@@ -374,4 +374,65 @@ describe("hub messaging audit entries carry no message or reply text (#13336)", 
       projectAuditResult("host.list", { hosts: [{ hostId: "studio", name: "Greg's studio" }] })
     ).toEqual({ hostCount: 1, hostIds: ["studio"] });
   });
+
+  it("counts a host's projects and assistants, never naming either", () => {
+    const projected = projectAuditResult("host.listAssistants", {
+      outcome: "ok",
+      detail: null,
+      retryAfterMs: null,
+      projects: [
+        {
+          projectId: "p-secret",
+          name: "acquisition-plans",
+          path: "/Users/someone/acquisition-plans",
+          assistants: [
+            { slot: 0, agentId: "claude", generation: "g", available: true },
+            { slot: 1, agentId: "claude", generation: null, available: false },
+          ],
+        },
+        { projectId: "p-2", name: "notes", path: "/Users/someone/notes", assistants: [] },
+      ],
+      projectsOmitted: 7,
+    });
+    expect(projected).toMatchObject({
+      outcome: "ok",
+      projectCount: 2,
+      assistantCount: 2,
+      projectsOmitted: 7,
+    });
+    expect(JSON.stringify(projected)).not.toMatch(/acquisition|notes|someone|p-secret/);
+  });
+
+  it("records whether a host's Codex quota came back and how many windows, never their values", () => {
+    expect(projectAuditArgs("host.readQuota", { hostId: "studio", extra: TEXT })).toEqual({
+      hostId: "studio",
+    });
+    const projected = projectAuditResult("host.readQuota", {
+      outcome: "ok",
+      detail: null,
+      retryAfterMs: null,
+      codex: {
+        status: "ok",
+        planType: "enterprise-secret-plan",
+        windows: [
+          { usedPercent: 83.25, windowDurationMins: 300, resetsAt: 1_712_345_678_901 },
+          { usedPercent: 12, windowDurationMins: 10_080, resetsAt: null },
+        ],
+        fetchedAt: 1_712_000_000_000,
+      },
+      observedAt: 1_712_000_000_500,
+    });
+    expect(projected).toMatchObject({ outcome: "ok", codexStatus: "ok", windowCount: 2 });
+    expect(JSON.stringify(projected)).not.toMatch(/secret|83\.25|1712/);
+
+    expect(
+      projectAuditResult("host.readQuota", {
+        outcome: "disconnected",
+        detail: "The host can't be reached right now.",
+        retryAfterMs: null,
+        codex: null,
+        observedAt: null,
+      })
+    ).toMatchObject({ outcome: "disconnected", codexStatus: null, windowCount: null });
+  });
 });

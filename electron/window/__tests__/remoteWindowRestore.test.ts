@@ -15,7 +15,10 @@ import {
   resetOpenWindowsTrackerForTests,
 } from "../openWindowsTracker.js";
 import {
+  REMOTE_RESTORE_REDIAL_MAX_MS,
+  REMOTE_RESTORE_REDIAL_MS,
   REMOTE_RESTORE_RETRY_CHANNEL,
+  forgetRemoteRestoresForHost,
   forgetRemoteWindowRestore,
   noteRemoteWindowRestore,
   remoteWindowReady,
@@ -28,9 +31,22 @@ const PROJECT = "a".repeat(64);
 const KEY = `studio-01:${PROJECT}`;
 
 function fakeClient(switchImpl: (...args: unknown[]) => Promise<unknown>) {
+  type State = { status: string; [key: string]: unknown };
+  const listeners = new Set<(hostId: string, state: State) => void>();
   const client = {
     list: vi.fn(() => [{ descriptor: { id: "studio-01", name: "Studio" } }]),
     switchWindowToHostProject: vi.fn(switchImpl),
+    connect: vi.fn(() => ({ status: "connecting" })),
+    hasPendingSwitch: vi.fn((_windowId: number) => false),
+    onConnectionChange: vi.fn((listener: (hostId: string, state: State) => void) => {
+      listeners.add(listener);
+      return () => listeners.delete(listener);
+    }),
+    /** Test hook: the host's connection changed. */
+    changed: (hostId: string, state: string | State) => {
+      const next = typeof state === "string" ? { status: state } : state;
+      for (const listener of [...listeners]) listener(hostId, next);
+    },
   };
   registerRemoteService("remoteHostsClient", client as never);
   return client;
@@ -145,6 +161,297 @@ describe("restoreRemoteWindows", () => {
     });
     expect(getPendingRemoteRestore(3)).toBe(KEY);
     warn.mockRestore();
+  });
+
+  describe("a window whose host couldn't be reached (#13389 follow-up)", () => {
+    const unreachable = () =>
+      new AppError({
+        code: "HOST_MODE_OFF",
+        message: "Daintree isn't running on studio-01",
+        userMessage: "Daintree isn't running on that host.",
+      });
+
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    it("moves back by itself once the host connects, saying so once", async () => {
+      let attempts = 0;
+      const client = fakeClient(async () => {
+        attempts++;
+        if (attempts === 1) throw unreachable();
+        return { outcome: "switched" };
+      });
+      const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+      noteRemoteWindowRestore(3, KEY);
+      remoteWindowReady(3);
+      const { d, sent, onRestored } = deps(new Set([3]));
+      await restoreRemoteWindows(d);
+      expect(sent).toHaveLength(1);
+      expect((sent[0]!.payload as { message: string }).message).toContain(
+        "moves back once Studio is reachable"
+      );
+
+      client.changed("studio-02", "connected");
+      expect(client.switchWindowToHostProject).toHaveBeenCalledTimes(1);
+      client.changed("studio-01", "connected");
+      await vi.waitFor(() => expect(onRestored).toHaveBeenCalledTimes(1));
+      expect(client.switchWindowToHostProject).toHaveBeenCalledTimes(2);
+      expect(sent).toHaveLength(1);
+      warn.mockRestore();
+    });
+
+    it("dials the host again while a window waits, and stops once the window is put to use", async () => {
+      vi.useFakeTimers();
+      const client = fakeClient(async () => {
+        throw unreachable();
+      });
+      const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+      noteRemoteWindowRestore(3, KEY);
+      remoteWindowReady(3);
+      const waitingWindows = new Set([3]);
+      const { d } = deps(waitingWindows);
+      await restoreRemoteWindows(d);
+      expect(client.connect).not.toHaveBeenCalled();
+
+      await vi.advanceTimersByTimeAsync(REMOTE_RESTORE_REDIAL_MS);
+      expect(client.connect).toHaveBeenCalledWith({ hostId: "studio-01" });
+
+      waitingWindows.delete(3);
+      client.connect.mockClear();
+      await vi.advanceTimersByTimeAsync(REMOTE_RESTORE_REDIAL_MS * 2);
+      expect(client.connect).not.toHaveBeenCalled();
+      warn.mockRestore();
+    });
+
+    it("never re-dials a host that refuses ssh access: only the person can fix that", async () => {
+      vi.useFakeTimers();
+      const client = fakeClient(async () => {
+        throw new AppError({
+          code: "HOST_SSH_ACCESS_DENIED",
+          message: "Permission denied (publickey)",
+          userMessage: "Studio refused the ssh login.",
+        });
+      });
+      const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+      noteRemoteWindowRestore(3, KEY);
+      remoteWindowReady(3);
+      await restoreRemoteWindows(deps(new Set([3])).d);
+      await vi.advanceTimersByTimeAsync(REMOTE_RESTORE_REDIAL_MS * 2);
+      expect(client.connect).not.toHaveBeenCalled();
+      // A fix made outside still brings it back when the host connects.
+      client.changed("studio-01", "connected");
+      expect(client.switchWindowToHostProject).toHaveBeenCalledTimes(2);
+      warn.mockRestore();
+    });
+
+    it("retries on a move into connected only, never on each ping of a connected link", async () => {
+      let attempts = 0;
+      const client = fakeClient(async () => {
+        attempts++;
+        throw attempts === 1
+          ? unreachable()
+          : new AppError({ code: "INTERNAL", message: "view failed", userMessage: "x" });
+      });
+      const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+      noteRemoteWindowRestore(3, KEY);
+      remoteWindowReady(3);
+      await restoreRemoteWindows(deps(new Set([3])).d);
+      client.changed("studio-01", "connected");
+      await vi.waitFor(() => expect(client.switchWindowToHostProject).toHaveBeenCalledTimes(2));
+      client.changed("studio-01", { status: "connected", rttMs: 4 });
+      client.changed("studio-01", { status: "connected", rttMs: 5 });
+      await Promise.resolve();
+      expect(client.switchWindowToHostProject).toHaveBeenCalledTimes(2);
+      client.changed("studio-01", "disconnected");
+      client.changed("studio-01", "connected");
+      await vi.waitFor(() => expect(client.switchWindowToHostProject).toHaveBeenCalledTimes(3));
+      warn.mockRestore();
+    });
+
+    it("gives way to a switch the person started in that window", async () => {
+      const client = fakeClient(async () => {
+        throw unreachable();
+      });
+      const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+      noteRemoteWindowRestore(3, KEY);
+      remoteWindowReady(3);
+      await restoreRemoteWindows(deps(new Set([3])).d);
+      client.hasPendingSwitch.mockReturnValue(true);
+      client.changed("studio-01", "connected");
+      await Promise.resolve();
+      expect(client.switchWindowToHostProject).toHaveBeenCalledTimes(1);
+      warn.mockRestore();
+    });
+
+    it("stops dialling once a later attempt finds ssh refused, or a build it can't talk to", async () => {
+      vi.useFakeTimers();
+      const client = fakeClient(async () => {
+        throw unreachable();
+      });
+      const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+      noteRemoteWindowRestore(3, KEY);
+      remoteWindowReady(3);
+      await restoreRemoteWindows(deps(new Set([3])).d);
+      client.changed("studio-01", {
+        status: "unreachable",
+        lastSeenAt: null,
+        detail: "Permission denied",
+        stoppedRetrying: true,
+      });
+      await vi.advanceTimersByTimeAsync(REMOTE_RESTORE_REDIAL_MAX_MS * 2);
+      expect(client.connect).not.toHaveBeenCalled();
+      warn.mockRestore();
+    });
+
+    it("never dials again for a host whose build can't talk to this one", async () => {
+      vi.useFakeTimers();
+      const client = fakeClient(async () => {
+        throw new AppError({
+          code: "HOST_VERSION_MISMATCH",
+          message: "protocol",
+          userMessage: "x",
+        });
+      });
+      const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+      noteRemoteWindowRestore(3, KEY);
+      remoteWindowReady(3);
+      await restoreRemoteWindows(deps(new Set([3])).d);
+      await vi.advanceTimersByTimeAsync(REMOTE_RESTORE_REDIAL_MAX_MS * 2);
+      expect(client.connect).not.toHaveBeenCalled();
+      warn.mockRestore();
+    });
+
+    it("lets go of the host's place when the project is gone from it", async () => {
+      vi.useFakeTimers();
+      const client = fakeClient(async () => {
+        throw new AppError({ code: "NOT_FOUND", message: "gone", userMessage: "x" });
+      });
+      const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+      noteRemoteWindowRestore(3, KEY);
+      remoteWindowReady(3);
+      await restoreRemoteWindows(deps(new Set([3])).d);
+      expect(getPendingRemoteRestore(3)).toBeNull();
+      await vi.advanceTimersByTimeAsync(REMOTE_RESTORE_REDIAL_MAX_MS);
+      expect(client.connect).not.toHaveBeenCalled();
+      warn.mockRestore();
+    });
+
+    it("backs off while the host stays away, and forgets a removed host", async () => {
+      vi.useFakeTimers();
+      const client = fakeClient(async () => {
+        throw unreachable();
+      });
+      const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+      noteRemoteWindowRestore(3, KEY);
+      remoteWindowReady(3);
+      await restoreRemoteWindows(deps(new Set([3])).d);
+      await vi.advanceTimersByTimeAsync(REMOTE_RESTORE_REDIAL_MS);
+      expect(client.connect).toHaveBeenCalledTimes(1);
+      await vi.advanceTimersByTimeAsync(REMOTE_RESTORE_REDIAL_MS);
+      expect(client.connect).toHaveBeenCalledTimes(1);
+      await vi.advanceTimersByTimeAsync(REMOTE_RESTORE_REDIAL_MS);
+      expect(client.connect).toHaveBeenCalledTimes(2);
+
+      forgetRemoteRestoresForHost("studio-01");
+      await vi.advanceTimersByTimeAsync(REMOTE_RESTORE_REDIAL_MAX_MS * 2);
+      expect(client.connect).toHaveBeenCalledTimes(2);
+      warn.mockRestore();
+    });
+
+    it("lets a switch the person started win over the first restore attempt", async () => {
+      const client = fakeClient(async () => ({ outcome: "switched" }));
+      client.hasPendingSwitch.mockReturnValue(true);
+      noteRemoteWindowRestore(3, KEY);
+      remoteWindowReady(3);
+      await restoreRemoteWindows(deps(new Set([3])).d);
+      expect(client.switchWindowToHostProject).not.toHaveBeenCalled();
+      expect(getPendingRemoteRestore(3)).toBeNull();
+    });
+
+    it("dials again after a connection lifts an earlier refusal, starting the backoff over", async () => {
+      vi.useFakeTimers();
+      let attempts = 0;
+      const client = fakeClient(async () => {
+        attempts++;
+        throw attempts === 1
+          ? new AppError({ code: "HOST_SSH_ACCESS_DENIED", message: "denied", userMessage: "x" })
+          : unreachable();
+      });
+      const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+      noteRemoteWindowRestore(3, KEY);
+      remoteWindowReady(3);
+      await restoreRemoteWindows(deps(new Set([3])).d);
+      await vi.advanceTimersByTimeAsync(REMOTE_RESTORE_REDIAL_MAX_MS);
+      expect(client.connect).not.toHaveBeenCalled();
+      // The person fixed ssh and connected; the retry fails, and the host goes away again.
+      client.changed("studio-01", "connected");
+      await vi.waitFor(() => expect(client.switchWindowToHostProject).toHaveBeenCalledTimes(2));
+      client.changed("studio-01", {
+        status: "unreachable",
+        lastSeenAt: null,
+        detail: null,
+        hostModeOff: true,
+      });
+      await vi.advanceTimersByTimeAsync(REMOTE_RESTORE_REDIAL_MS * 2);
+      expect(client.connect).toHaveBeenCalledTimes(1);
+      warn.mockRestore();
+    });
+
+    it("promises nothing for a project gone from the host", async () => {
+      fakeClient(async () => {
+        throw new AppError({
+          code: "NOT_FOUND",
+          message: "gone",
+          userMessage: "This project isn't on that host.",
+        });
+      });
+      const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+      noteRemoteWindowRestore(3, KEY);
+      remoteWindowReady(3);
+      const { d, sent } = deps(new Set([3]));
+      await restoreRemoteWindows(d);
+      expect((sent[0]!.payload as { message: string }).message).toContain(
+        "The window opened on this machine instead."
+      );
+      warn.mockRestore();
+    });
+
+    it("doesn't read the first ping of a host already connected as a reconnect", async () => {
+      let attempts = 0;
+      const client = fakeClient(async () => {
+        attempts++;
+        throw new AppError({ code: "INTERNAL", message: "view failed", userMessage: "x" });
+      });
+      client.list.mockReturnValue([
+        { descriptor: { id: "studio-01", name: "Studio" }, connection: { status: "connected" } },
+      ] as never);
+      const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+      noteRemoteWindowRestore(3, KEY);
+      remoteWindowReady(3);
+      await restoreRemoteWindows(deps(new Set([3])).d);
+      client.changed("studio-01", { status: "connected", rttMs: 3 });
+      await Promise.resolve();
+      expect(attempts).toBe(1);
+      warn.mockRestore();
+    });
+
+    it("stops waiting for a window that closed", async () => {
+      vi.useFakeTimers();
+      const client = fakeClient(async () => {
+        throw unreachable();
+      });
+      const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+      noteRemoteWindowRestore(3, KEY);
+      remoteWindowReady(3);
+      await restoreRemoteWindows(deps(new Set([3])).d);
+      forgetRemoteWindowRestore(3);
+      await vi.advanceTimersByTimeAsync(REMOTE_RESTORE_REDIAL_MS * 2);
+      client.changed("studio-01", "connected");
+      expect(client.connect).not.toHaveBeenCalled();
+      expect(client.switchWindowToHostProject).toHaveBeenCalledTimes(1);
+      warn.mockRestore();
+    });
   });
 
   it("names the failure for the shared presenter, so ssh refusals aren't offered a bare Retry", async () => {

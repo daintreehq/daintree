@@ -22,10 +22,14 @@ import {
  * this session's bearer belongs to is the only one these reach.
  */
 export interface AssistantMessagingAccess {
-  /** Whether this session is an enrolled lane right now; decides listing too. */
+  /** Whether this session is an enrolled lane right now. */
   isAvailable(): boolean;
   /** Whether this session may start a message to its Shell's hub (#13338); never true for the hub. */
   isSendAvailable(): boolean;
+  /** Whether its lane could be enrolled here; listing goes by this or `isAvailable`. */
+  isReachable?(): boolean;
+  /** Whether its lane could be one a remote Shell enrolls; listing of the send tool goes by this. */
+  isSendReachable?(): boolean;
   getInbox(args: AssistantGetInboxArgs): AssistantMessagingOutcome<AssistantGetInboxResult>;
   reply(args: AssistantReplyArgs): AssistantMessagingOutcome<AssistantReplyResult>;
   sendMessage(
@@ -42,6 +46,8 @@ export interface AssistantMessagingAccess {
 export interface AssistantMessagingRuntimeHandle {
   isAvailable(helpSessionId: string): boolean;
   isSendAvailable(helpSessionId: string): boolean;
+  isReachable?(helpSessionId: string): boolean;
+  isSendReachable?(helpSessionId: string): boolean;
   getInbox(
     helpSessionId: string,
     args: AssistantGetInboxArgs
@@ -96,6 +102,14 @@ export function bindAssistantMessaging(
     isSendAvailable: () => {
       const found = caller();
       return found !== null && found.runtime.isSendAvailable(found.helpSessionId);
+    },
+    isReachable: () => {
+      const found = caller();
+      return found !== null && found.runtime.isReachable?.(found.helpSessionId) === true;
+    },
+    isSendReachable: () => {
+      const found = caller();
+      return found !== null && found.runtime.isSendReachable?.(found.helpSessionId) === true;
     },
     getInbox: (args) => {
       const found = caller();

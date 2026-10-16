@@ -265,6 +265,57 @@ describe("classifyWaitingReason", () => {
       const lines = ["All checks passed.", "> "];
       expect(classifyWaitingReason(lines, true)).toBe("prompt");
     });
+
+    it("a wrapped row that starts with a question word is not a question (#13392)", () => {
+      // A host assistant's 49-column pane, settled after launching two agents.
+      // Read as a question, it blocked every completion notice it had asked for.
+      const lines = [
+        "  I'll check each commit myself as its notice",
+        "  arrives, and reply to the hub once, after both",
+        "  are verified.",
+        "",
+        "✻ Worked for 35s · done 3:44 PM",
+        "",
+        "─────────────────────────────────────────────────",
+        "❯ ",
+        "─────────────────────────────────────────────────",
+        "  ⏵⏵ bypass permissions on (shift+tab to cycle)",
+      ];
+      expect(classifyWaitingReason(lines, true)).toBe("prompt");
+    });
+
+    it("a capitalised question word opens a question whatever sits above it", () => {
+      for (const above of [
+        "Next step",
+        "- src/renderer.ts",
+        "```",
+        "└──────────┘",
+        "⏺ Found two config files",
+        "  I updated the config and reran the build",
+      ]) {
+        expect(classifyWaitingReason([above, "  Which file should I update", "❯ "], true)).toBe(
+          "question"
+        );
+      }
+    });
+
+    it("a lowercase question word mid-sentence is not a question", () => {
+      for (const lines of [
+        ["  The helpers from utils.ts, etc.", "  are covered by tests.", "❯ "],
+        ["  The constraints mean:", "  do the work after both complete.", "❯ "],
+        ["  are covered by tests.", "❯ "],
+      ]) {
+        expect(classifyWaitingReason(lines, true)).toBe("prompt");
+      }
+    });
+
+    it("a wrapped question that ends in a question mark is still a question", () => {
+      const lines = [
+        "  I can push the branch now, or would you rather",
+        "  review the diff first?",
+      ];
+      expect(classifyWaitingReason(lines, true)).toBe("question");
+    });
   });
 
   describe("ANSI stripping", () => {

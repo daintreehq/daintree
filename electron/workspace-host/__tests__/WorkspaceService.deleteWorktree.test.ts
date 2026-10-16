@@ -225,6 +225,15 @@ describe("WorkspaceService.deleteWorktree", () => {
     vi.restoreAllMocks();
   });
 
+  /** Dirty in the monitor's snapshot and still dirty when re-read. */
+  function dirtyBothWays(
+    monitor: WorktreeMonitor,
+    changes: NonNullable<ReturnType<WorktreeMonitor["getWorktreeChanges"]>>
+  ): void {
+    vi.spyOn(monitor, "getWorktreeChanges").mockReturnValue(changes);
+    vi.spyOn(monitor, "getFreshChanges").mockResolvedValue(changes);
+  }
+
   function createAndRegisterMonitor(overrides: Partial<Worktree> = {}): WorktreeMonitor {
     const wt = createTestWorktree(overrides);
     const monitor = new WorktreeMonitorClass(
@@ -418,7 +427,7 @@ describe("WorkspaceService.deleteWorktree", () => {
 
   it("blocks non-force deletion with 'untracked files' when only untracked files exist", async () => {
     const monitor = createAndRegisterMonitor();
-    vi.spyOn(monitor, "getWorktreeChanges").mockReturnValue({
+    dirtyBothWays(monitor, {
       worktreeId: "/test/worktree",
       rootPath: "/test/worktree",
       changedFileCount: 2,
@@ -445,7 +454,7 @@ describe("WorkspaceService.deleteWorktree", () => {
 
   it("blocks non-force deletion with 'uncommitted changes' when only tracked changes exist", async () => {
     const monitor = createAndRegisterMonitor();
-    vi.spyOn(monitor, "getWorktreeChanges").mockReturnValue({
+    dirtyBothWays(monitor, {
       worktreeId: "/test/worktree",
       rootPath: "/test/worktree",
       changedFileCount: 1,
@@ -469,7 +478,7 @@ describe("WorkspaceService.deleteWorktree", () => {
 
   it("blocks non-force deletion with 'uncommitted changes and untracked files' when both exist", async () => {
     const monitor = createAndRegisterMonitor();
-    vi.spyOn(monitor, "getWorktreeChanges").mockReturnValue({
+    dirtyBothWays(monitor, {
       worktreeId: "/test/worktree",
       rootPath: "/test/worktree",
       changedFileCount: 2,
@@ -486,6 +495,64 @@ describe("WorkspaceService.deleteWorktree", () => {
         type: "delete-worktree-result",
         success: false,
         error: expect.stringContaining("uncommitted changes and untracked files"),
+      })
+    );
+  });
+
+  it("re-reads a dirty snapshot before refusing, so a tree just cleared deletes (#13392)", async () => {
+    const fsModule = await import("fs/promises");
+    vi.mocked(fsModule.access).mockImplementation(async (p: unknown) => {
+      if (n(p as string) === "/test/worktree") return undefined;
+      throw new Error("ENOENT");
+    });
+    const monitor = createAndRegisterMonitor();
+    vi.spyOn(monitor, "getWorktreeChanges").mockReturnValue({
+      worktreeId: "/test/worktree",
+      rootPath: "/test/worktree",
+      changedFileCount: 2,
+      changes: [
+        { path: "__pycache__/a.pyc", status: "untracked", insertions: null, deletions: null },
+        { path: "__pycache__/b.pyc", status: "untracked", insertions: null, deletions: null },
+      ],
+    });
+    const fresh = vi.spyOn(monitor, "getFreshChanges").mockResolvedValue({
+      worktreeId: "/test/worktree",
+      rootPath: "/test/worktree",
+      changedFileCount: 0,
+      changes: [],
+    });
+
+    await service.deleteWorktree("req-fresh", "/test/worktree");
+
+    expect(fresh).toHaveBeenCalled();
+    expect(mockSendEvent).toHaveBeenCalledWith(
+      expect.objectContaining({ type: "delete-worktree-result", success: true })
+    );
+    // An ordinary remove of the checkout, never a forced one.
+    const removeCalls = mockSimpleGit.raw.mock.calls.filter(
+      (c) => Array.isArray(c[0]) && c[0][0] === "worktree" && c[0][1] === "remove"
+    );
+    expect(removeCalls).toHaveLength(1);
+    expect(removeCalls[0][0]).not.toContain("--force");
+  });
+
+  it("keeps the refusal when the re-read fails", async () => {
+    const monitor = createAndRegisterMonitor();
+    vi.spyOn(monitor, "getWorktreeChanges").mockReturnValue({
+      worktreeId: "/test/worktree",
+      rootPath: "/test/worktree",
+      changedFileCount: 1,
+      changes: [{ path: "new.txt", status: "untracked", insertions: null, deletions: null }],
+    });
+    vi.spyOn(monitor, "getFreshChanges").mockRejectedValue(new Error("git status failed"));
+
+    await service.deleteWorktree("req-fresh-fail", "/test/worktree");
+
+    expect(mockSendEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: "delete-worktree-result",
+        success: false,
+        error: expect.stringContaining("untracked files"),
       })
     );
   });

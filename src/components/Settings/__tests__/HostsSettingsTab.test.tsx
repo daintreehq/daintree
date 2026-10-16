@@ -29,6 +29,7 @@ function entry(id: string, name: string): HostListEntry {
       addedAt: 1,
       notificationsEnabled: false,
       assistantMessagingEnabled: false,
+      assistantStartEnabled: false,
     },
     connection: { status: "unreachable", lastSeenAt: null, detail: null },
     summary: null,

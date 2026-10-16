@@ -131,9 +131,11 @@ describe("toExchangeView delivery", () => {
     expect(view).toMatchObject({ delivery: "unconfirmed", deliveryAt: 7_000, expiresAt: null });
   });
 
-  it("names the furthest fact short of reading, or pending when there is none", () => {
-    expect(toExchangeView(entry(record()), NOW)).toMatchObject({
-      delivery: "pending",
+  it("names the furthest fact short of reading, or accepted when the host only holds the record", () => {
+    const held = record();
+    expect(toExchangeView(entry(held), NOW)).toMatchObject({
+      delivery: "accepted",
+      deliveryAt: held.createdAt,
       expiresAt: NOW + 10_000,
     });
     expect(toExchangeView(entry(delivered({ acceptedAt: 1_100 })), NOW).delivery).toBe("accepted");

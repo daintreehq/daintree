@@ -5,13 +5,17 @@ import {
   HOST_LIST_ASSISTANTS_TOOL,
   HOST_LIST_TASKS_TOOL,
   HOST_LIST_TOOL,
+  HOST_READ_QUOTA_TOOL,
   HOST_SEND_MESSAGE_TOOL,
+  HOST_START_ASSISTANT_TOOL,
   HostCancelTaskArgsSchema,
   HostGetTaskArgsSchema,
   HostListArgsSchema,
   HostListAssistantsArgsSchema,
   HostListTasksArgsSchema,
+  HostReadQuotaArgsSchema,
   HostSendMessageArgsSchema,
+  HostStartAssistantArgsSchema,
   type HostCancelTaskArgs,
   type HostCancelTaskResult,
   type HostGetTaskArgs,
@@ -24,8 +28,12 @@ import {
   type HostMessagingOutcome,
   type HostMessagingRefusalCode,
   type HostMessagingToolResult,
+  type HostReadQuotaArgs,
+  type HostReadQuotaResult,
   type HostSendMessageArgs,
   type HostSendMessageResult,
+  type HostStartAssistantArgs,
+  type HostStartAssistantResult,
 } from "../../../shared/types/hostMessaging.js";
 
 /**
@@ -37,6 +45,8 @@ import {
  */
 export interface HostMessagingRuntimeHandle {
   isAvailable(helpSessionId: string): boolean;
+  /** Whether this session could become the hub: offered from its start, refused until it is. */
+  isReachable?(helpSessionId: string): boolean;
   list(helpSessionId: string): Promise<HostMessagingOutcome<HostListResult>>;
   listAssistants(
     helpSessionId: string,
@@ -58,6 +68,14 @@ export interface HostMessagingRuntimeHandle {
     helpSessionId: string,
     args: HostCancelTaskArgs
   ): Promise<HostMessagingOutcome<HostCancelTaskResult>>;
+  startAssistant(
+    helpSessionId: string,
+    args: HostStartAssistantArgs
+  ): Promise<HostMessagingOutcome<HostStartAssistantResult>>;
+  readQuota(
+    helpSessionId: string,
+    args: HostReadQuotaArgs
+  ): Promise<HostMessagingOutcome<HostReadQuotaResult>>;
 }
 
 let installedRuntime: HostMessagingRuntimeHandle | null = null;
@@ -76,8 +94,10 @@ const INVALID_ARGS_MESSAGE = "The arguments don't match this tool's schema.";
 
 /** One MCP session's view of the hub runtime, keyed on the help session bound to it. */
 export interface HostMessagingAccess {
-  /** Whether this session is the hub and a host exists right now; decides listing too. */
+  /** Whether this session is the hub and a host exists right now. */
   isAvailable(): boolean;
+  /** Whether it could become the hub while a host exists; listing goes by this. */
+  isReachable?(): boolean;
   run(toolId: string, args: unknown): Promise<HostMessagingOutcome<HostMessagingToolResult>>;
 }
 
@@ -126,6 +146,14 @@ async function dispatch(
       const parsed = HostCancelTaskArgsSchema.safeParse(raw);
       return parsed.success ? runtime.cancelTask(helpSessionId, parsed.data) : invalidArgs();
     }
+    case HOST_START_ASSISTANT_TOOL: {
+      const parsed = HostStartAssistantArgsSchema.safeParse(raw);
+      return parsed.success ? runtime.startAssistant(helpSessionId, parsed.data) : invalidArgs();
+    }
+    case HOST_READ_QUOTA_TOOL: {
+      const parsed = HostReadQuotaArgsSchema.safeParse(raw);
+      return parsed.success ? runtime.readQuota(helpSessionId, parsed.data) : invalidArgs();
+    }
     default:
       return invalidArgs();
   }
@@ -147,6 +175,10 @@ export function bindHostMessaging(
     isAvailable: () => {
       const found = caller();
       return found !== null && found.runtime.isAvailable(found.helpSessionId);
+    },
+    isReachable: () => {
+      const found = caller();
+      return found !== null && found.runtime.isReachable?.(found.helpSessionId) === true;
     },
     run: async (toolId, args) => {
       const found = caller();

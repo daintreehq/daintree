@@ -198,7 +198,7 @@ export const AssistantSendMessageArgsSchema = z
       .max(ASSISTANT_REFERENCE_TASK_IDS_MAX)
       .optional()
       .describe(
-        `taskIds this message follows on from, at most ${ASSISTANT_REFERENCE_TASK_IDS_MAX}.`
+        `messageIds this answers or follows on from, at most ${ASSISTANT_REFERENCE_TASK_IDS_MAX}.`
       ),
   })
   .strict();

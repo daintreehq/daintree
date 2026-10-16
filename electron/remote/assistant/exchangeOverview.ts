@@ -59,8 +59,8 @@ function describeDelivery(
   if (delivery.wakeTypedAt !== null) return { delivery: "wake-typed", at: delivery.wakeTypedAt };
   // An attempt with nothing after it may or may not have reached the lane.
   if (delivery.attemptedAt !== null) return { delivery: "unconfirmed", at: delivery.attemptedAt };
-  if (delivery.acceptedAt !== null) return { delivery: "accepted", at: delivery.acceptedAt };
-  return { delivery: "pending", at: null };
+  // The host holding the record is what accepting it means.
+  return { delivery: "accepted", at: delivery.acceptedAt ?? record.createdAt };
 }
 
 function cancelKind(

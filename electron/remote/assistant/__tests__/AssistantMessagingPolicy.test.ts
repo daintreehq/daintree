@@ -22,9 +22,12 @@ function harness(overrides: Partial<AssistantMessagingPolicyDeps> = {}) {
   const launchGenerations = new Map<string, number>();
   const enabledHosts = new Set<string>();
   const listeners = new Set<(event: HelpSessionEndedEvent) => void>();
+  /** Which link session's view each run was started through, by session id. */
+  const startedBy = new Map<string, string>();
   let nextGeneration = 0;
   const policy = new AssistantMessagingPolicy({
     getRunningLaneSession: (projectId, slot) => running.get(laneKey(projectId, slot)) ?? null,
+    startedThrough: (session, linkSessionId) => startedBy.get(session.sessionId) === linkSessionId,
     getLiveGeneration: (terminalId) => launchGenerations.get(terminalId) ?? null,
     isHostMessagingEnabled: (hostId) => enabledHosts.has(hostId),
     onSessionEnded: (listener) => {
@@ -59,7 +62,7 @@ function harness(overrides: Partial<AssistantMessagingPolicyDeps> = {}) {
       listener({ projectId, slot, sessionId, reason });
     }
   };
-  return { policy, running, launchGenerations, enabledHosts, listeners, run, end };
+  return { policy, running, launchGenerations, enabledHosts, listeners, startedBy, run, end };
 }
 
 const lane = (projectId = "proj", slot = 0) => ({ projectId, slot });
@@ -297,6 +300,161 @@ describe("AssistantMessagingPolicy", () => {
     expect(h.policy.getEnrollment(lane("proj", 1))).toBeNull();
     expect(h.policy.getEnrollment(lane("proj", 2))?.enrolledBy).toEqual(SHELL_B);
     expect(h.policy.getHub()?.projectId).toBe("hub");
+  });
+
+  describe("a Shell's sender carries its enrollments across sessions", () => {
+    const SHELL_A2: MessagingShell = { kind: "remote", linkSessionId: "link-a2" };
+
+    it("keeps a proven Shell's enrollments through its session ending, for that Shell alone", () => {
+      const h = harness();
+      h.run("proj", 0, "s1");
+      h.run("proj", 1, "s2");
+      const enrolled = h.policy.enroll(lane("proj", 0), SHELL_A);
+      if (!enrolled.ok) throw new Error("expected enrollment");
+      expect(h.policy.enroll(lane("proj", 1), SHELL_B).ok).toBe(true);
+      h.policy.bindSender("link-a", "sender-a");
+      h.policy.bindSender("link-b", "sender-b");
+      expect(h.policy.getEnrollment(lane("proj", 0))?.sender).toBe("sender-a");
+
+      h.policy.releaseLinkSession("link-a");
+      // Waiting: no session can admit a message, but the lane still answers what reached it.
+      const waiting = h.policy.getEnrollment(lane("proj", 0));
+      expect(waiting?.generation).toBe(enrolled.enrollment.generation);
+      expect(
+        h.policy.checkLane({
+          lane: lane("proj", 0),
+          generation: enrolled.enrollment.generation,
+          shell: SHELL_A2,
+          kind: "admit",
+        })
+      ).toEqual({ ok: false, reason: "wrong-shell" });
+      expect(
+        h.policy.checkLane({
+          lane: lane("proj", 0),
+          generation: enrolled.enrollment.generation,
+          shell: waiting!.enrolledBy,
+          kind: "reply",
+        }).ok
+      ).toBe(true);
+
+      // Another Shell proving itself takes nothing.
+      expect(h.policy.bindSender("link-x", "sender-c")).toEqual([]);
+      expect(h.policy.getEnrollment(lane("proj", 0))?.enrolledBy).toEqual(SHELL_A);
+
+      // The same Shell on a later session takes its lanes back, generation unchanged.
+      expect(h.policy.bindSender("link-a2", "sender-a")).toEqual([
+        { from: "link-a", to: "link-a2" },
+      ]);
+      expect(h.policy.getEnrollment(lane("proj", 0))?.enrolledBy).toEqual(SHELL_A2);
+      expect(
+        h.policy.checkLane({
+          lane: lane("proj", 0),
+          generation: enrolled.enrollment.generation,
+          shell: SHELL_A2,
+          kind: "admit",
+        }).ok
+      ).toBe(true);
+      expect(h.policy.listEnrollments(SHELL_A2).map((e) => e.slot)).toEqual([0]);
+      expect(h.policy.getEnrollment(lane("proj", 1))?.enrolledBy).toEqual(SHELL_B);
+    });
+
+    it("records the sender of a session that proved itself before enrolling", () => {
+      const h = harness();
+      h.run("proj", 0, "s1");
+      h.policy.bindSender("link-a", "sender-a");
+      const enrolled = h.policy.enroll(lane("proj", 0), SHELL_A);
+      expect(enrolled.ok && enrolled.enrollment.sender).toBe("sender-a");
+      h.policy.releaseLinkSession("link-a");
+      expect(h.policy.getEnrollment(lane("proj", 0))).not.toBeNull();
+    });
+
+    it("still ends an unproven Shell's enrollments with its session, and never moves them", () => {
+      const h = harness();
+      h.run("proj", 0, "s1");
+      expect(h.policy.enroll(lane("proj", 0), SHELL_A).ok).toBe(true);
+      h.policy.releaseLinkSession("link-a");
+      expect(h.policy.getEnrollment(lane("proj", 0))).toBeNull();
+      expect(h.policy.getEnded(lane("proj", 0))?.reason).toBe("shell-gone");
+      expect(h.policy.bindSender("link-a2", "sender-a")).toEqual([]);
+      expect(h.policy.getEnrollment(lane("proj", 0))).toBeNull();
+    });
+
+    it("never lets a session prove a second sender, resumes included", () => {
+      const h = harness();
+      h.run("proj", 0, "s1");
+      h.policy.bindSender("link-a", "sender-a");
+      expect(h.policy.enroll(lane("proj", 0), SHELL_A).ok).toBe(true);
+      expect(h.policy.bindSender("link-a", "sender-b")).toEqual([]);
+      expect(h.policy.sessionSender("link-a")).toBe("sender-a");
+      expect(h.policy.getEnrollment(lane("proj", 0))?.sender).toBe("sender-a");
+    });
+
+    it("lets a waiting lane be turned off or taken over, never a connected Shell's", () => {
+      const h = harness();
+      h.run("proj", 0, "s1");
+      const first = h.policy.enroll(lane("proj", 0), SHELL_A);
+      if (!first.ok) throw new Error("expected enrollment");
+      h.policy.bindSender("link-a", "sender-a");
+      expect(h.policy.isWaiting(lane("proj", 0))).toBe(false);
+      expect(h.policy.enroll(lane("proj", 0), SHELL_B)).toEqual({
+        ok: false,
+        reason: "wrong-shell",
+      });
+      expect(h.policy.unenroll(lane("proj", 0), SHELL_B, first.enrollment.generation)).toBe(false);
+
+      h.policy.releaseLinkSession("link-a");
+      expect(h.policy.isWaiting(lane("proj", 0))).toBe(true);
+      expect(h.policy.unenroll(lane("proj", 0), LOCAL, first.enrollment.generation)).toBe(true);
+      expect(h.policy.getEnrollment(lane("proj", 0))).toBeNull();
+
+      const again = h.policy.enroll(lane("proj", 0), { kind: "remote", linkSessionId: "link-a3" });
+      if (!again.ok) throw new Error("expected enrollment");
+      h.policy.bindSender("link-a3", "sender-a");
+      h.policy.releaseLinkSession("link-a3");
+      const taken = h.policy.enroll(lane("proj", 0), SHELL_B);
+      expect(taken.ok && taken.enrollment.enrolledBy).toEqual(SHELL_B);
+      // The Shell that was away finds nothing to take back.
+      expect(h.policy.bindSender("link-a4", "sender-a")).toEqual([]);
+    });
+
+    it("keeps waiting consent when a takeover is refused, and announces the wait", () => {
+      const h = harness();
+      h.run("hub", 0, "s-hub");
+      h.run("proj", 0, "s1");
+      expect(h.policy.enroll(lane("hub", 0), LOCAL).ok).toBe(true);
+      const remote = h.policy.enroll(lane("proj", 0), SHELL_A);
+      if (!remote.ok) throw new Error("expected enrollment");
+      h.policy.bindSender("link-a", "sender-a");
+      let changes = 0;
+      const off = h.policy.onChange(() => changes++);
+      h.policy.releaseLinkSession("link-a");
+      expect(changes).toBe(1);
+      off();
+
+      // This machine already has its hub, so the lane can't be taken as another.
+      expect(h.policy.enroll(lane("proj", 0), LOCAL)).toEqual({ ok: false, reason: "hub-taken" });
+      expect(h.policy.getEnrollment(lane("proj", 0))?.generation).toBe(
+        remote.enrollment.generation
+      );
+      expect(h.policy.bindSender("link-a2", "sender-a")).toEqual([
+        { from: "link-a", to: "link-a2" },
+      ]);
+    });
+
+    it("ends a waiting enrollment with its run, and when the host stops listening", () => {
+      const h = harness();
+      h.run("proj", 0, "s1");
+      h.run("proj", 1, "s2");
+      expect(h.policy.enroll(lane("proj", 0), SHELL_A).ok).toBe(true);
+      expect(h.policy.enroll(lane("proj", 1), SHELL_A).ok).toBe(true);
+      h.policy.bindSender("link-a", "sender-a");
+      h.policy.releaseLinkSession("link-a");
+      h.end("proj", 0, "s1");
+      expect(h.policy.getEnrollment(lane("proj", 0))).toBeNull();
+      h.policy.releaseRemoteShells();
+      expect(h.policy.getEnrollment(lane("proj", 1))).toBeNull();
+      expect(h.policy.bindSender("link-a2", "sender-a")).toEqual([]);
+    });
   });
 
   it("releases every remote Shell's lanes when this host stops listening, keeping the hub", () => {
@@ -630,6 +788,52 @@ describe("AssistantMessagingPolicy", () => {
       h.policy.dispose();
       h.policy.setPaused(true);
       expect(heard).toBe(1);
+    });
+  });
+
+  describe("enrolling a run a hub started (#13392)", () => {
+    it("enrolls only the run it names, and only while nobody holds the lane", () => {
+      const h = harness();
+      h.run("proj", 0, "s1");
+      h.startedBy.set("s1", "link-a");
+      expect(h.policy.enrollStarted(lane("proj", 0), SHELL_A, "someone-else")).toEqual({
+        ok: false,
+        reason: "wrong-session",
+      });
+      expect(h.policy.enrollStarted(lane("proj", 1), SHELL_A, "s2")).toEqual({
+        ok: false,
+        reason: "unavailable",
+      });
+      // Knowing the session id isn't enough: the run has to have come through this Shell's view.
+      expect(h.policy.enrollStarted(lane("proj", 0), SHELL_B, "s1")).toEqual({
+        ok: false,
+        reason: "wrong-session",
+      });
+      const enrolled = h.policy.enrollStarted(lane("proj", 0), SHELL_A, "s1");
+      if (!enrolled.ok) throw new Error("expected enrollment");
+      // Asked again for the same run: the same enrollment, not a new generation.
+      const again = h.policy.enrollStarted(lane("proj", 0), SHELL_A, "s1");
+      expect(again.ok && again.enrollment.generation).toBe(enrolled.enrollment.generation);
+    });
+
+    it("never takes a lane another Shell holds, not even while that Shell is away", () => {
+      const h = harness();
+      h.run("proj", 0, "s1");
+      h.startedBy.set("s1", "link-a");
+      expect(h.policy.enroll(lane("proj", 0), SHELL_B).ok).toBe(true);
+      expect(h.policy.enrollStarted(lane("proj", 0), SHELL_A, "s1")).toEqual({
+        ok: false,
+        reason: "occupied",
+      });
+      h.policy.bindSender("link-b", "sender-b");
+      h.policy.releaseLinkSession("link-b");
+      expect(h.policy.isWaiting(lane("proj", 0))).toBe(true);
+      expect(h.policy.enrollStarted(lane("proj", 0), SHELL_A, "s1")).toEqual({
+        ok: false,
+        reason: "occupied",
+      });
+      // The person's own toggle keeps its rules: a Shell that's here may take a waiting lane.
+      expect(h.policy.enroll(lane("proj", 0), SHELL_A).ok).toBe(true);
     });
   });
 });

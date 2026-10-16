@@ -150,4 +150,25 @@ describe("AssistantLaneWaker", () => {
     wake.report({ kind: "delivered" });
     expect(h.outcomes).toEqual([{ kind: "delivered" }]);
   });
+  it("follows the same Shell to its newer session, and no other Shell (#13332)", () => {
+    const h = harness();
+    h.run("s1");
+    h.policy.bindSender("link-a", "sender-a");
+    const result = h.policy.enroll(LANE, SHELL_A);
+    if (!result.ok) throw new Error("expected enrollment");
+    h.driveBy(SHELL_B);
+    h.waker.wake(h.request(result.enrollment.generation));
+    // Held behind another driver, then the Shell restarts onto a new session.
+    expect(h.queued[0].wake.recheck()).toEqual({ kind: "held", reason: "driven-elsewhere" });
+    h.policy.releaseLinkSession("link-a");
+    h.policy.bindSender("link-a2", "sender-a");
+    h.driveBy({ kind: "remote", linkSessionId: "link-a2" });
+    expect(h.queued[0].wake.recheck()).toEqual({ kind: "ready" });
+
+    // A different Shell's session is never the one it follows.
+    h.policy.releaseLinkSession("link-a2");
+    h.policy.bindSender("link-c", "sender-c");
+    h.driveBy({ kind: "remote", linkSessionId: "link-c" });
+    expect(h.queued[0].wake.recheck()).toEqual({ kind: "held", reason: "driven-elsewhere" });
+  });
 });

@@ -28,6 +28,8 @@ vi.mock("../../../services/HelpSessionService.js", () => ({
     getRunningLaneSession: (projectId: string, slot: number) =>
       running.get(`${projectId}:${slot}`) ?? null,
     addSessionEndedListener: () => () => {},
+
+    addSessionReattachedListener: () => () => {},
     setMessagingReach: () => {},
   },
 }));
@@ -36,7 +38,8 @@ vi.mock("../../metrics/hostOps.js", () => ({ callerDrives: () => false }));
 vi.mock("../../../window/serviceRefs.js", () => ({ getPtyClient: () => pty.client }));
 
 import { CHANNELS } from "../../../ipc/channels.js";
-import { getRemoteService } from "../../runtime.js";
+import { getRemoteService, registerRemoteService } from "../../runtime.js";
+import type { HostProjectViewResult } from "../../client/hostProjectViews.js";
 import type { ExchangeRecord } from "../../exchange/types.js";
 import type { MovedExchange } from "../AssistantExchangeClient.js";
 import type { LaneEnrollment } from "../AssistantMessagingPolicy.js";
@@ -76,6 +79,66 @@ describe("installAssistantMessagingPolicy", () => {
   afterEach(() => {
     uninstall?.();
     uninstall = null;
+  });
+
+  it("gives enrolled lanes their views back on each session opening, retrying until windows are back (#13392)", async () => {
+    vi.useFakeTimers();
+    try {
+      let opened: (hostId: string) => void = () => {};
+      let startEnabled = true;
+      const prepared: string[] = [];
+      const answers: HostProjectViewResult[] = [{ status: "no-window" }];
+      const unregisterClient = registerRemoteService("assistantExchangeClient", {
+        listOwnLanes: async () => ({
+          lanes: [{ projectId: "p1", slot: 0, generation: "g", available: true }],
+        }),
+      } as never);
+      uninstall = installAssistantMessagingPolicy({
+        isHostMessagingEnabled: () => true,
+        hasHosts: () => true,
+        onHostsChanged: () => () => {},
+        isHostStartEnabled: () => startEnabled,
+        onHostSessionOpened: (listener) => {
+          opened = listener;
+          return () => {};
+        },
+        hostAssistants: {
+          projectPath: async () => "/repos/p1",
+          prepareView: async (_hostId, projectId) => {
+            prepared.push(projectId);
+            return answers.shift() ?? { status: "ready", webContentsId: 5, created: false };
+          },
+          dispatch: async () => ({ ok: true, result: null }),
+          invoke: async () => ({ isHolderEndpoint: true, holder: { leaseId: 1 } }),
+        },
+      });
+
+      opened("studio-01");
+      await vi.advanceTimersByTimeAsync(3_000);
+      // The window on that host wasn't back yet: tried again later, then left alone.
+      expect(prepared).toEqual(["p1"]);
+      await vi.advanceTimersByTimeAsync(10_000);
+      expect(prepared).toEqual(["p1", "p1"]);
+      await vi.advanceTimersByTimeAsync(200_000);
+      expect(prepared).toHaveLength(2);
+
+      // Without the person's start consent, nothing is restored.
+      startEnabled = false;
+      opened("studio-01");
+      await vi.advanceTimersByTimeAsync(200_000);
+      expect(prepared).toHaveLength(2);
+
+      // Nor once uninstalled, with a round already scheduled.
+      startEnabled = true;
+      opened("studio-01");
+      uninstall();
+      uninstall = null;
+      await vi.advanceTimersByTimeAsync(200_000);
+      expect(prepared).toHaveLength(2);
+      unregisterClient();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("pushes once on install, so a view that read it as missing reads it again", () => {

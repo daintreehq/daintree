@@ -65,8 +65,15 @@ const lanes = vi.hoisted(
 vi.mock("../../services/HelpSessionService.js", () => ({
   helpSessionService: {
     addSessionEndedListener: () => () => {},
+
+    addSessionReattachedListener: () => () => {},
     getRunningLaneSession: (projectId: string, slot: number) =>
       lanes.get(`${projectId}#${slot}`) ?? null,
+    listRunningLanes: () =>
+      [...lanes.keys()].map((key) => {
+        const [projectId, slot] = key.split("#");
+        return { projectId: projectId!, slot: Number(slot), agentId: "claude" };
+      }),
     getSessionLane: (sessionId: string) => {
       for (const [key, lane] of lanes) {
         if (lane.sessionId !== sessionId) continue;
@@ -81,6 +88,12 @@ vi.mock("../../services/HelpSessionService.js", () => ({
     revokeSession: async () => undefined,
     setMessagingReach: () => {},
   },
+}));
+
+/** The host's own Codex reading; nothing here spawns a Codex app server. */
+const codexQuota = vi.hoisted(() => ({ read: vi.fn() }));
+vi.mock("../../services/codex/CodexQuotaService.js", () => ({
+  readCodexQuota: codexQuota.read,
 }));
 
 /**
@@ -312,6 +325,50 @@ function shellA(): AssistantExchangeClient {
 }
 
 describe("assistant exchanges over the real link", () => {
+  it("hands the hub the host's Codex quota as the host read it (#13392)", async () => {
+    db.sqlite = openFile("app.db");
+    const r = await harness();
+    prepare(r);
+    const reading = {
+      status: "ok",
+      planType: "pro",
+      windows: [
+        { usedPercent: 42, windowDurationMins: 300, resetsAt: 1_700_000_000_000 },
+        { usedPercent: 7.5, windowDurationMins: 10_080, resetsAt: null },
+      ],
+      fetchedAt: 1_699_999_000_000,
+    };
+    codexQuota.read.mockResolvedValueOnce(reading);
+    await expect(shellA().readQuota(HOST_ID)).resolves.toEqual(reading);
+
+    const unavailable = { status: "unavailable", reason: "read-failed", fetchedAt: 1 };
+    codexQuota.read.mockResolvedValueOnce(unavailable);
+    await expect(shellA().readQuota(HOST_ID)).resolves.toEqual(unavailable);
+    expect(codexQuota.read).toHaveBeenCalledTimes(2);
+  }, 30_000);
+
+  it("enrolls nothing it can't show it started, and never a lane another Shell holds (#13392)", async () => {
+    db.sqlite = openFile("app.db");
+    const r = await harness();
+    prepare(r);
+    const a = shellA();
+    await expect(
+      a.enrollStarted(HOST_ID, { projectId: "proj-2", slot: 1, sessionId: "not-that-run" })
+    ).resolves.toEqual({ status: "wrong-session", lane: null });
+
+    // The right session id, but that run wasn't started through one of this Shell's views.
+    await expect(
+      a.enrollStarted(HOST_ID, { projectId: "proj-2", slot: 1, sessionId: "help-proj-2-1" })
+    ).resolves.toEqual({ status: "wrong-session", lane: null });
+    expect((await a.listLanes(HOST_ID)).lanes).toEqual([]);
+
+    // Slot 0 belongs to another Shell's session: never taken.
+    enrollOnHost("another-shell-session", 0);
+    await expect(
+      a.enrollStarted(HOST_ID, { projectId: "proj-2", slot: 0, sessionId: "help-proj-2-0" })
+    ).resolves.toEqual({ status: "occupied", lane: null });
+  }, 30_000);
+
   it(
     "hands a message to the lane's inbox and the lane's reply back to the Shell (#13336)",
     async () => {
@@ -363,9 +420,12 @@ describe("assistant exchanges over the real link", () => {
       expect(getEndpointRegistry().getRemote()).toHaveLength(0);
 
       const a = shellA();
-      expect(await a.listLanes(HOST_ID)).toEqual([
-        { projectId: "proj-2", slot: 0, generation, available: true },
+      // Over the real link: the lane names its agent, and the host lists what is running.
+      const listed = await a.listLanes(HOST_ID);
+      expect(listed.lanes).toEqual([
+        { projectId: "proj-2", slot: 0, generation, available: true, agentId: "claude" },
       ]);
+      expect(listed.assistants).toContainEqual({ projectId: "proj-2", slot: 0, agentId: "claude" });
 
       const sent = await a.send(HOST_ID, message({ generation }));
       expect(sent).toMatchObject({
@@ -456,8 +516,8 @@ describe("assistant exchanges over the real link", () => {
       const laneB = enrollOnHost(hostSessionOf(r, SHELL_B), 1);
       const a = shellA();
 
-      expect((await a.listLanes(HOST_ID)).map((lane) => lane.slot)).toEqual([0]);
-      expect((await b.client.listLanes(HOST_ID)).map((lane) => lane.slot)).toEqual([1]);
+      expect((await a.listLanes(HOST_ID)).lanes.map((lane) => lane.slot)).toEqual([0]);
+      expect((await b.client.listLanes(HOST_ID)).lanes.map((lane) => lane.slot)).toEqual([1]);
 
       // B can't reach A's lane, whatever it names.
       await expect(
@@ -596,7 +656,7 @@ describe("assistant exchanges over the real link", () => {
 
       // Consent ended with the sessions it was given to: a new message needs a new
       // enrollment, while a resend of one already taken still answers from its record.
-      expect(await a.listLanes(HOST_ID)).toEqual([]);
+      expect((await a.listLanes(HOST_ID)).lanes).toEqual([]);
       await expect(
         a.send(HOST_ID, message({ messageId: "m-2", generation: laneA }))
       ).rejects.toMatchObject({ code: "PERMISSION" });

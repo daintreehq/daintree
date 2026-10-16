@@ -94,6 +94,7 @@ function known(id: string, name: string, target: string): HostListEntry {
       addedAt: 0,
       notificationsEnabled: false,
       assistantMessagingEnabled: false,
+      assistantStartEnabled: false,
     },
     connection: { status: "disconnected" },
     summary: null,

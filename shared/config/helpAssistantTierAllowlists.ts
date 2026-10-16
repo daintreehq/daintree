@@ -138,6 +138,7 @@ export const CORE_TIER_TOOLS = [
   "host.listAssistants",
   "host.getTask",
   "host.listTasks",
+  "host.readQuota",
   // Logs meant for someone else go through the review the user trims and saves
   // themselves, not an archive the assistant builds from the raw log folder
   // (#12882). Reserved to the assistant below; off the external list.
@@ -231,9 +232,11 @@ export const FULL_TIER_ADDONS = [
   "host.switch",
   "project.openOnHost",
   // The hub messaging an assistant on another host, and asking it to stop
-  // (#13336): both act on another machine, so only a `full` hub sends.
+  // (#13336): both act on another machine, so only a `full` hub sends. Starting
+  // one there (#13392) is the same reach.
   "host.sendMessage",
   "host.cancelTask",
+  "host.startAssistant",
 ] as const satisfies readonly BuiltInActionId[];
 
 /**
@@ -282,6 +285,8 @@ export const RENDERER_OWNED_ORIGIN_ONLY_TOOLS = [
   "host.getTask",
   "host.listTasks",
   "host.cancelTask",
+  "host.startAssistant",
+  "host.readQuota",
 ] as const satisfies readonly BuiltInActionId[];
 
 /**

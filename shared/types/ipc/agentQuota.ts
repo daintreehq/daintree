@@ -14,15 +14,18 @@ export interface CodexQuotaWindow {
  * Why there is no quota to show. Stable slugs the renderer maps to copy; there
  * is deliberately no zero-usage fallback for any of them.
  */
-export type CodexQuotaUnavailableReason =
-  | "cli-missing"
-  | "timeout"
+export const CODEX_QUOTA_UNAVAILABLE_REASONS = [
+  "cli-missing",
+  "timeout",
   /** The read failed: signed out, API-key auth, or an app-server error. */
-  | "read-failed"
+  "read-failed",
   /** The reply didn't have the shape this client understands. */
-  | "unsupported-response"
+  "unsupported-response",
   /** A well-formed reply that carried no window at all. */
-  | "no-windows";
+  "no-windows",
+] as const;
+
+export type CodexQuotaUnavailableReason = (typeof CODEX_QUOTA_UNAVAILABLE_REASONS)[number];
 
 export type CodexQuotaResult =
   | {

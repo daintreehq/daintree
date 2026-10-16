@@ -1081,6 +1081,22 @@ describe("remote session wiring", () => {
     h.allowConnect.hostModeOff = false;
   });
 
+  it("keeps waiting through a host restart rather than settling on Host mode being off (#13392)", async () => {
+    await startHarness();
+    const connection = h.manager.connect(HOST_ID);
+    await expect(connection.whenReady(5_000)).resolves.toBe("ready");
+
+    // The host restarting: host.json is gone on the way down.
+    h.allowConnect.hostModeOff = true;
+    for (const socket of h.sockets) socket.destroy();
+    await waitFor(() => connection.currentSession === null);
+    await expect(connection.whenReady(300)).resolves.toBe("timeout");
+
+    const waiting = connection.whenReady(5_000);
+    h.allowConnect.hostModeOff = false;
+    await expect(waiting).resolves.toBe("ready");
+  });
+
   it("settles whenReady on connect, stop and timeout", async () => {
     await startHarness();
     h.allowConnect.value = false;

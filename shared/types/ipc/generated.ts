@@ -1030,6 +1030,7 @@ export interface GeneratedIpcInvokeMap {
         agentId: string;
         context?: import("../actions.js").ActionContext | undefined;
         slot?: number | undefined;
+        vacantOnly?: boolean | undefined;
       },
     ];
     result: {

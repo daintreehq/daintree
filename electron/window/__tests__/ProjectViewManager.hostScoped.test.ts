@@ -275,6 +275,27 @@ describe("ProjectViewManager — views keyed per host", () => {
     expect(clearEvictionMock).not.toHaveBeenCalled();
   });
 
+  it("restores a host's project in the background under its host key, never telling plugins", async () => {
+    await manager.switchTo("proj-local", "/path/local");
+    await flushImmediates();
+    pluginsOpenedMock.mockClear();
+    const key = toHostScopedKey("studio-01", "proj-a");
+
+    const restoring = manager.restoreInBackground(key, "/srv/a", { lastUsed: 5 });
+    await flushImmediates();
+    manager.signalViewHydrated(manager.views.get(key)!.view.webContents.id);
+    await expect(restoring).resolves.toEqual({ status: "restored" });
+
+    expect(manager.views.get(key)?.state).toBe("cached");
+    expect(manager.getActiveProjectId()).toBe("proj-local");
+    expect(identityArgs(viewArguments.at(-1)!)).toEqual([
+      "--daintree-initial-project-id=proj-a",
+      `${HOST_ID_ARG}=studio-01`,
+    ]);
+    // Plugins of a host's project run on the host, however its view was made.
+    expect(pluginsOpenedMock).not.toHaveBeenCalled();
+  });
+
   it("holds the same project id on two hosts and locally as three separate views", async () => {
     await manager.switchTo("proj-a", "/path/a");
     await flushImmediates();

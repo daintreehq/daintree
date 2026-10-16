@@ -165,6 +165,78 @@ describe("McpConfirmDialog", () => {
     vi.restoreAllMocks();
   });
 
+  describe("a confirmation nobody had on screen (#13392)", () => {
+    let visibility: DocumentVisibilityState;
+    beforeEach(() => {
+      visibility = "hidden";
+      Object.defineProperty(document, "visibilityState", {
+        configurable: true,
+        get: () => visibility,
+      });
+    });
+    afterEach(() => {
+      delete (document as { visibilityState?: unknown }).visibilityState;
+    });
+
+    it("times out as unseen when its window was never on screen", async () => {
+      vi.useFakeTimers();
+      try {
+        const pending = enqueue();
+        render(<McpConfirmDialog />);
+        await act(async () => {
+          await vi.advanceTimersByTimeAsync(30_000);
+        });
+        expect(await pending).toEqual({ decision: "timeout", unseen: true });
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("remembers it was seen when a preview lands after the view went hidden", async () => {
+      vi.useFakeTimers();
+      try {
+        visibility = "visible";
+        const pending = enqueue({ requestId: "req-preview", previewPending: true });
+        render(<McpConfirmDialog />);
+        await act(async () => {
+          await vi.advanceTimersByTimeAsync(2_000);
+        });
+        visibility = "hidden";
+        act(() => {
+          document.dispatchEvent(new Event("visibilitychange"));
+          useMcpConfirmStore.getState().setPreview("req-preview", ["worktree wt-1"]);
+        });
+        await act(async () => {
+          await vi.advanceTimersByTimeAsync(30_000);
+        });
+        expect(await pending).toEqual({ decision: "timeout" });
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("is an ordinary timeout once its window came on screen while it asked", async () => {
+      vi.useFakeTimers();
+      try {
+        const pending = enqueue();
+        render(<McpConfirmDialog />);
+        await act(async () => {
+          await vi.advanceTimersByTimeAsync(5_000);
+        });
+        visibility = "visible";
+        act(() => {
+          document.dispatchEvent(new Event("visibilitychange"));
+        });
+        await act(async () => {
+          await vi.advanceTimersByTimeAsync(30_000);
+        });
+        expect(await pending).toEqual({ decision: "timeout" });
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+  });
+
   describe("selectable target checklist (#12123)", () => {
     it("starts with every target checked and names the count on the confirm button", async () => {
       vi.useFakeTimers();

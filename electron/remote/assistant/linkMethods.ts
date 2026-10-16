@@ -4,6 +4,7 @@ import {
   ASSISTANT_MAX_HOP_COUNT,
   ASSISTANT_SEND_REFUSALS,
 } from "../../../shared/types/assistantMessaging.js";
+import { CODEX_QUOTA_UNAVAILABLE_REASONS } from "../../../shared/types/ipc/agentQuota.js";
 import { EXCHANGE_STATES } from "../exchange/types.js";
 
 /**
@@ -17,8 +18,22 @@ import { EXCHANGE_STATES } from "../exchange/types.js";
 export const AssistantLinkMethod = {
   /** Shell → Host: bind this session to the Shell's sender credential for this host. */
   AUTHENTICATE: "assistant.authenticate",
-  /** Shell → Host: the lanes this session enrolled. */
+  /**
+   * Shell → Host: the lanes this session enrolled, and every assistant running
+   * on the host with its agent, so the hub can see what it could reach.
+   */
   LIST_LANES: "assistant.list-lanes",
+  /**
+   * Shell → Host: enroll for this session's Shell a lane its hub just started
+   * in one of the host's projects (#13392): only that run, by help session id,
+   * and only while no other Shell holds the lane.
+   */
+  ENROLL_STARTED: "assistant.enroll-started",
+  /**
+   * Shell → Host: the host's Codex account quota, as Codex reports it there
+   * (#13392), so the hub can tell which host has allowance left.
+   */
+  READ_QUOTA: "assistant.read-quota",
   /** Shell → Host: send a message to an enrolled lane; a resend of its messageId never sends twice. */
   SEND: "assistant.send",
   /** Shell → Host: one of this sender's exchanges by messageId, or null when the host has none. */
@@ -107,13 +122,83 @@ export const EnrolledLaneSchema = z
     generation: id,
     /** Whether the lane would take a message now: its assistant is running and messaging isn't paused. */
     available: z.boolean(),
+    /** The agent CLI the lane's assistant runs; absent while it isn't running. */
+    agentId: id.optional(),
   })
   .strip();
 export type EnrolledLane = z.infer<typeof EnrolledLaneSchema>;
 
-export const LaneListSchema = z
-  .object({ lanes: z.array(EnrolledLaneSchema).max(MAX_LISTED_LANES) })
+export const RunningAssistantSchema = z
+  .object({
+    projectId: id,
+    slot,
+    agentId: id,
+    /** Whether its Daintree tools work: it runs through a live view. Absent from older hosts. */
+    attached: z.boolean().optional(),
+  })
   .strip();
+
+export const EnrollStartedPayloadSchema = z.object({ projectId: id, slot, sessionId: id }).strict();
+export type EnrollStartedPayload = z.infer<typeof EnrollStartedPayloadSchema>;
+
+export const EnrollStartedResultSchema = z
+  .object({
+    status: z.enum(["enrolled", "occupied", "not-running", "wrong-session", "refused"]),
+    lane: EnrolledLaneSchema.nullable(),
+  })
+  .strip();
+export type EnrollStartedResult = z.infer<typeof EnrollStartedResultSchema>;
+export type RunningAssistant = z.infer<typeof RunningAssistantSchema>;
+
+export const LaneListSchema = z
+  .object({
+    lanes: z.array(EnrolledLaneSchema).max(MAX_LISTED_LANES),
+    /** Absent from a host older than the listing of every assistant. */
+    assistants: z.array(RunningAssistantSchema).max(MAX_LISTED_LANES).optional(),
+  })
+  .strip();
+export type LaneList = z.infer<typeof LaneListSchema>;
+
+/** Codex reports two windows today; anything past this isn't a reading this build understands. */
+const MAX_QUOTA_WINDOWS = 8;
+const MAX_PLAN_TYPE_CHARS = 64;
+
+export const CodexQuotaReadingSchema = z.discriminatedUnion("status", [
+  z
+    .object({
+      status: z.literal("ok"),
+      planType: z.string().max(MAX_PLAN_TYPE_CHARS).nullable(),
+      windows: z
+        .array(
+          z
+            .object({
+              usedPercent: z.number().min(0).max(100),
+              windowDurationMins: z.number().int().min(1),
+              resetsAt: nullableTimestamp,
+            })
+            .strip()
+        )
+        .min(1)
+        .max(MAX_QUOTA_WINDOWS),
+      fetchedAt: timestamp,
+    })
+    .strip(),
+  z
+    .object({
+      status: z.literal("unavailable"),
+      // A newer host may name a reason this Shell doesn't know: still no quota, so a failed read.
+      reason: z.union([
+        z.enum(CODEX_QUOTA_UNAVAILABLE_REASONS),
+        z
+          .string()
+          .max(64)
+          .transform(() => "read-failed" as const),
+      ]),
+      fetchedAt: timestamp,
+    })
+    .strip(),
+]);
+export type CodexQuotaReading = z.infer<typeof CodexQuotaReadingSchema>;
 
 export const ExchangeRecordSchema = z
   .object({

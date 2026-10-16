@@ -176,6 +176,17 @@ describe("mcpConfirmStore", () => {
     expect(await timedOut).toEqual({ decision: "timeout" });
   });
 
+  it("says a timeout went unseen, and only a timeout (#13392)", async () => {
+    const unseen = requestMcpConfirmation(pendingFixture({ requestId: "a" }));
+    const approved = requestMcpConfirmation(pendingFixture({ requestId: "b" }));
+
+    useMcpConfirmStore.getState().resolveCurrent("timeout", undefined, undefined, true);
+    useMcpConfirmStore.getState().resolveCurrent("approved", undefined, undefined, true);
+
+    expect(await unseen).toEqual({ decision: "timeout", unseen: true });
+    expect(await approved).toEqual({ decision: "approved" });
+  });
+
   // #12692: "Allow for this session" reaches wider than the call on screen, so
   // it only survives an approval of a dialog that actually offered it.
   it("carries the session scope back only from a dialog that offered it", async () => {

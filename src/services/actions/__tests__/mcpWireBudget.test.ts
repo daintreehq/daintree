@@ -717,7 +717,21 @@ describe("MCP wire budget — aggregate ratchets (§9)", () => {
   // enrolled hub while a host exists, so the external ceiling above does not move.
   // #13338: assistant.sendMessage and the inbox's sent view, for a lane a
   // remote Shell enrolled; also off the external surface.
-  const MAX_COHORT_PAYLOAD_BYTES = 132_700;
+  // 132_700 → 133_200 for the swarm manager (#13392), measured at 133_159 B:
+  // `host.listAssistants` returns the host's projects, each with its
+  // assistants' slot, agent, generation and availability, and `host.list`'s
+  // lanes name their project and agent. Output schemas are a hard contract.
+  // Offered only to this Shell's hub, so the external ceiling does not move.
+  // 133_200 → 134_700 for `host.startAssistant` (#13392), measured at 134_648 B:
+  // its description, the project, agent and startNew arguments, and an output
+  // schema of the shared outcome fields beside the enrolled assistant's slot,
+  // agent, generation, availability and whether it was opened. Hub only.
+  // 134_700 → 136_850 for `host.readQuota` (#13392), measured at 136_786 B:
+  // its description, the hostId argument, and an output schema of the shared
+  // outcome fields beside the host's Codex reading as Codex reports it (each
+  // window's percent used, length and reset, or why there is none) and when
+  // this Shell received it. Hub only, so the external ceiling does not move.
+  const MAX_COHORT_PAYLOAD_BYTES = 136_850;
 
   const wireBytes = (t: WireTool) => t.descriptionBytes + t.paramsBytes + t.outputBytes;
 

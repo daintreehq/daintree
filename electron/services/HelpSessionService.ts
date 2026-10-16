@@ -208,6 +208,12 @@ interface ProvisionInput {
    */
   slot?: number;
   /**
+   * Refuse with `LANE_OCCUPIED` rather than displace a session already in the
+   * lane: set when nobody at this machine asked for it (a hub on another
+   * machine starting an assistant), so it can never end someone's assistant.
+   */
+  vacantOnly?: boolean;
+  /**
    * Snapshot of the renderer's `ActionContext` captured synchronously when
    * the user launched the assistant, before any `await`. Bound to the MCP
    * session at handshake and replayed as `contextOverride` on every tool
@@ -243,6 +249,18 @@ export interface RunningLaneSession {
   sessionId: string;
   terminalId: string;
   projectViewWebContentsId: number;
+}
+
+export interface RunningLane {
+  projectId: string;
+  slot: number;
+  agentId: string;
+  /**
+   * Pinned to a view, which its Daintree tools run through; false while it
+   * waits for one. A link that dropped leaves it pinned until the host gives
+   * that session up, so true is the pin, not proof the view answers.
+   */
+  attached?: boolean;
 }
 
 /**
@@ -589,6 +607,7 @@ export type HelpSessionErrorCode =
   | "MCP_PROBE_FAILED"
   | "USER_CONTENT_SYNC_FAILED"
   | "MIXED_AGENT_LANES"
+  | "LANE_OCCUPIED"
   | "UNSUPPORTED_ASSISTANT_AGENT";
 
 export class HelpSessionError extends Error {
@@ -680,6 +699,7 @@ export class HelpSessionService {
   private readonly panelVisibleByProjectId = new Map<string, boolean>();
   private onMcpSessionRevokedFn: ((token: string, sessionId: string) => void) | null = null;
   private readonly sessionEndedListeners = new Set<(event: HelpSessionEndedEvent) => void>();
+  private readonly sessionReattachedListeners = new Set<(lane: RunningLane) => void>();
   private onMcpSessionRepinnedFn: ((token: string) => void) | null = null;
   private disposed = false;
   private projectMetadataReader: ProjectMetadataReader | null = null;
@@ -729,6 +749,18 @@ export class HelpSessionService {
     };
   }
 
+  /**
+   * A view took over an assistant that had none (#13360, #13392): calls it
+   * made in between failed, so what it was in the middle of may need telling
+   * again. Same listener rules as `addSessionEndedListener`.
+   */
+  addSessionReattachedListener(listener: (lane: RunningLane) => void): () => void {
+    this.sessionReattachedListeners.add(listener);
+    return () => {
+      this.sessionReattachedListeners.delete(listener);
+    };
+  }
+
   private emitSessionEnded(
     record: Pick<HelpSessionRecord, "projectId" | "slot" | "sessionId">,
     reason: HelpSessionEndReason
@@ -746,6 +778,25 @@ export class HelpSessionService {
         console.warn("[HelpSessionService] Session-ended listener failed:", record.sessionId, err);
       }
     }
+  }
+
+  /** Every lane with a running assistant, in the terms `getRunningLaneSession` uses. */
+  listRunningLanes(): RunningLane[] {
+    const lanes: RunningLane[] = [];
+    for (const record of this.sessionsById.values()) {
+      if (record.revoked || record.ending) continue;
+      const terminalId = this.activeHelpTerminalBySlotKey.get(
+        assistantSlotKey(record.projectId, record.slot)
+      );
+      if (!terminalId || this.terminalBySessionId.get(record.sessionId) !== terminalId) continue;
+      lanes.push({
+        projectId: record.projectId,
+        slot: record.slot,
+        agentId: record.agentId,
+        attached: record.detachedAt === undefined,
+      });
+    }
+    return lanes;
   }
 
   /**
@@ -1255,6 +1306,20 @@ export class HelpSessionService {
         "MIXED_AGENT_LANES",
         `Another session in this project is running ${liveSibling.agentId}; sessions of one project share a folder and have to use the same agent. Stop it first, or open the new session with ${liveSibling.agentId}.`
       );
+    }
+
+    // Checked inside the lane lock, so nothing can take the lane between this
+    // and the provision below.
+    if (input.vacantOnly) {
+      const occupant = [...this.sessionsByToken.values()].find(
+        (record) => !record.revoked && record.projectId === input.projectId && record.slot === slot
+      );
+      if (occupant) {
+        throw new HelpSessionError(
+          "LANE_OCCUPIED",
+          `Assistant ${slot + 1} of this project is already in use; it was left running.`
+        );
+      }
     }
 
     // Single-backend invariant (#7509): displace any prior unrevoked record
@@ -1951,7 +2016,7 @@ export class HelpSessionService {
   peekPendingHibernation(
     projectId: string,
     slot: number,
-    options?: { isTerminalLive?: (terminalId: string) => boolean }
+    options?: { isTerminalLive?: (terminalId: string) => boolean; viewHandle?: number }
   ): {
     agentId: string;
     agentSessionId: string;
@@ -1963,7 +2028,12 @@ export class HelpSessionService {
     // (#13360) is told it is running, ahead of any conversation pointer: what
     // it offers then is to show that process, not to resume a transcript.
     if (options?.isTerminalLive) {
-      const detached = this.findDetachedLane(projectId, slot, options.isTerminalLive);
+      // Taken over for this very view by its host when the view came back
+      // (`adoptableSlots`), before its panel showed it: still the running
+      // process to show, not a transcript to resume.
+      const detached =
+        this.findDetachedLane(projectId, slot, options.isTerminalLive) ??
+        this.findLaneHeldFor(projectId, slot, options.viewHandle, options.isTerminalLive);
       if (detached) {
         return {
           agentId: detached.agentId,
@@ -2226,6 +2296,35 @@ export class HelpSessionService {
     return null;
   }
 
+  /** The lane's running assistant if it is pinned to `viewHandle`, a remote view. */
+  private findLaneHeldFor(
+    projectId: string,
+    slot: number,
+    viewHandle: number | undefined,
+    isTerminalLive: (terminalId: string) => boolean
+  ): HelpSessionRecord | null {
+    if (viewHandle === undefined || !isRemoteEndpointHandle(viewHandle)) return null;
+    const record = this.findLaneBackend(projectId, slot);
+    if (!record || record.projectViewWebContentsId !== viewHandle) return null;
+    const terminalId = this.terminalBySessionId.get(record.sessionId);
+    return terminalId && isTerminalLive(terminalId) ? record : null;
+  }
+
+  /**
+   * The slots of a project whose assistant is detached (#13360): still
+   * running, with no view. What a returning view of the project takes over.
+   */
+  detachedSlots(projectId: string): number[] {
+    const slots: number[] = [];
+    for (const record of this.sessionsById.values()) {
+      if (record.revoked || record.projectId !== projectId || record.detachedAt === undefined) {
+        continue;
+      }
+      if (this.findLaneBackend(projectId, record.slot) === record) slots.push(record.slot);
+    }
+    return slots;
+  }
+
   /**
    * The lane's detached assistant (#13360), if its PTY is still running. A
    * detached one whose PTY has exited has nobody left to end it: it is revoked
@@ -2406,7 +2505,8 @@ export class HelpSessionService {
     projectId: string,
     slot: number,
     webContentsId: number,
-    probe: (terminalId: string) => Promise<HelpAdoptProbe | null>
+    probe: (terminalId: string) => Promise<HelpAdoptProbe | null>,
+    options?: { keepRestoreIntent?: boolean }
   ): Promise<HelpAdoptResult> {
     if (this.disposed || !projectId || !isRemoteEndpointHandle(webContentsId)) {
       return { status: "absent" };
@@ -2442,14 +2542,32 @@ export class HelpSessionService {
         return { status: "absent" };
       }
 
+      const repinned = record.projectViewWebContentsId !== webContentsId;
+      const wasDetached = record.detachedAt !== undefined;
       record.windowId = webContentsId;
       record.projectViewWebContentsId = webContentsId;
       delete record.detachedAt;
-      delete record.panelOpenAtDetach;
-      try {
-        this.onMcpSessionRepinnedFn?.(record.token);
-      } catch (err) {
-        console.warn("[HelpSessionService] Resetting a taken-over assistant's MCP failed:", err);
+      // A host taking it over for a view whose panel hasn't shown it yet keeps
+      // whether the panel was open, so that view's cold restore can still open it.
+      if (options?.keepRestoreIntent !== true) delete record.panelOpenAtDetach;
+      // Only a pin that moved needs its transports retired. The view that
+      // already holds it showing it again must not cut a healthy connection.
+      if (repinned) {
+        try {
+          this.onMcpSessionRepinnedFn?.(record.token);
+        } catch (err) {
+          console.warn("[HelpSessionService] Resetting a taken-over assistant's MCP failed:", err);
+        }
+      }
+      if (wasDetached) {
+        const lane = { projectId, slot, agentId: record.agentId };
+        for (const listener of [...this.sessionReattachedListeners]) {
+          try {
+            listener(lane);
+          } catch (err) {
+            console.warn("[HelpSessionService] Session-reattached listener failed:", err);
+          }
+        }
       }
       return {
         status: "adopted",

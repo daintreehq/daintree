@@ -56,6 +56,7 @@ import {
   setRemoteHostNameResolver,
 } from "../../window/windowTitle.js";
 import { clearPendingRemoteRestoresForHost } from "../../window/openWindowsTracker.js";
+import { forgetRemoteRestoresForHost } from "../../window/remoteWindowRestore.js";
 import { clearHostPartitions } from "../../services/sessionCacheCleaner.js";
 import { forgetHostState, type HostStateCleanup } from "./forgetHostState.js";
 import { HostRegistry, type RemoteHostsStore } from "./HostRegistry.js";
@@ -73,6 +74,11 @@ import { unsupportedConnection } from "./connection.js";
 import { SshTransport } from "./sshTransport.js";
 import { TransportError, type LinkTransport } from "./transport.js";
 import { WindowHostBinding } from "./WindowHostBinding.js";
+import {
+  prepareHostProjectView,
+  type HostProjectViewDeps,
+  type HostProjectViewResult,
+} from "./hostProjectViews.js";
 import { defaultCommandRunner } from "./commandRunner.js";
 import { readOrCreateDeviceId } from "./deviceId.js";
 import { machineDisplayName } from "./machineName.js";
@@ -175,6 +181,30 @@ const senders: SenderLookup = {
     else queueMicrotask(callback);
   },
 };
+
+/** The window registry's side of preparing a host project's view (see hostProjectViews.ts). */
+function hostProjectViewDeps(bindings: WindowHostBinding): HostProjectViewDeps {
+  return {
+    owner(key) {
+      const owner = otherOwnerOf(key, null);
+      if (!owner) return null;
+      const entry = owner.projectViewManager.views.get(key);
+      const wc = entry?.view.webContents;
+      return {
+        state: owner.state,
+        entry: entry
+          ? { state: entry.state, webContentsId: wc && !wc.isDestroyed() ? wc.id : null }
+          : null,
+      };
+    },
+    windowsOn: (hostId) => [...bindings.windowsOn(hostId)],
+    restore: async (windowId, key, projectPath) => {
+      const pvm = getWindowRegistry()?.getByWindowId(windowId)?.services.projectViewManager;
+      return pvm ? pvm.restoreInBackground(key, projectPath, { lastUsed: Date.now() }) : null;
+    },
+    claim: (key, windowId) => claimProjectActivation(key, windowId),
+  };
+}
 
 function managerFor(windowId: number) {
   const pvm = getWindowRegistry()?.getByWindowId(windowId)?.services.projectViewManager;
@@ -537,6 +567,7 @@ const HOST_STATE_CLEANUPS: readonly HostStateCleanup[] = [
   },
   { name: "window titles", run: forgetRemoteWorkspaceTitles },
   { name: "window restores", run: clearPendingRemoteRestoresForHost },
+  { name: "window restore retries", run: forgetRemoteRestoresForHost },
   {
     name: "cached views",
     run(hostId) {
@@ -601,6 +632,12 @@ export function initRemoteHostsClient(hooks: RemoteHostsClientHooks = {}): {
   /** Sends a Remote Hosts event to every view on this machine. */
   emitLocal(event: RemoteHostsEvent): void;
   registry: HostRegistry;
+  /** A live view of a host's project, made in the background if need be; see prepareHostProjectView. */
+  prepareHostProjectView(
+    hostId: HostId,
+    projectId: string,
+    projectPath: string
+  ): Promise<HostProjectViewResult>;
   dispose(): Promise<void>;
 } {
   const registry = new HostRegistry(store as unknown as RemoteHostsStore);
@@ -779,6 +816,13 @@ export function initRemoteHostsClient(hooks: RemoteHostsClientHooks = {}): {
     manager,
     emitLocal: broadcastLocal,
     registry,
+    prepareHostProjectView: (hostId, projectId, projectPath) =>
+      prepareHostProjectView(
+        hostProjectViewDeps(bindings),
+        toHostScopedKey(hostId, projectId),
+        hostId,
+        projectPath
+      ),
     async dispose() {
       unregister();
       unregisterWindowHosts();

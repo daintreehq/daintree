@@ -19,17 +19,23 @@ import type {
   LaneEnrollment,
   MessagingDenial,
   MessagingShell,
+  SessionRebind,
 } from "./AssistantMessagingPolicy.js";
 import {
   AssistantLinkMethod,
   AuthenticatePayloadSchema,
+  EnrollStartedPayloadSchema,
   MAX_EXCHANGE_RESPONSES,
   ListExchangesPayloadSchema,
   MAX_LISTED_LANES,
   MessageIdPayloadSchema,
   SendPayloadSchema,
+  type CodexQuotaReading,
   type EnrolledLane,
+  type EnrollStartedResult,
   type ExchangeResponse,
+  type LaneList,
+  type RunningAssistant,
 } from "./linkMethods.js";
 
 declare module "../runtime.js" {
@@ -59,6 +65,8 @@ export interface AssistantExchangeHostDeps {
   admit?: (record: ExchangeRecord, envelope: InboxEnvelope) => void;
   /** The answers a lane gave an exchange; absent, the host doesn't hand replies back. */
   responses?: (key: ExchangeKey) => ExchangeResponse[];
+  /** A Shell's enrollments moved to its newer link session; what waits on the old one follows. */
+  onSessionRebound?: (rebind: SessionRebind) => void;
 }
 
 /**
@@ -128,7 +136,8 @@ function unsupported(): AppError {
  * its Shell keeps for this host; exchanges are scoped to that sender, so they
  * outlive the session and a restart on either side, and two Shells never see
  * each other's. Sending to a lane also needs the lane's enrollment, which
- * belongs to the link session that made it and ends with it.
+ * belongs to the Shell whose sender its session proved: a later session of
+ * that Shell takes it over once it authenticates (`bindSender`).
  */
 export function installAssistantExchangeHostWith(
   server: MetricsSessionSource,
@@ -214,7 +223,8 @@ export function installAssistantExchangeHostWith(
       AuthenticatePayloadSchema,
       ({ credential }) => {
         const senderId = senderIdForCredential(credential);
-        const bound = senders.get(session);
+        // Per transport here, and per session id in the policy, so a resume can't swap senders either.
+        const bound = senders.get(session) ?? deps.policy()?.sessionSender(sessionId);
         if (bound !== undefined && bound !== senderId) {
           throw new AppError({
             code: "PERMISSION",
@@ -222,28 +232,95 @@ export function installAssistantExchangeHostWith(
           });
         }
         senders.set(session, senderId);
+        // Consent follows the Shell this proves, not one connection.
+        const policy = deps.policy();
+        for (const rebind of policy?.bindSender(sessionId, senderId) ?? []) {
+          try {
+            deps.onSessionRebound?.(rebind);
+          } catch (error) {
+            console.warn("[AssistantExchanges] Moving a rebound session's messages failed:", error);
+          }
+        }
         return null;
       }
     );
 
     session.registerCallHandler(AssistantLinkMethod.LIST_LANES, EmptyPayloadSchema, () => {
       const policy = requirePolicy();
+      // Agents are read from everything running, before the listing is capped.
+      const running = policy.listRunning();
+      const agents = new Map(
+        running.map((lane) => [assistantSlotKey(lane.projectId, lane.slot), lane.agentId])
+      );
+      const agentOf = (projectId: string, slot: number) =>
+        agents.get(assistantSlotKey(projectId, slot));
+      const assistants: RunningAssistant[] = running.slice(0, MAX_LISTED_LANES);
       const lanes: EnrolledLane[] = policy
         .listEnrollments(shell)
         .slice(0, MAX_LISTED_LANES)
-        .map((enrollment) => ({
-          projectId: enrollment.projectId,
-          slot: enrollment.slot,
-          generation: enrollment.generation,
-          available: policy.checkLane({
-            lane: { projectId: enrollment.projectId, slot: enrollment.slot },
+        .map((enrollment) => {
+          const agentId = agentOf(enrollment.projectId, enrollment.slot);
+          return {
+            projectId: enrollment.projectId,
+            slot: enrollment.slot,
             generation: enrollment.generation,
-            shell,
-            kind: "wake",
-          }).ok,
-        }));
-      return { lanes };
+            available: policy.checkLane({
+              lane: { projectId: enrollment.projectId, slot: enrollment.slot },
+              generation: enrollment.generation,
+              shell,
+              kind: "wake",
+            }).ok,
+            ...(agentId === undefined ? {} : { agentId }),
+          };
+        });
+      return { lanes, assistants } satisfies LaneList;
     });
+
+    session.registerCallHandler(AssistantLinkMethod.READ_QUOTA, EmptyPayloadSchema, async () => {
+      requirePolicy();
+      // This host's own Codex profile, as Settings reads it; never Claude's (#12797).
+      const { readCodexQuota } = await import("../../services/codex/CodexQuotaService.js");
+      return (await readCodexQuota()) satisfies CodexQuotaReading;
+    });
+
+    session.registerCallHandler(
+      AssistantLinkMethod.ENROLL_STARTED,
+      EnrollStartedPayloadSchema,
+      ({ projectId, slot, sessionId: helpSessionId }): EnrollStartedResult => {
+        // Only a Shell that proved its sender: consent then outlives this connection.
+        requireSender(session);
+        const policy = requirePolicy();
+        const lane = { projectId, slot };
+        const result = policy.enrollStarted(lane, shell, helpSessionId);
+        if (!result.ok) {
+          const status =
+            result.reason === "occupied" || result.reason === "wrong-session"
+              ? result.reason
+              : result.reason === "unavailable"
+                ? "not-running"
+                : "refused";
+          return { status, lane: null };
+        }
+        const agentId = policy
+          .listRunning()
+          .find((running) => running.projectId === projectId && running.slot === slot)?.agentId;
+        return {
+          status: "enrolled",
+          lane: {
+            projectId,
+            slot,
+            generation: result.enrollment.generation,
+            available: policy.checkLane({
+              lane,
+              generation: result.enrollment.generation,
+              shell,
+              kind: "wake",
+            }).ok,
+            ...(agentId === undefined ? {} : { agentId }),
+          },
+        };
+      }
+    );
 
     session.registerCallHandler(AssistantLinkMethod.SEND, SendPayloadSchema, (payload) => {
       const sender = requireSender(session);
@@ -372,11 +449,11 @@ const MAX_SWEEP_BATCHES = 20;
  * support assistant messaging rather than handed records that vanish.
  */
 export async function installAssistantExchangeHost(
-  server: MetricsSessionSource
+  server: MetricsSessionSource & { supersede?(sessionId: string): boolean }
 ): Promise<() => void> {
   const [
     { getSharedSqlite },
-    { AssistantExchangeStore, onExchangeChanged },
+    { AssistantExchangeStore, closeExchangesLeftOpen, onExchangeChanged },
     { getRemoteService, registerRemoteService },
     { exchangeWakeSink },
     { AssistantHostOutbox },
@@ -393,6 +470,7 @@ export async function installAssistantExchangeHost(
     return () => {};
   }
   const store = new AssistantExchangeStore(sqlite);
+  closeExchangesLeftOpen(store);
   const sweep = (): void => {
     try {
       for (let batch = 0; batch < MAX_SWEEP_BATCHES && store.sweep().hasMore; batch++) {
@@ -431,6 +509,13 @@ export async function installAssistantExchangeHost(
       });
     },
     responses: (key) => getRemoteService("assistantMessagingRuntime")?.getResponses(key) ?? [],
+    onSessionRebound: (rebind) => {
+      getRemoteService("assistantHostOutbox")?.rebindSession(rebind);
+      // The Shell proved itself on a new session, so its old one, held for a
+      // resume that can't come, would only keep its views' leases and the
+      // assistants pinned to them.
+      server.supersede?.(rebind.from);
+    },
   });
   // What this host's lanes send the hub of the Shell that enrolled them (#13338).
   const outbox = new AssistantHostOutbox({

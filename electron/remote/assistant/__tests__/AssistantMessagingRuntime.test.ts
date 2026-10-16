@@ -119,6 +119,151 @@ describe("AssistantMessagingRuntime", () => {
     fs.rmSync(tmpDir, { recursive: true, force: true });
   });
 
+  it("wakes a lane again for what it still owes an answer once it has its tools back (#13392)", () => {
+    const rewake = vi.fn();
+    runtime.dispose();
+    runtime = new AssistantMessagingRuntime({
+      policy,
+      store,
+      inbox,
+      getSessionLane: (sessionId) => sessionLanes.get(sessionId) ?? null,
+      rewake,
+      now: () => clock,
+    });
+    runLane("s1");
+    const enrollment = enroll();
+    const read = send(enrollment, "build it");
+    const answered = send(enrollment, "list the panes");
+    const asked = send(enrollment, "deploy it");
+    runtime.getInbox("s1", {});
+    runtime.reply("s1", { taskId: answered.taskId, state: "completed", text: "two panes" });
+    runtime.reply("s1", {
+      taskId: asked.taskId,
+      state: "input-required",
+      text: "staging or prod?",
+    });
+    const unread = send(enrollment, "and the docs");
+
+    expect(runtime.reannounce(LANE)).toBe(2);
+    expect(rewake.mock.calls.map(([, record]) => (record as ExchangeRecord).taskId)).toEqual([
+      read.taskId,
+      unread.taskId,
+    ]);
+    expect(rewake.mock.calls[0]![0]).toMatchObject({ generation: enrollment.generation });
+    // A queued re-wake asks again before typing: once answered, it's no longer owed.
+    const stillOwed = rewake.mock.calls[0]![2] as () => boolean;
+    expect(stillOwed()).toBe(true);
+    runtime.reply("s1", { taskId: read.taskId, state: "completed", text: "built" });
+    expect(stillOwed()).toBe(false);
+    // A lane nobody enrolled has nothing owed.
+    expect(runtime.reannounce({ projectId: "elsewhere", slot: 0 })).toBe(0);
+    // Nothing can be woken while paused: still owed, so it says not yet rather than none.
+    rewake.mockClear();
+    policy.setPaused(true);
+    expect(runtime.reannounce(LANE)).toBeNull();
+    expect(rewake).not.toHaveBeenCalled();
+  });
+
+  it("moves an exchange its lane has read to working", () => {
+    runLane("s1");
+    const enrollment = enroll();
+    const record = send(enrollment, "run the tests");
+    expect(
+      store.get(SENDER, { senderId: SENDER.senderId, messageId: record.messageId })?.state
+    ).toBe("submitted");
+    runtime.getInbox("s1", {});
+    expect(
+      store.get(SENDER, { senderId: SENDER.senderId, messageId: record.messageId })?.state
+    ).toBe("working");
+  });
+
+  const sendReferencing = (
+    enrollment: LaneEnrollment,
+    body: string,
+    referenceTaskIds: string[]
+  ): ExchangeRecord => {
+    const { record } = store.create(SENDER, {
+      messageId: `msg-${++messageCounter}`,
+      contextId: "ctx-1",
+      referenceTaskIds,
+      receiver: exchangeReceiverFor(enrollment),
+      body,
+    });
+    runtime.admit(record, { body, provenance: PROVENANCE });
+    return record;
+  };
+
+  it("closes the question a completed follow-up names, with the follow-up's reply", () => {
+    runLane("s1");
+    const enrollment = enroll();
+    const asking = send(enrollment, "deploy it");
+    runtime.getInbox("s1", {});
+    expect(
+      runtime.reply("s1", {
+        taskId: asking.taskId,
+        state: "input-required",
+        text: "staging or prod?",
+      })
+    ).toMatchObject({ ok: true });
+    const answer = sendReferencing(enrollment, "staging", [asking.messageId]);
+    expect(
+      runtime.reply("s1", {
+        taskId: answer.taskId,
+        state: "completed",
+        text: "deployed to staging",
+      })
+    ).toMatchObject({ ok: true });
+    const asked = store.get(SENDER, { senderId: SENDER.senderId, messageId: asking.messageId });
+    expect(asked?.state).toBe("completed");
+    expect(asked?.delivery.replyReceivedAt).not.toBeNull();
+    expect(
+      runtime.getResponses({ senderId: SENDER.senderId, messageId: asking.messageId })
+    ).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ state: "completed", text: "deployed to staging" }),
+      ])
+    );
+  });
+
+  it("closes nothing for a message that only shares the conversation, queued before or after", () => {
+    runLane("s1");
+    const enrollment = enroll();
+    const asking = send(enrollment, "deploy it");
+    const queued = send(enrollment, "and update the changelog");
+    runtime.getInbox("s1", {});
+    runtime.reply("s1", {
+      taskId: asking.taskId,
+      state: "input-required",
+      text: "staging or prod?",
+    });
+    runtime.reply("s1", { taskId: queued.taskId, state: "completed", text: "changelog updated" });
+    const later = send(enrollment, "also bump the version");
+    runtime.reply("s1", { taskId: later.taskId, state: "completed", text: "bumped" });
+    expect(
+      store.get(SENDER, { senderId: SENDER.senderId, messageId: asking.messageId })?.state
+    ).toBe("input-required");
+  });
+
+  it("leaves a question in another conversation open", () => {
+    runLane("s1");
+    const enrollment = enroll();
+    const { record: other } = store.create(SENDER, {
+      messageId: "msg-other",
+      contextId: "ctx-2",
+      referenceTaskIds: [],
+      receiver: exchangeReceiverFor(enrollment),
+      body: "different thing",
+    });
+    runtime.admit(other, { body: "different thing", provenance: PROVENANCE });
+    runtime.getInbox("s1", {});
+    runtime.reply("s1", { taskId: other.taskId, state: "input-required", text: "which?" });
+    const answer = send(enrollment, "unrelated");
+    runtime.reply("s1", { taskId: answer.taskId, state: "completed", text: "done" });
+    expect(store.get(SENDER, { senderId: SENDER.senderId, messageId: "msg-other" })?.state).toBe(
+      "input-required"
+    );
+  });
+
   it("hands an enrolled lane its messages with provenance and a fenced body, and records the fetch", () => {
     runLane("s1");
     const enrollment = enroll();
@@ -342,6 +487,32 @@ describe("AssistantMessagingRuntime", () => {
         now: () => clock,
       });
     };
+
+    it("is reachable before enrollment wherever a lane could be enrolled, and refuses until then", () => {
+      withOutbox(outbox());
+      runLane("s1");
+      expect(runtime.isAvailable("s1")).toBe(false);
+      expect(runtime.isReachable("s1")).toBe(true);
+      expect(runtime.isSendReachable("s1")).toBe(true);
+      expect(runtime.getInbox("s1", {})).toMatchObject({ ok: false });
+      expect(runtime.isReachable("stranger")).toBe(false);
+
+      // A Shell with no host side reaches a lane only once it has hosts of its own.
+      let hasHosts = false;
+      runtime.dispose();
+      runtime = new AssistantMessagingRuntime({
+        policy,
+        store,
+        inbox,
+        getSessionLane: (sessionId) => sessionLanes.get(sessionId) ?? null,
+        hasHosts: () => hasHosts,
+        now: () => clock,
+      });
+      expect(runtime.isReachable("s1")).toBe(false);
+      hasHosts = true;
+      expect(runtime.isReachable("s1")).toBe(true);
+      expect(runtime.isSendReachable("s1")).toBe(false);
+    });
 
     it("queues it for a lane a remote Shell enrolled, under that enrollment", () => {
       const handle = outbox();

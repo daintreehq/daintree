@@ -400,6 +400,81 @@ describe("HelpSessionService", () => {
         expect(mockPtyKill).toHaveBeenCalledWith("term-local", "help-session-revoked");
       });
 
+      it("lists the slots a returning view can take over, and none once taken", async () => {
+        await launchRemote();
+        expect(service.detachedSlots("proj-1")).toEqual([]);
+        await service.detachByWebContentsId(HANDLE);
+        expect(service.detachedSlots("proj-1")).toEqual([0]);
+        expect(service.detachedSlots("proj-2")).toEqual([]);
+        await service.adoptDetachedSession("proj-1", 0, NEXT_HANDLE, liveProbe);
+        expect(service.detachedSlots("proj-1")).toEqual([]);
+      });
+
+      it("retires the MCP transports only when the pin moves, never for the view already holding it", async () => {
+        await launchRemote();
+        await service.detachByWebContentsId(HANDLE);
+        await service.adoptDetachedSession("proj-1", 0, NEXT_HANDLE, liveProbe, {
+          keepRestoreIntent: true,
+        });
+        expect(mockMcpServerService.resetHelpTransports).toHaveBeenCalledTimes(1);
+        // That view's panel binding a pane to it afterwards leaves the connection alone.
+        await service.adoptDetachedSession("proj-1", 0, NEXT_HANDLE, liveProbe);
+        expect(mockMcpServerService.resetHelpTransports).toHaveBeenCalledTimes(1);
+      });
+
+      it("tells listeners when a view takes over an assistant that had none, and only then (#13392)", async () => {
+        const reattached = vi.fn();
+        const off = service.addSessionReattachedListener(reattached);
+        await launchRemote();
+        await service.detachByWebContentsId(HANDLE);
+        await service.adoptDetachedSession("proj-1", 0, NEXT_HANDLE, liveProbe);
+        expect(reattached).toHaveBeenCalledWith({
+          projectId: "proj-1",
+          slot: 0,
+          agentId: provisionInput().agentId,
+        });
+        // The view that already has it showing it again is no take-over.
+        await service.adoptDetachedSession("proj-1", 0, NEXT_HANDLE, liveProbe);
+        expect(reattached).toHaveBeenCalledTimes(1);
+        off();
+      });
+
+      it("keeps the panel's restore intent through a host take-over until the view's own", async () => {
+        await launchRemote();
+        service.reportPanelOpen("proj-1", true);
+        await service.detachByWebContentsId(HANDLE);
+        await service.adoptDetachedSession("proj-1", 0, NEXT_HANDLE, liveProbe, {
+          keepRestoreIntent: true,
+        });
+        const peek = () =>
+          service.peekPendingHibernation("proj-1", 0, {
+            isTerminalLive: live,
+            viewHandle: NEXT_HANDLE,
+          });
+        expect(peek()).toMatchObject({ live: true, panelWasOpen: true });
+        // The view's own take-over consumes it.
+        await service.adoptDetachedSession("proj-1", 0, NEXT_HANDLE, liveProbe);
+        expect(peek()).toMatchObject({ live: true, panelWasOpen: false });
+      });
+
+      it("still offers the running assistant to the view its host handed it to", async () => {
+        await launchRemote();
+        await service.detachByWebContentsId(HANDLE);
+        await service.adoptDetachedSession("proj-1", 0, NEXT_HANDLE, liveProbe);
+
+        // Taken over before that view's panel showed it: shown as running, not resumed.
+        expect(
+          service.peekPendingHibernation("proj-1", 0, {
+            isTerminalLive: live,
+            viewHandle: NEXT_HANDLE,
+          })
+        ).toMatchObject({ live: true, agentId: "claude" });
+        // Another view is never told it can have it.
+        expect(
+          service.peekPendingHibernation("proj-1", 0, { isTerminalLive: live, viewHandle: -9 })
+        ).toBeNull();
+      });
+
       it("hands the running assistant to the next view of its project", async () => {
         const result = await launchRemote();
         await service.detachByWebContentsId(HANDLE);
@@ -2022,6 +2097,56 @@ describe("HelpSessionService", () => {
         projectViewWebContentsId: 42,
       });
       expect(service.getRunningLaneSession("proj-1", 1)).toBeNull();
+    });
+
+    it("lists every lane running an assistant, with its agent, and drops one once revoked", async () => {
+      const first = await service.provisionSession(provisionInput());
+      const second = await service.provisionSession({ ...provisionInput(), slot: 1 });
+      if (!first || !second) throw new Error("expected results");
+      // Provisioned is not running: nothing listed until a PTY is bound.
+      expect(service.listRunningLanes()).toEqual([]);
+      expect(service.markTerminalForToken(first.token, "term-1")).toBe(true);
+      expect(service.markTerminalForToken(second.token, "term-2")).toBe(true);
+      const agentId = provisionInput().agentId;
+      expect(service.listRunningLanes()).toEqual([
+        { projectId: "proj-1", slot: 0, agentId, attached: true },
+        { projectId: "proj-1", slot: 1, agentId, attached: true },
+      ]);
+      await service.revokeSession(first.sessionId);
+      expect(service.listRunningLanes()).toEqual([
+        { projectId: "proj-1", slot: 1, agentId, attached: true },
+      ]);
+    });
+
+    it("refuses rather than displaces an occupied lane when asked for a vacant one (#13392)", async () => {
+      const first = await service.provisionSession(provisionInput());
+      if (!first) throw new Error("expected result");
+      expect(service.markTerminalForToken(first.token, "term-1")).toBe(true);
+      await expect(
+        service.provisionSession({ ...provisionInput(), vacantOnly: true })
+      ).rejects.toMatchObject({ code: "LANE_OCCUPIED" });
+      // The assistant already there keeps running.
+      expect(service.getRunningLaneSession("proj-1", 0)?.sessionId).toBe(first.sessionId);
+      const beside = await service.provisionSession({
+        ...provisionInput(),
+        slot: 1,
+        vacantOnly: true,
+      });
+      expect(beside?.sessionId).toBeTruthy();
+    });
+
+    it("stops listing a lane the moment its teardown starts, before the PTY is gone", async () => {
+      let resolveKill!: (id: string | null) => void;
+      mockPtyGracefulKill.mockImplementationOnce(
+        () => new Promise<string | null>((resolve) => (resolveKill = resolve))
+      );
+      const result = await service.provisionSession(provisionInput());
+      if (!result) throw new Error("expected result");
+      expect(service.markTerminalForToken(result.token, "term-1")).toBe(true);
+      const revoke = service.revokeSession(result.sessionId, { captureHibernation: true });
+      expect(service.listRunningLanes()).toEqual([]);
+      resolveKill(null);
+      await revoke;
     });
 
     it("names a session's lane until the session is revoked (#13335)", async () => {

@@ -1448,6 +1448,9 @@ export class ProjectViewManager {
       // for as long as the session lives.
       const mcp = this.mcpActivityFor(projectId, wc);
       if (mcp.liveBinding || mcp.dispatchLease || mcp.unknown) continue;
+      // A host's assistant runs its tool calls through this view, often one the
+      // person never shows (a hub started it); frozen, every call would stall.
+      if (this.remoteAssistantLive?.(wc.id) === true) continue;
       void freezeWebContents(wc);
     }
   }

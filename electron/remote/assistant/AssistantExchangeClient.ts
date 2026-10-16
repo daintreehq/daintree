@@ -11,18 +11,23 @@ import type { AssistantHubReceiver } from "./AssistantHubReceiver.js";
 import type { AssistantMessagingPolicy, MessagingRequestKind } from "./AssistantMessagingPolicy.js";
 import {
   AssistantLinkMethod,
+  CodexQuotaReadingSchema,
   ExchangeChangedPayloadSchema,
   ExchangeChangesSchema,
   ExchangeRecordSchema,
   ExchangeResponsesSchema,
+  EnrollStartedResultSchema,
   LaneListSchema,
   MAX_EXCHANGE_PAGE,
   MessageIdPayloadSchema,
   SendResultSchema,
   SendToHubPayloadSchema,
   type AssistantSendPayload,
-  type EnrolledLane,
+  type CodexQuotaReading,
+  type EnrollStartedPayload,
+  type EnrollStartedResult,
   type ExchangeResponse,
+  type LaneList,
 } from "./linkMethods.js";
 
 export interface AssistantExchangeClientDeps {
@@ -40,6 +45,8 @@ export interface AssistantExchangeClientDeps {
   onExchangesMoved?: (hostId: HostId, moved: MovedExchange[]) => void;
   /** Admits what a host's assistants send this Shell's hub (#13338); absent, the Shell refuses them. */
   hubReceiver?: () => Pick<AssistantHubReceiver, "receive" | "lookUp"> | undefined;
+  /** This Shell's per-host opt-in; a host with it on is authenticated on every new session. */
+  messagingEnabled?: (hostId: HostId) => boolean;
   callTimeoutMs?: number;
 }
 
@@ -57,6 +64,11 @@ export interface MovedExchange {
 }
 
 const CALL_TIMEOUT_MS = 15_000;
+/**
+ * The host gives up on Codex after 15 s and answers that it timed out; this
+ * outlasts it, so that answer arrives rather than an unknown outcome.
+ */
+const QUOTA_CALL_TIMEOUT_MS = 30_000;
 
 /**
  * This Shell's own refusal to resend a message whose outcome stayed unknown
@@ -127,9 +139,11 @@ function invalidAnswer(hostId: HostId, method: string): AppError {
 /**
  * The Shell's side of assistant exchanges: the calls it makes on a host, and
  * the journal it keeps of what it sent. Every session that opens to a host
- * this Shell has sent to reconciles: it reads the host's changes since the
- * journal's cursor and looks up each send whose answer it never got. A host
- * that sleeps or a link that drops leaves an exchange where it was.
+ * this Shell has sent to, or may message, authenticates and reconciles: it
+ * reads the host's changes since the journal's cursor and looks up each send
+ * whose answer it never got. Authenticating is also what brings back the lanes
+ * this Shell enrolled over an earlier session. A host that sleeps or a link
+ * that drops leaves an exchange where it was.
  */
 export class AssistantExchangeClient {
   private readonly authenticated = new WeakSet<LinkSession>();
@@ -174,7 +188,14 @@ export class AssistantExchangeClient {
           MessageIdPayloadSchema,
           ({ messageId }) => this.requireReceiver().lookUp(hostId, messageId)
         );
-        if (this.deps.journal.existingCredential(hostId) === null) return;
+        // A host this Shell may message proves its sender at once, so lanes
+        // enrolled over an earlier session follow it here (#13332).
+        if (
+          this.deps.journal.existingCredential(hostId) === null &&
+          this.deps.messagingEnabled?.(hostId) !== true
+        ) {
+          return;
+        }
         void this.reconcile(hostId, session);
       })
     );
@@ -194,6 +215,17 @@ export class AssistantExchangeClient {
   }
 
   /**
+   * Proves this Shell's sender on a host's open session if it hasn't yet, as
+   * when messaging was turned on for a host already connected. A lane enrolled
+   * over a session whose sender was never proven ends with that session.
+   */
+  authenticateOpen(hostId: HostId): void {
+    const session = this.live.get(hostId);
+    if (this.disposed || !session?.isOpen || this.authenticated.has(session)) return;
+    void this.reconcile(hostId, session);
+  }
+
+  /**
    * Tells a host one of its messages to the hub changed, over its open session
    * only: a host that isn't connected reads its open messages when it is.
    */
@@ -207,15 +239,71 @@ export class AssistantExchangeClient {
       });
   }
 
-  /** The lanes this Shell's current session to the host enrolled. */
-  async listLanes(hostId: HostId): Promise<EnrolledLane[]> {
+  /** The lanes this Shell's current session to the host enrolled, and every assistant running there. */
+  async listLanes(hostId: HostId): Promise<LaneList> {
     this.checkHost(hostId, "inspect");
+    return this.readLanes(hostId);
+  }
+
+  /**
+   * The same listing, for giving this Shell's lanes their views back after a
+   * restart: it needs the host's messaging opt-in, but not a hub, which the
+   * person may not have brought back yet when this runs.
+   */
+  async listOwnLanes(hostId: HostId): Promise<LaneList> {
+    const policy = this.deps.policy?.();
+    if (policy && !policy.isSupported()) {
+      throw new AppError({
+        code: "UNSUPPORTED",
+        message: "Assistant messaging isn't supported here",
+      });
+    }
+    if (this.deps.messagingEnabled && !this.deps.messagingEnabled(hostId)) {
+      throw new AppError({
+        code: "PERMISSION",
+        message: `Assistant messaging to host ${hostId} refused: host-disabled`,
+      });
+    }
+    return this.readLanes(hostId);
+  }
+
+  private async readLanes(hostId: HostId): Promise<LaneList> {
     const session = await this.open(hostId);
+    // This Shell's enrollments move to a new session only once it proves its sender there.
+    await this.authenticate(hostId, session);
     const parsed = LaneListSchema.safeParse(
       await this.call(hostId, session, AssistantLinkMethod.LIST_LANES, null)
     );
     if (!parsed.success) throw invalidAnswer(hostId, AssistantLinkMethod.LIST_LANES);
-    return parsed.data.lanes;
+    return parsed.data;
+  }
+
+  /** The host's Codex account quota, as Codex reports it there. */
+  async readQuota(hostId: HostId): Promise<CodexQuotaReading> {
+    this.checkHost(hostId, "inspect");
+    const session = await this.open(hostId);
+    await this.authenticate(hostId, session);
+    const parsed = CodexQuotaReadingSchema.safeParse(
+      await this.call(hostId, session, AssistantLinkMethod.READ_QUOTA, null, QUOTA_CALL_TIMEOUT_MS)
+    );
+    if (!parsed.success) throw invalidAnswer(hostId, AssistantLinkMethod.READ_QUOTA);
+    return parsed.data;
+  }
+
+  /**
+   * Enroll for this Shell an assistant its hub just started on the host: that
+   * run only, and only while no other Shell holds the lane.
+   */
+  async enrollStarted(hostId: HostId, payload: EnrollStartedPayload): Promise<EnrollStartedResult> {
+    this.checkHost(hostId, "admit");
+    const session = await this.open(hostId);
+    // The host enrolls only for a session that proved this Shell's sender.
+    await this.authenticate(hostId, session);
+    const parsed = EnrollStartedResultSchema.safeParse(
+      await this.call(hostId, session, AssistantLinkMethod.ENROLL_STARTED, payload)
+    );
+    if (!parsed.success) throw invalidAnswer(hostId, AssistantLinkMethod.ENROLL_STARTED);
+    return parsed.data;
   }
 
   /**
@@ -514,10 +602,11 @@ export class AssistantExchangeClient {
     hostId: HostId,
     session: LinkSession,
     method: string,
-    payload: unknown
+    payload: unknown,
+    timeoutMs = this.timeoutMs
   ): Promise<unknown> {
     try {
-      return await session.call(method, payload, { timeoutMs: this.timeoutMs });
+      return await session.call(method, payload, { timeoutMs });
     } catch (error) {
       if (codeOf(error) === "UNSUPPORTED") throw unsupported(hostId, error);
       throw error;

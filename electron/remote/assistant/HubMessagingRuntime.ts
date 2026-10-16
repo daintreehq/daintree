@@ -1,5 +1,7 @@
 import { randomUUID } from "node:crypto";
+import { MAX_ASSISTANT_SLOTS, assistantSlotKey } from "../../../shared/config/assistantSlots.js";
 import {
+  HOST_LIST_PROJECTS_MAX,
   HOST_SEND_MAX_WAIT_MS,
   HOST_TASK_PAGE_MAX,
   HOST_TASK_REPLIES_MAX_BYTES,
@@ -16,11 +18,17 @@ import {
   type HostListTasksResult,
   type HostMessagingOutcome,
   type HostMessagingOutcomeCode,
+  type HostProjectEntry,
+  type HostReadQuotaArgs,
+  type HostReadQuotaResult,
   type HostSendMessageArgs,
   type HostSendMessageResult,
+  type HostStartAssistantArgs,
+  type HostStartAssistantResult,
   type HostTask,
   type HostTaskReply,
 } from "../../../shared/types/hostMessaging.js";
+import type { HostProjectSummary } from "../../../shared/types/ipc/remoteHosts.js";
 import type {
   HostConnectionState,
   HostId,
@@ -38,6 +46,8 @@ import type {
   MessagingRequestKind,
 } from "./AssistantMessagingPolicy.js";
 import { inboxBodyFits } from "./AssistantInbox.js";
+import type { HostAssistantStarter, HostStartRefusal } from "./HostAssistantStarter.js";
+import type { LaneList } from "./linkMethods.js";
 import { HOST_MESSAGING_PAUSED_MESSAGE, LANE_NOT_RUNNING_MESSAGE } from "./hostExchanges.js";
 import { TokenBucket } from "./tokenBucket.js";
 
@@ -58,9 +68,15 @@ export interface HubMessagingRuntimeDeps {
   /** Read at each call: the client is installed with the database and may come later. */
   client(): Pick<
     AssistantExchangeClient,
-    "listLanes" | "send" | "get" | "getResponses" | "listChanges" | "cancel" | "known"
+    "listLanes" | "readQuota" | "send" | "get" | "getResponses" | "listChanges" | "cancel" | "known"
   > | null;
   hosts(): ObservedHost[];
+  /** A connected host's projects, most used first; names what its assistants work in. */
+  listHostProjects?(hostId: HostId): Promise<readonly HostProjectSummary[]>;
+  /** The person's per-host consent to starting assistants there, read at each call. */
+  startEnabled?(hostId: HostId): boolean;
+  /** Starts and enrolls an assistant in a host's project; absent where nothing can. */
+  starter?(): Pick<HostAssistantStarter, "start"> | null;
   now?: () => number;
   newId?: () => string;
   /** Resolves after `ms`; injectable so a test's wait doesn't take real time. */
@@ -69,6 +85,77 @@ export interface HubMessagingRuntimeDeps {
 }
 
 const ERROR_MESSAGE = "Hosts can't be reached for assistant messaging right now.";
+
+const START_OFF_DETAIL =
+  "Starting assistants is turned off for this host in this Shell's host settings. Only the person can turn it on.";
+
+/** Why a start didn't happen, as an outcome and fixed words the hub can act on. */
+const START_REFUSALS: Record<
+  HostStartRefusal,
+  { code: Exclude<HostMessagingOutcomeCode, "ok">; detail: string }
+> = {
+  "consent-withdrawn": {
+    code: "opted_out",
+    detail:
+      "Starting assistants on this host, or messaging, was turned off or paused while this ran, so it stopped. An assistant it had already opened may still be running, unenrolled.",
+  },
+  "driven-elsewhere": {
+    code: "lane_unavailable",
+    detail:
+      "Another machine is driving that project on the host, so an assistant can't be started there from this Shell. The person can take it over in a window here.",
+  },
+  "no-project": {
+    code: "not_found",
+    detail: "The host has no project with that id. List its assistants for the projects it has.",
+  },
+  "no-slot": {
+    code: "lane_unavailable",
+    detail: `That project already runs ${MAX_ASSISTANT_SLOTS} assistants, its limit. Use one of them.`,
+  },
+  "agent-mismatch": {
+    code: "policy_rejected",
+    detail:
+      "That project's assistants run a different agent CLI, and a project's assistants share one. Use theirs, or omit agentId.",
+  },
+  "no-window": {
+    code: "lane_unavailable",
+    detail:
+      "No window here shows this host, so an assistant there would have nothing to work through. The person can open the host in a window.",
+  },
+  "no-room": {
+    code: "lane_unavailable",
+    detail:
+      "The windows on this host can't hold another project right now. The person can close a project there.",
+  },
+  busy: {
+    code: "lane_unavailable",
+    detail: "That project is being opened in a window right now. Try again shortly.",
+  },
+  "launch-failed": {
+    code: "lane_unavailable",
+    detail:
+      "The assistant couldn't be started there. The host's window for that project may say why.",
+  },
+  "agent-error": {
+    code: "lane_unavailable",
+    detail:
+      "The assistant opened, but its agent CLI answered with an error, such as not being signed in on that host. It was left open, unenrolled, for the person to see in that host's window; while it runs, that project can't start a different agent CLI.",
+  },
+  "timed-out": {
+    code: "lane_unavailable",
+    detail:
+      "The assistant was started but didn't reach its prompt in time; it may be stopped on a question in the host's window. List the host's assistants before starting another.",
+  },
+  "not-enrolled": {
+    code: "policy_rejected",
+    detail:
+      "The assistant runs, but couldn't be enrolled for this Shell. List the host's assistants to see it.",
+  },
+};
+const QUOTA_UNSUPPORTED_DETAIL =
+  "This host can't report its Codex quota. It may need a newer Daintree.";
+const QUOTA_NO_ANSWER_DETAIL = "The host didn't answer in time. Try again shortly.";
+
 const NOT_ELIGIBLE_MESSAGE =
   "Only this Shell's hub assistant, in the session it was enrolled with, can reach assistants on other hosts.";
 
@@ -161,6 +248,12 @@ class RefusalError extends Error {
 }
 
 const MINUTE_MS = 60_000;
+/** Outcomes the host gives a send it refused outright, recording nothing. */
+const REFUSED_UNRECORDED: ReadonlySet<HostMessagingOutcomeCode> = new Set([
+  "policy_rejected",
+  "lane_unavailable",
+  "paused",
+]);
 /** Sends to one host, and to all, per minute; reads and cancels across all hosts. */
 export const HUB_SENDS_PER_HOST_PER_MINUTE = 10;
 export const HUB_SENDS_PER_MINUTE = 30;
@@ -195,7 +288,8 @@ export function toHostTask(record: ExchangeRecord): HostTask {
     state: record.state,
     outcomeCode: record.outcome,
     delivery: {
-      acceptedAt: record.delivery.acceptedAt,
+      // The host holding a record is what accepting means ("Accepted means recorded").
+      acceptedAt: record.delivery.acceptedAt ?? record.createdAt,
       wakeTypedAt: record.delivery.wakeTypedAt,
       inboxFetchedAt: record.delivery.inboxFetchedAt,
       replyReceivedAt: record.delivery.replyReceivedAt,
@@ -225,6 +319,95 @@ function observedConnection(state: HostConnectionState): HostListEntry["connecti
  * come from its last summary and are null when none came; its lanes are what
  * the last `host.listAssistants` saw, never fetched on its behalf.
  */
+/**
+ * A host's projects with the assistants running in each, as the host reported
+ * them: projects with assistants first, then the rest in the host's own order.
+ * An enrolled lane carries its generation; one whose assistant isn't running
+ * is still listed, unavailable, so the hub sees it waiting.
+ */
+export function projectTree(
+  listed: LaneList,
+  summaries: readonly HostProjectSummary[],
+  paused: boolean
+): { projects: HostProjectEntry[]; omitted: number; lanes: HostAssistantLane[] } {
+  // A repeated id keeps its first, most-used place.
+  const listedIds = new Set<string>();
+  const unique = summaries.filter((summary) => {
+    if (listedIds.has(summary.id)) return false;
+    listedIds.add(summary.id);
+    return true;
+  });
+  const order = new Map(unique.map((summary, index) => [summary.id, index]));
+  const byId = new Map(unique.map((summary) => [summary.id, summary]));
+  const entries = new Map<string, HostProjectEntry>();
+  const entry = (projectId: string): HostProjectEntry => {
+    let found = entries.get(projectId);
+    if (!found) {
+      const summary = byId.get(projectId);
+      found = {
+        projectId,
+        name: summary?.name ?? null,
+        path: summary?.path ?? null,
+        assistants: [],
+      };
+      entries.set(projectId, found);
+    }
+    return found;
+  };
+  const enrolled = new Map(
+    listed.lanes.map((lane) => [assistantSlotKey(lane.projectId, lane.slot), lane])
+  );
+  const runningAgent = new Map(
+    (listed.assistants ?? []).map((running) => [
+      assistantSlotKey(running.projectId, running.slot),
+      running.agentId,
+    ])
+  );
+  const seen = new Set<string>();
+  for (const running of listed.assistants ?? []) {
+    const key = assistantSlotKey(running.projectId, running.slot);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    const lane = enrolled.get(key);
+    entry(running.projectId).assistants.push({
+      slot: running.slot,
+      agentId: running.agentId,
+      attached: running.attached ?? null,
+      generation: lane?.generation ?? null,
+      available: lane ? lane.available && !paused : false,
+    });
+  }
+  for (const lane of listed.lanes) {
+    const key = assistantSlotKey(lane.projectId, lane.slot);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    entry(lane.projectId).assistants.push({
+      slot: lane.slot,
+      agentId: lane.agentId ?? null,
+      attached: null,
+      generation: lane.generation,
+      available: lane.available && !paused,
+    });
+  }
+  for (const project of entries.values()) project.assistants.sort((a, b) => a.slot - b.slot);
+  const rank = (projectId: string) => order.get(projectId) ?? Number.MAX_SAFE_INTEGER;
+  const withAssistants = [...entries.values()].sort(
+    (a, b) => rank(a.projectId) - rank(b.projectId)
+  );
+  const without = unique.filter((summary) => !entries.has(summary.id)).map((s) => entry(s.id));
+  const all = [...withAssistants, ...without];
+  const projects = all.slice(0, HOST_LIST_PROJECTS_MAX);
+  const lanes: HostAssistantLane[] = listed.lanes.map((lane) => ({
+    projectId: lane.projectId,
+    projectName: byId.get(lane.projectId)?.name ?? null,
+    slot: lane.slot,
+    generation: lane.generation,
+    available: lane.available && !paused,
+    agentId: lane.agentId ?? runningAgent.get(assistantSlotKey(lane.projectId, lane.slot)) ?? null,
+  }));
+  return { projects, omitted: all.length - projects.length, lanes };
+}
+
 export class HubMessagingRuntime implements HostMessagingRuntimeHandle {
   private readonly now: () => number;
   private readonly newId: () => string;
@@ -273,6 +456,20 @@ export class HubMessagingRuntime implements HostMessagingRuntimeHandle {
     return !this.disposed && this.isHub(helpSessionId) && this.deps.hosts().length > 0;
   }
 
+  /**
+   * Whether this session could become the hub while a host exists. Its tools
+   * are offered on that alone, for clients that read the tool list once; the
+   * calls refuse until it is enrolled as the hub.
+   */
+  isReachable(helpSessionId: string): boolean {
+    return (
+      !this.disposed &&
+      this.deps.policy.isSupported() &&
+      this.deps.getSessionLane(helpSessionId) !== null &&
+      this.deps.hosts().length > 0
+    );
+  }
+
   /** Stops outstanding waits; exchanges on hosts are left as they are. */
   dispose(): void {
     this.disposed = true;
@@ -318,19 +515,91 @@ export class HubMessagingRuntime implements HostMessagingRuntimeHandle {
     args: HostListAssistantsArgs
   ): Promise<HostMessagingOutcome<HostListAssistantsResult>> {
     return this.settle(helpSessionId, async () => {
-      const base = { lanes: null };
+      const base = { projects: null, projectsOmitted: 0 };
+      const refused = this.refuse(args.hostId, "inspect") ?? this.limitRead();
+      if (refused) return { ...refused, ...base };
+      // Listing passes the pause; taking a message doesn't, so no lane takes one now.
+      const admits = this.deps.policy.checkHost({ hostId: args.hostId, kind: "admit" });
+      const paused = !admits.ok && admits.reason === "paused";
+      try {
+        const listed = await this.requireClient().listLanes(args.hostId);
+        // Names are a convenience: a host that can't list its projects still lists its assistants.
+        const summaries = await this.hostProjects(args.hostId);
+        const { projects, omitted, lanes } = projectTree(listed, summaries, paused);
+        this.observeLanes(args.hostId, lanes);
+        return { ...this.ok(), projects, projectsOmitted: omitted };
+      } catch (error) {
+        return { ...this.failed(error), ...base };
+      }
+    });
+  }
+
+  /**
+   * The host's Codex account quota as Codex reported it there, on demand. A
+   * read: the hub, an opted-in host and the read budget, and passes the pause.
+   */
+  readQuota(
+    helpSessionId: string,
+    args: HostReadQuotaArgs
+  ): Promise<HostMessagingOutcome<HostReadQuotaResult>> {
+    return this.settle(helpSessionId, async () => {
+      const base = { codex: null, observedAt: null };
       const refused = this.refuse(args.hostId, "inspect") ?? this.limitRead();
       if (refused) return { ...refused, ...base };
       try {
-        const listed = await this.requireClient().listLanes(args.hostId);
-        const lanes = listed.map((lane) => ({
-          projectId: lane.projectId,
-          slot: lane.slot,
-          generation: lane.generation,
-          available: lane.available,
-        }));
-        this.observeLanes(args.hostId, lanes);
-        return { ...this.ok(), lanes };
+        const codex = await this.requireClient().readQuota(args.hostId);
+        return { ...this.ok(), codex, observedAt: this.now() };
+      } catch (error) {
+        // A read sends nothing, so a call the host never answered is a timeout, not an ambiguous message.
+        if (codeOf(error) === "OUTCOME_UNKNOWN") {
+          return { ...this.outcomeWith("disconnected", QUOTA_NO_ANSWER_DETAIL), ...base };
+        }
+        const failure = this.failed(error);
+        if (failure.outcome === "unsupported") {
+          return { ...this.outcomeWith("unsupported", QUOTA_UNSUPPORTED_DETAIL), ...base };
+        }
+        return { ...failure, ...base };
+      }
+    });
+  }
+
+  /**
+   * Starts an assistant in one of a host's projects and enrolls it for this
+   * Shell, with nobody at the host (see HostAssistantStarter). A send in all
+   * but name: the hub, an opted-in host, no pause, the send budget, and the
+   * person's own consent to starting assistants on that host.
+   */
+  startAssistant(
+    helpSessionId: string,
+    args: HostStartAssistantArgs
+  ): Promise<HostMessagingOutcome<HostStartAssistantResult>> {
+    return this.settle(helpSessionId, async () => {
+      const base = { assistant: null };
+      const refused = this.refuse(args.hostId, "admit") ?? this.limitSend(args.hostId);
+      if (refused) return { ...refused, ...base };
+      if (this.deps.startEnabled?.(args.hostId) !== true) {
+        return { ...this.outcomeWith("opted_out", START_OFF_DETAIL), ...base };
+      }
+      const starter = this.deps.starter?.() ?? null;
+      if (!starter) return { ...this.outcome("unsupported"), ...base };
+      try {
+        const result = await starter.start(args.hostId, args.projectId, {
+          ...(args.agentId === undefined ? {} : { agentId: args.agentId }),
+          ...(args.startNew === undefined ? {} : { startNew: args.startNew }),
+          // Asked again at every step: the person can turn either opt-in off,
+          // or pause messaging, while a start is under way.
+          authorized: () =>
+            !this.disposed &&
+            this.isHub(helpSessionId) &&
+            this.deps.startEnabled?.(args.hostId) === true &&
+            this.deps.policy.checkHost({ hostId: args.hostId, kind: "admit" }).ok,
+        });
+        if (result.status === "refused") {
+          const { code, detail } = START_REFUSALS[result.reason];
+          return { ...this.outcomeWith(code, detail), ...base };
+        }
+        const { status: _status, ...assistant } = result;
+        return { ...this.ok(), assistant };
       } catch (error) {
         return { ...this.failed(error), ...base };
       }
@@ -377,6 +646,11 @@ export class HubMessagingRuntime implements HostMessagingRuntimeHandle {
         }
         if (codeOf(error) === "VALIDATION") return { ...this.outcome("conflict"), ...base };
         const named = errorOutcome(error);
+        // A fresh send the host refused outright recorded nothing: there is no
+        // task to follow. A resend keeps its id, which may still name one.
+        if (named !== null && REFUSED_UNRECORDED.has(named) && args.taskId === undefined) {
+          return { ...this.outcome(named), ...base, taskId: null, contextId: null };
+        }
         if (named !== null) return { ...this.outcome(named), ...base };
         // Not proven undelivered: the journal still holds the attempt for a lookup.
         console.warn("[HubMessaging] A send ended without a known outcome:", error);
@@ -547,6 +821,14 @@ export class HubMessagingRuntime implements HostMessagingRuntimeHandle {
     }
   }
 
+  private async hostProjects(hostId: HostId): Promise<readonly HostProjectSummary[]> {
+    try {
+      return (await this.deps.listHostProjects?.(hostId)) ?? [];
+    } catch {
+      return [];
+    }
+  }
+
   private observeLanes(hostId: HostId, lanes: HostAssistantLane[]): void {
     this.lanes.delete(hostId);
     if (this.lanes.size >= LANE_OBSERVATIONS_MAX) {
@@ -565,6 +847,14 @@ export class HubMessagingRuntime implements HostMessagingRuntimeHandle {
     retryAfterMs: number | null = null
   ): { outcome: HostMessagingOutcomeCode; detail: string | null; retryAfterMs: number | null } {
     return { outcome: code, detail: code === "ok" ? null : DETAILS[code], retryAfterMs };
+  }
+
+  /** An outcome whose usual words don't say why, with fixed words that do. */
+  private outcomeWith(
+    code: Exclude<HostMessagingOutcomeCode, "ok">,
+    detail: string
+  ): ReturnType<HubMessagingRuntime["outcome"]> {
+    return { outcome: code, detail, retryAfterMs: null };
   }
 
   /** A link failure as a named outcome; anything unnamed is a refusal with fixed words. */

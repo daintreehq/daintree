@@ -36,6 +36,7 @@ function entry(connection: HostConnectionState): HostListEntry {
       addedAt: 0,
       notificationsEnabled: false,
       assistantMessagingEnabled: false,
+      assistantStartEnabled: false,
     },
     connection,
     summary: null,

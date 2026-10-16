@@ -288,7 +288,8 @@ async function buildHostListener(
         detachTerminalBridge(endpointId);
         detachWorktreePortBridge(endpointId);
       }
-      // That Shell can't come back as this session, so the lanes it enrolled are done.
+      // That Shell can't come back as this session: lanes it enrolled end, unless
+      // its sender was proven, when they wait for its next session (bindSender).
       getRemoteService("assistantMessagingPolicy")?.releaseLinkSession(sessionId);
       notify();
     })

@@ -190,6 +190,7 @@ function projectReply(result: unknown): Record<string, unknown> {
 
 const HOST_ID_PATTERN = /^[\w.-]{1,64}$/;
 const HOST_OUTCOMES: ReadonlySet<string> = new Set(HOST_MESSAGING_OUTCOMES);
+const CODEX_QUOTA_STATUSES: ReadonlySet<string> = new Set(["ok", "unavailable"]);
 const TASK_STATES: ReadonlySet<string> = new Set([
   "submitted",
   "working",
@@ -267,9 +268,19 @@ const AUDIT_RESULT_PROJECTIONS: ReadonlyMap<string, (result: unknown) => unknown
   ["host.list", projectHostList],
   [
     "host.listAssistants",
-    hostResultProjection((record) => ({
-      laneCount: Array.isArray(record.lanes) ? record.lanes.length : null,
-    })),
+    // Counts only: a host's project names and paths stay out of the audit.
+    hostResultProjection((record) => {
+      const projects = Array.isArray(record.projects) ? record.projects : null;
+      return {
+        projectCount: projects?.length ?? null,
+        assistantCount:
+          projects?.reduce<number>((sum, project) => {
+            const assistants = asRecord(project)?.assistants;
+            return sum + (Array.isArray(assistants) ? assistants.length : 0);
+          }, 0) ?? null,
+        projectsOmitted: finiteNumber(record.projectsOmitted),
+      };
+    }),
   ],
   [
     "host.sendMessage",
@@ -288,6 +299,27 @@ const AUDIT_RESULT_PROJECTIONS: ReadonlyMap<string, (result: unknown) => unknown
     })),
   ],
   ["host.cancelTask", hostResultProjection()],
+  [
+    "host.startAssistant",
+    hostResultProjection((record) => {
+      const assistant = asRecord(record.assistant);
+      return {
+        slot: finiteNumber(assistant?.slot),
+        started: typeof assistant?.started === "boolean" ? assistant.started : null,
+      };
+    }),
+  ],
+  [
+    "host.readQuota",
+    // Whether Codex answered and how many windows, never what it said of them.
+    hostResultProjection((record) => {
+      const codex = asRecord(record.codex);
+      return {
+        codexStatus: fromSet(codex?.status, CODEX_QUOTA_STATUSES),
+        windowCount: Array.isArray(codex?.windows) ? codex.windows.length : null,
+      };
+    }),
+  ],
 ]);
 
 /** The value to summarize for `toolId`'s audit record: its projection when it has one, else the result as is. */
@@ -378,6 +410,19 @@ const AUDIT_ARGS_PROJECTIONS: ReadonlyMap<string, (args: unknown) => unknown> = 
       taskId: auditId(asRecord(args)?.taskId),
     }),
   ],
+  [
+    "host.startAssistant",
+    (args) => {
+      const record = asRecord(args);
+      return {
+        hostId: auditHostId(record?.hostId),
+        projectId: auditId(record?.projectId),
+        agentId: auditId(record?.agentId),
+        startNew: record?.startNew === true,
+      };
+    },
+  ],
+  ["host.readQuota", (args) => ({ hostId: auditHostId(asRecord(args)?.hostId) })],
   [
     "assistant.reply",
     (args) => {

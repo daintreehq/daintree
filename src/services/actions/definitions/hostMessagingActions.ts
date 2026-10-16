@@ -10,8 +10,12 @@ import {
   HostListResultSchema,
   HostListTasksArgsSchema,
   HostListTasksResultSchema,
+  HostReadQuotaArgsSchema,
+  HostReadQuotaResultSchema,
   HostSendMessageArgsSchema,
   HostSendMessageResultSchema,
+  HostStartAssistantArgsSchema,
+  HostStartAssistantResultSchema,
 } from "@shared/types/hostMessaging";
 
 function mainProcessOnly(id: string): () => Promise<never> {
@@ -34,8 +38,9 @@ const READ_ANNOTATIONS = {
  * manifest metadata only — schema, description, tier and audit. Execution
  * lives in the MCP CallTool handler (electron/services/mcp-server/sessionServer.ts):
  * only the help session this Shell's hub was enrolled with may call them, and
- * they reach hosts over the link from main. Listed only while that holds and
- * a host exists. `run()` throws if the renderer ever invokes it directly.
+ * they reach hosts over the link from main. Listed to any assistant session
+ * that could become the hub while a host exists, and refused until it is.
+ * `run()` throws if the renderer ever invokes it directly.
  */
 export function registerHostMessagingActions(actions: ActionRegistry): void {
   actions.set("host.list", () => ({
@@ -61,7 +66,7 @@ export function registerHostMessagingActions(actions: ActionRegistry): void {
     id: "host.listAssistants",
     title: "List assistants on a host",
     description:
-      "List the assistant lanes enrolled for you on a host: the generation a message needs, and whether each takes messages now.",
+      "List a host's projects and the assistants in each, with their agent; one enrolled for you carries the generation a message needs and whether it takes one now.",
     category: "help",
     kind: "query",
     danger: "safe",
@@ -160,5 +165,58 @@ export function registerHostMessagingActions(actions: ActionRegistry): void {
       openWorldHint: true,
     },
     run: mainProcessOnly("host.cancelTask"),
+  }));
+
+  actions.set("host.startAssistant", () => ({
+    id: "host.startAssistant",
+    title: "Add an assistant on a host",
+    description:
+      "Enroll an assistant in a host's project for you, reusing one already there or opening a new one, and return what a message to it needs. The person must allow this per host.",
+    category: "help",
+    kind: "command",
+    danger: "safe",
+    denyPluginDispatch: true,
+    scope: "renderer",
+    keywords: ["assistant", "host", "remote", "swarm", "enroll", "submanager"],
+    palette: { mode: "hidden" },
+    argsSchema: HostStartAssistantArgsSchema,
+    resultSchema: HostStartAssistantResultSchema,
+    mcpOutputSchema: true,
+    mcpAnnotations: {
+      readOnlyHint: false,
+      // startNew opens another assistant each time it's asked.
+      idempotentHint: false,
+      destructiveHint: false,
+      openWorldHint: true,
+    },
+    run: mainProcessOnly("host.startAssistant"),
+  }));
+
+  actions.set("host.readQuota", () => ({
+    id: "host.readQuota",
+    title: "Read a host's agent quota",
+    description:
+      "Read a host's Codex account quota as Codex reports it there: percent used and reset time for each limit window. Claude Code doesn't share its usage with other apps; for it, ask that host's assistant to read /usage in a pane.",
+    category: "help",
+    kind: "query",
+    danger: "safe",
+    denyPluginDispatch: true,
+    scope: "renderer",
+    keywords: [
+      "quota",
+      "usage",
+      "allocation",
+      "allowance",
+      "limit",
+      "headroom",
+      "remaining",
+      "host",
+    ],
+    palette: { mode: "hidden" },
+    argsSchema: HostReadQuotaArgsSchema,
+    resultSchema: HostReadQuotaResultSchema,
+    mcpOutputSchema: true,
+    mcpAnnotations: READ_ANNOTATIONS,
+    run: mainProcessOnly("host.readQuota"),
   }));
 }

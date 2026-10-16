@@ -81,10 +81,11 @@ export class AssistantLaneWaker {
     request: LaneWakeRequest,
     pinned: LaneEnrollment | null
   ): { check: LaneWakeCheck; enrollment: LaneEnrollment | null } {
+    const shell = this.currentShell(request, pinned);
     const result = this.deps.policy.checkLane({
       lane: request.lane,
       generation: request.generation,
-      shell: request.shell,
+      shell,
       kind: "wake",
     });
     if (!result.ok && result.reason !== "paused") {
@@ -104,10 +105,30 @@ export class AssistantLaneWaker {
       return { check: { kind: "unavailable", reason: "relaunched" }, enrollment: null };
     }
     if (!result.ok) return { check: { kind: "held", reason: "paused" }, enrollment };
-    if (!this.deps.shellDrives(enrollment.projectId, request.shell)) {
+    if (!this.deps.shellDrives(enrollment.projectId, shell)) {
       return { check: { kind: "held", reason: "driven-elsewhere" }, enrollment };
     }
     return { check: { kind: "ready" }, enrollment };
+  }
+
+  /**
+   * The Shell a queued wake answers to now. A remote Shell's enrollment moves
+   * to its newer link session when it proves the same sender there
+   * (`AssistantMessagingPolicy.bindSender`); a wake queued before that follows
+   * it, still under the generation and run it was pinned to.
+   */
+  private currentShell(request: LaneWakeRequest, pinned: LaneEnrollment | null): MessagingShell {
+    if (request.shell.kind !== "remote" || pinned?.sender === undefined) return request.shell;
+    const now = this.deps.policy.getEnrollment(request.lane);
+    if (
+      now !== null &&
+      now.enrolledBy.kind === "remote" &&
+      now.generation === request.generation &&
+      now.sender === pinned.sender
+    ) {
+      return now.enrolledBy;
+    }
+    return request.shell;
   }
 }
 

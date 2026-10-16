@@ -1,6 +1,8 @@
 import type Database from "better-sqlite3";
+import type { HostProjectSummary } from "../../../shared/types/ipc/remoteHosts.js";
 import type { HostId } from "../../../shared/types/remoteHosts.js";
 import { CHANNELS } from "../../ipc/channels.js";
+import { getEndpointRegistry } from "../../ipc/endpointRegistry.js";
 import { broadcastToRenderer } from "../../ipc/utils.js";
 import { peekDriveLeaseService } from "../../services/DriveLeaseService.js";
 import { helpSessionService } from "../../services/HelpSessionService.js";
@@ -12,6 +14,7 @@ import { getPtyClient } from "../../window/serviceRefs.js";
 import { AssistantExchangeJournal } from "../exchange/AssistantExchangeJournal.js";
 import {
   AssistantExchangeStore,
+  closeExchangesLeftOpen,
   EXCHANGE_RETRY_WINDOW_MS,
 } from "../exchange/AssistantExchangeStore.js";
 import type { LinkSession } from "../link/session.js";
@@ -20,6 +23,11 @@ import { getRemoteService, registerRemoteService } from "../runtime.js";
 import { exchangeWakeSink } from "../exchange/wakeSink.js";
 import { AssistantExchangeClient, type MovedExchange } from "./AssistantExchangeClient.js";
 import { AssistantHubReceiver } from "./AssistantHubReceiver.js";
+import {
+  HostAssistantStarter,
+  type HostAssistantStarterDeps,
+  type HostStartRefusal,
+} from "./HostAssistantStarter.js";
 import { AssistantInbox } from "./AssistantInbox.js";
 import { AssistantLaneWaker } from "./AssistantLaneWaker.js";
 import { AssistantMessagingPolicy, type MessagingShell } from "./AssistantMessagingPolicy.js";
@@ -44,6 +52,19 @@ declare module "../runtime.js" {
   }
 }
 
+/** How long a lane that got its view back stays owed a re-announcement its Shell can't take yet. */
+const REANNOUNCE_OWED_MS = 10 * 60_000;
+/** When to give enrolled lanes their views back after a session opens: windows restore after the link does. */
+const REATTACH_DELAYS_MS = [3_000, 10_000, 30_000, 90_000];
+/** What a later pass may still fix: a window that wasn't back yet, or one busy opening the project. */
+const REATTACH_RETRY: ReadonlySet<HostStartRefusal> = new Set([
+  "no-window",
+  "busy",
+  "no-room",
+  // An old session of this Shell's own, still held for resume, may hold the lease for a while.
+  "driven-elsewhere",
+]);
+
 export interface AssistantMessagingPolicyInstallDeps {
   /** This Shell's per-host opt-in, read from the host list at each check. */
   isHostMessagingEnabled(hostId: HostId): boolean;
@@ -53,6 +74,14 @@ export interface AssistantMessagingPolicyInstallDeps {
   onAvailabilityChanged?(): void;
   /** Every host this Shell knows, as last observed; what the hub's `host.list` reads. */
   observeHosts?(): ObservedHost[];
+  /** A connected host's projects, for naming what its assistants work in. */
+  listHostProjects?(hostId: HostId): Promise<readonly HostProjectSummary[]>;
+  /** The person's consent to the hub starting assistants on a host, read at each call. */
+  isHostStartEnabled?(hostId: HostId): boolean;
+  /** A session to a host opened (or reopened): lanes enrolled there may need their views back. */
+  onHostSessionOpened?(listener: (hostId: HostId) => void): () => void;
+  /** What starting an assistant in a host's project takes from the windows here. */
+  hostAssistants?: Omit<HostAssistantStarterDeps, "listLanes" | "enrollStarted" | "sleep" | "now">;
 }
 
 function openExchangeDatabase(): Database.Database | null {
@@ -80,9 +109,20 @@ export function installAssistantMessagingPolicy(
   deps: AssistantMessagingPolicyInstallDeps
 ): () => void {
   const store = new AssistantExchangeStore(openExchangeDatabase());
+  closeExchangesLeftOpen(store);
   const policy = new AssistantMessagingPolicy({
     getRunningLaneSession: (projectId, slot) =>
       helpSessionService.getRunningLaneSession(projectId, slot),
+    listRunningLanes: () => helpSessionService.listRunningLanes(),
+    startedThrough: (running, linkSessionId) =>
+      getEndpointRegistry()
+        .getRemote()
+        .some(
+          (endpoint) =>
+            endpoint.handle === running.projectViewWebContentsId &&
+            endpoint.linkSessionId === linkSessionId &&
+            !endpoint.isClosed()
+        ),
     getLiveGeneration: (terminalId) => getPtyClient()?.getLiveGeneration(terminalId) ?? null,
     isHostMessagingEnabled: deps.isHostMessagingEnabled,
     onSessionEnded: (listener) => helpSessionService.addSessionEndedListener(listener),
@@ -149,19 +189,103 @@ export function installAssistantMessagingPolicy(
     getSessionLane: (helpSessionId) => helpSessionService.getSessionLane(helpSessionId),
     // The host side installs it with its server, which may come later or not at all.
     outbox: () => getRemoteService("assistantHostOutbox"),
+    hasHosts: deps.hasHosts,
+    // Outside the exchange's one reserved wake, so it records nothing on the exchange.
+    rewake: (enrollment, record, stillOwed) =>
+      getRemoteService("assistantLaneWaker")?.wake({
+        lane: { projectId: enrollment.projectId, slot: enrollment.slot },
+        generation: record.receiver.enrollmentGeneration,
+        shell: enrollment.enrolledBy,
+        exchangeId: record.taskId,
+        // Asked again just before typing: the lane may have answered it meanwhile.
+        sink: { beforeType: stillOwed, report: () => {} },
+      }),
   });
+  // A lane whose assistant got its view back may have given up on a message
+  // while its tools were gone: tell it again what it still owes an answer.
+  // Owed until it can be woken: a view can take a detached assistant over
+  // before its Shell has proved itself on the new session, and the policy
+  // changing (that rebind, an unpause) is when to try again.
+  const owedReannounce = new Map<
+    string,
+    { lane: { projectId: string; slot: number }; at: number }
+  >();
+  const payReannounce = (): void => {
+    const now = Date.now();
+    for (const [key, owed] of owedReannounce) {
+      if (now - owed.at > REANNOUNCE_OWED_MS || runtime.reannounce(owed.lane) !== null) {
+        owedReannounce.delete(key);
+      }
+    }
+  };
+  const offReattached = helpSessionService.addSessionReattachedListener(({ projectId, slot }) => {
+    owedReannounce.set(`${projectId}\0${slot}`, { lane: { projectId, slot }, at: Date.now() });
+    payReannounce();
+  });
+  const offPolicyReannounce = policy.onChange(payReannounce);
   const onAvailabilityChanged = deps.onAvailabilityChanged;
   const stopListening = onAvailabilityChanged
     ? runtime.onAvailabilityChanged(onAvailabilityChanged)
     : () => {};
   const unregisterRuntime = setAssistantMessagingRuntime(runtime);
+  const exchangeClient = (): AssistantExchangeClient => {
+    const client = getRemoteService("assistantExchangeClient");
+    if (!client) throw new Error("Assistant exchanges aren't available");
+    return client;
+  };
+  const hostAssistants = deps.hostAssistants;
+  const starter = hostAssistants
+    ? new HostAssistantStarter({
+        ...hostAssistants,
+        listLanes: (hostId) => exchangeClient().listLanes(hostId),
+        listOwnLanes: (hostId) => exchangeClient().listOwnLanes(hostId),
+        enrollStarted: (hostId, payload) => exchangeClient().enrollStarted(hostId, payload),
+      })
+    : null;
   const hub = new HubMessagingRuntime({
     policy,
     getSessionLane: (helpSessionId) => helpSessionService.getSessionLane(helpSessionId),
     client: () => getRemoteService("assistantExchangeClient") ?? null,
     hosts: () => deps.observeHosts?.() ?? [],
+    listHostProjects: deps.listHostProjects,
+    startEnabled: (hostId) => deps.isHostStartEnabled?.(hostId) === true,
+    starter: () => starter,
   });
   const unregisterHub = setHostMessagingRuntime(hub);
+  // An assistant the hub started works through a hidden view of its project,
+  // which no window restores after a restart: give each enrolled lane's project
+  // a view again once the link is back, retrying while windows come back too.
+  // Each session opening starts a new round for its host; a pass from an
+  // older round stops at its next step and never reschedules.
+  let reattachDisposed = false;
+  const reattachTimers = new Map<HostId, ReturnType<typeof setTimeout>>();
+  const reattachRounds = new Map<HostId, number>();
+  const attemptReattach = (hostId: HostId, round: number, attempt: number): void => {
+    const delay = REATTACH_DELAYS_MS[attempt];
+    if (reattachDisposed || !starter || delay === undefined) return;
+    if (reattachRounds.get(hostId) !== round) return;
+    clearTimeout(reattachTimers.get(hostId));
+    const timer = setTimeout(() => {
+      reattachTimers.delete(hostId);
+      const authorized = () =>
+        !reattachDisposed &&
+        reattachRounds.get(hostId) === round &&
+        deps.isHostStartEnabled?.(hostId) === true;
+      if (!authorized()) return;
+      const again = () => attemptReattach(hostId, round, attempt + 1);
+      starter.reattach(hostId, authorized).then((left) => {
+        if (left.some((project) => REATTACH_RETRY.has(project.reason))) again();
+      }, again);
+    }, delay);
+    timer.unref?.();
+    reattachTimers.set(hostId, timer);
+  };
+  const reattach = (hostId: HostId): void => {
+    const round = (reattachRounds.get(hostId) ?? 0) + 1;
+    reattachRounds.set(hostId, round);
+    attemptReattach(hostId, round, 0);
+  };
+  const offSessionOpened = deps.onHostSessionOpened?.((hostId) => reattach(hostId)) ?? (() => {});
   // What a host's assistants send this hub (#13338), admitted through the same policy.
   const receiver = new AssistantHubReceiver({
     policy,
@@ -190,6 +314,13 @@ export function installAssistantMessagingPolicy(
   // A view that mounted before the policy existed read it as unavailable.
   push();
   return () => {
+    offReattached();
+    offPolicyReannounce();
+    owedReannounce.clear();
+    offSessionOpened();
+    reattachDisposed = true;
+    for (const timer of reattachTimers.values()) clearTimeout(timer);
+    reattachTimers.clear();
     stopListening();
     unregisterReceiver();
     receiver.dispose();
@@ -254,6 +385,8 @@ export interface AssistantExchangeClientInstallDeps {
   addUseCheck?(check: (hostId: HostId) => boolean): () => void;
   /** Told, at most once a tick per host, that the journal's exchanges for it changed. */
   onExchangesChanged?(hostId: HostId): void;
+  /** This Shell's per-host opt-in for assistant messaging. */
+  messagingEnabled?(hostId: HostId): boolean;
 }
 
 /**
@@ -277,13 +410,21 @@ export function installAssistantExchangeClient(
     }
   };
   // On change only: a host leaves the list through a removal this process sees.
-  const offHosts = deps.onHostsChanged(forgetRemovedHosts);
-  const client = new AssistantExchangeClient({
+  // Turning messaging on for a connected host proves this Shell's sender there now.
+  let client: AssistantExchangeClient | null = null;
+  const offHosts = deps.onHostsChanged(() => {
+    forgetRemovedHosts();
+    for (const hostId of deps.knownHosts()) {
+      if (deps.messagingEnabled?.(hostId) === true) client?.authenticateOpen(hostId);
+    }
+  });
+  client = new AssistantExchangeClient({
     journal,
     session: deps.session,
     onSessionOpened: deps.onSessionOpened,
     policy: () => getRemoteService("assistantMessagingPolicy"),
     hubReceiver: () => getRemoteService("assistantHubReceiver"),
+    messagingEnabled: deps.messagingEnabled,
     onExchangesMoved: (_hostId, moved) =>
       wakeHubForMoved(
         moved,

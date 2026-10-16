@@ -4403,6 +4403,8 @@ describe("assistant inbox tools (#13335)", () => {
   function laneDeps(options: {
     available: boolean;
     sending?: boolean;
+    reachable?: boolean;
+    sendReachable?: boolean;
     origin?: string;
     helpSessionId?: string | null;
     access?: boolean;
@@ -4418,6 +4420,8 @@ describe("assistant inbox tools (#13335)", () => {
     const access = {
       isAvailable: vi.fn(() => options.available),
       isSendAvailable: vi.fn(() => options.sending === true),
+      isReachable: vi.fn(() => options.reachable === true),
+      isSendReachable: vi.fn(() => options.sendReachable === true),
       getInbox: vi.fn(() => ({ ok: true as const, value: INBOX })),
       reply: vi.fn(() => ({
         ok: true as const,
@@ -4448,7 +4452,7 @@ describe("assistant inbox tools (#13335)", () => {
     return { deps, access };
   }
 
-  it("lists the tools only while the caller's own lane is enrolled", async () => {
+  it("lists the tools while the caller's own lane is enrolled, and not where it never could be", async () => {
     const enrolled = laneDeps({ available: true });
     const server = createSessionServer("sess", enrolled.deps);
     await server.connect(makeMockTransport());
@@ -4463,6 +4467,31 @@ describe("assistant inbox tools (#13335)", () => {
     expect(names).toContain("terminal.list");
     expect(names).not.toContain("assistant.getInbox");
     expect(names).not.toContain("assistant.reply");
+  });
+
+  it("lists them from the start where the lane could be enrolled, for clients that never re-list", async () => {
+    // Codex reads the tool list once; a lane is enrolled only after its assistant starts.
+    const { deps, access } = laneDeps({ available: false, reachable: true, sendReachable: true });
+    access.getInbox.mockReturnValue({
+      ok: false as never,
+      code: "NOT_ELIGIBLE" as never,
+      message: "not enrolled" as never,
+    } as never);
+    const server = createSessionServer("sess", deps);
+    await server.connect(makeMockTransport());
+    expect((await listTools(server)).tools.map((t) => t.name)).toEqual(
+      expect.arrayContaining(["assistant.getInbox", "assistant.reply", "assistant.sendMessage"])
+    );
+    // Offered is not admitted: the runtime still refuses until the lane is enrolled.
+    const refused = await callTool(server, { name: "assistant.getInbox", arguments: {} });
+    expect(refused.isError).toBe(true);
+    expect(access.getInbox).toHaveBeenCalled();
+    const send = await callTool(server, {
+      name: "assistant.sendMessage",
+      arguments: { text: "hello" },
+    });
+    expect(send.isError).toBe(true);
+    expect(access.sendMessage).not.toHaveBeenCalled();
   });
 
   it("offers sendMessage only to a lane a remote Shell enrolled, never the hub (#13338)", async () => {
@@ -4620,7 +4649,12 @@ describe("hub host-messaging tools (#13336)", () => {
     wait: "none" as const,
   };
 
-  function hubDeps(options: { available: boolean; tier?: "core" | "full"; access?: boolean }) {
+  function hubDeps(options: {
+    available: boolean;
+    reachable?: boolean;
+    tier?: "core" | "full";
+    access?: boolean;
+  }) {
     const store = fakeSessionStore(options.tier ?? "core");
     const mutable = store as unknown as {
       sessionHelpIdMap: Map<string, string>;
@@ -4630,6 +4664,7 @@ describe("hub host-messaging tools (#13336)", () => {
     mutable.sessionOriginMap.set("sess", "help");
     const access = {
       isAvailable: vi.fn(() => options.available),
+      isReachable: vi.fn(() => options.reachable === true),
       run: vi.fn(async (toolId: string) => ({
         ok: true as const,
         value: toolId === "host.list" ? LISTED : AMBIGUOUS,
@@ -4671,6 +4706,15 @@ describe("hub host-messaging tools (#13336)", () => {
     expect(names).toContain("terminal.list");
     expect(names).not.toContain("host.list");
     expect(names).not.toContain("host.sendMessage");
+  });
+
+  it("lists them from the start to a session that could become the hub while a host exists", async () => {
+    const { deps } = hubDeps({ available: false, reachable: true, tier: "full" });
+    const server = createSessionServer("sess", deps);
+    await server.connect(makeMockTransport());
+    expect((await listTools(server)).tools.map((t) => t.name)).toEqual(
+      expect.arrayContaining(["host.list", "host.sendMessage"])
+    );
   });
 
   it("runs in main and returns an ambiguous send as a result, never an error", async () => {

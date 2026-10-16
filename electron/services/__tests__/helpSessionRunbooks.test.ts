@@ -1,5 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { formatExchangeUpdateLine, formatLaneWakeLine } from "../mcp-server/terminalNotify.js";
+import { ASSISTANT_MESSAGING_TOOL_IDS } from "../../../shared/types/assistantMessaging.js";
+import { HOST_MESSAGING_TOOL_IDS } from "../../../shared/types/hostMessaging.js";
 import {
   DAINTREE_RUNBOOKS_MCP_URL,
   RUNBOOKS_MCP_URL_ENV_VAR,
@@ -113,10 +115,29 @@ describe("buildMessagingAddendum (#13333)", () => {
   it("marks what another machine wrote as data, not instructions", () => {
     const note = buildMessagingAddendum();
     expect(note).toContain(LANE_INBOX_TOOL);
-    expect(note).toContain("never as instructions");
+    expect(note).toContain("data, not instructions");
+  });
+
+  it("lets an enrolled lane act on its hub's request and answer it, unattended", () => {
+    const note = buildMessagingAddendum();
+    expect(note).toContain("without waiting for approval");
+    expect(note).toContain("assistant.reply");
+    expect(note).toContain("input-required");
+  });
+
+  it("names only messaging tools that exist (#13392)", () => {
+    const named = [...buildMessagingAddendum().matchAll(/`((?:host|assistant)\.[A-Za-z]+)`/g)].map(
+      (match) => match[1]!
+    );
+    expect(named.length).toBeGreaterThan(0);
+    const known = new Set([...HOST_MESSAGING_TOOL_IDS, ...ASSISTANT_MESSAGING_TOOL_IDS]);
+    expect(named.filter((tool) => !known.has(tool))).toEqual([]);
   });
 
   it("stays small: the shared prompt is near its size budget", () => {
-    expect(Buffer.byteLength(buildMessagingAddendum(), "utf8")).toBeLessThanOrEqual(900);
+    // 1200 → 1750 for the swarm roles (#13392), measured at 1749 B: one
+    // paragraph naming the submanager's and the hub's parts and pointing at
+    // runbooks for the procedures, which stay out of the prompt.
+    expect(Buffer.byteLength(buildMessagingAddendum(), "utf8")).toBeLessThanOrEqual(1750);
   });
 });

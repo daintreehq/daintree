@@ -471,7 +471,20 @@ describe("LLM-facing tool descriptions (#11542)", () => {
   // surface, so the external total does not move.
   // #13338 adds assistant.sendMessage for a lane a remote Shell enrolled, and
   // a sent view on assistant.getInbox; neither is on the external surface.
-  const MAX_COHORT_TOTAL_BYTES = 20_950;
+  // 20_950 → 21_000 for the swarm manager (#13392): `host.listAssistants` now
+  // lists a host's projects with the assistants in each, measured at 20_972 B.
+  // What the prose has to carry is that a project's assistants name their agent
+  // and that only one enrolled for this Shell has a generation. Off the
+  // external surface, so the external total does not move.
+  // 21_000 → 21_150 for the swarm manager's `host.startAssistant` (#13392),
+  // measured at 21_144 B. What the prose has to carry is that it reuses an
+  // assistant already there before opening one, what it returns, and that the
+  // person allows it per host. Full tier only, off the external surface.
+  // 21_150 → 21_400 for `host.readQuota` (#13392), measured at 21_368 B. What
+  // the prose has to carry is that it reads Codex's own report of a host's
+  // quota, and that Claude Code's usage isn't readable by other apps, so the
+  // hub asks that host's assistant for /usage instead. Off the external surface.
+  const MAX_COHORT_TOTAL_BYTES = 21_400;
 
   const ARG_SECTION = /\b(?:args?|arguments?|parameters?)\s*(?:\([^)]*\))?\s*:|\btakes no args\b/i;
 
@@ -1433,6 +1446,8 @@ describe("plugin-dispatch injection guard (#10558)", () => {
       "host.getTask": { hostId: "h-placeholder", taskId: "task-placeholder" },
       "host.listTasks": { hostId: "h-placeholder" },
       "host.cancelTask": { hostId: "h-placeholder", taskId: "task-placeholder" },
+      "host.startAssistant": { hostId: "h-placeholder", projectId: "p-placeholder" },
+      "host.readQuota": { hostId: "h-placeholder" },
     };
 
     const failures: string[] = [];

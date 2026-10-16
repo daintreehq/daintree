@@ -124,6 +124,8 @@ function clipDetail(detail: string | null): string | null {
 
 /** Past the 5 s ping and its answer: long enough that one is overdue, well short of the 20 s idle timeout. */
 const QUIET_AFTER_MS = 7_000;
+/** How long after a host was last heard from a "host mode off" still reads as a restart. */
+const HOST_RESTART_GRACE_MS = 2 * 60_000;
 const QUIET_CHECK_MS = 1_000;
 
 type HandshakeOutcome =
@@ -237,10 +239,18 @@ export class LinkClient {
     } catch (err) {
       if (this.attemptAbort === abort) this.attemptAbort = null;
       if (stale()) return;
+      const hostModeOff = err instanceof HostModeOffError;
+      // A host heard from moments ago that now says host mode is off is most
+      // likely restarting: it removes host.json on the way down and writes it
+      // again on the way up, so that window is worth retrying through.
+      const restarting =
+        hostModeOff &&
+        this.lastSeenAt !== null &&
+        this.now() - this.lastSeenAt < HOST_RESTART_GRACE_MS;
       this.fail(err instanceof TransportError ? err.detail : formatErrorMessage(err, "failed"), {
-        hostModeOff: err instanceof HostModeOffError,
-        // Nothing a later attempt does differently would change these.
-        parked: err instanceof HostModeOffError || err instanceof SshAccessError,
+        hostModeOff,
+        // Otherwise nothing a later attempt does differently would change these.
+        parked: (hostModeOff && !restarting) || err instanceof SshAccessError,
         // The transport's own words for what failed; its detail is often null.
         ...(err instanceof TransportError ? { failure: err.message } : {}),
       });

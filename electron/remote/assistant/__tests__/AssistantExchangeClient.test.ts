@@ -66,6 +66,9 @@ class FakeHost {
   gate: Promise<void> | null = null;
   handlers = new Map<string, (payload: unknown) => unknown>();
   failNextList = false;
+  authCalls = 0;
+  laneAnswer: unknown = { lanes: [] };
+  quotaAnswer: unknown = null;
 
   put(messageId: string, state: ExchangeState, replied = false): ExchangeRecord {
     const next = record(messageId, ++this.revision, state);
@@ -80,6 +83,7 @@ class FakeHost {
       call: async (method: string, payload: unknown) => {
         switch (method) {
           case AssistantLinkMethod.AUTHENTICATE:
+            this.authCalls++;
             return null;
           case AssistantLinkMethod.SEND: {
             const { messageId } = payload as { messageId: string };
@@ -87,6 +91,10 @@ class FakeHost {
           }
           case AssistantLinkMethod.GET_EXCHANGE:
             return this.records.get((payload as { messageId: string }).messageId) ?? null;
+          case AssistantLinkMethod.LIST_LANES:
+            return this.laneAnswer;
+          case AssistantLinkMethod.READ_QUOTA:
+            return this.quotaAnswer;
           case AssistantLinkMethod.LIST_EXCHANGES: {
             this.listCalls++;
             const gate = this.gate;
@@ -120,6 +128,202 @@ class FakeHost {
     return this.handlers.get(AssistantLinkMethod.EXCHANGE_CHANGED)!({ revision: this.revision });
   }
 }
+
+describe("AssistantExchangeClient proving its sender (#13332)", () => {
+  let dir: string;
+  let sqlite: Database.Database;
+  let journal: AssistantExchangeJournal;
+  let client: AssistantExchangeClient;
+
+  const settle = async () => {
+    for (let i = 0; i < 20; i++) await Promise.resolve();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  };
+
+  beforeEach(() => {
+    dir = fs.mkdtempSync(path.join(os.tmpdir(), "daintree-exchange-auth-"));
+    sqlite = openDb(path.join(dir, "shell.db"), migrationsFolder).sqlite;
+    journal = new AssistantExchangeJournal(sqlite);
+  });
+
+  afterEach(() => {
+    client.dispose();
+    sqlite.close();
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("proves itself on a new session to a host it may message, before it ever sent there", async () => {
+    let enabled = false;
+    let opened: (hostId: string, session: LinkSession) => void = () => {};
+    const host = new FakeHost();
+    const session = host.session();
+    client = new AssistantExchangeClient({
+      journal,
+      session: async () => session,
+      onSessionOpened: (listener) => {
+        opened = listener;
+        return () => {};
+      },
+      messagingEnabled: () => enabled,
+    });
+    client.start();
+
+    opened(HOST, session);
+    await settle();
+    expect(host.authCalls).toBe(0);
+
+    // Turned on while that session stays open: proven now, once.
+    enabled = true;
+    client.authenticateOpen(HOST);
+    await settle();
+    client.authenticateOpen(HOST);
+    await settle();
+    expect(host.authCalls).toBe(1);
+
+    const later = new FakeHost();
+    const next = later.session();
+    opened(HOST, next);
+    await settle();
+    expect(later.authCalls).toBe(1);
+  });
+});
+
+describe("AssistantExchangeClient listing a host's lanes", () => {
+  let dir: string;
+  let sqlite: Database.Database;
+  let client: AssistantExchangeClient;
+  let host: FakeHost;
+
+  beforeEach(() => {
+    dir = fs.mkdtempSync(path.join(os.tmpdir(), "daintree-exchange-lanes-"));
+    sqlite = openDb(path.join(dir, "shell.db"), migrationsFolder).sqlite;
+    host = new FakeHost();
+    const session = host.session();
+    client = new AssistantExchangeClient({
+      journal: new AssistantExchangeJournal(sqlite),
+      session: async () => session,
+      onSessionOpened: () => () => {},
+      messagingEnabled: () => true,
+    });
+  });
+
+  afterEach(() => {
+    client.dispose();
+    sqlite.close();
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("lists its own lanes for recovery with no hub, only while the host's messaging is on (#13392)", async () => {
+    const lane = { projectId: "proj-1", slot: 0, generation: "gen-1", available: true };
+    host.laneAnswer = { lanes: [lane] };
+    await expect(client.listOwnLanes(HOST)).resolves.toEqual({ lanes: [lane] });
+    expect(host.authCalls).toBe(1);
+
+    const off = new AssistantExchangeClient({
+      journal: new AssistantExchangeJournal(sqlite),
+      session: async () => host.session(),
+      onSessionOpened: () => () => {},
+      messagingEnabled: () => false,
+    });
+    await expect(off.listOwnLanes(HOST)).rejects.toMatchObject({ code: "PERMISSION" });
+    off.dispose();
+  });
+
+  it("reads a host from before the assistant listing, and one that sends what this build doesn't know", async () => {
+    const lane = { projectId: "proj-1", slot: 0, generation: "gen-1", available: true };
+    host.laneAnswer = { lanes: [lane] };
+    await expect(client.listLanes(HOST)).resolves.toEqual({ lanes: [lane] });
+    // Listing proves this Shell's sender first: its enrollments follow it to this session only then.
+    expect(host.authCalls).toBe(1);
+
+    host.laneAnswer = {
+      lanes: [{ ...lane, agentId: "codex", later: true }],
+      assistants: [{ projectId: "proj-1", slot: 0, agentId: "codex", later: true }],
+      later: true,
+    };
+    await expect(client.listLanes(HOST)).resolves.toEqual({
+      lanes: [{ ...lane, agentId: "codex" }],
+      assistants: [{ projectId: "proj-1", slot: 0, agentId: "codex" }],
+    });
+  });
+});
+
+describe("AssistantExchangeClient reading a host's Codex quota", () => {
+  let dir: string;
+  let sqlite: Database.Database;
+  let client: AssistantExchangeClient;
+  let host: FakeHost;
+  const WINDOW = { usedPercent: 42, windowDurationMins: 300, resetsAt: 1_700_000_000_000 };
+
+  beforeEach(() => {
+    dir = fs.mkdtempSync(path.join(os.tmpdir(), "daintree-exchange-quota-"));
+    sqlite = openDb(path.join(dir, "shell.db"), migrationsFolder).sqlite;
+    host = new FakeHost();
+    const session = host.session();
+    client = new AssistantExchangeClient({
+      journal: new AssistantExchangeJournal(sqlite),
+      session: async () => session,
+      onSessionOpened: () => () => {},
+      messagingEnabled: () => true,
+    });
+  });
+
+  afterEach(() => {
+    client.dispose();
+    sqlite.close();
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("proves its sender, then takes the host's reading, without what this build doesn't know", async () => {
+    host.quotaAnswer = {
+      status: "ok",
+      planType: "pro",
+      windows: [{ ...WINDOW, later: true }],
+      fetchedAt: 5,
+      later: true,
+    };
+    await expect(client.readQuota(HOST)).resolves.toEqual({
+      status: "ok",
+      planType: "pro",
+      windows: [WINDOW],
+      fetchedAt: 5,
+    });
+    expect(host.authCalls).toBe(1);
+
+    host.quotaAnswer = { status: "unavailable", reason: "cli-missing", fetchedAt: 5 };
+    await expect(client.readQuota(HOST)).resolves.toEqual(host.quotaAnswer);
+
+    // A newer host's reason this build doesn't know still means no quota there.
+    host.quotaAnswer = { status: "unavailable", reason: "asleep", fetchedAt: 5 };
+    await expect(client.readQuota(HOST)).resolves.toEqual({
+      status: "unavailable",
+      reason: "read-failed",
+      fetchedAt: 5,
+    });
+  });
+
+  it.each([
+    [
+      "a percent past the whole limit",
+      { status: "ok", planType: null, windows: [{ ...WINDOW, usedPercent: 140 }], fetchedAt: 5 },
+    ],
+    [
+      "more windows than any reading has",
+      { status: "ok", planType: null, windows: Array(9).fill(WINDOW), fetchedAt: 5 },
+    ],
+    [
+      "a plan name no plan has",
+      { status: "ok", planType: "p".repeat(65), windows: [WINDOW], fetchedAt: 5 },
+    ],
+    ["no reading at all", null],
+    ["an unavailable reading with no reason", { status: "unavailable", fetchedAt: 5 }],
+    ["a reason that isn't text", { status: "unavailable", reason: 7, fetchedAt: 5 }],
+    ["a quota with no window", { status: "ok", planType: null, windows: [], fetchedAt: 5 }],
+  ])("refuses %s", async (_label, answer) => {
+    host.quotaAnswer = answer;
+    await expect(client.readQuota(HOST)).rejects.toMatchObject({ code: "INTERNAL" });
+  });
+});
 
 describe("AssistantExchangeClient change events", () => {
   let dir: string;

@@ -92,6 +92,13 @@ export interface AssistantMessagingRuntimeDeps {
   getSessionLane(helpSessionId: string): LaneRef | null;
   /** Messages a host's lanes start to their Shell's hub (#13338); read at each call. */
   outbox?: () => AssistantHostOutboxHandle | undefined;
+  /** Whether this machine has a host of its own, so a lane here may become its hub. */
+  hasHosts?: () => boolean;
+  /**
+   * Types the wake line for an exchange into its lane again, outside the one
+   * reserved first wake: what `reannounce` uses once a lane has its tools back.
+   */
+  rewake?: (enrollment: LaneEnrollment, record: ExchangeRecord, stillOwed: () => boolean) => void;
   now?: () => number;
 }
 
@@ -173,6 +180,30 @@ export class AssistantMessagingRuntime {
     return (
       resolved.ok &&
       resolved.enrollment.enrolledBy.kind === "remote" &&
+      this.deps.outbox?.() !== undefined
+    );
+  }
+
+  /**
+   * Whether this lane could ever be enrolled here: a help session on a
+   * machine that listens as a host or has hosts of its own. Its tools are
+   * offered from the session's start on that alone, because some clients
+   * (Codex) read the tool list once and never act on `tools/list_changed`;
+   * the calls still refuse until the lane is enrolled.
+   */
+  isReachable(helpSessionId: string): boolean {
+    return (
+      this.deps.policy.isSupported() &&
+      this.deps.getSessionLane(helpSessionId) !== null &&
+      (this.deps.outbox?.() !== undefined || this.deps.hasHosts?.() === true)
+    );
+  }
+
+  /** Whether a lane here could be one a remote Shell enrolls, and so write to its hub. */
+  isSendReachable(helpSessionId: string): boolean {
+    return (
+      this.deps.policy.isSupported() &&
+      this.deps.getSessionLane(helpSessionId) !== null &&
       this.deps.outbox?.() !== undefined
     );
   }
@@ -286,7 +317,12 @@ export class AssistantMessagingRuntime {
       cursor = entry.seq;
     }
     for (const { entry } of picked) {
-      this.read(() => this.deps.store.recordDelivery(actor, entry.key, "inbox-fetched"));
+      const fetched = this.read(() =>
+        this.deps.store.recordDelivery(actor, entry.key, "inbox-fetched")
+      );
+      // Read by the lane it was for: from here the exchange is with that assistant.
+      if (fetched.state === "submitted")
+        this.bestEffort(() => this.deps.store.setState(actor, entry.key, "working"));
     }
     const messages = picked.map(({ message }) => message);
     return { messages, cursor, hasMore };
@@ -312,9 +348,61 @@ export class AssistantMessagingRuntime {
         : this.deps.store.recordDelivery(actor, entry.key, "reply-received", { body: args.text })
     );
     this.deps.inbox.respond(entry, args.state, args.text);
-    if (args.state === "completed") this.deps.inbox.drop(entry.taskId);
+    if (args.state === "completed") {
+      this.deps.inbox.drop(entry.taskId);
+      this.closeAnsweredQuestions(actor, entry, record.referenceTaskIds, args.text);
+    }
     this.announceResponse(entry.key);
     return { taskId: entry.taskId, state: args.state, revision: updated.revision };
+  }
+
+  /**
+   * A sender answers a lane's question by sending again, naming the asking
+   * exchange in `referenceTaskIds`; nothing addresses the asking exchange
+   * itself. So when the lane completes that follow-up, each exchange it names
+   * from the same sender, to this lane, still waiting on its question
+   * completes with the same reply rather than sitting at input-required until
+   * it expires. Only an explicit reference closes one: sharing a conversation
+   * proves nothing about which question a message answers.
+   */
+  private closeAnsweredQuestions(
+    actor: ReceiverActor,
+    answered: InboxEntry,
+    referenceTaskIds: readonly string[],
+    text: string
+  ): void {
+    if (referenceTaskIds.length === 0) return;
+    const named = new Set(referenceTaskIds);
+    for (const asked of this.deps.inbox.list(actor, 0)) {
+      if (
+        asked.taskId === answered.taskId ||
+        asked.key.senderId !== answered.key.senderId ||
+        !named.has(asked.key.messageId)
+      ) {
+        continue;
+      }
+      const closed = this.bestEffort(() => {
+        const record = this.deps.store.get(actor, asked.key);
+        if (record?.state !== "input-required" || !isLive(record, this.now())) return false;
+        if (!this.deps.inbox.canRespond(asked.taskId)) return false;
+        this.deps.store.recordDelivery(actor, asked.key, "reply-received", { body: text });
+        return true;
+      });
+      if (closed !== true) continue;
+      this.deps.inbox.respond(asked, "completed", text);
+      this.deps.inbox.drop(asked.taskId);
+      this.announceResponse(asked.key);
+    }
+  }
+
+  /** Follow-on bookkeeping that must never fail the call it follows. */
+  private bestEffort<T>(work: () => T): T | undefined {
+    try {
+      return work();
+    } catch (err) {
+      console.warn("[AssistantMessaging] Follow-on exchange update failed:", err);
+      return undefined;
+    }
   }
 
   /**
@@ -331,6 +419,42 @@ export class AssistantMessagingRuntime {
       throw new AssistantMessagingError("NOT_ELIGIBLE");
     }
     this.deps.inbox.admit(record, envelope);
+  }
+
+  /**
+   * Wakes a lane again for each exchange it still owes an answer, once a view
+   * has taken its assistant over after the one it ran through went away (a
+   * Shell restart, #13392). Its tool calls failed meanwhile, so it may have
+   * given up on a message it had already read. Answered and question-asking
+   * exchanges are left alone. Returns how many were announced, or null while
+   * the lane can't be woken yet: its Shell hasn't proved itself on a new
+   * session since a restart, or messaging is paused.
+   */
+  reannounce(lane: LaneRef): number | null {
+    const rewake = this.deps.rewake;
+    const enrollment = this.deps.policy.getEnrollment(lane);
+    if (!rewake || enrollment === null) return 0;
+    const wakeable = this.deps.policy.checkLane({
+      lane,
+      generation: enrollment.generation,
+      shell: enrollment.enrolledBy,
+      kind: "wake",
+    });
+    if (!wakeable.ok) return null;
+    const actor: ReceiverActor = { kind: "receiver", ...exchangeReceiverFor(enrollment) };
+    let announced = 0;
+    const owed = (entry: InboxEntry): ExchangeRecord | null => {
+      const record = this.bestEffort(() => this.deps.store.get(actor, entry.key));
+      if (!record || !isLive(record, this.now()) || record.state === "input-required") return null;
+      return this.deps.inbox.canRespond(entry.taskId) ? record : null;
+    };
+    for (const entry of this.deps.inbox.list(actor, 0)) {
+      const record = owed(entry);
+      if (!record) continue;
+      this.bestEffort(() => rewake(enrollment, record, () => owed(entry) !== null));
+      announced++;
+    }
+    return announced;
   }
 
   /** The answers to an exchange, for the Shell that sent it. */

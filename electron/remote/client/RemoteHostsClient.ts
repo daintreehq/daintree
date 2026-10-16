@@ -456,6 +456,11 @@ export class RemoteHostsClient {
     return this.options.manager.connect(hostId).state();
   }
 
+  /** Told whenever a host's connection state changes; returns the unsubscribe. */
+  onConnectionChange(listener: (hostId: HostId, state: HostConnectionState) => void): () => void {
+    return this.options.manager.onStateChange(listener);
+  }
+
   /** Dial (or re-dial) a host and settle once it is usable, runs another build, or times out. */
   connectAndWait(hostId: HostId, timeoutMs: number): Promise<HostReadiness> {
     this.ensureRouter();
@@ -1027,6 +1032,11 @@ export class RemoteHostsClient {
       }
       this.publishPendingSwitch(windowId, { ...pending, phase });
     }
+  }
+
+  /** Whether a switch of `windowId` to a host is on its way. */
+  hasPendingSwitch(windowId: number): boolean {
+    return this.pendingSwitches.has(windowId);
   }
 
   /** The asking window's switch to a host that is still on its way, or null. */

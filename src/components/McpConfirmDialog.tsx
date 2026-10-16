@@ -150,14 +150,40 @@ export function McpConfirmDialog() {
       requestId: string,
       decision: McpConfirmationDecision,
       selectedTargetIds?: readonly string[],
-      scope?: McpApprovalScope
+      scope?: McpApprovalScope,
+      unseen?: boolean
     ) => {
       if (handledRequestIdRef.current === requestId) return;
       handledRequestIdRef.current = requestId;
-      resolveCurrent(decision, selectedTargetIds, scope);
+      resolveCurrent(decision, selectedTargetIds, scope, unseen);
     },
     [resolveCurrent]
   );
+
+  // Whether this view was reported visible at any point while the request
+  // asked. Keyed on the request rather than `current`, which a preview landing
+  // replaces. A view the page reports hidden (a host's project in the
+  // background, a minimised window, on macOS one covered by others) still opens
+  // the dialog, and a timeout there means nobody saw it, not that anyone declined.
+  const seenRef = useRef<{ requestId: string; seen: boolean } | null>(null);
+  const currentRequestId = current?.requestId ?? null;
+  useEffect(() => {
+    if (currentRequestId === null) return;
+    if (seenRef.current?.requestId !== currentRequestId) {
+      seenRef.current = { requestId: currentRequestId, seen: false };
+    }
+    const observe = () => {
+      if (
+        document.visibilityState === "visible" &&
+        seenRef.current?.requestId === currentRequestId
+      ) {
+        seenRef.current.seen = true;
+      }
+    };
+    observe();
+    document.addEventListener("visibilitychange", observe);
+    return () => document.removeEventListener("visibilitychange", observe);
+  }, [currentRequestId]);
 
   // Which rows of a selectable confirmation are still checked (#12123). Every
   // target starts checked: these are the exact finite ids the caller already
@@ -230,7 +256,8 @@ export function McpConfirmDialog() {
       MAIN_DISPATCH_DEADLINE_MS - elapsed
     );
     const timer = setTimeout(() => {
-      resolveOnce(requestId, "timeout");
+      const seen = seenRef.current?.requestId === requestId ? seenRef.current.seen : true;
+      resolveOnce(requestId, "timeout", undefined, undefined, !seen);
     }, remaining);
     return () => clearTimeout(timer);
   }, [current, resolveOnce]);

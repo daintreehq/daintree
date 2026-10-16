@@ -199,6 +199,7 @@ function entry(spec: HostSpec, connection: HostConnectionState): HostListEntry {
       addedAt: Date.now() - 30 * 86_400_000,
       notificationsEnabled: false,
       assistantMessagingEnabled: false,
+      assistantStartEnabled: false,
     },
     connection,
     summary: null,

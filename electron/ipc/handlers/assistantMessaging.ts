@@ -64,13 +64,16 @@ function readState(ctx: IpcContext, lane: LaneRef | null): AssistantMessagingSta
   const enrollment = lane ? policy.getEnrollment(lane) : null;
   const ended = lane ? policy.getEnded(lane) : null;
   const mine = enrollment !== null && sameShell(enrollment.enrolledBy, shell);
+  // Consent whose Shell is away shows as on to anyone viewing the lane, so
+  // turning it off withdraws it; turning it on again then enrolls this Shell.
+  const waiting = enrollment !== null && !mine && lane !== null && policy.isWaiting(lane);
   return {
     available: true,
     paused: policy.isPaused(),
     canPause: shell.kind === "local",
     lane: {
-      enrolled: mine,
-      enrolledElsewhere: enrollment !== null && !mine,
+      enrolled: mine || waiting,
+      enrolledElsewhere: enrollment !== null && !mine && !waiting,
       // Another Shell's lapsed consent is that Shell's to hear about.
       ended:
         ended && sameShell(ended.enrolledBy, shell) ? { reason: ended.reason, at: ended.at } : null,
@@ -122,7 +125,10 @@ async function handleSetLaneEnrolled(
   const existing = policy.getEnrollment(lane);
   if (!input.enrolled) {
     if (existing === null) return done();
-    if (!sameShell(existing.enrolledBy, shell)) return refuse("wrong-shell");
+    // A lane whose Shell is away can be turned off from here; withdrawing never gives access.
+    if (!sameShell(existing.enrolledBy, shell) && !policy.isWaiting(lane)) {
+      return refuse("wrong-shell");
+    }
     policy.unenroll(lane, shell, existing.generation);
     return done();
   }

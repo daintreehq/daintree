@@ -133,6 +133,8 @@ export class HostServer {
   private readonly sockets = new Set<net.Socket>();
   private readonly live = new Map<string, HostSessionContext>();
   private readonly resumable = new Map<string, Resumable>();
+  /** Attached sessions whose Shell proved itself on a newer one: ended as soon as they park. */
+  private readonly superseded = new Set<string>();
   private readonly pendingHandshakes = new Set<LinkSession>();
   /**
    * Each session's resume secret, handed out only in its WELCOME, and the one
@@ -589,7 +591,9 @@ export class HostServer {
       ? "protocol-error"
       : close.by === "remote"
         ? "goodbye"
-        : null;
+        : this.superseded.delete(sessionId)
+          ? "session-replaced"
+          : null;
     if (deliberate) {
       this.expire({ sessionId, clientId, cause: deliberate, reason: close.reason, by: close.by });
       return;
@@ -610,6 +614,25 @@ export class HostServer {
     }, grace);
     timer.unref?.();
     this.resumable.set(sessionId, { sessionId, clientId, parkedAt: this.now(), timer });
+  }
+
+  /**
+   * The Shell that owned this session proved itself on a newer one (#13392):
+   * nothing will resume it, and held for the grace window it would keep its
+   * views' drive leases and the assistants pinned to them. Parked, it ends at
+   * once; still attached (the host hasn't seen its link die yet), it ends the
+   * moment it parks instead of being held. Answers whether it ended now.
+   */
+  supersede(sessionId: string): boolean {
+    const parked = this.resumable.get(sessionId);
+    if (!parked) {
+      if (this.live.has(sessionId)) this.superseded.add(sessionId);
+      return false;
+    }
+    clearTimeout(parked.timer);
+    this.resumable.delete(sessionId);
+    this.expire({ sessionId, clientId: parked.clientId, cause: "session-replaced" });
+    return true;
   }
 
   private expire(info: HostSessionExpired): void {

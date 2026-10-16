@@ -171,7 +171,10 @@ const QUESTION_SUPPRESS_PATTERNS: RegExp[] = [
   /\bfailed\b/i,
 ];
 
-const QUESTION_START_WORDS = /^\s*(what|where|which|why|how|should|would|do|is|are|can|could)\b/i;
+// Sentence case only: a question opens with a capital, while a narrow pane
+// wrapping prose starts rows mid-sentence ("…after both" / "are verified.").
+// Read as a question, that held every notice the pane had asked for (#13392).
+const QUESTION_START_WORDS = /^\s*(What|Where|Which|Why|How|Should|Would|Do|Is|Are|Can|Could)\b/;
 
 // Bare input-box chrome (prompt glyphs, box-drawing borders) — carries no
 // classification signal of its own.

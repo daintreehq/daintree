@@ -24,6 +24,7 @@ export interface UpdateHostPayload {
   connection?: HostConnection;
   notificationsEnabled?: boolean;
   assistantMessagingEnabled?: boolean;
+  assistantStartEnabled?: boolean;
 }
 
 export interface WindowHostInfo {
