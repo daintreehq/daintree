@@ -114,6 +114,7 @@ vi.mock("../../utils/gitFileWatcher.js", () => {
         }
         return Promise.resolve(result);
       }
+      setUpstreamRef() {}
       dispose() {}
     },
   };

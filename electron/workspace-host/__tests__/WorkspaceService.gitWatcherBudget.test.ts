@@ -21,6 +21,7 @@ vi.mock("../../utils/gitFileWatcher.js", () => ({
       watcherLive.peak = Math.max(watcherLive.peak, watcherLive.current);
       return Promise.resolve(true);
     }
+    setUpstreamRef() {}
     dispose() {
       if (this.armed) {
         this.armed = false;
