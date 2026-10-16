@@ -166,6 +166,16 @@ describe("discardFileChanges", () => {
     expect(trashed).toEqual([]);
   });
 
+  it("undoes a case-only rename, which a case-insensitive disk reads under both names", async () => {
+    git(["mv", "old.txt", "Old.txt"]);
+
+    await discardFileChanges(repo, "Old.txt", fakeTrash);
+
+    expect(git(["ls-files", "--", "old.txt", "Old.txt"]).trim()).toBe("old.txt");
+    expect(read("old.txt")).toBe("committed old\n");
+    expect(status()).toBe("");
+  });
+
   it("discards a copy's own row without touching the file it was copied from", async () => {
     // The copy sorts ahead of its source, so a lookup that matched a copy by
     // its source would reach the copy's record before the source's own.

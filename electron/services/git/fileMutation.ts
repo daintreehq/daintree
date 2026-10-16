@@ -113,8 +113,15 @@ async function resolveTarget(worktreePath: string, relativePath: string): Promis
 
   const root = await realpath(worktreePath);
   const absolutePath = path.join(root, ...segments);
-  const realParent = await realpathNearest(path.dirname(absolutePath));
-  const lockKey = path.join(realParent, path.basename(absolutePath));
+  const leaf = await lstatOrNull(absolutePath);
+  // An existing file is keyed by its full realpath — the spelling the plugin
+  // host's writers lock under, including the casing on disk. A symlink leaf or
+  // a missing file is keyed by its resolved parent, so the link itself is what
+  // gets acted on.
+  const lockKey =
+    leaf && !leaf.isSymbolicLink()
+      ? await realpath(absolutePath)
+      : path.join(await realpathNearest(path.dirname(absolutePath)), path.basename(absolutePath));
   const rel = path.relative(root, lockKey);
   if (!isInsideRoot(rel) || namesGitDir(rel.split(path.sep))) {
     throw new Error("Invalid file path: must point at a file inside the worktree");
@@ -230,7 +237,7 @@ export async function discardFileChanges(
   // editor save, and acting on the stale answer is how the wrong file goes.
   const keys = (await planDiscard(git, target)).targets.map((t) => t.lockKey);
   await runExclusiveAll(keys, async () => {
-    const plan = await planDiscard(git, target);
+    const plan = await planDiscard(git, await resolveTarget(worktreePath, relativePath));
     const lockedKeys = plan.targets.map((t) => t.lockKey);
     if (lockedKeys.some((key) => !keys.includes(key))) {
       throw new Error(`'${target.gitPath}' changed while waiting. Try again.`);
@@ -309,10 +316,21 @@ async function planDiscard(
   if (isRename && entry.origPath) {
     const source =
       entry.origPath === target.gitPath ? target : await resolveTarget(target.root, entry.origPath);
-    const sourceOnDisk = await refuseDirectory(source.absolutePath, entry.origPath);
+    const sourceStats = await lstatOrNull(source.absolutePath);
+    if (sourceStats?.isDirectory()) {
+      throw new Error(`'${entry.origPath}' is a folder. Only files can be discarded or deleted.`);
+    }
     // The rename took the source out of the index, so a file standing there
-    // now is a new one the user made. Restoring HEAD over it would lose it.
-    if (sourceOnDisk) {
+    // now is a new one the user made, and restoring HEAD over it would lose it.
+    // Unless it is the destination itself: a case-only rename on a
+    // case-insensitive disk reads back under both names.
+    const destinationStats = await lstatOrNull(destination.absolutePath);
+    const isCaseAlias =
+      sourceStats !== null &&
+      destinationStats !== null &&
+      sourceStats.dev === destinationStats.dev &&
+      sourceStats.ino === destinationStats.ino;
+    if (sourceStats && !isCaseAlias) {
       throw new Error(
         `'${entry.origPath}' was renamed to '${entry.path}', and a new file now stands at '${entry.origPath}'. Move it aside before discarding the rename.`
       );
