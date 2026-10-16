@@ -148,7 +148,9 @@ export function listLegacyAgentMcpEndpointIds(
 ): string[] {
   const answers = legacyAnswers(projectId, pluginInstanceId);
   return Object.entries(answers ?? {})
-    .filter(([, record]) => isLegacyRecord(record))
+    .filter(
+      ([endpointId, record]) => endpointId !== DATABASE_WRITES_ACCESS_ID && isLegacyRecord(record)
+    )
     .map(([endpointId]) => endpointId);
 }
 
@@ -178,7 +180,9 @@ export function isAgentMcpEndpointEnabled(
 ): boolean {
   const answer = projectAgentMcpAccessAnswer(projectId, pluginInstanceId);
   if (answer !== undefined && answer !== null) return accessAllowsEndpoint(answer, endpointId);
-  if (answer === undefined) {
+  // Declared writes postdate the answers kept one endpoint at a time, so none
+  // of those can speak for them.
+  if (answer === undefined && endpointId !== DATABASE_WRITES_ACCESS_ID) {
     const legacy = legacyAnswer(projectId, pluginInstanceId, endpointId);
     if (legacy !== null) return legacy;
   }

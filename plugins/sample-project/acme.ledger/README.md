@@ -15,7 +15,7 @@ The reference sample for a data plugin: a project plugin that declares a SQLite 
 | --- | --- |
 | `list_transactions` | A page of transactions, newest first. Optional `from`/`to` (inclusive `YYYY-MM-DD`), `category`, `limit` (1-200, default 50) and `offset`. Returns `next_offset` when there is more, and trims a page that would come close to the host's result limit (`trimmed_for_size`). |
 | `summarize_by_category` | Count and total per category, optionally within a date range. |
-| `add_transaction` | Declared in `plugin.json` and run by the host: one `INSERT … RETURNING` of `date`, `amount_cents`, `category` (lowercased and trimmed in SQL) and `memo` (`""` for none). Returns `changes`, `lastInsertRowid` and the stored row as `columns` and `rows`. |
+| `add_transaction` | Declared in `plugin.json` and run by the host: one `INSERT … RETURNING` of `date`, `amount_cents` (any non-zero safe integer), `category` (lowercased and trimmed of surrounding whitespace in SQL) and `memo` (`""` for none, uncapped). Returns `changes`, `lastInsertRowid` and the stored row as `columns` and `rows`. |
 | `add_split_transaction` | Records one payment split across 2-20 categories (`date`, `total_cents`, `splits`, optional `memo`) as one row per category sharing a split group. The parts must add up to `total_cents` exactly. |
 
 Nothing is ever updated or deleted through the tools. Amounts are integer cents, negative for money out. Each row carries a separate `provenance` object — when it was recorded, the terminal id and the launch agent hint from the caller — which is what the writer observed at write time, not an identity: the hint says how the terminal was launched, not who is calling. `add_transaction` stamps the time in its statement, but a declared query never sees the caller, so its rows have no terminal or hint. A row written by anything else has `null` provenance.
@@ -23,6 +23,8 @@ Nothing is ever updated or deleted through the tools. Amounts are integer cents,
 ## Declared write or tool?
 
 A write one statement can express, whose rules the schema can hold, is a declared query: `add_transaction` is a single `INSERT`, and everything it must satisfy is a trigger or a `STRICT` column, so it needs no code, no `mcp:expose` and no running worker. The host binds the agent's values to the manifest's SQL, runs it in a transaction of its own, and serves it only with **Read and write** access. Reach for a tool when the write needs what one statement cannot give: `add_split_transaction` checks its parts against each other before any is written, writes several rows in one transaction, generates the group id, and stamps the calling terminal. The readers stay tools too, because their filters are optional and their pages are trimmed to the result budget; a declared query takes every param it names.
+
+A declared write checks a row against the triggers the file has when it is called, and the host runs it without starting the plugin. So a ledger created by an older version of this sample, whose triggers checked only a date's shape, gains the calendar check the first time one of the plugin's own tools opens it.
 
 ## Where each rule lives
 
@@ -47,7 +49,7 @@ The first tool call that opens the database raises the one-time `fs:project-writ
 
 The host checks every call's arguments against the tool's `inputSchema` before `execute` runs, so each schema declares `additionalProperties: false` and its `required` fields. The tools still check each value themselves — real calendar dates a pattern cannot express, bounded integers, a category grammar, and the split balance — because a test can call `execute` directly, and every query binds its values as parameters, never as SQL text.
 
-Results stay well under the host's 256 KiB limit. Every text column is clipped in the query itself, so no single row can be large however the file was written — a memo past 4096 characters comes back cut short with `memo_truncated: true` — and pages are trimmed by size. `host.db` returns an integer past JavaScript's 2^53 as a `bigint`, and the tools send it on as a decimal string rather than a silently rounded number.
+The readers' results stay well under the host's 256 KiB limit. Every text column is clipped in the query itself, so no single row can be large however the file was written — a memo past 4096 characters comes back cut short with `memo_truncated: true` — and pages are trimmed by size. `add_transaction` returns its row whole, as written; the host drops a returned row too large for the result (`truncated: true`), never the write. `host.db` returns an integer past JavaScript's 2^53 as a `bigint`, and the tools send it on as a decimal string rather than a silently rounded number.
 
 Memos are untrusted text. Anyone who can write the repository, and any agent that calls a write tool, can put words in one, and an agent reading it later may take those words as instructions. The plugin returns memos only as data fields: tool descriptions are fixed strings, and nothing read from the database reaches one.
 

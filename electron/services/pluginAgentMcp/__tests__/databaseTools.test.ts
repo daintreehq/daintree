@@ -370,6 +370,30 @@ describe("runDatabaseWrite", () => {
     expect(count(t)).toBe(10);
   });
 
+  it("caps RETURNING rows at the read path's maximum and still writes them all", () => {
+    const t = target("ledger", LEDGER);
+    const result = write(
+      t,
+      "WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < 1001) INSERT INTO tx (account, v) SELECT 1, 'r' FROM n RETURNING id"
+    );
+    expect(result.changes).toBe(1001);
+    expect(result.rows).toHaveLength(1000);
+    expect(result.truncated).toBe(true);
+    expect(count(t)).toBe(1001);
+  });
+
+  it("says rows were dropped even when only the column list did not fit", () => {
+    const t = target("ledger", LEDGER);
+    const result = write(
+      t,
+      `INSERT INTO tx (account, v) VALUES (1, 'x') RETURNING v AS "${"c".repeat(400)}"`,
+      undefined,
+      300
+    );
+    expect(result).toMatchObject({ changes: 1, columns: [], rows: [], truncated: true });
+    expect(count(t)).toBe(1);
+  });
+
   it("leaves nothing behind when the statement fails part way", () => {
     const t = target(
       "ledger",

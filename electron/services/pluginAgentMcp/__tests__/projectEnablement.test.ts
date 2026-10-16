@@ -525,6 +525,7 @@ describe("projectEnablement", () => {
           "acme.all": "*",
           "acme.yes": true,
           "acme.list": [DB, "data"],
+          "acme.named": [DB, DATABASE_WRITES_ACCESS_ID],
         },
       });
       const scope = (manifestId: string) =>
@@ -541,12 +542,22 @@ describe("projectEnablement", () => {
       expect(scope("acme.yes")).toEqual(WRITES);
       expect(scope("acme.ro")).toEqual({ databases: true });
       expect(scope("acme.list")).toEqual({ databases: true });
+      expect(scope("acme.named")).toEqual({ databases: true });
     });
 
     it("are never read into an answer given before access levels", () => {
-      legacy({ [PROJECT_A]: { [LEDGER]: { [DB]: { decidedAt: 1 }, data: { decidedAt: 1 } } } });
+      legacy({
+        [PROJECT_A]: {
+          [LEDGER]: {
+            [DB]: { decidedAt: 1 },
+            data: { decidedAt: 1 },
+            [DATABASE_WRITES_ACCESS_ID]: { decidedAt: 1 },
+          },
+        },
+      });
       expect(agentMcpScopeFor(PROJECT_A, writer())).toEqual({ databases: true });
       expect(isAgentMcpEndpointEnabled(PROJECT_A, LEDGER, DATABASE_WRITES_ACCESS_ID)).toBe(false);
+      expect(listLegacyAgentMcpEndpointIds(PROJECT_A, LEDGER)).toEqual([DB, "data"]);
     });
 
     it("are revoked on a downgrade to read only, sparing a grant without them", () => {

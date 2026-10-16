@@ -397,7 +397,10 @@ export function runDatabaseWrite(
     rows.pop();
     result.truncated = true;
   }
-  if (jsonBytes(result) > budgetBytes) result.columns = [];
+  if (jsonBytes(result) > budgetBytes) {
+    result.columns = [];
+    result.truncated = true;
+  }
   return result;
 }
 

@@ -199,6 +199,9 @@ function row(
         }
       : {}),
     ...(own && plugin.hasDatabases && !databases ? { databasesWithheld: true } : {}),
+    ...(own && databases && plugin.hasDatabaseWrites === true && !writes
+      ? { writesWithheld: true as const }
+      : {}),
     available,
   };
 }
@@ -285,7 +288,7 @@ async function buildSnapshot(projectId: string | null): Promise<ProjectAgentTool
       },
       false
     );
-    const { databasesWithheld: _withheld, ...rest } = orphan;
+    const { databasesWithheld: _withheld, writesWithheld: _writesWithheld, ...rest } = orphan;
     rows.push({ ...rest, access: retainedAccess(projectId, id, manifest) });
   }
 

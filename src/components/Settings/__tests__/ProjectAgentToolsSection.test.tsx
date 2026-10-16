@@ -232,6 +232,18 @@ describe("ProjectAgentToolsSection", () => {
     );
   });
 
+  it("says when an earlier answer keeps the declared changes off", async () => {
+    agentMcpApi.listProjectPlugins.mockResolvedValue(
+      snapshot([plugin({ hasDatabaseWrites: true, access: "read-write", writesWithheld: true })])
+    );
+    render(<ProjectAgentToolsSection />);
+    await screen.findByTestId("project-agent-tools");
+
+    expect(rowFor("Ledger").textContent).toContain(
+      "The changes it declares stay off, from a choice made before these levels existed"
+    );
+  });
+
   it("never names a particular agent CLI in its copy", async () => {
     agentMcpApi.listProjectPlugins.mockResolvedValue(
       snapshot(

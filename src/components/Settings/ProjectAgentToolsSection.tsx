@@ -151,6 +151,9 @@ function PluginDescription({ plugin }: { plugin: ProjectAgentToolPlugin }) {
   if (plugin.databasesWithheld) {
     lines.push("Its database tools stay off, from a choice made before these levels existed");
   }
+  if (plugin.writesWithheld) {
+    lines.push("The changes it declares stay off, from a choice made before these levels existed");
+  }
   if (!plugin.available) {
     lines.push(
       plugin.access !== "off"

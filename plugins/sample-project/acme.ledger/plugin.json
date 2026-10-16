@@ -33,7 +33,7 @@
               },
               "memo": { "type": "string", "description": "Free text, \"\" for none" }
             },
-            "sql": "INSERT INTO transactions (date, amount_cents, category, memo, recorded_at) VALUES (:date, :amount_cents, lower(trim(:category)), :memo, strftime('%Y-%m-%dT%H:%M:%fZ', 'now')) RETURNING id, date, amount_cents, category, memo, recorded_at"
+            "sql": "INSERT INTO transactions (date, amount_cents, category, memo, recorded_at) VALUES (:date, :amount_cents, lower(trim(:category, char(32, 9, 10, 11, 12, 13))), :memo, strftime('%Y-%m-%dT%H:%M:%fZ', 'now')) RETURNING id, date, amount_cents, category, memo, recorded_at"
           }
         ]
       }

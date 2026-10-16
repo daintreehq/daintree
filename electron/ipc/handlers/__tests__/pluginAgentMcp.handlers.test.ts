@@ -336,6 +336,23 @@ describe("plugin agent MCP access IPC", () => {
       expect((await list()).plugins[0]).toMatchObject({ access: "read-only" });
     });
 
+    it("says when an answer from before access levels keeps declared writes off", async () => {
+      mocks.listPlugins.mockReturnValue([withWrites(plugin())]);
+      storeData.set("projectAgentMcpEnablement", {
+        [PROJECT]: {
+          "acme.ledger": { "@databases": { decidedAt: 1 }, data: { decidedAt: 1 } },
+        },
+      });
+
+      expect((await list()).plugins[0]).toMatchObject({
+        access: "read-write",
+        writesWithheld: true,
+      });
+
+      await set({ pluginInstanceId: "acme.ledger", access: "read-write", scope: "project" });
+      expect((await list()).plugins[0]).not.toHaveProperty("writesWithheld");
+    });
+
     it("reports a repository's read and write for a project plugin's declared writes", async () => {
       await writeRepositoryDefaults({ "acme.ledger": "read-write" });
       mocks.listPlugins.mockReturnValue([

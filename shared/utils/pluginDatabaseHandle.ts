@@ -478,6 +478,20 @@ export function readPluginDatabaseRows(
 }
 
 /**
+ * The URI a declared write opens its file by: `mode=rw` opens read-write and
+ * never creates. A UNC path's server goes into the path behind an empty
+ * authority (`file:////server/share/…`), since SQLite refuses any authority
+ * but `localhost`. Exported for its test on either platform's paths.
+ */
+export function writableOpenUri(
+  filePath: string,
+  windows: boolean = process.platform === "win32"
+): string {
+  const url = pathToFileURL(filePath, { windows });
+  return `file://${url.host === "" ? "" : `//${url.host}`}${url.pathname}?mode=rw`;
+}
+
+/**
  * Run one data-changing statement for an agent — a declared write query, the
  * SQL fixed by the manifest and only the values the agent's — and report what
  * it changed. Each row a `RETURNING` clause yields goes to `onRow`; every one
@@ -503,14 +517,21 @@ export function runPluginDatabaseWrite(
   assertAgentOpenable(location);
   let connection: SqliteDatabase;
   try {
-    // `mode=rw` opens without ever creating, so a file removed since the check
-    // above is reported missing rather than brought back empty.
+    // Opened without ever creating, so a file removed since the check above is
+    // reported missing rather than brought back empty.
     connection = new sqlite.DatabaseSync(
-      `${pathToFileURL(location.path).href}?mode=rw`,
+      writableOpenUri(location.path),
       WRITABLE_CONNECTION_OPTIONS
     );
   } catch (error) {
-    if (sqliteResultCode(error) !== SQLITE_CANTOPEN) throw error;
+    // An unreadable file or a directory fails the same way; only a file that
+    // is not there is one the plugin has yet to create.
+    if (
+      sqliteResultCode(error) !== SQLITE_CANTOPEN ||
+      fs.lstatSync(location.path, { throwIfNoEntry: false })
+    ) {
+      throw error;
+    }
     throw databaseError("DB_NOT_FOUND", `database "${location.id}" does not exist yet`);
   }
   try {

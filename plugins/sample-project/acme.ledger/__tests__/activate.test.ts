@@ -343,6 +343,13 @@ describe("acme.ledger — tool calls round-trip through the project's database",
     dispose();
   });
 
+  it("trims any surrounding whitespace from a category, as the old tool did", async () => {
+    const { call, dispose } = await activated();
+    await call("list_transactions");
+    expect(transaction("2026-09-01", -1, "\tEating Out\n").rows![0]![3]).toBe("eating out");
+    dispose();
+  });
+
   it("never creates the ledger from a declared write", async () => {
     const { dispose } = await activated();
     expect(() => transaction("2026-09-01", -100, "rent")).toThrow(/DB_NOT_FOUND/);

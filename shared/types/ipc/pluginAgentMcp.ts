@@ -50,6 +50,12 @@ export interface ProjectAgentToolPlugin {
    */
   databasesWithheld?: boolean;
   /**
+   * The plugin's own tools are on from a choice that predates declared writes
+   * (an answer kept per endpoint, or a repository's endpoint list), which never
+   * covers them; choosing read and write includes them.
+   */
+  writesWithheld?: true;
+  /**
    * False for a plugin whose access is on for this project but that no running
    * plugin currently offers here (it was disabled, uninstalled or changed its
    * manifest). The answer is kept, so it is listed and can be turned off; it

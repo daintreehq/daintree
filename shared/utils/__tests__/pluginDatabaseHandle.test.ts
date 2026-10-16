@@ -8,6 +8,7 @@ import {
   openPluginDatabase,
   readPluginDatabaseRows,
   runPluginDatabaseWrite,
+  writableOpenUri,
 } from "../pluginDatabaseHandle.js";
 import type { PluginDatabase, PluginDatabaseLocation } from "../../types/plugin.js";
 
@@ -956,12 +957,68 @@ describe("runPluginDatabaseWrite", () => {
 
   it("does not bring back a file removed after it was checked", () => {
     const lstat = fs.lstatSync;
-    vi.spyOn(fs, "lstatSync").mockImplementation(((file: fs.PathLike, options?: object) =>
-      file === location.path
-        ? ({ isSymbolicLink: () => false } as fs.Stats)
-        : lstat(file, options as fs.StatSyncOptions)) as typeof fs.lstatSync);
+    let checked = false;
+    // The existence check sees a file; by the open, it is gone.
+    vi.spyOn(fs, "lstatSync").mockImplementation(((file: fs.PathLike, options?: object) => {
+      if (file === location.path && !checked) {
+        checked = true;
+        return { isSymbolicLink: () => false } as fs.Stats;
+      }
+      return lstat(file, options as fs.StatSyncOptions);
+    }) as typeof fs.lstatSync);
     expect(codeOf(() => write("INSERT INTO t VALUES (1)"))).toBe("DB_NOT_FOUND");
     expect(fs.readdirSync(path.dirname(location.path))).toEqual([]);
+  });
+
+  it.skipIf(process.platform === "win32" || process.getuid?.() === 0)(
+    "reports a file it cannot open as that, not as missing",
+    () => {
+      seed("CREATE TABLE t (a);");
+      fs.chmodSync(location.path, 0o000);
+      try {
+        expect(() => write("INSERT INTO t VALUES (1)")).toThrow(/unable to open database file/);
+        expect(codeOf(() => write("INSERT INTO t VALUES (1)"))).not.toBe("DB_NOT_FOUND");
+      } finally {
+        fs.chmodSync(location.path, 0o644);
+      }
+    }
+  );
+
+  it("names the file by a URI SQLite opens read-write without creating, UNC paths too", () => {
+    expect(writableOpenUri("/tmp/a b%#?.db", false)).toBe("file:///tmp/a%20b%25%23%3F.db?mode=rw");
+    expect(writableOpenUri("C:\\data\\ledger.db", true)).toBe("file:///C:/data/ledger.db?mode=rw");
+    // SQLite refuses an authority other than localhost, so the server moves into the path.
+    expect(writableOpenUri("\\\\server\\share\\ledger.db", true)).toBe(
+      "file:////server/share/ledger.db?mode=rw"
+    );
+  });
+
+  it("rolls back what a RETURNING statement wrote when its caller throws", () => {
+    seed("CREATE TABLE t (a);");
+    expect(() =>
+      runPluginDatabaseWrite(
+        location,
+        "INSERT INTO t VALUES (1), (2) RETURNING a",
+        undefined,
+        () => {
+          throw new Error("encoder failed");
+        }
+      )
+    ).toThrow("encoder failed");
+    const raw = new DatabaseSync(location.path);
+    expect(raw.prepare("SELECT count(*) AS n FROM t").get()).toEqual({ n: 0 });
+    raw.close();
+  });
+
+  it("rolls back a write whose commit fails", () => {
+    seed(
+      "CREATE TABLE p (id INTEGER PRIMARY KEY); CREATE TABLE c (p INTEGER REFERENCES p (id) DEFERRABLE INITIALLY DEFERRED);"
+    );
+    // A deferred key is checked at COMMIT, after the statement succeeded.
+    expect(() => write("INSERT INTO c VALUES (7)")).toThrow(/FOREIGN KEY/);
+    const raw = new DatabaseSync(location.path);
+    expect(raw.prepare("SELECT count(*) AS n FROM c").get()).toEqual({ n: 0 });
+    raw.close();
   });
 
   // `?` cannot be in a Windows file name.
