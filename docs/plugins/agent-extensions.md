@@ -119,7 +119,7 @@ Daintree serves each plugin to the agents in its terminals as **one MCP server**
 
 A plugin's server can carry two kinds of tool:
 
-- **The database tools.** Declaring any [database](./contribution-points.md#databases--shipped) gets the server the host's own read-only `database_schema` and `database_query`, with no `mcp:expose` and no code from you.
+- **The database tools.** Declaring any [database](./contribution-points.md#databases--shipped) gets the server the host's own read-only `database_schema` and `database_query`, plus one tool per [query declared](./contribution-points.md#declared-queries) on it, with no `mcp:expose` and no code from you.
 - **Your own tools**, declared as a `contributes.agentMcp` endpoint and registered from `activate()` with [`host.mcp.registerTools`](./host-api.md#mcpregistertools). This is where writes with rules go: a split that must balance, an id that must be minted, a remote API behind the data.
 
 For a data plugin that makes three routes, and a good plugin offers all three:
@@ -136,7 +136,7 @@ Build the tools first and the fallback second: an agent with the tools reads thr
 
 The server is named `daintree-<name>`, from the short name the plugin declares as [`mcpName`](./manifest.md#mcpname) in its manifest (`"ledger"` → `daintree-ledger`). A plugin that declares none is named after the last segment of its manifest id. The name is the same in every project, so a permission allowlist written against `mcp__daintree-ledger__database_query` keeps working in the next project and the next clone — unless a collision (below) gives the plugin a suffix there.
 
-The database tools and your own tools are listed together on that one server, so an agent sees them as one plugin's tools. A plugin with a database and no `agentMcp` endpoint gets a server with just the database tools; a plugin with an endpoint and no database gets just its own. `database_schema` and `database_query` are reserved: a roster that registers either name is rejected.
+The database tools and your own tools are listed together on that one server, so an agent sees them as one plugin's tools. A plugin with a database and no `agentMcp` endpoint gets a server with just the database tools; a plugin with an endpoint and no database gets just its own. `database_schema` and `database_query` are reserved, and so is the name of every query the manifest declares: a roster that registers one is rejected.
 
 Names only collide in two ways: an installed plugin and a project copy of the same plugin in one launch, or two plugins that chose the same short name. The installed copy, or the plugin whose manifest id sorts first, keeps the plain name, and the other gets a short hash suffix (`daintree-ledger-3f9a2c1e`). The suffix is stable — it comes from the plugin's identity, not from the project or the order plugins loaded in — and it is the only place a hash appears. Choose a short name specific enough not to collide: `ledger` in a household-finance plugin is fine; `data` is not. The whole key is kept within 25 characters, because Claude names a tool `mcp__<server>__<tool>` under a 64-character limit, so the short name has 16 characters to work with.
 
@@ -222,6 +222,12 @@ What the tools allow:
 - **Nothing is created.** A database your code has not opened yet is reported by `database_schema` with `exists: false`, and `database_query` against it fails with `DB_NOT_FOUND`. The tools never create a file.
 
 Each call runs in a short-lived process separate from Daintree's main process and from your plugin, under the same 60-second call timeout as your own tools.
+
+### Declared queries
+
+A [query declared on a database](./contribution-points.md#declared-queries) is a third database tool, specific where `database_query` is general: `month_total` instead of the SQL for a month's total. The host lists each one after `database_schema` and `database_query`, under the query's `name`, with its `description` and an input schema built from its `params` — every param required, nothing else accepted — and annotates it `readOnlyHint: true` itself. The agent passes the values; the SQL and the database come from the manifest and are never arguments. A call runs exactly like a `database_query` call on the declaring database (same read-only connection, refusals, timeout and result shape) with up to 1,000 rows, so no code of yours runs and **Read only** access is enough.
+
+Use them for the reads an agent makes often or gets wrong: a total with a unit, a lookup by a key it would otherwise have to discover, a report that joins three tables. `database_query` stays on the server for everything else. Declared queries share the plugin's 16-tool budget with the tools you register, so a plugin with four declared queries can register twelve.
 
 ### Access: off, read only, read and write
 
@@ -313,7 +319,7 @@ Claude Code's `/mcp` lists the servers a session has; other CLIs have their own 
 
 When the server is listed but its requests fail, a 401 for a recently revoked credential says why in its body (`relaunched`, `terminal-exited`, `plugin-unloaded`, `access-reduced`, `server-stopped`), and Daintree's log has a `main:PluginAgentMcp` line for every credential issued, held, kept and revoked, and for refused requests by category, rate-limited to one a minute per category and credential and keyed by credential id where the request carried a live or remembered one. A credential issued at launch and never revoked, yet refused, points at the request rather than the credential: the wrong route, the plugin not loaded, or access no longer covering its scope.
 
-When the server is there but tools are missing: at **Read only** your own tools are left off by design; a roster that breaks a limit (a bad schema, a name over 32 characters, a reserved name, an annotation that claims safety) is rejected whole — `registerTools` throws at your call site, and if that escapes `activate()` the plugin manager's detail pane shows the failed activation; and a plugin with no database has no database tools. `database_query` reporting a database missing means your code has not created it yet — the tools read what exists and never create a file.
+When the server is there but tools are missing: at **Read only** your own tools are left off by design; a roster that breaks a limit (a bad schema, a name over 32 characters, a reserved name or a declared query's name, more tools than the 16 the declared queries leave room for, an annotation that claims safety) is rejected whole — `registerTools` throws at your call site, and if that escapes `activate()` the plugin manager's detail pane shows the failed activation; and a plugin with no database has no database tools. `database_query` reporting a database missing means your code has not created it yet — the tools read what exists and never create a file.
 
 Because only CLIs with a launch-time mechanism are handed servers, and only once a plugin has access, the tools are an addition to a project app's data path, never the whole of it. Every agent can read and write files and run `sqlite3`, so for data stored in the project the data itself, the contract in the plugin's `AGENTS.md` and a report script are what every agent reaches; the tools give the agents that have them a safer, validated way to do the same. See [Patterns → Write the data contract down](./patterns.md#write-the-data-contract-down).
 
@@ -425,6 +431,7 @@ So in a project left at its defaults, no terminal agent has a plugin's skills. W
 | --- | --- |
 | Give an agent in a Daintree terminal a new tool that does something | Agent MCP endpoint (`agentMcp`) |
 | Let agents read your plugin's SQLite data | Declare it in `contributes.databases` — the plugin's server gets `database_schema` and `database_query` with no code |
+| Give agents a specific read, such as a month's total | A query declared on the database (`queries`), served as its own tool with no code |
 | Let agents write data that has rules | Agent MCP endpoint tools that enforce them, beside the database tools |
 | Give Daintree and its in-app Assistant a tool backed by an existing stdio MCP server | MCP server (`mcpServers`) |
 | Teach the agent a methodology or rubric | Skill |

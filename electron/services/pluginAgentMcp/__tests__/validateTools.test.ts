@@ -138,6 +138,24 @@ describe("validateAgentMcpTools", () => {
     }
   );
 
+  it("counts the manifest's declared queries toward the same budget", () => {
+    const declaredQueryNames = new Set(["month_total", "large_entries"]);
+    const room = AGENT_MCP_MAX_TOOLS_PER_ENDPOINT - declaredQueryNames.size;
+    expect(validateAgentMcpTools(roster(room), { declaredQueryNames })).toHaveLength(room);
+    expect(() => validateAgentMcpTools(roster(room + 1), { declaredQueryNames })).toThrow(
+      `tools registers ${room + 1} tools beside the 2 database queries the manifest declares`
+    );
+  });
+
+  it("rejects a tool named like one of the manifest's declared queries", () => {
+    expect(() =>
+      validateAgentMcpTools(
+        { list: tool(), month_total: tool() },
+        { declaredQueryNames: new Set(["month_total"]) }
+      )
+    ).toThrow(/"month_total" is a database query the manifest declares/);
+  });
+
   it("accepts names that only resemble the reserved ones", () => {
     expect(
       validateAgentMcpTools({ database_schemas: tool(), my_database_query: tool() }).map(

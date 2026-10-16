@@ -7,7 +7,10 @@ import {
   isPrivateOrLoopbackHostname,
 } from "./pluginIdentifiers.js";
 import {
+  AGENT_MCP_MAX_DESCRIPTION_BYTES,
   AGENT_MCP_MAX_ENDPOINTS_PER_PLUGIN,
+  AGENT_MCP_MAX_TOOLS_PER_ENDPOINT,
+  AGENT_MCP_TOOL_NAME_PATTERN,
   BUILT_IN_PLUGIN_CAPABILITIES,
   PANEL_MENU_MAX_ITEMS,
   PANEL_TOOLBAR_MAX_ITEMS,
@@ -22,6 +25,8 @@ import {
   BINARY_EXEC_SUBCOMMANDS,
   stripCommandExecutableExtension,
 } from "../services/ProcessDetector/commandParser.js";
+import { declaredQueryProblems } from "../services/pluginAgentMcp/declaredQueries.js";
+import { RESERVED_AGENT_MCP_TOOL_NAMES } from "../services/pluginAgentMcp/types.js";
 import {
   BUILT_IN_ACTION_IDS,
   DENY_PLUGIN_DISPATCH_ACTION_IDS,
@@ -407,6 +412,70 @@ export const AgentMcpContributionSchema = z
 
 const DATABASE_FILE_EXTENSION = /\.(db|sqlite|sqlite3)$/;
 
+/** Most params one declared query may take. */
+export const DATABASE_QUERY_MAX_PARAMS = 16;
+
+const utf8Length = (value: string): number => new TextEncoder().encode(value).length;
+
+/** One param of a declared query: its JSON type and what it means. */
+export const DatabaseQueryParamSchema = z
+  .object({
+    type: z.enum(["string", "number", "integer", "boolean"]),
+    description: z.string().min(1).max(400).optional(),
+  })
+  .strict();
+
+/**
+ * `contributes.databases[].queries` entry — one parameterised statement the
+ * host serves to agents as a tool named `name`, with no plugin code. Whether
+ * the host can serve it safely is decided here, from the SQL as written,
+ * because the database need not exist yet: one statement, a read, and
+ * placeholders that match `params` exactly. Each failure names the query.
+ */
+export const DatabaseQueryContributionSchema = z
+  .object({
+    name: z.string().regex(AGENT_MCP_TOOL_NAME_PATTERN, {
+      message:
+        "query name must be 1-32 lowercase letters, digits and underscores, starting with a letter",
+    }),
+    mode: z.literal("read"),
+    description: z
+      .string()
+      .min(1)
+      .refine((value) => value.trim().length > 0, { message: "description must not be blank" })
+      .refine((value) => utf8Length(value) <= AGENT_MCP_MAX_DESCRIPTION_BYTES, {
+        message: `description must be at most ${AGENT_MCP_MAX_DESCRIPTION_BYTES} UTF-8 bytes`,
+      }),
+    params: z
+      .record(
+        z.string().regex(/^[A-Za-z_][A-Za-z0-9_]{0,63}$/, {
+          message:
+            "param names must be 1-64 letters, digits and underscores, not starting with a digit",
+        }),
+        DatabaseQueryParamSchema
+      )
+      .refine((params) => Object.keys(params).length <= DATABASE_QUERY_MAX_PARAMS, {
+        message: `a query may take at most ${DATABASE_QUERY_MAX_PARAMS} params`,
+      })
+      .default({}),
+    sql: z
+      .string()
+      .min(1)
+      .max(65536)
+      .refine((value) => !value.includes("\0"), { message: "sql must not contain NUL" }),
+  })
+  .strict()
+  .superRefine((query, ctx) => {
+    for (const problem of declaredQueryProblems(query)) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: [problem.field],
+        message: problem.message,
+        params: { errorCode: "database_query_unservable" },
+      });
+    }
+  });
+
 /**
  * `contributes.databases` manifest entry — a SQLite file the plugin opens
  * through `host.db`. The declaration is what names the file, discloses it, and
@@ -440,6 +509,10 @@ export const DatabaseContributionSchema = z
       })
       .optional(),
     journalMode: z.enum(["delete", "wal"]).default("delete"),
+    queries: z
+      .array(DatabaseQueryContributionSchema)
+      .max(AGENT_MCP_MAX_TOOLS_PER_ENDPOINT)
+      .optional(),
   })
   .strict();
 
@@ -2297,6 +2370,44 @@ function buildPluginManifestSchema(origin: PluginOrigin) {
             params: { errorCode: "database_local_path_unsupported" },
           });
         }
+      });
+
+      // Every declared query is a tool on the plugin's one MCP server, beside
+      // the host's own database tools, so names are unique across all of the
+      // plugin's databases and the total stays inside the server's budget.
+      const queryOwners = new Map<string, string>();
+      let declaredQueries = 0;
+      manifest.contributes.databases.forEach((database, index) => {
+        (database.queries ?? []).forEach((query, queryIndex) => {
+          declaredQueries += 1;
+          const path = ["contributes", "databases", index, "queries", queryIndex, "name"];
+          const owner = queryOwners.get(query.name);
+          if (RESERVED_AGENT_MCP_TOOL_NAMES.has(query.name)) {
+            ctx.addIssue({
+              code: z.ZodIssueCode.custom,
+              path,
+              message: `query "${query.name}" takes the name of one of the host's database tools (${[...RESERVED_AGENT_MCP_TOOL_NAMES].join(", ")}), which share the plugin's MCP server`,
+              params: { errorCode: "database_query_name_reserved" },
+            });
+          } else if (owner !== undefined) {
+            ctx.addIssue({
+              code: z.ZodIssueCode.custom,
+              path,
+              message: `query "${query.name}" is declared twice (first on database "${owner}"); query names are tool names on one MCP server, so each must be unique across the plugin's databases`,
+              params: { errorCode: "database_query_name_duplicate" },
+            });
+          } else {
+            queryOwners.set(query.name, database.id);
+          }
+          if (declaredQueries === AGENT_MCP_MAX_TOOLS_PER_ENDPOINT + 1) {
+            ctx.addIssue({
+              code: z.ZodIssueCode.custom,
+              path,
+              message: `query "${query.name}" is past the limit: a plugin may declare at most ${AGENT_MCP_MAX_TOOLS_PER_ENDPOINT} database queries in all`,
+              params: { errorCode: "database_query_limit" },
+            });
+          }
+        });
       });
 
       // The inverse asymmetry: `contributes.surfaces` is available to project

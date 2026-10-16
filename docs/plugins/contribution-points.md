@@ -837,8 +837,8 @@ The entry is strict: an unknown field (a `url`, a `command`) is rejected rather 
 
 | Limit | Value |
 | --- | --- |
-| Tools per endpoint | 16 |
-| Tool name | `^[a-z][a-z0-9_]{0,31}$` — at most 32 characters, so Claude's `mcp__<server>__<tool>` name stays within its 64-character limit. `database_schema` and `database_query` are reserved for the host's database tools |
+| Tools per endpoint | 16, counting the database queries the manifest declares |
+| Tool name | `^[a-z][a-z0-9_]{0,31}$` — at most 32 characters, so Claude's `mcp__<server>__<tool>` name stays within its 64-character limit. `database_schema` and `database_query` are reserved for the host's database tools, as is the name of each declared database query |
 | Description | Non-empty, at most 400 UTF-8 bytes |
 | `inputSchema` / `outputSchema` | A plain object with `type: "object"`, at most 8 KiB serialized each |
 | Result | At most 256 KiB of serialized JSON |
@@ -879,6 +879,7 @@ Declares a SQLite database the plugin opens with [`host.db`](./host-api.md#db--h
 | `location` | no | `"project"` (default) or `"local"`. |
 | `path` | no | `"project"` only. Relative to the project root (no leading `/`, backslash, `..` segment or URL syntax), at most 512 characters, ending in `.db`, `.sqlite` or `.sqlite3`, never inside `.git`. Defaults to `.daintree/data/<manifestId>/<id>.db`. |
 | `journalMode` | no | `"delete"` (default) or `"wal"`. |
+| `queries` | no | Named read statements the host serves to agents as tools of their own. See [Declared queries](#declared-queries) below. |
 
 **`"project"`** puts the file in the repository. That is the location for data agents edit: an agent in the project's terminal can open the same file with the `sqlite3` CLI, the file travels with a clone, and the committed data contract (your plugin's `AGENTS.md`) can name it by its project-relative path. It needs `scope: "project"` (`database_project_scope_only`) and the `fs:project-write` capability (`database_project_write_required`), because it writes into the repository. Whether the file itself is committed is the project's decision; gitignore it to keep the data out of history.
 
@@ -890,7 +891,48 @@ Declares a SQLite database the plugin opens with [`host.db`](./host-api.md#db--h
 
 At most 16 databases per plugin; entries are strict, so a `url` or `driver` field is refused rather than read as a backend the host does not have.
 
-**Agents can read it.** Declaring any database puts the host's own read-only database tools on the plugin's server, with no `mcp:expose` and no code from you — a plugin with no `agentMcp` endpoint gets a server with just these two. Like the rest of the server they are off until the plugin's agent access is at **Read only** or **Read and write** for the project ([Agent MCP endpoints](#agent-mcp-endpoints--shipped)). The two tools: `database_schema` lists your declared databases and the `CREATE` statements of their tables, views, indexes and triggers (a database never created is reported, never created), and `database_query` runs one row-returning statement — `SELECT`, `WITH`, or a pragma such as `table_info` — with `?` or named parameters, returning columns and rows as arrays (blobs base64, big integers as strings), 100 rows by default and 1000 at most, under the host's result budget. Each call opens a fresh read-only connection in a short-lived process that is killed on cancel or timeout, with the same `ATTACH`, `VACUUM INTO` and directory-pragma refusals as `host.db`. The host binds the declarations at load and resolves the file on each call, so reading your data never starts your plugin; a database your code has not created yet reads as missing until it runs once. Writes stay with your own `agentMcp` tools, where your rules apply. An installed plugin's local databases are one set of files every project shares, and the database tools can't filter rows by the calling project, so giving the plugin **Read only** (or **Read and write**) access in one project lets agents there read what your plugin stored for every other project, and making that the default for all projects lets every project's agents read it; the Agent tools setting says so beside the choice. If your plugin keeps per-project data, serve it through your own `agentMcp` tools, which can scope by `caller.projectId` ([Agent extensions → Installed plugins and shared data](./agent-extensions.md#installed-plugins-and-shared-data)).
+**Agents can read it.** Declaring any database puts the host's own read-only database tools on the plugin's server, with no `mcp:expose` and no code from you — a plugin with no `agentMcp` endpoint gets a server with just these two and any [queries it declares](#declared-queries). Like the rest of the server they are off until the plugin's agent access is at **Read only** or **Read and write** for the project ([Agent MCP endpoints](#agent-mcp-endpoints--shipped)). The two tools: `database_schema` lists your declared databases and the `CREATE` statements of their tables, views, indexes and triggers (a database never created is reported, never created), and `database_query` runs one row-returning statement — `SELECT`, `WITH`, or a pragma such as `table_info` — with `?` or named parameters, returning columns and rows as arrays (blobs base64, big integers as strings), 100 rows by default and 1000 at most, under the host's result budget. Each call opens a fresh read-only connection in a short-lived process that is killed on cancel or timeout, with the same `ATTACH`, `VACUUM INTO` and directory-pragma refusals as `host.db`. The host binds the declarations at load and resolves the file on each call, so reading your data never starts your plugin; a database your code has not created yet reads as missing until it runs once. Writes stay with your own `agentMcp` tools, where your rules apply. An installed plugin's local databases are one set of files every project shares, and the database tools can't filter rows by the calling project, so giving the plugin **Read only** (or **Read and write**) access in one project lets agents there read what your plugin stored for every other project, and making that the default for all projects lets every project's agents read it; the Agent tools setting says so beside the choice. If your plugin keeps per-project data, serve it through your own `agentMcp` tools, which can scope by `caller.projectId` ([Agent extensions → Installed plugins and shared data](./agent-extensions.md#installed-plugins-and-shared-data)).
+
+### Declared queries
+
+Most of the tools a small data app wants are one parameterised `SELECT` and a description. Declare those on the database and the host serves each one as a tool of its own on the plugin's server, named after the query (`mcp__daintree-ledger__month_total`), with no `agentMcp` endpoint and no code:
+
+```json
+"databases": [{
+  "id": "ledger",
+  "queries": [
+    {
+      "name": "month_total",
+      "mode": "read",
+      "description": "Total spend for a month, in integer cents.",
+      "params": { "month": { "type": "string", "description": "YYYY-MM" } },
+      "sql": "SELECT SUM(amount_cents) AS total FROM tx WHERE substr(date, 1, 7) = :month"
+    }
+  ]
+}]
+```
+
+| Field | Required | Notes |
+| --- | --- | --- |
+| `name` | yes | The tool name: `^[a-z][a-z0-9_]{0,31}$`, unique across all of the plugin's databases, and not `database_schema` or `database_query`. |
+| `mode` | yes | `"read"`, the only mode today. It decides which access level serves the tool; it is never advertised to the agent. |
+| `description` | yes | The tool description agents see. Non-empty, at most 400 UTF-8 bytes. |
+| `params` | no | Map of param name (letters, digits and `_`, not starting with a digit) to `{ "type", "description"? }`, at most 16. `type` is `"string"`, `"number"`, `"integer"` or `"boolean"`. Defaults to none. |
+| `sql` | yes | One statement, at most 65,536 characters. |
+
+The tool's input schema is built from `params`: every param required, of its declared type, and nothing else, so an agent passes values and never SQL. Each value binds to the placeholder of the same name — `:month`, `@month` or `$month`, the same spelling throughout — and an integer or a boolean binds as a SQLite integer (`true` is 1). A value is always data: `"2026-01' OR 1=1 --"` is a month that matches nothing.
+
+A `"read"` query is served beside `database_query` and under its rules: available once the plugin's agent access is **Read only** or higher, run on the same fresh read-only connection with the same refusals, against the database it is declared on, and returning the same `{ databaseId, columns, rows, truncated }`. It returns up to 1,000 rows under the result budget, with `truncated` set past either, so give a query that can match more an `ORDER BY` and a `LIMIT`. The host marks it `readOnlyHint: true` itself, from its own check of the SQL and the connection it runs on. Listing or calling it never starts your plugin.
+
+A query the host cannot serve safely rejects the manifest at load, with an error naming the query (`database_query_unservable` and friends):
+
+- the SQL is not exactly one statement (a trailing `;` or comment is fine);
+- it is not a `SELECT`, `WITH` or `VALUES` statement, or contains `INSERT`, `UPDATE`, `DELETE` or `REPLACE` anywhere outside a string or quoted name — `WITH … DELETE` is a write — so quote a column that shares one of those names (`"update"`); `replace(…)` the string function is fine;
+- a placeholder has no param, a param has no placeholder, or a placeholder is positional (`?`), uses two spellings of one name, or uses SQLite's `$name::x` or `$name(…)` forms;
+- the name is `database_schema` or `database_query` or is declared twice (`database_query_name_reserved`, `database_query_name_duplicate`);
+- the plugin declares more than 16 queries across all its databases (`database_query_limit`).
+
+The check reads the SQL as written, since the database need not exist at load; a query naming a table that doesn't exist yet loads and fails when called. Declared queries count toward the plugin's 16-tool budget together with any tools it registers on its [`agentMcp` endpoint](#agent-mcp-endpoints--shipped), and a registered tool may not take a query's name. Writes stay with your own tools.
 
 **Back up data…** Every panel of a plugin that declares a database offers **Back up data…** in its ⋯ and right-click menus, with no wiring in your view. The host finds the declared databases that exist, never creating one, and snapshots them with SQLite's online backup from a read-only connection, so a write in progress is either wholly in the copy or not in it at all. One database asks where to save the file, suggesting `<manifestId>-<id>-<YYYY-MM-DD_HHmmss>.db` in Downloads; several ask for a folder and write one file each under that pattern. A plugin with no database on disk yet says so instead of opening a dialog. The entry is host UI: the `plugin.backupDatabases` action behind it is closed to plugins and hidden from agents and MCP clients. For a copy your own code makes — into a sync folder, say — use the open handle's `backup(destPath)`.
 

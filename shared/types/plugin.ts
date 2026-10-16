@@ -915,9 +915,47 @@ export interface PluginDatabaseContribution {
   location: PluginDatabaseLocationKind;
   path?: string;
   journalMode: "delete" | "wal";
+  /** Named statements the host serves to agents as tools of their own. */
+  queries?: PluginDatabaseQueryContribution[];
 }
 
-/** Most tools one `agentMcp` endpoint may register. Client tool caps are app-wide, not per server. */
+/** The JSON type an agent passes for one declared query parameter. */
+export type PluginDatabaseQueryParamType = "string" | "number" | "integer" | "boolean";
+
+/** One parameter of a declared query, bound to the placeholder of the same name. */
+export interface PluginDatabaseQueryParam {
+  type: PluginDatabaseQueryParamType;
+  description?: string;
+}
+
+/**
+ * One `contributes.databases[].queries` entry: a single parameterised SQL
+ * statement the host serves to agents as its own tool, named `name`, on the
+ * plugin's MCP server — no plugin code runs. The tool's input schema is built
+ * from `params`, every one required; agents pass bound values only. Each
+ * placeholder (`:name`, `@name` or `$name`) must have a matching param and each
+ * param a placeholder; a boolean binds as 1 or 0.
+ *
+ * A `"read"` query is served beside `database_query`, under the same access
+ * level and on the same read-only connection, and must be one `SELECT`, `WITH`
+ * or `VALUES` statement. The host, not the plugin, marks it read-only to
+ * clients. Declared queries count toward the plugin's
+ * {@link AGENT_MCP_MAX_TOOLS_PER_ENDPOINT} together with any tools it
+ * registers.
+ */
+export interface PluginDatabaseQueryContribution {
+  name: string;
+  mode: "read";
+  description: string;
+  params: Record<string, PluginDatabaseQueryParam>;
+  sql: string;
+}
+
+/**
+ * Most tools one plugin may serve agents beyond the host's two database tools:
+ * its registered `agentMcp` roster and its declared database queries together.
+ * Client tool caps are app-wide, not per server.
+ */
 export const AGENT_MCP_MAX_TOOLS_PER_ENDPOINT = 16;
 /** Most `agentMcp` endpoints one manifest may declare. */
 export const AGENT_MCP_MAX_ENDPOINTS_PER_PLUGIN = 1;
@@ -999,11 +1037,13 @@ export interface PluginMcpToolDefinition {
 export interface PluginMcpApi {
   /**
    * Bind the tool roster for an endpoint declared in `contributes.agentMcp`,
-   * keyed by tool name. An undeclared endpoint id, a roster over
-   * {@link AGENT_MCP_MAX_TOOLS_PER_ENDPOINT}, or a tool breaking the name,
-   * description or schema limits is rejected whole. Calling it again for the
-   * same endpoint replaces the roster. Returns a disposer; every roster is
-   * dropped when the plugin unloads. Must be called during `activate()`.
+   * keyed by tool name. An undeclared endpoint id, a roster that with the
+   * manifest's declared database queries comes to more than
+   * {@link AGENT_MCP_MAX_TOOLS_PER_ENDPOINT}, a tool named like one of those
+   * queries, or a tool breaking the name, description or schema limits is
+   * rejected whole. Calling it again for the same endpoint replaces the
+   * roster. Returns a disposer; every roster is dropped when the plugin
+   * unloads. Must be called during `activate()`.
    */
   registerTools(
     endpointId: string,

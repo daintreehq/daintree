@@ -178,6 +178,15 @@ export function compileAgentMcpTool(descriptor: AgentMcpToolDescriptor): AgentMc
   });
 }
 
+/** What the registering plugin's manifest puts on the same MCP server. */
+export interface AgentMcpRosterContext {
+  /**
+   * Its declared database queries, which the host serves beside the roster:
+   * their names are taken, and they count toward the same budget.
+   */
+  readonly declaredQueryNames?: ReadonlySet<string>;
+}
+
 /**
  * Check a `host.mcp.registerTools` roster against the endpoint budget and
  * return the agent-facing descriptors, frozen and detached from the plugin's
@@ -187,9 +196,13 @@ export function compileAgentMcpTool(descriptor: AgentMcpToolDescriptor): AgentMc
  *
  * Only what an agent sees is checked here. The manifest gates (`mcp:expose`,
  * the endpoint declared in `contributes.agentMcp`) belong to the host that knows
- * which plugin is registering.
+ * which plugin is registering, and so does the `context` that host passes.
  */
-export function validateAgentMcpTools(tools: unknown): readonly AgentMcpRegisteredTool[] {
+export function validateAgentMcpTools(
+  tools: unknown,
+  context: AgentMcpRosterContext = {}
+): readonly AgentMcpRegisteredTool[] {
+  const declaredQueryNames = context.declaredQueryNames ?? new Set<string>();
   if (!isPlainObject(tools)) {
     throw new Error("tools must be a plain object keyed by tool name");
   }
@@ -204,6 +217,11 @@ export function validateAgentMcpTools(tools: unknown): readonly AgentMcpRegister
       `tools registers ${names.length} tools; an endpoint may register at most ${AGENT_MCP_MAX_TOOLS_PER_ENDPOINT}`
     );
   }
+  if (names.length + declaredQueryNames.size > AGENT_MCP_MAX_TOOLS_PER_ENDPOINT) {
+    throw new Error(
+      `tools registers ${names.length} tools beside the ${declaredQueryNames.size} database queries the manifest declares; a plugin may serve at most ${AGENT_MCP_MAX_TOOLS_PER_ENDPOINT} of the two together`
+    );
+  }
   const descriptors: AgentMcpToolDescriptor[] = [];
   for (const name of names) {
     if (!AGENT_MCP_TOOL_NAME_PATTERN.test(name)) {
@@ -214,6 +232,11 @@ export function validateAgentMcpTools(tools: unknown): readonly AgentMcpRegister
     if (RESERVED_AGENT_MCP_TOOL_NAMES.has(name)) {
       throw new Error(
         `tool name "${name}" is reserved for the host's database tools, which share this plugin's MCP server`
+      );
+    }
+    if (declaredQueryNames.has(name)) {
+      throw new Error(
+        `tool name "${name}" is a database query the manifest declares, which the host serves on this plugin's MCP server`
       );
     }
     const definition = tools[name];

@@ -154,6 +154,9 @@ export type { StorageApi, PluginStorageScope } from "./plugin.js";
 
 export type {
   PluginDatabaseContribution,
+  PluginDatabaseQueryContribution,
+  PluginDatabaseQueryParam,
+  PluginDatabaseQueryParamType,
   PluginDatabaseApi,
   PluginDatabase,
   PluginDatabaseStatements,

@@ -1349,6 +1349,43 @@ describe("agent MCP tools", () => {
       expect(registered().tools[0].checkInput({})).toBeNull();
     });
 
+    it("leaves room and names for the database queries the manifest declares", async () => {
+      const { deps, plugins } = makeDeps();
+      const plugin = fakePlugin();
+      const query = (name: string) => ({
+        name,
+        mode: "read" as const,
+        description: "A declared read.",
+        params: {},
+        sql: "SELECT 1",
+      });
+      (plugin.manifest.contributes as { databases: unknown }).databases = [
+        { id: "ledger", location: "local", journalMode: "delete", queries: [query("month_total")] },
+        {
+          id: "archive",
+          location: "local",
+          journalMode: "delete",
+          queries: [query("old_total"), query("year_total")],
+        },
+      ];
+      plugins.set(INSTANCE, plugin);
+      const { host } = createHost(deps, INSTANCE, BINDING);
+      const room = AGENT_MCP_MAX_TOOLS_PER_ENDPOINT - 3;
+      const roster = (count: number) =>
+        Object.fromEntries(Array.from({ length: count }, (_, i) => [`tool_${i}`, tool()]));
+
+      expect(() => host.mcp.registerTools("data", roster(room + 1))).toThrow(
+        /beside the 3 database queries the manifest declares/
+      );
+      expect(() => host.mcp.registerTools("data", { list: tool(), year_total: tool() })).toThrow(
+        /"year_total" is a database query the manifest declares/
+      );
+      expect(agentMcpEndpointRegistry.get(INSTANCE, "data")).toBeUndefined();
+
+      await host.mcp.registerTools("data", roster(room));
+      expect(registered().tools).toHaveLength(room);
+    });
+
     describe("rejects the whole roster", () => {
       const tooMany = Object.fromEntries(
         Array.from({ length: AGENT_MCP_MAX_TOOLS_PER_ENDPOINT + 1 }, (_, i) => [

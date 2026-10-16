@@ -2026,17 +2026,24 @@ export function createHost(
         // grants and the route are all driven by the manifest's declarations, so
         // a roster for an undeclared endpoint could never be reached — reject it
         // rather than hold an orphan.
-        const declared = deps.plugins
-          .get(pluginId)
-          ?.manifest.contributes.agentMcp?.some((endpoint) => endpoint.id === endpointId);
+        const contributes = deps.plugins.get(pluginId)?.manifest.contributes;
+        const declared = contributes?.agentMcp?.some((endpoint) => endpoint.id === endpointId);
         if (!declared) {
           throw new Error(
             `Plugin "${pluginId}" mcp.registerTools: endpoint "${endpointId}" is not declared in contributes.agentMcp`
           );
         }
+        // The host serves the manifest's declared queries on the same MCP
+        // server, so they take names and budget from the roster. Checked here,
+        // where the manifest is, for worker and in-process plugins alike.
+        const declaredQueryNames = new Set(
+          (contributes?.databases ?? []).flatMap((database) =>
+            (database.queries ?? []).map((query) => query.name)
+          )
+        );
         let descriptors: ReturnType<typeof validateAgentMcpTools>;
         try {
-          descriptors = validateAgentMcpTools(tools);
+          descriptors = validateAgentMcpTools(tools, { declaredQueryNames });
         } catch (err) {
           throw new Error(
             `Plugin "${pluginId}" mcp.registerTools("${endpointId}"): ${formatErrorMessage(err, "invalid tool roster")}`,

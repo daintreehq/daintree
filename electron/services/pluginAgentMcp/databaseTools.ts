@@ -92,7 +92,7 @@ export interface DatabaseTarget {
   problem: { code: string; message: string } | null;
 }
 
-type DatabaseQueryParam = string | number | null;
+type DatabaseQueryParam = string | number | bigint | null;
 export type DatabaseQueryParams = DatabaseQueryParam[] | Record<string, DatabaseQueryParam>;
 
 export type DatabaseToolRequest =
