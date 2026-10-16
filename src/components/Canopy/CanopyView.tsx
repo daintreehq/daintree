@@ -14,6 +14,7 @@ import { latestUndoOnly, UNDO_TOAST_DURATION_MS } from "@/lib/undoToast";
 import { pluralize } from "@/lib/pluralize";
 import { isMac } from "@/lib/platform";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
+import { clientErrorCode } from "@/utils/clientAppError";
 import { CANOPY_URGENT_PRIORITY, type CanopyReadMark } from "@shared/types/ipc/canopy";
 import { safeFireAndForget } from "@/utils/safeFireAndForget";
 import { CANOPY_SEEN_HEARTBEAT_MS, canopyViewIsWatched, reportCanopySeen } from "@/lib/canopySeen";
@@ -93,12 +94,6 @@ function isUrgentItem(item: CanopyItem): boolean {
     card.handledAt === null &&
     item.disposition === null
   );
-}
-
-/** The error's own code, when it carries one: main's refusals say why in it. */
-function errorCode(error: unknown): string | null {
-  if (typeof error !== "object" || error === null || !("code" in error)) return null;
-  return typeof error.code === "string" ? error.code : null;
 }
 
 /** An error toast whose one recovery is the place the action can be done by hand. */
@@ -1664,10 +1659,12 @@ function CanopyInbox({
   // while the link comes up, which is connecting, not trouble.
   const connecting =
     linkStatus === "connecting" ||
-    (linkStatus === "disconnected" && errorCode(remote.error) === "HOST_DISCONNECTED");
+    (linkStatus === "disconnected" && clientErrorCode(remote.error) === "HOST_DISCONNECTED");
   // The link dropped after the agents were read: what is listed is what it last showed.
   const linkDown = fleet !== null && linkStatus !== undefined && linkStatus !== "connected";
-  const hostTrouble = otherHost && (remote.error !== null || linkDown) && !connecting;
+  // Connecting stays quiet only until there are rows: rows kept from before say they are old.
+  const hostTrouble =
+    otherHost && (remote.error !== null || linkDown) && !(connecting && fleet === null);
   // Canopy is off on that host: its own offer, for it alone.
   const hostOffer = otherHost && canopy?.activated === false;
 
@@ -1807,16 +1804,18 @@ function CanopyInbox({
             <Callout
               severity="warning"
               size="compact"
-              title={`Can't reach ${hostName}`}
+              title={connecting ? `Reconnecting to ${hostName}…` : `Can't reach ${hostName}`}
               action={
                 <Button variant="outline" size="xs" onClick={remote.retry}>
                   Retry
                 </Button>
               }
             >
-              {linkWords?.state && linkWords.state !== "Connected"
-                ? [linkWords.state, linkWords.note].filter(Boolean).join(". ") + "."
-                : formatErrorMessage(remote.error, `${hostName} didn't answer.`)}{" "}
+              {connecting
+                ? ""
+                : linkWords?.state && linkWords.state !== "Connected"
+                  ? [linkWords.state, linkWords.note].filter(Boolean).join(". ") + "."
+                  : formatErrorMessage(remote.error, `${hostName} didn't answer.`)}{" "}
               {fleet !== null
                 ? "These are the agents it last showed."
                 : "Its agents show here once it answers."}

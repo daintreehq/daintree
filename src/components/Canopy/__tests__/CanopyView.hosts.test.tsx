@@ -426,4 +426,18 @@ describe("the Canopy host picker", () => {
     expect(document.body.textContent).toContain("These are the agents it last showed.");
     expect(document.getElementById("canopy-card-remote-run")).not.toBeNull();
   });
+
+  it("says it is connecting while picking a host dials it, not that it can't be reached", async () => {
+    state.hosts = [host("studio", "studio-01", { status: "disconnected" })];
+    // As main's refusal arrives across the bridge: the code rides in the message.
+    state.invoke.mockRejectedValue(
+      new Error("[AppError|HOST_DISCONNECTED] Host studio is not connected")
+    );
+    installElectron();
+    useCanopyStore.setState({ hostId: "studio" });
+    render(<CanopyView />);
+    await settle();
+    expect(document.body.textContent).toContain("Connecting to studio-01…");
+    expect(document.body.textContent).not.toContain("Can't reach studio-01");
+  });
 });

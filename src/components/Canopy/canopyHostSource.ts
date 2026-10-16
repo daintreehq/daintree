@@ -124,8 +124,10 @@ export function useRemoteCanopy(
       });
     // The newest snapshot applied; a host that came back may count from the start again.
     let lastSequence: number | undefined;
-    // Fleet snapshots carry no sequence: a push since a pull began is newer than its answer.
+    // Fleet snapshots carry no sequence: a push since a pull began is newer than
+    // its answer. Either read's failure, too, is older than a snapshot landed since it began.
     let fleetPushes = 0;
+    let canopyLands = 0;
     // Only the latest round of reads speaks: one from before a resync is old news, failures included.
     let round = 0;
     const applyCanopy = (snapshot: CanopySnapshot) => {
@@ -133,6 +135,7 @@ export function useRemoteCanopy(
       const sequence = snapshot.sequence;
       if (lastSequence !== undefined && sequence !== undefined && sequence < lastSequence) return;
       if (sequence !== undefined) lastSequence = sequence;
+      canopyLands += 1;
       update((state) => ({ ...state, canopy: snapshot, canopyError: null }));
     };
     const applyFleet = (snapshot: FleetSnapshot | null) =>
@@ -140,12 +143,15 @@ export function useRemoteCanopy(
     const read = () => {
       const mine = ++round;
       const pushesBefore = fleetPushes;
+      const landsBefore = canopyLands;
       canopyHostClient.invoke(hostId, "canopy:set-active", true).then(
         (snapshot) => {
           if (mine === round) applyCanopy(snapshot);
         },
         (error: unknown) => {
-          if (mine === round) update((state) => ({ ...state, canopyError: error }));
+          if (mine === round && canopyLands === landsBefore) {
+            update((state) => ({ ...state, canopyError: error }));
+          }
         }
       );
       canopyHostClient.invoke(hostId, "fleet:get-snapshot").then(
@@ -153,7 +159,9 @@ export function useRemoteCanopy(
           if (mine === round && fleetPushes === pushesBefore) applyFleet(snapshot);
         },
         (error: unknown) => {
-          if (mine === round) update((state) => ({ ...state, fleetError: error }));
+          if (mine === round && fleetPushes === pushesBefore) {
+            update((state) => ({ ...state, fleetError: error }));
+          }
         }
       );
     };
