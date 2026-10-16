@@ -28,6 +28,8 @@ export interface CommandOptions {
   maxOutputBytes?: number;
   /** Fed to the program's stdin, which is otherwise closed. */
   input?: CommandInput;
+  /** Variables set for the program on top of this process's environment. */
+  env?: Readonly<Record<string, string>>;
 }
 
 export type CommandInput = { text: string } | { file: string };
@@ -54,6 +56,7 @@ export const defaultCommandRunner: CommandRunner = (command, args, options = {})
       child = spawn(command, [...args], {
         stdio: [options.input ? "pipe" : "ignore", "pipe", "pipe"],
         windowsHide: true,
+        ...(options.env && { env: { ...process.env, ...options.env } }),
       });
     } catch (err) {
       resolve({

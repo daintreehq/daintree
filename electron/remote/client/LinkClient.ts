@@ -18,6 +18,7 @@ import { LinkSession, type LinkSessionOptions } from "../link/session.js";
 import {
   HostModeOffError,
   SshAccessError,
+  UnusableConnectionError,
   TransportError,
   type LinkTransport,
   type LinkTransportConnection,
@@ -250,7 +251,10 @@ export class LinkClient {
       this.fail(err instanceof TransportError ? err.detail : formatErrorMessage(err, "failed"), {
         hostModeOff,
         // Otherwise nothing a later attempt does differently would change these.
-        parked: (hostModeOff && !restarting) || err instanceof SshAccessError,
+        parked:
+          (hostModeOff && !restarting) ||
+          err instanceof SshAccessError ||
+          err instanceof UnusableConnectionError,
         // The transport's own words for what failed; its detail is often null.
         ...(err instanceof TransportError ? { failure: err.message } : {}),
       });

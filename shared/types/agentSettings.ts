@@ -1,24 +1,28 @@
 import { AGENT_REGISTRY, getEffectiveAgentConfig } from "../config/agentRegistry.js";
 import type { BuiltInAgentId } from "../config/agentIds.js";
 import {
+  agentCommandDialect,
   escapeShellArg,
   isSafeUnescaped,
   isSafeShellOption,
-  isWindows,
   quotePowerShellArg,
 } from "../utils/shellEscape.js";
 import { systemPromptArgPositions } from "../utils/agentSystemPrompt.js";
 import { HOST_INBOX_DIR_NAME } from "./ipc/fileTransfer.js";
 
 /**
- * Quotes one argument of an agent launch command. On Windows the command runs
- * through PowerShell: the base command is `& '...'` (agentLaunchCommand.ts) and
- * main launches it with `-EncodedCommand`. cmd-style `"..."` quoting there is a
- * PowerShell expandable string, so a prompt's `$(...)` ran before the agent
- * started and its `$var`s and backticks were rewritten. Single quotes are literal.
+ * Quotes one argument of an agent launch command, for the shell it runs under
+ * (see agentCommandDialect: a WSL host's is bash even under a Windows Shell).
+ * On Windows the command runs through PowerShell: the base command is `& '...'`
+ * (agentLaunchCommand.ts) and main launches it with `-EncodedCommand`.
+ * cmd-style `"..."` quoting there is a PowerShell expandable string, so a
+ * prompt's `$(...)` ran before the agent started and its `$var`s and backticks
+ * were rewritten. Single quotes are literal.
  */
 function quoteAgentArg(arg: string): string {
-  return isWindows() ? quotePowerShellArg(arg) : escapeShellArg(arg, "posix");
+  return agentCommandDialect() === "windows"
+    ? quotePowerShellArg(arg)
+    : escapeShellArg(arg, "posix");
 }
 
 /** {@link quoteAgentArg}, leaving a plain word (letters, digits, `_-/`) bare. */

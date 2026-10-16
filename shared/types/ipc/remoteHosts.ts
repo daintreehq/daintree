@@ -203,6 +203,13 @@ export interface DiscoveredHost {
   alreadyAdded: boolean;
   /** The machine is in the host list under another account (or ssh's default one). */
   knownMachine?: boolean;
+  /** A WSL distro's own facts, as `wsl.exe --list --verbose` printed them. */
+  wsl?: {
+    /** 1 or 2; null when the list didn't say. Only WSL 2 can run a Host. */
+    version: number | null;
+    /** The distro `wsl.exe` runs when none is named. */
+    isDefault: boolean;
+  };
 }
 
 export interface HostInstallInfo {
@@ -308,6 +315,12 @@ export interface HostAdvice {
    * Without it an AppImage host runs extracted. Null on macOS.
    */
   fuse: boolean | null;
+  /**
+   * Linux: whether systemd is the init system (PID 1), which Host mode's user
+   * service needs. A WSL distro runs without it unless its /etc/wsl.conf
+   * turns it on. Null on macOS, or when it wasn't seen.
+   */
+  systemd?: boolean | null;
 }
 
 export type LinuxPackagePreference = "deb" | "appimage";

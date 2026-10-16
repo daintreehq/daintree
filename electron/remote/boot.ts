@@ -1,7 +1,6 @@
 import path from "node:path";
 import { app } from "electron";
 import { formatErrorMessage } from "../../shared/utils/errorMessage.js";
-import { isHostModeRequested } from "../boot/hostModeLaunch.js";
 import { ensureWorkspaceClient, isWorkspaceClientStarting } from "../boot/hostServices.js";
 import { notifyRemoteViewEndpointOpened } from "../ipc/hostSendRelay.js";
 import { setRemoteBoundViewFilter } from "../ipc/utils.js";
@@ -11,6 +10,7 @@ import { resolveLiveWebContents } from "../window/webContentsRegistry.js";
 import { getWindowRegistry } from "../window/windowRef.js";
 import { toDisposable } from "../utils/lifecycle.js";
 import { AppError } from "../utils/errorTypes.js";
+import { isRemoteHostSupported } from "./buildGate.js";
 import { initRemoteHostsClient } from "./client/initClient.js";
 import { closeSshMasters } from "./client/sshTransport.js";
 import { installViewReverseRequests } from "./client/viewRequests.js";
@@ -22,8 +22,6 @@ import {
   installAssistantExchangeClient,
   installAssistantMessagingPolicy,
 } from "./assistant/install.js";
-import { followAppImageMoves } from "./host/appImageRelocation.js";
-import { createHostModeService } from "./host/hostModeDefaults.js";
 import {
   acceptLocalPushForRemoteView,
   installHybridSplits,
@@ -36,7 +34,6 @@ import { installPluginInstallSplits, installPluginParityClient } from "./plugins
 import { installSettingsCopyClient } from "./settingsCopy/install.js";
 import { installPortForwardClient } from "./ports/clientInstall.js";
 import { installHostSwitchService } from "./projects/clientInstall.js";
-import { registerRemoteService } from "./runtime.js";
 import type { HostDescriptor } from "../../shared/types/remoteHosts.js";
 import type { LinkTransport } from "./client/transport.js";
 import type { HostSocketLocation } from "./host/hostSocketPath.js";
@@ -60,9 +57,10 @@ export { setRemoteHostsWindowOpener } from "./client/initClient.js";
 
 /**
  * Entry point for everything Remote Hosts starts in the main process. Loaded
- * only through `if (__DAINTREE_REMOTE_HOSTS__) { await import("./remote/boot.js") }`
- * so Windows builds carry none of it. Services register themselves into
- * `./runtime.ts`; core code reaches them from there.
+ * only through `if (__DAINTREE_REMOTE_HOSTS__) { await import("./remote/boot.js") }`,
+ * and the Host role (./hostBoot.ts) only under `__DAINTREE_REMOTE_HOST_ROLE__`,
+ * so a Windows build carries the Shell alone. Services register themselves
+ * into `./runtime.ts`; core code reaches them from there.
  *
  * The client side always starts. It dials a host when something needs it (a
  * window, a switch, an operation, a forward, the hosts overview), and at
@@ -381,21 +379,11 @@ export async function startRemoteHosts(options: StartRemoteHostsOptions): Promis
   }
   if (!started) return;
   startClient(options);
-  // Registered whatever the setting, so the switch can start it at runtime.
-  const hostMode = createHostModeService({ location: options.hostLocation });
-  teardowns.push(registerRemoteService("hostMode", hostMode));
-  teardowns.push(() => hostMode.dispose());
-  const listenError: { error: unknown } | null = options.hostMode
-    ? await hostMode.startListening().then(
-        () => null,
-        (error: unknown) => ({ error })
-      )
-    : null;
-  // Started by its login item or unit: bring that item up to this build's text.
-  if (isHostModeRequested(process.argv)) void hostMode.refreshStartAtLogin();
-  // Never torn down: the updater renames an AppImage after this has stopped.
-  followAppImageMoves();
-  if (listenError) throw new HostModeListenError(listenError.error);
+  if (__DAINTREE_REMOTE_HOST_ROLE__ && isRemoteHostSupported()) {
+    const { startHostRole } = await import("./hostBoot.js");
+    const listenError = await startHostRole(options, (teardown) => teardowns.push(teardown));
+    if (listenError) throw new HostModeListenError(listenError.error);
+  }
 }
 
 export async function stopRemoteHosts(): Promise<void> {

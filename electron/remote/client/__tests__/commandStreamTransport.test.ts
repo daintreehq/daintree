@@ -112,6 +112,37 @@ describe("createCommandStreamTransport", () => {
     });
   });
 
+  it("reports what a launcher printed on stdout before failing, only when asked to", async () => {
+    // wsl.exe prints its own failures (no such distro) on stdout and exits with -1.
+    const message =
+      "There is no distribution with the supplied name.\nError code: Wsl/Service/WSL_E_DISTRO_NOT_FOUND";
+    const asked = new FakeStreamChild();
+    const opening = createCommandStreamTransport(() => asked, { stdoutInFailure: true }).open(
+      signal()
+    );
+    asked.stdout.write(`${message}\n`);
+    asked.exit(4294967295);
+    await expect(opening).rejects.toMatchObject({ name: "TransportError", detail: message });
+
+    // Without the option the stdout lines stay out of the failure, as for ssh.
+    const plain = new FakeStreamChild();
+    const plainOpening = createCommandStreamTransport(() => plain).open(signal());
+    plain.stdout.write(`${message}\n`);
+    plain.exit(4294967295);
+    await expect(plainOpening).rejects.toMatchObject({ name: "TransportError", detail: null });
+
+    // stderr still wins when there is some.
+    const both = new FakeStreamChild();
+    const bothOpening = createCommandStreamTransport(() => both, { stdoutInFailure: true }).open(
+      signal()
+    );
+    both.stdout.write("noise\n");
+    both.exit(1, "<3>WSL (430 - Relay) ERROR: execvpe(/x) failed\n");
+    await expect(bothOpening).rejects.toMatchObject({
+      detail: "<3>WSL (430 - Relay) ERROR: execvpe(/x) failed",
+    });
+  });
+
   it("gives up on a command that never answers, and on one that prints too much", async () => {
     const silent = new FakeStreamChild();
     await expect(

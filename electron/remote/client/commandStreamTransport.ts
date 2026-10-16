@@ -8,7 +8,9 @@ import { TransportError, type LinkTransport, type LinkTransportConnection } from
  * `wsl.exe -d <distro> -- …` is the same shape), which says which token the
  * host expects in one preamble line and then carries the link byte for byte.
  * Lines before the preamble (a chatty shell startup file on stdout) are
- * skipped; failures come back as the command's own stderr.
+ * skipped; failures come back as the command's own stderr, or with
+ * {@link CommandStreamTransportOptions.stdoutInFailure} what it printed on
+ * stdout before the preamble when stderr is empty.
  */
 
 export interface StreamCommandChild {
@@ -25,6 +27,12 @@ export interface CommandStreamTransportOptions {
   preambleTimeoutMs?: number;
   /** Most bytes read looking for the preamble before giving up. */
   maxPreambleBytes?: number;
+  /**
+   * A failure before the preamble also reports what came out on stdout, for
+   * a launcher that prints its own errors there (wsl.exe for a missing
+   * distro). Never anything after the preamble: that is the link.
+   */
+  stdoutInFailure?: boolean;
 }
 
 const DEFAULT_PREAMBLE_TIMEOUT_MS = 30_000;
@@ -134,7 +142,12 @@ function readPreamble(
   return new Promise((resolve, reject) => {
     let buffered = Buffer.alloc(0);
     let scanned = 0;
+    let skipped = "";
     let settled = false;
+    const skippedStdout = () =>
+      options.stdoutInFailure
+        ? (skipped + buffered.toString("utf8")).slice(-MAX_STDERR_BYTES).trim()
+        : "";
     const finish = (fn: () => void) => {
       if (settled) return;
       settled = true;
@@ -146,7 +159,7 @@ function readPreamble(
       fn();
     };
     const fail = (message: string, fallback: string | null) =>
-      finish(() => reject(new TransportError(message, stderr() || fallback)));
+      finish(() => reject(new TransportError(message, stderr() || skippedStdout() || fallback)));
     const onData = (chunk: Buffer) => {
       buffered = Buffer.concat([buffered, chunk]);
       for (;;) {
@@ -160,6 +173,7 @@ function readPreamble(
           return;
         }
         scanned += newline + 1;
+        if (options.stdoutInFailure) skipped = (skipped + line + "\n").slice(-MAX_STDERR_BYTES);
         buffered = rest;
       }
       if (scanned + buffered.byteLength > options.maxPreambleBytes) {
@@ -199,6 +213,7 @@ export function createCommandStreamTransport(
   const resolved: Required<CommandStreamTransportOptions> = {
     preambleTimeoutMs: options.preambleTimeoutMs ?? DEFAULT_PREAMBLE_TIMEOUT_MS,
     maxPreambleBytes: options.maxPreambleBytes ?? DEFAULT_MAX_PREAMBLE_BYTES,
+    stdoutInFailure: options.stdoutInFailure ?? false,
   };
   return {
     async open(signal): Promise<LinkTransportConnection> {

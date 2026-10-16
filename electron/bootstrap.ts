@@ -27,7 +27,7 @@ import { isRemoteHostSupported } from "./remote/buildGate.js";
 // link. The process exits once either side of the pipe closes.
 if (isRemoteHostSupported() && isAttachStdioRequested(process.argv)) {
   let code = 1;
-  if (__DAINTREE_REMOTE_HOSTS__) {
+  if (__DAINTREE_REMOTE_HOST_ROLE__) {
     try {
       const { runAttachStdioCli } = await import("./remote/host/attachStdioCli.js");
       code = await runAttachStdioCli();

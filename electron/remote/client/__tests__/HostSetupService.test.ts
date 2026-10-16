@@ -415,3 +415,81 @@ describe("HostSetupService", () => {
     await expect(fs.access(otherCache)).resolves.toBeUndefined();
   });
 });
+
+describe("HostSetupService on Windows (WSL distros)", () => {
+  const LINUX_DISTRO = [
+    "@@dt:uname Linux x86_64",
+    "@@dt:init systemd",
+    "@@dt:unit no",
+    "@@dt:end",
+  ].join("\n");
+
+  function windowsService(overrides: Partial<HostSetupDeps> = {}) {
+    const keepalive = { touched: [] as string[], released: [] as string[] };
+    const calls: Array<[string, readonly string[]]> = [];
+    const result = service(LINUX_DISTRO, {
+      platform: "win32",
+      run: async (command, args) => {
+        calls.push([command, args]);
+        return ok(command.endsWith("wsl.exe") ? LINUX_DISTRO : "");
+      },
+      wslKeepalive: {
+        touch: (distro) => keepalive.touched.push(distro),
+        release: (distro) => keepalive.released.push(distro),
+      },
+      ...overrides,
+    });
+    return { ...result, calls, keepalive };
+  }
+
+  it("checks a distro through wsl.exe --exec, holding it up around the command", async () => {
+    const { setup, calls, keepalive } = windowsService();
+    const result = await setup.probe({ connection: { kind: "wsl", distro: "Ubuntu-24.04" } });
+    expect(result).toMatchObject({ reachable: true, platform: "linux" });
+    expect(result.advice).toMatchObject({ systemd: true, sleepObserved: null });
+    const [command, args] = calls[0]!;
+    expect(command).toMatch(/\\System32\\wsl\.exe$/i);
+    expect(args.slice(0, 7)).toEqual([
+      "-d",
+      "Ubuntu-24.04",
+      "--cd",
+      "~",
+      "--exec",
+      "/bin/sh",
+      "-c",
+    ]);
+    expect(args.at(-1)).toContain("@@dt:uname");
+    expect(keepalive.touched).toEqual(["Ubuntu-24.04", "Ubuntu-24.04"]);
+  });
+
+  it("refuses an ssh host on Windows, and a WSL distro anywhere else", async () => {
+    const { setup, calls } = windowsService();
+    await expect(
+      setup.probe({ connection: { kind: "ssh", target: "greg@studio" } })
+    ).rejects.toMatchObject({ code: "UNSUPPORTED" });
+    expect(calls).toEqual([]);
+    const mac = service(LINUX_DISTRO);
+    await expect(
+      mac.setup.probe({ connection: { kind: "wsl", distro: "Ubuntu" } })
+    ).rejects.toMatchObject({ code: "UNSUPPORTED" });
+    expect(mac.calls).toEqual([]);
+  });
+
+  it("lets a forgotten host's distro go", async () => {
+    const { setup, keepalive } = windowsService();
+    await setup.forgetArtifacts({ connection: { kind: "wsl", distro: "Debian" } });
+    expect(keepalive.released).toEqual(["Debian"]);
+  });
+
+  it("doesn't hold up a distro whose host is being removed or re-pointed", async () => {
+    const { setup, keepalive, calls } = windowsService({ isRetiring: () => true });
+    // A check already under way when removal began still runs, but takes no hold.
+    await (
+      setup as unknown as {
+        probeOutcome(connection: unknown): Promise<unknown>;
+      }
+    ).probeOutcome({ kind: "wsl", distro: "Ubuntu" });
+    expect(calls).toHaveLength(1);
+    expect(keepalive.touched).toEqual([]);
+  });
+});

@@ -52,6 +52,19 @@ export function isSshAccessDenied(stderr: string): boolean {
   return SSH_ACCESS_DENIED.test(stderr);
 }
 
+/**
+ * This machine can't reach the host the way it is set up: a connection kind
+ * this platform doesn't use (an ssh host in a Windows Shell's list), WSL not
+ * installed, a distro that isn't there. Trying again finds the same until the
+ * user changes something, so the link waits for a Connect.
+ */
+export class UnusableConnectionError extends TransportError {
+  constructor(message: string, detail: string | null) {
+    super(message, detail);
+    this.name = "UnusableConnectionError";
+  }
+}
+
 /** ssh reached the host and found no Daintree listening there in Host mode. */
 export class HostModeOffError extends TransportError {
   constructor(detail: string) {

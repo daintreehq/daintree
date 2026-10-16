@@ -341,7 +341,7 @@ if (!gotTheLock) {
   // no display, as host setup's handoff over SSH is.
   const exitNow = () => app.exit(0);
   if (
-    __DAINTREE_REMOTE_HOSTS__ &&
+    __DAINTREE_REMOTE_HOST_ROLE__ &&
     process.platform === "linux" &&
     isRemoteHostSupported() &&
     (process.env.DISPLAY || process.env.WAYLAND_DISPLAY)

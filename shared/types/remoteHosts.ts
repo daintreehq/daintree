@@ -4,7 +4,8 @@
  *
  * Every Daintree is both. "local" is this machine's own Host; every other
  * host id is an opaque, client-minted identifier for a machine reached over
- * SSH. A window is bound to exactly one host.
+ * SSH, or a WSL distro on this Windows machine. A window is bound to exactly
+ * one host.
  */
 
 export type HostId = string;
@@ -103,21 +104,26 @@ export function isBlockingMismatch(mismatch: HandshakeMismatch): boolean {
   return mismatch.kind === "protocol";
 }
 
-/** How a host was found. Discovery only proves reachability. */
-export type HostDiscoverySource = "tailscale" | "bonjour" | "manual";
+/** How a host was found. Discovery only proves reachability; `wsl` is a distro installed on this PC. */
+export type HostDiscoverySource = "tailscale" | "bonjour" | "manual" | "wsl";
 
 /**
- * How this client reaches a host. SSH is the only kind today; each kind names
- * the one command that gets a stream to the host's Daintree. A future
- * `{ kind: "wsl"; distro: string }` (a Linux Host inside a WSL distro, reached
- * with `wsl.exe -d <distro> -- <host> --attach-stdio`) is a new member here,
- * and every `switch (connection.kind)` then has to say what it does for it.
+ * How this client reaches a host. Each kind names the one command that gets a
+ * stream to the host's Daintree: `ssh <target>`, or `wsl.exe -d <distro>` for
+ * a Linux Host inside a WSL distro on this Windows machine (#12830). Every
+ * `switch (connection.kind)` has to say what it does for each.
  */
-export type HostConnection = {
-  kind: "ssh";
-  /** What `ssh` is given: `user@host`, an alias from ~/.ssh/config, or a tailnet name. */
-  target: string;
-};
+export type HostConnection =
+  | {
+      kind: "ssh";
+      /** What `ssh` is given: `user@host`, an alias from ~/.ssh/config, or a tailnet name. */
+      target: string;
+    }
+  | {
+      kind: "wsl";
+      /** The distro's name as `wsl.exe -l` lists it, e.g. `Ubuntu-24.04`. */
+      distro: string;
+    };
 
 export type HostConnectionKind = HostConnection["kind"];
 
@@ -125,11 +131,28 @@ export function sshConnection(target: string): HostConnection {
   return { kind: "ssh", target };
 }
 
-/** The one way a host's address is shown: what the user typed for ssh. */
+export function wslConnection(distro: string): HostConnection {
+  return { kind: "wsl", distro };
+}
+
+/**
+ * A distro name as `wsl.exe -l` lists one: letters, digits, `.`, `_`, `-` and
+ * inner spaces, starting with a letter or digit so it can never read as a
+ * `wsl.exe` option. It travels as one argv element, never through a shell.
+ */
+const WSL_DISTRO_NAME = /^[A-Za-z0-9](?:[A-Za-z0-9._ -]{0,62}[A-Za-z0-9._-])?$/;
+
+export function isValidWslDistroName(distro: string): boolean {
+  return WSL_DISTRO_NAME.test(distro);
+}
+
+/** The one way a host's address is shown: what the user typed for ssh, the distro for WSL. */
 export function formatHostConnection(connection: HostConnection): string {
   switch (connection.kind) {
     case "ssh":
       return connection.target;
+    case "wsl":
+      return `${connection.distro} (WSL)`;
     default:
       // A kind this build doesn't know (a newer build's settings): name the kind.
       return (connection as { kind: string }).kind;
@@ -146,8 +169,17 @@ export function sshTargetOf(connection: HostConnection): string | null {
   }
 }
 
+/** The WSL distro, or null for a connection that isn't WSL. */
+export function wslDistroOf(connection: HostConnection): string | null {
+  return connection.kind === "wsl" ? connection.distro : null;
+}
+
 export function sameHostConnection(a: HostConnection, b: HostConnection): boolean {
-  return a.kind === b.kind && a.target === b.target;
+  if (a.kind === "ssh" && b.kind === "ssh") return a.target === b.target;
+  // WSL looks distro names up without regard to case.
+  if (a.kind === "wsl" && b.kind === "wsl")
+    return a.distro.toLowerCase() === b.distro.toLowerCase();
+  return false;
 }
 
 /**
@@ -208,16 +240,20 @@ export function isReservedHostName(name: string): boolean {
 /**
  * The connection an entry was saved with, from either shape: `connection`, or
  * the `sshTarget` string development builds of this feature wrote before it.
- * Null when neither is usable; the caller validates the target itself.
+ * Null when neither is usable; the caller validates the target or distro itself.
  */
 export function readStoredHostConnection(entry: {
   connection?: unknown;
   sshTarget?: unknown;
 }): HostConnection | null {
-  const connection = entry.connection as { kind?: unknown; target?: unknown } | null | undefined;
+  const connection = entry.connection as
+    { kind?: unknown; target?: unknown; distro?: unknown } | null | undefined;
   if (connection && typeof connection === "object") {
     if (connection.kind === "ssh" && typeof connection.target === "string") {
       return sshConnection(connection.target);
+    }
+    if (connection.kind === "wsl" && typeof connection.distro === "string") {
+      return wslConnection(connection.distro);
     }
     return null;
   }

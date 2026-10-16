@@ -17,12 +17,14 @@ let buildReadyTimer = null;
 
 const external = MAIN_EXTERNAL;
 
-// Remote Hosts is macOS/Linux only. A Windows build compiles the gate to
-// `false`, so every `if (__DAINTREE_REMOTE_HOSTS__) { await import(...) }`
-// site drops the link and host-server modules from the bundle entirely.
+// Every build can be a Remote Hosts Shell; only macOS and Linux can be a
+// Host. A Windows build compiles the Host-role gate to `false`, so every
+// `if (__DAINTREE_REMOTE_HOST_ROLE__) { await import(...) }` site drops the
+// listener, Host mode and the attach bridge from the bundle entirely.
 // DAINTREE_BUILD_TARGET_PLATFORM lets a cross-build name its target.
 const buildTargetPlatform = process.env.DAINTREE_BUILD_TARGET_PLATFORM || process.platform;
-const remoteHostsEnabled = buildTargetPlatform !== "win32";
+const remoteHostsEnabled = true;
+const remoteHostRoleEnabled = buildTargetPlatform !== "win32";
 
 // Client and host must run the same source commit, so the commit is baked in.
 function resolveBuildCommit() {
@@ -69,6 +71,7 @@ const common = {
   define: {
     "process.env.SENTRY_DSN": JSON.stringify(process.env.SENTRY_DSN || ""),
     __DAINTREE_REMOTE_HOSTS__: JSON.stringify(remoteHostsEnabled),
+    __DAINTREE_REMOTE_HOST_ROLE__: JSON.stringify(remoteHostRoleEnabled),
     __DAINTREE_BUILD_COMMIT__: JSON.stringify(buildCommit),
     // Strip E2E test backdoors from production builds (#9148). Replacing these
     // env-var reads with "" lets esbuild constant-fold the `=== "1"` checks to

@@ -103,6 +103,8 @@ export function buildHostProbeScript(): string {
     // looks for that helper (fuse3's fusermount3 or fuse2's fusermount).
     `f=no; if [ -e /dev/fuse ]; then for b in fusermount3 fusermount; do p=$(command -v $b 2>/dev/null) && [ -u "$p" ] && { f=yes; break; }; done; fi; echo "${MARK}fuse $f"`,
     `echo "${MARK}linger $(loginctl show-user "$(id -un)" -p Linger 2>/dev/null)"`,
+    // Host mode runs as a systemd user service; a WSL distro may boot without systemd.
+    `echo "${MARK}init $(head -c 64 /proc/1/comm 2>/dev/null)"`,
     // Only this SSH user's processes: another user's keyring is no use here.
     `k=none; for n in gnome-keyring-d kwalletd5 kwalletd6; do if pgrep -u "$(id -u)" -x $n >/dev/null 2>&1; then k=$n; break; fi; done; echo "${MARK}keyring $k"`,
   ].join("; ");
@@ -309,6 +311,7 @@ export function parseHostProbe(stdout: string): ParsedProbe {
     startAtLoginInstalled = unitPresent ? (unitEnabled ? unitEnabled === "enabled" : null) : false;
   }
   const fuseText = one("fuse");
+  const initText = one("init");
 
   return {
     platform,
@@ -334,6 +337,7 @@ export function parseHostProbe(stdout: string): ParsedProbe {
       hostModeUnit: unitPresent,
       startAtLoginInstalled,
       fuse: platform === "linux" && fuseText ? fuseText === "yes" : null,
+      systemd: platform === "linux" && initText ? initText === "systemd" : null,
     },
     hostModeState: parseHostModeStatus(one("hostmodestate") ?? ""),
     complete: values.has("end"),
@@ -444,28 +448,34 @@ export async function probeHost(params: {
           hostModeUnit: null,
           startAtLoginInstalled: null,
           fuse: null,
+          systemd: null,
         },
         hostModeState: null,
       },
     };
   }
+  // A WSL distro sleeps only when this PC does, and the Shell with it: its own sleep setting says nothing.
+  const observed: ParsedProbe =
+    connection.kind === "wsl"
+      ? { ...parsed, advice: { ...parsed.advice, sleepObserved: null, sleepDisabled: null } }
+      : parsed;
   return {
-    parsed,
+    parsed: observed,
     result: {
       connection,
       reachable: true,
       sshError: null,
-      platform: parsed.platform,
-      arch: parsed.arch,
-      install: parsed.install,
-      hostModeListening: parsed.hostModeListening,
-      suggestedCommands: suggestedCommandsFor(parsed),
-      appRunning: parsed.appRunning || parsed.hostModeListening,
-      appImages: parsed.appImages,
-      canDownload: parsed.canDownload,
-      matchesClient: hostMatchesClient(parsed, params.client),
-      advice: parsed.advice,
-      hostModeState: parsed.hostModeState,
+      platform: observed.platform,
+      arch: observed.arch,
+      install: observed.install,
+      hostModeListening: observed.hostModeListening,
+      suggestedCommands: suggestedCommandsFor(observed),
+      appRunning: observed.appRunning || observed.hostModeListening,
+      appImages: observed.appImages,
+      canDownload: observed.canDownload,
+      matchesClient: hostMatchesClient(observed, params.client),
+      advice: observed.advice,
+      hostModeState: observed.hostModeState,
     },
   };
 }

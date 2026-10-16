@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import fs from "node:fs/promises";
 import { clipboard, shell } from "electron";
 import type { AppState, BootResult, HydrateResult } from "../../../shared/types/ipc/app.js";
 import type {
@@ -12,11 +13,14 @@ import type { SystemOpenInEditorFallback } from "../../../shared/types/ipc/syste
 import type { ScratchSwitchPayload } from "../../../shared/types/ipc/scratch.js";
 import type { Scratch } from "../../../shared/types/scratch.js";
 import {
+  isValidWslDistroName,
   toHostScopedKey,
+  wslDistroOf,
   type HostDescriptor,
   type HostId,
 } from "../../../shared/types/remoteHosts.js";
 import { openExternalUrl } from "../../utils/openExternal.js";
+import { assertExtensionAllowed } from "../../utils/executablePathGuard.js";
 import { CHANNELS } from "../../ipc/channels.js";
 import type { HybridSplit } from "../../ipc/endpoint.js";
 import type { IpcContext } from "../../ipc/types.js";
@@ -40,6 +44,7 @@ import { getRemoteService } from "../runtime.js";
 import { mergeByOwnership, splitByOwnership } from "./fieldOwnership.js";
 import { notificationSettingsGet, notificationSettingsSet } from "./notificationSettings.js";
 import { sshTargetOf } from "../client/connection.js";
+import { wslUncPath } from "../../../shared/utils/wslPath.js";
 
 type SplitCall = Parameters<HybridSplit>[0];
 
@@ -283,17 +288,26 @@ function remoteSshAuthority(sshTarget: string): string {
   return `ssh-remote+${encoded}`;
 }
 
-export function buildRemoteEditorUrl(options: {
-  editorId: EditorConfig["id"] | null;
-  sshTarget: string;
-  path: string;
-  line?: number;
-  col?: number;
-}): string | null {
+export function buildRemoteEditorUrl(
+  options: {
+    editorId: EditorConfig["id"] | null;
+    path: string;
+    line?: number;
+    col?: number;
+  } & ({ sshTarget: string } | { wslDistro: string })
+): string | null {
   const scheme = REMOTE_EDITOR_SCHEMES[options.editorId ?? "vscode"];
   if (!scheme) return null;
   // The same grammar the connection itself accepts, so every host that connects can open files.
-  if (!isValidSshTarget(options.sshTarget)) return null;
+  let authority: string;
+  if ("wslDistro" in options) {
+    if (!isValidWslDistroName(options.wslDistro)) return null;
+    // The WSL remote's authority: `wsl+<distro>`, encoded so a space survives.
+    authority = `wsl+${encodeURIComponent(options.wslDistro)}`;
+  } else {
+    if (!isValidSshTarget(options.sshTarget)) return null;
+    authority = remoteSshAuthority(options.sshTarget);
+  }
   if (!options.path.startsWith("/") || /[\0\r\n]/.test(options.path)) return null;
   const isPosition = (n: number | undefined) => n === undefined || (Number.isInteger(n) && n > 0);
   if (!isPosition(options.line) || !isPosition(options.col)) return null;
@@ -303,7 +317,7 @@ export function buildRemoteEditorUrl(options: {
     options.line !== undefined
       ? `:${options.line}${options.col !== undefined ? `:${options.col}` : ""}`
       : "";
-  return `${scheme}://vscode-remote/${remoteSshAuthority(options.sshTarget)}${encodedPath}${position}`;
+  return `${scheme}://vscode-remote/${authority}${encodedPath}${position}`;
 }
 
 /**
@@ -346,16 +360,15 @@ const openInEditor: HybridSplit = async ({ hostId, args, remote }) => {
     }
   }
 
-  // The editor's remote is SSH; a host reached another way gets its path copied.
+  // The editor's own remote: SSH for an ssh host, WSL for a distro on this PC.
   const sshTarget = sshTargetOf(descriptor.connection);
-  if (!sshTarget) return copyHostPathInstead(hostId, hostPath);
-  const url = buildRemoteEditorUrl({
-    editorId,
-    sshTarget,
-    path: hostPath,
-    line: payload.line,
-    col: payload.col,
-  });
+  const wslDistro = wslDistroOf(descriptor.connection);
+  const position = { path: hostPath, line: payload.line, col: payload.col };
+  const url = sshTarget
+    ? buildRemoteEditorUrl({ editorId, sshTarget, ...position })
+    : wslDistro
+      ? buildRemoteEditorUrl({ editorId, wslDistro, ...position })
+      : null;
   if (!url) return copyHostPathInstead(hostId, hostPath);
   try {
     await shell.openExternal(url, { activate: true });
@@ -366,16 +379,36 @@ const openInEditor: HybridSplit = async ({ hostId, args, remote }) => {
   return undefined;
 };
 
-/**
- * A remote window's reveal is "Copy host path": a file manager opened here
- * would show this machine, and one on the host's screen helps nobody.
- */
-const copyHostPath: HybridSplit = async ({ args }) => {
-  const targetPath = (args[0] as { path?: unknown } | undefined)?.path;
+/** The host path an open or reveal names; the renderer sends it as a string or `{ path }`. */
+function requireHostPath(arg: unknown): string {
+  const targetPath = typeof arg === "string" ? arg : (arg as { path?: unknown } | undefined)?.path;
   if (typeof targetPath !== "string" || !targetPath.startsWith("/")) {
     throw new AppError({ code: "VALIDATION", message: "An absolute host path is required" });
   }
+  return targetPath;
+}
+
+/** The path's place in this PC's file manager when the host is a WSL distro here; else null. */
+function wslWindowsPath(hostId: HostId, hostPath: string): string | null {
+  const descriptor = hostDescriptor(hostId);
+  const distro = descriptor ? wslDistroOf(descriptor.connection) : null;
+  return distro ? wslUncPath(distro, hostPath) : null;
+}
+
+/**
+ * A remote window's reveal is "Copy host path": a file manager opened here
+ * would show this machine, and one on the host's screen helps nobody. A WSL
+ * distro's files are on this PC, so Explorer shows them through WSL's share.
+ */
+const copyHostPath: HybridSplit = async ({ hostId, args }) => {
+  const targetPath = requireHostPath(args[0]);
+  const windowsPath = wslWindowsPath(hostId, targetPath);
+  if (windowsPath) {
+    shell.showItemInFolder(windowsPath);
+    return undefined;
+  }
   clipboard.writeText(targetPath);
+  return undefined;
 };
 
 /**
@@ -396,9 +429,44 @@ const openForgePage: HybridSplit = async ({ hostId, remote }) => {
   return undefined;
 };
 
-const openOnHost = refuse(
+const refuseOpenOnHost = refuse(
   (host) => `This file is on ${host}, not this computer. Use Copy host path instead.`
 );
+
+/**
+ * Opening a host file with this machine's default app: only a WSL distro's,
+ * through its share. The default app runs what it opens, so the launcher's
+ * executable deny-list applies to the path as named and to what it resolves
+ * to: a harmless-looking name in the distro can't link to something Windows
+ * would execute.
+ */
+const openOnHost: HybridSplit = async (context) => {
+  const arg = context.args[0];
+  const targetPath = typeof arg === "string" ? arg : (arg as { path?: unknown } | undefined)?.path;
+  const windowsPath =
+    typeof targetPath === "string" && targetPath.startsWith("/")
+      ? wslWindowsPath(context.hostId, targetPath)
+      : null;
+  if (!windowsPath) return refuseOpenOnHost(context);
+  assertExtensionAllowed(windowsPath);
+  let resolved: string;
+  try {
+    resolved = await fs.realpath(windowsPath);
+  } catch {
+    // Windows can't follow a link made in the distro, so the default app couldn't open one either.
+    throw new AppError({
+      code: "INVALID_PATH",
+      message: `Couldn't resolve ${windowsPath}`,
+      userMessage: `Couldn't open ${String(targetPath)} from Windows: it isn't on ${hostLabel(context.hostId)}, or it's a link Windows can't follow.`,
+    });
+  }
+  assertExtensionAllowed(resolved);
+  const failure = await shell.openPath(resolved);
+  if (failure) {
+    throw new AppError({ code: "INTERNAL", message: failure, userMessage: failure });
+  }
+  return undefined;
+};
 
 /**
  * Every hybrid invoke channel with its split for a remote-bound window. Hybrid

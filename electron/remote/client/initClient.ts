@@ -70,9 +70,11 @@ import {
 import { RemoteHostsClient, type WindowControl } from "./RemoteHostsClient.js";
 import { RemoteRouterImpl, type SenderLookup } from "./RemoteRouter.js";
 import { answerReverseRequest } from "./reverseRequests.js";
-import { unsupportedConnection } from "./connection.js";
+import { requireSupportedConnection } from "./connection.js";
 import { SshTransport } from "./sshTransport.js";
-import { TransportError, type LinkTransport } from "./transport.js";
+import { WslKeepalive } from "./wslKeepalive.js";
+import { WslTransport } from "./wslTransport.js";
+import { TransportError, UnusableConnectionError, type LinkTransport } from "./transport.js";
 import { WindowHostBinding } from "./WindowHostBinding.js";
 import {
   prepareHostProjectView,
@@ -593,18 +595,48 @@ const HOST_STATE_CLEANUPS: readonly HostStateCleanup[] = [
   { name: "browser data", run: clearHostPartitions },
 ];
 
+/**
+ * Where a WSL distro's Host may listen: a packaged one's runtime directory,
+ * and, for a development build of this app, a development Host's too.
+ */
+const WSL_RUNTIME_DIR_NAMES = app.isPackaged ? ["daintree"] : ["daintree", "daintree-dev"];
+
 /** How a host's link is opened, by how it is reached. */
 function transportFor(
   connection: HostConnection,
   clientDir: string,
+  wsl: {
+    keepalive: WslKeepalive;
+    /** The host is being removed or re-pointed: its old distro must not be held again. */
+    isRetiring(connection: HostConnection): boolean;
+  },
   ensureRunning?: (signal: AbortSignal) => Promise<boolean>
 ): LinkTransport {
-  switch (connection.kind) {
+  let supported: HostConnection;
+  try {
+    supported = requireSupportedConnection(connection);
+  } catch (error) {
+    // Reported as the link's own failure, so every caller sees why without a throw to catch.
+    const reason = isAppError(error)
+      ? (error.userMessage ?? error.message)
+      : formatErrorMessage(error, "This host can't be reached from here");
+    return {
+      open: () => Promise.reject(new UnusableConnectionError(reason, reason)),
+    };
+  }
+  switch (supported.kind) {
     case "ssh":
-      return new SshTransport({ target: connection.target, clientDir, ensureRunning });
-    default:
-      // A new kind brings its own transport (WSL: a command stream over `wsl.exe`).
-      throw unsupportedConnection(connection, "Connecting");
+      return new SshTransport({ target: supported.target, clientDir, ensureRunning });
+    case "wsl":
+      return new WslTransport({
+        distro: supported.distro,
+        run: defaultCommandRunner,
+        keepalive: (distro) => {
+          if (!wsl.isRetiring(supported)) wsl.keepalive.want(distro);
+        },
+        ensureRunning,
+        runtimeDirNames: WSL_RUNTIME_DIR_NAMES,
+      });
   }
 }
 
@@ -647,6 +679,7 @@ export function initRemoteHostsClient(hooks: RemoteHostsClientHooks = {}): {
   /** Hosts whose Daintree this machine is checking on or starting over ssh, by attempts in flight. */
   const startingHosts = new Map<HostId, number>();
   const clientDir = path.join(app.getPath("userData"), "rh");
+  const wslKeepalive = new WslKeepalive();
   // Bound below: the sink needs the router's answer, the router needs the manager.
   let router: RemoteRouterImpl | null = null;
   const hostForView = (webContentsId: number) => router?.hostForSender(webContentsId) ?? null;
@@ -655,8 +688,13 @@ export function initRemoteHostsClient(hooks: RemoteHostsClientHooks = {}): {
     createTransport:
       hooks.createTransport ??
       ((descriptor) =>
-        transportFor(descriptor.connection, clientDir, (signal) =>
-          ensureHostRunning(descriptor.id, descriptor.connection, signal)
+        transportFor(
+          descriptor.connection,
+          clientDir,
+          // A dial while the host is removed or re-pointed (a notification, an
+          // update's reconnect) would hold the old distro after its release.
+          { keepalive: wslKeepalive, isRetiring: (connection) => client.isRetiring(connection) },
+          (signal) => ensureHostRunning(descriptor.id, descriptor.connection, signal)
         )),
     handshake: getLocalHandshakeInfo,
     client: {
@@ -802,6 +840,7 @@ export function initRemoteHostsClient(hooks: RemoteHostsClientHooks = {}): {
       downloadArtifact({ url, destination, signal, allowedPrefixes: RELEASE_FEED_PREFIXES }),
     emit: broadcastLocal,
     isRetiring: (connection) => client.isRetiring(connection),
+    wslKeepalive,
   });
   const unregister = registerRemoteService("remoteHostsClient", client);
   const unregisterWindowHosts = registerRemoteService("windowHosts", client);
@@ -830,6 +869,8 @@ export function initRemoteHostsClient(hooks: RemoteHostsClientHooks = {}): {
       stopTitleRefresh();
       setRemoteHostNameResolver(() => null);
       await client.dispose();
+      // Last: closing the links above may still have needed their distros up.
+      wslKeepalive.dispose();
     },
   };
 }

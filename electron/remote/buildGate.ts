@@ -1,5 +1,4 @@
 import {
-  isEitherRemoteRoleSupportedOn,
   isRemoteHostSupportedOn,
   isRemoteShellSupportedOn,
 } from "../../shared/config/remoteHostsSupport.js";
@@ -13,6 +12,12 @@ import {
 export const REMOTE_HOSTS_BUILD_ENABLED: boolean =
   typeof __DAINTREE_REMOTE_HOSTS__ === "boolean" ? __DAINTREE_REMOTE_HOSTS__ : true;
 
+/** The Host-role define, read the same way: false in Windows builds. */
+export const REMOTE_HOST_ROLE_BUILD_ENABLED: boolean =
+  typeof __DAINTREE_REMOTE_HOST_ROLE__ === "boolean"
+    ? __DAINTREE_REMOTE_HOST_ROLE__
+    : REMOTE_HOSTS_BUILD_ENABLED;
+
 export const BUILD_COMMIT: string =
   typeof __DAINTREE_BUILD_COMMIT__ === "string" ? __DAINTREE_BUILD_COMMIT__ : "unknown";
 
@@ -23,10 +28,13 @@ export function isRemoteShellSupported(): boolean {
 
 /** Other machines can drive this one (Host mode, start at login, `--attach-stdio`). */
 export function isRemoteHostSupported(): boolean {
-  return isRemoteHostSupportedOn(process.platform, REMOTE_HOSTS_BUILD_ENABLED);
+  return isRemoteHostSupportedOn(
+    process.platform,
+    REMOTE_HOSTS_BUILD_ENABLED && REMOTE_HOST_ROLE_BUILD_ENABLED
+  );
 }
 
 /** Either role: the Remote Hosts IPC namespaces and the boot that starts both sides. */
 export function isEitherRemoteRoleSupported(): boolean {
-  return isEitherRemoteRoleSupportedOn(process.platform, REMOTE_HOSTS_BUILD_ENABLED);
+  return isRemoteShellSupported() || isRemoteHostSupported();
 }

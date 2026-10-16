@@ -7,6 +7,25 @@
  * Detects if the current platform is Windows.
  * Works in both Node.js and browser environments.
  */
+/**
+ * The shell an agent launch command will run under, for a command built for
+ * another machine: a remote view's renderer reports its host's (a Windows
+ * Shell showing a project in a WSL distro builds commands for bash). Null
+ * leaves it to this process's own platform.
+ */
+let agentCommandDialectResolver: (() => "windows" | "posix" | null) | null = null;
+
+export function setAgentCommandDialectResolver(
+  resolve: (() => "windows" | "posix" | null) | null
+): void {
+  agentCommandDialectResolver = resolve;
+}
+
+/** How agent launch arguments are quoted and checked: the host's shell when it isn't this machine's. */
+export function agentCommandDialect(): "windows" | "posix" {
+  return agentCommandDialectResolver?.() ?? (isWindows() ? "windows" : "posix");
+}
+
 export function isWindows(): boolean {
   // Node.js environment
   if (typeof process !== "undefined" && process.platform) {
@@ -90,11 +109,12 @@ export function quotePowerShellArg(arg: string): string {
   return `'${arg.replace(/['\u2018-\u201b]/g, (quote) => quote + quote)}'`;
 }
 
-/** Source quoting for commands assembled for the project's host. */
+/** Source quoting for commands assembled for the project's host (its shell unless named). */
 export function quoteLaunchArgOptional(arg: string, platform?: "windows" | "posix"): string {
   if (isSafeUnescaped(arg) || isSafeShellOption(arg)) return arg;
-  const windows = platform === "windows" || (platform === undefined && isWindows());
-  return windows ? quotePowerShellArg(arg) : escapeShellArg(arg, "posix");
+  return (platform ?? agentCommandDialect()) === "windows"
+    ? quotePowerShellArg(arg)
+    : escapeShellArg(arg, "posix");
 }
 
 /**

@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { isValidRemoteHostId, type HostDescriptor } from "../../../../shared/types/remoteHosts.js";
 import { HostRegistry, type RemoteHostsStore, type RemoteHostsValue } from "../HostRegistry.js";
 
@@ -360,7 +360,43 @@ describe("HostRegistry", () => {
   it("refuses a connection kind it doesn't know", () => {
     const registry = new HostRegistry(memoryStore());
     expect(() =>
-      registry.add({ name: "x", connection: { kind: "wsl", distro: "Ubuntu" } as never })
+      registry.add({ name: "x", connection: { kind: "tcp", address: "studio:1" } as never })
     ).toThrow(expect.objectContaining({ code: "VALIDATION" }));
+  });
+
+  describe("by platform", () => {
+    const originalPlatform = process.platform;
+    afterEach(() => {
+      Object.defineProperty(process, "platform", { value: originalPlatform });
+    });
+
+    it("adds WSL distros on Windows and refuses ssh hosts there", () => {
+      Object.defineProperty(process, "platform", { value: "win32" });
+      const registry = new HostRegistry(memoryStore());
+      const added = registry.add({ name: "Ubuntu", connection: { kind: "wsl", distro: "Ubuntu" } });
+      expect(added.connection).toEqual({ kind: "wsl", distro: "Ubuntu" });
+      expect(() =>
+        registry.add({ name: "Ubuntu again", connection: { kind: "wsl", distro: "ubuntu" } })
+      ).toThrow();
+      expect(() =>
+        registry.add({ name: "studio", connection: { kind: "ssh", target: "greg@studio" } })
+      ).toThrow(expect.objectContaining({ code: "UNSUPPORTED" }));
+      expect(() =>
+        registry.add({ name: "bad", connection: { kind: "wsl", distro: "-u root" } })
+      ).toThrow(
+        expect.objectContaining({
+          code: "VALIDATION",
+          userMessage: "Choose a WSL distribution installed on this PC.",
+        })
+      );
+    });
+
+    it("refuses a WSL distro anywhere but Windows", () => {
+      Object.defineProperty(process, "platform", { value: "darwin" });
+      const registry = new HostRegistry(memoryStore());
+      expect(() =>
+        registry.add({ name: "Ubuntu", connection: { kind: "wsl", distro: "Ubuntu" } })
+      ).toThrow(expect.objectContaining({ code: "UNSUPPORTED" }));
+    });
   });
 });

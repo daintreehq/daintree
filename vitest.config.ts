@@ -6,15 +6,14 @@ import path from "path";
 // against empty strings: Vitest stubs every `.css` specifier — `?raw` included
 // — so the bytes have to arrive as a virtual JS module instead.
 import { pluginStyleContract } from "./scripts/lib/plugin-style-contract.mjs";
-import { isEitherRemoteRoleSupportedOn } from "./shared/config/remoteHostsSupport";
+import { isRemoteHostSupportedOn } from "./shared/config/remoteHostsSupport";
 
-// Code that only ever runs as part of Remote Hosts, which a platform with
-// neither role (Windows today, see shared/config/remoteHostsSupport.ts) never
-// starts: the boot, both roles' links over Unix sockets, and the project
-// service behind host-to-host clone and placement. Their suites assume POSIX
-// paths and sockets by design. The gate itself and the core code that checks
-// it are tested outside these folders, so they still run there.
-const REMOTE_HOSTS_ONLY_TESTS = isEitherRemoteRoleSupportedOn(process.platform, true)
+// Remote Hosts suites assume POSIX paths and Unix sockets by design: the
+// boot, both roles' links, and the project service behind host-to-host clone
+// and placement. A platform that can't be a Host (Windows, a WSL Shell only,
+// see shared/config/remoteHostsSupport.ts) skips them; CI runs them on Linux
+// with the platform mocked wherever a Windows Shell's behaviour is tested.
+const REMOTE_HOSTS_ONLY_TESTS = isRemoteHostSupportedOn(process.platform, true)
   ? []
   : ["electron/remote/**", "electron/services/projectAcrossHosts/**"];
 
@@ -29,6 +28,7 @@ export default defineConfig({
   plugins: [pluginStyleContract()],
   define: {
     __DAINTREE_REMOTE_HOSTS__: "true",
+    __DAINTREE_REMOTE_HOST_ROLE__: "true",
     __DAINTREE_BUILD_COMMIT__: JSON.stringify("test"),
   },
   resolve: {

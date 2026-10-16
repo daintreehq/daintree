@@ -3,11 +3,13 @@ import path from "node:path";
 import { build, type BuildOptions, type Metafile } from "esbuild";
 import { MAIN_EXTERNAL, MAIN_PRELOAD_ENTRY, mainEsmEntryPoints } from "../main-build-entries.mjs";
 
-// A Windows build compiles `__DAINTREE_REMOTE_HOSTS__` to false and must ship
-// none of Remote Hosts' gated modules. This bundles every entry
-// scripts/build-main.mjs builds, from the same shared list, and reads the
-// metafile, so a static import from core into a remote module fails here
-// rather than in a Windows release.
+// A build with `__DAINTREE_REMOTE_HOSTS__` false must ship none of Remote
+// Hosts' gated modules, and a Windows build, which compiles
+// `__DAINTREE_REMOTE_HOST_ROLE__` to false, must ship the Shell and none of
+// the Host's runtime. This bundles every entry scripts/build-main.mjs builds,
+// from the same shared list, and reads the metafile, so a static import from
+// core into a remote module, or from the Shell into the Host, fails here
+// rather than in a release.
 const root = path.resolve(__dirname, "../..");
 
 const ESM_ENTRY_POINTS: string[] = mainEsmEntryPoints(root);
@@ -19,6 +21,32 @@ const CORE_ALLOWED = new Set([
   "electron/remote/pendingHandler.ts",
   "electron/remote/handshakeInfo.ts",
 ]);
+
+// The only Host modules a Shell-only build may carry: pure contracts both sides
+// read (the attach preamble, the discovery file, socket paths, link method
+// schemas, the Host mode status file, unit templates), never a listener or service.
+const SHELL_SAFE_HOST_MODULES = new Set([
+  "electron/remote/host/attachStdio.ts",
+  "electron/remote/host/discoveryFile.ts",
+  "electron/remote/host/hostModeStatusFile.ts",
+  "electron/remote/host/hostSocketPath.ts",
+  "electron/remote/host/linkMethods.ts",
+  "electron/remote/host/startAtLogin.ts",
+]);
+
+const SHELL_DIRS = [
+  "link",
+  "client",
+  "terminal",
+  "worktreePort",
+  "files",
+  "ports",
+  "metrics",
+  "plugins",
+  "projects",
+  "hybrid",
+  "assistant",
+];
 
 const GATED_DIRS = [
   "link",
@@ -35,7 +63,7 @@ const GATED_DIRS = [
   "assistant",
 ];
 
-async function bundledInputs(remoteHosts: boolean): Promise<string[]> {
+async function bundledInputs(remoteHosts: boolean, hostRole = remoteHosts): Promise<string[]> {
   const shared: BuildOptions = {
     absWorkingDir: root,
     bundle: true,
@@ -48,6 +76,7 @@ async function bundledInputs(remoteHosts: boolean): Promise<string[]> {
     define: {
       "process.env.SENTRY_DSN": JSON.stringify(""),
       __DAINTREE_REMOTE_HOSTS__: JSON.stringify(remoteHosts),
+      __DAINTREE_REMOTE_HOST_ROLE__: JSON.stringify(hostRole),
       __DAINTREE_BUILD_COMMIT__: JSON.stringify("test"),
     },
   };
@@ -86,11 +115,16 @@ function remoteInputs(inputs: string[]): string[] {
 
 describe("Remote Hosts build gate tree-shaking", () => {
   let disabled: string[];
+  let shellOnly: string[];
   let enabled: string[];
 
   beforeAll(async () => {
-    [disabled, enabled] = await Promise.all([bundledInputs(false), bundledInputs(true)]);
-  }, 120_000);
+    [disabled, shellOnly, enabled] = await Promise.all([
+      bundledInputs(false),
+      bundledInputs(true, false),
+      bundledInputs(true),
+    ]);
+  }, 180_000);
 
   it("checks every entry the production build compiles", () => {
     expect(ESM_ENTRY_POINTS).toContain("electron/pty-host-bootstrap.ts");
@@ -115,6 +149,36 @@ describe("Remote Hosts build gate tree-shaking", () => {
         remote.some((input) => input.startsWith(`electron/remote/${dir}/`)),
         `electron/remote/${dir}/`
       ).toBe(true);
+    }
+  });
+
+  it("bundles the Shell but none of the Host's runtime when only the Host role is off", () => {
+    const remote = remoteInputs(shellOnly);
+    expect(remote).toContain("electron/remote/boot.ts");
+    for (const dir of SHELL_DIRS) {
+      expect(
+        remote.some((input) => input.startsWith(`electron/remote/${dir}/`)),
+        `electron/remote/${dir}/`
+      ).toBe(true);
+    }
+    const hostModules = remote.filter(
+      (input) =>
+        input.startsWith("electron/remote/host/") || input === "electron/remote/hostBoot.ts"
+    );
+    expect(hostModules.filter((input) => !SHELL_SAFE_HOST_MODULES.has(input))).toEqual([]);
+    // The WSL client is what a Windows build is for.
+    expect(remote).toContain("electron/remote/client/wslTransport.ts");
+  });
+
+  it("bundles the Host's runtime with both roles", () => {
+    const remote = remoteInputs(enabled);
+    for (const input of [
+      "electron/remote/hostBoot.ts",
+      "electron/remote/host/HostServer.ts",
+      "electron/remote/host/attachStdioCli.ts",
+      "electron/remote/host/headlessHostTakeover.ts",
+    ]) {
+      expect(remote).toContain(input);
     }
   });
 });

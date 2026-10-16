@@ -416,11 +416,21 @@ function isSafeLaunchPart(part: string, index: number): boolean {
   return isSafeRemotePath(part);
 }
 
-/** The remote command line that starts a host's attach bridge, from its discovery file. */
-export function attachCommandFor(info: HostDiscoveryInfo): string | null {
+/**
+ * The launch command a host published in its discovery file, when every part
+ * is one we will run (see {@link isSafeLaunchPart}); null otherwise.
+ */
+export function safeLaunchCommand(info: HostDiscoveryInfo): string[] | null {
   const command = info.command;
   if (!command || command.length === 0) return null;
   if (!command.every((part, index) => isSafeLaunchPart(part, index))) return null;
+  return [...command];
+}
+
+/** The remote command line that starts a host's attach bridge, from its discovery file. */
+export function attachCommandFor(info: HostDiscoveryInfo): string | null {
+  const command = safeLaunchCommand(info);
+  if (!command) return null;
   return [...command.map(shellQuote), ATTACH_STDIO_FLAG].join(" ");
 }
 

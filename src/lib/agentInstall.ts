@@ -3,9 +3,20 @@ import type {
   AgentInstallBlock,
   AgentInstallOS,
 } from "../../shared/config/agentRegistry";
+import { getHostPlatform, isRemoteWindow } from "@/hooks/useHostPlatform";
 import { isMac, isWindows, isLinux } from "./platform";
 
+/**
+ * The OS tools and agent CLIs are installed on: the host a remote view's
+ * project lives on (a Linux distro under a Windows Shell, say), else this
+ * machine. Install guidance for any other OS would be commands for the wrong
+ * machine.
+ */
 export function detectOS(): AgentInstallOS {
+  if (isRemoteWindow()) {
+    const host = getHostPlatform();
+    return host === "darwin" ? "macos" : host === "win32" ? "windows" : "linux";
+  }
   if (isMac()) return "macos";
   if (isWindows()) return "windows";
   if (isLinux()) return "linux";

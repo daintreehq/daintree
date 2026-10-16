@@ -121,7 +121,18 @@ describe("parseHostProbe", () => {
       hostModeUnit: false,
       startAtLoginInstalled: false,
       fuse: null,
+      systemd: null,
     });
+  });
+
+  it("reads whether systemd runs the host, which Host mode's user service needs", () => {
+    const linux = (init: string) =>
+      parseHostProbe(["@@dt:uname Linux x86_64", `@@dt:init ${init}`, "@@dt:end"].join("\n"));
+    expect(linux("systemd").advice.systemd).toBe(true);
+    // A WSL distro booted without systemd runs WSL's own init as PID 1.
+    expect(linux("init").advice.systemd).toBe(false);
+    expect(parseHostProbe(MAC_OUTPUT).advice.systemd).toBeNull();
+    expect(buildHostProbeScript()).toContain("init $(head -c 64 /proc/1/comm");
   });
 
   it("falls back to the newest AppImage, reading the version from its name", () => {
@@ -365,6 +376,21 @@ describe("probeHost", () => {
     expect(result.matchesClient).toBe(false);
     expect(result.suggestedCommands.map((c) => c.command)).toEqual([
       "sudo systemctl mask sleep.target suspend.target hibernate.target hybrid-sleep.target",
+      "loginctl enable-linger $USER",
+    ]);
+  });
+
+  it("gives a WSL distro no sleep advice: it sleeps only when this PC does", async () => {
+    const shell = shellReturning({ stdout: LINUX_OUTPUT });
+    const { result, parsed } = await probeHost({
+      connection: { kind: "wsl", distro: "Ubuntu-24.04" },
+      shell,
+      client: CLIENT,
+    });
+    expect(result.reachable).toBe(true);
+    expect(result.advice).toMatchObject({ sleepObserved: null, sleepDisabled: null });
+    expect(parsed?.advice.sleepDisabled).toBeNull();
+    expect(result.suggestedCommands.map((c) => c.command)).toEqual([
       "loginctl enable-linger $USER",
     ]);
   });

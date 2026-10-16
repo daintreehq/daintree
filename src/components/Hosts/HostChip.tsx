@@ -29,7 +29,7 @@ import { TimeAgo } from "@/components/ui/TimeAgo";
 import { pluralize } from "@/lib/pluralize";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
-import { isRemoteShellSupported } from "@/lib/remoteHosts";
+import { isRemoteShellSupported, remoteConnectionKind } from "@/lib/remoteHosts";
 import { drivenElsewhereBy, getViewHostId } from "@/hooks/useHostConnection";
 import { useHostConnectionStore } from "@/store/hostConnectionStore";
 import { actionService } from "@/services/ActionService";
@@ -278,7 +278,9 @@ export function HostChip() {
     ? localHostLabel(localPlatform)
     : (storeHostName ?? currentRow.name ?? windowHostId);
   // "SSH · studio-01": the place and how it is reached, so a remote window never reads as local.
-  const locationLabel = isLocalWindow ? name : `SSH · ${name}`;
+  // A Windows Shell reaches its hosts, WSL distros, one way only.
+  const via = remoteConnectionKind() === "wsl" ? "WSL" : "SSH";
+  const locationLabel = isLocalWindow ? name : `${via} · ${name}`;
   // "build-east-01" and "build-east-02" differ only at the end of the machine's
   // own label: its head gives way, its tail never does, and a domain after it
   // ("….corp.example") gives way before either. An address keeps its whole tail.
@@ -380,7 +382,7 @@ export function HostChip() {
           ) : (
             <>
               {/* "SSH · " and the name's end never clip; only its middle gives way. */}
-              <span className="shrink-0 whitespace-pre font-normal">SSH · </span>
+              <span className="shrink-0 whitespace-pre font-normal">{via} · </span>
               <span className="min-w-0 truncate">{nameHead}</span>
               <span className="shrink-0">{nameTail}</span>
               {nameDomain && (
@@ -433,7 +435,9 @@ export function HostChip() {
           <TooltipContent side="bottom">
             {isLocalWindow
               ? "Working on this machine"
-              : `Working on ${name} over SSH. Project files, terminals and agents run there${latency !== null ? `. ${latency} ms round trip` : ""}`}
+              : via === "WSL"
+                ? `Working in ${name} on WSL. Project files, terminals and agents run in that Linux distribution${latency !== null ? `. ${latency} ms round trip` : ""}`
+                : `Working on ${name} over SSH. Project files, terminals and agents run there${latency !== null ? `. ${latency} ms round trip` : ""}`}
           </TooltipContent>
         </Tooltip>
         <DropdownMenuContent align="center" pointer className="w-72">

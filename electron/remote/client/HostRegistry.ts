@@ -15,7 +15,7 @@ import {
 } from "../../../shared/types/remoteHosts.js";
 import type { AddHostPayload, UpdateHostPayload } from "../../../shared/types/ipc/remoteHosts.js";
 import { AppError } from "../../utils/errorTypes.js";
-import { parseHostConnection } from "./connection.js";
+import { parseHostConnection, requireSupportedConnection } from "./connection.js";
 
 /**
  * The hosts this client can attach to, in the device-owned `remoteHosts`
@@ -90,9 +90,13 @@ function requireNewAccount(
 function normalizeConnection(value: unknown): HostConnection {
   const connection = parseHostConnection(value);
   if (!connection) {
-    throw invalid("SSH target must look like user@host, a host name, or an ~/.ssh/config alias.");
+    throw invalid(
+      (value as { kind?: unknown } | null)?.kind === "wsl"
+        ? "Choose a WSL distribution installed on this PC."
+        : "SSH target must look like user@host, a host name, or an ~/.ssh/config alias."
+    );
   }
-  return connection;
+  return requireSupportedConnection(connection);
 }
 
 /** A readable id from the name, falling back to random when nothing usable is left. */

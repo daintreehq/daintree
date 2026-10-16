@@ -5,6 +5,7 @@ import {
   connectionLabel,
   defaultHostName,
   localNameSuggestion,
+  removeHostOutcome,
   restartConfirmLabel,
   restartImpactLines,
   restartTerminalCount,
@@ -156,5 +157,20 @@ describe("restart impact", () => {
       "Every terminal there: the host couldn't say what is running",
     ]);
     expect(canWaitForIdle(unknown)).toBe(false);
+  });
+});
+
+describe("removeHostOutcome", () => {
+  it("promises a remote machine keeps running", () => {
+    const outcome = removeHostOutcome({ kind: "ssh", target: "studio" }, "studio-01");
+    expect(outcome.label).toBe("Projects and Daintree on studio-01 keep running");
+    expect(outcome.sentence).toBe("Projects and Daintree on studio-01 keep running.");
+  });
+
+  it("says a WSL distro's terminals and agents end once WSL stops it", () => {
+    const outcome = removeHostOutcome({ kind: "wsl", distro: "Ubuntu-24.04" }, "Ubuntu");
+    expect(outcome.label).toBe("Terminals and agents in Ubuntu end once WSL stops it");
+    expect(outcome.sentence).toContain("Daintree stops keeping Ubuntu running");
+    expect(outcome.sentence).not.toContain("keep running.");
   });
 });
