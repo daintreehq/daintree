@@ -146,6 +146,20 @@ export interface FileRowMenuItemOptions {
    * browser lists unchanged files and has no diff to show for them.
    */
   hasChanges?: boolean;
+  /**
+   * Reveals this row in the OS file manager. Supplied by a surface that shows
+   * files outside every project root — the file panel — and already owns a
+   * reveal that takes the guarded out-of-root fallback; omitted surfaces use
+   * the root-contained `file.showItemInFolder`.
+   */
+  onReveal?: (() => void) | undefined;
+  /**
+   * Copies the file's text from what the surface already holds. Supplied by
+   * the file panel, which displays files outside every project root that
+   * `file.read`'s containment refuses; it also shows the item for any loaded
+   * text, whatever the extension. Omitted surfaces read through `file.read`.
+   */
+  onCopyFileContents?: (() => void) | undefined;
 }
 
 export interface FileRowMenuSurface {
@@ -341,7 +355,9 @@ export function useFileRowMenuItems(surface: FileRowMenuSurface): FileRowMenuCon
       // kinds with no text to put on a clipboard. Extension-only by necessity —
       // nothing here has read the file — so an unfamiliar binary still shows
       // the item and fails at the read with a reason.
-      const showCopyFileContents = showOpenCurrent && isFileContentsCopyCandidate(absolutePath);
+      const showCopyFileContents =
+        showOpenCurrent &&
+        (options?.onCopyFileContents !== undefined || isFileContentsCopyCandidate(absolutePath));
 
       return (
         <>
@@ -376,7 +392,7 @@ export function useFileRowMenuItems(surface: FileRowMenuSurface): FileRowMenuCon
               </ContextMenuActionItem>
             </>
           )}
-          <ContextMenuItem onSelect={() => handleReveal(absolutePath)}>
+          <ContextMenuItem onSelect={options?.onReveal ?? (() => handleReveal(absolutePath))}>
             <FolderOpen className={ICON_CLASS} />
             {reveal.label}
           </ContextMenuItem>
@@ -447,7 +463,11 @@ export function useFileRowMenuItems(surface: FileRowMenuSurface): FileRowMenuCon
                 Copy file name
               </ContextMenuItem>
               {showCopyFileContents && (
-                <ContextMenuItem onSelect={() => handleCopyFileContents(absolutePath)}>
+                <ContextMenuItem
+                  onSelect={
+                    options?.onCopyFileContents ?? (() => handleCopyFileContents(absolutePath))
+                  }
+                >
                   <Copy className={ICON_CLASS} />
                   Copy file contents
                 </ContextMenuItem>

@@ -92,6 +92,8 @@ import type { FileViewMode } from "@shared/types/panel";
 import { logError } from "@/utils/logger";
 import type { WorkingTreeFileChange } from "@/lib/workingTreeDiff";
 import { FileBrowserChangeSummary } from "./FileBrowserChangeSummary";
+import { FileContentContextMenu } from "@/components/FileViewer/FileContentContextMenu";
+import type { FileRowMenuController } from "@/hooks/useFileRowMenuItems";
 import { getFileTypeIcon } from "./fileTypeIcons";
 import { basename, join } from "@shared/utils/path";
 import type { MarkdownFontSize } from "@/store/preferencesStore";
@@ -202,6 +204,15 @@ export interface FileBrowserViewerProps {
   onSelectEntry: (path: string) => void;
   /** Menu items for a listing row's right-click menu — the tree's own callback. */
   rowContextMenu?: (row: FileEntryLike) => React.ReactNode;
+  /** Menu items for a changed-files summary row (#13423). */
+  changeContextMenu?: ((change: WorkingTreeFileChange) => React.ReactNode) | undefined;
+  /**
+   * The pane's shared file menu, for a right-click on the open file's content
+   * (#13423). The renderer rather than a ready-made row callback: the content's
+   * Open diff has to land on this viewer's own Diff mode, which only the viewer
+   * can switch to.
+   */
+  renderFileMenuItems?: FileRowMenuController["renderItems"] | undefined;
   /** Absolute base the listing's relative paths hang off, for drags (#11576). */
   basePath: string;
   /** Current order for the tree and the listing; driven by the toolbar menu. */
@@ -330,6 +341,8 @@ export function FileBrowserViewer({
   onShowDotfiles,
   onSelectEntry,
   rowContextMenu,
+  changeContextMenu,
+  renderFileMenuItems,
   basePath,
   sort,
   onSortChange,
@@ -383,6 +396,24 @@ export function FileBrowserViewer({
     filePath !== null && relativePath !== null
       ? changedFiles?.find((change) => change.relativePath === relativePath)?.status
       : undefined;
+  // The open file's own menu. Only for a file: the summary and the folder
+  // listing that share this body give each row a menu of their own.
+  const fileMenuItems =
+    filePath !== null && relativePath !== null && renderFileMenuItems
+      ? renderFileMenuItems(
+          {
+            absolutePath: filePath,
+            relativePath,
+            name: fileName,
+            isDirectory: false,
+            status: changeStatus ?? null,
+          },
+          {
+            hasChanges: changeStatus !== undefined,
+            onOpenDiff: () => setExplicitRenderMode("diff"),
+          }
+        )
+      : null;
   // Reading controls only for content that can be read: a Markdown file that
   // failed as oversized has no rendered view to switch to.
   const readable = state.status !== "error";
@@ -986,18 +1017,20 @@ export function FileBrowserViewer({
           closeAriaLabel={externalErrorCopy.dismiss}
         />
       )}
-      <div ref={bodyRef} className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
-        {/* A selected folder outranks the idle body: the changed-files summary
+      <FileContentContextMenu items={fileMenuItems}>
+        <div ref={bodyRef} className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
+          {/* A selected folder outranks the idle body: the changed-files summary
             answers "nothing is selected", and a folder selection is a
             selection (#11620). */}
-        {filePath
-          ? renderBody()
-          : missingFilePath !== null
-            ? renderMissingBody(missingFilePath)
-            : folderPath !== null
-              ? renderFolderBody()
-              : renderIdleBody()}
-      </div>
+          {filePath
+            ? renderBody()
+            : missingFilePath !== null
+              ? renderMissingBody(missingFilePath)
+              : folderPath !== null
+                ? renderFolderBody()
+                : renderIdleBody()}
+        </div>
+      </FileContentContextMenu>
     </>
   );
 
@@ -1008,7 +1041,13 @@ export function FileBrowserViewer({
    */
   function renderIdleBody() {
     if (changedFiles !== null && changedFiles.length > 0) {
-      return <FileBrowserChangeSummary changes={changedFiles} onSelect={onSelectChangedFile} />;
+      return (
+        <FileBrowserChangeSummary
+          changes={changedFiles}
+          onSelect={onSelectChangedFile}
+          changeContextMenu={changeContextMenu}
+        />
+      );
     }
 
     // flex-1 + min-h-0, not h-full: below the now-persistent toolbar a

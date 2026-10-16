@@ -484,6 +484,20 @@ describe("useFileRowMenuItems — Open diff routing", () => {
   });
 });
 
+describe("useFileRowMenuItems — Reveal routing", () => {
+  it("calls the surface's own reveal when one is injected", async () => {
+    // The file panel's reveal takes the out-of-root fallback its toolbar uses;
+    // the contained action would refuse a file outside every project root.
+    const onReveal = vi.fn();
+    const menu = await openMenu({ options: { onReveal } });
+
+    fireEvent.click(within(menu).getByRole("menuitem", { name: "Reveal in Finder" }));
+
+    expect(onReveal).toHaveBeenCalledTimes(1);
+    expect(dispatchMock.mock.calls.some(([id]) => id === "file.showItemInFolder")).toBe(false);
+  });
+});
+
 describe("useFileRowMenuItems — path semantics", () => {
   it("does not re-derive the relative path from the absolute one", async () => {
     // The file browser's row path stays relative to the true worktree root even
@@ -630,6 +644,23 @@ describe("useFileRowMenuItems — Copy file contents", () => {
     // not.
     const copy = await openSubmenu(menu, "Copy");
     expect(labels(copy)).not.toContain("Copy file contents");
+  });
+
+  it("copies through the surface's own text when one is injected, skipping file.read", async () => {
+    // The file panel holds the loaded text of a file `file.read` may refuse
+    // (outside every project root); the item follows the text, not the
+    // extension guess.
+    const onCopyFileContents = vi.fn();
+    const menu = await openMenu({
+      row: { absolutePath: "/elsewhere/notes.custom", name: "notes.custom" },
+      options: { onCopyFileContents },
+    });
+    const copy = await openSubmenu(menu, "Copy");
+
+    fireEvent.click(within(copy).getByRole("menuitem", { name: "Copy file contents" }));
+
+    expect(onCopyFileContents).toHaveBeenCalledTimes(1);
+    expect(dispatchMock.mock.calls.some(([id]) => id === "file.read")).toBe(false);
   });
 
   it("copies an empty file as the empty string", async () => {

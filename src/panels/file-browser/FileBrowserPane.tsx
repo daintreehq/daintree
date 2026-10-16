@@ -50,7 +50,7 @@ import {
 import { PendingUploadChips } from "@/components/Terminal/uploads/PendingUploadChips";
 import { LazyUploadConfirmHost } from "@/components/Terminal/uploads/LazyUploadConfirmHost";
 import { FileBrowserViewer } from "./FileBrowserViewer";
-import { buildWorkingTreeDiffModel } from "@/lib/workingTreeDiff";
+import { buildWorkingTreeDiffModel, type WorkingTreeFileChange } from "@/lib/workingTreeDiff";
 import { buildFileBrowserGitStatusIndex, isReadableRelativePath } from "./fileBrowserGitStatus";
 import { useFileBrowserTree } from "./useFileBrowserTree";
 import {
@@ -1157,6 +1157,24 @@ export function FileBrowserPane({
     ]
   );
 
+  // The changed-files summary's rows (#13423): the same core as a tree row,
+  // with the row's own git status rather than the index's. The index merges a
+  // path listed twice (a rename's two halves, say) to its most urgent status,
+  // and the menu should describe the row that was clicked.
+  const changeContextMenu = useCallback(
+    (change: WorkingTreeFileChange): React.ReactNode =>
+      basePath === ""
+        ? null
+        : renderFileRowMenuItems({
+            absolutePath: join(basePath, change.relativePath),
+            relativePath: change.relativePath,
+            name: basename(change.relativePath),
+            isDirectory: false,
+            status: change.status,
+          }),
+    [basePath, renderFileRowMenuItems]
+  );
+
   // A restored panel remembers a selection whose ancestors may be collapsed.
   // Expanding them on demand is what makes the row appear; doing it here rather
   // than in an effect keeps it a response to the user opening the panel.
@@ -1486,6 +1504,8 @@ export function FileBrowserPane({
               onShowDotfiles={handleShowDotfiles}
               onSelectEntry={handleSelectListingEntry}
               rowContextMenu={rowContextMenu}
+              changeContextMenu={changeContextMenu}
+              renderFileMenuItems={basePath === "" ? undefined : renderFileRowMenuItems}
               basePath={basePath}
               sort={sort}
               onSortChange={handleSortChange}
