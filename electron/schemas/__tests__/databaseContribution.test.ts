@@ -102,6 +102,18 @@ const MONTH_TOTAL = {
   sql: "SELECT SUM(amount_cents) AS total FROM tx WHERE substr(date, 1, 7) = :month",
 };
 
+const ADD_TRANSACTION = {
+  name: "add_transaction",
+  mode: "write",
+  description: "Record a transaction. Amount in integer cents, negative for spending.",
+  params: {
+    date: { type: "string", description: "YYYY-MM-DD" },
+    amount_cents: { type: "integer" },
+    category: { type: "string" },
+  },
+  sql: "INSERT INTO tx (date, amount_cents, category) VALUES (:date, :amount_cents, :category)",
+};
+
 function withQueries(...databases: Array<{ id: string; queries: unknown[] }>) {
   return parseProject(
     projectManifest({
@@ -127,6 +139,37 @@ describe("contributes.databases[].queries", () => {
       { id: "ledger", location: "project", journalMode: "delete", queries: [MONTH_TOTAL] },
       { id: "cache", location: "project", journalMode: "delete", queries: [] },
     ]);
+  });
+
+  it("accepts the issue's write query", () => {
+    const result = withQueries({ id: "ledger", queries: [ADD_TRANSACTION] });
+    expect(result.success && result.data.contributes.databases[0]?.queries).toEqual([
+      ADD_TRANSACTION,
+    ]);
+  });
+
+  it.each([
+    ["a read", { sql: "SELECT :date, :amount_cents, :category" }, /not one starting SELECT/],
+    [
+      "a WITH that leads into a read",
+      { sql: "WITH x AS (SELECT :date, :amount_cents, :category) SELECT * FROM x" },
+      /must lead into INSERT, REPLACE, UPDATE or DELETE, not SELECT/,
+    ],
+    [
+      "a write that ends the host's transaction",
+      { sql: "INSERT INTO tx VALUES (:date, :amount_cents, :category); COMMIT" },
+      /2 statements/,
+    ],
+    [
+      "a schema change",
+      { sql: "CREATE TABLE t AS SELECT :date, :amount_cents, :category" },
+      /not one starting CREATE/,
+    ],
+  ])("rejects a write query that is %s, naming the query", (_label, override, message) => {
+    const result = withQueries({ id: "ledger", queries: [{ ...ADD_TRANSACTION, ...override }] });
+    expect(errorCodes(result)).toEqual(["database_query_unservable"]);
+    expect(loadError(result)).toMatch(/query "add_transaction"/);
+    expect(loadError(result)).toMatch(message);
   });
 
   it("defaults a query's params to none", () => {
@@ -197,7 +240,7 @@ describe("contributes.databases[].queries", () => {
   });
 
   it.each([
-    ["an unknown mode", { mode: "write" }],
+    ["an unknown mode", { mode: "admin" }],
     ["an unknown field", { readOnlyHint: true }],
     ["a tool name the MCP grammar refuses", { name: "Month-Total" }],
     ["a blank description", { description: "   " }],

@@ -124,6 +124,27 @@ function plugin(
   } as unknown as LoadedPluginInfo;
 }
 
+/** The same plugin with a declared write query on its database. */
+function withWrites(info: LoadedPluginInfo): LoadedPluginInfo {
+  const query = {
+    name: "add_entry",
+    mode: "write",
+    description: "Add an entry.",
+    params: {},
+    sql: "INSERT INTO entries DEFAULT VALUES",
+  };
+  return {
+    ...info,
+    manifest: {
+      ...info.manifest,
+      contributes: {
+        ...info.manifest.contributes,
+        databases: [{ id: "ledger", description: "Household transactions", queries: [query] }],
+      },
+    },
+  } as LoadedPluginInfo;
+}
+
 function projectLedger(): LoadedPluginInfo {
   return plugin({ instanceId: PROJECT_LEDGER, origin: "project", projectId: PROJECT });
 }
@@ -293,6 +314,46 @@ describe("plugin agent MCP access IPC", () => {
 
       expect(row).toMatchObject({ hasDatabases: true, access: "off", available: true });
       expect(row.pluginTools).toBeUndefined();
+    });
+
+    it("offers read and write for a database-only plugin whose queries write", async () => {
+      mocks.listPlugins.mockReturnValue([withWrites(plugin({ agentMcp: null }))]);
+
+      const snapshot = await set({
+        pluginInstanceId: "acme.ledger",
+        access: "read-write",
+        scope: "project",
+      });
+
+      expect(snapshot.plugins[0]).toMatchObject({
+        hasDatabases: true,
+        hasDatabaseWrites: true,
+        access: "read-write",
+        source: "project",
+      });
+      expect(snapshot.plugins[0]!.pluginTools).toBeUndefined();
+      setProjectAgentMcpAccess(PROJECT, "acme.ledger", "read-only");
+      expect((await list()).plugins[0]).toMatchObject({ access: "read-only" });
+    });
+
+    it("reports a repository's read and write for a project plugin's declared writes", async () => {
+      await writeRepositoryDefaults({ "acme.ledger": "read-write" });
+      mocks.listPlugins.mockReturnValue([
+        withWrites(
+          plugin({
+            instanceId: PROJECT_LEDGER,
+            origin: "project",
+            projectId: PROJECT,
+            agentMcp: null,
+          })
+        ),
+      ]);
+
+      expect((await list()).plugins[0]).toMatchObject({
+        access: "read-write",
+        source: "repository",
+        repositoryAccess: "read-write",
+      });
     });
 
     it("marks an installed plugin with databases as shared across projects, live or withheld", async () => {
@@ -680,6 +741,22 @@ describe("plugin agent MCP access IPC", () => {
       expect(projectAgentMcpAccessAnswer(PROJECT, "acme.tools")).toBe("read-write");
       expect(projectAgentMcpAccessAnswer(PROJECT, "acme.data")).toBe("read-only");
       expect(storeData.has("pluginAgentMcpAccess")).toBe(false);
+    });
+
+    it("revokes a grant's declared writes when the answer drops to read only", async () => {
+      mocks.listPlugins.mockReturnValue([withWrites(plugin({ agentMcp: null }))]);
+      await set({ pluginInstanceId: "acme.ledger", access: "read-write", scope: "project" });
+      const { token } = pluginMcpGrantRegistry.issue({
+        pluginInstanceId: "acme.ledger",
+        scope: { databases: true, databaseWrites: true },
+        serverName: "daintree-ledger",
+        projectId: PROJECT,
+        terminalId: "term-1",
+      });
+
+      await set({ pluginInstanceId: "acme.ledger", access: "read-only", scope: "project" });
+
+      expect(pluginMcpGrantRegistry.authenticate(token)).toBeNull();
     });
 
     it("refuses to turn on a plugin nothing running offers here", async () => {

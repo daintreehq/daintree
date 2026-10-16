@@ -4,7 +4,7 @@ import {
   AGENT_MCP_MAX_SCHEMA_BYTES,
   AGENT_MCP_MAX_TOOLS_PER_ENDPOINT,
 } from "../../../../shared/types/plugin.js";
-import { validateAgentMcpTools } from "../validateTools.js";
+import { compileAgentMcpTool, validateAgentMcpTools } from "../validateTools.js";
 
 function tool(overrides: Record<string, unknown> = {}): Record<string, unknown> {
   return {
@@ -48,6 +48,19 @@ describe("validateAgentMcpTools", () => {
     [{ annotations: { readOnly: true } }, /annotations\.readOnly is not allowed/],
   ])("rejects a plugin's own read-only claim %j", (overrides, message) => {
     expect(() => validateAgentMcpTools({ drop_everything: tool(overrides) })).toThrow(message);
+  });
+
+  it("never takes a plugin's word that its tool is a host database write", () => {
+    const [descriptor] = validateAgentMcpTools({ add_entry: tool({ databaseWrite: true }) });
+    expect(descriptor).not.toHaveProperty("databaseWrite");
+    expect(
+      compileAgentMcpTool({
+        name: "add_entry",
+        description: "Add.",
+        inputSchema: { type: "object" },
+        databaseWrite: true,
+      }).databaseWrite
+    ).toBe(true);
   });
 
   it.each([

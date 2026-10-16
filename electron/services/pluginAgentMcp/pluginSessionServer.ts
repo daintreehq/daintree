@@ -18,6 +18,7 @@ import {
   DATABASE_ENDPOINT_ID,
   RESERVED_AGENT_MCP_TOOL_NAMES,
   type AgentMcpEndpointRegistration,
+  type AgentMcpRegisteredTool,
   type AgentMcpToolScope,
 } from "./types.js";
 
@@ -72,6 +73,10 @@ const ABORT_MESSAGES: Record<AbortCause, (timeoutMs: number) => string> = {
   "endpoint-changed": () =>
     "The plugin's tools changed while the call was running. List tools again and retry.",
 };
+
+/** Said after any abort of a write that had started: the commit may have landed first. */
+const WRITE_MAY_HAVE_APPLIED =
+  " The write may still have been applied; read the data before retrying.";
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
   if (value === null || typeof value !== "object" || Array.isArray(value)) return false;
@@ -186,6 +191,10 @@ export function createPluginSessionServer(options: PluginSessionServerOptions): 
   const databaseRegistration = (signal: AbortSignal): Promise<Registration> =>
     scope.databases ? awaitRegistration(DATABASE_ENDPOINT_ID, signal) : Promise.resolve(undefined);
 
+  /** A declared write is this grant's only with read and write access when it was minted. */
+  const isGranted = (tool: AgentMcpRegisteredTool): boolean =>
+    tool.databaseWrite !== true || scope.databaseWrites === true;
+
   /** The plugin's own roster, which only exists once the plugin has activated. */
   const pluginRegistration = async (signal: AbortSignal): Promise<Registration> => {
     if (scope.pluginEndpointId === undefined) return undefined;
@@ -223,7 +232,7 @@ export function createPluginSessionServer(options: PluginSessionServerOptions): 
     assertServable();
     const hostNames = hostToolNames(databases);
     const tools: Tool[] = [
-      ...(databases?.tools ?? []),
+      ...(databases?.tools ?? []).filter(isGranted),
       // Registration already refuses the host's names; this keeps the two
       // rosters from ever advertising one name twice regardless.
       ...(own?.tools ?? []).filter((tool) => !hostNames.has(tool.name)),
@@ -261,7 +270,10 @@ export function createPluginSessionServer(options: PluginSessionServerOptions): 
     const controller = new AbortController();
     // Held in an object so control-flow narrowing does not pin it to `null`:
     // it is written from listeners that fire between the awaits below.
-    const state: { abortCause: AbortCause | null } = { abortCause: null };
+    const state: { abortCause: AbortCause | null; writeStarted: boolean } = {
+      abortCause: null,
+      writeStarted: false,
+    };
     const abort = (cause: AbortCause): void => {
       if (controller.signal.aborted) return;
       state.abortCause = cause;
@@ -270,7 +282,10 @@ export function createPluginSessionServer(options: PluginSessionServerOptions): 
       controller.abort(reason);
     };
     const abortedResult = (): CallToolResult =>
-      toolError(ABORT_MESSAGES[state.abortCause ?? "cancelled"](callTimeoutMs));
+      toolError(
+        ABORT_MESSAGES[state.abortCause ?? "cancelled"](callTimeoutMs) +
+          (state.writeStarted ? WRITE_MAY_HAVE_APPLIED : "")
+      );
 
     // The budget and cancellation cover activation as well as the call: a slow
     // activation must not stretch the deadline the agent was promised.
@@ -322,7 +337,12 @@ export function createPluginSessionServer(options: PluginSessionServerOptions): 
         throw new McpError(ErrorCode.InvalidParams, `Unknown tool: ${toolName}`);
       }
 
-      const descriptor = registration?.tools.find((tool) => tool.name === toolName);
+      // A write this grant does not reach is answered as no tool at all, the
+      // same as it is missing from the list: still the host's name, so it never
+      // falls through to the plugin's own code.
+      const descriptor = registration?.tools.find(
+        (tool) => tool.name === toolName && isGranted(tool)
+      );
       if (!registration || !descriptor) {
         throw new McpError(ErrorCode.InvalidParams, `Unknown tool: ${toolName}`);
       }
@@ -357,6 +377,7 @@ export function createPluginSessionServer(options: PluginSessionServerOptions): 
       if (controller.signal.aborted) return abortedResult();
       if (!isCallerServable()) return toolError(RELOADING_MESSAGE);
 
+      state.writeStarted = descriptor.databaseWrite === true;
       let invocation: Promise<unknown>;
       try {
         invocation = Promise.resolve(

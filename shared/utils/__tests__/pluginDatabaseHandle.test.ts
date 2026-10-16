@@ -7,6 +7,7 @@ import {
   fileAccessAuthorizer,
   openPluginDatabase,
   readPluginDatabaseRows,
+  runPluginDatabaseWrite,
 } from "../pluginDatabaseHandle.js";
 import type { PluginDatabase, PluginDatabaseLocation } from "../../types/plugin.js";
 
@@ -885,6 +886,133 @@ describe("readPluginDatabaseRows", () => {
     new DatabaseSync(real).close();
     fs.symlinkSync(real, location.path);
     expect(codeOf(() => readAll("SELECT 1"))).toBe("TARGET_IS_SYMLINK");
+  });
+});
+
+describe("runPluginDatabaseWrite", () => {
+  // The resolver hands over canonical directories; so does this fixture.
+  beforeEach(() => {
+    location = { ...location, path: path.join(fs.realpathSync(dir), "ledger.db") };
+  });
+
+  function codeOf(fn: () => unknown): unknown {
+    try {
+      fn();
+    } catch (error) {
+      return (error as { code?: unknown }).code;
+    }
+    return "no error";
+  }
+
+  function seed(sql: string): void {
+    const raw = new DatabaseSync(location.path);
+    raw.exec(sql);
+    raw.close();
+  }
+
+  function write(sql: string, params?: Parameters<typeof runPluginDatabaseWrite>[2]) {
+    const rows: unknown[][] = [];
+    const result = runPluginDatabaseWrite(location, sql, params, (row) => rows.push(row));
+    return { ...result, rows };
+  }
+
+  it("commits a statement and hands RETURNING rows over as arrays", () => {
+    seed("CREATE TABLE t (id INTEGER PRIMARY KEY, a TEXT);");
+    expect(write("INSERT INTO t (a) VALUES (:a), (:a) RETURNING id, a", { ":a": "x" })).toEqual({
+      columns: ["id", "a"],
+      changes: 2,
+      lastInsertRowid: 2,
+      rows: [
+        [1n, "x"],
+        [2n, "x"],
+      ],
+    });
+    expect(write("DELETE FROM t WHERE id = 1")).toEqual({
+      columns: [],
+      changes: 1,
+      lastInsertRowid: 0,
+      rows: [],
+    });
+  });
+
+  it("is heard by an open host.db handle as an external change", async () => {
+    const db = await open({ migrations: ["CREATE TABLE t (a)"] });
+    const events: string[] = [];
+    db.onDidChange((event) => events.push(event.origin));
+    write("INSERT INTO t VALUES (1)");
+    await waitFor(() => events.length > 0);
+    expect(events).toEqual(["external"]);
+    expect(await db.query("SELECT a FROM t")).toEqual([{ a: 1 }]);
+  });
+
+  it("refuses a missing file without creating it, and a symlinked one", () => {
+    expect(codeOf(() => write("INSERT INTO t VALUES (1)"))).toBe("DB_NOT_FOUND");
+    expect(fs.existsSync(location.path)).toBe(false);
+    const real = path.join(dir, "real.db");
+    new DatabaseSync(real).close();
+    fs.symlinkSync(real, location.path);
+    expect(codeOf(() => write("INSERT INTO t VALUES (1)"))).toBe("TARGET_IS_SYMLINK");
+  });
+
+  it("does not bring back a file removed after it was checked", () => {
+    const lstat = fs.lstatSync;
+    vi.spyOn(fs, "lstatSync").mockImplementation(((file: fs.PathLike, options?: object) =>
+      file === location.path
+        ? ({ isSymbolicLink: () => false } as fs.Stats)
+        : lstat(file, options as fs.StatSyncOptions)) as typeof fs.lstatSync);
+    expect(codeOf(() => write("INSERT INTO t VALUES (1)"))).toBe("DB_NOT_FOUND");
+    expect(fs.readdirSync(path.dirname(location.path))).toEqual([]);
+  });
+
+  // `?` cannot be in a Windows file name.
+  it.skipIf(process.platform === "win32")("opens a path holding characters a URI escapes", () => {
+    const odd = path.join(fs.realpathSync(dir), "a b%3F#?");
+    fs.mkdirSync(odd);
+    location = { ...location, path: path.join(odd, "ledger.db") };
+    seed("CREATE TABLE t (a);");
+    expect(write("INSERT INTO t VALUES (1)").changes).toBe(1);
+    expect(fs.readdirSync(odd)).toEqual(["ledger.db"]);
+  });
+
+  it.skipIf(process.platform === "win32")(
+    "refuses a directory that no longer canonicalises to where it was resolved",
+    () => {
+      const real = path.join(fs.realpathSync(dir), "real");
+      fs.mkdirSync(real);
+      new DatabaseSync(path.join(real, "ledger.db")).close();
+      fs.symlinkSync(real, path.join(fs.realpathSync(dir), "link"));
+      location = { ...location, path: path.join(fs.realpathSync(dir), "link", "ledger.db") };
+      expect(codeOf(() => write("CREATE TABLE t (a)"))).toBe("PATH_NOT_ALLOWED");
+    }
+  );
+
+  it("applies the handle's file-access refusals and enforces foreign keys", () => {
+    seed("CREATE TABLE p (id INTEGER PRIMARY KEY); CREATE TABLE c (p INTEGER REFERENCES p (id));");
+    const outside = path.join(dir, "copy.db");
+    expect(codeOf(() => write(`ATTACH '${outside}' AS o`))).toBe("DB_STATEMENT_NOT_ALLOWED");
+    expect(codeOf(() => write(`VACUUM INTO '${outside}'`))).toBe("DB_STATEMENT_NOT_ALLOWED");
+    expect(codeOf(() => write("INSERT INTO c VALUES (1); DELETE FROM p"))).toBe(
+      "DB_MULTIPLE_STATEMENTS"
+    );
+    expect(() => write("INSERT INTO c VALUES (1)")).toThrow(/FOREIGN KEY/);
+    expect(fs.existsSync(outside)).toBe(false);
+  });
+
+  const probe = new DatabaseSync(":memory:");
+  const HAS_AUTHORIZER = typeof (probe as { setAuthorizer?: unknown }).setAuthorizer === "function";
+  probe.close();
+
+  it.skipIf(!HAS_AUTHORIZER)("refuses load_extension() inside a write", () => {
+    seed("CREATE TABLE t (a);");
+    expect(() => write("INSERT INTO t VALUES (load_extension('evil'))")).toThrow(/not authorized/);
+  });
+
+  it("puts the file back in its declared journal mode", () => {
+    seed("PRAGMA journal_mode = WAL; CREATE TABLE t (a);");
+    write("INSERT INTO t VALUES (1)");
+    const raw = new DatabaseSync(location.path);
+    expect(raw.prepare("PRAGMA journal_mode").get()).toEqual({ journal_mode: "delete" });
+    raw.close();
   });
 });
 

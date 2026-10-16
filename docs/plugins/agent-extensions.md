@@ -119,18 +119,19 @@ Daintree serves each plugin to the agents in its terminals as **one MCP server**
 
 A plugin's server can carry two kinds of tool:
 
-- **The database tools.** Declaring any [database](./contribution-points.md#databases--shipped) gets the server the host's own read-only `database_schema` and `database_query`, plus one tool per [query declared](./contribution-points.md#declared-queries) on it, with no `mcp:expose` and no code from you.
-- **Your own tools**, declared as a `contributes.agentMcp` endpoint and registered from `activate()` with [`host.mcp.registerTools`](./host-api.md#mcpregistertools). This is where writes with rules go: a split that must balance, an id that must be minted, a remote API behind the data.
+- **The database tools.** Declaring any [database](./contribution-points.md#databases--shipped) gets the server the host's own read-only `database_schema` and `database_query`, plus one tool per [query declared](./contribution-points.md#declared-queries) on it, a read or a write, with no `mcp:expose` and no code from you.
+- **Your own tools**, declared as a `contributes.agentMcp` endpoint and registered from `activate()` with [`host.mcp.registerTools`](./host-api.md#mcpregistertools). This is where writes go that one statement cannot express: a split that must balance, an id that must be minted, a remote API behind the data.
 
 For a data plugin that makes three routes, and a good plugin offers all three:
 
 | Route | For | Reaches |
 | --- | --- | --- |
 | The database tools | Reads: schema, lookups, totals, "what did I spend on groceries" | Agents Daintree launched, with the plugin's access at **Read only** or **Read and write** |
-| Your own tools | Writes that have rules, and reads that need your code | Agents Daintree launched, with access at **Read and write** |
+| Declared write queries | Writes one statement can express, under your schema's rules | Agents Daintree launched, with access at **Read and write** |
+| Your own tools | Writes that need your code, and reads that do | Agents Daintree launched, with access at **Read and write** |
 | Files or `sqlite3` under the plugin's `AGENTS.md` | The fallback every agent has, for data in the project | Every agent, including one launched outside Daintree or by a CLI Daintree can't wire. A `local` database has no path in the project, so it has no fallback: only the tools reach it |
 
-Build the tools first and the fallback second: an agent with the tools reads through a bounded query and writes through your validation, and the contract in `AGENTS.md` tells every other agent how to do the same by hand. `plugins/sample-project/acme.ledger` is all three in one zero-build plugin.
+Build the tools first and the fallback second: an agent with the tools reads through a bounded query and writes through your validation, and the contract in `AGENTS.md` tells every other agent how to do the same by hand. `plugins/sample-project/acme.ledger` is all of them in one zero-build plugin.
 
 ### One server per plugin
 
@@ -229,17 +230,19 @@ A [query declared on a database](./contribution-points.md#declared-queries) is a
 
 Use them for the reads an agent makes often or gets wrong: a total with a unit, a lookup by a key it would otherwise have to discover, a report that joins three tables. `database_query` stays on the server for everything else. Declared queries share the plugin's 16-tool budget with the tools you register, so a plugin with four declared queries can register twelve.
 
+A `"write"` query is the same idea for a write: `add_transaction` as one `INSERT`, with the agent passing only the values. The host lists it only to an agent whose access is **Read and write**, annotated destructive and not idempotent rather than read-only, so a client asks before running it. It runs in its own transaction under the policy of a writable `host.db` open, never creates the database, and answers `{ databaseId, changes, lastInsertRowid }`, plus the rows of a `RETURNING` clause. Your schema's constraints and triggers are its rules, since no code of yours runs. Declare a write when one statement and the schema say everything; register a tool when the write needs rules across rows, several statements, a value your code computes, or the caller. See [Declared queries](./contribution-points.md#declared-queries) for the full contract.
+
 ### Access: off, read only, read and write
 
 Each plugin has one agent access setting, in **Project settings → Plugins → Agent tools**:
 
-| Setting               | The agent gets                        |
-| --------------------- | ------------------------------------- |
-| **Off** (the default) | No server                             |
-| **Read only**         | The database tools                    |
-| **Read and write**    | The database tools and your own tools |
+| Setting               | The agent gets                                         |
+| --------------------- | ------------------------------------------------------ |
+| **Off** (the default) | No server                                              |
+| **Read only**         | The database tools, without declared writes            |
+| **Read and write**    | The database tools, declared writes and your own tools |
 
-Read only is about which tools are offered, not a sandbox: it filters no rows, and an agent that can run `sqlite3` can still open a project database's file. Read and write never makes the database tools writable either; writes happen only through your tools, where your rules apply. A plugin with no database has nothing to offer at Read only, so its choice is **Off** or **On** — On is stored as read and write, and is what `.daintree/mcp.json` calls `"read-write"`; one with a database and no `agentMcp` endpoint has nothing more at Read and write, so its choice is Off or Read only. For an installed plugin, whose databases are shared by every project, see [Installed plugins and shared data](#installed-plugins-and-shared-data) before relying on the database tools.
+Read only is about which tools are offered, not a sandbox: it filters no rows, and an agent that can run `sqlite3` can still open a project database's file. Read and write never makes `database_query` writable either; writes happen only through the writes you declare and your own tools, where your rules apply. A plugin with no database has nothing to offer at Read only, so its choice is **Off** or **On** — On is stored as read and write, and is what `.daintree/mcp.json` calls `"read-write"`; one with a database, no declared write and no `agentMcp` endpoint has nothing more at Read and write, so its choice is Off or Read only. Lowering a plugin from Read and write to Read only revokes the credentials that reached its declared writes, as it does those that reached its own tools. In `.daintree/mcp.json`, `"read-write"`, `"*"` and `true` include declared writes; an endpoint list from before access levels never does. For an installed plugin, whose databases are shared by every project, see [Installed plugins and shared data](#installed-plugins-and-shared-data) before relying on the database tools.
 
 The setting belongs to the plugin _instance_: an installed plugin and a project copy of the same manifest id are two settings. For a project plugin, the user's answer beats the repository's [default](#project-defaults-daintreemcpjson), and with neither the plugin is off. An **installed** plugin can also be set once for every project — the right default for data that belongs to the user rather than a project, such as a personal CRM or a notes index — and a project's own setting still overrides that. A repository can never turn an installed plugin on. See [Trust model → Agent MCP endpoints](./trust-model.md#agent-mcp-endpoints-mcpexpose).
 
@@ -432,7 +435,8 @@ So in a project left at its defaults, no terminal agent has a plugin's skills. W
 | Give an agent in a Daintree terminal a new tool that does something | Agent MCP endpoint (`agentMcp`) |
 | Let agents read your plugin's SQLite data | Declare it in `contributes.databases` — the plugin's server gets `database_schema` and `database_query` with no code |
 | Give agents a specific read, such as a month's total | A query declared on the database (`queries`), served as its own tool with no code |
-| Let agents write data that has rules | Agent MCP endpoint tools that enforce them, beside the database tools |
+| Let agents make a write one statement can express | A write query declared on the database (`"mode": "write"`), checked by your schema's constraints and triggers |
+| Let agents write data whose rules need code | Agent MCP endpoint tools that enforce them, beside the database tools |
 | Give Daintree and its in-app Assistant a tool backed by an existing stdio MCP server | MCP server (`mcpServers`) |
 | Teach the agent a methodology or rubric | Skill |
 | Let terminal agents reach an external API (Linear, Jira, Sentry) | Agent MCP endpoint, calling the API from your plugin's `main` |

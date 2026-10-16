@@ -6,6 +6,7 @@ import {
 } from "../../../../shared/types/plugin.js";
 import {
   agentMcpSurfaceOf,
+  declaresDatabaseWrites,
   isSharedAcrossProjects,
   listDeclaredAgentMcpPlugins,
 } from "../declaredEndpoints.js";
@@ -150,6 +151,24 @@ describe("listDeclaredAgentMcpPlugins", () => {
     ]);
   });
 
+  it("says when a plugin's declared queries include a write", () => {
+    const query = (mode: string) => ({ name: `q_${mode}`, mode, description: "Q.", params: {} });
+    const withQueries = (...modes: string[]) =>
+      plugin({
+        capabilities: [],
+        databases: [
+          { id: "a", location: "local", journalMode: "delete", queries: [query("read")] },
+          { id: "b", location: "local", journalMode: "delete", queries: modes.map(query) },
+        ],
+      });
+    const [writes] = listDeclaredAgentMcpPlugins([withQueries("write")], PROJECT_A, loaded);
+    expect(writes).toMatchObject({ hasDatabases: true, hasDatabaseWrites: true });
+    const [reads] = listDeclaredAgentMcpPlugins([withQueries("read")], PROJECT_A, loaded);
+    expect(reads).not.toHaveProperty("hasDatabaseWrites");
+    expect(declaresDatabaseWrites(withQueries().manifest)).toBe(false);
+    expect(declaresDatabaseWrites(withQueries("read", "write").manifest)).toBe(true);
+  });
+
   it("lists a plugin with both databases and an endpoint as one entry", () => {
     const entries = listDeclaredAgentMcpPlugins(
       [plugin({ databases: DATABASES })],
@@ -230,6 +249,11 @@ describe("agentMcpSurfaceOf", () => {
     expect(withQuery("SELECT 1")).toBe(withQuery("SELECT 1"));
     expect(withQuery("SELECT 2")).not.toBe(withQuery("SELECT 1"));
     expect(withQuery("SELECT 1")).not.toBe(surface({ databases: [{ id: "main" }] as never }));
+    // A reload that turns a read into a write is new authority, never the old grant's.
+    const asWrite = surface({
+      databases: [{ id: "main", queries: [{ ...query, mode: "write", sql: "SELECT 1" }] }] as never,
+    });
+    expect(asWrite).not.toBe(withQuery("SELECT 1"));
   });
 
   it("changes with the declared capability scopes", () => {

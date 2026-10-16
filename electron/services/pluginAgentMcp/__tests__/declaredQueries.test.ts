@@ -24,6 +24,22 @@ function messages(sql: string, params: PluginDatabaseQueryContribution["params"]
   return declaredQueryProblems(query(sql, params)).map((problem) => problem.message);
 }
 
+function write(
+  sql: string,
+  params: PluginDatabaseQueryContribution["params"] = {}
+): PluginDatabaseQueryContribution {
+  return { ...query(sql, params), name: "add_entry", mode: "write" };
+}
+
+function writeMessages(
+  sql: string,
+  params: PluginDatabaseQueryContribution["params"] = {}
+): string[] {
+  return declaredQueryProblems(write(sql, params)).map((problem) => problem.message);
+}
+
+const ENTRY = { month: { type: "string" as const }, amount: { type: "integer" as const } };
+
 describe("declaredQueryProblems", () => {
   it.each([
     "SELECT SUM(amount_cents) AS total FROM tx WHERE substr(date, 1, 7) = :month",
@@ -138,7 +154,86 @@ describe("declaredQueryProblems", () => {
   });
 });
 
+describe("declaredQueryProblems for a write", () => {
+  it.each([
+    "INSERT INTO tx (month, amount) VALUES (:month, :amount)",
+    "INSERT OR REPLACE INTO tx (month, amount) VALUES (:month, :amount)",
+    "REPLACE INTO tx (month, amount) VALUES (:month, :amount)",
+    "INSERT INTO tx (month, amount) VALUES (:month, :amount) ON CONFLICT (month) DO UPDATE SET amount = excluded.amount",
+    "UPDATE tx SET amount = :amount WHERE month = :month RETURNING *",
+    "DELETE FROM tx WHERE month = :month AND amount = :amount",
+    "WITH m AS (SELECT :month AS v) INSERT INTO tx (month, amount) SELECT v, :amount FROM m",
+    "WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < :amount) INSERT INTO tx (month, amount) SELECT :month, i FROM n",
+    'WITH a AS MATERIALIZED (SELECT :month AS m), "b c" AS NOT MATERIALIZED (SELECT (1) AS x) UPDATE tx SET amount = :amount WHERE month IN (SELECT m FROM a)',
+  ])("accepts a write: %s", (sql) => {
+    expect(writeMessages(sql, ENTRY)).toEqual([]);
+    // What the host accepts, SQLite runs as written.
+    const db = new DatabaseSync(":memory:");
+    try {
+      db.exec("CREATE TABLE tx (month TEXT PRIMARY KEY, amount INTEGER)");
+      expect(() => db.prepare(sql)).not.toThrow();
+    } finally {
+      db.close();
+    }
+  });
+
+  it.each([
+    ["SELECT 1", /not one starting SELECT/],
+    ["VALUES (1)", /not one starting VALUES/],
+    ["PRAGMA foreign_keys = OFF", /not one starting PRAGMA/],
+    ["CREATE TABLE t (a)", /not one starting CREATE/],
+    ["DROP TABLE tx", /not one starting DROP/],
+    ["ALTER TABLE tx ADD COLUMN b", /not one starting ALTER/],
+    ["BEGIN", /not one starting BEGIN/],
+    ["COMMIT", /not one starting COMMIT/],
+    ["SAVEPOINT s", /not one starting SAVEPOINT/],
+    ["ATTACH 'x.db' AS x", /not one starting ATTACH/],
+    ["DETACH x", /not one starting DETACH/],
+    ["VACUUM INTO 'copy.db'", /not one starting VACUUM/],
+    ["REINDEX", /not one starting REINDEX/],
+    ["ANALYZE", /not one starting ANALYZE/],
+    ["EXPLAIN DELETE FROM tx", /not one starting EXPLAIN/],
+    ['"insert" INTO tx VALUES (1)', /not one starting "insert"/],
+    ["WITH x AS (SELECT 1) SELECT * FROM x", /must lead into .* not SELECT/],
+    ["WITH x AS (DELETE FROM tx) SELECT 1", /must lead into .* not SELECT/],
+    ["WITH x SELECT 1", /common table expressions/],
+    ["WITH x AS (SELECT 1", /common table expressions/],
+    ["INSERT INTO tx VALUES (1); DELETE FROM tx", /2 statements/],
+    ["INSERT INTO tx VALUES (load_extension('evil'))", /load_extension/],
+    ["INSERT INTO tx VALUES (?)", /positional placeholders/],
+  ])("refuses %s", (sql, message) => {
+    expect(writeMessages(sql)).toEqual([expect.stringMatching(message)]);
+  });
+
+  it("holds a query with no mode to the rules for a read", () => {
+    const { mode: _mode, ...bare } = write("DELETE FROM tx");
+    expect(declaredQueryProblems(bare).map((problem) => problem.message)).toEqual([
+      expect.stringMatching(/a "read" query must be one SELECT/),
+    ]);
+  });
+
+  it("still checks a write's placeholders against its params", () => {
+    expect(writeMessages("DELETE FROM tx WHERE month = :month", ENTRY)).toEqual([
+      expect.stringMatching(/param "amount" has no placeholder/),
+    ]);
+  });
+});
+
 describe("the declared query tool", () => {
+  it("marks a write for read and write access and never as harmless", () => {
+    const tool = compileAgentMcpTool(
+      declaredQueryDescriptor(write("DELETE FROM tx WHERE month = :month", MONTH))
+    );
+    expect(tool.databaseWrite).toBe(true);
+    expect(tool.readOnly).toBeUndefined();
+    expect(tool.annotations).toEqual({
+      destructiveHint: true,
+      idempotentHint: false,
+      openWorldHint: false,
+    });
+    expect(tool.checkInput({ month: "2026-01" })).toBeNull();
+  });
+
   it("demands every param, and nothing else, as its declared type", () => {
     const tool = compileAgentMcpTool(
       declaredQueryDescriptor(

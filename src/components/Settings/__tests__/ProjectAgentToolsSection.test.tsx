@@ -202,6 +202,36 @@ describe("ProjectAgentToolsSection", () => {
     expect(rowFor("Warehouse").textContent).toContain("Lets agents query its databases, read only");
   });
 
+  it("offers read and write for a database-only plugin that declares writes, and says so", async () => {
+    agentMcpApi.listProjectPlugins.mockResolvedValue(
+      snapshot([
+        plugin({
+          pluginInstanceId: "acme.db",
+          pluginDisplayName: "Warehouse",
+          pluginTools: undefined,
+          hasDatabaseWrites: true,
+          sharedAcrossProjects: true,
+        }),
+        plugin({ hasDatabaseWrites: true }),
+      ])
+    );
+    render(<ProjectAgentToolsSection />);
+    await screen.findByTestId("project-agent-tools");
+
+    expect(optionLabels("Warehouse")).toEqual(["Off", "Read only", "Read and write"]);
+    expect(rowFor("Warehouse").textContent).toContain(
+      "Read only lets agents query its databases; read and write adds the changes it declares"
+    );
+    expect(rowFor("Ledger").textContent).toContain(
+      "read and write adds the changes it declares and Household ledger"
+    );
+    expect(
+      within(rowFor("Warehouse")).getByTestId("project-agent-tool-shared-warning").textContent
+    ).toBe(
+      "Shared by every project: agents with access to its databases can read, and with read and write change, what this plugin stored for your other projects"
+    );
+  });
+
   it("never names a particular agent CLI in its copy", async () => {
     agentMcpApi.listProjectPlugins.mockResolvedValue(
       snapshot(

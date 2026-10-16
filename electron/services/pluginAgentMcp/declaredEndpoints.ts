@@ -25,6 +25,13 @@ export function isSharedAcrossProjects(pluginInstanceId: string, hasDatabases: b
   return hasDatabases && projectIdFromPluginInstanceKey(pluginInstanceId) === null;
 }
 
+/** Whether any of a manifest's declared database queries writes. */
+export function declaresDatabaseWrites(manifest: Readonly<PluginManifest>): boolean {
+  return (manifest.contributes.databases ?? []).some((database) =>
+    (database.queries ?? []).some((query) => query.mode === "write")
+  );
+}
+
 /**
  * The plugins that could serve agent tools to one project: running installed
  * plugins, and project plugins loaded for that project. A project plugin loaded
@@ -36,8 +43,9 @@ export function isSharedAcrossProjects(pluginInstanceId: string, hasDatabases: b
  * rather than from any field on the row.
  *
  * A plugin that declares `contributes.databases` offers the host's read-only
- * database tools. The host serves those, not the plugin, so they need no
- * `mcp:expose`; the plugin's own `agentMcp` endpoint does. Either way nothing
+ * database tools, and any write queries it declares. The host serves those,
+ * not the plugin, so they need no `mcp:expose`; the plugin's own `agentMcp`
+ * endpoint does. Either way nothing
  * reaches an agent until the user gives the plugin access in the project.
  *
  * Pure over `PluginService.listPlugins()` output so the launch path, the route
@@ -59,6 +67,7 @@ export function listDeclaredAgentMcpPlugins(
       : undefined;
     const hasDatabases = (manifest.contributes.databases ?? []).length > 0;
     if (!endpoint && !hasDatabases) continue;
+    const hasDatabaseWrites = declaresDatabaseWrites(manifest);
     declared.push({
       pluginInstanceId: plugin.instanceId,
       pluginManifestId: pluginManifestIdFromInstanceKey(plugin.instanceId),
@@ -66,6 +75,7 @@ export function listDeclaredAgentMcpPlugins(
       origin: plugin.origin,
       ...(manifest.mcpName !== undefined ? { mcpName: manifest.mcpName } : {}),
       hasDatabases,
+      ...(hasDatabaseWrites ? { hasDatabaseWrites: true as const } : {}),
       ...(endpoint
         ? {
             pluginEndpoint: {

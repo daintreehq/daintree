@@ -157,10 +157,12 @@ function compileSchema(
  * than refusing the roster.
  */
 export function compileAgentMcpTool(descriptor: AgentMcpToolDescriptor): AgentMcpRegisteredTool {
-  const { name, description, inputSchema, outputSchema, readOnly, annotations } = descriptor;
+  const { name, description, inputSchema, outputSchema, readOnly, databaseWrite, annotations } =
+    descriptor;
   const checkInput = compileSchema(name, "inputSchema", inputSchema);
   const flags = {
     ...(readOnly === true ? { readOnly } : {}),
+    ...(databaseWrite === true ? { databaseWrite } : {}),
     ...(annotations !== undefined ? { annotations } : {}),
   };
   if (outputSchema === undefined) {

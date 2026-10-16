@@ -13,6 +13,13 @@
  * schema, the rules a JSON schema cannot express (the host already enforces
  * each `inputSchema`), parameterised SQL, and results kept inside the host's
  * size budget.
+ *
+ * A write one statement can express needs no code at all: `add_transaction`
+ * is a query declared in plugin.json, which the host serves and runs itself,
+ * so the triggers below are the whole of its rules. The tools here are what a
+ * declaration cannot be: a split, whose parts are checked against each other
+ * and written together, stamped with the calling terminal; and the readers,
+ * whose filters are optional and whose pages are trimmed to the result budget.
  */
 
 import { randomUUID } from "node:crypto";
@@ -25,9 +32,10 @@ const DEFAULT_PAGE = 50;
 const MAX_OFFSET = 100_000;
 const MAX_MEMO_CHARS = 280;
 const MAX_SPLITS = 20;
-// Rows this plugin writes never exceed MAX_MEMO_CHARS, but the file is the
-// project's and agents write it directly. Clipping on read keeps one such row
-// from blowing the whole result past the host's limit.
+// The split tool writes no memo past MAX_MEMO_CHARS, but add_transaction is a
+// declared write with no code to cap one, and agents write the file directly.
+// Clipping on read keeps one such row from blowing the whole result past the
+// host's limit.
 const MAX_RETURNED_MEMO_CHARS = 4096;
 const MAX_ABS_AMOUNT_CENTS = 100_000_000_000;
 // The host refuses a result over 256 KiB outright. Rows are trimmed well short
@@ -64,14 +72,16 @@ const MIGRATIONS = [
      WHERE split_group IS NOT NULL;`,
 ];
 
-// Checked in SQL too, because agents write this file with the sqlite3 CLI and
-// never go through the tools. The STRICT table already refuses a value it
-// cannot store as its column's type, such as -18.99 for an amount, before any
-// trigger runs. A trigger's RAISE message is what the agent reads, so each says
-// what to do instead. Only what one row can prove lives here: a split's balance
-// spans rows, and a row trigger sees the first part of a valid split before its
-// siblings exist. Byte lengths catch an embedded NUL, where GLOB and length()
-// stop reading. A calendar date is the tools' check; SQL checks the shape.
+// Checked in SQL, because agents write this file with the sqlite3 CLI and the
+// declared add_transaction, neither of which runs this plugin's code. The
+// STRICT table already refuses a value it cannot store as its column's type,
+// such as -18.99 for an amount, before any trigger runs. A trigger's RAISE
+// message is what the agent reads, so each says what to do instead. Only what
+// one row can prove lives here: a split's balance spans rows, and a row trigger
+// sees the first part of a valid split before its siblings exist. Byte lengths
+// catch an embedded NUL, where GLOB and length() stop reading. date() rolls a
+// day the month lacks over into the next, so a date it changes is not one the
+// calendar has.
 const rowGuards = (event) => `
   DROP TRIGGER IF EXISTS transactions_guard_${event.toLowerCase()};
   CREATE TRIGGER transactions_guard_${event.toLowerCase()} BEFORE ${event} ON transactions BEGIN
@@ -80,6 +90,8 @@ const rowGuards = (event) => `
     SELECT RAISE(ABORT, 'date must be YYYY-MM-DD, for example 2026-04-17')
       WHERE NEW.date NOT GLOB '[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]'
         OR length(CAST(NEW.date AS BLOB)) <> 10;
+    SELECT RAISE(ABORT, 'date must be a day the calendar has: 2026-02-28, not 2026-02-30')
+      WHERE date(NEW.date) IS NOT NEW.date;
     SELECT RAISE(ABORT, 'category must be lower case: a letter, then letters, digits, spaces, _ or -, at most 32 characters, no surrounding spaces')
       WHERE NOT (NEW.category GLOB '[a-z]*' AND NEW.category NOT GLOB '*[^a-z0-9 _-]*'
         AND NEW.category = trim(NEW.category) AND length(CAST(NEW.category AS BLOB)) <= 32
@@ -398,36 +410,6 @@ export async function activate(host) {
     };
   };
 
-  const addTransaction = async (args, caller, signal) => {
-    const tool = "add_transaction";
-    signal.throwIfAborted();
-    assertCaller(caller);
-    rejectUnknownKeys(tool, args, ["date", "amount_cents", "category", "memo"]);
-    requireKeys(tool, args, ["date", "amount_cents", "category"]);
-    const date = optionalDate(tool, args, "date");
-    const category = optionalCategory(tool, args, "category");
-    const cents = amount(tool, args, "amount_cents");
-    const text = memo(tool, args);
-
-    const db = await ledger();
-    // Last chance to honour a cancel. Past this point the INSERT runs to
-    // completion and the result reports what was stored. That does not make a
-    // cancelled call safe to retry: the statement blocks this worker, so the
-    // host can give up on the call while the row is being committed and
-    // discard the success. The description tells the agent to list first.
-    signal.throwIfAborted();
-    const [stored] = await db.query(INSERT_ROW, [
-      date,
-      cents,
-      category,
-      text,
-      null,
-      null,
-      ...provenance(caller),
-    ]);
-    return { committed: true, transaction: toTransaction(stored) };
-  };
-
   // The rule here is the reason this is a tool and not an INSERT an agent
   // types: the parts must add up to the payment exactly, and no JSON schema
   // can sum an array. Every part is checked before anything is written, and
@@ -484,8 +466,10 @@ export async function activate(host) {
     const group = randomUUID();
     const recorded = provenance(caller);
     const stored = await db.transaction(async (tx) => {
-      // A cancel seen here rolls the whole split back; see add_transaction for
-      // why one that lands during the commit cannot be honoured.
+      // A cancel seen here rolls the whole split back. One that lands during
+      // the commit cannot be honoured: the statement blocks this worker, so the
+      // host can give up on the call while the rows are being committed and
+      // discard the success. The description tells the agent to list first.
       signal.throwIfAborted();
       const rows = [];
       for (const part of parts) {
@@ -538,22 +522,6 @@ export async function activate(host) {
         additionalProperties: false,
       },
       execute: summarizeByCategory,
-    },
-    add_transaction: {
-      description:
-        "Append one transaction to this project's ledger and return the row as stored. amount_cents is a non-zero integer, negative for money out. category is lowercased. memo is optional, at most 280 characters. Nothing is ever updated or deleted. If a call is cancelled or times out the row may still have been stored: list before retrying.",
-      inputSchema: {
-        type: "object",
-        properties: {
-          date: DATE_PROPERTY,
-          amount_cents: AMOUNT_PROPERTY,
-          category: CATEGORY_PROPERTY,
-          memo: MEMO_PROPERTY,
-        },
-        required: ["date", "amount_cents", "category"],
-        additionalProperties: false,
-      },
-      execute: addTransaction,
     },
     add_split_transaction: {
       description:

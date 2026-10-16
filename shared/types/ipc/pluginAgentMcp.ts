@@ -27,6 +27,8 @@ export interface ProjectAgentToolPlugin {
   origin: "installed" | "project";
   /** The plugin declares databases, so the host offers read-only tools for them. */
   hasDatabases: boolean;
+  /** Some of its declared database queries write; only read and write access serves them. */
+  hasDatabaseWrites?: true;
   /**
    * An installed plugin with databases: they are one set of files shared by
    * every project, and the host's database tools can't filter them by project,

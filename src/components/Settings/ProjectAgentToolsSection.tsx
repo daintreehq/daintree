@@ -72,7 +72,7 @@ function accessOptions(plugin: ProjectAgentToolPlugin): SegmentedRadioOption<Age
           { value: plugin.access, label: ACCESS_LABELS[plugin.access] },
         ];
   }
-  if (!plugin.pluginTools) {
+  if (!plugin.pluginTools && !plugin.hasDatabaseWrites) {
     return [
       { value: "off", label: ACCESS_LABELS.off },
       { value: "read-only", label: ACCESS_LABELS["read-only"] },
@@ -112,7 +112,15 @@ function offersSharedDatabases(plugin: ProjectAgentToolPlugin): boolean {
 /** What the plugin offers, then where its current access comes from. */
 function PluginDescription({ plugin }: { plugin: ProjectAgentToolPlugin }) {
   const lines: string[] = [];
-  if (plugin.hasDatabases && plugin.pluginTools) {
+  if (plugin.hasDatabaseWrites && plugin.pluginTools) {
+    lines.push(
+      `Read only lets agents query its databases; read and write adds the changes it declares and ${plugin.pluginTools.name}`
+    );
+  } else if (plugin.hasDatabaseWrites) {
+    lines.push(
+      "Read only lets agents query its databases; read and write adds the changes it declares"
+    );
+  } else if (plugin.hasDatabases && plugin.pluginTools) {
     lines.push(
       `Read only lets agents query its databases; read and write adds ${plugin.pluginTools.name}`
     );
@@ -164,7 +172,7 @@ function PluginDescription({ plugin }: { plugin: ProjectAgentToolPlugin }) {
 /**
  * How much of each plugin's agent tools this project's agents may use: off,
  * read only (the host's tools for the plugin's databases) or read and write
- * (the plugin's own tools as well). An installed plugin's choice can be made
+ * (the writes it declares and the plugin's own tools as well). An installed plugin's choice can be made
  * the default for every project, which a project's own choice still overrides.
  *
  * Enabling a plugin never exposes its tools to agents by itself; this is the
@@ -348,8 +356,9 @@ export function ProjectAgentToolsSection() {
                             aria-hidden="true"
                           />
                           <span>
-                            Shared by every project: agents with access to its databases can read
-                            what this plugin stored for your other projects
+                            {plugin.hasDatabaseWrites
+                              ? "Shared by every project: agents with access to its databases can read, and with read and write change, what this plugin stored for your other projects"
+                              : "Shared by every project: agents with access to its databases can read what this plugin stored for your other projects"}
                           </span>
                         </span>
                       )}

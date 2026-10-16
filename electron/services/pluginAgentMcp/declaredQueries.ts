@@ -15,8 +15,10 @@ import {
   lexSql,
   type SqlToken,
 } from "../../../shared/utils/sqlLexer.js";
+import type { AgentMcpToolDescriptor } from "./types.js";
 
 type DeclaredQuery = Pick<PluginDatabaseQueryContribution, "name" | "sql" | "params">;
+type DeclaredQueryMode = PluginDatabaseQueryContribution["mode"];
 
 export interface DeclaredQueryProblem {
   /** The query field the problem is reported against. */
@@ -37,6 +39,11 @@ const READ_STATEMENTS = new Set(["SELECT", "WITH", "VALUES"]);
  * to be quoted. Schema, file and transaction statements need no list: none
  * can sit inside a `SELECT`, so the first-keyword check already refuses them.
  * `REPLACE` followed by `(` is the string function and stays allowed.
+ *
+ * They are also the only statements a write query may be. Anything else is
+ * refused by its first keyword: schema changes, pragmas and file statements
+ * would change more than rows, and `BEGIN`/`COMMIT` would end the transaction
+ * the host runs the write in.
  */
 const WRITE_KEYWORDS = new Set(["INSERT", "UPDATE", "DELETE", "REPLACE"]);
 
@@ -71,6 +78,65 @@ function isClosed(token: SqlToken): boolean {
     i++;
   }
   return false;
+}
+
+/** The index just past the parenthesised group opening at `start`, or -1. */
+function skipParens(statement: readonly SqlToken[], start: number): number {
+  if (statement[start]?.text !== "(") return -1;
+  let depth = 0;
+  for (let i = start; i < statement.length; i++) {
+    const token = statement[i]!;
+    if (token.kind !== "other") continue;
+    if (token.text === "(") depth++;
+    else if (token.text === ")" && --depth === 0) return i + 1;
+  }
+  return -1;
+}
+
+/**
+ * The first token of the statement a `WITH` clause leads into, past each
+ * `name [(columns)] AS [[NOT] MATERIALIZED] (…)`; null when the clause does
+ * not read that way. Only the token at that level decides: a CTE's body is
+ * always a `SELECT`, whatever its parentheses hold.
+ */
+function statementAfterWith(statement: readonly SqlToken[]): SqlToken | null {
+  let at = keywordOf(statement[1]) === "RECURSIVE" ? 2 : 1;
+  for (;;) {
+    const name = statement[at];
+    if (name?.kind !== "word" && name?.kind !== "quoted" && name?.kind !== "string") return null;
+    at++;
+    if (statement[at]?.text === "(") at = skipParens(statement, at);
+    if (at < 0 || keywordOf(statement[at]) !== "AS") return null;
+    at++;
+    if (keywordOf(statement[at]) === "NOT") at++;
+    if (keywordOf(statement[at]) === "MATERIALIZED") at++;
+    at = skipParens(statement, at);
+    if (at < 0) return null;
+    const next = statement[at];
+    if (next?.kind === "other" && next.text === ",") {
+      at++;
+      continue;
+    }
+    return next ?? null;
+  }
+}
+
+/** Why a statement cannot be a `"write"` query, or null. */
+function writeStatementProblem(statement: readonly SqlToken[]): string | null {
+  const first = statement[0]!;
+  const verb = keywordOf(first);
+  if (verb !== "WITH") {
+    return WRITE_KEYWORDS.has(verb ?? "")
+      ? null
+      : `a "write" query must be one INSERT, REPLACE, UPDATE or DELETE statement, not one starting ${first.text}`;
+  }
+  const main = statementAfterWith(statement);
+  if (main === null) {
+    return `the WITH clause of a "write" query must be common table expressions, each name AS (…), leading into INSERT, REPLACE, UPDATE or DELETE`;
+  }
+  return WRITE_KEYWORDS.has(keywordOf(main) ?? "")
+    ? null
+    : `the WITH clause of a "write" query must lead into INSERT, REPLACE, UPDATE or DELETE, not ${main.text}`;
 }
 
 function splitStatements(tokens: readonly SqlToken[]): SqlToken[][] {
@@ -155,12 +221,15 @@ export function declaredQueryInputSchema(params: DeclaredQuery["params"]): Plugi
 }
 
 /**
- * Everything that keeps the host from serving a `"read"` query safely, each
- * message naming the query. The checks are on the SQL as written, since no
- * database need exist at load; the read-only connection the query runs on is
- * what holds at call time.
+ * Everything that keeps the host from serving a query safely, each message
+ * naming the query. The checks are on the SQL as written, since no database
+ * need exist at load; at call time a read runs on a read-only connection, and
+ * a write under the policy of a writable `host.db` open. Without a `mode`, the
+ * query is held to the rules for a read.
  */
-export function declaredQueryProblems(query: DeclaredQuery): DeclaredQueryProblem[] {
+export function declaredQueryProblems(
+  query: DeclaredQuery & { mode?: DeclaredQueryMode }
+): DeclaredQueryProblem[] {
   const problems: DeclaredQueryProblem[] = [];
   const fail = (field: DeclaredQueryProblem["field"], detail: string): void => {
     problems.push({ field, message: `query "${query.name}": ${detail}` });
@@ -197,24 +266,32 @@ export function declaredQueryProblems(query: DeclaredQuery): DeclaredQueryProble
 
   const statement = statements[0]!;
   const first = statement[0]!;
-  if (!READ_STATEMENTS.has(keywordOf(first) ?? "")) {
-    fail(
-      "sql",
-      `a "read" query must be one SELECT, WITH or VALUES statement, not one starting ${first.text}`
+  if (query.mode === "write") {
+    const problem = writeStatementProblem(statement);
+    if (problem !== null) {
+      fail("sql", problem);
+      return problems;
+    }
+  } else {
+    if (!READ_STATEMENTS.has(keywordOf(first) ?? "")) {
+      fail(
+        "sql",
+        `a "read" query must be one SELECT, WITH or VALUES statement, not one starting ${first.text}`
+      );
+      return problems;
+    }
+    const write = statement.find(
+      (token, index) =>
+        WRITE_KEYWORDS.has(keywordOf(token) ?? "") &&
+        !(keywordOf(token) === "REPLACE" && statement[index + 1]?.text === "(")
     );
-    return problems;
-  }
-  const write = statement.find(
-    (token, index) =>
-      WRITE_KEYWORDS.has(keywordOf(token) ?? "") &&
-      !(keywordOf(token) === "REPLACE" && statement[index + 1]?.text === "(")
-  );
-  if (write) {
-    fail(
-      "sql",
-      `a "read" query cannot contain ${keywordOf(write)}; quote a column or table of that name`
-    );
-    return problems;
+    if (write) {
+      fail(
+        "sql",
+        `a "read" query cannot contain ${keywordOf(write)}; quote a column or table of that name`
+      );
+      return problems;
+    }
   }
   // Quoted too: SQLite calls `"load_extension"(…)` all the same.
   const extension = statement.findIndex(
@@ -296,17 +373,31 @@ export function bindDeclaredQueryArgs(
 }
 
 /**
- * What an agent is shown. Read-only by the host's own reading of the SQL and
- * the connection it runs on; the declaration's `mode` picks the access level
- * and is never advertised.
+ * How a declared write is announced. The host cannot tell from the SQL what
+ * the schema's triggers do with a row, so no write is ever called harmless or
+ * repeatable; the one claim it makes is that a write reaches nothing but the
+ * plugin's own file.
+ */
+const DECLARED_WRITE_ANNOTATIONS = Object.freeze({
+  destructiveHint: true,
+  idempotentHint: false,
+  openWorldHint: false,
+});
+
+/**
+ * What an agent is shown. A read is read-only by the host's own reading of
+ * the SQL and the connection it runs on; a write is marked so that only a
+ * grant with read and write access lists or calls it.
  */
 export function declaredQueryDescriptor(
-  query: Pick<PluginDatabaseQueryContribution, "name" | "description" | "params">
-): { name: string; description: string; inputSchema: PluginMcpJsonSchema; readOnly: true } {
-  return {
+  query: Pick<PluginDatabaseQueryContribution, "name" | "description" | "params" | "mode">
+): AgentMcpToolDescriptor {
+  const base = {
     name: query.name,
     description: query.description,
     inputSchema: declaredQueryInputSchema(query.params),
-    readOnly: true,
   };
+  return query.mode === "write"
+    ? { ...base, databaseWrite: true, annotations: DECLARED_WRITE_ANNOTATIONS }
+    : { ...base, readOnly: true };
 }

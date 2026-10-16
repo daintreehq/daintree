@@ -1012,11 +1012,14 @@ const MANIFEST_CONTRIBUTION_FIELD_CONSUMERS = {
       note: "The tool name agents call, on the plugin's one MCP server.",
     },
     mode: {
-      mode: "intentional-metadata",
+      mode: "derived-input",
       consumers: [
-        { file: PLUGIN_SCHEMA, symbol: "DatabaseQueryContributionSchema (literal 'read')" },
+        { file: DECLARED_QUERIES, symbol: "declaredQueryProblems" },
+        { file: DECLARED_QUERIES, symbol: "declaredQueryDescriptor" },
+        { file: DATABASE_ENDPOINT, symbol: "registerPluginDatabaseEndpoint" },
+        { file: AGENT_MCP_DECLARED, symbol: "declaresDatabaseWrites" },
       ],
-      note: "Only 'read' is accepted; it picks the access level and is never advertised as a hint.",
+      note: "Picks the statement a query may be, the connection it runs on, and whether only read and write access serves it.",
     },
     description: {
       mode: "verbatim",

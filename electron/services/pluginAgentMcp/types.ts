@@ -17,6 +17,14 @@ export const PLUGIN_MCP_ROUTE_PREFIX = "/mcp/plugin/";
 export const DATABASE_ENDPOINT_ID = "@databases";
 
 /**
+ * Not a roster: what a plugin's declared write queries, served on
+ * {@link DATABASE_ENDPOINT_ID}, answer to when access is asked. Only read and
+ * write access allows it (`accessAllowsEndpoint`), the level that serves the
+ * plugin's own tools, so a read-only grant never reaches a write.
+ */
+export const DATABASE_WRITES_ACCESS_ID = "@databases:write";
+
+/**
  * The host's database tools share a plugin's MCP server with the plugin's own,
  * so no plugin roster may use these names.
  */
@@ -37,6 +45,8 @@ export function pluginMcpRoutePath(pluginInstanceId: string): string {
  */
 export interface AgentMcpToolScope {
   readonly databases: boolean;
+  /** The plugin's declared write queries as well; only with `databases`. */
+  readonly databaseWrites?: true;
   readonly pluginEndpointId?: string;
 }
 
@@ -52,6 +62,12 @@ export interface AgentMcpToolDescriptor {
    * plugin's own roster, where it would be the plugin vouching for itself.
    */
   readonly readOnly?: true;
+  /**
+   * Host-owned declared write queries only: listed and callable only on a
+   * grant whose scope carries `databaseWrites`. Never taken from a plugin's
+   * own roster.
+   */
+  readonly databaseWrite?: true;
   /** The hints the plugin declared, snapshotted at registration. Never `readOnlyHint`. */
   readonly annotations?: Readonly<PluginMcpToolAnnotations>;
 }
@@ -102,6 +118,8 @@ export interface DeclaredAgentMcpPlugin {
   readonly origin: "global" | "project";
   readonly mcpName?: string;
   readonly hasDatabases: boolean;
+  /** Some declared database query writes, which only read and write access serves. */
+  readonly hasDatabaseWrites?: true;
   readonly pluginEndpoint?: {
     readonly id: string;
     readonly name: string;

@@ -14,13 +14,15 @@ import {
 } from "./projectDefaults.js";
 import {
   DATABASE_ENDPOINT_ID,
+  DATABASE_WRITES_ACCESS_ID,
   type AgentMcpToolScope,
   type DeclaredAgentMcpPlugin,
 } from "./types.js";
 
 /**
  * How much of each plugin's agent tools the user lets agents use: off, the
- * host's read-only database tools, or those and the plugin's own tools. Three
+ * host's read-only database tools, or those, the plugin's declared database
+ * writes and its own tools. Three
  * places can answer, and the first that does wins:
  *
  * 1. The user's answer for the project (`projectAgentMcpAccess`,
@@ -191,12 +193,20 @@ export function agentMcpScopeFor(
   const id = plugin.pluginInstanceId;
   const databases =
     plugin.hasDatabases && isAgentMcpEndpointEnabled(projectId, id, DATABASE_ENDPOINT_ID);
+  const databaseWrites =
+    databases &&
+    plugin.hasDatabaseWrites === true &&
+    isAgentMcpEndpointEnabled(projectId, id, DATABASE_WRITES_ACCESS_ID);
   const pluginEndpointId =
     plugin.pluginEndpoint && isAgentMcpEndpointEnabled(projectId, id, plugin.pluginEndpoint.id)
       ? plugin.pluginEndpoint.id
       : undefined;
   if (!databases && pluginEndpointId === undefined) return null;
-  return { databases, ...(pluginEndpointId !== undefined ? { pluginEndpointId } : {}) };
+  return {
+    databases,
+    ...(databaseWrites ? { databaseWrites: true as const } : {}),
+    ...(pluginEndpointId !== undefined ? { pluginEndpointId } : {}),
+  };
 }
 
 /** Whether the project's current access still covers everything in a scope. */
@@ -208,6 +218,8 @@ export function isAgentMcpScopeAllowed(
   return (
     (!scope.databases ||
       isAgentMcpEndpointEnabled(projectId, pluginInstanceId, DATABASE_ENDPOINT_ID)) &&
+    (scope.databaseWrites !== true ||
+      isAgentMcpEndpointEnabled(projectId, pluginInstanceId, DATABASE_WRITES_ACCESS_ID)) &&
     (scope.pluginEndpointId === undefined ||
       isAgentMcpEndpointEnabled(projectId, pluginInstanceId, scope.pluginEndpointId))
   );
