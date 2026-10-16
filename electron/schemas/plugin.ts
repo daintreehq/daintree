@@ -509,10 +509,10 @@ export const DatabaseContributionSchema = z
       })
       .optional(),
     journalMode: z.enum(["delete", "wal"]).default("delete"),
-    queries: z
-      .array(DatabaseQueryContributionSchema)
-      .max(AGENT_MCP_MAX_TOOLS_PER_ENDPOINT)
-      .optional(),
+    // Capped across all of the plugin's databases by the manifest check, which
+    // names the query past the limit; a per-entry cap would report first, and
+    // name none.
+    queries: z.array(DatabaseQueryContributionSchema).optional(),
   })
   .strict();
 

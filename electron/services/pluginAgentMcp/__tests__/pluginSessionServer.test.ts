@@ -785,8 +785,11 @@ describe("createPluginSessionServer", () => {
     it("waits for the host's roster before routing a call that arrives ahead of it", async () => {
       const databaseInvoke = vi.fn<AgentMcpToolInvoker>(async () => "host");
       const harness = await connect(vi.fn(), { scope: READ_WRITE, rosterWaitMs: 2_000 });
+      // The session's own list_changed subscription predates the spy, so the
+      // first call seen is the call handler starting to wait for the roster.
+      const subscribe = vi.spyOn(harness.registry, "onDidChange");
       const call = harness.client.callTool({ name: "month_total", arguments: { month: "x" } });
-      await new Promise((resolve) => setTimeout(resolve, 20));
+      await waitFor(() => subscribe.mock.calls.length > 0);
       harness.registry.register({
         pluginInstanceId: INSTANCE,
         endpointId: DATABASE_ENDPOINT_ID,

@@ -1564,7 +1564,6 @@
                 ]
               },
               "queries": {
-                "maxItems": 16,
                 "type": "array",
                 "items": {
                   "type": "object",

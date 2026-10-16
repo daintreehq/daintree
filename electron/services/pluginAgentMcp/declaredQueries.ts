@@ -10,8 +10,8 @@ import {
   type PluginMcpJsonSchema,
 } from "../../../shared/types/plugin.js";
 import {
+  identifierText,
   isInsignificant,
-  isKeyword,
   lexSql,
   type SqlToken,
 } from "../../../shared/utils/sqlLexer.js";
@@ -39,6 +39,16 @@ const READ_STATEMENTS = new Set(["SELECT", "WITH", "VALUES"]);
  * `REPLACE` followed by `(` is the string function and stays allowed.
  */
 const WRITE_KEYWORDS = new Set(["INSERT", "UPDATE", "DELETE", "REPLACE"]);
+
+/**
+ * The keyword a bare word spells, folded the way SQLite folds it: ASCII only,
+ * so `ınsert` stays a name rather than becoming `INSERT` through Unicode case
+ * mapping. A word with any other character is never a keyword.
+ */
+function keywordOf(token: SqlToken | undefined): string | null {
+  if (token?.kind !== "word" || !/^[A-Za-z_]+$/.test(token.text)) return null;
+  return token.text.toUpperCase();
+}
 
 /** A placeholder the host can bind from a named object. */
 const PLACEHOLDER_NAME = /^[A-Za-z_][A-Za-z0-9_]*$/;
@@ -91,6 +101,10 @@ function scanPlaceholders(tokens: readonly SqlToken[]): PlaceholderScan {
   for (const token of tokens) {
     if (token.kind === "other" && token.text === "?") {
       positional = true;
+      continue;
+    }
+    if (token.kind === "other" && ["$", "@", ":", "#"].includes(token.text)) {
+      problems.push(`placeholder ${token.text} has no name`);
       continue;
     }
     if (token.kind !== "variable") continue;
@@ -181,7 +195,7 @@ export function declaredQueryProblems(query: DeclaredQuery): DeclaredQueryProble
 
   const statement = statements[0]!;
   const first = statement[0]!;
-  if (first.kind !== "word" || !READ_STATEMENTS.has(first.text.toUpperCase())) {
+  if (!READ_STATEMENTS.has(keywordOf(first) ?? "")) {
     fail(
       "sql",
       `a "read" query must be one SELECT, WITH or VALUES statement, not one starting ${first.text}`
@@ -190,22 +204,20 @@ export function declaredQueryProblems(query: DeclaredQuery): DeclaredQueryProble
   }
   const write = statement.find(
     (token, index) =>
-      token.kind === "word" &&
-      WRITE_KEYWORDS.has(token.text.toUpperCase()) &&
-      !(isKeyword(token, "REPLACE") && statement[index + 1]?.text === "(")
+      WRITE_KEYWORDS.has(keywordOf(token) ?? "") &&
+      !(keywordOf(token) === "REPLACE" && statement[index + 1]?.text === "(")
   );
   if (write) {
     fail(
       "sql",
-      `a "read" query cannot contain ${write.text.toUpperCase()}; quote a column or table of that name`
+      `a "read" query cannot contain ${keywordOf(write)}; quote a column or table of that name`
     );
     return problems;
   }
+  // Quoted too: SQLite calls `"load_extension"(…)` all the same.
   const extension = statement.findIndex(
     (token, index) =>
-      token.kind === "word" &&
-      token.text.toLowerCase() === "load_extension" &&
-      statement[index + 1]?.text === "("
+      identifierText(token) === "load_extension" && statement[index + 1]?.text === "("
   );
   if (extension >= 0) {
     fail("sql", "a query cannot call load_extension()");

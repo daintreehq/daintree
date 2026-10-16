@@ -191,6 +191,9 @@ describe("contributes.databases[].queries", () => {
     );
     expect(errorCodes(over)).toEqual(["database_query_limit"]);
     expect(loadError(over)).toMatch(/query "q16" is past the limit/);
+    const oneDatabase = withQueries({ id: "a", queries: named(0, 17) });
+    expect(errorCodes(oneDatabase)).toEqual(["database_query_limit"]);
+    expect(loadError(oneDatabase)).toMatch(/query "q16" is past the limit/);
   });
 
   it.each([

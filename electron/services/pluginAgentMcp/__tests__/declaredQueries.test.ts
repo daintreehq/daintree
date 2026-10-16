@@ -64,8 +64,17 @@ describe("declaredQueryProblems", () => {
     ["WITH x AS (SELECT 1) UPDATE tx SET a = 1", /cannot contain UPDATE/],
     ["WITH x AS (SELECT 1) REPLACE INTO tx SELECT * FROM x", /cannot contain REPLACE/],
     ["SELECT load_extension('evil')", /load_extension/],
+    ["SELECT \"load_extension\"('evil')", /load_extension/],
+    ["SELECT [load_extension]('evil')", /load_extension/],
   ])("refuses a query that writes or reaches outside its file: %s", (sql, message) => {
     expect(messages(sql)).toEqual([expect.stringMatching(message)]);
+  });
+
+  it("folds keywords as SQLite does, ASCII only", () => {
+    // `ı` upper-cases to `I` in JavaScript, and `ſ` to `S`; to SQLite both
+    // spell names, not keywords.
+    expect(messages("SELECT 1 AS ınsert")).toEqual([]);
+    expect(messages("ſelect 1")).toEqual([expect.stringMatching(/not one starting ſelect/)]);
   });
 
   it("asks for a column that shares a write keyword to be quoted", () => {
@@ -93,6 +102,7 @@ describe("declaredQueryProblems", () => {
     ["SELECT $month(x)", /is not supported/],
     ["SELECT #month", /#month is not supported/],
     ["SELECT :month, @month", /written both as :month and @month/],
+    ["SELECT :month, @", /placeholder @ has no name/],
   ])("refuses a placeholder the host cannot bind by name: %s", (sql, message) => {
     expect(messages(sql, MONTH)).toEqual([expect.stringMatching(message)]);
   });
