@@ -840,11 +840,13 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
   // Merged so the worktree-ID Set is built at most once per pass.
   //
   // Only against a list the host actually delivered: before the first snapshot,
-  // while a load or reconnect is in flight, or after one failed, `worktrees` is
-  // empty or stale, and pruning against it would wipe every pin and label in the
-  // project (#13408).
+  // while a load is in flight, or after one failed, `worktrees` is empty or
+  // stale, and pruning against it would wipe every pin and label in the project
+  // (#13408). A reconnect is not gated: the view keeps its last full list
+  // through it, and a reconnect flag that outlives its recovery would otherwise
+  // switch pruning off for the rest of the session.
   const canPruneWorktreeIds =
-    isInitialized && !isLoading && !isReconnecting && error === null && worktreeLoadError === null;
+    isInitialized && !isLoading && error === null && worktreeLoadError === null;
   useEffect(() => {
     if (!canPruneWorktreeIds) return;
     const labelledIds = Object.keys(worktreeLabelColors);

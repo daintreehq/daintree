@@ -72,7 +72,11 @@ describe("worktree label bar cut-out (#13408)", () => {
     expect(forced?.[1]).toMatch(
       /\.worktree-label-bar,\s*\.worktree-label-swatch\s*\{\s*forced-color-adjust:\s*none/
     );
-    expect(forced?.[1]).toContain("CanvasText");
+    // Inside the bar's own box: the cut-out mask clips anything painted outside
+    // it, so an outer shadow would vanish on every card that shows a tick.
+    const bar = forced?.[1]?.match(/\.worktree-label-bar\s*\{([^}]*)\}/)?.[1] ?? "";
+    expect(bar).toMatch(/border-inline-end:\s*1px solid CanvasText/);
+    expect(bar).not.toMatch(/box-shadow/);
   });
 
   it("never paints the label in the accent", () => {

@@ -266,7 +266,10 @@ html[data-dragging="true"]
 
 /* Forced colors would flatten the hue to the canvas, and the hue is the whole
    label. Keep it, and draw a CanvasText boundary so it holds against any
-   system background. The mask still applies, so the cut-out survives. */
+   system background. The boundary is a border INSIDE the bar's box, not a
+   shadow outside it: the cut-out mask clips to the border box, so an outside
+   shadow vanished on exactly the cards that show a status tick. One pixel
+   wider keeps the full 3px of colour, still well inside the 16px gutter. */
 @media (forced-colors: active) {
   .worktree-label-bar,
   .worktree-label-swatch {
@@ -274,11 +277,9 @@ html[data-dragging="true"]
   }
 
   .worktree-label-bar {
-    box-shadow: 1px 0 0 CanvasText;
-  }
-
-  .worktree-label-bar:dir(rtl) {
-    box-shadow: -1px 0 0 CanvasText;
+    box-sizing: border-box;
+    width: 4px;
+    border-inline-end: 1px solid CanvasText;
   }
 
   .worktree-label-swatch {
