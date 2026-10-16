@@ -836,4 +836,201 @@ describe("AssistantMessagingPolicy", () => {
       expect(h.policy.enroll(lane("proj", 0), SHELL_A).ok).toBe(true);
     });
   });
+
+  describe("enrolling by the saved default (#13441)", () => {
+    it("makes the first running lane this Shell's hub, and never a second one", () => {
+      const h = harness();
+      h.run("proj", 0, "s1");
+      h.run("proj", 1, "s2");
+      const hub = h.policy.enrollByDefault(lane("proj", 0), LOCAL);
+      expect(hub.ok).toBe(true);
+      expect(h.policy.getHub()).toMatchObject({ projectId: "proj", slot: 0, enrolledBy: LOCAL });
+      expect(h.policy.enrollByDefault(lane("proj", 1), LOCAL)).toEqual({
+        ok: false,
+        reason: "hub-taken",
+      });
+      // Asked again for the hub itself: left as it is, generation and all.
+      expect(h.policy.enrollByDefault(lane("proj", 0), LOCAL)).toEqual({
+        ok: false,
+        reason: "occupied",
+      });
+      expect(h.policy.getHub()?.generation).toBe(hub.ok && hub.enrollment.generation);
+    });
+
+    it("waits for a run rather than starting one", () => {
+      const h = harness();
+      expect(h.policy.enrollByDefault(lane(), LOCAL)).toEqual({ ok: false, reason: "unavailable" });
+      // Bound to a lane but not spawned yet: no PTY incarnation to give consent to.
+      h.running.set(laneKey("proj", 0), {
+        sessionId: "s1",
+        terminalId: "t-s1",
+        projectViewWebContentsId: 1,
+      });
+      expect(h.policy.enrollByDefault(lane(), LOCAL)).toEqual({ ok: false, reason: "unavailable" });
+      expect(h.policy.getEnrollment(lane())).toBeNull();
+    });
+
+    it("never takes a lane another Shell holds, not even while that Shell is away", () => {
+      const h = harness();
+      h.run("proj", 0, "s1");
+      h.startedBy.set("s1", "link-a");
+      h.policy.bindSender("link-a", "sender-a");
+      h.policy.bindSender("link-b", "sender-b");
+      const held = h.policy.enroll(lane(), SHELL_B);
+      if (!held.ok) throw new Error("expected enrollment");
+      expect(h.policy.enrollByDefault(lane(), SHELL_A)).toEqual({ ok: false, reason: "occupied" });
+      h.policy.releaseLinkSession("link-b");
+      expect(h.policy.isWaiting(lane())).toBe(true);
+      expect(h.policy.enrollByDefault(lane(), SHELL_A)).toEqual({ ok: false, reason: "occupied" });
+      expect(h.policy.enrollByDefault(lane(), LOCAL)).toEqual({ ok: false, reason: "occupied" });
+      expect(h.policy.getEnrollment(lane())).toMatchObject({
+        generation: held.enrollment.generation,
+        enrolledBy: SHELL_B,
+      });
+    });
+
+    it("enrolls a remote Shell only once it proved its sender, and only for a run in its own view", () => {
+      const h = harness();
+      h.run("proj", 0, "s1");
+      h.startedBy.set("s1", "link-a");
+      expect(h.policy.enrollByDefault(lane(), SHELL_A)).toEqual({ ok: false, reason: "unproven" });
+      h.policy.bindSender("link-b", "sender-b");
+      expect(h.policy.enrollByDefault(lane(), SHELL_B)).toEqual({
+        ok: false,
+        reason: "wrong-session",
+      });
+      h.policy.bindSender("link-a", "sender-a");
+      const enrolled = h.policy.enrollByDefault(lane(), SHELL_A);
+      expect(enrolled.ok && enrolled.enrollment).toMatchObject({
+        enrolledBy: SHELL_A,
+        sender: "sender-a",
+      });
+    });
+
+    it("tells listeners the first time a session proves its sender, and only then", () => {
+      const h = harness();
+      let changes = 0;
+      h.policy.onChange(() => changes++);
+      h.policy.bindSender("link-a", "sender-a");
+      expect(changes).toBe(1);
+      h.policy.bindSender("link-a", "sender-a");
+      h.policy.bindSender("link-a", "sender-other");
+      expect(changes).toBe(1);
+    });
+
+    it("keeps a run the person turned off from being enrolled again until it's replaced", () => {
+      const h = harness();
+      h.run("proj", 0, "s1");
+      const first = h.policy.enrollByDefault(lane(), LOCAL);
+      if (!first.ok) throw new Error("expected enrollment");
+      let enrolledWhenHeard: boolean | null = null;
+      const off = h.policy.onChange(() => {
+        // Whatever the change sets off finds the decline already in place.
+        enrolledWhenHeard = h.policy.enrollByDefault(lane(), LOCAL).ok;
+      });
+      expect(h.policy.unenroll(lane(), LOCAL, first.enrollment.generation, { decline: true })).toBe(
+        true
+      );
+      off();
+      expect(enrolledWhenHeard).toBe(false);
+      expect(h.policy.enrollByDefault(lane(), LOCAL)).toEqual({ ok: false, reason: "declined" });
+
+      // A relaunch onto a new PTY incarnation is a new run.
+      h.run("proj", 0, "s1");
+      expect(h.policy.enrollByDefault(lane(), LOCAL).ok).toBe(true);
+    });
+
+    it("lets a decline lapse with its session", () => {
+      const h = harness();
+      h.run("proj", 0, "s1");
+      const first = h.policy.enrollByDefault(lane(), LOCAL);
+      if (!first.ok) throw new Error("expected enrollment");
+      h.policy.unenroll(lane(), LOCAL, first.enrollment.generation, { decline: true });
+      h.end("proj", 0, "s1");
+      h.run("proj", 0, "s2");
+      expect(h.policy.enrollByDefault(lane(), LOCAL).ok).toBe(true);
+    });
+
+    it("lifts a decline when the person turns the lane on again", () => {
+      const h = harness();
+      h.run("proj", 0, "s1");
+      const first = h.policy.enrollByDefault(lane(), LOCAL);
+      if (!first.ok) throw new Error("expected enrollment");
+      h.policy.unenroll(lane(), LOCAL, first.enrollment.generation, { decline: true });
+      const manual = h.policy.enroll(lane(), LOCAL);
+      if (!manual.ok) throw new Error("expected enrollment");
+      h.policy.unenroll(lane(), LOCAL, manual.enrollment.generation);
+      expect(h.policy.enrollByDefault(lane(), LOCAL).ok).toBe(true);
+    });
+
+    it("leaves a plain withdrawal to the default", () => {
+      const h = harness();
+      h.run("proj", 0, "s1");
+      const first = h.policy.enrollByDefault(lane(), LOCAL);
+      if (!first.ok) throw new Error("expected enrollment");
+      h.policy.unenroll(lane(), LOCAL, first.enrollment.generation);
+      expect(h.policy.enrollByDefault(lane(), LOCAL).ok).toBe(true);
+    });
+
+    it("doesn't move the hub to a sibling while the hub the person turned off still runs", () => {
+      const h = harness();
+      h.run("proj", 0, "s1");
+      h.run("proj", 1, "s2");
+      const hub = h.policy.enrollByDefault(lane("proj", 0), LOCAL);
+      if (!hub.ok) throw new Error("expected enrollment");
+      h.policy.unenroll(lane("proj", 0), LOCAL, hub.enrollment.generation, { decline: true });
+      expect(h.policy.enrollByDefault(lane("proj", 1), LOCAL)).toEqual({
+        ok: false,
+        reason: "declined",
+      });
+      // The person may still pick another hub themselves.
+      expect(h.policy.enroll(lane("proj", 1), LOCAL).ok).toBe(true);
+      h.policy.unenroll(lane("proj", 1), LOCAL, h.policy.getHub()!.generation);
+
+      // Once the declined hub stops, the next running lane may become the hub.
+      h.running.delete(laneKey("proj", 0));
+      h.end("proj", 0, "s1");
+      expect(h.policy.enrollByDefault(lane("proj", 1), LOCAL).ok).toBe(true);
+    });
+
+    it("lets a declined remote run keep its decline without holding back this Shell's hub", () => {
+      const h = harness();
+      h.run("proj", 0, "s1");
+      h.run("hub", 0, "s-hub");
+      h.startedBy.set("s1", "link-a");
+      h.policy.bindSender("link-a", "sender-a");
+      const remote = h.policy.enrollByDefault(lane("proj", 0), SHELL_A);
+      if (!remote.ok) throw new Error("expected enrollment");
+      h.policy.unenroll(lane("proj", 0), SHELL_A, remote.enrollment.generation, { decline: true });
+      expect(h.policy.enrollByDefault(lane("proj", 0), SHELL_A)).toEqual({
+        ok: false,
+        reason: "declined",
+      });
+      expect(h.policy.enrollByDefault(lane("hub", 0), LOCAL).ok).toBe(true);
+    });
+
+    it("refuses a hub's late start for a run the person turned off", () => {
+      const h = harness();
+      h.run("proj", 0, "s1");
+      h.startedBy.set("s1", "link-a");
+      h.policy.bindSender("link-a", "sender-a");
+      const enrolled = h.policy.enrollByDefault(lane(), SHELL_A);
+      if (!enrolled.ok) throw new Error("expected enrollment");
+      h.policy.unenroll(lane(), SHELL_A, enrolled.enrollment.generation, { decline: true });
+      expect(h.policy.enrollStarted(lane(), SHELL_A, "s1")).toEqual({
+        ok: false,
+        reason: "declined",
+      });
+      expect(h.policy.getEnrollment(lane())).toBeNull();
+    });
+
+    it("enrolls nothing on Windows", () => {
+      const h = harness({ platform: "win32" });
+      h.run("proj", 0, "s1");
+      expect(h.policy.enrollByDefault(lane(), LOCAL)).toEqual({
+        ok: false,
+        reason: "unsupported-platform",
+      });
+    });
+  });
 });

@@ -97,9 +97,10 @@ function denialFor(reason: MessagingDenial): AssistantMessagingEnrollDenial {
   }
 }
 
+/** Without a lane, only whether messaging is offered here and the pause, as settings read it. */
 async function handleGetState(
   ctx: IpcContext,
-  input: AssistantMessagingLaneRef
+  input?: AssistantMessagingLaneRef
 ): Promise<AssistantMessagingState> {
   return readState(ctx, laneFor(ctx, input));
 }
@@ -129,7 +130,8 @@ async function handleSetLaneEnrolled(
     if (!sameShell(existing.enrolledBy, shell) && !policy.isWaiting(lane)) {
       return refuse("wrong-shell");
     }
-    policy.unenroll(lane, shell, existing.generation);
+    // The person's off holds for this run, so the saved default doesn't turn it back on.
+    policy.unenroll(lane, shell, existing.generation, { decline: true });
     return done();
   }
   // Already on for this Shell: a fresh enrollment would only invalidate its generation.

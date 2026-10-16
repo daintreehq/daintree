@@ -2,6 +2,7 @@ import type Database from "better-sqlite3";
 import type { HostProjectSummary } from "../../../shared/types/ipc/remoteHosts.js";
 import type { HostId } from "../../../shared/types/remoteHosts.js";
 import { CHANNELS } from "../../ipc/channels.js";
+import { isRemoteEndpointHandle } from "../../ipc/endpoint.js";
 import { getEndpointRegistry } from "../../ipc/endpointRegistry.js";
 import { broadcastToRenderer } from "../../ipc/utils.js";
 import { peekDriveLeaseService } from "../../services/DriveLeaseService.js";
@@ -11,6 +12,7 @@ import { setHostMessagingRuntime } from "../../services/mcp-server/hostMessaging
 import { getSharedDb, getSharedSqlite } from "../../services/persistence/db.js";
 import type { PtyClient } from "../../services/PtyClient.js";
 import { getPtyClient } from "../../window/serviceRefs.js";
+import { getProjectForWebContents } from "../../window/webContentsRegistry.js";
 import { AssistantExchangeJournal } from "../exchange/AssistantExchangeJournal.js";
 import {
   AssistantExchangeStore,
@@ -30,6 +32,7 @@ import {
 } from "./HostAssistantStarter.js";
 import { AssistantInbox } from "./AssistantInbox.js";
 import { AssistantLaneWaker } from "./AssistantLaneWaker.js";
+import { AssistantMessagingDefaults } from "./AssistantMessagingDefaults.js";
 import { AssistantMessagingPolicy, type MessagingShell } from "./AssistantMessagingPolicy.js";
 import { AssistantMessagingRuntime } from "./AssistantMessagingRuntime.js";
 import { HubMessagingRuntime, type ObservedHost } from "./HubMessagingRuntime.js";
@@ -82,6 +85,34 @@ export interface AssistantMessagingPolicyInstallDeps {
   onHostSessionOpened?(listener: (hostId: HostId) => void): () => void;
   /** What starting an assistant in a host's project takes from the windows here. */
   hostAssistants?: Omit<HostAssistantStarterDeps, "listLanes" | "enrollStarted" | "sleep" | "now">;
+  /**
+   * This machine's saved default for its assistants accepting messages from
+   * other machines, read at each pass. Absent, nothing is enrolled by default.
+   */
+  acceptsByDefault?(): boolean;
+  onDefaultChanged?(listener: () => void): () => void;
+  /** Whether this Shell has messaging on for any host. */
+  hasMessagingHost?(): boolean;
+}
+
+/** The Shell whose view a run is pinned to; see `AssistantMessagingDefaultsDeps.viewShell`. */
+function viewShellOf(
+  running: { projectViewWebContentsId: number },
+  projectId: string
+): MessagingShell | null {
+  const handle = running.projectViewWebContentsId;
+  if (isRemoteEndpointHandle(handle)) {
+    const endpoint = getEndpointRegistry().getByHandle(handle);
+    const linkSessionId = endpoint?.linkSessionId;
+    return endpoint?.kind === "remote-view" &&
+      !endpoint.isClosed() &&
+      endpoint.projectId === projectId &&
+      linkSessionId
+      ? { kind: "remote", linkSessionId }
+      : null;
+  }
+  // Only one of this machine's project views showing the run's own project.
+  return getProjectForWebContents(handle) === projectId ? { kind: "local" } : null;
 }
 
 function openExchangeDatabase(): Database.Database | null {
@@ -127,16 +158,29 @@ export function installAssistantMessagingPolicy(
     isHostMessagingEnabled: deps.isHostMessagingEnabled,
     onSessionEnded: (listener) => helpSessionService.addSessionEndedListener(listener),
   });
+  const acceptsByDefault = deps.acceptsByDefault;
+  const defaults = new AssistantMessagingDefaults({
+    policy,
+    listRunningLanes: () => helpSessionService.listRunningLanes(),
+    getRunningLaneSession: (projectId, slot) =>
+      helpSessionService.getRunningLaneSession(projectId, slot),
+    viewShell: viewShellOf,
+    acceptsByDefault: () => acceptsByDefault?.() === true,
+    hasMessagingHost: () => deps.hasMessagingHost?.() === true,
+  });
   let revision = 0;
   let hadHosts = deps.hasHosts();
   const push = () => {
     revision += 1;
     broadcastToRenderer(CHANNELS.ASSISTANT_MESSAGING_CHANGED, { revision });
   };
-  // A spawn is when a run can be replaced in place. The client may not exist
-  // yet, but nothing can be enrolled without a running PTY, so every change
-  // tries again.
-  const reconcile = () => policy.reconcile();
+  // A spawn is when a run can be replaced in place, and when one starts. The
+  // client may not exist yet, but nothing can be enrolled without a running
+  // PTY, so every change tries again.
+  const reconcile = () => {
+    policy.reconcile();
+    defaults.schedule();
+  };
   let watched: PtyClient | null = null;
   const watchPty = () => {
     if (watched) return;
@@ -147,10 +191,14 @@ export function installAssistantMessagingPolicy(
   const offPolicy = policy.onChange(() => {
     watchPty();
     push();
+    defaults.schedule();
   });
+  const offDefault = deps.onDefaultChanged?.(() => defaults.schedule()) ?? (() => {});
   // Only the first host arriving or the last one going changes what views
   // show, and whether the hub is offered its host tools.
   const offHosts = deps.onHostsChanged(() => {
+    // Any host's opt-in may have turned on, which gives the hub a host to hear from.
+    defaults.schedule();
     const hasHosts = deps.hasHosts();
     if (hasHosts === hadHosts) return;
     hadHosts = hasHosts;
@@ -221,6 +269,8 @@ export function installAssistantMessagingPolicy(
   const offReattached = helpSessionService.addSessionReattachedListener(({ projectId, slot }) => {
     owedReannounce.set(`${projectId}\0${slot}`, { lane: { projectId, slot }, at: Date.now() });
     payReannounce();
+    // Its new view may belong to a Shell whose default now applies.
+    defaults.schedule();
   });
   const offPolicyReannounce = policy.onChange(payReannounce);
   const onAvailabilityChanged = deps.onAvailabilityChanged;
@@ -313,7 +363,11 @@ export function installAssistantMessagingPolicy(
   const unregisterRuntimeService = registerRemoteService("assistantMessagingRuntime", runtime);
   // A view that mounted before the policy existed read it as unavailable.
   push();
+  // Runs that started before the policy existed.
+  defaults.schedule();
   return () => {
+    defaults.dispose();
+    offDefault();
     offReattached();
     offPolicyReannounce();
     owedReannounce.clear();

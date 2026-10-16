@@ -220,7 +220,9 @@ export class HostRegistry {
       lastSeenAt: null,
       addedAt: this.now(),
       notificationsEnabled: false,
-      assistantMessagingEnabled: false,
+      // A Shell that reaches a host over SSH can already run anything there as
+      // that user; a message is no more. A host already listed keeps its value.
+      assistantMessagingEnabled: connection.kind === "ssh",
       assistantStartEnabled: false,
     };
     this.write([...hosts, descriptor]);

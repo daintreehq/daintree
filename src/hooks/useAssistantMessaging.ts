@@ -134,3 +134,43 @@ export function useAssistantMessaging(
     dismissRefusal,
   };
 }
+
+/**
+ * Whether messaging between machines is offered for the machine this view's
+ * assistants run on: never on Windows, and in a window of this machine only
+ * once it has a host. Read on mount, on every change main pushes and whenever
+ * a remote link resyncs.
+ */
+export function useAssistantMessagingAvailable(): boolean {
+  const [available, setAvailable] = useState(false);
+
+  useEffect(() => {
+    if (!assistantMessagingClient.isAvailable()) return undefined;
+    let active = true;
+    let revision = -1;
+    const read = () => {
+      assistantMessagingClient.getState().then(
+        (next) => {
+          if (!active || next.revision < revision) return;
+          revision = next.revision;
+          setAvailable(next.available);
+        },
+        () => {}
+      );
+    };
+    const offChanged = assistantMessagingClient.onChanged(read);
+    // A host that restarted counts its revisions from zero again.
+    const offResync = onHostResync(() => {
+      revision = -1;
+      read();
+    });
+    read();
+    return () => {
+      active = false;
+      offChanged();
+      offResync();
+    };
+  }, []);
+
+  return available;
+}

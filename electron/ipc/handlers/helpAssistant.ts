@@ -46,6 +46,7 @@ const HELP_ASSISTANT_DEFAULTS: HelpAssistantSettings = {
   debugLogging: false,
   loadGlobalHooksAndServers: false,
   daintreeConfirmations: "inherit",
+  acceptRemoteMessages: true,
 };
 
 const HELP_ASSISTANT_KEYS = [
@@ -61,9 +62,30 @@ const HELP_ASSISTANT_KEYS = [
   "debugLogging",
   "loadGlobalHooksAndServers",
   "daintreeConfirmations",
+  "acceptRemoteMessages",
 ] as const satisfies ReadonlyArray<keyof HelpAssistantSettings>;
 
 const KNOWN_KEYS: ReadonlySet<string> = new Set(HELP_ASSISTANT_KEYS);
+
+const settingsListeners = new Set<() => void>();
+
+/** Hear every settings write, after it lands; for main-process readers that act on a change. */
+export function onHelpAssistantSettingsChanged(listener: () => void): () => void {
+  settingsListeners.add(listener);
+  return () => {
+    settingsListeners.delete(listener);
+  };
+}
+
+function notifySettingsChanged(): void {
+  for (const listener of [...settingsListeners]) {
+    try {
+      listener();
+    } catch (err) {
+      console.warn("[HelpAssistant] Settings listener failed:", err);
+    }
+  }
+}
 
 function isValidAuditRetention(value: unknown): value is HelpAssistantAuditRetention {
   return value === 0 || value === 7 || value === 30;
@@ -97,6 +119,9 @@ function sanitizeStored(stored: unknown): Partial<HelpAssistantSettings> {
   if (typeof record.debugLogging === "boolean") out.debugLogging = record.debugLogging;
   if (typeof record.loadGlobalHooksAndServers === "boolean") {
     out.loadGlobalHooksAndServers = record.loadGlobalHooksAndServers;
+  }
+  if (typeof record.acceptRemoteMessages === "boolean") {
+    out.acceptRemoteMessages = record.acceptRemoteMessages;
   }
   // Read-time migration from the legacy `skipPermissions` boolean: if the
   // new fields aren't stored, derive them from the old boolean. New writes
@@ -163,6 +188,7 @@ export const helpAssistantNamespace = defineIpcNamespace({
         if (!patch || typeof patch !== "object") return;
         let daintreeControlTurnedOn = false;
         let auditRetentionWritten: HelpAssistantAuditRetention | null = null;
+        let wrote = false;
         for (const [field, value] of Object.entries(patch)) {
           if (value === undefined) continue;
           if (!KNOWN_KEYS.has(field)) continue;
@@ -176,7 +202,8 @@ export const helpAssistantNamespace = defineIpcNamespace({
               field === "runbookSearch" ||
               field === "bypassPermissions" ||
               field === "debugLogging" ||
-              field === "loadGlobalHooksAndServers") &&
+              field === "loadGlobalHooksAndServers" ||
+              field === "acceptRemoteMessages") &&
             typeof value !== "boolean"
           ) {
             continue;
@@ -205,7 +232,9 @@ export const helpAssistantNamespace = defineIpcNamespace({
             auditRetentionWritten = storedValue as HelpAssistantAuditRetention;
           }
           store.set(`helpAssistant.${field}`, storedValue);
+          wrote = true;
         }
+        if (wrote) notifySettingsChanged();
 
         // Apply the new retention window to the assistant audit rings
         // immediately so a shortened (or "Off"→on) setting takes effect now,

@@ -78,6 +78,24 @@ export interface EnrollmentEnded {
 export type EnrollmentResult =
   { ok: true; enrollment: LaneEnrollment } | { ok: false; reason: MessagingDenial };
 
+/**
+ * Why a saved default didn't enroll a lane: someone holds it already (a Shell
+ * that's away included), the person turned this run off, or the Shell it
+ * would answer to hasn't proved its sender or doesn't own the run's view.
+ */
+export type DefaultEnrollmentRefusal = "occupied" | "declined" | "unproven" | "wrong-session";
+
+/** The run a person turned messages off for; only that run, never the lane. */
+interface DeclinedRun {
+  projectId: string;
+  slot: number;
+  sessionId: string;
+  terminalId: string;
+  launchGeneration: number;
+  /** Declined as this Shell's hub, which no sibling lane takes over while it runs. */
+  hub: boolean;
+}
+
 export interface LaneCheck {
   lane: LaneRef;
   generation: string;
@@ -158,10 +176,11 @@ function laneKey(lane: LaneRef): string | null {
 
 /**
  * The one place cross-host assistant messaging asks before it admits or
- * delivers anything. Holds which lanes a person enrolled, which Shell enrolled
+ * delivers anything. Holds which lanes are enrolled, which Shell enrolled
  * each, this Shell's hub, and a machine-wide pause. Everything but the per-host
- * opt-in (which lives on the host list) is in memory: an app restart ends every
- * enrollment and clears the pause.
+ * opt-in (on the host list) and the saved default (in the assistant settings)
+ * is in memory: an app restart ends every enrollment and clears the pause, and
+ * the default enrolls each run again as it starts (`enrollByDefault`).
  *
  * Enrolling never launches an assistant. A lane whose assistant isn't running
  * can't be enrolled, and one that stops running is unavailable until its
@@ -171,6 +190,8 @@ export class AssistantMessagingPolicy {
   private readonly enrollments = new Map<string, LaneEnrollment>();
   /** Enrollments that ended without being withdrawn, kept until the lane is enrolled again. */
   private readonly ended = new Map<string, EnrollmentEnded>();
+  /** Runs the person turned off, which no default enrolls again; gone with the run. */
+  private readonly declined = new Map<string, DeclinedRun>();
   private readonly changeListeners = new Set<() => void>();
   /** Live link sessions and the sender each proved; gone with the session. */
   private readonly sessionSenders = new Map<string, string>();
@@ -211,29 +232,40 @@ export class AssistantMessagingPolicy {
       const hub = this.getHub();
       if (hub && laneKey(hub) !== key) return { ok: false, reason: "hub-taken" };
     }
-    const running = this.deps.getRunningLaneSession(lane.projectId, lane.slot);
-    const launchGeneration = running ? this.deps.getLiveGeneration(running.terminalId) : null;
-    if (!running || launchGeneration === null) return { ok: false, reason: "unavailable" };
-    const enrollment: LaneEnrollment = {
-      projectId: lane.projectId,
-      slot: lane.slot,
-      generation: this.newGeneration(),
-      sessionId: running.sessionId,
-      terminalId: running.terminalId,
-      launchGeneration,
-      enrolledBy:
-        shell.kind === "local"
-          ? { kind: "local" }
-          : { kind: "remote", linkSessionId: shell.linkSessionId },
-      enrolledAt: this.now(),
-    };
-    const sender =
-      shell.kind === "remote" ? this.sessionSenders.get(shell.linkSessionId) : undefined;
-    if (sender !== undefined) enrollment.sender = sender;
-    this.enrollments.set(key, enrollment);
-    this.ended.delete(key);
-    this.changed();
-    return { ok: true, enrollment: copyEnrollment(enrollment) };
+    const run = this.liveRun(lane);
+    if (!run) return { ok: false, reason: "unavailable" };
+    return { ok: true, enrollment: this.take(key, lane, shell, run) };
+  }
+
+  /**
+   * Enroll a running lane because this machine's saved default says to, with
+   * nobody clicking, so stricter than the person's toggle: never a lane anyone
+   * holds (a Shell that's away included), a run the person turned off, a
+   * second hub, or any hub while the one the person turned off still runs. A
+   * remote Shell must have proved its sender and own the view the run is
+   * pinned to. Checked and taken in one step.
+   */
+  enrollByDefault(
+    lane: LaneRef,
+    shell: MessagingShell
+  ): EnrollmentResult | { ok: false; reason: DefaultEnrollmentRefusal } {
+    if (!this.supported) return { ok: false, reason: "unsupported-platform" };
+    const key = laneKey(lane);
+    if (key === null || !isValidShell(shell)) return { ok: false, reason: "invalid-lane" };
+    if (this.current(key)) return { ok: false, reason: "occupied" };
+    const run = this.liveRun(lane);
+    if (!run) return { ok: false, reason: "unavailable" };
+    if (this.isDeclined(key, run)) return { ok: false, reason: "declined" };
+    if (shell.kind === "local") {
+      if (this.getHub()) return { ok: false, reason: "hub-taken" };
+      if (this.hubDeclined()) return { ok: false, reason: "declined" };
+    } else {
+      if (!this.sessionSenders.has(shell.linkSessionId)) return { ok: false, reason: "unproven" };
+      if (this.deps.startedThrough?.(run.running, shell.linkSessionId) !== true) {
+        return { ok: false, reason: "wrong-session" };
+      }
+    }
+    return { ok: true, enrollment: this.take(key, lane, shell, run) };
   }
 
   /**
@@ -247,7 +279,7 @@ export class AssistantMessagingPolicy {
     lane: LaneRef,
     shell: MessagingShell,
     sessionId: string
-  ): EnrollmentResult | { ok: false; reason: "occupied" | "wrong-session" } {
+  ): EnrollmentResult | { ok: false; reason: "occupied" | "wrong-session" | "declined" } {
     const key = laneKey(lane);
     if (key === null || !isValidShell(shell)) return { ok: false, reason: "invalid-lane" };
     const existing = this.current(key);
@@ -256,6 +288,9 @@ export class AssistantMessagingPolicy {
     }
     const running = this.deps.getRunningLaneSession(lane.projectId, lane.slot);
     if (!running) return { ok: false, reason: "unavailable" };
+    // A start that lands after the person turned this run off doesn't undo it.
+    const run = this.liveRun(lane);
+    if (run && this.isDeclined(key, run)) return { ok: false, reason: "declined" };
     // Knowing a session id proves nothing: the run has to have come through
     // one of this Shell's own views. (A relaunch in place during start-up keeps
     // its session and view, and is still the lane this Shell opened.)
@@ -276,8 +311,16 @@ export class AssistantMessagingPolicy {
    * Withdraw consent, naming the current generation. Only the Shell that
    * enrolled the lane, except while that Shell is away: anyone with a view of
    * the lane may then turn it off, since withdrawing never gives access.
+   * `decline` is the person turning it off: no saved default enrolls this run
+   * again, and no other lane becomes the hub by default while a declined hub
+   * runs. Turning the lane on again lifts it.
    */
-  unenroll(lane: LaneRef, shell: MessagingShell, generation: string): boolean {
+  unenroll(
+    lane: LaneRef,
+    shell: MessagingShell,
+    generation: string,
+    options: { decline?: boolean } = {}
+  ): boolean {
     const key = laneKey(lane);
     if (key === null) return false;
     const existing = this.current(key);
@@ -285,6 +328,17 @@ export class AssistantMessagingPolicy {
     if (!sameShell(existing.enrolledBy, shell) && !this.waiting(existing)) return false;
     this.enrollments.delete(key);
     this.ended.delete(key);
+    // Recorded before anyone hears of the change, so nothing it sets off re-enrolls the run.
+    if (options.decline === true) {
+      this.declined.set(key, {
+        projectId: existing.projectId,
+        slot: existing.slot,
+        sessionId: existing.sessionId,
+        terminalId: existing.terminalId,
+        launchGeneration: existing.launchGeneration,
+        hub: existing.enrolledBy.kind === "local",
+      });
+    }
     this.changed();
     return true;
   }
@@ -303,7 +357,9 @@ export class AssistantMessagingPolicy {
     if (proven !== undefined && proven !== senderId) return [];
     this.sessionSenders.set(linkSessionId, senderId);
     const rebinds = new Map<string, string>();
-    let changed = false;
+    // A first proof is news even with nothing to move: a saved default may now
+    // enroll a run this Shell opened before it proved itself.
+    let changed = proven === undefined;
     for (const enrollment of this.enrollments.values()) {
       const by = enrollment.enrolledBy;
       if (by.kind !== "remote") continue;
@@ -484,6 +540,7 @@ export class AssistantMessagingPolicy {
     this.changeListeners.clear();
     this.enrollments.clear();
     this.ended.clear();
+    this.declined.clear();
     this.sessionSenders.clear();
     this.paused = false;
   }
@@ -536,9 +593,75 @@ export class AssistantMessagingPolicy {
     );
   }
 
+  /** The run a lane is running now, with the PTY incarnation it runs on. */
+  private liveRun(lane: LaneRef): { running: RunningLaneSession; launchGeneration: number } | null {
+    const running = this.deps.getRunningLaneSession(lane.projectId, lane.slot);
+    const launchGeneration = running ? this.deps.getLiveGeneration(running.terminalId) : null;
+    return running && launchGeneration !== null ? { running, launchGeneration } : null;
+  }
+
+  private take(
+    key: string,
+    lane: LaneRef,
+    shell: MessagingShell,
+    run: { running: RunningLaneSession; launchGeneration: number }
+  ): LaneEnrollment {
+    const enrollment: LaneEnrollment = {
+      projectId: lane.projectId,
+      slot: lane.slot,
+      generation: this.newGeneration(),
+      sessionId: run.running.sessionId,
+      terminalId: run.running.terminalId,
+      launchGeneration: run.launchGeneration,
+      enrolledBy:
+        shell.kind === "local"
+          ? { kind: "local" }
+          : { kind: "remote", linkSessionId: shell.linkSessionId },
+      enrolledAt: this.now(),
+    };
+    const sender =
+      shell.kind === "remote" ? this.sessionSenders.get(shell.linkSessionId) : undefined;
+    if (sender !== undefined) enrollment.sender = sender;
+    this.enrollments.set(key, enrollment);
+    this.ended.delete(key);
+    this.declined.delete(key);
+    this.changed();
+    return copyEnrollment(enrollment);
+  }
+
+  /** Whether the person turned off `run`; a decline for an earlier run is dropped. */
+  private isDeclined(
+    key: string,
+    run: { running: RunningLaneSession; launchGeneration: number }
+  ): boolean {
+    const declined = this.declined.get(key);
+    if (!declined) return false;
+    if (
+      declined.sessionId === run.running.sessionId &&
+      declined.terminalId === run.running.terminalId &&
+      declined.launchGeneration === run.launchGeneration
+    ) {
+      return true;
+    }
+    this.declined.delete(key);
+    return false;
+  }
+
+  /** Whether a hub the person turned off is still running. */
+  private hubDeclined(): boolean {
+    for (const [key, declined] of [...this.declined]) {
+      if (!declined.hub) continue;
+      const run = this.liveRun(declined);
+      if (run && this.isDeclined(key, run)) return true;
+      this.declined.delete(key);
+    }
+    return false;
+  }
+
   private handleSessionEnded(event: HelpSessionEndedEvent): void {
     const key = laneKey({ projectId: event.projectId, slot: event.slot });
     if (key === null) return;
+    if (this.declined.get(key)?.sessionId === event.sessionId) this.declined.delete(key);
     const enrollment = this.enrollments.get(key);
     if (enrollment && enrollment.sessionId === event.sessionId) {
       this.end(key, enrollment, endReasonFor(event.reason));
