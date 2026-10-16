@@ -207,6 +207,7 @@ function isWatchableRef(ref: string): boolean {
 export class GitFileWatcher {
   private watchers: FSWatcher[] = [];
   private readonly watchedFilesByDirectory = new Map<string, Set<string>>();
+  private readonly watcherByDirectory = new Map<string, FSWatcher>();
   private debounceTimer: NodeJS.Timeout | null = null;
   private worktreeDebounceTimer: NodeJS.Timeout | null = null;
   private worktreeMaxWaitTimer: NodeJS.Timeout | null = null;
@@ -268,6 +269,12 @@ export class GitFileWatcher {
   private upstreamRef: string | null;
   /** The upstream ref file currently in a directory's tracked set. */
   private upstreamRefPath: string | null = null;
+  /**
+   * While the ref's directory doesn't exist: the nearest existing ancestor's
+   * entry on the way down to it, so the push that creates the directory still
+   * wakes a status pass, which then re-arms the exact ref.
+   */
+  private upstreamFallbackPath: string | null = null;
 
   constructor(options: GitFileWatcherOptions) {
     this.worktreePath = options.worktreePath;
@@ -447,29 +454,89 @@ export class GitFileWatcher {
 
   private armUpstreamRef(): void {
     const ref = this.upstreamRef;
+    const commonDir = this.commonDir;
     const nextPath =
-      ref !== null && this.commonDir !== null && isWatchableRef(ref)
-        ? pathJoin(this.commonDir, ...ref.split("/"))
+      ref !== null && commonDir !== null && isWatchableRef(ref)
+        ? pathJoin(commonDir, ...ref.split("/"))
         : null;
-    if (nextPath === this.upstreamRefPath) return;
+    if (nextPath === this.upstreamRefPath && this.upstreamFallbackPath === null) return;
 
-    if (this.upstreamRefPath !== null) {
-      this.watchedFilesByDirectory
-        .get(dirname(this.upstreamRefPath))
-        ?.delete(basename(this.upstreamRefPath));
-      this.upstreamRefPath = null;
+    // The new watch goes in before the old one comes out, so a ref moving
+    // within one directory keeps that directory's handle.
+    const previousPath = this.upstreamRefPath !== nextPath ? this.upstreamRefPath : null;
+    if (nextPath !== null && commonDir !== null) this.armUpstreamPath(nextPath, commonDir);
+    else this.releaseUpstreamFallback();
+    if (previousPath !== null) {
+      this.releaseWatchedFile(previousPath);
+      if (this.upstreamRefPath === previousPath) this.upstreamRefPath = null;
     }
-    if (nextPath === null) return;
+  }
 
-    // A tracked name already present (the ref also watched for another reason)
-    // is left alone on removal, so only claim one we add.
-    const tracked = this.watchedFilesByDirectory.get(dirname(nextPath));
-    if (tracked?.has(basename(nextPath))) return;
-    this.watchFile(nextPath);
-    // Absent directory: watchFile fell back silently. Left unclaimed, the next
-    // setUpstreamRef retries it.
-    if (this.watchedFilesByDirectory.get(dirname(nextPath))?.has(basename(nextPath))) {
-      this.upstreamRefPath = nextPath;
+  private armUpstreamPath(path: string, commonDir: string): void {
+    // Already watched for another reason (a local upstream on the current
+    // branch's ref): covered, and never ours to release.
+    if (this.watchedFilesByDirectory.get(dirname(path))?.has(basename(path))) {
+      this.releaseUpstreamFallback();
+      return;
+    }
+    if (this.claimWatchedFile(path)) {
+      this.upstreamRefPath = path;
+      this.releaseUpstreamFallback();
+      return;
+    }
+
+    // Absent directory (a packed ref, or one never fetched). Watch the nearest
+    // ancestor that exists — non-recursively, for the one child on the way
+    // down — no higher than refs/.
+    const boundary = pathJoin(commonDir, "refs");
+    let missing = dirname(path);
+    while (missing !== boundary && dirname(missing) !== missing) {
+      if (missing === this.upstreamFallbackPath) return;
+      if (this.claimWatchedFile(missing)) {
+        this.releaseUpstreamFallback();
+        this.upstreamFallbackPath = missing;
+        return;
+      }
+      missing = dirname(missing);
+    }
+  }
+
+  /**
+   * Add `filePath` to its directory's watch and report whether this call owns
+   * the entry. A name already tracked for another reason is never claimed, so
+   * releasing a claim can't stop that other watch.
+   */
+  private claimWatchedFile(filePath: string): boolean {
+    if (this.watchedFilesByDirectory.get(dirname(filePath))?.has(basename(filePath))) {
+      return false;
+    }
+    this.watchFile(filePath);
+    return this.watchedFilesByDirectory.get(dirname(filePath))?.has(basename(filePath)) ?? false;
+  }
+
+  private releaseUpstreamFallback(): void {
+    if (this.upstreamFallbackPath === null) return;
+    this.releaseWatchedFile(this.upstreamFallbackPath);
+    this.upstreamFallbackPath = null;
+  }
+
+  // Drops the name, and the directory's watch with it once nothing in it is
+  // tracked — an unnamed event would otherwise still wake the pass for it.
+  private releaseWatchedFile(filePath: string): void {
+    const watchDir = dirname(filePath);
+    const tracked = this.watchedFilesByDirectory.get(watchDir);
+    if (!tracked) return;
+    tracked.delete(basename(filePath));
+    if (tracked.size > 0) return;
+    const watcher = this.watcherByDirectory.get(watchDir);
+    this.watchedFilesByDirectory.delete(watchDir);
+    this.watcherByDirectory.delete(watchDir);
+    if (!watcher) return;
+    this.watchers = this.watchers.filter((w) => w !== watcher);
+    try {
+      watcher.close();
+    } catch {
+      // Stale handle (directory deleted underneath it) — nothing left to close.
     }
   }
 
@@ -506,7 +573,9 @@ export class GitFileWatcher {
 
     this.watchers = [];
     this.watchedFilesByDirectory.clear();
+    this.watcherByDirectory.clear();
     this.upstreamRefPath = null;
+    this.upstreamFallbackPath = null;
 
     if (this.worktreeSubscription) {
       this.worktreeSubscription.unsubscribe().catch(() => {
@@ -722,6 +791,7 @@ export class GitFileWatcher {
 
       this.watchers.push(watcher);
       this.watchedFilesByDirectory.set(watchDir, trackedFiles);
+      this.watcherByDirectory.set(watchDir, watcher);
     } catch {
       // Silent fallback to polling
     }

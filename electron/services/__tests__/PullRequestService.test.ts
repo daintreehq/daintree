@@ -4165,7 +4165,12 @@ describe("PullRequestService", () => {
     // The #13399 harness, plus the worktree's own view of its upstream ref.
     // `head` is what the forge's probe reports, so it can lag the local push.
     function makeHarness(initialCi: CIStatus | null) {
-      const state: { head: string; ci: CIStatus | null } = { head: "sha1", ci: initialCi };
+      // `updatedAt` moves on a metadata-only change (a title edit, a comment).
+      const state: { head: string; ci: CIStatus | null; updatedAt: string } = {
+        head: "sha1",
+        ci: initialCi,
+        updatedAt: "2024-02-02T00:00:00Z",
+      };
       const batchSpy = vi.fn(async (_repo: RepoRef, branches: string[]) => {
         const map = new Map<string, ForgePR | null>();
         for (const branch of branches) {
@@ -4186,11 +4191,11 @@ describe("PullRequestService", () => {
       });
       const probeOpenPRList = vi.fn(async (_repo: RepoRef, tracked: PRSnapshot[]) => {
         const changed = tracked
-          .filter((t) => t.headSha !== state.head)
+          .filter((t) => t.headSha !== state.head || t.updatedAt !== state.updatedAt)
           .map((t) => ({
             number: t.number,
             headSha: state.head,
-            updatedAt: "2024-02-02T00:00:00Z",
+            updatedAt: state.updatedAt,
             state: "open" as const,
             title: t.title,
           }));
@@ -4379,6 +4384,85 @@ describe("PullRequestService", () => {
       update("sha2", "refs/remotes/fork/feature/a");
 
       expect(detected).toHaveLength(0);
+
+      pullRequestService.destroy();
+    });
+
+    it("ignores a branch that only ends in the PR's head name", async () => {
+      makeHarness(ci("failure", "sha1"));
+      const { pullRequestService, detected, update } = await settle(
+        "refs/remotes/origin/topic/feature/a"
+      );
+
+      update("sha2");
+
+      expect(detected).toHaveLength(0);
+
+      pullRequestService.destroy();
+    });
+
+    it("keeps the new head's result through a metadata change the probe reports late", async () => {
+      const { state } = makeHarness(ci("failure", "sha1"));
+      const { pullRequestService, detected, update } = await settle();
+
+      update("sha2");
+      state.ci = ci("failure", "sha2");
+      jump(3 * SECOND);
+      await revalidate(pullRequestService);
+      expect(detected.at(-1)?.ciStatus?.state).toBe("failure");
+      expect(detected.at(-1)?.ciStatus?.headSha).toBe("sha2");
+
+      // The forge still names the old head, but something else about the PR
+      // changed: that is not a push back to sha1.
+      state.updatedAt = "2024-02-03T00:00:00Z";
+      state.ci = ci("failure", "sha1");
+      const before = detected.length;
+      jump(30 * SECOND);
+      await revalidate(pullRequestService);
+
+      expect(detected.slice(before).some((e) => e.ciStatus?.headSha === "sha1")).toBe(false);
+      expect(detected.slice(before).some((e) => e.ciStatus === undefined)).toBe(false);
+
+      pullRequestService.destroy();
+    });
+
+    it("still follows a newer head the probe reports from elsewhere", async () => {
+      const { state } = makeHarness(ci("failure", "sha1"));
+      const { pullRequestService, detected, update } = await settle();
+
+      update("sha2");
+      state.ci = ci("success", "sha2");
+      jump(3 * SECOND);
+      await revalidate(pullRequestService);
+      expect(detected.at(-1)?.ciStatus?.state).toBe("success");
+
+      // Pushed from another machine before this one fetched it.
+      state.head = "sha3";
+      state.ci = ci("success", "sha2");
+      const before = detected.length;
+      jump(30 * SECOND);
+      await revalidate(pullRequestService);
+
+      const after = detected.slice(before);
+      expect(after[0]?.ciStatus).toBeUndefined();
+      expect(after.some((e) => e.ciStatus?.headSha === "sha2")).toBe(false);
+
+      pullRequestService.destroy();
+    });
+
+    it("restores the result when the forge never confirms the push", async () => {
+      // A fork's same-named branch on the same commit moved, not the PR's.
+      makeHarness(ci("failure", "sha1"));
+      const { pullRequestService, detected, update } = await settle();
+
+      update("sha2");
+      for (let i = 0; i < 8; i++) {
+        jump(30 * SECOND);
+        await revalidate(pullRequestService);
+      }
+
+      expect(detected.at(-1)?.ciStatus?.state).toBe("failure");
+      expect(detected.at(-1)?.ciStatus?.headSha).toBe("sha1");
 
       pullRequestService.destroy();
     });

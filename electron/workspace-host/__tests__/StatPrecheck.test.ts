@@ -6,6 +6,7 @@ vi.mock("fs/promises", () => ({
 }));
 
 import { readFile, stat } from "fs/promises";
+import { join as pathJoin } from "path";
 import { StatPrecheck, type StatPrecheckHost } from "../StatPrecheck.js";
 
 interface MutableHost {
@@ -65,7 +66,7 @@ describe("StatPrecheck", () => {
   });
 
   it("falls through when only the upstream ref moved — a push or fetch (#13400)", async () => {
-    const upstreamPath = "/repo/.git/refs/remotes/origin/feature/x";
+    const upstreamPath = pathJoin("/repo/.git", "refs", "remotes", "origin", "feature", "x");
     let upstreamMtime = 1_000;
     vi.mocked(stat).mockImplementation((async (path: string) =>
       makeStatResult(path === upstreamPath ? upstreamMtime : 1_000)) as unknown as typeof stat);

@@ -408,8 +408,16 @@ export class GitStatusPass {
       const nextBaseBehindCount = baseDivergenceResult?.behindCount ?? undefined;
       const nextBaseMatchesUpstream = baseDivergenceResult?.matchesUpstream ?? undefined;
       const nextBaseCompareRef = baseDivergenceResult?.baseCompareRef ?? undefined;
-      const nextUpstreamRef = baseDivergenceResult?.upstreamRef ?? undefined;
-      const nextUpstreamHeadSha = baseDivergenceResult?.upstreamHeadSha ?? undefined;
+      // A divergence pass that failed says nothing about the upstream, so the
+      // last observation stands while it is still configured; dropping it
+      // would leave the PR service no "before" to see the next push against.
+      const keepUpstream = baseDivergenceResult === null && hasUpstream && !branchChanged;
+      const nextUpstreamRef = keepUpstream
+        ? this.upstreamRefValue
+        : (baseDivergenceResult?.upstreamRef ?? undefined);
+      const nextUpstreamHeadSha = keepUpstream
+        ? this.upstreamHeadShaValue
+        : (baseDivergenceResult?.upstreamHeadSha ?? undefined);
       // Follow the exact upstream ref file so a push to it wakes this pass
       // within the watcher debounce, wherever it nests (#13400).
       this.watcherController.setUpstreamRef(nextUpstreamRef ?? null);

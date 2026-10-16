@@ -133,12 +133,52 @@ function isGraceOpen(pr: InternalLinkedPR, now: number): boolean {
 function ciReadApplies(pr: InternalLinkedPR, ci: CIStatus | null, now: number): boolean {
   const readHead = ci?.headSha;
   if (readHead !== undefined && readHead === pr.displacedHeadSha) return false;
+  // A read that doesn't name its commit could still be the provider's cached
+  // answer for the head a local push moved off; the probe confirming the push
+  // is what retires that cache.
+  if (readHead === undefined && isLocalHeadUnconfirmed(pr)) return false;
   if (!isGraceOpen(pr, now)) return true;
   const expectedHead = pr.localHeadSha ?? pr.headSha;
   if (readHead !== undefined && expectedHead !== undefined && readHead !== expectedHead) {
     return false;
   }
   return reportsChecks(ci);
+}
+
+function isLocalHeadUnconfirmed(pr: InternalLinkedPR): boolean {
+  return (
+    pr.localHeadSha !== undefined && pr.headSha !== undefined && pr.headSha !== pr.localHeadSha
+  );
+}
+
+// Whether a probe snapshot's head is one this PR already accounts for while a
+// push seen locally is outstanding: the head it moved to (the catch-up), or one
+// it moved off (a probe still lagging the push). Neither is a new head.
+function isKnownHeadDuringLocalMove(pr: InternalLinkedPR, head: string): boolean {
+  return (
+    head === pr.localHeadSha ||
+    head === pr.headSha ||
+    head === pr.displacedHeadSha ||
+    head === pr.localMoveBaseSha
+  );
+}
+
+function clearLocalHeadMove(pr: InternalLinkedPR): void {
+  pr.localHeadSha = undefined;
+  pr.localHeadAt = undefined;
+  pr.localMoveBaseSha = undefined;
+}
+
+// The upstream ref is the only remote branch whose movement may be read as the
+// PR's: a single remote segment, then exactly the PR's head branch name.
+function upstreamNamesPRHead(ref: string, headRef: string): boolean {
+  const prefix = "refs/remotes/";
+  if (!ref.startsWith(prefix)) return false;
+  const rest = ref.slice(prefix.length);
+  const suffix = `/${headRef}`;
+  if (!rest.endsWith(suffix)) return false;
+  const remote = rest.slice(0, -suffix.length);
+  return remote.length > 0 && !remote.includes("/");
 }
 
 // The rollup held describes a commit the PR has moved past. Drop it: holding
@@ -226,6 +266,12 @@ interface InternalLinkedPR {
   // reported, so its catch-up still reads as a change, and a probe that still
   // reports the old head reads as unchanged rather than as a move back.
   localHeadSha?: string;
+  // When the first local move of the current run was seen, and the head the
+  // probe knew then. A push the probe never confirms within the post-push wait
+  // wasn't to this PR's head after all (a fork's same-named branch on the same
+  // commit), so the move is undone rather than left hiding a real result.
+  localHeadAt?: number;
+  localMoveBaseSha?: string;
 }
 
 export interface PRDetectionResult {
@@ -249,7 +295,7 @@ function isCandidateBranch(branchName: string | undefined): boolean {
 class PullRequestService {
   private pollTimer: NodeJS.Timeout | null = null;
   private revalidationTimer: NodeJS.Timeout | null = null;
-  private revalidationRunning = false;
+  private revalidationsRunning = 0;
   private earlyRevalidationAt: number | undefined;
   private pollIntervalMs: number = FOCUSED_POLL_INTERVAL_MS;
   private cwd: string = "";
@@ -479,40 +525,54 @@ class PullRequestService {
     const from = previous.upstreamHeadSha;
     const to = next.upstreamHeadSha;
     if (!ref || ref !== previous.upstreamRef || !from || !to || from === to) return;
-    if (!ref.startsWith("refs/remotes/")) return;
 
     const entry = this.detectedPRs.get(worktreeId);
     const repo = this.repoRef;
     if (!entry || !repo || !this.resolvedWorktrees.has(worktreeId)) return;
-    if (entry.state !== "open" || !entry.headRef || !ref.endsWith(`/${entry.headRef}`)) return;
+    if (entry.state !== "open" || !entry.headRef || !upstreamNamesPRHead(ref, entry.headRef)) {
+      return;
+    }
     if ((entry.localHeadSha ?? entry.headSha ?? entry._ciStatus?.headSha) !== from) return;
 
     logDebug("Upstream ref moved off the PR head - treating as a push", {
       worktreeId,
       prNumber: entry.number,
     });
-    applyHeadMove(entry, from, Date.now());
-    entry.localHeadSha = to;
+    // Two worktrees can hold distinct entries for one PR (separate detection
+    // cycles); each must drop the old head's result, or the other re-publishes it.
+    const now = Date.now();
+    const moved = new Set<InternalLinkedPR>();
+    for (const detected of this.detectedPRs.values()) {
+      if (moved.has(detected)) continue;
+      if (detected.number !== entry.number || detected.providerId !== entry.providerId) continue;
+      if (detected !== entry && detected.state !== "open") continue;
+      moved.add(detected);
+      if (detected.localHeadSha === undefined) {
+        detected.localHeadAt = now;
+        detected.localMoveBaseSha = detected.headSha ?? from;
+      }
+      applyHeadMove(detected, from, now);
+      detected.localHeadSha = to;
+    }
 
-    // Sibling worktrees on the branch share this entry, so all of them retract.
     for (const [siblingId, detected] of this.detectedPRs) {
-      if (detected !== entry) continue;
+      if (!moved.has(detected)) continue;
       events.emit("sys:pr:detected", {
         worktreeId: siblingId,
-        prNumber: entry.number,
-        prUrl: entry.url,
-        prState: entry.state,
+        prNumber: detected.number,
+        prUrl: detected.url,
+        prState: detected.state,
         // Both cleared, and no `isCiStatusLoading`: it would preserve the very
         // rollup this emit retracts.
-        prCiStatus: entry.ciStatus,
-        ciStatus: entry._ciStatus,
-        prTitle: entry.title,
+        prCiStatus: detected.ciStatus,
+        ciStatus: detected._ciStatus,
+        prTitle: detected.title,
         issueNumber: this.candidates.get(siblingId)?.issueNumber,
         branchName: this.candidates.get(siblingId)?.branchName,
-        providerId: entry.providerId,
+        providerId: detected.providerId,
         owner: repo.owner,
         repo: repo.repo,
-        baseRef: entry.baseRef,
+        baseRef: detected.baseRef,
         timestamp: Date.now(),
       });
     }
@@ -1514,6 +1574,20 @@ class PullRequestService {
     return true;
   }
 
+  // Undo a local head move the probe never confirmed. Only for providers with
+  // a probe marker to confirm against; without one there is nothing to wait for.
+  private expireUnconfirmedLocalHeadMove(pr: InternalLinkedPR, now: number): void {
+    if (!isLocalHeadUnconfirmed(pr) || pr.localHeadAt === undefined) return;
+    if (now >= pr.localHeadAt && now - pr.localHeadAt < CI_HEAD_MOVE_GRACE_MS) return;
+    logDebug("Local head move never reached the PR - restoring its result", {
+      prNumber: pr.number,
+    });
+    if (pr.displacedHeadSha === pr.localMoveBaseSha) pr.displacedHeadSha = undefined;
+    clearLocalHeadMove(pr);
+    pr.ciGraceUntil = undefined;
+    pr.needsCiBackfill = true;
+  }
+
   private clearStagnantPollCounts(): void {
     for (const pr of this.detectedPRs.values()) {
       pr.stagnantPollCount = 0;
@@ -1543,7 +1617,7 @@ class PullRequestService {
     if (delayMs !== undefined) {
       const at = Date.now() + delayMs;
       this.earlyRevalidationAt = Math.min(this.earlyRevalidationAt ?? at, at);
-      if (this.revalidationRunning) return;
+      if (this.revalidationsRunning > 0) return;
     }
 
     if (this.revalidationTimer) {
@@ -1571,14 +1645,14 @@ class PullRequestService {
         ? this.getBoostRevalidationIntervalMs()
         : RESOLVED_REVALIDATION_INTERVAL_MS;
     const intervalMs =
-      this.earlyRevalidationAt !== undefined
+      this.earlyRevalidationAt !== undefined && this.revalidationsRunning === 0
         ? Math.min(Math.max(0, this.earlyRevalidationAt - Date.now()), cadenceMs)
         : cadenceMs;
 
     this.revalidationTimer = setTimeout(() => {
       this.revalidationTimer = null;
       this.earlyRevalidationAt = undefined;
-      this.revalidationRunning = true;
+      this.revalidationsRunning += 1;
       void this.revalidateResolvedPRs()
         .catch((err) =>
           logWarn("Revalidation unexpected error", {
@@ -1586,7 +1660,7 @@ class PullRequestService {
           })
         )
         .finally(() => {
-          this.revalidationRunning = false;
+          this.revalidationsRunning -= 1;
           this.scheduleRevalidation();
         });
     }, intervalMs);
@@ -1767,8 +1841,11 @@ class PullRequestService {
         if (!snap.headSha) continue;
         for (const entry of this.detectedPRs.values()) {
           if (entry.number !== prNumber) continue;
-          // A push seen locally already moved this one; the probe is catching up.
-          if (entry.localHeadSha === snap.headSha) continue;
+          if (entry.localHeadSha !== undefined) {
+            if (isKnownHeadDuringLocalMove(entry, snap.headSha)) continue;
+            movedHeadNumbers.add(prNumber);
+            break;
+          }
           const ciHead = entry._ciStatus?.headSha;
           if (
             (entry.headSha !== undefined && entry.headSha !== snap.headSha) ||
@@ -1824,7 +1901,9 @@ class PullRequestService {
           // below just closed. An entry a local push already moved to this
           // head keeps whatever it has read for it since.
           const movedLocally =
-            snap?.headSha != null && detectedPR.localHeadSha === snap.headSha;
+            snap?.headSha != null &&
+            detectedPR.localHeadSha !== undefined &&
+            isKnownHeadDuringLocalMove(detectedPR, snap.headSha);
           if (headMoved && !movedLocally && !headMoveApplied.has(detectedPR)) {
             headMoveApplied.add(detectedPR);
             const displaced =
@@ -1834,7 +1913,7 @@ class PullRequestService {
               displaced !== snap?.headSha ? displaced : undefined,
               Date.now()
             );
-            detectedPR.localHeadSha = undefined;
+            clearLocalHeadMove(detectedPR);
           }
 
           if (prChanged) {
@@ -1895,7 +1974,7 @@ class PullRequestService {
             detectedPR.headSha = snap.headSha ?? undefined;
             detectedPR.updatedAt = snap.updatedAt ?? undefined;
             if (snap.headSha != null && detectedPR.localHeadSha === snap.headSha) {
-              detectedPR.localHeadSha = undefined;
+              clearLocalHeadMove(detectedPR);
             }
           }
 
@@ -1928,6 +2007,7 @@ class PullRequestService {
       if (this.ciEnrichmentEnabled) {
         const now = Date.now();
         for (const detectedPR of this.detectedPRs.values()) {
+          this.expireUnconfirmedLocalHeadMove(detectedPR, now);
           // Before any skip: the deadline has to close even on a tick that
           // already read this PR or reads it for another reason.
           const graceRead = this.consumeCiGraceRead(detectedPR, now);
@@ -2248,6 +2328,8 @@ class PullRequestService {
           if (prior?.number !== internalPR.number || prior.providerId !== providerId) continue;
           internalPR.headSha = prior.headSha;
           internalPR.localHeadSha = prior.localHeadSha;
+          internalPR.localHeadAt = prior.localHeadAt;
+          internalPR.localMoveBaseSha = prior.localMoveBaseSha;
           internalPR.displacedHeadSha = prior.displacedHeadSha;
           internalPR.ciSeen = prior.ciSeen;
           if (internalPR.state === "open") internalPR.ciGraceUntil = prior.ciGraceUntil;

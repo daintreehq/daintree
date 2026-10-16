@@ -397,6 +397,33 @@ describe("GitStatusPass", () => {
     expect(pass.upstreamRef).toBe("refs/remotes/origin/feature/x");
   });
 
+  it("keeps the last upstream observation through a failed divergence pass", async () => {
+    const compute = vi
+      .fn()
+      .mockResolvedValueOnce({
+        baseBranchName: "main",
+        aheadCount: 1,
+        behindCount: 0,
+        matchesUpstream: false,
+        baseCompareRef: "origin/main",
+        baseRemote: "origin",
+        upstreamRef: "refs/remotes/origin/feature/x",
+        upstreamHeadSha: "sha1",
+      })
+      .mockResolvedValueOnce(null);
+    mockGetWorktreeChangesWithStats.mockResolvedValue(
+      makeChanges({ tracking: "origin/feature/x", ahead: 1, behind: 0 })
+    );
+    const { pass, watcherController } = makePass({}, { compute } as unknown as BaseDivergence);
+    await pass.run(false);
+    await pass.run(true);
+
+    expect(pass.upstreamHeadSha).toBe("sha1");
+    expect(watcherController.setUpstreamRef).toHaveBeenLastCalledWith(
+      "refs/remotes/origin/feature/x"
+    );
+  });
+
   it("advances and emits activity for a clean-to-clean commit", async () => {
     const firstCommitTime = Date.now() - 120_000;
     const secondCommitTime = firstCommitTime + 60_000;
