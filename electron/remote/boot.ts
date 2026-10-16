@@ -17,6 +17,7 @@ import { installViewReverseRequests } from "./client/viewRequests.js";
 import { installHostFileClient } from "./files/clientInstall.js";
 import { installHostUploadClient } from "./files/uploadClient.js";
 import { installHostMetricsClient } from "./metrics/clientInstall.js";
+import { installCanopyHostsClient } from "./canopy/clientInstall.js";
 import {
   installAssistantExchangeClient,
   installAssistantMessagingPolicy,
@@ -249,6 +250,14 @@ function startClient(options: StartRemoteHostsOptions): void {
   // Host summaries and notifications: dials only hosts whose notifications are on.
   teardowns.push(
     installHostMetricsClient({
+      manager: client.manager,
+      registry: client.registry,
+      hostForView: client.hostForView,
+    })
+  );
+  // Canopy reading a host the view isn't bound to, This Mac included.
+  teardowns.push(
+    installCanopyHostsClient({
       manager: client.manager,
       registry: client.registry,
       hostForView: client.hostForView,

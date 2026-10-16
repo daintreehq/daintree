@@ -83,6 +83,7 @@ import { buildFileTransferPreloadBindings } from "./ipc/handlers/fileTransfer.pr
 import { buildHostSwitchPreloadBindings } from "./ipc/handlers/hostSwitch.preload.js";
 import { buildProjectMatchPreloadBindings } from "./ipc/handlers/projectMatch.preload.js";
 import { buildHostMetricsPreloadBindings } from "./ipc/handlers/hostMetrics.preload.js";
+import { buildCanopyHostPreloadBindings } from "./ipc/handlers/canopyHost.preload.js";
 import { buildPortForwardsPreloadBindings } from "./ipc/handlers/portForwards.preload.js";
 import { buildPluginParityPreloadBindings } from "./ipc/handlers/pluginParity.preload.js";
 import { buildSettingsCopyPreloadBindings } from "./ipc/handlers/settingsCopy.preload.js";
@@ -3228,6 +3229,11 @@ function buildElectronApi(): ElectronAPI {
       ...buildHostMetricsPreloadBindings(_unwrappingInvoke),
       onEvent: (callback: (event: IpcEventMap["host-metrics:event"]) => void) =>
         _typedOn("host-metrics:event", callback),
+    },
+    canopyHost: {
+      ...buildCanopyHostPreloadBindings(_unwrappingInvoke),
+      onEvent: (callback: (event: IpcEventMap["canopy-host:event"]) => void) =>
+        _typedOn("canopy-host:event", callback),
     },
     portForwards: {
       ...buildPortForwardsPreloadBindings(_unwrappingInvoke),

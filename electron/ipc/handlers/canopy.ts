@@ -166,6 +166,32 @@ const viewScopes = new Map<number, string | null>();
 const viewShown = new Map<number, ReadonlySet<string>>();
 /** Views that already carry lifecycle listeners, with the way to take them off. */
 const watchedViews = new Map<number, () => void>();
+/** Canopy views of another Shell, which no broadcast reaches: told each snapshot by name. */
+const snapshotObservers = new Set<(snapshot: CanopySnapshot) => void>();
+
+/** Every view hears a snapshot: this machine's windows, its remote views, and its observers. */
+function publishSnapshot(snapshot: CanopySnapshot): void {
+  typedBroadcast<"canopy:snapshot-updated">(CHANNELS.CANOPY_SNAPSHOT_UPDATED, snapshot);
+  for (const observer of [...snapshotObservers]) {
+    try {
+      observer(snapshot);
+    } catch (error) {
+      console.error("[Canopy] Snapshot observer failed:", error);
+    }
+  }
+}
+
+/**
+ * Be told each snapshot every view is pushed, for Canopy views that read this
+ * machine without being one of its views. No replay: `canopy:get-snapshot`
+ * reads the current one.
+ */
+export function observeCanopySnapshots(observer: (snapshot: CanopySnapshot) => void): () => void {
+  snapshotObservers.add(observer);
+  return () => {
+    snapshotObservers.delete(observer);
+  };
+}
 
 /**
  * The fleet service is created after the handlers register, so the
@@ -304,8 +330,7 @@ function getService(): CanopyService {
         return url;
       }
     },
-    broadcast: (snapshot) =>
-      typedBroadcast<"canopy:snapshot-updated">(CHANNELS.CANOPY_SNAPSHOT_UPDATED, snapshot),
+    broadcast: (snapshot) => publishSnapshot(snapshot),
     // The fleet and the project counts re-read their refinements: that is how
     // the sidebar hears of them with no panel open.
     onRefinementsChanged: () => notifyCanopyRefinementsChanged(),
@@ -926,7 +951,7 @@ export const canopyNamespace = defineIpcNamespace({
         // every view still hears the change, as a service would have told them.
         if (!service && mode !== "on") {
           const idle = hiddenOrIdleSnapshot();
-          typedBroadcast<"canopy:snapshot-updated">(CHANNELS.CANOPY_SNAPSHOT_UPDATED, idle);
+          publishSnapshot(idle);
           return idle;
         }
         const canopy = getService();

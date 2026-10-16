@@ -9,6 +9,7 @@ import { AppError } from "../../utils/errorTypes.js";
 import { createLogger } from "../../utils/logger.js";
 import { formatErrorMessage } from "../../../shared/utils/errorMessage.js";
 import { acceptHostPush } from "../hybrid/eventsPush.js";
+import { CANOPY_VIEWER_ENDPOINT_PREFIX } from "../canopy/linkMethods.js";
 import { appErrorEnvelope, hostDisconnectedEnvelope } from "../link/envelopes.js";
 import { Lane } from "../link/frames.js";
 import {
@@ -164,6 +165,7 @@ export class HostConnection {
   private readonly closedListeners = new Set<EndpointClosedListener>();
   private readonly attachedListeners = new Set<SessionAttachedListener>();
   private readonly sessionListeners = new Set<SessionOpenedListener>();
+  private readonly viewerEventListeners = new Set<(event: EventMessage) => void>();
   private hadSession = false;
   /**
    * Endpoints closed while the link was down. The host keeps a dropped
@@ -276,6 +278,12 @@ export class HostConnection {
     return () => this.sessionListeners.delete(listener);
   }
 
+  /** Told of the host's pushes to a Canopy viewer, which no bound view takes. */
+  onViewerEvent(listener: (event: EventMessage) => void): () => void {
+    this.viewerEventListeners.add(listener);
+    return () => this.viewerEventListeners.delete(listener);
+  }
+
   start(): void {
     this.started = true;
     this.link.start();
@@ -382,6 +390,7 @@ export class HostConnection {
     this.closedListeners.clear();
     this.attachedListeners.clear();
     this.sessionListeners.clear();
+    this.viewerEventListeners.clear();
     this.hadSession = false;
   }
 
@@ -860,6 +869,17 @@ export class HostConnection {
    */
   private deliver(event: EventMessage): void {
     if (!acceptHostPush(event.channel, event.args)) return;
+    // A Canopy panel reading this host from a view bound elsewhere.
+    if (event.endpointId?.startsWith(CANOPY_VIEWER_ENDPOINT_PREFIX)) {
+      for (const listener of [...this.viewerEventListeners]) {
+        try {
+          listener(event);
+        } catch (error) {
+          console.error("[RemoteHostManager] viewer-event listener failed:", error);
+        }
+      }
+      return;
+    }
     if (event.endpointId === null) {
       for (const webContentsId of this.endpoints.keys()) {
         if (this.isBoundHere(webContentsId)) {
@@ -911,6 +931,7 @@ export class RemoteHostManager {
     (hostId: HostId, info: SessionAttachedInfo) => void
   >();
   private readonly sessionListeners = new Set<(hostId: HostId, session: LinkSession) => void>();
+  private readonly viewerEventListeners = new Set<(hostId: HostId, event: EventMessage) => void>();
   private readonly now: () => number;
   /** When each connection was last asked for or found in use. */
   private readonly lastUsed = new Map<HostId, number>();
@@ -1048,6 +1069,12 @@ export class RemoteHostManager {
     return () => this.sessionListeners.delete(listener);
   }
 
+  /** {@link HostConnection.onViewerEvent} across every connection, including later ones. */
+  onViewerEvent(listener: (hostId: HostId, event: EventMessage) => void): () => void {
+    this.viewerEventListeners.add(listener);
+    return () => this.viewerEventListeners.delete(listener);
+  }
+
   /** Start (or nudge) the host's link. Resolves once the attempt is under way, not connected. */
   connect(hostId: HostId): HostConnection {
     const descriptor = this.options.registry.require(hostId);
@@ -1093,6 +1120,10 @@ export class RemoteHostManager {
             console.error("[RemoteHostManager] session-opened listener failed:", error);
           }
         }
+      });
+      conn.onViewerEvent((event) => {
+        if (this.connections.get(hostId) !== conn) return;
+        for (const listener of [...this.viewerEventListeners]) listener(hostId, event);
       });
       conn.onSessionAttached((info) => {
         if (this.connections.get(hostId) !== conn) return;

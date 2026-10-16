@@ -140,6 +140,14 @@ export interface GeneratedElectronAPI {
       ...args: IpcInvokeMap["canopy:watch-terminal"]["args"]
     ): Promise<IpcInvokeMap["canopy:watch-terminal"]["result"]>;
   };
+  canopyHost: {
+    invoke(
+      ...args: IpcInvokeMap["canopy-host:invoke"]["args"]
+    ): Promise<IpcInvokeMap["canopy-host:invoke"]["result"]>;
+    release(
+      ...args: IpcInvokeMap["canopy-host:release"]["args"]
+    ): Promise<IpcInvokeMap["canopy-host:release"]["result"]>;
+  };
   claude: {
     listSubagents(
       ...args: IpcInvokeMap["claude:list-subagents"]["args"]

@@ -1421,6 +1421,7 @@ export interface IpcEventMap {
   "operations:event": import("./operations.js").OperationsEvent;
   "file-transfer:event": import("./fileTransfer.js").FileTransferEvent;
   "host-metrics:event": import("./hostMetrics.js").HostMetricsEvent;
+  "canopy-host:event": import("./canopyHost.js").CanopyHostEvent;
   "port-forwards:event": import("./portForwards.js").PortForwardsEvent;
 
   // Worktree events
