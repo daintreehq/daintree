@@ -149,11 +149,8 @@ describe("orders", () => {
 });
 
 describe("orders per host", () => {
-  const stored = () =>
-    JSON.parse(window.localStorage.getItem("daintree-canopy-order") ?? "{}") as Record<
-      string,
-      unknown
-    >;
+  const stored = (): unknown =>
+    JSON.parse(window.localStorage.getItem("daintree-canopy-order") ?? "{}");
   const reload = async () => {
     vi.resetModules();
     return (await import("../canopyStore")).useCanopyStore;

@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { canopyHostClient } from "@/clients/canopyHostClient";
 import { safeFireAndForget } from "@/utils/safeFireAndForget";
 import type { CanopyHostChannel } from "@shared/types/ipc/canopyHost";
@@ -68,16 +68,33 @@ export function remoteCanopyApi(hostId: HostId): CanopyApi {
 export interface RemoteCanopyState {
   canopy: CanopySnapshot | null;
   fleet: FleetSnapshot | null;
-  /** The last read failed: the host couldn't be reached, or refused it. Cleared by the next read that lands. */
+  /**
+   * Why the host can't be read right now: its Canopy or its agents couldn't
+   * be read. Each clears only once the read that failed lands again.
+   */
   error: unknown;
   /**
    * Bumped each time the panel's state on the host has to be said again — the
-   * link came back and the host dropped it — so scope and shown rows are re-sent.
+   * link came back, or the user tried again — so scope and shown rows are re-sent.
    */
   epoch: number;
 }
 
-const EMPTY: RemoteCanopyState = { canopy: null, fleet: null, error: null, epoch: 0 };
+interface HeldState {
+  canopy: CanopySnapshot | null;
+  fleet: FleetSnapshot | null;
+  canopyError: unknown;
+  fleetError: unknown;
+  epoch: number;
+}
+
+const EMPTY: HeldState = {
+  canopy: null,
+  fleet: null,
+  canopyError: null,
+  fleetError: null,
+  epoch: 0,
+};
 
 /**
  * Another host's Canopy and agents, read while the panel shows that host: its
@@ -90,13 +107,14 @@ export function useRemoteCanopy(
   hostId: HostId | null,
   active: boolean
 ): RemoteCanopyState & { retry: () => void } {
-  const [held, setHeld] = useState<{ hostId: HostId; state: RemoteCanopyState } | null>(null);
-  const [attempt, setAttempt] = useState(0);
+  const [held, setHeld] = useState<{ hostId: HostId; state: HeldState } | null>(null);
+  // Reads again on the panel's open viewer: a new one would drop what the host was told.
+  const rereadRef = useRef<(() => void) | null>(null);
 
   useEffect(() => {
     if (!active || hostId === null) return;
     let live = true;
-    const update = (change: (state: RemoteCanopyState) => RemoteCanopyState) =>
+    const update = (change: (state: HeldState) => HeldState) =>
       setHeld((current) => {
         if (!live) return current;
         // Another host's answers never land on this one's list.
@@ -108,22 +126,40 @@ export function useRemoteCanopy(
     let lastSequence: number | undefined;
     // Fleet snapshots carry no sequence: a push since a pull began is newer than its answer.
     let fleetPushes = 0;
-    const fail = (error: unknown) => update((state) => ({ ...state, error }));
+    // Only the latest round of reads speaks: one from before a resync is old news, failures included.
+    let round = 0;
     const applyCanopy = (snapshot: CanopySnapshot) => {
       // A pull answered after a newer push is older news.
       const sequence = snapshot.sequence;
       if (lastSequence !== undefined && sequence !== undefined && sequence < lastSequence) return;
       if (sequence !== undefined) lastSequence = sequence;
-      update((state) => ({ ...state, canopy: snapshot, error: null }));
+      update((state) => ({ ...state, canopy: snapshot, canopyError: null }));
     };
     const applyFleet = (snapshot: FleetSnapshot | null) =>
-      update((state) => ({ ...state, fleet: snapshot, error: null }));
+      update((state) => ({ ...state, fleet: snapshot, fleetError: null }));
     const read = () => {
+      const mine = ++round;
       const pushesBefore = fleetPushes;
-      canopyHostClient.invoke(hostId, "canopy:set-active", true).then(applyCanopy, fail);
-      canopyHostClient.invoke(hostId, "fleet:get-snapshot").then((snapshot) => {
-        if (fleetPushes === pushesBefore) applyFleet(snapshot);
-      }, fail);
+      canopyHostClient.invoke(hostId, "canopy:set-active", true).then(
+        (snapshot) => {
+          if (mine === round) applyCanopy(snapshot);
+        },
+        (error: unknown) => {
+          if (mine === round) update((state) => ({ ...state, canopyError: error }));
+        }
+      );
+      canopyHostClient.invoke(hostId, "fleet:get-snapshot").then(
+        (snapshot) => {
+          if (mine === round && fleetPushes === pushesBefore) applyFleet(snapshot);
+        },
+        (error: unknown) => {
+          if (mine === round) update((state) => ({ ...state, fleetError: error }));
+        }
+      );
+    };
+    const sayAgain = () => {
+      update((state) => ({ ...state, epoch: state.epoch + 1 }));
+      read();
     };
     // Listening before the first read, so nothing pushed in between is missed.
     const off = canopyHostClient.onEvent((event) => {
@@ -138,21 +174,28 @@ export function useRemoteCanopy(
           return;
         case "resync":
           lastSequence = undefined;
-          update((state) => ({ ...state, epoch: state.epoch + 1 }));
-          read();
+          sayAgain();
           return;
         case "terminal-data":
           return;
       }
     });
+    rereadRef.current = sayAgain;
     read();
     return () => {
       live = false;
+      if (rereadRef.current === sayAgain) rereadRef.current = null;
       off();
       safeFireAndForget(canopyHostClient.release(hostId));
     };
-  }, [hostId, active, attempt]);
+  }, [hostId, active]);
 
   const state = hostId !== null && held?.hostId === hostId ? held.state : EMPTY;
-  return { ...state, retry: () => setAttempt((n) => n + 1) };
+  return {
+    canopy: state.canopy,
+    fleet: state.fleet,
+    error: state.canopyError ?? state.fleetError,
+    epoch: state.epoch,
+    retry: () => rereadRef.current?.(),
+  };
 }

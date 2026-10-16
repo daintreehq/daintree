@@ -95,6 +95,12 @@ function isUrgentItem(item: CanopyItem): boolean {
   );
 }
 
+/** The error's own code, when it carries one: main's refusals say why in it. */
+function errorCode(error: unknown): string | null {
+  if (typeof error !== "object" || error === null || !("code" in error)) return null;
+  return typeof error.code === "string" ? error.code : null;
+}
+
 /** An error toast whose one recovery is the place the action can be done by hand. */
 function failToast(
   title: string,
@@ -232,6 +238,12 @@ export function CanopyView() {
   const setHostId = useCanopyStore((s) => s.setHostId);
   const hostRows = useCanopyHostRows(hostId ?? canopyOwnHostId());
   const hostPicker = hostRows ? <CanopyHostPicker rows={hostRows} onPick={setHostId} /> : null;
+  // The host shown was removed, or hosts can't be shown here at all: the panel
+  // goes back to the window's own host, and the picker says so.
+  const hostListed = hostId === null || (hostRows?.some((row) => row.hostId === hostId) ?? false);
+  useEffect(() => {
+    if (!hostListed) setHostId(null);
+  }, [hostListed, setHostId]);
   useOverlayClaim("canopy", isOpen);
   const still = useFrozenBackdrop(isOpen);
   // A view put in the background — another project shown in its place — can
@@ -1572,6 +1584,11 @@ function CanopyInbox({
   useEffect(() => {
     if (renameAsk !== null && openRunId !== renameAsk.runId) setRenameAsk(null);
   }, [renameAsk, openRunId]);
+  // Requests are for a run on the host they were made on.
+  useEffect(() => {
+    setTrashArm(null);
+    setRenameAsk(null);
+  }, [hostId]);
   const askRename = (item: CanopyItem) => {
     focusCardNow(item.runId);
     setRenameAsk((ask) => ({ runId: item.runId, request: (ask?.request ?? 0) + 1 }));
@@ -1642,8 +1659,15 @@ function CanopyInbox({
   // Another host the panel can't read right now: why, in the host menu's own
   // words, with nothing of another host's put in its place.
   const linkWords = otherHost && hostRow ? describeHostMenuState(hostRow) : null;
-  const connecting = hostRow?.connection?.status === "connecting";
-  const hostTrouble = otherHost && remote.error !== null && !connecting;
+  const linkStatus = hostRow?.isLocal === false ? hostRow.connection?.status : undefined;
+  // Picking a host that isn't connected dials it: its first read is refused
+  // while the link comes up, which is connecting, not trouble.
+  const connecting =
+    linkStatus === "connecting" ||
+    (linkStatus === "disconnected" && errorCode(remote.error) === "HOST_DISCONNECTED");
+  // The link dropped after the agents were read: what is listed is what it last showed.
+  const linkDown = fleet !== null && linkStatus !== undefined && linkStatus !== "connected";
+  const hostTrouble = otherHost && (remote.error !== null || linkDown) && !connecting;
   // Canopy is off on that host: its own offer, for it alone.
   const hostOffer = otherHost && canopy?.activated === false;
 
@@ -1812,7 +1836,8 @@ function CanopyInbox({
               // the press here, on an offer naming the host, is the user's ask for both.
               if (canopy?.mode === "hidden") await api.setMode("unset");
               await api.setMode("on");
-              remote.retry();
+              // Read it again only while it is still the host shown.
+              if (useCanopyStore.getState().hostId === hostId) remote.retry();
             }}
           />
         )}

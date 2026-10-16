@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { act, renderHook } from "@testing-library/react";
+import { act, cleanup, renderHook } from "@testing-library/react";
 import type { CanopyHostEvent } from "@shared/types/ipc/canopyHost";
 import type { CanopySnapshot } from "@shared/types/ipc/canopy";
 import type { FleetSnapshot } from "@shared/types/ipc/fleet";
@@ -67,6 +67,8 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  // Unmounted before the mocks are cleared, so a hook's release lands in its own test.
+  cleanup();
   bridge.listeners.clear();
   vi.clearAllMocks();
 });
@@ -148,6 +150,50 @@ describe("useRemoteCanopy", () => {
     studioAnswer(canopy(42, 42));
     await settle();
     expect(result.current.canopy?.refreshedAt).not.toBe(42);
+  });
+});
+
+describe("useRemoteCanopy, trying again", () => {
+  it("reads again on the viewer it has, and says the panel's state there again", async () => {
+    const { result } = renderHook(() => useRemoteCanopy("studio", true));
+    await settle();
+    bridge.invoke.mockClear();
+    act(() => result.current.retry());
+    await settle();
+    // The host still holds what this panel told it: no new viewer to tell from scratch.
+    expect(bridge.release).not.toHaveBeenCalled();
+    expect(bridge.invoke).toHaveBeenCalledWith("studio", "canopy:set-active", true);
+    expect(result.current.epoch).toBe(1);
+  });
+
+  it("keeps one read's failure while the other read lands", async () => {
+    const refused = new Error("Canopy refused");
+    bridge.invoke.mockImplementation(async (_hostId: string, channel: string) => {
+      if (channel === "canopy:set-active") throw refused;
+      return fleet(1);
+    });
+    const { result } = renderHook(() => useRemoteCanopy("studio", true));
+    await settle();
+    expect(result.current.fleet?.changedAt).toBe(1);
+    expect(result.current.error).toBe(refused);
+    emit({ kind: "fleet-snapshot", hostId: "studio", snapshot: fleet(2) });
+    expect(result.current.error).toBe(refused);
+  });
+
+  it("drops a read answered after the link came back and was read again", async () => {
+    const answers: Array<(snapshot: FleetSnapshot) => void> = [];
+    bridge.invoke.mockImplementation((_hostId: string, channel: string) =>
+      channel === "fleet:get-snapshot"
+        ? new Promise<FleetSnapshot>((resolve) => answers.push(resolve))
+        : Promise.resolve(canopy(1, 1))
+    );
+    const { result } = renderHook(() => useRemoteCanopy("studio", true));
+    emit({ kind: "resync", hostId: "studio" });
+    answers[1]!(fleet(9));
+    await settle();
+    answers[0]!(fleet(3));
+    await settle();
+    expect(result.current.fleet?.changedAt).toBe(9);
   });
 });
 

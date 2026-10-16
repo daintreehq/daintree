@@ -209,7 +209,7 @@ beforeAll(() => {
       observe() {}
       unobserve() {}
       disconnect() {}
-    } as unknown as typeof ResizeObserver;
+    };
   }
 });
 
@@ -227,7 +227,7 @@ beforeEach(() => {
     return null;
   });
   useProjectStore.setState({
-    projects: [{ id: "p1", path: "/repo", name: "local-app", lastOpened: NOW }],
+    projects: [{ id: "p1", path: "/repo", name: "local-app", emoji: "🌳", lastOpened: NOW }],
   });
   useFleetSnapshotStore.setState({ snapshot: fleet(["local-run"]) });
   useCanopyStore.setState({
@@ -354,9 +354,10 @@ describe("the Canopy host picker", () => {
     useCanopyStore.setState({ hostId: "studio" });
     render(<CanopyView />);
     await settle();
-    const stored = JSON.parse(window.localStorage.getItem("daintree-canopy-order") ?? "{}");
-    expect(stored["studio|all"]).toEqual(["remote-run"]);
-    expect(stored["local|all"]).toBeUndefined();
+    const stored: unknown = JSON.parse(
+      window.localStorage.getItem("daintree-canopy-order") ?? "{}"
+    );
+    expect(stored).toEqual({ "studio|all": ["remote-run"] });
   });
 
   it("offers Canopy for the picked host by name when it is off there, and turns it on there", async () => {
@@ -378,9 +379,8 @@ describe("the Canopy host picker", () => {
       host("studio", "studio-01", {
         status: "unreachable",
         lastSeenAt: null,
-        stoppedRetrying: false,
-        hostModeOff: false,
-      } as HostListEntry["connection"]),
+        detail: null,
+      }),
     ];
     state.invoke.mockRejectedValue(
       Object.assign(new Error("Host studio is not connected"), { code: "HOST_DISCONNECTED" })
@@ -397,5 +397,33 @@ describe("the Canopy host picker", () => {
     fireEvent.click(screen.getByRole("button", { name: "Retry" }));
     await settle();
     expect(channelsCalled()).toContain("studio canopy:set-active");
+  });
+
+  it("goes back to the window's own host when the host shown is removed", async () => {
+    state.hosts = [host("studio", "studio-01"), host("lab", "lab-02")];
+    installElectron();
+    useCanopyStore.setState({ hostId: "studio" });
+    const { rerender } = render(<CanopyView />);
+    await settle();
+    state.hosts = [host("lab", "lab-02")];
+    rerender(<CanopyView />);
+    await settle();
+    expect(useCanopyStore.getState().hostId).toBeNull();
+    expect(screen.getByTestId("canopy-host-picker").getAttribute("data-host-id")).toBe("local");
+    expect(state.release).toHaveBeenCalledWith("studio");
+  });
+
+  it("says the list is what the host last showed once its link drops", async () => {
+    installElectron();
+    useCanopyStore.setState({ hostId: "studio" });
+    const { rerender } = render(<CanopyView />);
+    await settle();
+    expect(document.body.textContent).not.toContain("Can't reach studio-01");
+    state.hosts = [host("studio", "studio-01", { status: "disconnected" })];
+    rerender(<CanopyView />);
+    await settle();
+    expect(document.body.textContent).toContain("Can't reach studio-01");
+    expect(document.body.textContent).toContain("These are the agents it last showed.");
+    expect(document.getElementById("canopy-card-remote-run")).not.toBeNull();
   });
 });
