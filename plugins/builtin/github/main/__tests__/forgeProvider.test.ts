@@ -2237,7 +2237,9 @@ describe("CI verdicts across a push (#13399)", () => {
     const lagging = await githubForgeProvider.batchLookups!.getCIStatuses!(repo, [1]);
     const caughtUp = await githubForgeProvider.batchLookups!.getCIStatuses!(repo, [1]);
 
-    expect(lagging.get(1)?.headSha).toBe("sha1");
+    // Omitted, not answered: a transient miss to every batch caller, so the
+    // PR list keeps its coarse value and the host asks again.
+    expect(lagging.has(1)).toBe(false);
     expect(caughtUp.get(1)?.headSha).toBe("sha2");
     expect(mockGraphQLClient).toHaveBeenCalledTimes(3);
   });

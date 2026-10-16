@@ -3866,7 +3866,11 @@ describe("PullRequestService", () => {
     // diffs against what the service tracks, exactly like the real one, so a
     // tick only reports a change when `head` moved.
     function makePushHarness(initialCi: CIStatus | null) {
-      const state = { head: "sha1", ci: initialCi };
+      const state: { head: string; ci: CIStatus | null; prState: ForgePR["state"] } = {
+        head: "sha1",
+        ci: initialCi,
+        prState: "open",
+      };
       const batchSpy = vi.fn(async (_repo: RepoRef, branches: string[]) => {
         const map = new Map<string, ForgePR | null>();
         for (const branch of branches) {
@@ -3882,7 +3886,7 @@ describe("PullRequestService", () => {
       });
       const findPRsByNumbers = vi.fn(async (_repo: RepoRef, prNumbers: number[]) => {
         const map = new Map<number, ForgePR | null>();
-        for (const n of prNumbers) map.set(n, makeMockForgePR({ number: n }));
+        for (const n of prNumbers) map.set(n, makeMockForgePR({ number: n, state: state.prState }));
         return map;
       });
       const probeOpenPRList = vi.fn(async (_repo: RepoRef, tracked: PRSnapshot[]) => {
@@ -4048,6 +4052,88 @@ describe("PullRequestService", () => {
       jump(30 * SECOND);
       await revalidate(pullRequestService);
       expect(getCIStatuses).not.toHaveBeenCalled();
+
+      pullRequestService.destroy();
+    });
+
+    it("closes the window on schedule even while a blur backfill is owed", async () => {
+      // The backfill flag short-circuits the read selection; the deadline must
+      // not ride on that selection or the wait never ends.
+      const { state, getCIStatuses } = makePushHarness(ci("failure", "sha1"));
+      const { pullRequestService, detected } = await settle();
+
+      state.head = "sha2";
+      state.ci = ci("neutral", "sha2");
+      await revalidate(pullRequestService);
+      const entries = (
+        pullRequestService as unknown as { detectedPRs: Map<string, { needsCiBackfill?: boolean }> }
+      ).detectedPRs;
+      for (const entry of entries.values()) entry.needsCiBackfill = true;
+
+      for (let i = 0; i < 10; i++) {
+        jump(30 * SECOND);
+        await revalidate(pullRequestService);
+      }
+      getCIStatuses.mockClear();
+      jump(30 * SECOND);
+      await revalidate(pullRequestService);
+
+      expect(getCIStatuses).not.toHaveBeenCalled();
+      expect(detected.at(-1)?.ciStatus?.state).toBe("neutral");
+      const svc = pullRequestService as unknown as { boostExpiresAt: number | null };
+      expect(svc.boostExpiresAt).toBeNull();
+
+      pullRequestService.destroy();
+    });
+
+    it("does not wait for checks on a PR that closed with the push", async () => {
+      const { state, getCIStatuses } = makePushHarness(ci("failure", "sha1"));
+      const { pullRequestService } = await settle();
+
+      state.head = "sha2";
+      state.prState = "closed";
+      state.ci = ci("neutral", "sha2");
+      await revalidate(pullRequestService);
+
+      const svc = pullRequestService as unknown as { boostExpiresAt: number | null };
+      expect(svc.boostExpiresAt).toBeNull();
+      getCIStatuses.mockClear();
+      jump(30 * SECOND);
+      await revalidate(pullRequestService);
+      expect(getCIStatuses).not.toHaveBeenCalled();
+
+      pullRequestService.destroy();
+    });
+
+    it("keeps waiting across a manual refresh instead of settling on no checks", async () => {
+      const { state } = makePushHarness(ci("failure", "sha1"));
+      const { pullRequestService, detected } = await settle();
+
+      state.head = "sha2";
+      state.ci = ci("neutral", "sha2");
+      await revalidate(pullRequestService);
+      await pullRequestService.refresh();
+      await flushLoaders();
+
+      expect(detected.some((e) => e.ciStatus?.state === "neutral")).toBe(false);
+
+      state.ci = ci("success", "sha2");
+      jump(30 * SECOND);
+      await revalidate(pullRequestService);
+      expect(detected.at(-1)?.ciStatus?.state).toBe("success");
+
+      pullRequestService.destroy();
+    });
+
+    it("accepts a new head's checks from a provider that doesn't name the commit", async () => {
+      const { state } = makePushHarness(ciStatusFixture("failure"));
+      const { pullRequestService, detected } = await settle();
+
+      state.head = "sha2";
+      state.ci = ciStatusFixture("pending");
+      await revalidate(pullRequestService);
+
+      expect(detected.at(-1)?.ciStatus?.state).toBe("pending");
 
       pullRequestService.destroy();
     });

@@ -382,12 +382,14 @@ export function recordObservedPRHead(key: string, headSha: string | null | undef
   if (headSha) prObservedHeadShaCache.set(key, headSha);
 }
 
+export function describesObservedPRHead(key: string, entry: PRRequiredStatusEntry): boolean {
+  const observed = prObservedHeadShaCache.get(key);
+  return observed === undefined || entry.headSha === observed;
+}
+
 export function getPRRequiredStatusForCurrentHead(key: string): PRRequiredStatusEntry | undefined {
   const entry = prRequiredStatusCache.get(key);
-  if (!entry) return undefined;
-  const observed = prObservedHeadShaCache.get(key);
-  if (observed !== undefined && entry.headSha !== observed) return undefined;
-  return entry;
+  return entry && describesObservedPRHead(key, entry) ? entry : undefined;
 }
 
 /**

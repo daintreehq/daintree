@@ -42,6 +42,7 @@ import {
   getRepoListEpoch,
   issueTooltipCache,
   prRequiredStatusCache,
+  describesObservedPRHead,
   getPRRequiredStatusForCurrentHead,
   recordObservedPRHead,
   truncateBody,
@@ -868,7 +869,13 @@ export async function getCIStatusesImpl(
           ciStatus: undefined,
           ciSummary: undefined,
         };
-        prRequiredStatusCache.set(`${repo.owner}/${repo.repo}:${prNumber}`, entry);
+        const cacheKey = `${repo.owner}/${repo.repo}:${prNumber}`;
+        prRequiredStatusCache.set(cacheKey, entry);
+        // GitHub can still answer for the previous head seconds after a push.
+        // Omitted rather than returned: per the batch contract that is a
+        // transient miss, so the list keeps its coarse value and the host asks
+        // again, instead of either treating an old verdict as current.
+        if (!describesObservedPRHead(cacheKey, entry)) continue;
         result.set(prNumber, buildCIStatus(entry, null));
       }
     }
