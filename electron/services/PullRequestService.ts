@@ -167,10 +167,12 @@ function clearLocalHeadMove(pr: InternalLinkedPR): void {
   pr.localHeadSha = undefined;
   pr.localHeadAt = undefined;
   pr.localMoveBaseSha = undefined;
+  pr.displacedByLocalMove = undefined;
 }
 
 // The upstream ref is the only remote branch whose movement may be read as the
-// PR's: a single remote segment, then exactly the PR's head branch name.
+// PR's: a single remote segment, then exactly the PR's head branch name. A
+// remote whose own name has a slash is left to the probe.
 function upstreamNamesPRHead(ref: string, headRef: string): boolean {
   const prefix = "refs/remotes/";
   if (!ref.startsWith(prefix)) return false;
@@ -272,6 +274,9 @@ interface InternalLinkedPR {
   // commit), so the move is undone rather than left hiding a real result.
   localHeadAt?: number;
   localMoveBaseSha?: string;
+  // `displacedHeadSha` was last set by a local move, so undoing the move must
+  // drop it too — a head only a local sighting displaced may be the real one.
+  displacedByLocalMove?: boolean;
 }
 
 export interface PRDetectionResult {
@@ -548,11 +553,13 @@ class PullRequestService {
       if (detected !== entry && detected.state !== "open") continue;
       moved.add(detected);
       if (detected.localHeadSha === undefined) {
-        detected.localHeadAt = now;
         detected.localMoveBaseSha = detected.headSha ?? from;
       }
+      // Each push restarts the wait for confirmation, as it restarts the grace.
+      detected.localHeadAt = now;
       applyHeadMove(detected, from, now);
       detected.localHeadSha = to;
+      detected.displacedByLocalMove = true;
     }
 
     for (const [siblingId, detected] of this.detectedPRs) {
@@ -1574,15 +1581,21 @@ class PullRequestService {
     return true;
   }
 
-  // Undo a local head move the probe never confirmed. Only for providers with
-  // a probe marker to confirm against; without one there is nothing to wait for.
+  // A local head move the probe hasn't confirmed by the end of the post-push
+  // wait is dropped, along with everything it held back, and CI is read again
+  // for whatever the forge now says the head is. Either the moved ref wasn't
+  // this PR's head after all (a fork's same-named branch on the same commit),
+  // or the forge is far enough behind that the old answer is the honest one —
+  // the probe still catches the push when it does land. Providers without a
+  // probe never confirm, so for them this simply ends the move.
   private expireUnconfirmedLocalHeadMove(pr: InternalLinkedPR, now: number): void {
-    if (!isLocalHeadUnconfirmed(pr) || pr.localHeadAt === undefined) return;
-    if (now >= pr.localHeadAt && now - pr.localHeadAt < CI_HEAD_MOVE_GRACE_MS) return;
-    logDebug("Local head move never reached the PR - restoring its result", {
+    if (pr.localHeadSha === undefined || pr.headSha === pr.localHeadSha) return;
+    const at = pr.localHeadAt;
+    if (at !== undefined && now >= at && now - at < CI_HEAD_MOVE_GRACE_MS) return;
+    logDebug("Local head move never reached the PR - re-reading its result", {
       prNumber: pr.number,
     });
-    if (pr.displacedHeadSha === pr.localMoveBaseSha) pr.displacedHeadSha = undefined;
+    if (pr.displacedByLocalMove) pr.displacedHeadSha = undefined;
     clearLocalHeadMove(pr);
     pr.ciGraceUntil = undefined;
     pr.needsCiBackfill = true;
@@ -2330,6 +2343,7 @@ class PullRequestService {
           internalPR.localHeadSha = prior.localHeadSha;
           internalPR.localHeadAt = prior.localHeadAt;
           internalPR.localMoveBaseSha = prior.localMoveBaseSha;
+          internalPR.displacedByLocalMove = prior.displacedByLocalMove;
           internalPR.displacedHeadSha = prior.displacedHeadSha;
           internalPR.ciSeen = prior.ciSeen;
           if (internalPR.state === "open") internalPR.ciGraceUntil = prior.ciGraceUntil;

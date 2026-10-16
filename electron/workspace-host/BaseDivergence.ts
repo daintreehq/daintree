@@ -23,8 +23,9 @@ import type { StatPrecheck } from "./StatPrecheck.js";
 const RESOLUTION_MAX_AGE_MS = 5 * 60_000;
 // A configured upstream whose ref didn't resolve (not fetched yet, or deleted
 // on the remote) comes back by writing only that ref, which the stamp doesn't
-// cover, so it is asked again on this slower clock instead.
-const UNRESOLVED_UPSTREAM_RETRY_MS = 30_000;
+// cover, so it is asked again on a clock instead: soon at first, backing off to
+// the age ceiling for one that stays gone.
+const UNRESOLVED_UPSTREAM_RETRY_MIN_MS = 30_000;
 
 interface BaseDivergenceResult {
   baseBranchName: string | null;
@@ -95,6 +96,7 @@ export class BaseDivergence {
   private resolutionStamp: string | null = null;
   private resolution: RemoteResolution | null = null;
   private resolutionAt = 0;
+  private unresolvedUpstreamRetryMs = UNRESOLVED_UPSTREAM_RETRY_MIN_MS;
 
   constructor(
     private readonly host: BaseDivergenceHost,
@@ -272,7 +274,9 @@ export class BaseDivergence {
     const age = Date.now() - this.resolutionAt;
     const aged =
       (ambiguous && age >= RESOLUTION_MAX_AGE_MS) ||
-      (hasUpstream && this.resolution?.upstreamRef === null && age >= UNRESOLVED_UPSTREAM_RETRY_MS);
+      (hasUpstream &&
+        this.resolution?.upstreamRef === null &&
+        age >= this.unresolvedUpstreamRetryMs);
     // A null stamp means a stat failed unexpectedly. Re-resolving on every such
     // poll would turn a flaky filesystem into a spawn storm, so the cached
     // answer is held until it ages out on its own.
@@ -292,6 +296,11 @@ export class BaseDivergence {
 
     const { compareRef, remote } = resolveBaseCompareRef(inputs);
 
+    const stillUnresolved = hasUpstream && upstreamRef === null;
+    this.unresolvedUpstreamRetryMs =
+      stillUnresolved && this.resolution?.upstreamRef === null
+        ? Math.min(this.unresolvedUpstreamRetryMs * 2, RESOLUTION_MAX_AGE_MS)
+        : UNRESOLVED_UPSTREAM_RETRY_MIN_MS;
     this.resolution = {
       compareRef,
       remote,

@@ -473,6 +473,13 @@ export class GitFileWatcher {
   }
 
   private armUpstreamPath(path: string, commonDir: string): void {
+    // The fallback already holds this exact entry (the directory it waited
+    // for is the ref itself): take it over rather than release it.
+    if (path === this.upstreamFallbackPath) {
+      this.upstreamRefPath = path;
+      this.upstreamFallbackPath = null;
+      return;
+    }
     // Already watched for another reason (a local upstream on the current
     // branch's ref): covered, and never ours to release.
     if (this.watchedFilesByDirectory.get(dirname(path))?.has(basename(path))) {

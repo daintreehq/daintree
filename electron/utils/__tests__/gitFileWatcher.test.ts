@@ -559,6 +559,34 @@ describe("GitFileWatcher", () => {
     expect(onChange).toHaveBeenCalledTimes(1);
   });
 
+  it("keeps the fallback's watch when it turns out to be the ref itself", async () => {
+    const forkDir = pathJoin("/repo", ".git", "refs", "remotes", "fork");
+    const handles = new Map<string, FSWatcher>();
+    vi.mocked(watch).mockImplementation(((path: string) => {
+      if (path === pathJoin(forkDir, "topic")) throw new Error("ENOENT: no such directory");
+      const handle = createMockWatcher();
+      handles.set(path, handle);
+      return handle;
+    }) as unknown as typeof watch);
+    const onChange = vi.fn();
+    const gitWatcher = new GitFileWatcher({
+      worktreePath: "/repo",
+      branch: "topic",
+      debounceMs: 150,
+      upstreamRef: "refs/remotes/fork/topic/x",
+      onChange,
+    });
+    await gitWatcher.start();
+
+    // The fallback waits for fork/topic; the upstream becomes exactly that.
+    gitWatcher.setUpstreamRef("refs/remotes/fork/topic");
+
+    expect(handles.get(forkDir)?.close).not.toHaveBeenCalled();
+    callbackFor(forkDir)?.("rename", "topic");
+    await vi.advanceTimersByTimeAsync(150);
+    expect(onChange).toHaveBeenCalledTimes(1);
+  });
+
   it("closes a directory's watch once the upstream moves out of it", async () => {
     const remotes = pathJoin("/repo", ".git", "refs", "remotes");
     const handles = new Map<string, FSWatcher>();

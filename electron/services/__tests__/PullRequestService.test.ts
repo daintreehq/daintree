@@ -4467,6 +4467,26 @@ describe("PullRequestService", () => {
       pullRequestService.destroy();
     });
 
+    it("shows the forge's head once an unconfirmed chain of pushes expires", async () => {
+      const { state } = makeHarness(ci("failure", "sha1"));
+      const { pullRequestService, detected, update } = await settle();
+
+      update("sha2");
+      update("sha3");
+      // The forge only ever saw the first push.
+      state.head = "sha2";
+      state.ci = ci("success", "sha2");
+      for (let i = 0; i < 8; i++) {
+        jump(30 * SECOND);
+        await revalidate(pullRequestService);
+      }
+
+      expect(detected.at(-1)?.ciStatus?.state).toBe("success");
+      expect(detected.at(-1)?.ciStatus?.headSha).toBe("sha2");
+
+      pullRequestService.destroy();
+    });
+
     it("follows a second push from the head the first one moved to", async () => {
       const { state } = makeHarness(ci("failure", "sha1"));
       const { pullRequestService, detected, update } = await settle();
