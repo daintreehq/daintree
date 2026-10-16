@@ -85,6 +85,7 @@ export const CHANNELS = {
 
   FILES_SEARCH: "files:search",
   FILES_READ: "files:read",
+  FILES_TRASH: "files:trash",
 
   DIFF_MEDIA_READ_FILE_VERSIONS: "diff-media:read-file-versions",
 
@@ -385,6 +386,7 @@ export const CHANNELS = {
   GIT_PUSH: "git:push",
   GIT_PULL_REBASE: "git:pull-rebase",
   GIT_FETCH: "git:fetch",
+  GIT_DISCARD_FILE_CHANGES: "git:discard-file-changes",
   GIT_FORCE_PUSH_WITH_LEASE: "git:force-push-with-lease",
   GIT_LIST_REMOTE_COMMITS: "git:list-remote-commits",
   GIT_LIST_PUSH_COMMITS: "git:list-push-commits",

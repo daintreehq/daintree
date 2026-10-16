@@ -296,6 +296,7 @@ function AppInner() {
     gitPushResetKey,
     gitForcePushResetKey,
     gitPullRebaseResetKey,
+    fileMutationResetKey,
     gitWorktreeOperationResetKey,
     panelLimitResetKey,
     recipeConflictResetKey,
@@ -622,6 +623,7 @@ function AppInner() {
                 gitPushResetKey={gitPushResetKey}
                 gitForcePushResetKey={gitForcePushResetKey}
                 gitPullRebaseResetKey={gitPullRebaseResetKey}
+                fileMutationResetKey={fileMutationResetKey}
                 gitWorktreeOperationResetKey={gitWorktreeOperationResetKey}
                 recipeConflictResetKey={recipeConflictResetKey}
                 gitInitDialogOpen={gitInitDialogOpen}

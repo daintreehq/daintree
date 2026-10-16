@@ -181,6 +181,7 @@ export const CHANNEL_LEASE_POLICY = {
   "file-browser:stat-paths": "free",
   "file-watch:fingerprint": "free",
   "files:read": "free",
+  "files:trash": "driver",
   "files:search": "free",
   "fleet:get-snapshot": "free",
   "fleet:mark-run-read": "free",
@@ -270,6 +271,7 @@ export const CHANNEL_LEASE_POLICY = {
   "git:commit": "driver",
   "git:compare-worktrees": "free",
   "git:continue-repository-operation": "driver",
+  "git:discard-file-changes": "driver",
   "git:fetch": "driver",
   "git:force-push-with-lease": "driver",
   "git:get-file-diff": "free",
@@ -754,6 +756,7 @@ const CWD_ARG: LeaseTarget = [{ from: "path", at: [0] }];
 const CWD_FIELD: LeaseTarget = [{ from: "path", at: [0, "cwd"] }];
 const TERMINAL_ARG: LeaseTarget = [{ from: "terminal", at: [0] }];
 const WORKTREE_FIELD: LeaseTarget = [{ from: "worktree", at: [0, "worktreeId"] }];
+const WORKTREE_PATH_FIELD: LeaseTarget = [{ from: "path", at: [0, "worktreePath"] }];
 
 /**
  * How the lease gate finds the project each `driver` channel changes. Total
@@ -789,10 +792,12 @@ export const CHANNEL_LEASE_TARGETS = {
   "dev-preview:stop-by-panel": [{ from: "dev-preview-panel", at: [0, "panelId"] }],
   "dev-preview:stop-by-worktree": WORKTREE_FIELD,
   "dev-preview:stop-dev-server-by-worktree": WORKTREE_FIELD,
+  "files:trash": WORKTREE_PATH_FIELD,
   "git:abort-repository-operation": CWD_ARG,
   "git:checkout-ours-theirs": CWD_FIELD,
   "git:commit": CWD_FIELD,
   "git:continue-repository-operation": CWD_ARG,
+  "git:discard-file-changes": WORKTREE_PATH_FIELD,
   "git:fetch": CWD_FIELD,
   "git:force-push-with-lease": CWD_FIELD,
   "git:merge-base-into-branch": CWD_FIELD,

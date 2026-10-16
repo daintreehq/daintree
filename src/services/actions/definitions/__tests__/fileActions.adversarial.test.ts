@@ -15,7 +15,10 @@ const openPanelDialogMock = vi.hoisted(() => vi.fn<(options: unknown) => Promise
 const primePreviewCapabilityMock = vi.hoisted(() => vi.fn<() => Promise<string | null>>());
 const readMock = vi.hoisted(() => vi.fn());
 
-vi.mock("@/clients", () => ({ systemClient: systemClientMock }));
+vi.mock("@/clients", () => ({
+  systemClient: systemClientMock,
+  worktreeClient: { refresh: () => Promise.resolve() },
+}));
 vi.mock("@/clients/filesClient", () => ({ filesClient: { read: readMock } }));
 vi.mock("@/store", () => ({ useProjectStore: projectStoreMock }));
 vi.mock("@/store/panelStore", () => ({ usePanelStore: panelStoreMock }));

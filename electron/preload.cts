@@ -45,6 +45,10 @@ import {
 import { buildClipboardPreloadBindings } from "./ipc/handlers/clipboard.preload.js";
 import { buildDroppedFilePathsBinding } from "./utils/droppedFilePaths.js";
 import { buildGitFetchPreloadBindings } from "./ipc/handlers/gitFetch.preload.js";
+import {
+  buildFilesTrashPreloadBindings,
+  buildGitDiscardPreloadBindings,
+} from "./ipc/handlers/fileMutation.preload.js";
 import { buildSlashCommandsPreloadBindings } from "./ipc/handlers/slashCommands.preload.js";
 import { buildGlobalEnvPreloadBindings } from "./ipc/handlers/globalEnv.preload.js";
 import { buildAccessibilityPreloadBindings } from "./ipc/handlers/accessibility.preload.js";
@@ -1687,6 +1691,7 @@ function buildElectronApi(): ElectronAPI {
     files: {
       search: (payload) => _unwrappingInvoke(CHANNELS.FILES_SEARCH, payload),
       read: (payload) => _unwrappingInvoke(CHANNELS.FILES_READ, payload),
+      ...buildFilesTrashPreloadBindings(_unwrappingInvoke),
       // The one bridge from a dropped or pasted `File` to its native path.
       // `webUtils.getPathForFile` has to run here (Electron 32 removed
       // `File.path`), and it is exposed only as this purpose-named batch call
@@ -2494,6 +2499,8 @@ function buildElectronApi(): ElectronAPI {
       pullRebase: (cwd: string) => _unwrappingInvoke(CHANNELS.GIT_PULL_REBASE, { cwd }),
 
       ...buildGitFetchPreloadBindings(_unwrappingInvoke),
+
+      ...buildGitDiscardPreloadBindings(_unwrappingInvoke),
 
       forcePushWithLease: (cwd: string, branchName: string, leaseSha: string) =>
         _unwrappingInvoke(CHANNELS.GIT_FORCE_PUSH_WITH_LEASE, { cwd, branchName, leaseSha }),

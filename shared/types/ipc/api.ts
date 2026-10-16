@@ -460,7 +460,7 @@ export interface ElectronAPI extends GeneratedElectronAPI {
      */
     onHostMemoryPause(callback: (snapshot: HostMemoryPauseSnapshot) => void): () => void;
   };
-  files: {
+  files: GeneratedElectronAPI["files"] & {
     search(payload: FileSearchPayload): Promise<FileSearchResult>;
     read(payload: FileReadPayload): Promise<FileReadResult>;
     /**
