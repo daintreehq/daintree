@@ -205,7 +205,15 @@ export function HelpPanel({
   useEffect(() => {
     if (!isVisible) setHasDomFocus(false);
   }, [isVisible]);
-  const [showNewSessionConfirm, setShowNewSessionConfirm] = useState(false);
+  // The lane a restart is waiting on confirmation for. The header's overflow item
+  // and every tab's own menu share it, so the lane that restarts is the one the
+  // request named rather than whichever is in front when the user confirms.
+  const [pendingRestartSlot, setPendingRestartSlot] = useState<number | null>(null);
+  // Where the restart confirm hands focus back: a tab menu's item is gone by the
+  // time the dialog closes, but the lane's tab survives a restart. A ref because
+  // the dialog resolves it after its exit animation, once the pending slot is
+  // already cleared.
+  const restartFocusSlotRef = useRef<number | null>(null);
   const [showEndSessionConfirm, setShowEndSessionConfirm] = useState(false);
   const [showAgentSwitchConfirm, setShowAgentSwitchConfirm] = useState(false);
   // The lane a tab's close button is waiting on confirmation for (#12108).
@@ -1117,6 +1125,17 @@ export function HelpPanel({
     )
   );
 
+  // The header's "Restart conversation" gate, per lane, so each tab's menu offers
+  // the same item exactly where the overflow menu would for that lane.
+  const laneCanRestart = useHelpPanelStore(
+    useShallow((s) =>
+      openSlots.map((slot) => {
+        const lane = selectSlot(s, slot);
+        return Boolean(lane.terminalId && lane.agentId);
+      })
+    )
+  );
+
   const laneAgentStates = usePanelStore(
     useShallow((s: ReturnType<typeof usePanelStore.getState>) =>
       laneTerminalIds.map((laneTerminalId) => {
@@ -1163,9 +1182,10 @@ export function HelpPanel({
           fullTitle: task?.fullTitle,
           agentState: laneAgentStates[index],
           agentId: laneAgentIds[index] ?? null,
+          canRestart: laneCanRestart[index],
         };
       }),
-    [openSlots, laneAgentStates, laneTaskTitles, laneAgentIds]
+    [openSlots, laneAgentStates, laneTaskTitles, laneAgentIds, laneCanRestart]
   );
 
   // Bring back the tabs for lanes whose conversations an eviction or crash
@@ -1260,11 +1280,11 @@ export function HelpPanel({
   );
 
   // Same "something to lose" gate the Stop control uses, but evaluated against
-  // the lane BEING CLOSED rather than the one on screen — a background lane is
-  // exactly where a working agent goes unnoticed.
-  const laneNeedsCloseConfirm = useCallback((slot: number) => {
-    const lane = useHelpPanelStore.getState().sessions[slot];
-    if (!lane) return false;
+  // the lane BEING CLOSED OR RESTARTED rather than the one on screen — a
+  // background lane is exactly where a working agent goes unnoticed. Both
+  // discard the lane's conversation, so both take this one gate.
+  const laneNeedsDiscardConfirm = useCallback((slot: number) => {
+    const lane = selectSlot(useHelpPanelStore.getState(), slot);
     if (lane.conversationTouched) return true;
     if (!lane.terminalId) return false;
     const panel = usePanelStore.getState().panelsById[lane.terminalId];
@@ -1274,7 +1294,7 @@ export function HelpPanel({
 
   const handleCloseSlot = useCallback(
     (slot: number) => {
-      if (laneNeedsCloseConfirm(slot)) {
+      if (laneNeedsDiscardConfirm(slot)) {
         const index = sessionTabs.findIndex((tab) => tab.slot === slot);
         const successor =
           slot === activeSlot
@@ -1286,7 +1306,7 @@ export function HelpPanel({
       }
       closeSlotNow(slot);
     },
-    [laneNeedsCloseConfirm, closeSlotNow, sessionTabs, activeSlot]
+    [laneNeedsDiscardConfirm, closeSlotNow, sessionTabs, activeSlot]
   );
 
   const handleConfirmCloseSlot = useCallback(() => {
@@ -1312,22 +1332,43 @@ export function HelpPanel({
       ? `'${pendingCloseTab.fullTitle}'`
       : pendingCloseTab.label;
 
-  const handleNewSession = useCallback(() => {
-    if (!terminalId || !agentId) return;
-    if (shouldConfirmNewSession) {
-      setShowNewSessionConfirm(true);
-      return;
-    }
-    controller.newSession();
-  }, [controller, terminalId, agentId, shouldConfirmNewSession]);
+  // Read at call time rather than from the render that offered the item: a
+  // confirm can outlive its lane, and acquiring a controller for a closed slot
+  // would mint one with nothing to run.
+  const restartSlotNow = useCallback((slot: number) => {
+    const lane = selectSlot(useHelpPanelStore.getState(), slot);
+    if (!lane.terminalId || !lane.agentId) return;
+    acquireHelpSessionController(slot).newSession();
+  }, []);
 
-  const handleConfirmNewSession = useCallback(() => {
-    setShowNewSessionConfirm(false);
-    controller.newSession();
-  }, [controller]);
+  const handleRestartSlot = useCallback(
+    (slot: number) => {
+      const lane = selectSlot(useHelpPanelStore.getState(), slot);
+      if (!lane.terminalId || !lane.agentId) return;
+      if (laneNeedsDiscardConfirm(slot)) {
+        restartFocusSlotRef.current = slot;
+        setPendingRestartSlot(slot);
+        return;
+      }
+      restartSlotNow(slot);
+    },
+    [laneNeedsDiscardConfirm, restartSlotNow]
+  );
 
-  const handleCancelNewSession = useCallback(() => {
-    setShowNewSessionConfirm(false);
+  // The header's overflow item and the revoked-session banner act on the lane on screen.
+  const handleRestartActiveSlot = useCallback(
+    () => handleRestartSlot(activeSlot),
+    [handleRestartSlot, activeSlot]
+  );
+
+  const handleConfirmRestartSlot = useCallback(() => {
+    const slot = pendingRestartSlot;
+    setPendingRestartSlot(null);
+    if (slot !== null) restartSlotNow(slot);
+  }, [pendingRestartSlot, restartSlotNow]);
+
+  const handleCancelRestartSlot = useCallback(() => {
+    setPendingRestartSlot(null);
   }, []);
 
   // Stop reuses the same "something to lose" gate as +New session — confirm
@@ -1590,7 +1631,7 @@ export function HelpPanel({
         agentState={terminalPty?.agentState}
         canRestartConversation={Boolean(terminalId && agentId)}
         canEndSession={Boolean(terminalId && agentId)}
-        onRestartConversation={handleNewSession}
+        onRestartConversation={handleRestartActiveSlot}
         onEndSession={handleEndSession}
         onResumePastSession={handleResumePastSession}
         onOpenDocs={handleOpenAssistantDocs}
@@ -1613,6 +1654,7 @@ export function HelpPanel({
         activeSlot={activeSlot}
         onSelect={handleSelectSlot}
         onClose={handleCloseSlot}
+        onRestart={handleRestartSlot}
         // The strip is the only home for this action now. It used to live in the
         // header's overflow menu as well, which put the one findable route to a
         // second session two clicks behind an ellipsis.
@@ -1683,7 +1725,7 @@ export function HelpPanel({
           onOpenAssistantSettings={handleOpenSettings}
           onOpenLogs={handleOpenLogs}
           onOpenInstallerPage={handleOpenInstallerPage}
-          onStartNewSession={handleNewSession}
+          onStartNewSession={handleRestartActiveSlot}
           onDismissSessionRevoked={dismissSessionRevoked}
         />
         <AssistantMessagingNotice
@@ -1930,16 +1972,26 @@ export function HelpPanel({
         />
       )}
       <ConfirmDialog
-        isOpen={showNewSessionConfirm}
-        // Matches the overflow item that opens it. The old wording ("Start a new
-        // session?") described the outcome as a gain when the thing being confirmed
-        // is a loss, and it collided with the strip's own new-session control.
+        isOpen={pendingRestartSlot !== null}
+        // Matches the items that open it — the overflow menu's and each tab's. The
+        // old wording ("Start a new session?") described the outcome as a gain when
+        // the thing being confirmed is a loss, and it collided with the strip's own
+        // new-session control.
         title="Restart this conversation?"
         description="The current agent will stop and the conversation will be discarded"
         confirmLabel="Restart conversation"
-        onConfirm={handleConfirmNewSession}
-        onClose={handleCancelNewSession}
+        onConfirm={handleConfirmRestartSlot}
+        onClose={handleCancelRestartSlot}
         variant="destructive"
+        // Used only when the opener cannot take focus back: the overflow trigger
+        // still can, a tab menu's item cannot.
+        restoreFocusTo={() =>
+          restartFocusSlotRef.current === null
+            ? null
+            : (panelRef.current?.querySelector<HTMLElement>(
+                `[role="tab"][data-slot="${restartFocusSlotRef.current}"]`
+              ) ?? null)
+        }
       />
       <ConfirmDialog
         isOpen={showEndSessionConfirm}

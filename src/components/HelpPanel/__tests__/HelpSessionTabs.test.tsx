@@ -6,6 +6,7 @@ import {
   render as rtlRender,
   fireEvent,
   screen,
+  waitFor,
   within,
   type RenderOptions,
 } from "@testing-library/react";
@@ -767,21 +768,28 @@ describe("HelpSessionTabs", () => {
  */
 describe("HelpSessionTabs — each lane owns its menu", () => {
   const tabs: HelpSessionTab[] = [
-    { slot: 1, label: "Session 1", agentState: "idle" },
-    { slot: 2, label: "Session 2", agentState: "waiting" },
+    { slot: 1, label: "Session 1", agentState: "idle", canRestart: true },
+    { slot: 2, label: "Session 2", agentState: "waiting", canRestart: true },
   ];
 
-  function renderStrip(props: { canOpenSession?: boolean; onAncestorContextMenu?: () => void }) {
+  function renderStrip(props: {
+    tabs?: HelpSessionTab[];
+    canOpenSession?: boolean;
+    onAncestorContextMenu?: () => void;
+  }) {
     const onClose = vi.fn();
     const onOpenSession = vi.fn();
+    const onRestart = vi.fn();
+    const onSelect = vi.fn();
     rtlRender(
       <TooltipProvider>
         <div onContextMenu={props.onAncestorContextMenu}>
           <HelpSessionTabs
-            tabs={tabs}
+            tabs={props.tabs ?? tabs}
             activeSlot={1}
-            onSelect={vi.fn()}
+            onSelect={onSelect}
             onClose={onClose}
+            onRestart={onRestart}
             canOpenSession={props.canOpenSession ?? true}
             onOpenSession={onOpenSession}
             idBase="help"
@@ -790,7 +798,7 @@ describe("HelpSessionTabs — each lane owns its menu", () => {
         </div>
       </TooltipProvider>
     );
-    return { onClose, onOpenSession };
+    return { onClose, onOpenSession, onRestart, onSelect };
   }
 
   function lane(slot: number): HTMLElement {
@@ -812,6 +820,52 @@ describe("HelpSessionTabs — each lane owns its menu", () => {
 
     expect(onClose).toHaveBeenCalledWith(2);
     expect(onClose).not.toHaveBeenCalledWith(1);
+  });
+
+  it("restarts the lane under the pointer, not the active one, without selecting or closing it", async () => {
+    const { onRestart, onClose, onSelect } = renderStrip({});
+
+    fireEvent.contextMenu(lane(2));
+    const menu = await screen.findByRole("menu");
+    fireEvent.click(within(menu).getByRole("menuitem", { name: "Restart conversation" }));
+
+    expect(onRestart).toHaveBeenCalledTimes(1);
+    expect(onRestart).toHaveBeenCalledWith(2);
+    expect(onClose).not.toHaveBeenCalled();
+    expect(onSelect).not.toHaveBeenCalled();
+  });
+
+  it("offers a restart only in a lane that has something to restart", async () => {
+    renderStrip({
+      tabs: [
+        { slot: 1, label: "Session 1", agentState: "idle", canRestart: true },
+        { slot: 2, label: "Session 2", agentState: null, canRestart: false },
+      ],
+    });
+
+    fireEvent.contextMenu(lane(2));
+    const menu = await screen.findByRole("menu");
+
+    expect(within(menu).queryByRole("menuitem", { name: "Restart conversation" })).toBeNull();
+    expect(within(menu).getByRole("menuitem", { name: "Close session" })).toBeTruthy();
+  });
+
+  it("leaves focus on the restarted lane, whose tab survives the restart", async () => {
+    renderStrip({});
+    lane(2).focus();
+
+    fireEvent.contextMenu(lane(2));
+    const menu = await screen.findByRole("menu");
+    await act(async () => {
+      fireEvent.keyDown(within(menu).getByRole("menuitem", { name: "Restart conversation" }), {
+        key: "Enter",
+      });
+    });
+
+    expect(screen.queryByRole("menu")).toBeNull();
+    // Radix's focus scope hands focus back on a timer after it unmounts. A close
+    // from the menu suppresses that handoff; a restart must not.
+    await waitFor(() => expect(document.activeElement).toBe(lane(2)));
   });
 
   it("offers a new session only while a lane is free", async () => {
