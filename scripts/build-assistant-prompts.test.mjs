@@ -270,6 +270,22 @@ describe("help prompt outputs", () => {
         expect(body).toMatch(/question[^\n]*next prompt[^\n]*status[^.\n]*no longer working/i);
       }
     );
+
+    // The handback instruction is appended to the prompt, so on a slash command
+    // it became the command's arguments, and both prompts once taught it on
+    // every send (#13439). A sentence still takes it. Without it a notice fires
+    // once and is never followed up, so a run that stops and carries on needs
+    // its notice re-armed.
+    it.each(ALL_GENERATED)(
+      "%s keeps handback for sentences, not commands, and re-arms their notice",
+      (_name, body) => {
+        const tasks = section(body, "## Common Tasks");
+        expect(tasks).toMatch(/sentence takes `handback`/);
+        expect(tasks).toMatch(/slash command or skill none \(it'd join the arguments\)/);
+        expect(tasks).toMatch(/one notice per arm[^.]*re-arm `terminal\.notifyWhenIdle`/);
+        expect(tasks).toMatch(/earlier stop is no reason to nudge/);
+      }
+    );
   });
 
   describe("Claude-only content stays in CLAUDE.md", () => {

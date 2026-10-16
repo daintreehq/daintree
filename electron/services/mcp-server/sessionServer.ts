@@ -2757,24 +2757,25 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
             };
             return buildToolError({ code: "VALIDATION_ERROR", message });
           }
-          // Daintree's own assistant reads by the view it is pinned to rather
-          // than by the ledger (#12883): it holds unscoped input to every pane
-          // in that view, so a pane the user started is one it can already
-          // answer, and the question behind the answer is what it needs. The
-          // view is the whole boundary here — a creation record does not stand
-          // in for it — and every other `*Owned` tool keeps the ledger.
+          // Daintree's own assistant also reads by the view it is pinned to
+          // (#12883): it holds unscoped input to every pane in that view, so a
+          // pane the user started is one it can already answer, and the
+          // question behind the answer is what it needs. A pane it created
+          // stays readable by the ledger, as every session's does, so a view
+          // check that cannot answer never strands its own panes (#13439); the
+          // view is asked only about the rest. Every other `*Owned` tool keeps
+          // its ledger and hand-over rules.
           const readsByPinnedView =
             rendererOwnedOrigin && actionId === TERMINAL_READ_LAST_MESSAGE_OWNED_TOOL;
-          const inPinnedView =
-            readsByPinnedView &&
-            (await deps.isTerminalInPinnedWorkspace?.(resourceId).catch(() => false)) === true;
           // A hand-over is consulted only after the ownership ledger, and only
           // by the tools that declare it enough (#12490). The cleanup tools
           // never reach it, so an adopted terminal cannot be closed through
           // one.
-          const createdRecord = readsByPinnedView
-            ? undefined
-            : ownedRecordFor(ownedResource.resourceKind, resourceId);
+          const createdRecord = ownedRecordFor(ownedResource.resourceKind, resourceId);
+          const inPinnedView =
+            readsByPinnedView &&
+            createdRecord === undefined &&
+            (await deps.isTerminalInPinnedWorkspace?.(resourceId).catch(() => false)) === true;
           const record =
             createdRecord ??
             (ownedResource.acceptsAdoption && !readsByPinnedView

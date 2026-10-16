@@ -820,8 +820,9 @@ export function registerTerminalQueryActions(
   // (electron/services/mcp-server/sessionServer.ts): the ownership ledger it
   // authorizes against is keyed by MCP session id, which the renderer never
   // sees, and the transcript it reads is a file only main can open. Main checks
-  // ownership — for Daintree's own assistant, the pinned view's project instead
-  // (#12883) — then reads the agent's session from host state alone (#12479).
+  // ownership — for Daintree's own assistant, the pinned view's project as well
+  // (#12883, #13439) — then reads the agent's session from host state alone
+  // (#12479).
   // `run()` throws if the renderer ever invokes it directly.
   actions.set("terminal.readLastMessageOwned", () => ({
     id: "terminal.readLastMessageOwned",

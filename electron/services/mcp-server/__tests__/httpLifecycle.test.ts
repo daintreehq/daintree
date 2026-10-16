@@ -31,6 +31,19 @@ vi.mock("electron", () => ({
   ipcMain: { on: () => undefined, removeListener: () => undefined },
 }));
 
+// Only the pinned-view logger is observed; every other logger is the real one.
+const { pinnedViewLogInfo } = vi.hoisted(() => ({ pinnedViewLogInfo: vi.fn() }));
+vi.mock("../../../utils/logger.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../../utils/logger.js")>();
+  return {
+    ...actual,
+    createLogger: (name: string) => {
+      const logger = actual.createLogger(name);
+      return name === "main:McpPinnedView" ? { ...logger, info: pinnedViewLogInfo } : logger;
+    },
+  };
+});
+
 import http from "node:http";
 import { EventEmitter } from "node:events";
 import { createHash } from "node:crypto";
@@ -1060,6 +1073,47 @@ describe("HttpLifecycle", () => {
       delete deps.isAgentPaneInWorkspace;
 
       expect(await buildDeps(lc, "session-1").isTerminalInPinnedWorkspace!("mine")).toBe(false);
+    });
+
+    // The assistant's refusal reads the same whichever side failed, so only
+    // the log can say which one did (#13439).
+    it("logs which side refused, and nothing on admission", async () => {
+      pinnedViewLogInfo.mockClear();
+      const { deps, lc, isAgentPaneInWorkspace } = setup();
+      const inView = buildDeps(lc, "session-1").isTerminalInPinnedWorkspace!;
+
+      expect(await inView("mine")).toBe(true);
+      expect(pinnedViewLogInfo).not.toHaveBeenCalled();
+
+      expect(await inView("theirs")).toBe(false);
+      isAgentPaneInWorkspace.mockRejectedValueOnce(new Error("pty host gone"));
+      expect(await inView("mine")).toBe(false);
+      isAgentPaneInWorkspace.mockImplementationOnce(async () => {
+        workspaceOfView = "ws-b";
+        return true;
+      });
+      expect(await inView("mine")).toBe(false);
+      workspaceOfView = null;
+      expect(await inView("mine")).toBe(false);
+      workspaceOfView = "ws-a";
+      delete deps.isAgentPaneInWorkspace;
+      expect(await inView("mine")).toBe(false);
+
+      const logged = pinnedViewLogInfo.mock.calls.map(
+        ([, context]) => context as { sessionId: string; terminalId: string; reason: string }
+      );
+      expect(logged.map((context) => context.reason)).toEqual([
+        "not-in-workspace",
+        "lookup-failed",
+        "view-changed",
+        "no-view-workspace",
+        "unwired",
+      ]);
+      expect(logged[0]).toEqual({
+        sessionId: "session-1",
+        terminalId: "theirs",
+        reason: "not-in-workspace",
+      });
     });
   });
 
