@@ -42,6 +42,10 @@ interface AgentResolved {
   contextWindow: number | null;
 }
 
+interface CodexResolved extends AgentResolved {
+  upgrades: Record<string, string>;
+}
+
 interface DiskPayload {
   fetchedAt: number;
   raw: unknown;
@@ -85,8 +89,9 @@ const MAX_CODEX_BUFFER = 4 * 1024 * 1024;
  * in-flight fetch. Bundled `models[]`/`contextWindow` values from
  * `shared/config/agents/*.ts` remain the offline-safe fallback.
  *
- * Codex receives an additional offline enrichment pass from `codex debug
- * models --bundled` when the Codex CLI is on PATH.
+ * Codex has no bundled list at all: its models come from the installed CLI's
+ * `codex debug models --bundled`, along with the upgrade pointers that move a
+ * retired model onto its successor.
  *
  * Sources contribute metadata freely, but membership is decided by whichever
  * source actually speaks for the CLI — see {@link authoritativeIds}. models.dev
@@ -100,15 +105,8 @@ const MAX_CODEX_BUFFER = 4 * 1024 * 1024;
 export class AgentModelCatalogService {
   private inFlight: Promise<ParsedCatalog | null> | null = null;
   private memCache: CachedCatalog | null = null;
-  private codexCache: {
-    models: AgentModelConfig[];
-    contextWindow: number | null;
-    fetchedAt: number;
-  } | null = null;
-  private codexInFlight: Promise<{
-    models: AgentModelConfig[];
-    contextWindow: number | null;
-  } | null> | null = null;
+  private codexCache: (CodexResolved & { fetchedAt: number }) | null = null;
+  private codexInFlight: Promise<CodexResolved | null> | null = null;
 
   constructor(private readonly deps: CatalogDeps = {}) {}
 
@@ -120,21 +118,22 @@ export class AgentModelCatalogService {
   async getResolvedModels(agentId: string): Promise<ResolvedModelCatalog> {
     const bundled = this.getBundled(agentId);
 
+    // Codex never reads models.dev: its CLI decides membership and names, so the
+    // network could only delay a launch waiting on its upgrade pointers.
+    const isCodex = agentId === "codex";
     let catalog: ParsedCatalog | null = null;
-    try {
-      catalog = await this.getCatalog();
-    } catch (err) {
-      // Singleflight wrapper already catches and returns null; this is a
-      // defensive guard so a bug in the resolver never throws into IPC.
-      console.warn("[AgentModelCatalogService] catalog resolution failed", err);
+    if (!isCodex) {
+      try {
+        catalog = await this.getCatalog();
+      } catch (err) {
+        // Singleflight wrapper already catches and returns null; this is a
+        // defensive guard so a bug in the resolver never throws into IPC.
+        console.warn("[AgentModelCatalogService] catalog resolution failed", err);
+      }
     }
 
     const remote = catalog ? this.extractRemote(agentId, catalog) : null;
-
-    let codex: AgentResolved | null = null;
-    if (agentId === "codex") {
-      codex = await this.getCodexCatalog();
-    }
+    const codex = isCodex ? await this.getCodexCatalog() : null;
 
     const merged = this.merge(
       bundled,
@@ -155,6 +154,7 @@ export class AgentModelCatalogService {
     return {
       agentId,
       models: merged.models,
+      ...(codex ? { modelUpgrades: { ...codex.upgrades } } : {}),
       contextWindow: merged.contextWindow,
       source,
     };
@@ -215,30 +215,21 @@ export class AgentModelCatalogService {
    * The IDs this agent's picker is allowed to offer, in display order, or
    * `null` to keep the plain union of every source.
    *
-   * An agent whose bundled list is marked {@link AgentConfig.curatedModels}
-   * answers for itself — the curated set is a product decision, and a live CLI
-   * catalog still lists previous generations we deliberately stopped offering.
-   * The live CLI catalog (the binary that will receive `--model`) then prunes
-   * curated IDs it doesn't know, unless it knows none of them, in which case
-   * an older CLI's own list is the only set that will launch. Without a
-   * curated list the live catalog wins outright; everyone else keeps
-   * discovering new models from the remote catalog.
+   * Codex answers only through its own CLI: the live catalog is the binary that
+   * will receive `--model`. Without the CLI there is nothing to offer, and the
+   * CLI default still launches. An agent whose
+   * bundled list is marked {@link AgentConfig.curatedModels} answers for itself
+   * — its own aliases, which never go stale. Everyone else keeps discovering
+   * new models from the remote catalog.
    */
   private authoritativeIds(
     agentId: string,
     bundled: AgentResolved,
     codex: AgentResolved | null
   ): string[] | null {
-    const liveIds = codex && codex.models.length > 0 ? codex.models.map((m) => m.id) : null;
+    if (agentId === "codex") return codex ? codex.models.map((m) => m.id) : [];
     const curated = getEffectiveAgentConfig(agentId)?.curatedModels === true;
-    if (curated && bundled.models.length > 0) {
-      const curatedIds = bundled.models.map((m) => m.id);
-      if (!liveIds) return curatedIds;
-      const live = new Set(liveIds);
-      const known = curatedIds.filter((id) => live.has(id));
-      return known.length > 0 ? known : liveIds;
-    }
-    return liveIds;
+    return curated && bundled.models.length > 0 ? bundled.models.map((m) => m.id) : null;
   }
 
   private merge(
@@ -424,30 +415,38 @@ export class AgentModelCatalogService {
     }
   }
 
-  private async getCodexCatalog(): Promise<AgentResolved | null> {
+  private async getCodexCatalog(): Promise<CodexResolved | null> {
     if (this.codexCache && Date.now() - this.codexCache.fetchedAt < TTL_MS) {
-      return { models: this.codexCache.models, contextWindow: this.codexCache.contextWindow };
+      return this.fromCodexCache(this.codexCache);
     }
-    if (this.codexInFlight) {
-      const result = await this.codexInFlight;
-      return result ?? null;
-    }
-    this.codexInFlight = this.fetchCodexCatalog()
-      .catch((err) => {
+    // The fallback lives inside the shared promise so every caller joining a
+    // refresh gets the same answer as the one that started it.
+    const inFlight = (this.codexInFlight ??= this.fetchCodexCatalog()
+      .catch((err: unknown) => {
         console.warn("[AgentModelCatalogService] codex catalog failed", err);
         return null;
       })
+      .then((result) => {
+        if (result) {
+          this.codexCache = { ...result, fetchedAt: Date.now() };
+          return result;
+        }
+        // A failed refresh keeps the last catalog this CLI gave: with no
+        // bundled list behind it, dropping it would empty the picker over one
+        // slow probe.
+        return this.codexCache ? this.fromCodexCache(this.codexCache) : null;
+      })
       .finally(() => {
         this.codexInFlight = null;
-      });
-    const result = await this.codexInFlight;
-    if (result) {
-      this.codexCache = { ...result, fetchedAt: Date.now() };
-    }
-    return result ?? null;
+      }));
+    return inFlight;
   }
 
-  private async fetchCodexCatalog(): Promise<AgentResolved | null> {
+  private fromCodexCache(cache: CodexResolved): CodexResolved {
+    return { models: cache.models, contextWindow: cache.contextWindow, upgrades: cache.upgrades };
+  }
+
+  private async fetchCodexCatalog(): Promise<CodexResolved | null> {
     const exec = this.deps.execFileImpl ?? execFileAsync;
     const command = this.deps.codexCommand ?? "codex";
     let stdout = "";
@@ -509,21 +508,32 @@ export class AgentModelCatalogService {
         // unexpected type must not reject the whole catalog.
         visibility: z.unknown().optional(),
         priority: z.unknown().optional(),
+        // `null`, or `{ model, migration_markdown }` naming the successor.
+        upgrade: z.unknown().optional(),
       })
       .passthrough();
 
     const listed: { model: AgentModelConfig; priority: number }[] = [];
+    const upgrades = new Map<string, string>();
     let maxContext = 0;
     for (const entry of entries) {
       const safe = CodexEntrySchema.safeParse(entry);
       if (!safe.success) continue;
       const id = safe.data.slug ?? safe.data.id;
       if (!id) continue;
+      // Read before the visibility gate: a hidden retired slug can still be
+      // the one a user saved, and its pointer is what moves it on.
+      const upgrade = safe.data.upgrade;
+      const successor = upgradeTarget(upgrade);
+      if (successor && successor !== id) upgrades.set(id, successor);
       // Codex marks internal and retired slugs `"hide"` (`codex-auto-review`,
       // superseded releases). Only `"list"` entries belong in a picker, and an
       // absent or unrecognised value is treated as hidden so a format change
       // can't quietly reopen the gate.
       if (safe.data.visibility !== "list") continue;
+      // The previous generation stays listed with an upgrade pointer to its
+      // successor; any pointer at all, even one we can't read, retires it.
+      if (upgrade !== undefined && upgrade !== null) continue;
       const name = safe.data.display_name ?? safe.data.name ?? id;
       const ctx = safe.data.max_context_window ?? safe.data.context_window;
       if (typeof ctx === "number" && ctx > maxContext) maxContext = ctx;
@@ -533,15 +543,26 @@ export class AgentModelCatalogService {
           typeof safe.data.priority === "number" ? safe.data.priority : Number.MAX_SAFE_INTEGER,
       });
     }
-    if (listed.length === 0) return null;
     // Ascending `priority` is the CLI's own recommended order; entries without
     // one sort last, ties keeping input order (Array.prototype.sort is stable).
     listed.sort((a, b) => a.priority - b.priority);
     return {
       models: listed.map((l) => l.model),
       contextWindow: maxContext > 0 ? maxContext : null,
+      // `fromEntries` defines own keys, so a `__proto__` slug stays a key.
+      upgrades: Object.fromEntries(upgrades),
     };
   }
+}
+
+function upgradeTarget(upgrade: unknown): string | null {
+  const model =
+    typeof upgrade === "string"
+      ? upgrade
+      : upgrade && typeof upgrade === "object"
+        ? (upgrade as { model?: unknown }).model
+        : undefined;
+  return typeof model === "string" && model.trim() ? model.trim() : null;
 }
 
 function isNodeError(err: unknown): err is NodeJS.ErrnoException {

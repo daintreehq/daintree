@@ -73,10 +73,14 @@ export const config: AgentConfig = {
       "Run 'gemini auth login' after installing to authenticate",
     ],
   },
+  // The CLI's own aliases, which it resolves to the current model in each tier
+  // and moves forward on every release; a pinned ID goes stale instead.
   models: [
-    { id: "gemini-2.5-pro", name: "Gemini 2.5 Pro", shortLabel: "2.5 Pro" },
-    { id: "gemini-2.5-flash", name: "Gemini 2.5 Flash", shortLabel: "2.5 Flash" },
+    { id: "pro", name: "Pro", shortLabel: "Pro" },
+    { id: "flash", name: "Flash", shortLabel: "Flash" },
+    { id: "flash-lite", name: "Flash Lite", shortLabel: "Flash Lite" },
   ],
+  curatedModels: true,
   contextWindow: 1_000_000,
   capabilities: {
     scrollback: 10000,

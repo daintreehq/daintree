@@ -396,6 +396,7 @@ export const BUILT_IN_ACTION_IDS = [
   "agent.listToolbar",
   "agent.listAvailable",
   "agent.listPresets",
+  "agent.listModels",
   "agentSessionHistory.list",
   "agentSessionHistory.resume",
   // -- session bookmarks (#11288) --

@@ -39,6 +39,7 @@ const clientsMock = vi.hoisted(() => ({
   },
   agentCapabilitiesClient: {
     getRegistry: vi.fn(),
+    getResolvedModelList: vi.fn(),
   },
   userAgentRegistryClient: {
     get: vi.fn(),
@@ -2047,6 +2048,101 @@ describe("agentSessionHistory.list (#10854)", () => {
     expect(schema?.safeParse({ worktreeId: "wt-1", limit: -5 }).success).toBe(false);
     expect(schema?.safeParse({ worktreeId: "wt-1", limit: 2.5 }).success).toBe(false);
     expect(schema?.safeParse({ worktreeId: "wt-1", limit: 100_000 }).success).toBe(false);
+  });
+});
+
+describe("agent.listModels", () => {
+  const ModelsResultShape = z.object({
+    agents: z.array(
+      z.looseObject({
+        agentId: z.string(),
+        models: z.array(z.looseObject({ id: z.string(), name: z.string() })),
+      })
+    ),
+  });
+
+  function catalogFor(agentId: string) {
+    const models =
+      agentId === "codex"
+        ? [
+            { id: "gpt-6.1-sol", name: "GPT-6.1-Sol", shortLabel: "GPT-6.1-Sol" },
+            { id: "gpt-6-luna", name: "GPT-6-Luna", shortLabel: "GPT-6-Luna" },
+          ]
+        : agentId === "claude"
+          ? [{ id: "opus", name: "Opus", shortLabel: "Opus" }]
+          : [];
+    return {
+      agentId,
+      models,
+      modelUpgrades: agentId === "codex" ? { "gpt-5.6-sol": "gpt-6-sol" } : undefined,
+      contextWindow: 400_000,
+      source: "merged",
+    };
+  }
+
+  beforeEach(() => {
+    clientsMock.agentCapabilitiesClient.getRegistry.mockResolvedValue({
+      claude: { name: "Claude" },
+      codex: { name: "Codex" },
+      "my-plugin-agent": { name: "Plugin agent" },
+    });
+    clientsMock.agentCapabilitiesClient.getResolvedModelList.mockImplementation(
+      async (agentId: string) => catalogFor(agentId)
+    );
+  });
+
+  async function listModels(args: Record<string, unknown> = {}) {
+    const actions = setupActions(makeCallbacks());
+    const result = await callAction(actions, "agent.listModels", args);
+    expect(parseAgainstSchema(actions, "agent.listModels", result).success).toBe(true);
+    return ModelsResultShape.parse(result);
+  }
+
+  it("registers as a narrow read with a structured MCP result", () => {
+    const def = getDefinition(setupActions(makeCallbacks()), "agent.listModels");
+    expect(def.kind).toBe("query");
+    expect(def.danger).toBe("safe");
+    expect(def.scope).toBe("renderer");
+    expect(def.mcpOutputSchema).toBe(true);
+  });
+
+  it("returns one agent's models as ids and names only", async () => {
+    const { agents } = await listModels({ agentId: "codex" });
+
+    expect(agents).toEqual([
+      {
+        agentId: "codex",
+        models: [
+          { id: "gpt-6.1-sol", name: "GPT-6.1-Sol" },
+          { id: "gpt-6-luna", name: "GPT-6-Luna" },
+        ],
+      },
+    ]);
+  });
+
+  it("lists every registered agent in launcher order, plugin agents included", async () => {
+    const { agents } = await listModels();
+
+    const ids = agents.map((a) => a.agentId);
+    expect(ids).toEqual([
+      ...LAUNCHABLE_AGENT_IDS.filter((id) => id === "claude" || id === "codex"),
+      "my-plugin-agent",
+    ]);
+    expect(agents.find((a) => a.agentId === "my-plugin-agent")?.models).toEqual([]);
+  });
+
+  it("refuses an id no registry entry carries", async () => {
+    await expect(listModels({ agentId: "__proto__" })).rejects.toThrow(/Unknown agent ID/);
+    await expect(listModels({ agentId: "not-an-agent" })).rejects.toThrow(/agent\.listAvailable/);
+    expect(clientsMock.agentCapabilitiesClient.getResolvedModelList).not.toHaveBeenCalled();
+  });
+
+  it("surfaces a failed catalog read instead of reporting no models", async () => {
+    clientsMock.agentCapabilitiesClient.getResolvedModelList.mockRejectedValue(
+      new Error("ipc down")
+    );
+
+    await expect(listModels({ agentId: "codex" })).rejects.toThrow("ipc down");
   });
 });
 

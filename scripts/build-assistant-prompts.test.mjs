@@ -4,7 +4,6 @@ import { spawnSync } from "node:child_process";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { config as codexConfig } from "../shared/config/agents/codex.ts";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const root = path.resolve(here, "..");
@@ -455,11 +454,16 @@ describe("help prompt outputs", () => {
       expect(launch).toContain('agentLaunchFlags: ["-c", "model_reasoning_effort=high"]');
       expect(launch).toMatch(/no preset/);
       expect(launch).toMatch(/no per-agent model or flags/);
-      const models = launch.match(/`model: "([^"]+)"` \(or ([^)]*)\)/);
-      const named = models
-        ? [models[1], ...[...models[2].matchAll(/`([^`]+)`/g)].map((m) => m[1])]
-        : [];
-      expect(named.sort()).toEqual(codexConfig.models.map((m) => m.id).sort());
+    });
+
+    // #13437: a model id in an example is one the assistant copies onto
+    // launches nobody asked a model for, overriding the user's CLI default and
+    // going stale on the next release. Ids come from the live listing instead.
+    it("names no model id, only where to resolve one", () => {
+      const launch = tasks.split("\n").find((line) => line.startsWith("- Launch:")) ?? "";
+      expect(launch).not.toMatch(/model:\s*["'`]/);
+      expect(launch).toContain("agent.listModels");
+      expect(launch).toMatch(/`model`[^.]*\buser names\b/);
     });
 
     // Codex reads project instructions up to `project_doc_max_bytes` (32 KiB by

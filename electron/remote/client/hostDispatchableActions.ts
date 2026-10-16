@@ -57,6 +57,7 @@ export const HOST_DISPATCHABLE_ACTION_IDS: ReadonlySet<string> = new Set([
   "agent.launch",
   "agent.launchMany",
   "agent.listAvailable",
+  "agent.listModels",
   "agent.listPresets",
   "assistant.getInbox",
   "assistant.reply",

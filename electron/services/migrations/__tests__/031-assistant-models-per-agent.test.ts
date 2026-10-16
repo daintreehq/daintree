@@ -1,5 +1,35 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+
+// Extra catalog entries per agent, layered over the real registry. No two
+// assistant agents ship a shared model id any more, so the ambiguous-owner
+// case needs one planted.
+const extraModels = vi.hoisted(() => ({ byAgent: {} as Record<string, string[]> }));
+
+vi.mock("../../../../shared/config/agentRegistry.js", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("../../../../shared/config/agentRegistry.js")>();
+  return {
+    ...actual,
+    getAgentConfig: (agentId: string) => {
+      const config = actual.getAgentConfig(agentId);
+      const extra = extraModels.byAgent[agentId];
+      if (!config || !extra) return config;
+      return {
+        ...config,
+        models: [
+          ...(config.models ?? []),
+          ...extra.map((id) => ({ id, name: id, shortLabel: id })),
+        ],
+      };
+    },
+  };
+});
+
 import { migration031 } from "../031-assistant-models-per-agent.js";
+
+afterEach(() => {
+  extraModels.byAgent = {};
+});
 
 function run(helpAssistant: Record<string, unknown> | undefined) {
   const data: Record<string, unknown> = helpAssistant === undefined ? {} : { helpAssistant };
@@ -29,7 +59,8 @@ describe("migration031 — assistant model per agent", () => {
   });
 
   it("drops a model several assistant agents list, since its owner is unknown", () => {
-    expect(run({ modelId: "gemini-2.5-pro" }).after).toEqual({ modelIds: {} });
+    extraModels.byAgent = { gemini: ["shared-model"], copilot: ["shared-model"] };
+    expect(run({ modelId: "shared-model" }).after).toEqual({ modelIds: {} });
   });
 
   it("drops a custom model no catalog lists", () => {

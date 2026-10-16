@@ -754,7 +754,12 @@ describe("MCP wire budget — aggregate ratchets (§9)", () => {
   // only, so the external ceiling does not move.
   // 138_200 → 139_100 for #13382, measured at 139_096 B: the same `agent.launch`
   // decline reason and `panelLimit` snapshot as the external ceiling above.
-  const MAX_COHORT_PAYLOAD_BYTES = 139_100;
+  // 139_100 → 139_850 for `agent.listModels` (#13437), measured at 139_845 B:
+  // its description, the optional agentId, and the output schema — per-agent
+  // rows of model id and name, nothing more. The assistant prompt no longer
+  // names model ids, so this is how one the user names becomes an id. In-app
+  // only, so the external ceiling does not move.
+  const MAX_COHORT_PAYLOAD_BYTES = 139_850;
 
   const wireBytes = (t: WireTool) => t.descriptionBytes + t.paramsBytes + t.outputBytes;
 

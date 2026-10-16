@@ -497,7 +497,13 @@ describe("LLM-facing tool descriptions (#11542)", () => {
   // What the prose has to carry is that the image is of one panel alone and
   // that a hidden or covered panel is refused with no image; a caller missing
   // the refusal reads it as a bug. Full tier only, off the external surface.
-  const MAX_COHORT_TOTAL_BYTES = 21_950;
+  // 21_950 → 22_050 for `agent.listModels` (#13437), measured at 22_037 B. The
+  // assistant prompt stopped naming model ids, since the one it named was being
+  // copied onto launches nobody asked a model for; this is where a model the
+  // user does name gets resolved. What the prose has to carry is that the ids
+  // are current ones and that no model is the answer when none was named. In-app
+  // only, off the external surface.
+  const MAX_COHORT_TOTAL_BYTES = 22_050;
 
   const ARG_SECTION = /\b(?:args?|arguments?|parameters?)\s*(?:\([^)]*\))?\s*:|\btakes no args\b/i;
 

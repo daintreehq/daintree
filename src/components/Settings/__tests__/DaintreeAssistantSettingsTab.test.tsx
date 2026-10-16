@@ -868,6 +868,7 @@ describe("DaintreeAssistantSettingsTab", () => {
                       { id: "gpt-6-astra", name: "GPT-6 Astra", shortLabel: "Astra" },
                       { id: "gpt-6-luna", name: "GPT-6 Luna", shortLabel: "Luna" },
                     ],
+                    modelUpgrades: { "gpt-5.6-luna": "gpt-6-luna" },
                     contextWindow: null,
                     source: "merged",
                   }
@@ -884,7 +885,11 @@ describe("DaintreeAssistantSettingsTab", () => {
           );
       }
 
-      function renderWith(preferredAgentId: string, modelIds: Record<string, string>) {
+      function renderWith(
+        preferredAgentId: string,
+        modelIds: Record<string, string>,
+        options: { emptyCatalogs?: boolean } = {}
+      ) {
         mockGetAssistantSupportedAgentIds.mockReturnValue(["claude", "codex"]);
         helpPanelState.preferredAgentId = preferredAgentId;
         helpPanelState.setPreferredAgent = vi.fn((id: string | null) => {
@@ -902,6 +907,13 @@ describe("DaintreeAssistantSettingsTab", () => {
           }),
         });
         mockCatalogs();
+        if (options.emptyCatalogs) {
+          window.electron.agentCapabilities.getResolvedModelList = vi
+            .fn()
+            .mockImplementation((agentId: string) =>
+              Promise.resolve({ agentId, models: [], contextWindow: null, source: "bundled" })
+            );
+        }
         const tree = () => (
           <SettingsValidationProvider>
             <DaintreeAssistantSettingsTab />
@@ -928,6 +940,36 @@ describe("DaintreeAssistantSettingsTab", () => {
         await waitFor(() => expect(select.value).toBe("my-fork-model"));
         expect(optionValues(select)).toContain("my-fork-model");
         expect(optionValues(select)).not.toContain("opus");
+      });
+
+      it("shows a saved model the CLI has retired as the successor it launches as", async () => {
+        renderWith("codex", { codex: "gpt-5.6-luna" });
+        const select = (await screen.findByLabelText("Model")) as HTMLSelectElement;
+        await waitFor(() => expect(select.value).toBe("gpt-6-luna"));
+        expect(optionValues(select)).not.toContain("gpt-5.6-luna");
+        expect(window.electron.helpAssistant.setSettings).not.toHaveBeenCalled();
+      });
+
+      it("moves a retired saved model onto another pick when the user chooses one", async () => {
+        renderWith("codex", { codex: "gpt-5.6-luna" });
+        const select = (await screen.findByLabelText("Model")) as HTMLSelectElement;
+        await waitFor(() => expect(select.value).toBe("gpt-6-luna"));
+
+        fireEvent.change(select, { target: { value: "gpt-6-astra" } });
+
+        await waitFor(() =>
+          expect(window.electron.helpAssistant.setSettings).toHaveBeenCalledWith({
+            modelIds: { codex: "gpt-6-astra" },
+          })
+        );
+        await waitFor(() => expect(select.value).toBe("gpt-6-astra"));
+      });
+
+      it("keeps a saved model and its reset when the catalog comes back empty", async () => {
+        renderWith("codex", { codex: "gpt-6-sol" }, { emptyCatalogs: true });
+        const select = (await screen.findByLabelText("Model")) as HTMLSelectElement;
+        await waitFor(() => expect(select.value).toBe("gpt-6-sol"));
+        expect(optionValues(select)).toEqual(["__default__", "gpt-6-sol"]);
       });
 
       it("keeps each agent's choice across a switch away and back", async () => {
