@@ -1,6 +1,6 @@
 import { useCallback, useId, useMemo, useRef } from "react";
 import { LayoutGroup } from "framer-motion";
-import { Plus, SquareTerminal, X } from "lucide-react";
+import { Plus, RotateCw, SquareTerminal, X } from "lucide-react";
 import { SpinnerCircle, HollowCircle, InteractingCircle } from "@/components/icons";
 import { BrandMark } from "@/components/icons/BrandMark";
 import { getAgentConfig } from "@/config/agents";
@@ -143,6 +143,8 @@ export interface HelpSessionTab {
   agentState: AgentState | null | undefined;
   /** The agent the lane runs or will resume with; absent while nothing says. */
   agentId?: string | null;
+  /** The lane has a live terminal and agent — the header's own gate for "Restart conversation". */
+  canRestart?: boolean;
 }
 
 /**
@@ -177,6 +179,7 @@ interface SessionTabChipProps {
   onFocusTab: (slot: number) => void;
   /** Close from the lane's own menu, with focus handed on once the lane is gone. */
   onMenuClose: (slot: number) => void;
+  onRestart?: (slot: number) => void;
   isSoleLane: boolean;
   canOpenSession: boolean;
   onOpenSession?: () => void;
@@ -202,6 +205,7 @@ function SessionTabChip({
   onClose,
   onFocusTab,
   onMenuClose,
+  onRestart,
   isSoleLane,
   canOpenSession,
   onOpenSession,
@@ -295,7 +299,7 @@ function SessionTabChip({
     agentName !== null ||
     (tab.fullTitle !== undefined && (tab.fullTitle !== tab.label || isLabelTruncated));
   // Each lane owns its menu, like every other tab in the app: a right-click on a
-  // background lane closes that lane, never the one in front.
+  // background lane restarts or closes that lane, never the one in front.
   return (
     <ContextMenu>
       <Tooltip autoDismiss={false} open={hasTitleTip ? undefined : false}>
@@ -333,6 +337,15 @@ function SessionTabChip({
             </ContextMenuItem>
           ))}
         {(onOpenSession || hasAgentItems) && <ContextMenuSeparator />}
+        {/* Hidden rather than disabled where the lane has nothing to restart, as the
+            header's overflow item is. The tab survives a restart, so the menu hands
+            focus back to it as usual. */}
+        {onRestart && tab.canRestart && (
+          <ContextMenuItem destructive onSelect={() => onRestart(tab.slot)}>
+            <RotateCw data-menu-icon className="mr-2 h-3.5 w-3.5" aria-hidden="true" />
+            Restart conversation
+          </ContextMenuItem>
+        )}
         <ContextMenuItem
           onSelect={() => {
             closingFromMenuRef.current = true;
@@ -352,6 +365,8 @@ interface HelpSessionTabsProps {
   activeSlot: number;
   onSelect: (slot: number) => void;
   onClose: (slot: number) => void;
+  /** Restart one lane's conversation from its own menu, offered where its tab says it can. */
+  onRestart?: (slot: number) => void;
   /** Whether a lane is still free. False parks the trailing control rather than removing it. */
   canOpenSession?: boolean;
   onOpenSession?: () => void;
@@ -398,6 +413,7 @@ export function HelpSessionTabs({
   activeSlot,
   onSelect,
   onClose,
+  onRestart,
   canOpenSession = false,
   onOpenSession,
   newSessionAgentIds = EMPTY_AGENT_IDS,
@@ -538,6 +554,7 @@ export function HelpSessionTabs({
               onClose={handlePointerClose}
               onFocusTab={handleTabFocus}
               onMenuClose={handleMenuClose}
+              onRestart={onRestart}
               isSoleLane={tabs.length === 1}
               canOpenSession={canOpenSession}
               onOpenSession={onOpenSession}
