@@ -1021,6 +1021,12 @@ describe("McpServerService", () => {
         title: "Reload Panel",
         description: "Discard a plugin panel's view and mount a fresh one",
       }),
+      // Full-only (#13384): it hands an agent a plugin panel's pixels.
+      createManifestEntry({
+        id: "plugin.capturePanel" as ActionId,
+        title: "Capture Plugin Panel",
+        description: "A PNG of one plugin panel and the plugin's console errors",
+      }),
       createManifestEntry({
         id: "terminal.sendCommand" as ActionId,
         title: "Send Terminal Command",

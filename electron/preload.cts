@@ -58,6 +58,7 @@ import { buildPluginPreloadBindings } from "./ipc/handlers/plugin.preload.js";
 import { buildPluginMcpPreloadBindings } from "./ipc/handlers/pluginMcp.preload.js";
 import { buildPluginCapabilityPreloadBindings } from "./ipc/handlers/pluginCapability.preload.js";
 import { buildPluginProcessPreloadBindings } from "./ipc/handlers/pluginProcess.preload.js";
+import { buildPluginPanelCapturePreloadBindings } from "./ipc/handlers/pluginPanelCapture.preload.js";
 import { buildPluginMetricsPreloadBindings } from "./ipc/handlers/pluginMetrics.preload.js";
 import { buildScratchPreloadBindings } from "./ipc/handlers/scratch/preload.js";
 import { buildMcpServerPreloadBindings } from "./ipc/handlers/mcpServer.preload.js";
@@ -3625,6 +3626,7 @@ function buildElectronApi(): ElectronAPI {
     plugin: {
       ...buildPluginPreloadBindings(_pluginInvoke),
       ...buildPluginMetricsPreloadBindings(_unwrappingInvoke),
+      ...buildPluginPanelCapturePreloadBindings(_unwrappingInvoke),
 
       // Fire-and-forget: renderer-side view cost observations, drained in batches.
       reportViewMetrics: (reports: PluginRendererMetricsEnvelope[]) => {

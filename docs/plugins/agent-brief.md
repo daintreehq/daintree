@@ -456,6 +456,8 @@ To see a panel, drive it, or check a change to it, use the [panel preview](./dev
 
 Do not drive Daintree's own window to test a panel. Computer use on macOS acts on the frontmost window and cannot target a background one, so an agent testing in a Daintree window takes over whichever window the user has focused and switches it to the plugin's project. A plugin view also renders inline in the host document ([views.md](./views.md)), so input aimed at one pane cannot be held to it. The preview is the supported way for an agent to see and drive a panel. Load the plugin in Daintree for what only the host can show: activation, the worker, real data and the performance numbers below.
 
+To see what the panel looks like there, call the `plugin.capturePanel` MCP tool with the panel's id. It returns a PNG of that one panel at its real size, plus the plugin's recent console warnings and errors. It needs no restart and opens no port. Never ask the user to relaunch Daintree with `--remote-debugging-port`: that exposes every project view, terminals included, to any local process. The capture is refused, with no image, while the panel is not on screen (another project, a background tab, a closed dock), runs past the window, or has a dialog, menu or tooltip over it. Ask the user to bring it into view and retry. The console list covers every view of the plugin, not only that panel, because the views share the host document's console. The tool is in the `full` tier.
+
 ## Verify it loaded
 
 1. Open the project in Daintree. First time, a dialog names the plugins and asks once — **Always enable** persists the decision for this project, in Daintree's own store, never in the repository.

@@ -113,6 +113,7 @@ import { registerPluginMcpHandlers } from "./handlers/pluginMcp.js";
 import { registerPluginCapabilityHandlers } from "./handlers/pluginCapability.js";
 import { registerPluginProcessHandlers } from "./handlers/pluginProcess.js";
 import { registerPluginMetricsHandlers } from "./handlers/pluginMetrics.js";
+import { registerPluginPanelCaptureHandlers } from "./handlers/pluginPanelCapture.js";
 import { registerPluginPushListenerHandlers } from "./handlers/pluginPushListeners.js";
 import { registerPluginFocusedPanelHandlers } from "./handlers/pluginFocusedPanel.js";
 import { registerConnectivityHandlers } from "./handlers/connectivity.js";
@@ -264,6 +265,7 @@ export function registerIpcHandlers(deps: HandlerDependencies): () => void {
     register(() => registerPluginCapabilityHandlers());
     register(() => registerPluginProcessHandlers());
     register(() => registerPluginMetricsHandlers());
+    register(() => registerPluginPanelCaptureHandlers(deps));
     register(() => registerPluginPushListenerHandlers());
     register(() => registerPluginFocusedPanelHandlers());
     register(() => registerPerfHandlers(deps));

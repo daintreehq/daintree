@@ -223,12 +223,14 @@ export const FULL_TIER_ADDONS = [
   "errors.recent",
   "notifications.recent",
 
-  // The plugin-authoring loop (#12214, #12611): two reads, a project reload
-  // and a single-view remount that stages the user's confirm on unsaved work.
+  // The plugin-authoring loop (#12214, #12611, #13384): two reads, a project
+  // reload, a single-view remount that stages the user's confirm on unsaved
+  // work, and a capture of one panel as it renders.
   "plugin.validate",
   "plugin.diagnostics",
   "plugin.reloadProject",
   "plugin.reloadPanel",
+  "plugin.capturePanel",
 
   // Remote Hosts (#11158): which machine a window runs on, and taking its
   // project to another host through the switch dialog. Both change what the

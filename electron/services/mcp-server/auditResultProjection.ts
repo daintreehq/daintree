@@ -254,6 +254,21 @@ function projectHostReplies(record: Record<string, unknown>): Record<string, unk
   };
 }
 
+/** The capture's size and how many console lines came back — never the pixels or the lines. */
+function projectPanelCapture(result: unknown): Record<string, unknown> {
+  const record = asRecord(result);
+  const image = asRecord(record?.image);
+  if (!record || !image) return { status: "unrecognized" };
+  return {
+    width: finiteNumber(image.width),
+    height: finiteNumber(image.height),
+    imageBytes: typeof image.data === "string" ? Buffer.byteLength(image.data, "base64") : null,
+    consoleMessageCount: Array.isArray(record.consoleMessages)
+      ? record.consoleMessages.length
+      : null,
+  };
+}
+
 const AUDIT_RESULT_PROJECTIONS: ReadonlyMap<string, (result: unknown) => unknown> = new Map<
   string,
   (result: unknown) => unknown
@@ -320,6 +335,7 @@ const AUDIT_RESULT_PROJECTIONS: ReadonlyMap<string, (result: unknown) => unknown
       };
     }),
   ],
+  ["plugin.capturePanel", projectPanelCapture],
 ]);
 
 /** The value to summarize for `toolId`'s audit record: its projection when it has one, else the result as is. */
