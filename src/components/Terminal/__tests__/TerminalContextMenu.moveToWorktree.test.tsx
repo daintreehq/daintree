@@ -204,6 +204,7 @@ vi.mock("../TerminalHandOver", () => ({
 }));
 
 import { TerminalContextMenu } from "../TerminalContextMenu";
+import { PanelContextMenuTrigger } from "../PanelContextMenuTrigger";
 import { getWorktreeHeadline } from "@/lib/worktreeHeadline";
 import { useSidebarWorktreeOrder } from "@/hooks/useSidebarWorktreeOrder";
 
@@ -596,6 +597,41 @@ describe("TerminalContextMenu — Move to worktree cap and picker handoff (#1244
     expect(pickerProps.current?.returnFocusRef.current).toBe(pane);
     const point = anchorRef.current!.current!.getBoundingClientRect();
     expect([point.x, point.y]).toEqual([220, 140]);
+  });
+
+  // Outside a terminal only the title bar opens the menu (#13422). The picker
+  // still opens where the menu did, but focus goes back to the panel, which is
+  // what takes it, not to the title bar.
+  it("anchors on the title bar but returns focus to the panel when the header is the trigger", () => {
+    worktreesRef.current = manyWorktrees(12);
+    panelsById.current = {
+      "panel-1": { id: "panel-1", title: "Notes", kind: "file", worktreeId: "wt-main" },
+    };
+    render(
+      <TerminalContextMenu terminalId="panel-1" triggerScope="header">
+        <div data-panel-id="panel-1" tabIndex={-1} data-testid="panel-root">
+          <PanelContextMenuTrigger>
+            <div>Title bar</div>
+          </PanelContextMenuTrigger>
+          <div>Panel body</div>
+        </div>
+      </TerminalContextMenu>
+    );
+    const header = screen.getByText("Title bar");
+    vi.spyOn(header, "getBoundingClientRect").mockReturnValue(
+      DOMRect.fromRect({ x: 100, y: 50, width: 400, height: 30 })
+    );
+
+    fireEvent.contextMenu(header, { clientX: 160, clientY: 60 });
+    act(() => menuOpenChange.current?.(true));
+    fireEvent.click(screen.getByText(MORE));
+    closeMenu();
+
+    const anchor = anchorRef.current?.current;
+    expect(anchor?.contextElement).toBe(header);
+    expect(pickerProps.current?.returnFocusRef.current).toBe(screen.getByTestId("panel-root"));
+    const point = anchor!.getBoundingClientRect();
+    expect([point.x, point.y]).toEqual([160, 60]);
   });
 
   it("closes the picker when the menu starts speaking for another panel, and keeps it closed", () => {

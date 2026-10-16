@@ -146,6 +146,7 @@ import {
   subscribeToTourRegistry,
 } from "@/components/Tour/tourRegistry";
 import { MoveToWorktreePicker } from "@/components/Panel/MoveToWorktreePicker";
+import { PanelContextMenuTriggerContext } from "./PanelContextMenuTrigger";
 import {
   GENERIC_PANEL_RELOAD_ACTION_ID,
   GENERIC_PANEL_TOUR_ACTION_ID,
@@ -202,6 +203,14 @@ interface TerminalContextMenuProps {
    * menu from the keyboard never lands on a row standing in for it.
    */
   proxy?: boolean;
+  /**
+   * Which part of the panel opens the menu. `"surface"` (the default) makes
+   * every pixel of the children a trigger, which suits a terminal pane whose
+   * content has no menu of its own. `"header"` leaves the children alone and
+   * hands the trigger to a `PanelContextMenuTrigger` inside them — the title
+   * bar — so a file, diff or browser body keeps the right-click for itself.
+   */
+  triggerScope?: "surface" | "header";
 }
 
 /** Named for the host's file manager, which is where the hovered path lives. */
@@ -305,6 +314,7 @@ function TerminalContextMenuBody({
   children,
   forceLocation,
   proxy = false,
+  triggerScope = "surface",
 }: TerminalContextMenuProps) {
   // Open or still animating out. Raised by the right-click itself, in the same
   // batch as Radix's open, so the first open frame renders live data — Radix
@@ -489,7 +499,10 @@ function TerminalContextMenuBody({
           : null;
       const focusable =
         hit && pane.contains(hit) ? hit : proxy ? pane.querySelector<HTMLElement>(FOCUSABLE) : null;
-      movePickerReturnFocusRef.current = focusable ?? pane;
+      // A header-scoped trigger wraps the title bar, not the surface that takes focus.
+      const panelRoot =
+        triggerScope === "header" ? pane.closest<HTMLElement>("[data-panel-id]") : null;
+      movePickerReturnFocusRef.current = focusable ?? panelRoot ?? pane;
       capturedMovePickerAnchorRef.current = {
         // Lets Floating UI follow the pane itself when it moves or resizes.
         contextElement: pane,
@@ -504,7 +517,7 @@ function TerminalContextMenuBody({
         },
       };
     },
-    [proxy]
+    [proxy, triggerScope]
   );
 
   const handleTriggerContextMenu = useCallback(
@@ -1194,6 +1207,28 @@ function TerminalContextMenuBody({
     ? { "data-context-proxy": terminalId }
     : { "data-context-trigger": terminalId };
 
+  const renderTrigger = (onContextMenu: (event: React.MouseEvent<HTMLElement>) => void) => {
+    const triggerProps = {
+      ...triggerMarker,
+      onContextMenu,
+      onPointerDown: captureMovePickerAnchorOnPress,
+    };
+    if (triggerScope === "header") {
+      return (
+        <PanelContextMenuTriggerContext.Provider value={triggerProps}>
+          {children}
+        </PanelContextMenuTriggerContext.Provider>
+      );
+    }
+    return (
+      <ContextMenuTrigger asChild>
+        <div className="contents" {...triggerProps}>
+          {children}
+        </div>
+      </ContextMenuTrigger>
+    );
+  };
+
   const isBrowser = isBrowserPanel(terminal);
   const isDevPreview = isDevPreviewPanel(terminal);
   const isReview = isReviewPanel(terminal);
@@ -1395,16 +1430,7 @@ function TerminalContextMenuBody({
             return null;
           }}
         </MenuActionSourceContext.Consumer>
-        <ContextMenuTrigger asChild>
-          <div
-            className="contents"
-            {...triggerMarker}
-            onContextMenu={handleTriggerContextMenu}
-            onPointerDown={captureMovePickerAnchorOnPress}
-          >
-            {children}
-          </div>
-        </ContextMenuTrigger>
+        {renderTrigger(handleTriggerContextMenu)}
         <ContextMenuContent onCloseAutoFocus={handleCloseAutoFocus}>
           <MenuContentMountSignal isLive={isMenuLive} onLiveChange={setIsMenuLive} />
           {layoutSection}
@@ -1463,16 +1489,7 @@ function TerminalContextMenuBody({
             return null;
           }}
         </MenuActionSourceContext.Consumer>
-        <ContextMenuTrigger asChild>
-          <div
-            className="contents"
-            {...triggerMarker}
-            onContextMenu={handleTriggerContextMenu}
-            onPointerDown={captureMovePickerAnchorOnPress}
-          >
-            {children}
-          </div>
-        </ContextMenuTrigger>
+        {renderTrigger(handleTriggerContextMenu)}
         <ContextMenuContent onCloseAutoFocus={handleCloseAutoFocus}>
           <MenuContentMountSignal isLive={isMenuLive} onLiveChange={setIsMenuLive} />
           {layoutSection}
@@ -1530,16 +1547,7 @@ function TerminalContextMenuBody({
             return null;
           }}
         </MenuActionSourceContext.Consumer>
-        <ContextMenuTrigger asChild>
-          <div
-            className="contents"
-            {...triggerMarker}
-            onContextMenu={handleTriggerContextMenu}
-            onPointerDown={captureMovePickerAnchorOnPress}
-          >
-            {children}
-          </div>
-        </ContextMenuTrigger>
+        {renderTrigger(handleTriggerContextMenu)}
         <ContextMenuContent onCloseAutoFocus={handleCloseAutoFocus}>
           <MenuContentMountSignal isLive={isMenuLive} onLiveChange={setIsMenuLive} />
           {layoutSection}
@@ -1587,16 +1595,7 @@ function TerminalContextMenuBody({
             return null;
           }}
         </MenuActionSourceContext.Consumer>
-        <ContextMenuTrigger asChild>
-          <div
-            className="contents"
-            {...triggerMarker}
-            onContextMenu={handleTriggerContextMenu}
-            onPointerDown={captureMovePickerAnchorOnPress}
-          >
-            {children}
-          </div>
-        </ContextMenuTrigger>
+        {renderTrigger(handleTriggerContextMenu)}
         <ContextMenuContent onCloseAutoFocus={handleCloseAutoFocus}>
           <MenuContentMountSignal isLive={isMenuLive} onLiveChange={setIsMenuLive} />
           {/* The header's overflow menu renders this same list (#12606). */}
@@ -1687,16 +1686,7 @@ function TerminalContextMenuBody({
             return null;
           }}
         </MenuActionSourceContext.Consumer>
-        <ContextMenuTrigger asChild>
-          <div
-            className="contents"
-            {...triggerMarker}
-            onContextMenu={handleContextMenu}
-            onPointerDown={captureMovePickerAnchorOnPress}
-          >
-            {children}
-          </div>
-        </ContextMenuTrigger>
+        {renderTrigger(handleContextMenu)}
         <ContextMenuContent onCloseAutoFocus={handleCloseAutoFocus}>
           <MenuContentMountSignal isLive={isMenuLive} onLiveChange={setIsMenuLive} />
           {hasPty && (
