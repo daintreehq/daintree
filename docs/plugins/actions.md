@@ -568,6 +568,7 @@ An argument shown as `name?` is optional. Argument names come from each action's
 | `worktree.sessions.restartAll` | Restart all sessions | confirm | `confirmed?`, `worktreeId?` |
 | `worktree.sessions.trashAll` | Trash all sessions | confirm | `confirmed?`, `worktreeId?` |
 | `worktree.setActive` | Set active worktree | safe | `worktreeId` |
+| `worktree.setCustomTitle` | Set worktree title | safe | `title`, `worktreeId` |
 | `worktree.setLabelColor` | Set worktree label colour | safe | `color`, `worktreeId` |
 | `worktree.switchIndex` | Switch to worktree by index | safe | `index` |
 | `worktree.waitForPullRequest` | Wait for worktree pull request | safe | `worktreeIds`, `timeoutMs?` |

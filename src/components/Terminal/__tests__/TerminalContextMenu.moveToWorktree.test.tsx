@@ -35,6 +35,7 @@ const {
       groupByType: false,
       pinnedWorktrees: [] as string[],
       manualOrder: [] as string[],
+      worktreeCustomTitles: {} as Record<string, string>,
     },
   },
   panelsById: { current: {} as Record<string, unknown> },
@@ -300,6 +301,7 @@ describe("TerminalContextMenu — Move to worktree (#12445)", () => {
       groupByType: false,
       pinnedWorktrees: [],
       manualOrder: [],
+      worktreeCustomTitles: {},
     };
   });
 
@@ -451,6 +453,7 @@ describe("TerminalContextMenu — Move to worktree cap and picker handoff (#1244
       groupByType: false,
       pinnedWorktrees: [],
       manualOrder: [],
+      worktreeCustomTitles: {},
     };
   });
 

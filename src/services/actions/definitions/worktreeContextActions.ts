@@ -40,6 +40,11 @@ import { PANEL_LIMIT_ERROR_SUFFIX } from "./panelLimitError";
 import { paginate } from "@shared/utils/boundedOutput";
 import { GIT_PAGE_LIMIT_DEFAULT, GIT_PAGE_LIMIT_MAX } from "@shared/config/gitReadLimits";
 import {
+  WORKTREE_CUSTOM_TITLE_MAX_LENGTH,
+  isWorktreeCustomTitleTooLong,
+  normalizeWorktreeCustomTitle,
+} from "@/lib/worktreeCustomTitle";
+import {
   deriveReviewReadiness,
   REVIEW_READINESS_ITEM_IDS,
   type ReviewReadinessCta,
@@ -580,6 +585,42 @@ export function registerWorktreeContextActions(
             worktreeId,
             color === null ? null : worktreeLabelTokenForName(color)
           );
+      },
+    })
+  );
+
+  actions.set("worktree.setCustomTitle", () =>
+    defineAction({
+      id: "worktree.setCustomTitle",
+      title: "Set worktree title",
+      description:
+        "Names a worktree with a custom title shown in place of its issue, PR or branch headline on its card and in pickers. The computed headline stays visible beneath it. Cosmetic only.",
+      category: "worktree",
+      kind: "command",
+      danger: "safe",
+      scope: "renderer",
+      keywords: ["title", "name", "rename", "label", "custom"],
+      argsSchema: z.object({
+        worktreeId: z.string().min(1).describe("Worktree id, from the worktree list"),
+        title: z
+          .string()
+          .nullable()
+          .describe(
+            `Custom title, at most ${WORKTREE_CUSTOM_TITLE_MAX_LENGTH} characters after whitespace is collapsed; null or blank clears it`
+          ),
+      }),
+      run: async (args) => {
+        const { worktreeId, title } = args;
+        if (!getCurrentViewStore().getState().worktrees.has(worktreeId)) {
+          throw new Error(`Worktree not found: ${worktreeId}`);
+        }
+        const normalized = title === null ? "" : normalizeWorktreeCustomTitle(title);
+        // Rejected rather than truncated: the wire schema can't carry the limit.
+        if (isWorktreeCustomTitleTooLong(normalized)) {
+          throw new Error(`Title is longer than ${WORKTREE_CUSTOM_TITLE_MAX_LENGTH} characters`);
+        }
+        const { useWorktreeFilterStore } = await import("@/store/worktreeFilterStore");
+        useWorktreeFilterStore.getState().setWorktreeCustomTitle(worktreeId, normalized || null);
       },
     })
   );

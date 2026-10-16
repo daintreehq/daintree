@@ -12,11 +12,22 @@ import { isStandardBranch } from "@shared/config/branchPrefixes";
  * the context menu. The card can afford to render nothing there because the
  * rest of the card still says which worktree it is; a one-line row cannot.
  */
-export type WorktreeHeadline =
+export type ComputedWorktreeHeadline =
   | { kind: "pr"; number: number; title: string | undefined; label: string }
   | { kind: "issue"; number: number; title: string; label: string }
   | { kind: "main"; label: string }
   | { kind: "branch"; label: string };
+
+/**
+ * A custom title (#13409) replaces only `label`. `kind` and its fields stay the
+ * computed headline's, so a caller that draws provenance — the PR glyph, the
+ * issue mark — keeps drawing it, and `computedLabel` is what the title
+ * displaced, for a secondary line or tooltip. Both are absent without a title.
+ */
+export type WorktreeHeadline = ComputedWorktreeHeadline & {
+  customTitle?: string;
+  computedLabel?: string;
+};
 
 /**
  * The branch name a worktree row shows, falling back to the worktree's own
@@ -46,7 +57,20 @@ export function isMainWorktreeOnStandardBranch(worktree: Worktree | WorktreeStat
   );
 }
 
-export function getWorktreeHeadline(worktree: Worktree | WorktreeState): WorktreeHeadline {
+/**
+ * The title is passed in rather than read from the filter store, so this stays
+ * pure and a caller with no title to hand gets the computed headline.
+ */
+export function getWorktreeHeadline(
+  worktree: Worktree | WorktreeState,
+  customTitle?: string | null
+): WorktreeHeadline {
+  const computed = getComputedWorktreeHeadline(worktree);
+  if (!customTitle) return computed;
+  return { ...computed, label: customTitle, customTitle, computedLabel: computed.label };
+}
+
+function getComputedWorktreeHeadline(worktree: Worktree | WorktreeState): ComputedWorktreeHeadline {
   // PR-originated worktrees (created from the PR dropdown, #8888) invert the
   // default issue-first headline. `sourcePrNumber` is the in-memory
   // discriminator seeded at creation time, and the headline renders even before

@@ -40,6 +40,7 @@ import { getCurrentViewStore } from "@/store/createWorktreeStore";
 import { useWorktreeStore } from "@/hooks/useWorktreeStore";
 import { cn } from "../../lib/utils";
 import { copyableBranchName, isExternalWorktree } from "@/lib/worktreeFilters";
+import { getWorktreeHeadline } from "@/lib/worktreeHeadline";
 import { getAgentConfig, getAgentIds } from "@/config/agents";
 import { isAssistantOnlyAgentId } from "@shared/config/agentIds";
 import { getAgentSettingsEntry } from "@/types";
@@ -228,6 +229,7 @@ export function WorktreeCard({
   const labelColor = useWorktreeFilterStore(
     (state) => state.worktreeLabelColors[worktree.id] ?? null
   );
+  const customTitle = useWorktreeFilterStore((state) => state.worktreeCustomTitles[worktree.id]);
   const labelAriaSuffix = labelColor
     ? `, Label colour: ${worktreeLabelDisplayName(labelColor)}`
     : "";
@@ -587,6 +589,16 @@ export function WorktreeCard({
   };
 
   const [showIssuePicker, setShowIssuePicker] = useState(false);
+  const [showTitleDialog, setShowTitleDialog] = useState(false);
+  // The dialog returns focus to the ⋯ trigger it was opened from on its own;
+  // these are where it lands when the opener was the right-click menu, which
+  // has no trigger: the sidebar card's select button, or the grid cell.
+  const cardRootRef = useRef<HTMLElement | null>(null);
+  const selectButtonRef = useRef<HTMLButtonElement | null>(null);
+  const resolveTitleDialogRestore = () =>
+    selectButtonRef.current ??
+    cardRootRef.current?.closest<HTMLElement>('[role="gridcell"]') ??
+    cardRootRef.current;
 
   // `planFilePath` is a bare candidate filename (`TODO.md` and friends), so
   // `worktree.path` is the root it resolves against, and naming the card's own
@@ -760,6 +772,7 @@ export function WorktreeCard({
 
   const droppableRef = (node: HTMLElement | null) => {
     setNodeRef(node);
+    cardRootRef.current = node;
   };
 
   const activeDragData = active?.data.current as Partial<WorktreeDragData> | undefined;
@@ -984,6 +997,7 @@ export function WorktreeCard({
     isCollapsed: effectiveIsCollapsed,
     labelColor,
     onSetLabelColor: handleSetLabelColor,
+    onEditTitle: () => setShowTitleDialog(true),
     onLaunchAgent,
     onMoveUp,
     onMoveDown,
@@ -1029,6 +1043,19 @@ export function WorktreeCard({
     ariaStatusParts.push("has uncommitted changes");
   }
   const ariaStatusLabel = ariaStatusParts.join(", ");
+  const computedAriaTitle = worktree.issueTitle ?? worktree.branchDerivedTitle;
+  // A custom title leads, and what it displaced follows in the parenthetical,
+  // so a screen reader hears both names the card shows.
+  // The headline's own computed label rather than the issue fields, so a
+  // PR-originated card names its PR too.
+  const displacedAriaNames = customTitle
+    ? [getWorktreeHeadline(worktree).label, branchLabel].filter(
+        (name, i, names) => name && names.indexOf(name) === i
+      )
+    : [];
+  const ariaName = customTitle
+    ? `${customTitle} (${displacedAriaNames.join(", ")})`
+    : `${computedAriaTitle ?? branchLabel}${computedAriaTitle ? ` (${branchLabel})` : ""}`;
   const cardContent = (
     <ContextMenu>
       <ContextMenuTrigger asChild>
@@ -1093,7 +1120,7 @@ export function WorktreeCard({
           aria-busy={isBeingDeleted && !deleteError ? "true" : undefined}
           role={variant === "grid" ? "group" : undefined}
           aria-current={variant === "grid" && isActive ? "true" : undefined}
-          aria-label={`Worktree: ${worktree.issueTitle ?? worktree.branchDerivedTitle ?? branchLabel}${(worktree.issueTitle ?? worktree.branchDerivedTitle) ? ` (${branchLabel})` : ""}${worktree.isCurrent ? " (current)" : ""}, Status: ${ariaStatusLabel}${labelAriaSuffix}`}
+          aria-label={`Worktree: ${ariaName}${worktree.isCurrent ? " (current)" : ""}, Status: ${ariaStatusLabel}${labelAriaSuffix}`}
           onMouseDown={isMultiSelectEnabled ? suppressShiftClickTextSelection : undefined}
           onClick={handleCardClick}
           onDoubleClick={handleDoubleClick}
@@ -1217,12 +1244,13 @@ export function WorktreeCard({
           {variant === "sidebar" && (
             <button
               type="button"
+              ref={selectButtonRef}
               data-card-select-overlay=""
               className={cn(
                 "absolute inset-0 z-0 outline-hidden",
                 (isDraggingSort || isWorktreeSortDragging) && "pointer-events-none"
               )}
-              aria-label={`Select worktree: ${worktree.issueTitle ?? worktree.branchDerivedTitle ?? branchLabel}${(worktree.issueTitle ?? worktree.branchDerivedTitle) ? ` (${branchLabel})` : ""}${labelAriaSuffix}`}
+              aria-label={`Select worktree: ${ariaName}${labelAriaSuffix}`}
               // The row's marks are non-focusable, so this button is where a
               // keyboard user meets them: described by each mark's words, and,
               // collapsed, revealing the alarm's tooltip while ringed.
@@ -1446,6 +1474,7 @@ export function WorktreeCard({
                   onToggleCollapse={handleToggleCollapse}
                   contentId={`worktree-body-${worktree.id}`}
                   branchLabel={branchLabel}
+                  customTitle={customTitle}
                   sessionStates={terminalCounts.byState}
                   sessionTotal={terminalCounts.total}
                   sessionUnread={terminalCounts.unread}
@@ -1574,6 +1603,10 @@ export function WorktreeCard({
             onCloseIssuePicker={() => setShowIssuePicker(false)}
             onAttachIssue={handleAttachIssue}
             onDetachIssue={handleDetachIssue}
+            showTitleDialog={showTitleDialog}
+            onCloseTitleDialog={() => setShowTitleDialog(false)}
+            customTitle={customTitle}
+            restoreTitleDialogFocusTo={resolveTitleDialogRestore}
           />
         </div>
       </ContextMenuTrigger>

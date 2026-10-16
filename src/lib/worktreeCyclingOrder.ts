@@ -93,13 +93,17 @@ function buildDerivedMeta(
   };
 }
 
-function worktreeMatchesQuery(worktree: WorktreeState, query: string): boolean {
+function worktreeMatchesQuery(
+  worktree: WorktreeState,
+  query: string,
+  customTitle: string | undefined
+): boolean {
   if (!query) return true;
   const exactNum = parseExactNumber(query);
   if (exactNum !== null) {
     return worktree.issueNumber === exactNum || worktree.linked?.pr?.ref.number === exactNum;
   }
-  return scoreWorktree(worktree, query) > 0;
+  return scoreWorktree(worktree, query, customTitle) > 0;
 }
 
 /**
@@ -133,6 +137,7 @@ export function getVisibleWorktreesForCycling(
     pinnedWorktrees,
     manualOrder,
     quickStateFilter,
+    worktreeCustomTitles: customTitles,
   } = filterState;
 
   const devServerSessions = useWorktreeDevServerStore.getState().sessionsByWorktreeId;
@@ -191,6 +196,7 @@ export function getVisibleWorktreesForCycling(
     hasAgentFilter,
     activityFilters,
     devServerFilters,
+    customTitles,
   };
 
   const hasFacetFiltersActive = filterState.hasFacetFilters();
@@ -232,7 +238,14 @@ export function getVisibleWorktreesForCycling(
 
   const hasQuery = query.trim().length > 0;
   const sortedNonMain = hasQuery
-    ? sortWorktreesByRelevance(filtered, query, orderBy, validPinnedWorktrees, manualOrder)
+    ? sortWorktreesByRelevance(
+        filtered,
+        query,
+        orderBy,
+        validPinnedWorktrees,
+        manualOrder,
+        customTitles
+      )
     : sortWorktrees(filtered, orderBy, validPinnedWorktrees, manualOrder);
 
   // Match sidebar's grouped rendering: when grouped-by-type is on and
@@ -243,7 +256,7 @@ export function getVisibleWorktreesForCycling(
       : sortedNonMain;
 
   const topPinned: WorktreeState[] = [];
-  if (mainWorktree && worktreeMatchesQuery(mainWorktree, query)) {
+  if (mainWorktree && worktreeMatchesQuery(mainWorktree, query, customTitles[mainWorktree.id])) {
     const mainDerived = derivedMetaMap.get(mainWorktree.id) ?? {
       terminalCount: 0,
       hasAgent: false,

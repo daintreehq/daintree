@@ -756,6 +756,7 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
   const hasFacetFiltersActive = hasFacetFilters();
   const collapsedWorktrees = useWorktreeFilterStore((state) => state.collapsedWorktrees);
   const worktreeLabelColors = useWorktreeFilterStore((state) => state.worktreeLabelColors);
+  const worktreeCustomTitles = useWorktreeFilterStore((state) => state.worktreeCustomTitles);
   const pruneStaleWorktreeIds = useWorktreeFilterStore((state) => state.pruneStaleWorktreeIds);
   const setQuickStateFilter = useWorktreeFilterStore((state) => state.setQuickStateFilter);
 
@@ -850,10 +851,12 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
   useEffect(() => {
     if (!canPruneWorktreeIds) return;
     const labelledIds = Object.keys(worktreeLabelColors);
+    const titledIds = Object.keys(worktreeCustomTitles);
     if (
       pinnedWorktrees.length === 0 &&
       collapsedWorktrees.length === 0 &&
       labelledIds.length === 0 &&
+      titledIds.length === 0 &&
       manualOrder.length === 0
     ) {
       return;
@@ -862,7 +865,8 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
     const hasStalePin = pinnedWorktrees.some((id) => !existingIds.has(id));
     const hasStaleCollapsed = collapsedWorktrees.some((id) => !existingIds.has(id));
     const hasStaleLabel = labelledIds.some((id) => !existingIds.has(id));
-    if (hasStalePin || hasStaleCollapsed || hasStaleLabel) {
+    const hasStaleTitle = titledIds.some((id) => !existingIds.has(id));
+    if (hasStalePin || hasStaleCollapsed || hasStaleLabel || hasStaleTitle) {
       pruneStaleWorktreeIds(existingIds);
     }
     if (manualOrder.length > 0) {
@@ -877,6 +881,7 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
     pinnedWorktrees,
     collapsedWorktrees,
     worktreeLabelColors,
+    worktreeCustomTitles,
     manualOrder,
     pruneStaleWorktreeIds,
     setManualOrder,
@@ -1015,6 +1020,7 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
         hasAgentFilter,
         activityFilters,
         devServerFilters,
+        customTitles: worktreeCustomTitles,
       },
       devServerSessions
     );
@@ -1031,6 +1037,7 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
     activityFilters,
     devServerFilters,
     devServerSessions,
+    worktreeCustomTitles,
   ]);
 
   const mainWorktreeAggregateCounts = useMemo(() => {
@@ -1062,6 +1069,7 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
         hasAgentFilter,
         activityFilters,
         devServerFilters,
+        customTitles: worktreeCustomTitles,
       };
 
       let withoutQuickStateMatch = false;
@@ -1137,7 +1145,8 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
             deferredQuery,
             orderBy,
             validPinnedWorktrees,
-            manualOrder
+            manualOrder,
+            worktreeCustomTitles
           )
         : // `groupByType: false` on purpose. The sections are built separately
           // below, because `filteredWorktrees` has to stay the pre-grouping
@@ -1187,6 +1196,7 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
       activeWorktreeId,
       quickStateFilter,
       hasFacetFiltersActive,
+      worktreeCustomTitles,
     ]);
 
   const worktreeActions = useWorktreeActions({
@@ -1254,7 +1264,7 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
     if (exactNum !== null) {
       return w.issueNumber === exactNum || w.linked?.pr?.ref.number === exactNum;
     }
-    return scoreWorktree(w, deferredQuery) > 0;
+    return scoreWorktree(w, deferredQuery, worktreeCustomTitles[w.id]) > 0;
   };
 
   const pinnedFiltersPre: FilterState = {
@@ -1266,6 +1276,7 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
     hasAgentFilter,
     activityFilters,
     devServerFilters,
+    customTitles: worktreeCustomTitles,
   };
 
   const mainMatchesQueryPre = mainWorktree && worktreeMatchesQueryPre(mainWorktree);

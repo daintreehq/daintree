@@ -174,6 +174,8 @@ export const FULL_TIER_ADDONS = [
   // orchestrator can mark the worktree it is steering the user towards. A
   // per-project label the user sees and clears from the card menu, nothing more.
   "worktree.setLabelColor",
+  // Its companion (#13409): naming the worktree on its card, same scope.
+  "worktree.setCustomTitle",
 
   // Resume spawns a pane; the record owns its launch directory (#11908).
   "agentSessionHistory.list",

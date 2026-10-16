@@ -40,6 +40,7 @@ import {
   PanelTopClose,
   PanelTopOpen,
   Pause,
+  Pencil,
   Pin,
   PinOff,
   Play,
@@ -216,6 +217,8 @@ export interface WorktreeMenuItemsProps {
   labelColor?: WorktreeLabelToken | null;
   /** Receives null for None. Dispatches `worktree.setLabelColor`. */
   onSetLabelColor?: (token: WorktreeLabelToken | null) => void;
+  /** Opens the card's "Edit worktree title" dialog (#13409). */
+  onEditTitle?: () => void;
   // Optional only so a workspace root needn't pass inert handlers: the
   // `worktree.sessions.*` actions resolve a worktree id and no-op without one.
   onDockAll?: () => void;
@@ -325,6 +328,7 @@ export function WorktreeMenuItems({
   isCollapsed,
   labelColor,
   onSetLabelColor,
+  onEditTitle,
   onDockAll,
   onMaximizeAll,
   onResetRenderers,
@@ -1124,7 +1128,7 @@ export function WorktreeMenuItems({
   const hasMoveRows = Boolean(onMoveUp || onMoveDown);
   // Main and external worktrees get a label even though they can't be pinned —
   // the main worktree is the case labels exist for (#13408).
-  const canLabel = Boolean(onSetLabelColor);
+  const canLabel = Boolean(onSetLabelColor || onEditTitle);
   const hasCardRows = canPin || Boolean(onToggleCollapse) || canLabel;
   const organizeSub = worktree && (hasCardRows || hasMoveRows) && (
     <C.Sub key="organize">
@@ -1170,26 +1174,37 @@ export function WorktreeMenuItems({
               Label
             </C.SubTrigger>
             <C.SubContent>
-              <C.RadioGroup
-                value={labelColor ?? "none"}
-                onValueChange={(value: string) => {
-                  const next = isWorktreeLabelToken(value) ? value : null;
-                  if (next === (labelColor ?? null)) return;
-                  onSetLabelColor?.(next);
-                }}
-              >
-                <C.RadioItem value="none">None</C.RadioItem>
-                {WORKTREE_LABEL_COLORS.map((color) => (
-                  <C.RadioItem key={color.token} value={color.token}>
-                    <span
-                      aria-hidden="true"
-                      className="worktree-label-swatch mr-2"
-                      style={worktreeLabelColorStyle(color.token)}
-                    />
-                    {color.label}
-                  </C.RadioItem>
-                ))}
-              </C.RadioGroup>
+              {onEditTitle && (
+                <>
+                  <C.Item onSelect={onEditTitle} aria-haspopup="dialog">
+                    <Pencil className={ICON} />
+                    Edit title…
+                  </C.Item>
+                  {onSetLabelColor && <C.Separator />}
+                </>
+              )}
+              {onSetLabelColor && (
+                <C.RadioGroup
+                  value={labelColor ?? "none"}
+                  onValueChange={(value: string) => {
+                    const next = isWorktreeLabelToken(value) ? value : null;
+                    if (next === (labelColor ?? null)) return;
+                    onSetLabelColor?.(next);
+                  }}
+                >
+                  <C.RadioItem value="none">None</C.RadioItem>
+                  {WORKTREE_LABEL_COLORS.map((color) => (
+                    <C.RadioItem key={color.token} value={color.token}>
+                      <span
+                        aria-hidden="true"
+                        className="worktree-label-swatch mr-2"
+                        style={worktreeLabelColorStyle(color.token)}
+                      />
+                      {color.label}
+                    </C.RadioItem>
+                  ))}
+                </C.RadioGroup>
+              )}
             </C.SubContent>
           </C.Sub>
         )}

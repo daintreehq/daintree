@@ -23,6 +23,11 @@ interface NonMainSecondaryRowProps {
    */
   hasDisplayTitle: boolean;
   /**
+   * A custom title holds the headline (#13409), so whatever it displaced — the
+   * issue or PR with its title, or the branch — leads this stack instead.
+   */
+  hasCustomTitle?: boolean;
+  /**
    * True when the worktree was created from the PR dropdown (#8888): the PR is
    * the headline, so suppress the subordinate PR badge here and instead surface
    * the linked issue underneath.
@@ -45,10 +50,19 @@ export function NonMainSecondaryRow({
   hasUpstreamDelta,
   hasAuthFailedSignIn,
   hasDisplayTitle,
+  hasCustomTitle = false,
   isPrOriginated,
   hasPlanFile,
   badges,
 }: NonMainSecondaryRowProps) {
+  // The issue badge carries its title wherever it stands in for a headline:
+  // under a PR headline, and under a custom title that displaced the issue.
+  const issueBadgeTitle = isPrOriginated
+    ? worktree.issueTitle
+    : hasCustomTitle
+      ? (worktree.issueTitle ?? worktree.branchDerivedTitle)
+      : undefined;
+  const sourcePrNumber = worktree.sourcePrNumber;
   const prDetectionPaused = usePRCircuitBreakerStore((s) => s.tripped);
   // Suppress the subordinate PR badge when the PR is already the headline
   // (PR-originated worktrees, #8888) — the linked issue takes the secondary row.
@@ -154,10 +168,24 @@ export function NonMainSecondaryRow({
     // have something to say, and the badge decides whether it does; a row
     // whose every child rendered nothing must not leave its margin behind.
     <div className="flex flex-col gap-0.5 mt-2.5 px-1 empty:hidden">
-      {worktree.issueNumber && (isPrOriginated || !hasDisplayTitle) && (
+      {hasCustomTitle && isPrOriginated && sourcePrNumber && (
+        <PRBadge
+          prNumber={sourcePrNumber}
+          prTitle={worktree.linked?.pr?.title ?? worktree.prTitle}
+          prState={worktree.linked?.pr?.state}
+          prCiStatus={worktree.linked?.pr?.ciStatus}
+          isSubordinate={false}
+          worktreePath={worktree.path}
+          onOpen={badges.onOpenPR}
+          isActive={isActive}
+          underlineOnHover={underlineOnHover}
+          prDetectionPaused={prDetectionPaused}
+        />
+      )}
+      {worktree.issueNumber && (isPrOriginated || !hasDisplayTitle || hasCustomTitle) && (
         <IssueBadge
           issueNumber={worktree.issueNumber}
-          issueTitle={isPrOriginated ? worktree.issueTitle : undefined}
+          issueTitle={issueBadgeTitle}
           worktreePath={worktree.path}
           onOpen={badges.onOpenIssue}
           isActive={isActive}
@@ -169,7 +197,7 @@ export function NonMainSecondaryRow({
           has it drifted?". The upstream/PR pair still swaps between itself by
           alarm tier — that ordering is about which alarm outranks which, not
           about outranking the branch name. */}
-      {hasDisplayTitle && (
+      {(hasDisplayTitle || hasCustomTitle) && (
         <BranchLabel
           label={branchLabel}
           isActive={isActive}

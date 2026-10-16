@@ -14,6 +14,7 @@ const { worktreesRef, colorMapRef, prefsRef, dispatchMock, content } = vi.hoiste
       groupByType: false,
       pinnedWorktrees: [] as string[],
       manualOrder: [] as string[],
+      worktreeCustomTitles: {} as Record<string, string>,
     },
   },
   dispatchMock: vi.fn(),
@@ -287,7 +288,13 @@ function liveRegion(): string {
 beforeEach(() => {
   worktreesRef.current = SIDEBAR_ORDER;
   colorMapRef.current = null;
-  prefsRef.current = { orderBy: "alpha", groupByType: false, pinnedWorktrees: [], manualOrder: [] };
+  prefsRef.current = {
+    orderBy: "alpha",
+    groupByType: false,
+    pinnedWorktrees: [],
+    manualOrder: [],
+    worktreeCustomTitles: {},
+  };
   dispatchMock.mockReset();
   content.props = {};
   content.rootOpenChange = null;
@@ -375,6 +382,22 @@ describe("MoveToWorktreePicker", () => {
       // The lookalike carries 12431 in its branch but is not linked to it.
       type("#12431");
       expect(optionLabels()).toEqual(["#12431 Add systemPrompt to agent launch"]);
+    });
+
+    it("names a titled worktree by its title, with its branch under it, and finds it by title", () => {
+      prefsRef.current = {
+        ...prefsRef.current,
+        worktreeCustomTitles: { "w-bump": "Electron upgrade" },
+      };
+      render(<Harness />);
+
+      expect(spokenParts(option("Electron upgrade"))).toEqual([
+        "Electron upgrade",
+        "chore/bump-electron-42",
+      ]);
+
+      type("upgrade");
+      expect(optionLabels()).toEqual(["Electron upgrade"]);
     });
 
     it("matches text against the branch", () => {

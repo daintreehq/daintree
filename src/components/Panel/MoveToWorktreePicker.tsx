@@ -162,18 +162,29 @@ interface OrderPrefs {
   orderBy: OrderBy;
   pinnedWorktrees: string[];
   manualOrder: string[];
+  customTitles: Readonly<Record<string, string>>;
 }
 
-function toRow(worktree: WorktreeState, currentWorktreeId: string | undefined): PickerRow {
-  const headline = getWorktreeHeadline(worktree);
+function toRow(
+  worktree: WorktreeState,
+  currentWorktreeId: string | undefined,
+  customTitle: string | undefined
+): PickerRow {
+  const headline = getWorktreeHeadline(worktree, customTitle);
+  // A custom title (#13409) is a title like an issue's, whatever it displaced,
+  // so the branch goes underneath it.
   const detail =
-    headline.kind === "pr" || headline.kind === "issue"
-      ? getWorktreeBranchLabel(worktree)
-      : headline.kind === "main"
-        ? (worktree.branch ?? null)
-        : null;
+    headline.customTitle !== undefined
+      ? getWorktreeBranchLabel(worktree).trim() || null
+      : headline.kind === "pr" || headline.kind === "issue"
+        ? getWorktreeBranchLabel(worktree)
+        : headline.kind === "main"
+          ? (worktree.branch ?? null)
+          : null;
   const isBranchTitled =
-    headline.kind === "branch" && getWorktreeBranchLabel(worktree).trim() !== "";
+    headline.customTitle === undefined &&
+    headline.kind === "branch" &&
+    getWorktreeBranchLabel(worktree).trim() !== "";
   return {
     worktree,
     headline,
@@ -195,7 +206,9 @@ function orderForQuery(
   prefs: OrderPrefs
 ): readonly WorktreeState[] {
   if (!query) return ordered;
-  const matches = ordered.filter((worktree) => matchesWorktreeQuery(worktree, query));
+  const matches = ordered.filter((worktree) =>
+    matchesWorktreeQuery(worktree, query, prefs.customTitles[worktree.id])
+  );
   const main = matches.filter((worktree) => worktree.isMainWorktree);
   const rest = matches.filter((worktree) => !worktree.isMainWorktree);
   return [
@@ -205,7 +218,8 @@ function orderForQuery(
       query,
       prefs.orderBy,
       prefs.pinnedWorktrees,
-      prefs.manualOrder
+      prefs.manualOrder,
+      prefs.customTitles
     ),
   ];
 }
@@ -239,6 +253,7 @@ function MoveToWorktreePickerBody({
       orderBy: state.orderBy,
       pinnedWorktrees: state.pinnedWorktrees,
       manualOrder: state.manualOrder,
+      customTitles: state.worktreeCustomTitles,
     }))
   );
 
@@ -249,7 +264,7 @@ function MoveToWorktreePickerBody({
   const rows = useMemo(
     () =>
       orderForQuery(ordered, deferredQuery, prefs).map((worktree) =>
-        toRow(worktree, currentWorktreeId)
+        toRow(worktree, currentWorktreeId, prefs.customTitles[worktree.id])
       ),
     [ordered, deferredQuery, prefs, currentWorktreeId]
   );
@@ -604,10 +619,22 @@ function BranchName({
  * branch as git spells it — or, where the branch is the title, the branch alone
  * at the title's weight.
  */
-function RowRevealContent({ title, branch }: { title: string | null; branch: string | null }) {
+function RowRevealContent({
+  title,
+  displaced,
+  branch,
+}: {
+  title: string | null;
+  /** The computed headline a custom title replaced (#13409). */
+  displaced?: string;
+  branch: string | null;
+}) {
   return (
     <span className="flex flex-col gap-0.5 break-words">
       {title && <span>{title}</span>}
+      {displaced && displaced !== branch && (
+        <span className="text-2xs text-text-secondary">{displaced}</span>
+      )}
       {branch && (
         <span className={cn("font-mono", title ? "text-2xs text-text-secondary" : "text-xs")}>
           {branch}
@@ -651,8 +678,17 @@ function MoveToWorktreeRow({
 
   return (
     <TruncatedTooltip
-      content={<RowRevealContent title={isBranchTitled ? null : headline.label} branch={branch} />}
-      isTruncated={isTitleCut || isBranchCut}
+      content={
+        <RowRevealContent
+          title={isBranchTitled ? null : headline.label}
+          displaced={headline.computedLabel}
+          branch={branch}
+        />
+      }
+      // A custom title hides the computed headline whatever its length, and a
+      // search may have matched that headline, so the reveal always has
+      // something to say for a titled row.
+      isTruncated={isTitleCut || isBranchCut || headline.computedLabel !== undefined}
       // The row is the option the input's active descendant names; a tab stop
       // on its text would be a second focus target.
       focusable={false}

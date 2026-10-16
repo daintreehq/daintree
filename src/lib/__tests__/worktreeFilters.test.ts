@@ -1897,3 +1897,59 @@ describe("orderWorktreesLikeSidebar", () => {
     ).toEqual(["f2", "b1"]);
   });
 });
+
+describe("custom titles in search (#13409)", () => {
+  const titles = { "wt-1": "Release prep" };
+
+  it("scores a custom title at headline weight", () => {
+    const worktree = createMockWorktree({ id: "wt-1", name: "zzz", branch: "chore/zzz" });
+    expect(scoreWorktree(worktree, "release", titles["wt-1"])).toBe(4);
+    expect(scoreWorktree(worktree, "prep", titles["wt-1"])).toBe(3);
+    expect(scoreWorktree(worktree, "release")).toBe(0);
+  });
+
+  it("still matches the fields the title displaced", () => {
+    const worktree = createMockWorktree({
+      id: "wt-1",
+      name: "zzz",
+      branch: "chore/zzz",
+      issueTitle: "Crash on start",
+    });
+    expect(scoreWorktree(worktree, "crash", titles["wt-1"])).toBe(4);
+    expect(scoreWorktree(worktree, "chore", titles["wt-1"])).toBe(2);
+  });
+
+  it("matches through the filter state's title map", () => {
+    const worktree = createMockWorktree({ id: "wt-1", name: "zzz", branch: "chore/zzz" });
+    const filters = createEmptyFilters();
+    filters.query = "release";
+    expect(matchesFilters(worktree, filters, createEmptyMeta(), false)).toBe(false);
+    filters.customTitles = titles;
+    expect(matchesFilters(worktree, filters, createEmptyMeta(), false)).toBe(true);
+  });
+
+  it("leaves number lookup alone when a title is itself a number", () => {
+    const numbered = createMockWorktree({
+      id: "wt-2",
+      name: "a",
+      branch: "chore/a",
+      issueNumber: 2,
+    });
+    const titledTwo = createMockWorktree({ id: "wt-3", name: "b", branch: "chore/b" });
+    const filters = createEmptyFilters();
+    filters.query = "2";
+    filters.customTitles = { "wt-3": "2" };
+
+    expect(matchesFilters(numbered, filters, createEmptyMeta(), false)).toBe(true);
+    expect(matchesFilters(titledTwo, filters, createEmptyMeta(), false)).toBe(false);
+  });
+
+  it("ranks by the title when relevance sorting", () => {
+    const a = createMockWorktree({ id: "a", name: "alpha", branch: "feature/release-x" });
+    const b = createMockWorktree({ id: "b", name: "beta", branch: "chore/b" });
+    const sorted = sortWorktreesByRelevance([a, b], "release", "alpha", [], [], {
+      b: "Release prep",
+    });
+    expect(sorted.map((w) => w.id)).toEqual(["b", "a"]);
+  });
+});

@@ -489,7 +489,11 @@ describe("LLM-facing tool descriptions (#11542)", () => {
   // to carry is that the colour reaches the panel headers and pickers as well
   // as the card, and that it is cosmetic. Full tier only, off the external
   // surface.
-  const MAX_COHORT_TOTAL_BYTES = 21_550;
+  // 21_550 → 21_750 for `worktree.setCustomTitle` (#13409), measured at
+  // 21_713 B. What the prose has to carry is that the title replaces the
+  // computed headline on the card and in pickers while the computed one stays
+  // visible, and that it is cosmetic. Full tier only, off the external surface.
+  const MAX_COHORT_TOTAL_BYTES = 21_750;
 
   const ARG_SECTION = /\b(?:args?|arguments?|parameters?)\s*(?:\([^)]*\))?\s*:|\btakes no args\b/i;
 

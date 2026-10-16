@@ -1489,6 +1489,12 @@ describe("McpServerService", () => {
         title: "Set Worktree Label Colour",
         description: "Mark a worktree's sidebar card with a colour",
       }),
+      // Full-only (#13409).
+      createManifestEntry({
+        id: "worktree.setCustomTitle" as ActionId,
+        title: "Set Worktree Title",
+        description: "Give a worktree's sidebar card a custom title",
+      }),
       createManifestEntry({
         id: "git.stageFile" as ActionId,
         title: "Stage File",
