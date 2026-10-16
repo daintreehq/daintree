@@ -6,6 +6,7 @@ import type {
   RemoteEndpointCloseCause,
 } from "../../ipc/endpoint.js";
 import { AppError } from "../../utils/errorTypes.js";
+import { allocateRemoteHandle } from "../endpointHandles.js";
 
 /**
  * How a remote endpoint reaches its Shell: the session it currently rides,
@@ -19,18 +20,6 @@ export interface RemoteEndpointTransport {
     payload: unknown,
     options: EndpointRequestOptions | undefined
   ): Promise<unknown>;
-}
-
-let nextHandle = -1;
-
-/**
- * Negative and never reused within a process, so a remote handle can't collide
- * with a `WebContents` id or with an endpoint that has since closed.
- */
-export function allocateRemoteHandle(): number {
-  const handle = nextHandle;
-  nextHandle = handle <= -Number.MAX_SAFE_INTEGER ? -1 : handle - 1;
-  return handle;
 }
 
 function disconnected(message: string): AppError {

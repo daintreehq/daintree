@@ -14,7 +14,7 @@ import {
   type CanopyHostPushChannel,
 } from "../../../shared/types/ipc/canopyHost.js";
 import { AppError } from "../../utils/errorTypes.js";
-import { allocateRemoteHandle } from "../host/RemoteViewEndpoint.js";
+import { allocateRemoteHandle } from "../endpointHandles.js";
 
 export interface CanopyViewerParams {
   endpointId: string;
