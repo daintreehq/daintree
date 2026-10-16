@@ -192,6 +192,7 @@ vi.mock("../DockLaunchButton", () => ({ DockLaunchButton: () => null }));
 vi.mock("../DockLaunchMenuItems", () => ({ DockLaunchMenuItems: () => null }));
 vi.mock("../TrashContainer", () => ({ TrashContainer: () => null }));
 vi.mock("../WaitingContainer", () => ({ WaitingContainer: () => null }));
+vi.mock("../UnreadContainer", () => ({ UnreadContainer: () => null }));
 vi.mock("../ErrorsContainer", () => ({ ErrorsContainer: () => null }));
 vi.mock("../BackgroundContainer", () => ({ BackgroundContainer: () => null }));
 

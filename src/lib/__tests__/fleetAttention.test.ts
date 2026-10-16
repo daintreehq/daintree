@@ -1,15 +1,19 @@
 import { describe, it, expect } from "vitest";
 import {
+  ATTENTION_FILTER_BANDS,
   bandForRun,
   bandLabel,
   bandTimestamp,
   compareWithinBand,
+  DEMAND_BANDS,
   emptyBandCounts,
   FLEET_BANDS,
+  fleetBandRunKey,
   isAttentionBand,
   isDemandBand,
+  UNREAD_FILTER_BANDS,
 } from "../fleetAttention";
-import type { FleetRunRow } from "@shared/types/ipc/fleet";
+import type { FleetRunRow, FleetSnapshot } from "@shared/types/ipc/fleet";
 
 const NOW = 1_700_000_000_000;
 
@@ -469,5 +473,81 @@ describe("Canopy asks keep their age", () => {
     // An ask Daintree observed itself keeps its own clock.
     const observed = run({ agentState: "waiting", waitingReason: "question", since: NOW - 5_000 });
     expect(bandTimestamp(observed, "needs-you")).toBe(NOW - 5_000);
+  });
+});
+
+describe("fleetBandRunKey", () => {
+  function snapshot(runs: FleetRunRow[]): FleetSnapshot {
+    return { runs, changedAt: NOW, degraded: false, lastSuccessfulAt: NOW };
+  }
+
+  const unseen = { stoppedAt: NOW - 60_000 };
+  const seen = { stoppedAt: NOW - 60_000, seenAt: NOW - 30_000 };
+  const fleet = snapshot([
+    run({ runId: "approval", agentState: "waiting", waitingReason: "approval" }),
+    run({ runId: "error", agentState: "waiting", waitingReason: "error" }),
+    run({ runId: "unread", agentState: "completed", handBack: unseen }),
+    run({ runId: "read", agentState: "waiting", handBack: seen }),
+    run({ runId: "bare-prompt", agentState: "waiting", waitingReason: "prompt" }),
+    run({
+      runId: "parked-ask",
+      agentState: "waiting",
+      waitingReason: "question",
+      park: { parkedAt: NOW },
+    }),
+    run({
+      runId: "snoozed-hand-back",
+      agentState: "waiting",
+      handBack: unseen,
+      snooze: { snoozedAt: NOW - 60_000, snoozedUntil: NOW + 900_000 },
+    }),
+    run({
+      runId: "canopy-ask",
+      agentState: "completed",
+      handBack: seen,
+      canopy: { kind: "asked", quote: "Ship it?", readAt: NOW },
+    }),
+    run({ runId: "working", agentState: "working" }),
+  ]);
+
+  it("holds the asks for Attention and only the unread hand-backs for Unread", () => {
+    expect(fleetBandRunKey(fleet, ATTENTION_FILTER_BANDS).split("\n")).toEqual([
+      "approval",
+      "canopy-ask",
+      "error",
+    ]);
+    expect(fleetBandRunKey(fleet, UNREAD_FILTER_BANDS)).toBe("unread");
+  });
+
+  it("splits the demands between the two with nothing shared or left over", () => {
+    const attention = fleetBandRunKey(fleet, ATTENTION_FILTER_BANDS).split("\n");
+    const unread = fleetBandRunKey(fleet, UNREAD_FILTER_BANDS).split("\n");
+    expect(attention.filter((id) => unread.includes(id))).toEqual([]);
+    expect(fleetBandRunKey(fleet, DEMAND_BANDS).split("\n")).toEqual(
+      [...attention, ...unread].sort()
+    );
+  });
+
+  it("holds nobody before the first snapshot", () => {
+    expect(fleetBandRunKey(null, ATTENTION_FILTER_BANDS)).toBe("");
+    expect(fleetBandRunKey(snapshot([]), UNREAD_FILTER_BANDS)).toBe("");
+  });
+
+  it("reads the same set from a new snapshot in a different order", () => {
+    const reordered = snapshot([...fleet.runs].reverse());
+    expect(fleetBandRunKey(reordered, ATTENTION_FILTER_BANDS)).toBe(
+      fleetBandRunKey(fleet, ATTENTION_FILTER_BANDS)
+    );
+  });
+
+  it("drops a hand-back from Unread once it is seen, and takes it back when marked unread", () => {
+    const one = (handBack: FleetRunRow["handBack"]) =>
+      fleetBandRunKey(
+        snapshot([run({ runId: "t1", agentState: "waiting", handBack })]),
+        UNREAD_FILTER_BANDS
+      );
+    expect(one(unseen)).toBe("t1");
+    expect(one(seen)).toBe("");
+    expect(one({ ...seen, markedUnreadAt: NOW })).toBe("t1");
   });
 });

@@ -31,6 +31,7 @@ import { DockedNonPtyPanelItem } from "./DockedNonPtyPanelItem";
 import { DockedTabGroup } from "./DockedTabGroup";
 import { TrashContainer } from "./TrashContainer";
 import { WaitingContainer } from "./WaitingContainer";
+import { UnreadContainer } from "./UnreadContainer";
 import { ErrorsContainer } from "./ErrorsContainer";
 import { BackgroundContainer } from "./BackgroundContainer";
 import { DockLaunchButton } from "./DockLaunchButton";
@@ -549,6 +550,7 @@ export function ContentDock({ density = "normal" }: ContentDockProps) {
           >
             <BackgroundContainer compact={isCompact} />
             <WaitingContainer compact={isCompact} />
+            <UnreadContainer compact={isCompact} />
             <ErrorsContainer compact={isCompact} />
             <TrashContainer
               trashedTerminals={trashedItems}

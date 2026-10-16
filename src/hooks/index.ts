@@ -52,7 +52,7 @@ export {
   updateBrandingCache,
 } from "./useProjectBranding";
 
-export { useWaitingTerminalIds, useBackgroundPanelStats } from "./useTerminalSelectors";
+export { useBackgroundPanelStats } from "./useTerminalSelectors";
 
 export { useWorktreeColorMap } from "./useWorktreeColorMap";
 

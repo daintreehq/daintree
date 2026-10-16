@@ -9,6 +9,14 @@ import { isTerminalOrphaned, isTerminalVisible } from "@/lib/terminalVisibility"
 import { isTerminalErrorClusterEligible } from "@/store/fleetEligibility";
 import { isAskingWait } from "@/lib/handBackPresentation";
 import { useHandBackRunIds } from "@/hooks/useRunHandBackState";
+import { useFleetSnapshotStore } from "@/store/fleetSnapshotStore";
+import {
+  ATTENTION_FILTER_BANDS,
+  DEMAND_BANDS,
+  fleetBandRunKey,
+  UNREAD_FILTER_BANDS,
+  type FleetBand,
+} from "@/lib/fleetAttention";
 export { isTerminalOrphaned, isTerminalVisible };
 
 let _cachedWorktrees: Map<string, WorktreeSnapshot> | null = null;
@@ -85,17 +93,31 @@ export function useTerminalNotificationCounts(blurTime?: number | null): {
   );
 }
 
-/** Agents asking for something. An unread or read hand-back is not one of them. */
-export function useWaitingTerminals(): PtyPanelData[] {
+const EMPTY_RUN_IDS: ReadonlySet<string> = new Set();
+const EMPTY_TERMINALS: PtyPanelData[] = [];
+
+/** Runs the fleet places in `bands`. Stable across fleet pushes that leave the set alone. */
+function useFleetBandRunIds(bands: ReadonlySet<FleetBand>): ReadonlySet<string> {
+  const key = useFleetSnapshotStore((s) => fleetBandRunKey(s.snapshot, bands));
+  return useMemo(() => (key === "" ? EMPTY_RUN_IDS : new Set(key.split("\n"))), [key]);
+}
+
+/**
+ * Visible terminals whose fleet run sits in `bands`, so the dock's pills hold
+ * the same agents as the sidebar's buckets and Pilot. A terminal the fleet has
+ * not reported belongs to none of them.
+ */
+function useFleetBandTerminals(bands: ReadonlySet<FleetBand>): PtyPanelData[] {
   const worktreeIds = useWorktreeIds();
-  const handBackIds = useHandBackRunIds();
+  const runIds = useFleetBandRunIds(bands);
 
   return usePanelStore(
     useShallow((state) => {
+      if (runIds.size === 0) return EMPTY_TERMINALS;
       const out: PtyPanelData[] = [];
       for (const panel of getNarrowPanels(state.panelsById, state.panelIds)) {
+        if (!runIds.has(panel.id)) continue;
         if (!isPtyPanel(panel)) continue;
-        if (!isAskingWait(handBackIds, panel)) continue;
         if (!isTerminalVisible(panel, state.isInTrash, worktreeIds)) continue;
         out.push(panel);
       }
@@ -104,9 +126,39 @@ export function useWaitingTerminals(): PtyPanelData[] {
   );
 }
 
-export function useWaitingTerminalIds(): string[] {
-  const waiting = useWaitingTerminals();
-  return useMemo(() => waiting.map((t) => t.id), [waiting]);
+/**
+ * Agents asking for something: the sidebar's Attention bucket. A hand-back is
+ * not one of them unless Canopy read an ask in it, and a parked or snoozed
+ * agent has been shelved by the user.
+ */
+export function useWaitingTerminals(): PtyPanelData[] {
+  return useFleetBandTerminals(ATTENTION_FILTER_BANDS);
+}
+
+/** Hand-backs nobody has read yet: the unread half of the sidebar's Finished bucket. */
+export function useUnreadTerminals(): PtyPanelData[] {
+  return useFleetBandTerminals(UNREAD_FILTER_BANDS);
+}
+
+/**
+ * How many agents the dock's Waiting and Unread pills hold between them, as a
+ * primitive so a member's streaming output doesn't re-render the reader.
+ */
+export function useDemandTerminalCount(): number {
+  const worktreeIds = useWorktreeIds();
+  const runIds = useFleetBandRunIds(DEMAND_BANDS);
+
+  return usePanelStore((state) => {
+    if (runIds.size === 0) return 0;
+    let count = 0;
+    for (const panel of getNarrowPanels(state.panelsById, state.panelIds)) {
+      if (!runIds.has(panel.id)) continue;
+      if (!isPtyPanel(panel)) continue;
+      if (!isTerminalVisible(panel, state.isInTrash, worktreeIds)) continue;
+      count += 1;
+    }
+    return count;
+  });
 }
 
 export function useErrorTerminals(): PtyPanelData[] {
