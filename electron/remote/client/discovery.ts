@@ -1,8 +1,10 @@
 import os from "node:os";
 import {
+  isValidWslDistroName,
   sameHostAccount,
   sshConnection,
   sshMachineKey,
+  wslConnection,
   type HostConnection,
   type HostPlatform,
 } from "../../../shared/types/remoteHosts.js";
@@ -11,6 +13,7 @@ import type { CommandRunner } from "./commandRunner.js";
 import { sshTargetOf } from "./connection.js";
 import { isValidSshTarget } from "./sshTransport.js";
 import { displaySafeText } from "../../../shared/utils/displaySafeText.js";
+import { listWslDistros, type WslDistroEntry } from "../../utils/wsl.js";
 
 /**
  * Finding machines to add: tailnet peers from `tailscale status --json`, and
@@ -368,4 +371,36 @@ export async function discoverHosts(deps: DiscoverDeps): Promise<DiscoveredHost[
     });
   }
   return out;
+}
+
+/** Docker Desktop's own distros: its engine, never somewhere to run a Host. */
+const DOCKER_DESKTOP_DISTRO = /^docker-desktop(-data)?$/i;
+
+/**
+ * A Windows Shell's hosts to add: the WSL distros installed on this PC, the
+ * default one first. Listing never starts a distro. WSL 1 distros are listed
+ * with their version so setup can say why they can't run a Host.
+ */
+export async function discoverWslDistros(params: {
+  knownConnections: HostConnection[];
+  list?: () => Promise<WslDistroEntry[] | null>;
+}): Promise<DiscoveredHost[]> {
+  const distros = (await (params.list ?? listWslDistros)().catch(() => null)) ?? [];
+  return distros
+    .filter((distro) => isValidWslDistroName(distro.name))
+    .filter((distro) => !DOCKER_DESKTOP_DISTRO.test(distro.name))
+    .sort((a, b) => Number(b.isDefault) - Number(a.isDefault))
+    .map((distro) => {
+      const connection = wslConnection(distro.name);
+      return {
+        name: distro.name,
+        connection,
+        source: "wsl" as const,
+        platform: "linux" as const,
+        // A distro on this PC can always be started.
+        online: true,
+        alreadyAdded: params.knownConnections.some((known) => sameHostAccount(known, connection)),
+        wsl: { version: distro.version, isDefault: distro.isDefault },
+      };
+    });
 }

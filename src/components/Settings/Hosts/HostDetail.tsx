@@ -4,7 +4,12 @@ import { Button } from "@/components/ui/button";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { remoteHostsClient } from "@/clients/remoteHostsClient";
 import { getAgentConfig } from "@shared/config/agentRegistry";
-import { formatHostConnection, sshTargetOf, type HostListEntry } from "@shared/types/remoteHosts";
+import {
+  formatHostConnection,
+  sshTargetOf,
+  wslDistroOf,
+  type HostListEntry,
+} from "@shared/types/remoteHosts";
 import { SettingsSection } from "../SettingsSection";
 import { SettingsDependents, SettingsEmptyRow, SettingsGroup, SettingsRow } from "../SettingsGroup";
 import { SettingsInput } from "../SettingsInput";
@@ -115,6 +120,7 @@ export function HostDetail({
   );
   // Only an ssh target can be changed here; another kind of connection is shown as it is.
   const sshTarget = sshTargetOf(descriptor.connection);
+  const wslDistro = wslDistroOf(descriptor.connection);
   const [changeTargetOpen, setChangeTargetOpen] = useState(false);
   const connected = connection.status === "connected";
   // What a host reports is about it now only while it is connected: kept from
@@ -295,6 +301,8 @@ export function HostDetail({
                 </Button>
               }
             />
+          ) : wslDistro !== null ? (
+            <SettingsRow label="WSL distribution" description={wslDistro} />
           ) : (
             <SettingsRow
               label="Address"

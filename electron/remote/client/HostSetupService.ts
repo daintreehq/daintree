@@ -28,8 +28,8 @@ import {
 } from "../../services/operations/OperationRegistry.js";
 import { AppError } from "../../utils/errorTypes.js";
 import type { CommandRunner } from "./commandRunner.js";
-import { connectionKey, requireHostConnection, unsupportedConnection } from "./connection.js";
-import { discoverHosts } from "./discovery.js";
+import { connectionKey, requireHostConnection, requireSupportedConnection } from "./connection.js";
+import { discoverHosts, discoverWslDistros } from "./discovery.js";
 import { type ArtifactChecksum, lookupArtifactChecksum } from "./clientBuild.js";
 import { runHostInstall } from "./hostInstaller.js";
 import { RestartImpactSchema } from "../metrics/linkMethods.js";
@@ -38,13 +38,15 @@ import { probeHost, type ProbeOutcome } from "./hostProbe.js";
 import { NIGHTLY_FEED_URL, STABLE_FEED_URL, type ClientBuild, planInstall } from "./installPlan.js";
 import { createSshCommandChannel, failureDetail, type HostCommandChannel } from "./remoteShell.js";
 import { closeSshMaster, controlPathFor } from "./sshTransport.js";
+import type { WslKeepalive } from "./wslKeepalive.js";
+import { createWslCommandChannel } from "./wslShell.js";
 
 /**
  * The Add host flow and host upkeep behind the `remoteHosts` namespace:
  * discover machines, check one over SSH, install or update its build as a
  * tracked operation, turn Host mode on there, and clean up after a forgotten
  * host. Everything reaches the host through a {@link HostCommandChannel}: the
- * system `ssh` today.
+ * system `ssh`, or `wsl.exe` for a Linux Host in a WSL distro on Windows.
  */
 
 export interface HostSetupDeps {
@@ -71,10 +73,8 @@ export interface HostSetupDeps {
    * closes the SSH master, so nothing that changes the host starts meanwhile.
    */
   isRetiring?(connection: HostConnection): boolean;
-}
-
-function requireTarget(payload: unknown): HostConnection {
-  return requireHostConnection((payload as { connection?: unknown } | null)?.connection);
+  /** Holds WSL distros up between setup's commands; released when a host is forgotten. */
+  wslKeepalive?: Pick<WslKeepalive, "hold" | "release">;
 }
 
 /** Per-machine cache key: an ssh host keeps the key of its target alone. */
@@ -132,6 +132,10 @@ export class HostSetupService {
   }
 
   discover(signal?: AbortSignal): Promise<DiscoveredHost[]> {
+    // A Windows Shell's hosts are the WSL distros on this PC.
+    if (this.deps.platform === "win32") {
+      return discoverWslDistros({ knownConnections: this.deps.knownConnections() });
+    }
     return discoverHosts({
       run: this.deps.run,
       platform: this.deps.platform,
@@ -141,11 +145,11 @@ export class HostSetupService {
   }
 
   async probe(payload: HostSetupTarget): Promise<HostProbeResult> {
-    return (await this.probeOutcome(requireTarget(payload))).result;
+    return (await this.probeOutcome(this.requireTarget(payload))).result;
   }
 
   async planInstall(payload: PlanInstallPayload): Promise<HostInstallPlan> {
-    const outcome = await this.probeOutcome(requireTarget(payload));
+    const outcome = await this.probeOutcome(this.requireTarget(payload));
     return planInstall({
       client: this.deps.clientBuild(),
       probe: outcome.result,
@@ -155,7 +159,7 @@ export class HostSetupService {
   }
 
   install(payload: InstallHostPayload): Promise<InstallHostResult> {
-    const connection = requireTarget(payload);
+    const connection = this.requireTarget(payload);
     this.refuseWhileRetiring(connection);
     const opId = normalizeOperationId(payload?.opId);
     if (!opId) throw new AppError({ code: "VALIDATION", message: "opId is required" });
@@ -248,7 +252,7 @@ export class HostSetupService {
    * its keychain, as its Settings switch would. See hostModeBootstrap.ts.
    */
   async startHostMode(payload: HostSetupTarget): Promise<StartHostModeResult> {
-    const connection = requireTarget(payload);
+    const connection = this.requireTarget(payload);
     this.refuseWhileRetiring(connection);
     const channel = this.shellFor(connection);
     const before = await this.probeOutcome(connection, channel);
@@ -335,6 +339,14 @@ export class HostSetupService {
     });
   }
 
+  /** The payload's connection, if this platform's Shell can reach hosts that way. */
+  private requireTarget(payload: unknown): HostConnection {
+    return requireSupportedConnection(
+      requireHostConnection((payload as { connection?: unknown } | null)?.connection),
+      this.deps.platform
+    );
+  }
+
   private refuseWhileRetiring(connection: HostConnection): void {
     if (!this.deps.isRetiring?.(connection)) return;
     const message = `${formatHostConnection(connection)} is being removed or changed on this device. Try again once that finishes.`;
@@ -361,6 +373,10 @@ export class HostSetupService {
       case "ssh":
         await closeSshMaster(this.deps.run, this.deps.clientDir, connection.target, 10_000);
         break;
+      case "wsl":
+        // The distro may stop once nothing else uses it; its Host goes with it.
+        this.deps.wslKeepalive?.release(connection.distro);
+        break;
     }
     await fs.rm(this.cacheDirFor(connection), { recursive: true, force: true }).catch(() => {});
   }
@@ -372,16 +388,22 @@ export class HostSetupService {
   /** The command channel for a connection, by its kind. */
   private shellFor(connection: HostConnection): HostCommandChannel {
     if (this.deps.channelFor) return this.deps.channelFor(connection);
-    switch (connection.kind) {
+    const supported = requireSupportedConnection(connection, this.deps.platform);
+    switch (supported.kind) {
       case "ssh":
         return createSshCommandChannel({
-          target: connection.target,
-          controlPath: controlPathFor(this.deps.clientDir, connection.target),
+          target: supported.target,
+          controlPath: controlPathFor(this.deps.clientDir, supported.target),
           run: this.deps.run,
         });
-      default:
-        // A new kind brings its own channel (a WSL one runs `wsl.exe -d <distro> -- sh -c`).
-        throw unsupportedConnection(connection, "Setting up a host");
+      case "wsl": {
+        const keepalive = this.deps.wslKeepalive;
+        return createWslCommandChannel({
+          distro: supported.distro,
+          run: this.deps.run,
+          keepalive: keepalive ? (distro) => keepalive.hold(distro) : undefined,
+        });
+      }
     }
   }
 

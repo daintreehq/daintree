@@ -2,6 +2,8 @@ import {
   isEitherRemoteRoleSupportedOn,
   isRemoteHostSupportedOn,
   isRemoteShellSupportedOn,
+  remoteConnectionKindOn,
+  type RemoteConnectionKind,
 } from "@shared/config/remoteHostsSupport";
 import { isWindows } from "./platform";
 
@@ -27,4 +29,9 @@ export function isRemoteHostSupported(): boolean {
 /** Either role: what both sides show, such as the drive lease a project is under. */
 export function isEitherRemoteRoleSupported(): boolean {
   return isEitherRemoteRoleSupportedOn(clientPlatform(), BUILD_ENABLED);
+}
+
+/** How this machine reaches hosts: WSL distros on Windows, ssh everywhere else. */
+export function remoteConnectionKind(): RemoteConnectionKind {
+  return remoteConnectionKindOn(isWindows() ? "win32" : "posix");
 }

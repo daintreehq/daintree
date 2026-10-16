@@ -1622,11 +1622,10 @@ export default defineConfig(({ command, mode }) => {
   const importMapState = createImportMapState();
   return {
     envPrefix: ["VITE_", "DAINTREE_"],
-    // Remote Hosts is macOS/Linux only; a Windows build folds the gate to false.
+    // Every platform's renderer carries the Remote Hosts Shell (Windows drives
+    // WSL distros); the Host role is gated in main at runtime and build time.
     define: {
-      __DAINTREE_REMOTE_HOSTS__: JSON.stringify(
-        (process.env.DAINTREE_BUILD_TARGET_PLATFORM || process.platform) !== "win32"
-      ),
+      __DAINTREE_REMOTE_HOSTS__: JSON.stringify(true),
     },
     // xterm 6.0 ships a bundled InputHandler that references an unminified
     // identifier in `requestMode`; Vite's default identifier mangling produces

@@ -5,9 +5,15 @@ vi.mock("node:os", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:os")>();
   return { ...actual, default: { ...actual, hostname: () => "studio" } };
 });
+import {
+  sshConnection,
+  sshTargetOf,
+  wslConnection,
+} from "../../../../shared/types/remoteHosts.js";
 import type { CommandResult, CommandRunner } from "../commandRunner.js";
 import {
   discoverHosts,
+  discoverWslDistros,
   machineKey,
   parseAvahiBrowse,
   parseDnsSdBrowse,
@@ -233,7 +239,7 @@ describe("discoverHosts", () => {
     // studio-03.local may or may not be the tailnet's studio-03: nothing vouches for it.
     // greg's account on bigbox is added; the row names no account, so it warns rather than blocks.
     expect(
-      hosts.map((h) => [h.name, h.connection.target, h.source, h.alreadyAdded, !!h.knownMachine])
+      hosts.map((h) => [h.name, sshTargetOf(h.connection), h.source, h.alreadyAdded, !!h.knownMachine])
     ).toEqual([
       ["studio-03", "studio-03.tail1234.ts.net", "tailscale", false, false],
       ["bigbox", "bigbox.tail1234.ts.net", "tailscale", false, true],
@@ -271,7 +277,7 @@ describe("discoverHosts", () => {
       knownConnections: [],
       localHostNames: ["this-mac.local"],
     });
-    expect(hosts.map((h) => [h.connection.target, h.platform])).toEqual([
+    expect(hosts.map((h) => [sshTargetOf(h.connection), h.platform])).toEqual([
       ["studio-01.local", "darwin"],
       ["studio-03.local", null],
     ]);
@@ -301,7 +307,7 @@ describe("discoverHosts", () => {
       knownConnections: [],
       localHostNames: [],
     });
-    expect(hosts.map((h) => h.connection.target)).toEqual(["plain.local"]);
+    expect(hosts.map((h) => sshTargetOf(h.connection))).toEqual(["plain.local"]);
     expect(
       parseAvahiBrowse("=;eth0;IPv4;box;_ssh._tcp;local;box.local;192.168.1.9;2222;").map(
         (c) => c.sshTarget
@@ -328,7 +334,7 @@ describe("discoverHosts", () => {
       );
     };
     const hosts = await discoverHosts({ run, platform: "darwin", knownConnections: [] });
-    const targets = hosts.map((h) => h.connection.target);
+    const targets = hosts.map((h) => sshTargetOf(h.connection));
     expect(targets).not.toContain("laptop.local");
     expect(targets).toContain("studio.local");
   });
@@ -356,7 +362,7 @@ describe("discoverHosts", () => {
         { kind: "ssh", target: "greg@100.64.0.12" },
       ],
     });
-    expect(hosts.map((h) => [h.connection.target, h.alreadyAdded, !!h.knownMachine])).toEqual([
+    expect(hosts.map((h) => [sshTargetOf(h.connection), h.alreadyAdded, !!h.knownMachine])).toEqual([
       ["100.64.0.3", false, true],
       ["100.64.0.9", false, false],
       ["c.tail1234.ts.net", false, true],
@@ -405,7 +411,7 @@ describe("discoverHosts", () => {
       return missing;
     };
     const hosts = await discoverHosts({ run, platform: "linux", knownConnections: [] });
-    expect(hosts.map((h) => h.connection.target)).toEqual(["box.ts.net", "box-2.local"]);
+    expect(hosts.map((h) => sshTargetOf(h.connection))).toEqual(["box.ts.net", "box-2.local"]);
     // avahi leaves out this machine's own services itself.
     expect(avahiArgs.every((args) => args[0] === "-rptl")).toBe(true);
   });
@@ -421,3 +427,52 @@ describe("discoverHosts", () => {
     expect(tried).toContain("avahi-browse");
   });
 });
+
+describe("discoverWslDistros", () => {
+  const listed = [
+    { name: "FedoraLinux-44", isDefault: false, version: 2, state: "Stopped" },
+    { name: "docker-desktop", isDefault: false, version: 2, state: "Running" },
+    { name: "Legacy", isDefault: false, version: 1, state: "Stopped" },
+    { name: "Ubuntu-24.04", isDefault: true, version: 2, state: "Stopped" },
+  ];
+
+  it("lists this PC's distros as WSL hosts, the default first, without Docker Desktop's", async () => {
+    const hosts = await discoverWslDistros({
+      knownConnections: [wslConnection("fedoralinux-44"), sshConnection("FedoraLinux-44")],
+      list: async () => listed,
+    });
+    expect(
+      hosts.map((h) => [h.name, h.connection, h.source, h.platform, h.alreadyAdded, h.wsl])
+    ).toEqual([
+      [
+        "Ubuntu-24.04",
+        wslConnection("Ubuntu-24.04"),
+        "wsl",
+        "linux",
+        false,
+        { version: 2, isDefault: true },
+      ],
+      [
+        "FedoraLinux-44",
+        wslConnection("FedoraLinux-44"),
+        "wsl",
+        "linux",
+        true,
+        { version: 2, isDefault: false },
+      ],
+      ["Legacy", wslConnection("Legacy"), "wsl", "linux", false, { version: 1, isDefault: false }],
+    ]);
+  });
+
+  it("is empty when WSL is missing, has no distros, or the listing fails", async () => {
+    expect(await discoverWslDistros({ knownConnections: [], list: async () => null })).toEqual([]);
+    expect(await discoverWslDistros({ knownConnections: [], list: async () => [] })).toEqual([]);
+    expect(
+      await discoverWslDistros({
+        knownConnections: [],
+        list: () => Promise.reject(new Error("boom")),
+      })
+    ).toEqual([]);
+  });
+});
+

@@ -11,6 +11,7 @@ import { UI_DOHERTY_THRESHOLD } from "@/lib/animationUtils";
 import { useDeferredLoading } from "@/hooks/useDeferredLoading";
 import { isMac } from "@/lib/platform";
 import { remoteHostsClient } from "@/clients/remoteHostsClient";
+import { remoteConnectionKind } from "@/lib/remoteHosts";
 import { mintOperationId } from "@/clients/operationsClient";
 import { useRemoteHostsStore } from "@/store/remoteHostsStore";
 import { clientErrorText, isClientAppError } from "@/utils/clientAppError";
@@ -22,6 +23,8 @@ import {
   sameHostName,
   sshConnection,
   sshTargetOf,
+  wslConnection,
+  wslDistroOf,
   type HostConnection,
   type HostConnectionState,
   type HostId,
@@ -81,7 +84,18 @@ const SOURCE_LABEL: Record<DiscoveredHost["source"], string> = {
   tailscale: "Tailnet",
   bonjour: "Local network",
   manual: "Entered",
+  wsl: "WSL",
 };
+
+/** What the dialog's one field holds for a connection: an ssh target, or a WSL distro. */
+function addressOf(connection: HostConnection): string {
+  return sshTargetOf(connection) ?? wslDistroOf(connection) ?? "";
+}
+
+/** A distro that can't run a Host, in words; null when it can. */
+function wslRefusal(host: DiscoveredHost): string | null {
+  return host.wsl && host.wsl.version !== 2 ? "WSL 1 can't run Daintree" : null;
+}
 
 interface AddHostDialogProps {
   isOpen: boolean;
@@ -149,9 +163,13 @@ export function AddHostDialog({ isOpen, onClose, existing = null }: AddHostDialo
   const [discovered, setDiscovered] = useState<DiscoveredHost[] | null>(null);
   const [discoverError, setDiscoverError] = useState<string | null>(null);
   const [discoverAttempt, setDiscoverAttempt] = useState(0);
-  const [target, setTarget] = useState(existing ? (sshTargetOf(existing.connection) ?? "") : "");
-  // What this dialog adds or updates: a machine reached over ssh.
-  const connectionFor = () => sshConnection(target.trim());
+  // On Windows a host is a WSL distro on this PC; elsewhere a machine reached over ssh.
+  const viaWsl = remoteConnectionKind() === "wsl";
+  const makeConnection = (address: string) =>
+    viaWsl ? wslConnection(address) : sshConnection(address);
+  const [target, setTarget] = useState(existing ? addressOf(existing.connection) : "");
+  // What this dialog adds or updates.
+  const connectionFor = () => makeConnection(target.trim());
   const [name, setName] = useState(existing?.name ?? "");
   const [probe, setProbe] = useState<HostProbeResult | null>(null);
   const [plan, setPlan] = useState<HostInstallPlan | null>(null);
@@ -209,7 +227,7 @@ export function AddHostDialog({ isOpen, onClose, existing = null }: AddHostDialo
   // Checked as it's typed, against the same rules the host list applies on save:
   // finding out at the end came after the app was copied and Host mode turned on.
   const others = knownHosts.filter((entry) => entry.descriptor.id !== existing?.hostId);
-  const typed = target.trim() ? sshConnection(target.trim()) : null;
+  const typed = target.trim() ? makeConnection(target.trim()) : null;
   const nameError = existing || saved || !typed ? null : nameProblem(hostLabel, others);
   const duplicate =
     existing || saved || !typed
@@ -266,7 +284,7 @@ export function AddHostDialog({ isOpen, onClose, existing = null }: AddHostDialo
 
   const check = (nextTarget?: string) => {
     if (nextTarget !== undefined) setTarget(nextTarget);
-    const connection = nextTarget !== undefined ? sshConnection(nextTarget) : connectionFor();
+    const connection = nextTarget !== undefined ? makeConnection(nextTarget) : connectionFor();
     run(
       () => remoteHostsClient.probe(connection),
       (result) => {
@@ -392,8 +410,8 @@ export function AddHostDialog({ isOpen, onClose, existing = null }: AddHostDialo
             {savedHost.name} is saved, but Host mode is off there
           </p>
           <p className="text-text-secondary">
-            SSH reached it, and Daintree isn&apos;t running in Host mode there. Set it up to
-            connect.
+            {viaWsl ? "The distribution started" : "SSH reached it"}, and Daintree isn&apos;t
+            running in Host mode there. Set it up to connect.
           </p>
         </div>
       );
@@ -481,6 +499,113 @@ export function AddHostDialog({ isOpen, onClose, existing = null }: AddHostDialo
       primary = { label: "Close", onClick: onClose };
       secondary = undefined;
     }
+  } else if (step === "discover" && viaWsl) {
+    const picked = discovered?.find((host) => addressOf(host.connection) === target) ?? null;
+    body = (
+      <div className="space-y-4">
+        <div>
+          <p className="mb-2 text-sm font-medium text-text-primary">WSL distributions</p>
+          {discoverError !== null ? (
+            <div className="flex items-start justify-between gap-3">
+              <p role="alert" className="text-sm text-text-secondary select-text">
+                Couldn&apos;t list WSL distributions: {discoverError}
+              </p>
+              <Button variant="outline" size="sm" onClick={retryDiscover}>
+                Retry
+              </Button>
+            </div>
+          ) : discovered === null ? (
+            <p
+              className={cn(
+                "flex items-center gap-2 text-sm text-text-secondary",
+                !showDiscovering && "invisible"
+              )}
+              aria-hidden={!showDiscovering}
+            >
+              <Spinner size="sm" /> Listing WSL distributions
+            </p>
+          ) : discovered.length === 0 ? (
+            <div className="flex items-start justify-between gap-3">
+              <p className="text-sm text-text-secondary select-text">
+                No WSL distributions are installed. Install one with <code>wsl --install</code>,
+                then look again.
+              </p>
+              <Button variant="outline" size="sm" onClick={retryDiscover}>
+                Look again
+              </Button>
+            </div>
+          ) : (
+            <ul
+              className="divide-y divide-border-subtle rounded-[var(--radius-lg)] border border-border-default"
+              data-testid="add-host-wsl-distros"
+            >
+              {discovered.map((host) => {
+                const refusal = wslRefusal(host);
+                const address = addressOf(host.connection);
+                return (
+                  <li key={address}>
+                    <button
+                      type="button"
+                      disabled={host.alreadyAdded || refusal !== null || busy}
+                      aria-pressed={target === address}
+                      onClick={() => {
+                        setTarget(address);
+                        setName(host.name);
+                      }}
+                      className={cn(
+                        "flex w-full items-center justify-between gap-3 px-3 py-2 text-left",
+                        "hover:bg-overlay-soft disabled:cursor-default disabled:hover:bg-transparent",
+                        target === address && "bg-overlay-subtle"
+                      )}
+                    >
+                      <span className="min-w-0">
+                        <span className="block text-sm font-medium text-text-primary">
+                          {host.name}
+                        </span>
+                        <span className="block truncate text-xs text-text-secondary">
+                          {host.wsl?.version ? `WSL ${host.wsl.version}` : "WSL"}
+                          {host.wsl?.isDefault ? " · Default" : ""}
+                        </span>
+                      </span>
+                      <span className="shrink-0 text-xs text-text-secondary">
+                        {host.alreadyAdded ? "Added" : (refusal ?? "")}
+                      </span>
+                    </button>
+                  </li>
+                );
+              })}
+            </ul>
+          )}
+          {discovered !== null && discovered.length > 0 && (
+            <p className="mt-2 text-xs text-text-secondary">
+              Projects, terminals and agents run inside the distribution you pick, with its own
+              git and tools. Whether Daintree is ready there is checked next.
+            </p>
+          )}
+        </div>
+        <Field>
+          <FieldLabel>Name</FieldLabel>
+          <Input
+            value={name}
+            placeholder={target || "Ubuntu"}
+            onChange={(e) => setName(e.target.value)}
+          />
+          {nameError && <FieldError>{nameError}</FieldError>}
+        </Field>
+      </div>
+    );
+    primary = {
+      label: "Check distribution",
+      onClick: () => check(),
+      disabled:
+        busy ||
+        picked === null ||
+        picked.alreadyAdded ||
+        wslRefusal(picked) !== null ||
+        nameError !== null ||
+        duplicate !== null,
+      loading: busy,
+    };
   } else if (step === "discover") {
     body = (
       <div className="space-y-4">
@@ -603,7 +728,7 @@ export function AddHostDialog({ isOpen, onClose, existing = null }: AddHostDialo
     const localSuggestion =
       // Only while adding: an existing host keeps its saved target, which a
       // reconnect after install or Host mode would still dial.
-      !existing && !saved && probe && !probe.reachable
+      !viaWsl && !existing && !saved && probe && !probe.reachable
         ? localNameSuggestion(target.trim(), probe.sshError)
         : null;
     body = !probe ? (
@@ -612,7 +737,10 @@ export function AddHostDialog({ isOpen, onClose, existing = null }: AddHostDialo
       </p>
     ) : (
       <div>
-        <Line label="SSH" value={probe.reachable ? "Works" : "Didn't connect"} />
+        <Line
+          label={viaWsl ? "WSL" : "SSH"}
+          value={probe.reachable ? (viaWsl ? "Starts" : "Works") : "Didn't connect"}
+        />
         {!probe.reachable && probe.sshError && (
           <pre className="mt-1 whitespace-pre-wrap rounded-[var(--radius-md)] bg-surface-input p-2 text-xs text-text-secondary select-text">
             {probe.sshError}
@@ -650,12 +778,18 @@ export function AddHostDialog({ isOpen, onClose, existing = null }: AddHostDialo
             <Line label="Host mode" value={probe.hostModeListening ? "Listening" : "Off"} />
           </>
         )}
-        {!probe.reachable && (
-          <p className="mt-3 text-xs text-text-secondary">
-            Daintree connects with your own ssh and never asks for a password. On a Mac, turn on
-            Remote Login in System Settings → General → Sharing.
-          </p>
-        )}
+        {!probe.reachable &&
+          (viaWsl ? (
+            <p className="mt-3 text-xs text-text-secondary">
+              Daintree runs programs in the distribution with <code>wsl.exe</code>. Check that{" "}
+              <code>wsl -d {target}</code> opens a shell there.
+            </p>
+          ) : (
+            <p className="mt-3 text-xs text-text-secondary">
+              Daintree connects with your own ssh and never asks for a password. On a Mac, turn on
+              Remote Login in System Settings → General → Sharing.
+            </p>
+          ))}
       </div>
     );
     if (probe && !probe.reachable) {
@@ -846,9 +980,9 @@ export function AddHostDialog({ isOpen, onClose, existing = null }: AddHostDialo
               ? `Checked by Daintree on ${hostLabel}: ${probe.hostModeState.keychain.detail}.`
               : probe?.platform === "linux"
                 ? probe.advice.keyring === "running"
-                  ? "A keyring process was running for the SSH user when checked. Whether plugin secrets can be stored there is known once Host mode runs its own keyring check on that machine."
+                  ? `A keyring process was running for the ${viaWsl ? "distribution's" : "SSH"} user when checked. Whether plugin secrets can be stored there is known once Host mode runs its own keyring check on that machine.`
                   : probe.advice.keyring === "not-running"
-                    ? "No keyring process was seen running for the SSH user when checked. Host mode runs its own keyring check on that machine."
+                    ? `No keyring process was seen running for the ${viaWsl ? "distribution's" : "SSH"} user when checked. Host mode runs its own keyring check on that machine.`
                     : "The host's keyring wasn't checked. Host mode runs its own keyring check on that machine."
                 : "Plugin secrets live in the host's own keychain. Credentials aren't copied between machines: each host signs in for itself."}
           </p>

@@ -5,6 +5,7 @@ import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { remoteHostsClient } from "@/clients/remoteHostsClient";
 import { useRemoteHosts } from "@/hooks/useRemoteHosts";
+import { remoteConnectionKind } from "@/lib/remoteHosts";
 import { formatHostConnection, type HostId } from "@shared/types/remoteHosts";
 import HostModeGroup from "../HostModeGroup";
 import { SettingsSection } from "../SettingsSection";
@@ -180,7 +181,11 @@ export default function HostsSettingsTab() {
     <div className="space-y-8">
       <SettingsSection
         title="Remote hosts"
-        description="Macs and Linux machines this one opens projects on, over your own SSH"
+        description={
+          remoteConnectionKind() === "wsl"
+            ? "Linux distributions in WSL on this PC that Daintree opens projects in, with their own git, terminals and agents"
+            : "Macs and Linux machines this one opens projects on, over your own SSH"
+        }
         action={hosts.length > 0 ? addButton : undefined}
         id="hosts-list"
       >

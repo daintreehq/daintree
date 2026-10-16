@@ -6,13 +6,11 @@
  * - **Host**: other machines drive this one (Host mode's listener, start at
  *   login, `--attach-stdio`).
  *
- * Both are macOS and Linux only today, so a Windows build has neither. A
- * Windows Shell driving a Linux Host inside WSL (#12830) is the Shell gate
- * flipped for win32 plus the path work listed in
- * docs/architecture/remote-hosts.md; the Host gate stays off there.
+ * Every platform can be a Shell. Only macOS and Linux can be a Host: a
+ * Windows Shell drives Linux Hosts inside WSL distros on the same PC (#12830).
  */
-export function isRemoteShellSupportedOn(platform: string, buildEnabled: boolean): boolean {
-  return buildEnabled && platform !== "win32";
+export function isRemoteShellSupportedOn(_platform: string, buildEnabled: boolean): boolean {
+  return buildEnabled;
 }
 
 export function isRemoteHostSupportedOn(platform: string, buildEnabled: boolean): boolean {
@@ -25,4 +23,16 @@ export function isEitherRemoteRoleSupportedOn(platform: string, buildEnabled: bo
     isRemoteShellSupportedOn(platform, buildEnabled) ||
     isRemoteHostSupportedOn(platform, buildEnabled)
   );
+}
+
+/** How hosts are reached: `HostConnection["kind"]`, kept here so this module stays dependency-free. */
+export type RemoteConnectionKind = "ssh" | "wsl";
+
+/**
+ * The one kind of host a Shell on this platform reaches: Linux Hosts in WSL
+ * distros on Windows, ssh everywhere else. Windows' OpenSSH has no
+ * ControlMaster, which the ssh transport is built on.
+ */
+export function remoteConnectionKindOn(platform: string): RemoteConnectionKind {
+  return platform === "win32" ? "wsl" : "ssh";
 }

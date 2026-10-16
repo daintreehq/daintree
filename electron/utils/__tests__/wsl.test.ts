@@ -219,3 +219,74 @@ describe("getDefaultWslDistro", () => {
     expect(await getDefaultWslDistro()).toBe("Debian");
   });
 });
+
+describe("listWslDistros", () => {
+  beforeEach(() => {
+    vi.resetModules();
+    execFileMock.mockReset();
+  });
+
+  afterEach(() => {
+    Object.defineProperty(process, "platform", { value: originalPlatform, writable: true });
+  });
+
+  it("returns null on non-Windows platforms without spawning wsl.exe", async () => {
+    Object.defineProperty(process, "platform", { value: "linux", writable: true });
+    const { listWslDistros } = await import("../wsl.js");
+    expect(await listWslDistros()).toBeNull();
+    expect(execFileMock).not.toHaveBeenCalled();
+  });
+
+  it("lists every distro with its version and the default marked, header skipped", async () => {
+    Object.defineProperty(process, "platform", { value: "win32", writable: true });
+    // As WSL 3.0.3 prints it on the Windows test laptop.
+    const stdout =
+      "  NAME              STATE           VERSION\r\n" +
+      "* Ubuntu-24.04      Stopped         2\r\n" +
+      "  FedoraLinux-44    Running         2\r\n" +
+      "  Legacy            Stopped         1\r\n";
+    execFileMock.mockImplementation((_file, _args, _opts, cb: ExecFileCallback) =>
+      cb(null, utf16le(stdout))
+    );
+    const { listWslDistros } = await import("../wsl.js");
+    expect(await listWslDistros()).toEqual([
+      { name: "Ubuntu-24.04", isDefault: true, version: 2, state: "Stopped" },
+      { name: "FedoraLinux-44", isDefault: false, version: 2, state: "Running" },
+      { name: "Legacy", isDefault: false, version: 1, state: "Stopped" },
+    ]);
+  });
+
+  it("reads a translated header and state without matching on either", async () => {
+    Object.defineProperty(process, "platform", { value: "win32", writable: true });
+    const stdout =
+      "  NAME            STATUS               VERSION\r\n" +
+      "  Ubuntu          Wird ausgeführt      2\r\n";
+    execFileMock.mockImplementation((_file, _args, _opts, cb: ExecFileCallback) =>
+      cb(null, utf8(stdout))
+    );
+    const { listWslDistros } = await import("../wsl.js");
+    expect(await listWslDistros()).toEqual([
+      { name: "Ubuntu", isDefault: false, version: 2, state: "Wird ausgeführt" },
+    ]);
+  });
+
+  it("is an empty list when WSL is installed with no distro (non-zero exit, a hint on stdout)", async () => {
+    Object.defineProperty(process, "platform", { value: "win32", writable: true });
+    const exit = Object.assign(new Error("Command failed"), { code: 4294967295 });
+    execFileMock.mockImplementation((_file, _args, _opts, cb: ExecFileCallback) =>
+      cb(exit, utf8("Windows Subsystem for Linux has no installed distributions.\r\n"))
+    );
+    const { listWslDistros } = await import("../wsl.js");
+    expect(await listWslDistros()).toEqual([]);
+  });
+
+  it("is null when wsl.exe can't be started", async () => {
+    Object.defineProperty(process, "platform", { value: "win32", writable: true });
+    const missing = Object.assign(new Error("spawn wsl.exe ENOENT"), { code: "ENOENT" });
+    execFileMock.mockImplementation((_file, _args, _opts, cb: ExecFileCallback) =>
+      cb(missing, Buffer.alloc(0))
+    );
+    const { listWslDistros } = await import("../wsl.js");
+    expect(await listWslDistros()).toBeNull();
+  });
+});
