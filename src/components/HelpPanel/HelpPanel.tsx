@@ -57,11 +57,12 @@ import {
   useHelpPanelStore,
   selectSlot,
   selectOpenSlots,
+  selectHasRoomForSession,
   HELP_PANEL_MIN_WIDTH,
   HELP_PANEL_MAX_WIDTH,
   HELP_PANEL_DEFAULT_WIDTH,
 } from "@/store/helpPanelStore";
-import { MAX_ASSISTANT_SLOTS } from "@shared/config/assistantSlots";
+import { MAX_ASSISTANT_SLOTS, assistantSlotKey } from "@shared/config/assistantSlots";
 import {
   usePanelStore,
   getTerminalRefreshTier,
@@ -77,11 +78,11 @@ import { isAssistantFocused, useMacroFocusStore } from "@/store/macroFocusStore"
 import { useScratchStore } from "@/store/scratchStore";
 import { usePreferencesStore } from "@/store/preferencesStore";
 import { useFocusStore } from "@/store/focusStore";
-import { getAgentConfig, getAssistantSupportedAgentIds } from "@/config/agents";
+import { getAgentConfig } from "@/config/agents";
 import { buildResumeCommand } from "@shared/types/agentSettings";
-import { isAgentInstalled } from "../../../shared/utils/agentAvailability";
 import { actionService } from "@/services/ActionService";
 import { useEscapeStack } from "@/hooks/useEscapeStack";
+import { useAssistantAgentChoices } from "@/hooks/useAssistantAgentChoices";
 import { suppressSidebarResizes } from "@/lib/sidebarToggle";
 import { dismissAllTooltips } from "@/lib/tooltipDismissRegistry";
 import { TerminalRefreshTier } from "@/types";
@@ -309,8 +310,6 @@ export function HelpPanel({
     })
   );
   const cliDetail = useCliAvailabilityStore((s) => (agentId ? s.details[agentId] : undefined));
-  const cliAvailability = useCliAvailabilityStore((s) => s.availability);
-  const cliHasRealData = useCliAvailabilityStore((s) => s.hasRealData);
   const currentProject = useProjectStore((s) => s.currentProject);
   const currentScratch = useScratchStore((s) => s.currentScratch);
   const hybridInputEnabled = useTerminalInputStore((s) => s.hybridInputEnabled);
@@ -438,11 +437,9 @@ export function HelpPanel({
   });
 
   // Intersection of "wired for the assistant overlay" and "CLI is installed".
-  // Drives the single-supported-agent auto-skip in the controller.
-  const supportedInstalledAgentIds = useMemo(() => {
-    if (!cliHasRealData) return [];
-    return getAssistantSupportedAgentIds().filter((id) => isAgentInstalled(cliAvailability[id]));
-  }, [cliHasRealData, cliAvailability]);
+  // Drives the single-supported-agent auto-skip in the controller, and the
+  // "New session with…" items, which the toolbar button offers from the same list.
+  const supportedInstalledAgentIds = useAssistantAgentChoices();
   const supportedInstalledAgentIdsKey = supportedInstalledAgentIds.join(",");
 
   // A conversation the eviction/crash path captured for this workspace but never
@@ -1092,6 +1089,9 @@ export function HelpPanel({
   const sessionBodyId = `${tabIdBase}-body`;
   const openSlots = useHelpPanelStore(useShallow(selectOpenSlots));
   const canOpenParallelSession = openSlots.length < MAX_ASSISTANT_SLOTS;
+  const canStartSessionWithAgent = useHelpPanelStore((s) =>
+    selectHasRoomForSession(s, activeWorkspaceId)
+  );
 
   // Subscribed rather than read through `getState()` inside the panel-store selectors
   // below: a background lane that binds a terminal changes only this, and without the
@@ -1099,6 +1099,22 @@ export function HelpPanel({
   // happened to re-render the panel.
   const laneTerminalIds = useHelpPanelStore(
     useShallow((s) => openSlots.map((slot) => s.sessions[slot]?.terminalId ?? null))
+  );
+
+  // Each lane's agent, so a strip holding more than one can tell them apart. A
+  // tab restored for a captured conversation has no terminal yet; its capture
+  // names the agent it will resume with.
+  const laneAgentIds = useHelpPanelStore(
+    useShallow((s) =>
+      openSlots.map(
+        (slot) =>
+          s.sessions[slot]?.agentId ??
+          (activeWorkspaceId
+            ? s.hibernateSessions[assistantSlotKey(activeWorkspaceId, slot)]?.agentId
+            : undefined) ??
+          null
+      )
+    )
   );
 
   const laneAgentStates = usePanelStore(
@@ -1146,9 +1162,10 @@ export function HelpPanel({
           label: task?.label ?? `Session ${slot + 1}`,
           fullTitle: task?.fullTitle,
           agentState: laneAgentStates[index],
+          agentId: laneAgentIds[index] ?? null,
         };
       }),
-    [openSlots, laneAgentStates, laneTaskTitles]
+    [openSlots, laneAgentStates, laneTaskTitles, laneAgentIds]
   );
 
   // Bring back the tabs for lanes whose conversations an eviction or crash
@@ -1191,6 +1208,15 @@ export function HelpPanel({
     if (slot === null) return;
     useHelpPanelStore.getState().setOpen(true);
     useHelpPanelStore.getState().requestFocus();
+  }, []);
+
+  // One session on a named agent (#13442); the default stays where it is.
+  const handleOpenSessionWithAgent = useCallback((pickedAgentId: string) => {
+    void actionService.dispatch(
+      "help.newSessionWithAgent",
+      { agentId: pickedAgentId },
+      { source: "user" }
+    );
   }, []);
 
   const handleSelectSlot = useCallback((slot: number) => {
@@ -1571,6 +1597,9 @@ export function HelpPanel({
         onClose={handleClose}
         isFocused={isHighlighted}
         messaging={messagingControls}
+        newSessionAgentIds={supportedInstalledAgentIds}
+        canStartNewSession={canStartSessionWithAgent}
+        onNewSessionWithAgent={handleOpenSessionWithAgent}
       />
 
       {pastSessionsMounted && (
@@ -1589,6 +1618,9 @@ export function HelpPanel({
         // second session two clicks behind an ellipsis.
         canOpenSession={canOpenParallelSession}
         onOpenSession={handleOpenParallelSession}
+        newSessionAgentIds={supportedInstalledAgentIds}
+        canOpenSessionWithAgent={canStartSessionWithAgent}
+        onOpenSessionWithAgent={handleOpenSessionWithAgent}
         idBase={tabIdBase}
         panelId={sessionBodyId}
       />

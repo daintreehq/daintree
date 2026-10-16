@@ -40,7 +40,6 @@ export type HostStartRefusal =
   | "consent-withdrawn"
   | "no-project"
   | "no-slot"
-  | "agent-mismatch"
   | "no-window"
   | "no-room"
   | "busy"
@@ -308,10 +307,6 @@ export class HostAssistantStarter {
     const inProject = (listed.assistants ?? []).filter(
       (running) => running.projectId === projectId
     );
-    // A project's assistants share one session folder and so one agent CLI.
-    if (agentId !== undefined && inProject.some((running) => running.agentId !== agentId)) {
-      return refused("agent-mismatch");
-    }
     const occupied = new Set(inProject.map((running) => running.slot));
     const slot = Array.from({ length: MAX_ASSISTANT_SLOTS }, (_, index) => index).find(
       (candidate) => !occupied.has(candidate)

@@ -222,18 +222,22 @@ describe("HostAssistantStarter", () => {
     expect(result).toMatchObject({ status: "ready", slot: 1, started: true });
   });
 
-  it("refuses a project at its assistant limit, or one running a different agent, before launching", async () => {
+  it("refuses a project at its assistant limit before launching", async () => {
     lanes.assistants = [0, 1, 2].map((slot) => ({ projectId: PROJECT, slot, agentId: "claude" }));
     await expect(starter.start(HOST, PROJECT, { authorized })).resolves.toEqual({
       status: "refused",
       reason: "no-slot",
     });
-    lanes.assistants = [{ projectId: PROJECT, slot: 0, agentId: "claude" }];
-    await expect(starter.start(HOST, PROJECT, { agentId: "codex", authorized })).resolves.toEqual({
-      status: "refused",
-      reason: "agent-mismatch",
-    });
     expect(calls.filter((call) => call.startsWith("help.launchAgent"))).toEqual([]);
+  });
+
+  it("starts an assistant on another agent beside one already running", async () => {
+    // Lanes on different agents run in directories of their own, so a running
+    // Claude lane is no reason to refuse a Codex one.
+    lanes.assistants = [{ projectId: PROJECT, slot: 0, agentId: "claude" }];
+    const result = await starter.start(HOST, PROJECT, { agentId: "codex", authorized });
+    expect(result).toMatchObject({ status: "ready", slot: 1, started: true });
+    expect(calls.filter((call) => call.startsWith("help.launchAgent"))).toHaveLength(1);
   });
 
   it("stops as soon as the person withdraws consent, before anything more changes", async () => {

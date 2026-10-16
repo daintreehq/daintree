@@ -787,6 +787,29 @@ export function selectOpenSlots(state: HelpPanelState): number[] {
 }
 
 /**
+ * Whether a session can start without displacing one: a slot no tab holds yet,
+ * or an open tab with nothing in it — no terminal, no session and no captured
+ * conversation of `workspaceId`'s waiting to resume. Looser than the strip's
+ * `+`, which only ever opens a new tab, because a session started on a named
+ * agent fills an empty tab before it opens another (#13442).
+ */
+export function selectHasRoomForSession(
+  state: HelpPanelState,
+  workspaceId: string | null
+): boolean {
+  const open = selectOpenSlots(state);
+  return (
+    open.length < MAX_ASSISTANT_SLOTS ||
+    open.some(
+      (slot) =>
+        !state.sessions[slot]?.terminalId &&
+        !state.sessions[slot]?.sessionId &&
+        !(workspaceId && assistantSlotKey(workspaceId, slot) in state.hibernateSessions)
+    )
+  );
+}
+
+/**
  * A lane's live state, or an empty one when the lane is closed.
  *
  * Never returns undefined so callers don't have to branch on a lane that was

@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { mkdir, mkdtemp, rm, symlink, utimes, writeFile } from "fs/promises";
 import os from "os";
 import path from "path";
@@ -238,6 +238,92 @@ describe("codexHelpSessionsFrom", () => {
 });
 
 describe("listHelpPastSessions", () => {
+  const NO_PATHS = {
+    claude: "/nonexistent/help-sessions/x",
+    codex: ["/nonexistent/help-sessions/x"],
+  };
+
+  it("reads Codex history from each of its directories and lists a conversation once", async () => {
+    const listCodexSessions = vi.fn(async (cwd: string) =>
+      cwd === "/sessions/h.codex"
+        ? {
+            status: "ok" as const,
+            sessions: [
+              { id: "resumed", preview: "Picked back up", updatedAt: 40 },
+              { id: "fresh", preview: "Started here", updatedAt: 30 },
+            ],
+          }
+        : {
+            status: "ok" as const,
+            sessions: [
+              { id: "resumed", preview: "Picked back up", updatedAt: 10 },
+              { id: "legacy", preview: "From the shared folder", updatedAt: 20 },
+            ],
+          }
+    );
+    const merged = await listHelpPastSessions(
+      { claude: "/nonexistent/help-sessions/h", codex: ["/sessions/h.codex", "/sessions/h"] },
+      { claudeProjectsRoot: "/nonexistent/projects", listCodexSessions }
+    );
+    expect(listCodexSessions.mock.calls.map(([cwd]) => cwd)).toEqual([
+      "/sessions/h.codex",
+      "/sessions/h",
+    ]);
+    expect(merged.map((s) => [s.sessionId, s.updatedAt])).toEqual([
+      ["resumed", 40],
+      ["fresh", 30],
+      ["legacy", 20],
+    ]);
+  });
+
+  it("keeps the newest copy of a conversation whichever directory reports it first, and survives one failing", async () => {
+    const merged = await listHelpPastSessions(
+      {
+        claude: "/nonexistent/help-sessions/h",
+        codex: ["/sessions/h.codex", "/sessions/h", "/gone"],
+      },
+      {
+        claudeProjectsRoot: "/nonexistent/projects",
+        listCodexSessions: async (cwd) => {
+          if (cwd === "/gone") throw new Error("unreadable");
+          return {
+            status: "ok",
+            sessions:
+              cwd === "/sessions/h.codex"
+                ? [{ id: "resumed", preview: "Older copy", updatedAt: 10 }]
+                : [{ id: "resumed", preview: "Newer copy", updatedAt: 50 }],
+          };
+        },
+      }
+    );
+    expect(merged.map((s) => [s.sessionId, s.title, s.updatedAt])).toEqual([
+      ["resumed", "Newer copy", 50],
+    ]);
+  });
+
+  it("caps after merging the directories, so duplicates never cost a row", async () => {
+    const shared = Array.from({ length: HELP_PAST_SESSIONS_LIMIT }, (_, i) => ({
+      id: `t${i}`,
+      preview: `Question ${i}`,
+      updatedAt: i,
+    }));
+    const merged = await listHelpPastSessions(
+      { claude: "/nonexistent/help-sessions/h", codex: ["/sessions/h.codex", "/sessions/h"] },
+      {
+        claudeProjectsRoot: "/nonexistent/projects",
+        listCodexSessions: async (cwd) => ({
+          status: "ok",
+          sessions:
+            cwd === "/sessions/h"
+              ? [...shared, { id: "extra", preview: "Extra", updatedAt: -1 }]
+              : shared,
+        }),
+      }
+    );
+    expect(merged).toHaveLength(HELP_PAST_SESSIONS_LIMIT);
+    expect(new Set(merged.map((s) => s.sessionId)).size).toBe(HELP_PAST_SESSIONS_LIMIT);
+  });
+
   it("merges both stores newest first and survives one failing", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "help-past-merge-"));
     try {
@@ -249,22 +335,28 @@ describe("listHelpPastSessions", () => {
       const when = new Date(2000);
       await utimes(path.join(slugDir, `${A}.jsonl`), when, when);
 
-      const merged = await listHelpPastSessions(sessionPath, {
-        claudeProjectsRoot: path.join(root, "projects"),
-        listCodexSessions: async () => ({
-          status: "ok",
-          sessions: [
-            { id: "newer", preview: "Codex newer", updatedAt: 3000 },
-            { id: "older", preview: "Codex older", updatedAt: 1000 },
-          ],
-        }),
-      });
+      const merged = await listHelpPastSessions(
+        { claude: sessionPath, codex: [sessionPath] },
+        {
+          claudeProjectsRoot: path.join(root, "projects"),
+          listCodexSessions: async () => ({
+            status: "ok",
+            sessions: [
+              { id: "newer", preview: "Codex newer", updatedAt: 3000 },
+              { id: "older", preview: "Codex older", updatedAt: 1000 },
+            ],
+          }),
+        }
+      );
       expect(merged.map((s) => s.sessionId)).toEqual(["newer", A, "older"]);
 
-      const claudeOnly = await listHelpPastSessions(sessionPath, {
-        claudeProjectsRoot: path.join(root, "projects"),
-        listCodexSessions: () => Promise.reject(new Error("boom")),
-      });
+      const claudeOnly = await listHelpPastSessions(
+        { claude: sessionPath, codex: [sessionPath] },
+        {
+          claudeProjectsRoot: path.join(root, "projects"),
+          listCodexSessions: () => Promise.reject(new Error("boom")),
+        }
+      );
       expect(claudeOnly.map((s) => s.sessionId)).toEqual([A]);
     } finally {
       await rm(root, { recursive: true, force: true });
@@ -272,7 +364,7 @@ describe("listHelpPastSessions", () => {
   });
 
   it("orders equal times by identity so the list is stable", async () => {
-    const merged = await listHelpPastSessions("/nonexistent/help-sessions/x", {
+    const merged = await listHelpPastSessions(NO_PATHS, {
       claudeProjectsRoot: "/nonexistent/projects",
       listCodexSessions: async () => ({
         status: "ok",
@@ -291,7 +383,7 @@ describe("listHelpPastSessions", () => {
       preview: `Question ${i}`,
       updatedAt: i,
     }));
-    const merged = await listHelpPastSessions("/nonexistent/help-sessions/x", {
+    const merged = await listHelpPastSessions(NO_PATHS, {
       claudeProjectsRoot: "/nonexistent/projects",
       listCodexSessions: async () => ({ status: "ok", sessions }),
     });

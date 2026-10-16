@@ -1,7 +1,9 @@
 import { useCallback, useId, useMemo, useRef } from "react";
 import { LayoutGroup } from "framer-motion";
-import { Plus, X } from "lucide-react";
+import { Plus, SquareTerminal, X } from "lucide-react";
 import { SpinnerCircle, HollowCircle, InteractingCircle } from "@/components/icons";
+import { BrandMark } from "@/components/icons/BrandMark";
+import { getAgentConfig } from "@/config/agents";
 import { MAX_ASSISTANT_SLOTS } from "@shared/config/assistantSlots";
 import { cn } from "@/lib/utils";
 import { ARIA_DISABLED_CLASSES } from "@/components/ui/ariaDisabled";
@@ -23,6 +25,7 @@ import {
 import { isTabCloseKey, useKeyboardTabClose } from "@/hooks/useKeyboardTabClose";
 import { useTruncationDetection } from "@/hooks/useTruncationDetection";
 import type { AgentState } from "@/types";
+import { NewSessionWithAgentLabel } from "./NewSessionWithAgentLabel";
 
 /**
  * Per-lane state marker (#12108).
@@ -57,6 +60,33 @@ function TabStateIndicator({ agentState }: { agentState: AgentState | null | und
     return <HollowCircle className="w-3.5 h-3.5 shrink-0 text-state-waiting" aria-hidden="true" />;
   }
   return null;
+}
+
+/**
+ * Which agent a lane runs, drawn only while the strip holds lanes on more than
+ * one (#13442) — a single-agent strip has nothing to tell apart. The agent's
+ * own mark in the leading 14px box a grid tab gives its terminal icon.
+ */
+function TabAgentMark({ agentId }: { agentId: string }) {
+  const config = getAgentConfig(agentId);
+  const Icon = config?.icon ?? SquareTerminal;
+  return (
+    <span
+      data-testid="assistant-tab-agent-mark"
+      data-agent-id={agentId}
+      aria-hidden="true"
+      className="shrink-0 flex items-center justify-center w-3.5 h-3.5"
+    >
+      <BrandMark brandColor={config?.color}>
+        <Icon className="w-3.5 h-3.5" />
+      </BrandMark>
+    </span>
+  );
+}
+
+/** What a lane's agent is called where it is spoken or written out. */
+function agentDisplayName(agentId: string): string {
+  return getAgentConfig(agentId)?.name ?? agentId;
 }
 
 /**
@@ -98,6 +128,8 @@ function TabLabel({
   );
 }
 
+const EMPTY_AGENT_IDS: readonly string[] = [];
+
 export interface HelpSessionTab {
   slot: number;
   /** What the tab shows: the agent's trimmed task title, or `Session N`. */
@@ -109,6 +141,8 @@ export interface HelpSessionTab {
    */
   fullTitle?: string | undefined;
   agentState: AgentState | null | undefined;
+  /** The agent the lane runs or will resume with; absent while nothing says. */
+  agentId?: string | null;
 }
 
 /**
@@ -146,6 +180,11 @@ interface SessionTabChipProps {
   isSoleLane: boolean;
   canOpenSession: boolean;
   onOpenSession?: () => void;
+  /** Whether the strip spans several agents, so each lane names its own. */
+  showAgent: boolean;
+  newSessionAgentIds: readonly string[];
+  canOpenSessionWithAgent: boolean;
+  onOpenSessionWithAgent?: (agentId: string) => void;
 }
 
 /**
@@ -166,10 +205,20 @@ function SessionTabChip({
   isSoleLane,
   canOpenSession,
   onOpenSession,
+  showAgent,
+  newSessionAgentIds,
+  canOpenSessionWithAgent,
+  onOpenSessionWithAgent,
 }: SessionTabChipProps) {
   const closingFromMenuRef = useRef(false);
   const stateId = `${tabId}-state`;
-  const title = tab.fullTitle ?? tab.label;
+  const agentName = showAgent && tab.agentId ? agentDisplayName(tab.agentId) : null;
+  // The agent joins the name rather than the description: it is what tells two
+  // `Session N` tabs apart, which is the job of a name.
+  const title = agentName
+    ? `${tab.fullTitle ?? tab.label} — ${agentName}`
+    : (tab.fullTitle ?? tab.label);
+  const hasAgentItems = !!onOpenSessionWithAgent && newSessionAgentIds.length > 1;
   const { ref: labelRef, isTruncated: isLabelTruncated } = useTruncationDetection();
 
   const chip = (
@@ -218,6 +267,7 @@ function SessionTabChip({
       )}
     >
       {isActive && <DocumentTabIndicator />}
+      {agentName && tab.agentId && <TabAgentMark agentId={tab.agentId} />}
       <TabStateIndicator agentState={agentState} />
       <TabLabel label={tab.label} isTaskTitle={tab.fullTitle !== undefined} labelRef={labelRef} />
       <DocumentTabClose
@@ -240,8 +290,10 @@ function SessionTabChip({
   // which hands a non-button trigger `tabIndex={0}` and would put every clipped lane back
   // in the tab order. The wrapper stays mounted either way and is simply held shut —
   // swapping it in when a title arrives would remount the tab and drop keyboard focus.
+  // A lane marked with its agent explains the mark in the same tooltip.
   const hasTitleTip =
-    tab.fullTitle !== undefined && (tab.fullTitle !== tab.label || isLabelTruncated);
+    agentName !== null ||
+    (tab.fullTitle !== undefined && (tab.fullTitle !== tab.label || isLabelTruncated));
   // Each lane owns its menu, like every other tab in the app: a right-click on a
   // background lane closes that lane, never the one in front.
   return (
@@ -250,8 +302,8 @@ function SessionTabChip({
         <ContextMenuTrigger asChild onContextMenu={stopContextMenuPropagation}>
           <TooltipTrigger asChild>{chip}</TooltipTrigger>
         </ContextMenuTrigger>
-        {tab.fullTitle !== undefined && (
-          <TooltipContent side="bottom">{tab.fullTitle}</TooltipContent>
+        {(tab.fullTitle !== undefined || agentName !== null) && (
+          <TooltipContent side="bottom">{title}</TooltipContent>
         )}
       </Tooltip>
       <ContextMenuContent
@@ -265,14 +317,22 @@ function SessionTabChip({
         }}
       >
         {onOpenSession && (
-          <>
-            <ContextMenuItem disabled={!canOpenSession} onSelect={onOpenSession}>
-              <Plus data-menu-icon className="mr-2 h-3.5 w-3.5" aria-hidden="true" />
-              New session
-            </ContextMenuItem>
-            <ContextMenuSeparator />
-          </>
+          <ContextMenuItem disabled={!canOpenSession} onSelect={onOpenSession}>
+            <Plus data-menu-icon className="mr-2 h-3.5 w-3.5" aria-hidden="true" />
+            New session
+          </ContextMenuItem>
         )}
+        {hasAgentItems &&
+          newSessionAgentIds.map((agentId) => (
+            <ContextMenuItem
+              key={agentId}
+              disabled={!canOpenSessionWithAgent}
+              onSelect={() => onOpenSessionWithAgent?.(agentId)}
+            >
+              <NewSessionWithAgentLabel agentId={agentId} />
+            </ContextMenuItem>
+          ))}
+        {(onOpenSession || hasAgentItems) && <ContextMenuSeparator />}
         <ContextMenuItem
           onSelect={() => {
             closingFromMenuRef.current = true;
@@ -295,6 +355,11 @@ interface HelpSessionTabsProps {
   /** Whether a lane is still free. False parks the trailing control rather than removing it. */
   canOpenSession?: boolean;
   onOpenSession?: () => void;
+  /** Agents a session can be started on by name, from a tab's menu; offered only when there are several. */
+  newSessionAgentIds?: readonly string[];
+  /** Whether one can start, which an empty tab allows even at the ceiling. Defaults to `canOpenSession`. */
+  canOpenSessionWithAgent?: boolean;
+  onOpenSessionWithAgent?: (agentId: string) => void;
   /** Shared base for this strip's ids — see {@link helpSessionTabId}. */
   idBase: string;
   /** The id of the body this strip drives, for `aria-controls`. */
@@ -335,11 +400,16 @@ export function HelpSessionTabs({
   onClose,
   canOpenSession = false,
   onOpenSession,
+  newSessionAgentIds = EMPTY_AGENT_IDS,
+  canOpenSessionWithAgent = canOpenSession,
+  onOpenSessionWithAgent,
   idBase,
   panelId,
 }: HelpSessionTabsProps) {
   const listRef = useRef<HTMLDivElement | null>(null);
   const layoutGroupId = useId();
+  // Lanes on one agent look exactly as they always did; only a mix is marked.
+  const showAgent = new Set(tabs.flatMap((t) => (t.agentId ? [t.agentId] : []))).size > 1;
 
   /**
    * Move focus to one lane by DOM query rather than by holding a ref per tab. One ref on
@@ -471,6 +541,10 @@ export function HelpSessionTabs({
               isSoleLane={tabs.length === 1}
               canOpenSession={canOpenSession}
               onOpenSession={onOpenSession}
+              showAgent={showAgent}
+              newSessionAgentIds={newSessionAgentIds}
+              canOpenSessionWithAgent={canOpenSessionWithAgent}
+              onOpenSessionWithAgent={onOpenSessionWithAgent}
             />
           ))}
         </LayoutGroup>

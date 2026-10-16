@@ -2,16 +2,31 @@ import { useCallback, useEffect, useState } from "react";
 import { useShallow } from "zustand/react/shallow";
 import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import {
+  ContextMenu,
+  ContextMenuContent,
+  ContextMenuItem,
+  ContextMenuTrigger,
+} from "@/components/ui/context-menu";
+import { NewSessionWithAgentLabel } from "@/components/HelpPanel/NewSessionWithAgentLabel";
 import { createTooltipContent } from "@/lib/tooltipShortcut";
 import { useAriaKeyshortcuts, useEffectiveCombo, useShortcutHintHover } from "@/hooks";
 import { cn } from "@/lib/utils";
 import { DaintreeIcon } from "@/components/icons/DaintreeIcon";
 import { useFocusStore } from "@/store/focusStore";
-import { useHelpPanelStore, selectSlotTerminalIds } from "@/store/helpPanelStore";
+import {
+  useHelpPanelStore,
+  selectHasRoomForSession,
+  selectSlotTerminalIds,
+} from "@/store/helpPanelStore";
 import { usePanelStore } from "@/store";
+import { useProjectStore } from "@/store/projectStore";
+import { useScratchStore } from "@/store/scratchStore";
 import { isPtyPanel } from "@shared/types/panel";
 import { suppressSidebarResizes } from "@/lib/sidebarToggle";
 import { useMcpReadiness } from "@/hooks/useMcpReadiness";
+import { useAssistantAgentChoices } from "@/hooks/useAssistantAgentChoices";
+import { actionService } from "@/services/ActionService";
 import type { McpRuntimeSnapshot } from "@shared/types";
 import type { AgentState } from "@/types";
 
@@ -164,6 +179,15 @@ export function ToolbarAssistantButton({
     }
   }, [toggle, isOpen]);
 
+  // A right-click starts one session on a chosen agent (#13442). Only when
+  // there is a choice to make; the plain click above is untouched either way.
+  const agentChoices = useAssistantAgentChoices();
+  const hasAgentChoice = agentChoices.length > 1;
+  const projectId = useProjectStore((s) => s.currentProject?.id ?? null);
+  const scratchId = useScratchStore((s) => s.currentScratch?.id ?? null);
+  const workspaceId = projectId ?? scratchId;
+  const canOpenSession = useHelpPanelStore((s) => selectHasRoomForSession(s, workspaceId));
+
   const pip = describePip(mcp);
   const agentPip = describeAgentPip(unreadState);
   // The MCP-health pip takes precedence — when it's showing, the agent pip
@@ -182,41 +206,64 @@ export function ToolbarAssistantButton({
       : "Daintree Assistant";
 
   return (
-    <Tooltip>
-      <TooltipTrigger asChild>
-        <Button
-          {...hintHover}
-          type="button"
-          variant="ghost"
-          size="icon"
-          data-toolbar-item={dataToolbarItem}
-          onClick={handleClick}
-          className={toolbarIconButtonClass}
-          aria-label={label}
-          aria-pressed={isVisible}
-          aria-keyshortcuts={ariaShortcut}
-        >
-          <div className="relative">
-            <DaintreeIcon />
-            {/* One always-in-DOM pip; data-visible drives the @starting-style
-                enter/exit on .toolbar-badge. Precedence (MCP pip > agent pip)
-                stays in component logic — the className resolves to the winning
-                pip's color, with the pulse only on the delayed MCP state. */}
-            <span
-              aria-hidden="true"
-              data-testid="assistant-working-pip"
-              data-agent-state={agentState ?? ""}
-              data-visible={pip !== null || showAgentPip}
-              className={cn(
-                "toolbar-pip toolbar-badge",
-                pip?.className ?? (showAgentPip ? agentPip?.className : undefined),
-                pip?.delayed && "animate-pulse-delayed"
-              )}
-            />
-          </div>
-        </Button>
-      </TooltipTrigger>
-      <TooltipContent side="bottom">{createTooltipContent(label, shortcut)}</TooltipContent>
-    </Tooltip>
+    <ContextMenu>
+      <ContextMenuTrigger asChild disabled={!hasAgentChoice}>
+        <span className="inline-flex">
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button
+                {...hintHover}
+                type="button"
+                variant="ghost"
+                size="icon"
+                data-toolbar-item={dataToolbarItem}
+                onClick={handleClick}
+                className={toolbarIconButtonClass}
+                aria-label={label}
+                aria-pressed={isVisible}
+                aria-keyshortcuts={ariaShortcut}
+              >
+                <div className="relative">
+                  <DaintreeIcon />
+                  {/* One always-in-DOM pip; data-visible drives the @starting-style
+                      enter/exit on .toolbar-badge. Precedence (MCP pip > agent pip)
+                      stays in component logic — the className resolves to the winning
+                      pip's color, with the pulse only on the delayed MCP state. */}
+                  <span
+                    aria-hidden="true"
+                    data-testid="assistant-working-pip"
+                    data-agent-state={agentState ?? ""}
+                    data-visible={pip !== null || showAgentPip}
+                    className={cn(
+                      "toolbar-pip toolbar-badge",
+                      pip?.className ?? (showAgentPip ? agentPip?.className : undefined),
+                      pip?.delayed && "animate-pulse-delayed"
+                    )}
+                  />
+                </div>
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent side="bottom">{createTooltipContent(label, shortcut)}</TooltipContent>
+          </Tooltip>
+        </span>
+      </ContextMenuTrigger>
+      <ContextMenuContent>
+        {agentChoices.map((agentId) => (
+          <ContextMenuItem
+            key={agentId}
+            disabled={!canOpenSession}
+            onSelect={() => {
+              void actionService.dispatch(
+                "help.newSessionWithAgent",
+                { agentId },
+                { source: "user" }
+              );
+            }}
+          >
+            <NewSessionWithAgentLabel agentId={agentId} />
+          </ContextMenuItem>
+        ))}
+      </ContextMenuContent>
+    </ContextMenu>
   );
 }

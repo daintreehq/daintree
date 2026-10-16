@@ -144,7 +144,12 @@ vi.mock("../AssistantUserConfig.js", async (importOriginal) => {
   };
 });
 
-import { HelpSessionService, codexTrustArgs, projectRuleRoots } from "../HelpSessionService.js";
+import {
+  HelpSessionService,
+  assistantAgentDirKey,
+  codexTrustArgs,
+  projectRuleRoots,
+} from "../HelpSessionService.js";
 
 async function makeBundledHelpFolder(root: string): Promise<string> {
   const helpDir = path.join(root, "assistant");
@@ -1010,25 +1015,33 @@ describe("HelpSessionService", () => {
     });
 
     it.each(["copilot", "codex"])(
-      "retires Claude hooks when the project's session switches to %s",
+      "keeps a Claude session's hooks out of, and intact beside, a %s session in the project",
       async (agentId) => {
+        // A hook may be a guard the user relies on. Before lanes on different
+        // agents had directories of their own, a %s provision stripped it from
+        // the folder a live Claude lane was reading; now neither touches the
+        // other's settings.
         const hooks = {
           PreToolUse: [{ matcher: "Bash", hooks: [{ type: "command", command: "guard.sh" }] }],
         };
         mockLoadAssistantUserConfig.mockResolvedValue(emptyUserConfig({ claudeHooks: hooks }));
-        const first = await service.provisionSession(provisionInput());
-        if (!first) throw new Error("expected result");
-        await service.revokeSession(first.sessionId);
+        const claude = await service.provisionSession({ ...provisionInput(), slot: 0 });
+        if (!claude) throw new Error("expected claude provision");
 
-        // Opt-out: the loader now returns no hooks.
         mockLoadAssistantUserConfig.mockResolvedValue(emptyUserConfig());
-        await service.provisionSession({ ...provisionInput(), agentId });
+        const other = await service.provisionSession({ ...provisionInput(), agentId, slot: 1 });
+        if (!other) throw new Error(`expected ${agentId} provision`);
+        expect(other.sessionPath).not.toBe(claude.sessionPath);
 
-        const settings = JSON.parse(
-          await fs.readFile(path.join(first.sessionPath, ".claude", "settings.json"), "utf-8")
+        const claudeSettings = JSON.parse(
+          await fs.readFile(path.join(claude.sessionPath, ".claude", "settings.json"), "utf-8")
         );
-        expect(settings.hooks).toBeUndefined();
-        expect(settings.permissions.allow).toContain("Read(**)");
+        expect(claudeSettings.hooks).toEqual(hooks);
+        const otherSettings = await fs
+          .readFile(path.join(other.sessionPath, ".claude", "settings.json"), "utf-8")
+          .then((raw) => JSON.parse(raw) as { hooks?: unknown })
+          .catch(() => null);
+        expect(otherSettings?.hooks).toBeUndefined();
       }
     );
 
@@ -1717,14 +1730,20 @@ describe("HelpSessionService", () => {
     await fs.access(fresh.sessionPath);
   });
 
-  it("gcStaleSessions keeps the shared project directory and sweeps legacy per-lane ones", async () => {
+  it("gcStaleSessions keeps the shared project directories and sweeps legacy per-lane ones", async () => {
     // Lanes used to get `<hash>-sN` directories of their own. They now share the
     // bare-hash directory, so a leftover `-sN` is a legacy shape with nothing
     // resumable in it — its agent's resume id was captured against a cwd that
     // nothing launches in any more — and GC removes it like any other stranger.
+    // A lane on another agent has a directory of its own, which is live.
     const laneZero = await service.provisionSession({ ...provisionInput(), slot: 0 });
     const laneOne = await service.provisionSession({ ...provisionInput(), slot: 1 });
-    if (!laneZero || !laneOne) throw new Error("expected both provisions");
+    const codexLane = await service.provisionSession({
+      ...provisionInput(),
+      agentId: "codex",
+      slot: 2,
+    });
+    if (!laneZero || !laneOne || !codexLane) throw new Error("expected three provisions");
     expect(laneOne.sessionPath).toBe(laneZero.sessionPath);
 
     const hash = path.basename(laneZero.sessionPath);
@@ -1737,6 +1756,7 @@ describe("HelpSessionService", () => {
     await service.gcStaleSessions();
 
     await fs.access(laneZero.sessionPath);
+    await fs.access(codexLane.sessionPath);
     for (const dir of [legacyLane, outOfRange]) {
       await expect(fs.access(dir)).rejects.toThrow();
     }
@@ -2429,7 +2449,6 @@ describe("HelpSessionService", () => {
 
     it("hands Claude its lane file through --mcp-config, and refuses other agents", async () => {
       const claude = await service.provisionSession({ ...provisionInput(), slot: 0 });
-      // A Codex session in ANOTHER project: same-project mixing is refused below.
       const codex = await service.provisionSession({
         ...provisionInput(),
         projectId: "proj-2",
@@ -2447,35 +2466,46 @@ describe("HelpSessionService", () => {
       expect(service.getClaudeLaunchArgs("not-a-token")).toBeNull();
     });
 
-    it("refuses a second agent in a project whose sibling lane is live", async () => {
+    it("runs a second agent beside a live sibling lane, in a directory of its own", async () => {
       // The shared directory holds agent-shaped files — the content mirror, the
       // Copilot `.mcp.json`, Claude's settings overlay — and two agents' versions
-      // of them cannot coexist. Fail closed with a reason rather than let the
-      // newcomer quietly clobber the sibling's setup.
+      // of them cannot coexist, so the newcomer gets its own directory rather
+      // than a refusal, and the sibling's setup is never touched.
       const claude = await service.provisionSession({ ...provisionInput(), slot: 0 });
       if (!claude) throw new Error("expected claude provision");
+      expect(service.markTerminalForToken(claude.token, "term-claude")).toBe(true);
+      const claudeSettingsPath = path.join(claude.sessionPath, ".claude", "settings.json");
+      const claudeSettings = await fs.readFile(claudeSettingsPath, "utf-8");
+      mockPtyKill.mockClear();
 
-      await expect(
-        service.provisionSession({ ...provisionInput(), agentId: "codex", slot: 1 })
-      ).rejects.toMatchObject({ name: "HelpSessionError", code: "MIXED_AGENT_LANES" });
-      // The sibling is untouched.
-      expect(service.validateToken(claude.token)).toBe("core");
-
-      // Once the Claude lane is gone, the project can switch agents.
-      await service.revokeSession(claude.sessionId);
       const codex = await service.provisionSession({
         ...provisionInput(),
         agentId: "codex",
         slot: 1,
       });
-      expect(codex).not.toBeNull();
+      if (!codex) throw new Error("expected codex provision");
+
+      expect(codex.sessionPath).toBe(`${claude.sessionPath}.codex`);
+      // The mirror reconciles only the newcomer's directory, so the skills and
+      // commands it retires are never the Claude lane's.
+      expect(mockSyncAssistantContent).toHaveBeenLastCalledWith(
+        expect.objectContaining({ sessionPath: codex.sessionPath, agentId: "codex" })
+      );
+      expect(service.validateToken(claude.token)).toBe("core");
+      expect(mockPtyKill).not.toHaveBeenCalled();
+      await fs.access(laneFile(claude, 0));
+      expect(await fs.readFile(claudeSettingsPath, "utf-8")).toBe(claudeSettings);
+
+      // A second Codex lane joins the Codex directory, not a third one.
+      const codexTwo = await service.provisionSession({
+        ...provisionInput(),
+        agentId: "codex",
+        slot: 2,
+      });
+      expect(codexTwo?.sessionPath).toBe(codex.sessionPath);
     });
 
-    it("refuses a mixed-agent launch without displacing the caller's own lane", async () => {
-      // The guard has to run BEFORE displacement. Displacement revokes and
-      // kills whatever holds the slot being launched into, so a refusal
-      // ordered after it would charge the user their own live lane for an
-      // error they never get a session out of.
+    it("replaces only its own lane when that lane switches agent", async () => {
       const laneZero = await service.provisionSession({ ...provisionInput(), slot: 0 });
       const laneOne = await service.provisionSession({ ...provisionInput(), slot: 1 });
       if (!laneZero || !laneOne) throw new Error("expected both provisions");
@@ -2483,14 +2513,33 @@ describe("HelpSessionService", () => {
       expect(service.markTerminalForToken(laneOne.token, "term-slot-1")).toBe(true);
       mockPtyKill.mockClear();
 
-      await expect(
-        service.provisionSession({ ...provisionInput(), agentId: "codex", slot: 1 })
-      ).rejects.toMatchObject({ name: "HelpSessionError", code: "MIXED_AGENT_LANES" });
+      const codex = await service.provisionSession({
+        ...provisionInput(),
+        agentId: "codex",
+        slot: 1,
+      });
+      expect(codex).not.toBeNull();
 
-      // The lane the refused launch targeted is still the user's live session.
-      expect(service.validateToken(laneOne.token)).toBe("core");
+      expect(service.validateToken(laneOne.token)).toBe(false);
       expect(service.validateToken(laneZero.token)).toBe("core");
-      expect(mockPtyKill).not.toHaveBeenCalled();
+      expect(mockPtyKill.mock.calls.map(([terminalId]) => terminalId)).toEqual(["term-slot-1"]);
+    });
+
+    it("keys a custom agent's directory by a digest when its id isn't a safe name", async () => {
+      expect(assistantAgentDirKey("claude")).toBeNull();
+      expect(assistantAgentDirKey("codex")).toBe("codex");
+      expect(assistantAgentDirKey("my-agent-2")).toBe("my-agent-2");
+      // Case, dots and length all fall back to a bounded digest, and two ids
+      // that differ only by case never share a directory.
+      const upper = assistantAgentDirKey("My.Agent");
+      const lower = assistantAgentDirKey("my.agent");
+      expect(upper).toMatch(/^[0-9a-f]{16}$/);
+      expect(lower).toMatch(/^[0-9a-f]{16}$/);
+      expect(upper).not.toBe(lower);
+      expect(assistantAgentDirKey("a".repeat(40))).toMatch(/^[0-9a-f]{16}$/);
+      // An id spelled like another agent's digest is digested in turn, so it
+      // can't land in that agent's directory.
+      expect(assistantAgentDirKey(upper!)).not.toBe(upper);
     });
 
     it("removes a lane's --mcp-config file on revoke without touching its sibling's", async () => {
@@ -4335,32 +4384,33 @@ describe("HelpSessionService", () => {
       expect(stripManagedAddenda(claude)).toBe("# Help");
     });
 
-    it("strips a prior Claude bearer from .mcp.json on Codex hash-skip switch (no stale Authorization in cwd)", async () => {
-      // Provision Claude first — its literal Bearer lands in the lane file. Then
-      // plant one in the shared `.mcp.json` too, the way an install that
-      // predates the per-lane files would have left it.
-      const claudeResult = await service.provisionSession(provisionInput());
-      if (!claudeResult) throw new Error("expected claude provision");
-      expect((await readLaneConfig(claudeResult)).mcpServers.daintree?.headers?.Authorization).toBe(
-        `Bearer ${claudeResult.token}`
-      );
+    it("strips a dead bearer from .mcp.json on a Codex hash-skip provision (no stale Authorization in cwd)", async () => {
+      // Provision Codex once so its directory and template stamp exist, then
+      // plant a literal Bearer in its `.mcp.json`, the way a Claude provision
+      // in the same folder used to leave one before agents had their own.
+      const first = await service.provisionSession({
+        ...provisionInput(),
+        agentId: "codex",
+      });
+      if (!first) throw new Error("expected first codex provision");
+      await service.revokeSession(first.sessionId);
       await fs.writeFile(
-        path.join(claudeResult.sessionPath, ".mcp.json"),
+        path.join(first.sessionPath, ".mcp.json"),
         JSON.stringify({
           mcpServers: {
             "daintree-docs": { type: "http", url: "https://daintree.org/api/mcp" },
             daintree: {
               type: "sse",
               url: "http://127.0.0.1:45454/sse",
-              headers: { Authorization: `Bearer ${claudeResult.token}` },
+              headers: { Authorization: `Bearer ${first.token}` },
             },
           },
         })
       );
 
-      // Provision Codex for the same project. Template is unchanged →
+      // Provision Codex again for the same project. Template is unchanged →
       // hash gate skips fs.cp. Codex skips writeMcpConfig. Without the
-      // stale-strip in the codex branch, the dead Claude bearer would
+      // stale-strip in the codex branch, the dead bearer would
       // remain on disk in cwd (regression vs pre-#7525 behavior, where
       // fs.cp would have restored the bundled `.mcp.json`).
       // The gate must actually be what strips it: if the template were recopied
@@ -4371,7 +4421,7 @@ describe("HelpSessionService", () => {
       expect(cpSpy).not.toHaveBeenCalled();
       cpSpy.mockRestore();
       if (!codexResult) throw new Error("expected codex provision");
-      expect(codexResult.sessionPath).toBe(claudeResult.sessionPath);
+      expect(codexResult.sessionPath).toBe(first.sessionPath);
 
       const after = JSON.parse(
         await fs.readFile(path.join(codexResult.sessionPath, ".mcp.json"), "utf-8")

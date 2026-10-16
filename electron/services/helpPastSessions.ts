@@ -8,10 +8,11 @@ import type { CodexFolderSessionsResult } from "../../shared/types/ipc/agentSuba
 /**
  * Past assistant conversations for one project (#13206).
  *
- * Every assistant lane of a project runs in the same `help-sessions/<hash>`
- * directory, so the agents' own transcript stores already hold that project's
- * whole history. This reads them — never writes — and turns each conversation
- * into a picker row. Both stores are uncontracted formats, so every field is
+ * Every assistant lane of a project on one agent runs in the same
+ * `help-sessions/<hash>` directory (`<hash>.<agent>` for any agent but Claude),
+ * so the agents' own transcript stores already hold that project's whole
+ * history. This reads them — never writes — and turns each conversation into a
+ * picker row. Both stores are uncontracted formats, so every field is
  * optional and every failure degrades to fewer rows rather than an error.
  */
 
@@ -281,20 +282,38 @@ export interface ListHelpPastSessionsDeps {
   listCodexSessions: (cwd: string) => Promise<CodexFolderSessionsResult>;
 }
 
+/**
+ * Where each agent's assistant conversations were started: Claude's one
+ * session directory, and every directory Codex has run in — its own, and the
+ * project's shared one from before lanes on different agents were split.
+ */
+export interface HelpPastSessionPaths {
+  claude: string;
+  codex: readonly string[];
+}
+
 /** Newest first, capped. Each store fails on its own without hiding the other. */
 export async function listHelpPastSessions(
-  sessionPath: string,
+  paths: HelpPastSessionPaths,
   deps: ListHelpPastSessionsDeps
 ): Promise<HelpPastSession[]> {
-  const [claude, codex] = await Promise.all([
-    listClaudeHelpSessions(sessionPath, deps.claudeProjectsRoot).catch(() => []),
-    deps
-      .listCodexSessions(sessionPath)
-      .then(codexHelpSessionsFrom)
-      .catch(() => []),
+  const [claude, ...codexByPath] = await Promise.all([
+    listClaudeHelpSessions(paths.claude, deps.claudeProjectsRoot).catch(() => []),
+    ...paths.codex.map((codexPath) =>
+      deps
+        .listCodexSessions(codexPath)
+        .then(codexHelpSessionsFrom)
+        .catch(() => [])
+    ),
   ]);
+  // A conversation resumed into the newer directory can be reported under both.
+  const codex = new Map<string, HelpPastSession>();
+  for (const session of codexByPath.flat()) {
+    const seen = codex.get(session.sessionId);
+    if (!seen || session.updatedAt > seen.updatedAt) codex.set(session.sessionId, session);
+  }
   return (
-    [...claude, ...codex]
+    [...claude, ...codex.values()]
       // Ties break on identity so the order — and what the cap keeps — is stable.
       .sort(
         (a, b) =>
