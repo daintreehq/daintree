@@ -133,6 +133,7 @@ export class WatcherController {
    */
   private armedWatcher: GitFileWatcher | null = null;
   private attenuated = false;
+  private upstreamRef: string | null = null;
   private gitWatchDebounceTimer: NodeJS.Timeout | null = null;
   private gitWatchRefreshPending = false;
   private watcherRetryTimer: NodeJS.Timeout | null = null;
@@ -178,6 +179,17 @@ export class WatcherController {
     if (this.attenuated === attenuated) return;
     this.attenuated = attenuated;
     this.armedWatcher?.updateDebouncePolicy(this.debouncePolicy());
+  }
+
+  /**
+   * Follow the branch's upstream ref (#13400). Applied to the live and arming
+   * watchers in place — rotating would re-arm the recursive subscription — and
+   * remembered for later arms.
+   */
+  setUpstreamRef(ref: string | null): void {
+    this.upstreamRef = ref;
+    this.armedWatcher?.setUpstreamRef(ref);
+    this.pendingArm?.watcher.setUpstreamRef(ref);
   }
 
   private debouncePolicy() {
@@ -243,6 +255,7 @@ export class WatcherController {
     const watcher = new GitFileWatcher({
       worktreePath: this.host.worktreePath,
       branch: this.host.branch,
+      upstreamRef: this.upstreamRef,
       onChange: () => this.handleGitFileChange(),
       onGitConfigChanged: () => this.host.onGitConfigChanged?.(),
       onWorktreeFilesChanged: (affectedDirs) => this.handleWorktreeFilesChanged(affectedDirs),

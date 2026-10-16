@@ -36,6 +36,8 @@ interface GitFileStatBaseline {
   head: number;
   refsHead: number;
   packedRefs: number;
+  upstreamRef: string | null;
+  upstream: number;
 }
 
 export interface StatPrecheckHost {
@@ -47,6 +49,12 @@ export interface StatPrecheckHost {
   // events that fire during `resolveCommonDirAsync`/`buildStatBaseline`.
   readonly branch: string | undefined;
   readonly lastWatcherEventAt: number;
+  /**
+   * Full ref the branch's upstream resolves to. A push or fetch moves it and
+   * nothing else stat'd here, so without it an unwatched worktree would skip
+   * past the move until the staleness budget ran out (#13400).
+   */
+  readonly upstreamRef: string | null;
 }
 
 /**
@@ -143,19 +151,25 @@ export class StatPrecheck {
     branch: string | undefined
   ): Promise<GitFileStatBaseline | null> {
     try {
-      const [indexStat, headStat, refsHeadStat, packedRefsStat] = await Promise.all([
+      const upstreamRef = this.host.upstreamRef;
+      const [indexStat, headStat, refsHeadStat, packedRefsStat, upstreamStat] = await Promise.all([
         this.statMtime(pathJoin(gitDir, "index")),
         this.statMtime(pathJoin(gitDir, "HEAD")),
         branch
           ? this.statMtime(pathJoin(commonDir, "refs", "heads", branch))
           : Promise.resolve(STAT_ABSENT_SENTINEL),
         this.statMtime(pathJoin(commonDir, "packed-refs")),
+        upstreamRef
+          ? this.statMtime(pathJoin(commonDir, ...upstreamRef.split("/")))
+          : Promise.resolve(STAT_ABSENT_SENTINEL),
       ]);
       return {
         index: indexStat,
         head: headStat,
         refsHead: refsHeadStat,
         packedRefs: packedRefsStat,
+        upstreamRef,
+        upstream: upstreamStat,
       };
     } catch {
       return null;
@@ -167,7 +181,9 @@ export class StatPrecheck {
       a.index === b.index &&
       a.head === b.head &&
       a.refsHead === b.refsHead &&
-      a.packedRefs === b.packedRefs
+      a.packedRefs === b.packedRefs &&
+      a.upstreamRef === b.upstreamRef &&
+      a.upstream === b.upstream
     );
   }
 

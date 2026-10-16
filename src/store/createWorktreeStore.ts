@@ -2178,6 +2178,8 @@ function snapshotsEqual(a: WorktreeSnapshot, b: WorktreeSnapshot): boolean {
     a.planFilePath === b.planFilePath &&
     a.aheadCount === b.aheadCount &&
     a.behindCount === b.behindCount &&
+    a.upstreamRef === b.upstreamRef &&
+    a.upstreamHeadSha === b.upstreamHeadSha &&
     a.baseBranchName === b.baseBranchName &&
     a.baseAheadCount === b.baseAheadCount &&
     a.baseBehindCount === b.baseBehindCount &&

@@ -660,6 +660,12 @@ export class WorktreeMonitor {
       get behindCount() {
         return monitor.gitStatusPass.behindCount;
       },
+      get upstreamRef() {
+        return monitor.gitStatusPass.upstreamRef;
+      },
+      get upstreamHeadSha() {
+        return monitor.gitStatusPass.upstreamHeadSha;
+      },
       get baseBranchName() {
         return monitor.gitStatusPass.baseBranchName;
       },
@@ -747,6 +753,10 @@ export class WorktreeMonitor {
       },
       get lastWatcherEventAt() {
         return monitor.lastWatcherEventAt;
+      },
+      // Read lazily: BaseDivergence is built after the pre-check it depends on.
+      get upstreamRef() {
+        return monitor.baseDivergence?.upstreamRef ?? null;
       },
     };
     this.statPrecheck = new StatPrecheck(statPrecheckHost);

@@ -447,6 +447,185 @@ describe("GitFileWatcher", () => {
     await expect(gitWatcher.start()).resolves.toBe(true);
   });
 
+  // ---- Upstream ref: the push signal (#13400) ----
+
+  function callbackFor(dir: string) {
+    const call = [...vi.mocked(watch).mock.calls].reverse().find(([path]) => path === dir) as
+      [unknown, unknown, unknown] | undefined;
+    return call?.[2] as ((eventType: string, filename: string | Buffer | null) => void) | undefined;
+  }
+
+  it("fires on a push to a nested upstream ref on any remote", async () => {
+    const forkDir = pathJoin("/repo", ".git", "refs", "remotes", "fork", "feature");
+    const onChange = vi.fn();
+    const gitWatcher = new GitFileWatcher({
+      worktreePath: "/repo",
+      branch: "feature/x",
+      debounceMs: 150,
+      upstreamRef: "refs/remotes/fork/feature/x",
+      onChange,
+    });
+
+    await expect(gitWatcher.start()).resolves.toBe(true);
+    const cb = callbackFor(forkDir);
+    expect(cb).toBeDefined();
+
+    cb?.("rename", "other");
+    await vi.advanceTimersByTimeAsync(150);
+    expect(onChange).not.toHaveBeenCalled();
+
+    // git's lock-then-rename ref write.
+    cb?.("rename", "x.lock");
+    cb?.("rename", "x");
+    await vi.advanceTimersByTimeAsync(150);
+    expect(onChange).toHaveBeenCalledTimes(1);
+  });
+
+  it("follows the upstream to a new ref and stops reporting the old one", async () => {
+    const remotes = pathJoin("/repo", ".git", "refs", "remotes", "origin");
+    const onChange = vi.fn();
+    const gitWatcher = new GitFileWatcher({
+      worktreePath: "/repo",
+      branch: "feature/x",
+      debounceMs: 150,
+      onChange,
+    });
+    await gitWatcher.start();
+
+    gitWatcher.setUpstreamRef("refs/remotes/origin/feature/x");
+    gitWatcher.setUpstreamRef("refs/remotes/origin/feature/y");
+    const cb = callbackFor(pathJoin(remotes, "feature"));
+    expect(
+      vi.mocked(watch).mock.calls.filter(([p]) => p === pathJoin(remotes, "feature"))
+    ).toHaveLength(1);
+
+    cb?.("rename", "x");
+    await vi.advanceTimersByTimeAsync(150);
+    expect(onChange).not.toHaveBeenCalled();
+
+    cb?.("rename", "y");
+    await vi.advanceTimersByTimeAsync(150);
+    expect(onChange).toHaveBeenCalledTimes(1);
+  });
+
+  it("retries an upstream ref whose directory did not exist yet", async () => {
+    const featureDir = pathJoin("/repo", ".git", "refs", "remotes", "origin", "feature");
+    let exists = false;
+    vi.mocked(watch).mockImplementation(((path: string) => {
+      if (path === featureDir && !exists) throw new Error("ENOENT: no such directory");
+      return createMockWatcher();
+    }) as unknown as typeof watch);
+    const onChange = vi.fn();
+    const gitWatcher = new GitFileWatcher({
+      worktreePath: "/repo",
+      branch: "feature/x",
+      debounceMs: 150,
+      upstreamRef: "refs/remotes/origin/feature/x",
+      onChange,
+    });
+    await expect(gitWatcher.start()).resolves.toBe(true);
+
+    exists = true;
+    gitWatcher.setUpstreamRef("refs/remotes/origin/feature/x");
+    callbackFor(featureDir)?.("rename", "x");
+    await vi.advanceTimersByTimeAsync(150);
+    expect(onChange).toHaveBeenCalledTimes(1);
+  });
+
+  it("watches the nearest existing ancestor until the ref's directory appears", async () => {
+    const remotes = pathJoin("/repo", ".git", "refs", "remotes");
+    const forkDir = pathJoin(remotes, "fork");
+    const featureDir = pathJoin(forkDir, "feature");
+    vi.mocked(watch).mockImplementation(((path: string) => {
+      if (path === featureDir) throw new Error("ENOENT: no such directory");
+      return createMockWatcher();
+    }) as unknown as typeof watch);
+    const onChange = vi.fn();
+    const gitWatcher = new GitFileWatcher({
+      worktreePath: "/repo",
+      branch: "feature/x",
+      debounceMs: 150,
+      upstreamRef: "refs/remotes/fork/feature/x",
+      onChange,
+    });
+    await gitWatcher.start();
+
+    const cb = callbackFor(forkDir);
+    cb?.("rename", "unrelated");
+    await vi.advanceTimersByTimeAsync(150);
+    expect(onChange).not.toHaveBeenCalled();
+
+    // The push creating fork/feature/ for the first time.
+    cb?.("rename", "feature");
+    await vi.advanceTimersByTimeAsync(150);
+    expect(onChange).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps the fallback's watch when it turns out to be the ref itself", async () => {
+    const forkDir = pathJoin("/repo", ".git", "refs", "remotes", "fork");
+    const handles = new Map<string, FSWatcher>();
+    vi.mocked(watch).mockImplementation(((path: string) => {
+      if (path === pathJoin(forkDir, "topic")) throw new Error("ENOENT: no such directory");
+      const handle = createMockWatcher();
+      handles.set(path, handle);
+      return handle;
+    }) as unknown as typeof watch);
+    const onChange = vi.fn();
+    const gitWatcher = new GitFileWatcher({
+      worktreePath: "/repo",
+      branch: "topic",
+      debounceMs: 150,
+      upstreamRef: "refs/remotes/fork/topic/x",
+      onChange,
+    });
+    await gitWatcher.start();
+
+    // The fallback waits for fork/topic; the upstream becomes exactly that.
+    gitWatcher.setUpstreamRef("refs/remotes/fork/topic");
+
+    expect(handles.get(forkDir)?.close).not.toHaveBeenCalled();
+    callbackFor(forkDir)?.("rename", "topic");
+    await vi.advanceTimersByTimeAsync(150);
+    expect(onChange).toHaveBeenCalledTimes(1);
+  });
+
+  it("closes a directory's watch once the upstream moves out of it", async () => {
+    const remotes = pathJoin("/repo", ".git", "refs", "remotes");
+    const handles = new Map<string, FSWatcher>();
+    vi.mocked(watch).mockImplementation(((path: string) => {
+      const handle = createMockWatcher();
+      handles.set(path, handle);
+      return handle;
+    }) as unknown as typeof watch);
+    const gitWatcher = new GitFileWatcher({
+      worktreePath: "/repo",
+      branch: "feature/x",
+      debounceMs: 150,
+      upstreamRef: "refs/remotes/origin/feature/x",
+      onChange: vi.fn(),
+    });
+    await gitWatcher.start();
+
+    gitWatcher.setUpstreamRef("refs/remotes/fork/topic/x");
+
+    expect(handles.get(pathJoin(remotes, "origin", "feature"))?.close).toHaveBeenCalledTimes(1);
+    expect(handles.get(pathJoin(remotes, "fork", "topic"))?.close).not.toHaveBeenCalled();
+  });
+
+  it("never turns a malformed upstream ref into a watch path", async () => {
+    const gitWatcher = new GitFileWatcher({
+      worktreePath: "/repo",
+      branch: "feature/x",
+      debounceMs: 150,
+      upstreamRef: "refs/remotes/../../../etc/x",
+      onChange: vi.fn(),
+    });
+    await gitWatcher.start();
+
+    const watchedPaths = vi.mocked(watch).mock.calls.map(([path]) => String(path));
+    expect(watchedPaths.some((p) => !p.startsWith(pathJoin("/repo", ".git")))).toBe(false);
+  });
+
   // ---- Worktree debounce tests ----
 
   it("sustained burst fires onChange at max-wait ceiling", async () => {
