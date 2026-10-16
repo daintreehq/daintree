@@ -8646,36 +8646,53 @@ describe("session-scoped resource ownership (#11909)", () => {
         }
       );
 
-      // The view is the whole boundary: a pane the assistant created, but whose
-      // view it can no longer resolve, is refused like any other.
-      it("does not fall back to the ledger when the view check fails", async () => {
-        const { server, handleTerminalReadLastMessageOwned } = assistantReadHarness(
-          "s-assist-owned",
-          "help",
-          () => false
-        );
+      // A help session was refused the panes it had launched while the view
+      // check answered no (#13439). Its own panes are the ledger's, as every
+      // session's are, and the view is never asked about them.
+      it.each(["help", "assistant-pane"] as const)(
+        "%s reads a pane it created even when the view check refuses",
+        async (origin) => {
+          const { server, handleTerminalReadLastMessageOwned, isTerminalInPinnedWorkspace } =
+            assistantReadHarness(`s-assist-owned-${origin}`, origin, () => false);
 
-        const result = await callTool(server, {
-          name: "terminal.readLastMessageOwned",
-          arguments: { terminalId: "terminal-1" },
-        });
+          const result = await callTool(server, {
+            name: "terminal.readLastMessageOwned",
+            arguments: { terminalId: "terminal-1" },
+          });
 
-        expect(toolErrorPayload(result).code).toBe("RESOURCE_NOT_OWNED");
-        expect(handleTerminalReadLastMessageOwned).not.toHaveBeenCalled();
-      });
+          expect(result.isError).toBeUndefined();
+          expect(result.structuredContent).toEqual(READ_RESULT);
+          expect(handleTerminalReadLastMessageOwned).toHaveBeenCalledWith(
+            "terminal-1",
+            {},
+            expect.any(AbortSignal)
+          );
+          expect(isTerminalInPinnedWorkspace).not.toHaveBeenCalled();
+        }
+      );
 
-      it("refuses every read when the view check is not wired", async () => {
+      it("refuses a pane it did not create when the view check is not wired", async () => {
         const { store, server, handleTerminalReadLastMessageOwned } =
           readHarness("s-assist-unwired");
         store.sessionOriginMap.set("s-assist-unwired", "help");
 
-        const result = await callTool(server, {
+        const refused = await callTool(server, {
+          name: "terminal.readLastMessageOwned",
+          arguments: { terminalId: "user-pane" },
+        });
+        const owned = await callTool(server, {
           name: "terminal.readLastMessageOwned",
           arguments: { terminalId: "terminal-1" },
         });
 
-        expect(toolErrorPayload(result).code).toBe("RESOURCE_NOT_OWNED");
-        expect(handleTerminalReadLastMessageOwned).not.toHaveBeenCalled();
+        expect(toolErrorPayload(refused).code).toBe("RESOURCE_NOT_OWNED");
+        expect(owned.isError).toBeUndefined();
+        expect(handleTerminalReadLastMessageOwned).toHaveBeenCalledTimes(1);
+        expect(handleTerminalReadLastMessageOwned).toHaveBeenCalledWith(
+          "terminal-1",
+          {},
+          expect.any(AbortSignal)
+        );
       });
 
       it("decides the view before looking at the options", async () => {

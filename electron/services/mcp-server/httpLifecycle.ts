@@ -89,6 +89,9 @@ import {
   MCP_HANDSHAKE_REJECTED_CODE,
   minimumPermittingTier,
 } from "./shared.js";
+import { createLogger } from "../../utils/logger.js";
+
+const pinnedViewLogger = createLogger("main:McpPinnedView");
 
 /**
  * Push one event to the view pinned to an MCP session. A positive id is a local
@@ -1954,16 +1957,29 @@ export class HttpLifecycle {
           ?.workspaceId ?? null
       );
     };
+    // The refusal the assistant sees is uniform, so which side failed is
+    // recorded here: the view (pin, WebContents, workspace) or the pane's
+    // record (none, another project's, or an unanswered lookup) (#13439).
+    const refuseInPinnedView = (terminalId: string, reason: string): false => {
+      pinnedViewLogger.info("Pinned-view read refused", { sessionId, terminalId, reason });
+      return false;
+    };
     const isTerminalInPinnedWorkspace = async (terminalId: string): Promise<boolean> => {
       try {
         const workspaceId = pinnedWorkspaceId();
-        if (!workspaceId || !this.deps.isAgentPaneInWorkspace) return false;
-        if (!(await this.deps.isAgentPaneInWorkspace(terminalId, workspaceId))) return false;
+        if (!workspaceId) return refuseInPinnedView(terminalId, "no-view-workspace");
+        if (!this.deps.isAgentPaneInWorkspace) return refuseInPinnedView(terminalId, "unwired");
+        if (!(await this.deps.isAgentPaneInWorkspace(terminalId, workspaceId))) {
+          return refuseInPinnedView(terminalId, "not-in-workspace");
+        }
         // The record lookup is a round trip, and the view can go, or be
         // repointed, while it is out.
-        return pinnedWorkspaceId() === workspaceId;
+        if (pinnedWorkspaceId() !== workspaceId) {
+          return refuseInPinnedView(terminalId, "view-changed");
+        }
+        return true;
       } catch {
-        return false;
+        return refuseInPinnedView(terminalId, "lookup-failed");
       }
     };
 
