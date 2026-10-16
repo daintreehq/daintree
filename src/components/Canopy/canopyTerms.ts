@@ -1,3 +1,6 @@
+/** The dialog's title, the same in every state it renders: the feature named in full. */
+export const CANOPY_TITLE = "Daintree Canopy";
+
 /** The beta's terms, word for word on the pitch, in the inbox notice and in Settings. */
 export const CANOPY_BETA_TERMS =
   "Canopy is free and unlimited during the beta. It becomes a paid feature after that.";
