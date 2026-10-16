@@ -777,6 +777,26 @@ describe("AddHostDialog on Windows (WSL distros)", () => {
       })
     );
     expect(await screen.findByText("Starts")).toBeTruthy();
+    expect(screen.getByText("Matches this machine")).toBeTruthy();
+  });
+
+  it("advises on a distro's lifetime with this PC's Daintree, never on sleep or lingering", async () => {
+    remoteHosts.discover!.mockResolvedValueOnce([distro("Debian", 2)]);
+    remoteHosts.probe!.mockResolvedValue(
+      probeResult({ connection: { kind: "wsl", distro: "Debian" }, platform: "linux" })
+    );
+    render(<AddHostDialog isOpen onClose={() => {}} />);
+    fireEvent.click(await screen.findByRole("button", { name: /Debian/ }));
+    fireEvent.click(screen.getByRole("button", { name: "Check distribution" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Continue" }));
+    expect(await screen.findByText(/Host mode is on at .+ and starts with it/)).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Continue" }));
+    await screen.findByText("Keychain");
+    expect(screen.getByText("Running")).toBeTruthy();
+    expect(screen.getByText(/WSL stops it about 15 seconds later/)).toBeTruthy();
+    expect(screen.queryByText("Sleep")).toBeNull();
+    expect(screen.queryByText(/sleeping host/)).toBeNull();
+    expect(screen.queryByText(/Lingering|enable-linger/)).toBeNull();
   });
 
   it("stops at the check for a distro without systemd, and says how to turn it on", async () => {
@@ -800,6 +820,8 @@ describe("AddHostDialog on Windows (WSL distros)", () => {
       )
     ).toBeTruthy();
     expect(screen.getByText("wsl --terminate FedoraLinux-44")).toBeTruthy();
+    // Nothing installed: there's no build to compare with this machine's.
+    expect(screen.queryByText("Matches this machine")).toBeNull();
     expect(screen.queryByRole("button", { name: "Plan install" })).toBeNull();
     fireEvent.click(screen.getByRole("button", { name: "Check again" }));
     await waitFor(() => expect(remoteHosts.probe).toHaveBeenCalledTimes(2));

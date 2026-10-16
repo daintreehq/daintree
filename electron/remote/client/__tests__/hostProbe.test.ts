@@ -380,7 +380,7 @@ describe("probeHost", () => {
     ]);
   });
 
-  it("gives a WSL distro no sleep advice: it sleeps only when this PC does", async () => {
+  it("gives a WSL distro no sleep or linger advice: it runs and stops as one", async () => {
     const shell = shellReturning({ stdout: LINUX_OUTPUT });
     const { result, parsed } = await probeHost({
       connection: { kind: "wsl", distro: "Ubuntu-24.04" },
@@ -388,11 +388,10 @@ describe("probeHost", () => {
       client: CLIENT,
     });
     expect(result.reachable).toBe(true);
-    expect(result.advice).toMatchObject({ sleepObserved: null, sleepDisabled: null });
+    expect(result.advice).toMatchObject({ sleepObserved: null, sleepDisabled: null, linger: null });
     expect(parsed?.advice.sleepDisabled).toBeNull();
-    expect(result.suggestedCommands.map((c) => c.command)).toEqual([
-      "loginctl enable-linger $USER",
-    ]);
+    expect(parsed?.advice.linger).toBeNull();
+    expect(result.suggestedCommands).toEqual([]);
   });
 
   it("can't tell whether a host matches while its AppImages conflict", async () => {

@@ -313,8 +313,9 @@ export async function bootstrapHostMode(
       }
     } else {
       const target = linuxLaunchTarget(probe);
-      // Without lingering the user's services stop with their last login.
-      if (probe.advice.linger !== true) {
+      // Without lingering the user's services stop with their last login. A WSL
+      // distro keeps that login for as long as it runs, so it isn't asked.
+      if (connection.kind !== "wsl" && probe.advice.linger !== true) {
         const linger = await deps.channel.exec(ENABLE_LINGER_SCRIPT, { timeoutMs: 30_000, signal });
         if (linger.code !== 0) lingerRefused = failureDetail(linger, "loginctl failed");
       }

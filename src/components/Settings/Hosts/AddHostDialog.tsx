@@ -782,16 +782,18 @@ export function AddHostDialog({ isOpen, onClose, existing = null }: AddHostDialo
           <>
             <Line label="Platform" value={platformLabel(probe.platform, probe.arch)} />
             <Line label="Installed" value={installLabel(probe.install)} />
-            <Line
-              label="Matches this machine"
-              value={
-                probe.matchesClient === true
-                  ? "Same build"
-                  : probe.matchesClient === false
-                    ? "Different build"
-                    : "Can't tell"
-              }
-            />
+            {probe.install && (
+              <Line
+                label="Matches this machine"
+                value={
+                  probe.matchesClient === true
+                    ? "Same build"
+                    : probe.matchesClient === false
+                      ? "Different build"
+                      : "Can't tell"
+                }
+              />
+            )}
             <Line label="Host mode" value={probe.hostModeListening ? "Listening" : "Off"} />
             {noSystemd && (
               <div className="mt-3 space-y-2" data-testid="add-host-no-systemd">
@@ -970,7 +972,8 @@ export function AddHostDialog({ isOpen, onClose, existing = null }: AddHostDialo
     const switchedOn = hostModeSwitchedOn(probe);
     body = switchedOn ? (
       <p className="text-sm text-text-primary">
-        Host mode is on at {hostLabel} and starts at login there. This machine can connect.
+        Host mode is on at {hostLabel} and starts {viaWsl ? "with it" : "at login there"}. This
+        machine can connect.
       </p>
     ) : (
       <div className="space-y-2 text-sm">
@@ -982,7 +985,9 @@ export function AddHostDialog({ isOpen, onClose, existing = null }: AddHostDialo
         <p className="text-text-secondary">
           {probe?.platform === "darwin"
             ? "Daintree turns on Host mode there in the logged-in session and sets it to start at login. If it has never run on that Mac, open it once at the machine: macOS asks to approve a first launch."
-            : "Daintree installs its Host mode service there (a systemd user unit), starts it, and turns on Host mode with start at login. It also asks the host to let the service run after you log out."}
+            : viaWsl
+              ? "Daintree installs its Host mode service there (a systemd user unit), starts it, and turns on Host mode, so it starts whenever the distribution does."
+              : "Daintree installs its Host mode service there (a systemd user unit), starts it, and turns on Host mode with start at login. It also asks the host to let the service run after you log out."}
         </p>
       </div>
     );
@@ -1002,16 +1007,26 @@ export function AddHostDialog({ isOpen, onClose, existing = null }: AddHostDialo
   } else {
     body = (
       <div className="space-y-4 text-sm">
-        <div>
-          <p className="font-medium text-text-primary">Sleep</p>
-          <p className="text-text-secondary">
-            {probe?.advice.sleepDisabled === true
-              ? "The host is set not to sleep when idle."
-              : probe?.advice.sleepObserved
-                ? `Observed: ${probe.platform === "darwin" ? `sleep ${probe.advice.sleepObserved}` : `sleep.target ${probe.advice.sleepObserved}`}. A sleeping host drops its connection.`
-                : "A sleeping host drops its connection."}
-          </p>
-        </div>
+        {viaWsl ? (
+          <div>
+            <p className="font-medium text-text-primary">Running</p>
+            <p className="text-text-secondary">
+              {hostLabel} keeps running while Daintree is open on this PC. After you quit Daintree,
+              WSL stops it about 15 seconds later, and its terminals and agents with it.
+            </p>
+          </div>
+        ) : (
+          <div>
+            <p className="font-medium text-text-primary">Sleep</p>
+            <p className="text-text-secondary">
+              {probe?.advice.sleepDisabled === true
+                ? "The host is set not to sleep when idle."
+                : probe?.advice.sleepObserved
+                  ? `Observed: ${probe.platform === "darwin" ? `sleep ${probe.advice.sleepObserved}` : `sleep.target ${probe.advice.sleepObserved}`}. A sleeping host drops its connection.`
+                  : "A sleeping host drops its connection."}
+            </p>
+          </div>
+        )}
         <div>
           <p className="font-medium text-text-primary">Keychain</p>
           <p className="text-text-secondary">

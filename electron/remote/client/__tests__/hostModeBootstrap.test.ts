@@ -317,6 +317,27 @@ describe("bootstrapHostMode on a headless Linux host", () => {
     );
   });
 
+  it("doesn't ask a WSL distro for lingering: its login lasts as long as the distro runs", async () => {
+    const { channel, calls } = scripted();
+    const result = await bootstrapHostMode(
+      { kind: "wsl", distro: "Debian" },
+      await outcomeOf(linux({ linger: "no" })),
+      {
+        channel,
+        probe: probes([
+          linux({ unit: "enabled", linger: "no" }),
+          linux({ unit: "enabled", listening: true, linger: "no" }),
+          linux({ unit: "enabled", listening: true, linger: "no", state: state() }),
+        ]).probe,
+        sleep: async () => {},
+        now: clock(),
+      }
+    );
+    expect(calls.some((c) => c.script === ENABLE_LINGER_SCRIPT)).toBe(false);
+    expect(calls[0]!.script).toBe(SAVE_UNIT_SCRIPT);
+    expect(result).toMatchObject({ lingerRefused: null, probe: { hostModeListening: true } });
+  });
+
   it("runs an AppImage unpacked, in the unit and the handoff, where there is no FUSE", async () => {
     const { channel, calls } = scripted();
     const before = linux({ install: "appimage", fuse: false, linger: "yes" });

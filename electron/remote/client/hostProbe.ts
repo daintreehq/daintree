@@ -454,10 +454,16 @@ export async function probeHost(params: {
       },
     };
   }
-  // A WSL distro sleeps only when this PC does, and the Shell with it: its own sleep setting says nothing.
+  // A WSL distro sleeps only when this PC does, and the Shell with it: its own
+  // sleep setting says nothing. Nor does lingering: WSL holds the user's login
+  // session open for as long as the distro runs, and a distro that stops takes
+  // every service with it, lingering or not.
   const observed: ParsedProbe =
     connection.kind === "wsl"
-      ? { ...parsed, advice: { ...parsed.advice, sleepObserved: null, sleepDisabled: null } }
+      ? {
+          ...parsed,
+          advice: { ...parsed.advice, sleepObserved: null, sleepDisabled: null, linger: null },
+        }
       : parsed;
   return {
     parsed: observed,
