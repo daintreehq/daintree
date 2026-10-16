@@ -191,6 +191,17 @@ export interface GitFileWatcherOptions {
    *  the macOS FSEvents file descriptor ceiling (EMFILE). Fires in addition to
    *  `onWatcherFailed`. */
   onEmfileLimitReached?: () => void;
+  /**
+   * Full ref the branch's upstream resolves to (`refs/remotes/origin/feature/x`).
+   * Watched exactly, so a push to a nested or non-`origin` branch is seen
+   * without a recursive watch over `refs/remotes` (#13400).
+   */
+  upstreamRef?: string | null;
+}
+
+// A ref git reported for `@{u}`; anything else must never become a watch path.
+function isWatchableRef(ref: string): boolean {
+  return ref.startsWith("refs/") && !ref.split("/").some((part) => part === "" || part === "..");
 }
 
 export class GitFileWatcher {
@@ -253,6 +264,10 @@ export class GitFileWatcher {
   private readonly onEmfileLimitReached: (() => void) | undefined;
   private readonly watchWorktree: boolean;
   private currentBranch?: string;
+  private commonDir: string | null = null;
+  private upstreamRef: string | null;
+  /** The upstream ref file currently in a directory's tracked set. */
+  private upstreamRefPath: string | null = null;
 
   constructor(options: GitFileWatcherOptions) {
     this.worktreePath = options.worktreePath;
@@ -270,6 +285,7 @@ export class GitFileWatcher {
     this.onWorktreeWatcherReady = options.onWorktreeWatcherReady;
     this.onEmfileLimitReached = options.onEmfileLimitReached;
     this.currentBranch = options.branch;
+    this.upstreamRef = options.upstreamRef ?? null;
     this.watchWorktree = options.watchWorktree ?? false;
   }
 
@@ -360,6 +376,9 @@ export class GitFileWatcher {
       // feature-branch remote refs don't affect the repo-level toolbar counts.
       this.watchRemoteRefsDir(pathJoin(commonDir, "refs", "remotes", "origin"));
 
+      this.commonDir = commonDir;
+      this.armUpstreamRef();
+
       if (this.watchWorktree) {
         // Resolve the canonical root once so burst paths can be proved to live
         // inside this worktree. macOS FSEvents reports realpath'd paths, so a
@@ -415,6 +434,45 @@ export class GitFileWatcher {
     this.closeWatchers();
   }
 
+  /**
+   * Point the upstream-ref watch at a new ref, or drop it. Also retries a
+   * watch whose directory didn't exist yet, so callers can re-assert the same
+   * ref on every status pass.
+   */
+  setUpstreamRef(ref: string | null): void {
+    this.upstreamRef = ref;
+    if (this.disposed || this.commonDir === null) return;
+    this.armUpstreamRef();
+  }
+
+  private armUpstreamRef(): void {
+    const ref = this.upstreamRef;
+    const nextPath =
+      ref !== null && this.commonDir !== null && isWatchableRef(ref)
+        ? pathJoin(this.commonDir, ...ref.split("/"))
+        : null;
+    if (nextPath === this.upstreamRefPath) return;
+
+    if (this.upstreamRefPath !== null) {
+      this.watchedFilesByDirectory
+        .get(dirname(this.upstreamRefPath))
+        ?.delete(basename(this.upstreamRefPath));
+      this.upstreamRefPath = null;
+    }
+    if (nextPath === null) return;
+
+    // A tracked name already present (the ref also watched for another reason)
+    // is left alone on removal, so only claim one we add.
+    const tracked = this.watchedFilesByDirectory.get(dirname(nextPath));
+    if (tracked?.has(basename(nextPath))) return;
+    this.watchFile(nextPath);
+    // Absent directory: watchFile fell back silently. Left unclaimed, the next
+    // setUpstreamRef retries it.
+    if (this.watchedFilesByDirectory.get(dirname(nextPath))?.has(basename(nextPath))) {
+      this.upstreamRefPath = nextPath;
+    }
+  }
+
   private closeWatchers(): void {
     if (this.debounceTimer) {
       clearTimeout(this.debounceTimer);
@@ -448,6 +506,7 @@ export class GitFileWatcher {
 
     this.watchers = [];
     this.watchedFilesByDirectory.clear();
+    this.upstreamRefPath = null;
 
     if (this.worktreeSubscription) {
       this.worktreeSubscription.unsubscribe().catch(() => {

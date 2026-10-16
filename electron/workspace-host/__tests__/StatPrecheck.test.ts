@@ -12,6 +12,7 @@ interface MutableHost {
   abortSignal: AbortSignal;
   branch: string | undefined;
   lastWatcherEventAt: number;
+  upstreamRef: string | null;
 }
 
 function makeHost(overrides: Partial<MutableHost> = {}): MutableHost & StatPrecheckHost {
@@ -19,6 +20,7 @@ function makeHost(overrides: Partial<MutableHost> = {}): MutableHost & StatPrech
     abortSignal: new AbortController().signal,
     branch: "main",
     lastWatcherEventAt: 0,
+    upstreamRef: null,
     ...overrides,
   };
 }
@@ -60,6 +62,31 @@ describe("StatPrecheck", () => {
     const skip = await precheck.shouldSkip("/repo/.git", true);
 
     expect(skip).toBe(false);
+  });
+
+  it("falls through when only the upstream ref moved — a push or fetch (#13400)", async () => {
+    const upstreamPath = "/repo/.git/refs/remotes/origin/feature/x";
+    let upstreamMtime = 1_000;
+    vi.mocked(stat).mockImplementation((async (path: string) =>
+      makeStatResult(path === upstreamPath ? upstreamMtime : 1_000)) as unknown as typeof stat);
+    const precheck = new StatPrecheck(
+      makeHost({ branch: "feature/x", upstreamRef: "refs/remotes/origin/feature/x" })
+    );
+    await precheck.recordFullPass("/repo/.git");
+    expect(await precheck.shouldSkip("/repo/.git", false)).toBe(true);
+
+    upstreamMtime = 2_000;
+    expect(await precheck.shouldSkip("/repo/.git", false)).toBe(false);
+  });
+
+  it("falls through when the upstream switches to another ref", async () => {
+    vi.mocked(stat).mockResolvedValue(makeStatResult(1_000));
+    const host = makeHost({ upstreamRef: "refs/remotes/origin/a" });
+    const precheck = new StatPrecheck(host);
+    await precheck.recordFullPass("/repo/.git");
+
+    host.upstreamRef = "refs/remotes/fork/a";
+    expect(await precheck.shouldSkip("/repo/.git", false)).toBe(false);
   });
 
   it("falls through when a watcher event fired after the baseline was captured", async () => {

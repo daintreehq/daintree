@@ -197,6 +197,7 @@ function makeWatcherController(): WatcherController {
     markPending: vi.fn(),
     flushPendingIfReady: vi.fn(),
     scheduleDelayedFlush: vi.fn(),
+    setUpstreamRef: vi.fn(),
   } as unknown as WatcherController;
 }
 
@@ -211,7 +212,10 @@ function makeNoteReader(): NoteFileReader {
   return { read: vi.fn().mockResolvedValue({}) } as unknown as NoteFileReader;
 }
 
-function makePass(hostOverrides: Partial<GitStatusPassHost> = {}) {
+function makePass(
+  hostOverrides: Partial<GitStatusPassHost> = {},
+  baseDivergenceOverride?: BaseDivergence
+) {
   const host = makeHost(hostOverrides);
   const statPrecheck = new StatPrecheck({
     abortSignal: host.abortSignal,
@@ -219,8 +223,9 @@ function makePass(hostOverrides: Partial<GitStatusPassHost> = {}) {
       return host.branch;
     },
     lastWatcherEventAt: 0,
+    upstreamRef: null,
   });
-  const baseDivergence = new BaseDivergence(
+  const baseDivergence = baseDivergenceOverride ?? new BaseDivergence(
     {
       branch: host.branch,
       isMainWorktree: false,
@@ -357,6 +362,39 @@ describe("GitStatusPass", () => {
 
     expect(pass.lastActivityTimestamp).toBe(secondMtime);
     expect(host.emitUpdate).toHaveBeenCalledTimes(1);
+  });
+
+  it("emits a force-push that leaves the ahead/behind counts unchanged (#13400)", async () => {
+    const upstream = (sha: string) => ({
+      baseBranchName: "main",
+      aheadCount: 1,
+      behindCount: 0,
+      matchesUpstream: false,
+      baseCompareRef: "origin/main",
+      baseRemote: "origin",
+      upstreamRef: "refs/remotes/origin/feature/x",
+      upstreamHeadSha: sha,
+    });
+    const compute = vi
+      .fn()
+      .mockResolvedValueOnce(upstream("sha1"))
+      .mockResolvedValueOnce(upstream("sha2"));
+    mockGetWorktreeChangesWithStats.mockResolvedValue(
+      makeChanges({ tracking: "origin/feature/x", ahead: 1, behind: 0 })
+    );
+    const { pass, host, watcherController } = makePass({}, {
+      compute,
+    } as unknown as BaseDivergence);
+    await pass.run(false);
+    expect(pass.upstreamHeadSha).toBe("sha1");
+    expect(watcherController.setUpstreamRef).toHaveBeenCalledWith("refs/remotes/origin/feature/x");
+    vi.mocked(host.emitUpdate).mockClear();
+
+    await pass.run(false);
+
+    expect(host.emitUpdate).toHaveBeenCalledTimes(1);
+    expect(pass.upstreamHeadSha).toBe("sha2");
+    expect(pass.upstreamRef).toBe("refs/remotes/origin/feature/x");
   });
 
   it("advances and emits activity for a clean-to-clean commit", async () => {

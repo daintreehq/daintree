@@ -184,6 +184,12 @@ export interface WorktreeSnapshot {
   /** Number of commits behind the upstream tracking branch */
   behindCount?: number;
 
+  /** Full ref the upstream tracking branch resolves to (`refs/remotes/origin/feature/x`) */
+  upstreamRef?: string;
+
+  /** Commit the upstream tracking ref points at; moves on a push, never on a local commit */
+  upstreamHeadSha?: string;
+
   /** Name of the base branch (e.g. "develop") for divergence display */
   baseBranchName?: string | null;
 

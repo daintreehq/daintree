@@ -42,6 +42,14 @@ interface BaseDivergenceResult {
    * stale.
    */
   baseRemote: string | null;
+  /** Full ref `@{u}` resolves to (`refs/remotes/origin/feature/x`), or null without one. */
+  upstreamRef: string | null;
+  /**
+   * Commit `@{u}` points at. It moves when a push completes or a fetch picks up
+   * one made elsewhere, and never on a local commit, so it is the PR service's
+   * quota-free signal that the PR's head moved (#13400).
+   */
+  upstreamHeadSha: string | null;
 }
 
 /** Cached output of the (spawning) remote-resolution step. */
@@ -109,6 +117,11 @@ export class BaseDivergence {
   /** Remotes this repo has, as of the last resolution. Empty until one runs. */
   get availableRemotes(): readonly string[] {
     return this.resolution?.availableRemotes ?? [];
+  }
+
+  /** Full ref `@{u}` resolves to, as of the last resolution. */
+  get upstreamRef(): string | null {
+    return this.resolution?.upstreamRef ?? null;
   }
 
   async compute(hasUpstream: boolean): Promise<BaseDivergenceResult | null> {
@@ -181,6 +194,7 @@ export class BaseDivergence {
       const aheadCount = parts[1] != null && parts[1] !== "" ? parseInt(parts[1], 10) : 0;
 
       let matchesUpstream = false;
+      let upstreamHeadSha: string | null = null;
       if (hasUpstream) {
         try {
           // One invocation resolves both revs — rev-parse prints one OID per
@@ -189,6 +203,7 @@ export class BaseDivergence {
           const out = await git.raw(["rev-parse", "@{u}", resolvedRef]);
           const [upstreamCommit, baseCommit] = out.trim().split("\n");
           matchesUpstream = baseCommit !== undefined && upstreamCommit.trim() === baseCommit.trim();
+          upstreamHeadSha = upstreamCommit.trim() || null;
         } catch {
           matchesUpstream = false;
         }
@@ -201,6 +216,8 @@ export class BaseDivergence {
         matchesUpstream,
         baseCompareRef: resolvedRef,
         baseRemote: resolvedRemote,
+        upstreamRef: hasUpstream ? (resolution?.upstreamRef ?? null) : null,
+        upstreamHeadSha,
       };
       this.lastKey = key;
       this.lastResult = divergence;

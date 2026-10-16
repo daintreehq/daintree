@@ -4158,6 +4158,251 @@ describe("PullRequestService", () => {
     });
   });
 
+  describe("CI across a push seen on the upstream ref (#13400)", () => {
+    const SECOND = 1000;
+    const UPSTREAM = "refs/remotes/origin/feature/a";
+
+    // The #13399 harness, plus the worktree's own view of its upstream ref.
+    // `head` is what the forge's probe reports, so it can lag the local push.
+    function makeHarness(initialCi: CIStatus | null) {
+      const state: { head: string; ci: CIStatus | null } = { head: "sha1", ci: initialCi };
+      const batchSpy = vi.fn(async (_repo: RepoRef, branches: string[]) => {
+        const map = new Map<string, ForgePR | null>();
+        for (const branch of branches) {
+          map.set(branch, makeMockForgePR({ number: 1, headRef: branch }));
+        }
+        return map;
+      });
+      const mockImpl = mockForgeProviderResolved(undefined, batchSpy);
+      const getCIStatuses = vi.fn(async (_repo: RepoRef, prNumbers: number[]) => {
+        const map = new Map<number, CIStatus | null>();
+        for (const n of prNumbers) map.set(n, state.ci);
+        return map;
+      });
+      const findPRsByNumbers = vi.fn(async (_repo: RepoRef, prNumbers: number[]) => {
+        const map = new Map<number, ForgePR | null>();
+        for (const n of prNumbers) map.set(n, makeMockForgePR({ number: n }));
+        return map;
+      });
+      const probeOpenPRList = vi.fn(async (_repo: RepoRef, tracked: PRSnapshot[]) => {
+        const changed = tracked
+          .filter((t) => t.headSha !== state.head)
+          .map((t) => ({
+            number: t.number,
+            headSha: state.head,
+            updatedAt: "2024-02-02T00:00:00Z",
+            state: "open" as const,
+            title: t.title,
+          }));
+        return changed.length > 0
+          ? { kind: "changed" as const, changed }
+          : { kind: "unchanged" as const };
+      });
+      mockImpl.batchLookups = { findPRsByNumbers, getCIStatuses, probeOpenPRList };
+      return { state, getCIStatuses };
+    }
+
+    function ci(state: CIStatus["state"], headSha: string): CIStatus {
+      return { ...ciStatusFixture(state), headSha };
+    }
+
+    async function settle(upstreamRef: string = UPSTREAM, initialUpstreamSha = "sha1") {
+      const { pullRequestService } = await import("../PullRequestService.js");
+      const { events } = await import("../events.js");
+      pullRequestService.initialize("/repo", "test-project-id");
+      const update = (upstreamHeadSha: string | undefined, ref: string | undefined = upstreamRef) =>
+        events.emit(
+          "sys:worktree:update",
+          makeWorktreeSnapshot({
+            worktreeId: "wt-1",
+            branch: "feature/a",
+            upstreamRef: ref,
+            upstreamHeadSha,
+          })
+        );
+      update(initialUpstreamSha);
+      await pullRequestService.refresh();
+      await flushLoaders();
+      await revalidate(pullRequestService);
+
+      const detected: DaintreeEventMap["sys:pr:detected"][] = [];
+      events.on("sys:pr:detected", (payload) => detected.push(payload));
+      return { pullRequestService, detected, update };
+    }
+
+    async function revalidate(service: unknown): Promise<void> {
+      await (
+        service as unknown as { revalidateResolvedPRs: () => Promise<void> }
+      ).revalidateResolvedPRs();
+      await flushLoaders();
+    }
+
+    function jump(ms: number): void {
+      vi.setSystemTime(Date.now() + ms);
+    }
+
+    it("retracts the previous head's failure as soon as the push lands", async () => {
+      makeHarness(ci("failure", "sha1"));
+      const { pullRequestService, detected, update } = await settle();
+
+      update("sha2");
+
+      // Synchronous: no forge round trip stands between the push and this.
+      expect(detected).toHaveLength(1);
+      expect(detected[0]?.ciStatus).toBeUndefined();
+      expect(detected[0]?.prCiStatus).toBeUndefined();
+      expect(detected[0]?.isCiStatusLoading).toBeUndefined();
+
+      pullRequestService.destroy();
+    });
+
+    it("re-checks within seconds instead of waiting for the next tick", async () => {
+      makeHarness(ci("failure", "sha1"));
+      const { pullRequestService, update } = await settle();
+      const svc = pullRequestService as unknown as {
+        isPolling: boolean;
+        revalidateResolvedPRs: () => Promise<void>;
+      };
+      svc.isPolling = true;
+      const spy = vi.spyOn(svc, "revalidateResolvedPRs").mockResolvedValue(undefined);
+
+      update("sha2");
+      await vi.advanceTimersByTimeAsync(2 * SECOND);
+      expect(spy).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(2 * SECOND);
+      expect(spy).toHaveBeenCalledTimes(1);
+
+      pullRequestService.destroy();
+    });
+
+    it("never brings the old verdict back while the forge still reports the old head", async () => {
+      const { state, getCIStatuses } = makeHarness(ci("failure", "sha1"));
+      const { pullRequestService, detected, update } = await settle();
+
+      update("sha2");
+      getCIStatuses.mockClear();
+      // GitHub hasn't moved the PR yet: the probe still says sha1 and CI still
+      // answers for it.
+      jump(3 * SECOND);
+      await revalidate(pullRequestService);
+
+      expect(getCIStatuses).toHaveBeenCalled();
+      expect(detected.some((e) => e.ciStatus?.state === "failure")).toBe(false);
+
+      state.head = "sha2";
+      state.ci = ci("pending", "sha2");
+      jump(30 * SECOND);
+      await revalidate(pullRequestService);
+
+      expect(detected.some((e) => e.ciStatus?.state === "failure")).toBe(false);
+      expect(detected.at(-1)?.ciStatus?.state).toBe("pending");
+      expect(detected.at(-1)?.prCiStatus).toBe("pending");
+
+      pullRequestService.destroy();
+    });
+
+    it("keeps the new head's result when the probe catches up", async () => {
+      const { state } = makeHarness(ci("failure", "sha1"));
+      const { pullRequestService, detected, update } = await settle();
+
+      update("sha2");
+      state.ci = ci("pending", "sha2");
+      jump(3 * SECOND);
+      await revalidate(pullRequestService);
+      expect(detected.at(-1)?.ciStatus?.state).toBe("pending");
+
+      // The probe now reports the head the push already moved to — that is
+      // the catch-up, not another push, so the pending mark stays.
+      state.head = "sha2";
+      const before = detected.length;
+      jump(30 * SECOND);
+      await revalidate(pullRequestService);
+
+      expect(detected.slice(before).some((e) => e.ciStatus === undefined)).toBe(false);
+      expect(detected.at(-1)?.ciStatus?.state).toBe("pending");
+
+      pullRequestService.destroy();
+    });
+
+    it("does nothing on the first sighting of the upstream", async () => {
+      makeHarness(ci("failure", "sha1"));
+      const { pullRequestService, detected, update } = await settle();
+
+      update(undefined);
+      update("sha2");
+
+      expect(detected).toHaveLength(0);
+
+      pullRequestService.destroy();
+    });
+
+    it("ignores an upstream that names a different branch than the PR's head", async () => {
+      makeHarness(ci("failure", "sha1"));
+      const { pullRequestService, detected, update } = await settle(
+        "refs/remotes/origin/develop"
+      );
+
+      update("sha2");
+
+      expect(detected).toHaveLength(0);
+
+      pullRequestService.destroy();
+    });
+
+    it("ignores a local upstream, which a commit moves", async () => {
+      makeHarness(ci("failure", "sha1"));
+      const { pullRequestService, detected, update } = await settle("refs/heads/feature/a");
+
+      update("sha2");
+
+      expect(detected).toHaveLength(0);
+
+      pullRequestService.destroy();
+    });
+
+    it("ignores a move from a commit that wasn't the PR's head", async () => {
+      makeHarness(ci("failure", "sha1"));
+      // The worktree's upstream sits elsewhere than the PR's head (sha1).
+      const { pullRequestService, detected, update } = await settle(UPSTREAM, "sha0");
+
+      update("sha2");
+
+      expect(detected).toHaveLength(0);
+
+      pullRequestService.destroy();
+    });
+
+    it("ignores the upstream switching to another ref", async () => {
+      makeHarness(ci("failure", "sha1"));
+      const { pullRequestService, detected, update } = await settle();
+
+      update("sha2", "refs/remotes/fork/feature/a");
+
+      expect(detected).toHaveLength(0);
+
+      pullRequestService.destroy();
+    });
+
+    it("follows a second push from the head the first one moved to", async () => {
+      const { state } = makeHarness(ci("failure", "sha1"));
+      const { pullRequestService, detected, update } = await settle();
+
+      update("sha2");
+      state.ci = ci("failure", "sha2");
+      jump(3 * SECOND);
+      await revalidate(pullRequestService);
+      expect(detected.at(-1)?.ciStatus?.state).toBe("failure");
+
+      const before = detected.length;
+      update("sha3");
+
+      expect(detected.length).toBe(before + 1);
+      expect(detected.at(-1)?.ciStatus).toBeUndefined();
+
+      pullRequestService.destroy();
+    });
+  });
+
   describe("unchanged re-announcements", () => {
     it("announces a branch's missing PR once, not on every poll", async () => {
       mockForgeProviderResolved(async () => null);

@@ -305,6 +305,7 @@ function makePass(path: string) {
       return host.branch;
     },
     lastWatcherEventAt: 0,
+    upstreamRef: null,
   });
   const baseDivergence = new BaseDivergence(
     {
@@ -327,6 +328,7 @@ function makePass(path: string) {
     markPending() {},
     flushPendingIfReady() {},
     scheduleDelayedFlush() {},
+    setUpstreamRef() {},
   } as unknown as WatcherController;
   const pollingStrategy = {
     recordNoChange() {},
