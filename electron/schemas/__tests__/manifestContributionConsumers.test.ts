@@ -11,6 +11,8 @@ import {
   ContextMenuContributionSchema,
   CredentialFieldSchema,
   DatabaseContributionSchema,
+  DatabaseQueryContributionSchema,
+  DatabaseQueryParamSchema,
   FileDecorationContributionSchema,
   FileEditorContributionSchema,
   ForgeProviderContributionSchema,
@@ -110,6 +112,8 @@ const PLUGIN_DATABASE = "electron/services/plugin/pluginDatabase.ts";
 const PLUGIN_DATABASE_HANDLE = "shared/utils/pluginDatabaseHandle.ts";
 const PLUGIN_HOST_FACTORY = "electron/services/plugin/PluginHostFactory.ts";
 const PLUGIN_DATABASES_SECTION = "src/components/Plugin/PluginDatabasesSection.tsx";
+const DATABASE_ENDPOINT = "electron/services/pluginAgentMcp/databaseEndpoint.ts";
+const DECLARED_QUERIES = "electron/services/pluginAgentMcp/declaredQueries.ts";
 const GENERIC_PANEL_MENU = "src/components/Panel/genericPanelMenu.ts";
 const PLUGIN_PANEL_TOOLBAR = "src/components/Panel/PluginPanelToolbar.tsx";
 
@@ -142,6 +146,8 @@ const SWEPT_SCHEMAS = {
   tours: TourContributionSchema,
   databases: DatabaseContributionSchema,
   surfaces: SurfaceContributionsSchema,
+  "databases.queries": DatabaseQueryContributionSchema,
+  "databases.queries.params": DatabaseQueryParamSchema,
   "panels.menu": PanelMenuItemSchema,
   "panels.toolbar": PanelToolbarItemSchema,
   "agents.detection": AgentDetectionConfigSchema,
@@ -229,6 +235,14 @@ type FieldConsumerCoverage = {
   recipes: Record<keyof z.infer<typeof RecipeContributionSchema>, ConsumerDescriptor>;
   agentMcp: Record<keyof z.infer<typeof AgentMcpContributionSchema>, ConsumerDescriptor>;
   databases: Record<keyof z.infer<typeof DatabaseContributionSchema>, ConsumerDescriptor>;
+  "databases.queries": Record<
+    keyof z.infer<typeof DatabaseQueryContributionSchema>,
+    ConsumerDescriptor
+  >;
+  "databases.queries.params": Record<
+    keyof z.infer<typeof DatabaseQueryParamSchema>,
+    ConsumerDescriptor
+  >;
   surfaces: Record<keyof z.infer<typeof SurfaceContributionsSchema>, ConsumerDescriptor>;
   "panels.menu": Record<keyof z.infer<typeof PanelMenuItemSchema>, ConsumerDescriptor>;
   "panels.toolbar": Record<keyof z.infer<typeof PanelToolbarItemSchema>, ConsumerDescriptor>;
@@ -984,6 +998,61 @@ const MANIFEST_CONTRIBUTION_FIELD_CONSUMERS = {
       mode: "verbatim",
       consumers: [{ file: PLUGIN_DATABASE_HANDLE, symbol: "openPluginDatabase connect" }],
       note: "Re-applied as PRAGMA journal_mode on every open.",
+    },
+    queries: {
+      mode: "derived-input",
+      consumers: [{ file: DATABASE_ENDPOINT, symbol: "registerPluginDatabaseEndpoint" }],
+      note: "Each becomes a host tool on the database roster, run against this database.",
+    },
+  },
+  "databases.queries": {
+    name: {
+      mode: "verbatim",
+      consumers: [{ file: DECLARED_QUERIES, symbol: "declaredQueryDescriptor" }],
+      note: "The tool name agents call, on the plugin's one MCP server.",
+    },
+    mode: {
+      mode: "intentional-metadata",
+      consumers: [
+        { file: PLUGIN_SCHEMA, symbol: "DatabaseQueryContributionSchema (literal 'read')" },
+      ],
+      note: "Only 'read' is accepted; it picks the access level and is never advertised as a hint.",
+    },
+    description: {
+      mode: "verbatim",
+      consumers: [{ file: DECLARED_QUERIES, symbol: "declaredQueryDescriptor" }],
+      note: "The tool description agents are shown.",
+    },
+    params: {
+      mode: "derived-input",
+      consumers: [
+        { file: DECLARED_QUERIES, symbol: "declaredQueryInputSchema" },
+        { file: DECLARED_QUERIES, symbol: "bindDeclaredQueryArgs" },
+      ],
+      note: "Built into the tool's input schema, then bound to the placeholders of the same name.",
+    },
+    sql: {
+      mode: "verbatim",
+      consumers: [
+        { file: DECLARED_QUERIES, symbol: "declaredQueryProblems" },
+        { file: DATABASE_ENDPOINT, symbol: "registerPluginDatabaseEndpoint invoke" },
+      ],
+      note: "Checked at load; run as written on the read-only connection.",
+    },
+  },
+  "databases.queries.params": {
+    type: {
+      mode: "derived-input",
+      consumers: [
+        { file: DECLARED_QUERIES, symbol: "declaredQueryInputSchema" },
+        { file: DECLARED_QUERIES, symbol: "bindDeclaredQueryArgs" },
+      ],
+      note: "The JSON type the input schema demands; integers and booleans bind as INTEGER.",
+    },
+    description: {
+      mode: "verbatim",
+      consumers: [{ file: DECLARED_QUERIES, symbol: "declaredQueryInputSchema" }],
+      note: "The property description in the tool's input schema.",
     },
   },
   recipes: {

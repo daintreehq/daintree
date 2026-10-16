@@ -1790,11 +1790,13 @@ interface PluginMcpToolDefinition {
 interface PluginMcpApi {
     /**
      * Bind the tool roster for an endpoint declared in `contributes.agentMcp`,
-     * keyed by tool name. An undeclared endpoint id, a roster over
-     * {@link AGENT_MCP_MAX_TOOLS_PER_ENDPOINT}, or a tool breaking the name,
-     * description or schema limits is rejected whole. Calling it again for the
-     * same endpoint replaces the roster. Returns a disposer; every roster is
-     * dropped when the plugin unloads. Must be called during `activate()`.
+     * keyed by tool name. An undeclared endpoint id, a roster that with the
+     * manifest's declared database queries comes to more than
+     * {@link AGENT_MCP_MAX_TOOLS_PER_ENDPOINT}, a tool named like one of those
+     * queries, or a tool breaking the name, description or schema limits is
+     * rejected whole. Calling it again for the same endpoint replaces the
+     * roster. Returns a disposer; every roster is dropped when the plugin
+     * unloads. Must be called during `activate()`.
      */
     registerTools(endpointId: string, tools: Record<string, PluginMcpToolDefinition>): Promise<() => void>;
 }

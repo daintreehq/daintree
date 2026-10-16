@@ -193,6 +193,18 @@ export function createPluginSessionServer(options: PluginSessionServerOptions): 
     return awaitRegistration(scope.pluginEndpointId, signal);
   };
 
+  /**
+   * Every name the host answers on this server: its generic database tools and
+   * the plugin's declared queries, read from the host's roster whether or not
+   * this grant reaches it, so a name the host owns never falls through to the
+   * plugin's code.
+   */
+  const hostToolNames = (databases: Registration): ReadonlySet<string> => {
+    const roster = databases ?? endpointRegistry.get(pluginInstanceId, DATABASE_ENDPOINT_ID);
+    if (!roster) return RESERVED_AGENT_MCP_TOOL_NAMES;
+    return new Set([...RESERVED_AGENT_MCP_TOOL_NAMES, ...roster.tools.map((tool) => tool.name)]);
+  };
+
   const assertServable = (): void => {
     if (!isCallerServable()) {
       throw new McpError(ErrorCode.InternalError, RELOADING_MESSAGE);
@@ -209,11 +221,12 @@ export function createPluginSessionServer(options: PluginSessionServerOptions): 
       pluginRegistration(signal),
     ]);
     assertServable();
+    const hostNames = hostToolNames(databases);
     const tools: Tool[] = [
       ...(databases?.tools ?? []),
-      // Registration already refuses the reserved names; this keeps the two
+      // Registration already refuses the host's names; this keeps the two
       // rosters from ever advertising one name twice regardless.
-      ...(own?.tools ?? []).filter((tool) => !RESERVED_AGENT_MCP_TOOL_NAMES.has(tool.name)),
+      ...(own?.tools ?? []).filter((tool) => !hostNames.has(tool.name)),
     ].map((tool) => ({
       name: tool.name,
       description: tool.description,
@@ -282,28 +295,31 @@ export function createPluginSessionServer(options: PluginSessionServerOptions): 
       if (controller.signal.aborted) return abortedResult();
       if (!isCallerServable()) return toolError(RELOADING_MESSAGE);
 
-      // A database tool is the host's and is answered without the plugin; any
-      // other name can only be the plugin's own. A client that cached its tool
-      // list across an app restart can call before it lists, so the roster
-      // must be given its chance to register.
-      const ownerEndpointId = RESERVED_AGENT_MCP_TOOL_NAMES.has(toolName)
-        ? scope.databases
-          ? DATABASE_ENDPOINT_ID
-          : undefined
-        : scope.pluginEndpointId;
-      if (ownerEndpointId === undefined) {
-        throw new McpError(ErrorCode.InvalidParams, `Unknown tool: ${toolName}`);
-      }
+      // A database tool, generic or declared, is the host's and is answered
+      // without the plugin; any other name can only be the plugin's own. The
+      // host's roster is read first — reading it never activates the plugin —
+      // because only it knows the declared queries' names. A client that
+      // cached its tool list across an app restart can call before it lists,
+      // so each roster must be given its chance to register.
+      let ownerEndpointId: string | undefined;
       let registration: Registration;
       try {
-        registration = await Promise.race([
-          ownerEndpointId === DATABASE_ENDPOINT_ID
-            ? databaseRegistration(controller.signal)
-            : pluginRegistration(controller.signal),
-          aborted,
-        ]);
+        const databases = await Promise.race([databaseRegistration(controller.signal), aborted]);
+        if (hostToolNames(databases).has(toolName)) {
+          ownerEndpointId = scope.databases ? DATABASE_ENDPOINT_ID : undefined;
+          registration = databases;
+        } else {
+          ownerEndpointId = scope.pluginEndpointId;
+          registration =
+            ownerEndpointId === undefined
+              ? undefined
+              : await Promise.race([pluginRegistration(controller.signal), aborted]);
+        }
       } catch {
         return abortedResult();
+      }
+      if (ownerEndpointId === undefined) {
+        throw new McpError(ErrorCode.InvalidParams, `Unknown tool: ${toolName}`);
       }
 
       const descriptor = registration?.tools.find((tool) => tool.name === toolName);

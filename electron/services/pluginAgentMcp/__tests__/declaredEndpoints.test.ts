@@ -223,6 +223,15 @@ describe("agentMcpSurfaceOf", () => {
     expect(surface({ databases: [{ id: "main", name: "Main" }] as never })).not.toBe(base);
   });
 
+  it("changes when only a database's declared queries do", () => {
+    const query = { name: "month_total", mode: "read", description: "Total.", params: {} };
+    const withQuery = (sql: string) =>
+      surface({ databases: [{ id: "main", queries: [{ ...query, sql }] }] as never });
+    expect(withQuery("SELECT 1")).toBe(withQuery("SELECT 1"));
+    expect(withQuery("SELECT 2")).not.toBe(withQuery("SELECT 1"));
+    expect(withQuery("SELECT 1")).not.toBe(surface({ databases: [{ id: "main" }] as never }));
+  });
+
   it("changes with the declared capability scopes", () => {
     const withScopes = (allowedPaths: string[]) => {
       const info = plugin({});
