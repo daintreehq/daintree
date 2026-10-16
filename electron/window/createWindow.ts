@@ -50,6 +50,7 @@ import { seedTitleBarOverlay } from "./titleBarOverlay.js";
 import { readLastActiveProjectIdentitySync } from "../services/persistence/readLastProjectId.js";
 import { appWindowStateTracking, resolveBoundsProjectPath } from "./windowStateTracking.js";
 import { attachRendererConsoleCapture } from "./rendererConsoleCapture.js";
+import { attachRendererEditContextMenu } from "./rendererEditContextMenu.js";
 import { markPerformance } from "../utils/performance.js";
 import { registerProtocolsForSession, getDistPath } from "../setup/protocols.js";
 import { isDemoMode, isSmokeTest } from "../setup/environment.js";
@@ -319,6 +320,7 @@ export function setupBrowserWindow(
   // The app view's webContents is the "renderer" for all purposes
   const appWebContents = appView.webContents;
   attachRendererConsoleCapture(appWebContents);
+  attachRendererEditContextMenu(appWebContents);
 
   // Match the appView's background to the window chrome so the frame and
   // content area reveal a single colour when the window is shown before the

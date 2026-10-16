@@ -91,6 +91,9 @@ import { FileEditorBanner } from "@/components/FileViewer/FileEditorBanner";
 import { useFileDocumentDraftText, useFileDocumentFlags } from "@/store/fileDocumentStore";
 import { pluralize } from "@/lib/pluralize";
 import { FilePanePicker } from "./FilePanePicker";
+import { useFileRowMenuItems } from "@/hooks/useFileRowMenuItems";
+import { FileContentContextMenu } from "@/components/FileViewer/FileContentContextMenu";
+import { ContextMenuItem, ContextMenuSeparator } from "@/components/ui/context-menu";
 
 export interface FilePaneProps extends BasePanelProps {
   tabs?: TabInfo[];
@@ -1386,6 +1389,48 @@ export function FilePane({
     </>
   ) : undefined;
 
+  // The file's menu on its content (#13423) — the shared file-row core, scoped
+  // by containment like the diff and the reveal, never by the panel's stamped
+  // worktree. CopyTree source omitted: the run-source enum has no entry for
+  // this panel, and borrowing the nearest one would misfile its history.
+  const { renderItems: renderFileMenuItems } = useFileRowMenuItems({
+    worktreePath: diffWorktreePath,
+    worktreeId: revealWorktreeId || null,
+  });
+  const fileMenuItems = filePath ? (
+    <>
+      {/* The pane's own prefix: the route back to the tree, offered under the
+          same condition as the toolbar's button. */}
+      {revealWorktreeId && (
+        <>
+          <ContextMenuItem onSelect={() => void handleOpenExternal("file-browser")}>
+            <FolderTree className="w-3.5 h-3.5 mr-2" />
+            Show in file browser
+          </ContextMenuItem>
+          <ContextMenuSeparator />
+        </>
+      )}
+      {renderFileMenuItems(
+        {
+          absolutePath: filePath,
+          // Worktree-relative when a worktree contains the file; otherwise the
+          // project-relative path the header shows, so the copy still names
+          // something shorter than the absolute path.
+          relativePath: relativeFilePath || displayPath || filePath,
+          name: fileName ?? filePath,
+          isDirectory: false,
+          status: localChangeStatus ?? null,
+        },
+        {
+          hasChanges: localChangeStatus !== undefined,
+          // This pane's own Diff mode, the same one the toggle switches to,
+          // rather than a second diff panel.
+          onOpenDiff: () => handleViewModeChange("diff"),
+        }
+      )}
+    </>
+  ) : null;
+
   return (
     <ContentPanel
       id={id}
@@ -1410,255 +1455,257 @@ export function FilePane({
       onTabRename={onTabRename}
       onAddTab={onAddTab}
     >
-      <div
-        ref={heightHold.bodyRef}
-        className={`flex-1 min-h-0 overflow-auto bg-surface-canvas${
-          viewMode === "diff" ? " diff-scroll-root" : ""
-        }`}
-        data-testid="file-pane-body"
-      >
-        {/* Ahead of every load-state branch on purpose: a deleted file fails
+      <FileContentContextMenu items={fileMenuItems}>
+        <div
+          ref={heightHold.bodyRef}
+          className={`flex-1 min-h-0 overflow-auto bg-surface-canvas${
+            viewMode === "diff" ? " diff-scroll-root" : ""
+          }`}
+          data-testid="file-pane-body"
+        >
+          {/* Ahead of every load-state branch on purpose: a deleted file fails
             files.read, and images/binaries never load as text, yet their diff is
             exactly what the user asked to see. */}
-        {filePath && viewMode === "diff" && (
-          <Suspense fallback={<DiffLoadingSkeleton />}>
-            {diffContent === undefined ? (
-              <DiffLoadingSkeleton />
-            ) : (
-              <LazyDiffViewer
-                diff={diffContent}
-                viewType={diffViewType}
-                // The diff's paths are relative to the worktree the file
-                // physically lives in, not the one the panel is stamped with,
-                // so open-in-editor has to join against the same root the
-                // relative paths were derived from.
-                rootPath={diffWorktreePath}
-                wrapLines={effectiveDiffWrapLines}
-                onRetry={retryDiff}
-              />
-            )}
-          </Suspense>
-        )}
-
-        {!filePath && (
-          // Auto margins on the end children rather than `justify-center`:
-          // `h-full` pins this box to the scrollport, and centred overflow
-          // spills at BOTH ends, so the empty state's icon and title become
-          // unreachable in a short pane once the result list fills. Auto
-          // margins split the free space the same way and collapse to zero when
-          // there is none. Same fix as `ContentGridEmptyState`.
-          //
-          // A size container, because a short pane is the case that matters:
-          // there the introduction gives its height to the results rather than
-          // pushing them below the fold.
-          <div className="flex h-full w-full flex-col items-center gap-4 p-6 [container-type:size] [container-name:file-picker] [&>*:first-child]:mt-auto [&>*:last-child]:mb-auto">
-            <EmptyState
-              className="[@container_file-picker_(max-height:22.5rem)]:hidden"
-              variant="zero-data"
-              scale="canvas"
-              icon={<FileText className="h-6 w-6" />}
-              title="Open a file"
-              description={
-                pickerRoot
-                  ? "Search the project's files, or click a file path in any terminal."
-                  : "Open a project, then search its files here."
-              }
-            />
-            {pickerRoot && (
-              <FilePanePicker
-                rootPath={pickerRoot}
-                onOpen={(absolutePath) => setFilePanelPath(id, absolutePath)}
-              />
-            )}
-          </div>
-        )}
-
-        {filePath && viewMode !== "diff" && viewMode !== "edit" && loadState === "loading" && (
-          <div className="p-4 space-y-3">
-            <Skeleton label="Loading file">
-              <SkeletonBone className="h-5 w-1/3" />
-              <SkeletonText lines={12} />
-            </Skeleton>
-          </div>
-        )}
-
-        {filePath &&
-          viewMode !== "diff" &&
-          viewMode !== "edit" &&
-          loadState === "error" &&
-          errorCode && (
-            <FilePaneUnavailable
-              reason={toUnavailableReason(filePath, errorCode, errorMessage)}
-              message={errorMessage ?? ""}
-              fileName={fileName ?? filePath}
-              revealLabel={reveal.label}
-              openTarget={openTarget}
-              canOpenInDefaultApp={isInsideGovernedRoot}
-              onRetry={() => loadFile("explicit")}
-              onExternal={(target) => void handleOpenExternal(target)}
-            />
+          {filePath && viewMode === "diff" && (
+            <Suspense fallback={<DiffLoadingSkeleton />}>
+              {diffContent === undefined ? (
+                <DiffLoadingSkeleton />
+              ) : (
+                <LazyDiffViewer
+                  diff={diffContent}
+                  viewType={diffViewType}
+                  // The diff's paths are relative to the worktree the file
+                  // physically lives in, not the one the panel is stamped with,
+                  // so open-in-editor has to join against the same root the
+                  // relative paths were derived from.
+                  rootPath={diffWorktreePath}
+                  wrapLines={effectiveDiffWrapLines}
+                  onRetry={retryDiff}
+                />
+              )}
+            </Suspense>
           )}
 
-        {filePath && viewMode !== "diff" && (loadState === "image" || loadState === "svg") && (
-          <FileImagePreview
-            filePath={filePath}
-            rootPath={effectiveRootPath}
-            alt={fileName ?? filePath}
-            sanitizedSvg={loadState === "svg" ? sanitizedSvg : null}
-            cacheBust={String(reloadNonce)}
-            onError={() => {
-              setErrorCode("NOT_FOUND");
-              setLoadState("error");
-            }}
-            maxHeightClassName="max-h-full"
-          />
-        )}
-
-        {filePath && viewMode !== "diff" && loadState === "video" && (
-          <FileVideoPreview
-            filePath={filePath}
-            rootPath={effectiveRootPath}
-            label={fileName ?? filePath}
-            reloadKey={reloadNonce}
-            onPlayingChange={handleMediaPlayingChange}
-            onError={(error) => {
-              // An allowlisted container can still hold a codec Chromium lacks;
-              // name that instead of implying the file is missing.
-              setErrorCode(error?.code ?? "BINARY_FILE");
-              setErrorMessage(error?.title ?? "This video couldn't be played");
-              setLoadState("error");
-            }}
-            maxHeightClassName="max-h-full"
-          />
-        )}
-
-        {filePath && viewMode !== "diff" && loadState === "audio" && (
-          <FileAudioPreview
-            filePath={filePath}
-            rootPath={effectiveRootPath}
-            label={fileName ?? filePath}
-            reloadKey={reloadNonce}
-            onPlayingChange={handleMediaPlayingChange}
-            onError={(error) => {
-              // An allowlisted extension can still hold a codec Chromium lacks;
-              // name that instead of implying the file is missing.
-              setErrorCode(error?.code ?? "BINARY_FILE");
-              setErrorMessage(error?.title ?? "This audio file couldn't be played");
-              setLoadState("error");
-            }}
-          />
-        )}
-
-        {filePath && viewMode !== "diff" && loadState === "pdf" && (
-          <FilePdfPreview
-            filePath={filePath}
-            rootPath={effectiveRootPath}
-            label={fileName ?? filePath}
-            reloadKey={reloadNonce}
-            onError={(error) => {
-              setErrorCode(error.code ?? "BINARY_FILE");
-              setErrorMessage(error.title);
-              setLoadState("error");
-            }}
-          />
-        )}
-
-        {filePath && viewMode === "edit" && editor && (
-          <Suspense fallback={<EditorLoadingSkeleton />}>
-            <editor.Component
-              panelId={id}
-              filePath={filePath}
-              fileName={fileName ?? filePath}
-              rootPath={effectiveRootPath}
-              // The worktree that physically contains the file, by containment,
-              // not the one the panel is stamped with (see diffWorktreePath).
-              worktreePath={diffWorktreePath || null}
-              projectId={projectId}
-              wrapLines={markdownWrapLines}
-              isFocused={isFocused}
-              changeTick={changeTick}
-              onOpenExternalEditor={() => void handleOpenExternal("editor")}
-            />
-          </Suspense>
-        )}
-
-        {filePath &&
-          viewMode !== "diff" &&
-          viewMode !== "edit" &&
-          loadState === "loaded" &&
-          content !== null &&
-          (viewMode === "rendered" && isMarkdown ? (
-            <MarkdownViewer
-              ref={markdownViewerRef}
-              // The draft is document state, so Rendered previews it while one
-              // exists and the disk text otherwise (#12323).
-              content={draftText ?? content}
-              filePath={filePath}
-              rootPath={effectiveRootPath}
-              viewMode="rendered"
-              wrapLines={markdownWrapLines}
-              fontSize={markdownFontSize}
-              cacheBust={String(reloadNonce)}
-              onRendered={heightHold.handleRendered}
-            />
-          ) : viewMode === "rendered" && isHtml ? (
-            // Rendered HTML fills the pane in a sandboxed iframe rather than the
-            // min-h-full source column; the frame owns its own scrolling.
-            <HtmlViewer
-              previewUrl={htmlPreviewUrl}
-              reloadNonce={reloadNonce}
-              title={fileName ?? "HTML preview"}
-              className="min-h-full"
-            />
-          ) : (
-            // min-h-full column (mirrors FileViewerModal): the editor surface
-            // stretches to the bottom of the pane even for files shorter than it.
-            <div className="flex min-h-full flex-col">
-              {/* Source mode always carries the metadata bar, markdown included —
-                  it describes the bytes on disk, which is exactly what source
-                  mode shows. Rendered mode omits it (the document is the view). */}
-              {metadata && (
-                <div data-testid="file-viewer-metadata" className={FILE_METADATA_STRIP_CLASS}>
-                  {/* The same inner run as the editor's strip, gap included:
-                      matching the row height is not enough on its own — with
-                      different item spacing the byte count still slides
-                      sideways when the mode toggles. */}
-                  <span className={FILE_METADATA_RUN_CLASS}>
-                    <span className="tabular-nums">{pluralize(metadata.lineCount, "line")}</span>
-                    <span aria-hidden="true" className="text-text-muted">
-                      ·
-                    </span>
-                    <span className="tabular-nums">{metadata.sizeLabel}</span>
-                    <span aria-hidden="true" className="text-text-muted">
-                      ·
-                    </span>
-                    <span>UTF-8</span>
-                  </span>
-                </div>
-              )}
-              {isMarkdown ? (
-                <MarkdownViewer
-                  ref={markdownViewerRef}
-                  content={content}
-                  filePath={filePath}
-                  rootPath={effectiveRootPath}
-                  viewMode="source"
-                  initialLine={panel?.initialLine}
-                  wrapLines={markdownWrapLines}
-                  className="flex-1"
-                />
-              ) : (
-                <CodeViewer
-                  ref={codeViewerRef}
-                  content={content}
-                  filePath={filePath}
-                  initialLine={panel?.initialLine}
-                  className="flex-1"
+          {!filePath && (
+            // Auto margins on the end children rather than `justify-center`:
+            // `h-full` pins this box to the scrollport, and centred overflow
+            // spills at BOTH ends, so the empty state's icon and title become
+            // unreachable in a short pane once the result list fills. Auto
+            // margins split the free space the same way and collapse to zero when
+            // there is none. Same fix as `ContentGridEmptyState`.
+            //
+            // A size container, because a short pane is the case that matters:
+            // there the introduction gives its height to the results rather than
+            // pushing them below the fold.
+            <div className="flex h-full w-full flex-col items-center gap-4 p-6 [container-type:size] [container-name:file-picker] [&>*:first-child]:mt-auto [&>*:last-child]:mb-auto">
+              <EmptyState
+                className="[@container_file-picker_(max-height:22.5rem)]:hidden"
+                variant="zero-data"
+                scale="canvas"
+                icon={<FileText className="h-6 w-6" />}
+                title="Open a file"
+                description={
+                  pickerRoot
+                    ? "Search the project's files, or click a file path in any terminal."
+                    : "Open a project, then search its files here."
+                }
+              />
+              {pickerRoot && (
+                <FilePanePicker
+                  rootPath={pickerRoot}
+                  onOpen={(absolutePath) => setFilePanelPath(id, absolutePath)}
                 />
               )}
             </div>
-          ))}
-      </div>
+          )}
+
+          {filePath && viewMode !== "diff" && viewMode !== "edit" && loadState === "loading" && (
+            <div className="p-4 space-y-3">
+              <Skeleton label="Loading file">
+                <SkeletonBone className="h-5 w-1/3" />
+                <SkeletonText lines={12} />
+              </Skeleton>
+            </div>
+          )}
+
+          {filePath &&
+            viewMode !== "diff" &&
+            viewMode !== "edit" &&
+            loadState === "error" &&
+            errorCode && (
+              <FilePaneUnavailable
+                reason={toUnavailableReason(filePath, errorCode, errorMessage)}
+                message={errorMessage ?? ""}
+                fileName={fileName ?? filePath}
+                revealLabel={reveal.label}
+                openTarget={openTarget}
+                canOpenInDefaultApp={isInsideGovernedRoot}
+                onRetry={() => loadFile("explicit")}
+                onExternal={(target) => void handleOpenExternal(target)}
+              />
+            )}
+
+          {filePath && viewMode !== "diff" && (loadState === "image" || loadState === "svg") && (
+            <FileImagePreview
+              filePath={filePath}
+              rootPath={effectiveRootPath}
+              alt={fileName ?? filePath}
+              sanitizedSvg={loadState === "svg" ? sanitizedSvg : null}
+              cacheBust={String(reloadNonce)}
+              onError={() => {
+                setErrorCode("NOT_FOUND");
+                setLoadState("error");
+              }}
+              maxHeightClassName="max-h-full"
+            />
+          )}
+
+          {filePath && viewMode !== "diff" && loadState === "video" && (
+            <FileVideoPreview
+              filePath={filePath}
+              rootPath={effectiveRootPath}
+              label={fileName ?? filePath}
+              reloadKey={reloadNonce}
+              onPlayingChange={handleMediaPlayingChange}
+              onError={(error) => {
+                // An allowlisted container can still hold a codec Chromium lacks;
+                // name that instead of implying the file is missing.
+                setErrorCode(error?.code ?? "BINARY_FILE");
+                setErrorMessage(error?.title ?? "This video couldn't be played");
+                setLoadState("error");
+              }}
+              maxHeightClassName="max-h-full"
+            />
+          )}
+
+          {filePath && viewMode !== "diff" && loadState === "audio" && (
+            <FileAudioPreview
+              filePath={filePath}
+              rootPath={effectiveRootPath}
+              label={fileName ?? filePath}
+              reloadKey={reloadNonce}
+              onPlayingChange={handleMediaPlayingChange}
+              onError={(error) => {
+                // An allowlisted extension can still hold a codec Chromium lacks;
+                // name that instead of implying the file is missing.
+                setErrorCode(error?.code ?? "BINARY_FILE");
+                setErrorMessage(error?.title ?? "This audio file couldn't be played");
+                setLoadState("error");
+              }}
+            />
+          )}
+
+          {filePath && viewMode !== "diff" && loadState === "pdf" && (
+            <FilePdfPreview
+              filePath={filePath}
+              rootPath={effectiveRootPath}
+              label={fileName ?? filePath}
+              reloadKey={reloadNonce}
+              onError={(error) => {
+                setErrorCode(error.code ?? "BINARY_FILE");
+                setErrorMessage(error.title);
+                setLoadState("error");
+              }}
+            />
+          )}
+
+          {filePath && viewMode === "edit" && editor && (
+            <Suspense fallback={<EditorLoadingSkeleton />}>
+              <editor.Component
+                panelId={id}
+                filePath={filePath}
+                fileName={fileName ?? filePath}
+                rootPath={effectiveRootPath}
+                // The worktree that physically contains the file, by containment,
+                // not the one the panel is stamped with (see diffWorktreePath).
+                worktreePath={diffWorktreePath || null}
+                projectId={projectId}
+                wrapLines={markdownWrapLines}
+                isFocused={isFocused}
+                changeTick={changeTick}
+                onOpenExternalEditor={() => void handleOpenExternal("editor")}
+              />
+            </Suspense>
+          )}
+
+          {filePath &&
+            viewMode !== "diff" &&
+            viewMode !== "edit" &&
+            loadState === "loaded" &&
+            content !== null &&
+            (viewMode === "rendered" && isMarkdown ? (
+              <MarkdownViewer
+                ref={markdownViewerRef}
+                // The draft is document state, so Rendered previews it while one
+                // exists and the disk text otherwise (#12323).
+                content={draftText ?? content}
+                filePath={filePath}
+                rootPath={effectiveRootPath}
+                viewMode="rendered"
+                wrapLines={markdownWrapLines}
+                fontSize={markdownFontSize}
+                cacheBust={String(reloadNonce)}
+                onRendered={heightHold.handleRendered}
+              />
+            ) : viewMode === "rendered" && isHtml ? (
+              // Rendered HTML fills the pane in a sandboxed iframe rather than the
+              // min-h-full source column; the frame owns its own scrolling.
+              <HtmlViewer
+                previewUrl={htmlPreviewUrl}
+                reloadNonce={reloadNonce}
+                title={fileName ?? "HTML preview"}
+                className="min-h-full"
+              />
+            ) : (
+              // min-h-full column (mirrors FileViewerModal): the editor surface
+              // stretches to the bottom of the pane even for files shorter than it.
+              <div className="flex min-h-full flex-col">
+                {/* Source mode always carries the metadata bar, markdown included —
+                  it describes the bytes on disk, which is exactly what source
+                  mode shows. Rendered mode omits it (the document is the view). */}
+                {metadata && (
+                  <div data-testid="file-viewer-metadata" className={FILE_METADATA_STRIP_CLASS}>
+                    {/* The same inner run as the editor's strip, gap included:
+                      matching the row height is not enough on its own — with
+                      different item spacing the byte count still slides
+                      sideways when the mode toggles. */}
+                    <span className={FILE_METADATA_RUN_CLASS}>
+                      <span className="tabular-nums">{pluralize(metadata.lineCount, "line")}</span>
+                      <span aria-hidden="true" className="text-text-muted">
+                        ·
+                      </span>
+                      <span className="tabular-nums">{metadata.sizeLabel}</span>
+                      <span aria-hidden="true" className="text-text-muted">
+                        ·
+                      </span>
+                      <span>UTF-8</span>
+                    </span>
+                  </div>
+                )}
+                {isMarkdown ? (
+                  <MarkdownViewer
+                    ref={markdownViewerRef}
+                    content={content}
+                    filePath={filePath}
+                    rootPath={effectiveRootPath}
+                    viewMode="source"
+                    initialLine={panel?.initialLine}
+                    wrapLines={markdownWrapLines}
+                    className="flex-1"
+                  />
+                ) : (
+                  <CodeViewer
+                    ref={codeViewerRef}
+                    content={content}
+                    filePath={filePath}
+                    initialLine={panel?.initialLine}
+                    className="flex-1"
+                  />
+                )}
+              </div>
+            ))}
+        </div>
+      </FileContentContextMenu>
     </ContentPanel>
   );
 }

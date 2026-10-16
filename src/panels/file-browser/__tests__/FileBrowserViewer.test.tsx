@@ -250,6 +250,8 @@ import { usePluginRuntimeStore, _resetPluginRuntimeStoreForTest } from "@/store/
 import { useFileDocumentStore } from "@/store/fileDocumentStore";
 import { FileBrowserViewer } from "../FileBrowserViewer";
 import { TooltipProvider } from "@/components/ui/tooltip";
+import { ContextMenuItem } from "@/components/ui/context-menu";
+import type { FileRowMenuController } from "@/hooks/useFileRowMenuItems";
 import type { GitStatus } from "@shared/types/git";
 import type { WorkingTreeFileChange } from "@/lib/workingTreeDiff";
 import { NO_HIDDEN_ROWS } from "../fileBrowserTree";
@@ -297,6 +299,8 @@ interface ViewerOpts {
   onShowDotfiles?: () => void;
   onSelectEntry?: (path: string) => void;
   rowContextMenu?: (row: FileEntryLike) => React.ReactNode;
+  changeContextMenu?: (change: WorkingTreeFileChange) => React.ReactNode;
+  renderFileMenuItems?: FileRowMenuController["renderItems"];
   sort?: FileBrowserSortOrder;
   onSortChange?: (sort: FileBrowserSortOrder) => void;
   hideDotfiles?: boolean;
@@ -357,6 +361,8 @@ function viewerJsx(filePath: string | null, opts: ViewerOpts = {}) {
         onShowDotfiles={opts.onShowDotfiles ?? vi.fn()}
         onSelectEntry={opts.onSelectEntry ?? vi.fn()}
         {...(opts.rowContextMenu ? { rowContextMenu: opts.rowContextMenu } : {})}
+        changeContextMenu={opts.changeContextMenu}
+        renderFileMenuItems={opts.renderFileMenuItems}
         basePath="/repo"
         sort={opts.sort ?? { key: "name", direction: "asc" }}
         onSortChange={opts.onSortChange ?? vi.fn()}
@@ -2159,5 +2165,98 @@ describe("viewer at tight widths and keyboard continuity", () => {
     expect(status.getAttribute("role")).toBe("status");
     fireEvent.click(within(status).getByRole("button", { name: /retry/i }));
     expect(onRefresh).toHaveBeenCalled();
+  });
+});
+
+describe("file menu on the viewer's content (#13423)", () => {
+  // Two media blocks above blanket-unstub every global, which strips the
+  // ResizeObserver vitest.setup.ts installs; the menu's scroll shadows need it.
+  beforeEach(() => {
+    if (typeof globalThis.ResizeObserver !== "function") {
+      vi.stubGlobal(
+        "ResizeObserver",
+        class {
+          observe() {}
+          unobserve() {}
+          disconnect() {}
+        }
+      );
+    }
+  });
+
+  function menuRenderer() {
+    return vi.fn<FileRowMenuController["renderItems"]>((target, options) => (
+      <>
+        <ContextMenuItem>{`Menu for ${target.relativePath}`}</ContextMenuItem>
+        {options?.onOpenDiff && (
+          <ContextMenuItem onSelect={options.onOpenDiff}>Open diff</ContextMenuItem>
+        )}
+      </>
+    ));
+  }
+
+  it("opens the open file's menu on a right-click in its content", async () => {
+    readMock.mockResolvedValue({ content: "const a = 1;" });
+    const renderFileMenuItems = menuRenderer();
+    renderViewer("/repo/src/app.ts", {
+      relativePath: "src/app.ts",
+      changedFiles: [change("src/app.ts", "added")],
+      renderFileMenuItems,
+    });
+
+    fireEvent.contextMenu(await screen.findByTestId("code-viewer-mock"));
+
+    expect(await screen.findByText("Menu for src/app.ts")).toBeTruthy();
+    expect(renderFileMenuItems).toHaveBeenLastCalledWith(
+      {
+        absolutePath: "/repo/src/app.ts",
+        relativePath: "src/app.ts",
+        name: "app.ts",
+        isDirectory: false,
+        status: "added",
+      },
+      expect.objectContaining({ hasChanges: true })
+    );
+  });
+
+  it("lands the menu's Open diff on this viewer's own Diff mode", async () => {
+    readMock.mockResolvedValue({ content: "const a = 1;" });
+    useDiffContentMock.mockReturnValue({ content: "@@ -1 +1 @@", stale: false, retry: vi.fn() });
+    renderViewer("/repo/app.ts", {
+      changedFiles: [change("app.ts")],
+      renderFileMenuItems: menuRenderer(),
+    });
+
+    fireEvent.contextMenu(await screen.findByTestId("code-viewer-mock"));
+    fireEvent.click(await screen.findByText("Open diff"));
+
+    expect(await screen.findByTestId("diff-viewer-mock")).toBeTruthy();
+  });
+
+  it("marks a clean file as having nothing to diff", async () => {
+    readMock.mockResolvedValue({ content: "const a = 1;" });
+    const renderFileMenuItems = menuRenderer();
+    renderViewer("/repo/app.ts", { changedFiles: [], renderFileMenuItems });
+
+    await screen.findByTestId("code-viewer-mock");
+
+    expect(renderFileMenuItems).toHaveBeenLastCalledWith(
+      expect.objectContaining({ status: null }),
+      expect.objectContaining({ hasChanges: false })
+    );
+  });
+
+  it("hands the changed-files summary its row menu", async () => {
+    renderViewer(null, {
+      changedFiles: [change("src/app.ts")],
+      changeContextMenu: (c) => (
+        <ContextMenuItem>{`Row menu for ${c.relativePath}`}</ContextMenuItem>
+      ),
+      renderFileMenuItems: menuRenderer(),
+    });
+
+    fireEvent.contextMenu(screen.getByRole("button", { name: /src\/app\.ts/ }));
+
+    expect(await screen.findByText("Row menu for src/app.ts")).toBeTruthy();
   });
 });

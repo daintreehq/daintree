@@ -2,6 +2,7 @@
 import type { ReactNode } from "react";
 import { render, act, cleanup, screen, waitFor, fireEvent } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { ContextMenuItem } from "@/components/ui/context-menu";
 import type { GitStatus } from "@shared/types/git";
 // Type-only: erased before the vi.mock factory runs, so it cannot pull the real
 // module in ahead of its own mock.
@@ -165,6 +166,20 @@ vi.mock("@/hooks/useExternalChangeTick", () => ({
   NO_WATCHED_PATHS: Object.freeze([]),
   useExternalChangeTick: (root: string, paths: readonly string[], enabled: boolean) =>
     enabled ? externalChangeTickMock(root, paths) : undefined,
+}));
+// The shared file menu's real hook subscribes to the plugin, terminal-input and
+// fleet stores this suite never seeds; a stand-in renderer is enough to prove
+// what the pane hands it (#13423). The rest of the module stays real — the
+// content shell takes its propagation helper from it.
+const { fileMenuRenderMock } = vi.hoisted(() => ({ fileMenuRenderMock: vi.fn() }));
+vi.mock("@/hooks/useFileRowMenuItems", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/hooks/useFileRowMenuItems")>()),
+  useFileRowMenuItems: (surface: unknown) => ({
+    renderItems: (target: unknown, options: unknown) =>
+      fileMenuRenderMock(surface, target, options),
+    canInsertFileReference: false,
+    insertFileReference: () => false,
+  }),
 }));
 const { readMock, searchMock } = vi.hoisted(() => ({
   readMock: vi.fn(),
@@ -3849,5 +3864,111 @@ describe("FilePane pinned containment root", () => {
         expect.objectContaining({ rootPath: "/tmp/plugin/escape" })
       )
     );
+  });
+});
+
+describe("FilePane file menu on its content (#13423)", () => {
+  function renderPane(filePath: string) {
+    panelsById["file-1"] = { id: "file-1", kind: "file", filePath };
+    return render(
+      <TooltipProvider>
+        <FilePane
+          id="file-1"
+          title={filePath.split("/").pop() ?? filePath}
+          isFocused={false}
+          location="grid"
+          onFocus={() => {}}
+          onClose={() => {}}
+        />
+      </TooltipProvider>
+    );
+  }
+
+  beforeEach(() => {
+    // An earlier block blanket-unstubs globals, which strips the ResizeObserver
+    // vitest.setup.ts installs; the menu's scroll shadows need it.
+    if (typeof globalThis.ResizeObserver !== "function") {
+      vi.stubGlobal(
+        "ResizeObserver",
+        class {
+          observe() {}
+          unobserve() {}
+          disconnect() {}
+        }
+      );
+    }
+    fileMenuRenderMock.mockReset();
+    fileMenuRenderMock.mockImplementation(
+      (
+        _surface: unknown,
+        target: { relativePath: string },
+        options?: { onOpenDiff?: () => void }
+      ) => (
+        <>
+          <ContextMenuItem>{`Menu for ${target.relativePath}`}</ContextMenuItem>
+          {options?.onOpenDiff && (
+            <ContextMenuItem onSelect={options.onOpenDiff}>Open diff</ContextMenuItem>
+          )}
+        </>
+      )
+    );
+  });
+
+  it("opens the shared file menu on a right-click in the file's content", async () => {
+    worktreeState.worktrees.set("wt-1", {
+      id: "wt-1",
+      path: "/repo",
+      worktreeChanges: { changes: [{ path: "/repo/src/index.ts", status: "modified" }] },
+    });
+    readMock.mockResolvedValue({ content: "const a = 1;" });
+    renderPane("/repo/src/index.ts");
+
+    fireEvent.contextMenu(await screen.findByTestId("file-pane-body"));
+
+    expect(await screen.findByText("Menu for src/index.ts")).toBeTruthy();
+    // Scoped by containment, with the file's own status and a diff to open.
+    expect(fileMenuRenderMock).toHaveBeenLastCalledWith(
+      { worktreePath: "/repo", worktreeId: "wt-1" },
+      {
+        absolutePath: "/repo/src/index.ts",
+        relativePath: "src/index.ts",
+        name: "index.ts",
+        isDirectory: false,
+        status: "modified",
+      },
+      expect.objectContaining({ hasChanges: true })
+    );
+    // The pane's own prefix rides above the shared items.
+    expect(screen.getByRole("menuitem", { name: "Show in file browser" })).toBeTruthy();
+  });
+
+  it("lands the menu's Open diff on the pane's own Diff mode", async () => {
+    worktreeState.worktrees.set("wt-1", {
+      id: "wt-1",
+      path: "/repo",
+      worktreeChanges: { changes: [{ path: "/repo/src/index.ts", status: "modified" }] },
+    });
+    readMock.mockResolvedValue({ content: "const a = 1;" });
+    renderPane("/repo/src/index.ts");
+
+    fireEvent.contextMenu(await screen.findByTestId("file-pane-body"));
+    fireEvent.click(await screen.findByText("Open diff"));
+
+    expect(setFileViewModeMock).toHaveBeenCalledWith("file-1", "diff");
+  });
+
+  it("offers no worktree-scoped items for a file outside every worktree", async () => {
+    readMock.mockResolvedValue({ content: "const a = 1;" });
+    renderPane("/elsewhere/notes.ts");
+
+    fireEvent.contextMenu(await screen.findByTestId("file-pane-body"));
+
+    await screen.findByText(/^Menu for /);
+    expect(fileMenuRenderMock).toHaveBeenLastCalledWith(
+      { worktreePath: "", worktreeId: null },
+      expect.objectContaining({ absolutePath: "/elsewhere/notes.ts", status: null }),
+      expect.objectContaining({ hasChanges: false })
+    );
+    expect(screen.queryByRole("menuitem", { name: "Show in file browser" })).toBeNull();
   });
 });

@@ -20,6 +20,7 @@ import {
   attachRendererConsoleCapture,
   detachRendererConsoleCapture,
 } from "./rendererConsoleCapture.js";
+import { attachRendererEditContextMenu } from "./rendererEditContextMenu.js";
 import {
   beginWindowRecreating,
   endWindowRecreating,
@@ -52,6 +53,7 @@ export function setupViewHandlers(
   const win = host.win;
 
   attachRendererConsoleCapture(wc);
+  attachRendererEditContextMenu(wc);
 
   wc.setWindowOpenHandler(({ url }) => {
     if (url && canOpenExternalUrl(url)) {
