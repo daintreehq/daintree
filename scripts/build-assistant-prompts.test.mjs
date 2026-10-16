@@ -273,16 +273,17 @@ describe("help prompt outputs", () => {
 
     // The handback instruction is appended to the prompt, so on a slash command
     // it became the command's arguments, and both prompts once taught it on
-    // every send (#13439). Without it a notice fires once and is never followed
-    // up, so a run that stops and carries on needs its notice re-armed.
+    // every send (#13439). A sentence still takes it. Without it a notice fires
+    // once and is never followed up, so a run that stops and carries on needs
+    // its notice re-armed.
     it.each(ALL_GENERATED)(
-      "%s sends commands without handback and re-arms their notice",
+      "%s keeps handback for sentences, not commands, and re-arms their notice",
       (_name, body) => {
         const tasks = section(body, "## Common Tasks");
-        expect(tasks).toMatch(/slash command or skill takes no `handback`/);
+        expect(tasks).toMatch(/sentence takes `handback`/);
+        expect(tasks).toMatch(/slash command or skill none \(it'd join the arguments\)/);
         expect(tasks).toMatch(/one notice per arm[^.]*re-arm `terminal\.notifyWhenIdle`/);
         expect(tasks).toMatch(/earlier stop is no reason to nudge/);
-        expect(tasks).not.toMatch(/(?:launchMany|sendCommandMany)\([^)]*handback: true/);
       }
     );
   });

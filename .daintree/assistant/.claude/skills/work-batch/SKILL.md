@@ -17,7 +17,7 @@ Arguments: `$ARGUMENTS`
 
 ## Runbooks and the user's decisions
 
-These rounds are owned by the runbook `daintree.orchestration.work-in-waves` (merge-gated rounds, drains included), with `daintree.foundation` for the mechanics (dialogs, ownership, delivery, proving a finish). Load them with one runbook search for this request, `"Work batches of issues in parallel worktrees, merge their pull requests, then start the next batch"`, and follow `work-in-waves` for the rounds whatever else the search returns. A catalog without it predates it: take the mechanics from `daintree.foundation` and the rounds from this skill. The user wrote this skill, and it records their decisions where those runbooks leave room or assume otherwise:
+The runbook that owns these rounds is `daintree.orchestration.work-in-waves` (merge-gated rounds, drains included), with `daintree.foundation` for the mechanics (dialogs, ownership, delivery, proving a finish). Make this request's one runbook search with `"Work batches of issues in parallel worktrees, merge their pull requests, then start the next batch"` and follow what it selects, as the runbook rule says. If `work-in-waves` isn't among them, take the rounds from this skill and the mechanics from the foundation that came back, and never claim a runbook you didn't load. The user wrote this skill, and it records their decisions where those runbooks leave room or assume otherwise:
 
 - **The batch and its overlap policy are `/next-batch`'s.** It allows ordinary overlap and leaves it to `/prs:merge`, excluding only structural clashes: the user's policy, looser than a disjointness gate. Report its verdict as the gate's result; don't re-split, serialize or drop issues.
 - **The cap is the batch size**, already approved.
@@ -86,12 +86,12 @@ With filters, the first sentence becomes `Run /next-batch with a count of <size>
 
 ## 2. Start
 
-`git -C <main path> fetch origin <base>` first: neither a forge merge nor worktree creation updates local refs. Each issue's branch is `bugfix/issue-<n>-<slug>` with the `bug` label, else `feature/issue-<n>-<slug>`; the slug is the lowercased title with every run of other characters than a-z and 0-9 as one `-`, cut to 40 characters at a hyphen. Derive both with exactly these reads, one issue at a time, never by splitting `@tsv` with `IFS read` (an empty field collapses, so an unlabelled issue's title lands in the labels and its branch ends `issue-<n>-`):
+`git -C <main path> fetch origin <base>` first: neither a forge merge nor worktree creation updates local refs. Each issue's branch is `bugfix/issue-<n>-<slug>` with the `bug` label, else `feature/issue-<n>-<slug>`; the slug is the lowercased title with every run of other characters than a-z and 0-9 as one `-`, cut to 40 characters at a hyphen, or `untitled` if nothing is left. Derive both with exactly these reads, one issue at a time, never by splitting `@tsv` with `IFS read` (an empty field collapses, so an unlabelled issue's title lands in the labels and its branch ends `issue-<n>-`):
 
 ```bash
 J=$(gh issue view <n> --repo <owner>/<repo> --json labels,title)
 prefix=$(jq -r 'if any(.labels[]?; .name == "bug") then "bugfix" else "feature" end' <<<"$J")
-slug=$(jq -r '.title | ascii_downcase | gsub("[^a-z0-9]+"; "-") | gsub("^-|-$"; "") | if length > 40 then .[0:41] | sub("-[^-]*$"; "") | .[0:40] else . end' <<<"$J")
+slug=$(jq -r '.title | ascii_downcase | gsub("[^a-z0-9]+"; "-") | gsub("^-|-$"; "") | if length > 40 then .[0:41] | sub("-[^-]*$"; "") | .[0:40] else . end | if . == "" then "untitled" else . end' <<<"$J")
 echo "$prefix/issue-<n>-$slug"
 ```
 

@@ -8567,7 +8567,7 @@ describe("session-scoped resource ownership (#11909)", () => {
     });
 
     // Daintree's own assistant already types into every pane in its view, so it
-    // reads by that view rather than by the ledger (#12883).
+    // reads by that view as well as by the ledger (#12883, #13439).
     describe("from Daintree's own assistant (#12883)", () => {
       function assistantReadHarness(
         sessionId: string,
@@ -8670,6 +8670,30 @@ describe("session-scoped resource ownership (#11909)", () => {
           expect(isTerminalInPinnedWorkspace).not.toHaveBeenCalled();
         }
       );
+
+      // A hand-over is a grant to a pane, and the tool accepts one, but it never
+      // admits the assistant's read: only creation or the view does.
+      it("never admits a handed-over pane that the view check refuses", async () => {
+        const { store, server, handleTerminalReadLastMessageOwned, isTerminalInPinnedWorkspace } =
+          assistantReadHarness("s-assist-handed", "help", () => false);
+        store.resourceOwnership.bindPrincipal("s-assist-handed", "principal-help");
+        expect(
+          store.terminalAdoption.adopt({
+            terminalId: "handed-pane",
+            orchestratorPaneId: "orchestrator-pane",
+            principalId: "principal-help",
+          }).ok
+        ).toBe(true);
+
+        const result = await callTool(server, {
+          name: "terminal.readLastMessageOwned",
+          arguments: { terminalId: "handed-pane" },
+        });
+
+        expect(toolErrorPayload(result).code).toBe("RESOURCE_NOT_OWNED");
+        expect(isTerminalInPinnedWorkspace).toHaveBeenCalledWith("handed-pane");
+        expect(handleTerminalReadLastMessageOwned).not.toHaveBeenCalled();
+      });
 
       it("refuses a pane it did not create when the view check is not wired", async () => {
         const { store, server, handleTerminalReadLastMessageOwned } =
