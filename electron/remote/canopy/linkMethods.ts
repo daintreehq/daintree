@@ -10,6 +10,8 @@ export const CanopyLinkMethod = {
   INVOKE: "canopy.invoke",
   /** Shell → Host: the viewer's panel is gone; forget everything it said. */
   RELEASE: "canopy.release",
+  /** Host → Shell: a push to the viewer was lost, and the viewer with it; read again. */
+  VIEWER_LOST: "canopy.viewer-lost",
 } as const;
 
 /**
@@ -38,3 +40,5 @@ export const CanopyInvokePayloadSchema = z.object({
 export type CanopyInvokePayload = z.infer<typeof CanopyInvokePayloadSchema>;
 
 export const CanopyReleasePayloadSchema = z.object({ viewerId });
+
+export const CanopyViewerLostPayloadSchema = z.object({ viewerId });

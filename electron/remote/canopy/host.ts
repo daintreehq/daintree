@@ -51,6 +51,20 @@ export function installCanopyHostWith(
     // Per link, not per host session: a resumed link starts its viewers afresh.
     const prefix = `${++nextSession}:`;
     const ref = clientRefOf(client);
+    /**
+     * A push the Shell never got leaves its panel wrong: a snapshot no later
+     * one may replace, or a terminal missing bytes. The viewer is dropped,
+     * after the push in progress, and the Shell told to have its panel say
+     * its state again, on the request lane rather than the full one.
+     */
+    const lose = (viewerId: string): void => {
+      queueMicrotask(() => {
+        if (!viewers.close(prefix + viewerId) || !session.isOpen) return;
+        session.call(CanopyLinkMethod.VIEWER_LOST, { viewerId }).catch(() => {
+          // The link going down resyncs every reader of this host anyway.
+        });
+      });
+    };
     session.registerCallHandler(
       CanopyLinkMethod.INVOKE,
       CanopyInvokePayloadSchema,
@@ -60,12 +74,11 @@ export function installCanopyHostWith(
           () => ({
             endpointId: CANOPY_VIEWER_ENDPOINT_PREFIX + viewerId,
             clientId: client.clientId,
-            kind: "remote-view",
             onPush: (pushed, payload) => {
               if (!session.isOpen) return;
+              let result: string;
               try {
-                // A full queue drops this one; the next snapshot replaces it.
-                session.post({
+                result = session.post({
                   lane: Lane.EVENTS,
                   kind: EventKind.EVENT,
                   body: {
@@ -76,7 +89,9 @@ export function installCanopyHostWith(
                 });
               } catch (error) {
                 console.warn("[CanopyHost] Couldn't push to a Shell's viewer:", error);
+                result = "refused";
               }
+              if (result === "refused") lose(viewerId);
             },
           }),
           ref,

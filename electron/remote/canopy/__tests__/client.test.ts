@@ -1,8 +1,14 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { CanopyHostEvent } from "../../../../shared/types/ipc/canopyHost.js";
 import { wrapSuccess } from "../../../../shared/utils/ipcErrorSerialization.js";
 import type { EventMessage } from "../../link/messages.js";
-import { CanopyHostsClient, type CanopyHostConnection } from "../client.js";
+import {
+  CanopyHostsClient,
+  RELEASE_RETRIES,
+  RELEASE_RETRY_MS,
+  type CanopyHostConnection,
+} from "../client.js";
+import { AppError } from "../../../utils/errorTypes.js";
 import { CANOPY_VIEWER_ENDPOINT_PREFIX, CanopyLinkMethod } from "../linkMethods.js";
 import { CanopyViewers } from "../viewer.js";
 
@@ -11,12 +17,17 @@ const VIEW = 7;
 function setup(options: { hostForView?: (id: number) => string | null } = {}) {
   const hosts = new Set(["studio", "attic"]);
   const connections = new Map<string, CanopyHostConnection & { calls: unknown[][] }>();
+  const releaseFailures: Error[] = [];
   const connection = (hostId: string) => {
     const calls: unknown[][] = [];
     const conn = {
       calls,
       callHost: vi.fn(async (method: string, payload: unknown) => {
         calls.push([method, payload]);
+        if (method === CanopyLinkMethod.RELEASE) {
+          const failure = releaseFailures.shift();
+          if (failure) throw failure;
+        }
         return method === CanopyLinkMethod.INVOKE ? wrapSuccess({ from: hostId }) : null;
       }),
     };
@@ -26,7 +37,21 @@ function setup(options: { hostForView?: (id: number) => string | null } = {}) {
   connection("studio");
   connection("attic");
   const useChecks: Array<(hostId: string) => boolean> = [];
-  const sessionListeners: Array<(hostId: string) => void> = [];
+  const sessionListeners: Array<
+    (
+      hostId: string,
+      session: {
+        registerCallHandler: (m: string, s: unknown, h: (p: never) => unknown) => () => void;
+      }
+    ) => void
+  > = [];
+  const callHandlers = new Map<string, (payload: never) => unknown>();
+  const fakeSession = {
+    registerCallHandler: (method: string, _schema: unknown, handler: (p: never) => unknown) => {
+      callHandlers.set(method, handler);
+      return () => {};
+    },
+  };
   const viewerListeners: Array<(hostId: string, event: EventMessage) => void> = [];
   const registryListeners: Array<() => void> = [];
   const touched: string[] = [];
@@ -43,7 +68,7 @@ function setup(options: { hostForView?: (id: number) => string | null } = {}) {
         return () => {};
       },
       onSessionOpened: (listener) => {
-        sessionListeners.push(listener);
+        sessionListeners.push(listener as (typeof sessionListeners)[number]);
         return () => {};
       },
       onViewerEvent: (listener) => {
@@ -80,12 +105,18 @@ function setup(options: { hostForView?: (id: number) => string | null } = {}) {
     touched,
     connect,
     inUse: (hostId: string) => useChecks.some((check) => check(hostId)),
-    sessionOpened: (hostId: string) => sessionListeners.forEach((l) => l(hostId)),
+    releaseFailures,
+    sessionOpened: (hostId: string) => sessionListeners.forEach((l) => l(hostId, fakeSession)),
+    hostSays: (method: string, payload: unknown) => callHandlers.get(method)?.(payload as never),
     viewerEvent: (hostId: string, event: EventMessage) =>
       viewerListeners.forEach((l) => l(hostId, event)),
     registryChanged: () => registryListeners.forEach((l) => l()),
   };
 }
+
+afterEach(() => {
+  vi.useRealTimers();
+});
 
 describe("CanopyHostsClient", () => {
   it("names the viewer and the allowed channel to the host, and answers its data", async () => {
@@ -176,5 +207,44 @@ describe("CanopyHostsClient", () => {
     s.hosts.delete("studio");
     s.registryChanged();
     expect(s.inUse("studio")).toBe(false);
+  });
+
+  it("tells only the panel whose push the host lost to read again", async () => {
+    const s = setup();
+    await s.client.invoke(VIEW, "studio", "canopy:get-snapshot", []);
+    await s.client.invoke(VIEW + 1, "studio", "canopy:get-snapshot", []);
+    s.sessionOpened("studio");
+    s.sent.length = 0;
+    s.hostSays(CanopyLinkMethod.VIEWER_LOST, { viewerId: "v2" });
+    expect(s.sent).toEqual([
+      { webContentsId: VIEW + 1, event: { kind: "resync", hostId: "studio" } },
+    ]);
+  });
+
+  it("sends a release again while the host is up but didn't take it", async () => {
+    vi.useFakeTimers();
+    const s = setup();
+    await s.client.invoke(VIEW, "studio", "canopy:get-snapshot", []);
+    const busy = () => new AppError({ code: "RATE_LIMITED", message: "busy" });
+    s.releaseFailures.push(...Array.from({ length: RELEASE_RETRIES + 2 }, busy));
+    s.client.release(VIEW, "studio");
+    await vi.advanceTimersByTimeAsync(RELEASE_RETRY_MS * RELEASE_RETRIES * RELEASE_RETRIES);
+    const releases = s.connections
+      .get("studio")!
+      .calls.filter(([method]) => method === CanopyLinkMethod.RELEASE);
+    expect(releases).toHaveLength(RELEASE_RETRIES);
+  });
+
+  it("doesn't resend a release once the link that held the viewer is gone", async () => {
+    vi.useFakeTimers();
+    const s = setup();
+    await s.client.invoke(VIEW, "studio", "canopy:get-snapshot", []);
+    s.releaseFailures.push(new AppError({ code: "HOST_DISCONNECTED", message: "gone" }));
+    s.client.release(VIEW, "studio");
+    await vi.advanceTimersByTimeAsync(RELEASE_RETRY_MS * 10);
+    const releases = s.connections
+      .get("studio")!
+      .calls.filter(([method]) => method === CanopyLinkMethod.RELEASE);
+    expect(releases).toHaveLength(1);
   });
 });

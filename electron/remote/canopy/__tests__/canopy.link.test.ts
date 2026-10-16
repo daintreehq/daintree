@@ -34,6 +34,7 @@ import { wrapError, wrapSuccess } from "../../../../shared/utils/ipcErrorSeriali
 import { getIpcDispatcher } from "../../../ipc/dispatcher.js";
 import { getEndpointRegistry } from "../../../ipc/endpointRegistry.js";
 import type { IpcContext } from "../../../ipc/types.js";
+import { AppError } from "../../../utils/errorTypes.js";
 import { HostRegistry, type RemoteHostsStore } from "../../client/HostRegistry.js";
 import { RemoteHostManager } from "../../client/RemoteHostManager.js";
 import { createDirectTransport } from "../../client/transport.js";
@@ -107,6 +108,8 @@ function registerFakeCanopy() {
   return { calls, closed };
 }
 
+const clock = { now: 0 };
+
 async function startHost() {
   const dir = await makeTempDir();
   const location = hostSocketLocation({ platform: "darwin", userDataDir: dir });
@@ -139,6 +142,8 @@ async function startHost() {
     views: { send: () => true, watch: () => () => {}, resync: () => {}, hostOf: () => null },
     session: { pingIntervalMs: 0, idleTimeoutMs: 0 },
     backoff: { initialMs: 20, maxMs: 40, jitter: 0 },
+    now: () => clock.now,
+    idleReleaseMs: 1_000,
   });
   cleanups.push(async () => {
     await manager.disposeAll();
@@ -208,19 +213,45 @@ describe("Canopy on a host the view isn't bound to", () => {
     await waitFor(() => fake.closed.includes(answer.handle));
   });
 
-  it("keeps the link up while a panel reads the host", async () => {
+  it("keeps the link up while a panel reads the host, and releases it once none does", async () => {
     registerFakeCanopy();
     const h = await startHost();
     const shell = shellClient(h, () => null);
     h.manager.connect(h.hostId);
     await waitFor(() => h.manager.connectionState(h.hostId).status === "connected");
-
-    expect(shell.client.isRead(h.hostId)).toBe(false);
     await shell.client.invoke(VIEW, h.hostId, CHANNEL, []);
-    expect(shell.client.isRead(h.hostId)).toBe(true);
-    // The view reloading ends the panel it showed.
+
+    clock.now += 60_000;
+    h.manager.sweepIdle();
+    expect(h.manager.get(h.hostId)).toBeDefined();
+
+    // The view reloading ends the panel it showed; the idle window counts from then.
     shell.gone.get(VIEW)?.();
-    expect(shell.client.isRead(h.hostId)).toBe(false);
+    h.manager.sweepIdle();
+    expect(h.manager.get(h.hostId)).toBeDefined();
+    clock.now += 1_000;
+    h.manager.sweepIdle();
+    expect(h.manager.get(h.hostId)).toBeUndefined();
+  });
+
+  it("holds a panel reading This Mac to the drive lease, as any caller from a link", async () => {
+    const h = await startHost();
+    const shell = shellClient(h, () => h.hostId);
+    const trashed = vi.fn();
+    cleanups.push(getIpcDispatcher().registerInvoke("canopy:trash", trashed));
+    const gated: string[] = [];
+    cleanups.push(
+      getIpcDispatcher().setLeaseGate((channel, caller) => {
+        gated.push(`${channel}:${caller.kind}`);
+        return new AppError({ code: "DRIVEN_ELSEWHERE", message: "driven elsewhere" });
+      })
+    );
+
+    await expect(
+      shell.client.invoke(VIEW, "local", "canopy:trash", ["run-1", { spawnedAt: 1 }])
+    ).rejects.toMatchObject({ code: "DRIVEN_ELSEWHERE" });
+    expect(gated).toEqual(["canopy:trash:link"]);
+    expect(trashed).not.toHaveBeenCalled();
   });
 
   it("serves This Mac's Canopy to a view bound to a remote host", async () => {
@@ -230,7 +261,7 @@ describe("Canopy on a host the view isn't bound to", () => {
 
     const answer = (await shell.client.invoke(VIEW, "local", CHANNEL, [])) as { handle: number };
 
-    expect(fake.calls).toEqual([{ handle: answer.handle, kind: "local-view", clientId: "local" }]);
+    expect(fake.calls).toEqual([{ handle: answer.handle, kind: "remote-view", clientId: "local" }]);
     expect(shell.sent).toEqual([
       {
         webContentsId: VIEW,

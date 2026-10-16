@@ -19,7 +19,6 @@ import { allocateRemoteHandle } from "../host/RemoteViewEndpoint.js";
 export interface CanopyViewerParams {
   endpointId: string;
   clientId: string;
-  kind: ClientEndpoint["kind"];
   /** A push the viewer's view should hear, already narrowed to Canopy's own. */
   onPush(channel: CanopyHostPushChannel, payload: unknown): void;
 }
@@ -47,7 +46,9 @@ export function createCanopyViewer(params: CanopyViewerParams): CanopyViewer {
     endpointId: params.endpointId,
     clientId: params.clientId,
     projectId: null,
-    kind: params.kind,
+    // A link caller wherever it runs, This Mac included: the dispatcher holds
+    // it to the drive lease and the remote scope, as it does a remote view.
+    kind: "remote-view",
     handle,
     send(frame: HostFrame): void {
       if (closed || !isCanopyHostPushChannel(frame.channel)) return;

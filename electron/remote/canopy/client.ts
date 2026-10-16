@@ -12,12 +12,21 @@ import { LOCAL_HOST_ID, isLocalHostId, type HostId } from "../../../shared/types
 import { deserializeError } from "../../../shared/utils/ipcErrorSerialization.js";
 import { AppError } from "../../utils/errorTypes.js";
 import type { EventMessage } from "../link/messages.js";
-import { CANOPY_VIEWER_ENDPOINT_PREFIX, CanopyLinkMethod } from "./linkMethods.js";
+import type { LinkSession } from "../link/session.js";
+import {
+  CANOPY_VIEWER_ENDPOINT_PREFIX,
+  CanopyLinkMethod,
+  CanopyViewerLostPayloadSchema,
+} from "./linkMethods.js";
 import type { CanopyViewers } from "./viewer.js";
 
 export interface CanopyHostConnection {
   callHost(method: string, payload: unknown): Promise<unknown>;
 }
+
+/** How often, and how far apart, a release the host didn't take is sent again. */
+export const RELEASE_RETRIES = 5;
+export const RELEASE_RETRY_MS = 1_000;
 
 export interface CanopyHostsClientOptions {
   manager: {
@@ -25,7 +34,9 @@ export interface CanopyHostsClientOptions {
     connect(hostId: HostId): unknown;
     touch(hostId: HostId): void;
     addUseCheck(check: (hostId: HostId) => boolean): () => void;
-    onSessionOpened(listener: (hostId: HostId) => void): () => void;
+    onSessionOpened(
+      listener: (hostId: HostId, session: Pick<LinkSession, "registerCallHandler">) => void
+    ): () => void;
     onViewerEvent(listener: (hostId: HostId, event: EventMessage) => void): () => void;
   };
   registry: {
@@ -87,6 +98,8 @@ export class CanopyHostsClient {
   private readonly views = new Map<number, ViewRecord>();
   private readonly byViewer = new Map<string, Subscription>();
   private readonly disposers: Array<() => void> = [];
+  private readonly retries = new Set<ReturnType<typeof setTimeout>>();
+  private disposed = false;
 
   constructor(private readonly options: CanopyHostsClientOptions) {}
 
@@ -95,8 +108,19 @@ export class CanopyHostsClient {
     this.disposers.push(
       manager.addUseCheck((hostId) => this.isRead(hostId)),
       manager.onViewerEvent((hostId, event) => this.onViewerEvent(hostId, event)),
-      // A fresh or resumed link: the host's viewers went with the old one.
-      manager.onSessionOpened((hostId) => this.resync(hostId)),
+      manager.onSessionOpened((hostId, session) => {
+        session.registerCallHandler(
+          CanopyLinkMethod.VIEWER_LOST,
+          CanopyViewerLostPayloadSchema,
+          ({ viewerId }) => {
+            const sub = this.byViewer.get(viewerId);
+            if (sub?.hostId === hostId) this.tellToResync(sub);
+            return null;
+          }
+        );
+        // A fresh or resumed link: the host's viewers went with the old one.
+        this.resync(hostId);
+      }),
       registry.onChange(() => this.dropRemovedHosts())
     );
   }
@@ -104,6 +128,9 @@ export class CanopyHostsClient {
   dispose(): void {
     for (const dispose of this.disposers.splice(0)) dispose();
     for (const webContentsId of [...this.views.keys()]) this.releaseView(webContentsId);
+    this.disposed = true;
+    for (const timer of this.retries) clearTimeout(timer);
+    this.retries.clear();
     this.options.local.dispose();
   }
 
@@ -131,7 +158,6 @@ export class CanopyHostsClient {
         () => ({
           endpointId: CANOPY_VIEWER_ENDPOINT_PREFIX + sub.viewerId,
           clientId: this.options.localClient.clientId,
-          kind: "local-view",
           onPush: (pushed, payload) => {
             if (this.byViewer.get(sub.viewerId) !== sub) return;
             this.options.send(webContentsId, eventFor(LOCAL_HOST_ID, pushed, payload));
@@ -227,14 +253,32 @@ export class CanopyHostsClient {
       this.options.local.close(sub.viewerId);
       return;
     }
-    this.options.manager
-      .get(sub.hostId)
-      ?.callHost(CanopyLinkMethod.RELEASE, { viewerId: sub.viewerId })
-      .catch(() => {
-        // A host that can't hear it now dropped the viewer with its link.
-      });
+    this.releaseOnHost(sub.hostId, sub.viewerId, 0);
     // The idle release counts from the last panel reading the host, not from its first.
     this.options.manager.touch(sub.hostId);
+  }
+
+  /**
+   * A release the host didn't take leaves its panel open there, reading
+   * screens, so it is sent again while the link is up. A dropped link took
+   * the viewer with it.
+   */
+  private releaseOnHost(hostId: HostId, viewerId: string, attempt: number): void {
+    const connection = this.options.manager.get(hostId);
+    if (!connection || this.disposed) return;
+    connection.callHost(CanopyLinkMethod.RELEASE, { viewerId }).catch((error: unknown) => {
+      const code = (error as { code?: unknown } | null)?.code;
+      if (code === "HOST_DISCONNECTED" || attempt + 1 >= RELEASE_RETRIES || this.disposed) return;
+      const timer = setTimeout(
+        () => {
+          this.retries.delete(timer);
+          this.releaseOnHost(hostId, viewerId, attempt + 1);
+        },
+        RELEASE_RETRY_MS * (attempt + 1)
+      );
+      timer.unref?.();
+      this.retries.add(timer);
+    });
   }
 
   private releaseView(webContentsId: number): void {
@@ -263,10 +307,13 @@ export class CanopyHostsClient {
 
   private resync(hostId: HostId): void {
     for (const sub of [...this.byViewer.values()]) {
-      if (sub.hostId !== hostId) continue;
-      if (!this.options.send(sub.webContentsId, { kind: "resync", hostId })) {
-        this.releaseView(sub.webContentsId);
-      }
+      if (sub.hostId === hostId) this.tellToResync(sub);
+    }
+  }
+
+  private tellToResync(sub: Subscription): void {
+    if (!this.options.send(sub.webContentsId, { kind: "resync", hostId: sub.hostId })) {
+      this.releaseView(sub.webContentsId);
     }
   }
 

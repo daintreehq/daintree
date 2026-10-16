@@ -12,7 +12,7 @@ const client = {
 };
 
 function params(onPush = vi.fn()) {
-  return { endpointId: "canopy-viewer:a", clientId: "c", kind: "remote-view" as const, onPush };
+  return { endpointId: "canopy-viewer:a", clientId: "c", onPush };
 }
 
 describe("createCanopyViewer", () => {
