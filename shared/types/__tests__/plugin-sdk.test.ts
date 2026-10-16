@@ -22,6 +22,7 @@ import type {
   PluginPanelLifecycleEvent,
   PluginPanelLifecyclePhase,
   PanelReloadResult,
+  WorkerRestartResult,
   PluginSystemWakeEvent,
   McpServerContribution,
   PluginCapability,
@@ -610,6 +611,17 @@ describe("plugin-sdk boundary", () => {
       // Runtime-only: a worker reloads a view when its work finishes, long after
       // activate() returned.
       expectTypeOf<PluginActivationApi>().not.toHaveProperty("reloadPanel");
+    });
+
+    it("exposes host.restartWorker as a runtime method with a named result (#13410)", () => {
+      expectTypeOf<WorkerRestartResult>().toEqualTypeOf<
+        "scheduled" | "rate-limited" | "unavailable"
+      >();
+      const host = {} as PluginHostApi;
+      expectTypeOf(host.restartWorker).parameters.toEqualTypeOf<[]>();
+      expectTypeOf(host.restartWorker).returns.toEqualTypeOf<Promise<WorkerRestartResult>>();
+      // Runtime-only: a plugin reaches for it once its host calls start timing out.
+      expectTypeOf<PluginActivationApi>().not.toHaveProperty("restartWorker");
     });
 
     it("PluginActivationApi revoke-guards the panel lifecycle subscription", () => {

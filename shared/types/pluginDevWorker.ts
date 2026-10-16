@@ -60,6 +60,7 @@ export type PluginHostCallMethod =
   | "showToast"
   | "dispatch"
   | "reloadPanel"
+  | "restartWorker"
   | "actions.list"
   | "actions.get"
   | "settings.get"

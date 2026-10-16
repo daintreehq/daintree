@@ -303,6 +303,7 @@ type CreateHostShape = (pluginId: string) => {
     setPanelBadge: (panelId: string, badge: unknown) => Promise<void>;
     setPanelMenuItems: (panelId: string, items: unknown) => Promise<void>;
     reloadPanel: (panelId: unknown) => Promise<string>;
+    restartWorker: () => Promise<string>;
     invalidateFileDecorations: (scope: string, paths?: string[]) => Promise<void>;
     registerForgeProvider: (descriptor: { id: string }, impl: unknown) => () => void;
   };
@@ -709,6 +710,24 @@ describe("createHost (plugin activation API)", () => {
     service.unloadPlugin("acme.reload-unloaded");
 
     await expect(host.reloadPanel("p1")).resolves.toBe("unavailable");
+  });
+
+  it("host.restartWorker answers unavailable for a plugin with no worker, and once unloaded (#13410)", async () => {
+    await writePlugin("restart-self", { name: "acme.restart-self", version: "1.0.0" });
+    const service = new PluginService(tmpDir);
+    await service.initialize();
+    const restart = vi.spyOn(service, "restartPluginWorker");
+
+    const { host } = (service as unknown as { createHost: CreateHostShape }).createHost(
+      "acme.restart-self"
+    );
+
+    // No `main` and no command modules: nothing runs in a worker to restart.
+    await expect(host.restartWorker()).resolves.toBe("unavailable");
+    service.unloadPlugin("acme.restart-self");
+    await expect(host.restartWorker()).resolves.toBe("unavailable");
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(restart).not.toHaveBeenCalled();
   });
 
   it("host.invalidateFileDecorations rejects an empty scope (#10617)", async () => {

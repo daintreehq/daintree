@@ -51,8 +51,10 @@ import {
 import { z } from "zod";
 import {
   isBuiltInPluginCapability,
+  PLUGIN_WORKER_SELF_RESTART_COOLDOWN_MS,
   UNBOUND_PLUGIN_HOST_BINDING,
   type ProjectSurfaceSlot,
+  type WorkerRestartResult,
 } from "../../shared/types/plugin.js";
 import type {
   PluginManifest,
@@ -3855,6 +3857,8 @@ export class PluginService {
       safeArgsHash,
       recordPushRejected: (pluginId) => this.metrics.recordPushOversized(pluginId),
       trackPromptWait: (pluginId) => this.metrics.beginPromptWait(pluginId),
+      requestWorkerSelfRestart: (pluginId, boundPlugin) =>
+        this.requestWorkerSelfRestart(pluginId, boundPlugin),
     };
   }
 
@@ -5228,6 +5232,16 @@ export class PluginService {
   private workerRestarts = new Map<string, Promise<void>>();
 
   /**
+   * When each instance last had a `host.restartWorker()` accepted (#13410).
+   * Keyed by id, not by worker, so the cooldown outlives the restart it
+   * triggered — a fresh worker that asks again at once is refused — and goes
+   * only with a full unload.
+   */
+  private workerSelfRestartAt = new Map<string, number>();
+  /** Self-restarts accepted but not yet started, so an unload can drop them. */
+  private scheduledWorkerSelfRestarts = new Map<string, ReturnType<typeof setImmediate>>();
+
+  /**
    * Record a worker lifecycle transition and publish it.
    *
    * `failed` latches against `stopped`: the teardown that FOLLOWS a terminal
@@ -5393,6 +5407,38 @@ export class PluginService {
     this.workerRestarts.set(pluginId, settled);
     await settled;
     return this.buildRuntimeStatus(pluginId);
+  }
+
+  /**
+   * Admit a plugin's request to restart its own worker (`host.restartWorker`,
+   * #13410). Answers now and starts the restart on a later turn, so the bridge
+   * posts this answer to the old worker before the teardown reaches it — a
+   * microtask would run before that post. The restart itself is the ordinary
+   * {@link restartPluginWorker}, so panels rebind rather than close. A manual
+   * "Restart plugin" is never counted against this budget.
+   */
+  private requestWorkerSelfRestart(
+    pluginId: string,
+    boundPlugin: LoadedPlugin
+  ): WorkerRestartResult {
+    if (this.disposed || this.plugins.get(pluginId) !== boundPlugin) return "unavailable";
+    if (this.records.getDisabledIds().has(pluginId)) return "unavailable";
+    if (!this.hasWorkerCode(pluginId, boundPlugin)) return "unavailable";
+    const now = Date.now();
+    const last = this.workerSelfRestartAt.get(pluginId);
+    if (last !== undefined && now - last < PLUGIN_WORKER_SELF_RESTART_COOLDOWN_MS) {
+      return "rate-limited";
+    }
+    this.workerSelfRestartAt.set(pluginId, now);
+    const scheduled = setImmediate(() => {
+      this.scheduledWorkerSelfRestarts.delete(pluginId);
+      if (this.disposed || this.plugins.get(pluginId) !== boundPlugin) return;
+      this.restartPluginWorker(pluginId).catch((err: unknown) => {
+        console.warn(`[PluginService] Self-restart of "${pluginId}" failed:`, err);
+      });
+    });
+    this.scheduledWorkerSelfRestarts.set(pluginId, scheduled);
+    return "scheduled";
   }
 
   /** Live state of every tracked instance, for a renderer that has just attached. */
@@ -6395,6 +6441,10 @@ export class PluginService {
     // plugin is still there to explain (#12278). Emitted further down, once the
     // plugin itself is gone.
     this.workerStatuses.delete(pluginId);
+    const scheduledSelfRestart = this.scheduledWorkerSelfRestarts.get(pluginId);
+    if (scheduledSelfRestart !== undefined) clearImmediate(scheduledSelfRestart);
+    this.scheduledWorkerSelfRestarts.delete(pluginId);
+    this.workerSelfRestartAt.delete(pluginId);
 
     // Drop the diagnostic log ring buffer so a reload of the same plugin
     // doesn't carry forward log lines from the previous session.

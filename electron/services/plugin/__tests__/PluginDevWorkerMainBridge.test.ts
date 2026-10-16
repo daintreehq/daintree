@@ -85,6 +85,7 @@ function makeHost() {
     showConfirm: vi.fn(async () => false),
     dispatch: vi.fn(async () => ({ ok: true, result: undefined })),
     reloadPanel: vi.fn(async () => "scheduled"),
+    restartWorker: vi.fn(async () => "scheduled"),
     actions: {
       list: vi.fn(async () => [{ id: "terminal.new", danger: "safe", requiresArgs: false }]),
       get: vi.fn(async (id: string) => ({ id, danger: "safe", requiresArgs: false })),
@@ -356,6 +357,19 @@ describe("PluginDevWorkerMainBridge", () => {
     await flush();
     expect(host.reloadPanel).toHaveBeenCalledWith("p1");
     const result = workerHost.sent.find((m) => m.type === "host-result" && m.requestId === "c-rp");
+    expect(result).toMatchObject({ ok: true, result: "scheduled" });
+  });
+
+  it("relays restartWorker and returns the host's answer (#13410)", async () => {
+    const { host, workerHost } = makeBridge();
+    workerHost.emit("worker-message", {
+      type: "host-call",
+      requestId: "c-rw",
+      method: "restartWorker",
+    });
+    await flush();
+    expect(host.restartWorker).toHaveBeenCalledTimes(1);
+    const result = workerHost.sent.find((m) => m.type === "host-result" && m.requestId === "c-rw");
     expect(result).toMatchObject({ ok: true, result: "scheduled" });
   });
 
@@ -1554,6 +1568,38 @@ describe("PluginDevWorkerMainBridge", () => {
       await flush();
       return handle;
     }
+
+    it("kills a handle that arrives after the worker gave up on the spawn (#13410)", async () => {
+      const { host, workerHost } = makeBridge();
+      const handle = makeProcessHandle("late");
+      let settle!: (value: typeof handle) => void;
+      host.process.spawn.mockImplementationOnce(
+        () =>
+          new Promise<any>((resolve) => {
+            settle = resolve;
+          })
+      );
+      workerHost.emit("worker-message", {
+        type: "host-call",
+        requestId: "spawn-late",
+        method: "process.spawn",
+        params: { command: "node", options: {} },
+      });
+      await flush();
+      workerHost.emit("worker-message", { type: "host-cancel", requestId: "spawn-late" });
+      settle(handle);
+      await flush();
+      expect(handle.kill).toHaveBeenCalledTimes(1);
+      // Never stored, so a later restart by id finds nothing to act on.
+      workerHost.emit("worker-message", {
+        type: "host-call",
+        requestId: "restart-late",
+        method: "process.restart",
+        params: { processId: "late" },
+      });
+      await flush();
+      expect(handle.restart).not.toHaveBeenCalled();
+    });
 
     it("relays spawn to the host and replies with the handle id", async () => {
       const { host, workerHost } = makeBridge();

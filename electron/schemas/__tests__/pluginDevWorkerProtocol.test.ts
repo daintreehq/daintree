@@ -10,6 +10,7 @@ const VALID: PluginWorkerToHostMessage[] = [
   { type: "activate-error", error: "boom", stack: "at <anonymous>" },
   { type: "error", error: "bootstrap failed" },
   { type: "host-call", requestId: "c1", method: "getWorktrees", params: undefined },
+  { type: "host-call", requestId: "c3", method: "restartWorker", params: undefined },
   {
     type: "host-call",
     requestId: "c2",

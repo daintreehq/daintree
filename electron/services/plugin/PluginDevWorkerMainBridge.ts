@@ -836,6 +836,10 @@ export class PluginDevWorkerMainBridge {
         const p = params as ReloadPanelParams;
         return this.host.reloadPanel(p.panelId);
       }
+      case "restartWorker":
+        // The host defers the restart past this result's post, so the worker
+        // hears "scheduled" before it is torn down (#13410).
+        return this.host.restartWorker();
       case "actions.list":
         return this.host.actions.list();
       case "actions.get": {
@@ -1038,8 +1042,10 @@ export class PluginDevWorkerMainBridge {
             ? "duplex"
             : "pipe";
         // Disposed or reloaded while the spawn was settling — the worker that
-        // requested it is gone; kill the orphan rather than leak it.
-        if (this.disposed || generation !== this.reloadGeneration) {
+        // requested it is gone — or the worker gave up on the call (a cancel
+        // or its deadline, #13410) and will never learn this handle's id;
+        // kill the orphan rather than leak it.
+        if (this.disposed || generation !== this.reloadGeneration || signal.aborted) {
           try {
             handle.kill();
           } catch {

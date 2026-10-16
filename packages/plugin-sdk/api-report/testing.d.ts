@@ -1694,6 +1694,18 @@ interface PluginPanelLifecycleEvent {
  */
 type PanelReloadResult = "scheduled" | "not-mounted" | "rate-limited" | "unavailable";
 /**
+ * What the host did with a `host.restartWorker()` request (#13410). An
+ * acknowledgment of scheduling only — the restart runs after the answer is
+ * delivered, so the caller never sees the replacement come up.
+ *
+ * - `"scheduled"` — the plugin's worker will be torn down and started again.
+ * - `"rate-limited"` — a self-restart was already accepted within the last
+ *   30 seconds. Nothing is queued.
+ * - `"unavailable"` — there is no worker to restart: the plugin runs in
+ *   process (a builtin), is disabled or unloaded, or has no backend code.
+ */
+type WorkerRestartResult = "scheduled" | "rate-limited" | "unavailable";
+/**
  * One machine wake observation delivered to a plugin (#12175). Frozen before
  * delivery, and carries only timing — never what the machine was doing while
  * suspended.
@@ -4469,6 +4481,21 @@ interface PluginHostApi extends PluginActivationApi {
      */
     reloadPanel(panelId: string): Promise<PanelReloadResult>;
     /**
+     * Restart this plugin's own worker (#13410): the same restart as the
+     * "Restart plugin" button. Panels rebind to the new worker rather than
+     * closing. Use it to recover when host calls keep timing out — every host
+     * call still outstanding in the old worker is abandoned with it.
+     *
+     * Resolves with a {@link WorkerRestartResult} before the restart begins.
+     * One request per 30 seconds is accepted; the rest resolve
+     * `"rate-limited"`, and nothing is queued. A plugin that runs in
+     * process (a builtin) has no worker and resolves `"unavailable"`.
+     *
+     * No capability is required. NOT revoke-guarded, and resolves
+     * `"unavailable"` once the plugin is unloaded.
+     */
+    restartWorker(): Promise<WorkerRestartResult>;
+    /**
      * Surface a toast notification. The host namespaces the message as
      * `{pluginId}: {message}` for provenance — a plugin cannot spoof another
      * plugin's id since `pluginId` is bound to the host at activation. Routes
@@ -4878,6 +4905,8 @@ interface MockHostState {
      * calls that got past argument validation are recorded.
      */
     readonly reloadPanelCalls: ReadonlyArray<string>;
+    /** What each `host.restartWorker()` call answered, in the order they settled (#13410). */
+    readonly restartWorkerCalls: ReadonlyArray<WorkerRestartResult>;
     readonly showQuickPickCalls: ReadonlyArray<ShowQuickPickRecord>;
     readonly showInputBoxCalls: ReadonlyArray<ShowInputBoxRecord>;
     readonly showConfirmCalls: ReadonlyArray<ShowConfirmRecord>;
@@ -5095,6 +5124,11 @@ interface CreateMockHostOptions {
      * id → `"not-mounted"`, and a panel reported for another plugin rejects.
      */
     reloadPanel?: (panelId: string) => PanelReloadResult | Promise<PanelReloadResult>;
+    /**
+     * Custom resolver for `host.restartWorker` (#13410). The default answers
+     * `"scheduled"` every time; the mock has no worker, so nothing restarts.
+     */
+    restartWorker?: () => WorkerRestartResult | Promise<WorkerRestartResult>;
     /**
      * Declared plugin capabilities (`manifest.capabilities`), gating the agent
      * APIs the way production does (#10617). `getAgentState` requires `agent:read`

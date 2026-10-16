@@ -373,6 +373,15 @@ describe("createMockHost", () => {
     expect(host.reloadPanelCalls).toEqual(["p1"]);
   });
 
+  it("records restartWorker answers, scheduled unless a test decides otherwise (#13410)", async () => {
+    const host = createMockHost();
+    await expect(host.restartWorker()).resolves.toBe("scheduled");
+    const limited = createMockHost({ restartWorker: async () => "rate-limited" as const });
+    await expect(limited.restartWorker()).resolves.toBe("rate-limited");
+    expect(host.restartWorkerCalls).toEqual(["scheduled"]);
+    expect(limited.restartWorkerCalls).toEqual(["rate-limited"]);
+  });
+
   it("returns initial worktree snapshots", async () => {
     const host = createMockHost({
       activeWorktree: sampleSnapshot,
