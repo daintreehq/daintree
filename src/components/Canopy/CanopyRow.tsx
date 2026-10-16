@@ -170,6 +170,11 @@ interface CanopyRowProps {
    * for a mouse. The keyboard has E, and the context menu says so.
    */
   onArchive?: () => void;
+  /**
+   * The run is on another host, where it can't be answered from here yet: its
+   * choices are not offered as keys.
+   */
+  readingOnly?: boolean;
 }
 
 /**
@@ -196,6 +201,7 @@ export function CanopyRow({
   onClick,
   onOpen,
   onArchive,
+  readingOnly = false,
 }: CanopyRowProps) {
   const { row } = item;
   const card = item.card;
@@ -283,7 +289,7 @@ export function CanopyRow({
   const metaTail: Array<{ text: string } | { facts: string[] }> = [];
   const progress = compact ? null : itemProgress(item);
   const facts = compact ? [] : itemFacts(item);
-  const choices = compact ? [] : answerOptions(item);
+  const choices = compact || readingOnly ? [] : answerOptions(item);
   if (asideLabel !== null) metaTail.push({ text: asideLabel });
   // Quiet and working share the spinner and differ only in hue once motion is
   // reduced; the word says which, since the clock beside the glyph is only a time.

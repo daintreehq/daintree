@@ -1,5 +1,6 @@
 import { create } from "zustand";
 import { getViewWorkspaceId } from "./viewWorkspaceId";
+import { LOCAL_HOST_ID, type HostId } from "@shared/types/remoteHosts";
 import type { CanopyOrder } from "@/components/Canopy/canopyOrder";
 import {
   CANOPY_URGENT_PRIORITY,
@@ -37,6 +38,16 @@ interface CanopyState {
    */
   orders: Partial<Record<CanopyScope, CanopyOrder>>;
   setOrder: (scope: CanopyScope, order: CanopyOrder) => void;
+  /**
+   * The host the panel shows when it isn't the window's own: picked in the
+   * panel's header, and back to the window's own host each time it opens.
+   * Only the panel reads it; the toolbar always counts the window's own host.
+   */
+  hostId: HostId | null;
+  setHostId: (hostId: HostId | null) => void;
+  /** Each other host's order for all its projects, kept apart from this host's and each other's. */
+  hostOrders: Record<HostId, CanopyOrder>;
+  setHostOrder: (hostId: HostId, order: CanopyOrder) => void;
   /** The inbox's "Archived" group is unfolded; kept across opens. */
   archivedExpanded: boolean;
   setArchivedExpanded: (expanded: boolean) => void;
@@ -133,10 +144,25 @@ function loadScope(): CanopyScope {
 const MAX_PROJECT_ORDERS = 20;
 
 /**
- * Where a scope's order is stored: every project view shares the one for every
- * project's agents, and keeps its own for its project's.
+ * The host this view runs on. Read off the window rather than through the host
+ * connection hook, which would pull the connection stores in with it.
  */
-function orderSlot(scope: CanopyScope): string {
+export function canopyOwnHostId(): HostId {
+  const id = typeof window === "undefined" ? undefined : window.__DAINTREE_HOST_ID__?.id;
+  return typeof id === "string" && id.length > 0 ? id : LOCAL_HOST_ID;
+}
+
+/**
+ * Where a host's order for a scope is stored: every project view shares the
+ * one for every project's agents on that host, and keeps its own for its
+ * project's. Keyed by host, so one host's order never opens another's list.
+ */
+function orderSlot(hostId: HostId, scope: CanopyScope): string {
+  return scope === "all" ? `${hostId}|all` : `${hostId}|project:${getViewWorkspaceId() ?? ""}`;
+}
+
+/** Where this machine's orders were kept before they were kept per host. */
+function legacyOrderSlot(scope: CanopyScope): string {
   return scope === "all" ? "all" : `project:${getViewWorkspaceId() ?? ""}`;
 }
 
@@ -145,35 +171,75 @@ function readStoredOrders(): Record<string, unknown> {
   return parsed && typeof parsed === "object" ? { ...parsed } : {};
 }
 
-function loadOrders(): Partial<Record<CanopyScope, CanopyOrder>> {
+function storedIds(value: unknown): string[] | null {
+  return Array.isArray(value) && value.every((id) => typeof id === "string") ? value : null;
+}
+
+/**
+ * Ranked for no scan this view has seen, so the open places it afresh by what
+ * is known now, starting from the order it was left in.
+ */
+function unranked(ids: string[]): CanopyOrder {
+  return { ids, rankedFor: null, urgent: [] };
+}
+
+/** Where a host's stored order came from: its own slot, or, for this machine, the old one. */
+function storedOrder(
+  stored: Record<string, unknown>,
+  hostId: HostId,
+  scope: CanopyScope
+): string[] | null {
+  return (
+    storedIds(stored[orderSlot(hostId, scope)]) ??
+    (hostId === LOCAL_HOST_ID ? storedIds(stored[legacyOrderSlot(scope)]) : null)
+  );
+}
+
+function loadOrders(): {
+  orders: Partial<Record<CanopyScope, CanopyOrder>>;
+  hostOrders: Record<HostId, CanopyOrder>;
+} {
   try {
     const stored = readStoredOrders();
+    const own = canopyOwnHostId();
     const orders: Partial<Record<CanopyScope, CanopyOrder>> = {};
     for (const scope of ["all", "project"] as const) {
-      const ids = stored[orderSlot(scope)];
-      if (Array.isArray(ids) && ids.every((id) => typeof id === "string")) {
-        // Ranked for no scan this view has seen, so the open places it afresh
-        // by what is known now, starting from the order it was left in.
-        orders[scope] = { ids, rankedFor: null, urgent: [] };
-      }
+      const ids = storedOrder(stored, own, scope);
+      if (ids) orders[scope] = unranked(ids);
     }
-    return orders;
+    const hostOrders: Record<HostId, CanopyOrder> = {};
+    const others = new Set(
+      Object.keys(stored)
+        .filter((slot) => slot.endsWith("|all"))
+        .map((slot) => slot.slice(0, -"|all".length))
+    );
+    others.add(LOCAL_HOST_ID);
+    others.delete(own);
+    for (const hostId of others) {
+      const ids = storedOrder(stored, hostId, "all");
+      if (ids) hostOrders[hostId] = unranked(ids);
+    }
+    return { orders, hostOrders };
   } catch {
-    return {};
+    return { orders: {}, hostOrders: {} };
   }
 }
 
 /**
- * Saves one scope's order over what is stored, so a project view saving its
- * own never drops what another view saved meanwhile.
+ * Saves one host's order for a scope over what is stored, so a project view
+ * saving its own never drops what another view saved meanwhile.
  */
-function saveOrder(scope: CanopyScope, ids: readonly string[]): void {
+function saveOrder(hostId: HostId, scope: CanopyScope, ids: readonly string[]): void {
   try {
-    const slot = orderSlot(scope);
+    const slot = orderSlot(hostId, scope);
     const stored = readStoredOrders();
     delete stored[slot];
+    // Kept per host from here on: the old copy would only go stale.
+    if (hostId === LOCAL_HOST_ID) delete stored[legacyOrderSlot(scope)];
     stored[slot] = ids;
-    const projects = Object.keys(stored).filter((key) => key.startsWith("project:"));
+    const projects = Object.keys(stored).filter(
+      (key) => key.startsWith("project:") || key.includes("|project:")
+    );
     for (const key of projects.slice(0, Math.max(0, projects.length - MAX_PROJECT_ORDERS))) {
       delete stored[key];
     }
@@ -181,6 +247,10 @@ function saveOrder(scope: CanopyScope, ids: readonly string[]): void {
   } catch {
     // Best effort: this view still keeps it for the session.
   }
+}
+
+function sameIds(was: readonly string[] | undefined, ids: readonly string[]): boolean {
+  return was !== undefined && was.length === ids.length && was.every((id, i) => ids[i] === id);
 }
 
 function saveScope(scope: CanopyScope): void {
@@ -211,18 +281,20 @@ export const useCanopyStore = create<CanopyState>((set) => ({
       const acknowledged = acknowledgeUrgent(state.acknowledged, state.snapshot, new Set(runIds));
       return acknowledged ? { acknowledged } : state;
     }),
-  orders: loadOrders(),
+  ...loadOrders(),
   setOrder: (scope, order) =>
     set((state) => {
-      const was = state.orders[scope]?.ids;
-      if (
-        was === undefined ||
-        was.length !== order.ids.length ||
-        was.some((id, i) => order.ids[i] !== id)
-      ) {
-        saveOrder(scope, order.ids);
+      if (!sameIds(state.orders[scope]?.ids, order.ids)) {
+        saveOrder(canopyOwnHostId(), scope, order.ids);
       }
       return { orders: { ...state.orders, [scope]: order } };
+    }),
+  hostId: null,
+  setHostId: (hostId) => set({ hostId: hostId === canopyOwnHostId() ? null : hostId }),
+  setHostOrder: (hostId, order) =>
+    set((state) => {
+      if (!sameIds(state.hostOrders[hostId]?.ids, order.ids)) saveOrder(hostId, "all", order.ids);
+      return { hostOrders: { ...state.hostOrders, [hostId]: order } };
     }),
   archivedExpanded: false,
   setArchivedExpanded: (expanded) => set({ archivedExpanded: expanded }),
@@ -233,11 +305,19 @@ export const useCanopyStore = create<CanopyState>((set) => ({
     saveScope(scope);
     set({ scope });
   },
-  open: () => set((state) => (state.mode === "hidden" ? state : { isOpen: true })),
+  // Every opening starts on the window's own host.
+  open: () =>
+    set((state) =>
+      state.mode === "hidden" || state.isOpen ? state : { isOpen: true, hostId: null }
+    ),
   close: () => set({ isOpen: false }),
   toggle: () =>
     set((state) =>
-      state.isOpen ? { isOpen: false } : state.mode === "hidden" ? state : { isOpen: true }
+      state.isOpen
+        ? { isOpen: false }
+        : state.mode === "hidden"
+          ? state
+          : { isOpen: true, hostId: null }
     ),
   applySnapshot: (snapshot) =>
     set((state) => {

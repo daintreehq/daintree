@@ -64,6 +64,17 @@ import { CanopyPlace } from "./CanopyPlace";
 import { CanopyPitch } from "./CanopyPitch";
 import { CANOPY_BETA_TERMS, CANOPY_TITLE, CANOPY_WAITLIST_URL } from "./canopyTerms";
 import { useListReorderMotion } from "./useListReorderMotion";
+import { CanopyHeaderCenter, CanopyHostPicker, useCanopyHostRows } from "./CanopyHostPicker";
+import { CanopyHostOffer } from "./CanopyHostOffer";
+import { CanopyReadingPane } from "./CanopyReadingPane";
+import { ownCanopyApi, remoteCanopyApi, useRemoteCanopy } from "./canopyHostSource";
+import { canopyOwnHostId, type CanopyScope } from "@/store/canopyStore";
+import { retryHostProjects, useHostProjectLists } from "@/components/Hosts/hostProjects";
+import { describeHostMenuState, type HostMenuRow } from "@/components/Hosts/hostModel";
+import type { HostId } from "@shared/types/remoteHosts";
+
+/** No other host's projects to list: one array, so the lookup's key stays put. */
+const NO_HOSTS: readonly HostId[] = [];
 
 /** Ages are minute-grained, as in Pilot. */
 const AGE_TICK_MS = 30_000;
@@ -216,6 +227,11 @@ export function CanopyView() {
   const close = useCanopyStore((s) => s.close);
   const activated = useCanopyStore((s) => s.snapshot?.activated ?? null);
   const applySnapshot = useCanopyStore((s) => s.applySnapshot);
+  // Another host the panel shows, or null for the window's own.
+  const hostId = useCanopyStore((s) => s.hostId);
+  const setHostId = useCanopyStore((s) => s.setHostId);
+  const hostRows = useCanopyHostRows(hostId ?? canopyOwnHostId());
+  const hostPicker = hostRows ? <CanopyHostPicker rows={hostRows} onPick={setHostId} /> : null;
   useOverlayClaim("canopy", isOpen);
   const still = useFrozenBackdrop(isOpen);
   // A view put in the background — another project shown in its place — can
@@ -268,21 +284,37 @@ export function CanopyView() {
     return () => cancelAnimationFrame(frame);
   }, [isOpen, activated]);
 
-  // Main watches screens closely, and writes words, only while some view says a panel is open.
+  // Main watches screens closely, and writes words, only while some view says
+  // a panel is open on its host: another host's own Canopy does that for it.
+  const showingOwnHost = hostId === null;
   useEffect(() => {
-    if (!isOpen) return;
+    if (!isOpen || !showingOwnHost) return;
     const unsubscribe = window.electron.canopy.onSnapshotUpdated(applySnapshot);
     safeFireAndForget(window.electron.canopy.setActive(true).then(applySnapshot));
     return () => {
       unsubscribe();
       safeFireAndForget(window.electron.canopy.setActive(false));
     };
-  }, [isOpen, applySnapshot]);
+  }, [isOpen, showingOwnHost, applySnapshot]);
 
   const backdrop =
     still === null ? undefined : (
       <img src={still} alt="" draggable={false} className="h-screen w-screen max-w-none" />
     );
+
+  // Another host: its own Canopy says whether it is on, inside the inbox.
+  if (hostId !== null) {
+    const hostRow = hostRows?.find((row) => row.hostId === hostId) ?? null;
+    return (
+      <CanopyInbox
+        backdrop={backdrop}
+        restoreOpener={restoreOnReplace}
+        hostId={hostId}
+        hostRow={hostRow}
+        hostPicker={hostPicker}
+      />
+    );
+  }
 
   // Main hasn't said yet whether Canopy is on: neither the offer nor the
   // inbox, so neither flashes before the other replaces it.
@@ -302,7 +334,7 @@ export function CanopyView() {
       >
         <AppDialog.Header>
           <AppDialog.Title icon={<Telescope />}>{CANOPY_TITLE}</AppDialog.Title>
-          <span className="flex-1" />
+          <CanopyHeaderCenter>{hostPicker}</CanopyHeaderCenter>
           <AppDialog.CloseButton />
         </AppDialog.Header>
         {/* The keyboard waits here, inside the dialog, rather than on
@@ -324,10 +356,19 @@ export function CanopyView() {
         onTurnOn={() => window.electron.canopy.setMode("on").then(applySnapshot)}
         onHide={hideCanopy}
         restoreFocusTo={restoreOnReplace}
+        hostPicker={hostPicker}
       />
     );
   }
-  return <CanopyInbox backdrop={backdrop} restoreOpener={restoreOnReplace} />;
+  return (
+    <CanopyInbox
+      backdrop={backdrop}
+      restoreOpener={restoreOnReplace}
+      hostId={null}
+      hostRow={null}
+      hostPicker={hostPicker}
+    />
+  );
 }
 
 interface ShortcutRow {
@@ -341,7 +382,7 @@ interface ShortcutRow {
  * Every key the panel answers to, one press away instead of always on screen,
  * grouped by where the keyboard is: the pane's keys are the agent's.
  */
-function CanopyShortcuts() {
+function CanopyShortcuts({ readingOnly = false }: { readingOnly?: boolean }) {
   const step = isMac() ? "Cmd" : "Alt";
   // How to get here again: the user's own binding, and double-Shift while on.
   const toggle = useEffectiveCombo("canopy.toggle");
@@ -364,37 +405,50 @@ function CanopyShortcuts() {
         { keys: ["ArrowUp", "ArrowDown"], label: "Move" },
         { keys: ["J", "K"], label: "Move down or up" },
         { keys: ["Home", "End"], label: "First or last agent" },
-        { keys: ["Enter"], label: "Go to terminal" },
-        { keys: ["1", "9"], range: true, label: "Answer with that choice (twice when it's risky)" },
-        { keys: ["Y"], label: "Take the first choice, when it's read as safe" },
-        { keys: ["R"], label: "Reply" },
+        // Another host's runs are read here, not answered or gone to.
+        ...(readingOnly
+          ? []
+          : [
+              { keys: ["Enter"], label: "Go to terminal" },
+              {
+                keys: ["1", "9"],
+                range: true,
+                label: "Answer with that choice (twice when it's risky)",
+              },
+              { keys: ["Y"], label: "Take the first choice, when it's read as safe" },
+              { keys: ["R"], label: "Reply" },
+            ]),
         { keys: ["E"], label: "Archive, or move back to the inbox" },
-        { keys: ["F2"], label: "Rename" },
+        ...(readingOnly ? [] : [{ keys: ["F2"], label: "Rename" }]),
         { keys: ["U"], label: "Mark as read or unread" },
         { keys: ["Alt+U"], label: "Mark all as read" },
         { keys: ["Z"], label: "Undo" },
         { keys: ["Shift+F10"], label: "More actions" },
-        { keys: ["Cmd+Backspace"], label: "Trash, pressed twice; Z takes it back" },
+        ...(readingOnly
+          ? []
+          : [{ keys: ["Cmd+Backspace"], label: "Trash, pressed twice; Z takes it back" }]),
         { keys: ["Escape"], label: "Close" },
         ...(closeCombo ? [{ keys: [closeCombo], label: "Close Canopy" }] : []),
       ],
     },
     {
       heading: "In a reply or the terminal",
-      rows: [
-        { keys: [`${step}+ArrowUp`, `${step}+ArrowDown`], label: "Next agent" },
-        { keys: ["Enter"], label: "In a reply: send, then move to the next agent" },
-        { keys: ["Shift+Enter"], label: "New line in a reply" },
-        { keys: ["Escape"], label: "Back to the list from a reply" },
-        ...(paneClose
-          ? [
-              {
-                keys: [paneClose],
-                label: isMac() ? "Close Canopy" : "In a reply: close Canopy",
-              },
-            ]
-          : []),
-      ],
+      rows: readingOnly
+        ? []
+        : [
+            { keys: [`${step}+ArrowUp`, `${step}+ArrowDown`], label: "Next agent" },
+            { keys: ["Enter"], label: "In a reply: send, then move to the next agent" },
+            { keys: ["Shift+Enter"], label: "New line in a reply" },
+            { keys: ["Escape"], label: "Back to the list from a reply" },
+            ...(paneClose
+              ? [
+                  {
+                    keys: [paneClose],
+                    label: isMac() ? "Close Canopy" : "In a reply: close Canopy",
+                  },
+                ]
+              : []),
+          ],
     },
   ];
   return (
@@ -449,28 +503,51 @@ function CanopyShortcuts() {
 function CanopyInbox({
   backdrop,
   restoreOpener,
+  hostId,
+  hostRow,
+  hostPicker,
 }: {
   backdrop: React.ReactNode;
   /** What had the keyboard when the panel opened, while it is still there. */
   restoreOpener: () => HTMLElement | null;
+  /** The other host the panel shows, or null for the window's own. */
+  hostId: HostId | null;
+  /** That host as the host menu draws it, while it is in the host list. */
+  hostRow: HostMenuRow | null;
+  hostPicker: React.ReactNode;
 }) {
   const isOpen = useCanopyStore((s) => s.isOpen);
   const close = useCanopyStore((s) => s.close);
-  const canopy = useCanopyStore((s) => s.snapshot);
-  const fleet = useFleetSnapshotStore((s) => s.snapshot);
+  // Another host is read through its own Canopy and shown as it read it: its
+  // runs can be read, archived and marked here, and nothing else is done to
+  // them until it can reach them. The window's own stores never hold its data.
+  const otherHost = hostId !== null;
+  const hostName = hostRow?.name ?? hostId ?? "";
+  const remote = useRemoteCanopy(hostId, isOpen);
+  const api = useMemo(() => (hostId === null ? ownCanopyApi : remoteCanopyApi(hostId)), [hostId]);
+  const ownCanopy = useCanopyStore((s) => s.snapshot);
+  const ownFleet = useFleetSnapshotStore((s) => s.snapshot);
+  const canopy = otherHost ? remote.canopy : ownCanopy;
+  const fleet = otherHost ? remote.fleet : ownFleet;
   const projects = useProjectStore((s) => s.projects);
   const scratches = useScratchStore((s) => s.scratches);
-  const scope = useCanopyStore((s) => s.scope);
+  const hostProjects = useHostProjectLists(hostId === null ? NO_HOSTS : [hostId]);
+  const storedScope = useCanopyStore((s) => s.scope);
   const setScope = useCanopyStore((s) => s.setScope);
+  // "This project" is the window's own project: another host shows all of its own.
+  const scope: CanopyScope = otherHost ? "all" : storedScope;
+  // The link came back: its project names may have changed while it was away.
+  const recoveries = remote.epoch;
+  useEffect(() => {
+    if (hostId !== null && recoveries > 0) retryHostProjects(hostId);
+  }, [hostId, recoveries]);
 
   // Main reads only the screens in scope, so the agents a project view hides
-  // cost nothing.
+  // cost nothing. Said again whenever another host's link comes back.
   useEffect(() => {
     if (!isOpen) return;
-    safeFireAndForget(
-      window.electron.canopy.setScope(scope === "project" ? getViewWorkspaceId() : null)
-    );
-  }, [isOpen, scope]);
+    safeFireAndForget(api.setScope(scope === "project" ? getViewWorkspaceId() : null));
+  }, [isOpen, scope, api, recoveries]);
 
   const [nowMs, setNowMs] = useState(() => Date.now());
   useEffect(() => {
@@ -481,6 +558,17 @@ function CanopyInbox({
 
   const workspaces = useMemo(() => {
     const map = new Map<string, PilotWorkspaceMeta>();
+    // Another host's workspace ids mean something only there: named from its own list.
+    if (hostId !== null) {
+      for (const project of hostProjects.get(hostId) ?? []) {
+        map.set(project.id, {
+          kind: "project",
+          name: project.name,
+          ...(project.emoji ? { emoji: project.emoji } : {}),
+        });
+      }
+      return map;
+    }
     for (const project of projects) {
       map.set(project.id, {
         kind: "project",
@@ -498,16 +586,17 @@ function CanopyInbox({
       });
     }
     return map;
-  }, [projects, scratches]);
+  }, [hostId, hostProjects, projects, scratches]);
 
   const baseItems = useMemo(() => {
     if (!fleet) return [];
-    const here = getViewWorkspaceId();
+    // No project on another host is the one this window shows.
+    const here = otherHost ? null : getViewWorkspaceId();
     const runs =
       scope === "project" ? fleet.runs.filter((run) => run.workspaceId === here) : fleet.runs;
     const groups = buildPilotGroups(runs, {
       workspaces,
-      currentWorkspaceId: getViewWorkspaceId(),
+      currentWorkspaceId: here,
       nowMs,
     });
     const cards = new Map((canopy?.cards ?? []).map((card) => [card.runId, card]));
@@ -524,7 +613,7 @@ function CanopyInbox({
       new Map((canopy?.glances ?? []).map((entry) => [entry.runId, entry])),
       new Map((canopy?.reads ?? []).map((entry) => [entry.runId, entry]))
     );
-  }, [fleet, workspaces, nowMs, canopy, scope]);
+  }, [fleet, workspaces, nowMs, canopy, scope, otherHost]);
 
   // Every run shows the moment the panel opens, in the order it was left — or,
   // the first time, by what Daintree observes of each — and moves to its place
@@ -547,11 +636,21 @@ function CanopyInbox({
   const openedAtRef = useRef<number | null>(null);
   const [revealed, setRevealed] = useState(false);
   const [revealWake, setRevealWake] = useState(0);
+  // Showing another host is an opening of its own list.
+  const revealHostRef = useRef(hostId);
   useLayoutEffect(() => {
     if (!isOpen) {
       openedAtRef.current = null;
       setRevealed(false);
       return;
+    }
+    if (revealHostRef.current !== hostId) {
+      revealHostRef.current = hostId;
+      openedAtRef.current = null;
+      if (revealed) {
+        setRevealed(false);
+        return;
+      }
     }
     if (revealed) return;
     if (openedAtRef.current === null) openedAtRef.current = Date.now();
@@ -562,12 +661,17 @@ function CanopyInbox({
     }
     const timer = setTimeout(() => setRevealWake((n) => n + 1), left);
     return () => clearTimeout(timer);
-  }, [isOpen, revealed, owedOnOpen, revealWake]);
+  }, [isOpen, revealed, owedOnOpen, revealWake, hostId]);
 
   // The list moves only at moments the user can expect it to; see `nextCanopyOrder`.
+  // Each host keeps its own order: the same run ids mean other runs elsewhere.
   const refreshedAt = canopy?.refreshedAt ?? null;
-  const order = useCanopyStore((s) => s.orders[scope]) ?? null;
+  const ownOrder = useCanopyStore((s) => s.orders[scope]);
+  const hostOrder = useCanopyStore((s) => (hostId === null ? undefined : s.hostOrders[hostId]));
+  const order = (otherHost ? hostOrder : ownOrder) ?? null;
   const setOrder = useCanopyStore((s) => s.setOrder);
+  const setHostOrder = useCanopyStore((s) => s.setHostOrder);
+  const orderKey = `${hostId ?? ""}|${scope}`;
   const [pointerInList, setPointerInList] = useState(false);
   const lastInteractionRef = useRef(0);
   const pressingRef = useRef(false);
@@ -575,7 +679,7 @@ function CanopyInbox({
   const menuOpenRef = useRef(false);
   const lastRankRef = useRef(0);
   const openedRef = useRef(false);
-  const scopeRef = useRef(scope);
+  const orderKeyRef = useRef(orderKey);
   const [rankWake, setRankWake] = useState(0);
   const [rankRequest, setRankRequest] = useState(0);
   const rankRequestSeenRef = useRef(0);
@@ -586,10 +690,10 @@ function CanopyInbox({
     }
     if (baseItems.length === 0) return;
     const now = Date.now();
-    const opening = !openedRef.current || scopeRef.current !== scope;
+    const opening = !openedRef.current || orderKeyRef.current !== orderKey;
     if (opening) {
       openedRef.current = true;
-      scopeRef.current = scope;
+      orderKeyRef.current = orderKey;
       // What the user sees on opening counts as just ranked.
       lastRankRef.current = now;
     }
@@ -612,7 +716,8 @@ function CanopyInbox({
         lastRankRef.current = now;
         rankRequestSeenRef.current = rankRequest;
       }
-      setOrder(scope, step.order);
+      if (hostId === null) setOrder(scope, step.order);
+      else setHostOrder(hostId, step.order);
       return;
     }
     if (step.kind === "hold") return;
@@ -621,9 +726,12 @@ function CanopyInbox({
   }, [
     isOpen,
     scope,
+    hostId,
+    orderKey,
     baseItems,
     order,
     setOrder,
+    setHostOrder,
     refreshedAt,
     pointerInList,
     rankWake,
@@ -649,7 +757,7 @@ function CanopyInbox({
   const [keptUnread, setKeptUnread] = useState<ReadonlySet<string>>(() => new Set());
   useEffect(() => {
     setKeptUnread((kept) => (kept.size === 0 ? kept : new Set()));
-  }, [isOpen, scope]);
+  }, [isOpen, scope, hostId]);
   useEffect(() => {
     setKeptUnread((kept) => {
       if (!unreadOnly) return kept.size === 0 ? kept : new Set();
@@ -677,17 +785,19 @@ function CanopyInbox({
   // Before paint, so a close in the same moment can't lose it.
   const acknowledge = useCanopyStore((s) => s.acknowledge);
   useLayoutEffect(() => {
-    // A view nobody can see acknowledges nothing, for the moment before it closes.
-    if (!isOpen || isProjectViewCached()) return;
+    // A view nobody can see acknowledges nothing, for the moment before it
+    // closes; and the badge counts the window's own host, never another's runs.
+    if (!isOpen || otherHost || isProjectViewCached()) return;
     acknowledge(visible.map((item) => item.runId));
-  }, [isOpen, visible, acknowledge]);
+  }, [isOpen, otherHost, visible, acknowledge]);
   // Main holds a native page back only for an ask the panel shows: told the
-  // rows as listed, filters included, whenever they change.
+  // rows as listed, filters included, whenever they change — and told again
+  // when another host's link comes back, having dropped what it was told.
   const shownKey = isOpen ? visible.map((item) => item.runId).join(" ") : null;
   useEffect(() => {
     if (shownKey === null) return;
-    safeFireAndForget(window.electron.canopy.setShown(shownKey === "" ? [] : shownKey.split(" ")));
-  }, [shownKey]);
+    safeFireAndForget(api.setShown(shownKey === "" ? [] : shownKey.split(" ")));
+  }, [shownKey, api, recoveries]);
   const listRef = useRef<HTMLDivElement>(null);
   useListReorderMotion(listRef, listed.map((item) => item.runId).join(" "));
   // A list unmounted under the pointer never says the pointer left.
@@ -764,17 +874,15 @@ function CanopyInbox({
   // A deliberate act on a run reads it at once — going to it, a click,
   // answering, replying — through the turn it showed. Merely arriving on it
   // reads it only once it has stayed in front of the user (main's dwell).
-  const readNow = useCallback((item: CanopyItem) => {
-    if (!item.unread) return;
-    safeFireAndForget(
-      window.electron.canopy.setRead(
-        item.runId,
-        { spawnedAt: item.row.run.spawnedAt },
-        true,
-        item.readMark?.turn
-      )
-    );
-  }, []);
+  const readNow = useCallback(
+    (item: CanopyItem) => {
+      if (!item.unread) return;
+      safeFireAndForget(
+        api.setRead(item.runId, { spawnedAt: item.row.run.spawnedAt }, true, item.readMark?.turn)
+      );
+    },
+    [api]
+  );
 
   const focusCardNow = useCallback((runId: string) => {
     setPaneFocus(null);
@@ -786,8 +894,9 @@ function CanopyInbox({
 
   // The run the pane shows is one the user has in front of them: it counts as
   // looked at when it opens there, each minute it stays, and as it stops
-  // showing — while anyone can see the panel at all.
-  const shownRunId = isOpen ? (focusedItem?.runId ?? null) : null;
+  // showing — while anyone can see the panel at all. Another host's run shows
+  // only its reading here, not its terminal: no look is told of it.
+  const shownRunId = isOpen && !otherHost ? (focusedItem?.runId ?? null) : null;
   useEffect(() => {
     if (shownRunId === null) return;
     // One look, reconciled whenever it could stop or start being true — the
@@ -903,6 +1012,16 @@ function CanopyInbox({
   // The last triage the user did here, to take back with Z or the toast's
   // Undo. One deep, as in mail: only the newest action can be undone.
   const undoRef = useRef<(() => void) | null>(null);
+  // Another host's list starts afresh: no run open from the last one, and Z
+  // never takes back, unseen, what was done on a host no longer shown.
+  const shownHostRef = useRef(hostId);
+  useEffect(() => {
+    if (shownHostRef.current === hostId) return;
+    shownHostRef.current = hostId;
+    setFocusedId(null);
+    setPaneFocus(null);
+    undoRef.current = null;
+  }, [hostId]);
   /**
    * Holds Z for an action from its press, not from when main answers: a Z
    * pressed before then waits for it, and an action pressed after takes Z
@@ -988,16 +1107,19 @@ function CanopyInbox({
    * it is still as the change left it (`after`) — a new turn, or a change from
    * another view since, stands.
    */
-  const undoReads = useCallback((before: CanopyReadMark[], after: CanopyReadMark[]) => {
-    const was = new Map(before.map((mark) => [mark.runId, mark]));
-    const restores = after.flatMap((left) => {
-      const mark = was.get(left.runId);
-      return mark !== undefined && mark.spawnedAt === left.spawnedAt
-        ? [{ mark, expectVersion: left.version }]
-        : [];
-    });
-    if (restores.length > 0) safeFireAndForget(window.electron.canopy.restoreReads(restores));
-  }, []);
+  const undoReads = useCallback(
+    (before: CanopyReadMark[], after: CanopyReadMark[]) => {
+      const was = new Map(before.map((mark) => [mark.runId, mark]));
+      const restores = after.flatMap((left) => {
+        const mark = was.get(left.runId);
+        return mark !== undefined && mark.spawnedAt === left.spawnedAt
+          ? [{ mark, expectVersion: left.version }]
+          : [];
+      });
+      if (restores.length > 0) safeFireAndForget(api.restoreReads(restores));
+    },
+    [api]
+  );
 
   /**
    * Where the cursor goes once a run is dealt with — archived, answered,
@@ -1018,6 +1140,8 @@ function CanopyInbox({
 
   const handlers = useMemo<CanopyCardHandlers>(() => {
     const openRun = (item: CanopyItem) => {
+      // Another host's run: going to it would land on a terminal of the window's own.
+      if (otherHost) return;
       readNow(item);
       const args = { runId: item.runId, workspaceId: item.workspaceId };
       if (item.workspaceId !== getViewWorkspaceId()) {
@@ -1046,14 +1170,29 @@ function CanopyInbox({
     const goTo = (item: CanopyItem) => ({ label: "Go to terminal", onClick: () => openRun(item) });
     const archive = (item: CanopyItem, expectTurn?: number) =>
       expectTurn === undefined
-        ? window.electron.canopy.archive(item.runId, target(item))
-        : window.electron.canopy.archive(item.runId, target(item), expectTurn);
-    const unarchive = (item: CanopyItem) =>
-      window.electron.canopy.unarchive(item.runId, target(item));
-    const archiveFailed = (item: CanopyItem) => (error: unknown) =>
-      failToast("Couldn't archive", error, goTo(item));
-    const unarchiveFailed = (item: CanopyItem) => (error: unknown) =>
-      failToast("Couldn't move to inbox", error, goTo(item));
+        ? api.archive(item.runId, target(item))
+        : api.archive(item.runId, target(item), expectTurn);
+    const unarchive = (item: CanopyItem) => api.unarchive(item.runId, target(item));
+    // Another host's run has no terminal here to do it by hand in: the way
+    // back is trying again, on that host.
+    const recover = (item: CanopyItem, retry: () => void) =>
+      otherHost ? { label: "Retry", onClick: retry } : goTo(item);
+    const archiveFailed =
+      (item: CanopyItem) =>
+      (error: unknown): void =>
+        failToast(
+          "Couldn't archive",
+          error,
+          recover(item, () => safeFireAndForget(archive(item).catch(archiveFailed(item))))
+        );
+    const unarchiveFailed =
+      (item: CanopyItem) =>
+      (error: unknown): void =>
+        failToast(
+          "Couldn't move to inbox",
+          error,
+          recover(item, () => safeFireAndForget(unarchive(item).catch(unarchiveFailed(item))))
+        );
     return {
       onOpen: openRun,
       // Escape from the pane lands on the run's row; a run folded away in
@@ -1141,6 +1280,8 @@ function CanopyInbox({
       },
       onSendFailed: (item, error) => failToast("Couldn't send to agent", error, goTo(item)),
       onAnswer: (item, label) => {
+        // Answering reaches only the window's own host.
+        if (otherHost) return;
         readNow(item);
         // On to the next run that needs you, as a reply from the composer does —
         // on its row, where the next answer is one key away.
@@ -1158,6 +1299,8 @@ function CanopyInbox({
       // No toast on success: the user watched the name change. A refusal says
       // so and keeps the name it had.
       onRename: (item, title) => {
+        // Renaming reaches only the window's own host.
+        if (otherHost) return Promise.resolve();
         const rename = (): Promise<void> =>
           window.electron.canopy.rename(item.runId, target(item), title).catch((error: unknown) => {
             failToast("Couldn't rename terminal", error, {
@@ -1172,6 +1315,8 @@ function CanopyInbox({
         // The trash keeps a terminal only briefly, and its own countdown sits
         // behind this panel, in whichever project the run is in: so the way
         // back is offered here, on the toast and on Z.
+        // Trashing reaches only the window's own host.
+        if (otherHost) return;
         const undo = reserveUndo();
         safeFireAndForget(
           window.electron.canopy.trash(item.runId, target(item)).then(
@@ -1202,7 +1347,17 @@ function CanopyInbox({
         );
       },
     };
-  }, [close, readNow, focusCardNow, openPaneNow, nextAfter, reserveUndo, undoReads]);
+  }, [
+    close,
+    readNow,
+    focusCardNow,
+    openPaneNow,
+    nextAfter,
+    reserveUndo,
+    undoReads,
+    api,
+    otherHost,
+  ]);
 
   /** U: read or unread, by hand. Z takes it back. */
   const toggleRead = useCallback(
@@ -1210,12 +1365,7 @@ function CanopyInbox({
       if (itemArchived(item)) return;
       const read = item.unread;
       const send = () =>
-        window.electron.canopy.setRead(
-          item.runId,
-          { spawnedAt: item.row.run.spawnedAt },
-          read,
-          item.readMark?.turn
-        );
+        api.setRead(item.runId, { spawnedAt: item.row.run.spawnedAt }, read, item.readMark?.turn);
       const undo = reserveUndo();
       safeFireAndForget(
         send().then(
@@ -1239,7 +1389,7 @@ function CanopyInbox({
         )
       );
     },
-    [reserveUndo, undoReads]
+    [reserveUndo, undoReads, api]
   );
 
   /**
@@ -1253,7 +1403,7 @@ function CanopyInbox({
     const before = unread.flatMap((item) => (item.readMark ? [item.readMark] : []));
     const undo = reserveUndo();
     safeFireAndForget(
-      window.electron.canopy
+      api
         .markAllRead(
           unread.map((item) => ({
             runId: item.runId,
@@ -1375,6 +1525,18 @@ function CanopyInbox({
     // Keys aimed at the list's selected row act on the selected agent.
     const selected = visible[activeIndex];
     if (!selected) return;
+    // Another host's run: only what reaches that host. Enter and F2 would act
+    // on the window's own, and there is no pane to take the rest.
+    if (otherHost) {
+      if (event.key === "e" || event.key === "E") {
+        event.preventDefault();
+        if (!event.repeat) handlers.onArchive(selected);
+      } else if ((event.key === "u" || event.key === "U") && !event.shiftKey) {
+        event.preventDefault();
+        if (!event.repeat) toggleRead(selected);
+      }
+      return;
+    }
     if (event.key === "Enter") {
       event.preventDefault();
       handlers.onOpen(selected);
@@ -1424,23 +1586,28 @@ function CanopyInbox({
       openPaneNow(item.runId, "composer");
     },
     onToggleRead: toggleRead,
-    onReread: (item) =>
+    onReread: function reread(item) {
       safeFireAndForget(
-        window.electron.canopy
+        api
           .reread(item.runId, { spawnedAt: item.row.run.spawnedAt })
           .catch((error: unknown) =>
-            failToast("Couldn't read the screen again", error, {
-              label: "Go to terminal",
-              onClick: () => handlers.onOpen(item),
-            })
+            failToast(
+              "Couldn't read the screen again",
+              error,
+              otherHost
+                ? { label: "Retry", onClick: () => reread(item) }
+                : { label: "Go to terminal", onClick: () => handlers.onOpen(item) }
+            )
           )
-      ),
+      );
+    },
     onArchive: handlers.onArchive,
     onRename: askRename,
     onTrash: (item) => {
       focusCardNow(item.runId);
       setTrashArm((arm) => ({ runId: item.runId, request: (arm?.request ?? 0) + 1 }));
     },
+    readingOnly: otherHost,
     onOpenChange: (open) => {
       menuOpenRef.current = open;
       if (open) return;
@@ -1456,7 +1623,7 @@ function CanopyInbox({
   const refresh = () => {
     setRefreshes((n) => n + 1);
     safeFireAndForget(
-      window.electron.canopy
+      api
         .refresh()
         .catch((error: unknown) =>
           failToast("Couldn't refresh Canopy", error, { label: "Retry", onClick: refresh })
@@ -1472,6 +1639,23 @@ function CanopyInbox({
   // A project's name on every row says nothing while every row is in it.
   const manyProjects = new Set(items.map((item) => item.workspaceId)).size > 1;
 
+  // Another host the panel can't read right now: why, in the host menu's own
+  // words, with nothing of another host's put in its place.
+  const linkWords = otherHost && hostRow ? describeHostMenuState(hostRow) : null;
+  const connecting = hostRow?.connection?.status === "connecting";
+  const hostTrouble = otherHost && remote.error !== null && !connecting;
+  // Canopy is off on that host: its own offer, for it alone.
+  const hostOffer = otherHost && canopy?.activated === false;
+
+  // What the panel can say about another host before it has its agents.
+  const hostSummary =
+    hostTrouble && fleet === null
+      ? `Can't reach ${hostName}`
+      : otherHost && fleet === null && connecting
+        ? `Connecting to ${hostName}…`
+        : hostOffer
+          ? `Canopy is off on ${hostName}`
+          : null;
   const summaryLine =
     fleet === null
       ? "Reading agents…"
@@ -1509,6 +1693,42 @@ function CanopyInbox({
               .filter(Boolean)
               .join(" · ");
 
+  const headerControls = (
+    <>
+      {!otherHost && (
+        <SegmentedRadioGroup<"all" | "project">
+          aria-label="Agents to show"
+          density="compact"
+          className="mr-3"
+          value={scope}
+          onChange={setScope}
+          options={[
+            { value: "all", label: "All projects" },
+            { value: "project", label: "This project" },
+          ]}
+        />
+      )}
+      <CanopyShortcuts readingOnly={otherHost} />
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <Button
+            ref={refreshRef}
+            variant="ghost"
+            size="icon-xs"
+            aria-label="Refresh"
+            aria-busy={refreshes > 0 || undefined}
+            disabled={canopy === null}
+            onClick={refresh}
+          >
+            <SpinningIcon icon={RefreshCw} active={refreshes > 0} />
+          </Button>
+        </TooltipTrigger>
+        <TooltipContent side="bottom">Refresh</TooltipContent>
+      </Tooltip>
+      <AppDialog.CloseButton />
+    </>
+  );
+
   return (
     <AppDialog
       isOpen={isOpen}
@@ -1525,39 +1745,30 @@ function CanopyInbox({
       data-testid="canopy-dialog"
     >
       <AppDialog.Header>
-        <AppDialog.Title icon={<Telescope />}>{CANOPY_TITLE}</AppDialog.Title>
-        <span className="mr-3 ml-3 min-w-0 flex-1 truncate text-sm text-text-secondary">
-          {summaryLine}
-        </span>
-        <SegmentedRadioGroup<"all" | "project">
-          aria-label="Agents to show"
-          density="compact"
-          className="mr-3"
-          value={scope}
-          onChange={setScope}
-          options={[
-            { value: "all", label: "All projects" },
-            { value: "project", label: "This project" },
-          ]}
-        />
-        <CanopyShortcuts />
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <Button
-              ref={refreshRef}
-              variant="ghost"
-              size="icon-xs"
-              aria-label="Refresh"
-              aria-busy={refreshes > 0 || undefined}
-              disabled={canopy === null}
-              onClick={refresh}
-            >
-              <SpinningIcon icon={RefreshCw} active={refreshes > 0} />
-            </Button>
-          </TooltipTrigger>
-          <TooltipContent side="bottom">Refresh</TooltipContent>
-        </Tooltip>
-        <AppDialog.CloseButton />
+        {hostPicker ? (
+          // Three parts, the outer two sharing what is left, so the picker
+          // stands in the middle of the header.
+          <>
+            <span className="flex min-w-0 flex-1 basis-0 items-center">
+              <AppDialog.Title icon={<Telescope />}>{CANOPY_TITLE}</AppDialog.Title>
+              <span className="mx-3 min-w-0 flex-1 truncate text-sm text-text-secondary">
+                {hostSummary ?? summaryLine}
+              </span>
+            </span>
+            {hostPicker}
+            <span className="ml-3 flex min-w-0 flex-1 basis-0 items-center justify-end">
+              {headerControls}
+            </span>
+          </>
+        ) : (
+          <>
+            <AppDialog.Title icon={<Telescope />}>{CANOPY_TITLE}</AppDialog.Title>
+            <span className="mr-3 ml-3 min-w-0 flex-1 truncate text-sm text-text-secondary">
+              {hostSummary ?? summaryLine}
+            </span>
+            {headerControls}
+          </>
+        )}
       </AppDialog.Header>
 
       <div
@@ -1567,7 +1778,45 @@ function CanopyInbox({
         onKeyDown={onNavigationKeyDown}
       >
         {canopy?.tier === "free" && <BetaNotice />}
-        {(fleet?.degraded === true || canopy?.lastError) && (
+        {hostTrouble && (
+          <div className="flex shrink-0 flex-col gap-2 border-b border-border-default p-3">
+            <Callout
+              severity="warning"
+              size="compact"
+              title={`Can't reach ${hostName}`}
+              action={
+                <Button variant="outline" size="xs" onClick={remote.retry}>
+                  Retry
+                </Button>
+              }
+            >
+              {linkWords?.state && linkWords.state !== "Connected"
+                ? [linkWords.state, linkWords.note].filter(Boolean).join(". ") + "."
+                : formatErrorMessage(remote.error, `${hostName} didn't answer.`)}{" "}
+              {fleet !== null
+                ? "These are the agents it last showed."
+                : "Its agents show here once it answers."}
+            </Callout>
+          </div>
+        )}
+        {otherHost && fleet === null && !hostTrouble && connecting && (
+          <p className="flex flex-1 items-center justify-center text-sm text-text-secondary">
+            Connecting to {hostName}…
+          </p>
+        )}
+        {hostOffer && (
+          <CanopyHostOffer
+            hostName={hostName}
+            onTurnOn={async () => {
+              // Hidden there, it can't be turned on until it is shown again:
+              // the press here, on an offer naming the host, is the user's ask for both.
+              if (canopy?.mode === "hidden") await api.setMode("unset");
+              await api.setMode("on");
+              remote.retry();
+            }}
+          />
+        )}
+        {!hostOffer && (fleet?.degraded === true || canopy?.lastError) && (
           <div className="flex shrink-0 flex-col gap-2 border-b border-border-default p-3">
             {/* Daintree can't see its agents right now: the rows are the last
                 it saw, and nothing is read until it can again. */}
@@ -1595,7 +1844,7 @@ function CanopyInbox({
             )}
           </div>
         )}
-        {items.length > 0 && (
+        {!hostOffer && items.length > 0 && (
           // An inbox: what needs you down a sidebar, most urgent first, the rest
           // folded away beneath it, and the selected agent's own terminal beside
           // it, drawn as its pane.
@@ -1680,6 +1929,7 @@ function CanopyInbox({
                             onClick={() => readNow(item)}
                             onOpen={() => handlers.onOpen(item)}
                             onArchive={() => handlers.onArchive(item)}
+                            readingOnly={otherHost}
                           />
                         </CanopyRowMenu>
                       );
@@ -1732,6 +1982,7 @@ function CanopyInbox({
                               onClick={() => readNow(item)}
                               onOpen={() => handlers.onOpen(item)}
                               onArchive={() => handlers.onArchive(item)}
+                              readingOnly={otherHost}
                             />
                           </CanopyRowMenu>
                         ))}
@@ -1744,9 +1995,22 @@ function CanopyInbox({
             </div>
             <div className="flex min-h-0 min-w-0 flex-1 flex-col bg-surface-canvas px-2 pb-2">
               {focusedItem && (
-                <CanopyPlace item={focusedItem} id={`canopy-place-${focusedItem.runId}`} />
+                <CanopyPlace
+                  item={focusedItem}
+                  id={`canopy-place-${focusedItem.runId}`}
+                  hostId={hostId ?? ""}
+                  runBranch={api.runBranch}
+                />
               )}
-              {focusedItem ? (
+              {focusedItem && otherHost ? (
+                <CanopyReadingPane
+                  key={focusedItem.runId}
+                  item={focusedItem}
+                  domId={`canopy-detail-${focusedItem.runId}`}
+                  describedBy={`canopy-place-${focusedItem.runId}`}
+                  hostName={hostName}
+                />
+              ) : focusedItem ? (
                 <CanopyCard
                   key={focusedItem.runId}
                   ref={detailRef}
@@ -1787,7 +2051,7 @@ function CanopyInbox({
             </div>
           </div>
         )}
-        {fleet !== null && !fleet.degraded && items.length === 0 && (
+        {!hostOffer && fleet !== null && !fleet.degraded && items.length === 0 && (
           <div className="flex flex-1 flex-col items-center justify-center gap-3">
             {scope === "project" && fleet.runs.length > 0 ? (
               <>
@@ -1799,6 +2063,10 @@ function CanopyInbox({
                   Show all projects
                 </Button>
               </>
+            ) : otherHost ? (
+              <p className="text-sm text-text-secondary">
+                No agents are running on {hostName}. Each one shows up here once it starts.
+              </p>
             ) : (
               <p className="text-sm text-text-secondary">
                 Launch an agent from the toolbar and it shows up here.
