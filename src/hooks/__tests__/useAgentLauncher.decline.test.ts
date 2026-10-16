@@ -89,7 +89,7 @@ const SNAPSHOT: PanelLimitSnapshot = {
 };
 
 function setElectron(available: boolean): void {
-  (window as unknown as { electron?: unknown }).electron = available ? {} : undefined;
+  Reflect.set(window, "electron", available ? {} : undefined);
 }
 
 describe("useAgentLauncher — declined launches name their reason (#13382)", () => {

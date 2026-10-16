@@ -67,11 +67,15 @@ type TerminalListItem = {
   location: string;
 };
 
-async function callList(actions: ActionRegistry, args?: unknown): Promise<TerminalListItem[]> {
+async function runList(actions: ActionRegistry, args?: unknown): Promise<unknown> {
   const factory = actions.get("terminal.list");
   if (!factory) throw new Error("missing terminal.list");
   const def = factory() as AnyActionDefinition;
-  return ((await def.run(args, {} as never)) as { terminals: TerminalListItem[] }).terminals;
+  return def.run(args, {} as never);
+}
+
+async function callList(actions: ActionRegistry, args?: unknown): Promise<TerminalListItem[]> {
+  return ((await runList(actions, args)) as { terminals: TerminalListItem[] }).terminals;
 }
 
 beforeEach(() => {
@@ -582,13 +586,9 @@ describe("terminal.list panel limit (#13382)", () => {
         },
       },
     });
-    const factory = registerDefinitions().get("terminal.list");
-    const def = factory!() as AnyActionDefinition;
-
-    const result = (await def.run({ worktreeId: "wt-1" }, {} as never)) as {
-      terminals: Array<{ id: string }>;
-      panelLimit: unknown;
-    };
+    const result = z
+      .object({ terminals: z.array(z.object({ id: z.string() })), panelLimit: z.unknown() })
+      .parse(await runList(registerDefinitions(), { worktreeId: "wt-1" }));
 
     expect(result.terminals.map((t) => t.id)).toEqual(["grid-a"]);
     // Trash, dialog and non-persisted panels hold no slot; background ones do.
@@ -602,10 +602,13 @@ describe("terminal.list panel limit (#13382)", () => {
   });
 
   it("advertises panelLimit as a required object beside the terminals", () => {
-    const schema = outputSchema(registerAll(), "terminal.list")!;
-    expect((schema.properties as Record<string, { type?: unknown }>).panelLimit?.type).toBe(
-      "object"
-    );
+    const schema = z
+      .object({
+        properties: z.object({ panelLimit: z.object({ type: z.unknown() }) }),
+        required: z.array(z.string()),
+      })
+      .parse(outputSchema(registerAll(), "terminal.list"));
+    expect(schema.properties.panelLimit.type).toBe("object");
     expect(schema.required).toContain("panelLimit");
   });
 });

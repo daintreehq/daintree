@@ -778,10 +778,7 @@ function filterTerminalListToOwned(
   owns: (terminalId: string) => boolean
 ): import("../../../shared/types/actions.js").ActionDispatchResult {
   if (!result.ok) return result;
-  const payload = result.result as
-    | { terminals?: unknown; panelLimit?: unknown }
-    | null
-    | undefined;
+  const payload = result.result as { terminals?: unknown; panelLimit?: unknown } | null | undefined;
   if (!Array.isArray(payload?.terminals)) {
     return {
       ok: false,
