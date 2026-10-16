@@ -538,7 +538,13 @@ describe("MCP wire budget — aggregate ratchets (§9)", () => {
   // 53_400 → 53_450 for #13130, measured at 53_431 B: the undescribed
   // `cwdOutsideWorktree` field on `agent.launch`'s result, which tells a caller
   // its cwd sits outside the worktree the pane was filed under.
-  const MAX_EXTERNAL_PAYLOAD_BYTES = 53_450;
+  // 53_450 → 54_400 for #13382, measured at 54_387 B: `agent.launch`'s
+  // `spawnStatus` names why a launch was declined and `panelLimit` carries the
+  // count and limits a hard-limit refusal was judged on, and `terminal.list`
+  // returns the same snapshot so an orchestrator can stay under the limit.
+  // Output schemas are a hard contract; trimmed before measuring (plain
+  // numbers, not `.int()`'s safe-integer bounds on every field).
+  const MAX_EXTERNAL_PAYLOAD_BYTES = 54_400;
   // 190_000 → 192_700 for the same 2_048 B the external half above pays for.
   // Every byte #11909 spends sits on an externally advertised tool, so both
   // totals moved by the identical amount. Only this one needed the ratchet
@@ -746,7 +752,9 @@ describe("MCP wire budget — aggregate ratchets (§9)", () => {
   // 138_143 B: its description, the panelId argument, and no output schema —
   // the image travels as an MCP image block, not structured content. Full tier
   // only, so the external ceiling does not move.
-  const MAX_COHORT_PAYLOAD_BYTES = 138_200;
+  // 138_200 → 139_100 for #13382, measured at 139_096 B: the same `agent.launch`
+  // decline reason and `panelLimit` snapshot as the external ceiling above.
+  const MAX_COHORT_PAYLOAD_BYTES = 139_100;
 
   const wireBytes = (t: WireTool) => t.descriptionBytes + t.paramsBytes + t.outputBytes;
 

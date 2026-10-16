@@ -6,6 +6,7 @@ import {
   TerminalStatusResultSchema,
   TerminalSendCommandResultSchema,
   TerminalLastMessageResultSchema,
+  PanelLimitSnapshotSchema,
 } from "./schemas";
 import { readTailSnapshot, tailCapturedOutput } from "@shared/utils/artifactParser";
 import {
@@ -42,9 +43,11 @@ import {
   WAIT_UNTIL_IDLE_BATCH_OUTPUT_SCHEMA,
 } from "@shared/types/terminalWaitUntilIdle";
 import {
+  countPanelsTowardLimit,
   isEphemeralPanel,
   isClientMetadataEligible,
 } from "@/store/slices/panelRegistry/panelCount";
+import { buildPanelLimitSnapshot, usePanelLimitStore } from "@/store/panelLimitStore";
 import { readClientMetadata } from "@shared/utils/mcpClientMetadata";
 import { appendHandbackInstruction, mintHandbackCode } from "@shared/utils/handback";
 import { NOTIFY_ARG_DESCRIPTION, NotifyReplyLinesSchema } from "@shared/types/terminalNotify";
@@ -118,7 +121,11 @@ export function registerTerminalQueryActions(
           ),
       })
       .optional(),
-    resultSchema: z.object({ terminals: z.array(TerminalSummarySchema) }),
+    resultSchema: z.object({
+      terminals: z.array(TerminalSummarySchema),
+      // Unfiltered by the arguments, so an orchestrator can stay under the limit.
+      panelLimit: PanelLimitSnapshotSchema,
+    }),
     mcpOutputSchema: true,
     run: async (args: unknown) => {
       const { worktreeId, location, owned, terminalId, includeClientMetadata } = (args ?? {}) as {
@@ -199,7 +206,13 @@ export function registerTerminalQueryActions(
           : {}),
       }));
 
-      return { terminals: result };
+      const { softWarningLimit, confirmationLimit, hardLimit } = usePanelLimitStore.getState();
+      const panelLimit = buildPanelLimitSnapshot(
+        countPanelsTowardLimit(state.panelsById, state.panelIds),
+        { softWarningLimit, confirmationLimit, hardLimit }
+      );
+
+      return { terminals: result, panelLimit };
     },
   }));
 

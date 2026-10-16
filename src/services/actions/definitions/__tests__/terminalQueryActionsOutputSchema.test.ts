@@ -37,6 +37,7 @@ vi.mock("@shared/config/panelKindRegistry", () => ({
 import { ActionService } from "../../../ActionService";
 import { registerTerminalQueryActions } from "../terminalQueryActions";
 import { TerminalStatusResultSchema } from "../schemas";
+import { usePanelLimitStore } from "@/store/panelLimitStore";
 import { readClaudeLastMessage } from "../../../../../electron/services/claude/ClaudeSessionReader";
 import { buildToolCallResult } from "../../../../../electron/services/mcp-server/toolCallResult";
 
@@ -66,11 +67,15 @@ type TerminalListItem = {
   location: string;
 };
 
-async function callList(actions: ActionRegistry, args?: unknown): Promise<TerminalListItem[]> {
+async function runList(actions: ActionRegistry, args?: unknown): Promise<unknown> {
   const factory = actions.get("terminal.list");
   if (!factory) throw new Error("missing terminal.list");
   const def = factory() as AnyActionDefinition;
-  return ((await def.run(args, {} as never)) as { terminals: TerminalListItem[] }).terminals;
+  return def.run(args, {} as never);
+}
+
+async function callList(actions: ActionRegistry, args?: unknown): Promise<TerminalListItem[]> {
+  return ((await runList(actions, args)) as { terminals: TerminalListItem[] }).terminals;
 }
 
 beforeEach(() => {
@@ -558,6 +563,53 @@ describe("terminal.list isFocused field", () => {
     const items = await callList(registerDefinitions());
     expect(items).toHaveLength(1);
     expect(items[0]?.agentId).toBe("claude");
+  });
+});
+
+describe("terminal.list panel limit (#13382)", () => {
+  it("counts every panel holding a limit slot, whatever the listing is filtered to", async () => {
+    usePanelLimitStore.setState({ softWarningLimit: 2, confirmationLimit: 3, hardLimit: 4 });
+    panelStoreMock.getState.mockReturnValue({
+      focusedId: null,
+      panelIds: ["grid-a", "dock-b", "bg-c", "trash-d", "dialog-e", "ephemeral-f"],
+      panelsById: {
+        "grid-a": { id: "grid-a", kind: "terminal", location: "grid", worktreeId: "wt-1" },
+        "dock-b": { id: "dock-b", kind: "browser", location: "dock", worktreeId: "wt-2" },
+        "bg-c": { id: "bg-c", kind: "terminal", location: "background", worktreeId: "wt-2" },
+        "trash-d": { id: "trash-d", kind: "terminal", location: "trash" },
+        "dialog-e": { id: "dialog-e", kind: "file", location: "dialog" },
+        "ephemeral-f": {
+          id: "ephemeral-f",
+          kind: "terminal",
+          location: "dock",
+          excludeFromPersistence: true,
+        },
+      },
+    });
+    const result = z
+      .object({ terminals: z.array(z.object({ id: z.string() })), panelLimit: z.unknown() })
+      .parse(await runList(registerDefinitions(), { worktreeId: "wt-1" }));
+
+    expect(result.terminals.map((t) => t.id)).toEqual(["grid-a"]);
+    // Trash, dialog and non-persisted panels hold no slot; background ones do.
+    expect(result.panelLimit).toEqual({
+      count: 3,
+      softWarningLimit: 2,
+      confirmationLimit: 3,
+      hardLimit: 4,
+      tier: "confirm",
+    });
+  });
+
+  it("advertises panelLimit as a required object beside the terminals", () => {
+    const schema = z
+      .object({
+        properties: z.object({ panelLimit: z.object({ type: z.unknown() }) }),
+        required: z.array(z.string()),
+      })
+      .parse(outputSchema(registerAll(), "terminal.list"));
+    expect(schema.properties.panelLimit.type).toBe("object");
+    expect(schema.required).toContain("panelLimit");
   });
 });
 

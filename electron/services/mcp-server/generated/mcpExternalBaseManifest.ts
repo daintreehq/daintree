@@ -359,12 +359,20 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
           anyOf: [
             {
               type: "string",
-              const: "missing-cli",
+              enum: [
+                "missing-cli",
+                "panel-limit",
+                "already-launching",
+                "spawn-failed",
+                "unavailable",
+              ],
             },
             {
               type: "null",
             },
           ],
+          description:
+            "Null on a launch, else why not: panel-limit (see panelLimit), already-launching (retry), missing-cli (setup panel opened).",
         },
         worktreeId: {
           type: ["string", "null"],
@@ -380,6 +388,36 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
         },
         cwdOutsideWorktree: {
           type: ["boolean", "null"],
+        },
+        panelLimit: {
+          anyOf: [
+            {
+              type: "object",
+              properties: {
+                count: {
+                  type: "number",
+                },
+                softWarningLimit: {
+                  type: "number",
+                },
+                confirmationLimit: {
+                  type: "number",
+                },
+                hardLimit: {
+                  type: "number",
+                },
+                tier: {
+                  type: "string",
+                  enum: ["ok", "soft", "confirm", "hard"],
+                },
+              },
+              required: ["count", "softWarningLimit", "confirmationLimit", "hardLimit", "tier"],
+              additionalProperties: false,
+            },
+            {
+              type: "null",
+            },
+          ],
         },
         reply: {
           anyOf: [
@@ -440,6 +478,7 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
         "branch",
         "cwd",
         "cwdOutsideWorktree",
+        "panelLimit",
         "reply",
       ],
       additionalProperties: false,
@@ -1876,8 +1915,31 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
             additionalProperties: false,
           },
         },
+        panelLimit: {
+          type: "object",
+          properties: {
+            count: {
+              type: "number",
+            },
+            softWarningLimit: {
+              type: "number",
+            },
+            confirmationLimit: {
+              type: "number",
+            },
+            hardLimit: {
+              type: "number",
+            },
+            tier: {
+              type: "string",
+              enum: ["ok", "soft", "confirm", "hard"],
+            },
+          },
+          required: ["count", "softWarningLimit", "confirmationLimit", "hardLimit", "tier"],
+          additionalProperties: false,
+        },
       },
-      required: ["terminals"],
+      required: ["terminals", "panelLimit"],
       additionalProperties: false,
     },
     requiresArgs: false,

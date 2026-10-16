@@ -26,6 +26,7 @@ import {
   type QueuedCommand,
   isAgentReady,
 } from "./slices";
+import type { AddPanelCommitOptions } from "./slices/panelRegistry/types";
 import type { TerminalRefreshTier, AddPanelFocusPolicy } from "@shared/types";
 import {
   isGridPanelLocation,
@@ -352,7 +353,7 @@ export const usePanelStore = create<PanelGridState>()(
         set({ watchdogStatus: "disabled", watchdogDisabledInfo: info }),
       clearWatchdogDisabled: () => set({ watchdogStatus: "active", watchdogDisabledInfo: null }),
 
-      addPanel: async (options: AddPanelOptions) => {
+      addPanel: async (options: AddPanelOptions, commit?: AddPanelCommitOptions) => {
         // Capture the pre-create focus so we can restore previousFocusedId for the
         // dock-activation path (#6590). The registry slice atomically advances
         // focusedId to the new id when activateDockOnCreate is set, so by the
@@ -388,11 +389,22 @@ export const usePanelStore = create<PanelGridState>()(
           resolvedFocusPolicy !== "preserve" &&
           !(resolvedFocusPolicy === "auto" && assistantHasFocus) &&
           nothingFullscreen();
+        // Only the refusal hook is forwarded: focus-on-commit is decided here,
+        // from the gates captured above, never by the caller.
+        const onLimitRefused = commit?.onLimitRefused;
         const id = await registrySlice.addPanel(
           panelOptions,
-          focusesOnCommit
+          focusesOnCommit || onLimitRefused
             ? {
-                focus: { previousFocusedId: focusedBeforeCreate, stillApplies: nothingFullscreen },
+                ...(focusesOnCommit
+                  ? {
+                      focus: {
+                        previousFocusedId: focusedBeforeCreate,
+                        stillApplies: nothingFullscreen,
+                      },
+                    }
+                  : {}),
+                ...(onLimitRefused ? { onLimitRefused } : {}),
               }
             : undefined
         );

@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef } from "react";
 import { usePanelStore, type AddPanelOptions } from "@/store/panelStore";
+import type { PanelLimitSnapshot } from "@/store/panelLimitStore";
 import type { PtyPanelData } from "@shared/types/panel";
 import { useProjectStore } from "@/store/projectStore";
 import { useScratchStore } from "@/store/scratchStore";
@@ -235,6 +236,22 @@ export interface LaunchAgentOptions {
    * rewrite it. Empty/whitespace falls back to the default computed title.
    */
   name?: string;
+  /**
+   * Told why a launch that resolves to `null` was declined, so a caller that
+   * reports the outcome (`agent.launch`) can say more than "not launched".
+   * Never called for a launch that returns a result or throws.
+   */
+  onDecline?: (decline: LaunchDecline) => void;
+}
+
+/** Why `launchAgent` resolved to `null` without throwing. */
+export type LaunchDeclineReason =
+  "panel-limit" | "already-launching" | "spawn-failed" | "unavailable";
+
+export interface LaunchDecline {
+  reason: LaunchDeclineReason;
+  /** The count and limits the refusal was judged on; set only for `panel-limit`. */
+  panelLimit: PanelLimitSnapshot | null;
 }
 
 /**
@@ -396,16 +413,37 @@ export function useAgentLauncher(): UseAgentLauncherReturn {
       agentId: string,
       launchOptions?: LaunchAgentOptions
     ): Promise<LaunchAgentResult | null> => {
+      const decline = (
+        reason: LaunchDeclineReason,
+        panelLimit: PanelLimitSnapshot | null = null
+      ): null => {
+        launchOptions?.onDecline?.({ reason, panelLimit });
+        return null;
+      };
+
       if (!isElectronAvailable()) {
         console.warn("Electron API not available");
-        return null;
+        return decline("unavailable");
       }
 
       // Reentrancy guard scoped per agentId so concurrent launches of different
       // agents (or browser/dev-preview panels) are not blocked.
       // useRef avoids the react batching window that useState would have.
-      if (launchingAgentsRef.current.has(agentId)) return null;
+      if (launchingAgentsRef.current.has(agentId)) {
+        logWarn(`Declined a launch of ${agentId}: another launch of it is still in progress`);
+        return decline("already-launching");
+      }
       launchingAgentsRef.current.add(agentId);
+
+      // Per call, so a concurrent launch's refusal can never be read as this one's.
+      let limitRefusal: PanelLimitSnapshot | null = null;
+      const addPanelCommit = {
+        onLimitRefused: (snapshot: PanelLimitSnapshot) => {
+          limitRefusal = snapshot;
+        },
+      };
+      const declineAddPanel = (): null =>
+        limitRefusal ? decline("panel-limit", limitRefusal) : decline("spawn-failed");
 
       try {
         // Inside the try: a throw between the add above and the `finally` would
@@ -439,21 +477,24 @@ export function useAgentLauncher(): UseAgentLauncherReturn {
         // Handle browser pane specially
         if (agentId === "browser") {
           try {
-            const terminalId = await addPanel({
-              kind: "browser",
-              cwd,
-              worktreeId: effectiveWorktreeId || undefined,
-              location: launchOptions?.location,
-              activateDockOnCreate: launchOptions?.activateDockOnCreate,
-              spawnedBy: launchOptions?.spawnedBy,
-            });
-            if (!terminalId) return null;
+            const terminalId = await addPanel(
+              {
+                kind: "browser",
+                cwd,
+                worktreeId: effectiveWorktreeId || undefined,
+                location: launchOptions?.location,
+                activateDockOnCreate: launchOptions?.activateDockOnCreate,
+                spawnedBy: launchOptions?.spawnedBy,
+              },
+              addPanelCommit
+            );
+            if (!terminalId) return declineAddPanel();
             const rawLocation = usePanelStore.getState().panelsById[terminalId]?.location ?? "grid";
             const location = rawLocation === "dock" ? "dock" : "grid";
             return { terminalId, location, ...launchIdentity };
           } catch (error) {
             logError("Failed to launch browser pane", error);
-            return null;
+            return decline("spawn-failed");
           }
         }
 
@@ -466,23 +507,26 @@ export function useAgentLauncher(): UseAgentLauncherReturn {
             // (#11668). Resolved from the view's own project, never the
             // globally-current one.
             const devCommand = await readViewDevServerCommand();
-            const terminalId = await addPanel({
-              kind: "dev-preview",
-              title: "Dev server",
-              devCommand,
-              cwd,
-              worktreeId: effectiveWorktreeId || undefined,
-              location: launchOptions?.location,
-              activateDockOnCreate: launchOptions?.activateDockOnCreate,
-              spawnedBy: launchOptions?.spawnedBy,
-            });
-            if (!terminalId) return null;
+            const terminalId = await addPanel(
+              {
+                kind: "dev-preview",
+                title: "Dev server",
+                devCommand,
+                cwd,
+                worktreeId: effectiveWorktreeId || undefined,
+                location: launchOptions?.location,
+                activateDockOnCreate: launchOptions?.activateDockOnCreate,
+                spawnedBy: launchOptions?.spawnedBy,
+              },
+              addPanelCommit
+            );
+            if (!terminalId) return declineAddPanel();
             const rawLocation = usePanelStore.getState().panelsById[terminalId]?.location ?? "grid";
             const location = rawLocation === "dock" ? "dock" : "grid";
             return { terminalId, location, ...launchIdentity };
           } catch (error) {
             logError("Failed to launch dev-preview pane", error);
-            return null;
+            return decline("spawn-failed");
           }
         }
 
@@ -664,7 +708,7 @@ export function useAgentLauncher(): UseAgentLauncherReturn {
 
         if (isAgent && !command) {
           logWarn(`Cannot launch ${agentId} agent: command could not be generated`);
-          return null;
+          return decline("spawn-failed");
         }
 
         // Preset title: an explicit `displayTitle` wins verbatim; otherwise
@@ -852,14 +896,14 @@ export function useAgentLauncher(): UseAgentLauncherReturn {
 
         try {
           markRendererPerformance("agentlaunch.addpanel", { agentId });
-          const terminalId = await addPanel(options);
-          if (!terminalId) return null;
+          const terminalId = await addPanel(options, addPanelCommit);
+          if (!terminalId) return declineAddPanel();
           const rawLocation = usePanelStore.getState().panelsById[terminalId]?.location ?? "grid";
           const location = rawLocation === "dock" ? "dock" : "grid";
           return { terminalId, location, ...launchIdentity };
         } catch (error) {
           logError(`Failed to launch ${agentId} agent`, error);
-          return null;
+          return decline("spawn-failed");
         }
       } finally {
         launchingAgentsRef.current.delete(agentId);
