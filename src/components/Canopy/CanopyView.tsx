@@ -841,9 +841,12 @@ function CanopyInbox({
       mountedRef.current = false;
     };
   }, []);
+  // The host the list shows: two hosts can each have a run under the same id.
+  const listHostRef = useRef(hostId);
   useEffect(() => {
     visibleRef.current = visible;
     selectedRef.current = focusedItem?.runId ?? null;
+    listHostRef.current = hostId;
   });
   const bodyRef = useRef<HTMLDivElement>(null);
   // Anything the user does in the panel holds the list still for a while, and
@@ -1233,7 +1236,13 @@ function CanopyInbox({
         if (via === "terminal") return;
         // The user moved to another run while the reply was on its way, or
         // closed the panel: their choice stands.
-        if (!mountedRef.current || selectedRef.current !== item.runId) return;
+        if (
+          !mountedRef.current ||
+          listHostRef.current !== hostId ||
+          selectedRef.current !== item.runId
+        ) {
+          return;
+        }
         // Replied from the composer: on to the next run that needs you, into
         // its composer, as Send moves on in a mail queue. The answered one
         // leaves the queue when main's handled reading lands.
@@ -1305,7 +1314,13 @@ function CanopyInbox({
         safeFireAndForget(
           terminalApi.answer(item.runId, target(item), label).then(
             () => {
-              if (!mountedRef.current || selectedRef.current !== item.runId) return;
+              if (
+                !mountedRef.current ||
+                listHostRef.current !== hostId ||
+                selectedRef.current !== item.runId
+              ) {
+                return;
+              }
               if (next && next.runId !== item.runId) focusCardNow(next.runId);
             },
             (error: unknown) =>
@@ -1379,6 +1394,7 @@ function CanopyInbox({
     api,
     terminalApi,
     otherHost,
+    hostId,
   ]);
 
   /** U: read or unread, by hand. Z takes it back. */

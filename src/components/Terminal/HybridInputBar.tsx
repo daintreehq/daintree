@@ -371,7 +371,11 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
     const pickerOwnerId = useId();
     const currentProject = useProjectStore((s) => s.currentProject);
     const voiceStatus = useVoiceRecordingStore((s) => s.status);
-    const activeVoicePanelId = useVoiceRecordingStore((s) => s.activeTarget?.panelId ?? null);
+    // Dictation lands in a draft of this machine's project, by terminal id:
+    // never one for a terminal on another host.
+    const activeVoicePanelId = useVoiceRecordingStore((s) =>
+      thisMachineOff ? null : (s.activeTarget?.panelId ?? null)
+    );
     const voiceMicSignal = useVoiceRecordingStore((s) => s.micSignal);
     const externalDraftRevision = useTerminalInputStore((s) => s.externalDraftRevision);
     const panelWorktreeId = usePanelStore((s) => s.panelsById[terminalId]?.worktreeId);
@@ -1627,7 +1631,9 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
         </AppDialog>
         {/* One palette per id: while Canopy is open its own composer's is the
             one, not the grid pane's behind it. */}
-        {((isFocusedTerminal && !canopyOpen) || isolated) && (
+        {/* History spans this machine's projects, whose prompts name its files:
+            none is offered for a terminal on another host. */}
+        {((isFocusedTerminal && !canopyOpen) || (isolated && !thisMachineOff)) && (
           <PromptHistoryPalette
             terminalId={terminalId}
             projectId={projectId}

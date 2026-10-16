@@ -145,6 +145,10 @@ function mount(onGoTo?: () => void) {
   return { ...view, states, frame: view.container.querySelector("[data-canopy-terminal]")! };
 }
 
+/** Fractional, as layout reports it: 838.6 × 504.6 holds no more than 838 × 504. */
+const paneRect = () =>
+  ({ width: 838.6, height: 504.6, top: 0, left: 0, right: 838.6, bottom: 504.6 }) as DOMRect;
+
 /** Past the pane's size settle, so a hold it would ask for has been asked for. */
 const PAST_SIZE_SETTLE_MS = 200;
 
@@ -303,9 +307,7 @@ describe("CanopyTerminal", () => {
       terminalResize.mockImplementation(resize);
       cell.current = { width: 8, height: 16 };
       const view = mount();
-      // Fractional, as layout reports it: 838.6 × 504.6 holds no more than 838 × 504.
-      view.frame.getBoundingClientRect = () =>
-        ({ width: 838.6, height: 504.6, top: 0, left: 0, right: 838.6, bottom: 504.6 }) as DOMRect;
+      view.frame.getBoundingClientRect = paneRect;
       await open({ watchId: 7, snapshot: { data: "", cols: 200, rows: 60 } });
       await settle();
       return view;
@@ -455,7 +457,9 @@ describe("CanopyTerminal", () => {
     it("follows the size the host's own window gave the terminal, freezing and sizing nothing", async () => {
       cell.current = { width: 8, height: 16 };
       const remote = remoteApi();
-      mountRemote(remote);
+      const view = mountRemote(remote);
+      // A pane that fits a grid other than the PTY's: the window's own host would ask for it.
+      view.frame.getBoundingClientRect = paneRect;
       await act(async () =>
         remote.opens[0]!({ watchId: 3, snapshot: { data: "S", cols: 90, rows: 30 } })
       );
@@ -463,6 +467,7 @@ describe("CanopyTerminal", () => {
         await new Promise((resolve) => setTimeout(resolve, PAST_SIZE_SETTLE_MS));
       });
       expect(remote.api.terminalResize).not.toHaveBeenCalled();
+      expect(xterm.current!.resizes).toEqual([[90, 30]]);
       expect(pane.events).toEqual([]);
       remote.push({ kind: "data", watchId: 3, runId: "run-1", data: "x" });
       expect(xterm.current!.writes).toEqual(["S", "x"]);
@@ -488,24 +493,56 @@ describe("CanopyTerminal", () => {
       xterm.current!.emitData("y");
       expect(remote.api.terminalInput).not.toHaveBeenCalled();
 
-      // The link's return: the old stream died with it, so a new one is opened.
+      // The link's return: the old stream died with it, so a new one is opened,
+      // on a new xterm — the old one's parser may be mid-sequence.
+      const oldScreen = xterm.current!;
+      _resetCanopyWatchBurstForTests();
       await act(async () => remote.resync());
       expect(remote.opens).toHaveLength(2);
+      expect(xterm.current).not.toBe(oldScreen);
       // Output still in flight for the old stream lands on nothing.
       remote.push({ kind: "data", watchId: 3, runId: "run-1", data: "late" });
       await act(async () =>
         remote.opens[1]!({ watchId: 4, snapshot: { data: "NEW", cols: 80, rows: 24 } })
       );
+      expect(xterm.current!.writes).toEqual(["NEW"]);
+      // Shown, but not typed into until the link reads as up.
+      expect(view.states.at(-1)?.watchId ?? null).toBeNull();
+      fireEvent.keyDown(view.frame, { key: "y" });
+      xterm.current!.emitData("y");
+      expect(remote.api.terminalInput).not.toHaveBeenCalled();
+
       view.setReconnecting(false);
-      expect(xterm.current!.writes).toEqual(["OLD", "<reset>", "NEW"]);
       expect(view.states.at(-1)?.watchId).toBe(4);
       expect(view.container.querySelector("[data-canopy-reconnecting]")).toBeNull();
+      // One stream: the link reading as up doesn't open another.
+      expect(remote.opens).toHaveLength(2);
       expect(remote.api.terminalInput).not.toHaveBeenCalled();
+    });
+
+    it("opens nothing the link dropped before its burst wait was over", async () => {
+      vi.useFakeTimers();
+      try {
+        const first = remoteApi();
+        const view = mountRemote(first);
+        // Another row picked at once waits out the burst before asking for a stream.
+        view.unmount();
+        const second = remoteApi();
+        const next = mountRemote(second);
+        next.setReconnecting(true);
+        await act(async () => {
+          await vi.advanceTimersByTimeAsync(1_000);
+        });
+        expect(second.opens).toHaveLength(0);
+      } finally {
+        vi.useRealTimers();
+      }
     });
 
     it("ignores the answer to a stream it asked for before the link dropped", async () => {
       const remote = remoteApi();
       const view = mountRemote(remote);
+      _resetCanopyWatchBurstForTests();
       await act(async () => remote.resync());
       await act(async () =>
         remote.opens[1]!({ watchId: 5, snapshot: { data: "NEW", cols: 80, rows: 24 } })
@@ -514,7 +551,7 @@ describe("CanopyTerminal", () => {
         remote.opens[0]!({ watchId: 4, snapshot: { data: "OLD", cols: 80, rows: 24 } })
       );
       expect(view.states.at(-1)?.watchId).toBe(5);
-      expect(xterm.current!.writes).toEqual(["<reset>", "NEW"]);
+      expect(xterm.current!.writes).toEqual(["NEW"]);
     });
 
     it("offers to try again when it couldn't show the terminal, there being no pane here to go to", async () => {
@@ -524,6 +561,7 @@ describe("CanopyTerminal", () => {
       const retry = [...container.querySelectorAll("button")].find(
         (button) => button.textContent === "Retry"
       );
+      _resetCanopyWatchBurstForTests();
       await act(async () => retry?.click());
       expect(remote.opens).toHaveLength(2);
     });

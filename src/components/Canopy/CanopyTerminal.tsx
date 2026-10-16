@@ -123,10 +123,18 @@ export function CanopyTerminal({
   const [status, setStatus] = useState<"opening" | "live" | "failed" | "ended" | "reconnecting">(
     "opening"
   );
-  // The open stream's handles, for the link going down and the user's Retry.
+  // The open stream's handles, for the link going down and coming back, and the user's Retry.
   const suspendRef = useRef<(() => void) | null>(null);
-  const reopenRef = useRef<((next?: "reconnecting" | "opening") => void) | null>(null);
   const resumeRef = useRef<(() => void) | null>(null);
+  const reopenRef = useRef<((next: "reconnecting" | "opening") => void) | null>(null);
+  /**
+   * Each reopening starts the stream over on a new xterm: a reset one keeps
+   * its parser mid-sequence and its queued writes, which would land the fresh
+   * snapshot in the old screen's state.
+   */
+  const [generation, setGeneration] = useState(0);
+  const reopenStatusRef = useRef<"opening" | "reconnecting">("opening");
+  const reconnectingRef = useRef(reconnecting);
   // A full-screen TUI runs on the alternate buffer: like a grid pane, the view
   // then drops its inset and hides the scrollbar that buffer has no use for.
   const [altBuffer, setAltBuffer] = useState(false);
@@ -139,7 +147,8 @@ export function CanopyTerminal({
     const frame = frameRef.current;
     const host = hostRef.current;
     if (!frame || !host) return;
-    setStatus("opening");
+    setStatus(reopenStatusRef.current);
+    reopenStatusRef.current = "opening";
     let disposed = false;
     const stream: CanopyStreamState = { watchId: null, ended: false, secretPrompt: false };
     const publish = (next: Partial<CanopyStreamState>) => {
@@ -336,7 +345,9 @@ export function CanopyTerminal({
       // A reply to the program's own query, or a focus change, can fall
       // inside a gesture: the terminal's own pane answers those, and focus
       // here must never tell the agent it is being looked at.
-      if (!gesture || watchId === null || isTerminalReply(data)) return;
+      if (!gesture || watchId === null || isTerminalReply(data) || reconnectingRef.current) {
+        return;
+      }
       api.terminalInput(watchId, data).then(
         () => {
           if (isTerminalSubmission(data)) onSubmittedRef.current?.();
@@ -347,6 +358,7 @@ export function CanopyTerminal({
 
     // Each opening of the stream; an answer to an earlier one is old news.
     let attempt = 0;
+    let openTimer: ReturnType<typeof setTimeout> | null = null;
     const openStream = () => {
       lastWatchAt = performance.now();
       const mine = ++attempt;
@@ -359,42 +371,51 @@ export function CanopyTerminal({
         }
       );
     };
+    // The link dropped and the stream with it, and nothing has opened it since.
+    let suspended = false;
+    // A stream that opened while the link still read as down: shown, not typed into.
+    let heldWatchId: number | null = null;
     /**
      * The stream is gone — the link to the run's host dropped — so nothing
      * typed can reach it. Input stops at once, and nothing typed meanwhile is
      * kept to be sent later: the screen it was typed at is not the one the
      * agent will be showing.
      */
-    // Dropped with the link and not yet asked for again.
-    let suspended = false;
-    const suspend = (next: "reconnecting" | "opening" = "reconnecting") => {
+    const suspend = () => {
       if (disposed || stream.ended) return;
       suspended = true;
+      heldWatchId = null;
       attempt++;
+      if (openTimer !== null) {
+        clearTimeout(openTimer);
+        openTimer = null;
+      }
       view = null;
-      fence = undefined;
-      early.length = 0;
       if (stream.watchId !== null) publish({ watchId: null });
-      setStatus(next);
+      setStatus("reconnecting");
     };
-    /**
-     * Start again from a fresh snapshot of the screen, not from what was
-     * shown: after the link's return, or when the user tries again.
-     */
-    const reopen = (next: "reconnecting" | "opening" = "reconnecting") => {
+    /** Start again from a fresh snapshot of the screen, not from what was shown. */
+    const reopen = (next: "reconnecting" | "opening") => {
       if (disposed || stream.ended) return;
-      suspend(next);
-      suspended = false;
-      terminal.reset();
-      openStream();
+      disposed = true;
+      reopenStatusRef.current = next;
+      setGeneration((n) => n + 1);
     };
     suspendRef.current = suspend;
     reopenRef.current = reopen;
-    // The link is back: open again, unless its `resync` already did.
+    // The link reads as up again: open again unless its `resync` already did,
+    // and let the user type into a stream that opened meanwhile.
     resumeRef.current = () => {
-      if (suspended) reopen();
+      if (suspended) {
+        reopen("reconnecting");
+      } else if (heldWatchId !== null) {
+        const watchId = heldWatchId;
+        heldWatchId = null;
+        publish({ watchId });
+        setStatus("live");
+      }
     };
-    const offResync = api.onResync(() => reopen());
+    const offResync = api.onResync(() => reopen("reconnecting"));
     const onOpened = (opened: CanopyTerminalView) => {
       if (disposed) return;
       if (opened.watchId === null || opened.snapshot === null) {
@@ -428,6 +449,10 @@ export function CanopyTerminal({
         for (const chunk of queued) if (chunk.kind !== "data") apply(chunk);
       }
       if (stream.ended) return;
+      if (reconnectingRef.current) {
+        heldWatchId = opened.watchId;
+        return;
+      }
       publish({ watchId: opened.watchId });
       setStatus("live");
       requestPanelSize();
@@ -437,7 +462,6 @@ export function CanopyTerminal({
       logWarn("[Canopy] couldn't open the terminal stream", { error });
       setStatus("failed");
     };
-    let openTimer: ReturnType<typeof setTimeout> | null = null;
     if (performance.now() - lastWatchAt < WATCH_BURST_MS) {
       openTimer = setTimeout(() => {
         openTimer = null;
@@ -476,7 +500,7 @@ export function CanopyTerminal({
         { context: "Ending the canopy terminal stream" }
       );
     };
-  }, [runId, spawnedAt, api]);
+  }, [runId, spawnedAt, api, generation]);
 
   // The link's return also says `resync`, which opens the stream again; this
   // covers a link that came back without a fresh session to say it.
@@ -484,6 +508,7 @@ export function CanopyTerminal({
   useEffect(() => {
     const was = wasReconnectingRef.current;
     wasReconnectingRef.current = reconnecting;
+    reconnectingRef.current = reconnecting;
     if (reconnecting) suspendRef.current?.();
     else if (was) resumeRef.current?.();
   }, [reconnecting]);
