@@ -3328,8 +3328,8 @@ export class HelpSessionService {
         headers: { Authorization: `Bearer ${COPILOT_BEARER_PLACEHOLDER}` },
       };
     }
-    // Shared by every lane of the project, so a Copilot launch reads the host
-    // state of the latest provision, never an older one.
+    // Shared by every Copilot lane of the project, so a launch reads the host
+    // state of whichever provision wrote this file last.
     const target = path.join(sessionPath, ".mcp.json");
     await resilientAtomicWriteFile(
       target,
