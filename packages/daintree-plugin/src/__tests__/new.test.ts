@@ -548,6 +548,24 @@ describe("scaffoldPlugin --project", () => {
     expect(manifest.name).toBe(path.basename(result.dir));
   });
 
+  it("points the README at the panel preview exactly when the scaffold ships one", async () => {
+    for (const template of TEMPLATE_KINDS) {
+      const result = await scaffoldProject(template, `readme-${template}`);
+      const readme = await fs.readFile(path.join(result.dir, "README.md"), "utf8");
+      const pkg = await readJson(path.join(result.dir, "package.json"));
+      const hasPreview = result.files.includes("review/panel.stories.tsx");
+      expect(hasPreview, template).toBe(template === "view" || template === "full");
+      // The README must not promise a script the plugin lacks, nor stay silent
+      // about the one it has.
+      expect("test:preview" in (pkg.scripts as Record<string, string>), template).toBe(hasPreview);
+      expect(readme.includes("npm run test:preview"), template).toBe(hasPreview);
+      if (hasPreview) {
+        expect(readme).toContain("`review/panel.stories.tsx`");
+        expect(readme).toContain("`--remote-debugging-port`");
+      }
+    }
+  });
+
   it("leaves out the tour-authoring skill, since project plugins can't contribute tours", async () => {
     const result = await scaffoldProject();
     expect(result.files.some((file) => file.startsWith(".claude/"))).toBe(false);
