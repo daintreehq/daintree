@@ -140,6 +140,47 @@ export interface GeneratedIpcInvokeMap {
     args: [paused: boolean];
     result: boolean;
   };
+  "canopy-host:invoke": {
+    args: [
+      hostId: string,
+      channel:
+        | "canopy:archive"
+        | "canopy:get-snapshot"
+        | "canopy:mark-all-read"
+        | "canopy:mark-seen"
+        | "canopy:refresh"
+        | "canopy:rename"
+        | "canopy:reread"
+        | "canopy:restore-reads"
+        | "canopy:run-branch"
+        | "canopy:set-active"
+        | "canopy:set-mode"
+        | "canopy:set-read"
+        | "canopy:set-scope"
+        | "canopy:set-shown"
+        | "canopy:trash"
+        | "canopy:unarchive"
+        | "canopy:untrash"
+        | "canopy:unwatch-terminal"
+        | "canopy:watch-terminal"
+        | "fleet:get-snapshot",
+      args: unknown[],
+    ];
+    result:
+      | string
+      | number
+      | void
+      | import("./canopy.js").CanopyReadMark
+      | import("./canopy.js").CanopySnapshot
+      | import("./canopy.js").CanopyReadMark[]
+      | import("./canopy.js").CanopyTerminalView
+      | import("./fleet.js").FleetSnapshot
+      | null;
+  };
+  "canopy-host:release": {
+    args: [hostId: string];
+    result: void;
+  };
   "canopy:answer": {
     args: [runId: string, target: import("./canopy.js").CanopyTarget, label: string];
     result: void;

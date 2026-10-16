@@ -90,6 +90,7 @@ import { registerFileTransferHandlers } from "./handlers/fileTransfer.js";
 import { registerHostSwitchHandlers } from "./handlers/hostSwitch.js";
 import { registerProjectMatchHandlers } from "./handlers/projectMatch.js";
 import { registerHostMetricsHandlers } from "./handlers/hostMetrics.js";
+import { registerCanopyHostHandlers } from "./handlers/canopyHost.js";
 import { registerPortForwardsHandlers } from "./handlers/portForwards.js";
 import { registerPluginParityHandlers } from "./handlers/pluginParity.js";
 import { registerSettingsCopyHandlers } from "./handlers/settingsCopy.js";
@@ -282,6 +283,7 @@ export function registerIpcHandlers(deps: HandlerDependencies): () => void {
       register(() => registerHostSwitchHandlers());
       register(() => registerProjectMatchHandlers());
       register(() => registerHostMetricsHandlers());
+      register(() => registerCanopyHostHandlers());
       register(() => registerPortForwardsHandlers());
       register(() => registerPluginParityHandlers());
       register(() => registerSettingsCopyHandlers());

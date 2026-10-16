@@ -38,6 +38,7 @@ import { hostLaunchCommand, hostLocation } from "./hostLocation.js";
 import type { HostSocketLocation } from "./hostSocketPath.js";
 import { initRemoteHostsHost } from "./initHost.js";
 import { installHostMetricsHost } from "../metrics/hostMetricsHost.js";
+import { installCanopyHost } from "../canopy/hostInstall.js";
 import { installAssistantExchangeHost } from "../assistant/hostExchanges.js";
 import { observeAgents } from "../metrics/hostSources.js";
 import type { RemoteViewEndpoint } from "./RemoteViewEndpoint.js";
@@ -169,6 +170,8 @@ async function buildHostListener(
 
   // Summaries to every attached Shell, and the overview's and fleet's session methods.
   teardowns.push(await installHostMetricsHost(server));
+  // Canopy for Shells reading this host from a view bound elsewhere.
+  teardowns.push(installCanopyHost(server));
   // Assistant exchanges a Shell sends to this host's enrolled lanes, view or not.
   teardowns.push(await installAssistantExchangeHost(server));
 

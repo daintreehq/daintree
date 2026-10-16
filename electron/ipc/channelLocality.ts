@@ -109,6 +109,11 @@ export const CHANNEL_LOCALITY = {
   "assistant-messaging:get-state": "host",
   "assistant-messaging:set-lane-enrolled": "host",
   "assistant-messaging:set-paused": "host",
+  // Canopy on a host the view names, which this Shell reaches itself: This
+  // Mac's handlers, or another host's through its session.
+  "canopy-host:event": "shell",
+  "canopy-host:invoke": "shell",
+  "canopy-host:release": "shell",
   // Canopy reads the agents of the machine it runs on, which for a remote
   // window is the host. Only its backdrop, a picture of this window, is the Shell's.
   "canopy:answer": "host",
@@ -1182,6 +1187,7 @@ export const NAMESPACE_LOCALITY: ReadonlyArray<{ prefix: string; locality: Chann
   { prefix: "file-transfer:", locality: "shell" },
   { prefix: "host-switch:", locality: "shell" },
   { prefix: "host-metrics:", locality: "shell" },
+  { prefix: "canopy-host:", locality: "shell" },
   { prefix: "port-forwards:", locality: "shell" },
   { prefix: "plugin-parity:", locality: "shell" },
   { prefix: "settings-copy:", locality: "shell" },

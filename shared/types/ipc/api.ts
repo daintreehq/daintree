@@ -249,6 +249,9 @@ export interface ElectronAPI extends GeneratedElectronAPI {
   hostMetrics: GeneratedElectronAPI["hostMetrics"] & {
     onEvent(callback: (event: import("./hostMetrics.js").HostMetricsEvent) => void): () => void;
   };
+  canopyHost: GeneratedElectronAPI["canopyHost"] & {
+    onEvent(callback: (event: import("./canopyHost.js").CanopyHostEvent) => void): () => void;
+  };
   portForwards: GeneratedElectronAPI["portForwards"] & {
     onEvent(callback: (event: import("./portForwards.js").PortForwardsEvent) => void): () => void;
   };
