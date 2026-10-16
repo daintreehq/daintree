@@ -1612,9 +1612,9 @@ describe("PluginDevWorkerHostProxy coalesced subscriptions and readFiles", () =>
   it("relays readFiles in one host call, forwarding only the options that were set", async () => {
     const { proxy, sent } = makeProxy();
     const promise = proxy.host.fs.readFiles!(["/repo/a", "/repo/b"]);
-    void proxy.host.fs
-      .readFiles!(["/repo/c"], { encoding: "bytes", maxBytesPerFile: 10 })
-      .catch(() => undefined);
+    void proxy.host.fs.readFiles!(["/repo/c"], { encoding: "bytes", maxBytesPerFile: 10 }).catch(
+      () => undefined
+    );
     const calls = sent.filter((m) => m.type === "host-call" && m.method === "fs.readFiles");
     expect(calls).toHaveLength(2);
     expect(calls[0].params).toEqual({ paths: ["/repo/a", "/repo/b"] });
@@ -1942,9 +1942,13 @@ describe("PluginDevWorkerHostProxy host-call deadline (#13410)", () => {
   it("bounds a cancelled call main still owes an answer for", async () => {
     const { proxy, sent } = makeProxy();
     const controller = new AbortController();
-    const promise = proxy.host.sendToAgent("hi", { terminalId: "t1" }, {
-      signal: controller.signal,
-    });
+    const promise = proxy.host.sendToAgent(
+      "hi",
+      { terminalId: "t1" },
+      {
+        signal: controller.signal,
+      }
+    );
     const rejected = expect(promise).rejects.toMatchObject({ code: "TIMEOUT" });
     controller.abort();
     expect(sent.filter((m) => m.type === "host-cancel")).toHaveLength(1);

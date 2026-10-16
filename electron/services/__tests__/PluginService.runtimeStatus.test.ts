@@ -629,7 +629,11 @@ describe("host.restartWorker — a plugin restarting its own worker (#13410)", (
 
   it("answers unavailable for a builtin, which has no worker", () => {
     const service = new PluginService(pluginsRoot, "0.0.0");
-    const builtin = { manifest: { name: "daintree.github" }, isBuiltin: true, resolvedMain: "/b.js" };
+    const builtin = {
+      manifest: { name: "daintree.github" },
+      isBuiltin: true,
+      resolvedMain: "/b.js",
+    };
     internals(service).plugins.set("daintree.github", builtin);
 
     expect(requestSelfRestart(service)("daintree.github", builtin)).toBe("unavailable");
