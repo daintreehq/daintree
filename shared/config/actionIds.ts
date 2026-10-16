@@ -311,6 +311,7 @@ export const BUILT_IN_ACTION_IDS = [
   "plugin.diagnostics",
   "plugin.reloadProject",
   "plugin.reloadPanel",
+  "plugin.capturePanel",
   "plugin.reloadWindow",
   "plugin.openSettings",
   "plugin.backupDatabases",
@@ -614,6 +615,8 @@ export const DENY_PLUGIN_DISPATCH_ACTION_IDS = [
   // Plugins reload their own views through the rationed `requestReload` prop;
   // this would reach any panel, unrationed (#12611).
   "plugin.reloadPanel",
+  // Plugins never read another panel's pixels (#13384).
+  "plugin.capturePanel",
   "terminal.sendCommand",
   "terminal.sendCommandOwned",
   // Plugins read terminal text through `host.terminals.readScreen` (#13155),

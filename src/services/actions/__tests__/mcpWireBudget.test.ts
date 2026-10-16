@@ -738,7 +738,11 @@ describe("MCP wire budget — aggregate ratchets (§9)", () => {
   // 137_767 B: its description, the worktreeId and title arguments (the title's
   // field text carries the 80-character limit the wire schema cannot), and no
   // output schema. Full tier only, so the external ceiling does not move.
-  const MAX_COHORT_PAYLOAD_BYTES = 137_800;
+  // 137_800 → 138_200 for `plugin.capturePanel` (#13384), measured at
+  // 138_143 B: its description, the panelId argument, and no output schema —
+  // the image travels as an MCP image block, not structured content. Full tier
+  // only, so the external ceiling does not move.
+  const MAX_COHORT_PAYLOAD_BYTES = 138_200;
 
   const wireBytes = (t: WireTool) => t.descriptionBytes + t.paramsBytes + t.outputBytes;
 

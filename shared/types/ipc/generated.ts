@@ -1603,6 +1603,10 @@ export interface GeneratedIpcInvokeMap {
     args: [jobId: string];
     result: boolean;
   };
+  "plugin:capture-panel": {
+    args: [rect: import("../pluginPanelCapture.js").PluginPanelCaptureRect];
+    result: import("../pluginPanelCapture.js").PluginPanelCaptureResult;
+  };
   "plugin:check-for-update": {
     args: [pluginId: string];
     result: import("../plugin.js").PluginCheckUpdateResult;

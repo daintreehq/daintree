@@ -436,3 +436,32 @@ describe("hub messaging audit entries carry no message or reply text (#13336)", 
     ).toMatchObject({ outcome: "disconnected", codexStatus: null, windowCount: null });
   });
 });
+
+describe("plugin.capturePanel audit projection (#13384)", () => {
+  it("records the capture's size and message count, never the pixels or the messages", () => {
+    const data = Buffer.from("PIXEL-SENTINEL").toString("base64");
+    const projected = projectAuditResult("plugin.capturePanel", {
+      panelId: "p1",
+      pluginId: "acme.dashboard",
+      image: { mimeType: "image/png", data, width: 300, height: 200 },
+      consoleScope: "plugin",
+      consoleMessages: [{ level: "error", message: "MESSAGE-SENTINEL" }],
+    });
+
+    expect(projected).toEqual({
+      width: 300,
+      height: 200,
+      imageBytes: Buffer.byteLength(data, "base64"),
+      consoleMessageCount: 1,
+    });
+    const audited = JSON.stringify(summarizeMcpResult(projected));
+    expect(audited).not.toContain(data);
+    expect(audited).not.toContain("MESSAGE-SENTINEL");
+  });
+
+  it("reduces a result of another shape to a marker", () => {
+    expect(projectAuditResult("plugin.capturePanel", { pngBase64: "x" })).toEqual({
+      status: "unrecognized",
+    });
+  });
+});

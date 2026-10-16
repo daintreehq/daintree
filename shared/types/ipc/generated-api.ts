@@ -775,6 +775,9 @@ export interface GeneratedElectronAPI {
     cancelInstall(
       ...args: IpcInvokeMap["plugin:cancel-install"]["args"]
     ): Promise<IpcInvokeMap["plugin:cancel-install"]["result"]>;
+    capturePanel(
+      ...args: IpcInvokeMap["plugin:capture-panel"]["args"]
+    ): Promise<IpcInvokeMap["plugin:capture-panel"]["result"]>;
     checkForUpdate(
       ...args: IpcInvokeMap["plugin:check-for-update"]["args"]
     ): Promise<IpcInvokeMap["plugin:check-for-update"]["result"]>;

@@ -1,7 +1,10 @@
 import type { WebContents } from "electron";
 import { logError, logWarn } from "../utils/logger.js";
+import type { PluginConsoleEntry } from "../../shared/types/pluginPanelCapture.js";
 
-// Electron 41 console-message event details shape (string `level` since v35).
+// Electron 42 `console-message` details. They ride on the event object itself;
+// the positional `(level, message, line, sourceId)` arguments that follow are
+// the deprecated numeric form.
 interface ConsoleMessageDetails {
   level: "debug" | "info" | "warning" | "error";
   message: string;
@@ -17,9 +20,16 @@ const RATE_MAX_PER_WINDOW = 5;
 // WebContents live for days and the map is otherwise insert-only.
 const RATE_SWEEP_THRESHOLD = 256;
 
+/** Plugin warnings and errors kept per view for `plugin.capturePanel`. */
+export const PLUGIN_CONSOLE_BUFFER_MAX = 100;
+export const PLUGIN_CONSOLE_MESSAGE_MAX_CHARS = 2_000;
+const PLUGIN_SOURCE_PREFIX = "plugin://";
+
 const attached = new WeakSet<WebContents>();
 const handlers = new WeakMap<WebContents, ConsoleMessageHandler>();
+const navigationHandlers = new WeakMap<WebContents, () => void>();
 const rateState = new WeakMap<WebContents, Map<string, { count: number; resetAt: number }>>();
+const pluginBuffers = new WeakMap<WebContents, PluginConsoleEntry[]>();
 
 function normalizeSourceId(sourceId: string): string {
   const queryIdx = sourceId.indexOf("?");
@@ -56,20 +66,60 @@ function shouldAllow(
   return false;
 }
 
+function isDetails(value: unknown): value is ConsoleMessageDetails {
+  return (
+    value !== null &&
+    typeof value === "object" &&
+    typeof (value as { level?: unknown }).level === "string"
+  );
+}
+
+function bufferPluginMessage(
+  wc: WebContents,
+  level: "warning" | "error",
+  message: string,
+  sourceId: string,
+  lineNumber: number
+): void {
+  if (!sourceId.startsWith(PLUGIN_SOURCE_PREFIX)) return;
+  let buffer = pluginBuffers.get(wc);
+  if (!buffer) {
+    buffer = [];
+    pluginBuffers.set(wc, buffer);
+  }
+  buffer.push({
+    level,
+    message:
+      message.length > PLUGIN_CONSOLE_MESSAGE_MAX_CHARS
+        ? `${message.slice(0, PLUGIN_CONSOLE_MESSAGE_MAX_CHARS)}…`
+        : message,
+    sourceId,
+    lineNumber,
+    timestamp: Date.now(),
+  });
+  if (buffer.length > PLUGIN_CONSOLE_BUFFER_MAX)
+    buffer.splice(0, buffer.length - PLUGIN_CONSOLE_BUFFER_MAX);
+}
+
 export function attachRendererConsoleCapture(wc: WebContents): void {
   if (attached.has(wc)) return;
 
-  const handler: ConsoleMessageHandler = (_event, ...args) => {
+  const handler: ConsoleMessageHandler = (event, ...args) => {
     if (wc.isDestroyed()) return;
 
-    const details = args[0] as ConsoleMessageDetails | undefined;
-    if (!details || typeof details !== "object") return;
+    const details = isDetails(event) ? event : isDetails(args[0]) ? args[0] : undefined;
+    if (!details) return;
 
     const { level, message, lineNumber, sourceId } = details;
     if (level !== "warning" && level !== "error") return;
 
+    const safeMessage = typeof message === "string" ? message : "";
     const safeSourceId = typeof sourceId === "string" ? sourceId : "";
     const safeLineNumber = typeof lineNumber === "number" ? lineNumber : 0;
+
+    // Kept before the log rate limit: an agent reading a view's errors needs
+    // the newest ones, which a flood would otherwise be the first to lose.
+    bufferPluginMessage(wc, level, safeMessage, safeSourceId, safeLineNumber);
 
     if (!shouldAllow(wc, level, safeSourceId, safeLineNumber)) return;
 
@@ -81,16 +131,29 @@ export function attachRendererConsoleCapture(wc: WebContents): void {
     };
 
     if (level === "error") {
-      logError(message ?? "", undefined, context);
+      logError(safeMessage, undefined, context);
     } else {
-      logWarn(message ?? "", context);
+      logWarn(safeMessage, context);
     }
   };
 
+  // A reload is a new document: the previous one's plugin errors are not the
+  // views now on screen.
+  const onNavigate = () => {
+    pluginBuffers.delete(wc);
+  };
+
   wc.on("console-message", handler);
+  wc.on("did-navigate", onNavigate);
 
   attached.add(wc);
   handlers.set(wc, handler);
+  navigationHandlers.set(wc, onNavigate);
+}
+
+/** The view's recent warnings and errors logged from `plugin://` sources, oldest first. */
+export function getRecentPluginConsoleMessages(wc: WebContents): PluginConsoleEntry[] {
+  return [...(pluginBuffers.get(wc) ?? [])];
 }
 
 export function detachRendererConsoleCapture(wc: WebContents): void {
@@ -103,12 +166,24 @@ export function detachRendererConsoleCapture(wc: WebContents): void {
     }
     handlers.delete(wc);
   }
+  const onNavigate = navigationHandlers.get(wc);
+  if (onNavigate) {
+    try {
+      wc.removeListener("did-navigate", onNavigate);
+    } catch {
+      // same as above
+    }
+    navigationHandlers.delete(wc);
+  }
   attached.delete(wc);
   rateState.delete(wc);
+  pluginBuffers.delete(wc);
 }
 
 export function __resetRendererConsoleCaptureForTests(wc: WebContents): void {
   attached.delete(wc);
   handlers.delete(wc);
+  navigationHandlers.delete(wc);
   rateState.delete(wc);
+  pluginBuffers.delete(wc);
 }

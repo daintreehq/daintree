@@ -1130,6 +1130,7 @@ export const CHANNELS = {
   PLUGIN_REPORT_FOCUSED_PANEL: "plugin:report-focused-panel",
   /** Every tracked plugin's `PluginPerfSnapshot`. */
   PLUGIN_PERF_SNAPSHOTS_GET: "plugin:perf-snapshots-get",
+  PLUGIN_CAPTURE_PANEL: "plugin:capture-panel",
   /** Renderer → main, fire-and-forget: start receiving `PLUGIN_PERF_SNAPSHOTS_CHANGED`. */
   PLUGIN_PERF_SNAPSHOTS_SUBSCRIBE: "plugin:perf-snapshots-subscribe",
   PLUGIN_PERF_SNAPSHOTS_UNSUBSCRIBE: "plugin:perf-snapshots-unsubscribe",

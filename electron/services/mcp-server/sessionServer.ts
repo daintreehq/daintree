@@ -137,6 +137,7 @@ import {
   ACTIONS_SEARCH_DEFAULT_LIMIT,
 } from "./tierAuth.js";
 import { buildToolCallResult } from "./toolCallResult.js";
+import { buildImageToolCallResult, isImageResultTool } from "./imageToolResult.js";
 import { safeSerializeToolResultCompact } from "../../utils/safeSerializeToolResult.js";
 import { buildSurfaceManifest, MCP_SURFACE_TOOL_ID } from "./surfaceManifest.js";
 import { viewlessStatusArgsAreAnswerable } from "./terminalStatus.js";
@@ -4016,6 +4017,12 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
             } else if (sessionStore.httpSessions.has(sessionId)) {
               sessionStore.resetHttpIdleTimer(sessionId);
             }
+          }
+          if (isImageResultTool(actionId)) {
+            return withResolvedWorkspace(
+              buildImageToolCallResult(outcome.value.result),
+              dispatchedWorkspace
+            );
           }
           const structuredContent = buildStructuredContent(entry, outcome.value.result);
           return withResolvedWorkspace(

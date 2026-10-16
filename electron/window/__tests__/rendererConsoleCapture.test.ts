@@ -13,35 +13,49 @@ vi.mock("../../utils/logger.js", () => ({
 import {
   attachRendererConsoleCapture,
   detachRendererConsoleCapture,
+  getRecentPluginConsoleMessages,
+  PLUGIN_CONSOLE_BUFFER_MAX,
+  PLUGIN_CONSOLE_MESSAGE_MAX_CHARS,
   __resetRendererConsoleCaptureForTests,
 } from "../rendererConsoleCapture.js";
 
-type ConsoleListener = (event: unknown, details: unknown) => void;
+type ConsoleListener = (event: unknown, ...args: unknown[]) => void;
 
 interface MockWebContents {
   id: number;
   isDestroyed: () => boolean;
   on: ReturnType<typeof vi.fn>;
   removeListener: ReturnType<typeof vi.fn>;
+  /** Electron 42's shape: the details ride on the event, then the deprecated positional args. */
   emit: (details: unknown) => void;
+  /** The pre-35 shape some tests and older builds produce: details as the second argument. */
+  emitLegacy: (details: unknown) => void;
+  navigate: () => void;
 }
 
 let nextId = 1;
 
 function createMockWebContents(overrides: { destroyed?: boolean } = {}): MockWebContents {
   const id = nextId++;
-  let listener: ConsoleListener | null = null;
+  const listeners = new Map<string, ConsoleListener>();
   const wc: MockWebContents = {
     id,
     isDestroyed: () => overrides.destroyed === true,
     on: vi.fn((event: string, l: ConsoleListener) => {
-      if (event === "console-message") listener = l;
+      listeners.set(event, l);
     }),
     removeListener: vi.fn((event: string, l: ConsoleListener) => {
-      if (event === "console-message" && listener === l) listener = null;
+      if (listeners.get(event) === l) listeners.delete(event);
     }),
     emit: (details: unknown) => {
-      if (listener) listener({}, details);
+      const d = details as { message?: unknown; lineNumber?: unknown; sourceId?: unknown };
+      listeners.get("console-message")?.(details, 2, d?.message, d?.lineNumber, d?.sourceId);
+    },
+    emitLegacy: (details: unknown) => {
+      listeners.get("console-message")?.({}, details);
+    },
+    navigate: () => {
+      listeners.get("did-navigate")?.({});
     },
   };
   return wc;
@@ -177,7 +191,7 @@ describe("attachRendererConsoleCapture", () => {
     attachRendererConsoleCapture(wc as unknown as Electron.WebContents);
     attachRendererConsoleCapture(wc as unknown as Electron.WebContents);
 
-    expect(wc.on).toHaveBeenCalledTimes(1);
+    expect(wc.on.mock.calls.filter(([event]) => event === "console-message")).toHaveLength(1);
 
     wc.emit(makeDetails("error"));
     expect(logErrorMock).toHaveBeenCalledTimes(1);
@@ -306,5 +320,107 @@ describe("detachRendererConsoleCapture", () => {
     expect(logWarnMock).toHaveBeenCalledTimes(10);
 
     detachRendererConsoleCapture(wc as unknown as Electron.WebContents);
+  });
+});
+
+describe("plugin console buffer", () => {
+  const asWc = (wc: MockWebContents) => wc as unknown as Electron.WebContents;
+
+  it("reads details from the event object, as Electron 42 delivers them", () => {
+    const wc = createMockWebContents();
+    attachRendererConsoleCapture(asWc(wc));
+
+    wc.emit(makeDetails("error", { message: "boom" }));
+
+    expect(logErrorMock).toHaveBeenCalledWith("boom", undefined, expect.anything());
+    __resetRendererConsoleCaptureForTests(asWc(wc));
+  });
+
+  it("still reads the older second-argument shape", () => {
+    logWarnMock.mockClear();
+    const wc = createMockWebContents();
+    attachRendererConsoleCapture(asWc(wc));
+
+    wc.emitLegacy(makeDetails("warning", { message: "legacy" }));
+
+    expect(logWarnMock).toHaveBeenCalledWith("legacy", expect.anything());
+    __resetRendererConsoleCaptureForTests(asWc(wc));
+  });
+
+  it("keeps only plugin-sourced warnings and errors", () => {
+    const wc = createMockWebContents();
+    attachRendererConsoleCapture(asWc(wc));
+
+    wc.emit(makeDetails("error", { message: "host", sourceId: "app://daintree/index.js" }));
+    wc.emit(makeDetails("info", { sourceId: "plugin://pi-a/__dtv-1/view.js" }));
+    wc.emit(
+      makeDetails("error", {
+        message: "mine",
+        sourceId: "plugin://pi-a/__dtv-1/view.js",
+        lineNumber: 3,
+      })
+    );
+
+    expect(getRecentPluginConsoleMessages(asWc(wc))).toEqual([
+      expect.objectContaining({
+        level: "error",
+        message: "mine",
+        sourceId: "plugin://pi-a/__dtv-1/view.js",
+        lineNumber: 3,
+      }),
+    ]);
+    __resetRendererConsoleCaptureForTests(asWc(wc));
+  });
+
+  it("buffers past the log rate limit, bounded to the newest entries", () => {
+    const wc = createMockWebContents();
+    attachRendererConsoleCapture(asWc(wc));
+
+    for (let i = 0; i < PLUGIN_CONSOLE_BUFFER_MAX + 5; i++) {
+      wc.emit(makeDetails("warning", { message: `m${i}`, sourceId: "plugin://pi-a/v.js" }));
+    }
+
+    const buffered = getRecentPluginConsoleMessages(asWc(wc));
+    expect(buffered).toHaveLength(PLUGIN_CONSOLE_BUFFER_MAX);
+    expect(buffered[0]?.message).toBe("m5");
+    expect(buffered.at(-1)?.message).toBe(`m${PLUGIN_CONSOLE_BUFFER_MAX + 4}`);
+    __resetRendererConsoleCaptureForTests(asWc(wc));
+  });
+
+  it("caps each message's length", () => {
+    const wc = createMockWebContents();
+    attachRendererConsoleCapture(asWc(wc));
+
+    wc.emit(
+      makeDetails("error", {
+        message: "x".repeat(PLUGIN_CONSOLE_MESSAGE_MAX_CHARS + 50),
+        sourceId: "plugin://pi-a/v.js",
+      })
+    );
+
+    const [entry] = getRecentPluginConsoleMessages(asWc(wc));
+    expect(entry?.message.length).toBe(PLUGIN_CONSOLE_MESSAGE_MAX_CHARS + 1);
+    __resetRendererConsoleCaptureForTests(asWc(wc));
+  });
+
+  it("keeps each view's buffer to itself and clears it on navigation and detach", () => {
+    const wc1 = createMockWebContents();
+    const wc2 = createMockWebContents();
+    attachRendererConsoleCapture(asWc(wc1));
+    attachRendererConsoleCapture(asWc(wc2));
+
+    wc1.emit(makeDetails("error", { sourceId: "plugin://pi-a/v.js" }));
+    expect(getRecentPluginConsoleMessages(asWc(wc1))).toHaveLength(1);
+    expect(getRecentPluginConsoleMessages(asWc(wc2))).toEqual([]);
+
+    wc1.navigate();
+    expect(getRecentPluginConsoleMessages(asWc(wc1))).toEqual([]);
+
+    wc2.emit(makeDetails("error", { sourceId: "plugin://pi-a/v.js" }));
+    detachRendererConsoleCapture(asWc(wc2));
+    expect(getRecentPluginConsoleMessages(asWc(wc2))).toEqual([]);
+    expect(wc2.removeListener).toHaveBeenCalledWith("did-navigate", expect.any(Function));
+
+    __resetRendererConsoleCaptureForTests(asWc(wc1));
   });
 });

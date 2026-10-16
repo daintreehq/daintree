@@ -493,7 +493,11 @@ describe("LLM-facing tool descriptions (#11542)", () => {
   // 21_713 B. What the prose has to carry is that the title replaces the
   // computed headline on the card and in pickers while the computed one stays
   // visible, and that it is cosmetic. Full tier only, off the external surface.
-  const MAX_COHORT_TOTAL_BYTES = 21_750;
+  // 21_750 → 21_950 for `plugin.capturePanel` (#13384), measured at 21_908 B.
+  // What the prose has to carry is that the image is of one panel alone and
+  // that a hidden or covered panel is refused with no image; a caller missing
+  // the refusal reads it as a bug. Full tier only, off the external surface.
+  const MAX_COHORT_TOTAL_BYTES = 21_950;
 
   const ARG_SECTION = /\b(?:args?|arguments?|parameters?)\s*(?:\([^)]*\))?\s*:|\btakes no args\b/i;
 

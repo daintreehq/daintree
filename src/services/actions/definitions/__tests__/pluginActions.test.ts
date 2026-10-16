@@ -20,12 +20,24 @@ vi.mock("@/clients/systemClient", () => ({
 }));
 
 const panelState = vi.hoisted(() => ({
-  panelsById: {} as Record<string, { id: string; kind?: string; title: string }>,
+  panelsById: {} as Record<string, { id: string; kind?: string; title: string; location?: string }>,
 }));
 
 vi.mock("@/store/panelStore", () => ({
   usePanelStore: { getState: () => panelState },
 }));
+
+const captureHelpers = vi.hoisted(() => {
+  class PanelCaptureRefusedError extends Error {}
+  return {
+    PanelCaptureRefusedError,
+    locatePanelFrame: vi.fn(),
+    assertPanelCapturable: vi.fn(),
+    sameRect: vi.fn(),
+    consoleMessagesForPlugin: vi.fn(),
+  };
+});
+vi.mock("@/services/plugin/pluginPanelCapture", () => captureHelpers);
 
 import { registerPluginActions } from "../pluginActions";
 import type { ActionCallbacks, ActionRegistry, AnyActionDefinition } from "../../actionTypes";
@@ -41,6 +53,7 @@ import { ConfirmationStagedError } from "../../confirmationStaged";
 import { DENY_PLUGIN_DISPATCH_ACTION_IDS } from "@shared/config/actionIds";
 import { usePluginManagerStore } from "@/store/pluginManagerStore";
 import { useProjectStore } from "@/store/projectStore";
+import { registerPanelKind, unregisterPanelKind } from "@shared/config/panelKindRegistry";
 
 /**
  * These actions ignore the callbacks entirely — they reach main through the
@@ -767,5 +780,110 @@ describe("plugin.backupDatabases", () => {
     expect(def.denyPluginDispatch).toBe(true);
     expect(DENY_PLUGIN_DISPATCH_ACTION_IDS).toContain("plugin.backupDatabases");
     expect(def.mcpVisibility).toBe("hidden");
+  });
+});
+
+describe("plugin.capturePanel (#13384)", () => {
+  const KIND = "acme.dashboard.main";
+  const RECT = { x: 10, y: 20, width: 300, height: 200 };
+  const frame: unknown = { tagName: "DIV" };
+  let capturePanel: ReturnType<typeof vi.fn>;
+
+  beforeEach(() => {
+    registerPanelKind({
+      id: KIND,
+      name: "Dashboard",
+      iconId: "layout-dashboard",
+      color: "#38bdf8",
+      hasPty: false,
+      canRestart: false,
+      canConvert: false,
+      extensionId: "acme.dashboard",
+    });
+    panelState.panelsById = {
+      "plugin-1": { id: "plugin-1", kind: KIND, title: "Dashboard", location: "grid" },
+      "unowned-1": { id: "unowned-1", kind: "acme.unregistered", title: "Gone" },
+      "file-1": { id: "file-1", kind: "file", title: "README.md" },
+      "term-1": { id: "term-1", kind: "terminal", title: "Shell" },
+    };
+    captureHelpers.locatePanelFrame.mockReset().mockReturnValue(frame);
+    captureHelpers.assertPanelCapturable.mockReset().mockReturnValue(RECT);
+    captureHelpers.sameRect.mockReset().mockReturnValue(true);
+    captureHelpers.consoleMessagesForPlugin.mockReset().mockReturnValue([]);
+    capturePanel = vi.fn(async () => ({ pngBase64: "UE5H", consoleMessages: [{ raw: true }] }));
+    vi.stubGlobal("window", { electron: { plugin: { capturePanel } } });
+  });
+
+  afterEach(() => {
+    unregisterPanelKind(KIND);
+    vi.unstubAllGlobals();
+  });
+
+  it("is a read-only, explicit-panel query closed to plugins", () => {
+    const def = definition("plugin.capturePanel");
+    expect(def.kind).toBe("query");
+    expect(def.danger).toBe("safe");
+    expect(def.denyPluginDispatch).toBe(true);
+    expect((DENY_PLUGIN_DISPATCH_ACTION_IDS as readonly string[]).includes(def.id)).toBe(true);
+    // The image travels as an MCP image block; a structured copy would carry
+    // the base64 a second time.
+    expect(def.mcpOutputSchema).not.toBe(true);
+    expect(def.mcpAnnotations?.readOnlyHint).toBe(true);
+    expect(def.argsSchema?.safeParse({}).success).toBe(false);
+    expect(def.argsSchema?.safeParse({ panelId: "plugin-1" }).success).toBe(true);
+  });
+
+  it("captures the panel's own rect and narrows the console to its plugin", async () => {
+    const messages = [
+      { level: "error", message: "boom", source: "plugin://pi/v.js", line: 1, timestamp: "t" },
+    ];
+    captureHelpers.consoleMessagesForPlugin.mockReturnValue(messages);
+
+    const result = await run("plugin.capturePanel", { panelId: "plugin-1" });
+
+    expect(captureHelpers.locatePanelFrame).toHaveBeenCalledWith("plugin-1");
+    expect(captureHelpers.assertPanelCapturable).toHaveBeenCalledWith("plugin-1", frame, "grid");
+    expect(capturePanel).toHaveBeenCalledWith(RECT);
+    expect(captureHelpers.consoleMessagesForPlugin).toHaveBeenCalledWith(
+      [{ raw: true }],
+      "acme.dashboard"
+    );
+    expect(result).toEqual({
+      panelId: "plugin-1",
+      pluginId: "acme.dashboard",
+      image: { mimeType: "image/png", data: "UE5H", width: 300, height: 200 },
+      consoleScope: "plugin",
+      consoleMessages: messages,
+    });
+    expect(definition("plugin.capturePanel").resultSchema?.safeParse(result).success).toBe(true);
+  });
+
+  it("refuses missing and non-plugin panels without capturing", async () => {
+    await expect(run("plugin.capturePanel", { panelId: "nope" })).rejects.toThrow(/No panel/);
+    for (const panelId of ["file-1", "term-1", "unowned-1"]) {
+      await expect(run("plugin.capturePanel", { panelId })).rejects.toThrow(/not a plugin panel/);
+    }
+    expect(capturePanel).not.toHaveBeenCalled();
+  });
+
+  it("refuses before capturing when the panel cannot be captured cleanly", async () => {
+    captureHelpers.assertPanelCapturable.mockImplementation(() => {
+      throw new captureHelpers.PanelCaptureRefusedError("covered");
+    });
+    await expect(run("plugin.capturePanel", { panelId: "plugin-1" })).rejects.toThrow("covered");
+    expect(capturePanel).not.toHaveBeenCalled();
+  });
+
+  it("drops the pixels when the panel changed while they were taken", async () => {
+    captureHelpers.sameRect.mockReturnValue(false);
+    await expect(run("plugin.capturePanel", { panelId: "plugin-1" })).rejects.toThrow(/changed/);
+
+    captureHelpers.sameRect.mockReturnValue(true);
+    captureHelpers.assertPanelCapturable.mockReturnValueOnce(RECT).mockImplementationOnce(() => {
+      throw new captureHelpers.PanelCaptureRefusedError("a menu opened");
+    });
+    await expect(run("plugin.capturePanel", { panelId: "plugin-1" })).rejects.toThrow(
+      "a menu opened"
+    );
   });
 });
