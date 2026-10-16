@@ -7,10 +7,11 @@ import { loadCustomLaunchFlags } from "../assistantLaunchFlags";
 const getSettings = vi.fn();
 const getResolvedModelList = vi.fn();
 
-function catalog(agentId: string, ids: string[]) {
+function catalog(agentId: string, ids: string[], modelUpgrades?: Record<string, string>) {
   return {
     agentId,
     models: ids.map((id) => ({ id, name: id, shortLabel: id })),
+    ...(modelUpgrades ? { modelUpgrades } : {}),
     contextWindow: null,
     source: "merged",
   };
@@ -22,7 +23,10 @@ beforeEach(() => {
   getResolvedModelList.mockImplementation((agentId: string) =>
     Promise.resolve(
       agentId === "codex"
-        ? catalog("codex", ["gpt-6-astra", "gpt-6-sol", "gpt-6-luna"])
+        ? catalog("codex", ["gpt-6.1-sol", "gpt-6-astra", "gpt-6-sol", "gpt-6-luna"], {
+            "gpt-5.5": "gpt-5.6-sol",
+            "gpt-5.6-sol": "gpt-6-sol",
+          })
         : catalog(agentId, ["opus", "sonnet"])
     )
   );
@@ -79,9 +83,25 @@ describe("loadCustomLaunchFlags — model + custom args composition", () => {
     expect(await loadCustomLaunchFlags("claude")).toEqual([]);
   });
 
-  it("never gates an explicit choice on the catalog", async () => {
+  it("launches a saved model the CLI has retired as the end of its upgrade chain", async () => {
     getSettings.mockResolvedValue({ modelIds: { codex: "gpt-5.5" }, customArgs: "" });
-    expect(await loadCustomLaunchFlags("codex")).toEqual(["--model", "gpt-5.5"]);
+    expect(await loadCustomLaunchFlags("codex")).toEqual(["--model", "gpt-6-sol"]);
+  });
+
+  it("keeps a current saved model as written", async () => {
+    getSettings.mockResolvedValue({ modelIds: { codex: "gpt-6-luna" }, customArgs: "" });
+    expect(await loadCustomLaunchFlags("codex")).toEqual(["--model", "gpt-6-luna"]);
+  });
+
+  it("launches the saved model unchanged when the catalog can't be read", async () => {
+    getResolvedModelList.mockRejectedValue(new Error("ipc down"));
+    getSettings.mockResolvedValue({ modelIds: { codex: "gpt-5.5" }, customArgs: "--verbose" });
+    expect(await loadCustomLaunchFlags("codex")).toEqual(["--model", "gpt-5.5", "--verbose"]);
+  });
+
+  it("never reads the catalog for an explicit CLI default", async () => {
+    getSettings.mockResolvedValue({ modelIds: { codex: "" }, customArgs: "" });
+    expect(await loadCustomLaunchFlags("codex")).toEqual([]);
     expect(getResolvedModelList).not.toHaveBeenCalled();
   });
 

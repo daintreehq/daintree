@@ -24,6 +24,7 @@ An argument shown as `name?` is optional. Argument names come from each action's
 | `agent.getState` | Get agent state | safe | `agentId` |
 | `agent.launch` | Launch agent | safe | `agentId`, `activateDockOnCreate?`, `agentLaunchFlags?`, `cwd?`, `env?`, `excludeFromPersistence?`, `focusPolicy?`, `force?`, `handback?`, `interactive?`, `location?`, `model?`, `name?`, `notify?`, `presetId?`, `prompt?`, `removeOnExit?`, `replyLines?`, `requestedId?`, `spawnedBy?`, `systemPrompt?`, `waitForReply?`, `waitSeconds?`, `worktreeId?` |
 | `agent.listAvailable` | List available agents | safe | — |
+| `agent.listModels` | List agent models | safe | `agentId?` |
 | `agent.listPresets` | List agent presets | safe | `agentId`, `projectId?` |
 | `agent.listToolbar` | List toolbar agents | safe | — |
 | `agent.terminal` | Launch terminal | safe | `focusPolicy?`, `location?`, `spawnedBy?` |

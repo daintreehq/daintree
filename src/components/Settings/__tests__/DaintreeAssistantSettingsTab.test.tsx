@@ -868,6 +868,7 @@ describe("DaintreeAssistantSettingsTab", () => {
                       { id: "gpt-6-astra", name: "GPT-6 Astra", shortLabel: "Astra" },
                       { id: "gpt-6-luna", name: "GPT-6 Luna", shortLabel: "Luna" },
                     ],
+                    modelUpgrades: { "gpt-5.6-luna": "gpt-6-luna" },
                     contextWindow: null,
                     source: "merged",
                   }
@@ -928,6 +929,14 @@ describe("DaintreeAssistantSettingsTab", () => {
         await waitFor(() => expect(select.value).toBe("my-fork-model"));
         expect(optionValues(select)).toContain("my-fork-model");
         expect(optionValues(select)).not.toContain("opus");
+      });
+
+      it("shows a saved model the CLI has retired as the successor it launches as", async () => {
+        renderWith("codex", { codex: "gpt-5.6-luna" });
+        const select = (await screen.findByLabelText("Model")) as HTMLSelectElement;
+        await waitFor(() => expect(select.value).toBe("gpt-6-luna"));
+        expect(optionValues(select)).not.toContain("gpt-5.6-luna");
+        expect(window.electron.helpAssistant.setSettings).not.toHaveBeenCalled();
       });
 
       it("keeps each agent's choice across a switch away and back", async () => {

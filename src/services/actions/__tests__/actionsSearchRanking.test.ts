@@ -60,12 +60,16 @@ afterAll(() => {
 
 const SearchResultSchema = z.object({ results: z.array(z.object({ id: z.string() })) });
 
-async function firstCallable(query: string, tier: HelpAssistantTier): Promise<string | undefined> {
+async function callableRanking(query: string, tier: HelpAssistantTier): Promise<string[]> {
   const search = registry.get("actions.search")!();
   const result: unknown = await search.run({ query, limit: ACTIONS_SEARCH_MAX_LIMIT }, {});
   const { results } = SearchResultSchema.parse(result);
   const callable = new Set<string>(HELP_TIER_CUMULATIVE[tier]);
-  return results.find((entry) => callable.has(entry.id))?.id;
+  return results.filter((entry) => callable.has(entry.id)).map((entry) => entry.id);
+}
+
+async function firstCallable(query: string, tier: HelpAssistantTier): Promise<string | undefined> {
+  return (await callableRanking(query, tier))[0];
 }
 
 // Controls: the launch synonyms must not pull agent.launch ahead of the
@@ -104,11 +108,19 @@ describe("actions.search ranking over the real registry", () => {
       "run codex on a task",
       "run codex on task",
       // #13045: model and effort are launch arguments, not preset-only.
-      "codex model",
       "reasoning effort",
       "launch codex with high effort",
     ])("puts agent.launch first for %j", async (query) => {
       expect(await firstCallable(query, tier)).toBe("agent.launch");
+    });
+
+    // #13437: a model the user names is resolved to an id before the launch
+    // takes it, so the listing leads; #13045's launch still follows close
+    // behind rather than the preset listing reading as the only control.
+    it('puts agent.listModels first for "codex model", agent.launch close behind', async () => {
+      const ranked = await callableRanking("codex model", tier);
+      expect(ranked[0]).toBe("agent.listModels");
+      expect(ranked.slice(0, 3)).toContain("agent.launch");
     });
 
     // Each control is read at every set that can call its answer.

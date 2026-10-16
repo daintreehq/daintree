@@ -676,27 +676,21 @@ describe("model configuration", () => {
   // `claude --model` accepts either a full name or a family alias resolving to
   // the latest release. Pinned IDs go stale on every release (#11879), so the
   // invariant is the *shape* of the list, not which families are in it today.
-  it("claude offers bare family aliases, never pinned release IDs", () => {
-    const config = getAgentConfig("claude");
-    expect(config?.models).toBeDefined();
-    expect(config!.models!.length).toBeGreaterThanOrEqual(3);
-    const pinned = config!.models!.map((m) => m.id).filter((id) => /\d/.test(id));
-    expect(pinned).toEqual([]);
-  });
+  it.each(["claude", "gemini"])(
+    "%s offers the CLI's own aliases, never pinned release IDs",
+    (agentId) => {
+      const config = getAgentConfig(agentId);
+      expect(config?.models).toBeDefined();
+      expect(config!.models!.length).toBeGreaterThanOrEqual(3);
+      const pinned = config!.models!.map((m) => m.id).filter((id) => /\d/.test(id));
+      expect(pinned).toEqual([]);
+    }
+  );
 
-  // Codex doesn't validate `--model` against an allowlist — an unrecognised
-  // slug silently falls back to generic metadata rather than erroring — so the
-  // fallback list must name explicit tier slugs, never the ambiguous family
-  // alias that prefixes them (#11879).
-  it("codex offers explicit tier slugs, never a bare family alias", () => {
-    const config = getAgentConfig("codex");
-    expect(config?.models).toBeDefined();
-    expect(config!.models!.length).toBeGreaterThanOrEqual(1);
-    const modelIds = config!.models!.map((m) => m.id);
-    const ambiguous = modelIds.filter((id) =>
-      modelIds.some((other) => other !== id && other.startsWith(`${id}-`))
-    );
-    expect(ambiguous).toEqual([]);
+  // The installed CLI's own catalog names Codex models and retires old ones
+  // (#13437); a bundled list is what left the picker a release behind.
+  it("codex bundles no model list", () => {
+    expect(getAgentConfig("codex")?.models ?? []).toEqual([]);
   });
 });
 
@@ -704,8 +698,8 @@ describe("getAgentModelConfig", () => {
   it("returns model config for valid agent and model ID", () => {
     // A non-first entry whose name and shortLabel differ, so "returns the
     // first model" and "returns name instead of shortLabel" both fail here.
-    const expected = getAgentConfig("codex")!.models![1]!;
-    const model = getAgentModelConfig("codex", expected.id);
+    const expected = getAgentConfig("qwen")!.models![1]!;
+    const model = getAgentModelConfig("qwen", expected.id);
     expect(model).toEqual(expected);
     expect(model!.name).not.toBe(model!.shortLabel);
   });
@@ -721,9 +715,10 @@ describe("getAgentModelConfig", () => {
 
 describe("getAgentDisplayTitle", () => {
   it("returns agent name with model shortLabel when modelId matches", () => {
-    const model = getAgentConfig("codex")!.models![1]!;
-    expect(getAgentDisplayTitle("codex", model.id)).toBe(`Codex (${model.shortLabel})`);
-    expect(getAgentDisplayTitle("codex", model.id)).not.toContain(model.name);
+    const model = getAgentConfig("qwen")!.models![1]!;
+    const agentName = getAgentConfig("qwen")!.name;
+    expect(getAgentDisplayTitle("qwen", model.id)).toBe(`${agentName} (${model.shortLabel})`);
+    expect(getAgentDisplayTitle("qwen", model.id)).not.toContain(model.name);
   });
 
   it("returns plain agent name when no modelId provided", () => {

@@ -87,6 +87,10 @@ export const CORE_TIER_TOOLS = [
   // Preset ids are generated, merged from settings, `.daintree/presets/` and
   // CCR discovery; without this the launch argument is undiscoverable (#11859).
   "agent.listPresets",
+  // Model ids come from each CLI's own catalog and change with its releases, so
+  // a model the user names ("use Sol") is resolved here rather than from a slug
+  // the prompt would have to carry (#13437).
+  "agent.listModels",
 
   "terminal.list",
   "terminal.getStatus",

@@ -1132,6 +1132,17 @@ describe("narrow agent discovery tier reachability", () => {
     }
   );
 
+  // The model listing exists so the in-app assistant can turn a model the user
+  // names into an id without its prompt carrying slugs (#13437). An external
+  // caller passes an id it already has, so the external surface stays as is.
+  it("permits agent.listModels at every in-app tier only", () => {
+    for (const tier of ["core", "full"] as const) {
+      expect(isTierPermitted(tier, "agent.listModels", true)).toBe(true);
+      expect(isTierPermitted(tier, "agent.listModels", false)).toBe(true);
+    }
+    expect(isTierPermitted("external", "agent.listModels")).toBe(false);
+  });
+
   it("keeps agent.listToolbar and the broad agentSettings.get off every tier", () => {
     for (const toolId of ["agent.listToolbar", "agentSettings.get"]) {
       expect(BUILT_IN_ACTION_IDS as readonly string[]).toContain(toolId);

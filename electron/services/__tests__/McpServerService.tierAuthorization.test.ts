@@ -1713,6 +1713,7 @@ describe("McpServerService", () => {
           ["worktree.waitForPullRequest", "Wait For Pull Request"],
           ["agent.listAvailable", "List Available Agents"],
           ["agent.listPresets", "List Agent Presets"],
+          ["agent.listModels", "List Agent Models"],
           ["terminal.list", "List Terminals"],
           ["terminal.getStatus", "Get Terminal Status"],
           ["terminal.getOutput", "Get Terminal Output"],

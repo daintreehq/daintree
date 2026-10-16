@@ -262,7 +262,7 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
         },
         model: {
           description:
-            "Model passed to the agent CLI for this launch, in its own names. No preset needed.",
+            "Omit for the CLI's default; set only when the user names a model. No preset needed.",
           type: "string",
         },
         presetId: {
