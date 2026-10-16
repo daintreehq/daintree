@@ -2764,7 +2764,7 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
           // stays readable by the ledger, as every session's does, so a view
           // check that cannot answer never strands its own panes (#13439); the
           // view is asked only about the rest. Every other `*Owned` tool keeps
-          // the ledger alone.
+          // its ledger and hand-over rules.
           const readsByPinnedView =
             rendererOwnedOrigin && actionId === TERMINAL_READ_LAST_MESSAGE_OWNED_TOOL;
           // A hand-over is consulted only after the ownership ledger, and only
