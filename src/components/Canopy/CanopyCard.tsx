@@ -32,6 +32,7 @@ import { isHandBackStop, isHandBackUnseen } from "@shared/utils/runHandBack";
 import type { BrandMarkSurface } from "@/lib/brandIcon";
 import type { HybridInputBarHandle } from "@/components/Terminal/HybridInputBar";
 import { isMac } from "@/lib/platform";
+import { isNewWindowClick } from "@/components/Hosts/hostSwitching";
 import { isBuiltInAgentId } from "@shared/config/agentIds";
 import {
   answerNeedsConfirm,
@@ -58,7 +59,8 @@ const CONTROL_ICON = "[&_svg]:size-3.5";
 export const TRASH_CONFIRM_MS = 4_000;
 
 export interface CanopyCardHandlers {
-  onOpen: (item: CanopyItem) => void;
+  /** `newWindow`: Cmd/Ctrl held, so another host's run opens in a new window. */
+  onOpen: (item: CanopyItem, newWindow?: boolean) => void;
   onTrash: (item: CanopyItem) => void;
   /** Archive the run, or bring an archived one back to the inbox. */
   onArchive: (item: CanopyItem) => void;
@@ -153,7 +155,7 @@ function HeaderControl({
 }: {
   label: string;
   shortcut?: string;
-  onClick: () => void;
+  onClick: (event: React.MouseEvent<HTMLButtonElement>) => void;
   /**
    * Waiting for a confirming second press: the label is spelled out beside the
    * glyph. The only state that wears red, so a hovered or refocused control
@@ -227,7 +229,7 @@ export function CanopyCard({
   const { row } = item;
   const run = row.run;
   const canReply = canReplyTo(item, stream.secretPrompt);
-  const canTrash = !otherHost && canTrashItem(item);
+  const canTrash = canTrashItem(item);
   const archived = itemArchived(item);
   const looksDone = itemLooksDone(item);
   const sectionRef = useRef<HTMLElement>(null);
@@ -569,15 +571,11 @@ export function CanopyCard({
               brandColor={row.presetColor ?? row.chrome.color}
             />
           </span>
-          {otherHost ? (
-            <span className="min-w-0 truncate font-medium text-text-primary">{row.title}</span>
-          ) : (
-            <CanopyTitle
-              title={row.title}
-              onRename={(title) => onRename(item, title)}
-              renameRequest={renameRequest}
-            />
-          )}
+          <CanopyTitle
+            title={row.title}
+            onRename={(title) => onRename(item, title)}
+            renameRequest={renameRequest}
+          />
           {/* The readers think it is finished and Daintree sees it stopped:
               said in the title bar rather than over the terminal — where it
               would hide the agent's own report, or resize the agent if it took
@@ -631,11 +629,12 @@ export function CanopyCard({
           <span id={`${domId}-trash-confirm`} role="status" className="sr-only">
             {trashArmed ? "Press Trash terminal again to trash it" : ""}
           </span>
-          {!otherHost && (
-            <HeaderControl label="Go to terminal" onClick={() => onOpen(item)}>
-              <SquareArrowOutUpRight aria-hidden="true" />
-            </HeaderControl>
-          )}
+          <HeaderControl
+            label="Go to terminal"
+            onClick={(event) => onOpen(item, isNewWindowClick(event))}
+          >
+            <SquareArrowOutUpRight aria-hidden="true" />
+          </HeaderControl>
         </div>
         {/* The agent's state chip, in the reserved box at the far right where every agent pane keeps it. */}
         {agentId !== undefined && (
@@ -682,7 +681,7 @@ export function CanopyCard({
           reconnecting={reconnecting}
           onStreamChange={setStream}
           onSubmitted={() => onSent(item, "terminal")}
-          onGoTo={otherHost ? undefined : () => onOpen(item)}
+          onGoTo={(event) => onOpen(item, isNewWindowClick(event))}
         />
         {canReply ? (
           <div ref={replyHostRef} data-keybindings-isolated="" className="contents">

@@ -24,6 +24,7 @@ import type {
   UpdateHostPayload,
   WindowHostInfo,
 } from "../../../shared/types/ipc/remoteHosts.js";
+import type { ProjectFocusOnActivateIntent } from "../../../shared/types/ipc/project.js";
 import type { IpcContext } from "../../ipc/types.js";
 import type { RemoteRouter } from "../../ipc/endpoint.js";
 import { AppError } from "../../utils/errorTypes.js";
@@ -42,14 +43,22 @@ import { DetachedViewRegistry } from "./reconnect/DetachedViewRegistry.js";
 export interface WindowControl {
   /** Open an empty window and resolve to its id. */
   openWindow(): Promise<number>;
-  /** Show `(hostId, projectId)` in the window's project view manager. */
+  /**
+   * Show `(hostId, projectId)` in the window's project view manager; the view
+   * consumes `focusIntent` once it is showing.
+   */
   openRemoteProject(
     windowId: number,
     hostId: HostId,
     projectId: string,
-    projectPath: string
+    projectPath: string,
+    focusIntent?: ProjectFocusOnActivateIntent
   ): Promise<void>;
-  openLocalProject(windowId: number, projectId: string): Promise<void>;
+  openLocalProject(
+    windowId: number,
+    projectId: string,
+    focusIntent?: ProjectFocusOnActivateIntent
+  ): Promise<void>;
   /**
    * The local project to return a window to when it switches back to this
    * machine without naming one: the last this window showed, else the one
@@ -102,6 +111,17 @@ export interface WindowControl {
   ): number | null;
   /** Bring a window forward with its project view focused. */
   revealWindow?(windowId: number): void;
+  /**
+   * Hand `focusIntent` to the window showing `(hostId, projectId)`: straight to
+   * its view when that view is on screen, else parked for the switch that is
+   * bringing it there.
+   */
+  focusInWindow?(
+    windowId: number,
+    hostId: HostId,
+    projectId: string,
+    focusIntent: ProjectFocusOnActivateIntent
+  ): void;
   /** Call `onClosed` once when the window closes. */
   watchWindow(windowId: number, onClosed: () => void): void;
   /**
@@ -193,6 +213,24 @@ interface SwitchTicket {
 
 function invalid(message: string): AppError {
   return new AppError({ code: "VALIDATION", message });
+}
+
+function focusIntentOf(payload: SwitchWindowHostPayload): ProjectFocusOnActivateIntent | undefined {
+  const intent: unknown = payload.focusIntent;
+  if (intent === undefined) return undefined;
+  if (typeof intent === "object" && intent !== null) {
+    const { intent: kind, panelId } = intent as { intent?: unknown; panelId?: unknown };
+    if (kind === "focus-next-waiting") return { intent: kind };
+    if (
+      kind === "focus-panel" &&
+      typeof panelId === "string" &&
+      panelId.length > 0 &&
+      panelId.length <= MAX_PROJECT_ID_LENGTH
+    ) {
+      return { intent: kind, panelId };
+    }
+  }
+  throw invalid("focusIntent is not a focus intent");
 }
 
 function hostIdOf(payload: unknown): HostId {
@@ -611,6 +649,8 @@ export class RemoteHostsClient {
     ) {
       throw invalid("projectId must be a non-empty string");
     }
+    // Something to focus only in a project the switch names.
+    const focusIntent = projectId === undefined ? undefined : focusIntentOf(payload);
 
     const remote = !isLocalHostId(hostId);
     const epoch = this.epochs.get(hostId) ?? 0;
@@ -693,7 +733,8 @@ export class RemoteHostsClient {
         superseded,
         announce,
         commitPending,
-        (name) => void (pendingProjectName = name)
+        (name) => void (pendingProjectName = name),
+        focusIntent
       );
       // A window is showing that host now: it's the one the switcher offers first.
       // Not `window-opened`: that window stays on this machine offering the
@@ -722,7 +763,8 @@ export class RemoteHostsClient {
     announce: (phase: PendingHostSwitch["phase"]) => void,
     /** Called once the switch commits: past here it can't be cancelled. */
     commit: () => void,
-    nameProject: (name: string | null) => void
+    nameProject: (name: string | null) => void,
+    focusIntent?: ProjectFocusOnActivateIntent
   ): Promise<SwitchWindowHostResult> {
     let projectId = requestedProjectId;
     const remote = !isLocalHostId(hostId);
@@ -868,7 +910,7 @@ export class RemoteHostsClient {
     // it go once this switch has its turn, and is otherwise left as it is.
     if (projectId !== undefined) {
       const redirected = this.redirectToOwner(hostId, projectId, sourceWindowId);
-      if (redirected) return redirected;
+      if (redirected) return this.focusedElsewhere(redirected, focusIntent);
     }
 
     const windowId = newWindow ? await this.options.windows.openWindow() : sourceWindowId;
@@ -877,6 +919,8 @@ export class RemoteHostsClient {
     }
     const targetProjectId = projectId;
     const targetPath = projectPath;
+    // Passed only when there is one, so a plain switch opens as it always has.
+    const focusArg: [] | [ProjectFocusOnActivateIntent] = focusIntent ? [focusIntent] : [];
     let releaseClaim: () => void = () => {};
     const switching = this.inSwitchTurn(windowId, async (): Promise<SwitchWindowHostResult> => {
       // Checked again in turn: a newer request may have arrived while this
@@ -927,12 +971,15 @@ export class RemoteHostsClient {
       const owner = shower ?? holder;
       if (owner !== null) {
         if (remote || shower === null) this.options.windows.revealWindow?.(owner);
-        return {
-          outcome: "focused-elsewhere",
-          hostId,
-          projectId: targetProjectId,
-          targetWindowId: owner,
-        };
+        return this.focusedElsewhere(
+          {
+            outcome: "focused-elsewhere",
+            hostId,
+            projectId: targetProjectId,
+            targetWindowId: owner,
+          },
+          focusIntent
+        );
       }
       releaseClaim =
         this.options.windows.claimProject?.(hostId, targetProjectId, windowId) ?? releaseClaim;
@@ -943,7 +990,7 @@ export class RemoteHostsClient {
 
       try {
         if (!remote) {
-          await this.options.windows.openLocalProject(windowId, targetProjectId);
+          await this.options.windows.openLocalProject(windowId, targetProjectId, ...focusArg);
           return { outcome: "switched", hostId: LOCAL_HOST_ID, projectId: targetProjectId };
         }
         // Set above for every remote switch that names a project; never open a pathless view.
@@ -956,7 +1003,13 @@ export class RemoteHostsClient {
           projectName || targetProjectId,
           hostId
         );
-        await this.options.windows.openRemoteProject(windowId, hostId, targetProjectId, targetPath);
+        await this.options.windows.openRemoteProject(
+          windowId,
+          hostId,
+          targetProjectId,
+          targetPath,
+          ...focusArg
+        );
       } catch (error) {
         // The view didn't move, so neither does the binding: they never name
         // different hosts.
@@ -976,6 +1029,22 @@ export class RemoteHostsClient {
     });
     // Held until the window's views have the project (or the switch gave up).
     return switching.finally(() => releaseClaim());
+  }
+
+  /** The window that already had the project takes the focus the switch was asked for. */
+  private focusedElsewhere(
+    result: SwitchWindowHostResult,
+    focusIntent: ProjectFocusOnActivateIntent | undefined
+  ): SwitchWindowHostResult {
+    if (focusIntent && result.outcome === "focused-elsewhere") {
+      this.options.windows.focusInWindow?.(
+        result.targetWindowId,
+        result.hostId,
+        result.projectId,
+        focusIntent
+      );
+    }
+    return result;
   }
 
   /** Whether a window other than `windowId` is showing the project, or on its way to it. */

@@ -8,11 +8,13 @@ import {
   ContextMenuTrigger,
 } from "@/components/ui/context-menu";
 import { isMac } from "@/lib/platform";
+import { isNewWindowClick } from "@/components/Hosts/hostSwitching";
 import { canReplyTo } from "./CanopyCard";
 import { itemArchived, type CanopyItem } from "./canopyModel";
 
 export interface CanopyRowMenuActions {
-  onOpen: (item: CanopyItem) => void;
+  /** `newWindow`: Cmd/Ctrl held, so another host's run opens in a new window. */
+  onOpen: (item: CanopyItem, newWindow?: boolean) => void;
   onReply: (item: CanopyItem) => void;
   onToggleRead: (item: CanopyItem) => void;
   /** Read the run's screen again, words included: for a reading that looks wrong. */
@@ -24,12 +26,6 @@ export interface CanopyRowMenuActions {
   onTrash: (item: CanopyItem) => void;
   /** The menu opened or closed: the list holds still while it is open. */
   onOpenChange: (open: boolean) => void;
-  /**
-   * The run is on another host. Replying reaches it there; going to its
-   * terminal, renaming and trashing act on the window's own host, so they are
-   * left out until they can reach the run's.
-   */
-  otherHost?: boolean;
 }
 
 /**
@@ -43,7 +39,6 @@ export function CanopyRowMenu({
   ...actions
 }: CanopyRowMenuActions & { item: CanopyItem; children: ReactNode }) {
   const archived = itemArchived(item);
-  const otherHost = actions.otherHost === true;
   const trashChord = isMac() ? "Meta+Backspace" : "Control+Backspace";
   // Rename and Reply send focus into the pane on purpose — the run's name
   // field, or its composer: the menu closing must not hand it back to the row
@@ -62,12 +57,15 @@ export function CanopyRowMenu({
           event.preventDefault();
         }}
       >
-        {!otherHost && (
-          <ContextMenuItem aria-keyshortcuts="Enter" onSelect={() => actions.onOpen(item)}>
-            Go to terminal
-            <ContextMenuShortcut shortcut="Enter" />
-          </ContextMenuItem>
-        )}
+        {/* On click rather than select, so a Cmd/Ctrl-click keeps its modifier;
+            a key select clicks too, with none held. */}
+        <ContextMenuItem
+          aria-keyshortcuts="Enter"
+          onClick={(event) => actions.onOpen(item, isNewWindowClick(event))}
+        >
+          Go to terminal
+          <ContextMenuShortcut shortcut="Enter" />
+        </ContextMenuItem>
         {canReplyTo(item) && (
           <ContextMenuItem
             aria-keyshortcuts="R"
@@ -80,7 +78,7 @@ export function CanopyRowMenu({
             <ContextMenuShortcut shortcut="R" />
           </ContextMenuItem>
         )}
-        {(!otherHost || canReplyTo(item)) && <ContextMenuSeparator />}
+        <ContextMenuSeparator />
         {!archived && (
           <ContextMenuItem aria-keyshortcuts="U" onSelect={() => actions.onToggleRead(item)}>
             {item.unread ? "Mark as read" : "Mark as unread"}
@@ -94,31 +92,27 @@ export function CanopyRowMenu({
           {archived ? "Move to inbox" : "Archive"}
           <ContextMenuShortcut shortcut="E" />
         </ContextMenuItem>
-        {!otherHost && (
-          <>
-            <ContextMenuItem
-              aria-keyshortcuts="F2"
-              onSelect={() => {
-                focusMovedRef.current = true;
-                actions.onRename(item);
-              }}
-            >
-              Rename…
-              <ContextMenuShortcut shortcut="F2" />
-            </ContextMenuItem>
-            <ContextMenuSeparator />
-            {/* Arms Trash in the agent's pane, as its first press would; the
-                second press there confirms it. */}
-            <ContextMenuItem
-              destructive
-              aria-keyshortcuts={trashChord}
-              onSelect={() => actions.onTrash(item)}
-            >
-              Trash terminal…
-              <ContextMenuShortcut shortcut={trashChord} />
-            </ContextMenuItem>
-          </>
-        )}
+        <ContextMenuItem
+          aria-keyshortcuts="F2"
+          onSelect={() => {
+            focusMovedRef.current = true;
+            actions.onRename(item);
+          }}
+        >
+          Rename…
+          <ContextMenuShortcut shortcut="F2" />
+        </ContextMenuItem>
+        <ContextMenuSeparator />
+        {/* Arms Trash in the agent's pane, as its first press would; the
+            second press there confirms it. */}
+        <ContextMenuItem
+          destructive
+          aria-keyshortcuts={trashChord}
+          onSelect={() => actions.onTrash(item)}
+        >
+          Trash terminal…
+          <ContextMenuShortcut shortcut={trashChord} />
+        </ContextMenuItem>
       </ContextMenuContent>
     </ContextMenu>
   );

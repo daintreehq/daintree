@@ -203,10 +203,16 @@ describe("remoteCanopyApi", () => {
     await api.archive("run-1", { spawnedAt: 5 });
     await api.setRead("run-1", { spawnedAt: 5 }, true, 2);
     await api.runBranch("run-1", { spawnedAt: 5 });
+    await api.rename("run-1", { spawnedAt: 5 }, "auth fix");
+    await api.trash("run-1", { spawnedAt: 5 });
+    await api.untrash(7);
     expect(bridge.invoke.mock.calls).toEqual([
       ["studio", "canopy:archive", "run-1", { spawnedAt: 5 }],
       ["studio", "canopy:set-read", "run-1", { spawnedAt: 5 }, true, 2],
       ["studio", "canopy:run-branch", "run-1", { spawnedAt: 5 }],
+      ["studio", "canopy:rename", "run-1", { spawnedAt: 5 }, "auth fix"],
+      ["studio", "canopy:trash", "run-1", { spawnedAt: 5 }],
+      ["studio", "canopy:untrash", 7],
     ]);
   });
 });

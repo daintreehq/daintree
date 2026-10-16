@@ -164,7 +164,8 @@ interface CanopyRowProps {
   onSelect: () => void;
   /** A click on the row: the user opened it. */
   onClick: () => void;
-  onOpen: () => void;
+  /** A double-click on the row: go to its terminal (Cmd/Ctrl: in a new window). */
+  onOpen: (event: React.MouseEvent<HTMLElement>) => void;
   /**
    * Archive the run, or bring it back: offered on the row under the pointer,
    * for a mouse. The keyboard has E, and the context menu says so.

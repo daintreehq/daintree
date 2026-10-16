@@ -1,6 +1,7 @@
 import type { MouseEvent } from "react";
 import { LOCAL_HOST_ID, type HostId } from "@shared/types/remoteHosts";
 import type { SwitchWindowHostResult } from "@shared/types/ipc/remoteHosts";
+import type { ProjectFocusOnActivateIntent } from "@shared/types/ipc/project";
 import { isMac } from "@/lib/platform";
 import { notify } from "@/lib/notify";
 import { clientErrorText, isClientAppError } from "@/utils/clientAppError";
@@ -113,25 +114,48 @@ export function notifyHostSwitchFailure(
   });
 }
 
+export interface SwitchToHostOptions {
+  /** The window ended up where it was: the switch failed, or was cancelled or overtaken. */
+  onStayed?: () => void;
+  /** What to focus in the project once it is showing; ignored without a project. */
+  focusIntent?: ProjectFocusOnActivateIntent;
+  /**
+   * The project is showing, here, in a new window, or in the window that
+   * already had it — heard on a Retry from the failure toast as well.
+   */
+  onLanded?: () => void;
+}
+
 /**
  * Switch this window (or a new one) to a host, optionally straight into one of
- * its projects. `onStayed` hears when the window ends up where it was: the
- * switch failed, or was cancelled or overtaken by a newer navigation.
+ * its projects, and with that project a pane to focus once it is showing.
  */
 export async function switchToHost(
   hostId: HostId,
   newWindow: boolean,
   projectId?: string,
-  options?: { onStayed?: () => void }
+  options?: SwitchToHostOptions
 ): Promise<void> {
+  const focusIntent = projectId === undefined ? undefined : options?.focusIntent;
   try {
-    const result = await window.electron.remoteHosts.switchWindowHost(
-      projectId === undefined ? { hostId, newWindow } : { hostId, newWindow, projectId }
-    );
+    const result = await window.electron.remoteHosts.switchWindowHost({
+      hostId,
+      newWindow,
+      ...(projectId === undefined ? {} : { projectId }),
+      ...(focusIntent === undefined ? {} : { focusIntent }),
+    });
     if (result?.outcome === "superseded") options?.onStayed?.();
+    if (result?.outcome === "switched" || result?.outcome === "focused-elsewhere") {
+      options?.onLanded?.();
+    }
     followSwitchResult(result);
   } catch (error) {
     options?.onStayed?.();
-    notifyHostSwitchFailure(hostId, error, () => void switchToHost(hostId, newWindow, projectId));
+    // The retry is the same switch, heard by the same caller.
+    notifyHostSwitchFailure(
+      hostId,
+      error,
+      () => void switchToHost(hostId, newWindow, projectId, options)
+    );
   }
 }
