@@ -24,11 +24,23 @@
  * identity, never a status or the accent), held at one lightness and chroma
  * per polarity so every theme gets the same strength of light in its own
  * indigo. It follows where the window is, never the link's health, so the
- * toolbar never flickers on reconnect; the chip carries link state. */
-.surface-toolbar[data-remote-window] {
+ * toolbar never flickers on reconnect; the chip carries link state. The hue
+ * itself is shared with the worktree sidebar's host tag (sidebar.css), which
+ * sits outside the toolbar and so cannot inherit it. */
+.surface-toolbar[data-remote-window],
+.sidebar-remote-host {
   --remote-light: oklch(from var(--color-category-indigo) 0.74 0.11 h);
   /* What the light marks on the chip: its rim, edge and server glyph. */
   --remote-ink: var(--remote-light);
+}
+
+:where(.light, [data-color-mode="light"])
+  :is(.surface-toolbar[data-remote-window], .sidebar-remote-host) {
+  --remote-light: oklch(from var(--color-category-indigo) 0.68 0.16 h);
+  --remote-ink: oklch(from var(--color-category-indigo) 0.52 0.15 h);
+}
+
+.surface-toolbar[data-remote-window] {
   --remote-light-0: 20%;
   --remote-light-1: 19%;
   --remote-light-2: 13%;
@@ -51,8 +63,6 @@
  * (svalbard, hokkaido). The marks on the chip stay deep enough to read on a
  * light surface. */
 :where(.light, [data-color-mode="light"]) .surface-toolbar[data-remote-window] {
-  --remote-light: oklch(from var(--color-category-indigo) 0.68 0.16 h);
-  --remote-ink: oklch(from var(--color-category-indigo) 0.52 0.15 h);
   --remote-light-0: 26%;
   --remote-light-1: 25%;
   --remote-light-2: 16%;

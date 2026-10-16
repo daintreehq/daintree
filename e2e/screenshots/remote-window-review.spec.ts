@@ -16,6 +16,7 @@
  *   DAINTREE_SHOT_REMOTE_WINDOW  required — any truthy value runs the capture
  *   DAINTREE_SHOT_DIR            required — an ABSOLUTE output directory outside the repo
  *   DAINTREE_SHOT_THEMES         theme sweep (default: every built-in theme)
+ *   DAINTREE_SHOT_ONLY           capture only the shots whose file name contains this
  *
  * Never writes a PNG it has not verified, and counts the files itself at the end.
  */
@@ -38,6 +39,7 @@ const THEMES = (
   .split(",")
   .map((t) => t.trim())
   .filter(Boolean);
+const ONLY = process.env.DAINTREE_SHOT_ONLY ?? "";
 
 test.use({ deviceScaleFactor: 2 });
 
@@ -67,6 +69,8 @@ interface Shot {
   menu?: boolean;
   /** Mount the real worktree sidebar and take a taller frame. */
   sidebar?: boolean;
+  /** Hover the sidebar header, so its action cluster shows beside the title. */
+  hoverHeader?: boolean;
   /** Give the chip keyboard focus before the capture. */
   focus?: boolean;
   /** Emulate an accessibility mode for the capture. */
@@ -138,6 +142,14 @@ async function capture(page: Page, shot: Shot): Promise<string> {
   if (shot.sidebar) {
     await expect(page.getByRole("heading", { name: "Worktrees" })).toBeVisible({ timeout: 15_000 });
     await expect(page.getByTestId("sidebar-remote-host")).toHaveCount(shot.host ? 1 : 0);
+    // The tag is hidden from assistive tech; the heading carries the host instead.
+    await expect(page.getByRole("heading", { level: 2, name: /^Worktrees/ })).toHaveAccessibleName(
+      shot.host ? `Worktrees, on host ${shot.host}` : "Worktrees"
+    );
+    if (shot.hoverHeader) {
+      await page.getByRole("heading", { name: "Worktrees" }).hover();
+      await expect(page.getByRole("button", { name: "Open worktrees overview" })).toBeVisible();
+    }
   }
 
   // The chip's state and the menu's row for this host come from one fixture; a
@@ -184,6 +196,7 @@ test.describe("remote window review", () => {
     for (const theme of THEMES) {
       shots.push({ file: `local-${theme}.png`, theme });
       shots.push({ file: `remote-${theme}.png`, theme, host: "studio-01" });
+      shots.push({ file: `remote-sidebar-${theme}.png`, theme, host: "studio-01", sidebar: true });
     }
     shots.push(
       { file: "remote-second-host-daintree.png", host: "build-east-02" },
@@ -212,14 +225,42 @@ test.describe("remote window review", () => {
         host: "gregs-ubuntu-workstation-build-east-02.corp.example.com",
         width: 1100,
       },
-      { file: "remote-sidebar-daintree.png", host: "studio-01", sidebar: true },
+      {
+        file: "remote-sidebar-hover-daintree.png",
+        host: "studio-01",
+        sidebar: true,
+        hoverHeader: true,
+      },
+      {
+        file: "remote-sidebar-long-name-daintree.png",
+        host: "gregs-ubuntu-workstation-build-east-01",
+        sidebar: true,
+      },
+      {
+        file: "remote-sidebar-contrast-more-daintree.png",
+        host: "studio-01",
+        sidebar: true,
+        media: "contrast-more",
+      },
+      {
+        file: "remote-sidebar-contrast-more-svalbard.png",
+        theme: "svalbard",
+        host: "studio-01",
+        sidebar: true,
+        media: "contrast-more",
+      },
+      {
+        file: "remote-sidebar-forced-colors-daintree.png",
+        host: "studio-01",
+        sidebar: true,
+        media: "forced-colors",
+      },
       { file: "local-sidebar-daintree.png", sidebar: true },
       {
         file: "remote-sidebar-fqdn-daintree.png",
         host: "gregs-ubuntu-workstation-build-east-02.corp.example.com",
         sidebar: true,
       },
-      { file: "remote-sidebar-svalbard.png", theme: "svalbard", host: "studio-01", sidebar: true },
       { file: "remote-forced-colors-daintree.png", host: "studio-01", media: "forced-colors" },
       { file: "remote-contrast-more-daintree.png", host: "studio-01", media: "contrast-more" },
       {
@@ -231,7 +272,8 @@ test.describe("remote window review", () => {
     );
 
     const written: string[] = [];
-    for (const shot of shots) written.push(await capture(page, shot));
+    for (const shot of shots.filter((s) => s.file.includes(ONLY)))
+      written.push(await capture(page, shot));
 
     const onDisk = readdirSync(OUT_DIR).filter((f) => f.endsWith(".png"));
     expect(onDisk.sort()).toEqual(written.sort());
