@@ -204,13 +204,17 @@ describe("AgentModelCatalogService", () => {
   });
 
   it("preserves bundled shortLabel for known models", async () => {
-    const fetchImpl = mockFetch(makeCatalog());
+    const bundledPro = getEffectiveAgentConfig("gemini")!.models![0]!;
+    // Same id as the bundled alias, under a name whose derived label differs.
+    const fetchImpl = mockFetch({
+      google: { models: { [bundledPro.id]: chatModel("Gemini Remote Name", 1_000_000) } },
+    });
     const service = new AgentModelCatalogService({ cachePath, fetchImpl });
 
     const result = await service.getResolvedModels("gemini");
 
-    const bundledPro = getEffectiveAgentConfig("gemini")!.models![0]!;
     const pro = result.models.find((m) => m.id === bundledPro.id);
+    expect(pro?.name).toBe("Gemini Remote Name");
     expect(pro?.shortLabel).toBe(bundledPro.shortLabel);
   });
 
@@ -561,8 +565,8 @@ describe("AgentModelCatalogService", () => {
   });
 
   it("takes an older codex CLI's own catalog, never models.dev's OpenAI list", async () => {
-    // Deliberately unequal to the remote catalog's 200_000 max, so reversing
-    // the CLI-before-remote precedence would change the assertion below.
+    // Deliberately unequal to the remote catalog's 200_000 max, so reading
+    // models.dev for Codex would change the assertion below.
     const execFileImpl = mockCodexCli([
       { slug: "gpt-5.6-sol", display_name: "GPT-5.6 Sol", context_window: 512_000, ...LISTED(1) },
       { slug: "gpt-5.2", display_name: "GPT-5.2", context_window: 128_000, ...LISTED(29) },
@@ -580,7 +584,6 @@ describe("AgentModelCatalogService", () => {
     // `gpt-5.4` and `o3` are in the models.dev fixture and pass the capability
     // filter, but the CLI is the thing that will receive `--model`.
     expect(result.models.map((m) => m.id)).toEqual(["gpt-5.6-sol", "gpt-5.2"]);
-    // Codex CLI's context window is preferred over the remote catalog's.
     expect(result.contextWindow).toBe(512_000);
   });
 
@@ -707,7 +710,7 @@ describe("AgentModelCatalogService", () => {
     }) as unknown as ExecFn;
     const service = new AgentModelCatalogService({
       cachePath,
-      fetchImpl: mockFetch({}),
+      fetchImpl: mockFailingFetch(new Error("offline")),
       execFileImpl,
     });
 
@@ -722,6 +725,87 @@ describe("AgentModelCatalogService", () => {
     } finally {
       nowSpy.mockRestore();
     }
+  });
+
+  it("gives every caller joining a failed refresh the same last catalog", async () => {
+    let calls = 0;
+    let failRefresh!: () => void;
+    const execFileImpl: ExecFn = vi.fn(async () => {
+      calls += 1;
+      if (calls === 1) {
+        return { stdout: JSON.stringify({ models: CODEX_0_163_CATALOG }), stderr: "" };
+      }
+      await new Promise<void>((resolve) => {
+        failRefresh = resolve;
+      });
+      throw new Error("codex crashed");
+    }) as unknown as ExecFn;
+    const service = new AgentModelCatalogService({
+      cachePath,
+      fetchImpl: mockFailingFetch(new Error("offline")),
+      execFileImpl,
+    });
+
+    const first = await service.getResolvedModels("codex");
+    const realNow = Date.now();
+    const nowSpy = vi.spyOn(Date, "now").mockReturnValue(realNow + 25 * 60 * 60 * 1000);
+    try {
+      const pending = [
+        service.getResolvedModels("codex"),
+        service.getResolvedModels("codex"),
+        service.getResolvedModels("codex"),
+      ];
+      await vi.waitFor(() => expect(execFileImpl).toHaveBeenCalledTimes(2));
+      failRefresh();
+      for (const result of await Promise.all(pending)) {
+        expect(result.models).toEqual(first.models);
+        expect(result.modelUpgrades).toEqual(first.modelUpgrades);
+      }
+    } finally {
+      nowSpy.mockRestore();
+    }
+  });
+
+  it("never waits on models.dev for Codex", async () => {
+    const fetchImpl = vi.fn(() => new Promise<never>(() => {})) as unknown as FetchFn;
+    const service = new AgentModelCatalogService({
+      cachePath,
+      fetchImpl,
+      execFileImpl: mockCodexCli(CODEX_0_163_CATALOG),
+    });
+
+    const result = await service.getResolvedModels("codex");
+
+    expect(result.models.map((m) => m.id)).toContain("gpt-6.1-sol");
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
+  it("records a hidden entry's upgrade pointer and keeps a __proto__ slug an own key", async () => {
+    const service = new AgentModelCatalogService({
+      cachePath,
+      execFileImpl: mockCodexCli([
+        { slug: "gpt-current", display_name: "Current", ...LISTED(1), upgrade: null },
+        {
+          slug: "gpt-hidden-retired",
+          visibility: "hide",
+          priority: 20,
+          upgrade: { model: "gpt-current" },
+        },
+        { slug: "__proto__", visibility: "hide", priority: 30, upgrade: { model: "gpt-current" } },
+      ]),
+    });
+
+    const result = await service.getResolvedModels("codex");
+
+    expect(result.models.map((m) => m.id)).toEqual(["gpt-current"]);
+    expect(Object.keys(result.modelUpgrades ?? {}).sort()).toEqual([
+      "__proto__",
+      "gpt-hidden-retired",
+    ]);
+    // Survives the structured clone IPC applies as an ordinary own key.
+    const cloned = structuredClone(result.modelUpgrades)!;
+    expect(Object.getPrototypeOf(cloned)).toBe(Object.prototype);
+    expect(Object.hasOwn(cloned, "__proto__")).toBe(true);
   });
 
   it("carries no upgrade map for an agent whose CLI publishes none", async () => {

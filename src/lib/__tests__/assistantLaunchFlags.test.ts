@@ -105,6 +105,16 @@ describe("loadCustomLaunchFlags — model + custom args composition", () => {
     expect(getResolvedModelList).not.toHaveBeenCalled();
   });
 
+  it("never waits on the catalog for a saved model no upgrade can reach", async () => {
+    getSettings.mockResolvedValue({
+      modelIds: { claude: "opus", "my-agent": "local-model" },
+      customArgs: "",
+    });
+    expect(await loadCustomLaunchFlags("claude")).toEqual(["--model", "opus"]);
+    expect(await loadCustomLaunchFlags("my-agent")).toEqual(["--model", "local-model"]);
+    expect(getResolvedModelList).not.toHaveBeenCalled();
+  });
+
   it("reads only the launching agent's own entry", async () => {
     getSettings.mockResolvedValue({
       modelIds: { claude: "opus", codex: "gpt-6-astra" },

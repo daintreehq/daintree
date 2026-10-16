@@ -118,19 +118,22 @@ export class AgentModelCatalogService {
   async getResolvedModels(agentId: string): Promise<ResolvedModelCatalog> {
     const bundled = this.getBundled(agentId);
 
-    // Concurrent, so a first read never waits out the network timeout before
-    // the local CLI probe even starts.
-    const [catalog, codex] = await Promise.all([
-      this.getCatalog().catch((err: unknown) => {
+    // Codex never reads models.dev: its CLI decides membership and names, so the
+    // network could only delay a launch waiting on its upgrade pointers.
+    const isCodex = agentId === "codex";
+    let catalog: ParsedCatalog | null = null;
+    if (!isCodex) {
+      try {
+        catalog = await this.getCatalog();
+      } catch (err) {
         // Singleflight wrapper already catches and returns null; this is a
         // defensive guard so a bug in the resolver never throws into IPC.
         console.warn("[AgentModelCatalogService] catalog resolution failed", err);
-        return null;
-      }),
-      agentId === "codex" ? this.getCodexCatalog() : Promise.resolve(null),
-    ]);
+      }
+    }
 
     const remote = catalog ? this.extractRemote(agentId, catalog) : null;
+    const codex = isCodex ? await this.getCodexCatalog() : null;
 
     const merged = this.merge(
       bundled,
@@ -213,9 +216,8 @@ export class AgentModelCatalogService {
    * `null` to keep the plain union of every source.
    *
    * Codex answers only through its own CLI: the live catalog is the binary that
-   * will receive `--model`, and models.dev's OpenAI provider lists every model
-   * OpenAI publishes, most of which the CLI doesn't serve. Without the CLI there
-   * is nothing to offer, and the CLI default still launches. An agent whose
+   * will receive `--model`. Without the CLI there is nothing to offer, and the
+   * CLI default still launches. An agent whose
    * bundled list is marked {@link AgentConfig.curatedModels} answers for itself
    * — its own aliases, which never go stale. Everyone else keeps discovering
    * new models from the remote catalog.
@@ -417,26 +419,27 @@ export class AgentModelCatalogService {
     if (this.codexCache && Date.now() - this.codexCache.fetchedAt < TTL_MS) {
       return this.fromCodexCache(this.codexCache);
     }
-    if (this.codexInFlight) {
-      const result = await this.codexInFlight;
-      return result ?? null;
-    }
-    this.codexInFlight = this.fetchCodexCatalog()
-      .catch((err) => {
+    // The fallback lives inside the shared promise so every caller joining a
+    // refresh gets the same answer as the one that started it.
+    const inFlight = (this.codexInFlight ??= this.fetchCodexCatalog()
+      .catch((err: unknown) => {
         console.warn("[AgentModelCatalogService] codex catalog failed", err);
         return null;
       })
+      .then((result) => {
+        if (result) {
+          this.codexCache = { ...result, fetchedAt: Date.now() };
+          return result;
+        }
+        // A failed refresh keeps the last catalog this CLI gave: with no
+        // bundled list behind it, dropping it would empty the picker over one
+        // slow probe.
+        return this.codexCache ? this.fromCodexCache(this.codexCache) : null;
+      })
       .finally(() => {
         this.codexInFlight = null;
-      });
-    const result = await this.codexInFlight;
-    if (result) {
-      this.codexCache = { ...result, fetchedAt: Date.now() };
-      return result;
-    }
-    // A failed refresh keeps the last catalog this CLI gave: with no bundled
-    // list behind it, dropping it would empty the picker over one slow probe.
-    return this.codexCache ? this.fromCodexCache(this.codexCache) : null;
+      }));
+    return inFlight;
   }
 
   private fromCodexCache(cache: CodexResolved): CodexResolved {

@@ -461,9 +461,9 @@ describe("help prompt outputs", () => {
     // going stale on the next release. Ids come from the live listing instead.
     it("names no model id, only where to resolve one", () => {
       const launch = tasks.split("\n").find((line) => line.startsWith("- Launch:")) ?? "";
-      expect(launch).not.toMatch(/model: "/);
+      expect(launch).not.toMatch(/model:\s*["'`]/);
       expect(launch).toContain("agent.listModels");
-      expect(launch).toMatch(/`model` only if the user names one/);
+      expect(launch).toMatch(/`model`[^.]*\buser names\b/);
     });
 
     // Codex reads project instructions up to `project_doc_max_bytes` (32 KiB by

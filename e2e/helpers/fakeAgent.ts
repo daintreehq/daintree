@@ -189,6 +189,12 @@ function fakeAgentProgram(
   // Restore spawns `codex app-server --listen stdio://` to look up the latest
   // session; answering nothing is today's "no session" outcome.
   if (isCodex && argv[0] === "app-server") process.exit(0);
+  // The model catalog probe (`debug models --bundled`) reads JSON and exits;
+  // left to fall through it would start the interactive fake and log a launch.
+  if (isCodex && argv[0] === "debug") {
+    process.stdout.write('{"models":[]}\n');
+    process.exit(0);
+  }
 
   const paneTag = config.perPane
     ? "." + String(process.env.DAINTREE_PANE_ID || "unknown").replace(/[^A-Za-z0-9_-]/g, "_")

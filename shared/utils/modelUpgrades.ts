@@ -20,3 +20,12 @@ export function followModelUpgrades(
   }
   return current;
 }
+
+/**
+ * Whether `agentId`'s model catalog can name a successor for a retired model.
+ * Only Codex's does, through `codex debug models --bundled`; every other agent
+ * launches a saved model as saved, so it never waits on a catalog read.
+ */
+export function publishesModelUpgrades(agentId: string): boolean {
+  return agentId === "codex";
+}

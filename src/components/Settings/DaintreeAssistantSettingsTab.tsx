@@ -562,9 +562,12 @@ export function DaintreeAssistantSettingsTab() {
   }, [resolvedModels, effectiveModelId]);
 
   const modelSelectValue = effectiveModelId || MODEL_DEFAULT_SENTINEL;
+  // A saved choice keeps the row after an empty catalog (Codex without its CLI's
+  // model list), or the only way to clear it would disappear.
   const showModelPicker =
     Boolean(resolvedModels && resolvedModels.length > 0) ||
-    (modelCatalogFailed && Boolean(preferredAgentId));
+    (modelCatalogFailed && Boolean(preferredAgentId)) ||
+    (resolvedModels !== null && savedModelId !== null);
 
   useEffect(() => {
     let cancelled = false;

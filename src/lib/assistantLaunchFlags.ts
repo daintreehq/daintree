@@ -1,7 +1,7 @@
 import { agentCapabilitiesClient } from "@/clients/agentCapabilitiesClient";
 import { getSavedAssistantModelId, resolveAssistantModelId } from "@shared/config/agentRegistry";
 import type { ResolvedModelCatalog } from "@shared/types/ipc/agentCapabilities";
-import { followModelUpgrades } from "@shared/utils/modelUpgrades";
+import { followModelUpgrades, publishesModelUpgrades } from "@shared/utils/modelUpgrades";
 import { logError } from "@/utils/logger";
 
 async function loadCatalog(agentId: string): Promise<ResolvedModelCatalog | null> {
@@ -24,9 +24,11 @@ export async function loadCustomLaunchFlags(agentId: string): Promise<string[]> 
     // Only this agent's own entry — a model saved for another agent must never
     // reach this launch.
     const saved = getSavedAssistantModelId(settings.modelIds, agentId);
-    // An explicit CLI default ("") launches with no `--model` whatever the
-    // catalog says, so it never waits on one.
-    const catalog = saved === "" ? null : await loadCatalog(agentId);
+    // The catalog is read for an unsaved model's recommendation, or to move a
+    // saved one onto its successor. An explicit CLI default ("") and a saved
+    // model no upgrade can reach launch without waiting on it.
+    const needsCatalog = saved === null || (saved !== "" && publishesModelUpgrades(agentId));
+    const catalog = needsCatalog ? await loadCatalog(agentId) : null;
     const flags: string[] = [];
     const chosen = resolveAssistantModelId(
       agentId,
