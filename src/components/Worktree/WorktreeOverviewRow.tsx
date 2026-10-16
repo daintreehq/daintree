@@ -488,6 +488,9 @@ export function WorktreeOverviewRow({
                   </span>
                 </span>
                 <TruncatedTooltip
+                  // Shown whether or not the title is cut while a custom title
+                  // hides the computed headline.
+                  isTruncated={headline.computedLabel ? true : undefined}
                   content={
                     headline.computedLabel ? (
                       // What a custom title replaced, so a search that matched it

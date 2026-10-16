@@ -685,7 +685,10 @@ function MoveToWorktreeRow({
           branch={branch}
         />
       }
-      isTruncated={isTitleCut || isBranchCut}
+      // A custom title hides the computed headline whatever its length, and a
+      // search may have matched that headline, so the reveal always has
+      // something to say for a titled row.
+      isTruncated={isTitleCut || isBranchCut || headline.computedLabel !== undefined}
       // The row is the option the input's active descendant names; a tab stop
       // on its text would be a second focus target.
       focusable={false}
