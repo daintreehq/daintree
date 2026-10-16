@@ -103,7 +103,9 @@ function scanPlaceholders(tokens: readonly SqlToken[]): PlaceholderScan {
       positional = true;
       continue;
     }
-    if (token.kind === "other" && ["$", "@", ":", "#"].includes(token.text)) {
+    // A sigil with no name, alone or trailed by Tcl `::` (`@::`), lexes as one
+    // `other` token; SQLite refuses it as an unrecognized token.
+    if (token.kind === "other" && /^[$@:#]/.test(token.text)) {
       problems.push(`placeholder ${token.text} has no name`);
       continue;
     }

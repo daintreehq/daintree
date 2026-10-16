@@ -103,6 +103,8 @@ describe("declaredQueryProblems", () => {
     ["SELECT #month", /#month is not supported/],
     ["SELECT :month, @month", /written both as :month and @month/],
     ["SELECT :month, @", /placeholder @ has no name/],
+    ["SELECT :month, @::", /placeholder @:: has no name/],
+    ["SELECT :month, :::", /placeholder ::: has no name/],
   ])("refuses a placeholder the host cannot bind by name: %s", (sql, message) => {
     expect(messages(sql, MONTH)).toEqual([expect.stringMatching(message)]);
   });
