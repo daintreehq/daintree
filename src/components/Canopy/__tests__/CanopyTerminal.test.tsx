@@ -30,6 +30,7 @@ vi.mock("@xterm/xterm", () => ({
       };
     }
     open() {}
+    focus() {}
     reset() {
       xterm.current!.writes.push("<reset>");
     }
@@ -537,6 +538,25 @@ describe("CanopyTerminal", () => {
       } finally {
         vi.useRealTimers();
       }
+    });
+
+    it("leaves a run that exited while the link was coming back ended, not live", async () => {
+      const remote = remoteApi();
+      const view = mountRemote(remote);
+      await act(async () =>
+        remote.opens[0]!({ watchId: 3, snapshot: { data: "S", cols: 80, rows: 24 } })
+      );
+      view.setReconnecting(true);
+      _resetCanopyWatchBurstForTests();
+      await act(async () => remote.resync());
+      // Opened while the link still reads as down: held, then the run exits.
+      await act(async () =>
+        remote.opens[1]!({ watchId: 4, snapshot: { data: "S", cols: 80, rows: 24 } })
+      );
+      await act(async () => remote.push({ kind: "ended", watchId: 4, runId: "run-1" }));
+      view.setReconnecting(false);
+      expect(view.states.at(-1)).toMatchObject({ watchId: null, ended: true });
+      expect(view.container.textContent).toContain("This terminal has exited");
     });
 
     it("ignores the answer to a stream it asked for before the link dropped", async () => {

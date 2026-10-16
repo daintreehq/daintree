@@ -134,6 +134,7 @@ export function CanopyTerminal({
    */
   const [generation, setGeneration] = useState(0);
   const reopenStatusRef = useRef<"opening" | "reconnecting">("opening");
+  const refocusRef = useRef(false);
   const reconnectingRef = useRef(reconnecting);
   // A full-screen TUI runs on the alternate buffer: like a grid pane, the view
   // then drops its inset and hides the scrollbar that buffer has no use for.
@@ -172,6 +173,13 @@ export function CanopyTerminal({
       cursorBlink: false,
     });
     terminal.open(host);
+    if (refocusRef.current) {
+      refocusRef.current = false;
+      // Unless the user has put the keyboard somewhere else meanwhile.
+      if (document.activeElement === null || document.activeElement === document.body) {
+        terminal.focus();
+      }
+    }
     terminalRef.current = terminal;
 
     let webgl: WebglAddon | undefined;
@@ -271,6 +279,8 @@ export function CanopyTerminal({
     };
 
     let view: CanopyTerminalView | null = null;
+    // A stream that opened while the link still read as down: shown, not typed into.
+    let heldWatchId: number | null = null;
     let releasePane: (() => void) | null = null;
     let fence: number | undefined;
     const early: CanopyTerminalData[] = [];
@@ -285,6 +295,7 @@ export function CanopyTerminal({
         return;
       }
       if (chunk.kind === "ended") {
+        heldWatchId = null;
         publish({ watchId: null, ended: true });
         setStatus("ended");
         return;
@@ -373,8 +384,6 @@ export function CanopyTerminal({
     };
     // The link dropped and the stream with it, and nothing has opened it since.
     let suspended = false;
-    // A stream that opened while the link still read as down: shown, not typed into.
-    let heldWatchId: number | null = null;
     /**
      * The stream is gone — the link to the run's host dropped — so nothing
      * typed can reach it. Input stops at once, and nothing typed meanwhile is
@@ -399,6 +408,8 @@ export function CanopyTerminal({
       if (disposed || stream.ended) return;
       disposed = true;
       reopenStatusRef.current = next;
+      // Typing straight into the terminal carries on in the one that replaces it.
+      refocusRef.current = frame.contains(document.activeElement);
       setGeneration((n) => n + 1);
     };
     suspendRef.current = suspend;
@@ -406,6 +417,7 @@ export function CanopyTerminal({
     // The link reads as up again: open again unless its `resync` already did,
     // and let the user type into a stream that opened meanwhile.
     resumeRef.current = () => {
+      if (stream.ended) return;
       if (suspended) {
         reopen("reconnecting");
       } else if (heldWatchId !== null) {
