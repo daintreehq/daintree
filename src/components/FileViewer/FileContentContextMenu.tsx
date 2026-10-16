@@ -1,7 +1,11 @@
 import { useRef } from "react";
 import type React from "react";
 import { ContextMenu, ContextMenuContent, ContextMenuTrigger } from "@/components/ui/context-menu";
-import { stopFileRowMenuPropagation } from "@/hooks/useFileRowMenuItems";
+import {
+  isFileRowMenuKey,
+  openFileRowMenuFromKeyboard,
+  stopFileRowMenuPropagation,
+} from "@/hooks/useFileRowMenuItems";
 
 /** Whether the right-click landed on something that takes text input. */
 export function isEditableMenuTarget(target: EventTarget | null): boolean {
@@ -68,6 +72,25 @@ export function FileContentContextMenu({ items, children }: FileContentContextMe
       : null;
   };
 
+  // Any key ends the press's claim: a right-press that never produced a menu
+  // (it became a drag, say) would otherwise hand its stale answer to the next
+  // keyboard-opened one, after the selection has moved on.
+  const handleKeyDownCapture = () => {
+    selectionAtPressRef.current = null;
+  };
+
+  // Menu / Shift+F10. `data-row-menu` stands the global panel-menu handler
+  // down so these keys reach here. With text selected or an editable target
+  // the key is left alone: Chromium raises its own `contextmenu` for it, which
+  // the capture guard below defers to the native edit menu like a right-click.
+  const handleKeyDown = (event: React.KeyboardEvent<HTMLElement>) => {
+    if (!isFileRowMenuKey(event)) return;
+    if (isEditableMenuTarget(event.target) || hasTextSelectionWithin(event.currentTarget)) return;
+    event.preventDefault();
+    event.stopPropagation();
+    openFileRowMenuFromKeyboard(event.currentTarget);
+  };
+
   // Capture phase on the trigger itself, so it runs before Radix's
   // bubble-phase handler and before any enclosing panel menu: stopping
   // propagation here keeps both from seeing the event at all. The default is
@@ -92,7 +115,10 @@ export function FileContentContextMenu({ items, children }: FileContentContextMe
       <ContextMenuTrigger
         asChild
         disabled={disabled}
+        {...(disabled ? {} : { "data-row-menu": "" })}
         onPointerDownCapture={disabled ? undefined : handlePointerDownCapture}
+        onKeyDownCapture={disabled ? undefined : handleKeyDownCapture}
+        onKeyDown={disabled ? undefined : handleKeyDown}
         onContextMenuCapture={disabled ? undefined : handleContextMenuCapture}
         onContextMenu={disabled ? undefined : stopFileRowMenuPropagation}
       >

@@ -3868,8 +3868,13 @@ describe("FilePane pinned containment root", () => {
 });
 
 describe("FilePane file menu on its content (#13423)", () => {
-  function renderPane(filePath: string) {
-    panelsById["file-1"] = { id: "file-1", kind: "file", filePath };
+  function renderPane(filePath: string, panelWorktreeId?: string) {
+    panelsById["file-1"] = {
+      id: "file-1",
+      kind: "file",
+      filePath,
+      ...(panelWorktreeId ? { worktreeId: panelWorktreeId } : {}),
+    };
     return render(
       <TooltipProvider>
         <FilePane
@@ -3915,13 +3920,16 @@ describe("FilePane file menu on its content (#13423)", () => {
   });
 
   it("opens the shared file menu on a right-click in the file's content", async () => {
+    // The panel is stamped with a worktree the file isn't in (#11276); the menu
+    // must follow containment, like the toolbar.
+    worktreeState.worktrees.set("wt-stamped", { id: "wt-stamped", path: "/other" });
     worktreeState.worktrees.set("wt-1", {
       id: "wt-1",
       path: "/repo",
       worktreeChanges: { changes: [{ path: "/repo/src/index.ts", status: "modified" }] },
     });
     readMock.mockResolvedValue({ content: "const a = 1;" });
-    renderPane("/repo/src/index.ts");
+    renderPane("/repo/src/index.ts", "wt-stamped");
 
     fireEvent.contextMenu(await screen.findByTestId("file-pane-body"));
 
@@ -3958,8 +3966,9 @@ describe("FilePane file menu on its content (#13423)", () => {
   });
 
   it("offers no worktree-scoped items for a file outside every worktree", async () => {
+    worktreeState.worktrees.set("wt-stamped", { id: "wt-stamped", path: "/other" });
     readMock.mockResolvedValue({ content: "const a = 1;" });
-    renderPane("/elsewhere/notes.ts");
+    renderPane("/elsewhere/notes.ts", "wt-stamped");
 
     fireEvent.contextMenu(await screen.findByTestId("file-pane-body"));
 
@@ -3970,5 +3979,25 @@ describe("FilePane file menu on its content (#13423)", () => {
       expect.objectContaining({ hasChanges: false })
     );
     expect(screen.queryByRole("menuitem", { name: "Show in file browser" })).toBeNull();
+  });
+
+  it("reveals through the pane's own out-of-root reveal", async () => {
+    fileMenuRenderMock.mockImplementation(
+      (_surface: unknown, _target: unknown, options?: { onReveal?: () => void }) =>
+        options?.onReveal && <ContextMenuItem onSelect={options.onReveal}>Reveal</ContextMenuItem>
+    );
+    readMock.mockResolvedValue({ content: "const a = 1;" });
+    renderPane("/elsewhere/notes.ts");
+
+    fireEvent.contextMenu(await screen.findByTestId("file-pane-body"));
+    fireEvent.click(await screen.findByText("Reveal"));
+
+    await waitFor(() =>
+      expect(dispatchMock).toHaveBeenCalledWith(
+        "file.showItemInFolder",
+        { path: "/elsewhere/notes.ts", allowOutsideRoots: true },
+        expect.anything()
+      )
+    );
   });
 });

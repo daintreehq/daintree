@@ -1674,7 +1674,15 @@ export function HelpPanel({
               {!introDismissed && !hasEverLaunchedAgent && (
                 <HelpIntroBanner onDismiss={dismissIntro} />
               )}
-              <div className="flex-1 relative min-h-0">
+              {/* Claims the right-click so the app views' native edit menu
+                  stays out of the terminal: xterm parks its helper textarea
+                  under the pointer, and Cut or Select all there would act on
+                  that textarea, not the terminal buffer. Grid terminals get
+                  the same from their panel menu's trigger. */}
+              <div
+                className="flex-1 relative min-h-0"
+                onContextMenu={(event) => event.preventDefault()}
+              >
                 <Suspense fallback={null}>
                   <XtermAdapter
                     terminalId={terminalId}

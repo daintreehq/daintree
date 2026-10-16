@@ -146,6 +146,13 @@ export interface FileRowMenuItemOptions {
    * browser lists unchanged files and has no diff to show for them.
    */
   hasChanges?: boolean;
+  /**
+   * Reveals this row in the OS file manager. Supplied by a surface that shows
+   * files outside every project root — the file panel — and already owns a
+   * reveal that takes the guarded out-of-root fallback; omitted surfaces use
+   * the root-contained `file.showItemInFolder`.
+   */
+  onReveal?: (() => void) | undefined;
 }
 
 export interface FileRowMenuSurface {
@@ -376,7 +383,7 @@ export function useFileRowMenuItems(surface: FileRowMenuSurface): FileRowMenuCon
               </ContextMenuActionItem>
             </>
           )}
-          <ContextMenuItem onSelect={() => handleReveal(absolutePath)}>
+          <ContextMenuItem onSelect={options?.onReveal ?? (() => handleReveal(absolutePath))}>
             <FolderOpen className={ICON_CLASS} />
             {reveal.label}
           </ContextMenuItem>

@@ -1426,6 +1426,9 @@ export function FilePane({
           // This pane's own Diff mode, the same one the toggle switches to,
           // rather than a second diff panel.
           onOpenDiff: () => handleViewModeChange("diff"),
+          // The toolbar's reveal: it takes the guarded fallback for a file
+          // outside every project root, which this pane deliberately displays.
+          onReveal: () => void handleOpenExternal("reveal"),
         }
       )}
     </>

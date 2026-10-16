@@ -484,6 +484,20 @@ describe("useFileRowMenuItems — Open diff routing", () => {
   });
 });
 
+describe("useFileRowMenuItems — Reveal routing", () => {
+  it("calls the surface's own reveal when one is injected", async () => {
+    // The file panel's reveal takes the out-of-root fallback its toolbar uses;
+    // the contained action would refuse a file outside every project root.
+    const onReveal = vi.fn();
+    const menu = await openMenu({ options: { onReveal } });
+
+    fireEvent.click(within(menu).getByRole("menuitem", { name: "Reveal in Finder" }));
+
+    expect(onReveal).toHaveBeenCalledTimes(1);
+    expect(dispatchMock.mock.calls.some(([id]) => id === "file.showItemInFolder")).toBe(false);
+  });
+});
+
 describe("useFileRowMenuItems — path semantics", () => {
   it("does not re-derive the relative path from the absolute one", async () => {
     // The file browser's row path stays relative to the true worktree root even

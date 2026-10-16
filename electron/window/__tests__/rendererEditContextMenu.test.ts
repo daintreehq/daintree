@@ -66,9 +66,17 @@ describe("buildRendererEditMenuTemplate", () => {
   it("offers nothing when there is nothing to edit or copy", () => {
     const { wc } = createWebContents();
     expect(buildRendererEditMenuTemplate(wc as unknown as WebContents, params())).toBeNull();
-    expect(
-      buildRendererEditMenuTemplate(wc as unknown as WebContents, params({ selectionText: "  " }))
-    ).toBeNull();
+  });
+
+  it("treats a whitespace-only selection as copyable", () => {
+    // The renderer defers any non-empty selection here; dropping it would leave
+    // that right-click with no menu at all.
+    const { wc } = createWebContents();
+    const template = buildRendererEditMenuTemplate(
+      wc as unknown as WebContents,
+      params({ selectionText: "    " })
+    );
+    expect(labels(template)).toEqual(["Copy"]);
   });
 
   it("offers only Copy for selected read-only text", () => {

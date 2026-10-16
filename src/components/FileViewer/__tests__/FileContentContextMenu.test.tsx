@@ -115,9 +115,50 @@ describe("FileContentContextMenu", () => {
     expect(await screen.findByText("Reveal file")).toBeTruthy();
   });
 
+  it("opens the file's menu from the keyboard instead of the panel's", async () => {
+    renderContent();
+    const body = screen.getByTestId("body");
+
+    // The marker is what stands the global panel-menu key handler down.
+    expect(body.hasAttribute("data-row-menu")).toBe(true);
+    act(() => {
+      fireEvent.keyDown(screen.getByTestId("text"), { key: "F10", shiftKey: true });
+    });
+
+    expect(await screen.findByText("Reveal file")).toBeTruthy();
+    expect(screen.queryByText("Panel item")).toBeNull();
+  });
+
+  it("leaves the menu key to the browser while text is selected", () => {
+    renderContent();
+    selectContents(screen.getByTestId("text"));
+
+    const notPrevented = fireEvent.keyDown(screen.getByTestId("text"), { key: "ContextMenu" });
+
+    // Not prevented, so Chromium raises its own contextmenu and the native
+    // edit menu answers it, as for a right-click.
+    expect(notPrevented).toBe(true);
+    expect(screen.queryByText("Reveal file")).toBeNull();
+  });
+
+  it("drops a press's selection snapshot once the keyboard takes over", () => {
+    renderContent();
+    const text = screen.getByTestId("text");
+
+    // A right-press with nothing selected that never produced a menu…
+    fireEvent.pointerDown(text, { button: 2 });
+    // …then a keyboard selection and a keyboard-raised menu.
+    selectContents(text);
+    fireEvent.keyDown(text, { key: "Shift" });
+    rightClick(text);
+
+    expect(screen.queryByText("Reveal file")).toBeNull();
+  });
+
   it("stands down with no file, so the enclosing menu opens", async () => {
     renderContent(null);
 
+    expect(screen.getByTestId("body").hasAttribute("data-row-menu")).toBe(false);
     rightClick(screen.getByTestId("text"));
 
     expect(await screen.findByText("Panel item")).toBeTruthy();

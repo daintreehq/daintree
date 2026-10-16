@@ -25,7 +25,10 @@ export function buildRendererEditMenuTemplate(
   wc: WebContents,
   params: Pick<ContextMenuParams, "isEditable" | "selectionText" | "editFlags">
 ): MenuItemConstructorOptions[] | null {
-  const hasSelection = (params.selectionText ?? "").trim().length > 0;
+  // Untrimmed: a selection of indentation or blank lines is still a selection
+  // the renderer handed over, and trimming it here would leave that
+  // right-click with no menu at all.
+  const hasSelection = (params.selectionText ?? "").length > 0;
   if (params.isEditable) {
     return [
       {
