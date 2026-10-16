@@ -135,7 +135,6 @@ import {
   ContextMenuSub,
   ContextMenuSubContent,
   ContextMenuSubTrigger,
-  ContextMenuTrigger,
   stopContextMenuPropagation,
 } from "@/components/ui/context-menu";
 import { MenuActionSourceContext, type MenuActionSourceValue } from "@/components/ui/menu-source";
@@ -146,7 +145,7 @@ import {
   subscribeToTourRegistry,
 } from "@/components/Tour/tourRegistry";
 import { MoveToWorktreePicker } from "@/components/Panel/MoveToWorktreePicker";
-import { PanelContextMenuTriggerContext } from "./PanelContextMenuTrigger";
+import { PanelContextMenuTriggerScope } from "./PanelContextMenuTrigger";
 import {
   GENERIC_PANEL_RELOAD_ACTION_ID,
   GENERIC_PANEL_TOUR_ACTION_ID,
@@ -1203,32 +1202,6 @@ function TerminalContextMenuBody({
     return <div className="contents">{children}</div>;
   }
 
-  const triggerMarker = proxy
-    ? { "data-context-proxy": terminalId }
-    : { "data-context-trigger": terminalId };
-
-  const renderTrigger = (onContextMenu: (event: React.MouseEvent<HTMLElement>) => void) => {
-    const triggerProps = {
-      ...triggerMarker,
-      onContextMenu,
-      onPointerDown: captureMovePickerAnchorOnPress,
-    };
-    if (triggerScope === "header") {
-      return (
-        <PanelContextMenuTriggerContext.Provider value={triggerProps}>
-          {children}
-        </PanelContextMenuTriggerContext.Provider>
-      );
-    }
-    return (
-      <ContextMenuTrigger asChild>
-        <div className="contents" {...triggerProps}>
-          {children}
-        </div>
-      </ContextMenuTrigger>
-    );
-  };
-
   const isBrowser = isBrowserPanel(terminal);
   const isDevPreview = isDevPreviewPanel(terminal);
   const isReview = isReviewPanel(terminal);
@@ -1430,7 +1403,15 @@ function TerminalContextMenuBody({
             return null;
           }}
         </MenuActionSourceContext.Consumer>
-        {renderTrigger(handleTriggerContextMenu)}
+        <PanelContextMenuTriggerScope
+          terminalId={terminalId}
+          proxy={proxy}
+          scope={triggerScope}
+          onContextMenu={handleTriggerContextMenu}
+          onPointerDown={captureMovePickerAnchorOnPress}
+        >
+          {children}
+        </PanelContextMenuTriggerScope>
         <ContextMenuContent onCloseAutoFocus={handleCloseAutoFocus}>
           <MenuContentMountSignal isLive={isMenuLive} onLiveChange={setIsMenuLive} />
           {layoutSection}
@@ -1489,7 +1470,15 @@ function TerminalContextMenuBody({
             return null;
           }}
         </MenuActionSourceContext.Consumer>
-        {renderTrigger(handleTriggerContextMenu)}
+        <PanelContextMenuTriggerScope
+          terminalId={terminalId}
+          proxy={proxy}
+          scope={triggerScope}
+          onContextMenu={handleTriggerContextMenu}
+          onPointerDown={captureMovePickerAnchorOnPress}
+        >
+          {children}
+        </PanelContextMenuTriggerScope>
         <ContextMenuContent onCloseAutoFocus={handleCloseAutoFocus}>
           <MenuContentMountSignal isLive={isMenuLive} onLiveChange={setIsMenuLive} />
           {layoutSection}
@@ -1547,7 +1536,15 @@ function TerminalContextMenuBody({
             return null;
           }}
         </MenuActionSourceContext.Consumer>
-        {renderTrigger(handleTriggerContextMenu)}
+        <PanelContextMenuTriggerScope
+          terminalId={terminalId}
+          proxy={proxy}
+          scope={triggerScope}
+          onContextMenu={handleTriggerContextMenu}
+          onPointerDown={captureMovePickerAnchorOnPress}
+        >
+          {children}
+        </PanelContextMenuTriggerScope>
         <ContextMenuContent onCloseAutoFocus={handleCloseAutoFocus}>
           <MenuContentMountSignal isLive={isMenuLive} onLiveChange={setIsMenuLive} />
           {layoutSection}
@@ -1595,7 +1592,15 @@ function TerminalContextMenuBody({
             return null;
           }}
         </MenuActionSourceContext.Consumer>
-        {renderTrigger(handleTriggerContextMenu)}
+        <PanelContextMenuTriggerScope
+          terminalId={terminalId}
+          proxy={proxy}
+          scope={triggerScope}
+          onContextMenu={handleTriggerContextMenu}
+          onPointerDown={captureMovePickerAnchorOnPress}
+        >
+          {children}
+        </PanelContextMenuTriggerScope>
         <ContextMenuContent onCloseAutoFocus={handleCloseAutoFocus}>
           <MenuContentMountSignal isLive={isMenuLive} onLiveChange={setIsMenuLive} />
           {/* The header's overflow menu renders this same list (#12606). */}
@@ -1686,7 +1691,15 @@ function TerminalContextMenuBody({
             return null;
           }}
         </MenuActionSourceContext.Consumer>
-        {renderTrigger(handleContextMenu)}
+        <PanelContextMenuTriggerScope
+          terminalId={terminalId}
+          proxy={proxy}
+          scope={triggerScope}
+          onContextMenu={handleContextMenu}
+          onPointerDown={captureMovePickerAnchorOnPress}
+        >
+          {children}
+        </PanelContextMenuTriggerScope>
         <ContextMenuContent onCloseAutoFocus={handleCloseAutoFocus}>
           <MenuContentMountSignal isLive={isMenuLive} onLiveChange={setIsMenuLive} />
           {hasPty && (

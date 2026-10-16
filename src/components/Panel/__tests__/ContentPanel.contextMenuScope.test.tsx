@@ -98,6 +98,7 @@ function renderPanel(kind: string) {
       onFocus={() => {}}
       onClose={() => {}}
       onToggleMaximize={() => {}}
+      toolbar={<div data-testid="panel-toolbar">Toolbar</div>}
     >
       <div data-testid="panel-body">Body</div>
     </ContentPanel>
@@ -118,6 +119,7 @@ describe("ContentPanel — panel menu trigger scope", () => {
       const el = trigger();
       expect(el.querySelector("[data-panel-id]")).toBeNull();
       expect(el.contains(screen.getByTestId("panel-body"))).toBe(false);
+      expect(el.contains(screen.getByTestId("panel-toolbar"))).toBe(false);
       expect(el.textContent).toContain("Ledger");
     }
   );

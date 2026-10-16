@@ -26,17 +26,7 @@ vi.mock("@/store/fleetArmingStore", () => ({
   isFleetArmEligible: () => false,
 }));
 
-const panelsById = vi.hoisted(() => ({
-  current: {
-    page: {
-      id: "page",
-      title: "Page",
-      kind: "browser",
-      location: "grid",
-      browserUrl: "https://example.com",
-    },
-  } as Record<string, unknown>,
-}));
+const panelsById = vi.hoisted(() => ({ current: {} as Record<string, unknown> }));
 
 vi.mock("@/store", () => {
   const state = () => ({
@@ -53,7 +43,20 @@ vi.mock("@/store", () => {
 import { TerminalContextMenu } from "../TerminalContextMenu";
 import { PanelContextMenuTrigger } from "../PanelContextMenuTrigger";
 
-function renderPanel(triggerScope?: "surface" | "header") {
+// One panel per non-PTY branch of the menu: each renders its own trigger.
+const NON_PTY_BRANCHES: Array<[string, Record<string, unknown>]> = [
+  ["browser", { kind: "browser", browserUrl: "https://example.com" }],
+  ["dev-preview", { kind: "dev-preview", browserUrl: "http://localhost:3000" }],
+  ["file", { kind: "file", filePath: "/repo/README.md" }],
+  ["diff", { kind: "diff" }],
+  ["plugin", { kind: "acme.dashboard", pluginId: "acme" }],
+];
+
+function renderPanel(
+  triggerScope?: "surface" | "header",
+  fields: Record<string, unknown> = NON_PTY_BRANCHES[0]![1]
+) {
+  panelsById.current = { page: { id: "page", title: "Page", location: "grid", ...fields } };
   return render(
     <TerminalContextMenu terminalId="page" forceLocation="grid" triggerScope={triggerScope}>
       <div data-panel-id="page" tabIndex={-1}>
@@ -72,7 +75,7 @@ function rightClick(text: string) {
   });
 }
 
-const menuItem = () => screen.queryByText("Reload page");
+const menuItem = () => document.querySelector('[role="menu"]');
 
 beforeAll(async () => {
   await primeRadix();
@@ -83,22 +86,25 @@ afterEach(() => {
 });
 
 describe("TerminalContextMenu — header-scoped trigger", () => {
-  it("opens from the title bar", () => {
-    renderPanel("header");
+  it.each(NON_PTY_BRANCHES)("opens a %s panel's menu from the title bar", (_, fields) => {
+    renderPanel("header", fields);
     rightClick("Title bar");
     expect(menuItem()).not.toBeNull();
   });
 
-  it("leaves a right-click in the body to the body", () => {
-    renderPanel("header");
-    const body = screen.getByText("Panel body");
-    const event = new MouseEvent("contextmenu", { bubbles: true, cancelable: true });
-    act(() => {
-      body.dispatchEvent(event);
-    });
-    expect(menuItem()).toBeNull();
-    expect(event.defaultPrevented).toBe(false);
-  });
+  it.each(NON_PTY_BRANCHES)(
+    "leaves a right-click in a %s panel's body to the body",
+    (_, fields) => {
+      renderPanel("header", fields);
+      const body = screen.getByText("Panel body");
+      const event = new MouseEvent("contextmenu", { bubbles: true, cancelable: true });
+      act(() => {
+        body.dispatchEvent(event);
+      });
+      expect(menuItem()).toBeNull();
+      expect(event.defaultPrevented).toBe(false);
+    }
+  );
 
   it("marks only the title bar as the panel's trigger", () => {
     const { container } = renderPanel("header");
@@ -123,6 +129,21 @@ describe("TerminalContextMenu — surface-scoped trigger", () => {
     renderPanel();
     rightClick("Panel body");
     expect(menuItem()).not.toBeNull();
+  });
+
+  it("keeps the header slot inert when the panel record is gone", () => {
+    panelsById.current = {};
+    const { container } = render(
+      <TerminalContextMenu terminalId="page" forceLocation="grid" triggerScope="header">
+        <PanelContextMenuTrigger>
+          <div>Title bar</div>
+        </PanelContextMenuTrigger>
+      </TerminalContextMenu>
+    );
+    expect(screen.getByText("Title bar")).toBeTruthy();
+    expect(container.querySelector("[data-context-trigger]")).toBeNull();
+    rightClick("Title bar");
+    expect(menuItem()).toBeNull();
   });
 
   it("treats the header slot as plain content", () => {
