@@ -1,4 +1,4 @@
-import { BRANCH_TYPES, BRANCH_PREFIX_MAP } from "@shared/config/branchPrefixes";
+import { BRANCH_TYPES } from "@shared/config/branchPrefixes";
 import type { BranchType } from "@shared/config/branchPrefixes";
 import type { Issue } from "@shared/types/forge";
 
@@ -15,7 +15,7 @@ export interface PrefixSuggestion {
 }
 
 /**
- * Parses freeform branch input into prefix and slug components.
+ * Splits freeform branch input into prefix and slug at its first slash.
  * Handles: "feature/my-branch", "feat/my-branch", "my-branch" (no prefix)
  */
 export function parseBranchInput(input: string): ParsedBranchInput {
@@ -45,21 +45,8 @@ export function parseBranchInput(input: string): ParsedBranchInput {
     };
   }
 
-  // Check if the prefix is a known prefix or alias (case-insensitive)
-  const isKnownPrefix = !!BRANCH_PREFIX_MAP[potentialPrefix.toLowerCase()];
-
-  if (isKnownPrefix) {
-    // Normalize alias to canonical prefix (e.g., "feat" -> "feature")
-    const canonicalPrefix = BRANCH_PREFIX_MAP[potentialPrefix.toLowerCase()]!.prefix;
-    return {
-      prefix: canonicalPrefix,
-      slug,
-      fullBranchName: `${canonicalPrefix}/${slug}`,
-      hasPrefix: true,
-    };
-  }
-
-  // Unknown prefix - preserve case for custom prefixes, but validate characters
+  // Kept as typed, alias and case included: recognising `hotfix/` or `ui/` for
+  // its glyph must not rename the branch the dialog creates.
   return {
     prefix: potentialPrefix,
     slug,

@@ -7,7 +7,9 @@ import {
   STATUS_OPTIONS,
   TYPE_OPTIONS,
   describeActiveFacets,
+  HAS_AGENT_LABEL,
 } from "@/lib/worktreeFilterOptions";
+import { WORKTREE_TYPE_IDS } from "@/lib/worktreeTypes";
 
 const NONE = {
   statusFilters: new Set<never>(),
@@ -93,7 +95,8 @@ describe("describeActiveFacets", () => {
         expect(option.label.trim()).not.toBe("");
         expect(out).toContain(option.label);
         if (option.label !== option.value) {
-          expect(out.split(/[:,·\s]+/)).not.toContain(option.value);
+          // "Has an agent" is a facet with no key, so its words are not a leak.
+          expect(out.replace(HAS_AGENT_LABEL, "").split(/[:,·\s]+/)).not.toContain(option.value);
         }
       }
     }
@@ -107,5 +110,13 @@ describe("describeActiveFacets", () => {
     ]) {
       expect(out).toContain(`${title}:`);
     }
+  });
+});
+
+describe("TYPE_OPTIONS", () => {
+  it("offers every worktree type exactly once, each with a label", () => {
+    const values = TYPE_OPTIONS.map((option) => option.value);
+    expect([...values].sort()).toEqual([...WORKTREE_TYPE_IDS].sort());
+    expect(TYPE_OPTIONS.every((option) => option.label.length > 0)).toBe(true);
   });
 });

@@ -236,7 +236,7 @@ export function getVisibleWorktreesForCycling(
     : sortWorktrees(filtered, orderBy, validPinnedWorktrees, manualOrder);
 
   // Match sidebar's grouped rendering: when grouped-by-type is on and
-  // there is no query, the user sees groups flattened in TYPE_ORDER.
+  // there is no query, the user sees groups flattened in WORKTREE_TYPE_IDS order.
   const scrollableList =
     isGroupedByType && !hasQuery
       ? groupByType(sortedNonMain, orderBy, validPinnedWorktrees).flatMap((s) => s.worktrees)

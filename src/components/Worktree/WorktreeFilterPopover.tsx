@@ -194,8 +194,8 @@ interface ChipGridProps<T extends string> {
   counts?: Record<T, number>;
   /**
    * Past this many options, values that match nothing are folded behind a
-   * "more" toggle. Branch type carries fifteen values and a real repository
-   * uses three or four of them, so the unfolded grid was four rows of mostly
+   * "more" toggle. Branch type carries every recognised type and a real
+   * repository uses a handful of them, so the unfolded grid was rows of mostly
    * dead options sitting between the user and every facet below it.
    */
   overflowAfter?: number;

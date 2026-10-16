@@ -585,6 +585,33 @@ describe("worktreeFilterStore persistence scoping", () => {
     expect(second.useWorktreeFilterStore.getState().hasAgentFilter).toBe(false);
   });
 
+  it("drops persisted type filters the registry no longer knows", async () => {
+    // A stale id left in the set would match no worktree and empty the sidebar.
+    const scopedBlob = JSON.stringify({
+      state: {
+        query: "",
+        statusFilters: [],
+        typeFilters: ["design", "agent", "retired-type", "constructor", 7, null],
+        prIssueFilters: [],
+        sessionFilters: [],
+        activityFilters: [],
+        pinnedWorktrees: [],
+        collapsedWorktrees: [],
+        manualOrder: [],
+      },
+      version: 2,
+    });
+    installLocalStorage({
+      getItem: (key) => (key === PROJECT_KEY ? scopedBlob : null),
+      setItem: () => {},
+      removeItem: () => {},
+    });
+
+    const { useWorktreeFilterStore: store } = await import("../worktreeFilterStore");
+
+    expect(Array.from(store.getState().typeFilters).sort()).toEqual(["agent", "design"]);
+  });
+
   it("seeds liveQuery from the persisted query on hydration", async () => {
     const scopedBlob = JSON.stringify({
       state: {

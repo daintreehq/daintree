@@ -27,6 +27,7 @@ import {
   type WorktreeAgentBuckets,
 } from "@/lib/worktreeAgentBuckets";
 import type { Worktree } from "@shared/types/worktree";
+import { BRANCH_TYPES } from "@shared/config/branchPrefixes";
 import type {
   StatusFilter,
   TypeFilter,
@@ -141,6 +142,19 @@ describe("getWorktreeType", () => {
   it("handles case-insensitive matching", () => {
     const worktree = createMockWorktree({ branch: "FEATURE/uppercase" });
     expect(getWorktreeType(worktree)).toBe("feature");
+  });
+
+  it.each([
+    ["codex/fix/login", "bugfix"],
+    ["codex/login", "agent"],
+    ["alice/feature/login", "feature"],
+    ["alice/login", "other"],
+    ["design/header", "design"],
+    ["feature-login", "feature"],
+    ["CI-42-flaky-test", "other"],
+    ["renovate/react-19.x", "deps"],
+  ])("classifies %s as %s, the same way its label does", (branch, type) => {
+    expect(getWorktreeType(createMockWorktree({ branch }))).toBe(type);
   });
 
   it.each(["constructor-injection", "Constructor/refactor", "__proto__/x"])(
@@ -1033,6 +1047,21 @@ describe("sortWorktrees manual order", () => {
 });
 
 describe("groupByType", () => {
+  it("gives every recognised type a section, so no worktree drops out", () => {
+    const branches = [
+      ...BRANCH_TYPES.map((type) => `${type.prefix}/x`),
+      "codex/login",
+      "alice/login",
+    ];
+    const worktrees = branches.map((branch, i) =>
+      createMockWorktree({ id: String(i), branch, path: `/repo/wt-${i}` })
+    );
+    const groups = groupByType(worktrees, "alpha");
+    expect(groups.reduce((n, g) => n + g.worktrees.length, 0)).toBe(worktrees.length);
+    expect(groups.map((g) => g.type)).toEqual([...BRANCH_TYPES.map((t) => t.id), "agent", "other"]);
+    expect(groups.every((g) => g.displayName.length > 0)).toBe(true);
+  });
+
   it("groups worktrees by type", () => {
     const worktrees = [
       createMockWorktree({ id: "1", branch: "feature/a" }),
@@ -1781,7 +1810,7 @@ describe("orderWorktreesLikeSidebar", () => {
   };
 
   // Grouped re-sorts inside each section *without* `manualOrder`, so manual
-  // mode collapses to the name tiebreak there, and TYPE_ORDER (feature,
+  // mode collapses to the name tiebreak there, and WORKTREE_TYPE_IDS (feature,
   // bugfix, docs, then "Outside the project") outranks the pins.
   const grouped: Record<OrderBy, string[]> = {
     recent: ["m", "p2", "f20", "f2", "f10", "p1", "b1", "d1", "x"],

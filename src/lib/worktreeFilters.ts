@@ -1,5 +1,10 @@
 import type { Worktree, WorktreeState } from "@shared/types/worktree";
-import { BRANCH_PREFIX_MAP } from "@shared/config/branchPrefixes";
+import { classifyBranch } from "@shared/config/branchPrefixes";
+import {
+  getWorktreeTypeGroupName,
+  WORKTREE_TYPE_IDS,
+  type WorktreeTypeId,
+} from "@/lib/worktreeTypes";
 import { parseExactNumber } from "@/lib/parseExactNumber";
 import type {
   OrderBy,
@@ -79,39 +84,15 @@ export function matchesDevServerFilter(
   }
 }
 
-export type WorktreeTypeId =
-  | "feature"
-  | "bugfix"
-  | "refactor"
-  | "chore"
-  | "docs"
-  | "test"
-  | "release"
-  | "ci"
-  | "deps"
-  | "perf"
-  | "style"
-  | "wip"
-  | "main"
-  | "detached"
-  | "other";
+export type { WorktreeTypeId };
 
 export function getWorktreeType(worktree: Worktree | WorktreeState): WorktreeTypeId {
   if (worktree.isMainWorktree) return "main";
   if (worktree.isDetached || !worktree.branch) return "detached";
 
-  const branch = worktree.branch.toLowerCase();
-  const prefix = branch.split(/[/-]/)[0];
-  if (!prefix) return "other";
-
-  // Own keys only: a branch like `constructor-injection` would otherwise read an
-  // inherited member off the plain-object table, and its missing `id` becomes a
-  // group no section renders — dropping the worktree from grouped orderings.
-  const branchType = Object.hasOwn(BRANCH_PREFIX_MAP, prefix) ? BRANCH_PREFIX_MAP[prefix] : null;
-  if (branchType) {
-    return branchType.id as WorktreeTypeId;
-  }
-
+  const { type, namespace } = classifyBranch(worktree.branch);
+  if (type) return type.id;
+  if (namespace?.kind === "agent") return "agent";
   return "other";
 }
 
@@ -418,42 +399,6 @@ export interface GroupedSection<T> {
   worktrees: T[];
 }
 
-const TYPE_ORDER: WorktreeTypeId[] = [
-  "main",
-  "feature",
-  "bugfix",
-  "refactor",
-  "chore",
-  "docs",
-  "test",
-  "release",
-  "ci",
-  "deps",
-  "perf",
-  "style",
-  "wip",
-  "detached",
-  "other",
-];
-
-const TYPE_DISPLAY_NAMES: Record<WorktreeTypeId, string> = {
-  main: "Main",
-  feature: "Features",
-  bugfix: "Bugfixes",
-  refactor: "Refactors",
-  chore: "Chores",
-  docs: "Documentation",
-  test: "Tests",
-  release: "Releases",
-  ci: "CI/Build",
-  deps: "Dependencies",
-  perf: "Performance",
-  style: "Style",
-  wip: "Work in Progress",
-  detached: "Detached HEAD",
-  other: "Other",
-};
-
 export function groupByType<T extends Worktree | WorktreeState>(
   worktrees: T[],
   orderBy: OrderBy,
@@ -483,12 +428,12 @@ export function groupByType<T extends Worktree | WorktreeState>(
 
   // Build sections in predefined order
   const sections: GroupedSection<T>[] = [];
-  for (const type of TYPE_ORDER) {
+  for (const type of WORKTREE_TYPE_IDS) {
     const items = groups.get(type);
     if (items && items.length > 0) {
       sections.push({
         type,
-        displayName: TYPE_DISPLAY_NAMES[type],
+        displayName: getWorktreeTypeGroupName(type),
         worktrees: items,
       });
     }
@@ -578,23 +523,6 @@ export interface ChipCounts {
 }
 
 const STATUS_KEYS: StatusFilter[] = ["active", "dirty", "stale", "idle"];
-const TYPE_KEYS: TypeFilter[] = [
-  "feature",
-  "bugfix",
-  "refactor",
-  "chore",
-  "docs",
-  "test",
-  "release",
-  "ci",
-  "deps",
-  "perf",
-  "style",
-  "wip",
-  "main",
-  "detached",
-  "other",
-];
 const PR_ISSUE_KEYS: PrIssueFilter[] = ["hasIssue", "hasPR", "prOpen", "prMerged", "prClosed"];
 const SESSION_KEYS: SessionFilter[] = ["hasTerminals", "working", "waiting", "completed", "exited"];
 const ACTIVITY_KEYS: ActivityFilter[] = ["last15m", "last1h", "last24h", "last7d"];
@@ -616,7 +544,7 @@ function emptyRecord<K extends string>(keys: readonly K[]): Record<K, number> {
 export function emptyChipCounts(): ChipCounts {
   return {
     status: emptyRecord(STATUS_KEYS),
-    branchType: emptyRecord(TYPE_KEYS),
+    branchType: emptyRecord(WORKTREE_TYPE_IDS),
     prIssue: emptyRecord(PR_ISSUE_KEYS),
     sessions: emptyRecord(SESSION_KEYS),
     hasAgent: 0,

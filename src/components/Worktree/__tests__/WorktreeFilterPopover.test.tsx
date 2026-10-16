@@ -7,7 +7,7 @@ import type { ReactElement } from "react";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { WorktreeFilterPopover } from "../WorktreeFilterPopover";
 import { useWorktreeFilterStore } from "@/store/worktreeFilterStore";
-import type { ChipCounts } from "@/lib/worktreeFilters";
+import { emptyChipCounts, type ChipCounts } from "@/lib/worktreeFilters";
 import { STATUS_OPTIONS } from "@/lib/worktreeFilterOptions";
 
 // Section toggles are tooltip triggers (a collapsed summary that clips shows
@@ -26,23 +26,7 @@ function openPopover() {
 
 const COUNTS = {
   status: { active: 0, dirty: 3, stale: 0, idle: 2 },
-  branchType: {
-    feature: 2,
-    bugfix: 1,
-    refactor: 0,
-    chore: 0,
-    docs: 0,
-    test: 0,
-    release: 0,
-    ci: 0,
-    deps: 0,
-    perf: 0,
-    style: 0,
-    wip: 0,
-    main: 0,
-    detached: 0,
-    other: 0,
-  },
+  branchType: { ...emptyChipCounts().branchType, feature: 2, bugfix: 1 },
   prIssue: { hasIssue: 0, hasPR: 0, prOpen: 0, prMerged: 0, prClosed: 0 },
   sessions: { hasTerminals: 0, working: 0, waiting: 0, completed: 0, exited: 0 },
   hasAgent: 2,
@@ -189,8 +173,8 @@ describe("WorktreeFilterPopover chip states are told apart without colour", () =
   });
 
   it("folds a long facet's dead values behind one control, keeping the live ones", () => {
-    // Branch type carries fifteen values and a real repository uses three or
-    // four. The rule is that what is shown is what can do something.
+    // Branch type carries every recognised type and a real repository uses a
+    // handful. The rule is that what is shown is what can do something.
     openWithCounts();
     expect(chip(/^Feature/)).toBeDefined();
     expect(chip(/^Bugfix/)).toBeDefined();
@@ -205,23 +189,7 @@ describe("WorktreeFilterPopover chip states are told apart without colour", () =
     // cap spends its room on unselected values; selections are not negotiable.
     const many = {
       ...COUNTS,
-      branchType: {
-        feature: 0,
-        bugfix: 0,
-        refactor: 0,
-        chore: 0,
-        docs: 0,
-        test: 0,
-        release: 0,
-        ci: 0,
-        deps: 0,
-        perf: 0,
-        style: 0,
-        wip: 0,
-        main: 0,
-        detached: 0,
-        other: 0,
-      },
+      branchType: emptyChipCounts().branchType,
     } satisfies ChipCounts;
     const store = useWorktreeFilterStore.getState();
     const picked = [
@@ -258,6 +226,7 @@ describe("WorktreeFilterPopover chip states are told apart without colour", () =
     const manyMatching = {
       ...COUNTS,
       branchType: {
+        ...emptyChipCounts().branchType,
         feature: 1,
         bugfix: 1,
         refactor: 1,
@@ -270,9 +239,6 @@ describe("WorktreeFilterPopover chip states are told apart without colour", () =
         perf: 1,
         style: 1,
         wip: 1,
-        main: 0,
-        detached: 0,
-        other: 0,
       },
     } satisfies ChipCounts;
     render(
