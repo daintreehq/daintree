@@ -127,7 +127,7 @@ export interface GeneratedIpcInvokeMap {
     result: import("./agent.js").SaveArtifactResult | null;
   };
   "assistant-messaging:get-state": {
-    args: [input: import("./assistantMessaging.js").AssistantMessagingLaneRef];
+    args: [input?: import("./assistantMessaging.js").AssistantMessagingLaneRef | undefined];
     result: import("./assistantMessaging.js").AssistantMessagingState;
   };
   "assistant-messaging:set-lane-enrolled": {

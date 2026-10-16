@@ -2794,6 +2794,14 @@ export interface HelpAssistantSettings {
    * `"inherit"`.
    */
   daintreeConfirmations: HelpAssistantDaintreeConfirmations;
+  /**
+   * This machine's assistants accept messages from other machines as soon as
+   * they're running, without being turned on in the panel: on this Shell its
+   * first running assistant becomes the hub for hosts with messaging on, and
+   * on a host each assistant accepts the Shell whose view it runs in. The
+   * panel turns one run off. Machine-owned; never travels. Defaults to true.
+   */
+  acceptRemoteMessages: boolean;
 }
 
 /**

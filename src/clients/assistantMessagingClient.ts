@@ -11,7 +11,8 @@ export const assistantMessagingClient = {
     return typeof window !== "undefined" && window.electron?.assistantMessaging !== undefined;
   },
 
-  getState: (lane: LaneRef): Promise<AssistantMessagingState> => {
+  /** Without a lane, only whether messaging is offered for this view's machine and the pause. */
+  getState: (lane?: LaneRef): Promise<AssistantMessagingState> => {
     return window.electron.assistantMessaging.getState(lane);
   },
 

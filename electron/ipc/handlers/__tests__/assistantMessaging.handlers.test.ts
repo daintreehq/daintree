@@ -246,4 +246,29 @@ describe("assistant messaging IPC", () => {
     expect(state.available).toBe(false);
     expect(await setPaused(localCtx(), true)).toBe(false);
   });
+
+  it("answers availability without a lane, for settings that aren't about one (#13441)", async () => {
+    expect(await getState(localCtx(), undefined)).toMatchObject({
+      available: true,
+      lane: { enrolled: false, enrolledElsewhere: false, ended: null },
+    });
+    hosts = 0;
+    expect((await getState(localCtx(), undefined)).available).toBe(false);
+    expect((await getState(remoteCtx("link-a"), undefined)).available).toBe(true);
+  });
+
+  it("keeps the saved default from turning a lane back on after the person turned it off (#13441)", async () => {
+    run(0, "s1");
+    expect(policy.enrollByDefault({ projectId: "proj", slot: 0 }, { kind: "local" }).ok).toBe(true);
+    const off = await setLaneEnrolled(localCtx(), { projectId: "proj", slot: 0, enrolled: false });
+    expect(off.state.lane.enrolled).toBe(false);
+    expect(policy.enrollByDefault({ projectId: "proj", slot: 0 }, { kind: "local" })).toEqual({
+      ok: false,
+      reason: "declined",
+    });
+    // Turning it on again is the person's own choice and still works.
+    const on = await setLaneEnrolled(localCtx(), { projectId: "proj", slot: 0, enrolled: true });
+    expect(on.refusal).toBeNull();
+    expect(on.state.lane.enrolled).toBe(true);
+  });
 });

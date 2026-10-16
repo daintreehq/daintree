@@ -398,7 +398,7 @@ export function HostDetail({
             <>
               <SettingsRow
                 label="Allow assistant messaging with this host"
-                description="The assistant you let accept messages from other machines can message assistants on this host too. Off by default."
+                description={`Your assistant and ${hostName}'s assistants can message each other. On by default for hosts added over SSH.`}
                 error={messagingError ?? undefined}
                 control={({ labelId, descriptionId, disabled }) => (
                   <SettingsSwitch

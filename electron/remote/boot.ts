@@ -2,6 +2,10 @@ import path from "node:path";
 import { app } from "electron";
 import { formatErrorMessage } from "../../shared/utils/errorMessage.js";
 import { ensureWorkspaceClient, isWorkspaceClientStarting } from "../boot/hostServices.js";
+import {
+  getHelpAssistantSettings,
+  onHelpAssistantSettingsChanged,
+} from "../ipc/handlers/helpAssistant.js";
 import { notifyRemoteViewEndpointOpened } from "../ipc/hostSendRelay.js";
 import { setRemoteBoundViewFilter } from "../ipc/utils.js";
 import { releaseWindowTerminalPort, setRemoteViewHooks } from "../window/portDistribution.js";
@@ -261,11 +265,15 @@ function startClient(options: StartRemoteHostsOptions): void {
       hostForView: client.hostForView,
     })
   );
-  // Holds consent only; nothing reaches an assistant through it until a person enrolls a lane.
+  // Holds consent only; nothing reaches an assistant through it until a lane is
+  // enrolled, by the person or by this machine's saved default as a run starts.
   teardowns.push(
     installAssistantMessagingPolicy({
       isHostMessagingEnabled: (hostId) =>
         client.registry.get(hostId)?.assistantMessagingEnabled === true,
+      acceptsByDefault: () => getHelpAssistantSettings().acceptRemoteMessages,
+      onDefaultChanged: (listener) => onHelpAssistantSettingsChanged(listener),
+      hasMessagingHost: () => client.registry.list().some((host) => host.assistantMessagingEnabled),
       hasHosts: () => client.registry.list().length > 0,
       onHostsChanged: (listener) => client.registry.onChange(listener),
       observeHosts: () =>

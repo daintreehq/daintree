@@ -11,6 +11,7 @@ import { Input } from "@/components/ui/input";
 import { useDeferredLoading, useHelpSessionLiveStatus } from "@/hooks";
 import { useVisibilityAwareInterval } from "@/hooks/useVisibilityAwareInterval";
 import { useMcpReadiness } from "@/hooks/useMcpReadiness";
+import { useAssistantMessagingAvailable } from "@/hooks/useAssistantMessaging";
 import { actionService } from "@/services/ActionService";
 import { Button } from "@/components/ui/button";
 import { CopyButton } from "@/components/ui/CopyButton";
@@ -90,6 +91,7 @@ const SAVE_GROUP_BY_KEY: Record<keyof HelpAssistantSettings, SaveGroup> = {
   daintreeConfirmations: "security",
   auditRetention: "privacy",
   loadGlobalHooksAndServers: "content",
+  acceptRemoteMessages: "security",
 };
 
 const SETTING_KEYS: readonly (keyof HelpAssistantSettings)[] = [
@@ -105,6 +107,7 @@ const SETTING_KEYS: readonly (keyof HelpAssistantSettings)[] = [
   "daintreeConfirmations",
   "auditRetention",
   "loadGlobalHooksAndServers",
+  "acceptRemoteMessages",
 ];
 
 function patchedKeys(patch: Partial<HelpAssistantSettings>): (keyof HelpAssistantSettings)[] {
@@ -183,6 +186,7 @@ const SETTING_LABEL: Record<keyof HelpAssistantSettings, string> = {
   auditRetention: "Audit log retention",
   loadGlobalHooksAndServers: "Load my MCP servers and hooks",
   daintreeConfirmations: "Daintree confirmations",
+  acceptRemoteMessages: "Accept messages from other machines by default",
 };
 
 interface SaveFailure {
@@ -203,6 +207,7 @@ const DEFAULT_SETTINGS: HelpAssistantSettings = {
   debugLogging: false,
   loadGlobalHooksAndServers: false,
   daintreeConfirmations: "inherit",
+  acceptRemoteMessages: true,
 };
 
 // Radix Select rejects an empty-string item value, so the "use the CLI default"
@@ -383,6 +388,8 @@ export function DaintreeAssistantSettingsTab() {
   // separate mcpStatus state still supplies apiKey for copy/rotate (not in
   // the runtime snapshot). Keep both — they update independently (lesson #4958).
   const runtimeSnapshot = useMcpReadiness();
+  // Hidden on Windows and, in a window of this machine, until it has a host.
+  const messagingAvailable = useAssistantMessagingAvailable();
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
   // Failures of one-off actions stay on the section they belong to, not at the page foot.
@@ -868,6 +875,10 @@ export function DaintreeAssistantSettingsTab() {
     void persist({ debugLogging: !settings.debugLogging });
   };
 
+  const toggleAcceptRemoteMessages = () => {
+    void persist({ acceptRemoteMessages: !settings.acceptRemoteMessages });
+  };
+
   const toggleLoadGlobalHooksAndServers = () => {
     void persist({ loadGlobalHooksAndServers: !settings.loadGlobalHooksAndServers });
   };
@@ -1218,7 +1229,11 @@ export function DaintreeAssistantSettingsTab() {
 
       <SettingsSection
         title="Security"
-        description="How much of Daintree the assistant can reach, and which confirmations it skips"
+        description={
+          messagingAvailable
+            ? "How much of Daintree the assistant can reach, which confirmations it skips, and whether other machines can message it"
+            : "How much of Daintree the assistant can reach, and which confirmations it skips"
+        }
       >
         {saveError("security")}
         <SettingsGroup>
@@ -1293,6 +1308,23 @@ export function DaintreeAssistantSettingsTab() {
             onToggle={() => setShowBlastRadius((v) => !v)}
           />
         </SettingsGroup>
+
+        {messagingAvailable && (
+          <SettingsGroup label="Other machines">
+            <SettingsSwitchCard
+              id="assistant-accept-remote-messages"
+              title="Accept messages from other machines by default"
+              subtitle="As each assistant here starts, it turns on Accept messages from other machines wherever that can be on. Turning it off in an assistant's panel lasts until that assistant restarts."
+              isEnabled={settings.acceptRemoteMessages}
+              onChange={toggleAcceptRemoteMessages}
+              disabled={settingsUnavailable}
+              isModified={settings.acceptRemoteMessages !== DEFAULT_SETTINGS.acceptRemoteMessages}
+              onReset={() =>
+                void persist({ acceptRemoteMessages: DEFAULT_SETTINGS.acceptRemoteMessages })
+              }
+            />
+          </SettingsGroup>
+        )}
 
         <SessionLiveStatusCard configuredTier={settings.tier} />
       </SettingsSection>

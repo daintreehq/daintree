@@ -89,6 +89,7 @@ describe("registerHelpAssistantHandlers", () => {
       debugLogging: false,
       loadGlobalHooksAndServers: false,
       daintreeConfirmations: "inherit",
+      acceptRemoteMessages: true,
     });
   });
 
@@ -115,6 +116,7 @@ describe("registerHelpAssistantHandlers", () => {
       debugLogging: false,
       loadGlobalHooksAndServers: false,
       daintreeConfirmations: "inherit",
+      acceptRemoteMessages: true,
     });
   });
 
@@ -217,6 +219,31 @@ describe("registerHelpAssistantHandlers", () => {
     storeMock.set.mockClear();
     await handler(null, { loadGlobalHooksAndServers: "yes" as unknown as boolean });
     expect(storeMock.set).not.toHaveBeenCalled();
+  });
+
+  it("keeps a saved acceptRemoteMessages off, rejects a non-boolean, and tells listeners of a write (#13441)", async () => {
+    const { onHelpAssistantSettingsChanged } = await import("../helpAssistant.js");
+    storeMock.get.mockReturnValue({ acceptRemoteMessages: false });
+    registerHelpAssistantHandlers();
+    const get = ipcMainMock._handlers.get(GET_CHANNEL)!;
+    const set = ipcMainMock._handlers.get(SET_CHANNEL)!;
+    expect(await get(null)).toMatchObject({ acceptRemoteMessages: false });
+
+    let heard = 0;
+    const off = onHelpAssistantSettingsChanged(() => heard++);
+    try {
+      await set(null, { acceptRemoteMessages: true });
+      expect(storeMock.set).toHaveBeenCalledWith("helpAssistant.acceptRemoteMessages", true);
+      expect(heard).toBe(1);
+
+      storeMock.set.mockClear();
+      await set(null, { acceptRemoteMessages: "yes" as unknown as boolean });
+      expect(storeMock.set).not.toHaveBeenCalled();
+      // Nothing written, nothing to hear.
+      expect(heard).toBe(1);
+    } finally {
+      off();
+    }
   });
 
   it("persists daintreeConfirmations and rejects values outside the union (#12874)", async () => {
@@ -440,6 +467,7 @@ describe("registerHelpAssistantHandlers", () => {
       debugLogging: false,
       loadGlobalHooksAndServers: false,
       daintreeConfirmations: "inherit",
+      acceptRemoteMessages: true,
     });
   });
 

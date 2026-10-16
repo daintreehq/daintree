@@ -276,7 +276,10 @@ export interface HostDescriptor {
   addedAt: number;
   /** Cross-host notifications are opt-in per host. */
   notificationsEnabled: boolean;
-  /** Whether this Shell's assistant may message assistants on the host. Opt-in per host. */
+  /**
+   * Whether this Shell's assistant and the host's assistants may message each
+   * other. On for a host added over SSH; a stored host keeps what it had.
+   */
   assistantMessagingEnabled: boolean;
   /**
    * Whether this Shell's hub assistant may start an assistant in one of the

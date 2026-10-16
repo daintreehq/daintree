@@ -41,7 +41,8 @@ describe("HostRegistry", () => {
       lastSeenAt: null,
       addedAt: 1_000,
       notificationsEnabled: false,
-      assistantMessagingEnabled: false,
+      // Reached over SSH, so messaging starts on (#13441); starting assistants doesn't.
+      assistantMessagingEnabled: true,
       assistantStartEnabled: false,
     });
     expect(isValidRemoteHostId(added.id)).toBe(true);
@@ -154,12 +155,17 @@ describe("HostRegistry", () => {
     );
   });
 
-  it("keeps assistant messaging off until it is turned on, apart from notifications", () => {
-    const registry = new HostRegistry(memoryStore());
+  it("starts assistant messaging on for an SSH host, and keeps it apart from notifications (#13441)", () => {
+    const store = memoryStore();
+    const registry = new HostRegistry(store);
     const host = registry.add({ name: "box", connection: { kind: "ssh", target: "box.example" } });
-    expect(host.assistantMessagingEnabled).toBe(false);
+    expect(host.assistantMessagingEnabled).toBe(true);
+    const off = registry.update({ hostId: host.id, assistantMessagingEnabled: false });
+    expect(off.assistantMessagingEnabled).toBe(false);
     const notifying = registry.update({ hostId: host.id, notificationsEnabled: true });
     expect(notifying.assistantMessagingEnabled).toBe(false);
+    // A host turned off stays off when the list is read again.
+    expect(new HostRegistry(store).get(host.id)?.assistantMessagingEnabled).toBe(false);
     const enabled = registry.update({ hostId: host.id, assistantMessagingEnabled: true });
     expect(enabled).toMatchObject({ assistantMessagingEnabled: true, notificationsEnabled: true });
     expect(() =>
@@ -375,6 +381,8 @@ describe("HostRegistry", () => {
       const registry = new HostRegistry(memoryStore());
       const added = registry.add({ name: "Ubuntu", connection: { kind: "wsl", distro: "Ubuntu" } });
       expect(added.connection).toEqual({ kind: "wsl", distro: "Ubuntu" });
+      // Only an SSH host starts with messaging on; Windows doesn't offer it at all.
+      expect(added.assistantMessagingEnabled).toBe(false);
       expect(() =>
         registry.add({ name: "Ubuntu again", connection: { kind: "wsl", distro: "ubuntu" } })
       ).toThrow();
