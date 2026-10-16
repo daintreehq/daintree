@@ -289,9 +289,12 @@ export function BulkCreateWorktreeDialog({
     return map;
   }, [worktreeMap]);
 
-  // Until the list loads (or if it never does), the main worktree's checkout is
-  // the base, exactly as before the picker existed — so a fast Create or a
-  // failed load still behaves the way an untouched run always has.
+  // An untouched run cuts from the main worktree's checkout, exactly as before
+  // the picker existed. It comes ahead of the list's own default so the base
+  // can't shift under a run when the list lands — `current` there is whatever
+  // the project path has checked out, which a project opened from a linked
+  // worktree would get wrong. The list's default covers a main worktree with
+  // no branch (detached HEAD).
   const mainWorktreeBranch = useMemo(() => {
     for (const wt of worktreeMap.values()) {
       if (wt.isMainWorktree) return wt.branch;
@@ -300,9 +303,9 @@ export function BulkCreateWorktreeDialog({
   }, [worktreeMap]);
   const baseBranch = useMemo(() => {
     if (pickedBase) return pickedBase;
+    if (mainWorktreeBranch) return { name: mainWorktreeBranch, fromRemote: false };
     const derived = branches.length > 0 ? deriveDefaultBaseBranch(branches) : null;
-    if (derived?.name) return derived;
-    return mainWorktreeBranch ? { name: mainWorktreeBranch, fromRemote: false } : null;
+    return derived?.name ? derived : null;
   }, [pickedBase, branches, mainWorktreeBranch]);
 
   const handleBaseBranchSelect = useCallback((option: BranchOption) => {
@@ -350,6 +353,9 @@ export function BulkCreateWorktreeDialog({
         (skippedCount > 0 ? ` \u00b7 ${skippedCount} skipped` : "");
 
   const isExecuting = progress.phase === "executing";
+  // Nothing to cut issue branches from yet (detached main worktree, list still
+  // loading or empty): hold Create rather than fail every item.
+  const createBlocked = creatableCount === 0 || (mode === "issue" && !baseBranch);
   const isDone = progress.phase === "done";
 
   const { succeededCount, failedCount } = useMemo(() => {
@@ -1079,6 +1085,7 @@ export function BulkCreateWorktreeDialog({
     isExecutingRef.current = true;
     try {
       const toCreate = planned.filter((p) => !p.skipped);
+      if (mode === "issue" && !baseBranch) return;
       if (toCreate.length === 0) {
         console.warn(
           "[BulkCreateWorktreeDialog] handleCreate called with no creatable items — guard fired"
@@ -1109,6 +1116,7 @@ export function BulkCreateWorktreeDialog({
     setLastSelectedWorktreeRecipeIdByProject,
     runBatch,
     baseBranch,
+    mode,
   ]);
 
   const handleRetryFailed = useCallback(async () => {
@@ -1286,12 +1294,12 @@ export function BulkCreateWorktreeDialog({
               Cancel
             </Button>
             <Button
-              aria-disabled={isExecuting || creatableCount === 0 || undefined}
+              aria-disabled={isExecuting || createBlocked || undefined}
               variant="contrast"
-              onClick={isExecuting || creatableCount === 0 ? undefined : handleCreate}
+              onClick={isExecuting || createBlocked ? undefined : handleCreate}
               className={cn(
                 "min-w-[100px]",
-                (isExecuting || creatableCount === 0) && ARIA_DISABLED_CLASSES
+                (isExecuting || createBlocked) && ARIA_DISABLED_CLASSES
               )}
               data-testid="bulk-create-confirm-button"
               icon="check"
@@ -1368,7 +1376,10 @@ export function BulkCreateWorktreeDialog({
                   controller={baseBranchPicker}
                   disabled={branchesLoading || branchLoadFailed}
                   unavailableLabel={
-                    branches.length === 0 ? (baseBranch?.name ?? "No base branch") : undefined
+                    branches.length === 0
+                      ? (baseBranch?.name ??
+                        (branchesLoading ? "Loading branches\u2026" : "No base branch"))
+                      : undefined
                   }
                 />
               </FormRow>

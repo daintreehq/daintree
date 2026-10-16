@@ -2813,10 +2813,12 @@ describe("BulkCreateWorktreeDialog — base branch", () => {
     await advanceTimersGradually(2000);
   }
 
-  it("defaults to the branch the repo root has checked out", async () => {
+  it("keeps the main worktree's branch even when the list marks another current", async () => {
+    // A project opened from a linked worktree: the list's `current` is that
+    // worktree's checkout, not the main worktree's.
     mockListBranches.mockResolvedValue([
       { name: "main", current: false, remote: false },
-      { name: "develop", current: true, remote: false },
+      { name: "feature/x", current: true, remote: false },
     ]);
 
     render(<BulkCreateWorktreeDialog {...issueProps} />);
@@ -2825,15 +2827,53 @@ describe("BulkCreateWorktreeDialog — base branch", () => {
     });
 
     expect(mockListBranches).toHaveBeenCalledWith("/test/root");
-    expect(screen.getByRole("combobox", { name: "Base" }).textContent).toContain("develop");
+    expect(screen.getByRole("combobox", { name: "Base" }).textContent).toContain("main");
 
     await createAndSettle();
 
     const calls = mockWorktreeCreate.mock.calls;
     expect(calls.length).toBe(2);
     for (const [options] of calls) {
-      expect(options.baseBranch).toBe("develop");
+      expect(options.baseBranch).toBe("main");
       expect(options.fromRemote).toBe(false);
+    }
+  });
+
+  it("takes the list's default when the main worktree has no branch, holding Create until then", async () => {
+    worktreeDataHolder.map = new Map([
+      ["main-wt", { worktreeId: "main-wt", path: "/test/root", isMainWorktree: true }],
+    ]);
+    let resolveList: (list: unknown[]) => void = () => {};
+    mockListBranches.mockReturnValue(
+      new Promise((resolve) => {
+        resolveList = resolve;
+      })
+    );
+
+    render(<BulkCreateWorktreeDialog {...issueProps} />);
+
+    const confirm = screen.getByTestId("bulk-create-confirm-button");
+    expect(confirm.getAttribute("aria-disabled")).toBe("true");
+    await act(async () => {
+      confirm.click();
+    });
+    expect(mockWorktreeCreate).not.toHaveBeenCalled();
+
+    await act(async () => {
+      resolveList([
+        { name: "feature/y", current: false, remote: false },
+        { name: "develop", current: true, remote: false },
+      ]);
+      await vi.advanceTimersByTimeAsync(0);
+    });
+
+    expect(confirm.getAttribute("aria-disabled")).toBeNull();
+    await createAndSettle();
+
+    const calls = mockWorktreeCreate.mock.calls;
+    expect(calls.length).toBe(2);
+    for (const [options] of calls) {
+      expect(options.baseBranch).toBe("develop");
     }
   });
 
