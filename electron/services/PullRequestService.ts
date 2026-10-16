@@ -2115,7 +2115,7 @@ class PullRequestService {
           internalPR.headSha = prior.headSha;
           internalPR.displacedHeadSha = prior.displacedHeadSha;
           internalPR.ciSeen = prior.ciSeen;
-          internalPR.ciGraceUntil = prior.ciGraceUntil;
+          if (internalPR.state === "open") internalPR.ciGraceUntil = prior.ciGraceUntil;
           break;
         }
 

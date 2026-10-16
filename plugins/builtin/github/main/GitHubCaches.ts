@@ -378,8 +378,11 @@ export const prObservedHeadShaCache = new Cache<string, string>({
   defaultTTL: 30 * 60 * 1000,
 });
 
+// A PR the probe no longer sees open (merged, closed) has no head it can vouch
+// for, so the marker goes rather than pinning a head the PR has since left.
 export function recordObservedPRHead(key: string, headSha: string | null | undefined): void {
   if (headSha) prObservedHeadShaCache.set(key, headSha);
+  else prObservedHeadShaCache.invalidate(key);
 }
 
 export function describesObservedPRHead(key: string, entry: PRRequiredStatusEntry): boolean {

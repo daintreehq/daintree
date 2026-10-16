@@ -2244,6 +2244,24 @@ describe("CI verdicts across a push (#13399)", () => {
     expect(mockGraphQLClient).toHaveBeenCalledTimes(3);
   });
 
+  it("stops pinning a head once the PR leaves the open list", async () => {
+    mockGraphQLClient
+      .mockResolvedValueOnce(batchResponseFor(1, "sha1", failing))
+      .mockResolvedValueOnce(batchResponseFor(1, "sha2", running));
+
+    await githubForgeProvider.batchLookups!.getCIStatuses!(repo, [1]);
+    await probeSeesHead(1, "sha0", "sha1");
+    // Merged or closed after another push: absent from the open list.
+    mockRateLimitAwareFetch.mockResolvedValueOnce(new Response("[]", { status: 200 }));
+    await githubForgeProvider.batchLookups!.probeOpenPRList!(repo, [
+      { number: 1, headSha: "sha1", updatedAt: "2025-01-01T00:00:00Z", state: "open", title: "t" },
+    ]);
+    prRequiredStatusCache.clear();
+    const after = await githubForgeProvider.batchLookups!.getCIStatuses!(repo, [1]);
+
+    expect(after.get(1)?.headSha).toBe("sha2");
+  });
+
   it("guards the single-PR read with the same head check", async () => {
     const single = (oid: string, state: string) => ({
       repository: {
