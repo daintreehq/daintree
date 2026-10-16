@@ -135,6 +135,17 @@ describe("parseHostProbe", () => {
     expect(buildHostProbeScript()).toContain("init $(head -c 64 /proc/1/comm");
   });
 
+  it("reads whether Daintree has kept settings there, so has run as this user", () => {
+    const linux = (marker: string[]) =>
+      parseHostProbe(["@@dt:uname Linux x86_64", ...marker, "@@dt:end"].join("\n"));
+    expect(linux(["@@dt:settings yes"]).hasSettings).toBe(true);
+    expect(linux(["@@dt:settings no"]).hasSettings).toBe(false);
+    expect(linux([]).hasSettings).toBeNull();
+    const script = buildHostProbeScript();
+    expect(script).toContain('[ -f "${XDG_CONFIG_HOME:-$HOME/.config}/Daintree/config.json" ]');
+    expect(script).toContain('[ -f "$d/config.json" ]');
+  });
+
   it("falls back to the newest AppImage, reading the version from its name", () => {
     const probe = parseHostProbe(
       [

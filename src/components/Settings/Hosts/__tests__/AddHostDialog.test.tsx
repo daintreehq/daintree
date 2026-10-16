@@ -793,7 +793,9 @@ describe("AddHostDialog on Windows (WSL distros)", () => {
     fireEvent.click(screen.getByRole("button", { name: "Continue" }));
     await screen.findByText("Keychain");
     expect(screen.getByText("Running")).toBeTruthy();
-    expect(screen.getByText(/WSL stops it about 15 seconds later/)).toBeTruthy();
+    expect(
+      screen.getByText(/WSL stops it about 15 seconds after nothing else is using it/)
+    ).toBeTruthy();
     expect(screen.queryByText("Sleep")).toBeNull();
     expect(screen.queryByText(/sleeping host/)).toBeNull();
     expect(screen.queryByText(/Lingering|enable-linger/)).toBeNull();

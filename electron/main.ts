@@ -1029,7 +1029,8 @@ if (!gotTheLock) {
           hostModeHandedOff = true;
           if (isHostModeEnableRequested(commandLine)) {
             hostModeEnableRequested = true;
-            setupUpdateChannel = requestedUpdateChannel(commandLine);
+            // A later enable that names no channel doesn't cancel one still waiting.
+            setupUpdateChannel = requestedUpdateChannel(commandLine) ?? setupUpdateChannel;
           }
           // Before the remote runtime is up, its startup reads the flag instead.
           if (remoteHostsStarted) listenForHandedOffHostMode();

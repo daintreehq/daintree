@@ -78,10 +78,12 @@ function linux(opts: {
   linger?: "yes" | "no";
   fuse?: boolean;
   state?: string;
+  settings?: "yes" | "no";
 }) {
   const image = "/home/greg/Applications/Daintree.AppImage";
   return [
     "@@dt:uname Linux x86_64",
+    ...(opts.settings ? [`@@dt:settings ${opts.settings}`] : []),
     ...(opts.install === "appimage"
       ? [`@@dt:appimage ${image}`, `@@dt:appimageinfo ${BUILD}`]
       : ["@@dt:install deb /opt/Daintree", "@@dt:version 1.4.0", `@@dt:buildinfo ${BUILD}`]),
@@ -342,22 +344,32 @@ describe("bootstrapHostMode on a headless Linux host", () => {
     expect(result).toMatchObject({ lingerRefused: null, probe: { hostModeListening: true } });
   });
 
-  it("hands a host this setup just installed this machine's update channel with the enable request", async () => {
-    const { channel, calls } = scripted();
-    await bootstrapHostMode({ kind: "wsl", distro: "Debian" }, await outcomeOf(linux({})), {
-      channel,
-      probe: probes([
-        linux({ unit: "enabled" }),
-        linux({ unit: "enabled", listening: true }),
-        linux({ unit: "enabled", listening: true, state: state() }),
-      ]).probe,
-      sleep: async () => {},
-      now: clock(),
-      updateChannel: "nightly",
-    });
-    expect(calls.at(-1)!.script).toBe(
+  it("hands this machine's update channel to a host whose Daintree has never run, and only to one", async () => {
+    const handoffFor = async (settings: "yes" | "no" | undefined) => {
+      const { channel, calls } = scripted();
+      await bootstrapHostMode(
+        { kind: "wsl", distro: "Debian" },
+        await outcomeOf(linux({ settings })),
+        {
+          channel,
+          probe: probes([
+            linux({ unit: "enabled" }),
+            linux({ unit: "enabled", listening: true }),
+            linux({ unit: "enabled", listening: true, state: state() }),
+          ]).probe,
+          sleep: async () => {},
+          now: clock(),
+          updateChannel: "nightly",
+        }
+      );
+      return calls.at(-1)!.script;
+    };
+    expect(await handoffFor("no")).toBe(
       "'/opt/Daintree/daintree' --host-mode --enable-host-mode --update-channel=nightly --host-mode-handoff </dev/null >/dev/null 2>&1; echo \"@@dt:handoff $?\""
     );
+    // Daintree has run there: whoever set its channel, it stays.
+    expect(await handoffFor("yes")).not.toContain("--update-channel");
+    expect(await handoffFor(undefined)).not.toContain("--update-channel");
   });
 
   it("runs an AppImage unpacked, in the unit and the handoff, where there is no FUSE", async () => {

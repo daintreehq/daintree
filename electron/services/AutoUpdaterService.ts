@@ -199,6 +199,8 @@ class AutoUpdaterService {
   private checkingMenuTimeout: NodeJS.Timeout | null = null;
   private menuStateListeners: Set<(state: UpdateMenuState) => void> = new Set();
   private channelGeneration = 0;
+  /** The channel generation when the check now running began. */
+  private checkGeneration = 0;
   private downloadGeneration = 0;
   private checkingHandler: (() => void) | null = null;
   private availableHandler: ((info: UpdateInfo) => void) | null = null;
@@ -937,12 +939,15 @@ class AutoUpdaterService {
 
       this.checkingHandler = () => {
         console.log("[MAIN] Checking for update...");
+        this.checkGeneration = this.channelGeneration;
       };
       autoUpdater.on("checking-for-update", this.checkingHandler);
 
       this.availableHandler = (info: UpdateInfo) => {
         console.log("[MAIN] Update available:", info.version);
-        this.downloadGeneration = this.channelGeneration;
+        // The generation the check began under: a check of the old feed that
+        // answers after a channel switch must not stage its download as current.
+        this.downloadGeneration = this.checkGeneration;
         // Read the reason before `isManualCheck` is cleared — it feeds the check.
         const suppressionReason = this.getUpdateAvailableSuppressionReason(info.version);
         this.isManualCheck = false;
@@ -1072,10 +1077,10 @@ class AutoUpdaterService {
         // attempt marker the pending handoff just wrote — leaving a failed
         // install with no record of having been tried (issue #11481).
         if (this.installInFlight) return;
-        // Stale-download guard: downloadGeneration was captured in
-        // update-available, channelGeneration is incremented on channel
-        // switch. If they diverged, this download belongs to the prior
-        // channel and must not re-arm install.
+        // Stale-download guard: downloadGeneration is the generation its check
+        // began under, channelGeneration is incremented on channel switch. If
+        // they diverged, this download belongs to the prior channel and must
+        // not re-arm install.
         if (this.channelGeneration !== this.downloadGeneration) return;
         this.updateDownloaded = true;
         // After the guard, never before: a stale download from the previous
@@ -1343,6 +1348,7 @@ class AutoUpdaterService {
     this.lastBroadcastVersion = null;
     this.channelHandlersRegistered = false;
     this.channelGeneration = 0;
+    this.checkGeneration = 0;
     this.downloadGeneration = 0;
     this.initialized = false;
     this.clearCheckingMenuTimeout();

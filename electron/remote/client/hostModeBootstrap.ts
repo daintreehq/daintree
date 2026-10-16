@@ -50,9 +50,9 @@ export interface HostModeBootstrapDeps {
   sleep(ms: number, signal: AbortSignal): Promise<void>;
   now?: () => number;
   /**
-   * Set only when this setup installed Daintree on a machine that had none:
-   * the channel it then follows, this machine's. A host that was already
-   * there keeps its own.
+   * This machine's update channel. A host whose Daintree has never run there
+   * (no settings yet, so nobody chose one) is handed it with the enable
+   * request; any other keeps its own.
    */
   updateChannel?: UpdateChannel;
 }
@@ -292,6 +292,8 @@ export async function bootstrapHostMode(
   const signal = new AbortController().signal;
   const probe = before.result;
   if (hostModeConfirmed(before)) return { probe, lingerRefused: null };
+  // Left on its default, a nightly host would "update" to the stable release its version sorts below.
+  const updateChannel = before.parsed?.hasSettings === false ? deps.updateChannel : undefined;
   if (!probe.install) {
     throw new AppError({
       code: "NOT_FOUND",
@@ -322,7 +324,7 @@ export async function bootstrapHostMode(
   let confirmed: ProbeOutcome;
   try {
     if (probe.platform === "darwin") {
-      const started = await deps.channel.exec(macEnableScript(deps.updateChannel), {
+      const started = await deps.channel.exec(macEnableScript(updateChannel), {
         timeoutMs: 30_000,
         signal,
       });
@@ -400,7 +402,7 @@ export async function bootstrapHostMode(
       // Unpacking an AppImage without FUSE takes a while before it can hand over.
       const handoff = await run(
         deps.channel,
-        linuxHandoffScript(target, deps.updateChannel),
+        linuxHandoffScript(target, updateChannel),
         "Couldn't reach Daintree on the host",
         target.appImageExtractAndRun ? 5 * 60_000 : 120_000
       );

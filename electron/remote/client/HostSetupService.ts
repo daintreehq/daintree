@@ -114,11 +114,6 @@ function abortableSleep(ms: number, signal: AbortSignal): Promise<void> {
 export class HostSetupService {
   private readonly operations: OperationRegistry;
   private readonly targets = new Map<OperationId, HostConnection>();
-  /**
-   * Machines this setup installed Daintree on that had none: turning Host mode
-   * on there gives that host this machine's update channel, once.
-   */
-  private readonly freshInstalls = new Set<string>();
 
   constructor(private readonly deps: HostSetupDeps) {
     this.operations = new OperationRegistry({
@@ -208,21 +203,13 @@ export class HostSetupService {
         const controller = new AbortController();
         handle.onCancel(() => controller.abort());
         const shell = this.shellFor(connection);
-        // Whether Daintree was installed there before this install touched it.
-        const before: { installed: boolean | null } = { installed: null };
-        const result = await runHostInstall(
+        return runHostInstall(
           normalized,
           {
             shell,
             run: this.deps.run,
             client: this.deps.clientBuild(),
-            probe: async (signal) => {
-              const outcome = await this.probeOutcome(connection, shell, signal);
-              if (before.installed === null && outcome.parsed) {
-                before.installed = outcome.result.install !== null;
-              }
-              return outcome;
-            },
+            probe: (signal) => this.probeOutcome(connection, shell, signal),
             restartImpact: (hostId) => this.deps.restartImpact(hostId),
             download: (url, destination, signal) => this.deps.download(url, destination, signal),
             checksum: (url, signal) =>
@@ -238,13 +225,6 @@ export class HostSetupService {
           controller.signal,
           (progress) => handle.progress(progress)
         );
-        const installedFresh =
-          before.installed === false &&
-          (result.status === "installed" || result.status === "needs-user-command");
-        if (installedFresh) {
-          this.freshInstalls.add(connectionKey(connection));
-        }
-        return result;
       },
       {
         // A refusal changed nothing: the record says so rather than "succeeded".
@@ -283,17 +263,13 @@ export class HostSetupService {
       throw new AppError({ code: "INTERNAL", message, userMessage: message });
     }
     this.refuseWhileRetiring(connection);
-    const key = connectionKey(connection);
-    const fresh = this.freshInstalls.has(key);
-    const result = await bootstrapHostMode(connection, before, {
+    return bootstrapHostMode(connection, before, {
       channel,
       probe: () => this.probeOutcome(connection, channel),
       sleep: this.deps.sleep ?? abortableSleep,
       now: this.deps.now,
-      ...(fresh ? { updateChannel: this.deps.clientBuild().channel } : {}),
+      updateChannel: this.deps.clientBuild().channel,
     });
-    this.freshInstalls.delete(key);
-    return result;
   }
 
   /**

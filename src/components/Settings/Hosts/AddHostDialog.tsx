@@ -1011,8 +1011,9 @@ export function AddHostDialog({ isOpen, onClose, existing = null }: AddHostDialo
           <div>
             <p className="font-medium text-text-primary">Running</p>
             <p className="text-text-secondary">
-              {hostLabel} keeps running while Daintree is open on this PC. After you quit Daintree,
-              WSL stops it about 15 seconds later, and its terminals and agents with it.
+              Daintree keeps {hostLabel} running while it&apos;s open on this PC. After you quit,
+              WSL stops it about 15 seconds after nothing else is using it, and its terminals and
+              agents stop with it.
             </p>
           </div>
         ) : (
