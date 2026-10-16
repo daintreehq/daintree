@@ -1163,7 +1163,13 @@ describe("HelpPanel — closing one parallel lane (#12108)", () => {
   // Two live lanes: slot 0 on screen (the flat fixture) and slot 1 behind the
   // tab strip. `sessions` is what the close path and the per-lane state marker
   // read, so both lanes have to appear there.
-  function setupTwoLanes(opts: { backgroundAgentState?: string } = {}) {
+  function setupTwoLanes(
+    opts: {
+      frontAgentState?: string;
+      backgroundAgentState?: string;
+      backgroundTouched?: boolean;
+    } = {}
+  ) {
     projectStoreState.currentProject = { id: "proj-1", path: "/repo" };
     helpPanelState.terminalId = "term-1";
     helpPanelState.agentId = "claude";
@@ -1183,7 +1189,7 @@ describe("HelpPanel — closing one parallel lane (#12108)", () => {
         terminalId: "term-2",
         agentId: "claude",
         sessionId: "sess-back",
-        conversationTouched: false,
+        conversationTouched: opts.backgroundTouched ?? false,
         figures: [],
         activeFigureNumber: null,
       },
@@ -1197,7 +1203,7 @@ describe("HelpPanel — closing one parallel lane (#12108)", () => {
         title: "Claude",
         command: "claude",
         location: "dock",
-        agentState: "idle",
+        agentState: opts.frontAgentState ?? "idle",
       },
       "term-2": {
         id: "term-2",
@@ -1421,6 +1427,16 @@ describe("HelpPanel — closing one parallel lane (#12108)", () => {
       expect(queryByTestId("confirm-dialog")).toBeNull();
       expect(back).toHaveBeenCalledTimes(1);
       expect(front).not.toHaveBeenCalled();
+      // The background lane's conversation is torn down and relaunched into its own slot…
+      expect(panelStoreState.removePanel).toHaveBeenCalledWith("term-2");
+      expect(mockRevokeSession).toHaveBeenCalledWith("sess-back");
+      expect(helpPanelState.setTerminal).toHaveBeenCalledWith(
+        1,
+        "terminal-fresh",
+        "claude",
+        "sess-fresh"
+      );
+      // …while the lane in front is left running.
       expect(panelStoreState.removePanel).not.toHaveBeenCalledWith("term-1");
       expect(mockRevokeSession).not.toHaveBeenCalledWith("sess-front");
       // The lane is restarted in place: still open, still behind the tab strip, and
@@ -1453,9 +1469,20 @@ describe("HelpPanel — closing one parallel lane (#12108)", () => {
       expect(front).not.toHaveBeenCalled();
     });
 
+    it("confirms for a touched background lane even while it is idle and the front is untouched", () => {
+      setupTwoLanes({ backgroundTouched: true });
+      const back = vi.spyOn(acquireHelpSessionController(1), "newSession");
+
+      const { container, getByTestId } = render(<HelpPanel width={380} />);
+      fireEvent.click(tabMenuItem(container, 1, "Restart conversation")!);
+
+      expect(getByTestId("dialog-title").textContent).toBe("Restart this conversation?");
+      expect(back).not.toHaveBeenCalled();
+      expect(panelStoreState.removePanel).not.toHaveBeenCalled();
+    });
+
     it("restarts an idle background lane without asking while the lane in front is working", async () => {
-      setupTwoLanes();
-      panelStoreState.panelsById["term-1"]!.agentState = "working";
+      setupTwoLanes({ frontAgentState: "working" });
       primeRelaunch();
       const back = vi.spyOn(acquireHelpSessionController(1), "newSession");
 
@@ -1482,15 +1509,38 @@ describe("HelpPanel — closing one parallel lane (#12108)", () => {
       expect(panelStoreState.removePanel).not.toHaveBeenCalled();
     });
 
-    it("offers a restart only in a lane the overflow item could restart", () => {
+    it.each([
+      ["no terminal", { terminalId: null }],
+      ["no agent", { agentId: null }],
+    ])("offers no restart in a lane with %s, as the overflow item would not", (_, missing) => {
       setupTwoLanes();
-      helpPanelState.sessions[1] = { ...helpPanelState.sessions[1]!, terminalId: null };
+      helpPanelState.sessions[1] = { ...helpPanelState.sessions[1]!, ...missing };
 
       const { container } = render(<HelpPanel width={380} />);
 
       expect(tabMenuItem(container, 0, "Restart conversation")).not.toBeNull();
       expect(tabMenuItem(container, 1, "Restart conversation")).toBeNull();
       expect(tabMenuItem(container, 1, "Close session")).not.toBeNull();
+    });
+
+    it("restarts the lane on screen from the header overflow, whichever slot that is", async () => {
+      setupTwoLanes({ backgroundAgentState: "working" });
+      // Slot 1 in front: the flat fixture is the active lane in this harness.
+      helpPanelState.activeSlot = 1;
+      helpPanelState.terminalId = "term-2";
+      helpPanelState.sessionId = "sess-back";
+      primeRelaunch();
+      const front = vi.spyOn(acquireHelpSessionController(1), "newSession");
+      const other = vi.spyOn(acquireHelpSessionController(0), "newSession");
+
+      const { container, getByTestId } = render(<HelpPanel width={380} />);
+      fireEvent.click(restartConversationButton(container)!);
+      await act(async () => {
+        fireEvent.click(getByTestId("dialog-confirm"));
+      });
+
+      expect(front).toHaveBeenCalledTimes(1);
+      expect(other).not.toHaveBeenCalled();
     });
   });
 });
