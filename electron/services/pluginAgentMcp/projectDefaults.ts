@@ -6,7 +6,7 @@ import {
   AGENT_MCP_ACCESS_LEVELS,
   type AgentMcpAccess,
 } from "../../../shared/types/ipc/pluginAgentMcp.js";
-import { DATABASE_ENDPOINT_ID } from "./types.js";
+import { DATABASE_ENDPOINT_ID, DATABASE_WRITES_ACCESS_ID } from "./types.js";
 
 /**
  * A repository's own defaults for how much of ITS plugins' agent tools its
@@ -141,7 +141,9 @@ export function projectDefaultForEndpoint(
   if (selection === undefined) return null;
   if (selection === "*") return true;
   if (typeof selection === "string") return accessAllowsEndpoint(selection, endpointId);
-  return selection.has(endpointId);
+  // A list names rosters, from before declared writes existed; "read-write"
+  // is how a repository turns those on.
+  return endpointId !== DATABASE_WRITES_ACCESS_ID && selection.has(endpointId);
 }
 
 /** Whether the project's own file turns this roster on. Never true for an installed plugin. */

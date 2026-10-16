@@ -12,6 +12,7 @@
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 import type {
   PluginDatabase,
   PluginDatabaseChangeEvent,
@@ -177,6 +178,53 @@ export function fileAccessAuthorizer(constants: Record<string, number>): SqliteA
   };
 }
 
+/** Foreign keys on, for every connection that may write — `host.db` or an agent's declared write. */
+const WRITABLE_CONNECTION_OPTIONS = { enableForeignKeyConstraints: true } as const;
+
+/** SQLite's journal mode for the one a database declares. */
+function journalModeOf(location: PluginDatabaseLocation): "WAL" | "DELETE" {
+  return location.journalMode === "wal" ? "WAL" : "DELETE";
+}
+
+/**
+ * The policy a connection gets before its first statement runs, whoever opens
+ * it, so migrations and definitions are held to it as much as the plugin's own
+ * queries are, and an agent's declared write no less than either: the
+ * file-access authorizer, the lock wait, and — for a writable connection — the
+ * declared journal mode. That one is enforced on every open: an agent that ran
+ * `PRAGMA journal_mode=WAL` would otherwise leave committed data in a -wal
+ * sidecar that a commit of the .db alone silently misses.
+ */
+function applyConnectionPolicy(
+  connection: SqliteDatabase,
+  authorizer: SqliteAuthorizer | null,
+  journalMode: "WAL" | "DELETE" | null
+): void {
+  if (authorizer && typeof connection.setAuthorizer === "function") {
+    connection.setAuthorizer(authorizer);
+  }
+  connection.exec("PRAGMA busy_timeout = 5000");
+  if (journalMode !== null) connection.prepare(`PRAGMA journal_mode = ${journalMode}`).get();
+}
+
+function rollbackQuietly(connection: SqliteDatabase): void {
+  try {
+    connection.exec("ROLLBACK");
+  } catch {
+    // SQLite already rolled the transaction back
+  }
+}
+
+/** SQLite's primary result code on a `node:sqlite` error, or null. */
+function sqliteResultCode(error: unknown): number | null {
+  const errcode = (error as { errcode?: unknown } | null)?.errcode;
+  return typeof errcode === "number" ? errcode & 0xff : null;
+}
+
+const SQLITE_BUSY = 5;
+const SQLITE_LOCKED = 6;
+const SQLITE_CANTOPEN = 14;
+
 function bindArgs(params: PluginDatabaseParams | undefined): unknown[] {
   if (params === undefined) return [];
   if (Array.isArray(params)) return params as unknown[];
@@ -338,6 +386,29 @@ export interface OpenPluginDatabaseOptions extends PluginDatabaseOpenOptions {
 export const READ_MAX_VALUE_BYTES = 16 * 1024 * 1024;
 
 /**
+ * What an agent's connection proves before it opens: the file exists, since an
+ * agent never creates a database (the plugin's own open does, under the
+ * user's consent); it is not a link; and the directory the resolver proved
+ * canonical has not been swapped for one since.
+ */
+function assertAgentOpenable(location: PluginDatabaseLocation): void {
+  const leaf = fs.lstatSync(location.path, { throwIfNoEntry: false });
+  if (leaf?.isSymbolicLink()) {
+    throw databaseError("TARGET_IS_SYMLINK", `database "${location.id}" file is a symlink`);
+  }
+  if (!leaf) {
+    throw databaseError("DB_NOT_FOUND", `database "${location.id}" does not exist yet`);
+  }
+  const dir = path.dirname(location.path);
+  if (fs.realpathSync(dir) !== dir) {
+    throw databaseError(
+      "PATH_NOT_ALLOWED",
+      `database "${location.id}" moved after it was resolved`
+    );
+  }
+}
+
+/**
  * Run one row-returning statement on a fresh readonly connection and hand each
  * row to `onRow` as an array aligned with the returned column names, until the
  * rows run out or `onRow` returns false. Rows are streamed rather than
@@ -360,31 +431,17 @@ export function readPluginDatabaseRows(
   assertNoFileAccess(sql, location.id);
   const args = bindArgs(params);
   const sqlite = loadSqlite();
-  const leaf = fs.lstatSync(location.path, { throwIfNoEntry: false });
-  if (leaf?.isSymbolicLink()) {
-    throw databaseError("TARGET_IS_SYMLINK", `database "${location.id}" file is a symlink`);
-  }
-  if (!leaf) {
-    throw databaseError("DB_NOT_FOUND", `database "${location.id}" does not exist yet`);
-  }
-  // The resolver hands over a path whose directory is already canonical. A
-  // directory swapped for a link since then would canonicalise elsewhere.
-  const dir = path.dirname(location.path);
-  if (fs.realpathSync(dir) !== dir) {
-    throw databaseError(
-      "PATH_NOT_ALLOWED",
-      `database "${location.id}" moved after it was resolved`
-    );
-  }
+  assertAgentOpenable(location);
   const connection = new sqlite.DatabaseSync(location.path, { readOnly: true });
   try {
-    if (sqlite.constants && typeof connection.setAuthorizer === "function") {
-      connection.setAuthorizer(fileAccessAuthorizer(sqlite.constants));
-    }
+    applyConnectionPolicy(
+      connection,
+      sqlite.constants ? fileAccessAuthorizer(sqlite.constants) : null,
+      null
+    );
     // A caller's row budget is checked only after SQLite has built a value, so
     // cap what it may build: `zeroblob(1e9)` fails instead of allocating.
     if (connection.limits) connection.limits.length = READ_MAX_VALUE_BYTES;
-    connection.exec("PRAGMA busy_timeout = 5000");
     const statement = connection.prepare(sql);
     assertSingleStatement(sql, statement, location.id);
     if (
@@ -415,6 +472,127 @@ export function readPluginDatabaseRows(
       rows.return?.();
     }
     return { columns };
+  } finally {
+    connection.close();
+  }
+}
+
+/**
+ * The URI a declared write opens its file by: `mode=rw` opens read-write and
+ * never creates. A UNC path's server goes into the path behind an empty
+ * authority (`file:////server/share/…`), since SQLite refuses any authority
+ * but `localhost`. URL parsing drops a `localhost` server altogether, which
+ * would leave the path naming the local drive, so that one is put back from
+ * the path itself. Exported for its test on either platform's paths.
+ */
+export function writableOpenUri(
+  filePath: string,
+  windows: boolean = process.platform === "win32"
+): string {
+  const url = pathToFileURL(filePath, { windows });
+  const server =
+    url.host !== ""
+      ? url.host
+      : windows && /^[\\/]{2}localhost[\\/]/i.test(filePath)
+        ? "localhost"
+        : "";
+  return `file://${server === "" ? "" : `//${server}`}${url.pathname}?mode=rw`;
+}
+
+/**
+ * Run one data-changing statement for an agent — a declared write query, the
+ * SQL fixed by the manifest and only the values the agent's — and report what
+ * it changed. Each row a `RETURNING` clause yields goes to `onRow`; every one
+ * is stepped through, kept or not, so the statement always finishes.
+ *
+ * The connection gets the policy a writable `host.db` open applies, and the
+ * statement runs in a transaction of its own, so a failure anywhere leaves
+ * nothing behind. It opens only a file that exists. Being a connection of its
+ * own, a `host.db` handle sees its commit as `origin: "external"`.
+ */
+export function runPluginDatabaseWrite(
+  location: PluginDatabaseLocation,
+  sql: string,
+  params: PluginDatabaseParams | undefined,
+  onRow: (row: unknown[]) => void
+): { columns: string[]; changes: number; lastInsertRowid: number | bigint } {
+  if (typeof sql !== "string" || sql.trim().length === 0) {
+    throw databaseError("VALIDATION", "sql must be a non-empty string");
+  }
+  assertNoFileAccess(sql, location.id);
+  const args = bindArgs(params);
+  const sqlite = loadSqlite();
+  assertAgentOpenable(location);
+  let connection: SqliteDatabase;
+  try {
+    // Opened without ever creating, so a file removed since the check above is
+    // reported missing rather than brought back empty.
+    connection = new sqlite.DatabaseSync(
+      writableOpenUri(location.path),
+      WRITABLE_CONNECTION_OPTIONS
+    );
+  } catch (error) {
+    // An unreadable file or a directory fails the same way; only a file that
+    // is not there is one the plugin has yet to create.
+    if (
+      sqliteResultCode(error) !== SQLITE_CANTOPEN ||
+      fs.lstatSync(location.path, { throwIfNoEntry: false })
+    ) {
+      throw error;
+    }
+    throw databaseError("DB_NOT_FOUND", `database "${location.id}" does not exist yet`);
+  }
+  try {
+    applyConnectionPolicy(
+      connection,
+      sqlite.constants ? fileAccessAuthorizer(sqlite.constants) : null,
+      journalModeOf(location)
+    );
+    connection.exec("BEGIN IMMEDIATE");
+    try {
+      const statement = connection.prepare(sql);
+      assertSingleStatement(sql, statement, location.id);
+      if (
+        typeof statement.columns !== "function" ||
+        typeof statement.iterate !== "function" ||
+        typeof statement.setReturnArrays !== "function"
+      ) {
+        throw databaseError(
+          "DB_UNSUPPORTED",
+          "writing needs a runtime whose node:sqlite has StatementSync.iterate and setReturnArrays"
+        );
+      }
+      const columns = statement.columns().map((c) => c.name);
+      statement.setReadBigInts?.(true);
+      if (columns.length > 0) {
+        statement.setReturnArrays(true);
+        for (const row of statement.iterate(...args)) onRow(row as unknown[]);
+      } else {
+        statement.run(...args);
+      }
+      const counts = connection.prepare(
+        "SELECT changes() AS changes, last_insert_rowid() AS rowid"
+      );
+      counts.setReadBigInts?.(true);
+      const { changes, rowid } = counts.get() as {
+        changes: number | bigint;
+        rowid: number | bigint;
+      };
+      connection.exec("COMMIT");
+      return { columns, changes: Number(changes), lastInsertRowid: toNumberIfSafe(rowid) };
+    } catch (error) {
+      rollbackQuietly(connection);
+      throw error;
+    }
+  } catch (error) {
+    const code = sqliteResultCode(error);
+    if (code === SQLITE_BUSY || code === SQLITE_LOCKED) {
+      throw databaseError(
+        "DB_LOCKED",
+        `database "${location.id}" is locked by another connection; nothing was written, so it is safe to try again`
+      );
+    }
+    throw error;
   } finally {
     connection.close();
   }
@@ -456,15 +634,7 @@ export async function openPluginDatabase(
   const DatabaseSync = sqlite.DatabaseSync;
   const authorizer = sqlite.constants ? fileAccessAuthorizer(sqlite.constants) : null;
   const filePath = location.path;
-  const journalMode = location.journalMode === "wal" ? "WAL" : "DELETE";
-
-  const rollbackQuietly = (connection: SqliteDatabase): void => {
-    try {
-      connection.exec("ROLLBACK");
-    } catch {
-      // SQLite already rolled the transaction back
-    }
-  };
+  const journalMode = journalModeOf(location);
 
   // The version is read under the write lock, so two processes opening the
   // same file at once cannot both run migration n.
@@ -574,21 +744,12 @@ export async function openPluginDatabase(
         throw databaseError("DB_NOT_FOUND", `database "${location.id}" does not exist yet`);
       }
       connection = new DatabaseSync(filePath, {
-        enableForeignKeyConstraints: true,
+        ...WRITABLE_CONNECTION_OPTIONS,
         ...(readonly && { readOnly: true }),
       });
-      // Before any statement runs, so migrations and definitions are held to
-      // it as much as the plugin's own queries.
-      if (authorizer && typeof connection.setAuthorizer === "function") {
-        connection.setAuthorizer(authorizer);
-      }
       const opened = readIdentity(filePath);
-      connection.exec("PRAGMA busy_timeout = 5000");
+      applyConnectionPolicy(connection, authorizer, readonly ? null : journalMode);
       if (!readonly) {
-        // Enforced on every open: an agent that ran `PRAGMA journal_mode=WAL`
-        // would otherwise leave committed data in a -wal sidecar that a commit
-        // of the .db alone silently misses.
-        connection.prepare(`PRAGMA journal_mode = ${journalMode}`).get();
         migrate(connection);
         applyDefinitions(connection);
       }

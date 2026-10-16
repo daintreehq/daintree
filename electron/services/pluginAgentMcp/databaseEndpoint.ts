@@ -13,6 +13,7 @@ import {
   DATABASE_QUERY_TOOL,
   DATABASE_SCHEMA_TOOL,
   DATABASE_TOOL_DESCRIPTORS,
+  DATABASE_WRITE_REQUEST,
   type DatabaseQueryParams,
   type DatabaseTarget,
   type DatabaseToolRequest,
@@ -64,8 +65,9 @@ function codedError(code: string, message: string): Error {
 
 /**
  * Serve a plugin's declared databases to agents on {@link DATABASE_ENDPOINT_ID}:
- * the two generic tools, then one tool per declared query. The host owns this
- * roster, not the plugin: it is bound at load, before and independent of
+ * the two generic tools, then one tool per declared query, a write marked as
+ * one for the session to serve only with read and write access. The host owns
+ * this roster, not the plugin: it is bound at load, before and independent of
  * activation, so neither listing nor calling it runs plugin code, and an idle
  * worker being disposed leaves it in place. Returns the disposer; unloading
  * the plugin also drops it through the registry.
@@ -197,15 +199,19 @@ export function registerPluginDatabaseEndpoint(options: PluginDatabaseEndpointOp
       // the agent's mistake whether or not the database exists yet.
       const params = bindDeclaredQueryArgs(query, placeholders, args);
       const resolved = openable(await target(declaration, projectRoot));
-      // The author wrote and bounded the statement, so it gets the most rows a
-      // result may carry, not the default an agent's ad-hoc SQL starts at.
-      request = {
-        tool: DATABASE_QUERY_TOOL,
-        target: resolved,
-        sql: query.sql,
-        params,
-        rowLimit: DATABASE_QUERY_MAX_ROWS,
-      };
+      // The author wrote and bounded the statement, so a read gets the most
+      // rows a result may carry, not the default an agent's ad-hoc SQL starts
+      // at. Which connection runs it is the manifest's `mode`, never the call's.
+      request =
+        query.mode === "write"
+          ? { tool: DATABASE_WRITE_REQUEST, target: resolved, sql: query.sql, params }
+          : {
+              tool: DATABASE_QUERY_TOOL,
+              target: resolved,
+              sql: query.sql,
+              params,
+              rowLimit: DATABASE_QUERY_MAX_ROWS,
+            };
     } else {
       throw new Error(`Unknown tool: ${toolName}`);
     }

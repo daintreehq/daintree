@@ -939,13 +939,24 @@ export interface PluginDatabaseQueryParam {
  * A `"read"` query is served beside `database_query`, under the same access
  * level and on the same read-only connection, and must be one `SELECT`, `WITH`
  * or `VALUES` statement. The host, not the plugin, marks it read-only to
- * clients. Declared queries count toward the plugin's
+ * clients.
+ *
+ * A `"write"` query must be one `INSERT`, `REPLACE`, `UPDATE` or `DELETE`
+ * statement, optionally after `WITH` and with `RETURNING`. It is served only
+ * with read and write access, as the plugin's own tools are, and runs in a
+ * transaction of its own under the policy of a writable `host.db` open — so
+ * the statement and the schema's constraints and triggers are the rules a write
+ * must pass. It never creates a database that does not exist yet, and a
+ * `host.db` handle sees its commit as `origin: "external"`. Its result is
+ * `changes` and `lastInsertRowid`, plus `columns` and `rows` with `RETURNING`.
+ *
+ * Declared queries count toward the plugin's
  * {@link AGENT_MCP_MAX_TOOLS_PER_ENDPOINT} together with any tools it
  * registers.
  */
 export interface PluginDatabaseQueryContribution {
   name: string;
-  mode: "read";
+  mode: "read" | "write";
   description: string;
   params: Record<string, PluginDatabaseQueryParam>;
   sql: string;

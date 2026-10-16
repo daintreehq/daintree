@@ -108,9 +108,12 @@ export class PluginMcpGrantRegistry {
     if (!params.terminalId) {
       throw new Error("plugin MCP grant: terminal id is required");
     }
-    const { databases, pluginEndpointId } = params.scope;
+    const { databases, databaseWrites, pluginEndpointId } = params.scope;
     if (!databases && !pluginEndpointId) {
       throw new Error("plugin MCP grant: the scope reaches no tools");
+    }
+    if (databaseWrites === true && !databases) {
+      throw new Error("plugin MCP grant: database writes need the database tools");
     }
     const token = randomBytes(32).toString("base64url");
     const grant: PluginMcpGrant = Object.freeze({
@@ -119,6 +122,7 @@ export class PluginMcpGrantRegistry {
       pluginInstanceId: params.pluginInstanceId,
       scope: Object.freeze({
         databases,
+        ...(databaseWrites === true ? { databaseWrites } : {}),
         ...(pluginEndpointId ? { pluginEndpointId } : {}),
       }),
       serverName: params.serverName,

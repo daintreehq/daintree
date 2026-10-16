@@ -1,6 +1,7 @@
-// The host's read-only database tools for agents: what they advertise, and the
-// work each call does. The work runs in a short-lived utility process
-// (databaseQueryWorker.ts), so this module stays free of Electron imports.
+// The host's database tools for agents: what the two read-only ones advertise,
+// and the work each call does, a declared write query's included. The work
+// runs in a short-lived utility process (databaseQueryWorker.ts), so this
+// module stays free of Electron imports.
 
 import {
   AGENT_MCP_MAX_RESULT_BYTES,
@@ -8,10 +9,18 @@ import {
   type PluginMcpJsonSchema,
 } from "../../../shared/types/plugin.js";
 import { formatErrorMessage } from "../../../shared/utils/errorMessage.js";
-import { readPluginDatabaseRows } from "../../../shared/utils/pluginDatabaseHandle.js";
+import {
+  readPluginDatabaseRows,
+  runPluginDatabaseWrite,
+} from "../../../shared/utils/pluginDatabaseHandle.js";
 
 export const DATABASE_SCHEMA_TOOL = "database_schema";
 export const DATABASE_QUERY_TOOL = "database_query";
+/**
+ * The request a declared write query becomes. Never a tool of its own: the
+ * only SQL that reaches it is a manifest's, checked at load to be a write.
+ */
+export const DATABASE_WRITE_REQUEST = "database_write";
 
 export const DATABASE_QUERY_DEFAULT_ROWS = 100;
 export const DATABASE_QUERY_MAX_ROWS = 1000;
@@ -103,6 +112,12 @@ export type DatabaseToolRequest =
       sql: string;
       params?: DatabaseQueryParams;
       rowLimit?: number;
+    }
+  | {
+      tool: typeof DATABASE_WRITE_REQUEST;
+      target: DatabaseTarget;
+      sql: string;
+      params?: DatabaseQueryParams;
     };
 
 export type DatabaseToolResponse =
@@ -132,6 +147,21 @@ export interface DatabaseQueryResult {
   columns: string[];
   rows: DatabaseCell[][];
   truncated: boolean;
+}
+
+/**
+ * What a declared write changed. `changes` counts the rows the statement
+ * itself wrote, not those its triggers or cascades did; `lastInsertRowid` is
+ * SQLite's, so 0 when it inserted none. A statement with `RETURNING` also
+ * carries its rows, held to the read path's limits.
+ */
+export interface DatabaseWriteResult {
+  databaseId: string;
+  changes: number;
+  lastInsertRowid: number | string;
+  columns?: string[];
+  rows?: DatabaseCell[][];
+  truncated?: boolean;
 }
 
 function errorCode(error: unknown): string | null {
@@ -324,9 +354,62 @@ export function runDatabaseQuery(
   return result;
 }
 
+/**
+ * Run a declared write. The commit has happened by the time rows are measured,
+ * so a result too large to send trims rows rather than failing: an error
+ * would tell the agent nothing was written.
+ */
+export function runDatabaseWrite(
+  request: Extract<DatabaseToolRequest, { tool: typeof DATABASE_WRITE_REQUEST }>,
+  budgetBytes: number = DATABASE_RESULT_BUDGET_BYTES
+): DatabaseWriteResult {
+  const { target, sql, params } = request;
+  if (!target.resolved) throw unavailable(target);
+  const rows: DatabaseCell[][] = [];
+  let truncated = false;
+  let used = 0;
+  const written = runPluginDatabaseWrite(target.resolved, sql, params, (row) => {
+    if (truncated) return;
+    if (
+      rows.length >= DATABASE_QUERY_MAX_ROWS ||
+      row.some((value) => oversized(value, budgetBytes))
+    ) {
+      truncated = true;
+      return;
+    }
+    const encoded = row.map(encodeCell);
+    const cost = jsonBytes(encoded) + 1;
+    if (used + cost > budgetBytes) {
+      truncated = true;
+      return;
+    }
+    used += cost;
+    rows.push(encoded);
+  });
+  const result: DatabaseWriteResult = {
+    databaseId: target.id,
+    changes: written.changes,
+    lastInsertRowid: encodeCell(written.lastInsertRowid) as number | string,
+  };
+  if (written.columns.length === 0) return result;
+  Object.assign(result, { columns: written.columns, rows, truncated });
+  while (rows.length > 0 && jsonBytes(result) > budgetBytes) {
+    rows.pop();
+    result.truncated = true;
+  }
+  if (jsonBytes(result) > budgetBytes) {
+    result.columns = [];
+    result.truncated = true;
+  }
+  return result;
+}
+
 export function runDatabaseTool(request: DatabaseToolRequest): DatabaseToolResponse {
   try {
     if (request.tool === DATABASE_QUERY_TOOL) return { ok: true, value: runDatabaseQuery(request) };
+    if (request.tool === DATABASE_WRITE_REQUEST) {
+      return { ok: true, value: runDatabaseWrite(request) };
+    }
     const value = runDatabaseSchema(request.targets);
     // Asked for one database by name, its failure is the answer, not a detail
     // inside a successful listing.

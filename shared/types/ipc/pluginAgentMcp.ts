@@ -27,6 +27,8 @@ export interface ProjectAgentToolPlugin {
   origin: "installed" | "project";
   /** The plugin declares databases, so the host offers read-only tools for them. */
   hasDatabases: boolean;
+  /** Some of its declared database queries write; only read and write access serves them. */
+  hasDatabaseWrites?: true;
   /**
    * An installed plugin with databases: they are one set of files shared by
    * every project, and the host's database tools can't filter them by project,
@@ -47,6 +49,12 @@ export interface ProjectAgentToolPlugin {
    * on and its database tools off; any new choice replaces it.
    */
   databasesWithheld?: boolean;
+  /**
+   * The plugin's own tools are on from a choice that predates declared writes
+   * (an answer kept per endpoint, or a repository's endpoint list), which never
+   * covers them; choosing read and write includes them.
+   */
+  writesWithheld?: true;
   /**
    * False for a plugin whose access is on for this project but that no running
    * plugin currently offers here (it was disabled, uninstalled or changed its

@@ -188,6 +188,18 @@ describe("PluginMcpGrantRegistry", () => {
     expect(dbOnly).not.toHaveProperty("launchAgentIdHint");
   });
 
+  it("keeps a scope's database writes, and refuses them without the database tools", () => {
+    const registry = new PluginMcpGrantRegistry();
+    const { grant } = issue(registry, { scope: { databases: true, databaseWrites: true } });
+    expect(grant.scope).toEqual({ databases: true, databaseWrites: true });
+    expect(Object.isFrozen(grant.scope)).toBe(true);
+    expect(() =>
+      issue(registry, {
+        scope: { databases: false, databaseWrites: true, pluginEndpointId: "data" },
+      })
+    ).toThrow(/database writes need the database tools/);
+  });
+
   it("refuses a scope that reaches no tools, and a launch without a terminal", () => {
     const registry = new PluginMcpGrantRegistry();
 

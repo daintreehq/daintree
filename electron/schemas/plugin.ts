@@ -429,8 +429,9 @@ export const DatabaseQueryParamSchema = z
  * `contributes.databases[].queries` entry — one parameterised statement the
  * host serves to agents as a tool named `name`, with no plugin code. Whether
  * the host can serve it safely is decided here, from the SQL as written,
- * because the database need not exist yet: one statement, a read, and
- * placeholders that match `params` exactly. Each failure names the query.
+ * because the database need not exist yet: one statement, of the kind its
+ * `mode` names, and placeholders that match `params` exactly. Each failure
+ * names the query.
  */
 export const DatabaseQueryContributionSchema = z
   .object({
@@ -438,7 +439,7 @@ export const DatabaseQueryContributionSchema = z
       message:
         "query name must be 1-32 lowercase letters, digits and underscores, starting with a letter",
     }),
-    mode: z.literal("read"),
+    mode: z.enum(["read", "write"]),
     description: z
       .string()
       .min(1)

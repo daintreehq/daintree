@@ -37,6 +37,7 @@ import {
 import { _resetProjectMcpDefaultsForTests, refreshProjectMcpDefaults } from "../projectDefaults.js";
 import {
   DATABASE_ENDPOINT_ID,
+  DATABASE_WRITES_ACCESS_ID,
   type AgentMcpToolScope,
   type DeclaredAgentMcpPlugin,
 } from "../types.js";
@@ -485,6 +486,97 @@ describe("projectEnablement", () => {
       setAllProjectsAgentMcpAccess(LEDGER, "read-write");
 
       expect(pluginMcpGrantRegistry.authenticate(grant.token)).toBe(grant.grant);
+    });
+  });
+
+  describe("declared database writes", () => {
+    const writer = (overrides: Partial<DeclaredAgentMcpPlugin> = {}) =>
+      declared({ pluginEndpoint: undefined, hasDatabaseWrites: true, ...overrides });
+    const WRITES: AgentMcpToolScope = { databases: true, databaseWrites: true };
+
+    it("reach a grant only with read and write access, for a plugin that declares them", () => {
+      expect(agentMcpScopeFor(PROJECT_A, writer())).toBeNull();
+      setProjectAgentMcpAccess(PROJECT_A, LEDGER, "read-only");
+      expect(agentMcpScopeFor(PROJECT_A, writer())).toEqual({ databases: true });
+      setProjectAgentMcpAccess(PROJECT_A, LEDGER, "read-write");
+      expect(agentMcpScopeFor(PROJECT_A, writer())).toEqual(WRITES);
+      expect(
+        agentMcpScopeFor(PROJECT_A, writer({ pluginEndpoint: { id: "data", name: "L" } }))
+      ).toEqual({ ...WRITES, pluginEndpointId: "data" });
+      expect(agentMcpScopeFor(PROJECT_A, declared({ pluginEndpoint: undefined }))).toEqual({
+        databases: true,
+      });
+      setProjectAgentMcpAccess(PROJECT_A, LEDGER, "off");
+      expect(agentMcpScopeFor(PROJECT_A, writer())).toBeNull();
+    });
+
+    it("follow an installed plugin's answer for every project", () => {
+      setAllProjectsAgentMcpAccess(LEDGER, "read-write");
+      expect(agentMcpScopeFor(PROJECT_A, writer())).toEqual(WRITES);
+      setAllProjectsAgentMcpAccess(LEDGER, "read-only");
+      expect(agentMcpScopeFor(PROJECT_A, writer())).toEqual({ databases: true });
+    });
+
+    it("come from a repository default that says read and write, or everything", async () => {
+      await withDefaults(PROJECT_A, {
+        plugins: {
+          "acme.rw": "read-write",
+          "acme.ro": "read-only",
+          "acme.all": "*",
+          "acme.yes": true,
+          "acme.list": [DB, "data"],
+          "acme.named": [DB, DATABASE_WRITES_ACCESS_ID],
+        },
+      });
+      const scope = (manifestId: string) =>
+        agentMcpScopeFor(
+          PROJECT_A,
+          writer({
+            pluginInstanceId: makeProjectPluginInstanceKey(PROJECT_A, manifestId),
+            pluginManifestId: manifestId,
+            origin: "project",
+          })
+        );
+      expect(scope("acme.rw")).toEqual(WRITES);
+      expect(scope("acme.all")).toEqual(WRITES);
+      expect(scope("acme.yes")).toEqual(WRITES);
+      expect(scope("acme.ro")).toEqual({ databases: true });
+      expect(scope("acme.list")).toEqual({ databases: true });
+      expect(scope("acme.named")).toEqual({ databases: true });
+    });
+
+    it("are never read into an answer given before access levels", () => {
+      legacy({
+        [PROJECT_A]: {
+          [LEDGER]: {
+            [DB]: { decidedAt: 1 },
+            data: { decidedAt: 1 },
+            [DATABASE_WRITES_ACCESS_ID]: { decidedAt: 1 },
+          },
+        },
+      });
+      expect(agentMcpScopeFor(PROJECT_A, writer())).toEqual({ databases: true });
+      expect(isAgentMcpEndpointEnabled(PROJECT_A, LEDGER, DATABASE_WRITES_ACCESS_ID)).toBe(false);
+      expect(listLegacyAgentMcpEndpointIds(PROJECT_A, LEDGER)).toEqual([DB, "data"]);
+    });
+
+    it("are revoked on a downgrade to read only, sparing a grant without them", () => {
+      setProjectAgentMcpAccess(PROJECT_A, LEDGER, "read-write");
+      const writes = issue(LEDGER, PROJECT_A, WRITES, "t1");
+      const reads = issue(LEDGER, PROJECT_A, { databases: true }, "t2");
+
+      setProjectAgentMcpAccess(PROJECT_A, LEDGER, "read-only");
+
+      expect(isAgentMcpScopeAllowed(PROJECT_A, LEDGER, WRITES)).toBe(false);
+      expect(pluginMcpGrantRegistry.authenticate(writes.token)).toBeNull();
+      expect(pluginMcpGrantRegistry.authenticate(reads.token)).toBe(reads.grant);
+    });
+
+    it("never reach a grant minted without them when access goes up", () => {
+      setProjectAgentMcpAccess(PROJECT_A, LEDGER, "read-only");
+      const reads = issue(LEDGER, PROJECT_A, { databases: true });
+      setProjectAgentMcpAccess(PROJECT_A, LEDGER, "read-write");
+      expect(pluginMcpGrantRegistry.authenticate(reads.token)?.scope).toEqual({ databases: true });
     });
   });
 

@@ -18,7 +18,7 @@ import {
 import { runDatabaseTool, type DatabaseToolRequest } from "../databaseTools.js";
 import { AgentMcpEndpointRegistry } from "../endpointRegistry.js";
 import { createPluginSessionServer } from "../pluginSessionServer.js";
-import { DATABASE_ENDPOINT_ID } from "../types.js";
+import { DATABASE_ENDPOINT_ID, type AgentMcpToolScope } from "../types.js";
 import { validateAgentMcpTools } from "../validateTools.js";
 
 const { DatabaseSync } = process.getBuiltinModule("node:sqlite") as typeof import("node:sqlite");
@@ -389,5 +389,166 @@ describe("declared database queries", () => {
     );
     expect(activatePlugin).not.toHaveBeenCalled();
     expect(pluginInvoke).not.toHaveBeenCalled();
+  });
+});
+
+const ADD_ENTRY: PluginDatabaseQueryContribution = {
+  name: "add_entry",
+  mode: "write",
+  description: "Record an entry, in integer cents.",
+  params: { date: { type: "string" }, cents: { type: "integer" } },
+  sql: "INSERT INTO tx (date, amount_cents, voided) VALUES (:date, :cents, 0) RETURNING id",
+};
+
+async function connectSession(
+  scope: AgentMcpToolScope,
+  options: { callTimeoutMs?: number } = {}
+): Promise<Client> {
+  const server = createPluginSessionServer({
+    pluginInstanceId: INSTANCE,
+    scope,
+    serverName: "daintree-ledger",
+    caller: caller(),
+    sessionSignal: new AbortController().signal,
+    activatePlugin: async () => {},
+    endpointRegistry: registry,
+    rosterWaitMs: 0,
+    ...options,
+  });
+  const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+  const client = new Client({ name: "test-client", version: "1.0.0" });
+  await server.connect(serverTransport);
+  await client.connect(clientTransport);
+  cleanups.push(async () => {
+    await client.close().catch(() => {});
+    await server.close().catch(() => {});
+  });
+  return client;
+}
+
+function amounts(): number[] {
+  const raw = new DatabaseSync(path.join(dataDir, "databases", "ledger.db"));
+  try {
+    return raw
+      .prepare("SELECT amount_cents FROM tx ORDER BY id")
+      .all()
+      .map((row) => Number((row as { amount_cents: number }).amount_cents));
+  } finally {
+    raw.close();
+  }
+}
+
+describe("declared write queries", () => {
+  it("serves a write marked as one, never as read-only", () => {
+    const { tools } = registerLedger([MONTH_TOTAL, ADD_ENTRY]);
+    const addEntry = tools.find((tool) => tool.name === "add_entry")!;
+    expect(addEntry).toMatchObject({
+      databaseWrite: true,
+      annotations: { destructiveHint: true, idempotentHint: false, openWorldHint: false },
+    });
+    expect(addEntry.readOnly).toBeUndefined();
+  });
+
+  it("runs the manifest's statement as a write, with the agent's values bound", async () => {
+    seedLocal("ledger", TX_SQL);
+    const run = vi.fn(inline);
+    const { invoke } = register({
+      declarations: [
+        { id: "ledger", location: "local", journalMode: "delete", queries: [ADD_ENTRY] },
+      ],
+      run,
+    });
+    await expect(
+      invoke("add_entry", { date: "2026-03-01", cents: 700 }, caller(), signal())
+    ).resolves.toEqual({
+      databaseId: "ledger",
+      changes: 1,
+      lastInsertRowid: 4,
+      columns: ["id"],
+      rows: [[4]],
+      truncated: false,
+    });
+    expect(run.mock.calls[0]![0]).toMatchObject({
+      tool: "database_write",
+      sql: ADD_ENTRY.sql,
+      params: { ":date": "2026-03-01", ":cents": 700n },
+    });
+    expect(amounts()).toEqual([1250, 800, 400, 700]);
+  });
+
+  it("reports a database that does not exist yet, and creates nothing", async () => {
+    const { invoke } = registerLedger([ADD_ENTRY]);
+    await expect(
+      invoke("add_entry", { date: "2026-03-01", cents: 700 }, caller(), signal())
+    ).rejects.toMatchObject({ code: "DB_NOT_FOUND" });
+    expect(fs.existsSync(dataDir)).toBe(false);
+  });
+
+  it("is neither listed nor callable on a read-only grant", async () => {
+    seedLocal("ledger", TX_SQL);
+    const run = vi.fn(inline);
+    register({
+      declarations: [
+        {
+          id: "ledger",
+          location: "local",
+          journalMode: "delete",
+          queries: [MONTH_TOTAL, ADD_ENTRY],
+        },
+      ],
+      run,
+    });
+    const client = await connectSession({ databases: true });
+    const { tools } = await client.listTools();
+    expect(tools.map((t) => t.name)).toEqual(["database_schema", "database_query", "month_total"]);
+    await expect(
+      client.callTool({ name: "add_entry", arguments: { date: "2026-03-01", cents: 700 } })
+    ).rejects.toThrow(/Unknown tool: add_entry/);
+    expect(run).not.toHaveBeenCalled();
+    expect(amounts()).toEqual([1250, 800, 400]);
+  });
+
+  it("is listed and runs on a grant with read and write access", async () => {
+    seedLocal("ledger", TX_SQL);
+    registerLedger([MONTH_TOTAL, ADD_ENTRY]);
+    const client = await connectSession({ databases: true, databaseWrites: true });
+    const { tools } = await client.listTools();
+    expect(tools.map((t) => [t.name, t.annotations])).toEqual([
+      ["database_schema", { readOnlyHint: true }],
+      ["database_query", { readOnlyHint: true }],
+      ["month_total", { readOnlyHint: true }],
+      ["add_entry", { destructiveHint: true, idempotentHint: false, openWorldHint: false }],
+    ]);
+    const result = await client.callTool({
+      name: "add_entry",
+      arguments: { date: "2026-03-01", cents: 700 },
+    });
+    expect(result.isError).toBeFalsy();
+    expect(JSON.parse((result.content as Array<{ text: string }>)[0]!.text)).toMatchObject({
+      changes: 1,
+    });
+    expect(amounts()).toEqual([1250, 800, 400, 700]);
+  });
+
+  it("warns that a write cut off by the timeout may still have landed", async () => {
+    register({
+      declarations: [
+        { id: "ledger", location: "local", journalMode: "delete", queries: [ADD_ENTRY] },
+      ],
+      run: () => new Promise(() => {}),
+    });
+    seedLocal("ledger", TX_SQL);
+    const client = await connectSession(
+      { databases: true, databaseWrites: true },
+      { callTimeoutMs: 20 }
+    );
+    const result = await client.callTool({
+      name: "add_entry",
+      arguments: { date: "2026-03-01", cents: 700 },
+    });
+    expect(result.isError).toBe(true);
+    expect((result.content as Array<{ text: string }>)[0]!.text).toMatch(
+      /timed out .* may still have been applied; read the data before retrying/
+    );
   });
 });
