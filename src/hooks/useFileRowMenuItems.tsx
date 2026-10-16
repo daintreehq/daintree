@@ -174,8 +174,9 @@ export interface FileRowMenuItemOptions {
   onCopyFileContents?: (() => void) | undefined;
   /**
    * Whether `status` describes the working tree. False for a base-branch
-   * review, whose rows are committed changes: `Discard changes` there would act
-   * on whatever the working tree happens to hold, not on the change shown.
+   * review, whose rows are committed changes: `Discard changes` and
+   * `Delete file` there would act on whatever the working tree happens to
+   * hold, not on the change shown, so neither is offered.
    */
   statusIsLocal?: boolean;
 }
@@ -402,12 +403,15 @@ export function useFileRowMenuItems(surface: FileRowMenuSurface): FileRowMenuCon
         (options?.onCopyFileContents !== undefined || isFileContentsCopyCandidate(absolutePath));
       // Both act on one file of one worktree, so a folder row or a surface with
       // no worktree root (a workspace-rooted browser) has neither (#13424).
-      const canMutate = !isDirectory && worktreeId !== null && worktreePath !== "";
-      const showDiscard =
-        canMutate &&
-        options?.statusIsLocal !== false &&
-        status !== null &&
-        DISCARDABLE_STATUSES.has(status);
+      // A row whose status describes a comparison rather than the working tree
+      // can't say what either would do here: a committed deletion may be on
+      // disk again, a committed change may be conflicted now.
+      const canMutate =
+        !isDirectory &&
+        worktreeId !== null &&
+        worktreePath !== "" &&
+        options?.statusIsLocal !== false;
+      const showDiscard = canMutate && status !== null && DISCARDABLE_STATUSES.has(status);
       // A deleted file has nothing on disk to delete — Discard is what brings
       // it back — and a conflicted one is the conflict panel's. An untracked
       // file gets this alone: with nothing to restore to, discarding it and

@@ -72,10 +72,22 @@ async function realpathNearest(absolutePath: string): Promise<string> {
   }
 }
 
+function isInsideRoot(rel: string): boolean {
+  return rel !== "" && rel !== ".." && !rel.startsWith(`..${path.sep}`) && !path.isAbsolute(rel);
+}
+
+function namesGitDir(segments: string[]): boolean {
+  return segments.some((segment) => segment.toLowerCase() === ".git");
+}
+
 /**
  * Resolves a worktree-relative path and refuses anything that could reach past
  * the file the user clicked: absolute paths, `..`, the root itself, git's own
- * administration directory, and a symlinked parent that leads out of the tree.
+ * administration directory (also when reached through a symlinked folder), and
+ * a symlinked parent that leads out of the tree.
+ *
+ * Only the parent is resolved. The leaf is what gets restored or trashed, so a
+ * symlink leaf is acted on as the link, never as whatever it points at.
  */
 async function resolveTarget(worktreePath: string, relativePath: string): Promise<ResolvedTarget> {
   if (typeof worktreePath !== "string" || !path.isAbsolute(worktreePath)) {
@@ -87,20 +99,24 @@ async function resolveTarget(worktreePath: string, relativePath: string): Promis
   if (path.isAbsolute(relativePath) || path.win32.isAbsolute(relativePath)) {
     throw new Error("Invalid file path: must be relative to the worktree");
   }
-  const segments = relativePath.split(/[\\/]+/).filter((segment) => segment !== "");
+  // Git names paths with `/`. A backslash is a separator only on Windows; on
+  // POSIX `a\b.txt` is a file of its own and must not become `a/b.txt`.
+  const separators = process.platform === "win32" ? /[\\/]+/ : /\/+/;
+  const segments = relativePath.split(separators).filter((segment) => segment !== "");
   if (
     segments.length === 0 ||
     segments.some((segment) => segment === "." || segment === "..") ||
-    segments.some((segment) => segment.toLowerCase() === ".git")
+    namesGitDir(segments)
   ) {
     throw new Error("Invalid file path: must point at a file inside the worktree");
   }
 
   const root = await realpath(worktreePath);
   const absolutePath = path.join(root, ...segments);
-  const lockKey = await realpathNearest(absolutePath);
+  const realParent = await realpathNearest(path.dirname(absolutePath));
+  const lockKey = path.join(realParent, path.basename(absolutePath));
   const rel = path.relative(root, lockKey);
-  if (!rel || rel === ".." || rel.startsWith(`..${path.sep}`) || path.isAbsolute(rel)) {
+  if (!isInsideRoot(rel) || namesGitDir(rel.split(path.sep))) {
     throw new Error("Invalid file path: must point at a file inside the worktree");
   }
   return { root, gitPath: segments.join("/"), absolutePath, lockKey };
@@ -150,7 +166,13 @@ async function resolveHeadOid(git: SimpleGit): Promise<string | null> {
   const oid = (await tryRaw(git, ["rev-parse", "--verify", "HEAD^{commit}"]))?.trim();
   if (oid) return oid;
   const ref = (await tryRaw(git, ["symbolic-ref", "HEAD"]))?.trim();
-  if (ref && (await tryRaw(git, ["show-ref", "--verify", ref])) === null) return null;
+  if (ref) {
+    // `for-each-ref` answers a missing ref with empty output and exit 0, so a
+    // failed read can't pass for an unborn branch the way a swallowed error
+    // from `show-ref` would. Its own failure propagates.
+    const tip = await git.raw(["for-each-ref", "--format=%(objectname)", ref]);
+    if (tip.trim() === "") return null;
+  }
   throw new Error("Couldn't read this worktree's current commit.");
 }
 
@@ -202,12 +224,69 @@ export async function discardFileChanges(
   const target = await resolveTarget(worktreePath, relativePath);
   const git = await createHardenedGit(target.root);
 
+  // Planned once to learn which paths to lock, then again under the locks:
+  // anything checked before the wait — the status, a rename's partner, what is
+  // on disk, where a parent symlink leads — can change while queued behind an
+  // editor save, and acting on the stale answer is how the wrong file goes.
+  const keys = (await planDiscard(git, target)).targets.map((t) => t.lockKey);
+  await runExclusiveAll(keys, async () => {
+    const plan = await planDiscard(git, target);
+    const lockedKeys = plan.targets.map((t) => t.lockKey);
+    if (lockedKeys.some((key) => !keys.includes(key))) {
+      throw new Error(`'${target.gitPath}' changed while waiting. Try again.`);
+    }
+    const toRemove = plan.targets.filter((t) => t.head === "absent");
+    const toRestore = plan.targets.filter((t) => t.head === "blob");
+
+    // Trash before touching the index, so a refused Trash leaves the change
+    // exactly as it was rather than half-discarded.
+    for (const t of toRemove) {
+      if (t.onDisk) await trashItem(t.absolutePath);
+    }
+    if (toRemove.length > 0) {
+      await git.raw([
+        "rm",
+        "--cached",
+        "--quiet",
+        "--ignore-unmatch",
+        "--",
+        ...toRemove.map((t) => t.gitPath),
+      ]);
+    }
+    if (toRestore.length > 0 && plan.headOid !== null) {
+      await git.raw([
+        "restore",
+        `--source=${plan.headOid}`,
+        "--staged",
+        "--worktree",
+        "--",
+        ...toRestore.map((t) => t.gitPath),
+      ]);
+    }
+  });
+}
+
+interface DiscardTarget extends ResolvedTarget {
+  onDisk: boolean;
+  head: HeadEntry;
+}
+
+/** Works out which paths discarding `target` touches, refusing what it must not. */
+async function planDiscard(
+  git: SimpleGit,
+  target: ResolvedTarget
+): Promise<{ headOid: string | null; targets: DiscardTarget[] }> {
   const status = parsePorcelainV1Z(
     await git.raw(["status", "--porcelain=v1", "-z", "--untracked-files=no"])
   );
-  const entry = status.find(
-    (candidate) => candidate.path === target.gitPath || candidate.origPath === target.gitPath
-  );
+  // The row's own entry first. A rename can also be reached by its source, but
+  // a copy's source is a different file whose own changes are not this row's.
+  const entry =
+    status.find((candidate) => candidate.path === target.gitPath) ??
+    status.find(
+      (candidate) =>
+        candidate.origPath === target.gitPath && (candidate.x === "R" || candidate.y === "R")
+    );
   if (!entry) {
     throw new Error(`'${target.gitPath}' has no changes to discard.`);
   }
@@ -216,52 +295,35 @@ export async function discardFileChanges(
   }
 
   const isRename = entry.x === "R" || entry.y === "R";
-  const gitPaths = [entry.path];
-  // A copy's source is unchanged and stays; a rename's source comes back.
-  if (isRename && entry.origPath) gitPaths.push(entry.origPath);
-
   const headOid = await resolveHeadOid(git);
-  const targets = await Promise.all(
-    gitPaths.map(async (gitPath) => {
-      const resolved =
-        gitPath === target.gitPath ? target : await resolveTarget(target.root, gitPath);
-      const onDisk = await refuseDirectory(resolved.absolutePath, gitPath);
-      return { ...resolved, onDisk, head: await readHeadEntry(git, headOid, gitPath) };
-    })
-  );
-  const toRestore = targets.filter((t) => t.head === "blob");
-  const toRemove = targets.filter((t) => t.head === "absent");
+  const destination =
+    entry.path === target.gitPath ? target : await resolveTarget(target.root, entry.path);
+  const targets: DiscardTarget[] = [
+    {
+      ...destination,
+      onDisk: await refuseDirectory(destination.absolutePath, entry.path),
+      head: await readHeadEntry(git, headOid, entry.path),
+    },
+  ];
 
-  await runExclusiveAll(
-    targets.map((t) => t.lockKey),
-    async () => {
-      // Trash before touching the index, so a refused Trash leaves the change
-      // exactly as it was rather than half-discarded.
-      for (const t of toRemove) {
-        if (t.onDisk) await trashItem(t.absolutePath);
-      }
-      if (toRemove.length > 0) {
-        await git.raw([
-          "rm",
-          "--cached",
-          "--quiet",
-          "--ignore-unmatch",
-          "--",
-          ...toRemove.map((t) => t.gitPath),
-        ]);
-      }
-      if (toRestore.length > 0 && headOid !== null) {
-        await git.raw([
-          "restore",
-          `--source=${headOid}`,
-          "--staged",
-          "--worktree",
-          "--",
-          ...toRestore.map((t) => t.gitPath),
-        ]);
-      }
+  if (isRename && entry.origPath) {
+    const source =
+      entry.origPath === target.gitPath ? target : await resolveTarget(target.root, entry.origPath);
+    const sourceOnDisk = await refuseDirectory(source.absolutePath, entry.origPath);
+    // The rename took the source out of the index, so a file standing there
+    // now is a new one the user made. Restoring HEAD over it would lose it.
+    if (sourceOnDisk) {
+      throw new Error(
+        `'${entry.origPath}' was renamed to '${entry.path}', and a new file now stands at '${entry.origPath}'. Move it aside before discarding the rename.`
+      );
     }
-  );
+    targets.push({
+      ...source,
+      onDisk: false,
+      head: await readHeadEntry(git, headOid, entry.origPath),
+    });
+  }
+  return { headOid, targets };
 }
 
 /**
@@ -274,9 +336,16 @@ export async function trashFile(
   trashItem: TrashItem
 ): Promise<void> {
   const target = await resolveTarget(worktreePath, relativePath);
-  const exists = await refuseDirectory(target.absolutePath, target.gitPath);
-  if (!exists) {
-    throw new Error(`'${target.gitPath}' no longer exists.`);
-  }
-  await runExclusive(target.lockKey, () => trashItem(target.absolutePath));
+  await runExclusive(target.lockKey, async () => {
+    // Checked under the lock: a file swapped for a folder, or a parent swapped
+    // for a symlink, while this waited must not be what goes to the Trash.
+    const current = await resolveTarget(worktreePath, relativePath);
+    if (current.lockKey !== target.lockKey) {
+      throw new Error(`'${target.gitPath}' changed while waiting. Try again.`);
+    }
+    if (!(await refuseDirectory(current.absolutePath, current.gitPath))) {
+      throw new Error(`'${current.gitPath}' no longer exists.`);
+    }
+    await trashItem(current.absolutePath);
+  });
 }

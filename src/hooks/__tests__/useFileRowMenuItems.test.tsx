@@ -821,9 +821,9 @@ describe("useFileRowMenuItems — discard and delete (#13424)", () => {
     expect(mutationItems(menu)).toEqual([]);
   });
 
-  it("drops Discard when the row's status is not the working tree's", async () => {
+  it("offers neither when the row's status is not the working tree's", async () => {
     const menu = await openMenu({ options: { statusIsLocal: false } });
-    expect(mutationItems(menu)).toEqual(["Delete file"]);
+    expect(mutationItems(menu)).toEqual([]);
   });
 
   it.each([

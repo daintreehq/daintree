@@ -36,6 +36,9 @@ function FileMutationConfirmDialogInner() {
     <ConfirmDialog
       isOpen={true}
       variant="destructive"
+      // The menu that asks can sit inside a dialog of its own — the Review
+      // Hub's diff is nested — and a confirm behind it can't be answered.
+      zIndex="nested"
       onClose={() => resolveConfirmation(false)}
       onConfirm={() => resolveConfirmation(true)}
       title={isDiscard ? `Discard changes to '${name}'?` : `Delete '${name}'?`}

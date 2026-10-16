@@ -78,6 +78,11 @@ function initRepo(withCommit = true): void {
   git(["config", "user.email", "test@example.com"]);
   git(["config", "user.name", "Test"]);
   git(["config", "commit.gpgsign", "false"]);
+  // Pinned in the repo, which production's hardened git reads too: a global
+  // autocrlf or rename setting on the machine would otherwise make the
+  // fixture and the code under test disagree about what changed.
+  git(["config", "core.autocrlf", "false"]);
+  git(["config", "status.renames", "true"]);
   if (!withCommit) return;
   write("a.txt", "committed a\n");
   write("old.txt", "committed old\n");
@@ -150,6 +155,55 @@ describe("discardFileChanges", () => {
     expect(status()).toBe("");
     expect(trashedContents()).toEqual(["renamed and edited\n"]);
   });
+
+  it("refuses to restore a rename's source over a new file standing there", async () => {
+    git(["mv", "old.txt", "new.txt"]);
+    write("old.txt", "a different file\n");
+
+    await expect(discardFileChanges(repo, "new.txt", fakeTrash)).rejects.toThrow(/Move it aside/);
+    expect(read("old.txt")).toBe("a different file\n");
+    expect(read("new.txt")).toBe("committed old\n");
+    expect(trashed).toEqual([]);
+  });
+
+  it("discards a copy's own row without touching the file it was copied from", async () => {
+    // The copy sorts ahead of its source, so a lookup that matched a copy by
+    // its source would reach the copy's record before the source's own.
+    git(["config", "status.renames", "copies"]);
+    fs.copyFileSync(path.join(repo, "old.txt"), path.join(repo, "b-copy.txt"));
+    write("old.txt", "edited source\n");
+    git(["add", "-A"]);
+
+    await discardFileChanges(repo, "old.txt", fakeTrash);
+
+    expect(read("old.txt")).toBe("committed old\n");
+    expect(read("b-copy.txt")).toBe("committed old\n");
+    expect(trashed).toEqual([]);
+  });
+
+  it("refuses a path that reaches git's own directory through a symlinked folder", async () => {
+    try {
+      fs.symlinkSync(path.join(repo, ".git"), path.join(repo, "metadata"), "dir");
+    } catch {
+      return; // Symlinks need privileges on some Windows setups.
+    }
+
+    await expect(trashFile(repo, "metadata/index", fakeTrash)).rejects.toThrow(/Invalid file path/);
+    expect(fs.existsSync(path.join(repo, ".git", "index"))).toBe(true);
+  });
+
+  it.skipIf(process.platform === "win32")(
+    "keeps a backslash as part of a POSIX file name",
+    async () => {
+      write("a\\b.txt", "backslash name\n");
+      write("a/b.txt", "nested\n");
+
+      await trashFile(repo, "a\\b.txt", fakeTrash);
+
+      expect(trashedContents()).toEqual(["backslash name\n"]);
+      expect(read("a/b.txt")).toBe("nested\n");
+    }
+  );
 
   it("leaves every other change in the worktree alone", async () => {
     write("a.txt", "discard me\n");
@@ -255,6 +309,22 @@ describe("trashFile", () => {
   it("refuses a folder", async () => {
     await expect(trashFile(repo, "pages", fakeTrash)).rejects.toThrow(/is a folder/);
     expect(exists("pages/s.tsx")).toBe(true);
+  });
+
+  it("trashes a symlink as the link, even when it points outside the worktree", async () => {
+    const outside = fs.mkdtempSync(path.join(os.tmpdir(), "daintree-file-mutation-target-"));
+    scratchDirs.push(outside);
+    fs.writeFileSync(path.join(outside, "secret.env"), "kept\n");
+    try {
+      fs.symlinkSync(path.join(outside, "secret.env"), path.join(repo, ".env"));
+    } catch {
+      return;
+    }
+
+    await trashFile(repo, ".env", fakeTrash);
+
+    expect(fs.lstatSync(trashed[0]).isSymbolicLink()).toBe(true);
+    expect(fs.readFileSync(path.join(outside, "secret.env"), "utf-8")).toBe("kept\n");
   });
 
   it("refuses a file that is already gone", async () => {

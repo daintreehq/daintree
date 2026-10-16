@@ -38,7 +38,7 @@ export interface DiffFileSidebarProps {
   /**
    * Whether each entry's status is the working tree's. False for a base-branch
    * review, whose rows are committed changes; the row menu then drops
-   * `Discard changes`.
+   * `Discard changes` and `Delete file`.
    */
   statusIsLocal?: boolean;
   onSelect: (index: number) => void;
