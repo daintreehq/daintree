@@ -16,8 +16,9 @@ import type {
 const NONE = 0;
 const DEFAULT = PLUGIN_HOST_CALL_TIMEOUT_MS;
 const SLOW = PLUGIN_HOST_CALL_SLOW_TIMEOUT_MS;
-// A first-use capability consent dialog, or an OS keychain prompt behind a
-// secret setting, can sit in front of these before the work itself starts.
+// A first-use capability consent dialog, an OS keychain prompt behind a
+// secret setting, or (in Host mode) the driving machine's clipboard consent
+// can sit in front of these before the work itself starts.
 const INTERACTIVE = PLUGIN_HOST_CALL_INTERACTIVE_TIMEOUT_MS;
 
 type DeadlinePolicy = number | ((params: unknown) => number);
@@ -68,9 +69,9 @@ const HOST_CALL_DEADLINES = {
   "git.diff": SLOW,
   "git.add": INTERACTIVE,
   "git.commit": INTERACTIVE,
-  "clipboard.writeText": DEFAULT,
-  "clipboard.writeImage": DEFAULT,
-  "clipboard.readText": DEFAULT,
+  "clipboard.writeText": INTERACTIVE,
+  "clipboard.writeImage": INTERACTIVE,
+  "clipboard.readText": INTERACTIVE,
   "system.openPath": DEFAULT,
   "system.showItemInFolder": DEFAULT,
   "documents.renderPdf": INTERACTIVE,

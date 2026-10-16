@@ -4905,7 +4905,7 @@ interface MockHostState {
      * calls that got past argument validation are recorded.
      */
     readonly reloadPanelCalls: ReadonlyArray<string>;
-    /** What each `host.restartWorker()` call answered, in order (#13410). */
+    /** What each `host.restartWorker()` call answered, in the order they settled (#13410). */
     readonly restartWorkerCalls: ReadonlyArray<WorkerRestartResult>;
     readonly showQuickPickCalls: ReadonlyArray<ShowQuickPickRecord>;
     readonly showInputBoxCalls: ReadonlyArray<ShowInputBoxRecord>;

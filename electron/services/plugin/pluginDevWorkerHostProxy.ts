@@ -76,7 +76,10 @@ import {
   normalizePluginAllAgentsSnapshot,
   UNAVAILABLE_PLUGIN_ALL_AGENTS_SNAPSHOT,
 } from "../../../shared/utils/pluginAllAgentsSnapshot.js";
-import { AGENT_MCP_MAX_RESULT_BYTES } from "../../../shared/types/plugin.js";
+import {
+  AGENT_MCP_MAX_RESULT_BYTES,
+  PLUGIN_HOST_CALL_TIMEOUT_MS,
+} from "../../../shared/types/plugin.js";
 import type {
   PanelReloadResult,
   WorkerRestartResult,
@@ -183,6 +186,12 @@ export class PluginDevWorkerHostProxy {
   private disposed = false;
 
   private readonly pendingCalls = new Map<string, PendingCall>();
+  /**
+   * `process.spawn` calls this worker gave up on (#13410). Main may already
+   * have spawned and answered, and nothing else will ever learn the process id
+   * from that late answer, so it is killed when it arrives.
+   */
+  private readonly abandonedSpawns = new Set<string>();
   private readonly actionHandlers = new Map<string, ActionHandler>();
   private readonly ipcHandlers = new Map<string, RegisteredHandler>();
   private readonly subscriptions = new Map<string, (payload: unknown) => void>();
@@ -248,6 +257,7 @@ export class PluginDevWorkerHostProxy {
       }
     }
     this.pendingCalls.clear();
+    this.abandonedSpawns.clear();
     this.actionHandlers.clear();
     this.ipcHandlers.clear();
     this.subscriptions.clear();
@@ -275,7 +285,19 @@ export class PluginDevWorkerHostProxy {
     switch (msg.type) {
       case "host-result": {
         const pending = this.pendingCalls.get(msg.requestId);
-        if (!pending) return true;
+        if (!pending) {
+          if (this.abandonedSpawns.delete(msg.requestId) && msg.ok) {
+            const id = (msg.result as { id?: unknown } | undefined)?.id;
+            if (typeof id === "string") {
+              try {
+                this.notify("process.kill", { processId: id });
+              } catch {
+                // best-effort — the bridge kills it at teardown regardless
+              }
+            }
+          }
+          return true;
+        }
         this.pendingCalls.delete(msg.requestId);
         pending.cleanup?.();
         if (msg.ok) pending.resolve(msg.result);
@@ -615,6 +637,25 @@ export class PluginDevWorkerHostProxy {
         if (onAbort && signal) signal.removeEventListener("abort", onAbort);
         if (deadline !== undefined) clearTimeout(deadline);
       };
+      // Armed in the worker so the caller is released even when main is the
+      // side that stopped answering (#13410). A timeout rejects even a
+      // grace-bearing call: grace is for unload and cancellation, and a
+      // stalled host is neither.
+      const armDeadline = (ms: number): void => {
+        deadline = setTimeout(() => {
+          if (!this.pendingCalls.has(requestId)) return;
+          this.pendingCalls.delete(requestId);
+          cleanup();
+          if (method === "process.spawn") this.abandonedSpawns.add(requestId);
+          try {
+            this.post({ type: "host-cancel", requestId });
+          } catch {
+            // best-effort — the entry is already claimed
+          }
+          reject(hostCallTimeoutError(this.pluginId, method, ms));
+        }, ms);
+        deadline.unref?.();
+      };
       this.pendingCalls.set(requestId, {
         resolve: resolve as (value: unknown) => void,
         reject,
@@ -632,6 +673,10 @@ export class PluginDevWorkerHostProxy {
               // best-effort — the call itself is still in flight, and its
               // answer (or dispose's grace value) still settles the caller
             }
+            // A call with no deadline of its own (a picker waiting on the
+            // person) is owed main's answer to the cancel, not the person's,
+            // so that answer gets an ordinary deadline.
+            if (deadline === undefined) armDeadline(PLUGIN_HOST_CALL_TIMEOUT_MS);
             return;
           }
           this.pendingCalls.delete(requestId);
@@ -657,25 +702,7 @@ export class PluginDevWorkerHostProxy {
         };
         signal.addEventListener("abort", onAbort, { once: true });
       }
-      // Armed in the worker so the caller is released even when main is the
-      // side that stopped answering (#13410). It also bounds a
-      // `hostAnswersAbort` call, whose cancel otherwise waits on main. A
-      // timeout rejects even a grace-bearing call: grace is for unload and
-      // cancellation, and a stalled host is neither.
-      if (deadlineMs > 0) {
-        deadline = setTimeout(() => {
-          if (!this.pendingCalls.has(requestId)) return;
-          this.pendingCalls.delete(requestId);
-          cleanup();
-          try {
-            this.post({ type: "host-cancel", requestId });
-          } catch {
-            // best-effort — the entry is already claimed
-          }
-          reject(hostCallTimeoutError(this.pluginId, method, deadlineMs));
-        }, deadlineMs);
-        deadline.unref?.();
-      }
+      if (deadlineMs > 0) armDeadline(deadlineMs);
       try {
         const invocationId = this.invocation.getStore();
         this.post({

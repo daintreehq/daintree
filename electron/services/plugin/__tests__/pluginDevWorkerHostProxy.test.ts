@@ -874,8 +874,10 @@ describe("PluginDevWorkerHostProxy host.fs revision, mkdir, append and watch opt
 
   it("carries recursive and debounceMs on the watch call only when set", async () => {
     const { proxy, sent } = makeProxy();
-    void proxy.host.fs.watch(["/repo"], vi.fn(), { recursive: true, debounceMs: 150 });
-    void proxy.host.fs.watch(["/repo"], vi.fn());
+    void proxy.host.fs
+      .watch(["/repo"], vi.fn(), { recursive: true, debounceMs: 150 })
+      .catch(() => undefined);
+    void proxy.host.fs.watch(["/repo"], vi.fn()).catch(() => undefined);
     const calls = sent.filter((m) => m.type === "host-call" && m.method === "fs.watch");
     expect(calls[0].params).toMatchObject({ paths: ["/repo"], recursive: true, debounceMs: 150 });
     expect(calls[1].params).not.toHaveProperty("recursive");
@@ -884,8 +886,10 @@ describe("PluginDevWorkerHostProxy host.fs revision, mkdir, append and watch opt
 
   it("forwards a supplied recursive unchanged so the host can reject a malformed one", () => {
     const { proxy, sent } = makeProxy();
-    void proxy.host.fs.watch(["/repo"], vi.fn(), { recursive: "true" as unknown as boolean });
-    void proxy.host.fs.watch(["/repo"], vi.fn(), { recursive: false });
+    void proxy.host.fs
+      .watch(["/repo"], vi.fn(), { recursive: "true" as unknown as boolean })
+      .catch(() => undefined);
+    void proxy.host.fs.watch(["/repo"], vi.fn(), { recursive: false }).catch(() => undefined);
     const calls = sent.filter((m) => m.type === "host-call" && m.method === "fs.watch");
     expect(calls[0].params.recursive).toBe("true");
     expect(calls[1].params.recursive).toBe(false);
@@ -1608,7 +1612,9 @@ describe("PluginDevWorkerHostProxy coalesced subscriptions and readFiles", () =>
   it("relays readFiles in one host call, forwarding only the options that were set", async () => {
     const { proxy, sent } = makeProxy();
     const promise = proxy.host.fs.readFiles!(["/repo/a", "/repo/b"]);
-    void proxy.host.fs.readFiles!(["/repo/c"], { encoding: "bytes", maxBytesPerFile: 10 });
+    void proxy.host.fs
+      .readFiles!(["/repo/c"], { encoding: "bytes", maxBytesPerFile: 10 })
+      .catch(() => undefined);
     const calls = sent.filter((m) => m.type === "host-call" && m.method === "fs.readFiles");
     expect(calls).toHaveLength(2);
     expect(calls[0].params).toEqual({ paths: ["/repo/a", "/repo/b"] });
@@ -1945,6 +1951,60 @@ describe("PluginDevWorkerHostProxy host-call deadline (#13410)", () => {
 
     await vi.advanceTimersByTimeAsync(PLUGIN_HOST_CALL_INTERACTIVE_TIMEOUT_MS);
     await rejected;
+  });
+
+  it("clears the deadline when the call cannot be posted", async () => {
+    const { proxy, post } = makeProxy();
+    post.mockImplementationOnce(() => {
+      throw new Error("DataCloneError");
+    });
+    await expect(proxy.host.storage.get("k")).rejects.toThrow(/DataCloneError/);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("bounds main's answer to an aborted picker, which has no deadline of its own", async () => {
+    const { proxy, sent } = makeProxy();
+    const controller = new AbortController();
+    const promise = proxy.host.sendToAgent("hi", undefined, { signal: controller.signal });
+    const rejected = expect(promise).rejects.toMatchObject({ code: "TIMEOUT" });
+    expect(vi.getTimerCount()).toBe(0);
+    await vi.advanceTimersByTimeAsync(PLUGIN_HOST_CALL_INTERACTIVE_TIMEOUT_MS * 10);
+
+    controller.abort();
+    expect(sent.filter((m) => m.type === "host-cancel")).toHaveLength(1);
+    await vi.advanceTimersByTimeAsync(PLUGIN_HOST_CALL_TIMEOUT_MS);
+    await rejected;
+  });
+
+  it("kills a process whose spawn answer arrives after the worker gave up on it", async () => {
+    const { proxy, sent } = makeProxy();
+    const promise = proxy.host.process.spawn("node", { args: ["x.js"] });
+    const rejected = expect(promise).rejects.toMatchObject({ code: "TIMEOUT" });
+    const call = lastCall(sent, "process.spawn");
+    await vi.advanceTimersByTimeAsync(PLUGIN_HOST_CALL_INTERACTIVE_TIMEOUT_MS);
+    await rejected;
+
+    proxy.handleMessage({
+      type: "host-result",
+      requestId: call.requestId,
+      ok: true,
+      result: { id: "orphan", mode: "pipe" },
+    });
+    expect(sent).toContainEqual(
+      expect.objectContaining({
+        type: "host-notify",
+        method: "process.kill",
+        params: { processId: "orphan" },
+      })
+    );
+    // Only once: a duplicate answer finds nothing left to kill.
+    proxy.handleMessage({
+      type: "host-result",
+      requestId: call.requestId,
+      ok: true,
+      result: { id: "orphan", mode: "pipe" },
+    });
+    expect(sent.filter((m) => m.method === "process.kill")).toHaveLength(1);
   });
 
   it("releases main's watcher when a watch times out", async () => {
