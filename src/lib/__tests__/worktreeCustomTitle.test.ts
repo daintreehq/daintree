@@ -11,8 +11,14 @@ describe("normalizeWorktreeCustomTitle", () => {
   });
 
   it("strips zero-width characters so an invisible title normalises to empty", () => {
-    expect(normalizeWorktreeCustomTitle("​‌‍﻿")).toBe("");
-    expect(normalizeWorktreeCustomTitle("Re​lease")).toBe("Release");
+    expect(normalizeWorktreeCustomTitle("\u200B\u200C\u200D\uFEFF")).toBe("");
+    expect(normalizeWorktreeCustomTitle("Re\u200Blease")).toBe("Release");
+    expect(normalizeWorktreeCustomTitle("\u200D Release \u200C")).toBe("Release");
+  });
+
+  it("keeps a joiner inside the title, where it carries meaning", () => {
+    const technologist = "\u{1F469}\u200D\u{1F4BB}";
+    expect(normalizeWorktreeCustomTitle(` ${technologist} prep `)).toBe(`${technologist} prep`);
   });
 });
 

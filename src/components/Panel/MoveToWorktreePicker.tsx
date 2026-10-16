@@ -619,10 +619,22 @@ function BranchName({
  * branch as git spells it — or, where the branch is the title, the branch alone
  * at the title's weight.
  */
-function RowRevealContent({ title, branch }: { title: string | null; branch: string | null }) {
+function RowRevealContent({
+  title,
+  displaced,
+  branch,
+}: {
+  title: string | null;
+  /** The computed headline a custom title replaced (#13409). */
+  displaced?: string;
+  branch: string | null;
+}) {
   return (
     <span className="flex flex-col gap-0.5 break-words">
       {title && <span>{title}</span>}
+      {displaced && displaced !== branch && (
+        <span className="text-2xs text-text-secondary">{displaced}</span>
+      )}
       {branch && (
         <span className={cn("font-mono", title ? "text-2xs text-text-secondary" : "text-xs")}>
           {branch}
@@ -666,7 +678,13 @@ function MoveToWorktreeRow({
 
   return (
     <TruncatedTooltip
-      content={<RowRevealContent title={isBranchTitled ? null : headline.label} branch={branch} />}
+      content={
+        <RowRevealContent
+          title={isBranchTitled ? null : headline.label}
+          displaced={headline.computedLabel}
+          branch={branch}
+        />
+      }
       isTruncated={isTitleCut || isBranchCut}
       // The row is the option the input's active descendant names; a tab stop
       // on its text would be a second focus target.

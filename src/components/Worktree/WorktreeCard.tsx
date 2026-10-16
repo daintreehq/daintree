@@ -40,6 +40,7 @@ import { getCurrentViewStore } from "@/store/createWorktreeStore";
 import { useWorktreeStore } from "@/hooks/useWorktreeStore";
 import { cn } from "../../lib/utils";
 import { copyableBranchName, isExternalWorktree } from "@/lib/worktreeFilters";
+import { getWorktreeHeadline } from "@/lib/worktreeHeadline";
 import { getAgentConfig, getAgentIds } from "@/config/agents";
 import { isAssistantOnlyAgentId } from "@shared/config/agentIds";
 import { getAgentSettingsEntry } from "@/types";
@@ -1045,8 +1046,15 @@ export function WorktreeCard({
   const computedAriaTitle = worktree.issueTitle ?? worktree.branchDerivedTitle;
   // A custom title leads, and what it displaced follows in the parenthetical,
   // so a screen reader hears both names the card shows.
+  // The headline's own computed label rather than the issue fields, so a
+  // PR-originated card names its PR too.
+  const displacedAriaNames = customTitle
+    ? [getWorktreeHeadline(worktree).label, branchLabel].filter(
+        (name, i, names) => name && names.indexOf(name) === i
+      )
+    : [];
   const ariaName = customTitle
-    ? `${customTitle} (${[computedAriaTitle, branchLabel].filter(Boolean).join(", ")})`
+    ? `${customTitle} (${displacedAriaNames.join(", ")})`
     : `${computedAriaTitle ?? branchLabel}${computedAriaTitle ? ` (${branchLabel})` : ""}`;
   const cardContent = (
     <ContextMenu>

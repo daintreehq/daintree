@@ -487,7 +487,24 @@ export function WorktreeOverviewRow({
                     <CheckboxGlyph checked={isSelected} />
                   </span>
                 </span>
-                <TruncatedTooltip content={isBranchTitled ? branchLabel : title}>
+                <TruncatedTooltip
+                  content={
+                    headline.computedLabel ? (
+                      // What a custom title replaced, so a search that matched it
+                      // can be seen to have (#13409).
+                      <span className="flex flex-col gap-0.5">
+                        <span>{title}</span>
+                        <span className="text-2xs text-text-secondary">
+                          {headline.computedLabel}
+                        </span>
+                      </span>
+                    ) : isBranchTitled ? (
+                      branchLabel
+                    ) : (
+                      title
+                    )
+                  }
+                >
                   <span
                     className={cn(
                       "truncate text-text-primary",
