@@ -81,7 +81,6 @@ function bufferPluginMessage(
   sourceId: string,
   lineNumber: number
 ): void {
-  if (!sourceId.startsWith(PLUGIN_SOURCE_PREFIX)) return;
   let buffer = pluginBuffers.get(wc);
   if (!buffer) {
     buffer = [];
@@ -117,9 +116,13 @@ export function attachRendererConsoleCapture(wc: WebContents): void {
     const safeSourceId = typeof sourceId === "string" ? sourceId : "";
     const safeLineNumber = typeof lineNumber === "number" ? lineNumber : 0;
 
-    // Kept before the log rate limit: an agent reading a view's errors needs
-    // the newest ones, which a flood would otherwise be the first to lose.
-    bufferPluginMessage(wc, level, safeMessage, safeSourceId, safeLineNumber);
+    // A plugin's console stays in this view's buffer and never reaches the
+    // logger: its text is whatever the plugin printed — terminal output, a
+    // prompt — and the logger feeds paths that leave the machine.
+    if (safeSourceId.startsWith(PLUGIN_SOURCE_PREFIX)) {
+      bufferPluginMessage(wc, level, safeMessage, safeSourceId, safeLineNumber);
+      return;
+    }
 
     if (!shouldAllow(wc, level, safeSourceId, safeLineNumber)) return;
 

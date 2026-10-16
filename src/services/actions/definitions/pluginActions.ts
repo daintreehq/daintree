@@ -23,6 +23,7 @@ import {
   sameRect,
 } from "@/services/plugin/pluginPanelCapture";
 import { ConfirmationStagedError, confirmationStagedMessage } from "../confirmationStaged";
+import { UnactionableTargetError } from "../unactionableTarget";
 import { actionService } from "@/services/ActionService";
 import { notify } from "@/lib/notify";
 import { systemClient } from "@/clients/systemClient";
@@ -173,6 +174,8 @@ export function registerPluginActions(actions: ActionRegistry, callbacks: Action
             timestamp: z.string(),
           })
         ),
+        // Older matching entries left out by the count and size budgets.
+        consoleOmitted: z.number(),
       }),
       mcpAnnotations: {
         readOnlyHint: true,
@@ -182,27 +185,37 @@ export function registerPluginActions(actions: ActionRegistry, callbacks: Action
       },
       run: async ({ panelId }) => {
         const panel = usePanelStore.getState().panelsById[panelId];
-        if (!panel) throw new Error(`No panel with id "${panelId}"`);
+        // Refusals of the target itself: a retry with the same id cannot work.
+        if (!panel) throw new UnactionableTargetError(`No panel with id "${panelId}"`);
         const kind = panel.kind ?? "terminal";
         const pluginId = getPanelKindConfig(kind)?.extensionId;
         if (isBuiltInPanelKind(kind) || panelKindHasPty(kind) || !pluginId) {
-          throw new Error(`Panel "${panelId}" is not a plugin panel`);
+          throw new UnactionableTargetError(`Panel "${panelId}" is not a plugin panel`);
         }
         const capture = window.electron?.plugin?.capturePanel;
-        if (!capture) throw new Error("Panel capture is not available in this window");
+        if (!capture) throw new Error("Panel capture isn't available in this window");
 
         const frame = locatePanelFrame(panelId);
         const rect = assertPanelCapturable(panelId, frame, panel.location);
         const shot = await capture(rect);
         // Anything that opened, moved or closed while the pixels were taken
-        // may be in them; those bytes are dropped rather than returned.
-        const after = assertPanelCapturable(panelId, frame, panel.location);
-        if (!sameRect(rect, after) || usePanelStore.getState().panelsById[panelId] !== panel) {
+        // may be in them; those bytes are dropped rather than returned. The
+        // record itself is replaced whenever the view persists state, so only
+        // what decides where and what the panel shows is compared.
+        const current = usePanelStore.getState().panelsById[panelId];
+        if (
+          !current ||
+          current.kind !== panel.kind ||
+          current.location !== panel.location ||
+          locatePanelFrame(panelId) !== frame ||
+          !sameRect(rect, assertPanelCapturable(panelId, frame, current.location))
+        ) {
           throw new PanelCaptureRefusedError(
             `Panel "${panelId}" changed while it was captured; retry`
           );
         }
 
+        const { messages, omitted } = consoleMessagesForPlugin(shot.consoleMessages, pluginId);
         return {
           panelId,
           pluginId,
@@ -213,7 +226,8 @@ export function registerPluginActions(actions: ActionRegistry, callbacks: Action
             height: Math.round(rect.height),
           },
           consoleScope: "plugin" as const,
-          consoleMessages: consoleMessagesForPlugin(shot.consoleMessages, pluginId),
+          consoleMessages: messages,
+          consoleOmitted: omitted,
         };
       },
     })

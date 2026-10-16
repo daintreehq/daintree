@@ -326,6 +326,11 @@ describe("detachRendererConsoleCapture", () => {
 describe("plugin console buffer", () => {
   const asWc = (wc: MockWebContents) => wc as unknown as Electron.WebContents;
 
+  beforeEach(() => {
+    logWarnMock.mockClear();
+    logErrorMock.mockClear();
+  });
+
   it("reads details from the event object, as Electron 42 delivers them", () => {
     const wc = createMockWebContents();
     attachRendererConsoleCapture(asWc(wc));
@@ -337,7 +342,6 @@ describe("plugin console buffer", () => {
   });
 
   it("still reads the older second-argument shape", () => {
-    logWarnMock.mockClear();
     const wc = createMockWebContents();
     attachRendererConsoleCapture(asWc(wc));
 
@@ -361,6 +365,9 @@ describe("plugin console buffer", () => {
       })
     );
 
+    // Only the host's line reaches the logger: a plugin's console text stays
+    // in the view's buffer.
+    expect(logErrorMock.mock.calls.map(([message]) => message)).toEqual(["host"]);
     expect(getRecentPluginConsoleMessages(asWc(wc))).toEqual([
       expect.objectContaining({
         level: "error",
@@ -372,7 +379,7 @@ describe("plugin console buffer", () => {
     __resetRendererConsoleCaptureForTests(asWc(wc));
   });
 
-  it("buffers past the log rate limit, bounded to the newest entries", () => {
+  it("buffers every plugin entry, bounded to the newest", () => {
     const wc = createMockWebContents();
     attachRendererConsoleCapture(asWc(wc));
 

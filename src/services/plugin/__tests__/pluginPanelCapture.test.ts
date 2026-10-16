@@ -21,6 +21,7 @@ vi.mock("@/services/plugin/pluginDocumentRuntime", () => ({
 import { useUIStore } from "@/store/uiStore";
 import {
   CAPTURE_CONSOLE_LIMIT,
+  CAPTURE_CONSOLE_MAX_BYTES,
   PanelCaptureRefusedError,
   assertPanelCapturable,
   consoleMessagesForPlugin,
@@ -41,15 +42,38 @@ function box(left: number, top: number, width: number, height: number): DOMRect 
   } as DOMRect;
 }
 
-function mountFrame(panelId: string, rect = box(100, 50, 400, 300)): HTMLElement {
+function appRoot(): HTMLElement {
+  let root = document.getElementById("root");
+  if (!root) {
+    root = document.createElement("div");
+    root.id = "root";
+    document.body.appendChild(root);
+  }
+  return root;
+}
+
+function mountFrame(
+  panelId: string,
+  rect = box(100, 50, 400, 300),
+  parent: HTMLElement = appRoot()
+): HTMLElement {
   const frame = document.createElement("div");
   frame.dataset.panelId = panelId;
   frame.dataset.panelLocation = "grid";
   const inner = document.createElement("div");
   frame.appendChild(inner);
   frame.getBoundingClientRect = () => rect;
-  document.body.appendChild(frame);
+  parent.appendChild(frame);
   return frame;
+}
+
+/** A body-level portal, as `createPortal` mounts dialogs, toasts and menus. */
+function portal(rect: DOMRect, attrs: Record<string, string> = {}): HTMLElement {
+  const layer = document.createElement("div");
+  for (const [k, v] of Object.entries(attrs)) layer.setAttribute(k, v);
+  layer.getBoundingClientRect = () => rect;
+  document.body.appendChild(layer);
+  return layer;
 }
 
 let hitTarget: Element | null = null;
@@ -79,7 +103,7 @@ describe("locatePanelFrame", () => {
   });
 
   it("refuses a panel with no frame, or with two mid-move", () => {
-    expect(() => locatePanelFrame("p1")).toThrow(/not on screen/);
+    expect(() => locatePanelFrame("p1")).toThrow(/isn't on screen/);
     mountFrame("p1");
     mountFrame("p1");
     expect(() => locatePanelFrame("p1")).toThrow(/moving/);
@@ -131,30 +155,93 @@ describe("assertPanelCapturable", () => {
     expect(() => assertPanelCapturable("p1", frame, "dialog")).not.toThrow();
   });
 
-  it("refuses a floating layer over the panel, even one hit testing passes through", () => {
+  it("refuses any portalled layer over the panel, even one hit testing passes through", () => {
     const frame = mountFrame("p1");
     hitTarget = frame;
-    const tooltip = document.createElement("div");
-    tooltip.setAttribute("role", "tooltip");
-    tooltip.getBoundingClientRect = () => box(480, 60, 80, 20);
-    document.body.appendChild(tooltip);
+    // A toast in the strip between sample rows, and pointer-events: none.
+    const toaster = portal(box(0, 0, 0, 0), { role: "region", style: "pointer-events: none" });
+    const toast = document.createElement("div");
+    toast.getBoundingClientRect = () => box(380, 52, 120, 6);
+    toaster.appendChild(toast);
 
     expect(() => assertPanelCapturable("p1", frame, "grid")).toThrow(/close it and retry/);
   });
 
-  it("ignores floating layers elsewhere, inside the panel, or hosting it", () => {
+  it("refuses a raised fixed layer inside the app root, like a drag preview", () => {
     const frame = mountFrame("p1");
     hitTarget = frame;
-    const far = document.createElement("div");
-    far.setAttribute("role", "menu");
-    far.getBoundingClientRect = () => box(900, 600, 100, 100);
-    document.body.appendChild(far);
+    const preview = document.createElement("div");
+    preview.style.position = "fixed";
+    preview.style.zIndex = "999";
+    preview.getBoundingClientRect = () => box(150, 100, 40, 40);
+    appRoot().appendChild(preview);
+
+    expect(() => assertPanelCapturable("p1", frame, "grid")).toThrow(/close it and retry/);
+  });
+
+  it("ignores layers elsewhere, hidden, parked behind the app, or inside the panel", () => {
+    const frame = mountFrame("p1");
+    hitTarget = frame;
+    portal(box(900, 600, 100, 100), { role: "menu" });
+    const hidden = portal(box(100, 50, 400, 300), { "data-portal-boundary": "true" });
+    hidden.checkVisibility = () => false;
+    portal(box(0, 0, 2000, 2000), { style: "position: fixed; z-index: -1" });
     const own = document.createElement("div");
     own.setAttribute("role", "listbox");
     own.getBoundingClientRect = () => box(120, 60, 50, 50);
     frame.appendChild(own);
 
     expect(() => assertPanelCapturable("p1", frame, "grid")).not.toThrow();
+  });
+
+  it("lets a dialog panel through layers beneath it but not one above it", () => {
+    useUIStore.setState({ overlayStack: ["panel-dialog-a", "panel-dialog-b"] });
+    portal(box(0, 0, 1200, 800), { role: "dialog" });
+    const dialog = portal(box(0, 0, 1200, 800), { role: "dialog" });
+    const frame = mountFrame("p1", box(100, 50, 400, 300), dialog);
+    frame.dataset.panelLocation = "dialog";
+    hitTarget = frame;
+
+    expect(() => assertPanelCapturable("p1", frame, "dialog")).not.toThrow();
+
+    portal(box(0, 0, 1200, 800), { role: "alertdialog" });
+    expect(() => assertPanelCapturable("p1", frame, "dialog")).toThrow(/close it and retry/);
+  });
+
+  it("refuses a frame its scroll container cuts off", () => {
+    const scroller = document.createElement("div");
+    scroller.style.overflow = "auto";
+    scroller.getBoundingClientRect = () => box(100, 60, 400, 400);
+    appRoot().appendChild(scroller);
+    const frame = mountFrame("p1", box(100, 50, 400, 300), scroller);
+    hitTarget = frame;
+
+    expect(() => assertPanelCapturable("p1", frame, "grid")).toThrow(/scrolled out of view/);
+  });
+
+  it("refuses while the panel or a container of it is partly transparent", () => {
+    const fading = document.createElement("div");
+    fading.style.opacity = "0.6";
+    appRoot().appendChild(fading);
+    const frame = mountFrame("p1", box(100, 50, 400, 300), fading);
+    hitTarget = frame;
+
+    expect(() => assertPanelCapturable("p1", frame, "grid")).toThrow(/animating/);
+  });
+
+  it("refuses while an animation is running on the panel or a container of it", () => {
+    const frame = mountFrame("p1");
+    hitTarget = frame;
+    const effect = { target: appRoot() };
+    const setAnimations = (value: () => unknown[]) =>
+      Object.defineProperty(document, "getAnimations", { configurable: true, value });
+    setAnimations(() => [{ playState: "running", effect }]);
+
+    try {
+      expect(() => assertPanelCapturable("p1", frame, "grid")).toThrow(/animating/);
+    } finally {
+      setAnimations(() => []);
+    }
   });
 
   it("refuses when anything outside the panel is topmost at a sample point", () => {
@@ -191,7 +278,8 @@ describe("consoleMessagesForPlugin", () => {
       "acme.dashboard"
     );
 
-    expect(result).toEqual([
+    expect(result.omitted).toBe(0);
+    expect(result.messages).toEqual([
       {
         level: "error",
         message: "mine",
@@ -208,15 +296,33 @@ describe("consoleMessagesForPlugin", () => {
       entry("plugin://pi-a/view.js", `m${i}`)
     );
 
-    const result = consoleMessagesForPlugin(entries, "acme.dashboard");
-    expect(result).toHaveLength(CAPTURE_CONSOLE_LIMIT);
-    expect(result[0]?.message).toBe("m3");
+    const { messages, omitted } = consoleMessagesForPlugin(entries, "acme.dashboard");
+    expect(messages).toHaveLength(CAPTURE_CONSOLE_LIMIT);
+    expect(messages[0]?.message).toBe("m3");
+    expect(omitted).toBe(3);
+  });
+
+  it("keeps whole entries within the byte budget, newest first in, multibyte included", () => {
+    runtime.owners.set("pi-a", "acme.dashboard");
+    const wide = "界".repeat(2000);
+    const entries = Array.from({ length: CAPTURE_CONSOLE_LIMIT }, (_, i) =>
+      entry("plugin://pi-a/view.js", `${i}:${wide}`)
+    );
+
+    const { messages, omitted } = consoleMessagesForPlugin(entries, "acme.dashboard");
+    const bytes = new TextEncoder().encode(JSON.stringify(messages)).byteLength;
+    expect(bytes).toBeLessThanOrEqual(CAPTURE_CONSOLE_MAX_BYTES + messages.length + 2);
+    expect(messages.length).toBeGreaterThan(0);
+    expect(messages.at(-1)?.message.startsWith(`${CAPTURE_CONSOLE_LIMIT - 1}:`)).toBe(true);
+    expect(omitted).toBe(CAPTURE_CONSOLE_LIMIT - messages.length);
   });
 
   it("scrubs secrets out of the message", () => {
     runtime.owners.set("pi-a", "acme.dashboard");
     const token = `ghp_${"a".repeat(36)}`;
-    const [result] = consoleMessagesForPlugin(
+    const {
+      messages: [result],
+    } = consoleMessagesForPlugin(
       [entry("plugin://pi-a/view.js", `auth failed for ${token}`)],
       "acme.dashboard"
     );

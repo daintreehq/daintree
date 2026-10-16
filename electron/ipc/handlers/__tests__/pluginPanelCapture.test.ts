@@ -79,14 +79,14 @@ describe("plugin:capture-panel", () => {
     consoleBuffer.entries = [];
   });
 
-  it("captures the asking view at the panel's rect, pushed out to whole pixels", async () => {
+  it("captures the asking view at the panel's rect, pulled in to whole pixels", async () => {
     const sender = makeSender(5);
     consoleBuffer.entries = [{ level: "error", message: "boom" }];
     const capture = await setup(makeRegistry({ sender }));
 
     const result = await capture(sender, RECT);
 
-    expect(sender.capturePage).toHaveBeenCalledWith({ x: 10, y: 20, width: 301, height: 201 });
+    expect(sender.capturePage).toHaveBeenCalledWith({ x: 11, y: 21, width: 299, height: 199 });
     expect(result).toEqual({
       pngBase64: Buffer.from("PNGDATA").toString("base64"),
       consoleMessages: [{ level: "error", message: "boom" }],

@@ -7,13 +7,19 @@ import type { PluginConsoleEntry, PluginPanelCaptureRect } from "@shared/types/p
 /** Newest plugin console entries a capture returns. */
 export const CAPTURE_CONSOLE_LIMIT = 20;
 
+/**
+ * UTF-8 bytes of console entries a capture returns. The MCP text body that
+ * carries them is capped at 50 KiB, and an entry cut there would not parse.
+ */
+export const CAPTURE_CONSOLE_MAX_BYTES = 24 * 1024;
+
 /** Sample points per side when hit-testing the panel for anything drawn over it. */
 const HIT_GRID = 7;
 
 /**
- * Host layers that float over panels. A plugin view renders inline in the host
- * document, so any of these over the panel would be captured with it — and
- * they can show another pane's content.
+ * Host layers that float over panels without being portalled out of the app
+ * root. A plugin view renders inline in the host document, so any of these
+ * over the panel would be captured with it — and they can show another pane.
  */
 const FLOATING_LAYER_SELECTOR = [
   "[data-radix-popper-content-wrapper]",
@@ -62,6 +68,26 @@ function isPainted(el: Element): boolean {
     : true;
 }
 
+function ancestorsOf(frame: HTMLElement): Element[] {
+  const chain: Element[] = [];
+  for (let el = frame.parentElement; el; el = el.parentElement) chain.push(el);
+  return chain;
+}
+
+function clips(el: Element): boolean {
+  const style = getComputedStyle(el);
+  return [style.overflow, style.overflowX, style.overflowY].some(
+    (value) => value !== "" && value !== "visible"
+  );
+}
+
+function isRaisedFixed(el: Element): boolean {
+  const style = getComputedStyle(el);
+  if (style.position !== "fixed") return false;
+  const z = Number.parseInt(style.zIndex, 10);
+  return Number.isFinite(z) && z > 0;
+}
+
 /** The panel's one mounted frame, or a refusal saying why there is none to capture. */
 export function locatePanelFrame(panelId: string): HTMLElement {
   const frames = Array.from(
@@ -71,7 +97,7 @@ export function locatePanelFrame(panelId: string): HTMLElement {
   );
   if (frames.length === 0) {
     throw new PanelCaptureRefusedError(
-      `Panel "${panelId}" is not on screen; show it (its tab, the dock or the grid) and retry`
+      `Panel "${panelId}" isn't on screen; show it (its tab, the dock or the grid) and retry`
     );
   }
   if (frames.length > 1) {
@@ -82,8 +108,8 @@ export function locatePanelFrame(panelId: string): HTMLElement {
 
 /**
  * Refuse rather than hand back pixels that are not this panel alone: a view
- * nobody can see, a frame that is hidden, clipped or off screen, or a host
- * layer drawn over any part of it.
+ * nobody can see, a frame that is hidden, clipped, off screen or mid-animation,
+ * or anything of the host's drawn over any part of it.
  */
 export function assertPanelCapturable(
   panelId: string,
@@ -92,7 +118,7 @@ export function assertPanelCapturable(
 ): PluginPanelCaptureRect {
   if (!isProjectViewObservable()) {
     throw new PanelCaptureRefusedError(
-      "The panel's project is not on screen; switch to it and retry"
+      "The panel's project isn't on screen; switch to it and retry"
     );
   }
   if (!frame.isConnected || !isPainted(frame)) {
@@ -109,17 +135,78 @@ export function assertPanelCapturable(
     );
   }
 
+  const ancestors = ancestorsOf(frame);
+  // A scroll container cuts the frame off at its own edge, and whatever the
+  // host draws beyond that edge sits inside the frame's rect.
+  for (const el of ancestors) {
+    if (!clips(el)) continue;
+    const edge = el.getBoundingClientRect();
+    if (
+      box.left < edge.left - 0.5 ||
+      box.top < edge.top - 0.5 ||
+      box.right > edge.right + 0.5 ||
+      box.bottom > edge.bottom + 0.5
+    ) {
+      throw new PanelCaptureRefusedError(
+        `Panel "${panelId}" is partly scrolled out of view; bring all of it into view and retry`
+      );
+    }
+  }
+
+  // A panel mid-transition — a dock fading in, a move animating — is blended
+  // with whatever is under it, and the frame's own rect is not yet its own.
+  const settling = () =>
+    new PanelCaptureRefusedError(`Panel "${panelId}" is animating; retry once it settles`);
+  for (const el of [frame, ...ancestors]) {
+    const opacity = Number.parseFloat(getComputedStyle(el).opacity);
+    if (Number.isFinite(opacity) && opacity < 0.999) throw settling();
+  }
+  if (typeof document.getAnimations === "function") {
+    for (const animation of document.getAnimations()) {
+      const effect = animation.effect;
+      const target = effect && "target" in effect ? effect.target : null;
+      if (
+        animation.playState === "running" &&
+        target instanceof Element &&
+        (target === frame || target.contains(frame))
+      ) {
+        throw settling();
+      }
+    }
+  }
+
   const blocked = () =>
     new PanelCaptureRefusedError(
-      "Something is open over the panel (a dialog, menu or tooltip); close it and retry"
+      "Something is open over the panel (a dialog, menu, tooltip or notification); close it and retry"
     );
   // A panel presented in a dialog holds an overlay claim of its own; whatever
-  // else is open is still caught by the two checks below.
+  // else is open is still caught by the layer checks below.
   if (location !== "dialog" && useUIStore.getState().overlayStack.length > 0) throw blocked();
 
-  for (const layer of document.querySelectorAll(FLOATING_LAYER_SELECTOR)) {
-    if (frame.contains(layer) || layer.contains(frame)) continue;
-    if (isPainted(layer) && intersects(layer.getBoundingClientRect(), rect)) throw blocked();
+  // Everything portalled out of the app root — dialogs, menus, tooltips,
+  // toasts, the panel-move overlay — paints over the app. Portals stack in
+  // insertion order, so only the ones after the panel's own layer (when the
+  // panel is itself in one, as a dialog panel is) are above it.
+  const layers = Array.from(document.body.children);
+  const ownLayer = layers.findIndex((layer) => layer.contains(frame));
+  for (const [index, layer] of layers.entries()) {
+    if (index <= ownLayer && ownLayer !== -1) continue;
+    if (layer.contains(frame)) continue;
+    // Parked behind the app on purpose (the terminal offscreen container).
+    if (Number.parseInt(getComputedStyle(layer).zIndex, 10) < 0) continue;
+    for (const el of [layer, ...layer.querySelectorAll("*")]) {
+      if (intersects(el.getBoundingClientRect(), rect) && isPainted(el)) throw blocked();
+    }
+  }
+
+  // Inside the app root, floating layers that skip the portal and fixed
+  // layers raised above the panels (a drag preview, a popover in place).
+  const appRoot = ownLayer === -1 ? null : layers[ownLayer];
+  const scope = appRoot ?? document.body;
+  for (const el of scope.querySelectorAll("*")) {
+    if (frame.contains(el) || el.contains(frame)) continue;
+    if (!el.matches(FLOATING_LAYER_SELECTOR) && !isRaisedFixed(el)) continue;
+    if (intersects(el.getBoundingClientRect(), rect) && isPainted(el)) throw blocked();
   }
 
   for (let row = 0; row < HIT_GRID; row++) {
@@ -144,21 +231,32 @@ export function sameRect(a: PluginPanelCaptureRect, b: PluginPanelCaptureRect): 
 
 /**
  * The plugin's own entries out of everything the view buffered: those logged
- * from a module this plugin's load registered, newest last, scrubbed of paths
- * and secrets before they leave for an agent.
+ * from a module this plugin's load registered, scrubbed of paths and secrets
+ * before they leave for an agent. Newest last, up to the count and byte
+ * budgets; `omitted` counts the older matching entries left out.
  */
 export function consoleMessagesForPlugin(
   entries: readonly PluginConsoleEntry[],
   pluginId: string
-): CapturedConsoleMessage[] {
-  return entries
-    .filter((entry) => pluginDocumentRuntime.sourceForUrl(entry.sourceId)?.pluginId === pluginId)
-    .slice(-CAPTURE_CONSOLE_LIMIT)
-    .map((entry) => ({
+): { messages: CapturedConsoleMessage[]; omitted: number } {
+  const own = entries.filter(
+    (entry) => pluginDocumentRuntime.sourceForUrl(entry.sourceId)?.pluginId === pluginId
+  );
+  const messages: CapturedConsoleMessage[] = [];
+  let bytes = 0;
+  for (let i = own.length - 1; i >= 0 && messages.length < CAPTURE_CONSOLE_LIMIT; i--) {
+    const entry = own[i]!;
+    const message: CapturedConsoleMessage = {
       level: entry.level,
       message: scrubReportText(entry.message),
       source: entry.sourceId.split(/[?#]/)[0]!,
       line: entry.lineNumber,
       timestamp: new Date(entry.timestamp).toISOString(),
-    }));
+    };
+    const size = new TextEncoder().encode(JSON.stringify(message)).byteLength;
+    if (bytes + size > CAPTURE_CONSOLE_MAX_BYTES) break;
+    bytes += size;
+    messages.unshift(message);
+  }
+  return { messages, omitted: own.length - messages.length };
 }

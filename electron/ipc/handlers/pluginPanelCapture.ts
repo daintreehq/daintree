@@ -27,8 +27,8 @@ function isFiniteRect(rect: unknown): rect is PluginPanelCaptureRect {
 
 /**
  * The renderer's panel frame, in CSS pixels, as the DIP rect `capturePage`
- * takes: scaled by the view's zoom, pushed outward to whole pixels, and cut to
- * the view's own bounds so nothing past it is ever asked for.
+ * takes: scaled by the view's zoom, pulled in to whole pixels so no edge pixel
+ * lies outside what the renderer checked, and cut to the view's own bounds.
  */
 function toCaptureRect(
   rect: PluginPanelCaptureRect,
@@ -36,10 +36,10 @@ function toCaptureRect(
   viewSize: { width: number; height: number } | null
 ): Electron.Rectangle | null {
   const zoom = Number.isFinite(zoomFactor) && zoomFactor > 0 ? zoomFactor : 1;
-  let left = Math.max(0, Math.floor(rect.x * zoom));
-  let top = Math.max(0, Math.floor(rect.y * zoom));
-  let right = Math.ceil((rect.x + rect.width) * zoom);
-  let bottom = Math.ceil((rect.y + rect.height) * zoom);
+  let left = Math.max(0, Math.ceil(rect.x * zoom));
+  let top = Math.max(0, Math.ceil(rect.y * zoom));
+  let right = Math.floor((rect.x + rect.width) * zoom);
+  let bottom = Math.floor((rect.y + rect.height) * zoom);
   if (viewSize) {
     right = Math.min(right, viewSize.width);
     bottom = Math.min(bottom, viewSize.height);
