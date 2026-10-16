@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef, useMemo, useCallback } from "react";
 import { suggestPrefixes } from "../branchPrefixUtils";
+import { BRANCH_TYPES } from "@shared/config/branchPrefixes";
 import { keyBelongsToField, stepListboxCursor } from "@/hooks/useListboxCursor";
 
 export interface UsePrefixPickerResult {
@@ -61,7 +62,8 @@ export function usePrefixPicker({
     branchInput.trim().length > 0 &&
     branchInput.indexOf("/") === -1 &&
     prefixSuggestions.length > 0 &&
-    prefixSuggestions.length < 12;
+    // Every type matching means the input narrowed nothing.
+    prefixSuggestions.length < BRANCH_TYPES.length;
 
   // Auto-open on typing, gated on the field actually holding focus: the branch
   // name is also written for you — by picking an issue, by the project's

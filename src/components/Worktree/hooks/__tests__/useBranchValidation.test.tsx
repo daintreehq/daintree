@@ -78,13 +78,13 @@ describe("useBranchValidation — deferred branch resolution", () => {
     expect(result.current.consumeBranchResolution("feature/terrain-shadows")).toBeNull();
   });
 
-  it("matches on the canonical branch name, not the raw input", async () => {
-    mockGetAvailableBranch.mockResolvedValue("feature/terrain-2");
+  it("matches on the parsed branch name, keeping the typed alias", async () => {
+    mockGetAvailableBranch.mockResolvedValue("feat/terrain-2");
     const { result } = renderValidation("feat/terrain");
     await settle();
 
-    expect(mockGetAvailableBranch).toHaveBeenCalledWith(ROOT, "feature/terrain");
-    expect(result.current.consumeBranchResolution("  feat/terrain  ")).toBe("feature/terrain-2");
+    expect(mockGetAvailableBranch).toHaveBeenCalledWith(ROOT, "feat/terrain");
+    expect(result.current.consumeBranchResolution("  feat/terrain  ")).toBe("feat/terrain-2");
   });
 
   it("has nothing to offer when the typed name is already available", async () => {

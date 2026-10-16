@@ -9,7 +9,6 @@ import {
   useState,
 } from "react";
 import { useShallow } from "zustand/react/shallow";
-import type { LucideIcon } from "lucide-react";
 import { Sprout } from "@/components/icons";
 import { AppPalettePopover } from "@/components/ui/AppPalettePopover";
 import { AppPaletteDialog, PaletteFooterHints } from "@/components/ui/AppPaletteDialog";
@@ -17,7 +16,7 @@ import { PopoverSearchField } from "@/components/ui/PopoverSearchField";
 import { Button } from "@/components/ui/button";
 import { PALETTE_ROW_CLASS } from "@/components/ui/paletteRowStyles";
 import { TruncatedTooltip } from "@/components/ui/TruncatedTooltip";
-import { splitBranchType } from "@/components/Worktree/BranchLabel";
+import { splitBranchType, type BranchGlyph } from "@/components/Worktree/BranchLabel";
 import { useIsDockPopoverChild } from "@/components/ui/DockPopoverChildContext";
 import { useSidebarWorktreeOrder } from "@/hooks/useSidebarWorktreeOrder";
 import { useTruncationDetection } from "@/hooks/useTruncationDetection";
@@ -559,7 +558,7 @@ function BranchName({
   isHeadline,
 }: {
   branch: string;
-  Icon: LucideIcon | null;
+  Icon: BranchGlyph | null;
   head: string;
   tail: string;
   boxRef: React.RefObject<HTMLSpanElement | null>;

@@ -93,7 +93,7 @@ describe("useSidebarWorktreeOrder", () => {
   it("honours the grouping preference", () => {
     prefsRef.current = { ...prefsRef.current, groupByType: true };
     const { result } = renderHook(() => useSidebarWorktreeOrder());
-    // TYPE_ORDER puts features ahead of bugfixes, unlike the flat name sort.
+    // WORKTREE_TYPE_IDS puts features ahead of bugfixes, unlike the flat name sort.
     expect(ids(result.current)).toEqual(["m", "f", "b"]);
   });
 

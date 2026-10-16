@@ -13,26 +13,12 @@ import {
 } from "./persistence/persistWriteMerge";
 import { registerPersistedStore } from "./persistence/persistedStoreRegistry";
 import type { QuickStateFilter } from "@/lib/worktreeFilters";
+import { isWorktreeTypeId, type WorktreeTypeId } from "@/lib/worktreeTypes";
 
 export type OrderBy = "recent" | "created" | "alpha" | "manual";
 
 export type StatusFilter = "active" | "dirty" | "stale" | "idle";
-export type TypeFilter =
-  | "feature"
-  | "bugfix"
-  | "refactor"
-  | "chore"
-  | "docs"
-  | "test"
-  | "release"
-  | "ci"
-  | "deps"
-  | "perf"
-  | "style"
-  | "wip"
-  | "main"
-  | "detached"
-  | "other";
+export type TypeFilter = WorktreeTypeId;
 export type PrIssueFilter = "hasIssue" | "hasPR" | "prOpen" | "prMerged" | "prClosed";
 export type SessionFilter = "hasTerminals" | "working" | "waiting" | "completed" | "exited";
 export type ActivityFilter = "last15m" | "last1h" | "last24h" | "last7d";
@@ -294,7 +280,7 @@ function loadLegacySeedForProject(): Partial<ProjectPersistedShape> {
   return {
     query: typeof state.query === "string" ? state.query : undefined,
     statusFilters: arrayOrUndefined<StatusFilter>(state.statusFilters),
-    typeFilters: arrayOrUndefined<TypeFilter>(state.typeFilters),
+    typeFilters: arrayOrUndefined<unknown>(state.typeFilters)?.filter(isWorktreeTypeId),
     prIssueFilters: arrayOrUndefined<PrIssueFilter>(state.githubFilters),
     sessionFilters: stripLegacySessionFilters(
       arrayOrUndefined<SessionFilter>(state.sessionFilters)
@@ -458,7 +444,7 @@ function toProjectFiltersPersisted(
   return {
     query: typeof raw.query === "string" ? raw.query : "",
     statusFilters: arrayOrUndefined<StatusFilter>(raw.statusFilters) ?? [],
-    typeFilters: arrayOrUndefined<TypeFilter>(raw.typeFilters) ?? [],
+    typeFilters: arrayOrUndefined<unknown>(raw.typeFilters)?.filter(isWorktreeTypeId) ?? [],
     prIssueFilters: arrayOrUndefined<PrIssueFilter>(raw.prIssueFilters) ?? [],
     sessionFilters: arrayOrUndefined<SessionFilter>(raw.sessionFilters) ?? [],
     hasAgentFilter: raw.hasAgentFilter === true,
@@ -605,7 +591,14 @@ const _projectStore = create<ProjectScopedState>()(
           // search shows in the input and filter immediately after hydration.
           liveQuery: restoredQuery,
           statusFilters: new Set(p?.statusFilters ?? Array.from(current.statusFilters)),
-          typeFilters: new Set(p?.typeFilters ?? Array.from(current.typeFilters)),
+          // Filtered on every load, not in a migration: a type id leaves the
+          // registry without a version bump, and a stale id in the set would
+          // hide every worktree.
+          typeFilters: new Set(
+            Array.isArray(p?.typeFilters)
+              ? p.typeFilters.filter(isWorktreeTypeId)
+              : Array.from(current.typeFilters)
+          ),
           prIssueFilters: new Set(p?.prIssueFilters ?? Array.from(current.prIssueFilters)),
           sessionFilters: new Set(persistedSessionFilters ?? Array.from(current.sessionFilters)),
           hasAgentFilter:

@@ -306,7 +306,7 @@ describe("getVisibleWorktreesForCycling", () => {
     ]);
 
     const ids = getVisibleWorktreesForCycling().map((w) => w.id);
-    // features come before bugfixes which come before chores in TYPE_ORDER
+    // features come before bugfixes which come before chores in WORKTREE_TYPE_IDS
     const ixFeature = ids.indexOf("feat-1");
     const ixBug = ids.indexOf("bug-1");
     const ixChore = ids.indexOf("chore-1");
