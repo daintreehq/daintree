@@ -1037,6 +1037,17 @@ describe("help.launchAgent", () => {
       expect(useHelpPanelStore.getState().sessions[1]?.agentId).toBe("claude");
     });
 
+    it("starts the assistant's own default ahead of the general agent default", async () => {
+      // The general default is Claude; the assistant runs on Codex here.
+      useHelpPanelStore.setState({ preferredAgentId: "codex" });
+
+      await action.run(undefined, stubCtx);
+
+      expect(window.electron.help.provisionSession).toHaveBeenCalledWith(
+        expect.objectContaining({ agentId: "codex", slot: 0 })
+      );
+    });
+
     it("starts the default rather than the agent a hibernated sibling will resume with", async () => {
       useHelpPanelStore.getState().setHibernateSession("proj-default", 0, {
         sessionId: "agent-s",
@@ -1619,6 +1630,41 @@ describe("help.newSessionWithAgent (#13442)", () => {
 
     expect(controllers.has(0)).toBe(false);
     expect(controllers.get(1)?.launchWhenReady).toHaveBeenCalledTimes(1);
+  });
+
+  it("passes over an empty tab that is still starting the default, for the next free one", async () => {
+    // Slot 0 is empty but its controller is mid auto-launch: this launch would
+    // drop on its re-entrancy guard there.
+    const listeners = new Set<() => void>();
+    const starting = {
+      launchWhenReady: vi.fn(),
+      phase: "provisioning",
+      listeners,
+      getSnapshot: () => ({ phase: starting.phase }),
+      subscribe: (listener: () => void) => {
+        listeners.add(listener);
+        return () => listeners.delete(listener);
+      },
+    };
+    controllers.set(0, starting);
+
+    expect(await run("codex")).toEqual({ outcome: "started" });
+
+    expect(controllers.get(0)!.launchWhenReady).not.toHaveBeenCalled();
+    expect(controllers.get(1)?.launchWhenReady).toHaveBeenCalledWith(
+      expect.objectContaining({ agentId: "codex" })
+    );
+  });
+
+  it("starts nothing when it can't tell which tabs main still keeps", async () => {
+    window.electron.help.listPendingHibernationSlots = vi.fn(async () => {
+      throw new Error("ipc down");
+    });
+
+    expect(await run("codex")).toEqual({ outcome: "unavailable" });
+
+    expect(controllers.size).toBe(0);
+    expect(mockNotify).toHaveBeenCalledWith(expect.objectContaining({ type: "warning" }));
   });
 
   it("drops a Settings switch still waiting for a session, so it can't undo the pick", async () => {

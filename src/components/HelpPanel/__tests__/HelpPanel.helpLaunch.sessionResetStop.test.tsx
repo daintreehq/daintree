@@ -346,6 +346,7 @@ vi.mock("@/store/helpPanelStore", () => {
       slot === s.activeSlot ? s : ((s.sessions[slot] as typeof s) ?? s),
     selectActiveSlot: (s: typeof helpPanelState) => s,
     selectOpenSlots: (s: typeof helpPanelState) => s.openSlots,
+    selectHasRoomForSession: () => true,
     selectSlotTerminalIds: (s: typeof helpPanelState) => (s.terminalId ? [s.terminalId] : []),
     selectSlotForTerminal: (s: typeof helpPanelState, id: string) =>
       s.terminalId === id && id ? 0 : null,

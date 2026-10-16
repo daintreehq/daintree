@@ -14,14 +14,17 @@ import { useAriaKeyshortcuts, useEffectiveCombo, useShortcutHintHover } from "@/
 import { cn } from "@/lib/utils";
 import { DaintreeIcon } from "@/components/icons/DaintreeIcon";
 import { useFocusStore } from "@/store/focusStore";
-import { useHelpPanelStore, selectOpenSlots, selectSlotTerminalIds } from "@/store/helpPanelStore";
+import {
+  useHelpPanelStore,
+  selectHasRoomForSession,
+  selectSlotTerminalIds,
+} from "@/store/helpPanelStore";
 import { usePanelStore } from "@/store";
 import { isPtyPanel } from "@shared/types/panel";
 import { suppressSidebarResizes } from "@/lib/sidebarToggle";
 import { useMcpReadiness } from "@/hooks/useMcpReadiness";
 import { useAssistantAgentChoices } from "@/hooks/useAssistantAgentChoices";
 import { actionService } from "@/services/ActionService";
-import { MAX_ASSISTANT_SLOTS } from "@shared/config/assistantSlots";
 import type { McpRuntimeSnapshot } from "@shared/types";
 import type { AgentState } from "@/types";
 
@@ -178,7 +181,7 @@ export function ToolbarAssistantButton({
   // there is a choice to make; the plain click above is untouched either way.
   const agentChoices = useAssistantAgentChoices();
   const hasAgentChoice = agentChoices.length > 1;
-  const canOpenSession = useHelpPanelStore((s) => selectOpenSlots(s).length < MAX_ASSISTANT_SLOTS);
+  const canOpenSession = useHelpPanelStore(selectHasRoomForSession);
 
   const pip = describePip(mcp);
   const agentPip = describeAgentPip(unreadState);

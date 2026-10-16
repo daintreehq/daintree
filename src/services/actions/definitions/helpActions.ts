@@ -449,59 +449,80 @@ async function startHelpSessionWithAgent(
     return { outcome: "unavailable" };
   }
   await ensureHelpPanelRuntime();
-  const kept = await readKeptLaneAgents(workspace.id);
-  const target = pickHelpLaunchLane(useHelpPanelStore.getState(), workspace.id, (slot) =>
-    kept.has(slot)
-  );
-  if (!target) {
+  // A read that fails can't prove a lane vacant, and a fresh session in a lane
+  // main still keeps would take that conversation's place, so it stops here.
+  let kept: ReadonlySet<number>;
+  let acquireController: (slot: number) => HelpSessionController;
+  try {
+    kept = new Set((await window.electron.help.listPendingHibernationSlots?.(workspace.id)) ?? []);
+    ({ acquireHelpSessionController: acquireController } =
+      await import("@/controllers/helpSessionControllerRegistry"));
+  } catch (err) {
+    logError("Couldn't prepare a tab to start an assistant session in", err);
     notify({
       type: "warning",
-      title: "Assistant tabs full",
-      message: `All ${MAX_ASSISTANT_SLOTS} assistant tabs are in use. Close one to start another session.`,
+      title: "Assistant couldn't start",
+      message: "Daintree couldn't check this project's assistant tabs. Try again.",
       priority: "high",
       context: { eventKind: "uiFeedback" },
     });
-    return { outcome: "lanes-full" };
+    return { outcome: "unavailable" };
   }
 
-  const claimKey = assistantSlotKey(workspace.id, target.slot);
-  claimedHelpLaneKeys.add(claimKey);
-  let controller: HelpSessionController;
-  try {
-    const { acquireHelpSessionController } =
-      await import("@/controllers/helpSessionControllerRegistry");
-    controller = acquireHelpSessionController(target.slot);
-  } catch (err) {
-    claimedHelpLaneKeys.delete(claimKey);
-    logError("Failed to load the assistant to start a session", err);
-    return { outcome: "unavailable" };
+  // Nothing is awaited from here to the launch, so the tab chosen is still
+  // free when it is claimed. An empty tab can still be starting the default's
+  // session, which would drop this launch on its re-entrancy guard, so a busy
+  // one is passed over for the next free tab.
+  const state = useHelpPanelStore.getState();
+  const busy = new Set<number>();
+  for (;;) {
+    const target = pickHelpLaunchLane(
+      state,
+      workspace.id,
+      (slot) => kept.has(slot) || busy.has(slot)
+    );
+    if (!target) {
+      notify(
+        busy.size > 0
+          ? {
+              type: "warning",
+              title: "Assistant tab is busy",
+              message: "That tab is still starting a session. Try again once it's ready.",
+              priority: "high",
+              context: { eventKind: "uiFeedback" },
+            }
+          : {
+              type: "warning",
+              title: "Assistant tabs full",
+              message: `All ${MAX_ASSISTANT_SLOTS} assistant tabs are in use. Close one to start another session.`,
+              priority: "high",
+              context: { eventKind: "uiFeedback" },
+            }
+      );
+      return { outcome: busy.size > 0 ? "unavailable" : "lanes-full" };
+    }
+    const controller = acquireController(target.slot);
+    const phase = controller.getSnapshot().phase;
+    if (phase !== "idle" && phase !== "live") {
+      busy.add(target.slot);
+      continue;
+    }
+
+    const claimKey = assistantSlotKey(workspace.id, target.slot);
+    claimedHelpLaneKeys.add(claimKey);
+    // A Settings pick still waiting for a session would switch this one to the
+    // default the moment it binds (#13345), undoing the choice just made.
+    const pendingSwitch = state.agentSwitchRequest;
+    if (pendingSwitch) useHelpPanelStore.getState().clearAgentSwitchRequest(pendingSwitch.id);
+    // Queued before a new tab appears, or its first input sync would auto-launch
+    // the default into it. Pinned so a failed launch waits on Retry for this
+    // agent rather than being replaced by the default's.
+    controller.launchWhenReady({ agentId, replaceExisting: true, pinAgent: true });
+    if (target.isNew) useHelpPanelStore.getState().ensureSlot(target.slot);
+    revealHelpLane(target.slot);
+    holdLaneClaimUntilSettled(controller, claimKey);
+    return { outcome: "started" };
   }
-  // An empty tab can still be starting the default's session; this launch
-  // would drop on its re-entrancy guard, so say so rather than report a start.
-  const phase = controller.getSnapshot().phase;
-  if (phase !== "idle" && phase !== "live") {
-    claimedHelpLaneKeys.delete(claimKey);
-    notify({
-      type: "warning",
-      title: "Assistant tab is busy",
-      message: "That tab is still starting a session. Try again once it's ready.",
-      priority: "high",
-      context: { eventKind: "uiFeedback" },
-    });
-    return { outcome: "unavailable" };
-  }
-  // A Settings pick still waiting for a session would switch this one to the
-  // default the moment it binds (#13345), undoing the choice just made.
-  const pendingSwitch = useHelpPanelStore.getState().agentSwitchRequest;
-  if (pendingSwitch) useHelpPanelStore.getState().clearAgentSwitchRequest(pendingSwitch.id);
-  // Queued before a new tab appears, or its first input sync would auto-launch
-  // the default into it. Pinned so a failed launch waits on Retry for this
-  // agent rather than being replaced by the default's.
-  controller.launchWhenReady({ agentId, replaceExisting: true, pinAgent: true });
-  if (target.isNew) useHelpPanelStore.getState().ensureSlot(target.slot);
-  revealHelpLane(target.slot);
-  holdLaneClaimUntilSettled(controller, claimKey);
-  return { outcome: "started" };
 }
 
 export function registerHelpActions(actions: ActionRegistry, callbacks: ActionCallbacks): void {
@@ -758,8 +779,15 @@ export function registerHelpActions(actions: ActionRegistry, callbacks: ActionCa
           // directories of their own. A sibling's agent only stands in for a
           // default that couldn't be resolved.
           const ownKept = keptAgents.get(targetSlot);
+          // The assistant's own default, once this machine's CLIs are known —
+          // the general agent default only stands in when the assistant has
+          // none it can run here.
+          const assistantDefault = panelState.preferredAgentId;
           agentId =
             (ownKept && canLaunch(ownKept) ? ownKept : null) ??
+            (isInitialized && assistantDefault && canLaunch(assistantDefault)
+              ? assistantDefault
+              : null) ??
             resolvedDefault ??
             siblingLaneAgentId(panelState, workspace.id, targetSlot, canLaunch) ??
             keptLaneAgentId(keptAgents, targetSlot, canLaunch) ??

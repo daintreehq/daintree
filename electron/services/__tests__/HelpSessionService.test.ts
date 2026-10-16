@@ -2486,6 +2486,11 @@ describe("HelpSessionService", () => {
       if (!codex) throw new Error("expected codex provision");
 
       expect(codex.sessionPath).toBe(`${claude.sessionPath}.codex`);
+      // The mirror reconciles only the newcomer's directory, so the skills and
+      // commands it retires are never the Claude lane's.
+      expect(mockSyncAssistantContent).toHaveBeenLastCalledWith(
+        expect.objectContaining({ sessionPath: codex.sessionPath, agentId: "codex" })
+      );
       expect(service.validateToken(claude.token)).toBe("core");
       expect(mockPtyKill).not.toHaveBeenCalled();
       await fs.access(laneFile(claude, 0));
@@ -2532,6 +2537,9 @@ describe("HelpSessionService", () => {
       expect(lower).toMatch(/^[0-9a-f]{16}$/);
       expect(upper).not.toBe(lower);
       expect(assistantAgentDirKey("a".repeat(40))).toMatch(/^[0-9a-f]{16}$/);
+      // An id spelled like another agent's digest is digested in turn, so it
+      // can't land in that agent's directory.
+      expect(assistantAgentDirKey(upper!)).not.toBe(upper);
     });
 
     it("removes a lane's --mcp-config file on revoke without touching its sibling's", async () => {

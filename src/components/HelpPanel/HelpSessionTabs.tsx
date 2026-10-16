@@ -183,6 +183,7 @@ interface SessionTabChipProps {
   /** Whether the strip spans several agents, so each lane names its own. */
   showAgent: boolean;
   newSessionAgentIds: readonly string[];
+  canOpenSessionWithAgent: boolean;
   onOpenSessionWithAgent?: (agentId: string) => void;
 }
 
@@ -206,6 +207,7 @@ function SessionTabChip({
   onOpenSession,
   showAgent,
   newSessionAgentIds,
+  canOpenSessionWithAgent,
   onOpenSessionWithAgent,
 }: SessionTabChipProps) {
   const closingFromMenuRef = useRef(false);
@@ -324,7 +326,7 @@ function SessionTabChip({
           newSessionAgentIds.map((agentId) => (
             <ContextMenuItem
               key={agentId}
-              disabled={!canOpenSession}
+              disabled={!canOpenSessionWithAgent}
               onSelect={() => onOpenSessionWithAgent?.(agentId)}
             >
               <NewSessionWithAgentLabel agentId={agentId} />
@@ -355,6 +357,8 @@ interface HelpSessionTabsProps {
   onOpenSession?: () => void;
   /** Agents a session can be started on by name, from a tab's menu; offered only when there are several. */
   newSessionAgentIds?: readonly string[];
+  /** Whether one can start, which an empty tab allows even at the ceiling. Defaults to `canOpenSession`. */
+  canOpenSessionWithAgent?: boolean;
   onOpenSessionWithAgent?: (agentId: string) => void;
   /** Shared base for this strip's ids — see {@link helpSessionTabId}. */
   idBase: string;
@@ -397,6 +401,7 @@ export function HelpSessionTabs({
   canOpenSession = false,
   onOpenSession,
   newSessionAgentIds = EMPTY_AGENT_IDS,
+  canOpenSessionWithAgent = canOpenSession,
   onOpenSessionWithAgent,
   idBase,
   panelId,
@@ -538,6 +543,7 @@ export function HelpSessionTabs({
               onOpenSession={onOpenSession}
               showAgent={showAgent}
               newSessionAgentIds={newSessionAgentIds}
+              canOpenSessionWithAgent={canOpenSessionWithAgent}
               onOpenSessionWithAgent={onOpenSessionWithAgent}
             />
           ))}

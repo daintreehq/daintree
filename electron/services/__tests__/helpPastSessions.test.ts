@@ -276,6 +276,54 @@ describe("listHelpPastSessions", () => {
     ]);
   });
 
+  it("keeps the newest copy of a conversation whichever directory reports it first, and survives one failing", async () => {
+    const merged = await listHelpPastSessions(
+      {
+        claude: "/nonexistent/help-sessions/h",
+        codex: ["/sessions/h.codex", "/sessions/h", "/gone"],
+      },
+      {
+        claudeProjectsRoot: "/nonexistent/projects",
+        listCodexSessions: async (cwd) => {
+          if (cwd === "/gone") throw new Error("unreadable");
+          return {
+            status: "ok",
+            sessions:
+              cwd === "/sessions/h.codex"
+                ? [{ id: "resumed", preview: "Older copy", updatedAt: 10 }]
+                : [{ id: "resumed", preview: "Newer copy", updatedAt: 50 }],
+          };
+        },
+      }
+    );
+    expect(merged.map((s) => [s.sessionId, s.title, s.updatedAt])).toEqual([
+      ["resumed", "Newer copy", 50],
+    ]);
+  });
+
+  it("caps after merging the directories, so duplicates never cost a row", async () => {
+    const shared = Array.from({ length: HELP_PAST_SESSIONS_LIMIT }, (_, i) => ({
+      id: `t${i}`,
+      preview: `Question ${i}`,
+      updatedAt: i,
+    }));
+    const merged = await listHelpPastSessions(
+      { claude: "/nonexistent/help-sessions/h", codex: ["/sessions/h.codex", "/sessions/h"] },
+      {
+        claudeProjectsRoot: "/nonexistent/projects",
+        listCodexSessions: async (cwd) => ({
+          status: "ok",
+          sessions:
+            cwd === "/sessions/h"
+              ? [...shared, { id: "extra", preview: "Extra", updatedAt: -1 }]
+              : shared,
+        }),
+      }
+    );
+    expect(merged).toHaveLength(HELP_PAST_SESSIONS_LIMIT);
+    expect(new Set(merged.map((s) => s.sessionId)).size).toBe(HELP_PAST_SESSIONS_LIMIT);
+  });
+
   it("merges both stores newest first and survives one failing", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "help-past-merge-"));
     try {

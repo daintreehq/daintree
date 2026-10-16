@@ -870,6 +870,57 @@ describe("HelpSessionController — launchWhenReady (#13206)", () => {
     expect(launch).toHaveBeenLastCalledWith({ agentId: "codex", pinAgent: true });
   });
 
+  it("wakes a hibernated lane on the agent that held it, not the default (#13442)", () => {
+    const ctrl = new HelpSessionController();
+    const launch = vi.spyOn(ctrl, "launch").mockImplementation(() => {});
+    helpPanelState.hibernateSessions[slotKey("p1", 0)] = {
+      sessionId: "codex-thread",
+      cwd: "/help.codex",
+      agentId: "codex",
+    };
+
+    ctrl.syncInputs({ ...readyInputs, supportedInstalledAgentIds: ["claude", "codex"] });
+
+    expect(launch).toHaveBeenCalledTimes(1);
+    expect(launch).toHaveBeenCalledWith(
+      expect.objectContaining({ agentId: "codex", isAutoLaunch: true, replaceExisting: true })
+    );
+  });
+
+  it("falls back to the default when the agent that held the lane can't run here", () => {
+    const ctrl = new HelpSessionController();
+    const launch = vi.spyOn(ctrl, "launch").mockImplementation(() => {});
+    helpPanelState.hibernateSessions[slotKey("p1", 0)] = {
+      sessionId: "codex-thread",
+      cwd: "/help.codex",
+      agentId: "codex",
+    };
+
+    ctrl.syncInputs(readyInputs);
+
+    expect(launch).toHaveBeenCalledWith(expect.objectContaining({ agentId: "claude" }));
+  });
+
+  it("goes ahead with a pinned launch once the version gate that held it clears", () => {
+    const ctrl = new HelpSessionController();
+    ctrl.syncInputs({ ...readyInputs, autoLaunchEnabled: false });
+    const launch = vi.spyOn(ctrl, "launch").mockImplementation(() => {});
+    ctrl["_lastPinnedAgentId"] = "codex";
+
+    ctrl["_versionGate"]["host"].maybeAutoLaunch(readyInputs);
+    expect(launch).toHaveBeenCalledWith({
+      agentId: "codex",
+      replaceExisting: true,
+      pinAgent: true,
+    });
+
+    // Without a pin it is the ordinary auto-launch re-evaluation.
+    launch.mockClear();
+    ctrl["_lastPinnedAgentId"] = null;
+    ctrl["_versionGate"]["host"].maybeAutoLaunch({ ...readyInputs, autoLaunchEnabled: false });
+    expect(launch).not.toHaveBeenCalled();
+  });
+
   it("pins a launch made with pinAgent, and a launch without it lets go", () => {
     const ctrl = new HelpSessionController();
     ctrl.syncInputs({ ...readyInputs, autoLaunchEnabled: false });

@@ -8,10 +8,11 @@ import type { CodexFolderSessionsResult } from "../../shared/types/ipc/agentSuba
 /**
  * Past assistant conversations for one project (#13206).
  *
- * Every assistant lane of a project runs in the same `help-sessions/<hash>`
- * directory, so the agents' own transcript stores already hold that project's
- * whole history. This reads them — never writes — and turns each conversation
- * into a picker row. Both stores are uncontracted formats, so every field is
+ * Every assistant lane of a project on one agent runs in the same
+ * `help-sessions/<hash>` directory (`<hash>.<agent>` for any agent but Claude),
+ * so the agents' own transcript stores already hold that project's whole
+ * history. This reads them — never writes — and turns each conversation into a
+ * picker row. Both stores are uncontracted formats, so every field is
  * optional and every failure degrades to fewer rows rather than an error.
  */
 

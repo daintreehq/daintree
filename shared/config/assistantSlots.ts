@@ -10,8 +10,8 @@
  * re-prompt for trust and strand the resume token on every launch, which is
  * why `HelpSessionService` moved off per-launch UUID dirs in the first place.
  *
- * Every lane of a project shares ONE session directory, the bare project
- * hash. Lanes used to get their own (`<hash>-sN`), which bought isolation of
+ * Every lane of a project on one agent shares ONE session directory. Lanes
+ * used to get their own (`<hash>-sN`), which bought isolation of
  * the per-lane MCP bearer at the price of a fresh workspace-trust prompt and a
  * fresh `.mcp.json` approval prompt for every lane a user opened. Both prompts
  * are per folder, so one folder means one of each per project. What the extra

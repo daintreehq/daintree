@@ -520,6 +520,7 @@ function projectPathHash(projectPath: string): string {
 }
 
 const SAFE_AGENT_DIR_KEY = new RegExp(`^${ASSISTANT_AGENT_DIR_KEY_PATTERN}$`);
+const DIGEST_AGENT_DIR_KEY = new RegExp(`^[0-9a-f]{${PROJECT_HASH_LEN}}$`);
 
 /**
  * What qualifies an agent's session directory: null for Claude, which keeps
@@ -527,11 +528,16 @@ const SAFE_AGENT_DIR_KEY = new RegExp(`^${ASSISTANT_AGENT_DIR_KEY_PATTERN}$`);
  * for an id that is already a safe, bounded directory name (every built-in);
  * otherwise a digest. A user-defined id may carry uppercase, dots or any
  * length, and two that differ only by case would share one directory on a
- * case-insensitive filesystem.
+ * case-insensitive filesystem. An id shaped like a digest is digested too, so
+ * a literal id can never land on another agent's digest.
  */
 export function assistantAgentDirKey(agentId: string): string | null {
   if (agentId === "claude") return null;
-  if (agentId.length <= ASSISTANT_AGENT_DIR_KEY_MAX_LENGTH && SAFE_AGENT_DIR_KEY.test(agentId)) {
+  if (
+    agentId.length <= ASSISTANT_AGENT_DIR_KEY_MAX_LENGTH &&
+    SAFE_AGENT_DIR_KEY.test(agentId) &&
+    !DIGEST_AGENT_DIR_KEY.test(agentId)
+  ) {
     return agentId;
   }
   return createHash("sha256").update(agentId).digest("hex").slice(0, PROJECT_HASH_LEN);
@@ -1192,11 +1198,12 @@ export class HelpSessionService {
 
   /**
    * Provisions the per-project session directory for the Daintree Assistant
-   * under userData/help-sessions/<projectPathHash>/. The dir is reused across
-   * launches so Claude Code's per-folder workspace-trust prompt only fires
-   * once per project; the .mcp.json bearer is rotated on every provision.
+   * under userData/help-sessions/<projectPathHash>/ — `<projectPathHash>.<agent
+   * key>/` for any agent but Claude. The dir is reused across launches so
+   * Claude Code's per-folder workspace-trust prompt only fires once per
+   * project; the .mcp.json bearer is rotated on every provision.
    *
-   * One directory serves every lane of the project. On every call:
+   * One directory serves every lane of the project on that agent. On every call:
    *   1. Copy the bundled assistant/ template into the dir (overwrites — picks up
    *      bundled-asset updates without losing the trust acceptance).
    *   2. Write this lane's MCP wiring: for Claude, a per-lane `--mcp-config`

@@ -402,7 +402,13 @@ export class HelpSessionController {
     setHasAutoLaunched: (value) => {
       this._hasAutoLaunched = value;
     },
-    maybeAutoLaunch: (inputs) => this._maybeAutoLaunch(inputs),
+    // A launch pinned to an agent the gate held back is the user's pick rather
+    // than an auto-launch, so once that agent is current it goes ahead.
+    maybeAutoLaunch: (inputs) => {
+      const pinned = this._lastPinnedAgentId;
+      if (pinned) this.launch({ agentId: pinned, replaceExisting: true, pinAgent: true });
+      else this._maybeAutoLaunch(inputs);
+    },
   });
 
   private readonly _launchNotifications = new LaunchNotifications({
@@ -1196,6 +1202,24 @@ export class HelpSessionController {
     if (!inputs.currentProject) return;
     if (inputs.terminalId) return;
     if (this._hasAutoLaunched) return;
+
+    // A lane holding a captured conversation wakes on the agent that had it
+    // (#13442): a tab started on another agent and then hibernated is still
+    // that agent's tab, and launching the default there would miss the resume
+    // and start a stranger's conversation in its place.
+    const captured =
+      useHelpPanelStore.getState().hibernateSessions[
+        assistantSlotKey(inputs.currentProject.id, this.slot)
+      ]?.agentId;
+    if (
+      captured &&
+      captured !== inputs.preferredAgentId &&
+      inputs.supportedInstalledAgentIds.includes(captured)
+    ) {
+      this._hasAutoLaunched = true;
+      this.launch({ agentId: captured, isAutoLaunch: true, replaceExisting: true });
+      return;
+    }
 
     if (inputs.preferredAgentId) {
       this._hasAutoLaunched = true;

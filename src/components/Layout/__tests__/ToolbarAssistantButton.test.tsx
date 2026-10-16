@@ -628,21 +628,31 @@ describe("ToolbarAssistantButton — new session on a chosen agent", () => {
     expect(screen.queryByRole("menu")).toBeNull();
   });
 
-  it("parks the choices once every session slot is taken", async () => {
+  it("parks the choices once every tab holds a session, and not while one is empty", async () => {
     agentChoices.current = ["claude", "codex"];
-    useHelpPanelStore.setState({
-      sessions: { 0: emptyLane(), 1: emptyLane(), 2: emptyLane() },
-    });
-    const { container } = render(<ToolbarAssistantButton />);
+    const busyLane = (n: number) => ({ ...emptyLane(), terminalId: `t-${n}`, sessionId: `s-${n}` });
+    useHelpPanelStore.setState({ sessions: { 0: busyLane(0), 1: busyLane(1), 2: busyLane(2) } });
+    const { container, unmount } = render(<ToolbarAssistantButton />);
 
     fireEvent.contextMenu(container.querySelector("button")!);
-    const menu = await screen.findByRole("menu");
-
+    let menu = await screen.findByRole("menu");
     expect(
       within(menu)
         .getAllByRole("menuitem")
         .map((item) => item.getAttribute("aria-disabled"))
     ).toEqual(["true", "true"]);
+    unmount();
+
+    // An empty tab at the ceiling is still somewhere to start one.
+    useHelpPanelStore.setState({ sessions: { 0: busyLane(0), 1: emptyLane(), 2: busyLane(2) } });
+    const again = render(<ToolbarAssistantButton />);
+    fireEvent.contextMenu(again.container.querySelector("button")!);
+    menu = await screen.findByRole("menu");
+    expect(
+      within(menu)
+        .getAllByRole("menuitem")
+        .map((item) => item.getAttribute("aria-disabled"))
+    ).toEqual([null, null]);
   });
 
   it("keeps the plain click a toggle and nothing more, whatever the choice", () => {

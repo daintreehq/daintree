@@ -57,6 +57,7 @@ import {
   useHelpPanelStore,
   selectSlot,
   selectOpenSlots,
+  selectHasRoomForSession,
   HELP_PANEL_MIN_WIDTH,
   HELP_PANEL_MAX_WIDTH,
   HELP_PANEL_DEFAULT_WIDTH,
@@ -1088,6 +1089,7 @@ export function HelpPanel({
   const sessionBodyId = `${tabIdBase}-body`;
   const openSlots = useHelpPanelStore(useShallow(selectOpenSlots));
   const canOpenParallelSession = openSlots.length < MAX_ASSISTANT_SLOTS;
+  const canStartSessionWithAgent = useHelpPanelStore(selectHasRoomForSession);
 
   // Subscribed rather than read through `getState()` inside the panel-store selectors
   // below: a background lane that binds a terminal changes only this, and without the
@@ -1594,7 +1596,7 @@ export function HelpPanel({
         isFocused={isHighlighted}
         messaging={messagingControls}
         newSessionAgentIds={supportedInstalledAgentIds}
-        canStartNewSession={canOpenParallelSession}
+        canStartNewSession={canStartSessionWithAgent}
         onNewSessionWithAgent={handleOpenSessionWithAgent}
       />
 
@@ -1615,6 +1617,7 @@ export function HelpPanel({
         canOpenSession={canOpenParallelSession}
         onOpenSession={handleOpenParallelSession}
         newSessionAgentIds={supportedInstalledAgentIds}
+        canOpenSessionWithAgent={canStartSessionWithAgent}
         onOpenSessionWithAgent={handleOpenSessionWithAgent}
         idBase={tabIdBase}
         panelId={sessionBodyId}
