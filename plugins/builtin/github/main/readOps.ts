@@ -42,6 +42,8 @@ import {
   getRepoListEpoch,
   issueTooltipCache,
   prRequiredStatusCache,
+  getPRRequiredStatusForCurrentHead,
+  recordObservedPRHead,
   truncateBody,
   writePRTooltip,
   MAX_REVIEW_THREAD_PAGES,
@@ -187,6 +189,7 @@ function buildCIStatus(entry: PRRequiredStatusEntry, rawData: unknown): CIStatus
     failed,
     pending,
     ...(requiredChecksPassing !== undefined ? { requiredChecksPassing } : {}),
+    ...(entry.headSha ? { headSha: entry.headSha } : {}),
     rawData,
   };
 }
@@ -821,7 +824,7 @@ export async function getCIStatusesImpl(
 
     for (const prNumber of unique) {
       const cacheKey = `${repo.owner}/${repo.repo}:${prNumber}`;
-      const cached = prRequiredStatusCache.get(cacheKey);
+      const cached = getPRRequiredStatusForCurrentHead(cacheKey);
       if (cached) {
         result.set(prNumber, buildCIStatus(cached, null));
       } else {
@@ -839,9 +842,13 @@ export async function getCIStatusesImpl(
       const query = buildBatchRequiredChecksQuery(repo.owner, repo.repo, chunk);
       if (!query) continue;
 
+      // Bypasses runQuery's response cache: `prRequiredStatusCache` is this
+      // path's 60s cache, and a raw response kept under the same query text
+      // would hand back the previous head's rollup after the parsed entry was
+      // rejected as stale.
       let response: GraphQlQueryResponseData;
       try {
-        response = await runQuery(query, {}, "BATCH_REQUIRED_CHECKS_QUERY");
+        response = await runQuery(query, {}, "BATCH_REQUIRED_CHECKS_QUERY", true);
       } catch {
         // Omit this chunk so callers treat it as transient and retry later.
         continue;
@@ -876,7 +883,7 @@ export async function getCIStatusImpl(repo: RepoRef, prNumber: number): Promise<
   // the worktree dashboard polls CI per open PR across every view — so the
   // cache + single-flight collapse the fan-out to one request per PR per 60s.
   const cacheKey = `${repo.owner}/${repo.repo}:${prNumber}`;
-  const cached = prRequiredStatusCache.get(cacheKey);
+  const cached = getPRRequiredStatusForCurrentHead(cacheKey);
   if (cached) return buildCIStatus(cached, null);
 
   return dedupe(getCIStatusInflight, cacheKey, false, async () => {
@@ -889,6 +896,7 @@ export async function getCIStatusImpl(repo: RepoRef, prNumber: number): Promise<
     const entry: PRRequiredStatusEntry = {
       ciStatus: derived.ciStatus,
       ciSummary: derived.ciSummary,
+      ...(page.headOid ? { headSha: page.headOid } : {}),
     };
     prRequiredStatusCache.set(cacheKey, entry);
     return buildCIStatus(entry, rollup ?? null);
@@ -911,23 +919,22 @@ interface CIRollupPage {
  * doesn't exist. Shared by the roll-up and per-check reads so both see the same
  * response shape from the same query.
  *
- * `bypassCache` is what separates the two callers. `getCIStatus` wants the 60s
- * response cache — it is the hottest forge path and a minute-stale verdict is
- * documented. `getChecks` must not: a cached first page reporting
- * `hasNextPage: false` would let a since-added 101st check vanish from a list
- * that promises to be complete.
+ * Never served from runQuery's response cache. `getChecks` must not be: a
+ * cached first page reporting `hasNextPage: false` would let a since-added
+ * 101st check vanish from a list that promises to be complete. `getCIStatus`
+ * caches the parsed verdict in `prRequiredStatusCache` instead, where a push
+ * can be seen to supersede it (#13399).
  */
 async function fetchCIRollupPage(
   repo: RepoRef,
   prNumber: number,
-  cursor: string | null,
-  bypassCache = false
+  cursor: string | null
 ): Promise<CIRollupPage | null> {
   const response = await runQuery(
     PR_CI_STATUS_QUERY,
     { owner: repo.owner, repo: repo.repo, number: prNumber, cursor },
     "PR_CI_STATUS_QUERY",
-    bypassCache
+    true
   );
 
   const pr = (response?.repository as Record<string, unknown> | undefined)?.pullRequest as
@@ -996,7 +1003,7 @@ export async function getChecksImpl(
     let headOid: string | null = null;
 
     for (let page = 0; page < MAX_CHECK_PAGES; page++) {
-      const result: CIRollupPage | null = await fetchCIRollupPage(repo, prNumber, cursor, true);
+      const result: CIRollupPage | null = await fetchCIRollupPage(repo, prNumber, cursor);
       // Only the first page distinguishes "no such PR"; a later page losing the
       // PR means it moved under us, which is a failed traversal, not absence.
       if (!result) {
@@ -1060,7 +1067,13 @@ export async function probeOpenPRListImpl(
   // No token → the conditional GET can't be made; let the caller revalidate
   // through its normal (also token-gated) path rather than claim "unchanged".
   if (!token) return { kind: "fallback" };
-  return probeOpenPRList(repo.owner, repo.repo, token, tracked);
+  const result = await probeOpenPRList(repo.owner, repo.repo, token, tracked);
+  if (result.kind === "changed") {
+    for (const snap of result.changed) {
+      recordObservedPRHead(`${repo.owner}/${repo.repo}:${snap.number}`, snap.headSha);
+    }
+  }
+  return result;
 }
 
 export async function getRepoMetadataImpl(repo: RepoRef): Promise<RepoMetadata> {

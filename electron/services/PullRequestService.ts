@@ -102,6 +102,19 @@ function terminalCiRecheckIntervalMs(status: CIStatusState | undefined): number 
   return null;
 }
 
+// After a push, GitHub reports no rollup at all until the new head's first check
+// registers — normally seconds, minutes during an Actions incident — and that
+// reads exactly like a repo with no CI (#13399). A PR that has reported checks
+// before keeps being read on the boost cadence for this long after its head
+// moves; past it, "no checks" is accepted ([skip ci], path filters). ~6 reads
+// at the 30s boost floor, ~12 GraphQL points per push, and a second push
+// restarts the window rather than adding one.
+const CI_HEAD_MOVE_GRACE_MS = 3 * 60 * 1000;
+
+function reportsChecks(ci: CIStatus | null | undefined): boolean {
+  return ci?.state === "success" || ci?.state === "failure" || ci?.state === "pending";
+}
+
 // Rate-limit block constants extracted from the GitHub-specific service so the
 // polling loops consult the active provider's rate-limit state through
 // ForgeProviderImpl.getRateLimit() rather than the gitHubRateLimitService singleton.
@@ -148,6 +161,13 @@ interface InternalLinkedPR {
   // event: throttled, rate-limited, or rejected, it's gone. This flag keeps the
   // entry eligible on the periodic tick until an authoritative result lands.
   needsCiBackfill?: boolean;
+  // Some head of this PR has reported checks, so a rollup-less read after a
+  // push means "not registered yet" rather than "this repo has no CI".
+  ciSeen?: boolean;
+  // Deadline of the post-push wait for the new head's checks; see
+  // CI_HEAD_MOVE_GRACE_MS. While set, a read that reports no checks or
+  // describes another commit is held back instead of shown.
+  ciGraceUntil?: number;
 }
 
 export interface PRDetectionResult {
@@ -1306,7 +1326,9 @@ class PullRequestService {
     // (#6149) — exactly what the disable sweep exists to collapse.
     const hasPendingCi =
       this.ciEnrichmentEnabled &&
-      Array.from(this.detectedPRs.values()).some((pr) => pr.ciStatus === "pending");
+      Array.from(this.detectedPRs.values()).some(
+        (pr) => pr.ciStatus === "pending" || pr.ciGraceUntil !== undefined
+      );
     this.boostExpiresAt = hasPendingCi
       ? Date.now() + RESOLVED_REVALIDATION_BOOST_DURATION_MS
       : null;
@@ -1342,6 +1364,15 @@ class PullRequestService {
     // a stamp from the future suppress re-checks until real time catches up.
     if (last === undefined || now < last) return true;
     return now - last >= interval;
+  }
+
+  // While a head-move grace window is open every tick reads; the first tick
+  // past its deadline closes it and takes one last read, which (outside the
+  // window) is shown as-is — the "no checks" answer the window was waiting out.
+  private consumeCiGraceRead(pr: InternalLinkedPR, now: number): boolean {
+    if (pr.ciGraceUntil === undefined) return false;
+    if (now >= pr.ciGraceUntil) pr.ciGraceUntil = undefined;
+    return true;
   }
 
   private clearStagnantPollCounts(): void {
@@ -1565,6 +1596,27 @@ class PullRequestService {
 
       const enrichedPRNumbers = new Set<number>();
 
+      // Decided per PR number before any entry's snapshot advances below:
+      // sibling worktrees can share one entry, and the first iteration would
+      // otherwise hide the move from the rest. The stored rollup's own commit
+      // counts too, which catches a push seen on the very first probe, before
+      // any head marker was seeded.
+      const movedHeadNumbers = new Set<number>();
+      for (const [prNumber, snap] of changedSnapshotByNumber) {
+        if (!snap.headSha) continue;
+        for (const entry of this.detectedPRs.values()) {
+          if (entry.number !== prNumber) continue;
+          const ciHead = entry._ciStatus?.headSha;
+          if (
+            (entry.headSha !== undefined && entry.headSha !== snap.headSha) ||
+            (ciHead !== undefined && ciHead !== snap.headSha)
+          ) {
+            movedHeadNumbers.add(prNumber);
+            break;
+          }
+        }
+      }
+
       for (const { prNumber, pr, error } of results) {
         // Skip transient errors — a single flaky API call must not wipe PR state.
         if (error) continue;
@@ -1601,14 +1653,24 @@ class PullRequestService {
             detectedPR.url !== pr.url ||
             detectedPR.baseRef !== pr.baseRef;
 
-          // The probe's fresh REST markers, read before the emit rather than
-          // after: a title edit and a push can land in the same tick, and the
-          // rollup we hold describes the head we last saw, not the new one.
           const snap = changedSnapshotByNumber.get(prNumber);
-          const headMoved =
-            snap?.headSha != null &&
-            detectedPR.headSha !== undefined &&
-            snap.headSha !== detectedPR.headSha;
+          const headMoved = movedHeadNumbers.has(prNumber);
+
+          // The rollup we hold describes a commit the PR has moved past. Drop
+          // it before anything is emitted: holding the old head's cross over
+          // the new one keeps the CI-failed alarm up for a push that has not
+          // run yet. Nothing replaces it until the new head reports checks —
+          // not even `pending`, which only the forge gets to say.
+          if (headMoved) {
+            const hadCi = detectedPR.ciSeen === true || reportsChecks(detectedPR._ciStatus);
+            detectedPR.ciStatus = undefined;
+            detectedPR._ciStatus = undefined;
+            detectedPR.stagnantPollCount = 0;
+            if (hadCi) {
+              detectedPR.ciSeen = true;
+              detectedPR.ciGraceUntil = Date.now() + CI_HEAD_MOVE_GRACE_MS;
+            }
+          }
 
           if (prChanged) {
             const oldState = detectedPR.state;
@@ -1616,6 +1678,8 @@ class PullRequestService {
             detectedPR.title = pr.title;
             detectedPR.url = pr.url;
             detectedPR.baseRef = pr.baseRef;
+            // Checks for a closed or merged PR are never waited on.
+            if (newState !== "open") detectedPR.ciGraceUntil = undefined;
 
             logInfo("PR metadata changed during revalidation", {
               worktreeId,
@@ -1625,7 +1689,9 @@ class PullRequestService {
                 title: detectedPR.title !== pr.title ? true : undefined,
               },
             });
+          }
 
+          if (prChanged || headMoved) {
             events.emit("sys:pr:detected", {
               worktreeId,
               prNumber: pr.number,
@@ -1637,11 +1703,11 @@ class PullRequestService {
               // every badge actually reads until the enrichment below lands a
               // round trip later — the blink this branch used to produce on any
               // title or state edit. A metadata change on the same head says
-              // nothing about CI, so the last known status rides along; a change
-              // that came with a new head says the opposite, and holding the old
-              // head's green over the new one would be worse than a blank.
-              prCiStatus: headMoved ? undefined : detectedPR.ciStatus,
-              ciStatus: headMoved ? undefined : detectedPR._ciStatus,
+              // nothing about CI, so the last known status rides along; a new
+              // head already cleared both above. No `isCiStatusLoading`: that
+              // flag would preserve the very rollup this emit retracts.
+              prCiStatus: detectedPR.ciStatus,
+              ciStatus: detectedPR._ciStatus,
               prTitle: pr.title,
               issueNumber: this.candidates.get(worktreeId)?.issueNumber,
               branchName: lookupBranchByWorktreeId.get(worktreeId),
@@ -1697,6 +1763,7 @@ class PullRequestService {
           if (
             detectedPR.ciStatus === "pending" ||
             detectedPR.needsCiBackfill === true ||
+            this.consumeCiGraceRead(detectedPR, now) ||
             this.isTerminalCiRecheckDue(detectedPR, now)
           ) {
             enrichedPRNumbers.add(detectedPR.number);
@@ -2175,6 +2242,24 @@ class PullRequestService {
         // result: the user asked for it, and the boost stays collapsed because
         // updateBoostFromDetectedPRs only arms while ambient enrichment is on.
         if (!force && !this.ciEnrichmentEnabled) return;
+        // A verdict for a commit other than the head we last observed is
+        // either the old head (GitHub's PR head trails a push by seconds, and
+        // any cache keyed by PR number outlives it) or one the probe hasn't
+        // seen yet. Neither describes the PR we show, so it is never applied.
+        if (
+          ciStatus?.headSha !== undefined &&
+          pr.headSha !== undefined &&
+          ciStatus.headSha !== pr.headSha
+        ) {
+          return;
+        }
+        if (pr.ciGraceUntil !== undefined) {
+          // The new head has no checks registered yet. Keep the badge blank and
+          // let the boost cadence ask again rather than settle on "no checks".
+          if (!reportsChecks(ciStatus)) return;
+          pr.ciGraceUntil = undefined;
+        }
+        if (reportsChecks(ciStatus)) pr.ciSeen = true;
         const prevCiStatus = pr.ciStatus;
         // A resolved value is authoritative: the batch contract surfaces a
         // transient miss as a rejection (→ .catch below), so a `null` here is a
@@ -2212,6 +2297,8 @@ class PullRequestService {
             // entry re-publishes the rollup this one just replaced.
             detected.ciStatus = pr.ciStatus;
             detected._ciStatus = pr._ciStatus;
+            detected.ciSeen = pr.ciSeen;
+            detected.ciGraceUntil = pr.ciGraceUntil;
             events.emit("sys:pr:detected", {
               worktreeId,
               prNumber: pr.number,

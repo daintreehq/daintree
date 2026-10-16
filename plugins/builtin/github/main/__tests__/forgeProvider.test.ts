@@ -5,6 +5,7 @@ import { MAX_REVIEW_THREAD_PAGES } from "../GitHubCaches.js";
 import type { ShouldBlockResult } from "../GitHubRateLimitService.js";
 
 const mockGraphQLClient = vi.fn();
+const mockRateLimitAwareFetch = vi.fn();
 const mockFetchActivityProbe = vi.fn();
 const mockShouldBlockRequest = vi.fn((_resource?: string): ShouldBlockResult => ({
   blocked: false,
@@ -21,6 +22,7 @@ vi.mock("../GitHubAuth.js", () => ({
     validate: vi.fn(),
   },
   GITHUB_API_TIMEOUT_MS: 5000,
+  rateLimitAwareFetch: (...args: unknown[]) => mockRateLimitAwareFetch(...args),
 }));
 
 vi.mock("../GitHubStats.js", () => ({
@@ -2112,6 +2114,166 @@ describe("batchLookups.getCIStatuses", () => {
     expect(mockGraphQLClient).not.toHaveBeenCalled();
     expect(result.get(5)?.state).toBe("success");
     expect(result.has(6)).toBe(false);
+  });
+});
+
+describe("CI verdicts across a push (#13399)", () => {
+  beforeEach(() => {
+    mockGraphQLClient.mockReset();
+    mockRateLimitAwareFetch.mockReset();
+  });
+
+  function batchResponseFor(
+    number: number,
+    oid: string,
+    rollup: { state: string; contexts: Array<Record<string, unknown>> } | null
+  ) {
+    return {
+      rateLimit: { cost: 1, remaining: 4999, resetAt: "" },
+      [`pr_${number}`]: {
+        pullRequest: {
+          number,
+          commits: {
+            nodes: [
+              {
+                commit: {
+                  oid,
+                  statusCheckRollup:
+                    rollup === null
+                      ? null
+                      : {
+                          state: rollup.state,
+                          contexts: { nodes: rollup.contexts, pageInfo: { hasNextPage: false } },
+                        },
+                },
+              },
+            ],
+          },
+        },
+      },
+    };
+  }
+
+  const failing = {
+    state: "FAILURE",
+    contexts: [
+      { __typename: "CheckRun", conclusion: "FAILURE", status: "COMPLETED", isRequired: true },
+    ],
+  };
+  const running = {
+    state: "PENDING",
+    contexts: [
+      { __typename: "CheckRun", conclusion: null, status: "IN_PROGRESS", isRequired: true },
+    ],
+  };
+
+  async function probeSeesHead(number: number, previous: string, next: string) {
+    mockRateLimitAwareFetch.mockResolvedValueOnce(
+      new Response(
+        JSON.stringify([
+          {
+            number,
+            state: "open",
+            title: "t",
+            updated_at: "2025-02-01T00:00:00Z",
+            head: { sha: next },
+          },
+        ]),
+        { status: 200 }
+      )
+    );
+    const result = await githubForgeProvider.batchLookups!.probeOpenPRList!(repo, [
+      { number, headSha: previous, updatedAt: "2025-01-01T00:00:00Z", state: "open", title: "t" },
+    ]);
+    expect(result.kind).toBe("changed");
+  }
+
+  it("names the commit each batch verdict was read from", async () => {
+    mockGraphQLClient.mockResolvedValueOnce(batchResponseFor(1, "sha1", failing));
+
+    const result = await githubForgeProvider.batchLookups!.getCIStatuses!(repo, [1]);
+
+    expect(result.get(1)?.state).toBe("failure");
+    expect(result.get(1)?.headSha).toBe("sha1");
+  });
+
+  it("keeps the commit for a head with no checks registered yet", async () => {
+    // Indistinguishable from "no CI" by the rollup alone; the commit is what
+    // lets the host see this answer is about the new head, not a stale one.
+    mockGraphQLClient.mockResolvedValueOnce(batchResponseFor(1, "sha2", null));
+
+    const result = await githubForgeProvider.batchLookups!.getCIStatuses!(repo, [1]);
+
+    expect(result.get(1)?.state).toBe("neutral");
+    expect(result.get(1)?.headSha).toBe("sha2");
+  });
+
+  it("re-reads instead of serving the previous head's cached verdict once the probe sees a push", async () => {
+    mockGraphQLClient
+      .mockResolvedValueOnce(batchResponseFor(1, "sha1", failing))
+      .mockResolvedValueOnce(batchResponseFor(1, "sha2", running));
+
+    await githubForgeProvider.batchLookups!.getCIStatuses!(repo, [1]);
+    await probeSeesHead(1, "sha1", "sha2");
+    // Same PR set → same query text, so this also proves runQuery's raw
+    // response cache isn't handing back the first answer.
+    const after = await githubForgeProvider.batchLookups!.getCIStatuses!(repo, [1]);
+
+    expect(mockGraphQLClient).toHaveBeenCalledTimes(2);
+    expect(after.get(1)?.state).toBe("pending");
+    expect(after.get(1)?.headSha).toBe("sha2");
+  });
+
+  it("keeps re-reading while GitHub still answers for the old head", async () => {
+    // GitHub's PR head trails a push by seconds: a fresh read can still return
+    // the old commit. Caching that under the PR number must not end the wait.
+    mockGraphQLClient
+      .mockResolvedValueOnce(batchResponseFor(1, "sha1", failing))
+      .mockResolvedValueOnce(batchResponseFor(1, "sha1", failing))
+      .mockResolvedValueOnce(batchResponseFor(1, "sha2", running));
+
+    await githubForgeProvider.batchLookups!.getCIStatuses!(repo, [1]);
+    await probeSeesHead(1, "sha1", "sha2");
+    const lagging = await githubForgeProvider.batchLookups!.getCIStatuses!(repo, [1]);
+    const caughtUp = await githubForgeProvider.batchLookups!.getCIStatuses!(repo, [1]);
+
+    expect(lagging.get(1)?.headSha).toBe("sha1");
+    expect(caughtUp.get(1)?.headSha).toBe("sha2");
+    expect(mockGraphQLClient).toHaveBeenCalledTimes(3);
+  });
+
+  it("guards the single-PR read with the same head check", async () => {
+    const single = (oid: string, state: string) => ({
+      repository: {
+        pullRequest: {
+          commits: {
+            nodes: [
+              {
+                commit: {
+                  oid,
+                  statusCheckRollup: {
+                    state,
+                    contexts: { nodes: [], pageInfo: { hasNextPage: false } },
+                  },
+                },
+              },
+            ],
+          },
+        },
+      },
+      rateLimit: { cost: 1, remaining: 4999, resetAt: "" },
+    });
+    mockGraphQLClient
+      .mockResolvedValueOnce(single("sha1", "FAILURE"))
+      .mockResolvedValueOnce(single("sha2", "PENDING"));
+
+    const before = await githubForgeProvider.getCIStatus(repo, 1);
+    await probeSeesHead(1, "sha1", "sha2");
+    const after = await githubForgeProvider.getCIStatus(repo, 1);
+
+    expect(before?.headSha).toBe("sha1");
+    expect(after?.state).toBe("pending");
+    expect(after?.headSha).toBe("sha2");
   });
 });
 

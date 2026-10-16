@@ -22,6 +22,7 @@ import {
   prTooltipWrittenAt,
   reviewThreadsCache,
   prRequiredStatusCache,
+  getPRRequiredStatusForCurrentHead,
   truncateBody,
   isoToEpochMs,
   getRepoListEpoch,
@@ -396,7 +397,7 @@ async function enrichPRsWithRequiredStatus(
   const cached = new Map<number, PRRequiredStatusEntry>();
 
   for (const pr of candidates) {
-    const hit = bypassCache ? undefined : prRequiredStatusCache.get(cacheKeyFor(pr.number));
+    const hit = bypassCache ? undefined : getPRRequiredStatusForCurrentHead(cacheKeyFor(pr.number));
     if (hit) {
       cached.set(pr.number, hit);
     } else {
@@ -447,6 +448,7 @@ export function parseBatchRequiredChecksResponse(
             commits?: {
               nodes?: Array<{
                 commit?: {
+                  oid?: string | null;
                   statusCheckRollup?: {
                     state?: string | null;
                     contexts?: {
@@ -460,14 +462,26 @@ export function parseBatchRequiredChecksResponse(
           };
         }
       | undefined;
-    const rollup = repo?.pullRequest?.commits?.nodes?.[0]?.commit?.statusCheckRollup;
-    if (!rollup) continue;
+    const commit = repo?.pullRequest?.commits?.nodes?.[0]?.commit;
+    const headSha = typeof commit?.oid === "string" && commit.oid ? commit.oid : undefined;
+    const rollup = commit?.statusCheckRollup;
+    if (!rollup) {
+      // A commit with no checks registered yet still says which head was read,
+      // which is what lets a caller tell "this push has no checks yet" from a
+      // verdict cached for the previous push (#13399).
+      if (headSha) out.set(num, { ciStatus: undefined, ciSummary: undefined, headSha });
+      continue;
+    }
     const derived = deriveRequiredCIStatus(
       rollup.contexts?.nodes,
       rollup.contexts?.pageInfo?.hasNextPage ?? false,
       rollup.state
     );
-    out.set(num, { ciStatus: derived.ciStatus, ciSummary: derived.ciSummary });
+    out.set(num, {
+      ciStatus: derived.ciStatus,
+      ciSummary: derived.ciSummary,
+      ...(headSha ? { headSha } : {}),
+    });
   }
   return out;
 }
