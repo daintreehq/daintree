@@ -160,6 +160,45 @@ function fleet(runIds: string[]): FleetSnapshot {
   };
 }
 
+/** A described approval, answerable from the list by its number. */
+function approvalCard(runId: string): CanopySnapshot["cards"][number] {
+  return {
+    runId,
+    spawnedAt: NOW - 3_600_000,
+    revision: 2,
+    category: "approval",
+    confidence: 0.9,
+    attentionProbability: 0.9,
+    attentionScore: 95,
+    priority: 95,
+    stage: "described",
+    wordsFromEarlierRead: false,
+    priorityFromEarlierRead: false,
+    wordsCategory: "approval",
+    describing: false,
+    task: null,
+    headline: "Wants to run the migration",
+    summary: null,
+    question: "Do you want to proceed?",
+    options: ["Yes", "No"],
+    secretPrompt: false,
+    risk: "none",
+    riskReason: null,
+    action: null,
+    progress: null,
+    steps: null,
+    tests: "unknown",
+    changes: "unknown",
+    handledAt: null,
+    activity: null,
+    glance: { recap: null, said: null, doing: null, action: null },
+    statusLine: null,
+    contextLeft: null,
+    stalledSince: null,
+    observedAt: NOW + 10_000,
+  };
+}
+
 let remoteCanopy: CanopySnapshot = canopySnapshot();
 let remoteFleet: FleetSnapshot | null = fleet(["remote-run"]);
 
@@ -317,26 +356,41 @@ describe("the Canopy host picker", () => {
     expect(screen.queryByRole("radiogroup", { name: "Agents to show" })).toBeNull();
   });
 
-  it("offers only what reaches the run's own host", async () => {
+  it("shows another host's run live and answers it there, going nowhere on this host", async () => {
     const own = installElectron();
+    remoteCanopy = canopySnapshot({ cards: [approvalCard("remote-run")] });
     useCanopyStore.setState({ hostId: "studio" });
     render(<CanopyView />);
     await settle();
     const row = document.getElementById("canopy-card-remote-run")!;
-    // Its reading, never its terminal or a reply.
-    expect(document.querySelector("[data-canopy-terminal]")).toBeNull();
-    expect(document.querySelector("[data-canopy-reading]")).not.toBeNull();
+    // Its live terminal, read from that host.
+    expect(document.querySelector('[data-canopy-terminal][data-run="remote-run"]')).not.toBeNull();
+    // Going to it, renaming it and trashing it would act on this window's host.
+    expect(screen.queryByRole("button", { name: "Go to terminal" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Trash terminal" })).toBeNull();
 
+    act(() => row.focus());
     fireEvent.keyDown(row, { key: "Enter" });
     fireEvent.keyDown(row, { key: "F2" });
-    fireEvent.keyDown(row, { key: "1" });
     fireEvent.keyDown(row, { key: "Backspace", metaKey: true });
     fireEvent.doubleClick(row);
     await settle();
     expect(state.dispatch).not.toHaveBeenCalled();
-    expect(own.answer).not.toHaveBeenCalled();
     expect(own.trash).not.toHaveBeenCalled();
     expect(own.rename).not.toHaveBeenCalled();
+
+    await act(async () => {
+      fireEvent.keyDown(row, { key: "1" });
+    });
+    await settle();
+    expect(state.invoke).toHaveBeenCalledWith(
+      "studio",
+      "canopy:answer",
+      "remote-run",
+      { spawnedAt: NOW - 3_600_000 },
+      "Yes"
+    );
+    expect(own.answer).not.toHaveBeenCalled();
 
     fireEvent.keyDown(row, { key: "e" });
     await settle();
@@ -347,6 +401,22 @@ describe("the Canopy host picker", () => {
       expect.objectContaining({ spawnedAt: NOW - 3_600_000 })
     );
     expect(own.archive).not.toHaveBeenCalled();
+  });
+
+  it("presses no answer into another host's run while the link to it is down", async () => {
+    installElectron();
+    // Its agents were read; the link has dropped since.
+    state.hosts = [host("studio", "studio-01", { status: "connecting", attempt: 1 })];
+    remoteCanopy = canopySnapshot({ cards: [approvalCard("remote-run")] });
+    useCanopyStore.setState({ hostId: "studio" });
+    render(<CanopyView />);
+    await settle();
+    const row = document.getElementById("canopy-card-remote-run")!;
+    act(() => row.focus());
+    await act(async () => {
+      fireEvent.keyDown(row, { key: "1" });
+    });
+    expect(channelsCalled()).not.toContain("studio canopy:answer");
   });
 
   it("keeps the picked host's order apart from this host's", async () => {

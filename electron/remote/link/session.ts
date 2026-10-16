@@ -145,6 +145,10 @@ function flowOf(message: LinkMessage): string | undefined {
   ) {
     return terminalFlow(message.body.endpointId, message.body.terminalId);
   }
+  // One stream per viewer, so it takes turns as one more terminal.
+  if (message.lane === Lane.INTERACTIVE && message.kind === InteractiveKind.CANOPY_TERMINAL) {
+    return message.body.endpointId;
+  }
   return undefined;
 }
 

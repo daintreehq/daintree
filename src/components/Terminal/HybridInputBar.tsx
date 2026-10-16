@@ -165,6 +165,14 @@ export interface HybridInputBarProps {
    */
   isolated?: boolean;
   /**
+   * The terminal is on another host than this window's (Canopy reading it):
+   * that host's id. Nothing of this machine's — a file, an image, a path from
+   * completion, a diff or a screen expanded at send — is offered or sent,
+   * since it would name something that isn't there; text is typed as text.
+   * Its draft and history are that host's, apart from this one's.
+   */
+  otherHostId?: string;
+  /**
    * Sends the composer's text and says whether the terminal took it, in place
    * of the fire-and-forget `onSend`: the draft is cleared and kept in history
    * only once it resolves `true`, so a refused send leaves the text in place.
@@ -279,11 +287,13 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
       followsDriver = false,
       className,
       isolated = false,
+      otherHostId,
       submitText,
       selected,
     },
     ref
   ) => {
+    const thisMachineOff = otherHostId !== undefined;
     const submitTextRef = useRef(submitText);
     useEffect(() => {
       submitTextRef.current = submitText;
@@ -298,7 +308,11 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
     // An isolated composer types to a terminal that may live in another
     // project, beside that terminal's own composer: its draft and history are
     // its own, so neither leaks into the pane's (or, through it, the fleet's).
-    const projectId = isolated ? ISOLATED_COMPOSER_SCOPE : currentProjectId;
+    const projectId = isolated
+      ? thisMachineOff
+        ? `${ISOLATED_COMPOSER_SCOPE}:${otherHostId}`
+        : ISOLATED_COMPOSER_SCOPE
+      : currentProjectId;
     const isInHistoryMode = useTerminalInputStore((s) => {
       const key = projectId ? `${projectId}:${terminalId}` : terminalId;
       return (s.historyIndex.get(key) ?? -1) !== -1;
@@ -357,7 +371,11 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
     const pickerOwnerId = useId();
     const currentProject = useProjectStore((s) => s.currentProject);
     const voiceStatus = useVoiceRecordingStore((s) => s.status);
-    const activeVoicePanelId = useVoiceRecordingStore((s) => s.activeTarget?.panelId ?? null);
+    // Dictation lands in a draft of this machine's project, by terminal id:
+    // never one for a terminal on another host.
+    const activeVoicePanelId = useVoiceRecordingStore((s) =>
+      thisMachineOff ? null : (s.activeTarget?.panelId ?? null)
+    );
     const voiceMicSignal = useVoiceRecordingStore((s) => s.micSignal);
     const externalDraftRevision = useTerminalInputStore((s) => s.externalDraftRevision);
     const panelWorktreeId = usePanelStore((s) => s.panelsById[terminalId]?.worktreeId);
@@ -439,14 +457,22 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
     // Layout phase: a native drop can arrive after a commit that disabled the
     // bar but before passive effects run, and must not be taken then.
     const disabledRef = useRef(disabled);
+    const thisMachineOffRef = useRef(thisMachineOff);
     useLayoutEffect(() => {
       disabledRef.current = disabled;
-    }, [disabled]);
+      thisMachineOffRef.current = thisMachineOff;
+    }, [disabled, thisMachineOff]);
     // A bar that can't take the user's own typing (disabled, or read-only
-    // while a voice submission settles) takes no dropped files either.
+    // while a voice submission settles) takes no dropped files either, and
+    // nor does one typing to another host, where this machine's files aren't.
     const canTakeDrop = useCallback(() => {
       const view = editorViewRef.current;
-      return !!view && !disabledRef.current && view.state.facet(EditorView.editable);
+      return (
+        !!view &&
+        !disabledRef.current &&
+        !thisMachineOffRef.current &&
+        view.state.facet(EditorView.editable)
+      );
     }, []);
     const {
       handleDragEnter,
@@ -508,7 +534,8 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
 
     const { imagePasteExtension, filePasteExtension, plainPasteKeymap } = usePasteExtensions(
       cwd,
-      uploadSurface
+      uploadSurface,
+      thisMachineOff
     );
 
     useEffect(() => {
@@ -584,12 +611,14 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
     // completionSources — `/` and Daintree's `@` are always available; `$`
     // (Codex capabilities) is added only when the agent declares a `$` source.
     const activeTriggers = useMemo(() => {
+      // Every menu offers what this machine has: its files, its commands.
+      if (thisMachineOff) return new Set<CompletionTrigger>();
       const triggers = new Set<CompletionTrigger>(["/", "@"]);
       for (const source of agentId ? (getAgentConfig(agentId)?.completionSources ?? []) : []) {
         triggers.add(source.trigger);
       }
       return triggers;
-    }, [agentId]);
+    }, [agentId, thisMachineOff]);
 
     const triggerChar = activeCompletionContext?.triggerChar ?? null;
     // Which Daintree `@` provider claims the query (else `@file` fallback).
@@ -741,6 +770,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
       terminalId,
       cwd,
       agentId,
+      expandContext: !thisMachineOff,
     });
 
     // The outside-write revision the effect below last brought into the editor.
@@ -1416,13 +1446,30 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
                     menu, since a file can come from this machine or the host;
                     the root renders nothing, so a local window keeps a plain
                     button. */}
-                <DropdownMenu>
-                  <Tooltip>
-                    <TooltipTrigger asChild>
-                      {isRemote ? (
-                        <DropdownMenuTrigger asChild>
+                {!thisMachineOff && (
+                  <DropdownMenu>
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        {isRemote ? (
+                          <DropdownMenuTrigger asChild>
+                            <button
+                              type="button"
+                              disabled={disabled}
+                              className={cn(
+                                "flex items-center justify-center h-6 w-6 rounded-full transition-colors cursor-pointer",
+                                COMPOSER_CONTROL_TEXT_CLASS,
+                                COMPOSER_CONTROL_HOVER_BG_CLASS,
+                                COMPOSER_CONTROL_FOCUS_CLASS
+                              )}
+                              aria-label="Attach files"
+                            >
+                              <Paperclip className="h-3.5 w-3.5" />
+                            </button>
+                          </DropdownMenuTrigger>
+                        ) : (
                           <button
                             type="button"
+                            onClick={() => void handleAttachFiles()}
                             disabled={disabled}
                             className={cn(
                               "flex items-center justify-center h-6 w-6 rounded-full transition-colors cursor-pointer",
@@ -1434,37 +1481,22 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
                           >
                             <Paperclip className="h-3.5 w-3.5" />
                           </button>
-                        </DropdownMenuTrigger>
-                      ) : (
-                        <button
-                          type="button"
-                          onClick={() => void handleAttachFiles()}
-                          disabled={disabled}
-                          className={cn(
-                            "flex items-center justify-center h-6 w-6 rounded-full transition-colors cursor-pointer",
-                            COMPOSER_CONTROL_TEXT_CLASS,
-                            COMPOSER_CONTROL_HOVER_BG_CLASS,
-                            COMPOSER_CONTROL_FOCUS_CLASS
-                          )}
-                          aria-label="Attach files"
-                        >
-                          <Paperclip className="h-3.5 w-3.5" />
-                        </button>
-                      )}
-                    </TooltipTrigger>
-                    <TooltipContent side="top">Attach files</TooltipContent>
-                  </Tooltip>
-                  {isRemote && (
-                    <DropdownMenuContent align="end" side="top">
-                      <DropdownMenuItem onSelect={() => void handleAttachFiles()}>
-                        {isMac() ? "From this Mac…" : "From this computer…"}
-                      </DropdownMenuItem>
-                      <DropdownMenuItem onSelect={() => void handleAttachFromHost()}>
-                        {`From ${hostPlatform.hostName ?? "the host"}…`}
-                      </DropdownMenuItem>
-                    </DropdownMenuContent>
-                  )}
-                </DropdownMenu>
+                        )}
+                      </TooltipTrigger>
+                      <TooltipContent side="top">Attach files</TooltipContent>
+                    </Tooltip>
+                    {isRemote && (
+                      <DropdownMenuContent align="end" side="top">
+                        <DropdownMenuItem onSelect={() => void handleAttachFiles()}>
+                          {isMac() ? "From this Mac…" : "From this computer…"}
+                        </DropdownMenuItem>
+                        <DropdownMenuItem onSelect={() => void handleAttachFromHost()}>
+                          {`From ${hostPlatform.hostName ?? "the host"}…`}
+                        </DropdownMenuItem>
+                      </DropdownMenuContent>
+                    )}
+                  </DropdownMenu>
+                )}
                 {hasStash && (
                   <Tooltip>
                     <TooltipTrigger asChild>
@@ -1599,7 +1631,9 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
         </AppDialog>
         {/* One palette per id: while Canopy is open its own composer's is the
             one, not the grid pane's behind it. */}
-        {((isFocusedTerminal && !canopyOpen) || isolated) && (
+        {/* History spans this machine's projects, whose prompts name its files:
+            none is offered for a terminal on another host. */}
+        {((isFocusedTerminal && !canopyOpen) || (isolated && !thisMachineOff)) && (
           <PromptHistoryPalette
             terminalId={terminalId}
             projectId={projectId}

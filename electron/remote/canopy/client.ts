@@ -151,6 +151,14 @@ export class CanopyHostsClient {
       throw invalid(`${String(channel)} can't be called on another host's Canopy`);
     }
     if (!Array.isArray(args)) throw invalid("args must be an array");
+    // Ending a watch on a host the view no longer reads: nothing is open there
+    // to end, and subscribing to say so would open it again.
+    if (
+      channel === "canopy:unwatch-terminal" &&
+      !this.views.get(webContentsId)?.hosts.has(target)
+    ) {
+      return undefined;
+    }
     const sub = this.subscribe(webContentsId, target);
     if (isLocalHostId(target)) {
       const envelope = await this.options.local.invoke(
@@ -185,6 +193,7 @@ export class CanopyHostsClient {
       viewerId: sub.viewerId,
       channel,
       args,
+      interactive: true,
     });
     if (!isIpcEnvelope(answer)) {
       throw new AppError({ code: "INTERNAL", message: `Host ${target} sent an invalid answer` });

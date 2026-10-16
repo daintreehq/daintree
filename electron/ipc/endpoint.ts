@@ -19,6 +19,18 @@ export interface ClientRef {
 export const LOCAL_CLIENT_ID = "local";
 
 /**
+ * The endpoint id of a Canopy panel reading this machine from a view bound
+ * elsewhere: a remote Shell's panel, or one of this Shell's remote-bound views
+ * reading This Mac. Ordinary remote endpoints are namespaced by their session,
+ * so none can take this form.
+ */
+export const CANOPY_VIEWER_ENDPOINT_PREFIX = "canopy-viewer:";
+
+export function isCanopyViewerEndpointId(endpointId: string): boolean {
+  return endpointId.startsWith(CANOPY_VIEWER_ENDPOINT_PREFIX);
+}
+
+/**
  * What a Host pushes to one endpoint. Terminal bytes do not travel as frames;
  * they ride the terminal stream bridge on the interactive lane. Requests that
  * need an answer go through {@link ClientEndpoint.request}.

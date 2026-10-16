@@ -44,6 +44,7 @@ import {
 import { KIND_LABEL } from "./CanopyRow";
 import { CanopyTerminal, type CanopyStreamState } from "./CanopyTerminal";
 import { CanopyTitle } from "./CanopyTitle";
+import { ownCanopyTerminalApi, type CanopyTerminalApi } from "./canopyHostSource";
 
 const LazyHybridInputBar = lazy(() =>
   import("@/components/Terminal/HybridInputBar").then((m) => ({ default: m.HybridInputBar }))
@@ -107,6 +108,17 @@ interface CanopyCardProps extends CanopyCardHandlers {
   armTrash?: number;
   /** A rename asked for from the row (its menu, or F2): each new number is a new request. */
   renameRequest?: number;
+  /**
+   * The run is on a host other than the window's, picked in the panel: the
+   * id of that host. Its terminal, reply and answers reach it there; going to
+   * it, renaming and trashing don't, and nothing of this machine's files is
+   * offered to it.
+   */
+  otherHostId?: string;
+  /** The run's host's Canopy; the window's own by default. */
+  terminalApi?: CanopyTerminalApi;
+  /** The link to the run's host is down: nothing is typed or answered until it is back. */
+  reconnecting?: boolean;
 }
 
 /**
@@ -199,7 +211,11 @@ export function CanopyCard({
   onInitialFocusSettled,
   armTrash,
   renameRequest,
+  otherHostId,
+  terminalApi = ownCanopyTerminalApi,
+  reconnecting = false,
 }: CanopyCardProps) {
+  const otherHost = otherHostId !== undefined;
   const [stream, setStream] = useState<CanopyStreamState>({
     watchId: null,
     ended: false,
@@ -211,7 +227,7 @@ export function CanopyCard({
   const { row } = item;
   const run = row.run;
   const canReply = canReplyTo(item, stream.secretPrompt);
-  const canTrash = canTrashItem(item);
+  const canTrash = !otherHost && canTrashItem(item);
   const archived = itemArchived(item);
   const looksDone = itemLooksDone(item);
   const sectionRef = useRef<HTMLElement>(null);
@@ -385,7 +401,8 @@ export function CanopyCard({
             : null;
       if (label !== null) {
         event.preventDefault();
-        if (event.repeat) return true;
+        // Nothing is pressed into a screen this panel can't see.
+        if (event.repeat || reconnecting) return true;
         const confirms = armedAnswer?.digit === digit && armedAnswer.label === label;
         if (digit !== null && answerNeedsConfirm(item) && !confirms) {
           setAnswerArmed({ label, digit, target: trashTarget });
@@ -505,7 +522,7 @@ export function CanopyCard({
     const watchId = stream.watchId;
     if (watchId === null) return false;
     try {
-      await window.electron.canopy.terminalSubmit(
+      await terminalApi.terminalSubmit(
         watchId,
         text,
         imagePaths && imagePaths.length > 0 ? [...imagePaths] : undefined
@@ -552,11 +569,15 @@ export function CanopyCard({
               brandColor={row.presetColor ?? row.chrome.color}
             />
           </span>
-          <CanopyTitle
-            title={row.title}
-            onRename={(title) => onRename(item, title)}
-            renameRequest={renameRequest}
-          />
+          {otherHost ? (
+            <span className="min-w-0 truncate font-medium text-text-primary">{row.title}</span>
+          ) : (
+            <CanopyTitle
+              title={row.title}
+              onRename={(title) => onRename(item, title)}
+              renameRequest={renameRequest}
+            />
+          )}
           {/* The readers think it is finished and Daintree sees it stopped:
               said in the title bar rather than over the terminal — where it
               would hide the agent's own report, or resize the agent if it took
@@ -610,9 +631,11 @@ export function CanopyCard({
           <span id={`${domId}-trash-confirm`} role="status" className="sr-only">
             {trashArmed ? "Press Trash terminal again to trash it" : ""}
           </span>
-          <HeaderControl label="Go to terminal" onClick={() => onOpen(item)}>
-            <SquareArrowOutUpRight aria-hidden="true" />
-          </HeaderControl>
+          {!otherHost && (
+            <HeaderControl label="Go to terminal" onClick={() => onOpen(item)}>
+              <SquareArrowOutUpRight aria-hidden="true" />
+            </HeaderControl>
+          )}
         </div>
         {/* The agent's state chip, in the reserved box at the far right where every agent pane keeps it. */}
         {agentId !== undefined && (
@@ -655,9 +678,11 @@ export function CanopyCard({
           key={`${item.runId}:${run.spawnedAt}`}
           runId={item.runId}
           spawnedAt={run.spawnedAt}
+          api={terminalApi}
+          reconnecting={reconnecting}
           onStreamChange={setStream}
           onSubmitted={() => onSent(item, "terminal")}
-          onGoTo={() => onOpen(item)}
+          onGoTo={otherHost ? undefined : () => onOpen(item)}
         />
         {canReply ? (
           <div ref={replyHostRef} data-keybindings-isolated="" className="contents">
@@ -665,8 +690,9 @@ export function CanopyCard({
               <LazyHybridInputBar
                 ref={composerRef}
                 isolated
+                otherHostId={otherHostId}
                 terminalId={item.runId}
-                cwd={run.cwd ?? ""}
+                cwd={otherHost ? "" : (run.cwd ?? "")}
                 agentId={agentId}
                 agentState={run.agentState}
                 disabled={stream.watchId === null}
@@ -682,7 +708,7 @@ export function CanopyCard({
                   }
                   const watchId = stream.watchId;
                   if (watchId === null) return;
-                  window.electron.canopy.terminalSendKey(watchId, key).then(
+                  terminalApi.terminalSendKey(watchId, key).then(
                     // Only Enter answers anything; arrows and Escape steer the
                     // agent's own menu and must not move the panel on.
                     () => {

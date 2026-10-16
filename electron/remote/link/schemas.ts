@@ -151,6 +151,11 @@ const ReverseRequestSchema = z.object({
 const CallSchema = z.object({ requestId: u32, method: channel, payload: z.unknown() });
 
 const EventSchema = z.object({ endpointId: id.nullable(), channel, args });
+const CanopyTerminalSchema = z.object({
+  endpointId: id,
+  channel: z.literal("canopy:terminal-data"),
+  args: z.tuple([z.unknown()]),
+});
 
 const TerminalOutSchema = z.object({
   endpointId: id,
@@ -227,6 +232,7 @@ const BODY_SCHEMAS: Record<number, Record<number, z.ZodType>> = {
     [InteractiveKind.TERMINAL_IN]: PortMessageSchema,
     [InteractiveKind.TERMINAL_RESET]: TerminalResetSchema,
     [InteractiveKind.WORKTREE_PORT]: PortMessageSchema,
+    [InteractiveKind.CANOPY_TERMINAL]: CanopyTerminalSchema,
   },
   [Lane.BULK]: {
     [BulkKind.TRANSFER_BEGIN]: TransferBeginSchema,

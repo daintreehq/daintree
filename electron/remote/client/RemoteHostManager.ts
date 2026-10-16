@@ -9,12 +9,13 @@ import { AppError } from "../../utils/errorTypes.js";
 import { createLogger } from "../../utils/logger.js";
 import { formatErrorMessage } from "../../../shared/utils/errorMessage.js";
 import { acceptHostPush } from "../hybrid/eventsPush.js";
-import { CANOPY_VIEWER_ENDPOINT_PREFIX } from "../canopy/linkMethods.js";
+import { CANOPY_VIEWER_ENDPOINT_PREFIX, isCanopyViewerEndpointId } from "../canopy/linkMethods.js";
 import { appErrorEnvelope, hostDisconnectedEnvelope } from "../link/envelopes.js";
 import { Lane } from "../link/frames.js";
 import {
   ControlKind,
   EventKind,
+  InteractiveKind,
   type EventMessage,
   type LinkClientInfo,
   type ReverseRequestMessage,
@@ -603,6 +604,10 @@ export class HostConnection {
       }
     }
     session.on(Lane.EVENTS, EventKind.EVENT, (body) => this.deliver(body));
+    // Only a Canopy viewer's terminal rides this kind; anything else naming it is dropped.
+    session.on(Lane.INTERACTIVE, InteractiveKind.CANOPY_TERMINAL, (body) => {
+      if (isCanopyViewerEndpointId(body.endpointId)) this.deliver(body);
+    });
     // Every session, fresh or resumed: a resume is a new LinkSession, and one
     // without a handler answers the host UNSUPPORTED.
     session.setReverseRequestHandler((message) => this.reverseRequest(message));

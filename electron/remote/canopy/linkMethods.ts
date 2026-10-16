@@ -19,7 +19,7 @@ export const CanopyLinkMethod = {
  * endpoint: a Shell routes these to the view reading that host, never to the
  * views bound to it.
  */
-export const CANOPY_VIEWER_ENDPOINT_PREFIX = "canopy-viewer:";
+export { CANOPY_VIEWER_ENDPOINT_PREFIX, isCanopyViewerEndpointId } from "../../ipc/endpoint.js";
 
 /** The most args any allowed Canopy call takes, with room to spare. */
 export const MAX_CANOPY_INVOKE_ARGS = 8;
@@ -36,6 +36,12 @@ export const CanopyInvokePayloadSchema = z.object({
   viewerId,
   channel: z.enum(CANOPY_HOST_CHANNELS),
   args: z.array(z.unknown()).max(MAX_CANOPY_INVOKE_ARGS),
+  /**
+   * The Shell takes the viewer's terminal stream on the interactive lane. A
+   * Shell that never says so hears it as an event, as before: an interactive
+   * kind it doesn't know would end the link.
+   */
+  interactive: z.boolean().optional(),
 });
 export type CanopyInvokePayload = z.infer<typeof CanopyInvokePayloadSchema>;
 

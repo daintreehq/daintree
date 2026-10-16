@@ -50,6 +50,9 @@ import {
 import { CanopyHostsClient } from "../client.js";
 import { installCanopyHostWith } from "../host.js";
 import { CanopyViewers } from "../viewer.js";
+import { Lane } from "../../link/frames.js";
+import { InteractiveKind } from "../../link/messages.js";
+import { LinkSession } from "../../link/session.js";
 
 const VIEW = 21;
 const CHANNEL = "canopy:get-snapshot";
@@ -285,5 +288,32 @@ describe("Canopy on a host the view isn't bound to", () => {
       code: "VALIDATION",
     });
     expect(fake.calls).toEqual([]);
+  });
+
+  it("carries the watched terminal's stream across the link on the interactive lane", async () => {
+    const chunk = { kind: "data", watchId: 4, runId: "run-1", data: "hi", streamEnd: 2 };
+    const off = getIpcDispatcher().registerInvoke("canopy:watch-terminal", (ctx) => {
+      const { endpoint } = ctx as IpcContext;
+      endpoint.send({ type: "event", channel: "canopy:terminal-data", args: [chunk] });
+      return { watchId: 4, snapshot: null };
+    });
+    cleanups.push(off);
+    const post = vi.spyOn(LinkSession.prototype, "post");
+    cleanups.push(() => post.mockRestore());
+    const h = await startHost();
+    const shell = shellClient(h, () => null);
+    h.manager.connect(h.hostId);
+    await waitFor(() => h.manager.connectionState(h.hostId).status === "connected");
+
+    await shell.client.invoke(VIEW, h.hostId, "canopy:watch-terminal", ["run-1", { spawnedAt: 1 }]);
+    expect(post).toHaveBeenCalledWith(
+      expect.objectContaining({ lane: Lane.INTERACTIVE, kind: InteractiveKind.CANOPY_TERMINAL })
+    );
+
+    await waitFor(() => shell.sent.some(({ event }) => event.kind === "terminal-data"));
+    expect(shell.sent).toContainEqual({
+      webContentsId: VIEW,
+      event: { kind: "terminal-data", hostId: h.hostId, chunk },
+    });
   });
 });

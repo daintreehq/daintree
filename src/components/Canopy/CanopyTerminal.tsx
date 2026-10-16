@@ -20,6 +20,7 @@ import { streamRangeOf, stripCoveredOutput } from "@/services/terminal/streamFen
 import { isTerminalReply } from "@/services/terminal/inputUtils";
 import { logWarn } from "@/utils/logger";
 import { safeFireAndForget } from "@/utils/safeFireAndForget";
+import { ownCanopyTerminalApi, type CanopyTerminalApi } from "./canopyHostSource";
 
 const SCROLLBACK = 2_000;
 /** The smallest grid worth handing an agent; a smaller measure is a pane mid-layout. */
@@ -65,6 +66,13 @@ export interface CanopyStreamState {
 interface CanopyTerminalProps {
   runId: string;
   spawnedAt: number;
+  /** The host the run is on; the window's own by default. */
+  api?: CanopyTerminalApi;
+  /**
+   * The link to the run's host is down: the stream is gone with it, so input
+   * stops and the pane says so until the link's return opens it again.
+   */
+  reconnecting?: boolean;
   onStreamChange?: (state: CanopyStreamState) => void;
   /** Return was typed straight into the terminal and the run took it. */
   onSubmitted?: () => void;
@@ -94,6 +102,8 @@ interface CanopyTerminalProps {
 export function CanopyTerminal({
   runId,
   spawnedAt,
+  api = ownCanopyTerminalApi,
+  reconnecting = false,
   onStreamChange,
   onSubmitted,
   onGoTo,
@@ -110,7 +120,22 @@ export function CanopyTerminal({
   // The grid's own resolved setting, so a screen reader meets this terminal
   // exactly as it meets the same terminal in its pane.
   const screenReaderEnabled = useScreenReaderStore((s) => s.resolvedScreenReaderEnabled());
-  const [status, setStatus] = useState<"opening" | "live" | "failed" | "ended">("opening");
+  const [status, setStatus] = useState<"opening" | "live" | "failed" | "ended" | "reconnecting">(
+    "opening"
+  );
+  // The open stream's handles, for the link going down and coming back, and the user's Retry.
+  const suspendRef = useRef<(() => void) | null>(null);
+  const resumeRef = useRef<(() => void) | null>(null);
+  const reopenRef = useRef<((next: "reconnecting" | "opening") => void) | null>(null);
+  /**
+   * Each reopening starts the stream over on a new xterm: a reset one keeps
+   * its parser mid-sequence and its queued writes, which would land the fresh
+   * snapshot in the old screen's state.
+   */
+  const [generation, setGeneration] = useState(0);
+  const reopenStatusRef = useRef<"opening" | "reconnecting">("opening");
+  const refocusRef = useRef(false);
+  const reconnectingRef = useRef(reconnecting);
   // A full-screen TUI runs on the alternate buffer: like a grid pane, the view
   // then drops its inset and hides the scrollbar that buffer has no use for.
   const [altBuffer, setAltBuffer] = useState(false);
@@ -123,7 +148,8 @@ export function CanopyTerminal({
     const frame = frameRef.current;
     const host = hostRef.current;
     if (!frame || !host) return;
-    setStatus("opening");
+    setStatus(reopenStatusRef.current);
+    reopenStatusRef.current = "opening";
     let disposed = false;
     const stream: CanopyStreamState = { watchId: null, ended: false, secretPrompt: false };
     const publish = (next: Partial<CanopyStreamState>) => {
@@ -147,6 +173,13 @@ export function CanopyTerminal({
       cursorBlink: false,
     });
     terminal.open(host);
+    if (refocusRef.current) {
+      refocusRef.current = false;
+      // Unless the user has put the keyboard somewhere else meanwhile.
+      if (document.activeElement === null || document.activeElement === document.body) {
+        terminal.focus();
+      }
+    }
     terminalRef.current = terminal;
 
     let webgl: WebglAddon | undefined;
@@ -190,7 +223,8 @@ export function CanopyTerminal({
         sizeTimer = null;
         const watchId = stream.watchId;
         const cell = getXtermCellDimensions(terminal);
-        if (disposed || watchId === null || cell === null) return;
+        // Another host's terminal keeps the size its own window gave it.
+        if (disposed || watchId === null || cell === null || !api.holdsSize) return;
         // Fractional bounds, truncated, as the grid pane measures them: a
         // rounded-up clientWidth can promise a column the pane hasn't got.
         const box = frame.getBoundingClientRect();
@@ -203,7 +237,7 @@ export function CanopyTerminal({
         if (ptySize !== null && cols === ptySize.cols && rows === ptySize.rows) return;
         // Ahead of the PTY's echo, so output drawn for the new size lands on it.
         terminal.resize(cols, rows);
-        window.electron.canopy.terminalResize(watchId, cols, rows).catch((error: unknown) => {
+        api.terminalResize(watchId, cols, rows).catch((error: unknown) => {
           logWarn("[Canopy] couldn't size the terminal", { error });
           // Refused, so no echo is coming: back to the grid the PTY really has.
           if (!disposed && ptySize !== null) terminal.resize(ptySize.cols, ptySize.rows);
@@ -245,6 +279,8 @@ export function CanopyTerminal({
     };
 
     let view: CanopyTerminalView | null = null;
+    // A stream that opened while the link still read as down: shown, not typed into.
+    let heldWatchId: number | null = null;
     let releasePane: (() => void) | null = null;
     let fence: number | undefined;
     const early: CanopyTerminalData[] = [];
@@ -259,6 +295,7 @@ export function CanopyTerminal({
         return;
       }
       if (chunk.kind === "ended") {
+        heldWatchId = null;
         publish({ watchId: null, ended: true });
         setStatus("ended");
         return;
@@ -272,7 +309,7 @@ export function CanopyTerminal({
       if (paint.length === 0) return;
       terminal.write(paint, checkSecret);
     };
-    const offData = window.electron.canopy.onTerminalData((chunk) => {
+    const offData = api.onTerminalData((chunk) => {
       if (chunk.runId !== runId) return;
       // The stream can start before the call that opened it returns.
       if (view === null) early.push(chunk);
@@ -319,8 +356,10 @@ export function CanopyTerminal({
       // A reply to the program's own query, or a focus change, can fall
       // inside a gesture: the terminal's own pane answers those, and focus
       // here must never tell the agent it is being looked at.
-      if (!gesture || watchId === null || isTerminalReply(data)) return;
-      window.electron.canopy.terminalInput(watchId, data).then(
+      if (!gesture || watchId === null || isTerminalReply(data) || reconnectingRef.current) {
+        return;
+      }
+      api.terminalInput(watchId, data).then(
         () => {
           if (isTerminalSubmission(data)) onSubmittedRef.current?.();
         },
@@ -328,10 +367,67 @@ export function CanopyTerminal({
       );
     });
 
+    // Each opening of the stream; an answer to an earlier one is old news.
+    let attempt = 0;
+    let openTimer: ReturnType<typeof setTimeout> | null = null;
     const openStream = () => {
       lastWatchAt = performance.now();
-      window.electron.canopy.watchTerminal(runId, { spawnedAt }).then(onOpened, onOpenFailed);
+      const mine = ++attempt;
+      api.watchTerminal(runId, { spawnedAt }).then(
+        (opened) => {
+          if (mine === attempt) onOpened(opened);
+        },
+        (error: unknown) => {
+          if (mine === attempt) onOpenFailed(error);
+        }
+      );
     };
+    // The link dropped and the stream with it, and nothing has opened it since.
+    let suspended = false;
+    /**
+     * The stream is gone — the link to the run's host dropped — so nothing
+     * typed can reach it. Input stops at once, and nothing typed meanwhile is
+     * kept to be sent later: the screen it was typed at is not the one the
+     * agent will be showing.
+     */
+    const suspend = () => {
+      if (disposed || stream.ended) return;
+      suspended = true;
+      heldWatchId = null;
+      attempt++;
+      if (openTimer !== null) {
+        clearTimeout(openTimer);
+        openTimer = null;
+      }
+      view = null;
+      if (stream.watchId !== null) publish({ watchId: null });
+      setStatus("reconnecting");
+    };
+    /** Start again from a fresh snapshot of the screen, not from what was shown. */
+    const reopen = (next: "reconnecting" | "opening") => {
+      if (disposed || stream.ended) return;
+      disposed = true;
+      reopenStatusRef.current = next;
+      // Typing straight into the terminal carries on in the one that replaces it.
+      refocusRef.current = frame.contains(document.activeElement);
+      setGeneration((n) => n + 1);
+    };
+    suspendRef.current = suspend;
+    reopenRef.current = reopen;
+    // The link reads as up again: open again unless its `resync` already did,
+    // and let the user type into a stream that opened meanwhile.
+    resumeRef.current = () => {
+      if (stream.ended) return;
+      if (suspended) {
+        reopen("reconnecting");
+      } else if (heldWatchId !== null) {
+        const watchId = heldWatchId;
+        heldWatchId = null;
+        publish({ watchId });
+        setStatus("live");
+      }
+    };
+    const offResync = api.onResync(() => reopen("reconnecting"));
     const onOpened = (opened: CanopyTerminalView) => {
       if (disposed) return;
       if (opened.watchId === null || opened.snapshot === null) {
@@ -339,7 +435,10 @@ export function CanopyTerminal({
         return;
       }
       view = opened;
-      releasePane = terminalInstanceService.holdGeometry(runId);
+      // The pane in this view is frozen only for a terminal this view sizes.
+      if (api.holdsSize && releasePane === null) {
+        releasePane = terminalInstanceService.holdGeometry(runId);
+      }
       const snapshot = opened.snapshot;
       ptySize = { cols: snapshot.cols, rows: snapshot.rows };
       terminal.resize(snapshot.cols, snapshot.rows);
@@ -362,6 +461,10 @@ export function CanopyTerminal({
         for (const chunk of queued) if (chunk.kind !== "data") apply(chunk);
       }
       if (stream.ended) return;
+      if (reconnectingRef.current) {
+        heldWatchId = opened.watchId;
+        return;
+      }
       publish({ watchId: opened.watchId });
       setStatus("live");
       requestPanelSize();
@@ -371,7 +474,6 @@ export function CanopyTerminal({
       logWarn("[Canopy] couldn't open the terminal stream", { error });
       setStatus("failed");
     };
-    let openTimer: ReturnType<typeof setTimeout> | null = null;
     if (performance.now() - lastWatchAt < WATCH_BURST_MS) {
       openTimer = setTimeout(() => {
         openTimer = null;
@@ -383,7 +485,11 @@ export function CanopyTerminal({
 
     return () => {
       disposed = true;
+      if (suspendRef.current === suspend) suspendRef.current = null;
+      if (reopenRef.current === reopen) reopenRef.current = null;
+      resumeRef.current = null;
       if (openTimer !== null) clearTimeout(openTimer);
+      offResync();
       offData();
       input.dispose();
       bufferChange.dispose();
@@ -402,11 +508,22 @@ export function CanopyTerminal({
       // it took meanwhile lands after the one main restores, not before it.
       const release = releasePane;
       safeFireAndForget(
-        window.electron.canopy.unwatchTerminal().finally(() => release?.()),
+        api.unwatchTerminal().finally(() => release?.()),
         { context: "Ending the canopy terminal stream" }
       );
     };
-  }, [runId, spawnedAt]);
+  }, [runId, spawnedAt, api, generation]);
+
+  // The link's return also says `resync`, which opens the stream again; this
+  // covers a link that came back without a fresh session to say it.
+  const wasReconnectingRef = useRef(reconnecting);
+  useEffect(() => {
+    const was = wasReconnectingRef.current;
+    wasReconnectingRef.current = reconnecting;
+    reconnectingRef.current = reconnecting;
+    if (reconnecting) suspendRef.current?.();
+    else if (was) resumeRef.current?.();
+  }, [reconnecting]);
 
   useEffect(() => {
     const terminal = terminalRef.current;
@@ -433,7 +550,18 @@ export function CanopyTerminal({
           edge, in the gutter the grid was measured to leave, not over the last
           column; wider when the PTY is, and the frame scrolls. */}
       <div ref={hostRef} className="min-w-full shrink-0" />
-      {(status === "failed" || status === "ended") && (
+      {(status === "reconnecting" || reconnecting) && status !== "ended" && (
+        <div
+          role="status"
+          data-canopy-reconnecting=""
+          className="absolute inset-x-0 top-3 flex justify-center text-xs text-text-secondary"
+        >
+          <p className="rounded-full bg-surface-panel px-2.5 py-1 shadow-[var(--theme-shadow-ambient)]">
+            Reconnecting…
+          </p>
+        </div>
+      )}
+      {(status === "failed" || status === "ended") && !reconnecting && (
         <div
           role="status"
           className="absolute inset-x-0 top-3 flex flex-col items-center gap-2 text-center text-xs text-text-secondary"
@@ -443,9 +571,14 @@ export function CanopyTerminal({
           ) : (
             <>
               <p>Couldn't show this terminal here</p>
-              {onGoTo && (
+              {onGoTo ? (
                 <Button variant="outline" size="xs" onClick={onGoTo}>
                   Go to terminal
+                </Button>
+              ) : (
+                // Another host's run has no pane of this window's to go to.
+                <Button variant="outline" size="xs" onClick={() => reopenRef.current?.("opening")}>
+                  Retry
                 </Button>
               )}
             </>

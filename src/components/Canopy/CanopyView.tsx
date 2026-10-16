@@ -67,8 +67,13 @@ import { CANOPY_BETA_TERMS, CANOPY_TITLE, CANOPY_WAITLIST_URL } from "./canopyTe
 import { useListReorderMotion } from "./useListReorderMotion";
 import { CanopyHeaderCenter, CanopyHostPicker, useCanopyHostRows } from "./CanopyHostPicker";
 import { CanopyHostOffer } from "./CanopyHostOffer";
-import { CanopyReadingPane } from "./CanopyReadingPane";
-import { ownCanopyApi, remoteCanopyApi, useRemoteCanopy } from "./canopyHostSource";
+import {
+  ownCanopyApi,
+  ownCanopyTerminalApi,
+  remoteCanopyApi,
+  remoteCanopyTerminalApi,
+  useRemoteCanopy,
+} from "./canopyHostSource";
 import { canopyOwnHostId, type CanopyScope } from "@/store/canopyStore";
 import { retryHostProjects, useHostProjectLists } from "@/components/Hosts/hostProjects";
 import { describeHostMenuState, type HostMenuRow } from "@/components/Hosts/hostModel";
@@ -389,7 +394,7 @@ interface ShortcutRow {
  * Every key the panel answers to, one press away instead of always on screen,
  * grouped by where the keyboard is: the pane's keys are the agent's.
  */
-function CanopyShortcuts({ readingOnly = false }: { readingOnly?: boolean }) {
+function CanopyShortcuts({ otherHost = false }: { otherHost?: boolean }) {
   const step = isMac() ? "Cmd" : "Alt";
   // How to get here again: the user's own binding, and double-Shift while on.
   const toggle = useEffectiveCombo("canopy.toggle");
@@ -412,26 +417,22 @@ function CanopyShortcuts({ readingOnly = false }: { readingOnly?: boolean }) {
         { keys: ["ArrowUp", "ArrowDown"], label: "Move" },
         { keys: ["J", "K"], label: "Move down or up" },
         { keys: ["Home", "End"], label: "First or last agent" },
-        // Another host's runs are read here, not answered or gone to.
-        ...(readingOnly
-          ? []
-          : [
-              { keys: ["Enter"], label: "Go to terminal" },
-              {
-                keys: ["1", "9"],
-                range: true,
-                label: "Answer with that choice (twice when it's risky)",
-              },
-              { keys: ["Y"], label: "Take the first choice, when it's read as safe" },
-              { keys: ["R"], label: "Reply" },
-            ]),
+        // Another host's runs are answered here, but not gone to.
+        ...(otherHost ? [] : [{ keys: ["Enter"], label: "Go to terminal" }]),
+        {
+          keys: ["1", "9"],
+          range: true,
+          label: "Answer with that choice (twice when it's risky)",
+        },
+        { keys: ["Y"], label: "Take the first choice, when it's read as safe" },
+        { keys: ["R"], label: "Reply" },
         { keys: ["E"], label: "Archive, or move back to the inbox" },
-        ...(readingOnly ? [] : [{ keys: ["F2"], label: "Rename" }]),
+        ...(otherHost ? [] : [{ keys: ["F2"], label: "Rename" }]),
         { keys: ["U"], label: "Mark as read or unread" },
         { keys: ["Alt+U"], label: "Mark all as read" },
         { keys: ["Z"], label: "Undo" },
         { keys: ["Shift+F10"], label: "More actions" },
-        ...(readingOnly
+        ...(otherHost
           ? []
           : [{ keys: ["Cmd+Backspace"], label: "Trash, pressed twice; Z takes it back" }]),
         { keys: ["Escape"], label: "Close" },
@@ -440,22 +441,20 @@ function CanopyShortcuts({ readingOnly = false }: { readingOnly?: boolean }) {
     },
     {
       heading: "In a reply or the terminal",
-      rows: readingOnly
-        ? []
-        : [
-            { keys: [`${step}+ArrowUp`, `${step}+ArrowDown`], label: "Next agent" },
-            { keys: ["Enter"], label: "In a reply: send, then move to the next agent" },
-            { keys: ["Shift+Enter"], label: "New line in a reply" },
-            { keys: ["Escape"], label: "Back to the list from a reply" },
-            ...(paneClose
-              ? [
-                  {
-                    keys: [paneClose],
-                    label: isMac() ? "Close Canopy" : "In a reply: close Canopy",
-                  },
-                ]
-              : []),
-          ],
+      rows: [
+        { keys: [`${step}+ArrowUp`, `${step}+ArrowDown`], label: "Next agent" },
+        { keys: ["Enter"], label: "In a reply: send, then move to the next agent" },
+        { keys: ["Shift+Enter"], label: "New line in a reply" },
+        { keys: ["Escape"], label: "Back to the list from a reply" },
+        ...(paneClose
+          ? [
+              {
+                keys: [paneClose],
+                label: isMac() ? "Close Canopy" : "In a reply: close Canopy",
+              },
+            ]
+          : []),
+      ],
     },
   ];
   return (
@@ -532,6 +531,10 @@ function CanopyInbox({
   const hostName = hostRow?.name ?? hostId ?? "";
   const remote = useRemoteCanopy(hostId, isOpen);
   const api = useMemo(() => (hostId === null ? ownCanopyApi : remoteCanopyApi(hostId)), [hostId]);
+  const terminalApi = useMemo(
+    () => (hostId === null ? ownCanopyTerminalApi : remoteCanopyTerminalApi(hostId)),
+    [hostId]
+  );
   const ownCanopy = useCanopyStore((s) => s.snapshot);
   const ownFleet = useFleetSnapshotStore((s) => s.snapshot);
   const canopy = otherHost ? remote.canopy : ownCanopy;
@@ -838,9 +841,12 @@ function CanopyInbox({
       mountedRef.current = false;
     };
   }, []);
+  // The host the list shows: two hosts can each have a run under the same id.
+  const listHostRef = useRef(hostId);
   useEffect(() => {
     visibleRef.current = visible;
     selectedRef.current = focusedItem?.runId ?? null;
+    listHostRef.current = hostId;
   });
   const bodyRef = useRef<HTMLDivElement>(null);
   // Anything the user does in the panel holds the list still for a while, and
@@ -1230,7 +1236,13 @@ function CanopyInbox({
         if (via === "terminal") return;
         // The user moved to another run while the reply was on its way, or
         // closed the panel: their choice stands.
-        if (!mountedRef.current || selectedRef.current !== item.runId) return;
+        if (
+          !mountedRef.current ||
+          listHostRef.current !== hostId ||
+          selectedRef.current !== item.runId
+        ) {
+          return;
+        }
         // Replied from the composer: on to the next run that needs you, into
         // its composer, as Send moves on in a mail queue. The answered one
         // leaves the queue when main's handled reading lands.
@@ -1285,21 +1297,38 @@ function CanopyInbox({
           )
         );
       },
-      onSendFailed: (item, error) => failToast("Couldn't send to agent", error, goTo(item)),
-      onAnswer: (item, label) => {
-        // Answering reaches only the window's own host.
-        if (otherHost) return;
+      onSendFailed: (item, error) =>
+        failToast(
+          "Couldn't send to agent",
+          error,
+          // The reply is still in its composer, on the run's own host.
+          otherHost
+            ? { label: "Reply", onClick: () => openPaneNow(item.runId, "composer") }
+            : goTo(item)
+        ),
+      onAnswer: function answer(item, label) {
         readNow(item);
         // On to the next run that needs you, as a reply from the composer does —
         // on its row, where the next answer is one key away.
         const next = nextAfter(item.runId);
         safeFireAndForget(
-          window.electron.canopy.answer(item.runId, target(item), label).then(
+          terminalApi.answer(item.runId, target(item), label).then(
             () => {
-              if (!mountedRef.current || selectedRef.current !== item.runId) return;
+              if (
+                !mountedRef.current ||
+                listHostRef.current !== hostId ||
+                selectedRef.current !== item.runId
+              ) {
+                return;
+              }
               if (next && next.runId !== item.runId) focusCardNow(next.runId);
             },
-            (error: unknown) => failToast("Couldn't answer", error, goTo(item))
+            (error: unknown) =>
+              failToast(
+                "Couldn't answer",
+                error,
+                recover(item, () => answer(item, label))
+              )
           )
         );
       },
@@ -1363,7 +1392,9 @@ function CanopyInbox({
     reserveUndo,
     undoReads,
     api,
+    terminalApi,
     otherHost,
+    hostId,
   ]);
 
   /** U: read or unread, by hand. Z takes it back. */
@@ -1532,24 +1563,15 @@ function CanopyInbox({
     // Keys aimed at the list's selected row act on the selected agent.
     const selected = visible[activeIndex];
     if (!selected) return;
-    // Another host's run: only what reaches that host. Enter and F2 would act
-    // on the window's own, and there is no pane to take the rest.
-    if (otherHost) {
-      if (event.key === "e" || event.key === "E") {
-        event.preventDefault();
-        if (!event.repeat) handlers.onArchive(selected);
-      } else if ((event.key === "u" || event.key === "U") && !event.shiftKey) {
-        event.preventDefault();
-        if (!event.repeat) toggleRead(selected);
-      }
-      return;
-    }
+    // Another host's run: Enter and F2 would act on the window's own, so they
+    // do nothing; its pane takes the rest, as it does here.
     if (event.key === "Enter") {
       event.preventDefault();
-      handlers.onOpen(selected);
+      if (!otherHost) handlers.onOpen(selected);
       return;
     }
     if (event.key === "F2") {
+      if (otherHost) return;
       event.preventDefault();
       askRename(selected);
       return;
@@ -1619,7 +1641,7 @@ function CanopyInbox({
       focusCardNow(item.runId);
       setTrashArm((arm) => ({ runId: item.runId, request: (arm?.request ?? 0) + 1 }));
     },
-    readingOnly: otherHost,
+    otherHost,
     onOpenChange: (open) => {
       menuOpenRef.current = open;
       if (open) return;
@@ -1729,7 +1751,7 @@ function CanopyInbox({
           ]}
         />
       )}
-      <CanopyShortcuts readingOnly={otherHost} />
+      <CanopyShortcuts otherHost={otherHost} />
       <Tooltip>
         <TooltipTrigger asChild>
           <Button
@@ -1953,7 +1975,6 @@ function CanopyInbox({
                             onClick={() => readNow(item)}
                             onOpen={() => handlers.onOpen(item)}
                             onArchive={() => handlers.onArchive(item)}
-                            readingOnly={otherHost}
                           />
                         </CanopyRowMenu>
                       );
@@ -2006,7 +2027,6 @@ function CanopyInbox({
                               onClick={() => readNow(item)}
                               onOpen={() => handlers.onOpen(item)}
                               onArchive={() => handlers.onArchive(item)}
-                              readingOnly={otherHost}
                             />
                           </CanopyRowMenu>
                         ))}
@@ -2026,17 +2046,9 @@ function CanopyInbox({
                   runBranch={api.runBranch}
                 />
               )}
-              {focusedItem && otherHost ? (
-                <CanopyReadingPane
-                  key={focusedItem.runId}
-                  item={focusedItem}
-                  domId={`canopy-detail-${focusedItem.runId}`}
-                  describedBy={`canopy-place-${focusedItem.runId}`}
-                  hostName={hostName}
-                />
-              ) : focusedItem ? (
+              {focusedItem ? (
                 <CanopyCard
-                  key={focusedItem.runId}
+                  key={`${hostId ?? ""}:${focusedItem.runId}`}
                   ref={detailRef}
                   item={focusedItem}
                   domId={`canopy-detail-${focusedItem.runId}`}
@@ -2051,6 +2063,9 @@ function CanopyInbox({
                       current?.runId === focusedItem.runId ? null : current
                     )
                   }
+                  otherHostId={hostId ?? undefined}
+                  terminalApi={terminalApi}
+                  reconnecting={otherHost && linkStatus !== undefined && linkStatus !== "connected"}
                   {...handlers}
                 />
               ) : (

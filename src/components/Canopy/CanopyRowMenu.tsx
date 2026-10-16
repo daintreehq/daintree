@@ -25,11 +25,11 @@ export interface CanopyRowMenuActions {
   /** The menu opened or closed: the list holds still while it is open. */
   onOpenChange: (open: boolean) => void;
   /**
-   * The run is on another host: only what that host's Canopy can do from here
-   * is offered. Going to its terminal, replying, renaming and trashing act on
-   * the window's own host, so they are left out until they can reach the run's.
+   * The run is on another host. Replying reaches it there; going to its
+   * terminal, renaming and trashing act on the window's own host, so they are
+   * left out until they can reach the run's.
    */
-  readingOnly?: boolean;
+  otherHost?: boolean;
 }
 
 /**
@@ -43,7 +43,7 @@ export function CanopyRowMenu({
   ...actions
 }: CanopyRowMenuActions & { item: CanopyItem; children: ReactNode }) {
   const archived = itemArchived(item);
-  const readingOnly = actions.readingOnly === true;
+  const otherHost = actions.otherHost === true;
   const trashChord = isMac() ? "Meta+Backspace" : "Control+Backspace";
   // Rename and Reply send focus into the pane on purpose — the run's name
   // field, or its composer: the menu closing must not hand it back to the row
@@ -62,13 +62,13 @@ export function CanopyRowMenu({
           event.preventDefault();
         }}
       >
-        {!readingOnly && (
+        {!otherHost && (
           <ContextMenuItem aria-keyshortcuts="Enter" onSelect={() => actions.onOpen(item)}>
             Go to terminal
             <ContextMenuShortcut shortcut="Enter" />
           </ContextMenuItem>
         )}
-        {!readingOnly && canReplyTo(item) && (
+        {canReplyTo(item) && (
           <ContextMenuItem
             aria-keyshortcuts="R"
             onSelect={() => {
@@ -80,7 +80,7 @@ export function CanopyRowMenu({
             <ContextMenuShortcut shortcut="R" />
           </ContextMenuItem>
         )}
-        {!readingOnly && <ContextMenuSeparator />}
+        {(!otherHost || canReplyTo(item)) && <ContextMenuSeparator />}
         {!archived && (
           <ContextMenuItem aria-keyshortcuts="U" onSelect={() => actions.onToggleRead(item)}>
             {item.unread ? "Mark as read" : "Mark as unread"}
@@ -94,7 +94,7 @@ export function CanopyRowMenu({
           {archived ? "Move to inbox" : "Archive"}
           <ContextMenuShortcut shortcut="E" />
         </ContextMenuItem>
-        {!readingOnly && (
+        {!otherHost && (
           <>
             <ContextMenuItem
               aria-keyshortcuts="F2"

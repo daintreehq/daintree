@@ -12,6 +12,7 @@ import {
   type WorktreeViewStoreApi,
 } from "@/store/createWorktreeStore";
 import { usePanelStore } from "@/store/panelStore";
+import { useTerminalInputStore } from "@/store/terminalInputStore";
 import { initBuiltInPanelKinds } from "@/panels/registry";
 
 const registry = vi.hoisted(() => ({ register: vi.fn(), unregister: vi.fn() }));
@@ -198,6 +199,45 @@ describe("HybridInputBar isolated", () => {
       mount(false, true);
       await act(async () => {});
       expect(resolvePaneDropTarget("term-1", "xterm", "hybridInput")).toBe("xterm");
+    });
+  });
+
+  describe("typing to a run on another host (#13387)", () => {
+    function mountOtherHost(hostId = "studio") {
+      return render(
+        <TooltipProvider>
+          <WorktreeStoreContext.Provider value={createWorktreeStore()}>
+            <HybridInputBar
+              terminalId="term-1"
+              cwd=""
+              agentId="claude"
+              onSend={() => {}}
+              isolated
+              otherHostId={hostId}
+            />
+          </WorktreeStoreContext.Provider>
+        </TooltipProvider>
+      );
+    }
+
+    it("offers no way to attach this machine's files", async () => {
+      const own = mount(true);
+      await act(async () => {});
+      expect(own.container.querySelector('[aria-label="Attach files"]')).not.toBeNull();
+      own.unmount();
+
+      const other = mountOtherHost();
+      await act(async () => {});
+      expect(other.container.querySelector('[aria-label="Attach files"]')).toBeNull();
+    });
+
+    it("keeps its draft to that host, apart from this host's canopy reply to the same id", async () => {
+      useTerminalInputStore.getState().setDraftInput("term-1", "on this mac", "isolated-composer");
+      const other = mountOtherHost();
+      await act(async () => {});
+      expect(other.container.querySelector(".cm-content")?.textContent).not.toContain(
+        "on this mac"
+      );
     });
   });
 

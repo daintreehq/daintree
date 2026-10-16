@@ -14,6 +14,7 @@ import {
   type CanopyHostPushChannel,
 } from "../../../shared/types/ipc/canopyHost.js";
 import { AppError } from "../../utils/errorTypes.js";
+import { wrapSuccess } from "../../../shared/utils/ipcErrorSerialization.js";
 import { allocateRemoteHandle } from "../endpointHandles.js";
 
 export interface CanopyViewerParams {
@@ -134,6 +135,11 @@ export class CanopyViewers {
       );
     }
     let viewer = this.viewers.get(key);
+    // An unwatch arriving after its panel was released ends nothing: it must
+    // not open the panel again here to say so.
+    if (!viewer && channel === "canopy:unwatch-terminal") {
+      return Promise.resolve(wrapSuccess(undefined));
+    }
     if (!viewer) {
       viewer = createCanopyViewer(params());
       this.viewers.set(key, viewer);

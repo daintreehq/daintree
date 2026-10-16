@@ -1,6 +1,6 @@
 import type { ClientRef } from "../../ipc/endpoint.js";
 import { Lane } from "../link/frames.js";
-import { EventKind, type LinkClientInfo } from "../link/messages.js";
+import { EventKind, InteractiveKind, type LinkClientInfo } from "../link/messages.js";
 import type { LinkSession } from "../link/session.js";
 import {
   CANOPY_VIEWER_ENDPOINT_PREFIX,
@@ -88,7 +88,7 @@ export function installCanopyHostWith(
     session.registerCallHandler(
       CanopyLinkMethod.INVOKE,
       CanopyInvokePayloadSchema,
-      ({ viewerId, channel, args }) =>
+      ({ viewerId, channel, args, interactive }) =>
         viewers.invoke(
           prefix + viewerId,
           () => ({
@@ -96,17 +96,23 @@ export function installCanopyHostWith(
             clientId: client.clientId,
             onPush: (pushed, payload) => {
               if (!session.isOpen) return;
+              const endpointId = CANOPY_VIEWER_ENDPOINT_PREFIX + viewerId;
               let result: string;
               try {
-                result = session.post({
-                  lane: Lane.EVENTS,
-                  kind: EventKind.EVENT,
-                  body: {
-                    endpointId: CANOPY_VIEWER_ENDPOINT_PREFIX + viewerId,
-                    channel: pushed,
-                    args: [payload],
-                  },
-                });
+                // Its terminal's bytes take turns with grid panes' output, so
+                // busy terminals elsewhere on this host don't hold up its echo.
+                result =
+                  interactive === true && pushed === "canopy:terminal-data"
+                    ? session.post({
+                        lane: Lane.INTERACTIVE,
+                        kind: InteractiveKind.CANOPY_TERMINAL,
+                        body: { endpointId, channel: pushed, args: [payload] },
+                      })
+                    : session.post({
+                        lane: Lane.EVENTS,
+                        kind: EventKind.EVENT,
+                        body: { endpointId, channel: pushed, args: [payload] },
+                      });
               } catch (error) {
                 console.warn("[CanopyHost] Couldn't push to a Shell's viewer:", error);
                 result = "refused";

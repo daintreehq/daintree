@@ -52,6 +52,12 @@ export const InteractiveKind = {
   TERMINAL_RESET: 3,
   /** Either direction: a worktree-port RPC message for an endpoint. */
   WORKTREE_PORT: 4,
+  /**
+   * Host → client: a Canopy viewer's live terminal stream, sent only to a
+   * viewer that asked for it, so its echo takes turns with grid panes' output
+   * rather than queueing behind every event.
+   */
+  CANOPY_TERMINAL: 5,
 } as const;
 
 export const BulkKind = {
@@ -192,6 +198,13 @@ export interface EventMessage {
   args: unknown[];
 }
 
+/** A viewer's `canopy:terminal-data` push, as an event addressed to it. */
+export interface CanopyTerminalMessage {
+  endpointId: string;
+  channel: "canopy:terminal-data";
+  args: [unknown];
+}
+
 export interface TerminalOutMessage {
   endpointId: string;
   terminalId: string;
@@ -313,6 +326,11 @@ export type LinkMessage =
       lane: typeof Lane.INTERACTIVE;
       kind: typeof InteractiveKind.WORKTREE_PORT;
       body: WorktreePortMessage;
+    }
+  | {
+      lane: typeof Lane.INTERACTIVE;
+      kind: typeof InteractiveKind.CANOPY_TERMINAL;
+      body: CanopyTerminalMessage;
     }
   | { lane: typeof Lane.BULK; kind: typeof BulkKind.TRANSFER_BEGIN; body: TransferBeginMessage }
   | {
