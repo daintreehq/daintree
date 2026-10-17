@@ -809,7 +809,9 @@ describe.skipIf(process.platform === "win32")(
       // The lane runs a new session now; the old one is still provisioned for it.
       start("proj:1", "s-new", 11);
       provisioned.set("s-new", "proj:1");
-      const send = vi.fn(async () => ({ status: "unknown" }));
+      const send = vi.fn(async (_hostId: string, _payload: unknown, _asker?: unknown) => ({
+        status: "unknown",
+      }));
       const unregisterClient = registerRemoteService("assistantExchangeClient", {
         send,
       } as never);
