@@ -2,7 +2,11 @@ import { describe, expect, it } from "vitest";
 import type { RunningLaneSession } from "../../../services/HelpSessionService.js";
 import type { LaneWake, LaneWakeOutcome } from "../../../services/mcp-server/terminalNotify.js";
 import { AssistantLaneWaker, type LaneWakeRequest } from "../AssistantLaneWaker.js";
-import { AssistantMessagingPolicy, type MessagingShell } from "../AssistantMessagingPolicy.js";
+import {
+  AssistantMessagingPolicy,
+  OPEN_LANE_GENERATION,
+  type MessagingShell,
+} from "../AssistantMessagingPolicy.js";
 
 const SHELL_A: MessagingShell = { kind: "remote", linkSessionId: "link-a" };
 const SHELL_B: MessagingShell = { kind: "remote", linkSessionId: "link-b" };
@@ -16,6 +20,7 @@ function harness() {
     getRunningLaneSession: (projectId, slot) => running.get(`${projectId}#${slot}`) ?? null,
     getLiveGeneration: (terminalId) => launchGenerations.get(terminalId) ?? null,
     isHostMessagingEnabled: () => true,
+    acceptsRemoteMessages: () => true,
     onSessionEnded: () => () => {},
     platform: "darwin",
     newGeneration: () => `gen-${++nextGeneration}`,
@@ -170,5 +175,45 @@ describe("AssistantLaneWaker", () => {
     h.policy.bindSender("link-c", "sender-c");
     h.driveBy({ kind: "remote", linkSessionId: "link-c" });
     expect(h.queued[0].wake.recheck()).toEqual({ kind: "held", reason: "driven-elsewhere" });
+  });
+
+  describe("a remote Shell's message to an open lane (#13467)", () => {
+    it("is typed whoever drives the project: it's this machine's notice to its own assistant", () => {
+      const h = harness();
+      h.run("s1");
+      h.driveBy({ kind: "local" });
+      h.waker.wake(h.request(OPEN_LANE_GENERATION, SHELL_B));
+      expect(h.queued).toHaveLength(1);
+      expect(h.queued[0].lane).toEqual({
+        helpSessionId: "s1",
+        terminalId: "t-s1",
+        projectId: "proj",
+      });
+      expect(h.queued[0].wake.recheck()).toEqual({ kind: "ready" });
+    });
+
+    it("never types into the run that replaced the one it was queued for", () => {
+      const h = harness();
+      h.run("s1");
+      h.waker.wake(h.request(OPEN_LANE_GENERATION));
+      h.run("s1");
+      expect(h.queued[0].wake.recheck()).toEqual({ kind: "unavailable", reason: "relaunched" });
+    });
+
+    it("waits while paused, and reports a lane that isn't running or was turned off", () => {
+      const h = harness();
+      h.run("s1");
+      h.waker.wake(h.request(OPEN_LANE_GENERATION));
+      h.policy.setPaused(true);
+      expect(h.queued[0].wake.recheck()).toEqual({ kind: "held", reason: "paused" });
+      h.policy.setPaused(false);
+      h.policy.declineRun(LANE);
+      expect(h.queued[0].wake.recheck()).toEqual({ kind: "unavailable", reason: "declined" });
+
+      const idle = harness();
+      idle.waker.wake(idle.request(OPEN_LANE_GENERATION));
+      expect(idle.queued).toEqual([]);
+      expect(idle.outcomes).toEqual([{ kind: "unavailable", reason: "unavailable" }]);
+    });
   });
 });

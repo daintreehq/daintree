@@ -299,6 +299,19 @@ describe("installAssistantMessagingPolicy", () => {
     expect(policy.getEnded({ projectId: "proj", slot: 0 })?.reason).toBe("relaunched");
   });
 
+  it("tells a lane's new run what other machines sent the run before, once it spawns (#13467)", () => {
+    install();
+    running.set("proj:0", { sessionId: "s1", terminalId: "t1" });
+    pty.generations.set("t1", 1);
+    const reannounce = vi.spyOn(getRemoteService("assistantMessagingRuntime")!, "reannounce");
+    pty.emit("spawn-result", "t-not-a-lane", { success: true, id: "t-not-a-lane" });
+    pty.emit("spawn-result", "t1", { success: false, id: "t1" });
+    expect(reannounce).not.toHaveBeenCalled();
+    pty.generations.set("t1", 2);
+    pty.emit("spawn-result", "t1", { success: true, id: "t1" });
+    expect(reannounce).toHaveBeenCalledWith({ projectId: "proj", slot: 0 });
+  });
+
   it("unregisters both services and stops listening on teardown", () => {
     install();
     uninstall!();

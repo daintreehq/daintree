@@ -46,6 +46,9 @@ describe("assistant messaging IPC", () => {
   const platform = Object.getOwnPropertyDescriptor(process, "platform")!;
   const running = new Map<string, RunningLaneSession>();
   let hosts = 1;
+  /** Whether this machine listens as a host; a remote view's host does by definition. */
+  let listening = false;
+  let accepting = true;
   let policy: AssistantMessagingPolicy;
   const teardowns: Array<() => void> = [];
 
@@ -61,10 +64,19 @@ describe("assistant messaging IPC", () => {
     Object.defineProperty(process, "platform", { value: "darwin" });
     running.clear();
     hosts = 1;
+    listening = false;
+    accepting = true;
     policy = new AssistantMessagingPolicy({
       getRunningLaneSession: (projectId, slot) => running.get(`${projectId}:${slot}`) ?? null,
+      listRunningLanes: () =>
+        [...running.keys()].map((key) => ({
+          projectId: key.split(":")[0]!,
+          slot: Number(key.split(":")[1]),
+          agentId: "claude",
+        })),
       getLiveGeneration: () => 1,
       isHostMessagingEnabled: () => true,
+      acceptsRemoteMessages: () => accepting,
       onSessionEnded: () => () => {},
       platform: "darwin",
     });
@@ -72,6 +84,7 @@ describe("assistant messaging IPC", () => {
     teardowns.push(
       registerRemoteService("assistantMessagingSurface", {
         hasHosts: () => hosts > 0,
+        listensAsHost: () => listening,
         revision: () => policy.getRevision(),
       })
     );
@@ -128,7 +141,7 @@ describe("assistant messaging IPC", () => {
     expect(policy.getHub()?.slot).toBe(0);
   });
 
-  it("enrolls a remote window's lane as that window's link session, never a claimed one", async () => {
+  it("routes a remote window's lane to that window's link session, never a claimed one", async () => {
     run(0, "s1");
     await setLaneEnrolled(remoteCtx("link-a"), {
       projectId: "proj",
@@ -141,16 +154,57 @@ describe("assistant messaging IPC", () => {
       linkSessionId: "link-a",
     });
     expect(policy.getHub()).toBeNull();
+  });
 
-    const other = await getState(remoteCtx("link-b"), { projectId: "proj", slot: 0 });
-    expect(other.lane).toEqual({ enrolled: false, enrolledElsewhere: true, ended: null });
-    const refused = await setLaneEnrolled(remoteCtx("link-b"), {
-      projectId: "proj",
-      slot: 0,
-      enrolled: false,
-    });
-    expect(refused.refusal).toBe("wrong-shell");
-    expect(policy.getEnrollment({ projectId: "proj", slot: 0 })).not.toBeNull();
+  it("shows a lane on to every Shell, and lets any of them turn its run off (#13467)", async () => {
+    const lane = { projectId: "proj", slot: 0 };
+    run(0, "s1");
+    await setLaneEnrolled(remoteCtx("link-a"), { ...lane, enrolled: true });
+
+    const other = await getState(remoteCtx("link-b"), lane);
+    expect(other.lane).toEqual({ enrolled: true, enrolledElsewhere: false, ended: null });
+    const off = await setLaneEnrolled(remoteCtx("link-b"), { ...lane, enrolled: false });
+    expect(off.refusal).toBeNull();
+    expect(off.state.lane.enrolled).toBe(false);
+    expect(policy.checkOpen(lane, "admit")).toEqual({ ok: false, reason: "declined" });
+    // Off ends where the lane's own messages went, too.
+    expect(policy.getEnrollment(lane)).toBeNull();
+    expect((await getState(remoteCtx("link-a"), lane)).lane.enrolled).toBe(false);
+
+    const on = await setLaneEnrolled(remoteCtx("link-a"), { ...lane, enrolled: true });
+    expect(on.refusal).toBeNull();
+    expect(policy.checkOpen(lane, "admit").ok).toBe(true);
+
+    // A relaunch accepts again, whoever turned the run before it off.
+    await setLaneEnrolled(remoteCtx("link-b"), { ...lane, enrolled: false });
+    run(0, "s2");
+    expect((await getState(remoteCtx("link-b"), lane)).lane.enrolled).toBe(true);
+  });
+
+  it("offers a listening host's own window the controls with no hosts of its own", async () => {
+    hosts = 0;
+    listening = true;
+    const lane = { projectId: "proj", slot: 0 };
+    run(0, "s1");
+    const state = await getState(localCtx(), lane);
+    expect(state.available).toBe(true);
+    expect(state.lane).toEqual({ enrolled: true, enrolledElsewhere: false, ended: null });
+    const off = await setLaneEnrolled(localCtx(), { ...lane, enrolled: false });
+    expect(off.state.lane.enrolled).toBe(false);
+    const on = await setLaneEnrolled(localCtx(), { ...lane, enrolled: true });
+    expect(on.state.lane.enrolled).toBe(true);
+    // With no host of its own, it never becomes a hub.
+    expect(policy.getHub()).toBeNull();
+  });
+
+  it("shows a lane off, and won't turn it on, while this machine doesn't accept messages", async () => {
+    accepting = false;
+    const lane = { projectId: "proj", slot: 0 };
+    run(0, "s1");
+    expect((await getState(remoteCtx("link-a"), lane)).lane.enrolled).toBe(false);
+    const on = await setLaneEnrolled(remoteCtx("link-a"), { ...lane, enrolled: true });
+    expect(on.refusal).toBe("unavailable");
+    expect(on.state.lane.enrolled).toBe(false);
   });
 
   it("shows a lane whose Shell is away as on, so turning it off withdraws it (#13332)", async () => {
@@ -221,13 +275,13 @@ describe("assistant messaging IPC", () => {
     expect(off.state.lane.ended).toBeNull();
   });
 
-  it("shows how a lane's enrollment ended only to the Shell that gave it", async () => {
+  it("shows how a hub's enrollment ended only to this machine, never over a lane open to all", async () => {
     run(0, "s1");
-    await setLaneEnrolled(remoteCtx("link-a"), { projectId: "proj", slot: 0, enrolled: true });
+    await setLaneEnrolled(localCtx(), { projectId: "proj", slot: 0, enrolled: true });
     run(0, "s2");
-    const mine = await getState(remoteCtx("link-a"), { projectId: "proj", slot: 0 });
+    const mine = await getState(localCtx(), { projectId: "proj", slot: 0 });
     expect(mine.lane.ended?.reason).toBe("relaunched");
-    const theirs = await getState(localCtx(), { projectId: "proj", slot: 0 });
+    const theirs = await getState(remoteCtx("link-a"), { projectId: "proj", slot: 0 });
     expect(theirs.lane.ended).toBeNull();
   });
 

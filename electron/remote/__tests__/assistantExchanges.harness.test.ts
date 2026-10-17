@@ -118,6 +118,7 @@ import { getEndpointRegistry } from "../../ipc/endpointRegistry.js";
 import { openDb } from "../../services/persistence/db.js";
 import { AppError } from "../../utils/errorTypes.js";
 import { AssistantExchangeClient } from "../assistant/AssistantExchangeClient.js";
+import { OPEN_LANE_GENERATION } from "../assistant/AssistantMessagingPolicy.js";
 import { AssistantLinkMethod, type AssistantSendPayload } from "../assistant/linkMethods.js";
 import { LinkClient } from "../client/LinkClient.js";
 import { createDirectTransport } from "../client/transport.js";
@@ -348,26 +349,35 @@ describe("assistant exchanges over the real link", () => {
     expect(codexQuota.read).toHaveBeenCalledTimes(2);
   }, 30_000);
 
-  it("enrolls nothing it can't show it started, and never a lane another Shell holds (#13392)", async () => {
+  it("routes nothing it can't show it started, and never a lane another Shell holds (#13392)", async () => {
     db.sqlite = openFile("app.db");
     const r = await harness();
     prepare(r);
     const a = shellA();
+    const policy = requireRemoteService("assistantMessagingPolicy");
     await expect(
       a.enrollStarted(HOST_ID, { projectId: "proj-2", slot: 1, sessionId: "not-that-run" })
     ).resolves.toEqual({ status: "wrong-session", lane: null });
 
-    // The right session id, but that run wasn't started through one of this Shell's views.
+    // The right session id, but that run wasn't started through one of this Shell's views:
+    // open to this Shell like every lane (#13467), its own messages going nowhere.
     await expect(
       a.enrollStarted(HOST_ID, { projectId: "proj-2", slot: 1, sessionId: "help-proj-2-1" })
-    ).resolves.toEqual({ status: "wrong-session", lane: null });
-    expect((await a.listLanes(HOST_ID)).lanes).toEqual([]);
+    ).resolves.toMatchObject({
+      status: "enrolled",
+      lane: { projectId: "proj-2", slot: 1, generation: OPEN_LANE_GENERATION, routed: false },
+    });
+    expect(policy.getEnrollment({ projectId: "proj-2", slot: 1 })).toBeNull();
 
-    // Slot 0 belongs to another Shell's session: never taken.
+    // Slot 0's own messages go to another Shell's session: never taken.
     enrollOnHost("another-shell-session", 0);
     await expect(
       a.enrollStarted(HOST_ID, { projectId: "proj-2", slot: 0, sessionId: "help-proj-2-0" })
-    ).resolves.toEqual({ status: "occupied", lane: null });
+    ).resolves.toMatchObject({ status: "enrolled", lane: { routed: false } });
+    expect(policy.getEnrollment({ projectId: "proj-2", slot: 0 })?.enrolledBy).toEqual({
+      kind: "remote",
+      linkSessionId: "another-shell-session",
+    });
   }, 30_000);
 
   it(
@@ -391,7 +401,8 @@ describe("assistant exchanges over the real link", () => {
       });
       expect(inbox.value.messages[0]!.untrustedBody).toContain("please rebase the release branch");
       // Only the lane it was addressed to reads it.
-      expect(lane.getInbox("help-proj-2-1", {}).ok).toBe(false);
+      const sibling = lane.getInbox("help-proj-2-1", {});
+      expect(sibling.ok && sibling.value.messages).toEqual([]);
 
       expect(
         lane.reply("help-proj-2-0", {
@@ -421,13 +432,26 @@ describe("assistant exchanges over the real link", () => {
       expect(getEndpointRegistry().getRemote()).toHaveLength(0);
 
       const a = shellA();
-      // Over the real link: the lane names its agent, and the host lists what is running.
+      // Over the real link: every running lane is open to this Shell, under its stable
+      // address, naming its agent and whether its own messages come here (#13467).
       const listed = await a.listLanes(HOST_ID);
-      expect(listed.lanes).toEqual([
-        { projectId: "proj-2", slot: 0, generation, available: true, agentId: "claude" },
-      ]);
+      expect(listed.lanes.map((lane) => assistantSlotKey(lane.projectId, lane.slot))).toEqual(
+        listed.assistants!.map((lane) => assistantSlotKey(lane.projectId, lane.slot))
+      );
+      expect(listed.lanes).toContainEqual({
+        projectId: "proj-2",
+        slot: 0,
+        generation: OPEN_LANE_GENERATION,
+        available: true,
+        agentId: "claude",
+        routed: true,
+      });
+      expect(listed.lanes).toContainEqual(
+        expect.objectContaining({ projectId: "proj-2", slot: 1, routed: false })
+      );
       expect(listed.assistants).toContainEqual({ projectId: "proj-2", slot: 0, agentId: "claude" });
 
+      // An older Shell names the generation it was enrolled under: filed at the open address.
       const sent = await a.send(HOST_ID, message({ generation }));
       expect(sent).toMatchObject({
         status: "accepted",
@@ -435,7 +459,10 @@ describe("assistant exchanges over the real link", () => {
         record: {
           messageId: "m-1",
           state: "submitted",
-          receiver: { laneId: assistantSlotKey("proj-2", 0), enrollmentGeneration: generation },
+          receiver: {
+            laneId: assistantSlotKey("proj-2", 0),
+            enrollmentGeneration: OPEN_LANE_GENERATION,
+          },
         },
       });
       if (sent.status !== "accepted") return;
@@ -514,21 +541,19 @@ describe("assistant exchanges over the real link", () => {
       prepare(r);
       const b = await startShellB(r, openFile("shell-b.db"));
       const laneA = enrollOnHost(hostSessionOf(r, null), 0);
-      const laneB = enrollOnHost(hostSessionOf(r, SHELL_B), 1);
       const a = shellA();
 
-      expect((await a.listLanes(HOST_ID)).lanes.map((lane) => lane.slot)).toEqual([0]);
-      expect((await b.client.listLanes(HOST_ID)).lanes.map((lane) => lane.slot)).toEqual([1]);
+      // Both reach the lane whichever Shell started it (#13467); only A hears from it.
+      const routed = async (client: AssistantExchangeClient) =>
+        (await client.listLanes(HOST_ID)).lanes.find(
+          (lane) => lane.projectId === "proj-2" && lane.slot === 0
+        )?.routed;
+      expect(await routed(a)).toBe(true);
+      expect(await routed(b.client)).toBe(false);
 
-      // B can't reach A's lane, whatever it names.
-      await expect(
-        b.client.send(HOST_ID, message({ messageId: "probe", generation: laneA }))
-      ).rejects.toMatchObject({ code: "PERMISSION" });
-      expect(b.journal.get(HOST_ID, "probe")).toBeNull();
-
-      // The same messageId from each is two exchanges, one each.
+      // The same messageId from each, to the same assistant at once, is two exchanges, one each.
       const fromA = await a.send(HOST_ID, message({ generation: laneA }));
-      const fromB = await b.client.send(HOST_ID, message({ slot: 1, generation: laneB }));
+      const fromB = await b.client.send(HOST_ID, message({ generation: OPEN_LANE_GENERATION }));
       if (fromA.status !== "accepted" || fromB.status !== "accepted")
         throw new Error("not accepted");
       expect(fromA.disposition).toBe("created");
@@ -611,9 +636,11 @@ describe("assistant exchanges over the real link", () => {
       prepare(r);
       let b = await startShellB(r, openFile("shell-b.db"));
       const laneA = enrollOnHost(hostSessionOf(r, null), 0);
-      const laneB = enrollOnHost(hostSessionOf(r, SHELL_B), 1);
       const fromA = await shellA().send(HOST_ID, message({ generation: laneA }));
-      const fromB = await b.client.send(HOST_ID, message({ slot: 1, generation: laneB }));
+      const fromB = await b.client.send(
+        HOST_ID,
+        message({ slot: 1, generation: OPEN_LANE_GENERATION })
+      );
       if (fromA.status !== "accepted" || fromB.status !== "accepted")
         throw new Error("not accepted");
       await shellA().reconcile(HOST_ID);
@@ -655,12 +682,15 @@ describe("assistant exchanges over the real link", () => {
       expect(await a.get(HOST_ID, "m-1")).toMatchObject({ taskId: fromA.record.taskId });
       expect(await b.client.get(HOST_ID, "m-1")).toMatchObject({ taskId: fromB.record.taskId });
 
-      // Consent ended with the sessions it was given to: a new message needs a new
-      // enrollment, while a resend of one already taken still answers from its record.
-      expect((await a.listLanes(HOST_ID)).lanes).toEqual([]);
-      await expect(
-        a.send(HOST_ID, message({ messageId: "m-2", generation: laneA }))
-      ).rejects.toMatchObject({ code: "PERMISSION" });
+      // Nothing to redo after the restart (#13467): the lanes are open again as they run,
+      // a new message under the address it was listed goes through, and a resend of one
+      // already taken still answers from its record.
+      expect((await a.listLanes(HOST_ID)).lanes).toContainEqual(
+        expect.objectContaining({ projectId: "proj-2", slot: 0, available: true })
+      );
+      expect(await a.send(HOST_ID, message({ messageId: "m-2", generation: laneA }))).toMatchObject(
+        { status: "accepted", disposition: "created" }
+      );
       expect(await a.send(HOST_ID, message({ generation: laneA }))).toMatchObject({
         disposition: "existing",
         record: { taskId: fromA.record.taskId },

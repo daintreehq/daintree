@@ -72,6 +72,15 @@ export interface HostStartOptions {
   authorized(): boolean;
 }
 
+/**
+ * A lane this Shell started, whose own messages come to its hub. A host lists
+ * every lane open to other machines (#13467) and says which; an older one
+ * lists only lanes enrolled for this Shell.
+ */
+function isOwn(lane: LaneList["lanes"][number]): boolean {
+  return lane.routed !== false;
+}
+
 const POLL_MS = 1_000;
 /** How long a new assistant gets to open its prompt, its trust question answered on the way. */
 const READY_WAIT_MS = 45_000;
@@ -242,7 +251,7 @@ export class HostAssistantStarter {
     if (!authorized()) return [];
     const listed = await (this.deps.listOwnLanes ?? this.deps.listLanes)(hostId);
     const left: Array<{ projectId: string; reason: HostStartRefusal }> = [];
-    for (const projectId of new Set(listed.lanes.map((lane) => lane.projectId))) {
+    for (const projectId of new Set(listed.lanes.filter(isOwn).map((lane) => lane.projectId))) {
       const reason = await this.inTurn(hostId, projectId, async () => {
         if (!authorized()) return "consent-withdrawn" as const;
         const path = await this.deps.projectPath(hostId, projectId);
@@ -283,6 +292,7 @@ export class HostAssistantStarter {
       ? undefined
       : listed.lanes.find(
           (lane) =>
+            isOwn(lane) &&
             lane.projectId === projectId &&
             lane.available &&
             (agentId === undefined || lane.agentId === agentId)

@@ -66,7 +66,7 @@ export function registerHostMessagingActions(actions: ActionRegistry): void {
     id: "host.listAssistants",
     title: "List assistants on a host",
     description:
-      "List a host's projects and the assistants in each, with their agent; one enrolled for you carries the generation a message needs and whether it takes one now.",
+      "List a host's projects and the assistants in each, with their agent; each open one carries the generation a message needs and whether it takes one now.",
     category: "help",
     kind: "query",
     danger: "safe",

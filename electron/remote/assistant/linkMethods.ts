@@ -11,22 +11,27 @@ import { EXCHANGE_STATES } from "../exchange/types.js";
  * Session-level methods for assistant exchanges between a Shell and a host.
  * They ride every session, including a summary-only one with no view bound.
  * None names who is asking: the host knows the sender from the credential the
- * session authenticated with, and the lane's consent from its enrollment. A
- * host from before these existed answers UNSUPPORTED, which reads as "this
- * host doesn't support assistant messaging".
+ * session authenticated with. A host's lanes take messages from any Shell that
+ * authenticated, with no enrollment (#13467); a host from before that
+ * answers only for lanes enrolled for the asking Shell. A host from before
+ * these existed answers UNSUPPORTED, which reads as "this host doesn't support
+ * assistant messaging".
  */
 export const AssistantLinkMethod = {
   /** Shell → Host: bind this session to the Shell's sender credential for this host. */
   AUTHENTICATE: "assistant.authenticate",
   /**
-   * Shell → Host: the lanes this session enrolled, and every assistant running
-   * on the host with its agent, so the hub can see what it could reach.
+   * Shell → Host: the lanes this session's Shell can message (every one open
+   * to other machines; an older host, only those this session enrolled), and
+   * every assistant running on the host with its agent.
    */
   LIST_LANES: "assistant.list-lanes",
   /**
-   * Shell → Host: enroll for this session's Shell a lane its hub just started
-   * in one of the host's projects (#13392): only that run, by help session id,
-   * and only while no other Shell holds the lane.
+   * Shell → Host: a lane this session's hub just started in one of the host's
+   * projects (#13392), by help session id. The lane answers as open to this
+   * Shell; when the run came through one of its views and no other Shell holds
+   * it, the lane's own messages go to this Shell's hub too. An older host
+   * enrolls it, and only while no other Shell holds the lane.
    */
   ENROLL_STARTED: "assistant.enroll-started",
   /**
@@ -34,7 +39,7 @@ export const AssistantLinkMethod = {
    * (#13392), so the hub can tell which host has allowance left.
    */
   READ_QUOTA: "assistant.read-quota",
-  /** Shell → Host: send a message to an enrolled lane; a resend of its messageId never sends twice. */
+  /** Shell → Host: send a message to a lane; a resend of its messageId never sends twice. */
   SEND: "assistant.send",
   /** Shell → Host: one of this sender's exchanges by messageId, or null when the host has none. */
   GET_EXCHANGE: "assistant.get-exchange",
@@ -99,7 +104,11 @@ export const SendPayloadSchema = z
     referenceTaskIds: z.array(id).max(MAX_REFERENCE_TASK_IDS),
     projectId: id,
     slot,
-    /** The enrollment generation the Shell was told; a later enrollment refuses it. */
+    /**
+     * The generation the Shell was listed. A host whose lanes are open files
+     * every message under the lane's one stable address whatever this says;
+     * an older host refuses one from an earlier enrollment.
+     */
     generation: id,
     body: z.string().min(1).max(MAX_EXCHANGE_BODY_CHARS),
   })
@@ -124,6 +133,12 @@ export const EnrolledLaneSchema = z
     available: z.boolean(),
     /** The agent CLI the lane's assistant runs; absent while it isn't running. */
     agentId: id.optional(),
+    /**
+     * Whether the lane's own messages go to the asking Shell's hub: the run
+     * came through one of its views. Absent from a host whose every listed
+     * lane was enrolled for the asking Shell, which then means true.
+     */
+    routed: z.boolean().optional(),
   })
   .strip();
 export type EnrolledLane = z.infer<typeof EnrolledLaneSchema>;
