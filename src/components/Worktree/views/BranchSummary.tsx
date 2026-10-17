@@ -6,6 +6,10 @@ import { TruncatedTooltip } from "@/components/ui/TruncatedTooltip";
 const ELLIPSIS = "…";
 /** Subpixel slack, so the browser never adds a second ellipsis on top of ours. */
 const FIT_SLACK = 2;
+/** The base's share when both names are cut; the name being created takes the rest. */
+const BASE_SHARE = 0.4;
+/** Below this many cells the bias stops: a base cut to `fe…s` is no longer context. */
+const BASE_FLOOR_CELLS = 8;
 
 let measureCtx: CanvasRenderingContext2D | null | undefined;
 
@@ -181,25 +185,33 @@ export function BranchSummary({ base, branch, icon }: BranchSummaryProps) {
         return;
       }
 
-      // Max-min fair: an equal share each, and whatever one name does not need
-      // passes to the other. Splitting the space in proportion to length looks
+      // Max-min fair: a share each, and whatever one name does not need passes
+      // to the other. Splitting the space in proportion to length looks
       // reasonable and is not — it crushed a base of "develop" down to "d...p"
-      // to subsidise a long name that already had room to spare.
-      const half = available / 2;
-      let baseBudget = half;
-      let branchBudget = half;
-      if (baseWidth <= half) {
+      // to subsidise a long name that already had room to spare. The shares are
+      // weighted rather than equal because the new branch is what the user is
+      // confirming and the base is context: an even split cut both to
+      // `featu…oads → featu…ader`, where neither could be recognised.
+      const baseFloor = Math.min(available / 2, textWidth("0".repeat(BASE_FLOOR_CELLS), font));
+      const baseShare = Math.max(available * BASE_SHARE, baseFloor);
+      let baseBudget = baseShare;
+      let branchBudget = available - baseShare;
+      if (baseWidth <= baseShare) {
         baseBudget = baseWidth;
         branchBudget = available - baseWidth;
-      } else if (branchWidth <= half) {
+      } else if (branchWidth <= available - baseShare) {
         branchBudget = branchWidth;
         baseBudget = available - branchWidth;
       }
 
-      setFitted({
-        base: base ? fitMiddle(base, baseBudget, font) : "",
-        branch: fitMiddle(branch, branchBudget, font),
-      });
+      const fittedBase = base ? fitMiddle(base, baseBudget, font) : "";
+      // A crop stops on a whole grapheme, so it rarely spends its whole budget.
+      // What the base leaves goes to the new name, not to dead space before the
+      // buttons.
+      if (fittedBase !== (base ?? "")) {
+        branchBudget = available - textWidth(fittedBase, font);
+      }
+      setFitted({ base: fittedBase, branch: fitMiddle(branch, branchBudget, font) });
     };
 
     apply();
