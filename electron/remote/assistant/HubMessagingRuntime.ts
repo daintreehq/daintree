@@ -633,12 +633,14 @@ export class HubMessagingRuntime implements HostMessagingRuntimeHandle {
       const refused = this.refuse(args.hostId, "admit") ?? this.limitSend(args.hostId);
       if (refused) return { ...refused, ...base, taskId: null, contextId: null };
       const client = this.requireClient();
-      // Before the send, so a message that lane starts in answer finds its asker.
-      this.deps.routes?.remember(
-        args.hostId,
-        { projectId: args.projectId, slot: args.slot },
-        caller
-      );
+      // A new message the host took, or may have, makes the caller that lane's
+      // asker; a refusal or a resend of another assistant's message never does.
+      const remember = (): void =>
+        this.deps.routes?.remember(
+          args.hostId,
+          { projectId: args.projectId, slot: args.slot },
+          caller
+        );
       let record: ExchangeRecord;
       try {
         const sent = await client.send(
@@ -654,7 +656,11 @@ export class HubMessagingRuntime implements HostMessagingRuntimeHandle {
           },
           caller
         );
-        if (sent.status === "unknown") return { ...this.outcome("ambiguous"), ...base };
+        if (sent.status === "unknown") {
+          remember();
+          return { ...this.outcome("ambiguous"), ...base };
+        }
+        if (sent.disposition === "created") remember();
         record = sent.record;
       } catch (error) {
         // The client's own refusal past the retry window, where a lookup is all

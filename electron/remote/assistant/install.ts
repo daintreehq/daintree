@@ -452,14 +452,17 @@ export function installAssistantMessagingPolicy(
     store,
     runtime,
     recipient: (hostId, sourceLane) => {
+      // In the order runs were provisioned; a run no view holds can't be woken.
+      const attached = helpSessionService
+        .listRunningLanes()
+        .filter((lane) => lane.attached !== false)
+        .map((lane) => ({ projectId: lane.projectId, slot: lane.slot }));
       const asker = routes.askerFor(hostId, sourceLane);
-      if (asker !== null && accepting(asker)) return asker;
-      for (const lane of helpSessionService.listRunningLanes()) {
-        if (lane.attached === false) continue;
-        const ref = { projectId: lane.projectId, slot: lane.slot };
-        if (accepting(ref)) return ref;
-      }
-      return null;
+      const preferred = attached.find(
+        (lane) => lane.projectId === asker?.projectId && lane.slot === asker.slot
+      );
+      if (preferred && accepting(preferred)) return preferred;
+      return attached.find(accepting) ?? null;
     },
     hostName: (hostId) =>
       deps.observeHosts?.().find((host) => host.hostId === hostId)?.name ?? "Remote host",

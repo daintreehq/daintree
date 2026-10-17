@@ -501,12 +501,19 @@ export class AssistantMessagingPolicy {
   }
 
   /**
-   * Ends every enrollment whose run was replaced. A relaunch in place keeps
-   * its session and terminal ids and emits no session event, so without this
-   * it would only be noticed by the next read.
+   * Ends every enrollment, and drops every person's off, whose run was
+   * replaced. A relaunch in place keeps its session and terminal ids and
+   * emits no session event, so without this it would only be noticed by the
+   * next read, and a view would still show the new run as turned off.
    */
   reconcile(): void {
     for (const key of [...this.enrollments.keys()]) this.current(key);
+    let lifted = false;
+    for (const [key, declined] of [...this.declined]) {
+      const run = this.liveRun(declined);
+      if (run && !this.isDeclined(key, run)) lifted = true;
+    }
+    if (lifted) this.changed();
   }
 
   /** How the lane's last enrollment ended, while it hasn't been enrolled again. */

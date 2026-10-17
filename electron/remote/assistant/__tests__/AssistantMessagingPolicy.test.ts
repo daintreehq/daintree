@@ -1285,6 +1285,33 @@ describe("AssistantMessagingPolicy", () => {
       expect(changes).toBe(2);
     });
 
+    it("reconcile drops an off whose run was relaunched in place and tells listeners", () => {
+      const h = accepting();
+      h.run("proj", 0, "s1", "term");
+      h.run("proj", 1, "s2");
+      h.policy.declineRun(lane("proj", 0), LOCAL);
+      h.policy.declineRun(lane("proj", 1), SHELL_A);
+      const changes: number[] = [];
+      h.policy.onChange(() => changes.push(h.policy.getRevision()));
+      const before = h.policy.getRevision();
+      // Nothing replaced: the offs stand and nobody hears anything.
+      h.policy.reconcile();
+      expect(changes).toEqual([]);
+      expect(h.policy.getRevision()).toBe(before);
+
+      // Same session and terminal ids, a new launch generation: no session event fires.
+      h.run("proj", 0, "s1", "term");
+      h.policy.reconcile();
+      expect(changes).toEqual([before + 1]);
+      expect(h.policy.isRunDeclined(lane("proj", 0))).toBe(false);
+      expect(h.policy.checkOpen(lane("proj", 0), "admit").ok).toBe(true);
+      expect(h.policy.isRunDeclined(lane("proj", 1))).toBe(true);
+
+      // Once dropped, a later reconcile has nothing left to report.
+      h.policy.reconcile();
+      expect(changes).toHaveLength(1);
+    });
+
     it("lists every lane open to other machines, paused or not", () => {
       const running = [
         { projectId: "proj", slot: 0, agentId: "claude" },

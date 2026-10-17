@@ -1,12 +1,13 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { AppError } from "../../../utils/errorTypes.js";
 import type { ExchangeRecord } from "../../exchange/types.js";
-import type {
-  HostCheck,
-  HostCheckResult,
-  LaneRef,
-  MessagingDenial,
-  OpenRun,
+import {
+  AssistantMessagingPolicy,
+  type HostCheck,
+  type HostCheckResult,
+  type LaneRef,
+  type MessagingDenial,
+  type OpenRun,
 } from "../AssistantMessagingPolicy.js";
 import { RetryWindowPassedError } from "../AssistantExchangeClient.js";
 import type { AssistantShellRoutes } from "../AssistantShellRoutes.js";
@@ -111,10 +112,14 @@ describe("HubMessagingRuntime (#13336)", () => {
   let startEnabled: boolean;
   let starter: { start: ReturnType<typeof vi.fn> } | null;
   let ids: number;
+  let sleep: (ms: number) => Promise<void>;
 
   beforeEach(() => {
     clock = 1_000_000;
     ids = 0;
+    sleep = async (ms) => {
+      clock += ms;
+    };
     hosts = [host()];
     runs = new Map([
       ["a", RUN_A],
@@ -194,9 +199,7 @@ describe("HubMessagingRuntime (#13336)", () => {
       hosts: () => hosts,
       now: () => clock,
       newId: () => `id-${++ids}`,
-      sleep: async (ms) => {
-        clock += ms;
-      },
+      sleep: (ms) => sleep(ms),
       pollIntervalMs: 1_000,
     });
   });
@@ -290,6 +293,68 @@ describe("HubMessagingRuntime (#13336)", () => {
       });
       expect(client.send).not.toHaveBeenCalled();
       expect(starter?.start).not.toHaveBeenCalled();
+    });
+
+    it("with the real policy and the setting off, reads and cancels reach the client but new messages don't", async () => {
+      const policy = new AssistantMessagingPolicy({
+        getRunningLaneSession: () => null,
+        getLiveGeneration: () => null,
+        isHostMessagingEnabled: () => true,
+        acceptsRemoteMessages: () => false,
+        onSessionEnded: () => () => {},
+        platform: "darwin",
+      });
+      const real = new HubMessagingRuntime({
+        policy,
+        listHostProjects: hostProjects as never,
+        startEnabled: () => startEnabled,
+        starter: () => starter as never,
+        getSessionLane: (id) => lanes.get(id) ?? null,
+        callerRun: (id) => runs.get(id) ?? null,
+        routes,
+        client: () => client as never,
+        hosts: () => hosts,
+        now: () => clock,
+        newId: () => `id-${++ids}`,
+        sleep: (ms) => sleep(ms),
+      });
+      expect(real.isAvailable("a")).toBe(true);
+      await expect(real.list("a")).resolves.toMatchObject({
+        ok: true,
+        value: { hosts: [{ hostId: "studio" }] },
+      });
+      for (const result of await Promise.all([
+        real.listAssistants("a", { hostId: "studio" }),
+        real.readQuota("a", { hostId: "studio" }),
+        real.getTask("a", { hostId: "studio", taskId: "task-1" }),
+        real.listTasks("a", { hostId: "studio" }),
+        real.cancelTask("a", { hostId: "studio", taskId: "task-1" }),
+      ])) {
+        expect(result).toMatchObject({ ok: true, value: { outcome: "ok" } });
+      }
+      expect(client.listLanes).toHaveBeenCalledWith("studio");
+      expect(client.readQuota).toHaveBeenCalledWith("studio");
+      expect(client.get).toHaveBeenCalledWith("studio", "task-1");
+      expect(client.listChanges).toHaveBeenCalled();
+      expect(client.cancel).toHaveBeenCalledWith("studio", "task-1");
+
+      for (const result of await Promise.all([
+        real.sendMessage("a", SEND),
+        real.startAssistant("a", { hostId: "studio", projectId: "proj-2" }),
+      ])) {
+        expect(result).toMatchObject({
+          ok: true,
+          value: {
+            outcome: "opted_out",
+            detail: expect.stringContaining("Accept messages from other machines"),
+          },
+        });
+      }
+      expect(client.send).not.toHaveBeenCalled();
+      expect(starter?.start).not.toHaveBeenCalled();
+      expect(routes.remember).not.toHaveBeenCalled();
+      real.dispose();
+      policy.dispose();
     });
 
     it("offers nothing once disposed", async () => {
@@ -688,20 +753,71 @@ describe("HubMessagingRuntime (#13336)", () => {
       );
     });
 
-    it("binds the send to the caller's run and remembers its route before sending", async () => {
+    it("binds the send to the caller's run and remembers its route once the host took it", async () => {
       routes.remember.mockImplementation(() => {
-        expect(client.send).not.toHaveBeenCalled();
+        expect(client.send).toHaveBeenCalledTimes(1);
       });
       await expect(runtime.sendMessage("other-project", SEND)).resolves.toMatchObject({
         ok: true,
         value: { outcome: "ok" },
       });
+      expect(routes.remember).toHaveBeenCalledTimes(1);
       expect(routes.remember).toHaveBeenCalledWith(
         "studio",
         { projectId: "proj-2", slot: 0 },
         RUN_OTHER_PROJECT
       );
       expect(client.send.mock.calls[0]![2]).toEqual(RUN_OTHER_PROJECT);
+    });
+
+    it("remembers the route for a send whose answer was lost: the host may have it", async () => {
+      client.send.mockResolvedValueOnce({ status: "unknown", messageId: "maybe" });
+      await expect(
+        runtime.sendMessage("sibling", { ...SEND, taskId: "maybe" })
+      ).resolves.toMatchObject({ value: { outcome: "ambiguous" } });
+      expect(routes.remember).toHaveBeenCalledWith(
+        "studio",
+        { projectId: "proj-2", slot: 0 },
+        RUN_SIBLING
+      );
+    });
+
+    it("keeps the first asker's route when another assistant resends its message", async () => {
+      await runtime.sendMessage("a", { ...SEND, taskId: "t-shared" });
+      client.send.mockImplementationOnce(
+        async (_hostId: string, payload: { messageId: string }) => ({
+          status: "accepted",
+          disposition: "existing",
+          record: record({ messageId: payload.messageId }),
+        })
+      );
+      await expect(
+        runtime.sendMessage("other-project", { ...SEND, taskId: "t-shared" })
+      ).resolves.toMatchObject({ value: { outcome: "ok", taskId: "t-shared" } });
+      expect(client.send).toHaveBeenCalledTimes(2);
+      expect(routes.remember).toHaveBeenCalledTimes(1);
+      expect(routes.remember).toHaveBeenCalledWith(
+        "studio",
+        { projectId: "proj-2", slot: 0 },
+        RUN_A
+      );
+    });
+
+    it.each([
+      ["a taskId conflict", new AppError({ code: "VALIDATION", message: "reused" }), "conflict"],
+      ["a send past its retry window", new RetryWindowPassedError("task-1"), "expired"],
+      [
+        "the host's refusal",
+        new AppError({ code: "PERMISSION", message: "not enrolled" }),
+        "policy_rejected",
+      ],
+    ])("remembers no route for %s", async (_label, error, outcome) => {
+      client.send.mockRejectedValueOnce(error);
+      await expect(runtime.sendMessage("a", SEND)).resolves.toMatchObject({
+        value: { outcome },
+      });
+      expect(client.send).toHaveBeenCalledTimes(1);
+      expect(routes.remember).not.toHaveBeenCalled();
     });
 
     it("remembers no route for a send it refused before sending", async () => {
@@ -854,6 +970,31 @@ describe("HubMessagingRuntime (#13336)", () => {
       const sent = await runtime.sendMessage("a", { ...SEND, waitMs: 20_000 });
       expect(sent).toMatchObject({ value: { wait: "timed_out" } });
       expect(client.get).toHaveBeenCalledTimes(1);
+    });
+
+    it("holds two waits at once, from any callers, and returns the next send without waiting", async () => {
+      const held: Array<() => void> = [];
+      sleep = () => new Promise<void>((resolve) => held.push(resolve));
+      client.get.mockResolvedValue(record({ state: "working" }));
+      const first = runtime.sendMessage("a", { ...SEND, waitMs: 10_000 });
+      const second = runtime.sendMessage("sibling", { ...SEND, waitMs: 10_000 });
+      await vi.waitFor(() => expect(held).toHaveLength(2));
+
+      await expect(
+        runtime.sendMessage("other-project", { ...SEND, waitMs: 10_000 })
+      ).resolves.toMatchObject({ ok: true, value: { outcome: "ok", wait: "skipped" } });
+      expect(client.send).toHaveBeenCalledTimes(3);
+
+      // One wait settles and frees its place for the next caller's.
+      client.get.mockResolvedValue(record({ state: "completed" }));
+      held.shift()!();
+      await expect(first).resolves.toMatchObject({ value: { wait: "settled" } });
+      const fourth = runtime.sendMessage("other-project", { ...SEND, waitMs: 10_000 });
+      await vi.waitFor(() => expect(held).toHaveLength(2));
+      held.shift()!();
+      held.shift()!();
+      await expect(second).resolves.toMatchObject({ value: { wait: "settled" } });
+      await expect(fourth).resolves.toMatchObject({ value: { wait: "settled" } });
     });
 
     it("waits for a reply when asked, and a timeout ends only the wait", async () => {

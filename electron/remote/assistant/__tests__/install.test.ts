@@ -5,6 +5,14 @@ const running = vi.hoisted(
   () =>
     new Map<string, { sessionId: string; terminalId: string; projectViewWebContentsId?: number }>()
 );
+/**
+ * The lane each help session was provisioned for, by session id, kept apart
+ * from `running`: a session its lane displaced still has its lane until it is
+ * revoked, as the real service keeps it.
+ */
+const provisioned = vi.hoisted(() => new Map<string, string>());
+/** Running lanes whose session no view has attached, by lane key. */
+const detached = vi.hoisted(() => new Set<string>());
 const sessionEnded = vi.hoisted(() => new Set<(event: unknown) => void>());
 /** Which project each of this machine's views shows, by WebContents id. */
 const views = vi.hoisted(() => new Map<number, string>());
@@ -47,9 +55,19 @@ vi.mock("../../../services/HelpSessionService.js", () => ({
     listRunningLanes: () =>
       [...running.keys()].map((key) => {
         const [projectId, slot] = key.split(":");
-        return { projectId: projectId!, slot: Number(slot), agentId: "claude", attached: true };
+        return {
+          projectId: projectId!,
+          slot: Number(slot),
+          agentId: "claude",
+          attached: !detached.has(key),
+        };
       }),
     getSessionLane: (helpSessionId: string) => {
+      const lane = provisioned.get(helpSessionId);
+      if (lane !== undefined) {
+        const [projectId, slot] = lane.split(":");
+        return { projectId: projectId!, slot: Number(slot) };
+      }
       for (const [key, run] of running) {
         if (run.sessionId !== helpSessionId) continue;
         const [projectId, slot] = key.split(":");
@@ -121,6 +139,34 @@ const migrationsFolder = path.resolve(
   path.dirname(fileURLToPath(import.meta.url)),
   "../../../services/persistence/migrations"
 );
+
+const remoteEndpoints: Array<() => void> = [];
+/** A remote Shell's open view of `projectId` at `handle`, over link session `linkSessionId`. */
+const remoteView = (handle: number, linkSessionId: string, projectId = "proj") => {
+  const endpointId = `remote${handle}`;
+  getEndpointRegistry().add({
+    endpointId,
+    clientId: "client",
+    projectId,
+    kind: "remote-view" as const,
+    handle,
+    linkSessionId,
+    send: () => {},
+    request: async () => null,
+    onClose: () => ({ dispose: () => {} }),
+    isClosed: () => false,
+  } as never);
+  remoteEndpoints.push(() => getEndpointRegistry().remove(endpointId));
+};
+
+beforeEach(() => {
+  provisioned.clear();
+  detached.clear();
+});
+
+afterEach(() => {
+  for (const remove of remoteEndpoints.splice(0)) remove();
+});
 
 describe("installAssistantMessagingPolicy", () => {
   let hosts: string[];
@@ -377,7 +423,6 @@ describe("installAssistantMessagingPolicy applying the saved default (#13441)", 
   let accepts: boolean;
   let defaultListeners: Set<() => void>;
   let uninstall: (() => void) | null = null;
-  const endpoints: Array<() => void> = [];
 
   const install = () =>
     (uninstall = installAssistantMessagingPolicy({
@@ -408,23 +453,6 @@ describe("installAssistantMessagingPolicy applying the saved default (#13441)", 
       pty.emit("spawn-result", terminalId, { success: true, id: terminalId, launchGeneration: 1 });
     }
   };
-  /** A remote Shell's open view of `proj` at `handle`, over link session `linkSessionId`. */
-  const remoteView = (handle: number, linkSessionId: string) => {
-    const endpointId = `remote${handle}`;
-    getEndpointRegistry().add({
-      endpointId,
-      clientId: "client",
-      projectId: "proj",
-      kind: "remote-view" as const,
-      handle,
-      linkSessionId,
-      send: () => {},
-      request: async () => null,
-      onClose: () => ({ dispose: () => {} }),
-      isClosed: () => false,
-    } as never);
-    endpoints.push(() => getEndpointRegistry().remove(endpointId));
-  };
   const nudge = () => {
     for (const listener of [...defaultListeners]) listener();
   };
@@ -444,7 +472,6 @@ describe("installAssistantMessagingPolicy applying the saved default (#13441)", 
   afterEach(() => {
     uninstall?.();
     uninstall = null;
-    for (const remove of endpoints.splice(0)) remove();
   });
 
   it("enrolls no run in this machine's own views: they reach hosts without one (#13468)", async () => {
@@ -582,7 +609,10 @@ describe.skipIf(process.platform === "win32")(
         wakes.push(request);
       });
     };
-    /** A spawned run in view `view`: 11 is this machine's view of `proj`, anything else isn't. */
+    /**
+     * A spawned run in view `view`: 11 is this machine's view of `proj`, -12 a
+     * remote Shell's open view of it once `remoteView(-12, ...)` registered it.
+     */
     const start = (lane: string, sessionId: string, view: number) => {
       const terminalId = `t-${sessionId}`;
       running.set(lane, { sessionId, terminalId, projectViewWebContentsId: view });
@@ -625,7 +655,8 @@ describe.skipIf(process.platform === "win32")(
 
     it("goes to the earliest of this machine's assistants taking messages, at its open address", () => {
       // A remote Shell's run here is that Shell's, never a recipient for this one's hosts.
-      start("proj:0", "s0", 12);
+      remoteView(-12, "link-a");
+      start("proj:0", "s0", -12);
       start("proj:1", "s1", 11);
       start("proj:2", "s2", 11);
       install();
@@ -658,7 +689,8 @@ describe.skipIf(process.platform === "win32")(
     });
 
     it("refuses as unavailable with nobody here taking messages, recording nothing", () => {
-      start("proj:0", "s0", 12);
+      remoteView(-12, "link-a");
+      start("proj:0", "s0", -12);
       install();
       expect(receive()).toEqual({ status: "refused", refusal: "hub_unavailable" });
       expect(wakes).toEqual([]);
@@ -705,7 +737,8 @@ describe.skipIf(process.platform === "win32")(
     });
 
     it("lets any live assistant in this machine's views send, never one a remote view runs", async () => {
-      start("proj:0", "s0", 12);
+      remoteView(-12, "link-a");
+      start("proj:0", "s0", -12);
       start("proj:1", "s1", 11);
       install();
       const send = vi.fn(async () => ({ status: "unknown" }));
@@ -721,10 +754,18 @@ describe.skipIf(process.platform === "win32")(
           generation: "g",
           text: "hello",
         };
+        // A live run here, in a real remote Shell's view of its own project: that Shell's.
+        expect(
+          getRemoteService("assistantMessagingPolicy")!.checkOpen(
+            { projectId: "proj", slot: 0 },
+            "admit"
+          ).ok
+        ).toBe(true);
         await expect(hub.sendMessage("s0", args)).resolves.toMatchObject({
           ok: false,
           code: "NOT_ELIGIBLE",
         });
+        await expect(hub.list("s0")).resolves.toMatchObject({ ok: false, code: "NOT_ELIGIBLE" });
         await expect(hub.sendMessage("s1", args)).resolves.toMatchObject({ ok: true });
         // Sent as that run, so only it is woken when the exchange moves.
         expect(send).toHaveBeenCalledTimes(1);
@@ -739,6 +780,61 @@ describe.skipIf(process.platform === "win32")(
             launchGeneration: 1,
           } satisfies OpenRun,
         ]);
+      } finally {
+        unregisterClient();
+      }
+    });
+
+    it("skips a running lane no view has attached as recipient", () => {
+      start("proj:0", "s0", 11);
+      start("proj:1", "s1", 11);
+      detached.add("proj:0");
+      install();
+      expect(
+        getRemoteService("assistantMessagingPolicy")!.checkOpen(
+          { projectId: "proj", slot: 0 },
+          "admit"
+        ).ok
+      ).toBe(true);
+      expect(receive()).toMatchObject({ status: "accepted" });
+      expect(lastWake()).toMatchObject({ lane: { projectId: "proj", slot: 1 } });
+      detached.add("proj:1");
+      expect(receive()).toEqual({ status: "refused", refusal: "hub_unavailable" });
+    });
+
+    it("refuses a session its lane displaced, while the session that replaced it may send", async () => {
+      start("proj:1", "s-old", 11);
+      provisioned.set("s-old", "proj:1");
+      install();
+      // The lane runs a new session now; the old one is still provisioned for it.
+      start("proj:1", "s-new", 11);
+      provisioned.set("s-new", "proj:1");
+      const send = vi.fn(async () => ({ status: "unknown" }));
+      const unregisterClient = registerRemoteService("assistantExchangeClient", {
+        send,
+      } as never);
+      try {
+        const hub = hostMessaging.runtime as HubMessagingRuntime;
+        const args = {
+          hostId: "studio",
+          projectId: "host-proj",
+          slot: 0,
+          generation: "g",
+          text: "hello",
+        };
+        expect(hub.isReachable("s-old")).toBe(true);
+        expect(hub.isAvailable("s-old")).toBe(false);
+        await expect(hub.sendMessage("s-old", args)).resolves.toMatchObject({
+          ok: false,
+          code: "NOT_ELIGIBLE",
+        });
+        await expect(hub.list("s-old")).resolves.toMatchObject({
+          ok: false,
+          code: "NOT_ELIGIBLE",
+        });
+        expect(send).not.toHaveBeenCalled();
+        await expect(hub.sendMessage("s-new", args)).resolves.toMatchObject({ ok: true });
+        expect(send.mock.calls[0]?.[2]).toMatchObject({ slot: 1, sessionId: "s-new" });
       } finally {
         unregisterClient();
       }
