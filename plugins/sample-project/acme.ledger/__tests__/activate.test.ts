@@ -494,22 +494,213 @@ describe("acme.ledger — row ids past 2^53", () => {
   });
 });
 
-describe("acme.ledger — add_transaction's rules, held by its schema and the triggers", () => {
+describe("acme.ledger — add_transaction refuses a malformed call", () => {
   it.each([
     [{ amount_cents: -1, category: "misc", memo: "" }, /'date'/],
-    [{ date: "2026-02-30", amount_cents: -1, category: "misc", memo: "" }, /day the calendar has/],
-    [{ date: "1 Sept", amount_cents: -1, category: "misc", memo: "" }, /date must be YYYY-MM-DD/],
-    [{ date: "2026-09-01", amount_cents: 0, category: "misc", memo: "" }, /non-zero integer/],
     [{ date: "2026-09-01", amount_cents: 1.5, category: "misc", memo: "" }, /amount_cents/],
     [{ date: "2026-09-01", amount_cents: "12", category: "misc", memo: "" }, /amount_cents/],
     [{ date: "2026-09-01", amount_cents: -1, category: "misc", memo: null }, /memo/],
-    [{ date: "2026-09-01", amount_cents: -1, category: "9lives", memo: "" }, /lower case/],
     [{ date: "2026-09-01", amount_cents: -1, category: "misc" }, /'memo'/],
   ] as const)("refuses %j", async (args, message) => {
     const { call, dispose } = await activated();
     await call("list_transactions");
     expect(() => addTransaction(args)).toThrow(message);
     expect((await call("list_transactions")).transactions).toEqual([]);
+    dispose();
+  });
+});
+
+function rowCount(): number {
+  const db = external();
+  try {
+    return Number((db.prepare("SELECT count(*) AS n FROM transactions").get() as { n: number }).n);
+  } finally {
+    db.close();
+  }
+}
+
+/** A ledger this version of the plugin created, with its triggers up to date. */
+async function seedCurrentLedger() {
+  const { call, dispose } = await activated();
+  await call("list_transactions");
+  dispose();
+}
+
+/**
+ * A ledger an earlier version created: the same migrations, and the triggers
+ * as they were before the calendar check, recorded as applied, so only the
+ * plugin's next open of the file replaces them.
+ */
+async function seedLedgerBeforeCalendarCheck() {
+  await seedCurrentLedger();
+  const db = external();
+  try {
+    const guards = db
+      .prepare(
+        "SELECT name, sql FROM sqlite_schema WHERE type = 'trigger' AND name LIKE 'transactions_guard_%'"
+      )
+      .all() as Array<{ name: string; sql: string }>;
+    expect(guards).toHaveLength(2);
+    for (const { name, sql } of guards) {
+      const older = sql.replace(
+        /\s*SELECT RAISE\(ABORT, 'date must be a day the calendar has[^;]*;/,
+        ""
+      );
+      expect(older).not.toBe(sql);
+      db.exec(`DROP TRIGGER ${name}; ${older};`);
+    }
+    db.exec(
+      "UPDATE _daintree_meta SET value = 'applied by an earlier version' WHERE key = 'definitions_sha256'"
+    );
+  } finally {
+    db.close();
+  }
+}
+
+/** A day the calendar lacks, written past the triggers as an agent's sqlite3 would. */
+function insertImpossibleDate() {
+  const db = external();
+  try {
+    db.prepare(
+      "INSERT INTO transactions (date, amount_cents, category, memo) VALUES ('2026-02-30', -1, 'misc', '')"
+    ).run();
+  } finally {
+    db.close();
+  }
+}
+
+const VALID = { date: "2026-09-01", amount_cents: -1, category: "misc", memo: "" };
+
+// The declared write runs no plugin code and the host never opens the file
+// with the plugin's migrations first, so each ledger below is called exactly as
+// it sits on disk.
+describe.each([
+  ["copied over from before host.db, with no triggers", async () => seedVersionOneLedger(() => {})],
+  ["created before the calendar check", seedLedgerBeforeCalendarCheck],
+  ["created by this version", seedCurrentLedger],
+] as const)("acme.ledger — add_transaction on a ledger %s", (_ledger, seed) => {
+  beforeEach(seed);
+
+  // A refusal that starts with the param's path is the host's input check, not
+  // a trigger or constraint in the file.
+  it.each([
+    ["a day February lacks", { date: "2026-02-30" }, /^\/date /],
+    ["29 February in a common year", { date: "2025-02-29" }, /^\/date /],
+    ["29 February in a century not divisible by 400", { date: "1900-02-29" }, /^\/date /],
+    ["a thirteenth month", { date: "2026-13-01" }, /^\/date /],
+    ["a date with an embedded NUL", { date: "2026-09-01\u0000" }, /^\/date /],
+    ["a date with a trailing newline", { date: "2026-09-01\n" }, /^\/date /],
+    ["a date in full-width digits", { date: "２０２６-09-01" }, /^\/date /],
+    ["a zero amount", { amount_cents: 0 }, /^\/amount_cents /],
+    ["one cent past the bound", { amount_cents: 100_000_000_001 }, /^\/amount_cents /],
+    ["one cent past the negative bound", { amount_cents: -100_000_000_001 }, /^\/amount_cents /],
+    ["a category with a letter outside ASCII", { category: "café" }, /^\/category /],
+    ["a category with an embedded NUL", { category: "misc\u0000" }, /^\/category /],
+    ["a category of 33 characters", { category: "a".repeat(33) }, /^\/category /],
+    ["a memo of 281 characters", { memo: "🧾".repeat(281) }, /^\/memo /],
+    ["281 characters with a NUL", { memo: `${"x".repeat(280)}\u0000` }, /^\/memo /],
+  ] as const)("refuses %s and writes nothing", (_what, change, message) => {
+    const before = rowCount();
+    expect(() => addTransaction({ ...VALID, ...change })).toThrow(message);
+    expect(rowCount()).toBe(before);
+  });
+
+  it("stores leap days and the amount bounds themselves", () => {
+    const stored = [
+      transaction("2024-02-29", -100_000_000_000, "misc"),
+      transaction("2000-02-29", 100_000_000_000, "misc"),
+    ].map((result) => result.rows![0]!.slice(1, 3));
+    expect(stored).toEqual([
+      ["2024-02-29", -100_000_000_000],
+      ["2000-02-29", 100_000_000_000],
+    ]);
+  });
+
+  it("stores a memo of 280 characters of any kind, embedded NULs included, unchanged", () => {
+    const memos = [
+      "🧾".repeat(280),
+      `${"x".repeat(139)}\u0000${"y".repeat(140)}`,
+      "cafe\u0301 — naïve, 家計簿",
+    ];
+    for (const memo of memos) transaction("2026-09-01", -1, "misc", memo);
+    const db = external();
+    try {
+      // Compared as bytes: node:sqlite before Node 26 ends a string it reads
+      // back at the first NUL, though SQLite stored all of it.
+      const rows = db
+        .prepare("SELECT hex(memo) AS memo FROM transactions ORDER BY id")
+        .all() as Array<{
+        memo: string;
+      }>;
+      expect(rows.map((row) => row.memo)).toEqual(
+        memos.map((memo) => Buffer.from(memo, "utf8").toString("hex").toUpperCase())
+      );
+    } finally {
+      db.close();
+    }
+  });
+
+  it("trims Unicode whitespace around a category and lowercases it", () => {
+    expect(transaction("2026-09-01", -1, "\u3000Eating Out\u00a0\ufeff").rows![0]![3]).toBe(
+      "eating out"
+    );
+  });
+});
+
+describe("acme.ledger — an older ledger once the plugin opens it again", () => {
+  it.each([
+    ["copied over from before host.db", async () => seedVersionOneLedger(() => {})],
+    ["created before the calendar check", seedLedgerBeforeCalendarCheck],
+  ] as const)(
+    "a ledger %s takes a day the calendar lacks from sqlite3 until then",
+    async (_ledger, seed) => {
+      await seed();
+      insertImpossibleDate();
+      const { call, dispose } = await activated();
+      await call("list_transactions");
+      dispose();
+      expect(() => insertImpossibleDate()).toThrow(/day the calendar has/);
+      // The rule reaches rows written from now on; one already stored stays.
+      const db = external();
+      try {
+        expect(
+          db.prepare("SELECT count(*) AS n FROM transactions WHERE date(date) IS NOT date").get()
+        ).toEqual({ n: 1 });
+      } finally {
+        db.close();
+      }
+    }
+  );
+});
+
+describe("acme.ledger — both writers hold a memo and an amount to the same bounds", () => {
+  const split = (total_cents: number, memo: string) => ({
+    date: "2026-09-01",
+    total_cents,
+    memo,
+    splits: [
+      { category: "a", amount_cents: total_cents - 1 },
+      { category: "b", amount_cents: 1 },
+    ],
+  });
+
+  it.each([
+    ["the largest amount", 100_000_000_000, "", true],
+    ["one cent more", 100_000_000_001, "", false],
+    ["a memo of 280 characters", 2, "🧾".repeat(280), true],
+    ["a memo of 281", 2, "🧾".repeat(281), false],
+  ] as const)("%s", async (_case, amount, memo, accepted) => {
+    const { call, dispose } = await activated();
+    await call("list_transactions");
+    const declared = () => transaction("2026-09-01", amount, "misc", memo);
+    const viaSplit = call("add_split_transaction", split(amount, memo));
+    if (accepted) {
+      expect(declared).not.toThrow();
+      await expect(viaSplit).resolves.toMatchObject({ committed: true });
+    } else {
+      expect(declared).toThrow();
+      await expect(viaSplit).rejects.toThrow();
+    }
     dispose();
   });
 });

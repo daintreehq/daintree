@@ -922,10 +922,32 @@ export interface PluginDatabaseContribution {
 /** The JSON type an agent passes for one declared query parameter. */
 export type PluginDatabaseQueryParamType = "string" | "number" | "integer" | "boolean";
 
-/** One parameter of a declared query, bound to the placeholder of the same name. */
+/** The `format`s a declared `"string"` param may require, as JSON Schema defines them. */
+export type PluginDatabaseQueryParamFormat =
+  "date" | "time" | "date-time" | "email" | "uri" | "uuid";
+
+/**
+ * One parameter of a declared query, bound to the placeholder of the same name.
+ *
+ * The constraints are JSON Schema keywords copied into the tool's input
+ * schema, which the host checks before the statement runs. Unlike a trigger
+ * or `CHECK` constraint, they do not depend on what schema the file has when
+ * the query is called, so a rule about one value belongs here. A string may
+ * take `minLength`, `maxLength` (both counted in characters), `pattern` (a
+ * Unicode regular expression) and `format`; a number or integer `minimum` and
+ * `maximum` (inclusive). `not: { const }` refuses one value of the param's
+ * type, such as 0.
+ */
 export interface PluginDatabaseQueryParam {
   type: PluginDatabaseQueryParamType;
   description?: string;
+  minLength?: number;
+  maxLength?: number;
+  pattern?: string;
+  format?: PluginDatabaseQueryParamFormat;
+  minimum?: number;
+  maximum?: number;
+  not?: { const: string | number | boolean };
 }
 
 /**

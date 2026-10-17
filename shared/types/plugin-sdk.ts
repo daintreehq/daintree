@@ -156,6 +156,7 @@ export type {
   PluginDatabaseContribution,
   PluginDatabaseQueryContribution,
   PluginDatabaseQueryParam,
+  PluginDatabaseQueryParamFormat,
   PluginDatabaseQueryParamType,
   PluginDatabaseApi,
   PluginDatabase,

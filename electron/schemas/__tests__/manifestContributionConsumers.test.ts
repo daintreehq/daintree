@@ -1057,6 +1057,41 @@ const MANIFEST_CONTRIBUTION_FIELD_CONSUMERS = {
       consumers: [{ file: DECLARED_QUERIES, symbol: "declaredQueryInputSchema" }],
       note: "The property description in the tool's input schema.",
     },
+    minLength: {
+      mode: "verbatim",
+      consumers: [{ file: DECLARED_QUERIES, symbol: "declaredQueryInputSchema" }],
+      note: "Copied into the param's input-schema property; the host checks it before the statement runs.",
+    },
+    maxLength: {
+      mode: "verbatim",
+      consumers: [{ file: DECLARED_QUERIES, symbol: "declaredQueryInputSchema" }],
+      note: "Copied into the param's input-schema property; the host checks it before the statement runs.",
+    },
+    pattern: {
+      mode: "verbatim",
+      consumers: [{ file: DECLARED_QUERIES, symbol: "declaredQueryInputSchema" }],
+      note: "Copied into the param's input-schema property; the host checks it before the statement runs.",
+    },
+    format: {
+      mode: "verbatim",
+      consumers: [{ file: DECLARED_QUERIES, symbol: "declaredQueryInputSchema" }],
+      note: "Copied into the param's input-schema property; the host's Ajv formats enforce it.",
+    },
+    minimum: {
+      mode: "verbatim",
+      consumers: [{ file: DECLARED_QUERIES, symbol: "declaredQueryInputSchema" }],
+      note: "Copied into the param's input-schema property, replacing an integer's safe-range default.",
+    },
+    maximum: {
+      mode: "verbatim",
+      consumers: [{ file: DECLARED_QUERIES, symbol: "declaredQueryInputSchema" }],
+      note: "Copied into the param's input-schema property, replacing an integer's safe-range default.",
+    },
+    not: {
+      mode: "verbatim",
+      consumers: [{ file: DECLARED_QUERIES, symbol: "declaredQueryInputSchema" }],
+      note: "Copied into the param's input-schema property: the one value the param refuses.",
+    },
   },
   recipes: {
     id: {

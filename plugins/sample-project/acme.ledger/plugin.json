@@ -22,16 +22,28 @@
             "mode": "write",
             "description": "Append one transaction to this project's ledger and return the row as stored. For one payment across several categories use add_split_transaction. If the ledger does not exist yet, call list_transactions once to create it. A cancelled or timed-out call may still have stored the row: list before retrying.",
             "params": {
-              "date": { "type": "string", "description": "YYYY-MM-DD, a day the calendar has" },
+              "date": {
+                "type": "string",
+                "format": "date",
+                "description": "YYYY-MM-DD, a day the calendar has"
+              },
               "amount_cents": {
                 "type": "integer",
+                "minimum": -100000000000,
+                "maximum": 100000000000,
+                "not": { "const": 0 },
                 "description": "Integer cents, never 0, negative for money out: 18.99 spent is -1899"
               },
               "category": {
                 "type": "string",
+                "pattern": "^\\s*[A-Za-z][A-Za-z0-9 _-]{0,31}\\s*$",
                 "description": "A letter, then letters, digits, spaces, _ or -, at most 32; stored lower case"
               },
-              "memo": { "type": "string", "description": "Free text, \"\" for none" }
+              "memo": {
+                "type": "string",
+                "maxLength": 280,
+                "description": "Free text, at most 280 characters, \"\" for none"
+              }
             },
             "sql": "INSERT INTO transactions (date, amount_cents, category, memo, recorded_at) VALUES (:date, :amount_cents, lower(trim(:category, char(9, 10, 11, 12, 13, 32, 160, 5760, 8192, 8193, 8194, 8195, 8196, 8197, 8198, 8199, 8200, 8201, 8202, 8232, 8233, 8239, 8287, 12288, 65279))), :memo, strftime('%Y-%m-%dT%H:%M:%fZ', 'now')) RETURNING id, date, amount_cents, category, memo, recorded_at"
           }

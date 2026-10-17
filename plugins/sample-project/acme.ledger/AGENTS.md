@@ -15,7 +15,7 @@ Daintree may give you tools for this ledger on one MCP server, `daintree-ledger`
 - **Databases (read-only)**: `database_schema` shows the schema, and `database_query` runs one read-only `SELECT`, `WITH` or pragma with `databaseId` `ledger`, binding values with `?` and `params`. It always reads the project root's file, whichever worktree you are in, and it cannot write.
 - **Household ledger**: `list_transactions` and `summarize_by_category` to read; `add_transaction` for one transaction, and `add_split_transaction` for one payment split across categories. They apply every rule below for you.
 
-`add_transaction` is one `INSERT` that Daintree runs itself from the ledger's `plugin.json`, so the triggers below are the whole of what it checks, and a refusal is the trigger's message. Pass every argument, `memo` as `""` when there is none. It returns the stored row as `columns` and `rows`, with `changes` and `lastInsertRowid`. It records when the row was written, not which terminal wrote it; `add_split_transaction` records both.
+`add_transaction` is one `INSERT` that Daintree runs itself from the ledger's `plugin.json`. Daintree checks each argument first — a calendar date, a non-zero `amount_cents` no larger than 100000000000 in magnitude, the category grammar, a `memo` of at most 280 characters — and the triggers below then check the row; a refusal names the rule it broke. Pass every argument, `memo` as `""` when there is none. It returns the stored row as `columns` and `rows`, with `changes` and `lastInsertRowid`. It records when the row was written, not which terminal wrote it; `add_split_transaction` records both.
 
 Neither set updates or deletes a row. For that, or without the tools, use `sqlite3` under the rules below.
 
@@ -32,6 +32,8 @@ Neither set updates or deletes a row. For that, or without the tools, use `sqlit
 | `recorded_at`, `recorded_terminal_id`, `recorded_agent_hint` | Set by the ledger tools: `recorded_at` by both writers, the other two by `add_split_transaction` only. Leave them `NULL` when you write a row yourself. |
 
 Triggers refuse a row that breaks the rules for `date`, `amount_cents`, `category` and the split columns, and the error says what to write instead. They check the whole row on every `UPDATE`, so an edit to one column of an older row that breaks another rule is refused until you fix both. The table itself refuses a value it cannot store as the column's type, such as `-18.99` for `amount_cents`.
+
+A ledger copied over from an older version of the plugin gets these triggers the first time one of the plugin's own tools opens it, and until then has older ones or none, so call `list_transactions` once before writing such a ledger with `sqlite3`. A trigger checks a row only when it is written, so a row stored before a rule existed stays as it was until someone edits it. To find dates the calendar lacks: `SELECT id, date FROM transactions WHERE date(date) IS NOT date;`
 
 ## Splits
 

@@ -1606,6 +1606,54 @@
                             "type": "string",
                             "minLength": 1,
                             "maxLength": 400
+                          },
+                          "minLength": {
+                            "type": "integer",
+                            "minimum": 0,
+                            "maximum": 9007199254740991
+                          },
+                          "maxLength": {
+                            "type": "integer",
+                            "minimum": 0,
+                            "maximum": 9007199254740991
+                          },
+                          "pattern": {
+                            "type": "string",
+                            "minLength": 1,
+                            "maxLength": 1024
+                          },
+                          "format": {
+                            "type": "string",
+                            "enum": [
+                              "date",
+                              "time",
+                              "date-time",
+                              "email",
+                              "uri",
+                              "uuid"
+                            ]
+                          },
+                          "minimum": {
+                            "type": "number"
+                          },
+                          "maximum": {
+                            "type": "number"
+                          },
+                          "not": {
+                            "type": "object",
+                            "properties": {
+                              "const": {
+                                "type": [
+                                  "string",
+                                  "number",
+                                  "boolean"
+                                ]
+                              }
+                            },
+                            "required": [
+                              "const"
+                            ],
+                            "additionalProperties": false
                           }
                         },
                         "required": [

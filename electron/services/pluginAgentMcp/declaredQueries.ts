@@ -197,8 +197,24 @@ function scanPlaceholders(tokens: readonly SqlToken[]): PlaceholderScan {
   return { spellings, problems };
 }
 
+/** The JSON Schema keywords a param declares, copied into its property as written. */
+const PARAM_CONSTRAINT_KEYWORDS = [
+  "minLength",
+  "maxLength",
+  "pattern",
+  "format",
+  "minimum",
+  "maximum",
+  "not",
+] as const;
+
+/**
+ * One param's property. An integer is held to the range a JavaScript number
+ * binds exactly unless the param declares a narrower one; the manifest schema
+ * keeps a declared bound inside it.
+ */
 function paramSchema(param: PluginDatabaseQueryParam): Record<string, unknown> {
-  const base: Record<string, unknown> =
+  const schema: Record<string, unknown> =
     param.type === "integer"
       ? {
           type: "integer",
@@ -206,7 +222,10 @@ function paramSchema(param: PluginDatabaseQueryParam): Record<string, unknown> {
           maximum: Number.MAX_SAFE_INTEGER,
         }
       : { type: param.type };
-  return param.description !== undefined ? { ...base, description: param.description } : base;
+  for (const keyword of PARAM_CONSTRAINT_KEYWORDS) {
+    if (param[keyword] !== undefined) schema[keyword] = param[keyword];
+  }
+  return param.description !== undefined ? { ...schema, description: param.description } : schema;
 }
 
 /** The tool's input schema: every param, each required, nothing else. */
