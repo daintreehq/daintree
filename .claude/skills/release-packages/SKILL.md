@@ -2,14 +2,14 @@
 name: release-packages
 disable-model-invocation: true
 argument-hint: "[package or 'all'] [patch|minor] — e.g. `sdk minor`, `all patch`, or nothing to be asked"
-description: "Release the plugin author npm packages (@daintreehq/plugin-sdk, @daintreehq/plugin-vite, daintree-plugin, create-daintree-plugin): work out which ones changed since they were last published, bump their versions with the correct cascade through dependents and the scaffold's version ranges, open the bump PR to develop, and, once main carries the bump, cut the per-package tags that make release-packages.yml publish through npm Trusted Publishing. Use this whenever the user wants to publish, release, bump, version, or ship any of the plugin packages or the plugin SDK, CLI or Vite preset, even if they only say 'push a new SDK' or 'get the CLI fix out'. Do not use it for the Electron app release; that is the `release` command."
+description: "Release the plugin author npm packages (@daintreehq/plugin-sdk, @daintreehq/plugin-vite, daintree-plugin, create-daintree-plugin, @daintreehq/tour): work out which ones changed since they were last published, bump their versions with the correct cascade through dependents and the scaffold's version ranges, open the bump PR to develop, and, once main carries the bump, cut the per-package tags that make release-packages.yml publish through npm Trusted Publishing. Use this whenever the user wants to publish, release, bump, version, or ship any of the plugin packages or the plugin SDK, CLI, Vite preset or tour engine, even if they only say 'push a new SDK' or 'get the CLI fix out'. Do not use it for the Electron app release; that is the `release` command."
 ---
 
 # Release Packages
 
-Release the four plugin author packages that live in `packages/` and publish through `.github/workflows/release-packages.yml`. This is a human-driven workflow with checkpoints: use `AskUserQuestion` at each one and never move past it without an answer. The user decides versions and timing, you do the bookkeeping and keep the invariants honest.
+Release the five plugin author packages that live in `packages/` and publish through `.github/workflows/release-packages.yml`. This is a human-driven workflow with checkpoints: use `AskUserQuestion` at each one and never move past it without an answer. The user decides versions and timing, you do the bookkeeping and keep the invariants honest.
 
-**Argument (may be empty):** `$ARGUMENTS`. A package name (`sdk`, `vite`, `cli`, `create`, or `all`) and an optional bump size pre-answer the questions in Phase 0. Confirm them anyway.
+**Argument (may be empty):** `$ARGUMENTS`. A package name (`sdk`, `vite`, `cli`, `create`, `tour`, or `all`) and an optional bump size pre-answer the questions in Phase 0. Confirm them anyway.
 
 ## What gets released
 
@@ -19,6 +19,7 @@ Release the four plugin author packages that live in `packages/` and publish thr
 | `@daintreehq/plugin-vite` | `packages/plugin-vite` | `plugin-vite-v` | nothing (peers: vite, react) |
 | `daintree-plugin` | `packages/daintree-plugin` | `daintree-plugin-v` | scaffolds pin sdk, vite and itself |
 | `create-daintree-plugin` | `packages/create-daintree-plugin` | `create-daintree-plugin-v` | `daintree-plugin` |
+| `@daintreehq/tour` | `packages/tour` | `tour-v` | nothing (optional peers: react, lucide-react) |
 
 `@daintreehq/svelte-source-model` is private and never published. `@daintreehq/plugin-testing` no longer exists; its mock host ships as `@daintreehq/plugin-sdk/testing`.
 
@@ -29,7 +30,7 @@ Read `.github/workflows/release-packages.yml` once before starting; it is the so
 - **Versions are independent.** Bump only what changed. One tag push publishes every package whose `package.json` version is not yet on the registry and skips the rest, so several bumps can ride one tag.
 - **A tag must match its package's version exactly** or the run fails on purpose.
 - **Anything that publishes must be a commit on `main`.** The workflow checks ancestry. Package tags are therefore cut from `main`, after the bump has ridden a normal app release there. Never tag `develop` or a feature branch.
-- **Publishing needs no token.** Each package has this repo and this workflow registered as its npm trusted publisher, so the workflow publishes with an OIDC token and provenance. The skill never runs `npm publish` itself. The one exception is a package that has never been published: npm cannot register a trusted publisher for a package that does not exist, so its first version is published by hand from a logged-in laptop, after which the trusted publisher is added on npmjs.com. If `npm view <name> version` returns E404, tell the user that is where they are and point them at the maintainer note in `docs/plugins/dev-loop.md`.
+- **Publishing needs no token.** Each package has this repo and this workflow registered as its npm trusted publisher, so the workflow publishes with an OIDC token and provenance. The skill never runs `npm publish` itself. The one exception is a package that has never been published: npm cannot register a trusted publisher for a package that does not exist, so its first version is published by hand from a logged-in laptop, after which the trusted publisher is added on npmjs.com. If `npm view <name> version` returns E404, tell the user that is where they are and point them at the maintainer note in `docs/plugins/dev-loop.md`. `@daintreehq/tour` is in that state until its 0.1.0 goes up by hand. It is last in the workflow's publish order, so a tag pushed before then still publishes the other packages, but the run fails at the tour's publish step; do that first publish before cutting any tag.
 
 ## The version cascade
 
@@ -41,7 +42,7 @@ This is the part that goes wrong when done by hand. Several places pin these pac
 | `@daintreehq/plugin-vite` | `packages/daintree-plugin/src/scaffold/templates.ts` devDependency `@daintreehq/plugin-vite` | `daintree-plugin` (patch at least) |
 | `daintree-plugin` | `packages/daintree-plugin/src/scaffold/templates.ts` devDependency `daintree-plugin`, its assertion in `packages/daintree-plugin/src/__tests__/new.test.ts`, and `packages/create-daintree-plugin/package.json` dependency `daintree-plugin` | `create-daintree-plugin` (patch at least) |
 
-A **patch** bump changes no ranges and cascades nowhere. Find every pinned range with `git grep -n -E '"(@daintreehq/plugin-(sdk|vite)|daintree-plugin)": "\^' -- packages` rather than trusting this table; a new pin added since this was written is exactly the kind of thing that slips.
+`@daintreehq/tour` has no row: nothing in `packages/` pins it, so its bumps never cascade. A **patch** bump changes no ranges and cascades nowhere. Find every pinned range with `git grep -n -E '"(@daintreehq/(plugin-sdk|plugin-vite|tour)|daintree-plugin)": "\^' -- packages` rather than trusting this table; a new pin added since this was written is exactly the kind of thing that slips.
 
 Pre-1.0 sizing, unless the user says otherwise: a change an author can see (new export, new CLI flag, new scaffold output, changed behaviour) is **minor**; a fix, a docs-only or test-only change, or a rebuild with no visible difference is **patch**. Breaking changes are also minor on 0.x, and the changelog line must say so. There is no separate changelog file for the packages; the PR body and the GitHub release notes carry it.
 
@@ -50,11 +51,11 @@ Pre-1.0 sizing, unless the user says otherwise: a change an author can see (new 
 1. Read every published version and the version in the tree, and list the changes since each package's last tag:
 
 ```bash
-for p in plugin-sdk plugin-vite daintree-plugin create-daintree-plugin; do
+for p in plugin-sdk plugin-vite daintree-plugin create-daintree-plugin tour; do
   name=$(node -p "require('./packages/$p/package.json').name")
   echo "$name tree=$(node -p "require('./packages/$p/package.json').version") npm=$(npm view "$name" version 2>/dev/null || echo unpublished)"
 done
-git tag -l 'sdk-v*' 'plugin-vite-v*' 'daintree-plugin-v*' 'create-daintree-plugin-v*' | sort -V
+git tag -l 'sdk-v*' 'plugin-vite-v*' 'daintree-plugin-v*' 'create-daintree-plugin-v*' 'tour-v*' | sort -V
 git log --oneline <last-tag-for-that-package>..HEAD -- packages/<dir>
 ```
 
@@ -121,7 +122,7 @@ Enter here when `main` already carries versions that npm does not have. Verify t
 
 ```bash
 git checkout main && git pull origin main
-for p in plugin-sdk plugin-vite daintree-plugin create-daintree-plugin; do
+for p in plugin-sdk plugin-vite daintree-plugin create-daintree-plugin tour; do
   name=$(node -p "require('./packages/$p/package.json').name")
   echo "$name main=$(node -p "require('./packages/$p/package.json').version") npm=$(npm view "$name" version 2>/dev/null || echo unpublished)"
 done
