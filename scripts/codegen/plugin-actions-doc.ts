@@ -102,7 +102,7 @@ async function loadRegistry(): Promise<ActionRegistry> {
 }
 
 /**
- * Exits explicitly once the message is flushed. The SSR load constructs the
+ * Exits explicitly once the message write completes or fails. The SSR load constructs the
  * renderer's `TerminalInstanceService` singleton, whose reflow heartbeat and
  * reconciliation watchdog arm intervals that outlive `server.close()`, so the
  * process would otherwise never exit on its own.
