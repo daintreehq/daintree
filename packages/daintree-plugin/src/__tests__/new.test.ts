@@ -154,8 +154,9 @@ describe("scaffoldPlugin", () => {
 
     // The runtime (`PluginService.loadPlugin`) registers a panel kind only while
     // iterating declared `panels`, attaching a view's componentPath when ids
-    // match. A view with no matching non-PTY panel is ignored, so the scaffold
-    // must pair every view with a panel of the same id for it to render.
+    // match. The manifest validator rejects a panel view with no matching panel,
+    // and a PTY panel never renders a view, so the scaffold must pair every view with
+    // a non-PTY panel of the same id.
     const panel = contributes.panels.find((p) => p.id === contributes.views[0].id);
     expect(panel).toBeDefined();
     expect(panel?.hasPty ?? false).toBe(false);

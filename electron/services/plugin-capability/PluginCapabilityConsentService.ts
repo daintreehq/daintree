@@ -2,7 +2,7 @@ import type { BuiltInPluginCapability, PluginScopeKey } from "../../../shared/ty
 import type { PluginCapabilityConsentOutcome } from "../../../shared/types/pluginCapabilityConsent.js";
 import type { PluginCapabilityConsentStore } from "./PluginCapabilityConsentStore.js";
 
-/** Prefix on the thrown error so `useHostChannel` discriminates a denial. */
+/** Prefix on the thrown error so a plugin view can recognise a denial. */
 export const PLUGIN_CAPABILITY_DENIED_PREFIX = "PERMISSION_REQUIRED";
 
 /**

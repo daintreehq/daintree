@@ -2977,8 +2977,9 @@ function buildPluginManifestSchema(origin: PluginOrigin) {
       // resolves to the empty string, silently dropping the value. Agent
       // command/args also resolve `${settings:*}` at spawn (via
       // `resolveSettingTemplate` in terminal/lifecycle.ts), but are deliberately
-      // NOT validated here — that path tolerates an unset id at launch, so this
-      // parse-time check stays scoped to MCP contributions. The
+      // NOT validated here — that path throws `SettingTemplateError` for an
+      // unset or empty value at launch, so this parse-time check stays scoped
+      // to MCP contributions. The
       // scan matches any `${settings:...}` shape (broad inner pattern), then
       // classifies: a key outside the `${SAFE_ID_PATTERN}` grammar is malformed
       // (the supervisor's stricter regex would skip it, passing the literal
