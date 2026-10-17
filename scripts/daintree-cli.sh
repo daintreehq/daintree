@@ -36,10 +36,12 @@ get_version() {
   script_dir="$(dirname "$SCRIPT_PATH")"
 
   # Packaged Linux: the script sits in resources/ beside app.asar, which carries
-  # the build stamp uncompressed (scripts/build-main.mjs).
+  # the build stamp uncompressed (scripts/build-main.mjs). LC_ALL=C because
+  # macOS 14's grep matches nothing in a UTF-8 locale once it meets a byte
+  # that isn't valid UTF-8, and app.asar is binary.
   if [[ -f "$script_dir/app.asar" ]]; then
     local stamp=""
-    stamp="$(grep -a -o -m 1 -E '[{]"daintreeBuildInfo":1,"version":"[0-9A-Za-z.+-]+"' "$script_dir/app.asar" 2>/dev/null | head -1)"
+    stamp="$(LC_ALL=C grep -a -o -m 1 -E '[{]"daintreeBuildInfo":1,"version":"[0-9A-Za-z.+-]+"' "$script_dir/app.asar" 2>/dev/null | head -1)"
     if [[ -n "$stamp" ]]; then
       echo "${stamp##*\"version\":\"}" | tr -d '"'
       return
