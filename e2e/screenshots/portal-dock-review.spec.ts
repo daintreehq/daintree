@@ -3,8 +3,9 @@
  *
  * Drives the Portal preview entry (`portal-preview.html`), which mounts the real
  * `PortalDock` from fixtures: the launchpad on first run and on a blank tab, a
- * chat page with its tab strip, the no-links empty state, and the dev-server
- * section empty and populated. Hover and keyboard-focus states are performed
+ * chat page with its tab strip, a restored tab's skeleton at narrow, default and
+ * wide widths, the no-links empty state, and the dev-server section empty and
+ * populated. Hover and keyboard-focus states are performed
  * with a real pointer and real keys.
  *
  * Opt-in only: skips itself unless DAINTREE_SHOT_PORTAL is set.
@@ -16,7 +17,9 @@
  *   DAINTREE_SHOT_PORTAL   required — any truthy value runs the capture
  *   DAINTREE_SHOT_DIR      required — an ABSOLUTE output directory outside the repo
  *   DAINTREE_SHOT_THEMES   themes for the per-state captures (default daintree,bondi,namib)
- *   DAINTREE_SHOT_SWEEP    "0" skips the all-themes sweep of the first-run launchpad
+ *   DAINTREE_SHOT_FIXTURES fixtures to capture (default all)
+ *   DAINTREE_SHOT_SWEEP    "0" skips the all-themes sweep
+ *   DAINTREE_SHOT_SWEEP_FIXTURE  the fixture the sweep captures (default launchpad-first-run)
  */
 
 import { test, expect, type Locator, type Page } from "@playwright/test";
@@ -26,6 +29,7 @@ import { BUILT_IN_THEME_SOURCES } from "@shared/theme/builtInThemeSources";
 import {
   FIXTURE_NAMES,
   getFixture,
+  isFixtureName,
   type FixtureName,
 } from "../../src/components/Portal/__preview__/fixtures";
 import {
@@ -42,6 +46,12 @@ const THEMES = (process.env.DAINTREE_SHOT_THEMES ?? "daintree,bondi,namib")
   .map((t) => t.trim())
   .filter(Boolean);
 const SWEEP = process.env.DAINTREE_SHOT_SWEEP !== "0";
+const SWEEP_FIXTURE = process.env.DAINTREE_SHOT_SWEEP_FIXTURE ?? "launchpad-first-run";
+const FIXTURES_TO_SHOOT = process.env.DAINTREE_SHOT_FIXTURES
+  ? process.env.DAINTREE_SHOT_FIXTURES.split(",")
+      .map((f) => f.trim())
+      .filter(Boolean)
+  : FIXTURE_NAMES;
 const ALL_THEMES = BUILT_IN_THEME_SOURCES.map((t) => t.id);
 
 test.use({ deviceScaleFactor: 2 });
@@ -165,6 +175,13 @@ async function expectFixtureState(page: Page, name: FixtureName): Promise<void> 
   for (const tab of spec.tabs) {
     await expect(page.getByRole("tab", { name: tab.title }).first()).toBeAttached();
   }
+  const restoring =
+    spec.activeTabId !== null &&
+    !!spec.tabs.find((t) => t.id === spec.activeTabId)?.url &&
+    !(spec.createdTabs ?? []).includes(spec.activeTabId);
+  const skeleton = page.getByRole("status", { name: "Loading tab" });
+  if (restoring) await expect(skeleton).toBeVisible();
+  else await expect(skeleton).toHaveCount(0);
   const launchpad =
     spec.activeTabId === null || spec.tabs.find((t) => t.id === spec.activeTabId)?.url === null;
   if (launchpad && !spec.noLinks) {
@@ -207,11 +224,18 @@ test("Portal dock — states and themes", async ({ page }) => {
     throw new Error(`Unknown theme(s) in DAINTREE_SHOT_THEMES: ${unknown.join(", ")}`);
   }
 
+  const unknownFixtures = [...FIXTURES_TO_SHOOT, SWEEP_FIXTURE].filter((f) => !isFixtureName(f));
+  if (unknownFixtures.length > 0) {
+    throw new Error(`Unknown fixture(s): ${unknownFixtures.join(", ")}`);
+  }
+  const fixtures = FIXTURES_TO_SHOOT.filter(isFixtureName);
+  const sweepFixture = SWEEP_FIXTURE as FixtureName;
+
   const snap = makeSnap(OUT_DIR);
   const written: string[] = [];
 
   for (const theme of THEMES) {
-    for (const name of FIXTURE_NAMES) {
+    for (const name of fixtures) {
       await open(page, name, theme);
       await drive(page, name);
       await expectFixtureState(page, name);
@@ -223,13 +247,14 @@ test("Portal dock — states and themes", async ({ page }) => {
 
   if (SWEEP) {
     for (const sweepTheme of ALL_THEMES) {
-      const frame = await open(page, "launchpad-first-run", sweepTheme);
-      written.push(await snap(frame, `sweep--launchpad--${sweepTheme}.png`));
+      const frame = await open(page, sweepFixture, sweepTheme);
+      await expectFixtureState(page, sweepFixture);
+      written.push(await snap(frame, `sweep--${sweepFixture}--${sweepTheme}.png`));
     }
   }
 
   const onDisk = readdirSync(OUT_DIR).filter((f) => f.endsWith(".png"));
   expect(onDisk.length).toBe(written.length);
-  expect(onDisk.length).toBeGreaterThanOrEqual(THEMES.length * FIXTURE_NAMES.length);
+  expect(onDisk.length).toBeGreaterThanOrEqual(THEMES.length * fixtures.length);
   console.log(`[portal-shots] ${onDisk.length} PNGs in ${OUT_DIR}`);
 });
