@@ -137,9 +137,9 @@ type Pinned = ComposerPin;
  * Segments while the chain is short enough to read at a glance in the drawer.
  *
  * 30 characters is what fits the control's own width, and the control now gets
- * that width at every drawer size: `PropertyRow` drops its 64px label column
+ * that width at every drawer size: `PropertyRow` drops its 48px label column
  * below a 340px drawer (see `InspectorSection`), so the 280px floor hands the
- * segments the full content box rather than 184px of it. Before that the
+ * segments the full content box rather than 200px of it. Before that the
  * budget was a guess about the widest case and the narrow case silently
  * overflowed into an `overflow-hidden` wrapper — which did not truncate a
  * label, it removed a scope the user could no longer reach.
