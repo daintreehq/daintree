@@ -21,7 +21,7 @@ export const HOST_MEMORY_PAUSE_COPY = {
     title: "Memory pause lifted",
     body: "A terminal host still reports a memory warning and may pause output again.",
   },
-  detailsHint: "Click to open Why slow?",
+  detailsHint: "Open Why slow?",
   whySlow: {
     paused: "A terminal host paused its output to reduce its memory use",
     monitoring: "A terminal host lifted its memory pause but still reports a memory warning",
