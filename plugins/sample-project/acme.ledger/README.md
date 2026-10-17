@@ -69,4 +69,4 @@ Earlier versions of this sample kept the ledger at `.daintree/plugin-storage/acm
 
 At most 16 tools per endpoint, names matching `^[a-z][a-z0-9_]{0,31}$`, descriptions up to 400 bytes, schemas that are plain `{ "type": "object" }` objects up to 8 KiB, results up to 256 KiB of JSON, and 60 seconds per call. The host rejects a roster that breaks any of these whole.
 
-`engines.daintree` is `>=0.44.0`, the first release with declared queries (`add_transaction`); 0.43 and earlier read the manifest strictly and refuse it as unreadable regardless of the range.
+`engines.daintree` is `>=0.44.0`, the first release with declared queries (`add_transaction`); 0.43 and earlier reject the unknown `queries` field at the strict schema gate and show the plugin as Unreadable regardless of the range.

@@ -383,10 +383,9 @@ interface PluginFsWatchOptions extends PluginHostCallOptions {
  *
  * Reads are gated on `fs:project-read` / `fs:user-data-read`; writes on
  * `fs:project-write` / `fs:user-data-write`. A plugin missing the relevant
- * capability is rejected with a `PERMISSION_REQUIRED:` prefix (the same prefix
- * `useHostChannel` discriminates on); a path outside every allowed root is
- * rejected with a `PATH_NOT_ALLOWED:` prefix. Writes are recorded in the plugin
- * audit trail.
+ * capability is rejected with a `PERMISSION_REQUIRED:` prefix; a path outside
+ * every allowed root is rejected with a `PATH_NOT_ALLOWED:` prefix. Writes are
+ * recorded in the plugin audit trail.
  *
  * Unlike the global `files.read` IPC, {@link readFile} carries NO 500KB / binary
  * cap — it is a deliberate plugin API, not the size-limited preview path.

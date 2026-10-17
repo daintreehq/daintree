@@ -2790,8 +2790,7 @@ export function createHost(
  * declared `shell:exec` capability — the first runtime enforcement of a scope
  * capability, mirroring how the typed-channel `requires` gate reads
  * `manifest.capabilities`. A plugin without it is rejected with a
- * `PERMISSION_REQUIRED:` prefix (the same prefix `useHostChannel` already
- * discriminates on).
+ * `PERMISSION_REQUIRED:` prefix, which the calling view can inspect.
  */
 function buildProcessApi(
   deps: PluginHostFactoryDeps,

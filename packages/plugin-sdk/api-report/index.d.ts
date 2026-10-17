@@ -1422,7 +1422,7 @@ interface ForgeProviderContribution {
      * contract and the multi-field auth path.
      */
     credentialFields?: CredentialField[];
-    /** Exact `contributes.settings[].id` of one of this plugin's settings, used to group provider settings. */
+    /** Exact `contributes.settings[].id` of one of this plugin's settings; the manifest is rejected if no declared setting matches. */
     settingsScopeRef?: string;
     /** IDs of `views` contributions shown under this provider's panel section. */
     viewRefs?: string[];
@@ -4043,8 +4043,8 @@ type PluginSendToAgentResult = {
  * `priority:"low"` + `type:"error"` toast silently drops — see the lint rule at
  * `eslint.config.js`), pass a `ReactNode` message, or attach an action button
  * (plugins have no IPC channel to wire one to). `message` is prefixed with the
- * plugin's manifest display name (`{displayName}: {message}`) by the host for
- * provenance.
+ * plugin's manifest `displayName` (or `name` when it has none) by the host for
+ * provenance: `{displayName}: {message}`.
  */
 interface PluginToastOptions {
     /** Toast body. String only across the IPC boundary — no `ReactNode`. */
@@ -4619,10 +4619,9 @@ interface PluginFsWatchOptions extends PluginHostCallOptions {
  *
  * Reads are gated on `fs:project-read` / `fs:user-data-read`; writes on
  * `fs:project-write` / `fs:user-data-write`. A plugin missing the relevant
- * capability is rejected with a `PERMISSION_REQUIRED:` prefix (the same prefix
- * `useHostChannel` discriminates on); a path outside every allowed root is
- * rejected with a `PATH_NOT_ALLOWED:` prefix. Writes are recorded in the plugin
- * audit trail.
+ * capability is rejected with a `PERMISSION_REQUIRED:` prefix; a path outside
+ * every allowed root is rejected with a `PATH_NOT_ALLOWED:` prefix. Writes are
+ * recorded in the plugin audit trail.
  *
  * Unlike the global `files.read` IPC, {@link readFile} carries NO 500KB / binary
  * cap — it is a deliberate plugin API, not the size-limited preview path.
@@ -5319,10 +5318,11 @@ interface PluginActivationApi {
      * {@link onDidChangePanelLifecycle} gives a *view* a re-validation point, but
      * a plugin's timers, forge providers, and reconciliation passes keep running
      * against state frozen at suspend. The host's own resume path resumes
-     * git-status polling only while a Daintree window is on screen and holds its
-     * post-wake refresh until one is, so a machine that wakes with the app hidden
-     * leaves that state stale until the user comes back — for an unbounded
-     * stretch, with nothing else announcing the wake.
+     * git-status polling only while a Daintree window is visible and the screen
+     * is unlocked, and holds its post-wake refresh until a window is also
+     * focused, so a machine that wakes with the app hidden or blurred leaves that
+     * state stale until the user comes back — for an unbounded stretch, with
+     * nothing else announcing the wake.
      *
      * Delivered at most once per resume, after the host has attempted to resync
      * its pty and workspace hosts, so a plugin re-reading worktree state from the
@@ -5757,10 +5757,11 @@ interface PluginHostApi extends PluginActivationApi {
     restartWorker(): Promise<WorkerRestartResult>;
     /**
      * Surface a toast notification. The host prefixes the message with the
-     * plugin's manifest display name, `{displayName}: {message}`, for provenance.
-     * The name is resolved host-side from the `pluginId` bound at activation, so
-     * a plugin cannot spoof another's; a project plugin's id is an instance key,
-     * which is why the display name is shown rather than the id. Routes
+     * plugin's manifest `displayName` (or `name` when it has none),
+     * `{displayName}: {message}`, for provenance. The label is resolved host-side
+     * from the `pluginId` bound at activation rather than taken from the plugin;
+     * the id itself is never shown, since a project plugin's id is an instance
+     * key. Display names need not be unique. Routes
      * through the app's `notify()` path so rate-limit, quiet-hours, and
      * inbox-history semantics apply identically to plugin toasts.
      *
