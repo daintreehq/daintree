@@ -340,7 +340,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
     const modalEditorHostRef = useRef<HTMLDivElement | null>(null);
     const compactEditorHostRef = useRef<HTMLDivElement | null>(null);
     // Absolute path the current selection resolves to, captured on right-click.
-    // Gates the "View file" / "Open folder" context-menu section.
+    // Gates the "View file" / reveal context-menu section.
     const [selectionFilePath, setSelectionFilePath] = useState<string | null>(null);
     const lastEnterKeydownNewlineRef = useRef(false);
     const handledEnterRef = useRef(false);
