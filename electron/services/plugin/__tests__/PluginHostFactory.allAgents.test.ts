@@ -1591,6 +1591,18 @@ describe("plugin databases", () => {
       expect(fs.existsSync(path.join(projectRoot, ".daintree"))).toBe(false);
     });
 
+    it("opens with the migrations it checked, not ones swapped in during the consent prompt", async () => {
+      const { deps } = makeDeps([{ id: "ledger", location: "project", journalMode: "delete" }]);
+      const { host } = createHost(deps, INSTANCE, { projectId: PROJECT_ID, projectRoot });
+      const migrations = ["CREATE TABLE t (x)"];
+      ensureAllowed.mockImplementationOnce(async () => {
+        migrations[0] = "ATTACH 'x.db' AS x";
+      });
+      const db = await host.db.open("ledger", { migrations });
+      expect(await db.query("SELECT count(*) AS n FROM t")).toEqual([{ n: 0 }]);
+      await db.close();
+    });
+
     it("opens a project database readonly without consent and without creating anything", async () => {
       ensureAllowed.mockClear();
       const { deps } = makeDeps([{ id: "ledger", location: "project", journalMode: "delete" }]);

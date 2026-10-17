@@ -9,8 +9,8 @@ import type { PluginDatabaseLocation } from "../../../shared/types/plugin.js";
 import { databaseError } from "../../../shared/utils/pluginDatabaseHandle.js";
 
 export {
+  checkedSchemaOptions,
   openPluginDatabase,
-  validatePluginDatabaseOpenOptions,
 } from "../../../shared/utils/pluginDatabaseHandle.js";
 
 export interface PluginDatabaseDeclaration {

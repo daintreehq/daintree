@@ -71,9 +71,9 @@ import {
 import { isChannelSchema } from "./PluginChannelRegistry.js";
 import { abortErrorFor } from "./pluginAbortError.js";
 import {
+  checkedSchemaOptions,
   openPluginDatabase,
   resolvePluginDatabaseLocation,
-  validatePluginDatabaseOpenOptions,
 } from "./pluginDatabase.js";
 import type { PluginDatabaseApi } from "../../../shared/types/plugin.js";
 import {
@@ -1085,11 +1085,12 @@ export function createHost(
       const mode = { readonly: options?.readonly === true };
       // Schema options are checked before resolveDatabase prompts for
       // project-write consent, so a malformed open never banks a grant (#10524).
-      validatePluginDatabaseOpenOptions(id, options);
+      const schema = checkedSchemaOptions(id, options);
       const location = await resolveDatabase(id, mode);
       let untrack: (() => void) | null = null;
       const database = await openPluginDatabase(location, {
         ...options,
+        ...schema,
         revalidate: () => resolveDatabase(id, mode),
         prepareBackup: (destPath) => prepareDatabaseBackup(id, destPath),
         onClosed: () => untrack?.(),
@@ -4326,7 +4327,9 @@ function buildGitApi(deps: PluginHostFactoryDeps, pluginId: string): PluginGitAp
       options?.signal?.throwIfAborted();
       requireLoaded("add");
       requireWriteCap("add");
-      resolveAddPathspecs(pluginId, paths);
+      // The checked copy is what runs, so a caller mutating its array during
+      // the consent await cannot swap in a pathspec that was never checked.
+      const targets = resolveAddPathspecs(pluginId, paths);
       const resolved = await containWorktree(worktreePath);
       requireLoaded("add");
       // Consent fires after containment + pathspec validation so a doomed call
@@ -4334,7 +4337,7 @@ function buildGitApi(deps: PluginHostFactoryDeps, pluginId: string): PluginGitAp
       // prompt await.
       await ensureCapabilityConsent(deps, pluginId, "git:write");
       requireLoaded("add");
-      await git.add(resolved, paths, options?.signal);
+      await git.add(resolved, targets, options?.signal);
       deps.safeAppendAudit({
         pluginId,
         actionId: `git.add:${resolved}`,

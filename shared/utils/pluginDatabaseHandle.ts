@@ -638,6 +638,23 @@ export function validatePluginDatabaseOpenOptions(
   return { migrations, definitions, readonly };
 }
 
+/**
+ * Validate a `db.open`'s schema options before its location is resolved, and
+ * return the checked copies to open with — so neither a malformed call nor one
+ * whose arrays change during the consent await can bank a grant for SQL that
+ * was never checked.
+ */
+export function checkedSchemaOptions(
+  id: string,
+  options: PluginDatabaseOpenOptions | undefined
+): Pick<PluginDatabaseOpenOptions, "migrations" | "definitions"> {
+  const { migrations, definitions } = validatePluginDatabaseOpenOptions(id, options);
+  return {
+    migrations: options?.migrations === undefined ? undefined : migrations,
+    definitions,
+  };
+}
+
 export async function openPluginDatabase(
   location: PluginDatabaseLocation,
   options: OpenPluginDatabaseOptions = {}

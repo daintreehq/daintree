@@ -1,20 +1,19 @@
 // @vitest-environment jsdom
 import { renderHook } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { ActionManifestEntry } from "@shared/types/actions";
+import type { ActionId, ActionManifestEntry } from "@shared/types/actions";
 
-const manifest = (id: string, danger: ActionManifestEntry["danger"]) =>
-  ({
-    id,
-    name: id,
-    title: id,
-    description: "",
-    category: "test",
-    kind: "command",
-    danger,
-    enabled: true,
-    requiresArgs: false,
-  }) as unknown as ActionManifestEntry;
+const manifest = (id: ActionId, danger: ActionManifestEntry["danger"]): ActionManifestEntry => ({
+  id,
+  name: id,
+  title: id,
+  description: "",
+  category: "test",
+  kind: "command",
+  danger,
+  enabled: true,
+  requiresArgs: false,
+});
 
 const catalog = vi.hoisted(() => new Map<string, unknown>());
 const denied = vi.hoisted(() => new Set<string>());
