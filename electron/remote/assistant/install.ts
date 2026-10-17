@@ -42,8 +42,10 @@ import { HubMessagingRuntime, type ObservedHost } from "./HubMessagingRuntime.js
 
 /** What the messaging controls need beyond the policy itself. */
 export interface AssistantMessagingSurface {
-  /** Whether this Shell has any host: the controls stay hidden until it does. */
+  /** Whether this Shell has any host: with none, and not listening as a host, the controls stay hidden. */
   hasHosts(): boolean;
+  /** Whether other machines can message assistants here: this machine listens as a host. */
+  listensAsHost(): boolean;
   /** Increases on every change pushed to views. */
   revision(): number;
 }
@@ -89,8 +91,9 @@ export interface AssistantMessagingPolicyInstallDeps {
   /** What starting an assistant in a host's project takes from the windows here. */
   hostAssistants?: Omit<HostAssistantStarterDeps, "listLanes" | "enrollStarted" | "sleep" | "now">;
   /**
-   * This machine's saved default for its assistants accepting messages from
-   * other machines, read at each pass. Absent, nothing is enrolled by default.
+   * This machine's "accept messages from other machines", read at each check:
+   * whether its assistants take messages from other machines at all, and
+   * whether each run is enrolled by default. Absent, neither.
    */
   acceptsByDefault?(): boolean;
   onDefaultChanged?(listener: () => void): () => void;
@@ -192,6 +195,7 @@ export function installAssistantMessagingPolicy(
       );
     },
     isHostMessagingEnabled: deps.isHostMessagingEnabled,
+    acceptsRemoteMessages: () => deps.acceptsByDefault?.() === true,
     onSessionEnded: (listener) => helpSessionService.addSessionEndedListener(listener),
   });
   const acceptsByDefault = deps.acceptsByDefault;
@@ -218,9 +222,19 @@ export function installAssistantMessagingPolicy(
       const generation =
         result.launchGeneration ?? getPtyClient()?.getLiveGeneration(terminalId) ?? null;
       if (generation !== null) spawned.set(terminalId, generation);
+      // A new run in a lane answers what other machines sent the one before it.
+      for (const lane of helpSessionService.listRunningLanes()) {
+        const running = helpSessionService.getRunningLaneSession(lane.projectId, lane.slot);
+        if (running?.terminalId !== terminalId) continue;
+        owedReannounce.set(`${lane.projectId}\0${lane.slot}`, {
+          lane: { projectId: lane.projectId, slot: lane.slot },
+          at: Date.now(),
+        });
+      }
     }
     policy.reconcile();
     defaults.schedule();
+    payReannounce();
   };
   // A run that ends can free the hub for a sibling (a declined hub, say)
   // without any enrollment changing.
@@ -242,7 +256,12 @@ export function installAssistantMessagingPolicy(
     push();
     defaults.schedule();
   });
-  const offDefault = deps.onDefaultChanged?.(() => defaults.schedule()) ?? (() => {});
+  // The setting also decides what other machines may message, which views and tools show.
+  const offDefault =
+    deps.onDefaultChanged?.(() => {
+      policy.refresh();
+      defaults.schedule();
+    }) ?? (() => {});
   const offSessionEnded = helpSessionService.addSessionEndedListener(runEnded);
   // Only the first host arriving or the last one going changes what views
   // show, and whether the hub is offered its host tools.
@@ -278,6 +297,7 @@ export function installAssistantMessagingPolicy(
   helpSessionService.setMessagingReach(() => policy.isSupported());
   const unregisterSurface = registerRemoteService("assistantMessagingSurface", {
     hasHosts: deps.hasHosts,
+    listensAsHost: () => runtime.listensAsHost(),
     revision: () => revision,
   });
   const runtime = new AssistantMessagingRuntime({
@@ -289,11 +309,13 @@ export function installAssistantMessagingPolicy(
     outbox: () => getRemoteService("assistantHostOutbox"),
     hasHosts: deps.hasHosts,
     // Outside the exchange's one reserved wake, so it records nothing on the exchange.
-    rewake: (enrollment, record, stillOwed) =>
+    // Only a lane's open address and its hub's enrollment are sent messages, and
+    // neither is woken under a remote Shell's drive lease.
+    rewake: (lane, record, stillOwed) =>
       getRemoteService("assistantLaneWaker")?.wake({
-        lane: { projectId: enrollment.projectId, slot: enrollment.slot },
+        lane,
         generation: record.receiver.enrollmentGeneration,
-        shell: enrollment.enrolledBy,
+        shell: { kind: "local" },
         exchangeId: record.taskId,
         // Asked again just before typing: the lane may have answered it meanwhile.
         sink: { beforeType: stillOwed, report: () => {} },

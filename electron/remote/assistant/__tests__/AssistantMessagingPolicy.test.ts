@@ -1088,4 +1088,158 @@ describe("AssistantMessagingPolicy", () => {
       });
     });
   });
+
+  describe("lanes open to every Shell (#13467)", () => {
+    const accepting = () => {
+      let accepts = true;
+      const h = harness({ acceptsRemoteMessages: () => accepts });
+      return {
+        ...h,
+        setAccepts: (value: boolean) => {
+          accepts = value;
+        },
+      };
+    };
+
+    it("lets any Shell reach a running lane with nobody enrolling it, wherever it runs", () => {
+      const h = accepting();
+      h.run("proj", 0, "s1");
+      // Its own window's hub, or another Shell's route, takes nothing away from the rest.
+      expect(h.policy.enroll(lane(), LOCAL).ok).toBe(true);
+      expect(h.policy.checkOpen(lane(), "admit")).toEqual({
+        ok: true,
+        run: {
+          projectId: "proj",
+          slot: 0,
+          sessionId: "s1",
+          terminalId: "t-s1",
+          launchGeneration: 1,
+        },
+      });
+      expect(h.policy.getHub()?.slot).toBe(0);
+      expect(h.policy.checkOpen(lane("proj", 1), "admit")).toEqual({
+        ok: false,
+        reason: "unavailable",
+      });
+    });
+
+    it("answers with the run there now, so a relaunch is reached at the same address", () => {
+      const h = accepting();
+      h.run("proj", 0, "s1");
+      h.run("proj", 0, "s1");
+      const relaunched = h.policy.checkOpen(lane(), "wake");
+      expect(relaunched.ok && relaunched.run.launchGeneration).toBe(2);
+      h.run("proj", 0, "s2");
+      const replaced = h.policy.checkOpen(lane(), "wake");
+      expect(replaced.ok && replaced.run.sessionId).toBe("s2");
+    });
+
+    it("closes to new messages with the machine's setting, but never to answering", () => {
+      const h = accepting();
+      h.run("proj", 0, "s1");
+      h.setAccepts(false);
+      for (const kind of ["admit", "wake", "inspect"] as const) {
+        expect(h.policy.checkOpen(lane(), kind)).toEqual({ ok: false, reason: "not-accepting" });
+      }
+      expect(h.policy.checkOpen(lane(), "reply").ok).toBe(true);
+      expect(harness().policy.checkOpen(lane(), "admit")).toEqual({
+        ok: false,
+        reason: "not-accepting",
+      });
+    });
+
+    it("holds new messages while paused, but still lists the lane and lets it answer", () => {
+      const h = accepting();
+      h.run("proj", 0, "s1");
+      h.policy.setPaused(true);
+      expect(h.policy.checkOpen(lane(), "admit")).toEqual({ ok: false, reason: "paused" });
+      expect(h.policy.checkOpen(lane(), "inspect").ok).toBe(true);
+      expect(h.policy.checkOpen(lane(), "reply").ok).toBe(true);
+    });
+
+    it("turns off only the run the person turned off, ending what it was enrolled as", () => {
+      const h = accepting();
+      h.run("proj", 0, "s1");
+      expect(h.policy.enroll(lane(), SHELL_A).ok).toBe(true);
+      const changes: number[] = [];
+      h.policy.onChange(() => changes.push(h.policy.getRevision()));
+      expect(h.policy.declineRun(lane(), SHELL_B)).toBe(true);
+      expect(changes).toHaveLength(1);
+      expect(h.policy.checkOpen(lane(), "admit")).toEqual({ ok: false, reason: "declined" });
+      expect(h.policy.checkOpen(lane(), "reply").ok).toBe(true);
+      expect(h.policy.isRunDeclined(lane())).toBe(true);
+      expect(h.policy.getEnrollment(lane())).toBeNull();
+      // Nor does a default or a Shell's start give it back for this run.
+      h.startedBy.set("s1", "link-a");
+      expect(h.policy.enrollStarted(lane(), SHELL_A, "s1")).toEqual({
+        ok: false,
+        reason: "declined",
+      });
+
+      h.policy.acceptRun(lane(), SHELL_A);
+      expect(h.policy.checkOpen(lane(), "admit").ok).toBe(true);
+      h.policy.declineRun(lane(), SHELL_B);
+      h.run("proj", 0, "s2");
+      expect(h.policy.checkOpen(lane(), "admit").ok).toBe(true);
+      expect(h.policy.declineRun(lane("proj", 3), SHELL_B)).toBe(false);
+    });
+
+    it("keeps a hub turned off here from passing to a sibling by default while it runs, however often", () => {
+      const h = accepting();
+      h.run("proj", 0, "s1");
+      h.run("proj", 1, "s2");
+      expect(h.policy.enrollByDefault(lane(), LOCAL).ok).toBe(true);
+      h.policy.declineRun(lane(), LOCAL);
+      expect(h.policy.getHub()).toBeNull();
+      // A second off, from another view say, still knows it was the hub.
+      h.policy.declineRun(lane(), LOCAL);
+      expect(h.policy.enrollByDefault(lane("proj", 1), LOCAL)).toEqual({
+        ok: false,
+        reason: "declined",
+      });
+    });
+
+    it("lets a remote view's on open a hub turned off here to other machines, never back to a hub", () => {
+      const h = accepting();
+      h.run("proj", 0, "s1");
+      h.run("proj", 1, "s2");
+      expect(h.policy.enroll(lane(), LOCAL).ok).toBe(true);
+      h.policy.declineRun(lane(), LOCAL);
+      h.policy.acceptRun(lane(), SHELL_A);
+      expect(h.policy.checkOpen(lane(), "admit").ok).toBe(true);
+      expect(h.policy.enrollByDefault(lane(), LOCAL)).toEqual({ ok: false, reason: "declined" });
+      expect(h.policy.enrollByDefault(lane("proj", 1), LOCAL)).toEqual({
+        ok: false,
+        reason: "declined",
+      });
+      // Off again keeps it closed, and this machine's own on lifts it all.
+      h.policy.declineRun(lane(), SHELL_A);
+      expect(h.policy.checkOpen(lane(), "admit")).toEqual({ ok: false, reason: "declined" });
+      h.policy.acceptRun(lane(), LOCAL);
+      expect(h.policy.enrollByDefault(lane(), LOCAL).ok).toBe(true);
+    });
+
+    it("never ends this machine's hub for a remote view's off", () => {
+      const h = accepting();
+      h.run("proj", 0, "s1");
+      expect(h.policy.enroll(lane(), LOCAL).ok).toBe(true);
+      expect(h.policy.declineRun(lane(), SHELL_A)).toBe(true);
+      expect(h.policy.checkOpen(lane(), "admit")).toEqual({ ok: false, reason: "declined" });
+      expect(h.policy.getHub()?.slot).toBe(0);
+    });
+
+    it("lists every lane open to other machines, paused or not", () => {
+      const running = [
+        { projectId: "proj", slot: 0, agentId: "claude" },
+        { projectId: "proj", slot: 1, agentId: "codex" },
+        { projectId: "other", slot: 0, agentId: "claude" },
+      ];
+      const h = harness({ acceptsRemoteMessages: () => true, listRunningLanes: () => running });
+      h.run("proj", 0, "s1");
+      h.run("proj", 1, "s2");
+      h.policy.declineRun(lane("proj", 1), SHELL_A);
+      h.policy.setPaused(true);
+      expect(h.policy.listOpen().map((run) => run.sessionId)).toEqual(["s1"]);
+    });
+  });
 });

@@ -14,12 +14,13 @@ import type {
   SenderActor,
 } from "../exchange/types.js";
 import { inboxBodyFits, type InboxEnvelope } from "./AssistantInbox.js";
-import type {
-  AssistantMessagingPolicy,
-  LaneEnrollment,
-  MessagingDenial,
-  MessagingShell,
-  SessionRebind,
+import {
+  OPEN_LANE_GENERATION,
+  type AssistantMessagingPolicy,
+  type LaneRef,
+  type MessagingDenial,
+  type MessagingShell,
+  type SessionRebind,
 } from "./AssistantMessagingPolicy.js";
 import {
   AssistantLinkMethod,
@@ -50,11 +51,11 @@ export interface AssistantExchangeHostDeps {
   policy(): AssistantMessagingPolicy | undefined;
   store: AssistantExchangeStore;
   /**
-   * Hands a newly accepted exchange to its lane's wake. Absent, or when the
-   * lane can't be woken now, the exchange waits as submitted: availability
-   * never fails an exchange this host accepted.
+   * Hands a newly accepted exchange to its lane's wake, with the Shell that
+   * sent it. Absent, or when the lane can't be woken now, the exchange waits
+   * as submitted: availability never fails an exchange this host accepted.
    */
-  wake?: (record: ExchangeRecord, enrollment: LaneEnrollment) => void | Promise<void>;
+  wake?: (record: ExchangeRecord, lane: LaneRef, shell: MessagingShell) => void | Promise<void>;
   /** Committed changes to any exchange on this host, whichever store wrote them. */
   onExchangeChanged?: (listener: (change: ExchangeChange) => void) => () => void;
   /**
@@ -86,6 +87,8 @@ export function senderIdForCredential(credential: string): string {
  */
 export const LANE_NOT_RUNNING_MESSAGE = "The lane's assistant isn't running";
 export const HOST_MESSAGING_PAUSED_MESSAGE = "Assistant messaging is paused on this host";
+export const LANE_NOT_ACCEPTING_MESSAGE =
+  "The lane isn't taking messages from other machines: this host's setting or its run is off";
 
 function refuseLane(reason: MessagingDenial): AppError {
   switch (reason) {
@@ -112,6 +115,13 @@ function refuseLane(reason: MessagingDenial): AppError {
         message: HOST_MESSAGING_PAUSED_MESSAGE,
         userMessage: "Assistant messaging is paused on this host.",
       });
+    case "not-accepting":
+    case "declined":
+      return new AppError({
+        code: "PERMISSION",
+        message: LANE_NOT_ACCEPTING_MESSAGE,
+        userMessage: "That assistant isn't taking messages from other machines.",
+      });
     default:
       // Not enrolled, and enrolled by another Shell, read alike: neither may learn of the other.
       return new AppError({
@@ -135,9 +145,12 @@ function unsupported(): AppError {
  * view or not. A session authenticates its sender once with the credential
  * its Shell keeps for this host; exchanges are scoped to that sender, so they
  * outlive the session and a restart on either side, and two Shells never see
- * each other's. Sending to a lane also needs the lane's enrollment, which
- * belongs to the Shell whose sender its session proved: a later session of
- * that Shell takes it over once it authenticates (`bindSender`).
+ * each other's. Any authenticated Shell may send to any lane open to other
+ * machines (`checkOpen`), filed under the lane's one stable address, so two
+ * Shells can message the same assistant and a relaunched run reads what was
+ * sent to the one before. A lane's own messages go to the Shell its
+ * enrollment names, which a later session of that Shell takes over once it
+ * authenticates (`bindSender`).
  */
 export function installAssistantExchangeHostWith(
   server: MetricsSessionSource,
@@ -166,14 +179,14 @@ export function installAssistantExchangeHostWith(
   const handOff = (
     policy: AssistantMessagingPolicy,
     record: ExchangeRecord,
-    check: Parameters<AssistantMessagingPolicy["checkLane"]>[0]
+    lane: LaneRef,
+    shell: MessagingShell
   ): void => {
     const wake = deps.wake;
     if (!wake) return;
-    const ready = policy.checkLane({ ...check, kind: "wake" });
-    if (!ready.ok) return;
+    if (!policy.checkOpen(lane, "wake").ok) return;
     try {
-      void Promise.resolve(wake(record, ready.enrollment)).catch((error: unknown) => {
+      void Promise.resolve(wake(record, lane, shell)).catch((error: unknown) => {
         console.warn("[AssistantExchanges] Lane wake failed:", error);
       });
     } catch (error) {
@@ -255,25 +268,19 @@ export function installAssistantExchangeHostWith(
       const agentOf = (projectId: string, slot: number) =>
         agents.get(assistantSlotKey(projectId, slot));
       const assistants: RunningAssistant[] = running.slice(0, MAX_LISTED_LANES);
+      // What an older Shell reads as the lanes it may message, and owns: only
+      // those whose own messages come to it, as before every lane was open.
       const lanes: EnrolledLane[] = policy
         .listEnrollments(shell)
         .slice(0, MAX_LISTED_LANES)
-        .map((enrollment) => {
-          const agentId = agentOf(enrollment.projectId, enrollment.slot);
-          return {
-            projectId: enrollment.projectId,
-            slot: enrollment.slot,
-            generation: enrollment.generation,
-            available: policy.checkLane({
-              lane: { projectId: enrollment.projectId, slot: enrollment.slot },
-              generation: enrollment.generation,
-              shell,
-              kind: "wake",
-            }).ok,
-            ...(agentId === undefined ? {} : { agentId }),
-          };
-        });
-      return { lanes, assistants } satisfies LaneList;
+        .map((enrollment) =>
+          openLane(policy, enrollment, agentOf(enrollment.projectId, enrollment.slot))
+        );
+      const open: EnrolledLane[] = policy
+        .listOpen()
+        .slice(0, MAX_LISTED_LANES)
+        .map((run) => openLane(policy, run, agentOf(run.projectId, run.slot)));
+      return { lanes, open, assistants } satisfies LaneList;
     });
 
     session.registerCallHandler(AssistantLinkMethod.READ_QUOTA, EmptyPayloadSchema, async () => {
@@ -287,7 +294,7 @@ export function installAssistantExchangeHostWith(
       AssistantLinkMethod.ENROLL_STARTED,
       EnrollStartedPayloadSchema,
       ({ projectId, slot, sessionId: helpSessionId }): EnrollStartedResult => {
-        // Only a Shell that proved its sender: consent then outlives this connection.
+        // Only a Shell that proved its sender: its route then outlives this connection.
         requireSender(session);
         const policy = requirePolicy();
         const lane = { projectId, slot };
@@ -304,26 +311,14 @@ export function installAssistantExchangeHostWith(
         const agentId = policy
           .listRunning()
           .find((running) => running.projectId === projectId && running.slot === slot)?.agentId;
-        return {
-          status: "enrolled",
-          lane: {
-            projectId,
-            slot,
-            generation: result.enrollment.generation,
-            available: policy.checkLane({
-              lane,
-              generation: result.enrollment.generation,
-              shell,
-              kind: "wake",
-            }).ok,
-            ...(agentId === undefined ? {} : { agentId }),
-          },
-        };
+        return { status: "enrolled", lane: openLane(policy, lane, agentId) };
       }
     );
 
     session.registerCallHandler(AssistantLinkMethod.SEND, SendPayloadSchema, (payload) => {
       const sender = requireSender(session);
+      // Filed under the lane's stable address whatever generation the Shell
+      // was listed: an older Shell may still name one from an enrollment.
       const input: CreateExchangeInput = {
         messageId: payload.messageId,
         contextId: payload.contextId,
@@ -331,22 +326,27 @@ export function installAssistantExchangeHostWith(
         receiver: {
           hostId: LOCAL_HOST_ID,
           laneId: assistantSlotKey(payload.projectId, payload.slot),
-          enrollmentGeneration: payload.generation,
+          enrollmentGeneration: OPEN_LANE_GENERATION,
         },
         body: payload.body,
       };
       // A resend of a message this host already took answers from its record,
-      // even once the enrollment it came in under has ended.
-      if (deps.store.get(sender, { senderId: sender.senderId, messageId: payload.messageId })) {
-        return deps.store.create(sender, input);
+      // even once its lane stopped taking new ones, filed where it was: one
+      // taken before lanes were open has its enrollment's generation.
+      const existing = deps.store.get(sender, {
+        senderId: sender.senderId,
+        messageId: payload.messageId,
+      });
+      if (existing) {
+        const sameLane = existing.receiver.laneId === input.receiver.laneId;
+        return deps.store.create(
+          sender,
+          sameLane ? { ...input, receiver: existing.receiver } : input
+        );
       }
       const policy = requirePolicy();
-      const check = {
-        lane: { projectId: payload.projectId, slot: payload.slot },
-        generation: payload.generation,
-        shell,
-      };
-      const admitted = policy.checkLane({ ...check, kind: "admit" });
+      const lane = { projectId: payload.projectId, slot: payload.slot };
+      const admitted = policy.checkOpen(lane, "admit");
       if (!admitted.ok) throw refuseLane(admitted.reason);
       // Refused before anything is recorded: a body the lane could never be handed whole.
       if (deps.admit && !inboxBodyFits(payload.body)) {
@@ -369,7 +369,7 @@ export function installAssistantExchangeHostWith(
         });
         return refused ? { ...result, record: refused } : result;
       }
-      handOff(policy, result.record, { ...check, kind: "wake" });
+      handOff(policy, result.record, lane, shell);
       return result;
     });
 
@@ -440,6 +440,21 @@ export function installAssistantExchangeHostWith(
   };
 }
 
+/** A lane as a Shell is listed it: under its open address, whatever enrolled it. */
+function openLane(
+  policy: AssistantMessagingPolicy,
+  at: LaneRef,
+  agentId: string | undefined
+): EnrolledLane {
+  const lane = { projectId: at.projectId, slot: at.slot };
+  return {
+    ...lane,
+    generation: OPEN_LANE_GENERATION,
+    available: policy.checkOpen(lane, "wake").ok,
+    ...(agentId === undefined ? {} : { agentId }),
+  };
+}
+
 const SWEEP_INTERVAL_MS = 60 * 60_000;
 const MAX_SWEEP_BATCHES = 20;
 
@@ -495,11 +510,11 @@ export async function installAssistantExchangeHost(
       if (!runtime) throw unsupported();
       runtime.admit(record, envelope);
     },
-    wake: (record, enrollment) => {
+    wake: (record, lane, shell) => {
       getRemoteService("assistantLaneWaker")?.wake({
-        lane: { projectId: enrollment.projectId, slot: enrollment.slot },
+        lane,
         generation: record.receiver.enrollmentGeneration,
-        shell: enrollment.enrolledBy,
+        shell,
         exchangeId: record.taskId,
         sink: exchangeWakeSink(
           store,
@@ -533,9 +548,12 @@ export async function installAssistantExchangeHost(
       }),
   });
   const unregisterOutbox = registerRemoteService("assistantHostOutbox", outbox);
+  // Listening is what opens this machine's lanes to other machines: views and tools reread.
+  getRemoteService("assistantMessagingPolicy")?.refresh();
   return () => {
     clearInterval(timer);
     unregisterOutbox();
+    getRemoteService("assistantMessagingPolicy")?.refresh();
     outbox.dispose();
     unwire();
     unregister();

@@ -110,14 +110,26 @@ function refuse(code: "VALIDATION" | "RATE_LIMITED", message: string): AppError 
 /**
  * Message bodies, and the answers to them, while an exchange is live. The
  * exchange store keeps only a body's digest and size (#13331), so the text
- * lives here, in memory and bounded: an app restart ends every enrollment
- * (#13332), and a body nobody can be enrolled to read again has nowhere to go.
+ * lives here, in memory and bounded: an app restart fails every exchange
+ * left open (#13332), so a body has nowhere to go after one.
  *
  * Nothing here decides who may read what. The messaging runtime checks the
  * caller's lane and the exchange record before it hands out an entry; this
  * only refuses to hold more than it was sized for, and never evicts an unread
  * message to make room.
  */
+function toList(
+  receivers: ExchangeReceiver | readonly ExchangeReceiver[]
+): readonly ExchangeReceiver[] {
+  return Array.isArray(receivers)
+    ? (receivers as readonly ExchangeReceiver[])
+    : [receivers as ExchangeReceiver];
+}
+
+function ownedBy(entry: InboxEntry, receivers: readonly ExchangeReceiver[]): boolean {
+  return receivers.some((receiver) => sameReceiver(entry.receiver, receiver));
+}
+
 export class AssistantInbox {
   private readonly entries = new Map<string, InboxEntry>();
   private readonly responses = new Map<string, ResponseLog>();
@@ -214,21 +226,29 @@ export class AssistantInbox {
     return { ...entry };
   }
 
-  /** This receiver's entries after `afterSeq`, oldest first. */
-  list(receiver: ExchangeReceiver, afterSeq: number): InboxEntry[] {
+  /**
+   * These receivers' entries after `afterSeq`, oldest first. One lane may
+   * read as several: its open address and its hub's enrollment, on one
+   * sequence.
+   */
+  list(receivers: ExchangeReceiver | readonly ExchangeReceiver[], afterSeq: number): InboxEntry[] {
     this.prune();
+    const own = toList(receivers);
     const found: InboxEntry[] = [];
     for (const entry of this.entries.values()) {
-      if (entry.seq > afterSeq && sameReceiver(entry.receiver, receiver)) found.push(entry);
+      if (entry.seq > afterSeq && ownedBy(entry, own)) found.push(entry);
     }
     return found.sort((a, b) => a.seq - b.seq);
   }
 
-  /** The receiver's own entry for a task; another receiver's is not found. */
-  find(receiver: ExchangeReceiver, taskId: string): InboxEntry | null {
+  /** One of these receivers' own entry for a task; another receiver's is not found. */
+  find(
+    receivers: ExchangeReceiver | readonly ExchangeReceiver[],
+    taskId: string
+  ): InboxEntry | null {
     this.prune();
     const entry = this.entries.get(taskId);
-    return entry && sameReceiver(entry.receiver, receiver) ? entry : null;
+    return entry && ownedBy(entry, toList(receivers)) ? entry : null;
   }
 
   drop(taskId: string): void {

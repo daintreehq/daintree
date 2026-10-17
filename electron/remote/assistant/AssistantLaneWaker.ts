@@ -3,12 +3,20 @@ import type {
   LaneWakeCheck,
   LaneWakeOutcome,
 } from "../../services/mcp-server/terminalNotify.js";
-import type {
-  AssistantMessagingPolicy,
-  LaneEnrollment,
-  LaneRef,
-  MessagingShell,
+import {
+  OPEN_LANE_GENERATION,
+  type AssistantMessagingPolicy,
+  type LaneRef,
+  type MessagingShell,
 } from "./AssistantMessagingPolicy.js";
+
+/** The run a wake was pinned to: one that replaces it is not who the wake was for. */
+interface PinnedRun {
+  projectId: string;
+  sessionId: string;
+  terminalId: string;
+  launchGeneration: number;
+}
 
 /** Where a wake's outcome is recorded: the exchange it announces. */
 export interface LaneWakeSink {
@@ -19,7 +27,10 @@ export interface LaneWakeSink {
 
 export interface LaneWakeRequest {
   lane: LaneRef;
-  /** The enrollment generation the exchange was admitted under. */
+  /**
+   * The generation the exchange was admitted under: the lane's open address
+   * for a remote Shell's message, or the enrollment it went to.
+   */
   generation: string;
   /** The Shell that sent it, from the authenticated session, never the payload. */
   shell: MessagingShell;
@@ -31,7 +42,7 @@ export interface LaneWakeRequest {
 }
 
 export interface AssistantLaneWakerDeps {
-  policy: Pick<AssistantMessagingPolicy, "checkLane" | "getEnrollment">;
+  policy: Pick<AssistantMessagingPolicy, "checkLane" | "getEnrollment" | "checkOpen">;
   /** Whether `shell` may type into `projectId` under its drive lease right now. */
   shellDrives(projectId: string, shell: MessagingShell): boolean;
   /** The pane's notice line; the only writer that types into it. */
@@ -42,9 +53,9 @@ export interface AssistantLaneWakerDeps {
 }
 
 /**
- * Tells an enrolled lane that an admitted exchange is waiting (#13333). It
- * never launches or resumes an assistant: a lane that isn't running when the
- * wake is due is unavailable, and the message waits in its inbox.
+ * Tells a lane that an admitted exchange is waiting (#13333). It never
+ * launches or resumes an assistant: a lane that isn't running when the wake
+ * is due is unavailable, and the message waits in its inbox.
  */
 export class AssistantLaneWaker {
   constructor(private readonly deps: AssistantLaneWakerDeps) {}
@@ -52,11 +63,11 @@ export class AssistantLaneWaker {
   /** Call once, after the exchange was created; a resend that found it existing never wakes again. */
   wake(request: LaneWakeRequest): void {
     const first = this.check(request, null);
-    if (first.enrollment === null) {
+    if (first.run === null) {
       report(request.sink, first.check);
       return;
     }
-    const pinned = first.enrollment;
+    const pinned = first.run;
     this.deps.queue(
       {
         helpSessionId: pinned.sessionId,
@@ -73,14 +84,48 @@ export class AssistantLaneWaker {
     );
   }
 
+  private check(
+    request: LaneWakeRequest,
+    pinned: PinnedRun | null
+  ): { check: LaneWakeCheck; run: PinnedRun | null } {
+    return request.generation === OPEN_LANE_GENERATION
+      ? this.checkOpen(request, pinned)
+      : this.checkEnrolled(request, pinned);
+  }
+
+  /**
+   * A remote Shell's message to an open lane: whether the lane still takes
+   * one, in the run the wake was pinned to, and the pause. Daintree types the
+   * notice into its own assistant, not the sending Shell, so whoever drives
+   * the project (someone at this machine's own window, say) doesn't hold it.
+   */
+  private checkOpen(
+    request: LaneWakeRequest,
+    pinned: PinnedRun | null
+  ): { check: LaneWakeCheck; run: PinnedRun | null } {
+    const result = this.deps.policy.checkOpen(request.lane, "wake");
+    if (!result.ok && result.reason !== "paused") {
+      return { check: { kind: "unavailable", reason: result.reason }, run: null };
+    }
+    // Paused is checked last, so the lane passed everything else: it waits.
+    const held = result.ok ? result : this.deps.policy.checkOpen(request.lane, "inspect");
+    if (!held.ok) return { check: { kind: "unavailable", reason: held.reason }, run: null };
+    const run = held.run;
+    if (pinned !== null && !sameRun(run, pinned)) {
+      return { check: { kind: "unavailable", reason: "relaunched" }, run: null };
+    }
+    if (!result.ok) return { check: { kind: "held", reason: "paused" }, run };
+    return { check: { kind: "ready" }, run };
+  }
+
   /**
    * Enrollment, its generation, the pause switch and the drive lease, as they
    * stand now. Link calls skip the dispatcher's lease gate, so it is read here.
    */
-  private check(
+  private checkEnrolled(
     request: LaneWakeRequest,
-    pinned: LaneEnrollment | null
-  ): { check: LaneWakeCheck; enrollment: LaneEnrollment | null } {
+    pinned: PinnedRun | null
+  ): { check: LaneWakeCheck; run: PinnedRun | null } {
     const shell = this.currentShell(request, pinned);
     const result = this.deps.policy.checkLane({
       lane: request.lane,
@@ -89,26 +134,21 @@ export class AssistantLaneWaker {
       kind: "wake",
     });
     if (!result.ok && result.reason !== "paused") {
-      return { check: { kind: "unavailable", reason: result.reason }, enrollment: null };
+      return { check: { kind: "unavailable", reason: result.reason }, run: null };
     }
     // Paused is checked last, so the lane passed everything else: it waits.
     const enrollment = result.ok ? result.enrollment : this.deps.policy.getEnrollment(request.lane);
     if (enrollment === null || enrollment.generation !== request.generation) {
-      return { check: { kind: "unavailable", reason: "not-enrolled" }, enrollment: null };
+      return { check: { kind: "unavailable", reason: "not-enrolled" }, run: null };
     }
-    if (
-      pinned !== null &&
-      (enrollment.sessionId !== pinned.sessionId ||
-        enrollment.terminalId !== pinned.terminalId ||
-        enrollment.launchGeneration !== pinned.launchGeneration)
-    ) {
-      return { check: { kind: "unavailable", reason: "relaunched" }, enrollment: null };
+    if (pinned !== null && !sameRun(enrollment, pinned)) {
+      return { check: { kind: "unavailable", reason: "relaunched" }, run: null };
     }
-    if (!result.ok) return { check: { kind: "held", reason: "paused" }, enrollment };
+    if (!result.ok) return { check: { kind: "held", reason: "paused" }, run: enrollment };
     if (!this.deps.shellDrives(enrollment.projectId, shell)) {
-      return { check: { kind: "held", reason: "driven-elsewhere" }, enrollment };
+      return { check: { kind: "held", reason: "driven-elsewhere" }, run: enrollment };
     }
-    return { check: { kind: "ready" }, enrollment };
+    return { check: { kind: "ready" }, run: enrollment };
   }
 
   /**
@@ -117,19 +157,28 @@ export class AssistantLaneWaker {
    * (`AssistantMessagingPolicy.bindSender`); a wake queued before that follows
    * it, still under the generation and run it was pinned to.
    */
-  private currentShell(request: LaneWakeRequest, pinned: LaneEnrollment | null): MessagingShell {
-    if (request.shell.kind !== "remote" || pinned?.sender === undefined) return request.shell;
+  private currentShell(request: LaneWakeRequest, pinned: PinnedRun | null): MessagingShell {
+    if (request.shell.kind !== "remote" || pinned === null) return request.shell;
     const now = this.deps.policy.getEnrollment(request.lane);
     if (
       now !== null &&
       now.enrolledBy.kind === "remote" &&
       now.generation === request.generation &&
-      now.sender === pinned.sender
+      now.sender !== undefined &&
+      sameRun(now, pinned)
     ) {
       return now.enrolledBy;
     }
     return request.shell;
   }
+}
+
+function sameRun(a: PinnedRun, b: PinnedRun): boolean {
+  return (
+    a.sessionId === b.sessionId &&
+    a.terminalId === b.terminalId &&
+    a.launchGeneration === b.launchGeneration
+  );
 }
 
 function report(sink: LaneWakeSink, check: LaneWakeCheck): void {

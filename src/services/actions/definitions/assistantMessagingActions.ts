@@ -76,7 +76,7 @@ export function registerAssistantMessagingActions(actions: ActionRegistry): void
     id: "assistant.sendMessage",
     title: "Message the hub assistant",
     description:
-      "Message the hub assistant of the Shell that enrolled your lane: a handoff, a blocker, a decision you need. Waits while that Shell is away. A contextId allows few messages; don't bounce back and forth. Replies arrive in your inbox's sent view.",
+      "Message the hub assistant of the Shell that started your lane: a handoff, a blocker, a decision you need. Waits while that Shell is away. A contextId allows few messages; don't bounce back and forth. Replies arrive in your inbox's sent view.",
     category: "help",
     kind: "command",
     danger: "safe",

@@ -22,6 +22,26 @@ export interface LaneRef {
   slot: number;
 }
 
+/**
+ * The generation every remote Shell's message to a lane is filed under (#13467).
+ * A lane takes messages from any Shell that authenticated over the link, with
+ * no enrollment, so its address is the slot alone: it holds across relaunches,
+ * link drops and restarts on either side, and a run that replaces another
+ * reads what was sent to the one before.
+ */
+export const OPEN_LANE_GENERATION = "open";
+
+/** The run an open lane is answering in right now. */
+export interface OpenRun {
+  projectId: string;
+  slot: number;
+  sessionId: string;
+  terminalId: string;
+  launchGeneration: number;
+}
+
+export type OpenCheck = { ok: true; run: OpenRun } | { ok: false; reason: MessagingDenial };
+
 export interface LaneEnrollment {
   projectId: string;
   slot: number;
@@ -60,7 +80,9 @@ export type MessagingDenial =
   | "hub-taken"
   | "host-disabled"
   | "no-hub"
-  | "paused";
+  | "paused"
+  | "not-accepting"
+  | "declined";
 
 /**
  * Why a lane's enrollment ended without the person turning it off: its session
@@ -102,6 +124,11 @@ interface DeclinedRun {
   launchGeneration: number;
   /** Declined as this Shell's hub, which no sibling lane takes over while it runs. */
   hub: boolean;
+  /**
+   * Turned on again from another machine's view: it takes messages from other
+   * machines, while the hub this machine's person turned off stays off.
+   */
+  reopened?: boolean;
 }
 
 export interface LaneCheck {
@@ -137,6 +164,11 @@ export interface AssistantMessagingPolicyDeps {
   spawnConfirmed?(terminalId: string, launchGeneration: number): boolean;
   /** This Shell's per-host opt-in. */
   isHostMessagingEnabled(hostId: HostId): boolean;
+  /**
+   * This machine's "accept messages from other machines", read at each check.
+   * Absent, no lane here takes a message from another machine.
+   */
+  acceptsRemoteMessages?(): boolean;
   onSessionEnded(listener: (event: HelpSessionEndedEvent) => void): () => void;
   platform?: NodeJS.Platform;
   now?: () => number;
@@ -144,6 +176,8 @@ export interface AssistantMessagingPolicyDeps {
 }
 
 const PAUSE_EXEMPT: ReadonlySet<MessagingRequestKind> = new Set(["reply", "inspect"]);
+/** What a lane's run being turned off, or the machine's setting, stops: everything but answering. */
+const OPEN_GATED: ReadonlySet<MessagingRequestKind> = new Set(["admit", "wake", "inspect"]);
 
 function sameShell(a: MessagingShell, b: MessagingShell): boolean {
   if (a.kind === "local" || b.kind === "local") return a.kind === b.kind;
@@ -190,11 +224,15 @@ function laneKey(lane: LaneRef): string | null {
 
 /**
  * The one place cross-host assistant messaging asks before it admits or
- * delivers anything. Holds which lanes are enrolled, which Shell enrolled
- * each, this Shell's hub, and a machine-wide pause. Everything but the per-host
- * opt-in (on the host list) and the saved default (in the assistant settings)
- * is in memory: an app restart ends every enrollment and clears the pause, and
- * the default enrolls each run again as it starts (`enrollByDefault`).
+ * delivers anything. As a host, every running lane is open to every Shell that
+ * authenticated over the link (`checkOpen`), unless this machine's setting is
+ * off, the person turned that run off, or messaging is paused. Enrollment is
+ * what's left for the rest: this Shell's hub, and the Shell a host's lane
+ * writes to when it starts a message of its own (the one whose view started
+ * it). Everything but the per-host opt-in (on the host list) and the saved
+ * setting (in the assistant settings) is in memory: an app restart ends every
+ * enrollment and clears the pause, and the default enrolls each run again as
+ * it starts (`enrollByDefault`).
  *
  * Enrolling never launches an assistant. A lane whose assistant isn't running
  * can't be enrolled, and one that stops running is unavailable until its
@@ -559,6 +597,112 @@ export class AssistantMessagingPolicy {
     return this.decide(hub, check.kind);
   }
 
+  /**
+   * Host side: may an authenticated remote Shell reach this lane for `kind`?
+   * Any Shell may, with no enrollment: the link's own token is the consent
+   * (#13467). The machine's setting and a run the person turned off stop new
+   * messages and wakes but never answers to what was already admitted, and the
+   * pause stops what it always has. The run answered with is the one running
+   * now. A message for a run whose spawn then fails isn't lost: it waits at
+   * the lane's address for the run that takes its place.
+   */
+  checkOpen(lane: LaneRef, kind: MessagingRequestKind): OpenCheck {
+    if (!this.supported) return { ok: false, reason: "unsupported-platform" };
+    const key = laneKey(lane);
+    if (key === null) return { ok: false, reason: "invalid-lane" };
+    if (OPEN_GATED.has(kind) && this.deps.acceptsRemoteMessages?.() !== true) {
+      return { ok: false, reason: "not-accepting" };
+    }
+    const run = this.liveRun(lane);
+    if (!run) return { ok: false, reason: "unavailable" };
+    if (OPEN_GATED.has(kind) && this.isClosed(key, run)) return { ok: false, reason: "declined" };
+    if (this.paused && !PAUSE_EXEMPT.has(kind)) return { ok: false, reason: "paused" };
+    return {
+      ok: true,
+      run: {
+        projectId: lane.projectId,
+        slot: lane.slot,
+        sessionId: run.running.sessionId,
+        terminalId: run.running.terminalId,
+        launchGeneration: run.launchGeneration,
+      },
+    };
+  }
+
+  /** Every running lane open to remote Shells, paused or not: what a Shell may address. */
+  listOpen(): OpenRun[] {
+    const open: OpenRun[] = [];
+    for (const lane of this.listRunning()) {
+      const checked = this.checkOpen(lane, "inspect");
+      if (checked.ok) open.push(checked.run);
+    }
+    return open;
+  }
+
+  /** Whether the person turned the lane's current run off to other machines. */
+  isRunDeclined(lane: LaneRef): boolean {
+    const key = laneKey(lane);
+    const run = key === null ? null : this.liveRun(lane);
+    return key !== null && run !== null && this.isClosed(key, run);
+  }
+
+  /**
+   * The person turned the lane's current run off, from a view of `by`: it
+   * takes no new message from another machine, and no Shell's hub hears from
+   * it. Turned off on this machine, it stops being this machine's hub too; a
+   * remote view's off never touches that. Only that run, as `unenroll`'s
+   * decline; a relaunch accepts again. False when nothing is running there.
+   */
+  declineRun(lane: LaneRef, by: MessagingShell): boolean {
+    const key = laneKey(lane);
+    if (key === null || !isValidShell(by)) return false;
+    const run = this.liveRun(lane);
+    if (!run) return false;
+    const existing = this.current(key);
+    const ends =
+      existing !== undefined && (existing.enrolledBy.kind === "remote" || by.kind === "local");
+    if (ends) {
+      this.enrollments.delete(key);
+      this.ended.delete(key);
+    }
+    // Turned off again, a hub it was stays one the person turned off.
+    const wasHub = this.isDeclined(key, run) && this.declined.get(key)?.hub === true;
+    this.declined.set(key, {
+      projectId: lane.projectId,
+      slot: lane.slot,
+      sessionId: run.running.sessionId,
+      terminalId: run.running.terminalId,
+      launchGeneration: run.launchGeneration,
+      hub: wasHub || (ends && existing?.enrolledBy.kind === "local"),
+    });
+    this.changed();
+    return true;
+  }
+
+  /**
+   * Lifts the person's off for the lane's current run, from a view of `by`.
+   * A remote view's on opens it to other machines again but leaves a hub this
+   * machine's person turned off as they left it: no default makes it, or a
+   * sibling, the hub while it runs.
+   */
+  acceptRun(lane: LaneRef, by: MessagingShell): void {
+    const key = laneKey(lane);
+    const declined = key === null ? undefined : this.declined.get(key);
+    if (key === null || !declined || !isValidShell(by)) return;
+    if (by.kind === "remote" && declined.hub) {
+      if (declined.reopened === true) return;
+      declined.reopened = true;
+    } else {
+      this.declined.delete(key);
+    }
+    this.changed();
+  }
+
+  /** Something a check reads changed outside the policy, such as this machine's setting. */
+  refresh(): void {
+    this.changed();
+  }
+
   dispose(): void {
     this.unsubscribe?.();
     this.unsubscribe = null;
@@ -670,6 +814,14 @@ export class AssistantMessagingPolicy {
     }
     this.declined.delete(key);
     return false;
+  }
+
+  /** Whether the run is turned off to other machines: declined, and not reopened from one. */
+  private isClosed(
+    key: string,
+    run: { running: RunningLaneSession; launchGeneration: number }
+  ): boolean {
+    return this.isDeclined(key, run) && this.declined.get(key)?.reopened !== true;
   }
 
   private endedForAnother(
