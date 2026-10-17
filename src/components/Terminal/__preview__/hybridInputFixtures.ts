@@ -33,9 +33,59 @@ export const DRAFTS = {
   /** The second reported case, from the Daintree Assistant sidebar: three lines at ~430px. */
   sidebar:
     "afsJ FDASLJHF ADSKJHF SDA F JDSKAFH SAD FSADH FKJDSHAF DSKJFH SDAKJFHSD KAFHKDSJ FHKJASDFHDSAK JFHAKSDJFH DSAKHF DSKJFHASDKFH DASKFA",
+  /**
+   * The third reported case: an ordinary prose prompt that wraps to two lines in
+   * a ~700px pane with a short last line, where the controls took a row of
+   * their own beneath it and left the end of that line empty.
+   */
+  prose:
+    "And when you're done please give me an idea of how much the performance overall improved.",
+  /** Hard newlines whose last line is short, the way a pasted list ends. */
+  list: "Before you push:\n- rebase onto develop\n- rerun the flaky worktree test\n- ok",
+  /**
+   * Ends on an `@file` chip long enough to wrap inside itself at the narrow
+   * widths. The chip paints only its text, so the empty right of its box is
+   * room for the controls.
+   */
+  path: "Check the fixtures in @src/components/Terminal/__preview__/hybridInputFixtures.ts",
 } as const;
 
 export type DraftName = keyof typeof DRAFTS;
+
+/**
+ * The typing strip: one prompt shown at a run of lengths, as if typed, so a
+ * single picture shows what the composer does on each keystroke around a wrap
+ * — whether the controls move, and whether the height steps evenly.
+ */
+export const TYPING_DRAFT = `${DRAFTS.prose} Then rerun the flaky worktree test and tell me what changed.`;
+
+export const TYPING_WIDTH = 360;
+
+/** Draft lengths for the strip: two and a half lines at `TYPING_WIDTH`, every five characters. */
+export const TYPING_LENGTHS = Array.from({ length: 20 }, (_, i) => 20 + i * 5);
+
+/**
+ * The pills case: a prompt that ends on a pasted screenshot's chip. The chip
+ * is a tinted pill whose label wraps once the pane is narrower than it, which
+ * is the one shape a column beside the text can beat the corner on.
+ */
+export const PILL_DRAFT = "Why does this pane render blank? ";
+
+export const PILL_WIDTHS = [520, 420, 360, 300, 260, 220] as const;
+
+/**
+ * Narrow panes where the draft ends on the pill itself, with the space the
+ * paste leaves after it deleted. In a pane narrower than its label the pill
+ * wraps to the full width, and that is the shape where giving up a column
+ * beside the text can be shorter than a row beneath it. The dropped file's
+ * longer label is the one that keeps its row count when narrowed.
+ */
+export const PILL_PANES = [
+  ...PILL_WIDTHS.map((width) => ({ id: `pills-${width}`, width, tight: false, file: false })),
+  { id: "pills-220-tight", width: 220, tight: true, file: false },
+  { id: "pills-300-file", width: 300, tight: true, file: true },
+  { id: "pills-270-file", width: 270, tight: true, file: true },
+] as const;
 
 /** Resolves a `?draft=` query value, falling back to the reported case. */
 export function resolveDraft(name: string | null): string {

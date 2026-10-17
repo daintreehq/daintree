@@ -95,39 +95,32 @@ describe("HybridInputBar layout contract", () => {
     expect(heights.filter((height) => height < FLOOR_STEPS)).toEqual([]);
   });
 
-  it("moves only the trailing group to a rail, and only when wrapped AND narrow", () => {
+  it("takes the trailing controls out of the text's flow, so placing them cannot rewrap the draft", () => {
+    // The controls sit in the shell's bottom-right corner, beside the draft's
+    // last row or on a row beneath it, decided from where that row ends
+    // (`useComposerMeasure`). That rule is only free of a feedback loop while
+    // the text wraps at the same width in both arrangements: the group is
+    // positioned out of flow, and the canvas track carries no utility that
+    // answers the rail. The canvas never reorders or takes a row of its own,
+    // so the text column does not shift and the `❯` keeps pointing at the
+    // line being typed.
     const text = declarations();
+    const inner = /<div\s+ref=\{trailingGroupRef\}\s+className="([^"]*)"/.exec(text)?.[1] ?? "";
     const track = /className="[^"]*\bflex-1\b[^"]*"/.exec(text)?.[0] ?? "";
-    const trailing = /className="[^"]*\bpr-1\.5\b[^"]*"/.exec(text)?.[0] ?? "";
 
-    // One compound condition on ONE ancestor. Two chained group variants
-    // (`group-data-[…]/shell:group-has-[…]/shell:`) are each satisfied by any
-    // ancestor carrying that name, so a second `.group/shell` up the tree
-    // could satisfy one half each; a single `group-[…]/shell` selector cannot.
-    // Wrapped alone put a rail under a three-line draft in an 1800px pane,
-    // where the icon column costs 3% and the rail costs a row. Narrow alone
-    // would double the height of every one-line composer in a tiled fleet.
-    const rail = /group-\[\[data-composer-narrow\]:has\(\[data-composer-multiline\]\)\]\/shell:/;
-    expect(trailing).toMatch(new RegExp(rail.source + "basis-full"));
-    // The canvas answers the same condition (for its stand-in right inset),
-    // so the two can never disagree about which arrangement is showing. The
-    // utility it applies is its own business.
-    expect(track).toMatch(rail);
-    // The canvas stays on the picker's row: it never reorders and never takes
-    // a row of its own, so the text column does not shift and the `❯` keeps
-    // pointing at the line being typed.
+    expect(inner).toMatch(/\babsolute\b/);
+    expect(track).not.toMatch(/composer-rail/);
     expect(track).not.toMatch(/\border-/);
     expect(track).not.toMatch(/\bbasis-full\b/);
-    expect(text).not.toMatch(/@max-\[[^\]]+\]\/composer:/);
   });
 
-  it("measures the content-sized inner trailing group, never the rail wrapper", () => {
-    // The wrapper takes a full basis on the rail, so its width would be the
-    // whole row and "narrow" would confirm itself. The ref must sit on an
-    // inner group that is sized by its buttons alone: no basis, no growth, no
-    // width utility — any of those would make it fill the rail too.
+  it("measures the content-sized trailing group", () => {
+    // `useComposerMeasure` reads this group's left edge to decide whether the
+    // last row leaves it room, so its box must be the buttons' and nothing
+    // else: no basis, no growth, no width utility — any of those would widen
+    // it past its buttons and send a draft that fits to the rail.
     const text = declarations();
-    const inner = /<div ref=\{trailingGroupRef\} className="([^"]*)"/.exec(text)?.[1] ?? "";
+    const inner = /<div\s+ref=\{trailingGroupRef\}\s+className="([^"]*)"/.exec(text)?.[1] ?? "";
 
     expect(inner).toMatch(/\bshrink-0\b/);
     expect(inner).not.toMatch(/\bbasis-/);
