@@ -60,6 +60,8 @@ const FIXTURES: Record<string, RegExp> = {
   gitlab: /REST/,
   "reset-due": /GraphQL/,
   "resume-passed": /next check/,
+  "large-quota": /1,000,000/,
+  "long-countdown": /23h 59m/,
   "countdown-ladder": /59m 59s|59m/,
   "banner-ladder": /Resumes/,
 };
@@ -85,7 +87,8 @@ async function capture(page: Page, fixture: string, theme: string): Promise<stri
   await stubViteHmrClient(page);
   await page.clock.setFixedTime(FROZEN_NOW);
   await page.mouse.move(0, 0);
-  await page.setViewportSize({ width: 640, height: 520 });
+  // Tall enough for countdown-ladder's seven rows; the clip trims every frame to its panel.
+  await page.setViewportSize({ width: 640, height: 900 });
   await page.goto(`${baseURL}/rate-limit-details-preview.html?theme=${theme}&fixture=${fixture}`);
   const shell = page.locator("[data-preview-shell]");
   await expect(shell, `fixture "${fixture}" rendered no shell`).toBeAttached();
