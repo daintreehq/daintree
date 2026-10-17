@@ -42,8 +42,16 @@ export function msUntilNextLabelChange(remainingMs: number): number {
   return remainingMs - (60_000 * minutes - 1000);
 }
 
-function formatClockTime(epochMs: number): string {
-  return new Date(epochMs).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+/**
+ * The fixed time read in place of a ticking countdown. A reset on another day
+ * names that day, since a bare clock time a day out reads as one hours away.
+ */
+function formatResetMoment(epochMs: number): string {
+  const at = new Date(epochMs);
+  const time = at.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+  if (at.toDateString() === new Date().toDateString()) return `at ${time}`;
+  const day = at.toLocaleDateString([], { weekday: "short", month: "short", day: "numeric" });
+  return `on ${day} at ${time}`;
 }
 
 /**
@@ -66,7 +74,7 @@ export function LiveRateLimitCountdown({ resetAt }: { resetAt: number }) {
   return (
     <>
       <span aria-hidden="true">in {formatRateLimitCountdownCoarse(remaining)}</span>
-      <span className="sr-only">at {formatClockTime(resetAt)}</span>
+      <span className="sr-only">{formatResetMoment(resetAt)}</span>
     </>
   );
 }
@@ -184,7 +192,7 @@ function BucketRowSkeleton({ stillWorking }: { stillWorking: boolean }) {
 function StaticTimeAlternative({ verb, at }: { verb: string; at: number }) {
   return (
     <span className="sr-only">
-      {verb} at {formatClockTime(at)}
+      {verb} {formatResetMoment(at)}
     </span>
   );
 }
@@ -253,7 +261,9 @@ function RateLimitBucketRow({ bucket, now }: { bucket: RateLimitBucket; now: num
         </span>
         {remainingMs > 0 ? (
           <>
-            <span aria-hidden="true">Resets in {formatRateLimitCountdown(remainingMs)}</span>
+            <span aria-hidden="true">
+              Resets in <span className="font-medium">{formatRateLimitCountdown(remainingMs)}</span>
+            </span>
             <StaticTimeAlternative verb="Resets" at={bucket.resetAt} />
           </>
         ) : (
