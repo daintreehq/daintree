@@ -697,9 +697,10 @@ declare module "@daintreehq/plugin-ui" {
    */
   export const VirtualList: PluginVirtualListComponent;
   /**
-   * A table with a sticky header and an always-virtualised body. Sorting is
-   * controlled: the table reports `onSortChange` and you sort `rows`. With
-   * `onRowClick` it is a keyboard grid (one tab stop, arrows, Enter).
+   * A table with a sticky header and a body virtualised by default
+   * (`virtualize={false}` draws a plain table). Sorting is controlled: the
+   * table reports `onSortChange` and you sort `rows`. With `onRowClick` it is a
+   * keyboard grid (one tab stop, arrows, Enter).
    */
   export const DataTable: <T>(props: DataTableProps<T>) => ReactNode;
   /**

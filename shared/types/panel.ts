@@ -22,11 +22,10 @@ export type { BuiltInPanelKind };
  *
  * A plugin-contributed kind is `{manifestId}.{kindId}` for a globally installed
  * plugin and `project:{projectId}/{manifestId}/{kindId}` for a project-local
- * one. Layouts persist `PanelSnapshot.kind` verbatim, so the project-qualified
- * form reaches disk as-is today. `toRuntimePanelKindId` /
- * `toPersistedPanelKindRef` in `shared/config/panelKindRegistry.ts` are the
- * conversion for a later layout schema that drops the project id, so that a
- * re-clone at a different path stops orphaning saved panels.
+ * one. Layouts never persist the project-qualified form (#12280): they store
+ * the portable `{manifestId}.{kindId}` plus a `kindRef` and re-qualify on
+ * restore (`shared/utils/panelKindPersistence.ts`), so a re-clone at a
+ * different path does not orphan saved panels.
  */
 export type PanelKind = BuiltInPanelKind | (string & {});
 

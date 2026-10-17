@@ -1422,7 +1422,7 @@ interface ForgeProviderContribution {
      * contract and the multi-field auth path.
      */
     credentialFields?: CredentialField[];
-    /** ID prefix in this plugin's `settings` contributions, used to group provider settings. */
+    /** Exact `contributes.settings[].id` of one of this plugin's settings, used to group provider settings. */
     settingsScopeRef?: string;
     /** IDs of `views` contributions shown under this provider's panel section. */
     viewRefs?: string[];
@@ -3298,9 +3298,10 @@ interface SettingsApi {
  * NOT gated by `contributes.settings` declarations, so a plugin can persist its
  * own working state freely without declaring every key. Values are stored as
  * plaintext JSON (no secret encryption — never store credentials here) at
- * `~/.daintree/plugin-storage/{pluginId}.json` (user scope),
- * `<projectRoot>/.daintree/plugin-storage/{pluginId}.json` (project scope), or
- * `<worktreePath>/.daintree/plugin-storage/{pluginId}.json` (worktree scope),
+ * `~/.daintree/plugin-storage/{pluginId}.json` (user scope; a project
+ * plugin's `pluginId` is its per-project instance key),
+ * `<projectRoot>/.daintree/plugin-storage/{manifestId}.json` (project scope), or
+ * `<worktreePath>/.daintree/plugin-storage/{manifestId}.json` (worktree scope),
  * with `chmod 0o600` applied on POSIX.
  *
  * `scope` defaults to `"user"`. The `"project"` and `"worktree"` scopes resolve
@@ -4041,8 +4042,9 @@ type PluginSendToAgentResult = {
  * app's internal `notify()` surface: plugins cannot set `priority` (a
  * `priority:"low"` + `type:"error"` toast silently drops — see the lint rule at
  * `eslint.config.js`), pass a `ReactNode` message, or attach an action button
- * (plugins have no IPC channel to wire one to). `message` is namespaced with the
- * plugin's id (`{pluginId}: {message}`) by the host for provenance.
+ * (plugins have no IPC channel to wire one to). `message` is prefixed with the
+ * plugin's manifest display name (`{displayName}: {message}`) by the host for
+ * provenance.
  */
 interface PluginToastOptions {
     /** Toast body. String only across the IPC boundary — no `ReactNode`. */
@@ -5109,8 +5111,9 @@ interface PluginActivationApi {
      * dispatch the args are `safeParse`d, the handler is invoked with the
      * parsed payload, and the result is `safeParse`d before returning to the
      * renderer. Schema failures throw with a `SCHEMA_ERROR:` prefix; missing
-     * capabilities throw with a `PERMISSION_REQUIRED:` prefix — the
-     * renderer-side `useHostChannel` hook discriminates on these prefixes.
+     * capabilities throw with a `PERMISSION_REQUIRED:` prefix. The
+     * renderer-side `useHostChannel` hook passes the error through unchanged as
+     * its `error` value; the view tells the prefixes apart.
      *
      * Must be called during `activate()`.
      *
@@ -5315,10 +5318,11 @@ interface PluginActivationApi {
      * This is the signal background work has no other way to get.
      * {@link onDidChangePanelLifecycle} gives a *view* a re-validation point, but
      * a plugin's timers, forge providers, and reconciliation passes keep running
-     * against state frozen at suspend. The host's own resume path only re-enables
-     * workspace polling if a window is focused, so a machine that wakes while the
-     * app is blurred leaves that state stale until the user comes back — for an
-     * unbounded stretch, with nothing else announcing the wake.
+     * against state frozen at suspend. The host's own resume path resumes
+     * git-status polling only while a Daintree window is on screen and holds its
+     * post-wake refresh until one is, so a machine that wakes with the app hidden
+     * leaves that state stale until the user comes back — for an unbounded
+     * stretch, with nothing else announcing the wake.
      *
      * Delivered at most once per resume, after the host has attempted to resync
      * its pty and workspace hosts, so a plugin re-reading worktree state from the
@@ -5475,14 +5479,14 @@ interface PluginHostApi extends PluginActivationApi {
      * {@link dispatch} this is NOT revoke-guarded: liveness is plugin membership,
      * so it becomes a silent no-op once the plugin is unloaded. `channel` must be
      * a non-empty string without colons (the namespace separator); an invalid
-     * channel throws so authoring mistakes surface loudly.
+     * channel rejects so authoring mistakes surface loudly.
      *
      * Pass `panelId` to target a single panel instance — only the renderer
      * subscribed via `window.electron.plugin.onPanel(pluginId, channel, panelId,
      * …)` (or the SDK's `usePluginPanelEvent`) receives it, so multiple open
      * instances of the same panel kind no longer all receive every push. Omit it
      * (or pass `null`) to broadcast to every `plugin.on` / `usePluginEvent`
-     * subscriber as before. An empty-string `panelId` throws.
+     * subscriber as before. An empty-string `panelId` rejects.
      */
     postToPanel(channel: string, payload: unknown, panelId?: string | null): Promise<void>;
     /**
@@ -5752,9 +5756,11 @@ interface PluginHostApi extends PluginActivationApi {
      */
     restartWorker(): Promise<WorkerRestartResult>;
     /**
-     * Surface a toast notification. The host namespaces the message as
-     * `{pluginId}: {message}` for provenance — a plugin cannot spoof another
-     * plugin's id since `pluginId` is bound to the host at activation. Routes
+     * Surface a toast notification. The host prefixes the message with the
+     * plugin's manifest display name, `{displayName}: {message}`, for provenance.
+     * The name is resolved host-side from the `pluginId` bound at activation, so
+     * a plugin cannot spoof another's; a project plugin's id is an instance key,
+     * which is why the display name is shown rather than the id. Routes
      * through the app's `notify()` path so rate-limit, quiet-hours, and
      * inbox-history semantics apply identically to plugin toasts.
      *

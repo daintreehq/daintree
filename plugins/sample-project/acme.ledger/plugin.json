@@ -8,7 +8,7 @@
   "authors": [{ "name": "Daintree", "role": "Maintainer" }],
   "main": "dist/index.mjs",
   "engines": {
-    "daintree": ">=0.39.0"
+    "daintree": ">=0.44.0"
   },
   "capabilities": ["mcp:expose", "fs:project-write"],
   "contributes": {

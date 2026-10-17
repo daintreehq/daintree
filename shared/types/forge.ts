@@ -1575,7 +1575,7 @@ export interface ForgeProviderContribution {
    * contract and the multi-field auth path.
    */
   credentialFields?: CredentialField[];
-  /** ID prefix in this plugin's `settings` contributions, used to group provider settings. */
+  /** Exact `contributes.settings[].id` of one of this plugin's settings, used to group provider settings. */
   settingsScopeRef?: string;
   /** IDs of `views` contributions shown under this provider's panel section. */
   viewRefs?: string[];
