@@ -1,7 +1,9 @@
 import { useEffect, useEffectEvent, useRef } from "react";
 import { Skeleton, SkeletonBone, SkeletonHint } from "@/components/ui/Skeleton";
+import { useHorizontalScrollControls } from "@/hooks/useHorizontalScrollControls";
 import { useMediaSourceUrl } from "./useMediaSourceUrl";
 import type { MediaPreviewError } from "./useMediaSourceUrl";
+import "./FileAudioPreview.css";
 
 // Matches the video ceiling. The hook no longer builds a whole-file Blob, so
 // this is a preview-scope judgement rather than a memory bound — and an hour of
@@ -73,6 +75,8 @@ export function FileAudioPreview({
   });
 
   const mediaRef = useRef<HTMLAudioElement>(null);
+  const viewportRef = useRef<HTMLDivElement>(null);
+  const { isOverflowing, canScrollLeft, canScrollRight } = useHorizontalScrollControls(viewportRef);
 
   // Effect event so this keys on the source alone — callers pass inline
   // closures, and re-running on every parent render would report a stop the
@@ -104,58 +108,72 @@ export function FileAudioPreview({
   return (
     // Chromium's native audio control drops its scrubber and volume slider
     // below ~300px, and a docked pane can be narrower than that. The floor
-    // keeps the control whole and lets the wrapper scroll instead — the same
+    // keeps the control whole and lets the viewport scroll instead — the same
     // floor applies to the skeleton so settling doesn't shift the layout. The
     // side padding gives way first — 12px each side down to none as the pane
-    // closes from 324px to 300px — so the wrapper only scrolls once the
-    // control itself no longer fits.
-    <div className="flex items-center justify-center overflow-x-auto px-[clamp(0px,calc((100%-300px)/2),12px)] py-6">
-      {sourceUrl ? (
-        <audio
-          // Keyed by the source URL so switching files (or reloading) remounts
-          // the element rather than continuing playback of the previous source.
-          key={sourceUrl}
-          ref={mediaRef}
-          src={sourceUrl}
-          controls
-          preload="metadata"
-          aria-label={label}
-          className="w-full max-w-md min-w-[300px]"
-          // `paused` alone would call a buffering stall a stop; `ended` alone
-          // would call a finished track still playing (the spec leaves `paused`
-          // false at the end). Both, on all three events, or neither is right.
-          onPlay={(event) =>
-            onPlayingChange?.(!event.currentTarget.paused && !event.currentTarget.ended)
-          }
-          onPause={(event) =>
-            onPlayingChange?.(!event.currentTarget.paused && !event.currentTarget.ended)
-          }
-          onEnded={(event) =>
-            onPlayingChange?.(!event.currentTarget.paused && !event.currentTarget.ended)
-          }
-          // A decode failure stops playback without a `pause`. Every caller in
-          // tree unmounts the preview here, which would retract it anyway — but
-          // the leaf is shared, and one that merely logs must not be left
-          // holding a player that stopped.
-          onError={() => {
-            onPlayingChange?.(false);
-            onError?.();
-          }}
-        />
-      ) : probing ? (
-        // Covers the size probe — a HEAD answered from a realpath and an fd
-        // stat, so `SkeletonBone`'s 400ms gate normally swallows it entirely. It
-        // earns its place on a cold or contended disk. The mounted control still
-        // loads its own metadata afterwards; that wait is the element's.
-        <div className="flex w-full max-w-md min-w-[300px] flex-col items-center gap-3">
-          <Skeleton label="Loading audio" className="w-full">
-            <SkeletonBone className="h-[54px] w-full rounded-full" />
-          </Skeleton>
-          {/* Sibling, never nested: the wrapper's aria-busy silences mutations
-              inside its own subtree. */}
-          <SkeletonHint />
-        </div>
-      ) : null}
+    // closes from 324px to 300px — so the viewport only scrolls once the
+    // control itself no longer fits. Sized explicitly rather than by the host:
+    // a centring flex host would otherwise shrink-wrap it to the floor.
+    <div
+      className="audio-preview relative my-6 w-full min-w-0"
+      data-overflowing={isOverflowing || undefined}
+      data-scroll-start={canScrollLeft || undefined}
+      data-scroll-end={canScrollRight || undefined}
+    >
+      {/* Safe centring: an overflowing control starts at the left edge, where
+          scrolling can reach it, instead of spilling past it with the play
+          button. */}
+      <div
+        ref={viewportRef}
+        className="audio-preview__viewport flex items-center justify-center-safe overflow-x-auto px-[clamp(0px,calc((100%-300px)/2),12px)]"
+      >
+        {sourceUrl ? (
+          <audio
+            // Keyed by the source URL so switching files (or reloading) remounts
+            // the element rather than continuing playback of the previous source.
+            key={sourceUrl}
+            ref={mediaRef}
+            src={sourceUrl}
+            controls
+            preload="metadata"
+            aria-label={label}
+            className="w-full max-w-md min-w-[300px]"
+            // `paused` alone would call a buffering stall a stop; `ended` alone
+            // would call a finished track still playing (the spec leaves `paused`
+            // false at the end). Both, on all three events, or neither is right.
+            onPlay={(event) =>
+              onPlayingChange?.(!event.currentTarget.paused && !event.currentTarget.ended)
+            }
+            onPause={(event) =>
+              onPlayingChange?.(!event.currentTarget.paused && !event.currentTarget.ended)
+            }
+            onEnded={(event) =>
+              onPlayingChange?.(!event.currentTarget.paused && !event.currentTarget.ended)
+            }
+            // A decode failure stops playback without a `pause`. Every caller in
+            // tree unmounts the preview here, which would retract it anyway — but
+            // the leaf is shared, and one that merely logs must not be left
+            // holding a player that stopped.
+            onError={() => {
+              onPlayingChange?.(false);
+              onError?.();
+            }}
+          />
+        ) : probing ? (
+          // Covers the size probe — a HEAD answered from a realpath and an fd
+          // stat, so `SkeletonBone`'s 400ms gate normally swallows it entirely. It
+          // earns its place on a cold or contended disk. The mounted control still
+          // loads its own metadata afterwards; that wait is the element's.
+          <div className="flex w-full max-w-md min-w-[300px] flex-col items-center gap-3">
+            <Skeleton label="Loading audio" className="w-full">
+              <SkeletonBone className="h-[54px] w-full rounded-full" />
+            </Skeleton>
+            {/* Sibling, never nested: the wrapper's aria-busy silences mutations
+                inside its own subtree. */}
+            <SkeletonHint />
+          </div>
+        ) : null}
+      </div>
     </div>
   );
 }

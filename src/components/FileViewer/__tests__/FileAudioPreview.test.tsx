@@ -34,13 +34,14 @@ function setPlaybackState(
   Object.defineProperty(element, "ended", { configurable: true, value: state.ended ?? false });
 }
 
+const realFetch = globalThis.fetch;
 beforeEach(() => {
   vi.stubGlobal("fetch", fetchMock);
 });
 
 afterEach(() => {
   cleanup();
-  vi.unstubAllGlobals();
+  vi.stubGlobal("fetch", realFetch);
   fetchMock.mockReset();
 });
 

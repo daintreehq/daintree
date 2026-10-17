@@ -1,0 +1,130 @@
+/* The "more this way" cue for a player narrower than its pane, the one a
+   wide Markdown table gets (MarkdownDocument.css): a fade at whichever edge
+   has more of the control past it. A mask rather than a cover, because the
+   player sits on whatever the host panel paints — canvas, panel, or a
+   selected panel's tint. ScrollShadow's compact 16px rather than the rails'
+   24px: the control is short, and the wider fade dims a volume button that
+   is fully in view.
+
+   Chromium's padding box takes in the scrollbar, so clipping the mask to it
+   would fade a classic scrollbar's ends too. The fade instead stops a
+   measured gutter short of the bottom (`--app-scrollbar-gutter`, 0 under
+   overlay scrollbars) and a second layer keeps that strip opaque.
+
+   The fade widths animate on the frame and are inherited by the viewport. */
+@property --audio-preview-fade-start {
+  syntax: "<length>";
+  inherits: true;
+  initial-value: 0px;
+}
+
+@property --audio-preview-fade-end {
+  syntax: "<length>";
+  inherits: true;
+  initial-value: 0px;
+}
+
+.audio-preview[data-overflowing] {
+  transition:
+    --audio-preview-fade-start var(--transition-duration) ease-out,
+    --audio-preview-fade-end var(--transition-duration) ease-out;
+}
+
+/* The scrollbar sits under the control it moves, not across the pane's
+   whitespace — and a macOS overlay bar draws into this gap rather than over
+   the control. The negative margin hands the gap and the bar to the frame's
+   bottom margin, so a centring host doesn't lift the player when the pane
+   crosses the floor. A focused button scrolled into view lands clear of the
+   fade. */
+.audio-preview[data-overflowing] > .audio-preview__viewport {
+  padding-bottom: 0.5rem;
+  margin-bottom: calc(-0.5rem - var(--app-scrollbar-gutter, 0px));
+  scroll-padding-inline: 1rem;
+  mask-image:
+    linear-gradient(
+      to right,
+      transparent,
+      #000 var(--audio-preview-fade-start),
+      #000 calc(100% - var(--audio-preview-fade-end)),
+      transparent
+    ),
+    linear-gradient(#000 0 0);
+  mask-size:
+    100% calc(100% - var(--app-scrollbar-gutter, 0px)),
+    100% var(--app-scrollbar-gutter, 0px);
+  mask-position: top, bottom;
+  mask-repeat: no-repeat;
+}
+
+.audio-preview[data-scroll-start] {
+  --audio-preview-fade-start: 1rem;
+}
+
+.audio-preview[data-scroll-end] {
+  --audio-preview-fade-end: 1rem;
+}
+
+/* High contrast, as ScrollShadowOverlay does it: the wash goes, and the edge
+   that has more of the control gets a rule. Two blocks on purpose — see
+   index.css. */
+@media (forced-colors: active) {
+  .audio-preview[data-overflowing] > .audio-preview__viewport {
+    mask-image: none;
+  }
+
+  .audio-preview[data-overflowing]::before,
+  .audio-preview[data-overflowing]::after {
+    content: "";
+    position: absolute;
+    inset-block: 0;
+    pointer-events: none;
+    opacity: 0;
+    transition: opacity var(--transition-duration) ease-out;
+  }
+
+  .audio-preview[data-overflowing]::before {
+    inset-inline-start: 0;
+    border-inline-start: 2px solid;
+  }
+
+  .audio-preview[data-overflowing]::after {
+    inset-inline-end: 0;
+    border-inline-end: 2px solid;
+  }
+
+  .audio-preview[data-scroll-start]::before,
+  .audio-preview[data-scroll-end]::after {
+    opacity: 1;
+  }
+}
+
+@media (prefers-contrast: more) {
+  .audio-preview[data-overflowing] > .audio-preview__viewport {
+    mask-image: none;
+  }
+
+  .audio-preview[data-overflowing]::before,
+  .audio-preview[data-overflowing]::after {
+    content: "";
+    position: absolute;
+    inset-block: 0;
+    width: 1px;
+    pointer-events: none;
+    background: var(--color-border-strong);
+    opacity: 0;
+    transition: opacity var(--transition-duration) ease-out;
+  }
+
+  .audio-preview[data-overflowing]::before {
+    inset-inline-start: 0;
+  }
+
+  .audio-preview[data-overflowing]::after {
+    inset-inline-end: 0;
+  }
+
+  .audio-preview[data-scroll-start]::before,
+  .audio-preview[data-scroll-end]::after {
+    opacity: 1;
+  }
+}
