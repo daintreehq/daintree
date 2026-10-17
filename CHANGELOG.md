@@ -1,5 +1,165 @@
 # Changelog
 
+## [0.44.0] - 2026-10-17
+
+Remote Hosts ships: a window can drive another Mac or Linux machine's Daintree over ssh, or a Linux Host in a WSL 2 distro on Windows, and the Daintree Assistant can hand work to the assistants running there. Canopy arrives as an opt-in inbox of every agent ranked by what it needs from you, agent hand-backs are tracked as read or unread instead of counting as waiting, and Linux gains arm64 builds and a self-updating `.deb`.
+
+### Breaking Changes
+
+- Linux: the `.deb` needs glibc 2.34 or newer (Ubuntu 22.04, Debian 12, RHEL 9 and later) (#13247)
+- Linux: cookie encryption is off, which removes the keyring password prompt at startup; existing users sign in again once to sites in browser panels (#13247)
+
+### Features
+
+**Remote Hosts**
+
+- A window can attach to another machine's Daintree over the system `ssh`: terminals, git, worktrees, agents, plugins and MCP run on the host while this machine draws the UI, and terminal streams resume with replay after a dropped link (#11158)
+- Settings › Hosts adds a host from Tailscale or Bonjour/Avahi discovery or an SSH target, installs or updates the matching build (Shell and Host run the same one), and turns on Host mode with start at login (#11158, #13294)
+- Windows drives a Linux Host in a WSL 2 distro: Add host lists this PC's distros, Reveal in Explorer goes through `\\wsl.localhost` and Open in editor uses VS Code's WSL remote (#12830)
+- Hosts are dialled on demand and released after 5 idle minutes, and updating a host first lists the terminals and Shells the restart will end (#13288)
+- Switch host (`Cmd+Alt+U`, `Ctrl+Alt+U` on Linux) opens a recency-ordered palette with each host's agents, load and round trip; a slow switch shows progress with Cancel and holds typed input (#13268, #13329, #13308, #13311)
+- Remote windows show an `SSH ·` or `WSL ·` host chip with the link's round trip, and a host tag in the Worktrees header (#13302, #13312, #13413)
+- The project switcher lists other hosts' projects; opening one matches it by repository or clones it, and an unpushed branch can be pushed to its upstream before it continues there (#13290, #13286)
+- One screen drives a host project at a time; other screens watch read-only, following the driver's panels, navigation, drafts and terminal grid, with Take control to switch (#13280, #13281, #13282, #13283, #13285)
+- Drops, pastes and clipboard images upload to the host, host files open in a host-scoped picker and viewer, and host dev servers forward to this machine's browser panels (#11158, #13296)
+- The Hosts overview shows per-host CPU and memory, agent CLIs, plugin parity, forwarded ports and least-loaded worktree placement, and fleet broadcast reaches agents on other hosts (#11158)
+- Copy settings sends this computer's portable settings to a host by category with secrets withheld, shows drift since the last copy and can undo it (#13346, #13347)
+
+**Canopy**
+
+- Canopy, an inbox of every agent terminal across projects ranked by what each one needs from you, opens from the toolbar or `Cmd+E` (`Ctrl+Shift+O` on Windows and Linux) (#13220)
+- Opt-in and free during the beta: nothing is read until you turn it on, then each agent's screen, recent scrollback, title and state go to `canopy.daintree.org` after key and password redaction (#13220)
+- The inbox shows the selected agent's live terminal with one-key answers to permission prompts, a reply composer, read/unread, archive, rename and trash with undo, and pages you when an agent asks for something (#13220)
+- With a remote host added, a host picker reads that host's Canopy, and you can watch and type into its agents and act on its runs (#13385, #13386, #13387, #13388)
+
+**Fleet and attention**
+
+- Agent hand-backs stay unread until you've looked at the pane, with Mark as read / Mark as unread in the terminal context menu (#13233)
+- A handed-back agent draws a neutral unread disc, then a finished ring, instead of the amber waiting circle; amber now means an approval, question or error, and every state glyph shares one ring (#13235, #13271, #13320)
+- The dock gets an Unread pill beside Waiting, and Waiting holds only agents asking for something (#13451)
+- Agents can be parked and unparked from the terminal context menu, with a note and an optional release gate, or in bulk from a worktree card's Sessions submenu (#13236)
+- A "Has an agent" filter narrows the worktree sidebar to worktrees with an agent terminal (#13232)
+
+**Daintree Assistant**
+
+- On macOS and Linux the assistant can run work across Remote Hosts: `host.*` tools read each host's projects, assistants, tasks and Codex quota, and on the Full tool set `host.sendMessage` delegates to a host's assistant and checks its reply (#13336, #13389, #13411)
+- Host assistants message back with `assistant.getInbox`, `assistant.reply` and `assistant.sendMessage`; exchanges survive a dropped link or a restart, and the Hosts overview lists them (#13331, #13333, #13334, #13335, #13337, #13338, #13340)
+- Messaging between machines is on by default for ssh hosts, with per-run and per-host switches; `host.startAssistant` needs its own per-host opt-in (#13339, #13441, #13389)
+- Sessions can start on any installed assistant-capable agent, not only the default, from "New session with <agent>" (#13442)
+- Each session tab's context menu has Restart conversation for that tab's lane (#13440)
+
+**Projects and worktrees**
+
+- Project groups and archive in the project switcher: named, reorderable groups, and an Archived section that drops out of the Welcome screen's recents (#13393)
+- Worktree cards take a colour label and a custom title, searchable in the sidebar, overview, palette and pickers (#13408, #13409)
+- 25 recognised branch types, 13 of them new, each with its own icon; agent namespaces group under Agents and bot branches under Dependencies or Releases (#13390)
+- The bulk worktree dialog's issue mode has a Base picker (#13394)
+
+**Files and panels**
+
+- Changed-file rows and open files get the file tree's context menu, and selected text or an editable field gets a native Cut, Copy, Paste and Select all menu (#13423)
+- Discard changes and Delete file in file row menus, behind a confirm; deleted files go to the OS Trash (#13424)
+- Non-terminal panels open the panel context menu only from the title bar, so a right-click in the body no longer covers your work (#13422)
+- The agent composer has a selected state, with the accent outline only while it has the keyboard (#13293)
+
+**Plugins and MCP**
+
+- Plugins can declare parameterised SQL queries under `contributes.databases[].queries` that the host serves as agent tools: reads by default, single-statement writes at Read and write access, with typed params checked before the SQL runs (#13449, #13450, #13455)
+- `host.restartWorker()` lets a plugin restart its own worker, at most once every 30s (#13410)
+- `plugin.capturePanel` (Full tool set) returns a PNG of a live plugin panel plus its recent console warnings and errors (#13384)
+- `agent.launch` says why it didn't spawn in `spawnStatus` and returns a `panelLimit` snapshot; `terminal.list` reports panel headroom (#13382)
+- `agent.listModels` returns each agent's model ids and names (#13437)
+
+**Linux**
+
+- Linux arm64 AppImage and `.deb` builds with their own update feed (#13253)
+- `.deb` installs auto-update through one polkit prompt and add a `/usr/bin/daintree` CLI; the AppImage runs without libfuse2 and gets differential updates (#13247)
+
+### Bug Fixes
+
+**Fleet and attention**
+
+- Hand-backs no longer count as waiting in the window title, macOS Dock badge, waiting pill, tab and dock highlights or launcher pips (#13271)
+- The sidebar's Working, Attention and Finished buckets, Pilot and the project switcher's counts all come from the same fleet bands; agents at a plain prompt no longer fill Attention (#13234, #13237, #13238)
+- Agent states use one vocabulary: "Completed" becomes "Finished" and "ready for review" becomes "unread" (#13271)
+- An unsent composer draft keeps the agent in directing instead of dropping to waiting during a pause (#13272)
+
+**Terminals and agents**
+
+- A file dropped on an agent pane lands where the keyboard is, like a paste, and a notice offers insert or copy if the pane changed before it landed (#13275, #13327)
+- The slash-command picker opens only in the composer that asked for it, instead of in every agent pane (#13251)
+- The terminal find bar draws the current match distinctly and stops sliding as the count changes (#13263)
+- Assistant-launched Codex panes no longer override your Codex default with `--model gpt-6-sol`; the Codex model picker lists what the installed CLI reports, and Gemini offers the CLI's `pro`, `flash` and `flash-lite` aliases (#13437)
+- Composer attachment chips share one hover card with a visible remove control (#13397)
+- Codex's Find session list tells apart sessions that open with the same words (#13403)
+
+**Daintree Assistant and MCP**
+
+- The assistant can read the last message of panes it launched again, a regression in 0.43.0 (#13439)
+- Notices to an idle orchestrator pane are retried on a backoff instead of waiting for a pane event that never comes (#13405)
+- Routed MCP dispatch into a cached project view sees worktrees created since it was cached (#13348)
+- The assistant's agent and the default agent travel with settings export and import (#13345)
+- A narrow pane that wraps prose onto a line starting with a question word no longer reads as asking a question (#13389)
+- A non-force `worktree.delete` re-reads status before refusing a just-cleaned worktree as dirty (#13389)
+
+**Keyboard**
+
+- Colliding defaults moved: Send selection to another terminal is `Cmd+K Cmd+I`, Kill all armed terminals is `Cmd+K Cmd+Shift+K` and Next waiting dock agent is `Cmd+K Cmd+/` (#13299)
+- User rebinds beat plugin bindings, a focused portal page gets `Cmd+W`, `Cmd+T` and tab switching, and Escape in the review commit box no longer drops the draft (#13299)
+- `Cmd+Alt+N` and `Cmd+Alt+I` work outside a terminal on macOS (#13270)
+- Switch to last workspace (`Cmd+Alt+=`) follows its configured binding (#13308)
+- The shortcut reference lists every custom key, and Escape clears a typed search before closing it or the theme picker (#13248, #13264)
+
+**Projects, worktrees and review**
+
+- Opening a project that another window keeps cached opens it where you asked, instead of switching the other window to it (#13274, #13291)
+- Create worktree from a PR pins the base to the PR head, and the prompt field is hidden when the recipe already starts an agent (#13260)
+- Review & commit lists stash-pop conflicts with Open, Mark resolved and take-side actions, the push confirm lists what it will publish, and Retry re-runs the failed action (#13258, #13246)
+- The PR CI badge no longer shows the previous commit's result after a push (#13399, #13400)
+- The repository command approval dialog groups commands into Setup, Teardown and Resources and says when each runs (#13358)
+- The agent approval dialog reads requester, action, then targets, names the approval's scope, and moves focus back to Cancel when the next request appears (#13341)
+
+**Palettes, dialogs and panels**
+
+- Command palette descriptions and keywords match only on the whole query, so "theme" no longer turns up "Abort Git operation" (#13255)
+- The project switcher gets Shift+F10, PageUp/PageDown and IME support and fits shorter windows (#13257)
+- The resume session palette and copy menu show an error with Retry when history can't be read, instead of looking empty (#13249, #13250)
+- The recipe editor shows a recipe's real scope, and dialogs opened from menus return focus to the menu's trigger (#13254)
+- The empty file pane's picker works from the keyboard and tells no matches apart from a failed search (#13396)
+- Diff note cards stay inside their column, and wide Markdown tables scroll on their own (#13402, #13404)
+- Browser address-bar suggestions keep the end of long URLs visible, the device bar wraps in narrow panes, and the portal's bulk-close confirm lists each tab (#13398, #13356, #13401)
+- The Run command launcher keeps a pinned command's settings and offers Retry on a failed launch (#13252)
+- The memory notice's two buttons become one menu (#13229)
+- Pulse health chips stay neutral unless CI is failing or alerts are open (#13326)
+- The running processes dialog, dev preview console, notification archive, diagnostics and audit logs get clearer rows, labels and full values (#13343, #13266, #13256, #13355, #13406)
+
+**Plugins**
+
+- Upgrading a plugin or rebuilding with `daintree-plugin dev` no longer cuts agents off from its MCP tools (#13267)
+- Plugin worker host calls reject with `TIMEOUT` instead of hanging forever (#13410)
+- `host.git.add` and `host.db.open` validate before the consent prompt, so a call that would fail can't bank a grant (#13456)
+
+**Windows**
+
+- Bare executable names (git, gh, npm, node, agent CLIs) resolve only from absolute PATH entries, so a same-named file in the project can't run in their place, and agent prompts reach the CLI verbatim (#13261)
+- Ctrl+V and Ctrl+C work in terminals, restored terminals open in PowerShell 7, closing a terminal no longer leaks a conhost, and process-tree kills go through one batched helper (#13261)
+
+**Linux**
+
+- Default shortcuts moved off the Ctrl+Alt keys Linux desktops grab: New terminal, Scroll to last activity and Open file browser are Ctrl+Shift+Alt+T, L and F, and directional focus is Ctrl+Shift+arrows (#13247)
+- Agent CLIs are found without `which`, terminals no longer inherit AppImage or Chromium variables, tiling window managers get a minimum size, and the packages are about 380 MB smaller (#13247)
+
+**macOS**
+
+- Programs run in a terminal can send Apple Events, such as `osascript` scripting Finder, after a one-time macOS prompt instead of failing with `-1743` (#13278)
+
+**Everywhere else**
+
+- `daintree://` links and double-clicked `.dntr` installs reach the primary window when it has a browser panel open (#13247)
+- Export Configuration carries more settings and withholds per-agent permission-bypass flags and more kinds of secrets (#13346)
+- Switching the update channel no longer stages the old channel's update (#13436)
+- Menu separators and icons stay visible in forced-colours mode (#13302, #13328)
+
 ## [0.43.0] - 2026-10-11
 
 Assistant conversations now survive quit and crash and can be picked back up from a past-session picker, and Codex carries on in the same conversation after it updates itself. Panel add and close settle the grid in about 60ms, plugins can publish contextual panel menu actions and read panel focus, and scratch and non-git folder rows get the actions worktree rows already had.
