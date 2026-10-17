@@ -252,8 +252,8 @@ export const theme: BuiltInThemeSource = {
     //     `-subtle` pill, not the panel, and there are two pill contexts (12%
     //     into canvas, 20% into elevated).
     //   - the raw base is ALSO painted as text, on its own alpha tint, in
-    //     `CAT_COLOR_CLASSES` (`bg-cat-*/15 text-cat-*`) and
-    //     `EVENT_CATEGORY_STYLES` (`/20`) in src/config/categoryColors.ts, plus
+    //     `EVENT_CATEGORY_STYLES` (`bg-cat-*/20 text-cat-*`) in
+    //     src/config/categoryColors.ts, plus
     //     the branch chips in shared/theme/entityColors.ts. So the base owes AA
     //     against ITS OWN TINT, not just the 3:1 it owes as a panel-kind icon.
     //
