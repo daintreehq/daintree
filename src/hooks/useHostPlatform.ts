@@ -97,6 +97,11 @@ export function isRemoteWindow(): boolean {
   return currentHostId() !== LOCAL_HOST_ID;
 }
 
+/** A WSL distro's window: remote, but its files are on this PC, where Explorer shows them through WSL's share. */
+export function isWslWindow(): boolean {
+  return isRemoteWindow() && snapshot().connection?.kind === "wsl";
+}
+
 /** A persisted key for something scoped to this view's project: bare locally. */
 export function hostScopedKey(id: string): string {
   return toHostScopedKey(currentHostId(), id);
@@ -108,9 +113,7 @@ export function hostScopedKey(id: string): string {
  * other names match `fileManagerRevealLabel`, asked of the host's platform.
  */
 export function hostFileManagerRevealLabel(): string {
-  // A WSL distro's files are on this PC: Explorer shows them through WSL's share.
-  if (isRemoteWindow())
-    return snapshot().connection?.kind === "wsl" ? "Show in Explorer" : "Copy host path";
+  if (isRemoteWindow()) return isWslWindow() ? "Show in Explorer" : "Copy host path";
   if (isHostMac()) return "Show in Finder";
   if (isHostWindows()) return "Show in Explorer";
   return "Show in file manager";
