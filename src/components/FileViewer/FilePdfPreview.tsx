@@ -174,13 +174,17 @@ export function FilePdfPreview({
   return (
     // The probe is a realpath and a stat, so `SkeletonBone`'s 400ms gate
     // normally swallows it; it earns its place on a cold or contended disk.
-    <div className="flex h-full w-full flex-col gap-3 p-4">
-      <Skeleton label="Loading PDF" className="min-h-0 flex-1">
-        <SkeletonBone className="h-full w-full" />
+    // The bone takes the frame's own box — edge to edge, square — because the
+    // viewer paints its page layout inside that box and changes it with the
+    // pane's size; an inset card is what squashes into a banner in a short split.
+    <div className="relative h-full w-full">
+      <Skeleton label="Loading PDF" className="h-full w-full">
+        <SkeletonBone className="h-full w-full rounded-none" />
       </Skeleton>
-      {/* Sibling, never nested: the wrapper's aria-busy silences mutations
-          inside its own subtree. */}
-      <SkeletonHint />
+      {/* Sibling, never nested: the wrapper is itself a live region. Laid over
+          the bone rather than below it, so the bone neither reserves a row for
+          it nor gives one up when it appears. */}
+      <SkeletonHint className="absolute inset-x-4 bottom-8 flex justify-center" />
     </div>
   );
 }
