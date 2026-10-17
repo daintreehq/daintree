@@ -79,7 +79,9 @@ document.body.style.margin = "0";
 
 // The chat page is a native view in the app; stand in for it with a light page.
 const standIn = document.createElement("style");
-standIn.textContent = `[data-fixture] #portal-placeholder > .bg-surface-sidebar:only-child { background: #f7f6f3; }`;
+// A restoring tab's skeleton shares the placeholder's surface but is the app's own
+// paint, so it keeps the sidebar colour.
+standIn.textContent = `[data-fixture] #portal-placeholder > .bg-surface-sidebar:only-child:not([role="status"]) { background: #f7f6f3; }`;
 document.head.appendChild(standIn);
 
 await primeRadix();

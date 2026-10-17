@@ -129,6 +129,27 @@ export const FIXTURES = {
     activeTabId: "t-docs",
     createdTabs: ["t-claude", "t-chatgpt", "t-gemini", "t-docs", "t-claude-2", "t-chatgpt-2"],
   },
+  "page-restoring": {
+    width: 480,
+    height: 900,
+    tabs: [claude, chatgpt, gemini],
+    activeTabId: "t-claude",
+    createdTabs: ["t-chatgpt", "t-gemini"],
+  },
+  "page-restoring-narrow": {
+    width: 320,
+    height: 760,
+    tabs: [claude, chatgpt],
+    activeTabId: "t-claude",
+    createdTabs: ["t-chatgpt"],
+  },
+  "page-restoring-wide": {
+    width: 1040,
+    height: 760,
+    tabs: [claude, chatgpt, gemini, docs],
+    activeTabId: "t-gemini",
+    createdTabs: ["t-claude", "t-chatgpt", "t-docs"],
+  },
   "page-hover-copy": {
     width: 480,
     height: 600,
