@@ -195,7 +195,7 @@ describe("ForgeStatsToolbarButton digit pulse", () => {
     expect(effectStart).toBeGreaterThan(0);
     // Ahead of the loading/error guard: a switch lands as statsLoading=true
     // with lastUpdated=null, and behind the guard the old baseline survived.
-    expect(effectStart).toBeLessThan(source.indexOf("if (statsLoading || statsError) {"));
+    expect(effectStart).toBeLessThan(source.indexOf("if (statsLoading || statsError) return;"));
     const slice = source.slice(effectStart, effectStart + 1500);
     expect(slice).toMatch(/lastUpdated\s*==\s*null/);
     expect(slice).toMatch(/issueCountRef\.current\s*=\s*undefined/);

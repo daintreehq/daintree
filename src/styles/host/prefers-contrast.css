@@ -198,6 +198,23 @@
     color: var(--color-text-primary) !important;
   }
 
+  /* A still forge loading bar (reduced motion, performance mode) is the whole
+     indicator rather than a track under a moving band, so it takes full
+     secondary ink instead of its 70% tint. */
+  @media (prefers-reduced-motion: reduce) {
+    .forge-status-loading {
+      background: var(--color-text-secondary);
+    }
+  }
+
+  body[data-reduce-animations="true"] .forge-status-loading {
+    background: var(--color-text-secondary);
+  }
+
+  body[data-performance-mode="true"] .forge-status-loading {
+    background: var(--color-text-secondary) !important;
+  }
+
   /* Diff-viewer increased-contrast rules live in src/components/Worktree/DiffViewer.css
      (component-owned: the stylesheet rides the lazy diff chunk). */
 }
