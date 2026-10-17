@@ -492,6 +492,9 @@ export class AssistantMessagingRuntime {
       // Anything that closes it may lift (the pause, the setting, a run not up yet): owed till then.
       if (open.ok) receivers.push(openReceiverFor(lane));
       else waiting = true;
+    } else if (this.deps.inbox.list(openReceiverFor(lane), 0).length > 0) {
+      // Kept for when this machine listens as a host again.
+      waiting = true;
     }
     const enrollment = this.deps.policy.getEnrollment(lane);
     if (enrollment?.enrolledBy.kind === "local") {

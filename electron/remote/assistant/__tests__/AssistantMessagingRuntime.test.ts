@@ -180,6 +180,19 @@ describe("AssistantMessagingRuntime", () => {
     rewake.mockClear();
     policy.setPaused(true);
     expect(runtime.reannounce(LANE)).toBeNull();
+    policy.setPaused(false);
+    // Nor while this machine stops listening: its mail waits for it to listen again.
+    const stopped = new AssistantMessagingRuntime({
+      policy,
+      store,
+      inbox,
+      getSessionLane: (sessionId) => sessionLanes.get(sessionId) ?? null,
+      rewake,
+      outbox: () => undefined,
+      now: () => clock,
+    });
+    expect(stopped.reannounce(LANE)).toBeNull();
+    expect(stopped.reannounce({ projectId: "proj", slot: 1 })).toBe(0);
     expect(rewake).not.toHaveBeenCalled();
   });
 
@@ -545,7 +558,7 @@ describe("AssistantMessagingRuntime", () => {
     expect(policy.declineRun(LANE, { kind: "local" })).toBe(true);
     expect(policy.checkOpen(LANE, "admit")).toEqual({ ok: false, reason: "declined" });
     expect(runtime.isAvailable("s1")).toBe(true);
-    policy.acceptRun(LANE);
+    policy.acceptRun(LANE, { kind: "local" });
     expect(policy.checkOpen(LANE, "admit").ok).toBe(true);
     accepting = false;
     expect(policy.checkOpen(LANE, "wake")).toEqual({ ok: false, reason: "not-accepting" });

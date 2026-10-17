@@ -151,7 +151,7 @@ async function handleSetLaneEnrolled(
       policy.declineRun(lane, shell);
       return done();
     }
-    policy.acceptRun(lane);
+    policy.acceptRun(lane, shell);
     // On this machine, also its hub when it has hosts and nothing holds the lane. A remote
     // view's on never routes the lane's own messages: only a run its view started does.
     if (existing === null && shell.kind === "local" && surface()?.hasHosts() === true) {

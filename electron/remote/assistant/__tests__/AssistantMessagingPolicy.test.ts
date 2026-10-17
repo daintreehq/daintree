@@ -1176,7 +1176,7 @@ describe("AssistantMessagingPolicy", () => {
         reason: "declined",
       });
 
-      h.policy.acceptRun(lane());
+      h.policy.acceptRun(lane(), SHELL_A);
       expect(h.policy.checkOpen(lane(), "admit").ok).toBe(true);
       h.policy.declineRun(lane(), SHELL_B);
       h.run("proj", 0, "s2");
@@ -1197,6 +1197,26 @@ describe("AssistantMessagingPolicy", () => {
         ok: false,
         reason: "declined",
       });
+    });
+
+    it("lets a remote view's on open a hub turned off here to other machines, never back to a hub", () => {
+      const h = accepting();
+      h.run("proj", 0, "s1");
+      h.run("proj", 1, "s2");
+      expect(h.policy.enroll(lane(), LOCAL).ok).toBe(true);
+      h.policy.declineRun(lane(), LOCAL);
+      h.policy.acceptRun(lane(), SHELL_A);
+      expect(h.policy.checkOpen(lane(), "admit").ok).toBe(true);
+      expect(h.policy.enrollByDefault(lane(), LOCAL)).toEqual({ ok: false, reason: "declined" });
+      expect(h.policy.enrollByDefault(lane("proj", 1), LOCAL)).toEqual({
+        ok: false,
+        reason: "declined",
+      });
+      // Off again keeps it closed, and this machine's own on lifts it all.
+      h.policy.declineRun(lane(), SHELL_A);
+      expect(h.policy.checkOpen(lane(), "admit")).toEqual({ ok: false, reason: "declined" });
+      h.policy.acceptRun(lane(), LOCAL);
+      expect(h.policy.enrollByDefault(lane(), LOCAL).ok).toBe(true);
     });
 
     it("never ends this machine's hub for a remote view's off", () => {

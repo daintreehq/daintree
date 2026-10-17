@@ -124,6 +124,11 @@ interface DeclinedRun {
   launchGeneration: number;
   /** Declined as this Shell's hub, which no sibling lane takes over while it runs. */
   hub: boolean;
+  /**
+   * Turned on again from another machine's view: it takes messages from other
+   * machines, while the hub this machine's person turned off stays off.
+   */
+  reopened?: boolean;
 }
 
 export interface LaneCheck {
@@ -610,7 +615,7 @@ export class AssistantMessagingPolicy {
     }
     const run = this.liveRun(lane);
     if (!run) return { ok: false, reason: "unavailable" };
-    if (OPEN_GATED.has(kind) && this.isDeclined(key, run)) return { ok: false, reason: "declined" };
+    if (OPEN_GATED.has(kind) && this.isClosed(key, run)) return { ok: false, reason: "declined" };
     if (this.paused && !PAUSE_EXEMPT.has(kind)) return { ok: false, reason: "paused" };
     return {
       ok: true,
@@ -634,11 +639,11 @@ export class AssistantMessagingPolicy {
     return open;
   }
 
-  /** Whether the person turned the lane's current run off. */
+  /** Whether the person turned the lane's current run off to other machines. */
   isRunDeclined(lane: LaneRef): boolean {
     const key = laneKey(lane);
     const run = key === null ? null : this.liveRun(lane);
-    return key !== null && run !== null && this.isDeclined(key, run);
+    return key !== null && run !== null && this.isClosed(key, run);
   }
 
   /**
@@ -674,10 +679,22 @@ export class AssistantMessagingPolicy {
     return true;
   }
 
-  /** Lifts the person's off for the lane's current run. */
-  acceptRun(lane: LaneRef): void {
+  /**
+   * Lifts the person's off for the lane's current run, from a view of `by`.
+   * A remote view's on opens it to other machines again but leaves a hub this
+   * machine's person turned off as they left it: no default makes it, or a
+   * sibling, the hub while it runs.
+   */
+  acceptRun(lane: LaneRef, by: MessagingShell): void {
     const key = laneKey(lane);
-    if (key === null || !this.declined.delete(key)) return;
+    const declined = key === null ? undefined : this.declined.get(key);
+    if (key === null || !declined || !isValidShell(by)) return;
+    if (by.kind === "remote" && declined.hub) {
+      if (declined.reopened === true) return;
+      declined.reopened = true;
+    } else {
+      this.declined.delete(key);
+    }
     this.changed();
   }
 
@@ -797,6 +814,14 @@ export class AssistantMessagingPolicy {
     }
     this.declined.delete(key);
     return false;
+  }
+
+  /** Whether the run is turned off to other machines: declined, and not reopened from one. */
+  private isClosed(
+    key: string,
+    run: { running: RunningLaneSession; launchGeneration: number }
+  ): boolean {
+    return this.isDeclined(key, run) && this.declined.get(key)?.reopened !== true;
   }
 
   private endedForAnother(
