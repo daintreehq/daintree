@@ -268,7 +268,6 @@ export const HUB_SENDS_PER_MINUTE = 30;
 export const HUB_READS_PER_MINUTE = 120;
 /** Sends that may be waiting for a reply at once; another returns without waiting. */
 export const HUB_MAX_CONCURRENT_WAITS = 2;
-
 const DEFAULT_POLL_INTERVAL_MS = 2_000;
 /** The least time a wait's last poll gets, so a wait shorter than one interval still looks once. */
 const FINAL_POLL_FLOOR_MS = 1_000;
@@ -321,9 +320,9 @@ function observedConnection(state: HostConnectionState): HostListEntry["connecti
  * The caller is always a help session id the MCP transport bound to its
  * bearer, and any live assistant lane on this machine qualifies, with nothing
  * to enroll (#13468); a revoked session, a pane or an external key gets
- * nothing, whatever its tier. Each host must be opted in, this machine's
- * "Accept messages from other machines" must be on and messaging unpaused,
- * and the policy is asked again on every call. Tasks belong to the Shell, not
+ * nothing, whatever its tier. Each host must be opted in, and a new message
+ * or start also needs this machine's "Accept messages from other machines"
+ * on and messaging unpaused; the policy is asked again on every call. Tasks belong to the Shell, not
  * the assistant that sent them: any assistant here may look one up or cancel
  * it.
  *

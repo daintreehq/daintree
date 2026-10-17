@@ -152,7 +152,7 @@ export interface AssistantMessagingPolicyDeps {
   /**
    * Whether that incarnation's spawn succeeded and it hasn't closed. A pending
    * spawn already has a live generation; only a default waits for this, so a
-   * spawn that then fails never holds the hub. Absent, every live one counts.
+   * spawn that then fails is never enrolled. Absent, every live one counts.
    */
   spawnConfirmed?(terminalId: string, launchGeneration: number): boolean;
   /** This Shell's per-host opt-in. */
@@ -444,7 +444,7 @@ export class AssistantMessagingPolicy {
    * A remote Shell's link session is gone for good. Enrollments its sender
    * was proven on wait for that Shell's next session (see `bindSender`):
    * their lanes can still read and answer what already reached them, and
-   * what they write to the hub waits in the outbox, but no message reaches
+   * what they write to that Shell waits in the outbox, but no message reaches
    * them until it is back. The rest end.
    */
   releaseLinkSession(linkSessionId: string): void {

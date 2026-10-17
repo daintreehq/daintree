@@ -2,12 +2,14 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { AppError } from "../../../utils/errorTypes.js";
 import type { ExchangeRecord } from "../../exchange/types.js";
 import type {
-  EnrollmentResult,
   HostCheck,
-  LaneEnrollment,
+  HostCheckResult,
+  LaneRef,
   MessagingDenial,
+  OpenRun,
 } from "../AssistantMessagingPolicy.js";
 import { RetryWindowPassedError } from "../AssistantExchangeClient.js";
+import type { AssistantShellRoutes } from "../AssistantShellRoutes.js";
 import { LANE_NOT_RUNNING_MESSAGE } from "../hostExchanges.js";
 import {
   HOST_LIST_PROJECTS_MAX,
@@ -18,21 +20,20 @@ import {
 } from "../../../../shared/types/hostMessaging.js";
 import {
   HUB_SENDS_PER_HOST_PER_MINUTE,
+  HUB_SENDS_PER_MINUTE,
   HubMessagingRuntime,
   projectTree,
   type ObservedHost,
 } from "../HubMessagingRuntime.js";
 
-const HUB: LaneEnrollment = {
-  projectId: "proj-1",
-  slot: 0,
-  generation: "hub-gen",
-  sessionId: "hub",
-  terminalId: "t-hub",
-  launchGeneration: 1,
-  enrolledBy: { kind: "local" },
-  enrolledAt: 1,
-};
+function run(projectId: string, slot: number, sessionId: string): OpenRun {
+  return { projectId, slot, sessionId, terminalId: `t-${sessionId}`, launchGeneration: 1 };
+}
+
+/** One assistant here, a sibling slot in its project, and one in another project. */
+const RUN_A = run("proj-1", 0, "a");
+const RUN_SIBLING = run("proj-1", 1, "sibling");
+const RUN_OTHER_PROJECT = run("proj-3", 0, "other-project");
 
 function record(overrides: Partial<ExchangeRecord> = {}): ExchangeRecord {
   return {
@@ -90,8 +91,9 @@ const SEND = {
 describe("HubMessagingRuntime (#13336)", () => {
   let clock: number;
   let hosts: ObservedHost[];
-  let hub: LaneEnrollment | null;
-  let lanes: Map<string, { projectId: string; slot: number }>;
+  let runs: Map<string, OpenRun>;
+  let lanes: Map<string, LaneRef>;
+  let routes: { remember: ReturnType<typeof vi.fn<AssistantShellRoutes["remember"]>> };
   let denial: MessagingDenial | null;
   let checks: HostCheck[];
   let client: {
@@ -114,11 +116,19 @@ describe("HubMessagingRuntime (#13336)", () => {
     clock = 1_000_000;
     ids = 0;
     hosts = [host()];
-    hub = HUB;
-    lanes = new Map([
-      ["hub", { projectId: "proj-1", slot: 0 }],
-      ["other-lane", { projectId: "proj-1", slot: 1 }],
+    runs = new Map([
+      ["a", RUN_A],
+      ["sibling", RUN_SIBLING],
+      ["other-project", RUN_OTHER_PROJECT],
     ]);
+    // "remote-view" is a live session whose run a remote Shell's view holds: no caller run here.
+    lanes = new Map([
+      ["a", { projectId: "proj-1", slot: 0 }],
+      ["sibling", { projectId: "proj-1", slot: 1 }],
+      ["other-project", { projectId: "proj-3", slot: 0 }],
+      ["remote-view", { projectId: "proj-4", slot: 0 }],
+    ]);
+    routes = { remember: vi.fn<AssistantShellRoutes["remember"]>() };
     denial = null;
     checks = [];
     client = {
@@ -168,16 +178,18 @@ describe("HubMessagingRuntime (#13336)", () => {
       starter: () => starter as never,
       policy: {
         isSupported: () => true,
-        getHub: () => hub,
-        checkHost: (check: HostCheck): EnrollmentResult => {
+        checkHost: (check: HostCheck): HostCheckResult => {
           checks.push(check);
           if (denial === "paused" && (check.kind === "reply" || check.kind === "inspect")) {
-            return { ok: true, enrollment: HUB };
+            return { ok: true };
           }
-          return denial ? { ok: false, reason: denial } : { ok: true, enrollment: HUB };
+          if (denial === "not-accepting" && check.kind !== "admit") return { ok: true };
+          return denial ? { ok: false, reason: denial } : { ok: true };
         },
       },
       getSessionLane: (id) => lanes.get(id) ?? null,
+      callerRun: (id) => runs.get(id) ?? null,
+      routes,
       client: () => client as never,
       hosts: () => hosts,
       now: () => clock,
@@ -190,25 +202,48 @@ describe("HubMessagingRuntime (#13336)", () => {
   });
 
   describe("who may call", () => {
-    it("is the session the hub was enrolled with, and no other lane or session", async () => {
-      expect(runtime.isAvailable("hub")).toBe(true);
-      expect(runtime.isAvailable("other-lane")).toBe(false);
-      expect(runtime.isAvailable("stranger")).toBe(false);
-      await expect(runtime.list("other-lane")).resolves.toMatchObject({
-        ok: false,
-        code: "NOT_ELIGIBLE",
-      });
+    const tools = (session: string) => [
+      runtime.list(session),
+      runtime.listAssistants(session, { hostId: "studio" }),
+      runtime.readQuota(session, { hostId: "studio" }),
+      runtime.startAssistant(session, { hostId: "studio", projectId: "proj-2" }),
+      runtime.sendMessage(session, SEND),
+      runtime.getTask(session, { hostId: "studio", taskId: "task-1" }),
+      runtime.listTasks(session, { hostId: "studio" }),
+      runtime.cancelTask(session, { hostId: "studio", taskId: "task-1" }),
+    ];
 
-      // A relaunched hub holds a new session; the old one's bearer reaches nothing.
-      hub = { ...HUB, sessionId: "hub-2" };
-      lanes.set("hub-2", { projectId: "proj-1", slot: 0 });
-      expect(runtime.isAvailable("hub")).toBe(false);
-      expect(runtime.isAvailable("hub-2")).toBe(true);
+    it.each(["a", "sibling", "other-project"])(
+      "is any assistant running on this machine: every tool answers for %s",
+      async (session) => {
+        expect(runtime.isAvailable(session)).toBe(true);
+        const [listed, ...rest] = await Promise.all(tools(session));
+        expect(listed).toMatchObject({ ok: true, value: { hosts: [{ hostId: "studio" }] } });
+        for (const result of rest) {
+          expect(result).toMatchObject({ ok: true, value: { outcome: "ok" } });
+        }
+      }
+    );
+
+    it("refuses a session with no run of its own here, in words naming who may call", async () => {
+      for (const session of ["remote-view", "stranger"]) {
+        expect(runtime.isAvailable(session)).toBe(false);
+        for (const result of await Promise.all(tools(session))) {
+          expect(result).toEqual({
+            ok: false,
+            code: "NOT_ELIGIBLE",
+            message:
+              "Only a Daintree Assistant running on this machine can reach assistants on other hosts.",
+          });
+        }
+      }
+      expect(client.send).not.toHaveBeenCalled();
+      expect(starter?.start).not.toHaveBeenCalled();
     });
 
     it("lists no lane as taking messages while this Shell has messaging paused", async () => {
       denial = "paused";
-      await expect(runtime.listAssistants("hub", { hostId: "studio" })).resolves.toMatchObject({
+      await expect(runtime.listAssistants("a", { hostId: "studio" })).resolves.toMatchObject({
         ok: true,
         value: {
           outcome: "ok",
@@ -216,36 +251,94 @@ describe("HubMessagingRuntime (#13336)", () => {
         },
       });
       denial = null;
-      await expect(runtime.listAssistants("hub", { hostId: "studio" })).resolves.toMatchObject({
+      await expect(runtime.listAssistants("a", { hostId: "studio" })).resolves.toMatchObject({
         value: { projects: [{ assistants: [{ slot: 0, available: true }] }, { assistants: [] }] },
       });
     });
 
     it("is hidden until a host exists", () => {
       hosts = [];
-      expect(runtime.isAvailable("hub")).toBe(false);
-      expect(runtime.isReachable("hub")).toBe(false);
+      expect(runtime.isAvailable("a")).toBe(false);
+      expect(runtime.isReachable("a")).toBe(false);
+      expect(runtime.isReachable("remote-view")).toBe(false);
     });
 
-    it("is reachable from any lane's session while a host exists, though only the hub may call", async () => {
-      expect(runtime.isReachable("other-lane")).toBe(true);
+    it("is reachable from any live session's lane while a host exists, before its run is confirmed", async () => {
+      expect(runtime.isReachable("remote-view")).toBe(true);
+      expect(runtime.isReachable("sibling")).toBe(true);
       expect(runtime.isReachable("stranger")).toBe(false);
-      await expect(runtime.list("other-lane")).resolves.toMatchObject({
+      await expect(runtime.list("remote-view")).resolves.toMatchObject({
         ok: false,
         code: "NOT_ELIGIBLE",
       });
     });
 
+    it("tells a caller this machine's setting is off as opted_out, never NOT_ELIGIBLE", async () => {
+      denial = "not-accepting";
+      const sent = await runtime.sendMessage("a", SEND);
+      expect(sent).toMatchObject({ ok: true, value: { outcome: "opted_out", taskId: null } });
+      if (!sent.ok) throw new Error("refused outright");
+      expect(sent.value.detail).toContain("Accept messages from other machines");
+      await expect(
+        runtime.startAssistant("a", { hostId: "studio", projectId: "proj-2" })
+      ).resolves.toMatchObject({
+        ok: true,
+        value: {
+          outcome: "opted_out",
+          detail: expect.stringContaining("Accept messages from other machines"),
+        },
+      });
+      expect(client.send).not.toHaveBeenCalled();
+      expect(starter?.start).not.toHaveBeenCalled();
+    });
+
     it("offers nothing once disposed", async () => {
       runtime.dispose();
-      expect(runtime.isAvailable("hub")).toBe(false);
-      await expect(runtime.list("hub")).resolves.toMatchObject({ code: "NOT_ELIGIBLE" });
+      expect(runtime.isAvailable("a")).toBe(false);
+      expect(runtime.isReachable("a")).toBe(false);
+      await expect(runtime.list("a")).resolves.toMatchObject({ code: "NOT_ELIGIBLE" });
+    });
+  });
+
+  describe("tasks belong to the Shell", () => {
+    it("lets one assistant look up, list and cancel a task another sent", async () => {
+      const sent = await runtime.sendMessage("a", { ...SEND, taskId: "shared-task" });
+      expect(sent).toMatchObject({ ok: true, value: { outcome: "ok", taskId: "shared-task" } });
+      client.get.mockResolvedValueOnce(record({ messageId: "shared-task" }));
+      client.listChanges.mockResolvedValueOnce({
+        records: [record({ messageId: "shared-task" })],
+        cursor: 1,
+        hasMore: false,
+        reset: false,
+      });
+      client.cancel.mockResolvedValueOnce(
+        record({ messageId: "shared-task", cancelRequestedAt: 20 })
+      );
+
+      await expect(
+        runtime.getTask("other-project", { hostId: "studio", taskId: "shared-task" })
+      ).resolves.toMatchObject({
+        ok: true,
+        value: { outcome: "ok", task: { taskId: "shared-task" } },
+      });
+      await expect(runtime.listTasks("sibling", { hostId: "studio" })).resolves.toMatchObject({
+        ok: true,
+        value: { outcome: "ok", tasks: [{ taskId: "shared-task" }] },
+      });
+      await expect(
+        runtime.cancelTask("other-project", { hostId: "studio", taskId: "shared-task" })
+      ).resolves.toMatchObject({
+        ok: true,
+        value: { outcome: "ok", task: { taskId: "shared-task", cancelRequestedAt: 20 } },
+      });
+      expect(client.get).toHaveBeenCalledWith("studio", "shared-task");
+      expect(client.cancel).toHaveBeenCalledWith("studio", "shared-task");
     });
   });
 
   describe("host.listAssistants", () => {
     it("lists the host's projects with the assistants in each, in the advertised shape", async () => {
-      const listed = await runtime.listAssistants("hub", { hostId: "studio" });
+      const listed = await runtime.listAssistants("a", { hostId: "studio" });
       if (!listed.ok) throw new Error("refused");
       expect(HostListAssistantsResultSchema.parse(listed.value)).toEqual({
         outcome: "ok",
@@ -265,7 +358,7 @@ describe("HubMessagingRuntime (#13336)", () => {
         projectsOmitted: 0,
       });
       // host.list then names the lane's project from that listing, without asking again.
-      const hostList = await runtime.list("hub");
+      const hostList = await runtime.list("a");
       if (!hostList.ok) throw new Error("refused");
       expect(HostListResultSchema.parse(hostList.value).hosts[0]?.lanes).toEqual([
         {
@@ -282,7 +375,7 @@ describe("HubMessagingRuntime (#13336)", () => {
 
     it("still lists the assistants, unnamed, when the host's projects can't be read", async () => {
       hostProjects.mockRejectedValueOnce(new Error("HOST_DISCONNECTED"));
-      const listed = await runtime.listAssistants("hub", { hostId: "studio" });
+      const listed = await runtime.listAssistants("a", { hostId: "studio" });
       if (!listed.ok) throw new Error("refused");
       expect(HostListAssistantsResultSchema.parse(listed.value).projects).toEqual([
         {
@@ -298,7 +391,7 @@ describe("HubMessagingRuntime (#13336)", () => {
 
     it("refuses in the advertised shape", async () => {
       denial = "host-disabled";
-      const refused = await runtime.listAssistants("hub", { hostId: "studio" });
+      const refused = await runtime.listAssistants("a", { hostId: "studio" });
       if (!refused.ok) throw new Error("refused outright");
       expect(HostListAssistantsResultSchema.parse(refused.value)).toMatchObject({
         outcome: "opted_out",
@@ -309,7 +402,7 @@ describe("HubMessagingRuntime (#13336)", () => {
         new AppError({ code: "HOST_DISCONNECTED", message: "link dropped" })
       );
       denial = null;
-      const failed = await runtime.listAssistants("hub", { hostId: "studio" });
+      const failed = await runtime.listAssistants("a", { hostId: "studio" });
       if (!failed.ok) throw new Error("refused outright");
       expect(HostListAssistantsResultSchema.parse(failed.value)).toMatchObject({
         outcome: "disconnected",
@@ -321,7 +414,7 @@ describe("HubMessagingRuntime (#13336)", () => {
 
   describe("host.readQuota", () => {
     it("passes the host's reading through, stamped with when this Shell received it", async () => {
-      const read = await runtime.readQuota("hub", { hostId: "studio" });
+      const read = await runtime.readQuota("a", { hostId: "studio" });
       if (!read.ok) throw new Error("refused");
       expect(HostReadQuotaResultSchema.parse(read.value)).toEqual({
         outcome: "ok",
@@ -345,7 +438,7 @@ describe("HubMessagingRuntime (#13336)", () => {
         reason: "read-failed",
         fetchedAt: 980_000,
       });
-      await expect(runtime.readQuota("hub", { hostId: "studio" })).resolves.toMatchObject({
+      await expect(runtime.readQuota("a", { hostId: "studio" })).resolves.toMatchObject({
         value: {
           outcome: "ok",
           codex: { status: "unavailable", reason: "read-failed" },
@@ -354,16 +447,16 @@ describe("HubMessagingRuntime (#13336)", () => {
       });
     });
 
-    it("is the hub's alone, on an opted-in host it knows, and reads through a pause", async () => {
-      await expect(runtime.readQuota("other-lane", { hostId: "studio" })).resolves.toMatchObject({
+    it("reads only an opted-in host it knows, and reads through a pause", async () => {
+      await expect(runtime.readQuota("remote-view", { hostId: "studio" })).resolves.toMatchObject({
         ok: false,
         code: "NOT_ELIGIBLE",
       });
-      await expect(runtime.readQuota("hub", { hostId: "elsewhere" })).resolves.toMatchObject({
+      await expect(runtime.readQuota("a", { hostId: "elsewhere" })).resolves.toMatchObject({
         value: { outcome: "not_found", codex: null, observedAt: null },
       });
       denial = "host-disabled";
-      const off = await runtime.readQuota("hub", { hostId: "studio" });
+      const off = await runtime.readQuota("a", { hostId: "studio" });
       if (!off.ok) throw new Error("refused outright");
       expect(HostReadQuotaResultSchema.parse(off.value)).toMatchObject({
         outcome: "opted_out",
@@ -373,7 +466,7 @@ describe("HubMessagingRuntime (#13336)", () => {
       expect(client.readQuota).not.toHaveBeenCalled();
 
       denial = "paused";
-      await expect(runtime.readQuota("hub", { hostId: "studio" })).resolves.toMatchObject({
+      await expect(runtime.readQuota("a", { hostId: "studio" })).resolves.toMatchObject({
         value: { outcome: "ok", codex: { status: "ok" } },
       });
     });
@@ -382,7 +475,7 @@ describe("HubMessagingRuntime (#13336)", () => {
       client.readQuota.mockRejectedValueOnce(
         new AppError({ code: "HOST_DISCONNECTED", message: "link dropped" })
       );
-      await expect(runtime.readQuota("hub", { hostId: "studio" })).resolves.toMatchObject({
+      await expect(runtime.readQuota("a", { hostId: "studio" })).resolves.toMatchObject({
         value: { outcome: "disconnected", codex: null, observedAt: null },
       });
 
@@ -390,14 +483,14 @@ describe("HubMessagingRuntime (#13336)", () => {
         new AppError({ code: "OUTCOME_UNKNOWN", message: "no answer within 30000 ms" })
       );
       // A read that went unanswered sent nothing, so it's never reported as an ambiguous message.
-      await expect(runtime.readQuota("hub", { hostId: "studio" })).resolves.toMatchObject({
+      await expect(runtime.readQuota("a", { hostId: "studio" })).resolves.toMatchObject({
         value: { outcome: "disconnected", codex: null },
       });
 
       client.readQuota.mockRejectedValueOnce(
         new AppError({ code: "UNSUPPORTED", message: "unknown method" })
       );
-      const old = await runtime.readQuota("hub", { hostId: "studio" });
+      const old = await runtime.readQuota("a", { hostId: "studio" });
       if (!old.ok) throw new Error("refused outright");
       expect(HostReadQuotaResultSchema.parse(old.value)).toMatchObject({
         outcome: "unsupported",
@@ -408,7 +501,7 @@ describe("HubMessagingRuntime (#13336)", () => {
       client.readQuota.mockRejectedValueOnce(
         new AppError({ code: "INTERNAL", message: "invalid answer" })
       );
-      await expect(runtime.readQuota("hub", { hostId: "studio" })).resolves.toMatchObject({
+      await expect(runtime.readQuota("a", { hostId: "studio" })).resolves.toMatchObject({
         ok: false,
         code: "UNAVAILABLE",
       });
@@ -419,7 +512,7 @@ describe("HubMessagingRuntime (#13336)", () => {
     const args = { hostId: "studio", projectId: "proj-2", agentId: "claude" };
 
     it("starts and enrolls one, answering with what a message to it needs", async () => {
-      const started = await runtime.startAssistant("hub", args);
+      const started = await runtime.startAssistant("a", args);
       if (!started.ok) throw new Error("refused");
       expect(HostStartAssistantResultSchema.parse(started.value)).toEqual({
         outcome: "ok",
@@ -441,8 +534,23 @@ describe("HubMessagingRuntime (#13336)", () => {
       );
     });
 
+    it("remembers the started assistant's lane as the caller's route, and nothing on a refusal", async () => {
+      starter!.start.mockResolvedValueOnce({ status: "refused", reason: "no-slot" });
+      await runtime.startAssistant("sibling", args);
+      expect(routes.remember).not.toHaveBeenCalled();
+
+      await runtime.startAssistant("sibling", args);
+      // The started lane, as the starter reported it (slot 1), not the project asked for.
+      expect(routes.remember).toHaveBeenCalledTimes(1);
+      expect(routes.remember).toHaveBeenCalledWith(
+        "studio",
+        { projectId: "proj-2", slot: 1 },
+        RUN_SIBLING
+      );
+    });
+
     it("hands the starter a consent check it reads live, so turning it off mid-start stops it", async () => {
-      await runtime.startAssistant("hub", args);
+      await runtime.startAssistant("a", args);
       const { authorized } = starter!.start.mock.calls[0]![2] as { authorized: () => boolean };
       expect(authorized()).toBe(true);
       startEnabled = false;
@@ -451,13 +559,19 @@ describe("HubMessagingRuntime (#13336)", () => {
       denial = "paused";
       expect(authorized()).toBe(false);
       denial = null;
-      hub = { ...HUB, sessionId: "someone-else" };
+      expect(authorized()).toBe(true);
+      // The same session answering in a relaunched run is no longer the caller that asked.
+      runs.set("a", { ...RUN_A, launchGeneration: 2 });
+      expect(authorized()).toBe(false);
+      runs.set("a", RUN_A);
+      expect(authorized()).toBe(true);
+      runs.delete("a");
       expect(authorized()).toBe(false);
     });
 
     it("needs the person's per-host consent, on top of messaging, and isn't paused past", async () => {
       startEnabled = false;
-      const off = await runtime.startAssistant("hub", args);
+      const off = await runtime.startAssistant("a", args);
       if (!off.ok) throw new Error("refused outright");
       expect(HostStartAssistantResultSchema.parse(off.value)).toMatchObject({
         outcome: "opted_out",
@@ -466,11 +580,11 @@ describe("HubMessagingRuntime (#13336)", () => {
       });
       startEnabled = true;
       denial = "paused";
-      await expect(runtime.startAssistant("hub", args)).resolves.toMatchObject({
+      await expect(runtime.startAssistant("a", args)).resolves.toMatchObject({
         value: { outcome: "paused", assistant: null },
       });
       expect(starter?.start).not.toHaveBeenCalled();
-      await expect(runtime.startAssistant("other-lane", args)).resolves.toMatchObject({
+      await expect(runtime.startAssistant("remote-view", args)).resolves.toMatchObject({
         ok: false,
         code: "NOT_ELIGIBLE",
       });
@@ -478,7 +592,7 @@ describe("HubMessagingRuntime (#13336)", () => {
 
     it("says why a start didn't happen in fixed words", async () => {
       starter!.start.mockResolvedValueOnce({ status: "refused", reason: "no-window" });
-      const refused = await runtime.startAssistant("hub", args);
+      const refused = await runtime.startAssistant("a", args);
       if (!refused.ok) throw new Error("refused outright");
       expect(HostStartAssistantResultSchema.parse(refused.value)).toMatchObject({
         outcome: "lane_unavailable",
@@ -486,7 +600,7 @@ describe("HubMessagingRuntime (#13336)", () => {
         assistant: null,
       });
       starter = null;
-      await expect(runtime.startAssistant("hub", args)).resolves.toMatchObject({
+      await expect(runtime.startAssistant("a", args)).resolves.toMatchObject({
         value: { outcome: "unsupported", assistant: null },
       });
     });
@@ -512,7 +626,7 @@ describe("HubMessagingRuntime (#13336)", () => {
         }),
         host({ hostId: "off", assistantMessagingEnabled: false }),
       ];
-      const listed = await runtime.list("hub");
+      const listed = await runtime.list("a");
       if (!listed.ok) throw new Error("refused");
       expect(listed.value.hosts).toEqual([
         {
@@ -531,9 +645,9 @@ describe("HubMessagingRuntime (#13336)", () => {
 
     it("drops a disconnected host's agent tally and reports the lanes it last listed", async () => {
       hosts = [host({ summary: { sampledAt: 1, agentsObserved: { working: 3 } } as never })];
-      await runtime.listAssistants("hub", { hostId: "studio" });
+      await runtime.listAssistants("a", { hostId: "studio" });
       clock += 5;
-      const listed = await runtime.list("hub");
+      const listed = await runtime.list("a");
       if (!listed.ok) throw new Error("refused");
       expect(listed.value.hosts[0]).toMatchObject({
         connection: "disconnected",
@@ -556,7 +670,7 @@ describe("HubMessagingRuntime (#13336)", () => {
 
   describe("host.sendMessage", () => {
     it("returns the receipt at once, its taskId the message id", async () => {
-      const sent = await runtime.sendMessage("hub", SEND);
+      const sent = await runtime.sendMessage("a", SEND);
       expect(sent).toMatchObject({
         ok: true,
         value: {
@@ -569,13 +683,37 @@ describe("HubMessagingRuntime (#13336)", () => {
       });
       expect(client.send).toHaveBeenCalledWith(
         "studio",
-        expect.objectContaining({ messageId: "id-1", body: "hello", referenceTaskIds: [] })
+        expect.objectContaining({ messageId: "id-1", body: "hello", referenceTaskIds: [] }),
+        RUN_A
       );
+    });
+
+    it("binds the send to the caller's run and remembers its route before sending", async () => {
+      routes.remember.mockImplementation(() => {
+        expect(client.send).not.toHaveBeenCalled();
+      });
+      await expect(runtime.sendMessage("other-project", SEND)).resolves.toMatchObject({
+        ok: true,
+        value: { outcome: "ok" },
+      });
+      expect(routes.remember).toHaveBeenCalledWith(
+        "studio",
+        { projectId: "proj-2", slot: 0 },
+        RUN_OTHER_PROJECT
+      );
+      expect(client.send.mock.calls[0]![2]).toEqual(RUN_OTHER_PROJECT);
+    });
+
+    it("remembers no route for a send it refused before sending", async () => {
+      denial = "host-disabled";
+      await runtime.sendMessage("a", SEND);
+      await runtime.sendMessage("a", { ...SEND, text: "\u0001".repeat(16_000) });
+      expect(routes.remember).not.toHaveBeenCalled();
     });
 
     it("reports a send whose answer was lost as ambiguous, never as a failure", async () => {
       client.send.mockResolvedValueOnce({ status: "unknown", messageId: "retry-me" });
-      const sent = await runtime.sendMessage("hub", { ...SEND, taskId: "retry-me" });
+      const sent = await runtime.sendMessage("a", { ...SEND, taskId: "retry-me" });
       expect(sent).toMatchObject({
         ok: true,
         value: { outcome: "ambiguous", taskId: "retry-me", task: null },
@@ -583,7 +721,7 @@ describe("HubMessagingRuntime (#13336)", () => {
       if (sent.ok) expect(sent.value.detail).toContain("before sending again");
 
       client.send.mockRejectedValueOnce(new Error("socket hung up"));
-      await expect(runtime.sendMessage("hub", SEND)).resolves.toMatchObject({
+      await expect(runtime.sendMessage("a", SEND)).resolves.toMatchObject({
         ok: true,
         value: { outcome: "ambiguous" },
       });
@@ -600,7 +738,7 @@ describe("HubMessagingRuntime (#13336)", () => {
       [new AppError({ code: "VALIDATION", message: "past its retry window reused" }), "conflict"],
     ])("names %s as %s", async (error, outcome) => {
       client.send.mockRejectedValueOnce(error);
-      await expect(runtime.sendMessage("hub", SEND)).resolves.toMatchObject({
+      await expect(runtime.sendMessage("a", SEND)).resolves.toMatchObject({
         ok: true,
         value: { outcome },
       });
@@ -610,85 +748,110 @@ describe("HubMessagingRuntime (#13336)", () => {
       client.send.mockRejectedValueOnce(
         new AppError({ code: "PERMISSION", message: "not enrolled" })
       );
-      await expect(runtime.sendMessage("hub", SEND)).resolves.toMatchObject({
+      await expect(runtime.sendMessage("a", SEND)).resolves.toMatchObject({
         value: { outcome: "policy_rejected", taskId: null, contextId: null },
       });
       // Unknown outcomes keep theirs: the message may be on the host.
       client.send.mockRejectedValueOnce(new AppError({ code: "HOST_DISCONNECTED", message: "x" }));
-      const disconnected = await runtime.sendMessage("hub", SEND);
+      const disconnected = await runtime.sendMessage("a", SEND);
       expect(disconnected.ok && disconnected.value.taskId).not.toBeNull();
       // A resend keeps its id: an earlier attempt under it may still be on the host.
       client.send.mockRejectedValueOnce(
         new AppError({ code: "PERMISSION", message: "not enrolled" })
       );
       await expect(
-        runtime.sendMessage("hub", { ...SEND, taskId: "task-resent" })
+        runtime.sendMessage("a", { ...SEND, taskId: "task-resent" })
       ).resolves.toMatchObject({ value: { outcome: "policy_rejected", taskId: "task-resent" } });
       client.send.mockRejectedValueOnce(new AppError({ code: "UNSUPPORTED", message: "x" }));
-      const unsupported = await runtime.sendMessage("hub", SEND);
+      const unsupported = await runtime.sendMessage("a", SEND);
       expect(unsupported.ok && unsupported.value.taskId).not.toBeNull();
     });
 
     it("names the policy's refusals without sending", async () => {
       denial = "host-disabled";
-      await expect(runtime.sendMessage("hub", SEND)).resolves.toMatchObject({
+      await expect(runtime.sendMessage("a", SEND)).resolves.toMatchObject({
         value: { outcome: "opted_out", taskId: null },
       });
       denial = "paused";
-      await expect(runtime.sendMessage("hub", SEND)).resolves.toMatchObject({
+      await expect(runtime.sendMessage("a", SEND)).resolves.toMatchObject({
         value: { outcome: "paused" },
       });
       await expect(
-        runtime.sendMessage("hub", { ...SEND, hostId: "unknown-host" })
+        runtime.sendMessage("a", { ...SEND, hostId: "unknown-host" })
       ).resolves.toMatchObject({ value: { outcome: "not_found" } });
       expect(client.send).not.toHaveBeenCalled();
     });
 
     it("refuses a body the inbox can't hold whole before spending a send", async () => {
-      const result = await runtime.sendMessage("hub", { ...SEND, text: "\u0001".repeat(16_000) });
+      const result = await runtime.sendMessage("a", { ...SEND, text: "\u0001".repeat(16_000) });
       expect(result).toMatchObject({ ok: true, value: { outcome: "too_large", taskId: null } });
       expect(client.send).not.toHaveBeenCalled();
     });
 
     it("limits sends per host as a result naming when to retry", async () => {
       for (let i = 0; i < HUB_SENDS_PER_HOST_PER_MINUTE; i++) {
-        await expect(runtime.sendMessage("hub", SEND)).resolves.toMatchObject({
+        await expect(runtime.sendMessage("a", SEND)).resolves.toMatchObject({
           value: { outcome: "ok" },
         });
       }
-      const limited = await runtime.sendMessage("hub", SEND);
+      const limited = await runtime.sendMessage("a", SEND);
       expect(limited).toMatchObject({ ok: true, value: { outcome: "rate_limited" } });
       if (!limited.ok) throw new Error("refused");
       expect(limited.value.retryAfterMs).toBeGreaterThan(0);
       expect(client.send).toHaveBeenCalledTimes(HUB_SENDS_PER_HOST_PER_MINUTE);
 
       clock += limited.value.retryAfterMs!;
-      await expect(runtime.sendMessage("hub", SEND)).resolves.toMatchObject({
+      await expect(runtime.sendMessage("a", SEND)).resolves.toMatchObject({
         value: { outcome: "ok" },
       });
     });
 
+    it("shares one Shell-wide send budget between every assistant here", async () => {
+      // Spread across hosts so the per-host limit never binds first.
+      const perHost = HUB_SENDS_PER_HOST_PER_MINUTE;
+      hosts = Array.from({ length: Math.ceil(HUB_SENDS_PER_MINUTE / perHost) + 1 }, (_, i) =>
+        host({ hostId: `h-${i}` })
+      );
+      for (let i = 0; i < HUB_SENDS_PER_MINUTE; i++) {
+        const session = i % 2 === 0 ? "a" : "other-project";
+        await expect(
+          runtime.sendMessage(session, { ...SEND, hostId: `h-${Math.floor(i / perHost)}` })
+        ).resolves.toMatchObject({ value: { outcome: "ok" } });
+      }
+      // A second assistant gets no budget of its own: the next send from either is limited.
+      for (const session of ["a", "sibling"]) {
+        const limited = await runtime.sendMessage(session, {
+          ...SEND,
+          hostId: `h-${hosts.length - 1}`,
+        });
+        expect(limited).toMatchObject({ ok: true, value: { outcome: "rate_limited" } });
+        if (!limited.ok) throw new Error("refused");
+        expect(limited.value.retryAfterMs).toBeGreaterThan(0);
+      }
+      expect(client.send).toHaveBeenCalledTimes(HUB_SENDS_PER_MINUTE);
+    });
+
     it("resends under the same taskId with the same contextId, so the host sees one message", async () => {
-      await runtime.sendMessage("hub", { ...SEND, taskId: "t-9" });
-      await runtime.sendMessage("hub", { ...SEND, taskId: "t-9" });
+      await runtime.sendMessage("a", { ...SEND, taskId: "t-9" });
+      await runtime.sendMessage("a", { ...SEND, taskId: "t-9" });
       const contexts = client.send.mock.calls.map(([, payload]) => payload.contextId);
       expect(contexts).toEqual(["t-9", "t-9"]);
     });
 
     it("looks at least once on a wait shorter than one poll", async () => {
       client.get.mockResolvedValueOnce(record({ state: "input-required" }));
-      await expect(runtime.sendMessage("hub", { ...SEND, waitMs: 200 })).resolves.toMatchObject({
+      await expect(runtime.sendMessage("a", { ...SEND, waitMs: 200 })).resolves.toMatchObject({
         value: { wait: "settled", task: { state: "input-required" } },
       });
       expect(client.get).toHaveBeenCalledTimes(1);
     });
 
-    it("stops waiting once the caller is no longer the hub", async () => {
+    it("stops waiting once the caller's run is replaced", async () => {
       client.get.mockImplementation(async () => {
-        hub = { ...HUB, sessionId: "hub-2" };
+        runs.set("a", { ...RUN_A, terminalId: "t-relaunched", launchGeneration: 2 });
         return record({ state: "working" });
       });
-      const sent = await runtime.sendMessage("hub", { ...SEND, waitMs: 20_000 });
+      const sent = await runtime.sendMessage("a", { ...SEND, waitMs: 20_000 });
       expect(sent).toMatchObject({ value: { wait: "timed_out" } });
       expect(client.get).toHaveBeenCalledTimes(1);
     });
@@ -697,12 +860,12 @@ describe("HubMessagingRuntime (#13336)", () => {
       client.get
         .mockResolvedValueOnce(record({ state: "working" }))
         .mockResolvedValueOnce(record({ state: "completed" }));
-      await expect(runtime.sendMessage("hub", { ...SEND, waitMs: 10_000 })).resolves.toMatchObject({
+      await expect(runtime.sendMessage("a", { ...SEND, waitMs: 10_000 })).resolves.toMatchObject({
         value: { outcome: "ok", wait: "settled", task: { state: "completed" } },
       });
 
       client.get.mockResolvedValue(record({ state: "working" }));
-      const timedOut = await runtime.sendMessage("hub", { ...SEND, waitMs: 3_000 });
+      const timedOut = await runtime.sendMessage("a", { ...SEND, waitMs: 3_000 });
       expect(timedOut).toMatchObject({
         value: { outcome: "ok", wait: "timed_out", task: { state: "working" } },
       });
@@ -714,7 +877,7 @@ describe("HubMessagingRuntime (#13336)", () => {
   describe("host.getTask", () => {
     it("returns the record and its replies fenced as another machine's words", async () => {
       client.getResponses.mockResolvedValueOnce([{ state: "completed", text: "done ```", at: 50 }]);
-      const got = await runtime.getTask("hub", { hostId: "studio", taskId: "task-1" });
+      const got = await runtime.getTask("a", { hostId: "studio", taskId: "task-1" });
       if (!got.ok) throw new Error("refused");
       expect(got.value).toMatchObject({
         outcome: "ok",
@@ -734,7 +897,7 @@ describe("HubMessagingRuntime (#13336)", () => {
           at: i,
         }))
       );
-      const got = await runtime.getTask("hub", { hostId: "studio", taskId: "task-1" });
+      const got = await runtime.getTask("a", { hostId: "studio", taskId: "task-1" });
       if (!got.ok) throw new Error("refused");
       expect(got.value.replies!.map((reply) => reply.at)).toEqual([2, 3]);
       expect(got.value.repliesOmitted).toBe(2);
@@ -744,7 +907,7 @@ describe("HubMessagingRuntime (#13336)", () => {
       client.get.mockRejectedValueOnce(new AppError({ code: "HOST_DISCONNECTED", message: "x" }));
       client.known.mockReturnValueOnce({ record: record({ state: "working" }), updatedAt: 77 });
       await expect(
-        runtime.getTask("hub", { hostId: "studio", taskId: "task-1" })
+        runtime.getTask("a", { hostId: "studio", taskId: "task-1" })
       ).resolves.toMatchObject({
         ok: true,
         value: {
@@ -761,19 +924,19 @@ describe("HubMessagingRuntime (#13336)", () => {
         new AppError({ code: "UNSUPPORTED", message: "x" })
       );
       await expect(
-        runtime.getTask("hub", { hostId: "studio", taskId: "task-1" })
+        runtime.getTask("a", { hostId: "studio", taskId: "task-1" })
       ).resolves.toMatchObject({ value: { outcome: "ok", replies: null } });
 
       client.get.mockResolvedValueOnce(null);
       await expect(
-        runtime.getTask("hub", { hostId: "studio", taskId: "task-1" })
+        runtime.getTask("a", { hostId: "studio", taskId: "task-1" })
       ).resolves.toMatchObject({ value: { outcome: "not_found", task: null } });
     });
 
     it("is refused for a host that was opted out", async () => {
       denial = "host-disabled";
       await expect(
-        runtime.getTask("hub", { hostId: "studio", taskId: "task-1" })
+        runtime.getTask("a", { hostId: "studio", taskId: "task-1" })
       ).resolves.toMatchObject({ value: { outcome: "opted_out" } });
       expect(client.get).not.toHaveBeenCalled();
     });
@@ -786,7 +949,7 @@ describe("HubMessagingRuntime (#13336)", () => {
       hasMore: true,
       reset: false,
     });
-    const listed = await runtime.listTasks("hub", {
+    const listed = await runtime.listTasks("a", {
       hostId: "studio",
       cursor: 7,
       limit: 5,
@@ -801,14 +964,14 @@ describe("HubMessagingRuntime (#13336)", () => {
   it("host.cancelTask records the request even while messaging is paused", async () => {
     denial = "paused";
     await expect(
-      runtime.cancelTask("hub", { hostId: "studio", taskId: "task-1" })
+      runtime.cancelTask("a", { hostId: "studio", taskId: "task-1" })
     ).resolves.toMatchObject({ value: { outcome: "ok", task: { cancelRequestedAt: 20 } } });
     expect(checks.at(-1)).toEqual({ hostId: "studio", kind: "reply" });
   });
 
   it("refuses with fixed words when a host call fails in a way nothing names", async () => {
     client.listLanes.mockRejectedValueOnce(new Error("/Users/someone/secret broke"));
-    const listed = await runtime.listAssistants("hub", { hostId: "studio" });
+    const listed = await runtime.listAssistants("a", { hostId: "studio" });
     expect(listed).toMatchObject({ ok: false, code: "UNAVAILABLE" });
     if (!listed.ok) expect(listed.message).not.toContain("secret");
   });

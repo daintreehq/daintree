@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, expectTypeOf, it, vi } from "vitest";
 
 const broadcastToRenderer = vi.hoisted(() => vi.fn());
 const running = vi.hoisted(
@@ -13,6 +13,10 @@ const ledger = vi.hoisted(
   () => new Map<string, { generation: number; spawnOk?: boolean; closedAt?: number }>()
 );
 const runbooksHostState = vi.hoisted(() => ({ read: null as (() => unknown) | null }));
+/** The exchange database the installed store opens; null leaves it without one. */
+const sharedDb = vi.hoisted(() => ({ sqlite: null as unknown }));
+/** The host messaging runtime install hands the MCP server. */
+const hostMessaging = vi.hoisted(() => ({ runtime: null as unknown }));
 const pty = vi.hoisted(() => {
   const listeners = new Map<string, Set<(...args: unknown[]) => void>>();
   const generations = new Map<string, number>();
@@ -45,6 +49,14 @@ vi.mock("../../../services/HelpSessionService.js", () => ({
         const [projectId, slot] = key.split(":");
         return { projectId: projectId!, slot: Number(slot), agentId: "claude", attached: true };
       }),
+    getSessionLane: (helpSessionId: string) => {
+      for (const [key, run] of running) {
+        if (run.sessionId !== helpSessionId) continue;
+        const [projectId, slot] = key.split(":");
+        return { projectId: projectId!, slot: Number(slot) };
+      }
+      return null;
+    },
     addSessionEndedListener: (listener: (event: unknown) => void) => {
       sessionEnded.add(listener);
       return () => sessionEnded.delete(listener);
@@ -63,19 +75,52 @@ vi.mock("../../../window/serviceRefs.js", () => ({ getPtyClient: () => pty.clien
 vi.mock("../../../window/webContentsRegistry.js", () => ({
   getProjectForWebContents: (id: number) => views.get(id) ?? null,
 }));
+vi.mock("../../../services/persistence/db.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../../services/persistence/db.js")>()),
+  getSharedSqlite: () => sharedDb.sqlite,
+}));
+vi.mock("../../../services/mcp-server/hostMessagingTools.js", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("../../../services/mcp-server/hostMessagingTools.js")>();
+  return {
+    ...actual,
+    setHostMessagingRuntime: (runtime: Parameters<typeof actual.setHostMessagingRuntime>[0]) => {
+      hostMessaging.runtime = runtime;
+      return () => {
+        if (hostMessaging.runtime === runtime) hostMessaging.runtime = null;
+      };
+    },
+  };
+});
 vi.mock("../../../services/pty/lifecycleLedger.js", () => ({
   getLifecycleLedger: () => ({ getEntry: (id: string) => ledger.get(id) }),
 }));
 
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { CHANNELS } from "../../../ipc/channels.js";
+import { openDb } from "../../../services/persistence/db.js";
 import { getEndpointRegistry } from "../../../ipc/endpointRegistry.js";
 import { getRemoteService, registerRemoteService } from "../../runtime.js";
 import type { HostProjectViewResult } from "../../client/hostProjectViews.js";
+import { AssistantExchangeStore } from "../../exchange/AssistantExchangeStore.js";
 import type { ExchangeRecord } from "../../exchange/types.js";
 import type { MovedExchange } from "../AssistantExchangeClient.js";
-import type { LaneEnrollment } from "../AssistantMessagingPolicy.js";
-import type { ObservedHost } from "../HubMessagingRuntime.js";
-import { installAssistantMessagingPolicy, wakeHubForMoved } from "../install.js";
+import { OPEN_LANE_GENERATION, type OpenRun } from "../AssistantMessagingPolicy.js";
+import { openReceiverFor } from "../AssistantMessagingRuntime.js";
+import type { HubMessagingRuntime, ObservedHost } from "../HubMessagingRuntime.js";
+import {
+  installAssistantMessagingPolicy,
+  wakeAskersForMoved,
+  type AssistantMessagingPolicyInstallDeps,
+} from "../install.js";
+
+const migrationsFolder = path.resolve(
+  path.dirname(fileURLToPath(import.meta.url)),
+  "../../../services/persistence/migrations"
+);
 
 describe("installAssistantMessagingPolicy", () => {
   let hosts: string[];
@@ -170,7 +215,7 @@ describe("installAssistantMessagingPolicy", () => {
         observed({ hostId: "attic", assistantMessagingEnabled: false, connection: connected }),
       ];
       installObserving();
-      // Having hosts makes this machine their hub, not a lane of theirs.
+      // Having hosts lets this machine's assistants reach theirs; it isn't a lane of theirs.
       expect(read()).toEqual({ hosts: "configured", laneReachable: false });
 
       seen = [observed({ connection: connected })];
@@ -330,7 +375,6 @@ describe("installAssistantMessagingPolicy", () => {
 
 describe("installAssistantMessagingPolicy applying the saved default (#13441)", () => {
   let accepts: boolean;
-  let messagingHost: boolean;
   let defaultListeners: Set<() => void>;
   let uninstall: (() => void) | null = null;
   const endpoints: Array<() => void> = [];
@@ -345,15 +389,15 @@ describe("installAssistantMessagingPolicy applying the saved default (#13441)", 
         defaultListeners.add(listener);
         return () => defaultListeners.delete(listener);
       },
-      hasMessagingHost: () => messagingHost,
     }));
   const policy = () => getRemoteService("assistantMessagingPolicy")!;
   const settle = async () => {
     for (let i = 0; i < 5; i++) await Promise.resolve();
   };
   /**
-   * A run in the view `view` (positive ids are this machine's own views),
-   * spawned unless `pending`, which leaves it waiting on the pty-host's answer.
+   * A run in the view `view` (positive ids are this machine's own views,
+   * negative ones remote Shells'), spawned unless `pending`, which leaves it
+   * waiting on the pty-host's answer.
    */
   const start = (lane: string, sessionId: string, view: number, pending = false) => {
     const terminalId = `t-${sessionId}`;
@@ -363,6 +407,23 @@ describe("installAssistantMessagingPolicy applying the saved default (#13441)", 
     if (!pending) {
       pty.emit("spawn-result", terminalId, { success: true, id: terminalId, launchGeneration: 1 });
     }
+  };
+  /** A remote Shell's open view of `proj` at `handle`, over link session `linkSessionId`. */
+  const remoteView = (handle: number, linkSessionId: string) => {
+    const endpointId = `remote${handle}`;
+    getEndpointRegistry().add({
+      endpointId,
+      clientId: "client",
+      projectId: "proj",
+      kind: "remote-view" as const,
+      handle,
+      linkSessionId,
+      send: () => {},
+      request: async () => null,
+      onClose: () => ({ dispose: () => {} }),
+      isClosed: () => false,
+    } as never);
+    endpoints.push(() => getEndpointRegistry().remove(endpointId));
   };
   const nudge = () => {
     for (const listener of [...defaultListeners]) listener();
@@ -377,7 +438,6 @@ describe("installAssistantMessagingPolicy applying the saved default (#13441)", 
     views.clear();
     ledger.clear();
     accepts = true;
-    messagingHost = true;
     defaultListeners = new Set();
   });
 
@@ -387,45 +447,66 @@ describe("installAssistantMessagingPolicy applying the saved default (#13441)", 
     for (const remove of endpoints.splice(0)) remove();
   });
 
-  it("makes a run in this machine's own view the hub once it has spawned", async () => {
+  it("enrolls no run in this machine's own views: they reach hosts without one (#13468)", async () => {
     views.set(11, "proj");
     install();
-    start("proj:0", "s1", 11, true);
+    start("proj:0", "s1", 11);
+    start("proj:1", "s2", 11);
     nudge();
     await settle();
-    expect(policy().getHub()).toBeNull();
-    pty.emit("spawn-result", "t-s1", { success: true, id: "t-s1", launchGeneration: 1 });
-    await settle();
-    expect(policy().getHub()).toMatchObject({ projectId: "proj", slot: 0, sessionId: "s1" });
+    expect(policy().listEnrollments()).toEqual([]);
+    // Nor does the default ask whether this Shell has a host to hear from: there is no hub to want.
+    expectTypeOf<AssistantMessagingPolicyInstallDeps>().not.toHaveProperty("hasMessagingHost");
   });
 
-  it("never gives the hub to a spawn that failed, and gives it to the next run instead", async () => {
-    views.set(11, "proj");
+  it("never enrolls a spawn that failed, and enrolls the next run instead", async () => {
+    remoteView(-5, "link-a");
     install();
-    start("proj:0", "s1", 11, true);
+    policy().bindSender("link-a", "sender-a");
+    start("proj:0", "s1", -5, true);
     // The pty-host refused it: the pending entry goes, the lane stays bound.
     pty.generations.delete("t-s1");
     ledger.set("t-s1", { generation: 1, spawnOk: false, closedAt: 1 });
     pty.emit("spawn-result", "t-s1", { success: false, id: "t-s1", launchGeneration: 1 });
     await settle();
-    expect(policy().getHub()).toBeNull();
-    start("proj:1", "s2", 11);
+    expect(policy().listEnrollments()).toEqual([]);
+    start("proj:1", "s2", -5);
     await settle();
-    expect(policy().getHub()).toMatchObject({ slot: 1 });
+    expect(policy().listEnrollments()).toEqual([
+      expect.objectContaining({ slot: 1, enrolledBy: { kind: "remote", linkSessionId: "link-a" } }),
+    ]);
+  });
+
+  it("enrolls a remote Shell's run only once it has spawned", async () => {
+    remoteView(-5, "link-a");
+    install();
+    policy().bindSender("link-a", "sender-a");
+    start("proj:0", "s1", -5, true);
+    nudge();
+    await settle();
+    expect(policy().getEnrollment({ projectId: "proj", slot: 0 })).toBeNull();
+    pty.emit("spawn-result", "t-s1", { success: true, id: "t-s1", launchGeneration: 1 });
+    await settle();
+    expect(policy().getEnrollment({ projectId: "proj", slot: 0 })).toMatchObject({
+      sessionId: "s1",
+    });
   });
 
   it("keeps a run's spawn when a duplicate spawn of the same terminal is refused", async () => {
-    views.set(11, "proj");
+    remoteView(-5, "link-a");
     accepts = false;
     install();
-    start("proj:0", "s1", 11);
+    policy().bindSender("link-a", "sender-a");
+    start("proj:0", "s1", -5);
     // The ledger now describes the refused attempt; the first one is still the live run.
     ledger.set("t-s1", { generation: 2, spawnOk: false, closedAt: 1 });
     pty.emit("spawn-result", "t-s1", { success: false, id: "t-s1", launchGeneration: 2 });
     accepts = true;
     nudge();
     await settle();
-    expect(policy().getHub()).toMatchObject({ slot: 0, launchGeneration: 1 });
+    expect(policy().getEnrollment({ projectId: "proj", slot: 0 })).toMatchObject({
+      launchGeneration: 1,
+    });
   });
 
   it("leaves a run alone whose view shows another project, or is no view of this machine", async () => {
@@ -437,63 +518,22 @@ describe("installAssistantMessagingPolicy applying the saved default (#13441)", 
     expect(policy().listEnrollments()).toEqual([]);
   });
 
-  it("waits for the saved default and a host with messaging on, then applies them", async () => {
-    views.set(11, "proj");
+  it("waits for the saved default, then applies it", async () => {
+    remoteView(-5, "link-a");
     accepts = false;
-    messagingHost = false;
     install();
-    start("proj:0", "s1", 11);
+    policy().bindSender("link-a", "sender-a");
+    start("proj:0", "s1", -5);
     await settle();
-    expect(policy().getHub()).toBeNull();
+    expect(policy().getEnrollment({ projectId: "proj", slot: 0 })).toBeNull();
     accepts = true;
     nudge();
     await settle();
-    // Still no host to hear from.
-    expect(policy().getHub()).toBeNull();
-    messagingHost = true;
-    nudge();
-    await settle();
-    expect(policy().getHub()).not.toBeNull();
-  });
-
-  it("gives the hub to a sibling once the hub the person turned off stops", async () => {
-    views.set(11, "proj");
-    install();
-    start("proj:0", "s1", 11);
-    start("proj:1", "s2", 11);
-    await settle();
-    const hub = policy().getHub();
-    expect(hub).toMatchObject({ slot: 0 });
-    policy().unenroll({ projectId: "proj", slot: 0 }, { kind: "local" }, hub!.generation, {
-      decline: true,
-    });
-    await settle();
-    expect(policy().getHub()).toBeNull();
-
-    running.delete("proj:0");
-    for (const listener of [...sessionEnded]) {
-      listener({ projectId: "proj", slot: 0, sessionId: "s1", reason: "revoked" });
-    }
-    await settle();
-    expect(policy().getHub()).toMatchObject({ slot: 1 });
+    expect(policy().getEnrollment({ projectId: "proj", slot: 0 })).not.toBeNull();
   });
 
   it("enrolls a run in a remote Shell's open view for that Shell once it proved its sender", async () => {
-    const endpoint = {
-      endpointId: "remote-1",
-      clientId: "client",
-      projectId: "proj",
-      kind: "remote-view" as const,
-      handle: -5,
-      linkSessionId: "link-a",
-      send: () => {},
-      request: async () => null,
-      onClose: () => ({ dispose: () => {} }),
-      isClosed: () => false,
-    };
-    getEndpointRegistry().add(endpoint as never);
-    endpoints.push(() => getEndpointRegistry().remove("remote-1"));
-    messagingHost = false;
+    remoteView(-5, "link-a");
     install();
     start("proj:0", "s1", -5);
     await settle();
@@ -514,39 +554,238 @@ describe("installAssistantMessagingPolicy applying the saved default (#13441)", 
   });
 });
 
-describe("wakeHubForMoved", () => {
-  const hub = { projectId: "proj", slot: 0, generation: "hub-2" } as LaneEnrollment;
-  const moved = (taskId: string, hubGeneration: string): MovedExchange => ({
+describe.skipIf(process.platform === "win32")(
+  "installAssistantMessagingPolicy handing a host's messages to an assistant here (#13468)",
+  () => {
+    let accepts: boolean;
+    let tmpDir: string;
+    let uninstall: (() => void) | null = null;
+    let wakes: Array<{ lane: unknown; generation: string; exchangeId?: string }>;
+    const studio: ObservedHost = {
+      hostId: "studio",
+      name: "studio-01",
+      assistantMessagingEnabled: true,
+      connection: { status: "disconnected" },
+      lastSeenAt: null,
+      summary: null,
+    };
+
+    const install = () => {
+      uninstall = installAssistantMessagingPolicy({
+        isHostMessagingEnabled: () => true,
+        hasHosts: () => true,
+        onHostsChanged: () => () => {},
+        observeHosts: () => [studio],
+        acceptsByDefault: () => accepts,
+      });
+      vi.spyOn(getRemoteService("assistantLaneWaker")!, "wake").mockImplementation((request) => {
+        wakes.push(request);
+      });
+    };
+    /** A spawned run in view `view`: 11 is this machine's view of `proj`, anything else isn't. */
+    const start = (lane: string, sessionId: string, view: number) => {
+      const terminalId = `t-${sessionId}`;
+      running.set(lane, { sessionId, terminalId, projectViewWebContentsId: view });
+      pty.generations.set(terminalId, 1);
+    };
+    let sent = 0;
+    const receive = (sourceLane = { projectId: "host-proj", slot: 0 }) =>
+      getRemoteService("assistantHubReceiver")!.receive("studio", {
+        messageId: `m-${++sent}`,
+        contextId: `ctx-${sent}`,
+        referenceTaskIds: [],
+        sourceLane,
+        hopCount: 1,
+        body: "the migration landed",
+      });
+    const lastWake = () => wakes.at(-1);
+
+    beforeEach(() => {
+      broadcastToRenderer.mockClear();
+      running.clear();
+      pty.listeners.clear();
+      pty.generations.clear();
+      sessionEnded.clear();
+      views.clear();
+      ledger.clear();
+      views.set(11, "proj");
+      accepts = true;
+      wakes = [];
+      tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "daintree-install-receiver-"));
+      sharedDb.sqlite = openDb(path.join(tmpDir, "exchange.db"), migrationsFolder).sqlite;
+    });
+
+    afterEach(() => {
+      uninstall?.();
+      uninstall = null;
+      (sharedDb.sqlite as { close(): void } | null)?.close();
+      sharedDb.sqlite = null;
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    });
+
+    it("goes to the earliest of this machine's assistants taking messages, at its open address", () => {
+      // A remote Shell's run here is that Shell's, never a recipient for this one's hosts.
+      start("proj:0", "s0", 12);
+      start("proj:1", "s1", 11);
+      start("proj:2", "s2", 11);
+      install();
+      const received = receive();
+      if (received.status !== "accepted") throw new Error(`not accepted: ${received.status}`);
+      expect(lastWake()).toMatchObject({
+        lane: { projectId: "proj", slot: 1 },
+        generation: OPEN_LANE_GENERATION,
+        shell: { kind: "local" },
+        exchangeId: received.taskId,
+      });
+      // Filed at that lane's open address, so a run that replaces it reads it too.
+      const filed = new AssistantExchangeStore(sharedDb.sqlite as never).listChangesSince(
+        { kind: "receiver", ...openReceiverFor({ projectId: "proj", slot: 1 }) },
+        0
+      );
+      expect(filed.records.map((record) => record.taskId)).toEqual([received.taskId]);
+    });
+
+    it("skips an assistant the person turned off", () => {
+      start("proj:1", "s1", 11);
+      start("proj:2", "s2", 11);
+      install();
+      getRemoteService("assistantMessagingPolicy")!.declineRun(
+        { projectId: "proj", slot: 1 },
+        { kind: "local" }
+      );
+      expect(receive()).toMatchObject({ status: "accepted" });
+      expect(lastWake()).toMatchObject({ lane: { projectId: "proj", slot: 2 } });
+    });
+
+    it("refuses as unavailable with nobody here taking messages, recording nothing", () => {
+      start("proj:0", "s0", 12);
+      install();
+      expect(receive()).toEqual({ status: "refused", refusal: "hub_unavailable" });
+      expect(wakes).toEqual([]);
+    });
+
+    it("goes to the assistant that last spoke to the sending lane, while it takes messages", async () => {
+      start("proj:1", "s1", 11);
+      start("proj:2", "s2", 11);
+      install();
+      const unregisterClient = registerRemoteService("assistantExchangeClient", {
+        send: async () => ({ status: "unknown" }),
+      } as never);
+      try {
+        const hub = hostMessaging.runtime as HubMessagingRuntime;
+        await expect(
+          hub.sendMessage("s2", {
+            hostId: "studio",
+            projectId: "host-proj",
+            slot: 0,
+            generation: "g",
+            text: "did the migration land?",
+          })
+        ).resolves.toMatchObject({ ok: true });
+
+        expect(receive()).toMatchObject({ status: "accepted" });
+        expect(lastWake()).toMatchObject({
+          lane: { projectId: "proj", slot: 2 },
+          generation: OPEN_LANE_GENERATION,
+        });
+        // Another lane on the host has no route: the earliest one takes it.
+        receive({ projectId: "host-proj", slot: 1 });
+        expect(lastWake()).toMatchObject({ lane: { projectId: "proj", slot: 1 } });
+
+        // The asker turned off: the earliest one taking messages gets it instead.
+        getRemoteService("assistantMessagingPolicy")!.declineRun(
+          { projectId: "proj", slot: 2 },
+          { kind: "local" }
+        );
+        receive();
+        expect(lastWake()).toMatchObject({ lane: { projectId: "proj", slot: 1 } });
+      } finally {
+        unregisterClient();
+      }
+    });
+
+    it("lets any live assistant in this machine's views send, never one a remote view runs", async () => {
+      start("proj:0", "s0", 12);
+      start("proj:1", "s1", 11);
+      install();
+      const send = vi.fn(async () => ({ status: "unknown" }));
+      const unregisterClient = registerRemoteService("assistantExchangeClient", {
+        send,
+      } as never);
+      try {
+        const hub = hostMessaging.runtime as HubMessagingRuntime;
+        const args = {
+          hostId: "studio",
+          projectId: "host-proj",
+          slot: 0,
+          generation: "g",
+          text: "hello",
+        };
+        await expect(hub.sendMessage("s0", args)).resolves.toMatchObject({
+          ok: false,
+          code: "NOT_ELIGIBLE",
+        });
+        await expect(hub.sendMessage("s1", args)).resolves.toMatchObject({ ok: true });
+        // Sent as that run, so only it is woken when the exchange moves.
+        expect(send).toHaveBeenCalledTimes(1);
+        expect(send.mock.calls[0]).toEqual([
+          "studio",
+          expect.objectContaining({ projectId: "host-proj", slot: 0 }),
+          {
+            projectId: "proj",
+            slot: 1,
+            sessionId: "s1",
+            terminalId: "t-s1",
+            launchGeneration: 1,
+          } satisfies OpenRun,
+        ]);
+      } finally {
+        unregisterClient();
+      }
+    });
+  }
+);
+
+describe("wakeAskersForMoved", () => {
+  const asker = (slot: number, sessionId: string): OpenRun => ({
+    projectId: "proj",
+    slot,
+    sessionId,
+    terminalId: `t-${sessionId}`,
+    launchGeneration: 2,
+  });
+  const moved = (taskId: string, run: OpenRun): MovedExchange => ({
     record: { taskId } as ExchangeRecord,
-    hubGeneration,
+    asker: run,
   });
 
-  it("wakes the hub that sent each exchange, as an update from this Shell", () => {
+  it("wakes the run that sent each exchange, at its lane's open address, as an update", () => {
     const wake = vi.fn();
-    wakeHubForMoved(
-      [moved("task-1", "hub-2"), moved("task-2", "hub-1")],
-      { getHub: () => hub },
-      {
-        wake,
-      }
-    );
-    expect(wake).toHaveBeenCalledTimes(1);
+    wakeAskersForMoved([moved("task-1", asker(0, "s1")), moved("task-2", asker(1, "s2"))], {
+      wake,
+    });
+    expect(wake).toHaveBeenCalledTimes(2);
     expect(wake.mock.calls[0]![0]).toMatchObject({
       lane: { projectId: "proj", slot: 0 },
-      generation: "hub-2",
+      generation: OPEN_LANE_GENERATION,
       shell: { kind: "local" },
       exchangeId: "task-1",
       kind: "update",
+      run: asker(0, "s1"),
     });
+    expect(wake.mock.calls[1]![0]).toMatchObject({
+      lane: { projectId: "proj", slot: 1 },
+      exchangeId: "task-2",
+      run: asker(1, "s2"),
+    });
+    // The lane lifts the run off the request: only the exact asker is checked, never its lane.
+    expect(Object.keys(wake.mock.calls[0]![0].lane)).toEqual(["projectId", "slot"]);
   });
 
-  it("wakes nothing with no hub enrolled, or no waker", () => {
+  it("wakes nothing with nothing moved, and never throws without a waker", () => {
     const wake = vi.fn();
-    wakeHubForMoved([moved("task-1", "hub-2")], { getHub: () => null }, { wake });
-    wakeHubForMoved([moved("task-1", "hub-2")], undefined, { wake });
-    expect(() =>
-      wakeHubForMoved([moved("task-1", "hub-2")], { getHub: () => hub }, undefined)
-    ).not.toThrow();
+    wakeAskersForMoved([], { wake });
+    expect(() => wakeAskersForMoved([moved("task-1", asker(0, "s1"))], undefined)).not.toThrow();
     expect(wake).not.toHaveBeenCalled();
   });
 });

@@ -18,12 +18,26 @@ import { AssistantExchangeJournal } from "../../exchange/AssistantExchangeJourna
 import type { ExchangeRecord, ExchangeState } from "../../exchange/types.js";
 import type { LinkSession } from "../../link/session.js";
 import { AssistantExchangeClient, type MovedExchange } from "../AssistantExchangeClient.js";
-import type { AssistantMessagingPolicy } from "../AssistantMessagingPolicy.js";
+import type { AssistantMessagingPolicy, OpenRun } from "../AssistantMessagingPolicy.js";
 import { AssistantLinkMethod } from "../linkMethods.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const migrationsFolder = path.resolve(__dirname, "../../../services/persistence/migrations");
 const HOST = "studio";
+const ASKER_1: OpenRun = {
+  projectId: "local-proj",
+  slot: 0,
+  sessionId: "help-1",
+  terminalId: "t-1",
+  launchGeneration: 1,
+};
+const ASKER_2: OpenRun = {
+  projectId: "local-proj",
+  slot: 1,
+  sessionId: "help-2",
+  terminalId: "t-2",
+  launchGeneration: 1,
+};
 
 function record(messageId: string, revision: number, state: ExchangeState): ExchangeRecord {
   return {
@@ -213,7 +227,7 @@ describe("AssistantExchangeClient listing a host's lanes", () => {
     fs.rmSync(dir, { recursive: true, force: true });
   });
 
-  it("lists its own lanes for recovery with no hub, only while the host's messaging is on (#13392)", async () => {
+  it("lists its own lanes for recovery, only while the host's messaging is on (#13392)", async () => {
     const lane = { projectId: "proj-1", slot: 0, generation: "gen-1", available: true };
     host.laneAnswer = { lanes: [lane] };
     await expect(client.listOwnLanes(HOST)).resolves.toEqual({ lanes: [lane] });
@@ -333,7 +347,7 @@ describe("AssistantExchangeClient change events", () => {
   let session: LinkSession;
   let opened: (hostId: string, session: LinkSession) => void;
   let moved: MovedExchange[];
-  let hubGeneration: string | null;
+  let asker: OpenRun | undefined;
   let client: AssistantExchangeClient;
 
   const settle = async () => {
@@ -352,7 +366,6 @@ describe("AssistantExchangeClient change events", () => {
       policy: () =>
         ({
           checkHost: () => ({ ok: true }),
-          getHub: () => (hubGeneration === null ? null : { generation: hubGeneration }),
         }) as unknown as AssistantMessagingPolicy,
       onExchangesMoved: (_hostId, batch) => moved.push(...batch),
     });
@@ -366,7 +379,7 @@ describe("AssistantExchangeClient change events", () => {
     host = new FakeHost();
     session = host.session();
     moved = [];
-    hubGeneration = "hub-1";
+    asker = ASKER_1;
     makeClient();
   });
 
@@ -378,19 +391,23 @@ describe("AssistantExchangeClient change events", () => {
 
   async function sendOne(messageId = "m-1"): Promise<void> {
     opened(HOST, session);
-    await client.send(HOST, {
-      messageId,
-      contextId: "ctx",
-      referenceTaskIds: [],
-      projectId: "proj",
-      slot: 0,
-      generation: "lane-gen",
-      body: "hello",
-    });
+    await client.send(
+      HOST,
+      {
+        messageId,
+        contextId: "ctx",
+        referenceTaskIds: [],
+        projectId: "proj",
+        slot: 0,
+        generation: "lane-gen",
+        body: "hello",
+      },
+      asker
+    );
     await settle();
   }
 
-  it("reads the host's changes when it announces one, and tells the hub that sent it", async () => {
+  it("reads the host's changes when it announces one, and tells the assistant that sent it", async () => {
     await sendOne();
     host.put("m-1", "completed");
     expect(host.announce()).toBeNull();
@@ -398,7 +415,7 @@ describe("AssistantExchangeClient change events", () => {
 
     expect(journal.get(HOST, "m-1")?.record?.state).toBe("completed");
     expect(moved).toEqual([
-      { record: expect.objectContaining({ messageId: "m-1" }), hubGeneration: "hub-1" },
+      { record: expect.objectContaining({ messageId: "m-1" }), asker: ASKER_1 },
     ]);
   });
 
@@ -432,7 +449,7 @@ describe("AssistantExchangeClient change events", () => {
     expect(moved.map((m) => m.record.state)).toEqual(["working", "completed"]);
   });
 
-  it("tells no hub of a change that doesn't move the state, or of an exchange sent before a restart", async () => {
+  it("tells no asker of a change that doesn't move the state, or of an exchange sent before a restart", async () => {
     await sendOne();
     // A delivery fact bumps the revision but leaves the state where it was.
     host.put("m-1", "submitted");
@@ -451,8 +468,8 @@ describe("AssistantExchangeClient change events", () => {
     expect(moved).toEqual([]);
   });
 
-  it("names no hub for an exchange sent while none was enrolled", async () => {
-    hubGeneration = null;
+  it("tells nobody of an exchange sent without an asker", async () => {
+    asker = undefined;
     await sendOne();
     host.put("m-1", "completed");
     host.announce();
@@ -460,17 +477,35 @@ describe("AssistantExchangeClient change events", () => {
     expect(moved).toEqual([]);
   });
 
-  it("keeps an exchange with the hub that first sent it, through a resend under another", async () => {
+  it("keeps an exchange with the assistant that first sent it, through a resend by another", async () => {
     await sendOne();
-    hubGeneration = "hub-2";
+    asker = ASKER_2;
     await sendOne();
     host.put("m-1", "completed", true);
     host.announce();
     await settle();
-    expect(moved.map((m) => m.hubGeneration)).toEqual(["hub-1"]);
+    expect(moved.map((m) => m.asker)).toEqual([ASKER_1]);
   });
 
-  it("binds no hub to a resend of an exchange sent before a restart", async () => {
+  it("tells each exchange's own asker, and keeps a copy of the run it was given", async () => {
+    const given = { ...ASKER_1 };
+    asker = given;
+    await sendOne("m-1");
+    // Whatever the caller does with its object afterwards, the binding is the run as sent.
+    given.sessionId = "help-mutated";
+    asker = ASKER_2;
+    await sendOne("m-2");
+    host.put("m-1", "completed", true);
+    host.put("m-2", "working");
+    host.announce();
+    await settle();
+    expect(moved.map((m) => [m.record.messageId, m.asker])).toEqual([
+      ["m-1", ASKER_1],
+      ["m-2", ASKER_2],
+    ]);
+  });
+
+  it("binds no asker to a resend of an exchange sent before a restart", async () => {
     await sendOne();
     client.dispose();
     makeClient();
@@ -482,7 +517,7 @@ describe("AssistantExchangeClient change events", () => {
     expect(moved).toEqual([]);
   });
 
-  it("tells the hub of a reply that lands after the exchange already failed", async () => {
+  it("tells the asker of a reply that lands after the exchange already failed", async () => {
     await sendOne();
     host.put("m-1", "failed");
     host.announce();
@@ -521,7 +556,7 @@ describe("AssistantExchangeClient change events", () => {
     }
   });
 
-  it("tells the hub of a move it only learned by looking up a send whose answer was lost", async () => {
+  it("tells the asker of a move it only learned by looking up a send whose answer was lost", async () => {
     await sendOne();
     // A resend whose answer is lost leaves it unresolved; the host meanwhile has the reply.
     const call = session.call.bind(session);

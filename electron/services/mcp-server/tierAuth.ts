@@ -200,14 +200,14 @@ export interface SessionSurfacePolicy {
   assistantMessaging?: boolean;
   /**
    * Whether that lane was enrolled by a remote Shell, so it may start a
-   * message to the Shell's hub (#13338). Never true for the hub itself; read
+   * message to that Shell (#13338). Never true for a Shell's own lane; read
    * live per listing, and as `=== true`.
    */
   assistantSending?: boolean;
   /**
-   * Whether this session is this Shell's enrolled hub and a host exists
-   * (#13336). Only then are the `host.*` messaging tools offered; read live
-   * per listing, and as `=== true`.
+   * Whether this session is one of this Shell's assistants and a host exists
+   * (#13336, #13468). Only then are the `host.*` messaging tools offered;
+   * read live per listing, and as `=== true`.
    */
   hubMessaging?: boolean;
 }
@@ -514,9 +514,9 @@ export interface TargetPolicySessionSnapshot {
    */
   paneSkipConfirmations?: boolean;
   /**
-   * Whether the session is this Shell's enrolled hub while a host exists
-   * (#13336). The hub's host tools exist for no other session at any tier, so
-   * they are never offered as a stub. Read as `=== true`.
+   * Whether the session is one of this Shell's assistants while a host exists
+   * (#13336, #13468). The host tools exist for no other session at any tier,
+   * so they are never offered as a stub. Read as `=== true`.
    */
   hubMessaging?: boolean;
   /** Live per-tool grants, from the non-evicting snapshot. */
@@ -857,7 +857,7 @@ export function buildUnavailableStub(
   if (!isExistenceCatalogVisible(snapshot)) return null;
   const id = readEntryId(entry);
   if (id === null) return null;
-  // No tier makes these exist for anyone but the hub, so "raise your tier" would be wrong.
+  // No tier makes these exist for anything but a Shell's own assistant, so "raise your tier" would be wrong.
   if (HOST_MESSAGING_TOOL_IDS.has(id) && snapshot.hubMessaging !== true) return null;
   const record = entry as Partial<ActionManifestEntry>;
 

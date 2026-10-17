@@ -84,13 +84,13 @@ export interface AssistantMessagingPolicyInstallDeps {
   isHostMessagingEnabled(hostId: HostId): boolean;
   hasHosts(): boolean;
   onHostsChanged(listener: () => void): () => void;
-  /** Told whenever a lane may have gained or lost its inbox or hub tools. */
+  /** Told whenever a lane may have gained or lost its inbox or host tools. */
   onAvailabilityChanged?(): void;
-  /** Every host this Shell knows, as last observed; what the hub's `host.list` reads. */
+  /** Every host this Shell knows, as last observed; what `host.list` reads. */
   observeHosts?(): ObservedHost[];
   /** A connected host's projects, for naming what its assistants work in. */
   listHostProjects?(hostId: HostId): Promise<readonly HostProjectSummary[]>;
-  /** The person's consent to the hub starting assistants on a host, read at each call. */
+  /** The person's consent to this Shell's assistants starting assistants on a host, read at each call. */
   isHostStartEnabled?(hostId: HostId): boolean;
   /** A session to a host opened (or reopened): lanes enrolled there may need their views back. */
   onHostSessionOpened?(listener: (hostId: HostId) => void): () => void;
@@ -127,7 +127,7 @@ function viewShellOf(
 
 /**
  * This machine's hosts as runbook search is told them (#13411), from what the
- * hub's `host.list` reads: connected means a host this Shell lets its assistant
+ * `host.list` reads: connected means a host this Shell lets its assistant
  * message is connected right now. Hosts this Shell can't observe are unreported
  * rather than guessed down to "none connected".
  */
@@ -241,8 +241,8 @@ export function installAssistantMessagingPolicy(
     defaults.schedule();
     payReannounce();
   };
-  // A run that ends can free the hub for a sibling (a declined hub, say)
-  // without any enrollment changing.
+  // A run that ends can change which runs the default may enroll without
+  // any enrollment changing.
   const runEnded = () => defaults.schedule();
   const ptyExited = (terminalId: string) => {
     if (getPtyClient()?.getLiveGeneration(terminalId) == null) spawned.delete(terminalId);
@@ -269,7 +269,7 @@ export function installAssistantMessagingPolicy(
     }) ?? (() => {});
   const offSessionEnded = helpSessionService.addSessionEndedListener(runEnded);
   // Only the first host arriving or the last one going changes what views
-  // show, and whether the hub is offered its host tools.
+  // show, and whether assistants are offered their host tools.
   const offHosts = deps.onHostsChanged(() => {
     // A removed host's lanes start nothing more to this Shell.
     routes.retainHosts(new Set((deps.observeHosts?.() ?? []).map((host) => host.hostId)));
@@ -315,8 +315,8 @@ export function installAssistantMessagingPolicy(
     outbox: () => getRemoteService("assistantHostOutbox"),
     hasHosts: deps.hasHosts,
     // Outside the exchange's one reserved wake, so it records nothing on the exchange.
-    // Only a lane's open address and its hub's enrollment are sent messages, and
-    // neither is woken under a remote Shell's drive lease.
+    // Only a lane's open address is sent messages, and it isn't woken under a
+    // remote Shell's drive lease.
     rewake: (lane, record, stillOwed) =>
       getRemoteService("assistantLaneWaker")?.wake({
         lane,
@@ -405,7 +405,7 @@ export function installAssistantMessagingPolicy(
     starter: () => starter,
   });
   const unregisterHub = setHostMessagingRuntime(hub);
-  // An assistant the hub started works through a hidden view of its project,
+  // An assistant this Shell started works through a hidden view of its project,
   // which no window restores after a restart: give each enrolled lane's project
   // a view again once the link is back, retrying while windows come back too.
   // Each session opening starts a new round for its host; a pass from an

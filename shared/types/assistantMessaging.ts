@@ -3,7 +3,7 @@ import { z } from "zod";
 /**
  * Cross-host assistant messaging, as an enrolled lane sees it: the messages
  * addressed to it, the answers it sends back, and (for a lane a remote Shell
- * enrolled) messages it starts to that Shell's hub (#13338). Every tool runs
+ * enrolled) messages it starts to that Shell (#13338). Every tool runs
  * in main and takes the caller's lane from its own help-session bearer, never
  * from its arguments, so a lane only ever reads and writes as itself.
  *
@@ -43,7 +43,7 @@ export const ASSISTANT_PROVENANCE_LABEL_MAX_CHARS = 120;
 export const ASSISTANT_MAX_HOP_COUNT = 8;
 /**
  * Most messages a host's assistants may start in one conversation (contextId)
- * to the hub (#13338), so two assistants can't bounce messages back and forth
+ * to a Shell (#13338), so two assistants can't bounce messages back and forth
  * forever (OWASP ASI08). A reply belongs to the message it answers and spends
  * none.
  */
@@ -69,7 +69,7 @@ export const AssistantGetInboxArgsSchema = z.object({
   view: z
     .enum(["received", "sent"])
     .optional()
-    .describe("received (default) or sent: yours to the hub, with replies."),
+    .describe("received (default) or sent: yours to that Shell, with replies."),
 });
 
 export type AssistantGetInboxArgs = z.infer<typeof AssistantGetInboxArgsSchema>;
@@ -92,7 +92,7 @@ export const AssistantInboxMessageSchema = z.object({
 export type AssistantInboxMessage = z.infer<typeof AssistantInboxMessageSchema>;
 
 /**
- * Where a message this lane sent the hub stands. `waiting-for-hub` means it is
+ * Where a message this lane sent its Shell stands. `waiting-for-hub` means it is
  * held here until the Shell that enrolled the lane is connected; `refused`
  * and `expired` are final. Anything else is the exchange's own state on the
  * Shell, observed, not a verdict on the work.

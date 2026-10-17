@@ -1067,7 +1067,7 @@ export interface SessionServerDeps extends OwnedMainExecutors {
    */
   assistantMessaging?: AssistantMessagingAccess;
   /**
-   * The hub's reach to other hosts' assistants (#13336), bound to this
+   * The assistant's reach to other hosts' assistants (#13336), bound to this
    * session's help-session bearer. Absent for every other bearer; then the
    * `host.*` messaging tools are neither listed nor run.
    */
@@ -1730,7 +1730,7 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
           } else if (!laneSendingOffered()) {
             permittedActionIds.delete(ASSISTANT_SEND_MESSAGE_TOOL);
           }
-          // Likewise the hub's host tools, offered only where a hub could be (#13336).
+          // Likewise the host tools, offered only to an assistant session while a host exists (#13336).
           if (!hubMessagingOffered()) {
             for (const id of HOST_MESSAGING_TOOL_IDS) permittedActionIds.delete(id);
           }
@@ -3428,10 +3428,10 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
           }
         }
 
-        // Short-circuit: the hub's tools for other hosts' assistants (#13336)
-        // run in main over the link. Only the help session this Shell's hub was
-        // enrolled with gets past the runtime's own check, whatever admitted
-        // the call above. Named outcomes (opted out, unreachable, ambiguous,
+        // Short-circuit: a Shell assistant's tools for other hosts' assistants
+        // (#13336) run in main over the link. Only an assistant running in one
+        // of this machine's own views gets past the runtime's own check
+        // (#13468), whatever admitted the call above. Named outcomes (opted out, unreachable, ambiguous,
         // ...) are results; refusals are fixed text, and the audit projections
         // keep message and reply text out of the log.
         if (HOST_MESSAGING_TOOL_IDS.has(actionId)) {

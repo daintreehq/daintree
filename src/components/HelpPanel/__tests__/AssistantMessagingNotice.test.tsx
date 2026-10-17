@@ -95,12 +95,12 @@ describe("AssistantMessagingNotice", () => {
     const { container } = render(
       <AssistantMessagingNotice
         state={state(null)}
-        refusal="hub-taken"
+        refusal="wrong-shell"
         laneKey="a"
         onDismissRefusal={onDismissRefusal}
       />
     );
-    expect(region(container).textContent).toContain("already accepts messages");
+    expect(region(container).textContent).toContain("Another machine turned messages on");
     fireEvent.click(container.querySelector('[aria-label="Dismiss messaging notice"]')!);
     expect(onDismissRefusal).toHaveBeenCalledTimes(1);
   });

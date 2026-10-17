@@ -129,16 +129,49 @@ describe("assistant messaging IPC", () => {
     }
   });
 
-  it("enrolls a local window's lane as this machine, making it the hub", async () => {
+  it("turns a local window's lane off and on without enrolling it, on a Shell with hosts (#13468)", async () => {
+    const lane = { projectId: "proj", slot: 0 };
     run(0, "s1");
-    const result = await setLaneEnrolled(localCtx(), {
-      projectId: "proj",
-      slot: 0,
+    // This machine's own assistants need no enrollment: the lane reads on from the start.
+    expect((await getState(localCtx(), lane)).lane).toEqual({
       enrolled: true,
+      enrolledElsewhere: false,
+      ended: null,
     });
-    expect(result.refusal).toBeNull();
-    expect(result.state.lane).toEqual({ enrolled: true, enrolledElsewhere: false, ended: null });
-    expect(policy.getHub()?.slot).toBe(0);
+
+    const off = await setLaneEnrolled(localCtx(), { ...lane, enrolled: false });
+    expect(off.refusal).toBeNull();
+    expect(off.state.lane).toEqual({ enrolled: false, enrolledElsewhere: false, ended: null });
+    expect(policy.checkOpen(lane, "admit")).toEqual({ ok: false, reason: "declined" });
+
+    const on = await setLaneEnrolled(localCtx(), { ...lane, enrolled: true });
+    expect(on.refusal).toBeNull();
+    expect(on.state.lane).toEqual({ enrolled: true, enrolledElsewhere: false, ended: null });
+    expect(policy.checkOpen(lane, "admit").ok).toBe(true);
+    // Neither direction ever takes an enrollment for this machine.
+    expect(policy.getEnrollment(lane)).toBeNull();
+  });
+
+  it("keeps two of this machine's lanes on independently (#13468)", async () => {
+    const first = { projectId: "proj", slot: 0 };
+    const second = { projectId: "proj", slot: 1 };
+    run(0, "s1");
+    run(1, "s2");
+    for (const lane of [first, second]) {
+      const on = await setLaneEnrolled(localCtx(), { ...lane, enrolled: true });
+      expect(on.refusal).toBeNull();
+      expect(on.state.lane).toEqual({ enrolled: true, enrolledElsewhere: false, ended: null });
+    }
+
+    await setLaneEnrolled(localCtx(), { ...first, enrolled: false });
+    expect((await getState(localCtx(), first)).lane.enrolled).toBe(false);
+    expect((await getState(localCtx(), second)).lane).toEqual({
+      enrolled: true,
+      enrolledElsewhere: false,
+      ended: null,
+    });
+    expect(policy.getEnrollment(first)).toBeNull();
+    expect(policy.getEnrollment(second)).toBeNull();
   });
 
   it("never enrolls anything from a remote window's toggle, whatever shell it claims", async () => {
@@ -152,21 +185,19 @@ describe("assistant messaging IPC", () => {
     expect(on.refusal).toBeNull();
     // Where a lane's own messages go is only for a run that Shell's view started.
     expect(policy.getEnrollment({ projectId: "proj", slot: 0 })).toBeNull();
-    expect(policy.getHub()).toBeNull();
   });
 
-  it("leaves this machine's hub as it is when a remote window turns the lane off", async () => {
+  it("holds a remote window's off for this machine's window too, until either turns it on", async () => {
     listening = true;
     const lane = { projectId: "proj", slot: 0 };
     run(0, "s1");
-    await setLaneEnrolled(localCtx(), { ...lane, enrolled: true });
-    expect(policy.getHub()?.slot).toBe(0);
     const off = await setLaneEnrolled(remoteCtx("link-a"), { ...lane, enrolled: false });
     expect(off.state.lane.enrolled).toBe(false);
-    expect(policy.getHub()?.slot).toBe(0);
-    // This machine's own off is the person at it: the hub goes too.
-    await setLaneEnrolled(localCtx(), { ...lane, enrolled: false });
-    expect(policy.getHub()).toBeNull();
+    expect((await getState(localCtx(), lane)).lane.enrolled).toBe(false);
+    const on = await setLaneEnrolled(localCtx(), { ...lane, enrolled: true });
+    expect(on.refusal).toBeNull();
+    expect((await getState(remoteCtx("link-a"), lane)).lane.enrolled).toBe(true);
+    expect(policy.getEnrollment(lane)).toBeNull();
   });
 
   it("shows a lane on to every Shell, and lets any of them turn its run off (#13467)", async () => {
@@ -207,8 +238,8 @@ describe("assistant messaging IPC", () => {
     expect(off.state.lane.enrolled).toBe(false);
     const on = await setLaneEnrolled(localCtx(), { ...lane, enrolled: true });
     expect(on.state.lane.enrolled).toBe(true);
-    // With no host of its own, it never becomes a hub.
-    expect(policy.getHub()).toBeNull();
+    // The toggle only ever stops what other machines send; it enrolls nothing.
+    expect(policy.getEnrollment(lane)).toBeNull();
   });
 
   it("shows a lane off, and won't turn it on, while this machine doesn't accept messages", async () => {
@@ -219,6 +250,11 @@ describe("assistant messaging IPC", () => {
     const on = await setLaneEnrolled(remoteCtx("link-a"), { ...lane, enrolled: true });
     expect(on.refusal).toBe("unavailable");
     expect(on.state.lane.enrolled).toBe(false);
+    // This machine's own window, on a Shell with hosts but not listening, is refused the same way.
+    const local = await setLaneEnrolled(localCtx(), { ...lane, enrolled: true });
+    expect(local.refusal).toBe("unavailable");
+    expect(local.state.lane).toEqual({ enrolled: false, enrolledElsewhere: false, ended: null });
+    expect(policy.getEnrollment(lane)).toBeNull();
   });
 
   it("shows a lane whose Shell is away as on, so turning it off withdraws it (#13332)", async () => {
@@ -257,46 +293,50 @@ describe("assistant messaging IPC", () => {
       const result = await setLaneEnrolled(localCtx(), input);
       expect(result.refusal).toBe("unavailable");
     }
-    expect(policy.getHub()).toBeNull();
+    // None of them reached the lane the view does show.
+    expect(policy.isRunDeclined({ projectId: "proj", slot: 0 })).toBe(false);
+    expect(policy.getEnrollment({ projectId: "proj", slot: 0 })).toBeNull();
   });
 
-  it("says why it can't enroll a lane that isn't running, or a second hub", async () => {
+  it("says why it can't turn on a lane that isn't running", async () => {
     const idle = await setLaneEnrolled(localCtx(), { projectId: "proj", slot: 0, enrolled: true });
     expect(idle.refusal).toBe("not-running");
-
-    run(0, "s1");
-    run(1, "s2");
-    await setLaneEnrolled(localCtx(), { projectId: "proj", slot: 0, enrolled: true });
-    const second = await setLaneEnrolled(localCtx(), {
-      projectId: "proj",
-      slot: 1,
-      enrolled: true,
-    });
-    expect(second.refusal).toBe("hub-taken");
-    expect(policy.getHub()?.slot).toBe(0);
+    expect(idle.state.lane).toEqual({ enrolled: false, enrolledElsewhere: false, ended: null });
   });
 
-  it("turning a lane on twice keeps its generation; turning it off withdraws it", async () => {
+  it("turning a lane on leaves a Shell's enrollment as it is; turning it off withdraws it", async () => {
+    const lane = { projectId: "proj", slot: 0 };
     run(0, "s1");
-    await setLaneEnrolled(localCtx(), { projectId: "proj", slot: 0, enrolled: true });
-    const generation = policy.getHub()?.generation;
-    await setLaneEnrolled(localCtx(), { projectId: "proj", slot: 0, enrolled: true });
-    expect(policy.getHub()?.generation).toBe(generation);
+    expect(policy.enroll(lane, { kind: "remote", linkSessionId: "link-a" }).ok).toBe(true);
+    const generation = policy.getEnrollment(lane)?.generation;
+    for (let i = 0; i < 2; i++) {
+      const on = await setLaneEnrolled(localCtx(), { ...lane, enrolled: true });
+      expect(on.refusal).toBeNull();
+      // Another Shell holding the lane's own messages never shows as held elsewhere.
+      expect(on.state.lane).toEqual({ enrolled: true, enrolledElsewhere: false, ended: null });
+    }
+    expect(policy.getEnrollment(lane)?.generation).toBe(generation);
 
-    const off = await setLaneEnrolled(localCtx(), { projectId: "proj", slot: 0, enrolled: false });
+    const off = await setLaneEnrolled(localCtx(), { ...lane, enrolled: false });
     expect(off.refusal).toBeNull();
     expect(off.state.lane.enrolled).toBe(false);
     expect(off.state.lane.ended).toBeNull();
+    expect(policy.getEnrollment(lane)).toBeNull();
   });
 
-  it("shows how a hub's enrollment ended only to this machine, never over a lane open to all", async () => {
+  it("shows how an enrollment ended only to its own Shell, never over a lane open to all", async () => {
+    const lane = { projectId: "proj", slot: 0 };
     run(0, "s1");
-    await setLaneEnrolled(localCtx(), { projectId: "proj", slot: 0, enrolled: true });
+    policy.enroll(lane, { kind: "remote", linkSessionId: "link-a" });
     run(0, "s2");
-    const mine = await getState(localCtx(), { projectId: "proj", slot: 0 });
+    // Open to every Shell, nobody hears about it.
+    expect((await getState(remoteCtx("link-a"), lane)).lane.ended).toBeNull();
+
+    accepting = false;
+    const mine = await getState(remoteCtx("link-a"), lane);
     expect(mine.lane.ended?.reason).toBe("relaunched");
-    const theirs = await getState(remoteCtx("link-a"), { projectId: "proj", slot: 0 });
-    expect(theirs.lane.ended).toBeNull();
+    expect((await getState(remoteCtx("link-b"), lane)).lane.ended).toBeNull();
+    expect((await getState(localCtx(), lane)).lane.ended).toBeNull();
   });
 
   it("lets this machine's windows pause, while a remote window only sees the pause", async () => {
@@ -305,6 +345,9 @@ describe("assistant messaging IPC", () => {
     expect(await setPaused(remoteCtx("link-a"), false)).toBe(true);
     expect(policy.isPaused()).toBe(true);
     expect((await getState(remoteCtx("link-a"), { projectId: "proj", slot: 0 })).paused).toBe(true);
+    // The pause doesn't turn a lane off: it reads on to anyone viewing it.
+    run(0, "s1");
+    expect((await getState(localCtx(), { projectId: "proj", slot: 0 })).lane.enrolled).toBe(true);
     expect(await setPaused(localCtx(), "no")).toBe(true);
   });
 
@@ -327,13 +370,19 @@ describe("assistant messaging IPC", () => {
 
   it("keeps the saved default from turning a lane back on after the person turned it off (#13441)", async () => {
     run(0, "s1");
-    expect(policy.enrollByDefault({ projectId: "proj", slot: 0 }, { kind: "local" }).ok).toBe(true);
-    const off = await setLaneEnrolled(localCtx(), { projectId: "proj", slot: 0, enrolled: false });
-    expect(off.state.lane.enrolled).toBe(false);
+    // This machine's own runs need no enrollment, by default or otherwise (#13468).
     expect(policy.enrollByDefault({ projectId: "proj", slot: 0 }, { kind: "local" })).toEqual({
       ok: false,
-      reason: "declined",
+      reason: "wrong-session",
     });
+    const off = await setLaneEnrolled(localCtx(), { projectId: "proj", slot: 0, enrolled: false });
+    expect(off.state.lane.enrolled).toBe(false);
+    expect(
+      policy.enrollByDefault(
+        { projectId: "proj", slot: 0 },
+        { kind: "remote", linkSessionId: "link-a" }
+      )
+    ).toEqual({ ok: false, reason: "declined" });
     // Turning it on again is the person's own choice and still works.
     const on = await setLaneEnrolled(localCtx(), { projectId: "proj", slot: 0, enrolled: true });
     expect(on.refusal).toBeNull();

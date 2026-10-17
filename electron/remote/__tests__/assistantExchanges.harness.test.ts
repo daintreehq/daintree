@@ -91,6 +91,37 @@ vi.mock("../../services/HelpSessionService.js", () => ({
   },
 }));
 
+/**
+ * This Shell's own project views, by WebContents id: what makes an assistant
+ * running here one of this machine's, which may reach hosts (#13468). The
+ * host's lanes run in a view this registry doesn't know.
+ */
+const localViews = vi.hoisted(() => new Map<number, string>());
+vi.mock("../../window/webContentsRegistry.js", async (importOriginal) => {
+  const original = await importOriginal<typeof import("../../window/webContentsRegistry.js")>();
+  return {
+    ...original,
+    getProjectForWebContents: (id: number) =>
+      localViews.get(id) ?? original.getProjectForWebContents(id),
+  };
+});
+
+/** The host messaging runtime install hands the MCP server: what this Shell's assistants call. */
+const hostTools = vi.hoisted(() => ({ runtime: null as unknown }));
+vi.mock("../../services/mcp-server/hostMessagingTools.js", async (importOriginal) => {
+  const original =
+    await importOriginal<typeof import("../../services/mcp-server/hostMessagingTools.js")>();
+  return {
+    ...original,
+    setHostMessagingRuntime: (runtime: Parameters<typeof original.setHostMessagingRuntime>[0]) => {
+      hostTools.runtime = runtime;
+      return () => {
+        if (hostTools.runtime === runtime) hostTools.runtime = null;
+      };
+    },
+  };
+});
+
 /** The host's own Codex reading; nothing here spawns a Codex app server. */
 const codexQuota = vi.hoisted(() => ({ read: vi.fn() }));
 vi.mock("../../services/codex/CodexQuotaService.js", () => ({
@@ -118,7 +149,9 @@ import { getEndpointRegistry } from "../../ipc/endpointRegistry.js";
 import { openDb } from "../../services/persistence/db.js";
 import { AppError } from "../../utils/errorTypes.js";
 import { AssistantExchangeClient } from "../assistant/AssistantExchangeClient.js";
-import { OPEN_LANE_GENERATION } from "../assistant/AssistantMessagingPolicy.js";
+import { OPEN_LANE_GENERATION, type OpenRun } from "../assistant/AssistantMessagingPolicy.js";
+import { openReceiverFor } from "../assistant/AssistantMessagingRuntime.js";
+import type { HubMessagingRuntime } from "../assistant/HubMessagingRuntime.js";
 import { AssistantLinkMethod, type AssistantSendPayload } from "../assistant/linkMethods.js";
 import { LinkClient } from "../client/LinkClient.js";
 import { createDirectTransport } from "../client/transport.js";
@@ -136,6 +169,8 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const migrationsFolder = path.resolve(__dirname, "../../services/persistence/migrations");
 const TEST_TIMEOUT_MS = 60_000;
 const SHELL_B = "shell-b";
+/** The WebContents id of this Shell's own view of proj-1. */
+const LOCAL_VIEW = 901;
 
 let h: RemoteHarness | null = null;
 let dir: string;
@@ -162,6 +197,7 @@ afterEach(async () => {
   h = null;
   db.sqlite = null;
   lanes.clear();
+  localViews.clear();
   closeAll();
   fs.rmSync(dir, { recursive: true, force: true });
 });
@@ -180,27 +216,43 @@ async function restartHarness(): Promise<RemoteHarness> {
 }
 
 /**
- * Assistants running on the host, this Shell's hub enrolled on itself, and
- * messaging to the host turned on. Proj-2's slots are the host's lanes.
+ * Assistants running on the host, and messaging to the host turned on.
+ * Proj-1's slots are this Shell's own assistants, in its own view of proj-1,
+ * which reach the host with nothing enrolled (#13468); proj-2's are the
+ * host's lanes. `shellSlots` is how many of this Shell's run.
  */
-function prepare(r: RemoteHarness): void {
+function prepare(r: RemoteHarness, shellSlots = 1): void {
   (r.pty.client as unknown as { getLiveGeneration(id: string): number }).getLiveGeneration = () =>
     1;
-  for (const [projectId, slot] of [
-    ["proj-1", 0],
-    ["proj-2", 0],
-    ["proj-2", 1],
-  ] as const) {
+  localViews.set(LOCAL_VIEW, "proj-1");
+  const shellLanes = Array.from({ length: shellSlots }, (_, slot) => ["proj-1", slot] as const);
+  for (const [projectId, slot] of [...shellLanes, ["proj-2", 0] as const, ["proj-2", 1] as const]) {
     const sessionId = `help-${projectId}-${slot}`;
     lanes.set(`${projectId}#${slot}`, {
       sessionId,
       terminalId: `t-${sessionId}`,
-      projectViewWebContentsId: 1,
+      projectViewWebContentsId: projectId === "proj-1" ? LOCAL_VIEW : 1,
     });
   }
-  const shell = requireRemoteService("assistantMessagingPolicy");
-  expect(shell.enroll({ projectId: "proj-1", slot: 0 }, { kind: "local" }).ok).toBe(true);
   harnessState.client!.registry.update({ hostId: HOST_ID, assistantMessagingEnabled: true });
+}
+
+/** One of this Shell's assistants as it runs now: who a send is made as. */
+function shellRun(slot: number): OpenRun {
+  const sessionId = `help-proj-1-${slot}`;
+  return {
+    projectId: "proj-1",
+    slot,
+    sessionId,
+    terminalId: `t-${sessionId}`,
+    launchGeneration: 1,
+  };
+}
+
+/** The host.* tools this Shell's assistants call. */
+function hostToolsRuntime(): HubMessagingRuntime {
+  if (!hostTools.runtime) throw new Error("no host messaging runtime installed");
+  return hostTools.runtime as HubMessagingRuntime;
 }
 
 /** The host's link session id for a Shell, as only the host knows it. */
@@ -327,7 +379,7 @@ function shellA(): AssistantExchangeClient {
 }
 
 describe("assistant exchanges over the real link", () => {
-  it("hands the hub the host's Codex quota as the host read it (#13392)", async () => {
+  it("hands this Shell the host's Codex quota as the host read it (#13392)", async () => {
     db.sqlite = openFile("app.db");
     const r = await harness();
     prepare(r);
@@ -491,45 +543,102 @@ describe("assistant exchanges over the real link", () => {
   );
 
   it(
-    "tells the sending Shell when its exchange changes on the host, and wakes its hub",
+    "tells the sending Shell when its exchange changes on the host, and wakes the run that sent it",
     async () => {
       db.sqlite = openFile("app.db");
       const r = await harness();
-      prepare(r);
+      prepare(r, 2);
       const b = await startShellB(r, openFile("shell-b.db"));
       const generation = enrollOnHost(hostSessionOf(r, null), 0);
       const a = shellA();
       const wake = vi.spyOn(requireRemoteService("assistantLaneWaker"), "wake");
-      const sent = await a.send(HOST_ID, message({ generation }));
-      if (sent.status !== "accepted") throw new Error("not accepted");
+      const sent = await a.send(HOST_ID, message({ generation }), shellRun(1));
+      // Sent with no assistant behind it: nobody is told when it moves.
+      const unasked = await a.send(HOST_ID, message({ messageId: "m-2", slot: 1, generation }));
+      if (sent.status !== "accepted" || unasked.status !== "accepted") {
+        throw new Error("not accepted");
+      }
       // Authenticated as itself, on the same host.
       await b.client.listChanges(HOST_ID, 0);
 
-      // The receiving lane's own tools write through a store of their own.
-      new AssistantExchangeStore(db.sqlite).recordDelivery(
-        { kind: "receiver", ...sent.record.receiver },
-        { senderId: sent.record.senderId, messageId: "m-1" },
-        "reply-received",
-        { body: "done" }
-      );
+      // The receiving lanes' own tools write through a store of their own.
+      const hostStore = new AssistantExchangeStore(db.sqlite);
+      for (const record of [sent.record, unasked.record]) {
+        hostStore.recordDelivery(
+          { kind: "receiver", ...record.receiver },
+          { senderId: record.senderId, messageId: record.messageId },
+          "reply-received",
+          { body: "done" }
+        );
+      }
 
       const journal = new AssistantExchangeJournal(db.sqlite!);
       await waitUntil(
-        () => journal.get(HOST_ID, "m-1")?.record?.state === "completed",
-        "the journal to hear of the reply"
+        () =>
+          journal.get(HOST_ID, "m-1")?.record?.state === "completed" &&
+          journal.get(HOST_ID, "m-2")?.record?.state === "completed",
+        "the journal to hear of the replies"
       );
-      const hub = requireRemoteService("assistantMessagingPolicy").getHub()!;
-      expect(wake).toHaveBeenCalledWith(
+      // Only the asker's run, at its lane's open address; never the Shell's other assistant.
+      // (Host and Shell share one waker here: the host's own wakes of its lanes aren't updates.)
+      const moved = wake.mock.calls
+        .map(([request]) => request)
+        .filter((request) => request.kind === "update");
+      expect(moved).toEqual([
         expect.objectContaining({
-          lane: { projectId: hub.projectId, slot: hub.slot },
-          generation: hub.generation,
+          lane: { projectId: "proj-1", slot: 1 },
+          generation: OPEN_LANE_GENERATION,
           shell: { kind: "local" },
           exchangeId: sent.record.taskId,
           kind: "update",
-        })
-      );
+          run: shellRun(1),
+        }),
+      ]);
       // Another Shell on the same host hears nothing of it.
       expect(b.journal.list(HOST_ID)).toEqual([]);
+    },
+    TEST_TIMEOUT_MS
+  );
+
+  it(
+    "lets any of this Shell's assistants reach a host's assistant, and another read or cancel its task (#13468)",
+    async () => {
+      db.sqlite = openFile("app.db");
+      const r = await harness();
+      prepare(r, 2);
+      const tools = hostToolsRuntime();
+      const args = {
+        hostId: HOST_ID,
+        projectId: "proj-2",
+        slot: 0,
+        generation: OPEN_LANE_GENERATION,
+        text: "is the release branch rebased?",
+      };
+      // Nothing is enrolled on this Shell: every assistant in its own views may send.
+      expect(requireRemoteService("assistantMessagingPolicy").listEnrollments()).toEqual([]);
+      expect(tools.isAvailable("help-proj-1-0")).toBe(true);
+      expect(tools.isAvailable("help-proj-1-1")).toBe(true);
+      // An assistant this machine's views don't run is no caller of its host tools.
+      await expect(tools.sendMessage("help-proj-2-1", args)).resolves.toMatchObject({
+        ok: false,
+        code: "NOT_ELIGIBLE",
+      });
+
+      const sent = await tools.sendMessage("help-proj-1-0", args);
+      if (!sent.ok || sent.value.taskId === null) throw new Error("send refused");
+      expect(sent.value).toMatchObject({ outcome: "ok", task: { state: "submitted" } });
+      const taskId = sent.value.taskId;
+      // Straight to the host's lane, at its open address.
+      const lane = requireRemoteService("assistantMessagingRuntime");
+      const inbox = lane.getInbox("help-proj-2-0", {});
+      expect(inbox.ok && inbox.value.messages.map((m) => m.messageId)).toEqual([taskId]);
+
+      // The task is the Shell's: its other assistant reads it and cancels it.
+      const read = await tools.getTask("help-proj-1-1", { hostId: HOST_ID, taskId });
+      expect(read).toMatchObject({ ok: true, value: { outcome: "ok", task: { taskId } } });
+      const canceled = await tools.cancelTask("help-proj-1-1", { hostId: HOST_ID, taskId });
+      expect(canceled).toMatchObject({ ok: true, value: { task: { taskId } } });
+      expect((await shellA().get(HOST_ID, taskId))?.cancelRequestedAt).not.toBeNull();
     },
     TEST_TIMEOUT_MS
   );
@@ -777,16 +886,20 @@ describe("assistant exchanges over the real link", () => {
   );
 
   it(
-    "lets a host's lane message this Shell's hub and reads the hub's reply back (#13338)",
+    "lets a host's lane message this Shell's assistant at its open address and reads the reply back (#13338)",
     async () => {
       db.sqlite = openFile("app.db");
       const r = await harness();
       prepare(r);
       enrollOnHost(hostSessionOf(r, null), 0);
       const runtime = requireRemoteService("assistantMessagingRuntime");
-      // The hub has the inbox tools but no hub of its own to write to.
+      // This Shell's assistant has the inbox tools but no Shell of its own to write to.
       expect(runtime.isSendAvailable("help-proj-1-0")).toBe(false);
       expect(runtime.isSendAvailable("help-proj-2-0")).toBe(true);
+      // Nothing on this Shell needed enrolling for it to hear from its host.
+      expect(requireRemoteService("assistantMessagingPolicy").listEnrollments()).toEqual([
+        expect.objectContaining({ projectId: "proj-2", slot: 0 }),
+      ]);
 
       const sent = runtime.sendMessage("help-proj-2-0", {
         text: "migration landed on feature/x, studio-04 can start",
@@ -794,20 +907,26 @@ describe("assistant exchanges over the real link", () => {
       if (!sent.ok) throw new Error(`send refused: ${sent.code}`);
       expect(sent.value).toMatchObject({ hopCount: 1, state: "waiting-for-hub" });
 
-      const hubInbox = () => {
+      const shellInbox = () => {
         const inbox = runtime.getInbox("help-proj-1-0", {});
-        if (!inbox.ok) throw new Error(`hub inbox refused: ${inbox.code}`);
+        if (!inbox.ok) throw new Error(`Shell inbox refused: ${inbox.code}`);
         return inbox.value.messages;
       };
-      await waitUntil(() => hubInbox().length === 1, "the message in the hub's inbox");
-      const [message] = hubInbox();
+      await waitUntil(() => shellInbox().length === 1, "the message in the Shell's inbox");
+      const [message] = shellInbox();
       expect(message).toMatchObject({
         messageId: sent.value.messageId,
         contextId: sent.value.contextId,
         provenance: { sendingLane: "slot 0 of project proj-2", hopCount: 1 },
       });
       expect(message!.untrustedBody).toContain("studio-04 can start");
-      // The host lane's own inbox is untouched: this went to the hub only.
+      // Filed at the lane's open address, so a run that replaces it reads it too.
+      const filed = new AssistantExchangeStore(db.sqlite).listChangesSince(
+        { kind: "receiver", ...openReceiverFor({ projectId: "proj-1", slot: 0 }) },
+        0
+      );
+      expect(filed.records.map((record) => record.messageId)).toEqual([sent.value.messageId]);
+      // The host lane's own inbox is untouched: this went to this Shell only.
       const own = runtime.getInbox("help-proj-2-0", {});
       expect(own.ok && own.value.messages).toEqual([]);
 
@@ -823,9 +942,46 @@ describe("assistant exchanges over the real link", () => {
         if (!page.ok) throw new Error(`sent view refused: ${page.code}`);
         return page.value.sent ?? [];
       };
-      await waitUntil(() => sentView()[0]?.state === "completed", "the hub's reply on the host");
+      await waitUntil(
+        () => sentView()[0]?.state === "completed",
+        "the Shell assistant's reply on the host"
+      );
       expect(sentView()[0]!.replies).toHaveLength(1);
       expect(sentView()[0]!.replies[0]!.untrustedText).toContain("thanks, starting studio-04");
+    },
+    TEST_TIMEOUT_MS
+  );
+
+  it(
+    "hands a host lane's message to the assistant here that last spoke to it (#13468)",
+    async () => {
+      db.sqlite = openFile("app.db");
+      const r = await harness();
+      prepare(r, 2);
+      enrollOnHost(hostSessionOf(r, null), 0);
+      const runtime = requireRemoteService("assistantMessagingRuntime");
+      // The later of this Shell's two assistants asks the host's lane something.
+      const asked = await hostToolsRuntime().sendMessage("help-proj-1-1", {
+        hostId: HOST_ID,
+        projectId: "proj-2",
+        slot: 0,
+        generation: OPEN_LANE_GENERATION,
+        text: "which schema did you pick?",
+      });
+      expect(asked).toMatchObject({ ok: true, value: { outcome: "ok" } });
+
+      const sent = runtime.sendMessage("help-proj-2-0", { text: "picked the v2 schema" });
+      if (!sent.ok) throw new Error(`send refused: ${sent.code}`);
+      const inboxOf = (sessionId: string) => {
+        const inbox = runtime.getInbox(sessionId, {});
+        return inbox.ok ? inbox.value.messages.map((m) => m.messageId) : null;
+      };
+      await waitUntil(
+        () => inboxOf("help-proj-1-1")?.includes(sent.value.messageId) === true,
+        "the message with the assistant that asked"
+      );
+      // Not the earliest one, which would have had it with no route.
+      expect(inboxOf("help-proj-1-0")).toEqual([]);
     },
     TEST_TIMEOUT_MS
   );
@@ -849,8 +1005,8 @@ describe("assistant exchanges over the real link", () => {
         return page.ok ? page.value.sent?.[0]?.state : undefined;
       };
       expect(state()).toBe("waiting-for-hub");
-      const hubInbox = runtime.getInbox("help-proj-1-0", {});
-      expect(hubInbox.ok && hubInbox.value.messages).toEqual([]);
+      const shellInbox = runtime.getInbox("help-proj-1-0", {});
+      expect(shellInbox.ok && shellInbox.value.messages).toEqual([]);
 
       await r.restoreLink();
       await waitUntil(() => state() === "submitted", "delivery once the Shell is back");
