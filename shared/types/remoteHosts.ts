@@ -278,13 +278,14 @@ export interface HostDescriptor {
   notificationsEnabled: boolean;
   /**
    * Whether this Shell's assistant and the host's assistants may message each
-   * other. On for a host added over SSH; a stored host keeps what it had.
+   * other. On for an SSH host, and kept across a change of target; the person
+   * can turn it off.
    */
   assistantMessagingEnabled: boolean;
   /**
    * Whether this Shell's hub assistant may start an assistant in one of the
-   * host's projects and enroll it for itself, without a person there. Opt-in
-   * per host, and only with messaging on.
+   * host's projects and enroll it for itself, without a person there. On for
+   * an SSH host like messaging, and only acts with messaging on.
    */
   assistantStartEnabled: boolean;
 }

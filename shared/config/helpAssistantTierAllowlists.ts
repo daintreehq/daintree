@@ -136,13 +136,18 @@ export const CORE_TIER_TOOLS = [
   "assistant.getInbox",
   "assistant.reply",
   "assistant.sendMessage",
-  // The hub's reads of other hosts' assistants (#13336). Offered only to the
-  // help session this Shell's hub was enrolled with, while a host exists.
+  // The hub's reach into other hosts' assistants: reads, messages and cancels
+  // (#13336), and starting one there (#13392). Offered only to the help session
+  // this Shell's hub was enrolled with, while a host exists; each host's own
+  // switches in Settings still decide what reaches it (#13469).
   "host.list",
   "host.listAssistants",
   "host.getTask",
   "host.listTasks",
   "host.readQuota",
+  "host.sendMessage",
+  "host.cancelTask",
+  "host.startAssistant",
   // Logs meant for someone else go through the review the user trims and saves
   // themselves, not an archive the assistant builds from the raw log folder
   // (#12882). Reserved to the assistant below; off the external list.
@@ -243,12 +248,6 @@ export const FULL_TIER_ADDONS = [
   // switch dialog is confirmed there. Registered only where Remote Hosts is.
   "host.switch",
   "project.openOnHost",
-  // The hub messaging an assistant on another host, and asking it to stop
-  // (#13336): both act on another machine, so only a `full` hub sends. Starting
-  // one there (#13392) is the same reach.
-  "host.sendMessage",
-  "host.cancelTask",
-  "host.startAssistant",
 ] as const satisfies readonly BuiltInActionId[];
 
 /**

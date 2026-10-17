@@ -28,6 +28,7 @@ import { migration028 } from "./028-quiet-sound-and-flash-defaults.js";
 import { migration029 } from "./029-store-tour-progress-per-tour.js";
 import { migration030 } from "./030-assistant-recommended-model-default.js";
 import { migration031 } from "./031-assistant-models-per-agent.js";
+import { migration032 } from "./032-assistant-host-consent-defaults.js";
 
 export const migrations: Migration[] = [
   migration002,
@@ -60,4 +61,5 @@ export const migrations: Migration[] = [
   migration029,
   migration030,
   migration031,
+  migration032,
 ];
