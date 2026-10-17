@@ -57,11 +57,20 @@ export function commitAvatarIsSquare(author: CommitAuthor): boolean {
   return resolveCommitAgentIcon(author) != null || isBotAuthor(author.name);
 }
 
-function initialsOf(name: string): string {
+function initialsOf(name: string, max: 1 | 2): string {
   const words = name.trim().split(/\s+/).filter(Boolean);
   if (words.length === 0) return "?";
+  if (max === 1) return words[0]![0]!.toUpperCase();
   if (words.length === 1) return words[0]!.slice(0, 2).toUpperCase();
   return (words[0]![0]! + words[words.length - 1]![0]!).toUpperCase();
+}
+
+// Below 20px a second letter only fits the circle at a size nobody can read,
+// so small avatars keep the first initial. Type never drops under the scale's
+// 10px floor (`text-3xs`); above it, ~42% of the edge keeps wide pairs like
+// "MW" clear of the curve.
+function initialsLayout(size: number): { max: 1 | 2; fontSize: number } {
+  return { max: size < 20 ? 1 : 2, fontSize: Math.max(10, Math.round(size * 0.42)) };
 }
 
 export interface CommitAuthorAvatarProps {
@@ -146,6 +155,7 @@ export function CommitAuthorAvatar({
   }
   const key = (author.email.trim() || author.name.trim()).toLowerCase();
   const color = CAT_COLOR_CLASSES[Math.abs(djb2(key)) % CAT_COLOR_CLASSES.length]!;
+  const layout = initialsLayout(size);
   const initials = (
     <span
       aria-hidden="true"
@@ -156,9 +166,9 @@ export function CommitAuthorAvatar({
         src != null && "absolute inset-0",
         src == null && className
       )}
-      style={{ ...box, fontSize: Math.round(size * 0.5) }}
+      style={{ ...box, fontSize: layout.fontSize }}
     >
-      {initialsOf(author.name)}
+      {initialsOf(author.name, layout.max)}
     </span>
   );
   if (src == null) return initials;
