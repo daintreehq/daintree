@@ -4643,9 +4643,9 @@ export interface PluginActivationApi {
    * a plugin's timers, forge providers, and reconciliation passes keep running
    * against state frozen at suspend. The host's own resume path resumes
    * git-status polling only while a Daintree window is visible and the screen
-   * is unlocked, and holds its post-wake refresh until a window is also
-   * focused, so a machine that wakes with the app hidden or blurred leaves that
-   * state stale until the user comes back — for an unbounded stretch, with
+   * is unlocked, and holds its explicit post-wake refresh until a window is
+   * also focused, so a machine that wakes with the app hidden or locked leaves
+   * that state stale until the user comes back — for an unbounded stretch, with
    * nothing else announcing the wake.
    *
    * Delivered at most once per resume, after the host has attempted to resync

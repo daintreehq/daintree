@@ -47,8 +47,8 @@ const DAINTREE_ENGINE_RANGE = ">=0.11.0";
  * A `contributes.panels` entry paired with a `views` entry of the
  * same `id`. The runtime (`PluginService.loadPlugin`) only registers a panel
  * kind while iterating declared `panels`, attaching the view's `componentPath`
- * when ids match; the manifest validator rejects a view with no matching panel
- * (#10620), so the scaffold must emit both. The panel points at the
+ * when ids match; the manifest validator rejects a `location: "panel"` view
+ * with no matching panel (#10620), so the scaffold must emit both. The panel points at the
  * plugin's own {@link PANEL_ICON_PATH} so a new author starts from the custom
  * icon form (#13143); swapping it for a generic id like `"puzzle"` still works.
  */
