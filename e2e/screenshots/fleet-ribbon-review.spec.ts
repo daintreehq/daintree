@@ -16,12 +16,18 @@
  *     npx playwright test --project=screenshots fleet-ribbon-review
  *
  * Env knobs:
- *   DAINTREE_SHOT_FLEET    required — any truthy value runs the capture
+ *   DAINTREE_SHOT_FLEET    required — any truthy value runs the capture; `dots` runs only
+ *                          the worktree-dot close-ups
  *   DAINTREE_SHOT_DIR      required — output directory, outside the repo
  *   DAINTREE_SHOT_THEMES   comma-separated sweep (default: daintree,bondi,namib; `all` = every built-in)
  *
  * The first theme gets every fixture plus the pointer/keyboard states; the others get
  * the SWEEP subset, which is where theme-specific collapse shows up.
+ *
+ * The worktree dots get their own close-ups (`dots-*.png`): the count chip alone, at
+ * rest, under the pointer and open, in every swept theme, plus forced colors, contrast
+ * more and a 1x display. Their cut-outs are a couple of device pixels wide, and only a
+ * chip-sized clip shows whether they read as gaps or as rings of the wrong colour.
  *
  * Hard rule, inherited from the sibling harnesses: never write a PNG that has not been
  * verified. Every capture asserts its fixture's marker is really on screen first and
@@ -34,6 +40,8 @@ import path from "path";
 import { createServer, type ViteDevServer } from "vite";
 
 const ENABLED = !!process.env.DAINTREE_SHOT_FLEET;
+const DOTS_ONLY = process.env.DAINTREE_SHOT_FLEET === "dots";
+const DOTS_PREFIX = "dots-";
 
 const OUT_DIR = process.env.DAINTREE_SHOT_DIR ? path.resolve(process.env.DAINTREE_SHOT_DIR) : "";
 
@@ -280,7 +288,7 @@ test("fleet ribbon — states, interactions and themes", async ({ page }) => {
     type: "conditional-skip",
     description: "DAINTREE_SHOT_FLEET is required for the fleet ribbon capture",
   });
-  test.skip(!ENABLED, "set DAINTREE_SHOT_FLEET=1 to run the capture");
+  test.skip(!ENABLED || DOTS_ONLY, "set DAINTREE_SHOT_FLEET=1 to run the capture");
 
   await stubViteHmrClient(page);
 
@@ -368,11 +376,119 @@ test("fleet ribbon — states, interactions and themes", async ({ page }) => {
     );
   }
 
-  const onDisk = readdirSync(OUT_DIR).filter((f) => f.endsWith(".png"));
+  const onDisk = readdirSync(OUT_DIR).filter(
+    (f) => f.endsWith(".png") && !f.startsWith(DOTS_PREFIX)
+  );
   expect(onDisk.length).toBe(written.length);
   const sweepCount = FIXTURES.filter((f) => f.sweep).length;
   expect(onDisk.length).toBeGreaterThanOrEqual(
     FIXTURES.length + (THEMES.length - 1) * sweepCount + 2 + 5
   );
   console.log(`[fleet-shots] ${onDisk.length} PNGs in ${OUT_DIR}`);
+});
+
+const CHIP = '[data-testid="fleet-armed-count-chip"]';
+const DOTS = '[data-testid="fleet-worktree-dots"]';
+
+/**
+ * The count chip alone, with a few px of ribbon around it so the cut-outs can be judged
+ * against both the chip's fill and the bar it sits on. Refuses to write unless all
+ * three dots of the cross-worktree fixture are on screen.
+ */
+async function snapChip(page: Page, file: string): Promise<string> {
+  const dots = page.locator(DOTS).first();
+  await expect(dots, `${file}: dots not visible — refusing to write`).toBeVisible();
+  await expect(dots.locator(":scope > *"), `${file}: expected three dots`).toHaveCount(3);
+  const box = await page.locator(CHIP).first().boundingBox();
+  if (!box || box.width < 8 || box.height < 8) {
+    throw new Error(`${file}: chip has no real box (${JSON.stringify(box)}) — refusing to write`);
+  }
+  const pad = 6;
+  const out = path.join(OUT_DIR, `${DOTS_PREFIX}${file}`);
+  await page.screenshot({
+    path: out,
+    clip: {
+      x: box.x - pad,
+      y: box.y - pad,
+      width: box.width + pad * 2,
+      height: box.height + pad * 2,
+    },
+  });
+  return out;
+}
+
+test("fleet worktree dots — cut-outs across states, themes and contrast modes", async ({
+  page,
+  browser,
+}) => {
+  test.info().annotations.push({
+    type: "conditional-skip",
+    description: "DAINTREE_SHOT_FLEET is required for the fleet worktree dots capture",
+  });
+  test.skip(!ENABLED, "set DAINTREE_SHOT_FLEET=1 or =dots to run the capture");
+
+  await stubViteHmrClient(page);
+  const written: string[] = [];
+  const fixture = "armed-cross-worktree";
+
+  for (const theme of THEMES) {
+    await open(page, fixture, theme, FRAME_WIDTH);
+    written.push(await snapChip(page, `rest--${theme}.png`));
+    await page.locator(CHIP).first().hover();
+    await page.waitForTimeout(250);
+    written.push(await snapChip(page, `hover--${theme}.png`));
+  }
+
+  const primary = THEMES[0]!;
+
+  {
+    await open(page, fixture, primary, FRAME_WIDTH);
+    await page.locator(CHIP).first().click();
+    await expect(page.locator(CHIP).first()).toHaveAttribute("data-state", "open");
+    // Off the chip, so the open fill is judged on its own rather than with hover on top.
+    await page.mouse.move(0, 0);
+    await page.waitForTimeout(300);
+    written.push(await snapChip(page, `open--${primary}.png`));
+  }
+
+  // The UA's forced palette follows the colour scheme, so both halves are captured.
+  for (const colorScheme of ["dark", "light"] as const) {
+    await page.emulateMedia({ forcedColors: "active", colorScheme });
+    await open(page, fixture, primary, FRAME_WIDTH);
+    const forced = await page.evaluate(() => matchMedia("(forced-colors: active)").matches);
+    if (!forced) throw new Error("forced-colors emulation did not apply — refusing to write");
+    written.push(await snapChip(page, `forced-${colorScheme}--${primary}.png`));
+    await page.locator(CHIP).first().hover();
+    await page.waitForTimeout(250);
+    written.push(await snapChip(page, `forced-${colorScheme}-hover--${primary}.png`));
+  }
+  await page.emulateMedia({ forcedColors: "none", colorScheme: null });
+
+  {
+    await page.emulateMedia({ contrast: "more" });
+    await open(page, fixture, primary, FRAME_WIDTH);
+    written.push(await snapChip(page, `contrast-more--${primary}.png`));
+    await page.emulateMedia({ contrast: "no-preference" });
+  }
+
+  {
+    // A 1x display, where a 1.5px cut-out is barely more than one device pixel and
+    // antialiasing decides whether it reads as a gap.
+    const context = await browser.newContext({ deviceScaleFactor: 1 });
+    const flat = await context.newPage();
+    try {
+      await stubViteHmrClient(flat);
+      await open(flat, fixture, primary, FRAME_WIDTH);
+      written.push(await snapChip(flat, `rest--${primary}--1x.png`));
+    } finally {
+      await context.close();
+    }
+  }
+
+  const onDisk = readdirSync(OUT_DIR).filter(
+    (f) => f.endsWith(".png") && f.startsWith(DOTS_PREFIX)
+  );
+  expect(onDisk.length).toBe(written.length);
+  expect(onDisk.length).toBe(THEMES.length * 2 + 1 + 4 + 1 + 1);
+  console.log(`[fleet-dots-shots] ${onDisk.length} PNGs in ${OUT_DIR}`);
 });
