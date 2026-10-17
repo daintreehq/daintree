@@ -19,9 +19,12 @@ type HoldStatus = Extract<TerminalFlowStatus, "paused-backpressure" | "suspended
 
 interface HoldDisplay {
   icon: LucideIcon;
+  /** The glyph's accessible name and the tooltip's heading — one name for the state. */
   label: string;
-  title: string;
+  /** Why it is happening. */
   body: string;
+  /** What happens next, on its own line so it never breaks across the cause. */
+  recovery: string;
   showsHeldDuration: boolean;
 }
 
@@ -31,8 +34,8 @@ const HOLD_DISPLAY: Record<HoldStatus, HoldDisplay> = {
   "paused-backpressure": {
     icon: Pause,
     label: "Output paused",
-    title: "Buffer overflow",
-    body: "Output paused to prevent data loss.",
+    body: "This pane is catching up on queued output.",
+    recovery: "The pause lifts on its own.",
     showsHeldDuration: true,
   },
   // FUTURE_SAB: `suspended` is only emitted by the SharedArrayBuffer transport
@@ -44,8 +47,8 @@ const HOLD_DISPLAY: Record<HoldStatus, HoldDisplay> = {
   suspended: {
     icon: Hourglass,
     label: "Output suspended",
-    title: "Output suspended",
-    body: "Streaming stalled. Recovers automatically on focus.",
+    body: "Streaming stalled.",
+    recovery: "Recovers automatically on focus.",
     showsHeldDuration: true,
   },
 };
@@ -60,6 +63,9 @@ function toHoldStatus(status: TerminalFlowStatus | undefined): HoldStatus | null
   }
 }
 
+// Trails the heading as "Output paused · 12s", the same state-then-duration
+// shape as the agent indicator's tooltip beside it, so the hold's name stays
+// the first thing read and the duration never reads as a third sentence.
 function HeldDuration({ id }: { id: string }) {
   const heldDurationMs = usePanelStore((state) => {
     const panel = state.panelsById[id];
@@ -67,8 +73,9 @@ function HeldDuration({ id }: { id: string }) {
   });
   if (heldDurationMs == null || heldDurationMs <= 0) return null;
   return (
-    <span className="text-text-secondary tabular-nums">
-      Paused for {formatElapsedDuration(heldDurationMs)}
+    <span className="font-normal text-text-secondary tabular-nums">
+      {" · "}
+      {formatElapsedDuration(heldDurationMs)}
     </span>
   );
 }
@@ -135,14 +142,17 @@ export function TerminalStatusSlot({ id, flowStatus, submitStatus }: TerminalSta
           <div className="flex flex-col gap-2">
             {holdDisplay && (
               <div className="flex flex-col gap-0.5">
-                <span className="font-medium">{holdDisplay.title}</span>
+                <span className="font-medium">
+                  {holdDisplay.label}
+                  {holdDisplay.showsHeldDuration && <HeldDuration id={id} />}
+                </span>
                 <span>{holdDisplay.body}</span>
-                {holdDisplay.showsHeldDuration && <HeldDuration id={id} />}
+                <span>{holdDisplay.recovery}</span>
               </div>
             )}
             {isSubmitSlow && (
               <div className="flex flex-col gap-0.5">
-                <span className="font-medium">Still sending</span>
+                <span className="font-medium">Prompt still sending</span>
                 <span>Later prompts stay queued so they can&apos;t merge into this one.</span>
               </div>
             )}
