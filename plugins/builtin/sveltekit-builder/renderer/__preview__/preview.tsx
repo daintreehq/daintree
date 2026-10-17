@@ -9,6 +9,7 @@ import { applyAppThemeToRoot } from "@/theme/applyAppTheme";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { DevPreviewToolDrawerChrome } from "@/components/DevPreview/DevPreviewToolDrawerChrome";
 import { usePanelStore } from "@/store/panelStore";
+import { useDevPreviewToolStore } from "@/store/devPreviewToolStore";
 import { useCliAvailabilityStore } from "@/store/cliAvailabilityStore";
 import { SiteBuilderDrawer, SiteBuilderToolbar } from "../SiteBuilderSurfaces.js";
 import { createBuilderSession } from "../inspectorController.js";
@@ -38,6 +39,7 @@ import "@/index.css";
  * Query parameters (the screenshot spec drives these):
  *   ?theme=daintree|bondi|…   built-in theme id
  *   ?fixture=element          one state; required
+ *   ?drawer=341               drawer width in px, as the user's resize leaves it
  */
 
 const params = new URLSearchParams(window.location.search);
@@ -47,6 +49,11 @@ const fixtureName: FixtureName = isFixtureName(fixtureParam) ? fixtureParam : "e
 const fixture = fixtureFor(fixtureName);
 
 applyAppThemeToRoot(document.documentElement, resolveAppTheme(themeId));
+
+// The drawer's rows switch layout on its container width, so a review of that
+// switch has to pin the width rather than inherit the default.
+const drawerParam = params.get("drawer");
+if (drawerParam) useDevPreviewToolStore.getState().setDrawerWidth(Number(drawerParam));
 
 function ptyRow(id: string, extra: Partial<PtyPanelData>): PtyPanelData {
   return {
