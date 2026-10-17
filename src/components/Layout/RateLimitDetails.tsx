@@ -262,8 +262,7 @@ function RateLimitBucketRow({ bucket, now }: { bucket: RateLimitBucket; now: num
         {remainingMs > 0 ? (
           <>
             <span aria-hidden="true">
-              Resets in{" "}
-              <span className="font-medium">{formatRateLimitCountdown(remainingMs)}</span>
+              Resets in <span className="font-medium">{formatRateLimitCountdown(remainingMs)}</span>
             </span>
             <StaticTimeAlternative verb="Resets" at={bucket.resetAt} />
           </>
