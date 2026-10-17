@@ -106,7 +106,15 @@ export function FileVideoPreview({
   }, [sourceUrl]);
 
   return (
-    <div className="flex items-center justify-center p-6 min-h-[300px]">
+    // Fills its host so the video's `max-h-full` has a height to resolve
+    // against: in a content-sized wrapper that cap computes to none, and a
+    // wide-but-short pane or a portrait clip ran past the fold, controls and
+    // all. There is no floor, so a pane shorter than one never scrolls to reach
+    // play. The inset follows the pane's width — 24px at a comfortable size,
+    // down to 8px in a small tile — so the room goes to the clip, not the frame.
+    // A content-sized host (the file panel as a dialog) has no height to fill,
+    // and there the stage sizes to the clip as before.
+    <div className="flex h-full w-full min-h-0 min-w-0 items-center justify-center p-[clamp(8px,3%,24px)]">
       {sourceUrl ? (
         <video
           // Keyed by the source URL so switching files (or reloading) remounts
@@ -148,13 +156,22 @@ export function FileVideoPreview({
         // stat, so `SkeletonBone`'s 400ms gate normally swallows it entirely. It
         // earns its place on a cold or contended disk. The mounted player still
         // loads its own metadata afterwards; that wait is the element's.
-        <div className="flex w-full max-w-md flex-col items-center gap-3">
-          <Skeleton label="Loading video" className="w-full">
-            <SkeletonBone className="aspect-video w-full" />
-          </Skeleton>
-          {/* Sibling, never nested: the wrapper's aria-busy silences mutations
-              inside its own subtree. */}
-          <SkeletonHint />
+        //
+        // The bone is fitted the way the player will be — a 16:9 guess bounded
+        // by both the stage's width and its height — so it sits where the clip
+        // lands, and the hint sits inside it where the control bar will be
+        // rather than adding to the height. The size container is what `cqh`
+        // measures; with no height to fill it would measure zero, so
+        // `aspect-video` sizes it instead.
+        <div className="flex aspect-video h-full w-full items-center justify-center [container-type:size]">
+          <div className="relative w-[min(100%,calc(100cqh*16/9))]">
+            <Skeleton label="Loading video" className="w-full">
+              <SkeletonBone className="aspect-video w-full rounded-lg" />
+            </Skeleton>
+            {/* Sibling, never nested: the wrapper's aria-busy silences mutations
+                inside its own subtree. */}
+            <SkeletonHint className="absolute inset-x-0 bottom-3 flex justify-center" />
+          </div>
         </div>
       ) : null}
     </div>
