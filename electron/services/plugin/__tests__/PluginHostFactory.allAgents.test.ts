@@ -1575,6 +1575,34 @@ describe("plugin databases", () => {
       expect(fs.existsSync(path.join(projectRoot, ".daintree"))).toBe(false);
     });
 
+    it.each([
+      ["a non-array migrations", { migrations: "CREATE TABLE t (x)" }, /VALIDATION/],
+      ["a non-string migration", { migrations: [42] }, /VALIDATION/],
+      ["non-string definitions", { definitions: 7 }, /VALIDATION/],
+      ["an ATTACH migration", { migrations: ["ATTACH 'x.db' AS x"] }, /DB_STATEMENT_NOT_ALLOWED/],
+    ])("rejects %s before asking for project-write consent", async (_name, options, error) => {
+      ensureAllowed.mockClear();
+      const { deps } = makeDeps([{ id: "ledger", location: "project", journalMode: "delete" }]);
+      const { host } = createHost(deps, INSTANCE, { projectId: PROJECT_ID, projectRoot });
+      await expect(
+        host.db.open("ledger", options as unknown as Parameters<typeof host.db.open>[1])
+      ).rejects.toThrow(error);
+      expect(ensureAllowed).not.toHaveBeenCalled();
+      expect(fs.existsSync(path.join(projectRoot, ".daintree"))).toBe(false);
+    });
+
+    it("opens with the migrations it checked, not ones swapped in during the consent prompt", async () => {
+      const { deps } = makeDeps([{ id: "ledger", location: "project", journalMode: "delete" }]);
+      const { host } = createHost(deps, INSTANCE, { projectId: PROJECT_ID, projectRoot });
+      const migrations = ["CREATE TABLE t (x)"];
+      ensureAllowed.mockImplementationOnce(async () => {
+        migrations[0] = "ATTACH 'x.db' AS x";
+      });
+      const db = await host.db.open("ledger", { migrations });
+      expect(await db.query("SELECT count(*) AS n FROM t")).toEqual([{ n: 0 }]);
+      await db.close();
+    });
+
     it("opens a project database readonly without consent and without creating anything", async () => {
       ensureAllowed.mockClear();
       const { deps } = makeDeps([{ id: "ledger", location: "project", journalMode: "delete" }]);

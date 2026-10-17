@@ -94,6 +94,7 @@ export function usePluginBridge(): void {
         try {
           const entries = actionService
             .list(undefined, { includeSchemas: true })
+            .filter((entry) => !actionService.deniesPluginDispatch(entry.id as ActionId))
             .map(toPluginManifestEntry);
           window.electron.pluginBridge.sendActionsListResponse({ requestId, entries });
         } catch {
@@ -109,9 +110,14 @@ export function usePluginBridge(): void {
           const entry = actionService.get(actionId as ActionId);
           // `get()` ignores the restricted filter that `list()` applies, so drop
           // restricted entries here to keep the single-lookup surface consistent
-          // with the catalog (restricted actions are invisible to plugins).
+          // with the catalog. Actions `dispatch` refuses for the plugin source
+          // are dropped from both, so `canDispatch` answers "restricted" for them.
           const projected =
-            entry && entry.danger !== "restricted" ? toPluginManifestEntry(entry) : null;
+            entry &&
+            entry.danger !== "restricted" &&
+            !actionService.deniesPluginDispatch(actionId as ActionId)
+              ? toPluginManifestEntry(entry)
+              : null;
           window.electron.pluginBridge.sendActionsGetResponse({ requestId, entry: projected });
         } catch {
           window.electron.pluginBridge.sendActionsGetResponse({ requestId, entry: null });

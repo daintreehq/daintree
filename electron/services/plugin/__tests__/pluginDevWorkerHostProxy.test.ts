@@ -439,6 +439,17 @@ describe("PluginDevWorkerHostProxy host.actions (#10561)", () => {
 });
 
 describe("PluginDevWorkerHostProxy host.db", () => {
+  it("rejects malformed schema options before asking main to resolve (and prompt)", async () => {
+    const { proxy, sent } = makeProxy();
+    await expect(
+      proxy.host.db.open("ledger", { migrations: [42] } as unknown as { migrations: string[] })
+    ).rejects.toMatchObject({ code: "VALIDATION" });
+    await expect(
+      proxy.host.db.open("ledger", { migrations: ["ATTACH 'x.db' AS x"] })
+    ).rejects.toMatchObject({ code: "DB_STATEMENT_NOT_ALLOWED" });
+    expect(sent.some((m) => m.type === "host-call" && m.method === "db.resolve")).toBe(false);
+  });
+
   it("resolves the location in main and opens the file in the worker", async () => {
     const { mkdtempSync, rmSync } = await import("node:fs");
     const { tmpdir } = await import("node:os");

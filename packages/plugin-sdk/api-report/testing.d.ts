@@ -113,9 +113,9 @@ interface PluginActionManifestEntry {
     /**
      * Base danger classification. `host.dispatch()` rejects `"confirm"` actions
      * with `CONFIRMATION_REQUIRED` (plugins cannot bypass the prompt) and never
-     * exposes `"restricted"` actions in the catalog — so a listed entry is always
-     * `"safe"` or `"confirm"`. Use `host.actions.canDispatch(id)` for a pre-flight
-     * check before triggering.
+     * exposes `"restricted"` or plugin-denied actions in the catalog — so a
+     * listed entry is always `"safe"` or `"confirm"`. Use
+     * `host.actions.canDispatch(id)` for a pre-flight check before triggering.
      */
     danger: ActionDanger;
     /** JSON Schema for the action's args, or undefined when it takes none. */
@@ -137,8 +137,9 @@ interface PluginActionManifestEntry {
  * - `"confirm"` — a `danger:"confirm"` action; `dispatch()` returns
  *   `CONFIRMATION_REQUIRED` (plugins cannot pre-confirm). The plugin should warn
  *   the user or route through an interactive sibling action.
- * - `"restricted"` — the action is `danger:"restricted"`, unknown, or otherwise
- *   not exposed to plugins; `dispatch()` would return `RESTRICTED` / `NOT_FOUND`.
+ * - `"restricted"` — the action is `danger:"restricted"`, unknown, or closed to
+ *   plugin dispatch (`denyPluginDispatch`); `dispatch()` would return
+ *   `RESTRICTED` / `NOT_FOUND`.
  */
 type PluginCanDispatchResult = "ok" | "confirm" | "restricted";
 
@@ -4134,16 +4135,17 @@ interface PluginActivationApi {
 interface PluginHostActionsApi {
     /**
      * List every plugin-dispatchable action as a slim
-     * {@link PluginActionManifestEntry}. Mirrors `ActionService.list()`:
-     * `danger:"restricted"` actions are filtered out, so listed entries are always
+     * {@link PluginActionManifestEntry}. Mirrors `ActionService.list()` minus
+     * the actions {@link PluginHostApi.dispatch} refuses: `danger:"restricted"`
+     * ones and those closed to plugin dispatch, so listed entries are always
      * `"safe"` or `"confirm"`. Resolves `[]` when no renderer is available or the
      * plugin has been unloaded.
      */
     list(): Promise<PluginActionManifestEntry[]>;
     /**
-     * Look up a single action by id, or `null` when it doesn't exist or is
-     * `danger:"restricted"` (restricted actions are invisible to plugins, matching
-     * {@link list}). Prefer this over {@link list} for a single lookup — it avoids
+     * Look up a single action by id, or `null` when it doesn't exist or is one
+     * {@link list} leaves out (`danger:"restricted"`, or closed to plugin
+     * dispatch). Prefer this over {@link list} for a single lookup — it avoids
      * projecting the whole catalog.
      */
     get(actionId: ActionId): Promise<PluginActionManifestEntry | null>;
@@ -4151,7 +4153,7 @@ interface PluginHostActionsApi {
      * Pre-flight a dispatch without triggering it: `"ok"` for a safe action,
      * `"confirm"` for a confirm-gated one (which {@link PluginHostApi.dispatch}
      * would reject with `CONFIRMATION_REQUIRED`), and `"restricted"` for an
-     * unknown or `danger:"restricted"` action. Lets a plugin warn the user before
+     * unknown action or one {@link get} answers `null` for. Lets a plugin warn the user before
      * triggering a confirm prompt. See {@link PluginCanDispatchResult}.
      */
     canDispatch(actionId: ActionId): Promise<PluginCanDispatchResult>;
