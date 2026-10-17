@@ -31,7 +31,7 @@ A plugin that declares `"scope": "project"` lives in a project's own repository 
 | `recipes` | Rejected — the plugin recipe registry is broadcast to every renderer unfiltered |
 | `fileDecorationProviders` | Rejected — decoration requests carry a resource path with no owning-project routing |
 | `processTools` | Rejected — detections are mirrored into the shared pty-host as one table for every terminal |
-| `mcpServers` | Rejected — the plugin-MCP IPC surface is app-global: servers are addressed by plugin and server id alone, and a tool call carries no project to check the contribution against |
+| `mcpServers` | Rejected — the plugin-MCP IPC surface is app-global: servers are addressed by plugin and server id alone, and a tool call carries no project to check the contribution against. To serve tools to the project's agents, declare `agentMcp` instead |
 | `tours` | Rejected — plugin tours are offered from the app-wide Help menu and command palette, and tour playback has no per-project visibility yet |
 | `forgeProviders` | Rejected — forge providers need synchronous host methods that cannot cross the plugin worker's message port |
 | `fileEditors` | Rejected — built-in only; the editor slot resolves through the host-bundled builtin view registry, which a project plugin has no renderer in |
@@ -497,7 +497,7 @@ export default function Dashboard(props) {
 | `styleRootAttributes` | `Readonly<Record<string, string>>` | Spread onto any container you render through `createPortal`, so the runtime-compiled Tailwind classes inside it still apply. See [Views → Styling](./views.md#styling). |
 | `settingsContext` | `{ scope: "user" \| "project"; projectId: string \| null }` \| `undefined` | Present only on a `location: "settings"` view: which settings home it is mounted in. `projectId` is `null` in the `"user"` home. See [A custom settings section](#a-custom-settings-section). |
 
-The view is wrapped in an error boundary by the host. An unhandled render error shows a diagnostics pane with "Try again" — which produces a fresh `lazy()` reference so the dynamic import is re-evaluated rather than returning the cached failed promise — alongside "Close panel", "Copy diagnostics", and "View logs".
+The view is wrapped in an error boundary by the host. An unhandled render error shows a diagnostics pane with "Try again" — which mounts a fresh attempt, and after a failed import loads the view from a new URL, since the failed module stays cached under the old one — alongside "Close panel", "Copy diagnostics", and "View logs".
 
 ### Which signal to use
 
@@ -566,7 +566,7 @@ Menu items add entries to Daintree's application menus.
         "label": "Plan from Linear…",
         "actionId": "acme.linear-planner.plan-from-issue",
         "location": "view",
-        "accelerator": "Cmd+Shift+L"
+        "accelerator": "Cmd/Ctrl+Shift+L"
       }
     ]
   }
@@ -580,7 +580,7 @@ Menu items add entries to Daintree's application menus.
 | `label` | yes | Menu entry label. |
 | `actionId` | yes | Fully-qualified action ID to dispatch. |
 | `location` | yes | One of `"terminal"`, `"file"`, `"view"`, `"help"`. Determines which top-level menu the item appears in. |
-| `accelerator` | no | Platform-neutral shortcut, e.g. `"Cmd+Shift+L"` (becomes `Ctrl+Shift+L` on Windows/Linux). |
+| `accelerator` | no | An Electron accelerator string, passed through as written except that `Cmd/Ctrl` becomes `CommandOrControl`. Write `"Cmd/Ctrl+Shift+L"` (or Electron's own `"CmdOrCtrl+Shift+L"`) for Cmd on macOS and Ctrl on Windows/Linux; a bare `Cmd` is the Command key, which Electron does not map to Ctrl there. |
 | `when` | no | Context expression gating whether the item appears. Evaluated once at menu build time against an empty context, so only constant expressions (literals and negations of unknown identifiers) are useful — for live conditions use a keybinding `when` clause instead. |
 
 ## Keybindings — _Shipped_
@@ -751,13 +751,15 @@ An identifier that names no key evaluates false, so `"worktree.hasBranch"` hides
 
 **Dispatch arguments.** A `worktree` or `terminal` item is dispatched with no arguments, so its handler cannot tell which worktree or pane was clicked; use it for actions that act on the user's current context. A `file` item is dispatched with the clicked file, as described next.
 
-**Locations:** `worktree`, `terminal`, `file`. More may be added. The `file` location is mounted on every file row Daintree renders — the Review Hub's changed-file rows, the worktree card's changed-files list, the file browser's tree and folder listing, and the diff viewer's file sidebar: a contributed `file` item appears in the right-click menu of a file row on all four surfaces, and its action is dispatched with `{ path, worktreePath, status }` for the clicked file (so your handler receives the file, not `undefined`) — `path` is always absolute, while `worktreePath` and `status` are each omitted when the row has no worktree root or no git status, so an unchanged file in the file browser arrives as `{ path }` alone. Every file row carries the menu whether or not a plugin contributes to it: your items are appended below Daintree's own file actions, so a single `file` contribution reaches all four surfaces without any per-surface work.
+**Locations:** `worktree`, `terminal`, `file`. More may be added. The `file` location is the one file menu Daintree shares across every surface that shows a file — the Review Hub's changed-file rows, the worktree card's changed-files list, the file browser's tree, folder listing and change summary, the diff viewer's file sidebar, and the right-click menu on a file's own content in the file browser and in a file panel — so a single `file` contribution reaches all of them without any per-surface work. Its action is dispatched with `{ path, worktreePath, status }` for the clicked file (so your handler receives the file, not `undefined`) — `path` is always absolute, while `worktreePath` and `status` are each omitted when the row has no worktree root or no git status, so an unchanged file in the file browser arrives as `{ path }` alone.
+
+**Where the items go.** On a file menu and on the worktree card's menu, contributed items sit in an **Extensions** submenu, one group per plugin (labelled when more than one plugin contributes), after Daintree's own entries and before the destructive ones — Discard changes and Delete file on a file, Delete worktree… on a worktree. The submenu appears only when at least one item passes its `when`, and a `worktree` item is not offered on a bare workspace root. On a terminal, contributed items are appended at the end of the right-click menu.
 
 Context menus follow the same `actionId` dispatch pattern as menu items; only a `file`-location item receives the clicked subject as dispatch args. A `terminal`-location item is dispatched with no arguments and appears on every terminal. To put entries on your own panels, including a PTY-backed one, that know which panel was right-clicked, use the panel's `menu` or [runtime menu entries](#runtime-menu-entries) instead: those are dispatched with `{ panelId }`. Two built-in actions pair well here: `file.openDiff` opens the side-by-side diff for the dispatched `{ path, worktreePath, status }`, and `panel.openPluginPanel` spawns (or focuses) one of your plugin panels, passing `initialArgs` straight through to the view's `initialArgs` prop — so a context-menu item can open your panel scoped to the file the user clicked.
 
 ## MCP servers — _Shipped_
 
-Declares Model Context Protocol servers the plugin ships. The manifest key is `mcpServers` (it was `experimental_mcpServers` until #10466 — the old key is still accepted as a deprecated alias that logs a warning). The runtime is live: `PluginMcpSupervisor` (`electron/services/PluginMcpSupervisor.ts`) spawns and supervises the stdio subprocess, and IPC handlers in `electron/ipc/handlers/pluginMcp.ts` wire start/restart/listTools/getFullSchema. See [Agent extensions → MCP servers](./agent-extensions.md#mcp-servers) for the full story.
+Declares Model Context Protocol servers the plugin ships. The manifest key is `mcpServers` (it was `experimental_mcpServers` until #10466 — the old key is still accepted as a deprecated alias that logs a warning). The runtime is live: `PluginMcpSupervisor` (`electron/services/PluginMcpSupervisor.ts`) spawns and supervises the stdio subprocess, and IPC handlers in `electron/ipc/handlers/pluginMcp.ts` wire list/restart/listTools/getFullSchema/callTool. See [Agent extensions → MCP servers](./agent-extensions.md#mcp-servers) for the full story.
 
 ```json
 {
@@ -779,7 +781,7 @@ Declares Model Context Protocol servers the plugin ships. The manifest key is `m
 
 | Field | Required | Notes |
 | --- | --- | --- |
-| `id` | yes | Letters, digits, `.`, `_` and `-`, at most 64 characters. Namespaced at runtime as `{pluginId}.{id}`. |
+| `id` | yes | Letters, digits, `.`, `_` and `-`, at most 64 characters. Scoped to the plugin: a server is addressed by your plugin id and this id. |
 | `name` | yes | Display name. |
 | `command` | yes | Any non-empty string — typically `node`, `python` or `npx`, resolved on `PATH`. |
 | `args` | no | Argv after the command. A relative path here resolves against the plugin directory, the server's working directory. |
@@ -789,9 +791,9 @@ Declares Model Context Protocol servers the plugin ships. The manifest key is `m
 
 **What a `${settings:…}` token resolves to.** The token is substituted at spawn time from the plugin's stored **user-scope** value only. A string is used as-is, a number or boolean is converted to its string form, and an object or array is JSON-encoded. An unset value becomes the empty string — the setting's declared `default` is not used — and so does a token naming a `project` or `local` setting, which this path never reads.
 
-Daintree supervises the process: lazy spawn on first tool use, hard kill on Daintree exit, and on an unexpected crash it transitions the server to `crashed` and rejects pending and subsequent tool calls until an explicit manual restart — there is no automatic retry or backoff.
+Daintree supervises the process: lazy spawn the first time its tools are listed or called, hard kill on Daintree exit, and on an unexpected crash it transitions the server to `crashed` and rejects the calls in flight. The supervisor never respawns a crashed server on its own and has no retry or backoff; the next tool listing, schema fetch or call spawns it again, as a manual restart does.
 
-Daintree is the **client** of this server. Its tools are reachable only through the `window.electron.pluginMcp` IPC surface, whose tool consumer is the in-app Daintree Assistant; the plugin manager's settings UI starts, restarts and inspects the server. They are not merged into the `tools/list` that agents running in Daintree's terminals see. To give terminal agents tools, declare an [agent MCP endpoint](#agent-mcp-endpoints--shipped) instead.
+Daintree is the **client** of this server. Its tools are reachable only through the `window.electron.pluginMcp` IPC surface, which nothing in Daintree calls for tools today; the plugin manager's settings UI lists, restarts and inspects the server. They are not merged into the `tools/list` that agents running in Daintree's terminals see. To give terminal agents tools, declare an [agent MCP endpoint](#agent-mcp-endpoints--shipped) instead.
 
 **Secret rotation auto-restart:** when a **user-scope** setting changes, every currently running server (status `ready` or `crashed`) that references it via `${settings:settingId}` in its `command`, `args`, or `env` is automatically restarted so the new value is folded in at the next spawn. The restart is debounced ~1s, so a burst of edits coalesces into one respawn. Servers that were never lazily started stay stopped — a settings change never eagerly boots a server.
 
@@ -804,7 +806,7 @@ Tool use is gated by a consent/permission/audit subsystem (`electron/services/pl
 
 ## Agent MCP endpoints — _Shipped_
 
-Declares the tools the plugin serves to agents running in Daintree's terminals. This is the opposite direction from [`mcpServers`](#mcp-servers--shipped): Daintree hosts the plugin's MCP server on its own loopback listener and the agent is the client. Each plugin is one server, `daintree-<name>`, named by the manifest's top-level [`mcpName`](./manifest.md#mcpname); the tools you register are listed on it beside the host's read-only [database tools](#databases--shipped) when the plugin declares a database. The manifest entry is declarative only — the tools arrive at activation through [`host.mcp.registerTools`](./host-api.md#mcpregistertools). See [Agent extensions → Agent MCP endpoints](./agent-extensions.md#agent-mcp-endpoints) for the worked example, the naming rule and troubleshooting.
+Declares the tools the plugin serves to agents running in Daintree's terminals. This is the opposite direction from [`mcpServers`](#mcp-servers--shipped): Daintree hosts the plugin's MCP server on its own loopback listener and the agent is the client. Each plugin is one server, `daintree-<name>`, named by the manifest's top-level [`mcpName`](./manifest.md#mcpname); the tools you register are listed on it beside the host's read-only [database tools](#databases--shipped) and any [declared queries](#declared-queries) when the plugin declares a database. The manifest entry is declarative only — the tools arrive at activation through [`host.mcp.registerTools`](./host-api.md#mcpregistertools). See [Agent extensions → Agent MCP endpoints](./agent-extensions.md#agent-mcp-endpoints) for the worked example, the naming rule and troubleshooting.
 
 ```json
 {
@@ -846,7 +848,7 @@ The entry is strict: an unknown field (a `url`, a `command`) is rejected rather 
 
 The cap was 8 tools before Daintree 0.39.0. An older host rejects a larger roster whole: `registerTools` throws, and unless the plugin catches it, activation fails. A plugin that registers more than 8 tools should set `engines.daintree` to `>=0.39.0`. The range is advisory — an older Daintree still installs and loads the plugin — but it shows the user a compatibility warning that explains the failure.
 
-**Giving it access.** Declaring the endpoint exposes nothing, for an installed plugin or a project one. Each plugin has one agent access setting — **Off** (the default), **Read only** (the database tools) or **Read and write** (the database tools and your own tools) — in **Project settings → Plugins → Agent tools**. It is stored in Daintree's own user store, keyed by the plugin _instance_ so an answer for an installed plugin never reaches a project plugin with the same manifest id, and never in the repository. An installed plugin can also be set once for every project, and a project's own setting overrides that. A project plugin's own repository can set a default in `.daintree/mcp.json`, which never reaches an installed plugin and which the user's answer overrides ([Agent extensions → Project defaults](./agent-extensions.md#project-defaults-daintreemcpjson)). Lowering the setting revokes every live credential it no longer allows. Once the plugin has access, each agent launched in that project afterwards receives a credential for its server — Claude Code, Codex, Gemini CLI, opencode, Copilot CLI, Amp, Qwen Code and Mistral Vibe, each in its own launch mechanism; an agent already running must be relaunched to get it ([Agent extensions → Reaching an agent](./agent-extensions.md#reaching-an-agent)). The Daintree MCP server must be enabled in Settings → MCP server, since the plugin's server is served on its listener.
+**Giving it access.** Declaring the endpoint exposes nothing, for an installed plugin or a project one. Each plugin has one agent access setting — **Off** (the default), **Read only** (the database tools and declared read queries) or **Read and write** (those, declared write queries and your own tools) — in **Project settings → Plugins → Agent tools**. It is stored in Daintree's own user store, keyed by the plugin _instance_ so an answer for an installed plugin never reaches a project plugin with the same manifest id, and never in the repository. An installed plugin can also be set once for every project, and a project's own setting overrides that. A project plugin's own repository can set a default in `.daintree/mcp.json`, which never reaches an installed plugin and which the user's answer overrides ([Agent extensions → Project defaults](./agent-extensions.md#project-defaults-daintreemcpjson)). Lowering the setting revokes every live credential it no longer allows. Once the plugin has access, each agent launched in that project afterwards receives a credential for its server — Claude Code, Codex, Gemini CLI, opencode, Copilot CLI, Amp, Qwen Code and Mistral Vibe, each in its own launch mechanism; an agent already running must be relaunched to get it ([Agent extensions → Reaching an agent](./agent-extensions.md#reaching-an-agent)). The Daintree MCP server must be enabled in Settings → MCP server, since the plugin's server is served on its listener.
 
 **Available under `scope: "project"`.** Unlike `mcpServers` and `skills`, this surface has a project axis: every credential is minted for one terminal launch in one project, the route re-checks that project's access setting on every request, and a project plugin's endpoint can only be granted to the project that loaded it. See [Trust model → Agent MCP endpoints](./trust-model.md#agent-mcp-endpoints-mcpexpose) for the credential and consent model.
 
@@ -945,11 +947,12 @@ The result is `{ databaseId, changes, lastInsertRowid }`, plus `columns`, `rows`
 
 A query the host cannot serve safely rejects the manifest at load, with an error naming the query (`database_query_unservable` and friends):
 
-- the SQL is not exactly one statement (a trailing `;` or comment is fine);
+- the SQL is not exactly one statement (a trailing `;` or comment is fine), or leaves a quote or `/*` comment unterminated;
 - a `"read"` query is not a `SELECT`, `WITH` or `VALUES` statement, or contains `INSERT`, `UPDATE`, `DELETE` or `REPLACE` anywhere outside a string or quoted name — `WITH … DELETE` is a write — so quote a column that shares one of those names (`"update"`); `replace(…)` the string function is fine;
 - a `"write"` query is not one `INSERT`, `REPLACE`, `UPDATE` or `DELETE` statement, or its `WITH` clause does not lead into one, so a schema change, a pragma, `BEGIN` or `COMMIT`, or a read is refused;
 - the SQL calls `load_extension()`;
 - a placeholder has no param, a param has no placeholder, or a placeholder is positional (`?`), uses two spellings of one name, or uses SQLite's `$name::x` or `$name(…)` forms;
+- the input schema built from `params` is larger than 8 KiB serialized;
 - the name is `database_schema` or `database_query` or is declared twice (`database_query_name_reserved`, `database_query_name_duplicate`);
 - the plugin declares more than 16 queries across all its databases (`database_query_limit`).
 
@@ -1052,7 +1055,7 @@ Named multi-terminal launch layouts a plugin ships. A contributed recipe is regi
 
 Welcome tours that play in the same dialog as the Daintree tour. An enabled plugin's tours register when it loads and are withdrawn when it is disabled, uninstalled or hidden in the project; a tour that is open at that moment closes, keeping the viewer's progress. A reload closes it too, and reopening plays the new version.
 
-A tour without `panelKind` is a **plugin tour**, offered from Help and the command palette under the plugin's display name (for example "SvelteKit Site Builder: Welcome Tour"). A tour with `panelKind` is a **panel tour**, opened from that panel's three-dots menu as "<Panel name> Welcome Tour"; it keeps to a couple of chapters but is held to the same standard as any other tour. The panel's Welcome Tour item appears once its tour is registered and disappears when it is withdrawn, so the item never appears with nothing to play.
+A tour without `panelKind` is a **plugin tour**, offered from Help and the command palette as "<plugin display name>: <title>" (for example "SvelteKit Site Builder: Welcome Tour"). A tour with `panelKind` is a **panel tour**, opened from that panel's three-dots menu as "<Panel name> Welcome Tour"; it keeps to a couple of chapters but is held to the same standard as any other tour. The panel's Welcome Tour item appears once its tour is registered and disappears when it is withdrawn, so the item never appears with nothing to play.
 
 ```json
 {
@@ -1144,7 +1147,7 @@ Available to `"scope": "project"` plugins alone. An installed plugin is bound to
 
 Rules:
 
-- **Slot-replacing, never removing.** Surrounding chrome is untouched: the project switcher, the sidebar and the worktree dashboard stay where they are. The host draws a thin strip of its own above the region, outside the view's box, carrying a switch between the panel name and the stock launcher and, while the surface shows, a "No panels open" label and the launcher's search entry, so a broken or half-finished surface cannot strand the user. Nothing overlaps the view, so it needs no reserved space.
+- **Slot-replacing, never removing.** Surrounding chrome is untouched: the project switcher, the sidebar and the worktree dashboard stay where they are. The host draws a thin strip of its own above the region, outside the view's box, carrying a switch between the panel name and the stock launcher and, while the surface shows, an icon button for the launcher's search, so a broken or half-finished surface cannot strand the user. Nothing overlaps the view, so it needs no reserved space.
 - **The user decides whether it stays.** The first time a claimed surface would show in a project, a notice names the plugin and offers to keep it or use the launcher. The answer, whether given there or with the strip's switch, is remembered per project in Daintree's own settings, never in the repository, and is shown with a reset under the project's plugin settings. A slot that passes to a different plugin asks again.
 - **`viewId` must name a declared `contributes.views` entry**, cross-checked at validation like any other dangling reference (`surface_view_ref_unknown`). It must not name a panel with `hasPty: true` (`surface_view_ref_pty`) — a PTY panel is rendered by the terminal host and never loads the view module, so the claim would hold the slot and draw nothing — nor a `location: "settings"` view (`surface_view_ref_settings`), which renders only in the plugin's settings.
 - **At most one plugin per slot per project.** First claim wins; a second is refused and logged with both plugin names, so the author can tell which manifest to change. Never a silent last-wins. The refused plugin still loads and its other contributions work, and its claim is remembered — it inherits the slot if the incumbent later unloads.
@@ -1232,7 +1235,7 @@ Registers a provider that decorates files (or other scoped resources) with statu
 | Field | Required | Notes |
 | --- | --- | --- |
 | `id` | yes | Namespaced at runtime as `{pluginId}.{id}`. Must match the `id` passed when the provider binds at runtime. |
-| `scopes` | yes | Non-empty list of scope patterns the provider answers for. A scope like `worktree-diff:*` matches every resource the host routes under the `worktree-diff` namespace; the host dispatches decoration pulls to the first provider whose scope matches. |
+| `scopes` | yes | Non-empty list of scope patterns the provider answers for: an exact scope string, or a prefix ending in `*` — `worktree-diff:*` matches every resource the host routes under the `worktree-diff` namespace, and `*` alone matches every scope. A decoration pull goes to every provider with a matching pattern, activating its plugin first if needed, and their answers are merged (below). |
 
 **Host-routed scopes:**
 
@@ -1245,7 +1248,7 @@ Keep these scopes distinct: a provider registered for `worktree-diff:*` is **not
 
 The manifest entry is read eagerly so the host's decoration-routing table (`electron/services/fileDecorationRegistry.ts`) knows which provider owns a scope before any plugin code runs; the implementation binds lazily in `activate()`. See [Host API](./host-api.md) for the runtime registration signature.
 
-When two providers declare the **same exact scope string**, their decorations merge first-writer-wins per field in plugin load order — so the second provider's badge for a shared path can be silently dropped. The host emits a `console.warn` at registration time naming both plugins and the duplicated scope so the collision is detectable. (Broad/narrow coexistence — a `worktree-files:*` provider alongside a `worktree-files:/some/path` one — is intentional and not warned.)
+When more than one provider matches a scope, their decorations merge per path and per field (`badge`, `tooltip`, `color`, `url`), first writer wins in plugin load order — so the second provider's badge for a shared path is silently dropped. A provider that rejects, or doesn't answer within 3 seconds, is skipped for that pull, and entries for paths the host didn't ask about are discarded. When two plugins declare the **same exact scope string**, the host emits a `console.warn` at registration time naming both plugins and the duplicated scope so the collision is detectable. (Broad/narrow coexistence — a `worktree-files:*` provider alongside a `worktree-files:/some/path` one — is intentional and not warned, though the two still merge the same way.)
 
 From your `activate()` subscriptions and timers, call `host.invalidateFileDecorations(scope, paths?)` to signal that a scope's decorations changed and any renderer showing them should re-pull.
 
@@ -1395,9 +1398,9 @@ A plugin agent is launchable and selectable as a named entry in the effective re
 | `scanLineCount` / `promptScanLineCount` | no | Integer line-window bounds (1–1000) for the matcher. |
 | `debounceMs` / `promptFastPathMinQuietMs` | no | Integer millisecond timings (0–600000). |
 | `primaryConfidence` / `fallbackConfidence` / `promptConfidence` / `completionConfidence` | no | Confidence weights in `[0, 1]` for a matched tier. |
-| `titleStatePatterns` | no | `{ working, waiting }` string arrays (≤50 entries, each ≤256 chars) matched against the terminal title. |
+| `titleStatePatterns` | no | `{ working, waiting }`, both required: arrays (≤50 entries, each 1–256 characters) of plain, case-sensitive substrings matched against the terminal title — not regular expressions. `working` is checked first. |
 
-Every pattern array holds at most 50 entries, and each entry is 1–256 characters and must compile as a JavaScript regular expression.
+Every other pattern array holds at most 50 entries, and each entry is 1–256 characters and must compile as a JavaScript regular expression.
 
 ## Process tools — _Shipped_
 

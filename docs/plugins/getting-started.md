@@ -19,7 +19,7 @@ cd my-first-plugin
 
 `npx daintree-plugin new my-first-plugin` is equivalent — `create-daintree-plugin` is the npm-init shim that forwards to the same scaffolder. Through `npm create`, the scaffolder's own flags go after a `--`, or npm keeps them: `npm create daintree-plugin@latest my-first-plugin -- --publisher acme --template command --yes` scaffolds with no prompts.
 
-> **Today's npm release.** The packages on npm are at 0.1.0, and the repository is ahead of them. Every step on this page works with 0.1.0 except three, each marked where it appears (the 0.1.0 CLI also refuses manifests that declare `databases`, `tours` or a settings view, which this page doesn't use): importing the UI kit in a [view](#add-a-view) needs a small stopgap, `daintree-plugin lint` doesn't exist yet (skip it), and `daintree-plugin dev` prints no metrics table.
+> **Today's npm release.** The packages on npm are at 0.1.0, and the repository is ahead of them. Every step on this page works with 0.1.0 except three, each marked where it appears (the 0.1.0 CLI also refuses manifests that use anything added since — `databases`, `tours`, a settings view, the settings fields `required` and `editor`, a panel `toolbar`, `mcpName`, `platforms`, `remote`, and the `terminal:read`, `project:dispatch` and `panel:focus-read` capabilities — none of which this page uses): importing the UI kit in a [view](#add-a-view) needs a small stopgap, `daintree-plugin lint` doesn't exist yet (skip it), and `daintree-plugin dev` prints no metrics table.
 
 The scaffolder asks for a publisher segment, a display name, and a template (command, view, mcp, or full) and generates, for the `command` template:
 
@@ -38,7 +38,7 @@ my-first-plugin/
 └── .gitignore
 ```
 
-The `view` and `full` templates add `src/panel.tsx`; `mcp` and `full` add `src/server.ts` and `vite.config.server.ts`, the Node-target build for the MCP server. The scaffold also writes `.claude/skills/daintree-tour/`, the tour-authoring skill ([Tours](./tours.md)). Not in the 0.1.0 release on npm; it ships in the next one.
+The `view` and `full` templates add `src/panel.tsx`, the panel's own icon at `icons/panel.svg`, and a [panel preview](./dev-loop.md#preview-a-panel-outside-daintree) — `review/panel.stories.tsx`, `review/panel.spec.ts`, `playwright.config.ts` and a `test:preview` script; `mcp` and `full` add `src/server.ts` and `vite.config.server.ts`, the Node-target build for the MCP server. The scaffold also writes `.claude/skills/daintree-tour/`, the tour-authoring skill ([Tours](./tours.md)). The icon, the preview and the skill are not in the 0.1.0 release on npm; they ship in the next one.
 
 `plugins/sample/hello-daintree/` in the Daintree repository is the host's own reference plugin. Read it for the host API, but don't copy it as a starting point: it is in the reserved `daintree.*` namespace, which `validate` and the installer refuse for a third-party plugin, and it is unbuilt — its `main` names `main/index.js`, and the directory holds only `main/index.ts`. Start from the scaffold.
 
@@ -98,7 +98,7 @@ export async function activate(host: PluginHostApi): Promise<() => void> {
 }
 ```
 
-`activate` runs the first time something needs the plugin — here, the first run of the command — and the returned disposer cleans up on unload. Await `registerAction`: it returns a promise, and an unawaited one can let activation finish before the registration lands. Actions registered through `host.registerAction` are unregistered automatically, so this disposer is a no-op. Keep the `contributes.commands` entry in `plugin.json` alongside the imperative registration: the manifest entry is what puts the command in the palette before your code has run, and dispatching it is what triggers activation. An imperative `registerAction` for the same id supersedes any `src/{id}.js` file, so the two paths don't fight — what you should not do is ship both a compiled `src/say-hello.js` handler and an imperative registration and expect the file to win.
+`activate` runs as soon as the plugin is installed or updated, and after a restart the first time something needs it — here, the first run of the command — and the returned disposer cleans up on unload. Await `registerAction`: it returns a promise, and an unawaited one can let activation finish before the registration lands. Actions registered through `host.registerAction` are unregistered automatically, so this disposer is a no-op. Keep the `contributes.commands` entry in `plugin.json` alongside the imperative registration: the manifest entry is what puts the command in the palette before your code has run, and dispatching it is what triggers activation. An imperative `registerAction` for the same id supersedes any `src/{id}.js` file, so the two paths don't fight — what you should not do is ship both a compiled `src/say-hello.js` handler and an imperative registration and expect the file to win.
 
 ## Run it
 
@@ -138,7 +138,7 @@ interface Window {
 }
 ```
 
-The stopgaps cover the kit import and the bridge types only. The newer SDK hooks (`useCachedHostChannel` and the other performance hooks), synced collections and the database types are not in SDK 0.1.0: Not in the 0.1.0 release on npm; it ships in the next one.
+The stopgaps cover the kit import and the bridge types only. The newer SDK hooks (`useCachedHostChannel` and the other performance hooks), synced collections and the database types are not in SDK 0.1.0; they ship in the next release.
 
 Run `npx daintree-plugin lint` before you package: it flags the patterns that make a view slow or look foreign, and names the fix. Not in the 0.1.0 release on npm; it ships in the next one — skip this step until then.
 
