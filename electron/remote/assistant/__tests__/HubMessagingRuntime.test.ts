@@ -770,16 +770,24 @@ describe("HubMessagingRuntime (#13336)", () => {
       expect(client.send.mock.calls[0]![2]).toEqual(RUN_OTHER_PROJECT);
     });
 
-    it("remembers the route for a send whose answer was lost: the host may have it", async () => {
+    it("remembers the route for a fresh send whose answer was lost: the host may have it", async () => {
       client.send.mockResolvedValueOnce({ status: "unknown", messageId: "maybe" });
-      await expect(
-        runtime.sendMessage("sibling", { ...SEND, taskId: "maybe" })
-      ).resolves.toMatchObject({ value: { outcome: "ambiguous" } });
+      await expect(runtime.sendMessage("sibling", SEND)).resolves.toMatchObject({
+        value: { outcome: "ambiguous" },
+      });
       expect(routes.remember).toHaveBeenCalledWith(
         "studio",
         { projectId: "proj-2", slot: 0 },
         RUN_SIBLING
       );
+    });
+
+    it("leaves the route alone for a resend whose answer was lost: it may be another assistant's", async () => {
+      client.send.mockResolvedValueOnce({ status: "unknown", messageId: "maybe" });
+      await expect(
+        runtime.sendMessage("sibling", { ...SEND, taskId: "maybe" })
+      ).resolves.toMatchObject({ value: { outcome: "ambiguous" } });
+      expect(routes.remember).not.toHaveBeenCalled();
     });
 
     it("keeps the first asker's route when another assistant resends its message", async () => {

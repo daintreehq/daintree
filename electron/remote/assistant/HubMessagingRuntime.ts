@@ -657,7 +657,8 @@ export class HubMessagingRuntime implements HostMessagingRuntimeHandle {
           caller
         );
         if (sent.status === "unknown") {
-          remember();
+          // Only a fresh taskId is surely new: a resend may be another assistant's message.
+          if (args.taskId === undefined) remember();
           return { ...this.outcome("ambiguous"), ...base };
         }
         if (sent.disposition === "created") remember();
