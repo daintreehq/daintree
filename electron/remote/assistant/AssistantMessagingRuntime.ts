@@ -465,7 +465,10 @@ export class AssistantMessagingRuntime {
    * refused.
    */
   admit(record: ExchangeRecord, envelope: InboxEnvelope): void {
-    if (!this.isStanding(record.receiver)) throw new AssistantMessagingError("NOT_ELIGIBLE");
+    const admissible = isOpenReceiver(record.receiver)
+      ? this.listensAsHost()
+      : this.isStanding(record.receiver);
+    if (!admissible) throw new AssistantMessagingError("NOT_ELIGIBLE");
     this.deps.inbox.admit(record, envelope);
   }
 
@@ -477,7 +480,7 @@ export class AssistantMessagingRuntime {
    * meanwhile, so it may have given up on a message it had already read.
    * Answered and question-asking exchanges are left alone. Returns how many
    * were announced, or null while the lane can't be woken yet: messaging is
-   * paused, or its run isn't running yet.
+   * paused, the lane isn't taking messages, or its run isn't running yet.
    */
   reannounce(lane: LaneRef): number | null {
     const rewake = this.deps.rewake;
@@ -486,8 +489,9 @@ export class AssistantMessagingRuntime {
     let waiting = false;
     if (this.listensAsHost()) {
       const open = this.deps.policy.checkOpen(lane, "wake");
+      // Anything that closes it may lift (the pause, the setting, a run not up yet): owed till then.
       if (open.ok) receivers.push(openReceiverFor(lane));
-      else waiting = open.reason === "paused" || open.reason === "unavailable";
+      else waiting = true;
     }
     const enrollment = this.deps.policy.getEnrollment(lane);
     if (enrollment?.enrolledBy.kind === "local") {
@@ -591,11 +595,12 @@ export class AssistantMessagingRuntime {
 
   /**
    * Whether entries for `receiver` may still be read: a lane's open address
-   * stays while this machine listens as a host, whatever run the lane is on;
-   * an enrollment's goes with it.
+   * stays, whatever run the lane is on and even while this machine stops
+   * listening for a while (its lanes read it once listening again, under the
+   * exchange's own expiry); an enrollment's goes with it.
    */
   private isStanding(receiver: ExchangeReceiver): boolean {
-    if (isOpenReceiver(receiver)) return this.listensAsHost();
+    if (isOpenReceiver(receiver)) return true;
     return this.deps.policy
       .listEnrollments()
       .some((enrollment) => this.isReceiverOf(enrollment, receiver));

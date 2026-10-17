@@ -21,17 +21,18 @@ export const AssistantLinkMethod = {
   /** Shell → Host: bind this session to the Shell's sender credential for this host. */
   AUTHENTICATE: "assistant.authenticate",
   /**
-   * Shell → Host: the lanes this session's Shell can message (every one open
-   * to other machines; an older host, only those this session enrolled), and
-   * every assistant running on the host with its agent.
+   * Shell → Host: the lanes whose own messages go to this session's Shell,
+   * every lane open to other machines (absent from an older host, where the
+   * first are all a Shell can message), and every assistant running on the
+   * host with its agent.
    */
   LIST_LANES: "assistant.list-lanes",
   /**
-   * Shell → Host: a lane this session's hub just started in one of the host's
-   * projects (#13392), by help session id. The lane answers as open to this
-   * Shell; when the run came through one of its views and no other Shell holds
-   * it, the lane's own messages go to this Shell's hub too. An older host
-   * enrolls it, and only while no other Shell holds the lane.
+   * Shell → Host: route to this session's Shell the messages a lane its hub
+   * just started in one of the host's projects (#13392) writes of its own:
+   * only that run, by help session id, only when it came through one of this
+   * Shell's views, and only while no other Shell holds the lane. On an older
+   * host this is also what lets the Shell message the lane at all.
    */
   ENROLL_STARTED: "assistant.enroll-started",
   /**
@@ -133,12 +134,6 @@ export const EnrolledLaneSchema = z
     available: z.boolean(),
     /** The agent CLI the lane's assistant runs; absent while it isn't running. */
     agentId: id.optional(),
-    /**
-     * Whether the lane's own messages go to the asking Shell's hub: the run
-     * came through one of its views. Absent from a host whose every listed
-     * lane was enrolled for the asking Shell, which then means true.
-     */
-    routed: z.boolean().optional(),
   })
   .strip();
 export type EnrolledLane = z.infer<typeof EnrolledLaneSchema>;
@@ -168,6 +163,12 @@ export type RunningAssistant = z.infer<typeof RunningAssistantSchema>;
 export const LaneListSchema = z
   .object({
     lanes: z.array(EnrolledLaneSchema).max(MAX_LISTED_LANES),
+    /**
+     * Every lane open to other machines (#13467), which any authenticated
+     * Shell may message. Absent from an older host: there `lanes` are all
+     * this Shell can message.
+     */
+    open: z.array(EnrolledLaneSchema).max(MAX_LISTED_LANES).optional(),
     /** Absent from a host older than the listing of every assistant. */
     assistants: z.array(RunningAssistantSchema).max(MAX_LISTED_LANES).optional(),
   })

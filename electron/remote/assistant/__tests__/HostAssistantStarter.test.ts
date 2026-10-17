@@ -213,22 +213,6 @@ describe("HostAssistantStarter", () => {
     expect(calls).not.toContain("enroll 0 session-0");
   });
 
-  it("never answers with a lane open to every Shell that this one didn't start (#13467)", async () => {
-    lanes.lanes = [
-      {
-        projectId: PROJECT,
-        slot: 0,
-        generation: "open",
-        available: true,
-        agentId: "claude",
-        routed: false,
-      },
-    ];
-    lanes.assistants = [{ projectId: PROJECT, slot: 0, agentId: "claude" }];
-    const result = await starter.start(HOST, PROJECT, { authorized });
-    expect(result).toMatchObject({ status: "ready", slot: 1, started: true });
-  });
-
   it("starts another on request even with one enrolled for this Shell there", async () => {
     lanes.lanes = [
       { projectId: PROJECT, slot: 0, generation: "g0", available: true, agentId: "claude" },
@@ -423,21 +407,6 @@ describe("HostAssistantStarter", () => {
       expect(deps.prepareView).toHaveBeenCalledTimes(1);
       expect(deps.prepareView).toHaveBeenCalledWith(HOST, PROJECT, "/repos/one");
       expect(calls).toEqual([]);
-    });
-
-    it("leaves alone a project whose lanes are open to this Shell but not its own (#13467)", async () => {
-      lanes.lanes = [
-        {
-          projectId: PROJECT,
-          slot: 0,
-          generation: "open",
-          available: true,
-          agentId: "claude",
-          routed: false,
-        },
-      ];
-      await expect(starter.reattach(HOST, authorized)).resolves.toEqual([]);
-      expect(deps.prepareView).not.toHaveBeenCalled();
     });
 
     it("stops when consent is withdrawn while it looks the project up", async () => {

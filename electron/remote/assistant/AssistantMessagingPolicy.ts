@@ -642,28 +642,33 @@ export class AssistantMessagingPolicy {
   }
 
   /**
-   * The person turned the lane's current run off: it takes no new message
-   * from another machine, and whatever it was enrolled as (this Shell's hub,
-   * or another Shell's return route) ends. Only that run, as `unenroll`'s
+   * The person turned the lane's current run off, from a view of `by`: it
+   * takes no new message from another machine, and no Shell's hub hears from
+   * it. Turned off on this machine, it stops being this machine's hub too; a
+   * remote view's off never touches that. Only that run, as `unenroll`'s
    * decline; a relaunch accepts again. False when nothing is running there.
    */
-  declineRun(lane: LaneRef): boolean {
+  declineRun(lane: LaneRef, by: MessagingShell): boolean {
     const key = laneKey(lane);
-    if (key === null) return false;
+    if (key === null || !isValidShell(by)) return false;
     const run = this.liveRun(lane);
     if (!run) return false;
     const existing = this.current(key);
-    if (existing) {
+    const ends =
+      existing !== undefined && (existing.enrolledBy.kind === "remote" || by.kind === "local");
+    if (ends) {
       this.enrollments.delete(key);
       this.ended.delete(key);
     }
+    // Turned off again, a hub it was stays one the person turned off.
+    const wasHub = this.isDeclined(key, run) && this.declined.get(key)?.hub === true;
     this.declined.set(key, {
       projectId: lane.projectId,
       slot: lane.slot,
       sessionId: run.running.sessionId,
       terminalId: run.running.terminalId,
       launchGeneration: run.launchGeneration,
-      hub: existing?.enrolledBy.kind === "local",
+      hub: wasHub || (ends && existing?.enrolledBy.kind === "local"),
     });
     this.changed();
     return true;

@@ -145,15 +145,16 @@ async function handleSetLaneEnrolled(
   }
   const existing = policy.getEnrollment(lane);
   if (listensAsHost(shell)) {
-    // The person's off holds for this run, whoever views it, and ends what it
-    // was enrolled as; the saved default doesn't turn it back on.
+    // The person's off holds for this run, whoever views it; the saved default
+    // doesn't turn it back on. Only this machine's own window ends it as the hub.
     if (!input.enrolled) {
-      policy.declineRun(lane);
+      policy.declineRun(lane, shell);
       return done();
     }
     policy.acceptRun(lane);
-    // Also this Shell's hub, or where the lane's own messages go, when nothing holds that yet.
-    if (existing === null && (shell.kind === "remote" || surface()?.hasHosts() === true)) {
+    // On this machine, also its hub when it has hosts and nothing holds the lane. A remote
+    // view's on never routes the lane's own messages: only a run its view started does.
+    if (existing === null && shell.kind === "local" && surface()?.hasHosts() === true) {
       policy.enroll(lane, shell);
     }
     const open = policy.checkOpen(lane, "inspect");

@@ -1163,7 +1163,7 @@ describe("AssistantMessagingPolicy", () => {
       expect(h.policy.enroll(lane(), SHELL_A).ok).toBe(true);
       const changes: number[] = [];
       h.policy.onChange(() => changes.push(h.policy.getRevision()));
-      expect(h.policy.declineRun(lane())).toBe(true);
+      expect(h.policy.declineRun(lane(), SHELL_B)).toBe(true);
       expect(changes).toHaveLength(1);
       expect(h.policy.checkOpen(lane(), "admit")).toEqual({ ok: false, reason: "declined" });
       expect(h.policy.checkOpen(lane(), "reply").ok).toBe(true);
@@ -1178,23 +1178,34 @@ describe("AssistantMessagingPolicy", () => {
 
       h.policy.acceptRun(lane());
       expect(h.policy.checkOpen(lane(), "admit").ok).toBe(true);
-      h.policy.declineRun(lane());
+      h.policy.declineRun(lane(), SHELL_B);
       h.run("proj", 0, "s2");
       expect(h.policy.checkOpen(lane(), "admit").ok).toBe(true);
-      expect(h.policy.declineRun(lane("proj", 3))).toBe(false);
+      expect(h.policy.declineRun(lane("proj", 3), SHELL_B)).toBe(false);
     });
 
-    it("keeps a declined hub from passing to a sibling by default while it runs", () => {
+    it("keeps a hub turned off here from passing to a sibling by default while it runs, however often", () => {
       const h = accepting();
       h.run("proj", 0, "s1");
       h.run("proj", 1, "s2");
       expect(h.policy.enrollByDefault(lane(), LOCAL).ok).toBe(true);
-      h.policy.declineRun(lane());
+      h.policy.declineRun(lane(), LOCAL);
       expect(h.policy.getHub()).toBeNull();
+      // A second off, from another view say, still knows it was the hub.
+      h.policy.declineRun(lane(), LOCAL);
       expect(h.policy.enrollByDefault(lane("proj", 1), LOCAL)).toEqual({
         ok: false,
         reason: "declined",
       });
+    });
+
+    it("never ends this machine's hub for a remote view's off", () => {
+      const h = accepting();
+      h.run("proj", 0, "s1");
+      expect(h.policy.enroll(lane(), LOCAL).ok).toBe(true);
+      expect(h.policy.declineRun(lane(), SHELL_A)).toBe(true);
+      expect(h.policy.checkOpen(lane(), "admit")).toEqual({ ok: false, reason: "declined" });
+      expect(h.policy.getHub()?.slot).toBe(0);
     });
 
     it("lists every lane open to other machines, paused or not", () => {
@@ -1206,7 +1217,7 @@ describe("AssistantMessagingPolicy", () => {
       const h = harness({ acceptsRemoteMessages: () => true, listRunningLanes: () => running });
       h.run("proj", 0, "s1");
       h.run("proj", 1, "s2");
-      h.policy.declineRun(lane("proj", 1));
+      h.policy.declineRun(lane("proj", 1), SHELL_A);
       h.policy.setPaused(true);
       expect(h.policy.listOpen().map((run) => run.sessionId)).toEqual(["s1"]);
     });

@@ -227,7 +227,7 @@ export function installAssistantExchangeHostWith(
   }): void => {
     if (wired.has(session)) return;
     wired.add(session);
-    const shell = { kind: "remote", linkSessionId: sessionId } as const;
+    const shell: MessagingShell = { kind: "remote", linkSessionId: sessionId };
     // Display data the Shell chose for itself, cleaned by the inbox; never identity.
     const sendingHost = client?.clientName || "Remote Shell";
 
@@ -268,11 +268,19 @@ export function installAssistantExchangeHostWith(
       const agentOf = (projectId: string, slot: number) =>
         agents.get(assistantSlotKey(projectId, slot));
       const assistants: RunningAssistant[] = running.slice(0, MAX_LISTED_LANES);
+      // What an older Shell reads as the lanes it may message, and owns: only
+      // those whose own messages come to it, as before every lane was open.
       const lanes: EnrolledLane[] = policy
+        .listEnrollments(shell)
+        .slice(0, MAX_LISTED_LANES)
+        .map((enrollment) =>
+          openLane(policy, enrollment, agentOf(enrollment.projectId, enrollment.slot))
+        );
+      const open: EnrolledLane[] = policy
         .listOpen()
         .slice(0, MAX_LISTED_LANES)
-        .map((run) => openLane(policy, run, agentOf(run.projectId, run.slot), shell));
-      return { lanes, assistants } satisfies LaneList;
+        .map((run) => openLane(policy, run, agentOf(run.projectId, run.slot)));
+      return { lanes, open, assistants } satisfies LaneList;
     });
 
     session.registerCallHandler(AssistantLinkMethod.READ_QUOTA, EmptyPayloadSchema, async () => {
@@ -290,18 +298,20 @@ export function installAssistantExchangeHostWith(
         requireSender(session);
         const policy = requirePolicy();
         const lane = { projectId, slot };
-        const open = policy.checkOpen(lane, "inspect");
-        if (!open.ok) {
-          return { status: open.reason === "unavailable" ? "not-running" : "refused", lane: null };
+        const result = policy.enrollStarted(lane, shell, helpSessionId);
+        if (!result.ok) {
+          const status =
+            result.reason === "occupied" || result.reason === "wrong-session"
+              ? result.reason
+              : result.reason === "unavailable"
+                ? "not-running"
+                : "refused";
+          return { status, lane: null };
         }
-        if (open.run.sessionId !== helpSessionId) return { status: "wrong-session", lane: null };
-        // Open whether or not this Shell gets the lane's own messages: only a
-        // run its own view started, that no other Shell holds, routes them here.
-        policy.enrollStarted(lane, shell, helpSessionId);
         const agentId = policy
           .listRunning()
           .find((running) => running.projectId === projectId && running.slot === slot)?.agentId;
-        return { status: "enrolled", lane: openLane(policy, open.run, agentId, shell) };
+        return { status: "enrolled", lane: openLane(policy, lane, agentId) };
       }
     );
 
@@ -321,9 +331,18 @@ export function installAssistantExchangeHostWith(
         body: payload.body,
       };
       // A resend of a message this host already took answers from its record,
-      // even once its lane stopped taking new ones.
-      if (deps.store.get(sender, { senderId: sender.senderId, messageId: payload.messageId })) {
-        return deps.store.create(sender, input);
+      // even once its lane stopped taking new ones, filed where it was: one
+      // taken before lanes were open has its enrollment's generation.
+      const existing = deps.store.get(sender, {
+        senderId: sender.senderId,
+        messageId: payload.messageId,
+      });
+      if (existing) {
+        const sameLane = existing.receiver.laneId === input.receiver.laneId;
+        return deps.store.create(
+          sender,
+          sameLane ? { ...input, receiver: existing.receiver } : input
+        );
       }
       const policy = requirePolicy();
       const lane = { projectId: payload.projectId, slot: payload.slot };
@@ -421,21 +440,18 @@ export function installAssistantExchangeHostWith(
   };
 }
 
-/** A lane open to other machines, as `shell` is listed it. */
+/** A lane as a Shell is listed it: under its open address, whatever enrolled it. */
 function openLane(
   policy: AssistantMessagingPolicy,
-  run: { projectId: string; slot: number },
-  agentId: string | undefined,
-  shell: Extract<MessagingShell, { kind: "remote" }>
+  at: LaneRef,
+  agentId: string | undefined
 ): EnrolledLane {
-  const lane = { projectId: run.projectId, slot: run.slot };
-  const route = policy.getEnrollment(lane)?.enrolledBy;
+  const lane = { projectId: at.projectId, slot: at.slot };
   return {
     ...lane,
     generation: OPEN_LANE_GENERATION,
     available: policy.checkOpen(lane, "wake").ok,
     ...(agentId === undefined ? {} : { agentId }),
-    routed: route?.kind === "remote" && route.linkSessionId === shell.linkSessionId,
   };
 }
 
@@ -532,9 +548,12 @@ export async function installAssistantExchangeHost(
       }),
   });
   const unregisterOutbox = registerRemoteService("assistantHostOutbox", outbox);
+  // Listening is what opens this machine's lanes to other machines: views and tools reread.
+  getRemoteService("assistantMessagingPolicy")?.refresh();
   return () => {
     clearInterval(timer);
     unregisterOutbox();
+    getRemoteService("assistantMessagingPolicy")?.refresh();
     outbox.dispose();
     unwire();
     unregister();

@@ -141,25 +141,39 @@ describe("assistant messaging IPC", () => {
     expect(policy.getHub()?.slot).toBe(0);
   });
 
-  it("routes a remote window's lane to that window's link session, never a claimed one", async () => {
+  it("never enrolls anything from a remote window's toggle, whatever shell it claims", async () => {
     run(0, "s1");
-    await setLaneEnrolled(remoteCtx("link-a"), {
+    const on = await setLaneEnrolled(remoteCtx("link-a"), {
       projectId: "proj",
       slot: 0,
       enrolled: true,
       shell: { kind: "local" },
     });
-    expect(policy.getEnrollment({ projectId: "proj", slot: 0 })?.enrolledBy).toEqual({
-      kind: "remote",
-      linkSessionId: "link-a",
-    });
+    expect(on.refusal).toBeNull();
+    // Where a lane's own messages go is only for a run that Shell's view started.
+    expect(policy.getEnrollment({ projectId: "proj", slot: 0 })).toBeNull();
+    expect(policy.getHub()).toBeNull();
+  });
+
+  it("leaves this machine's hub as it is when a remote window turns the lane off", async () => {
+    listening = true;
+    const lane = { projectId: "proj", slot: 0 };
+    run(0, "s1");
+    await setLaneEnrolled(localCtx(), { ...lane, enrolled: true });
+    expect(policy.getHub()?.slot).toBe(0);
+    const off = await setLaneEnrolled(remoteCtx("link-a"), { ...lane, enrolled: false });
+    expect(off.state.lane.enrolled).toBe(false);
+    expect(policy.getHub()?.slot).toBe(0);
+    // This machine's own off is the person at it: the hub goes too.
+    await setLaneEnrolled(localCtx(), { ...lane, enrolled: false });
     expect(policy.getHub()).toBeNull();
   });
 
   it("shows a lane on to every Shell, and lets any of them turn its run off (#13467)", async () => {
     const lane = { projectId: "proj", slot: 0 };
     run(0, "s1");
-    await setLaneEnrolled(remoteCtx("link-a"), { ...lane, enrolled: true });
+    // A run link-a's view started: its own messages go to link-a.
+    expect(policy.enroll(lane, { kind: "remote", linkSessionId: "link-a" }).ok).toBe(true);
 
     const other = await getState(remoteCtx("link-b"), lane);
     expect(other.lane).toEqual({ enrolled: true, enrolledElsewhere: false, ended: null });
@@ -209,7 +223,7 @@ describe("assistant messaging IPC", () => {
 
   it("shows a lane whose Shell is away as on, so turning it off withdraws it (#13332)", async () => {
     run(0, "s1");
-    await setLaneEnrolled(remoteCtx("link-a"), { projectId: "proj", slot: 0, enrolled: true });
+    policy.enroll({ projectId: "proj", slot: 0 }, { kind: "remote", linkSessionId: "link-a" });
     policy.bindSender("link-a", "sender-a");
     policy.releaseLinkSession("link-a");
 

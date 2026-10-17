@@ -317,8 +317,10 @@ function observedConnection(state: HostConnectionState): HostListEntry["connecti
 /**
  * A host's projects with the assistants running in each, as the host reported
  * them: projects with assistants first, then the rest in the host's own order.
- * An enrolled lane carries its generation; one whose assistant isn't running
- * is still listed, unavailable, so the hub sees it waiting.
+ * A lane this Shell can message carries its generation: every lane open to
+ * other machines (#13467), or on an older host one enrolled for this Shell,
+ * whose assistant may not be running and is then listed unavailable, so the
+ * hub sees it waiting.
  */
 export function projectTree(
   listed: LaneList,
@@ -349,8 +351,9 @@ export function projectTree(
     }
     return found;
   };
+  const reachable = listed.open ?? listed.lanes;
   const enrolled = new Map(
-    listed.lanes.map((lane) => [assistantSlotKey(lane.projectId, lane.slot), lane])
+    reachable.map((lane) => [assistantSlotKey(lane.projectId, lane.slot), lane])
   );
   const runningAgent = new Map(
     (listed.assistants ?? []).map((running) => [
@@ -372,7 +375,7 @@ export function projectTree(
       available: lane ? lane.available && !paused : false,
     });
   }
-  for (const lane of listed.lanes) {
+  for (const lane of reachable) {
     const key = assistantSlotKey(lane.projectId, lane.slot);
     if (seen.has(key)) continue;
     seen.add(key);
@@ -392,7 +395,7 @@ export function projectTree(
   const without = unique.filter((summary) => !entries.has(summary.id)).map((s) => entry(s.id));
   const all = [...withAssistants, ...without];
   const projects = all.slice(0, HOST_LIST_PROJECTS_MAX);
-  const lanes: HostAssistantLane[] = listed.lanes.map((lane) => ({
+  const lanes: HostAssistantLane[] = reachable.map((lane) => ({
     projectId: lane.projectId,
     projectName: byId.get(lane.projectId)?.name ?? null,
     slot: lane.slot,

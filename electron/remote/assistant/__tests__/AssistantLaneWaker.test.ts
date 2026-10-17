@@ -207,7 +207,7 @@ describe("AssistantLaneWaker", () => {
       h.policy.setPaused(true);
       expect(h.queued[0].wake.recheck()).toEqual({ kind: "held", reason: "paused" });
       h.policy.setPaused(false);
-      h.policy.declineRun(LANE);
+      h.policy.declineRun(LANE, { kind: "local" });
       expect(h.queued[0].wake.recheck()).toEqual({ kind: "unavailable", reason: "declined" });
 
       const idle = harness();

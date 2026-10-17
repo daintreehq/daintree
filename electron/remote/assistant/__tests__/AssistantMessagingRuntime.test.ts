@@ -542,7 +542,7 @@ describe("AssistantMessagingRuntime", () => {
     newRuntime();
     runLane("s1");
     const record = send(LANE, "before");
-    expect(policy.declineRun(LANE)).toBe(true);
+    expect(policy.declineRun(LANE, { kind: "local" })).toBe(true);
     expect(policy.checkOpen(LANE, "admit")).toEqual({ ok: false, reason: "declined" });
     expect(runtime.isAvailable("s1")).toBe(true);
     policy.acceptRun(LANE);
