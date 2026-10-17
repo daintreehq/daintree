@@ -46,14 +46,22 @@ export function DiffChangeStepper({ count, index, onStep }: DiffChangeStepperPro
         a screen-reader user who has just pressed Next needs to hear where they
         landed without losing the button they are about to press again.
 
-        Tabular figures because the count sits between two buttons whose
-        positions must not shuffle as the index crosses from 9 to 10.
+        The arrows must hold still under a pointer that clicks Next again and
+        again. Tabular figures keep every digit the same width, but "10 of 20"
+        is still a digit longer than "9 of 20", so the slot is sized by the
+        widest value it can show and the text sits against its end edge: only
+        the new leading digit appears, and " of 20" never moves. The sizer is
+        drawn from an attribute, so it adds no text to the live region.
       */}
-      <span
-        className="px-1 text-xs tabular-nums text-text-secondary select-none"
-        aria-live="polite"
-      >
-        {`${index + 1} of ${count}`}
+      <span className="grid px-1 text-xs tabular-nums text-text-secondary select-none">
+        <span className="col-start-1 row-start-1 text-end" aria-live="polite">
+          {`${index + 1} of ${count}`}
+        </span>
+        <span
+          aria-hidden="true"
+          data-label={`${count} of ${count}`}
+          className="invisible col-start-1 row-start-1 after:content-[attr(data-label)]"
+        />
       </span>
       <FileViewerToolbar.IconButton label="Previous change" onClick={() => onStep(-1)}>
         <ChevronUp className={TOOLBAR_ICON_CLASS} />

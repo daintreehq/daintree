@@ -181,8 +181,79 @@ test("rendered Markdown diff — cases, widths and themes", async ({ page }) => 
 
   // Count the files ourselves. A harness that trusts its own exit code is how a
   // review ends up reasoning about screenshots that were never written.
-  const onDisk = readdirSync(OUT_DIR).filter((f) => f.endsWith(".png"));
+  const onDisk = readdirSync(OUT_DIR).filter(
+    (f) => f.endsWith(".png") && !f.startsWith("stepper-")
+  );
   expect(onDisk.length).toBe(written.length);
   expect(onDisk.length).toBeGreaterThanOrEqual(THEMES.length * FIXTURES.length);
   console.log(`[markdown-diff-shots] ${onDisk.length} PNGs in ${OUT_DIR}`);
+});
+
+/**
+ * The change stepper as the counter walks across a digit boundary.
+ *
+ * The defect this exists to show is a shift of a few pixels between two
+ * captures, so each state is the toolbar's leading strip at 2x, and the arrows'
+ * positions are logged so a review can compare numbers rather than squint.
+ * Stepped through the real buttons: the counter only means something if it is
+ * the one the host's own step and scroll sync produce.
+ */
+test("change stepper — counter across a digit boundary", async ({ browser }) => {
+  test.info().annotations.push({
+    type: "conditional-skip",
+    description: "DAINTREE_SHOT_MDDIFF is required for the rendered-Markdown diff capture",
+  });
+  test.skip(!ENABLED, "set DAINTREE_SHOT_MDDIFF=1 to run the capture");
+
+  const context = await browser.newContext({ deviceScaleFactor: 2 });
+  const page = await context.newPage();
+  const theme = THEMES[0]!;
+  const written: string[] = [];
+  const positions: Record<string, { previous: number; next: number; path: number }> = {};
+
+  const cases = [
+    { fixture: "many-changes", total: 20, stops: [1, 9, 10, 20] },
+    { fixture: "sparse", total: 2, stops: [1, 2] },
+  ] as const;
+
+  for (const { fixture, total, stops } of cases) {
+    await open(page, fixture, theme, DEFAULT_WIDTH);
+    const toolbar = page.getByRole("toolbar", { name: "Diff viewer controls" });
+    const stepper = toolbar.getByRole("group", { name: "Changes" });
+    const previous = stepper.getByRole("button", { name: "Previous change" });
+    const next = stepper.getByRole("button", { name: "Next change" });
+    const fileLabel = toolbar.getByText("teleprompter.md").first();
+    await expect(stepper).toContainText(`1 of ${total}`);
+
+    let at = 1;
+    for (const stop of stops) {
+      while (at < stop) {
+        await next.click();
+        at++;
+      }
+      // Wait on the value, then verify it is the one the file will be named for.
+      await expect(stepper).toContainText(`${stop} of ${total}`);
+      // Stepping to the last change scrolls the page as well as the diff body,
+      // which would put the toolbar outside the clip.
+      await toolbar.scrollIntoViewIfNeeded();
+      const box = await toolbar.boundingBox();
+      if (!box) throw new Error(`${fixture} at ${stop}: toolbar has no box — refusing to write`);
+      const file = `stepper-${fixture}-${String(stop).padStart(2, "0")}-of-${total}.png`;
+      await page.screenshot({
+        path: path.join(OUT_DIR, file),
+        clip: { x: box.x, y: box.y, width: 340, height: box.height },
+      });
+      written.push(file);
+      positions[`${stop} of ${total}`] = {
+        previous: (await previous.boundingBox())!.x,
+        next: (await next.boundingBox())!.x,
+        path: (await fileLabel.boundingBox())!.x,
+      };
+    }
+  }
+  await context.close();
+
+  console.log(`[markdown-diff-shots] stepper x positions\n${JSON.stringify(positions, null, 2)}`);
+  const onDisk = readdirSync(OUT_DIR).filter((f) => f.startsWith("stepper-") && f.endsWith(".png"));
+  expect(onDisk.sort()).toEqual(written.sort());
 });
