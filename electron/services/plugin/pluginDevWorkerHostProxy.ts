@@ -106,7 +106,7 @@ import {
   hostCallTimeoutError,
   isHostCallTimeoutError,
 } from "./pluginHostCallDeadline.js";
-import { openPluginDatabase } from "./pluginDatabase.js";
+import { openPluginDatabase, validatePluginDatabaseOpenOptions } from "./pluginDatabase.js";
 import { validateAgentMcpTools } from "../pluginAgentMcp/validateTools.js";
 import type {
   PluginHostCallMethod,
@@ -1428,6 +1428,10 @@ export class PluginDevWorkerHostProxy {
             ...(options?.readonly === true && { readonly: true }),
           }),
         open: async (id, options) => {
+          // Checked here, not only in openPluginDatabase: the host prompts for
+          // project-write consent on resolve, and a malformed open must not
+          // bank a grant (#10524).
+          validatePluginDatabaseOpenOptions(id, options);
           const params = { id, ...(options?.readonly === true && { readonly: true }) };
           const location = await this.call<PluginDatabaseLocation>("db.resolve", params);
           const database: PluginDatabase = await openPluginDatabase(location, {

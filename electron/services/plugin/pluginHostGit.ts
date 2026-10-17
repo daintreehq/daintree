@@ -55,6 +55,22 @@ function assertSafePathspec(pluginId: string, spec: string): void {
   }
 }
 
+/**
+ * The pathspecs `add` stages: the non-empty strings given, or the whole
+ * worktree when none are. Each is checked by {@link assertSafePathspec}, so the
+ * host can reject a doomed call before it asks for `git:write` consent.
+ */
+export function resolveAddPathspecs(pluginId: string, paths?: readonly string[]): string[] {
+  const targets =
+    Array.isArray(paths) && paths.length > 0
+      ? paths.filter((p): p is string => typeof p === "string" && p.length > 0)
+      : ["."];
+  for (const spec of targets) {
+    assertSafePathspec(pluginId, spec);
+  }
+  return targets;
+}
+
 /** Factory the host uses to obtain a git client for a contained worktree path — injectable for tests. */
 export type HostGitFactory = (cwd: string) => Promise<SimpleGit>;
 
@@ -171,13 +187,7 @@ export class PluginHostGit {
     signal?.throwIfAborted();
     const git = await this.gitFactory(worktreePath);
     signal?.throwIfAborted();
-    const targets =
-      Array.isArray(paths) && paths.length > 0
-        ? paths.filter((p): p is string => typeof p === "string" && p.length > 0)
-        : ["."];
-    for (const spec of targets) {
-      assertSafePathspec(this.pluginId, spec);
-    }
+    const targets = resolveAddPathspecs(this.pluginId, paths);
     // "--" forces git to treat every following token as a pathspec, not an
     // option — defense in depth alongside the leading-"-" rejection above.
     await git.raw(["add", "--", ...targets]);

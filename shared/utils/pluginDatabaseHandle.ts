@@ -604,10 +604,15 @@ export function runPluginDatabaseWrite(
  * this function refuses a symlinked leaf itself and relies on `revalidate` to
  * re-prove the directories when it has to reopen.
  */
-export async function openPluginDatabase(
-  location: PluginDatabaseLocation,
-  options: OpenPluginDatabaseOptions = {}
-): Promise<PluginDatabase> {
+/**
+ * Check the schema options of a `db.open` without touching any file. The host
+ * runs it before resolving the location, so a malformed call is refused before
+ * the project-write consent prompt can bank a grant for it (#10524).
+ */
+export function validatePluginDatabaseOpenOptions(
+  id: string,
+  options: PluginDatabaseOpenOptions = {}
+): { migrations: readonly string[]; definitions: string | undefined; readonly: boolean } {
   if (options.migrations !== undefined && !Array.isArray(options.migrations)) {
     throw databaseError("VALIDATION", "migrations must be an array of SQL strings");
   }
@@ -628,8 +633,19 @@ export async function openPluginDatabase(
       "a readonly open cannot apply migrations or definitions; open it writable once to set the schema up"
     );
   }
-  for (const sql of migrations) assertNoFileAccess(sql, location.id);
-  if (definitions !== undefined) assertNoFileAccess(definitions, location.id);
+  for (const sql of migrations) assertNoFileAccess(sql, id);
+  if (definitions !== undefined) assertNoFileAccess(definitions, id);
+  return { migrations, definitions, readonly };
+}
+
+export async function openPluginDatabase(
+  location: PluginDatabaseLocation,
+  options: OpenPluginDatabaseOptions = {}
+): Promise<PluginDatabase> {
+  const { migrations, definitions, readonly } = validatePluginDatabaseOpenOptions(
+    location.id,
+    options
+  );
   const sqlite = loadSqlite();
   const DatabaseSync = sqlite.DatabaseSync;
   const authorizer = sqlite.constants ? fileAccessAuthorizer(sqlite.constants) : null;

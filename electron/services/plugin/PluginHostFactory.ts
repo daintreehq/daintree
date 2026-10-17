@@ -25,7 +25,7 @@ import {
   getPluginCapabilityConsentStore,
 } from "../plugin-capability/instances.js";
 import { resolveContainedPath, PluginPathNotAllowedError } from "./pluginFsContainment.js";
-import { PluginHostGit, type HostGitFactory } from "./pluginHostGit.js";
+import { PluginHostGit, resolveAddPathspecs, type HostGitFactory } from "./pluginHostGit.js";
 import {
   pluginManifestIdFromInstanceKey,
   projectIdFromPluginInstanceKey,
@@ -70,7 +70,11 @@ import {
 } from "./pluginSubscriptionCoalescing.js";
 import { isChannelSchema } from "./PluginChannelRegistry.js";
 import { abortErrorFor } from "./pluginAbortError.js";
-import { openPluginDatabase, resolvePluginDatabaseLocation } from "./pluginDatabase.js";
+import {
+  openPluginDatabase,
+  resolvePluginDatabaseLocation,
+  validatePluginDatabaseOpenOptions,
+} from "./pluginDatabase.js";
 import type { PluginDatabaseApi } from "../../../shared/types/plugin.js";
 import {
   databaseBackupApprovers,
@@ -1079,6 +1083,9 @@ export function createHost(
     resolve: (id: string, options?: { readonly?: boolean }) => resolveDatabase(id, options),
     open: async (id, options) => {
       const mode = { readonly: options?.readonly === true };
+      // Schema options are checked before resolveDatabase prompts for
+      // project-write consent, so a malformed open never banks a grant (#10524).
+      validatePluginDatabaseOpenOptions(id, options);
       const location = await resolveDatabase(id, mode);
       let untrack: (() => void) | null = null;
       const database = await openPluginDatabase(location, {
@@ -2401,9 +2408,9 @@ export function createHost(
     // as dispatch: plugins introspect from post-activation callbacks/timers.
     // Once the plugin unloads these degrade to empty/absent results ([] / null
     // / "restricted") without a renderer round-trip. The renderer projects
-    // ActionService.list()/get() — which already filter danger:"restricted" —
-    // to the slim PluginActionManifestEntry, so the catalog never exposes a
-    // restricted action.
+    // ActionService.list()/get() — minus danger:"restricted" and every
+    // denyPluginDispatch action — to the slim PluginActionManifestEntry, so the
+    // catalog never exposes an action dispatch would refuse as RESTRICTED.
     actions: {
       list: async () => {
         if (!deps.plugins.has(pluginId)) return [];
@@ -2428,7 +2435,8 @@ export function createHost(
         }
       },
       // canDispatch derives locally from get() — no extra round-trip. A null
-      // entry (unknown id, or a restricted action the renderer projects away)
+      // entry (unknown id, or a restricted or plugin-denied action the renderer
+      // projects away)
       // maps to "restricted"; "confirm" actions surface as "confirm" so a
       // plugin can warn before dispatch() returns CONFIRMATION_REQUIRED.
       canDispatch: async (actionId) => {
@@ -4318,10 +4326,12 @@ function buildGitApi(deps: PluginHostFactoryDeps, pluginId: string): PluginGitAp
       options?.signal?.throwIfAborted();
       requireLoaded("add");
       requireWriteCap("add");
+      resolveAddPathspecs(pluginId, paths);
       const resolved = await containWorktree(worktreePath);
       requireLoaded("add");
-      // Consent fires after containment so an out-of-scope path never banks a
-      // git:write grant (#10524). Re-check liveness after the prompt await.
+      // Consent fires after containment + pathspec validation so a doomed call
+      // never banks a git:write grant (#10524). Re-check liveness after the
+      // prompt await.
       await ensureCapabilityConsent(deps, pluginId, "git:write");
       requireLoaded("add");
       await git.add(resolved, paths, options?.signal);

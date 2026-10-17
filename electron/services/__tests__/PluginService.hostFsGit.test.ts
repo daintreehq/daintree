@@ -856,6 +856,33 @@ describe("JIT capability consent gating (#10524)", () => {
     expect(git.add).not.toHaveBeenCalled();
     expect(git.commit).not.toHaveBeenCalled();
   });
+
+  it.each([["-A"], ["/etc/passwd"], [":(top)"], ["../outside"]])(
+    "rejects git.add pathspec %s before asking for consent",
+    async (spec) => {
+      const bridge = vi.fn(async () => "approved-and-pin" as const);
+      getPluginCapabilityConsentService().setConsentBridge(bridge);
+      const git = { raw: vi.fn().mockResolvedValue("") } as unknown as SimpleGit;
+      (
+        svc as unknown as { _setHostGitFactoryForTests(f: () => Promise<SimpleGit>): void }
+      )._setHostGitFactoryForTests(async () => git);
+      const seam = svc as unknown as {
+        _registerFakePluginForTests(p: FakeLoadedPlugin): void;
+        _createHostForTests(id: string): PluginHostApi;
+      };
+      seam._registerFakePluginForTests({
+        manifest: makeManifest(["git:read", "git:write"], [allowed]),
+        dir: baseDir,
+        loadedAt: 0,
+        isBuiltin: false,
+      });
+      const host = seam._createHostForTests("acme.fsgit");
+
+      await expect(host.git.add(allowed, [spec])).rejects.toThrow(/PATH_NOT_ALLOWED/);
+      expect(bridge).not.toHaveBeenCalled();
+      expect(git.raw).not.toHaveBeenCalled();
+    }
+  );
 });
 
 describe("a bound plugin's ${project}/${worktree} allowlist roots", () => {
