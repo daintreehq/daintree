@@ -15,11 +15,13 @@
  * size budget.
  *
  * A write one statement can express needs no code at all: `add_transaction`
- * is a query declared in plugin.json, which the host serves and runs itself,
- * so the triggers below are the whole of its rules. The tools here are what a
- * declaration cannot be: a split, whose parts are checked against each other
- * and written together, stamped with the calling terminal; and the readers,
- * whose filters are optional and whose pages are trimmed to the result budget.
+ * is a query declared in plugin.json, which the host serves and runs itself.
+ * Its params carry the same per-value rules as the tools below, which the host
+ * checks before the statement runs, because the triggers are whatever the file
+ * had when this code last opened it. The tools here are what a declaration
+ * cannot be: a split, whose parts are checked against each other and written
+ * together, stamped with the calling terminal; and the readers, whose filters
+ * are optional and whose pages are trimmed to the result budget.
  */
 
 import { randomUUID } from "node:crypto";
@@ -30,12 +32,12 @@ const ENDPOINT_ID = "data";
 const MAX_PAGE = 200;
 const DEFAULT_PAGE = 50;
 const MAX_OFFSET = 100_000;
+// plugin.json declares these two bounds on add_transaction's params as well.
 const MAX_MEMO_CHARS = 280;
 const MAX_SPLITS = 20;
-// The split tool writes no memo past MAX_MEMO_CHARS, but add_transaction is a
-// declared write with no code to cap one, and agents write the file directly.
-// Clipping on read keeps one such row from blowing the whole result past the
-// host's limit.
+// Rows this plugin writes never exceed MAX_MEMO_CHARS, but the file is the
+// project's and agents write it directly. Clipping on read keeps one such row
+// from blowing the whole result past the host's limit.
 const MAX_RETURNED_MEMO_CHARS = 4096;
 const MAX_ABS_AMOUNT_CENTS = 100_000_000_000;
 // The host refuses a result over 256 KiB outright. Rows are trimmed well short
@@ -72,16 +74,15 @@ const MIGRATIONS = [
      WHERE split_group IS NOT NULL;`,
 ];
 
-// Checked in SQL, because agents write this file with the sqlite3 CLI and the
-// declared add_transaction, neither of which runs this plugin's code. The
-// STRICT table already refuses a value it cannot store as its column's type,
-// such as -18.99 for an amount, before any trigger runs. A trigger's RAISE
-// message is what the agent reads, so each says what to do instead. Only what
-// one row can prove lives here: a split's balance spans rows, and a row trigger
-// sees the first part of a valid split before its siblings exist. Byte lengths
-// catch an embedded NUL, where GLOB and length() stop reading. date() rolls a
-// day the month lacks over into the next, so a date it changes is not one the
-// calendar has.
+// Checked in SQL too, because agents write this file with the sqlite3 CLI and
+// never go through the tools. The STRICT table already refuses a value it
+// cannot store as its column's type, such as -18.99 for an amount, before any
+// trigger runs. A trigger's RAISE message is what the agent reads, so each
+// says what to do instead. Only what one row can prove lives here: a split's
+// balance spans rows, and a row trigger sees the first part of a valid split
+// before its siblings exist. Byte lengths catch an embedded NUL, where GLOB
+// and length() stop reading. date() rolls a day the month lacks over into the
+// next, so a date it changes is not one the calendar has.
 const rowGuards = (event) => `
   DROP TRIGGER IF EXISTS transactions_guard_${event.toLowerCase()};
   CREATE TRIGGER transactions_guard_${event.toLowerCase()} BEFORE ${event} ON transactions BEGIN

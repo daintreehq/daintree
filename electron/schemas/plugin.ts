@@ -417,13 +417,98 @@ export const DATABASE_QUERY_MAX_PARAMS = 16;
 
 const utf8Length = (value: string): number => new TextEncoder().encode(value).length;
 
-/** One param of a declared query: its JSON type and what it means. */
+/** The JSON Schema formats a declared string param may require; the host's validator knows each. */
+export const DATABASE_QUERY_PARAM_FORMATS = [
+  "date",
+  "time",
+  "date-time",
+  "email",
+  "uri",
+  "uuid",
+] as const;
+
+const STRING_PARAM_CONSTRAINTS = ["minLength", "maxLength", "pattern", "format"] as const;
+const NUMBER_PARAM_CONSTRAINTS = ["minimum", "maximum"] as const;
+
+/** Whether `value` is a value of the declared param type, as the input schema checks it. */
+function isParamValue(type: string, value: unknown): boolean {
+  return type === "integer" ? Number.isSafeInteger(value) : typeof value === type;
+}
+
+/**
+ * One param of a declared query: its JSON type, what it means, and the JSON
+ * Schema constraints its value must meet. Each constraint is refused on a type
+ * it cannot apply to, so a rule the author wrote is never silently skipped.
+ */
 export const DatabaseQueryParamSchema = z
   .object({
     type: z.enum(["string", "number", "integer", "boolean"]),
     description: z.string().min(1).max(400).optional(),
+    minLength: z.number().int().min(0).optional(),
+    maxLength: z.number().int().min(0).optional(),
+    pattern: z.string().min(1).max(1024).optional(),
+    format: z.enum(DATABASE_QUERY_PARAM_FORMATS).optional(),
+    minimum: z.number().optional(),
+    maximum: z.number().optional(),
+    not: z
+      .object({ const: z.union([z.string(), z.number(), z.boolean()]) })
+      .strict()
+      .optional(),
   })
-  .strict();
+  .strict()
+  .superRefine((param, ctx) => {
+    const fail = (path: string, message: string): void => {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: [path],
+        message,
+        params: { errorCode: "database_query_param_constraint" },
+      });
+    };
+    const numeric = param.type === "number" || param.type === "integer";
+    for (const key of STRING_PARAM_CONSTRAINTS) {
+      if (param[key] !== undefined && param.type !== "string") {
+        fail(key, `${key} applies only to a "string" param, not "${param.type}"`);
+      }
+    }
+    for (const key of NUMBER_PARAM_CONSTRAINTS) {
+      const bound = param[key];
+      if (bound === undefined) continue;
+      if (!numeric) {
+        fail(key, `${key} applies only to a "number" or "integer" param, not "${param.type}"`);
+      } else if (param.type === "integer" && !Number.isSafeInteger(bound)) {
+        fail(
+          key,
+          `${key} of an "integer" param must be an integer no larger than 2^53 - 1 in magnitude`
+        );
+      }
+    }
+    if (
+      param.minLength !== undefined &&
+      param.maxLength !== undefined &&
+      param.minLength > param.maxLength
+    ) {
+      fail("minLength", `minLength ${param.minLength} is more than maxLength ${param.maxLength}`);
+    }
+    if (
+      param.minimum !== undefined &&
+      param.maximum !== undefined &&
+      param.minimum > param.maximum
+    ) {
+      fail("minimum", `minimum ${param.minimum} is more than maximum ${param.maximum}`);
+    }
+    if (param.pattern !== undefined) {
+      // The host's validator compiles a pattern as a Unicode expression.
+      try {
+        new RegExp(param.pattern, "u");
+      } catch {
+        fail("pattern", "pattern must be a valid Unicode regular expression");
+      }
+    }
+    if (param.not !== undefined && !isParamValue(param.type, param.not.const)) {
+      fail("not", `not.const must be a value of the param's type, "${param.type}"`);
+    }
+  });
 
 /**
  * `contributes.databases[].queries` entry — one parameterised statement the

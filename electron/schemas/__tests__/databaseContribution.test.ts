@@ -254,3 +254,109 @@ describe("contributes.databases[].queries", () => {
     );
   });
 });
+
+describe("contributes.databases[].queries[].params constraints", () => {
+  const withParams = (params: Record<string, unknown>) =>
+    withQueries({
+      id: "ledger",
+      queries: [
+        {
+          ...ADD_TRANSACTION,
+          params,
+          sql: `INSERT INTO tx VALUES (${Object.keys(params)
+            .map((name) => `:${name}`)
+            .join(", ")})`,
+        },
+      ],
+    });
+
+  it("keeps each constraint on a param of the type it applies to", () => {
+    const params = {
+      date: { type: "string", format: "date" },
+      memo: { type: "string", minLength: 0, maxLength: 280, pattern: "^\\P{Cc}*$" },
+      amount_cents: { type: "integer", minimum: -100, maximum: 100, not: { const: 0 } },
+      ratio: { type: "number", minimum: 0.5, maximum: 0.5, not: { const: 0.25 } },
+      voided: { type: "boolean", not: { const: true } },
+    };
+    const result = withParams(params);
+    expect(result.success && result.data.contributes.databases[0]?.queries?.[0]?.params).toEqual(
+      params
+    );
+  });
+
+  it.each([
+    [
+      "a string constraint on an integer",
+      { n: { type: "integer", maxLength: 3 } },
+      /maxLength applies only to a "string" param/,
+    ],
+    [
+      "a format on a number",
+      { n: { type: "number", format: "date" } },
+      /format applies only to a "string" param/,
+    ],
+    [
+      "a numeric bound on a string",
+      { s: { type: "string", minimum: 1 } },
+      /minimum applies only to a "number" or "integer" param/,
+    ],
+    [
+      "a numeric bound on a boolean",
+      { b: { type: "boolean", maximum: 1 } },
+      /maximum applies only/,
+    ],
+    [
+      "a fractional bound on an integer",
+      { n: { type: "integer", minimum: 0.5 } },
+      /must be an integer no larger than 2\^53 - 1/,
+    ],
+    [
+      "an integer bound a number cannot bind exactly",
+      { n: { type: "integer", maximum: 2 ** 53 } },
+      /no larger than 2\^53 - 1/,
+    ],
+    [
+      "a minimum above the maximum",
+      { n: { type: "number", minimum: 2, maximum: 1 } },
+      /minimum 2 is more than maximum 1/,
+    ],
+    [
+      "a minLength above the maxLength",
+      { s: { type: "string", minLength: 4, maxLength: 3 } },
+      /minLength 4 is more than maxLength 3/,
+    ],
+    [
+      "a pattern that does not compile",
+      { s: { type: "string", pattern: "(" } },
+      /valid Unicode regular expression/,
+    ],
+    [
+      "a pattern only a non-Unicode expression accepts",
+      { s: { type: "string", pattern: "[\\w-a]" } },
+      /valid Unicode regular expression/,
+    ],
+    [
+      "a refused value of another type",
+      { n: { type: "integer", not: { const: "0" } } },
+      /not\.const must be a value of the param's type, "integer"/,
+    ],
+    [
+      "a fractional refused value on an integer",
+      { n: { type: "integer", not: { const: 0.5 } } },
+      /not\.const must be a value/,
+    ],
+  ])("rejects %s, naming the rule", (_label, params, message) => {
+    const result = withParams(params);
+    expect(errorCodes(result)).toContain("database_query_param_constraint");
+    expect(loadError(result)).toMatch(message);
+  });
+
+  it.each([
+    ["a format the host does not check", { s: { type: "string", format: "date-fullyear" } }],
+    ["a negative length", { s: { type: "string", maxLength: -1 } }],
+    ["a not that is a whole schema", { n: { type: "integer", not: { minimum: 0 } } }],
+    ["an unknown keyword", { n: { type: "integer", multipleOf: 5 } }],
+  ])("rejects %s", (_label, params) => {
+    expect(withParams(params).success).toBe(false);
+  });
+});

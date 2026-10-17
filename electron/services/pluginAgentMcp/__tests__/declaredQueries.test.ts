@@ -257,6 +257,50 @@ describe("the declared query tool", () => {
     expect(tool.checkInput({ ...ok, month: null })).not.toBeNull();
   });
 
+  it("holds each value to the constraints its param declares", () => {
+    const tool = compileAgentMcpTool(
+      declaredQueryDescriptor(
+        write("INSERT INTO tx VALUES (:day, :note, :amount, :ratio)", {
+          day: { type: "string", format: "date" },
+          note: { type: "string", minLength: 1, maxLength: 3, pattern: "^\\p{Ll}+$" },
+          amount: { type: "integer", minimum: -10, maximum: 10, not: { const: 0 } },
+          ratio: { type: "number", minimum: 0, maximum: 1 },
+        })
+      )
+    );
+    const ok = { day: "2024-02-29", note: "été", amount: -10, ratio: 1 };
+    expect(tool.checkInput(ok)).toBeNull();
+    expect(tool.checkInput({ ...ok, note: "🧾" })).toMatch(/\/note must match pattern/);
+    expect(tool.checkInput({ ...ok, day: "2025-02-29" })).toMatch(/\/day must match format "date"/);
+    expect(tool.checkInput({ ...ok, note: "" })).toMatch(/\/note must NOT have fewer than 1/);
+    expect(tool.checkInput({ ...ok, note: "abcd" })).toMatch(/\/note must NOT have more than 3/);
+    expect(tool.checkInput({ ...ok, note: "Ab" })).toMatch(/\/note must match pattern/);
+    expect(tool.checkInput({ ...ok, amount: 0 })).toMatch(/\/amount must NOT be valid/);
+    expect(tool.checkInput({ ...ok, amount: 11 })).toMatch(/\/amount must be <= 10/);
+    expect(tool.checkInput({ ...ok, ratio: 1.01 })).toMatch(/\/ratio must be <= 1/);
+  });
+
+  it("counts a declared length in characters, not UTF-16 units", () => {
+    const tool = compileAgentMcpTool(
+      declaredQueryDescriptor(
+        write("INSERT INTO tx VALUES (:memo)", { memo: { type: "string", maxLength: 3 } })
+      )
+    );
+    expect(tool.checkInput({ memo: "🧾🧾🧾" })).toBeNull();
+    expect(tool.checkInput({ memo: "🧾🧾🧾🧾" })).not.toBeNull();
+  });
+
+  it("keeps an integer to the range a JavaScript number binds exactly unless it narrows it", () => {
+    const schema = declaredQueryInputSchema({
+      wide: { type: "integer" },
+      narrow: { type: "integer", minimum: 1 },
+    });
+    expect(schema.properties).toMatchObject({
+      wide: { minimum: Number.MIN_SAFE_INTEGER, maximum: Number.MAX_SAFE_INTEGER },
+      narrow: { minimum: 1, maximum: Number.MAX_SAFE_INTEGER },
+    });
+  });
+
   it("takes no arguments when it declares no params", () => {
     const schema = declaredQueryInputSchema({});
     expect(schema).not.toHaveProperty("required");
