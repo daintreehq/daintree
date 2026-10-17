@@ -1328,8 +1328,8 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
   const laneSendingAvailable = (): boolean =>
     laneMessagingAvailable() && assistantMessaging?.isSendAvailable() === true;
 
-  // Whether this session is this Shell's enrolled hub while a host exists
-  // (#13336). Read per listing, never cached.
+  // Whether this session is one of this Shell's own assistants while a host
+  // exists (#13336, #13468). Read per listing, never cached.
   const hubMessagingAvailable = (): boolean =>
     hostMessaging !== undefined &&
     sessionStore.sessionHelpIdMap.has(sessionId) &&

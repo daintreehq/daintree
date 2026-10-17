@@ -44,7 +44,9 @@ import type {
   LaneRef,
   MessagingDenial,
   MessagingRequestKind,
+  OpenRun,
 } from "./AssistantMessagingPolicy.js";
+import type { AssistantShellRoutes } from "./AssistantShellRoutes.js";
 import { inboxBodyFits } from "./AssistantInbox.js";
 import type { HostAssistantStarter, HostStartRefusal } from "./HostAssistantStarter.js";
 import type { LaneList } from "./linkMethods.js";
@@ -62,9 +64,17 @@ export interface ObservedHost {
 }
 
 export interface HubMessagingRuntimeDeps {
-  policy: Pick<AssistantMessagingPolicy, "getHub" | "checkHost" | "isSupported">;
+  policy: Pick<AssistantMessagingPolicy, "checkHost" | "isSupported">;
   /** The lane a live help session was provisioned for; null once it is revoked or ending. */
   getSessionLane(helpSessionId: string): LaneRef | null;
+  /**
+   * The run a help session is answering in right now, when it is the running
+   * assistant of its lane in one of this machine's own views; null for a
+   * session its lane replaced, or an assistant a remote Shell's view runs here.
+   */
+  callerRun(helpSessionId: string): OpenRun | null;
+  /** Where a host lane's own messages go first: the assistant here that last spoke to it. */
+  routes?: Pick<AssistantShellRoutes, "remember">;
   /** Read at each call: the client is installed with the database and may come later. */
   client(): Pick<
     AssistantExchangeClient,
@@ -89,7 +99,7 @@ const ERROR_MESSAGE = "Hosts can't be reached for assistant messaging right now.
 const START_OFF_DETAIL =
   "Starting assistants is turned off for this host in this Shell's host settings. Only the person can turn it on.";
 
-/** Why a start didn't happen, as an outcome and fixed words the hub can act on. */
+/** Why a start didn't happen, as an outcome and fixed words the caller can act on. */
 const START_REFUSALS: Record<
   HostStartRefusal,
   { code: Exclude<HostMessagingOutcomeCode, "ok">; detail: string }
@@ -152,7 +162,10 @@ const QUOTA_UNSUPPORTED_DETAIL =
 const QUOTA_NO_ANSWER_DETAIL = "The host didn't answer in time. Try again shortly.";
 
 const NOT_ELIGIBLE_MESSAGE =
-  "Only this Shell's hub assistant, in the session it was enrolled with, can reach assistants on other hosts.";
+  "Only a Daintree Assistant running on this machine can reach assistants on other hosts.";
+
+const NOT_ACCEPTING_DETAIL =
+  "This machine's \"Accept messages from other machines\" setting is off, so its assistants can't reach other hosts' assistants. Only the person can turn it on, in the assistant settings.";
 
 /** What each outcome means for the caller, in fixed words. */
 const DETAILS: Record<Exclude<HostMessagingOutcomeCode, "ok">, string> = {
@@ -255,6 +268,7 @@ export const HUB_SENDS_PER_MINUTE = 30;
 export const HUB_READS_PER_MINUTE = 120;
 /** Sends that may be waiting for a reply at once; another returns without waiting. */
 export const HUB_MAX_CONCURRENT_WAITS = 2;
+
 const DEFAULT_POLL_INTERVAL_MS = 2_000;
 /** The least time a wait's last poll gets, so a wait shorter than one interval still looks once. */
 const FINAL_POLL_FLOOR_MS = 1_000;
@@ -269,7 +283,7 @@ function withinMs<T>(work: Promise<T>, ms: number): Promise<T> {
   return Promise.race([work, late]).finally(() => clearTimeout(timer));
 }
 
-/** A task's state once nothing more will happen to it without the hub, or at all. */
+/** A task's state once nothing more will happen to it without the caller, or at all. */
 function settled(record: ExchangeRecord): boolean {
   return record.state === "input-required" || TERMINAL_EXCHANGE_STATES.has(record.state);
 }
@@ -303,12 +317,15 @@ function observedConnection(state: HostConnectionState): HostListEntry["connecti
 }
 
 /**
- * What this Shell's hub assistant reaches other hosts' assistants through
- * (#13336). The caller is always a help session id the MCP transport bound to
- * its bearer, and it must be the very session the hub was enrolled with:
- * another lane on this machine, a revoked or relaunched hub, a pane or an
- * external key gets nothing, whatever its tier. Each host must be opted in,
- * and the policy is asked again on every call.
+ * What this Shell's assistants reach other hosts' assistants through (#13336).
+ * The caller is always a help session id the MCP transport bound to its
+ * bearer, and any live assistant lane on this machine qualifies, with nothing
+ * to enroll (#13468); a revoked session, a pane or an external key gets
+ * nothing, whatever its tier. Each host must be opted in, this machine's
+ * "Accept messages from other machines" must be on and messaging unpaused,
+ * and the policy is asked again on every call. Tasks belong to the Shell, not
+ * the assistant that sent them: any assistant here may look one up or cancel
+ * it.
  *
  * Everything here reports what was observed. A host's load and agent counts
  * come from its last summary and are null when none came; its lanes are what
@@ -320,7 +337,7 @@ function observedConnection(state: HostConnectionState): HostListEntry["connecti
  * A lane this Shell can message carries its generation: every lane open to
  * other machines (#13467), or on an older host one enrolled for this Shell,
  * whose assistant may not be running and is then listed unavailable, so the
- * hub sees it waiting.
+ * caller sees it waiting.
  */
 export function projectTree(
   listed: LaneList,
@@ -435,29 +452,20 @@ export class HubMessagingRuntime implements HostMessagingRuntimeHandle {
     );
   }
 
-  /** The hub and nothing else: the session the local enrollment was given to, on this platform. */
-  isHub(helpSessionId: string): boolean {
-    const { policy } = this.deps;
-    if (!policy.isSupported()) return false;
-    const lane = this.deps.getSessionLane(helpSessionId);
-    if (lane === null) return false;
-    const hub = policy.getHub();
-    return (
-      hub !== null &&
-      hub.sessionId === helpSessionId &&
-      hub.projectId === lane.projectId &&
-      hub.slot === lane.slot
-    );
+  /** The run a calling session answers in, when it may reach hosts at all. */
+  private caller(helpSessionId: string): OpenRun | null {
+    if (this.disposed || !this.deps.policy.isSupported()) return null;
+    return this.deps.callerRun(helpSessionId);
   }
 
   isAvailable(helpSessionId: string): boolean {
-    return !this.disposed && this.isHub(helpSessionId) && this.deps.hosts().length > 0;
+    return this.caller(helpSessionId) !== null && this.deps.hosts().length > 0;
   }
 
   /**
-   * Whether this session could become the hub while a host exists. Its tools
-   * are offered on that alone, for clients that read the tool list once; the
-   * calls refuse until it is enrolled as the hub.
+   * Whether this session's tools are offered while a host exists: any live
+   * assistant session, before its run is confirmed, for clients that read the
+   * tool list once. The calls still refuse what the policy does.
    */
   isReachable(helpSessionId: string): boolean {
     return (
@@ -534,7 +542,7 @@ export class HubMessagingRuntime implements HostMessagingRuntimeHandle {
 
   /**
    * The host's Codex account quota as Codex reported it there, on demand. A
-   * read: the hub, an opted-in host and the read budget, and passes the pause.
+   * read: an opted-in host and the read budget, and passes the pause.
    */
   readQuota(
     helpSessionId: string,
@@ -564,14 +572,14 @@ export class HubMessagingRuntime implements HostMessagingRuntimeHandle {
   /**
    * Starts an assistant in one of a host's projects and enrolls it for this
    * Shell, with nobody at the host (see HostAssistantStarter). A send in all
-   * but name: the hub, an opted-in host, no pause, the send budget, and the
-   * person's own consent to starting assistants on that host.
+   * but name: an opted-in host, this machine's setting, no pause, the send
+   * budget, and the person's own consent to starting assistants on that host.
    */
   startAssistant(
     helpSessionId: string,
     args: HostStartAssistantArgs
   ): Promise<HostMessagingOutcome<HostStartAssistantResult>> {
-    return this.settle(helpSessionId, async () => {
+    return this.settle(helpSessionId, async (caller) => {
       const base = { assistant: null };
       const refused = this.refuse(args.hostId, "admit") ?? this.limitSend(args.hostId);
       if (refused) return { ...refused, ...base };
@@ -587,8 +595,7 @@ export class HubMessagingRuntime implements HostMessagingRuntimeHandle {
           // Asked again at every step: the person can turn either opt-in off,
           // or pause messaging, while a start is under way.
           authorized: () =>
-            !this.disposed &&
-            this.isHub(helpSessionId) &&
+            this.isStillCaller(helpSessionId, caller) &&
             this.deps.startEnabled?.(args.hostId) === true &&
             this.deps.policy.checkHost({ hostId: args.hostId, kind: "admit" }).ok,
         });
@@ -597,6 +604,11 @@ export class HubMessagingRuntime implements HostMessagingRuntimeHandle {
           return { ...this.outcomeWith(code, detail), ...base };
         }
         const { status: _status, ...assistant } = result;
+        this.deps.routes?.remember(
+          args.hostId,
+          { projectId: assistant.projectId, slot: assistant.slot },
+          caller
+        );
         return { ...this.ok(), assistant };
       } catch (error) {
         return { ...this.failed(error), ...base };
@@ -608,7 +620,7 @@ export class HubMessagingRuntime implements HostMessagingRuntimeHandle {
     helpSessionId: string,
     args: HostSendMessageArgs
   ): Promise<HostMessagingOutcome<HostSendMessageResult>> {
-    return this.settle(helpSessionId, async () => {
+    return this.settle(helpSessionId, async (caller) => {
       const taskId = args.taskId ?? this.newId();
       // A new conversation is named after its first message, so a resend under
       // the same taskId carries the same contextId and the host takes it as the
@@ -622,17 +634,27 @@ export class HubMessagingRuntime implements HostMessagingRuntimeHandle {
       const refused = this.refuse(args.hostId, "admit") ?? this.limitSend(args.hostId);
       if (refused) return { ...refused, ...base, taskId: null, contextId: null };
       const client = this.requireClient();
+      // Before the send, so a message that lane starts in answer finds its asker.
+      this.deps.routes?.remember(
+        args.hostId,
+        { projectId: args.projectId, slot: args.slot },
+        caller
+      );
       let record: ExchangeRecord;
       try {
-        const sent = await client.send(args.hostId, {
-          messageId: taskId,
-          contextId,
-          referenceTaskIds: args.referenceTaskIds ?? [],
-          projectId: args.projectId,
-          slot: args.slot,
-          generation: args.generation,
-          body: args.text,
-        });
+        const sent = await client.send(
+          args.hostId,
+          {
+            messageId: taskId,
+            contextId,
+            referenceTaskIds: args.referenceTaskIds ?? [],
+            projectId: args.projectId,
+            slot: args.slot,
+            generation: args.generation,
+            body: args.text,
+          },
+          caller
+        );
         if (sent.status === "unknown") return { ...this.outcome("ambiguous"), ...base };
         record = sent.record;
       } catch (error) {
@@ -673,7 +695,7 @@ export class HubMessagingRuntime implements HostMessagingRuntimeHandle {
           wait: "skipped",
         };
       }
-      const waited = await this.waitForReply(helpSessionId, args.hostId, record, waitMs);
+      const waited = await this.waitForReply(helpSessionId, caller, args.hostId, record, waitMs);
       return {
         ...this.ok(),
         ...base,
@@ -786,11 +808,12 @@ export class HubMessagingRuntime implements HostMessagingRuntimeHandle {
   /**
    * Polls the host until the task settles or the wait runs out. Each poll is
    * bounded by what is left of the wait (the last by a short floor, so even
-   * the shortest wait looks once), and the caller must still be the hub and
-   * the host still reachable for it before each one.
+   * the shortest wait looks once), and the caller must still be the run that
+   * sent it and the host still readable before each one.
    */
   private async waitForReply(
     helpSessionId: string,
+    caller: OpenRun,
     hostId: HostId,
     record: ExchangeRecord,
     waitMs: number
@@ -801,7 +824,7 @@ export class HubMessagingRuntime implements HostMessagingRuntimeHandle {
     try {
       while (!this.disposed) {
         await this.sleep(Math.max(0, Math.min(this.pollIntervalMs, deadline - this.now())));
-        if (this.disposed || !this.isHub(helpSessionId)) break;
+        if (!this.isStillCaller(helpSessionId, caller)) break;
         if (!this.deps.policy.checkHost({ hostId, kind: "inspect" }).ok) break;
         try {
           const budget = Math.max(deadline - this.now(), FINAL_POLL_FLOOR_MS);
@@ -817,6 +840,19 @@ export class HubMessagingRuntime implements HostMessagingRuntimeHandle {
     } finally {
       this.waits -= 1;
     }
+  }
+
+  /** Whether `helpSessionId` still answers in the run it called from. */
+  private isStillCaller(helpSessionId: string, caller: OpenRun): boolean {
+    const now = this.caller(helpSessionId);
+    return (
+      now !== null &&
+      now.projectId === caller.projectId &&
+      now.slot === caller.slot &&
+      now.sessionId === caller.sessionId &&
+      now.terminalId === caller.terminalId &&
+      now.launchGeneration === caller.launchGeneration
+    );
   }
 
   private async hostProjects(hostId: HostId): Promise<readonly HostProjectSummary[]> {
@@ -875,7 +911,8 @@ export class HubMessagingRuntime implements HostMessagingRuntimeHandle {
     }
     const decision = this.deps.policy.checkHost({ hostId, kind });
     if (decision.ok) return null;
-    if (decision.reason === "no-hub") throw new RefusalError("NOT_ELIGIBLE");
+    if (decision.reason === "not-accepting")
+      return this.outcomeWith("opted_out", NOT_ACCEPTING_DETAIL);
     return this.outcome(denialOutcome(decision.reason));
   }
 
@@ -913,13 +950,14 @@ export class HubMessagingRuntime implements HostMessagingRuntimeHandle {
 
   private async settle<T>(
     helpSessionId: string,
-    work: () => Promise<T>
+    work: (caller: OpenRun) => Promise<T>
   ): Promise<HostMessagingOutcome<T>> {
-    if (this.disposed || !this.isHub(helpSessionId)) {
+    const caller = this.caller(helpSessionId);
+    if (caller === null) {
       return { ok: false, code: "NOT_ELIGIBLE", message: NOT_ELIGIBLE_MESSAGE };
     }
     try {
-      return { ok: true, value: await work() };
+      return { ok: true, value: await work(caller) };
     } catch (error) {
       if (error instanceof RefusalError) {
         return { ok: false, code: error.code, message: error.message };

@@ -77,9 +77,7 @@ export type MessagingDenial =
   | "stale-generation"
   | "unavailable"
   | "wrong-shell"
-  | "hub-taken"
   | "host-disabled"
-  | "no-hub"
   | "paused"
   | "not-accepting"
   | "declined";
@@ -122,13 +120,6 @@ interface DeclinedRun {
   sessionId: string;
   terminalId: string;
   launchGeneration: number;
-  /** Declined as this Shell's hub, which no sibling lane takes over while it runs. */
-  hub: boolean;
-  /**
-   * Turned on again from another machine's view: it takes messages from other
-   * machines, while the hub this machine's person turned off stays off.
-   */
-  reopened?: boolean;
 }
 
 export interface LaneCheck {
@@ -142,6 +133,8 @@ export interface HostCheck {
   hostId: HostId;
   kind: MessagingRequestKind;
 }
+
+export type HostCheckResult = { ok: true } | { ok: false; reason: MessagingDenial };
 
 export interface AssistantMessagingPolicyDeps {
   /** The help session a lane is running right now; never launches one. */
@@ -226,10 +219,11 @@ function laneKey(lane: LaneRef): string | null {
  * The one place cross-host assistant messaging asks before it admits or
  * delivers anything. As a host, every running lane is open to every Shell that
  * authenticated over the link (`checkOpen`), unless this machine's setting is
- * off, the person turned that run off, or messaging is paused. Enrollment is
- * what's left for the rest: this Shell's hub, and the Shell a host's lane
- * writes to when it starts a message of its own (the one whose view started
- * it). Everything but the per-host opt-in (on the host list) and the saved
+ * off, the person turned that run off, or messaging is paused. As a Shell,
+ * every assistant here may reach hosts' assistants (`checkHost`), with the
+ * same setting and pause as its switches. Enrollment is what's left: the
+ * Shell a host's lane writes to when it starts a message of its own (the one
+ * whose view started it). Everything but the per-host opt-in (on the host list) and the saved
  * setting (in the assistant settings) is in memory: an app restart ends every
  * enrollment and clears the pause, and the default enrolls each run again as
  * it starts (`enrollByDefault`).
@@ -280,22 +274,19 @@ export class AssistantMessagingPolicy {
     if (existing && !sameShell(existing.enrolledBy, shell) && !this.waiting(existing)) {
       return { ok: false, reason: "wrong-shell" };
     }
-    if (shell.kind === "local") {
-      const hub = this.getHub();
-      if (hub && laneKey(hub) !== key) return { ok: false, reason: "hub-taken" };
-    }
     const run = this.liveRun(lane);
     if (!run) return { ok: false, reason: "unavailable" };
     return { ok: true, enrollment: this.take(key, lane, shell, run) };
   }
 
   /**
-   * Enroll a running lane because this machine's saved default says to, with
-   * nobody clicking, so stricter than the person's toggle: never a lane anyone
-   * holds (a Shell that's away included), a run the person turned off, a
-   * second hub, or any hub while the one the person turned off still runs. A
-   * remote Shell must have proved its sender and own the view the run is
-   * pinned to. Checked and taken in one step.
+   * Enroll a running lane for the remote Shell whose view it runs in because
+   * this machine's saved default says to, with nobody clicking, so stricter
+   * than the person's toggle: never a lane anyone holds (a Shell that's away
+   * included) or a run the person turned off, and only for a Shell that proved
+   * its sender and owns the view the run is pinned to. This machine's own
+   * assistants need no enrollment to reach other hosts (#13468). Checked and
+   * taken in one step.
    */
   enrollByDefault(
     lane: LaneRef,
@@ -317,14 +308,10 @@ export class AssistantMessagingPolicy {
     // and another Shell's view then took the assistant over) isn't given to a
     // different Shell by default; the Shell that gave it gets it back.
     if (this.endedForAnother(key, run, shell)) return { ok: false, reason: "wrong-shell" };
-    if (shell.kind === "local") {
-      if (this.getHub()) return { ok: false, reason: "hub-taken" };
-      if (this.hubDeclined()) return { ok: false, reason: "declined" };
-    } else {
-      if (!this.sessionSenders.has(shell.linkSessionId)) return { ok: false, reason: "unproven" };
-      if (this.deps.startedThrough?.(run.running, shell.linkSessionId) !== true) {
-        return { ok: false, reason: "wrong-session" };
-      }
+    if (shell.kind === "local") return { ok: false, reason: "wrong-session" };
+    if (!this.sessionSenders.has(shell.linkSessionId)) return { ok: false, reason: "unproven" };
+    if (this.deps.startedThrough?.(run.running, shell.linkSessionId) !== true) {
+      return { ok: false, reason: "wrong-session" };
     }
     return { ok: true, enrollment: this.take(key, lane, shell, run) };
   }
@@ -373,8 +360,7 @@ export class AssistantMessagingPolicy {
    * enrolled the lane, except while that Shell is away: anyone with a view of
    * the lane may then turn it off, since withdrawing never gives access.
    * `decline` is the person turning it off: no saved default enrolls this run
-   * again, and no other lane becomes the hub by default while a declined hub
-   * runs. Turning the lane on again lifts it.
+   * again. Turning the lane on again lifts it.
    */
   unenroll(
     lane: LaneRef,
@@ -397,7 +383,6 @@ export class AssistantMessagingPolicy {
         sessionId: existing.sessionId,
         terminalId: existing.terminalId,
         launchGeneration: existing.launchGeneration,
-        hub: existing.enrolledBy.kind === "local",
       });
     }
     this.changed();
@@ -515,16 +500,6 @@ export class AssistantMessagingPolicy {
     return this.deps.listRunningLanes?.() ?? [];
   }
 
-  /** The lane enrolled on this Shell itself, if any. */
-  getHub(): LaneEnrollment | null {
-    for (const [key, enrollment] of this.enrollments) {
-      if (enrollment.enrolledBy.kind !== "local") continue;
-      const hub = this.current(key);
-      return hub ? copyEnrollment(hub) : null;
-    }
-    return null;
-  }
-
   /**
    * Ends every enrollment whose run was replaced. A relaunch in place keeps
    * its session and terminal ids and emits no session event, so without this
@@ -586,15 +561,24 @@ export class AssistantMessagingPolicy {
     return this.decide(enrollment, check.kind);
   }
 
-  /** Shell side: may this Shell's hub message assistants on `hostId` for `kind`? */
-  checkHost(check: HostCheck): EnrollmentResult {
+  /**
+   * Shell side: may this Shell's assistants message assistants on `hostId`
+   * for `kind`? Any of them may, with nothing to enroll (#13468): the host's
+   * opt-in, this machine's setting and the pause are the only switches. The
+   * setting stops new messages (`admit`) only: reading, listing and
+   * cancelling what is already under way pass it, as most of them pass the
+   * pause.
+   */
+  checkHost(check: HostCheck): HostCheckResult {
     if (!this.supported) return { ok: false, reason: "unsupported-platform" };
     if (!this.deps.isHostMessagingEnabled(check.hostId)) {
       return { ok: false, reason: "host-disabled" };
     }
-    const hub = this.getHub();
-    if (!hub) return { ok: false, reason: "no-hub" };
-    return this.decide(hub, check.kind);
+    if (check.kind === "admit" && this.deps.acceptsRemoteMessages?.() !== true) {
+      return { ok: false, reason: "not-accepting" };
+    }
+    if (this.paused && !PAUSE_EXEMPT.has(check.kind)) return { ok: false, reason: "paused" };
+    return { ok: true };
   }
 
   /**
@@ -615,7 +599,7 @@ export class AssistantMessagingPolicy {
     }
     const run = this.liveRun(lane);
     if (!run) return { ok: false, reason: "unavailable" };
-    if (OPEN_GATED.has(kind) && this.isClosed(key, run)) return { ok: false, reason: "declined" };
+    if (OPEN_GATED.has(kind) && this.isDeclined(key, run)) return { ok: false, reason: "declined" };
     if (this.paused && !PAUSE_EXEMPT.has(kind)) return { ok: false, reason: "paused" };
     return {
       ok: true,
@@ -643,14 +627,14 @@ export class AssistantMessagingPolicy {
   isRunDeclined(lane: LaneRef): boolean {
     const key = laneKey(lane);
     const run = key === null ? null : this.liveRun(lane);
-    return key !== null && run !== null && this.isClosed(key, run);
+    return key !== null && run !== null && this.isDeclined(key, run);
   }
 
   /**
    * The person turned the lane's current run off, from a view of `by`: it
-   * takes no new message from another machine, and no Shell's hub hears from
-   * it. Turned off on this machine, it stops being this machine's hub too; a
-   * remote view's off never touches that. Only that run, as `unenroll`'s
+   * takes no new message from another machine, and no Shell hears from it.
+   * It can still reach other hosts' assistants itself: only this machine's
+   * setting and the pause stop that (#13468). Only that run, as `unenroll`'s
    * decline; a relaunch accepts again. False when nothing is running there.
    */
   declineRun(lane: LaneRef, by: MessagingShell): boolean {
@@ -658,43 +642,26 @@ export class AssistantMessagingPolicy {
     if (key === null || !isValidShell(by)) return false;
     const run = this.liveRun(lane);
     if (!run) return false;
-    const existing = this.current(key);
-    const ends =
-      existing !== undefined && (existing.enrolledBy.kind === "remote" || by.kind === "local");
-    if (ends) {
+    if (this.current(key) !== undefined) {
       this.enrollments.delete(key);
       this.ended.delete(key);
     }
-    // Turned off again, a hub it was stays one the person turned off.
-    const wasHub = this.isDeclined(key, run) && this.declined.get(key)?.hub === true;
     this.declined.set(key, {
       projectId: lane.projectId,
       slot: lane.slot,
       sessionId: run.running.sessionId,
       terminalId: run.running.terminalId,
       launchGeneration: run.launchGeneration,
-      hub: wasHub || (ends && existing?.enrolledBy.kind === "local"),
     });
     this.changed();
     return true;
   }
 
-  /**
-   * Lifts the person's off for the lane's current run, from a view of `by`.
-   * A remote view's on opens it to other machines again but leaves a hub this
-   * machine's person turned off as they left it: no default makes it, or a
-   * sibling, the hub while it runs.
-   */
+  /** Lifts the person's off for the lane's current run, from a view of `by`. */
   acceptRun(lane: LaneRef, by: MessagingShell): void {
     const key = laneKey(lane);
-    const declined = key === null ? undefined : this.declined.get(key);
-    if (key === null || !declined || !isValidShell(by)) return;
-    if (by.kind === "remote" && declined.hub) {
-      if (declined.reopened === true) return;
-      declined.reopened = true;
-    } else {
-      this.declined.delete(key);
-    }
+    if (key === null || !this.declined.has(key) || !isValidShell(by)) return;
+    this.declined.delete(key);
     this.changed();
   }
 
@@ -816,14 +783,6 @@ export class AssistantMessagingPolicy {
     return false;
   }
 
-  /** Whether the run is turned off to other machines: declined, and not reopened from one. */
-  private isClosed(
-    key: string,
-    run: { running: RunningLaneSession; launchGeneration: number }
-  ): boolean {
-    return this.isDeclined(key, run) && this.declined.get(key)?.reopened !== true;
-  }
-
   private endedForAnother(
     key: string,
     run: { running: RunningLaneSession; launchGeneration: number },
@@ -844,17 +803,6 @@ export class AssistantMessagingPolicy {
     return (
       ended.sender === undefined || ended.sender !== this.sessionSenders.get(shell.linkSessionId)
     );
-  }
-
-  /** Whether a hub the person turned off is still running. */
-  private hubDeclined(): boolean {
-    for (const [key, declined] of [...this.declined]) {
-      if (!declined.hub) continue;
-      const run = this.liveRun(declined);
-      if (run && this.isDeclined(key, run)) return true;
-      this.declined.delete(key);
-    }
-    return false;
   }
 
   private handleSessionEnded(event: HelpSessionEndedEvent): void {

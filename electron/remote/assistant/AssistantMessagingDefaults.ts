@@ -13,16 +13,16 @@ export interface AssistantMessagingDefaultsDeps {
   viewShell(running: RunningLaneSession, projectId: string): MessagingShell | null;
   /** This machine's saved "accept messages from other machines by default", read at each pass. */
   acceptsByDefault(): boolean;
-  /** Whether this Shell has messaging on for any host: without one, a hub hears from nobody. */
-  hasMessagingHost(): boolean;
 }
 
 /**
  * Applies this machine's saved default to its running assistants, so nobody
- * has to turn each run on: every run is offered to the Shell whose view it
- * runs in, through `enrollByDefault`, which refuses whatever a person or
- * another Shell already decided. A run that isn't there yet waits for the next
- * pass; nothing here starts one. Passes are coalesced to one per tick.
+ * has to turn each run on: every run a remote Shell's view runs is offered to
+ * that Shell, through `enrollByDefault`, which refuses whatever a person or
+ * another Shell already decided, so what the run starts on its own goes to
+ * that Shell. This machine's own runs need nothing (#13468). A run that isn't
+ * there yet waits for the next pass; nothing here starts one. Passes are
+ * coalesced to one per tick.
  */
 export class AssistantMessagingDefaults {
   private queued = false;
@@ -45,14 +45,12 @@ export class AssistantMessagingDefaults {
 
   apply(): void {
     if (this.disposed || !this.deps.policy.isSupported() || !this.deps.acceptsByDefault()) return;
-    const hubWanted = this.deps.hasMessagingHost();
-    // In the order runs were provisioned, so the hub is the earliest one still running.
     for (const lane of this.deps.listRunningLanes()) {
       if (lane.attached === false) continue;
       const running = this.deps.getRunningLaneSession(lane.projectId, lane.slot);
       if (!running) continue;
       const shell = this.deps.viewShell(running, lane.projectId);
-      if (shell === null || (shell.kind === "local" && !hubWanted)) continue;
+      if (shell === null || shell.kind === "local") continue;
       this.deps.policy.enrollByDefault({ projectId: lane.projectId, slot: lane.slot }, shell);
     }
   }

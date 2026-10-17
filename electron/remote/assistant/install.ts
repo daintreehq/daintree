@@ -28,6 +28,7 @@ import { getRemoteService, registerRemoteService } from "../runtime.js";
 import { exchangeWakeSink } from "../exchange/wakeSink.js";
 import { AssistantExchangeClient, type MovedExchange } from "./AssistantExchangeClient.js";
 import { AssistantHubReceiver } from "./AssistantHubReceiver.js";
+import { AssistantShellRoutes } from "./AssistantShellRoutes.js";
 import {
   HostAssistantStarter,
   type HostAssistantStarterDeps,
@@ -36,7 +37,12 @@ import {
 import { AssistantInbox } from "./AssistantInbox.js";
 import { AssistantLaneWaker } from "./AssistantLaneWaker.js";
 import { AssistantMessagingDefaults } from "./AssistantMessagingDefaults.js";
-import { AssistantMessagingPolicy, type MessagingShell } from "./AssistantMessagingPolicy.js";
+import {
+  AssistantMessagingPolicy,
+  OPEN_LANE_GENERATION,
+  type LaneRef,
+  type MessagingShell,
+} from "./AssistantMessagingPolicy.js";
 import { AssistantMessagingRuntime } from "./AssistantMessagingRuntime.js";
 import { HubMessagingRuntime, type ObservedHost } from "./HubMessagingRuntime.js";
 
@@ -97,8 +103,6 @@ export interface AssistantMessagingPolicyInstallDeps {
    */
   acceptsByDefault?(): boolean;
   onDefaultChanged?(listener: () => void): () => void;
-  /** Whether this Shell has messaging on for any host. */
-  hasMessagingHost?(): boolean;
 }
 
 /** The Shell whose view a run is pinned to; see `AssistantMessagingDefaultsDeps.viewShell`. */
@@ -199,6 +203,8 @@ export function installAssistantMessagingPolicy(
     onSessionEnded: (listener) => helpSessionService.addSessionEndedListener(listener),
   });
   const acceptsByDefault = deps.acceptsByDefault;
+  // Which of this Shell's assistants last spoke to each host lane: where that lane's own messages go.
+  const routes = new AssistantShellRoutes();
   const defaults = new AssistantMessagingDefaults({
     policy,
     listRunningLanes: () => helpSessionService.listRunningLanes(),
@@ -206,7 +212,6 @@ export function installAssistantMessagingPolicy(
       helpSessionService.getRunningLaneSession(projectId, slot),
     viewShell: viewShellOf,
     acceptsByDefault: () => acceptsByDefault?.() === true,
-    hasMessagingHost: () => deps.hasMessagingHost?.() === true,
   });
   let revision = 0;
   let hadHosts = deps.hasHosts();
@@ -266,7 +271,8 @@ export function installAssistantMessagingPolicy(
   // Only the first host arriving or the last one going changes what views
   // show, and whether the hub is offered its host tools.
   const offHosts = deps.onHostsChanged(() => {
-    // Any host's opt-in may have turned on, which gives the hub a host to hear from.
+    // A removed host's lanes start nothing more to this Shell.
+    routes.retainHosts(new Set((deps.observeHosts?.() ?? []).map((host) => host.hostId)));
     defaults.schedule();
     const hasHosts = deps.hasHosts();
     if (hasHosts === hadHosts) return;
@@ -346,8 +352,8 @@ export function installAssistantMessagingPolicy(
   });
   const offPolicyReannounce = policy.onChange(payReannounce);
   // Read at each provision and held for that session; a host that connects later counts from the
-  // next. A lane is an assistant a hub on another machine can enroll, so only listening as a host
-  // makes one: a hub's own assistant hears from its hosts, but not as their lane.
+  // next. A lane is an assistant another machine's Shell can message, so only listening as a host
+  // makes one: a Shell's own assistant hears from its hosts, but not as their lane.
   helpSessionService.setRunbooksHostState(() => {
     const hosts = observedRunbooksHostsState(deps.hasHosts(), deps.observeHosts?.() ?? null);
     return hosts === null ? null : { hosts, laneReachable: runtime.listensAsHost() };
@@ -374,6 +380,24 @@ export function installAssistantMessagingPolicy(
   const hub = new HubMessagingRuntime({
     policy,
     getSessionLane: (helpSessionId) => helpSessionService.getSessionLane(helpSessionId),
+    callerRun: (helpSessionId) => {
+      const lane = helpSessionService.getSessionLane(helpSessionId);
+      if (lane === null) return null;
+      const running = helpSessionService.getRunningLaneSession(lane.projectId, lane.slot);
+      if (running === null || running.sessionId !== helpSessionId) return null;
+      // An assistant a remote Shell's view runs here is that Shell's, never this one's.
+      if (viewShellOf(running, lane.projectId)?.kind !== "local") return null;
+      const launchGeneration = getPtyClient()?.getLiveGeneration(running.terminalId) ?? null;
+      if (launchGeneration === null) return null;
+      return {
+        projectId: lane.projectId,
+        slot: lane.slot,
+        sessionId: running.sessionId,
+        terminalId: running.terminalId,
+        launchGeneration,
+      };
+    },
+    routes,
     client: () => getRemoteService("assistantExchangeClient") ?? null,
     hosts: () => deps.observeHosts?.() ?? [],
     listHostProjects: deps.listHostProjects,
@@ -415,17 +439,34 @@ export function installAssistantMessagingPolicy(
     attemptReattach(hostId, round, 0);
   };
   const offSessionOpened = deps.onHostSessionOpened?.((hostId) => reattach(hostId)) ?? (() => {});
-  // What a host's assistants send this hub (#13338), admitted through the same policy.
+  // One of this machine's own assistants taking messages from other machines right now.
+  const accepting = (lane: LaneRef): boolean => {
+    if (!policy.checkOpen(lane, "admit").ok) return false;
+    const running = helpSessionService.getRunningLaneSession(lane.projectId, lane.slot);
+    return running !== null && viewShellOf(running, lane.projectId)?.kind === "local";
+  };
+  // What a host's assistants send this Shell (#13338), admitted through the same policy: to the
+  // lane that last spoke to theirs, else the earliest-provisioned one taking messages (#13468).
   const receiver = new AssistantHubReceiver({
     policy,
     store,
     runtime,
+    recipient: (hostId, sourceLane) => {
+      const asker = routes.askerFor(hostId, sourceLane);
+      if (asker !== null && accepting(asker)) return asker;
+      for (const lane of helpSessionService.listRunningLanes()) {
+        if (lane.attached === false) continue;
+        const ref = { projectId: lane.projectId, slot: lane.slot };
+        if (accepting(ref)) return ref;
+      }
+      return null;
+    },
     hostName: (hostId) =>
       deps.observeHosts?.().find((host) => host.hostId === hostId)?.name ?? "Remote host",
-    wake: (record, enrolled) =>
+    wake: (record, recipient) =>
       waker.wake({
-        lane: { projectId: enrolled.projectId, slot: enrolled.slot },
-        generation: enrolled.generation,
+        lane: recipient,
+        generation: OPEN_LANE_GENERATION,
         shell: { kind: "local" },
         exchangeId: record.taskId,
         sink: exchangeWakeSink(
@@ -461,6 +502,7 @@ export function installAssistantMessagingPolicy(
     receiver.dispose();
     unregisterHub();
     hub.dispose();
+    routes.clear();
     unregisterRuntimeService();
     unregisterRuntime();
     unregisterSurface();
@@ -486,26 +528,25 @@ declare module "../runtime.js" {
 }
 
 /**
- * Tells this Shell's hub that exchanges it sent moved on their host (#13337),
- * through the same guarded wake a receiving lane gets. Only the hub that sent
- * them: a lane enrolled since is a different participant and hears nothing.
+ * Tells each of this Shell's assistants that exchanges it sent moved on their
+ * host (#13337), through the same guarded wake a receiving lane gets. Only the
+ * run that sent them (#13468): one that replaced it, or another assistant,
+ * hears nothing, though any of them can still look the task up.
  */
-export function wakeHubForMoved(
+export function wakeAskersForMoved(
   moved: readonly MovedExchange[],
-  policy: Pick<AssistantMessagingPolicy, "getHub"> | undefined,
   waker: Pick<AssistantLaneWaker, "wake"> | undefined
 ): void {
-  const hub = policy?.getHub();
-  if (!hub || !waker) return;
-  for (const { record, hubGeneration } of moved) {
-    if (hubGeneration !== hub.generation) continue;
+  if (!waker) return;
+  for (const { record, asker } of moved) {
     waker.wake({
-      lane: { projectId: hub.projectId, slot: hub.slot },
-      generation: hub.generation,
+      lane: { projectId: asker.projectId, slot: asker.slot },
+      generation: OPEN_LANE_GENERATION,
       shell: { kind: "local" },
       exchangeId: record.taskId,
       kind: "update",
-      // The host's record holds what happened; telling the hub twice costs nothing.
+      run: asker,
+      // The host's record holds what happened; telling the asker twice costs nothing.
       sink: { beforeType: () => true, report: () => {} },
     });
   }
@@ -563,11 +604,7 @@ export function installAssistantExchangeClient(
     hubReceiver: () => getRemoteService("assistantHubReceiver"),
     messagingEnabled: deps.messagingEnabled,
     onExchangesMoved: (_hostId, moved) =>
-      wakeHubForMoved(
-        moved,
-        getRemoteService("assistantMessagingPolicy"),
-        getRemoteService("assistantLaneWaker")
-      ),
+      wakeAskersForMoved(moved, getRemoteService("assistantLaneWaker")),
   });
   // Subscribed before the first reconcile, so nothing it records goes unannounced.
   const pending = new Set<HostId>();

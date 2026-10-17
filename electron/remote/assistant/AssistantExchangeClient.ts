@@ -8,7 +8,11 @@ import type {
 import type { CreateDisposition, ExchangeChanges, ExchangeRecord } from "../exchange/types.js";
 import type { LinkSession } from "../link/session.js";
 import type { AssistantHubReceiver } from "./AssistantHubReceiver.js";
-import type { AssistantMessagingPolicy, MessagingRequestKind } from "./AssistantMessagingPolicy.js";
+import type {
+  AssistantMessagingPolicy,
+  MessagingRequestKind,
+  OpenRun,
+} from "./AssistantMessagingPolicy.js";
 import {
   AssistantLinkMethod,
   CodexQuotaReadingSchema,
@@ -35,12 +39,12 @@ export interface AssistantExchangeClientDeps {
   /** The host's open session, connecting it if need be; null when the host can't be reached. */
   session(hostId: HostId): Promise<LinkSession | null>;
   onSessionOpened(listener: (hostId: HostId, session: LinkSession) => void): () => void;
-  /** This Shell's policy: whether its hub may message assistants on a host at all. */
+  /** This Shell's policy: whether its assistants may message assistants on a host at all. */
   policy?: () => AssistantMessagingPolicy | undefined;
   /**
    * Told after a reconcile with the exchanges whose state it moved, each with
-   * the enrollment generation of the hub that sent it in this run. One sent
-   * before a restart has none and isn't told: nothing is rebound to a new hub.
+   * the assistant run that sent it in this process. One sent before a restart
+   * has none and isn't told: nothing is rebound to another assistant.
    */
   onExchangesMoved?: (hostId: HostId, moved: MovedExchange[]) => void;
   /** Admits what a host's assistants send this Shell's hub (#13338); absent, the Shell refuses them. */
@@ -60,7 +64,8 @@ export type AssistantSendResult =
 
 export interface MovedExchange {
   record: ExchangeRecord;
-  hubGeneration: string;
+  /** The assistant run here that sent it. */
+  asker: OpenRun;
 }
 
 const CALL_TIMEOUT_MS = 15_000;
@@ -148,8 +153,8 @@ function invalidAnswer(hostId: HostId, method: string): AppError {
 export class AssistantExchangeClient {
   private readonly authenticated = new WeakSet<LinkSession>();
   private readonly reconciling = new Map<HostId, Promise<void>>();
-  /** The hub enrollment each exchange sent in this run went out under, by host and messageId. */
-  private readonly sentBy = new Map<string, { hubGeneration: string; sentAt: number }>();
+  /** The assistant run that sent each exchange in this process, by host and messageId. */
+  private readonly sentBy = new Map<string, { asker: OpenRun; sentAt: number }>();
   /** Hosts that announced a change while their reconcile was already reading. */
   private readonly again = new Set<HostId>();
   private readonly disposers: Array<() => void> = [];
@@ -247,7 +252,7 @@ export class AssistantExchangeClient {
 
   /**
    * The same listing, for giving this Shell's lanes their views back after a
-   * restart: it needs the host's messaging opt-in, but not a hub, which the
+   * restart: it needs the host's messaging opt-in and nothing else the
    * person may not have brought back yet when this runs.
    */
   async listOwnLanes(hostId: HostId): Promise<LaneList> {
@@ -291,7 +296,7 @@ export class AssistantExchangeClient {
   }
 
   /**
-   * Enroll for this Shell an assistant its hub just started on the host: that
+   * Enroll for this Shell an assistant one of its own just started on the host: that
    * run only, and only while no other Shell holds the lane.
    */
   async enrollStarted(hostId: HostId, payload: EnrollStartedPayload): Promise<EnrollStartedResult> {
@@ -312,7 +317,11 @@ export class AssistantExchangeClient {
    * same messageId again is safe: the host answers from its record, and
    * refuses one reused for a different message.
    */
-  async send(hostId: HostId, payload: AssistantSendPayload): Promise<AssistantSendResult> {
+  async send(
+    hostId: HostId,
+    payload: AssistantSendPayload,
+    asker?: OpenRun
+  ): Promise<AssistantSendResult> {
     this.checkHost(hostId, "admit");
     const { journal } = this.deps;
     const session = await this.open(hostId);
@@ -327,10 +336,9 @@ export class AssistantExchangeClient {
       throw new RetryWindowPassedError(payload.messageId);
     }
     const attempt = journal.noteSending(hostId, payload.messageId);
-    // Only a message new to the journal is this hub's: a resend keeps whose it was, and
-    // one sent before a restart stays no hub's.
-    const hub = entry === null ? this.deps.policy?.()?.getHub() : null;
-    if (hub) this.bind(sentKey(hostId, payload.messageId), hub.generation);
+    // Only a message new to the journal is the asker's: a resend, by whichever
+    // assistant, keeps whose it was, and one sent before a restart stays nobody's.
+    if (entry === null && asker !== undefined) this.bind(sentKey(hostId, payload.messageId), asker);
     let answer: unknown;
     try {
       answer = await session.call(AssistantLinkMethod.SEND, payload, { timeoutMs: this.timeoutMs });
@@ -436,12 +444,12 @@ export class AssistantExchangeClient {
   }
 
   /** Bindings outlive no exchange: past its TTL the host has expired it whatever happened. */
-  private bind(key: string, hubGeneration: string): void {
+  private bind(key: string, asker: OpenRun): void {
     const now = Date.now();
     for (const [other, binding] of this.sentBy) {
       if (now - binding.sentAt > EXCHANGE_TTL_MS) this.sentBy.delete(other);
     }
-    this.sentBy.set(key, { hubGeneration, sentAt: now });
+    this.sentBy.set(key, { asker: { ...asker }, sentAt: now });
   }
 
   private retryLater(hostId: HostId, session?: LinkSession): void {
@@ -470,7 +478,7 @@ export class AssistantExchangeClient {
       for (const record of records) {
         const known = journal.get(hostId, record.messageId)?.record;
         // An exchange first seen past where its send left it moved while its answer was lost.
-        // Delivery facts move the revision too; only a new state or a reply is the hub's business.
+        // Delivery facts move the revision too; only a new state or a reply is the asker's business.
         const isMove = known
           ? known.revision < record.revision &&
             (known.state !== record.state ||
@@ -507,7 +515,7 @@ export class AssistantExchangeClient {
       const key = sentKey(hostId, record.messageId);
       const binding = this.sentBy.get(key);
       if (binding === undefined) continue;
-      moved.push({ record, hubGeneration: binding.hubGeneration });
+      moved.push({ record, asker: { ...binding.asker } });
       // A reply may still land after another terminal state, so only a reply or expiry ends it.
       if (record.delivery.replyReceivedAt !== null || record.tombstonedAt !== null) {
         this.sentBy.delete(key);
@@ -517,7 +525,7 @@ export class AssistantExchangeClient {
     try {
       this.deps.onExchangesMoved?.(hostId, moved);
     } catch (error) {
-      console.error("[AssistantExchanges] Telling the hub of moved exchanges failed:", error);
+      console.error("[AssistantExchanges] Telling askers of moved exchanges failed:", error);
     }
   }
 

@@ -36,7 +36,7 @@ export interface AssistantMessagingState {
 }
 
 export type AssistantMessagingEnrollDenial =
-  "unavailable" | "unsupported" | "hub-taken" | "wrong-shell" | "not-running";
+  "unavailable" | "unsupported" | "wrong-shell" | "not-running";
 
 export interface AssistantMessagingEnrollResult {
   state: AssistantMessagingState;

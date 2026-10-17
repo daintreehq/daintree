@@ -8,6 +8,7 @@ import {
   type AssistantMessagingPolicy,
   type LaneRef,
   type MessagingShell,
+  type OpenRun,
 } from "./AssistantMessagingPolicy.js";
 
 /** The run a wake was pinned to: one that replaces it is not who the wake was for. */
@@ -36,13 +37,19 @@ export interface LaneWakeRequest {
   shell: MessagingShell;
   /** The exchange's opaque handle, typed into the lane as is. */
   exchangeId: string;
-  /** A receiving lane's new message (the default), or the hub's own exchange having moved. */
+  /** A receiving lane's new message (the default), or the caller's own exchange having moved. */
   kind?: LaneWake["kind"];
+  /**
+   * The one run of this machine's own the wake is for: the assistant that sent
+   * an exchange that moved (#13468). It was admitted when it was sent, so only
+   * that run still running and the pause decide; a replacement never hears it.
+   */
+  run?: OpenRun;
   sink: LaneWakeSink;
 }
 
 export interface AssistantLaneWakerDeps {
-  policy: Pick<AssistantMessagingPolicy, "checkLane" | "getEnrollment" | "checkOpen">;
+  policy: Pick<AssistantMessagingPolicy, "checkLane" | "getEnrollment" | "checkOpen" | "isPaused">;
   /** Whether `shell` may type into `projectId` under its drive lease right now. */
   shellDrives(projectId: string, shell: MessagingShell): boolean;
   /** The pane's notice line; the only writer that types into it. */
@@ -88,9 +95,25 @@ export class AssistantLaneWaker {
     request: LaneWakeRequest,
     pinned: PinnedRun | null
   ): { check: LaneWakeCheck; run: PinnedRun | null } {
+    if (request.run !== undefined) return this.checkRun(request.run);
     return request.generation === OPEN_LANE_GENERATION
       ? this.checkOpen(request, pinned)
       : this.checkEnrolled(request, pinned);
+  }
+
+  /**
+   * The asker's own exchange moved: whether the run that sent it is the one
+   * running now, and the pause. Neither the setting nor the run being turned
+   * off to other machines stops it, as neither stops reading the exchange.
+   */
+  private checkRun(run: OpenRun): { check: LaneWakeCheck; run: PinnedRun | null } {
+    const now = this.deps.policy.checkOpen(run, "reply");
+    if (!now.ok) return { check: { kind: "unavailable", reason: now.reason }, run: null };
+    if (!sameRun(now.run, run)) {
+      return { check: { kind: "unavailable", reason: "relaunched" }, run: null };
+    }
+    if (this.deps.policy.isPaused()) return { check: { kind: "held", reason: "paused" }, run };
+    return { check: { kind: "ready" }, run };
   }
 
   /**
