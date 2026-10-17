@@ -188,9 +188,7 @@ async function shoot(page: Page, state: State, file: string) {
 
   const hint = page.getByTestId("app-dialog-hint");
   const names = hint.locator("[data-branch-name]");
-  await expect(names, `${state.name}: the echo is not showing`).toHaveCount(
-    state.existing ? 1 : 2
-  );
+  await expect(names, `${state.name}: the echo is not showing`).toHaveCount(state.existing ? 1 : 2);
   const target = state.existing ?? state.branch!;
   await expect(hint, `${state.name} is not the state it names`).toContainText(target);
   if (state.base) await expect(hint).toContainText(state.base);
