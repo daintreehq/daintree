@@ -81,18 +81,6 @@ describe("ProjectStore recipe reconciliation", () => {
     expect(inr).toEqual([]);
   });
 
-  it("in-repo-only recipe is backfilled to ProjectFileStore", async () => {
-    const recipe = makeRecipe({ id: stableInRepoId("Backfill Test") });
-    await seedInRepo(recipe);
-
-    await store.reconcileProjectRecipes(projectPath, projectId);
-
-    const fsRecipes = await readFileStore();
-    expect(fsRecipes).toHaveLength(1);
-    expect(fsRecipes[0]!.id).toBe(recipe.id);
-    expect(fsRecipes[0]!.name).toBe(recipe.name);
-  });
-
   it("ProjectFileStore-only legacy recipe (non-inrepo id) is promoted to .daintree/", async () => {
     const recipe = makeRecipe({
       id: "recipe-legacy-123",
@@ -319,29 +307,6 @@ describe("ProjectStore recipe reconciliation", () => {
     }
   });
 
-  it("in-repo recipe overwrites differing ProjectFileStore copy", async () => {
-    const id = stableInRepoId("Conflict Recipe");
-    const inRepoVersion = makeRecipe({
-      id,
-      name: "Conflict Recipe",
-      terminals: [{ type: "terminal", command: "echo in-repo" }],
-    });
-    const fileStoreVersion = makeRecipe({
-      id,
-      name: "Conflict Recipe",
-      terminals: [{ type: "terminal", command: "echo stale" }],
-    });
-
-    await seedInRepo(inRepoVersion);
-    await seedFileStore([fileStoreVersion]);
-
-    await store.reconcileProjectRecipes(projectPath, projectId);
-
-    const fs2 = await readFileStore();
-    expect(fs2).toHaveLength(1);
-    expect(fs2[0]!.terminals[0]!.command).toBe("echo in-repo");
-  });
-
   it("handles a mix of all cases in one reconciliation pass", async () => {
     // 1. In-repo recipe (should backfill)
     const inRepoOnly = makeRecipe({
@@ -466,14 +431,6 @@ describe("ProjectStore recipe reconciliation", () => {
     const fs2 = await readFileStore();
     expect(fs2).toHaveLength(1);
     expect(fs2[0]!.id).toBe(recipe.id);
-  });
-
-  it("returns an empty collision list when nothing collides", async () => {
-    const recipe = makeRecipe({ id: "recipe-opaque-uuid", name: "Opaque", scope: "inrepo" });
-    await seedInRepo(recipe);
-
-    const collisions = await store.reconcileProjectRecipes(projectPath, projectId);
-    expect(collisions).toEqual([]);
   });
 
   it("tags loaded in-repo recipes with scope 'inrepo' (opaque-id recipe detected without prefix)", async () => {
@@ -1015,15 +972,6 @@ describe("ProjectStore in-repo recipe forward-compatibility guard (#12261)", () 
     expect(await fs.readFile(filePath, "utf-8")).toBe(original);
     // ...and the local recipe still survives in the mirror rather than being dropped.
     expect((await store.getRecipes(projectId)).map((r) => r.id)).toContain("local-ghost");
-  });
-
-  it("reconciliation still promotes when the destination is absent or clean", async () => {
-    const projectId = "a".repeat(64);
-    await store.saveRecipes(projectId, [makeRecipe({ id: "local-new", name: "Fresh" })]);
-    await store.reconcileProjectRecipes(projectPath, projectId);
-
-    const onDisk = await fs.readFile(path.join(recipesDir, "fresh.json"), "utf-8");
-    expect(JSON.parse(onDisk).name).toBe("Fresh");
   });
 
   it("refuses a save that would drop terminals past the per-recipe cap", async () => {

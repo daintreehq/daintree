@@ -279,5 +279,60 @@ describe("projectSettingsStore", () => {
 
       expect(useProjectSettingsStore.getState().settings).toBeNull();
     });
+
+    it("applies a patch made during the initial load once that load lands", async () => {
+      // The load read the settings before the write the patch records.
+      const settingsRead = createDeferred<ProjectSettings>();
+      getSettingsMock.mockReturnValueOnce(settingsRead.promise);
+      detectRunnersMock.mockResolvedValueOnce(DETECTED_RUNNERS);
+      const load = useProjectSettingsStore.getState().loadSettings("project-a");
+
+      patchCachedProjectSettings("project-a", { browserAllowedHosts: ["example.com"] });
+      settingsRead.resolve(SETTINGS_WITH_COMMANDS);
+      await load;
+
+      const state = useProjectSettingsStore.getState();
+      expect(state.settings).toEqual({
+        ...SETTINGS_WITH_COMMANDS,
+        browserAllowedHosts: ["example.com"],
+      });
+      expect(state.detectedRunners).toEqual([DETECTED_RUNNERS[1]]);
+    });
+
+    it("leaves a load that started after the patch with what it read", async () => {
+      useProjectSettingsStore.setState({ settings: null, projectId: "project-a" });
+      patchCachedProjectSettings("project-a", { browserAllowedHosts: ["example.com"] });
+
+      getSettingsMock.mockResolvedValueOnce({
+        ...SETTINGS_WITH_COMMANDS,
+        browserAllowedHosts: ["example.com", "later.test"],
+      });
+      detectRunnersMock.mockResolvedValueOnce([]);
+      await useProjectSettingsStore.getState().loadSettings("project-a");
+
+      expect(useProjectSettingsStore.getState().settings?.browserAllowedHosts).toEqual([
+        "example.com",
+        "later.test",
+      ]);
+    });
+  });
+
+  it("keeps approved hosts through settings saved from a copy that predates them", () => {
+    useProjectSettingsStore.setState({
+      projectId: "project-a",
+      settings: { runCommands: [], browserAllowedHosts: ["example.com"] },
+    });
+
+    // A settings control saving the copy it read before the approval landed.
+    useProjectSettingsStore.getState().setSettings({
+      runCommands: [],
+      devServerCommand: "pnpm dev",
+    });
+
+    expect(useProjectSettingsStore.getState().settings).toEqual({
+      runCommands: [],
+      devServerCommand: "pnpm dev",
+      browserAllowedHosts: ["example.com"],
+    });
   });
 });

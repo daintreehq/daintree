@@ -4,11 +4,16 @@ import { act, fireEvent, render } from "@testing-library/react";
 import { useState } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { FixedDropdownVisibleContext } from "../fixed-dropdown";
-import { Tooltip, TooltipTrigger, TooltipContent } from "../tooltip";
+import { Tooltip, TooltipTrigger, TooltipContent, TooltipProvider } from "../tooltip";
 import { TOOLTIP_MOTION_CLASS, TOOLTIP_PRESS_DISMISSED_MOTION_CLASS } from "../overlayMotion";
 import { _resetForTests, dismissAllTooltips } from "@/lib/tooltipDismissRegistry";
+import {
+  _resetTooltipFocusSuppressionForTests,
+  armTooltipFocusSuppression,
+} from "@/lib/tooltipFocusSuppression";
 
-const { rootSpy, mountSpy, primeOnEventSpy, contentSpy } = vi.hoisted(() => ({
+const { rootSpy, mountSpy, primeOnEventSpy, contentSpy, providerSpy } = vi.hoisted(() => ({
+  providerSpy: vi.fn(),
   rootSpy: vi.fn<(props: { open?: boolean; onOpenChange?: (open: boolean) => void }) => void>(),
   mountSpy: vi.fn(),
   primeOnEventSpy: vi.fn(),
@@ -20,9 +25,17 @@ vi.mock("../radix-loader", () => {
   // hand React new component types on every render and remount the trigger.
   const primitives = {
     TooltipPrimitive: {
-      Provider: ({ children }: { children: React.ReactNode }) => <>{children}</>,
-      Root: (props: { open?: boolean; children: React.ReactNode }) => {
+      Provider: ({ children }: { children: React.ReactNode }) => {
+        providerSpy();
+        return <>{children}</>;
+      },
+      Root: (props: {
+        open?: boolean;
+        onOpenChange?: (open: boolean) => void;
+        children: React.ReactNode;
+      }) => {
         rootSpy(props);
+        openChange = props.onOpenChange;
         // Each new mount of the stub creates a fresh closure id. Reading it
         // back from rendered DOM lets tests assert when React remounted the
         // Root (e.g., via key change) vs. when it just re-rendered it. This
@@ -62,6 +75,8 @@ vi.mock("../radix-loader", () => {
   };
   return { primeOnEvent: primeOnEventSpy, useRadixPrimitives: () => primitives };
 });
+
+let openChange: ((open: boolean) => void) | undefined;
 
 describe("Tooltip wrapper — FixedDropdownVisibleContext gate (issue #8001)", () => {
   beforeEach(() => {
@@ -760,5 +775,125 @@ describe("Tooltip — a press on its trigger dismisses it without the exit fade"
     act(() => setOpen(true));
     act(() => setOpen(false));
     expect(hasExit()).toBe(true);
+  });
+});
+
+/**
+ * The stranded-tooltip half of the overlay close policy: an overlay marks the
+ * element it is about to hand focus to, and that element's tooltip must not
+ * open on the focus it never asked for.
+ */
+describe("Tooltip — focus-open suppression around an overlay close", () => {
+  beforeEach(() => {
+    rootSpy.mockClear();
+    openChange = undefined;
+    _resetTooltipFocusSuppressionForTests();
+  });
+
+  function lastOpen() {
+    return rootSpy.mock.calls.at(-1)?.[0].open;
+  }
+
+  function renderTooltip() {
+    render(
+      <Tooltip>
+        <TooltipTrigger>trigger</TooltipTrigger>
+        <TooltipContent>hint</TooltipContent>
+      </Tooltip>
+    );
+    return document.querySelector("button") as HTMLButtonElement;
+  }
+
+  function markRestoredFocus(element: HTMLElement) {
+    // What an overlay's onCloseAutoFocus does, followed by the focus itself.
+    armTooltipFocusSuppression();
+    element.focus();
+    fireEvent.focusIn(element);
+  }
+
+  it("swallows the focus-driven open that follows an overlay close", () => {
+    const trigger = renderTooltip();
+    act(() => markRestoredFocus(trigger));
+    act(() => openChange?.(true));
+    expect(lastOpen()).toBe(false);
+  });
+
+  it("still opens on a genuine hover afterwards", () => {
+    // The suppression must not outlive the restoration — pointerenter on the
+    // trigger means the user really is hovering it.
+    const trigger = renderTooltip();
+    act(() => markRestoredFocus(trigger));
+    // fireEvent, not a raw dispatch: React routes onPointerEnter through its own
+    // synthetic delegation, so a hand-built `pointerenter` never reaches it.
+    act(() => {
+      fireEvent.pointerEnter(trigger);
+    });
+    act(() => openChange?.(true));
+    expect(lastOpen()).toBe(true);
+  });
+
+  it("also clears on a pointer that was already resting on the trigger", () => {
+    // Radix opens from pointermove, not pointerenter, so a pointer already
+    // parked over the trigger when the menu closed never fires an enter — its
+    // next micro-move has to be enough to lift the suppression.
+    const trigger = renderTooltip();
+    act(() => markRestoredFocus(trigger));
+    act(() => {
+      fireEvent.pointerMove(trigger, { pointerType: "mouse" });
+    });
+    act(() => openChange?.(true));
+    expect(lastOpen()).toBe(true);
+  });
+
+  it("leaves an unrelated trigger's tooltip alone", () => {
+    // The whole point of doing this per element rather than through
+    // `dismissAllTooltips()`: one menu closing must not mute the rest of the app.
+    renderTooltip();
+    const stranger = document.createElement("button");
+    document.body.appendChild(stranger);
+    act(() => markRestoredFocus(stranger));
+
+    act(() => openChange?.(true));
+    expect(lastOpen()).toBe(true);
+    stranger.remove();
+  });
+
+  it("expires rather than pinning the trigger shut", () => {
+    vi.useFakeTimers();
+    try {
+      const trigger = renderTooltip();
+      act(() => markRestoredFocus(trigger));
+      act(() => {
+        vi.advanceTimersByTime(1000);
+      });
+      act(() => openChange?.(true));
+      expect(lastOpen()).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
+describe("Tooltip wrapper — provider", () => {
+  beforeEach(() => providerSpy.mockClear());
+
+  const tooltip = (
+    <Tooltip>
+      <TooltipTrigger>Copy</TooltipTrigger>
+      <TooltipContent>Copy to clipboard</TooltipContent>
+    </Tooltip>
+  );
+
+  it("brings its own provider on a page that mounts none", () => {
+    const { getByText } = render(tooltip);
+    expect(getByText("Copy")).toBeTruthy();
+    expect(providerSpy).toHaveBeenCalled();
+  });
+
+  it("uses the app's provider when one is above it", () => {
+    render(<TooltipProvider>{tooltip}</TooltipProvider>);
+    // The outer provider renders once; a second of its own would re-render
+    // with every pass of the tooltip.
+    expect(providerSpy).toHaveBeenCalledTimes(1);
   });
 });

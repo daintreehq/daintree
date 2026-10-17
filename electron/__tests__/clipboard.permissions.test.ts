@@ -1,0 +1,307 @@
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import * as fs from "node:fs/promises";
+import * as path from "node:path";
+
+// Real files under a redirected temp root: the permission bits, the symlink
+// refusal and the exclusive create are properties of the filesystem calls, so a
+// mocked fs could only restate the implementation.
+
+const clipboardMock = vi.hoisted(() => ({
+  readImage: vi.fn(),
+  writeImage: vi.fn(),
+  writeText: vi.fn(),
+  readText: vi.fn(),
+}));
+
+vi.mock("electron", () => ({
+  app: { getPath: vi.fn((key: string) => `/mock/electron/${key}`) },
+  clipboard: clipboardMock,
+  nativeImage: { createFromBuffer: vi.fn(), createFromPath: vi.fn() },
+  ipcMain: { handle: vi.fn(), removeHandler: vi.fn() },
+  dialog: { showOpenDialog: vi.fn() },
+  BrowserWindow: { getFocusedWindow: vi.fn(() => null), fromWebContents: vi.fn(() => null) },
+}));
+
+vi.mock("../services/ProjectStore.js", () => ({
+  projectStore: {
+    getAllProjects: vi.fn(() => []),
+    getCurrentProjectId: vi.fn(() => null),
+  },
+}));
+
+const osMockState = vi.hoisted(() => ({ base: "" }));
+vi.mock("node:os", async (importOriginal) => {
+  const actual = (await importOriginal()) as typeof import("node:os");
+  const nodeFs = await import("node:fs");
+  const nodePath = await import("node:path");
+  osMockState.base = nodeFs.mkdtempSync(nodePath.join(actual.tmpdir(), "clipboard-perms-"));
+  return { ...actual, tmpdir: () => osMockState.base };
+});
+
+const cryptoState = vi.hoisted(() => ({ id: null as string | null }));
+vi.mock("node:crypto", async (importOriginal) => {
+  const actual = (await importOriginal()) as typeof import("node:crypto");
+  return {
+    ...actual,
+    randomBytes: (size: number) =>
+      cryptoState.id === null
+        ? actual.randomBytes(size)
+        : { toString: () => cryptoState.id as string },
+  };
+});
+
+const { ipcMain } = await import("electron");
+const { cleanupOldClipboardImages, registerClipboardHandlers } =
+  await import("../ipc/handlers/clipboard.js");
+
+const posixIt = process.platform === "win32" ? it.skip : it;
+
+const PNG = Buffer.from([0x89, 0x50, 0x4e, 0x47]);
+
+const MAX_AGE_MS = 24 * 60 * 60 * 1000;
+const MAX_FILE_COUNT = 20;
+// Round to a second boundary to avoid mtime truncation on filesystems with 1s
+// granularity (ext4).
+const NOW = Math.floor(Date.now() / 1000) * 1000;
+
+function clipboardDir(): string {
+  return path.join(osMockState.base, "daintree-clipboard");
+}
+
+async function modeOf(p: string): Promise<number> {
+  return (await fs.stat(p)).mode & 0o777;
+}
+
+async function createClipboardFile(name: string, ageMs: number): Promise<string> {
+  const filePath = path.join(clipboardDir(), name);
+  await fs.writeFile(filePath, "png-bytes");
+  const mtime = new Date(NOW - ageMs);
+  await fs.utimes(filePath, mtime, mtime);
+  return filePath;
+}
+
+async function listClipboardFiles(): Promise<string[]> {
+  const entries = await fs.readdir(clipboardDir());
+  return entries.sort();
+}
+
+type SaveImage = () => Promise<{ filePath: string; thumbnailDataUrl: string }>;
+
+function saveImageHandler(): SaveImage {
+  const match = vi
+    .mocked(ipcMain.handle)
+    .mock.calls.find(([channel]) => channel === "clipboard:save-image");
+  if (!match) throw new Error("clipboard:save-image was not registered");
+  const handler = match[1] as (event: unknown) => ReturnType<SaveImage>;
+  return () => handler({});
+}
+
+let unregister: (() => void) | null = null;
+
+beforeEach(async () => {
+  vi.mocked(ipcMain.handle).mockClear();
+  cryptoState.id = null;
+  await fs.rm(clipboardDir(), { recursive: true, force: true });
+  clipboardMock.readImage.mockReturnValue({
+    isEmpty: () => false,
+    toPNG: () => PNG,
+    getSize: () => ({ width: 80, height: 40 }),
+    resize: () => ({ toPNG: () => Buffer.from([0x89]) }),
+  });
+});
+
+afterEach(async () => {
+  unregister?.();
+  unregister = null;
+  vi.restoreAllMocks();
+  // Let the fire-and-forget startup/save cleanups settle before the next reset.
+  await new Promise((resolve) => setTimeout(resolve, 10));
+});
+
+afterAll(async () => {
+  await fs.rm(osMockState.base, { recursive: true, force: true });
+});
+
+describe("clipboard image save permissions", () => {
+  posixIt("creates the clipboard dir 0700 and the PNG 0600", async () => {
+    unregister = registerClipboardHandlers();
+    const { filePath } = await saveImageHandler()();
+
+    expect(path.dirname(filePath)).toBe(clipboardDir());
+    expect(await modeOf(clipboardDir())).toBe(0o700);
+    expect(await modeOf(filePath)).toBe(0o600);
+    expect(await fs.readFile(filePath)).toEqual(PNG);
+  });
+
+  posixIt("tightens a clipboard dir an earlier version left at 0755", async () => {
+    await fs.mkdir(clipboardDir(), { mode: 0o755 });
+    await fs.chmod(clipboardDir(), 0o755);
+
+    unregister = registerClipboardHandlers();
+    await saveImageHandler()();
+
+    expect(await modeOf(clipboardDir())).toBe(0o700);
+  });
+
+  posixIt("refuses a symlink planted at the clipboard dir name", async () => {
+    const elsewhere = path.join(osMockState.base, "someone-elses-dir");
+    await fs.mkdir(elsewhere, { mode: 0o777 });
+    await fs.symlink(elsewhere, clipboardDir());
+
+    unregister = registerClipboardHandlers();
+    await expect(saveImageHandler()()).rejects.toThrow();
+
+    expect(await fs.readdir(elsewhere)).toEqual([]);
+    expect((await fs.lstat(clipboardDir())).isSymbolicLink()).toBe(true);
+    await fs.rm(elsewhere, { recursive: true, force: true });
+  });
+
+  posixIt("refuses to overwrite a file already sitting at the new name", async () => {
+    vi.spyOn(Date, "now").mockReturnValue(1_700_000_000_000);
+    cryptoState.id = "abc123";
+    await fs.mkdir(clipboardDir(), { mode: 0o700 });
+    const planted = path.join(clipboardDir(), "clipboard-1700000000000-abc123.png");
+    await fs.writeFile(planted, "planted");
+
+    unregister = registerClipboardHandlers();
+    await expect(saveImageHandler()()).rejects.toMatchObject({ code: "EEXIST" });
+
+    expect(await fs.readFile(planted, "utf8")).toBe("planted");
+  });
+
+  posixIt("refuses a final-component symlink at the new name", async () => {
+    vi.spyOn(Date, "now").mockReturnValue(1_700_000_000_000);
+    cryptoState.id = "abc123";
+    await fs.mkdir(clipboardDir(), { mode: 0o700 });
+    const target = path.join(osMockState.base, "target.png");
+    await fs.writeFile(target, "original");
+    await fs.symlink(target, path.join(clipboardDir(), "clipboard-1700000000000-abc123.png"));
+
+    unregister = registerClipboardHandlers();
+    await expect(saveImageHandler()()).rejects.toThrow();
+
+    expect(await fs.readFile(target, "utf8")).toBe("original");
+    await fs.rm(target, { force: true });
+  });
+});
+
+describe("clipboard cleanup through a planted symlink", () => {
+  posixIt("never unlinks files in the directory a symlinked dir points at", async () => {
+    const elsewhere = path.join(osMockState.base, "victim");
+    await fs.mkdir(elsewhere);
+    const victim = path.join(elsewhere, "clipboard-1-aaaaaa.png");
+    await fs.writeFile(victim, "keep me");
+    const old = new Date(Date.now() - 48 * 60 * 60 * 1000);
+    await fs.utimes(victim, old, old);
+    await fs.symlink(elsewhere, clipboardDir());
+
+    await cleanupOldClipboardImages();
+
+    expect(await fs.readFile(victim, "utf8")).toBe("keep me");
+    await fs.rm(elsewhere, { recursive: true, force: true });
+  });
+
+  posixIt("never sweeps a real directory owned by another user", async () => {
+    await fs.mkdir(clipboardDir(), { mode: 0o700 });
+    const stale = path.join(clipboardDir(), "clipboard-1-aaaaaa.png");
+    await fs.writeFile(stale, "not mine");
+    const old = new Date(Date.now() - 48 * 60 * 60 * 1000);
+    await fs.utimes(stale, old, old);
+    vi.spyOn(process, "getuid").mockReturnValue(process.getuid!() + 1);
+
+    await cleanupOldClipboardImages();
+
+    expect(await fs.readFile(stale, "utf8")).toBe("not mine");
+  });
+});
+
+describe("cleanupOldClipboardImages — age eviction", () => {
+  beforeEach(async () => {
+    await fs.mkdir(clipboardDir(), { recursive: true });
+  });
+
+  it("preserves a file exactly at the 24h boundary but evicts one past it", async () => {
+    const atBoundary = await createClipboardFile("clipboard-at-boundary.png", MAX_AGE_MS);
+    const pastBoundary = await createClipboardFile(
+      "clipboard-past-boundary.png",
+      MAX_AGE_MS + 1000
+    );
+    await cleanupOldClipboardImages(NOW);
+    await expect(fs.access(atBoundary)).resolves.toBeUndefined();
+    await expect(fs.access(pastBoundary)).rejects.toThrow();
+  });
+
+  it("ignores files that don't match the clipboard naming pattern", async () => {
+    const other = path.join(clipboardDir(), "unrelated.txt");
+    await fs.writeFile(other, "keep me");
+    const mtime = new Date(NOW - (MAX_AGE_MS + 60_000));
+    await fs.utimes(other, mtime, mtime);
+
+    await cleanupOldClipboardImages(NOW);
+    await expect(fs.access(other)).resolves.toBeUndefined();
+  });
+
+  it("returns without error when the clipboard dir doesn't exist", async () => {
+    await fs.rm(clipboardDir(), { recursive: true, force: true });
+    await expect(cleanupOldClipboardImages(NOW)).resolves.toBeUndefined();
+  });
+});
+
+describe("cleanupOldClipboardImages — count cap", () => {
+  beforeEach(async () => {
+    await fs.mkdir(clipboardDir(), { recursive: true });
+  });
+
+  it("keeps only the newest MAX_FILE_COUNT files when more survive the age check", async () => {
+    const total = MAX_FILE_COUNT + 5;
+    // Older index => older mtime. All within the 24h window so age eviction
+    // doesn't apply; only the count cap should.
+    for (let i = 0; i < total; i++) {
+      const ageMs = (total - i) * 60_000; // i=0 oldest, i=total-1 newest
+      await createClipboardFile(`clipboard-${i}-x.png`, ageMs);
+    }
+
+    await cleanupOldClipboardImages(NOW);
+
+    const remaining = await listClipboardFiles();
+    expect(remaining).toHaveLength(MAX_FILE_COUNT);
+    // The 5 oldest (indices 0-4) should be gone; the newest 20 (5-24) kept.
+    expect(remaining).not.toContain("clipboard-0-x.png");
+    expect(remaining).not.toContain("clipboard-4-x.png");
+    expect(remaining).toContain("clipboard-5-x.png");
+    expect(remaining).toContain(`clipboard-${total - 1}-x.png`);
+  });
+
+  it("does not evict when exactly MAX_FILE_COUNT files survive", async () => {
+    for (let i = 0; i < MAX_FILE_COUNT; i++) {
+      await createClipboardFile(`clipboard-${i}-x.png`, (i + 1) * 60_000);
+    }
+
+    await cleanupOldClipboardImages(NOW);
+
+    const remaining = await listClipboardFiles();
+    expect(remaining).toHaveLength(MAX_FILE_COUNT);
+  });
+
+  it("applies age eviction before the count cap", async () => {
+    // 3 old (evicted by age) + 22 fresh. After age eviction 22 survive; count
+    // cap trims to 20.
+    for (let i = 0; i < 3; i++) {
+      await createClipboardFile(`clipboard-old-${i}.png`, MAX_AGE_MS + (i + 1) * 60_000);
+    }
+    for (let i = 0; i < 22; i++) {
+      await createClipboardFile(`clipboard-fresh-${i}.png`, (i + 1) * 1_000);
+    }
+
+    await cleanupOldClipboardImages(NOW);
+
+    const remaining = await listClipboardFiles();
+    expect(remaining).toHaveLength(MAX_FILE_COUNT);
+    expect(remaining.every((name) => name.startsWith("clipboard-fresh-"))).toBe(true);
+    // fresh-21 and fresh-20 carry the largest age offsets (oldest mtimes), so
+    // the count cap evicts exactly those two.
+    expect(remaining).not.toContain("clipboard-fresh-21.png");
+    expect(remaining).not.toContain("clipboard-fresh-20.png");
+    expect(remaining).toContain("clipboard-fresh-0.png");
+  });
+});

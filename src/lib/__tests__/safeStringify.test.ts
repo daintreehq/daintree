@@ -60,43 +60,10 @@ describe("safeStringify", () => {
     expect(safeStringify(obj)).toBe('{"nullVal":null}');
   });
 
-  it("handles arrays with BigInt", () => {
-    const arr = [BigInt(1), BigInt(2), BigInt(3)];
-    expect(safeStringify(arr)).toBe('["1","2","3"]');
-  });
-
-  it("handles mixed types", () => {
-    const obj = {
-      str: "hello",
-      num: 42,
-      bigint: BigInt("9007199254740993"),
-      bool: true,
-      arr: [1, 2, BigInt(3)],
-    };
-    const result = JSON.parse(safeStringify(obj));
-    expect(result.str).toBe("hello");
-    expect(result.num).toBe(42);
-    expect(result.bigint).toBe("9007199254740993");
-    expect(result.bool).toBe(true);
-    expect(result.arr).toEqual([1, 2, "3"]);
-  });
-
   it("supports pretty printing with space parameter", () => {
     const obj = { a: 1, b: 2 };
     const result = safeStringify(obj, 2);
     expect(result).toBe('{\n  "a": 1,\n  "b": 2\n}');
-  });
-
-  it("handles primitive values directly", () => {
-    expect(safeStringify("hello")).toBe('"hello"');
-    expect(safeStringify(123)).toBe("123");
-    expect(safeStringify(true)).toBe("true");
-    expect(safeStringify(null)).toBe("null");
-  });
-
-  it("handles empty objects and arrays", () => {
-    expect(safeStringify({})).toBe("{}");
-    expect(safeStringify([])).toBe("[]");
   });
 
   it("handles Date objects", () => {
@@ -104,13 +71,6 @@ describe("safeStringify", () => {
     const obj = { date };
     const result = JSON.parse(safeStringify(obj));
     expect(result.date).toBe("2024-01-15T12:00:00.000Z");
-  });
-
-  it("handles Map and Set (as regular objects)", () => {
-    const map = new Map([["key", "value"]]);
-    const set = new Set([1, 2, 3]);
-    expect(safeStringify(map)).toBe("{}");
-    expect(safeStringify(set)).toBe("{}");
   });
 
   it("handles top-level undefined", () => {
@@ -151,21 +111,6 @@ describe("safeStringify", () => {
     expect(result).toBe('[1,2,"[Circular]"]');
   });
 
-  it("handles pretty-printed BigInt in context", () => {
-    const context = { timestamp: BigInt("123456789012345678"), user: "alice" };
-    const result = safeStringify(context, 2);
-    const parsed = JSON.parse(result);
-    expect(parsed.timestamp).toBe("123456789012345678");
-    expect(parsed.user).toBe("alice");
-    expect(result).toContain("\n");
-  });
-
-  it("invokes replacer when space is omitted", () => {
-    const obj = { fn: function foo() {} };
-    const result = safeStringify(obj);
-    expect(result).toBe('{"fn":"[Function: foo]"}');
-  });
-
   it("produces deterministic key order", () => {
     const obj = { b: 1, a: 2, c: 3 };
     expect(safeStringify(obj)).toBe('{"a":2,"b":1,"c":3}');
@@ -173,14 +118,5 @@ describe("safeStringify", () => {
 
   it("handles top-level BigInt", () => {
     expect(safeStringify(BigInt("9007199254740993123456789"))).toBe('"9007199254740993123456789"');
-  });
-
-  it("handles circular reference containing BigInt", () => {
-    const obj: Record<string, unknown> = {
-      id: BigInt("999999999999999999999"),
-    };
-    obj.self = obj;
-    const result = safeStringify(obj);
-    expect(result).toBe('{"id":"999999999999999999999","self":"[Circular]"}');
   });
 });

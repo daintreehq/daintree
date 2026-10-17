@@ -97,13 +97,6 @@ const ALLOWLIST: AllowlistEntry[] = [
       "composer controls repeat in every composer and the shell's own focus edge spends the accent, so their ring is a neutral mix of the terminal's own ink",
   },
   {
-    file: "src/components/Terminal/HybridInputBar.tsx",
-    rule: "mechanism",
-    lines: 1,
-    reason:
-      "the composer shell's focus-within edge is a field boundary, not a control ring; the field family owns it",
-  },
-  {
     file: "src/components/Setup/AgentSetupWizard.tsx",
     rule: "offset",
     lines: 1,

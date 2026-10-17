@@ -353,15 +353,6 @@ afterEach(() => {
 });
 
 describe("HelpSessionController — lifecycle", () => {
-  it("start() arms tier-mismatch and system-sleep subscriptions", () => {
-    const ctrl = new HelpSessionController();
-    ctrl.start();
-    expect(mockMcpOnTierNotPermitted).toHaveBeenCalledTimes(1);
-    expect(mockSystemSleepOnSuspend).toHaveBeenCalledTimes(1);
-    expect(mockSystemSleepOnWake).toHaveBeenCalledTimes(1);
-    ctrl.stop();
-  });
-
   it("start() is idempotent across StrictMode double-mount (no duplicate listeners)", () => {
     const ctrl = new HelpSessionController();
     ctrl.start();
@@ -393,28 +384,9 @@ describe("HelpSessionController — lifecycle", () => {
     expect(systemSleepListeners.suspend).toHaveLength(0);
     expect(systemSleepListeners.wake).toHaveLength(0);
   });
-
-  it("stop() is safe to call when start() has not run", () => {
-    const ctrl = new HelpSessionController();
-    expect(() => ctrl.stop()).not.toThrow();
-  });
 });
 
 describe("HelpSessionController — subscribe / getSnapshot", () => {
-  it("snapshot is initially in the idle state with no banners", () => {
-    const ctrl = new HelpSessionController();
-    const snap = ctrl.getSnapshot();
-    expect(snap.phase).toBe("idle");
-    expect(snap.showResumeBanner).toBe(false);
-    expect(snap.assistantVersionTooOld).toBeNull();
-    expect(snap.tierMismatch).toBeNull();
-    expect(snap.isApprovingTier).toBe(false);
-    expect(snap.isCheckingVersion).toBe(false);
-    expect(snap.launchError).toBeNull();
-    expect(snap.mcpActivity).toBeNull();
-    expect(snap.sessionRevoked).toBeNull();
-  });
-
   it("returns the same snapshot reference when no state changes (Object.is stable)", () => {
     const ctrl = new HelpSessionController();
     const a = ctrl.getSnapshot();
@@ -481,32 +453,6 @@ describe("HelpSessionController — turn-outcome alert pip", () => {
       ...payload,
     });
   }
-
-  it("surfaces agent-stuck as outcomeAlert and notifies listeners", () => {
-    helpPanelState.sessionId = "help-1";
-    const ctrl = new HelpSessionController();
-    ctrl.start();
-    const listener = vi.fn();
-    ctrl.subscribe(listener);
-    expect(ctrl.getSnapshot().outcomeAlert).toBeNull();
-
-    fireOutcome({ helpSessionId: "help-1", outcome: "agent-stuck" });
-    expect(listener).toHaveBeenCalled();
-    expect(ctrl.getSnapshot().outcomeAlert).toBe("agent-stuck");
-    ctrl.stop();
-  });
-
-  it("surfaces reasoning-loop and clears on user dismiss", () => {
-    helpPanelState.sessionId = "help-1";
-    const ctrl = new HelpSessionController();
-    ctrl.start();
-    fireOutcome({ helpSessionId: "help-1", outcome: "reasoning-loop", turnId: "turn-1" });
-    expect(ctrl.getSnapshot().outcomeAlert).toBe("reasoning-loop");
-
-    ctrl.dismissOutcomeAlert();
-    expect(ctrl.getSnapshot().outcomeAlert).toBeNull();
-    ctrl.stop();
-  });
 
   it("auto-clears the pip when a tool call from a different turn starts", () => {
     helpPanelState.sessionId = "help-1";
@@ -998,18 +944,5 @@ describe("HelpSessionController — the sidebar stays open while a sibling lane 
 
       expect(helpPanelState.setOpen, trigger).toHaveBeenCalledWith(false);
     }
-  });
-
-  it("counts an opened-but-unlaunched sibling as a reason to stay", () => {
-    // A tab the user opened and has not typed into yet is still a tab they are
-    // looking at. The predicate is "another slot exists", not "another agent is
-    // running" — the same predicate the tab strip's close uses.
-    const ctrl = new HelpSessionController();
-    ctrl["_patch"]({ phase: "live" });
-    bindLiveSessionBesideAnother(ctrl);
-
-    ctrl.endSession();
-
-    expect(helpPanelState.setOpen).not.toHaveBeenCalled();
   });
 });

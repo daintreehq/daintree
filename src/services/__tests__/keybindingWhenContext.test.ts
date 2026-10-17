@@ -5,7 +5,7 @@ import { buildKeybindingWhenContext } from "../keybindingWhenContext";
 import { usePaletteStore, usePanelStore } from "@/store";
 import type { PaletteId } from "@/store/paletteStore";
 import { useFleetArmingStore } from "@/store/fleetArmingStore";
-import { useMacroFocusStore } from "@/store/macroFocusStore";
+import { useCanopyStore } from "@/store/canopyStore";
 
 function makeAgent(id: string, overrides: Partial<PtyPanelData> = {}): PtyPanelData {
   return {
@@ -29,6 +29,7 @@ function eventFrom(target: Element | null): KeyboardEvent {
 }
 
 afterEach(() => {
+  useCanopyStore.setState({ mode: "unset" });
   usePaletteStore.setState({ activePaletteId: null });
   useFleetArmingStore.setState({ armedIds: new Set<string>() });
   usePanelStore.setState({ panelsById: {} });
@@ -36,6 +37,17 @@ afterEach(() => {
 });
 
 describe("buildKeybindingWhenContext", () => {
+  it("reports canopyHidden only while the user has hidden Canopy", () => {
+    for (const [mode, hidden] of [
+      ["unset", false],
+      ["on", false],
+      ["hidden", true],
+    ] as const) {
+      useCanopyStore.setState({ mode });
+      expect(buildKeybindingWhenContext(eventFrom(null)).canopyHidden).toBe(hidden);
+    }
+  });
+
   it("reports terminalFocused only for targets inside an xterm host", () => {
     const xterm = document.createElement("div");
     xterm.className = "xterm";
@@ -94,13 +106,19 @@ describe("buildKeybindingWhenContext", () => {
     expect(buildKeybindingWhenContext(eventFrom(null)).fleetWaiting).toBe(true);
   });
 
-  it("mirrors sidebar visibility from the macro focus store", () => {
-    const { visibility } = useMacroFocusStore.getState();
-
-    useMacroFocusStore.setState({ visibility: { ...visibility, sidebar: false } });
-    expect(buildKeybindingWhenContext(eventFrom(null)).sidebarVisible).toBe(false);
-
-    useMacroFocusStore.setState({ visibility: { ...visibility, sidebar: true } });
-    expect(buildKeybindingWhenContext(eventFrom(null)).sidebarVisible).toBe(true);
+  it("marks a text field or editor as text input, but not a terminal's own textarea", () => {
+    document.body.innerHTML = `
+      <input id="field" />
+      <div id="editor" contenteditable="true"></div>
+      <div class="xterm"><textarea id="xterm-input"></textarea></div>
+      <button id="button">Go</button>`;
+    // jsdom doesn't implement isContentEditable; Chromium sets it for this element.
+    Object.defineProperty(document.getElementById("editor"), "isContentEditable", { value: true });
+    const ctx = (id: string) => buildKeybindingWhenContext(eventFrom(document.getElementById(id)));
+    expect(ctx("field").textInputFocused).toBe(true);
+    expect(ctx("editor").textInputFocused).toBe(true);
+    expect(ctx("xterm-input").textInputFocused).toBe(false);
+    expect(ctx("xterm-input").terminalFocused).toBe(true);
+    expect(ctx("button").textInputFocused).toBe(false);
   });
 });

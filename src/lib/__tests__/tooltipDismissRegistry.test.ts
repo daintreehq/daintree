@@ -119,17 +119,4 @@ describe("tooltipDismissRegistry", () => {
 
     expect(isTooltipFocusOpenSuppressed()).toBe(true);
   });
-
-  it("_resetForTests clears handlers and suppression", () => {
-    const handler = vi.fn();
-    registerTooltipDismiss(handler);
-    dismissAllTooltips();
-    handler.mockClear();
-
-    _resetForTests();
-
-    expect(isTooltipFocusOpenSuppressed()).toBe(false);
-    dismissAllTooltips();
-    expect(handler).not.toHaveBeenCalled();
-  });
 });

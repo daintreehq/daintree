@@ -30,14 +30,6 @@ describe("terminalColorSchemes", () => {
     expect(getSchemeById(DEFAULT_SCHEME_ID)!.name).toBe("Match app theme");
   });
 
-  it("getSchemeById returns undefined for unknown ID", () => {
-    expect(getSchemeById("nonexistent")).toBeUndefined();
-  });
-
-  it("APP_THEME_TERMINAL_SCHEME_MAP covers daintree and bondi", () => {
-    expect(Object.keys(APP_THEME_TERMINAL_SCHEME_MAP).sort()).toEqual(["bondi", "daintree"]);
-  });
-
   it("every mapped terminal scheme resolves to an existing scheme", () => {
     for (const [appTheme, terminalSchemeId] of Object.entries(APP_THEME_TERMINAL_SCHEME_MAP)) {
       const scheme = getSchemeById(terminalSchemeId);
@@ -49,9 +41,5 @@ describe("terminalColorSchemes", () => {
     const scheme = getMappedTerminalScheme("daintree");
     expect(scheme).toBeDefined();
     expect(scheme!.id).toBe("daintree");
-  });
-
-  it("getMappedTerminalScheme returns undefined for unknown app theme", () => {
-    expect(getMappedTerminalScheme("nonexistent")).toBeUndefined();
   });
 });

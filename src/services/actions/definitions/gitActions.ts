@@ -18,6 +18,7 @@ import { useGitPushConfirmStore } from "@/store/gitPushConfirmStore";
 import { useGitPullRebaseConfirmStore } from "@/store/gitPullRebaseConfirmStore";
 import { useGitWorktreeOperationConfirmStore } from "@/store/gitWorktreeOperationConfirmStore";
 import { useGitForcePushStore } from "@/store/gitForcePushStore";
+import { useFileMutationConfirmStore } from "@/store/fileMutationConfirmStore";
 import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";
 import { isClientGitError } from "@/utils/clientGitError";
 import { humanizeAppError, formatErrorMessage } from "@shared/utils/errorMessage";
@@ -40,6 +41,8 @@ import {
 import type { ConflictedFileEntry, StagingFileEntry } from "@shared/types/git";
 import type { CommitItem, HeatCell } from "@shared/types/pulse";
 import { z } from "zod";
+import { mintRemoteOperationId } from "@/clients/operationsClient";
+import { runHostOperation } from "@/hooks/useHostConnection";
 
 const clamp = (value: number, min: number, max: number): number =>
   Math.min(Math.max(Math.trunc(value) || min, min), max);
@@ -645,6 +648,44 @@ export function registerGitActions(actions: ActionRegistry, _callbacks: ActionCa
     },
   }));
 
+  const fileMutationArgsSchema = withWorktreeLocation({
+    filePath: z.string().min(1).describe("Path of the file, relative to the worktree root."),
+  });
+
+  actions.set("git.discardFileChanges", () => ({
+    id: "git.discardFileChanges",
+    title: "Discard file changes",
+    description:
+      "Put one changed file back to its last commit, dropping both its staged and unstaged changes. A file new since that commit, or a rename's new copy, moves to the OS Trash instead. Untracked and conflicted files are refused.",
+    category: "git",
+    kind: "command",
+    // D1 (#13424): a working-tree edit restored over has no copy anywhere —
+    // not in the reflog, not in the Trash.
+    danger: "confirm",
+    dangerRationale:
+      "Overwrites the file with its committed version. Its uncommitted edits are lost and git cannot recover them.",
+    scope: "renderer",
+    argsSchema: fileMutationArgsSchema,
+    run: async (args: unknown, ctx: ActionContext) => {
+      const { filePath, ...location } = fileMutationArgsSchema.parse(args);
+      const worktreePath = requireWorktreePath(location, ctx);
+      // Same split as `git.pullRebase`: an agent dispatch was already cleared
+      // against the MCP bridge's own confirm, and this deferred store can only
+      // be resolved by a renderer dialog a headless caller cannot reach.
+      if (ctx.dispatchSource !== "agent") {
+        const confirmed = await useFileMutationConfirmStore
+          .getState()
+          .requestConfirmation({ kind: "discard", relativePath: filePath });
+        if (!confirmed) return;
+      }
+      try {
+        await window.electron.git.discardFileChanges({ worktreePath, relativePath: filePath });
+      } finally {
+        await refreshWorktree(location, ctx);
+      }
+    },
+  }));
+
   actions.set("git.stageAll", () => ({
     id: "git.stageAll",
     title: "Stage all files",
@@ -770,7 +811,16 @@ export function registerGitActions(actions: ActionRegistry, _callbacks: ActionCa
       const forcePush = useGitForcePushStore.getState();
       forcePush.clearRecovery(resolvedCwd);
       try {
-        return await window.electron.git.push(resolvedCwd, setUpstream);
+        const opId = mintRemoteOperationId();
+        // A push has no result to rebuild; a lost answer settles on the host's outcome.
+        return await runHostOperation(
+          opId,
+          () =>
+            opId
+              ? window.electron.git.push(resolvedCwd, setUpstream, opId)
+              : window.electron.git.push(resolvedCwd, setUpstream),
+          { fromResult: () => undefined }
+        );
       } catch (error) {
         if (isClientGitError(error) && error.gitReason === "push-rejected-outdated") {
           // `recordRejection` stores nothing when either field is missing, so a

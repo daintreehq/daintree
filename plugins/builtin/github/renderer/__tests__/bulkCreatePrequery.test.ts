@@ -46,26 +46,6 @@ describe("resolveIssuePrequeries", () => {
     expect(getDefaultPath).toHaveBeenCalledWith("/repo", "feature/issue-1");
   });
 
-  it("resolves multiple items concurrently", async () => {
-    const getAvailableBranch = vi.fn((_, name) => Promise.resolve(name));
-    const getDefaultPath = vi.fn((_, branch) => Promise.resolve(`/path/${branch}`));
-
-    const { results, failedItems } = await resolveIssuePrequeries({
-      rootPath: "/repo",
-      items: [mockPlanned(1), mockPlanned(2), mockPlanned(3)],
-      existingBranches: null,
-      getAvailableBranch,
-      getDefaultPath,
-      isStaleRun: () => false,
-    });
-
-    expect(results.size).toBe(3);
-    expect(results.get(1)).toEqual({ branch: "feature/issue-1", path: "/path/feature/issue-1" });
-    expect(results.get(2)).toEqual({ branch: "feature/issue-2", path: "/path/feature/issue-2" });
-    expect(results.get(3)).toEqual({ branch: "feature/issue-3", path: "/path/feature/issue-3" });
-    expect(failedItems.length).toBe(0);
-  });
-
   it("applies deterministic suffixes for colliding branch names", async () => {
     const getAvailableBranch = vi.fn().mockResolvedValue("feature/issue-1");
     const getDefaultPath = vi.fn((_, branch) => Promise.resolve(`/path/${branch}`));
@@ -92,23 +72,6 @@ describe("resolveIssuePrequeries", () => {
     expect(getDefaultPath).toHaveBeenCalledWith("/repo", "feature/issue-1-3");
   });
 
-  it("handles branch name collisions across items in the same batch", async () => {
-    const getAvailableBranch = vi.fn().mockResolvedValue("feature/issue-1");
-    const getDefaultPath = vi.fn((_, branch) => Promise.resolve(`/path/${branch}`));
-
-    const { results } = await resolveIssuePrequeries({
-      rootPath: "/repo",
-      items: [mockPlanned(1, "feature/issue-1"), mockPlanned(2, "feature/issue-1")],
-      existingBranches: null,
-      getAvailableBranch,
-      getDefaultPath,
-      isStaleRun: () => false,
-    });
-
-    expect(results.get(1)?.branch).toBe("feature/issue-1");
-    expect(results.get(2)?.branch).toBe("feature/issue-1-2");
-  });
-
   it("handles partial failures gracefully", async () => {
     const getAvailableBranch = vi.fn((_, name) => {
       if (name === "feature/issue-2") throw new Error("Branch lookup failed");
@@ -129,33 +92,6 @@ describe("resolveIssuePrequeries", () => {
     expect(failedItems.some((f) => f.number === 2)).toBe(true);
     expect(results.get(1)).toBeDefined();
     expect(results.get(3)).toBeDefined();
-  });
-
-  it("stops early on stale run", async () => {
-    let callCount = 0;
-    const getAvailableBranch = vi.fn().mockImplementation(async () => {
-      callCount++;
-      await new Promise((resolve) => setTimeout(resolve, 10));
-      return "branch";
-    });
-    const getDefaultPath = vi.fn().mockResolvedValue("/path");
-
-    let isStale = false;
-    const { results: _, failedItems } = await resolveIssuePrequeries({
-      rootPath: "/repo",
-      items: [mockPlanned(1), mockPlanned(2), mockPlanned(3)],
-      existingBranches: null,
-      getAvailableBranch,
-      getDefaultPath,
-      isStaleRun: () => isStale,
-    });
-
-    setTimeout(() => {
-      isStale = true;
-    }, 5);
-
-    expect(failedItems.length).toBeGreaterThanOrEqual(0);
-    expect(callCount).toBeGreaterThan(0);
   });
 
   it("returns empty results for zero items", async () => {

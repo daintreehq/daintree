@@ -1,4 +1,6 @@
-import type { FleetRunRow } from "@shared/types/ipc/fleet";
+import type { FleetRunRow, FleetSnapshot, RunCanopyRefinement } from "@shared/types/ipc/fleet";
+import { isHandBackStop, isHandBackUnseen } from "@shared/utils/runHandBack";
+import { canopyPlacement } from "@shared/utils/canopyRefinement";
 
 /**
  * Attention bands, worst-first.
@@ -49,7 +51,11 @@ export const FLEET_BANDS = [
 export type FleetBand = (typeof FLEET_BANDS)[number];
 
 /** Bands that constitute a demand on the user — the ones an idle fleet has none of. */
-const DEMAND_BANDS: ReadonlySet<FleetBand> = new Set<FleetBand>(["blocked", "needs-you", "review"]);
+export const DEMAND_BANDS: ReadonlySet<FleetBand> = new Set<FleetBand>([
+  "blocked",
+  "needs-you",
+  "review",
+]);
 
 export function isDemandBand(band: FleetBand): boolean {
   return DEMAND_BANDS.has(band);
@@ -61,7 +67,7 @@ export function isDemandBand(band: FleetBand): boolean {
  * `quiet` is deliberately NOT a demand: nothing is asking the user for
  * anything, and folding it into the demand count would make "3 agents need
  * you" promise three conversations and deliver two — the exact overstatement
- * the acknowledged-completion watermark exists to prevent. It is still the
+ * the per-run seen state exists to prevent. It is still the
  * thing a group header has to be able to point at, so the chip and the summary
  * read this set rather than the demand one.
  */
@@ -72,17 +78,63 @@ export function isAttentionBand(band: FleetBand): boolean {
 }
 
 /**
+ * The bands behind the three state buckets every surface names the same way:
+ * Pilot's segments and the worktree sidebar's quick-state filter read these
+ * sets, so "Attention" or "Finished" cannot mean one set of agents in one place
+ * and another set elsewhere. Narrower than {@link isAttentionBand} on purpose —
+ * `review` is a hand-back, not something an agent is asking.
+ */
+export const ATTENTION_FILTER_BANDS: ReadonlySet<FleetBand> = new Set<FleetBand>([
+  "blocked",
+  "needs-you",
+]);
+export const WORKING_FILTER_BANDS: ReadonlySet<FleetBand> = new Set<FleetBand>(["running"]);
+export const FINISHED_FILTER_BANDS: ReadonlySet<FleetBand> = new Set<FleetBand>(["review", "done"]);
+/** The unread half of Finished: hand-backs nobody has had in front of them yet. */
+export const UNREAD_FILTER_BANDS: ReadonlySet<FleetBand> = new Set<FleetBand>(["review"]);
+
+const bandRunKeyCache = new WeakMap<FleetSnapshot, Map<ReadonlySet<FleetBand>, string>>();
+
+/**
+ * Every run in one of `bands`, as one sorted string of run ids (terminal ids).
+ * A primitive, so a store selector over it only re-renders when membership
+ * changes rather than on every fleet push. A snapshot not yet delivered holds
+ * nobody: the park, snooze and hand-back facts are unknown, and guessing them
+ * from the panel would count every prompt as a question.
+ *
+ * Cached per snapshot and band set, so `bands` must be a module constant.
+ */
+export function fleetBandRunKey(
+  snapshot: FleetSnapshot | null,
+  bands: ReadonlySet<FleetBand>
+): string {
+  if (snapshot === null) return "";
+  let bySet = bandRunKeyCache.get(snapshot);
+  if (bySet === undefined) {
+    bySet = new Map();
+    bandRunKeyCache.set(snapshot, bySet);
+  }
+  const cached = bySet.get(bands);
+  if (cached !== undefined) return cached;
+  const ids: string[] = [];
+  for (const run of snapshot.runs) {
+    if (bands.has(bandForRun(run))) ids.push(run.runId);
+  }
+  const key = ids.sort().join("\n");
+  bySet.set(bands, key);
+  return key;
+}
+
+/**
  * Which band a run belongs to.
  *
- * `acknowledgedAt` is the workspace's completion watermark: a completion at or
- * before it has already been seen, so it stops being a hand-back and becomes a
- * fact. Without it every finished run demands attention forever, and a user who
- * has reviewed everything still reads "3 agents need you" — the switcher makes
- * exactly this distinction (`getWorkspaceActivityStatus`) and the two surfaces
- * have to agree about what is still outstanding.
- *
- * A completion with no `since` cannot be compared to the watermark and stays in
- * `review`: unknown is not evidence of having been seen.
+ * A stop is a hand-back only when main watched the run do the work before it:
+ * that record carries the run's own seen state, so `review` against `done` is
+ * the user's look at this run rather than a workspace-wide watermark. A stop
+ * main never saw work before — a restored session, a flicker under the work
+ * bar, a shell sitting at its prompt — has handed nothing back and reads as
+ * `idle`, not as the agent asking for something. Only a wait that names what
+ * it wants (an approval, a question, an error) is a demand.
  *
  * A park beats every state, including `blocked`. Parking is the user saying
  * "this one does not need me until further notice", and an attention model
@@ -92,36 +144,62 @@ export function isAttentionBand(band: FleetBand): boolean {
  * are the only ways back above the fold, and all of them are the user's own
  * rules firing.
  */
-export function bandForRun(run: FleetRunRow, acknowledgedAt?: number): FleetBand {
+export function bandForRun(run: FleetRunRow): FleetBand {
   if (run.park !== undefined) return "parked";
   // Presence alone, deliberately: main strips expired snoozes before the row is
   // built, so this needs no clock. A run carrying both records reads as parked
   // — the stronger, indefinite decision wins, matching FLEET_BANDS' order.
   if (run.snooze !== undefined) return "snoozed";
+  // Canopy's reading refines the free rules below and sits under the user's
+  // own decisions above. Seeing a question answers nothing, so an ask holds
+  // whatever the hand-back's seen state says — the seen mark itself is left
+  // alone, and comes back into force the moment the turn moves on.
+  const canopy = runCanopyPlacement(run);
+  if (canopy?.kind === "asked") return "needs-you";
+  if (canopy?.kind === "not-asking") {
+    // A question wait is never recorded as a hand-back, so the run's record is
+    // from an earlier stop and says nothing about this one. The wait is the
+    // stop, and whether the user has read it is Canopy's mark for its turn.
+    return canopy.seen ? "done" : "review";
+  }
+  // A stop main watched the run make after work it saw is a hand-back, and
+  // whether the user has had it in front of them since is main's to say — so
+  // it holds through the slide from `completed` into a generic `waiting`. The
+  // same stop with no record handed nothing back: a prompt is not a question.
+  if (run.agentState !== undefined && isHandBackStop(run.agentState, run.waitingReason)) {
+    if (run.handBack === undefined) return "idle";
+    return isHandBackUnseen(run.handBack) ? "review" : "done";
+  }
   switch (run.agentState) {
     case "waiting":
       return run.waitingReason === "error" ? "blocked" : "needs-you";
-    case "completed":
-      return acknowledgedAt !== undefined && run.since !== undefined && run.since <= acknowledgedAt
-        ? "done"
-        : "review";
     case "working":
     case "directing":
       // Presence alone, like the park and snooze records above: main only puts
       // `quietSince` on the wire once the silence has crossed its stall
       // threshold, so this needs no clock and no threshold of its own.
-      return run.quietSince !== undefined ? "quiet" : "running";
+      return run.quietSince !== undefined || canopy?.kind === "stalled" ? "quiet" : "running";
     default:
       return "idle";
   }
+}
+
+/** The Canopy refinement placing this run now, if any; see `canopyPlacement`. */
+export function runCanopyPlacement(run: FleetRunRow): RunCanopyRefinement | undefined {
+  return canopyPlacement(
+    run.agentState,
+    run.waitingReason,
+    run.canopy,
+    run.quietSince !== undefined
+  );
 }
 
 /**
  * The band's own name for what the run is doing.
  *
  * Derived from the band rather than re-read from `agentState` so the visible
- * label, the tone and the ordering can never disagree — an acknowledged
- * completion must not still say "ready for review" while sorting as done.
+ * label, the tone and the ordering can never disagree — a seen hand-back
+ * must not still say "unread" while sorting as done.
  * `running` and `idle` split on state because they each cover two situations
  * the user can tell apart and would want to.
  *
@@ -139,7 +217,7 @@ export function bandLabel(band: FleetBand, run: FleetRunRow): string {
     case "needs-you":
       return "Waiting";
     case "review":
-      return "Ready for review";
+      return "Unread";
     case "running":
       return run.agentState === "directing" ? "Directing" : "Working";
     case "quiet":
@@ -181,8 +259,25 @@ export function bandTimestamp(run: FleetRunRow, band: FleetBand): number | undef
       return run.park?.parkedAt ?? run.since;
     case "snoozed":
       return run.snooze?.snoozedAt ?? run.since;
-    case "quiet":
-      return run.quietSince ?? run.since;
+    case "quiet": {
+      if (run.quietSince !== undefined) return run.quietSince;
+      const canopy = runCanopyPlacement(run);
+      return canopy?.kind === "stalled" ? canopy.stalledSince : run.since;
+    }
+    case "review":
+    case "done":
+      // Dated from the stop itself, not the slide into `waiting` after it. A
+      // question wait Canopy read as asking nothing is its own stop; the
+      // record, if any, is an earlier one.
+      if (runCanopyPlacement(run)?.kind === "not-asking") return run.since;
+      return run.handBack?.stoppedAt ?? run.since;
+    case "needs-you":
+      // An ask Canopy read on a hand-back is as old as the stop it was asked
+      // at: the slide from `completed` into a prompt wait would otherwise make
+      // an outstanding question look new and sort it under fresher demands.
+      return runCanopyPlacement(run)?.kind === "asked"
+        ? (run.handBack?.stoppedAt ?? run.since)
+        : run.since;
     default:
       return run.since;
   }

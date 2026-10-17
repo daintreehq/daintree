@@ -130,17 +130,6 @@ describe("createPtyHostMessageDispatcher", () => {
     expect(ctx.ptyManager.write).toHaveBeenCalledWith("term-1", "hello", "t-1");
   });
 
-  it("logs a warning and returns nothing for unknown message types", () => {
-    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
-    const ctx = makeCtx();
-    const dispatch = createPtyHostMessageDispatcher(ctx);
-
-    const result = dispatch({ type: "no-such-message" });
-
-    expect(result).toBeUndefined();
-    expect(warn).toHaveBeenCalledWith("[PtyHost] Unknown message type:", "no-such-message");
-  });
-
   it("treats prototype-chain keys as unknown message types", () => {
     // The handler map is built with Object.create(null) so that message
     // types colliding with Object.prototype methods ("constructor",

@@ -111,22 +111,6 @@ export const STATUS_SUCCESS_INVENTORY = {
       rationale: "Recorded result of the command the user just ran; leaves with the dialog",
     },
   ],
-  "src/components/DevPreview/ConsolePanel.tsx": [
-    {
-      category: "transient",
-      signature: "text-status-success",
-      anchor: 'aria-label="Copy console message"',
-      expectedOccurrences: 1,
-      rationale: "Copy-message confirmation; resets when the copy flash times out",
-    },
-    {
-      category: "transient",
-      signature: "text-status-success",
-      anchor: 'aria-label="Copy visible console messages"',
-      expectedOccurrences: 1,
-      rationale: "Copy-all-messages confirmation; resets when the copy flash times out",
-    },
-  ],
   "src/components/FileViewer/diffChangeSet.ts": [
     {
       category: "domain",
@@ -218,20 +202,6 @@ export const STATUS_SUCCESS_INVENTORY = {
       signature: "bg-status-success",
       expectedOccurrences: 1,
       rationale: "Finished task; the row auto-clears after AUTO_CLEAR_DELAY",
-    },
-  ],
-  "src/components/Pulse/ProjectPulseCard.tsx": [
-    {
-      category: "outcome",
-      signature: "text-status-success",
-      expectedOccurrences: 1,
-      rationale: "Recorded result of the last CI run on the branch",
-    },
-    {
-      category: "outcome",
-      signature: "var(--color-status-success)",
-      expectedOccurrences: 1,
-      rationale: "Counted result chip; the only success caller is the merged-PR count",
     },
   ],
   "src/components/Pulse/PulseSummary.tsx": [
@@ -329,14 +299,6 @@ export const STATUS_SUCCESS_INVENTORY = {
       anchor: 'iconClass: "text-status-success"',
       expectedOccurrences: 1,
       rationale: "Recorded result carried by a success notification on the grid bar",
-    },
-  ],
-  "src/components/Worktree/ReviewHub/FileSection.tsx": [
-    {
-      category: "domain",
-      signature: "text-status-success",
-      expectedOccurrences: 1,
-      rationale: "Section diff insertion count",
     },
   ],
   "src/components/Worktree/ReviewHub/FileStageRow.tsx": [
@@ -577,5 +539,5 @@ export const STATUS_SUCCESS_INVENTORY = {
  * another added) still trips the per-site checks, and these catch the case
  * where a whole file moves without either check firing.
  */
-export const EXPECTED_STATUS_SUCCESS_SITES = 64;
-export const EXPECTED_STATUS_SUCCESS_OCCURRENCES = 66;
+export const EXPECTED_STATUS_SUCCESS_SITES = 59;
+export const EXPECTED_STATUS_SUCCESS_OCCURRENCES = 61;

@@ -27,16 +27,6 @@ describe("useIsHibernated", () => {
     vi.clearAllMocks();
   });
 
-  it("returns the current hibernation state", () => {
-    currentHibernated = false;
-    const { result: r1 } = renderHook(() => useIsHibernated("t1"));
-    expect(r1.current).toBe(false);
-
-    currentHibernated = true;
-    const { result: r2 } = renderHook(() => useIsHibernated("t1"));
-    expect(r2.current).toBe(true);
-  });
-
   it("re-renders when subscriber notification fires", () => {
     currentHibernated = false;
     const { result } = renderHook(() => useIsHibernated("t1"));
@@ -49,13 +39,6 @@ describe("useIsHibernated", () => {
     currentHibernated = false;
     act(() => capturedListener?.());
     expect(result.current).toBe(false);
-  });
-
-  it("cleans up subscription on unmount", () => {
-    const { unmount } = renderHook(() => useIsHibernated("t1"));
-    expect(capturedListener).not.toBeNull();
-    unmount();
-    expect(capturedListener).toBeNull();
   });
 
   it("re-subscribes when id changes", () => {

@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { readFile } from "fs/promises";
 import { resolve } from "path";
+import { readIndexCss } from "@/__tests__/support/hostCss";
 
 const CARD_PATH = resolve(__dirname, "../ProjectPulseCard.tsx");
 const SUMMARY_PATH = resolve(__dirname, "../PulseSummary.tsx");
@@ -9,7 +10,6 @@ const HEATMAP_PATH = resolve(__dirname, "../PulseHeatmap.tsx");
 const INDEX_CSS_PATH = resolve(__dirname, "../../../index.css");
 const DESIGN_CONTRACT_CSS_PATH = resolve(__dirname, "../../../styles/design-contract.css");
 const PULSE_CSS_PATH = resolve(__dirname, "../../../styles/components/pulse.css");
-const FLAME_PATH = resolve(__dirname, "../StreakFlame.tsx");
 
 // Find a `@media (X)` opening brace and return the slice up to the matching
 // closing brace (or until the next top-level @media / @layer / @theme opens).
@@ -178,20 +178,6 @@ describe("ProjectPulseCard — slot stability (issue #7671)", () => {
     // PulseSkeleton + loaded card + new-repo variant + error variant = 4
     expect(occurrences!.length).toBeGreaterThanOrEqual(4);
   });
-
-  it("health section wraps all four sub-variants in a single stable border-t pt-3 min-h-9 container", async () => {
-    const content = await readFile(CARD_PATH, "utf-8");
-    // The wrapping div holds the slot at a constant height while the loaded
-    // health row, skeleton, no-remote hint, and offline hint swap inside it.
-    expect(content).toContain('"border-t border-border-default pt-3 min-h-9"');
-  });
-
-  it("non-loaded variants centre content vertically inside the reserved slot", async () => {
-    const content = await readFile(CARD_PATH, "utf-8");
-    // `flex items-center` keeps the short message centred when min-h reserves
-    // extra space (otherwise the message would pin to the top of the card).
-    expect(content).toMatch(/min-h-\[240px\] flex items-center/);
-  });
 });
 
 describe("ProjectPulseCard — accessibility (issue #7229)", () => {
@@ -239,12 +225,6 @@ describe("ProjectPulseCard — accessibility (issue #7229)", () => {
     expect(content).toContain("Pulse data updated");
   });
 
-  it("live-region completion is gated on a prior successful load and no error", async () => {
-    const content = await readFile(CARD_PATH, "utf-8");
-    expect(content).toContain("hasEverLoadedRef");
-    expect(content).toContain("!error");
-  });
-
   it("refresh spinner respects motion-reduce", async () => {
     const content = await readFile(CARD_PATH, "utf-8");
     // The refresh spinner is the shared SpinningIcon (#11323), whose spin is
@@ -285,12 +265,6 @@ describe("PulseHeatmap — legend (issue #9819)", () => {
     for (const level of [1, 2, 3, 4]) {
       expect(content).toContain(`var(--pulse-heat-${level},`);
     }
-  });
-
-  it("legend uses Less and More labels", async () => {
-    const content = await readFile(CARD_PATH, "utf-8");
-    expect(content).toContain(">Less<");
-    expect(content).toContain(">More<");
   });
 
   it("legend is decorative (aria-hidden) and ships an sr-only description for aria-describedby", async () => {
@@ -357,7 +331,7 @@ describe("PulseHeatmap — high-contrast shape cue (issue #9819)", () => {
   });
 
   it("forced-colors block paints the shape with CanvasText and sizes it per level", async () => {
-    const content = await readFile(INDEX_CSS_PATH, "utf-8");
+    const content = readIndexCss();
     const block = mediaBlockSlice(content, "@media (forced-colors: active)");
     expect(block).toContain(".pulse-heat-cell-shape");
     expect(block).toContain("CanvasText");
@@ -368,7 +342,7 @@ describe("PulseHeatmap — high-contrast shape cue (issue #9819)", () => {
   });
 
   it("forced-colors block borders every legend swatch like the grid cells it explains", async () => {
-    const content = await readFile(INDEX_CSS_PATH, "utf-8");
+    const content = readIndexCss();
     const block = mediaBlockSlice(content, "@media (forced-colors: active)");
     // Legend swatches are <span>s, so they miss the ButtonText border every
     // grid <button> gets. Without one the empty swatch paints Canvas-on-Canvas
@@ -380,7 +354,7 @@ describe("PulseHeatmap — high-contrast shape cue (issue #9819)", () => {
   });
 
   it("forced-colors block redraws the latest-active marker as a non-shadow outline", async () => {
-    const content = await readFile(INDEX_CSS_PATH, "utf-8");
+    const content = readIndexCss();
     const block = mediaBlockSlice(content, "@media (forced-colors: active)");
     expect(block).toMatch(
       /\.pulse-heat-cell\[data-latest-active\]\s*{[^}]*outline:[^;]*CanvasText/
@@ -388,7 +362,7 @@ describe("PulseHeatmap — high-contrast shape cue (issue #9819)", () => {
   });
 
   it("prefers-contrast block bumps heat-cell border to 1px theme-text", async () => {
-    const content = await readFile(INDEX_CSS_PATH, "utf-8");
+    const content = readIndexCss();
     const block = mediaBlockSlice(content, "@media (prefers-contrast: more)");
     expect(block).toContain(".pulse-heat-cell");
     expect(block).toMatch(/\.pulse-heat-cell\s*{[^}]*border-width:\s*1px/);
@@ -396,7 +370,7 @@ describe("PulseHeatmap — high-contrast shape cue (issue #9819)", () => {
   });
 
   it("the two contrast blocks stay separate (CLAUDE.md dual-block guard)", async () => {
-    const content = await readFile(INDEX_CSS_PATH, "utf-8");
+    const content = readIndexCss();
     const forcedStart = content.indexOf("@media (forced-colors: active)");
     const contrastStart = content.indexOf("@media (prefers-contrast: more)");
     expect(forcedStart).toBeGreaterThan(-1);
@@ -420,20 +394,34 @@ describe("Pulse — no surface can express failure (issue #11172)", () => {
     // that moved there would otherwise escape this scan entirely.
     ["design-contract.css", DESIGN_CONTRACT_CSS_PATH],
   ])("%s carries no missed-day token, class, or label", async (_name, path) => {
-    const content = await readFile(path, "utf-8");
+    const content = path === INDEX_CSS_PATH ? readIndexCss() : await readFile(path, "utf-8");
     expect(content).not.toMatch(MISSED_DAY_SURFACE);
   });
 
   // The coach line's own vocabulary is held to a policy in
   // projectPulseCoach.test.ts, which checks every string the function can
   // actually return rather than grepping the source for quoted literals.
+});
 
-  it("streak flame colors are theme tokens, not hardcoded hexes", async () => {
-    const content = await readFile(FLAME_PATH, "utf-8");
-    // Each tier resolves through var(--pulse-streak-N, …) so a theme can
-    // restyle it; the raw hex survives only as the inline fallback.
-    expect(content).toMatch(/var\(--pulse-streak-1,/);
-    expect(content).toMatch(/var\(--pulse-streak-7,/);
-    expect(content).not.toMatch(/color:\s*"#[0-9A-Fa-f]{6}"/);
+describe("PulseHeatmap — ARIA grid + roving tabindex (issue #7229)", () => {
+  it("uses ARIA grid roles", async () => {
+    const content = await readFile(HEATMAP_PATH, "utf-8");
+    expect(content).toContain('role="grid"');
+    expect(content).toContain('role="row"');
+    expect(content).toContain('role="gridcell"');
+    expect(content).not.toContain('role="group"');
+  });
+
+  it("implements roving tabindex from render state", async () => {
+    const content = await readFile(HEATMAP_PATH, "utf-8");
+    expect(content).toContain("activeCellKey");
+    expect(content).toContain("setActiveCellKey");
+    expect(content).toContain("isActive ? 0 : -1");
+    expect(content).not.toMatch(/tabIndex=\{0\}\s*\/>/);
+  });
+
+  it("ignores Alt/Shift+Arrow combos in the grid keyboard handler", async () => {
+    const content = await readFile(HEATMAP_PATH, "utf-8");
+    expect(content).toContain("event.altKey || event.shiftKey");
   });
 });

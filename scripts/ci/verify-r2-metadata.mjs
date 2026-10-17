@@ -17,7 +17,7 @@ import { setTimeout as defaultSleep } from "node:timers/promises";
 import { load } from "js-yaml";
 import { buildPublishedUrl } from "./verify-r2-uploads.mjs";
 
-const VALID_SUFFIXES = new Set(["-mac", "-linux", ""]);
+const VALID_SUFFIXES = new Set(["-mac", "-linux", "-linux-arm64", ""]);
 const FETCH_TIMEOUT_MS = 15_000;
 
 export function metadataFilename(prefix, suffix) {

@@ -1,11 +1,10 @@
-import { readFileSync } from "node:fs";
-import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
+import { readIndexCss } from "@/__tests__/support/hostCss";
 
 // The power-saving motion gate (#12515) must actually stop the looping classes
 // and nothing else: a wildcard, or a transition override, would reach Radix
 // Presence exit transitions and leave closed overlays ghosted in the DOM.
-const css = readFileSync(resolve(__dirname, "../../index.css"), "utf8");
+const css = readIndexCss();
 
 interface TopLevelRule {
   selectors: string[];

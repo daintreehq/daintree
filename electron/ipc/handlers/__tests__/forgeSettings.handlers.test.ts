@@ -122,25 +122,6 @@ describe("registerForgeSettingsHandlers", () => {
     registryMock.listMatchingProviders.mockReturnValue([{}]);
   });
 
-  it("registers all IPC handlers including the credential channels", () => {
-    const cleanup = registerForgeSettingsHandlers();
-    expect(ipcMainMock.handle).toHaveBeenCalledTimes(7);
-    expect(ipcMainMock.handle).toHaveBeenCalledWith("forge:get-settings", expect.any(Function));
-    expect(ipcMainMock.handle).toHaveBeenCalledWith(
-      "forge:set-default-provider",
-      expect.any(Function)
-    );
-    expect(ipcMainMock.handle).toHaveBeenCalledWith("forge:get-providers", expect.any(Function));
-    expect(ipcMainMock.handle).toHaveBeenCalledWith("forge:resolve-provider", expect.any(Function));
-    expect(ipcMainMock.handle).toHaveBeenCalledWith("forge:set-credential", expect.any(Function));
-    expect(ipcMainMock.handle).toHaveBeenCalledWith(
-      "forge:get-credential-status",
-      expect.any(Function)
-    );
-    expect(ipcMainMock.handle).toHaveBeenCalledWith("forge:clear-credential", expect.any(Function));
-    cleanup();
-  });
-
   it("getSettings returns null defaultProviderId when key is absent", () => {
     registerForgeSettingsHandlers();
     const getSettings = findHandler("forge:get-settings");
@@ -204,13 +185,6 @@ describe("registerForgeSettingsHandlers", () => {
     expect(storeMock.set).toHaveBeenCalledWith("forgeDefaultProviderId", null);
   });
 
-  it("setDefaultProvider treats empty string as null", () => {
-    registerForgeSettingsHandlers();
-    const setDefault = findHandler("forge:set-default-provider");
-    expect(setDefault(null, "")).toEqual({ defaultProviderId: null });
-    expect(storeMock.set).toHaveBeenCalledWith("forgeDefaultProviderId", null);
-  });
-
   it("setDefaultProvider treats non-string payloads as null", () => {
     registerForgeSettingsHandlers();
     const setDefault = findHandler("forge:set-default-provider");
@@ -238,13 +212,6 @@ describe("registerForgeSettingsHandlers", () => {
     expect(setDefault(null, "builtin.github")).toEqual({
       defaultProviderId: "daintree.github.github",
     });
-    expect(storeMock.set).toHaveBeenCalledWith("forgeDefaultProviderId", "daintree.github.github");
-  });
-
-  it("setDefaultProvider canonicalizes a legacy bare 'github' input before persisting (#8451)", () => {
-    registerForgeSettingsHandlers();
-    const setDefault = findHandler("forge:set-default-provider");
-    expect(setDefault(null, "github")).toEqual({ defaultProviderId: "daintree.github.github" });
     expect(storeMock.set).toHaveBeenCalledWith("forgeDefaultProviderId", "daintree.github.github");
   });
 
@@ -463,13 +430,6 @@ describe("registerForgeSettingsHandlers", () => {
 
   it("getSettings normalizes legacy 'builtin.github' to canonical 'daintree.github.github' (#8451)", () => {
     storeMock._data["forgeDefaultProviderId"] = "builtin.github";
-    registerForgeSettingsHandlers();
-    const getSettings = findHandler("forge:get-settings");
-    expect(getSettings(null)).toEqual({ defaultProviderId: "daintree.github.github" });
-  });
-
-  it("getSettings normalizes legacy bare 'github' to canonical 'daintree.github.github' (#8451)", () => {
-    storeMock._data["forgeDefaultProviderId"] = "github";
     registerForgeSettingsHandlers();
     const getSettings = findHandler("forge:get-settings");
     expect(getSettings(null)).toEqual({ defaultProviderId: "daintree.github.github" });

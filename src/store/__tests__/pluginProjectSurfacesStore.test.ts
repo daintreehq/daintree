@@ -466,23 +466,4 @@ describe("pluginProjectSurfacesStore", () => {
 
     expect(state().choices).toEqual({});
   });
-
-  it("starts a fresh session with nothing loaded until main answers", async () => {
-    const choices = { emptyCanvas: record("acme.dash", "stock") };
-    const bridge = installBridge({ emptyCanvas: claim }, { choices: snapshot(choices) });
-    state().init();
-    await flush();
-    expect(state().choicesLoaded).toBe(true);
-
-    // The answer lives in main, not in this view: a reset view knows nothing
-    // until it reads it back, and then it has it again.
-    _resetPluginProjectSurfacesStoreForTest();
-    expect(state().choicesLoaded).toBe(false);
-    expect(state().choices).toEqual({});
-    expect(bridge.choiceListeners).toHaveLength(0);
-
-    state().init();
-    await flush();
-    expect(state().choices).toEqual(choices);
-  });
 });

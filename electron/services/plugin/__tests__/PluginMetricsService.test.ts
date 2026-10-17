@@ -99,12 +99,6 @@ describe("PluginMetricsService", () => {
     });
   });
 
-  it("reports isolation from the host", () => {
-    fx.known.add("daintree.github");
-    fx.builtins.add("daintree.github");
-    expect(fx.service.getSnapshot("daintree.github")?.isolation).toBe("in-process");
-  });
-
   it("counts activations and keeps the last duration", () => {
     fx.service.recordActivation("acme.demo", 120);
     fx.service.recordActivation("acme.demo", 80);

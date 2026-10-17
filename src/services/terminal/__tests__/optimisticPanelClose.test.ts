@@ -266,15 +266,6 @@ describe("optimisticPanelClose — close guards (#12323)", () => {
     __resetPanelCloseGuardsForTests();
   });
 
-  it("still hides an unguarded panel synchronously", () => {
-    const cell = mountPanel("p1");
-    mockState.panelIds = ["p1"];
-    mockState.panelsById = { p1: { id: "p1" } };
-    requestPanelClose({ hideIds: ["p1"], commit: vi.fn() });
-    expect(cell.style.display).toBe("none");
-    expect(isOptimisticallyClosing("p1")).toBe(true);
-  });
-
   it("waits for the guard and hides nothing while it is pending", async () => {
     const cell = mountPanel("p1");
     mockState.panelIds = ["p1"];

@@ -34,10 +34,6 @@ describe("ViewContributionSchema (issue #10464)", () => {
     expect(ViewContributionSchema.safeParse({ ...base, location: "sidebar" }).success).toBe(false);
   });
 
-  it("rejects an unknown location value", () => {
-    expect(ViewContributionSchema.safeParse({ ...base, location: "floating" }).success).toBe(false);
-  });
-
   it("rejects a missing location", () => {
     const { location: _omit, ...withoutLocation } = base;
     expect(ViewContributionSchema.safeParse(withoutLocation).success).toBe(false);

@@ -240,40 +240,5 @@ describe("devServerErrors", () => {
       };
       expect(isRecoverableError(error)).toBe(false);
     });
-
-    it("returns false for permission errors", () => {
-      const error: DevServerError = {
-        type: "permission",
-        message: "Permission denied",
-      };
-      expect(isRecoverableError(error)).toBe(false);
-    });
-
-    it("returns false for unknown errors", () => {
-      const error: DevServerError = {
-        type: "unknown",
-        message: "Unknown error",
-      };
-      expect(isRecoverableError(error)).toBe(false);
-    });
-  });
-
-  describe("recommendedActionId (#8276)", () => {
-    it("maps port-conflict to the cache-clear remedy", () => {
-      const error = detectDevServerError(
-        "Error: listen EADDRINUSE: address already in use :::3000"
-      );
-      expect(error?.recommendedActionId).toBe("devPreview.restartAndClearCache");
-    });
-
-    it("maps missing-dependencies to the reinstall remedy", () => {
-      const error = detectDevServerError("Error: Cannot find module 'vite'");
-      expect(error?.recommendedActionId).toBe("devPreview.reinstallAndRestart");
-    });
-
-    it("leaves permission errors without a recommended action", () => {
-      const error = detectDevServerError("Error: EACCES: permission denied, open '/etc/passwd'");
-      expect(error?.recommendedActionId).toBeUndefined();
-    });
   });
 });

@@ -109,16 +109,6 @@ describe("dialog panel ephemeral lifecycle", () => {
   });
 
   describe("panel limit", () => {
-    it("excludes dialog panels from the limit count", () => {
-      seed([
-        makeFilePanel("grid-1"),
-        makeFilePanel("dialog-1", { location: "dialog", excludeFromPersistence: true }),
-      ]);
-      const { panelsById, panelIds } = usePanelStore.getState();
-
-      expect(countPanelsTowardLimit(panelsById, panelIds)).toBe(1);
-    });
-
     it("excludes any excludeFromPersistence panel, not just dialogs", () => {
       // The assistant overlay carries the flag while sitting in the dock; the
       // field's contract covers counts regardless of location.

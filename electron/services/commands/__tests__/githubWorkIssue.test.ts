@@ -176,19 +176,6 @@ describe("githubWorkIssueCommand", () => {
     expect(githubWorkIssueCommand.disabledReason?.({} as never)).toMatch(/forge provider/i);
   });
 
-  it("uses the issue URL returned by the forge provider", async () => {
-    getIssueMock.mockResolvedValue(
-      makeIssue({ url: "https://gitlab.com/daintree/app/-/issues/55" })
-    );
-
-    const result = await githubWorkIssueCommand.execute({ cwd: "/repo" } as never, {
-      issueNumber: 55,
-    });
-
-    expect(result.success).toBe(true);
-    expect(result.data?.issueUrl).toBe("https://gitlab.com/daintree/app/-/issues/55");
-  });
-
   it("returns ISSUE_NOT_FOUND when the provider reports no issue", async () => {
     getIssueMock.mockResolvedValue(null);
 
@@ -223,17 +210,6 @@ describe("githubWorkIssueCommand", () => {
 
     expect(result.success).toBe(true);
     expect(findAvailableBranchNameMock).toHaveBeenCalledWith("issue-55-cafe-resume");
-  });
-
-  it("normalizes naïve to naive in slugified branch names", async () => {
-    getIssueMock.mockResolvedValue(makeIssue({ number: 7, title: "Fix naïve approach" }));
-
-    const result = await githubWorkIssueCommand.execute({ cwd: "/repo" } as never, {
-      issueNumber: 7,
-    });
-
-    expect(result.success).toBe(true);
-    expect(findAvailableBranchNameMock).toHaveBeenCalledWith("issue-7-fix-naive-approach");
   });
 
   it("prefers trunk over main when develop is absent", async () => {

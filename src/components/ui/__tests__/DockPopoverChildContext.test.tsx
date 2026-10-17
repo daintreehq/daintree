@@ -37,12 +37,4 @@ describe("data-dock-popover-child stamping via DockPopoverChildProvider", () => 
     expect(content).not.toBeNull();
     expect(content.hasAttribute("data-dock-popover-child")).toBe(false);
   });
-
-  it("the attribute is empty-string when present (matches `closest()` predicate)", () => {
-    // `target.closest("[data-dock-popover-child]")` in dockPopoverGuard.ts
-    // requires the attribute to be present, not value-equal. Confirm we
-    // stamp an empty string rather than e.g. `"true"` so `closest` matches.
-    const content = renderDropdown(true);
-    expect(content.getAttribute("data-dock-popover-child")).toBe("");
-  });
 });

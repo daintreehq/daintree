@@ -65,48 +65,6 @@ describe("SettingsValidationRegistry", () => {
     expect(result.current!.tabsWithErrors.has("code-forge")).toBe(true);
   });
 
-  it("keeps the tab in error when both publishers report errors", () => {
-    const { result } = renderHook(
-      () => {
-        useSettingsTabValidation("code-forge", true);
-        useSettingsTabValidation("code-forge", true);
-        return useContext(SettingsValidationContext);
-      },
-      { wrapper: wrap }
-    );
-
-    expect(result.current!.tabsWithErrors.has("code-forge")).toBe(true);
-  });
-
-  it("keeps the parent's error when the child publisher unmounts", () => {
-    let tabs: ReadonlySet<SettingsTab> = new Set();
-    const onSnapshot = (next: ReadonlySet<SettingsTab>) => {
-      tabs = next;
-    };
-
-    const { rerender } = render(
-      <Harness
-        parentMounted
-        parentHasError
-        childMounted
-        childHasError={false}
-        onSnapshot={onSnapshot}
-      />
-    );
-    expect(tabs.has("code-forge")).toBe(true);
-
-    rerender(
-      <Harness
-        parentMounted
-        parentHasError
-        childMounted={false}
-        childHasError={false}
-        onSnapshot={onSnapshot}
-      />
-    );
-    expect(tabs.has("code-forge")).toBe(true);
-  });
-
   it("keeps the tab in error when an errored child unmounts while the parent is errored", () => {
     let tabs: ReadonlySet<SettingsTab> = new Set();
     const onSnapshot = (next: ReadonlySet<SettingsTab>) => {

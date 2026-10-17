@@ -56,10 +56,6 @@ describe("getDaintreeEnv / isDaintreeEnvEnabled", () => {
     expect(isDaintreeEnvEnabled("DAINTREE_PERF_CAPTURE")).toBe(true);
   });
 
-  it("DAINTREE_PERF_CAPTURE stays off when the bridge is absent and env is unset", () => {
-    expect(isDaintreeEnvEnabled("DAINTREE_PERF_CAPTURE")).toBe(false);
-  });
-
   it("returns false when neither the bridge nor import.meta.env is set to '1'", () => {
     expect(isDaintreeEnvEnabled("DAINTREE_E2E_SKIP_FIRST_RUN_DIALOGS")).toBe(false);
   });

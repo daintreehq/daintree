@@ -136,7 +136,7 @@ cn(DOCK_STATUS_PILL_CLASS, isOpen && DOCK_STATUS_PILL_OPEN_CLASS);
 
 - **Open** is the neutral ladder's top rung: `bg-overlay-emphasis` on the pills; `--dock-item-bg-active` / `--dock-item-border-active` on the chips, whose `:root` defaults are `overlay-emphasis` and `border-strong` and which light themes lift to white. Neither default nor any theme override may be accent-derived. The open fill is repeated under `hover:` so pointing at an open item never drops it back to the hover step.
 - **Hover** is one fill for the whole strip: `--dock-item-bg-hover` (`overlay-medium`), chips and pills alike.
-- **Agent-state glyph** on a chip is `DOCK_STATE_GLYPH_CLASS` (12px), the size the tab strip, panel header and sidebar draw it beside a 14px kind icon. The plain-command spinner and finished check in the same slot take the same size.
+- **Agent-state glyph** on a chip is `DOCK_STATE_GLYPH_CLASS` (12px), the size the tab strip and sidebar draw it beside a 14px kind icon. The pane header is the exception: it draws the glyph alone at 16px past the close button. The plain-command spinner and finished check in the same slot take the same size.
 - **Separators** inside a chip (title | command) are `bg-border-divider`, like every other separator.
 - The launch pill (`DockLaunchButton.tsx`) intentionally does NOT keep its accent focus-visible ring after a pointer-dismissed dropdown (see comment near `wasPointerCloseRef`); keyboard dismissal still restores focus for WAI-ARIA.
 
@@ -477,7 +477,7 @@ A right-click menu is scoped to the object under the pointer, never to whatever 
 - **Panel stand-ins** — a tab, sidebar session row, rescue chip or dock status-popover row (Waiting, Background) wraps itself in `TerminalContextMenu` with `proxy`. A proxy stops the event at itself and leaves `data-context-trigger` to the panel's own surface, so `openPanelContextMenu` (Shift+F10) still finds the panel and not a row that stands for it. Grid and dock tabs get this from `TabButton`; pass `menuLocation` so layout commands match the strip.
 - **Any other nested trigger** — pass `stopContextMenuPropagation` from `ui/context-menu` as the inner trigger's `onContextMenu`. Never `preventDefault()` there: Radix skips its own open when the default is already prevented. File rows use `stopFileRowMenuPropagation`, which does the same job.
 - **A chip that stands for a group** (a dock tab-group chip) shows one member's identity, and its menu is that member's.
-- **Canonical:** `PortalToolbar.tsx` (per-tab menu), `TabButton.tsx`, `WorktreeTerminalSection.tsx`, `HelpSessionTabs.tsx`. Pinned by `TabButton.contextMenu.test.tsx`, `WorktreeTerminalSection.contextMenu.test.tsx` and `HelpSessionTabs.contextMenu.test.tsx`.
+- **Canonical:** `PortalToolbar.tsx` (per-tab menu), `TabButton.tsx`, `WorktreeTerminalSection.tsx`, `HelpSessionTabs.tsx`. Pinned by `TabButton.contextMenu.test.tsx`, `WorktreeTerminalSection.contextMenu.test.tsx` and `HelpSessionTabs.test.tsx`.
 
 ---
 

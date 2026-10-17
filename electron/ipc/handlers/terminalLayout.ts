@@ -1,4 +1,5 @@
 import { projectStore } from "../../services/ProjectStore.js";
+import { peekDriveLeaseService } from "../../services/DriveLeaseService.js";
 import { noteRendererSessionIdentityEdits } from "../../services/pty/agentSessionCapturePersistence.js";
 import { isUsableTerminalGeometry } from "../../../shared/types/terminal.js";
 import {
@@ -229,6 +230,7 @@ export const terminalLayoutNamespace = defineIpcNamespace({
           // (#11497).
           mruList: existingState?.mruList,
         }));
+        peekDriveLeaseService()?.notifyPanelsChanged(projectId);
       }
     ),
     getTerminalSizes: op(
@@ -337,6 +339,7 @@ export const terminalLayoutNamespace = defineIpcNamespace({
           // See setTerminals: this rebuild deletes any field it omits (#11497).
           mruList: existingState?.mruList,
         }));
+        peekDriveLeaseService()?.notifyPanelsChanged(projectId);
       }
     ),
     getFocusMode: op(TERMINAL_LAYOUT_METHOD_CHANNELS.getFocusMode, async (projectId: string) => {
@@ -448,6 +451,7 @@ export const terminalLayoutNamespace = defineIpcNamespace({
         const changedIds = sanitizeIdList(payload.changedIds);
         const removedIds = sanitizeIdList(payload.removedIds);
 
+        let saved = false;
         await projectStore.enqueueProjectStateUpdate(projectId, (existingState) => {
           const mergedDrafts =
             changedIds === undefined
@@ -470,6 +474,7 @@ export const terminalLayoutNamespace = defineIpcNamespace({
           if (!existingState && Object.keys(mergedDrafts).length === 0) {
             return null;
           }
+          saved = true;
           return {
             projectId,
             activeWorktreeId: existingState?.activeWorktreeId,
@@ -485,6 +490,7 @@ export const terminalLayoutNamespace = defineIpcNamespace({
             mruList: existingState?.mruList,
           };
         });
+        if (saved) peekDriveLeaseService()?.notifyDraftsChanged(projectId);
       }
     ),
   },

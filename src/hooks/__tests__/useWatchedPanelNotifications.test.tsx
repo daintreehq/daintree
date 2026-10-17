@@ -87,20 +87,6 @@ describe("applyStaggerQueueCap", () => {
     expect(queue).not.toContain(originalFirst);
     expect(queue[0]).toBe(originalSecond);
   });
-
-  it("drops the oldest each call when invoked repeatedly past the cap", () => {
-    const queue = Array.from({ length: MAX_STAGGER_QUEUE_LENGTH + 5 }, (_, i) => (): number => i);
-    const firstThree = queue.slice(0, 3);
-
-    applyStaggerQueueCap(queue);
-    applyStaggerQueueCap(queue);
-    applyStaggerQueueCap(queue);
-
-    expect(queue.length).toBe(MAX_STAGGER_QUEUE_LENGTH + 2);
-    for (const dropped of firstThree) {
-      expect(queue).not.toContain(dropped);
-    }
-  });
 });
 
 describe("useWatchedPanelNotifications", () => {

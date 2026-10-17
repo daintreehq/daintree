@@ -10,6 +10,10 @@ import { keybindingService } from "@/services/KeybindingService";
 import type { KeybindingResolutionResult } from "@/services/keybindingUtils";
 import type { TerminalPaddingPaint } from "@/services/terminal/terminalPaddingPaint";
 import { XtermAdapter } from "../XtermAdapter";
+import {
+  _resetCtrlVImagePasteForTests,
+  registerClipboardImagePaster,
+} from "../uploads/ctrlVImagePaste";
 
 const mocks = vi.hoisted(() => {
   let keyHandler: ((event: KeyboardEvent) => boolean) | null = null;
@@ -746,11 +750,14 @@ describe("XtermAdapter lifecycle", () => {
       });
     }
 
-    it("writes the backward-word sequence for Option+Left", async () => {
+    it.each([
+      ["ArrowLeft", "\x1bb"],
+      ["ArrowRight", "\x1bf"],
+    ] as const)("writes the word-navigation sequence for Option+%s", async (key, sequence) => {
       const onInput = vi.fn();
       const keyHandler = await mountAndGetKeyHandler({ onInput });
 
-      const event = optionArrow("ArrowLeft");
+      const event = optionArrow(key);
       const preventDefaultSpy = vi.spyOn(event, "preventDefault");
       const stopPropagationSpy = vi.spyOn(event, "stopPropagation");
 
@@ -758,19 +765,21 @@ describe("XtermAdapter lifecycle", () => {
       expect(keyHandler(event)).toBe(false);
       expect(preventDefaultSpy).toHaveBeenCalled();
       expect(stopPropagationSpy).toHaveBeenCalled();
-      expect(mocks.writeTerminalInputOrFleet).toHaveBeenCalledWith("term-1", "\x1bb");
+      expect(mocks.writeTerminalInputOrFleet).toHaveBeenCalledWith("term-1", sequence);
       // `return false` bypasses xterm's onData, so input tracking is replicated here.
       expect(mocks.terminalInstanceService.notifyUserInput).toHaveBeenCalledWith("term-1");
-      expect(onInput).toHaveBeenCalledWith("\x1bb");
+      expect(onInput).toHaveBeenCalledWith(sequence);
     });
 
-    it("writes the forward-word sequence for Option+Right", async () => {
-      const onInput = vi.fn();
-      const keyHandler = await mountAndGetKeyHandler({ onInput });
+    it("does not turn modified arrows into word-navigation input", async () => {
+      const keyHandler = await mountAndGetKeyHandler();
 
-      expect(keyHandler(optionArrow("ArrowRight"))).toBe(false);
-      expect(mocks.writeTerminalInputOrFleet).toHaveBeenCalledWith("term-1", "\x1bf");
-      expect(onInput).toHaveBeenCalledWith("\x1bf");
+      keyHandler(optionArrow("ArrowLeft", { shiftKey: true }));
+      keyHandler(optionArrow("ArrowRight", { ctrlKey: true }));
+      keyHandler(optionArrow("ArrowLeft", { metaKey: true }));
+
+      expect(mocks.writeTerminalInputOrFleet).not.toHaveBeenCalled();
+      expect(mocks.terminalInstanceService.notifyUserInput).not.toHaveBeenCalled();
     });
 
     it("keeps writing while the key is held", async () => {
@@ -835,31 +844,6 @@ describe("XtermAdapter lifecycle", () => {
       expect(mocks.writeTerminalInputOrFleet).not.toHaveBeenCalled();
       expect(mocks.terminalInstanceService.notifyUserInput).not.toHaveBeenCalled();
       expect(onInput).not.toHaveBeenCalled();
-    });
-
-    it("does not claim Option+Arrow combined with another modifier", async () => {
-      const keyHandler = await mountAndGetKeyHandler();
-
-      // Shift+Option extends a selection; Cmd+Option is bound to terminal.focus*.
-      keyHandler(optionArrow("ArrowLeft", { shiftKey: true }));
-      keyHandler(optionArrow("ArrowRight", { ctrlKey: true }));
-      keyHandler(optionArrow("ArrowLeft", { metaKey: true }));
-
-      expect(mocks.writeTerminalInputOrFleet).not.toHaveBeenCalled();
-      expect(mocks.terminalInstanceService.notifyUserInput).not.toHaveBeenCalled();
-    });
-
-    it("leaves unmodified arrows to xterm", async () => {
-      const keyHandler = await mountAndGetKeyHandler();
-
-      const plainArrow = new KeyboardEvent("keydown", {
-        key: "ArrowLeft",
-        code: "ArrowLeft",
-        bubbles: true,
-        cancelable: true,
-      });
-      expect(keyHandler(plainArrow)).toBe(true);
-      expect(mocks.writeTerminalInputOrFleet).not.toHaveBeenCalled();
     });
 
     it("swallows Option+Arrow without writing while input is locked", async () => {
@@ -956,6 +940,108 @@ describe("XtermAdapter lifecycle", () => {
       expect(keyHandler(key({ key: "Insert", code: "Insert", shiftKey: true }))).toBe(false);
 
       await waitFor(() => expect(mocks.managed.terminal.paste).toHaveBeenCalledWith("pasted-text"));
+    });
+
+    describe("with an image on the clipboard", () => {
+      const pasteKey = () => key({ key: "V", code: "KeyV", ctrlKey: true, shiftKey: true });
+      let unregister: () => void = () => {};
+
+      afterEach(() => {
+        unregister();
+        _resetCtrlVImagePasteForTests();
+      });
+
+      function registerPaster(outcome: Promise<"inserted" | "empty" | "failed">) {
+        const paster = vi.fn<() => Promise<"inserted" | "empty" | "failed">>(() => outcome);
+        unregister = registerClipboardImagePaster("term-1", paster);
+        return paster;
+      }
+
+      it("pastes the image when Ctrl+Shift+V finds no text", async () => {
+        clipboard.readText.mockResolvedValue("");
+        const paster = registerPaster(Promise.resolve("inserted"));
+        const keyHandler = await mountAndGetKeyHandler();
+
+        expect(keyHandler(pasteKey())).toBe(false);
+
+        await waitFor(() => expect(paster).toHaveBeenCalledTimes(1));
+        expect(mocks.managed.terminal.paste).not.toHaveBeenCalled();
+      });
+
+      it("pastes the image on Shift+Insert too", async () => {
+        clipboard.readText.mockResolvedValue("");
+        const paster = registerPaster(Promise.resolve("inserted"));
+        const keyHandler = await mountAndGetKeyHandler();
+
+        keyHandler(key({ key: "Insert", code: "Insert", shiftKey: true }));
+
+        await waitFor(() => expect(paster).toHaveBeenCalledTimes(1));
+      });
+
+      it("pastes the text when the clipboard carries both", async () => {
+        const paster = registerPaster(Promise.resolve("inserted"));
+        const keyHandler = await mountAndGetKeyHandler();
+
+        keyHandler(pasteKey());
+
+        await waitFor(() =>
+          expect(mocks.managed.terminal.paste).toHaveBeenCalledWith("pasted-text")
+        );
+        expect(paster).not.toHaveBeenCalled();
+      });
+
+      it("sends one image while the first is still saving", async () => {
+        clipboard.readText.mockResolvedValue("");
+        let finish!: (outcome: "inserted") => void;
+        const paster = registerPaster(
+          new Promise((resolve) => {
+            finish = resolve;
+          })
+        );
+        const keyHandler = await mountAndGetKeyHandler();
+
+        keyHandler(pasteKey());
+        await waitFor(() => expect(paster).toHaveBeenCalledTimes(1));
+        keyHandler(pasteKey());
+        await waitFor(() => expect(clipboard.readText).toHaveBeenCalledTimes(2));
+        await Promise.resolve();
+        expect(paster).toHaveBeenCalledTimes(1);
+
+        await act(async () => {
+          finish("inserted");
+        });
+        keyHandler(pasteKey());
+        await waitFor(() => expect(paster).toHaveBeenCalledTimes(2));
+      });
+
+      it("drops the image when input locks while the clipboard is read", async () => {
+        let resolveText!: (text: string) => void;
+        clipboard.readText.mockReturnValue(
+          new Promise((resolve) => {
+            resolveText = resolve;
+          })
+        );
+        const paster = registerPaster(Promise.resolve("inserted"));
+        const keyHandler = await mountAndGetKeyHandler();
+
+        keyHandler(pasteKey());
+        mocks.managed.isInputLocked = true;
+        await act(async () => {
+          resolveText("");
+        });
+
+        expect(paster).not.toHaveBeenCalled();
+      });
+
+      it("leaves a text-less clipboard alone when no paster is registered", async () => {
+        clipboard.readText.mockResolvedValue("");
+        const keyHandler = await mountAndGetKeyHandler();
+
+        expect(keyHandler(pasteKey())).toBe(false);
+
+        await waitFor(() => expect(clipboard.readText).toHaveBeenCalled());
+        expect(mocks.managed.terminal.paste).not.toHaveBeenCalled();
+      });
     });
 
     it("never pastes while input is locked", async () => {

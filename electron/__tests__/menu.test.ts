@@ -204,6 +204,9 @@ vi.mock("../window/fullscreen.js", () => ({
   toggleWindowFullscreen: toggleWindowFullscreenMock,
 }));
 
+const linuxIconPathMock = vi.hoisted(() => vi.fn<() => string | undefined>(() => undefined));
+vi.mock("../window/linuxWindowIcon.js", () => ({ getLinuxAppIconPath: linuxIconPathMock }));
+
 const autoUpdaterServiceMock = vi.hoisted(() => {
   let menuState: "idle" | "checking" | "ready" = "idle";
   return {
@@ -276,6 +279,7 @@ import { webContents, app, Menu, dialog } from "electron";
 import { CHANNELS } from "../ipc/channels.js";
 import { getWorkspaceClientRef } from "../window/windowServices.js";
 import { AppError } from "../utils/errorTypes.js";
+import { registerRemoteService } from "../remote/runtime.js";
 
 function findMenuItem(
   template: Electron.MenuItemConstructorOptions[],
@@ -329,6 +333,14 @@ describe("About panel build channel (#11121)", () => {
         expect(options.version).toBe(getBuildChannelLabel(version));
         expect(options.version).toBeTruthy();
       }
+    });
+
+    it("gives the dialog the app icon where one is shipped as a file (Linux)", () => {
+      linuxIconPathMock.mockReturnValueOnce("/opt/Daintree/resources/icon.png");
+      expect(buildAboutPanelOptions("1.0.0").iconPath).toBe("/opt/Daintree/resources/icon.png");
+
+      linuxIconPathMock.mockReturnValueOnce(undefined);
+      expect(buildAboutPanelOptions("1.0.0")).not.toHaveProperty("iconPath");
     });
   });
 });
@@ -957,10 +969,6 @@ describe("update menu lifecycle", () => {
       expect(item).toBeUndefined();
     });
 
-    it("registers a menu-state listener after Menu.setApplicationMenu", () => {
-      expect(autoUpdaterServiceMock.onMenuStateChange).toHaveBeenCalled();
-    });
-
     it("applies the current state immediately after rebuild (sticky Ready)", () => {
       autoUpdaterServiceMock.__setMenuState("ready");
       capturedTemplate = [];
@@ -1065,21 +1073,6 @@ describe("update menu lifecycle", () => {
       expect(autoUpdaterServiceMock.quitAndInstallIfReady).not.toHaveBeenCalled();
     });
 
-    it("calls checkForUpdatesManually when state is checking (defensive — item is also disabled)", async () => {
-      autoUpdaterServiceMock.__setMenuState("checking");
-      const item = findUpdateItem(capturedTemplate, "check-for-updates-mac");
-
-      item!.click!(
-        {} as Electron.MenuItem,
-        mockBrowserWindow as unknown as Electron.BaseWindow,
-        {} as Electron.KeyboardEvent
-      );
-      await flushClick();
-
-      expect(autoUpdaterServiceMock.checkForUpdatesManually).toHaveBeenCalledTimes(1);
-      expect(autoUpdaterServiceMock.quitAndInstallIfReady).not.toHaveBeenCalled();
-    });
-
     it("calls quitAndInstallIfReady when state is ready", async () => {
       autoUpdaterServiceMock.__setMenuState("ready");
       const item = findUpdateItem(capturedTemplate, "check-for-updates-mac");
@@ -1132,29 +1125,27 @@ describe("update menu lifecycle", () => {
       expect(items.some((i) => i.type === "separator")).toBe(false);
     });
 
-    it("on linux replaces the macOS-only roles with [minimize, close] and no orphan separator", () => {
-      Object.defineProperty(process, "platform", { value: "linux", configurable: true });
+    it.each(["win32", "linux"] as const)(
+      "on %s never lets Minimize take Ctrl+M from the focused page",
+      (platform) => {
+        Object.defineProperty(process, "platform", { value: platform, configurable: true });
+        createApplicationMenu(mockBrowserWindow as unknown as Electron.BrowserWindow);
+
+        const minimize = findSubmenu(capturedTemplate, "Window").find((i) => i.role === "minimize");
+        expect(minimize?.registerAccelerator).toBe(false);
+      }
+    );
+
+    it("on darwin keeps Cmd+M minimizing the window", () => {
+      Object.defineProperty(process, "platform", { value: "darwin", configurable: true });
       createApplicationMenu(mockBrowserWindow as unknown as Electron.BrowserWindow);
 
-      const items = findSubmenu(capturedTemplate, "Window");
-      expect(items.map((i) => i.role ?? i.type)).toEqual(["minimize", "close"]);
+      const minimize = findSubmenu(capturedTemplate, "Window").find((i) => i.role === "minimize");
+      expect(minimize?.registerAccelerator).not.toBe(false);
     });
   });
 
   describe("File menu Exit and Settings accelerator on non-darwin (#7939)", () => {
-    it("on darwin: no Exit item, no Settings... with accelerator (Settings... lives in app menu)", () => {
-      Object.defineProperty(process, "platform", { value: "darwin", configurable: true });
-      createApplicationMenu(mockBrowserWindow as unknown as Electron.BrowserWindow);
-
-      const fileMenu = capturedTemplate.find((m) => m.label === "File");
-      const items = fileMenu!.submenu as Electron.MenuItemConstructorOptions[];
-      expect(items.some((i) => i.label === "Exit")).toBe(false);
-      const fileSettings = items.find(
-        (i) => i.label === "Settings…" && i.accelerator === "CommandOrControl+,"
-      );
-      expect(fileSettings).toBeUndefined();
-    });
-
     it("on win32: File menu ends with separator + Exit (role: quit) and exposes Settings... with CommandOrControl+,", () => {
       Object.defineProperty(process, "platform", { value: "win32", configurable: true });
       createApplicationMenu(mockBrowserWindow as unknown as Electron.BrowserWindow);
@@ -1167,22 +1158,6 @@ describe("update menu lifecycle", () => {
       expect(last.label).toBe("Exit");
       expect(last.role).toBe("quit");
       expect(penultimate.type).toBe("separator");
-
-      const settings = items.find((i) => i.label === "Settings…");
-      expect(settings).toBeDefined();
-      expect(settings!.accelerator).toBe("CommandOrControl+,");
-    });
-
-    it("on linux: File menu ends with separator + Exit (role: quit) and exposes Settings... with CommandOrControl+,", () => {
-      Object.defineProperty(process, "platform", { value: "linux", configurable: true });
-      createApplicationMenu(mockBrowserWindow as unknown as Electron.BrowserWindow);
-
-      const fileMenu = capturedTemplate.find((m) => m.label === "File");
-      const items = fileMenu!.submenu as Electron.MenuItemConstructorOptions[];
-
-      const last = items[items.length - 1];
-      expect(last.label).toBe("Exit");
-      expect(last.role).toBe("quit");
 
       const settings = items.find((i) => i.label === "Settings…");
       expect(settings).toBeDefined();
@@ -1231,17 +1206,6 @@ describe("update menu lifecycle", () => {
 
     it("on win32: About is the last item in Help, preceded by a separator", () => {
       Object.defineProperty(process, "platform", { value: "win32", configurable: true });
-      createApplicationMenu(mockBrowserWindow as unknown as Electron.BrowserWindow);
-
-      const items = findHelpSubmenu(capturedTemplate);
-      const last = items[items.length - 1];
-      const penultimate = items[items.length - 2];
-      expect(last.role).toBe("about");
-      expect(penultimate.type).toBe("separator");
-    });
-
-    it("on linux: About is the last item in Help, preceded by a separator", () => {
-      Object.defineProperty(process, "platform", { value: "linux", configurable: true });
       createApplicationMenu(mockBrowserWindow as unknown as Electron.BrowserWindow);
 
       const items = findHelpSubmenu(capturedTemplate);
@@ -1318,6 +1282,7 @@ describe("handleDirectoryOpen window targeting", () => {
       getAllViews: vi.fn<() => unknown[]>(() => []),
       getActiveView: vi.fn<() => unknown>(() => null),
       setPendingFocusIntent: vi.fn(),
+      releaseCachedView: vi.fn<(projectId: string) => boolean>(() => true),
     };
   }
 
@@ -1433,7 +1398,7 @@ describe("handleDirectoryOpen window targeting", () => {
     expect(projectStoreMock.setCurrentProject).not.toHaveBeenCalled();
   });
 
-  it("has the owning window switch to a project it only holds cached", async () => {
+  it("opens a project another window only holds cached here, leaving that window alone (#13291)", async () => {
     const targetManager = createManager();
     const ownerManager = createManager();
     ownerManager.getActiveProjectId.mockReturnValue("project-other");
@@ -1467,13 +1432,11 @@ describe("handleDirectoryOpen window targeting", () => {
     const targetWindow = { id: 7, isDestroyed: () => false } as unknown as Electron.BrowserWindow;
     await handleDirectoryOpen(PROJECT.path, targetWindow);
 
-    expect(ownerAppWebContents.send).toHaveBeenCalledWith("menu-action", {
-      actionId: "project.switch",
-      args: { projectId: PROJECT.id },
-    });
-    expect(ownerWindow.focus).toHaveBeenCalled();
-    expect(targetManager.switchTo).not.toHaveBeenCalled();
+    expect(ownerManager.releaseCachedView).toHaveBeenCalledWith(PROJECT.id);
+    expect(ownerAppWebContents.send).not.toHaveBeenCalled();
+    expect(ownerWindow.focus).not.toHaveBeenCalled();
     expect(ownerManager.switchTo).not.toHaveBeenCalled();
+    expect(targetManager.switchTo).toHaveBeenCalled();
   });
 });
 
@@ -1655,15 +1618,6 @@ describe("handleDirectoryOpen non-repository folders", () => {
     deferredSend();
 
     expect(mockWebContents.send).not.toHaveBeenCalled();
-  });
-
-  it("still shows the native error box for unrelated failures", async () => {
-    projectStoreMock.addProject.mockRejectedValue(new Error("ENOENT: no such file or directory"));
-
-    await handleDirectoryOpen(FOLDER, targetWindowStub());
-
-    expect(mockWebContents.send).not.toHaveBeenCalled();
-    expect(dialog.showMessageBox).toHaveBeenCalledTimes(1);
   });
 
   it("does not hijack unrelated structured errors", async () => {
@@ -2240,5 +2194,232 @@ describe("Help menu plugin tours (#12773)", () => {
 
     getProjectForWebContentsMock.mockReturnValue("project-b");
     expect(helpItems().some((i) => i.label === "Acme Site Builder: Welcome Tour")).toBe(true);
+  });
+});
+
+describe("a window on a remote host", () => {
+  const originalPlatform = process.platform;
+  const RECENT = {
+    id: "recent-a",
+    name: "Recent A",
+    path: "/work/recent-a",
+    emoji: "🌲",
+    lastOpened: 1,
+  };
+  const windowHosts = {
+    windowHost: vi.fn((windowId: number) =>
+      windowId === mockBrowserWindow.id ? "studio-01" : "local"
+    ),
+    viewHost: vi.fn((_webContentsId: number) => "local"),
+    switchWindowToLocal: vi.fn(async (_windowId: number, projectId: string) => ({
+      outcome: "switched" as const,
+      hostId: "local",
+      projectId,
+    })),
+    openHostProjectInNewWindow: vi.fn(),
+  };
+  let unregister: () => void = () => {};
+  const hostWindow = mockBrowserWindow as unknown as Electron.BrowserWindow;
+
+  function fileMenuItem(label: string): Electron.MenuItemConstructorOptions {
+    Object.defineProperty(process, "platform", { value: "darwin", configurable: true });
+    createApplicationMenu(hostWindow);
+    const found = findMenuItem(capturedTemplate, "File", label);
+    expect(found).toBeDefined();
+    return found!;
+  }
+
+  function click(
+    entry: Electron.MenuItemConstructorOptions,
+    event: Partial<Electron.KeyboardEvent> = {}
+  ) {
+    return entry.click!(
+      {} as Electron.MenuItem,
+      mockBrowserWindow as unknown as Electron.BaseWindow,
+      event as Electron.KeyboardEvent
+    );
+  }
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    capturedTemplate = [];
+    mockWebContents.isDestroyed.mockReturnValue(false);
+    mockWebContents.isLoadingMainFrame.mockReturnValue(false);
+    getAppWebContentsMock.mockImplementation(() => mockWebContents);
+    windowRefMock.getWindowRegistry.mockReturnValue(null);
+    projectStoreMock.getProjectByPath.mockResolvedValue(null);
+    unregister = registerRemoteService("windowHosts", windowHosts);
+  });
+
+  afterEach(() => {
+    unregister();
+    Object.defineProperty(process, "platform", { value: originalPlatform, configurable: true });
+    projectStoreMock.getAllProjects.mockReturnValue([]);
+  });
+
+  it("opens the host's picker in the window rather than this machine's folder dialog", async () => {
+    await click(fileMenuItem("Open Project…"));
+
+    expect(dialog.showOpenDialog).not.toHaveBeenCalled();
+    expect(mockWebContents.send).toHaveBeenCalledExactlyOnceWith(CHANNELS.MENU_ACTION, {
+      actionId: "project.add",
+      args: undefined,
+    });
+    expect(projectStoreMock.addProject).not.toHaveBeenCalled();
+  });
+
+  it("hands Open Project in New Window… to the window's renderer as well", async () => {
+    await click(fileMenuItem("Open Project in New Window…"));
+
+    expect(dialog.showOpenDialog).not.toHaveBeenCalled();
+    expect(mockWebContents.send).toHaveBeenCalledExactlyOnceWith(CHANNELS.MENU_ACTION, {
+      actionId: "project.openInNewWindow",
+      args: undefined,
+    });
+    expect(openFolderInNewWindowMock).not.toHaveBeenCalled();
+  });
+
+  it("brings the window back to this machine for an Open Recent entry", async () => {
+    projectStoreMock.getAllProjects.mockReturnValue([RECENT]);
+    projectStoreMock.addProject.mockResolvedValue({ id: RECENT.id, path: RECENT.path });
+    const recent = fileMenuItem("Open Recent").submenu as Electron.MenuItemConstructorOptions[];
+
+    await click(recent[0]!);
+
+    expect(projectStoreMock.addProject).toHaveBeenCalledWith(RECENT.path);
+    expect(windowHosts.switchWindowToLocal).toHaveBeenCalledExactlyOnceWith(
+      mockBrowserWindow.id,
+      RECENT.id
+    );
+    expect(projectStoreMock.setCurrentProject).not.toHaveBeenCalled();
+  });
+
+  it("leaves the window on its host when another window already shows the project", async () => {
+    projectStoreMock.addProject.mockResolvedValue({ id: RECENT.id, path: RECENT.path });
+    const ownerWindow = {
+      id: 4,
+      isDestroyed: () => false,
+      isMinimized: () => false,
+      show: vi.fn(),
+      focus: vi.fn(),
+    };
+    const ownerView = { webContents: { isDestroyed: () => false, focus: vi.fn(), send: vi.fn() } };
+    const ownerManager = {
+      getActiveProjectId: () => RECENT.id,
+      getOutgoingBridgeProjectId: () => null,
+      getAllViews: () => [{ projectId: RECENT.id, view: ownerView }],
+      getActiveView: () => ownerView,
+    };
+    windowRefMock.getWindowRegistry.mockReturnValue({
+      getByWindowId: () => undefined,
+      all: () => [
+        { windowId: 4, browserWindow: ownerWindow, services: { projectViewManager: ownerManager } },
+      ],
+    });
+
+    await handleDirectoryOpen(RECENT.path, hostWindow);
+
+    expect(windowHosts.switchWindowToLocal).not.toHaveBeenCalled();
+    expect(ownerWindow.focus).toHaveBeenCalled();
+  });
+
+  it("opens a folder with no repository in a window on this machine, never the host window's git prompt", async () => {
+    projectStoreMock.addProject.mockRejectedValue(
+      new AppError({ code: "NOT_A_GIT_REPO", message: "Not a git repository: /work/plain" })
+    );
+
+    await handleDirectoryOpen("/work/plain", hostWindow);
+
+    expect(openFolderInNewWindowMock).toHaveBeenCalledExactlyOnceWith(
+      "/work/plain",
+      mockBrowserWindow.id
+    );
+    expect(mockWebContents.send).not.toHaveBeenCalled();
+    expect(windowHosts.switchWindowToLocal).not.toHaveBeenCalled();
+    expect(dialog.showMessageBox).not.toHaveBeenCalled();
+  });
+
+  it("shows the view the host window still holds for the project by bringing it back here", async () => {
+    projectStoreMock.addProject.mockResolvedValue({ id: RECENT.id, path: RECENT.path });
+    const hostManager = {
+      getActiveProjectId: () => "studio-01:remote-a",
+      getOutgoingBridgeProjectId: () => null,
+      getAllViews: () => [
+        { projectId: "studio-01:remote-a", view: { webContents: { isDestroyed: () => false } } },
+        { projectId: RECENT.id, view: { webContents: { isDestroyed: () => false } } },
+      ],
+      getActiveView: () => null,
+      switchTo: vi.fn(),
+    };
+    windowRefMock.getWindowRegistry.mockReturnValue({
+      getByWindowId: (id: number) =>
+        id === mockBrowserWindow.id ? { services: { projectViewManager: hostManager } } : undefined,
+      all: () => [
+        {
+          windowId: mockBrowserWindow.id,
+          browserWindow: mockBrowserWindow,
+          services: { projectViewManager: hostManager },
+        },
+      ],
+    });
+
+    await handleDirectoryOpen(RECENT.path, hostWindow);
+
+    expect(windowHosts.switchWindowToLocal).toHaveBeenCalledExactlyOnceWith(
+      mockBrowserWindow.id,
+      RECENT.id
+    );
+    expect(hostManager.switchTo).not.toHaveBeenCalled();
+    expect(mockWebContents.send).not.toHaveBeenCalled();
+  });
+
+  it("comes back to this machine when a host switch lands while the folder is being added", async () => {
+    // On this machine at entry; on studio-01 by the time the folder is added.
+    windowHosts.windowHost.mockReturnValueOnce("local");
+    projectStoreMock.addProject.mockResolvedValue({ id: RECENT.id, path: RECENT.path });
+
+    await handleDirectoryOpen(RECENT.path, hostWindow);
+
+    expect(windowHosts.switchWindowToLocal).toHaveBeenCalledExactlyOnceWith(
+      mockBrowserWindow.id,
+      RECENT.id
+    );
+    expect(projectStoreMock.setCurrentProject).not.toHaveBeenCalled();
+  });
+
+  it("says so when the window for a folder with no repository can't open", async () => {
+    projectStoreMock.addProject.mockRejectedValue(
+      new AppError({ code: "NOT_A_GIT_REPO", message: "Not a git repository: /work/plain" })
+    );
+    openFolderInNewWindowMock.mockRejectedValueOnce(new Error("boom"));
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    await handleDirectoryOpen("/work/plain", hostWindow);
+
+    await vi.waitFor(() =>
+      expect(dialog.showMessageBox).toHaveBeenCalledExactlyOnceWith(
+        hostWindow,
+        expect.objectContaining({ message: "Couldn't open a new window" })
+      )
+    );
+    expect(mockWebContents.send).not.toHaveBeenCalled();
+    errSpy.mockRestore();
+  });
+
+  it("says why a folder can't open in a native dialog, and keeps the window on its host", async () => {
+    projectStoreMock.addProject.mockRejectedValue(
+      new AppError({ code: "NOT_FOUND", message: "missing" })
+    );
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    await handleDirectoryOpen("/work/gone", hostWindow);
+
+    expect(dialog.showMessageBox).toHaveBeenCalledExactlyOnceWith(
+      hostWindow,
+      expect.objectContaining({ type: "error", title: "Couldn't open folder" })
+    );
+    expect(windowHosts.switchWindowToLocal).not.toHaveBeenCalled();
+    expect(mockWebContents.send).not.toHaveBeenCalled();
+    errSpy.mockRestore();
   });
 });

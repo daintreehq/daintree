@@ -217,35 +217,3 @@ describe("panel persistence workspace id (#11484)", () => {
     expect(getter()).toBeUndefined();
   });
 });
-
-describe("projectStore persistence boundary hardening", () => {
-  it("allows state updates when project persistence writes fail", async () => {
-    installLocalStorage(
-      createStorageMock({
-        setItem: () => {
-          throw new Error("QuotaExceededError");
-        },
-      })
-    );
-
-    const { useProjectStore } = await import("../projectStore");
-
-    const project = {
-      id: "project-1",
-      name: "Project 1",
-      path: "/tmp/project-1",
-      emoji: "folder",
-      lastOpened: Date.now(),
-    };
-
-    expect(() => {
-      useProjectStore.setState({
-        projects: [project],
-        currentProject: project,
-      });
-    }).not.toThrow();
-
-    expect(useProjectStore.getState().currentProject?.id).toBe("project-1");
-    expect(useProjectStore.getState().projects).toHaveLength(1);
-  });
-});

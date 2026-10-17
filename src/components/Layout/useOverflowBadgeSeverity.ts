@@ -13,6 +13,10 @@ import { isAgentLaunchable } from "../../../shared/utils/agentAvailability";
 import { isPtyPanel } from "@shared/types/panel";
 import type { AnyToolbarButtonId } from "@/../../shared/types/toolbar";
 import { pluralize } from "@/lib/pluralize";
+import { isHandBackWait } from "@/lib/handBackPresentation";
+import { useHandBackRunIds } from "@/hooks/useRunHandBackState";
+
+const NO_HAND_BACKS: ReadonlySet<string> = new Set();
 
 export type OverflowBadgeSeverity = "critical" | "warning" | "info" | null;
 
@@ -26,7 +30,8 @@ export function countOverflowAgentStates(
   panelsById: Record<string, PanelInstance>,
   panelIds: readonly string[],
   activeWorktreeId: string | null,
-  overflowIds: readonly AnyToolbarButtonId[]
+  overflowIds: readonly AnyToolbarButtonId[],
+  handBackRunIds: ReadonlySet<string> = NO_HAND_BACKS
 ): Map<AgentState, number> {
   const counts = new Map<AgentState, number>();
   const overflowedAgentSet = new Set<string>();
@@ -49,6 +54,8 @@ export function countOverflowAgentStates(
     if (activeWorktreeId && p.worktreeId !== activeWorktreeId) continue;
     if (!ACTIVE_AGENT_STATES.has(p.agentState)) continue;
     if (!p.agentState || !agentStateDotColor(p.agentState)) continue;
+    // A hand-back is not asking for anything, so it earns no dot.
+    if (isHandBackWait(handBackRunIds, p)) continue;
     counts.set(p.agentState, (counts.get(p.agentState) ?? 0) + 1);
   }
   return counts;
@@ -69,13 +76,20 @@ export function formatAgentObservations(counts: ReadonlyMap<AgentState, number>)
  */
 export function useOverflowAgentObservations(overflowIds: readonly AnyToolbarButtonId[]): string[] {
   const activeWorktreeId = useWorktreeSelectionStore((s) => s.activeWorktreeId);
+  const handBackRunIds = useHandBackRunIds();
   // Derived inside the selector: every activity/headline flush replaces a
   // panel object, which a shallow `panelsById` subscription treats as a change
   // and re-renders the whole toolbar for.
   return usePanelStore(
     useShallow((s) =>
       formatAgentObservations(
-        countOverflowAgentStates(s.panelsById, s.panelIds, activeWorktreeId, overflowIds)
+        countOverflowAgentStates(
+          s.panelsById,
+          s.panelIds,
+          activeWorktreeId,
+          overflowIds,
+          handBackRunIds
+        )
       )
     )
   );
@@ -104,14 +118,23 @@ const ACTIVE_AGENT_STATES: ReadonlySet<AgentState | undefined> = new Set<AgentSt
  */
 export function useOverflowBadgeSeverity(
   overflowIds: readonly AnyToolbarButtonId[],
-  errorCount: number
+  errorCount: number,
+  /** Asks Canopy reads as urgent, for its button folded into the menu. */
+  canopyUrgentCount = 0
 ): OverflowBadgeSeverity {
   const activeWorktreeId = useWorktreeSelectionStore((s) => s.activeWorktreeId);
+  const handBackRunIds = useHandBackRunIds();
   // A boolean, not `panelsById`, so activity/headline flushes that replace
   // panel objects without changing a dot state don't re-render the toolbar.
   const hasOverflowAgentState = usePanelStore(
     (s) =>
-      countOverflowAgentStates(s.panelsById, s.panelIds, activeWorktreeId, overflowIds).size > 0
+      countOverflowAgentStates(
+        s.panelsById,
+        s.panelIds,
+        activeWorktreeId,
+        overflowIds,
+        handBackRunIds
+      ).size > 0
   );
 
   const notificationUnreadCount = useNotificationHistoryStore((s) => s.unreadCount);
@@ -138,6 +161,10 @@ export function useOverflowBadgeSeverity(
       warning = true;
     }
 
+    if (overflowIds.includes("canopy") && canopyUrgentCount > 0) {
+      warning = true;
+    }
+
     if (overflowIds.includes("notification-center") && notificationUnreadCount > 0) {
       info = true;
     }
@@ -159,6 +186,7 @@ export function useOverflowBadgeSeverity(
   }, [
     overflowIds,
     errorCount,
+    canopyUrgentCount,
     hasOverflowAgentState,
     notificationUnreadCount,
     availability,

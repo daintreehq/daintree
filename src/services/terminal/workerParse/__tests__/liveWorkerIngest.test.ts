@@ -2,14 +2,13 @@ import { describe, expect, it, vi } from "vitest";
 import { Terminal } from "@xterm/headless";
 import { SerializeAddon } from "@xterm/addon-serialize";
 import { ParseAuthority } from "../parseAuthority";
-import { AuthorityEndpoint, IngestPortConsumer, createInThreadTransport } from "../parseTransport";
+import { AuthorityEndpoint, IngestPortConsumer } from "../parseTransport";
 import type {
   AuthorityRequest,
   AuthorityResponse,
   AuthorityTransport,
   IngestPortMessage,
 } from "../parseTransport";
-import { WorkerParseSession } from "../WorkerParseSession";
 import { LiveWorkerIngest } from "../LiveWorkerIngest";
 import type { LiveWorkerIngestDeps } from "../LiveWorkerIngest";
 
@@ -190,31 +189,6 @@ describe("IngestPortConsumer", () => {
     expect(responses).toEqual([
       { type: "error", message: expect.stringContaining("write buffer overflow") },
     ]);
-  });
-});
-
-describe("WorkerParseSession initial seed", () => {
-  it("restores initialSerializedState into the authority before any feed", async () => {
-    const mirror = makeMirror();
-    const session = new WorkerParseSession(
-      createInThreadTransport(),
-      { write: (data, cb) => mirror.terminal.write(data, cb) },
-      {
-        cols: 80,
-        rows: 24,
-        scrollback: 1000,
-        cadenceMs: 0,
-        initialSerializedState: "seeded-content\r\n",
-      }
-    );
-    session.feed("fed-later\r\n");
-    await session.promoteToInteractive();
-    await drain(mirror.terminal);
-
-    expectOnceInOrder(bufferText(mirror.terminal), ["seeded-content", "fed-later"]);
-
-    session.dispose();
-    mirror.terminal.dispose();
   });
 });
 

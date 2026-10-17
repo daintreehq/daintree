@@ -425,7 +425,7 @@ const CALLOUT_COPY: Record<CalloutSeverity, [string, string]> = {
   error: ["Couldn't save settings", "EACCES: permission denied, open settings.json"],
   warning: [
     "Default recipe unavailable",
-    "The pinned recipe was deleted or is no longer eligible.",
+    "The default recipe was deleted or is no longer eligible.",
   ],
   danger: ["This deletes the worktree", "Uncommitted changes in feature-auth-refresh are lost."],
   success: ["CLI is now available", "The agent binary was detected. Re-check to continue."],

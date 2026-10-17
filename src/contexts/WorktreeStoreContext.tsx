@@ -20,6 +20,7 @@ import { startDeletedWorktreeCleanup } from "@/store/deletedWorktreeCleanup";
 import { usePulseStore } from "@/store/pulseStore";
 import { useProjectStore } from "@/store/projectStore";
 import { usePRCircuitBreakerStore } from "@/store/prCircuitBreakerStore";
+import { trackWorktreeSnapshot } from "@/store/worktreeSnapshotSync";
 import {
   repaintActiveWorktreeTerminals,
   wakeActiveWorktreeTerminals,
@@ -267,7 +268,9 @@ export function WorktreeStoreProvider({ children }: { children: ReactNode }) {
       // guards) and never awaits the promise.
       const associationsPromise = worktreeClient.getAllIssueAssociations().catch(() => undefined);
 
-      worktreePort
+      // Tracked to the end of the chain, so an MCP dispatch arriving on a port
+      // this fetch was started for runs against the applied snapshot (#13348).
+      const snapshot = worktreePort
         .request("get-all-states")
         .then(
           async (response: {
@@ -397,6 +400,7 @@ export function WorktreeStoreProvider({ children }: { children: ReactNode }) {
             store.getState().setLoading(false);
           }
         });
+      trackWorktreeSnapshot(snapshot);
     }
 
     const handleWorktreeEvent = (

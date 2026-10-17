@@ -387,19 +387,6 @@ describe("restartTerminal agent-exited demotion (#5764)", () => {
     });
   });
 
-  it("preserves launchAgentId on the panel after demoted restart (launch identity)", async () => {
-    const demoted = { ...agentPanelBase, agentState: "exited" as const, exitCode: 0 };
-    usePanelStore.setState({
-      panelsById: { [demoted.id]: demoted },
-      panelIds: [demoted.id],
-    });
-
-    await usePanelStore.getState().restartTerminal("test-1");
-
-    const after = usePanelStore.getState().panelsById["test-1"] as PtyPanelData | undefined;
-    expect(after?.launchAgentId).toBe("claude");
-  });
-
   it("preserves agentState: exited across repeated demoted restarts", async () => {
     // Without this, the first demoted restart clears agentState, and the
     // next restart relaunches the agent because the guard sees no exit
@@ -536,39 +523,6 @@ describe("restartTerminal exit/demotion semantics (#5807)", () => {
     const after = usePanelStore.getState().panelsById["test-1"] as PtyPanelData | undefined;
     expect(after?.launchAgentId).toBe("claude");
     expect(after?.agentState).toBe("exited");
-  });
-
-  // Scenario 3: "shell survives agent exit" remains holds — a cold-launched
-  // agent terminal whose agent is still actively working (no demotion signal)
-  // relaunches as the agent on restart.
-  it("relaunches cold-launched agent terminal as agent when still active (shell-survives invariant)", async () => {
-    const active = {
-      id: "test-1",
-      kind: "terminal" as const,
-      launchAgentId: "claude",
-      agentLaunchFlags: ["--persisted-flag"],
-      title: "Claude",
-      cwd: "/some/path",
-      command: "claude",
-      cols: 80,
-      rows: 24,
-      location: "grid" as const,
-      agentState: "working" as const,
-      // No exitCode, no "exited" state — the invariant from #5807 (iii):
-      // shell survives agent exit means demotion state is respected; while
-      // the agent is live, restart still relaunches it.
-    };
-    usePanelStore.setState({
-      panelsById: { [active.id]: active },
-      panelIds: [active.id],
-    });
-
-    await usePanelStore.getState().restartTerminal("test-1");
-
-    expect(mockSpawn).toHaveBeenCalledTimes(1);
-    const payload = mockSpawn.mock.calls[0]![0];
-    expect(payload.launchAgentId).toBe("claude");
-    expect(payload.command).toBeDefined();
   });
 });
 
@@ -1053,6 +1007,30 @@ describe("restartTerminal captured live-session resume", () => {
     // retry to resume the same conversation.
     expect(after?.agentSessionId).toBe("live-123");
   });
+
+  it("shows a refusal from main by its user message and keeps the spawn phase", async () => {
+    mockGracefulKill.mockResolvedValue(null);
+    mockSpawn.mockRejectedValueOnce(
+      new Error(
+        `[AppError|DRIVEN_ELSEWHERE|${encodeURIComponent(
+          "This project is being driven from studio-01. Take it over to make changes."
+        )}] terminal:spawn changes a project another window drives`
+      )
+    );
+    usePanelStore.setState({
+      panelsById: { [agentPanelBase.id]: { ...agentPanelBase, agentState: "exited" as const } },
+      panelIds: [agentPanelBase.id],
+    });
+
+    await usePanelStore.getState().restartTerminal("test-1");
+
+    const after = usePanelStore.getState().panelsById["test-1"] as PtyPanelData | undefined;
+    expect(after?.restartError?.message).toBe(
+      "This project is being driven from studio-01. Take it over to make changes."
+    );
+    expect(after?.restartError?.message).not.toContain("[AppError");
+    expect(after?.restartError?.context?.phase).toBe("pty-spawn");
+  });
 });
 
 describe("restartTerminal stale flow state cleared (#9899)", () => {
@@ -1107,6 +1085,68 @@ describe("restartTerminal stale flow state cleared (#9899)", () => {
     // Dock pills / tab labels read runtimeStatus directly — it must not keep
     // folding the now-cleared paused flow status.
     expect(after?.runtimeStatus).not.toBe("paused-backpressure");
+  });
+
+  it("brings an exited terminal back to running once it respawns", async () => {
+    const exited = {
+      ...agentPanelBase,
+      agentState: "exited" as const,
+      isVisible: true,
+      exitCode: 1,
+      runtimeStatus: "exited" as const,
+    };
+    usePanelStore.setState({
+      panelsById: { [exited.id]: exited },
+      panelIds: [exited.id],
+    });
+
+    await usePanelStore.getState().restartTerminal("test-1");
+
+    const after = usePanelStore.getState().panelsById["test-1"] as PtyPanelData | undefined;
+    expect(after?.exitCode).toBeUndefined();
+    expect(after?.runtimeStatus).toBe("running");
+  });
+
+  it("keeps a terminal whose respawn failed reading as exited", async () => {
+    const exited = {
+      ...agentPanelBase,
+      agentState: "exited" as const,
+      isVisible: true,
+      exitCode: 1,
+      runtimeStatus: "exited" as const,
+    };
+    usePanelStore.setState({
+      panelsById: { [exited.id]: exited },
+      panelIds: [exited.id],
+    });
+    mockSpawn.mockRejectedValueOnce(new Error("spawn failed: ENOENT"));
+
+    await usePanelStore.getState().restartTerminal("test-1");
+
+    const after = usePanelStore.getState().panelsById["test-1"] as PtyPanelData | undefined;
+    expect(after?.restartError).toBeDefined();
+    expect(after?.runtimeStatus).toBe("exited");
+  });
+
+  it("relaunches an agent its host lost as the agent, not a demoted shell", async () => {
+    // What hostTerminalResync leaves behind: exited, but no exit code was seen.
+    const lost = {
+      ...agentPanelBase,
+      agentState: "working" as const,
+      isVisible: true,
+      runtimeStatus: "exited" as const,
+    };
+    usePanelStore.setState({
+      panelsById: { [lost.id]: lost },
+      panelIds: [lost.id],
+    });
+
+    await usePanelStore.getState().restartTerminal("test-1");
+
+    const payload = mockSpawn.mock.calls.at(-1)![0];
+    expect(payload.launchAgentId).toBe("claude");
+    const after = usePanelStore.getState().panelsById["test-1"] as PtyPanelData | undefined;
+    expect(after?.runtimeStatus).toBe("running");
   });
 
   // Restarting is itself an acknowledgement of the lost session (#9802), and

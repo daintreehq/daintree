@@ -8,7 +8,10 @@ import path from "node:path";
 import type { PluginDatabaseLocation } from "../../../shared/types/plugin.js";
 import { databaseError } from "../../../shared/utils/pluginDatabaseHandle.js";
 
-export { openPluginDatabase } from "../../../shared/utils/pluginDatabaseHandle.js";
+export {
+  checkedSchemaOptions,
+  openPluginDatabase,
+} from "../../../shared/utils/pluginDatabaseHandle.js";
 
 export interface PluginDatabaseDeclaration {
   id: string;

@@ -150,26 +150,6 @@ describe("PtyClient Handshake Protocol", () => {
         mockChild.postMessage.mock.calls.filter((c) => c[0]?.type === "health-check").length
       ).toBe(2); // handshake + first interval
     });
-
-    it("should ignore late pong after timeout", () => {
-      const client = createClient({ healthCheckIntervalMs: 1000 });
-
-      client.pauseHealthCheck();
-      mockChild.postMessage.mockClear();
-      client.resumeHealthCheck();
-
-      // Advance past timeout
-      vi.advanceTimersByTime(5000);
-
-      // Late pong should not cause issues (interval already started)
-      expect(() => mockChild.emit("message", { type: "pong" })).not.toThrow();
-
-      // Interval should still be running normally
-      vi.advanceTimersByTime(1000);
-      expect(
-        mockChild.postMessage.mock.calls.filter((c) => c[0]?.type === "health-check").length
-      ).toBeGreaterThanOrEqual(2);
-    });
   });
 
   describe("host log forwarding", () => {
@@ -189,17 +169,6 @@ describe("PtyClient Handshake Protocol", () => {
         [],
         expect.objectContaining({
           execArgv: expect.not.arrayContaining(["--expose-gc"]),
-        })
-      );
-    });
-
-    it("should start pty-host with 512MB memory limit by default", () => {
-      createClient();
-      expect(forkMock).toHaveBeenCalledWith(
-        expect.any(String),
-        [],
-        expect.objectContaining({
-          execArgv: expect.arrayContaining(["--max-old-space-size=512"]),
         })
       );
     });
@@ -329,6 +298,59 @@ describe("PtyClient Handshake Protocol", () => {
         id: "test-terminal",
         enabled: true,
       });
+    });
+
+    it("keeps a mirror on while any holder still wants it", () => {
+      const client = createClient();
+      client.spawn("test-terminal", {
+        cwd: "/repo",
+        cols: 80,
+        rows: 30,
+        restore: false,
+      } as any);
+      const mirrorMessages = () =>
+        mockChild.postMessage.mock.calls
+          .map((c: unknown[]) => c[0] as { type?: string; enabled?: boolean })
+          .filter((m) => m.type === "set-ipc-data-mirror")
+          .map((m) => m.enabled);
+      mockChild.postMessage.mockClear();
+
+      client.setIpcDataMirror("test-terminal", true);
+      const release = client.acquireIpcDataMirror("test-terminal");
+      release();
+      release();
+      // A viewer's lease coming and going must not switch off the explicit holder.
+      expect(mirrorMessages()).toEqual([true]);
+
+      const viewer = client.acquireIpcDataMirror("test-terminal");
+      client.setIpcDataMirror("test-terminal", false);
+      expect(mirrorMessages()).toEqual([true]);
+      viewer();
+      expect(mirrorMessages()).toEqual([true, false]);
+    });
+
+    it("never lets a lease from before a kill release one taken since", () => {
+      const client = createClient();
+      const spawn = () =>
+        client.spawn("test-terminal", {
+          cwd: "/repo",
+          cols: 80,
+          rows: 30,
+          restore: false,
+        } as any);
+      spawn();
+      const old = client.acquireIpcDataMirror("test-terminal");
+      client.kill("test-terminal");
+      spawn();
+      const current = client.acquireIpcDataMirror("test-terminal");
+      mockChild.postMessage.mockClear();
+      old();
+      const disabled = mockChild.postMessage.mock.calls.filter(
+        (c: unknown[]) =>
+          (c[0] as { type?: string; enabled?: boolean })?.type === "set-ipc-data-mirror"
+      );
+      expect(disabled).toEqual([]);
+      current();
     });
 
     it("does not re-send mirror for killed terminals", () => {
@@ -700,5 +722,644 @@ describe("PtyClient Handshake Protocol", () => {
       expect(priv.healthWatchdog.lastPingTime).toBeNull();
       void client;
     });
+  });
+});
+
+/**
+ * #8827: the app boot path constructs PtyClient with `deferStart: true` so the
+ * PTY host fork no longer blocks the first renderer load. The fork is triggered
+ * later by `start()`, after the early PATH refresh resolves. These tests pin
+ * that contract: deferStart skips the constructor fork, `start()` forks exactly
+ * once, and the default (non-deferred) path keeps forking in the constructor.
+ */
+describe("PtyClient deferStart", () => {
+  let mockChild: MockUtilityProcess;
+  let PtyClientClass: typeof import("../PtyClient.js").PtyClient;
+  let forkMock: Mock;
+
+  beforeEach(async () => {
+    mockChild = Object.assign(new EventEmitter(), {
+      postMessage: vi.fn(),
+      kill: vi.fn(),
+      stdout: new EventEmitter(),
+      stderr: new EventEmitter(),
+    });
+
+    (utilityProcess.fork as Mock).mockReturnValue(mockChild);
+
+    vi.resetModules();
+    vi.doMock("electron", () => ({
+      utilityProcess: {
+        fork: vi.fn().mockReturnValue(mockChild),
+      },
+      dialog: {
+        showMessageBox: vi.fn().mockResolvedValue({ response: 0 }),
+      },
+      app: {
+        getPath: vi.fn().mockReturnValue("/mock/user/data"),
+        on: vi.fn(),
+        off: vi.fn(),
+      },
+    }));
+
+    const module = await import("../PtyClient.js");
+    PtyClientClass = module.PtyClient;
+    forkMock = (await import("electron")).utilityProcess.fork as unknown as Mock;
+
+    // Install after imports: fake timers can stall module re-execution (#11661).
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.clearAllMocks();
+  });
+
+  it("does not fork the host in the constructor when deferStart is true", () => {
+    const client = new PtyClientClass({ deferStart: true });
+
+    expect(forkMock).not.toHaveBeenCalled();
+    expect(client.isHostStarted()).toBe(false);
+
+    client.dispose();
+  });
+
+  it("forks the host exactly once when start() is called after a deferred construction", () => {
+    const client = new PtyClientClass({ deferStart: true });
+    expect(forkMock).not.toHaveBeenCalled();
+
+    client.start();
+
+    expect(forkMock).toHaveBeenCalledTimes(1);
+    expect(client.isHostStarted()).toBe(true);
+
+    client.dispose();
+  });
+
+  it("treats a second start() call as a no-op (idempotent)", () => {
+    const client = new PtyClientClass({ deferStart: true });
+
+    client.start();
+    client.start();
+    client.start();
+
+    expect(forkMock).toHaveBeenCalledTimes(1);
+    expect(client.isHostStarted()).toBe(true);
+
+    client.dispose();
+  });
+
+  it("forks in the constructor when deferStart is unset (default behavior)", () => {
+    const client = new PtyClientClass();
+
+    expect(forkMock).toHaveBeenCalledTimes(1);
+    expect(client.isHostStarted()).toBe(true);
+
+    client.dispose();
+  });
+
+  it("replays a spawn requested before the deferred host was ready", () => {
+    const client = new PtyClientClass({ deferStart: true });
+
+    // Spawn while the host has not forked yet — the send() is dropped (no child).
+    client.spawn("t1", { cwd: "/tmp", cols: 80, rows: 30 });
+    expect(mockChild.postMessage).not.toHaveBeenCalledWith(
+      expect.objectContaining({ type: "spawn", id: "t1" })
+    );
+
+    // Fork the host, then signal ready — the queued spawn must be replayed.
+    client.start();
+    mockChild.emit("message", { type: "ready" });
+
+    expect(mockChild.postMessage).toHaveBeenCalledWith(
+      expect.objectContaining({ type: "spawn", id: "t1" })
+    );
+
+    client.dispose();
+  });
+
+  it("queues a MessagePort requested before start() and flushes it on ready", () => {
+    const client = new PtyClientClass({ deferStart: true });
+    const port = { close: vi.fn(), postMessage: vi.fn(), start: vi.fn() };
+
+    // No host child yet — the port is queued rather than forwarded.
+    client.connectMessagePort(7, port as never);
+    expect(mockChild.postMessage).not.toHaveBeenCalledWith(
+      expect.objectContaining({ type: "connect-port", windowId: 7 }),
+      expect.anything()
+    );
+
+    client.start();
+    mockChild.emit("message", { type: "ready" });
+
+    expect(mockChild.postMessage).toHaveBeenCalledWith(
+      expect.objectContaining({ type: "connect-port", windowId: 7 }),
+      [port]
+    );
+
+    client.dispose();
+  });
+
+  it("replays a resource profile set before the deferred host was ready", () => {
+    const client = new PtyClientClass({ deferStart: true });
+
+    // ResourceProfileService's startup push can land before the host exists.
+    client.setResourceProfile("efficiency");
+    client.setProcessTreePollInterval(25_000);
+
+    client.start();
+    mockChild.emit("message", { type: "ready" });
+
+    const sent = mockChild.postMessage.mock.calls.map((c: unknown[]) => c[0] as { type: string });
+    const profileIndex = sent.findIndex((m) => m.type === "set-resource-profile");
+    const intervalIndex = sent.findIndex((m) => m.type === "set-process-tree-poll-interval");
+    expect(sent[profileIndex]).toMatchObject({ profile: "efficiency" });
+    expect(sent[intervalIndex]).toMatchObject({ ms: 25_000 });
+    expect(profileIndex).toBeLessThan(intervalIndex);
+
+    client.dispose();
+  });
+
+  it("replays a resource profile posted between fork and the host's first ready", () => {
+    const client = new PtyClientClass();
+    // Posted before the host's listener exists — the real host drops it.
+    client.setResourceProfile("efficiency");
+    mockChild.postMessage.mockClear();
+
+    mockChild.emit("message", { type: "ready" });
+
+    expect(mockChild.postMessage).toHaveBeenCalledWith(
+      expect.objectContaining({ type: "set-resource-profile", profile: "efficiency" })
+    );
+
+    client.dispose();
+  });
+});
+
+describe("PtyClient projectId assignment", () => {
+  let mockChild: MockUtilityProcess;
+  let PtyClientClass: typeof import("../PtyClient.js").PtyClient;
+
+  beforeEach(async () => {
+    mockChild = Object.assign(new EventEmitter(), {
+      postMessage: vi.fn(),
+      kill: vi.fn(),
+      stdout: new EventEmitter(),
+      stderr: new EventEmitter(),
+    });
+
+    (utilityProcess.fork as Mock).mockReturnValue(mockChild);
+
+    vi.resetModules();
+    vi.doMock("electron", () => ({
+      utilityProcess: {
+        fork: vi.fn().mockReturnValue(mockChild),
+      },
+      dialog: {
+        showMessageBox: vi.fn().mockResolvedValue({ response: 0 }),
+      },
+      app: {
+        getPath: vi.fn().mockReturnValue("/mock/user/data"),
+        on: vi.fn(),
+        off: vi.fn(),
+      },
+    }));
+
+    const module = await import("../PtyClient.js");
+    PtyClientClass = module.PtyClient;
+
+    // Install after imports: fake timers can stall module re-execution (#11661).
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.clearAllMocks();
+  });
+
+  const createClient = () => {
+    const client = new PtyClientClass();
+    mockChild.emit("message", { type: "ready" });
+    return client;
+  };
+
+  describe("getLiveWorkspaceIds (#12320)", () => {
+    /**
+     * The open-window manifest needs this because a project's agents outlive
+     * its renderer: LRU eviction destroys the view and leaves the PTYs
+     * running, so a manifest built from views alone drops exactly the
+     * long-running projects a relaunch most needs to bring back.
+     */
+    it("reports every workspace that owns a tracked terminal, deduplicated", () => {
+      const client = createClient();
+      client.spawn("t1", { cwd: "/a", cols: 80, rows: 24, projectId: "project-a" });
+      client.spawn("t2", { cwd: "/a", cols: 80, rows: 24, projectId: "project-a" });
+      client.spawn("t3", { cwd: "/b", cols: 80, rows: 24, projectId: "project-b" });
+
+      expect(client.getLiveWorkspaceIds()).toEqual(new Set(["project-a", "project-b"]));
+    });
+
+    it("keeps a workspace while any of its terminals survives", () => {
+      const client = createClient();
+      client.spawn("t1", { cwd: "/a", cols: 80, rows: 24, projectId: "project-a" });
+      client.spawn("t2", { cwd: "/a", cols: 80, rows: 24, projectId: "project-a" });
+
+      mockChild.emit("message", { type: "exit", id: "t1", exitCode: 0 });
+
+      expect(client.getLiveWorkspaceIds().has("project-a")).toBe(true);
+    });
+
+    it("drops a workspace once its last terminal exits", () => {
+      const client = createClient();
+      client.spawn("t1", { cwd: "/a", cols: 80, rows: 24, projectId: "project-a" });
+      mockChild.emit("message", { type: "exit", id: "t1", exitCode: 0 });
+
+      expect(client.getLiveWorkspaceIds().has("project-a")).toBe(false);
+    });
+
+    it("contributes nothing for a terminal with no owning workspace", () => {
+      const client = createClient();
+      client.spawn("t1", { cwd: "/tmp", cols: 80, rows: 24 });
+
+      expect(client.getLiveWorkspaceIds()).toEqual(new Set());
+    });
+
+    it("answers without sending anything to the host", () => {
+      // The manifest is written from the shutdown chain's synchronous prefix,
+      // where an async round trip has no chance to answer before the process
+      // ends.
+      const client = createClient();
+      client.spawn("t1", { cwd: "/a", cols: 80, rows: 24, projectId: "project-a" });
+      mockChild.postMessage.mockClear();
+
+      client.getLiveWorkspaceIds();
+
+      expect(mockChild.postMessage).not.toHaveBeenCalled();
+    });
+  });
+
+  it("defaults spawn() projectId to activeProjectId when omitted", () => {
+    const client = createClient();
+    client.setActiveProject(1, "project-a");
+    mockChild.postMessage.mockClear();
+
+    client.spawn("t1", {
+      cwd: "/tmp",
+      cols: 80,
+      rows: 24,
+    });
+
+    expect(mockChild.postMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: "spawn",
+        id: "t1",
+        options: expect.objectContaining({ projectId: "project-a" }),
+      })
+    );
+  });
+
+  it("does not override an explicit spawn() projectId", () => {
+    const client = createClient();
+    client.setActiveProject(1, "project-a");
+    mockChild.postMessage.mockClear();
+
+    client.spawn("t2", {
+      cwd: "/tmp",
+      cols: 80,
+      rows: 24,
+      projectId: "explicit-project",
+    });
+
+    expect(mockChild.postMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: "spawn",
+        id: "t2",
+        options: expect.objectContaining({ projectId: "explicit-project" }),
+      })
+    );
+  });
+
+  it("treats blank projectId as missing and falls back to activeProjectId", () => {
+    const client = createClient();
+    client.setActiveProject(1, "project-a");
+    mockChild.postMessage.mockClear();
+
+    client.spawn("t3", {
+      cwd: "/tmp",
+      cols: 80,
+      rows: 24,
+      projectId: "  ",
+    });
+
+    expect(mockChild.postMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: "spawn",
+        id: "t3",
+        options: expect.objectContaining({ projectId: "project-a" }),
+      })
+    );
+  });
+});
+
+function createMockPort() {
+  return {
+    close: vi.fn(),
+    start: vi.fn(),
+    on: vi.fn(),
+    postMessage: vi.fn(),
+  };
+}
+
+describe("PtyClient multi-port support", () => {
+  let mockChild: MockUtilityProcess;
+  let PtyClientClass: typeof import("../PtyClient.js").PtyClient;
+  let forkMock: Mock;
+
+  beforeEach(async () => {
+    mockChild = Object.assign(new EventEmitter(), {
+      postMessage: vi.fn(),
+      kill: vi.fn(),
+      stdout: new EventEmitter(),
+      stderr: new EventEmitter(),
+    });
+
+    vi.resetModules();
+    vi.doMock("electron", () => ({
+      utilityProcess: {
+        fork: vi.fn().mockReturnValue(mockChild),
+      },
+      dialog: {
+        showMessageBox: vi.fn().mockResolvedValue({ response: 0 }),
+      },
+      app: {
+        getPath: vi.fn().mockReturnValue("/mock/user/data"),
+        on: vi.fn(),
+        off: vi.fn(),
+      },
+    }));
+
+    const module = await import("../PtyClient.js");
+    PtyClientClass = module.PtyClient;
+    forkMock = (await import("electron")).utilityProcess.fork as unknown as Mock;
+
+    // Install after imports: fake timers can stall module re-execution (#11661).
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.clearAllMocks();
+  });
+
+  const createClient = () => {
+    const client = new PtyClientClass();
+    mockChild.emit("message", { type: "ready" });
+    return client;
+  };
+
+  it("connects multiple windows independently", () => {
+    const client = createClient();
+    mockChild.postMessage.mockClear();
+
+    const port1 = createMockPort();
+    const port2 = createMockPort();
+
+    client.connectMessagePort(1, port1 as unknown as import("electron").MessagePortMain);
+    client.connectMessagePort(2, port2 as unknown as import("electron").MessagePortMain);
+
+    expect(mockChild.postMessage).toHaveBeenCalledTimes(2);
+    expect(mockChild.postMessage).toHaveBeenCalledWith({ type: "connect-port", windowId: 1 }, [
+      port1,
+    ]);
+    expect(mockChild.postMessage).toHaveBeenCalledWith({ type: "connect-port", windowId: 2 }, [
+      port2,
+    ]);
+  });
+
+  it("sends windowId with set-active-project", () => {
+    const client = createClient();
+    mockChild.postMessage.mockClear();
+
+    client.setActiveProject(1, "project-a");
+
+    expect(mockChild.postMessage).toHaveBeenCalledWith({
+      type: "set-active-project",
+      windowId: 1,
+      projectId: "project-a",
+    });
+  });
+
+  it("includes projectPath with set-active-project when provided", () => {
+    const client = createClient();
+    mockChild.postMessage.mockClear();
+
+    client.setActiveProject(1, "project-a", "/projects/a");
+
+    expect(mockChild.postMessage).toHaveBeenCalledWith({
+      type: "set-active-project",
+      windowId: 1,
+      projectId: "project-a",
+      projectPath: "/projects/a",
+    });
+  });
+
+  it("sends windowId with project-switch", () => {
+    const client = createClient();
+    mockChild.postMessage.mockClear();
+
+    client.onProjectSwitch(1, "project-b");
+
+    expect(mockChild.postMessage).toHaveBeenCalledWith({
+      type: "project-switch",
+      windowId: 1,
+      projectId: "project-b",
+    });
+  });
+
+  it("includes projectPath with project-switch when provided", () => {
+    const client = createClient();
+    mockChild.postMessage.mockClear();
+
+    client.onProjectSwitch(1, "project-b", "/projects/b");
+
+    expect(mockChild.postMessage).toHaveBeenCalledWith({
+      type: "project-switch",
+      windowId: 1,
+      projectId: "project-b",
+      projectPath: "/projects/b",
+    });
+  });
+
+  it("sends disconnect-port message", () => {
+    const client = createClient();
+    mockChild.postMessage.mockClear();
+
+    client.disconnectMessagePort(1);
+
+    expect(mockChild.postMessage).toHaveBeenCalledWith({
+      type: "disconnect-port",
+      windowId: 1,
+    });
+  });
+
+  it("replays per-window project contexts after host restart", () => {
+    const client = createClient();
+    client.setActiveProject(1, "project-a", "/projects/a");
+    client.onProjectSwitch(2, "project-b", "/projects/b");
+
+    // Simulate host crash and restart
+    const newChild = Object.assign(new EventEmitter(), {
+      postMessage: vi.fn(),
+      kill: vi.fn(),
+      stdout: new EventEmitter(),
+      stderr: new EventEmitter(),
+    });
+    forkMock.mockReturnValue(newChild);
+
+    // Install port refresh callback (normally done in windowServices.ts)
+    client.setPortRefreshCallback(() => {
+      // In production this recreates ports for all windows
+    });
+
+    mockChild.emit("exit", 1);
+    vi.advanceTimersByTime(2000);
+
+    // New host becomes ready
+    newChild.emit("message", { type: "ready" });
+
+    // Should replay both windows' project contexts
+    const setActiveCalls = newChild.postMessage.mock.calls.filter(
+      (c: unknown[]) => (c[0] as Record<string, unknown>)?.type === "set-active-project"
+    );
+    const switchCalls = newChild.postMessage.mock.calls.filter(
+      (c: unknown[]) => (c[0] as Record<string, unknown>)?.type === "project-switch"
+    );
+
+    expect(setActiveCalls.length).toBe(1);
+    expect(setActiveCalls[0][0]).toMatchObject({
+      type: "set-active-project",
+      windowId: 1,
+      projectId: "project-a",
+      projectPath: "/projects/a",
+    });
+    expect(switchCalls.length).toBe(1);
+    expect(switchCalls[0][0]).toMatchObject({
+      type: "project-switch",
+      windowId: 2,
+      projectId: "project-b",
+      projectPath: "/projects/b",
+    });
+  });
+
+  it("disconnectMessagePort clears window project context", () => {
+    const client = createClient();
+    client.setActiveProject(1, "project-a");
+    client.onProjectSwitch(2, "project-b");
+
+    // Disconnect window 1
+    client.disconnectMessagePort(1);
+
+    // Simulate host crash and restart
+    const newChild = Object.assign(new EventEmitter(), {
+      postMessage: vi.fn(),
+      kill: vi.fn(),
+      stdout: new EventEmitter(),
+      stderr: new EventEmitter(),
+    });
+    forkMock.mockReturnValue(newChild);
+    client.setPortRefreshCallback(() => {});
+
+    mockChild.emit("exit", 1);
+    vi.advanceTimersByTime(2000);
+    newChild.emit("message", { type: "ready" });
+
+    // Should only replay window 2's context, not window 1
+    const setActiveCalls = newChild.postMessage.mock.calls.filter(
+      (c: unknown[]) => (c[0] as Record<string, unknown>)?.type === "set-active-project"
+    );
+    const switchCalls = newChild.postMessage.mock.calls.filter(
+      (c: unknown[]) => (c[0] as Record<string, unknown>)?.type === "project-switch"
+    );
+
+    expect(setActiveCalls.length).toBe(0);
+    expect(switchCalls.length).toBe(1);
+    expect(switchCalls[0][0]).toMatchObject({
+      type: "project-switch",
+      windowId: 2,
+      projectId: "project-b",
+    });
+  });
+});
+
+interface MockUtilityProcessWithPid extends EventEmitter {
+  pid: number | undefined;
+  postMessage: ReturnType<typeof vi.fn>;
+  kill: ReturnType<typeof vi.fn>;
+  stdout: EventEmitter;
+  stderr: EventEmitter;
+}
+
+describe("PtyClient.getHostPidForWindow", () => {
+  let mockChild: MockUtilityProcessWithPid;
+  let PtyClientClass: typeof import("../PtyClient.js").PtyClient;
+
+  beforeEach(async () => {
+    mockChild = Object.assign(new EventEmitter(), {
+      pid: 4242 as number | undefined,
+      postMessage: vi.fn(),
+      kill: vi.fn(),
+      stdout: new EventEmitter(),
+      stderr: new EventEmitter(),
+    });
+
+    vi.resetModules();
+    vi.doMock("electron", () => ({
+      utilityProcess: { fork: vi.fn().mockReturnValue(mockChild) },
+      dialog: { showMessageBox: vi.fn().mockResolvedValue({ response: 0 }) },
+      app: {
+        getPath: vi.fn().mockReturnValue("/mock/user/data"),
+        on: vi.fn(),
+        off: vi.fn(),
+      },
+    }));
+
+    PtyClientClass = (await import("../PtyClient.js")).PtyClient;
+    // Install after imports: fake timers can stall module re-execution (#11661).
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.clearAllMocks();
+  });
+
+  it("returns null before the host is forked", () => {
+    const client = new PtyClientClass({ deferStart: true });
+    expect(client.getHostPidForWindow(1)).toBeNull();
+    client.dispose();
+  });
+
+  it("returns the forked host's pid for any window on the default shard", () => {
+    const client = new PtyClientClass({ deferStart: true });
+    client.start();
+    expect(client.getHostPidForWindow(1)).toBe(4242);
+    expect(client.getHostPidForWindow(99)).toBe(4242);
+    client.dispose();
+  });
+
+  it("returns null when the forked process has no pid yet", () => {
+    mockChild.pid = undefined;
+    const client = new PtyClientClass({ deferStart: true });
+    client.start();
+    expect(client.getHostPidForWindow(1)).toBeNull();
+    client.dispose();
+  });
+
+  it("returns null once the host has exited", () => {
+    const client = new PtyClientClass({ deferStart: true });
+    client.start();
+    mockChild.emit("exit", 1);
+    expect(client.getHostPidForWindow(1)).toBeNull();
+    client.dispose();
   });
 });

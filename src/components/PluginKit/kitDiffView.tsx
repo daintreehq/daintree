@@ -3,7 +3,7 @@ import type { HunkData } from "react-diff-view";
 import type { PluginDiffHunk, PluginDiffHunkAction } from "@shared/types/plugin-sdk-react";
 import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import { DiffViewer, type DiffViewerHunkFile } from "@/components/Worktree/DiffViewer";
+import type { DiffViewerHunkFile } from "@/components/Worktree/DiffViewer";
 import { unifiedDiff } from "@/components/Worktree/unifiedDiff";
 import { canonicalLang } from "@/components/Markdown/fenceLanguage";
 import { cn } from "@/lib/utils";
@@ -11,12 +11,13 @@ import { renderIconSource } from "./PluginKitIcons";
 import { hasContent, node } from "./kitProps";
 import { useKitOverlayZClass } from "./kitScope";
 import { reportPluginFault } from "./kitDiagnostics";
+import { getPluginKitHost } from "./kitHost";
 
-// The kit DiffView's half that carries the host diff viewer, in its own chunk:
-// react-diff-view, the tokenizer client and the viewer's stylesheet load on the
-// first DiffView a view renders. The diff is drawn by DiffViewer itself; this
-// only turns two texts into the patch it reads and the hunks it hands back
-// into the public shape.
+// The kit DiffView's half that carries the host diff viewer, in its own chunk,
+// loaded on the first DiffView a view renders. The diff is drawn by the viewer
+// the host supplies (`kitHost`: the app's DiffViewer, with react-diff-view, the
+// tokenizer client and its stylesheet); this only turns two texts into the
+// patch it reads and the hunks it hands back into the public shape.
 
 export interface KitDiffViewImplProps {
   oldText: string | undefined;
@@ -305,6 +306,7 @@ export default function KitDiffViewImpl({
         );
       }
     : undefined;
+  const Viewer = getPluginKitHost().DiffViewer;
   const style: CSSProperties | undefined =
     maxHeight === undefined ? undefined : { maxHeight, overflow: "auto" };
   return (
@@ -324,15 +326,20 @@ export default function KitDiffViewImpl({
       )}
       style={style}
     >
-      <DiffViewer
-        diff={diff}
-        viewType={view}
-        wrapLines={wrap}
-        source={twoTexts ? newText : undefined}
-        language={language ? canonicalLang(language) : undefined}
-        renderHunkActions={renderActions}
-        openInEditor={false}
-      />
+      {Viewer ? (
+        <Viewer
+          diff={diff}
+          viewType={view}
+          wrapLines={wrap}
+          source={twoTexts ? newText : undefined}
+          language={language ? canonicalLang(language) : undefined}
+          renderHunkActions={renderActions}
+          openInEditor={false}
+        />
+      ) : (
+        // No host viewer (a plain preview page): the patch itself, as text.
+        <pre className="m-0 overflow-x-auto p-3 font-mono text-xs text-text-primary">{diff}</pre>
+      )}
     </div>
   );
 }

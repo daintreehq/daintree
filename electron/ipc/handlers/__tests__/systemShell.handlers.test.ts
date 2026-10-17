@@ -16,6 +16,13 @@ const appMock = vi.hoisted(() => ({
   getPath: vi.fn((name: string) => `/userdata/${name}`),
 }));
 
+// On Linux the default app opens through xdg-open rather than shell.openPath;
+// these tests check what reaches the OS opener, so route it to the shell mock.
+vi.mock("../../../utils/openPath.js", async () => {
+  const { shell } = await import("electron");
+  return { openWithDefaultApp: (target: string) => shell.openPath(target) };
+});
+
 vi.mock("electron", () => ({
   ipcMain: ipcMainMock,
   shell: shellMock,
@@ -81,6 +88,20 @@ vi.mock("../../../utils/openExternal.js", () => ({
   openExternalUrl: openExternalUrlMock,
 }));
 
+const findOnPathMock = vi.hoisted(() =>
+  vi.fn<(command: string, options?: unknown) => Promise<string | null>>(() => Promise.resolve(null))
+);
+
+vi.mock("../../../utils/findOnPath.js", () => ({
+  findOnPath: findOnPathMock,
+}));
+
+const execFileMock = vi.hoisted(() => vi.fn());
+
+vi.mock("child_process", () => ({
+  execFile: execFileMock,
+}));
+
 // Bypass the IPC security guard + perf wrapper — register the raw handler.
 vi.mock("../../utils.js", () => ({
   typedHandle: (channel: string, handler: unknown) => {
@@ -95,6 +116,13 @@ vi.mock("../../utils.js", () => ({
     );
     return () => ipcMainMock.removeHandler(channel);
   },
+}));
+
+const scanWindowsPathMock = vi.hoisted(() => vi.fn());
+
+vi.mock("../../../utils/windowsExecutable.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../../utils/windowsExecutable.js")>()),
+  scanWindowsPath: scanWindowsPathMock,
 }));
 
 import { CHANNELS } from "../../channels.js";
@@ -829,6 +857,80 @@ describe("system:show-item-in-folder-unconfined (out-of-root reveal recovery)", 
     const handler = getHandler(CHANNELS.SYSTEM_SHOW_ITEM_IN_FOLDER_UNCONFINED);
     await handler(fakeEvent, { path: link });
     expect(shellMock.showItemInFolder).toHaveBeenCalledWith(resolved);
+  });
+});
+
+describe("system:check-command", () => {
+  let cleanup: () => void;
+  const originalPlatform = Object.getOwnPropertyDescriptor(process, "platform")!;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    Object.defineProperty(process, "platform", { value: "linux", configurable: true });
+    cleanup = registerSystemShellHandlers({} as HandlerDependencies);
+  });
+
+  afterEach(() => {
+    cleanup();
+    Object.defineProperty(process, "platform", originalPlatform);
+  });
+
+  // Minimal Fedora and Arch installs have no `which`; spawning it made every
+  // command — including the package manager the install banner probes — read
+  // as absent.
+  it("answers from the in-process PATH lookup on linux, spawning nothing", async () => {
+    findOnPathMock.mockImplementation((command) =>
+      Promise.resolve(command === "dnf" ? "/usr/bin/dnf" : null)
+    );
+    const handler = getHandler(CHANNELS.SYSTEM_CHECK_COMMAND);
+
+    expect(await handler(fakeEvent, "dnf")).toBe(true);
+    expect(await handler(fakeEvent, "apt-get")).toBe(false);
+    expect(execFileMock).not.toHaveBeenCalled();
+  });
+
+  it("rejects a command with path or shell characters before looking anything up", async () => {
+    const handler = getHandler(CHANNELS.SYSTEM_CHECK_COMMAND);
+
+    expect(await handler(fakeEvent, "../bin/sh")).toBe(false);
+    expect(await handler(fakeEvent, "git;rm")).toBe(false);
+    expect(findOnPathMock).not.toHaveBeenCalled();
+  });
+});
+
+describe("system:check-command on Windows", () => {
+  const originalPlatform = Object.getOwnPropertyDescriptor(process, "platform")!;
+  let cleanup: () => void;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    Object.defineProperty(process, "platform", { value: "win32", configurable: true });
+    cleanup = registerSystemShellHandlers({} as HandlerDependencies);
+  });
+
+  afterEach(() => {
+    cleanup();
+    Object.defineProperty(process, "platform", originalPlatform);
+  });
+
+  it("reports a command available only when PATH holds it", async () => {
+    const handler = getHandler(CHANNELS.SYSTEM_CHECK_COMMAND);
+
+    scanWindowsPathMock.mockResolvedValueOnce({ paths: ["C:\\tools\\gh.exe"], skipped: [] });
+    await expect(handler(fakeEvent, "gh")).resolves.toBe(true);
+    expect(scanWindowsPathMock).toHaveBeenLastCalledWith("gh");
+
+    // Nothing on PATH (a slow entry counts as holding nothing): not available.
+    scanWindowsPathMock.mockResolvedValueOnce({ paths: [], skipped: ["\\\\server\\tools"] });
+    await expect(handler(fakeEvent, "gh")).resolves.toBe(false);
+  });
+
+  it("rejects names that are not plain command names before looking anything up", async () => {
+    const handler = getHandler(CHANNELS.SYSTEM_CHECK_COMMAND);
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    await expect(handler(fakeEvent, "..\\gh")).resolves.toBe(false);
+    expect(scanWindowsPathMock).not.toHaveBeenCalled();
   });
 });
 

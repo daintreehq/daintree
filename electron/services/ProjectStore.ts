@@ -33,6 +33,7 @@ import { countResumableAgentPanels } from "./projectStateRestore.js";
 import { isProjectWorkspaceId, isScratchWorkspaceId } from "../../shared/utils/workspaceIds.js";
 import {
   generateProjectId,
+  mintFreshProjectId,
   mintProjectId,
   isValidProjectId,
   getProjectStateDir,
@@ -65,6 +66,15 @@ import { repairMovedSubmodulePaths } from "./git/submodulePathRepair.js";
 
 export { DEFAULT_PROJECT_EMOJI } from "../../shared/utils/projectEmoji.js";
 import { DEFAULT_PROJECT_EMOJI } from "../../shared/utils/projectEmoji.js";
+
+/** A fresh project (one cloned from another machine) asked for a folder a project is registered at. */
+function freshFolderTaken(): AppError {
+  return new AppError({
+    code: "VALIDATION",
+    message: "A project is already registered at that folder",
+    userMessage: "Daintree already has a project registered at that folder. Choose another folder.",
+  });
+}
 
 /**
  * The single spelling of a project path used for identity comparisons. Separator
@@ -155,6 +165,8 @@ function rowToProject(row: ProjectRow): Project {
   if (resumableAgentCount !== null) project.resumableAgentCount = resumableAgentCount;
   // Only `false` is carried: null means git-backed, and so does absence.
   if (row.gitBacked === false) project.gitBacked = false;
+  if (typeof row.archivedAt === "number") project.archivedAt = row.archivedAt;
+  if (typeof row.groupId === "string" && row.groupId.length > 0) project.groupId = row.groupId;
   const lastKnownStats = rowToRepoStats(row);
   if (lastKnownStats) project.lastKnownStats = lastKnownStats;
   return project;
@@ -682,7 +694,19 @@ export class ProjectStore {
    * are read independently — a lightweight open carries no identity, and an
    * identity never implies a mode.
    */
-  async addProject(projectPath: string, options?: ProjectAddOptions): Promise<Project> {
+  async addProject(
+    projectPath: string,
+    options?: ProjectAddOptions & {
+      /**
+       * A folder whose contents came from another machine: it gets a new,
+       * random identity. Its committed id never adopts an unavailable
+       * project's, and a folder another project is still registered at is
+       * refused, so no earlier project's settings, sessions or plugin trust
+       * (kept by id) come with it.
+       */
+      fresh?: boolean;
+    }
+  ): Promise<Project> {
     const classification = await this.classifyGitBacking(projectPath);
     const creationIdentity = options?.identity;
 
@@ -741,6 +765,9 @@ export class ProjectStore {
         : undefined;
 
     const existing = await this.getProjectByPath(normalizedPath);
+    // A folder from another machine never takes over a project row: that
+    // row's id is where its settings and plugin trust live.
+    if (existing && options?.fresh) throw freshFolderTaken();
     if (existing) {
       // A git root resolved, so promote a row that was adopted without one —
       // this is what `git init` on a lightweight workspace lands on (#11405).
@@ -754,7 +781,9 @@ export class ProjectStore {
     // whose registered path is gone, this is that project at its new home and
     // its identity — and therefore every id-keyed piece of state — is preserved
     // in place (#11282).
-    const relocated = await this.tryAdoptMovedProject(inRepo.id, normalizedPath);
+    const relocated = options?.fresh
+      ? null
+      : await this.tryAdoptMovedProject(inRepo.id, normalizedPath);
     if (relocated) return relocated;
 
     // Re-check under the same tick as the insert. Several awaits have happened
@@ -763,11 +792,16 @@ export class ProjectStore {
     // mint a *random* one and insert a second row for one directory — the path
     // column has no unique index to catch it.
     const raced = await this.getProjectByPath(normalizedPath);
-    if (raced) return raced;
+    if (raced) {
+      if (options?.fresh) throw freshFolderTaken();
+      return raced;
+    }
 
     const now = Date.now();
     const project: Project = {
-      id: mintProjectId(normalizedPath, (candidate) => this.isProjectIdTaken(candidate)),
+      id: options?.fresh
+        ? mintFreshProjectId((candidate) => this.isProjectIdTaken(candidate))
+        : mintProjectId(normalizedPath, (candidate) => this.isProjectIdTaken(candidate)),
       path: normalizedPath,
       name: inRepo.name ?? mintIdentity?.name ?? path.basename(normalizedPath),
       emoji: inRepo.emoji ?? mintIdentity?.emoji ?? DEFAULT_PROJECT_EMOJI,
@@ -1035,9 +1069,15 @@ export class ProjectStore {
     // number sets it; omitting the key leaves it untouched. Don't route the clear
     // through `undefined` — a callee that strips undefined keys would silently
     // drop the clear (review #4).
-    updates: Partial<Omit<Project, "autoParkedAt" | "resumableAgentCount">> & {
+    updates: Partial<
+      Omit<Project, "autoParkedAt" | "resumableAgentCount" | "archivedAt" | "groupId">
+    > & {
       autoParkedAt?: number | null;
       resumableAgentCount?: number | null;
+      // Same clear-by-null contract as `autoParkedAt`. Written only by the
+      // project-groups IPC, which validates them; `project:update` strips both.
+      archivedAt?: number | null;
+      groupId?: string | null;
     }
   ): Project {
     const db = getSharedDb();
@@ -1058,6 +1098,8 @@ export class ProjectStore {
       autoParkedAt: number | null;
       resumableAgentCount: number | null;
       gitBacked: boolean | null;
+      archivedAt: number | null;
+      groupId: string | null;
     }> = {};
     if (updates.name !== undefined) set.name = updates.name;
     if (updates.path !== undefined) set.path = updates.path;
@@ -1080,6 +1122,8 @@ export class ProjectStore {
     // workspace clears the flag by passing `undefined`, which an existence-blind
     // check would silently drop and leave the row lightweight forever.
     if ("gitBacked" in updates) set.gitBacked = updates.gitBacked ?? null;
+    if ("archivedAt" in updates) set.archivedAt = updates.archivedAt ?? null;
+    if ("groupId" in updates) set.groupId = updates.groupId ?? null;
 
     if (Object.keys(set).length > 0) {
       db.update(projectsTable).set(set).where(eq(projectsTable.id, projectId)).run();
@@ -1234,6 +1278,65 @@ export class ProjectStore {
       })
       .from(projectsTable)
       .all();
+  }
+
+  /**
+   * Every project as another window lists it, most used first (#13290).
+   *
+   * Not `getAllProjects()`, for the reason `getAllProjectIdentities()` gives:
+   * its status repair demotes the `active` a remote switch just wrote, so every
+   * listing from another machine would undo that switch's bookkeeping.
+   */
+  getProjectSummaries(): Array<{ id: string; name: string; path: string; emoji: string }> {
+    const rows = getSharedDb()
+      .select({
+        id: projectsTable.id,
+        name: projectsTable.name,
+        path: projectsTable.path,
+        emoji: projectsTable.emoji,
+        frecencyScore: projectsTable.frecencyScore,
+        lastAccessedAt: projectsTable.lastAccessedAt,
+        lastOpened: projectsTable.lastOpened,
+      })
+      .from(projectsTable)
+      .all();
+    const now = Date.now();
+    return rows
+      .map((row) => ({
+        row,
+        score: decayFrecencyScore(row.frecencyScore ?? 0, row.lastAccessedAt ?? 0, now),
+      }))
+      .sort((a, b) => b.score - a.score || (b.row.lastOpened ?? 0) - (a.row.lastOpened ?? 0))
+      .map(({ row }) => ({ id: row.id, name: row.name, path: row.path, emoji: row.emoji }));
+  }
+
+  /**
+   * A project opened here from another machine's window: status and the same
+   * frecency bump a local switch gives it, so "Most used" counts remote use.
+   * The global current-project pointer names this machine's own window and is
+   * left alone.
+   */
+  recordRemoteActivation(projectId: string): Project {
+    const project = this.getProjectById(projectId);
+    if (!project) throw new Error(`Project not found: ${projectId}`);
+    if (getWritesSuppressed()) {
+      return this.updateProject(projectId, { status: "active", autoParkedAt: null });
+    }
+    const now = Date.now();
+    // Bumped from the pre-update lastOpened, which is the debounce clock.
+    const frecencyScore = bumpFrecencyScore(
+      project.frecencyScore ?? FRECENCY_COLD_START,
+      project.lastAccessedAt ?? 0,
+      project.lastOpened ?? 0,
+      now
+    );
+    return this.updateProject(projectId, {
+      status: "active",
+      autoParkedAt: null,
+      lastOpened: now,
+      lastAccessedAt: now,
+      frecencyScore,
+    });
   }
 
   getAllProjects(): Project[] {
@@ -1789,6 +1892,10 @@ export class ProjectStore {
     return this.settingsManager.saveProjectSettings(projectId, settings);
   }
 
+  async addBrowserAllowedHost(projectId: string, hostname: string): Promise<string[]> {
+    return this.settingsManager.addBrowserAllowedHost(projectId, hostname);
+  }
+
   getEffectiveNotificationSettings(): NotificationSettings {
     return this.settingsManager.getEffectiveNotificationSettings(this.getCurrentProjectId());
   }
@@ -2044,6 +2151,12 @@ export class ProjectStore {
 
   async deleteGlobalRecipe(recipeId: string): Promise<void> {
     return this.globalFileStore.deleteRecipe(recipeId);
+  }
+
+  async transformGlobalRecipes(
+    transform: (recipes: TerminalRecipe[]) => TerminalRecipe[] | null
+  ): Promise<void> {
+    return this.globalFileStore.transformRecipes(transform);
   }
 }
 

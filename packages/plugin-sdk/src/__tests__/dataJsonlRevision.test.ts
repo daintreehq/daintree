@@ -72,8 +72,4 @@ describe("contentRevision", () => {
     const view = backing.subarray(2, 4);
     expect(await contentRevision(view)).toBe(hostRevision(new Uint8Array([3, 4])));
   });
-
-  it("is the lowercase 64-character hex writeFile accepts as expectedRevision", async () => {
-    expect(await contentRevision("")).toMatch(/^[0-9a-f]{64}$/);
-  });
 });

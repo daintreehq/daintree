@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
-import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { readCssWithImports } from "@/__tests__/support/cssManifest";
 
 const TEST_DIR = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(TEST_DIR, "../../..");
@@ -21,7 +21,7 @@ const SURFACES = [
 
 describe("backdrop-filter fallbacks contract (#8166, #8939)", () => {
   for (const { file, selector } of SURFACES) {
-    const css = fs.readFileSync(path.join(STYLES_ROOT, file), "utf8");
+    const css = readCssWithImports(path.join(STYLES_ROOT, file));
 
     const baseIdx = css.indexOf(`${selector} {`);
     const supportsIdx = css.indexOf("@supports not (backdrop-filter: blur(1px))");

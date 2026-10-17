@@ -18,6 +18,11 @@ vi.mock("@parcel/watcher", () => ({
   default: { subscribe: subscribeMock },
 }));
 
+const inotifyCapacityMock = vi.hoisted(() => ({
+  probeInotifyInstance: vi.fn(async (_dir: string): Promise<string | null> => null),
+}));
+vi.mock("../inotifyCapacity.js", () => inotifyCapacityMock);
+
 import {
   MAX_PARCEL_EXCLUSION_PATHS,
   closeAllParcelWatcherSubscriptions,
@@ -60,6 +65,57 @@ describe("subscribeParcelWatcher", () => {
   ] as const)("selects the safe backend contract on %s", (platform, expected) => {
     setPlatform(platform);
     expect(parcelWatcherBackendOption()).toEqual(expected);
+  });
+
+  it("refuses to start Parcel's inotify backend when no instance is left, instead of blocking", async () => {
+    await closeAllParcelWatcherSubscriptions();
+    inotifyCapacityMock.probeInotifyInstance.mockResolvedValueOnce("EMFILE");
+
+    await expect(subscribeParcelWatcher("/repo", vi.fn())).rejects.toMatchObject({
+      code: "EMFILE",
+      message: expect.stringContaining("max_user_instances"),
+    });
+    expect(subscribeMock).not.toHaveBeenCalled();
+
+    // The lifecycle queue is free again for the next attempt.
+    subscribeMock.mockResolvedValueOnce({ unsubscribe: vi.fn().mockResolvedValue(undefined) });
+    const subscription = await subscribeParcelWatcher("/repo", vi.fn());
+    expect(subscribeMock).toHaveBeenCalledTimes(1);
+    await subscription.unsubscribe();
+  });
+
+  it("names a full system file table rather than the instance limit", async () => {
+    await closeAllParcelWatcherSubscriptions();
+    inotifyCapacityMock.probeInotifyInstance.mockResolvedValueOnce("ENFILE");
+
+    const refusal = subscribeParcelWatcher("/repo", vi.fn());
+    await expect(refusal).rejects.toMatchObject({ code: "ENFILE" });
+    await expect(refusal).rejects.not.toMatchObject({
+      message: expect.stringContaining("max_user_instances"),
+    });
+    expect(subscribeMock).not.toHaveBeenCalled();
+  });
+
+  it("checks for an instance before every Linux subscribe", async () => {
+    await closeAllParcelWatcherSubscriptions();
+    subscribeMock.mockResolvedValue({ unsubscribe: vi.fn().mockResolvedValue(undefined) });
+
+    const first = await subscribeParcelWatcher("/repo/a", vi.fn());
+    const second = await subscribeParcelWatcher("/repo/b", vi.fn());
+    expect(inotifyCapacityMock.probeInotifyInstance.mock.calls).toEqual([["/repo/a"], ["/repo/b"]]);
+
+    await first.unsubscribe();
+    await second.unsubscribe();
+    subscribeMock.mockReset();
+  });
+
+  it("never checks off Linux", async () => {
+    await closeAllParcelWatcherSubscriptions();
+    setPlatform("darwin");
+    subscribeMock.mockResolvedValueOnce({ unsubscribe: vi.fn().mockResolvedValue(undefined) });
+    const subscription = await subscribeParcelWatcher("/repo", vi.fn());
+    expect(inotifyCapacityMock.probeInotifyInstance).not.toHaveBeenCalled();
+    await subscription.unsubscribe();
   });
 
   it("observes a failed teardown so a fire-and-forget caller can't crash the host", async () => {

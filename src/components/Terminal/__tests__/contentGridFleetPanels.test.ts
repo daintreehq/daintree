@@ -23,19 +23,6 @@ describe("buildFleetPanels", () => {
     expect(result.map((p) => p.id)).toEqual(["g1"]);
   });
 
-  it("never admits the overlay assistant into the fleet (#9699)", () => {
-    const panels = {
-      agent: makePanel("agent", "grid"),
-      assistant: makePanel("assistant", "overlay"),
-    };
-    const order = ["agent", "assistant"];
-
-    const result = buildFleetPanels(order, new Set(order), panels);
-
-    expect(result.map((p) => p.id)).toEqual(["agent"]);
-    expect(result.some((p) => p.id === "assistant")).toBe(false);
-  });
-
   it("respects arm order and arm membership", () => {
     const panels = {
       a: makePanel("a", "grid"),

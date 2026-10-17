@@ -1,20 +1,26 @@
 import type { FleetRunRow } from "@shared/types/ipc/fleet";
+import { AGENT_BUCKET_LABEL } from "@/lib/agentStateVocabulary";
 import type { FleetBand, FleetBandCounts } from "@/lib/fleetAttention";
 import {
   bandForRun,
+  runCanopyPlacement,
   bandLabel,
   bandTimestamp,
   compareWithinBand,
+  ATTENTION_FILTER_BANDS,
   emptyBandCounts,
+  FINISHED_FILTER_BANDS,
   FLEET_BANDS,
   isAttentionBand,
   isDemandBand,
+  WORKING_FILTER_BANDS,
 } from "@/lib/fleetAttention";
 import { agoPhrase, formatWaitAge } from "@/lib/projectRowStatus";
 import { isFilterMatch } from "@/lib/projectSwitcherSearch";
 import { composeTitledPanel } from "@/utils/terminalTitleDisplay";
 import { deriveTerminalChrome, type TerminalChromeDescriptor } from "@/utils/terminalChrome";
 import { worktreeLabels } from "@/lib/worktreeLabels";
+import { canopyEvidenceParts, type CanopyEvidenceParts } from "@/lib/canopyRefinementPresentation";
 
 export interface PilotRow {
   run: FleetRunRow;
@@ -80,6 +86,12 @@ export interface PilotRow {
    * type when hunting for the run you shelved behind it.
    */
   parkNote: string | null;
+  /**
+   * What Canopy read that placed this row, quoted and attributed; null when
+   * the free rules alone placed it. A reading is a suggestion, so a row it
+   * moved has to say so and show the words it moved on.
+   */
+  canopyEvidence: CanopyEvidenceParts | null;
   /**
    * How long the run has been WORKING, on a row whose clock is measuring
    * something else. Only a quiet row has one, and it exists purely for the
@@ -176,7 +188,7 @@ export interface PilotWorktreeGroup extends PilotGroupCore {
 
 export type PilotDisplayGroup = PilotProjectGroup | PilotWorktreeGroup;
 
-function directoryLabel(cwd: string): string | null {
+export function directoryLabel(cwd: string): string | null {
   const cleaned = cwd.replace(/[/\\]+$/, "");
   if (!cleaned) return null;
   const segments = cleaned.split(/[/\\]/);
@@ -202,11 +214,6 @@ export interface PilotWorkspaceMeta {
   name: string;
   emoji?: string;
   color?: string;
-  /**
-   * The workspace's completion watermark. Completions at or before it have been
-   * seen and stop counting as a hand-back — see `bandForRun`.
-   */
-  lastCompletionSeenAt?: number;
   /**
    * When the workspace was last switched to, which is what orders the groups.
    * A project-to-project switch also stamps the project being LEFT, a
@@ -397,6 +404,20 @@ function ageOf(
 }
 
 /**
+ * The attribution for a row Canopy placed. A park or snooze outranks the
+ * reading, and a row the user shelved must not claim a reading moved it.
+ */
+function canopyEvidenceFor(
+  run: FleetRunRow,
+  band: FleetBand,
+  nowMs: number
+): CanopyEvidenceParts | null {
+  if (band === "parked" || band === "snoozed") return null;
+  const placement = runCanopyPlacement(run);
+  return placement === undefined ? null : canopyEvidenceParts(placement, nowMs);
+}
+
+/**
  * How each band says its own age.
  *
  * The verb is what makes the duration mean something: a demand's age is how
@@ -433,11 +454,10 @@ export function buildPilotGroups(
     // A run whose workspace has been removed from the store still has to render
     // — dropping it would hide a live agent because a lookup missed.
     const name = meta?.name ?? "Unknown workspace";
-    const acknowledgedAt = meta?.lastCompletionSeenAt;
 
     const sorted = [...workspaceRuns].sort((a, b) => {
-      const bandA = bandForRun(a, acknowledgedAt);
-      const byBand = rank(bandA) - rank(bandForRun(b, acknowledgedAt));
+      const bandA = bandForRun(a);
+      const byBand = rank(bandA) - rank(bandForRun(b));
       if (byBand !== 0) return byBand;
       // Same band, so one clock governs the pair — and which clock that is
       // belongs to the band, not to this call site. `bandTimestamp` is what the
@@ -447,7 +467,7 @@ export function buildPilotGroups(
     });
 
     const rows: PilotRow[] = sorted.map((run) => {
-      const band = bandForRun(run, acknowledgedAt);
+      const band = bandForRun(run);
       const chrome = derivePilotRunChrome(run);
       const title = composePilotRunTitle(run, chrome);
 
@@ -461,6 +481,7 @@ export function buildPilotGroups(
         worktreeLabel: disambiguatingLabel(directoryLabel(run.cwd), name),
         ...ageOf(run, band, ctx.nowMs),
         parkNote: run.park?.note ?? null,
+        canopyEvidence: canopyEvidenceFor(run, band, ctx.nowMs),
       };
     });
 
@@ -800,15 +821,15 @@ export type PilotBandFilter =
  * bottom of All.
  */
 const BAND_FILTER_SETS: Record<Exclude<PilotBandFilter, "all">, ReadonlySet<FleetBand>> = {
-  "needs-you": new Set<FleetBand>(["blocked", "needs-you"]),
+  "needs-you": ATTENTION_FILTER_BANDS,
   // Its own segment rather than a corner of Working, and the segments stay
   // disjoint so the four counts still add up under All. "Which of my agents
   // has gone silent" is the second question this surface answers, and before
   // this it had no control, no count and no summary — only an annotation on
   // whichever row you happened to scroll past.
   quiet: new Set<FleetBand>(["quiet"]),
-  working: new Set<FleetBand>(["running"]),
-  finished: new Set<FleetBand>(["review", "done"]),
+  working: WORKING_FILTER_BANDS,
+  finished: FINISHED_FILTER_BANDS,
   parked: new Set<FleetBand>(["parked"]),
   // The remainder, and the only reason it exists: `snoozed` and `idle` are the
   // two bands that belong to none of the questions above. An exited shell is
@@ -838,9 +859,9 @@ export const PILOT_BAND_FILTERS: readonly Exclude<PilotBandFilter, "all">[] = [
  * and calling the pair by the name of one of its members made the segment
  * contradict itself the moment it drew the blocked glyph: a red prohibition
  * sign beside the word "Waiting" is two different claims about the same two
- * runs. The sidebar's `QuickStateFilterBar` bucket is the same union — it
- * filters on `agentState === "waiting"`, which is where an errored agent lives
- * too — so it carries the same word rather than being left to drift. The ROW
+ * runs. The sidebar's `QuickStateFilterBar` bucket is the same union — both
+ * read `ATTENTION_FILTER_BANDS` — so it carries the same word rather than being
+ * left to drift. The ROW
  * still says "Blocked" or "Waiting"; only the bucket that holds both takes a
  * name wide enough to cover them.
  *
@@ -852,13 +873,13 @@ export const PILOT_BAND_FILTERS: readonly Exclude<PilotBandFilter, "all">[] = [
  */
 export const PILOT_BAND_FILTER_LABEL: Record<PilotBandFilter, string> = {
   all: "All",
-  "needs-you": "Attention",
+  "needs-you": AGENT_BUCKET_LABEL.attention,
   // Observed, not inferred. The fleet knows the agent has said nothing for
   // twelve minutes; it does not know the agent is stuck, and a segment called
   // "Stalled" would be the surface guessing on the user's behalf.
   quiet: "Quiet",
-  working: "Working",
-  finished: "Finished",
+  working: AGENT_BUCKET_LABEL.working,
+  finished: AGENT_BUCKET_LABEL.finished,
   parked: "Parked",
   other: "Other",
 };

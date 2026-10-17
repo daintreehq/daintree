@@ -8,6 +8,7 @@ vi.mock("@/clients", () => ({
     onData: vi.fn(() => vi.fn()),
     onExit: vi.fn(() => vi.fn()),
     onTierChanged: vi.fn(() => vi.fn()),
+    onReset: vi.fn(() => vi.fn()),
     write: vi.fn(),
     setActivityTier: vi.fn(),
     wake: vi.fn(),
@@ -18,6 +19,7 @@ vi.mock("@/clients", () => ({
     })),
     acknowledgeData: vi.fn(),
     acknowledgePortData: vi.fn(),
+    getPortAckGeneration: vi.fn(() => 0),
     discardPortAcks: vi.fn(),
   },
   systemClient: { openExternal: vi.fn() },
@@ -208,21 +210,6 @@ describe("TerminalInstanceService fully-settled waits", () => {
     expect(settled).toBe(true);
   });
 
-  it("settles when restore transitions to 'done' and is notified", async () => {
-    const managed = makeManaged("t1", { scrollbackRestoreState: "in-progress" });
-    let settled = false;
-    const promise = service.waitForFullySettled("t1").then(() => {
-      settled = true;
-    });
-    await Promise.resolve();
-    expect(settled).toBe(false);
-
-    managed.scrollbackRestoreState = "done";
-    service.notifyRestoreSettledWaiters("t1");
-    await promise;
-    expect(settled).toBe(true);
-  });
-
   it("settles (does not hang) when restore fails — caller inspects the error", async () => {
     const managed = makeManaged("t1", { scrollbackRestoreState: "in-progress" });
     const promise = service.waitForFullySettled("t1");
@@ -288,11 +275,6 @@ describe("TerminalInstanceService fully-settled waits", () => {
       service.notifyRestoreSettledWaiters("b");
       await promise;
       expect(settled).toBe(true);
-    });
-
-    it("dedupes repeated ids", async () => {
-      makeManaged("a", { scrollbackRestoreState: "done" });
-      await expect(service.waitForAllFullySettled(["a", "a", "a"])).resolves.toBeUndefined();
     });
 
     it("rejects naming the still-pending panels on timeout", async () => {

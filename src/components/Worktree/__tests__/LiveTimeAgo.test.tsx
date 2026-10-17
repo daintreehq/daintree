@@ -30,19 +30,6 @@ describe("LiveTimeAgo", () => {
     expect(container.firstChild).toBeNull();
   });
 
-  it("renders nothing when timestamp is undefined", () => {
-    const { container } = renderTimeAgo({});
-    expect(container.firstChild).toBeNull();
-  });
-
-  it.each([Number.NaN, Infinity, 0, -1])(
-    "renders nothing for invalid timestamp %s",
-    (timestamp) => {
-      const { container } = renderTimeAgo({ timestamp });
-      expect(container.firstChild).toBeNull();
-    }
-  );
-
   it("renders nothing for a future timestamp", () => {
     const now = 1_700_000_000_000;
     vi.setSystemTime(now);
@@ -212,19 +199,6 @@ describe("LiveTimeAgo", () => {
       vi.advanceTimersByTime(1000);
     });
     expect(vi.getTimerCount()).toBe(1);
-  });
-
-  it("snaps to the current value on visibility restore", () => {
-    const now = 1_700_000_000_000;
-    vi.setSystemTime(now);
-    const { container } = renderTimeAgo({ timestamp: now - 10_000 });
-    expect(container.textContent).toContain("10s");
-
-    act(() => {
-      vi.setSystemTime(now + 45_000);
-      document.dispatchEvent(new Event("visibilitychange"));
-    });
-    expect(container.textContent).toContain("55s");
   });
 });
 

@@ -1,15 +1,18 @@
 // eager-import-allow: reads persisted window state via store.get synchronously when creating the window
 import { app, BrowserWindow, WebContentsView, dialog, ipcMain, session } from "electron";
 import {
+  getAppView,
   getWindowForWebContents,
   registerWebContents,
   registerAppView,
 } from "./webContentsRegistry.js";
+import { attachActiveViewFocus } from "./activeViewFocus.js";
 import { getWindowRegistry } from "./windowRef.js";
+import { routeNewWindowRequest } from "./windowHost.js";
 import { toggleWindowFullscreen } from "./fullscreen.js";
 import type { ProjectViewManager } from "./ProjectViewManager.js";
 import path from "path";
-import { createWindowWithState } from "../windowState.js";
+import { createWindowWithState, disposeWindowStateTracking } from "../windowState.js";
 import { store } from "../store.js";
 import { resolveAppTheme } from "../../shared/theme/index.js";
 import type { AppColorScheme } from "../../shared/theme/index.js";
@@ -21,13 +24,13 @@ import {
 
 import { canOpenExternalUrl, openExternalUrl } from "../utils/openExternal.js";
 import { isTrustedRendererUrl } from "../../shared/utils/trustedRenderer.js";
-import { isLocalhostUrl, isDevPreviewProxyUrl } from "../../shared/utils/urlUtils.js";
+import { isWebviewSrcAllowed } from "./ProjectViewHandlers.js";
 import { isBrowserPartition } from "../../shared/utils/partitionUtils.js";
 import { getDevServerUrl } from "../../shared/config/devServer.js";
 import { CHANNELS } from "../ipc/channels.js";
 import { sendToRenderer } from "../ipc/handlers.js";
 import { getCrashRecoveryService } from "../services/CrashRecoveryService.js";
-import { isRendererOwnedShortcut } from "../services/menuAccelerators.js";
+import { findTerminalCycleAction, isRendererOwnedShortcut } from "../services/menuAccelerators.js";
 import { PERF_MARKS } from "../../shared/perf/marks.js";
 import {
   buildSkeletonCss,
@@ -40,10 +43,14 @@ import {
   INITIAL_COLOR_SCHEME_ARG,
   INSTANCE_ROLE_ARG,
 } from "./skeletonCss.js";
-import { getPlatformWindowOptions } from "./platformWindowOptions.js";
+import { getMinimumWindowSize, getPlatformWindowOptions } from "./platformWindowOptions.js";
+import { getLinuxWindowIconOption } from "./linuxWindowIcon.js";
+import { showWindowInactive } from "./showWindowInactive.js";
 import { seedTitleBarOverlay } from "./titleBarOverlay.js";
 import { readLastActiveProjectIdentitySync } from "../services/persistence/readLastProjectId.js";
+import { appWindowStateTracking, resolveBoundsProjectPath } from "./windowStateTracking.js";
 import { attachRendererConsoleCapture } from "./rendererConsoleCapture.js";
+import { attachRendererEditContextMenu } from "./rendererEditContextMenu.js";
 import { markPerformance } from "../utils/performance.js";
 import { registerProtocolsForSession, getDistPath } from "../setup/protocols.js";
 import { isDemoMode, isSmokeTest } from "../setup/environment.js";
@@ -80,7 +87,12 @@ function registerWindowIpcHandlers(onCreateWindow?: CreateWindowHandler): void {
     // back in it (#12594).
     ipcMain.handle(CHANNELS.WINDOW_NEW, (event, projectPath?: string) => {
       const bw = getWindowForWebContents(event.sender);
-      return onCreateWindow(projectPath ?? undefined, bw && !bw.isDestroyed() ? bw.id : null);
+      return routeNewWindowRequest(
+        event.sender.id,
+        bw && !bw.isDestroyed() ? bw.id : null,
+        projectPath ?? undefined,
+        onCreateWindow
+      );
     });
   }
 
@@ -158,7 +170,13 @@ export function setupBrowserWindow(
   dirname: string,
   options: SetupBrowserWindowOptions = {}
 ): CreateWindowResult {
-  const { onRecreateWindow, onCreateWindow, projectPath, revealMode = "show" } = options;
+  const {
+    onRecreateWindow,
+    onCreateWindow,
+    projectPath,
+    initialProjectId,
+    revealMode = "show",
+  } = options;
   let smokeTestTimer: ReturnType<typeof setTimeout> | undefined;
   let _smokeRendererUnresponsive = false;
 
@@ -214,12 +232,13 @@ export function setupBrowserWindow(
   const win = createWindowWithState(
     {
       show: false,
-      minWidth: 800,
-      minHeight: 600,
+      ...getMinimumWindowSize(),
       ...getPlatformWindowOptions(windowBg),
+      ...getLinuxWindowIconOption(),
       backgroundColor: windowBg,
     },
-    projectPath ?? undefined
+    resolveBoundsProjectPath(projectPath, initialProjectId),
+    appWindowStateTracking
   );
   markPerformance(PERF_MARKS.MAIN_WINDOW_CREATED);
 
@@ -243,7 +262,7 @@ export function setupBrowserWindow(
       // before the renderer loads, so a restored background window would
       // otherwise take focus here and never reach its showInactive().
       if (revealMode === "showInactive") {
-        win.showInactive();
+        showWindowInactive(win);
       } else {
         win.show();
       }
@@ -301,11 +320,20 @@ export function setupBrowserWindow(
   // The app view's webContents is the "renderer" for all purposes
   const appWebContents = appView.webContents;
   attachRendererConsoleCapture(appWebContents);
+  attachRendererEditContextMenu(appWebContents);
 
   // Match the appView's background to the window chrome so the frame and
   // content area reveal a single colour when the window is shown before the
   // first paint; WebContentsView defaults to white otherwise.
   appView.setBackgroundColor(windowBg);
+
+  // Attached before the reveal so the first activation is never missed. The
+  // registry's app view is whatever the window is showing — the startup view,
+  // the welcome view, or the project view a switch last revealed.
+  const activeViewFocus = attachActiveViewFocus(win, {
+    getActiveView: () => getAppView(win),
+    isSwitchBridged: () => getProjectViewManagerFor(win)?.isSwitchBridged() ?? false,
+  });
 
   if (isSmokeTest) {
     win.on("unresponsive", () => {
@@ -426,9 +454,12 @@ export function setupBrowserWindow(
       if (!win.isDestroyed()) {
         markPerformance(PERF_MARKS.MAIN_WINDOW_SHOWN, viaFallback ? { fallback: true } : undefined);
         if (revealMode === "showInactive") {
-          win.showInactive();
+          showWindowInactive(win);
         } else {
           win.show();
+          // For a platform that activates inside show(); on Linux activation
+          // arrives later as the `focus` event, which runs the same check.
+          activeViewFocus.schedule();
         }
       }
     };
@@ -504,9 +535,7 @@ export function setupBrowserWindow(
 
   // Harden webview security — on the app view's webContents
   appWebContents.on("will-attach-webview", (event, webPreferences, params) => {
-    // Dev-preview webviews now load the stable proxy origin (dp-*.localhost), which
-    // isLocalhostUrl rejects — accept it explicitly (#9100).
-    const isAllowedLocalhostUrl = isLocalhostUrl(params.src) || isDevPreviewProxyUrl(params.src);
+    const isAllowedLocalhostUrl = isWebviewSrcAllowed(appWebContents.id, params.src);
     const partition = params.partition ?? "";
     const isValidPartition =
       isBrowserPartition(partition) ||
@@ -532,22 +561,15 @@ export function setupBrowserWindow(
     webPreferences.partition = params.partition;
   });
 
-  // Prevent Cmd+W / Ctrl+W from closing the window, and route Ctrl+Tab terminal
-  // focus shortcuts for the initial app view. ProjectViewManager installs the
+  // Prevent Cmd+W / Ctrl+W from closing the window, and route the terminal
+  // cycle shortcuts (Ctrl+Tab by default) for the initial app view. ProjectViewManager installs the
   // same Ctrl+Tab bridge for cold-started project views.
   appWebContents.on("before-input-event", (event, input) => {
     const key = input.key.toLowerCase();
-    const isTerminalFocusShortcut =
-      input.type === "keyDown" &&
-      (key === "tab" || input.code === "Tab") &&
-      input.control &&
-      !input.meta &&
-      !input.alt;
-    if (isTerminalFocusShortcut) {
+    const terminalCycleAction = findTerminalCycleAction(input);
+    if (terminalCycleAction) {
       event.preventDefault();
-      appWebContents.send(CHANNELS.MENU_ACTION, {
-        actionId: input.shift ? "terminal.focusPrevious" : "terminal.focusNext",
-      });
+      appWebContents.send(CHANNELS.MENU_ACTION, terminalCycleAction);
       return;
     }
 
@@ -613,6 +635,8 @@ export function setupBrowserWindow(
   });
 
   win.once("closed", () => {
+    activeViewFocus.dispose();
+    disposeWindowStateTracking(win);
     if (reclaimTimer) {
       clearTimeout(reclaimTimer);
       reclaimTimer = null;

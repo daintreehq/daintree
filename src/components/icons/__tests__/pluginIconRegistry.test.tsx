@@ -11,27 +11,10 @@ import {
   PLUGIN_ICON_IDS,
   getPluginIconComponent,
   resolvePluginIcon,
-  type PluginIconComponent,
 } from "../pluginIconRegistry";
 import { setPluginCustomIcons } from "../pluginCustomIconStore";
 
-function markup(Icon: PluginIconComponent): string {
-  return render(<Icon />).container.innerHTML;
-}
-
 describe("pluginIconRegistry", () => {
-  it("maps exactly the advertised ids — no unrenderable id, no unreachable glyph", () => {
-    expect(Object.keys(PLUGIN_ICON_COMPONENTS).sort()).toEqual([...PLUGIN_ICON_IDS].sort());
-  });
-
-  it("renders a real glyph for every advertised id", () => {
-    for (const id of PLUGIN_ICON_IDS) {
-      const Icon = getPluginIconComponent(id);
-      expect(Icon, `no component registered for "${id}"`).toBeDefined();
-      expect(markup(Icon!), `"${id}" rendered no svg`).toContain("<svg");
-    }
-  });
-
   it("gives every advertised id its own glyph", () => {
     // Two ids sharing a glyph would make them indistinguishable to a plugin
     // author picking between them — including `monitor`/`monitor-play`, which

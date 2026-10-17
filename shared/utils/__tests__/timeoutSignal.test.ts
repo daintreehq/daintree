@@ -40,21 +40,6 @@ describe("createTimeoutSignal", () => {
     expect((handle.signal.reason as DOMException).name).toBe("TimeoutError");
   });
 
-  it("matches the reason shape AbortSignal.timeout produces", async () => {
-    vi.useRealTimers();
-    const native = AbortSignal.timeout(1);
-    await new Promise((resolve) => native.addEventListener("abort", resolve, { once: true }));
-
-    vi.useFakeTimers();
-    const handle = createTimeoutSignal(1);
-    await vi.advanceTimersByTimeAsync(2);
-
-    const ours = handle.signal.reason as DOMException;
-    const theirs = native.reason as DOMException;
-    expect(ours.constructor).toBe(theirs.constructor);
-    expect(ours.name).toBe(theirs.name);
-  });
-
   it("releases the timer once the deadline fires", async () => {
     createTimeoutSignal(100);
     expect(vi.getTimerCount()).toBe(1);

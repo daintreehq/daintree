@@ -173,6 +173,11 @@ export interface HydrateResult {
    */
   workspaceId?: string | null;
   agentSettings: import("../agentSettings.js").AgentSettings;
+  /**
+   * The host's assistant agent and default terminal agent (#13345). Optional
+   * because a remote host on an older build doesn't send it.
+   */
+  agentDefaults?: import("./agentDefaults.js").AgentDefaultsSnapshot;
   gpuWebGLHardware: boolean;
   gpuHardwareAccelerationDisabled: boolean;
   /**
@@ -205,6 +210,12 @@ export interface HydrateResult {
   runningUnderRosetta?: boolean;
   /** True when the user permanently dismissed the Rosetta translation warning. */
   rosettaWarningDismissed?: boolean;
+  /**
+   * Where the user stands on Canopy, so a hidden Canopy's toolbar button never
+   * paints and then vanishes. Optional for backward compat with older main
+   * processes.
+   */
+  canopyMode?: import("./canopy.js").CanopyMode;
   /** Number of saved panels skipped due to safe-mode boot (0 when safe mode is inactive). */
   skippedPanelCount?: number;
   /**
@@ -242,6 +253,17 @@ export interface HydrateResult {
    * React 19 `use()` safe-boot fallback), the renderer falls back to the IPC call.
    */
   systemTmpDir?: string;
+  /**
+   * The machine the view's project lives on: its platform, home and temp
+   * directories. Commands, paths and labels the renderer builds for that
+   * machine use these rather than the client's own. Locally they equal this
+   * process's `process.platform`, `os.homedir()` and `os.tmpdir()`. Optional
+   * for payloads built without them (the switch prefetch), where the renderer
+   * falls back to its own platform and `systemTmpDir`.
+   */
+  hostPlatform?: "darwin" | "linux" | "win32";
+  hostHomeDir?: string;
+  hostTmpDir?: string;
   /**
    * Per-project layout state folded into the hydrate payload so the renderer
    * skips the standalone `getTabGroups`/`getTerminalSizes`/`getDraftInputs`

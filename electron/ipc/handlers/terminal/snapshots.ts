@@ -45,7 +45,7 @@ type ValidatedReplayHistoryPayload = z.output<typeof TerminalReplayHistoryPayloa
  * very binding this works around.
  */
 function resolveSenderWorkspaceId(ctx: IpcContext): string | null {
-  return ctx.projectId ?? getProjectIdFromSenderUrl(ctx.event.sender);
+  return ctx.projectId ?? (ctx.event && getProjectIdFromSenderUrl(ctx.event.sender));
 }
 
 export function registerTerminalSnapshotHandlers(deps: HandlerDependencies): () => void {
@@ -353,6 +353,7 @@ export function registerTerminalSnapshotHandlers(deps: HandlerDependencies): () 
   };
 
   const handleTerminalSearchSemanticBuffers = async (
+    ctx: IpcContext,
     query: string,
     isRegex: boolean
   ): Promise<import("../../../../shared/types/ipc/terminal.js").SemanticSearchMatch[]> => {
@@ -368,7 +369,13 @@ export function registerTerminalSnapshotHandlers(deps: HandlerDependencies): () 
       return [];
     }
     try {
-      return await ptyClient.searchSemanticBuffersAsync(query, isRegex);
+      const matches = await ptyClient.searchSemanticBuffersAsync(query, isRegex);
+      // A window on another machine searches its own project's terminals only.
+      if (ctx.endpoint?.kind !== "remote-view") return matches;
+      const projectId = ctx.endpoint.projectId;
+      return projectId === null
+        ? []
+        : matches.filter((match) => ptyClient.getTerminalProjectId(match.terminalId) === projectId);
     } catch (error) {
       logWarn("terminal:searchSemanticBuffers failed", { error });
       return [];
@@ -436,6 +443,7 @@ export function registerTerminalSnapshotHandlers(deps: HandlerDependencies): () 
         id: terminal.id,
         projectId: terminal.projectId,
         kind: terminal.kind,
+        isTrashed: terminal.isTrashed,
 
         launchAgentId: terminal.launchAgentId,
         title: terminal.title,
@@ -547,7 +555,8 @@ export function registerTerminalSnapshotHandlers(deps: HandlerDependencies): () 
       getAll: op(CHANNELS.TERMINAL_GET_ALL, handleTerminalGetAll),
       searchSemanticBuffers: op(
         CHANNELS.TERMINAL_SEARCH_SEMANTIC_BUFFERS,
-        handleTerminalSearchSemanticBuffers
+        handleTerminalSearchSemanticBuffers,
+        { withContext: true }
       ),
       reconnect: op(CHANNELS.TERMINAL_RECONNECT, handleTerminalReconnect, { withContext: true }),
       reconnectBulk: op(CHANNELS.TERMINAL_RECONNECT_BULK, handleTerminalReconnectBulk, {

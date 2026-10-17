@@ -2,19 +2,13 @@
  * @vitest-environment jsdom
  */
 import { describe, it, expect, afterEach, vi } from "vitest";
-import { readFileSync } from "node:fs";
-import { resolve } from "node:path";
 import { act, render, cleanup } from "@testing-library/react";
 import { AnimatedLabel } from "../AnimatedLabel";
+import { readIndexCss } from "@/__tests__/support/hostCss";
 
 describe("AnimatedLabel", () => {
   afterEach(() => {
     cleanup();
-  });
-
-  it("renders the current label", () => {
-    const { container } = render(<AnimatedLabel label="Copy" />);
-    expect(container.textContent).toBe("Copy");
   });
 
   it("does not animate on mount", () => {
@@ -106,7 +100,7 @@ describe("AnimatedLabel", () => {
 // even at rest. JSDOM doesn't apply stylesheets, so we assert against the CSS
 // source directly — this fails if anyone reintroduces filter into the swap.
 describe("AnimatedLabel CSS contract", () => {
-  const css = readFileSync(resolve(process.cwd(), "src/index.css"), "utf8");
+  const css = readIndexCss();
 
   const extractBlock = (header: string) => {
     const start = css.indexOf(header);

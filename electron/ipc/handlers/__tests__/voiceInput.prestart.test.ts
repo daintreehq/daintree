@@ -122,15 +122,21 @@ const sender = vi.hoisted(() => ({
   onDestroyed: null as null | (() => void),
 }));
 
-const fakeEvent = {
-  sender: {
+// A fresh renderer per test, as in production: a destroyed WebContents is never
+// reused, and the shared destroyed-watcher remembers the ones it saw go.
+let nextSenderId = 1;
+function makeSender() {
+  return {
+    id: nextSenderId++,
     once: vi.fn((_event: string, fn: () => void) => {
       sender.onDestroyed = fn;
     }),
     removeListener: vi.fn(),
     isDestroyed: () => sender.destroyed,
-  },
-} as unknown as Electron.IpcMainInvokeEvent;
+  };
+}
+
+const fakeEvent = { sender: makeSender() };
 
 function getHandler(channel: string) {
   const call = ipcMainMock.handle.mock.calls.find(([c]) => c === channel);
@@ -177,6 +183,7 @@ describe("voiceInput — audio sent before the provider starts", () => {
     shared.assembleKeyterms = null;
     sender.destroyed = false;
     sender.onDestroyed = null;
+    fakeEvent.sender = makeSender();
     sent = [];
     const win = {
       webContents: {

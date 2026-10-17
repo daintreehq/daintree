@@ -963,7 +963,7 @@ async function captureTerminal(run: Run): Promise<void> {
       await openFind();
       const bar = await findBarRoot(input);
       await input.fill("Daintree");
-      const caseToggle = bar.getByRole("button", { name: "Toggle case sensitivity" });
+      const caseToggle = bar.getByRole("button", { name: "Match case" });
       if ((await caseToggle.getAttribute("aria-pressed")) !== "true") await caseToggle.click();
       await parkPointer(page);
       await settle(page, 700);
@@ -976,7 +976,7 @@ async function captureTerminal(run: Run): Promise<void> {
     await shoot(run, "terminal-findbar-empty", async () => {
       await openFind();
       const bar = await findBarRoot(input);
-      const caseToggle = bar.getByRole("button", { name: "Toggle case sensitivity" });
+      const caseToggle = bar.getByRole("button", { name: "Match case" });
       if ((await caseToggle.getAttribute("aria-pressed")) === "true") await caseToggle.click();
       await input.fill("");
       await input.focus();

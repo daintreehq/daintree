@@ -67,13 +67,13 @@ const ROWS = `${DIALOG} [role="listitem"]`;
 
 /**
  * Overrides seeded through the real IPC before the theme reload, so the renderer
- * boots with them the way a returning user's would. One rebinding, one cleared
- * binding, and one previously-unbound action given a key.
+ * boots with them the way a returning user's would. One rebinding to two keys,
+ * one cleared binding, and one previously-unbound action given a key.
  */
 const OVERRIDES: Record<string, string[]> = {
-  "terminal.watch": ["Ctrl+Alt+W"],
+  "terminal.watch": ["Ctrl+Alt+W", "Ctrl+Alt+Shift+W"],
   "terminal.redraw": [],
-  "agent.cursor": ["Cmd+Alt+U"],
+  "agent.cursor": ["Cmd+Alt+Y"],
 };
 
 const POLISH_CSS = `
@@ -158,7 +158,12 @@ async function openReference(page: Page): Promise<void> {
 }
 
 async function closeReference(page: Page): Promise<void> {
+  // A query takes the first Escape (it clears the search), the second closes.
   await page.keyboard.press("Escape").catch(() => {});
+  await settle(page, 100);
+  if (await page.locator(DIALOG).isVisible()) {
+    await page.keyboard.press("Escape").catch(() => {});
+  }
   await page
     .locator(DIALOG)
     .waitFor({ state: "hidden", timeout: 5000 })

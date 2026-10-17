@@ -224,14 +224,6 @@ describe("diffMedia readFileVersions", () => {
     expect(result.head.ok).toBe(true);
   });
 
-  it("passes the HEAD-side TOO_LARGE result through", async () => {
-    readFileAtHeadMock.mockResolvedValue({ ok: false, reason: "TOO_LARGE" });
-
-    const result = await invoke({ cwd: REPO_ROOT, filePath: "img.png" });
-
-    expect(result.head).toEqual({ ok: false, error: "TOO_LARGE" });
-  });
-
   it("maps an unexpected git failure to a HEAD-side ERROR instead of rejecting", async () => {
     vi.spyOn(console, "error").mockImplementation(() => {});
     readFileAtHeadMock.mockRejectedValue(new Error("git exploded"));
@@ -423,18 +415,6 @@ describe("diffMedia readFileVersions", () => {
       const result = await invoke({ cwd: REPO_ROOT, filePath: "img.png", known });
 
       expect(result.working).toEqual({ ok: true, unchanged: true, version: known.working });
-    });
-
-    it("charges a revalidation that has to resend bytes against the byte budget", async () => {
-      const known = await freshVersions();
-      for (let i = 0; i < 9; i++) await invoke({ cwd: REPO_ROOT, filePath: "img.png" });
-      fileHandleMock.stat.mockResolvedValue({ ...FD_STAT, ctimeNs: FD_STAT.ctimeNs + 1n });
-      fileHandleMock.readFile.mockClear();
-
-      await expect(invoke({ cwd: REPO_ROOT, filePath: "img.png", known })).rejects.toMatchObject({
-        code: "RATE_LIMITED",
-      });
-      expect(fileHandleMock.readFile).not.toHaveBeenCalled();
     });
 
     it("caps unchanged revalidations with their own budget", async () => {

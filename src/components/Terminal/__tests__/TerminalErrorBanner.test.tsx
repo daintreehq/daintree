@@ -105,15 +105,6 @@ function contextLine(text: RegExp): HTMLParagraphElement {
 }
 
 describe("TerminalErrorBanner", () => {
-  it("renders the restart-failed title", () => {
-    renderBanner({
-      message: "child process died",
-      recoverable: true,
-      timestamp: 1,
-    });
-    expect(screen.getByText(/terminal restart failed/i)).toBeTruthy();
-  });
-
   it("does not show Change directory for non-ENOENT errors", () => {
     renderBanner({
       message: "child process died",
@@ -143,18 +134,6 @@ describe("TerminalErrorBanner", () => {
       context: { failedCwd: "/missing/dir" },
     });
     expect(screen.queryByRole("button", { name: /^change directory$/i })).toBeNull();
-  });
-
-  it("renders the failed cwd in the context line", () => {
-    renderBanner({
-      message: "ENOENT",
-      code: "ENOENT",
-      recoverable: true,
-      timestamp: 1,
-      context: { failedCwd: "/missing/dir" },
-    });
-    const line = contextLine(/^Directory: \/missing\/dir$/);
-    expect(line.textContent).toBe("Directory: /missing/dir");
   });
 
   it("keeps the final path segment of a long cwd in its own unclipped span", () => {

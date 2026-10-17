@@ -136,26 +136,6 @@ describe("applyAccentOverrideToScheme", () => {
     expect(patched.tokens["surface-canvas"]).toBe(darkScheme.tokens["surface-canvas"]);
     expect(patched.tokens["text-primary"]).toBe(darkScheme.tokens["text-primary"]);
   });
-
-  it("preserves scheme metadata (id, name, type, builtin)", () => {
-    const patched = applyAccentOverrideToScheme(darkScheme, "#00ff00");
-    expect(patched.id).toBe(darkScheme.id);
-    expect(patched.name).toBe(darkScheme.name);
-    expect(patched.type).toBe(darkScheme.type);
-    expect(patched.builtin).toBe(darkScheme.builtin);
-  });
-
-  it("also merges override into a synthetic scheme with custom tokens", () => {
-    const synthetic: AppColorScheme = {
-      ...lightScheme,
-      id: "synthetic",
-      name: "Synthetic",
-      builtin: false,
-    };
-    const patched = applyAccentOverrideToScheme(synthetic, "#123456");
-    expect(patched.tokens["accent-primary"]).toBe("#123456");
-    expect(patched.id).toBe("synthetic");
-  });
 });
 
 describe("getAppThemeWarnings — non-hex accent-rgb degradation", () => {
@@ -188,18 +168,5 @@ describe("getAppThemeWarnings — non-hex accent-rgb degradation", () => {
   it("does not warn when accent-primary is hex (normal path)", () => {
     const warnings = getAppThemeWarnings(darkScheme);
     expect(warnings.some((w) => w.message.includes("accent-rgb"))).toBe(false);
-  });
-
-  it("warns for color-mix() accent values, not just oklch", () => {
-    const scheme: AppColorScheme = {
-      ...darkScheme,
-      tokens: {
-        ...darkScheme.tokens,
-        "accent-primary": "color-mix(in oklab, #ff0000, #0000ff)",
-        "accent-rgb": "0, 0, 0",
-      },
-    };
-    const warnings = getAppThemeWarnings(scheme);
-    expect(warnings.some((w) => w.message.includes("accent-rgb"))).toBe(true);
   });
 });

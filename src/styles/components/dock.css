@@ -4,7 +4,7 @@
  * The pills exist only while agents occupy those states. Without an
  * animation the first waiting/errored agent makes the pill pop in and the
  * last one clearing makes it vanish, unlike every toolbar badge. Same
- * technique as [data-toolbar-overflow-trigger] in toolbar.css: opacity-only
+ * technique as [data-toolbar-overflow-trigger] in toolbar/pips.css: opacity-only
  * (these are full-size buttons — scale would read as a glitch) with
  * @starting-style + allow-discrete driving entry and exit in pure CSS. The
  * wrapper stays mounted and toggles data-visible, going display:none when

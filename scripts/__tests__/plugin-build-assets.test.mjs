@@ -92,17 +92,6 @@ describe("copyPluginExtraAssets", () => {
     ).toEqual([]);
   });
 
-  it("is idempotent across repeated runs", () => {
-    const src = path.join(workDir, "src");
-    const dest = path.join(workDir, "dest");
-    writeFile(path.join(src, "bin", "demo-agent.mjs"), "v1\n");
-
-    copyPluginExtraAssets(src, dest);
-    copyPluginExtraAssets(src, dest);
-
-    expect(fs.readFileSync(path.join(dest, "bin", "demo-agent.mjs"), "utf8")).toBe("v1\n");
-  });
-
   it("overwrites a changed source file on the next copy", () => {
     const src = path.join(workDir, "src");
     const dest = path.join(workDir, "dest");

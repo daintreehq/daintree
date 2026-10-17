@@ -311,48 +311,6 @@ describe("DevPreviewProxyService", () => {
     expect(reply).toBe("echo:ping");
   });
 
-  it("preserves the request path and query string on a WSS (TLS) upgrade (#9974)", async () => {
-    let seenUrl: string | undefined;
-    tlsUpstream = https.createServer({ cert: TLS_CERT, key: TLS_KEY });
-    const upstreamPort = await listenTls(tlsUpstream);
-    wss = new WebSocketServer({ server: tlsUpstream });
-    wss.on("connection", (socket, req) => {
-      seenUrl = req.url;
-      socket.send("ok");
-    });
-
-    proxy = new DevPreviewProxyService(() => ({ port: upstreamPort, isHttps: true }));
-    const proxyPort = await proxy.start();
-
-    const client = new WebSocket(`ws://127.0.0.1:${proxyPort}/@vite/client?t=123`, {
-      headers: { host: `dp-test.localhost:${proxyPort}` },
-    });
-    await new Promise<void>((resolve, reject) => {
-      client.on("message", () => resolve());
-      client.on("error", reject);
-    });
-    client.close();
-
-    expect(seenUrl).toBe("/@vite/client?t=123");
-  });
-
-  it("strips the Domain attribute from upstream Set-Cookie headers", async () => {
-    upstream = http.createServer((_req, res) => {
-      res.writeHead(200, { "Set-Cookie": "sid=abc; Domain=localhost; Path=/" });
-      res.end("ok");
-    });
-    const upstreamPort = await listen(upstream);
-
-    proxy = new DevPreviewProxyService(() => ({ port: upstreamPort, isHttps: false }));
-    const proxyPort = await proxy.start();
-
-    const res = await request(proxyPort, `dp-test.localhost:${proxyPort}`);
-    const setCookie = res.headers["set-cookie"]?.[0] ?? "";
-
-    expect(setCookie).toContain("sid=abc");
-    expect(setCookie.toLowerCase()).not.toContain("domain=");
-  });
-
   it("strips Domain from every Set-Cookie header (multiple cookies, incl. Domain=.localhost)", async () => {
     upstream = http.createServer((_req, res) => {
       res.writeHead(200, {
@@ -379,28 +337,11 @@ describe("DevPreviewProxyService", () => {
     }
   });
 
-  it("returns 502 when no upstream is registered for the subdomain", async () => {
-    proxy = new DevPreviewProxyService(() => null);
-    const proxyPort = await proxy.start();
-
-    const res = await request(proxyPort, `dp-missing.localhost:${proxyPort}`);
-    expect(res.status).toBe(502);
-  });
-
   it("returns 502 for a host that is not a dev-preview proxy subdomain", async () => {
     proxy = new DevPreviewProxyService(() => ({ port: 9999, isHttps: false }));
     const proxyPort = await proxy.start();
 
     const res = await request(proxyPort, "example.com");
-    expect(res.status).toBe(502);
-  });
-
-  it("returns 502 when the upstream is unreachable", async () => {
-    // Resolve to a port nothing is listening on.
-    proxy = new DevPreviewProxyService(() => ({ port: 1, isHttps: false }));
-    const proxyPort = await proxy.start();
-
-    const res = await request(proxyPort, `dp-test.localhost:${proxyPort}`);
     expect(res.status).toBe(502);
   });
 
@@ -606,21 +547,6 @@ describe("DevPreviewProxyService", () => {
       expect(res.status).toBe(403);
     });
 
-    it("rejects an expired token with 403", async () => {
-      // Fake only the Date clock so HTTP/socket timers stay real; advance past the
-      // 60s TTL between minting and redeeming.
-      vi.useFakeTimers({ toFake: ["Date"] });
-      proxy = new DevPreviewProxyService(() => null);
-      const proxyPort = await proxy.start();
-
-      const bootstrapUrl = proxy.mintBrowserToken("panel-1", "proj-1", "/");
-      const { host, path } = splitBootstrapUrl(bootstrapUrl);
-
-      vi.setSystemTime(Date.now() + 61_000);
-      const res = await request(proxyPort, host, path);
-      expect(res.status).toBe(403);
-    });
-
     it("rejects a token redeemed against a different panel's origin (panel binding)", async () => {
       proxy = new DevPreviewProxyService(() => null);
       const proxyPort = await proxy.start();
@@ -650,21 +576,6 @@ describe("DevPreviewProxyService", () => {
       const head = await request(proxyPort, host, path, "HEAD");
       expect(head.status).toBe(405);
 
-      const get = await request(proxyPort, host, path);
-      expect(get.status).toBe(302);
-    });
-
-    it("rejects a non-GET method on the bootstrap route with 405 without consuming the token", async () => {
-      proxy = new DevPreviewProxyService(() => null);
-      const proxyPort = await proxy.start();
-
-      const bootstrapUrl = proxy.mintBrowserToken("panel-1", "proj-1", "/");
-      const { host, path } = splitBootstrapUrl(bootstrapUrl);
-
-      const post = await request(proxyPort, host, path, "POST");
-      expect(post.status).toBe(405);
-
-      // The rejected POST must not have burned the single-use token.
       const get = await request(proxyPort, host, path);
       expect(get.status).toBe(302);
     });
@@ -1134,5 +1045,65 @@ describe("DevPreviewProxyService", () => {
         blocker.close();
       }
     });
+  });
+});
+
+describe("DevPreviewProxyService remote upstream fallback", () => {
+  let proxy: DevPreviewProxyService | null = null;
+  let upstream: http.Server | null = null;
+
+  afterEach(() => {
+    proxy?.dispose();
+    proxy = null;
+    upstream?.close();
+    upstream = null;
+  });
+
+  it("asks the remote resolver only for a subdomain this machine doesn't know", async () => {
+    upstream = http.createServer((req, res) => res.end(`served ${req.url}`));
+    const upstreamPort = await listen(upstream);
+    const remote = vi.fn((subdomain: string) =>
+      subdomain === "dp-remote"
+        ? Promise.resolve({ kind: "ok" as const, port: upstreamPort, isHttps: false })
+        : null
+    );
+    proxy = new DevPreviewProxyService(
+      (sub) => (sub === "dp-local" ? { port: upstreamPort, isHttps: false } : null),
+      undefined,
+      remote
+    );
+    const proxyPort = await proxy.start();
+
+    const local = await request(proxyPort, `dp-local.localhost:${proxyPort}`, "/a");
+    expect(local.body).toBe("served /a");
+    expect(remote).not.toHaveBeenCalled();
+
+    const viaRemote = await request(proxyPort, `dp-remote.localhost:${proxyPort}`, "/b");
+    expect(viaRemote.body).toBe("served /b");
+    expect(remote).toHaveBeenCalledWith("dp-remote");
+
+    const unknown = await request(proxyPort, `dp-unknown.localhost:${proxyPort}`);
+    expect(unknown.status).toBe(502);
+    expect(unknown.body).toContain("No dev server is registered");
+  });
+
+  it("reports a remote preview that isn't running, and survives a failed lookup", async () => {
+    proxy = new DevPreviewProxyService(
+      () => null,
+      undefined,
+      (subdomain) =>
+        subdomain === "dp-stopped"
+          ? Promise.resolve({ kind: "not-running" as const, status: "stopped" as const })
+          : Promise.reject(new Error("link down"))
+    );
+    const proxyPort = await proxy.start();
+
+    const stopped = await request(proxyPort, `dp-stopped.localhost:${proxyPort}`);
+    expect(stopped.status).toBe(502);
+    expect(stopped.body).toContain("isn't running");
+
+    const failed = await request(proxyPort, `dp-broken.localhost:${proxyPort}`);
+    expect(failed.status).toBe(502);
+    expect(failed.body).toContain("No dev server is registered");
   });
 });

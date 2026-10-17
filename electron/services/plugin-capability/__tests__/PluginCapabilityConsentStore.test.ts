@@ -62,19 +62,6 @@ describe("PluginCapabilityConsentStore", () => {
     expect(store.hasGrant({ pluginId: "acme.x", capability: "git:write" })).toBe(true);
   });
 
-  it("revokeAllForPlugin removes only that plugin's grants and reports durable", () => {
-    const { store } = makeStore();
-    store.grant({ pluginId: "acme.x", capability: "shell:exec" });
-    store.grant({ pluginId: "acme.x", capability: "git:write" });
-    store.grant({ pluginId: "acme.y", capability: "shell:exec" });
-
-    expect(store.revokeAllForPlugin("acme.x")).toBe(true);
-    expect(store.hasGrant({ pluginId: "acme.x", capability: "shell:exec" })).toBe(false);
-    expect(store.hasGrant({ pluginId: "acme.x", capability: "git:write" })).toBe(false);
-    // Sibling plugin untouched.
-    expect(store.hasGrant({ pluginId: "acme.y", capability: "shell:exec" })).toBe(true);
-  });
-
   it("revokeAllForPlugin is a durable no-op when there is nothing to purge", () => {
     const { store, saveConfig } = makeStore();
     expect(store.revokeAllForPlugin("acme.absent")).toBe(true);

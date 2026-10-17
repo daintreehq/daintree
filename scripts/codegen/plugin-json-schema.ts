@@ -51,6 +51,7 @@ const UNENCODED_RULES = [
   "A panel view's id must equal the id of a declared panel. A location: \"settings\" view is the exception: at most one per plugin, with an id no panel uses. A surface's viewId must name a declared panel view whose panel is not a PTY panel.",
   "A panel's menu may name only this plugin's own actions (written \"<plugin name>.<id>\", matching a declared command when the plugin declares commands), each at most once, and a hasPty panel may not have menu entries.",
   'A "project" database needs "scope": "project" and the "fs:project-write" capability; path applies only to a "project" database.',
+  'A database query\'s sql must be one statement: for a "read" query, one SELECT, WITH or VALUES statement with no INSERT, UPDATE, DELETE or REPLACE; for a "write" query, one INSERT, REPLACE, UPDATE or DELETE statement, optionally after WITH. Its named placeholders must match its params exactly, and positional (?) placeholders are refused. Query names must be unique across all of a plugin\'s databases, may not be database_schema or database_query, and number at most 16 in all; with any tools the plugin registers, at most 16 together.',
   'A secret setting (type "secret" or secret: true) may not declare a default, since it would ship in plugin.json.',
   'Under project scope, menuItems, agents, skills, recipes, fileDecorationProviders, fileEditors, processTools, mcpServers, tours and forgeProviders are refused, and "scope": "project" is required.',
   "The reserved daintree.* publisher namespace is accepted only for built-in plugins.",

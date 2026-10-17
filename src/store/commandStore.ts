@@ -12,7 +12,15 @@ import { logError } from "@/utils/logger";
 interface CommandStore {
   // Picker state
   isPickerOpen: boolean;
-  openPicker: () => void;
+  /**
+   * The composer that opened the picker. Every agent pane mounts its own
+   * `CommandPickerHost` against this one store, so without an owner each of
+   * them opened a palette (and later a builder) at once, and a selection ran
+   * with whichever pane's context its palette belonged to. Kept through close:
+   * the builder that follows a selection belongs to the same composer.
+   */
+  pickerOwnerId: string | null;
+  openPicker: (ownerId?: string) => void;
   closePicker: () => void;
 
   // Builder state
@@ -37,6 +45,8 @@ interface CommandStore {
   // Cached commands
   commands: CommandManifestEntry[];
   isLoadingCommands: boolean;
+  /** Why the last list request failed; cleared when the next one starts. */
+  commandsLoadError: string | null;
   loadCommands: (context?: CommandContext) => Promise<void>;
 }
 
@@ -52,7 +62,8 @@ let loadGeneration = 0;
 export const useCommandStore = create<CommandStore>()((set, get) => ({
   // Picker state
   isPickerOpen: false,
-  openPicker: () => set({ isPickerOpen: true }),
+  pickerOwnerId: null,
+  openPicker: (ownerId) => set({ isPickerOpen: true, pickerOwnerId: ownerId ?? null }),
   closePicker: () => set({ isPickerOpen: false }),
 
   // Builder state
@@ -155,17 +166,19 @@ export const useCommandStore = create<CommandStore>()((set, get) => ({
   // Cached commands
   commands: [],
   isLoadingCommands: false,
+  commandsLoadError: null,
   loadCommands: async (context) => {
     const { isLoadingCommands } = get();
     if (isLoadingCommands) return;
 
-    set({ isLoadingCommands: true });
+    set({ isLoadingCommands: true, commandsLoadError: null });
 
     try {
       const commands = await commandsClient.list(context);
       set({ commands });
     } catch (error) {
       logError("Failed to load commands", error);
+      set({ commandsLoadError: formatErrorMessage(error, "Couldn't load commands") });
     } finally {
       set({ isLoadingCommands: false });
     }

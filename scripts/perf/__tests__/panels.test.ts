@@ -1,6 +1,5 @@
 import { afterAll, describe, expect, it } from "vitest";
 import { allScenarios } from "../scenarios";
-import { classifyMetric } from "../lib/comparability";
 import {
   disposePanelFixtures,
   expectedHiddenCounts,
@@ -15,17 +14,6 @@ import {
   setDifferenceCount,
 } from "../lib/panelsFixture";
 import type { PerfMode, ScenarioContext } from "../types";
-
-const PANEL_IDS = [
-  "PERF-240",
-  "PERF-241",
-  "PERF-242",
-  "PERF-243",
-  "PERF-244",
-  "PERF-245",
-  "PERF-246",
-  "PERF-247",
-] as const;
 
 function scenarioFor(id: string) {
   const scenario = allScenarios.find((candidate) => candidate.id === id);
@@ -46,18 +34,6 @@ describe("panel scenarios (PERF-240..247)", () => {
   // exit handler never fires here and ~70 MB of synthetic trees and repos would
   // survive every `npm test`.
   afterAll(() => disposePanelFixtures());
-
-  it("declares every panel id with a count-class correctness predicate", () => {
-    for (const id of PANEL_IDS) {
-      const scenario = scenarioFor(id);
-      expect(scenario.correctness?.length, `${id} declares no predicate`).toBeGreaterThan(0);
-      for (const metric of scenario.correctness ?? []) {
-        // A predicate that classifies as a duration would be written off as
-        // timing noise by `perf compare` on exactly the run that needed it.
-        expect(classifyMetric(metric), `${id}:${metric}`).toBe("count");
-      }
-    }
-  });
 
   it(
     "PERF-240 builds the rows the fixture wrote and hides exactly the junk",

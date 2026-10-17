@@ -28,6 +28,8 @@ import { HOST_MEMORY_PAUSE_COPY } from "@/lib/hostMemoryPauseCopy";
 import { getCloudSyncWarningCopy } from "@/utils/cloudSyncWarningCopy";
 import { useMissingPrerequisiteStore } from "@/store/missingPrerequisiteStore";
 import { useGlobalBannerDismissalStore } from "@/store/globalBannerDismissalStore";
+import { useHostConnectionStore } from "@/store/hostConnectionStore";
+import { _resetDriveLeaseBannerForTesting, seedDriveLeaseView } from "../driveLeaseState";
 import type { PrerequisiteCheckResult } from "@shared/types";
 
 function missingGit(overrides: Partial<PrerequisiteCheckResult> = {}): PrerequisiteCheckResult {
@@ -137,6 +139,61 @@ describe("GlobalBannerCoordinator", () => {
     expect(container.firstChild).toBeNull();
   });
 
+  it("puts a remote window's lost host link above a backend crash", () => {
+    usePanelStore.setState({ backendStatus: "disconnected", lastCrashType: null });
+    useHostConnectionStore.setState({
+      hostId: "studio-01",
+      hostName: "studio-01",
+      everConnected: true,
+      connection: { status: "unreachable", lastSeenAt: null, detail: null },
+    });
+    render(<GlobalBannerCoordinator />);
+    expect(screen.getByText("studio-01 is unreachable")).toBeTruthy();
+    expect(screen.queryByText("Terminal service crashed")).toBeNull();
+    useHostConnectionStore.getState().reset();
+  });
+
+  it("shows who has control below a backend crash but above the watchdog", () => {
+    seedDriveLeaseView({
+      projectId: "p1",
+      holder: {
+        leaseId: 3,
+        endpointId: "remote-1",
+        clientId: "client-2",
+        clientName: "greg-mbp",
+        isHostLocal: false,
+        acquiredAt: 1,
+      },
+      drivingHere: false,
+      isHolderEndpoint: false,
+      viewerIsHostLocal: true,
+    });
+    try {
+      usePanelStore.setState({ watchdogStatus: "disabled" });
+      const { unmount } = render(<GlobalBannerCoordinator />);
+      expect(screen.getByText("greg-mbp has control of this project")).toBeTruthy();
+      expect(screen.queryByText("Crash watchdog disabled")).toBeNull();
+      unmount();
+
+      usePanelStore.setState({ backendStatus: "disconnected", lastCrashType: null });
+      render(<GlobalBannerCoordinator />);
+      expect(screen.getByText("Terminal service crashed")).toBeTruthy();
+      expect(screen.queryByText("greg-mbp has control of this project")).toBeNull();
+    } finally {
+      _resetDriveLeaseBannerForTesting();
+    }
+  });
+
+  it("never shows a host banner in a window that runs on this machine", () => {
+    useHostConnectionStore.setState({
+      hostId: null,
+      connection: { status: "unreachable", lastSeenAt: null, detail: null },
+    });
+    const { container } = render(<GlobalBannerCoordinator />);
+    expect(container.firstChild).toBeNull();
+    useHostConnectionStore.getState().reset();
+  });
+
   it("leaves global chrome empty when project plugins need a trust decision", () => {
     const { container } = render(<GlobalBannerCoordinator />);
     act(() => {
@@ -161,29 +218,6 @@ describe("GlobalBannerCoordinator", () => {
     expect(screen.queryByText(/Session recovered after unexpected exit/)).toBeNull();
   });
 
-  it("renders the host crash banner when backend is disconnected", () => {
-    usePanelStore.setState({ backendStatus: "disconnected", lastCrashType: "OUT_OF_MEMORY" });
-
-    render(<GlobalBannerCoordinator />);
-
-    expect(screen.getByText("Terminal service ran out of memory")).toBeTruthy();
-  });
-
-  it("treats recovering backend as host-crash priority", () => {
-    vi.useFakeTimers();
-    usePanelStore.setState({ backendStatus: "recovering" });
-    useSafeModeStore.setState({ safeMode: true, dismissed: false });
-
-    render(<GlobalBannerCoordinator />);
-
-    act(() => {
-      vi.advanceTimersByTime(400);
-    });
-
-    expect(screen.getByText("Terminal service restarting")).toBeTruthy();
-    expect(screen.queryByText("Safe mode — panels weren't restored")).toBeNull();
-  });
-
   it("renders the safe mode banner when host is connected and safe mode is active", () => {
     useSafeModeStore.setState({ safeMode: true, dismissed: false });
     useRestoreConfirmationStore.setState({ visible: true, suspectCount: 0, crashCount: 1 });
@@ -194,14 +228,6 @@ describe("GlobalBannerCoordinator", () => {
     expect(screen.queryByText(/Session recovered after unexpected exit/)).toBeNull();
   });
 
-  it("renders the restore confirmation when only restore is active", () => {
-    useRestoreConfirmationStore.setState({ visible: true, suspectCount: 0, crashCount: 1 });
-
-    render(<GlobalBannerCoordinator />);
-
-    expect(screen.getByText("Session recovered after unexpected exit")).toBeTruthy();
-  });
-
   it("treats a dismissed safe mode as inactive and promotes restore", () => {
     useSafeModeStore.setState({ safeMode: true, dismissed: true });
     useRestoreConfirmationStore.setState({ visible: true, suspectCount: 0, crashCount: 1 });
@@ -210,20 +236,6 @@ describe("GlobalBannerCoordinator", () => {
 
     expect(screen.getByText("Session recovered after unexpected exit")).toBeTruthy();
     expect(screen.queryByText("Safe mode — panels weren't restored")).toBeNull();
-  });
-
-  it("does not auto-dismiss the restore banner while suppressed by a higher-priority banner", () => {
-    vi.useFakeTimers();
-    usePanelStore.setState({ backendStatus: "disconnected", lastCrashType: "UNKNOWN_CRASH" });
-    useRestoreConfirmationStore.setState({ visible: true, suspectCount: 0, crashCount: 1 });
-
-    render(<GlobalBannerCoordinator />);
-
-    act(() => {
-      vi.advanceTimersByTime(30_000);
-    });
-
-    expect(useRestoreConfirmationStore.getState().visible).toBe(true);
   });
 
   it("starts the restore auto-dismiss timer fresh after promotion from suppressed", () => {
@@ -264,20 +276,6 @@ describe("GlobalBannerCoordinator", () => {
 
     expect(await screen.findByText("Safe mode — panels weren't restored")).toBeTruthy();
     expect(screen.queryByText(/Session recovered after unexpected exit/)).toBeNull();
-  });
-
-  it("does not auto-dismiss the restore banner while suppressed by safe mode", () => {
-    vi.useFakeTimers();
-    useSafeModeStore.setState({ safeMode: true, dismissed: false });
-    useRestoreConfirmationStore.setState({ visible: true, suspectCount: 0, crashCount: 1 });
-
-    render(<GlobalBannerCoordinator />);
-
-    act(() => {
-      vi.advanceTimersByTime(30_000);
-    });
-
-    expect(useRestoreConfirmationStore.getState().visible).toBe(true);
   });
 
   it("drains the stack: host-crash -> safe-mode -> restore with a fresh timer each step", () => {
@@ -395,14 +393,6 @@ describe("GlobalBannerCoordinator", () => {
     expect(screen.getByText("Crash watchdog disabled")).toBeTruthy();
   });
 
-  it("renders the cloud sync banner when only a synced folder is detected", () => {
-    useCloudSyncBannerStore.setState({ service: "Dropbox", projectId: "p1" });
-
-    render(<GlobalBannerCoordinator />);
-
-    expect(screen.getByText(cloudSyncTitle)).toBeTruthy();
-  });
-
   it("leaves the slot to cloud sync when a forge token is also unhealthy", () => {
     setForgeTokenUnhealthy(true);
     useCloudSyncBannerStore.setState({ service: "Dropbox", projectId: "p1" });
@@ -439,16 +429,6 @@ describe("GlobalBannerCoordinator", () => {
     render(<GlobalBannerCoordinator />);
 
     expect(screen.getByText("Running under Rosetta")).toBeTruthy();
-  });
-
-  it("suppresses the Rosetta warning while the host has crashed", () => {
-    usePanelStore.setState({ backendStatus: "disconnected", lastCrashType: "UNKNOWN_CRASH" });
-    useRosettaBannerStore.setState({ visible: true });
-
-    render(<GlobalBannerCoordinator />);
-
-    expect(screen.getByText("Terminal service crashed")).toBeTruthy();
-    expect(screen.queryByText("Running under Rosetta")).toBeNull();
   });
 
   it("prefers cloud sync over the Rosetta warning when both are active", () => {

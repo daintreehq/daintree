@@ -46,6 +46,7 @@ import { isPtyPanel } from "@shared/types/panel";
 import { terminalClient } from "@/clients";
 import { createFocusFollowBreaker } from "./focusFollowBreaker";
 import { subscribeFocusedPanelReporter } from "./focusedPanelReporter";
+import { initAgentDefaultsSync } from "@/services/agentDefaultsSync";
 import { isProjectViewCached, subscribeProjectViewLifecycle } from "@/lib/viewCacheState";
 
 // Thunk form: read the live mruList at fire time, not at schedule time. A
@@ -660,6 +661,9 @@ export function initStoreOrchestrator(): () => void {
   // Focused panel kind for `host.onDidChangeFocusedPanel` (#13221). Main
   // combines it with window and Portal focus, which it observes itself.
   disposables.add(toDisposable(subscribeFocusedPanelReporter()));
+
+  // The host's assistant agent and default terminal agent (#13345).
+  disposables.add(toDisposable(initAgentDefaultsSync()));
 
   cleanupFn = () => {
     disposables.dispose();

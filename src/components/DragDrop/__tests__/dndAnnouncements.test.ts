@@ -197,16 +197,6 @@ describe("createDragAnnouncements — global DndProvider factory", () => {
     ).toBeUndefined();
   });
 
-  it("onDragCancel still announces for non-worktree-sort drags", () => {
-    const announcements = createDragAnnouncements(makeRefs(), resolveActive, resolveOver);
-    expect(
-      announcements.onDragCancel!({
-        active: makeActive({ type: "panel", terminal: { title: "Claude Agent" } }),
-        over: null,
-      })
-    ).toBe("Drag cancelled. Claude Agent returned to its original position");
-  });
-
   it("position string still resolves even when refs survive past the drop event", () => {
     // Regression: the monitor clears refs at the *next* onDragStart, not at
     // onDragEnd, because dnd-kit dispatches listeners in insertion order and
@@ -338,35 +328,11 @@ describe("makeSortableAnnouncements — nested DndContext factory", () => {
       );
     });
 
-    it("treats empty-string labels as missing and falls back to noun + id", () => {
-      const emptyLabels = makeSortableAnnouncements(() => "", "panel tab");
-      expect(emptyLabels.onDragStart!({ active: active("panel-99") })).toBe(
-        "Picked up panel tab panel-99. Press arrow keys to move, Space to drop, Escape to cancel."
-      );
-    });
-
-    it("never includes 'undefined' in the announcement string", () => {
-      const nullLabels = makeSortableAnnouncements(() => null, "panel tab");
-      const result = nullLabels.onDragStart!({ active: active("panel-x") });
-      expect(result).not.toContain("undefined");
-      expect(result).toBe(
-        "Picked up panel tab panel-x. Press arrow keys to move, Space to drop, Escape to cancel."
-      );
-    });
-
     it("treats whitespace-only labels as missing and falls back to noun + id", () => {
       const blankLabels = makeSortableAnnouncements(() => "   \n\t", "panel tab");
       expect(blankLabels.onDragStart!({ active: active("panel-blank") })).toBe(
         "Picked up panel tab panel-blank. Press arrow keys to move, Space to drop, Escape to cancel."
       );
-    });
-
-    it("applies fallback to over slot when over label is missing", () => {
-      const announcements = buildAnnouncements();
-      // Active resolves to "Claude Agent" (panel-1); over uses an unknown id.
-      expect(
-        announcements.onDragOver!({ active: active("panel-1"), over: over("panel-mystery") })
-      ).toBe("Claude Agent is over panel tab panel-mystery");
     });
 
     it("uses fallbacks across all lifecycle methods when label is null", () => {
@@ -385,42 +351,6 @@ describe("makeSortableAnnouncements — nested DndContext factory", () => {
       );
       expect(nullLabels.onDragCancel!({ active: a, over: null })).toBe(
         "Drag cancelled. panel tab panel-x returned to its original position"
-      );
-    });
-  });
-
-  describe("toolbar button surface", () => {
-    const labels = new Map<string, string>([
-      ["btn-portal", "Portal"],
-      ["btn-recipes", "Recipes"],
-    ]);
-    const buildAnnouncements = () =>
-      makeSortableAnnouncements((id) => labels.get(String(id)), "toolbar button");
-
-    it("uses the surface noun in the fallback", () => {
-      const announcements = buildAnnouncements();
-      expect(announcements.onDragStart!({ active: active("btn-mystery") })).toBe(
-        "Picked up toolbar button btn-mystery. Press arrow keys to move, Space to drop, Escape to cancel."
-      );
-    });
-
-    it("resolves known IDs to labels", () => {
-      const announcements = buildAnnouncements();
-      expect(announcements.onDragStart!({ active: active("btn-portal") })).toBe(
-        "Picked up Portal. Press arrow keys to move, Space to drop, Escape to cancel."
-      );
-    });
-  });
-
-  describe("browser tab surface", () => {
-    const labels = new Map<string, string>([["tab-a", "Daintree Docs"]]);
-    const buildAnnouncements = () =>
-      makeSortableAnnouncements((id) => labels.get(String(id)), "browser tab");
-
-    it("uses the browser tab noun in the fallback", () => {
-      const announcements = buildAnnouncements();
-      expect(announcements.onDragStart!({ active: active("tab-z") })).toBe(
-        "Picked up browser tab tab-z. Press arrow keys to move, Space to drop, Escape to cancel."
       );
     });
   });

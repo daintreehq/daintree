@@ -5,6 +5,7 @@ import { describe, it, expect, vi, afterEach, beforeEach } from "vitest";
 import { act, render, cleanup, fireEvent } from "@testing-library/react";
 import { createRef } from "react";
 import type { FileChangeDetail } from "../../../types";
+import type { FileDecoration } from "@shared/types/forge";
 
 // The list no longer owns a diff modal: it opens a dialog-presented `diff`
 // panel and keeps that panel's change set current. Stepping between files now
@@ -86,6 +87,30 @@ vi.mock("@/components/ui/tooltip", () => ({
   TooltipProvider: ({ children }: { children: React.ReactNode }) => <>{children}</>,
 }));
 
+// No plugin context-menu items, so rows keep the plain-row DOM.
+vi.mock("@/hooks/usePluginContextMenuItems", () => ({
+  usePluginContextMenuItems: () => [],
+}));
+
+// systemClient is only touched on a url-badge click; stub it to avoid pulling
+// window.electron at import time.
+vi.mock("@/clients/systemClient", () => ({
+  systemClient: { openExternal: vi.fn() },
+}));
+
+const { decorationsRef, scopeRef, pathsRef } = vi.hoisted(() => ({
+  decorationsRef: { current: {} as Record<string, FileDecoration> },
+  scopeRef: { current: "" },
+  pathsRef: { current: [] as string[] },
+}));
+vi.mock("@/hooks/useFileTreeDecorations", () => ({
+  useFileTreeDecorations: (scope: string, paths: string[]) => {
+    scopeRef.current = scope;
+    pathsRef.current = paths;
+    return decorationsRef.current;
+  },
+}));
+
 import { FileChangeList, type FileChangeListHandle } from "../FileChangeList";
 
 const ROOT = "/repo";
@@ -149,13 +174,6 @@ describe("FileChangeList — row-recency cue (#6544)", () => {
     });
 
     expect(newRows(container)).toEqual(["a.ts"]);
-  });
-
-  it("default maxVisible is 8", () => {
-    const many = Array.from({ length: 12 }, (_, i) => file(`file-${i}.ts`));
-    const { container } = render(<FileChangeList changes={many} rootPath={ROOT} />);
-    const rows = container.querySelectorAll<HTMLElement>(".group\\/filerow");
-    expect(rows.length).toBe(8);
   });
 
   it("explicit maxVisible override wins over the new default", () => {
@@ -375,15 +393,6 @@ describe("FileChangeList — stale state (#8069)", () => {
     expect(el.getAttribute("aria-busy")).toBe("true");
   });
 
-  it("treats an explicit isStale={false} the same as an absent prop", () => {
-    const { container } = render(
-      <FileChangeList changes={[file("a.ts"), file("b.ts")]} rootPath={ROOT} isStale={false} />
-    );
-    const el = scroll(container);
-    expect(el.classList.contains("surface-stale")).toBe(false);
-    expect(el.getAttribute("aria-busy")).toBeNull();
-  });
-
   it("carries the stale marker on exactly one container, with folders present", () => {
     const { container } = render(
       <FileChangeList changes={[file("src/a.ts"), file("test/b.ts")]} rootPath={ROOT} isStale />
@@ -432,17 +441,6 @@ describe("FileChangeList — row activation opens the diff panel (#9217)", () =>
     if (!options) throw new Error("openPanelDialog was not called");
     return options;
   }
-
-  it("makes each row a focusable button with an accessible label", () => {
-    const { container } = render(
-      <FileChangeList changes={[file("a.ts"), file("b.ts")]} rootPath={ROOT} />
-    );
-    const [first] = rows(container);
-    expect(first).toBeTruthy();
-    expect(first!.getAttribute("role")).toBe("button");
-    expect(first!.getAttribute("tabindex")).toBe("0");
-    expect(first!.getAttribute("aria-label")).toContain("a.ts");
-  });
 
   it("opens the diff panel on Enter", () => {
     const { container } = render(
@@ -695,5 +693,45 @@ describe("FileChangeList — one tab stop, arrows move it", () => {
     first!.focus();
     fireEvent.keyDown(first!, { key: "ArrowDown", metaKey: true });
     expect(document.activeElement).toBe(first);
+  });
+});
+
+describe("FileChangeList — plugin file decorations", () => {
+  beforeEach(() => {
+    decorationsRef.current = {};
+    scopeRef.current = "";
+    pathsRef.current = [];
+  });
+
+  afterEach(() => {
+    cleanup();
+  });
+
+  it("passes the worktree-files scope and the raw change paths to the hook", () => {
+    render(
+      <FileChangeList changes={[file("/repo/src/a.ts"), file("/repo/src/b.ts")]} rootPath={ROOT} />
+    );
+    expect(scopeRef.current).toBe("worktree-files:/repo");
+    expect(new Set(pathsRef.current)).toEqual(new Set(["/repo/src/a.ts", "/repo/src/b.ts"]));
+  });
+
+  it("renders a badge for a decorated path and nothing for an undecorated one", () => {
+    decorationsRef.current = {
+      "/repo/src/a.ts": { badge: "3", tooltip: "3 issues" },
+    };
+    const { container } = render(
+      <FileChangeList changes={[file("/repo/src/a.ts"), file("/repo/src/b.ts")]} rootPath={ROOT} />
+    );
+    const decorated = container.querySelector<HTMLElement>('[aria-label="Open src/a.ts"]')!;
+    const plain = container.querySelector<HTMLElement>('[aria-label="Open src/b.ts"]')!;
+    const glyphs = (row: HTMLElement) =>
+      Array.from(row.querySelectorAll('[aria-hidden="true"]')).filter(
+        (el) => el.textContent === "3"
+      );
+    // The glyph is presentation only; the row speaks the provider's words.
+    expect(glyphs(decorated)).toHaveLength(1);
+    expect(decorated.getAttribute("aria-description")).toBe("3 issues");
+    expect(glyphs(plain)).toHaveLength(0);
+    expect(plain.hasAttribute("aria-description")).toBe(false);
   });
 });

@@ -50,7 +50,7 @@ import {
   DropdownMenuSubContent,
   DropdownMenuSubTrigger,
   DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu";
+} from "@/components/ui/dropdown-menu-base";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { useFieldControl } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";

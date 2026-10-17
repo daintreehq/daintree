@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import fs from "fs";
 import path from "path";
+import { readToolbarCss } from "@/__tests__/support/cssManifest";
 
 // One press for every toolbar control: no change of size, a fill that lands on
 // the first frame of the press and eases back on release, and on light themes a
@@ -8,10 +9,7 @@ import path from "path";
 // across every control class at once, so a control added to the list inherits
 // them and a control that drifts from them fails by name.
 
-const CSS = fs.readFileSync(
-  path.resolve(__dirname, "../../../styles/components/toolbar.css"),
-  "utf-8"
-);
+const CSS = readToolbarCss();
 const PILL_SOURCE = fs.readFileSync(path.resolve(__dirname, "../ForgeStatPill.tsx"), "utf-8");
 
 const CONTROLS = [

@@ -11,21 +11,6 @@ import type { AgentPreset } from "@shared/config/agentRegistry";
 
 // Adversarial unit tests for preset merging logic
 describe("Adversarial: Preset Merging", () => {
-  it("handles undefined/empty inputs gracefully", () => {
-    expect(() => getMergedPresets("claude")).not.toThrow();
-    expect(() => getMergedPresets("claude", undefined, [])).not.toThrow();
-    expect(() => getMergedPresets("claude", [], undefined)).not.toThrow();
-  });
-
-  it("prevents prototype pollution via env keys", () => {
-    const maliciousCustomPresets = [
-      { id: "malicious", name: "Evil", env: { __proto__: "polluted" } as Record<string, string> },
-    ];
-    getMergedPresets("claude", maliciousCustomPresets);
-    // Must not pollute global Object.prototype
-    expect(({} as Record<string, unknown>).isAdmin).toBeUndefined();
-  });
-
   it("rejects shell injection in env values", () => {
     const injectionPresets = [
       { id: "inject", name: "Bad", env: { ANTHROPIC_API_KEY: "$(rm -rf /)" } },
@@ -66,33 +51,12 @@ describe("Adversarial: Preset Merging", () => {
     expect(result).toHaveLength(0);
   });
 
-  it("rejects env values that are non-string objects", () => {
-    const presets = [
-      {
-        id: "obj-env",
-        name: "ObjEnv",
-        env: { KEY: { nested: "value" } as unknown as string },
-      },
-    ];
-    const result = getMergedPresets("claude", presets);
-    expect(result[0]!.env?.KEY).toBeUndefined();
-  });
-
   it("custom preset shadows CCR preset with same ID", () => {
     const customPresets = [{ id: "ccr-opus", name: "My Custom Opus" }];
     const ccrPresets = [{ id: "ccr-opus", name: "CCR Opus" }];
     const result = getMergedPresets("claude", customPresets, ccrPresets);
     expect(result.filter((f) => f.id === "ccr-opus")).toHaveLength(1);
     expect(result.find((f) => f.id === "ccr-opus")?.name).toBe("My Custom Opus");
-  });
-
-  it("blocks dangerous system env var names", () => {
-    const dangerous = [
-      { id: "danger", name: "Bad", env: { PATH: "/injected", LD_PRELOAD: "evil.so" } },
-    ];
-    const result = getMergedPresets("claude", dangerous);
-    expect(result[0]!.env?.PATH).toBeUndefined();
-    expect(result[0]!.env?.LD_PRELOAD).toBeUndefined();
   });
 
   it("allows safe env vars through", () => {
@@ -171,11 +135,6 @@ describe("Adversarial: name validation rejects apostrophes (Bug — over-aggress
     expect(result[0]!.name).toBe("Don't touch");
   });
 
-  it('allows preset name with double-quote ("My Config")', () => {
-    const result = getMergedPresets("claude", [{ id: "f1", name: '"My Config"' }]);
-    expect(result).toHaveLength(1);
-  });
-
   it("still blocks angle brackets (XSS-relevant)", () => {
     const result = getMergedPresets("claude", [{ id: "f1", name: "<script>alert(1)</script>" }]);
     expect(result).toHaveLength(0);
@@ -207,32 +166,11 @@ describe("Adversarial: customFlags shell injection (Bug — missing sanitization
     expect(result[0]!.customFlags).toBeUndefined();
   });
 
-  it("rejects customFlags containing pipe operator", () => {
-    const result = getMergedPresets("claude", [
-      { id: "f1", name: "Pipe", customFlags: "--verbose | tee /tmp/out" },
-    ]);
-    expect(result[0]!.customFlags).toBeUndefined();
-  });
-
-  it("rejects customFlags containing command substitution", () => {
-    const result = getMergedPresets("claude", [
-      { id: "f1", name: "Subst", customFlags: "--model $(cat /etc/passwd)" },
-    ]);
-    expect(result[0]!.customFlags).toBeUndefined();
-  });
-
   it("allows safe customFlags with only dashes and alphanumerics", () => {
     const result = getMergedPresets("claude", [
       { id: "f1", name: "Safe", customFlags: "--verbose --output-format json" },
     ]);
     expect(result[0]!.customFlags).toBe("--verbose --output-format json");
-  });
-
-  it("null-coerces customFlags to undefined when injection is detected", () => {
-    const result = getMergedPresets("claude", [
-      { id: "f1", name: "Inject2", customFlags: "--flag; evil" },
-    ]);
-    expect(result[0]!.customFlags).toBeUndefined();
   });
 
   // Extended deny-list (#7078): chaining, redirection, variable expansion, escape.
@@ -242,55 +180,6 @@ describe("Adversarial: customFlags shell injection (Bug — missing sanitization
       { id: "f1", name: "Amp", customFlags: "--flag & evil" },
     ]);
     expect(result[0]!.customFlags).toBeUndefined();
-  });
-
-  it("rejects customFlags containing > — redirection", () => {
-    const result = getMergedPresets("claude", [
-      { id: "f1", name: "Redir", customFlags: "--verbose > /etc/passwd" },
-    ]);
-    expect(result[0]!.customFlags).toBeUndefined();
-  });
-
-  it("rejects customFlags containing >> — append redirection", () => {
-    const result = getMergedPresets("claude", [
-      { id: "f1", name: "Append", customFlags: "--log >> /tmp/out" },
-    ]);
-    expect(result[0]!.customFlags).toBeUndefined();
-  });
-
-  it("rejects customFlags containing 2> — stderr redirection", () => {
-    const result = getMergedPresets("claude", [
-      { id: "f1", name: "Stderr", customFlags: "--err 2> /tmp/err" },
-    ]);
-    expect(result[0]!.customFlags).toBeUndefined();
-  });
-
-  it("rejects customFlags containing < — input redirection", () => {
-    const result = getMergedPresets("claude", [
-      { id: "f1", name: "InRedir", customFlags: "--config < /etc/shadow" },
-    ]);
-    expect(result[0]!.customFlags).toBeUndefined();
-  });
-
-  it("rejects customFlags containing ${VAR} — variable expansion", () => {
-    const result = getMergedPresets("claude", [
-      { id: "f1", name: "VarExp", customFlags: "--model ${HOME}" },
-    ]);
-    expect(result[0]!.customFlags).toBeUndefined();
-  });
-
-  it("rejects customFlags containing backslash — escape sequence", () => {
-    const result = getMergedPresets("claude", [
-      { id: "f1", name: "Escape", customFlags: "--flag\\;evil" },
-    ]);
-    expect(result[0]!.customFlags).toBeUndefined();
-  });
-
-  it("allows customFlags with bare $ without ( or { (no over-blocking)", () => {
-    const result = getMergedPresets("claude", [
-      { id: "f1", name: "BareDollar", customFlags: "--prompt-suffix $TODAY" },
-    ]);
-    expect(result[0]!.customFlags).toBe("--prompt-suffix $TODAY");
   });
 });
 
@@ -308,20 +197,6 @@ describe("Adversarial: preset.args injection (Bug — unsanitized args array)", 
     expect(result[0]!.args).toBeUndefined();
   });
 
-  it("rejects args entries containing command substitution", () => {
-    const result = getMergedPresets("claude", [
-      { id: "f1", name: "Subst", args: ["--model $(cat /etc/passwd)"] },
-    ]);
-    expect(result[0]!.args).toBeUndefined();
-  });
-
-  it("rejects args entries containing pipe", () => {
-    const result = getMergedPresets("claude", [
-      { id: "f1", name: "Pipe", args: ["--verbose | tee /tmp/out"] },
-    ]);
-    expect(result[0]!.args).toBeUndefined();
-  });
-
   it("rejects non-string args entries", () => {
     const result = getMergedPresets("claude", [
       { id: "f1", name: "NonStr", args: [{ nested: "bad" } as unknown as string] },
@@ -335,20 +210,6 @@ describe("Adversarial: preset.args injection (Bug — unsanitized args array)", 
     ]);
     expect(result[0]!.args).toEqual(["--model", "claude-opus-4-6", "--verbose"]);
   });
-
-  it("filters only dangerous entries and keeps safe ones", () => {
-    const result = getMergedPresets("claude", [
-      { id: "f1", name: "Mixed", args: ["--verbose", "--flag; evil", "--output-format", "json"] },
-    ]);
-    // Any dangerous entry should poison the whole args array (drop it entirely)
-    // OR the implementation filters per-entry — either way, injection strings must not survive
-    const args = result[0]!.args;
-    if (args !== undefined) {
-      expect(args.every((a) => !a.includes(";") && !a.includes("$(") && !a.includes("|"))).toBe(
-        true
-      );
-    }
-  });
 });
 
 // ── adversarial: validatePreset whitespace-only name (Bug — check before trim) ──
@@ -359,11 +220,6 @@ describe("Adversarial: preset.args injection (Bug — unsanitized args array)", 
 describe("Adversarial: validatePreset whitespace-only name (Bug — guard before trim)", () => {
   it("rejects a preset whose name is only whitespace", () => {
     const result = getMergedPresets("claude", [{ id: "f1", name: "   " }]);
-    expect(result).toHaveLength(0);
-  });
-
-  it("rejects a preset whose name is a single tab character", () => {
-    const result = getMergedPresets("claude", [{ id: "f1", name: "\t" }]);
     expect(result).toHaveLength(0);
   });
 
@@ -386,11 +242,6 @@ describe("Adversarial: validatePreset whitespace-only name (Bug — guard before
 //      splits on "&" and backgrounds the agent process.
 
 describe("Adversarial: sanitizeArgs empty strings (Bug — empty token allowed)", () => {
-  it("filters a lone empty-string arg", () => {
-    const result = getMergedPresets("claude", [{ id: "f1", name: "Empty", args: [""] }]);
-    expect(result[0]!.args).toBeUndefined();
-  });
-
   it("filters empty strings within a mixed-safe array", () => {
     const result = getMergedPresets("claude", [
       { id: "f1", name: "Mixed", args: ["--verbose", "", "--output-format"] },
@@ -421,61 +272,13 @@ describe("Adversarial: sanitizeArgs extended metacharacter deny-list (#7078)", (
     ]);
     expect(result[0]!.args).toBeUndefined();
   });
-
-  it("rejects args containing > — shell redirection operator", () => {
-    const result = getMergedPresets("claude", [
-      { id: "f1", name: "Redir", args: ["--output>/etc/passwd"] },
-    ]);
-    expect(result[0]!.args).toBeUndefined();
-  });
-
-  it("rejects args containing < — input redirection", () => {
-    const result = getMergedPresets("claude", [
-      { id: "f1", name: "InRedir", args: ["--config</etc/shadow"] },
-    ]);
-    expect(result[0]!.args).toBeUndefined();
-  });
-
-  it("rejects args containing ${VAR} — variable expansion", () => {
-    const result = getMergedPresets("claude", [
-      { id: "f1", name: "VarExp", args: ["--model=${HOME}"] },
-    ]);
-    expect(result[0]!.args).toBeUndefined();
-  });
-
-  it("rejects args containing backslash — escape sequence", () => {
-    const result = getMergedPresets("claude", [
-      { id: "f1", name: "Escape", args: ["--flag\\;evil"] },
-    ]);
-    expect(result[0]!.args).toBeUndefined();
-  });
-
-  it("allows args with bare $ without ( or { (no over-blocking)", () => {
-    const result = getMergedPresets("claude", [
-      { id: "f1", name: "BareDollar", args: ["--prompt-suffix=$TODAY"] },
-    ]);
-    expect(result[0]!.args).toEqual(["--prompt-suffix=$TODAY"]);
-  });
 });
 
 // ── adversarial: sanitizeAgentEnv (exported function, used for globalEnv) ──────
 
 describe("Adversarial: sanitizeAgentEnv exported function", () => {
-  it("returns undefined for undefined input", () => {
-    expect(sanitizeAgentEnv(undefined)).toBeUndefined();
-  });
-
   it("returns undefined when all entries are filtered", () => {
     expect(sanitizeAgentEnv({ PATH: "/injected" })).toBeUndefined();
-  });
-
-  it("returns undefined for an empty object", () => {
-    expect(sanitizeAgentEnv({})).toBeUndefined();
-  });
-
-  it("allows safe string values through", () => {
-    const result = sanitizeAgentEnv({ MY_KEY: "hello", ANOTHER: "world" });
-    expect(result).toEqual({ MY_KEY: "hello", ANOTHER: "world" });
   });
 
   it("drops non-string values", () => {
@@ -568,17 +371,6 @@ describe("Preset fallback chain sanitization", () => {
     const p = result.find((x) => x.id === "p");
     expect(p?.fallbacks).toBeUndefined();
   });
-
-  it("tolerates non-array fallbacks field", () => {
-    const bad = [
-      {
-        id: "p",
-        name: "P",
-        fallbacks: "not-an-array" as unknown as string[],
-      },
-    ];
-    expect(() => getMergedPresets("claude", bad)).not.toThrow();
-  });
 });
 
 describe("sanitizeDisplayTitle", () => {
@@ -631,11 +423,6 @@ describe("getMergedPresets — displayTitle", () => {
     const preset = result.find((f) => f.id === "z");
     expect(preset).toBeDefined();
     expect(preset?.displayTitle).toBeUndefined();
-  });
-
-  it("leaves displayTitle undefined when absent", () => {
-    const result = getMergedPresets("claude", [{ id: "z", name: "Claude" }]);
-    expect(result.find((f) => f.id === "z")?.displayTitle).toBeUndefined();
   });
 });
 

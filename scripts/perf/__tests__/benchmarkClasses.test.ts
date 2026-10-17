@@ -69,13 +69,4 @@ describe("benchmark classes", () => {
     expect(description).toContain("transport stubbed");
     expect(description.includes("\n")).toBe(false);
   });
-
-  it("keeps the families that were reclassified on evidence", () => {
-    // These three are the reclassifications this table was built for, and each
-    // is documented in scripts/perf/README.md. A silent upgrade back to
-    // `mechanism` would restore the exact overstatement being corrected.
-    expect(classifyBenchmark("PERF-077")!.kind).toBe("diagnostic");
-    expect(classifyBenchmark("PERF-196")!.kind).toBe("diagnostic");
-    expect(classifyBenchmark("PERF-035")!.kind).toBe("diagnostic");
-  });
 });

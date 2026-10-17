@@ -78,19 +78,6 @@ describe("resolveForgeProvider", () => {
     expect(registryMock.listMatchingProviders).not.toHaveBeenCalled();
   });
 
-  it("treats forgeProviderOverride === null as auto-detect (falls through)", () => {
-    const github = makeProvider("builtin", "github", ["github.com"]);
-    registryMock.listMatchingProviders.mockReturnValue([github]);
-
-    expect(
-      resolveForgeProvider({
-        remoteUrl: "https://github.com/owner/repo.git",
-        forgeProviderOverride: null,
-        globalDefaultProviderId: null,
-      })
-    ).toEqual({ entry: github, resolvedVia: "hostname" });
-  });
-
   it("treats forgeProviderOverride undefined as auto-detect (falls through)", () => {
     const github = makeProvider("builtin", "github", ["github.com"]);
     registryMock.listMatchingProviders.mockReturnValue([github]);

@@ -6,6 +6,7 @@ import {
   TerminalStatusResultSchema,
   TerminalSendCommandResultSchema,
   TerminalLastMessageResultSchema,
+  PanelLimitSnapshotSchema,
 } from "./schemas";
 import { readTailSnapshot, tailCapturedOutput } from "@shared/utils/artifactParser";
 import {
@@ -42,9 +43,11 @@ import {
   WAIT_UNTIL_IDLE_BATCH_OUTPUT_SCHEMA,
 } from "@shared/types/terminalWaitUntilIdle";
 import {
+  countPanelsTowardLimit,
   isEphemeralPanel,
   isClientMetadataEligible,
 } from "@/store/slices/panelRegistry/panelCount";
+import { buildPanelLimitSnapshot, usePanelLimitStore } from "@/store/panelLimitStore";
 import { readClientMetadata } from "@shared/utils/mcpClientMetadata";
 import { appendHandbackInstruction, mintHandbackCode } from "@shared/utils/handback";
 import { NOTIFY_ARG_DESCRIPTION, NotifyReplyLinesSchema } from "@shared/types/terminalNotify";
@@ -53,6 +56,7 @@ import {
   TerminalCloseManyArgsSchema,
   TerminalSendCommandManyArgsSchema,
 } from "@shared/types/mcpBatch";
+import { buildTerminalSendCommandReceipt } from "@shared/utils/terminalSendCommandResult";
 import { isAgentTerminal } from "@/utils/terminalType";
 import { UnactionableTargetError } from "@/services/actions/unactionableTarget";
 
@@ -74,16 +78,6 @@ const HANDBACK_ARG_SCHEMA = z
  * the tool's input schema advertises it.
  */
 const NOTIFY_ARG_SCHEMA = z.boolean().optional().describe(NOTIFY_ARG_DESCRIPTION);
-
-/**
- * Cap on the command text echoed back by `terminal.sendCommand` (#12337).
- *
- * Bounded because the result advertises an output schema: over the 50 KiB
- * response budget the transport drops `structuredContent` and flags the call
- * `isError`, so an unbounded echo would turn a successful large submission into
- * a reported failure with its own correlation token truncated away.
- */
-const MAX_ECHOED_COMMAND_CHARS = 1024;
 
 export function registerTerminalQueryActions(
   actions: ActionRegistry,
@@ -127,7 +121,11 @@ export function registerTerminalQueryActions(
           ),
       })
       .optional(),
-    resultSchema: z.object({ terminals: z.array(TerminalSummarySchema) }),
+    resultSchema: z.object({
+      terminals: z.array(TerminalSummarySchema),
+      // Unfiltered by the arguments, so an orchestrator can stay under the limit.
+      panelLimit: PanelLimitSnapshotSchema,
+    }),
     mcpOutputSchema: true,
     run: async (args: unknown) => {
       const { worktreeId, location, owned, terminalId, includeClientMetadata } = (args ?? {}) as {
@@ -208,7 +206,13 @@ export function registerTerminalQueryActions(
           : {}),
       }));
 
-      return { terminals: result };
+      const { softWarningLimit, confirmationLimit, hardLimit } = usePanelLimitStore.getState();
+      const panelLimit = buildPanelLimitSnapshot(
+        countPanelsTowardLimit(state.panelsById, state.panelIds),
+        { softWarningLimit, confirmationLimit, hardLimit }
+      );
+
+      return { terminals: result, panelLimit };
     },
   }));
 
@@ -816,8 +820,9 @@ export function registerTerminalQueryActions(
   // (electron/services/mcp-server/sessionServer.ts): the ownership ledger it
   // authorizes against is keyed by MCP session id, which the renderer never
   // sees, and the transcript it reads is a file only main can open. Main checks
-  // ownership — for Daintree's own assistant, the pinned view's project instead
-  // (#12883) — then reads the agent's session from host state alone (#12479).
+  // ownership — for Daintree's own assistant, the pinned view's project as well
+  // (#12883, #13439) — then reads the agent's session from host state alone
+  // (#12479).
   // `run()` throws if the renderer ever invokes it directly.
   actions.set("terminal.readLastMessageOwned", () => ({
     id: "terminal.readLastMessageOwned",
@@ -983,20 +988,11 @@ export function registerTerminalQueryActions(
         await terminalClient.submit(terminalId, command, submissionToken);
       }
 
-      // Return a clear message so the AI model knows not to repeat this action
-      return {
-        sent: true,
-        terminalId,
-        // Echoed back bounded, never whole. The result now advertises an output
-        // schema, and an oversized result does not merely truncate: it drops
-        // `structuredContent` and comes back flagged `isError`. A large context
-        // injection echoed in full would therefore report a submission that DID
-        // go out as a failed call, with the token it needs to check that gone
-        // from the truncated body — the exact silent loss this issue closes.
-        command: command.slice(0, MAX_ECHOED_COMMAND_CHARS),
-        submissionToken,
-        message: `Submission queued. Do not send this command again; check delivery with the terminal-status capability using this submissionToken.`,
-      };
+      // A clear message so the AI model knows not to repeat this action, with
+      // the command echoed back bounded, never whole: an oversized result drops
+      // `structuredContent` and comes back flagged `isError`, which would report
+      // a submission that DID go out as a failed call.
+      return buildTerminalSendCommandReceipt(terminalId, command, submissionToken);
     },
   }));
 

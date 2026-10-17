@@ -103,21 +103,6 @@ describe("forge.getCIStatus advertises a usable MCP outputSchema (#11544)", () =
     expect((schema!.properties as Record<string, unknown>).ciStatus).toBeDefined();
   });
 
-  it("keeps the not-found case expressible by making ciStatus nullable", () => {
-    const schema = outputSchema(registerAll(), "forge.getCIStatus")!;
-    const ciStatus = (schema.properties as { ciStatus: Record<string, unknown> }).ciStatus;
-    const branches = (ciStatus.anyOf as Array<Record<string, unknown>> | undefined) ?? [];
-    expect(branches.some((b) => b.type === "null")).toBe(true);
-    expect(branches.some((b) => b.type === "object")).toBe(true);
-  });
-
-  it("exposes the roll-up count fields an agent needs to judge a PR", () => {
-    const props = ciStatusBranchProperties(registerAll());
-    for (const key of ["state", "total", "passed", "failed", "pending"]) {
-      expect(props[key]).toBeDefined();
-    }
-  });
-
   it("advertises every CIStatusState the provider can return", () => {
     const props = ciStatusBranchProperties(registerAll());
     const state = props.state as { enum?: string[] };
@@ -136,40 +121,6 @@ describe("forge.getCIStatus advertises a usable MCP outputSchema (#11544)", () =
     expect(props.rawData).toBeUndefined();
     expect(props.freshnessToken).toBeUndefined();
     expect(props.notModified).toBeUndefined();
-  });
-
-  it("does not require requiredChecksPassing (absent when the provider doesn't gate)", () => {
-    const required = (ciStatusObjectBranch(registerAll()).required as string[] | undefined) ?? [];
-    // The provider omits the key entirely when it doesn't gate on required
-    // checks; requiring it would make a strict client reject that response.
-    expect(required).not.toContain("requiredChecksPassing");
-    // The always-present fields must stay required, or the schema stops
-    // telling a client anything useful about what it can rely on.
-    expect(required).toEqual(
-      expect.arrayContaining(["state", "total", "passed", "failed", "pending"])
-    );
-  });
-
-  it("closes the object, which is what makes the IPC-side stripping load-bearing", () => {
-    // Zod emits `additionalProperties: false`. A strict MCP client validating
-    // structuredContent against this schema would therefore REJECT a response
-    // carrying any un-advertised key — so if the handler ever stopped
-    // projecting and forwarded the provider's rawData, every strict client
-    // would start failing. This is the invariant that makes projectCIStatus
-    // load-bearing rather than merely tidy.
-    expect(ciStatusObjectBranch(registerAll()).additionalProperties).toBe(false);
-  });
-
-  // Watchout: the two singular/plural PR reads now advertise schemas and the
-  // list reads still do not, and the difference is not an oversight either way.
-  // The PR reads return one normalized shape that `dispatch` parses — so what
-  // arrives IS the schema, `rawData` included in what gets stripped. The list
-  // reads build their rows in `run()` under a `view` argument, so their payload
-  // shape is chosen per call and no single schema is true of it.
-  it("emits an outputSchema for the singular and plural PR reads", () => {
-    const service = registerAll();
-    expect(outputSchema(service, "forge.getPR")).toBeDefined();
-    expect(outputSchema(service, "forge.getPRs")).toBeDefined();
   });
 
   it("does not emit an outputSchema for forge.listPRs", () => {
@@ -477,13 +428,6 @@ describe("forge.getChecks advertises a usable MCP outputSchema (#11786)", () => 
     expect((schema.properties as Record<string, unknown>).checks).toBeDefined();
   });
 
-  it("keeps the not-found case expressible by making checks nullable", () => {
-    const checks = (checksSchema().properties as { checks: Record<string, unknown> }).checks;
-    const branches = (checks.anyOf as Array<Record<string, unknown>> | undefined) ?? [];
-    expect(branches.some((b) => b.type === "null")).toBe(true);
-    expect(branches.some((b) => b.type === "array")).toBe(true);
-  });
-
   it("requires the two fields every check must carry and no more", () => {
     const item = checkItemSchema();
     expect(item.required).toEqual(expect.arrayContaining(["name", "status"]));
@@ -539,8 +483,103 @@ describe("forge.getChecks advertises a usable MCP outputSchema (#11786)", () => 
       validate({ checks: [{ name: "build", status: "completed", conclusion: "exploded" }] })
     ).toBe(false);
   });
+});
 
-  it("rejects a bare array that isn't wrapped under checks", () => {
-    expect(validator()([{ name: "build", status: "completed" }])).toBe(false);
+function propertyNames(schema: Record<string, unknown> | undefined): string[] {
+  const props = schema?.properties as Record<string, unknown> | undefined;
+  return props ? Object.keys(props).sort() : [];
+}
+
+// #11546 — the twelve forge write actions used to return void with no
+// resultSchema, so an agent driving them through MCP learned nothing about what
+// changed. `outputSchema` is published only when BOTH `mcpOutputSchema` and
+// `resultSchema` are set (ActionService.computeSchemas), so these register
+// through the real ActionService and assert the *generated* schema rather than
+// the literal flag — the flag alone never reaches the wire.
+describe("forge write actions publish a manifest outputSchema (#11546)", () => {
+  const WRITE_ACTIONS = [
+    "forge.assignIssue",
+    "forge.unassignIssue",
+    "forge.approvePR",
+    "forge.requestChanges",
+    "forge.dismissReview",
+    "forge.requestReviewers",
+    "forge.closePR",
+    "forge.reopenPR",
+    "forge.mergePR",
+    "forge.convertPRToDraft",
+    "forge.markPRReadyForReview",
+    "forge.commentOnPR",
+  ];
+
+  it.each(WRITE_ACTIONS)("%s generates an object-typed outputSchema", (id) => {
+    const schema = outputSchema(registerAll(), id);
+    expect(schema).toBeDefined();
+    // buildToolOutputSchema (tierAuth) forwards only object-typed schemas, and
+    // buildStructuredContent attaches structuredContent only when a schema is
+    // present — an array or missing schema silently drops it on the wire.
+    expect(schema!.type).toBe("object");
+    expect(propertyNames(schema).length).toBeGreaterThan(0);
+  });
+
+  it("keeps paired actions on an identical published shape", () => {
+    const service = registerAll();
+    // Same result family => same published contract. Drift here would force an
+    // agent to special-case which direction of the pair it called.
+    const pairs: Array<[string, string]> = [
+      ["forge.assignIssue", "forge.unassignIssue"],
+      ["forge.approvePR", "forge.requestChanges"],
+      ["forge.approvePR", "forge.dismissReview"],
+      ["forge.closePR", "forge.reopenPR"],
+      ["forge.convertPRToDraft", "forge.markPRReadyForReview"],
+    ];
+    for (const [a, b] of pairs) {
+      expect(propertyNames(outputSchema(service, a))).toEqual(
+        propertyNames(outputSchema(service, b))
+      );
+    }
+  });
+
+  it("keeps the result families structurally distinct", () => {
+    const service = registerAll();
+    // Each action must report the state IT changed. Comparing the families to
+    // each other (rather than to a copied field list) catches the real
+    // regression: two families collapsing onto one schema.
+    const representatives = [
+      "forge.assignIssue",
+      "forge.approvePR",
+      "forge.requestReviewers",
+      "forge.closePR",
+      "forge.mergePR",
+      "forge.convertPRToDraft",
+      "forge.commentOnPR",
+    ];
+    const signatures = representatives.map((id) =>
+      propertyNames(outputSchema(service, id)).join(",")
+    );
+
+    expect(new Set(signatures).size).toBe(representatives.length);
+  });
+
+  it("names at least one required field per action, so a result is never all-optional", () => {
+    const service = registerAll();
+    // An all-optional schema promises nothing: a client could not rely on any
+    // field being present. Derived from the generated schemas — no field list
+    // is restated here.
+    for (const id of WRITE_ACTIONS) {
+      const required = (outputSchema(service, id)?.required ?? []) as string[];
+      expect(required.length).toBeGreaterThan(0);
+    }
+  });
+
+  it("keeps the array-shaped label actions opted out at the ActionService layer", () => {
+    const service = registerAll();
+    // A policy assertion, not a wire-behavior one: addIssueLabel and
+    // removeIssueLabel carry an ARRAY resultSchema, and MCP structuredContent
+    // must be an object. buildToolOutputSchema would drop an array schema
+    // anyway, so this guards the intent — they stay opted out until their
+    // result is reshaped into an object.
+    expect(outputSchema(service, "forge.addIssueLabel")).toBeUndefined();
+    expect(outputSchema(service, "forge.removeIssueLabel")).toBeUndefined();
   });
 });

@@ -18,6 +18,7 @@ import {
   ArrowDown,
   ArrowUp,
   ArrowUpFromLine,
+  Bell,
   CheckSquare,
   CircleStop,
   Clock,
@@ -39,6 +40,7 @@ import {
   PanelTopClose,
   PanelTopOpen,
   Pause,
+  Pencil,
   Pin,
   PinOff,
   Play,
@@ -56,6 +58,7 @@ import {
 import {
   ArrowUpDown,
   CircleDot,
+  CirclePause,
   FolderOpen,
   Folders,
   FolderTree,
@@ -64,10 +67,17 @@ import {
   Package,
   Plus,
   ServerCog,
+  Tag,
   Workflow,
 } from "@/components/icons";
+import {
+  isWorktreeLabelToken,
+  WORKTREE_LABEL_COLORS,
+  type WorktreeLabelToken,
+} from "@shared/theme/worktreeColors";
+import { worktreeLabelColorStyle } from "./worktreeLabelColorStyle";
 import { copyableBranchName, isExternalWorktree } from "@/lib/worktreeFilters";
-import { fileManagerRevealLabel } from "@/lib/platform";
+import { hostFileManagerRevealLabel, isRemoteWindow } from "@/hooks/useHostPlatform";
 import { BrandMark } from "@/components/icons/BrandMark";
 import { getBrandColorHex } from "@/lib/colorUtils";
 import { useMenuActionSource, type MenuActionSourceValue } from "@/components/ui/menu-source";
@@ -155,6 +165,13 @@ export interface WorktreeMenuItemsProps {
     waiting: number;
     working: number;
   };
+  /**
+   * The worktree's agents by park state, as the fleet snapshot sees them.
+   * Absent where there is no snapshot to read (a workspace root).
+   */
+  parking?: { parked: number; unparked: number };
+  onParkAgents?: () => void;
+  onUnparkAgents?: () => void;
   onLaunchAgent?: (agentId: string) => void;
   onMoveUp?: () => void;
   onMoveDown?: () => void;
@@ -196,6 +213,12 @@ export interface WorktreeMenuItemsProps {
   onTogglePin?: () => void;
   onToggleCollapse?: () => void;
   isCollapsed?: boolean;
+  /** The worktree's colour label, or null when it has none. */
+  labelColor?: WorktreeLabelToken | null;
+  /** Receives null for None. Dispatches `worktree.setLabelColor`. */
+  onSetLabelColor?: (token: WorktreeLabelToken | null) => void;
+  /** Opens the card's "Edit worktree title" dialog (#13409). */
+  onEditTitle?: () => void;
   // Optional only so a workspace root needn't pass inert handlers: the
   // `worktree.sessions.*` actions resolve a worktree id and no-op without one.
   onDockAll?: () => void;
@@ -271,6 +294,9 @@ export function WorktreeMenuItems({
   runningRecipeId,
   isPinned,
   counts,
+  parking,
+  onParkAgents,
+  onUnparkAgents,
   onLaunchAgent,
   onMoveUp,
   onMoveDown,
@@ -300,6 +326,9 @@ export function WorktreeMenuItems({
   onTogglePin,
   onToggleCollapse,
   isCollapsed,
+  labelColor,
+  onSetLabelColor,
+  onEditTitle,
   onDockAll,
   onMaximizeAll,
   onResetRenderers,
@@ -420,9 +449,9 @@ export function WorktreeMenuItems({
             Open in editor
           </C.Item>
         )}
-        <C.Item onSelect={onRevealInFinder}>
+        <C.Item onSelect={isRemoteWindow() ? onCopyPath : onRevealInFinder}>
           <FolderOpen className={ICON} />
-          {fileManagerRevealLabel()}
+          {hostFileManagerRevealLabel()}
         </C.Item>
       </C.SubContent>
     </C.Sub>
@@ -752,6 +781,33 @@ export function WorktreeMenuItems({
           </>
         )}
 
+        {/* Park is local and reversible with Unpark right beside it, so
+            neither asks first. Each row counts only the agents it would
+            change, so the pair reads as the worktree's split. */}
+        {parking !== undefined && parking.parked + parking.unparked > 0 && (
+          <>
+            <C.Label>Parking</C.Label>
+            <C.Item
+              onSelect={onParkAgents}
+              disabled={parking.unparked === 0 || !onParkAgents}
+              {...counted("Park agents", parking.unparked)}
+            >
+              <CirclePause className={ICON} />
+              Park agents
+              <C.Meta>{parking.unparked}</C.Meta>
+            </C.Item>
+            <C.Item
+              onSelect={onUnparkAgents}
+              disabled={parking.parked === 0 || !onUnparkAgents}
+              {...counted("Unpark agents", parking.parked)}
+            >
+              <Bell className={ICON} />
+              Unpark agents
+              <C.Meta>{parking.parked}</C.Meta>
+            </C.Item>
+          </>
+        )}
+
         {counts.active > 0 && (
           <>
             <C.Label>Maintenance</C.Label>
@@ -1070,7 +1126,11 @@ export function WorktreeMenuItems({
     !worktree.isMainWorktree &&
     !isExternalWorktree(worktree);
   const hasMoveRows = Boolean(onMoveUp || onMoveDown);
-  const organizeSub = worktree && (canPin || onToggleCollapse || hasMoveRows) && (
+  // Main and external worktrees get a label even though they can't be pinned —
+  // the main worktree is the case labels exist for (#13408).
+  const canLabel = Boolean(onSetLabelColor || onEditTitle);
+  const hasCardRows = canPin || Boolean(onToggleCollapse) || canLabel;
+  const organizeSub = worktree && (hasCardRows || hasMoveRows) && (
     <C.Sub key="organize">
       <C.SubTrigger>
         <ArrowUpDown className={ICON} />
@@ -1107,7 +1167,48 @@ export function WorktreeMenuItems({
             )}
           </C.Item>
         )}
-        {hasMoveRows && (canPin || onToggleCollapse) && <C.Separator />}
+        {canLabel && (
+          <C.Sub>
+            <C.SubTrigger>
+              <Tag className={ICON} />
+              Label
+            </C.SubTrigger>
+            <C.SubContent>
+              {onEditTitle && (
+                <>
+                  <C.Item onSelect={onEditTitle} aria-haspopup="dialog">
+                    <Pencil className={ICON} />
+                    Edit title…
+                  </C.Item>
+                  {onSetLabelColor && <C.Separator />}
+                </>
+              )}
+              {onSetLabelColor && (
+                <C.RadioGroup
+                  value={labelColor ?? "none"}
+                  onValueChange={(value: string) => {
+                    const next = isWorktreeLabelToken(value) ? value : null;
+                    if (next === (labelColor ?? null)) return;
+                    onSetLabelColor?.(next);
+                  }}
+                >
+                  <C.RadioItem value="none">None</C.RadioItem>
+                  {WORKTREE_LABEL_COLORS.map((color) => (
+                    <C.RadioItem key={color.token} value={color.token}>
+                      <span
+                        aria-hidden="true"
+                        className="worktree-label-swatch mr-2"
+                        style={worktreeLabelColorStyle(color.token)}
+                      />
+                      {color.label}
+                    </C.RadioItem>
+                  ))}
+                </C.RadioGroup>
+              )}
+            </C.SubContent>
+          </C.Sub>
+        )}
+        {hasMoveRows && hasCardRows && <C.Separator />}
         {hasMoveRows && (
           <>
             <C.Item onSelect={onMoveUp} disabled={!onMoveUp || !canMoveUp}>

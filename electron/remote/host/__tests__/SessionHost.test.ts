@@ -1,0 +1,855 @@
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { EndpointRegistryImpl } from "../../../ipc/endpointRegistry.js";
+import type { EndpointInvocation, RemoteSessionExpiryCause } from "../../../ipc/endpoint.js";
+import { logBuffer } from "../../../services/LogBuffer.js";
+import { wrapSuccess } from "../../../../shared/utils/ipcErrorSerialization.js";
+import type { IpcEnvelope } from "../../../../shared/types/ipc/errors.js";
+import { Lane } from "../../link/frames.js";
+import { ControlKind } from "../../link/messages.js";
+import type { EnqueueResult } from "../../link/scheduler.js";
+import type { LinkSession } from "../../link/session.js";
+import type { HostSessionContext, HostSessionExpired } from "../HostServer.js";
+import { LinkMethod } from "../linkMethods.js";
+import { ANSWER_RETRY_MS, SessionHost } from "../SessionHost.js";
+
+type Listener = (body: unknown) => void;
+
+/** Just enough of a LinkSession to drive SessionHost deterministically. */
+function fakeLink() {
+  const listeners = new Map<string, Set<Listener>>();
+  const writable = new Set<() => void>();
+  const closeListeners = new Set<() => void>();
+  const posted: Array<{ lane: number; kind: number; body: unknown }> = [];
+  const calls: Array<{ method: string; payload: unknown }> = [];
+  const link = {
+    isOpen: true,
+    isClosed: false,
+    postResult: "queued" as EnqueueResult,
+    queued: 0,
+    invokeHandler: null as ((m: unknown) => Promise<IpcEnvelope>) | null,
+    reverseRequest: vi.fn((): Promise<unknown> => new Promise(() => {})),
+    on(lane: number, kind: number, listener: Listener) {
+      const key = `${lane}/${kind}`;
+      const set = listeners.get(key) ?? new Set();
+      set.add(listener);
+      listeners.set(key, set);
+      return () => set.delete(listener);
+    },
+    onWritable(cb: () => void) {
+      writable.add(cb);
+      return () => writable.delete(cb);
+    },
+    onClose(cb: () => void) {
+      closeListeners.add(cb);
+      return () => closeListeners.delete(cb);
+    },
+    registerCallHandler: () => () => {},
+    setInvokeHandler(handler: ((m: unknown) => Promise<IpcEnvelope>) | null) {
+      link.invokeHandler = handler;
+    },
+    setSendHandler: () => {},
+    post(message: { lane: number; kind: number; body: unknown }) {
+      posted.push(message);
+      return link.postResult;
+    },
+    queuedBytes: () => link.queued,
+    call: vi.fn(async (method: string, payload: unknown) => {
+      calls.push({ method, payload });
+      return null;
+    }),
+    emit(lane: number, kind: number, body: unknown) {
+      for (const listener of listeners.get(`${lane}/${kind}`) ?? []) listener(body);
+    },
+    tick() {
+      for (const cb of [...writable]) cb();
+    },
+    drop() {
+      link.isOpen = false;
+      link.isClosed = true;
+      for (const cb of [...closeListeners]) cb();
+    },
+    posted,
+    calls,
+  };
+  return link;
+}
+
+function fakeServer() {
+  const sessionListeners = new Set<(ctx: HostSessionContext) => void>();
+  const expiredListeners = new Set<(info: HostSessionExpired) => void>();
+  return {
+    onSession: (l: (ctx: HostSessionContext) => void) => {
+      sessionListeners.add(l);
+      return () => sessionListeners.delete(l);
+    },
+    onSessionExpired: (l: (info: HostSessionExpired) => void) => {
+      expiredListeners.add(l);
+      return () => expiredListeners.delete(l);
+    },
+    attach(sessionId: string, link: ReturnType<typeof fakeLink>, resumed = false) {
+      const ctx = {
+        sessionId,
+        resumed,
+        client: { clientId: "c1", clientName: "greg-mbp", platform: "darwin" as const },
+        session: link as unknown as LinkSession,
+      };
+      for (const l of sessionListeners) l(ctx);
+    },
+    expire(sessionId: string, cause: RemoteSessionExpiryCause = "grace-expired") {
+      for (const l of expiredListeners) l({ sessionId, clientId: "c1", cause });
+    },
+  };
+}
+
+let registry: EndpointRegistryImpl;
+let server: ReturnType<typeof fakeServer>;
+let host: SessionHost;
+let counts: number[];
+const invocations: Array<{ invocation: EndpointInvocation; channel: string }> = [];
+
+beforeEach(() => {
+  vi.useFakeTimers();
+  registry = new EndpointRegistryImpl();
+  server = fakeServer();
+  counts = [];
+  invocations.length = 0;
+  host = new SessionHost(server, {
+    dispatcher: {
+      invokeForEndpoint: async (invocation, channel) => {
+        invocations.push({ invocation, channel });
+        return wrapSuccess(invocation.endpoint.projectId);
+      },
+      sendForEndpoint: () => {},
+    },
+    registry,
+    setAttachedFrontendCount: (n) => counts.push(n),
+    eventsHighWaterBytes: 1_000,
+    overHighWaterGraceMs: 100,
+    maxEndpointsPerSession: 2,
+  });
+});
+
+afterEach(() => {
+  host.dispose();
+  vi.useRealTimers();
+});
+
+function open(link: ReturnType<typeof fakeLink>, endpointId: string, projectId: string | null) {
+  link.emit(Lane.CONTROL, ControlKind.ENDPOINT_OPEN, { endpointId, projectId });
+}
+
+describe("SessionHost", () => {
+  it("creates uniquely named endpoints with negative handles per session", () => {
+    const one = fakeLink();
+    const two = fakeLink();
+    server.attach("s1", one);
+    server.attach("s2", two);
+    open(one, "view-1", "p");
+    open(two, "view-1", "p");
+
+    const remote = registry.getRemote();
+    expect(remote).toHaveLength(2);
+    expect(new Set(remote.map((e) => e.endpointId)).size).toBe(2);
+    expect(remote.every((e) => e.handle < 0)).toBe(true);
+    expect(new Set(remote.map((e) => e.handle)).size).toBe(2);
+    expect(counts).toEqual([0, 1, 2]);
+  });
+
+  it("counts a Shell toward keep-awake only while it has a view open here", () => {
+    const link = fakeLink();
+    server.attach("s1", link);
+    // A summary-only link: nobody is using this host from it.
+    expect(counts).toEqual([0]);
+    open(link, "view-1", "p");
+    expect(counts.at(-1)).toBe(1);
+    link.emit(Lane.CONTROL, ControlKind.ENDPOINT_CLOSE, { endpointId: "view-1" });
+    expect(counts.at(-1)).toBe(0);
+    expect(host.attachedCount).toBe(0);
+  });
+
+  it("stops holding the host awake once a window has gone unused, and resumes on input", () => {
+    const link = fakeLink();
+    server.attach("s1", link);
+    open(link, "view-1", "p");
+    expect(counts.at(-1)).toBe(1);
+
+    vi.advanceTimersByTime(5 * 60_000);
+    // Still attached and still showing a view, but nobody has touched it.
+    expect(counts.at(-1)).toBe(0);
+    expect(registry.getRemote()).toHaveLength(1);
+
+    host.noteActivity("s1");
+    expect(counts.at(-1)).toBe(1);
+    vi.advanceTimersByTime(4 * 60_000);
+    host.noteActivity("s1");
+    vi.advanceTimersByTime(4 * 60_000);
+    // Each use renews the window.
+    expect(counts.at(-1)).toBe(1);
+    vi.advanceTimersByTime(60_000);
+    expect(counts.at(-1)).toBe(0);
+  });
+
+  it("caps endpoints per session", () => {
+    const link = fakeLink();
+    server.attach("s1", link);
+    open(link, "a", null);
+    open(link, "b", null);
+    open(link, "c", null);
+    expect(registry.getRemote()).toHaveLength(2);
+  });
+
+  it("rebinds an endpoint and makes answers to earlier requests stale", async () => {
+    const link = fakeLink();
+    let answer!: (value: unknown) => void;
+    link.reverseRequest.mockImplementation(() => new Promise((resolve) => (answer = resolve)));
+    server.attach("s1", link);
+    open(link, "view-1", "p1");
+    const endpoint = registry.getRemote()[0]!;
+
+    const pending = endpoint.request("plugin:prompt", {});
+    link.emit(Lane.CONTROL, ControlKind.ENDPOINT_REBIND, { endpointId: "view-1", projectId: "p2" });
+    answer("yes");
+
+    await expect(pending).rejects.toMatchObject({ code: "STALE_GENERATION" });
+    expect(endpoint.projectId).toBe("p2");
+    expect(registry.getForProject("p2")).toEqual([endpoint]);
+  });
+
+  it("settles a pending request with HOST_DISCONNECTED when its endpoint closes", async () => {
+    const link = fakeLink();
+    server.attach("s1", link);
+    open(link, "view-1", "p1");
+    const endpoint = registry.getRemote()[0]!;
+    const pending = endpoint.request("mcp:dispatch-action", {});
+
+    link.emit(Lane.CONTROL, ControlKind.ENDPOINT_CLOSE, { endpointId: "view-1" });
+
+    await expect(pending).rejects.toMatchObject({ code: "HOST_DISCONNECTED" });
+    expect(registry.getRemote()).toHaveLength(0);
+  });
+
+  it("answers an invoke for an unknown endpoint with NOT_FOUND, without dispatching", async () => {
+    const link = fakeLink();
+    server.attach("s1", link);
+    const envelope = await link.invokeHandler!({
+      requestId: 1,
+      endpointId: "never-opened",
+      channel: "git:get-file-diff",
+      args: [],
+    });
+    expect(envelope.ok ? null : envelope.error.code).toBe("NOT_FOUND");
+    expect(invocations).toHaveLength(0);
+  });
+
+  it("keeps endpoints while the Shell is away and closes them only when the session expires", () => {
+    const link = fakeLink();
+    server.attach("s1", link);
+    open(link, "view-1", "p1");
+    link.drop();
+    expect(counts.at(-1)).toBe(0);
+    expect(registry.getRemote()).toHaveLength(1);
+
+    server.expire("s1");
+    expect(registry.getRemote()).toHaveLength(0);
+  });
+
+  it("says why each endpoint closed, in its close listeners and in the log", () => {
+    logBuffer.clear();
+    const one = fakeLink();
+    server.attach("s1", one);
+    open(one, "view-1", "p1");
+    open(one, "view-2", "p1");
+    const two = fakeLink();
+    server.attach("s2", two);
+    open(two, "view-1", "p2");
+    const three = fakeLink();
+    server.attach("s3", three);
+    open(three, "view-1", "p3");
+    const closed: Array<[string, unknown]> = [];
+    for (const endpoint of registry.getRemote()) {
+      endpoint.onClose(() => closed.push([endpoint.endpointId, endpoint.closeCause]));
+    }
+
+    one.emit(Lane.CONTROL, ControlKind.ENDPOINT_CLOSE, { endpointId: "view-1" });
+    // A dropped link closes nothing: the session waits for a resume.
+    one.drop();
+    expect(closed).toHaveLength(1);
+    server.expire("s1", "grace-expired");
+    // A fresh session under an id the host still holds replaces it.
+    server.attach("s2", fakeLink());
+    host.dispose();
+
+    expect(closed).toEqual([
+      ["remote:s1:view-1", "client-closed"],
+      ["remote:s1:view-2", "grace-expired"],
+      ["remote:s2:view-1", "session-replaced"],
+      ["remote:s3:view-1", "host-shutdown"],
+    ]);
+    const lines = logBuffer
+      .getFiltered({ sources: ["main:SessionHost"] })
+      .filter((entry) => entry.message === "Remote view endpoint closed")
+      .map((entry) => entry.context);
+    expect(lines).toEqual([
+      expect.objectContaining({
+        sessionId: "s1",
+        clientId: "c1",
+        clientEndpointId: "view-1",
+        projectId: "p1",
+        cause: "client-closed",
+      }),
+      expect.objectContaining({
+        sessionId: "s1",
+        clientEndpointId: "view-2",
+        cause: "grace-expired",
+      }),
+      expect.objectContaining({ sessionId: "s2", cause: "session-replaced" }),
+      expect.objectContaining({ sessionId: "s3", cause: "host-shutdown" }),
+    ]);
+  });
+
+  it("reports its endpoints' link dropping and resuming, before the session expires", () => {
+    const changes: Array<[string[], boolean]> = [];
+    host.onTransportChange((endpointIds, attached) => changes.push([endpointIds, attached]));
+    const link = fakeLink();
+    server.attach("s1", link);
+    open(link, "view-1", "p1");
+    open(link, "view-2", "p2");
+    const ids = registry.getRemote().map((e) => e.endpointId);
+    expect(changes).toEqual([]);
+
+    link.drop();
+    expect(changes).toEqual([[ids, false]]);
+
+    server.attach("s1", fakeLink(), true);
+    expect(changes).toEqual([
+      [ids, false],
+      [ids, true],
+    ]);
+
+    // A fresh session announces nothing: its endpoints start attached.
+    server.attach("s2", fakeLink());
+    expect(changes).toHaveLength(2);
+  });
+
+  it("resyncs a Shell whose event lane stays over high water past the grace", () => {
+    const link = fakeLink();
+    server.attach("s1", link);
+    open(link, "view-1", "p1");
+    const endpoint = registry.getRemote()[0]!;
+
+    link.postResult = "over-high-water";
+    link.queued = 5_000;
+    endpoint.send({ type: "event", channel: "terminal:data", args: [1] });
+    vi.advanceTimersByTime(100);
+
+    // Dropping now: nothing more is queued for it.
+    const postedBefore = link.posted.length;
+    endpoint.send({ type: "event", channel: "terminal:data", args: [2] });
+    expect(link.posted).toHaveLength(postedBefore);
+
+    // Not until what was queued has drained.
+    link.tick();
+    expect(link.calls).toHaveLength(0);
+    link.queued = 0;
+    link.postResult = "queued";
+    link.tick();
+    expect(link.calls).toEqual([
+      {
+        method: LinkMethod.ENDPOINT_RESYNC,
+        payload: { endpointIds: ["view-1"], reason: "overflow" },
+      },
+    ]);
+
+    endpoint.send({ type: "event", channel: "terminal:data", args: [3] });
+    expect(link.posted.length).toBe(postedBefore + 1);
+  });
+
+  it("does not resync when the lane recovers within the grace", () => {
+    const link = fakeLink();
+    server.attach("s1", link);
+    open(link, "view-1", "p1");
+    const endpoint = registry.getRemote()[0]!;
+
+    link.postResult = "over-high-water";
+    link.queued = 5_000;
+    endpoint.send({ type: "event", channel: "terminal:data", args: [1] });
+    link.queued = 200;
+    vi.advanceTimersByTime(100);
+    link.tick();
+
+    expect(link.calls).toHaveLength(0);
+    link.postResult = "queued";
+    const before = link.posted.length;
+    endpoint.send({ type: "event", channel: "terminal:data", args: [2] });
+    expect(link.posted).toHaveLength(before + 1);
+  });
+
+  it("tells a resumed Shell which endpoints missed events while it was away", () => {
+    const first = fakeLink();
+    server.attach("s1", first);
+    open(first, "view-1", "p1");
+    open(first, "view-2", "p2");
+    first.drop();
+    registry.getForProject("p1")[0]!.send({ type: "event", channel: "terminal:data", args: [] });
+
+    const second = fakeLink();
+    server.attach("s1", second, true);
+
+    expect(second.calls).toEqual([
+      {
+        method: LinkMethod.ENDPOINT_RESYNC,
+        payload: { endpointIds: ["view-1", "view-2"], reason: "reattached" },
+      },
+    ]);
+    expect(registry.getRemote()).toHaveLength(2);
+    expect(counts.at(-1)).toBe(1);
+  });
+
+  it("resumes delivery for a new endpoint when every stale endpoint closed mid-resync", () => {
+    const link = fakeLink();
+    server.attach("s1", link);
+    open(link, "view-1", "p1");
+    link.postResult = "refused";
+    registry.getRemote()[0]!.send({ type: "event", channel: "terminal:data", args: [] });
+    link.emit(Lane.CONTROL, ControlKind.ENDPOINT_CLOSE, { endpointId: "view-1" });
+
+    link.postResult = "queued";
+    link.tick();
+    open(link, "view-2", "p1");
+    const before = link.posted.length;
+    registry.getRemote()[0]!.send({ type: "event", channel: "terminal:data", args: [] });
+    expect(link.posted).toHaveLength(before + 1);
+    expect(link.calls).toHaveLength(0);
+  });
+
+  it("keeps owing a resync when the notice could not be delivered", async () => {
+    const link = fakeLink();
+    link.call.mockRejectedValueOnce(new Error("queue full"));
+    server.attach("s1", link);
+    open(link, "view-1", "p1");
+    link.postResult = "refused";
+    registry.getRemote()[0]!.send({ type: "event", channel: "terminal:data", args: [] });
+    link.postResult = "queued";
+    link.tick();
+    await vi.waitFor(() => expect(link.call).toHaveBeenCalledTimes(1));
+    await Promise.resolve();
+
+    link.tick();
+    expect(link.call).toHaveBeenCalledTimes(2);
+    expect(link.call.mock.calls[1]![1]).toEqual({ endpointIds: ["view-1"], reason: "overflow" });
+  });
+
+  it("reports the endpoint to bridges that follow it, with its current link", () => {
+    const link = fakeLink();
+    const opened = vi.fn();
+    host.onEndpointOpened(opened);
+    server.attach("s1", link);
+    open(link, "view-1", "p1");
+
+    expect(opened).toHaveBeenCalledTimes(1);
+    const [endpoint, handle] = opened.mock.calls[0]!;
+    expect(endpoint).toBe(registry.getRemote()[0]);
+    expect(handle.sessionId).toBe("s1");
+    expect(handle.link()).toBe(link);
+    link.drop();
+    expect(handle.link()).toBeNull();
+  });
+});
+
+describe("SessionHost: the project a Shell last showed here", () => {
+  const client = (clientName: string) => ({
+    clientId: `${clientName}-launch`,
+    clientName,
+    platform: "darwin" as const,
+    kind: "remote" as const,
+  });
+  const known = new Set(["p1", "p2"]);
+
+  function remembering() {
+    return new SessionHost(fakeServer(), {
+      dispatcher: { invokeForEndpoint: async () => wrapSuccess(null), sendForEndpoint: () => {} },
+      registry: new EndpointRegistryImpl(),
+      describeProject: (projectId) =>
+        known.has(projectId) ? { projectId, path: `/srv/${projectId}`, name: projectId } : null,
+    });
+  }
+
+  it("remembers per Shell machine, across that Shell's relaunches", () => {
+    const sessions = remembering();
+    sessions.noteActiveProject(client("greg-mbp"), "p1");
+    sessions.noteActiveProject(client("studio-02"), "p2");
+    // A relaunched Shell has a new client id but the same machine.
+    expect(
+      sessions.lastActiveProject({ ...client("greg-mbp"), clientId: "second-launch" })
+    ).toEqual({ projectId: "p1", path: "/srv/p1", name: "p1" });
+    expect(sessions.lastActiveProject(client("studio-02"))?.projectId).toBe("p2");
+    expect(sessions.lastActiveProject(client("elsewhere"))).toBeNull();
+    sessions.dispose();
+  });
+
+  it("tells apart two installs that share a machine name, by the install each says it is", () => {
+    const sessions = remembering();
+    const first = { ...client("greg-mbp"), deviceId: "d-first" };
+    const second = { ...client("greg-mbp"), deviceId: "d-second" };
+    sessions.noteActiveProject(first, "p1");
+    sessions.noteActiveProject(second, "p2");
+    expect(sessions.lastActiveProject({ ...first, clientId: "first-relaunched" })?.projectId).toBe(
+      "p1"
+    );
+    expect(sessions.lastActiveProject(second)?.projectId).toBe("p2");
+    // A Shell too old to say which install it is still finds its machine's.
+    sessions.noteActiveProject(client("greg-mbp"), "p2");
+    expect(sessions.lastActiveProject(client("greg-mbp"))?.projectId).toBe("p2");
+    expect(sessions.lastActiveProject(first)?.projectId).toBe("p1");
+    sessions.dispose();
+  });
+
+  it("keeps only projects this host has, and forgets one it no longer has", () => {
+    const sessions = remembering();
+    sessions.noteActiveProject(client("greg-mbp"), "p1");
+    sessions.noteActiveProject(client("greg-mbp"), "not-here");
+    expect(sessions.lastActiveProject(client("greg-mbp"))?.projectId).toBe("p1");
+    known.delete("p1");
+    try {
+      expect(sessions.lastActiveProject(client("greg-mbp"))).toBeNull();
+      known.add("p1");
+      // Forgotten, not merely hidden.
+      expect(sessions.lastActiveProject(client("greg-mbp"))).toBeNull();
+    } finally {
+      known.add("p1");
+      sessions.dispose();
+    }
+  });
+
+  it("answers both over the link", () => {
+    const handlers = new Map<string, (payload: never) => unknown>();
+    const link = fakeLink();
+    link.registerCallHandler = ((method: string, _schema: unknown, handler: never) => {
+      handlers.set(method, handler);
+      return () => {};
+    }) as never;
+    const fake = fakeServer();
+    const sessions = new SessionHost(fake, {
+      dispatcher: { invokeForEndpoint: async () => wrapSuccess(null), sendForEndpoint: () => {} },
+      registry: new EndpointRegistryImpl(),
+      describeProject: (projectId) =>
+        known.has(projectId) ? { projectId, path: `/srv/${projectId}`, name: projectId } : null,
+    });
+    fake.attach("s1", link);
+    expect(handlers.get(LinkMethod.LAST_ACTIVE_PROJECT)!(null as never)).toBeNull();
+    expect(handlers.get(LinkMethod.NOTE_ACTIVE_PROJECT)!({ projectId: "p2" } as never)).toBeNull();
+    expect(handlers.get(LinkMethod.LAST_ACTIVE_PROJECT)!(null as never)).toEqual({
+      projectId: "p2",
+      path: "/srv/p2",
+      name: "p2",
+    });
+    sessions.dispose();
+  });
+});
+
+describe("SessionHost assistant liveness (#13349)", () => {
+  /** Endpoint handle → the project its live assistant was launched for. */
+  let liveAssistants: Map<number, string>;
+  let sessions: SessionHost;
+  let fake: ReturnType<typeof fakeServer>;
+  let endpoints: EndpointRegistryImpl;
+
+  beforeEach(() => {
+    liveAssistants = new Map();
+    fake = fakeServer();
+    endpoints = new EndpointRegistryImpl();
+    sessions = new SessionHost(fake, {
+      dispatcher: { invokeForEndpoint: async () => wrapSuccess(null), sendForEndpoint: () => {} },
+      registry: endpoints,
+      assistantLive: (endpoint) => liveAssistants.get(endpoint.handle) === endpoint.projectId,
+    });
+  });
+
+  afterEach(() => sessions.dispose());
+
+  const assistantCalls = (link: ReturnType<typeof fakeLink>) =>
+    link.calls.filter(({ method }) => method === LinkMethod.ENDPOINT_ASSISTANT);
+  const handleOf = (projectId: string) => endpoints.getForProject(projectId)[0]!.handle;
+  const flush = async () => {
+    for (let i = 0; i < 5; i++) await Promise.resolve();
+  };
+
+  it("tells the Shell when a view's assistant starts and stops, and nothing in between", () => {
+    const link = fakeLink();
+    fake.attach("s1", link);
+    open(link, "view-1", "p1");
+    open(link, "view-2", "p2");
+    sessions.refreshAssistants();
+    // A new endpoint has no assistant, which the Shell already assumes.
+    expect(assistantCalls(link)).toEqual([]);
+
+    liveAssistants.set(handleOf("p1"), "p1");
+    sessions.refreshAssistants();
+    sessions.refreshAssistants();
+    expect(assistantCalls(link)).toEqual([
+      {
+        method: LinkMethod.ENDPOINT_ASSISTANT,
+        payload: { endpoints: [{ endpointId: "view-1", projectId: "p1", live: true }] },
+      },
+    ]);
+
+    liveAssistants.clear();
+    sessions.refreshAssistants();
+    expect(assistantCalls(link).at(-1)!.payload).toEqual({
+      endpoints: [{ endpointId: "view-1", projectId: "p1", live: false }],
+    });
+    expect(assistantCalls(link)).toHaveLength(2);
+  });
+
+  it("tells a resumed Shell every view's answer, including what changed while it was away", () => {
+    const first = fakeLink();
+    fake.attach("s1", first);
+    open(first, "view-1", "p1");
+    open(first, "view-2", "p2");
+    liveAssistants.set(handleOf("p1"), "p1");
+    liveAssistants.set(handleOf("p2"), "p2");
+    sessions.refreshAssistants();
+    first.drop();
+
+    // The p1 assistant quit while nobody was attached to hear it.
+    liveAssistants.delete(handleOf("p1"));
+    sessions.refreshAssistants();
+
+    const second = fakeLink();
+    fake.attach("s1", second, true);
+    expect(assistantCalls(second)).toEqual([
+      {
+        method: LinkMethod.ENDPOINT_ASSISTANT,
+        payload: {
+          endpoints: [
+            { endpointId: "view-1", projectId: "p1", live: false },
+            { endpointId: "view-2", projectId: "p2", live: true },
+          ],
+        },
+      },
+    ]);
+  });
+
+  it("answers again for a view that moved to another project", () => {
+    const link = fakeLink();
+    fake.attach("s1", link);
+    open(link, "view-1", "p1");
+    liveAssistants.set(handleOf("p1"), "p1");
+    sessions.refreshAssistants();
+
+    link.emit(Lane.CONTROL, ControlKind.ENDPOINT_REBIND, { endpointId: "view-1", projectId: "p2" });
+
+    expect(assistantCalls(link).at(-1)!.payload).toEqual({
+      endpoints: [{ endpointId: "view-1", projectId: "p2", live: false }],
+    });
+  });
+
+  const coded = (code: string) => Object.assign(new Error(code), { code });
+  const sentAssistants = (link: ReturnType<typeof fakeLink>) =>
+    link.call.mock.calls.filter(([method]) => method === LinkMethod.ENDPOINT_ASSISTANT);
+
+  it("asks an attached Shell again when it failed to take an answer", async () => {
+    // A missed start would leave the view open to eviction until some other
+    // terminal spawned or exited, so the retry can't wait for one.
+    const link = fakeLink();
+    fake.attach("s1", link);
+    open(link, "view-1", "p1");
+    link.call.mockRejectedValueOnce(coded("RATE_LIMITED"));
+    liveAssistants.set(handleOf("p1"), "p1");
+    sessions.refreshAssistants();
+    await flush();
+    expect(sentAssistants(link)).toHaveLength(1);
+
+    vi.advanceTimersByTime(ANSWER_RETRY_MS);
+    expect(sentAssistants(link)).toHaveLength(2);
+    expect(sentAssistants(link)[1]![1]).toEqual({
+      endpoints: [{ endpointId: "view-1", projectId: "p1", live: true }],
+    });
+  });
+
+  it("doesn't keep asking a Shell from before the call", async () => {
+    const link = fakeLink();
+    fake.attach("s1", link);
+    open(link, "view-1", "p1");
+    link.call.mockRejectedValueOnce(coded("UNSUPPORTED"));
+    liveAssistants.set(handleOf("p1"), "p1");
+    sessions.refreshAssistants();
+    await flush();
+
+    vi.advanceTimersByTime(ANSWER_RETRY_MS);
+    sessions.refreshAssistants();
+    expect(sentAssistants(link)).toHaveLength(1);
+  });
+
+  it("answers for the other views when one view's read throws, and keeps what it last said", () => {
+    const failing = new Set<string>();
+    sessions.dispose();
+    sessions = new SessionHost(fake, {
+      dispatcher: { invokeForEndpoint: async () => wrapSuccess(null), sendForEndpoint: () => {} },
+      registry: endpoints,
+      assistantLive: (endpoint) => {
+        if (failing.has(endpoint.projectId ?? "")) throw new Error("backends unreadable");
+        return liveAssistants.get(endpoint.handle) === endpoint.projectId;
+      },
+    });
+    const error = vi.spyOn(console, "error").mockImplementation(() => {});
+    const link = fakeLink();
+    fake.attach("s1", link);
+    open(link, "view-1", "p1");
+    open(link, "view-2", "p2");
+    liveAssistants.set(handleOf("p1"), "p1");
+    sessions.refreshAssistants();
+
+    failing.add("p1");
+    liveAssistants.set(handleOf("p2"), "p2");
+    expect(() => sessions.refreshAssistants()).not.toThrow();
+    expect(assistantCalls(link).at(-1)!.payload).toEqual({
+      endpoints: [{ endpointId: "view-2", projectId: "p2", live: true }],
+    });
+
+    // Readable again and unchanged: nothing to correct.
+    failing.clear();
+    sessions.refreshAssistants();
+    expect(assistantCalls(link)).toHaveLength(2);
+    error.mockRestore();
+  });
+
+  it("says nothing more about a view whose endpoint closed", () => {
+    const link = fakeLink();
+    fake.attach("s1", link);
+    open(link, "view-1", "p1");
+    liveAssistants.set(handleOf("p1"), "p1");
+    sessions.refreshAssistants();
+    link.emit(Lane.CONTROL, ControlKind.ENDPOINT_CLOSE, { endpointId: "view-1" });
+
+    sessions.refreshAssistants();
+    expect(assistantCalls(link)).toHaveLength(1);
+  });
+});
+
+describe("SessionHost agent activity (#13359)", () => {
+  /** Projects with an agent working, waiting or directing here. */
+  let activeProjects: Set<string>;
+  let sessions: SessionHost;
+  let fake: ReturnType<typeof fakeServer>;
+
+  beforeEach(() => {
+    activeProjects = new Set();
+    fake = fakeServer();
+    sessions = new SessionHost(fake, {
+      dispatcher: { invokeForEndpoint: async () => wrapSuccess(null), sendForEndpoint: () => {} },
+      registry: new EndpointRegistryImpl(),
+      agentActive: (endpoint) => activeProjects.has(endpoint.projectId ?? ""),
+    });
+  });
+
+  afterEach(() => sessions.dispose());
+
+  // Every attempt, delivered or refused.
+  const agentCalls = (link: ReturnType<typeof fakeLink>) =>
+    link.call.mock.calls
+      .filter(([method]) => method === LinkMethod.ENDPOINT_AGENT_ACTIVITY)
+      .map(([, payload]) => payload);
+  const flush = async () => {
+    for (let i = 0; i < 5; i++) await Promise.resolve();
+  };
+
+  it("answers a view that opens onto agents already working, and only changes after", () => {
+    activeProjects.add("p1");
+    const link = fakeLink();
+    fake.attach("s1", link);
+    open(link, "view-1", "p1");
+    open(link, "view-2", "p2");
+    expect(agentCalls(link)).toEqual([
+      { endpoints: [{ endpointId: "view-1", projectId: "p1", active: true }] },
+      { endpoints: [{ endpointId: "view-2", projectId: "p2", active: false }] },
+    ]);
+
+    sessions.refreshAgentActivity();
+    expect(agentCalls(link)).toHaveLength(2);
+
+    activeProjects.delete("p1");
+    activeProjects.add("p2");
+    sessions.refreshAgentActivity();
+    expect(agentCalls(link).at(-1)).toEqual({
+      endpoints: [
+        { endpointId: "view-1", projectId: "p1", active: false },
+        { endpointId: "view-2", projectId: "p2", active: true },
+      ],
+    });
+  });
+
+  it("answers again for a view that moved between two projects with active agents", () => {
+    // The Shell drops a view's answer when it moves, so an unchanged boolean
+    // still has to be said about the new binding.
+    activeProjects.add("p1");
+    activeProjects.add("p2");
+    const link = fakeLink();
+    fake.attach("s1", link);
+    open(link, "view-1", "p1");
+
+    link.emit(Lane.CONTROL, ControlKind.ENDPOINT_REBIND, { endpointId: "view-1", projectId: "p2" });
+
+    expect(agentCalls(link).at(-1)).toEqual({
+      endpoints: [{ endpointId: "view-1", projectId: "p2", active: true }],
+    });
+  });
+
+  it("tells a resumed Shell every view's answer, including what changed while it was away", () => {
+    activeProjects.add("p1");
+    const first = fakeLink();
+    fake.attach("s1", first);
+    open(first, "view-1", "p1");
+    open(first, "view-2", "p2");
+    first.drop();
+
+    activeProjects.clear();
+    activeProjects.add("p2");
+    sessions.refreshAgentActivity();
+
+    const second = fakeLink();
+    fake.attach("s1", second, true);
+    expect(agentCalls(second)).toEqual([
+      {
+        endpoints: [
+          { endpointId: "view-1", projectId: "p1", active: false },
+          { endpointId: "view-2", projectId: "p2", active: true },
+        ],
+      },
+    ]);
+  });
+
+  it("asks an attached Shell again when it failed to take an answer, but not one from before the call", async () => {
+    const link = fakeLink();
+    fake.attach("s1", link);
+    open(link, "view-1", "p1");
+    link.call.mockRejectedValueOnce(Object.assign(new Error("busy"), { code: "RATE_LIMITED" }));
+    activeProjects.add("p1");
+    sessions.refreshAgentActivity();
+    await flush();
+    vi.advanceTimersByTime(ANSWER_RETRY_MS);
+    expect(agentCalls(link)).toHaveLength(3);
+    expect(agentCalls(link).at(-1)).toEqual({
+      endpoints: [{ endpointId: "view-1", projectId: "p1", active: true }],
+    });
+
+    link.call.mockRejectedValueOnce(Object.assign(new Error("old"), { code: "UNSUPPORTED" }));
+    activeProjects.delete("p1");
+    sessions.refreshAgentActivity();
+    await flush();
+    vi.advanceTimersByTime(ANSWER_RETRY_MS);
+    sessions.refreshAgentActivity();
+    expect(agentCalls(link)).toHaveLength(4);
+  });
+
+  it("keeps the assistant answer to itself", () => {
+    activeProjects.add("p1");
+    const link = fakeLink();
+    fake.attach("s1", link);
+    open(link, "view-1", "p1");
+    sessions.refreshAssistants();
+    expect(link.call.mock.calls.map(([method]) => method)).toEqual([
+      LinkMethod.ENDPOINT_AGENT_ACTIVITY,
+    ]);
+  });
+});

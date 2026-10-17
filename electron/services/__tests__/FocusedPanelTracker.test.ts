@@ -146,4 +146,42 @@ describe("FocusedPanelTracker", () => {
     expect(thrower).toHaveBeenCalledTimes(2);
     errors.mockRestore();
   });
+
+  describe("views attached from another machine", () => {
+    it("lets the newest screen decide, its 'no panel' included", () => {
+      const tracker = new FocusedPanelTracker();
+      tracker.reportRemote(-1, "pa", { kind: "terminal" }, true);
+      expect(kindOf(tracker)).toBe("terminal");
+      // Another Shell's screen focuses its sidebar: nothing, not the first terminal.
+      tracker.reportRemote(-2, "pb", { kind: null }, true);
+      expect(kindOf(tracker)).toBeNull();
+      // This machine's own screen then takes focus with a diff.
+      tracker.report(10, W1, "p1", { kind: "diff" });
+      tracker.setFocusedWindow(W1);
+      expect(tracker.getCurrent().workspaceId).toBe("p1");
+      tracker.reportRemote(-1, "pa", { kind: "browser" }, true);
+      expect(kindOf(tracker)).toBe("browser");
+    });
+
+    it("counts a remote screen only while its Shell says it is focused", () => {
+      const tracker = new FocusedPanelTracker();
+      tracker.setFocusedWindow(W1);
+      tracker.report(10, W1, "p1", { kind: "diff" });
+      tracker.reportRemote(-1, "pa", { kind: "terminal" }, true);
+      expect(kindOf(tracker)).toBe("terminal");
+      tracker.reportRemote(-1, "pa", { kind: "terminal" }, false);
+      expect(kindOf(tracker)).toBe("diff");
+      tracker.reportRemote(-1, "pa", { kind: "terminal" }, true);
+      tracker.removeRemote(-1);
+      expect(kindOf(tracker)).toBe("diff");
+    });
+
+    it("treats this machine's Portal gaining focus as its newest activity", () => {
+      const tracker = new FocusedPanelTracker();
+      tracker.setFocusedWindow(W1);
+      tracker.reportRemote(-1, "pa", { kind: "terminal" }, true);
+      tracker.setPortalFocused(W1, true);
+      expect(kindOf(tracker)).toBe("portal");
+    });
+  });
 });

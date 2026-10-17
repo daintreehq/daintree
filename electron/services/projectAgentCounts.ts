@@ -1,29 +1,52 @@
 import type { AgentState, WaitingReason } from "../../shared/types/agent.js";
 import type { PanelKind } from "../../shared/types/panel.js";
+import type { RunCanopyRefinement, RunHandBackRecord } from "../../shared/types/ipc/fleet.js";
+import { isHandBackStop, isHandBackUnseen } from "../../shared/utils/runHandBack.js";
+import { canopyPlacement } from "../../shared/utils/canopyRefinement.js";
 import { getAgentAvailabilityStore } from "./AgentAvailabilityStore.js";
 
 /** Per-project agent tallies derived from the live terminal list. */
 export interface ProjectAgentCounts {
   active: number;
+  /**
+   * Agents asking something of the user: an approval, a question, an error, or
+   * a prompt wait main never watched hand back work (a run already stopped when
+   * it was first seen). A watched hand-back is never counted here — it lands in
+   * {@link completed} instead, however its state has slid since (#13238).
+   */
   waiting: number;
   /** Waiting agents blocked on an error — a subset of {@link waiting}. */
   blocked: number;
   /** Earliest transition into `waiting`, or null when nothing is waiting. */
   oldestWaitingSince: number | null;
-  /** Agents settled in `completed` — work finished, awaiting human review. */
+  /**
+   * Agents that handed work back: settled in `completed`, or stopped at a plain
+   * prompt after work main watched. Seen or not — this is presence, and
+   * {@link unacknowledgedCompleted} is the part that asks for attention.
+   */
   completed: number;
   /**
-   * Completed agents whose completion the user has not seen yet: their
-   * transition into `completed` postdates the project's acknowledgement
-   * watermark. A subset of {@link completed}. Terminals in `completed` with no
-   * recorded transition time can never clear a timestamp watermark, so they
-   * count toward {@link completed} only.
+   * Finished agents the user has not seen yet. A run carrying a hand-back
+   * record answers from it: unseen or marked unread counts, seen never does. A
+   * run without one (stopped before main was watching) falls back to the
+   * project's acknowledgement watermark, and with no recorded transition time
+   * it can never clear one, so it counts toward {@link completed} only. A
+   * subset of {@link completed}.
    */
   unacknowledgedCompleted: number;
   /** Earliest unacknowledged completion, or null when everything was seen. */
   oldestUnacknowledgedCompletionAt: number | null;
   /** Latest unacknowledged completion, or null when everything was seen. */
   latestUnacknowledgedCompletionAt: number | null;
+  /**
+   * Latest unacknowledged completion the project watermark can clear: one with
+   * no hand-back record. Null when there is none. Main-only — the completion
+   * acknowledger stamps this, never {@link latestUnacknowledgedCompletionAt},
+   * because a recorded hand-back answers only to its own seen state and a
+   * watermark stamped from it would never clear the count, or could move
+   * backwards past completions it had already acknowledged.
+   */
+  latestWatermarkUnacknowledgedAt: number | null;
   /** Latest completion regardless of acknowledgement, for "finished 2h ago". */
   latestCompletionAt: number | null;
   /** Latest transition into `working`, or null. Orders the Running band. */
@@ -37,7 +60,8 @@ export interface ProjectAgentCounts {
    * {@link waiting}, {@link blocked} and {@link unacknowledgedCompleted}, which
    * are the tallies that make a project read as needing someone. Without this
    * field a project whose every agent is snoozed would be indistinguishable
-   * from one with nothing in it.
+   * from one with nothing in it. A parked run is withheld from the same three
+   * tallies, but is not counted here.
    */
   snoozed: number;
   /**
@@ -136,6 +160,26 @@ export type RunExclusionReason = "trashed" | "help" | "dev-preview" | "no-pty" |
  * one surface and not the other. A second copy of these five rules is a bug
  * waiting to be written, so there is exactly one.
  */
+/** An agent gone within this long of its launch failed to start, rather than finished. */
+export const LAUNCH_FAILURE_WINDOW_MS = 60_000;
+
+/**
+ * Launched as an agent, and the agent was gone within a minute: a crash, a
+ * missing login or a broken install, with the reason on screen in the shell it
+ * left behind. Still a run — the user asked for an agent and has none, which
+ * they need to see — unlike an agent quit on purpose after doing its work.
+ */
+function diedAtLaunch(terminal: CountableTerminal): boolean {
+  return (
+    Boolean(terminal.launchAgentId) &&
+    !terminal.detectedAgentId &&
+    terminal.agentState === "exited" &&
+    terminal.spawnedAt !== undefined &&
+    terminal.lastStateChange !== undefined &&
+    terminal.lastStateChange - terminal.spawnedAt <= LAUNCH_FAILURE_WINDOW_MS
+  );
+}
+
 export function classifyRun(
   terminal: CountableTerminal,
   isHelpTerminal: (id: string) => boolean
@@ -164,7 +208,7 @@ export function classifyRun(
   const hasLiveOrBootAgent =
     Boolean(terminal.detectedAgentId) ||
     (Boolean(terminal.launchAgentId) && terminal.everDetectedAgent !== true);
-  if (!hasLiveOrBootAgent) return "not-an-agent";
+  if (!hasLiveOrBootAgent && !diedAtLaunch(terminal)) return "not-an-agent";
 
   return null;
 }
@@ -179,6 +223,7 @@ function empty(): ProjectAgentCounts {
     unacknowledgedCompleted: 0,
     oldestUnacknowledgedCompletionAt: null,
     latestUnacknowledgedCompletionAt: null,
+    latestWatermarkUnacknowledgedAt: null,
     latestCompletionAt: null,
     latestWorkingSince: null,
     snoozed: 0,
@@ -200,6 +245,20 @@ function empty(): ProjectAgentCounts {
  */
 function usableTimestamp(value: number | undefined): number {
   return typeof value === "number" && Number.isFinite(value) && value > 0 ? value : 0;
+}
+
+/** Tally one unseen hand-back, dated when known. */
+function noteUnacknowledged(entry: ProjectAgentCounts, at: number): void {
+  entry.unacknowledgedCompleted += 1;
+  if (at <= 0) return;
+  entry.oldestUnacknowledgedCompletionAt = Math.min(
+    entry.oldestUnacknowledgedCompletionAt ?? Number.POSITIVE_INFINITY,
+    at
+  );
+  entry.latestUnacknowledgedCompletionAt = Math.max(
+    entry.latestUnacknowledgedCompletionAt ?? 0,
+    at
+  );
 }
 
 /**
@@ -388,7 +447,33 @@ export function computeProjectAgentCounts(
    * the pre-lane spawn-time ordering — the right answer for a harness
    * computing raw tallies, and for any caller that has no session service.
    */
-  assistantSlotForTerminal?: (terminalId: string) => number | null
+  assistantSlotForTerminal?: (terminalId: string) => number | null,
+  /**
+   * The hand-back record main kept for a run, keyed by terminal id and checked
+   * against its spawn time so a dead process's record cannot speak for a new
+   * one. `RunHandBackService.getRecord` is the intended source.
+   *
+   * It is what separates an agent that finished its turn from one asking
+   * something: both settle into `waiting` at the prompt. Omitting it leaves
+   * every prompt wait counted as one, which is all a harness computing raw
+   * tallies can claim to know.
+   */
+  handBackFor?: (terminalId: string, spawnedAt?: number) => RunHandBackRecord | undefined,
+  /**
+   * Runs the user has parked, keyed by terminal id.
+   * `RunAttentionService.getAll()` is the intended source. A park is withheld
+   * from every attention tally whatever the run is doing, as the fleet bands
+   * it (`bandForRun`); it still counts as presence.
+   */
+  parkedRuns?: ReadonlyMap<string, unknown>,
+  /**
+   * Canopy's refinement for a run's incarnation, when it has one —
+   * `canopyRefinementFor` is the intended source. An ask it read counts as a
+   * wait, and a question it read as asking nothing as a hand-back of its own,
+   * as the fleet bands them; a stall changes no tally here. Omitted, the free
+   * rules alone.
+   */
+  canopyFor?: (terminalId: string, spawnedAt: number) => RunCanopyRefinement | undefined
 ): Map<string, ProjectAgentCounts> {
   const counts = new Map<string, ProjectAgentCounts>();
   for (const id of projectIds) counts.set(id, empty());
@@ -430,6 +515,8 @@ export function computeProjectAgentCounts(
         ? activeSnoozes.get(terminal.id)
         : undefined;
     const isSnoozed = snooze !== undefined;
+    const isParked = terminal.id !== undefined && parkedRuns?.has(terminal.id) === true;
+    const isShelved = isSnoozed || isParked;
     if (isSnoozed) {
       entry.snoozed += 1;
       // An unlimited snooze carries no wake time and must not be allowed to
@@ -444,11 +531,47 @@ export function computeProjectAgentCounts(
       }
     }
 
-    if (terminal.agentState === "waiting") {
-      // A snoozed wait is withheld from every attention tally — waiting, its
+    // A stop main watched the run make after work it saw is a hand-back, and
+    // whether the user has seen it is the record's to say — through the slide
+    // from `completed` into a plain prompt wait, which otherwise reads as the
+    // agent asking for something (#13238). Same decision `bandForRun` makes,
+    // so the switcher and the fleet agree about what is outstanding.
+    const canopy =
+      terminal.id !== undefined && terminal.spawnedAt !== undefined
+        ? canopyPlacement(
+            terminal.agentState,
+            terminal.waitingReason,
+            canopyFor?.(terminal.id, terminal.spawnedAt)
+          )
+        : undefined;
+    const asked = canopy?.kind === "asked";
+    const notAsking = canopy?.kind === "not-asking" ? canopy : undefined;
+    const handBack =
+      terminal.id !== undefined &&
+      terminal.agentState !== undefined &&
+      !asked &&
+      isHandBackStop(terminal.agentState, terminal.waitingReason)
+        ? handBackFor?.(terminal.id, terminal.spawnedAt)
+        : undefined;
+
+    if (notAsking !== undefined) {
+      // A question wait is never recorded as a hand-back, so a record the run
+      // carries is from an earlier stop. The wait is the stop, unseen until
+      // Canopy's read mark covers its turn, as the fleet bands it.
+      entry.completed += 1;
+      const at = usableTimestamp(terminal.lastStateChange);
+      if (at > 0) entry.latestCompletionAt = Math.max(entry.latestCompletionAt ?? 0, at);
+      if (!isShelved && !notAsking.seen) noteUnacknowledged(entry, at);
+    } else if (handBack !== undefined) {
+      entry.completed += 1;
+      const at = usableTimestamp(handBack.stoppedAt) || usableTimestamp(terminal.lastStateChange);
+      if (at > 0) entry.latestCompletionAt = Math.max(entry.latestCompletionAt ?? 0, at);
+      if (!isShelved && isHandBackUnseen(handBack)) noteUnacknowledged(entry, at);
+    } else if (terminal.agentState === "waiting" || asked) {
+      // A shelved wait is withheld from every attention tally — waiting, its
       // blocked subset, and the age that dates them. The run is still there and
       // still waiting; the user has said it does not need them yet.
-      if (!isSnoozed) {
+      if (!isShelved) {
         entry.waiting += 1;
         // `"error"` means the agent settled after a blocking failure, where input
         // may not unblock it — a materially different ask than an empty prompt.
@@ -457,7 +580,13 @@ export function computeProjectAgentCounts(
 
         // Age the wait from the transition into `waiting`. Terminals that haven't
         // recorded one yet still count toward `waiting` but can't contribute an age.
-        const since = terminal.lastStateChange;
+        // An ask Canopy read on a hand-back is as old as the stop it was asked at,
+        // as the fleet dates it, not the slide from `completed` into a prompt.
+        const askedAt =
+          asked && terminal.id !== undefined
+            ? handBackFor?.(terminal.id, terminal.spawnedAt)?.stoppedAt
+            : undefined;
+        const since = askedAt ?? terminal.lastStateChange;
         if (typeof since === "number" && since > 0) {
           entry.oldestWaitingSince =
             entry.oldestWaitingSince === null ? since : Math.min(entry.oldestWaitingSince, since);
@@ -474,20 +603,17 @@ export function computeProjectAgentCounts(
       const at = terminal.lastStateChange;
       if (typeof at === "number" && at > 0) {
         entry.latestCompletionAt = Math.max(entry.latestCompletionAt ?? 0, at);
+        // No hand-back record, so the project watermark is all there is.
         // Unacknowledged = finished after the user last saw this project.
         // Deliberately no elapsed-time cutoff: a completion that happened
         // while the user was away must stay surfaced until actually seen.
-        // A snoozed completion is exempt: the hand-back is real, but the user
+        // A shelved completion is exempt: the hand-back is real, but the user
         // has already said they don't want to be reminded of it yet.
         const seenUpTo = lastCompletionSeenAt?.get(terminal.projectId) ?? 0;
-        if (!isSnoozed && at > seenUpTo) {
-          entry.unacknowledgedCompleted += 1;
-          entry.oldestUnacknowledgedCompletionAt = Math.min(
-            entry.oldestUnacknowledgedCompletionAt ?? Number.POSITIVE_INFINITY,
-            at
-          );
-          entry.latestUnacknowledgedCompletionAt = Math.max(
-            entry.latestUnacknowledgedCompletionAt ?? 0,
+        if (!isShelved && at > seenUpTo) {
+          noteUnacknowledged(entry, at);
+          entry.latestWatermarkUnacknowledgedAt = Math.max(
+            entry.latestWatermarkUnacknowledgedAt ?? 0,
             at
           );
         }

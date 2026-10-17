@@ -1,12 +1,6 @@
 import { describe, expect, it } from "vitest";
-import fs from "node:fs";
-import path from "node:path";
-import { fileURLToPath } from "node:url";
 import { FILE_TREE_ICON_CLASS } from "@/panels/file-browser/fileTypeIcons";
-
-const TEST_DIR = path.dirname(fileURLToPath(import.meta.url));
-const REPO_ROOT = path.resolve(TEST_DIR, "../../..");
-const INDEX_CSS = path.join(REPO_ROOT, "src/index.css");
+import { readIndexCss } from "@/__tests__/support/hostCss";
 
 // Issue #11596: the file-browser tree draws entry icons in the secondary text
 // token so they sit under the filename they label. That token is tuned for
@@ -20,8 +14,8 @@ function stripComments(css: string): string {
 }
 
 /** Bodies of every `@media (<query>)` block in a stylesheet, brace-matched. */
-function readMediaBlocks(file: string, query: string): string {
-  const content = stripComments(fs.readFileSync(file, "utf8"));
+function readMediaBlocks(css: string, query: string): string {
+  const content = stripComments(css);
   const marker = `@media (${query})`;
   const blocks: string[] = [];
 
@@ -57,7 +51,7 @@ const SELECTOR = new RegExp(`\\.${FILE_TREE_ICON_CLASS}\\s*\\{([^}]*)\\}`);
 
 describe("file-tree icon contrast contract (#11596)", () => {
   it("lifts entry icons to the solid text token under Increase Contrast", () => {
-    const block = readMediaBlocks(INDEX_CSS, "prefers-contrast: more");
+    const block = readMediaBlocks(readIndexCss(), "prefers-contrast: more");
     // Fail loudly rather than vacuously if the whole block ever disappears.
     expect(block).not.toBe("");
 
@@ -87,7 +81,7 @@ describe("file-tree icon contrast contract (#11596)", () => {
     // Scoped to rules that name the icon class: the property inherits, so an
     // ancestor opting out would defeat this too, but enumerating every possible
     // ancestor selector is not something a source scan can do honestly.
-    const content = stripComments(fs.readFileSync(INDEX_CSS, "utf8"));
+    const content = stripComments(readIndexCss());
     const rules = [
       ...content.matchAll(new RegExp(`\\.${FILE_TREE_ICON_CLASS}[^{}]*\\{([^}]*)\\}`, "g")),
     ];

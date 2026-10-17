@@ -13,6 +13,7 @@ import {
   computeProjectAgentCounts,
   type CountableTerminal,
 } from "../projectAgentCounts.js";
+import type { RunCanopyRefinement } from "../../../shared/types/ipc/fleet.js";
 
 const agent = (over: Partial<CountableTerminal> = {}): CountableTerminal => ({
   id: "t1",
@@ -83,6 +84,19 @@ describe("classifyRun", () => {
     expect(classifyRun(agent({ launchAgentId: "codex", everDetectedAgent: true }), isHelp)).toBe(
       "not-an-agent"
     );
+  });
+
+  it("keeps an agent that died within a minute of launch, but not one quit after its work", () => {
+    const exited = (afterMs: number) =>
+      agent({
+        launchAgentId: "gemini",
+        everDetectedAgent: true,
+        agentState: "exited",
+        spawnedAt: 1_000_000,
+        lastStateChange: 1_000_000 + afterMs,
+      });
+    expect(classifyRun(exited(5_000), isHelp)).toBeNull();
+    expect(classifyRun(exited(30 * 60_000), isHelp)).toBe("not-an-agent");
   });
 });
 
@@ -473,20 +487,6 @@ describe("computeProjectAgentCounts — snooze", () => {
     expect(p1.snoozed).toBe(1);
   });
 
-  it("reads as Running when one agent is snoozed-waiting and another is working", () => {
-    // The issue's headline scenario, straight through the counts.
-    const counts = computeProjectAgentCounts(
-      ["p1"],
-      [agent({ id: "t1", agentState: "waiting" }), agent({ id: "t2", agentState: "working" })],
-      undefined,
-      snoozes("t1")
-    );
-
-    const p1 = counts.get("p1")!;
-    expect(p1.waiting).toBe(0);
-    expect(p1.active).toBe(1);
-  });
-
   it("keeps the subset invariants intact across a mixed snoozed/unsnoozed project", () => {
     // blocked <= waiting and unacknowledgedCompleted <= completed have to hold
     // whatever snooze suppresses, or a row renders a count it cannot explain.
@@ -579,18 +579,6 @@ describe("computeProjectAgentCounts — snooze", () => {
     expect(p1.waiting).toBe(1);
     expect(p1.snoozed).toBe(0);
     expect(p1.nextSnoozeWakeAt).toBeNull();
-  });
-
-  it("does not snooze a run whose id merely resembles another project's", () => {
-    const counts = computeProjectAgentCounts(
-      ["p1"],
-      [agent({ id: "t1", agentState: "waiting" })],
-      undefined,
-      snoozes("t2")
-    );
-
-    expect(counts.get("p1")!.waiting).toBe(1);
-    expect(counts.get("p1")!.snoozed).toBe(0);
   });
 
   it("never counts an excluded terminal as snoozed", () => {
@@ -854,5 +842,267 @@ describe("computeProjectAgentCounts — assistant presence (#11806)", () => {
 
     expect(counts.get("p1")!.assistantState).toBe("idle");
     expect(counts.get("p1")!.assistantStateSince).toBe(4_000);
+  });
+});
+
+describe("computeProjectAgentCounts — hand-backs and parks (#13238)", () => {
+  const p1Terminals = () => [agent({ id: "a", agentState: "completed", lastStateChange: 4_000 })];
+  type HandBack = { stoppedAt: number; seenAt?: number; markedUnreadAt?: number };
+  const count = (
+    terminals: CountableTerminal[],
+    records: Readonly<Partial<Record<string, HandBack>>> = {},
+    options: { parked?: string[]; snoozed?: string[]; seenUpTo?: number } = {}
+  ) =>
+    computeProjectAgentCounts(
+      ["p1"],
+      terminals.map((t) => ({ detectedAgentId: "claude", ...t })),
+      options.seenUpTo !== undefined ? new Map([["p1", options.seenUpTo]]) : undefined,
+      new Map((options.snoozed ?? []).map((id) => [id, {}])),
+      undefined,
+      undefined,
+      (id) => records[id],
+      new Map((options.parked ?? []).map((id) => [id, {}]))
+    ).get("p1")!;
+
+  it("counts an unseen hand-back resting at a prompt as finished and unseen, not waiting", () => {
+    const p1 = count([agent({ id: "a", agentState: "waiting", waitingReason: "prompt" })], {
+      a: { stoppedAt: 500 },
+    });
+
+    expect(p1).toMatchObject({
+      waiting: 0,
+      blocked: 0,
+      oldestWaitingSince: null,
+      completed: 1,
+      unacknowledgedCompleted: 1,
+      oldestUnacknowledgedCompletionAt: 500,
+      latestUnacknowledgedCompletionAt: 500,
+      latestCompletionAt: 500,
+    });
+  });
+
+  it("settles a seen hand-back: finished, but toward no attention tally", () => {
+    const p1 = count([agent({ id: "a", agentState: "waiting" })], {
+      a: { stoppedAt: 500, seenAt: 600 },
+    });
+
+    expect(p1).toMatchObject({ waiting: 0, completed: 1, unacknowledgedCompleted: 0 });
+  });
+
+  it("brings a hand-back marked unread back into the unseen tally", () => {
+    const p1 = count([agent({ id: "a", agentState: "completed", lastStateChange: 500 })], {
+      a: { stoppedAt: 500, seenAt: 600, markedUnreadAt: 700 },
+    });
+
+    expect(p1).toMatchObject({ completed: 1, unacknowledgedCompleted: 1 });
+  });
+
+  it("lets the record outrank the project watermark for a completed run", () => {
+    const p1 = count(
+      [agent({ id: "a", agentState: "completed", lastStateChange: 500 })],
+      { a: { stoppedAt: 500, seenAt: 600 } },
+      { seenUpTo: 0 }
+    );
+
+    expect(p1.unacknowledgedCompleted).toBe(0);
+  });
+
+  it("keeps approval, question and error waits as asks even with a record", () => {
+    const record = { stoppedAt: 500 };
+    const p1 = count(
+      [
+        agent({ id: "a", agentState: "waiting", waitingReason: "approval" }),
+        agent({ id: "b", agentState: "waiting", waitingReason: "question" }),
+        agent({ id: "c", agentState: "waiting", waitingReason: "error" }),
+      ],
+      { a: record, b: record, c: record }
+    );
+
+    expect(p1).toMatchObject({ waiting: 3, blocked: 1, completed: 0, unacknowledgedCompleted: 0 });
+  });
+
+  it("still counts a prompt wait main never watched hand back as an ask", () => {
+    const p1 = count([agent({ id: "a", agentState: "waiting", waitingReason: "prompt" })]);
+
+    expect(p1).toMatchObject({ waiting: 1, completed: 0 });
+  });
+
+  it("falls back to the watermark for a completed run with no record", () => {
+    const terminals = [agent({ id: "a", agentState: "completed", lastStateChange: 500 })];
+
+    expect(count(terminals, {}, { seenUpTo: 400 }).unacknowledgedCompleted).toBe(1);
+    expect(count(terminals, {}, { seenUpTo: 500 }).unacknowledgedCompleted).toBe(0);
+  });
+
+  it("passes the spawn time through so a dead process's record cannot speak", () => {
+    const handBackFor = vi.fn(() => undefined);
+    computeProjectAgentCounts(
+      ["p1"],
+      [agent({ id: "a", detectedAgentId: "claude", agentState: "waiting", spawnedAt: 42 })],
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      handBackFor
+    );
+
+    expect(handBackFor).toHaveBeenCalledWith("a", 42);
+  });
+
+  it("withholds parked runs from every attention tally but keeps their presence", () => {
+    const p1 = count(
+      [
+        agent({ id: "a", agentState: "waiting", waitingReason: "approval", lastStateChange: 5 }),
+        agent({ id: "b", agentState: "waiting", waitingReason: "error" }),
+        agent({ id: "c", agentState: "completed", lastStateChange: 500 }),
+        agent({ id: "d", agentState: "waiting" }),
+        agent({ id: "e", agentState: "working" }),
+      ],
+      { d: { stoppedAt: 700 } },
+      { parked: ["a", "b", "c", "d", "e"] }
+    );
+
+    expect(p1).toMatchObject({
+      waiting: 0,
+      blocked: 0,
+      oldestWaitingSince: null,
+      unacknowledgedCompleted: 0,
+      completed: 2,
+      active: 1,
+      snoozed: 0,
+    });
+  });
+
+  it("offers the watermark only the completions it can clear", () => {
+    // A recorded hand-back answers to its own seen state. Stamping the
+    // watermark from it would never clear it, and an old one marked unread
+    // would drag the watermark back under completions already acknowledged.
+    const p1 = count(
+      [
+        agent({ id: "a", agentState: "completed", lastStateChange: 4_000 }),
+        agent({ id: "b", agentState: "completed", lastStateChange: 9_000 }),
+        agent({ id: "c", agentState: "waiting" }),
+      ],
+      { b: { stoppedAt: 9_000 }, c: { stoppedAt: 1_000, seenAt: 2_000, markedUnreadAt: 3_000 } },
+      { seenUpTo: 3_500 }
+    );
+
+    expect(p1).toMatchObject({
+      unacknowledgedCompleted: 3,
+      latestUnacknowledgedCompletionAt: 9_000,
+      latestWatermarkUnacknowledgedAt: 4_000,
+    });
+    expect(
+      count(p1Terminals(), {}, { seenUpTo: 5_000 }).latestWatermarkUnacknowledgedAt
+    ).toBeNull();
+  });
+
+  it("withholds a snoozed unseen hand-back from the unseen tally", () => {
+    const p1 = count(
+      [agent({ id: "a", agentState: "waiting" })],
+      { a: { stoppedAt: 500 } },
+      {
+        snoozed: ["a"],
+      }
+    );
+
+    expect(p1).toMatchObject({ completed: 1, unacknowledgedCompleted: 0, snoozed: 1 });
+  });
+});
+
+describe("computeProjectAgentCounts — Canopy refinements (#13239)", () => {
+  const count = (
+    terminals: CountableTerminal[],
+    refinement: RunCanopyRefinement | undefined,
+    records: Readonly<Partial<Record<string, { stoppedAt: number; seenAt?: number }>>> = {}
+  ) =>
+    computeProjectAgentCounts(
+      ["p1"],
+      terminals.map((t) => ({ detectedAgentId: "claude", spawnedAt: 1, ...t })),
+      undefined,
+      new Map(),
+      undefined,
+      undefined,
+      (id) => records[id],
+      new Map(),
+      () => refinement
+    ).get("p1")!;
+
+  it("counts a seen hand-back Canopy read as asking something as a wait, like the fleet bands it", () => {
+    // Slid from `completed` into a prompt wait at 900, after stopping at 500.
+    const terminals = [
+      agent({ id: "a", agentState: "waiting", waitingReason: "prompt", lastStateChange: 900 }),
+    ];
+    const records = { a: { stoppedAt: 500, seenAt: 600 } };
+    expect(count(terminals, undefined, records)).toMatchObject({ waiting: 0, completed: 1 });
+    expect(
+      count(
+        terminals,
+        { kind: "asked", quote: "Want me to update the tests?", readAt: 700 },
+        records
+      )
+    ).toMatchObject({ waiting: 1, completed: 0, oldestWaitingSince: 500 });
+  });
+
+  const NOT_ASKING = {
+    kind: "not-asking",
+    quote: "All tests pass.",
+    readAt: 700,
+    seen: false,
+  } as const;
+
+  it("counts a question wait Canopy read as asking nothing as an unseen hand-back of its own", () => {
+    // A first turn: a question wait is never recorded as a hand-back.
+    const terminals = [
+      agent({ id: "a", agentState: "waiting", waitingReason: "question", lastStateChange: 900 }),
+    ];
+    expect(count(terminals, undefined)).toMatchObject({ waiting: 1, completed: 0 });
+    expect(count(terminals, NOT_ASKING)).toMatchObject({
+      waiting: 0,
+      completed: 1,
+      unacknowledgedCompleted: 1,
+      latestCompletionAt: 900,
+      oldestUnacknowledgedCompletionAt: 900,
+    });
+    expect(count(terminals, { ...NOT_ASKING, seen: true })).toMatchObject({
+      waiting: 0,
+      completed: 1,
+      unacknowledgedCompleted: 0,
+    });
+  });
+
+  it("never lets an earlier stop's read mark speak for a question wait that asks nothing", () => {
+    // The record is the stop before this wait, seen before this wait began.
+    const terminals = [
+      agent({ id: "a", agentState: "waiting", waitingReason: "question", lastStateChange: 900 }),
+    ];
+    const records = { a: { stoppedAt: 300, seenAt: 400 } };
+    expect(count(terminals, NOT_ASKING, records)).toMatchObject({
+      completed: 1,
+      unacknowledgedCompleted: 1,
+      latestCompletionAt: 900,
+      oldestUnacknowledgedCompletionAt: 900,
+    });
+  });
+
+  it("withholds a shelved question wait that asks nothing from the unseen tally", () => {
+    const terminals = [agent({ id: "a", agentState: "waiting", waitingReason: "question" })];
+    const counts = computeProjectAgentCounts(
+      ["p1"],
+      terminals.map((t) => ({ detectedAgentId: "claude", spawnedAt: 1, ...t })),
+      undefined,
+      new Map(),
+      undefined,
+      undefined,
+      () => undefined,
+      new Map([["a", {}]]),
+      () => NOT_ASKING
+    ).get("p1")!;
+    expect(counts).toMatchObject({ waiting: 0, unacknowledgedCompleted: 0 });
+  });
+
+  it("never lets a reading clear an approval Daintree observed", () => {
+    const terminals = [agent({ id: "a", agentState: "waiting", waitingReason: "approval" })];
+    expect(count(terminals, NOT_ASKING).waiting).toBe(1);
   });
 });

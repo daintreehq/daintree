@@ -13,7 +13,8 @@ import type { McpApprovalScope, McpConfirmationDecision } from "@shared/types/ip
 import { cn } from "@/lib/utils";
 import { Checkbox } from "@/components/ui/checkbox";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
-import { Spinner } from "@/components/ui/Spinner";
+import { AppDialog } from "@/components/ui/AppDialog";
+import { Skeleton, SkeletonText } from "@/components/ui/Skeleton";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
 import { isCautionPreviewLine, stripCautionPrefix } from "@/lib/mcpPreviewLines";
 import {
@@ -86,6 +87,9 @@ const PREVIEW_MIN_BODY_HEIGHT = "min-h-[5.5rem]";
  */
 const PREVIEW_MAX_BODY_HEIGHT = "max-h-[13rem]";
 
+/** The house's long-wait mark: past it, a loading state says it is still going. */
+const PREVIEW_STILL_WORKING_MS = 5_000;
+
 function truncateUserAgent(userAgent: string): string {
   return userAgent.length > MAX_USER_AGENT_DISPLAY
     ? `${userAgent.slice(0, MAX_USER_AGENT_DISPLAY - 1)}…`
@@ -146,14 +150,40 @@ export function McpConfirmDialog() {
       requestId: string,
       decision: McpConfirmationDecision,
       selectedTargetIds?: readonly string[],
-      scope?: McpApprovalScope
+      scope?: McpApprovalScope,
+      unseen?: boolean
     ) => {
       if (handledRequestIdRef.current === requestId) return;
       handledRequestIdRef.current = requestId;
-      resolveCurrent(decision, selectedTargetIds, scope);
+      resolveCurrent(decision, selectedTargetIds, scope, unseen);
     },
     [resolveCurrent]
   );
+
+  // Whether this view was reported visible at any point while the request
+  // asked. Keyed on the request rather than `current`, which a preview landing
+  // replaces. A view the page reports hidden (a host's project in the
+  // background, a minimised window, on macOS one covered by others) still opens
+  // the dialog, and a timeout there means nobody saw it, not that anyone declined.
+  const seenRef = useRef<{ requestId: string; seen: boolean } | null>(null);
+  const currentRequestId = current?.requestId ?? null;
+  useEffect(() => {
+    if (currentRequestId === null) return;
+    if (seenRef.current?.requestId !== currentRequestId) {
+      seenRef.current = { requestId: currentRequestId, seen: false };
+    }
+    const observe = () => {
+      if (
+        document.visibilityState === "visible" &&
+        seenRef.current?.requestId === currentRequestId
+      ) {
+        seenRef.current.seen = true;
+      }
+    };
+    observe();
+    document.addEventListener("visibilitychange", observe);
+    return () => document.removeEventListener("visibilitychange", observe);
+  }, [currentRequestId]);
 
   // Which rows of a selectable confirmation are still checked (#12123). Every
   // target starts checked: these are the exact finite ids the caller already
@@ -178,6 +208,17 @@ export function McpConfirmDialog() {
   useLayoutEffect(() => {
     setAllowForSession(false);
   }, [resetKey]);
+
+  // A preview still pending after the house's long-wait mark says so, rather
+  // than leaving the same line up for the whole wait.
+  const previewPending = current?.previewPending === true;
+  const [previewSlow, setPreviewSlow] = useState(false);
+  useLayoutEffect(() => {
+    setPreviewSlow(false);
+    if (!previewPending) return;
+    const timer = setTimeout(() => setPreviewSlow(true), PREVIEW_STILL_WORKING_MS);
+    return () => clearTimeout(timer);
+  }, [resetKey, previewPending]);
 
   const toggleTarget = useCallback((id: string) => {
     setSelectedIds((previous) => {
@@ -215,7 +256,8 @@ export function McpConfirmDialog() {
       MAIN_DISPATCH_DEADLINE_MS - elapsed
     );
     const timer = setTimeout(() => {
-      resolveOnce(requestId, "timeout");
+      const seen = seenRef.current?.requestId === requestId ? seenRef.current.seen : true;
+      resolveOnce(requestId, "timeout", undefined, undefined, !seen);
     }, remaining);
     return () => clearTimeout(timer);
   }, [current, resolveOnce]);
@@ -268,19 +310,35 @@ export function McpConfirmDialog() {
     selectableTargets !== undefined ||
     showAssistantPreference;
 
+  const offersSession = current.offerSessionApproval === true;
+  // Queue depth stays out of a typed-name request's footer: the slot belongs to
+  // ConfirmDialog's own "type the phrase" instruction, which is the one reason
+  // for the dead button the approver cannot otherwise see.
+  const hint = gateHintText(
+    previewState,
+    previewSlow,
+    current.typedNameTarget ? 0 : queueDepth,
+    selectableTargets !== undefined && selectedCount === 0
+  );
+
   const sharedProps = {
     isOpen: true,
+    // One width for every request, so a promotion never re-centres the buttons
+    // sideways; wide enough that a file path or commit subject stays on one line
+    // and the scoped session label still leaves the footer hint room to read.
+    size: "md" as const,
     onClose: () => resolveOnce(current.requestId, "rejected"),
     title: confirmTitle(current),
-    description: current.actionDescription,
-    confirmLabel: selectionConfirmLabel(current, selectedCount),
+    confirmLabel: offersSession
+      ? sessionConfirmLabel(current.actionTitle, allowForSession)
+      : selectionConfirmLabel(current, selectedCount),
     cancelLabel: "Cancel",
     onConfirm: () =>
       resolveOnce(
         current.requestId,
         "approved",
         approvedTargetIds,
-        current.offerSessionApproval === true && allowForSession ? "session" : undefined
+        offersSession && allowForSession ? "session" : undefined
       ),
     hasPreview: hasScrollableContent,
     // An empty selection is the same outcome as Cancel with an extra dispatch in
@@ -289,28 +347,34 @@ export function McpConfirmDialog() {
       previewState === "pending" || (selectableTargets !== undefined && selectedCount === 0),
     confirmCooldownMs: isDestructive ? CONFIRM_COOLDOWN_MS : undefined,
     cooldownKey: current.requestId,
-    // The preference control must never be where focus lands: an arrow key
-    // meant for the dialog would otherwise change an app-wide setting.
-    initialFocus: showAssistantPreference ? ("cancel" as const) : undefined,
-    hint: (
-      <GateHint
-        previewState={previewState}
-        queueDepth={queueDepth}
-        emptySelection={selectableTargets !== undefined && selectedCount === 0}
-      />
-    ),
+    // A promoted request is a new question: it opens at the top, with focus back
+    // on the safe default rather than on the button that answered the last one.
+    bodyResetKey: current.requestId,
+    focusResetKey: current.requestId,
+    // Neither future-requests control may be where focus lands: a Space or an
+    // arrow key meant for something else would otherwise widen a grant or change
+    // an app-wide setting. A bare request has nothing else focusable before them.
+    initialFocus: showAssistantPreference || offersSession ? ("cancel" as const) : undefined,
+    // Absent rather than empty when there is nothing to say, so ConfirmDialog's
+    // own typed-name hint can take the slot.
+    hint: hint ? (
+      // Wraps rather than truncating: beside the long session label the reason
+      // the button is dead would otherwise shrink to an ellipsis. Two lines of
+      // text-xs sit inside the button's height, so the row never moves.
+      <span aria-live="polite" className="line-clamp-2 min-w-0 break-words">
+        {hint}
+      </span>
+    ) : undefined,
   };
 
+  // Who → what happens → what's affected → detail → later requests. The
+  // description stays beside the rationale: some actions carry a warning in one
+  // that the other doesn't repeat (forge.dismissReview's merge-safety note).
   const body = (
-    <div className="space-y-3">
+    <div className="space-y-4">
       <RequesterRow current={current} />
 
-      {current.approvalReason === "above-tier" && (
-        <p className="text-xs text-text-secondary leading-relaxed select-text">
-          This is beyond what this project&apos;s MCP tier lets agents do on their own, so it needs
-          your approval to run.
-        </p>
-      )}
+      <AppDialog.Description>{current.actionDescription}</AppDialog.Description>
 
       {current.dangerRationale && (
         <ConsequenceNote isDestructive={isDestructive}>{current.dangerRationale}</ConsequenceNote>
@@ -318,6 +382,9 @@ export function McpConfirmDialog() {
 
       {selectableTargets !== undefined && (
         <TargetChecklist
+          // Keyed per request so a promoted request's list opens scrolled to its
+          // top; each keyed sibling needs its own prefix, or React matches them.
+          key={`targets:${current.requestId}`}
           targets={selectableTargets}
           selectedIds={selectedIds}
           onToggle={toggleTarget}
@@ -326,26 +393,35 @@ export function McpConfirmDialog() {
 
       {previewState !== "none" && (
         <PreviewCard
+          key={`preview:${current.requestId}`}
           title={current.previewTitle ?? "Working tree changes"}
           state={previewState}
           lines={current.preview ?? []}
         />
       )}
 
-      {hasArgs && <ArgumentsDisclosure argsSummary={current.argsSummary} />}
+      {hasArgs && (
+        <ArgumentsDisclosure key={`args:${current.requestId}`} argsSummary={current.argsSummary} />
+      )}
 
-      {current.offerSessionApproval === true && (
-        <SessionApprovalOption
-          actionTitle={current.actionTitle}
-          checked={allowForSession}
-          onCheckedChange={setAllowForSession}
-        />
+      {offersSession && (
+        <LaterRequests>
+          <SessionApprovalOption
+            actionTitle={current.actionTitle}
+            checked={allowForSession}
+            onCheckedChange={setAllowForSession}
+          />
+        </LaterRequests>
       )}
 
       {/* Not keyed per request: one assistant request promoting into another
           would otherwise unmount a focused segment and drop focus to the body.
           The value is app-wide, so it carries across requests unchanged. */}
-      {showAssistantPreference && <AssistantConfirmationPreference />}
+      {showAssistantPreference && (
+        <LaterRequests>
+          <AssistantConfirmationPreference />
+        </LaterRequests>
+      )}
     </div>
   );
 
@@ -389,6 +465,18 @@ export function selectionConfirmLabel(current: PendingMcpConfirm, selectedCount:
   const label = current.selectionConfirmLabel;
   if (current.selectableTargets === undefined || label === undefined) return current.actionTitle;
   return `${label.verb} ${selectedCount} ${selectedCount === 1 ? label.one : label.many}`;
+}
+
+/**
+ * The confirm button's label when the request also offers a session grant.
+ *
+ * The checkbox changes what the click does, so the button says which of the two
+ * it is about to do: one call, or this call plus every later call to the same
+ * tool. A button that read the same either way would hide the broader reach in
+ * a control the approver may have ticked and scrolled past.
+ */
+export function sessionConfirmLabel(actionTitle: string, allowForSession: boolean): string {
+  return allowForSession ? `${actionTitle} and allow for session` : `${actionTitle} once`;
 }
 
 /**
@@ -439,26 +527,49 @@ function RequesterRow({ current }: { current: PendingMcpConfirm }) {
   } else if (callerInfo) {
     Icon = Plug;
     name = truncateUserAgent(callerInfo.userAgent);
-    detail = `…${callerInfo.token4LastChars}`;
+    // A host's agent has no bearer of this machine's, so nothing to show.
+    detail = callerInfo.token4LastChars ? `…${callerInfo.token4LastChars}` : null;
   } else if (isAssistant) {
     Icon = Sparkles;
     name = "Daintree Assistant";
   }
 
   return (
-    <div className="flex items-baseline gap-2 text-xs">
-      <span className="shrink-0 text-text-secondary">Requested by</span>
-      <span className="flex min-w-0 flex-1 items-baseline gap-1.5">
-        <Icon
-          aria-hidden="true"
-          className="w-3 h-3 shrink-0 translate-y-0.5 text-daintree-text/45"
-        />
-        <CallerName name={name} userAgent={callerInfo?.userAgent} />
-        {detail && (
-          <span className="shrink-0 font-mono text-2xs text-text-secondary">{detail}</span>
-        )}
-      </span>
+    <div className="space-y-1">
+      <div className="flex items-center gap-2">
+        <span className="shrink-0 text-xs text-text-secondary">Requested by</span>
+        <span className="flex min-w-0 flex-1 items-center gap-1.5">
+          <Icon aria-hidden="true" className="size-3.5 shrink-0 text-text-secondary" />
+          <CallerName name={name} userAgent={callerInfo?.userAgent} />
+          {detail && (
+            <span className="shrink-0 font-mono text-2xs text-text-secondary">{detail}</span>
+          )}
+        </span>
+      </div>
+      {/* The question is about reach, not danger: the action may be harmless. */}
+      {current.approvalReason === "above-tier" && (
+        <p className="text-xs text-text-secondary">
+          Above this project&apos;s MCP tier, so it needs your approval
+        </p>
+      )}
     </div>
+  );
+}
+
+/**
+ * The future-requests band under the request: session grants and standing
+ * preferences. Ruled off and labelled so it reads as a separate decision from
+ * the one the footer answers — nothing in here approves the call on screen.
+ */
+function LaterRequests({ children }: { children: React.ReactNode }) {
+  const labelId = useId();
+  return (
+    <section aria-labelledby={labelId} className="space-y-2 border-t border-tint/[0.08] pt-3">
+      <h3 id={labelId} className={SECTION_LABEL_CLASS}>
+        Later requests
+      </h3>
+      {children}
+    </section>
   );
 }
 
@@ -468,7 +579,8 @@ function RequesterRow({ current }: { current: PendingMcpConfirm }) {
  * Spells out the reach, because it is wider than the call on screen: later
  * calls to the same tool run with whatever arguments the agent sends. The
  * lifetime is the grant cache's hard ceiling, not its sliding window, so it is
- * the most the approval can ever last.
+ * the most the approval can ever last. Only the box and its label toggle it;
+ * the scope line is there to be read, not clicked.
  */
 function SessionApprovalOption({
   actionTitle,
@@ -479,25 +591,24 @@ function SessionApprovalOption({
   checked: boolean;
   onCheckedChange: (checked: boolean) => void;
 }) {
-  const labelId = useId();
+  const checkboxId = useId();
   const detailId = useId();
   return (
-    <div className="relative flex items-start gap-2">
+    <div className="flex items-start gap-2">
       <Checkbox
+        id={checkboxId}
         size="sm"
         checked={checked}
         onCheckedChange={(value) => onCheckedChange(value === true)}
-        aria-labelledby={labelId}
         aria-describedby={detailId}
-        className="static mt-0.5 before:absolute before:inset-0 before:content-['']"
+        className="mt-0.5"
       />
       <span className="flex min-w-0 flex-1 flex-col gap-0.5">
-        <span id={labelId} className="text-xs text-text-primary">
-          Allow for the rest of this session
-        </span>
+        <label htmlFor={checkboxId} className="w-fit text-xs text-text-primary">
+          Allow for this session
+        </label>
         <span id={detailId} className="text-2xs text-text-secondary">
-          This agent&apos;s later {actionTitle} calls run without asking, with any arguments, for up
-          to 30 minutes.
+          Later {actionTitle} calls from this agent · any arguments · up to 30 minutes
         </span>
       </span>
     </div>
@@ -527,6 +638,10 @@ function AssistantConfirmationPreference() {
     (state) => state.settings?.globalSkipPermissions === true
   );
   const detailId = useId();
+  const panelId = useId();
+  // Collapsed on every mount: changing a standing setting is a deliberate
+  // second step, never something an approver stumbles into.
+  const [expanded, setExpanded] = useState(false);
   const mountedRef = useRef(true);
   // Saves are told apart by issue order, not by value: Never → Always → Never
   // must not let the first save's failure undo the third's success. A failure
@@ -589,47 +704,68 @@ function AssistantConfirmationPreference() {
     );
   };
 
-  let detail: string;
+  const asks =
+    preference !== null && !assistantSkipsDaintreeConfirmations(preference, globalSkipPermissions);
+  const preferenceLabel =
+    DAINTREE_CONFIRMATION_OPTIONS.find((option) => option.value === preference)?.label ?? "";
+
+  let summary: string;
   if (status === "loading") {
-    detail = "Checking the current setting…";
+    summary = "Checking…";
   } else if (status === "load-failed" || preference === null) {
-    detail = "Couldn't read the current setting. Change it in Settings > Daintree Assistant.";
+    summary = "Couldn't read";
+  } else if (status === "save-failed") {
+    summary = `Couldn't save · ${preferenceLabel}`;
   } else {
-    const asks = !assistantSkipsDaintreeConfirmations(preference, globalSkipPermissions);
-    const current = asks ? "asks" : "doesn't ask";
-    const resolved =
-      preference === "inherit"
-        ? `Right now it ${current}, following Settings > Agents > Skip permission prompts, which is ${globalSkipPermissions ? "on" : "off"}.`
-        : `Right now it ${current}.`;
-    const failed =
-      status === "save-failed" ? "Couldn't save that change, so it's back to what it was. " : "";
-    detail = `${failed}${resolved}`;
+    summary = `${preferenceLabel} · ${asks ? "asks" : "doesn't ask"}`;
+  }
+
+  let detail: string;
+  if (status === "load-failed" || (status !== "loading" && preference === null)) {
+    detail = "Couldn't read the current setting. Change it in Settings > Daintree Assistant.";
+  } else if (status === "save-failed") {
+    detail = "Couldn't save that change, so it's back to what it was.";
+  } else if (preference === "inherit") {
+    detail = `Saves now, even if you cancel. Follows Settings > Agents > Skip permission prompts (${globalSkipPermissions ? "on" : "off"}).`;
+  } else {
+    detail = "Saves now and applies from the assistant's next request, even if you cancel.";
   }
 
   return (
-    <div className="space-y-2 border-t border-tint/[0.08] pt-3">
-      <div className="space-y-0.5">
-        <div className={SECTION_LABEL_CLASS}>Daintree confirmations</div>
-        <div className="text-2xs text-text-secondary">
-          Whether Daintree asks before the assistant runs actions like this one, as in Settings &gt;
-          Daintree Assistant &gt; Daintree confirmations. A change applies from the assistant&apos;s
-          next call; this request still needs your answer.
+    <div>
+      <button
+        type="button"
+        aria-expanded={expanded}
+        aria-controls={panelId}
+        onClick={() => setExpanded((value) => !value)}
+        className={cn(DISCLOSURE_ROW_CLASS, "justify-between")}
+      >
+        <span className="flex items-center gap-1.5">
+          <DisclosureChevron expanded={expanded} />
+          <span className="text-xs text-text-primary">Daintree confirmations</span>
+        </span>
+        <span className="truncate text-xs text-text-secondary">{summary}</span>
+      </button>
+      {/* A save that fails after the section is closed still has to be heard;
+          the panel's own live region is hidden with it. */}
+      <span aria-live="polite" className="sr-only">
+        {!expanded && status === "save-failed" ? detail : ""}
+      </span>
+      <div id={panelId} hidden={!expanded} className="space-y-2 pt-2 pl-[1.125rem]">
+        <SegmentedRadioGroup<string>
+          options={DAINTREE_CONFIRMATION_OPTIONS}
+          value={preference ?? ""}
+          onChange={handleChange}
+          aria-label="Daintree confirmations for the assistant"
+          aria-describedby={detailId}
+          aria-invalid={status === "save-failed"}
+          disabled={preference === null}
+          density="compact"
+          testId="mcp-confirm-assistant-preference"
+        />
+        <div id={detailId} aria-live="polite" className="text-2xs text-text-secondary">
+          {detail}
         </div>
-      </div>
-      <SegmentedRadioGroup<string>
-        options={DAINTREE_CONFIRMATION_OPTIONS}
-        value={preference ?? ""}
-        onChange={handleChange}
-        aria-label="Daintree confirmations for the assistant"
-        aria-describedby={detailId}
-        aria-invalid={status === "save-failed"}
-        disabled={preference === null}
-        density="compact"
-        fullWidth
-        testId="mcp-confirm-assistant-preference"
-      />
-      <div id={detailId} aria-live="polite" className="min-h-[2lh] text-2xs text-text-secondary">
-        {detail}
       </div>
     </div>
   );
@@ -653,20 +789,16 @@ function ConsequenceNote({
   children: React.ReactNode;
 }) {
   if (!isDestructive) {
-    return (
-      <div className="space-y-1">
-        <div className={SECTION_LABEL_CLASS}>Why this is gated</div>
-        <div className="text-xs text-text-secondary break-words">{children}</div>
-      </div>
-    );
+    return <AppDialog.Description className="break-words">{children}</AppDialog.Description>;
   }
 
+  // The glyph and tint carry the severity; the words stay on the neutral ramp,
+  // which is the only ramp with a contrast floor in every theme.
   return (
-    <Callout severity="danger">
-      <div className="space-y-1">
-        <div className={cn(SECTION_LABEL_CLASS, "text-status-danger")}>What this does</div>
-        <div>{children}</div>
-      </div>
+    <Callout severity="danger" title="What this does">
+      <AppDialog.Description className="text-xs text-text-primary break-words">
+        {children}
+      </AppDialog.Description>
     </Callout>
   );
 }
@@ -710,16 +842,13 @@ function PreviewCard({
         )}
       >
         {state === "pending" ? (
-          <div
-            className="flex h-full items-center justify-center py-4"
-            role="status"
-            aria-label="Checking what this affects"
-          >
-            <Spinner size="sm" className="text-daintree-text/40" />
-          </div>
+          <Skeleton label="Checking what this affects">
+            <SkeletonText lines={3} lineHeightClassName="h-3" />
+          </Skeleton>
         ) : state === "unavailable" ? (
           <CautionRow>
-            Couldn't check what this affects. Approve only if you already know what it will change.
+            Couldn&apos;t check what this affects. Approve only if you already know what it will
+            change.
           </CautionRow>
         ) : (
           <div className="space-y-1">
@@ -824,16 +953,21 @@ function TargetChecklist({
                   <span className="truncate text-xs text-text-primary">{target.name}</span>
                   {target.agentRunning && <Badge size="xs">Agent running</Badge>}
                 </span>
-                <span className="truncate text-2xs text-text-secondary">
-                  {target.worktree ? `${target.worktree} · ` : ""}
-                  {target.kindLabel}
-                  {" · "}
-                  {/* Two panels in one worktree can carry the same title, and
-                      then nothing above tells their checkboxes apart — which is
-                      the difference between refusing the terminal you meant and
-                      destroying it. The id is also what the caller named, so it
-                      is what a human cross-referencing the tool call looks for. */}
-                  <span className="font-mono">{displayIds.get(target.id) ?? target.id}</span>
+                {/* The id is the column's tiebreaker, so it never truncates: two panels
+                    in one worktree can carry the same title, and then only the id
+                    tells their checkboxes apart. It is also what the caller named, so
+                    it is what a human cross-referencing the tool call looks for. A
+                    long worktree name gives way instead. */}
+                <span className="flex min-w-0 items-baseline gap-1 text-2xs text-text-secondary">
+                  {target.worktree && <span className="min-w-0 truncate">{target.worktree}</span>}
+                  {/* A bare text node, not inside either span: the name computation
+                      trims each element's text, so a separator inside one would
+                      fuse the worktree onto the kind in the checkbox's name. */}
+                  {target.worktree && " · "}
+                  <span className="shrink-0">
+                    {target.kindLabel} ·{" "}
+                    <span className="font-mono">{displayIds.get(target.id) ?? target.id}</span>
+                  </span>
                 </span>
               </span>
             </li>
@@ -862,6 +996,28 @@ function CautionRow({ children }: { children: React.ReactNode }) {
   );
 }
 
+const DISCLOSURE_ROW_CLASS = cn(
+  "flex w-full items-center gap-1.5 rounded-[var(--radius-sm)] py-1 text-left",
+  "transition-colors duration-150 ease-out hover:bg-overlay-subtle",
+  "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:-outline-offset-2"
+);
+
+function DisclosureChevron({ expanded }: { expanded: boolean }) {
+  return (
+    <ChevronRight
+      aria-hidden="true"
+      // `src/index.css` drops the rotation transition for this marker under
+      // prefers-reduced-motion. This disclosure is the one the plugin dialogs
+      // copy, so the marker travels with the pattern.
+      data-animated-chevron
+      className={cn(
+        "w-3 h-3 shrink-0 text-text-secondary transition-transform duration-150 ease-out",
+        expanded && "rotate-90"
+      )}
+    />
+  );
+}
+
 /**
  * The redacted argument summary, behind a disclosure.
  *
@@ -880,24 +1036,10 @@ function ArgumentsDisclosure({ argsSummary }: { argsSummary: string }) {
         type="button"
         aria-expanded={expanded}
         onClick={() => setExpanded((value) => !value)}
-        className={cn(
-          "flex w-full items-center gap-1.5 rounded-[var(--radius-sm)] py-1 text-left",
-          "transition-colors duration-150 ease-out hover:bg-overlay-subtle",
-          "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:-outline-offset-2"
-        )}
+        className={DISCLOSURE_ROW_CLASS}
       >
-        <ChevronRight
-          aria-hidden="true"
-          // `src/index.css` drops the rotation transition for this marker under
-          // prefers-reduced-motion. This disclosure is the one the plugin
-          // dialogs copy, so the marker travels with the pattern.
-          data-animated-chevron
-          className={cn(
-            "w-3 h-3 shrink-0 text-text-secondary transition-transform duration-150 ease-out",
-            expanded && "rotate-90"
-          )}
-        />
-        <span className={SECTION_LABEL_CLASS}>Arguments</span>
+        <DisclosureChevron expanded={expanded} />
+        <span className="text-xs text-text-secondary">Arguments</span>
       </button>
       {expanded && (
         <pre className="mt-1 max-h-40 overflow-y-auto rounded-[var(--radius-md)] bg-overlay-subtle px-2 py-1.5 font-mono text-xs break-words whitespace-pre-wrap text-text-primary">
@@ -918,35 +1060,28 @@ function ArgumentsDisclosure({ argsSummary }: { argsSummary: string }) {
  * the user can act on are named. Nothing here is colour-coded either — it has
  * to survive forced-colors, where a tone would be flattened away.
  */
-function GateHint({
-  previewState,
-  queueDepth,
-  emptySelection,
-}: {
-  previewState: PreviewState;
-  queueDepth: number;
-  emptySelection: boolean;
-}) {
+function gateHintText(
+  previewState: PreviewState,
+  previewSlow: boolean,
+  queueDepth: number,
+  emptySelection: boolean
+): string | null {
   const parts: string[] = [];
-  if (previewState === "pending") parts.push("Checking what this affects…");
+  if (previewState === "pending") {
+    parts.push(previewSlow ? "Still working…" : "Checking what this affects…");
+  }
   // Says why the button is dead rather than leaving the approver to guess. Same
   // outcome as Cancel, so it is a nudge, not an error.
   if (emptySelection) parts.push("Nothing selected — cancel, or check something to destroy.");
   if (queueDepth > 0) {
     parts.push(`${pluralize(queueDepth, "more request")} waiting`);
   }
-  if (parts.length === 0) return null;
-
-  return (
-    <span aria-live="polite" className="min-w-0 truncate">
-      {parts.join(" · ")}
-    </span>
-  );
+  return parts.length === 0 ? null : parts.join(" · ");
 }
 
 /** The caller's name, with the raw user agent behind it for anyone checking. */
 function CallerName({ name, userAgent }: { name: string; userAgent?: string }) {
-  const text = <span className="truncate text-text-primary">{name}</span>;
+  const text = <span className="truncate text-sm font-medium text-text-primary">{name}</span>;
   if (!userAgent) return text;
   return (
     <Tooltip>

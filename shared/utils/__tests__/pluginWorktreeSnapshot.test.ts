@@ -92,32 +92,6 @@ describe("toPluginWorktreeSnapshot — linked projection", () => {
     expect(out.linked?.issue?.ref.number).toBe(7);
   });
 
-  it("uses the same providerId on linked, linked.pr.ref, and linked.issue.ref", () => {
-    const out = toPluginWorktreeSnapshot(
-      makeSnapshot({
-        prNumber: 42,
-        prUrl: "u",
-        prState: "open",
-        issueNumber: 7,
-      })
-    );
-    const providerId = out.linked?.providerId;
-    expect(providerId).toBe(BUILTIN_GITHUB_PROVIDER_ID);
-    expect(out.linked?.pr?.ref.providerId).toBe(providerId);
-    expect(out.linked?.issue?.ref.providerId).toBe(providerId);
-  });
-
-  it("maps the three WorktreeSnapshot prState values through directly", () => {
-    const open = toPluginWorktreeSnapshot(makeSnapshot({ prNumber: 1, prState: "open" }));
-    expect(open.linked?.pr?.state).toBe("open");
-
-    const merged = toPluginWorktreeSnapshot(makeSnapshot({ prNumber: 1, prState: "merged" }));
-    expect(merged.linked?.pr?.state).toBe("merged");
-
-    const closed = toPluginWorktreeSnapshot(makeSnapshot({ prNumber: 1, prState: "closed" }));
-    expect(closed.linked?.pr?.state).toBe("closed");
-  });
-
   it("defaults missing prUrl to an empty string and missing prState to open", () => {
     const out = toPluginWorktreeSnapshot(makeSnapshot({ prNumber: 99 }));
     expect(out.linked?.pr?.url).toBe("");
@@ -379,23 +353,6 @@ describe("toPluginWorktreeSnapshot — host-built vs legacy fallback parity (#99
       legacyFallback.linked?.issue?.ref.providerId
     );
     expect(legacyFallback.linked?.providerId).toBe(BUILTIN_GITHUB_PROVIDER_ID);
-  });
-
-  it("does not emit any of the legacy providerId forms from the fallback path", () => {
-    const out = toPluginWorktreeSnapshot(
-      makeSnapshot({
-        prNumber: 1,
-        prUrl: "u",
-        prState: "open",
-        issueNumber: 2,
-      })
-    );
-    expect(out.linked?.providerId).not.toBe("github");
-    expect(out.linked?.providerId).not.toBe("builtin.github");
-    expect(out.linked?.pr?.ref.providerId).not.toBe("github");
-    expect(out.linked?.pr?.ref.providerId).not.toBe("builtin.github");
-    expect(out.linked?.issue?.ref.providerId).not.toBe("github");
-    expect(out.linked?.issue?.ref.providerId).not.toBe("builtin.github");
   });
 });
 

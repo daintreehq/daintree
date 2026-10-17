@@ -134,20 +134,41 @@ export function readLastActiveProjectIdSync(): string | null {
 export function readLastActiveProjectIdentitySync(
   projectId: string
 ): Pick<Project, "name" | "emoji" | "color"> | null {
-  try {
-    const readIdentity = (sqlite: InstanceType<typeof Database>) => {
-      const row = sqlite
-        .prepare("SELECT name, emoji, color FROM projects WHERE id = ?")
-        .get(projectId) as { name: string; emoji: string; color: string | null } | undefined;
-      if (!row) return null;
-      return { name: row.name, emoji: row.emoji, color: row.color ?? undefined };
-    };
+  return readProjectRowSync((sqlite) => {
+    const row = sqlite
+      .prepare("SELECT name, emoji, color FROM projects WHERE id = ?")
+      .get(projectId) as { name: string; emoji: string; color: string | null } | undefined;
+    if (!row) return null;
+    return { name: row.name, emoji: row.emoji, color: row.color ?? undefined };
+  });
+}
 
+/**
+ * The folder of a project known only by id. Window bounds are saved per project
+ * folder, and a restored window is created from its project's id alone, so this
+ * is what lets it reopen where that project's window was rather than on top of
+ * the last window saved. Same connection rules as the identity reader above.
+ *
+ * Returns null for an id with no project row (a scratch, a host-scoped
+ * workspace, a deleted project) and when anything throws.
+ */
+export function readProjectPathSync(projectId: string): string | null {
+  return readProjectRowSync((sqlite) => {
+    const row = sqlite.prepare("SELECT path FROM projects WHERE id = ?").get(projectId) as
+      { path: string | null } | undefined;
+    return row?.path || null;
+  });
+}
+
+function readProjectRowSync<T>(
+  read: (sqlite: InstanceType<typeof Database>) => T | null
+): T | null {
+  try {
     // Only the first window's boot runs before the shared DB is open; later
     // windows and crash reloads read through it rather than open and tear down
     // a connection of their own.
     const shared = getSharedSqlite();
-    if (shared) return readIdentity(shared);
+    if (shared) return read(shared);
 
     const dbPath = path.join(app.getPath("userData"), "daintree.db");
 
@@ -157,12 +178,12 @@ export function readLastActiveProjectIdentitySync(
 
     const sqlite = new Database(dbPath, { readonly: true });
     try {
-      return readIdentity(sqlite);
+      return read(sqlite);
     } finally {
       sqlite.close();
     }
   } catch {
-    // Corrupt DB, missing column, etc. — anonymous skeleton is the fallback.
+    // Corrupt DB, missing column, etc. — the caller's fallback applies.
     return null;
   }
 }

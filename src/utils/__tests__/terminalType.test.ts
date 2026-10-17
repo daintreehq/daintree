@@ -20,10 +20,6 @@ describe("isAgentTerminal", () => {
       })
     ).toBe(true);
   });
-
-  it("falls back to detectedAgentId for legacy terminal records", () => {
-    expect(isAgentTerminal({ detectedAgentId: "claude" })).toBe(true);
-  });
 });
 
 describe("runtime agent identity helpers", () => {

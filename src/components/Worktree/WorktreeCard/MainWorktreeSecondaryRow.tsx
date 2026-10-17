@@ -6,6 +6,7 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "../../ui/tooltip";
 import { FolderGit2 } from "lucide-react";
 import type { AggregateCounts } from "./MainWorktreeSummaryRows";
 import { pluralize } from "@/lib/pluralize";
+import { bucketCountPhrase } from "@/lib/agentStateVocabulary";
 
 interface MainWorktreeSecondaryRowProps {
   branchLabel: string;
@@ -107,9 +108,13 @@ export function MainWorktreeSecondaryRow({
                 aggregateCounts.finished > 0) &&
                 " — "}
               {[
-                aggregateCounts.working > 0 && `${aggregateCounts.working} working`,
-                aggregateCounts.waiting > 0 && `${aggregateCounts.waiting} waiting`,
-                aggregateCounts.finished > 0 && `${aggregateCounts.finished} done`,
+                // Worktree bucket counts, so they take the buckets' words.
+                aggregateCounts.working > 0 &&
+                  bucketCountPhrase(aggregateCounts.working, "working"),
+                aggregateCounts.waiting > 0 &&
+                  bucketCountPhrase(aggregateCounts.waiting, "attention"),
+                aggregateCounts.finished > 0 &&
+                  bucketCountPhrase(aggregateCounts.finished, "finished"),
               ]
                 .filter(Boolean)
                 .join(", ")}

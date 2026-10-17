@@ -50,9 +50,10 @@ import { getTerminalFocusTarget } from "@/components/Terminal/terminalFocus";
 import { deriveTerminalChrome } from "@/utils/terminalChrome";
 import { getTerminalAgentDisplayState } from "@/utils/terminalAgentDisplayState";
 import {
-  getEffectiveStateIcon,
-  getEffectiveStateColor,
   getEffectiveStateLabel,
+  SESSION_COLORS,
+  SESSION_ICONS,
+  SESSION_LABELS,
 } from "@/components/Worktree/terminalStateConfig";
 import { TerminalRefreshTier } from "@/types";
 import { terminalInstanceService } from "@/services/TerminalInstanceService";
@@ -95,6 +96,8 @@ import { UI_ANIMATION_DURATION, EASE_OUT_EXPO_FM } from "@/lib/animationUtils";
 import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { useDismissableTooltip } from "@/hooks/useDismissableTooltip";
+import { useHandBackRunIds, useRunHandBackState } from "@/hooks/useRunHandBackState";
+import { resolveSessionPresentation } from "@/lib/handBackPresentation";
 import { DockPopoverChildProvider } from "@/components/ui/DockPopoverChildContext";
 import {
   consultPanelCloseGuards,
@@ -170,6 +173,7 @@ export function DockedTabGroup({ group, panels }: DockedTabGroupProps) {
     return panels.find((p) => p.id === activeTabId) ?? panels[0];
   }, [panels, activeTabId]);
   const activePanelId = activePanel?.id;
+  const activeHandBack = useRunHandBackState(activePanelId ?? "");
 
   // The pane this group actually has open in the dock — the id every close must
   // name. Reading it from the store (rather than assuming the active tab) keeps
@@ -593,7 +597,8 @@ export function DockedTabGroup({ group, panels }: DockedTabGroupProps) {
     }
   }, [activePanel, group.id, addPanel, addPanelToGroup, trashPanel, setActiveTab]);
 
-  const groupBlockedState = getGroupBlockedAgentState(panels);
+  const handBackRunIds = useHandBackRunIds();
+  const groupBlockedState = getGroupBlockedAgentState(panels, handBackRunIds);
   const blockedState = useDockBlockedState(groupBlockedState);
   const isDeprioritized = !isOpen && isGroupDeprioritized(panels);
   const showDockAgentHighlights = usePreferencesStore((s) => s.showDockAgentHighlights);
@@ -681,9 +686,20 @@ export function DockedTabGroup({ group, panels }: DockedTabGroupProps) {
   const activePlainWorking = getDockDisplayActivityState(activePanel) === "working";
   const displayTitle = activePanel.title;
   const displayAgentState = getTerminalAgentDisplayState(activeChrome, agentState);
+  // A hand-back draws unread or done, as on the pane's own chip.
+  const shownAgentState = resolveSessionPresentation(
+    displayAgentState,
+    activePanel.agentState,
+    activePanel.waitingReason,
+    activeHandBack
+  );
   // The glyph is smoothed (idle/missing shows as waiting); the words are not.
   const observedStateLabel = agentState ? getEffectiveStateLabel(agentState) : undefined;
-  const StateIcon = displayAgentState ? getEffectiveStateIcon(displayAgentState) : null;
+  // A hand-back is named for what it is drawn as; the observation rides along.
+  const isHandBack = shownAgentState !== displayAgentState;
+  const stateLabel =
+    isHandBack && shownAgentState ? SESSION_LABELS[shownAgentState] : observedStateLabel;
+  const StateIcon = shownAgentState ? SESSION_ICONS[shownAgentState] : null;
 
   return (
     <DockPopoverChildProvider>
@@ -722,7 +738,7 @@ export function DockedTabGroup({ group, panels }: DockedTabGroupProps) {
                   return moved;
                 });
               }}
-              aria-label={`${activePanel.title}${displayAgentState ? (observedStateLabel ? ` — agent ${observedStateLabel}` : "") : groupPlainWorking ? " — command running" : ""} (${panels.length} tabs) - Click to preview, double-click to move to grid, drag to reorder`}
+              aria-label={`${activePanel.title}${displayAgentState ? (stateLabel ? ` — agent ${stateLabel}` : "") : groupPlainWorking ? " — command running" : ""} (${panels.length} tabs) - Click to preview, double-click to move to grid, drag to reorder`}
             >
               <div className="flex items-center justify-center shrink-0">
                 <TerminalIcon
@@ -758,19 +774,19 @@ export function DockedTabGroup({ group, panels }: DockedTabGroupProps) {
                 <DockActivityCue state={groupPlainWorking ? "working" : "finished"} />
               )}
 
-              {displayAgentState && StateIcon && (
+              {shownAgentState && StateIcon && (
                 <Tooltip open={stateTip.open} onOpenChange={stateTip.onOpenChange}>
                   <TooltipTrigger asChild onPointerEnter={stateTip.onPointerEnter}>
                     <div
                       className={cn(
                         "ml-1.5 flex items-center shrink-0 transition-[color] duration-150 ease-out",
-                        getEffectiveStateColor(displayAgentState)
+                        SESSION_COLORS[shownAgentState]
                       )}
                     >
                       <StateIcon
                         className={cn(
                           DOCK_STATE_GLYPH_CLASS,
-                          displayAgentState === "working" && "animate-spin-slow",
+                          shownAgentState === "working" && "animate-spin-slow",
                           "motion-reduce:animate-none"
                         )}
                         aria-hidden="true"
@@ -778,7 +794,11 @@ export function DockedTabGroup({ group, panels }: DockedTabGroupProps) {
                     </div>
                   </TooltipTrigger>
                   <TooltipContent side="bottom">
-                    {observedStateLabel ? `Agent ${observedStateLabel}` : "No agent state observed"}
+                    {stateLabel
+                      ? isHandBack
+                        ? `Agent ${stateLabel} · Observed: ${observedStateLabel}`
+                        : `Agent ${stateLabel}`
+                      : "No agent state observed"}
                   </TooltipContent>
                 </Tooltip>
               )}

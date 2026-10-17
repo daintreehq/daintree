@@ -5,7 +5,15 @@ import { getCurrentViewStore } from "@/store/createWorktreeStore";
 import { useWorktreeFilterStore } from "@/store/worktreeFilterStore";
 import { useWorktreeDevServerStore } from "@/store/worktreeDevServerStore";
 import { computeChipState } from "@/components/Worktree/utils/computeChipState";
-import type { WorktreeLifecycleStage } from "@/components/Worktree/WorktreeCard/hooks/useWorktreeStatus";
+import {
+  deriveWorktreeAgentBuckets,
+  EMPTY_WORKTREE_AGENT_BUCKETS,
+  isWorktreeMergedForCleanup,
+} from "@/lib/worktreeAgentBuckets";
+import {
+  readWorktreeAgentBucketInputs,
+  type WorktreeAgentBucketInputs,
+} from "@/hooks/useWorktreeAgentBucketInputs";
 import {
   compareWorktreeNames,
   groupByType,
@@ -40,14 +48,16 @@ function buildDerivedMeta(
   // scan over all panel ids.
   worktreePanelIds: readonly string[] | undefined,
   isInTrash: (id: string) => boolean,
-  worktreeIds: Set<string>
+  worktreeIds: Set<string>,
+  bucketInputs: WorktreeAgentBucketInputs
 ): DerivedWorktreeMeta {
   let terminalCount = 0;
-  let waitingTerminalCount = 0;
+  let hasAgent = false;
   let hasWorkingAgent = false;
   let hasWaitingAgent = false;
   let hasCompletedAgent = false;
   let hasExitedAgent = false;
+  const agentIds: string[] = [];
 
   for (const id of worktreePanelIds ?? []) {
     const t = panelsById[id];
@@ -55,59 +65,45 @@ function buildDerivedMeta(
     terminalCount++;
     if (!isAgentTerminal(t)) continue;
     if (!isPtyPanel(t)) continue;
+    hasAgent = true;
+    agentIds.push(id);
     if (t.agentState === "working") hasWorkingAgent = true;
-    if (t.agentState === "waiting") {
-      hasWaitingAgent = true;
-      waitingTerminalCount++;
-    }
+    if (t.agentState === "waiting") hasWaitingAgent = true;
     if (t.agentState === "completed") hasCompletedAgent = true;
     if (t.agentState === "exited") hasExitedAgent = true;
   }
 
-  const hasChanges = (worktree.worktreeChanges?.changedFileCount ?? 0) > 0;
-  const isComplete =
-    !!worktree.issueNumber &&
-    !!worktree.linked?.pr &&
-    worktree.linked.pr.state !== "closed" &&
-    worktree.linked.pr.state !== "declined" &&
-    !hasChanges &&
-    worktree.worktreeChanges !== null;
-
-  let lifecycleStage: WorktreeLifecycleStage | null = null;
-  if (!worktree.isMainWorktree && worktree.worktreeChanges !== null) {
-    if (worktree.linked?.pr?.state === "merged") {
-      lifecycleStage = worktree.issueNumber ? "ready-for-cleanup" : "merged";
-    } else if (worktree.linked?.pr?.state === "open") {
-      lifecycleStage = "in-review";
-    }
-  }
-
-  const chipState = computeChipState({
-    waitingTerminalCount,
-    lifecycleStage,
-    isComplete,
-    hasActiveAgent: hasWorkingAgent,
-  });
+  const buckets = deriveWorktreeAgentBuckets(
+    agentIds,
+    bucketInputs.runsById,
+    isWorktreeMergedForCleanup(worktree)
+  );
 
   return {
     terminalCount,
+    hasAgent,
     hasWorkingAgent,
     hasWaitingAgent,
     hasCompletedAgent,
     hasExitedAgent,
     hasMergeConflict:
       worktree.worktreeChanges?.changes.some((c) => c.status === "conflicted") ?? false,
-    chipState,
+    buckets,
+    chipState: computeChipState(buckets),
   };
 }
 
-function worktreeMatchesQuery(worktree: WorktreeState, query: string): boolean {
+function worktreeMatchesQuery(
+  worktree: WorktreeState,
+  query: string,
+  customTitle: string | undefined
+): boolean {
   if (!query) return true;
   const exactNum = parseExactNumber(query);
   if (exactNum !== null) {
     return worktree.issueNumber === exactNum || worktree.linked?.pr?.ref.number === exactNum;
   }
-  return scoreWorktree(worktree, query) > 0;
+  return scoreWorktree(worktree, query, customTitle) > 0;
 }
 
 /**
@@ -133,6 +129,7 @@ export function getVisibleWorktreesForCycling(
     typeFilters,
     prIssueFilters,
     sessionFilters,
+    hasAgentFilter,
     activityFilters,
     devServerFilters,
     alwaysShowActive,
@@ -140,6 +137,7 @@ export function getVisibleWorktreesForCycling(
     pinnedWorktrees,
     manualOrder,
     quickStateFilter,
+    worktreeCustomTitles: customTitles,
   } = filterState;
 
   const devServerSessions = useWorktreeDevServerStore.getState().sessionsByWorktreeId;
@@ -172,6 +170,7 @@ export function getVisibleWorktreesForCycling(
     if (wt.worktreeId) validWorktreeIds.add(wt.worktreeId);
   }
   const derivedMetaMap = new Map<string, DerivedWorktreeMeta>();
+  const bucketInputs = readWorktreeAgentBucketInputs();
   for (const worktree of rawWorktrees) {
     derivedMetaMap.set(
       worktree.id,
@@ -180,7 +179,8 @@ export function getVisibleWorktreesForCycling(
         panelState.panelsById,
         panelState.panelIdsByWorktreeId[worktree.id],
         panelState.isInTrash,
-        validWorktreeIds
+        validWorktreeIds,
+        bucketInputs
       )
     );
   }
@@ -193,8 +193,10 @@ export function getVisibleWorktreesForCycling(
     typeFilters,
     prIssueFilters,
     sessionFilters,
+    hasAgentFilter,
     activityFilters,
     devServerFilters,
+    customTitles,
   };
 
   const hasFacetFiltersActive = filterState.hasFacetFilters();
@@ -236,25 +238,34 @@ export function getVisibleWorktreesForCycling(
 
   const hasQuery = query.trim().length > 0;
   const sortedNonMain = hasQuery
-    ? sortWorktreesByRelevance(filtered, query, orderBy, validPinnedWorktrees, manualOrder)
+    ? sortWorktreesByRelevance(
+        filtered,
+        query,
+        orderBy,
+        validPinnedWorktrees,
+        manualOrder,
+        customTitles
+      )
     : sortWorktrees(filtered, orderBy, validPinnedWorktrees, manualOrder);
 
   // Match sidebar's grouped rendering: when grouped-by-type is on and
-  // there is no query, the user sees groups flattened in TYPE_ORDER.
+  // there is no query, the user sees groups flattened in WORKTREE_TYPE_IDS order.
   const scrollableList =
     isGroupedByType && !hasQuery
       ? groupByType(sortedNonMain, orderBy, validPinnedWorktrees).flatMap((s) => s.worktrees)
       : sortedNonMain;
 
   const topPinned: WorktreeState[] = [];
-  if (mainWorktree && worktreeMatchesQuery(mainWorktree, query)) {
+  if (mainWorktree && worktreeMatchesQuery(mainWorktree, query, customTitles[mainWorktree.id])) {
     const mainDerived = derivedMetaMap.get(mainWorktree.id) ?? {
       terminalCount: 0,
+      hasAgent: false,
       hasWorkingAgent: false,
       hasWaitingAgent: false,
       hasCompletedAgent: false,
       hasExitedAgent: false,
       hasMergeConflict: false,
+      buckets: EMPTY_WORKTREE_AGENT_BUCKETS,
       chipState: null,
     };
     if (

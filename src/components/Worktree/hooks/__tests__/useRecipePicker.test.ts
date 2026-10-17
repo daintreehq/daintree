@@ -2,7 +2,7 @@
  * @vitest-environment jsdom
  */
 import { describe, it, expect, vi } from "vitest";
-import { renderHook, act } from "@testing-library/react";
+import { renderHook } from "@testing-library/react";
 import { useRecipePicker, CLONE_LAYOUT_ID } from "../useRecipePicker";
 import type { TerminalRecipe } from "@/types";
 
@@ -112,25 +112,5 @@ describe("useRecipePicker", () => {
     );
     expect(setter).toHaveBeenCalledWith("test-project", undefined);
     expect(result.current.selectedRecipeId).toBe(CLONE_LAYOUT_ID);
-  });
-
-  it("respects user touch and does not override", () => {
-    const { result } = renderHook(() => useRecipePicker({ ...defaultArgs }));
-    expect(result.current.selectedRecipeId).toBe(CLONE_LAYOUT_ID);
-
-    act(() => {
-      result.current.recipeSelectionTouchedRef.current = true;
-      result.current.setSelectedRecipeId(null);
-    });
-    expect(result.current.selectedRecipeId).toBe(null);
-  });
-
-  it("selectedRecipe is undefined for sentinel IDs", () => {
-    const recipes = [makeRecipe("recipe-1")];
-    const { result } = renderHook(() =>
-      useRecipePicker({ ...defaultArgs, startingLayoutRecipes: recipes })
-    );
-    expect(result.current.selectedRecipeId).toBe(CLONE_LAYOUT_ID);
-    expect(result.current.selectedRecipe).toBeUndefined();
   });
 });

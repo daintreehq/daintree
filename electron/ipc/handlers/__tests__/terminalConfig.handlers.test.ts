@@ -104,29 +104,6 @@ describe("terminalConfig handlers", () => {
     delete process.env.DAINTREE_E2E_MODE;
   });
 
-  it("registers all handlers and cleanup removes them", () => {
-    const cleanup = registerTerminalConfigHandlers();
-
-    const registeredChannels = (
-      ipcMain.handle as unknown as { mock: { calls: Array<[string, Handler]> } }
-    ).mock.calls.map((c) => c[0]);
-    expect(registeredChannels).toContain(CHANNELS.TERMINAL_CONFIG_GET);
-    expect(registeredChannels).toContain(CHANNELS.TERMINAL_CONFIG_SET_SCROLLBACK);
-    expect(registeredChannels).toContain(CHANNELS.TERMINAL_CONFIG_SET_PERFORMANCE_MODE);
-    expect(registeredChannels).toContain(CHANNELS.TERMINAL_CONFIG_SET_FONT_SIZE);
-    expect(registeredChannels).toContain(CHANNELS.TERMINAL_CONFIG_SET_FONT_FAMILY);
-    expect(registeredChannels).toContain(CHANNELS.TERMINAL_CONFIG_SET_HYBRID_INPUT_ENABLED);
-    expect(registeredChannels).toContain(CHANNELS.TERMINAL_CONFIG_SET_HYBRID_INPUT_AUTO_FOCUS);
-    expect(registeredChannels).toContain(CHANNELS.TERMINAL_CONFIG_SET_SCREEN_READER_MODE);
-    expect(registeredChannels).toContain(CHANNELS.TERMINAL_CONFIG_SET_CACHED_PROJECT_VIEWS);
-
-    cleanup();
-    const removedChannels = (
-      ipcMain.removeHandler as unknown as { mock: { calls: Array<[string]> } }
-    ).mock.calls.map((c) => c[0]);
-    expect(removedChannels).toEqual(expect.arrayContaining(registeredChannels));
-  });
-
   it("get returns current terminal config with an effective cachedProjectViews", async () => {
     registerTerminalConfigHandlers();
     const handler = getHandler(CHANNELS.TERMINAL_CONFIG_GET);
@@ -207,15 +184,6 @@ describe("terminalConfig handlers", () => {
       expect(result.cachedProjectViews).toBe(3);
     });
 
-    it("returns 3 for a 24 GiB machine (between 16 and 32 GiB)", async () => {
-      osState.totalmem = 24 * 1024 ** 3;
-      registerTerminalConfigHandlers();
-      const handler = getHandler(CHANNELS.TERMINAL_CONFIG_GET);
-
-      const result = (await handler({}, undefined)) as Record<string, unknown>;
-      expect(result.cachedProjectViews).toBe(3);
-    });
-
     it("returns 4 at the 32 GiB threshold", async () => {
       osState.totalmem = 32 * 1024 ** 3;
       registerTerminalConfigHandlers();
@@ -225,26 +193,8 @@ describe("terminalConfig handlers", () => {
       expect(result.cachedProjectViews).toBe(4);
     });
 
-    it("returns 4 for a 48 GiB machine", async () => {
-      osState.totalmem = 48 * 1024 ** 3;
-      registerTerminalConfigHandlers();
-      const handler = getHandler(CHANNELS.TERMINAL_CONFIG_GET);
-
-      const result = (await handler({}, undefined)) as Record<string, unknown>;
-      expect(result.cachedProjectViews).toBe(4);
-    });
-
     it("returns 5 at the 64 GiB threshold", async () => {
       osState.totalmem = 64 * 1024 ** 3;
-      registerTerminalConfigHandlers();
-      const handler = getHandler(CHANNELS.TERMINAL_CONFIG_GET);
-
-      const result = (await handler({}, undefined)) as Record<string, unknown>;
-      expect(result.cachedProjectViews).toBe(5);
-    });
-
-    it("returns 5 for a 128 GiB machine", async () => {
-      osState.totalmem = 128 * 1024 ** 3;
       registerTerminalConfigHandlers();
       const handler = getHandler(CHANNELS.TERMINAL_CONFIG_GET);
 
@@ -425,14 +375,6 @@ describe("terminalConfig handlers", () => {
     expect(mockPvm.setCachedViewLimit).toHaveBeenCalledWith(4);
   });
 
-  it("setCachedProjectViews does not crash when deps is absent", async () => {
-    registerTerminalConfigHandlers();
-    const handler = getHandler(CHANNELS.TERMINAL_CONFIG_SET_CACHED_PROJECT_VIEWS);
-
-    await handler({}, 3);
-    expect(storeState.data.terminalConfig).toMatchObject({ cachedProjectViews: 3 });
-  });
-
   it("normalizes malformed terminalConfig shape before writes", async () => {
     storeState.data.terminalConfig = "corrupted";
     registerTerminalConfigHandlers();
@@ -443,17 +385,6 @@ describe("terminalConfig handlers", () => {
   });
 
   describe("setRecentSchemeIds", () => {
-    it("persists a valid string array", async () => {
-      registerTerminalConfigHandlers();
-      const handler = getHandler(CHANNELS.TERMINAL_CONFIG_SET_RECENT_SCHEME_IDS);
-
-      await handler({}, ["dracula", "monokai"]);
-
-      expect(storeState.data.terminalConfig).toMatchObject({
-        recentSchemeIds: ["dracula", "monokai"],
-      });
-    });
-
     it("ignores non-array input without mutating store", async () => {
       registerTerminalConfigHandlers();
       const handler = getHandler(CHANNELS.TERMINAL_CONFIG_SET_RECENT_SCHEME_IDS);

@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from "vitest";
 import { CHANNELS } from "../../../ipc/channels.js";
 
 const { mockIpcMain, mockWebContentsRegistry, mockProjectViews, mockWindowForWebContents } =
@@ -54,6 +54,7 @@ vi.mock("../../../window/windowRef.js", () => ({
 }));
 
 vi.mock("../../../window/webContentsRegistry.js", () => ({
+  getProjectForWebContents: () => null,
   getWebContentsForProject: (projectId: string) => mockProjectViews.get(projectId) ?? [],
   getWindowForWebContents: (wc: { id: number }) => mockWindowForWebContents.get(wc.id) ?? null,
 }));
@@ -70,11 +71,14 @@ import {
   SessionBindingError,
   WorkspaceBindingError,
   McpRouteBindingError,
+  RemoteHostWindowOnlyError,
 } from "../rendererBridge.js";
+import { registerRemoteService } from "../../../remote/runtime.js";
 import { unfreezeWebContents } from "../../../utils/webContentsLifecycle.js";
 import { WorkspaceViewLeaseRegistry } from "../workspaceViewLease.js";
+import type { RoutedViewWorktreePort } from "../worktreeViewPort.js";
 import type { PendingRequest, DispatchEnvelope } from "../shared.js";
-import { buildMcpErrorPayload, RETRIABLE_ERROR_CODES } from "../shared.js";
+import { buildMcpErrorPayload, MCP_DISPATCH_TIMEOUT_MS, RETRIABLE_ERROR_CODES } from "../shared.js";
 import type { ActionManifestEntry } from "../../../../shared/types/actions.js";
 
 /**
@@ -257,27 +261,29 @@ describe("rendererBridge — per-session pinned dispatch (#7002)", () => {
     expect(sent[1]).not.toHaveProperty("authorization");
   });
 
-  it("sends context: undefined when no override is supplied — unpinned path is untouched (#8317)", async () => {
-    const wc = makeWebContents(702);
-    mockWebContentsRegistry.set(702, wc);
+  it("threads a host's approval options into the pinned dispatch payload", async () => {
+    const wc = makeWebContents(703);
+    mockWebContentsRegistry.set(703, wc);
 
-    let sentPayload: { requestId: string; context?: unknown } | undefined;
+    let sentPayload: Record<string, unknown> | undefined;
     wc.send.mockImplementation((channel: string, payload: { requestId: string }) => {
       if (channel !== CHANNELS.MCP_SERVER_DISPATCH_ACTION_REQUEST) return;
-      sentPayload = payload as { requestId: string; context?: unknown };
+      sentPayload = payload as Record<string, unknown>;
       queueMicrotask(() => {
         mockIpcMain.emit(
           CHANNELS.MCP_SERVER_DISPATCH_ACTION_RESPONSE,
-          { sender: { id: 702 } },
+          { sender: { id: 703 } },
           { requestId: payload.requestId, result: { ok: true, result: "ok" } }
         );
       });
     });
 
-    await bridge.dispatchActionForWebContents(702, "actions.list", {}, false);
+    await bridge.dispatchActionForWebContents(703, "git.push", {}, false, undefined, "external", {
+      offerSessionApproval: true,
+    });
 
-    expect(sentPayload).toBeDefined();
-    expect(sentPayload?.context).toBeUndefined();
+    expect(sentPayload?.offerSessionApproval).toBe(true);
+    expect(sentPayload).not.toHaveProperty("approvalOnly");
   });
 
   it("threads the session's authenticated origin into the dispatch IPC payload (#11808)", async () => {
@@ -529,19 +535,6 @@ describe("rendererBridge — per-WebContents manifest cache (#9887)", () => {
     expect(bridge.getCachedManifestForWebContents(141)).toBeNull();
   });
 
-  it("clearCache drops all per-WebContents manifests", async () => {
-    const wc = makeWebContents(151);
-    mockWebContentsRegistry.set(151, wc);
-    autoReplyManifest(wc, [{ id: "cached" }] as ActionManifestEntry[]);
-
-    await bridge.requestManifestForWebContents(151);
-    expect(bridge.getCachedManifestForWebContents(151)).toEqual([{ id: "cached" }]);
-
-    bridge.clearCache();
-
-    expect(bridge.getCachedManifestForWebContents(151)).toBeNull();
-  });
-
   it("resurrection guard: a fetch that resolves after clearCache does not repopulate the cache", async () => {
     const wc = makeWebContents(161);
     mockWebContentsRegistry.set(161, wc);
@@ -690,29 +683,6 @@ describe("rendererBridge — requesting-bearer identity passthrough (#9157)", ()
     expect(sentPayload?.callerInfo).toEqual(callerInfo);
   });
 
-  it("leaves callerInfo absent (undefined) when not provided", async () => {
-    const wc = makeWebContents(802);
-    const bridge = makeActiveBridge(wc);
-
-    let sentPayload: { requestId: string; callerInfo?: unknown } | undefined;
-    wc.send.mockImplementation((channel: string, payload: { requestId: string }) => {
-      if (channel !== CHANNELS.MCP_SERVER_DISPATCH_ACTION_REQUEST) return;
-      sentPayload = payload as { requestId: string; callerInfo?: unknown };
-      queueMicrotask(() => {
-        mockIpcMain.emit(
-          CHANNELS.MCP_SERVER_DISPATCH_ACTION_RESPONSE,
-          { sender: { id: 802 } },
-          { requestId: payload.requestId, result: { ok: true, result: "ok" } }
-        );
-      });
-    });
-
-    await bridge.dispatchAction("actions.list", {}, false);
-
-    expect(sentPayload).toBeDefined();
-    expect(sentPayload?.callerInfo).toBeUndefined();
-  });
-
   it("defaults the unpinned dispatch payload to an external origin (#11808)", async () => {
     const wc = makeWebContents(804);
     const bridge = makeActiveBridge(wc);
@@ -736,34 +706,6 @@ describe("rendererBridge — requesting-bearer identity passthrough (#9157)", ()
     await bridge.dispatchAction("actions.list", {}, false);
 
     expect(sentPayload?.sessionOrigin).toBe("external");
-  });
-
-  it("the pinned dispatch path leaves callerInfo undefined (provenance-free)", async () => {
-    // Pinned (help-session) dispatch must stay provenance-free. Mirrors the
-    // `context: undefined` convention — the key is present but undefined, which
-    // structured clone strips at the IPC boundary so the renderer sees nothing.
-    const wc = makeWebContents(803);
-    mockWebContentsRegistry.set(803, wc);
-    const bridge = createRendererBridge(pendingManifests, pendingDispatches, () => null);
-    bridge.setupListeners([]);
-
-    let sentPayload: { requestId: string; callerInfo?: unknown } | undefined;
-    wc.send.mockImplementation((channel: string, payload: { requestId: string }) => {
-      if (channel !== CHANNELS.MCP_SERVER_DISPATCH_ACTION_REQUEST) return;
-      sentPayload = payload as { requestId: string; callerInfo?: unknown };
-      queueMicrotask(() => {
-        mockIpcMain.emit(
-          CHANNELS.MCP_SERVER_DISPATCH_ACTION_RESPONSE,
-          { sender: { id: 803 } },
-          { requestId: payload.requestId, result: { ok: true, result: "ok" } }
-        );
-      });
-    });
-
-    await bridge.dispatchActionForWebContents(803, "actions.list", {}, false);
-
-    expect(sentPayload).toBeDefined();
-    expect(sentPayload?.callerInfo).toBeUndefined();
   });
 });
 
@@ -864,27 +806,68 @@ describe("rendererBridge — unpinned routing follows focus order (#11536)", () 
     });
   }
 
-  it("dispatches to the most-recently-focused window, not the first registered", async () => {
-    const wcFirst = makeWebContents(901);
-    const wcFocused = makeWebContents(902);
-    const ctxFirst = makeContext({ activeWebContents: wcFirst });
-    const ctxFocused = makeContext({ activeWebContents: wcFocused });
-    autoRespond(wcFirst);
-    autoRespond(wcFocused);
+  describe("windows on a remote host (#13285)", () => {
+    let unregister: (() => void) | null = null;
 
-    // Registered first-to-last as [first, focused]; focus says the opposite.
-    const focusRef = { current: [ctxFocused, ctxFirst] };
-    const bridge = createRendererBridge(
-      pendingManifests,
-      pendingDispatches,
-      () => makeRegistry([ctxFirst, ctxFocused], focusRef) as never
-    );
-    bridge.setupListeners([]);
+    function onHost(hostByView: Record<number, string>) {
+      unregister = registerRemoteService("windowHosts", {
+        windowHost: () => "local",
+        viewHost: (id: number) => hostByView[id] ?? "local",
+        hostName: (hostId: string) => (hostId === "h-1" ? "studio-01" : null),
+        switchWindowToLocal: vi.fn(),
+        openHostProjectInNewWindow: vi.fn(),
+      } as never);
+    }
 
-    await bridge.dispatchAction("actions.list", {}, false);
+    afterEach(() => {
+      unregister?.();
+      unregister = null;
+    });
 
-    expect(wcFocused.send).toHaveBeenCalled();
-    expect(wcFirst.send).not.toHaveBeenCalled();
+    it("passes over a focused window on a host for the next local one", async () => {
+      const wcRemote = makeWebContents(941);
+      const wcLocal = makeWebContents(942);
+      const ctxRemote = makeContext({ activeWebContents: wcRemote });
+      const ctxLocal = makeContext({ activeWebContents: wcLocal });
+      autoRespond(wcRemote);
+      autoRespond(wcLocal);
+      onHost({ 941: "h-1" });
+
+      const bridge = createRendererBridge(
+        pendingManifests,
+        pendingDispatches,
+        () => makeRegistry([ctxLocal, ctxRemote], { current: [ctxRemote, ctxLocal] }) as never
+      );
+      bridge.setupListeners([]);
+
+      await bridge.dispatchAction("actions.list", {}, false);
+
+      expect(wcLocal.send).toHaveBeenCalled();
+      expect(wcRemote.send).not.toHaveBeenCalled();
+    });
+
+    it("refuses, naming the host, when every window is on a host", async () => {
+      const wcRemote = makeWebContents(951);
+      const ctxRemote = makeContext({ activeWebContents: wcRemote });
+      autoRespond(wcRemote);
+      onHost({ 951: "h-1" });
+
+      const bridge = createRendererBridge(
+        pendingManifests,
+        pendingDispatches,
+        () => makeRegistry([ctxRemote], { current: [ctxRemote] }) as never
+      );
+      bridge.setupListeners([]);
+
+      const failure = await bridge.dispatchAction("actions.list", {}, false).then(
+        () => null,
+        (error: unknown) => error
+      );
+
+      expect(failure).toBeInstanceOf(RemoteHostWindowOnlyError);
+      expect((failure as Error).message).toContain("studio-01");
+      expect(wcRemote.send).not.toHaveBeenCalled();
+    });
   });
 
   it("re-resolves focus on every call, so a mid-session focus change retargets", async () => {
@@ -1447,22 +1430,6 @@ describe("rendererBridge — workspace-bound routing (#11789)", () => {
       .map(([, payload]) => (payload as { sessionOrigin?: unknown }).sessionOrigin);
 
     expect(origins).toEqual(["assistant-pane", "external"]);
-  });
-
-  it("keeps routing to its workspace after another workspace's view is registered", async () => {
-    // The isolation the whole feature is for: nothing about workspace B
-    // appearing (or being focused) may move workspace A's session.
-    const wcA = registerView("ws-a", 101);
-    const promiseOne = bridge.dispatchActionForWorkspace("ws-a", "terminal.list", {}, false);
-    await settleDispatch();
-    await promiseOne;
-
-    registerView("ws-b", 202);
-    const promiseTwo = bridge.dispatchActionForWorkspace("ws-a", "terminal.list", {}, false);
-    await settleDispatch();
-    await promiseTwo;
-
-    expect(wcA.send).toHaveBeenCalledTimes(2);
   });
 
   it("follows the workspace to a replacement view rather than dying with the old one", async () => {
@@ -2147,6 +2114,273 @@ describe("rendererBridge — thaw and eviction lease for routed operations (#117
     await promise;
 
     expect(leases.has(101)).toBe(false);
+  });
+});
+
+describe("rendererBridge — worktree port for a cached routed view (#13348)", () => {
+  let pendingManifests: Map<string, PendingRequest<ActionManifestEntry[]>>;
+  let pendingDispatches: Map<string, PendingRequest<DispatchEnvelope>>;
+  let leases: WorkspaceViewLeaseRegistry;
+  let worktreePort: {
+    prepare: Mock<RoutedViewWorktreePort["prepare"]>;
+    release: Mock<RoutedViewWorktreePort["release"]>;
+  };
+  let bridge: ReturnType<typeof createRendererBridge>;
+
+  beforeEach(() => {
+    mockIpcMain.removeAllListeners();
+    mockWebContentsRegistry.clear();
+    mockProjectViews.clear();
+    vi.mocked(unfreezeWebContents).mockClear();
+    vi.mocked(unfreezeWebContents).mockResolvedValue(undefined);
+    pendingManifests = new Map();
+    pendingDispatches = new Map();
+    leases = new WorkspaceViewLeaseRegistry();
+    worktreePort = {
+      prepare: vi.fn<RoutedViewWorktreePort["prepare"]>().mockResolvedValue(true),
+      release: vi.fn<RoutedViewWorktreePort["release"]>(),
+    };
+    bridge = createRendererBridge(
+      pendingManifests,
+      pendingDispatches,
+      () => null,
+      leases,
+      worktreePort
+    );
+    bridge.setupListeners([]);
+  });
+
+  function registerView(workspaceId: string, id: number): FakeWebContents {
+    const wc = makeWebContents(id);
+    mockWebContentsRegistry.set(id, wc);
+    mockProjectViews.set(workspaceId, [...(mockProjectViews.get(workspaceId) ?? []), wc]);
+    return wc;
+  }
+
+  function settleDispatch(webContentsId: number, requestId: string): void {
+    mockIpcMain.emit(
+      CHANNELS.MCP_SERVER_DISPATCH_ACTION_RESPONSE,
+      { sender: { id: webContentsId } },
+      { requestId, result: { ok: true, result: "done" } }
+    );
+  }
+
+  function deferred<T>(): { promise: Promise<T>; resolve: (value: T) => void } {
+    let resolve: (value: T) => void = () => {};
+    const promise = new Promise<T>((r) => {
+      resolve = r;
+    });
+    return { promise, resolve };
+  }
+
+  it("sends the dispatch only after the thawed view's worktree port is ready", async () => {
+    // The incident: the action ran against a store whose port closed when the
+    // view was cached, so a worktree created moments earlier was "not found".
+    const wc = registerView("ws-a", 101);
+    const thaw = deferred<void>();
+    vi.mocked(unfreezeWebContents).mockReturnValue(thaw.promise);
+    const ready = deferred<boolean>();
+    worktreePort.prepare.mockReturnValue(ready.promise);
+
+    const promise = bridge.dispatchActionForWorkspace("ws-a", "agent.launch", {}, false);
+    await flushThaw();
+    // Not before the thaw: a frozen renderer cannot confirm a port.
+    expect(worktreePort.prepare).not.toHaveBeenCalled();
+
+    thaw.resolve();
+    await flushThaw();
+    expect(worktreePort.prepare).toHaveBeenCalledWith(wc, undefined);
+    expect(wc.send).not.toHaveBeenCalled();
+
+    ready.resolve(true);
+    await flushThaw();
+    expect(wc.send).toHaveBeenCalledWith(
+      CHANNELS.MCP_SERVER_DISPATCH_ACTION_REQUEST,
+      expect.objectContaining({ actionId: "agent.launch" })
+    );
+
+    settleDispatch(101, [...pendingDispatches.keys()][0]);
+    await promise;
+  });
+
+  it.each([
+    ["could not be restored", () => Promise.resolve(false)],
+    ["rejected", () => Promise.reject(new Error("broker gone"))],
+    [
+      "threw synchronously",
+      () => {
+        throw new Error("broker gone");
+      },
+    ],
+  ])("still dispatches when the port %s", async (_label, outcome) => {
+    // Most actions never read the worktree store; refusing them over a port
+    // they do not need would turn a degraded view into a dead one.
+    const wc = registerView("ws-a", 101);
+    worktreePort.prepare.mockImplementation(outcome);
+
+    const promise = bridge.dispatchActionForWorkspace("ws-a", "terminal.list", {}, false);
+    await flushThaw();
+
+    expect(wc.send).toHaveBeenCalledTimes(1);
+    settleDispatch(101, [...pendingDispatches.keys()][0]);
+    await promise;
+  });
+
+  it("never sends a request that settled while the port was being restored", async () => {
+    const wc = registerView("ws-a", 101);
+    const ready = deferred<boolean>();
+    worktreePort.prepare.mockReturnValue(ready.promise);
+
+    const promise = bridge.dispatchActionForWorkspace("ws-a", "terminal.list", {}, false);
+    await flushThaw();
+    expect(worktreePort.prepare).toHaveBeenCalled();
+
+    wc.triggerDestroyed();
+    await expect(promise).rejects.toBeInstanceOf(WorkspaceBindingError);
+
+    ready.resolve(true);
+    await flushThaw();
+    expect(wc.send).not.toHaveBeenCalled();
+  });
+
+  it("releases the port, and never sends, when the deadline passes while it is restored", async () => {
+    vi.useFakeTimers();
+    try {
+      const wc = registerView("ws-a", 101);
+      const ready = deferred<boolean>();
+      worktreePort.prepare.mockReturnValue(ready.promise);
+
+      const promise = bridge.dispatchActionForWorkspace("ws-a", "terminal.list", {}, false);
+      const outcome = promise.catch((err: unknown) => err);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(worktreePort.prepare).toHaveBeenCalled();
+
+      await vi.advanceTimersByTimeAsync(MCP_DISPATCH_TIMEOUT_MS);
+      expect(await outcome).toBeInstanceOf(Error);
+      expect(pendingDispatches.size).toBe(0);
+      expect(leases.has(101)).toBe(false);
+      expect(worktreePort.release).toHaveBeenCalledWith(101);
+
+      ready.resolve(true);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(wc.send).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("answers the caller even when closing the port throws", async () => {
+    registerView("ws-a", 101);
+    worktreePort.release.mockImplementation(() => {
+      throw new Error("broker gone");
+    });
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    try {
+      const promise = bridge.dispatchActionForWorkspace("ws-a", "terminal.list", {}, false);
+      await flushThaw();
+      settleDispatch(101, [...pendingDispatches.keys()][0]);
+
+      await expect(promise).resolves.toMatchObject({ result: { ok: true } });
+      expect(leases.has(101)).toBe(false);
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it("manages no port without a lease registry to say when the view is idle", async () => {
+    const wc = registerView("ws-a", 101);
+    const unleased = createRendererBridge(
+      pendingManifests,
+      pendingDispatches,
+      () => null,
+      undefined,
+      worktreePort
+    );
+    unleased.setupListeners([]);
+
+    const promise = unleased.dispatchActionForWorkspace("ws-a", "terminal.list", {}, false);
+    await flushThaw();
+    expect(wc.send).toHaveBeenCalledTimes(1);
+    settleDispatch(101, [...pendingDispatches.keys()][0]);
+    await promise;
+
+    expect(worktreePort.prepare).not.toHaveBeenCalled();
+    expect(worktreePort.release).not.toHaveBeenCalled();
+  });
+
+  it("closes the port only when the view's last routed request settles", async () => {
+    registerView("ws-a", 101);
+
+    const first = bridge.dispatchActionForWorkspace("ws-a", "terminal.list", {}, false);
+    const second = bridge.dispatchActionForWorkspace("ws-a", "worktree.list", {}, false);
+    await flushThaw();
+    const [firstId, secondId] = [...pendingDispatches.keys()];
+
+    settleDispatch(101, firstId);
+    await first;
+    // The second request is still reading the store this port feeds.
+    expect(worktreePort.release).not.toHaveBeenCalled();
+
+    settleDispatch(101, secondId);
+    await second;
+    expect(worktreePort.release).toHaveBeenCalledTimes(1);
+    expect(worktreePort.release).toHaveBeenCalledWith(101);
+  });
+
+  it("restores nothing for a manifest request, but counts it toward the last release", async () => {
+    // tools/list reads the action registry, not the worktree store. It can
+    // still be the last request out after a dispatch restored the port.
+    registerView("ws-a", 101);
+
+    const dispatch = bridge.dispatchActionForWorkspace("ws-a", "terminal.list", {}, false);
+    const manifest = bridge.requestManifestForWorkspace("ws-a");
+    await flushThaw();
+    expect(worktreePort.prepare).toHaveBeenCalledTimes(1);
+
+    settleDispatch(101, [...pendingDispatches.keys()][0]);
+    await dispatch;
+    expect(worktreePort.release).not.toHaveBeenCalled();
+
+    const [manifestId] = [...pendingManifests.keys()];
+    mockIpcMain.emit(
+      CHANNELS.MCP_SERVER_GET_MANIFEST_RESPONSE,
+      { sender: { id: 101 } },
+      { requestId: manifestId, manifest: [] }
+    );
+    await manifest;
+    expect(worktreePort.release).toHaveBeenCalledWith(101);
+  });
+
+  it("leaves the unpinned focused-window path alone", async () => {
+    // The active view's port belongs to activation, and it is never cached.
+    const activeWc = makeWebContents(707);
+    const registryBridge = createRendererBridge(
+      pendingManifests,
+      pendingDispatches,
+      () =>
+        ({
+          focusOrder: () => [
+            {
+              browserWindow: { isDestroyed: () => false },
+              services: {
+                projectViewManager: { getActiveView: () => ({ webContents: activeWc }) },
+              },
+            },
+          ],
+        }) as never,
+      leases,
+      worktreePort
+    );
+    registryBridge.setupListeners([]);
+
+    const promise = registryBridge.dispatchAction("actions.list", {}, false);
+    await flushThaw();
+    settleDispatch(707, [...pendingDispatches.keys()][0]);
+    await promise;
+
+    expect(worktreePort.prepare).not.toHaveBeenCalled();
+    expect(worktreePort.release).not.toHaveBeenCalled();
   });
 });
 

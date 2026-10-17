@@ -3,8 +3,19 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { spawn } from "node:child_process";
 import { checkIgnoredPaths, listUntrackedMatchingPatternFile } from "../gitCheckIgnore.js";
 import { GIT_BLOCK_TIMEOUT_MS } from "../hardenedGit.js";
+import { resolveExecutableForSpawn } from "../windowsExecutable.js";
 
 vi.mock("node:child_process", () => ({ spawn: vi.fn() }));
+
+/** Where git resolves on a (simulated) Windows host; the host's real PATH is never searched. */
+const { WINDOWS_GIT } = vi.hoisted(() => ({ WINDOWS_GIT: "C:\\Program Files\\Git\\cmd\\git.exe" }));
+
+vi.mock("../windowsExecutable.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../windowsExecutable.js")>()),
+  resolveExecutableForSpawn: vi.fn(async (name: string, _env?: unknown, platform?: string) =>
+    platform === "win32" ? WINDOWS_GIT : name
+  ),
+}));
 
 interface FakeChild extends EventEmitter {
   stdout: EventEmitter;
@@ -31,6 +42,18 @@ function nextChild(): FakeChild {
   return child;
 }
 
+/**
+ * Wait for git's spawn. On Windows (the host's, unless a case names a platform)
+ * it follows an asynchronous PATH lookup, so a case drives the child only after
+ * this.
+ */
+async function spawned(): Promise<void> {
+  for (let tick = 0; tick < 20 && vi.mocked(spawn).mock.calls.length === 0; tick++) {
+    await Promise.resolve();
+  }
+  expect(spawn).toHaveBeenCalledTimes(1);
+}
+
 function spawnArgs(): string[] {
   return vi.mocked(spawn).mock.calls[0][1] as string[];
 }
@@ -49,6 +72,7 @@ describe("checkIgnoredPaths", () => {
   it("feeds paths over NUL-terminated stdin and keeps argv constant-size", async () => {
     const child = nextChild();
     const promise = checkIgnoredPaths("/repo", ["a.log", "sub/b.log"]);
+    await spawned();
     child.stdout.emit("data", Buffer.from("a.log\0sub/b.log\0"));
     child.emit("close", 0, null);
 
@@ -67,6 +91,7 @@ describe("checkIgnoredPaths", () => {
   it("spawns with the hardened config and env", async () => {
     const child = nextChild();
     const promise = checkIgnoredPaths("/repo", ["a.log"], { platform: "linux" });
+    await spawned();
     child.emit("close", 1, null);
     await promise;
 
@@ -81,6 +106,25 @@ describe("checkIgnoredPaths", () => {
     expect(options.cwd).toBe("/repo");
     expect(options.windowsHide).toBe(true);
     expect(options.env.GIT_OPTIONAL_LOCKS).toBe("0");
+    // Off Windows, simple-git's bare name with no PATH lookup.
+    expect(vi.mocked(spawn).mock.calls[0][0]).toBe("git");
+    expect(resolveExecutableForSpawn).not.toHaveBeenCalled();
+  });
+
+  it("starts git on Windows by the absolute path its PATH lookup found", async () => {
+    const child = nextChild();
+    const promise = checkIgnoredPaths("C:\\repo", ["C:\\repo\\a.log"], { platform: "win32" });
+    await spawned();
+    child.emit("close", 1, null);
+    await promise;
+
+    expect(vi.mocked(resolveExecutableForSpawn)).toHaveBeenCalledWith(
+      "git",
+      expect.any(Object),
+      "win32"
+    );
+    expect(vi.mocked(spawn).mock.calls[0][0]).toBe(WINDOWS_GIT);
+    expect(spawnArgs().slice(-3)).toEqual(["check-ignore", "--stdin", "-z"]);
   });
 
   it("drops GIT_LITERAL_PATHSPECS, which check-ignore refuses to run under", async () => {
@@ -91,6 +135,7 @@ describe("checkIgnoredPaths", () => {
     // it was handed against the repo's ignore patterns.
     const child = nextChild();
     const promise = checkIgnoredPaths("/repo", ["a.log"], { platform: "linux" });
+    await spawned();
     child.emit("close", 1, null);
     await promise;
     const options = vi.mocked(spawn).mock.calls[0][2] as { env: NodeJS.ProcessEnv };
@@ -103,6 +148,7 @@ describe("checkIgnoredPaths", () => {
     // would report them and silently break the caller's skip predicate.
     const child = nextChild();
     const promise = checkIgnoredPaths("/repo", ["a.log"]);
+    await spawned();
     child.emit("close", 1, null);
     await promise;
     expect(spawnArgs()).not.toContain("--no-index");
@@ -112,6 +158,7 @@ describe("checkIgnoredPaths", () => {
   it("reassembles output split across chunks and drops the trailing empty token", async () => {
     const child = nextChild();
     const promise = checkIgnoredPaths("/repo", ["one.log", "two.log"]);
+    await spawned();
     child.stdout.emit("data", Buffer.from("one.l"));
     child.stdout.emit("data", Buffer.from("og\0two.log\0"));
     child.emit("close", 0, null);
@@ -122,6 +169,7 @@ describe("checkIgnoredPaths", () => {
     const odd = ["a b.log", "line\nbreak.log", "café/ünïcode.log"];
     const child = nextChild();
     const promise = checkIgnoredPaths("/repo", odd);
+    await spawned();
     child.stdout.emit("data", Buffer.from(odd.join("\0") + "\0", "utf8"));
     child.emit("close", 0, null);
     // NUL framing is why these survive: no shell quoting, no line splitting.
@@ -131,6 +179,7 @@ describe("checkIgnoredPaths", () => {
   it("treats exit 1 as a valid empty result, not a failure", async () => {
     const child = nextChild();
     const promise = checkIgnoredPaths("/repo", ["tracked.ts"]);
+    await spawned();
     child.emit("close", 1, null);
     await expect(promise).resolves.toEqual(new Set());
   });
@@ -142,6 +191,7 @@ describe("checkIgnoredPaths", () => {
   ])("rejects on exit %i and discards partial output", async (code, stderr) => {
     const child = nextChild();
     const promise = checkIgnoredPaths("/repo", ["a.log", "/etc/hosts"]);
+    await spawned();
     // A fatal can arrive after git already wrote matches for the paths it
     // processed. Trusting that prefix would skip a status refresh on a burst
     // that was never fully classified.
@@ -154,6 +204,7 @@ describe("checkIgnoredPaths", () => {
   it("rejects when git is killed by a signal", async () => {
     const child = nextChild();
     const promise = checkIgnoredPaths("/repo", ["a.log"]);
+    await spawned();
     // code is null on signal death; without this branch it would fall through
     // the `code === 0` / `code === 1` checks into a confusing "exit null".
     child.emit("close", null, "SIGKILL");
@@ -163,6 +214,7 @@ describe("checkIgnoredPaths", () => {
   it("rejects on a spawn error", async () => {
     const child = nextChild();
     const promise = checkIgnoredPaths("/repo", ["a.log"]);
+    await spawned();
     child.emit("error", new Error("ENOENT"));
     await expect(promise).rejects.toThrow("ENOENT");
   });
@@ -170,6 +222,7 @@ describe("checkIgnoredPaths", () => {
   it("swallows stdin EPIPE and still settles from close", async () => {
     const child = nextChild();
     const promise = checkIgnoredPaths("/repo", ["a.log"]);
+    await spawned();
     // git can exit before the body finishes writing; the stream then errors
     // after the process is already gone. `close` is the source of truth.
     child.stdin.emit("error", new Error("EPIPE"));
@@ -181,6 +234,7 @@ describe("checkIgnoredPaths", () => {
     vi.useFakeTimers();
     const child = nextChild();
     const promise = checkIgnoredPaths("/repo", ["a.log"], { timeoutMs: 250 });
+    await spawned();
     const assertion = expect(promise).rejects.toThrow("timed out after 250ms");
     await vi.advanceTimersByTimeAsync(250);
     await assertion;
@@ -193,6 +247,7 @@ describe("checkIgnoredPaths", () => {
     const promise = checkIgnoredPaths("/repo", ["a.log"], {
       timeoutMs: GIT_BLOCK_TIMEOUT_MS * 10,
     });
+    await spawned();
     const assertion = expect(promise).rejects.toThrow(`timed out after ${GIT_BLOCK_TIMEOUT_MS}ms`);
     await vi.advanceTimersByTimeAsync(GIT_BLOCK_TIMEOUT_MS);
     await assertion;
@@ -202,6 +257,7 @@ describe("checkIgnoredPaths", () => {
     vi.useFakeTimers();
     const child = nextChild();
     const promise = checkIgnoredPaths("/repo", ["a.log"], { timeoutMs: 100 });
+    await spawned();
     const assertion = expect(promise).rejects.toThrow("timed out");
     await vi.advanceTimersByTimeAsync(100);
     child.stdout.emit("data", Buffer.from("a.log\0"));
@@ -213,6 +269,7 @@ describe("checkIgnoredPaths", () => {
     const controller = new AbortController();
     const child = nextChild();
     const promise = checkIgnoredPaths("/repo", ["a.log"], { signal: controller.signal });
+    await spawned();
     const options = vi.mocked(spawn).mock.calls[0][2] as { signal?: AbortSignal };
     expect(options.signal).toBe(controller.signal);
     child.emit("close", 1, null);
@@ -229,6 +286,7 @@ describe("listUntrackedMatchingPatternFile", () => {
   it("uses the pattern file as the only exclude source and expands directories", async () => {
     const child = nextChild();
     const promise = listUntrackedMatchingPatternFile("/repo", "/repo/.worktreeinclude");
+    await spawned();
     child.stdout.emit("data", Buffer.from(".env\0certs/dev.pem\0"));
     child.emit("close", 0, null);
 
@@ -251,6 +309,7 @@ describe("listUntrackedMatchingPatternFile", () => {
     const promise = listUntrackedMatchingPatternFile("/repo", "/repo/.worktreeinclude", {
       maxStdoutBytes: 8,
     });
+    await spawned();
     child.stdout.emit("data", Buffer.from("a.env\0b.env\0"));
     child.emit("close", 0, null);
 
@@ -261,6 +320,7 @@ describe("listUntrackedMatchingPatternFile", () => {
   it("rejects on any non-zero exit", async () => {
     const child = nextChild();
     const promise = listUntrackedMatchingPatternFile("/repo", "/repo/.worktreeinclude");
+    await spawned();
     child.stderr.emit("data", Buffer.from("fatal: cannot use /repo/.worktreeinclude"));
     child.emit("close", 128, null);
 

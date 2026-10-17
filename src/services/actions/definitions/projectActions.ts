@@ -4,7 +4,8 @@ import type { ActionContext } from "@shared/types/actions";
 import type { AgentVisibleProjectSettingsKey, ProjectSettings } from "@shared/types";
 import { pickAgentVisibleProjectSettings } from "@shared/types";
 import { z } from "zod";
-import { projectClient } from "@/clients";
+import { PROJECT_LIST_SORT_MODES } from "@shared/types/project";
+import { projectClient, projectGroupsClient } from "@/clients";
 import { useProjectStore } from "@/store/projectStore";
 import { useScratchStore } from "@/store/scratchStore";
 import { getViewWorkspaceId } from "@/store/viewWorkspaceId";
@@ -92,6 +93,13 @@ const agentVisibleProjectSettingsShape: Record<AgentVisibleProjectSettingsKey, z
 // sends it: a row in the overview names a run in another workspace more often
 // than not.
 const openRunArgs = z.object({ runId: z.string(), workspaceId: z.string().optional() });
+
+const setGroupArgs = z.object({
+  projectId: z.string().min(1),
+  groupId: z.string().min(1).nullable(),
+});
+
+const createGroupArgs = z.object({ name: z.string(), projectId: z.string().min(1).optional() });
 
 /**
  * The one thing a row in the agent overview promises, not kept.
@@ -573,6 +581,120 @@ export function registerProjectActions(actions: ActionRegistry, callbacks: Actio
     run: async (args: unknown) => {
       const { projectId } = args as { projectId: string };
       await useProjectStore.getState().removeProject(projectId);
+    },
+  }));
+
+  // Filing: archive and groups. Read-modify on the host, which validates every
+  // write and broadcasts it, so these go through the client rather than a
+  // renderer store — an agent gets the host's own refusal, not a toast.
+  const resolveProjectId = (projectId: string | undefined): string => {
+    const id = projectId ?? useProjectStore.getState().currentProject?.id;
+    if (!id) throw new Error("No project given and no project is open");
+    return id;
+  };
+
+  actions.set("project.archive", () => ({
+    id: "project.archive",
+    title: "Archive project",
+    description:
+      "File a project away: it leaves the project switcher's main list for a folded Archived section, but keeps its settings, worktrees, pin and group, and still surfaces if one of its agents runs or asks for input. Defaults to the current project. Reverse it with project.unarchive.",
+    category: "project",
+    kind: "command",
+    danger: "safe",
+    scope: "renderer",
+    argsSchema: z.object({ projectId: z.string().optional() }),
+    run: async (args: unknown) => {
+      const { projectId } = (args ?? {}) as { projectId?: string };
+      await projectGroupsClient.setArchived(resolveProjectId(projectId), true);
+    },
+  }));
+
+  actions.set("project.unarchive", () => ({
+    id: "project.unarchive",
+    title: "Unarchive project",
+    description:
+      "Bring an archived project back to where it was in the project switcher — its group, or Other projects. Defaults to the current project. Does nothing to a project that isn't archived.",
+    category: "project",
+    kind: "command",
+    danger: "safe",
+    scope: "renderer",
+    argsSchema: z.object({ projectId: z.string().optional() }),
+    run: async (args: unknown) => {
+      const { projectId } = (args ?? {}) as { projectId?: string };
+      await projectGroupsClient.setArchived(resolveProjectId(projectId), false);
+    },
+  }));
+
+  actions.set("project.setGroup", () => ({
+    id: "project.setGroup",
+    title: "Move project to group",
+    description:
+      "File a project under one of the user's project groups, or pass null for groupId to take it out of its group and back into Other projects. A project sits in at most one group. List the groups first for their ids; an unknown id is refused.",
+    category: "project",
+    kind: "command",
+    danger: "safe",
+    scope: "renderer",
+    argsSchema: setGroupArgs,
+    run: async ({ projectId, groupId }: z.infer<typeof setGroupArgs>) => {
+      await projectGroupsClient.setMembership(projectId, groupId);
+    },
+  }));
+
+  actions.set("project.listGroups", () => ({
+    id: "project.listGroups",
+    title: "List project groups",
+    description:
+      "List the user's project groups — the named sections of the project switcher — in the order they appear, with each one's id and sort order. Which projects belong to a group is on each project's own groupId. It never fails: an empty list means no groups exist yet.",
+    category: "project",
+    kind: "query",
+    danger: "safe",
+    scope: "renderer",
+    resultSchema: z.object({
+      groups: z.array(
+        z.object({
+          id: z.string(),
+          name: z.string(),
+          position: z.number(),
+          sortMode: z.enum(PROJECT_LIST_SORT_MODES),
+          createdAt: z.number(),
+        })
+      ),
+    }),
+    run: async () => ({ groups: await projectGroupsClient.list() }),
+  }));
+
+  actions.set("project.createGroup", () => ({
+    id: "project.createGroup",
+    title: "Create project group",
+    description:
+      "Create a named project group, shown as its own section of the project switcher after the existing groups. Pass projectId to file that project under it straight away. Names are unique ignoring case; a duplicate or empty name is refused.",
+    category: "project",
+    kind: "command",
+    danger: "safe",
+    scope: "renderer",
+    argsSchema: createGroupArgs,
+    run: async ({ name, projectId }: z.infer<typeof createGroupArgs>) => {
+      // Checked before anything is created: refusing an unknown project after
+      // the group exists would leave a retry of the same call failing on its
+      // own duplicate name.
+      if (
+        projectId !== undefined &&
+        !useProjectStore.getState().projects.some((p) => p.id === projectId)
+      ) {
+        throw new Error(`Project not found: ${projectId}`);
+      }
+      const group = await projectGroupsClient.create(name);
+      if (projectId !== undefined) {
+        try {
+          await projectGroupsClient.setMembership(projectId, group.id);
+        } catch (error) {
+          throw new Error(
+            `Created group "${group.name}" (${group.id}), but couldn't move the project into it: ${formatErrorMessage(error, "unknown error")}. Use project.setGroup to retry.`,
+            { cause: error }
+          );
+        }
+      }
+      return group;
     },
   }));
 

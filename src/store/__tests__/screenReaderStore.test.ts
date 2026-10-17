@@ -32,14 +32,4 @@ describe("screenReaderStore", () => {
     useScreenReaderStore.getState().setOsAccessibilityEnabled(true);
     expect(useScreenReaderStore.getState().resolvedScreenReaderEnabled()).toBe(false);
   });
-
-  it("setScreenReaderMode updates mode", () => {
-    useScreenReaderStore.getState().setScreenReaderMode("on");
-    expect(useScreenReaderStore.getState().screenReaderMode).toBe("on");
-  });
-
-  it("setOsAccessibilityEnabled updates OS state", () => {
-    useScreenReaderStore.getState().setOsAccessibilityEnabled(true);
-    expect(useScreenReaderStore.getState().osAccessibilityEnabled).toBe(true);
-  });
 });

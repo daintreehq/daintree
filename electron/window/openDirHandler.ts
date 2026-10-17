@@ -1,3 +1,4 @@
+import { basename } from "node:path";
 import type { BrowserWindow } from "electron";
 import type {
   OpenFoldersInNewWindow,
@@ -10,7 +11,12 @@ import {
   getPendingOpenDirPaths,
   setOpenDirConsumer,
 } from "../setup/environment.js";
-import { decideProjectOpenTarget, type ProjectOpenSource } from "./windowOpenPolicy.js";
+import {
+  decideProjectOpenTarget,
+  type OpenWorld,
+  type ProjectOpenSource,
+} from "./windowOpenPolicy.js";
+import { cachedViewBusy } from "./cachedViewBusy.js";
 import { setNewWindowOpener } from "./newWindowOpen.js";
 import {
   holdWindowForOpen,
@@ -54,6 +60,12 @@ export interface OpenDirHandlerDeps {
    * router opens it there itself.
    */
   redirectToOwner?: (project: { id: string; path: string }, windowId: number) => boolean;
+  /**
+   * Tear down the project's cached view in `windowId` so an explicit new-window
+   * open can take it elsewhere (#13274). False when that window can no longer
+   * let it go — the open then switches to it there, as before.
+   */
+  releaseCachedView?: (projectId: string, windowId: number) => boolean;
 }
 
 // App-lifetime consumer: macOS `open-file` is app-lifetime, so this wires once.
@@ -134,8 +146,11 @@ export async function routeProjectOpen(
   const registry = deps.getWindowRegistry();
 
   // Synchronous from the snapshot to the reservation: nothing may change the
-  // world between deciding on a window and claiming it.
-  const decision = decideProjectOpenTarget(
+  // world between deciding on a window and claiming it. A cached view moving to
+  // a new window is released inside that span too, so the project never has a
+  // live view in two windows.
+  const world = snapshotOpenWorld(registry, deps.getPreference(), deps.isProjectClosed);
+  let decision = decideProjectOpenTarget(
     {
       projectId: project?.id ?? null,
       projectPath: targetPath,
@@ -144,8 +159,29 @@ export async function routeProjectOpen(
       disposition: routing.disposition,
       initiatingWindowId: routing.initiatingWindowId,
     },
-    snapshotOpenWorld(registry, deps.getPreference(), deps.isProjectClosed)
+    world
   );
+  const releaseFrom = decision.kind === "focus" ? undefined : decision.releaseFromWindowId;
+  if (
+    releaseFrom !== undefined &&
+    !(project !== null && deps.releaseCachedView?.(project.id, releaseFrom) === true)
+  ) {
+    decision = { kind: "activate", windowId: releaseFrom, reason: "owner" };
+  }
+
+  // A window asked for this project in the app; another window keeping it only
+  // cached, which can't let it go, is never switched to it on that window's
+  // behalf (#13291). Whatever it shows stays.
+  if (
+    routing.source === "in-app" &&
+    project !== null &&
+    decision.kind === "activate" &&
+    decision.reason === "owner" &&
+    decision.windowId !== routing.initiatingWindowId &&
+    keepsOnlyCached(world, decision.windowId, project.id)
+  ) {
+    throw cachedViewBusy(basename(project.path) || project.path);
+  }
 
   const win =
     decision.kind === "create"
@@ -163,9 +199,8 @@ export async function routeProjectOpen(
   // and one still behind its paint gate has to wait for revealWindow's "show".
   //
   // An owner that is the asking window itself only holds the project cached
-  // (one showing it is a no-op focus), and there is nowhere else a single live
-  // view can go: that window switches to it. The single-owner rule outranks
-  // "new" here, as it does for every other gesture.
+  // (one showing it is a no-op focus) that it could not release for "new" — it
+  // backs a running assistant, or is mid-activation: that window switches to it.
   const { windowId } = decision;
   const redirectToOwner = (): boolean =>
     routing.source === "in-app" &&
@@ -200,6 +235,22 @@ export async function routeProjectOpen(
  * execution time, inside the serialized chain, so it sees the windows as they
  * are once the opens ahead of it have landed.
  */
+/**
+ * Whether `windowId` holds the project's live view in its background only,
+ * behind another workspace it is showing. A window on the project picker shows
+ * nothing to lose, so showing the project there is no switch away from anything.
+ */
+function keepsOnlyCached(world: OpenWorld, windowId: number, projectId: string): boolean {
+  const holder = world.windows.find((w) => w.windowId === windowId);
+  return (
+    holder !== undefined &&
+    holder.viewProjectIds.includes(projectId) &&
+    holder.activeProjectId !== null &&
+    holder.activeProjectId !== projectId &&
+    holder.bridgeProjectId !== projectId
+  );
+}
+
 export function installOpenDirConsumer(deps: OpenDirHandlerDeps): void {
   if (openDirConsumerInstalled) return;
   openDirConsumerInstalled = true;

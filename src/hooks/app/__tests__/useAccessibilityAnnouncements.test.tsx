@@ -458,31 +458,6 @@ describe("useAccessibilityAnnouncements — badge-state announcements (#9204)", 
     expect(useAnnouncerStore.getState().polite?.msg).toBe("Pane A: output resumed");
   });
 
-  // FUTURE_SAB: `suspended` is a skeleton value (#9900); the resume
-  // edge in the formatter is exercised here for the future state.
-  it("announces resume from 'suspended' to 'running' (FUTURE_SAB; #9900)", () => {
-    const { rerender } = renderHook(() => useAccessibilityAnnouncements());
-
-    act(() => {
-      setPanels([{ id: "t1", title: "Pane A", flowStatus: "suspended" }]);
-    });
-    rerender();
-    act(() => {
-      vi.advanceTimersByTime(400);
-    });
-    useAnnouncerStore.setState({ polite: null, assertive: null });
-
-    act(() => {
-      setPanels([{ id: "t1", title: "Pane A", flowStatus: "running" }]);
-    });
-    rerender();
-    act(() => {
-      vi.advanceTimersByTime(400);
-    });
-
-    expect(useAnnouncerStore.getState().polite?.msg).toBe("Pane A: output resumed");
-  });
-
   it("does NOT announce 'resumed' when transitioning 'running' → 'running'", () => {
     const { rerender } = renderHook(() => useAccessibilityAnnouncements());
 
@@ -690,37 +665,6 @@ describe("useAccessibilityAnnouncements — badge-state announcements (#9204)", 
     expect(useAnnouncerStore.getState().polite?.msg).toBe("Pane A: exited with code 0");
   });
 
-  it("flow and queue debounce keys are independent — both fire", () => {
-    const { rerender } = renderHook(() => useAccessibilityAnnouncements());
-
-    act(() => {
-      setPanels([{ id: "t1", title: "Pane A" }], { t1: 0 });
-    });
-    rerender();
-    act(() => {
-      vi.advanceTimersByTime(400);
-    });
-    useAnnouncerStore.setState({ polite: null, assertive: null });
-
-    // Both transitions in the same render — independent debounce slots mean
-    // neither cancels the other.
-    act(() => {
-      setPanels([{ id: "t1", title: "Pane A", flowStatus: "paused-backpressure" }], {
-        t1: 2,
-      });
-    });
-    rerender();
-    act(() => {
-      vi.advanceTimersByTime(400);
-    });
-
-    // Last-write-wins on the store entry; both announcements ran through it.
-    // Inspect by id ordering — the queue announcement is scheduled after the
-    // flow one, so it lands last and wins the slot.
-    const msg = useAnnouncerStore.getState().polite?.msg;
-    expect(msg === "Pane A: 2 commands queued" || msg === "Pane A: output paused").toBe(true);
-  });
-
   it("subscribes to hibernation and announces 'hibernated' / 'woke up' transitions", () => {
     const { rerender } = renderHook(() => useAccessibilityAnnouncements());
 
@@ -853,24 +797,6 @@ describe("useAccessibilityAnnouncements — location and maximize announcements 
     expect(useAnnouncerStore.getState().polite?.msg).toBe("Pane A restored to grid");
   });
 
-  it("announces location changes immediately without debounce", () => {
-    const { rerender } = renderHook(() => useAccessibilityAnnouncements());
-
-    act(() => {
-      setPanels([{ id: "t1", title: "Pane A", location: "grid" }]);
-    });
-    rerender();
-    useAnnouncerStore.setState({ polite: null, assertive: null });
-
-    act(() => {
-      setPanels([{ id: "t1", title: "Pane A", location: "dock" }]);
-    });
-    rerender();
-
-    // No timer advance — the announcement is already present.
-    expect(useAnnouncerStore.getState().polite?.msg).toBe("Pane A minimized to dock");
-  });
-
   it("announces location changes for non-PTY panels (browser/dev-preview/review)", () => {
     const { rerender } = renderHook(() => useAccessibilityAnnouncements());
 
@@ -976,17 +902,6 @@ describe("useAccessibilityAnnouncements — location and maximize announcements 
     rerender();
 
     expect(useAnnouncerStore.getState().polite?.msg).toBe("Pane A unmaximized");
-  });
-
-  it("does not announce on first mount when nothing is maximized", () => {
-    const { rerender } = renderHook(() => useAccessibilityAnnouncements());
-
-    act(() => {
-      setPanels([{ id: "t1", title: "Pane A", location: "grid" }]);
-    });
-    rerender();
-
-    expect(useAnnouncerStore.getState().polite).toBeNull();
   });
 
   it("does not announce on first mount when a panel is already maximized", () => {

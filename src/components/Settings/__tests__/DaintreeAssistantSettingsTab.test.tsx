@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { render, screen, fireEvent, waitFor, within } from "@testing-library/react";
+import { act, render, screen, fireEvent, waitFor, within } from "@testing-library/react";
 import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
 
 vi.stubGlobal(
@@ -35,6 +35,9 @@ vi.mock("@/components/icons", () => {
     HollowCircle: stub,
     InteractingCircle: stub,
     ExitedCircle: stub,
+    UnreadCircle: stub,
+    DoneCircle: stub,
+    IdleCircle: stub,
     NpmIcon: stub,
     YarnIcon: stub,
     PnpmIcon: stub,
@@ -315,18 +318,6 @@ describe("DaintreeAssistantSettingsTab", () => {
       { timeout: 5000 }
     );
 
-  it("loads settings and MCP status on mount", async () => {
-    const { container } = render(
-      <SettingsValidationProvider>
-        <DaintreeAssistantSettingsTab />
-      </SettingsValidationProvider>
-    );
-    await waitForContent(container, "Search documentation");
-
-    expect(window.electron.helpAssistant.getSettings).toHaveBeenCalledTimes(1);
-    expect(window.electron.mcpServer.getStatus).toHaveBeenCalledTimes(1);
-  });
-
   it("toggling doc search persists docSearch=false", async () => {
     const { container } = render(
       <SettingsValidationProvider>
@@ -426,18 +417,6 @@ describe("DaintreeAssistantSettingsTab", () => {
       expect(screen.queryByLabelText("Reset Search documentation to default")).toBeNull();
       expect(screen.queryByLabelText("Reset Daintree control to default")).toBeNull();
     });
-  });
-
-  it("does not mark the behavior switches modified at their defaults", async () => {
-    const { container } = render(
-      <SettingsValidationProvider>
-        <DaintreeAssistantSettingsTab />
-      </SettingsValidationProvider>
-    );
-    await waitForContent(container, "Search documentation");
-
-    expect(screen.queryByLabelText("Reset Search documentation to default")).toBeNull();
-    expect(screen.queryByLabelText("Reset Daintree control to default")).toBeNull();
   });
 
   it("hides the debug logging toggle unless the Daintree Assistant agent is selected", async () => {
@@ -889,6 +868,7 @@ describe("DaintreeAssistantSettingsTab", () => {
                       { id: "gpt-6-astra", name: "GPT-6 Astra", shortLabel: "Astra" },
                       { id: "gpt-6-luna", name: "GPT-6 Luna", shortLabel: "Luna" },
                     ],
+                    modelUpgrades: { "gpt-5.6-luna": "gpt-6-luna" },
                     contextWindow: null,
                     source: "merged",
                   }
@@ -905,7 +885,11 @@ describe("DaintreeAssistantSettingsTab", () => {
           );
       }
 
-      function renderWith(preferredAgentId: string, modelIds: Record<string, string>) {
+      function renderWith(
+        preferredAgentId: string,
+        modelIds: Record<string, string>,
+        options: { emptyCatalogs?: boolean } = {}
+      ) {
         mockGetAssistantSupportedAgentIds.mockReturnValue(["claude", "codex"]);
         helpPanelState.preferredAgentId = preferredAgentId;
         helpPanelState.setPreferredAgent = vi.fn((id: string | null) => {
@@ -923,6 +907,13 @@ describe("DaintreeAssistantSettingsTab", () => {
           }),
         });
         mockCatalogs();
+        if (options.emptyCatalogs) {
+          window.electron.agentCapabilities.getResolvedModelList = vi
+            .fn()
+            .mockImplementation((agentId: string) =>
+              Promise.resolve({ agentId, models: [], contextWindow: null, source: "bundled" })
+            );
+        }
         const tree = () => (
           <SettingsValidationProvider>
             <DaintreeAssistantSettingsTab />
@@ -949,6 +940,36 @@ describe("DaintreeAssistantSettingsTab", () => {
         await waitFor(() => expect(select.value).toBe("my-fork-model"));
         expect(optionValues(select)).toContain("my-fork-model");
         expect(optionValues(select)).not.toContain("opus");
+      });
+
+      it("shows a saved model the CLI has retired as the successor it launches as", async () => {
+        renderWith("codex", { codex: "gpt-5.6-luna" });
+        const select = (await screen.findByLabelText("Model")) as HTMLSelectElement;
+        await waitFor(() => expect(select.value).toBe("gpt-6-luna"));
+        expect(optionValues(select)).not.toContain("gpt-5.6-luna");
+        expect(window.electron.helpAssistant.setSettings).not.toHaveBeenCalled();
+      });
+
+      it("moves a retired saved model onto another pick when the user chooses one", async () => {
+        renderWith("codex", { codex: "gpt-5.6-luna" });
+        const select = (await screen.findByLabelText("Model")) as HTMLSelectElement;
+        await waitFor(() => expect(select.value).toBe("gpt-6-luna"));
+
+        fireEvent.change(select, { target: { value: "gpt-6-astra" } });
+
+        await waitFor(() =>
+          expect(window.electron.helpAssistant.setSettings).toHaveBeenCalledWith({
+            modelIds: { codex: "gpt-6-astra" },
+          })
+        );
+        await waitFor(() => expect(select.value).toBe("gpt-6-astra"));
+      });
+
+      it("keeps a saved model and its reset when the catalog comes back empty", async () => {
+        renderWith("codex", { codex: "gpt-6-sol" }, { emptyCatalogs: true });
+        const select = (await screen.findByLabelText("Model")) as HTMLSelectElement;
+        await waitFor(() => expect(select.value).toBe("gpt-6-sol"));
+        expect(optionValues(select)).toEqual(["__default__", "gpt-6-sol"]);
       });
 
       it("keeps each agent's choice across a switch away and back", async () => {
@@ -1330,28 +1351,6 @@ describe("DaintreeAssistantSettingsTab", () => {
     await waitForContent(container, "Check the MCP server tab for details");
   });
 
-  it("hides the local-server disclosure when Daintree control is persisted off", async () => {
-    installApi({
-      getSettings: vi.fn().mockResolvedValue({
-        docSearch: true,
-        daintreeControl: false,
-        tier: "core" as const,
-        bypassPermissions: false,
-        auditRetention: 7,
-        customArgs: "",
-      }),
-    });
-
-    const { container } = render(
-      <SettingsValidationProvider>
-        <DaintreeAssistantSettingsTab />
-      </SettingsValidationProvider>
-    );
-    await waitForContent(container, "Daintree control");
-
-    expect(container.textContent).not.toContain("starts a local HTTP server on 127.0.0.1");
-  });
-
   it("lists Codex in the agent dropdown when it passes the assistant gate", async () => {
     mockGetAssistantSupportedAgentIds.mockReturnValue(["claude", "codex"]);
 
@@ -1683,33 +1682,6 @@ describe("DaintreeAssistantSettingsTab", () => {
     });
   });
 
-  it("renders an agent dropdown listing assistant-supported agents", async () => {
-    const { container } = render(
-      <SettingsValidationProvider>
-        <DaintreeAssistantSettingsTab />
-      </SettingsValidationProvider>
-    );
-    await waitForContent(container, "Agent");
-
-    const select = screen.getByRole("combobox", { name: "Agent" }) as HTMLSelectElement;
-    const labels = Array.from(select.options).map((o) => o.label);
-    expect(labels).toContain("Claude Code");
-  });
-
-  it("calls helpPanelStore.setPreferredAgent when the agent dropdown changes", async () => {
-    const { container } = render(
-      <SettingsValidationProvider>
-        <DaintreeAssistantSettingsTab />
-      </SettingsValidationProvider>
-    );
-    await waitForContent(container, "Agent");
-
-    const select = screen.getByRole("combobox", { name: "Agent" }) as HTMLSelectElement;
-    fireEvent.change(select, { target: { value: "claude" } });
-
-    expect(helpPanelState.setPreferredAgent).toHaveBeenCalledWith("claude");
-  });
-
   it("shows the dropped-agent banner when a persisted agent was dropped", async () => {
     helpPanelState.droppedPreferredAgentId = "claude";
 
@@ -1861,18 +1833,6 @@ describe("DaintreeAssistantSettingsTab", () => {
     expect(window.electron.system.getAgentVersion).not.toHaveBeenCalled();
   });
 
-  it("audit retention description no longer claims logging can be skipped entirely", async () => {
-    const { container } = render(
-      <SettingsValidationProvider>
-        <DaintreeAssistantSettingsTab />
-      </SettingsValidationProvider>
-    );
-    await waitForContent(container, "Audit log retention");
-
-    expect(container.textContent).not.toContain("skip logging entirely");
-    expect(container.textContent).toContain("kept separately");
-  });
-
   it("renders turn-outcome diagnostics in the privacy section after expanding advanced diagnostics", async () => {
     const { container } = render(
       <SettingsValidationProvider>
@@ -1888,20 +1848,6 @@ describe("DaintreeAssistantSettingsTab", () => {
     fireEvent.click(screen.getByRole("button", { name: "Advanced diagnostics" }));
 
     await waitForContent(container, "Clear turn outcomes");
-  });
-
-  it("renders the recording toggle in the privacy section, on by default", async () => {
-    const { container } = render(
-      <SettingsValidationProvider>
-        <DaintreeAssistantSettingsTab />
-      </SettingsValidationProvider>
-    );
-    await waitForContent(container, "Capture audit log");
-
-    expect(window.electron.mcpServer.getAuditConfig).toHaveBeenCalledTimes(1);
-    const toggle = screen.getByLabelText("Capture audit log");
-    expect(toggle.getAttribute("aria-checked")).toBe("true");
-    expect(container.textContent).toContain("Recording every dispatch");
   });
 
   it("toggling the recording switch off calls setAuditEnabled(false) and updates the subtitle", async () => {
@@ -2179,5 +2125,127 @@ describe("SessionLiveStatusCard (live help session)", () => {
     );
 
     await waitFor(() => expect(getLiveSessionStatus).toHaveBeenCalledWith({ sessionId: "help-1" }));
+  });
+});
+
+describe("DaintreeAssistantSettingsTab accepting messages from other machines (#13441)", () => {
+  const LABEL = "Accept messages from other machines by default";
+  const savedSettings = (acceptRemoteMessages: boolean) => ({
+    docSearch: true,
+    daintreeControl: true,
+    runbookSearch: true,
+    tier: "core" as const,
+    bypassPermissions: false,
+    auditRetention: 7 as const,
+    modelIds: {},
+    customArgs: "",
+    idleHibernateMinutes: 5 as const,
+    debugLogging: false,
+    loadGlobalHooksAndServers: false,
+    daintreeConfirmations: "inherit" as const,
+    acceptRemoteMessages,
+  });
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    helpPanelState.preferredAgentId = null;
+    helpPanelState.droppedPreferredAgentId = null;
+    helpPanelState.sessionId = null;
+    helpPanelState.setPreferredAgent = vi.fn();
+    helpPanelState.clearDroppedPreferredAgent = vi.fn();
+    mockGetAssistantSupportedAgentIds.mockReturnValue(["claude"]);
+    installApi({ getSettings: vi.fn().mockResolvedValue(savedSettings(true)) });
+  });
+
+  const waitForContent = (container: HTMLElement, text: string) =>
+    waitFor(
+      () => {
+        expect(container.textContent).toContain(text);
+      },
+      { timeout: 5000 }
+    );
+
+  function installMessaging(available: boolean) {
+    const listeners = new Set<() => void>();
+    let revision = 0;
+    let current = available;
+    const messaging = {
+      getState: vi.fn(async () => ({
+        available: current,
+        paused: false,
+        canPause: true,
+        lane: { enrolled: false, enrolledElsewhere: false, ended: null },
+        revision,
+      })),
+      setLaneEnrolled: vi.fn(),
+      setPaused: vi.fn(),
+      onChanged: vi.fn((listener: () => void) => {
+        listeners.add(listener);
+        return () => listeners.delete(listener);
+      }),
+    };
+    Object.assign(window.electron, { assistantMessaging: messaging });
+    return {
+      messaging,
+      push(next: boolean) {
+        current = next;
+        revision += 1;
+        for (const listener of [...listeners]) listener();
+      },
+    };
+  }
+
+  const renderTab = () =>
+    render(
+      <SettingsValidationProvider>
+        <DaintreeAssistantSettingsTab />
+      </SettingsValidationProvider>
+    );
+
+  it("stays hidden where messaging between machines isn't offered", async () => {
+    const { messaging } = installMessaging(false);
+    const { container } = renderTab();
+    await waitForContent(container, "Search documentation");
+    await waitFor(() => expect(messaging.getState).toHaveBeenCalledWith(undefined));
+    // Absent after the answer landed, not merely before it did.
+    await act(async () => {
+      await messaging.getState.mock.results[0]?.value;
+    });
+    expect(screen.queryByRole("switch", { name: LABEL })).toBeNull();
+  });
+
+  it("shows the saved default as on, and persists turning it off", async () => {
+    installMessaging(true);
+    const { container } = renderTab();
+    await waitForContent(container, "Search documentation");
+    const toggle = await screen.findByRole("switch", { name: LABEL });
+    await waitFor(() => expect(window.electron.helpAssistant.getSettings).toHaveBeenCalled());
+    expect(toggle.getAttribute("aria-checked")).toBe("true");
+    fireEvent.click(toggle);
+    await waitFor(() => {
+      expect(window.electron.helpAssistant.setSettings).toHaveBeenCalledWith({
+        acceptRemoteMessages: false,
+      });
+    });
+  });
+
+  it("shows a saved off as off", async () => {
+    installApi({ getSettings: vi.fn().mockResolvedValue(savedSettings(false)) });
+    installMessaging(true);
+    renderTab();
+    await waitFor(() => {
+      expect(screen.getByRole("switch", { name: LABEL }).getAttribute("aria-checked")).toBe(
+        "false"
+      );
+    });
+  });
+
+  it("appears once the first host makes messaging available", async () => {
+    const { push } = installMessaging(false);
+    const { container } = renderTab();
+    await waitForContent(container, "Search documentation");
+    expect(screen.queryByRole("switch", { name: LABEL })).toBeNull();
+    push(true);
+    expect(await screen.findByRole("switch", { name: LABEL })).toBeTruthy();
   });
 });

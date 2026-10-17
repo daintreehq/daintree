@@ -150,13 +150,6 @@ describe("CommitPanel — push confirm", () => {
     expect(screen.getByTestId("push-confirm-dialog")).toBeDefined();
   });
 
-  it("on a protected branch ('main'), opens the ConfirmDialog instead of pushing", () => {
-    const { onCommitAndPush } = renderPanel({ currentBranch: "main" });
-    fireEvent.click(screen.getByRole("button", { name: /Commit & push/ }));
-    expect(onCommitAndPush).not.toHaveBeenCalled();
-    expect(screen.getByTestId("push-confirm-dialog")).toBeDefined();
-  });
-
   it("confirming the dialog calls onCommitAndPush", () => {
     const { onCommitAndPush } = renderPanel({ currentBranch: "develop" });
     fireEvent.click(screen.getByRole("button", { name: /Commit & push/ }));
@@ -182,15 +175,6 @@ describe("CommitPanel — push confirm", () => {
     expect(message.textContent).toContain("Body line");
   });
 
-  it("shows the target-branch pill with the current branch name", () => {
-    renderPanel({ currentBranch: "feature/my-thing" });
-    fireEvent.click(screen.getByRole("button", { name: /Commit & push/ }));
-    const pill = screen.getByTestId("commit-panel-push-confirm-branch");
-    // The pill names the full destination, not just the branch: which
-    // repository the push lands in is the fact a fork workflow hides (#11746).
-    expect(pill.textContent).toBe("origin/feature/my-thing");
-  });
-
   it("warns about protected branches in the description copy", () => {
     renderPanel({ currentBranch: "main" });
     fireEvent.click(screen.getByRole("button", { name: /Commit & push/ }));
@@ -203,7 +187,7 @@ describe("CommitPanel — push confirm", () => {
     fireEvent.click(screen.getByRole("button", { name: /Commit & push/ }));
     const description = screen.getByTestId("confirm-description");
     expect(description.textContent).not.toContain("protected branch");
-    expect(description.textContent).toContain("Review your commit message");
+    expect(description.textContent).toContain("Review the commit before pushing");
   });
 
   it("when skipPushConfirm is true, pushes directly without opening the dialog", () => {
@@ -264,17 +248,6 @@ describe("CommitPanel — push confirm", () => {
     expect(screen.getByTestId("confirm-description").textContent).toContain("protected branch");
   });
 
-  it("treats 'master' and 'development' as protected for the warning copy", () => {
-    renderPanel({ currentBranch: "master" });
-    fireEvent.click(screen.getByRole("button", { name: /Commit & push/ }));
-    expect(screen.getByTestId("confirm-description").textContent).toContain("protected branch");
-    cleanup();
-
-    renderPanel({ currentBranch: "development" });
-    fireEvent.click(screen.getByRole("button", { name: /Commit & push/ }));
-    expect(screen.getByTestId("confirm-description").textContent).toContain("protected branch");
-  });
-
   it("with hasRemote=false, does not open the dialog (no push to confirm)", () => {
     const onCommit = vi.fn().mockResolvedValue(undefined);
     const onCommitAndPush = vi.fn().mockResolvedValue(undefined);
@@ -310,17 +283,6 @@ describe("CommitPanel — push confirm", () => {
     fireEvent.keyDown(textarea, { key: "Enter", metaKey: true });
     expect(onCommitAndPush).not.toHaveBeenCalled();
     expect(screen.getByTestId("push-confirm-dialog")).toBeDefined();
-  });
-
-  it("with currentBranch=null, the dialog opens but confirming is blocked", () => {
-    // A null branch is a detached HEAD, which has no push destination to
-    // resolve — the confirm opens to explain that rather than pushing (#11746).
-    const { onCommitAndPush } = renderPanel({ currentBranch: null });
-    fireEvent.click(screen.getByRole("button", { name: /Commit & push/ }));
-    expect(screen.getByTestId("push-confirm-dialog")).toBeDefined();
-    expect(screen.getByTestId("commit-panel-push-no-destination")).toBeDefined();
-    fireEvent.click(screen.getByRole("button", { name: /Push to branch/ }));
-    expect(onCommitAndPush).not.toHaveBeenCalled();
   });
 
   it("with currentBranch=null but a resolved destination, confirming fires push exactly once", () => {

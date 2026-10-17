@@ -1,4 +1,5 @@
 import {
+  APP_THEME_POLARITY_VARIABLES,
   APP_THEME_TOKEN_KEYS,
   BUILT_IN_APP_SCHEMES,
   EXTENSION_KEYS,
@@ -780,6 +781,7 @@ export interface SwitchPass {
 function expectedVariableKeys(scheme: AppColorScheme): Set<string> {
   const keys = new Set<string>(["--theme-color-mode"]);
   for (const key of APP_THEME_TOKEN_KEYS) keys.add(`--theme-${key}`);
+  for (const key of Object.keys(APP_THEME_POLARITY_VARIABLES[scheme.type])) keys.add(key);
   for (const [name, value] of Object.entries(scheme.extensions ?? {})) {
     if (typeof value === "string" && value.trim()) keys.add(`--${name}`);
   }

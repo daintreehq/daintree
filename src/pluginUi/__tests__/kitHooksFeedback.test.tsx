@@ -25,10 +25,14 @@ import { keybindingService } from "@/services/KeybindingService";
 import { useNotificationStore } from "@/store/notificationStore";
 import { usePluginRuntimeStore } from "@/store/pluginRuntimeStore";
 import { UNDO_ACTION_LABEL, UNDO_TOAST_DURATION_MS } from "@/lib/undoToast";
+import { installAppPluginKitHost } from "@/services/plugin/appPluginKitHost";
+
+// The app's own kit host, so the kit reaches the app services mocked here.
+installAppPluginKitHost();
 
 beforeAll(async () => {
   await kit.whenPluginUiReady();
-});
+}, 60_000);
 
 beforeEach(() => {
   notifySpy.mockClear();

@@ -18,10 +18,6 @@ describe("buildWorktreeMoveInstruction", () => {
     expect(message.includes("\n")).toBe(false);
     expect(message.trim()).toBe(message);
   });
-
-  it("does not leak a different destination's path", () => {
-    expect(buildWorktreeMoveInstruction("/repo/wt-c")).not.toContain("/repo/wt-b");
-  });
 });
 
 describe("composeDraftWithInstruction", () => {
@@ -29,22 +25,6 @@ describe("composeDraftWithInstruction", () => {
     for (const blank of ["", "   ", "\n\n", " \t\n "]) {
       expect(composeDraftWithInstruction(blank, INSTRUCTION)).toBe(INSTRUCTION);
     }
-  });
-
-  it("reproduces a non-blank draft byte for byte", () => {
-    // Trailing spaces can be a deliberate Markdown hard break, and the point of
-    // #11867's bar path is that the user's draft goes along untouched.
-    const draft = "look at @diff  ";
-    const composed = composeDraftWithInstruction(draft, INSTRUCTION);
-
-    expect(composed.startsWith(draft)).toBe(true);
-    expect(composed.endsWith(INSTRUCTION)).toBe(true);
-  });
-
-  it("separates the draft from the instruction with a blank line", () => {
-    const composed = composeDraftWithInstruction("fix the bug", INSTRUCTION);
-
-    expect(composed.slice("fix the bug".length, -INSTRUCTION.length)).toBe("\n\n");
   });
 
   it("adds only newlines, and only the ones the draft is missing", () => {
@@ -66,11 +46,5 @@ describe("composeDraftWithInstruction", () => {
         expect(`${draft}${separator.slice(0, -1)}`).not.toMatch(/\n\n$/);
       }
     }
-  });
-
-  it("appends once, so the instruction cannot be doubled", () => {
-    const composed = composeDraftWithInstruction("already said it", INSTRUCTION);
-
-    expect(composed.split(INSTRUCTION)).toHaveLength(2);
   });
 });

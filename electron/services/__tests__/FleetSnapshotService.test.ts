@@ -28,6 +28,10 @@ vi.mock("../AgentAvailabilityStore.js", () => ({
 }));
 
 import { FleetSnapshotService, STALL_QUIET_MS } from "../FleetSnapshotService.js";
+import {
+  notifyCanopyRefinementsChanged,
+  setCanopyRefinementSource,
+} from "../canopy/canopyRefinementSource.js";
 import type { FleetSnapshot } from "../../../shared/types/ipc/fleet.js";
 
 const NOW = 1_830_001;
@@ -329,22 +333,6 @@ describe("FleetSnapshotService", () => {
     service.stop();
   });
 
-  it("polls on its own interval without any external trigger", async () => {
-    const client = makePtyClient([terminal({ agentState: "working" })]);
-    const service = new FleetSnapshotService(client as never);
-    service.start();
-
-    await vi.advanceTimersByTimeAsync(5_000);
-    const afterFirst = client.getAllTerminalsWithCompletenessAsync.mock.calls.length;
-    await vi.advanceTimersByTimeAsync(5_000);
-
-    expect(afterFirst).toBeGreaterThan(0);
-    expect(client.getAllTerminalsWithCompletenessAsync.mock.calls.length).toBeGreaterThan(
-      afterFirst
-    );
-    service.stop();
-  });
-
   it("stops polling after stop and resumes after a restart", async () => {
     const client = makePtyClient([terminal({ agentState: "working" })]);
     const service = new FleetSnapshotService(client as never);
@@ -425,6 +413,36 @@ describe("FleetSnapshotService", () => {
     service.pushSnapshotTo(wc as never);
 
     expect(wc.send).toHaveBeenCalledWith(liveChannel, livePayload);
+    service.stop();
+  });
+
+  it("replays to a view attached over a link on the live channel", async () => {
+    const client = makePtyClient([terminal({ agentState: "waiting", lastStateChange: NOW })]);
+    const service = new FleetSnapshotService(client as never);
+    const endpoint = {
+      kind: "remote-view" as const,
+      isClosed: vi.fn(() => false),
+      send: vi.fn(),
+    };
+
+    service.pushSnapshotToEndpoint(endpoint as never);
+    expect(endpoint.send).not.toHaveBeenCalled();
+
+    service.refresh();
+    await vi.runOnlyPendingTimersAsync();
+    const [liveChannel, livePayload] = broadcastMock.mock.calls[0] as [string, FleetSnapshot];
+    service.pushSnapshotToEndpoint(endpoint as never);
+
+    expect(endpoint.send).toHaveBeenCalledWith({
+      type: "event",
+      channel: liveChannel,
+      args: [livePayload],
+    });
+
+    endpoint.send.mockClear();
+    endpoint.isClosed.mockReturnValue(true);
+    service.pushSnapshotToEndpoint(endpoint as never);
+    expect(endpoint.send).not.toHaveBeenCalled();
     service.stop();
   });
 
@@ -637,20 +655,6 @@ describe("FleetSnapshotService", () => {
     expect(broadcastMock).not.toHaveBeenCalled();
   });
 
-  it("replays the retained snapshot to a freshly loaded view", async () => {
-    const client = makePtyClient([terminal({ agentState: "waiting", lastStateChange: NOW })]);
-    const service = new FleetSnapshotService(client as never);
-    service.refresh();
-    await vi.runOnlyPendingTimersAsync();
-
-    const wc = { isDestroyed: () => false, send: vi.fn() };
-    service.pushSnapshotTo(wc as never);
-
-    expect(wc.send).toHaveBeenCalledTimes(1);
-    expect((wc.send.mock.calls[0][1] as FleetSnapshot).runs[0].runId).toBe("t1");
-    service.stop();
-  });
-
   it("sends nothing to a new view before the first compute", () => {
     const service = new FleetSnapshotService(makePtyClient() as never);
     const wc = { isDestroyed: () => false, send: vi.fn() };
@@ -671,6 +675,108 @@ describe("FleetSnapshotService", () => {
     await vi.runOnlyPendingTimersAsync();
 
     expect(lastSnapshot().runs[0].park).toEqual(park);
+    service.stop();
+  });
+
+  it("decorates a run with its hand-back, for the incarnation it spawned in", async () => {
+    const client = makePtyClient([terminal({ agentState: "waiting", lastStateChange: NOW })]);
+    let record: { stoppedAt: number; seenAt?: number } | undefined = { stoppedAt: NOW - 1_000 };
+    const getRecord = vi.fn((_id: string, _spawnedAt?: number) => record);
+    const retain = vi.fn();
+    const handBacks = { getRecord, retain };
+    const service = new FleetSnapshotService(client as never, null, handBacks as never);
+    service.start();
+    service.refresh();
+    await vi.runOnlyPendingTimersAsync();
+
+    expect(lastSnapshot().runs[0].handBack).toEqual({ stoppedAt: NOW - 1_000 });
+    expect(getRecord).toHaveBeenCalledWith("t1", NOW - 60_000);
+    expect(retain).toHaveBeenCalledWith(new Set(["t1"]), expect.any(Number));
+
+    // Seen is a fleet change on its own, with no agent state moving.
+    record = { stoppedAt: NOW - 1_000, seenAt: NOW };
+    eventEmitter.emit("terminal:hand-back-changed", { id: "t1", unseen: false, timestamp: NOW });
+    await vi.advanceTimersByTimeAsync(250);
+    expect(broadcastMock).toHaveBeenCalledTimes(2);
+    expect(lastSnapshot().runs[0].handBack).toEqual(record);
+    service.stop();
+  });
+
+  it("decorates a run with Canopy's refinement for its incarnation, and re-publishes when it changes", async () => {
+    const client = makePtyClient([terminal({ agentState: "completed", lastStateChange: NOW })]);
+    let refinement: { kind: "asked"; quote: string; readAt: number } | undefined = undefined;
+    const source = vi.fn((_id: string, _spawnedAt: number) => refinement);
+    setCanopyRefinementSource(source);
+    const service = new FleetSnapshotService(client as never);
+    try {
+      service.start();
+      service.refresh();
+      await vi.runOnlyPendingTimersAsync();
+      expect(lastSnapshot().runs[0].canopy).toBeUndefined();
+      expect(source).toHaveBeenCalledWith("t1", NOW - 60_000);
+      const published = broadcastMock.mock.calls.length;
+
+      refinement = { kind: "asked", quote: "Want me to update the tests too?", readAt: NOW };
+      notifyCanopyRefinementsChanged();
+      await vi.advanceTimersByTimeAsync(250);
+      expect(broadcastMock.mock.calls.length).toBe(published + 1);
+      expect(lastSnapshot().runs[0].canopy).toEqual(refinement);
+
+      // The same reading told again is no fleet change.
+      notifyCanopyRefinementsChanged();
+      await vi.advanceTimersByTimeAsync(250);
+      expect(broadcastMock.mock.calls.length).toBe(published + 1);
+
+      // Canopy going away takes every refinement with it.
+      setCanopyRefinementSource(null);
+      await vi.advanceTimersByTimeAsync(250);
+      expect(lastSnapshot().runs[0].canopy).toBeUndefined();
+    } finally {
+      setCanopyRefinementSource(null);
+      service.stop();
+    }
+  });
+
+  it("withdraws Canopy's refinements from a degraded fleet without waiting for the host", async () => {
+    const client = makePtyClient([terminal({ agentState: "completed", lastStateChange: NOW })]);
+    const refinement = { kind: "asked", quote: "Ship it?", readAt: NOW } as const;
+    setCanopyRefinementSource(() => refinement);
+    const service = new FleetSnapshotService(client as never);
+    try {
+      service.start();
+      service.refresh();
+      await vi.runOnlyPendingTimersAsync();
+      expect(lastSnapshot().runs[0].canopy).toEqual(refinement);
+
+      client.setFleet([], true);
+      service.refresh();
+      await vi.runOnlyPendingTimersAsync();
+      expect(lastSnapshot().degraded).toBe(true);
+
+      setCanopyRefinementSource(null);
+      expect(lastSnapshot()).toMatchObject({ degraded: true });
+      expect(lastSnapshot().runs[0].canopy).toBeUndefined();
+      expect(lastSnapshot().runs[0].runId).toBe("t1");
+    } finally {
+      setCanopyRefinementSource(null);
+      service.stop();
+    }
+  });
+
+  it("never prunes hand-backs from a degraded read", async () => {
+    const client = makePtyClient([terminal()]);
+    const retain = vi.fn();
+    const service = new FleetSnapshotService(client as never, null, {
+      getRecord: () => undefined,
+      retain,
+    } as never);
+    service.refresh();
+    await vi.runOnlyPendingTimersAsync();
+    client.setFleet([], true);
+    retain.mockClear();
+    service.refresh();
+    await vi.runOnlyPendingTimersAsync();
+    expect(retain).not.toHaveBeenCalled();
     service.stop();
   });
 

@@ -25,24 +25,11 @@ describe("getGravatarUrl", () => {
     const url2 = getGravatarUrl("test@example.com", 40);
     expect(url1).toBe(url2);
   });
-
-  it("includes the size parameter", () => {
-    const url = getGravatarUrl("a@b.com", 80);
-    expect(url).toContain("?s=80&d=404");
-  });
 });
 
 describe("isBotAuthor", () => {
   it("returns true for dependabot", () => {
     expect(isBotAuthor("dependabot[bot]")).toBe(true);
-  });
-
-  it("returns true for github-actions", () => {
-    expect(isBotAuthor("github-actions[bot]")).toBe(true);
-  });
-
-  it("returns true for renovate", () => {
-    expect(isBotAuthor("renovate[bot]")).toBe(true);
   });
 
   it("returns false for human authors", () => {

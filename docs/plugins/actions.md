@@ -24,6 +24,7 @@ An argument shown as `name?` is optional. Argument names come from each action's
 | `agent.getState` | Get agent state | safe | `agentId` |
 | `agent.launch` | Launch agent | safe | `agentId`, `activateDockOnCreate?`, `agentLaunchFlags?`, `cwd?`, `env?`, `excludeFromPersistence?`, `focusPolicy?`, `force?`, `handback?`, `interactive?`, `location?`, `model?`, `name?`, `notify?`, `presetId?`, `prompt?`, `removeOnExit?`, `replyLines?`, `requestedId?`, `spawnedBy?`, `systemPrompt?`, `waitForReply?`, `waitSeconds?`, `worktreeId?` |
 | `agent.listAvailable` | List available agents | safe | — |
+| `agent.listModels` | List agent models | safe | `agentId?` |
 | `agent.listPresets` | List agent presets | safe | `agentId`, `projectId?` |
 | `agent.listToolbar` | List toolbar agents | safe | — |
 | `agent.terminal` | Launch terminal | safe | `focusPolicy?`, `location?`, `spawnedBy?` |
@@ -137,6 +138,7 @@ An argument shown as `name?` is optional. Argument names come from each action's
 | `file.openPanel` | Open file panel | safe | `path`, `rootPath?`, `viewMode?` |
 | `file.read` | Read file | safe | `path`, `rootPath?` |
 | `file.showItemInFolder` | Reveal in file manager | safe | `path`, `allowOutsideRoots?` |
+| `file.trash` | Move file to Trash | confirm | `filePath`, `worktreeId?`, `worktreePath?` |
 | `file.view` | View file | safe | `path`, `col?`, `confineToRoot?`, `line?`, `rootPath?`, `viewMode?`, `worktreeId?` |
 | `files.search` | Search files | safe | `query`, `cwd?`, `limit?` |
 
@@ -189,6 +191,7 @@ An argument shown as `name?` is optional. Argument names come from each action's
 | `git.abortRepositoryOperation` | Abort Git operation | confirm | `cwd?`, `operation?`, `worktreeId?`, `worktreePath?` |
 | `git.commit` | Commit | safe | `message`, `cwd?`, `worktreeId?`, `worktreePath?` |
 | `git.continueRepositoryOperation` | Continue Git operation | safe | `cwd?`, `worktreeId?`, `worktreePath?` |
+| `git.discardFileChanges` | Discard file changes | confirm | `filePath`, `worktreeId?`, `worktreePath?` |
 | `git.fetch` | Fetch | safe | `cwd?`, `prune?`, `worktreeId?`, `worktreePath?` |
 | `git.forcePushWithLease` | Force push with lease | confirm | `cwd?`, `worktreeId?`, `worktreePath?` |
 | `git.getFileDiff` | Get file diff | safe | `filePath`, `status`, `cwd?`, `ignoreWhitespace?`, `maxBytes?`, `offset?`, `worktreeId?`, `worktreePath?` |
@@ -211,6 +214,7 @@ An argument shown as `name?` is optional. Argument names come from each action's
 | --- | --- | --- | --- |
 | `help.displayImage` | Display documentation image | safe | `url`, `altText?`, `caption?` |
 | `help.gettingStarted.show` | Getting started | safe | — |
+| `help.newSessionWithAgent` | New assistant session with agent | safe | `agentId` |
 | `help.openCommandsFolder` | Open assistant commands folder | safe | — |
 | `help.resumePastSession` | Resume past assistant session | safe | `agentId`, `sessionId`, `slot?` |
 | `help.tour.show` | Daintree Tour | safe | `tourId?` |
@@ -321,26 +325,34 @@ An argument shown as `name?` is optional. Argument names come from each action's
 
 | Action | Title | Danger | Arguments |
 | --- | --- | --- | --- |
+| `canopy.markAllRead` | Mark all Canopy agents as read | safe | — |
+| `canopy.toggle` | Open Canopy | safe | — |
 | `pilot.openProject` | View this project's agents | safe | — |
 | `pilot.openRun` | Open run | safe | `runId`, `workspaceId?` |
 | `pilot.toggle` | View all agents | safe | — |
 | `project.add` | Open project | safe | `destination?`, `path?` |
+| `project.archive` | Archive project | safe | `projectId?` |
 | `project.cloneRepo` | Clone repository | safe | — |
 | `project.close` | Close project | safe | `projectId` |
 | `project.closeActive` | Close project | safe | — |
+| `project.createGroup` | Create project group | safe | `name`, `projectId?` |
 | `project.detectRunners` | Detect runners | safe | `projectId?` |
 | `project.getAll` | List projects | safe | — |
 | `project.getCurrent` | Get current project | safe | — |
 | `project.getSettings` | Get project settings | safe | `projectId?` |
 | `project.getStats` | Get project stats | safe | `projectId?` |
+| `project.listGroups` | List project groups | safe | — |
 | `project.muteNotifications` | Mute project notifications | safe | `projectId` |
 | `project.openDialog` | Pick directory | safe | — |
 | `project.openInNewWindow` | Open project in new window | safe | — |
+| `project.openOnHost` | Open project on host… | safe | `hostId`, `projectId`, `navigateOnly?`, `newWindow?`, `worktree?` |
 | `project.remove` | Remove project | confirm | `projectId` |
 | `project.saveSettings` | Save project settings | safe | `projectId`, `settings` |
+| `project.setGroup` | Move project to group | safe | `groupId`, `projectId` |
 | `project.settings.open` | Open project settings | safe | — |
 | `project.silenceNotificationKind` | Silence notification kind | safe | `kind`, `projectId?` |
 | `project.switch` | Switch project | safe | `projectId` |
+| `project.unarchive` | Unarchive project | safe | `projectId?` |
 | `project.update` | Update project | safe | `projectId`, `updates` |
 
 ## recipes
@@ -495,6 +507,10 @@ An argument shown as `name?` is optional. Argument names come from each action's
 
 | Action | Title | Danger | Arguments |
 | --- | --- | --- | --- |
+| `host.add` | Add host… | safe | — |
+| `host.forwardPort` | Forward port… | safe | `port`, `hostId?`, `label?` |
+| `host.overview.open` | Hosts overview… | safe | — |
+| `host.switch` | Switch host… | confirm | `hostId?`, `newWindow?` |
 | `workspace.list` | List workspaces | safe | — |
 
 ## worktree
@@ -556,6 +572,8 @@ An argument shown as `name?` is optional. Argument names come from each action's
 | `worktree.sessions.restartAll` | Restart all sessions | confirm | `confirmed?`, `worktreeId?` |
 | `worktree.sessions.trashAll` | Trash all sessions | confirm | `confirmed?`, `worktreeId?` |
 | `worktree.setActive` | Set active worktree | safe | `worktreeId` |
+| `worktree.setCustomTitle` | Set worktree title | safe | `title`, `worktreeId` |
+| `worktree.setLabelColor` | Set worktree label colour | safe | `color`, `worktreeId` |
 | `worktree.switchIndex` | Switch to worktree by index | safe | `index` |
 | `worktree.waitForPullRequest` | Wait for worktree pull request | safe | `worktreeIds`, `timeoutMs?` |
 | `worktree.waitUntilReady` | Wait until worktree ready | safe | `timeoutMs?`, `worktreeId?`, `worktreePath?` |

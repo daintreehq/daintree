@@ -40,6 +40,8 @@ interface CommandBuilderProps {
   executionError: string | null;
   onExecute: (args: Record<string, unknown>) => Promise<CommandResult>;
   onCancel: () => void;
+  /** Where focus goes when the form closes, ahead of whatever opened it. */
+  restoreFocusTo?: () => HTMLElement | null;
 }
 
 interface FieldErrors {
@@ -160,6 +162,7 @@ function BuilderTextField({
         placeholder={field.placeholder}
         aria-describedby={error ? errorId : field.helpText ? helpId : undefined}
         aria-invalid={error ? "true" : undefined}
+        aria-required={field.required || undefined}
         className={cn(FIELD_INPUT, error && "border-status-error")}
       />
     </FormRow>
@@ -199,6 +202,7 @@ function BuilderTextareaField({
         density="compact"
         invalid={!!error}
         aria-describedby={error ? errorId : field.helpText ? helpId : undefined}
+        aria-required={field.required || undefined}
         // `block`: an inline textarea sits on the text baseline and leaves a
         // descender gap beneath it, pushing its hint further off than an input's.
         className="block min-h-[100px]"
@@ -242,6 +246,7 @@ function BuilderSelectField({
           id={inputId}
           aria-describedby={error ? errorId : field.helpText ? helpId : undefined}
           aria-invalid={error ? true : undefined}
+          aria-required={field.required || undefined}
           className={cn(FIELD_CONTROL_SIZE, error && "border-status-error")}
         >
           <SelectValue placeholder={placeholder} />
@@ -353,6 +358,7 @@ export function CommandBuilder({
   executionError,
   onExecute,
   onCancel,
+  restoreFocusTo,
 }: CommandBuilderProps) {
   const [currentStepIndex, setCurrentStepIndex] = useState(0);
   const [formData, setFormData] = useState<Record<string, unknown>>({});
@@ -519,7 +525,14 @@ export function CommandBuilder({
   }, [handleExecute]);
 
   return (
-    <AppDialog isOpen={true} onClose={handleClose} size="md" dismissible={canDismiss}>
+    <AppDialog
+      isOpen={true}
+      onClose={handleClose}
+      size="md"
+      dismissible={canDismiss}
+      restoreFocusTo={restoreFocusTo}
+      preferRestoreFocusTo={restoreFocusTo !== undefined}
+    >
       <AppDialog.Header>
         <AppDialog.Title>{command.label}</AppDialog.Title>
         <AppDialog.CloseButton />
@@ -590,13 +603,19 @@ export function CommandBuilder({
                   disabled={isExecuting}
                   // Enter in a single-line field presses the footer's primary —
                   // Next, or the submit on the last step — so it runs the same
-                  // validation a click does.
+                  // validation a click does. Focus moves with it: a run disables
+                  // this fieldset, and the field the key was pressed in would
+                  // drop the keyboard onto <body>. Validation failing sends it
+                  // straight back to the first invalid field.
                   onKeyDown={(event) => {
                     if (!isEnterToSubmit(event)) return;
                     event.preventDefault();
+                    primaryRef.current?.focus();
                     primaryRef.current?.click();
                   }}
-                  className="m-0 min-w-0 border-0 p-0 [&_:disabled]:opacity-100!"
+                  // `mx-0`, not `m-0`: the block margin is the gap `space-y-5`
+                  // puts between the fields and a failure banner beneath them.
+                  className="mx-0 min-w-0 border-0 p-0 [&_:disabled]:opacity-100!"
                 >
                   <FormGrid>
                     {currentStep.fields.map((field) => (

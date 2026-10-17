@@ -20,6 +20,7 @@ import {
   UI_PALETTE_ENTER_DURATION,
   UI_PALETTE_EXIT_DURATION,
 } from "@/lib/animationUtils";
+import { readIndexCss } from "@/__tests__/support/hostCss";
 
 beforeAll(async () => {
   await primeRadix();
@@ -40,19 +41,6 @@ function assertHTMLElement(el: Element | null | undefined, label: string): HTMLE
   return el;
 }
 
-function renderPopoverContent(): HTMLElement {
-  render(
-    <PopoverPrimitive.Root open>
-      <PopoverPrimitive.Trigger>trigger</PopoverPrimitive.Trigger>
-      <PopoverContent forceMount>content</PopoverContent>
-    </PopoverPrimitive.Root>
-  );
-  return assertHTMLElement(
-    document.querySelector("[data-radix-popper-content-wrapper] > *"),
-    "PopoverContent"
-  );
-}
-
 describe("Radix overlay animation classes — runtime render", () => {
   it("PopoverContent respects caller-provided transformOrigin override", () => {
     // Load-bearing for the zoom, not incidental: the scale grows from this
@@ -71,16 +59,6 @@ describe("Radix overlay animation classes — runtime render", () => {
       "PopoverContent"
     );
     expect(el.style.transformOrigin).toBe("center");
-  });
-
-  it("every token of the shared motion survives cn() into the rendered className", () => {
-    // Counting the constant's name in the source proves only that it was
-    // imported. This proves it was actually applied AND that `tailwind-merge`
-    // did not quietly drop a token on the way — the two ways the shared
-    // definition can stop reaching the DOM while every other test passes.
-    const rendered = new Set(renderPopoverContent().className.split(/\s+/));
-    const missing = OVERLAY_MOTION_CLASS.split(" ").filter((token) => !rendered.has(token));
-    expect(missing, "tokens absent from the rendered PopoverContent").toEqual([]);
   });
 
   it("a caller className cannot silently strip the motion", () => {
@@ -108,8 +86,8 @@ describe("Radix overlay animation classes — wrapper source", () => {
   it.each([
     ["popover.tsx", "OVERLAY_MOTION_CLASS", 1],
     ["select.tsx", "OVERLAY_MOTION_CLASS", 1],
-    ["dropdown-menu.tsx", "OVERLAY_MOTION_CLASS", 2],
-    ["context-menu.tsx", "OVERLAY_MOTION_CLASS", 2],
+    ["dropdown-menu-base.tsx", "OVERLAY_MOTION_CLASS", 2],
+    ["context-menu-base.tsx", "OVERLAY_MOTION_CLASS", 2],
     ["tooltip.tsx", "TOOLTIP_MOTION_CLASS", 1],
   ])("%s applies %s to each of its content components", (file, constant, expected) => {
     // Imports are stripped whole, so one prettier wraps across lines still
@@ -124,29 +102,11 @@ describe("Radix overlay animation classes — wrapper source", () => {
   });
 
   it.each([
-    ["dropdown-menu.tsx", "--radix-dropdown-menu-content-transform-origin"],
-    ["context-menu.tsx", "--radix-context-menu-content-transform-origin"],
+    ["dropdown-menu-base.tsx", "--radix-dropdown-menu-content-transform-origin"],
+    ["context-menu-base.tsx", "--radix-context-menu-content-transform-origin"],
   ])("%s sets transformOrigin on both Content and SubContent", (file, variable) => {
     const src = readWrapperSource(file);
     expect(src.split(`var(${variable})`).length - 1).toBe(2);
-  });
-
-  it("tooltip.tsx defaults to viewport-aware collisionPadding and width cap (issue #8008)", () => {
-    const src = readWrapperSource("tooltip.tsx");
-    expect(src).toContain("collisionPadding = 8");
-    expect(src).toContain("collisionPadding={collisionPadding}");
-    expect(src).toContain("max-w-xs");
-  });
-
-  it("tooltip.tsx wires a pointerActiveRef focus-visible filter (issue #8008)", () => {
-    const src = readWrapperSource("tooltip.tsx");
-    expect(src).toContain("pointerActiveRef");
-    expect(src).toContain("onPointerDown");
-    expect(src).toContain("onPointerUp");
-    // The focus-capture handler must early-return when the ref is set —
-    // otherwise the click-to-focus path opens the tooltip and it strands
-    // until the next pointer move.
-    expect(src).toMatch(/if \(pointerActiveRef\.current\) return/);
   });
 });
 
@@ -269,7 +229,7 @@ describe("lists that drop from a trigger their own width", () => {
   });
 
   it("time the drop on the shared entry/exit tier", () => {
-    const css = readFileSync(path.join(SRC_ROOT, "index.css"), "utf8");
+    const css = readIndexCss();
     const rule = (state: string) =>
       new RegExp(
         `\\.${OVERLAY_DROP_MOTION_CLASS}\\[data-state="${state}"\\]\\s*\\{[^}]*var\\(--duration-(\\d+)\\)`

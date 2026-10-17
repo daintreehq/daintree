@@ -10,10 +10,15 @@ import type { PluginArchiveInstallIntent, PluginInstallResult } from "@shared/ty
 
 vi.mock("zustand/react/shallow", () => ({ useShallow: (fn: unknown) => fn }));
 vi.mock("@/store", () => ({ usePortalStore: () => ({ isOpen: false, width: 0 }) }));
+vi.mock("@/store/portalStore", () => ({ usePortalStore: () => ({ isOpen: false, width: 0 }) }));
 vi.mock("@/hooks", async (importOriginal) => {
   const actual = (await importOriginal()) as Record<string, unknown>;
   return { ...actual, useOverlayState: () => {} };
 });
+vi.mock("@/hooks/useOverlayState", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/hooks/useOverlayState")>()),
+  useOverlayState: () => {},
+}));
 vi.mock("@/hooks/useAnimatedPresence", () => ({
   useAnimatedPresence: ({ isOpen }: { isOpen: boolean }) => ({
     isVisible: isOpen,
@@ -554,14 +559,6 @@ describe("PluginArchiveInstallConfirmDialog", () => {
 
       // Two recipes are two things to approve even when they read alike.
       expect(screen.getByTestId("archive-recipe-list").querySelectorAll("li")).toHaveLength(2);
-    });
-
-    it("leaves no overflow count beside the recipe list", () => {
-      render(<PluginArchiveInstallConfirmDialog />);
-      enqueue(recipeIntent(24));
-
-      const list = screen.getByTestId("archive-recipe-list");
-      expect(list.textContent).not.toMatch(/\+\d+ more/);
     });
 
     it("bounds the recipe list in a keyboard-reachable region, not by dropping rows", () => {

@@ -4,6 +4,8 @@
 // beside it pins the list to the SDK entry itself.
 export const PLUGIN_SDK_REACT_RUNTIME_EXPORTS = [
   "HOST_CHANNEL_CACHE_LIMIT",
+  "HostDisconnectedError",
+  "OutcomeUnknownError",
   "createViewScope",
   "lazyWithPreload",
   "loadDocumentPackage",

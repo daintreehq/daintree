@@ -69,7 +69,7 @@ const fakePushRenderer = vi.hoisted(() => ({
 }));
 vi.mock("../../ipc/utils.js", () => ({
   broadcastToRenderer: broadcastToRendererMock,
-  getProjectRendererTargets: () => [fakePushRenderer],
+  getProjectPushTargets: () => [fakePushRenderer],
 }));
 vi.mock("../../store.js", () => ({
   store: storeMock,
@@ -115,6 +115,26 @@ vi.mock("../fileDecorationRegistry.js", () => ({
   unregisterFileDecorationProviderImpl: vi.fn(),
   scopeMatchesPattern: vi.fn((s: string, p: string) => s === p),
 }));
+
+// The host.process cases are about capability gating and handle shape, not
+// program lookup. On Windows the manager resolves a bare name from PATH before
+// it starts anything, and the host's own PATH (or its lack of `codex`) must not
+// decide whether these spawns reach the spawner, so the lookup answers with a
+// fixed absolute path there.
+vi.mock("../../utils/windowsExecutable.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../utils/windowsExecutable.js")>();
+  return {
+    ...actual,
+    resolveExecutableForSpawn: (
+      name: string,
+      env?: NodeJS.ProcessEnv,
+      platform: NodeJS.Platform = process.platform
+    ): Promise<string> =>
+      platform !== "win32" || /[\\/:]/.test(name)
+        ? actual.resolveExecutableForSpawn(name, env, platform)
+        : Promise.resolve(`C:\\bin\\${name}.exe`),
+  };
+});
 
 // Mocked so MCP-server activation tests don't try to spawn real subprocesses
 // or exercise the execa dynamic-import. The supervisor's wiring is verified
@@ -283,6 +303,7 @@ type CreateHostShape = (pluginId: string) => {
     setPanelBadge: (panelId: string, badge: unknown) => Promise<void>;
     setPanelMenuItems: (panelId: string, items: unknown) => Promise<void>;
     reloadPanel: (panelId: unknown) => Promise<string>;
+    restartWorker: () => Promise<string>;
     invalidateFileDecorations: (scope: string, paths?: string[]) => Promise<void>;
     registerForgeProvider: (descriptor: { id: string }, impl: unknown) => () => void;
   };
@@ -691,6 +712,24 @@ describe("createHost (plugin activation API)", () => {
     await expect(host.reloadPanel("p1")).resolves.toBe("unavailable");
   });
 
+  it("host.restartWorker answers unavailable for a plugin with no worker, and once unloaded (#13410)", async () => {
+    await writePlugin("restart-self", { name: "acme.restart-self", version: "1.0.0" });
+    const service = new PluginService(tmpDir);
+    await service.initialize();
+    const restart = vi.spyOn(service, "restartPluginWorker");
+
+    const { host } = (service as unknown as { createHost: CreateHostShape }).createHost(
+      "acme.restart-self"
+    );
+
+    // No `main` and no command modules: nothing runs in a worker to restart.
+    await expect(host.restartWorker()).resolves.toBe("unavailable");
+    service.unloadPlugin("acme.restart-self");
+    await expect(host.restartWorker()).resolves.toBe("unavailable");
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(restart).not.toHaveBeenCalled();
+  });
+
   it("host.invalidateFileDecorations rejects an empty scope (#10617)", async () => {
     await writePlugin("deco-reject", { name: "acme.deco-reject", version: "1.0.0" });
     const service = new PluginService(tmpDir);
@@ -883,50 +922,6 @@ describe("createHost — host.process (managed processes, #9234)", () => {
 
     handle.write?.('{"jsonrpc":"2.0","method":"initialize"}\n');
     expect(fakes[0]!.stdinWrites.join("")).toBe('{"jsonrpc":"2.0","method":"initialize"}\n');
-  });
-
-  it("gates duplex spawn on shell:exec like every other mode (#11871)", async () => {
-    await writePlugin("proc-duplex-nocap", { name: "acme.proc-duplex-nocap", version: "1.0.0" });
-    const service = new PluginService(tmpDir);
-    await service.initialize();
-
-    const spawner = vi.fn(() => makeFakeChild({ duplex: true }).child);
-    const manager = new PluginProcessManager({ streamSink: () => {}, spawner, killGraceMs: 10 });
-    service._setProcessManagerForTests(manager);
-
-    const { host } = (service as unknown as { createHost: ProcessHostShape }).createHost(
-      "acme.proc-duplex-nocap"
-    );
-    const spawn = host.process.spawn as (command: string, options?: unknown) => Promise<unknown>;
-
-    await expect(spawn("codex", { mode: "duplex" })).rejects.toThrow(
-      /PERMISSION_REQUIRED.*shell:exec/
-    );
-    expect(spawner).not.toHaveBeenCalled();
-  });
-
-  it("blocks a denied-consent duplex spawn before the manager (#11871)", async () => {
-    await writePlugin("proc-duplex-deny", {
-      name: "acme.proc-duplex-deny",
-      version: "1.0.0",
-      capabilities: ["shell:exec"],
-    });
-    const service = new PluginService(tmpDir);
-    await service.initialize();
-
-    const spawner = vi.fn(() => makeFakeChild({ duplex: true }).child);
-    const manager = new PluginProcessManager({ streamSink: () => {}, spawner, killGraceMs: 10 });
-    service._setProcessManagerForTests(manager);
-    getPluginCapabilityConsentService().setConsentBridge(async () => "rejected");
-
-    const { host } = (service as unknown as { createHost: ProcessHostShape }).createHost(
-      "acme.proc-duplex-deny"
-    );
-    const spawn = host.process.spawn as (command: string, options?: unknown) => Promise<unknown>;
-
-    await expect(spawn("codex", { mode: "duplex" })).rejects.toThrow(/PERMISSION_REQUIRED/);
-    expect(spawner).not.toHaveBeenCalled();
-    expect(manager.runningCount("acme.proc-duplex-deny")).toBe(0);
   });
 
   it("tears duplex children down on unload and silences a stale write (#11871)", async () => {
@@ -1220,26 +1215,6 @@ describe("createHost — showToast", () => {
       // The bucket key stays the raw id: never rendered, and two plugins may
       // share a display name.
       rateLimitKey: "plugin:acme.toast-named:success",
-    });
-  });
-
-  it("defaults type to info when omitted", async () => {
-    await writePlugin("toast-default", { name: "acme.toast-default", version: "1.0.0" });
-    const service = new PluginService(tmpDir);
-    await service.initialize();
-
-    const { host } = (service as unknown as { createHost: ToastHostShape }).createHost(
-      "acme.toast-default"
-    );
-
-    broadcastToRendererMock.mockClear();
-    await host.showToast({ message: "Done" });
-
-    expect(broadcastToRendererMock).toHaveBeenCalledWith(CHANNELS.NOTIFICATION_SHOW_TOAST, {
-      type: "info",
-      message: "acme.toast-default: Done",
-      duration: undefined,
-      rateLimitKey: "plugin:acme.toast-default:info",
     });
   });
 

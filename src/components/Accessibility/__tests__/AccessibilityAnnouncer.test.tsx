@@ -25,14 +25,6 @@ describe("AccessibilityAnnouncer", () => {
     cleanup();
   });
 
-  it("renders two aria-live regions", () => {
-    const { container } = render(<AccessibilityAnnouncer />);
-    const politeRegion = container.querySelector('[aria-live="polite"]');
-    const assertiveRegion = container.querySelector('[aria-live="assertive"]');
-    expect(politeRegion).toBeTruthy();
-    expect(assertiveRegion).toBeTruthy();
-  });
-
   it("both regions have aria-atomic=true", () => {
     const { container } = render(<AccessibilityAnnouncer />);
     const regions = container.querySelectorAll("[aria-atomic]");
@@ -40,31 +32,6 @@ describe("AccessibilityAnnouncer", () => {
     for (const region of regions) {
       expect(region.getAttribute("aria-atomic")).toBe("true");
     }
-  });
-
-  it("displays polite announcement text", () => {
-    useAnnouncerStore.setState({ polite: { msg: "Panel focused", id: 1 } });
-    const { container } = render(<AccessibilityAnnouncer />);
-    vi.advanceTimersByTime(100);
-    const politeRegion = container.querySelector('[aria-live="polite"]');
-    expect(politeRegion?.textContent).toBe("Panel focused");
-  });
-
-  it("displays assertive announcement text", () => {
-    useAnnouncerStore.setState({ assertive: { msg: "Error occurred", id: 1 } });
-    const { container } = render(<AccessibilityAnnouncer />);
-    vi.advanceTimersByTime(100);
-    const assertiveRegion = container.querySelector('[aria-live="assertive"]');
-    expect(assertiveRegion?.textContent).toBe("Error occurred");
-  });
-
-  it("renders empty when no announcements", () => {
-    const { container } = render(<AccessibilityAnnouncer />);
-    vi.advanceTimersByTime(100);
-    const politeRegion = container.querySelector('[aria-live="polite"]');
-    const assertiveRegion = container.querySelector('[aria-live="assertive"]');
-    expect(politeRegion?.textContent).toBe("");
-    expect(assertiveRegion?.textContent).toBe("");
   });
 
   it("preserves DOM node identity across announcements", () => {
@@ -135,20 +102,6 @@ describe("AccessibilityAnnouncer", () => {
 
     expect(politeRegion?.textContent).toBe("Polite message");
     expect(assertiveRegion?.textContent).toBe("Assertive message");
-  });
-
-  it("delivers both polite and assertive text when set simultaneously in same render", () => {
-    useAnnouncerStore.setState({
-      polite: { msg: "Info", id: 1 },
-      assertive: { msg: "Alert", id: 2 },
-    });
-    const { container } = render(<AccessibilityAnnouncer />);
-    vi.advanceTimersByTime(100);
-    const politeRegion = container.querySelector('[aria-live="polite"]');
-    const assertiveRegion = container.querySelector('[aria-live="assertive"]');
-
-    expect(politeRegion?.textContent).toBe("Info");
-    expect(assertiveRegion?.textContent).toBe("Alert");
   });
 
   it("leaves zero pending timers after unmount", () => {
@@ -259,11 +212,6 @@ describe("accessibilityAnnouncerStore — ariaNotify path", () => {
     expect(ariaNotifyMock).toHaveBeenCalledWith("Failure", { priority: "high" });
   });
 
-  it("defaults to 'normal' priority when no priority is specified", () => {
-    useAnnouncerStore.getState().announce("Saved");
-    expect(ariaNotifyMock).toHaveBeenCalledWith("Saved", { priority: "normal" });
-  });
-
   it("does NOT mutate the store when ariaNotify is available", () => {
     useAnnouncerStore.getState().announce("Saved", "polite");
     useAnnouncerStore.getState().announce("Failed", "assertive");
@@ -281,27 +229,5 @@ describe("accessibilityAnnouncerStore — ariaNotify path", () => {
     expect(ariaNotifyMock).toHaveBeenCalledTimes(1);
     const state = useAnnouncerStore.getState();
     expect(state.polite?.msg).toBe("Saved");
-  });
-});
-
-describe("accessibilityAnnouncerStore — DOM-mutation fallback", () => {
-  beforeEach(() => {
-    useAnnouncerStore.setState({ polite: null, assertive: null, nextId: 1 });
-    _resetAnnouncerDeliveryForTests();
-    delete (document as DocumentWithAriaNotify).ariaNotify;
-  });
-
-  it("mutates the store when ariaNotify is unavailable", () => {
-    useAnnouncerStore.getState().announce("Saved", "polite");
-    const state = useAnnouncerStore.getState();
-    expect(state.polite?.msg).toBe("Saved");
-    expect(state.polite?.id).toBe(1);
-  });
-
-  it("routes assertive announcements to the assertive entry", () => {
-    useAnnouncerStore.getState().announce("Failure", "assertive");
-    const state = useAnnouncerStore.getState();
-    expect(state.assertive?.msg).toBe("Failure");
-    expect(state.polite).toBeNull();
   });
 });

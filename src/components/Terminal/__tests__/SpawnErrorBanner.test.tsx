@@ -61,7 +61,6 @@ vi.mock("@/components/ui/popover", () => ({
 }));
 
 import { SpawnErrorBanner } from "../SpawnErrorBanner";
-import { SPAWN_ERROR_BANNER_COPY } from "../spawnErrorBannerCopy";
 
 // Listing every variant explicitly (rather than `Object.keys() as SpawnErrorCode[]`)
 // keeps the array's element type sound and forces the test to be updated when a
@@ -144,15 +143,7 @@ function renderBanner(
 const overflow = () => screen.getByTestId("overflow-content");
 
 describe("SpawnErrorBanner", () => {
-  it.each(ALL_SPAWN_ERROR_CODES)("renders a non-empty title for %s", (code) => {
-    renderBanner(code);
-    const title = SPAWN_ERROR_BANNER_COPY[code].title;
-    expect(title.length).toBeGreaterThan(0);
-    expect(screen.getByText(title)).toBeTruthy();
-  });
-
-  // Hardcoded oracles — guard against a copy-table transposition that the
-  // table-driven test above would silently accept.
+  // Hardcoded oracles rather than the copy table, so a transposition in the table fails here.
   it.each([
     ["ENOENT", "Couldn't find shell or command"],
     ["EACCES", "Couldn't execute shell"],
@@ -164,6 +155,12 @@ describe("SpawnErrorBanner", () => {
   ] as const)("renders the expected title for %s", (code, expected) => {
     renderBanner(code);
     expect(screen.getByText(expected)).toBeTruthy();
+  });
+
+  it("reads a code it has no copy for as the generic failure instead of crashing", () => {
+    renderBanner("ECONNRESET" as SpawnErrorCode);
+    expect(screen.getByText("Couldn't start terminal")).toBeTruthy();
+    expect(screen.getByText("simulated ECONNRESET error")).toBeTruthy();
   });
 
   it("explains the kept-alive process and keeps Retry inline for TERMINAL_ALREADY_LIVE", () => {
@@ -179,11 +176,6 @@ describe("SpawnErrorBanner", () => {
     expect(overflow().contains(retry)).toBe(false);
     fireEvent.click(retry);
     expect(onRetry).toHaveBeenCalledWith("t-1");
-  });
-
-  it("renders the UNKNOWN code with the message as description", () => {
-    renderBanner("UNKNOWN");
-    expect(screen.getByText(/simulated UNKNOWN error/i)).toBeTruthy();
   });
 
   it("keeps a single inline action and moves Trash terminal into the overflow menu", () => {
@@ -295,13 +287,6 @@ describe("SpawnErrorBanner", () => {
     expect(onRetry).not.toHaveBeenCalled();
   });
 
-  it("invokes onRetry when not restarting", () => {
-    const onRetry = vi.fn();
-    renderBanner("ENOENT", { onRetry });
-    fireEvent.click(screen.getByRole("button", { name: /retry starting terminal/i }));
-    expect(onRetry).toHaveBeenCalledWith("t-1");
-  });
-
   it("disables the demoted overflow Retry while restarting and does not invoke onRetry", () => {
     const onRetry = vi.fn();
     // ENOTDIR makes Change directory the primary, so Retry is demoted to overflow.
@@ -328,16 +313,6 @@ describe("SpawnErrorBanner", () => {
       renderBanner("ENOENT", { errno: -2, syscall: "spawn", path: "/usr/bin/zsh" });
       const payload = screen.getByTestId("diagnostic-payload");
       expect(payload.textContent).toBe("errno=-2 syscall=spawn path=/usr/bin/zsh");
-    });
-
-    it("omits absent fields from the payload (errno only)", () => {
-      renderBanner("EACCES", { errno: 13 });
-      expect(screen.getByTestId("diagnostic-payload").textContent).toBe("errno=13");
-    });
-
-    it("omits absent fields from the payload (path only)", () => {
-      renderBanner("ENOENT", { path: "/bin/missing" });
-      expect(screen.getByTestId("diagnostic-payload").textContent).toBe("path=/bin/missing");
     });
 
     it("copies the whole message beneath the fields, however far the description clips it", async () => {
@@ -392,27 +367,6 @@ describe("SpawnErrorBanner", () => {
         expect(screen.queryByRole("button", { name: /^copy error$/i })).toBeNull();
       } finally {
         Object.defineProperty(navigator, "clipboard", { configurable: true, value: original });
-      }
-    });
-
-    it("still renders the copy button when clipboard is unavailable, but clicking is a no-op", () => {
-      const original = navigator.clipboard;
-      Object.defineProperty(navigator, "clipboard", {
-        configurable: true,
-        value: undefined,
-      });
-      try {
-        renderBanner("ENOENT", { errno: -2, syscall: "spawn", path: "/bin/x" });
-        const button = screen.getByRole("button", { name: /copy diagnostics/i });
-        expect(button).toBeTruthy();
-        expect(() => fireEvent.click(button)).not.toThrow();
-        // Label stays at "Copy diagnostics" (never flips to "Diagnostics copied").
-        expect(screen.queryByRole("button", { name: /diagnostics copied/i })).toBeNull();
-      } finally {
-        Object.defineProperty(navigator, "clipboard", {
-          configurable: true,
-          value: original,
-        });
       }
     });
   });

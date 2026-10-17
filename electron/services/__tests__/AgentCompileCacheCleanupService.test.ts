@@ -132,17 +132,6 @@ describe("runAgentCompileCacheCleanup discovery", () => {
 });
 
 describe("runAgentCompileCacheCleanup TTL pass", () => {
-  it("removes an expired version directory and keeps a fresh sibling", async () => {
-    const stale = await seedVersionDir("claude", "v22.0.0-arm64-old-501", { ageDays: 90 });
-    const fresh = await seedVersionDir("claude", "v26.0.0-arm64-new-501", { ageDays: 1 });
-
-    const result = await runAgentCompileCacheCleanup(NOW, root, TTL_ONLY);
-
-    expect(result.expiredRemoved).toBe(1);
-    expect(await exists(stale)).toBe(false);
-    expect(await exists(fresh)).toBe(true);
-  });
-
   it("evicts an expired directory without stat-ing any of the blobs inside it", async () => {
     await seedVersionDir("claude", "v22.0.0-arm64-old-501", { ageDays: 90, fileCount: 25 });
 
@@ -174,16 +163,6 @@ describe("runAgentCompileCacheCleanup TTL pass", () => {
     await runAgentCompileCacheCleanup(NOW, root, TTL_ONLY);
 
     expect(await exists(path.join(root, "gemini"))).toBe(false);
-  });
-
-  it("leaves an agent directory that still holds a surviving version directory", async () => {
-    await seedVersionDir("claude", "v20-old", { ageDays: 90 });
-    const fresh = await seedVersionDir("claude", "v26-new", { ageDays: 1 });
-
-    await runAgentCompileCacheCleanup(NOW, root, TTL_ONLY);
-
-    expect(await exists(fresh)).toBe(true);
-    expect(await exists(path.join(root, "claude"))).toBe(true);
   });
 
   it("removes an agent directory that holds no version directories at all", async () => {

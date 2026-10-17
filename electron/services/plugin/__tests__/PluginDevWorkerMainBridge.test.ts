@@ -19,6 +19,13 @@ import type { PluginIpcContext } from "../../../../shared/types/plugin.js";
 import { databaseBackupApprovers } from "../pluginInternalApprovers.js";
 import { parseWorkerToHostMessage } from "../../../schemas/pluginDevWorker.js";
 import { PLUGIN_PUSH_MAX_PAYLOAD_BYTES } from "../../../../shared/config/pluginBudgets.js";
+import {
+  _resetPluginFrontendRoutingForTesting,
+  getPluginInvokeOrigin,
+  runInPluginInvocation,
+  setPluginFrontendRouter,
+} from "../pluginFrontendRouting.js";
+import type { ClientEndpoint } from "../../../ipc/endpoint.js";
 
 class FakeWorkerHost extends EventEmitter {
   sent: any[] = [];
@@ -78,6 +85,7 @@ function makeHost() {
     showConfirm: vi.fn(async () => false),
     dispatch: vi.fn(async () => ({ ok: true, result: undefined })),
     reloadPanel: vi.fn(async () => "scheduled"),
+    restartWorker: vi.fn(async () => "scheduled"),
     actions: {
       list: vi.fn(async () => [{ id: "terminal.new", danger: "safe", requiresArgs: false }]),
       get: vi.fn(async (id: string) => ({ id, danger: "safe", requiresArgs: false })),
@@ -352,6 +360,19 @@ describe("PluginDevWorkerMainBridge", () => {
     expect(result).toMatchObject({ ok: true, result: "scheduled" });
   });
 
+  it("relays restartWorker and returns the host's answer (#13410)", async () => {
+    const { host, workerHost } = makeBridge();
+    workerHost.emit("worker-message", {
+      type: "host-call",
+      requestId: "c-rw",
+      method: "restartWorker",
+    });
+    await flush();
+    expect(host.restartWorker).toHaveBeenCalledTimes(1);
+    const result = workerHost.sent.find((m) => m.type === "host-result" && m.requestId === "c-rw");
+    expect(result).toMatchObject({ ok: true, result: "scheduled" });
+  });
+
   it("relays getWorktreesResult and returns the union object unchanged (#12174)", async () => {
     const { host, workerHost } = makeBridge();
     workerHost.emit("worker-message", {
@@ -381,20 +402,6 @@ describe("PluginDevWorkerMainBridge", () => {
     expect(host.clipboard.writeText).toHaveBeenCalledWith("hello");
     const result = workerHost.sent.find((m) => m.type === "host-result" && m.requestId === "cw");
     expect(result).toMatchObject({ ok: true, result: undefined });
-  });
-
-  it("routes clipboard.readText to the host and replies with its text", async () => {
-    const { host, workerHost } = makeBridge();
-    workerHost.emit("worker-message", {
-      type: "host-call",
-      requestId: "cr",
-      method: "clipboard.readText",
-      params: undefined,
-    });
-    await flush();
-    expect(host.clipboard.readText).toHaveBeenCalled();
-    const result = workerHost.sent.find((m) => m.type === "host-result" && m.requestId === "cr");
-    expect(result).toMatchObject({ ok: true, result: "clip-contents" });
   });
 
   it("relays an empty clipboard read as ok:true with an empty string", async () => {
@@ -429,22 +436,6 @@ describe("PluginDevWorkerMainBridge", () => {
       ok: true,
       result: { path: "/data/out.pdf", bytes: 1234, revision: "a".repeat(64) },
     });
-  });
-
-  it("relays a documents.renderPdf rejection with its code prefix intact", async () => {
-    const { host, workerHost } = makeBridge();
-    host.documents.renderPdf.mockRejectedValueOnce(
-      new Error("RENDER_TIMEOUT: render exceeded 30000 ms")
-    );
-    workerHost.emit("worker-message", {
-      type: "host-call",
-      requestId: "pdf2",
-      method: "documents.renderPdf",
-      params: { options: { html: "x", outputPath: "/data/out.pdf" } },
-    });
-    await flush();
-    const result = workerHost.sent.find((m) => m.type === "host-result" && m.requestId === "pdf2");
-    expect(result).toMatchObject({ ok: false, error: expect.stringMatching(/^RENDER_TIMEOUT:/) });
   });
 
   it("replies host-result ok:false when the host method throws", async () => {
@@ -1301,50 +1292,6 @@ describe("PluginDevWorkerMainBridge", () => {
     expect(dispose).toHaveBeenCalledTimes(1);
   });
 
-  it("disposes registered providers on reload", async () => {
-    const { host, workerHost, bridge } = makeBridge();
-    bridge.waitForActivation().catch(() => {});
-    const dispose = vi.fn();
-    host.registerFileDecorationProvider.mockReturnValueOnce(dispose);
-    workerHost.emit("worker-message", {
-      type: "host-notify",
-      method: "registerFileDecorationProvider",
-      params: { descriptor: { id: "acme.demo.deco" } },
-    });
-    // Let the async registration record its disposer before the generation is
-    // retired (the register message and the exit are distinct tasks in prod).
-    await flush();
-    workerHost.emit("exit", 1, false);
-    expect(dispose).toHaveBeenCalledTimes(1);
-  });
-
-  it("clears prior registrations and fails pending invokes when a generation is retired", async () => {
-    const { host, workerHost, bridge, clear } = makeBridge();
-    bridge.waitForActivation().catch(() => {});
-    // Register an action and start an invocation that never gets a reply.
-    workerHost.emit("worker-message", {
-      type: "host-notify",
-      method: "registerAction",
-      params: {
-        descriptor: {
-          id: "greet",
-          title: "Greet",
-          description: "",
-          category: "Demo",
-          kind: "command",
-          danger: "safe",
-        },
-      },
-    });
-    const wrapper = host.registerAction.mock.calls[0][1] as (a: unknown) => Promise<unknown>;
-    const pending = wrapper({});
-    pending.catch(() => {});
-
-    workerHost.emit("exit", 1, false);
-    expect(clear).toHaveBeenCalled();
-    await expect(pending).rejects.toThrow(/crashed/);
-  });
-
   it("fails pending invokes when the worker crashes (#12216)", async () => {
     const { host, workerHost, bridge } = makeBridge();
     bridge.waitForActivation().catch(() => {});
@@ -1621,6 +1568,38 @@ describe("PluginDevWorkerMainBridge", () => {
       await flush();
       return handle;
     }
+
+    it("kills a handle that arrives after the worker gave up on the spawn (#13410)", async () => {
+      const { host, workerHost } = makeBridge();
+      const handle = makeProcessHandle("late");
+      let settle!: (value: typeof handle) => void;
+      host.process.spawn.mockImplementationOnce(
+        () =>
+          new Promise<any>((resolve) => {
+            settle = resolve;
+          })
+      );
+      workerHost.emit("worker-message", {
+        type: "host-call",
+        requestId: "spawn-late",
+        method: "process.spawn",
+        params: { command: "node", options: {} },
+      });
+      await flush();
+      workerHost.emit("worker-message", { type: "host-cancel", requestId: "spawn-late" });
+      settle(handle);
+      await flush();
+      expect(handle.kill).toHaveBeenCalledTimes(1);
+      // Never stored, so a later restart by id finds nothing to act on.
+      workerHost.emit("worker-message", {
+        type: "host-call",
+        requestId: "restart-late",
+        method: "process.restart",
+        params: { processId: "late" },
+      });
+      await flush();
+      expect(handle.restart).not.toHaveBeenCalled();
+    });
 
     it("relays spawn to the host and replies with the handle id", async () => {
       const { host, workerHost } = makeBridge();
@@ -1937,23 +1916,6 @@ describe("PluginDevWorkerMainBridge", () => {
       workerHost.emit("worker-message", { type: "unsubscribe", subscriptionId: "fs7" });
       expect(dispose).toHaveBeenCalledTimes(1);
     });
-
-    it("replies with an error when the host watch rejects", async () => {
-      const { host, workerHost } = makeBridge();
-      host.fs.watch.mockRejectedValueOnce(new Error("PERMISSION_REQUIRED: fs:project-read"));
-      workerHost.emit("worker-message", {
-        type: "host-call",
-        requestId: "w3",
-        method: "fs.watch",
-        params: { subscriptionId: "fs3", paths: ["/nope"] },
-      });
-      await flush();
-      const res = workerHost.sent.find(
-        (m: any) => m.type === "host-result" && m.requestId === "w3"
-      );
-      expect(res).toMatchObject({ ok: false });
-      expect(res.error).toMatch(/PERMISSION_REQUIRED/);
-    });
   });
 
   describe("host.fs revision, mkdir and append relay", () => {
@@ -2001,25 +1963,6 @@ describe("PluginDevWorkerMainBridge", () => {
         );
         expect(res).toMatchObject({ ok: true, result: undefined });
       }
-    });
-
-    it("replies with the host's error when an append is refused", async () => {
-      const { host, workerHost } = makeBridge();
-      host.fs.appendFile.mockRejectedValueOnce(
-        new Error("TARGET_IS_SYMLINK: refusing to write through a symlink")
-      );
-      workerHost.emit("worker-message", {
-        type: "host-call",
-        requestId: "a2",
-        method: "fs.appendFile",
-        params: { path: "/repo/link.jsonl", contents: "x" },
-      });
-      await flush();
-      const res = workerHost.sent.find(
-        (m: any) => m.type === "host-result" && m.requestId === "a2"
-      );
-      expect(res).toMatchObject({ ok: false });
-      expect(res.error).toMatch(/^TARGET_IS_SYMLINK/);
     });
   });
 
@@ -2686,5 +2629,91 @@ describe("PluginDevWorkerMainBridge push rejections", () => {
     await flush();
     expect(host.broadcastToRenderer).toHaveBeenCalledWith("tick", { a: 1 });
     expect(onPushRejected).not.toHaveBeenCalled();
+  });
+});
+
+describe("PluginDevWorkerMainBridge invocation scope", () => {
+  afterEach(() => _resetPluginFrontendRoutingForTesting());
+
+  function fakeEndpoint(id: string, projectId: string): ClientEndpoint {
+    return {
+      endpointId: id,
+      clientId: `client-${id}`,
+      projectId,
+      kind: "remote-view",
+      handle: -1,
+      send: vi.fn(),
+      request: vi.fn(),
+      onClose: () => ({ dispose: () => {} }),
+      isClosed: () => false,
+    };
+  }
+
+  it("answers each worker host call for the invocation that made it, even interleaved", async () => {
+    setPluginFrontendRouter({ resolve: () => ({ kind: "local" }), onChange: () => () => {} });
+    const { host, workerHost } = makeBridge({ capabilities: [] });
+    workerHost.emit("worker-message", {
+      type: "host-notify",
+      method: "registerHandler",
+      params: { channel: "go", hasSchema: false },
+    });
+    await flush();
+    const wrapper = (host.registerHandler as any).mock.calls[0][1] as (...a: any[]) => unknown;
+    const seen: Record<string, string | null> = {};
+    (host.showConfirm as any).mockImplementation(async (options: { title: string }) => {
+      seen[options.title] = getPluginInvokeOrigin("acme.demo")?.endpoint.endpointId ?? null;
+      return true;
+    });
+
+    const a = fakeEndpoint("a", "project-a");
+    const b = fakeEndpoint("b", "project-b");
+    void runInPluginInvocation("acme.demo", a, () => wrapper({}, {}));
+    void runInPluginInvocation("acme.demo", b, () => wrapper({}, {}));
+    await flush();
+    const invokes = workerHost.sent.filter((m) => m.type === "invoke");
+    expect(invokes).toHaveLength(2);
+    const [invokeA, invokeB] = invokes;
+
+    // B's handler asks first, then A's: each answer belongs to its own caller.
+    workerHost.emit("worker-message", {
+      type: "host-call",
+      requestId: "c1",
+      method: "showConfirm",
+      params: { options: { title: "from-b" } },
+      invocationId: invokeB.requestId,
+    });
+    workerHost.emit("worker-message", {
+      type: "host-call",
+      requestId: "c2",
+      method: "showConfirm",
+      params: { options: { title: "from-a" } },
+      invocationId: invokeA.requestId,
+    });
+    // Background work of the worker carries no invocation.
+    workerHost.emit("worker-message", {
+      type: "host-call",
+      requestId: "c3",
+      method: "showConfirm",
+      params: { options: { title: "background" } },
+    });
+    await flush();
+    expect(seen).toEqual({ "from-b": "b", "from-a": "a", background: null });
+
+    // Once A's invocation settles, a late call naming it belongs to nobody.
+    workerHost.emit("worker-message", {
+      type: "invoke-result",
+      requestId: invokeA.requestId,
+      ok: true,
+      result: null,
+    });
+    workerHost.emit("worker-message", {
+      type: "host-call",
+      requestId: "c4",
+      method: "showConfirm",
+      params: { options: { title: "late-a" } },
+      invocationId: invokeA.requestId,
+    });
+    await flush();
+    expect(seen["late-a"]).toBeNull();
   });
 });

@@ -1,11 +1,28 @@
 import { Package } from "lucide-react";
 import { cn } from "@/lib/utils";
 import type { PluginAttribution } from "@/hooks/usePluginAttribution";
+import type { PluginUiPromptWaited } from "@shared/types/pluginUiPrompt";
 
 interface PluginProvenanceProps {
   attribution: PluginAttribution;
   id?: string;
   className?: string;
+  /** Set when the prompt waited on its host for someone to attach. */
+  waited?: PluginUiPromptWaited;
+}
+
+/**
+ * "3:12 AM" for today, "Mar 4, 3:12 AM" otherwise. A waiting prompt may be
+ * hours old, and the person answering should know what they're answering.
+ */
+export function formatAskedAt(askedAt: number, now = Date.now()): string {
+  const asked = new Date(askedAt);
+  const sameDay = asked.toDateString() === new Date(now).toDateString();
+  return asked.toLocaleString(undefined, {
+    ...(sameDay ? {} : { month: "short", day: "numeric" }),
+    hour: "numeric",
+    minute: "2-digit",
+  });
 }
 
 /**
@@ -20,7 +37,7 @@ interface PluginProvenanceProps {
  * it because the name is the plugin's own claim and the id is what the plugin
  * list shows.
  */
-export function PluginProvenance({ attribution, id, className }: PluginProvenanceProps) {
+export function PluginProvenance({ attribution, id, className, waited }: PluginProvenanceProps) {
   return (
     <span
       id={id}
@@ -41,6 +58,11 @@ export function PluginProvenance({ attribution, id, className }: PluginProvenanc
             as the plugin's identifier rather than trailing prose. */}
         {attribution.manifestId && (
           <span className="mt-0.5 block font-mono text-2xs">{attribution.manifestId}</span>
+        )}
+        {waited && (
+          <span className="mt-0.5 block" data-testid="plugin-prompt-waited">
+            Asked on {waited.hostName} at {formatAskedAt(waited.askedAt)}, while nobody was attached
+          </span>
         )}
       </span>
     </span>

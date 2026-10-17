@@ -375,7 +375,7 @@ function IconButton({
   controls?: string;
   /**
    * Opts the button out of the persistent `toolbar-icon-button` armed chip via
-   * `data-sidebar-toggle` (see `toolbar.css`): a sidebar toggle sits in its
+   * `data-sidebar-toggle` (see `toolbar/controls.css`): a sidebar toggle sits in its
    * "on" state almost always, so the icon swap, not a lit background, carries
    * the state.
    */

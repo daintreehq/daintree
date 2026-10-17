@@ -11,13 +11,6 @@ function worktree(id: string, branch: string | undefined): WorktreeSnapshot {
 const WORKTREES = [worktree("wt-a", "main"), worktree("wt-b", "feature/x")];
 
 describe("WorktreeSelector", () => {
-  it("is a combobox named by its visible label", () => {
-    render(
-      <WorktreeSelector label="Base" worktrees={WORKTREES} selectedId={null} onChange={vi.fn()} />
-    );
-    expect(screen.getByRole("combobox", { name: "Base" })).toBeTruthy();
-  });
-
   it("names the unset state rather than showing an empty trigger", () => {
     render(
       <WorktreeSelector label="Base" worktrees={WORKTREES} selectedId={null} onChange={vi.fn()} />

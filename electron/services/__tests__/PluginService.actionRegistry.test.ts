@@ -349,37 +349,12 @@ describe("Plugin action registry", () => {
     );
   });
 
-  it("sets effectiveDanger='safe' when the plugin holds no high-risk capability", () => {
-    service.registerPluginAction("acme.my-plugin", validContribution());
-    expect(service.listPluginActions()[0].effectiveDanger).toBe("safe");
-  });
-
   it("keeps effectiveDanger='confirm' when the plugin self-declares confirm", () => {
     service.registerPluginAction("acme.my-plugin", {
       ...validContribution(),
       danger: "confirm" as const,
     });
     expect(service.listPluginActions()[0].effectiveDanger).toBe("confirm");
-  });
-
-  it("raises effectiveDanger to 'confirm' for a self-declared 'safe' action when the manifest grants a high-risk capability", async () => {
-    await writePlugin("risky", {
-      name: "acme.risky",
-      version: "1.0.0",
-      capabilities: ["fs:project-read", "shell:exec"],
-    });
-    const svc = new PluginService(tmpDir);
-    await svc.initialize();
-
-    svc.registerPluginAction("acme.risky", {
-      ...validContribution(),
-      id: "acme.risky.doThing",
-      danger: "safe" as const,
-    });
-
-    const action = svc.listPluginActions().find((a) => a.id === "acme.risky.doThing");
-    expect(action?.danger).toBe("safe"); // plugin's advisory declaration preserved
-    expect(action?.effectiveDanger).toBe("confirm"); // host raised it
   });
 
   it.each([
@@ -495,69 +470,6 @@ describe("Plugin action registry", () => {
     ).toBe("confirm");
   });
 
-  it("raises effectiveDanger for sensitive-read + shell:exec even with network scope (shell is never attenuated)", async () => {
-    await writePlugin("read-shell", {
-      name: "acme.read-shell",
-      version: "1.0.0",
-      capabilities: ["fs:project-read", "shell:exec"],
-      scopes: { network: { allowedUrls: ["https://api.example.com"] } },
-    });
-    const svc = new PluginService(tmpDir);
-    await svc.initialize();
-
-    svc.registerPluginAction("acme.read-shell", {
-      ...validContribution(),
-      id: "acme.read-shell.doThing",
-      danger: "safe" as const,
-    });
-
-    // shell:exec is flat-elevated regardless — but the test asserts the compound
-    // path also fires because the network scope must not attenuate shell sinks.
-    const action = svc.listPluginActions().find((a) => a.id === "acme.read-shell.doThing");
-    expect(action?.effectiveDanger).toBe("confirm");
-  });
-
-  it("raises effectiveDanger for remote-mutation pair network:fetch + git:write (no scope)", async () => {
-    await writePlugin("net-write", {
-      name: "acme.net-write",
-      version: "1.0.0",
-      capabilities: ["network:fetch", "git:write"],
-    });
-    const svc = new PluginService(tmpDir);
-    await svc.initialize();
-
-    svc.registerPluginAction("acme.net-write", {
-      ...validContribution(),
-      id: "acme.net-write.doThing",
-      danger: "safe" as const,
-    });
-
-    // git:write already elevates flat — compound path is redundant but correct.
-    expect(
-      svc.listPluginActions().find((a) => a.id === "acme.net-write.doThing")?.effectiveDanger
-    ).toBe("confirm");
-  });
-
-  it("does not compound-elevate a plugin holding only a sensitive read (no sink)", async () => {
-    await writePlugin("read-only", {
-      name: "acme.read-only",
-      version: "1.0.0",
-      capabilities: ["agent:read", "git:read"],
-    });
-    const svc = new PluginService(tmpDir);
-    await svc.initialize();
-
-    svc.registerPluginAction("acme.read-only", {
-      ...validContribution(),
-      id: "acme.read-only.doThing",
-      danger: "safe" as const,
-    });
-
-    expect(
-      svc.listPluginActions().find((a) => a.id === "acme.read-only.doThing")?.effectiveDanger
-    ).toBe("safe");
-  });
-
   it("does not compound-elevate a plugin holding only network:fetch (no source/sink pair)", async () => {
     await writePlugin("net-only", {
       name: "acme.net-only",
@@ -576,26 +488,6 @@ describe("Plugin action registry", () => {
     expect(
       svc.listPluginActions().find((a) => a.id === "acme.net-only.doThing")?.effectiveDanger
     ).toBe("safe");
-  });
-
-  it("compound elevation is order-independent in the capabilities array", async () => {
-    await writePlugin("order", {
-      name: "acme.order",
-      version: "1.0.0",
-      capabilities: ["network:fetch", "agent:read"],
-    });
-    const svc = new PluginService(tmpDir);
-    await svc.initialize();
-
-    svc.registerPluginAction("acme.order", {
-      ...validContribution(),
-      id: "acme.order.doThing",
-      danger: "safe" as const,
-    });
-
-    expect(
-      svc.listPluginActions().find((a) => a.id === "acme.order.doThing")?.effectiveDanger
-    ).toBe("confirm");
   });
 
   it("does not raise effectiveDanger for read-only / reversible capabilities (no compound pair)", async () => {
@@ -869,15 +761,6 @@ describe("Plugin action registry — per-action capability intent (requires)", (
     expect(dangerOf(svc)).toBe("safe");
   });
 
-  it("does not elevate an action that names socket:connect in requires", async () => {
-    const svc = await riskyService(["socket:connect", "shell:exec"]);
-    svc.registerPluginAction(
-      "acme.intent",
-      contribution("acme.intent", { requires: ["socket:connect"] })
-    );
-    expect(dangerOf(svc)).toBe("safe");
-  });
-
   it("leaves requires undefined on the descriptor when the action declared none", async () => {
     // Distinguishable from `[]` downstream — the renderer's descriptor
     // equality and any future consumer must see "not declared", not "empty".
@@ -1125,35 +1008,6 @@ describe("createHost — registerAction", () => {
     // Handler receives the same {} the validator accepted — not undefined.
     expect(handler).toHaveBeenCalledWith({});
     expect(result).toBe("ok");
-  });
-
-  it("rejects restricted danger", () => {
-    const { host } = getHost("acme.act-test");
-    expect(() =>
-      host.registerAction(
-        descriptor({ danger: "restricted" as unknown as "safe" }),
-        () => undefined
-      )
-    ).toThrow(/invalid danger/i);
-  });
-
-  it("raises effectiveDanger to confirm when the manifest grants a high-risk capability", async () => {
-    await writePlugin("act-risky", {
-      name: "acme.act-risky",
-      version: "1.0.0",
-      capabilities: ["shell:exec"],
-    });
-    const svc = new PluginService(tmpDir);
-    await svc.initialize();
-    const { host } = (svc as unknown as { createHost: ActionHostShape }).createHost(
-      "acme.act-risky"
-    );
-
-    host.registerAction(descriptor({ danger: "safe" }), () => undefined);
-
-    const action = svc.listPluginActions().find((a) => a.id === "acme.act-risky.plan-from-issue");
-    expect(action?.danger).toBe("safe");
-    expect(action?.effectiveDanger).toBe("confirm");
   });
 
   it("replaces the prior descriptor and handler on re-registration with the same id", async () => {

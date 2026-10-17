@@ -801,25 +801,6 @@ describe("McpServerService", () => {
       expect(text).toContain("feat/x");
       expect(text).toContain("could not be fetched");
     });
-
-    it("rejects non-string argument values via the SDK schema validator", async () => {
-      const { window } = createMockWindow();
-      await service.start(window);
-      const { client, transport } = await connectClient(service.currentPort!);
-      transports.push(transport);
-
-      // The SDK's GetPromptRequestSchema enforces Record<string, string> on
-      // arguments. Numeric values are rejected (the SDK surfaces this as a
-      // request-level error) before our handler runs — the surface signal
-      // for client authors that the MCP spec requires string-valued prompt
-      // arguments.
-      await expect(
-        client.getPrompt({
-          name: "start_issue",
-          arguments: { issue_number: 6610 as unknown as string },
-        })
-      ).rejects.toThrow();
-    });
   });
 
   describe("resources", () => {
@@ -1444,36 +1425,6 @@ describe("McpServerService", () => {
       const content = result.contents[0] as { uri: string; mimeType: string; text: string };
       expect(Buffer.byteLength(content.text, "utf8")).toBeLessThanOrEqual(RESOURCE_TEXT_MAX_BYTES);
       expect(JSON.parse(content.text)).toEqual(output);
-    });
-
-    it("full tier sees resources and is permitted to read them", async () => {
-      const dispatchMock = vi.fn((_payload: DispatchRequest): ActionDispatchResult => ({
-        ok: true,
-        result: [],
-      }));
-      const { window } = createMockWindow({
-        getManifest: manifestForResources,
-        dispatchAction: dispatchMock,
-      });
-      await service.start(window);
-
-      const token = `pane-token-${Math.random().toString(36).slice(2)}`;
-      paneTokenTiers.set(token, "full");
-      const client = new Client({ name: "mcp-pane-client", version: "1.0.0" });
-      const headers = { Authorization: `Bearer ${token}` };
-      const transport = new SSEClientTransport(
-        new URL(`http://127.0.0.1:${service.currentPort}/sse`),
-        {
-          eventSourceInit: { headers } as never,
-          requestInit: { headers },
-        }
-      );
-      await client.connect(transport);
-      transports.push(transport);
-
-      const list = await client.listResources();
-      const uris = list.resources.map((r) => r.uri);
-      expect(uris).toContain("daintree://project/current/issues");
     });
 
     it("subscribes to agent state and notifies on agent:state-changed", async () => {

@@ -1178,8 +1178,8 @@ describe("focus-ring fallback contract", () => {
     // stops reaching them has broken rather than passed. A bare total would instead
     // pin today's duplication and fail the next honest refactor.
     for (const sentinel of [
-      "src/components/ui/dropdown-menu.tsx",
-      "src/components/ui/context-menu.tsx",
+      "src/components/ui/dropdown-menu-base.tsx",
+      "src/components/ui/context-menu-base.tsx",
       "src/components/ui/select.tsx",
     ]) {
       expect(seenFiles.has(sentinel), `scan must still reach ${sentinel}`).toBe(true);

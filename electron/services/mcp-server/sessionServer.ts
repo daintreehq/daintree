@@ -81,6 +81,7 @@ import {
   EXECUTION_ERROR_CODE,
   SESSION_BINDING_GONE,
   SESSION_GONE,
+  NO_FRONTEND_ATTACHED_CODE,
   INVALID_URL_CODE,
   RESOURCE_NOT_OWNED_CODE,
   buildToolError,
@@ -95,9 +96,12 @@ import {
   INTERACTIVE_WAIT_UNTIL_IDLE_TIMEOUT_CAP_MS,
   MAX_WAIT_UNTIL_IDLE_TIMEOUT_MS,
 } from "../../../shared/types/terminalWaitUntilIdle.js";
+import { isMcpHostRoutingEnabled } from "./driveTarget.js";
 import {
   McpRouteBindingError,
+  NoFrontendAttachedError,
   RendererBridgeUnavailableError,
+  RemoteHostWindowOnlyError,
   WorkspaceBindingError,
 } from "./rendererBridge.js";
 import { getExternalBaseManifest } from "./baseManifest.js";
@@ -133,6 +137,7 @@ import {
   ACTIONS_SEARCH_DEFAULT_LIMIT,
 } from "./tierAuth.js";
 import { buildToolCallResult } from "./toolCallResult.js";
+import { buildImageToolCallResult, isImageResultTool } from "./imageToolResult.js";
 import { safeSerializeToolResultCompact } from "../../utils/safeSerializeToolResult.js";
 import { buildSurfaceManifest, MCP_SURFACE_TOOL_ID } from "./surfaceManifest.js";
 import { viewlessStatusArgsAreAnswerable } from "./terminalStatus.js";
@@ -166,6 +171,23 @@ import {
 } from "../../../shared/types/terminalNotify.js";
 import { REPLY_WAIT_DEFAULT_SECONDS, WaitSecondsSchema } from "../../../shared/types/replyWait.js";
 import type { ReplyWait, ReplyWaiterService } from "./replyWaiter.js";
+import {
+  ASSISTANT_GET_INBOX_TOOL,
+  ASSISTANT_MESSAGING_TOOL_IDS,
+  ASSISTANT_REPLY_TOOL,
+  ASSISTANT_SEND_MESSAGE_TOOL,
+} from "../../../shared/types/assistantMessaging.js";
+import {
+  auditCodeForMessagingRefusal,
+  runAssistantMessagingTool,
+  type AssistantMessagingAccess,
+} from "./assistantMessagingTools.js";
+import { HOST_MESSAGING_TOOL_IDS } from "../../../shared/types/hostMessaging.js";
+import {
+  auditCodeForHostMessagingRefusal,
+  runHostMessagingTool,
+  type HostMessagingAccess,
+} from "./hostMessagingTools.js";
 
 /**
  * Backstop on the `actions.list` page walk. The registry is a few hundred
@@ -223,6 +245,11 @@ export const VIEWLESS_MAIN_PROCESS_TOOLS: ReadonlySet<string> = new Set([
   // Terminal notices live in main and read the pty-host, so arming one needs
   // no project view.
   TERMINAL_NOTIFY_WHEN_IDLE_TOOL,
+  // An enrolled lane's inbox lives in main beside its exchange records
+  // (#13335); the lane is read from the caller's bearer, never a view.
+  ASSISTANT_GET_INBOX_TOOL,
+  ASSISTANT_REPLY_TOOL,
+  ASSISTANT_SEND_MESSAGE_TOOL,
 ]);
 /**
  * The main-process executors an owned tool can name. Kept apart from the rest
@@ -613,20 +640,28 @@ function bindWait(result: CallToolResult, wait: ReplyWait): string | undefined {
   return terminalId;
 }
 
+/** How a call's reply wait ended, as its held notice needs to know. */
+type ReleaseNotice = (answered: boolean, stoppedWithoutMarker: boolean) => void;
+
 /**
  * Settle a call's held notice by how its reply wait ended: an answered wait
  * already told the caller, and one that ran out leaves the notice as the word
- * of the end.
+ * of the end. A stop with no marker can still be followed by one.
  */
-function releaseNoticeAfter(wait: ReplyWait, release: (answered: boolean) => void): void {
-  void wait.promise.then((reply) => release(reply.outcome !== "timeout"));
+function releaseNoticeAfter(wait: ReplyWait, release: ReleaseNotice): void {
+  void wait.promise.then((reply) =>
+    release(
+      reply.outcome !== "timeout",
+      reply.outcome === "settled" && reply.handback === undefined
+    )
+  );
 }
 
 /** A send's or launch's result with the reply it waited for. */
 async function attachReply(
   result: CallToolResult,
   wait: ReplyWait,
-  releaseNotice?: (answered: boolean) => void
+  releaseNotice?: ReleaseNotice
 ): Promise<CallToolResult> {
   if (releaseNotice !== undefined) releaseNoticeAfter(wait, releaseNotice);
   // A failed dispatch is returned as it came, even when its wait had already
@@ -743,7 +778,7 @@ function filterTerminalListToOwned(
   owns: (terminalId: string) => boolean
 ): import("../../../shared/types/actions.js").ActionDispatchResult {
   if (!result.ok) return result;
-  const payload = result.result as { terminals?: unknown } | null | undefined;
+  const payload = result.result as { terminals?: unknown; panelLimit?: unknown } | null | undefined;
   if (!Array.isArray(payload?.terminals)) {
     return {
       ok: false,
@@ -757,10 +792,15 @@ function filterTerminalListToOwned(
   return {
     ok: true,
     result: {
+      // Rebuilt rather than spread so a field added to the listing later is
+      // reviewed here, not passed through unfiltered.
       terminals: payload.terminals.filter((row) => {
         const id = (row as { id?: unknown } | null | undefined)?.id;
         return typeof id === "string" && owns(id);
       }),
+      // The project-wide count the hard limit is judged on, never narrowed to
+      // this caller's own rows.
+      panelLimit: payload.panelLimit,
     },
   };
 }
@@ -1020,6 +1060,18 @@ export interface SessionServerDeps extends OwnedMainExecutors {
    * not-eligible.
    */
   terminalNotify?: TerminalNotifyHandlers;
+  /**
+   * The caller's own lane's messaging (#13335), bound to this session's
+   * help-session bearer. Absent for every other bearer; then
+   * `assistant.getInbox` and `assistant.reply` are neither listed nor run.
+   */
+  assistantMessaging?: AssistantMessagingAccess;
+  /**
+   * The hub's reach to other hosts' assistants (#13336), bound to this
+   * session's help-session bearer. Absent for every other bearer; then the
+   * `host.*` messaging tools are neither listed nor run.
+   */
+  hostMessaging?: HostMessagingAccess;
   /** Blocking replies for `waitForReply`. Optional; absent, the flag is ignored. */
   replyWaiter?: Pick<ReplyWaiterService, "wait">;
   /**
@@ -1178,6 +1230,12 @@ export interface SessionServerDeps extends OwnedMainExecutors {
     caption?: string;
     altText?: string;
   }) => void;
+  /**
+   * Record where this session's `tools/list` is about to be answered from, so
+   * a later route change can tell the client its list moved (#13350). Returns
+   * whether the route has moved since. Wired for workspace-bound sessions only.
+   */
+  noteToolListRoute?: () => () => boolean;
 }
 
 /**
@@ -1228,6 +1286,8 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
     notifyDisplayImage,
     workspaceBinding,
     terminalNotify,
+    assistantMessaging,
+    hostMessaging,
     replyWaiter,
     resolveOwnPane,
     requestApproval,
@@ -1254,6 +1314,45 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
     paneApproval: requestApproval !== undefined,
     paneSkipConfirmations: requestApproval !== undefined && deps.paneSkipConfirmations === true,
   };
+
+  // Whether this session is an enrolled lane's own assistant right now
+  // (#13335): a help-session bearer whose lane the messaging runtime still
+  // recognises. Read per listing, never cached.
+  const laneMessagingAvailable = (): boolean =>
+    assistantMessaging !== undefined &&
+    sessionStore.sessionHelpIdMap.has(sessionId) &&
+    assistantMessaging.isAvailable();
+
+  // Whether this session may also start a message to its Shell's hub
+  // (#13338): a lane a remote Shell enrolled, never the hub itself.
+  const laneSendingAvailable = (): boolean =>
+    laneMessagingAvailable() && assistantMessaging?.isSendAvailable() === true;
+
+  // Whether this session is this Shell's enrolled hub while a host exists
+  // (#13336). Read per listing, never cached.
+  const hubMessagingAvailable = (): boolean =>
+    hostMessaging !== undefined &&
+    sessionStore.sessionHelpIdMap.has(sessionId) &&
+    hostMessaging.isAvailable();
+
+  // What a listing offers: the tools above from the session's start wherever
+  // its lane could be enrolled, not only once it is. Codex reads the tool
+  // list once and never acts on `tools/list_changed`, and a lane can only be
+  // enrolled after its assistant starts, so enrollment-gated listing never
+  // reached it. The calls themselves still refuse until the lane is enrolled.
+  const laneMessagingOffered = (): boolean =>
+    laneMessagingAvailable() ||
+    (assistantMessaging !== undefined &&
+      sessionStore.sessionHelpIdMap.has(sessionId) &&
+      assistantMessaging.isReachable?.() === true);
+  const laneSendingOffered = (): boolean =>
+    laneSendingAvailable() ||
+    (laneMessagingOffered() && assistantMessaging?.isSendReachable?.() === true);
+  const hubMessagingOffered = (): boolean =>
+    hubMessagingAvailable() ||
+    (hostMessaging !== undefined &&
+      sessionStore.sessionHelpIdMap.has(sessionId) &&
+      hostMessaging.isReachable?.() === true);
 
   const server = new Server(
     { name: "Daintree", version: app.getVersion() },
@@ -1340,6 +1439,12 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
       if (err instanceof WorkspaceBindingError) {
         return getExternalBaseManifest();
       }
+      // Only windows on a remote host are open (#13285). This machine's tools
+      // are still this machine's: list them, and let each call name the host
+      // it refuses to reach into.
+      if (err instanceof RemoteHostWindowOnlyError) {
+        return getExternalBaseManifest();
+      }
       // A dead *pin* still is a dead end (#11789). The session's identity is
       // the destroyed WebContents, not a workspace it can re-resolve, so there
       // is no later state in which this succeeds — and serving a cached
@@ -1368,12 +1473,30 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
     // legitimately empty surface and carrying no hint that reconnecting is the
     // fix.
     if (tier === null) throw sessionGoneError();
-    const manifest = await resolveManifest("tools/list");
+    // A route that moved while the fetch was out is fetched again from where it
+    // went (#13350): the old route's answer could land after the re-list the
+    // move's notice asks for, and the client keeps whichever list came last.
+    // Once only; a route still moving is left to the notice.
+    let manifest!: Awaited<ReturnType<typeof resolveManifest>>;
+    for (let attempt = 1; ; attempt++) {
+      const routeMoved = deps.noteToolListRoute?.();
+      try {
+        manifest = await resolveManifest("tools/list");
+      } catch (err) {
+        if (attempt === 1 && routeMoved?.()) continue;
+        throw err;
+      }
+      if (attempt === 1 && routeMoved?.()) continue;
+      break;
+    }
     // Origin read once for the whole listing, and the same way the dispatch
     // gate reads it, so a tool withheld here is refused there (#12407).
     const listSurface: SessionSurfacePolicy = {
       ...sessionSurface,
       rendererOwnedOrigin: sessionStore.isRendererOwnedOrigin(sessionId),
+      assistantMessaging: laneMessagingOffered(),
+      assistantSending: laneSendingOffered(),
+      hubMessaging: hubMessagingOffered(),
     };
     const tools = manifest
       .filter((entry) => shouldExposeTool(entry, tier, listSurface))
@@ -1591,16 +1714,28 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
               .flatMap((grant) => [...grant.allowedTools])
               .filter((toolId) => isGenericNativeGrantEligible(toolId))
           );
+          const permittedActionIds = new Set<string>([
+            ...getReachableActionIds(
+              tier,
+              rendererOwnedOrigin,
+              sessionSurface.paneApproval === true
+            ),
+            ...perToolGrantedActionIds,
+            ...nativeGrantedActionIds,
+          ]);
+          // The inbox tools are offered only where this session's own lane
+          // could be enrolled (#13335), whatever its tier or grants; discovery agrees.
+          if (!laneMessagingOffered()) {
+            for (const id of ASSISTANT_MESSAGING_TOOL_IDS) permittedActionIds.delete(id);
+          } else if (!laneSendingOffered()) {
+            permittedActionIds.delete(ASSISTANT_SEND_MESSAGE_TOOL);
+          }
+          // Likewise the hub's host tools, offered only where a hub could be (#13336).
+          if (!hubMessagingOffered()) {
+            for (const id of HOST_MESSAGING_TOOL_IDS) permittedActionIds.delete(id);
+          }
           return {
-            permittedActionIds: new Set<string>([
-              ...getReachableActionIds(
-                tier,
-                rendererOwnedOrigin,
-                sessionSurface.paneApproval === true
-              ),
-              ...perToolGrantedActionIds,
-              ...nativeGrantedActionIds,
-            ]),
+            permittedActionIds,
             callerLimit: searchLimit ?? ACTIONS_SEARCH_DEFAULT_LIMIT,
             requestedActionId: readRequestedActionId(args),
             ...(listPaging ? { listPaging } : {}),
@@ -1611,6 +1746,7 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
               rendererOwnedOrigin,
               paneApproval: sessionSurface.paneApproval === true,
               paneSkipConfirmations: sessionSurface.paneSkipConfirmations === true,
+              hubMessaging: hubMessagingOffered(),
               perToolGrantedActionIds,
               nativeGrantedActionIds,
               confirmationsSkipped,
@@ -1658,7 +1794,7 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
     // A call with `notify` and `waitForReply` both holds its notice while the
     // wait runs, since the wait answers the caller itself when it can; this
     // settles it once the wait ends.
-    let releaseNotice: ((answered: boolean) => void) | undefined;
+    let releaseNotice: ReleaseNotice | undefined;
 
     // Set once the ownership gate inside the IIFE has cleared, and read by the
     // delegated dispatch and the post-cleanup release. Undefined for every
@@ -2036,6 +2172,19 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
         ) {
           viewlessStatusWorkspaceId = err.workspaceId;
           boundManifest = [];
+        } else if (
+          err instanceof NoFrontendAttachedError &&
+          getExternalBaseManifest().some((entry) => entry.id === actionId)
+        ) {
+          // Nothing is attached to the workspace, so no renderer can be asked:
+          // the dispatch below either runs the action in main or refuses it as
+          // needing a frontend. The ceiling still has a truthful answer for a
+          // built-in tool, because the host's base surface is generated from
+          // the same action registry, and it is what keeps a confirm-gated call
+          // refused here rather than run by main unattended. A tool the base
+          // surface does not describe — a plugin's — keeps failing closed below:
+          // a view that opened before its dispatch could raise its dialog.
+          boundManifest = getExternalBaseManifest();
         } else {
           // Fail closed. Proceeding on an unresolved manifest would erase the
           // only evidence that this action needs confirmation, turning a refusal
@@ -2608,24 +2757,25 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
             };
             return buildToolError({ code: "VALIDATION_ERROR", message });
           }
-          // Daintree's own assistant reads by the view it is pinned to rather
-          // than by the ledger (#12883): it holds unscoped input to every pane
-          // in that view, so a pane the user started is one it can already
-          // answer, and the question behind the answer is what it needs. The
-          // view is the whole boundary here — a creation record does not stand
-          // in for it — and every other `*Owned` tool keeps the ledger.
+          // Daintree's own assistant also reads by the view it is pinned to
+          // (#12883): it holds unscoped input to every pane in that view, so a
+          // pane the user started is one it can already answer, and the
+          // question behind the answer is what it needs. A pane it created
+          // stays readable by the ledger, as every session's does, so a view
+          // check that cannot answer never strands its own panes (#13439); the
+          // view is asked only about the rest. Every other `*Owned` tool keeps
+          // its ledger and hand-over rules.
           const readsByPinnedView =
             rendererOwnedOrigin && actionId === TERMINAL_READ_LAST_MESSAGE_OWNED_TOOL;
-          const inPinnedView =
-            readsByPinnedView &&
-            (await deps.isTerminalInPinnedWorkspace?.(resourceId).catch(() => false)) === true;
           // A hand-over is consulted only after the ownership ledger, and only
           // by the tools that declare it enough (#12490). The cleanup tools
           // never reach it, so an adopted terminal cannot be closed through
           // one.
-          const createdRecord = readsByPinnedView
-            ? undefined
-            : ownedRecordFor(ownedResource.resourceKind, resourceId);
+          const createdRecord = ownedRecordFor(ownedResource.resourceKind, resourceId);
+          const inPinnedView =
+            readsByPinnedView &&
+            createdRecord === undefined &&
+            (await deps.isTerminalInPinnedWorkspace?.(resourceId).catch(() => false)) === true;
           const record =
             createdRecord ??
             (ownedResource.acceptsAdoption && !readsByPinnedView
@@ -2911,8 +3061,8 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
             // Settled once the item is back, so the launch's notice exists by then.
             const releaseItemNotice = () => {
               if (wait === undefined || noticeHold === undefined || noticePane === null) return;
-              releaseNoticeAfter(wait, (answered) =>
-                terminalNotify?.releaseHold(noticePane, noticeHold, answered)
+              releaseNoticeAfter(wait, (answered, stoppedWithoutMarker) =>
+                terminalNotify?.releaseHold(noticePane, noticeHold, answered, stoppedWithoutMarker)
               );
             };
             let itemResult: CallToolResult;
@@ -3007,7 +3157,15 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
           const hold =
             batchItem?.noticeHold ??
             (waitForReply && replyWaiter !== undefined ? createNoticeHold() : undefined);
-          const noticeOptions = { replyLines, ...(hold !== undefined ? { hold } : {}) };
+          const handback =
+            typeof args === "object" &&
+            args !== null &&
+            (args as Record<string, unknown>).handback === true;
+          const noticeOptions = {
+            replyLines,
+            ...(hold !== undefined ? { hold } : {}),
+            ...(handback ? { handback } : {}),
+          };
           try {
             if (actionId === AGENT_LAUNCH_TOOL) {
               if ((readStringArg(args, "prompt") ?? "").trim().length === 0) {
@@ -3036,7 +3194,8 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
           }
           // A batch settles its items' holds itself, as each item's wait ends.
           if (hold !== undefined && batchItem?.noticeHold === undefined) {
-            releaseNotice = (answered) => terminalNotify.releaseHold(pane, hold, answered);
+            releaseNotice = (answered, stoppedWithoutMarker) =>
+              terminalNotify.releaseHold(pane, hold, answered, stoppedWithoutMarker);
           }
         }
 
@@ -3219,6 +3378,100 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
           }
         }
 
+        // Short-circuit: an enrolled lane's inbox, replies (#13335) and its
+        // messages to the hub (#13338) live in main beside the exchange records. The lane comes from this session's
+        // help bearer alone, so the access check is the call itself: every
+        // other bearer, and a lane no longer enrolled as it was, is refused
+        // here whatever admitted the call above. Refusals are fixed text and
+        // results never carry a body into the audit (see its projections).
+        if (ASSISTANT_MESSAGING_TOOL_IDS.has(actionId)) {
+          emitToolCallStarted(false);
+          try {
+            // Help-session bearers only, as for help.displayImage: a pane or
+            // api-key bearer has no lane, whatever its tier admitted.
+            // Sending is narrower again: only a lane a remote Shell enrolled,
+            // so the hub, which has the inbox tools, is refused it here too.
+            const eligible =
+              assistantMessaging !== undefined &&
+              sessionStore.sessionHelpIdMap.has(sessionId) &&
+              (actionId !== ASSISTANT_SEND_MESSAGE_TOOL || laneSendingAvailable());
+            const settled = runAssistantMessagingTool(
+              actionId,
+              args,
+              eligible ? assistantMessaging : undefined
+            );
+            if (!settled.ok) {
+              outcome = {
+                kind: "result",
+                value: {
+                  ok: false,
+                  error: {
+                    code: auditCodeForMessagingRefusal(settled.code),
+                    message: settled.message,
+                  },
+                },
+              };
+              return buildToolError({ code: settled.code, message: settled.message });
+            }
+            const result = settled.value;
+            outcome = { kind: "result", value: { ok: true, result } };
+            return buildToolCallResult(result, {
+              structuredContent: result as unknown as Record<string, unknown>,
+            });
+          } catch (err) {
+            outcome = { kind: "throw", error: err };
+            if (err instanceof McpError) throw err;
+            return buildToolError({
+              code: EXECUTION_ERROR_CODE,
+              message: `${actionId} failed`,
+            });
+          }
+        }
+
+        // Short-circuit: the hub's tools for other hosts' assistants (#13336)
+        // run in main over the link. Only the help session this Shell's hub was
+        // enrolled with gets past the runtime's own check, whatever admitted
+        // the call above. Named outcomes (opted out, unreachable, ambiguous,
+        // ...) are results; refusals are fixed text, and the audit projections
+        // keep message and reply text out of the log.
+        if (HOST_MESSAGING_TOOL_IDS.has(actionId)) {
+          emitToolCallStarted(false);
+          try {
+            const settled = await runHostMessagingTool(
+              actionId,
+              args,
+              hostMessaging !== undefined && sessionStore.sessionHelpIdMap.has(sessionId)
+                ? hostMessaging
+                : undefined
+            );
+            if (!settled.ok) {
+              outcome = {
+                kind: "result",
+                value: {
+                  ok: false,
+                  error: {
+                    code: auditCodeForHostMessagingRefusal(settled.code),
+                    message: settled.message,
+                  },
+                },
+              };
+              return buildToolError({ code: settled.code, message: settled.message });
+            }
+            const result = settled.value;
+            outcome = { kind: "result", value: { ok: true, result } };
+            return buildToolCallResult(result, {
+              structuredContent: result as unknown as Record<string, unknown>,
+            });
+          } catch (err) {
+            outcome = { kind: "throw", error: err };
+            if (err instanceof McpError) throw err;
+            return buildToolError({
+              code: EXECUTION_ERROR_CODE,
+              message: `${actionId} failed`,
+            });
+          }
+        }
+
         // Short-circuit: skills.search / skills.load run entirely in the main
         // process (#10892). The action manifest entries (renderer) carry
         // schema/tier/audit, but the skill registry — parsed plugin markdown —
@@ -3280,7 +3533,13 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
               // against, and the same ones `tools/list` filters by — so the
               // report can never advertise a tool the listing withholds
               // (#11789, #12407).
-              { ...sessionSurface, rendererOwnedOrigin }
+              {
+                ...sessionSurface,
+                rendererOwnedOrigin,
+                assistantMessaging: laneMessagingOffered(),
+                assistantSending: laneSendingOffered(),
+                hubMessaging: hubMessagingOffered(),
+              }
             );
             outcome = { kind: "result", value: { ok: true, result } };
             return buildToolCallResult(result, {
@@ -3546,7 +3805,10 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
               { actions?: unknown; hasMore?: unknown } | null | undefined;
             if (!payload || !Array.isArray(payload.actions)) break;
             collected.push(...payload.actions);
-            if (payload.hasMore !== true || payload.actions.length === 0) break;
+            // Not stopped by an empty page: a Shell answering for this host
+            // narrows each page to what a host may run (#13350), so one can
+            // come back empty with more behind it.
+            if (payload.hasMore !== true) break;
             offset += ACTIONS_LIST_MAX_LIMIT;
           }
           return {
@@ -3663,6 +3925,20 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
           }
         } catch (err) {
           outcome = { kind: "throw", error: err };
+          // Checked before the binding failure it extends: the workspace is
+          // reachable in principle, it just has nothing attached that could run
+          // this action, and the host has no form of it to run alone.
+          if (err instanceof NoFrontendAttachedError) {
+            const statusHint =
+              actionId === TERMINAL_GET_STATUS_TOOL
+                ? ` Status for specific terminals can still be read without one — call '${actionId}' again with an explicit 'terminalIds' array.`
+                : "";
+            return buildToolError({
+              code: NO_FRONTEND_ATTACHED_CODE,
+              message: `${err.message}${statusHint}`,
+              retriable: true,
+            });
+          }
           if (err instanceof McpRouteBindingError) {
             return buildToolError({
               code: SESSION_BINDING_GONE,
@@ -3709,15 +3985,17 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
             // entry couldn't be fetched (the manifest itself comes from the
             // renderer, so `entry` is undefined here and the tool's danger is
             // unknowable). We must not claim CONFIRMATION_REQUIRED without
-            // knowing the tool is confirm-gated, so this stays a *retriable*
-            // EXECUTION_ERROR — the renderer may come back when a window opens.
-            // The message names the cause so the caller retries deliberately
-            // rather than treating it as an opaque dispatch failure.
-            return buildToolError({
-              code: EXECUTION_ERROR_CODE,
-              message:
-                "No Daintree window is open, so the action surface is unavailable. Retry once a project window is open.",
-            });
+            // knowing the tool is confirm-gated. With Host-mode routing this is
+            // the typed, retriable "no frontend" refusal — a window may open,
+            // locally or from another machine; an unbound session names no
+            // workspace, so there is no project the host could run the action
+            // for on its own. Without it, the retriable EXECUTION_ERROR this
+            // has always been.
+            const message =
+              "No Daintree window is open, so the action surface is unavailable. Retry once a project window is open.";
+            return isMcpHostRoutingEnabled()
+              ? buildToolError({ code: NO_FRONTEND_ATTACHED_CODE, message, retriable: true })
+              : buildToolError({ code: EXECUTION_ERROR_CODE, message });
           }
           return buildToolError({
             code: EXECUTION_ERROR_CODE,
@@ -3745,6 +4023,12 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
             } else if (sessionStore.httpSessions.has(sessionId)) {
               sessionStore.resetHttpIdleTimer(sessionId);
             }
+          }
+          if (isImageResultTool(actionId)) {
+            return withResolvedWorkspace(
+              buildImageToolCallResult(outcome.value.result),
+              dispatchedWorkspace
+            );
           }
           const structuredContent = buildStructuredContent(entry, outcome.value.result);
           return withResolvedWorkspace(
@@ -3774,6 +4058,14 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
         // Compute the duration once so the audit record and the live strip
         // report the same wall-clock, not two reads a few µs apart (#9759).
         const durationMs = Date.now() - startedAt;
+        // A decision only comes back from a dialog that was raised, so a call
+        // stamped `skip-preference` that carries one was asked after all — by
+        // a remote Shell that keeps asking for a move of its window, or one
+        // too old to take the stamp (#13368). The decision says what happened.
+        const recordedAuthorization: McpDispatchAuthorization | undefined =
+          dispatchAuthorization === "skip-preference" && confirmationDecision !== undefined
+            ? undefined
+            : dispatchAuthorization;
         try {
           appendAuditRecord({
             toolId: actionId,
@@ -3784,8 +4076,8 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
             startedAt,
             outcome: settledOutcome,
             confirmationDecision,
-            ...(dispatchAuthorization !== undefined
-              ? { authorization: dispatchAuthorization }
+            ...(recordedAuthorization !== undefined
+              ? { authorization: recordedAuthorization }
               : {}),
             capturedTurnId,
           });
@@ -4520,6 +4812,13 @@ async function lookupManifestEntry(
       // null and silently drop host confirmation + structuredContent.
       manifest = await requestManifest();
     } catch (err) {
+      // No frontend is attached, which is not a route that went away: the
+      // dispatch can still run in main, or say it needs a frontend. The host's
+      // base surface describes the built-in actions it covers, so their danger
+      // and output schema stay known.
+      if (err instanceof NoFrontendAttachedError) {
+        return getExternalBaseManifest().find((e) => e.id === actionId);
+      }
       // A route that is gone is not a manifest that is merely unavailable
       // (#12082). Collapsing it to `undefined` here makes the bound-session
       // guard below report a non-retriable `NOT_FOUND` — "no such action" — for

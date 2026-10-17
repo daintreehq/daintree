@@ -10,7 +10,7 @@ name: Nightly Publish
 #
 # Windows nightly binaries were never published (Windows distribution goes
 # through the Microsoft Store in the release workflow), so only macOS + Linux
-# build here. The launch smoke check stays: it's release hygiene that guards the
+# (x64 and arm64, each on its native runner and its own feed) build here. The launch smoke check stays: it's release hygiene that guards the
 # published artifact from shipping a brick to real auto-update clients, not a
 # test suite.
 #
@@ -50,6 +50,10 @@ jobs:
         include:
           - os: ubuntu-22.04
             name: Linux
+            linux_metadata: latest-linux.yml
+          - os: ubuntu-22.04-arm
+            name: Linux arm64
+            linux_metadata: latest-linux-arm64.yml
           - os: macos-14
             name: macOS
 
@@ -64,7 +68,7 @@ jobs:
           cache: npm
 
       - name: Install Linux dependencies
-        if: matrix.os == 'ubuntu-22.04'
+        if: startsWith(matrix.os, 'ubuntu')
         run: |
           sudo apt-get update
           sudo apt-get install -y \
@@ -77,7 +81,7 @@ jobs:
 
       - name: Fontconfig cache key
         id: fontconfig-cache-key
-        if: matrix.os == 'ubuntu-22.04'
+        if: startsWith(matrix.os, 'ubuntu')
         run: |
           set -euo pipefail
           mkdir -p ~/.cache/fontconfig
@@ -88,14 +92,14 @@ jobs:
 
       - name: Cache fontconfig
         id: cache-fontconfig
-        if: matrix.os == 'ubuntu-22.04'
+        if: startsWith(matrix.os, 'ubuntu')
         uses: actions/cache@v5
         with:
           path: ~/.cache/fontconfig
           key: fontconfig-${{ runner.os }}-${{ runner.arch }}-${{ steps.fontconfig-cache-key.outputs.ubuntu }}-${{ steps.fontconfig-cache-key.outputs.fc_version }}-${{ steps.fontconfig-cache-key.outputs.font_pkg_hash }}
 
       - name: Warm fontconfig cache
-        if: matrix.os == 'ubuntu-22.04'
+        if: startsWith(matrix.os, 'ubuntu')
         run: fc-cache -fv
 
       - name: Install dependencies
@@ -129,7 +133,7 @@ jobs:
         run: npm run build
 
       - name: Smoke test (Linux)
-        if: matrix.os == 'ubuntu-22.04'
+        if: startsWith(matrix.os, 'ubuntu')
         run: xvfb-run --auto-servernum npm run test:smoke
         env:
           NODE_ENV: production
@@ -191,7 +195,7 @@ jobs:
             -c.buildDependenciesFromSource=true
 
       - name: Package (Linux)
-        if: matrix.os == 'ubuntu-22.04'
+        if: startsWith(matrix.os, 'ubuntu')
         shell: bash
         env:
           DEBUG: electron-builder,electron-notarize*,electron-osx-sign*
@@ -207,9 +211,9 @@ jobs:
         run: node scripts/ci/generate-update-metadata.mjs mac release/latest-mac.yml
 
       - name: Generate update metadata (Linux)
-        if: matrix.os == 'ubuntu-22.04'
+        if: startsWith(matrix.os, 'ubuntu')
         shell: bash
-        run: node scripts/ci/generate-update-metadata.mjs linux release/latest-linux.yml
+        run: node scripts/ci/generate-update-metadata.mjs linux "release/${{ matrix.linux_metadata }}"
 
       - name: Validate update metadata (macOS)
         if: startsWith(matrix.os, 'macos')
@@ -230,14 +234,14 @@ jobs:
           node scripts/ci/validate-update-metadata.mjs release/latest-mac.yml
 
       - name: Validate update metadata (Linux)
-        if: matrix.os == 'ubuntu-22.04'
+        if: startsWith(matrix.os, 'ubuntu')
         shell: bash
         run: |
-          if [ ! -f "release/latest-linux.yml" ]; then
-            echo "::error::Missing release/latest-linux.yml - Linux auto-update will not work"
+          if [ ! -f "release/${{ matrix.linux_metadata }}" ]; then
+            echo "::error::Missing release/${{ matrix.linux_metadata }} - ${{ matrix.name }} auto-update will not work"
             exit 1
           fi
-          node scripts/ci/validate-update-metadata.mjs release/latest-linux.yml
+          node scripts/ci/validate-update-metadata.mjs "release/${{ matrix.linux_metadata }}"
 
       - name: Upload build artifacts
         uses: actions/upload-artifact@v7
@@ -281,6 +285,14 @@ jobs:
         uses: actions/download-artifact@v8
         with:
           name: nightly-ubuntu-22.04
+          path: release/
+
+      # Arch-distinct names (`-arm64.AppImage`, `_arm64.deb`,
+      # `latest-linux-arm64.yml`), so it shares release/ with x64 safely.
+      - name: Download Linux arm64 artifacts
+        uses: actions/download-artifact@v8
+        with:
+          name: nightly-ubuntu-22.04-arm
           path: release/
 
       - name: List nightly files
@@ -343,6 +355,14 @@ jobs:
           PUBLISH_URL: https://updates.daintree.org/nightly/
           UPDATE_METADATA_PREFIX: latest
           METADATA_SUFFIX: "-linux"
+        run: node scripts/ci/verify-r2-metadata.mjs
+
+      - name: Verify Linux arm64 metadata at CDN edge
+        shell: bash
+        env:
+          PUBLISH_URL: https://updates.daintree.org/nightly/
+          UPDATE_METADATA_PREFIX: latest
+          METADATA_SUFFIX: "-linux-arm64"
         run: node scripts/ci/verify-r2-metadata.mjs
 
       - name: Clean up old nightly builds

@@ -50,7 +50,7 @@ export function useResumeSessionsPalette() {
   const isOpen = usePaletteStore((state) => state.activePaletteId === RESUME_PALETTE_ID);
   const worktrees = useWorktreeStore((state) => (isOpen ? state.worktrees : EMPTY_WORKTREES));
   const currentProjectId = useProjectStore((state) => state.currentProject?.id ?? null);
-  const { sessions, isLoading } = useAgentSessionRecords(isOpen);
+  const { sessions, isLoading, failed: loadFailed, reload } = useAgentSessionRecords(isOpen);
 
   const items = useMemo(
     () => buildResumeSessionItems(sessions, { currentProjectId, worktrees }),
@@ -129,6 +129,9 @@ export function useResumeSessionsPalette() {
   return {
     ...palette,
     isLoading,
+    /** The journal could not be read; the list is empty for that reason, not because nothing was closed. */
+    loadFailed,
+    reload,
     isSearching,
     visibleResults,
     hiddenCount,

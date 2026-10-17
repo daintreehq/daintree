@@ -1,8 +1,24 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
-import { chmodSync, mkdirSync, mkdtempSync, rmSync, statSync, writeFileSync } from "fs";
+import {
+  chmodSync,
+  lstatSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  statSync,
+  symlinkSync,
+  writeFileSync,
+} from "fs";
+import { mkdtemp, readFile, rm } from "fs/promises";
 import path from "path";
 import os from "os";
 import {
+  ensureOwnerOnlyDir,
+  resilientAtomicWriteFile,
+  resilientAtomicWriteFileSync,
+  resilientDirectWriteFile,
   tightenDirPermissions,
   tightenDirPermissionsSync,
   tightenFilePermissionsSync,
@@ -110,5 +126,165 @@ describe("tightenDirPermissionsSync / tightenDirPermissions", () => {
     const absent = path.join(tmpDir, "absent");
     expect(() => tightenDirPermissionsSync(absent)).not.toThrow();
     await expect(tightenDirPermissions(absent)).resolves.toBeUndefined();
+  });
+});
+
+describe("ensureOwnerOnlyDir", () => {
+  let tmpDir: string;
+
+  beforeEach(() => {
+    tmpDir = mkdtempSync(path.join(os.tmpdir(), "daintree-owner-dir-"));
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+    rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  posixIt("creates a missing directory at 0o700", async () => {
+    const dir = path.join(tmpDir, "inbox");
+
+    await ensureOwnerOnlyDir(dir);
+
+    expect(statSync(dir).isDirectory()).toBe(true);
+    expect(mode(dir)).toBe(0o700);
+  });
+
+  posixIt("tightens an existing directory left at the umask default", async () => {
+    const dir = path.join(tmpDir, "inbox");
+    mkdirSync(dir);
+    chmodSync(dir, 0o755);
+
+    await ensureOwnerOnlyDir(dir);
+
+    expect(mode(dir)).toBe(0o700);
+  });
+
+  posixIt("refuses a symlink at the name and leaves its target alone", async () => {
+    const target = path.join(tmpDir, "elsewhere");
+    mkdirSync(target);
+    chmodSync(target, 0o777);
+    const dir = path.join(tmpDir, "inbox");
+    symlinkSync(target, dir);
+
+    await expect(ensureOwnerOnlyDir(dir)).rejects.toThrow(/real directory/);
+
+    expect(lstatSync(dir).isSymbolicLink()).toBe(true);
+    expect(mode(target)).toBe(0o777);
+    expect(readdirSync(target)).toEqual([]);
+  });
+
+  it("refuses a regular file at the name", async () => {
+    const dir = path.join(tmpDir, "inbox");
+    writeFileSync(dir, "not a dir");
+
+    await expect(ensureOwnerOnlyDir(dir)).rejects.toThrow(/real directory/);
+  });
+
+  posixIt("refuses a directory owned by another user without touching it", async () => {
+    const dir = path.join(tmpDir, "inbox");
+    mkdirSync(dir);
+    chmodSync(dir, 0o755);
+    const ownUid = process.getuid!();
+    vi.spyOn(process, "getuid").mockReturnValue(ownUid + 1);
+
+    await expect(ensureOwnerOnlyDir(dir)).rejects.toThrow(/another user/);
+
+    expect(mode(dir)).toBe(0o755);
+  });
+});
+
+describe("resilientAtomicWriteFile", () => {
+  let tmpDir: string;
+
+  beforeEach(async () => {
+    tmpDir = await mkdtemp(path.join(os.tmpdir(), "daintree-atomic-test-"));
+  });
+
+  afterEach(async () => {
+    await rm(tmpDir, { recursive: true, force: true });
+  });
+
+  it("writes data atomically to the target path", async () => {
+    const target = path.join(tmpDir, "test.json");
+    await resilientAtomicWriteFile(target, '{"key":"value"}', "utf-8");
+
+    const content = await readFile(target, "utf-8");
+    expect(content).toBe('{"key":"value"}');
+  });
+
+  it("leaves no temp files after successful write", async () => {
+    const target = path.join(tmpDir, "test.json");
+    await resilientAtomicWriteFile(target, "data", "utf-8");
+
+    const files = readdirSync(tmpDir);
+    expect(files).toEqual(["test.json"]);
+  });
+
+  it("overwrites existing file atomically", async () => {
+    const target = path.join(tmpDir, "test.json");
+    await resilientAtomicWriteFile(target, "original", "utf-8");
+    await resilientAtomicWriteFile(target, "updated", "utf-8");
+
+    const content = await readFile(target, "utf-8");
+    expect(content).toBe("updated");
+  });
+
+  it("throws ENOENT when parent directory does not exist", async () => {
+    const target = path.join(tmpDir, "nonexistent", "test.json");
+    await expect(resilientAtomicWriteFile(target, "data")).rejects.toThrow();
+  });
+});
+
+describe("resilientAtomicWriteFileSync", () => {
+  let tmpDir: string;
+
+  beforeEach(() => {
+    tmpDir = mkdtempSync(path.join(os.tmpdir(), "daintree-atomic-sync-test-"));
+  });
+
+  afterEach(() => {
+    rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  it("writes data atomically to the target path", () => {
+    const target = path.join(tmpDir, "test.json");
+    resilientAtomicWriteFileSync(target, '{"key":"value"}', "utf-8");
+
+    const content = readFileSync(target, "utf-8");
+    expect(content).toBe('{"key":"value"}');
+  });
+
+  it("leaves no temp files after successful write", () => {
+    const target = path.join(tmpDir, "test.json");
+    resilientAtomicWriteFileSync(target, "data", "utf-8");
+
+    const files = readdirSync(tmpDir);
+    expect(files).toEqual(["test.json"]);
+  });
+
+  it("throws when parent directory does not exist", () => {
+    const target = path.join(tmpDir, "nonexistent", "test.json");
+    expect(() => resilientAtomicWriteFileSync(target, "data")).toThrow();
+  });
+});
+
+describe("resilientDirectWriteFile", () => {
+  let tmpDir: string;
+
+  beforeEach(async () => {
+    tmpDir = await mkdtemp(path.join(os.tmpdir(), "daintree-direct-test-"));
+  });
+
+  afterEach(async () => {
+    await rm(tmpDir, { recursive: true, force: true });
+  });
+
+  it("writes data directly to the target path", async () => {
+    const target = path.join(tmpDir, "test.txt");
+    await resilientDirectWriteFile(target, "hello", "utf-8");
+
+    const content = await readFile(target, "utf-8");
+    expect(content).toBe("hello");
   });
 });

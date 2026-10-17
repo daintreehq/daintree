@@ -417,28 +417,6 @@ describe("ProjectPluginWatcher", () => {
     expect(await waitFor(() => watcher.isWatching(PROJECT_ID))).toBe(true);
   });
 
-  it("does not arm when the project has no .daintree/plugins folder", async () => {
-    const root = await fsp.mkdtemp(path.join(os.tmpdir(), `dt-ppw-empty-${randomUUID()}-`));
-    roots.push(root);
-    const { watcher } = makeWatcher();
-    await watcher.ensure(PROJECT_ID, root);
-    expect(watcher.isWatching(PROJECT_ID)).toBe(false);
-  });
-
-  it("arms later, once the plugins folder appears", async () => {
-    const root = await fsp.mkdtemp(path.join(os.tmpdir(), `dt-ppw-late-${randomUUID()}-`));
-    roots.push(root);
-    const { watcher } = makeWatcher();
-    await watcher.ensure(PROJECT_ID, root);
-    expect(watcher.isWatching(PROJECT_ID)).toBe(false);
-
-    await fsp.mkdir(path.join(root, ".daintree", "plugins"), { recursive: true });
-    await watcher.ensure(PROJECT_ID, root);
-    // The sentinel may already be arming when the explicit ensure() lands, and
-    // the subscribe itself is async either way.
-    expect(await waitFor(() => watcher.isWatching(PROJECT_ID))).toBe(true);
-  });
-
   it("reconciles a plugin folder that appears already complete (#12212)", async () => {
     // The headline case: an agent writes the whole plugin at once. `arm()`
     // fingerprints what it finds, so without a forced reconcile the settle

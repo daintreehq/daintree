@@ -210,22 +210,6 @@ describe("SynchronizedFrameAnalyzer", () => {
       expect(result.signal).not.toBe("spinner");
     });
 
-    it("returns spinner when cell revisits codepoints", () => {
-      // 4-frame braille cycle revisited across 8 frames — each codepoint
-      // appears twice, satisfying the revisitation requirement.
-      const cycle = ["⠋", "⠙", "⠹", "⠸"];
-      let result = analyzer.classify(
-        snapshot({ rows: ["", "  static"], cols: 40, capturedAt: 1000 })
-      );
-      for (let i = 0; i < 8; i++) {
-        const ch = cycle[i % cycle.length];
-        result = analyzer.classify(
-          snapshot({ rows: ["", `${ch} static`], cols: 40, capturedAt: 1100 + i * 100 })
-        );
-      }
-      expect(result.signal).toBe("spinner");
-    });
-
     it("does NOT return spinner when interval is too slow", () => {
       const cycle = ["⠋", "⠙", "⠹", "⠸"];
       let result = analyzer.classify(

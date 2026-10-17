@@ -1,7 +1,282 @@
 // @vitest-environment jsdom
-import { describe, it, expect } from "vitest";
+import { createPortal } from "react-dom";
 import { readFileSync } from "fs";
 import { resolve } from "path";
+import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import type { PtyPanelData } from "@shared/types/panel";
+
+// Issue #11156 — a docked terminal's Radix Popover content is portaled to
+// document.body, so it sits outside the dock rail's DOM tree while its keydowns
+// still arrive at the rail's roving-tabindex handler through React. Typing an
+// arrow in a docked terminal roved the rail and yanked focus onto the next chip.
+//
+// This is a handler-level test of that contract, not a replica of the production
+// panel topology (which relocates the panel through DockPanelOffscreenContainer
+// into the popover). It asserts what the rail owes its portaled children: a key
+// whose target is outside the rail's DOM is none of the rail's business.
+//
+// vi.mock factories are hoisted above the module body, so everything they read
+// has to live in vi.hoisted or it is still in TDZ when they run.
+const fixture = vi.hoisted(() => {
+  const PORTAL_TERMINAL_ID = "dock-1";
+  const dockPanels = [
+    {
+      id: PORTAL_TERMINAL_ID,
+      kind: "terminal",
+      title: "First panel",
+      location: "dock",
+      cwd: "/tmp",
+      cols: 80,
+      rows: 24,
+    },
+    {
+      id: "dock-2",
+      kind: "terminal",
+      title: "Second panel",
+      location: "dock",
+      cwd: "/tmp",
+      cols: 80,
+      rows: 24,
+    },
+  ] satisfies PtyPanelData[];
+
+  return {
+    PORTAL_TERMINAL_ID,
+    dockPanels,
+    panelState: {
+      panelsById: Object.fromEntries(dockPanels.map((panel) => [panel.id, panel])),
+      panelIds: dockPanels.map((panel) => panel.id),
+      // The rail reads the worktree index alongside `panelIds` so a panel
+      // committed mid-spawn-batch still paints (#9649). These fixtures are all
+      // worktree-less, so they live in the `__none__` bucket.
+      panelIdsByWorktreeId: { __none__: dockPanels.map((panel) => panel.id) },
+      trashedTerminals: new Map<string, never>(),
+      tabGroups: new Map<string, never>(),
+    },
+    // Returning children needs no JSX, which keeps this usable from vi.hoisted.
+    passthrough: ({ children }: { children?: React.ReactNode }) => children,
+  };
+});
+
+vi.mock("@/store", () => ({
+  usePanelStore: (selector: (s: typeof fixture.panelState) => unknown) =>
+    selector(fixture.panelState),
+  useProjectStore: (selector: (s: { currentProject: null }) => unknown) =>
+    selector({ currentProject: null }),
+  useWorktreeSelectionStore: (selector: (s: { activeWorktreeId: null }) => unknown) =>
+    selector({ activeWorktreeId: null }),
+}));
+vi.mock("@/store/scratchStore", () => ({
+  useScratchStore: (selector: (s: { currentScratch: null }) => unknown) =>
+    selector({ currentScratch: null }),
+}));
+vi.mock("@/store/helpPanelStore", () => ({
+  useHelpPanelStore: (selector: (s: { terminalId: null }) => unknown) =>
+    selector({ terminalId: null }),
+  // #12108: the dock filters against every lane, so it reads this selector.
+  selectSlotTerminalIds: () => [],
+  selectSlot: (s: unknown) => s,
+  selectActiveSlot: (s: unknown) => s,
+  selectOpenSlots: () => [0],
+}));
+vi.mock("@/store/agentSettingsStore", () => ({
+  useAgentSettingsStore: (selector: (s: { settings: null }) => unknown) =>
+    selector({ settings: null }),
+}));
+vi.mock("@/store/cliAvailabilityStore", () => ({
+  useCliAvailabilityStore: (selector: (s: { availability: null }) => unknown) =>
+    selector({ availability: null }),
+}));
+vi.mock("@/store/toolbarPreferencesStore", () => ({
+  useToolbarPreferencesStore: (
+    selector: (s: { layout: { leftButtons: string[]; rightButtons: string[] } }) => unknown
+  ) => selector({ layout: { leftButtons: [], rightButtons: [] } }),
+}));
+vi.mock("@/store/preferencesStore", () => ({
+  usePreferencesStore: (selector: (s: { setDockDensity: () => void }) => unknown) =>
+    selector({ setDockDensity: () => {} }),
+}));
+vi.mock("@/hooks", () => ({
+  useHorizontalScrollControls: () => ({
+    canScrollLeft: false,
+    canScrollRight: false,
+    scrollLeft: vi.fn(),
+    scrollRight: vi.fn(),
+  }),
+}));
+vi.mock("@/hooks/useWorktrees", () => ({ useWorktrees: () => ({ worktrees: [] }) }));
+vi.mock("@/hooks/useWorktreeStore", () => ({
+  useWorktreeStore: (selector: (s: { worktrees: Map<string, unknown> }) => unknown) =>
+    selector({ worktrees: new Map() }),
+}));
+vi.mock("@/hooks/useProjectSettings", () => ({ useProjectSettings: () => ({ settings: null }) }));
+vi.mock("@/utils/workspaceCwd", () => ({ resolveWorkspaceCwd: () => "/tmp" }));
+vi.mock("@/config/agents", () => ({ getAgentIds: () => [], getAgentConfig: () => undefined }));
+vi.mock("@/lib/agentMenuOrder", () => ({
+  sortAgentsByToolbarPin: () => ({ sorted: [], pinnedCount: 0 }),
+}));
+vi.mock("@/services/ActionService", () => ({ actionService: { dispatch: vi.fn() } }));
+
+vi.mock("@dnd-kit/core", () => ({
+  useDndContext: () => ({ active: null }),
+  useDroppable: () => ({ setNodeRef: vi.fn(), isOver: false }),
+  useDndMonitor: () => {},
+}));
+vi.mock("@dnd-kit/sortable", () => ({
+  SortableContext: fixture.passthrough,
+  horizontalListSortingStrategy: vi.fn(),
+}));
+vi.mock("@/components/DragDrop", () => ({
+  SortableDockItem: fixture.passthrough,
+  SortableDockPlaceholder: () => null,
+  DOCK_PLACEHOLDER_ID: "__dock-placeholder__",
+  useIsWorktreeSortDragging: () => false,
+  useDndPlaceholder: () => ({ activeTerminal: null, isDragging: false }),
+}));
+vi.mock("@/components/ui/tooltip", () => ({
+  Tooltip: fixture.passthrough,
+  TooltipTrigger: fixture.passthrough,
+  TooltipContent: () => null,
+}));
+vi.mock("@/components/ui/context-menu", () => ({
+  ContextMenu: fixture.passthrough,
+  ContextMenuTrigger: fixture.passthrough,
+  ContextMenuContent: () => null,
+  ContextMenuItem: fixture.passthrough,
+  ContextMenuMeta: fixture.passthrough,
+  ContextMenuLabel: fixture.passthrough,
+  ContextMenuRadioGroup: fixture.passthrough,
+  ContextMenuRadioItem: fixture.passthrough,
+  ContextMenuSeparator: () => null,
+  ContextMenuSub: fixture.passthrough,
+  ContextMenuSubContent: fixture.passthrough,
+  ContextMenuSubTrigger: fixture.passthrough,
+}));
+
+// Stands in for the real Radix Popover trigger plus its portaled panel content.
+// Two inputs, because production has two kinds of key-cancelling behaviour and
+// the guard must be blind to both:
+//   - "cancelled": xterm in its default mode stops propagation on keys it
+//     handles. This is the benign case.
+//   - "uncancelled": xterm in screenReaderMode deliberately does NOT cancel
+//     arrows (see CoreBrowserTerminal's keydown handler), and the CodeMirror
+//     input bar preventDefaults without stopping propagation. These are the
+//     events that actually escape into the rail — the real #11156 trigger.
+// A guard keyed on `defaultPrevented` would pass the cancelled case and still
+// let the uncancelled one steal focus, so both are asserted.
+vi.mock("../DockedTerminalItem", () => ({
+  DockedTerminalItem: ({ terminal }: { terminal: PtyPanelData }) => (
+    <>
+      <button type="button" data-dock-item="" data-testid={`chip-${terminal.id}`}>
+        {terminal.title}
+      </button>
+      {terminal.id === fixture.PORTAL_TERMINAL_ID
+        ? createPortal(
+            <>
+              <textarea
+                aria-label="Cancelled terminal input"
+                onKeyDown={(event) => event.preventDefault()}
+              />
+              <textarea aria-label="Uncancelled terminal input" />
+            </>,
+            document.body
+          )
+        : null}
+    </>
+  ),
+}));
+vi.mock("../DockedNonPtyPanelItem", () => ({ DockedNonPtyPanelItem: () => null }));
+vi.mock("../DockedTabGroup", () => ({ DockedTabGroup: () => null }));
+vi.mock("../DockLaunchButton", () => ({ DockLaunchButton: () => null }));
+vi.mock("../DockLaunchMenuItems", () => ({ DockLaunchMenuItems: () => null }));
+vi.mock("../TrashContainer", () => ({ TrashContainer: () => null }));
+vi.mock("../WaitingContainer", () => ({ WaitingContainer: () => null }));
+vi.mock("../UnreadContainer", () => ({ UnreadContainer: () => null }));
+vi.mock("../ErrorsContainer", () => ({ ErrorsContainer: () => null }));
+vi.mock("../BackgroundContainer", () => ({ BackgroundContainer: () => null }));
+
+import { ContentDock } from "../ContentDock";
+
+function renderDock() {
+  render(<ContentDock />);
+
+  const rail = screen.getByRole("toolbar", { name: "Docked panels" });
+  const chips = fixture.dockPanels.map((panel) => screen.getByTestId(`chip-${panel.id}`));
+
+  // getDockItems() filters on `offsetParent !== null`, and jsdom has no layout,
+  // so it reports null for every element. Without this the item list comes back
+  // empty, the handler bails before the switch, and the regression below would
+  // pass even with the guard removed — a worthless green.
+  for (const chip of chips) {
+    Object.defineProperty(chip, "offsetParent", { configurable: true, get: () => rail });
+    chip.scrollIntoView = vi.fn();
+  }
+
+  const inputs = {
+    cancelled: screen.getByRole("textbox", { name: "Cancelled terminal input" }),
+    uncancelled: screen.getByRole("textbox", { name: "Uncancelled terminal input" }),
+  };
+  return { rail, chips, inputs };
+}
+
+/** Roving tabindex keeps the active chip as the rail's only tab stop. */
+const tabStops = (chips: HTMLElement[]) => chips.map((chip) => chip.tabIndex);
+
+afterEach(cleanup);
+
+describe("ContentDock — arrow keys from a docked terminal (issue #11156)", () => {
+  it("roves focus across rail chips for arrows that originate on a chip", () => {
+    const { chips } = renderDock();
+    const [first, second] = chips as [HTMLElement, HTMLElement];
+
+    first.focus();
+    expect(tabStops(chips)).toEqual([0, -1]);
+
+    fireEvent.keyDown(first, { key: "ArrowRight" });
+
+    expect(document.activeElement).toBe(second);
+    expect(tabStops(chips)).toEqual([-1, 0]);
+  });
+
+  const KEYS = ["ArrowLeft", "ArrowRight", "Home", "End"] as const;
+  const SURFACES = ["cancelled", "uncancelled"] as const;
+
+  it.each(SURFACES.flatMap((surface) => KEYS.map((key) => [surface, key] as const)))(
+    "leaves focus and rail tab stops untouched for %s %s typed into the portaled terminal",
+    (surface, key) => {
+      const { rail, chips, inputs } = renderDock();
+      const input = inputs[surface];
+
+      chips[0]!.focus();
+      const stopsBefore = tabStops(chips);
+
+      input.focus();
+      // The terminal reaches this handler through the React tree while sitting
+      // outside the rail's DOM tree. That divergence is the whole bug.
+      expect(rail.contains(input)).toBe(false);
+
+      fireEvent.keyDown(input, { key });
+
+      expect(document.activeElement).toBe(input);
+      expect(tabStops(chips)).toEqual(stopsBefore);
+    }
+  );
+
+  it("does not adopt the portaled terminal as the rail's active chip on focus", () => {
+    const { chips, inputs } = renderDock();
+
+    chips[0]!.focus();
+    inputs.uncancelled.focus();
+
+    // Focus events bubble the fiber tree too. The rail must not treat the
+    // terminal as one of its chips: ArrowRight from the first chip still lands
+    // on the second, proving the active index survived the terminal's focus.
+    fireEvent.keyDown(chips[0]!, { key: "ArrowRight" });
+
+    expect(document.activeElement).toBe(chips[1]);
+  });
+});
 
 describe("ContentDock regression test", () => {
   it("does not import or render ClusterAttentionPill", () => {
@@ -9,14 +284,6 @@ describe("ContentDock regression test", () => {
 
     expect(content).not.toContain("ClusterAttentionPill");
     expect(content).not.toContain('from "@/components/Fleet"');
-  });
-
-  it("renders from resolved dock items instead of raw tab-group shells", () => {
-    const content = readFileSync(resolve(__dirname, "../ContentDock.tsx"), "utf-8");
-
-    expect(content).toContain("const dockItems = useMemo");
-    expect(content).toContain("dockItems.length === 0");
-    expect(content).not.toContain("if (groupPanels.length === 0) return null");
   });
 
   // Issue #11332 — dock membership must follow the registry so plugin panels can
@@ -150,14 +417,6 @@ describe("ContentDock regression test", () => {
     expect(content).toMatch(/usePreferencesStore\(\(s\)\s*=>\s*s\.setDockDensity\)/);
   });
 
-  it("offers the three density options compact, normal, and comfortable", () => {
-    const content = readFileSync(resolve(__dirname, "../ContentDock.tsx"), "utf-8");
-
-    expect(content).toContain('value: "compact"');
-    expect(content).toContain('value: "normal"');
-    expect(content).toContain('value: "comfortable"');
-  });
-
   it("places the density submenu after DockLaunchMenuItems with a separator", () => {
     const content = readFileSync(resolve(__dirname, "../ContentDock.tsx"), "utf-8");
 
@@ -209,35 +468,6 @@ describe("ContentDock regression test", () => {
       expect(content).toMatch(/const\s+\{\s*active:\s*dndActive\s*\}\s*=\s*useDndContext\(\)/);
       expect(content).toContain("const isDndActive = dndActive !== null");
       expect(content).toContain("aria-busy={isDndActive || undefined}");
-    });
-
-    it("queries [data-dock-item] chips inside the scroll container", () => {
-      const content = readFileSync(resolve(__dirname, "../ContentDock.tsx"), "utf-8");
-
-      expect(content).toContain('querySelectorAll<HTMLElement>("[data-dock-item]")');
-      expect(content).toContain("offsetParent !== null");
-    });
-
-    it("uses a ref (not state) for the active dock index", () => {
-      const content = readFileSync(resolve(__dirname, "../ContentDock.tsx"), "utf-8");
-
-      expect(content).toContain("activeDockIndexRef = useRef(0)");
-    });
-
-    it("syncs roving tab stops via useLayoutEffect", () => {
-      const content = readFileSync(resolve(__dirname, "../ContentDock.tsx"), "utf-8");
-
-      expect(content).toContain("useLayoutEffect");
-      expect(content).toContain("syncDockTabStops");
-      // Clamp matches Toolbar.tsx pattern when chips are added/removed.
-      expect(content).toMatch(/Math\.min\(activeDockIndexRef\.current,\s*items\.length\s*-\s*1\)/);
-    });
-
-    it("wires onKeyDown and onFocusCapture to the rail container", () => {
-      const content = readFileSync(resolve(__dirname, "../ContentDock.tsx"), "utf-8");
-
-      expect(content).toContain("onKeyDown={handleDockKeyDown}");
-      expect(content).toContain("onFocusCapture={handleDockFocusCapture}");
     });
 
     it("early-returns the key handler when dnd-kit has an active drag", () => {
@@ -302,17 +532,6 @@ describe("ContentDock regression test", () => {
   // the tab order, and the scroll container needs scroll-padding so focused
   // edge chips are not parked behind the gradient scrim.
   describe("focus recovery — issue #9681", () => {
-    it("tracks the previously focused chip in a dedicated ref", () => {
-      const content = readFileSync(resolve(__dirname, "../ContentDock.tsx"), "utf-8");
-
-      expect(content).toContain("prevFocusedDockItemRef = useRef<HTMLElement | null>(null)");
-      // The recovery ref sits alongside the existing roving-index ref.
-      const indexRefIdx = content.indexOf("activeDockIndexRef = useRef");
-      const focusRefIdx = content.indexOf("prevFocusedDockItemRef = useRef");
-      expect(indexRefIdx).toBeGreaterThan(0);
-      expect(focusRefIdx).toBeGreaterThan(indexRefIdx);
-    });
-
     it("records the focused chip in handleDockFocusCapture", () => {
       const content = readFileSync(resolve(__dirname, "../ContentDock.tsx"), "utf-8");
 

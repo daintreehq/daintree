@@ -1,4 +1,5 @@
 import { access } from "fs/promises";
+import type { InotifyLimit } from "../../shared/types/workspace-host.js";
 import type { WslGitInvocation } from "../utils/hardenedGit.js";
 import type PQueue from "p-queue";
 import type { WorktreeChanges } from "../../shared/types/git.js";
@@ -96,7 +97,7 @@ export interface WorktreeMonitorCallbacks {
   onBranchChanged?: (worktreeId: string, newBranch: string) => void;
   onExternalRemoval?: (worktreeId: string) => void;
   onResourceStatusPoll?: (worktreeId: string) => Promise<unknown> | void;
-  onInotifyLimitReached?: (worktreeId: string) => void;
+  onInotifyLimitReached?: (worktreeId: string, limit: InotifyLimit) => void;
   onEmfileLimitReached?: (worktreeId: string) => void;
   onWatcherRecovered?: (worktreeId: string) => void;
   /**
@@ -510,8 +511,8 @@ export class WorktreeMonitor {
           run();
         }
       },
-      onInotifyLimitReached: (worktreeId: string) =>
-        monitor.callbacks.onInotifyLimitReached?.(worktreeId),
+      onInotifyLimitReached: (worktreeId: string, limit: InotifyLimit) =>
+        monitor.callbacks.onInotifyLimitReached?.(worktreeId, limit),
       onEmfileLimitReached: (worktreeId: string) =>
         monitor.callbacks.onEmfileLimitReached?.(worktreeId),
       onWatcherRecovered: () => monitor.callbacks.onWatcherRecovered?.(monitor.id),
@@ -659,6 +660,12 @@ export class WorktreeMonitor {
       get behindCount() {
         return monitor.gitStatusPass.behindCount;
       },
+      get upstreamRef() {
+        return monitor.gitStatusPass.upstreamRef;
+      },
+      get upstreamHeadSha() {
+        return monitor.gitStatusPass.upstreamHeadSha;
+      },
       get baseBranchName() {
         return monitor.gitStatusPass.baseBranchName;
       },
@@ -746,6 +753,10 @@ export class WorktreeMonitor {
       },
       get lastWatcherEventAt() {
         return monitor.lastWatcherEventAt;
+      },
+      // Read lazily: BaseDivergence is built after the pre-check it depends on.
+      get upstreamRef() {
+        return monitor.baseDivergence?.upstreamRef ?? null;
       },
     };
     this.statPrecheck = new StatPrecheck(statPrecheckHost);

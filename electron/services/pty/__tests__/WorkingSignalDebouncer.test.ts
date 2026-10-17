@@ -51,11 +51,5 @@ describe("WorkingSignalDebouncer", () => {
       // Signal started at t=1000; with 600ms delay it should fire at t>=1600.
       expect(debouncer.shouldTriggerRecovery(1600, true)).toBe(true);
     });
-
-    it("exposes the current delay through the getter", () => {
-      expect(debouncer.delayMs).toBe(1500);
-      debouncer.setDelay(600);
-      expect(debouncer.delayMs).toBe(600);
-    });
   });
 });

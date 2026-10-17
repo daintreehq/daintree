@@ -6,10 +6,12 @@ import {
   DATABASE_QUERY_TOOL,
   DATABASE_SCHEMA_TOOL,
   DATABASE_TOOL_DESCRIPTORS,
+  DATABASE_WRITE_REQUEST,
   encodeCell,
   runDatabaseQuery,
   runDatabaseSchema,
   runDatabaseTool,
+  runDatabaseWrite,
   type DatabaseTarget,
 } from "../databaseTools.js";
 import { validateAgentMcpTools } from "../validateTools.js";
@@ -286,5 +288,192 @@ describe("runDatabaseTool schema", () => {
     expect(result.databases[0]!.objects).toHaveLength(1000);
     expect(result.databases[1]).toMatchObject({ truncated: false });
     expect(result.databases[1]!.objects.map((o) => o.name)).toEqual(["only"]);
+  });
+});
+
+describe("runDatabaseWrite", () => {
+  const LEDGER = `CREATE TABLE account (id INTEGER PRIMARY KEY);
+    CREATE TABLE tx (id INTEGER PRIMARY KEY, account INTEGER REFERENCES account (id), v TEXT, blob BLOB);
+    INSERT INTO account (id) VALUES (1);`;
+
+  function write(
+    t: DatabaseTarget,
+    sql: string,
+    params?: Record<string, string | number | bigint | null>,
+    budgetBytes?: number
+  ) {
+    return runDatabaseWrite({ tool: DATABASE_WRITE_REQUEST, target: t, sql, params }, budgetBytes);
+  }
+
+  function count(t: DatabaseTarget, where = "1"): number {
+    const raw = new DatabaseSync(t.resolved!.path);
+    try {
+      return Number(
+        (raw.prepare(`SELECT count(*) AS n FROM tx WHERE ${where}`).get() as { n: number }).n
+      );
+    } finally {
+      raw.close();
+    }
+  }
+
+  it("reports what an insert changed, and nothing else without RETURNING", () => {
+    const t = target("ledger", LEDGER);
+    const result = write(t, "INSERT INTO tx (account, v) VALUES (:account, :v)", {
+      ":account": 1n,
+      ":v": "first",
+    });
+    expect(result).toEqual({ databaseId: "ledger", changes: 1, lastInsertRowid: 1 });
+    expect(count(t)).toBe(1);
+  });
+
+  it("returns RETURNING rows encoded like a read's", () => {
+    const t = target("ledger", LEDGER);
+    const result = write(
+      t,
+      "INSERT INTO tx (id, account, v, blob) VALUES (:id, 1, 'x', x'00ff') RETURNING id, v, blob",
+      { ":id": 9007199254740993n }
+    );
+    expect(result).toEqual({
+      databaseId: "ledger",
+      changes: 1,
+      lastInsertRowid: "9007199254740993",
+      columns: ["id", "v", "blob"],
+      rows: [["9007199254740993", "x", { blob: "AP8=" }]],
+      truncated: false,
+    });
+  });
+
+  it("counts every row an update or delete touched, on a connection that inserted none", () => {
+    const t = target(
+      "ledger",
+      `${LEDGER} INSERT INTO tx (account, v) VALUES (1, 'a'), (1, 'b'), (1, 'c');`
+    );
+    expect(write(t, "UPDATE tx SET v = 'z' WHERE v <> 'c'")).toEqual({
+      databaseId: "ledger",
+      changes: 2,
+      lastInsertRowid: 0,
+    });
+    expect(write(t, "DELETE FROM tx WHERE v = :v", { ":v": "none" })).toMatchObject({ changes: 0 });
+  });
+
+  it("finishes every RETURNING row it cannot send", () => {
+    const t = target("ledger", LEDGER);
+    const result = write(
+      t,
+      "INSERT INTO tx (account, v) SELECT 1, printf('%040d', value) FROM json_each(json_array(1,2,3,4,5,6,7,8,9,10)) RETURNING v",
+      undefined,
+      300
+    );
+    expect(result.changes).toBe(10);
+    expect(result.truncated).toBe(true);
+    expect(result.rows!.length).toBeLessThan(10);
+    expect(count(t)).toBe(10);
+  });
+
+  it("caps RETURNING rows at the read path's maximum and still writes them all", () => {
+    const t = target("ledger", LEDGER);
+    const result = write(
+      t,
+      "WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < 1001) INSERT INTO tx (account, v) SELECT 1, 'r' FROM n RETURNING id"
+    );
+    expect(result.changes).toBe(1001);
+    expect(result.rows).toHaveLength(1000);
+    expect(result.truncated).toBe(true);
+    expect(count(t)).toBe(1001);
+  });
+
+  it("says rows were dropped even when only the column list did not fit", () => {
+    const t = target("ledger", `${LEDGER} INSERT INTO tx (account, v) VALUES (1, 'x');`);
+    // No row to trim first: only dropping the column list can mark it.
+    const result = write(
+      t,
+      `UPDATE tx SET v = 'y' WHERE v = 'none' RETURNING v AS "${"c".repeat(400)}"`,
+      undefined,
+      300
+    );
+    expect(result).toMatchObject({ changes: 0, columns: [], rows: [], truncated: true });
+  });
+
+  it("leaves nothing behind when the statement fails part way", () => {
+    const t = target(
+      "ledger",
+      `${LEDGER} CREATE TRIGGER no_three BEFORE INSERT ON tx WHEN NEW.v = '3' BEGIN SELECT RAISE(FAIL, 'not three'); END;`
+    );
+    // FAIL keeps the rows a statement already wrote; only the transaction the
+    // host runs the write in takes them back out.
+    expect(() =>
+      write(t, "INSERT INTO tx (account, v) SELECT 1, value FROM json_each('[1,2,3,4]')")
+    ).toThrow(/not three/);
+    expect(count(t)).toBe(0);
+  });
+
+  it("enforces foreign keys, as a writable host.db open does", () => {
+    const t = target("ledger", LEDGER);
+    expect(() => write(t, "INSERT INTO tx (account, v) VALUES (2, 'orphan')")).toThrow(
+      /FOREIGN KEY constraint failed/
+    );
+    expect(count(t)).toBe(0);
+  });
+
+  it("applies the declared journal mode", () => {
+    const t = target("ledger", LEDGER);
+    const wal: DatabaseTarget = { ...t, resolved: { ...t.resolved!, journalMode: "wal" } };
+    write(wal, "INSERT INTO tx (account, v) VALUES (1, 'x')");
+    const raw = new DatabaseSync(t.resolved!.path);
+    try {
+      expect(raw.prepare("PRAGMA journal_mode").get()).toEqual({ journal_mode: "wal" });
+    } finally {
+      raw.close();
+    }
+  });
+
+  it("refuses a statement that would reach another file, whatever the manifest said", () => {
+    const t = target("ledger", LEDGER);
+    expect(() => write(t, `ATTACH '${path.join(dir, "other.db")}' AS other`)).toThrow(
+      /DB_STATEMENT_NOT_ALLOWED/
+    );
+    expect(fs.existsSync(path.join(dir, "other.db"))).toBe(false);
+  });
+
+  it("never creates a missing database", () => {
+    const t = target("ledger");
+    expect(() => write(t, "INSERT INTO tx (v) VALUES ('x')")).toThrow(/DB_NOT_FOUND/);
+    expect(() => write(missing("ledger"), "INSERT INTO tx (v) VALUES ('x')")).toThrow(
+      /DB_NOT_FOUND/
+    );
+    expect(fs.readdirSync(dir)).toEqual([]);
+  });
+
+  it("says a locked database wrote nothing and can be tried again", () => {
+    const t = target("ledger", LEDGER);
+    const holder = new DatabaseSync(t.resolved!.path);
+    holder.exec("BEGIN IMMEDIATE");
+    try {
+      expect(() => write(t, "INSERT INTO tx (account, v) VALUES (1, 'x')")).toThrow(
+        /DB_LOCKED: .*nothing was written/
+      );
+    } finally {
+      holder.exec("ROLLBACK");
+      holder.close();
+    }
+    expect(count(t)).toBe(0);
+  }, 15_000);
+
+  it("is what runDatabaseTool answers a write request with", () => {
+    const t = target("ledger", LEDGER);
+    expect(
+      runDatabaseTool({
+        tool: DATABASE_WRITE_REQUEST,
+        target: t,
+        sql: "INSERT INTO tx (account, v) VALUES (1, 'x')",
+      })
+    ).toEqual({ ok: true, value: { databaseId: "ledger", changes: 1, lastInsertRowid: 1 } });
+    expect(
+      runDatabaseTool({
+        tool: DATABASE_WRITE_REQUEST,
+        target: t,
+        sql: "INSERT INTO tx (account, v) VALUES (9, 'x')",
+      })
+    ).toMatchObject({ ok: false, error: { message: expect.stringMatching(/FOREIGN KEY/) } });
   });
 });

@@ -60,6 +60,8 @@ export interface SnapshotBuilderHost {
   readonly planFilePath: string | undefined;
   readonly aheadCount: number | undefined;
   readonly behindCount: number | undefined;
+  readonly upstreamRef: string | null | undefined;
+  readonly upstreamHeadSha: string | null | undefined;
   readonly baseBranchName: string | null | undefined;
   readonly baseAheadCount: number | null | undefined;
   readonly baseBehindCount: number | null | undefined;
@@ -183,6 +185,8 @@ export class SnapshotBuilder {
       planFilePath: this.host.planFilePath,
       aheadCount: this.host.aheadCount,
       behindCount: this.host.behindCount,
+      upstreamRef: this.host.upstreamRef ?? undefined,
+      upstreamHeadSha: this.host.upstreamHeadSha ?? undefined,
       baseBranchName: this.host.baseBranchName ?? undefined,
       baseAheadCount: this.host.baseAheadCount ?? undefined,
       baseBehindCount: this.host.baseBehindCount ?? undefined,

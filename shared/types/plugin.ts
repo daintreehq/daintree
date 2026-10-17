@@ -801,6 +801,37 @@ export interface PluginPanelLifecycleEvent {
 export type PanelReloadResult = "scheduled" | "not-mounted" | "rate-limited" | "unavailable";
 
 /**
+ * What the host did with a `host.restartWorker()` request (#13410). An
+ * acknowledgment of scheduling only — the restart runs after the answer is
+ * delivered, so the caller never sees the replacement come up.
+ *
+ * - `"scheduled"` — the plugin's worker will be torn down and started again.
+ * - `"rate-limited"` — a self-restart was already accepted within the last
+ *   30 seconds. Nothing is queued.
+ * - `"unavailable"` — there is no worker to restart: the plugin runs in
+ *   process (a builtin), is disabled or unloaded, or has no backend code.
+ */
+export type WorkerRestartResult = "scheduled" | "rate-limited" | "unavailable";
+
+/** Minimum gap between two accepted `host.restartWorker()` requests from one plugin. */
+export const PLUGIN_WORKER_SELF_RESTART_COOLDOWN_MS = 30_000;
+
+/**
+ * Worker-side deadlines for a host call (#13410), enforced in the worker so
+ * they fire even when main is the side that stopped answering. An expired
+ * call rejects with an error whose `code` is `"TIMEOUT"`; a timeout never
+ * proves the host did nothing.
+ */
+export const PLUGIN_HOST_CALL_TIMEOUT_MS = 60_000;
+/** Deadline for a host call that walks a tree or runs git. */
+export const PLUGIN_HOST_CALL_SLOW_TIMEOUT_MS = 120_000;
+/**
+ * Deadline for a host call that may first wait on a person: a first-use
+ * capability consent dialog (five minutes to answer) or an OS keychain prompt.
+ */
+export const PLUGIN_HOST_CALL_INTERACTIVE_TIMEOUT_MS = 360_000;
+
+/**
  * One machine wake observation delivered to a plugin (#12175). Frozen before
  * delivery, and carries only timing — never what the machine was doing while
  * suspended.
@@ -884,9 +915,80 @@ export interface PluginDatabaseContribution {
   location: PluginDatabaseLocationKind;
   path?: string;
   journalMode: "delete" | "wal";
+  /** Named statements the host serves to agents as tools of their own. */
+  queries?: PluginDatabaseQueryContribution[];
 }
 
-/** Most tools one `agentMcp` endpoint may register. Client tool caps are app-wide, not per server. */
+/** The JSON type an agent passes for one declared query parameter. */
+export type PluginDatabaseQueryParamType = "string" | "number" | "integer" | "boolean";
+
+/** The `format`s a declared `"string"` param may require, as JSON Schema defines them. */
+export type PluginDatabaseQueryParamFormat =
+  "date" | "time" | "date-time" | "email" | "uri" | "uuid";
+
+/**
+ * One parameter of a declared query, bound to the placeholder of the same name.
+ *
+ * The constraints are JSON Schema keywords copied into the tool's input
+ * schema, which the host checks before the statement runs. Unlike a trigger
+ * or `CHECK` constraint, they do not depend on what schema the file has when
+ * the query is called, so a rule about one value belongs here. A string may
+ * take `minLength`, `maxLength` (both counted in characters), `pattern` (a
+ * Unicode regular expression) and `format`; a number or integer `minimum` and
+ * `maximum` (inclusive). `not: { const }` refuses one value of the param's
+ * type, such as 0.
+ */
+export interface PluginDatabaseQueryParam {
+  type: PluginDatabaseQueryParamType;
+  description?: string;
+  minLength?: number;
+  maxLength?: number;
+  pattern?: string;
+  format?: PluginDatabaseQueryParamFormat;
+  minimum?: number;
+  maximum?: number;
+  not?: { const: string | number | boolean };
+}
+
+/**
+ * One `contributes.databases[].queries` entry: a single parameterised SQL
+ * statement the host serves to agents as its own tool, named `name`, on the
+ * plugin's MCP server — no plugin code runs. The tool's input schema is built
+ * from `params`, every one required; agents pass bound values only. Each
+ * placeholder (`:name`, `@name` or `$name`) must have a matching param and each
+ * param a placeholder; a boolean binds as 1 or 0.
+ *
+ * A `"read"` query is served beside `database_query`, under the same access
+ * level and on the same read-only connection, and must be one `SELECT`, `WITH`
+ * or `VALUES` statement. The host, not the plugin, marks it read-only to
+ * clients.
+ *
+ * A `"write"` query must be one `INSERT`, `REPLACE`, `UPDATE` or `DELETE`
+ * statement, optionally after `WITH` and with `RETURNING`. It is served only
+ * with read and write access, as the plugin's own tools are, and runs in a
+ * transaction of its own under the policy of a writable `host.db` open — so
+ * the statement and the schema's constraints and triggers are the rules a write
+ * must pass. It never creates a database that does not exist yet, and a
+ * `host.db` handle sees its commit as `origin: "external"`. Its result is
+ * `changes` and `lastInsertRowid`, plus `columns` and `rows` with `RETURNING`.
+ *
+ * Declared queries count toward the plugin's
+ * {@link AGENT_MCP_MAX_TOOLS_PER_ENDPOINT} together with any tools it
+ * registers.
+ */
+export interface PluginDatabaseQueryContribution {
+  name: string;
+  mode: "read" | "write";
+  description: string;
+  params: Record<string, PluginDatabaseQueryParam>;
+  sql: string;
+}
+
+/**
+ * Most tools one plugin may serve agents beyond the host's two database tools:
+ * its registered `agentMcp` roster and its declared database queries together.
+ * Client tool caps are app-wide, not per server.
+ */
 export const AGENT_MCP_MAX_TOOLS_PER_ENDPOINT = 16;
 /** Most `agentMcp` endpoints one manifest may declare. */
 export const AGENT_MCP_MAX_ENDPOINTS_PER_PLUGIN = 1;
@@ -968,11 +1070,13 @@ export interface PluginMcpToolDefinition {
 export interface PluginMcpApi {
   /**
    * Bind the tool roster for an endpoint declared in `contributes.agentMcp`,
-   * keyed by tool name. An undeclared endpoint id, a roster over
-   * {@link AGENT_MCP_MAX_TOOLS_PER_ENDPOINT}, or a tool breaking the name,
-   * description or schema limits is rejected whole. Calling it again for the
-   * same endpoint replaces the roster. Returns a disposer; every roster is
-   * dropped when the plugin unloads. Must be called during `activate()`.
+   * keyed by tool name. An undeclared endpoint id, a roster that with the
+   * manifest's declared database queries comes to more than
+   * {@link AGENT_MCP_MAX_TOOLS_PER_ENDPOINT}, a tool named like one of those
+   * queries, or a tool breaking the name, description or schema limits is
+   * rejected whole. Calling it again for the same endpoint replaces the
+   * roster. Returns a disposer; every roster is dropped when the plugin
+   * unloads. Must be called during `activate()`.
    */
   registerTools(
     endpointId: string,
@@ -1365,6 +1469,20 @@ export interface PluginManifest {
    * decision is the project folder, not this field.
    */
   scope?: "project";
+  /**
+   * `"unsupported"` for a plugin that only works on the machine the person is
+   * sitting at — a view that assumes the renderer's `localhost` is the
+   * project's machine, or code that relies on local OS behaviour. It is then
+   * not activated for a window attached from another machine, which shows a
+   * placeholder instead. Absent means `"supported"`.
+   */
+  remote?: "supported" | "unsupported";
+  /**
+   * The operating systems (Node `process.platform` names) the package has a
+   * build for. Absent means any; only a plugin shipping native modules for one
+   * OS needs it, and installing it on another machine is refused up front.
+   */
+  platforms?: Array<"darwin" | "linux" | "win32">;
   capabilities?: PluginCapability[];
   /**
    * Per-capability scope bindings that attenuate the compound-capability
@@ -1637,8 +1755,9 @@ export interface PluginSettingsUiValues {
   /**
    * At-rest tier new secret writes will use right now (#9167). `"keychain"` when
    * the OS keychain (Electron `safeStorage`) is available, `"unavailable"` when
-   * it is not (e.g. a headless Linux box) and secret writes are refused. The
-   * settings UI discloses this honestly per secret field.
+   * it is not (e.g. a headless Linux box) and secret writes are refused,
+   * `"locked"` when it gave no key this session. The settings UI discloses this
+   * honestly per secret field.
    */
   secretTier: PluginSecretStorageTier;
   /**
@@ -1653,9 +1772,11 @@ export interface PluginSettingsUiValues {
 /**
  * At-rest storage tier for new secret setting values. Secrets are never written
  * in plaintext: with no OS keychain the tier is `"unavailable"` and a write is
- * refused (#12613).
+ * refused (#12613). `"locked"` is a keychain that is there but gave no key this
+ * session (its unlock prompt was dismissed or failed): Electron asks once per
+ * run, so writes are refused until Daintree restarts and asks again.
  */
-export type PluginSecretStorageTier = "keychain" | "unavailable";
+export type PluginSecretStorageTier = "keychain" | "locked" | "unavailable";
 
 /**
  * A plugin's declared `required` settings, split by what their stored state
@@ -1681,6 +1802,22 @@ export interface PluginRequiredSettingsStatus {
  */
 export interface PluginHostCallOptions {
   signal?: AbortSignal;
+}
+
+/**
+ * Call options for {@link PluginHostApi.showQuickPick},
+ * {@link PluginHostApi.showInputBox} and {@link PluginHostApi.showConfirm}.
+ *
+ * `whenNoFrontend` decides what happens when the project lives on a host that
+ * nobody is attached to (agents often run overnight with no window open).
+ * `"fail"`, the default, rejects with a `NO_FRONTEND_ATTACHED:` error — never
+ * the dismiss value, so "nobody was there" can't be mistaken for "the person
+ * said no". `"queue"` waits until a frontend attaches and shows the prompt
+ * there, marked with the host and the time it was asked; aborting `signal`
+ * still settles it with the dismiss value.
+ */
+export interface PluginPromptCallOptions extends PluginHostCallOptions {
+  whenNoFrontend?: "fail" | "queue";
 }
 
 /**
@@ -1819,9 +1956,10 @@ export interface SettingsApi {
  * NOT gated by `contributes.settings` declarations, so a plugin can persist its
  * own working state freely without declaring every key. Values are stored as
  * plaintext JSON (no secret encryption — never store credentials here) at
- * `~/.daintree/plugin-storage/{pluginId}.json` (user scope),
- * `<projectRoot>/.daintree/plugin-storage/{pluginId}.json` (project scope), or
- * `<worktreePath>/.daintree/plugin-storage/{pluginId}.json` (worktree scope),
+ * `~/.daintree/plugin-storage/{pluginId}.json` (user scope; a project
+ * plugin's `pluginId` is its per-project instance key),
+ * `<projectRoot>/.daintree/plugin-storage/{manifestId}.json` (project scope), or
+ * `<worktreePath>/.daintree/plugin-storage/{manifestId}.json` (worktree scope),
  * with `chmod 0o600` applied on POSIX.
  *
  * `scope` defaults to `"user"`. The `"project"` and `"worktree"` scopes resolve
@@ -2213,7 +2351,16 @@ export type PluginActivationResult =
        */
       recoveryComponentPath?: string;
     }
-  | { ok: false; error: string; stack?: string };
+  | {
+      ok: false;
+      error: string;
+      stack?: string;
+      /**
+       * The plugin declares `"remote": "unsupported"` and the caller is a
+       * window attached from another machine: it was deliberately not started.
+       */
+      remoteUnsupported?: { pluginId: string };
+    };
 
 /**
  * Wire envelope for every push over the `plugin:{pluginId}:{channel}` transport
@@ -2512,8 +2659,28 @@ export interface LoadedPluginInfo {
 export interface PluginIpcContext {
   projectId: string | null;
   worktreeId: string | null;
+  /**
+   * Opaque per-caller handle. A view on this machine has its renderer's id
+   * (positive); a view on another machine attached to this host has a negative
+   * handle that names no local renderer.
+   */
   webContentsId: number;
   pluginId: string;
+  /**
+   * Set when the call reached this host over a link: which attached frontend
+   * made it (`"remote"` for a window on another machine). Absent for a window
+   * on this machine.
+   */
+  origin?: PluginInvokeOrigin;
+}
+
+/** The frontend behind one {@link PluginIpcContext}. */
+export interface PluginInvokeOrigin {
+  kind: "local" | "remote";
+  /** Stable id of the attached machine; `"local"` for this one. */
+  clientId: string;
+  /** Stable id of the calling view for as long as it stays attached. */
+  endpointId: string;
 }
 
 export type PluginIpcHandler = (
@@ -3081,8 +3248,9 @@ export type PluginSendToAgentResult =
  * app's internal `notify()` surface: plugins cannot set `priority` (a
  * `priority:"low"` + `type:"error"` toast silently drops — see the lint rule at
  * `eslint.config.js`), pass a `ReactNode` message, or attach an action button
- * (plugins have no IPC channel to wire one to). `message` is namespaced with the
- * plugin's id (`{pluginId}: {message}`) by the host for provenance.
+ * (plugins have no IPC channel to wire one to). `message` is prefixed with the
+ * plugin's manifest `displayName` (or `name` when it has none) by the host for
+ * provenance: `{displayName}: {message}`.
  */
 export interface PluginToastOptions {
   /** Toast body. String only across the IPC boundary — no `ReactNode`. */
@@ -3709,10 +3877,9 @@ export interface PluginFsRevisionMismatchError extends Error {
  *
  * Reads are gated on `fs:project-read` / `fs:user-data-read`; writes on
  * `fs:project-write` / `fs:user-data-write`. A plugin missing the relevant
- * capability is rejected with a `PERMISSION_REQUIRED:` prefix (the same prefix
- * `useHostChannel` discriminates on); a path outside every allowed root is
- * rejected with a `PATH_NOT_ALLOWED:` prefix. Writes are recorded in the plugin
- * audit trail.
+ * capability is rejected with a `PERMISSION_REQUIRED:` prefix; a path outside
+ * every allowed root is rejected with a `PATH_NOT_ALLOWED:` prefix. Writes are
+ * recorded in the plugin audit trail.
  *
  * Unlike the global `files.read` IPC, {@link readFile} carries NO 500KB / binary
  * cap — it is a deliberate plugin API, not the size-limited preview path.
@@ -4235,8 +4402,9 @@ export interface PluginActivationApi {
    * dispatch the args are `safeParse`d, the handler is invoked with the
    * parsed payload, and the result is `safeParse`d before returning to the
    * renderer. Schema failures throw with a `SCHEMA_ERROR:` prefix; missing
-   * capabilities throw with a `PERMISSION_REQUIRED:` prefix — the
-   * renderer-side `useHostChannel` hook discriminates on these prefixes.
+   * capabilities throw with a `PERMISSION_REQUIRED:` prefix. The
+   * renderer-side `useHostChannel` hook passes the error through unchanged as
+   * its `error` value; the view tells the prefixes apart.
    *
    * Must be called during `activate()`.
    *
@@ -4473,10 +4641,12 @@ export interface PluginActivationApi {
    * This is the signal background work has no other way to get.
    * {@link onDidChangePanelLifecycle} gives a *view* a re-validation point, but
    * a plugin's timers, forge providers, and reconciliation passes keep running
-   * against state frozen at suspend. The host's own resume path only re-enables
-   * workspace polling if a window is focused, so a machine that wakes while the
-   * app is blurred leaves that state stale until the user comes back — for an
-   * unbounded stretch, with nothing else announcing the wake.
+   * against state frozen at suspend. The host's own resume path resumes
+   * git-status polling only while a Daintree window is visible and the screen
+   * is unlocked, and holds its explicit post-wake refresh until a window is
+   * also focused, so a machine that wakes with the app hidden or locked leaves
+   * that state stale until the user comes back — for an unbounded stretch, with
+   * nothing else announcing the wake.
    *
    * Delivered at most once per resume, after the host has attempted to resync
    * its pty and workspace hosts, so a plugin re-reading worktree state from the
@@ -4543,16 +4713,17 @@ export interface PluginActivationApi {
 export interface PluginHostActionsApi {
   /**
    * List every plugin-dispatchable action as a slim
-   * {@link PluginActionManifestEntry}. Mirrors `ActionService.list()`:
-   * `danger:"restricted"` actions are filtered out, so listed entries are always
+   * {@link PluginActionManifestEntry}. Mirrors `ActionService.list()` minus
+   * the actions {@link PluginHostApi.dispatch} refuses: `danger:"restricted"`
+   * ones and those closed to plugin dispatch, so listed entries are always
    * `"safe"` or `"confirm"`. Resolves `[]` when no renderer is available or the
    * plugin has been unloaded.
    */
   list(): Promise<PluginActionManifestEntry[]>;
   /**
-   * Look up a single action by id, or `null` when it doesn't exist or is
-   * `danger:"restricted"` (restricted actions are invisible to plugins, matching
-   * {@link list}). Prefer this over {@link list} for a single lookup — it avoids
+   * Look up a single action by id, or `null` when it doesn't exist or is one
+   * {@link list} leaves out (`danger:"restricted"`, or closed to plugin
+   * dispatch). Prefer this over {@link list} for a single lookup — it avoids
    * projecting the whole catalog.
    */
   get(actionId: ActionId): Promise<PluginActionManifestEntry | null>;
@@ -4560,7 +4731,7 @@ export interface PluginHostActionsApi {
    * Pre-flight a dispatch without triggering it: `"ok"` for a safe action,
    * `"confirm"` for a confirm-gated one (which {@link PluginHostApi.dispatch}
    * would reject with `CONFIRMATION_REQUIRED`), and `"restricted"` for an
-   * unknown or `danger:"restricted"` action. Lets a plugin warn the user before
+   * unknown action or one {@link get} answers `null` for. Lets a plugin warn the user before
    * triggering a confirm prompt. See {@link PluginCanDispatchResult}.
    */
   canDispatch(actionId: ActionId): Promise<PluginCanDispatchResult>;
@@ -4636,14 +4807,14 @@ export interface PluginHostApi extends PluginActivationApi {
    * {@link dispatch} this is NOT revoke-guarded: liveness is plugin membership,
    * so it becomes a silent no-op once the plugin is unloaded. `channel` must be
    * a non-empty string without colons (the namespace separator); an invalid
-   * channel throws so authoring mistakes surface loudly.
+   * channel rejects so authoring mistakes surface loudly.
    *
    * Pass `panelId` to target a single panel instance — only the renderer
    * subscribed via `window.electron.plugin.onPanel(pluginId, channel, panelId,
    * …)` (or the SDK's `usePluginPanelEvent`) receives it, so multiple open
    * instances of the same panel kind no longer all receive every push. Omit it
    * (or pass `null`) to broadcast to every `plugin.on` / `usePluginEvent`
-   * subscriber as before. An empty-string `panelId` throws.
+   * subscriber as before. An empty-string `panelId` rejects.
    */
   postToPanel(channel: string, payload: unknown, panelId?: string | null): Promise<void>;
   /**
@@ -4906,9 +5077,27 @@ export interface PluginHostApi extends PluginActivationApi {
    */
   reloadPanel(panelId: string): Promise<PanelReloadResult>;
   /**
-   * Surface a toast notification. The host namespaces the message as
-   * `{pluginId}: {message}` for provenance — a plugin cannot spoof another
-   * plugin's id since `pluginId` is bound to the host at activation. Routes
+   * Restart this plugin's own worker (#13410): the same restart as the
+   * "Restart plugin" button. Panels rebind to the new worker rather than
+   * closing. Use it to recover when host calls keep timing out — every host
+   * call still outstanding in the old worker is abandoned with it.
+   *
+   * Resolves with a {@link WorkerRestartResult} before the restart begins.
+   * One request per 30 seconds is accepted; the rest resolve
+   * `"rate-limited"`, and nothing is queued. A plugin that runs in
+   * process (a builtin) has no worker and resolves `"unavailable"`.
+   *
+   * No capability is required. NOT revoke-guarded, and resolves
+   * `"unavailable"` once the plugin is unloaded.
+   */
+  restartWorker(): Promise<WorkerRestartResult>;
+  /**
+   * Surface a toast notification. The host prefixes the message with the
+   * plugin's manifest `displayName` (or `name` when it has none),
+   * `{displayName}: {message}`, for provenance. The label is resolved host-side
+   * from the `pluginId` bound at activation rather than taken from the plugin;
+   * the id itself is never shown, since a project plugin's id is an instance
+   * key. Display names need not be unique. Routes
    * through the app's `notify()` path so rate-limit, quiet-hours, and
    * inbox-history semantics apply identically to plugin toasts.
    *
@@ -4974,16 +5163,20 @@ export interface PluginHostApi extends PluginActivationApi {
    * `undefined` rather than rejecting — a cancelled prompt is a dismissal, not a
    * failure, so the never-throws contract above still holds (#12279). This is
    * the one place {@link PluginHostCallOptions} settles instead of rejecting.
+   *
+   * The one rejection a well-formed prompt can meet is `NO_FRONTEND_ATTACHED:`,
+   * when the project is on a host nobody is attached to; see
+   * {@link PluginPromptCallOptions.whenNoFrontend}.
    */
   showQuickPick(
     items: PluginQuickPickItem[],
     options: PluginQuickPickOptions & { canSelectMany: true },
-    callOptions?: PluginHostCallOptions
+    callOptions?: PluginPromptCallOptions
   ): Promise<PluginQuickPickItem[] | undefined>;
   showQuickPick(
     items: PluginQuickPickItem[],
     options?: PluginQuickPickOptions,
-    callOptions?: PluginHostCallOptions
+    callOptions?: PluginPromptCallOptions
   ): Promise<PluginQuickPickItem | undefined>;
   /**
    * Imperatively prompt the user for a line of text, rendered through the app's
@@ -4997,7 +5190,7 @@ export interface PluginHostApi extends PluginActivationApi {
    */
   showInputBox(
     options?: PluginInputBoxOptions,
-    callOptions?: PluginHostCallOptions
+    callOptions?: PluginPromptCallOptions
   ): Promise<string | undefined>;
   /**
    * Imperatively ask the user to confirm an action, rendered through the app's
@@ -5009,7 +5202,10 @@ export interface PluginHostApi extends PluginActivationApi {
    * For an irreversible action set {@link PluginConfirmOptions.destructive} and
    * use a verb-noun `confirmLabel`.
    */
-  showConfirm(options: PluginConfirmOptions, callOptions?: PluginHostCallOptions): Promise<boolean>;
+  showConfirm(
+    options: PluginConfirmOptions,
+    callOptions?: PluginPromptCallOptions
+  ): Promise<boolean>;
   /**
    * Persistent, plugin-scoped key/value settings. JSON storage with `chmod 0o600`
    * on POSIX; declared secrets are encrypted through the OS keychain. See

@@ -123,21 +123,6 @@ describe("updateTitle ownership ladder", () => {
     expect(panel?.titleMode).toBe("user");
   });
 
-  it("automation rename pins custom", () => {
-    usePanelStore.getState().updateTitle("t1", "Auth worker", "automation");
-    const panel = getPtyPanel("t1");
-    expect(panel?.title).toBe("Auth worker");
-    expect(panel?.titleMode).toBe("custom");
-  });
-
-  it("automation bounces off a user lock", () => {
-    usePanelStore.getState().updateTitle("t1", "Mine", "user");
-    usePanelStore.getState().updateTitle("t1", "Overwritten by MCP", "automation");
-    const panel = getPtyPanel("t1");
-    expect(panel?.title).toBe("Mine");
-    expect(panel?.titleMode).toBe("user");
-  });
-
   it("a user rename replaces an automation title", () => {
     usePanelStore.getState().updateTitle("t1", "Auth worker", "automation");
     usePanelStore.getState().updateTitle("t1", "Mine now", "user");

@@ -4,7 +4,7 @@ A plugin can ship a narrated welcome tour that plays in the same dialog as the D
 
 For the manifest field table on its own, see [Contribution points → Tours](./contribution-points.md#tours--shipped-installed-plugins).
 
-To have Claude Code author the tour with you, use the bundled `daintree-tour` skill: plugins scaffolded with `daintree-plugin new` already include it in `.claude/skills/daintree-tour/`, and `npx daintree-plugin skill add` copies it into an existing plugin. Start Claude Code in the plugin directory and ask for a tour, or run `/daintree-tour`. The skill, and the `daintree-plugin skill` and `tour` commands this guide uses: Not in the 0.1.0 release on npm; it ships in the next one.
+To have Claude Code author the tour with you, use the bundled `daintree-tour` skill: plugins scaffolded with `daintree-plugin new` already include it in `.claude/skills/daintree-tour/`, and `npx daintree-plugin skill add` copies it into an existing plugin. Start Claude Code in the plugin directory and ask for a tour, or run `/daintree-tour`. The skill and the `daintree-plugin skill` and `tour` commands this guide uses are not in the 0.1.0 release on npm; they ship in the next one.
 
 Tours need Daintree 0.39.0 or later: `contributes.tours` and the `@daintreehq/tour` import-map specifiers first shipped in v0.39.0.
 
@@ -58,7 +58,7 @@ my-plugin/
 
 A two-chapter plugin tour. Copy it, rename the ids, and run it through [Voicing](#voicing) and [Previewing](#previewing-and-testing).
 
-**`plugin.json`** — declare the tour with an empty `chapters` array. `daintree-plugin validate` refuses a tour with no chapters until the first `tour voice` or `tour align` fills them in. The 0.1.0 CLI on npm predates `contributes.tours` and refuses any manifest that declares one: Not in the 0.1.0 release on npm; it ships in the next one.
+**`plugin.json`** — declare the tour with an empty `chapters` array. `daintree-plugin validate` refuses a tour with no chapters until the first `tour voice` or `tour align` fills them in. The 0.1.0 CLI on npm predates `contributes.tours` and refuses any manifest that declares one; the next release accepts it.
 
 ```json
 {
@@ -176,7 +176,7 @@ export default {
 };
 ```
 
-**`vite.config.ts`** — build it with `@daintreehq/plugin-vite`, which leaves `react` and `@daintreehq/tour` external for the host to supply (leaving `@daintreehq/tour` external: Not in the 0.1.0 release on npm; it ships in the next one.) A scene never needs `@daintreehq/tour` installed to run: Daintree serves every `@daintreehq/tour` specifier from its import map. Installed as a dev dependency it gives you the types and is what `tour preview` plays your scenes against, alongside `lucide-react`, which the kit's icons come from and the preview needs to draw them. `@daintreehq/tour` is not published to npm yet, so type-checking a scene and running `tour preview` both wait for the next release.
+**`vite.config.ts`** — build it with `@daintreehq/plugin-vite`, which leaves `react` and `@daintreehq/tour` external for the host to supply. `@daintreehq/plugin-vite` 0.1.0 on npm externalizes React alone; with it, add `externals: [/^@daintreehq\/tour($|\/)/]` to `daintreePlugin()` until the next release. A scene never needs `@daintreehq/tour` installed to run: Daintree serves every `@daintreehq/tour` specifier from its import map. Installed as a dev dependency it gives you the types and is what `tour preview` plays your scenes against, alongside `lucide-react`, which the kit's icons come from and the preview needs to draw them. `@daintreehq/tour` has not been published to npm, so outside the Daintree repository type-checking a scene and running `tour preview` both wait until it is.
 
 ```ts
 import { daintreePlugin } from "@daintreehq/plugin-vite";
@@ -204,7 +204,7 @@ A scene module doesn't need a build step. `plugins/fixtures/installed/acme.welco
 
 Narration is written for the ear, and the same rules apply to plugin tours as to the Daintree Tour (they live in the header of `src/components/Tour/tourChapters.ts`).
 
-- **`[[cue]]` sits immediately before the word the scene reacts to.** `Every [[pages]] page you add` fires `pages` the moment "page" is spoken. The marker is never voiced. Cue ids are yours to name; each one becomes a key in the chapter's `cues`.
+- **`[[cue]]` sits immediately before the word the scene reacts to.** `Every [[pages]] page you add` fires `pages` the moment "page" is spoken. The marker is never voiced. Cue ids are yours to name, in lowercase letters, digits and hyphens; each one becomes a key in the chapter's `cues`. Anything else in double brackets (`[[Pages]]`, `[[page_list]]`) is not a cue: its inner `[…]` reads as a delivery direction and a stray bracket is left on each side.
 - **Write for the ear.** No symbols, no abbreviations the voice has to guess at, no file paths read aloud. Short sentences. Say "command palette", not "⌘⇧P".
 - **Spell shortcuts out in words.** Plugin narration has one take per chapter; the `{{action.id}}` shortcut tokens the Daintree Tour voices once per keyboard are not expanded for plugin tours. Prefer naming the command over naming its keys.
 - **`[single brackets]` direct the delivery, never the content.** Write them as short stage directions that combine two dimensions (`[warm and welcoming, unhurried]` reads better than `[warm]`), put them at the start of a sentence, and use them sparingly: a direction holds until the next one, and every switch is an audible change of register. The plain read is usually the right one.
@@ -342,7 +342,9 @@ Serves the tour in your browser without Daintree, loading your scene module by t
 
 - a chapter's timing is stale against its narration (it previews the old timing until you re-voice);
 - a chapter has no timing yet (it previews an estimate without audio);
-- a scene waits on a cue the narration never marks, which would never fire.
+- a chapter's plugin-relative audio file is missing (it plays silently);
+- a scene waits on a cue the narration never marks, which would never fire;
+- a scene throws.
 
 For a check you can run in CI or hand to an agent:
 
@@ -350,7 +352,7 @@ For a check you can run in CI or hand to an agent:
 daintree-plugin tour preview --headless --out <dir> [--settle <ms>]
 ```
 
-This captures a frame at the start and at each cue of every chapter instead, after letting the scene settle (`--settle`, default 750 ms), and writes `capture.json` beside the frames with each frame's cue, time and the canvas-space rectangle of every anchor on screen, so a test can confirm the cursor and highlights land where the narration says. The command fails if a scene throws. Headless capture needs `playwright-core` and a Chromium (`npx playwright-core install chromium`).
+This captures a frame at the start and at each cue of every chapter instead, after letting the scene settle (`--settle`, default 750 ms), and writes `capture.json` beside the frames with each frame's cue, time and the canvas-space rectangle of every anchor on screen, so a test can confirm the cursor and highlights land where the narration says. The command fails if a scene throws. Headless capture needs `playwright-core` (an optional dependency of the CLI, found beside it or in the plugin's own `node_modules`) and a Chromium (`npx playwright-core install chromium`).
 
 Before shipping, run `daintree-plugin validate`, and check `daintree-plugin package --dry-run --verbose` lists your scene module and every audio file a chapter's `audioUrl` names: a `.gitignore` or `.dntrignore` pattern that catches `tours/` leaves chapters silent. Then install the plugin and open the tour from where users will find it: Help or the palette for a plugin tour, the panel's three-dots menu for a panel tour.
 

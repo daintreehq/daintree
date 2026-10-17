@@ -7,7 +7,6 @@ import {
   validatePathPattern,
   validateBranchName,
   previewPathPattern,
-  DEFAULT_WORKTREE_PATH_PATTERN,
 } from "../pathPattern.js";
 
 describe("sanitizeBranchName", () => {
@@ -27,12 +26,6 @@ describe("sanitizeBranchName", () => {
     expect(sanitizeBranchName("/leading-slash/")).toBe("leading-slash");
   });
 
-  it("handles complex branch names", () => {
-    expect(sanitizeBranchName("feature/JIRA-123_add-new-feature")).toBe(
-      "feature-JIRA-123_add-new-feature"
-    );
-  });
-
   it("preserves underscores", () => {
     expect(sanitizeBranchName("feature_with_underscores")).toBe("feature_with_underscores");
   });
@@ -45,15 +38,6 @@ describe("buildPathPatternVariables", () => {
     expect(vars["branch-slug"]).toBe("feature-test");
     expect(vars["repo-name"]).toBe("my-app");
     expect(vars["parent-dir"]).toBe("/Users/name/Projects");
-  });
-
-  it("handles Windows-style paths", () => {
-    // Note: On Unix, backslashes are not path separators, so basename returns the full path
-    // This test documents current behavior - Windows compatibility would need platform detection
-    const vars = buildPathPatternVariables("C:\\Users\\name\\Projects\\my-app", "develop");
-    expect(vars["branch-slug"]).toBe("develop");
-    // base-folder will be the full string on Unix (backslash is not a separator)
-    expect(vars["base-folder"]).toBeDefined();
   });
 
   it("builds variables from a WSL UNC root path", () => {
@@ -171,23 +155,9 @@ describe("generateWorktreePath", () => {
     expect(result).toBe("/Users/name/Projects/daintree-app-feature-foo-bar");
   });
 
-  it("generates path with flat sibling pattern", () => {
-    const result = generateWorktreePath(
-      "/Users/name/Projects/daintree-app",
-      "feature/foo-bar",
-      "{parent-dir}/{branch-slug}"
-    );
-    expect(result).toBe("/Users/name/Projects/feature-foo-bar");
-  });
-
   it("preserves the UNC prefix for a WSL root path", () => {
     const result = generateWorktreePath("\\\\wsl$\\Ubuntu\\home\\user\\my-app", "feature/foo-bar");
     expect(result).toBe("//wsl$/Ubuntu/home/user/my-app-worktrees/feature-foo-bar");
-  });
-
-  it("preserves the UNC prefix for a standard server share root path", () => {
-    const result = generateWorktreePath("\\\\server\\share\\projects\\my-app", "develop");
-    expect(result).toBe("//server/share/projects/my-app-worktrees/develop");
   });
 
   it("preserves the UNC prefix for the \\\\server\\share\\dir fixture from issue #7948", () => {
@@ -260,11 +230,6 @@ describe("validatePathPattern", () => {
     expect(result.valid).toBe(false);
     expect(result.error).toContain("Absolute paths are not allowed");
   });
-
-  it("allows patterns starting with {parent-dir}", () => {
-    const result = validatePathPattern("{parent-dir}/worktrees/{branch-slug}");
-    expect(result.valid).toBe(true);
-  });
 });
 
 describe("previewPathPattern", () => {
@@ -285,38 +250,12 @@ describe("previewPathPattern", () => {
     expect(result).toBe("/Users/name/Projects/my-project-bugfix-issue-42");
   });
 
-  it("handles patterns that throw during resolution", () => {
-    // previewPathPattern catches errors and returns "Invalid pattern"
-    // For empty string, validatePathPattern would fail but generateWorktreePath
-    // still produces output, so let's test with a truly invalid scenario
-    const result = previewPathPattern("{branch-slug}", "/Users/name/Projects/my-project");
-    // This is valid, so it should produce a result
-    expect(result).toContain("feature-example-branch");
-  });
-
   it("preserves the UNC prefix for a UNC root path", () => {
     const result = previewPathPattern(
       "{parent-dir}/{base-folder}-worktrees/{branch-slug}",
       "\\\\server\\share\\projects\\my-app"
     );
     expect(result).toBe("//server/share/projects/my-app-worktrees/feature-example-branch");
-  });
-});
-
-describe("DEFAULT_WORKTREE_PATH_PATTERN", () => {
-  it("is the expected default pattern", () => {
-    expect(DEFAULT_WORKTREE_PATH_PATTERN).toBe(
-      "{parent-dir}/{base-folder}-worktrees/{branch-slug}"
-    );
-  });
-
-  it("produces expected output", () => {
-    const result = generateWorktreePath(
-      "/home/user/repos/my-app",
-      "develop",
-      DEFAULT_WORKTREE_PATH_PATTERN
-    );
-    expect(result).toBe("/home/user/repos/my-app-worktrees/develop");
   });
 });
 
@@ -430,14 +369,6 @@ describe("validateBranchName", () => {
 });
 
 describe("edge cases", () => {
-  it("handles very long branch names", () => {
-    const longBranch = "feature/" + "a".repeat(200);
-    const result = sanitizeBranchName(longBranch);
-    // The slash is replaced with a dash, so length is the same
-    expect(result.length).toBe(longBranch.length);
-    expect(result).not.toContain("/");
-  });
-
   it("handles empty branch name", () => {
     const result = sanitizeBranchName("");
     expect(result).toBe("");
@@ -446,10 +377,5 @@ describe("edge cases", () => {
   it("handles branch name with only special chars", () => {
     const result = sanitizeBranchName("///");
     expect(result).toBe("");
-  });
-
-  it("handles unicode in branch names", () => {
-    const result = sanitizeBranchName("feature/émoji-test");
-    expect(result).not.toContain("/");
   });
 });

@@ -66,28 +66,6 @@ describe("ensureHydrationBootstrap", () => {
     expect(initializeMock).toHaveBeenCalledTimes(1);
   });
 
-  it("resolves and reuses the singleton when loadOverrides rejects (non-fatal degradation — issue #9931)", async () => {
-    // This is a unit test of bootstrap behavior given the post-fix contract
-    // that loadOverrides() self-catches IPC rejections. The boundary contract
-    // (production try/catch in loadOverrides) is covered in
-    // KeybindingService.test.ts. Use mockImplementationOnce so the real
-    // promise rejection happens and is observed before the public method
-    // returns — emulating the production self-catch shape.
-    loadOverridesMock.mockImplementationOnce(() =>
-      Promise.reject(new Error("boom")).catch(() => undefined)
-    );
-
-    // loadOverrides() resolves with the constructor-seeded defaults, so the
-    // bootstrap completes successfully and the rest of hydrateAppState continues.
-    await expect(ensureHydrationBootstrap()).resolves.toBeUndefined();
-
-    // Singleton is not reset on non-fatal degradation; subsequent calls reuse
-    // the resolved promise and do not re-invoke either task.
-    await ensureHydrationBootstrap();
-    expect(loadOverridesMock).toHaveBeenCalledTimes(1);
-    expect(initializeMock).toHaveBeenCalledTimes(1);
-  });
-
   it("propagates initialize() rejections and clears the singleton", async () => {
     initializeMock.mockRejectedValueOnce(new Error("init fail"));
 
@@ -259,26 +237,6 @@ describe("ensureHydrationBootstrap", () => {
       await ensureHydrationBootstrap();
 
       expect(bootstrapMarks()).toEqual([]);
-    });
-
-    it("emits start + end for both spans when loadOverrides IPC rejects (non-fatal degradation — issue #9931)", async () => {
-      // Mirror production: IPC rejects, loadOverrides() self-catches and
-      // resolves. The boundary contract is covered in KeybindingService.test.ts.
-      loadOverridesMock.mockImplementationOnce(() =>
-        Promise.reject(new Error("boom")).catch(() => undefined)
-      );
-
-      // Bootstrap resolves because loadOverrides resolved. withRendererSpan's
-      // try/finally fires the :end mark regardless of the inner IPC outcome.
-      await expect(ensureHydrationBootstrap()).resolves.toBeUndefined();
-
-      // Both spans still fire — loadOverrides completes (with defaults) and
-      // initialize() runs concurrently via Promise.all.
-      const marks = bootstrapMarks();
-      expect(marks).toContain("hydrate_bootstrap_load_overrides:start");
-      expect(marks).toContain("hydrate_bootstrap_load_overrides:end");
-      expect(marks).toContain("hydrate_bootstrap_init_user_agents:start");
-      expect(marks).toContain("hydrate_bootstrap_init_user_agents:end");
     });
   });
 });

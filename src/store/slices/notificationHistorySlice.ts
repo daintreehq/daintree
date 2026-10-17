@@ -44,6 +44,8 @@ export interface NotificationHistoryEntry {
     worktreeId?: string;
     panelId?: string;
     eventKind?: NotificationEventKind;
+    /** The other machine this came from; its project ids mean nothing here. */
+    hostName?: string;
   };
   actions?: NotificationHistoryAction[];
 }
@@ -313,6 +315,13 @@ interface NotificationHistoryState {
    * Archives every non-archived entry in the thread. No-op when nothing matches.
    */
   archiveByCorrelationId: (correlationId: string) => void;
+  /**
+   * Archive's inverse: back to the active inbox, still read. Without it an
+   * archive was undoable only by the toast-less `e` never having happened.
+   */
+  unarchiveEntry: (id: string) => void;
+  /** Restores every archived entry in the thread. No-op when nothing matches. */
+  unarchiveByCorrelationId: (correlationId: string) => void;
   clearAll: () => void;
   markAllRead: () => void;
   /**
@@ -483,6 +492,26 @@ export const useNotificationHistoryStore = create<NotificationHistoryState>()(
             snoozedThreads,
             unreadCount: computeUnreadCount(entries, snoozedThreads, now),
           };
+        }),
+      unarchiveEntry: (id) =>
+        set((state) => {
+          const entry = state.entries.find((e) => e.id === id);
+          if (!entry || !entry.archivedAt) return state;
+          const entries = state.entries.map((e) => (e.id === id ? { ...e, archivedAt: null } : e));
+          return { entries, unreadCount: computeUnreadCount(entries, state.snoozedThreads) };
+        }),
+      unarchiveByCorrelationId: (correlationId) =>
+        set((state) => {
+          let mutated = false;
+          const entries = state.entries.map((e) => {
+            if (e.correlationId === correlationId && e.archivedAt) {
+              mutated = true;
+              return { ...e, archivedAt: null };
+            }
+            return e;
+          });
+          if (!mutated) return state;
+          return { entries, unreadCount: computeUnreadCount(entries, state.snoozedThreads) };
         }),
       archiveByCorrelationId: (correlationId) =>
         set((state) => {

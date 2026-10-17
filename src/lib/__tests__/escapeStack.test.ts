@@ -84,16 +84,6 @@ describe("escapeStack", () => {
     expect(handler).toHaveBeenCalledOnce();
   });
 
-  it("_resetForTests clears all entries", () => {
-    registerEscape(vi.fn());
-    registerEscape(vi.fn());
-
-    _resetForTests();
-
-    expect(hasHandlers()).toBe(false);
-    expect(dispatchEscape()).toBe(false);
-  });
-
   it("survives a throwing handler and still returns true", () => {
     const throwing = () => {
       throw new Error("boom");

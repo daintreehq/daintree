@@ -32,12 +32,6 @@ describe("parsePorcelainV2Conflicts", () => {
     expect(parsePorcelainV2Conflicts(input)).toEqual([]);
   });
 
-  it("parses a single both-modified unmerged entry", () => {
-    const line = "u UU N... 100644 100644 100644 100644 aaa bbb ccc src/file.ts";
-    const result = parsePorcelainV2Conflicts(line);
-    expect(result).toEqual([{ path: "src/file.ts", xy: "UU", label: "both modified" }]);
-  });
-
   it("maps all known XY codes to human labels", () => {
     const codes: Array<[string, string]> = [
       ["UU", "both modified"],

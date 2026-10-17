@@ -3,6 +3,7 @@ import type { ProjectSettings, RunCommand } from "@shared/types";
 import type { NotificationSettings } from "@shared/types/ipc/api";
 import { projectClient } from "@/clients";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
+import { mergeBrowserAllowedHosts } from "@shared/utils/urlUtils";
 import { logError } from "@/utils/logger";
 
 interface ProjectSettingsState {
@@ -66,6 +67,29 @@ const settingsSnapshotCache = new Map<string, SettingsSnapshot>();
 let latestLoadRequest = 0;
 let settingsRevision = 0;
 
+// Patches made while a project's settings were still loading. The load in
+// flight may have read the settings before the write a patch records, so it
+// applies the ones made after it started; a later load reads them from disk.
+const patchesAwaitingLoad = new Map<
+  string,
+  Array<{ patch: Partial<ProjectSettings>; revision: number }>
+>();
+
+function applyPatchesAwaitingLoad(
+  projectId: string,
+  settings: ProjectSettings,
+  revisionAtStart: number
+): ProjectSettings {
+  const queued = patchesAwaitingLoad.get(projectId);
+  if (!queued) return settings;
+  patchesAwaitingLoad.delete(projectId);
+  return queued.reduce(
+    (merged, { patch, revision }) =>
+      revision > revisionAtStart ? { ...merged, ...patch } : merged,
+    settings
+  );
+}
+
 function evictOldestSettings(): void {
   if (settingsSnapshotCache.size <= MAX_SETTINGS_CACHE_SIZE) return;
   const firstKey = settingsSnapshotCache.keys().next().value;
@@ -111,7 +135,11 @@ const createProjectSettingsStore: StateCreator<ProjectSettingsState & ProjectSet
       }
 
       const current = get().settings;
-      const settings = settingsRevision !== revisionAtStart && current ? current : data;
+      const settings = applyPatchesAwaitingLoad(
+        projectId,
+        settingsRevision !== revisionAtStart && current ? current : data,
+        revisionAtStart
+      );
       const savedCommandStrings = new Set(settings.runCommands?.map((c) => c.command) || []);
       const newDetected = detected.filter((d) => !savedCommandStrings.has(d.command));
 
@@ -148,7 +176,7 @@ const createProjectSettingsStore: StateCreator<ProjectSettingsState & ProjectSet
 
       set({
         error,
-        settings: { runCommands: [] },
+        settings: applyPatchesAwaitingLoad(projectId, { runCommands: [] }, revisionAtStart),
         detectedRunners: [],
         allDetectedRunners: [],
         isLoading: false,
@@ -159,11 +187,21 @@ const createProjectSettingsStore: StateCreator<ProjectSettingsState & ProjectSet
   setSettings: (settings: ProjectSettings) => {
     settingsRevision++;
     const savedCommandStrings = new Set(settings.runCommands?.map((c) => c.command) || []);
-    set((state) => ({
-      settings,
-      detectedRunners: state.allDetectedRunners.filter((d) => !savedCommandStrings.has(d.command)),
-      error: null,
-    }));
+    set((state) => {
+      // Main keeps every approved host through a save whose copy predates it,
+      // so the cache keeps them too.
+      const browserAllowedHosts = mergeBrowserAllowedHosts(
+        state.settings?.browserAllowedHosts,
+        settings.browserAllowedHosts
+      );
+      return {
+        settings: browserAllowedHosts ? { ...settings, browserAllowedHosts } : settings,
+        detectedRunners: state.allDetectedRunners.filter(
+          (d) => !savedCommandStrings.has(d.command)
+        ),
+        error: null,
+      };
+    });
   },
 
   setDetectedRunners: (runners: RunCommand[]) => {
@@ -171,6 +209,7 @@ const createProjectSettingsStore: StateCreator<ProjectSettingsState & ProjectSet
   },
 
   reset: () => {
+    patchesAwaitingLoad.clear();
     set(initialState);
   },
 
@@ -217,14 +256,22 @@ export const useProjectSettingsStore = create<ProjectSettingsState & ProjectSett
  * Merge fields persisted outside the settings form into the cached settings.
  * Without this the cache keeps the pre-write values, and the next form save —
  * which spreads that cache — reverts them (#12326). No-op unless the store
- * still holds the project the write targeted.
+ * still holds the project the write targeted. While that project's settings
+ * are still loading, the patch waits for the load to land.
  */
 export function patchCachedProjectSettings(
   projectId: string,
   patch: Partial<ProjectSettings>
 ): void {
   const state = useProjectSettingsStore.getState();
-  if (state.projectId !== projectId || !state.settings) return;
+  if (state.projectId !== projectId) return;
+  if (!state.settings) {
+    settingsRevision++;
+    const queued = patchesAwaitingLoad.get(projectId) ?? [];
+    queued.push({ patch, revision: settingsRevision });
+    patchesAwaitingLoad.set(projectId, queued);
+    return;
+  }
   state.setSettings({ ...state.settings, ...patch });
 }
 

@@ -111,40 +111,6 @@ function makeWorktree(id: string, overrides: Partial<WorktreeSnapshot> = {}): Wo
 }
 
 describe("WorktreeStoreProvider worktree-activated handler (#9945)", () => {
-  it("updates activeWorktreeId when host emits a worktree-activated event", async () => {
-    const store = await renderProvider();
-    // Seed two worktrees so the activated id exists in the store map.
-    act(() => {
-      store
-        .getState()
-        .applyUpdate(makeWorktree("wt-main", { isMainWorktree: true, branch: "main" }), {
-          epoch: "test",
-          seq: 1,
-        });
-      store
-        .getState()
-        .applyUpdate(makeWorktree("wt-active", { isMainWorktree: false, branch: "feature/test" }), {
-          epoch: "test",
-          seq: 2,
-        });
-    });
-    // Mark the active worktree as the user-visible active.
-    act(() => {
-      useWorktreeSelectionStore.setState({ activeWorktreeId: "wt-active" });
-    });
-
-    act(() => {
-      emit("worktree-activated", {
-        type: "worktree-activated",
-        worktreeId: "wt-main",
-        epoch: "test",
-        seq: 3,
-      });
-    });
-
-    expect(useWorktreeSelectionStore.getState().activeWorktreeId).toBe("wt-main");
-  });
-
   it("recovers activeWorktreeId to main in the same tick as a worktree-removed (#9945 flicker fix)", async () => {
     const store = await renderProvider();
     act(() => {

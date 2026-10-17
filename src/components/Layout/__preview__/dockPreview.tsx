@@ -14,8 +14,11 @@ import { useWorktreeSelectionStore } from "@/store/worktreeStore";
 import { usePanelStore } from "@/store/panelStore";
 import { usePreferencesStore, type DockDensity } from "@/store/preferencesStore";
 import { usePluginContextMenuItemsStore } from "@/store/pluginContextMenuItemsStore";
-import type { PanelInstance, PtyPanelData } from "@shared/types/panel";
+import { useFleetSnapshotStore } from "@/store/fleetSnapshotStore";
+import { isPtyPanel, type PanelInstance, type PtyPanelData } from "@shared/types/panel";
 import type { WaitingReason } from "@shared/types/agent";
+import type { FleetRunRow } from "@shared/types/ipc/fleet";
+import { isHandBackStop } from "@shared/utils/runHandBack";
 import type { WorktreeSnapshot } from "@shared/types/workspace-host";
 import type { TrashedTerminal } from "@/store/slices";
 import type { TabGroup } from "@/types";
@@ -27,7 +30,7 @@ import "@/index.css";
  * Standalone visual-review harness for the whole content dock.
  *
  * The dock mixes two scopes on one strip: the chips belong to the active
- * worktree, while the Background / Waiting / Errors / Trash pills read across
+ * worktree, while the Background / Waiting / Unread / Errors / Trash pills read across
  * every worktree in the project. Photographing that honestly needs panels in
  * several worktrees at once — agents waiting elsewhere, trash from elsewhere —
  * which is slow to stage in the real app and impossible to hold still. This
@@ -126,6 +129,11 @@ function waiting(minutesAgo: number, reason: WaitingReason = "prompt"): PaneOver
   };
 }
 
+/** An agent that finished its turn and handed it back, unread. */
+function handedBack(minutesAgo: number): PaneOverrides {
+  return { agentState: "completed", lastStateChange: FROZEN_NOW - minutesAgo * 60_000 };
+}
+
 function fromAgent(spec: PaneOverrides & { id: string }): PanelInstance {
   const { id, title, ...rest } = spec;
   return pane(id, title ?? id, rest);
@@ -201,6 +209,9 @@ const FIXTURES: Record<string, Fixture> = {
       }),
       shell,
       ...elsewhere().slice(0, 3),
+      fromAgent(
+        agent("x-done", "gemini", { ...handedBack(5), worktreeId: "wt-12383", location: "grid" })
+      ),
       fromAgent(
         agent("x-err", "codex", {
           agentState: "exited",
@@ -316,6 +327,32 @@ const FIXTURES: Record<string, Fixture> = {
       } as TabGroup,
     ],
   },
+  // The Unread popover: hand-backs nobody has read, beside a Waiting pill.
+  unread: {
+    what: "three unread hand-backs, one here, beside one agent waiting elsewhere",
+    panels: [
+      fromAgent(
+        agent("u-1", "claude", {
+          ...handedBack(4),
+          location: "grid",
+          lastObservedTitle: "Tighten the unread popover rows",
+        })
+      ),
+      fromAgent(
+        agent("u-2", "codex", { ...handedBack(11), worktreeId: "wt-12383", location: "grid" })
+      ),
+      fromAgent(
+        agent("u-3", "gemini", { ...handedBack(26), worktreeId: "wt-thumbs", location: "grid" })
+      ),
+      fromAgent(
+        agent("e-1", "claude", {
+          ...waiting(2, "approval"),
+          worktreeId: "wt-main",
+          location: "grid",
+        })
+      ),
+    ],
+  },
   // The chip cues and the rail's scroll affordances — `dock-cues-review` flips
   // `activityStatus`/`agentState` through `window.__dockPreview` to catch them
   // mid-flight, and a narrow frame makes this rail overflow.
@@ -402,8 +439,49 @@ usePanelStore.setState({
   ...(openPanelId ? { activeDockTerminalId: openPanelId } : {}),
 });
 
+/**
+ * The fleet's view of each agent, which is what the Waiting and Unread pills
+ * read. An approval, question or error wait is an ask on its own. A plain
+ * prompt only waits when Canopy read a question in it, which is how the
+ * Waiting fixtures keep their unlabelled rows. A finished turn is an unread
+ * hand-back.
+ */
+function fleetRun(panel: PtyPanelData): FleetRunRow {
+  const stoppedAt = panel.lastStateChange ?? FROZEN_NOW;
+  const promptWait =
+    panel.agentState === "waiting" && isHandBackStop(panel.agentState, panel.waitingReason);
+  return {
+    runId: panel.id,
+    workspaceId: "proj-daintree",
+    worktreeId: panel.worktreeId,
+    agentState: panel.agentState,
+    waitingReason: panel.waitingReason,
+    spawnedAt: FROZEN_NOW - 3_600_000,
+    cwd: panel.cwd,
+    ...(panel.agentState === "completed" ? { handBack: { stoppedAt } } : {}),
+    ...(promptWait
+      ? { canopy: { kind: "asked" as const, quote: "Want me to keep going?", readAt: stoppedAt } }
+      : {}),
+  };
+}
+
+useFleetSnapshotStore.setState({
+  snapshot: {
+    runs: fixture.panels
+      .filter(isPtyPanel)
+      .filter((p) => p.detectedAgentId)
+      .map(fleetRun),
+    changedAt: FROZEN_NOW,
+    degraded: false,
+    lastSuccessfulAt: FROZEN_NOW,
+  },
+});
+
 // The cue harness drives live transitions through the real store.
-(window as unknown as { __dockPreview: unknown }).__dockPreview = { usePanelStore };
+(window as unknown as { __dockPreview: unknown }).__dockPreview = {
+  usePanelStore,
+  useFleetSnapshotStore,
+};
 
 /** Stand-in chrome, so the strip sits where it sits in the app. */
 function Frame() {

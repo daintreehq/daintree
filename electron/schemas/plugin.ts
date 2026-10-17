@@ -7,7 +7,10 @@ import {
   isPrivateOrLoopbackHostname,
 } from "./pluginIdentifiers.js";
 import {
+  AGENT_MCP_MAX_DESCRIPTION_BYTES,
   AGENT_MCP_MAX_ENDPOINTS_PER_PLUGIN,
+  AGENT_MCP_MAX_TOOLS_PER_ENDPOINT,
+  AGENT_MCP_TOOL_NAME_PATTERN,
   BUILT_IN_PLUGIN_CAPABILITIES,
   PANEL_MENU_MAX_ITEMS,
   PANEL_TOOLBAR_MAX_ITEMS,
@@ -22,6 +25,8 @@ import {
   BINARY_EXEC_SUBCOMMANDS,
   stripCommandExecutableExtension,
 } from "../services/ProcessDetector/commandParser.js";
+import { declaredQueryProblems } from "../services/pluginAgentMcp/declaredQueries.js";
+import { RESERVED_AGENT_MCP_TOOL_NAMES } from "../services/pluginAgentMcp/types.js";
 import {
   BUILT_IN_ACTION_IDS,
   DENY_PLUGIN_DISPATCH_ACTION_IDS,
@@ -82,6 +87,9 @@ export const PanelMenuItemSchema = z
     label: z.string().trim().min(1).max(80).optional(),
   })
   .strict();
+
+/** Values of a manifest's `platforms`: Node's `process.platform` names. */
+export const PLUGIN_PLATFORMS = ["darwin", "linux", "win32"] as const;
 
 /**
  * One `contributes.panels[].toolbar` entry: a button in the panel header.
@@ -404,6 +412,156 @@ export const AgentMcpContributionSchema = z
 
 const DATABASE_FILE_EXTENSION = /\.(db|sqlite|sqlite3)$/;
 
+/** Most params one declared query may take. */
+export const DATABASE_QUERY_MAX_PARAMS = 16;
+
+const utf8Length = (value: string): number => new TextEncoder().encode(value).length;
+
+/** The JSON Schema formats a declared string param may require; the host's validator knows each. */
+export const DATABASE_QUERY_PARAM_FORMATS = [
+  "date",
+  "time",
+  "date-time",
+  "email",
+  "uri",
+  "uuid",
+] as const;
+
+const STRING_PARAM_CONSTRAINTS = ["minLength", "maxLength", "pattern", "format"] as const;
+const NUMBER_PARAM_CONSTRAINTS = ["minimum", "maximum"] as const;
+
+/** Whether `value` is a value of the declared param type, as the input schema checks it. */
+function isParamValue(type: string, value: unknown): boolean {
+  return type === "integer" ? Number.isSafeInteger(value) : typeof value === type;
+}
+
+/**
+ * One param of a declared query: its JSON type, what it means, and the JSON
+ * Schema constraints its value must meet. Each constraint is refused on a type
+ * it cannot apply to, so a rule the author wrote is never silently skipped.
+ */
+export const DatabaseQueryParamSchema = z
+  .object({
+    type: z.enum(["string", "number", "integer", "boolean"]),
+    description: z.string().min(1).max(400).optional(),
+    minLength: z.number().int().min(0).optional(),
+    maxLength: z.number().int().min(0).optional(),
+    pattern: z.string().min(1).max(1024).optional(),
+    format: z.enum(DATABASE_QUERY_PARAM_FORMATS).optional(),
+    minimum: z.number().optional(),
+    maximum: z.number().optional(),
+    not: z
+      .object({ const: z.union([z.string(), z.number(), z.boolean()]) })
+      .strict()
+      .optional(),
+  })
+  .strict()
+  .superRefine((param, ctx) => {
+    const fail = (path: string, message: string): void => {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: [path],
+        message,
+        params: { errorCode: "database_query_param_constraint" },
+      });
+    };
+    const numeric = param.type === "number" || param.type === "integer";
+    for (const key of STRING_PARAM_CONSTRAINTS) {
+      if (param[key] !== undefined && param.type !== "string") {
+        fail(key, `${key} applies only to a "string" param, not "${param.type}"`);
+      }
+    }
+    for (const key of NUMBER_PARAM_CONSTRAINTS) {
+      const bound = param[key];
+      if (bound === undefined) continue;
+      if (!numeric) {
+        fail(key, `${key} applies only to a "number" or "integer" param, not "${param.type}"`);
+      } else if (param.type === "integer" && !Number.isSafeInteger(bound)) {
+        fail(
+          key,
+          `${key} of an "integer" param must be an integer no larger than 2^53 - 1 in magnitude`
+        );
+      }
+    }
+    if (
+      param.minLength !== undefined &&
+      param.maxLength !== undefined &&
+      param.minLength > param.maxLength
+    ) {
+      fail("minLength", `minLength ${param.minLength} is more than maxLength ${param.maxLength}`);
+    }
+    if (
+      param.minimum !== undefined &&
+      param.maximum !== undefined &&
+      param.minimum > param.maximum
+    ) {
+      fail("minimum", `minimum ${param.minimum} is more than maximum ${param.maximum}`);
+    }
+    if (param.pattern !== undefined) {
+      // The host's validator compiles a pattern as a Unicode expression.
+      try {
+        new RegExp(param.pattern, "u");
+      } catch {
+        fail("pattern", "pattern must be a valid Unicode regular expression");
+      }
+    }
+    if (param.not !== undefined && !isParamValue(param.type, param.not.const)) {
+      fail("not", `not.const must be a value of the param's type, "${param.type}"`);
+    }
+  });
+
+/**
+ * `contributes.databases[].queries` entry — one parameterised statement the
+ * host serves to agents as a tool named `name`, with no plugin code. Whether
+ * the host can serve it safely is decided here, from the SQL as written,
+ * because the database need not exist yet: one statement, of the kind its
+ * `mode` names, and placeholders that match `params` exactly. Each failure
+ * names the query.
+ */
+export const DatabaseQueryContributionSchema = z
+  .object({
+    name: z.string().regex(AGENT_MCP_TOOL_NAME_PATTERN, {
+      message:
+        "query name must be 1-32 lowercase letters, digits and underscores, starting with a letter",
+    }),
+    mode: z.enum(["read", "write"]),
+    description: z
+      .string()
+      .min(1)
+      .refine((value) => value.trim().length > 0, { message: "description must not be blank" })
+      .refine((value) => utf8Length(value) <= AGENT_MCP_MAX_DESCRIPTION_BYTES, {
+        message: `description must be at most ${AGENT_MCP_MAX_DESCRIPTION_BYTES} UTF-8 bytes`,
+      }),
+    params: z
+      .record(
+        z.string().regex(/^[A-Za-z_][A-Za-z0-9_]{0,63}$/, {
+          message:
+            "param names must be 1-64 letters, digits and underscores, not starting with a digit",
+        }),
+        DatabaseQueryParamSchema
+      )
+      .refine((params) => Object.keys(params).length <= DATABASE_QUERY_MAX_PARAMS, {
+        message: `a query may take at most ${DATABASE_QUERY_MAX_PARAMS} params`,
+      })
+      .default({}),
+    sql: z
+      .string()
+      .min(1)
+      .max(65536)
+      .refine((value) => !value.includes("\0"), { message: "sql must not contain NUL" }),
+  })
+  .strict()
+  .superRefine((query, ctx) => {
+    for (const problem of declaredQueryProblems(query)) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: [problem.field],
+        message: problem.message,
+        params: { errorCode: "database_query_unservable" },
+      });
+    }
+  });
+
 /**
  * `contributes.databases` manifest entry — a SQLite file the plugin opens
  * through `host.db`. The declaration is what names the file, discloses it, and
@@ -437,6 +595,10 @@ export const DatabaseContributionSchema = z
       })
       .optional(),
     journalMode: z.enum(["delete", "wal"]).default("delete"),
+    // Capped across all of the plugin's databases by the manifest check, which
+    // names the query past the limit; a per-entry cap would report first, and
+    // name none.
+    queries: z.array(DatabaseQueryContributionSchema).optional(),
   })
   .strict();
 
@@ -2045,6 +2207,20 @@ function buildPluginManifestSchema(origin: PluginOrigin) {
       // here — whether it is required, optional-but-rejected, or absent is a
       // function of the discovering `origin`, enforced in `superRefine`.
       scope: z.literal("project").optional(),
+      // Whether a window attached from another machine may use the plugin.
+      // Absent means supported: plugin main code runs on the host either way.
+      remote: z.enum(["supported", "unsupported"]).optional(),
+      // The operating systems the package has a build for. Absent means any:
+      // only a plugin shipping native modules for one OS needs to say so, and
+      // installing it on another machine is refused before anything is copied.
+      platforms: z
+        .array(z.enum(PLUGIN_PLATFORMS))
+        .min(1)
+        .max(PLUGIN_PLATFORMS.length)
+        .refine((list) => new Set(list).size === list.length, {
+          message: "platforms must not repeat an entry",
+        })
+        .optional(),
       capabilities: z.array(PluginCapabilitySchema).default([]),
       scopes: PluginManifestScopesSchema.optional(),
       activationEvents: z.array(z.literal("onStartupFinished")).default([]),
@@ -2280,6 +2456,44 @@ function buildPluginManifestSchema(origin: PluginOrigin) {
             params: { errorCode: "database_local_path_unsupported" },
           });
         }
+      });
+
+      // Every declared query is a tool on the plugin's one MCP server, beside
+      // the host's own database tools, so names are unique across all of the
+      // plugin's databases and the total stays inside the server's budget.
+      const queryOwners = new Map<string, string>();
+      let declaredQueries = 0;
+      manifest.contributes.databases.forEach((database, index) => {
+        (database.queries ?? []).forEach((query, queryIndex) => {
+          declaredQueries += 1;
+          const path = ["contributes", "databases", index, "queries", queryIndex, "name"];
+          const owner = queryOwners.get(query.name);
+          if (RESERVED_AGENT_MCP_TOOL_NAMES.has(query.name)) {
+            ctx.addIssue({
+              code: z.ZodIssueCode.custom,
+              path,
+              message: `query "${query.name}" takes the name of one of the host's database tools (${[...RESERVED_AGENT_MCP_TOOL_NAMES].join(", ")}), which share the plugin's MCP server`,
+              params: { errorCode: "database_query_name_reserved" },
+            });
+          } else if (owner !== undefined) {
+            ctx.addIssue({
+              code: z.ZodIssueCode.custom,
+              path,
+              message: `query "${query.name}" is declared twice (first on database "${owner}"); query names are tool names on one MCP server, so each must be unique across the plugin's databases`,
+              params: { errorCode: "database_query_name_duplicate" },
+            });
+          } else {
+            queryOwners.set(query.name, database.id);
+          }
+          if (declaredQueries === AGENT_MCP_MAX_TOOLS_PER_ENDPOINT + 1) {
+            ctx.addIssue({
+              code: z.ZodIssueCode.custom,
+              path,
+              message: `query "${query.name}" is past the limit: a plugin may declare at most ${AGENT_MCP_MAX_TOOLS_PER_ENDPOINT} database queries in all`,
+              params: { errorCode: "database_query_limit" },
+            });
+          }
+        });
       });
 
       // The inverse asymmetry: `contributes.surfaces` is available to project
@@ -2763,8 +2977,9 @@ function buildPluginManifestSchema(origin: PluginOrigin) {
       // resolves to the empty string, silently dropping the value. Agent
       // command/args also resolve `${settings:*}` at spawn (via
       // `resolveSettingTemplate` in terminal/lifecycle.ts), but are deliberately
-      // NOT validated here — that path tolerates an unset id at launch, so this
-      // parse-time check stays scoped to MCP contributions. The
+      // NOT validated here — that path throws `SettingTemplateError` for an
+      // unset or empty value at launch, so this parse-time check stays scoped
+      // to MCP contributions. The
       // scan matches any `${settings:...}` shape (broad inner pattern), then
       // classifies: a key outside the `${SAFE_ID_PATTERN}` grammar is malformed
       // (the supervisor's stricter regex would skip it, passing the literal

@@ -2,8 +2,8 @@
 // API-surface snapshot guard for `@daintreehq/plugin-sdk`.
 //
 // The package is the public type surface third-party plugins compile against,
-// exposed through its entry points — `.`, `./react`, `./files`, `./data` and
-// `./testing` (each `dist/<entry>.d.ts`), plus the hand-written `./plugin-ui` and `./view-globals` declarations. Nothing else in CI notices when a code change alters
+// exposed through its entry points — `.`, `./react`, `./files`, `./data`,
+// `./testing`, `./testing/preview` and `./testing/playwright` (each `dist/<entry>.d.ts`), plus the hand-written `./plugin-ui`, `./testing/plugin-ui` and `./view-globals` declarations. Nothing else in CI notices when a code change alters
 // that exported shape: only runtime contract tests are gated. This guard
 // snapshots the built declarations into git-tracked report files so any change
 // to the surface forces a reviewed, committed update.
@@ -55,6 +55,16 @@ const ENTRIES = [
     dist: path.join(root, "packages/plugin-sdk/dist/testing.d.ts"),
     snapshot: path.join(root, "packages/plugin-sdk/api-report/testing.d.ts"),
   },
+  {
+    name: "./testing/preview",
+    dist: path.join(root, "packages/plugin-sdk/dist/testing-preview.d.ts"),
+    snapshot: path.join(root, "packages/plugin-sdk/api-report/testing-preview.d.ts"),
+  },
+  {
+    name: "./testing/playwright",
+    dist: path.join(root, "packages/plugin-sdk/dist/testing-playwright.d.ts"),
+    snapshot: path.join(root, "packages/plugin-sdk/api-report/testing-playwright.d.ts"),
+  },
   // Hand-written rather than built: an ambient `declare module` for the
   // host-served `@daintreehq/plugin-ui`, which has no package of its own. It
   // ships as-is, so the source file is also the bytes consumers resolve.
@@ -62,6 +72,14 @@ const ENTRIES = [
     name: "./plugin-ui",
     dist: path.join(root, "packages/plugin-sdk/plugin-ui.d.ts"),
     snapshot: path.join(root, "packages/plugin-sdk/api-report/plugin-ui.d.ts"),
+  },
+  // Hand-written: the types of the kit's browser build, a re-export of the
+  // ambient `@daintreehq/plugin-ui` declaration above. The build itself fails
+  // when its runtime exports leave HOST_FACADE_REQUIRED_EXPORTS.
+  {
+    name: "./testing/plugin-ui",
+    dist: path.join(root, "packages/plugin-sdk/testing-plugin-ui.d.ts"),
+    snapshot: path.join(root, "packages/plugin-sdk/api-report/testing-plugin-ui.d.ts"),
   },
   // Hand-written for the same reason: the ambient `window.electron.plugin`
   // declaration for plugin views, shipped as-is.

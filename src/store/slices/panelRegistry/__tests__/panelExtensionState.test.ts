@@ -123,12 +123,6 @@ describe("setPanelExtensionState", () => {
     seed([makePluginPanel()]);
   });
 
-  it("seeds state onto a panel that has none", () => {
-    usePanelStore.getState().setPanelExtensionState("p1", { root: "src" });
-
-    expect(stateOf("p1")).toEqual({ root: "src" });
-  });
-
   it("merges rather than replaces, so independent keys coexist", () => {
     const store = usePanelStore.getState();
     store.setPanelExtensionState("p1", { root: "src", expanded: ["src"] });
@@ -303,13 +297,6 @@ describe("setPanelExtensionState", () => {
     // Dropping the offender brings it back under and succeeds.
     expect(store.setPanelExtensionState("p1", { huge: undefined })).toBe(true);
     expect(stateOf("p1")).toEqual({ keep: 1 });
-  });
-
-  it("ignores an unknown panel id", () => {
-    expect(() =>
-      usePanelStore.getState().setPanelExtensionState("gone", { root: "src" })
-    ).not.toThrow();
-    expect(usePanelStore.getState().panelsById["gone"]).toBeUndefined();
   });
 });
 

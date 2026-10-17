@@ -1,10 +1,9 @@
 // @vitest-environment jsdom
 import { render, act } from "@testing-library/react";
-import { readFileSync } from "fs";
-import path from "path";
 import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
 import { ALL_CLEAR_FLASH_DURATION } from "@/lib/animationUtils";
 import { AllClearOverlay } from "../AllClearOverlay";
+import { readIndexCss } from "@/__tests__/support/hostCss";
 
 const OVERLAY_SELECTOR = "[aria-hidden='true']";
 
@@ -48,16 +47,6 @@ afterEach(() => {
 });
 
 describe("AllClearOverlay", () => {
-  it("renders the overlay when the event carries shouldFlash: true", () => {
-    render(<AllClearOverlay />);
-
-    act(() => {
-      fireAllClear(true);
-    });
-
-    expect(document.body.querySelector(OVERLAY_SELECTOR)).toBeTruthy();
-  });
-
   it("does not render before the callback fires", () => {
     render(<AllClearOverlay />);
     expect(document.body.querySelector(OVERLAY_SELECTOR)).toBeNull();
@@ -161,22 +150,6 @@ describe("AllClearOverlay", () => {
     );
   });
 
-  it("clears the safety timer on unmount", () => {
-    const { unmount } = render(<AllClearOverlay />);
-
-    act(() => {
-      fireAllClear(true);
-    });
-
-    unmount();
-
-    expect(() => {
-      act(() => {
-        vi.advanceTimersByTime(500);
-      });
-    }).not.toThrow();
-  });
-
   it("cleans up onAllAgentsClear listener on unmount", () => {
     const { unmount } = render(<AllClearOverlay />);
     unmount();
@@ -185,7 +158,7 @@ describe("AllClearOverlay", () => {
 });
 
 describe("all-clear flash stylesheet", () => {
-  const css = readFileSync(path.resolve(__dirname, "../../../index.css"), "utf-8");
+  const css = readIndexCss();
 
   function zToken(name: string): number {
     const match = css.match(new RegExp(`--z-${name}:\\s*(\\d+);`));

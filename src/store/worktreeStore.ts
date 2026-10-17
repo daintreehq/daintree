@@ -17,6 +17,13 @@ import { PERF_MARKS } from "@shared/perf/marks";
 import { isRendererPerfCaptureEnabled, markRendererPerformance } from "@/utils/performance";
 import { getFleetArmedIds, getFleetLastArmedId } from "./storeAccessors";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
+import { pathComparisonKey } from "@shared/utils/path";
+import { isHostWindows } from "@/hooks/useHostPlatform";
+import {
+  getHostOwnedStateEpoch,
+  sendHostOwnedWrite,
+  supersedeDeferredHostOwnedWrite,
+} from "@/store/persistence/hostOwnedWrites";
 
 interface CreateDialogState {
   isOpen: boolean;
@@ -42,6 +49,28 @@ export interface PendingCreation extends PendingCreationDraft {
   startedAt: number;
   status: "creating" | "error";
   error?: string;
+}
+
+/**
+ * The key of the pending creation for `path`, however the two are spelled. The
+ * dialog keys a row by the path the user typed, while the host's worktree id is
+ * the realpath: on Windows a typed `c:/dev/app-worktrees/x` comes back as
+ * `C:\Dev\app-worktrees\x`, backslashed and in the on-disk case.
+ */
+function findPendingCreationKey(
+  pending: Map<string, PendingCreation>,
+  path: string
+): string | undefined {
+  if (pending.has(path)) return path;
+  // Off Windows the host reports the spelling the dialog keyed, so an exact
+  // match is the whole rule.
+  if (pending.size === 0 || !isHostWindows()) return undefined;
+  const options = { caseInsensitive: true };
+  const target = pathComparisonKey(path, options);
+  for (const key of pending.keys()) {
+    if (pathComparisonKey(key, options) === target) return key;
+  }
+  return undefined;
 }
 
 /**
@@ -393,6 +422,10 @@ let lastPersistedActiveWorktreeId: string | null | undefined;
 let pendingPersistActiveWorktreeId: string | null | undefined;
 let persistRequestVersion = 0;
 
+/** The host-state epoch each "last persisted" value was acknowledged in; stale once it moves. */
+let lastPersistedActiveWorktreeEpoch = 0;
+let lastPersistedMruEpoch = 0;
+
 let lastPersistedMruList: string[] | undefined;
 let pendingPersistMruList: string[] | undefined;
 let mruPersistVersion = 0;
@@ -415,8 +448,17 @@ function mruListsEqual(a: string[] | undefined, b: string[]): boolean {
   return true;
 }
 
+const MRU_WRITE_KEY = "app-state:mruList";
+const ACTIVE_WORKTREE_WRITE_KEY = "app-state:activeWorktreeId";
+
 export function persistMruList(list: string[]): void {
-  if (mruListsEqual(pendingPersistMruList ?? lastPersistedMruList, list)) {
+  const epoch = getHostOwnedStateEpoch();
+  const acknowledged = lastPersistedMruEpoch === epoch ? lastPersistedMruList : undefined;
+  // On its way already: that write stays the one to hold if the link loses it.
+  if (pendingPersistMruList !== undefined && mruListsEqual(pendingPersistMruList, list)) return;
+  if (pendingPersistMruList === undefined && mruListsEqual(acknowledged, list)) {
+    // The host has it: anything held from before is older.
+    supersedeDeferredHostOwnedWrite(MRU_WRITE_KEY);
     return;
   }
 
@@ -424,10 +466,19 @@ export function persistMruList(list: string[]): void {
   const requestVersion = ++mruPersistVersion;
 
   void loadClientsModule()
-    .then(({ appClient }) => appClient.setState({ mruList: list }))
-    .then(() => {
+    .then(({ appClient }) =>
+      sendHostOwnedWrite(
+        MRU_WRITE_KEY,
+        () => appClient.setState({ mruList: list }),
+        () => persistMruList(list)
+      )
+    )
+    .then((outcome) => {
       if (requestVersion === mruPersistVersion) {
-        lastPersistedMruList = list;
+        if (outcome === "sent") {
+          lastPersistedMruList = list;
+          lastPersistedMruEpoch = epoch;
+        }
         pendingPersistMruList = undefined;
       }
     })
@@ -496,7 +547,16 @@ function scheduleWorktreeSwitchPaintedMark(
 }
 
 function persistActiveWorktree(id: string | null): void {
-  if (id === lastPersistedActiveWorktreeId || id === pendingPersistActiveWorktreeId) {
+  const epoch = getHostOwnedStateEpoch();
+  // What the host was last known to hold, unless another screen may have
+  // driven the project since, or a different pick is still on its way there.
+  const acknowledged =
+    lastPersistedActiveWorktreeEpoch === epoch ? lastPersistedActiveWorktreeId : undefined;
+  // On its way already: that write stays the one to hold if the link loses it.
+  if (id === pendingPersistActiveWorktreeId) return;
+  if (pendingPersistActiveWorktreeId === undefined && id === acknowledged) {
+    // The host has it: anything held from before is older.
+    supersedeDeferredHostOwnedWrite(ACTIVE_WORKTREE_WRITE_KEY);
     return;
   }
 
@@ -506,10 +566,17 @@ function persistActiveWorktree(id: string | null): void {
   const payload = { activeWorktreeId: id ?? undefined };
 
   void loadClientsModule()
-    .then(({ appClient }) => appClient.setState(payload))
-    .then(() => {
-      if (requestVersion === persistRequestVersion) {
+    .then(({ appClient }) =>
+      sendHostOwnedWrite(
+        ACTIVE_WORKTREE_WRITE_KEY,
+        () => appClient.setState(payload),
+        () => persistActiveWorktree(id)
+      )
+    )
+    .then((outcome) => {
+      if (requestVersion === persistRequestVersion && outcome === "sent") {
         lastPersistedActiveWorktreeId = id;
+        lastPersistedActiveWorktreeEpoch = epoch;
       }
     })
     .catch((error) => {
@@ -578,7 +645,7 @@ function captureMaximizeSnapshot(panels: PanelMaximizeFields): WorktreeMaximizeS
  * `ContentGrid`'s maximize branch either, and a panel that has since moved to
  * another worktree is no longer ours to show.
  */
-function resolveMaximizeForWorktree(
+export function resolveMaximizeForWorktree(
   snapshot: WorktreeMaximizeSnapshot,
   worktreeId: string,
   panels: PanelMaximizeLookup
@@ -945,9 +1012,12 @@ const createWorktreeSelectionStore: StateCreator<WorktreeSelectionState> = (set,
     set((state) => {
       // Idempotent for in-flight creations (StrictMode-safe). An error entry is
       // replaced so a retry resubmission resets status to "creating".
-      const existing = state.pendingCreations.get(path);
+      const existingKey = findPendingCreationKey(state.pendingCreations, path);
+      const existing =
+        existingKey === undefined ? undefined : state.pendingCreations.get(existingKey);
       if (existing && existing.status === "creating") return state;
       const next = new Map(state.pendingCreations);
+      if (existingKey !== undefined && existingKey !== path) next.delete(existingKey);
       next.set(path, {
         ...meta,
         path,
@@ -960,28 +1030,31 @@ const createWorktreeSelectionStore: StateCreator<WorktreeSelectionState> = (set,
 
   resolvePendingCreation: (path) => {
     set((state) => {
-      if (!state.pendingCreations.has(path)) return state;
+      const key = findPendingCreationKey(state.pendingCreations, path);
+      if (key === undefined) return state;
       const next = new Map(state.pendingCreations);
-      next.delete(path);
+      next.delete(key);
       return { pendingCreations: next };
     });
   },
 
   failPendingCreation: (path, error) => {
     set((state) => {
-      const existing = state.pendingCreations.get(path);
-      if (!existing) return state;
+      const key = findPendingCreationKey(state.pendingCreations, path);
+      const existing = key === undefined ? undefined : state.pendingCreations.get(key);
+      if (key === undefined || !existing) return state;
       const next = new Map(state.pendingCreations);
-      next.set(path, { ...existing, status: "error", error });
+      next.set(key, { ...existing, status: "error", error });
       return { pendingCreations: next };
     });
   },
 
   dismissPendingCreation: (path) => {
     set((state) => {
-      if (!state.pendingCreations.has(path)) return state;
+      const key = findPendingCreationKey(state.pendingCreations, path);
+      if (key === undefined) return state;
       const next = new Map(state.pendingCreations);
-      next.delete(path);
+      next.delete(key);
       return { pendingCreations: next };
     });
   },

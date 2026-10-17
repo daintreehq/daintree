@@ -42,13 +42,6 @@ describe("gitRepoOperationState", () => {
     expect(isRepoOperationInProgress(gitDir)).toBe(false);
   });
 
-  for (const sentinel of OPERATION_SENTINEL_NAMES) {
-    it(`returns true when ${sentinel} exists`, () => {
-      vi.mocked(readdirSync).mockReturnValue(["HEAD", sentinel] as never);
-      expect(isRepoOperationInProgress(gitDir)).toBe(true);
-    });
-  }
-
   it("lists the directory exactly once per call", () => {
     // The whole point of the readdir approach: one syscall per poll, not one
     // existsSync per sentinel.

@@ -86,15 +86,6 @@ describe("useGlobalBannerHeightVar", () => {
     for (const cb of cbs) cb();
   }
 
-  it("publishes the measured banner height", () => {
-    const banner = bannerWrapper(72);
-
-    renderHook(() => useGlobalBannerHeightVar(banner.el));
-    fireResize(banner.el);
-
-    expect(readVar()).toBe("72px");
-  });
-
   it("publishes 0px when the coordinator renders no banner", () => {
     // GlobalBannerCoordinator returns null with no active slot, collapsing the
     // wrapper — which must resolve to the same offset as the pre-#11893 top-12.

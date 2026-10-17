@@ -1,8 +1,11 @@
 import fs from "fs";
 import path from "path";
 import os from "os";
-import { shell } from "electron";
+import { openWithDefaultApp } from "../utils/openPath.js";
+import { linuxDesktopAppEnv } from "./pty/EnvironmentFilter.js";
 import type { EditorConfig, DiscoveredEditor, KnownEditorId } from "../../shared/types/editor.js";
+import { withPathProbeSlot } from "../utils/findOnPath.js";
+import { findWindowsPathFile, windowsEnvValue } from "../utils/windowsExecutable.js";
 
 interface EditorDefinition {
   id: KnownEditorId;
@@ -269,29 +272,14 @@ function jetbrainsToolboxScriptDirs(): string[] {
 }
 
 function binaryCandidates(binary: string, extraDirs: string[]): string[] {
-  const p = process.platform === "win32" ? path.win32 : path.posix;
-  const pathDirs = (process.env.PATH ?? "").split(p.delimiter).filter(Boolean);
-  const searchDirs = [...extraDirs, ...pathDirs];
-
-  const extensions =
-    process.platform === "win32"
-      ? (process.env.PATHEXT ?? ".EXE;.CMD;.BAT").split(";").map((e) => e.toLowerCase())
-      : [""];
-
-  const candidates: string[] = [];
-  for (const dir of searchDirs) {
-    for (const ext of extensions) {
-      candidates.push(p.join(dir, binary + ext));
-    }
-  }
-  return candidates;
+  const pathDirs = (process.env.PATH ?? "").split(path.posix.delimiter).filter(Boolean);
+  return [...extraDirs, ...pathDirs].map((dir) => path.posix.join(dir, binary));
 }
 
 async function isExecutableFile(fullPath: string): Promise<boolean> {
   try {
     const stat = await fs.promises.stat(fullPath);
     if (!stat.isFile()) return false;
-    if (process.platform === "win32") return true;
     await fs.promises.access(fullPath, fs.constants.X_OK);
     return true;
   } catch {
@@ -299,44 +287,73 @@ async function isExecutableFile(fullPath: string): Promise<boolean> {
   }
 }
 
-function resolveEditorDef(id: KnownEditorId): EditorDefinition | undefined {
-  return KNOWN_EDITORS.find((e) => e.id === id);
+/**
+ * The Windows PATH search, with `extraDirs` ahead of PATH. It shares its slots
+ * and per-directory deadline with every other Windows lookup, so a PATH entry
+ * on a dropped network share is searched past rather than waited on. Only
+ * absolute directories count, so the working directory is never searched.
+ */
+function findWindowsEditor(binary: string, extraDirs: string[] = []): Promise<string | null> {
+  const searchPath = [
+    ...extraDirs.map((dir) => (dir.includes(";") ? `"${dir}"` : dir)),
+    windowsEnvValue(process.env, "PATH") ?? "",
+  ]
+    .filter(Boolean)
+    .join(";");
+  // A name that already has an extension (`notepad++.exe`) is tried as given
+  // first, then each PATHEXT extension: execa starts what cmd.exe can, which
+  // includes a `.vbs` wrapper run by its file association.
+  const extensions = (windowsEnvValue(process.env, "PATHEXT") ?? ".EXE;.CMD;.BAT")
+    .split(";")
+    .filter(Boolean)
+    .map((extension) => extension.toLowerCase());
+  const candidates = [
+    ...(path.win32.extname(binary) ? [binary] : []),
+    ...extensions.map((extension) => binary + extension),
+  ];
+  return findWindowsPathFile(candidates, { PATH: searchPath });
 }
 
-// Probes share libuv's four-thread fs pool with the rest of the main process,
-// so a PATH entry on a hung mount must not be able to occupy all of it.
-const MAX_CONCURRENT_PROBES = 2;
-let activeProbes = 0;
-const probeQueue: Array<() => void> = [];
-
-function withProbeSlot<T>(task: () => Promise<T>): Promise<T> {
-  return new Promise<T>((resolve, reject) => {
-    const run = () => {
-      activeProbes++;
-      new Promise<T>((settle) => settle(task())).then(resolve, reject).finally(() => {
-        activeProbes--;
-        probeQueue.shift()?.();
-      });
-    };
-    if (activeProbes < MAX_CONCURRENT_PROBES) run();
-    else probeQueue.push(run);
-  });
+function resolveEditorDef(id: KnownEditorId): EditorDefinition | undefined {
+  return KNOWN_EDITORS.find((e) => e.id === id);
 }
 
 /**
  * The same walk as a synchronous PATH lookup — binaries first, then extra
  * dirs, then PATH, one candidate at a time — so it touches exactly the paths
  * and picks exactly the file a sequential search would. Only the waiting moves
- * off the main thread; separate editors walk concurrently under the slot cap.
+ * off the main thread; separate editors walk concurrently under the slot cap,
+ * which is shared with every POSIX PATH lookup (`findOnPath`) so that together
+ * they can never hold more of libuv's fs pool than the cap allows. Windows
+ * goes through its own PATH search, in PATHEXT order within each directory.
  */
 async function findExecutable(def: EditorDefinition): Promise<string | null> {
   const extraDirs = def.extraDirs ? def.extraDirs() : [];
+  if (process.platform === "win32") {
+    for (const binary of def.binaries) {
+      const found = await findWindowsEditor(binary, extraDirs);
+      if (found) return found;
+    }
+    return null;
+  }
   for (const binary of def.binaries) {
     for (const candidate of binaryCandidates(binary, extraDirs)) {
-      if (await withProbeSlot(() => isExecutableFile(candidate))) return candidate;
+      if (await withPathProbeSlot(() => isExecutableFile(candidate))) return candidate;
     }
   }
   return null;
+}
+
+/**
+ * The program to launch for an editor command the user configured (a custom
+ * command, `$VISUAL`, `$EDITOR`). On Windows a bare name is looked up in PATH
+ * first, because execa, like process creation, would otherwise look in the
+ * working directory before PATH; null when PATH has none, which the caller
+ * treats as a failed launch. A path, and every name off Windows, passes through.
+ */
+async function launchProgram(binary: string): Promise<string | null> {
+  if (process.platform !== "win32" || /[\\/:]/.test(binary)) return binary;
+  return findWindowsEditor(binary);
 }
 
 export async function discover(): Promise<DiscoveredEditor[]> {
@@ -455,11 +472,15 @@ export async function openFile(
   const { execa } = await import("execa");
 
   const launchEditor = async (binary: string, args: string[]): Promise<boolean> => {
+    const program = await launchProgram(binary);
+    if (program === null) return false;
     try {
-      const child = execa(binary, args, {
+      const desktopEnv = linuxDesktopAppEnv();
+      const child = execa(program, args, {
         detached: true,
         stdio: "ignore",
         cleanup: false,
+        ...(desktopEnv ? { env: desktopEnv, extendEnv: false } : {}),
       });
       child.nodeChildProcess.unref();
       // Suppress unhandled async rejection from the detached process
@@ -545,7 +566,7 @@ export async function openFile(
   // 5. shell.openPath as last resort — the OS default handler, which for a
   // directory means the file manager. Reaching it is the failure the worktree
   // action used to start from, so it stays strictly last.
-  const errorString = await shell.openPath(filePath);
+  const errorString = await openWithDefaultApp(filePath);
   if (errorString) {
     throw new Error(`Failed to open file: ${errorString}`);
   }

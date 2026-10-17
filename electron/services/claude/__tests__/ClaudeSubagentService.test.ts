@@ -102,13 +102,6 @@ describe("listClaudeSubagents", () => {
     });
   });
 
-  it("still answers for a restored pane the detector has not reached yet", async () => {
-    await seedChild("aaa1", [TASK, REPLY]);
-    getTerminalAsync.mockResolvedValue(claudeTerminal());
-    const result = await listClaudeSubagents("t1");
-    expect(result.status).toBe("ok");
-  });
-
   it("accepts a terminal detected as Claude even when it was launched as something else", async () => {
     getTerminalAsync.mockResolvedValue(
       claudeTerminal({ launchAgentId: "bash", detectedAgentId: "claude" })

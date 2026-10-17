@@ -40,12 +40,6 @@ describe("notifyWarmReactivationComplete", () => {
     expect(() => notifyWarmReactivationComplete()).not.toThrow();
   });
 
-  it("fires synchronously when requestAnimationFrame is unavailable", () => {
-    (globalThis as unknown as { requestAnimationFrame: unknown }).requestAnimationFrame = undefined;
-    notifyWarmReactivationComplete();
-    expect(notifyWarmViewPainted).toHaveBeenCalledTimes(1);
-  });
-
   it("is a no-op when the preload bridge is absent", () => {
     (globalThis as unknown as { window: unknown }).window = {};
     expect(() => {

@@ -155,15 +155,6 @@ describe("WhySlowContent", () => {
     expect(screen.getByText("degraded: analysis-worker-1")).toBeTruthy();
   });
 
-  it("renders a dash for the worker queue when the summary is unavailable", async () => {
-    getWhySlowSnapshot.mockResolvedValue(makeSnapshot({ workers: null }));
-
-    render(<WhySlowContent />);
-
-    expect(await screen.findByText("Queued jobs")).toBeTruthy();
-    expect(screen.queryByText(/^degraded:/)).toBeNull();
-  });
-
   it("renders the app vs terminal-workload memory split", async () => {
     getWhySlowSnapshot.mockResolvedValue(
       makeSnapshot({

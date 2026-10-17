@@ -21,7 +21,7 @@
  * the supervisor stands down — the pty-hosts' own teardown handles those trees.
  *
  * This is the one cleanup tier that survives a hard crash; cooperative paths
- * (`taskkill /T`, graceful kill, renderer teardown) only run when the main
+ * (the verified tree kill, graceful kill, renderer teardown) only run when the main
  * process is still executing. On unsupported platforms / when the native
  * binary is missing, every path degrades to a no-op with a single warning.
  */

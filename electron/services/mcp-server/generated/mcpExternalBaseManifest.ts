@@ -230,7 +230,7 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
         },
         notify: {
           description:
-            "When this agent next stops, Daintree types its handback summary, else its screen, into your prompt; end your turn, don't poll. Agent panes and assistants only.",
+            "When this agent next stops, Daintree types its handback summary, else its screen, into your prompt; may be missed: poll too. Agent panes and assistants only.",
           type: "boolean",
         },
         replyLines: {
@@ -262,7 +262,7 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
         },
         model: {
           description:
-            "Model passed to the agent CLI for this launch, in its own names. No preset needed.",
+            "Omit for the CLI's default; set only when the user names a model. No preset needed.",
           type: "string",
         },
         presetId: {
@@ -359,12 +359,20 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
           anyOf: [
             {
               type: "string",
-              const: "missing-cli",
+              enum: [
+                "missing-cli",
+                "panel-limit",
+                "already-launching",
+                "spawn-failed",
+                "unavailable",
+              ],
             },
             {
               type: "null",
             },
           ],
+          description:
+            "Null on a launch, else why not: panel-limit (see panelLimit), already-launching (retry), missing-cli (setup panel opened).",
         },
         worktreeId: {
           type: ["string", "null"],
@@ -380,6 +388,36 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
         },
         cwdOutsideWorktree: {
           type: ["boolean", "null"],
+        },
+        panelLimit: {
+          anyOf: [
+            {
+              type: "object",
+              properties: {
+                count: {
+                  type: "number",
+                },
+                softWarningLimit: {
+                  type: "number",
+                },
+                confirmationLimit: {
+                  type: "number",
+                },
+                hardLimit: {
+                  type: "number",
+                },
+                tier: {
+                  type: "string",
+                  enum: ["ok", "soft", "confirm", "hard"],
+                },
+              },
+              required: ["count", "softWarningLimit", "confirmationLimit", "hardLimit", "tier"],
+              additionalProperties: false,
+            },
+            {
+              type: "null",
+            },
+          ],
         },
         reply: {
           anyOf: [
@@ -440,6 +478,7 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
         "branch",
         "cwd",
         "cwdOutsideWorktree",
+        "panelLimit",
         "reply",
       ],
       additionalProperties: false,
@@ -1876,8 +1915,31 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
             additionalProperties: false,
           },
         },
+        panelLimit: {
+          type: "object",
+          properties: {
+            count: {
+              type: "number",
+            },
+            softWarningLimit: {
+              type: "number",
+            },
+            confirmationLimit: {
+              type: "number",
+            },
+            hardLimit: {
+              type: "number",
+            },
+            tier: {
+              type: "string",
+              enum: ["ok", "soft", "confirm", "hard"],
+            },
+          },
+          required: ["count", "softWarningLimit", "confirmationLimit", "hardLimit", "tier"],
+          additionalProperties: false,
+        },
       },
-      required: ["terminals"],
+      required: ["terminals", "panelLimit"],
       additionalProperties: false,
     },
     requiresArgs: false,
@@ -2170,7 +2232,7 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
         },
         notify: {
           description:
-            "When this agent next stops, Daintree types its handback summary, else its screen, into your prompt; end your turn, don't poll. Agent panes and assistants only.",
+            "When this agent next stops, Daintree types its handback summary, else its screen, into your prompt; may be missed: poll too. Agent panes and assistants only.",
           type: "boolean",
         },
         replyLines: {

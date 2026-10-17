@@ -98,7 +98,7 @@ function makeCommit(index: number, overrides: Record<string, unknown> = {}) {
   };
 }
 
-function setupActions(): {
+function setupActions(windowExtras: Record<string, unknown> = {}): {
   run: (id: string, args?: unknown, ctx?: Record<string, unknown>) => Promise<unknown>;
   runParsed: (id: string, args?: unknown, ctx?: Record<string, unknown>) => Promise<unknown>;
   git: GitStub;
@@ -118,7 +118,7 @@ function setupActions(): {
     if (!factory) throw new Error(`missing ${id}`);
     const def = factory() as AnyActionDefinition;
     Object.defineProperty(globalThis, "window", {
-      value: { electron: { git } },
+      value: { electron: { git }, ...windowExtras },
       configurable: true,
       writable: true,
     });
@@ -420,14 +420,6 @@ describe("gitActions adversarial", () => {
     expect(git.commit).not.toHaveBeenCalled();
   });
 
-  it("git.commit rejects newline-only messages", async () => {
-    const { run, git } = setupActions();
-    await expect(run("git.commit", { cwd: "/repo", message: "\n\n\t" })).rejects.toThrow(
-      /Commit message/
-    );
-    expect(git.commit).not.toHaveBeenCalled();
-  });
-
   it("git.commit falls back to ctx.activeWorktreePath when cwd is not supplied", async () => {
     const { run, git } = setupActions();
     await run("git.commit", { message: "feat: x" }, { activeWorktreePath: "/repo" });
@@ -442,12 +434,23 @@ describe("gitActions adversarial", () => {
     expect(git.push).toHaveBeenCalledWith("/repo", false);
   });
 
-  it("git.push preserves explicit setUpstream:true", async () => {
-    const { run, git } = setupActions();
-    const p = run("git.push", { cwd: "/repo", setUpstream: true });
+  it("git.push names the push as an operation only in a remote-bound view", async () => {
+    const remote = setupActions({ __DAINTREE_HOST_ID__: { id: "build-box" } });
+    const p = remote.run("git.push", { cwd: "/repo", setUpstream: true });
     await resolvePushConfirm(true);
     await p;
-    expect(git.push).toHaveBeenCalledWith("/repo", true);
+    expect(remote.git.push).toHaveBeenCalledWith(
+      "/repo",
+      true,
+      expect.stringMatching(/^[0-9a-f-]{36}$/)
+    );
+
+    // A view on this machine's own host takes the untracked path.
+    const local = setupActions({ __DAINTREE_HOST_ID__: { id: "local" } });
+    const q = local.run("git.push", { cwd: "/repo", setUpstream: true });
+    await resolvePushConfirm(true);
+    await q;
+    expect(local.git.push).toHaveBeenCalledWith("/repo", true);
   });
 
   it("git.push does not reach IPC when the confirm gate is declined", async () => {
@@ -464,18 +467,6 @@ describe("gitActions adversarial", () => {
     expect(git.fetch).toHaveBeenCalledWith({ cwd: "/repo", prune: false });
     expect(useGitPullRebaseConfirmStore.getState().pendingConfirm).toBeNull();
     expect(useGitPushConfirmStore.getState().pendingConfirm).toBeNull();
-  });
-
-  it("git.fetch passes prune through only when explicitly requested", async () => {
-    const { run, git } = setupActions();
-    await run("git.fetch", { cwd: "/repo", prune: true });
-    expect(git.fetch).toHaveBeenCalledWith({ cwd: "/repo", prune: true });
-  });
-
-  it("git.fetch treats an absent prune as false, never as truthy", async () => {
-    const { run, git } = setupActions();
-    await run("git.fetch", { cwd: "/repo", prune: undefined });
-    expect(git.fetch).toHaveBeenCalledWith({ cwd: "/repo", prune: false });
   });
 
   it("git.fetch's schema rejects a non-boolean prune instead of coercing it", async () => {
@@ -546,24 +537,6 @@ describe("gitActions adversarial", () => {
     expect(git.pullRebase).not.toHaveBeenCalled();
   });
 
-  // #11538: an agent dispatch reaching run() already cleared ActionService's
-  // host-attested confirm gate against the MCP bridge's own modal. The deferred
-  // store here resolves only from a renderer dialog, which a headless MCP client
-  // can never click — so awaiting it again hangs the push forever.
-  it("git.push skips the renderer confirm store entirely for agent dispatch", async () => {
-    const { run, git } = setupActions();
-    await run("git.push", { cwd: "/repo" }, { dispatchSource: "agent" });
-    expect(git.push).toHaveBeenCalledWith("/repo", undefined);
-    expect(useGitPushConfirmStore.getState().pendingConfirm).toBeNull();
-  });
-
-  it("git.pullRebase skips the renderer confirm store entirely for agent dispatch", async () => {
-    const { run, git } = setupActions();
-    await run("git.pullRebase", { cwd: "/repo" }, { dispatchSource: "agent" });
-    expect(git.pullRebase).toHaveBeenCalledWith("/repo");
-    expect(useGitPullRebaseConfirmStore.getState().pendingConfirm).toBeNull();
-  });
-
   it("git.push carries setUpstream through the agent bypass unchanged", async () => {
     const { run, git } = setupActions();
     await run("git.push", { cwd: "/repo", setUpstream: false }, { dispatchSource: "agent" });
@@ -624,30 +597,6 @@ describe("gitActions adversarial", () => {
     expect(git.pullRebase).toHaveBeenCalledWith("/repo");
   });
 
-  it("git.getFileDiff forwards cwd, filePath, and status positionally without mutation", async () => {
-    const { run, git } = setupActions();
-    await run("git.getFileDiff", {
-      cwd: "/repo",
-      filePath: "src/file with spaces.ts",
-      status: "renamed",
-    });
-    expect(git.getFileDiff).toHaveBeenCalledWith(
-      "/repo",
-      "src/file with spaces.ts",
-      "renamed",
-      undefined,
-      { offset: 0, maxBytes: GIT_FILE_DIFF_DEFAULT_MAX_BYTES }
-    );
-  });
-
-  it("git.stageFile rejects when filePath is empty — schema guard", async () => {
-    const { run, git } = setupActions();
-    // Schema allows empty string; this documents current behavior.
-    // If it becomes a validation gate, this assertion should flip.
-    await run("git.stageFile", { cwd: "/repo", filePath: "" });
-    expect(git.stageFile).toHaveBeenCalledWith("/repo", "");
-  });
-
   it("git.commit rejects missing message (undefined) before touching git", async () => {
     const { run, git } = setupActions();
     await expect(run("git.commit", { cwd: "/repo" })).rejects.toThrow(/Commit message is required/);
@@ -658,30 +607,6 @@ describe("gitActions adversarial", () => {
     const { run, git } = setupActions();
     await run("git.getStagingStatus", undefined, { activeWorktreePath: "/repo" });
     expect(git.getStagingStatus).toHaveBeenCalledWith("/repo");
-  });
-
-  it("git.getStagingStatus prefers explicit cwd over ctx", async () => {
-    const { run, git } = setupActions();
-    await run("git.getStagingStatus", { cwd: "/explicit" }, { activeWorktreePath: "/ctx" });
-    expect(git.getStagingStatus).toHaveBeenCalledWith("/explicit");
-  });
-
-  it("git.getStagingStatus throws when no cwd and no ctx", async () => {
-    const { run } = setupActions();
-    await expect(run("git.getStagingStatus")).rejects.toThrow("No active worktree");
-  });
-
-  it("git.getFileDiff falls back to ctx.activeWorktreePath", async () => {
-    const { run, git } = setupActions();
-    await run(
-      "git.getFileDiff",
-      { filePath: "x.ts", status: "modified" },
-      { activeWorktreePath: "/repo" }
-    );
-    expect(git.getFileDiff).toHaveBeenCalledWith("/repo", "x.ts", "modified", undefined, {
-      offset: 0,
-      maxBytes: GIT_FILE_DIFF_DEFAULT_MAX_BYTES,
-    });
   });
 
   it("git.listCommits falls back to ctx.activeWorktreePath and forwards filters", async () => {

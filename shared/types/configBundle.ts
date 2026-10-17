@@ -4,8 +4,9 @@ import { z } from "zod";
  * Portable configuration bundle (#11889).
  *
  * A single versioned JSON file carrying the configuration worth moving to a
- * second machine: custom agents, per-agent flags, keybinding overrides, theme,
- * notification preferences, the worktree path pattern, and global recipes.
+ * second machine: custom agents, per-agent flags, the default and assistant
+ * agents, keybinding overrides, theme, notification preferences, the worktree
+ * path pattern, and global recipes.
  *
  * Deliberately NOT a dump of `StoreSchema`. Machine-local runtime state (window
  * geometry, open panels, active worktree, install records, audit history) and
@@ -28,14 +29,28 @@ export const CONFIG_BUNDLE_SCHEMA_VERSION = 1;
  */
 export const CONFIG_BUNDLE_MAX_BYTES = 2 * 1024 * 1024;
 
+/**
+ * Every section, in apply order: custom agents before the settings that name
+ * them, agent presets before the bypass overrides layered on them.
+ */
 export const CONFIG_BUNDLE_SECTION_IDS = [
   "userAgentRegistry",
   "agentSettings",
+  "agentDefaults",
+  "permissionBypass",
+  "assistantModels",
   "keybindingOverrides",
   "appTheme",
   "notificationSettings",
   "worktreeConfig",
   "globalRecipes",
+  "hibernation",
+  "sessionRestore",
+  "idleTerminalNotify",
+  "idleBackgroundAutoClose",
+  "agentUpdateChecks",
+  "pluginUpdateChecks",
+  "globalEnvironment",
 ] as const;
 
 export type ConfigBundleSectionId = (typeof CONFIG_BUNDLE_SECTION_IDS)[number];
@@ -43,11 +58,21 @@ export type ConfigBundleSectionId = (typeof CONFIG_BUNDLE_SECTION_IDS)[number];
 export const CONFIG_BUNDLE_SECTION_LABELS: Record<ConfigBundleSectionId, string> = {
   userAgentRegistry: "Custom agents",
   agentSettings: "Agent settings",
+  agentDefaults: "Default agents",
   keybindingOverrides: "Keyboard shortcuts",
   appTheme: "Theme",
   notificationSettings: "Notifications",
   worktreeConfig: "Worktree path pattern",
   globalRecipes: "Global recipes",
+  permissionBypass: "Permission bypass",
+  assistantModels: "Assistant models",
+  hibernation: "Project hibernation",
+  sessionRestore: "Session restore",
+  idleTerminalNotify: "Idle terminal alerts",
+  idleBackgroundAutoClose: "Idle background terminals",
+  agentUpdateChecks: "Agent update checks",
+  pluginUpdateChecks: "Plugin update checks",
+  globalEnvironment: "Global environment variables",
 };
 
 export function isConfigBundleSectionId(value: string): value is ConfigBundleSectionId {
@@ -137,6 +162,19 @@ export interface ConfigBundlePreviewChange {
    */
   from?: string;
   to?: string;
+  /**
+   * Something the person should know before applying it: a custom agent whose
+   * CLI isn't installed on the target, or a shortcut that reads differently on
+   * the target's platform.
+   */
+  note?: string;
+}
+
+/** A leaf the target can't use, named and explained before anything is written. */
+export interface ConfigBundlePreviewSkip {
+  key: string;
+  label: string;
+  reason: string;
 }
 
 export interface ConfigBundlePreviewSection {
@@ -149,6 +187,8 @@ export interface ConfigBundlePreviewSection {
   unchanged: number;
   /** Every added and replaced leaf, replacements first. */
   changes: ConfigBundlePreviewChange[];
+  /** Leaves the target would refuse, with why. Absent when there are none. */
+  skipped?: ConfigBundlePreviewSkip[];
 }
 
 /** `ready` carries a bundle to confirm; `rejected` carries the reason in `errors`. */

@@ -94,12 +94,17 @@ vi.mock("../../../services/ProjectSwitchStatusTiming.js", () => ({
   projectSwitchStatusTiming: statusTimingMock,
 }));
 
+const activateProjectOnHostMock = vi.hoisted(() =>
+  vi.fn(async (_workspace: unknown, _project: unknown, _residentId: number) => undefined)
+);
+
 vi.mock("../../../services/ProjectSwitchService.js", () => ({
   ProjectSwitchService: class MockProjectSwitchService {
     onSwitch = vi.fn();
     switchProject = vi.fn();
     reopenProject = vi.fn();
   },
+  activateProjectOnHost: activateProjectOnHostMock,
 }));
 
 vi.mock("../../../services/RunCommandDetector.js", () => ({
@@ -162,6 +167,7 @@ import {
   resetProjectHistory,
 } from "../../../services/ProjectHistoryService.js";
 import { distributePortsToView } from "../../../window/portDistribution.js";
+import { _resetRemoteServicesForTest, registerRemoteService } from "../../../remote/runtime.js";
 import { createProjectCrudRegistrar } from "./helpers/projectCrudLifecycle.js";
 import type { HandlerDependencies } from "../../types.js";
 import type {
@@ -258,6 +264,31 @@ describe("project switch/reopen refreshes the File-menu project gates (#11136)",
     await handler({ sender: { id: 10 } }, "proj-new");
 
     expect(refreshProjectMenuStateMock).toHaveBeenCalled();
+  });
+
+  it("supersedes a host switch still waiting in the window, for a switch and a reopen alike", async () => {
+    const supersedePendingSwitch = vi.fn();
+    registerRemoteService("windowHosts", { supersedePendingSwitch } as never);
+    try {
+      projectStoreMock.getProjectById.mockReturnValue({
+        id: "proj-new",
+        name: "New",
+        path: "/projects/new",
+        status: "background",
+      });
+      await handlerFor(CHANNELS.PROJECT_SWITCH, depsWith(makePvm()))(
+        { sender: { id: 10 } },
+        "proj-new"
+      );
+      await handlerFor(CHANNELS.PROJECT_REOPEN, depsWith(makePvm()))(
+        { sender: { id: 10 } },
+        "proj-new"
+      );
+
+      expect(supersedePendingSwitch.mock.calls).toEqual([[1], [1]]);
+    } finally {
+      _resetRemoteServicesForTest();
+    }
   });
 
   it("refreshes after a legacy (no-PVM) switch", async () => {
@@ -902,60 +933,6 @@ describe("project:switch activeWorktreeId pre-apply (#5000)", () => {
       unknown
     >;
     expect(savedState.activeWorktreeId).toBeUndefined();
-  });
-
-  it("persists activeWorktreeId from outgoingState on project reopen", async () => {
-    const mockView = {
-      webContents: { id: 200, isDestroyed: () => false, send: vi.fn() },
-    };
-
-    const pvm = {
-      switchTo: vi.fn().mockResolvedValue({ view: mockView, isNew: false }),
-    };
-
-    const fakeWindow2 = { id: 2, isDestroyed: () => false };
-    mockGetWindowForWebContents.mockReturnValue(fakeWindow2);
-
-    const ctx = makeWindowContext(2, 20, { projectViewManager: pvm as never });
-    const registry = makeWindowRegistry([ctx]);
-
-    projectStoreMock.getCurrentProjectId.mockReturnValue("proj-old");
-    projectStoreMock.getProjectById.mockReturnValue({
-      id: "proj-reopen",
-      name: "Reopen Project",
-      path: "/projects/reopen",
-      status: "background",
-    });
-    projectStoreMock.setCurrentProject.mockResolvedValue(undefined);
-    projectStoreMock.getProjectState.mockResolvedValue(null);
-    projectStoreMock.saveProjectState.mockResolvedValue(undefined);
-
-    const deps = {
-      mainWindow: { id: 1 } as unknown,
-      windowRegistry: registry,
-      projectViewManager: pvm,
-    } as unknown as HandlerDependencies;
-
-    registerProjectCrudHandlers(deps);
-
-    const handleMap = new Map<string, (...args: unknown[]) => unknown>();
-    for (const call of (ipcMain.handle as ReturnType<typeof vi.fn>).mock.calls) {
-      handleMap.set(call[0] as string, call[1] as (...args: unknown[]) => unknown);
-    }
-
-    const handler = handleMap.get(CHANNELS.PROJECT_REOPEN);
-    const fakeEvent = { sender: { id: 20 } };
-    const outgoingState = {
-      draftInputs: {},
-      activeWorktreeId: "wt-reopen",
-    };
-
-    await handler!(fakeEvent, "proj-reopen", outgoingState);
-
-    expect(projectStoreMock.saveProjectState).toHaveBeenCalledWith(
-      "proj-old",
-      expect.objectContaining({ activeWorktreeId: "wt-reopen" })
-    );
   });
 });
 
@@ -1670,29 +1647,6 @@ describe("project:switch concurrent worktree load", () => {
     expect(worktreeService.loadProject).not.toHaveBeenCalledWith("/projects/old", 7);
     expect(worktreeService.unregisterWindow).not.toHaveBeenCalled();
   });
-
-  it("does not surface a worktree load failure through a successful swap", async () => {
-    const sendMock = vi.fn();
-    const { invoke } = setup({
-      switchTo: async () => ({
-        view: { webContents: { id: 300, isDestroyed: () => false, send: sendMock } },
-        isNew: false,
-      }),
-      loadProject: async () => {
-        throw new Error("Not a git repository");
-      },
-    });
-
-    // Forward-fail (#8400): the load rejection — even though it now starts
-    // before the swap — must resolve the switch and surface as the targeted
-    // worktree-load-status, not reject the handler.
-    await invoke();
-
-    expect(sendMock).toHaveBeenCalledWith(CHANNELS.PROJECT_WORKTREE_LOAD_STATUS, {
-      projectId: "proj-new",
-      worktreeLoadError: "Not a git repository",
-    });
-  });
 });
 
 describe("project:switch status timing (#12461)", () => {
@@ -2063,19 +2017,6 @@ describe("project:switch PTY port ordering (#10075)", () => {
     // onProjectSwitch still fires regardless of new/warm.
     expect(ptyClient.onProjectSwitch).toHaveBeenCalledWith(7, "proj-new", "/projects/new");
   });
-
-  it("resumes the incoming project's workspace host on switch (#10743)", async () => {
-    const { invoke, worktreeService } = setup({
-      isNew: false,
-      loadProject: async () => undefined,
-    });
-
-    await invoke();
-
-    // Switching TO a project must foreground its host so a previously
-    // backgrounded project resumes full-rate polling for fresh state.
-    expect(worktreeService.resumeProject).toHaveBeenCalledWith("/projects/new");
-  });
 });
 
 describe("project:switch outgoing project is the sender's, not the global (#11101)", () => {
@@ -2409,7 +2350,8 @@ describe("project switch/reopen redirects to the window that owns the project (#
   }
 
   /** A manager whose views are `views` (project ids) and whose active one is `active`. */
-  function makeOwnerPvm(active: string | null, views: string[]) {
+  function makeOwnerPvm(active: string | null, initialViews: string[]) {
+    const views = [...initialViews];
     const webContentsByProject = new Map(
       views.map((projectId, i) => [projectId, makeViewWebContents(300 + i)])
     );
@@ -2431,6 +2373,12 @@ describe("project switch/reopen redirects to the window that owns the project (#
           : null
       ),
       webContentsFor: (projectId: string) => webContentsByProject.get(projectId)!,
+      releaseCachedView: vi.fn((projectId: string) => {
+        const index = views.indexOf(projectId);
+        if (index < 0 || projectId === active) return false;
+        views.splice(index, 1);
+        return true;
+      }),
     };
   }
 
@@ -2578,50 +2526,53 @@ describe("project switch/reopen redirects to the window that owns the project (#
       return { senderPvm, ownerPvm, ownerWindow, ownerAppWebContents, ...handlers };
     }
 
-    it("has the owning window's renderer switch to it, and reports it", async () => {
+    it("opens it here once that window lets its cached view go, and leaves that window alone (#13291)", async () => {
       const { senderPvm, ownerPvm, ownerWindow, ownerAppWebContents, switchHandler } =
         setupCached();
 
       const result = await switchHandler(SENDER_EVENT, TARGET.id, OUTGOING);
 
-      expect(result).toEqual({
-        outcome: "activated-elsewhere",
-        project: TARGET,
-        targetWindowId: 2,
-      });
-      // The owner's renderer runs the switch so it can save the layout it is
-      // leaving; main never swaps the owner's view behind its back.
-      expect(ownerAppWebContents.send).toHaveBeenCalledWith(CHANNELS.MENU_ACTION, {
-        actionId: "project.switch",
-        args: { projectId: TARGET.id },
-      });
+      expect(result).toEqual({ outcome: "switched", project: TARGET });
+      expect(ownerPvm.releaseCachedView).toHaveBeenCalledWith(TARGET.id);
+      expect(senderPvm.switchTo).toHaveBeenCalled();
+      // Nothing the other window shows changes, and it doesn't come forward.
+      expect(ownerAppWebContents.send).not.toHaveBeenCalled();
       expect(ownerPvm.switchTo).not.toHaveBeenCalled();
-      expect(ownerWindow.focus).toHaveBeenCalled();
-
-      expect(senderPvm.switchTo).not.toHaveBeenCalled();
-      expect(projectStoreMock.setCurrentProject).not.toHaveBeenCalled();
+      expect(ownerWindow.focus).not.toHaveBeenCalled();
     });
 
-    it("parks the focus intent on the owner's manager for the switch it triggers", async () => {
-      const { ownerPvm, switchHandler } = setupCached();
+    it("keeps the focus intent for this window's own switch", async () => {
+      const { senderPvm, ownerPvm, switchHandler } = setupCached();
       const focusIntent = { intent: "focus-next-waiting" };
 
       await switchHandler(SENDER_EVENT, TARGET.id, undefined, { focusIntent });
 
-      expect(ownerPvm.setPendingFocusIntent).toHaveBeenCalledWith(TARGET.id, focusIntent);
+      expect(senderPvm.setPendingFocusIntent).toHaveBeenCalledWith(TARGET.id, focusIntent);
+      expect(ownerPvm.setPendingFocusIntent).not.toHaveBeenCalled();
     });
 
-    it("redirects a reopen the same way", async () => {
-      const { senderPvm, ownerAppWebContents, reopenHandler } = setupCached();
+    it("fails, switching neither window, when that window can't let its cached view go", async () => {
+      const { senderPvm, ownerPvm, ownerWindow, ownerAppWebContents, switchHandler } =
+        setupCached();
+      ownerPvm.releaseCachedView.mockReturnValue(false);
+
+      await expect(switchHandler(SENDER_EVENT, TARGET.id, OUTGOING)).rejects.toMatchObject({
+        code: "PROJECT_OPEN_FAILED",
+      });
+      expect(senderPvm.switchTo).not.toHaveBeenCalled();
+      expect(ownerAppWebContents.send).not.toHaveBeenCalled();
+      expect(ownerWindow.focus).not.toHaveBeenCalled();
+    });
+
+    it("handles a reopen the same way", async () => {
+      const { senderPvm, ownerPvm, ownerAppWebContents, reopenHandler } = setupCached();
 
       const result = await reopenHandler(SENDER_EVENT, TARGET.id);
 
-      expect(result).toMatchObject({ outcome: "activated-elsewhere", targetWindowId: 2 });
-      expect(ownerAppWebContents.send).toHaveBeenCalledWith(
-        CHANNELS.MENU_ACTION,
-        expect.objectContaining({ actionId: "project.switch" })
-      );
-      expect(senderPvm.switchTo).not.toHaveBeenCalled();
+      expect(result).toEqual({ outcome: "switched", project: TARGET });
+      expect(ownerPvm.releaseCachedView).toHaveBeenCalledWith(TARGET.id);
+      expect(ownerAppWebContents.send).not.toHaveBeenCalled();
+      expect(senderPvm.switchTo).toHaveBeenCalled();
     });
   });
 
@@ -2838,4 +2789,229 @@ describe("project switch/reopen redirects to the window that owns the project (#
       expect(senderPvm.switchTo).toHaveBeenCalled();
     });
   });
+});
+
+describe("project switch/reopen from a view on a remote Shell", () => {
+  const OLD_ID = "b".repeat(64);
+  const PROJECT_ID = "c".repeat(64);
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    projectStoreMock.getProjectState.mockResolvedValue(null);
+    projectStoreMock.saveProjectState.mockResolvedValue(undefined);
+  });
+
+  async function invokeOverLink(channel: string, args: unknown[]) {
+    const { getIpcDispatcher, _resetIpcDispatcherForTesting } = await import("../../dispatcher.js");
+    const { wrapError, wrapSuccess } =
+      await import("../../../../shared/utils/ipcErrorSerialization.js");
+    _resetIpcDispatcherForTesting();
+    const dispatcher = getIpcDispatcher();
+    dispatcher.setInvokeEnveloper(async (_channel, _args, call) => {
+      try {
+        return wrapSuccess(await call());
+      } catch (error) {
+        return wrapError(error);
+      }
+    });
+    const release = dispatcher.allowHybridOverLink(channel);
+    const pvm = { switchTo: vi.fn(), getProjectIdForWebContents: vi.fn() };
+    const worktreeService = {
+      resumeProject: vi.fn(),
+      loadProject: vi.fn(),
+      unregisterWindow: vi.fn(),
+    };
+    const deps = {
+      projectViewManager: pvm,
+      worktreeService,
+    } as unknown as HandlerDependencies;
+    const cleanup = registerProjectCrudHandlers(deps);
+    const endpoint = {
+      endpointId: "s1:view-1",
+      clientId: "client-1",
+      projectId: OLD_ID,
+      kind: "remote-view" as const,
+      handle: -7,
+      send: vi.fn(),
+      request: vi.fn(),
+      onClose: vi.fn(() => ({ dispose: () => undefined })),
+      isClosed: () => false,
+    };
+    const envelope = await dispatcher.invokeForEndpoint(
+      { endpoint, client: { clientId: "client-1", kind: "remote" } as never },
+      channel,
+      args
+    );
+    release();
+    cleanup?.();
+    _resetIpcDispatcherForTesting();
+    return { envelope, pvm, worktreeService, endpoint };
+  }
+
+  it("saves the layout the view leaves and runs the shared Host activation for the view", async () => {
+    projectStoreMock.getProjectById.mockReturnValue({
+      id: PROJECT_ID,
+      name: "Remote",
+      path: "/home/greg/remote",
+    });
+
+    const { envelope, pvm, worktreeService, endpoint } = await invokeOverLink(
+      CHANNELS.PROJECT_SWITCH,
+      [PROJECT_ID, { activeWorktreeId: "wt-left" }]
+    );
+
+    expect(envelope).toMatchObject({ ok: true, data: { outcome: "switched" } });
+    expect(projectStoreMock.saveProjectState).toHaveBeenCalledWith(
+      OLD_ID,
+      expect.objectContaining({ projectId: OLD_ID, activeWorktreeId: "wt-left" })
+    );
+    expect(activateProjectOnHostMock).toHaveBeenCalledWith(
+      worktreeService,
+      expect.objectContaining({ id: PROJECT_ID, path: "/home/greg/remote" }),
+      -7
+    );
+    expect(endpoint.send).toHaveBeenCalledWith({
+      type: "event",
+      channel: CHANNELS.PROJECT_WORKTREE_LOAD_STATUS,
+      args: [{ projectId: PROJECT_ID, worktreeLoadError: null }],
+    });
+    expect(pvm.switchTo).not.toHaveBeenCalled();
+    expect(projectStoreMock.setCurrentProject).not.toHaveBeenCalled();
+  });
+
+  it("runs the same activation for a reopen", async () => {
+    projectStoreMock.getProjectById.mockReturnValue({
+      id: PROJECT_ID,
+      name: "Remote",
+      path: "/home/greg/remote",
+      status: "background",
+    });
+
+    const { envelope, worktreeService } = await invokeOverLink(CHANNELS.PROJECT_REOPEN, [
+      PROJECT_ID,
+    ]);
+
+    expect(envelope).toMatchObject({ ok: true, data: { outcome: "switched" } });
+    expect(activateProjectOnHostMock).toHaveBeenCalledWith(
+      worktreeService,
+      expect.objectContaining({ id: PROJECT_ID }),
+      -7
+    );
+    expect(projectStoreMock.setCurrentProject).not.toHaveBeenCalled();
+  });
+
+  it("forward-fails a workspace load to the view's recovery banner rather than refusing", async () => {
+    projectStoreMock.getProjectById.mockReturnValue({
+      id: PROJECT_ID,
+      name: "Remote",
+      path: "/home/greg/remote",
+    });
+    activateProjectOnHostMock.mockRejectedValueOnce(new Error("spawn failed"));
+
+    const { envelope, endpoint } = await invokeOverLink(CHANNELS.PROJECT_SWITCH, [PROJECT_ID]);
+
+    expect(envelope).toMatchObject({ ok: true, data: { outcome: "switched" } });
+    expect(endpoint.send).toHaveBeenCalledWith({
+      type: "event",
+      channel: CHANNELS.PROJECT_WORKTREE_LOAD_STATUS,
+      args: [{ projectId: PROJECT_ID, worktreeLoadError: expect.stringContaining("spawn failed") }],
+    });
+  });
+});
+
+describe("project:switch and project:reopen leave a driven project's saved state alone", () => {
+  let leaseModule: typeof import("../../../services/DriveLeaseService.js");
+  const isDriving = vi.fn<(projectId: string, endpoint: { clientId: string }) => boolean>();
+
+  beforeEach(async () => {
+    vi.clearAllMocks();
+    mockGetProjectForWebContents.mockReturnValue("proj-old");
+    mockGetWindowForWebContents.mockReturnValue(null);
+    projectStoreMock.getCurrentProjectId.mockReturnValue("proj-old");
+    projectStoreMock.setCurrentProject.mockResolvedValue(undefined);
+    projectStoreMock.getProjectState.mockResolvedValue({
+      projectId: "proj-old",
+      sidebarWidth: 350,
+      terminals: [{ id: "driver-pane", kind: "browser", title: "Driver", location: "grid" }],
+      activeWorktreeId: "wt-driver",
+    });
+    projectStoreMock.saveProjectState.mockResolvedValue(undefined);
+    leaseModule = await import("../../../services/DriveLeaseService.js");
+    leaseModule._resetDriveLeaseServiceForTesting({
+      isDriving,
+      dispose: () => undefined,
+    } as unknown as InstanceType<typeof leaseModule.DriveLeaseService>);
+  });
+
+  afterEach(() => {
+    leaseModule._resetDriveLeaseServiceForTesting(null);
+  });
+
+  function handlers() {
+    const pvm = {
+      switchTo: vi.fn().mockResolvedValue({
+        view: { webContents: { id: 100, isDestroyed: () => false, send: vi.fn() } },
+        isNew: false,
+      }),
+      getProjectIdForWebContents: vi.fn(),
+    };
+    registerProjectCrudHandlers({
+      mainWindow: { id: 1 } as unknown,
+      projectViewManager: pvm,
+    } as unknown as HandlerDependencies);
+    const handleMap = new Map<string, (...args: unknown[]) => unknown>();
+    for (const call of (ipcMain.handle as ReturnType<typeof vi.fn>).mock.calls) {
+      handleMap.set(call[0] as string, call[1] as (...args: unknown[]) => unknown);
+    }
+    return { handleMap, pvm };
+  }
+
+  const stale = {
+    terminals: [],
+    draftInputs: { "driver-pane": "a displaced draft" },
+    activeWorktreeId: "wt-stale",
+  };
+
+  for (const [channel, status] of [
+    [CHANNELS.PROJECT_SWITCH, undefined],
+    [CHANNELS.PROJECT_REOPEN, "background"],
+  ] as const) {
+    it(`${channel}: navigates, but skips the outgoing save while another screen drives it`, async () => {
+      projectStoreMock.getProjectById.mockReturnValue({
+        id: "proj-new",
+        name: "New",
+        path: "/projects/new",
+        ...(status ? { status } : {}),
+      });
+      isDriving.mockReturnValue(false);
+      const { handleMap, pvm } = handlers();
+
+      await handleMap.get(channel)!({ sender: { id: 99 } }, "proj-new", stale);
+
+      expect(pvm.switchTo).toHaveBeenCalled();
+      expect(isDriving).toHaveBeenCalledWith(
+        "proj-old",
+        expect.objectContaining({ clientId: "local" })
+      );
+      expect(projectStoreMock.saveProjectState).not.toHaveBeenCalled();
+    });
+
+    it(`${channel}: saves the outgoing state while this screen drives it`, async () => {
+      projectStoreMock.getProjectById.mockReturnValue({
+        id: "proj-new",
+        name: "New",
+        path: "/projects/new",
+        ...(status ? { status } : {}),
+      });
+      isDriving.mockReturnValue(true);
+      const { handleMap } = handlers();
+
+      await handleMap.get(channel)!({ sender: { id: 99 } }, "proj-new", stale);
+
+      expect(projectStoreMock.saveProjectState).toHaveBeenCalledWith(
+        "proj-old",
+        expect.objectContaining({ activeWorktreeId: "wt-stale" })
+      );
+    });
+  }
 });

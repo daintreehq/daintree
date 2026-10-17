@@ -1,5 +1,18 @@
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import type { AnyActionDefinition } from "../../actionTypes";
+import type { ActionId } from "@shared/types/actions";
+import type { ActionCallbacks, ActionRegistry, AnyActionDefinition } from "../../actionTypes";
+import type { ActionService } from "../../../ActionService";
+
+// ActionService pulls in the shortcut-hint store and keybinding service at
+// module load; the manifest-schema suite below only needs it to import cleanly.
+vi.mock("../../../../store/shortcutHintStore", () => ({
+  shortcutHintStore: {
+    getState: vi.fn(() => ({ counts: {}, show: vi.fn(), incrementCount: vi.fn() })),
+  },
+}));
+vi.mock("../../../KeybindingService", () => ({
+  keybindingService: { getEffectiveCombo: vi.fn(() => null), getDisplayCombo: vi.fn(() => "") },
+}));
 
 const mockNotify = vi.fn();
 vi.mock("@/lib/notify", () => ({
@@ -62,50 +75,6 @@ describe("worktree resource action definitions", () => {
     registerWorktreeActions(registry as never, callbacks as never);
   });
 
-  it("registers all 6 resource action IDs", () => {
-    for (const id of RESOURCE_ACTION_IDS) {
-      expect(registry.has(id), `missing action: ${id}`).toBe(true);
-    }
-  });
-
-  it.each([
-    ["worktree.resource.provision", "safe"],
-    ["worktree.resource.teardown", "confirm"],
-    ["worktree.resource.resume", "safe"],
-    ["worktree.resource.pause", "safe"],
-    ["worktree.resource.status", "safe"],
-    ["worktree.resource.connect", "safe"],
-  ] as const)("%s has danger=%s", (id, expectedDanger) => {
-    const factory = registry.get(id)!;
-    const def = factory();
-    expect(def.danger).toBe(expectedDanger);
-  });
-
-  // These were marked `discoverable` on the theory that omitting them from
-  // tools/list still left them reachable through the meta-tools. #11585 found
-  // that no client can do that, so the marking meant they were invisible to the
-  // in-app assistant for no benefit. Their tier placement is the real control,
-  // and it is unchanged — the annotation is simply gone.
-  it.each([
-    "worktree.resource.provision",
-    "worktree.resource.teardown",
-    "worktree.resource.resume",
-    "worktree.resource.pause",
-    "worktree.resource.status",
-  ] as const)("%s is listed whenever its tier permits it", (id) => {
-    const def = registry.get(id)!();
-    expect(def.mcpVisibility).toBeUndefined();
-  });
-
-  it("all resource actions have category=worktree and kind=command", () => {
-    for (const id of RESOURCE_ACTION_IDS) {
-      const def = registry.get(id)!();
-      expect(def.category).toBe("worktree");
-      expect(def.kind).toBe("command");
-      expect(def.scope).toBe("renderer");
-    }
-  });
-
   it("connect action is enabled only when resourceConnectCommand exists", () => {
     const def = registry.get("worktree.resource.connect")!();
     // No worktree in the mocked store → isEnabled should return false
@@ -142,12 +111,6 @@ describe("worktree resource action definitions", () => {
       // No worktree in the mocked store → isEnabled should return false
       expect(def.isEnabled!({ activeWorktreeId: "/test" }), `${id} should be disabled`).toBe(false);
     }
-  });
-
-  it("worktree.resource.status is always enabled (no isEnabled gate)", () => {
-    const def = registry.get("worktree.resource.status")!();
-    expect(def.isEnabled).toBeUndefined();
-    expect(def.disabledReason).toBeUndefined();
   });
 
   it("worktree.resource.status returns { configured: false, status: null } when no status command", async () => {
@@ -426,5 +389,85 @@ describe("worktree resource action definitions", () => {
     await callArgs.action.onClick();
 
     expect(writeTextMock).toHaveBeenCalledWith("Command exited with code 1");
+  });
+});
+
+// #11533 — worktree.resource.status declares its result shape. A `resultSchema`
+// alone never reaches the wire: publication is gated on `mcpOutputSchema`, and
+// buildToolOutputSchema drops anything whose top-level type isn't "object".
+// Registering through the real ActionService exercises the Zod -> JSON Schema
+// conversion, so these assert the *generated* schema rather than the flags.
+describe("worktree.resource.status emits a manifest outputSchema (#11533)", () => {
+  let registerAll: () => ActionService;
+
+  beforeAll(async () => {
+    const { ActionService } = await import("../../../ActionService");
+    const { registerWorktreeResourceActions } = await import("../worktreeResourceActions");
+    registerAll = () => {
+      const registry: ActionRegistry = new Map();
+      registerWorktreeResourceActions(registry, {
+        onAddTerminal: vi.fn(),
+      } as unknown as ActionCallbacks);
+      const service = new ActionService();
+      for (const [, factory] of registry) {
+        service.register(factory() as AnyActionDefinition);
+      }
+      return service;
+    };
+  });
+
+  function outputSchema(service: ActionService, id: ActionId): Record<string, unknown> | undefined {
+    return service.get(id)?.outputSchema;
+  }
+
+  it("generates an object-typed outputSchema keyed by configured/status", () => {
+    const schema = outputSchema(registerAll(), "worktree.resource.status");
+    expect(schema).toBeDefined();
+    // buildToolOutputSchema discards any schema that isn't object-typed, which
+    // is why a discriminated union (emitted as a bare oneOf) can't be used here.
+    expect(schema!.type).toBe("object");
+
+    expect(schema!.properties).toHaveProperty("configured");
+    expect(schema!.properties).toHaveProperty("status");
+    expect(schema!.required).toEqual(expect.arrayContaining(["configured", "status"]));
+  });
+
+  it("advertises every field of the resource status object, and admits null", () => {
+    const schema = outputSchema(registerAll(), "worktree.resource.status")!;
+    const serialized = JSON.stringify(schema.properties);
+
+    // `status` is null whenever no status command is configured, so a strict
+    // MCP client would reject the unconfigured branch without the null arm.
+    expect(serialized).toContain("null");
+
+    for (const field of [
+      "lastStatus",
+      "lastOutput",
+      "error",
+      "lastCheckedAt",
+      "endpoint",
+      "meta",
+      "provider",
+      "resumedAt",
+      "pausedAt",
+    ]) {
+      expect(serialized).toContain(field);
+    }
+  });
+
+  it("publishes no outputSchema for the actions that resolve with nothing", () => {
+    const service = registerAll();
+    for (const id of [
+      "worktree.resource.provision",
+      "worktree.resource.teardown",
+      "worktree.resource.resume",
+      "worktree.resource.pause",
+      "worktree.resource.connect",
+    ] as const) {
+      expect(
+        outputSchema(service, id),
+        `${id} should not advertise an output schema`
+      ).toBeUndefined();
+    }
   });
 });

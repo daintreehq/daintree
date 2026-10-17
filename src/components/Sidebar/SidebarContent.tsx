@@ -1,4 +1,5 @@
 import { lazyWithPreload } from "@/lib/lazyWithPreload";
+import { AGENT_BUCKET_LABEL } from "@/lib/agentStateVocabulary";
 import {
   Suspense,
   lazy,
@@ -47,6 +48,10 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
 import { createTooltipContent } from "@/lib/tooltipShortcut";
 import { WorktreesReconnectingBadge } from "./WorktreesReconnectingBadge";
 import { SpinningIcon } from "@/components/ui/SpinningIcon";
+import { Server } from "@/components/icons";
+import { getViewHostId } from "@/hooks/useHostConnection";
+import { useHostConnectionStore } from "@/store/hostConnectionStore";
+import { splitHostName } from "@/components/Hosts/hostModel";
 import { Button } from "@/components/ui/button";
 import { SIDEBAR_HEADER_ACTION, SIDEBAR_HEADER_ROW } from "./sidebarHeader";
 import { useDispatchedSidebarRefresh } from "./useDispatchedSidebarRefresh";
@@ -74,6 +79,7 @@ import { useFleetArmingStore } from "@/store/fleetArmingStore";
 import {
   selectSidebarVisiblePanelIds,
   selectSidebarAgentStateByPanelId,
+  selectSidebarAgentPanelIds,
   selectSidebarFleetEligibleWorktreeById,
   computePanelStateByWorktree,
 } from "./sidebarPanelDerivation";
@@ -95,6 +101,12 @@ import {
 } from "@/lib/worktreeFilters";
 import { describeActiveFacets } from "@/lib/worktreeFilterOptions";
 import { computeChipState } from "@/components/Worktree/utils/computeChipState";
+import {
+  deriveWorktreeAgentBuckets,
+  EMPTY_WORKTREE_AGENT_BUCKETS,
+  isWorktreeMergedForCleanup,
+} from "@/lib/worktreeAgentBuckets";
+import { useWorktreeAgentBucketInputs } from "@/hooks/useWorktreeAgentBucketInputs";
 import { parseExactNumber } from "@/lib/parseExactNumber";
 import type { WorktreeState } from "@/types";
 import { actionService } from "@/services/ActionService";
@@ -141,9 +153,9 @@ const NO_MATCH_QUERY_MAX = 40;
 
 /** Mirrors `QuickStateFilterBar`'s own labels — see the rationale there. */
 const QUICK_STATE_LABELS: Record<"working" | "waiting" | "finished", string> = {
-  working: "Working",
-  waiting: "Attention",
-  finished: "Finished",
+  working: AGENT_BUCKET_LABEL.working,
+  waiting: AGENT_BUCKET_LABEL.attention,
+  finished: AGENT_BUCKET_LABEL.finished,
 };
 
 const KEYBOARD_REORDER_ANNOUNCEMENT_DEBOUNCE_MS = 150;
@@ -388,6 +400,11 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
   const overviewAriaShortcut = useAriaKeyshortcuts("worktree.overview");
   const refreshAriaShortcut = useAriaKeyshortcuts("worktree.refresh");
   const createWorktreeAriaShortcut = useAriaKeyshortcuts("worktree.createDialog.open");
+  // Static per view: a project view is bound to one host for its life.
+  const viewHostId = getViewHostId();
+  const storeHostName = useHostConnectionStore((s) => s.hostName);
+  const remoteHostName = viewHostId === null ? null : (storeHostName ?? viewHostId);
+  const remoteHostParts = remoteHostName === null ? null : splitHostName(remoteHostName);
   const virtuosoRef = useRef<VirtuosoHandle | null>(null);
   const scrollerElementRef = useRef<HTMLElement | null>(null);
   // Latest dragStartOrder + sort-disabled state captured in refs so the
@@ -672,6 +689,7 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
     typeFilters,
     prIssueFilters,
     sessionFilters,
+    hasAgentFilter,
     activityFilters,
     devServerFilters,
     alwaysShowActive,
@@ -688,6 +706,7 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
       typeFilters: state.typeFilters,
       prIssueFilters: state.prIssueFilters,
       sessionFilters: state.sessionFilters,
+      hasAgentFilter: state.hasAgentFilter,
       activityFilters: state.activityFilters,
       devServerFilters: state.devServerFilters,
       alwaysShowActive: state.alwaysShowActive,
@@ -736,6 +755,8 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
   const hasFacetFilters = useWorktreeFilterStore((state) => state.hasFacetFilters);
   const hasFacetFiltersActive = hasFacetFilters();
   const collapsedWorktrees = useWorktreeFilterStore((state) => state.collapsedWorktrees);
+  const worktreeLabelColors = useWorktreeFilterStore((state) => state.worktreeLabelColors);
+  const worktreeCustomTitles = useWorktreeFilterStore((state) => state.worktreeCustomTitles);
   const pruneStaleWorktreeIds = useWorktreeFilterStore((state) => state.pruneStaleWorktreeIds);
   const setQuickStateFilter = useWorktreeFilterStore((state) => state.setQuickStateFilter);
 
@@ -755,6 +776,7 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
   // structural, agent-state, or fleet-eligibility changes.
   const visiblePanelIds = usePanelStore(useShallow(selectSidebarVisiblePanelIds));
   const agentStateByPanelId = usePanelStore(useShallow(selectSidebarAgentStateByPanelId));
+  const agentPanelIds = usePanelStore(useShallow(selectSidebarAgentPanelIds));
   const fleetEligibleWorktreeById = usePanelStore(
     useShallow(selectSidebarFleetEligibleWorktreeById)
   );
@@ -765,9 +787,17 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
         panelIdsByWorktreeId,
         visiblePanelIds,
         agentStateByPanelId,
+        agentPanelIds,
         worktreeIds
       ),
-    [worktreeIdList, panelIdsByWorktreeId, visiblePanelIds, agentStateByPanelId, worktreeIds]
+    [
+      worktreeIdList,
+      panelIdsByWorktreeId,
+      visiblePanelIds,
+      agentStateByPanelId,
+      agentPanelIds,
+      worktreeIds,
+    ]
   );
 
   const searchInputRef = useRef<HTMLInputElement>(null);
@@ -806,13 +836,27 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
 
   const setManualOrder = useWorktreeFilterStore((state) => state.setManualOrder);
 
-  // Clean up stale pinned/collapsed worktrees (single store write so pruning
-  // costs one persist flush, not N) and stale manual order entries. Merged so
-  // the worktree-ID Set is built at most once per pass.
+  // Clean up stale pinned/collapsed/labelled worktrees (single store write so
+  // pruning costs one persist flush, not N) and stale manual order entries.
+  // Merged so the worktree-ID Set is built at most once per pass.
+  //
+  // Only against a list the host actually delivered: before the first snapshot,
+  // while a load is in flight, or after one failed, `worktrees` is empty or
+  // stale, and pruning against it would wipe every pin and label in the project
+  // (#13408). A reconnect is not gated: the view keeps its last full list
+  // through it, and a reconnect flag that outlives its recovery would otherwise
+  // switch pruning off for the rest of the session.
+  const canPruneWorktreeIds =
+    isInitialized && !isLoading && error === null && worktreeLoadError === null;
   useEffect(() => {
+    if (!canPruneWorktreeIds) return;
+    const labelledIds = Object.keys(worktreeLabelColors);
+    const titledIds = Object.keys(worktreeCustomTitles);
     if (
       pinnedWorktrees.length === 0 &&
       collapsedWorktrees.length === 0 &&
+      labelledIds.length === 0 &&
+      titledIds.length === 0 &&
       manualOrder.length === 0
     ) {
       return;
@@ -820,7 +864,9 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
     const existingIds = new Set(worktrees.map((w) => w.id));
     const hasStalePin = pinnedWorktrees.some((id) => !existingIds.has(id));
     const hasStaleCollapsed = collapsedWorktrees.some((id) => !existingIds.has(id));
-    if (hasStalePin || hasStaleCollapsed) {
+    const hasStaleLabel = labelledIds.some((id) => !existingIds.has(id));
+    const hasStaleTitle = titledIds.some((id) => !existingIds.has(id));
+    if (hasStalePin || hasStaleCollapsed || hasStaleLabel || hasStaleTitle) {
       pruneStaleWorktreeIds(existingIds);
     }
     if (manualOrder.length > 0) {
@@ -830,68 +876,70 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
       }
     }
   }, [
+    canPruneWorktreeIds,
     worktrees,
     pinnedWorktrees,
     collapsedWorktrees,
+    worktreeLabelColors,
+    worktreeCustomTitles,
     manualOrder,
     pruneStaleWorktreeIds,
     setManualOrder,
   ]);
 
   // Compute derived metadata for each worktree. Panel scan is delegated to the
-  // single-pass `panelStateByWorktree` selector above, so this useMemo only
-  // joins per-worktree state with worktree-level fields and chip computation.
+  // single-pass `panelStateByWorktree` selector above; the quick-state buckets
+  // join this worktree's visible agent panels to their fleet runs, through the
+  // same derivation the overview modal, cycling and the card read.
+  const { runsById } = useWorktreeAgentBucketInputs();
   const derivedMetaMap = useMemo(() => {
     const map = new Map<string, DerivedWorktreeMeta>();
     for (const worktree of deferredWorktrees) {
       const panelState = panelStateByWorktree[worktree.id] ?? {
         terminalCount: 0,
         waitingTerminalCount: 0,
+        hasAgent: false,
         hasWorkingAgent: false,
         hasWaitingAgent: false,
         hasCompletedAgent: false,
         hasExitedAgent: false,
       };
 
-      // chipState logic mirrors useWorktreeStatus.ts — keep in sync
-      const hasChanges = (worktree.worktreeChanges?.changedFileCount ?? 0) > 0;
-      const isComplete =
-        !!worktree.issueNumber &&
-        !!worktree.linked?.pr &&
-        worktree.linked.pr.state !== "closed" &&
-        worktree.linked.pr.state !== "declined" &&
-        !hasChanges &&
-        worktree.worktreeChanges !== null;
-
-      let lifecycleStage: "in-review" | "merged" | "ready-for-cleanup" | null = null;
-      if (!worktree.isMainWorktree && worktree.worktreeChanges !== null) {
-        if (worktree.linked?.pr?.state === "merged") {
-          lifecycleStage = worktree.issueNumber ? "ready-for-cleanup" : "merged";
-        } else if (worktree.linked?.pr?.state === "open") {
-          lifecycleStage = "in-review";
-        }
-      }
-
-      const chipState = computeChipState({
-        waitingTerminalCount: panelState.waitingTerminalCount,
-        lifecycleStage,
-        isComplete,
-        hasActiveAgent: panelState.hasWorkingAgent,
-      });
+      const worktreeOrphaned = worktreeIds.size > 0 && !worktreeIds.has(worktree.id);
+      const visibleAgentPanelIds = worktreeOrphaned
+        ? []
+        : (panelIdsByWorktreeId[worktree.id] ?? []).filter(
+            (id) => visiblePanelIds[id] && agentPanelIds[id]
+          );
+      const buckets = deriveWorktreeAgentBuckets(
+        visibleAgentPanelIds,
+        runsById,
+        isWorktreeMergedForCleanup(worktree)
+      );
 
       map.set(worktree.id, {
         terminalCount: panelState.terminalCount,
+        hasAgent: panelState.hasAgent,
         hasWorkingAgent: panelState.hasWorkingAgent,
         hasWaitingAgent: panelState.hasWaitingAgent,
         hasCompletedAgent: panelState.hasCompletedAgent,
         hasExitedAgent: panelState.hasExitedAgent,
         hasMergeConflict:
           worktree.worktreeChanges?.changes.some((c) => c.status === "conflicted") ?? false,
-        chipState,
+        buckets,
+        chipState: computeChipState(buckets),
       });
     }
     return map;
-  }, [deferredWorktrees, panelStateByWorktree]);
+  }, [
+    deferredWorktrees,
+    panelStateByWorktree,
+    panelIdsByWorktreeId,
+    visiblePanelIds,
+    agentPanelIds,
+    worktreeIds,
+    runsById,
+  ]);
 
   // Apply filters and sorting
   const mainWorktree = useMemo(
@@ -911,13 +959,20 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
   );
 
   const quickStateCounts = useMemo(() => {
-    const counts = { all: nonMainWorktrees.length, working: 0, waiting: 0, finished: 0 };
+    const counts = {
+      all: nonMainWorktrees.length,
+      working: 0,
+      waiting: 0,
+      finished: 0,
+      finishedUnseen: 0,
+    };
     for (const w of nonMainWorktrees) {
       const meta = derivedMetaMap.get(w.id);
       if (!meta) continue;
       if (matchesQuickStateFilter("working", meta)) counts.working++;
       if (matchesQuickStateFilter("waiting", meta)) counts.waiting++;
       if (matchesQuickStateFilter("finished", meta)) counts.finished++;
+      if (meta.buckets.finishedUnseen) counts.finishedUnseen++;
     }
     return counts;
   }, [nonMainWorktrees, derivedMetaMap]);
@@ -962,8 +1017,10 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
         typeFilters,
         prIssueFilters,
         sessionFilters,
+        hasAgentFilter,
         activityFilters,
         devServerFilters,
+        customTitles: worktreeCustomTitles,
       },
       devServerSessions
     );
@@ -976,9 +1033,11 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
     typeFilters,
     prIssueFilters,
     sessionFilters,
+    hasAgentFilter,
     activityFilters,
     devServerFilters,
     devServerSessions,
+    worktreeCustomTitles,
   ]);
 
   const mainWorktreeAggregateCounts = useMemo(() => {
@@ -1007,19 +1066,23 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
         typeFilters,
         prIssueFilters,
         sessionFilters,
+        hasAgentFilter,
         activityFilters,
         devServerFilters,
+        customTitles: worktreeCustomTitles,
       };
 
       let withoutQuickStateMatch = false;
       const filtered = nonMainWorktrees.filter((worktree) => {
         const derived = derivedMetaMap.get(worktree.id) ?? {
           terminalCount: 0,
+          hasAgent: false,
           hasWorkingAgent: false,
           hasWaitingAgent: false,
           hasCompletedAgent: false,
           hasExitedAgent: false,
           hasMergeConflict: false,
+          buckets: EMPTY_WORKTREE_AGENT_BUCKETS,
           chipState: null,
         };
         const isActive = worktree.id === activeWorktreeId;
@@ -1082,7 +1145,8 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
             deferredQuery,
             orderBy,
             validPinnedWorktrees,
-            manualOrder
+            manualOrder,
+            worktreeCustomTitles
           )
         : // `groupByType: false` on purpose. The sections are built separately
           // below, because `filteredWorktrees` has to stay the pre-grouping
@@ -1120,6 +1184,7 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
       typeFilters,
       prIssueFilters,
       sessionFilters,
+      hasAgentFilter,
       activityFilters,
       devServerFilters,
       devServerSessions,
@@ -1131,6 +1196,7 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
       activeWorktreeId,
       quickStateFilter,
       hasFacetFiltersActive,
+      worktreeCustomTitles,
     ]);
 
   const worktreeActions = useWorktreeActions({
@@ -1198,7 +1264,7 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
     if (exactNum !== null) {
       return w.issueNumber === exactNum || w.linked?.pr?.ref.number === exactNum;
     }
-    return scoreWorktree(w, deferredQuery) > 0;
+    return scoreWorktree(w, deferredQuery, worktreeCustomTitles[w.id]) > 0;
   };
 
   const pinnedFiltersPre: FilterState = {
@@ -1207,8 +1273,10 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
     typeFilters,
     prIssueFilters,
     sessionFilters,
+    hasAgentFilter,
     activityFilters,
     devServerFilters,
+    customTitles: worktreeCustomTitles,
   };
 
   const mainMatchesQueryPre = mainWorktree && worktreeMatchesQueryPre(mainWorktree);
@@ -1220,11 +1288,13 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
         pinnedFiltersPre,
         derivedMetaMap.get(mainWorktree.id) ?? {
           terminalCount: 0,
+          hasAgent: false,
           hasWorkingAgent: false,
           hasWaitingAgent: false,
           hasCompletedAgent: false,
           hasExitedAgent: false,
           hasMergeConflict: false,
+          buckets: EMPTY_WORKTREE_AGENT_BUCKETS,
           chipState: null,
         },
         mainWorktree.id === activeWorktreeId,
@@ -1283,6 +1353,7 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
     typeFilters,
     prIssueFilters,
     sessionFilters,
+    hasAgentFilter,
     activityFilters,
     devServerFilters,
   });
@@ -1849,10 +1920,52 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
           !hasNonMainWorktrees && "border-b border-divider"
         )}
       >
-        <div className="flex min-w-0 items-baseline gap-1.5">
-          <h2 className="truncate text-text-primary font-semibold text-sm tracking-wide">
+        <div className="flex min-w-0 flex-1 items-baseline gap-1.5">
+          {/* Heading navigation lands here, not on the tag, so the host rides in
+              the heading's name, and stays there when the tag hides. */}
+          <h2
+            className="shrink-0 text-text-primary font-semibold text-sm tracking-wide"
+            aria-label={
+              remoteHostName === null ? undefined : `Worktrees, on host ${remoteHostName}`
+            }
+          >
             Worktrees
           </h2>
+          {remoteHostParts && !showReconnecting && (
+            // These checkouts live on the host, not here: the list says where,
+            // in the remote hue the toolbar above it wears. It repeats the host
+            // chip, so it is the first thing to go — when the header is too
+            // narrow for the name's distinguishing end, or "Reconnecting…"
+            // needs the room. Centred in the free run between the title and the
+            // actions, so it sits in its own light rather than trailing the title.
+            <span className="hidden min-w-0 flex-1 justify-center self-center @[18rem]/header:flex">
+              <span
+                data-testid="sidebar-remote-host"
+                aria-hidden="true"
+                className="sidebar-remote-host flex h-5 min-w-0 cursor-default items-center gap-1 rounded-[var(--radius-sm)] px-1.5 text-xs text-text-secondary"
+              >
+                <Server className="sidebar-remote-host-source h-3 w-3 shrink-0" />
+                {/* One gapless run, so the name's parts never read as separate words. */}
+                <span className="flex min-w-0">
+                  {/* A few characters of a long head always show: "g…" names nothing. */}
+                  <span
+                    className={cn(
+                      "truncate",
+                      remoteHostParts.nameHead.length > 4 ? "min-w-[4ch]" : "shrink-0"
+                    )}
+                  >
+                    {remoteHostParts.nameHead}
+                  </span>
+                  <span className="shrink-0">{remoteHostParts.nameTail}</span>
+                  {remoteHostParts.nameDomain && (
+                    <span className="min-w-0 shrink-[100] truncate">
+                      {remoteHostParts.nameDomain}
+                    </span>
+                  )}
+                </span>
+              </span>
+            </span>
+          )}
           {showReconnecting && (
             <WorktreesReconnectingBadge
               escalatedSince={showReconnectingEscalated ? reconnectingAt : null}
@@ -2036,6 +2149,7 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
                 value={quickStateFilter}
                 onChange={setQuickStateFilter}
                 counts={quickStateCounts}
+                finishedUnseen={quickStateCounts.finishedUnseen}
                 trailing={armMatchingButton}
               />
             </div>

@@ -1,6 +1,7 @@
 import { useEffect } from "react";
 import { notify } from "@/lib/notify";
 import { safeFireAndForget } from "@/utils/safeFireAndForget";
+import { ClientAppError } from "@/utils/clientAppError";
 import type { MainProcessToastPayload } from "@shared/types/ipc/maps";
 import { useDistributionStore } from "@/store/distributionStore";
 
@@ -32,11 +33,56 @@ function parseTrustedDaintreeUrl(raw: string | undefined): string | null {
   return url.toString();
 }
 
+/** `{ hostId, projectId }` from a toast action's data, or null when it isn't one. */
+function parseHostProjectTarget(
+  raw: string | undefined
+): { hostId: string; projectId: string } | null {
+  if (!raw) return null;
+  try {
+    const parsed: unknown = JSON.parse(raw);
+    if (typeof parsed !== "object" || parsed === null) return null;
+    const { hostId, projectId } = parsed as { hostId?: unknown; projectId?: unknown };
+    if (typeof hostId !== "string" || hostId.length === 0) return null;
+    if (typeof projectId !== "string" || projectId.length === 0) return null;
+    return { hostId, projectId };
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * A switch main ran (a window put back on its host at launch) that failed,
+ * shown by the same presenter as every other entry point so the same failure
+ * offers the same recovery.
+ */
+function presentHostSwitchFailure(
+  payload: MainProcessToastPayload,
+  failure: NonNullable<MainProcessToastPayload["hostSwitchFailure"]>
+): void {
+  const { hostId, projectId, code } = failure;
+  const error = new ClientAppError(code ?? "HOST_DISCONNECTED", payload.message, payload.message);
+  safeFireAndForget(
+    import("@/components/Hosts/hostSwitching").then(({ notifyHostSwitchFailure, switchToHost }) =>
+      notifyHostSwitchFailure(
+        hostId,
+        error,
+        () => void switchToHost(hostId, false, projectId),
+        payload.title ? { title: payload.title } : undefined
+      )
+    ),
+    { context: "Showing a failed host switch from main" }
+  );
+}
+
 export function useMainProcessToastListener(): void {
   useEffect(() => {
     if (!window.electron?.notification?.onShowToast) return;
 
     const cleanup = window.electron.notification.onShowToast((payload: MainProcessToastPayload) => {
+      if (payload.hostSwitchFailure) {
+        presentHostSwitchFailure(payload, payload.hostSwitchFailure);
+        return;
+      }
       const action = payload.action
         ? {
             label: payload.action.label,
@@ -72,6 +118,19 @@ export function useMainProcessToastListener(): void {
                 safeFireAndForget(window.electron.clipboard.writeText(data), {
                   context: "Writing clipboard text from toast action",
                 });
+              } else if (ipcChannel === "remote-hosts:switch-window-host") {
+                // Retry for a window main couldn't put back on its host at launch.
+                const target = parseHostProjectTarget(data);
+                if (!target) {
+                  console.warn("[MainProcessToast] remote-hosts:switch-window-host bad payload");
+                  return;
+                }
+                safeFireAndForget(
+                  import("@/components/Hosts/hostSwitching").then(({ switchToHost }) =>
+                    switchToHost(target.hostId, false, target.projectId)
+                  ),
+                  { context: "Reopening a window on its host from toast action" }
+                );
               } else {
                 console.warn(`[MainProcessToast] Unknown IPC channel for action: ${ipcChannel}`);
               }

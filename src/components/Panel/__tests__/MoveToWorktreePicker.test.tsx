@@ -14,6 +14,7 @@ const { worktreesRef, colorMapRef, prefsRef, dispatchMock, content } = vi.hoiste
       groupByType: false,
       pinnedWorktrees: [] as string[],
       manualOrder: [] as string[],
+      worktreeCustomTitles: {} as Record<string, string>,
     },
   },
   dispatchMock: vi.fn(),
@@ -210,14 +211,33 @@ function options(): HTMLElement[] {
   return Array.from(document.querySelectorAll<HTMLElement>('[role="option"]'));
 }
 
+/**
+ * What a screen reader hears from a row, one piece per text run, in order. A
+ * cut branch draws its pieces hidden from assistive technology and speaks the
+ * whole ref in their place, so this is the row's text however it is cut.
+ */
+function spokenParts(element: HTMLElement): string[] {
+  const parts: string[] = [];
+  const walker = document.createTreeWalker(element, NodeFilter.SHOW_TEXT);
+  for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+    if (node.parentElement?.closest('[aria-hidden="true"]')) continue;
+    const text = node.textContent?.trim();
+    if (text) parts.push(text);
+  }
+  return parts;
+}
+
+/** A row's headline: the first thing it says. */
+function titleOf(option: HTMLElement): string {
+  return spokenParts(option)[0] ?? "";
+}
+
 function optionLabels(): string[] {
-  return options().map((option) => option.querySelector("span.truncate")?.textContent ?? "");
+  return options().map(titleOf);
 }
 
 function option(label: string): HTMLElement {
-  const match = options().find(
-    (candidate) => candidate.querySelector("span.truncate")?.textContent === label
-  );
+  const match = options().find((candidate) => titleOf(candidate) === label);
   if (!match) throw new Error(`option "${label}" not found`);
   return match;
 }
@@ -226,7 +246,16 @@ function selectedLabel(): string | null {
   const selected = options().find(
     (candidate) => candidate.getAttribute("aria-selected") === "true"
   );
-  return selected?.querySelector("span.truncate")?.textContent ?? null;
+  return selected ? titleOf(selected) : null;
+}
+
+/** The mark painted in the worktree's identity colour, if the row draws one. */
+function colourMark(option: HTMLElement): HTMLElement | null {
+  return (
+    Array.from(option.querySelectorAll<HTMLElement>("span")).find(
+      (span) => span.style.backgroundColor !== ""
+    ) ?? null
+  );
 }
 
 function type(value: string) {
@@ -259,7 +288,13 @@ function liveRegion(): string {
 beforeEach(() => {
   worktreesRef.current = SIDEBAR_ORDER;
   colorMapRef.current = null;
-  prefsRef.current = { orderBy: "alpha", groupByType: false, pinnedWorktrees: [], manualOrder: [] };
+  prefsRef.current = {
+    orderBy: "alpha",
+    groupByType: false,
+    pinnedWorktrees: [],
+    manualOrder: [],
+    worktreeCustomTitles: {},
+  };
   dispatchMock.mockReset();
   content.props = {};
   content.rootOpenChange = null;
@@ -280,27 +315,21 @@ describe("MoveToWorktreePicker", () => {
       ]);
     });
 
-    it("names the dialog and the search box", () => {
-      render(<Harness />);
-
-      expect(document.querySelector('[role="dialog"]')?.getAttribute("aria-label")).toBe(
-        "Move to worktree"
-      );
-      expect(searchInput().getAttribute("placeholder")).toBe("Search worktrees");
-    });
-
     it("adds the branch under a title, and nothing under a branch", () => {
       render(<Harness />);
 
-      const detail = (label: string) =>
-        option(label).querySelector("span.font-mono")?.textContent ?? null;
-
-      expect(detail("#12431 Add systemPrompt to agent launch")).toBe(
-        "feature/issue-12431-add-systemprompt"
-      );
-      expect(detail("#12389 Panel header agent glyph")).toBe("feature/issue-12389-panel-glyph");
-      expect(detail("daintree")).toBe("main");
-      expect(detail("fix/restore-recovery-cwd")).toBeNull();
+      // The whole ref, prefix included, though the row draws the prefix as a glyph.
+      expect(spokenParts(option("#12431 Add systemPrompt to agent launch"))).toEqual([
+        "#12431 Add systemPrompt to agent launch",
+        "feature/issue-12431-add-systemprompt",
+        "Current",
+      ]);
+      expect(spokenParts(option("#12389 Panel header agent glyph"))).toEqual([
+        "#12389 Panel header agent glyph",
+        "feature/issue-12389-panel-glyph",
+      ]);
+      expect(spokenParts(option("daintree"))).toEqual(["daintree", "main"]);
+      expect(spokenParts(option("fix/restore-recovery-cwd"))).toEqual(["fix/restore-recovery-cwd"]);
     });
 
     it("keeps the current worktree in place, disabled and marked current", () => {
@@ -317,18 +346,17 @@ describe("MoveToWorktreePicker", () => {
       colorMapRef.current = { "w-main": "red", "w-restore": "rgb(1, 2, 3)" };
       render(<Harness />);
 
-      const dot = option("fix/restore-recovery-cwd").querySelector<HTMLElement>(
-        "span.rounded-full"
+      expect(colourMark(option("fix/restore-recovery-cwd"))?.style.backgroundColor).toBe(
+        "rgb(1, 2, 3)"
       );
-      expect(dot?.style.backgroundColor).toBe("rgb(1, 2, 3)");
-      expect(option("daintree").querySelector("span.rounded-full")).toBeNull();
+      expect(colourMark(option("daintree"))).toBeNull();
       expect(option("daintree").querySelector("svg")).not.toBeNull();
     });
 
     it("draws no dot when there are no worktree colours", () => {
       render(<Harness />);
 
-      expect(document.querySelector('[role="option"] span.rounded-full')).toBeNull();
+      expect(options().map(colourMark).filter(Boolean)).toEqual([]);
     });
 
     it("marks its content as part of a dock preview when opened from one", () => {
@@ -354,6 +382,22 @@ describe("MoveToWorktreePicker", () => {
       // The lookalike carries 12431 in its branch but is not linked to it.
       type("#12431");
       expect(optionLabels()).toEqual(["#12431 Add systemPrompt to agent launch"]);
+    });
+
+    it("names a titled worktree by its title, with its branch under it, and finds it by title", () => {
+      prefsRef.current = {
+        ...prefsRef.current,
+        worktreeCustomTitles: { "w-bump": "Electron upgrade" },
+      };
+      render(<Harness />);
+
+      expect(spokenParts(option("Electron upgrade"))).toEqual([
+        "Electron upgrade",
+        "chore/bump-electron-42",
+      ]);
+
+      type("upgrade");
+      expect(optionLabels()).toEqual(["Electron upgrade"]);
     });
 
     it("matches text against the branch", () => {
@@ -614,15 +658,5 @@ describe("MoveToWorktreePicker", () => {
 
       expect(document.activeElement).toBe(anchor);
     });
-  });
-});
-
-describe("MoveToWorktreePicker alignment", () => {
-  // The header hangs it back from a button at the end of its bar; the context
-  // menu opens it from a point, the way the menu itself opened.
-  it.each(["start", "end"] as const)("lines the picker up on the anchor's %s edge", (align) => {
-    render(<Harness align={align} />);
-
-    expect(content.props.align).toBe(align);
   });
 });

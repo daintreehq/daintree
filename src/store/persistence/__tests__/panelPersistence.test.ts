@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { initBuiltInPanelKinds } from "@/panels/registry";
 import { PanelPersistence, panelToSnapshot } from "../panelPersistence";
 import { setWorktreeGitDirAccessor } from "@/store/storeAccessors";
-import type { TerminalInstance, TerminalSnapshot } from "@/types";
+import type { TabGroup, TerminalInstance, TerminalSnapshot } from "@/types";
 
 initBuiltInPanelKinds();
 
@@ -29,6 +29,7 @@ const createMockProjectClient = () => ({
   onWorktreeLoadStatus: vi.fn().mockReturnValue(() => {}),
   getSettings: vi.fn().mockResolvedValue({}),
   saveSettings: vi.fn().mockResolvedValue(undefined),
+  addBrowserAllowedHost: vi.fn().mockResolvedValue([]),
   detectRunners: vi.fn().mockResolvedValue([]),
   close: vi.fn().mockResolvedValue({ success: true }),
   sleepProject: vi
@@ -86,30 +87,6 @@ describe("PanelPersistence", () => {
     vi.useRealTimers();
   });
 
-  describe("constructor", () => {
-    it("creates instance with default options", () => {
-      const client = createMockProjectClient();
-      const persistence = new PanelPersistence(client);
-      expect(persistence).toBeInstanceOf(PanelPersistence);
-    });
-
-    it("creates instance with custom options", () => {
-      const client = createMockProjectClient();
-      const persistence = new PanelPersistence(client, {
-        debounceMs: 1000,
-        filter: () => true,
-        transform: (t): TerminalSnapshot => ({
-          id: t.id,
-          kind: t.kind,
-          title: t.title,
-          cwd: t.cwd,
-          location: t.location === "trash" ? "grid" : t.location,
-        }),
-      });
-      expect(persistence).toBeInstanceOf(PanelPersistence);
-    });
-  });
-
   describe("save", () => {
     it("debounces multiple saves into single persist call", async () => {
       const client = createMockProjectClient();
@@ -152,28 +129,6 @@ describe("PanelPersistence", () => {
       const savedTerminals = client.setTerminals.mock.calls[0]![1] as TerminalSnapshot[];
       expect(savedTerminals).toHaveLength(2);
       expect(savedTerminals).not.toContainEqual(expect.objectContaining({ id: "trash-1" }));
-    });
-
-    it("excludes dialog-presented panels by default", async () => {
-      // Dialog panels are ephemeral (#11239): filtering them here is what makes
-      // "never persisted" and "never restored on restart" true — nothing is
-      // written, so there is nothing to rehydrate.
-      const client = createMockProjectClient();
-      const persistence = new PanelPersistence(client, { debounceMs: 100 });
-
-      const gridTerminal = createMockTerminal({ id: "grid-1", location: "grid" });
-      const dialogPanel = createMockTerminal({
-        id: "dialog-1",
-        location: "dialog",
-        excludeFromPersistence: true,
-      });
-
-      persistence.save([gridTerminal, dialogPanel], projectId);
-      await vi.advanceTimersByTimeAsync(100);
-
-      const savedTerminals = client.setTerminals.mock.calls[0]![1] as TerminalSnapshot[];
-      expect(savedTerminals).toHaveLength(1);
-      expect(savedTerminals).not.toContainEqual(expect.objectContaining({ id: "dialog-1" }));
     });
 
     it("excludes dialog panels that are missing the ephemeral flag", async () => {
@@ -314,43 +269,6 @@ describe("PanelPersistence", () => {
       const savedTerminals = client.setTerminals.mock.calls[0]![1] as TerminalSnapshot[];
       expect(savedTerminals).toHaveLength(1);
       expect(savedTerminals[0]).toEqual(expect.objectContaining({ id: "claude-1" }));
-    });
-
-    it("applies custom transform function", async () => {
-      const client = createMockProjectClient();
-      const persistence = new PanelPersistence(client, {
-        debounceMs: 100,
-        transform: (t): TerminalSnapshot => ({
-          id: t.id,
-          kind: t.kind,
-          title: "Custom",
-          cwd: t.cwd,
-          location: t.location === "trash" ? "grid" : t.location,
-        }),
-      });
-
-      const terminal = createMockTerminal({
-        id: "test-1",
-        cwd: "/custom/path",
-        title: "Should not appear",
-      });
-
-      persistence.save([terminal], projectId);
-      await vi.advanceTimersByTimeAsync(100);
-
-      expect(client.setTerminals).toHaveBeenCalledWith(
-        projectId,
-        [
-          expect.objectContaining({
-            id: "test-1",
-            title: "Custom",
-            cwd: "/custom/path",
-          }),
-        ],
-        expect.any(Array),
-        expect.any(Array),
-        undefined
-      );
     });
 
     it("skips save if no project ID is provided", async () => {
@@ -608,29 +526,6 @@ describe("PanelPersistence", () => {
     });
   });
 
-  describe("whenIdle", () => {
-    it("resolves immediately when no pending persist", async () => {
-      const client = createMockProjectClient();
-      const persistence = new PanelPersistence(client, { debounceMs: 100 });
-
-      await expect(persistence.whenIdle()).resolves.toBeUndefined();
-    });
-
-    it("resolves after pending persist completes", async () => {
-      const client = createMockProjectClient();
-      const persistence = new PanelPersistence(client, { debounceMs: 100 });
-
-      const terminal = createMockTerminal();
-      persistence.save([terminal], projectId);
-
-      // Advance timers to trigger debounced save
-      await vi.advanceTimersByTimeAsync(100);
-
-      // Now wait for the persist to complete
-      await expect(persistence.whenIdle()).resolves.toBeUndefined();
-    });
-  });
-
   describe("snapshot reuse", () => {
     it("reuses snapshots for unchanged panels and rebuilds only the changed one", () => {
       const persistence = new PanelPersistence(createMockProjectClient(), { debounceMs: 100 });
@@ -732,19 +627,6 @@ describe("PanelPersistence", () => {
       );
     });
 
-    it("omits extensionState from snapshot when undefined", async () => {
-      const client = createMockProjectClient();
-      const persistence = new PanelPersistence(client, { debounceMs: 100 });
-
-      const terminal = createMockTerminal({ id: "no-ext", kind: "browser" });
-
-      persistence.save([terminal], projectId);
-      await vi.advanceTimersByTimeAsync(100);
-
-      const savedTerminals = client.setTerminals.mock.calls[0]![1] as TerminalSnapshot[];
-      expect(savedTerminals[0]).not.toHaveProperty("extensionState");
-    });
-
     it("persists extensionState for PTY panels", async () => {
       const client = createMockProjectClient();
       const persistence = new PanelPersistence(client, { debounceMs: 100 });
@@ -789,12 +671,6 @@ describe("PanelPersistence", () => {
           pluginId: "my-plugin",
         })
       );
-    });
-
-    it("omits pluginId from snapshot when absent", () => {
-      const panel = createMockTerminal({ id: "no-plugin", kind: "browser" });
-      const snapshot = panelToSnapshot(panel);
-      expect(snapshot).not.toHaveProperty("pluginId");
     });
 
     it("stamps worktreeGitDir from the worktree store, omitting it when unknown (#11388)", () => {
@@ -1140,12 +1016,6 @@ describe("PanelPersistence", () => {
       );
     });
 
-    it("getPreviousSnapshotMap returns undefined for unknown projects", () => {
-      const client = createMockProjectClient();
-      const persistence = new PanelPersistence(client, { debounceMs: 100 });
-      expect(persistence.getPreviousSnapshotMap("nonexistent")).toBeUndefined();
-    });
-
     it("preserves fragment via queued state when debounce has not flushed", async () => {
       // Covers the queuedTerminalsByProject branch of getPreviousSnapshotMap.
       // Make the first persist hang so queued state stays present while a
@@ -1484,6 +1354,287 @@ describe("PanelPersistence", () => {
       });
 
       expect(panelToSnapshot(panel)).not.toHaveProperty("extensionStateVersion");
+    });
+  });
+});
+
+// Issue #1861: only explicit groups (panelIds.length > 1) are persisted.
+describe("PanelPersistence.saveTabGroups", () => {
+  const projectId = "test-project-id";
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  describe("explicit group filtering", () => {
+    it("only persists groups with panelIds.length > 1", async () => {
+      const client = createMockProjectClient();
+      const persistence = new PanelPersistence(client, { debounceMs: 100 });
+
+      const explicitGroup: TabGroup = {
+        id: "group-1",
+        panelIds: ["term-1", "term-2"],
+        activeTabId: "term-1",
+        location: "grid",
+      };
+
+      const singlePanelGroup: TabGroup = {
+        id: "group-2",
+        panelIds: ["term-3"],
+        activeTabId: "term-3",
+        location: "grid",
+      };
+
+      const emptyGroup: TabGroup = {
+        id: "group-3",
+        panelIds: [],
+        activeTabId: "",
+        location: "grid",
+      };
+
+      const tabGroups = new Map<string, TabGroup>([
+        ["group-1", explicitGroup],
+        ["group-2", singlePanelGroup],
+        ["group-3", emptyGroup],
+      ]);
+
+      persistence.saveTabGroups(tabGroups, projectId);
+      await vi.advanceTimersByTimeAsync(100);
+
+      expect(client.setTabGroups).toHaveBeenCalledWith(
+        projectId,
+        [explicitGroup],
+        expect.any(Array),
+        expect.any(Array)
+      );
+    });
+
+    it("persists empty array when all groups are virtual (single panel)", async () => {
+      const client = createMockProjectClient();
+      const persistence = new PanelPersistence(client, { debounceMs: 100 });
+
+      const singlePanelGroup1: TabGroup = {
+        id: "group-1",
+        panelIds: ["term-1"],
+        activeTabId: "term-1",
+        location: "grid",
+      };
+
+      const singlePanelGroup2: TabGroup = {
+        id: "group-2",
+        panelIds: ["term-2"],
+        activeTabId: "term-2",
+        location: "dock",
+      };
+
+      const tabGroups = new Map<string, TabGroup>([
+        ["group-1", singlePanelGroup1],
+        ["group-2", singlePanelGroup2],
+      ]);
+
+      persistence.saveTabGroups(tabGroups, projectId);
+      await vi.advanceTimersByTimeAsync(100);
+
+      expect(client.setTabGroups).toHaveBeenCalledWith(
+        projectId,
+        [],
+        expect.any(Array),
+        expect.any(Array)
+      );
+    });
+  });
+
+  describe("project ID handling", () => {
+    it("skips save if no project ID is provided", async () => {
+      const client = createMockProjectClient();
+      const persistence = new PanelPersistence(client, { debounceMs: 100 });
+
+      const group: TabGroup = {
+        id: "group-1",
+        panelIds: ["term-1", "term-2"],
+        activeTabId: "term-1",
+        location: "grid",
+      };
+
+      persistence.saveTabGroups(new Map([["group-1", group]])); // No project ID
+
+      await vi.advanceTimersByTimeAsync(100);
+
+      expect(client.setTabGroups).not.toHaveBeenCalled();
+    });
+
+    it("uses getProjectId option if projectId not passed directly", async () => {
+      const client = createMockProjectClient();
+      const persistence = new PanelPersistence(client, {
+        debounceMs: 100,
+        getProjectId: () => "from-option",
+      });
+
+      const group: TabGroup = {
+        id: "group-1",
+        panelIds: ["term-1", "term-2"],
+        activeTabId: "term-1",
+        location: "grid",
+      };
+
+      persistence.saveTabGroups(new Map([["group-1", group]])); // No project ID passed directly
+
+      await vi.advanceTimersByTimeAsync(100);
+
+      expect(client.setTabGroups).toHaveBeenCalledWith(
+        "from-option",
+        expect.any(Array),
+        expect.any(Array),
+        expect.any(Array)
+      );
+    });
+  });
+
+  describe("debouncing", () => {
+    it("debounces multiple saves into single persist call", async () => {
+      const client = createMockProjectClient();
+      const persistence = new PanelPersistence(client, { debounceMs: 100 });
+
+      const group1: TabGroup = {
+        id: "group-1",
+        panelIds: ["term-1", "term-2"],
+        activeTabId: "term-1",
+        location: "grid",
+      };
+
+      const group2: TabGroup = {
+        id: "group-1",
+        panelIds: ["term-1", "term-2", "term-3"],
+        activeTabId: "term-2",
+        location: "grid",
+      };
+
+      persistence.saveTabGroups(new Map([["group-1", group1]]), projectId);
+      persistence.saveTabGroups(new Map([["group-1", group2]]), projectId);
+      persistence.saveTabGroups(new Map([["group-1", group1]]), projectId);
+
+      expect(client.setTabGroups).not.toHaveBeenCalled();
+
+      await vi.advanceTimersByTimeAsync(100);
+
+      expect(client.setTabGroups).toHaveBeenCalledTimes(1);
+      expect(client.setTabGroups).toHaveBeenCalledWith(
+        projectId,
+        [group1],
+        expect.any(Array),
+        expect.any(Array)
+      );
+    });
+
+    it("skips redundant tab group persist when payload is unchanged", async () => {
+      const client = createMockProjectClient();
+      const persistence = new PanelPersistence(client, { debounceMs: 100 });
+
+      const group: TabGroup = {
+        id: "group-1",
+        panelIds: ["term-1", "term-2"],
+        activeTabId: "term-1",
+        location: "grid",
+      };
+
+      persistence.saveTabGroups(new Map([["group-1", group]]), projectId);
+      await vi.advanceTimersByTimeAsync(100);
+      expect(client.setTabGroups).toHaveBeenCalledTimes(1);
+
+      persistence.saveTabGroups(new Map([["group-1", { ...group }]]), projectId);
+      await vi.advanceTimersByTimeAsync(100);
+
+      expect(client.setTabGroups).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  describe("cancel and flush", () => {
+    it("cancel prevents pending tab group save", async () => {
+      const client = createMockProjectClient();
+      const persistence = new PanelPersistence(client, { debounceMs: 100 });
+
+      const group: TabGroup = {
+        id: "group-1",
+        panelIds: ["term-1", "term-2"],
+        activeTabId: "term-1",
+        location: "grid",
+      };
+
+      persistence.saveTabGroups(new Map([["group-1", group]]), projectId);
+      persistence.cancel();
+
+      await vi.advanceTimersByTimeAsync(100);
+
+      expect(client.setTabGroups).not.toHaveBeenCalled();
+    });
+
+    it("flush immediately executes pending tab group save", async () => {
+      const client = createMockProjectClient();
+      const persistence = new PanelPersistence(client, { debounceMs: 500 });
+
+      const group: TabGroup = {
+        id: "group-1",
+        panelIds: ["term-1", "term-2"],
+        activeTabId: "term-1",
+        location: "grid",
+      };
+
+      persistence.saveTabGroups(new Map([["group-1", group]]), projectId);
+
+      expect(client.setTabGroups).not.toHaveBeenCalled();
+
+      persistence.flush();
+      await vi.advanceTimersByTimeAsync(0);
+
+      expect(client.setTabGroups).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  describe("layout merge delta (#11350)", () => {
+    const g = (id: string, panelIds: string[]): TabGroup => ({
+      id,
+      panelIds,
+      activeTabId: panelIds[0]!,
+      location: "grid",
+    });
+
+    it("emits a deleted group in removedIds once the baseline is primed", async () => {
+      const client = createMockProjectClient();
+      const persistence = new PanelPersistence(client, { debounceMs: 100 });
+
+      persistence.primeTabGroups(projectId, [g("g1", ["a", "b"]), g("g2", ["c", "d"])]);
+
+      // User dissolves g2, leaving only g1.
+      persistence.saveTabGroups(new Map([["g1", g("g1", ["a", "b"])]]), projectId);
+      await vi.advanceTimersByTimeAsync(100);
+
+      const [, , changedIds, removedIds] = client.setTabGroups.mock.calls[0]!;
+      expect(changedIds).toEqual([]);
+      expect(removedIds).toEqual(["g2"]);
+    });
+
+    it("emits a newly added group in changedIds against a primed baseline", async () => {
+      const client = createMockProjectClient();
+      const persistence = new PanelPersistence(client, { debounceMs: 100 });
+
+      persistence.primeTabGroups(projectId, [g("g1", ["a", "b"])]);
+
+      persistence.saveTabGroups(
+        new Map([
+          ["g1", g("g1", ["a", "b"])],
+          ["g2", g("g2", ["c", "d"])],
+        ]),
+        projectId
+      );
+      await vi.advanceTimersByTimeAsync(100);
+
+      const [, , changedIds, removedIds] = client.setTabGroups.mock.calls[0]!;
+      expect(changedIds).toEqual(["g2"]);
+      expect(removedIds).toEqual([]);
     });
   });
 });

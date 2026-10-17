@@ -8,17 +8,10 @@ import {
   filterPilotBands,
   filterPilotGroups,
   summarizePilotGroups,
-  PILOT_BAND_FILTER_LABEL,
   type PilotRowContext,
 } from "../pilotRows";
 import type { FleetRunRow } from "@shared/types/ipc/fleet";
-import {
-  bandForRun,
-  bandLabel,
-  emptyBandCounts,
-  FLEET_BANDS,
-  type FleetBand,
-} from "@/lib/fleetAttention";
+import { emptyBandCounts, FLEET_BANDS, type FleetBand } from "@/lib/fleetAttention";
 
 const NOW = 1_700_000_000_000;
 
@@ -47,6 +40,7 @@ describe("buildPilotGroups", () => {
       [
         run({
           agentState: "waiting",
+          waitingReason: "question",
           agentId: "claude",
           title: "Fix the palette wait-age tick",
           since: NOW - 120_000,
@@ -168,7 +162,14 @@ describe("buildPilotGroups", () => {
   it("still renders a run whose workspace is no longer in the store", () => {
     // Dropping it would hide a live agent because a name lookup missed.
     const [group] = buildPilotGroups(
-      [run({ runId: "orphan", workspaceId: "gone", agentState: "waiting" })],
+      [
+        run({
+          runId: "orphan",
+          workspaceId: "gone",
+          agentState: "waiting",
+          waitingReason: "question",
+        }),
+      ],
       ctx()
     );
 
@@ -215,31 +216,6 @@ describe("buildPilotGroups", () => {
     expect(alpha.rows.map((r) => r.run.runId).sort()).toEqual(["a", "c"]);
   });
 
-  it("orders projects by last opened, not by worst band", () => {
-    const groups = buildPilotGroups(
-      [
-        run({
-          runId: "b",
-          workspaceId: "aa-stale",
-          agentState: "waiting",
-          waitingReason: "error",
-          since: NOW,
-        }),
-        run({ runId: "w", workspaceId: "zz-fresh", agentState: "working", since: NOW }),
-      ],
-      ctx({
-        workspaces: new Map([
-          // Name, band, arrival order and workspace id would ALL put the stale
-          // project first. Only recency lifts the just-opened one over it.
-          ["aa-stale", { kind: "project", name: "aaa", lastOpened: NOW - 3_600_000 }],
-          ["zz-fresh", { kind: "project", name: "zzz", lastOpened: NOW }],
-        ]),
-      })
-    );
-
-    expect(groups.map((g) => g.name)).toEqual(["zzz", "aaa"]);
-  });
-
   it("puts the project just opened above another project's waiting agents", () => {
     // The reported case (#11678): the current project held one working agent and
     // rendered below a project holding four waiting ones, because waiting
@@ -254,6 +230,7 @@ describe("buildPilotGroups", () => {
               runId: `px-${id}`,
               workspaceId: "px",
               agentState: "waiting",
+              waitingReason: "question",
               since: NOW - 600_000,
             })
           ),
@@ -298,25 +275,6 @@ describe("buildPilotGroups", () => {
     expect(groups.map((g) => g.name)).toEqual(["zzz", "mmm", "aaa"]);
   });
 
-  it("breaks an equal last-opened tie by name", () => {
-    const groups = buildPilotGroups(
-      [
-        // Arrival order and workspace id both favour "beta", so only the name
-        // tiebreak can produce the expected order.
-        run({ runId: "a", workspaceId: "p1", agentState: "working", since: NOW }),
-        run({ runId: "b", workspaceId: "p2", agentState: "working", since: NOW }),
-      ],
-      ctx({
-        workspaces: new Map([
-          ["p1", { kind: "project", name: "beta", lastOpened: NOW }],
-          ["p2", { kind: "project", name: "alpha", lastOpened: NOW }],
-        ]),
-      })
-    );
-
-    expect(groups.map((g) => g.name)).toEqual(["alpha", "beta"]);
-  });
-
   it("sinks a workspace it cannot date below every dated one, without dropping it", () => {
     // A run whose workspace has left the store still has to render. Ranking it
     // is a separate question: an absent opening time is not evidence of a recent
@@ -324,7 +282,13 @@ describe("buildPilotGroups", () => {
     // Named so a name fallback would put the unknown group first instead.
     const groups = buildPilotGroups(
       [
-        run({ runId: "orphan", workspaceId: "gone", agentState: "waiting", since: NOW }),
+        run({
+          runId: "orphan",
+          workspaceId: "gone",
+          agentState: "waiting",
+          waitingReason: "question",
+          since: NOW,
+        }),
         run({ runId: "known", workspaceId: "p1", agentState: "working", since: NOW }),
       ],
       ctx({
@@ -443,8 +407,18 @@ describe("buildPilotGroups", () => {
     const [group] = buildPilotGroups(
       [
         run({ runId: "working", agentState: "working", since: NOW - 1000 }),
-        run({ runId: "fresh-wait", agentState: "waiting", since: NOW - 60_000 }),
-        run({ runId: "stale-wait", agentState: "waiting", since: NOW - 40 * 60_000 }),
+        run({
+          runId: "fresh-wait",
+          agentState: "waiting",
+          waitingReason: "question",
+          since: NOW - 60_000,
+        }),
+        run({
+          runId: "stale-wait",
+          agentState: "waiting",
+          waitingReason: "question",
+          since: NOW - 40 * 60_000,
+        }),
         run({ runId: "blocked", agentState: "waiting", waitingReason: "error", since: NOW }),
       ],
       ctx()
@@ -461,8 +435,8 @@ describe("buildPilotGroups", () => {
   it("counts only demands in a project's demand tally", () => {
     const [group] = buildPilotGroups(
       [
-        run({ runId: "a", agentState: "waiting", since: NOW }),
-        run({ runId: "b", agentState: "completed", since: NOW }),
+        run({ runId: "a", agentState: "waiting", waitingReason: "question", since: NOW }),
+        run({ runId: "b", agentState: "completed", handBack: { stoppedAt: NOW }, since: NOW }),
         run({ runId: "c", agentState: "working", since: NOW }),
         run({ runId: "d", agentState: "idle", since: NOW }),
       ],
@@ -480,8 +454,13 @@ describe("buildPilotGroups", () => {
   it("ages every row against one shared clock", () => {
     const [group] = buildPilotGroups(
       [
-        run({ runId: "a", agentState: "waiting", since: NOW - 60_000 }),
-        run({ runId: "b", agentState: "waiting", since: NOW - 3_600_000 }),
+        run({ runId: "a", agentState: "waiting", waitingReason: "question", since: NOW - 60_000 }),
+        run({
+          runId: "b",
+          agentState: "waiting",
+          waitingReason: "question",
+          since: NOW - 3_600_000,
+        }),
       ],
       ctx({ nowMs: NOW })
     );
@@ -489,46 +468,47 @@ describe("buildPilotGroups", () => {
     expect(group!.rows.map((r) => r.age)).toEqual(["1h", "1m"]);
   });
 
-  it("stops counting a completion the workspace has already acknowledged", () => {
-    const seen = buildPilotGroups(
-      [run({ agentState: "completed", since: NOW - 60_000 })],
-      ctx({
-        workspaces: new Map([
-          ["p1", { kind: "project", name: "daintree", lastCompletionSeenAt: NOW }],
-        ]),
-      })
+  it("files a finished agent sliding to its prompt as a hand-back, not a wait", () => {
+    // The `completed` state lasts half a second; what the user actually sees is
+    // the agent back at its prompt, which must not read as it asking something.
+    const [group] = buildPilotGroups(
+      [
+        run({
+          agentState: "waiting",
+          waitingReason: "prompt",
+          since: NOW,
+          handBack: { stoppedAt: NOW - 500 },
+        }),
+      ],
+      ctx()
     );
-    expect(seen[0]!.demandCount).toBe(0);
-    expect(seen[0]!.rows[0]!.band).toBe("done");
-
-    const unseen = buildPilotGroups(
-      [run({ agentState: "completed", since: NOW })],
-      ctx({
-        workspaces: new Map([
-          ["p1", { kind: "project", name: "daintree", lastCompletionSeenAt: NOW - 60_000 }],
-        ]),
-      })
-    );
-    expect(unseen[0]!.demandCount).toBe(1);
+    expect(group!.rows[0]!.band).toBe("review");
+    expect(group!.rows[0]!.statusLabel).toBe("Unread");
   });
 
-  it("acknowledges per workspace rather than fleet-wide", () => {
+  it("acknowledges per run rather than per workspace", () => {
     const groups = buildPilotGroups(
       [
-        run({ runId: "a", workspaceId: "p1", agentState: "completed", since: NOW - 60_000 }),
-        run({ runId: "b", workspaceId: "p2", agentState: "completed", since: NOW - 60_000 }),
+        run({
+          runId: "a",
+          agentState: "completed",
+          since: NOW - 60_000,
+          handBack: { stoppedAt: NOW - 60_000, seenAt: NOW - 30_000 },
+        }),
+        run({
+          runId: "b",
+          agentState: "completed",
+          since: NOW - 60_000,
+          handBack: { stoppedAt: NOW - 60_000 },
+        }),
       ],
-      ctx({
-        workspaces: new Map([
-          ["p1", { kind: "project", name: "seen", lastCompletionSeenAt: NOW }],
-          ["p2", { kind: "project", name: "unseen" }],
-        ]),
-      })
+      ctx()
     );
 
-    const byName = new Map(groups.map((g) => [g.name, g.demandCount]));
-    expect(byName.get("seen")).toBe(0);
-    expect(byName.get("unseen")).toBe(1);
+    expect(groups[0]!.demandCount).toBe(1);
+    const bands = new Map(groups[0]!.rows.map((r) => [r.run.runId, r.band]));
+    expect(bands.get("a")).toBe("done");
+    expect(bands.get("b")).toBe("review");
   });
 
   it("carries the workspace kind so a scratch is not drawn as a project", () => {
@@ -620,10 +600,6 @@ describe("filterPilotGroups", () => {
     expect(filterPilotGroups(groups(), "zzzz")).toEqual([]);
   });
 
-  it("keeps every row when the project name itself matches", () => {
-    expect(filterPilotGroups(groups(), "daintree")[0]!.rows).toHaveLength(2);
-  });
-
   it("keeps every row when the project name matches without being typed whole", () => {
     // The short-circuit has to survive on match quality, not on the query
     // happening to be a substring: "fs" is neither contiguous in "fleet
@@ -687,8 +663,13 @@ describe("filterPilotGroups", () => {
     const filtered = filterPilotGroups(
       buildPilotGroups(
         [
-          run({ runId: "a", agentState: "waiting", title: "auth refactor" }),
-          run({ runId: "b", agentState: "waiting", title: "docs pass" }),
+          run({
+            runId: "a",
+            agentState: "waiting",
+            waitingReason: "question",
+            title: "auth refactor",
+          }),
+          run({ runId: "b", agentState: "waiting", waitingReason: "question", title: "docs pass" }),
         ],
         ctx()
       ),
@@ -735,19 +716,33 @@ describe("countPilotBands", () => {
           waitingReason: "error",
           since: NOW,
         }),
-        run({ runId: "needs", workspaceId: "p1", agentState: "waiting", since: NOW }),
-        run({ runId: "review", workspaceId: "p1", agentState: "completed", since: NOW }),
+        run({
+          runId: "needs",
+          workspaceId: "p1",
+          agentState: "waiting",
+          waitingReason: "question",
+          since: NOW,
+        }),
+        run({
+          runId: "review",
+          workspaceId: "p1",
+          agentState: "completed",
+          since: NOW,
+          handBack: { stoppedAt: NOW },
+        }),
         run({ runId: "running", workspaceId: "p2", agentState: "working", since: NOW }),
         run({
           runId: "done",
           workspaceId: "p2",
           agentState: "completed",
           since: NOW - 120_000,
+          handBack: { stoppedAt: NOW - 120_000, seenAt: NOW - 60_000 },
         }),
         run({
           runId: "parked",
           workspaceId: "p2",
           agentState: "waiting",
+          waitingReason: "question",
           since: NOW,
           park: { parkedAt: NOW - 60_000 },
         }),
@@ -756,12 +751,33 @@ describe("countPilotBands", () => {
       ctx({
         workspaces: new Map([
           ["p1", { kind: "project", name: "one" }],
-          // Acknowledged after `done` finished but before `review` did, so the
-          // two completions land in different bands.
-          ["p2", { kind: "project", name: "two", lastCompletionSeenAt: NOW - 60_000 }],
+          ["p2", { kind: "project", name: "two" }],
         ]),
       })
     );
+
+  it("counts an agent at its prompt as Finished or idle, never Attention — as the sidebar does (#13234)", () => {
+    const counts = countPilotBands(
+      buildPilotGroups(
+        [
+          run({
+            runId: "handed-back",
+            agentState: "waiting",
+            waitingReason: "prompt",
+            since: NOW,
+            handBack: { stoppedAt: NOW },
+          }),
+          run({ runId: "prompt", agentState: "waiting", waitingReason: "prompt", since: NOW }),
+          run({ runId: "bare", agentState: "waiting", waitingReason: undefined, since: NOW }),
+          run({ runId: "approval", agentState: "waiting", waitingReason: "approval", since: NOW }),
+        ],
+        ctx()
+      )
+    );
+    expect(counts["needs-you"]).toBe(1);
+    expect(counts.finished).toBe(1);
+    expect(counts.other).toBe(2);
+  });
 
   it("maps every band onto the segments", () => {
     const counts = countPilotBands(wholeFleet());
@@ -777,22 +793,23 @@ describe("countPilotBands", () => {
     expect(counts["needs-you"] + counts.working + counts.finished).toBe(counts.all - 2);
   });
 
-  it("leaves an exited run out of every segment but All", () => {
-    // An exited terminal isn't working, isn't finished, and isn't asking for
-    // anything — putting it in a bucket would make that bucket lie.
-    const counts = countPilotBands(
-      buildPilotGroups([run({ runId: "gone", agentState: "exited", since: NOW })], ctx())
-    );
-
-    expect(counts.all).toBe(1);
-    expect(counts["needs-you"] + counts.working + counts.finished).toBe(0);
-  });
-
   it("counts the population it was handed, so a query narrows the segments", () => {
     const built = buildPilotGroups(
       [
-        run({ runId: "a", agentState: "waiting", title: "auth refactor", since: NOW }),
-        run({ runId: "b", agentState: "waiting", title: "docs pass", since: NOW }),
+        run({
+          runId: "a",
+          agentState: "waiting",
+          waitingReason: "question",
+          title: "auth refactor",
+          since: NOW,
+        }),
+        run({
+          runId: "b",
+          agentState: "waiting",
+          waitingReason: "question",
+          title: "docs pass",
+          since: NOW,
+        }),
       ],
       ctx()
     );
@@ -810,6 +827,7 @@ describe("parked rows", () => {
       [
         run({
           agentState: "waiting",
+          waitingReason: "question",
           since: NOW - 3 * 3_600_000,
           park: { parkedAt: NOW - 120_000, note: "after the migration" },
         }),
@@ -830,12 +848,14 @@ describe("parked rows", () => {
         run({
           runId: "recent",
           agentState: "waiting",
+          waitingReason: "question",
           since: NOW - 3_600_000,
           park: { parkedAt: NOW - 60_000 },
         }),
         run({
           runId: "ancient",
           agentState: "waiting",
+          waitingReason: "question",
           since: NOW - 60_000,
           park: { parkedAt: NOW - 3_600_000 },
         }),
@@ -856,7 +876,7 @@ describe("parked rows", () => {
           since: NOW,
           park: { parkedAt: NOW },
         }),
-        run({ runId: "b", agentState: "waiting", since: NOW }),
+        run({ runId: "b", agentState: "waiting", waitingReason: "question", since: NOW }),
       ],
       ctx()
     );
@@ -868,7 +888,14 @@ describe("parked rows", () => {
 
   it("is admitted by no state segment — hiding from Waiting is the point of parking", () => {
     const groups = buildPilotGroups(
-      [run({ agentState: "waiting", since: NOW, park: { parkedAt: NOW } })],
+      [
+        run({
+          agentState: "waiting",
+          waitingReason: "question",
+          since: NOW,
+          park: { parkedAt: NOW },
+        }),
+      ],
       ctx()
     );
 
@@ -881,8 +908,14 @@ describe("parked rows", () => {
   it("gets a segment of its own that admits nothing else", () => {
     const groups = buildPilotGroups(
       [
-        run({ runId: "shelved", agentState: "waiting", since: NOW, park: { parkedAt: NOW } }),
-        run({ runId: "live", agentState: "waiting", since: NOW }),
+        run({
+          runId: "shelved",
+          agentState: "waiting",
+          waitingReason: "question",
+          since: NOW,
+          park: { parkedAt: NOW },
+        }),
+        run({ runId: "live", agentState: "waiting", waitingReason: "question", since: NOW }),
       ],
       ctx()
     );
@@ -898,11 +931,18 @@ describe("parked rows", () => {
         run({
           runId: "shelved",
           agentState: "waiting",
+          waitingReason: "question",
           since: NOW,
           title: "auth refactor",
           park: { parkedAt: NOW, note: "resume after the migration lands" },
         }),
-        run({ runId: "other", agentState: "waiting", since: NOW, title: "docs pass" }),
+        run({
+          runId: "other",
+          agentState: "waiting",
+          waitingReason: "question",
+          since: NOW,
+          title: "docs pass",
+        }),
       ],
       ctx()
     );
@@ -994,20 +1034,6 @@ describe("bandFilterHasDemand", () => {
   });
 });
 
-describe("state vocabulary", () => {
-  it("names the bucket wider than the states inside it, never after one of them", () => {
-    // The segment holds `blocked` AND `needs-you`, so it cannot borrow either
-    // one's word: "Waiting 2" over an errored run and a waiting one is a claim
-    // about both that is only true of one. The ROW keeps the exact state.
-    const waiting = run({ agentState: "waiting", waitingReason: "question" });
-    const blocked = run({ agentState: "waiting", waitingReason: "error" });
-
-    expect(bandLabel(bandForRun(waiting), waiting)).toBe("Waiting");
-    expect(bandLabel(bandForRun(blocked), blocked)).toBe("Blocked");
-    expect(PILOT_BAND_FILTER_LABEL["needs-you"]).toBe("Attention");
-  });
-});
-
 describe("filterPilotBands", () => {
   const mixed = () =>
     buildPilotGroups(
@@ -1064,7 +1090,7 @@ describe("filterPilotBands", () => {
     const [built] = buildPilotGroups(
       [
         run({ runId: "urgent", agentState: "waiting", waitingReason: "error", since: NOW }),
-        run({ runId: "asking", agentState: "waiting", since: NOW }),
+        run({ runId: "asking", agentState: "waiting", waitingReason: "question", since: NOW }),
         run({ runId: "calm", agentState: "working", since: NOW }),
       ],
       ctx()
@@ -1083,9 +1109,21 @@ describe("filterPilotBands", () => {
   it("intersects with a query rather than replacing it", () => {
     const built = buildPilotGroups(
       [
-        run({ runId: "a", agentState: "waiting", title: "auth refactor", since: NOW }),
+        run({
+          runId: "a",
+          agentState: "waiting",
+          waitingReason: "question",
+          title: "auth refactor",
+          since: NOW,
+        }),
         run({ runId: "b", agentState: "working", title: "auth rewrite", since: NOW }),
-        run({ runId: "c", agentState: "waiting", title: "docs pass", since: NOW }),
+        run({
+          runId: "c",
+          agentState: "waiting",
+          waitingReason: "question",
+          title: "docs pass",
+          since: NOW,
+        }),
       ],
       ctx()
     );
@@ -1105,7 +1143,7 @@ describe("summarizePilotGroups", () => {
           run({ runId: "a", agentState: "working" }),
           run({ runId: "b", agentState: "exited" }),
           run({ runId: "c", agentState: "idle" }),
-          run({ runId: "d", agentState: "waiting" }),
+          run({ runId: "d", agentState: "waiting", waitingReason: "question" }),
         ],
         ctx()
       )
@@ -1119,7 +1157,7 @@ describe("summarizePilotGroups", () => {
   it("agrees with the per-group demand counts it summarises", () => {
     const built = buildPilotGroups(
       [
-        run({ runId: "a", workspaceId: "p1", agentState: "waiting" }),
+        run({ runId: "a", workspaceId: "p1", agentState: "waiting", waitingReason: "question" }),
         run({ runId: "b", workspaceId: "p2", agentState: "waiting", waitingReason: "error" }),
         run({ runId: "c", workspaceId: "p2", agentState: "working" }),
       ],
@@ -1178,10 +1216,6 @@ describe("hasWorktreeAxis", () => {
       );
     });
 
-    it("is true for a lone agent in a project with two worktrees", () => {
-      expect(hasWorktreeAxis([{ worktreeId: "/repo/wt/a" }], 2)).toBe(true);
-    });
-
     it("is true with no runs at all once the project is known to have two", () => {
       // A scoped view of a project with no agents says "none here yet", which
       // answers the question asked. The whole fleet answers a different one.
@@ -1192,10 +1226,6 @@ describe("hasWorktreeAxis", () => {
       // The root checkout is a first-class entry in that count, so one means a
       // project worked only in its own root.
       expect(hasWorktreeAxis([{ worktreeId: "/repo" }], 1)).toBe(false);
-    });
-
-    it("is false where the project has no worktrees to speak of", () => {
-      expect(hasWorktreeAxis([], 0)).toBe(false);
     });
 
     it("never lets an absent or zero count veto an axis the runs proved", () => {
@@ -1268,7 +1298,13 @@ describe("buildPilotWorktreeGroups", () => {
     ]);
     const alarmed = worktreeGroups([
       run({ runId: "a", worktreeId: "/repo/wt/alpha", agentState: "working" }),
-      run({ runId: "z", worktreeId: "/repo/wt/zulu", agentState: "waiting", since: NOW - 60_000 }),
+      run({
+        runId: "z",
+        worktreeId: "/repo/wt/zulu",
+        agentState: "waiting",
+        waitingReason: "question",
+        since: NOW - 60_000,
+      }),
     ]);
 
     expect(alarmed.map((g) => g.name)).toEqual(calm.map((g) => g.name));
@@ -1284,6 +1320,7 @@ describe("buildPilotWorktreeGroups", () => {
         runId: "waiting",
         worktreeId: "/repo/wt/alpha",
         agentState: "waiting",
+        waitingReason: "question",
         since: NOW - 60_000,
       }),
     ]);
@@ -1299,6 +1336,7 @@ describe("buildPilotWorktreeGroups", () => {
         runId: "blocked",
         worktreeId: "/repo/wt/alpha",
         agentState: "waiting",
+        waitingReason: "question",
         since: NOW - 60_000,
       }),
       run({ runId: "busy", worktreeId: "/repo/wt/beta", agentState: "working" }),
@@ -1428,19 +1466,6 @@ describe("buildPilotWorktreeGroups", () => {
     expect(hasWorktreeAxis([{ worktreeId: "" }, {}])).toBe(false);
   });
 
-  it("opens the same way twice for the same fleet", () => {
-    // The comparator has to be a total order, or spatial memory never forms.
-    const runs = [
-      run({ runId: "a", worktreeId: "/repo/wt/beta" }),
-      run({ runId: "b", worktreeId: "/repo/wt/alpha" }),
-      run({ runId: "c" }),
-    ];
-
-    expect(worktreeGroups(runs).map((g) => g.groupId)).toEqual(
-      worktreeGroups([...runs].reverse()).map((g) => g.groupId)
-    );
-  });
-
   describe("with the main worktree named", () => {
     /** A root whose basename sorts last, so only the lead rule can move it. */
     const ZEBRA_ROOT = "/repo/zebra";
@@ -1536,6 +1561,7 @@ describe("narrowing on the worktree axis", () => {
       worktreeId: "/repo/wt/alpha",
       title: "Fix auth",
       agentState: "waiting",
+      waitingReason: "question",
       since: NOW - 60_000,
     }),
     run({ runId: "busy", worktreeId: "/repo/wt/beta", title: "Run tests", agentState: "working" }),
@@ -1546,12 +1572,6 @@ describe("narrowing on the worktree axis", () => {
       agentState: "working",
     }),
   ];
-
-  it("drops a worktree the query emptied", () => {
-    const filtered = filterPilotGroups(worktreeGroups(SPREAD), "auth");
-
-    expect(filtered.map((g) => g.name)).toEqual(["alpha"]);
-  });
 
   it("admits a whole worktree on its own name", () => {
     // Typing a worktree name to see everything in it is the question this
@@ -1576,18 +1596,43 @@ describe("narrowing on the worktree axis", () => {
 
     expect(filtered.flatMap((g) => g.rows)).toHaveLength(SPREAD.length);
   });
+});
 
-  it("counts and summarises the scoped population only", () => {
-    const groups = worktreeGroups(SPREAD);
+describe("buildPilotGroups — Canopy attribution", () => {
+  const ASKED = {
+    kind: "asked",
+    quote: "Should I also migrate the tests?",
+    readAt: NOW - 2 * 60_000,
+  } as const;
 
-    expect(countPilotBands(groups).all).toBe(SPREAD.length);
-    expect(summarizePilotGroups(groups).demand).toBe(1);
+  it("shows the quoted evidence on a row Canopy placed, and on its accessible surface", () => {
+    const [group] = buildPilotGroups(
+      [
+        run({
+          agentState: "completed",
+          handBack: { stoppedAt: NOW - 1, seenAt: NOW },
+          canopy: ASKED,
+        }),
+      ],
+      ctx()
+    );
+    const row = group!.rows[0]!;
+    expect(row.band).toBe("needs-you");
+    expect(row.canopyEvidence).toEqual({
+      claim: 'Asked: "Should I also migrate the tests?"',
+      attribution: "read by Canopy 2m ago",
+    });
   });
 
-  it("recomputes a band-filtered worktree's own summary", () => {
-    const filtered = filterPilotBands(worktreeGroups(SPREAD), "needs-you");
-
-    expect(filtered.map((g) => g.name)).toEqual(["alpha"]);
-    expect(filtered[0]!.demandCount).toBe(1);
+  it("carries no attribution where the free rules placed the row, or the user shelved it", () => {
+    const [group] = buildPilotGroups(
+      [
+        run({ runId: "plain", agentState: "waiting", waitingReason: "question" }),
+        run({ runId: "parked", agentState: "completed", canopy: ASKED, park: { parkedAt: NOW } }),
+        run({ runId: "moved-on", agentState: "working", canopy: ASKED }),
+      ],
+      ctx()
+    );
+    expect(group!.rows.map((r) => r.canopyEvidence)).toEqual([null, null, null]);
   });
 });

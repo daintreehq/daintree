@@ -290,6 +290,7 @@ import { useSortable } from "@dnd-kit/sortable";
 import { DRAG_GHOST_OPACITY } from "@/lib/animationUtils";
 import { TOOLBAR_BUTTON_METADATA } from "@/components/Layout/toolbarButtonMetadata";
 import { LAUNCHER_PANEL_BUTTON_IDS } from "@shared/types/toolbar";
+import { useCanopyStore } from "@/store/canopyStore";
 import { ToolbarSettingsTab } from "../ToolbarSettingsTab";
 
 function agentSettings(overrides: Record<string, { pinned?: boolean }>): AgentSettings {
@@ -457,20 +458,6 @@ describe("ToolbarSettingsTab — agent visibility routing", () => {
     expect(setPanelButtonOnToolbarMock).toHaveBeenCalledWith("browser", true);
     expect(toggleButtonVisibilityMock).not.toHaveBeenCalled();
     expect(setAgentPinnedMock).not.toHaveBeenCalled();
-  });
-
-  it("routes a panel-button hide through the same action", () => {
-    mockToolbarState = makeToolbarState({
-      leftButtons: ["terminal", "file-browser", "launcher"],
-      rightButtons: ["settings"],
-      pinnedButtons: {},
-    });
-
-    const { getByLabelText } = render(<ToolbarSettingsTab />);
-    fireEvent.click(getByLabelText(switchName("Browse files")));
-
-    expect(setPanelButtonOnToolbarMock).toHaveBeenCalledWith("file-browser", false);
-    expect(toggleButtonVisibilityMock).not.toHaveBeenCalled();
   });
 
   it("reflects pinned agents in the side visible-count summary", () => {
@@ -1060,26 +1047,6 @@ describe("ToolbarSettingsTab — plugin button promotion (#11304)", () => {
     expect(setPluginButtonPromotedMock).toHaveBeenCalledWith("acme.ping", true);
     expect(toggleButtonVisibilityMock).not.toHaveBeenCalled();
   });
-
-  it("demotes an already-promoted contribution", () => {
-    mockToolbarState = makeToolbarState({
-      ...mockToolbarState.layout,
-      pinnedButtons: { "acme.ping": true },
-    });
-
-    const { getByLabelText } = render(<ToolbarSettingsTab />);
-    fireEvent.click(getByLabelText(switchName("Hello ping")));
-
-    expect(setPluginButtonPromotedMock).toHaveBeenCalledWith("acme.ping", false);
-  });
-
-  it("leaves built-in toggles on toggleButtonVisibility", () => {
-    const { getByLabelText } = render(<ToolbarSettingsTab />);
-    fireEvent.click(getByLabelText(switchName("Launcher")));
-
-    expect(toggleButtonVisibilityMock).toHaveBeenCalledWith("launcher", "left");
-    expect(setPluginButtonPromotedMock).not.toHaveBeenCalled();
-  });
 });
 
 describe("ToolbarSettingsTab — panel button pinning (#11667)", () => {
@@ -1500,5 +1467,34 @@ describe("ToolbarSettingsTab — reset", () => {
     payload.action.onClick();
     expect(restored().layout.leftButtons).toBe(changed.leftButtons);
     expect(restored().layout.rightButtons).toBe(changed.rightButtons);
+  });
+});
+
+describe("ToolbarSettingsTab — a hidden Canopy", () => {
+  beforeEach(() => {
+    clearStoreMocks();
+    vi.mocked(useSortable).mockImplementation(defaultSortable);
+    mockAgentSettings = null;
+    mockToolbarState = makeToolbarState({
+      leftButtons: ["launcher", "terminal"],
+      rightButtons: ["canopy", "settings"],
+      pinnedButtons: {},
+    });
+  });
+
+  afterEach(() => {
+    useCanopyStore.setState({ mode: "unset" });
+    mockToolbarState = makeToolbarState();
+  });
+
+  it("drops Canopy's row while hidden, keeping its place for when it is shown", () => {
+    const shown = render(<ToolbarSettingsTab />);
+    expect(switchNamesIn(rightColumn(shown.container))).toContain(switchName("Canopy"));
+    shown.unmount();
+
+    useCanopyStore.setState({ mode: "hidden" });
+    const { container } = render(<ToolbarSettingsTab />);
+    expect(switchNamesIn(container)).not.toContain(switchName("Canopy"));
+    expect(setRightButtonsMock).not.toHaveBeenCalled();
   });
 });

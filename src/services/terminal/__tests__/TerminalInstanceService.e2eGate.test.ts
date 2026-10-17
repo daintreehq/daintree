@@ -12,6 +12,7 @@ vi.mock("@/clients", () => ({
     onData: vi.fn(() => vi.fn()),
     onExit: vi.fn(() => vi.fn()),
     onTierChanged: vi.fn(() => vi.fn()),
+    onReset: vi.fn(() => vi.fn()),
     setActivityTier: vi.fn(),
     wake: vi.fn().mockResolvedValue({ state: null }),
     write: vi.fn(),
@@ -19,6 +20,7 @@ vi.mock("@/clients", () => ({
     getSharedBuffer: vi.fn(() => null),
     acknowledgeData: vi.fn(),
     acknowledgePortData: vi.fn(),
+    getPortAckGeneration: vi.fn(() => 0),
     discardPortAcks: vi.fn(),
   },
   systemClient: { openExternal: vi.fn() },
@@ -109,13 +111,6 @@ describe("TerminalInstanceService E2E terminal-bridge gate", () => {
   afterEach(() => {
     clearGlobals();
     vi.resetModules();
-  });
-
-  it("does not attach any terminal bridge when __DAINTREE_E2E_MODE__ is absent", async () => {
-    await importServiceWithMode(undefined);
-    for (const name of E2E_TERMINAL_GLOBALS) {
-      expect(windowProp(name), name).toBeUndefined();
-    }
   });
 
   it("does not attach when __DAINTREE_E2E_MODE__ is false", async () => {

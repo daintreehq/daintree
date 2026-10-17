@@ -6,9 +6,31 @@ import path from "path";
 // against empty strings: Vitest stubs every `.css` specifier — `?raw` included
 // — so the bytes have to arrive as a virtual JS module instead.
 import { pluginStyleContract } from "./scripts/lib/plugin-style-contract.mjs";
+import { isRemoteHostSupportedOn } from "./shared/config/remoteHostsSupport";
+
+// Remote Hosts suites assume POSIX paths and Unix sockets by design: the
+// boot, both roles' links, and the project service behind host-to-host clone
+// and placement. A platform that can't be a Host (Windows, a WSL Shell only,
+// see shared/config/remoteHostsSupport.ts) skips them; CI runs them on Linux
+// with the platform mocked wherever a Windows Shell's behaviour is tested.
+const REMOTE_HOSTS_ONLY_TESTS = isRemoteHostSupportedOn(process.platform, true)
+  ? []
+  : ["electron/remote/**", "electron/services/projectAcrossHosts/**"];
+
+// The suite asserts en-US number formatting — the plugin kit formats with the
+// default locale — so a developer on another locale (en_ZA groups digits with
+// spaces) saw kit tests fail that CI never shows. The forked workers inherit
+// this, and their ICU reads it when they start.
+process.env.LANG = "en_US.UTF-8";
+process.env.LC_ALL = "en_US.UTF-8";
 
 export default defineConfig({
   plugins: [pluginStyleContract()],
+  define: {
+    __DAINTREE_REMOTE_HOSTS__: "true",
+    __DAINTREE_REMOTE_HOST_ROLE__: "true",
+    __DAINTREE_BUILD_COMMIT__: JSON.stringify("test"),
+  },
   resolve: {
     alias: {
       "@": path.resolve(__dirname, "./src"),
@@ -20,6 +42,12 @@ export default defineConfig({
       "@daintreehq/tour/mock-app": path.resolve(__dirname, "./packages/tour/src/mock-app.ts"),
       "@daintreehq/tour": path.resolve(__dirname, "./packages/tour/src/index.ts"),
       "@daintreehq/plugin-ui": path.resolve(__dirname, "./src/pluginUi/index.ts"),
+      // Source, so a story suite runs against this tree's preview rather than
+      // whichever `dist/` the workspace link happens to point at.
+      "@daintreehq/plugin-sdk/testing/preview": path.resolve(
+        __dirname,
+        "./packages/plugin-sdk/src/testing-preview.ts"
+      ),
     },
   },
   test: {
@@ -59,6 +87,9 @@ export default defineConfig({
       "build",
       "release",
       "**/*.integration.test.{js,ts}",
+      // Playwright specs against a plugin's panel preview, run by `playwright test`.
+      "plugins/**/review/*.spec.ts",
+      ...REMOTE_HOSTS_ONLY_TESTS,
     ],
     testTimeout: 15000,
     // Paired with testTimeout the way vitest.integration.config.ts pairs its

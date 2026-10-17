@@ -45,14 +45,19 @@ interface FakeWebContents {
 let nextWebContentsId = 1;
 function makeWebContents(): FakeWebContents {
   let loading = false;
-  const startListeners: Array<() => void> = [];
+  const startListeners: Array<
+    (details: { isMainFrame: boolean; isSameDocument: boolean }) => void
+  > = [];
   const send = vi.fn();
   const wc = {
     id: nextWebContentsId++,
     isDestroyed: () => false,
-    isLoading: () => loading,
-    on: (event: string, listener: () => void) => {
-      if (event === "did-start-loading") startListeners.push(listener);
+    isLoadingMainFrame: () => loading,
+    on: (
+      event: string,
+      listener: (details: { isMainFrame: boolean; isSameDocument: boolean }) => void
+    ) => {
+      if (event === "did-start-navigation") startListeners.push(listener);
     },
     send,
   } as unknown as WebContents;
@@ -62,7 +67,7 @@ function makeWebContents(): FakeWebContents {
     setLoading: (value) => (loading = value),
     startLoading: () => {
       loading = true;
-      for (const listener of startListeners) listener();
+      for (const listener of startListeners) listener({ isMainFrame: true, isSameDocument: false });
     },
   };
 }

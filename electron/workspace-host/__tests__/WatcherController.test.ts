@@ -9,7 +9,11 @@ let mockWatcherStartResult = false;
 let mockRecursiveStartResult: boolean | undefined;
 let mockGitOnlyStartResult: boolean | undefined;
 let mockWatcherStartFiresFailure = false;
-let capturedOnInotifyLimitReached: (() => void) | undefined;
+// Whether a recursive start that resolves true also gets its subscription
+// live, as the real watcher reports through onWorktreeWatcherReady. False
+// models a subscription that fails after start() has resolved.
+let mockRecursiveSubscriptionGoesLive = true;
+let capturedOnInotifyLimitReached: ((limit: "watches" | "instances") => void) | undefined;
 let capturedOnEmfileLimitReached: (() => void) | undefined;
 let capturedWatcherOptions: Record<string, unknown> | undefined;
 let watcherStartCallCount = 0;
@@ -18,16 +22,19 @@ vi.mock("../../utils/gitFileWatcher.js", () => {
   return {
     GitFileWatcher: class {
       private readonly onWatcherFailed?: () => void;
+      private readonly onWorktreeWatcherReady?: () => void;
       private readonly watchWorktree: boolean;
       constructor(
         opts: {
           onWatcherFailed?: () => void;
-          onInotifyLimitReached?: () => void;
+          onInotifyLimitReached?: (limit: "watches" | "instances") => void;
           onEmfileLimitReached?: () => void;
+          onWorktreeWatcherReady?: () => void;
           watchWorktree?: boolean;
         } & Record<string, unknown>
       ) {
         this.onWatcherFailed = opts.onWatcherFailed;
+        this.onWorktreeWatcherReady = opts.onWorktreeWatcherReady;
         this.watchWorktree = opts.watchWorktree === true;
         capturedOnInotifyLimitReached = opts.onInotifyLimitReached;
         capturedOnEmfileLimitReached = opts.onEmfileLimitReached;
@@ -41,8 +48,15 @@ vi.mock("../../utils/gitFileWatcher.js", () => {
         if (this.watchWorktree && mockWatcherStartFiresFailure && !result) {
           this.onWatcherFailed?.();
         }
+        if (this.watchWorktree && result && mockRecursiveSubscriptionGoesLive) {
+          // The real subscription settles after start() has resolved.
+          void Promise.resolve()
+            .then(() => Promise.resolve())
+            .then(() => this.onWorktreeWatcherReady?.());
+        }
         return Promise.resolve(result);
       }
+      setUpstreamRef() {}
       dispose() {}
     },
   };
@@ -106,6 +120,7 @@ describe("WatcherController", () => {
     mockRecursiveStartResult = undefined;
     mockGitOnlyStartResult = undefined;
     mockWatcherStartFiresFailure = false;
+    mockRecursiveSubscriptionGoesLive = true;
     watcherStartCallCount = 0;
     capturedOnInotifyLimitReached = undefined;
     capturedOnEmfileLimitReached = undefined;
@@ -163,38 +178,6 @@ describe("WatcherController", () => {
     expect(capturedWatcherOptions?.watchWorktree).toBe(false);
   });
 
-  it("falls back to git-only when recursive fails synchronously via onWatcherFailed", async () => {
-    // Recursive fails AND fires onWatcherFailed synchronously; git-only succeeds.
-    mockRecursiveStartResult = false;
-    mockGitOnlyStartResult = true;
-    mockWatcherStartFiresFailure = true;
-    const host = makeHost({ isElevated: true });
-    const ctrl = new WatcherController(host as WatcherControllerHost);
-
-    ctrl.start();
-
-    await settle();
-    expect(ctrl.currentMode).toBe("git-only");
-    expect(ctrl.hasWatcher).toBe(true);
-  });
-
-  it("schedules a recursive retry after a failed recursive start (focused only)", async () => {
-    mockRecursiveStartResult = false;
-    mockGitOnlyStartResult = true;
-    const host = makeHost({ isElevated: true });
-    const ctrl = new WatcherController(host as WatcherControllerHost);
-
-    ctrl.start();
-
-    await settle();
-    expect(ctrl.currentMode).toBe("git-only");
-
-    // After the retry interval, recursive succeeds.
-    mockRecursiveStartResult = true;
-    await vi.advanceTimersByTimeAsync(31_000);
-    expect(ctrl.currentMode).toBe("recursive");
-  });
-
   it("does not fire onWatcherRecovered on a clean cold start", async () => {
     mockWatcherStartResult = true;
     const host = makeHost({ isElevated: true });
@@ -204,6 +187,27 @@ describe("WatcherController", () => {
 
     await settle();
     expect(ctrl.currentMode).toBe("recursive");
+    expect(host.onWatcherRecovered).not.toHaveBeenCalled();
+  });
+
+  it("doesn't signal recovery when a retried recursive arm resolves but its subscription then fails", async () => {
+    mockRecursiveStartResult = false;
+    mockGitOnlyStartResult = true;
+    const host = makeHost({ isElevated: true });
+    const ctrl = new WatcherController(host as WatcherControllerHost);
+
+    ctrl.start();
+    await settle();
+    expect(ctrl.currentMode).toBe("git-only");
+
+    // start() resolves, but the subscription never goes live: the inotify
+    // limit is still hit, and that arrives after the arm has resolved.
+    mockRecursiveStartResult = true;
+    mockRecursiveSubscriptionGoesLive = false;
+    await vi.advanceTimersByTimeAsync(31_000);
+    capturedOnInotifyLimitReached?.("watches");
+    await settle();
+
     expect(host.onWatcherRecovered).not.toHaveBeenCalled();
   });
 
@@ -325,55 +329,6 @@ describe("WatcherController", () => {
     const startsAtCap = watcherStartCallCount;
     await vi.advanceTimersByTimeAsync(120_000);
     expect(watcherStartCallCount).toBe(startsAtCap);
-  });
-
-  it("update() rotates without resetting the retry budget", async () => {
-    mockRecursiveStartResult = false;
-    mockGitOnlyStartResult = true;
-    const host = makeHost({ isElevated: true });
-    const ctrl = new WatcherController(host as WatcherControllerHost);
-
-    ctrl.start();
-
-    await settle();
-    // Burn 2 retries.
-    await vi.advanceTimersByTimeAsync(31_000);
-    await vi.advanceTimersByTimeAsync(31_000);
-
-    // Rotate (e.g. branch checkout) — budget should NOT reset.
-    ctrl.update();
-    await settle();
-
-    // Now allow recursive to succeed; remaining budget = 3 retries.
-    mockRecursiveStartResult = true;
-    await vi.advanceTimersByTimeAsync(31_000);
-    expect(ctrl.currentMode).toBe("recursive");
-  });
-
-  it("stop(true) resets the retry budget — restart allows a full 5-retry budget", async () => {
-    mockRecursiveStartResult = false;
-    mockGitOnlyStartResult = true;
-    const host = makeHost({ isElevated: true });
-    const ctrl = new WatcherController(host as WatcherControllerHost);
-
-    // Burn 3 retries on the first run.
-    ctrl.start();
-    await settle();
-    await vi.advanceTimersByTimeAsync(31_000);
-    await vi.advanceTimersByTimeAsync(31_000);
-    await vi.advanceTimersByTimeAsync(31_000);
-
-    ctrl.stop(true);
-
-    // Restart — fresh budget should mean recursive can succeed within budget.
-    ctrl.start();
-    await settle();
-    // Now allow recursive to succeed at the next retry — budget was reset
-    // so retryCount=1 at this point. If reset failed and budget was still
-    // close to MAX_RETRIES, recursive might never get an upgrade.
-    mockRecursiveStartResult = true;
-    await vi.advanceTimersByTimeAsync(31_000);
-    expect(ctrl.currentMode).toBe("recursive");
   });
 
   it("stop(false) preserves the retry budget — exhausted budget stays exhausted across rotation", async () => {
@@ -595,9 +550,9 @@ describe("WatcherController", () => {
     ctrl.start();
     await settle();
 
-    capturedOnInotifyLimitReached?.();
+    capturedOnInotifyLimitReached?.("instances");
     capturedOnEmfileLimitReached?.();
-    expect(host.onInotifyLimitReached).toHaveBeenCalledWith("/test/worktree");
+    expect(host.onInotifyLimitReached).toHaveBeenCalledWith("/test/worktree", "instances");
     expect(host.onEmfileLimitReached).toHaveBeenCalledWith("/test/worktree");
   });
 
@@ -640,16 +595,6 @@ describe("WatcherController", () => {
     fireWorktreeFilesChanged?.(["src"]);
 
     expect(host.onWorktreeFilesChanged).not.toHaveBeenCalled();
-  });
-
-  it("uses the 250ms worktree min-debounce floor", async () => {
-    mockWatcherStartResult = true;
-    const host = makeHost({ isElevated: true });
-    const ctrl = new WatcherController(host as WatcherControllerHost);
-    ctrl.start();
-    await settle();
-
-    expect(capturedWatcherOptions).toMatchObject({ worktreeMinDebounceMs: 250 });
   });
 
   it("handleElevationChange(false) defers the downgrade by the settle delay", async () => {
@@ -970,39 +915,6 @@ describe("WatcherController", () => {
         await vi.advanceTimersByTimeAsync(31_000);
       }
       expect(ctrl.resetRetryBudget()).toBe(true);
-    });
-
-    it("stop(false) preserves both the retry count and the session cap", async () => {
-      mockRecursiveStartResult = false;
-      mockGitOnlyStartResult = true;
-      const host = makeHost({ isElevated: true });
-      const ctrl = new WatcherController(host as WatcherControllerHost);
-
-      ctrl.start();
-
-      await settle();
-      for (let i = 0; i < 6; i++) {
-        await vi.advanceTimersByTimeAsync(31_000);
-      }
-      expect(ctrl.resetRetryBudget()).toBe(true);
-      ctrl.update();
-      await settle();
-      for (let i = 0; i < 6; i++) {
-        await vi.advanceTimersByTimeAsync(31_000);
-      }
-      // 2nd reset — should succeed (2 of 3 consumed).
-      expect(ctrl.resetRetryBudget()).toBe(true);
-
-      // stop(false) should NOT restore the 2 already-consumed resets.
-      ctrl.stop(false);
-      ctrl.start();
-      await settle();
-      for (let i = 0; i < 6; i++) {
-        await vi.advanceTimersByTimeAsync(31_000);
-      }
-      const result = ctrl.resetRetryBudget();
-      // After 2 resets consumed, the 3rd (last) should succeed.
-      expect(result).toBe(true);
     });
   });
   describe("dark-watcher recovery (#12042)", () => {

@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { resolveNextMajorVersion } from "../utils/resolveNextVersion.js";
 import { scriptFlagSeparator } from "../../shared/utils/devCommandValidation.js";
+import { stripUtf8Bom } from "../utils/stripUtf8Bom.js";
 export { getInvalidCommandMessage } from "../../shared/utils/devCommandValidation.js";
 
 export const NEXT_DEV_DIRECT_RE = /\bnext\s+dev\b/;
@@ -55,7 +56,7 @@ export async function extractPort(command: string, cwd: string): Promise<number 
     const scriptName = scriptMatch[1];
     try {
       const pkgRaw = await fs.readFile(path.join(cwd, "package.json"), "utf-8");
-      const pkg = JSON.parse(pkgRaw);
+      const pkg = JSON.parse(stripUtf8Bom(pkgRaw));
       const scriptBody = pkg?.scripts?.[scriptName];
       if (typeof scriptBody === "string") {
         if (SHELL_CONTROL_RE.test(scriptBody)) return null;
@@ -98,7 +99,7 @@ export function stripTurbopackFlag(command: string): string {
 async function readPackageScript(cwd: string, scriptName: string): Promise<string | null> {
   try {
     const pkgRaw = await fs.readFile(path.join(cwd, "package.json"), "utf-8");
-    const pkg = JSON.parse(pkgRaw);
+    const pkg = JSON.parse(stripUtf8Bom(pkgRaw));
     const scriptBody = pkg?.scripts?.[scriptName];
     return typeof scriptBody === "string" ? scriptBody : null;
   } catch {
@@ -218,7 +219,7 @@ export async function normalizeViteDevCommand(
     const scriptName = scriptMatch[1];
     try {
       const pkgRaw = await fs.readFile(path.join(cwd, "package.json"), "utf-8");
-      const pkg = JSON.parse(pkgRaw);
+      const pkg = JSON.parse(stripUtf8Bom(pkgRaw));
       const scriptBody = pkg?.scripts?.[scriptName];
       if (typeof scriptBody !== "string") return command;
       if (SHELL_CONTROL_RE.test(scriptBody)) return command;

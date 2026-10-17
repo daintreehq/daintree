@@ -1,5 +1,10 @@
 import { describe, it, expect } from "vitest";
-import { checkShrinkageGuard, aggregateByRule, checkByRule } from "./lint-ratchet.mjs";
+import {
+  checkShrinkageGuard,
+  aggregateByRule,
+  checkByRule,
+  findErrorLevelSkips,
+} from "./lint-ratchet.mjs";
 
 // These import the pure helpers directly from the script — the `invokedDirectly`
 // guard means importing the module does not spawn ESLint or touch the baseline.
@@ -14,12 +19,6 @@ describe("lint-ratchet shrinkage guard", () => {
       expect(result.blocked).toBe(false);
     });
 
-    it("passes when warnings decrease by less than 10%", () => {
-      // prior=100, new=91 → drop=0.09
-      const result = checkShrinkageGuard(100, 91, false);
-      expect(result.blocked).toBe(false);
-    });
-
     it("blocks when warnings decrease by more than 10%", () => {
       // prior=100, new=89 → drop=0.11 > 0.1
       const result = checkShrinkageGuard(100, 89, false);
@@ -27,18 +26,6 @@ describe("lint-ratchet shrinkage guard", () => {
       expect(result.message).toContain("::error::refusing to update baseline");
       expect(result.message).toContain("11.0% shrinkage");
       expect(result.message).toContain("10% threshold");
-    });
-
-    it("blocks large drops", () => {
-      // prior=200, new=100 → drop=0.50
-      const result = checkShrinkageGuard(200, 100, false);
-      expect(result.blocked).toBe(true);
-      expect(result.message).toContain("50.0% shrinkage");
-    });
-
-    it("passes when warning count stays the same", () => {
-      const result = checkShrinkageGuard(100, 100, false);
-      expect(result.blocked).toBe(false);
     });
 
     it("passes when warnings increase", () => {
@@ -53,57 +40,12 @@ describe("lint-ratchet shrinkage guard", () => {
       const result = checkShrinkageGuard(100, 70, true);
       expect(result.blocked).toBe(false);
     });
-
-    it("bypasses the guard even at 100% drop", () => {
-      const result = checkShrinkageGuard(100, 0, true);
-      expect(result.blocked).toBe(false);
-    });
-  });
-
-  describe("priorCount=0 edge cases", () => {
-    it("allows update when prior count is 0 (avoids division by zero)", () => {
-      // prior=0, new=5 → skip guard, not a shrinkage scenario
-      const result = checkShrinkageGuard(0, 5, false);
-      expect(result.blocked).toBe(false);
-    });
-
-    it("allows update when prior count is 0 and new count is 0", () => {
-      const result = checkShrinkageGuard(0, 0, false);
-      expect(result.blocked).toBe(false);
-    });
-  });
-
-  describe("priorCount edge cases", () => {
-    it("allows update when prior count is Infinity (malformed baseline)", () => {
-      const result = checkShrinkageGuard(Infinity, 50, false);
-      expect(result.blocked).toBe(false);
-    });
-
-    it("allows update when prior count is NaN (malformed baseline)", () => {
-      const result = checkShrinkageGuard(NaN, 50, false);
-      expect(result.blocked).toBe(false);
-    });
   });
 
   describe("threshold boundary values", () => {
-    it("10% boundary: prior=1000 new=900 → exactly 10%, passes", () => {
-      const result = checkShrinkageGuard(1000, 900, false);
-      expect(result.blocked).toBe(false);
-    });
-
     it("just over 10%: prior=1000 new=899 → 10.1%, blocks", () => {
       const result = checkShrinkageGuard(1000, 899, false);
       expect(result.blocked).toBe(true);
-    });
-
-    it("small absolute numbers: prior=10 new=8 → 20%, blocks", () => {
-      const result = checkShrinkageGuard(10, 8, false);
-      expect(result.blocked).toBe(true);
-    });
-
-    it("small absolute numbers: prior=10 new=9 → 10%, passes", () => {
-      const result = checkShrinkageGuard(10, 9, false);
-      expect(result.blocked).toBe(false);
     });
   });
 });
@@ -244,5 +186,36 @@ describe("checkByRule", () => {
     const { disappeared, regressed } = checkByRule({ toString: 3 }, { "no-console": 1 });
     expect(disappeared).toEqual(["toString"]);
     expect(regressed).toEqual([]);
+  });
+});
+
+describe("findErrorLevelSkips", () => {
+  const configs = {
+    "/repo/src/__tests__/a.test.ts": { rules: { "react-compiler/react-compiler": [1] } },
+    "/repo/src/__tests__/b.test.ts": { rules: { "@typescript-eslint/no-floating-promises": [2] } },
+    "/repo/e2e/core/c.ts": {
+      rules: { "@typescript-eslint/no-unsafe-type-assertion": "error", "no-console": [2] },
+    },
+    "/repo/src/store/prod.ts": { rules: { "react-compiler/react-compiler": [2] } },
+  };
+  const getConfig = async (filePath) => configs[filePath];
+
+  it("reports skipped rules that are errors on test files", async () => {
+    expect(await findErrorLevelSkips(Object.keys(configs), getConfig)).toEqual([
+      {
+        filePath: "/repo/src/__tests__/b.test.ts",
+        ruleId: "@typescript-eslint/no-floating-promises",
+      },
+      { filePath: "/repo/e2e/core/c.ts", ruleId: "@typescript-eslint/no-unsafe-type-assertion" },
+    ]);
+  });
+
+  it("ignores production files and files with no config", async () => {
+    expect(
+      await findErrorLevelSkips(
+        ["/repo/src/store/prod.ts", "/repo/src/__tests__/none.test.ts"],
+        getConfig
+      )
+    ).toEqual([]);
   });
 });

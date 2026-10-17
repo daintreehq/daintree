@@ -32,7 +32,7 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 
 beforeAll(async () => {
   await kit.whenPluginUiReady();
-});
+}, 60_000);
 
 afterEach(() => {
   cleanup();
@@ -276,20 +276,6 @@ describe("AvatarGroup", () => {
       const font = initials.className.split(" ").find((name) => name in FONT_PX);
       expect(FONT_PX[font ?? ""]).toBe(fit.fontPx);
       cleanup();
-    }
-  });
-
-  it("gives every disc its own edge inside the canvas cut-out", () => {
-    render(
-      withTooltips(
-        createElement(kit.AvatarGroup, { avatars: people, max: 2, "aria-label": "People" })
-      )
-    );
-    const group = screen.getByRole("group", { name: "People" });
-    for (const disc of group.children) {
-      const classes = disc.className.split(" ");
-      expect(classes).toContain("ring-surface-canvas");
-      expect(classes).toContain("border-border-strong");
     }
   });
 

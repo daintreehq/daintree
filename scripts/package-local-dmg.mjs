@@ -167,10 +167,21 @@ console.log(
     `(${signed ? "signed: Developer ID" : "unsigned"}; working tree stays v${version})`
 );
 
-const run = (cmd, args) =>
-  execFileSync(cmd, args, { stdio: "inherit", cwd: root, shell: process.platform === "win32" });
+const run = (cmd, args, env) =>
+  execFileSync(cmd, args, {
+    stdio: "inherit",
+    cwd: root,
+    shell: process.platform === "win32",
+    env: env ? { ...process.env, ...env } : process.env,
+  });
 
-run("npm", ["run", "build"]);
+// The app typechecks against the workspace packages' built dist/, which only
+// `npm install` rebuilds; after a pull that adds an export (e.g. the SDK's
+// `testing/preview`) a stale dist fails `tsc` with TS2307.
+run("npm", ["run", "packages:build"]);
+// The build marker a host probe and install read must carry the version this
+// app will report, not package.json's.
+run("npm", ["run", "build"], { DAINTREE_BUILD_VERSION: devVersion });
 run("npx", [
   "electron-builder",
   // electron-builder does not auto-detect the `.config.cjs` infix, so the full

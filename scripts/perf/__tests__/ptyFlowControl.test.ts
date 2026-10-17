@@ -20,7 +20,6 @@ import {
   observeIpcFallbackSequences,
   IPC_FALLBACK_HOST_SEQUENCE,
   loadFlowControlModules,
-  measureTimerOverheadNs,
   orderMisses,
   predictGovernorSchedule,
   setDifferenceCount,
@@ -460,12 +459,4 @@ describe("PortBatcher flush cadence", () => {
     const grade = await gradeFlushCadence(modules, modules.constants.PORT_BATCH_THRESHOLD_BYTES);
     expect(grade.cadenceShortfallCount).toBeGreaterThan(0);
   }, 20_000);
-});
-
-describe("timer overhead calibration", () => {
-  it("reports a positive per-call cost", () => {
-    const ns = measureTimerOverheadNs(2_000);
-    expect(ns).toBeGreaterThan(0);
-    expect(Number.isFinite(ns)).toBe(true);
-  });
 });

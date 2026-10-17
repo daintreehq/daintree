@@ -8,6 +8,7 @@ import { webContents as webContentsModule } from "electron";
 import type { WindowRegistry } from "../../window/WindowRegistry.js";
 import { store } from "../../store.js";
 import { CHANNELS } from "../../ipc/channels.js";
+import { getEndpointRegistry } from "../../ipc/endpointRegistry.js";
 import { formatErrorMessage } from "../../../shared/utils/errorMessage.js";
 import { assistantSkipsDaintreeConfirmations } from "../../../shared/utils/assistantDaintreeConfirmations.js";
 import { summarizeMcpArgs, summarizeMcpResult } from "../../../shared/utils/mcpArgsSummary.js";
@@ -31,9 +32,9 @@ import type {
   McpWorkspaceBinding,
 } from "./shared.js";
 import { parseWorkspaceSelector, type WorkspaceSelectorRejection } from "./workspaceSelector.js";
-import { projectAuditResult } from "./auditResultProjection.js";
+import { projectAuditArgs, projectAuditResult } from "./auditResultProjection.js";
 import { helpOwnershipPrincipal } from "./resourceOwnership.js";
-import { WorkspaceBindingError } from "./rendererBridge.js";
+import { SessionBindingError, WorkspaceBindingError } from "./rendererBridge.js";
 import { PLUGIN_MCP_ROUTE_PREFIX, type PluginMcpRouteHandler } from "../pluginAgentMcp/types.js";
 import { isProjectWorkspaceId, isScratchWorkspaceId } from "../../../shared/utils/workspaceIds.js";
 import type {
@@ -55,6 +56,8 @@ import {
   resolveTokenTier,
 } from "./tierAuth.js";
 import { createSessionServer, cleanupResourceSubscriptions } from "./sessionServer.js";
+import { bindAssistantMessaging } from "./assistantMessagingTools.js";
+import { bindHostMessaging } from "./hostMessagingTools.js";
 import type { SessionStore } from "./sessionStore.js";
 import type { AuditService } from "./auditLog.js";
 import { classifyMcpDispatchResult } from "./auditLog.js";
@@ -86,6 +89,42 @@ import {
   MCP_HANDSHAKE_REJECTED_CODE,
   minimumPermittingTier,
 } from "./shared.js";
+import { createLogger } from "../../utils/logger.js";
+
+const pinnedViewLogger = createLogger("main:McpPinnedView");
+
+/**
+ * Push one event to the view pinned to an MCP session. A positive id is a local
+ * WebContents; a negative one is the handle of a view attached over a link,
+ * which is reached through its endpoint. Returns false when no live view holds
+ * the pin, so a caller scanning several sessions can move on to the next. The
+ * payload is built only once a live target is found.
+ */
+export function sendToPinnedView(
+  id: number,
+  channel: string,
+  buildPayload: () => unknown,
+  label: string
+): boolean {
+  if (id < 0) {
+    const endpoint = getEndpointRegistry().getByHandle(id);
+    if (!endpoint || endpoint.kind !== "remote-view" || endpoint.isClosed()) return false;
+    try {
+      endpoint.send({ type: "event", channel, args: [buildPayload()] });
+    } catch (err) {
+      console.error(`[MCP] ${label} send failed:`, err);
+    }
+    return true;
+  }
+  const wc = webContentsModule.fromId(id);
+  if (!wc || wc.isDestroyed()) return false;
+  try {
+    wc.send(channel, buildPayload());
+  } catch (err) {
+    console.error(`[MCP] ${label} send failed:`, err);
+  }
+  return true;
+}
 
 export interface HttpLifecycleDeps {
   sessionStore: SessionStore;
@@ -128,6 +167,13 @@ export interface HttpLifecycleDeps {
     workspaceId: string,
     preferredWebContentsId?: number
   ) => Promise<import("../../../shared/types/actions.js").ActionManifestEntry[]>;
+  // Records the route a bound session's `tools/list` is answered from, so a
+  // move tells its client (#13350). Optional like the routes it watches.
+  noteToolListRoute?: (
+    sessionId: string,
+    workspaceId: string,
+    preferredWebContentsId?: number
+  ) => () => boolean;
   dispatchActionForWorkspace?: (
     workspaceId: string,
     actionId: string,
@@ -850,20 +896,20 @@ export class HttpLifecycle {
       if (helpId !== payload.helpSessionId) continue;
       const pinnedId = this.deps.sessionStore.sessionWebContentsMap.get(transportSessionId);
       if (pinnedId === undefined) continue;
-      const wc = webContentsModule.fromId(pinnedId);
-      // A transport session whose WebContents was LRU-evicted/destroyed is
-      // skipped, not treated as the answer — a reconnect or concurrent
-      // transport for the same help session may still hold a live pin.
-      if (!wc || wc.isDestroyed()) continue;
-      try {
-        wc.send(CHANNELS.MCP_TURN_OUTCOME_ALERT, {
+      // A transport session whose view was LRU-evicted/destroyed is skipped,
+      // not treated as the answer — a reconnect or concurrent transport for
+      // the same help session may still hold a live pin.
+      const sent = sendToPinnedView(
+        pinnedId,
+        CHANNELS.MCP_TURN_OUTCOME_ALERT,
+        () => ({
           helpSessionId: payload.helpSessionId,
           outcome: payload.outcome,
           ...(payload.turnId !== undefined ? { turnId: payload.turnId } : {}),
-        });
-      } catch (err) {
-        console.error("[MCP] turn-outcome-alert send failed:", err);
-      }
+        }),
+        "turn-outcome-alert"
+      );
+      if (!sent) continue;
       return;
     }
   }
@@ -1769,6 +1815,16 @@ export class HttpLifecycle {
         !this.deps.sessionStore.httpSessions.has(newSessionId)
       ) {
         discardUninitializedSession();
+      } else if (
+        pin !== null &&
+        transport.sessionId !== undefined &&
+        this.resolveSessionPin(authHeader)?.webContentsId !== pin.webContentsId
+      ) {
+        // The bearer's pin moved while this handshake was out — a view took
+        // the assistant over (#13360), which retires the bearer's transports —
+        // but this one only registered afterwards, still holding the pin it
+        // resolved first. Retire it as well; the client reconnects onto the new pin.
+        this.deps.sessionStore.revokeSession(transport.sessionId);
       }
     } catch (err) {
       console.error("[MCP] Streamable HTTP request failed:", err);
@@ -1833,6 +1889,7 @@ export class HttpLifecycle {
     const pinnedManifest = this.deps.requestManifestForWebContents;
     const workspaceDispatch = this.deps.dispatchActionForWorkspace;
     const workspaceManifest = this.deps.requestManifestForWorkspace;
+    const noteToolListRoute = this.deps.noteToolListRoute;
     // Snapshotted for the same reason as the pin below: a session torn down
     // mid-call must keep failing closed to its own workspace rather than
     // silently reverting to the focused-window path.
@@ -1900,16 +1957,29 @@ export class HttpLifecycle {
           ?.workspaceId ?? null
       );
     };
+    // The refusal the assistant sees is uniform, so which side failed is
+    // recorded here: the view (pin, WebContents, workspace) or the pane's
+    // record (none, another project's, or an unanswered lookup) (#13439).
+    const refuseInPinnedView = (terminalId: string, reason: string): false => {
+      pinnedViewLogger.info("Pinned-view read refused", { sessionId, terminalId, reason });
+      return false;
+    };
     const isTerminalInPinnedWorkspace = async (terminalId: string): Promise<boolean> => {
       try {
         const workspaceId = pinnedWorkspaceId();
-        if (!workspaceId || !this.deps.isAgentPaneInWorkspace) return false;
-        if (!(await this.deps.isAgentPaneInWorkspace(terminalId, workspaceId))) return false;
+        if (!workspaceId) return refuseInPinnedView(terminalId, "no-view-workspace");
+        if (!this.deps.isAgentPaneInWorkspace) return refuseInPinnedView(terminalId, "unwired");
+        if (!(await this.deps.isAgentPaneInWorkspace(terminalId, workspaceId))) {
+          return refuseInPinnedView(terminalId, "not-in-workspace");
+        }
         // The record lookup is a round trip, and the view can go, or be
         // repointed, while it is out.
-        return pinnedWorkspaceId() === workspaceId;
+        if (pinnedWorkspaceId() !== workspaceId) {
+          return refuseInPinnedView(terminalId, "view-changed");
+        }
+        return true;
       } catch {
-        return false;
+        return refuseInPinnedView(terminalId, "lookup-failed");
       }
     };
 
@@ -1923,6 +1993,17 @@ export class HttpLifecycle {
     const missingWorkspaceRoute = (): Error =>
       new WorkspaceBindingError(boundWorkspaceId ?? "", "not-found");
 
+    /**
+     * Pinned at handshake and torn down since — a take-over retiring the
+     * assistant's transports (#13360), a revoke, an idle reap — while a call
+     * was still on its way. Such a call fails closed, as a gone pin does,
+     * rather than falling through to a route that follows focus.
+     */
+    const goneBinding = (): SessionBindingError | null =>
+      pinnedWebContentsId !== null && !this.deps.sessionStore.sessionWebContentsMap.has(sessionId)
+        ? new SessionBindingError(pinnedWebContentsId)
+        : null;
+
     const requestManifest: import("./sessionServer.js").SessionServerDeps["requestManifest"] =
       () => {
         if (boundWorkspaceId !== null) {
@@ -1934,6 +2015,8 @@ export class HttpLifecycle {
         if (id !== undefined && pinnedManifest) {
           return pinnedManifest(id);
         }
+        const gone = goneBinding();
+        if (gone) return Promise.reject(gone);
         return this.deps.requestManifest();
       };
 
@@ -1951,15 +2034,18 @@ export class HttpLifecycle {
     const bridgeReveal = this.deps.revealOwnedRun;
     const revealOwnedRun: import("./sessionServer.js").SessionServerDeps["revealOwnedRun"] =
       bridgeReveal
-        ? (workspaceId, actionId, args, confirmed) =>
-            bridgeReveal(
+        ? (workspaceId, actionId, args, confirmed) => {
+            const gone = goneBinding();
+            if (gone) return Promise.reject(gone);
+            return bridgeReveal(
               workspaceId,
               actionId,
               args,
               confirmed ?? false,
               sessionOrigin,
               preferredWebContentsId
-            )
+            );
+          }
         : undefined;
 
     const dispatchAction: import("./sessionServer.js").SessionServerDeps["dispatchAction"] = (
@@ -2012,6 +2098,8 @@ export class HttpLifecycle {
             })
           : pinnedDispatch(id, actionId, args, confirmed, boundContext, sessionOrigin);
       }
+      const gone = goneBinding();
+      if (gone) return Promise.reject(gone);
       // Unpinned external/api-key dispatch — surface the requesting bearer's
       // identity so the confirm dialog can name the client (#9157). Returns
       // null (→ undefined) for help-session bearers, so callerInfo never
@@ -2124,18 +2212,17 @@ export class HttpLifecycle {
         if (!isRendererOwned(payload.sessionId)) return;
         const id = this.deps.sessionStore.sessionWebContentsMap.get(payload.sessionId);
         if (id === undefined) return;
-        const wc = webContentsModule.fromId(id);
-        if (!wc || wc.isDestroyed()) return;
-        try {
-          wc.send(CHANNELS.MCP_TIER_NOT_PERMITTED, {
+        sendToPinnedView(
+          id,
+          CHANNELS.MCP_TIER_NOT_PERMITTED,
+          () => ({
             sessionId: payload.sessionId,
             toolId: payload.toolId,
             tier: payload.tier,
             targetTier: payload.targetTier,
-          });
-        } catch (err) {
-          console.error("[MCP] tier-not-permitted send failed:", err);
-        }
+          }),
+          "tier-not-permitted"
+        );
       };
 
     const recordDenial: import("./sessionServer.js").SessionServerDeps["recordDenial"] = (
@@ -2158,16 +2245,15 @@ export class HttpLifecycle {
           payload.pinnedWebContentsId ??
           this.deps.sessionStore.sessionWebContentsMap.get(payload.sessionId);
         if (id === undefined) return;
-        const wc = webContentsModule.fromId(id);
-        if (!wc || wc.isDestroyed()) return;
-        try {
-          wc.send(CHANNELS.MCP_SESSION_REVOKED, {
+        sendToPinnedView(
+          id,
+          CHANNELS.MCP_SESSION_REVOKED,
+          () => ({
             sessionId: payload.sessionId,
             denialKind: payload.denialKind,
-          });
-        } catch (err) {
-          console.error("[MCP] session-revoked send failed:", err);
-        }
+          }),
+          "session-revoked"
+        );
       };
 
     const notifyToolCallStarted: import("./sessionServer.js").SessionServerDeps["notifyToolCallStarted"] =
@@ -2179,26 +2265,27 @@ export class HttpLifecycle {
         if (!isRendererOwned(payload.sessionId)) return;
         const id = this.deps.sessionStore.sessionWebContentsMap.get(payload.sessionId);
         if (id === undefined) return;
-        const wc = webContentsModule.fromId(id);
-        if (!wc || wc.isDestroyed()) return;
         // Redact args with the same pipeline the audit record uses so the strip
         // never shows raw bearer tokens or absolute paths (#9759). The turn id
         // is the snapshot the dispatch took at call-start (#10067) — not a fresh
         // read here, which could disagree with the settled/audit value if the
         // FSM transitioned mid-call.
         const turnId = payload.capturedTurnId;
-        try {
-          wc.send(CHANNELS.MCP_TOOL_CALL_STARTED, {
+        sendToPinnedView(
+          id,
+          CHANNELS.MCP_TOOL_CALL_STARTED,
+          () => ({
             sessionId: payload.sessionId,
             toolId: payload.toolId,
-            argsSummary: summarizeMcpArgs(payload.args, (s) => scrubSecrets(sanitizePath(s))),
+            argsSummary: summarizeMcpArgs(projectAuditArgs(payload.toolId, payload.args), (s) =>
+              scrubSecrets(sanitizePath(s))
+            ),
             startedAt: payload.startedAt,
             danger: payload.danger,
             ...(turnId !== null ? { turnId } : {}),
-          });
-        } catch (err) {
-          console.error("[MCP] tool-call-started send failed:", err);
-        }
+          }),
+          "tool-call-started"
+        );
       };
 
     const notifyToolCallSettled: import("./sessionServer.js").SessionServerDeps["notifyToolCallSettled"] =
@@ -2206,16 +2293,16 @@ export class HttpLifecycle {
         if (!isRendererOwned(payload.sessionId)) return;
         const id = this.deps.sessionStore.sessionWebContentsMap.get(payload.sessionId);
         if (id === undefined) return;
-        const wc = webContentsModule.fromId(id);
-        if (!wc || wc.isDestroyed()) return;
         // Derive result/errorCode/severity from the same classifier the audit
         // writer uses, so the strip's glyph and red-tint match the audit log.
         const { result, errorCode } = classifyMcpDispatchResult(payload.outcome);
         // Same snapshot the started event carried (#10067) — guarantees the
         // strip's in-flight row and its settled row resolve to one turn group.
         const turnId = payload.capturedTurnId;
-        try {
-          wc.send(CHANNELS.MCP_TOOL_CALL_SETTLED, {
+        sendToPinnedView(
+          id,
+          CHANNELS.MCP_TOOL_CALL_SETTLED,
+          () => ({
             sessionId: payload.sessionId,
             toolId: payload.toolId,
             durationMs: Math.max(0, Math.round(payload.durationMs)),
@@ -2223,10 +2310,9 @@ export class HttpLifecycle {
             ...(errorCode !== undefined ? { errorCode } : {}),
             severity: computeMcpAuditSeverity(result, errorCode),
             ...(turnId !== null ? { turnId } : {}),
-          });
-        } catch (err) {
-          console.error("[MCP] tool-call-settled send failed:", err);
-        }
+          }),
+          "tool-call-settled"
+        );
       };
 
     const notifyDisplayImage: import("./sessionServer.js").SessionServerDeps["notifyDisplayImage"] =
@@ -2239,10 +2325,10 @@ export class HttpLifecycle {
         if (!isRendererOwned(payload.sessionId)) return;
         const id = this.deps.sessionStore.sessionWebContentsMap.get(payload.sessionId);
         if (id === undefined) return;
-        const wc = webContentsModule.fromId(id);
-        if (!wc || wc.isDestroyed()) return;
-        try {
-          wc.send(CHANNELS.MCP_HELP_DISPLAY_IMAGE, {
+        sendToPinnedView(
+          id,
+          CHANNELS.MCP_HELP_DISPLAY_IMAGE,
+          () => ({
             sessionId: payload.sessionId,
             imageId: payload.imageId,
             figureNumber: payload.figureNumber,
@@ -2250,10 +2336,9 @@ export class HttpLifecycle {
             url: payload.url,
             ...(payload.caption !== undefined ? { caption: payload.caption } : {}),
             ...(payload.altText !== undefined ? { altText: payload.altText } : {}),
-          });
-        } catch (err) {
-          console.error("[MCP] help-display-image send failed:", err);
-        }
+          }),
+          "help-display-image"
+        );
       };
 
     return {
@@ -2287,6 +2372,14 @@ export class HttpLifecycle {
       ...(this.deps.terminalNotify !== undefined
         ? { terminalNotify: this.deps.terminalNotify }
         : {}),
+      // The lane is whichever help session this transport is bound to (#13335).
+      assistantMessaging: bindAssistantMessaging(() =>
+        this.deps.sessionStore.sessionHelpIdMap.get(sessionId)
+      ),
+      // The hub is whichever help session this transport is bound to, if it is the hub (#13336).
+      hostMessaging: bindHostMessaging(() =>
+        this.deps.sessionStore.sessionHelpIdMap.get(sessionId)
+      ),
       // A pane bearer's own terminal is fixed for the bearer's life and was
       // resolved at handshake; a help lane's is read per call, because its
       // binding follows the PTY that currently serves it.
@@ -2326,7 +2419,9 @@ export class HttpLifecycle {
             : undefined;
         this.deps.auditService.appendRecord({
           ...recordInput,
-          argsSummary: summarizeMcpArgs(input.args, (s) => scrubSecrets(sanitizePath(s))),
+          argsSummary: summarizeMcpArgs(projectAuditArgs(input.toolId, input.args), (s) =>
+            scrubSecrets(sanitizePath(s))
+          ),
           ...(turnId !== null ? { turnId } : {}),
           ...(helpSessionId !== null ? { helpSessionId } : {}),
           ...(resultSummary !== null ? { resultSummary } : {}),
@@ -2357,6 +2452,12 @@ export class HttpLifecycle {
       notifyToolCallStarted,
       notifyToolCallSettled,
       notifyDisplayImage,
+      ...(boundWorkspaceId !== null && noteToolListRoute
+        ? {
+            noteToolListRoute: () =>
+              noteToolListRoute(sessionId, boundWorkspaceId, preferredWebContentsId),
+          }
+        : {}),
     };
   }
 

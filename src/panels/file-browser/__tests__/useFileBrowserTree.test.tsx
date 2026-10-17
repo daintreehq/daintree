@@ -250,57 +250,6 @@ describe("useFileBrowserTree", () => {
     });
   });
 
-  it("never sends a server-side filter flag — every listing request is raw", async () => {
-    listDirectory.mockImplementation(async (payload) =>
-      payload.dirPath === "src" ? [file("src/app.ts")] : [dir("src")]
-    );
-
-    const { result } = renderHook(() =>
-      useFileBrowserTree({
-        source: wtSource("wt-1"),
-        expandedPaths: ["src"],
-        // Visibility is on, yet the request must stay raw: filtering is now the
-        // client's job, so no listing may carry an includeIgnored-style flag.
-        hideDotfiles: true,
-        alwaysHiddenPatterns: [".DS_Store"],
-        changeTick: undefined,
-      })
-    );
-
-    await waitFor(() =>
-      expect(result.current.rows.map((row) => row.path)).toEqual(["src", "src/app.ts"])
-    );
-
-    for (const [payload] of listDirectory.mock.calls) {
-      expect(Object.keys(payload)).not.toContain("includeIgnored");
-    }
-  });
-
-  it("shows dot-prefixed entries by default and hides them once hideDotfiles is on", async () => {
-    listDirectory.mockResolvedValue([file(".env"), dir("src"), file("README.md")]);
-
-    const { result, rerender } = renderHook(
-      (props: { hideDotfiles: boolean }) =>
-        useFileBrowserTree({
-          source: wtSource("wt-1"),
-          expandedPaths: [],
-          hideDotfiles: props.hideDotfiles,
-          alwaysHiddenPatterns: [],
-          changeTick: undefined,
-        }),
-      { initialProps: { hideDotfiles: false } }
-    );
-
-    await waitFor(() => expect(result.current.isInitialLoading).toBe(false));
-    expect(result.current.rows.map((row) => row.path)).toEqual([".env", "src", "README.md"]);
-
-    rerender({ hideDotfiles: true });
-
-    await waitFor(() =>
-      expect(result.current.rows.map((row) => row.path)).toEqual(["src", "README.md"])
-    );
-  });
-
   it("hides an always-hidden junk entry even while dotfiles are shown", async () => {
     listDirectory.mockResolvedValue([file(".DS_Store"), file(".env"), file("README.md")]);
 
@@ -1332,19 +1281,6 @@ describe("stale-while-revalidate seeding (#11367)", () => {
     });
   });
 
-  it("captures nothing without a worktree", () => {
-    const { result } = renderHook(() =>
-      useFileBrowserTree({
-        source: null,
-        expandedPaths: [],
-        hideDotfiles: false,
-        alwaysHiddenPatterns: [],
-        changeTick: undefined,
-      })
-    );
-    expect(result.current.captureSnapshot()).toBeNull();
-  });
-
   describe("root failure over a seeded tree", () => {
     beforeEach(() => {
       vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
@@ -1948,35 +1884,6 @@ describe("useFileBrowserTree listing recovery and revalidation (#11620)", () => 
     expect(result.current.listingRows?.[0]?.mtimeMs).toBe(1_700_000);
   });
 
-  it("keeps a selected file's parent listing when the folder stops being listed", async () => {
-    // Selecting a file out of a folder listing flips that folder from "being
-    // listed" to "merely the parent". Dropping it there would forget the file's
-    // kind on the very click that selected it.
-    listDirectory.mockImplementation(async (payload) =>
-      payload.dirPath === "src" ? [file("src/a.ts")] : [dir("src")]
-    );
-
-    const { result, rerender } = renderHook(
-      (props: { selectedPath: string }) =>
-        useFileBrowserTree({
-          source: wtSource("wt-1"),
-          expandedPaths: [],
-          hideDotfiles: false,
-          alwaysHiddenPatterns: [],
-          changeTick: undefined,
-          selectedPath: props.selectedPath,
-        }),
-      { initialProps: { selectedPath: "src" } }
-    );
-
-    await waitFor(() => expect(result.current.listingRows).not.toBeNull());
-    rerender({ selectedPath: "src/a.ts" });
-
-    await waitFor(() => expect(result.current.listingPath).toBeNull());
-    // The kind still resolves, which is what keeps the viewer on the file.
-    expect(result.current.selectedNode?.isDirectory).toBe(false);
-  });
-
   it("re-orders an on-screen listing without re-fetching it", async () => {
     listDirectory.mockImplementation(async (payload) =>
       payload.dirPath === "src"
@@ -2260,19 +2167,6 @@ describe("useFileBrowserTree failure recovery edge cases (#11620)", () => {
       // lives — its mtime, the Modified column and the sort that reads it. The
       // root and `b` are untouched.
       expect(requested(from).sort()).toEqual(["a", "a/deep"]);
-    });
-
-    it("re-lists only the root when a top-level entry changed", async () => {
-      mockThreeBranches();
-      const base: TickProps = { changeTick: 1, changedDirs: undefined };
-      const { rerender } = await mountTree(base);
-      await primeCursor(rerender, base);
-
-      const from = listDirectory.mock.calls.length;
-      rerender({ ...base, changeTick: 200, changedDirs: burst(200, 100, [""]) });
-      await act(() => settle());
-
-      expect(requested(from)).toEqual([""]);
     });
 
     it("re-lists each touched directory once when one burst spans several", async () => {

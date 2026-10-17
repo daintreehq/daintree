@@ -13,6 +13,7 @@ import type {
   AddPanelOptions,
 } from "@/types";
 import type { PanelInstance, PanelWorktreeMoveNotice } from "@shared/types/panel";
+import type { PanelLimitSnapshot } from "@/store/panelLimitStore";
 
 export type { AddPanelOptions };
 
@@ -180,10 +181,26 @@ export interface PanelRegistrySlice {
   promoteDialogPanelToGrid: (id: string) => boolean;
   toggleTerminalLocation: (id: string) => void;
 
-  trashPanel: (id: string) => void;
+  /**
+   * Move a panel to the trash and tell the PTY host. `hostTrashed` is for a
+   * terminal main has already trashed on the host: the pane follows without a
+   * second host trash, which after an Undo elsewhere would trash it again.
+   */
+  trashPanel: (id: string, options?: { hostTrashed?: boolean }) => void;
   /** Trash all panels in a group together, storing group metadata for restoration */
   trashPanelGroup: (panelId: string) => void;
-  restoreTerminal: (id: string, targetWorktreeId?: string) => void;
+  /**
+   * Bring a panel back from the trash and tell the PTY host. `hostRestored` is
+   * for a terminal main has already restored on the host: the pane follows
+   * without a second host restore, which could undo a trash made since.
+   * `keepFocus` leaves focus where it is, for a restore made while an overlay
+   * holds the keyboard: the pane comes back without taking it from behind.
+   */
+  restoreTerminal: (
+    id: string,
+    targetWorktreeId?: string,
+    options?: { hostRestored?: boolean; keepFocus?: boolean }
+  ) => void;
   /** Restore all panels with the given groupRestoreId, recreating the tab group */
   restoreTrashedGroup: (groupRestoreId: string, targetWorktreeId?: string) => void;
   markAsTrashed: (id: string, expiresAt: number, originalLocation: "dock" | "grid") => void;
@@ -430,4 +447,10 @@ export interface AddPanelCommitOptions {
      */
     stillApplies: () => boolean;
   };
+  /**
+   * Told when this call is refused at the hard panel limit, with the count and
+   * limits the refusal was judged on. The return value alone is `null` for
+   * several unrelated reasons, so a caller that must report why reads it here.
+   */
+  onLimitRefused?: (snapshot: PanelLimitSnapshot) => void;
 }

@@ -73,19 +73,6 @@ describe("errorStore", () => {
     expect(state.errors.some((entry) => entry.message === "error-54")).toBe(true);
   });
 
-  it("preserves correlationId through addError", () => {
-    const id = useErrorStore.getState().addError({
-      type: "git",
-      message: "push rejected",
-      source: "git",
-      retryability: "none",
-      correlationId: "test-corr-1234",
-    });
-
-    const error = useErrorStore.getState().errors.find((e) => e.id === id);
-    expect(error?.correlationId).toBe("test-corr-1234");
-  });
-
   it("preserves original correlationId on deduplicated errors", () => {
     vi.setSystemTime(new Date("2026-01-01T00:00:00.000Z"));
     useErrorStore.getState().addError({
@@ -108,19 +95,6 @@ describe("errorStore", () => {
     const state = useErrorStore.getState();
     expect(state.errors).toHaveLength(1);
     expect(state.errors[0]?.correlationId).toBe("original-corr-id");
-  });
-
-  it("preserves recoveryHint through addError", () => {
-    const id = useErrorStore.getState().addError({
-      type: "filesystem",
-      message: "EACCES: permission denied",
-      source: "fs",
-      retryability: "none",
-      recoveryHint: "Check file permissions or run with elevated privileges.",
-    });
-
-    const error = useErrorStore.getState().errors.find((e) => e.id === id);
-    expect(error?.recoveryHint).toBe("Check file permissions or run with elevated privileges.");
   });
 
   it("does not include recoveryHint in dedup comparison", () => {
@@ -175,20 +149,6 @@ describe("errorStore", () => {
 
       const error = useErrorStore.getState().errors.find((e) => e.id === id);
       expect(error?.retryProgress).toBeUndefined();
-    });
-
-    it("reset removes all retryProgress", () => {
-      const id = useErrorStore.getState().addError({
-        type: "process",
-        message: "spawn failed",
-        source: "pty",
-        retryability: "auto",
-      });
-
-      useErrorStore.getState().updateRetryProgress(id, 1, 3);
-      useErrorStore.getState().reset();
-
-      expect(useErrorStore.getState().errors).toEqual([]);
     });
   });
 

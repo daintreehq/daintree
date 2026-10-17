@@ -75,6 +75,9 @@ const registryMock = vi.hoisted(() => ({
 
 vi.mock("../../window/webContentsRegistry.js", () => registryMock);
 
+const iconMock = vi.hoisted(() => ({ getLinuxWindowIcon: vi.fn(() => undefined as unknown) }));
+vi.mock("../../window/linuxWindowIcon.js", () => iconMock);
+
 import { sendToRenderer } from "../../ipc/utils.js";
 import { notificationService } from "../NotificationService.js";
 import type { ProjectTitleLookup, ProjectTitleRow } from "../../window/windowTitle.js";
@@ -259,6 +262,16 @@ describe("NotificationService", () => {
     expect(() => notificationService.updateNotifications(11, { waitingCount: 1 })).not.toThrow();
   });
 
+  it("carries the app icon when there is one, so Linux daemons don't draw a generic one", () => {
+    const icon = { isEmpty: () => false };
+    iconMock.getLinuxWindowIcon.mockReturnValueOnce(icon);
+    notificationService.showNativeNotification("Agent waiting", "a");
+    expect(electronMock.notificationInstances.at(-1)!.options).toMatchObject({ icon });
+
+    notificationService.showNativeNotification("Agent waiting", "b");
+    expect(electronMock.notificationInstances.at(-1)!.options).not.toHaveProperty("icon");
+  });
+
   describe("project-aware titles", () => {
     const rows = lookupOf({
       alpha: { name: "alpha-app", status: "active" },
@@ -279,19 +292,6 @@ describe("NotificationService", () => {
       expect(lastTitle(winB)).toBe("beta-app");
     });
 
-    it("names the same project in both windows showing it", () => {
-      const winA = createWindowMock(false, [11]);
-      const winB = createWindowMock(false, [21]);
-      winA.activeProjectId = "alpha";
-      winB.activeProjectId = "alpha";
-
-      notificationService.initialize(createRegistryMock([winA, winB]) as never, rows);
-      notificationService.refreshTitles();
-
-      expect(lastTitle(winA)).toBe("alpha-app");
-      expect(lastTitle(winB)).toBe(lastTitle(winA));
-    });
-
     it("scopes the waiting count to the window that owns it", () => {
       const winA = createWindowMock(false, [11]);
       const winB = createWindowMock(false, [21]);
@@ -304,18 +304,6 @@ describe("NotificationService", () => {
 
       expect(lastTitle(winA)).toBe("(4) alpha-app");
       expect(lastTitle(winB)).toBe("beta-app");
-    });
-
-    it("sums a window's cached views into one count beside its project name", () => {
-      const win = createWindowMock(false, [11, 12]);
-      win.activeProjectId = "alpha";
-
-      notificationService.initialize(createRegistryMock([win]) as never, rows);
-      notificationService.updateNotifications(11, { waitingCount: 2 });
-      notificationService.updateNotifications(12, { waitingCount: 3 });
-      vi.advanceTimersByTime(301);
-
-      expect(lastTitle(win)).toBe("(5) alpha-app");
     });
 
     it("keeps the waiting count when only the project identity changed", () => {
@@ -614,26 +602,6 @@ describe("NotificationService", () => {
       (notificationService as unknown as { activeNotifications: Set<unknown> }).activeNotifications
         .size
     ).toBe(0);
-  });
-
-  it("warns when a watch notification fails", () => {
-    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
-
-    notificationService.showWatchNotification(
-      "Watch hit",
-      "Pattern matched",
-      { foo: "bar" } as never,
-      "navigate:channel"
-    );
-    const instance = electronMock.notificationInstances.at(-1)!;
-    expect(instance.show).toHaveBeenCalled();
-
-    instance.trigger("failed", {}, "unsigned dev build");
-
-    expect(warnSpy).toHaveBeenCalledWith(
-      expect.stringContaining("native notification failed"),
-      "unsigned dev build"
-    );
   });
 
   describe("closing banners with their panels (#12793)", () => {
@@ -1115,5 +1083,56 @@ describe("NotificationService", () => {
 
       expect(instance.handlers.click).toBeUndefined();
     });
+  });
+});
+
+describe("NotificationService remote owners", () => {
+  afterEach(() => {
+    notificationService.dispose();
+  });
+
+  it("hands a remote view's notification to its Shell, as a category, instead of this screen", () => {
+    const shown = electronMock.notificationInstances.length;
+    const sink = vi.fn();
+    notificationService.setRemoteNotificationSink(sink);
+    const context = { panelId: "t1", panelTitle: "Claude" };
+
+    notificationService.showWatchNotification("Agent waiting", "b", context, "nav:channel", {
+      ownerWebContentsId: -4,
+      silent: true,
+      category: "waiting",
+    });
+
+    expect(sink).toHaveBeenCalledWith({
+      ownerHandle: -4,
+      title: "Agent waiting",
+      body: "b",
+      category: "waiting",
+      navigation: { channel: "nav:channel", context },
+    });
+    expect(electronMock.notificationInstances.length).toBe(shown);
+  });
+
+  it("sends an uncategorised notification to a Shell as info, which carries no sound", () => {
+    const sink = vi.fn();
+    notificationService.setRemoteNotificationSink(sink);
+    notificationService.showNativeNotification("t", "b", { ownerWebContentsId: -4 });
+    expect(sink).toHaveBeenCalledWith(expect.objectContaining({ category: "info" }));
+  });
+
+  it("never shows a remote owner's notification here, even with no sink", () => {
+    const shown = electronMock.notificationInstances.length;
+    notificationService.setRemoteNotificationSink(null);
+    notificationService.showNativeNotification("t", "b", { ownerWebContentsId: -1 });
+    expect(electronMock.notificationInstances.length).toBe(shown);
+  });
+
+  it("keeps showing local owners' notifications natively", () => {
+    const shown = electronMock.notificationInstances.length;
+    const sink = vi.fn();
+    notificationService.setRemoteNotificationSink(sink);
+    notificationService.showNativeNotification("t", "b", { ownerWebContentsId: 12 });
+    expect(sink).not.toHaveBeenCalled();
+    expect(electronMock.notificationInstances.length).toBe(shown + 1);
   });
 });

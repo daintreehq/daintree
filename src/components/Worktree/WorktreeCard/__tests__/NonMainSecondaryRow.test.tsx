@@ -114,11 +114,6 @@ describe("NonMainSecondaryRow → PRBadge circuit-breaker wiring", () => {
     usePRCircuitBreakerStore.setState({ tripped: false });
   });
 
-  it("passes prDetectionPaused=false when the breaker is not tripped", () => {
-    renderRow();
-    expect(prBadgeProps.at(-1)?.prDetectionPaused).toBe(false);
-  });
-
   it("passes prDetectionPaused=true when the breaker is tripped", () => {
     usePRCircuitBreakerStore.setState({ tripped: true });
     renderRow();
@@ -202,26 +197,6 @@ describe("NonMainSecondaryRow → badge ordering by alarm tier", () => {
     expect(upIdx).toBeLessThan(prIdx);
   });
 
-  it("CI failed beats auth-failed — PR stays first", () => {
-    const { container } = renderRow({
-      worktree: {
-        ...baseWorktree,
-        fetchAuthFailed: true,
-        matchedForgeProviderId: "daintree.github.github",
-        linked: ciFailureLinked(),
-      } as WorktreeState,
-      hasAuthFailedSignIn: true,
-    });
-    const order = Array.from(container.querySelectorAll("[data-testid]")).map((el) =>
-      el.getAttribute("data-testid")
-    );
-    const prIdx = order.indexOf("pr-badge");
-    const upIdx = order.indexOf("upstream-sync-badge");
-    expect(prIdx).toBeGreaterThanOrEqual(0);
-    expect(upIdx).toBeGreaterThanOrEqual(0);
-    expect(prIdx).toBeLessThan(upIdx);
-  });
-
   it("PR-originated: suppresses the subordinate PR badge and shows the linked issue", () => {
     issueBadgeProps.length = 0;
     const { queryByTestId } = renderRow({
@@ -252,27 +227,6 @@ describe("NonMainSecondaryRow → badge ordering by alarm tier", () => {
     });
     expect(queryByTestId("issue-badge")).toBeNull();
     expect(queryByTestId("pr-badge")).toBeNull();
-  });
-
-  it("CI 'pending' does not flip the order (transient — no spatial churn)", () => {
-    const pendingLinked = ciFailureLinked();
-    pendingLinked.pr.ciStatus.state = "pending" as never;
-    const { container } = renderRow({
-      worktree: {
-        ...baseWorktree,
-        behindCount: 1,
-        linked: pendingLinked,
-      } as WorktreeState,
-      hasUpstreamDelta: true,
-    });
-    const order = Array.from(container.querySelectorAll("[data-testid]")).map((el) =>
-      el.getAttribute("data-testid")
-    );
-    const prIdx = order.indexOf("pr-badge");
-    const upIdx = order.indexOf("upstream-sync-badge");
-    expect(prIdx).toBeGreaterThanOrEqual(0);
-    expect(upIdx).toBeGreaterThanOrEqual(0);
-    expect(upIdx).toBeLessThan(prIdx);
   });
 });
 

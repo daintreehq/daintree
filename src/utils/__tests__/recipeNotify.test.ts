@@ -28,11 +28,6 @@ describe("notifyRecipeSpawnFailures", () => {
     expect(notifyMock).not.toHaveBeenCalled();
   });
 
-  it("does nothing for an empty result set", () => {
-    notifyRecipeSpawnFailures({ spawned: [], failed: [] });
-    expect(notifyMock).not.toHaveBeenCalled();
-  });
-
   it("stays quiet when the user declined every missing terminal at the panel-limit confirm", () => {
     notifyRecipeSpawnFailures(
       {

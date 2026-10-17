@@ -9,7 +9,6 @@ import {
   vi,
   type MockInstance,
 } from "vitest";
-import * as reactEntry from "../react.js";
 import { createViewScope, type ViewScope, type ViewScopeStats } from "../react/createViewScope.js";
 
 function fakeGl(options: { lost?: boolean; extension?: boolean } = {}) {
@@ -38,10 +37,6 @@ afterEach(() => {
 });
 
 describe("createViewScope lifetime", () => {
-  it("is exported as a runtime value from the react entry", () => {
-    expect(typeof reactEntry.createViewScope).toBe("function");
-  });
-
   it("releases everything when the view's signal aborts, and aborts its own signal first", () => {
     const upstream = new AbortController();
     const scope = createViewScope(upstream.signal);

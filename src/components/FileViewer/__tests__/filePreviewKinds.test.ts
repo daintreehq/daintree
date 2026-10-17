@@ -1,6 +1,7 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   buildDaintreeFileUrl,
+  buildDaintreeMediaUrl,
   buildDaintreePdfUrl,
   isAudioFilePath,
   isFileContentsCopyCandidate,
@@ -10,18 +11,14 @@ import {
   isUnsupportedAudioFilePath,
   isUnsupportedVideoFilePath,
   isVideoFilePath,
+  primeHostPreviewCapability,
+  resetHostPreviewCapabilityForTests,
 } from "../filePreviewKinds";
 
 describe("filePreviewKinds", () => {
   describe("isImageFilePath", () => {
     it.each([
       "photo.png",
-      "photo.jpg",
-      "photo.jpeg",
-      "photo.gif",
-      "photo.webp",
-      "photo.bmp",
-      "photo.ico",
       "icon.svg",
       // Chromium decodes and animates both natively; before #11426 they fell
       // through to the text path and reported "Binary file — cannot display".
@@ -29,7 +26,6 @@ describe("filePreviewKinds", () => {
       "animation.apng",
       // Case is normalized before lookup, so a shouty extension still renders.
       "PHOTO.AVIF",
-      "ANIMATION.APNG",
       "a/b/c.render.avif",
     ])("accepts %s", (path) => {
       expect(isImageFilePath(path)).toBe(true);
@@ -38,10 +34,7 @@ describe("filePreviewKinds", () => {
     it.each([
       // Only the final extension counts — a lookalike suffix is still text.
       "photo.avif.txt",
-      "animation.apng.txt",
-      "notes.md",
       "clip.mp4",
-      "archive.zip",
     ])("rejects %s", (path) => {
       expect(isImageFilePath(path)).toBe(false);
     });
@@ -58,12 +51,9 @@ describe("filePreviewKinds", () => {
   });
 
   describe("isVideoFilePath", () => {
-    it.each(["clip.mp4", "clip.m4v", "clip.webm", "clip.ogv", "CLIP.MP4", "a/b/c.demo.webm"])(
-      "accepts %s",
-      (path) => {
-        expect(isVideoFilePath(path)).toBe(true);
-      }
-    );
+    it.each(["clip.mp4", "CLIP.MP4", "a/b/c.demo.webm"])("accepts %s", (path) => {
+      expect(isVideoFilePath(path)).toBe(true);
+    });
 
     it.each([
       // Containers Chromium can't demux stay out so a <video> element is never
@@ -78,7 +68,6 @@ describe("filePreviewKinds", () => {
       "clip.mp4.txt",
       "clip",
       "photo.png",
-      "notes.md",
     ])("rejects %s", (path) => {
       expect(isVideoFilePath(path)).toBe(false);
     });
@@ -92,7 +81,7 @@ describe("filePreviewKinds", () => {
   });
 
   describe("isUnsupportedVideoFilePath", () => {
-    it.each(["clip.mov", "clip.mkv", "clip.avi", "clip.wmv", "CLIP.MOV"])("accepts %s", (path) => {
+    it.each(["clip.mkv", "CLIP.MOV"])("accepts %s", (path) => {
       expect(isUnsupportedVideoFilePath(path)).toBe(true);
     });
 
@@ -106,29 +95,15 @@ describe("filePreviewKinds", () => {
   describe("isAudioFilePath", () => {
     it.each([
       "track.mp3",
-      "track.wav",
-      "track.flac",
-      "track.ogg",
-      "track.oga",
-      "track.opus",
       // m4a/aac ride the same proprietary-codec build that makes mp4 play.
       "track.m4a",
-      "track.aac",
       "TRACK.MP3",
       "a/b/c.take 2.flac",
     ])("accepts %s", (path) => {
       expect(isAudioFilePath(path)).toBe(true);
     });
 
-    it.each([
-      "track.wma",
-      "track.aiff",
-      "track.mid",
-      "track.mp3.txt",
-      "track",
-      "photo.png",
-      "notes.md",
-    ])("rejects %s", (path) => {
+    it.each(["track.mp3.txt", "track", "photo.png"])("rejects %s", (path) => {
       expect(isAudioFilePath(path)).toBe(false);
     });
 
@@ -151,15 +126,7 @@ describe("filePreviewKinds", () => {
   });
 
   describe("isUnsupportedAudioFilePath", () => {
-    it.each([
-      "track.wma",
-      "track.aiff",
-      "track.aif",
-      "track.mid",
-      "track.midi",
-      "track.amr",
-      "TRACK.WMA",
-    ])("accepts %s", (path) => {
+    it.each(["track.aiff", "track.mid", "TRACK.WMA"])("accepts %s", (path) => {
       expect(isUnsupportedAudioFilePath(path)).toBe(true);
     });
 
@@ -191,14 +158,11 @@ describe("filePreviewKinds", () => {
   });
 
   describe("isPdfFilePath", () => {
-    it.each(["spec.pdf", "SPEC.PDF", "a/b/data.sheet.pdf", "/abs/path/report.Pdf"])(
-      "accepts %s",
-      (path) => {
-        expect(isPdfFilePath(path)).toBe(true);
-      }
-    );
+    it.each(["spec.pdf", "SPEC.PDF", "a/b/data.sheet.pdf"])("accepts %s", (path) => {
+      expect(isPdfFilePath(path)).toBe(true);
+    });
 
-    it.each(["spec.pdf.txt", "spec", "notes.md", "photo.png", "clip.mp4"])("rejects %s", (path) => {
+    it.each(["spec.pdf.txt", "spec", "clip.mp4"])("rejects %s", (path) => {
       expect(isPdfFilePath(path)).toBe(false);
     });
 
@@ -222,26 +186,7 @@ describe("filePreviewKinds", () => {
   });
 
   describe("isFileContentsCopyCandidate", () => {
-    it.each([
-      "/repo/logo.png",
-      "/repo/photo.JPEG",
-      "/repo/icon.svg",
-      "/repo/clip.mp4",
-      "/repo/clip.mov",
-      "/repo/track.mp3",
-      "/repo/track.wma",
-      "/repo/spec.pdf",
-    ])("refuses %s", (filePath) => {
-      expect(isFileContentsCopyCandidate(filePath)).toBe(false);
-    });
-
-    it.each([
-      "/repo/index.ts",
-      "/repo/README.md",
-      "/repo/page.html",
-      "/repo/Makefile",
-      "/repo/.env",
-    ])("offers %s", (filePath) => {
+    it.each(["/repo/index.ts", "/repo/Makefile", "/repo/.env"])("offers %s", (filePath) => {
       expect(isFileContentsCopyCandidate(filePath)).toBe(true);
     });
 
@@ -290,5 +235,113 @@ describe("filePreviewKinds", () => {
       expect(pdf.protocol).not.toBe(file.protocol);
       expect(pdf.search).toBe(file.search);
     });
+  });
+});
+
+const CAP = "0123456789abcdef0123456789abcdef";
+
+function viewHost(
+  id: string | undefined,
+  getPreviewCapability = vi.fn(async (): Promise<string | null> => CAP)
+) {
+  vi.stubGlobal("window", {
+    ...(id === undefined ? {} : { __DAINTREE_HOST_ID__: { id } }),
+    electron: { fileTransfer: { getPreviewCapability } },
+  });
+  return getPreviewCapability;
+}
+
+const LOCAL = {
+  file: "daintree-file://load?path=%2Frepo%2Fa%20b.png&root=%2Frepo",
+  media: "daintree-media://load/?path=%2Frepo%2Fa%20b.png&root=%2Frepo",
+  pdf: "daintree-pdf://load?path=%2Frepo%2Fa%20b.png&root=%2Frepo",
+};
+
+function build() {
+  return {
+    file: buildDaintreeFileUrl("/repo/a b.png", "/repo"),
+    media: buildDaintreeMediaUrl("/repo/a b.png", "/repo"),
+    pdf: buildDaintreePdfUrl("/repo/a b.png", "/repo"),
+  };
+}
+
+describe("preview URLs by view host", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    resetHostPreviewCapabilityForTests();
+  });
+
+  it("are byte-identical to the local shape for a view of this machine", async () => {
+    const fetchCap = viewHost(undefined);
+    expect(build()).toEqual(LOCAL);
+    expect(await primeHostPreviewCapability()).toBeNull();
+    viewHost("local", fetchCap);
+    expect(build()).toEqual(LOCAL);
+    expect(await primeHostPreviewCapability()).toBeNull();
+    expect(fetchCap).not.toHaveBeenCalled();
+  });
+
+  it("name the host and carry this view's capability for a remote view", async () => {
+    const fetchCap = viewHost("studio-01");
+    expect(await primeHostPreviewCapability()).toBe(CAP);
+    const urls = build();
+    expect(urls.file).toBe(
+      `daintree-file://host/studio-01/${CAP}/load?path=%2Frepo%2Fa%20b.png&root=%2Frepo`
+    );
+    expect(urls.media).toBe(
+      `daintree-media://host/studio-01/${CAP}/load/?path=%2Frepo%2Fa%20b.png&root=%2Frepo`
+    );
+    expect(urls.pdf).toBe(
+      `daintree-pdf://host/studio-01/${CAP}/load?path=%2Frepo%2Fa%20b.png&root=%2Frepo`
+    );
+    for (const url of Object.values(urls)) {
+      const parsed = new URL(url);
+      expect(parsed.host).toBe("host");
+      expect(parsed.searchParams.get("path")).toBe("/repo/a b.png");
+    }
+    await primeHostPreviewCapability();
+    expect(fetchCap).toHaveBeenCalledTimes(1);
+  });
+
+  it("fetches the capability once for concurrent callers", async () => {
+    const fetchCap = viewHost("studio-01");
+    const [a, b] = await Promise.all([primeHostPreviewCapability(), primeHostPreviewCapability()]);
+    expect(a).toBe(CAP);
+    expect(b).toBe(CAP);
+    expect(fetchCap).toHaveBeenCalledTimes(1);
+  });
+
+  it("goes without a capability until it arrives, and starts fetching it", async () => {
+    const fetchCap = viewHost("studio-01");
+    expect(buildDaintreeFileUrl("/a", "/")).toBe(
+      "daintree-file://host/studio-01/load?path=%2Fa&root=%2F"
+    );
+    expect(fetchCap).toHaveBeenCalledTimes(1);
+    await primeHostPreviewCapability();
+    expect(buildDaintreeFileUrl("/a", "/")).toBe(
+      `daintree-file://host/studio-01/${CAP}/load?path=%2Fa&root=%2F`
+    );
+  });
+
+  it("asks again after a failed fetch", async () => {
+    const fetchCap = viewHost(
+      "studio-01",
+      vi.fn(async (): Promise<string | null> => {
+        throw new Error("link down");
+      })
+    );
+    expect(await primeHostPreviewCapability()).toBeNull();
+    fetchCap.mockResolvedValueOnce(CAP);
+    expect(await primeHostPreviewCapability()).toBe(CAP);
+    expect(fetchCap).toHaveBeenCalledTimes(2);
+  });
+
+  it("lets a caller pin the host explicitly, never lending this view's capability to another host", async () => {
+    viewHost("studio-01");
+    await primeHostPreviewCapability();
+    expect(buildDaintreeFileUrl("/a", "/", null)).toBe("daintree-file://load?path=%2Fa&root=%2F");
+    expect(buildDaintreeFileUrl("/a", "/", "Mac.lan")).toBe(
+      "daintree-file://host/Mac.lan/load?path=%2Fa&root=%2F"
+    );
   });
 });

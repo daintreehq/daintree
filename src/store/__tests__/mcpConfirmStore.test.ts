@@ -47,17 +47,6 @@ describe("mcpConfirmStore", () => {
     expect(useMcpConfirmStore.getState().current).toBeNull();
   });
 
-  it("resolves with the user's decision keyed by requestId, never overwriting a sibling", async () => {
-    const first = requestMcpConfirmation(pendingFixture({ requestId: "a" }));
-    const second = requestMcpConfirmation(pendingFixture({ requestId: "b" }));
-
-    useMcpConfirmStore.getState().resolveCurrent("approved");
-    expect(await first).toEqual({ decision: "approved" });
-
-    useMcpConfirmStore.getState().resolveCurrent("timeout");
-    expect(await second).toEqual({ decision: "timeout" });
-  });
-
   it("ignores resolveCurrent when nothing is showing", () => {
     expect(() => useMcpConfirmStore.getState().resolveCurrent("rejected")).not.toThrow();
     expect(useMcpConfirmStore.getState().current).toBeNull();
@@ -185,6 +174,17 @@ describe("mcpConfirmStore", () => {
 
     expect(await rejected).toEqual({ decision: "rejected" });
     expect(await timedOut).toEqual({ decision: "timeout" });
+  });
+
+  it("says a timeout went unseen, and only a timeout (#13392)", async () => {
+    const unseen = requestMcpConfirmation(pendingFixture({ requestId: "a" }));
+    const approved = requestMcpConfirmation(pendingFixture({ requestId: "b" }));
+
+    useMcpConfirmStore.getState().resolveCurrent("timeout", undefined, undefined, true);
+    useMcpConfirmStore.getState().resolveCurrent("approved", undefined, undefined, true);
+
+    expect(await unseen).toEqual({ decision: "timeout", unseen: true });
+    expect(await approved).toEqual({ decision: "approved" });
   });
 
   // #12692: "Allow for this session" reaches wider than the call on screen, so

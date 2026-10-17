@@ -40,7 +40,7 @@ ${tailwindUtilitiesCss.trim()}
 
 /**
  * Host rules the mockup kit relies on that live in the host's own stylesheet
- * rather than the design contract. Mirrors `.tour-click-ring` in src/index.css.
+ * rather than the design contract. Mirrors `.tour-click-ring` in src/styles/host/animations.css.
  */
 const HOST_TOUR_CSS = `@keyframes tour-click-ring {
   0% { opacity: 0.9; transform: scale(0.3); }
@@ -142,5 +142,8 @@ export async function compilePreviewCss(sources: string[], theme: PreviewTheme):
       return { path: id, base, content };
     },
   });
-  return `${theme.css}${hostRootVariablesCss}\n${compiler.build([...candidates])}\n${HOST_TOUR_CSS}${HARNESS_CSS}`;
+  // The host's root defaults first, so the theme's variables win as the inline
+  // ones the app sets on <html> do; light themes carry their own dialog plane
+  // and shadow stack.
+  return `${hostRootVariablesCss}\n${theme.css}${compiler.build([...candidates])}\n${HOST_TOUR_CSS}${HARNESS_CSS}`;
 }

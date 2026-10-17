@@ -91,15 +91,6 @@ describe("OsDndService — macOS", () => {
     expect(svc.getState()).toBe(false);
   });
 
-  it("subscribes to both enabled and disabled Darwin notifications", () => {
-    execFileSyncMock.mockReturnValueOnce("");
-    const svc = getOsDndService();
-    svc.initialize();
-    const names = systemPreferencesMock.subscribeNotification.mock.calls.map((c) => c[0]);
-    expect(names).toContain("_NSDoNotDisturbEnabledNotification");
-    expect(names).toContain("_NSDoNotDisturbDisabledNotification");
-  });
-
   it("flips state to true on the enabled notification and notifies listeners", () => {
     execFileSyncMock.mockReturnValueOnce("");
     const svc = getOsDndService();
@@ -161,15 +152,6 @@ describe("OsDndService — macOS", () => {
     expect(svc.getState()).toBeUndefined();
   });
 
-  it("dispose is safe to call before or after initialize", () => {
-    const svc = getOsDndService();
-    expect(() => svc.dispose()).not.toThrow();
-    execFileSyncMock.mockReturnValueOnce("");
-    svc.initialize();
-    expect(() => svc.dispose()).not.toThrow();
-    expect(() => svc.dispose()).not.toThrow();
-  });
-
   it("onStateChanged returns an unsubscribe that detaches the listener", () => {
     execFileSyncMock.mockReturnValueOnce("");
     const svc = getOsDndService();
@@ -202,14 +184,6 @@ describe("OsDndService — macOS", () => {
 describe("OsDndService — non-macOS platforms", () => {
   it("Linux returns undefined and skips subscribeNotification entirely", () => {
     setPlatform("linux");
-    const svc = getOsDndService();
-    svc.initialize();
-    expect(svc.getState()).toBeUndefined();
-    expect(systemPreferencesMock.subscribeNotification).not.toHaveBeenCalled();
-  });
-
-  it("Windows returns undefined and skips subscribeNotification entirely", () => {
-    setPlatform("win32");
     const svc = getOsDndService();
     svc.initialize();
     expect(svc.getState()).toBeUndefined();

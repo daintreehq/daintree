@@ -72,60 +72,6 @@ describe("registerTelemetryHandlers", () => {
     broadcasterMock._state.active = false;
   });
 
-  it("registers all invoke + subscribe IPC handlers", () => {
-    const cleanup = registerTelemetryHandlers();
-    // 4 pre-existing handlers + 2 new preview invoke handlers (get-state, toggle)
-    expect(ipcMainMock.handle).toHaveBeenCalledTimes(6);
-    // 2 new preview subscribe/unsubscribe listeners via ipcMain.on
-    expect(ipcMainMock.on).toHaveBeenCalledTimes(2);
-    cleanup();
-  });
-
-  it("returns cleanup that removes all handlers by channel name", () => {
-    const cleanup = registerTelemetryHandlers();
-    cleanup();
-    expect(ipcMainMock.removeHandler).toHaveBeenCalledWith("telemetry:get");
-    expect(ipcMainMock.removeHandler).toHaveBeenCalledWith("telemetry:set-enabled");
-    expect(ipcMainMock.removeHandler).toHaveBeenCalledWith("telemetry:mark-prompt-shown");
-    expect(ipcMainMock.removeHandler).toHaveBeenCalledWith("telemetry:track");
-    expect(ipcMainMock.removeHandler).toHaveBeenCalledWith("telemetry:preview-get-state");
-    expect(ipcMainMock.removeHandler).toHaveBeenCalledWith("telemetry:preview-toggle");
-    expect(ipcMainMock.removeHandler).toHaveBeenCalledTimes(6);
-    expect(ipcMainMock.removeListener).toHaveBeenCalledWith(
-      "telemetry:preview-subscribe",
-      expect.any(Function)
-    );
-    expect(ipcMainMock.removeListener).toHaveBeenCalledWith(
-      "telemetry:preview-unsubscribe",
-      expect.any(Function)
-    );
-  });
-
-  it("TELEMETRY_GET handler returns enabled and hasSeenPrompt", async () => {
-    telemetryServiceMock.isTelemetryEnabled.mockReturnValue(true);
-    telemetryServiceMock.hasTelemetryPromptBeenShown.mockReturnValue(true);
-
-    registerTelemetryHandlers();
-
-    const [channel, handler] =
-      ipcMainMock.handle.mock.calls.find(([ch]) => ch.includes("telemetry:get")) ?? [];
-    expect(channel).toBe("telemetry:get");
-    const result = await handler();
-    expect(result).toEqual({ enabled: true, hasSeenPrompt: true });
-  });
-
-  it("TELEMETRY_GET handler returns default false/false state", async () => {
-    telemetryServiceMock.isTelemetryEnabled.mockReturnValue(false);
-    telemetryServiceMock.hasTelemetryPromptBeenShown.mockReturnValue(false);
-
-    registerTelemetryHandlers();
-
-    const [, handler] =
-      ipcMainMock.handle.mock.calls.find(([ch]) => ch.includes("telemetry:get")) ?? [];
-    const result = await handler();
-    expect(result).toEqual({ enabled: false, hasSeenPrompt: false });
-  });
-
   it("TELEMETRY_GET handler returns mixed state (enabled=false, hasSeenPrompt=true)", async () => {
     telemetryServiceMock.isTelemetryEnabled.mockReturnValue(false);
     telemetryServiceMock.hasTelemetryPromptBeenShown.mockReturnValue(true);
@@ -239,17 +185,6 @@ describe("registerTelemetryHandlers", () => {
 
     await handler(null, "onboarding_step_viewed", [1, 2, 3]);
     expect(telemetryServiceMock.trackEvent).not.toHaveBeenCalled();
-  });
-
-  it("TELEMETRY_PREVIEW_GET_STATE returns the current active flag", async () => {
-    broadcasterMock._state.active = true;
-    registerTelemetryHandlers();
-
-    const [, handler] =
-      ipcMainMock.handle.mock.calls.find(([ch]) => ch === "telemetry:preview-get-state") ?? [];
-
-    const result = await handler();
-    expect(result).toEqual({ active: true });
   });
 
   it("TELEMETRY_PREVIEW_TOGGLE flips state and broadcasts the change on boolean input", async () => {

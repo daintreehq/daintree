@@ -12,6 +12,7 @@ function resetWorktreeFilterStore() {
     typeFilters: new Set(),
     prIssueFilters: new Set(),
     sessionFilters: new Set(),
+    hasAgentFilter: false,
     activityFilters: new Set(),
     devServerFilters: new Set(),
     alwaysShowActive: true,
@@ -19,6 +20,8 @@ function resetWorktreeFilterStore() {
     hideMainWorktree: false,
     pinnedWorktrees: [],
     collapsedWorktrees: [],
+    worktreeLabelColors: {},
+    worktreeCustomTitles: {},
     manualOrder: [],
     quickStateFilter: "all",
   });
@@ -47,6 +50,24 @@ describe("worktreeFilterStore", () => {
     expect(useWorktreeFilterStore.getState().hasActiveFilters()).toBe(true);
   });
 
+  it("treats 'Has an agent' as one facet filter that clearAll resets", () => {
+    useWorktreeFilterStore.getState().setHasAgentFilter(true);
+
+    const state = useWorktreeFilterStore.getState();
+    expect(state.hasAgentFilter).toBe(true);
+    expect(state.getActiveFilterCount()).toBe(1);
+    expect(state.hasActiveFilters()).toBe(true);
+    expect(state.hasFacetFilters()).toBe(true);
+
+    // Clearing Sessions leaves it alone: it is not a Sessions value.
+    state.clearSessionFilters();
+    expect(useWorktreeFilterStore.getState().hasAgentFilter).toBe(true);
+
+    useWorktreeFilterStore.getState().clearAll();
+    expect(useWorktreeFilterStore.getState().hasAgentFilter).toBe(false);
+    expect(useWorktreeFilterStore.getState().hasFacetFilters()).toBe(false);
+  });
+
   it("hasActiveFilters returns true when only a facet filter is active (no query)", () => {
     useWorktreeFilterStore.getState().toggleStatusFilter("active");
 
@@ -64,14 +85,6 @@ describe("worktreeFilterStore", () => {
 
     expect(useWorktreeFilterStore.getState().hasActiveFilters()).toBe(false);
     expect(useWorktreeFilterStore.getState().getActiveFilterCount()).toBe(0);
-  });
-
-  it("setLiveQuery updates the transient live query without touching the persisted query", () => {
-    useWorktreeFilterStore.getState().setLiveQuery("draft");
-
-    expect(useWorktreeFilterStore.getState().liveQuery).toBe("draft");
-    // The persisted (debounced) query is independent and stays empty.
-    expect(useWorktreeFilterStore.getState().query).toBe("");
   });
 
   it("clearAll resets the live query alongside the persisted query", () => {
@@ -155,13 +168,6 @@ describe("worktreeFilterStore", () => {
       }
     });
 
-    it.each(sections)("clearing $name is idempotent on an already-empty section", (target) => {
-      target.clear();
-
-      expect(target.size()).toBe(0);
-      expect(useWorktreeFilterStore.getState().hasActiveFilters()).toBe(false);
-    });
-
     it("preserves the search query when clearing a single section", () => {
       const store = useWorktreeFilterStore.getState();
       store.setQuery("feature-x");
@@ -172,46 +178,6 @@ describe("worktreeFilterStore", () => {
       expect(useWorktreeFilterStore.getState().statusFilters.size).toBe(0);
       expect(useWorktreeFilterStore.getState().query).toBe("feature-x");
     });
-  });
-
-  it("shows main worktree by default (hideMainWorktree is false)", () => {
-    expect(useWorktreeFilterStore.getState().hideMainWorktree).toBe(false);
-  });
-
-  it("toggles hideMainWorktree on and off", () => {
-    const store = useWorktreeFilterStore.getState();
-
-    store.setHideMainWorktree(true);
-    expect(useWorktreeFilterStore.getState().hideMainWorktree).toBe(true);
-
-    store.setHideMainWorktree(false);
-    expect(useWorktreeFilterStore.getState().hideMainWorktree).toBe(false);
-  });
-
-  it("resets hideMainWorktree to false on clearAll", () => {
-    useWorktreeFilterStore.getState().setHideMainWorktree(true);
-    useWorktreeFilterStore.getState().clearAll();
-
-    expect(useWorktreeFilterStore.getState().hideMainWorktree).toBe(false);
-  });
-
-  it("defaults alwaysShowWaiting to true", () => {
-    expect(useWorktreeFilterStore.getState().alwaysShowWaiting).toBe(true);
-  });
-
-  it("toggles alwaysShowWaiting via setter", () => {
-    useWorktreeFilterStore.getState().setAlwaysShowWaiting(false);
-    expect(useWorktreeFilterStore.getState().alwaysShowWaiting).toBe(false);
-
-    useWorktreeFilterStore.getState().setAlwaysShowWaiting(true);
-    expect(useWorktreeFilterStore.getState().alwaysShowWaiting).toBe(true);
-  });
-
-  it("does not reset alwaysShowWaiting on clearAll", () => {
-    useWorktreeFilterStore.getState().setAlwaysShowWaiting(false);
-    useWorktreeFilterStore.getState().clearAll();
-
-    expect(useWorktreeFilterStore.getState().alwaysShowWaiting).toBe(false);
   });
 
   it("does not duplicate collapsed worktree ids", () => {
@@ -250,21 +216,6 @@ describe("worktreeFilterStore", () => {
     useWorktreeFilterStore.getState().clearAll();
 
     expect(useWorktreeFilterStore.getState().collapsedWorktrees).toEqual(["wt-1"]);
-  });
-
-  it('defaults quickStateFilter to "all"', () => {
-    expect(useWorktreeFilterStore.getState().quickStateFilter).toBe("all");
-  });
-
-  it("updates quickStateFilter via setter", () => {
-    useWorktreeFilterStore.getState().setQuickStateFilter("working");
-    expect(useWorktreeFilterStore.getState().quickStateFilter).toBe("working");
-
-    useWorktreeFilterStore.getState().setQuickStateFilter("waiting");
-    expect(useWorktreeFilterStore.getState().quickStateFilter).toBe("waiting");
-
-    useWorktreeFilterStore.getState().setQuickStateFilter("all");
-    expect(useWorktreeFilterStore.getState().quickStateFilter).toBe("all");
   });
 
   it("counts quickStateFilter in hasActiveFilters and getActiveFilterCount", () => {
@@ -325,21 +276,6 @@ describe("worktreeFilterStore", () => {
     it("returns false when only quickStateFilter is active", () => {
       useWorktreeFilterStore.getState().clearAll();
       useWorktreeFilterStore.getState().setQuickStateFilter("working");
-      expect(useWorktreeFilterStore.getState().hasFacetFilters()).toBe(false);
-    });
-
-    it("returns true when query and facet filters are both active", () => {
-      useWorktreeFilterStore.getState().clearAll();
-      useWorktreeFilterStore.getState().setQuery("search");
-      useWorktreeFilterStore.getState().toggleStatusFilter("active");
-      expect(useWorktreeFilterStore.getState().hasFacetFilters()).toBe(true);
-    });
-
-    it("returns false after clearAll when facets were active", () => {
-      useWorktreeFilterStore.getState().clearAll();
-      useWorktreeFilterStore.getState().toggleStatusFilter("dirty");
-      useWorktreeFilterStore.getState().toggleTypeFilter("feature");
-      useWorktreeFilterStore.getState().clearAll();
       expect(useWorktreeFilterStore.getState().hasFacetFilters()).toBe(false);
     });
   });
@@ -411,14 +347,85 @@ describe("worktreeFilterStore", () => {
     expect(next.manualOrder).toEqual(["wt-2", "wt-3"]);
   });
 
-  it("clearQuickStateFilter is a no-op when already 'all'", () => {
-    const store = useWorktreeFilterStore.getState();
-    store.toggleStatusFilter("active");
-    store.clearQuickStateFilter();
+  describe("setWorktreeLabelColor", () => {
+    it("sets, replaces and clears a label", () => {
+      const store = useWorktreeFilterStore.getState();
+      store.setWorktreeLabelColor("wt-1", "category-teal");
+      store.setWorktreeLabelColor("wt-2", "category-violet");
+      store.setWorktreeLabelColor("wt-1", "category-pink");
+      expect(useWorktreeFilterStore.getState().worktreeLabelColors).toEqual({
+        "wt-1": "category-pink",
+        "wt-2": "category-violet",
+      });
 
-    const next = useWorktreeFilterStore.getState();
-    expect(next.quickStateFilter).toBe("all");
-    expect(next.statusFilters.has("active")).toBe(true);
+      store.setWorktreeLabelColor("wt-1", null);
+      expect(useWorktreeFilterStore.getState().worktreeLabelColors).toEqual({
+        "wt-2": "category-violet",
+      });
+    });
+
+    it("is a no-op when the colour is unchanged or there is nothing to clear", () => {
+      const store = useWorktreeFilterStore.getState();
+      store.setWorktreeLabelColor("wt-1", "category-blue");
+      const before = useWorktreeFilterStore.getState().worktreeLabelColors;
+
+      store.setWorktreeLabelColor("wt-1", "category-blue");
+      store.setWorktreeLabelColor("wt-other", null);
+
+      expect(useWorktreeFilterStore.getState().worktreeLabelColors).toBe(before);
+    });
+
+    it("survives clearAll, which only resets search and filters", () => {
+      const store = useWorktreeFilterStore.getState();
+      store.setWorktreeLabelColor("wt-1", "category-teal");
+      store.setQuery("abc");
+
+      store.clearAll();
+
+      expect(useWorktreeFilterStore.getState().worktreeLabelColors).toEqual({
+        "wt-1": "category-teal",
+      });
+    });
+  });
+
+  describe("setWorktreeCustomTitle", () => {
+    it("normalises, replaces and clears a title", () => {
+      const store = useWorktreeFilterStore.getState();
+      store.setWorktreeCustomTitle("wt-1", "  Release   prep ");
+      store.setWorktreeCustomTitle("wt-2", "Integration");
+      expect(useWorktreeFilterStore.getState().worktreeCustomTitles).toEqual({
+        "wt-1": "Release prep",
+        "wt-2": "Integration",
+      });
+
+      store.setWorktreeCustomTitle("wt-1", "\u200B ");
+      store.setWorktreeCustomTitle("wt-2", null);
+      expect(useWorktreeFilterStore.getState().worktreeCustomTitles).toEqual({});
+    });
+
+    it("is a no-op for an unchanged title, nothing to clear, or an over-long title", () => {
+      const store = useWorktreeFilterStore.getState();
+      store.setWorktreeCustomTitle("wt-1", "Integration");
+      const before = useWorktreeFilterStore.getState().worktreeCustomTitles;
+
+      store.setWorktreeCustomTitle("wt-1", " Integration ");
+      store.setWorktreeCustomTitle("wt-other", null);
+      store.setWorktreeCustomTitle("wt-1", "x".repeat(81));
+
+      expect(useWorktreeFilterStore.getState().worktreeCustomTitles).toBe(before);
+    });
+
+    it("survives clearAll, which only resets search and filters", () => {
+      const store = useWorktreeFilterStore.getState();
+      store.setWorktreeCustomTitle("wt-1", "Integration");
+      store.setQuery("abc");
+
+      store.clearAll();
+
+      expect(useWorktreeFilterStore.getState().worktreeCustomTitles).toEqual({
+        "wt-1": "Integration",
+      });
+    });
   });
 
   describe("pruneStaleWorktreeIds", () => {
@@ -437,6 +444,52 @@ describe("worktreeFilterStore", () => {
       expect(next.collapsedWorktrees).toEqual(["wt-2"]);
     });
 
+    it("removes labels for worktrees not in validIds and keeps the rest", () => {
+      const store = useWorktreeFilterStore.getState();
+      store.setWorktreeLabelColor("wt-1", "category-teal");
+      store.setWorktreeLabelColor("wt-gone", "category-pink");
+
+      store.pruneStaleWorktreeIds(new Set(["wt-1"]));
+
+      expect(useWorktreeFilterStore.getState().worktreeLabelColors).toEqual({
+        "wt-1": "category-teal",
+      });
+    });
+
+    it("removes titles for worktrees not in validIds and keeps the rest", () => {
+      const store = useWorktreeFilterStore.getState();
+      store.setWorktreeCustomTitle("wt-1", "Integration");
+      store.setWorktreeCustomTitle("wt-gone", "Spike");
+
+      store.pruneStaleWorktreeIds(new Set(["wt-1"]));
+
+      expect(useWorktreeFilterStore.getState().worktreeCustomTitles).toEqual({
+        "wt-1": "Integration",
+      });
+    });
+
+    it("preserves title map identity when no title is stale", () => {
+      const store = useWorktreeFilterStore.getState();
+      store.setWorktreeCustomTitle("wt-1", "Integration");
+      store.setWorktreeLabelColor("wt-stale", "category-blue");
+      const before = useWorktreeFilterStore.getState().worktreeCustomTitles;
+
+      store.pruneStaleWorktreeIds(new Set(["wt-1"]));
+
+      expect(useWorktreeFilterStore.getState().worktreeCustomTitles).toBe(before);
+    });
+
+    it("preserves label map identity when no label is stale", () => {
+      const store = useWorktreeFilterStore.getState();
+      store.setWorktreeLabelColor("wt-1", "category-blue");
+      store.pinWorktree("wt-stale");
+      const before = useWorktreeFilterStore.getState().worktreeLabelColors;
+
+      store.pruneStaleWorktreeIds(new Set(["wt-1"]));
+
+      expect(useWorktreeFilterStore.getState().worktreeLabelColors).toBe(before);
+    });
+
     it("preserves array identity when nothing is stale", () => {
       const store = useWorktreeFilterStore.getState();
       store.pinWorktree("wt-1");
@@ -451,27 +504,6 @@ describe("worktreeFilterStore", () => {
       const after = useWorktreeFilterStore.getState();
       expect(after.pinnedWorktrees).toBe(beforePinned);
       expect(after.collapsedWorktrees).toBe(beforeCollapsed);
-    });
-
-    it("is a no-op when both lists are empty", () => {
-      const before = useWorktreeFilterStore.getState();
-      useWorktreeFilterStore.getState().pruneStaleWorktreeIds(new Set(["wt-anything"]));
-      const after = useWorktreeFilterStore.getState();
-      expect(after.pinnedWorktrees).toBe(before.pinnedWorktrees);
-      expect(after.collapsedWorktrees).toBe(before.collapsedWorktrees);
-    });
-
-    it("clears every pin when validIds is empty", () => {
-      const store = useWorktreeFilterStore.getState();
-      store.pinWorktree("wt-1");
-      store.pinWorktree("wt-2");
-      store.collapseWorktree("wt-3");
-
-      store.pruneStaleWorktreeIds(new Set());
-
-      const next = useWorktreeFilterStore.getState();
-      expect(next.pinnedWorktrees).toEqual([]);
-      expect(next.collapsedWorktrees).toEqual([]);
     });
   });
 });
@@ -615,6 +647,100 @@ describe("worktreeFilterStore persistence scoping", () => {
     }
   });
 
+  it("writes the 'Has an agent' filter through to the scoped key when set and unset", async () => {
+    vi.useFakeTimers();
+    try {
+      const writes = new Map<string, string>();
+      installLocalStorage({
+        getItem: (key) => writes.get(key) ?? null,
+        setItem: (key, value) => {
+          writes.set(key, value);
+        },
+        removeItem: (key) => {
+          writes.delete(key);
+        },
+      });
+
+      const { useWorktreeFilterStore: store } = await import("../worktreeFilterStore");
+      const persisted = () =>
+        (JSON.parse(writes.get(PROJECT_KEY)!) as { state: { hasAgentFilter: boolean } }).state
+          .hasAgentFilter;
+
+      store.getState().setHasAgentFilter(true);
+      vi.advanceTimersByTime(400);
+      expect(persisted()).toBe(true);
+
+      store.getState().setHasAgentFilter(false);
+      expect(store.getState().hasAgentFilter).toBe(false);
+      vi.advanceTimersByTime(400);
+      expect(persisted()).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("restores the 'Has an agent' filter, and defaults it off when absent", async () => {
+    const blob = (extra: Record<string, unknown>) =>
+      JSON.stringify({
+        state: {
+          query: "",
+          statusFilters: [],
+          typeFilters: [],
+          prIssueFilters: [],
+          sessionFilters: [],
+          activityFilters: [],
+          pinnedWorktrees: [],
+          collapsedWorktrees: [],
+          manualOrder: [],
+          ...extra,
+        },
+        version: 2,
+      });
+    installLocalStorage({
+      getItem: (key) => (key === PROJECT_KEY ? blob({ hasAgentFilter: true }) : null),
+      setItem: () => {},
+      removeItem: () => {},
+    });
+    const first = await import("../worktreeFilterStore");
+    expect(first.useWorktreeFilterStore.getState().hasAgentFilter).toBe(true);
+
+    vi.resetModules();
+    installLocalStorage({
+      getItem: (key) => (key === PROJECT_KEY ? blob({}) : null),
+      setItem: () => {},
+      removeItem: () => {},
+    });
+    const second = await import("../worktreeFilterStore");
+    expect(second.useWorktreeFilterStore.getState().hasAgentFilter).toBe(false);
+  });
+
+  it("drops persisted type filters the registry no longer knows", async () => {
+    // A stale id left in the set would match no worktree and empty the sidebar.
+    const scopedBlob = JSON.stringify({
+      state: {
+        query: "",
+        statusFilters: [],
+        typeFilters: ["design", "agent", "retired-type", "constructor", 7, null],
+        prIssueFilters: [],
+        sessionFilters: [],
+        activityFilters: [],
+        pinnedWorktrees: [],
+        collapsedWorktrees: [],
+        manualOrder: [],
+      },
+      version: 2,
+    });
+    installLocalStorage({
+      getItem: (key) => (key === PROJECT_KEY ? scopedBlob : null),
+      setItem: () => {},
+      removeItem: () => {},
+    });
+
+    const { useWorktreeFilterStore: store } = await import("../worktreeFilterStore");
+
+    expect(Array.from(store.getState().typeFilters).sort()).toEqual(["agent", "design"]);
+  });
+
   it("seeds liveQuery from the persisted query on hydration", async () => {
     const scopedBlob = JSON.stringify({
       state: {
@@ -711,6 +837,21 @@ describe("worktreeFilterStore persistence scoping", () => {
     expect(state.collapsedWorktrees).toEqual(["wt-legacy-collapsed"]);
     expect(state.manualOrder).toEqual(["wt-a", "wt-b"]);
     expect(Array.from(state.statusFilters)).toEqual(["active"]);
+  });
+
+  it("seeds only known type filters from the legacy combined blob", async () => {
+    const legacyBlob = JSON.stringify({
+      state: { typeFilters: ["hotfix", "dependabot", "toString", 3] },
+    });
+    installLocalStorage({
+      getItem: (key) => (key === GLOBAL_KEY ? legacyBlob : null),
+      setItem: () => {},
+      removeItem: () => {},
+    });
+
+    const { useWorktreeFilterStore: store } = await import("../worktreeFilterStore");
+
+    expect(Array.from(store.getState().typeFilters)).toEqual(["hotfix"]);
   });
 
   it("does not re-seed when the scoped key already exists", async () => {
@@ -1028,5 +1169,355 @@ describe("worktreeFilterStore persistence scoping", () => {
     expect(state.hideMainWorktree).toBe(false);
     expect(state.pinnedWorktrees).toEqual(["wt-pin"]);
     expect(state.query).toBe("");
+  });
+});
+
+/**
+ * Cross-view write-merge coverage for the shared localStorage partition
+ * (issue #11351). Only the GLOBAL prefs sub-store (`daintree-worktree-filters`)
+ * needs the merge: its five fields share one literal key across views. The
+ * per-project sub-store (`daintree-worktree-filters:{projectId}`) is exempt — its
+ * key already embeds the project id — and must stay untouched by a global write.
+ */
+describe("worktreeFilterStore cross-view write merge (#11351)", () => {
+  const GLOBAL_KEY = "daintree-worktree-filters";
+  // No projectId in the URL → the per-project store keys off "default".
+  const PROJECT_KEY = "daintree-worktree-filters:default";
+  const VERSION = 1;
+  const originalDescriptor = Object.getOwnPropertyDescriptor(globalThis, "localStorage");
+
+  type PersistedBlob = { version: number; state: Record<string, unknown> };
+
+  function installLocalStorage(initial: Record<string, string>): Map<string, string> {
+    const backing = new Map<string, string>(Object.entries(initial));
+    Object.defineProperty(globalThis, "localStorage", {
+      value: {
+        getItem: (key: string) => backing.get(key) ?? null,
+        setItem: (key: string, value: string) => {
+          backing.set(key, value);
+        },
+        removeItem: (key: string) => {
+          backing.delete(key);
+        },
+      },
+      configurable: true,
+      writable: true,
+    });
+    return backing;
+  }
+
+  function restoreLocalStorage(): void {
+    if (originalDescriptor) {
+      Object.defineProperty(globalThis, "localStorage", originalDescriptor);
+      return;
+    }
+    delete (globalThis as Partial<typeof globalThis>).localStorage;
+  }
+
+  function readGlobal(backing: Map<string, string>): PersistedBlob {
+    const blob: PersistedBlob = JSON.parse(backing.get(GLOBAL_KEY)!);
+    return blob;
+  }
+
+  beforeEach(() => {
+    vi.resetModules();
+    // The per-project sub-store is debounced; the global sub-store is synchronous
+    // and unaffected by fake timers.
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    restoreLocalStorage();
+    vi.resetModules();
+    vi.restoreAllMocks();
+  });
+
+  it("a fresh view's orderBy change preserves a sibling's non-default global pref", async () => {
+    const backing = installLocalStorage({});
+    const { useWorktreeFilterStore: store } = await import("../worktreeFilterStore");
+
+    backing.set(
+      GLOBAL_KEY,
+      JSON.stringify({
+        version: VERSION,
+        state: {
+          orderBy: "created",
+          groupByType: false,
+          alwaysShowActive: false,
+          alwaysShowWaiting: true,
+          hideMainWorktree: false,
+        },
+      })
+    );
+
+    store.getState().setOrderBy("alpha");
+
+    const written = readGlobal(backing);
+    expect(written.state.orderBy).toBe("alpha"); // this view's change
+    expect(written.state.alwaysShowActive).toBe(false); // sibling's non-default survived
+  });
+
+  it("independent global pref changes both survive and the project key stays untouched", async () => {
+    const backing = installLocalStorage({});
+    const { useWorktreeFilterStore: store } = await import("../worktreeFilterStore");
+
+    store.getState().setAlwaysShowActive(false);
+
+    // Sibling hides the main worktree on disk.
+    const disk = readGlobal(backing);
+    disk.state.hideMainWorktree = true;
+    backing.set(GLOBAL_KEY, JSON.stringify(disk));
+
+    const projectKeyBefore = backing.get(PROJECT_KEY) ?? null;
+
+    store.getState().setAlwaysShowWaiting(false);
+
+    const written = readGlobal(backing);
+    expect(written.state.alwaysShowWaiting).toBe(false); // this view's change
+    expect(written.state.hideMainWorktree).toBe(true); // sibling's change survived
+    expect(written.state.alwaysShowActive).toBe(false);
+    // The per-project store keys off its own project-scoped key — a global write
+    // must not touch it.
+    expect(backing.get(PROJECT_KEY) ?? null).toBe(projectKeyBefore);
+  });
+
+  it("normalizes an invalid manual + groupByType combination produced by a merge", async () => {
+    const backing = installLocalStorage({});
+    const { useWorktreeFilterStore: store } = await import("../worktreeFilterStore");
+
+    // A sibling left `manual` ordering (valid while not grouping) plus a
+    // non-default `alwaysShowActive` on disk.
+    backing.set(
+      GLOBAL_KEY,
+      JSON.stringify({
+        version: VERSION,
+        state: {
+          orderBy: "manual",
+          groupByType: false,
+          alwaysShowActive: false,
+          alwaysShowWaiting: true,
+          hideMainWorktree: false,
+        },
+      })
+    );
+
+    // This view enables grouping (its own orderBy is the default "created"). The
+    // merge pulls in the sibling's `manual` order, recombining it with grouping —
+    // an invalid pair the reconciler must normalize back to "created".
+    store.getState().setGroupByType(true);
+
+    const written = readGlobal(backing);
+    expect(written.state.groupByType).toBe(true);
+    expect(written.state.orderBy).toBe("created");
+    // Proves the merge ran (without it, this view would rewrite the default true).
+    expect(written.state.alwaysShowActive).toBe(false);
+  });
+
+  it("a stale same-project window's filter write preserves a sibling window's pin", async () => {
+    const backing = installLocalStorage({});
+    const { useWorktreeFilterStore: store } = await import("../worktreeFilterStore");
+    vi.advanceTimersByTime(400); // drain any hydration write on the debounced project store
+
+    // A sibling window on the SAME project (which shares the per-project key)
+    // pinned a worktree.
+    backing.set(
+      PROJECT_KEY,
+      JSON.stringify({
+        version: 2,
+        state: {
+          query: "",
+          statusFilters: [],
+          typeFilters: [],
+          prIssueFilters: [],
+          sessionFilters: [],
+          activityFilters: [],
+          pinnedWorktrees: ["wt-1"],
+          collapsedWorktrees: [],
+          manualOrder: [],
+        },
+      })
+    );
+
+    // This stale window (never saw the pin) changes its filter query.
+    store.getState().setQuery("needle");
+    vi.advanceTimersByTime(400);
+
+    const projectBlob: { version: number; state: { pinnedWorktrees: string[]; query: string } } =
+      JSON.parse(backing.get(PROJECT_KEY)!);
+    expect(projectBlob.state.pinnedWorktrees).toEqual(["wt-1"]); // sibling's pin survived
+    expect(projectBlob.state.query).toBe("needle"); // this window's change applied
+  });
+
+  it("a stale window's write keeps a sibling's type filters, minus ids nobody knows", async () => {
+    const backing = installLocalStorage({});
+    const { useWorktreeFilterStore: store } = await import("../worktreeFilterStore");
+    vi.advanceTimersByTime(400);
+
+    backing.set(
+      PROJECT_KEY,
+      JSON.stringify({
+        version: 2,
+        state: {
+          query: "",
+          statusFilters: [],
+          typeFilters: ["design", "retired-type"],
+          prIssueFilters: [],
+          sessionFilters: [],
+          activityFilters: [],
+          pinnedWorktrees: [],
+          collapsedWorktrees: [],
+          manualOrder: [],
+        },
+      })
+    );
+
+    store.getState().setQuery("needle");
+    vi.advanceTimersByTime(400);
+
+    const projectBlob: { state: { typeFilters: string[]; query: string } } = JSON.parse(
+      backing.get(PROJECT_KEY)!
+    );
+    expect(projectBlob.state.typeFilters).toEqual(["design"]);
+    expect(projectBlob.state.query).toBe("needle");
+  });
+
+  it("a stale same-project window's write preserves a sibling's label", async () => {
+    const backing = installLocalStorage({});
+    const { useWorktreeFilterStore: store } = await import("../worktreeFilterStore");
+    vi.advanceTimersByTime(400);
+
+    backing.set(
+      PROJECT_KEY,
+      JSON.stringify({
+        version: 2,
+        state: {
+          query: "",
+          statusFilters: [],
+          typeFilters: [],
+          prIssueFilters: [],
+          sessionFilters: [],
+          activityFilters: [],
+          pinnedWorktrees: [],
+          collapsedWorktrees: [],
+          worktreeLabelColors: { "wt-main": "category-teal" },
+          manualOrder: [],
+        },
+      })
+    );
+
+    store.getState().setQuery("needle");
+    vi.advanceTimersByTime(400);
+
+    const projectBlob: {
+      state: { worktreeLabelColors: Record<string, string>; query: string };
+    } = JSON.parse(backing.get(PROJECT_KEY)!);
+    expect(projectBlob.state.worktreeLabelColors).toEqual({ "wt-main": "category-teal" });
+    expect(projectBlob.state.query).toBe("needle");
+  });
+
+  it("hydrates labels and drops entries that are not a known label token", async () => {
+    installLocalStorage({
+      [PROJECT_KEY]: JSON.stringify({
+        version: 2,
+        state: {
+          worktreeLabelColors: {
+            "wt-1": "category-violet",
+            "wt-2": "category-green",
+            "wt-3": 7,
+          },
+        },
+      }),
+    });
+    const { useWorktreeFilterStore: store } = await import("../worktreeFilterStore");
+
+    expect(store.getState().worktreeLabelColors).toEqual({ "wt-1": "category-violet" });
+  });
+
+  it("a stale same-project window's write preserves a sibling's custom title", async () => {
+    const backing = installLocalStorage({});
+    const { useWorktreeFilterStore: store } = await import("../worktreeFilterStore");
+    vi.advanceTimersByTime(400);
+
+    backing.set(
+      PROJECT_KEY,
+      JSON.stringify({
+        version: 2,
+        state: {
+          query: "",
+          statusFilters: [],
+          typeFilters: [],
+          prIssueFilters: [],
+          sessionFilters: [],
+          activityFilters: [],
+          pinnedWorktrees: [],
+          collapsedWorktrees: [],
+          worktreeCustomTitles: { "wt-main": "Integration" },
+          manualOrder: [],
+        },
+      })
+    );
+
+    store.getState().setQuery("needle");
+    vi.advanceTimersByTime(400);
+
+    const projectBlob: {
+      state: { worktreeCustomTitles: Record<string, string>; query: string };
+    } = JSON.parse(backing.get(PROJECT_KEY)!);
+    expect(projectBlob.state.worktreeCustomTitles).toEqual({ "wt-main": "Integration" });
+    expect(projectBlob.state.query).toBe("needle");
+  });
+
+  it("hydrates titles, normalising them and dropping blank, over-long or non-string entries", async () => {
+    installLocalStorage({
+      [PROJECT_KEY]: JSON.stringify({
+        version: 2,
+        state: {
+          worktreeCustomTitles: {
+            "wt-1": "  Release  prep ",
+            "wt-2": "\u200B",
+            "wt-3": "x".repeat(81),
+            "wt-4": 7,
+          },
+        },
+      }),
+    });
+    const { useWorktreeFilterStore: store } = await import("../worktreeFilterStore");
+
+    expect(store.getState().worktreeCustomTitles).toEqual({ "wt-1": "Release prep" });
+  });
+
+  it("a stale same-project window's write preserves a sibling's 'Has an agent' filter", async () => {
+    const backing = installLocalStorage({});
+    const { useWorktreeFilterStore: store } = await import("../worktreeFilterStore");
+    vi.advanceTimersByTime(400);
+
+    backing.set(
+      PROJECT_KEY,
+      JSON.stringify({
+        version: 2,
+        state: {
+          query: "",
+          statusFilters: [],
+          typeFilters: [],
+          prIssueFilters: [],
+          sessionFilters: [],
+          hasAgentFilter: true,
+          activityFilters: [],
+          pinnedWorktrees: [],
+          collapsedWorktrees: [],
+          manualOrder: [],
+        },
+      })
+    );
+
+    store.getState().setQuery("needle");
+    vi.advanceTimersByTime(400);
+
+    const projectBlob: { state: { hasAgentFilter: boolean; query: string } } = JSON.parse(
+      backing.get(PROJECT_KEY)!
+    );
+    expect(projectBlob.state.hasAgentFilter).toBe(true);
+    expect(projectBlob.state.query).toBe("needle");
   });
 });

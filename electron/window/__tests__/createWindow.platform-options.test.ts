@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { getPlatformWindowOptions } from "../platformWindowOptions.js";
+import { getMinimumWindowSize, getPlatformWindowOptions } from "../platformWindowOptions.js";
 import {
   WINDOWS_CAPTION_SYMBOL_COLOR,
   WINDOWS_TITLEBAR_HEIGHT_PX,
@@ -84,5 +84,16 @@ describe("createWindow wires the overlay owner — issue #11766", () => {
     // The seeded tokens must be the same object the constructor colour came
     // from, or the recorded "already applied" colour would be a lie.
     expect(source).toContain('const windowBg = scheme.tokens["surface-canvas"]');
+  });
+});
+
+describe("minimum window size", () => {
+  it("lets a Linux tiling window manager's narrow tile fit, instead of clipping an 800px layout", () => {
+    expect(getMinimumWindowSize("linux")).toEqual({ minWidth: 400, minHeight: 300 });
+  });
+
+  it("keeps 800x600 where the window manager honours a minimum", () => {
+    expect(getMinimumWindowSize("darwin")).toEqual({ minWidth: 800, minHeight: 600 });
+    expect(getMinimumWindowSize("win32")).toEqual({ minWidth: 800, minHeight: 600 });
   });
 });

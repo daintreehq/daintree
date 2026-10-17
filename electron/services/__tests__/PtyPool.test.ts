@@ -94,6 +94,9 @@ const settleRefill = async () => {
   }
 };
 
+// ensureUtf8Locale's fallback: Linux systems without locale packages have only C.UTF-8.
+const FALLBACK_LANG = process.platform === "linux" ? "C.UTF-8" : "en_US.UTF-8";
+
 describe("PtyPool", () => {
   const originalShell = process.env.SHELL;
   const originalHome = process.env.HOME;
@@ -292,7 +295,7 @@ describe("PtyPool", () => {
     expect(spawnOptions.env?.TERM).toBe("xterm-256color");
     expect(spawnOptions.env?.COLORTERM).toBe("truecolor");
     expect(spawnOptions.env?.FORCE_COLOR).toBe("3");
-    expect(spawnOptions.env?.LANG).toBe("en_US.UTF-8");
+    expect(spawnOptions.env?.LANG).toBe(FALLBACK_LANG);
     expect(spawnOptions.env?.LC_ALL).toBeUndefined();
     pool.dispose();
   });
@@ -450,7 +453,7 @@ describe("PtyPool", () => {
     pool.dispose();
   });
 
-  it("falls back to en_US.UTF-8 when LANG is non-UTF-8", async () => {
+  it("falls back to the platform's UTF-8 locale when LANG is non-UTF-8", async () => {
     process.env.LANG = "C";
     spawnMock.mockReturnValue(createFakeProcess(502));
     const pool = new PtyPool({ poolSize: 1, defaultCwd: "/repo" });
@@ -458,7 +461,7 @@ describe("PtyPool", () => {
     await pool.warmPool();
 
     const spawnOptions = spawnMock.mock.calls[0]?.[2] as { env?: Record<string, string> };
-    expect(spawnOptions.env?.LANG).toBe("en_US.UTF-8");
+    expect(spawnOptions.env?.LANG).toBe(FALLBACK_LANG);
     pool.dispose();
   });
 

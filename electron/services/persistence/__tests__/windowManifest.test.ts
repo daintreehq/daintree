@@ -5,6 +5,7 @@ import {
   OPEN_WINDOWS_MANIFEST_VERSION,
   filterRestorableWindows,
   isReadableOpenWindowsManifest,
+  isRemoteWorkspaceKey,
   parseOpenWindowsManifest,
   serializeOpenWindowsManifest,
   type OpenWindowRecord,
@@ -21,12 +22,6 @@ describe("parseOpenWindowsManifest", () => {
   it("round-trips what serialize produced", () => {
     const records = [record("alpha"), record(null), record("beta")];
     expect(parseOpenWindowsManifest(serializeOpenWindowsManifest(records))).toEqual(records);
-  });
-
-  it("preserves record order — order is the focus order", () => {
-    const records = [record("c"), record("a"), record("b")];
-    const parsed = parseOpenWindowsManifest(serializeOpenWindowsManifest(records));
-    expect(parsed.map((r) => r.projectId)).toEqual(["c", "a", "b"]);
   });
 
   it("keeps duplicate project ids as separate windows", () => {
@@ -174,14 +169,16 @@ describe("isReadableOpenWindowsManifest", () => {
 });
 
 describe("filterRestorableWindows", () => {
-  it("drops a record whose project no longer exists", () => {
-    const records = [record("gone"), record("here")];
-    expect(filterRestorableWindows(records, new Set(["here"]))).toEqual([record("here")]);
+  it("keeps a window that was on a host's project, which only the host can vouch for", () => {
+    const remote = record(`studio-01:${"a".repeat(64)}`);
+    expect(filterRestorableWindows([remote, record("gone")], new Set())).toEqual([remote]);
   });
 
-  it("never substitutes a surviving project for a deleted one", () => {
-    const filtered = filterRestorableWindows([record("gone")], new Set(["other"]));
-    expect(filtered).toEqual([]);
+  it("drops a host-scoped key whose host id or project id isn't one", () => {
+    for (const id of ["local:abc", "bad host:abc", "studio-01:", `studio-01:${"x".repeat(257)}`]) {
+      expect(isRemoteWorkspaceKey(id), id).toBe(false);
+      expect(filterRestorableWindows([record(id)], new Set())).toEqual([]);
+    }
   });
 
   it("keeps project-picker windows, which have no project to validate", () => {

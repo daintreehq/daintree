@@ -13,6 +13,7 @@ import { useShallow } from "zustand/react/shallow";
 import { useSplitterKeys } from "@/hooks/useSplitterKeys";
 import { ExternalLink, History, MessageCircle, Settings2, Sparkles } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { reportCanopySent } from "@/lib/canopySeen";
 import { Button } from "@/components/ui/button";
 import { ChoiceCard } from "@/components/ui/card";
 import { InlineStatusBanner } from "@/components/Terminal/InlineStatusBanner";
@@ -30,7 +31,9 @@ import { safeFireAndForget } from "@/utils/safeFireAndForget";
 import { isBuiltInAgentId } from "@shared/config/agentIds";
 import { HelpIntroBanner } from "./HelpIntroBanner";
 import { usePaletteStore } from "@/store/paletteStore";
-import { HelpPanelHeader } from "./HelpPanelHeader";
+import { HelpPanelHeader, type HelpPanelMessagingControls } from "./HelpPanelHeader";
+import { AssistantMessagingNotice } from "./AssistantMessagingNotice";
+import { useAssistantMessaging } from "@/hooks/useAssistantMessaging";
 import { HelpSessionTabs, helpSessionTabId, type HelpSessionTab } from "./HelpSessionTabs";
 import { HelpSessionLaneRuntime } from "./HelpSessionLaneRuntime";
 import {
@@ -54,11 +57,12 @@ import {
   useHelpPanelStore,
   selectSlot,
   selectOpenSlots,
+  selectHasRoomForSession,
   HELP_PANEL_MIN_WIDTH,
   HELP_PANEL_MAX_WIDTH,
   HELP_PANEL_DEFAULT_WIDTH,
 } from "@/store/helpPanelStore";
-import { MAX_ASSISTANT_SLOTS } from "@shared/config/assistantSlots";
+import { MAX_ASSISTANT_SLOTS, assistantSlotKey } from "@shared/config/assistantSlots";
 import {
   usePanelStore,
   getTerminalRefreshTier,
@@ -74,11 +78,11 @@ import { isAssistantFocused, useMacroFocusStore } from "@/store/macroFocusStore"
 import { useScratchStore } from "@/store/scratchStore";
 import { usePreferencesStore } from "@/store/preferencesStore";
 import { useFocusStore } from "@/store/focusStore";
-import { getAgentConfig, getAssistantSupportedAgentIds } from "@/config/agents";
+import { getAgentConfig } from "@/config/agents";
 import { buildResumeCommand } from "@shared/types/agentSettings";
-import { isAgentInstalled } from "../../../shared/utils/agentAvailability";
 import { actionService } from "@/services/ActionService";
 import { useEscapeStack } from "@/hooks/useEscapeStack";
+import { useAssistantAgentChoices } from "@/hooks/useAssistantAgentChoices";
 import { suppressSidebarResizes } from "@/lib/sidebarToggle";
 import { dismissAllTooltips } from "@/lib/tooltipDismissRegistry";
 import { TerminalRefreshTier } from "@/types";
@@ -201,7 +205,15 @@ export function HelpPanel({
   useEffect(() => {
     if (!isVisible) setHasDomFocus(false);
   }, [isVisible]);
-  const [showNewSessionConfirm, setShowNewSessionConfirm] = useState(false);
+  // The lane a restart is waiting on confirmation for. The header's overflow item
+  // and every tab's own menu share it, so the lane that restarts is the one the
+  // request named rather than whichever is in front when the user confirms.
+  const [pendingRestartSlot, setPendingRestartSlot] = useState<number | null>(null);
+  // Where the restart confirm hands focus back: a tab menu's item is gone by the
+  // time the dialog closes, but the lane's tab survives a restart. A ref because
+  // the dialog resolves it after its exit animation, once the pending slot is
+  // already cleared.
+  const restartFocusSlotRef = useRef<number | null>(null);
   const [showEndSessionConfirm, setShowEndSessionConfirm] = useState(false);
   const [showAgentSwitchConfirm, setShowAgentSwitchConfirm] = useState(false);
   // The lane a tab's close button is waiting on confirmation for (#12108).
@@ -212,10 +224,10 @@ export function HelpPanel({
   // lane: its neighbour, the following one first. Null when the lane being
   // closed is the selected one — focus then follows the store's new selection.
   const [pendingCloseSuccessor, setPendingCloseSuccessor] = useState<number | null>(null);
-  // Tracks the last preferredAgentId the switch effect acted on so a single
-  // preference change drives at most one switch attempt (the effect re-runs
-  // on unrelated dep changes while the async launch settles).
-  const prevPreferredAgentIdRef = useRef<string | null>(null);
+  // The switch request the effect last acted on, so one Settings pick drives at
+  // most one switch attempt (the effect re-runs on unrelated dep changes while
+  // the async launch settles).
+  const handledSwitchRequestIdRef = useRef<number | null>(null);
   const [visibilityEpoch, setVisibilityEpoch] = useState(0);
 
   // The lane this panel body is showing, and its controller (#12108).
@@ -237,6 +249,7 @@ export function HelpPanel({
     sessionId,
     agentId,
     preferredAgentId,
+    agentSwitchRequest,
     autoLaunchEnabled,
     droppedPreferredAgentId,
     introDismissed,
@@ -250,6 +263,7 @@ export function HelpPanel({
     setOpen,
     setAutoLaunchEnabled,
     setPreferredAgent,
+    clearAgentSwitchRequest,
     dismissIntro,
     clearDroppedPreferredAgent,
   } = useHelpPanelStore(
@@ -260,6 +274,7 @@ export function HelpPanel({
       sessionId: selectSlot(s, s.activeSlot).sessionId,
       agentId: selectSlot(s, s.activeSlot).agentId,
       preferredAgentId: s.preferredAgentId,
+      agentSwitchRequest: s.agentSwitchRequest,
       autoLaunchEnabled: s.autoLaunchEnabled,
       droppedPreferredAgentId: s.droppedPreferredAgentId,
       introDismissed: s.introDismissed,
@@ -273,6 +288,7 @@ export function HelpPanel({
       setOpen: s.setOpen,
       setAutoLaunchEnabled: s.setAutoLaunchEnabled,
       setPreferredAgent: s.setPreferredAgent,
+      clearAgentSwitchRequest: s.clearAgentSwitchRequest,
       dismissIntro: s.dismissIntro,
       clearDroppedPreferredAgent: s.clearDroppedPreferredAgent,
     }))
@@ -302,8 +318,6 @@ export function HelpPanel({
     })
   );
   const cliDetail = useCliAvailabilityStore((s) => (agentId ? s.details[agentId] : undefined));
-  const cliAvailability = useCliAvailabilityStore((s) => s.availability);
-  const cliHasRealData = useCliAvailabilityStore((s) => s.hasRealData);
   const currentProject = useProjectStore((s) => s.currentProject);
   const currentScratch = useScratchStore((s) => s.currentScratch);
   const hybridInputEnabled = useTerminalInputStore((s) => s.hybridInputEnabled);
@@ -327,6 +341,27 @@ export function HelpPanel({
         : null,
     [activeWorkspaceId, activeWorkspacePath]
   );
+  const messaging = useAssistantMessaging(activeWorkspaceId, activeSlot, sessionId);
+  const messagingLane = messaging.state?.lane;
+  const messagingControls: HelpPanelMessagingControls | null =
+    messaging.state?.available && messagingLane
+      ? {
+          enrolled: messagingLane.enrolled,
+          // Turning it on needs a running assistant; turning it off never does.
+          canChangeEnrollment:
+            !messagingLane.enrolledElsewhere && (messagingLane.enrolled || Boolean(terminalId)),
+          enrollmentHint: messagingLane.enrolledElsewhere
+            ? "Turned on from another machine"
+            : !messagingLane.enrolled && !terminalId
+              ? "Start this assistant first"
+              : null,
+          paused: messaging.state.paused,
+          canPause: messaging.state.canPause,
+          pauseHint: messaging.state.canPause ? null : "Change this on the machine running it",
+          onEnrolledChange: messaging.setLaneEnrolled,
+          onPausedChange: messaging.setPaused,
+        }
+      : null;
 
   // The ActionContext pinned to this session at launch (#8772). Fetched once
   // per session id — the binding is fixed at provision time and only changes
@@ -410,11 +445,9 @@ export function HelpPanel({
   });
 
   // Intersection of "wired for the assistant overlay" and "CLI is installed".
-  // Drives the single-supported-agent auto-skip in the controller.
-  const supportedInstalledAgentIds = useMemo(() => {
-    if (!cliHasRealData) return [];
-    return getAssistantSupportedAgentIds().filter((id) => isAgentInstalled(cliAvailability[id]));
-  }, [cliHasRealData, cliAvailability]);
+  // Drives the single-supported-agent auto-skip in the controller, and the
+  // "New session with…" items, which the toolbar button offers from the same list.
+  const supportedInstalledAgentIds = useAssistantAgentChoices();
   const supportedInstalledAgentIdsKey = supportedInstalledAgentIds.join(",");
 
   // A conversation the eviction/crash path captured for this workspace but never
@@ -452,12 +485,15 @@ export function HelpPanel({
         // Offer Resume only for an agent that is still installed AND an entry
         // the controller can resume by exact id (#13205). A non-resumable agent,
         // or an entry with no id (a Codex lane never captured), would dead-end
-        // in `_spawnResumed` and start fresh, so "Resume" would lie.
+        // in `_spawnResumed` and start fresh, so "Resume" would lie. A lane
+        // whose assistant is still running on the host (#13360) needs neither:
+        // the launch takes the live process over instead of resuming anything.
         const canResume =
           pendingAgentId != null &&
-          supportedInstalledAgentIds.includes(pendingAgentId) &&
-          !!pending?.agentSessionId &&
-          buildResumeCommand(pendingAgentId, pending.agentSessionId) !== undefined;
+          (pending?.live === true ||
+            (supportedInstalledAgentIds.includes(pendingAgentId) &&
+              !!pending?.agentSessionId &&
+              buildResumeCommand(pendingAgentId, pending.agentSessionId) !== undefined));
         setResumablePending(
           canResume ? { workspaceId: activeWorkspaceId, agentId: pendingAgentId } : null
         );
@@ -660,46 +696,46 @@ export function HelpPanel({
     return () => clearTimeout(timer);
   }, [controller, terminalId, terminalPty?.agentState]);
 
-  // React to a Settings agent change while a session is already bound.
-  // `setTerminal` no longer overwrites `preferredAgentId`, so a user choice
-  // made in the Daintree Assistant settings tab reaches here as a genuine
-  // change. Replace the live session with the chosen agent, gated by the
-  // same D1 confirm as a new session when there's a conversation to lose.
-  // (#8353 — switching the assistant agent was a silent no-op.)
+  // Apply an agent picked in Settings in this view to the live session,
+  // gated by the same D1 confirm as a new session when there's a
+  // conversation to lose (#8353 — switching the assistant agent was a silent
+  // no-op). Only an explicit pick queues a request; the default itself is the
+  // host's and also moves on an import or a pick in another window, which
+  // must never replace a session here (#13345).
   useEffect(() => {
-    // No preference, or no live session to replace. Do NOT record the value
-    // yet — a preference chosen before a terminal binds must still trigger
-    // the switch once the terminal appears (#8353 critical fix).
-    if (!preferredAgentId || !terminalId) return;
-    // Already running the preferred agent — covers first-mount hydration and
-    // the user reverting the dropdown back to the live agent. Reconcile any
-    // open confirm so a stale "Switch to X?" prompt can't fire the wrong
-    // agent after the preference moved on.
-    if (preferredAgentId === agentId) {
-      prevPreferredAgentIdRef.current = preferredAgentId;
+    if (!agentSwitchRequest) {
       if (showAgentSwitchConfirm) setShowAgentSwitchConfirm(false);
       return;
     }
-    // Dedupe: this preference, against the current live agent, was already
-    // acted on (the effect re-runs on unrelated dep changes while the async
-    // launch settles).
-    if (prevPreferredAgentIdRef.current === preferredAgentId) return;
-    prevPreferredAgentIdRef.current = preferredAgentId;
+    // No live session to replace yet. Keep the request — a pick made before
+    // a terminal binds must still switch once one appears (#8353 critical fix).
+    if (!terminalId) return;
+    // Already running the picked agent — covers the auto-launch that the pick
+    // itself drove and the user reverting the dropdown back to the live agent.
+    // Closing the confirm keeps a stale "Switch to X?" from firing.
+    if (agentSwitchRequest.agentId === agentId) {
+      clearAgentSwitchRequest(agentSwitchRequest.id);
+      if (showAgentSwitchConfirm) setShowAgentSwitchConfirm(false);
+      return;
+    }
+    if (handledSwitchRequestIdRef.current === agentSwitchRequest.id) return;
+    handledSwitchRequestIdRef.current = agentSwitchRequest.id;
     const shouldConfirm =
       (terminalPty?.agentState !== undefined &&
         CLOSE_CONFIRM_AGENT_STATES.has(terminalPty.agentState)) ||
       conversationTouched;
     if (shouldConfirm) {
-      // The dialog title and confirm action both read live `preferredAgentId`,
-      // so a retarget to a third agent while the dialog is open tracks the
-      // latest preference without needing a separate pending field.
+      // The dialog reads the live request, so a retarget to a third agent
+      // while it's open tracks the latest pick.
       setShowAgentSwitchConfirm(true);
       return;
     }
-    controller.selectAgent(preferredAgentId);
+    clearAgentSwitchRequest(agentSwitchRequest.id);
+    controller.selectAgent(agentSwitchRequest.agentId);
   }, [
     controller,
-    preferredAgentId,
+    agentSwitchRequest,
+    clearAgentSwitchRequest,
     terminalId,
     agentId,
     terminalPty?.agentState,
@@ -1061,6 +1097,9 @@ export function HelpPanel({
   const sessionBodyId = `${tabIdBase}-body`;
   const openSlots = useHelpPanelStore(useShallow(selectOpenSlots));
   const canOpenParallelSession = openSlots.length < MAX_ASSISTANT_SLOTS;
+  const canStartSessionWithAgent = useHelpPanelStore((s) =>
+    selectHasRoomForSession(s, activeWorkspaceId)
+  );
 
   // Subscribed rather than read through `getState()` inside the panel-store selectors
   // below: a background lane that binds a terminal changes only this, and without the
@@ -1068,6 +1107,33 @@ export function HelpPanel({
   // happened to re-render the panel.
   const laneTerminalIds = useHelpPanelStore(
     useShallow((s) => openSlots.map((slot) => s.sessions[slot]?.terminalId ?? null))
+  );
+
+  // Each lane's agent, so a strip holding more than one can tell them apart. A
+  // tab restored for a captured conversation has no terminal yet; its capture
+  // names the agent it will resume with.
+  const laneAgentIds = useHelpPanelStore(
+    useShallow((s) =>
+      openSlots.map(
+        (slot) =>
+          s.sessions[slot]?.agentId ??
+          (activeWorkspaceId
+            ? s.hibernateSessions[assistantSlotKey(activeWorkspaceId, slot)]?.agentId
+            : undefined) ??
+          null
+      )
+    )
+  );
+
+  // The header's "Restart conversation" gate, per lane, so each tab's menu offers
+  // the same item exactly where the overflow menu would for that lane.
+  const laneCanRestart = useHelpPanelStore(
+    useShallow((s) =>
+      openSlots.map((slot) => {
+        const lane = selectSlot(s, slot);
+        return Boolean(lane.terminalId && lane.agentId);
+      })
+    )
   );
 
   const laneAgentStates = usePanelStore(
@@ -1115,9 +1181,11 @@ export function HelpPanel({
           label: task?.label ?? `Session ${slot + 1}`,
           fullTitle: task?.fullTitle,
           agentState: laneAgentStates[index],
+          agentId: laneAgentIds[index] ?? null,
+          canRestart: laneCanRestart[index],
         };
       }),
-    [openSlots, laneAgentStates, laneTaskTitles]
+    [openSlots, laneAgentStates, laneTaskTitles, laneAgentIds, laneCanRestart]
   );
 
   // Bring back the tabs for lanes whose conversations an eviction or crash
@@ -1162,6 +1230,15 @@ export function HelpPanel({
     useHelpPanelStore.getState().requestFocus();
   }, []);
 
+  // One session on a named agent (#13442); the default stays where it is.
+  const handleOpenSessionWithAgent = useCallback((pickedAgentId: string) => {
+    void actionService.dispatch(
+      "help.newSessionWithAgent",
+      { agentId: pickedAgentId },
+      { source: "user" }
+    );
+  }, []);
+
   const handleSelectSlot = useCallback((slot: number) => {
     useHelpPanelStore.getState().setActiveSlot(slot);
     // A lane's xterm was hidden while it was in the background, so it has no
@@ -1203,11 +1280,11 @@ export function HelpPanel({
   );
 
   // Same "something to lose" gate the Stop control uses, but evaluated against
-  // the lane BEING CLOSED rather than the one on screen — a background lane is
-  // exactly where a working agent goes unnoticed.
-  const laneNeedsCloseConfirm = useCallback((slot: number) => {
-    const lane = useHelpPanelStore.getState().sessions[slot];
-    if (!lane) return false;
+  // the lane BEING CLOSED OR RESTARTED rather than the one on screen — a
+  // background lane is exactly where a working agent goes unnoticed. Both
+  // discard the lane's conversation, so both take this one gate.
+  const laneNeedsDiscardConfirm = useCallback((slot: number) => {
+    const lane = selectSlot(useHelpPanelStore.getState(), slot);
     if (lane.conversationTouched) return true;
     if (!lane.terminalId) return false;
     const panel = usePanelStore.getState().panelsById[lane.terminalId];
@@ -1217,7 +1294,7 @@ export function HelpPanel({
 
   const handleCloseSlot = useCallback(
     (slot: number) => {
-      if (laneNeedsCloseConfirm(slot)) {
+      if (laneNeedsDiscardConfirm(slot)) {
         const index = sessionTabs.findIndex((tab) => tab.slot === slot);
         const successor =
           slot === activeSlot
@@ -1229,7 +1306,7 @@ export function HelpPanel({
       }
       closeSlotNow(slot);
     },
-    [laneNeedsCloseConfirm, closeSlotNow, sessionTabs, activeSlot]
+    [laneNeedsDiscardConfirm, closeSlotNow, sessionTabs, activeSlot]
   );
 
   const handleConfirmCloseSlot = useCallback(() => {
@@ -1255,22 +1332,43 @@ export function HelpPanel({
       ? `'${pendingCloseTab.fullTitle}'`
       : pendingCloseTab.label;
 
-  const handleNewSession = useCallback(() => {
-    if (!terminalId || !agentId) return;
-    if (shouldConfirmNewSession) {
-      setShowNewSessionConfirm(true);
-      return;
-    }
-    controller.newSession();
-  }, [controller, terminalId, agentId, shouldConfirmNewSession]);
+  // Read at call time rather than from the render that offered the item: a
+  // confirm can outlive its lane, and acquiring a controller for a closed slot
+  // would mint one with nothing to run.
+  const restartSlotNow = useCallback((slot: number) => {
+    const lane = selectSlot(useHelpPanelStore.getState(), slot);
+    if (!lane.terminalId || !lane.agentId) return;
+    acquireHelpSessionController(slot).newSession();
+  }, []);
 
-  const handleConfirmNewSession = useCallback(() => {
-    setShowNewSessionConfirm(false);
-    controller.newSession();
-  }, [controller]);
+  const handleRestartSlot = useCallback(
+    (slot: number) => {
+      const lane = selectSlot(useHelpPanelStore.getState(), slot);
+      if (!lane.terminalId || !lane.agentId) return;
+      if (laneNeedsDiscardConfirm(slot)) {
+        restartFocusSlotRef.current = slot;
+        setPendingRestartSlot(slot);
+        return;
+      }
+      restartSlotNow(slot);
+    },
+    [laneNeedsDiscardConfirm, restartSlotNow]
+  );
 
-  const handleCancelNewSession = useCallback(() => {
-    setShowNewSessionConfirm(false);
+  // The header's overflow item and the revoked-session banner act on the lane on screen.
+  const handleRestartActiveSlot = useCallback(
+    () => handleRestartSlot(activeSlot),
+    [handleRestartSlot, activeSlot]
+  );
+
+  const handleConfirmRestartSlot = useCallback(() => {
+    const slot = pendingRestartSlot;
+    setPendingRestartSlot(null);
+    if (slot !== null) restartSlotNow(slot);
+  }, [pendingRestartSlot, restartSlotNow]);
+
+  const handleCancelRestartSlot = useCallback(() => {
+    setPendingRestartSlot(null);
   }, []);
 
   // Stop reuses the same "something to lose" gate as +New session — confirm
@@ -1295,19 +1393,22 @@ export function HelpPanel({
 
   const handleConfirmAgentSwitch = useCallback(() => {
     setShowAgentSwitchConfirm(false);
-    // Guard against the preference having moved back to the running agent (or
-    // cleared) between opening the dialog and confirming.
-    if (preferredAgentId && preferredAgentId !== agentId) {
-      controller.selectAgent(preferredAgentId);
+    if (!agentSwitchRequest) return;
+    clearAgentSwitchRequest(agentSwitchRequest.id);
+    // Guard against the pick having moved back to the running agent between
+    // opening the dialog and confirming.
+    if (agentSwitchRequest.agentId !== agentId) {
+      controller.selectAgent(agentSwitchRequest.agentId);
     }
-  }, [controller, preferredAgentId, agentId]);
+  }, [controller, agentSwitchRequest, clearAgentSwitchRequest, agentId]);
 
-  // Leave preferredAgentId as the user set it — reverting it on cancel would
-  // be a silent fallback the dropdown wouldn't reflect. The session simply
-  // stays on the running agent until the user confirms a switch.
+  // Leave the default as the user set it — reverting it on cancel would be a
+  // silent fallback the dropdown wouldn't reflect. The session simply stays on
+  // the running agent; only the request to switch it is dropped.
   const handleCancelAgentSwitch = useCallback(() => {
     setShowAgentSwitchConfirm(false);
-  }, []);
+    if (agentSwitchRequest) clearAgentSwitchRequest(agentSwitchRequest.id);
+  }, [agentSwitchRequest, clearAgentSwitchRequest]);
 
   const handleOpenSettings = useCallback(() => {
     void actionService.dispatch("app.settings.openTab", { tab: "assistant" }, { source: "user" });
@@ -1406,7 +1507,8 @@ export function HelpPanel({
   // the pick is stored as the default, then launched like "Start assistant".
   const handleChooseAssistant = useCallback(
     (chosenAgentId: string) => {
-      setPreferredAgent(chosenAgentId);
+      // Launched directly below, so no switch request rides along.
+      setPreferredAgent(chosenAgentId, { switchSession: false });
       setAutoLaunchEnabled(true);
       controller.launch({ agentId: chosenAgentId, replaceExisting: true });
     },
@@ -1529,12 +1631,16 @@ export function HelpPanel({
         agentState={terminalPty?.agentState}
         canRestartConversation={Boolean(terminalId && agentId)}
         canEndSession={Boolean(terminalId && agentId)}
-        onRestartConversation={handleNewSession}
+        onRestartConversation={handleRestartActiveSlot}
         onEndSession={handleEndSession}
         onResumePastSession={handleResumePastSession}
         onOpenDocs={handleOpenAssistantDocs}
         onClose={handleClose}
         isFocused={isHighlighted}
+        messaging={messagingControls}
+        newSessionAgentIds={supportedInstalledAgentIds}
+        canStartNewSession={canStartSessionWithAgent}
+        onNewSessionWithAgent={handleOpenSessionWithAgent}
       />
 
       {pastSessionsMounted && (
@@ -1548,11 +1654,15 @@ export function HelpPanel({
         activeSlot={activeSlot}
         onSelect={handleSelectSlot}
         onClose={handleCloseSlot}
+        onRestart={handleRestartSlot}
         // The strip is the only home for this action now. It used to live in the
         // header's overflow menu as well, which put the one findable route to a
         // second session two clicks behind an ellipsis.
         canOpenSession={canOpenParallelSession}
         onOpenSession={handleOpenParallelSession}
+        newSessionAgentIds={supportedInstalledAgentIds}
+        canOpenSessionWithAgent={canStartSessionWithAgent}
+        onOpenSessionWithAgent={handleOpenSessionWithAgent}
         idBase={tabIdBase}
         panelId={sessionBodyId}
       />
@@ -1615,8 +1725,14 @@ export function HelpPanel({
           onOpenAssistantSettings={handleOpenSettings}
           onOpenLogs={handleOpenLogs}
           onOpenInstallerPage={handleOpenInstallerPage}
-          onStartNewSession={handleNewSession}
+          onStartNewSession={handleRestartActiveSlot}
           onDismissSessionRevoked={dismissSessionRevoked}
+        />
+        <AssistantMessagingNotice
+          state={messaging.state}
+          refusal={messaging.refusal}
+          laneKey={messaging.laneKey}
+          onDismissRefusal={messaging.dismissRefusal}
         />
         {showTerminal ? (
           isMissingCli && agentId ? (
@@ -1632,7 +1748,15 @@ export function HelpPanel({
               {!introDismissed && !hasEverLaunchedAgent && (
                 <HelpIntroBanner onDismiss={dismissIntro} />
               )}
-              <div className="flex-1 relative min-h-0">
+              {/* Claims the right-click so the app views' native edit menu
+                  stays out of the terminal: xterm parks its helper textarea
+                  under the pointer, and Cut or Select all there would act on
+                  that textarea, not the terminal buffer. Grid terminals get
+                  the same from their panel menu's trigger. */}
+              <div
+                className="flex-1 relative min-h-0"
+                onContextMenu={(event) => event.preventDefault()}
+              >
                 <Suspense fallback={null}>
                   <XtermAdapter
                     terminalId={terminalId}
@@ -1659,9 +1783,13 @@ export function HelpPanel({
                     agentHasLifecycleEvent={terminalPty?.stateChangeTrigger !== undefined}
                     agentState={terminalPty?.agentState}
                     disabled={terminalPty?.isInputLocked === true}
+                    // The aside's own focus state, the one its edge shows: the
+                    // grid's selection never names the Assistant's terminal.
+                    selected={isHighlighted}
                     onSend={({ text, imagePaths }) => {
                       if (terminalPty?.isInputLocked === true) return;
                       terminalInstanceService.notifyUserInput(terminalId);
+                      reportCanopySent(terminalId);
                       // submit can now reject for dead PTYs (#8706); swallow
                       // to log so the unhandled rejection doesn't leak — the
                       // help panel is a one-shot send with no recovery UI.
@@ -1675,7 +1803,12 @@ export function HelpPanel({
                     }}
                     onSendKey={(key) => {
                       if (terminalPty?.isInputLocked === true) return;
-                      terminalInstanceService.notifyUserInput(terminalId);
+                      if (key === "escape") {
+                        terminalInstanceService.clearDirectingState(terminalId, "escape-key");
+                      } else {
+                        terminalInstanceService.notifyUserInput(terminalId);
+                      }
+                      if (key === "enter") reportCanopySent(terminalId);
                       terminalClient.sendKey(terminalId, key);
                     }}
                   />
@@ -1839,16 +1972,26 @@ export function HelpPanel({
         />
       )}
       <ConfirmDialog
-        isOpen={showNewSessionConfirm}
-        // Matches the overflow item that opens it. The old wording ("Start a new
-        // session?") described the outcome as a gain when the thing being confirmed
-        // is a loss, and it collided with the strip's own new-session control.
+        isOpen={pendingRestartSlot !== null}
+        // Matches the items that open it — the overflow menu's and each tab's. The
+        // old wording ("Start a new session?") described the outcome as a gain when
+        // the thing being confirmed is a loss, and it collided with the strip's own
+        // new-session control.
         title="Restart this conversation?"
         description="The current agent will stop and the conversation will be discarded"
         confirmLabel="Restart conversation"
-        onConfirm={handleConfirmNewSession}
-        onClose={handleCancelNewSession}
+        onConfirm={handleConfirmRestartSlot}
+        onClose={handleCancelRestartSlot}
         variant="destructive"
+        // Used only when the opener cannot take focus back: the overflow trigger
+        // still can, a tab menu's item cannot.
+        restoreFocusTo={() =>
+          restartFocusSlotRef.current === null
+            ? null
+            : (panelRef.current?.querySelector<HTMLElement>(
+                `[role="tab"][data-slot="${restartFocusSlotRef.current}"]`
+              ) ?? null)
+        }
       />
       <ConfirmDialog
         isOpen={showEndSessionConfirm}
@@ -1888,7 +2031,9 @@ export function HelpPanel({
       <ConfirmDialog
         isOpen={showAgentSwitchConfirm}
         title={`Switch to ${
-          getAgentConfig(preferredAgentId ?? "")?.name ?? preferredAgentId ?? "agent"
+          getAgentConfig(agentSwitchRequest?.agentId ?? "")?.name ??
+          agentSwitchRequest?.agentId ??
+          "agent"
         }?`}
         description="The current session will end and the conversation will be discarded"
         confirmLabel="Switch agent"

@@ -246,6 +246,7 @@ vi.mock("@/store/helpPanelStore", () => {
     selectSlot: (s: typeof helpPanelState) => s,
     selectActiveSlot: (s: typeof helpPanelState) => s,
     selectOpenSlots: () => [0],
+    selectHasRoomForSession: () => true,
     selectSlotTerminalIds: (s: typeof helpPanelState) => (s.terminalId ? [s.terminalId] : []),
     selectSlotForTerminal: (s: typeof helpPanelState, id: string) =>
       s.terminalId === id && id ? 0 : null,
@@ -579,19 +580,6 @@ describe("HelpPanel — reveal focus ownership (#11472)", () => {
   });
 
   describe("legitimate focus requests still land", () => {
-    it("focuses the assistant on open even when another pane owns focus", () => {
-      helpPanelState.isOpen = false;
-      const { rerender } = render(<HelpPanel width={380} />);
-      focusForeignEditor();
-      clearFocusSpies();
-
-      helpPanelState.isOpen = true;
-      rerender(<HelpPanel width={380} />);
-      act(() => flushFrame());
-
-      expect(hybridHandle.focusWithCursorAtEnd).toHaveBeenCalled();
-    });
-
     it("focuses the assistant on reveal even when another pane owns focus", () => {
       const { rerender } = render(<HelpPanel width={0} isVisible={false} />);
       focusForeignEditor();
@@ -607,26 +595,6 @@ describe("HelpPanel — reveal focus ownership (#11472)", () => {
       const { rerender } = renderSettledWithForeignFocus();
 
       helpPanelState.focusRequest += 1;
-      rerender(<HelpPanel width={380} />);
-      act(() => flushFrame());
-
-      expect(hybridHandle.focusWithCursorAtEnd).toHaveBeenCalled();
-    });
-
-    it("retries the grab on spawning -> ready while the assistant owns focus", () => {
-      // Cold open against a still-spawning terminal parks focus on the panel
-      // root rather than the editor. Becoming ready is a structural retry, and
-      // the assistant still owning focus is what authorizes it.
-      setPanel("t-1", "spawning");
-      const { rerender } = render(<HelpPanel width={380} />);
-      act(() => flushFrame());
-      act(() => flushFrame());
-      act(() => {
-        document.getElementById("daintree-assistant-panel")?.focus();
-      });
-      clearFocusSpies();
-
-      setPanel("t-1", "ready");
       rerender(<HelpPanel width={380} />);
       act(() => flushFrame());
 

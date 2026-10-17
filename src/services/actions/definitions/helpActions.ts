@@ -36,7 +36,10 @@ import {
   getAssistantWiredAgentIds,
 } from "@shared/config/agentRegistry";
 import { isAgentLaunchable } from "@shared/utils/agentAvailability";
-import { HELP_ASSISTANT_GREETING } from "@shared/config/helpAssistantGreeting";
+import {
+  HELP_ASSISTANT_GREETING,
+  HUB_STARTED_ASSISTANT_GREETING,
+} from "@shared/config/helpAssistantGreeting";
 import { buildResumeCommand } from "@shared/types";
 import { isPtyPanel } from "@shared/types/panel";
 import { usePaletteStore } from "@/store/paletteStore";
@@ -74,19 +77,23 @@ function isFreeHelpLane(state: HelpPanelState, workspaceId: string, slot: number
  * The lane `help.launchAgent` may launch into without displacing anything
  * (#13192): the active tab if it is free, else another free tab, else a slot
  * no tab occupies yet (`isNew`). Null when every slot holds a session.
+ * `isKept` marks further slots as taken — ones main still keeps a conversation
+ * for that this view's store doesn't know about yet.
  */
 function pickHelpLaunchLane(
   state: HelpPanelState,
-  workspaceId: string
+  workspaceId: string,
+  isKept: (slot: number) => boolean = () => false
 ): { slot: number; isNew: boolean } | null {
-  if (isFreeHelpLane(state, workspaceId, state.activeSlot)) {
+  const isFree = (slot: number) => isFreeHelpLane(state, workspaceId, slot) && !isKept(slot);
+  if (isFree(state.activeSlot)) {
     return { slot: state.activeSlot, isNew: false };
   }
   for (const slot of ASSISTANT_SLOTS) {
-    if (isFreeHelpLane(state, workspaceId, slot)) return { slot, isNew: false };
+    if (isFree(slot)) return { slot, isNew: false };
   }
   for (const slot of ASSISTANT_SLOTS) {
-    if (!state.sessions[slot] && !isHeldHelpSlot(state, workspaceId, slot)) {
+    if (!state.sessions[slot] && !isHeldHelpSlot(state, workspaceId, slot) && !isKept(slot)) {
       return { slot, isNew: true };
     }
   }
@@ -94,13 +101,94 @@ function pickHelpLaunchLane(
 }
 
 /**
- * The agent another lane of this workspace is running or will resume with.
- * Lanes of one project share a session folder and must run one agent — main
- * refuses a mismatch with `MIXED_AGENT_LANES` — so a help launch beside them
- * has to join that agent rather than fail on the default. A live lane proves
- * its agent launches; a hibernated one only counts while the assistant can
- * still run it, since main doesn't hold it against the launch and a missing
- * CLI or a retired agent would.
+ * Exactly `slot`, when launching there displaces nothing (#13392): a caller
+ * that picked the slot against the host's own list of running assistants, which
+ * this view's tabs may not show, names it rather than letting the view choose.
+ */
+function exactHelpLaunchLane(
+  state: HelpPanelState,
+  workspaceId: string,
+  slot: number
+): { slot: number; isNew: boolean } | null {
+  if (isFreeHelpLane(state, workspaceId, slot)) return { slot, isNew: false };
+  if (!state.sessions[slot] && !isHeldHelpSlot(state, workspaceId, slot)) {
+    return { slot, isNew: true };
+  }
+  return null;
+}
+
+/**
+ * A lane this view still shows bound to an assistant, for a caller that
+ * refuses to displace one (#13392). After its host restarted with the link
+ * down, the exit never arrived and the lane stays taken by a terminal that is
+ * gone; only main can say so. It provisions the lane only when the host runs
+ * no assistant there, and refuses otherwise, so the binding is let go only on
+ * that answer.
+ */
+function staleHelpLaunchLane(
+  state: HelpPanelState,
+  workspaceId: string,
+  slot: number
+): {
+  slot: number;
+  isNew: false;
+  stale: { terminalId: string | null; sessionId: string | null };
+} | null {
+  const lane = state.sessions[slot];
+  if (!lane || (lane.terminalId === null && lane.sessionId === null)) return null;
+  // Another launch heading for it owns it.
+  if (claimedHelpLaneKeys.has(assistantSlotKey(workspaceId, slot))) return null;
+  return {
+    slot,
+    isNew: false,
+    stale: { terminalId: lane.terminalId, sessionId: lane.sessionId },
+  };
+}
+
+/**
+ * Let go of a stale lane's binding once main has provisioned the lane, which it
+ * does only when the host runs no assistant there: what the view still shows
+ * went with its host. Done in the same step as the new terminal binds, so the
+ * lane is never empty for its own controller to launch into meanwhile, and only
+ * while the lane still holds what was found: anything that bound it since owns
+ * it, and the launch gives way. The pane goes without a kill being sent; the
+ * view drops its copy of the old resume token, as a view loaded afresh would
+ * never have had it.
+ */
+function releaseStaleHelpLane(
+  workspaceId: string,
+  slot: number,
+  stale: { terminalId: string | null; sessionId: string | null }
+): void {
+  const state = useHelpPanelStore.getState();
+  const current = state.sessions[slot];
+  if (
+    !current ||
+    current.terminalId !== stale.terminalId ||
+    current.sessionId !== stale.sessionId
+  ) {
+    return;
+  }
+  if (stale.sessionId) {
+    window.electron.help.revokeSession(stale.sessionId).catch((err) => {
+      logError("Failed to revoke a help session its host had already ended", err);
+    });
+  }
+  if (stale.terminalId) {
+    usePanelStore.getState().removePanel(stale.terminalId, { backendAlreadyClosed: true });
+  }
+  state.clearTerminal(slot);
+  state.clearHibernateSession(workspaceId, slot);
+}
+
+/**
+ * The agent another lane of this workspace is running or will resume with —
+ * evidence that this machine runs it, for a help launch whose default can't be
+ * resolved yet (a host's cold view before CLI availability arrives). Lanes on
+ * different agents run in directories of their own, so a resolved default
+ * always wins over it. A live lane proves its agent launches; a hibernated one
+ * only counts while the assistant can still run it, since a missing CLI or a
+ * retired agent wouldn't.
  */
 function siblingLaneAgentId(
   state: HelpPanelState,
@@ -128,6 +216,40 @@ function siblingLaneAgentId(
 }
 
 /**
+ * The agents main kept to resume this workspace's lanes, by slot. A view that
+ * came up cold has none of them in its store (a host's background view after
+ * the host restarted), and its default can be a CLI that machine never runs,
+ * started in the very folder the project's assistant used.
+ */
+async function readKeptLaneAgents(workspaceId: string): Promise<Map<number, string>> {
+  const kept = new Map<number, string>();
+  const help = window.electron.help;
+  try {
+    for (const slot of (await help.listPendingHibernationSlots?.(workspaceId)) ?? []) {
+      const entry = await help.peekPendingHibernation?.(workspaceId, slot);
+      if (entry?.agentId) kept.set(slot, entry.agentId);
+    }
+  } catch (err) {
+    logError("Couldn't read the agents kept for this project's assistant lanes", err);
+  }
+  return kept;
+}
+
+/** The lane's own kept agent, else another lane's: like a hibernated sibling's, only one the assistant can still run. */
+function keptLaneAgentId(
+  kept: ReadonlyMap<number, string>,
+  slot: number,
+  canLaunch: (agentId: string) => boolean
+): string | null {
+  const own = kept.get(slot);
+  if (own && canLaunch(own)) return own;
+  for (const [other, agentId] of kept) {
+    if (other !== slot && canLaunch(agentId)) return agentId;
+  }
+  return null;
+}
+
+/**
  * Backstop for a picked resume's lane claim when its launch never settles —
  * longer than the controller's own launch watchdog, which reaps a hung launch
  * first, so the claim never lapses under a launch that is still running.
@@ -135,8 +257,7 @@ function siblingLaneAgentId(
 const LANE_CLAIM_MAX_HOLD_MS = 120_000;
 
 /** How the past-session picker's pick went — the picker acts on `lanes-full`. */
-export type HelpPastSessionPickOutcome =
-  "focused" | "resumed" | "lanes-full" | "agent-mismatch" | "unavailable";
+export type HelpPastSessionPickOutcome = "focused" | "resumed" | "lanes-full" | "unavailable";
 
 /**
  * The lane already holding this conversation: a live lane whose terminal was
@@ -261,27 +382,6 @@ async function resumeHelpPastSession(args: {
   const claimKey = assistantSlotKey(workspace.id, target.slot);
   if (claimedHelpLaneKeys.has(claimKey)) return { outcome: "lanes-full" };
 
-  // Lanes of one project share a folder and one agent; main refuses a mix.
-  // Lanes of one project share a folder and one agent, and main refuses a
-  // second agent beside a live one. Only live tabs count: a capture left by a
-  // closed tab is no obstacle, and counting it would block the switch the
-  // message below tells the user to make.
-  const targetSlot = target.slot;
-  const sibling = ASSISTANT_SLOTS.filter((slot) => slot !== targetSlot)
-    .map((slot) => state.sessions[slot])
-    .find((lane) => lane?.terminalId && lane.agentId)?.agentId;
-  if (sibling && sibling !== args.agentId) {
-    notify({
-      type: "warning",
-      title: "Session uses a different agent",
-      message:
-        "Assistant tabs in one project share an agent. Close the other tabs to reopen this session.",
-      priority: "high",
-      context: { eventKind: "uiFeedback" },
-    });
-    return { outcome: "agent-mismatch" };
-  }
-
   claimedHelpLaneKeys.add(claimKey);
   let controller: HelpSessionController;
   try {
@@ -309,6 +409,10 @@ async function resumeHelpPastSession(args: {
     });
     return { outcome: "unavailable" };
   }
+  // Resuming a conversation is its own choice of agent: a Settings pick still
+  // waiting for a session must not replace this one once it binds (#13345).
+  const pendingSwitch = useHelpPanelStore.getState().agentSwitchRequest;
+  if (pendingSwitch) useHelpPanelStore.getState().clearAgentSwitchRequest(pendingSwitch.id);
   // Queued before the lane appears: a brand-new lane's first input sync would
   // otherwise auto-launch a blank session into it.
   controller.launchWhenReady({
@@ -320,6 +424,105 @@ async function resumeHelpPastSession(args: {
   revealHelpLane(target.slot);
   holdLaneClaimUntilSettled(controller, claimKey);
   return { outcome: "resumed" };
+}
+
+/** How a "New session with…" pick went. */
+export type HelpNewSessionOutcome = "started" | "lanes-full" | "unavailable";
+
+/**
+ * Start one session on `agentId` (#13442) without touching the assistant's
+ * default, which later sessions keep starting on. It lands where a help launch
+ * would — the active tab when it is empty, else another free one, else a new
+ * tab — so it never displaces a conversation, including one main still keeps
+ * for a tab this view hasn't restored yet.
+ */
+async function startHelpSessionWithAgent(
+  agentId: string
+): Promise<{ outcome: HelpNewSessionOutcome }> {
+  const projectState = useProjectStore.getState();
+  const workspace = projectState.currentProject ?? useScratchStore.getState().currentScratch;
+  if (!workspace) {
+    notifyLaunchFailed(
+      agentId,
+      projectState.isBootstrapped ? LAUNCH_BLOCKED_NO_WORKSPACE : LAUNCH_BLOCKED_LOADING
+    );
+    return { outcome: "unavailable" };
+  }
+  await ensureHelpPanelRuntime();
+  // A read that fails can't prove a lane vacant, and a fresh session in a lane
+  // main still keeps would take that conversation's place, so it stops here.
+  let kept: ReadonlySet<number>;
+  let acquireController: (slot: number) => HelpSessionController;
+  try {
+    kept = new Set((await window.electron.help.listPendingHibernationSlots?.(workspace.id)) ?? []);
+    ({ acquireHelpSessionController: acquireController } =
+      await import("@/controllers/helpSessionControllerRegistry"));
+  } catch (err) {
+    logError("Couldn't prepare a tab to start an assistant session in", err);
+    notify({
+      type: "warning",
+      title: "Assistant couldn't start",
+      message: "Daintree couldn't check this project's assistant tabs. Try again.",
+      priority: "high",
+      context: { eventKind: "uiFeedback" },
+    });
+    return { outcome: "unavailable" };
+  }
+
+  // Nothing is awaited from here to the launch, so the tab chosen is still
+  // free when it is claimed. An empty tab can still be starting the default's
+  // session, which would drop this launch on its re-entrancy guard, so a busy
+  // one is passed over for the next free tab.
+  const state = useHelpPanelStore.getState();
+  const busy = new Set<number>();
+  for (;;) {
+    const target = pickHelpLaunchLane(
+      state,
+      workspace.id,
+      (slot) => kept.has(slot) || busy.has(slot)
+    );
+    if (!target) {
+      notify(
+        busy.size > 0
+          ? {
+              type: "warning",
+              title: "Assistant tab is busy",
+              message: "That tab is still starting a session. Try again once it's ready.",
+              priority: "high",
+              context: { eventKind: "uiFeedback" },
+            }
+          : {
+              type: "warning",
+              title: "Assistant tabs full",
+              message: `All ${MAX_ASSISTANT_SLOTS} assistant tabs are in use. Close one to start another session.`,
+              priority: "high",
+              context: { eventKind: "uiFeedback" },
+            }
+      );
+      return { outcome: busy.size > 0 ? "unavailable" : "lanes-full" };
+    }
+    const controller = acquireController(target.slot);
+    const phase = controller.getSnapshot().phase;
+    if (phase !== "idle" && phase !== "live") {
+      busy.add(target.slot);
+      continue;
+    }
+
+    const claimKey = assistantSlotKey(workspace.id, target.slot);
+    claimedHelpLaneKeys.add(claimKey);
+    // A Settings pick still waiting for a session would switch this one to the
+    // default the moment it binds (#13345), undoing the choice just made.
+    const pendingSwitch = state.agentSwitchRequest;
+    if (pendingSwitch) useHelpPanelStore.getState().clearAgentSwitchRequest(pendingSwitch.id);
+    // Queued before a new tab appears, or its first input sync would auto-launch
+    // the default into it. Pinned so a failed launch waits on Retry for this
+    // agent rather than being replaced by the default's.
+    controller.launchWhenReady({ agentId, replaceExisting: true, pinAgent: true });
+    if (target.isNew) useHelpPanelStore.getState().ensureSlot(target.slot);
+    revealHelpLane(target.slot);
+    holdLaneClaimUntilSettled(controller, claimKey);
+    return { outcome: "started" };
+  }
 }
 
 export function registerHelpActions(actions: ActionRegistry, callbacks: ActionCallbacks): void {
@@ -423,8 +626,28 @@ export function registerHelpActions(actions: ActionRegistry, callbacks: ActionCa
     danger: "safe",
     scope: "renderer",
     keywords: ["assistant", "support", "docs", "guide"],
-    argsSchema: z.object({ agentId: AgentIdSchema.optional() }).optional(),
-    run: async (parsed?: { agentId?: string }) => {
+    argsSchema: z
+      .object({
+        agentId: AgentIdSchema.optional(),
+        // For a caller starting an assistant on someone's behalf (#13392): launch
+        // into exactly this lane, and refuse rather than displace one already there.
+        slot: z
+          .number()
+          .int()
+          .min(0)
+          .max(MAX_ASSISTANT_SLOTS - 1)
+          .optional(),
+        vacantOnly: z.boolean().optional(),
+        // A fixed opening for an assistant nobody here will answer; never free text.
+        greeting: z.enum(["hub"]).optional(),
+      })
+      .optional(),
+    run: async (parsed?: {
+      agentId?: string;
+      slot?: number;
+      vacantOnly?: boolean;
+      greeting?: "hub";
+    }) => {
       // Snapshot the renderer's action context BEFORE any await. This is
       // bound to the MCP session at provision and replayed as the
       // contextOverride on every assistant tool call, so a focus shift
@@ -461,6 +684,9 @@ export function registerHelpActions(actions: ActionRegistry, callbacks: ActionCa
       }
 
       let agentId: string;
+      // The default as resolved against what this machine can run; null until
+      // CLI availability is known, when `agentId` below is only a guess.
+      let resolvedDefault: string | null = null;
       if (parsed?.agentId) {
         agentId = parsed.agentId;
       } else {
@@ -472,7 +698,7 @@ export function registerHelpActions(actions: ActionRegistry, callbacks: ActionCa
         // deprecated tier, or an unimplemented injection mode). An explicit
         // `args.agentId` still goes straight to that gate, so an experimental
         // agent stays launchable by name.
-        const resolved = isInitialized
+        resolvedDefault = isInitialized
           ? getDefaultAgentId(
               defaultAgent,
               undefined,
@@ -480,7 +706,7 @@ export function registerHelpActions(actions: ActionRegistry, callbacks: ActionCa
               new Set(getAssistantSupportedAgentIds())
             )
           : null;
-        agentId = resolved ?? "claude";
+        agentId = resolvedDefault ?? "claude";
       }
 
       let session: Awaited<ReturnType<typeof window.electron.help.provisionSession>> | null = null;
@@ -502,8 +728,26 @@ export function registerHelpActions(actions: ActionRegistry, callbacks: ActionCa
       // kills whatever a lane was running, so a busy tab is never a target: the
       // help agent opens beside it instead (#13192).
       await helpPanelRuntimeReady;
+      // Read before a lane is chosen and claimed: nothing is awaited between the
+      // claim and the provision, so no other launch can take the lane meanwhile.
+      const keptAgents = parsed?.agentId
+        ? new Map<number, string>()
+        : await readKeptLaneAgents(workspace.id);
       const panelState = useHelpPanelStore.getState();
-      const lane = pickHelpLaunchLane(panelState, workspace.id);
+      const lane: {
+        slot: number;
+        isNew: boolean;
+        stale?: { terminalId: string | null; sessionId: string | null };
+      } | null =
+        parsed?.slot === undefined
+          ? pickHelpLaunchLane(panelState, workspace.id)
+          : (exactHelpLaunchLane(panelState, workspace.id, parsed.slot) ??
+            (parsed.vacantOnly
+              ? staleHelpLaunchLane(panelState, workspace.id, parsed.slot)
+              : null));
+      // A caller that named the lane is told by the missing result, with no
+      // tab opened or toast shown in a view nobody may be looking at.
+      if (!lane && parsed?.slot !== undefined) return undefined;
       if (!lane) {
         useFocusStore.getState().clearAssistantGesture();
         if (!panelState.isOpen) {
@@ -529,7 +773,25 @@ export function registerHelpActions(actions: ActionRegistry, callbacks: ActionCa
           const canLaunch = (id: string) =>
             wired.includes(id) &&
             (!isInitialized || !isBuiltInAgentId(id) || isAgentLaunchable(availability[id]));
-          agentId = siblingLaneAgentId(panelState, workspace.id, targetSlot, canLaunch) ?? agentId;
+          // The lane's own kept conversation first: its agent is what resumes
+          // there. Then the default — a sibling tab on another agent is no
+          // reason to leave it, since lanes on different agents run in
+          // directories of their own. A sibling's agent only stands in for a
+          // default that couldn't be resolved.
+          const ownKept = keptAgents.get(targetSlot);
+          // The assistant's own default, once this machine's CLIs are known —
+          // the general agent default only stands in when the assistant has
+          // none it can run here.
+          const assistantDefault = panelState.preferredAgentId;
+          agentId =
+            (ownKept && canLaunch(ownKept) ? ownKept : null) ??
+            (isInitialized && assistantDefault && canLaunch(assistantDefault)
+              ? assistantDefault
+              : null) ??
+            resolvedDefault ??
+            siblingLaneAgentId(panelState, workspace.id, targetSlot, canLaunch) ??
+            keptLaneAgentId(keptAgents, targetSlot, canLaunch) ??
+            agentId;
         }
 
         try {
@@ -539,12 +801,15 @@ export function registerHelpActions(actions: ActionRegistry, callbacks: ActionCa
             agentId,
             context: capturedContext,
             slot: targetSlot,
+            ...(parsed?.vacantOnly ? { vacantOnly: true } : {}),
           });
         } catch (err) {
           logError("Failed to provision help session", err);
           // Decode BEFORE any message formatting: the contextBridge strips the
           // custom `code` property, so it rides an encoded message prefix.
           const code = extractHelpSessionErrorCode(err);
+          // A caller starting it on someone's behalf hears it from the missing result.
+          if (parsed?.vacantOnly) return undefined;
           let message = "Couldn't start the Daintree Assistant session.";
           if (code === "MCP_PROBE_FAILED") {
             message =
@@ -599,7 +864,8 @@ export function registerHelpActions(actions: ActionRegistry, callbacks: ActionCa
             agentId,
             cwd,
             location: "overlay",
-            prompt: HELP_ASSISTANT_GREETING,
+            prompt:
+              parsed?.greeting === "hub" ? HUB_STARTED_ASSISTANT_GREETING : HELP_ASSISTANT_GREETING,
             excludeFromPersistence: true,
             removeOnExit: true,
             ...(env && { env }),
@@ -622,6 +888,7 @@ export function registerHelpActions(actions: ActionRegistry, callbacks: ActionCa
           // slot meanwhile — or bound the tab this launch reused — it is ours to
           // keep only while it is still free.
           claimedHelpLaneKeys.delete(claimKey);
+          if (lane.stale) releaseStaleHelpLane(workspace.id, targetSlot, lane.stale);
           const bindState = useHelpPanelStore.getState();
           const laneLost = bindState.sessions[targetSlot]
             ? !isFreeHelpLane(bindState, workspace.id, targetSlot)
@@ -655,15 +922,43 @@ export function registerHelpActions(actions: ActionRegistry, callbacks: ActionCa
             helpPanel.requestFocus();
           }
           window.electron.help.markTerminal(result.result.terminalId).catch(() => {});
+          // What a caller starting an assistant on someone's behalf (a hub on
+          // another machine) needs to find and enroll the lane it landed in.
+          return {
+            slot: targetSlot,
+            terminalId: launchedTerminalId,
+            sessionId: session.sessionId,
+            agentId,
+            cwd,
+          };
         } else if (session) {
           window.electron.help.revokeSession(session.sessionId).catch((err) => {
             logError("Failed to revoke help session after failed launch", err);
           });
         }
+        return undefined;
       } finally {
         claimedHelpLaneKeys.delete(claimKey);
       }
     },
+  }));
+
+  actions.set("help.newSessionWithAgent", () => ({
+    id: "help.newSessionWithAgent",
+    title: "New assistant session with agent",
+    description:
+      "Start one Daintree Assistant session on a chosen agent, leaving the default as is",
+    category: "help",
+    kind: "command",
+    danger: "safe",
+    scope: "renderer",
+    // Picked from the assistant's own menus. An agent starting a help session
+    // has `help.launchAgent`, which already takes an agent.
+    mcpVisibility: "hidden",
+    palette: { mode: "hidden" },
+    keywords: ["assistant", "session", "agent", "claude", "codex"],
+    argsSchema: z.object({ agentId: z.string().min(1) }),
+    run: async (args: { agentId: string }) => startHelpSessionWithAgent(args.agentId),
   }));
 
   actions.set("help.resumePastSession", () => ({

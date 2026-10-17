@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 import * as p from "@clack/prompts";
 import { SCOPED_PLUGIN_NAME_PATTERN } from "../../../../electron/schemas/plugin.js";
@@ -154,8 +155,24 @@ export async function scaffoldPlugin(opts: ScaffoldPluginOptions): Promise<Scaff
  * Returns `null` rather than guessing, so `--project` fails with a clear
  * message instead of silently creating `.daintree/plugins/` in whatever
  * directory the author happened to be standing in.
+ *
+ * `~/.daintree/` is Daintree's own data directory (global plugins, plugin data,
+ * the CLI control file), not a project, so in the home directory only `.git`
+ * counts. Without that, any directory under home resolves to home itself and
+ * `--project` scaffolds into the global plugins folder — on Windows that
+ * includes every temp directory, which lives under the profile.
  */
-export async function findProjectRoot(startDir: string): Promise<string | null> {
+export async function findProjectRoot(
+  startDir: string,
+  options: { homeDir?: string } = {}
+): Promise<string | null> {
+  const home = path.resolve(options.homeDir ?? os.homedir());
+  // Real paths too: a home reached through a symlink or junction is still home.
+  const realHome = await fs.realpath(home).catch(() => home);
+  const sameDir = (a: string, b: string): boolean =>
+    process.platform === "win32" ? a.toLowerCase() === b.toLowerCase() : a === b;
+  const isHome = async (dir: string): Promise<boolean> =>
+    sameDir(dir, home) || sameDir(await fs.realpath(dir).catch(() => dir), realHome);
   const isDir = async (p: string): Promise<boolean> =>
     fs
       .stat(p)
@@ -170,7 +187,7 @@ export async function findProjectRoot(startDir: string): Promise<string | null> 
   let current = path.resolve(startDir);
   for (;;) {
     if (
-      (await isDir(path.join(current, ".daintree"))) ||
+      (!(await isHome(current)) && (await isDir(path.join(current, ".daintree")))) ||
       (await exists(path.join(current, ".git")))
     )
       return current;

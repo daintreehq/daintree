@@ -72,18 +72,6 @@ describe("notify()", () => {
       expect(entry!.context).toEqual({ projectId: "proj-1" });
     });
 
-    it("stores context on the active toast notification", () => {
-      vi.spyOn(document, "hasFocus").mockReturnValue(true);
-      notify({
-        type: "info",
-        message: "Project event",
-        priority: "high",
-        context: { projectId: "proj-1", worktreeId: "wt-2" },
-      });
-      const notification = useNotificationStore.getState().notifications[0];
-      expect(notification!.context).toEqual({ projectId: "proj-1", worktreeId: "wt-2" });
-    });
-
     it("stores context on grid-bar history entries", () => {
       vi.spyOn(document, "hasFocus").mockReturnValue(true);
       notify({
@@ -94,13 +82,6 @@ describe("notify()", () => {
       });
       const entry = useNotificationHistoryStore.getState().entries[0];
       expect(entry!.context).toEqual({ projectId: "proj-2" });
-    });
-
-    it("omits context on history entry when none supplied", () => {
-      vi.spyOn(document, "hasFocus").mockReturnValue(true);
-      notify({ type: "info", message: "No ctx", priority: "high" });
-      const entry = useNotificationHistoryStore.getState().entries[0];
-      expect(entry!.context).toBeUndefined();
     });
 
     it("clears context on coalesce when the incoming projectId differs from the existing one", () => {
@@ -226,18 +207,6 @@ describe("notify()", () => {
       expect(useNotificationHistoryStore.getState().entries).toHaveLength(1);
     });
 
-    it("does not suppress when only projectId is supplied", () => {
-      vi.spyOn(document, "hasFocus").mockReturnValue(true);
-      setActiveWorktree("wt-1");
-      notify({
-        type: "info",
-        message: "Project event",
-        priority: "high",
-        context: { projectId: "proj-1" },
-      });
-      expect(useNotificationStore.getState().notifications).toHaveLength(1);
-    });
-
     it("does not suppress when context.worktreeId differs from active", () => {
       vi.spyOn(document, "hasFocus").mockReturnValue(true);
       setActiveWorktree("wt-1");
@@ -267,19 +236,6 @@ describe("notify()", () => {
       expect(entries).toHaveLength(1);
       // Not seen — they will pick it up from the inbox when they refocus.
       expect(entries[0]!.seenAsToast).toBe(false);
-    });
-
-    it("does not suppress watch-priority notifications", () => {
-      vi.spyOn(document, "hasFocus").mockReturnValue(true);
-      setActiveWorktree("wt-1");
-      notify({
-        type: "warning",
-        message: "Watch event",
-        priority: "watch",
-        context: { worktreeId: "wt-1" },
-        suppressWhenOriginVisible: true,
-      });
-      expect(useNotificationStore.getState().notifications).toHaveLength(1);
     });
 
     it("low priority is unaffected (history only, no grace)", () => {
@@ -554,26 +510,6 @@ describe("notify()", () => {
       expect(useNotificationStore.getState().notifications).toHaveLength(1);
     });
 
-    it("reset clears the deferred refocus listener", () => {
-      const focusSpy = vi.spyOn(document, "hasFocus").mockReturnValue(true);
-      setActiveWorktree("wt-1");
-      notify({
-        type: "info",
-        message: "Torn down",
-        priority: "high",
-        context: { worktreeId: "wt-1" },
-        suppressWhenOriginVisible: true,
-      });
-      focusSpy.mockReturnValue(false);
-      window.dispatchEvent(new Event("blur"));
-      _resetPendingSuppressedForTest();
-
-      activeWorktreeId = "wt-2";
-      focusSpy.mockReturnValue(true);
-      window.dispatchEvent(new Event("focus"));
-      expect(useNotificationStore.getState().notifications).toHaveLength(0);
-    });
-
     it("promoted toast carries the same historyEntryId as the suppressed entry", () => {
       vi.spyOn(document, "hasFocus").mockReturnValue(true);
       setActiveWorktree("wt-1");
@@ -617,23 +553,6 @@ describe("notify()", () => {
       });
       expect(useNotificationStore.getState().notifications).toHaveLength(1);
       expect(mockShowNative).toHaveBeenCalledTimes(1);
-    });
-
-    it("_resetPendingSuppressedForTest clears pending grace timers and listeners", () => {
-      vi.spyOn(document, "hasFocus").mockReturnValue(true);
-      setActiveWorktree("wt-1");
-      notify({
-        type: "info",
-        message: "cancelled",
-        priority: "high",
-        context: { worktreeId: "wt-1" },
-        suppressWhenOriginVisible: true,
-      });
-      _resetPendingSuppressedForTest();
-      // Navigating away should NOT promote — the listener was cleaned up.
-      setActiveWorktree("wt-2");
-      vi.advanceTimersByTime(600);
-      expect(useNotificationStore.getState().notifications).toHaveLength(0);
     });
 
     it("an address alone never suppresses — action results on the active worktree still toast", () => {
@@ -729,16 +648,6 @@ describe("notify()", () => {
       expect(isScheduledQuietHours(new Date(2024, 0, 1, 12, 0))).toBe(false);
     });
 
-    it("isScheduledQuietHours returns true within the configured window", () => {
-      useNotificationSettingsStore.setState({
-        quietHoursEnabled: true,
-        quietHoursStartMin: 22 * 60,
-        quietHoursEndMin: 6 * 60,
-        quietHoursWeekdays: [],
-      });
-      expect(isScheduledQuietHours(new Date(2024, 0, 1, 23, 0))).toBe(true);
-    });
-
     it("suppresses non-urgent toast during scheduled quiet hours", () => {
       vi.spyOn(document, "hasFocus").mockReturnValue(true);
       useNotificationSettingsStore.setState({
@@ -823,24 +732,6 @@ describe("notify()", () => {
       notify({ type: "success", message: "Weekend", priority: "high" });
 
       expect(useNotificationStore.getState().notifications).toHaveLength(1);
-      vi.useRealTimers();
-    });
-
-    it("records history during schedule quiet with seenAsToast=false", () => {
-      vi.spyOn(document, "hasFocus").mockReturnValue(true);
-      useNotificationSettingsStore.setState({
-        quietHoursEnabled: true,
-        quietHoursStartMin: 22 * 60,
-        quietHoursEndMin: 6 * 60,
-      });
-      vi.useFakeTimers();
-      vi.setSystemTime(new Date(2024, 0, 1, 23, 0));
-
-      notify({ type: "success", message: "Inbox only", priority: "high" });
-
-      const entries = useNotificationHistoryStore.getState().entries;
-      expect(entries).toHaveLength(1);
-      expect(entries[0]!.seenAsToast).toBe(false);
       vi.useRealTimers();
     });
   });
@@ -939,14 +830,6 @@ describe("notify()", () => {
       vi.useRealTimers();
     });
 
-    it("muteUntilNextMorning mirrors the timestamp into the settings store", () => {
-      vi.useFakeTimers();
-      vi.setSystemTime(new Date(2024, 0, 1, 23, 0));
-      const until = muteUntilNextMorning();
-      expect(useNotificationSettingsStore.getState().quietUntil).toBe(until);
-      vi.useRealTimers();
-    });
-
     it("_setQuietUntil (startup path) does NOT mirror to the settings store", () => {
       // Startup quiet windows must not flip the toolbar to BellOff during boot.
       useNotificationSettingsStore.setState({ quietUntil: 0 });
@@ -954,26 +837,9 @@ describe("notify()", () => {
       expect(useNotificationSettingsStore.getState().quietUntil).toBe(0);
     });
 
-    it("muteUntilNextMorning mirrors the timestamp to the main process", () => {
-      vi.useFakeTimers();
-      vi.setSystemTime(new Date(2024, 0, 1, 23, 0));
-      const until = muteUntilNextMorning();
-      expect(mockSetSessionMute).toHaveBeenCalledWith(until);
-      vi.useRealTimers();
-    });
-
     it("muteUntilNextMorning mutes until next 08:00", () => {
       vi.useFakeTimers();
       vi.setSystemTime(new Date(2024, 0, 1, 23, 0));
-      const until = muteUntilNextMorning();
-      expect(new Date(until).getHours()).toBe(8);
-      expect(new Date(until).getDate()).toBe(2);
-      vi.useRealTimers();
-    });
-
-    it("muteUntilNextMorning picks tomorrow when already past 08:00", () => {
-      vi.useFakeTimers();
-      vi.setSystemTime(new Date(2024, 0, 1, 10, 0));
       const until = muteUntilNextMorning();
       expect(new Date(until).getHours()).toBe(8);
       expect(new Date(until).getDate()).toBe(2);

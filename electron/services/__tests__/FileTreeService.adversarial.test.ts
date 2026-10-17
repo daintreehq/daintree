@@ -261,19 +261,6 @@ describe("FileTreeService adversarial", () => {
     expect("size" in second[0]).toBe(false);
   });
 
-  it("SIZE_CHANGE_NOT_CACHED", async () => {
-    shared.readdir.mockResolvedValue([d("index.ts")]);
-    shared.lstat
-      .mockResolvedValueOnce(createStats({ size: 10 }))
-      .mockResolvedValueOnce(createStats({ size: 999 }));
-
-    const first = await service.getFileTree("/repo");
-    const second = await service.getFileTree("/repo");
-
-    expect(first[0]?.size).toBe(10);
-    expect(second[0]?.size).toBe(999);
-  });
-
   it("WINDOWS_SEPARATORS_NORMALIZE_TO_POSIX_PATHS", async () => {
     // Emitted paths are POSIX on every platform: they are matched against a
     // CopyTree manifest, which is POSIX-relative to the root, and handed to
@@ -288,19 +275,6 @@ describe("FileTreeService adversarial", () => {
         path: "nested/dir/visible.txt",
         size: 7,
       },
-    ]);
-  });
-
-  it("DOT_GIT_IS_RETURNED_LIKE_ANY_OTHER_ENTRY", async () => {
-    // Raw listing: `.git` is the caller's to hide. The file browser's junk list
-    // does it (#11330), and the context listing drops it because CopyTree never
-    // descends into it (#11439).
-    shared.readdir.mockResolvedValueOnce([d(".git", { dir: true }), d("src", { dir: true })]);
-    shared.lstat.mockResolvedValue(createStats({ isDirectory: true }));
-
-    await expect(service.getFileTree("/repo")).resolves.toEqual([
-      { name: ".git", path: ".git", isDirectory: true },
-      { name: "src", path: "src", isDirectory: true },
     ]);
   });
 

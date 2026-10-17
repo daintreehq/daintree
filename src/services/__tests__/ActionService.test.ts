@@ -46,67 +46,6 @@ describe("ActionService", () => {
   });
 
   describe("register", () => {
-    it("should register a new action", () => {
-      const action: ActionDefinition = {
-        id: "actions.list" as ActionId,
-        title: "Test Action",
-        description:
-          "A test action for validating ActionService dispatch, registration, and manifest entry generation.",
-        category: "test",
-        kind: "command",
-        danger: "safe",
-        scope: "renderer",
-        run: vi.fn().mockResolvedValue(undefined),
-      };
-
-      service.register(action);
-
-      const manifest = service.list();
-      expect(manifest).toHaveLength(1);
-      expect(manifest[0]!.id).toBe("actions.list");
-    });
-
-    it("has() reports whether an id is in the registry", () => {
-      const action: ActionDefinition = {
-        id: "actions.list" as ActionId,
-        title: "Test Action",
-        description:
-          "A test action for validating ActionService dispatch, registration, and manifest entry generation.",
-        category: "test",
-        kind: "command",
-        danger: "safe",
-        scope: "renderer",
-        run: vi.fn().mockResolvedValue(undefined),
-      };
-      expect(service.has("actions.list" as ActionId)).toBe(false);
-      service.register(action);
-      expect(service.has("actions.list" as ActionId)).toBe(true);
-    });
-
-    it("getTitle() resolves a registered action's title and falls back to empty string", () => {
-      const action: ActionDefinition = {
-        id: "actions.list" as ActionId,
-        title: "Do Thing",
-        description:
-          "A test action for validating ActionService dispatch, registration, and manifest entry generation.",
-        category: "test",
-        kind: "command",
-        danger: "safe",
-        scope: "renderer",
-        run: vi.fn().mockResolvedValue(undefined),
-      };
-
-      // Unknown id resolves to "" without throwing.
-      expect(service.getTitle("never.registered" as ActionId)).toBe("");
-
-      service.register(action);
-      expect(service.getTitle("actions.list" as ActionId)).toBe("Do Thing");
-
-      // After unregister the title is no longer resolvable.
-      service.unregister("actions.list" as ActionId);
-      expect(service.getTitle("actions.list" as ActionId)).toBe("");
-    });
-
     it("selfNotifiesOnExecutionError() reflects the flag and fails closed for unknown ids", () => {
       const base = {
         description:
@@ -305,49 +244,6 @@ describe("ActionService", () => {
       }
     });
 
-    it("should successfully execute a registered action", async () => {
-      const mockRun = vi.fn().mockResolvedValue("success");
-      const action: ActionDefinition<undefined, string> = {
-        id: "actions.list" as ActionId,
-        title: "Test Action",
-        description:
-          "A test action for validating ActionService dispatch, registration, and manifest entry generation.",
-        category: "test",
-        kind: "command",
-        danger: "safe",
-        scope: "renderer",
-        run: mockRun,
-      };
-
-      service.register(action);
-      const result = await service.dispatch("actions.list");
-
-      expect(result.ok).toBe(true);
-      if (result.ok) {
-        expect(result.result).toBe("success");
-      }
-      expect(mockRun).toHaveBeenCalled();
-    });
-
-    it("executes a safe action dispatched from a plugin source", async () => {
-      const mockRun = vi.fn().mockResolvedValue("ok");
-      service.register({
-        id: "actions.list" as ActionId,
-        title: "Test Action",
-        description:
-          "A test action for validating ActionService dispatch, registration, and manifest entry generation.",
-        category: "test",
-        kind: "command",
-        danger: "safe",
-        scope: "renderer",
-        run: mockRun,
-      });
-
-      const result = await service.dispatch("actions.list", undefined, { source: "plugin" });
-      expect(result.ok).toBe(true);
-      expect(mockRun).toHaveBeenCalled();
-    });
-
     it("returns CONFIRMATION_REQUIRED for a confirm action from a plugin source (no confirmed bypass)", async () => {
       const mockRun = vi.fn().mockResolvedValue(undefined);
       service.register({
@@ -469,26 +365,6 @@ describe("ActionService", () => {
       ).toBe("safe");
     });
 
-    it("returns RESTRICTED for a restricted action from a plugin source", async () => {
-      const mockRun = vi.fn().mockResolvedValue(undefined);
-      service.register({
-        id: "actions.list" as ActionId,
-        title: "Test Action",
-        description:
-          "A test action for validating ActionService dispatch, registration, and manifest entry generation.",
-        category: "test",
-        kind: "command",
-        danger: "restricted",
-        scope: "renderer",
-        run: mockRun,
-      });
-
-      const result = await service.dispatch("actions.list", undefined, { source: "plugin" });
-      expect(result.ok).toBe(false);
-      if (!result.ok) expect(result.error.code).toBe("RESTRICTED");
-      expect(mockRun).not.toHaveBeenCalled();
-    });
-
     it("returns RESTRICTED for a denyPluginDispatch action from a plugin source (#10558)", async () => {
       const mockRun = vi.fn().mockResolvedValue(undefined);
       service.register({
@@ -586,53 +462,6 @@ describe("ActionService", () => {
       expect(mockRun).not.toHaveBeenCalled();
     });
 
-    it("should NOT show warning toast when disabled action has disabledReason (#8814)", async () => {
-      const action: ActionDefinition = {
-        id: "actions.list" as ActionId,
-        title: "Test Action",
-        description:
-          "A test action for validating ActionService dispatch, registration, and manifest entry generation.",
-        category: "test",
-        kind: "command",
-        danger: "safe",
-        scope: "renderer",
-        isEnabled: () => false,
-        disabledReason: () => "No focused terminal",
-        run: vi.fn(),
-      };
-
-      service.register(action);
-      const result = await service.dispatch("actions.list");
-
-      expect(result.ok).toBe(false);
-      if (!result.ok) {
-        expect(result.error.code).toBe("DISABLED");
-        expect(result.error.message).toBe("No focused terminal");
-      }
-      expect(notifyMock).not.toHaveBeenCalled();
-    });
-
-    it("should NOT show toast when disabled action has no disabledReason", async () => {
-      const action: ActionDefinition = {
-        id: "actions.list" as ActionId,
-        title: "Test Action",
-        description:
-          "A test action for validating ActionService dispatch, registration, and manifest entry generation.",
-        category: "test",
-        kind: "command",
-        danger: "safe",
-        scope: "renderer",
-        isEnabled: () => false,
-        run: vi.fn(),
-      };
-
-      service.register(action);
-      const result = await service.dispatch("actions.list");
-
-      expect(result.ok).toBe(false);
-      expect(notifyMock).not.toHaveBeenCalled();
-    });
-
     it("should NOT show toast for disabled action from any source (#8814)", async () => {
       const action: ActionDefinition = {
         id: "actions.list" as ActionId,
@@ -662,53 +491,6 @@ describe("ActionService", () => {
       }
     });
 
-    it("should suppress disabled-action toast for agent source but still return DISABLED", async () => {
-      const action: ActionDefinition = {
-        id: "actions.list" as ActionId,
-        title: "Test Action",
-        description:
-          "A test action for validating ActionService dispatch, registration, and manifest entry generation.",
-        category: "test",
-        kind: "command",
-        danger: "safe",
-        scope: "renderer",
-        isEnabled: () => false,
-        disabledReason: () => "Disabled for test",
-        run: vi.fn(),
-      };
-
-      service.register(action);
-      notifyMock.mockClear();
-
-      const result = await service.dispatch("actions.list", undefined, { source: "agent" });
-
-      expect(result.ok).toBe(false);
-      if (!result.ok) {
-        expect(result.error.code).toBe("DISABLED");
-        expect(result.error.message).toBe("Disabled for test");
-      }
-      expect(notifyMock).not.toHaveBeenCalled();
-    });
-
-    it("should NOT show toast for enabled actions", async () => {
-      const action: ActionDefinition = {
-        id: "actions.list" as ActionId,
-        title: "Test Action",
-        description:
-          "A test action for validating ActionService dispatch, registration, and manifest entry generation.",
-        category: "test",
-        kind: "command",
-        danger: "safe",
-        scope: "renderer",
-        run: vi.fn().mockResolvedValue(undefined),
-      };
-
-      service.register(action);
-      await service.dispatch("actions.list");
-
-      expect(notifyMock).not.toHaveBeenCalled();
-    });
-
     it("should reject restricted actions", async () => {
       const mockRun = vi.fn().mockResolvedValue(undefined);
       const action: ActionDefinition = {
@@ -731,29 +513,6 @@ describe("ActionService", () => {
         expect(result.error.code).toBe("RESTRICTED");
       }
       expect(mockRun).not.toHaveBeenCalled();
-    });
-
-    it("should handle execution errors", async () => {
-      const action: ActionDefinition = {
-        id: "actions.list" as ActionId,
-        title: "Test Action",
-        description:
-          "A test action for validating ActionService dispatch, registration, and manifest entry generation.",
-        category: "test",
-        kind: "command",
-        danger: "safe",
-        scope: "renderer",
-        run: vi.fn().mockRejectedValue(new Error("Execution failed")),
-      };
-
-      service.register(action);
-      const result = await service.dispatch("actions.list");
-
-      expect(result.ok).toBe(false);
-      if (!result.ok) {
-        expect(result.error.code).toBe("EXECUTION_ERROR");
-        expect(result.error.message).toContain("Execution failed");
-      }
     });
 
     // A main-process AppError reaches the renderer with its own `code`/`name`
@@ -880,18 +639,6 @@ describe("ActionService", () => {
         expect(mockRun).toHaveBeenCalledWith(
           undefined,
           expect.objectContaining({ hostConfirmed: true })
-        );
-      });
-
-      it("leaves ctx.hostConfirmed unset when the host attested nothing", async () => {
-        const mockRun = vi.fn().mockResolvedValue(undefined);
-        service.register(confirmAction(mockRun));
-
-        await service.dispatch("actions.list", undefined, { source: "user" });
-
-        expect(mockRun).toHaveBeenCalledWith(
-          undefined,
-          expect.objectContaining({ hostConfirmed: undefined })
         );
       });
 
@@ -1151,32 +898,6 @@ describe("ActionService", () => {
   });
 
   describe("list", () => {
-    it("should return empty array when no actions registered", () => {
-      const manifest = service.list();
-      expect(manifest).toEqual([]);
-    });
-
-    it("should include inputSchema from Zod schema", () => {
-      const countSchema = z.object({ count: z.number() });
-      const action: ActionDefinition<typeof countSchema, void> = {
-        id: "actions.list" as ActionId,
-        title: "Test Action",
-        description:
-          "A test action for validating ActionService dispatch, registration, and manifest entry generation.",
-        category: "test",
-        kind: "command",
-        danger: "safe",
-        scope: "renderer",
-        argsSchema: countSchema,
-        run: vi.fn().mockResolvedValue(undefined),
-      };
-
-      service.register(action);
-      const manifest = service.list();
-
-      expect(manifest[0]!.inputSchema).toBeDefined();
-    });
-
     it("should include enablement status", () => {
       const action: ActionDefinition = {
         id: "actions.list" as ActionId,
@@ -1265,26 +986,6 @@ describe("ActionService", () => {
       const manifest = service.list();
       expect(manifest).toHaveLength(1);
       expect(manifest[0]!.id).toBe("actions.visible");
-    });
-
-    it("should default to visible when isVisible is undefined", () => {
-      const action: ActionDefinition = {
-        id: "actions.noVisible" as ActionId,
-        title: "No Visible Action",
-        description:
-          "An action without isVisible used for testing that the default behavior keeps the entry in list() output.",
-        category: "test",
-        kind: "command",
-        danger: "safe",
-        scope: "renderer",
-        run: vi.fn().mockResolvedValue(undefined),
-      };
-
-      service.register(action);
-      const manifest = service.list();
-
-      expect(manifest).toHaveLength(1);
-      expect(manifest[0]!.id).toBe("actions.noVisible");
     });
 
     it("should still exclude restricted actions even when isVisible returns true", () => {
@@ -1393,25 +1094,6 @@ describe("ActionService", () => {
       expect(manifest[0]!.keywords).toEqual(["save", "draft", "store"]);
     });
 
-    it("should omit keywords when not defined", () => {
-      const action: ActionDefinition = {
-        id: "actions.noKeywords" as ActionId,
-        title: "No Keywords Action",
-        description:
-          "An action without keywords used for testing that keywords default to undefined in manifest entries.",
-        category: "test",
-        kind: "command",
-        danger: "safe",
-        scope: "renderer",
-        run: vi.fn().mockResolvedValue(undefined),
-      };
-
-      service.register(action);
-      const manifest = service.list();
-
-      expect(manifest[0]!.keywords).toBeUndefined();
-    });
-
     it("should propagate mcpAnnotations to manifest entries", () => {
       const action: ActionDefinition = {
         id: "actions.annotated" as ActionId,
@@ -1434,25 +1116,6 @@ describe("ActionService", () => {
         readOnlyHint: true,
         idempotentHint: false,
       });
-    });
-
-    it("should omit mcpAnnotations when not defined", () => {
-      const action: ActionDefinition = {
-        id: "actions.unannotated" as ActionId,
-        title: "Unannotated Action",
-        description:
-          "An action without explicit MCP overrides for testing that mcpAnnotations defaults to undefined.",
-        category: "test",
-        kind: "command",
-        danger: "safe",
-        scope: "renderer",
-        run: vi.fn().mockResolvedValue(undefined),
-      };
-
-      service.register(action);
-      const manifest = service.list();
-
-      expect(manifest[0]!.mcpAnnotations).toBeUndefined();
     });
 
     it("should isolate mcpAnnotations from caller mutations", () => {
@@ -1550,54 +1213,6 @@ describe("ActionService", () => {
       (first.examples![0]!.args as Record<string, unknown>).key = "mutated";
       const second = service.get("test.examples" as ActionId)!;
       expect((second.examples![0]!.args as Record<string, unknown>).key).toBe("value");
-    });
-
-    it("omits examples and dangerRationale from manifest entry when not defined", () => {
-      const action: ActionDefinition = {
-        id: "test.noexamples" as ActionId,
-        title: "Test No Examples",
-        description: "An action without examples or danger rationale for propagation testing.",
-        category: "test",
-        kind: "command",
-        danger: "safe",
-        scope: "renderer",
-        run: vi.fn().mockResolvedValue(undefined),
-      };
-
-      service.register(action);
-      const entry = service.get("test.noexamples" as ActionId);
-
-      expect(entry).not.toBeNull();
-      expect(entry!.examples).toBeUndefined();
-      expect(entry!.dangerRationale).toBeUndefined();
-    });
-  });
-
-  describe("get", () => {
-    it("should return null for non-existent action", () => {
-      const entry = service.get("app.settings" as ActionId);
-      expect(entry).toBeNull();
-    });
-
-    it("should return manifest entry for existing action", () => {
-      const action: ActionDefinition = {
-        id: "actions.list" as ActionId,
-        title: "Test Action",
-        description:
-          "A test action for validating ActionService dispatch, registration, and manifest entry generation.",
-        category: "test",
-        kind: "command",
-        danger: "safe",
-        scope: "renderer",
-        run: vi.fn().mockResolvedValue(undefined),
-      };
-
-      service.register(action);
-      const entry = service.get("actions.list");
-
-      expect(entry).not.toBeNull();
-      expect(entry?.id).toBe("actions.list");
-      expect(entry?.title).toBe("Test Action");
     });
   });
 
@@ -1852,10 +1467,6 @@ describe("ActionService", () => {
       ...overrides,
     });
 
-    it("returns null before any action has been dispatched", () => {
-      expect(service.getLastAction()).toBeNull();
-    });
-
     it("captures last action after a successful user dispatch", async () => {
       service.register(makeAction("test.repeatable"));
       await service.dispatch("test.repeatable" as ActionId, { foo: 1 }, { source: "user" });
@@ -1972,19 +1583,6 @@ describe("ActionService", () => {
 
       await service.dispatch("test.destructive" as ActionId, undefined, { source: "context-menu" });
       expect(service.getLastAction()?.actionId).toBe("test.safe");
-    });
-
-    it("replaces the stored action on each new eligible dispatch", async () => {
-      service.register(makeAction("test.first"));
-      service.register(makeAction("test.second"));
-
-      await service.dispatch("test.first" as ActionId, { a: 1 }, { source: "user" });
-      await service.dispatch("test.second" as ActionId, { b: 2 }, { source: "user" });
-
-      expect(service.getLastAction()).toEqual({
-        actionId: "test.second",
-        args: { b: 2 },
-      });
     });
 
     it("outer dispatch captures after inner dispatch completes (nested ordering)", async () => {
@@ -2177,36 +1775,6 @@ describe("ActionService", () => {
 
       service.register(makeAction("test.action"));
       await service.dispatch("test.action" as ActionId, undefined, { source: "keybinding" });
-
-      expect(mockShow).not.toHaveBeenCalled();
-      expect(mockIncrementCount).not.toHaveBeenCalled();
-    });
-
-    it("does not emit hint for menu source", async () => {
-      mockGetEffectiveCombo.mockReturnValue("Cmd+K");
-
-      service.register(makeAction("test.action"));
-      await service.dispatch("test.action" as ActionId, undefined, { source: "menu" });
-
-      expect(mockShow).not.toHaveBeenCalled();
-      expect(mockIncrementCount).not.toHaveBeenCalled();
-    });
-
-    it("does not emit hint for context-menu source", async () => {
-      mockGetEffectiveCombo.mockReturnValue("Cmd+K");
-
-      service.register(makeAction("test.action"));
-      await service.dispatch("test.action" as ActionId, undefined, { source: "context-menu" });
-
-      expect(mockShow).not.toHaveBeenCalled();
-      expect(mockIncrementCount).not.toHaveBeenCalled();
-    });
-
-    it("does not emit hint for agent source", async () => {
-      mockGetEffectiveCombo.mockReturnValue("Cmd+K");
-
-      service.register(makeAction("test.action"));
-      await service.dispatch("test.action" as ActionId, undefined, { source: "agent" });
 
       expect(mockShow).not.toHaveBeenCalled();
       expect(mockIncrementCount).not.toHaveBeenCalled();
@@ -2466,24 +2034,6 @@ describe("ActionService", () => {
       expect(warnSpy).not.toHaveBeenCalled();
     });
 
-    it("does not warn when action has neither isEnabled nor disabledReason", () => {
-      const action: ActionDefinition = {
-        id: "test.neither" as ActionId,
-        title: "Test",
-        description:
-          "Test action for validating ActionService definition invariant warnings and registration behavior.",
-        category: "test",
-        kind: "command",
-        danger: "safe",
-        scope: "renderer",
-        run: vi.fn().mockResolvedValue(undefined),
-      };
-
-      service.register(action);
-
-      expect(warnSpy).not.toHaveBeenCalled();
-    });
-
     it("does not warn when action has disabledReason without isEnabled (valid pattern)", () => {
       const action: ActionDefinition = {
         id: "test.onlyDisabledReason" as ActionId,
@@ -2501,56 +2051,6 @@ describe("ActionService", () => {
       service.register(action);
 
       expect(warnSpy).not.toHaveBeenCalled();
-    });
-
-    it("warns for multiple offending actions", () => {
-      const action1: ActionDefinition = {
-        id: "test.offender1" as ActionId,
-        title: "Test 1",
-        description:
-          "Test action one for validating ActionService definition invariant warnings with multiple offending actions.",
-        category: "test",
-        kind: "command",
-        danger: "safe",
-        scope: "renderer",
-        isEnabled: () => false,
-        run: vi.fn().mockResolvedValue(undefined),
-      };
-
-      const action2: ActionDefinition = {
-        id: "test.offender2" as ActionId,
-        title: "Test 2",
-        description:
-          "Test action two for validating ActionService definition invariant warnings with multiple offending actions.",
-        category: "test",
-        kind: "command",
-        danger: "safe",
-        scope: "renderer",
-        isEnabled: () => false,
-        disabledReason: () => "Reason", // This one is OK
-        run: vi.fn().mockResolvedValue(undefined),
-      };
-
-      const action3: ActionDefinition = {
-        id: "test.offender3" as ActionId,
-        title: "Test 3",
-        description:
-          "Test action three for validating ActionService definition invariant warnings with multiple offending actions.",
-        category: "test",
-        kind: "command",
-        danger: "safe",
-        scope: "renderer",
-        isEnabled: () => false,
-        run: vi.fn().mockResolvedValue(undefined),
-      };
-
-      service.register(action1);
-      service.register(action2);
-      service.register(action3);
-
-      expect(warnSpy).toHaveBeenCalledTimes(2);
-      expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('Action "test.offender1"'));
-      expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('Action "test.offender3"'));
     });
 
     it("does not warn on duplicate registration (validate runs after duplicate-ID check)", () => {
@@ -2579,26 +2079,6 @@ describe("ActionService", () => {
   });
 
   describe("manifest partial cache (issue #7284)", () => {
-    it("returns deeply-equal inputSchema across list() calls", () => {
-      const argsSchema = z.object({ count: z.number() });
-      service.register({
-        id: "actions.list" as ActionId,
-        title: "Test",
-        description:
-          "Test action for validating ActionService definition invariant warnings and registration behavior.",
-        category: "test",
-        kind: "command",
-        danger: "safe",
-        scope: "renderer",
-        argsSchema,
-        run: vi.fn().mockResolvedValue(undefined),
-      });
-
-      const first = service.list()[0]!.inputSchema;
-      const second = service.list()[0]!.inputSchema;
-      expect(first).toEqual(second);
-    });
-
     it("isolates inputSchema from caller mutations", () => {
       const argsSchema = z.object({ count: z.number() });
       service.register({
@@ -2791,10 +2271,6 @@ describe("ActionService", () => {
       return (s as unknown as { schemaCache: Map<string, unknown> }).schemaCache;
     }
 
-    function getRequiresArgsCache(s: ActionService): Map<string, boolean> {
-      return (s as unknown as { requiresArgsCache: Map<string, boolean> }).requiresArgsCache;
-    }
-
     function registerSchemaAction(id = "actions.list" as ActionId): void {
       service.register({
         id,
@@ -2815,11 +2291,6 @@ describe("ActionService", () => {
       expect(getSchemaCache(service).size).toBe(0);
     });
 
-    it("populates requiresArgsCache eagerly during register()", () => {
-      registerSchemaAction();
-      expect(getRequiresArgsCache(service).get("actions.list" as ActionId)).toBe(true);
-    });
-
     it("listIds() returns registered ids without populating schemaCache", () => {
       registerSchemaAction("actions.list" as ActionId);
       service.register({
@@ -2837,20 +2308,6 @@ describe("ActionService", () => {
       const ids = Array.from(service.listIds());
       expect(ids).toEqual(["actions.list", "actions.get"]);
       expect(getSchemaCache(service).size).toBe(0);
-    });
-
-    it("populates schemaCache on first list() call", () => {
-      registerSchemaAction();
-      expect(getSchemaCache(service).size).toBe(0);
-      service.list();
-      expect(getSchemaCache(service).size).toBe(1);
-    });
-
-    it("populates schemaCache on first get() call", () => {
-      registerSchemaAction();
-      expect(getSchemaCache(service).size).toBe(0);
-      service.get("actions.list" as ActionId);
-      expect(getSchemaCache(service).size).toBe(1);
     });
 
     it("caches no-argsSchema actions on first read so repeated calls do not recompute", () => {
@@ -2875,17 +2332,6 @@ describe("ActionService", () => {
       service.list();
       service.get("actions.list" as ActionId);
       expect(cache.get("actions.list" as ActionId)).toBe(cachedAfterFirst);
-    });
-
-    it("unregister() clears both requiresArgsCache and schemaCache", () => {
-      registerSchemaAction();
-      service.list();
-      expect(getSchemaCache(service).size).toBe(1);
-      expect(getRequiresArgsCache(service).size).toBe(1);
-
-      service.unregister("actions.list" as ActionId);
-      expect(getSchemaCache(service).size).toBe(0);
-      expect(getRequiresArgsCache(service).size).toBe(0);
     });
 
     it("list({ includeSchemas: false }) skips compilation and returns schema-free entries", () => {

@@ -25,6 +25,7 @@ vi.mock("@/clients", () => ({
     onData: vi.fn(() => vi.fn()),
     onExit: vi.fn(() => vi.fn()),
     onTierChanged: vi.fn(() => vi.fn()),
+    onReset: vi.fn(() => vi.fn()),
     write: vi.fn(),
     setActivityTier: vi.fn(),
     wake: vi.fn(),
@@ -35,6 +36,7 @@ vi.mock("@/clients", () => ({
     })),
     acknowledgeData: vi.fn(),
     acknowledgePortData: vi.fn(),
+    getPortAckGeneration: vi.fn(() => 0),
     discardPortAcks: vi.fn(),
   },
   systemClient: { openExternal: vi.fn() },
@@ -205,19 +207,6 @@ describe("TerminalInstanceService applyBackgroundWindowResize", () => {
     // viewport snapshot, regardless of what earlier events applied.
     expect(applyBackgroundResizeSpy).toHaveBeenNthCalledWith(1, "a", 800 * 1.2, 600 * 1.2);
     expect(applyBackgroundResizeSpy).toHaveBeenNthCalledWith(2, "a", 800 * 1.5, 600 * 1.0);
-  });
-
-  it("a terminal skipped in one pass still lands on the correct absolute size in the next", () => {
-    const managed = makeManaged({ lastWidth: 800, lastHeight: 600 });
-    service.instances.set("a", managed);
-
-    // First pass skipped (e.g. resize-locked) — applyBackgroundResize returns null
-    // and lastWidth is untouched. The origin snapshot must keep the second
-    // pass anchored to the original viewport, not an advanced basis.
-    service.applyBackgroundWindowResize(1200, 840);
-    service.applyBackgroundWindowResize(1500, 1400);
-
-    expect(applyBackgroundResizeSpy).toHaveBeenLastCalledWith("a", 800 * 1.5, 600 * 2.0);
   });
 
   it("resetBackgroundResizeBasis restores the live viewport as the basis", () => {

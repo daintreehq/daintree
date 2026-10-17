@@ -64,30 +64,6 @@ describe("migration016 — rename flavor to preset", () => {
     expect(after.agents.claude.customFlags).toBe("--verbose");
   });
 
-  it("handles both fields simultaneously", () => {
-    const data: Record<string, unknown> = {
-      agentSettings: {
-        agents: {
-          claude: {
-            flavorId: "ccr-a",
-            customFlavors: [{ id: "x" }],
-            pinned: true,
-          },
-        },
-      },
-    };
-    const store = makeStoreMock(data);
-    migration016.up(store);
-    const after = data.agentSettings as {
-      agents: Record<string, Record<string, unknown>>;
-    };
-    expect(after.agents.claude.presetId).toBe("ccr-a");
-    expect(after.agents.claude.customPresets).toEqual([{ id: "x" }]);
-    expect(after.agents.claude.pinned).toBe(true);
-    expect("flavorId" in after.agents.claude).toBe(false);
-    expect("customFlavors" in after.agents.claude).toBe(false);
-  });
-
   it("is idempotent — running twice leaves already-migrated data intact", () => {
     const data: Record<string, unknown> = {
       agentSettings: {

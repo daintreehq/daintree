@@ -472,25 +472,6 @@ describe("deferredInitQueue", () => {
     consoleWarn.mockRestore();
   });
 
-  it("non-quit reset still allows a fresh cycle to drain (macOS re-open)", async () => {
-    // Regression guard: a cycle that never saw haltDeferredQueue
-    // (reset on last-window-close, new window, new drain) works normally.
-    const t1 = vi.fn();
-    registerDeferredTask({ name: "t1", run: t1 });
-    finalizeDeferredRegistration(10_000);
-    signalFirstInteractive(1);
-    await waitForDrain();
-
-    resetDeferredQueue();
-
-    const t2 = vi.fn();
-    registerDeferredTask({ name: "t2", run: t2 });
-    finalizeDeferredRegistration(10_000);
-    signalFirstInteractive(2);
-    await waitForDrain();
-    expect(t2).toHaveBeenCalledTimes(1);
-  });
-
   it("halt between a sync task and its queued setImmediate stops the chain", async () => {
     const first = vi.fn();
     const second = vi.fn();

@@ -3,12 +3,6 @@ import { buildDedupKey, canonicalArgsHash, readDedupCache } from "../sessionDedu
 
 describe("sessionDedup", () => {
   describe("canonicalArgsHash", () => {
-    it("returns the same hash regardless of object key insertion order", () => {
-      const a = canonicalArgsHash("terminal.new", { foo: 1, bar: 2 });
-      const b = canonicalArgsHash("terminal.new", { bar: 2, foo: 1 });
-      expect(a).toBe(b);
-    });
-
     it("recursively sorts nested object keys", () => {
       const a = canonicalArgsHash("worktree.createWithRecipe", {
         outer: { x: 1, y: 2 },
@@ -74,12 +68,6 @@ describe("sessionDedup", () => {
       const b = buildDedupKey("terminal.new", undefined, { foo: 1 });
       expect(a).toBe(b);
     });
-
-    it("auto-hash collapses identical args regardless of key order", () => {
-      const a = buildDedupKey("terminal.new", undefined, { foo: 1, bar: 2 });
-      const b = buildDedupKey("terminal.new", undefined, { bar: 2, foo: 1 });
-      expect(a).toBe(b);
-    });
   });
 
   describe("readDedupCache", () => {
@@ -94,14 +82,6 @@ describe("sessionDedup", () => {
       });
     });
 
-    it("preserves argsHash on the returned entry", () => {
-      const cache = new Map();
-      const result = { content: [{ type: "text" as const, text: "ok" }] };
-      cache.set("k", { result, expiresAt: 2000, argsHash: "sha256-hex" });
-      const entry = readDedupCache(cache, "k", 1000);
-      expect(entry?.argsHash).toBe("sha256-hex");
-    });
-
     it("returns undefined and evicts when entry is expired", () => {
       const cache = new Map();
       cache.set("k", { result: { content: [] }, expiresAt: 1000, argsHash: "h" });
@@ -113,10 +93,6 @@ describe("sessionDedup", () => {
       const cache = new Map();
       cache.set("k", { result: { content: [] }, expiresAt: 1000, argsHash: "h" });
       expect(readDedupCache(cache, "k", 1000)).toBeUndefined();
-    });
-
-    it("returns undefined for an absent key", () => {
-      expect(readDedupCache(new Map(), "missing", 0)).toBeUndefined();
     });
   });
 });

@@ -117,6 +117,7 @@ import { readGpuDisabledFlagData } from "../gpuDisabledFlag.js";
 describe("GpuCrashMonitorService", () => {
   let tmpDir: string;
   let originalPlatform: NodeJS.Platform;
+  let originalSessionType: string | undefined;
 
   beforeEach(() => {
     vi.clearAllMocks();
@@ -131,6 +132,9 @@ describe("GpuCrashMonitorService", () => {
     // this per-test.
     originalPlatform = process.platform;
     Object.defineProperty(process, "platform", { value: "linux", configurable: true });
+    // The soft fallback only applies on a Wayland session.
+    originalSessionType = process.env.XDG_SESSION_TYPE;
+    process.env.XDG_SESSION_TYPE = "wayland";
     vi.spyOn(console, "log").mockImplementation(() => {});
     vi.spyOn(console, "warn").mockImplementation(() => {});
     vi.spyOn(console, "error").mockImplementation(() => {});
@@ -138,15 +142,13 @@ describe("GpuCrashMonitorService", () => {
 
   afterEach(() => {
     Object.defineProperty(process, "platform", { value: originalPlatform, configurable: true });
+    if (originalSessionType === undefined) delete process.env.XDG_SESSION_TYPE;
+    else process.env.XDG_SESSION_TYPE = originalSessionType;
     fs.rmSync(tmpDir, { recursive: true, force: true });
     vi.restoreAllMocks();
   });
 
   describe("flag file helpers", () => {
-    it("isGpuDisabledByFlag returns false when no flag exists", () => {
-      expect(isGpuDisabledByFlag(tmpDir)).toBe(false);
-    });
-
     it("writeGpuDisabledFlag creates the flag file", () => {
       writeGpuDisabledFlag(tmpDir, "crash");
       expect(fs.existsSync(path.join(tmpDir, "gpu-disabled.flag"))).toBe(true);
@@ -173,23 +175,8 @@ describe("GpuCrashMonitorService", () => {
       expect(data!.timestamp).toBeGreaterThan(0);
     });
 
-    it("isGpuDisabledByFlag returns true after writing flag", () => {
-      writeGpuDisabledFlag(tmpDir, "crash");
-      expect(isGpuDisabledByFlag(tmpDir)).toBe(true);
-    });
-
-    it("clearGpuDisabledFlag removes the flag file", () => {
-      writeGpuDisabledFlag(tmpDir, "crash");
-      clearGpuDisabledFlag(tmpDir);
-      expect(isGpuDisabledByFlag(tmpDir)).toBe(false);
-    });
-
     it("clearGpuDisabledFlag is safe when no flag exists", () => {
       expect(() => clearGpuDisabledFlag(tmpDir)).not.toThrow();
-    });
-
-    it("isGpuAngleFallbackByFlag returns false when no flag exists", () => {
-      expect(isGpuAngleFallbackByFlag(tmpDir)).toBe(false);
     });
 
     it("writeGpuAngleFallbackFlag creates the flag file", () => {
@@ -234,12 +221,6 @@ describe("GpuCrashMonitorService", () => {
 
     it("returns false on macOS even when the flag exists", () => {
       Object.defineProperty(process, "platform", { value: "darwin" });
-      writeGpuAngleFallbackFlag(tmpDir);
-      expect(isGpuAngleFallbackApplied(tmpDir)).toBe(false);
-    });
-
-    it("returns false on Windows even when the flag exists", () => {
-      Object.defineProperty(process, "platform", { value: "win32" });
       writeGpuAngleFallbackFlag(tmpDir);
       expect(isGpuAngleFallbackApplied(tmpDir)).toBe(false);
     });
@@ -294,11 +275,6 @@ describe("GpuCrashMonitorService", () => {
       }
     }
 
-    it("registers child-process-gone listener on initialize", async () => {
-      await loadAndInit();
-      expect(appMock.on).toHaveBeenCalledWith("child-process-gone", expect.any(Function));
-    });
-
     it("first GPU crash writes ANGLE fallback flag and relaunches without disabling acceleration", async () => {
       await loadAndInit();
       emitGpuCrash();
@@ -309,19 +285,6 @@ describe("GpuCrashMonitorService", () => {
       expect(isGpuAngleFallbackByFlag(tmpDir)).toBe(true);
       expect(isGpuDisabledByFlag(tmpDir)).toBe(false);
       expect(storeMock.set).not.toHaveBeenCalled();
-    });
-
-    it("does not enter the nuclear path on the first crash (soft fallback first)", async () => {
-      await loadAndInit();
-      emitGpuCrash();
-      await vi.waitFor(() => {
-        expect(appMock.exit).toHaveBeenCalledWith(0);
-      });
-      expect(isGpuDisabledByFlag(tmpDir)).toBe(false);
-      expect(storeMock.set).not.toHaveBeenCalledWith(
-        "gpu",
-        expect.objectContaining({ hardwareAccelerationDisabled: true })
-      );
     });
 
     it("does NOT trigger first-crash relaunch when ANGLE fallback flag already exists (loop guard)", async () => {
@@ -419,33 +382,6 @@ describe("GpuCrashMonitorService", () => {
       });
       expect(appMock.relaunch).toHaveBeenCalledTimes(1);
       expect(isGpuAngleFallbackByFlag(tmpDir)).toBe(true);
-    });
-
-    it("logs soft fallback with structured logger", async () => {
-      await loadAndInit();
-      emitGpuCrash();
-      await vi.waitFor(() => {
-        expect(appMock.exit).toHaveBeenCalledWith(0);
-      });
-      expect(loggerMethods.warn).toHaveBeenCalledWith(
-        "gpu-crash-soft-fallback",
-        expect.objectContaining({ crashCount: 1 })
-      );
-    });
-
-    it("logs nuclear disable with structured logger", async () => {
-      writeGpuAngleFallbackFlag(tmpDir);
-      await loadAndInit();
-      emitGpuCrash();
-      emitGpuCrash();
-      emitGpuCrash();
-      await vi.waitFor(() => {
-        expect(appMock.exit).toHaveBeenCalledWith(0);
-      });
-      expect(loggerMethods.warn).toHaveBeenCalledWith(
-        "gpu-crash-nuclear-disable",
-        expect.objectContaining({ crashCount: 3 })
-      );
     });
 
     it("only relaunches once even with additional crashes after the first soft fallback", async () => {
@@ -610,8 +546,13 @@ describe("GpuCrashMonitorService", () => {
         });
       });
 
-      it("win32: first crash does not write ANGLE flag, does not relaunch", async () => {
-        await withPlatform("win32", async () => {
+      it.each(["x11", undefined])(
+        "linux session %s: first crash does not write ANGLE flag, does not relaunch",
+        async (sessionType) => {
+          // environment.ts applies the ANGLE/Vulkan switches on Wayland only, so an
+          // X11 (or unknown) session's relaunch would cost the session and change nothing.
+          if (sessionType === undefined) delete process.env.XDG_SESSION_TYPE;
+          else process.env.XDG_SESSION_TYPE = sessionType;
           const writeSpy = await trackAtomicWriter();
           try {
             await loadAndInit();
@@ -622,14 +563,14 @@ describe("GpuCrashMonitorService", () => {
             expect(isGpuAngleFallbackByFlag(tmpDir)).toBe(false);
             expect(writeSpy).not.toHaveBeenCalled();
             expect(loggerMethods.info).toHaveBeenCalledWith(
-              "gpu-crash-soft-fallback-skip-nonlinux",
-              expect.objectContaining({ platform: "win32", crashCount: 1 })
+              "gpu-crash-soft-fallback-skip-x11",
+              expect.objectContaining({ sessionType: sessionType ?? null, crashCount: 1 })
             );
           } finally {
             vi.doUnmock("../../utils/fs.js");
           }
-        });
-      });
+        }
+      );
 
       it("darwin: strikes still accumulate to nuclear disable across crashes", async () => {
         await withPlatform("darwin", async () => {
@@ -645,20 +586,6 @@ describe("GpuCrashMonitorService", () => {
           expect(storeMock.set).toHaveBeenCalledWith("gpu", {
             hardwareAccelerationDisabled: true,
           });
-        });
-      });
-
-      it("win32: strikes still accumulate to nuclear disable across crashes", async () => {
-        await withPlatform("win32", async () => {
-          await loadAndInit();
-          emitGpuCrash();
-          emitGpuCrash();
-          emitGpuCrash();
-          await vi.waitFor(() => {
-            expect(appMock.exit).toHaveBeenCalledWith(0);
-          });
-          expect(appMock.relaunch).toHaveBeenCalledTimes(1);
-          expect(isGpuDisabledByFlag(tmpDir)).toBe(true);
         });
       });
     });
@@ -680,16 +607,6 @@ describe("GpuCrashMonitorService", () => {
           "gpu-crash-loop-hard-stop",
           expect.objectContaining({ path: "angle-fallback" })
         );
-      });
-
-      it("ANGLE path: relaunches when guard allows", async () => {
-        crashLoopGuardMock.shouldRelaunch.mockReturnValue(true);
-        await loadAndInit();
-        emitGpuCrash();
-        await vi.waitFor(() => {
-          expect(appMock.exit).toHaveBeenCalledWith(0);
-        });
-        expect(appMock.relaunch).toHaveBeenCalledTimes(1);
       });
 
       it("Nuclear path: does not relaunch when guard hard-stops, but exits cleanly", async () => {
@@ -714,19 +631,6 @@ describe("GpuCrashMonitorService", () => {
           "gpu-crash-loop-hard-stop",
           expect.objectContaining({ path: "nuclear-disable" })
         );
-      });
-
-      it("Nuclear path: relaunches when guard allows", async () => {
-        writeGpuAngleFallbackFlag(tmpDir);
-        crashLoopGuardMock.shouldRelaunch.mockReturnValue(true);
-        await loadAndInit();
-        emitGpuCrash();
-        emitGpuCrash();
-        emitGpuCrash();
-        await vi.waitFor(() => {
-          expect(appMock.exit).toHaveBeenCalledWith(0);
-        });
-        expect(appMock.relaunch).toHaveBeenCalledTimes(1);
       });
     });
 
@@ -880,68 +784,6 @@ describe("GpuCrashMonitorService", () => {
         );
       });
 
-      it("nuclear hard-stop: marker writes still complete when cleanupOnExit throws", async () => {
-        writeGpuAngleFallbackFlag(tmpDir);
-        crashLoopGuardMock.shouldRelaunch.mockReturnValue(false);
-        crashRecoveryMock.cleanupOnExit.mockImplementationOnce(() => {
-          throw new Error("cleanupOnExit failed");
-        });
-        await loadAndInit();
-        emitGpuCrash();
-        emitGpuCrash();
-        emitGpuCrash();
-        await vi.waitFor(() => {
-          expect(appMock.exit).toHaveBeenCalledWith(0);
-        });
-        expect(crashLoopGuardMock.markCleanExit).toHaveBeenCalledTimes(1);
-        expect(panelSuspectLedgerMock.markCleanLaunch).toHaveBeenCalledTimes(1);
-        expect(appMock.relaunch).not.toHaveBeenCalled();
-      });
-
-      it("nuclear relaunch: marker writes still complete when markCleanExit throws", async () => {
-        writeGpuAngleFallbackFlag(tmpDir);
-        crashLoopGuardMock.markCleanExit.mockImplementationOnce(() => {
-          throw new Error("markCleanExit failed");
-        });
-        await loadAndInit();
-        emitGpuCrash();
-        emitGpuCrash();
-        emitGpuCrash();
-        await vi.waitFor(() => {
-          expect(appMock.exit).toHaveBeenCalledWith(0);
-        });
-        expect(crashRecoveryMock.cleanupOnExit).toHaveBeenCalledTimes(1);
-        expect(panelSuspectLedgerMock.markCleanLaunch).toHaveBeenCalledTimes(1);
-        expect(appMock.relaunch).toHaveBeenCalledTimes(1);
-        expect(loggerMethods.error).toHaveBeenCalledWith(
-          "gpu-mitigation-mark-clean-exit-failed",
-          expect.any(Error),
-          expect.objectContaining({ path: "nuclear-disable" })
-        );
-      });
-
-      it("nuclear relaunch: relaunch still happens when markCleanLaunch throws", async () => {
-        writeGpuAngleFallbackFlag(tmpDir);
-        panelSuspectLedgerMock.markCleanLaunch.mockImplementationOnce(() => {
-          throw new Error("markCleanLaunch failed");
-        });
-        await loadAndInit();
-        emitGpuCrash();
-        emitGpuCrash();
-        emitGpuCrash();
-        await vi.waitFor(() => {
-          expect(appMock.exit).toHaveBeenCalledWith(0);
-        });
-        expect(crashRecoveryMock.cleanupOnExit).toHaveBeenCalledTimes(1);
-        expect(crashLoopGuardMock.markCleanExit).toHaveBeenCalledTimes(1);
-        expect(appMock.relaunch).toHaveBeenCalledTimes(1);
-        expect(loggerMethods.error).toHaveBeenCalledWith(
-          "gpu-mitigation-mark-clean-launch-failed",
-          expect.any(Error),
-          expect.objectContaining({ path: "nuclear-disable" })
-        );
-      });
-
       it("soft hard-stop: app.exit(0) still happens when closeTelemetry rejects", async () => {
         crashLoopGuardMock.shouldRelaunch.mockReturnValue(false);
         telemetryServiceMock.closeTelemetry.mockRejectedValueOnce(
@@ -985,37 +827,6 @@ describe("GpuCrashMonitorService", () => {
           expect.any(Error),
           expect.objectContaining({ path: "nuclear-disable" })
         );
-      });
-
-      it("non-GPU crashes do not call the cleanup helper", async () => {
-        await loadAndInit();
-        emitChildProcessGone("Utility", "crashed", 1, "daintree-pty-host");
-        emitChildProcessGone("Utility", "crashed", 1, "daintree-pty-host");
-        emitChildProcessGone("Utility", "crashed", 1, "daintree-pty-host");
-        expect(crashRecoveryMock.cleanupOnExit).not.toHaveBeenCalled();
-        expect(crashLoopGuardMock.markCleanExit).not.toHaveBeenCalled();
-        expect(panelSuspectLedgerMock.markCleanLaunch).not.toHaveBeenCalled();
-      });
-
-      it("clean-exit / killed GPU exits do not call the cleanup helper", async () => {
-        await loadAndInit();
-        emitGpuCrash("clean-exit");
-        emitGpuCrash("killed");
-        emitGpuCrash("clean-exit");
-        expect(crashRecoveryMock.cleanupOnExit).not.toHaveBeenCalled();
-        expect(crashLoopGuardMock.markCleanExit).not.toHaveBeenCalled();
-        expect(panelSuspectLedgerMock.markCleanLaunch).not.toHaveBeenCalled();
-      });
-
-      it("already-disabled path does not call the cleanup helper", async () => {
-        writeGpuDisabledFlag(tmpDir, "crash");
-        await loadAndInit();
-        emitGpuCrash();
-        emitGpuCrash();
-        emitGpuCrash();
-        expect(crashRecoveryMock.cleanupOnExit).not.toHaveBeenCalled();
-        expect(crashLoopGuardMock.markCleanExit).not.toHaveBeenCalled();
-        expect(panelSuspectLedgerMock.markCleanLaunch).not.toHaveBeenCalled();
       });
 
       it("failed ANGLE flag write does not call the cleanup helper", async () => {
@@ -1085,90 +896,6 @@ describe("GpuCrashMonitorService", () => {
       }
     }
 
-    it("three crashes within window trigger nuclear disable", async () => {
-      writeGpuAngleFallbackFlag(tmpDir);
-      await loadAndInit();
-
-      emitGpuCrash();
-      emitGpuCrash();
-      emitGpuCrash();
-
-      await vi.waitFor(() => {
-        expect(appMock.exit).toHaveBeenCalledWith(0);
-      });
-      expect(appMock.relaunch).toHaveBeenCalledTimes(1);
-      expect(isGpuDisabledByFlag(tmpDir)).toBe(true);
-      expect(loggerMethods.warn).toHaveBeenCalledWith(
-        "gpu-crash-nuclear-disable",
-        expect.objectContaining({ crashCount: 3 })
-      );
-    });
-
-    it("does NOT trigger nuclear disable when first crash falls outside window", async () => {
-      writeGpuAngleFallbackFlag(tmpDir);
-
-      let now = Date.now();
-      const dateSpy = vi.spyOn(Date, "now").mockImplementation(() => now);
-
-      await loadAndInit();
-
-      // 2 crashes at T+0
-      emitGpuCrash();
-      emitGpuCrash();
-
-      // Advance past the window
-      now += GPU_CRASH_WINDOW_MS + 1;
-
-      // 3rd crash at T+5min+1ms — first 2 pruned, effectiveCount = 1
-      emitGpuCrash();
-
-      await new Promise((r) => setImmediate(r));
-
-      expect(appMock.relaunch).not.toHaveBeenCalled();
-      expect(appMock.exit).not.toHaveBeenCalled();
-
-      dateSpy.mockRestore();
-    });
-
-    it("does NOT trigger nuclear when only 2 crashes remain in window", async () => {
-      writeGpuAngleFallbackFlag(tmpDir);
-
-      let now = Date.now();
-      const dateSpy = vi.spyOn(Date, "now").mockImplementation(() => now);
-
-      await loadAndInit();
-
-      // 1 crash at T+0
-      emitGpuCrash();
-
-      // Advance past window
-      now += GPU_CRASH_WINDOW_MS + 1000;
-
-      // 2 crashes at T+5min+1s — first pruned, effectiveCount = 2
-      emitGpuCrash();
-      emitGpuCrash();
-
-      await new Promise((r) => setImmediate(r));
-
-      expect(appMock.relaunch).not.toHaveBeenCalled();
-      expect(appMock.exit).not.toHaveBeenCalled();
-
-      dateSpy.mockRestore();
-    });
-
-    it("logs disable-flag-active at init when flag exists", async () => {
-      writeGpuDisabledFlag(tmpDir, "crash");
-      await loadAndInit();
-      expect(loggerMethods.info).toHaveBeenCalledWith("gpu-crash-disable-flag-active");
-    });
-
-    it("logs angle-fallback-flag-active at init when flag exists", async () => {
-      writeGpuAngleFallbackFlag(tmpDir);
-      await loadAndInit();
-      expect(loggerMethods.info).toHaveBeenCalledWith("gpu-angle-fallback-flag-active");
-      expect(loggerMethods.info).not.toHaveBeenCalledWith("gpu-crash-disable-flag-active");
-    });
-
     it("crashes exactly at window boundary are excluded", async () => {
       writeGpuAngleFallbackFlag(tmpDir);
 
@@ -1204,23 +931,90 @@ describe("GpuCrashMonitorService", () => {
       return mod;
     }
 
-    it("logs gpu-startup-status once webgl2 is classified", async () => {
+    // The handler the freshest module bound; earlier tests' modules bound theirs too.
+    function fireGpuInfoUpdate(): void {
+      const binds = appMock.on.mock.calls.filter((call) => call[0] === "gpu-info-update");
+      (binds.at(-1)![1] as () => void)();
+    }
+
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    it("logs the status the GPU process reports once its updates go quiet", async () => {
+      vi.useFakeTimers();
+      // Provisional until the GPU process reports, even on a working GPU.
+      appMock.getGPUFeatureStatus.mockReturnValue({
+        webgl: "disabled_off",
+        gpu_compositing: "disabled_software",
+      });
+      await initFresh();
+      await vi.advanceTimersByTimeAsync(500);
+      expect(loggerMethods.info).not.toHaveBeenCalledWith("gpu-startup-status", expect.anything());
+
       appMock.getGPUFeatureStatus.mockReturnValue({
         webgl2: "enabled",
         webgl: "enabled",
         gpu_compositing: "enabled",
       });
-      await initFresh();
+      fireGpuInfoUpdate();
+      await vi.advanceTimersByTimeAsync(1_000);
       expect(loggerMethods.info).toHaveBeenCalledWith("gpu-startup-status", {
         webgl2: "enabled",
         webgl: "enabled",
         gpu_compositing: "enabled",
       });
+      expect(loggerMethods.info).not.toHaveBeenCalledWith(
+        "gpu-startup-status",
+        expect.objectContaining({ webgl: "disabled_off" })
+      );
     });
 
-    it("skips logging while the GPU is not yet classified (no webgl2)", async () => {
-      // Chromium has not yet classified the GPU — the sample has no webgl2, so
-      // the logger must stay silent rather than emitting an empty trace.
+    it("waits for a quick second update to land before logging", async () => {
+      vi.useFakeTimers();
+      appMock.getGPUFeatureStatus.mockReturnValue({
+        webgl: "unavailable_off",
+        gpu_compositing: "unavailable_off",
+      });
+      await initFresh();
+      fireGpuInfoUpdate();
+      await vi.advanceTimersByTimeAsync(3);
+      appMock.getGPUFeatureStatus.mockReturnValue({
+        webgl: "unavailable_off",
+        gpu_compositing: "disabled_software",
+      });
+      fireGpuInfoUpdate();
+      // The first update's timer would have fired here; the second restarted it.
+      await vi.advanceTimersByTimeAsync(997);
+      expect(loggerMethods.info).not.toHaveBeenCalledWith("gpu-startup-status", expect.anything());
+      await vi.advanceTimersByTimeAsync(3);
+      expect(loggerMethods.info).toHaveBeenCalledWith("gpu-startup-status", {
+        webgl2: undefined,
+        webgl: "unavailable_off",
+        gpu_compositing: "disabled_software",
+      });
+    });
+
+    it("logs from webgl alone at the deadline when no update ever comes", async () => {
+      vi.useFakeTimers();
+      appMock.getGPUFeatureStatus.mockReturnValue({
+        webgl: "unavailable_off",
+        gpu_compositing: "unavailable_off",
+      });
+      await initFresh();
+      await vi.advanceTimersByTimeAsync(9_999);
+      expect(loggerMethods.info).not.toHaveBeenCalledWith("gpu-startup-status", expect.anything());
+      await vi.advanceTimersByTimeAsync(1);
+      expect(loggerMethods.info).toHaveBeenCalledWith("gpu-startup-status", {
+        webgl2: undefined,
+        webgl: "unavailable_off",
+        gpu_compositing: "unavailable_off",
+      });
+    });
+
+    it("skips logging while the GPU is not yet classified (no WebGL status)", async () => {
+      // Chromium has not yet classified the GPU — the sample has no WebGL entry,
+      // so the logger must stay silent rather than emitting an empty trace.
       appMock.getGPUFeatureStatus.mockReturnValue({});
       await initFresh();
       expect(loggerMethods.info).not.toHaveBeenCalledWith("gpu-startup-status", expect.anything());

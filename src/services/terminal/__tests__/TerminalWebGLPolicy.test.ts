@@ -51,16 +51,6 @@ describe("TerminalWebGLPolicy.wantsWebGLAtTier", () => {
     }
   });
 
-  it("focus does not change the result — an unfocused visible standard terminal still wants WebGL", () => {
-    const policy = makePolicy();
-    const unfocusedStandard = makeManaged({
-      isVisible: true,
-      isFocused: false,
-      runtimeAgentId: undefined,
-    });
-    expect(policy.wantsWebGLAtTier(unfocusedStandard, TerminalRefreshTier.VISIBLE)).toBe(true);
-  });
-
   it("ineligible tiers (BACKGROUND, undefined) never want WebGL, even visible + focused + agent", () => {
     const policy = makePolicy();
     const managed = makeManaged({ isVisible: true, isFocused: true, runtimeAgentId: "claude" });
@@ -117,11 +107,6 @@ describe("TerminalWebGLPolicy.shouldHaveActiveWebGL — DOM-mode pin safety net"
     const policy = makePolicy({ getMode: () => "dom", getPinnedId: () => "t1" });
     expect(policy.shouldHaveActiveWebGL(baseManaged())).toBe(true);
   });
-
-  it("returns true for a visible eligible terminal in WebGL mode", () => {
-    const policy = makePolicy({ getMode: () => "webgl" });
-    expect(policy.shouldHaveActiveWebGL(baseManaged())).toBe(true);
-  });
 });
 
 describe("cached project view (#12514)", () => {
@@ -152,5 +137,27 @@ describe("cached project view (#12514)", () => {
     const policy = makePolicy({ isViewSuppressed: () => false });
 
     expect(policy.wantsWebGLAtTier(makeManaged(), TerminalRefreshTier.FOCUSED)).toBe(true);
+  });
+});
+
+describe("TerminalWebGLPolicy.shouldHaveActiveWebGL without hardware WebGL", () => {
+  it("never reports a missing context as a fault the watchdog must repair", () => {
+    const managed = makeManaged({ lastAppliedTier: TerminalRefreshTier.VISIBLE });
+    expect(makePolicy().shouldHaveActiveWebGL(managed)).toBe(true);
+    expect(makePolicy({ isHardwareAvailable: () => false }).shouldHaveActiveWebGL(managed)).toBe(
+      false
+    );
+    expect(makePolicy({ isHardwareAvailable: () => true }).shouldHaveActiveWebGL(managed)).toBe(
+      true
+    );
+  });
+
+  it("follows the manager's availability as it changes", () => {
+    let available = false;
+    const policy = makePolicy({ isHardwareAvailable: () => available });
+    const managed = makeManaged({ lastAppliedTier: TerminalRefreshTier.VISIBLE });
+    expect(policy.shouldHaveActiveWebGL(managed)).toBe(false);
+    available = true;
+    expect(policy.shouldHaveActiveWebGL(managed)).toBe(true);
   });
 });

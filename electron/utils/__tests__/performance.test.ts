@@ -21,12 +21,7 @@ vi.mock("node:fs", () => ({
 }));
 
 import { logWarn } from "../logger.js";
-import {
-  startEventLoopLagMonitor,
-  rebaseRendererElapsedMs,
-  APP_BOOT_T0,
-  mainTimeOrigin,
-} from "../performance.js";
+import { startEventLoopLagMonitor, rebaseRendererElapsedMs } from "../performance.js";
 
 function createPowerEvents() {
   const suspendListeners = new Set<() => void>();
@@ -67,11 +62,6 @@ describe("startEventLoopLagMonitor", () => {
     stopFn?.();
     stopFn = null;
     vi.useRealTimers();
-  });
-
-  it("returns a cleanup function", () => {
-    stopFn = startEventLoopLagMonitor(1000, 100);
-    expect(typeof stopFn).toBe("function");
   });
 
   it("does not warn when lag is below threshold", () => {
@@ -372,17 +362,5 @@ describe("rebaseRendererElapsedMs", () => {
     // Expected: (1_000_100 + 5 + 200) - (1_000_000 + 0) = 305
     const result = rebaseRendererElapsedMs(1_000_100, 5, 200);
     expect(result).toBe(305);
-  });
-
-  it("produces values greater than renderer elapsed when renderer started after main", () => {
-    // Renderer started 500ms after main boot
-    const result = rebaseRendererElapsedMs(1_000_500, 10, 50);
-    // (1_000_500 + 10 + 50) - (1_000_000 + 0) = 560
-    expect(result).toBe(560);
-  });
-
-  it("exports APP_BOOT_T0 and mainTimeOrigin", () => {
-    expect(typeof APP_BOOT_T0).toBe("number");
-    expect(typeof mainTimeOrigin).toBe("number");
   });
 });

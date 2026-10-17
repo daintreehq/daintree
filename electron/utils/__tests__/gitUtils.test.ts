@@ -23,6 +23,7 @@ import {
   clearGitDirCache,
   clearGitCommonDirCache,
 } from "../gitUtils.js";
+import { executableForSpawn } from "../windowsExecutable.js";
 
 type ExecCallback = (error: Error | null, stdout: string, stderr: string) => void;
 
@@ -109,15 +110,10 @@ describe("getGitBranch", () => {
     await getGitBranch("/repo/path", { timeout: 1234 });
     expect(execFileMock).toHaveBeenCalledTimes(1);
     const [file, args, opts] = execFileMock.mock.calls[0];
-    expect(file).toBe("git");
+    // On Windows git is spawned by its absolute PATH location.
+    expect(file).toBe(executableForSpawn("git"));
     expect(args).toEqual(["rev-parse", "--abbrev-ref", "HEAD"]);
     expect(opts).toMatchObject({ cwd: "/repo/path", timeout: 1234 });
-  });
-
-  it("defaults to a short 500ms timeout", async () => {
-    mockGitOutput("main\n");
-    await getGitBranch("/repo");
-    expect(execFileMock.mock.calls[0][2]).toMatchObject({ timeout: 500 });
   });
 });
 

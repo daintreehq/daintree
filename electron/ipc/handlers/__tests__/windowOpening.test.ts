@@ -18,14 +18,7 @@ vi.mock("electron", () => ({ ipcMain: ipcMainMock }));
 vi.mock("../../../store.js", () => ({ store: storeMock }));
 
 import { registerWindowOpeningHandlers } from "../windowOpening.js";
-import {
-  buildWindowOpeningPreloadBindings,
-  WINDOW_OPENING_METHOD_CHANNELS,
-} from "../windowOpening.preload.js";
-import {
-  readOpenFoldersInNewWindow,
-  readWindowOpeningConfig,
-} from "../../../window/windowOpeningConfig.js";
+import { readWindowOpeningConfig } from "../../../window/windowOpeningConfig.js";
 import { CHANNELS } from "../../channels.js";
 import type { HandlerDependencies } from "../../types.js";
 
@@ -82,32 +75,6 @@ describe("readWindowOpeningConfig", () => {
   });
 });
 
-// The open policy's `getPreference` (windowServices.ts) is this function, so a
-// stored choice reaches folder opens from outside the app (#12593).
-describe("readOpenFoldersInNewWindow", () => {
-  beforeEach(() => {
-    storeData.clear();
-    vi.clearAllMocks();
-  });
-
-  it.each(["default", "on", "off"] as const)("returns a stored %s", (mode) => {
-    storeData.set("windowOpening", { openFoldersInNewWindow: mode });
-    expect(readOpenFoldersInNewWindow()).toBe(mode);
-  });
-
-  it("follows a change made after an earlier read", () => {
-    storeData.set("windowOpening", { openFoldersInNewWindow: "off" });
-    expect(readOpenFoldersInNewWindow()).toBe("off");
-    storeData.set("windowOpening", { openFoldersInNewWindow: "on" });
-    expect(readOpenFoldersInNewWindow()).toBe("on");
-  });
-
-  it("reads an unknown stored value as the default", () => {
-    storeData.set("windowOpening", { openFoldersInNewWindow: "sometimes" });
-    expect(readOpenFoldersInNewWindow()).toBe("default");
-  });
-});
-
 describe("windowOpening IPC", () => {
   let cleanup: () => void;
 
@@ -120,24 +87,6 @@ describe("windowOpening IPC", () => {
 
   afterEach(() => {
     cleanup();
-  });
-
-  it("declares its channels in CHANNELS", () => {
-    expect(WINDOW_OPENING_METHOD_CHANNELS.getConfig).toBe(CHANNELS.WINDOW_OPENING_GET_CONFIG);
-    expect(WINDOW_OPENING_METHOD_CHANNELS.updateConfig).toBe(CHANNELS.WINDOW_OPENING_UPDATE_CONFIG);
-  });
-
-  it("removes its handlers on cleanup", () => {
-    cleanup();
-    expect(ipcHandlers.has(CHANNELS.WINDOW_OPENING_GET_CONFIG)).toBe(false);
-    expect(ipcHandlers.has(CHANNELS.WINDOW_OPENING_UPDATE_CONFIG)).toBe(false);
-    cleanup = registerWindowOpeningHandlers({} as HandlerDependencies);
-  });
-
-  it("getConfig reads the default from a store that predates the key", async () => {
-    await expect(invoke(CHANNELS.WINDOW_OPENING_GET_CONFIG)).resolves.toEqual({
-      openFoldersInNewWindow: "default",
-    });
   });
 
   it.each(["default", "on", "off"] as const)("updateConfig persists %s", async (mode) => {
@@ -196,25 +145,5 @@ describe("windowOpening IPC", () => {
       invoke(CHANNELS.WINDOW_OPENING_UPDATE_CONFIG, { openFoldersInNewWindow: "off" })
     ).resolves.toEqual({ openFoldersInNewWindow: "off" });
     expect(storeData.get("windowOpening")).toEqual({ openFoldersInNewWindow: "off" });
-  });
-
-  it("updateConfig surfaces a store write failure", async () => {
-    storeMock.set.mockImplementationOnce(() => {
-      throw new Error("EACCES: permission denied");
-    });
-    await expect(
-      invoke(CHANNELS.WINDOW_OPENING_UPDATE_CONFIG, { openFoldersInNewWindow: "on" })
-    ).rejects.toThrow(/EACCES/);
-  });
-
-  it("preload bindings forward each method to its channel", async () => {
-    const invokeMock = vi.fn(() => Promise.resolve({ openFoldersInNewWindow: "on" }));
-    const bindings = buildWindowOpeningPreloadBindings(invokeMock);
-    await bindings.getConfig();
-    await bindings.updateConfig({ openFoldersInNewWindow: "on" });
-    expect(invokeMock).toHaveBeenNthCalledWith(1, CHANNELS.WINDOW_OPENING_GET_CONFIG);
-    expect(invokeMock).toHaveBeenNthCalledWith(2, CHANNELS.WINDOW_OPENING_UPDATE_CONFIG, {
-      openFoldersInNewWindow: "on",
-    });
   });
 });

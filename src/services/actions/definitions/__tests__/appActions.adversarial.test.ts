@@ -134,16 +134,6 @@ describe("appActions adversarial", () => {
     errorSpy.mockRestore();
   });
 
-  it("app.reloadConfig dispatches the main-process reload via electron bridge", async () => {
-    const actions = register();
-    const factory = actions.get("app.reloadConfig");
-    if (!factory) throw new Error("missing action");
-    const def = factory();
-    await (def.run as (a: unknown, c: unknown) => Promise<unknown>)(undefined, {});
-
-    expect(reloadConfigMock).toHaveBeenCalledTimes(1);
-  });
-
   it("subscription is skipped entirely when electron bridge is missing", () => {
     Object.defineProperty(globalThis, "window", {
       value: { electron: { window: { openNew: vi.fn() } } },

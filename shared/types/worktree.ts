@@ -140,6 +140,12 @@ export interface LifecycleCommandReviewSource {
 export interface LifecycleCommandReview {
   fingerprint: string;
   sources: LifecycleCommandReviewSource[];
+  /**
+   * Approving resumes a setup this worktree skipped, and that setup goes on to
+   * provision a resource: the label of the group whose commands it runs. The
+   * group appears in `sources` only while its commands are unapproved.
+   */
+  provisionAfterSetup?: string;
 }
 
 /** Longest failure text carried on a setup status. See {@link WorktreeSetupStatus.error}. */
@@ -340,6 +346,12 @@ export interface Worktree {
 
   /** Number of commits behind the upstream tracking branch */
   behindCount?: number;
+
+  /** Full ref the upstream tracking branch resolves to (`refs/remotes/origin/feature/x`) */
+  upstreamRef?: string;
+
+  /** Commit the upstream tracking ref points at; moves on a push, never on a local commit */
+  upstreamHeadSha?: string;
 
   /** Name of the base branch (e.g. "develop") for divergence display */
   baseBranchName?: string | null;

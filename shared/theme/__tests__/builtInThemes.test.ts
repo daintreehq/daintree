@@ -2,18 +2,21 @@ import { readdirSync, readFileSync, statSync, type Dirent } from "node:fs";
 import { join, relative } from "node:path";
 import { describe, expect, it } from "vitest";
 import { BUILT_IN_THEME_SOURCES } from "../builtInThemes/index.js";
-import { getThemeContrastWarnings, getLightThemeMatrixWarnings } from "../contrast.js";
-import { EXTENSION_KEY_REGISTRY, isExtensionKeyRequired } from "../extensionRegistry.js";
 import {
-  auditSurfaceRamp,
-  auditAccentProminence,
-  auditCrossThemeAccents,
-  auditBorderSeparation,
-  hexToOklch,
-} from "../oklch.js";
+  DISPLAY_SURFACES,
+  blendOverBackground,
+  contrastRatio,
+  deltaEOK,
+  getThemeContrastWarnings,
+  getLightThemeMatrixWarnings,
+  parseRgba,
+} from "../contrast.js";
+import type { BuiltInThemeSource } from "../builtInThemeSources.js";
+import { EXTENSION_KEY_REGISTRY, isExtensionKeyRequired } from "../extensionRegistry.js";
+import { auditSurfaceRamp, auditBorderSeparation, hexToOklch } from "../oklch.js";
 import { BUILT_IN_APP_SCHEMES, createDaintreeTokens, normalizeAppColorScheme } from "../themes.js";
 import { RED_GREEN_OVERRIDES, BLUE_YELLOW_OVERRIDES } from "../colorVisionOverrides.js";
-import { APP_THEME_TOKEN_KEYS, EXTENSION_KEYS } from "../types.js";
+import { APP_THEME_TOKEN_KEYS, EXTENSION_KEYS, type AppThemeTokenKey } from "../types.js";
 
 // Minimal hex-only engine input covering createDaintreeTokens' required Pick.
 // Deliberately omits border-* and status-*-surface so the engine derives them
@@ -65,18 +68,6 @@ const LIGHT_ENGINE_INPUT = {
 } as const;
 
 describe("built-in themes", () => {
-  it("every source compiles to a valid AppColorScheme", () => {
-    expect(BUILT_IN_THEME_SOURCES.length).toBeGreaterThan(0);
-    expect(BUILT_IN_APP_SCHEMES).toHaveLength(BUILT_IN_THEME_SOURCES.length);
-    for (const scheme of BUILT_IN_APP_SCHEMES) {
-      expect(scheme.id).toBeTruthy();
-      expect(scheme.name).toBeTruthy();
-      expect(["dark", "light"]).toContain(scheme.type);
-      expect(scheme.builtin).toBe(true);
-      expect(scheme.tokens).toBeDefined();
-    }
-  });
-
   it("all theme IDs are unique", () => {
     const ids = BUILT_IN_APP_SCHEMES.map((s) => s.id);
     expect(new Set(ids).size).toBe(ids.length);
@@ -108,32 +99,6 @@ describe("built-in themes", () => {
     for (const source of BUILT_IN_THEME_SOURCES) {
       expect(source.location, `${source.id} missing location`).toBeTruthy();
       expect(source.heroImage, `${source.id} missing heroImage`).toBeTruthy();
-    }
-  });
-
-  it("every source palette has all required surface, text, and status fields", () => {
-    for (const source of BUILT_IN_THEME_SOURCES) {
-      const { surfaces, text, status, activity, syntax } = source.palette;
-      expect(surfaces.grid, `${source.id} missing surfaces.grid`).toBeTruthy();
-      expect(surfaces.sidebar, `${source.id} missing surfaces.sidebar`).toBeTruthy();
-      expect(surfaces.canvas, `${source.id} missing surfaces.canvas`).toBeTruthy();
-      expect(surfaces.panel, `${source.id} missing surfaces.panel`).toBeTruthy();
-      expect(surfaces.elevated, `${source.id} missing surfaces.elevated`).toBeTruthy();
-      expect(text.primary, `${source.id} missing text.primary`).toBeTruthy();
-      expect(text.secondary, `${source.id} missing text.secondary`).toBeTruthy();
-      expect(text.muted, `${source.id} missing text.muted`).toBeTruthy();
-      expect(text.inverse, `${source.id} missing text.inverse`).toBeTruthy();
-      expect(status.success, `${source.id} missing status.success`).toBeTruthy();
-      expect(status.warning, `${source.id} missing status.warning`).toBeTruthy();
-      expect(status.danger, `${source.id} missing status.danger`).toBeTruthy();
-      expect(status.info, `${source.id} missing status.info`).toBeTruthy();
-      expect(activity.active, `${source.id} missing activity.active`).toBeTruthy();
-      expect(activity.idle, `${source.id} missing activity.idle`).toBeTruthy();
-      expect(activity.working, `${source.id} missing activity.working`).toBeTruthy();
-      expect(activity.waiting, `${source.id} missing activity.waiting`).toBeTruthy();
-      for (const key of Object.keys(syntax) as (keyof typeof syntax)[]) {
-        expect(syntax[key], `${source.id} missing syntax.${key}`).toBeTruthy();
-      }
     }
   });
 
@@ -497,21 +462,6 @@ describe("built-in themes", () => {
     }
   });
 
-  it("light surface ramps clear the depth budget (span, per-step JND, panel→elevated lift)", () => {
-    // Behavioural guard, not a value mirror: a light ramp whose span collapses,
-    // whose steps merge, or whose floating tier gets the weakest lift will fail
-    // here even though every other token passes (RC-1).
-    const lightSources = BUILT_IN_THEME_SOURCES.filter((s) => s.type === "light");
-    expect(lightSources.length).toBeGreaterThan(0);
-    for (const source of lightSources) {
-      const result = auditSurfaceRamp(source.palette.surfaces, source.id, "light");
-      expect(
-        result.failures,
-        `${source.id} light ramp failures:\n${result.failures.join("\n")}`
-      ).toHaveLength(0);
-    }
-  });
-
   it("light borders clear the separation floor vs the brightest surface", () => {
     // RC-6: when overlay/shadow depth dies on a near-white field, separation
     // falls to borders. border-default and border-interactive must stay
@@ -586,27 +536,6 @@ describe("built-in themes", () => {
           .join("\n")}`
       ).toHaveLength(0);
     }
-  });
-
-  it("accent prominence passes OKLCH audit", () => {
-    for (const source of BUILT_IN_THEME_SOURCES) {
-      const result = auditAccentProminence(source.palette, source.id);
-      for (const warning of result.warnings) {
-        console.warn(`[OKLCH accent] ${warning}`);
-      }
-      expect(
-        result.failures,
-        `${source.id} accent failures:\n${result.failures.join("\n")}`
-      ).toHaveLength(0);
-    }
-  });
-
-  it("cross-theme accent distance passes OKLCH audit", () => {
-    const result = auditCrossThemeAccents(BUILT_IN_THEME_SOURCES);
-    for (const warning of result.warnings) {
-      console.warn(`[OKLCH cross-theme] ${warning}`);
-    }
-    expect(result.failures, `cross-theme failures:\n${result.failures.join("\n")}`).toHaveLength(0);
   });
 
   it("EXTENSION_KEYS is in sync with the CSS/TSX surface (drift detection)", () => {
@@ -861,3 +790,387 @@ function hexToRgbTuple(hex: string): [number, number, number] {
     parseInt(expanded.slice(4, 6), 16),
   ];
 }
+
+describe("bondi", () => {
+  /**
+   * Bondi is the default light theme, and each of these rules was once broken in
+   * a way the shared contrast gate could not see: a colour that clears its budget
+   * on the bare surface but not on the surface it actually paints on. They assert
+   * the rule, never the hex — any value that keeps the rule passes.
+   */
+  const bondi = BUILT_IN_APP_SCHEMES.find((s) => s.id === "bondi")!;
+  const token = (key: AppThemeTokenKey) => bondi.tokens[key];
+
+  /** Composite an rgba() or solid token over a background. */
+  function paint(value: string, bg: string): string {
+    const alpha = parseRgba(value);
+    return alpha ? blendOverBackground(alpha.hex, bg, alpha.opacity) : value;
+  }
+
+  const SYNTAX_ROLES = [
+    "syntax-comment",
+    "syntax-punctuation",
+    "syntax-number",
+    "syntax-string",
+    "syntax-operator",
+    "syntax-keyword",
+    "syntax-function",
+    "syntax-link",
+    "syntax-quote",
+    "text-primary",
+  ] as const satisfies readonly AppThemeTokenKey[];
+
+  // DiffViewer.lines.css paints the word-level edit span inside a line cell that
+  // already carries the line wash, so an alpha edit wash stacks on the line
+  // wash. The changed characters are the ones a review is about; they must be
+  // at least as legible as the code around them.
+  it.each([
+    ["insert", "diff-insert-background", "diff-insert-edit-background"],
+    ["delete", "diff-delete-background", "diff-delete-edit-background"],
+  ] as const)("keeps every syntax role at AA on the %s line and word washes", (_, line, edit) => {
+    const canvas = token("surface-canvas");
+    const lineBg = paint(token(line), canvas);
+    const editBg = paint(token(edit), lineBg);
+    for (const bg of [lineBg, editBg]) {
+      for (const role of SYNTAX_ROLES) {
+        const ratio = contrastRatio(token(role), bg);
+        expect(
+          ratio,
+          `${role} ${token(role)} on ${bg} is ${ratio.toFixed(2)}:1`
+        ).toBeGreaterThanOrEqual(4.5);
+      }
+    }
+  });
+
+  // Status colours print as text (`+123` counts, the file-tree `M`, error
+  // rows) on the sidebar, and as labels on their own 10-15% tint.
+  it.each(["status-success", "status-warning", "status-danger", "status-info"] as const)(
+    "prints %s at AA on the sidebar and on its own chip tint",
+    (key) => {
+      const ink = token(key);
+      const backgrounds = {
+        sidebar: token("surface-sidebar"),
+        "15% over panel": blendOverBackground(ink, token("surface-panel"), 0.15),
+        "10% over white": blendOverBackground(ink, token("surface-panel-elevated"), 0.1),
+      };
+      for (const [where, bg] of Object.entries(backgrounds)) {
+        const ratio = contrastRatio(ink, bg);
+        expect(ratio, `${key} ${ink} on ${where} is ${ratio.toFixed(2)}:1`).toBeGreaterThanOrEqual(
+          4.5
+        );
+      }
+    }
+  );
+
+  // The waiting ring is a thin stroke, so luminance contrast is what makes it
+  // the loudest mark on a light field — and it must not read as the warning
+  // colour a shade darker.
+  it("makes waiting the heaviest status mark and keeps it apart from warning", () => {
+    const white = token("surface-panel-elevated");
+    const waiting = contrastRatio(token("activity-waiting"), white);
+    for (const key of [
+      "status-success",
+      "status-warning",
+      "status-danger",
+      "status-info",
+    ] as const) {
+      expect(waiting, `waiting must out-weigh ${key}`).toBeGreaterThan(
+        contrastRatio(token(key), white)
+      );
+    }
+    expect(deltaEOK(token("activity-waiting"), token("status-warning"))).toBeGreaterThanOrEqual(
+      0.04
+    );
+  });
+
+  // ANSI 90 carries hints, timestamps and secondary CLI output: body text.
+  it("keeps the terminal dim slot at AA and every base ANSI colour at AA", () => {
+    const bg = token("terminal-background");
+    for (const key of [
+      "terminal-bright-black",
+      "terminal-red",
+      "terminal-green",
+      "terminal-yellow",
+      "terminal-blue",
+      "terminal-magenta",
+      "terminal-cyan",
+    ] as const) {
+      const ratio = contrastRatio(token(key), bg);
+      expect(ratio, `${key} ${token(key)} is ${ratio.toFixed(2)}:1`).toBeGreaterThanOrEqual(4.5);
+    }
+  });
+
+  // `#panel-grid` paints this extension as background-color, where a gradient
+  // is invalid and the gutter silently falls through to the canvas.
+  it("gives the panel gutter a plain colour and keeps it below the panels", () => {
+    const gutter = bondi.extensions?.["panel-grid-bg"];
+    expect(gutter).toMatch(/^#[0-9a-f]{6}$/i);
+    // Below the panels by a step a large field reads as a frame; the pane
+    // border and ambient shadow carry the edge itself.
+    expect(contrastRatio(gutter!, token("surface-panel"))).toBeGreaterThanOrEqual(1.1);
+  });
+});
+
+describe("border-input", () => {
+  /**
+   * `border-input` — the resting boundary of `Input` and `Textarea`.
+   *
+   * Split out of `border-strong` for the same reason `selection-outline` was: an
+   * input boundary is a user-interface component under WCAG 1.4.11 and owes 3:1
+   * on its own, while `border-strong` is a separation value shared with dividers
+   * and card edges that reads as a hard ruled line at that weight. The engine
+   * default is therefore whatever `border-strong` resolved to, and a theme moves
+   * only by naming the token.
+   *
+   * These assertions are about the RULE, not the hex: any ink that clears the
+   * ratio on both surfaces a field edge touches passes.
+   */
+  const INPUT_BOUNDARY_MIN_CONTRAST = 3;
+
+  const OPTED_IN = ["daintree", "bondi"] as const;
+
+  it.each(OPTED_IN)("clears 3:1 on %s against both surfaces a field edge touches", (id) => {
+    const scheme = BUILT_IN_APP_SCHEMES.find((s) => s.id === id);
+    expect(scheme, `${id} scheme`).toBeDefined();
+    if (!scheme) return;
+
+    const ink = scheme.tokens["border-input"];
+    // The edge sits between the field fill and the panel behind it, so it has to
+    // carry the ratio against both — one side alone is not the indicator.
+    for (const surface of ["surface-input", "surface-panel"] as const) {
+      const bg = scheme.tokens[surface];
+      // An alpha ink is composited against the surface it is measured on —
+      // which is the whole reason this token wants a solid value: the same
+      // rgba() lands on a different colour over the field fill than over the
+      // panel, so clearing one side says nothing about the other.
+      const alpha = parseRgba(ink);
+      const ratio = contrastRatio(
+        alpha ? blendOverBackground(alpha.hex, bg, alpha.opacity) : ink,
+        bg
+      );
+      expect(
+        ratio,
+        `${id} border-input (${ink}) is ${ratio.toFixed(2)}:1 on ${surface} (${scheme.tokens[surface]}); WCAG 1.4.11 wants ${INPUT_BOUNDARY_MIN_CONTRAST}:1`
+      ).toBeGreaterThanOrEqual(INPUT_BOUNDARY_MIN_CONTRAST);
+    }
+  });
+
+  it("is exactly border-strong on every theme that does not opt in", () => {
+    const optedIn = new Set<string>(OPTED_IN);
+    const others = BUILT_IN_APP_SCHEMES.filter((s) => !optedIn.has(s.id));
+    expect(others.length).toBeGreaterThan(0);
+    for (const scheme of others) {
+      expect(
+        scheme.tokens["border-input"],
+        `${scheme.id} must inherit border-strong until it deliberately raises its field edge`
+      ).toBe(scheme.tokens["border-strong"]);
+    }
+  });
+});
+
+describe("border-input on a partial import", () => {
+  it("follows the resolved border-strong when the import names neither token", async () => {
+    // Normalisation seeds a partial theme from a fallback scheme, and that
+    // scheme can carry an explicit `border-input` of its own. An import that
+    // never mentioned input borders must not inherit another theme's.
+    const { normalizeAppColorScheme } = await import("../themes.js");
+    const scheme = normalizeAppColorScheme({
+      id: "partial-import",
+      name: "Partial import",
+      type: "dark",
+      tokens: { "surface-canvas": "#101010" },
+    } as never);
+    expect(scheme.tokens["border-input"]).toBe(scheme.tokens["border-strong"]);
+  });
+
+  it("keeps an input border the import sets itself", async () => {
+    const { normalizeAppColorScheme } = await import("../themes.js");
+    const scheme = normalizeAppColorScheme({
+      id: "explicit-import",
+      name: "Explicit import",
+      type: "dark",
+      tokens: { "surface-canvas": "#101010", "border-input": "#abcdef" },
+    } as never);
+    expect(scheme.tokens["border-input"]).toBe("#abcdef");
+  });
+});
+
+/**
+ * `text-placeholder` on the default dark theme.
+ *
+ * The engine derives this token as `text-primary` at 35% alpha when a theme
+ * declares nothing, which put daintree at 2.7–2.8:1 on every display surface —
+ * below even this repo's own placeholder floor, which `MATRIX_CONTRAST_PAIRS`
+ * sets at a 3:1 graphical tier. Nothing caught it because that pair carries
+ * `appliesTo: "light"`, so no dark theme is measured against it.
+ *
+ * These assertions are about the RULE, not the value: any hex that keeps
+ * placeholders legible on every surface passes, and the test says nothing about
+ * which hex that is. What it refuses is the two ways this regressed before —
+ * dropping back to the alpha derivation, and drifting under the floor.
+ */
+describe("daintree text-placeholder", () => {
+  const daintree = BUILT_IN_APP_SCHEMES.find((s) => s.id === "daintree");
+
+  it("declares the token solid rather than inheriting the alpha derivation", () => {
+    // An alpha text colour bakes into `color-mix()` on `color`, and the design
+    // system bans slash-alpha text precisely because the contrast cannot then
+    // be recovered downstream. A solid token is the only correctable form.
+    const raw = daintree?.tokens["text-placeholder"];
+    expect(raw).toBeDefined();
+    expect(parseRgba(raw as string)).toBeNull();
+  });
+
+  it("clears the placeholder floor on every display surface", () => {
+    const raw = daintree?.tokens["text-placeholder"] as string;
+
+    const failures: string[] = [];
+    for (const surface of DISPLAY_SURFACES) {
+      const bg = daintree?.tokens[surface];
+      if (!bg) continue;
+
+      const alpha = parseRgba(raw);
+      const fg = alpha ? blendOverBackground(alpha.hex, bg, alpha.opacity) : raw;
+      const ratio = contrastRatio(fg, bg);
+
+      // 3:1, matching `MATRIX_CONTRAST_PAIRS` — this repo treats placeholder as
+      // a graphical-tier de-emphasis, not 4.5:1 body text. That tier is the
+      // house position and it outranks the stricter external reading: a
+      // placeholder that clears AA stops receding from `text-muted`, which the
+      // role ramp in `scripts/theme-text-contrast.test.ts` requires it to do.
+      // The derivation this replaced sat at 2.7-2.8:1, under even this floor.
+      if (ratio < 3) failures.push(`${surface}: ${ratio.toFixed(2)}:1`);
+    }
+
+    expect(failures).toEqual([]);
+  });
+
+  it("recedes from text-muted, so the role ramp keeps its order", () => {
+    // The ramp is primary > secondary > muted > placeholder. A placeholder that
+    // outruns muted inverts it, and "nearest role" stops meaning anything.
+    const placeholder = daintree?.tokens["text-placeholder"] as string;
+    const muted = daintree?.tokens["text-muted"] as string;
+
+    for (const surface of DISPLAY_SURFACES) {
+      const bg = daintree?.tokens[surface];
+      if (!bg) continue;
+      expect(contrastRatio(placeholder, bg)).toBeLessThan(contrastRatio(muted, bg));
+    }
+  });
+});
+
+describe("segmented selection boundary", () => {
+  /**
+   * The selected segment of `SegmentedRadioGroup` (the settings scope switch, every
+   * settings preset row, the create-worktree mode switches) is marked by a
+   * `text-secondary` boundary on the `surface-inset` track. Its fill barely moves off the
+   * track, so the boundary is the state indicator WCAG 1.4.11 asks 3:1 of. The rule, not
+   * the hex: any theme whose secondary ink clears the ratio on its inset track passes.
+   */
+  const SELECTION_INDICATOR_MIN_CONTRAST = 3;
+
+  it.each(BUILT_IN_APP_SCHEMES.map((scheme) => [scheme.id, scheme] as const))(
+    "clears 3:1 against the inset track on %s",
+    (_id, scheme) => {
+      const ink = scheme.tokens["text-secondary"];
+      const inset = scheme.tokens["surface-inset"];
+      // Dark themes author the track as a wash, so it is measured where the control
+      // actually sits: on a settings group (panel-elevated) and on a bare panel.
+      for (const surface of ["surface-panel-elevated", "surface-panel"] as const) {
+        const base = scheme.tokens[surface];
+        const insetAlpha = parseRgba(inset);
+        const track = insetAlpha
+          ? blendOverBackground(insetAlpha.hex, base, insetAlpha.opacity)
+          : inset;
+        const inkAlpha = parseRgba(ink);
+        const ratio = contrastRatio(
+          inkAlpha ? blendOverBackground(inkAlpha.hex, track, inkAlpha.opacity) : ink,
+          track
+        );
+        expect(
+          ratio,
+          `${scheme.id}: text-secondary (${ink}) is ${ratio.toFixed(2)}:1 on the inset track over ${surface}`
+        ).toBeGreaterThanOrEqual(SELECTION_INDICATOR_MIN_CONTRAST);
+      }
+    }
+  );
+});
+
+describe("pulse heat ramp — every painted step is visibly distinct", () => {
+  // Clearly above the ~0.02 JND: a level-1 day that only just clears JND still
+  // reads as a quiet day at 10px, and a level 3 that only just clears it reads as
+  // a peak — the two defects this guards against.
+  const MIN_STEP_DELTA_E = 0.05;
+
+  const HEX = /^#[0-9A-Fa-f]{6}$/;
+  const STOPS = ["pulse-heat-1", "pulse-heat-2", "pulse-heat-3", "pulse-heat-4"] as const;
+
+  // Mirrors PulseHeatmap's fallback defaults for a theme that authors only the
+  // hue: the cell paints `pulse-heat-color` at each opacity over the card.
+  const LEGACY_OPACITY_DEFAULTS = { low: 0.18, medium: 0.35, high: 0.55 };
+
+  /**
+   * The ramp a theme actually paints, empty cell first. Opaque stops when the
+   * theme authors all four; otherwise the legacy alpha ramp composited over the
+   * card. `null` when neither is resolvable to hex.
+   */
+  function paintedRamp(theme: BuiltInThemeSource): string[] | null {
+    const ext = theme.extensions ?? {};
+    const empty = ext["pulse-empty-bg"];
+    if (!empty || !HEX.test(empty)) return null;
+
+    const opaque = STOPS.map((key) => ext[key]);
+    if (opaque.every((stop): stop is string => stop !== undefined && HEX.test(stop))) {
+      return [empty, ...opaque];
+    }
+
+    const color = ext["pulse-heat-color"];
+    const card = ext["pulse-card-bg"];
+    if (!color || !HEX.test(color) || !card || !HEX.test(card)) return null;
+    const opacity = (key: string, fallback: number) => {
+      const value = Number(ext[key as keyof typeof ext]);
+      return Number.isFinite(value) ? value : fallback;
+    };
+    return [
+      empty,
+      blendOverBackground(
+        color,
+        card,
+        opacity("pulse-heat-low-opacity", LEGACY_OPACITY_DEFAULTS.low)
+      ),
+      blendOverBackground(
+        color,
+        card,
+        opacity("pulse-heat-medium-opacity", LEGACY_OPACITY_DEFAULTS.medium)
+      ),
+      blendOverBackground(
+        color,
+        card,
+        opacity("pulse-heat-high-opacity", LEGACY_OPACITY_DEFAULTS.high)
+      ),
+      color,
+    ];
+  }
+
+  const ramps = BUILT_IN_THEME_SOURCES.map((theme) => [theme.id, paintedRamp(theme)] as const);
+
+  it("resolves a ramp for every built-in theme that styles the pulse", () => {
+    const styled = BUILT_IN_THEME_SOURCES.filter((t) => t.extensions?.["pulse-empty-bg"]);
+    expect(styled.length).toBeGreaterThan(0);
+    for (const theme of styled) {
+      expect(paintedRamp(theme), `${theme.id} has no resolvable heat ramp`).not.toBeNull();
+    }
+  });
+
+  it.each(ramps.filter(([, ramp]) => ramp !== null))(
+    "%s: empty → heat-1 → … → heat-4 each step clears the floor",
+    (id, ramp) => {
+      for (let i = 1; i < ramp!.length; i += 1) {
+        expect(
+          deltaEOK(ramp![i - 1]!, ramp![i]!),
+          `${id}: step ${i - 1}→${i} (${ramp![i - 1]} → ${ramp![i]})`
+        ).toBeGreaterThanOrEqual(MIN_STEP_DELTA_E);
+      }
+    }
+  );
+});

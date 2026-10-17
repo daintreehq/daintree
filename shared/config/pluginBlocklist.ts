@@ -4,7 +4,7 @@
  * A small remote list of plugins Daintree refuses to load — the cheaper,
  * faster precursor to full publisher-identity signing. Fetched once at
  * startup from a Daintree-controlled endpoint, cached on disk for offline
- * enforcement, and matched by `{ name, versionRange }` (with `jti` reserved
+ * enforcement, and matched by `{ name, ranges }` (with `jti` reserved
  * for a future signed-identity model). The fetch fails open: a network or
  * parse failure never blocks a user's plugins.
  */

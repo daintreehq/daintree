@@ -23,6 +23,7 @@ import type {
 } from "@shared/types/ipc/project";
 import { PERF_MARKS } from "@shared/perf/marks";
 import { markSwitch, setActiveSwitchTrace } from "@/utils/switchTrace";
+import { clientErrorCode } from "@/utils/clientAppError";
 import type { IdArrayFieldEdit } from "@shared/utils/layoutMerge";
 import type {
   GitInitOptions,
@@ -54,6 +55,25 @@ let subscribed = false;
 const SETTINGS_TTL_MS = 500;
 const settingsInflight: Map<string, Promise<ProjectSettings>> = new Map();
 const settingsCache: Map<string, { value: ProjectSettings; expiresAt: number }> = new Map();
+
+/**
+ * Adds an approved host by reading the settings and saving them whole, as
+ * builds before `project:add-browser-allowed-host` did. Only for a host that
+ * lacks that channel: a whole save can revert a write made between the read
+ * and the save, which the field-level write cannot.
+ */
+async function addBrowserAllowedHostBySavingSettings(
+  projectId: string,
+  hostname: string
+): Promise<string[]> {
+  const host = hostname.trim().toLowerCase();
+  const settings = await window.electron.project.getSettings(projectId);
+  const hosts = settings.browserAllowedHosts ?? [];
+  if (hosts.some((saved) => saved.toLowerCase() === host)) return hosts;
+  const next = [...hosts, host];
+  await window.electron.project.saveSettings(projectId, { ...settings, browserAllowedHosts: next });
+  return next;
+}
 
 export function invalidateCurrentCache(): void {
   hasCachedValue = false;
@@ -233,6 +253,24 @@ export const projectClient = {
     return window.electron.project.saveSettings(projectId, settings);
   },
 
+  addBrowserAllowedHost: async (projectId: string, hostname: string): Promise<string[]> => {
+    invalidateProjectSettingsCache(projectId);
+    try {
+      return await window.electron.project.addBrowserAllowedHost(projectId, hostname);
+    } catch (error) {
+      // A remote host whose Daintree predates the channel refuses it as one it
+      // doesn't know; save the way that build did instead.
+      if (clientErrorCode(error) !== "CHANNEL_NOT_REMOTABLE") throw error;
+      console.warn(
+        "[projectClient] Host has no field-level allow-list write; saving the settings whole"
+      );
+      return await addBrowserAllowedHostBySavingSettings(projectId, hostname);
+    } finally {
+      // A read that landed while Main was writing may hold the file from before.
+      invalidateProjectSettingsCache(projectId);
+    }
+  },
+
   detectRunners: (projectId: string): Promise<RunCommand[]> => {
     return window.electron.project.detectRunners(projectId);
   },
@@ -297,8 +335,8 @@ export const projectClient = {
     return window.electron.project.onCloneProgress(callback);
   },
 
-  cancelClone: (): Promise<void> => {
-    return window.electron.project.cancelClone();
+  cancelClone: (opId?: string): Promise<void> => {
+    return window.electron.project.cancelClone(opId);
   },
 
   getRecipes: (

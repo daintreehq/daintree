@@ -57,6 +57,10 @@ vi.mock("../OsDndService.js", () => ({
 
 import { events } from "../events.js";
 import { agentNotificationService } from "../AgentNotificationService.js";
+import {
+  _resetEndpointRegistryForTesting,
+  getEndpointRegistry,
+} from "../../ipc/endpointRegistry.js";
 
 /** Stand-in for a project view's webContents id — the renderer that owns the watched panels. */
 const OWNER = 101;
@@ -209,11 +213,11 @@ describe("AgentNotificationService", () => {
     vi.advanceTimersByTime(5000);
 
     expect(notificationServiceMock.showWatchNotification).toHaveBeenCalledWith(
-      "Agent completed",
+      "Agent finished",
       expect.stringContaining("finished"),
       expect.objectContaining({ panelId: "term-1" }),
       "notification:watch-navigate",
-      { silent: true, ownerWebContentsId: OWNER }
+      { silent: true, ownerWebContentsId: OWNER, category: "completed" }
     );
   });
 
@@ -228,7 +232,7 @@ describe("AgentNotificationService", () => {
       expect.stringContaining("waiting for input"),
       expect.objectContaining({ panelId: "term-1" }),
       "notification:watch-navigate",
-      { silent: true, ownerWebContentsId: OWNER, closeWithPanels: ["term-1"] }
+      { silent: true, ownerWebContentsId: OWNER, closeWithPanels: ["term-1"], category: "waiting" }
     );
   });
 
@@ -259,15 +263,6 @@ describe("AgentNotificationService", () => {
 
     expect(notificationServiceMock.showWatchNotification).not.toHaveBeenCalled();
     expect(soundServiceMock.playFile).not.toHaveBeenCalled();
-  });
-
-  it("plays sound when soundEnabled is true and a notification type is enabled", () => {
-    mockStore({ waitingEnabled: true, soundEnabled: true });
-
-    events.emit("agent:state-changed", makePayload("waiting"));
-    vi.advanceTimersByTime(200);
-
-    expect(soundServiceMock.playFile).toHaveBeenCalled();
   });
 
   it("does not play sound when soundEnabled is false", () => {
@@ -329,7 +324,7 @@ describe("AgentNotificationService", () => {
       expect.stringContaining("waiting for input"),
       expect.objectContaining({ panelId: "term-1" }),
       "notification:watch-navigate",
-      { silent: true, ownerWebContentsId: OWNER, closeWithPanels: ["term-1"] }
+      { silent: true, ownerWebContentsId: OWNER, closeWithPanels: ["term-1"], category: "waiting" }
     );
   });
 
@@ -362,11 +357,11 @@ describe("AgentNotificationService", () => {
     vi.advanceTimersByTime(3000);
 
     expect(notificationServiceMock.showWatchNotification).toHaveBeenCalledWith(
-      "Agent completed",
+      "Agent finished",
       expect.stringContaining("finished"),
       expect.objectContaining({ panelId: "term-1" }),
       "notification:watch-navigate",
-      { silent: true, ownerWebContentsId: OWNER }
+      { silent: true, ownerWebContentsId: OWNER, category: "completed" }
     );
   });
 
@@ -681,7 +676,12 @@ describe("AgentNotificationService", () => {
         "3 agents waiting for input",
         expect.any(Object),
         "notification:watch-navigate",
-        { silent: true, ownerWebContentsId: OWNER, closeWithPanels: ["term-1", "term-2", "term-3"] }
+        {
+          silent: true,
+          ownerWebContentsId: OWNER,
+          closeWithPanels: ["term-1", "term-2", "term-3"],
+          category: "waiting",
+        }
       );
       expect(soundServiceMock.playFile).toHaveBeenCalledTimes(1);
     });
@@ -698,7 +698,12 @@ describe("AgentNotificationService", () => {
         expect.stringContaining("agent-1 is waiting for input"),
         expect.any(Object),
         "notification:watch-navigate",
-        { silent: true, ownerWebContentsId: OWNER, closeWithPanels: ["term-1"] }
+        {
+          silent: true,
+          ownerWebContentsId: OWNER,
+          closeWithPanels: ["term-1"],
+          category: "waiting",
+        }
       );
     });
 
@@ -716,7 +721,12 @@ describe("AgentNotificationService", () => {
         expect.stringContaining("agent-1 is waiting for approval"),
         expect.any(Object),
         "notification:watch-navigate",
-        { silent: true, ownerWebContentsId: OWNER, closeWithPanels: ["term-1"] }
+        {
+          silent: true,
+          ownerWebContentsId: OWNER,
+          closeWithPanels: ["term-1"],
+          category: "waiting",
+        }
       );
     });
 
@@ -734,7 +744,12 @@ describe("AgentNotificationService", () => {
         expect.stringContaining("agent-1 is waiting for input"),
         expect.any(Object),
         "notification:watch-navigate",
-        { silent: true, ownerWebContentsId: OWNER, closeWithPanels: ["term-1"] }
+        {
+          silent: true,
+          ownerWebContentsId: OWNER,
+          closeWithPanels: ["term-1"],
+          category: "waiting",
+        }
       );
     });
 
@@ -758,7 +773,12 @@ describe("AgentNotificationService", () => {
         expect.stringContaining("is waiting for approval"),
         expect.any(Object),
         "notification:watch-navigate",
-        { silent: true, ownerWebContentsId: OWNER, closeWithPanels: ["term-1"] }
+        {
+          silent: true,
+          ownerWebContentsId: OWNER,
+          closeWithPanels: ["term-1"],
+          category: "waiting",
+        }
       );
     });
 
@@ -780,7 +800,12 @@ describe("AgentNotificationService", () => {
         "3 agents waiting for approval",
         expect.any(Object),
         "notification:watch-navigate",
-        { silent: true, ownerWebContentsId: OWNER, closeWithPanels: ["term-1", "term-2", "term-3"] }
+        {
+          silent: true,
+          ownerWebContentsId: OWNER,
+          closeWithPanels: ["term-1", "term-2", "term-3"],
+          category: "waiting",
+        }
       );
     });
 
@@ -804,7 +829,12 @@ describe("AgentNotificationService", () => {
         "2 agents waiting for input",
         expect.any(Object),
         "notification:watch-navigate",
-        { silent: true, ownerWebContentsId: OWNER, closeWithPanels: ["term-1", "term-2"] }
+        {
+          silent: true,
+          ownerWebContentsId: OWNER,
+          closeWithPanels: ["term-1", "term-2"],
+          category: "waiting",
+        }
       );
     });
 
@@ -837,11 +867,11 @@ describe("AgentNotificationService", () => {
 
       expect(notificationServiceMock.showWatchNotification).toHaveBeenCalledTimes(1);
       expect(notificationServiceMock.showWatchNotification).toHaveBeenCalledWith(
-        "Agents completed",
+        "Agents finished",
         "3 agents finished their tasks",
         expect.any(Object),
         "notification:watch-navigate",
-        { silent: true, ownerWebContentsId: OWNER }
+        { silent: true, ownerWebContentsId: OWNER, category: "completed" }
       );
     });
 
@@ -1151,26 +1181,6 @@ describe("AgentNotificationService", () => {
       vi.advanceTimersByTime(10_000);
       expect(soundServiceMock.playPulse).toHaveBeenCalledTimes(1);
     });
-
-    it("does not gate the pulse when OS DND state is undefined", () => {
-      mockStore({ soundEnabled: true, workingPulseEnabled: true });
-      osDndServiceMock.getState.mockReturnValue(undefined);
-
-      events.emit("agent:state-changed", makePayload("working", "idle"));
-      vi.advanceTimersByTime(10_000);
-
-      expect(soundServiceMock.playPulse).toHaveBeenCalledTimes(1);
-    });
-
-    it("does not gate the pulse when OS DND is explicitly off", () => {
-      mockStore({ soundEnabled: true, workingPulseEnabled: true });
-      osDndServiceMock.getState.mockReturnValue(false);
-
-      events.emit("agent:state-changed", makePayload("working", "idle"));
-      vi.advanceTimersByTime(10_000);
-
-      expect(soundServiceMock.playPulse).toHaveBeenCalledTimes(1);
-    });
   });
 
   describe("OS DND hard constraint — never suppresses in-app toasts", () => {
@@ -1191,7 +1201,7 @@ describe("AgentNotificationService", () => {
         expect.any(String),
         expect.any(Object),
         "notification:watch-navigate",
-        { silent: true, ownerWebContentsId: OWNER }
+        { silent: true, ownerWebContentsId: OWNER, category: "completed" }
       );
     });
 
@@ -1369,11 +1379,11 @@ describe("AgentNotificationService", () => {
       vi.advanceTimersByTime(5000);
 
       expect(notificationServiceMock.showWatchNotification).toHaveBeenCalledWith(
-        "Agent completed",
+        "Agent finished",
         expect.stringContaining("finished"),
         expect.objectContaining({ worktreeId: "wt-B" }),
         "notification:watch-navigate",
-        { silent: true, ownerWebContentsId: OWNER }
+        { silent: true, ownerWebContentsId: OWNER, category: "completed" }
       );
     });
 
@@ -1403,7 +1413,12 @@ describe("AgentNotificationService", () => {
         expect.stringContaining("waiting"),
         expect.objectContaining({ worktreeId: "wt-B" }),
         "notification:watch-navigate",
-        { silent: true, ownerWebContentsId: OWNER, closeWithPanels: ["term-1"] }
+        {
+          silent: true,
+          ownerWebContentsId: OWNER,
+          closeWithPanels: ["term-1"],
+          category: "waiting",
+        }
       );
     });
 
@@ -1432,11 +1447,11 @@ describe("AgentNotificationService", () => {
       vi.advanceTimersByTime(5000);
 
       expect(notificationServiceMock.showWatchNotification).toHaveBeenCalledWith(
-        "Agent completed",
+        "Agent finished",
         expect.any(String),
         expect.objectContaining({ worktreeId: "wt-fresh" }),
         "notification:watch-navigate",
-        { silent: true, ownerWebContentsId: OWNER }
+        { silent: true, ownerWebContentsId: OWNER, category: "completed" }
       );
     });
 
@@ -1454,11 +1469,11 @@ describe("AgentNotificationService", () => {
       vi.advanceTimersByTime(5000);
 
       expect(notificationServiceMock.showWatchNotification).toHaveBeenCalledWith(
-        "Agent completed",
+        "Agent finished",
         expect.any(String),
         expect.objectContaining({ worktreeId: undefined }),
         "notification:watch-navigate",
-        { silent: true, ownerWebContentsId: OWNER }
+        { silent: true, ownerWebContentsId: OWNER, category: "completed" }
       );
     });
   });
@@ -1600,14 +1615,14 @@ describe("AgentNotificationService", () => {
       // Advance past the 2s completion debounce + 0ms flush timer
       vi.advanceTimersByTime(2001);
 
-      // Both completions should be captured (grouped into one "Agents completed"
+      // Both completions should be captured (grouped into one "Agents finished"
       // burst rather than silently dropping one).
       expect(notificationServiceMock.showWatchNotification).toHaveBeenCalledWith(
-        "Agents completed",
+        "Agents finished",
         "2 agents finished their tasks",
         expect.any(Object),
         "notification:watch-navigate",
-        { silent: true, ownerWebContentsId: OWNER }
+        { silent: true, ownerWebContentsId: OWNER, category: "completed" }
       );
     });
 
@@ -1703,11 +1718,11 @@ describe("AgentNotificationService", () => {
       vi.advanceTimersByTime(5000);
 
       expect(notificationServiceMock.showWatchNotification).toHaveBeenCalledWith(
-        "Agent completed",
+        "Agent finished",
         expect.stringContaining("claude"),
         expect.objectContaining({ panelId: "term-1" }),
         "notification:watch-navigate",
-        { silent: true, ownerWebContentsId: OWNER }
+        { silent: true, ownerWebContentsId: OWNER, category: "completed" }
       );
     });
   });
@@ -1775,7 +1790,12 @@ describe("AgentNotificationService", () => {
         expect.any(String),
         expect.any(Object),
         "notification:watch-navigate",
-        { silent: true, ownerWebContentsId: OWNER, closeWithPanels: ["term-1"] }
+        {
+          silent: true,
+          ownerWebContentsId: OWNER,
+          closeWithPanels: ["term-1"],
+          category: "waiting",
+        }
       );
     });
   });
@@ -1862,32 +1882,13 @@ describe("AgentNotificationService", () => {
         expect.stringContaining("agent-2 is waiting for input"),
         expect.any(Object),
         "notification:watch-navigate",
-        { silent: true, ownerWebContentsId: OWNER, closeWithPanels: ["term-2"] }
+        {
+          silent: true,
+          ownerWebContentsId: OWNER,
+          closeWithPanels: ["term-2"],
+          category: "waiting",
+        }
       );
-    });
-
-    it("flushWaitingBurst is a no-op when the in-handler purge emptied the buffer", () => {
-      // Idempotency: if a `completed`/`exited` event lands during the
-      // 200ms burst window and the in-handler splice drains the buffer,
-      // the flush must not throw and must not emit any notification.
-      // (Earlier review draft added a pre-flush live-state re-check; that
-      // was removed because appState.terminals is renderer-pushed with
-      // round-trip latency — it would drop legitimate waiting entries
-      // and is also ambiguous between "absent" and "removed" terminals.
-      // The in-handler splice is the only correct defense, since it runs
-      // on the same event tick as the `completed`/`exited` event and
-      // uses the event's own `state` field.)
-      mockStore({ waitingEnabled: true });
-      agentNotificationService.syncWatchedPanels(OWNER, ["term-1"]);
-
-      events.emit("agent:state-changed", makePayloadFor("term-1", "agent-1", "waiting"));
-      events.emit(
-        "agent:state-changed",
-        makePayloadFor("term-1", "agent-1", "completed", "waiting")
-      );
-      vi.advanceTimersByTime(300);
-
-      expect(notificationServiceMock.showWatchNotification).not.toHaveBeenCalled();
     });
   });
 
@@ -1927,7 +1928,12 @@ describe("AgentNotificationService", () => {
         expect.any(String),
         expect.objectContaining({ panelId: "term-1" }),
         "notification:watch-navigate",
-        { silent: true, ownerWebContentsId: OWNER, closeWithPanels: ["term-1"] }
+        {
+          silent: true,
+          ownerWebContentsId: OWNER,
+          closeWithPanels: ["term-1"],
+          category: "waiting",
+        }
       );
     });
 
@@ -1945,7 +1951,12 @@ describe("AgentNotificationService", () => {
         expect.any(String),
         expect.objectContaining({ panelId: "term-2" }),
         "notification:watch-navigate",
-        { silent: true, ownerWebContentsId: OWNER_B, closeWithPanels: ["term-2"] }
+        {
+          silent: true,
+          ownerWebContentsId: OWNER_B,
+          closeWithPanels: ["term-2"],
+          category: "waiting",
+        }
       );
     });
 
@@ -1965,7 +1976,12 @@ describe("AgentNotificationService", () => {
         expect.any(String),
         expect.objectContaining({ panelId: "term-1" }),
         "notification:watch-navigate",
-        { silent: true, ownerWebContentsId: OWNER, closeWithPanels: ["term-1"] }
+        {
+          silent: true,
+          ownerWebContentsId: OWNER,
+          closeWithPanels: ["term-1"],
+          category: "waiting",
+        }
       );
     });
 
@@ -1991,7 +2007,12 @@ describe("AgentNotificationService", () => {
         expect.any(String),
         expect.objectContaining({ panelId: "term-2" }),
         "notification:watch-navigate",
-        { silent: true, ownerWebContentsId: OWNER_B, closeWithPanels: ["term-2"] }
+        {
+          silent: true,
+          ownerWebContentsId: OWNER_B,
+          closeWithPanels: ["term-2"],
+          category: "waiting",
+        }
       );
     });
 
@@ -2015,7 +2036,12 @@ describe("AgentNotificationService", () => {
         expect.any(String),
         expect.objectContaining({ panelId: "term-2" }),
         "notification:watch-navigate",
-        { silent: true, ownerWebContentsId: OWNER_B, closeWithPanels: ["term-2"] }
+        {
+          silent: true,
+          ownerWebContentsId: OWNER_B,
+          closeWithPanels: ["term-2"],
+          category: "waiting",
+        }
       );
     });
 
@@ -2054,7 +2080,12 @@ describe("AgentNotificationService", () => {
         expect.any(String),
         expect.objectContaining({ panelId: "term-1" }),
         "notification:watch-navigate",
-        { silent: true, ownerWebContentsId: OWNER, closeWithPanels: ["term-1"] }
+        {
+          silent: true,
+          ownerWebContentsId: OWNER,
+          closeWithPanels: ["term-1"],
+          category: "waiting",
+        }
       );
     });
 
@@ -2201,7 +2232,12 @@ describe("AgentNotificationService", () => {
           expect.any(String),
           expect.objectContaining({ panelId: "term-1" }),
           "notification:watch-navigate",
-          { silent: true, ownerWebContentsId: OWNER, closeWithPanels: ["term-1"] }
+          {
+            silent: true,
+            ownerWebContentsId: OWNER,
+            closeWithPanels: ["term-1"],
+            category: "waiting",
+          }
         );
       }
     );
@@ -2235,7 +2271,12 @@ describe("AgentNotificationService", () => {
         "2 agents waiting for input",
         expect.objectContaining({ panelId: "term-2", worktreeId: "wt-2" }),
         "notification:watch-navigate",
-        { silent: true, ownerWebContentsId: OWNER, closeWithPanels: ["term-2", "term-3"] }
+        {
+          silent: true,
+          ownerWebContentsId: OWNER,
+          closeWithPanels: ["term-2", "term-3"],
+          category: "waiting",
+        }
       );
     });
 
@@ -2384,5 +2425,299 @@ describe("AgentNotificationService", () => {
 
       expect(notificationServiceMock.showWatchNotification).not.toHaveBeenCalled();
     });
+  });
+
+  describe("Canopy asks", () => {
+    const ask = (terminalId = "term-1", kind: "approval" | "question" = "approval") => ({
+      terminalId,
+      worktreeId: "wt-1",
+      agentId: "agent-1",
+      kind,
+    });
+    /** Past the boot grace, so a restore's first reading doesn't page. */
+    const pastBoot = () => vi.advanceTimersByTime(9_000);
+
+    afterEach(() => {
+      // clearAllMocks keeps implementations; these tests change them.
+      notificationServiceMock.isOwnerViewFocused.mockImplementation(() => false);
+      notificationServiceMock.isWindowFocused.mockReturnValue(false);
+      notificationServiceMock.getUserPresence.mockReturnValue("present");
+    });
+
+    it("pages for an ask without waiting notifications on or the panel watched", () => {
+      mockStore({ soundEnabled: true });
+      agentNotificationService.syncWatchedPanels(OWNER, []);
+      pastBoot();
+      agentNotificationService.notifyCanopyAsk(ask(), () => []);
+      vi.advanceTimersByTime(200);
+
+      expect(soundServiceMock.playFile).toHaveBeenCalledWith("waiting.wav");
+      expect(notificationServiceMock.showNativeNotification).toHaveBeenCalledWith(
+        "Agent waiting",
+        "agent-1 is waiting for approval",
+        expect.objectContaining({
+          closeWithPanels: ["term-1"],
+          navigation: expect.objectContaining({
+            context: expect.objectContaining({ panelId: "term-1", worktreeId: "wt-1" }),
+          }),
+        })
+      );
+    });
+
+    it("groups asks that land together into one banner", () => {
+      mockStore();
+      pastBoot();
+      agentNotificationService.notifyCanopyAsk(ask("term-1", "question"), () => []);
+      agentNotificationService.notifyCanopyAsk(ask("term-2", "question"), () => []);
+      vi.advanceTimersByTime(200);
+
+      expect(notificationServiceMock.showNativeNotification).toHaveBeenCalledTimes(1);
+      expect(notificationServiceMock.showNativeNotification).toHaveBeenCalledWith(
+        "Agents waiting",
+        "2 agents waiting on questions",
+        expect.objectContaining({ closeWithPanels: ["term-1", "term-2"] })
+      );
+    });
+
+    it("stays quiet with notifications off, or during the boot grace", () => {
+      mockStore();
+      projectStoreMock.getEffectiveNotificationSettings.mockReturnValue({
+        ...DEFAULT_NOTIFICATION_SETTINGS,
+        enabled: false,
+      });
+      pastBoot();
+      agentNotificationService.notifyCanopyAsk(ask(), () => []);
+      vi.advanceTimersByTime(200);
+      expect(notificationServiceMock.showNativeNotification).not.toHaveBeenCalled();
+
+      agentNotificationService.dispose();
+      agentNotificationService.initialize();
+      mockStore();
+      agentNotificationService.notifyCanopyAsk(ask(), () => []);
+      vi.advanceTimersByTime(200);
+      expect(notificationServiceMock.showNativeNotification).not.toHaveBeenCalled();
+    });
+
+    it("stays quiet when Daintree's own banner already went out for the wait", () => {
+      mockStore({ waitingEnabled: true });
+      pastBoot();
+      events.emit("agent:state-changed", makePayload("waiting"));
+      vi.advanceTimersByTime(200);
+      expect(notificationServiceMock.showWatchNotification).toHaveBeenCalledTimes(1);
+
+      agentNotificationService.notifyCanopyAsk(ask(), () => []);
+      vi.advanceTimersByTime(200);
+      expect(notificationServiceMock.showNativeNotification).not.toHaveBeenCalled();
+    });
+
+    it("stays quiet while Canopy is open in front of the user", () => {
+      mockStore();
+      pastBoot();
+      notificationServiceMock.isOwnerViewFocused.mockImplementation((owner) => owner === 7);
+      agentNotificationService.notifyCanopyAsk(ask(), () => [7]);
+      vi.advanceTimersByTime(200);
+      expect(notificationServiceMock.showNativeNotification).not.toHaveBeenCalled();
+    });
+
+    it("pages for an ask no open panel lists, though another ask's panel is in front", () => {
+      mockStore();
+      pastBoot();
+      notificationServiceMock.isOwnerViewFocused.mockImplementation((owner) => owner === 7);
+      // term-1's project is listed by no panel; term-2's by the focused one.
+      agentNotificationService.notifyCanopyAsk(ask("term-1"), () => []);
+      agentNotificationService.notifyCanopyAsk(ask("term-2"), () => [7]);
+      vi.advanceTimersByTime(200);
+      expect(notificationServiceMock.showNativeNotification).toHaveBeenCalledTimes(1);
+      expect(notificationServiceMock.showNativeNotification).toHaveBeenCalledWith(
+        "Agent waiting",
+        expect.any(String),
+        expect.objectContaining({ closeWithPanels: ["term-1"] })
+      );
+    });
+
+    it("keeps Daintree's own waiting banner quiet for a wait Canopy already paged for", () => {
+      mockStore({ waitingEnabled: true });
+      pastBoot();
+      agentNotificationService.notifyCanopyAsk(ask(), () => []);
+      vi.advanceTimersByTime(200);
+      expect(notificationServiceMock.showNativeNotification).toHaveBeenCalledTimes(1);
+
+      events.emit("agent:state-changed", makePayload("waiting"));
+      vi.advanceTimersByTime(200);
+      expect(notificationServiceMock.showWatchNotification).not.toHaveBeenCalled();
+    });
+
+    it("drops a buffered ask when the agent goes back to work", () => {
+      mockStore();
+      pastBoot();
+      agentNotificationService.notifyCanopyAsk(ask(), () => []);
+      events.emit("agent:state-changed", makePayload("working", "waiting"));
+      vi.advanceTimersByTime(200);
+      expect(notificationServiceMock.showNativeNotification).not.toHaveBeenCalled();
+    });
+
+    it("drops buffered asks when Canopy opens in front before they flush", () => {
+      mockStore();
+      pastBoot();
+      const open: number[] = [];
+      agentNotificationService.notifyCanopyAsk(ask(), () => open);
+      open.push(7);
+      notificationServiceMock.isOwnerViewFocused.mockImplementation((owner) => owner === 7);
+      vi.advanceTimersByTime(200);
+      expect(notificationServiceMock.showNativeNotification).not.toHaveBeenCalled();
+    });
+
+    it("stays quiet for a never-watched agent whose worktree the focused window shows", () => {
+      mockStore();
+      pastBoot();
+      notificationServiceMock.isWindowFocused.mockReturnValue(true);
+      notificationServiceMock.getUserPresence.mockReturnValue("present");
+      agentNotificationService.notifyCanopyAsk(ask("term-never-watched"), () => []);
+      vi.advanceTimersByTime(200);
+      expect(notificationServiceMock.showNativeNotification).not.toHaveBeenCalled();
+    });
+
+    it("stays quiet when the user is looking at the agent's worktree", () => {
+      mockStore();
+      pastBoot();
+      notificationServiceMock.isOwnerViewFocused.mockImplementation((owner) => owner === OWNER);
+      notificationServiceMock.getUserPresence.mockReturnValue("present");
+      agentNotificationService.notifyCanopyAsk(ask(), () => []);
+      vi.advanceTimersByTime(200);
+      expect(notificationServiceMock.showNativeNotification).not.toHaveBeenCalled();
+    });
+  });
+});
+
+describe("notifications owned by a view on a remote Shell", () => {
+  const REMOTE_OWNER = -7;
+
+  function attachRemoteView(clientId: string) {
+    getEndpointRegistry().add({
+      endpointId: "remote:s1:view-1",
+      clientId,
+      projectId: "p1",
+      kind: "remote-view",
+      handle: REMOTE_OWNER,
+      send: vi.fn(),
+      request: vi.fn(),
+      onClose: () => ({ dispose: () => undefined }),
+      isClosed: () => false,
+    });
+  }
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.useFakeTimers();
+    _resetEndpointRegistryForTesting();
+    osDndServiceMock.getState.mockReturnValue(undefined);
+    agentNotificationService.initialize();
+    attachRemoteView("client-a");
+  });
+
+  afterEach(() => {
+    agentNotificationService.dispose();
+    vi.runOnlyPendingTimers();
+    vi.useRealTimers();
+    _resetEndpointRegistryForTesting();
+  });
+
+  it("sends the category and plays nothing on this machine", () => {
+    mockStore({ waitingEnabled: true, completedEnabled: true, soundEnabled: true });
+    agentNotificationService.syncWatchedPanels(REMOTE_OWNER, ["term-1"]);
+
+    events.emit("agent:state-changed", makePayload("waiting"));
+    vi.advanceTimersByTime(250);
+    expect(notificationServiceMock.showWatchNotification).toHaveBeenLastCalledWith(
+      "Agent waiting",
+      expect.any(String),
+      expect.any(Object),
+      "notification:watch-navigate",
+      {
+        silent: true,
+        ownerWebContentsId: REMOTE_OWNER,
+        closeWithPanels: ["term-1"],
+        category: "waiting",
+      }
+    );
+
+    agentNotificationService.syncWatchedPanels(REMOTE_OWNER, ["term-1"]);
+    events.emit("agent:state-changed", makePayload("completed", "waiting"));
+    vi.advanceTimersByTime(2001);
+    expect(notificationServiceMock.showWatchNotification).toHaveBeenLastCalledWith(
+      "Agent finished",
+      expect.any(String),
+      expect.any(Object),
+      "notification:watch-navigate",
+      { silent: true, ownerWebContentsId: REMOTE_OWNER, category: "completed" }
+    );
+    expect(soundServiceMock.playFile).not.toHaveBeenCalled();
+  });
+
+  it("sends a Canopy ask's waiting category to the remote Shell and plays nothing here", () => {
+    mockStore({ soundEnabled: true });
+    agentNotificationService.syncWatchedPanels(REMOTE_OWNER, ["term-1"]);
+    // Past the boot grace, so the ask isn't taken for a restore's first reading.
+    vi.advanceTimersByTime(9_000);
+    agentNotificationService.notifyCanopyAsk(
+      { terminalId: "term-1", worktreeId: "wt-1", agentId: "agent-1", kind: "approval" },
+      () => []
+    );
+    vi.advanceTimersByTime(200);
+    expect(notificationServiceMock.showNativeNotification).toHaveBeenCalledWith(
+      "Agent waiting",
+      expect.any(String),
+      expect.objectContaining({ ownerWebContentsId: REMOTE_OWNER, category: "waiting" })
+    );
+    expect(soundServiceMock.playFile).not.toHaveBeenCalled();
+  });
+
+  it("still plays this machine's sound for its own windows", () => {
+    mockStore({ waitingEnabled: true, soundEnabled: true });
+    agentNotificationService.syncWatchedPanels(OWNER, ["term-1"]);
+    events.emit("agent:state-changed", makePayload("waiting"));
+    vi.advanceTimersByTime(250);
+    expect(soundServiceMock.playFile).toHaveBeenCalledWith("waiting.wav");
+  });
+
+  it("holds back a completion for the Shell that muted, not for this machine's windows", () => {
+    mockStore({ completedEnabled: true, soundEnabled: false });
+    agentNotificationService.setSessionMuteUntil(Date.now() + 60_000, "client-a");
+
+    agentNotificationService.syncWatchedPanels(REMOTE_OWNER, ["term-1"]);
+    events.emit("agent:state-changed", makePayload("completed"));
+    vi.advanceTimersByTime(2001);
+    expect(notificationServiceMock.showWatchNotification).not.toHaveBeenCalled();
+    expect(agentNotificationService.isSessionMuted()).toBe(false);
+
+    agentNotificationService.syncWatchedPanels(REMOTE_OWNER, []);
+    agentNotificationService.syncWatchedPanels(OWNER, ["term-1"]);
+    events.emit("agent:state-changed", makePayload("working", "completed"));
+    events.emit("agent:state-changed", makePayload("completed"));
+    vi.advanceTimersByTime(2001);
+    expect(notificationServiceMock.showWatchNotification).toHaveBeenCalledWith(
+      "Agent finished",
+      expect.any(String),
+      expect.any(Object),
+      "notification:watch-navigate",
+      { silent: true, ownerWebContentsId: OWNER, category: "completed" }
+    );
+  });
+
+  it("does not let this machine's own mute silence a remote Shell", () => {
+    mockStore({ completedEnabled: true });
+    agentNotificationService.setSessionMuteUntil(Date.now() + 60_000);
+    agentNotificationService.syncWatchedPanels(REMOTE_OWNER, ["term-1"]);
+
+    events.emit("agent:state-changed", makePayload("completed"));
+    vi.advanceTimersByTime(2001);
+
+    expect(notificationServiceMock.showWatchNotification).toHaveBeenCalledWith(
+      "Agent finished",
+      expect.any(String),
+      expect.any(Object),
+      "notification:watch-navigate",
+      { silent: true, ownerWebContentsId: REMOTE_OWNER, category: "completed" }
+    );
   });
 });

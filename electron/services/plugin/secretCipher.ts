@@ -1,11 +1,25 @@
 import { safeStorage } from "electron";
+import { isLinuxKeyringBackend } from "./linuxKeyringBackend.js";
 
 /**
  * The at-rest tier a secret write would use right now, disclosed honestly in the
  * plugin settings UI. `"unavailable"` means there is no OS keychain to encrypt
  * with, and a secret write is refused rather than stored in plaintext (#12613).
+ * `"locked"` means there is one, but it gave Daintree no key this session (its
+ * unlock prompt was dismissed or failed) and only a restart asks again.
  */
-export type SecretStorageTier = "keychain" | "unavailable";
+export type SecretStorageTier = "keychain" | "locked" | "unavailable";
+
+/** A decrypted secret, and whether its ciphertext is due to be written again. */
+export interface DecryptedSecret {
+  plaintext: string;
+  /**
+   * The ciphertext should be replaced: Chromium reports its key superseded (a
+   * fixed-key value now that a keyring answers), or only the synchronous API
+   * could read it.
+   */
+  reencrypt: boolean;
+}
 
 /**
  * Encrypts/decrypts secret setting values for at-rest storage. The store holds
@@ -16,63 +30,224 @@ export interface SecretCipher {
   /** Which at-rest tier {@link encrypt} will use right now. */
   tier(): SecretStorageTier;
   /**
-   * Encrypt a plaintext secret to a base64 ciphertext string, or `null` when no
-   * OS keychain is available (the caller then refuses the write).
+   * Encrypt a plaintext secret to a base64 ciphertext string. Resolves `null`
+   * when no OS keychain holds the key (the caller then refuses the write), and
+   * rejects when the keychain didn't answer in time.
    */
-  encrypt(plaintext: string): string | null;
-  /** Decrypt a base64 ciphertext produced by {@link encrypt}. */
-  decrypt(ciphertextBase64: string): string;
+  encrypt(plaintext: string): Promise<string | null>;
+  /**
+   * Decrypt a base64 ciphertext. `legacy` marks one the synchronous API wrote
+   * before secrets moved to the async one, which may need that API to read.
+   */
+  decrypt(ciphertextBase64: string, options?: { legacy?: boolean }): Promise<DecryptedSecret>;
 }
 
-type LinuxStorageBackend = ReturnType<typeof safeStorage.getSelectedStorageBackend>;
-
 /**
- * On Linux `isEncryptionAvailable()` doesn't say what backs the encryption:
- * `basic_text` uses Chromium's hardcoded key and `unknown` is what Electron
- * reports before `ready` (#12614). Exhaustive over Electron's backend union so a
- * new backend fails typecheck until it is classified; a string outside the union
- * at runtime is treated as not a keychain.
+ * A keychain prompt waits on a person, so a call can take as long as it takes
+ * them to type a password. It must not wait forever, though: no one may be at
+ * the machine (a remote host), and a pending write holds up the plugin's whole
+ * settings store behind it.
  */
-const LINUX_BACKEND_IS_KEYCHAIN: Record<LinuxStorageBackend, boolean> = {
-  gnome_libsecret: true,
-  kwallet: true,
-  kwallet5: true,
-  kwallet6: true,
-  basic_text: false,
-  unknown: false,
-};
+export const SECRET_STORAGE_TIMEOUT_MS = 60_000;
+
+export class SecretStorageTimeoutError extends Error {
+  constructor(ms: number) {
+    super(
+      `Secure storage didn't answer within ${Math.round(ms / 1000)} s. It may be waiting on a password prompt.`
+    );
+    this.name = "SecretStorageTimeoutError";
+  }
+}
+
+function withTimeout<T>(promise: Promise<T>): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<never>((_resolve, reject) => {
+    timer = setTimeout(
+      () => reject(new SecretStorageTimeoutError(SECRET_STORAGE_TIMEOUT_MS)),
+      SECRET_STORAGE_TIMEOUT_MS
+    );
+  });
+  return Promise.race([promise, timeout]).finally(() => clearTimeout(timer));
+}
+
+function linuxBackend(): string | null {
+  try {
+    return safeStorage.getSelectedStorageBackend();
+  } catch {
+    return null;
+  }
+}
 
 /**
  * `safeStorage.isEncryptionAvailable()` can throw on Linux when called before
  * the app `ready` event, and `safeStorage` is absent entirely outside an Electron
- * runtime. Treat any such failure as "no keychain" so a secret write is refused
- * rather than crashing a settings read. A Linux backend that isn't a real
- * keychain is treated the same way, so the UI never labels it as one.
+ * runtime. Treat any such failure as "no keychain" so a settings read never
+ * crashes on it.
  */
 function keychainAvailable(): boolean {
   try {
-    if (safeStorage?.isEncryptionAvailable() !== true) return false;
-    if (process.platform !== "linux") return true;
-    return LINUX_BACKEND_IS_KEYCHAIN[safeStorage.getSelectedStorageBackend()] === true;
+    return safeStorage?.isEncryptionAvailable() === true;
   } catch {
     return false;
   }
 }
 
+function prefixOf(ciphertext: Buffer): string {
+  return ciphertext.subarray(0, 3).toString("latin1");
+}
+
+/**
+ * How the keychain failed this session, once it has. Electron builds its async
+ * encryptor once per process, so a keychain that gave it no key (an unlock
+ * prompt dismissed or failed) gives none for the rest of the run, and nothing
+ * asks again until Daintree restarts. That no-key result can't say why: on
+ * Linux the same fixed-key fallback follows a dismissed unlock prompt and a
+ * keyring service that isn't running at all, and Chromium's Keychain provider
+ * reports a denial and any other Keychain error alike, so the words say only
+ * that the store wasn't available. DPAPI has no prompt to dismiss, so on
+ * Windows a failure just means there is no keychain to use.
+ */
+let sessionFailure: "locked" | "unavailable" | null = null;
+
+/** @internal Tests only. */
+export function _resetSecretStorageSessionForTests(): void {
+  sessionFailure = null;
+}
+
+function noteKeychainKey(keyed: boolean): void {
+  if (keyed) sessionFailure = null;
+  else sessionFailure = process.platform === "win32" ? "unavailable" : "locked";
+}
+
+/** What stopped this session getting a key: all that is known is that it didn't. */
+function lockedReason(): string {
+  const store = process.platform === "darwin" ? "The Keychain" : "The keyring";
+  return `${store} wasn't available this session`;
+}
+
+const RESTART = "restart Daintree to try again";
+
+/** Why a secret write was refused at `tier`, in words for the person who tried it. */
+export function secretWriteRefusal(key: string, tier: SecretStorageTier): string {
+  if (tier !== "locked") {
+    return `Secure storage is unavailable on this device, so the secret "${key}" wasn't saved`;
+  }
+  return `${lockedReason()}, so the secret "${key}" wasn't saved — ${RESTART}`;
+}
+
+function readRefusal(cause?: unknown): unknown {
+  if (sessionFailure === "locked") {
+    return new Error(`${lockedReason()}, so the secret couldn't be read — ${RESTART}`);
+  }
+  return cause ?? new Error("Secure storage is unavailable, so the secret couldn't be read");
+}
+
+/**
+ * Encrypt with the async API, or `null` when the result wouldn't be keychain
+ * protected. Linux needs a real keyring backend, and Chromium's async encryptor
+ * falls back there to its fixed-key provider ("v10") when the keyring doesn't
+ * answer, which anyone can decrypt.
+ */
+async function encryptWithKeychain(plaintext: string): Promise<Buffer | null> {
+  const linux = process.platform === "linux";
+  if (linux && !isLinuxKeyringBackend(linuxBackend() ?? "")) return null;
+  let encrypted: Buffer;
+  try {
+    encrypted = await withTimeout(safeStorage.encryptStringAsync(plaintext));
+  } catch (error) {
+    // Still waiting on a prompt says nothing yet about how it will be answered.
+    if (error instanceof SecretStorageTimeoutError) throw error;
+    noteKeychainKey(false);
+    return null;
+  }
+  const keyed = !(linux && prefixOf(encrypted) === "v10");
+  noteKeychainKey(keyed);
+  return keyed ? encrypted : null;
+}
+
+const PROBE_TEXT = "daintree-secret-probe";
+
+/** Whether the async encryptor holds a real keychain key, noting the answer. */
+async function keychainKeyed(): Promise<boolean> {
+  return (await encryptWithKeychain(PROBE_TEXT)) !== null;
+}
+
+/**
+ * The synchronous API, kept only to read ciphertext it wrote before secrets
+ * moved to the async one. It fetches the key on the main thread and would hold
+ * the app on a keychain prompt until the watchdog kills it, so callers run it
+ * only once {@link keychainKeyed} shows the async encryptor holds a real key:
+ * the keychain has answered by then. On KWallet that means the async provider
+ * has just opened the wallet, which kwalletd leaves open by default; a wallet
+ * set to close as soon as no app uses it can still prompt here, once per legacy
+ * secret, since the read that needed this rewrites it through the async API.
+ * Gone in Electron 46.
+ */
+function decryptLegacy(ciphertext: Buffer, cause?: unknown): string {
+  if (typeof safeStorage?.decryptString !== "function") throw readRefusal(cause);
+  return safeStorage.decryptString(ciphertext);
+}
+
+/**
+ * The sync API keeps its KWallet key in the "Chromium Keys" folder every
+ * Chromium-based app shares; Electron's async provider keeps its own under the
+ * app's name. A sync "v11" value is therefore under a key the async API doesn't
+ * hold, and decrypting it there fails, or with an unlucky padding byte returns
+ * garbage. libsecret, Keychain and DPAPI share one key across both APIs.
+ */
+function needsSyncKey(ciphertext: Buffer): boolean {
+  return (
+    process.platform === "linux" &&
+    (linuxBackend() ?? "").startsWith("kwallet") &&
+    prefixOf(ciphertext) === "v11"
+  );
+}
+
 /**
  * Default cipher backed by Electron `safeStorage` (macOS Keychain, Windows DPAPI,
- * Linux libsecret/kwallet). When `isEncryptionAvailable()` is false — typically a
- * headless Linux box with no backing store — {@link encrypt} returns `null`.
+ * Linux libsecret/kwallet) through its async API, which fetches the key off the
+ * main thread: on Linux the sync API holds the whole app on a keyring prompt.
  */
 export const safeStorageCipher: SecretCipher = {
   tier() {
-    return keychainAvailable() ? "keychain" : "unavailable";
+    // What this session already learned stands until restart, and answering
+    // from it keeps the sync check below from going back to a Keychain that
+    // just refused, on the main thread.
+    if (sessionFailure !== null) return sessionFailure;
+    // On Linux isEncryptionAvailable() fetches the key synchronously and holds
+    // the main thread on a keyring prompt (autologin, a locked or missing
+    // keyring) until the watchdog kills the app. The settings view only needs
+    // the tier, which the backend already tells; a write still checks fully.
+    const present =
+      process.platform === "linux"
+        ? isLinuxKeyringBackend(linuxBackend() ?? "")
+        : keychainAvailable();
+    return present ? "keychain" : "unavailable";
   },
-  encrypt(plaintext) {
-    if (!keychainAvailable()) return null;
-    return safeStorage.encryptString(plaintext).toString("base64");
+  async encrypt(plaintext) {
+    return (await encryptWithKeychain(plaintext))?.toString("base64") ?? null;
   },
-  decrypt(ciphertextBase64) {
-    return safeStorage.decryptString(Buffer.from(ciphertextBase64, "base64"));
+  async decrypt(ciphertextBase64, options) {
+    const ciphertext = Buffer.from(ciphertextBase64, "base64");
+    const legacy = options?.legacy === true;
+    if (legacy && needsSyncKey(ciphertext)) {
+      if (!(await keychainKeyed())) throw readRefusal();
+      return { plaintext: decryptLegacy(ciphertext), reencrypt: true };
+    }
+    try {
+      const { result, shouldReEncrypt } = await withTimeout(
+        safeStorage.decryptStringAsync(ciphertext)
+      );
+      return { plaintext: result, reencrypt: shouldReEncrypt };
+    } catch (error) {
+      if (error instanceof SecretStorageTimeoutError) throw error;
+      // Electron's own message names neither the cause nor a way round it; a
+      // keychain that gave no key this session is both.
+      if (!(await keychainKeyed())) throw readRefusal(error);
+      // Outside KWallet, Linux's sync API holds the same keys as the async one,
+      // so a sync retry could only add a keyring prompt on the main thread.
+      if (!legacy || process.platform === "linux") throw error;
+      return { plaintext: decryptLegacy(ciphertext, error), reencrypt: true };
+    }
   },
 };

@@ -92,6 +92,7 @@ import type {
   PluginTerminalScreenResult,
   PluginPanelLifecycleEvent,
   PanelReloadResult,
+  WorkerRestartResult,
   PluginSystemWakeEvent,
   PluginGitCommitResult,
   PluginPanelBadge,
@@ -269,6 +270,8 @@ export interface MockHostState {
    * calls that got past argument validation are recorded.
    */
   readonly reloadPanelCalls: ReadonlyArray<string>;
+  /** What each `host.restartWorker()` call answered, in the order they settled (#13410). */
+  readonly restartWorkerCalls: ReadonlyArray<WorkerRestartResult>;
   readonly showQuickPickCalls: ReadonlyArray<ShowQuickPickRecord>;
   readonly showInputBoxCalls: ReadonlyArray<ShowInputBoxRecord>;
   readonly showConfirmCalls: ReadonlyArray<ShowConfirmRecord>;
@@ -501,6 +504,11 @@ export interface CreateMockHostOptions {
    * id → `"not-mounted"`, and a panel reported for another plugin rejects.
    */
   reloadPanel?: (panelId: string) => PanelReloadResult | Promise<PanelReloadResult>;
+  /**
+   * Custom resolver for `host.restartWorker` (#13410). The default answers
+   * `"scheduled"` every time; the mock has no worker, so nothing restarts.
+   */
+  restartWorker?: () => WorkerRestartResult | Promise<WorkerRestartResult>;
   /**
    * Declared plugin capabilities (`manifest.capabilities`), gating the agent
    * APIs the way production does (#10617). `getAgentState` requires `agent:read`
@@ -859,6 +867,7 @@ export function createMockHost(options: CreateMockHostOptions = {}): PluginHostA
   const setPanelBadgeCalls: SetPanelBadgeRecord[] = [];
   const setPanelMenuItemsCalls: SetPanelMenuItemsRecord[] = [];
   const reloadPanelCalls: string[] = [];
+  const restartWorkerCalls: WorkerRestartResult[] = [];
   /** Latest simulated lifecycle event per panel id, for `reloadPanel`. */
   const panelPhases = new Map<string, PluginPanelLifecycleEvent>();
   const showQuickPickCalls: ShowQuickPickRecord[] = [];
@@ -1975,6 +1984,11 @@ export function createMockHost(options: CreateMockHostOptions = {}): PluginHostA
       if (known.phase === "render-failed") return "unavailable";
       return "not-mounted";
     },
+    async restartWorker() {
+      const result = options.restartWorker ? await options.restartWorker() : "scheduled";
+      restartWorkerCalls.push(result);
+      return result;
+    },
     async showToast(opts: PluginToastOptions) {
       // Full production parity (#10617): message length, type enum, durationMs
       // bounds — not just a truthy-message check. A shape the real host rejects
@@ -2585,6 +2599,7 @@ export function createMockHost(options: CreateMockHostOptions = {}): PluginHostA
     setPanelBadgeCalls,
     setPanelMenuItemsCalls,
     reloadPanelCalls,
+    restartWorkerCalls,
     showQuickPickCalls,
     showInputBoxCalls,
     showConfirmCalls,

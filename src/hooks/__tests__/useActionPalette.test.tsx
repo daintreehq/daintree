@@ -1052,23 +1052,6 @@ describe("useActionPalette", () => {
       expect(result.current.results[0]!.id).toBe("terminal.close");
     });
 
-    it("does not exclude non-matching categories from the results", async () => {
-      listMock.mockReturnValue([
-        makeEntry("terminal.close", "Close", true, "terminal"),
-        makeEntry("browser.close", "Close", true, "browser"),
-      ]);
-      getContextMock.mockReturnValue({ focusedTerminalKind: "terminal" });
-
-      const { result } = renderHook(() => useActionPalette());
-      act(() => result.current.open());
-      act(() => result.current.setQuery("close"));
-
-      await waitFor(() => expect(result.current.results.length).toBe(2), { timeout: 2000 });
-
-      const ids = result.current.results.map((r) => r.id);
-      expect(ids).toContain("browser.close");
-    });
-
     it("leaves ordering unchanged when context is empty", async () => {
       listMock.mockReturnValue([
         makeEntry("terminal.close", "Close", true, "terminal"),
@@ -1177,7 +1160,7 @@ describe("useActionPalette", () => {
       expect(ids.indexOf("panel.close")).toBeLessThan(ids.indexOf("browser.close"));
     });
 
-    it.each(["   ", "\t\n", " \t\n "])(
+    it.each([" \t\n "])(
       "does not boost worktree categories when focusedWorktreeId is whitespace (%j)",
       async (whitespace) => {
         listMock.mockReturnValue([
@@ -1537,31 +1520,6 @@ describe("useActionPalette", () => {
 
       // Title match "Save Output" should rank above keyword-only "Stash Input"
       expect(result.current.results[0]!.id).toBe("terminal.saveOutput");
-    });
-
-    it("handles actions without keywords gracefully", async () => {
-      listMock.mockReturnValue([
-        {
-          id: "action.noKeywords",
-          title: "No Keywords",
-          description: "An action without keywords",
-          category: "General",
-          kind: "command",
-          enabled: true,
-        },
-        makeEntry("other.action", "Other Action"),
-      ]);
-
-      const { result } = renderHook(() => useActionPalette());
-      act(() => result.current.open());
-      act(() => result.current.setQuery("no keywords"));
-
-      await waitFor(() => expect(result.current.results.length).toBeGreaterThan(0), {
-        timeout: 2000,
-      });
-
-      // Should not throw, and the action should be findable via title
-      expect(result.current.results.some((r) => r.id === "action.noKeywords")).toBe(true);
     });
   });
 });

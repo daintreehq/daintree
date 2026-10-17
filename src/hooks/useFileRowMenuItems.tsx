@@ -1,6 +1,6 @@
 import { Fragment, useCallback, useMemo } from "react";
 import type React from "react";
-import { Copy, ExternalLink, FileDiff } from "lucide-react";
+import { Copy, ExternalLink, FileDiff, RotateCcw, Trash2 } from "lucide-react";
 import { AtSign, FileText, FolderOpen, Folders, Package } from "@/components/icons";
 import {
   ContextMenuActionItem,
@@ -38,6 +38,18 @@ import type { CopyTreeRunSource, GitStatus } from "@shared/types";
 const ICON_CLASS = "w-3.5 h-3.5 mr-2";
 
 const INSERT_LABEL = "Insert file reference";
+
+/**
+ * Statuses with a committed state to go back to. `untracked` has none — its
+ * only undo is Delete — and `conflicted` belongs to the conflict panel.
+ */
+const DISCARDABLE_STATUSES: ReadonlySet<GitStatus> = new Set([
+  "modified",
+  "added",
+  "deleted",
+  "renamed",
+  "copied",
+]);
 
 /**
  * Why the row can't insert a reference, in the two registers the menu needs.
@@ -146,6 +158,27 @@ export interface FileRowMenuItemOptions {
    * browser lists unchanged files and has no diff to show for them.
    */
   hasChanges?: boolean;
+  /**
+   * Reveals this row in the OS file manager. Supplied by a surface that shows
+   * files outside every project root — the file panel — and already owns a
+   * reveal that takes the guarded out-of-root fallback; omitted surfaces use
+   * the root-contained `file.showItemInFolder`.
+   */
+  onReveal?: (() => void) | undefined;
+  /**
+   * Copies the file's text from what the surface already holds. Supplied by
+   * the file panel, which displays files outside every project root that
+   * `file.read`'s containment refuses; it also shows the item for any loaded
+   * text, whatever the extension. Omitted surfaces read through `file.read`.
+   */
+  onCopyFileContents?: (() => void) | undefined;
+  /**
+   * Whether `status` describes the working tree. False for a base-branch
+   * review, whose rows are committed changes: `Discard changes` and
+   * `Delete file` there would act on whatever the working tree happens to
+   * hold, not on the change shown, so neither is offered.
+   */
+  statusIsLocal?: boolean;
 }
 
 export interface FileRowMenuSurface {
@@ -305,6 +338,30 @@ export function useFileRowMenuItems(surface: FileRowMenuSurface): FileRowMenuCon
     [reveal, worktreeId]
   );
 
+  const handleDiscardChanges = useCallback(
+    (relativePath: string) =>
+      // The action asks for the confirm, so Retry re-asks rather than reusing
+      // an approval given for a file that may have changed since.
+      runRowAction(
+        "git.discardFileChanges",
+        { worktreePath, filePath: relativePath },
+        "Couldn't discard changes",
+        worktreeId
+      ),
+    [worktreePath, worktreeId]
+  );
+
+  const handleDeleteFile = useCallback(
+    (relativePath: string) =>
+      runRowAction(
+        "file.trash",
+        { worktreePath, filePath: relativePath },
+        "Couldn't delete file",
+        worktreeId
+      ),
+    [worktreePath, worktreeId]
+  );
+
   const handleCopyContext = useCallback(
     (target: FileRowMenuTarget) => {
       if (worktreeId === null) return;
@@ -341,7 +398,25 @@ export function useFileRowMenuItems(surface: FileRowMenuSurface): FileRowMenuCon
       // kinds with no text to put on a clipboard. Extension-only by necessity —
       // nothing here has read the file — so an unfamiliar binary still shows
       // the item and fails at the read with a reason.
-      const showCopyFileContents = showOpenCurrent && isFileContentsCopyCandidate(absolutePath);
+      const showCopyFileContents =
+        showOpenCurrent &&
+        (options?.onCopyFileContents !== undefined || isFileContentsCopyCandidate(absolutePath));
+      // Both act on one file of one worktree, so a folder row or a surface with
+      // no worktree root (a workspace-rooted browser) has neither (#13424).
+      // A row whose status describes a comparison rather than the working tree
+      // can't say what either would do here: a committed deletion may be on
+      // disk again, a committed change may be conflicted now.
+      const canMutate =
+        !isDirectory &&
+        worktreeId !== null &&
+        worktreePath !== "" &&
+        options?.statusIsLocal !== false;
+      const showDiscard = canMutate && status !== null && DISCARDABLE_STATUSES.has(status);
+      // A deleted file has nothing on disk to delete — Discard is what brings
+      // it back — and a conflicted one is the conflict panel's. An untracked
+      // file gets this alone: with nothing to restore to, discarding it and
+      // deleting it are one operation, so it is offered once.
+      const showDelete = canMutate && status !== "deleted" && status !== "conflicted";
 
       return (
         <>
@@ -376,7 +451,7 @@ export function useFileRowMenuItems(surface: FileRowMenuSurface): FileRowMenuCon
               </ContextMenuActionItem>
             </>
           )}
-          <ContextMenuItem onSelect={() => handleReveal(absolutePath)}>
+          <ContextMenuItem onSelect={options?.onReveal ?? (() => handleReveal(absolutePath))}>
             <FolderOpen className={ICON_CLASS} />
             {reveal.label}
           </ContextMenuItem>
@@ -447,7 +522,11 @@ export function useFileRowMenuItems(surface: FileRowMenuSurface): FileRowMenuCon
                 Copy file name
               </ContextMenuItem>
               {showCopyFileContents && (
-                <ContextMenuItem onSelect={() => handleCopyFileContents(absolutePath)}>
+                <ContextMenuItem
+                  onSelect={
+                    options?.onCopyFileContents ?? (() => handleCopyFileContents(absolutePath))
+                  }
+                >
                   <Copy className={ICON_CLASS} />
                   Copy file contents
                 </ContextMenuItem>
@@ -495,6 +574,24 @@ export function useFileRowMenuItems(surface: FileRowMenuSurface): FileRowMenuCon
               </ContextMenuSub>
             </>
           )}
+          {/* Last and set apart: the only items here that change the file. */}
+          {(showDiscard || showDelete) && (
+            <>
+              <ContextMenuSeparator />
+              {showDiscard && (
+                <ContextMenuItem onSelect={() => handleDiscardChanges(relativePath)}>
+                  <RotateCcw className={ICON_CLASS} />
+                  Discard changes
+                </ContextMenuItem>
+              )}
+              {showDelete && (
+                <ContextMenuItem onSelect={() => handleDeleteFile(relativePath)}>
+                  <Trash2 className={ICON_CLASS} />
+                  Delete file
+                </ContextMenuItem>
+              )}
+            </>
+          )}
         </>
       );
     },
@@ -511,6 +608,8 @@ export function useFileRowMenuItems(surface: FileRowMenuSurface): FileRowMenuCon
       handleCopyContext,
       handleCopyFileContents,
       handleReveal,
+      handleDiscardChanges,
+      handleDeleteFile,
     ]
   );
 

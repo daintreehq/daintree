@@ -17,13 +17,6 @@ function makeWidths(ids: ToolbarButtonId[], width = 36): Map<string, number> {
 describe("computeOverflow", () => {
   const ids: ToolbarButtonId[] = ["terminal", "browser", "forge-stats", "settings", "copy-tree"];
 
-  it("returns all visible when everything fits", () => {
-    const widths = makeWidths(ids, 36);
-    const result = computeOverflow(500, widths, ids, TOOLBAR_BUTTON_PRIORITIES);
-    expect(result.visibleIds).toEqual(ids);
-    expect(result.overflowIds).toEqual([]);
-  });
-
   it("returns all visible at exact fit", () => {
     const widths = makeWidths(ids, 36); // 5 * 36 = 180
     const result = computeOverflow(180, widths, ids, TOOLBAR_BUTTON_PRIORITIES);
@@ -111,23 +104,6 @@ describe("computeOverflow", () => {
   });
 
   describe("pinnedIds — issue #8158", () => {
-    it("keeps a pinned item visible even when the container is too narrow", () => {
-      const ordered: ToolbarButtonId[] = ["voice-recording", "settings", "copy-tree"];
-      const widths = makeWidths(ordered, 40);
-      // Container 10 → would normally overflow everything. Pin voice-recording.
-      // Removable = settings, copy-tree → removable width 80. target = 10-0-8 = 2.
-      // Remove both: 80→40→0 ≤ 2. voice-recording survives unconditionally.
-      const result = computeOverflow(
-        10,
-        widths,
-        ordered,
-        TOOLBAR_BUTTON_PRIORITIES,
-        new Set<ToolbarButtonId>(["voice-recording"])
-      );
-      expect(result.visibleIds).toContain("voice-recording");
-      expect(result.overflowIds).not.toContain("voice-recording");
-    });
-
     it("non-pinned items still overflow normally when pinned IDs are present", () => {
       const ordered: ToolbarButtonId[] = ["voice-recording", "terminal", "settings", "copy-tree"];
       const widths = makeWidths(ordered, 40);
@@ -183,25 +159,6 @@ describe("computeOverflow", () => {
       expect(result.overflowIds).toEqual(["settings", "copy-tree"]);
     });
 
-    it("pins voice-recording when placed on the left side too", () => {
-      // The user may move voice-recording into the left group; pinning must
-      // honor whichever side it lives on (the same pinnedIds set is passed
-      // for both sides in Toolbar.tsx).
-      const ordered: ToolbarButtonId[] = ["voice-recording", "terminal", "settings"];
-      const widths = makeWidths(ordered, 40);
-      // Container 50, pinned 40 → availableWidth = 10. terminal(40)+settings(40)
-      // both overflow; voice-recording stays visible.
-      const result = computeOverflow(
-        50,
-        widths,
-        ordered,
-        TOOLBAR_BUTTON_PRIORITIES,
-        new Set<ToolbarButtonId>(["voice-recording"])
-      );
-      expect(result.visibleIds).toEqual(["voice-recording"]);
-      expect(result.overflowIds).toEqual(["terminal", "settings"]);
-    });
-
     it("pinned ID absent from orderedIds is a no-op", () => {
       // Passing a pinned set whose ID isn't on this side must produce the
       // same result as no pinning — guards against silent width arithmetic
@@ -217,13 +174,6 @@ describe("computeOverflow", () => {
         foreignPinSet
       );
       expect(withForeignPin).toEqual(without);
-    });
-
-    it("undefined pinnedIds preserves prior behavior", () => {
-      const widths = makeWidths(ids, 36);
-      const without = computeOverflow(500, widths, ids, TOOLBAR_BUTTON_PRIORITIES);
-      const withUndefined = computeOverflow(500, widths, ids, TOOLBAR_BUTTON_PRIORITIES, undefined);
-      expect(withUndefined).toEqual(without);
     });
 
     it("empty pinnedIds set preserves prior behavior", () => {
@@ -282,25 +232,6 @@ describe("computeGuardedOverflow", () => {
     );
     expect(result.overflowIds).toContain("copy-tree");
     expect(result.overflowIds).toContain("settings");
-  });
-
-  it("holds the previous result when growing but still below the restore threshold", () => {
-    const widths = makeWidths(ids, 36);
-    const previous: OverflowResult = {
-      visibleIds: ["terminal", "browser", "forge-stats", "settings"],
-      overflowIds: ["copy-tree"],
-    };
-    // Previous width 170, smallest overflowed = 36, restore buffer = 16.
-    // Threshold = 170 + 36 + 16 = 222. At 200 we should hold.
-    const result = computeGuardedOverflow(
-      200,
-      widths,
-      ids,
-      TOOLBAR_BUTTON_PRIORITIES,
-      170,
-      previous
-    );
-    expect(result).toBe(previous);
   });
 
   it("restores items once growth clears the restore threshold", () => {

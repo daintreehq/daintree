@@ -1,0 +1,224 @@
+// @vitest-environment jsdom
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import type { HostProjectSummary } from "@shared/types/ipc/remoteHosts";
+
+class ResizeObserverStub {
+  observe() {}
+  unobserve() {}
+  disconnect() {}
+}
+
+beforeAll(() => {
+  if (typeof globalThis.ResizeObserver === "undefined") {
+    globalThis.ResizeObserver = ResizeObserverStub as typeof ResizeObserver;
+  }
+});
+
+vi.mock("@/hooks", async (importOriginal) => {
+  const actual = (await importOriginal()) as Record<string, unknown>;
+  return { ...actual, useEscapeStack: () => {}, useOverlayState: () => {} };
+});
+vi.mock("@/hooks/useOverlayState", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/hooks/useOverlayState")>()),
+  useOverlayState: () => {},
+}));
+vi.mock("@/hooks/useAnimatedPresence", () => ({
+  useAnimatedPresence: ({ isOpen }: { isOpen: boolean }) => ({
+    isVisible: isOpen,
+    shouldRender: isOpen,
+  }),
+}));
+vi.mock("@/store", () => ({ usePortalStore: () => ({ isOpen: false, width: 0 }) }));
+vi.mock("@/store/portalStore", () => ({ usePortalStore: () => ({ isOpen: false, width: 0 }) }));
+vi.mock("@/store/paletteStore", () => {
+  const usePaletteStore = (selector?: (s: { activePaletteId: null }) => unknown) =>
+    selector ? selector({ activePaletteId: null }) : { activePaletteId: null };
+  usePaletteStore.getState = () => ({ activePaletteId: null });
+  return { usePaletteStore };
+});
+vi.mock("@/components/Hosts/hostList", () => ({
+  useHostList: () => ({
+    hosts: [{ descriptor: { id: "h1", name: "studio-01" }, connection: {}, summary: null }],
+    localSummary: null,
+  }),
+  getHostListSnapshot: () => ({ hosts: [], localSummary: null }),
+}));
+vi.mock("@/lib/platform", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/platform")>()),
+  isMac: () => true,
+  isWindows: () => false,
+}));
+vi.mock("@/utils/logger", () => ({
+  logError: vi.fn(),
+  logDebug: vi.fn(),
+  logInfo: vi.fn(),
+  logWarn: vi.fn(),
+}));
+
+vi.mock("@/components/Hosts/Overview/HostAddProjectDialog", () => ({
+  HostAddProjectDialog: ({
+    hostName,
+    onClose,
+    onOpened,
+  }: {
+    hostName: string;
+    onClose: () => void;
+    onOpened: (result: { kind: "opened"; hostId: string; projectId: string }) => void;
+  }) => (
+    <>
+      <button
+        type="button"
+        onClick={() => onOpened({ kind: "opened", hostId: "h1", projectId: "p-new" })}
+      >
+        Clone onto {hostName}
+      </button>
+      <button type="button" onClick={onClose}>
+        Cancel adding
+      </button>
+    </>
+  ),
+}));
+
+import { HostProjectPicker } from "../HostProjectPicker";
+
+const listHostProjects = vi.fn<(payload: { hostId: string }) => Promise<HostProjectSummary[]>>();
+const switchWindowHost = vi.fn(() => Promise.resolve({ outcome: "switched" }));
+
+beforeEach(() => {
+  listHostProjects.mockReset();
+  switchWindowHost.mockClear();
+  Object.defineProperty(window, "electron", {
+    configurable: true,
+    writable: true,
+    value: { remoteHosts: { listHostProjects, switchWindowHost } },
+  });
+});
+
+afterEach(() => cleanup());
+
+async function renderPicker(onClose = vi.fn()) {
+  render(<HostProjectPicker hostId="h1" onClose={onClose} />);
+  await act(async () => {
+    await Promise.resolve();
+  });
+  return onClose;
+}
+
+describe("HostProjectPicker", () => {
+  it("lists the host's projects under its name and switches the window to the one picked", async () => {
+    listHostProjects.mockResolvedValue([
+      { id: "p1", name: "App", path: "/srv/app" },
+      { id: "p2", name: "Site", path: "/srv/site" },
+    ]);
+    const onClose = await renderPicker();
+    expect(listHostProjects).toHaveBeenCalledWith({ hostId: "h1" });
+    expect(screen.getByText("Projects on studio-01")).toBeTruthy();
+    fireEvent.click(await screen.findByText("Site"));
+    expect(onClose).toHaveBeenCalled();
+    await waitFor(() =>
+      expect(switchWindowHost).toHaveBeenCalledWith({
+        hostId: "h1",
+        newWindow: false,
+        projectId: "p2",
+      })
+    );
+  });
+
+  it("says a host has no projects and offers to add one there, never another empty window", async () => {
+    listHostProjects.mockResolvedValue([]);
+    const onClose = await renderPicker();
+    expect(await screen.findByText("studio-01 has no projects yet.")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: /in a new window/ })).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Add project on studio-01…" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Clone onto studio-01" }));
+    expect(onClose).toHaveBeenCalled();
+    await waitFor(() =>
+      expect(switchWindowHost).toHaveBeenCalledWith({
+        hostId: "h1",
+        newWindow: false,
+        projectId: "p-new",
+      })
+    );
+    expect(switchWindowHost).not.toHaveBeenCalledWith({ hostId: "h1", newWindow: true });
+  });
+
+  it("returns to the empty host's list when adding a project is cancelled", async () => {
+    listHostProjects.mockResolvedValue([]);
+    const onClose = await renderPicker();
+    fireEvent.click(await screen.findByRole("button", { name: "Add project on studio-01…" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Cancel adding" }));
+    expect(await screen.findByText("studio-01 has no projects yet.")).toBeTruthy();
+    expect(onClose).not.toHaveBeenCalled();
+    expect(switchWindowHost).not.toHaveBeenCalled();
+  });
+
+  it("says so when the host can't be listed, and lists it again on Retry", async () => {
+    listHostProjects.mockRejectedValueOnce(new Error("link down"));
+    listHostProjects.mockResolvedValueOnce([{ id: "p1", name: "App", path: "/srv/app" }]);
+    await renderPicker();
+    expect(await screen.findByText("Couldn't list the projects on studio-01.")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+    expect(await screen.findByText("App")).toBeTruthy();
+    expect(listHostProjects).toHaveBeenCalledTimes(2);
+  });
+
+  it("keeps a failure and its Retry in view when a search was typed while listing", async () => {
+    let reject: (error: Error) => void = () => {};
+    listHostProjects.mockReturnValueOnce(new Promise((_, fail) => (reject = fail)));
+    await renderPicker();
+    fireEvent.change(screen.getByRole("combobox"), { target: { value: "app" } });
+    await act(async () => reject(new Error("link down")));
+    expect(await screen.findByText("Couldn't list the projects on studio-01.")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Retry" })).toBeTruthy();
+  });
+
+  it("retries a failed listing on Enter", async () => {
+    listHostProjects.mockRejectedValueOnce(new Error("link down"));
+    listHostProjects.mockResolvedValueOnce([]);
+    await renderPicker();
+    await screen.findByText("Couldn't list the projects on studio-01.");
+    fireEvent.keyDown(screen.getByRole("combobox"), { key: "Enter" });
+    expect(await screen.findByText("studio-01 has no projects yet.")).toBeTruthy();
+  });
+
+  it("says how many projects it isn't showing rather than stopping silently", async () => {
+    listHostProjects.mockResolvedValue(
+      Array.from({ length: 130 }, (_, index) => ({
+        id: `p${index}`,
+        name: `project-${index}`,
+        path: `/srv/project-${index}`,
+      }))
+    );
+    await renderPicker();
+    await screen.findByText("project-0");
+    expect(document.querySelectorAll('[role="option"]').length).toBeLessThan(130);
+    expect(document.body.textContent).toMatch(/\+\d+ more/);
+    // The rest are a search away.
+    fireEvent.change(screen.getByRole("combobox"), { target: { value: "project-129" } });
+    expect(await screen.findByText("project-129")).toBeTruthy();
+  });
+
+  it("opens the picked project in a new window on Cmd+Enter", async () => {
+    listHostProjects.mockResolvedValue([{ id: "p1", name: "App", path: "/srv/app" }]);
+    await renderPicker();
+    await screen.findByText("App");
+    fireEvent.keyDown(screen.getByRole("combobox"), { key: "Enter", metaKey: true });
+    await waitFor(() =>
+      expect(switchWindowHost).toHaveBeenCalledWith({
+        hostId: "h1",
+        newWindow: true,
+        projectId: "p1",
+      })
+    );
+  });
+
+  it("tells an empty host from a search that matched nothing", async () => {
+    listHostProjects.mockResolvedValue([{ id: "p1", name: "App", path: "/srv/app" }]);
+    await renderPicker();
+    await screen.findByText("App");
+    fireEvent.change(screen.getByRole("combobox"), { target: { value: "zzz" } });
+    expect(await screen.findByText(/No matches for/)).toBeTruthy();
+    expect(screen.queryByText("studio-01 has no projects yet.")).toBeNull();
+  });
+});

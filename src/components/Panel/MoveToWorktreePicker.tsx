@@ -1,4 +1,13 @@
-import { useCallback, useDeferredValue, useEffect, useId, useMemo, useRef, useState } from "react";
+import {
+  useCallback,
+  useDeferredValue,
+  useEffect,
+  useId,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import { useShallow } from "zustand/react/shallow";
 import { Sprout } from "@/components/icons";
 import { AppPalettePopover } from "@/components/ui/AppPalettePopover";
@@ -6,8 +15,11 @@ import { AppPaletteDialog, PaletteFooterHints } from "@/components/ui/AppPalette
 import { PopoverSearchField } from "@/components/ui/PopoverSearchField";
 import { Button } from "@/components/ui/button";
 import { PALETTE_ROW_CLASS } from "@/components/ui/paletteRowStyles";
+import { TruncatedTooltip } from "@/components/ui/TruncatedTooltip";
+import { splitBranchType, type BranchGlyph } from "@/components/Worktree/BranchLabel";
 import { useIsDockPopoverChild } from "@/components/ui/DockPopoverChildContext";
 import { useSidebarWorktreeOrder } from "@/hooks/useSidebarWorktreeOrder";
+import { useTruncationDetection } from "@/hooks/useTruncationDetection";
 import { useWorktreeColorMap } from "@/hooks/useWorktreeColorMap";
 import { matchesWorktreeQuery, sortWorktreesByRelevance } from "@/lib/worktreeFilters";
 import {
@@ -20,6 +32,7 @@ import { actionService } from "@/services/ActionService";
 import { useWorktreeFilterStore, type OrderBy } from "@/store/worktreeFilterStore";
 import type { WorktreeState } from "@/types";
 import { pluralize } from "@/lib/pluralize";
+import { UI_TOOLTIP_DELAY_DURATION } from "@/lib/animationUtils";
 
 export interface MoveToWorktreePickerProps {
   panelId: string;
@@ -140,6 +153,8 @@ interface PickerRow {
   headline: WorktreeHeadline;
   /** The branch, when the headline is a title rather than the branch itself. */
   detail: string | null;
+  /** The headline is the branch, so it is drawn as one. */
+  isBranchTitled: boolean;
   isCurrent: boolean;
 }
 
@@ -147,17 +162,36 @@ interface OrderPrefs {
   orderBy: OrderBy;
   pinnedWorktrees: string[];
   manualOrder: string[];
+  customTitles: Readonly<Record<string, string>>;
 }
 
-function toRow(worktree: WorktreeState, currentWorktreeId: string | undefined): PickerRow {
-  const headline = getWorktreeHeadline(worktree);
+function toRow(
+  worktree: WorktreeState,
+  currentWorktreeId: string | undefined,
+  customTitle: string | undefined
+): PickerRow {
+  const headline = getWorktreeHeadline(worktree, customTitle);
+  // A custom title (#13409) is a title like an issue's, whatever it displaced,
+  // so the branch goes underneath it.
   const detail =
-    headline.kind === "pr" || headline.kind === "issue"
-      ? getWorktreeBranchLabel(worktree)
-      : headline.kind === "main"
-        ? (worktree.branch ?? null)
-        : null;
-  return { worktree, headline, detail, isCurrent: worktree.id === currentWorktreeId };
+    headline.customTitle !== undefined
+      ? getWorktreeBranchLabel(worktree).trim() || null
+      : headline.kind === "pr" || headline.kind === "issue"
+        ? getWorktreeBranchLabel(worktree)
+        : headline.kind === "main"
+          ? (worktree.branch ?? null)
+          : null;
+  const isBranchTitled =
+    headline.customTitle === undefined &&
+    headline.kind === "branch" &&
+    getWorktreeBranchLabel(worktree).trim() !== "";
+  return {
+    worktree,
+    headline,
+    detail,
+    isBranchTitled,
+    isCurrent: worktree.id === currentWorktreeId,
+  };
 }
 
 /**
@@ -172,7 +206,9 @@ function orderForQuery(
   prefs: OrderPrefs
 ): readonly WorktreeState[] {
   if (!query) return ordered;
-  const matches = ordered.filter((worktree) => matchesWorktreeQuery(worktree, query));
+  const matches = ordered.filter((worktree) =>
+    matchesWorktreeQuery(worktree, query, prefs.customTitles[worktree.id])
+  );
   const main = matches.filter((worktree) => worktree.isMainWorktree);
   const rest = matches.filter((worktree) => !worktree.isMainWorktree);
   return [
@@ -182,7 +218,8 @@ function orderForQuery(
       query,
       prefs.orderBy,
       prefs.pinnedWorktrees,
-      prefs.manualOrder
+      prefs.manualOrder,
+      prefs.customTitles
     ),
   ];
 }
@@ -216,6 +253,7 @@ function MoveToWorktreePickerBody({
       orderBy: state.orderBy,
       pinnedWorktrees: state.pinnedWorktrees,
       manualOrder: state.manualOrder,
+      customTitles: state.worktreeCustomTitles,
     }))
   );
 
@@ -226,7 +264,7 @@ function MoveToWorktreePickerBody({
   const rows = useMemo(
     () =>
       orderForQuery(ordered, deferredQuery, prefs).map((worktree) =>
-        toRow(worktree, currentWorktreeId)
+        toRow(worktree, currentWorktreeId, prefs.customTitles[worktree.id])
       ),
     [ordered, deferredQuery, prefs, currentWorktreeId]
   );
@@ -256,12 +294,49 @@ function MoveToWorktreePickerBody({
     document.getElementById(activeDescendant)?.scrollIntoView({ block: "nearest" });
   }, [activeDescendant]);
 
+  // The row the arrow keys last landed on shows its full name when it is cut.
+  // Under the pointer the tooltip opens on hover as any other does. Scoped to
+  // the query like the cursor, so typing takes it down without an effect.
+  const [reveal, setReveal] = useState<{ query: string; worktreeId: string } | null>(null);
+  const revealedWorktreeId =
+    reveal !== null && reveal.query === deferredQuery ? reveal.worktreeId : null;
+
+  // The row Enter takes with no key pressed, the first target on opening and
+  // after each query, reveals too once the user pauses on it, for as long as a
+  // hover tooltip waits. Otherwise a typed query's first result is taken
+  // unread. Once the user has acted under a query (moved the cursor, taken the
+  // pointer, pressed Escape) the pause stands down for it: their reveal, or
+  // their dismissal, is the one that holds. Until then it follows the first
+  // target, which an agent's activity can reorder under a still cursor.
+  const [actedQuery, setActedQuery] = useState<string | null>(null);
+  const firstTargetId = targets[0]?.worktree.id ?? null;
+  useEffect(() => {
+    if (firstTargetId === null || actedQuery === deferredQuery) return;
+    const timer = setTimeout(
+      () => setReveal({ query: deferredQuery, worktreeId: firstTargetId }),
+      UI_TOOLTIP_DELAY_DURATION
+    );
+    return () => clearTimeout(timer);
+  }, [actedQuery, deferredQuery, firstTargetId]);
+
   const moveCursorTo = useCallback(
     (index: number) => {
       const row = targets[index];
-      if (row) setCursor({ query: deferredQuery, worktreeId: row.worktree.id });
+      if (!row) return;
+      setCursor({ query: deferredQuery, worktreeId: row.worktree.id });
+      setReveal({ query: deferredQuery, worktreeId: row.worktree.id });
+      setActedQuery(deferredQuery);
     },
     [deferredQuery, targets]
+  );
+
+  const handleHover = useCallback(
+    (worktreeId: string) => {
+      setCursor({ query: deferredQuery, worktreeId });
+      setReveal(null);
+      setActedQuery(deferredQuery);
+    },
+    [deferredQuery]
   );
 
   const handleNavigationKeyDown = useCallback(
@@ -270,7 +345,14 @@ function MoveToWorktreePickerBody({
       // can report 229 before `isComposing` flips, so both are checked.
       if (event.nativeEvent.isComposing || event.nativeEvent.keyCode === 229) return;
       if (event.metaKey || event.ctrlKey || event.altKey) return;
-      // Escape is the shell's: it clears a query before it closes.
+      // An open reveal is the topmost layer, so the shell never sees this
+      // Escape: it takes the reveal down and leaves the query and the picker.
+      // Without a reveal showing, the shell has already cleared or closed.
+      if (event.key === "Escape") {
+        setReveal(null);
+        setActedQuery(deferredQuery);
+        return;
+      }
       if (targets.length === 0) return;
 
       let handled = true;
@@ -301,7 +383,7 @@ function MoveToWorktreePickerBody({
       event.preventDefault();
       event.stopPropagation();
     },
-    [activeIndex, moveCursorTo, onMove, targets]
+    [activeIndex, deferredQuery, moveCursorTo, onMove, targets]
   );
 
   const clearSearch = useCallback(() => {
@@ -353,8 +435,11 @@ function MoveToWorktreePickerBody({
                 row={row}
                 optionId={getOptionId(rowIndex)}
                 isActive={row.worktree.id === activeWorktreeId}
+                isRevealed={
+                  row.worktree.id === activeWorktreeId && row.worktree.id === revealedWorktreeId
+                }
                 color={colorMap?.[row.worktree.id]}
-                onHover={(worktreeId) => setCursor({ query: deferredQuery, worktreeId })}
+                onHover={handleHover}
                 onMove={onMove}
               />
             ))}
@@ -383,10 +468,188 @@ function MoveToWorktreePickerBody({
   );
 }
 
+/** Shortest end of a branch that is kept whole, and the longest it may grow to reach a word. */
+const BRANCH_TAIL_MIN = 12;
+const BRANCH_TAIL_MAX = 20;
+
+/**
+ * A branch name as the part that may give way and the end that never does.
+ *
+ * Branches cut from neighbouring issues share everything up to their last
+ * words — `…-restart-on-idle-link-release`, `…-restart-on-endpoint-close-revoke`
+ * — so an end-cut makes them identical. The kept end starts on a word, and is
+ * the longest that fits the budget, so it reads as words rather than letters.
+ */
+function splitBranchTail(name: string): { head: string; tail: string } {
+  const chars = Array.from(name);
+  if (chars.length <= BRANCH_TAIL_MAX + 4) return { head: name, tail: "" };
+  let keep = BRANCH_TAIL_MIN;
+  for (let i = chars.length - BRANCH_TAIL_MAX; i <= chars.length - BRANCH_TAIL_MIN; i++) {
+    if (/[-_/.]/.test(chars[i - 1]!) && !/[-_/.]/.test(chars[i]!)) {
+      keep = chars.length - i;
+      break;
+    }
+  }
+  return {
+    head: chars.slice(0, chars.length - keep).join(""),
+    tail: chars.slice(chars.length - keep).join(""),
+  };
+}
+
+let measureContext: CanvasRenderingContext2D | null = null;
+
+function measureText(text: string, font: string): number {
+  measureContext ??= document.createElement("canvas").getContext("2d");
+  if (!measureContext) return text.length * 7;
+  measureContext.font = font;
+  return measureContext.measureText(text).width;
+}
+
+/**
+ * A branch the way the sidebar draws one, its type as a glyph and the rest in
+ * mono, with its head fitted to the room its kept end leaves.
+ *
+ * Fitted in JS rather than left to `text-overflow`: a mono ellipsis lands on a
+ * glyph boundary, so the head's box keeps up to a character of slack after it,
+ * and `issue-13336-… exchange-history` reads as a branch with a space in it.
+ * The fit is also what says whether the row needs its reveal.
+ */
+function useFittedBranch(branch: string | null) {
+  const { Icon, rest } = splitBranchType(branch ?? "");
+  const { head, tail } = splitBranchTail(rest);
+  const boxRef = useRef<HTMLSpanElement>(null);
+  const tailRef = useRef<HTMLSpanElement>(null);
+  const [shown, setShown] = useState(head);
+
+  useLayoutEffect(() => {
+    const box = boxRef.current;
+    if (!box) return;
+    let live = true;
+    const fit = () => {
+      if (!live) return;
+      const style = getComputedStyle(box);
+      const font = `${style.fontWeight} ${style.fontSize} ${style.fontFamily}`;
+      const room = box.clientWidth - (tailRef.current?.offsetWidth ?? 0);
+      // Unmeasured (hidden, zero-width): the whole head, with CSS as the backstop.
+      if (room <= 0 || measureText(head, font) <= room) {
+        setShown(head);
+        return;
+      }
+      let lo = 0;
+      let hi = head.length - 1;
+      while (lo < hi) {
+        const mid = Math.ceil((lo + hi) / 2);
+        if (measureText(`${head.slice(0, mid)}…`, font) <= room) lo = mid;
+        else hi = mid - 1;
+      }
+      setShown(`${head.slice(0, lo)}…`);
+    };
+    fit();
+    // The first pass can measure the fallback face; the mono face is narrower.
+    void document.fonts?.ready.then(fit);
+    const observer = typeof ResizeObserver === "undefined" ? null : new ResizeObserver(fit);
+    observer?.observe(box);
+    return () => {
+      live = false;
+      observer?.disconnect();
+    };
+  }, [head]);
+
+  return { Icon, head: shown, tail, isCut: shown !== head, boxRef, tailRef };
+}
+
+/**
+ * The drawn pieces are hidden from assistive technology and the whole ref is
+ * spoken instead, so the option's name is the branch exactly, however it is
+ * cut on screen.
+ */
+function BranchName({
+  branch,
+  Icon,
+  head,
+  tail,
+  boxRef,
+  tailRef,
+  isHeadline,
+}: {
+  branch: string;
+  Icon: BranchGlyph | null;
+  head: string;
+  tail: string;
+  boxRef: React.RefObject<HTMLSpanElement | null>;
+  tailRef: React.RefObject<HTMLSpanElement | null>;
+  isHeadline: boolean;
+}) {
+  return (
+    <>
+      <span className="sr-only">{branch}</span>
+      <span
+        aria-hidden="true"
+        className={cn(
+          "flex min-w-0 items-center gap-1 font-mono",
+          isHeadline ? "text-xs leading-5" : "text-2xs font-medium text-text-secondary"
+        )}
+      >
+        {/* One box at both sizes, so a branch starts on the same column whether
+            it is a row's headline or its detail. */}
+        {Icon && (
+          <span className="flex size-3.5 shrink-0 items-center justify-center">
+            <Icon
+              className={cn("text-text-secondary", isHeadline ? "size-3.5" : "size-3")}
+              strokeWidth={2.5}
+            />
+          </span>
+        )}
+        {/* Fills the line, so the room it measures is the line's, not the text's. */}
+        <span ref={boxRef} className="flex min-w-0 flex-1 whitespace-pre">
+          <span className="min-w-0 truncate">{head}</span>
+          {tail && (
+            <span ref={tailRef} className="shrink-0">
+              {tail}
+            </span>
+          )}
+        </span>
+      </span>
+    </>
+  );
+}
+
+/**
+ * The whole of a clipped row, in the row's own order: its title, then its
+ * branch as git spells it — or, where the branch is the title, the branch alone
+ * at the title's weight.
+ */
+function RowRevealContent({
+  title,
+  displaced,
+  branch,
+}: {
+  title: string | null;
+  /** The computed headline a custom title replaced (#13409). */
+  displaced?: string;
+  branch: string | null;
+}) {
+  return (
+    <span className="flex flex-col gap-0.5 break-words">
+      {title && <span>{title}</span>}
+      {displaced && displaced !== branch && (
+        <span className="text-2xs text-text-secondary">{displaced}</span>
+      )}
+      {branch && (
+        <span className={cn("font-mono", title ? "text-2xs text-text-secondary" : "text-xs")}>
+          {branch}
+        </span>
+      )}
+    </span>
+  );
+}
+
 interface MoveToWorktreeRowProps {
   row: PickerRow;
   optionId: string;
   isActive: boolean;
+  /** The cursor's reveal is here (arrow keys, or a pause on the default row): the full name shows if it is cut. */
+  isRevealed: boolean;
   color: string | undefined;
   onHover: (worktreeId: string) => void;
   onMove: (worktreeId: string) => void;
@@ -396,62 +659,124 @@ function MoveToWorktreeRow({
   row,
   optionId,
   isActive,
+  isRevealed,
   color,
   onHover,
   onMove,
 }: MoveToWorktreeRowProps) {
-  const { worktree, headline, detail, isCurrent } = row;
+  const { worktree, headline, detail, isBranchTitled, isCurrent } = row;
+  const branch = isBranchTitled ? headline.label : detail;
+  const { ref: titleRef, isTruncated: isTitleCut } = useTruncationDetection();
+  const {
+    Icon: BranchIcon,
+    head: branchHead,
+    tail: branchTail,
+    isCut: isBranchCut,
+    boxRef: branchBoxRef,
+    tailRef: branchTailRef,
+  } = useFittedBranch(branch);
 
   return (
-    <div
-      id={optionId}
-      role="option"
-      aria-selected={isActive}
-      // Kept in its place rather than hidden, so every other row still sits
-      // where it does in the sidebar.
-      aria-disabled={isCurrent || undefined}
-      aria-current={isCurrent ? "true" : undefined}
-      // Pointer-move rather than mouse-enter, so the cursor follows the pointer
-      // within a row too, and keyboard and pointer can never light two rows.
-      onPointerMove={isCurrent ? undefined : () => onHover(worktree.id)}
-      onClick={
-        isCurrent
-          ? undefined
-          : (event) => {
-              // Stopped here, not merely prevented: the pane under the picker
-              // focuses itself on any click it sees, whatever the default
-              // state, and focusing the pane that just left would pull the
-              // view over to the worktree it moved to.
-              event.stopPropagation();
-              onMove(worktree.id);
-            }
+    <TruncatedTooltip
+      content={
+        <RowRevealContent
+          title={isBranchTitled ? null : headline.label}
+          displaced={headline.computedLabel}
+          branch={branch}
+        />
       }
-      className={cn(
-        PALETTE_ROW_CLASS,
-        "flex items-center gap-2 rounded-[var(--radius-sm)] px-2 py-1.5",
-        isCurrent ? "cursor-default" : "cursor-pointer"
-      )}
+      // A custom title hides the computed headline whatever its length, and a
+      // search may have matched that headline, so the reveal always has
+      // something to say for a titled row.
+      isTruncated={isTitleCut || isBranchCut || headline.computedLabel !== undefined}
+      // The row is the option the input's active descendant names; a tab stop
+      // on its text would be a second focus target.
+      focusable={false}
+      // Held open against Radix's own closes: it drops a tooltip whose trigger
+      // scrolls, and the list scrolls to every row the arrow keys reach.
+      // Escape and the pointer take it down from the picker instead.
+      open={isRevealed || undefined}
+      // Off the list's side rather than above or below the row, where it would
+      // cover the neighbours the row is being told apart from.
+      side="left"
+      align="start"
     >
-      {/* Reserved whether or not there is a glyph, so the titles hold one column. */}
-      <span className="flex size-3.5 shrink-0 items-center justify-center" aria-hidden="true">
-        {worktree.isMainWorktree ? (
-          <Sprout className="size-3.5 text-text-secondary" />
-        ) : color ? (
-          <span className="size-2 rounded-full" style={{ backgroundColor: color }} />
-        ) : null}
-      </span>
-      <span className="flex min-w-0 flex-1 flex-col">
-        <span
+      {/* The reveal's trigger. It spans the list's padding so the tooltip's
+          standard offset clears the popover's edge instead of overlapping it. */}
+      <div className="-mx-2 px-2">
+        <div
+          id={optionId}
+          role="option"
+          aria-selected={isActive}
+          // Kept in its place rather than hidden, so every other row still sits
+          // where it does in the sidebar.
+          aria-disabled={isCurrent || undefined}
+          aria-current={isCurrent ? "true" : undefined}
+          // Pointer-move rather than mouse-enter, so the cursor follows the pointer
+          // within a row too, and keyboard and pointer can never light two rows.
+          onPointerMove={isCurrent ? undefined : () => onHover(worktree.id)}
+          onClick={
+            isCurrent
+              ? undefined
+              : (event) => {
+                  // Stopped here, not merely prevented: the pane under the picker
+                  // focuses itself on any click it sees, whatever the default
+                  // state, and focusing the pane that just left would pull the
+                  // view over to the worktree it moved to.
+                  event.stopPropagation();
+                  onMove(worktree.id);
+                }
+          }
           className={cn(
-            "truncate text-sm",
-            isCurrent ? "text-text-secondary" : "text-text-primary"
+            PALETTE_ROW_CLASS,
+            "flex items-center gap-2 rounded-[var(--radius-sm)] px-2 py-1.5",
+            isCurrent ? "cursor-default" : "cursor-pointer"
           )}
         >
-          {headline.label}
-        </span>
-        {detail && <span className="truncate font-mono text-xs text-text-secondary">{detail}</span>}
-      </span>
-      {isCurrent && <span className="shrink-0 text-xs text-text-secondary">Current</span>}
-    </div>
+          {/* Reserved whether or not there is a glyph, so the titles hold one column. */}
+          <span className="flex size-3.5 shrink-0 items-center justify-center" aria-hidden="true">
+            {worktree.isMainWorktree ? (
+              <Sprout className="size-3.5 text-text-secondary" />
+            ) : color ? (
+              <span className="size-2 rounded-full" style={{ backgroundColor: color }} />
+            ) : null}
+          </span>
+          <span
+            className={cn(
+              "flex min-w-0 flex-1 flex-col",
+              isCurrent ? "text-text-secondary" : "text-text-primary"
+            )}
+          >
+            {isBranchTitled ? (
+              <BranchName
+                branch={headline.label}
+                Icon={BranchIcon}
+                head={branchHead}
+                tail={branchTail}
+                boxRef={branchBoxRef}
+                tailRef={branchTailRef}
+                isHeadline
+              />
+            ) : (
+              <span ref={titleRef} className="truncate text-sm">
+                {headline.label}
+              </span>
+            )}
+            {detail && (
+              <BranchName
+                branch={detail}
+                Icon={BranchIcon}
+                head={branchHead}
+                tail={branchTail}
+                boxRef={branchBoxRef}
+                tailRef={branchTailRef}
+                isHeadline={false}
+              />
+            )}
+          </span>
+          {isCurrent && <span className="shrink-0 text-xs text-text-secondary">Current</span>}
+        </div>
+      </div>
+    </TruncatedTooltip>
   );
 }

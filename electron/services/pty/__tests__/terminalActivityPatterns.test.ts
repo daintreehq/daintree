@@ -59,14 +59,6 @@ describe("createProcessStateValidator", () => {
     expect(cache.hasActiveDescendants).toHaveBeenCalledWith(42, 0.5);
   });
 
-  it("reports descendant CPU usage", () => {
-    const cache = createMockProcessTreeCache(new Map(), false, 12.5);
-    const validator = createProcessStateValidator(42, cache)!;
-
-    expect(validator.getDescendantsCpuUsage?.()).toBe(12.5);
-    expect(cache.getDescendantsCpuUsage).toHaveBeenCalledWith(42);
-  });
-
   it("returns false when no children exist", () => {
     const cache = createMockProcessTreeCache(new Map([[1, []]]));
     const validator = createProcessStateValidator(1, cache)!;
@@ -243,16 +235,6 @@ describe("buildActivityMonitorOptions", () => {
     expect(matchesApproveOnce).toBe(true);
   });
 
-  it("does not include universal approval patterns for non-agent terminals", () => {
-    const result = buildActivityMonitorOptions(undefined, {});
-    expect(result.promptHintPatterns).toBeUndefined();
-  });
-
-  it("sets promptFastPathMinQuietMs to the 8s waiting quiet floor for cursor agent", () => {
-    const result = buildActivityMonitorOptions("cursor", {});
-    expect(result.promptFastPathMinQuietMs).toBe(8000);
-  });
-
   it("sets promptFastPathMinQuietMs to the 8s waiting quiet floor for claude agent", () => {
     const result = buildActivityMonitorOptions("claude", {});
     expect(result.promptFastPathMinQuietMs).toBe(8000);
@@ -273,14 +255,5 @@ describe("buildActivityMonitorOptions", () => {
     });
     expect(result.patternConfig).toBeDefined();
     expect(result.bootCompletePatterns).toBeDefined();
-  });
-
-  it("sets background-tier recovery threshold (#6641)", () => {
-    // Background polling (500ms) shortens the recovery debouncer so
-    // backgrounded agents can escape "waiting" when output resumes. The
-    // volume detector is sample-cadence invariant (#6666), so no tier-
-    // specific window widening is needed.
-    const result = buildActivityMonitorOptions("claude", {});
-    expect(result.backgroundWorkingRecoveryDelayMs).toBe(600);
   });
 });

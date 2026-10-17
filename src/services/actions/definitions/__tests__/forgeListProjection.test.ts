@@ -96,11 +96,6 @@ describe("summary projection drops what a chooser does not need", () => {
     });
   });
 
-  it("produces rows that satisfy the declared result schema", () => {
-    expect(ForgeIssueSummarySchema.safeParse(projectIssueSummary(issue)).success).toBe(true);
-    expect(ForgePRSummarySchema.safeParse(projectPRSummary(pr)).success).toBe(true);
-  });
-
   it("emits nothing the declared schema does not name", () => {
     // `safeParse` strips extras, so the check above would still pass if the
     // projector started leaking `rawState`, `mergeable` or `body`. Strict

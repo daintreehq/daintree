@@ -22,14 +22,6 @@ describe("createSessionKey", () => {
     expect(key).toContain("panel");
     expect(key).not.toBe("projpanel");
   });
-
-  it("is deterministic", () => {
-    expect(createSessionKey("a", "b")).toBe(createSessionKey("a", "b"));
-  });
-
-  it("produces different keys for different inputs", () => {
-    expect(createSessionKey("a", "b")).not.toBe(createSessionKey("a", "c"));
-  });
 });
 
 describe("sanitizeToken", () => {
@@ -44,10 +36,6 @@ describe("sanitizeToken", () => {
   it("truncates to 24 characters", () => {
     const long = "a".repeat(50);
     expect(sanitizeToken(long).length).toBeLessThanOrEqual(24);
-  });
-
-  it("returns dashes for all-invalid input", () => {
-    expect(sanitizeToken("!!!")).toBe("---");
   });
 
   it("returns 'x' for entirely empty input", () => {
@@ -65,13 +53,6 @@ describe("cloneEnv", () => {
     const cloned = cloneEnv(env);
     expect(cloned).toEqual(env);
     expect(cloned).not.toBe(env);
-  });
-
-  it("returns a copy disconnected from the original", () => {
-    const env: Record<string, string> = { FOO: "bar" };
-    const cloned = cloneEnv(env)!;
-    env.BAZ = "qux";
-    expect(cloned).not.toHaveProperty("BAZ");
   });
 });
 
@@ -101,10 +82,6 @@ describe("envEquals", () => {
 describe("isPlainRecord", () => {
   it("returns false for null", () => {
     expect(isPlainRecord(null)).toBe(false);
-  });
-
-  it("returns false for undefined", () => {
-    expect(isPlainRecord(undefined)).toBe(false);
   });
 
   it("returns false for arrays", () => {

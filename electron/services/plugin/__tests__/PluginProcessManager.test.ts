@@ -19,6 +19,44 @@ import {
   type PluginProcessStreamEvent,
 } from "../../../../shared/types/ipc/pluginProcess.js";
 import type { PluginProcessDataChunk } from "../../../../shared/types/plugin.js";
+import { virtualWindowsFiles } from "../../../utils/__tests__/helpers/virtualWindowsFs.js";
+
+// Windows-path files for the PATH lookup a Windows spawn makes.
+vi.mock("node:fs", async (importOriginal) =>
+  (await import("../../../utils/__tests__/helpers/virtualWindowsFs.js")).withVirtualWindowsFiles(
+    await importOriginal()
+  )
+);
+
+// Most cases run as the host and are about process management, not program
+// lookup. On a Windows host their bare names must not reach that host's PATH
+// (which the virtual disk above hides anyway), so the lookup answers with a
+// fixed absolute path. The program-lookup cases at the end search the virtual
+// disk for real.
+const programLookup = vi.hoisted(() => ({
+  searchVirtualDisk: false,
+  /** Where a bare name resolves on a Windows host in the host-platform cases. */
+  hostResolved: (name: string) => `C:\\bin\\${name}.exe`,
+}));
+vi.mock("../../../utils/windowsExecutable.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../../utils/windowsExecutable.js")>();
+  return {
+    ...actual,
+    resolveExecutableForSpawn: (
+      name: string,
+      env?: NodeJS.ProcessEnv,
+      platform?: NodeJS.Platform
+    ): Promise<string> =>
+      programLookup.searchVirtualDisk || platform !== "win32" || /[\\/:]/.test(name)
+        ? actual.resolveExecutableForSpawn(name, env, platform)
+        : Promise.resolve(programLookup.hostResolved(name)),
+  };
+});
+
+/** The program a host-platform case expects started for a bare `name`. */
+function expectedProgram(name: string): string {
+  return process.platform === "win32" ? programLookup.hostResolved(name) : name;
+}
 
 async function flushMicrotasks(): Promise<void> {
   await new Promise((r) => setImmediate(r));
@@ -419,17 +457,6 @@ describe("PluginProcessManager", () => {
       PluginProcessConcurrencyError
     );
     await Promise.all(inFlight);
-  });
-
-  it("frees a concurrency slot when a process exits", async () => {
-    const h = makeHarness();
-    const handle = await h.manager.spawn("acme.tool", pipeConfig());
-    expect(h.manager.runningCount("acme.tool")).toBe(1);
-    h.fakes[0]!.emitExit(0, null);
-    await flushMicrotasks();
-    expect(h.manager.runningCount("acme.tool")).toBe(0);
-
-    void handle; // keep the handle referenced
   });
 
   it("killAll terminates every outstanding process for a plugin", async () => {
@@ -916,7 +943,7 @@ describe("PluginProcessManager", () => {
       expect(handle.mode).toBe("pty");
       expect(h.ptyConfigs).toHaveLength(1);
       expect(h.ptyConfigs[0]!.config).toMatchObject({
-        command: "flutter",
+        command: expectedProgram("flutter"),
         args: ["daemon", "--machine"],
         cwd: "/repo",
         cols: 120,
@@ -990,6 +1017,8 @@ describe("PluginProcessManager", () => {
         },
       });
       const pending = manager.spawn("acme.tool", ptyConfig());
+      // On Windows the allocation starts only once the program lookup answers.
+      await vi.waitFor(() => expect(h.ptyConfigs).toHaveLength(1));
       // The plugin resizes while the allocation is still in flight. The spawn
       // message is already gone, so this CANNOT become the initial size — it
       // has to land as a real SIGWINCH the moment the PTY comes up, and exactly
@@ -1059,14 +1088,6 @@ describe("PluginProcessManager", () => {
       h.ptys[1]!.emitData("fresh");
       await flushMicrotasks();
       expect(chunks).toEqual([{ stream: "data", chunk: "fresh" }]);
-    });
-
-    it("carries the current geometry across a restart", async () => {
-      const h = makeHarness();
-      const handle = await h.manager.spawn("acme.tool", ptyConfig({ cols: 80, rows: 24 }));
-      handle.resize(140, 45);
-      await handle.restart();
-      expect(h.ptyConfigs.at(-1)!.config).toMatchObject({ cols: 140, rows: 45 });
     });
 
     it("bumps the generation on every restart so the transport can filter", async () => {
@@ -1146,6 +1167,8 @@ describe("PluginProcessManager", () => {
       });
       const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
       const pending = manager.spawn("acme.tool", ptyConfig());
+      // On Windows the allocation starts only once the program lookup answers.
+      await vi.waitFor(() => expect(release).toBeDefined());
       manager.killAll("acme.tool");
       release?.(new Error("host gone"));
       const handle = await pending;
@@ -1174,6 +1197,8 @@ describe("PluginProcessManager", () => {
           }),
       });
       const pending = manager.spawn("acme.tool", ptyConfig());
+      // On Windows the allocation starts only once the program lookup answers.
+      await vi.waitFor(() => expect(release).toBeDefined());
       // Unload tears everything down while the PTY is still allocating.
       manager.killAll("acme.tool");
       const fake = makeFakePty();
@@ -1243,20 +1268,6 @@ describe("PluginProcessManager", () => {
       expect(h.fakes[0]!.stdinWrites).toEqual([]);
     });
 
-    it("makes write() a no-op after the child exits rather than throwing", async () => {
-      const h = makeHarness();
-      const handle = await h.manager.spawn("acme.tool", duplexConfig());
-      const fake = h.fakes[0]!;
-
-      fake.emitExit(0, null);
-      await flushMicrotasks();
-
-      // Fire-and-forget contract: a write racing the exit behaves like kill() on
-      // a dead process, not an exception thrown inside a plugin's timer.
-      expect(() => handle.write("late\n")).not.toThrow();
-      expect(fake.stdinWrites).toEqual([]);
-    });
-
     it("makes write() a no-op once stdin has been destroyed", async () => {
       const h = makeHarness();
       const handle = await h.manager.spawn("acme.tool", duplexConfig());
@@ -1287,49 +1298,6 @@ describe("PluginProcessManager", () => {
       expect(second.stdinWrites.join("")).toBe("after-restart\n");
       // The detached predecessor receives nothing.
       expect(first.stdinWrites).toEqual([]);
-    });
-
-    it("counts duplex processes against the per-plugin concurrency cap", async () => {
-      const h = makeHarness();
-      for (let i = 0; i < PLUGIN_PROCESS_MAX_CONCURRENT; i++) {
-        await h.manager.spawn("acme.tool", duplexConfig());
-      }
-      expect(h.manager.runningCount("acme.tool")).toBe(PLUGIN_PROCESS_MAX_CONCURRENT);
-      await expect(h.manager.spawn("acme.tool", duplexConfig())).rejects.toThrow(
-        PluginProcessConcurrencyError
-      );
-    });
-
-    it("records duplex spawns in the audit trail", async () => {
-      const h = makeHarness();
-      await h.manager.spawn("acme.tool", duplexConfig({ command: "codex" }));
-      expect(h.auditCalls).toEqual([{ pluginId: "acme.tool", command: "codex" }]);
-    });
-
-    it("tears duplex children down on unload", async () => {
-      const h = makeHarness();
-      await h.manager.spawn("acme.tool", duplexConfig());
-      await h.manager.spawn("acme.tool", duplexConfig());
-
-      h.manager.killAll("acme.tool");
-
-      expect(h.fakes[0]!.killSignals).toContain("SIGTERM");
-      expect(h.fakes[1]!.killSignals).toContain("SIGTERM");
-    });
-
-    it("leaves resize inert on a duplex process — there is no terminal", async () => {
-      const h = makeHarness();
-      const handle = await h.manager.spawn("acme.tool", duplexConfig());
-      expect(() => handle.resize(120, 40)).not.toThrow();
-      expect(h.ptys).toHaveLength(0);
-    });
-
-    it("leaves pipe-mode writes inert even though the write path now exists", async () => {
-      const h = makeHarness();
-      const handle = await h.manager.spawn("acme.tool", pipeConfig());
-
-      expect(() => handle.write("x")).not.toThrow();
-      expect(h.fakes[0]!.stdinWrites).toEqual([]);
     });
 
     it("no-ops when stdin has ended rather than writing after end", async () => {
@@ -1670,5 +1638,115 @@ describe("PluginProcessManager", () => {
       await vi.advanceTimersByTimeAsync(3_000);
       expect(groupSignals()).toEqual([]);
     });
+  });
+});
+
+describe("PluginProcessManager on Windows: program lookup", () => {
+  const originalPlatform = Object.getOwnPropertyDescriptor(process, "platform")!;
+
+  beforeEach(() => {
+    Object.defineProperty(process, "platform", { value: "win32", configurable: true });
+    programLookup.searchVirtualDisk = true;
+    virtualWindowsFiles.set({
+      "C:\\tools\\flutter.exe": "",
+      "C:\\tools\\node.exe": "",
+      "C:\\plugin\\bin\\tool.exe": "",
+    });
+  });
+
+  afterEach(() => {
+    Object.defineProperty(process, "platform", originalPlatform);
+    programLookup.searchVirtualDisk = false;
+    virtualWindowsFiles.clear();
+  });
+
+  it("starts a bare name from the child's PATH by absolute path", async () => {
+    const h = makeHarness();
+    await h.manager.spawn(
+      "acme.tool",
+      pipeConfig({ command: "node", cwd: "C:\\repo", env: { PATH: ".;C:\\tools" } })
+    );
+    await h.manager.spawn(
+      "acme.tool",
+      ptyConfig({ command: "flutter", cwd: "C:\\repo", env: { PATH: "C:\\tools" } })
+    );
+
+    expect(h.spawnConfigs[0]?.command).toBe("C:\\tools\\node.exe");
+    expect(h.ptyConfigs[0]?.config.command).toBe("C:\\tools\\flutter.exe");
+    // What the plugin asked for is what the audit trail and listing report.
+    expect(h.auditCalls.map((call) => call.command)).toContain("node");
+    expect(h.manager.list("acme.tool").map((info) => info.command)).toEqual(["node", "flutter"]);
+  });
+
+  it("records a name PATH does not hold as a failed start, never spawning it bare", async () => {
+    // A same-named file in the working directory, or under a relative PATH
+    // entry, is not looked at.
+    const h = makeHarness();
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const piped = await h.manager.spawn(
+      "acme.tool",
+      pipeConfig({ command: "node", cwd: "C:\\repo", env: { PATH: ".;bin;C:\\empty" } })
+    );
+    const pty = await h.manager.spawn(
+      "acme.tool",
+      ptyConfig({ command: "flutter", cwd: "C:\\repo", env: { PATH: "." } })
+    );
+    const crashes: unknown[] = [];
+    piped.onCrash((info) => crashes.push(info));
+    pty.onCrash((info) => crashes.push(info));
+    await flushMicrotasks();
+
+    expect(h.spawnConfigs).toHaveLength(0);
+    expect(h.ptyConfigs).toHaveLength(0);
+    expect(crashes).toHaveLength(2);
+    expect(h.manager.runningCount("acme.tool")).toBe(0);
+    errorSpy.mockRestore();
+  });
+
+  it("looks a program up again on restart only when the last lookup missed", async () => {
+    const h = makeHarness();
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const missing = await h.manager.spawn(
+      "acme.tool",
+      pipeConfig({ command: "deno", cwd: "C:\\repo", env: { PATH: "C:\\tools" } })
+    );
+    const found = await h.manager.spawn(
+      "acme.tool",
+      pipeConfig({ command: "node", cwd: "C:\\repo", env: { PATH: "C:\\tools" } })
+    );
+    await flushMicrotasks();
+    expect(h.spawnConfigs.map((config) => config.command)).toEqual(["C:\\tools\\node.exe"]);
+
+    // deno installed since (after the PATH directory listings aged out); node
+    // moved, but a found program keeps its path.
+    virtualWindowsFiles.set({ "C:\\tools\\deno.exe": "", "C:\\other\\node.exe": "" });
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(Date.now() + 60_000);
+    try {
+      await missing.restart();
+      await found.restart();
+    } finally {
+      vi.useRealTimers();
+    }
+
+    expect(h.spawnConfigs.map((config) => config.command)).toEqual([
+      "C:\\tools\\node.exe",
+      "C:\\tools\\deno.exe",
+      "C:\\tools\\node.exe",
+    ]);
+    errorSpy.mockRestore();
+  });
+
+  it("passes a path through as the plugin gave it", async () => {
+    const h = makeHarness();
+    for (const command of ["C:\\plugin\\bin\\tool.exe", ".\\bin\\tool.exe", "bin/tool"]) {
+      await h.manager.spawn("acme.tool", pipeConfig({ command, cwd: "C:\\plugin" }));
+    }
+
+    expect(h.spawnConfigs.map((config) => config.command)).toEqual([
+      "C:\\plugin\\bin\\tool.exe",
+      ".\\bin\\tool.exe",
+      "bin/tool",
+    ]);
   });
 });

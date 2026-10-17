@@ -44,6 +44,7 @@ export function FleetCountChip({
   onOpenChange,
 }: FleetCountChipProps): ReactElement {
   const armOrder = useFleetArmingStore((s) => s.armOrder);
+  const crossHostTargets = useFleetArmingStore((s) => s.crossHostTargets);
   const disarmId = useFleetArmingStore((s) => s.disarmId);
   const addToFleet = useFleetArmingStore((s) => s.addToFleet);
   // Supervised-run submission failures per pane (#10930): the armed list is
@@ -238,7 +239,7 @@ export function FleetCountChip({
               </span>
             </div>
             <ul className="flex flex-col overflow-y-auto">
-              {armOrder.length === 0 ? (
+              {armOrder.length === 0 && crossHostTargets.length === 0 ? (
                 <li>
                   <EmptyState
                     variant="zero-data"
@@ -331,6 +332,48 @@ export function FleetCountChip({
                   );
                 })
               )}
+              {crossHostTargets.map((target) => {
+                const label = `${target.title} · ${target.hostName}`;
+                const sendFailed = run?.targets.some(
+                  (t) => t.terminalId === target.key && t.submission === "failed"
+                );
+                return (
+                  // Another host's agent has no pane here to focus, so its row
+                  // only names it and lets it leave the fleet.
+                  <li
+                    key={target.key}
+                    className={cn(
+                      "flex items-center gap-2 rounded-[var(--radius-md)]",
+                      POPOVER_ROW_HOVER_CLASS
+                    )}
+                    data-testid={`fleet-row-host-${target.key}`}
+                  >
+                    <span
+                      className="flex min-w-0 flex-1 items-center gap-1.5 px-2 py-1 text-xs leading-[inherit] text-text-primary"
+                      title={label}
+                    >
+                      <span className="truncate">{target.title}</span>
+                      <span className="shrink-0 text-text-secondary">on {target.hostName}</span>
+                    </span>
+                    {sendFailed && (
+                      <span className="inline-flex shrink-0 items-center gap-1 text-3xs font-medium text-text-primary">
+                        <XCircle className="h-3 w-3 text-status-error" aria-hidden="true" />
+                        Send failed
+                      </span>
+                    )}
+                    <Button
+                      variant="ghost"
+                      size="icon-xs"
+                      onClick={() => disarmId(target.key)}
+                      aria-label={`Disarm ${target.title} on ${target.hostName}`}
+                      // Ringed inside: the list scrolls and clips anything outside it.
+                      className="mr-0.5 shrink-0 [&_svg]:size-3.5 focus-visible:-outline-offset-2"
+                    >
+                      <X aria-hidden="true" />
+                    </Button>
+                  </li>
+                );
+              })}
             </ul>
             <div className="mt-1 border-t border-divider pt-1">
               <Button

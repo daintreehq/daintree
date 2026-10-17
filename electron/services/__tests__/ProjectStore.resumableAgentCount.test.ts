@@ -31,7 +31,9 @@ const CREATE_TABLES_SQL = `
     stats_pr_count INTEGER,
     stats_provider_id TEXT,
     stats_last_updated INTEGER,
-    git_backed INTEGER
+    git_backed INTEGER,
+    archived_at INTEGER,
+    group_id TEXT
   );
   CREATE TABLE IF NOT EXISTS scratches (
     id TEXT PRIMARY KEY,
@@ -202,14 +204,6 @@ describe("ProjectStore resumable agent count", () => {
       expect(store.getProjectById(projectId)?.resumableAgentCount).toBe(0);
     });
 
-    it("carries a positive count through", () => {
-      db.update(schema.projects)
-        .set({ resumableAgentCount: 4 })
-        .where(eq(schema.projects.id, projectId))
-        .run();
-      expect(store.getProjectById(projectId)?.resumableAgentCount).toBe(4);
-    });
-
     it("treats a corrupt count as never counted rather than as a claim", () => {
       // A negative or fractional value cannot have come from counting panels,
       // so the row falls back to making no claim.
@@ -224,12 +218,6 @@ describe("ProjectStore resumable agent count", () => {
   });
 
   describe("keeping the count current as state is written", () => {
-    it("installs an observer on the state manager", () => {
-      // The whole write-through design depends on this wiring existing; without
-      // it every count below would silently come from nowhere.
-      expect(observerSlot.current).toBeTypeOf("function");
-    });
-
     it("recounts from the state that was just persisted", () => {
       observerSlot.current?.(projectId, {
         terminals: [

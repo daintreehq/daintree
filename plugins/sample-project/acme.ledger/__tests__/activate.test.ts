@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -7,9 +7,25 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 // build step and therefore no declaration file.
 import { activate } from "../dist/index.mjs";
 import { createMockHost } from "../../../../shared/testing/createMockHost.js";
-import { validateAgentMcpTools } from "../../../../electron/services/pluginAgentMcp/validateTools.js";
+import {
+  compileAgentMcpTool,
+  validateAgentMcpTools,
+} from "../../../../electron/services/pluginAgentMcp/validateTools.js";
+import {
+  DATABASE_WRITE_REQUEST,
+  runDatabaseTool,
+  type DatabaseWriteResult,
+} from "../../../../electron/services/pluginAgentMcp/databaseTools.js";
+import {
+  bindDeclaredQueryArgs,
+  declaredQueryDescriptor,
+  declaredQueryPlaceholders,
+  declaredQueryProblems,
+} from "../../../../electron/services/pluginAgentMcp/declaredQueries.js";
+import { DatabaseContributionSchema } from "../../../../electron/schemas/plugin.js";
 import type {
   PluginDatabase,
+  PluginDatabaseQueryContribution,
   PluginHostApi,
   PluginMcpCaller,
   PluginMcpToolDefinition,
@@ -67,7 +83,6 @@ interface Transaction {
 }
 
 interface ToolResults {
-  add_transaction: { committed: boolean; transaction: Transaction };
   add_split_transaction: {
     committed: boolean;
     split: { group: string; total_cents: number };
@@ -87,12 +102,57 @@ interface ToolResults {
 }
 
 const manifest = JSON.parse(readFileSync(join(__dirname, "..", "plugin.json"), "utf8")) as {
-  contributes: { databases: Array<{ id: string }> };
+  contributes: {
+    databases: Array<{ id: string; queries?: PluginDatabaseQueryContribution[] }>;
+  };
 };
 const declaredDatabases = manifest.contributes.databases.map((d) => d.id);
+const declaredQueries = manifest.contributes.databases.flatMap((d) => d.queries ?? []);
+const addTransactionQuery = declaredQueries.find((q) => q.name === "add_transaction")!;
 
 function ledgerFile() {
   return join(databaseDir, "ledger.db");
+}
+
+/**
+ * `add_transaction` as the host serves it: the arguments checked against the
+ * input schema the agent is shown, bound to the manifest's statement, and run
+ * on the connection a declared write gets. No plugin code is involved.
+ */
+function addTransaction(args: Record<string, unknown>): DatabaseWriteResult {
+  const problem = compileAgentMcpTool(declaredQueryDescriptor(addTransactionQuery)).checkInput(
+    args
+  );
+  if (problem !== null) throw new Error(problem);
+  const response = runDatabaseTool({
+    tool: DATABASE_WRITE_REQUEST,
+    target: {
+      id: "ledger",
+      location: "project",
+      resolved: {
+        id: "ledger",
+        location: "project",
+        // Canonical, as the host's resolver hands it over.
+        path: join(realpathSync(projectRoot), "databases", "ledger.db"),
+        projectRelativePath: null,
+        journalMode: "delete",
+      },
+      problem: null,
+    },
+    sql: addTransactionQuery.sql,
+    params: bindDeclaredQueryArgs(
+      addTransactionQuery,
+      declaredQueryPlaceholders(addTransactionQuery.sql),
+      args
+    ),
+  });
+  if (!response.ok) throw new Error(response.error.message);
+  return response.value as DatabaseWriteResult;
+}
+
+/** One ordinary transaction, as an agent would record it. */
+function transaction(date: string, amount_cents: number, category: string, memo = "") {
+  return addTransaction({ date, amount_cents, category, memo });
 }
 
 /** A second connection, standing in for an agent running the sqlite3 CLI. */
@@ -158,27 +218,35 @@ describe("acme.ledger — activation", () => {
     expect(host.registeredMcpTools.map((r) => r.endpointId)).toEqual(["data"]);
     expect(Object.keys(roster.tools).sort()).toEqual([
       "add_split_transaction",
-      "add_transaction",
       "list_transactions",
       "summarize_by_category",
     ]);
     // The mock deliberately skips the roster budget; the real validator is what
-    // a running host applies, and it rejects a roster whole.
-    expect(() => validateAgentMcpTools(roster.tools)).not.toThrow();
+    // a running host applies, and it rejects a roster whole — including one
+    // that takes a declared query's name.
+    expect(() =>
+      validateAgentMcpTools(roster.tools, {
+        declaredQueryNames: new Set(declaredQueries.map((q) => q.name)),
+      })
+    ).not.toThrow();
     dispose();
   });
 
-  it("advertises schemas the host enforces without refusing what the tools normalize", async () => {
-    const { roster, dispose } = await activated();
-    const add = validateAgentMcpTools(roster.tools).find((t) => t.name === "add_transaction")!;
-    const valid = { date: "2026-09-01", amount_cents: -1, category: "misc" };
+  it("declares add_transaction as a write the host can serve", () => {
+    expect(addTransactionQuery.mode).toBe("write");
+    expect(declaredQueryProblems(addTransactionQuery)).toEqual([]);
+    expect(() => DatabaseContributionSchema.parse(manifest.contributes.databases[0])).not.toThrow();
+    expect(declaredQueryDescriptor(addTransactionQuery)).toMatchObject({ databaseWrite: true });
+  });
+
+  it("advertises a schema for add_transaction that takes what the statement normalizes", () => {
+    const add = compileAgentMcpTool(declaredQueryDescriptor(addTransactionQuery));
+    const valid = { date: "2026-09-01", amount_cents: -1, category: "misc", memo: "" };
 
     expect(add.checkInput(valid)).toBeNull();
     expect(add.checkInput({ ...valid, category: " Groceries " })).toBeNull();
-    expect(add.checkInput({ ...valid, category: "9lives" })).toMatch(/\/category must match/);
     expect(add.checkInput({ ...valid, where: "1=1" })).toMatch(/additional properties/);
-    expect(add.checkInput({ amount_cents: -1, category: "misc" })).toMatch(/'date'/);
-    dispose();
+    expect(add.checkInput({ amount_cents: -1, category: "misc", memo: "" })).toMatch(/'date'/);
   });
 
   it("opens the database plugin.json declares, and only on the first tool call", async () => {
@@ -233,29 +301,60 @@ describe("acme.ledger — activation", () => {
 });
 
 describe("acme.ledger — tool calls round-trip through the project's database", () => {
-  it("stores a transaction and returns the stored row with separate provenance", async () => {
+  it("stores a transaction through the declared write and returns the row as stored", async () => {
     const { call, dispose } = await activated();
-    const result = await call("add_transaction", {
+    await call("list_transactions");
+    const result = addTransaction({
       date: "2026-09-01",
       amount_cents: -4250,
       category: " Groceries ",
       memo: "weekly shop",
     });
-    expect(result.committed).toBe(true);
-    expect(result.transaction).toMatchObject({
-      date: "2026-09-01",
-      amount_cents: -4250,
-      category: "groceries",
-      memo: "weekly shop",
-      split: null,
-      provenance: { terminal_id: "term-1", launch_agent_hint: "claude" },
+    expect(result).toMatchObject({
+      databaseId: "ledger",
+      changes: 1,
+      columns: ["id", "date", "amount_cents", "category", "memo", "recorded_at"],
+      truncated: false,
     });
-    expect(typeof result.transaction.id).toBe("number");
-    expect(Number.isNaN(Date.parse(result.transaction.provenance.recorded_at ?? ""))).toBe(false);
+    const [id, date, amount, category, memo, recordedAt] = result.rows![0]!;
+    expect([date, amount, category, memo]).toEqual([
+      "2026-09-01",
+      -4250,
+      "groceries",
+      "weekly shop",
+    ]);
+    expect(result.lastInsertRowid).toBe(id);
+    expect(Number.isNaN(Date.parse(String(recordedAt)))).toBe(false);
 
+    // A declared write has no caller to stamp; only the time is recorded.
     const page = await call("list_transactions");
-    expect(page.transactions).toEqual([result.transaction]);
+    expect(page.transactions).toEqual([
+      {
+        id,
+        date: "2026-09-01",
+        amount_cents: -4250,
+        category: "groceries",
+        memo: "weekly shop",
+        split: null,
+        provenance: { recorded_at: recordedAt, terminal_id: null, launch_agent_hint: null },
+      },
+    ]);
     expect(page.next_offset).toBeNull();
+    dispose();
+  });
+
+  it("trims any surrounding whitespace from a category, as the old tool did", async () => {
+    const { call, dispose } = await activated();
+    await call("list_transactions");
+    expect(transaction("2026-09-01", -1, "\tEating Out\n").rows![0]![3]).toBe("eating out");
+    expect(transaction("2026-09-02", -1, "\u00a0Rent\u3000\ufeff").rows![0]![3]).toBe("rent");
+    dispose();
+  });
+
+  it("never creates the ledger from a declared write", async () => {
+    const { dispose } = await activated();
+    expect(() => transaction("2026-09-01", -100, "rent")).toThrow(/DB_NOT_FOUND/);
+    expect(existsSync(ledgerFile())).toBe(false);
     dispose();
   });
 
@@ -268,9 +367,8 @@ describe("acme.ledger — tool calls round-trip through the project's database",
       ["2026-09-05", -3000, "groceries"],
       ["2026-09-09", -500, "transport"],
     ];
-    for (const [date, amount_cents, category] of rows) {
-      await call("add_transaction", { date, amount_cents, category });
-    }
+    await call("list_transactions");
+    for (const [date, amount_cents, category] of rows) transaction(date, amount_cents, category);
 
     const first = await call("list_transactions", {
       from: "2026-09-01",
@@ -303,7 +401,8 @@ describe("acme.ledger — tool calls round-trip through the project's database",
 
   it("treats filter values as data, never as SQL", async () => {
     const { call, dispose } = await activated();
-    await call("add_transaction", { date: "2026-09-01", amount_cents: -100, category: "rent" });
+    await call("list_transactions");
+    transaction("2026-09-01", -100, "rent");
     await expect(call("list_transactions", { category: "x' OR '1'='1" })).rejects.toThrow(
       /category must start with a letter/
     );
@@ -360,7 +459,8 @@ describe("acme.ledger — tool calls round-trip through the project's database",
 
   it("returns 64-bit values a JS number cannot hold as decimal strings, not rounded numbers", async () => {
     const { call, dispose } = await activated();
-    await call("add_transaction", { date: "2026-09-01", amount_cents: 1, category: "misc" });
+    await call("list_transactions");
+    transaction("2026-09-01", 1, "misc");
     const agent = external();
     agent
       .prepare("INSERT INTO transactions (date, amount_cents, category) VALUES (?, ?, ?)")
@@ -387,39 +487,226 @@ describe("acme.ledger — row ids past 2^53", () => {
       .run(9007199254740992n, "2026-01-01", -1, "external");
     agent.close();
 
-    const result = await call("add_transaction", {
-      date: "2026-09-01",
-      amount_cents: 200,
-      category: "mine",
-    });
-    expect(result.transaction).toMatchObject({ category: "mine", amount_cents: 200 });
-    expect(result.transaction.id).toBe("9007199254740993");
+    const result = transaction("2026-09-01", 200, "mine");
+    expect(result.rows![0]!.slice(0, 4)).toEqual(["9007199254740993", "2026-09-01", 200, "mine"]);
+    expect(result.lastInsertRowid).toBe("9007199254740993");
+    dispose();
+  });
+});
+
+describe("acme.ledger — add_transaction refuses a malformed call", () => {
+  it.each([
+    [{ amount_cents: -1, category: "misc", memo: "" }, /'date'/],
+    [{ date: "2026-09-01", amount_cents: 1.5, category: "misc", memo: "" }, /amount_cents/],
+    [{ date: "2026-09-01", amount_cents: "12", category: "misc", memo: "" }, /amount_cents/],
+    [{ date: "2026-09-01", amount_cents: -1, category: "misc", memo: null }, /memo/],
+    [{ date: "2026-09-01", amount_cents: -1, category: "misc" }, /'memo'/],
+  ] as const)("refuses %j", async (args, message) => {
+    const { call, dispose } = await activated();
+    await call("list_transactions");
+    expect(() => addTransaction(args)).toThrow(message);
+    expect((await call("list_transactions")).transactions).toEqual([]);
+    dispose();
+  });
+});
+
+function rowCount(): number {
+  const db = external();
+  try {
+    return Number((db.prepare("SELECT count(*) AS n FROM transactions").get() as { n: number }).n);
+  } finally {
+    db.close();
+  }
+}
+
+/** A ledger this version of the plugin created, with its triggers up to date. */
+async function seedCurrentLedger() {
+  const { call, dispose } = await activated();
+  await call("list_transactions");
+  dispose();
+}
+
+/**
+ * A ledger an earlier version created: the same migrations, and the triggers
+ * as they were before the calendar check, recorded as applied, so only the
+ * plugin's next open of the file replaces them.
+ */
+async function seedLedgerBeforeCalendarCheck() {
+  await seedCurrentLedger();
+  const db = external();
+  try {
+    const guards = db
+      .prepare(
+        "SELECT name, sql FROM sqlite_schema WHERE type = 'trigger' AND name LIKE 'transactions_guard_%'"
+      )
+      .all() as Array<{ name: string; sql: string }>;
+    expect(guards).toHaveLength(2);
+    for (const { name, sql } of guards) {
+      const older = sql.replace(
+        /\s*SELECT RAISE\(ABORT, 'date must be a day the calendar has[^;]*;/,
+        ""
+      );
+      expect(older).not.toBe(sql);
+      db.exec(`DROP TRIGGER ${name}; ${older};`);
+    }
+    db.exec(
+      "UPDATE _daintree_meta SET value = 'applied by an earlier version' WHERE key = 'definitions_sha256'"
+    );
+  } finally {
+    db.close();
+  }
+}
+
+/** A day the calendar lacks, written past the triggers as an agent's sqlite3 would. */
+function insertImpossibleDate() {
+  const db = external();
+  try {
+    db.prepare(
+      "INSERT INTO transactions (date, amount_cents, category, memo) VALUES ('2026-02-30', -1, 'misc', '')"
+    ).run();
+  } finally {
+    db.close();
+  }
+}
+
+const VALID = { date: "2026-09-01", amount_cents: -1, category: "misc", memo: "" };
+
+// The declared write runs no plugin code and the host never opens the file
+// with the plugin's migrations first, so each ledger below is called exactly as
+// it sits on disk.
+describe.each([
+  ["copied over from before host.db, with no triggers", async () => seedVersionOneLedger(() => {})],
+  ["created before the calendar check", seedLedgerBeforeCalendarCheck],
+  ["created by this version", seedCurrentLedger],
+] as const)("acme.ledger — add_transaction on a ledger %s", (_ledger, seed) => {
+  beforeEach(seed);
+
+  // A refusal that starts with the param's path is the host's input check, not
+  // a trigger or constraint in the file.
+  it.each([
+    ["a day February lacks", { date: "2026-02-30" }, /^\/date /],
+    ["29 February in a common year", { date: "2025-02-29" }, /^\/date /],
+    ["29 February in a century not divisible by 400", { date: "1900-02-29" }, /^\/date /],
+    ["a thirteenth month", { date: "2026-13-01" }, /^\/date /],
+    ["a date with an embedded NUL", { date: "2026-09-01\u0000" }, /^\/date /],
+    ["a date with a trailing newline", { date: "2026-09-01\n" }, /^\/date /],
+    ["a date in full-width digits", { date: "２０２６-09-01" }, /^\/date /],
+    ["a zero amount", { amount_cents: 0 }, /^\/amount_cents /],
+    ["one cent past the bound", { amount_cents: 100_000_000_001 }, /^\/amount_cents /],
+    ["one cent past the negative bound", { amount_cents: -100_000_000_001 }, /^\/amount_cents /],
+    ["a category with a letter outside ASCII", { category: "café" }, /^\/category /],
+    ["a category with an embedded NUL", { category: "misc\u0000" }, /^\/category /],
+    ["a category of 33 characters", { category: "a".repeat(33) }, /^\/category /],
+    ["a memo of 281 characters", { memo: "🧾".repeat(281) }, /^\/memo /],
+    ["281 characters with a NUL", { memo: `${"x".repeat(280)}\u0000` }, /^\/memo /],
+  ] as const)("refuses %s and writes nothing", (_what, change, message) => {
+    const before = rowCount();
+    expect(() => addTransaction({ ...VALID, ...change })).toThrow(message);
+    expect(rowCount()).toBe(before);
+  });
+
+  it("stores leap days and the amount bounds themselves", () => {
+    const stored = [
+      transaction("2024-02-29", -100_000_000_000, "misc"),
+      transaction("2000-02-29", 100_000_000_000, "misc"),
+    ].map((result) => result.rows![0]!.slice(1, 3));
+    expect(stored).toEqual([
+      ["2024-02-29", -100_000_000_000],
+      ["2000-02-29", 100_000_000_000],
+    ]);
+  });
+
+  it("stores a memo of 280 characters of any kind, embedded NULs included, unchanged", () => {
+    const memos = [
+      "🧾".repeat(280),
+      `${"x".repeat(139)}\u0000${"y".repeat(140)}`,
+      "cafe\u0301 — naïve, 家計簿",
+    ];
+    for (const memo of memos) transaction("2026-09-01", -1, "misc", memo);
+    const db = external();
+    try {
+      // Compared as bytes: node:sqlite before Node 26 ends a string it reads
+      // back at the first NUL, though SQLite stored all of it.
+      const rows = db
+        .prepare("SELECT hex(memo) AS memo FROM transactions ORDER BY id")
+        .all() as Array<{
+        memo: string;
+      }>;
+      expect(rows.map((row) => row.memo)).toEqual(
+        memos.map((memo) => Buffer.from(memo, "utf8").toString("hex").toUpperCase())
+      );
+    } finally {
+      db.close();
+    }
+  });
+
+  it("trims Unicode whitespace around a category and lowercases it", () => {
+    expect(transaction("2026-09-01", -1, "\u3000Eating Out\u00a0\ufeff").rows![0]![3]).toBe(
+      "eating out"
+    );
+  });
+});
+
+describe("acme.ledger — an older ledger once the plugin opens it again", () => {
+  it.each([
+    ["copied over from before host.db", async () => seedVersionOneLedger(() => {})],
+    ["created before the calendar check", seedLedgerBeforeCalendarCheck],
+  ] as const)(
+    "a ledger %s takes a day the calendar lacks from sqlite3 until then",
+    async (_ledger, seed) => {
+      await seed();
+      insertImpossibleDate();
+      const { call, dispose } = await activated();
+      await call("list_transactions");
+      dispose();
+      expect(() => insertImpossibleDate()).toThrow(/day the calendar has/);
+      // The rule reaches rows written from now on; one already stored stays.
+      const db = external();
+      try {
+        expect(
+          db.prepare("SELECT count(*) AS n FROM transactions WHERE date(date) IS NOT date").get()
+        ).toEqual({ n: 1 });
+      } finally {
+        db.close();
+      }
+    }
+  );
+});
+
+describe("acme.ledger — both writers hold a memo and an amount to the same bounds", () => {
+  const split = (total_cents: number, memo: string) => ({
+    date: "2026-09-01",
+    total_cents,
+    memo,
+    splits: [
+      { category: "a", amount_cents: total_cents - 1 },
+      { category: "b", amount_cents: 1 },
+    ],
+  });
+
+  it.each([
+    ["the largest amount", 100_000_000_000, "", true],
+    ["one cent more", 100_000_000_001, "", false],
+    ["a memo of 280 characters", 2, "🧾".repeat(280), true],
+    ["a memo of 281", 2, "🧾".repeat(281), false],
+  ] as const)("%s", async (_case, amount, memo, accepted) => {
+    const { call, dispose } = await activated();
+    await call("list_transactions");
+    const declared = () => transaction("2026-09-01", amount, "misc", memo);
+    const viaSplit = call("add_split_transaction", split(amount, memo));
+    if (accepted) {
+      expect(declared).not.toThrow();
+      await expect(viaSplit).resolves.toMatchObject({ committed: true });
+    } else {
+      expect(declared).toThrow();
+      await expect(viaSplit).rejects.toThrow();
+    }
     dispose();
   });
 });
 
 describe("acme.ledger — the tools check their own arguments too", () => {
   it.each([
-    ["add_transaction", { amount_cents: -1, category: "misc" }, /date is required/],
-    [
-      "add_transaction",
-      { date: "2026-02-30", amount_cents: -1, category: "misc" },
-      /calendar date/,
-    ],
-    ["add_transaction", { date: "2026-09-01", amount_cents: 0, category: "misc" }, /non-zero/],
-    ["add_transaction", { date: "2026-09-01", amount_cents: 1.5, category: "misc" }, /non-zero/],
-    ["add_transaction", { date: "2026-09-01", amount_cents: "12", category: "misc" }, /non-zero/],
-    [
-      "add_transaction",
-      { date: "2026-09-01", amount_cents: -1, category: "misc", memo: "x".repeat(281) },
-      /memo must be a string/,
-    ],
-    [
-      "add_transaction",
-      { date: "2026-09-01", amount_cents: -1, category: "misc", memo: null },
-      /memo must be a string/,
-    ],
-    ["add_transaction", { date: "2026-09-01", amount_cents: -1, category: "9lives" }, /category/],
     ["list_transactions", { limit: 201 }, /limit must be an integer from 1 to 200/],
     ["list_transactions", { offset: -1 }, /offset must be an integer/],
     ["list_transactions", { from: "2026-09-10", to: "2026-09-01" }, /is after/],
@@ -523,20 +810,30 @@ describe("acme.ledger — the tools check their own arguments too", () => {
   it("counts memo length in characters the way the schema does, not UTF-16 units", async () => {
     const { call, dispose } = await activated();
     const memo = "🧾".repeat(280);
-    const result = await call("add_transaction", {
+    const result = await call("add_split_transaction", {
       date: "2026-09-01",
-      amount_cents: -1,
-      category: "misc",
+      total_cents: -2,
       memo,
+      splits: [
+        { category: "a", amount_cents: -1 },
+        { category: "b", amount_cents: -1 },
+      ],
     });
-    expect(result.transaction.memo).toBe(memo);
+    expect(result.transactions.map((t) => t.memo)).toEqual([memo, memo]);
     dispose();
   });
 
   it("writes nothing when validation fails", async () => {
     const { call, dispose } = await activated();
     await expect(
-      call("add_transaction", { date: "2026-09-01", amount_cents: 0, category: "misc" })
+      call("add_split_transaction", {
+        date: "2026-09-01",
+        total_cents: -3,
+        splits: [
+          { category: "a", amount_cents: -1 },
+          { category: "b", amount_cents: -1 },
+        ],
+      })
     ).rejects.toThrow();
     const page = await call("list_transactions");
     expect(page.transactions).toEqual([]);
@@ -565,22 +862,6 @@ describe("acme.ledger — cancellation", () => {
       dispose();
     }
   );
-
-  it("does not write a transaction whose call was cancelled first", async () => {
-    const { call, dispose } = await activated();
-    const controller = new AbortController();
-    controller.abort(new Error("Tool call timed out."));
-    await expect(
-      call(
-        "add_transaction",
-        { date: "2026-09-01", amount_cents: -100, category: "misc" },
-        { signal: controller.signal }
-      )
-    ).rejects.toThrow("Tool call timed out.");
-    const page = await call("list_transactions");
-    expect(page.transactions).toEqual([]);
-    dispose();
-  });
 });
 
 describe("acme.ledger — a split must balance", () => {
@@ -694,7 +975,8 @@ describe("acme.ledger — a split must balance", () => {
 
   it("stores a split whole or not at all", async () => {
     const { call, dispose } = await activated();
-    await call("add_transaction", { date: "2026-09-01", amount_cents: -100, category: "rent" });
+    await call("list_transactions");
+    transaction("2026-09-01", -100, "rent");
     // A failure after the first part is written, which input checks cannot
     // produce: only the transaction keeps that part out of the file.
     const agent = external();
@@ -769,6 +1051,11 @@ describe("acme.ledger — rules held in the schema, for agents writing with sqli
       /date must be YYYY-MM-DD/,
     ],
     [
+      "INSERT INTO transactions (date, amount_cents, category) VALUES ('2026-02-29', -1899, 'books')",
+      /day the calendar has/,
+    ],
+    ["UPDATE transactions SET date = '2026-04-31'", /day the calendar has/],
+    [
       "INSERT INTO transactions (date, amount_cents, category) VALUES ('2026-04-17', -1899, 'Books')",
       /category must be lower case/,
     ],
@@ -813,7 +1100,8 @@ describe("acme.ledger — rules held in the schema, for agents writing with sqli
     ],
   ])("refuses %s", async (sql, message) => {
     const { call, dispose } = await activated();
-    await call("add_transaction", { date: "2026-09-01", amount_cents: -100, category: "rent" });
+    await call("list_transactions");
+    transaction("2026-09-01", -100, "rent");
     const agent = external();
     try {
       expect(() => agent.exec(sql)).toThrow(message);
@@ -825,7 +1113,8 @@ describe("acme.ledger — rules held in the schema, for agents writing with sqli
 
   it("leaves a refused row out of the file", async () => {
     const { call, dispose } = await activated();
-    await call("add_transaction", { date: "2026-09-01", amount_cents: -100, category: "rent" });
+    await call("list_transactions");
+    transaction("2026-09-01", -100, "rent");
     const agent = external();
     try {
       expect(() => agent.exec("UPDATE transactions SET amount_cents = 0")).toThrow();

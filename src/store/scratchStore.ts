@@ -77,6 +77,9 @@ export const useScratchStore = create<ScratchStoreState>((set, get) => ({
 
   switchScratch: async (scratchId: string, options) => {
     const switched = await scratchClient.switch(scratchId, options);
+    // The window didn't move to it (another window had it, or a newer
+    // navigation won): this view still shows what it showed.
+    if (!switched) return;
     set((state) => ({
       currentScratch: switched,
       scratches: state.scratches.map((s) => (s.id === switched.id ? switched : s)),

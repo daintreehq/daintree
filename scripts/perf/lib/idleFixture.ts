@@ -1,8 +1,9 @@
 import { execFileSync, spawn } from "node:child_process";
-import { chmodSync, writeFileSync } from "node:fs";
-import { delimiter, join } from "node:path";
+import { chmodSync, mkdirSync, writeFileSync } from "node:fs";
+import { delimiter, dirname, join } from "node:path";
 import { performance, type EventLoopUtilization } from "node:perf_hooks";
 import type { ProcessTreeCache as ProcessTreeCacheType } from "../../../electron/services/ProcessTreeCache";
+import { windowsSystemTool } from "../../../electron/utils/windowsExecutable";
 import {
   allSpawnMark,
   allSpawnsSince,
@@ -229,23 +230,21 @@ export function processProbeSpawnCount(byExecutable: Record<string, number>): nu
 export interface ProbeFaultHandle {
   dir: string;
   previousPath: string | undefined;
+  previousSystemRoot: string | undefined;
+  probeChildEnv: NodeJS.ProcessEnv;
 }
 
 /**
  * Break the process-tree probe for real, then heal it.
  *
- * ProcessTreeCache resolves `ps` (POSIX) / `powershell.exe` (Windows) off PATH on
- * every poll, so prepending a directory holding a failing shim makes the
- * PRODUCT's own probe fail — no stubbing, no injected error, nothing the
- * service can tell apart from a sandboxed `ps` or a broken PATH on a real
- * machine, which is exactly how this fails in the field.
+ * POSIX resolves `ps` through PATH; Windows resolves PowerShell under
+ * SystemRoot. Redirect the resolver each product probe actually uses to an
+ * isolated failing executable, leaving the real system files alone.
  *
- * The shim must fail the way the real thing fails: a non-zero exit, which
- * `execFile`/`exec` surface as a rejection. Deleting the binary would produce
- * an ENOENT the service handles on the same path, but a PATH shim also
- * reproduces the case where a wrapper exists and refuses.
+ * A failing POSIX script or invalid Windows executable makes the OS probe
+ * reject on the product's normal error path.
  *
- * PATH is read at CreateProcess time, so on Windows the fault only bites a
+ * SystemRoot is read at CreateProcess time, so on Windows the fault only bites a
  * census that starts a process. Since #12243 the census is served by one
  * persistent helper, resolved before the shim existed — so a caller that has
  * one passes its PID and it is killed here. That is the same fault the shim
@@ -255,11 +254,13 @@ export interface ProbeFaultHandle {
  */
 export function installProcessProbeFault(censusHelperPid?: number | null): ProbeFaultHandle {
   const dir = createPerfTempRoot("daintree-perf-probe-fault-");
+  const probeChildEnv = { ...process.env };
+  const previousSystemRoot = process.env.SystemRoot;
   if (process.platform === "win32") {
-    // ProcessTreeCache launches the explicit `powershell.exe` name. A `.cmd`
-    // shim only intercepted the obsolete shell-mediated path; an invalid PE at
-    // the exact executable name makes CreateProcess fail at the product seam.
-    writeFileSync(join(dir, "powershell.exe"), "not a Windows executable\r\n");
+    const shim = windowsSystemTool("powershell.exe", { SystemRoot: dir });
+    mkdirSync(dirname(shim), { recursive: true });
+    writeFileSync(shim, "not a Windows executable\r\n");
+    process.env.SystemRoot = dir;
   } else {
     const shim = join(dir, "ps");
     writeFileSync(shim, "#!/bin/sh\nexit 1\n");
@@ -274,16 +275,20 @@ export function installProcessProbeFault(censusHelperPid?: number | null): Probe
       // Already gone, which is the state this was trying to reach.
     }
   }
-  return { dir, previousPath };
+  return { dir, previousPath, previousSystemRoot, probeChildEnv };
 }
 
 export function removeProcessProbeFault(handle: ProbeFaultHandle): void {
+  if (process.platform === "win32") {
+    if (handle.previousSystemRoot === undefined) delete process.env.SystemRoot;
+    else process.env.SystemRoot = handle.previousSystemRoot;
+  }
   if (handle.previousPath === undefined) {
     delete process.env.PATH;
   } else {
     process.env.PATH = handle.previousPath;
   }
-  // Best-effort; the PATH restore above is what matters. If it fails, the root
+  // Best-effort; restoring the resolver environment above is what matters. If it fails, the root
   // stays registered for the exit/signal sweep.
   releasePerfTempRoot(handle.dir);
 }
@@ -299,11 +304,15 @@ export function removeProcessProbeFault(handle: ProbeFaultHandle): void {
 export function processProbeWorks(): boolean {
   try {
     if (process.platform === "win32") {
-      execFileSync("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", "exit 0"], {
-        stdio: "ignore",
-        timeout: 20_000,
-        windowsHide: true,
-      });
+      execFileSync(
+        windowsSystemTool("powershell.exe"),
+        ["-NoProfile", "-NonInteractive", "-Command", "exit 0"],
+        {
+          stdio: "ignore",
+          timeout: 20_000,
+          windowsHide: true,
+        }
+      );
     } else {
       execFileSync("ps", ["-eo", "pid"], { stdio: "ignore", timeout: 10_000 });
     }
@@ -325,9 +334,14 @@ export interface ProbeChild {
  *
  * `process.execPath` is deliberate: it is absolute, so it still starts while
  * the probe fault has PATH pointed at a shim directory, and it exists on every
- * platform the harness runs on.
+ * platform the harness runs on. During a Windows fault, pass the pre-fault
+ * environment so the child itself doesn't inherit the broken SystemRoot.
  */
-export function spawnProbeChild(lifetimeMs = 120_000, startupCpuMs = 0): ProbeChild {
+export function spawnProbeChild(
+  lifetimeMs = 120_000,
+  startupCpuMs = 0,
+  env?: NodeJS.ProcessEnv
+): ProbeChild {
   const child = spawn(
     process.execPath,
     [
@@ -336,6 +350,7 @@ export function spawnProbeChild(lifetimeMs = 120_000, startupCpuMs = 0): ProbeCh
     ],
     {
       stdio: "ignore",
+      env,
     }
   );
   child.unref();

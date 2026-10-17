@@ -19,7 +19,8 @@ import { SearchField } from "@/components/ui/SearchField";
 import { KBD_CLASS, KbdChord } from "@/components/ui/Kbd";
 import { AccessibilityAnnouncer } from "@/components/Accessibility/AccessibilityAnnouncer";
 import { PALETTE_HEADER_ATTR } from "./paletteHeaderAttr";
-import { useOverlayState, useEscapeStack } from "@/hooks";
+import { useOverlayState } from "@/hooks/useOverlayState";
+import { useEscapeStack } from "@/hooks/useEscapeStack";
 import {
   ESCAPE_BACKSTOP_DIALOG_ATTR,
   registerDialogEscapeBackstop,
@@ -31,7 +32,10 @@ import {
 import { useAnimatedPresence } from "@/hooks/useAnimatedPresence";
 import { clearDialogOverlays } from "@/lib/dialogOverlayDismissal";
 import { usePaletteStore } from "@/store/paletteStore";
-import { consumePaletteFocusRestoreSuppression } from "./paletteFocusRestore";
+import {
+  consumeDeferredPaletteFocusRestore,
+  consumePaletteFocusRestoreSuppression,
+} from "./paletteFocusRestore";
 import {
   UI_PALETTE_ENTER_DURATION,
   UI_PALETTE_EXIT_DURATION,
@@ -188,6 +192,22 @@ export function AppPaletteDialog({
       clearDialogOverlays();
       return;
     }
+    // The caller decides once it knows whether its pick moved focus elsewhere.
+    const receive = consumeDeferredPaletteFocusRestore();
+    if (receive) {
+      clearDialogOverlays();
+      const dialog = dialogRef.current;
+      receive(() => {
+        if (!el || !document.contains(el)) return;
+        // Only while nothing else has taken the keyboard meanwhile: focus
+        // still on the body, or still in this palette on its way out.
+        const active = document.activeElement;
+        const unclaimed =
+          !active || active === document.body || (dialog !== null && dialog.contains(active));
+        if (unclaimed) el.focus();
+      });
+      return;
+    }
     if (!el) return;
     // Palette-to-palette handoff: the next palette will install its
     // own focus, so skip restore entirely — and skip the overlay clear
@@ -225,6 +245,9 @@ export function AppPaletteDialog({
     if (isOpen === wasOpenRef.current) return;
     wasOpenRef.current = isOpen;
     clearDialogOverlays();
+    // A palette opening owns the keyboard now: a restore another one handed
+    // off on its way out (and never ran) must not take it back later.
+    if (isOpen) consumeDeferredPaletteFocusRestore();
   }, [isOpen]);
 
   // Read in the insertion phase, before this commit's layout work: the palette
@@ -394,6 +417,10 @@ export function AppPaletteDialog({
           // same inset top lip, deeper drop, because this one floats over a
           // scrim.
           PALETTE_SURFACE_WIDTHS[tier],
+          // A column capped at what is left below the 15vh offset, so a short
+          // window shrinks the body's scroll box instead of pushing the footer
+          // — the line that says what Enter does — off the bottom of the screen.
+          "flex flex-col max-h-[calc(85dvh-1rem)]",
           "mx-4 surface-overlay shadow-modal rounded-[var(--radius-lg)] overflow-hidden origin-top",
           // Tailwind v4 scale-* emits the individual `scale` property, which
           // `transform` in a transition list does NOT cover — the palette
@@ -468,7 +495,8 @@ AppPaletteDialog.Header = function AppPaletteHeader({
         // tighter default to give the search box room above the rule, and they
         // are the two surfaces the family is modelled on. Promoted to the
         // default so every palette breathes the same.
-        "relative overflow-hidden px-3 pt-2 pb-2 border-b border-border-strong",
+        // `shrink-0`: in the card's capped column only the body gives way.
+        "relative shrink-0 overflow-hidden px-3 pt-2 pb-2 border-b border-border-strong",
         className
       )}
     >
@@ -731,7 +759,7 @@ AppPaletteDialog.Footer = function AppPaletteFooter({
   return (
     <div
       className={cn(
-        "px-3 py-2 border-t border-border-strong bg-surface-panel text-xs text-text-secondary flex items-center gap-4",
+        "shrink-0 px-3 py-2 border-t border-border-strong bg-surface-panel text-xs text-text-secondary flex items-center gap-4",
         className
       )}
     >
@@ -849,6 +877,9 @@ interface AppPaletteInputProps extends Omit<
    * mode-prefix chip (e.g. `> Commands`).
    */
   inputPrefix?: React.ReactNode;
+  /** Shows the field's clear button and makes Escape clear a query before it closes anything. */
+  onClear?: () => void;
+  clearLabel?: string;
 }
 
 /**

@@ -30,6 +30,10 @@ import {
 } from "@/components/PluginKit/PluginKitRichCharts";
 import { withoutOverlaps } from "@/components/PluginKit/PluginKitCharts";
 import { PLAIN_STYLE } from "@/components/PluginKit/kitAnsi";
+import { installAppPluginKitHost } from "@/services/plugin/appPluginKitHost";
+
+// The app's own kit host, so the kit reaches the app services mocked here.
+installAppPluginKitHost();
 
 // The setup file's ResizeObserver never reports; charts size from its
 // entries, so this one reports a fixed width on observe.

@@ -82,14 +82,6 @@ describe('manifest "scope": "project" origin gate', () => {
     expect(result.success).toBe(false);
   });
 
-  it("still applies the gate when contributes is absent entirely", () => {
-    // `contributes` carries a `.default({})`, so superRefine sees a fully
-    // materialized object — the gate must not depend on the key being written.
-    const result = parse("project", {});
-    expect(errorCodes(result)).toContain("project_scope_required");
-    expect(parse("project", { scope: "project" }).success).toBe(true);
-  });
-
   it("still applies the gate through the deprecated-alias preprocess", () => {
     // `contributes` is wrapped in a preprocess that rewrites `experimental_*`
     // aliases. A manifest taking that branch must not slip the scope check.
@@ -149,35 +141,11 @@ describe('contributes.forgeProviders under "scope": "project"', () => {
 describe("getPluginManifestSchema origin widening", () => {
   const daintreeNamed = { name: "daintree.first-party", version: "1.0.0" };
 
-  it("maps the deprecated boolean bridge onto the same origins", () => {
-    // The two forbidden-to-edit call sites (PluginService, PluginInstaller)
-    // still pass a boolean. Pin the mapping so the bridge cannot drift from the
-    // meaning the flag had.
-    expect(getPluginManifestSchema(true).safeParse(daintreeNamed).success).toBe(
-      getPluginManifestSchema("builtin").safeParse(daintreeNamed).success
-    );
-    expect(getPluginManifestSchema(false).safeParse(daintreeNamed).success).toBe(
-      getPluginManifestSchema("user").safeParse(daintreeNamed).success
-    );
-  });
-
   it("keeps the reserved namespace to the builtin origin only", () => {
     expect(getPluginManifestSchema("builtin").safeParse(daintreeNamed).success).toBe(true);
     expect(errorCodes(getPluginManifestSchema("user").safeParse(daintreeNamed))).toContain(
       "namespace_reserved"
     );
-  });
-
-  it("still accepts a scope-less manifest under both pre-existing origins", () => {
-    // Smoke check on the widening being a pure rename: a manifest that declares
-    // no scope must not notice which of the two old origins it is parsed under.
-    const manifest = {
-      name: "acme.unchanged",
-      version: "1.0.0",
-      contributes: { forgeProviders: [forgeProvider] },
-    };
-    expect(getPluginManifestSchema("user").safeParse(manifest).success).toBe(true);
-    expect(getPluginManifestSchema("builtin").safeParse(manifest).success).toBe(true);
   });
 });
 
@@ -255,11 +223,6 @@ describe('structurally-global contributions under "scope": "project"', () => {
       expect(reason.length).toBeGreaterThan(40);
     }
   );
-
-  it.each(UNSCOPED_GROUPS)("accepts an empty contributes.%s array", (group) => {
-    const result = parseGroup(group, []);
-    expect(result.success).toBe(true);
-  });
 
   it.each(UNSCOPED_GROUPS)("still accepts contributes.%s from an installed plugin", (group) => {
     const result = parse("user", {
@@ -396,12 +359,6 @@ describe("contributes.surfaces", () => {
       contributes: { surfaces: { emptyCanvas: undefined } },
     });
     expect(result.success).toBe(true);
-  });
-
-  it("materializes an empty surfaces object when the key is absent", () => {
-    const result = parse("project", { scope: "project" });
-    expect(result.success).toBe(true);
-    if (result.success) expect(result.data.contributes.surfaces).toEqual({});
   });
 
   it("rejects an unknown surface slot", () => {

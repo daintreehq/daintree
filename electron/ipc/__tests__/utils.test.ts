@@ -105,14 +105,6 @@ describe("ipc utils", () => {
     expect(send).toHaveBeenCalledWith("channel:test", { ok: true });
   });
 
-  it("sendToRenderer tolerates missing webContents without throwing", () => {
-    const win = {
-      isDestroyed: () => false,
-    } as unknown;
-
-    expect(() => sendToRenderer(win as never, "channel:test", { ok: true })).not.toThrow();
-  });
-
   it("sendToRenderer tolerates webContents without isDestroyed function", () => {
     const send = vi.fn();
     const win = {
@@ -138,16 +130,6 @@ describe("ipc utils", () => {
 
     typedSend(win as never, "app:error" as never, { error: "x" } as never);
     expect(send).toHaveBeenCalledWith("app:error", { error: "x" });
-  });
-
-  it("typedSend tolerates missing webContents without throwing", () => {
-    const win = {
-      isDestroyed: () => false,
-    } as unknown;
-
-    expect(() =>
-      typedSend(win as never, "app:error" as never, { error: "x" } as never)
-    ).not.toThrow();
   });
 
   it("typedSend tolerates webContents without isDestroyed function", () => {
@@ -213,23 +195,6 @@ describe("ipc utils", () => {
     expect(ipcMainMock.removeHandler).toHaveBeenCalledWith("project:get:all");
   });
 
-  it("typedHandleWithContext sets senderWindow to null when fromWebContents returns null", async () => {
-    browserWindowFromWebContentsMock.mockReturnValue(null);
-
-    const handler = vi.fn(async (_ctx: unknown) => "ok");
-    typedHandleWithContext("project:get:all" as never, handler as never);
-
-    const [[, registered]] = ipcMainMock.handle.mock.calls as [
-      [string, (...args: unknown[]) => Promise<unknown>],
-    ];
-
-    await registered({ sender: { id: 99 } });
-
-    const ctx = handler.mock.calls[0][0] as { webContentsId: number; senderWindow: unknown };
-    expect(ctx.webContentsId).toBe(99);
-    expect(ctx.senderWindow).toBeNull();
-  });
-
   it("typedHandle throws when invoked before enforceIpcSenderValidation", () => {
     _resetIpcGuardForTesting();
     expect(() => typedHandle("project:get:all" as never, (async () => ({})) as never)).toThrow(
@@ -252,26 +217,10 @@ describe("broadcastToRenderer", () => {
     vi.clearAllMocks();
   });
 
-  it("no-ops when there are no open windows", () => {
-    browserWindowGetAllWindowsMock.mockReturnValue([]);
-    expect(() => broadcastToRenderer("channel:test", { ok: true })).not.toThrow();
-  });
-
-  it("sends to a single alive window", () => {
-    const send = vi.fn();
-    const win = {
-      isDestroyed: () => false,
-      webContents: { isDestroyed: () => false, send },
-    };
-    browserWindowGetAllWindowsMock.mockReturnValue([win]);
-
-    broadcastToRenderer("channel:test", "data1", "data2");
-    expect(send).toHaveBeenCalledWith("channel:test", "data1", "data2");
-  });
-
   it("sends to multiple alive windows", () => {
     const send1 = vi.fn();
     const send2 = vi.fn();
+    const deadSend = vi.fn();
     const win1 = {
       isDestroyed: () => false,
       webContents: { isDestroyed: () => false, send: send1 },
@@ -280,50 +229,20 @@ describe("broadcastToRenderer", () => {
       isDestroyed: () => false,
       webContents: { isDestroyed: () => false, send: send2 },
     };
-    browserWindowGetAllWindowsMock.mockReturnValue([win1, win2]);
+    browserWindowGetAllWindowsMock.mockReturnValue([
+      win1,
+      { isDestroyed: () => true, webContents: { isDestroyed: () => false, send: deadSend } },
+      { isDestroyed: () => false, webContents: { isDestroyed: () => true, send: deadSend } },
+      { isDestroyed: () => false },
+      win2,
+    ]);
 
     broadcastToRenderer("channel:test", { payload: true });
     expect(send1).toHaveBeenCalledTimes(1);
     expect(send1).toHaveBeenCalledWith("channel:test", { payload: true });
     expect(send2).toHaveBeenCalledTimes(1);
     expect(send2).toHaveBeenCalledWith("channel:test", { payload: true });
-  });
-
-  it("skips destroyed windows", () => {
-    const send1 = vi.fn();
-    const send2 = vi.fn();
-    const alive = {
-      isDestroyed: () => false,
-      webContents: { isDestroyed: () => false, send: send1 },
-    };
-    const destroyed = {
-      isDestroyed: () => true,
-      webContents: { isDestroyed: () => false, send: send2 },
-    };
-    browserWindowGetAllWindowsMock.mockReturnValue([alive, destroyed]);
-
-    broadcastToRenderer("channel:test");
-    expect(send1).toHaveBeenCalled();
-    expect(send2).not.toHaveBeenCalled();
-  });
-
-  it("skips windows with no webContents", () => {
-    const win = { isDestroyed: () => false };
-    browserWindowGetAllWindowsMock.mockReturnValue([win]);
-
-    expect(() => broadcastToRenderer("channel:test")).not.toThrow();
-  });
-
-  it("skips windows where webContents is destroyed", () => {
-    const send = vi.fn();
-    const win = {
-      isDestroyed: () => false,
-      webContents: { isDestroyed: () => true, send },
-    };
-    browserWindowGetAllWindowsMock.mockReturnValue([win]);
-
-    broadcastToRenderer("channel:test");
-    expect(send).not.toHaveBeenCalled();
+    expect(deadSend).not.toHaveBeenCalled();
   });
 
   it("does not throw when webContents.send throws", () => {
@@ -517,31 +436,6 @@ describe("sendToRendererContext", () => {
     expect(send).toHaveBeenCalledWith("channel:test", "arg1", "arg2");
   });
 
-  it("no-ops when senderWindow is null", () => {
-    const ctx = {
-      senderWindow: null,
-      webContentsId: 1,
-      event: {},
-    };
-
-    expect(() => sendToRendererContext(ctx as never, "channel:test", "data")).not.toThrow();
-  });
-
-  it("passes variadic args through correctly", () => {
-    const send = vi.fn();
-    const ctx = {
-      senderWindow: {
-        isDestroyed: () => false,
-        webContents: { isDestroyed: () => false, send },
-      },
-      webContentsId: 1,
-      event: {},
-    };
-
-    sendToRendererContext(ctx as never, "channel:test", 1, "two", { three: 3 });
-    expect(send).toHaveBeenCalledWith("channel:test", 1, "two", { three: 3 });
-  });
-
   it("no-ops when senderWindow is destroyed", () => {
     const send = vi.fn();
     const ctx = {
@@ -554,6 +448,7 @@ describe("sendToRendererContext", () => {
     };
 
     sendToRendererContext(ctx as never, "channel:test", "data");
+    sendToRendererContext({ ...ctx, senderWindow: null } as never, "channel:test", "data");
     expect(send).not.toHaveBeenCalled();
   });
 });
@@ -580,12 +475,6 @@ describe("waitForRateLimitSlot (leaky bucket, 2-arg)", () => {
   afterEach(() => {
     _resetRateLimitQueuesForTest();
     vi.useRealTimers();
-  });
-
-  it("resolves immediately for the first caller on a fresh key", async () => {
-    const start = Date.now();
-    await waitForRateLimitSlot("lb-test", 5_000);
-    expect(Date.now()).toBe(start);
   });
 
   it("serializes a concurrent burst at fixed intervals (no feast/famine)", async () => {
@@ -724,15 +613,6 @@ describe("waitForRateLimitSlot (leaky bucket, 2-arg)", () => {
     await waitForRateLimitSlot("lb-zero", -100);
     expect(Date.now()).toBe(before);
   });
-
-  it("_resetRateLimitQueuesForTest clears leaky bucket state", async () => {
-    await waitForRateLimitSlot("lb-reset", 5_000);
-    _resetRateLimitQueuesForTest();
-
-    const before = Date.now();
-    await waitForRateLimitSlot("lb-reset", 5_000);
-    expect(Date.now()).toBe(before);
-  });
 });
 
 describe("waitForBurstRateLimitSlot (token bucket)", () => {
@@ -845,15 +725,6 @@ describe("waitForRateLimitSlot (sliding window, 3-arg)", () => {
   afterEach(() => {
     _resetRateLimitQueuesForTest();
     vi.useRealTimers();
-  });
-
-  it("resolves immediately when under the limit", async () => {
-    const results: number[] = [];
-    for (let i = 0; i < 10; i++) {
-      await waitForRateLimitSlot("test", 10, 30_000);
-      results.push(i);
-    }
-    expect(results).toHaveLength(10);
   });
 
   it("queues the 11th request instead of rejecting", async () => {

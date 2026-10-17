@@ -24,6 +24,8 @@
  * The write side lives in windowManifestStore.ts.
  */
 
+import { isValidRemoteHostId, parseHostScopedKey } from "../../../shared/types/remoteHosts.js";
+
 export const OPEN_WINDOWS_KEY = "openWindows";
 export const OPEN_WINDOWS_MANIFEST_VERSION = 1;
 
@@ -206,8 +208,27 @@ export function serializeOpenWindowsManifest(records: OpenWindowRecord[]): strin
   return JSON.stringify(manifest);
 }
 
+/** Longest project id a host-scoped key may carry (the switch refuses longer ones). */
+const MAX_REMOTE_PROJECT_ID_LENGTH = 256;
+
 /**
- * Drop records whose workspace no longer exists, keeping picker windows.
+ * A window that was showing another machine's project: `<hostId>:<projectId>`
+ * (`toHostScopedKey`). Whether that project still exists is the host's to say
+ * once it connects, so the record is kept rather than checked here, and a
+ * forgotten host's window still restores (on this machine) rather than vanish.
+ */
+export function isRemoteWorkspaceKey(id: string): boolean {
+  const { hostId, projectId } = parseHostScopedKey(id);
+  return (
+    isValidRemoteHostId(hostId) &&
+    projectId.length > 0 &&
+    projectId.length <= MAX_REMOTE_PROJECT_ID_LENGTH
+  );
+}
+
+/**
+ * Drop records whose workspace no longer exists, keeping picker windows and
+ * windows on another machine's project ({@link isRemoteWorkspaceKey}).
  *
  * Skipping is deliberate and matches VS Code: a deleted project must never be
  * silently replaced by a different one, and it must not stop the surviving
@@ -221,7 +242,12 @@ export function filterRestorableWindows(
   existingWorkspaceIds: ReadonlySet<string>
 ): OpenWindowRecord[] {
   return records
-    .filter((record) => record.projectId === null || existingWorkspaceIds.has(record.projectId))
+    .filter(
+      (record) =>
+        record.projectId === null ||
+        existingWorkspaceIds.has(record.projectId) ||
+        isRemoteWorkspaceKey(record.projectId)
+    )
     .map((record) => {
       // Background ids are filtered by the same rule and for the same reason,
       // one level down: a deleted project is skipped, never substituted. A

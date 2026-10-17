@@ -176,8 +176,13 @@ function createMockWindow() {
     isDestroyed: vi.fn(() => false),
     on: vi.fn(),
     removeListener: vi.fn(),
+    // The background-resize debounce can fire while a test is still running;
+    // without this it throws outside any test and fails the whole run.
+    isMinimized: vi.fn(() => false),
     getContentBounds: vi.fn(() => ({ x: 0, y: 0, width: 800, height: 600 })),
     contentView: {
+      on: vi.fn(),
+      removeListener: vi.fn(),
       children: [] as unknown[],
       addChildView: vi.fn(),
       removeChildView: vi.fn(),
@@ -247,29 +252,6 @@ describe("ProjectViewManager — preload eval cost (#9770)", () => {
 
     expect(() => manager.recordPreloadDuration(999_999, 42)).not.toThrow();
     expect(preloadDurationFor(manager, "proj-a")).toBeUndefined();
-  });
-
-  it("no-ops for a flush that races in after the view was evicted", async () => {
-    const evictingManager = new ProjectViewManager(win as never, {
-      dirname: "/test",
-      paintGateTimeoutMs: 0,
-      paintGateHardTimeoutMs: 0,
-      warmPaintGateTimeoutMs: 0,
-      warmPaintGateHardTimeoutMs: 0,
-      cachedProjectViews: 2,
-    });
-    const viewA = { webContents: createMockWebContents(), setBounds: vi.fn() };
-    evictingManager.registerInitialView(viewA as never, "proj-a", "/path/a");
-    const staleWcId = webContentsIdFor(evictingManager, "proj-a");
-
-    // Evict proj-a (its webContents → project mapping is torn down).
-    await evictingManager.switchTo("proj-b", "/path/b");
-    await flushImmediates();
-    await evictingManager.switchTo("proj-c", "/path/c");
-    await flushImmediates();
-
-    expect(() => evictingManager.recordPreloadDuration(staleWcId, 42)).not.toThrow();
-    expect(evictingManager.getProjectIdForWebContents(staleWcId)).toBeNull();
   });
 
   // A cache limit of 2 forces proj-a to be evicted (and carry an eviction

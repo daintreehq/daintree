@@ -1,6 +1,5 @@
 // eager-import-allow: reads voice-input settings via store.get synchronously in the IPC handler
 import { ipcMain, systemPreferences } from "electron";
-import { spawn } from "child_process";
 import { CHANNELS } from "../channels.js";
 import { store } from "../../store.js";
 import { projectStore } from "../../services/ProjectStore.js";
@@ -28,15 +27,17 @@ import { getAppWebContents } from "../../window/webContentsRegistry.js";
 import { voiceFileLinkResolver } from "../../services/VoiceFileLinkResolver.js";
 import { typedHandle, typedHandleValidated, typedHandleWithContext } from "../utils.js";
 import { openExternalUrl } from "../../utils/openExternal.js";
+import { openLinuxSoundSettings } from "../../services/voice/linuxSoundSettings.js";
 import {
   VoiceInputCorrectPayloadSchema,
   type VoiceInputCorrectPayload,
 } from "../../schemas/ipc.js";
+import { onWebContentsDestroyed } from "../../window/webContentsDestroyed.js";
 
 let service: VoiceTranscriptionService | null = null;
 let servicePromise: Promise<VoiceTranscriptionService> | null = null;
 let activeEventUnsubscribe: (() => void) | null = null;
-let activeDestroyListener: { sender: Electron.WebContents; fn: () => void } | null = null;
+let activeDestroyListener: { fn: () => void; unwatch: () => void } | null = null;
 let correctionService: VoiceCorrectionService | null = null;
 let sessionController: AbortController | null = null;
 let sessionProjectInfo: { name?: string; path?: string } = {};
@@ -192,7 +193,7 @@ function cleanupActiveSubscription(): void {
     activeEventUnsubscribe = null;
   }
   if (activeDestroyListener) {
-    activeDestroyListener.sender.removeListener("destroyed", activeDestroyListener.fn);
+    activeDestroyListener.unwatch();
     activeDestroyListener = null;
   }
 }
@@ -225,33 +226,38 @@ async function requestMicPermission(): Promise<boolean> {
   return true;
 }
 
-function openMicSettings(): void {
-  const logOpenFailure = (err: unknown) =>
+/** Resolves whether a settings app opened, so the UI can say when nothing did. */
+async function openMicSettings(): Promise<boolean> {
+  const logOpenFailure = (err: unknown, command?: string) =>
     logDebug("[VoiceInput] Failed to open mic settings", {
       error: (err as Error)?.message ?? String(err),
+      ...(command ? { command } : {}),
     });
 
-  if (process.platform === "darwin") {
-    void openExternalUrl(
-      "x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone"
-    ).catch(logOpenFailure);
-  } else if (process.platform === "win32") {
-    void openExternalUrl("ms-settings:privacy-microphone").catch(logOpenFailure);
-  } else {
-    // Linux: try gnome-control-center, fall back silently. A missing binary
-    // surfaces as an async "error" event, not a throw — without this listener it
-    // becomes an uncaughtException and takes the app into fatal recovery.
+  if (process.platform === "darwin" || process.platform === "win32") {
+    const url =
+      process.platform === "darwin"
+        ? "x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone"
+        : "ms-settings:privacy-microphone";
     try {
-      const child = spawn("gnome-control-center", ["sound"], {
-        detached: true,
-        stdio: "ignore",
-      });
-      child.on("error", logOpenFailure);
-      child.unref();
+      await openExternalUrl(url);
+      return true;
     } catch (err) {
       logOpenFailure(err);
+      return false;
     }
   }
+
+  // Linux has no settings URL; the sound panel is a different app per desktop.
+  const opened = await openLinuxSoundSettings(process.env.XDG_CURRENT_DESKTOP, (launcher, err) =>
+    logOpenFailure(err, launcher.command)
+  );
+  if (!opened) {
+    logWarn("[VoiceInput] No sound settings app could be opened", {
+      desktop: process.env.XDG_CURRENT_DESKTOP ?? null,
+    });
+  }
+  return opened;
 }
 
 async function parseOpenAIErrorBody(
@@ -404,7 +410,7 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
     const svc = await getService();
     const serviceReadyAt = performance.now();
     // The renderer went away during the import — nothing is left to record for.
-    if (ctx.event.sender.isDestroyed()) {
+    if (!ctx.event || ctx.event.sender.isDestroyed()) {
       return { ok: false, error: "Voice session superseded" };
     }
     // Snapshot transcription settings at session start (model, language, API key).
@@ -580,8 +586,11 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
       if (voiceStartNonce === myNonce) voiceStartNonce++;
       if (preStartAudio?.nonce === myNonce) preStartAudio = null;
     };
-    ctx.event.sender.once("destroyed", onDestroyed);
-    activeDestroyListener = { sender: ctx.event.sender, fn: onDestroyed };
+    const sender = ctx.event?.sender ?? null;
+    const unwatchDestroyed = sender ? onWebContentsDestroyed(sender, onDestroyed) : null;
+    activeDestroyListener = unwatchDestroyed
+      ? { fn: onDestroyed, unwatch: unwatchDestroyed }
+      : null;
 
     // Freeze the assembled keyterms into the session settings snapshot. Assembly
     // has its own internal timeouts, so this await is bounded and never blocks the
@@ -608,7 +617,7 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
         activeEventUnsubscribe = null;
       }
       unsubscribe();
-      ctx.event.sender.removeListener("destroyed", onDestroyed);
+      unwatchDestroyed?.();
       if (activeDestroyListener?.fn === onDestroyed) {
         activeDestroyListener = null;
       }
@@ -641,7 +650,7 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
         activeEventUnsubscribe = null;
       }
       unsubscribe();
-      ctx.event.sender.removeListener("destroyed", onDestroyed);
+      sender?.removeListener("destroyed", onDestroyed);
       activeDestroyListener = null;
       // Tear down the session controller so an orphaned signal isn't left
       // attached to correctionService for the next session.
@@ -721,9 +730,7 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
     return requestMicPermission();
   };
 
-  const handleOpenMicSettings = () => {
-    openMicSettings();
-  };
+  const handleOpenMicSettings = () => openMicSettings();
 
   const handleValidateApiKey = async (apiKey: string) => {
     const settings = getVoiceSettings();

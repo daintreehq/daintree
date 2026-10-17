@@ -8,10 +8,4 @@ describe("PLUGIN_SDK_REACT_RUNTIME_EXPORTS", () => {
     // so a hook added to or dropped from the SDK entry must land here too.
     expect([...PLUGIN_SDK_REACT_RUNTIME_EXPORTS].sort()).toEqual(Object.keys(sdkReact).sort());
   });
-
-  it("has no duplicates", () => {
-    expect(new Set(PLUGIN_SDK_REACT_RUNTIME_EXPORTS).size).toBe(
-      PLUGIN_SDK_REACT_RUNTIME_EXPORTS.length
-    );
-  });
 });

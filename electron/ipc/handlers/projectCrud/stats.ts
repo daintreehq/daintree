@@ -6,10 +6,12 @@ import type { MemoryRollup, MemoryRollupProject } from "../../../../shared/types
 import { ProjectStatsService } from "../../../services/ProjectStatsService.js";
 import { FleetSnapshotService } from "../../../services/FleetSnapshotService.js";
 import { RunAttentionService } from "../../../services/RunAttentionService.js";
+import { RunHandBackService } from "../../../services/RunHandBackService.js";
 import { isCleaningUp } from "../../../lifecycle/shutdownCoordinator.js";
 import { store } from "../../../store.js";
 import { registerDeferredTask } from "../../../window/deferredInitQueue.js";
 import { computeProjectAgentCounts } from "../../../services/projectAgentCounts.js";
+import { canopyRefinementFor } from "../../../services/canopy/canopyRefinementSource.js";
 import { projectStore } from "../../../services/ProjectStore.js";
 import { scratchStore } from "../../../services/ScratchStore.js";
 import { isValidScratchId } from "../../../services/scratchStorePaths.js";
@@ -24,6 +26,7 @@ import {
 
 let projectStatsServiceInstance: ProjectStatsService | null = null;
 let runAttentionServiceInstance: RunAttentionService | null = null;
+let runHandBackServiceInstance: RunHandBackService | null = null;
 
 export function getProjectStatsService(): ProjectStatsService | null {
   return projectStatsServiceInstance;
@@ -35,6 +38,10 @@ export function getFleetSnapshotService(): FleetSnapshotService | null {
 
 export function getRunAttentionService(): RunAttentionService | null {
   return runAttentionServiceInstance;
+}
+
+export function getRunHandBackService(): RunHandBackService | null {
+  return runHandBackServiceInstance;
 }
 
 export function registerProjectStatsHandlers(deps: HandlerDependencies): () => void {
@@ -67,7 +74,22 @@ export function registerProjectStatsHandlers(deps: HandlerDependencies): () => v
     }
   });
 
-  const projectStatsService = new ProjectStatsService(deps.ptyClient, runAttentionService);
+  // Hand-backs ride the fleet rows like park and snooze, so the service is built
+  // before the snapshot that decorates with it.
+  const runHandBackService = new RunHandBackService({ isQuitting: isCleaningUp });
+  runHandBackServiceInstance = runHandBackService;
+  handlers.push(() => {
+    runHandBackService.dispose();
+    if (runHandBackServiceInstance === runHandBackService) {
+      runHandBackServiceInstance = null;
+    }
+  });
+
+  const projectStatsService = new ProjectStatsService(
+    deps.ptyClient,
+    runAttentionService,
+    runHandBackService
+  );
   projectStatsServiceInstance = projectStatsService;
   projectStatsService.start();
   // Defer the initial compute off the first-interactive critical path. The
@@ -94,7 +116,11 @@ export function registerProjectStatsHandlers(deps: HandlerDependencies): () => v
   // same cadence. Registered here so the two can never be started apart, and so
   // one lifecycle owns both. They sample independently, so a surface reading
   // runs and one reading counts can differ across a single transition.
-  const fleetSnapshotService = new FleetSnapshotService(deps.ptyClient, runAttentionService);
+  const fleetSnapshotService = new FleetSnapshotService(
+    deps.ptyClient,
+    runAttentionService,
+    runHandBackService
+  );
   setFleetSnapshotServiceRef(fleetSnapshotService);
   fleetSnapshotService.start();
   registerDeferredTask({
@@ -132,7 +158,7 @@ export function registerProjectStatsHandlers(deps: HandlerDependencies): () => v
       // window isn't showing. A window without a view manager observes nothing.
       return ctx.services.projectViewManager?.getActiveProjectId() ?? null;
     },
-    getStatusMap: () => projectStatsService.getLastBroadcast(),
+    getAcknowledgeableCompletionAt: (id) => projectStatsService.getAcknowledgeableCompletionAt(id),
     // The observed id is whatever the focused view has active, which is the
     // scratch UUID while a scratch is open (#11518). Both kinds now carry
     // status entries, so the stamp has to land in the store that owns the row —
@@ -227,6 +253,7 @@ export function registerProjectStatsHandlers(deps: HandlerDependencies): () => v
     // waiting, and the push path suppresses unchanged payloads, so nothing
     // would correct them until agent state next moved.
     const { helpSessionService } = await import("../../../services/HelpSessionService.js");
+    const runHandBack = runHandBackServiceInstance;
     const agentCounts = computeProjectAgentCounts(
       uniqueIds,
       allTerminals,
@@ -237,7 +264,11 @@ export function registerProjectStatsHandlers(deps: HandlerDependencies): () => v
       (id) => helpSessionService.isPanelVisible(id),
       // Lets concurrent assistants be ranked by who needs the user,
       // rather than by whichever started last (#12108).
-      (terminalId) => helpSessionService.getSlotForTerminal(terminalId)
+      (terminalId) => helpSessionService.getSlotForTerminal(terminalId),
+      // Hand-back seen state and parks, as the pushed status map reads them.
+      runHandBack ? (id, spawnedAt) => runHandBack.getRecord(id, spawnedAt) : undefined,
+      runAttentionServiceInstance?.getAll(),
+      canopyRefinementFor
     );
 
     const result: BulkProjectStats = {};

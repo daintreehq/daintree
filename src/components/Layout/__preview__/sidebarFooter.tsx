@@ -480,7 +480,7 @@ export const FIXTURES: Record<string, Fixture> = {
           command: "npm run packages:build",
           description: "Build every plugin SDK workspace package",
         },
-        { id: "r-help", name: "build:help", command: "npm run build:help" },
+        { id: "r-help", name: "build:assistant", command: "npm run build:assistant" },
       ];
       const saved: RunCommand[] = [
         {
@@ -523,6 +523,19 @@ export const FIXTURES: Record<string, Fixture> = {
       } catch {
         // history is then empty, which the capture will show
       }
+    },
+  },
+
+  /** A launch the panel store rejects: the command comes back with a Retry. */
+  "launch-fails": {
+    what: "the terminal for a command could not be started",
+    seed: () => {
+      baseline();
+      usePanelStore.setState({
+        addPanel: async () => {
+          throw new Error("spawn failed");
+        },
+      });
     },
   },
 
@@ -635,6 +648,12 @@ function answering(methods: Record<string, unknown>): unknown {
 }
 
 installPreviewShims({
+  // An incomplete census, which `useClosedTerminalProcessNotice` ignores. The
+  // inert default resolves `undefined`, and reading `.complete` off it threw on
+  // every load and failed the capture's page-error gate.
+  processes: answering({
+    getSnapshot: async () => ({ complete: false, samplesAvailable: false }),
+  }),
   project: answering({
     getAll: async () => PROJECT_LIST,
     getSettings: async () => ({ runCommands: SAVED_RUNNERS }),

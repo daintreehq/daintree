@@ -2,6 +2,8 @@ import { useEffect } from "react";
 import { keybindingService } from "@/services/KeybindingService";
 import { KEYBINDING_PRIORITY } from "@/services/defaultKeybindings";
 import type { PluginKeybindingDescriptor } from "@shared/types/plugin";
+import { isRemoteContributionActionAllowed } from "@shared/utils/remotePluginContributions";
+import { pluginViewHostId } from "@/components/Plugin/remotePluginView";
 
 /**
  * Registers plugin-contributed keybindings into the KeybindingService.
@@ -34,7 +36,9 @@ export function usePluginKeybindings(): void {
         keybindingService.removePluginBindings(pluginId);
       }
       registeredPluginIds.clear();
+      const remote = pluginViewHostId() !== null;
       for (const { pluginId, item } of entries) {
+        if (remote && !isRemoteContributionActionAllowed(pluginId, item.actionId)) continue;
         keybindingService.registerBinding({
           actionId: item.actionId,
           combo: item.combo,

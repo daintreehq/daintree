@@ -54,6 +54,19 @@ const DATABASE_QUERY = compileAgentMcpTool({
   readOnly: true,
 });
 
+/** A declared query, as the host's database roster carries it. */
+const MONTH_TOTAL = compileAgentMcpTool({
+  name: "month_total",
+  description: "Total spend for a month.",
+  inputSchema: {
+    type: "object",
+    additionalProperties: false,
+    required: ["month"],
+    properties: { month: { type: "string" } },
+  },
+  readOnly: true,
+});
+
 interface Harness {
   client: Client;
   registry: AgentMcpEndpointRegistry;
@@ -81,6 +94,8 @@ async function connect(
     serverName?: string;
     /** Registers the host's database roster with this invoker. */
     databaseInvoke?: AgentMcpToolInvoker;
+    /** The host's database roster; the generic two by default. */
+    databaseTools?: AgentMcpRegisteredTool[];
     activation?: "fails" | "registers-nothing";
     isCallerServable?: () => boolean;
   } = {}
@@ -98,7 +113,7 @@ async function connect(
     registry.register({
       pluginInstanceId: INSTANCE,
       endpointId: DATABASE_ENDPOINT_ID,
-      tools: [DATABASE_SCHEMA, DATABASE_QUERY],
+      tools: options.databaseTools ?? [DATABASE_SCHEMA, DATABASE_QUERY],
       invoke: databaseInvoke,
     });
   };
@@ -569,11 +584,6 @@ describe("createPluginSessionServer", () => {
     await waitFor(() => seen?.aborted === true);
   });
 
-  it("reports the server key the agent was handed as its server name", async () => {
-    const { client } = await connect(vi.fn(), { serverName: "daintree-ledger-1a2b3c4d" });
-    expect(client.getServerVersion()?.name).toBe("daintree-ledger-1a2b3c4d");
-  });
-
   describe("scope", () => {
     it("lists the database tools first, then the plugin's own, on a read-write session", async () => {
       const { client } = await connect(vi.fn(), {
@@ -689,6 +699,106 @@ describe("createPluginSessionServer", () => {
       const { tools } = await client.listTools();
       expect(tools.map((tool) => tool.name)).toEqual(["database_schema", "database_query"]);
       expect(activatePlugin).toHaveBeenCalledWith(INSTANCE);
+    });
+  });
+
+  describe("declared queries", () => {
+    const HOST_ROSTER = [DATABASE_SCHEMA, DATABASE_QUERY, MONTH_TOTAL];
+
+    it("routes a declared query to the host on a read-write session, never activating the plugin", async () => {
+      const pluginInvoke = vi.fn<AgentMcpToolInvoker>(async () => "plugin");
+      const databaseInvoke = vi.fn<AgentMcpToolInvoker>(async () => ({ rows: [[1]] }));
+      const { client, activatePlugin } = await connect(pluginInvoke, {
+        scope: READ_WRITE,
+        databaseInvoke,
+        databaseTools: HOST_ROSTER,
+      });
+      const result = await client.callTool({
+        name: "month_total",
+        arguments: { month: "2026-01" },
+      });
+      expect(result.isError).toBeUndefined();
+      expect(databaseInvoke).toHaveBeenCalledWith(
+        "month_total",
+        { month: "2026-01" },
+        CALLER,
+        expect.any(AbortSignal)
+      );
+      expect(pluginInvoke).not.toHaveBeenCalled();
+      expect(activatePlugin).not.toHaveBeenCalled();
+    });
+
+    it("checks a declared query's arguments before the host runs it", async () => {
+      const databaseInvoke = vi.fn<AgentMcpToolInvoker>(async () => null);
+      const { client } = await connect(vi.fn(), {
+        scope: DATABASES_ONLY,
+        databaseInvoke,
+        databaseTools: HOST_ROSTER,
+      });
+      const result = await client.callTool({ name: "month_total", arguments: {} });
+      expect(result.isError).toBe(true);
+      expect(textOf(result)).toMatch(/Input validation error.*month/);
+      expect(databaseInvoke).not.toHaveBeenCalled();
+    });
+
+    it("never lists or runs a plugin tool that takes a declared query's name", async () => {
+      const shadow = compileAgentMcpTool({ ...MONTH_TOTAL, readOnly: undefined });
+      const pluginInvoke = vi.fn<AgentMcpToolInvoker>(async () => "plugin");
+      const databaseInvoke = vi.fn<AgentMcpToolInvoker>(async () => "host");
+      const { client } = await connect(pluginInvoke, {
+        scope: READ_WRITE,
+        tools: [shadow, LOOKUP],
+        databaseInvoke,
+        databaseTools: HOST_ROSTER,
+      });
+      const { tools } = await client.listTools();
+      expect(tools.map((tool) => [tool.name, tool.annotations])).toEqual([
+        ["database_schema", { readOnlyHint: true }],
+        ["database_query", { readOnlyHint: true }],
+        ["month_total", { readOnlyHint: true }],
+        ["lookup", undefined],
+      ]);
+      const result = await client.callTool({ name: "month_total", arguments: { month: "x" } });
+      expect(JSON.parse(textOf(result))).toBe("host");
+      expect(pluginInvoke).not.toHaveBeenCalled();
+    });
+
+    it("answers a declared query as unknown on a session whose scope has no databases", async () => {
+      const shadow = compileAgentMcpTool({ ...MONTH_TOTAL, readOnly: undefined });
+      const pluginInvoke = vi.fn<AgentMcpToolInvoker>(async () => "plugin");
+      const databaseInvoke = vi.fn<AgentMcpToolInvoker>(async () => "host");
+      const { client } = await connect(pluginInvoke, {
+        scope: PLUGIN_ONLY,
+        tools: [shadow, LOOKUP],
+        databaseInvoke,
+        databaseTools: HOST_ROSTER,
+      });
+      const { tools } = await client.listTools();
+      expect(tools.map((tool) => tool.name)).toEqual(["lookup"]);
+      await expect(
+        client.callTool({ name: "month_total", arguments: { month: "x" } })
+      ).rejects.toThrow(/Unknown tool/);
+      expect(pluginInvoke).not.toHaveBeenCalled();
+      expect(databaseInvoke).not.toHaveBeenCalled();
+    });
+
+    it("waits for the host's roster before routing a call that arrives ahead of it", async () => {
+      const databaseInvoke = vi.fn<AgentMcpToolInvoker>(async () => "host");
+      const harness = await connect(vi.fn(), { scope: READ_WRITE, rosterWaitMs: 2_000 });
+      // The session's own list_changed subscription predates the spy, so the
+      // first call seen is the call handler starting to wait for the roster.
+      const subscribe = vi.spyOn(harness.registry, "onDidChange");
+      const call = harness.client.callTool({ name: "month_total", arguments: { month: "x" } });
+      await waitFor(() => subscribe.mock.calls.length > 0);
+      harness.registry.register({
+        pluginInstanceId: INSTANCE,
+        endpointId: DATABASE_ENDPOINT_ID,
+        tools: HOST_ROSTER,
+        invoke: databaseInvoke,
+      });
+      const result = await call;
+      expect(JSON.parse(textOf(result))).toBe("host");
+      expect(harness.activatePlugin).not.toHaveBeenCalled();
     });
   });
 

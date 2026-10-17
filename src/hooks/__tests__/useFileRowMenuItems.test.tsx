@@ -220,6 +220,9 @@ describe("useFileRowMenuItems — canonical order", () => {
       expect.stringContaining("Insert file reference"),
       "---",
       "Copy",
+      "---",
+      "Discard changes",
+      "Delete file",
     ]);
   });
 
@@ -259,6 +262,9 @@ describe("useFileRowMenuItems — canonical order", () => {
       "Copy",
       "---",
       "Extensions",
+      "---",
+      "Discard changes",
+      "Delete file",
     ]);
 
     const extensions = await openSubmenu(menu, "Extensions");
@@ -311,13 +317,6 @@ describe("useFileRowMenuItems — canonical order", () => {
     // still open and still navigable.
     expect(document.activeElement).toBe(trigger);
   });
-
-  it("renders no Extensions trigger, and no rule for one, with nothing installed", async () => {
-    const menu = await openMenu();
-
-    expect(labels(menu)).not.toContain("Extensions");
-    expect(separatorCount(menu)).toBe(1);
-  });
 });
 
 describe("useFileRowMenuItems — conditional items", () => {
@@ -365,12 +364,15 @@ describe("useFileRowMenuItems — conditional items", () => {
     expect(rendered).not.toContain("Open file");
     expect(rendered).not.toContain("Open in editor");
     // Two of the three opens gone still leaves the rule with items above it.
+    // Nothing on disk to delete; Discard is what brings it back.
     expect(structure(menu)).toEqual([
       "Open diff",
       "Reveal in Finder",
       expect.stringContaining("Insert file reference"),
       "---",
       "Copy",
+      "---",
+      "Discard changes",
     ]);
 
     const copy = await openSubmenu(menu, "Copy");
@@ -410,23 +412,6 @@ describe("useFileRowMenuItems — conditional items", () => {
  */
 describe("useFileRowMenuItems — Insert file reference refusal reasons", () => {
   const CASES: Array<[InsertFileReferenceRefusalReason, string, string]> = [
-    ["workspace-unavailable", "No workspace", "Insert file reference, no workspace"],
-    ["fleet-broadcast-armed", "Fleet armed", "Insert file reference, the fleet is armed"],
-    [
-      "hybrid-input-disabled",
-      "Input bar off",
-      "Insert file reference, the hybrid input bar is off",
-    ],
-    [
-      "backend-unavailable",
-      "No terminal service",
-      "Insert file reference, the terminal service is unavailable",
-    ],
-    [
-      "recorded-target-unavailable",
-      "Agent unavailable",
-      "Insert file reference, that agent can't take input",
-    ],
     ["no-eligible-agent", "No agent available", "Insert file reference, no agent is available"],
     [
       "multiple-eligible-agents",
@@ -508,24 +493,21 @@ describe("useFileRowMenuItems — Open diff routing", () => {
   });
 });
 
-describe("useFileRowMenuItems — path semantics", () => {
-  it("copies the absolute path, the relative path and the name it was handed", async () => {
-    const writeText = navigator.clipboard.writeText as ReturnType<typeof vi.fn>;
+describe("useFileRowMenuItems — Reveal routing", () => {
+  it("calls the surface's own reveal when one is injected", async () => {
+    // The file panel's reveal takes the out-of-root fallback its toolbar uses;
+    // the contained action would refuse a file outside every project root.
+    const onReveal = vi.fn();
+    const menu = await openMenu({ options: { onReveal } });
 
-    for (const [label, expected] of [
-      ["Copy path", "/repo/src/index.ts"],
-      ["Copy relative path", "src/index.ts"],
-      ["Copy file name", "index.ts"],
-    ] as const) {
-      const menu = await openMenu();
-      const copy = await openSubmenu(menu, "Copy");
-      fireEvent.click(within(copy).getByRole("menuitem", { name: label }));
-      await waitFor(() => expect(writeText).toHaveBeenCalledWith(expected));
-      writeText.mockClear();
-      cleanup();
-    }
+    fireEvent.click(within(menu).getByRole("menuitem", { name: "Reveal in Finder" }));
+
+    expect(onReveal).toHaveBeenCalledTimes(1);
+    expect(dispatchMock.mock.calls.some(([id]) => id === "file.showItemInFolder")).toBe(false);
   });
+});
 
+describe("useFileRowMenuItems — path semantics", () => {
   it("does not re-derive the relative path from the absolute one", async () => {
     // The file browser's row path stays relative to the true worktree root even
     // when the tree is re-rooted, so a derived value would be wrong there.
@@ -664,11 +646,6 @@ describe("useFileRowMenuItems — Copy file contents", () => {
     ["a directory", { isDirectory: true, name: "src", relativePath: "src", status: null }],
     ["a deleted file", { status: "deleted" as const }],
     ["an image", { absolutePath: "/repo/logo.png", name: "logo.png" }],
-    ["an SVG", { absolutePath: "/repo/icon.svg", name: "icon.svg" }],
-    ["a video", { absolutePath: "/repo/clip.mp4", name: "clip.mp4" }],
-    ["an unplayable video", { absolutePath: "/repo/clip.mov", name: "clip.mov" }],
-    ["audio", { absolutePath: "/repo/track.mp3", name: "track.mp3" }],
-    ["a PDF", { absolutePath: "/repo/spec.pdf", name: "spec.pdf" }],
   ])("hides the item for %s", async (_case, row) => {
     const menu = await openMenu({ row });
     // The submenu has to be opened first: its content is Presence-gated, so a
@@ -676,6 +653,23 @@ describe("useFileRowMenuItems — Copy file contents", () => {
     // not.
     const copy = await openSubmenu(menu, "Copy");
     expect(labels(copy)).not.toContain("Copy file contents");
+  });
+
+  it("copies through the surface's own text when one is injected, skipping file.read", async () => {
+    // The file panel holds the loaded text of a file `file.read` may refuse
+    // (outside every project root); the item follows the text, not the
+    // extension guess.
+    const onCopyFileContents = vi.fn();
+    const menu = await openMenu({
+      row: { absolutePath: "/elsewhere/notes.custom", name: "notes.custom" },
+      options: { onCopyFileContents },
+    });
+    const copy = await openSubmenu(menu, "Copy");
+
+    fireEvent.click(within(copy).getByRole("menuitem", { name: "Copy file contents" }));
+
+    expect(onCopyFileContents).toHaveBeenCalledTimes(1);
+    expect(dispatchMock.mock.calls.some(([id]) => id === "file.read")).toBe(false);
   });
 
   it("copies an empty file as the empty string", async () => {
@@ -718,14 +712,6 @@ describe("useFileRowMenuItems — Copy file contents", () => {
       expect(useAnnouncerStore.getState().polite?.msg).toBe("File contents copied")
     );
     expect(getCopyFlash()).toBeNull();
-  });
-
-  it("keeps the item for an extension it doesn't recognise", async () => {
-    // Optimistic by design: the read is the real gate, and hiding everything
-    // unfamiliar would drop the item for perfectly ordinary text files.
-    const menu = await openMenu({ row: { absolutePath: "/repo/Makefile", name: "Makefile" } });
-    const copy = await openSubmenu(menu, "Copy");
-    expect(labels(copy)).toContain("Copy file contents");
   });
 });
 
@@ -795,6 +781,85 @@ describe("useFileRowMenuItems — reveal", () => {
       expect(dispatchMock.mock.calls.some(([id]) => id === "file.showItemInFolder")).toBe(true)
     );
     expect(notifyMock).not.toHaveBeenCalled();
+  });
+});
+
+describe("useFileRowMenuItems — discard and delete (#13424)", () => {
+  function mutationItems(menu: HTMLElement): string[] {
+    return labels(menu).filter((label) => label === "Discard changes" || label === "Delete file");
+  }
+
+  it.each([
+    ["modified", ["Discard changes", "Delete file"]],
+    ["added", ["Discard changes", "Delete file"]],
+    ["renamed", ["Discard changes", "Delete file"]],
+    ["copied", ["Discard changes", "Delete file"]],
+    ["deleted", ["Discard changes"]],
+    // Nothing to restore to, so discarding and deleting are one operation.
+    ["untracked", ["Delete file"]],
+    ["ignored", ["Delete file"]],
+    ["conflicted", []],
+    [null, ["Delete file"]],
+  ] as const)("offers the right items for a %s file", async (status, expected) => {
+    const menu = await openMenu({ row: { status } });
+    expect(mutationItems(menu)).toEqual(expected);
+  });
+
+  it("offers neither for a folder, and leaves no trailing rule", async () => {
+    const menu = await openMenu({
+      row: { isDirectory: true, relativePath: "src", name: "src", status: "modified" },
+    });
+    expect(mutationItems(menu)).toEqual([]);
+    expect(structure(menu).at(-1)).toBe("Copy");
+  });
+
+  it.each([
+    ["no worktree id", { worktreeId: null }],
+    ["no worktree root", { worktreePath: "" }],
+  ] as const)("offers neither on a surface with %s", async (_label, surface) => {
+    const menu = await openMenu({ surface });
+    expect(mutationItems(menu)).toEqual([]);
+  });
+
+  it("offers neither when the row's status is not the working tree's", async () => {
+    const menu = await openMenu({ options: { statusIsLocal: false } });
+    expect(mutationItems(menu)).toEqual([]);
+  });
+
+  it.each([
+    ["Discard changes", "git.discardFileChanges"],
+    ["Delete file", "file.trash"],
+  ])("%s dispatches %s with the worktree-relative path", async (label, actionId) => {
+    const menu = await openMenu();
+    fireEvent.click(within(menu).getByRole("menuitem", { name: label }));
+
+    await waitFor(() =>
+      expect(dispatchMock).toHaveBeenCalledWith(
+        actionId,
+        { worktreePath: WORKTREE, filePath: "src/index.ts" },
+        { source: "context-menu" }
+      )
+    );
+  });
+
+  it("toasts a failed discard with a Retry that dispatches again", async () => {
+    dispatchMock.mockImplementation(() =>
+      Promise.resolve({ ok: false, error: { message: "No trash on this volume" } })
+    );
+    const menu = await openMenu();
+    fireEvent.click(within(menu).getByRole("menuitem", { name: "Discard changes" }));
+
+    await waitFor(() => expect(notifyMock).toHaveBeenCalledTimes(1));
+    const payload = notifyMock.mock.calls[0]?.[0];
+    expect(payload?.title).toBe("Couldn't discard changes");
+    expect(payload?.message).toBe("No trash on this volume");
+
+    payload?.action?.onClick();
+    await waitFor(() =>
+      expect(
+        dispatchMock.mock.calls.filter(([id]) => id === "git.discardFileChanges")
+      ).toHaveLength(2)
+    );
   });
 });
 

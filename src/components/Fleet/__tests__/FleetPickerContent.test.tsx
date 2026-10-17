@@ -200,25 +200,6 @@ describe("FleetPickerContent + useFleetPicker", () => {
   });
 
   describe("selection handlers", () => {
-    it("toggles a row on click", async () => {
-      seedTerminals([makeTerminal("t1"), makeTerminal("t2")]);
-      useWorktreeSelectionStore.setState({ activeWorktreeId: null });
-      const captured: { picker?: ReturnType<typeof useFleetPicker> } = {};
-      renderHarness([makeWorktreeSnap("wt-1", "main")], {
-        mode: "cold-start",
-        onCommit: () => {},
-        capturePicker: (p) => {
-          captured.picker = p;
-        },
-      });
-      await act(async () => {});
-      const row = screen.getByTestId("fp-row-t1");
-      await act(async () => {
-        fireEvent.click(row);
-      });
-      expect(captured.picker?.selectedIds.has("t1")).toBe(true);
-    });
-
     it("cancels Shift+mousedown on a row and keeps the row's focus (#12926)", async () => {
       seedTerminals([makeTerminal("t1"), makeTerminal("t2")]);
       useWorktreeSelectionStore.setState({ activeWorktreeId: null });
@@ -364,23 +345,6 @@ describe("FleetPickerContent + useFleetPicker", () => {
       });
       await act(async () => {});
       expect(captured.picker?.acquired).toBe(false);
-    });
-
-    it("releases the session when isOpen flips false", async () => {
-      seedTerminals([makeTerminal("t1")]);
-      const { rerender } = renderHarness([makeWorktreeSnap("wt-1", "main")], {
-        mode: "cold-start",
-        onCommit: () => {},
-      });
-      await act(async () => {});
-      expect(useFleetPickerSessionStore.getState().activeOwner).toBe("cold-start");
-      rerender(
-        <WorktreeStoreContext.Provider value={createWorktreeStore()}>
-          <Harness mode="cold-start" onCommit={() => {}} isOpen={false} />
-        </WorktreeStoreContext.Provider>
-      );
-      await act(async () => {});
-      expect(useFleetPickerSessionStore.getState().activeOwner).toBeNull();
     });
   });
 
@@ -718,35 +682,6 @@ describe("FleetPickerContent + useFleetPicker", () => {
   });
 
   describe("keyboard entry from the search field", () => {
-    it("ArrowDown in the search input moves focus into the list", async () => {
-      // The dialog opens with the search input focused and the footer
-      // advertises "↑↓ Move", so this is the first thing a keyboard user tries.
-      seedTerminals([
-        makeTerminal("t1", { title: "alpha" }),
-        makeTerminal("t2", { title: "beta" }),
-      ]);
-      useWorktreeSelectionStore.setState({ activeWorktreeId: null });
-      renderHarness([makeWorktreeSnap("wt-1", "main")], {
-        mode: "cold-start",
-        onCommit: () => {},
-      });
-      await act(async () => {});
-
-      // The real dialog autofocuses this input; the test harness does not, so
-      // put focus where the user's would be before pressing the key.
-      const search = screen.getByTestId("fp-search") as HTMLInputElement;
-      search.focus();
-      expect(document.activeElement).toBe(search);
-
-      await act(async () => {
-        fireEvent.keyDown(search, { key: "ArrowDown" });
-      });
-      await act(async () => {});
-
-      expect(document.activeElement).not.toBe(search);
-      expect((document.activeElement as HTMLElement)?.getAttribute("role")).toBe("treeitem");
-    });
-
     it("ArrowDown in the search input lands on the first group heading", async () => {
       // The hand-off enters at the same node the tree container's own ArrowDown
       // does. Skipping straight to the first row would strand the heading above

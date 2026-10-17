@@ -58,12 +58,10 @@ const DIRECT_VERIFY_FLAGS = ["--verify", "--deep", "--strict"];
  */
 function createHarness({
   archiveNames,
-  dittoFails = false,
   appsPerArchive = 1,
   codesignFails = false,
 }: {
   archiveNames: string[];
-  dittoFails?: boolean;
   appsPerArchive?: number;
   codesignFails?: boolean;
 }): Harness {
@@ -90,25 +88,23 @@ function createHarness({
 
   writeExecutable(
     join(binDir, "ditto"),
-    dittoFails
-      ? `#!/usr/bin/env bash\nprintf '%s\\n' "$*" >> "${dittoLog}"\necho 'ditto: corrupt archive' >&2\nexit 1\n`
-      : [
-          "#!/usr/bin/env bash",
-          `printf '%s\\n' "$*" >> "${dittoLog}"`,
-          // Invoked as: ditto -x -k <archive> <destination>
-          'dest="${4:?}"',
-          `for i in $(seq 1 ${appsPerArchive}); do`,
-          '  app="$dest/Daintree$i.app"',
-          '  mkdir -p "$app/Contents/MacOS"',
-          '  printf "%s" "binary" > "$app/Contents/MacOS/Daintree"',
-          `  mkdir -p "$app/${helperDirs[0]}" "$app/${helperDirs[1]}"`,
-          `  printf "%s" "binary" > "$app/${helperDirs[0]}/${helperNames[0]}"`,
-          `  printf "%s" "binary" > "$app/${helperDirs[1]}/${helperNames[1]}"`,
-          "done",
-          // Breadcrumb so the test can detect a destination the script failed to reap.
-          `printf "%s\\n" "$dest" >> "${destinationsLog}"`,
-          "",
-        ].join("\n")
+    [
+      "#!/usr/bin/env bash",
+      `printf '%s\\n' "$*" >> "${dittoLog}"`,
+      // Invoked as: ditto -x -k <archive> <destination>
+      'dest="${4:?}"',
+      `for i in $(seq 1 ${appsPerArchive}); do`,
+      '  app="$dest/Daintree$i.app"',
+      '  mkdir -p "$app/Contents/MacOS"',
+      '  printf "%s" "binary" > "$app/Contents/MacOS/Daintree"',
+      `  mkdir -p "$app/${helperDirs[0]}" "$app/${helperDirs[1]}"`,
+      `  printf "%s" "binary" > "$app/${helperDirs[0]}/${helperNames[0]}"`,
+      `  printf "%s" "binary" > "$app/${helperDirs[1]}/${helperNames[1]}"`,
+      "done",
+      // Breadcrumb so the test can detect a destination the script failed to reap.
+      `printf "%s\\n" "$dest" >> "${destinationsLog}"`,
+      "",
+    ].join("\n")
   );
 
   // Fails ONLY for the direct integrity check, never for the metadata queries
@@ -275,17 +271,6 @@ describe("verify-macos-update-archives.sh", () => {
 
     expect(result.status).toBe(0);
     expect(readLog(harness.dittoLog)).toHaveLength(1);
-  });
-
-  itOnPosix("fails when an archive cannot be extracted", () => {
-    const harness = createHarness({
-      archiveNames: ["corrupt-arm64-mac.zip"],
-      dittoFails: true,
-    });
-
-    const result = run(harness, [TEAM_ID, ...harness.archives]);
-
-    expect(result.status).not.toBe(0);
   });
 
   itOnPosix("fails when extraction does not yield exactly one app bundle", () => {

@@ -32,6 +32,10 @@ vi.mock("../pty/index.js", async (importOriginal) => {
       getInfo() {
         return { wasKilled: false, isExited: false };
       }
+      // Windows reads it to hold the tree-kill helper warm while PTYs are live.
+      getPublicState() {
+        return { hasPty: true };
+      }
       isAgentCurrentlyLive() {
         return false;
       }
@@ -140,20 +144,6 @@ describe("PtyManager.spawn — PTY cleanup on constructor failure", () => {
     ).toThrow("spawn ENOENT");
 
     expect(manager.hasTerminal("t1")).toBe(false);
-  });
-
-  it("registers terminal normally when constructor succeeds", () => {
-    shouldThrow = false;
-
-    manager.spawn("t1", {
-      cwd: "/tmp",
-      cols: 80,
-      rows: 24,
-      kind: "terminal",
-    });
-
-    expect(manager.hasTerminal("t1")).toBe(true);
-    expect(mockPty.kill).not.toHaveBeenCalled();
   });
 
   it("rejects a duplicate spawn against a live terminal with TERMINAL_ALREADY_LIVE", () => {

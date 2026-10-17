@@ -35,7 +35,7 @@ vi.mock("@/lib/utils", () => ({
   cn: (...args: unknown[]) => args.filter(Boolean).join(" "),
 }));
 
-vi.mock("@/hooks", () => ({
+vi.mock("@/hooks/useOverlayState", () => ({
   useOverlayState: () => {},
 }));
 
@@ -81,12 +81,6 @@ describe("AppPaletteDialog.Empty instant derivation", () => {
     // string comparison, but the length guard must keep instant false so the
     // crossfade back to the zero-data state still plays.
     deferQuery = () => "foo";
-    render(<AppPaletteDialog.Empty query="" emptyMessage="No items available" />);
-    expect(lastProps().instant).toBe(false);
-    expect(lastProps().variant).toBe("zero-data");
-  });
-
-  it("keeps the fade on the steady zero-data state", () => {
     render(<AppPaletteDialog.Empty query="" emptyMessage="No items available" />);
     expect(lastProps().instant).toBe(false);
     expect(lastProps().variant).toBe("zero-data");

@@ -13,10 +13,16 @@ import { AGENT_REGISTRY, getAgentConfig } from "@/config/agents";
 import { BrandMark } from "@/components/icons";
 import { LAUNCHABLE_AGENT_IDS } from "@shared/config/agentIds";
 import {
+  classifyNpmPermissionFailure,
+  detectOS,
   extractInspectUrl,
+  findNonNpmInstallBlock,
   getInstallBlocksForCurrentOS,
   isBlockExecutable,
+  NPM_USER_PREFIX_COMMAND,
+  type NpmPermissionFailure,
 } from "@/lib/agentInstall";
+import { Callout } from "@/components/ui/Callout";
 import { systemClient } from "@/clients";
 import { useAgentSettingsStore } from "@/store";
 import { DEFAULT_DANGEROUS_ARGS, resolveDangerousMode } from "@shared/types/agentSettings";
@@ -33,6 +39,48 @@ import { formatErrorMessage } from "@shared/utils/errorMessage";
 const AGENT_ORDER = LAUNCHABLE_AGENT_IDS;
 
 type CardStatus = "idle" | "installing" | "installed" | "error" | "manual";
+
+/**
+ * What to do when npm refused a global install for permissions, by where it was
+ * refused. The folder comes from npm's report, so the copy names it rather than
+ * saying who owns it.
+ */
+function NpmPermissionCallout({
+  failure,
+  alternative,
+  testId,
+}: {
+  failure: NpmPermissionFailure;
+  alternative: string | undefined;
+  testId: string;
+}) {
+  const isCache = failure.kind === "cache";
+  const command = isCache ? failure.fixCommand : NPM_USER_PREFIX_COMMAND;
+  return (
+    <Callout
+      severity="warning"
+      size="compact"
+      title={isCache ? "npm can't write to its cache" : "npm can't write to its global folder"}
+      data-testid={testId}
+      data-npm-failure={failure.kind}
+    >
+      <p>
+        This account can't write to <span className="font-mono">{failure.folder}</span>.{" "}
+        {isCache
+          ? "Take ownership of it, then install again."
+          : "Point npm at a folder you own, install again, then add ~/.npm-global/bin to your PATH."}
+      </p>
+      {command && (
+        <div className="mt-1.5">
+          <CopyableCommand command={command} />
+        </div>
+      )}
+      {alternative && (
+        <p className="mt-1.5">Or install with {alternative}, which doesn't need npm.</p>
+      )}
+    </Callout>
+  );
+}
 
 interface AgentCliStepProps {
   availability: CliAvailability;
@@ -84,6 +132,8 @@ export function AgentCliStep({
   }, []);
 
   const selectedAgentIds = useMemo(() => AGENT_ORDER.filter((id) => selections[id]), [selections]);
+  // The OS the install blocks were picked for, so the advice matches the commands.
+  const installOS = detectOS();
 
   useEffect(() => {
     mountedRef.current = true;
@@ -270,6 +320,13 @@ export function AgentCliStep({
           const canInstall = status === "idle" || status === "error";
           const errorLog = cardErrors[agentId];
           const isErrorExpanded = expandedErrors[agentId];
+          const npmPermissionFailure =
+            isError && errorLog
+              ? (currentBlock?.commands ?? [])
+                  .map((cmd) => classifyNpmPermissionFailure(cmd, errorLog, installOS))
+                  .find((failure) => failure !== null)
+              : undefined;
+          const nonNpmBlock = npmPermissionFailure ? findNonNpmInstallBlock(blocks) : null;
 
           return (
             <div key={agentId} className="space-y-0">
@@ -383,6 +440,13 @@ export function AgentCliStep({
 
               {isError && (
                 <div className="pl-14 pt-1.5 pb-1 space-y-1">
+                  {npmPermissionFailure && (
+                    <NpmPermissionCallout
+                      failure={npmPermissionFailure}
+                      alternative={nonNpmBlock?.label}
+                      testId={`npm-permission-${agentId}`}
+                    />
+                  )}
                   {errorLog && (
                     <>
                       <Button
@@ -412,7 +476,8 @@ export function AgentCliStep({
                       </pre>
                     </>
                   )}
-                  {currentBlock?.commands && (
+                  {/* Re-running the npm line by hand hits the same unwritable folder. */}
+                  {currentBlock?.commands && !npmPermissionFailure && (
                     <div className="space-y-1">
                       <div className="text-2xs text-text-secondary">Or install manually:</div>
                       {currentBlock.commands.map((cmd) => (

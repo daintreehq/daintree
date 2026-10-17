@@ -21,7 +21,7 @@ import "@/index.css";
  *
  * Query parameters (the screenshot spec drives these):
  *   ?theme=daintree|bondi|…                      built-in theme id
- *   ?fixture=shipped|no-forge|wide|loading|empty  manifest to show (default shipped)
+ *   ?fixture=shipped|no-forge|wide|loading|empty|load-error  manifest to show (default shipped)
  *
  * The composer strip behind the palette is harness decoration. The last command
  * the picker selected is mirrored onto `body[data-selected-command]`.
@@ -63,6 +63,14 @@ function App() {
         isOpen={isOpen}
         commands={commands}
         isLoading={fixture === "loading"}
+        loadError={
+          fixture === "load-error"
+            ? "The command list request timed out. Check the app is still responding."
+            : null
+        }
+        onRetryLoad={() => {
+          document.body.dataset.retriedLoad = "true";
+        }}
         onSelect={(cmd) => {
           document.body.dataset.selectedCommand = cmd.id;
           setIsOpen(false);

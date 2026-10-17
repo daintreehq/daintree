@@ -17,17 +17,6 @@ import type { AppThemeTokenKey } from "../types.js";
 // eslint-disable-next-line react-hooks/rules-of-hooks -- culori config, not a React hook
 useMode(modeOklab);
 
-const OKABE_ITO = [
-  "#000000",
-  "#E69F00",
-  "#56B4E9",
-  "#009E73",
-  "#F0E442",
-  "#0072B2",
-  "#D55E00",
-  "#CC79A7",
-];
-
 type Deficiency = "protanopia" | "deuteranopia" | "tritanopia";
 
 const ALL_CATEGORY_TOKENS = [
@@ -52,8 +41,7 @@ const DEFICIENCIES: Deficiency[] = ["protanopia", "deuteranopia", "tritanopia"];
 // Quarter-JND floor (~0.005 OKLab units). Catches near-identical perceived
 // colors under CVD. 1 JND ≈ 0.02 in OKLab; 0.005 is the floor where two tokens
 // map to functionally the same color. The Okabe-Ito calibration benchmark is
-// considerably higher (~0.09–0.10), serving as the aspirational target
-// documented in the informational tests below.
+// considerably higher (~0.09–0.10), serving as the aspirational target.
 const JND_FLOOR = 0.005;
 
 function cvdFilter(deficiency: Deficiency) {
@@ -117,30 +105,13 @@ function normHex(h: string): string {
   return h.trim().toLowerCase();
 }
 
-function calibrateOkabeItoThreshold(deficiency: Deficiency): number {
-  const { distances } = computePairwiseDistances(OKABE_ITO, deficiency);
-  return Math.min(...distances);
-}
-
 function minPairwiseDistance(colors: string[], deficiency: Deficiency): number | null {
   const { distances, skipped } = computePairwiseDistances(colors, deficiency);
   if (skipped.length > 0 || distances.length === 0) return null;
   return Math.min(...distances);
 }
 
-// Reference: Okabe-Ito calibrated thresholds (informational only).
-const OI_THRESHOLDS = Object.fromEntries(
-  DEFICIENCIES.map((d) => [d, calibrateOkabeItoThreshold(d)])
-) as Record<Deficiency, number>;
-
 describe("palette distinguishability", () => {
-  it("Okabe-Ito calibration yields positive thresholds", () => {
-    for (const [mode, t] of Object.entries(OI_THRESHOLDS)) {
-      expect(t, `${mode} threshold`).toBeGreaterThan(0);
-      expect(t, `${mode} threshold should be below 0.25 OKLab units`).toBeLessThan(0.25);
-    }
-  });
-
   describe("worktree identity palette (WORKTREE_COLOR_PALETTE)", () => {
     it("no two worktree tokens collapse to identity under any CVD mode (JND floor)", () => {
       const failures: string[] = [];
@@ -177,29 +148,6 @@ describe("palette distinguishability", () => {
         failures,
         `${failures.length} token pairs collapsed to near-identity under CVD\n${failures.join("\n")}`
       ).toHaveLength(0);
-    });
-
-    it("reports minimum pairwise distance per scheme vs Okabe-Ito reference", () => {
-      // Informational: documents how each scheme's worktree palette compares
-      // to the Okabe-Ito gold standard. Not a hard gate.
-      for (const scheme of BUILT_IN_APP_SCHEMES) {
-        const values = resolveTokens(scheme, [...WORKTREE_COLOR_PALETTE]);
-        if (values.length !== 8) continue;
-
-        for (const deficiency of DEFICIENCIES) {
-          const minDist = minPairwiseDistance(values, deficiency);
-          const oi = OI_THRESHOLDS[deficiency]!;
-          expect(minDist, `${scheme.id} ${deficiency} minimum`).toBeGreaterThan(0);
-          // Logging-only check: records schemes below the Okabe-Ito bar.
-          // Not a hard failure — the JND-floor test above is the hard gate.
-          if (minDist !== null) {
-            expect(
-              minDist,
-              `${scheme.id} ${deficiency}: worktree min ${minDist.toFixed(4)} (Okabe-Ito ref: ${oi.toFixed(4)})`
-            ).toBeGreaterThan(0);
-          }
-        }
-      }
     });
   });
 
@@ -353,45 +301,6 @@ describe("palette distinguishability", () => {
         ).toHaveLength(0);
       });
     }
-
-    it("reports minimum status-pair distance per scheme vs Okabe-Ito reference", () => {
-      // Informational: surfaces the closest status pair per (scheme,
-      // deficiency) so a hand-tune that nudges the closest pair toward the
-      // JND floor is visible before it pushes the hard gate above. The
-      // success/danger canary is reported separately under red-green
-      // deficiencies — that's the safety-critical pair (banners, diff
-      // insert/delete backgrounds) and historically the closest in hand-
-      // tuned schemes (e.g. arashiyama ~0.0061).
-      for (const scheme of BUILT_IN_APP_SCHEMES) {
-        const values = resolveTokens(scheme, [...STATUS_TOKENS]);
-        if (values.length !== STATUS_TOKENS.length) continue;
-
-        for (const deficiency of DEFICIENCIES) {
-          const minDist = minPairwiseDistance(values, deficiency);
-          const oi = OI_THRESHOLDS[deficiency]!;
-          expect(minDist, `${scheme.id} ${deficiency} minimum`).toBeGreaterThan(0);
-          if (minDist !== null) {
-            expect(
-              minDist,
-              `${scheme.id} ${deficiency}: status min ${minDist.toFixed(4)} (Okabe-Ito ref: ${oi.toFixed(4)})`
-            ).toBeGreaterThan(0);
-          }
-        }
-
-        // Success/danger canary under red-green deficiencies.
-        const success = values[STATUS_TOKENS.indexOf("status-success")]!;
-        const danger = values[STATUS_TOKENS.indexOf("status-danger")]!;
-        for (const deficiency of ["protanopia", "deuteranopia"] as const) {
-          const sdDist = minPairwiseDistance([success, danger], deficiency);
-          if (sdDist !== null) {
-            expect(
-              sdDist,
-              `${scheme.id} ${deficiency}: status-success vs status-danger = ${sdDist.toFixed(4)}`
-            ).toBeGreaterThan(0);
-          }
-        }
-      }
-    });
   });
 
   describe("CVD override maps internal distinguishability", () => {
@@ -434,22 +343,6 @@ describe("palette distinguishability", () => {
           failures,
           `${failures.length} override pairs collapsed to near-identity under CVD\n${failures.join("\n")}`
         ).toHaveLength(0);
-      });
-
-      it(`${name}: internal distinguishability vs Okabe-Ito reference (informational)`, () => {
-        for (const deficiency of deficiencies) {
-          const minDist = minPairwiseDistance(uniqueHex, deficiency);
-          const oi = OI_THRESHOLDS[deficiency]!;
-          expect(minDist, `${name} ${deficiency} minimum`).toBeGreaterThan(0);
-          // Informational: reports distance relative to Okabe-Ito reference.
-          // The JND-floor test above is the hard gate; this documents the gap.
-          if (minDist !== null) {
-            expect(
-              minDist,
-              `${name} ${deficiency}: override min ${minDist.toFixed(4)} (Okabe-Ito ref: ${oi.toFixed(4)})`
-            ).toBeGreaterThan(0);
-          }
-        }
       });
     }
 

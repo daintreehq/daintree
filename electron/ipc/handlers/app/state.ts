@@ -3,7 +3,14 @@ import os from "os";
 import { app } from "electron";
 import { CHANNELS } from "../../channels.js";
 import { store, type StoreSchema, consumePendingSettingsRecovery } from "../../../store.js";
+import { readCanopyMode } from "../../../services/canopy/canopyMode.js";
+import { readAgentDefaults } from "../../../services/agentDefaults.js";
 import { projectStore } from "../../../services/ProjectStore.js";
+import {
+  mayWriteProjectState,
+  peekDriveLeaseService,
+} from "../../../services/DriveLeaseService.js";
+import { APP_STATE_FIELD_OWNERSHIP } from "../../../storeOwnership.js";
 import { AppStateTerminalEntrySchema, filterValidTerminalEntries } from "../../../schemas/ipc.js";
 import { filterRestorableTerminalSnapshots } from "../../../services/projectStateRestore.js";
 import { getCrashRecoveryService } from "../../../services/CrashRecoveryService.js";
@@ -26,8 +33,17 @@ export const CRASH_CRITICAL_FIELDS = new Set([
   "fleetScopeMode",
 ]);
 
-import { getGpuFeatureStatus, isWebGLHardwareAccelerated } from "../../../utils/gpuDetection.js";
+import {
+  getGpuFeatureStatus,
+  getWebGLFeatureStatus,
+  isWebGLHardwareAccelerated,
+  whenGpuReported,
+} from "../../../utils/gpuDetection.js";
 import { isRunningUnderRosetta } from "../../../utils/rosettaDetection.js";
+
+// Long enough for a cold GPU process (it reports ~300 ms after start), short
+// enough that a GPU that never reports doesn't hold the first window back.
+const GPU_REPORT_WAIT_MS = 1_500;
 import {
   isGpuDisabledByFlag,
   isGpuAngleFallbackApplied,
@@ -49,6 +65,140 @@ import { getValidatedOverrides } from "../keybinding.js";
 import { loadSanitizedUserAgentRegistry } from "../../../services/UserAgentRegistryService.js";
 import type { Project } from "../../../types/index.js";
 import type { HandlerDependencies, IpcContext } from "../../types.js";
+import type { BootResult, HydrateResult } from "../../../../shared/types/ipc/app.js";
+
+type HostPlatformFields = Required<
+  Pick<HydrateResult, "hostPlatform" | "hostHomeDir" | "hostTmpDir">
+>;
+
+/** This machine, as the host of whatever the view shows. */
+export function readHostPlatformFields(): HostPlatformFields {
+  const platform = process.platform;
+  return {
+    hostPlatform:
+      platform === "darwin" || platform === "win32" || platform === "linux" ? platform : "linux",
+    hostHomeDir: os.homedir(),
+    hostTmpDir: os.tmpdir(),
+  };
+}
+
+/** Hydrate fields that describe the machine the window is drawn on, never the host. */
+export type ShellHydrateFields = Pick<
+  HydrateResult,
+  | "gpuWebGLHardware"
+  | "gpuHardwareAccelerationDisabled"
+  | "gpuDisabledReason"
+  | "gpuAngleFallbackActive"
+  | "safeMode"
+  | "isWindowsStore"
+  | "runningUnderRosetta"
+  | "rosettaWarningDismissed"
+  | "crashCount"
+  | "lastCrashAt"
+  | "settingsRecovery"
+  | "databaseRecovery"
+  | "crashLoopStateRecovery"
+  | "systemTmpDir"
+  | "keybindingOverrides"
+>;
+
+/**
+ * The Shell half of a hydrate. `consumeOneShots: false` leaves the settings
+ * and database recovery notices for this machine's own windows: a hydrate
+ * answered for a remote Shell must not swallow them.
+ */
+export function readShellHydrateFields(options: { consumeOneShots: boolean }): ShellHydrateFields {
+  const webglStatus = getWebGLFeatureStatus(getGpuFeatureStatus());
+  const gpuWebGLHardware = isWebGLHardwareAccelerated(webglStatus);
+  if (!gpuWebGLHardware) {
+    console.warn(
+      `[AppHydrate] Software-only WebGL detected (status: ${webglStatus}). WebGL terminal renderer will be disabled.`
+    );
+  }
+  const guard = getCrashLoopGuard();
+  const inSafeMode = guard.isSafeMode();
+  const userData = app.getPath("userData");
+  return {
+    gpuWebGLHardware,
+    gpuHardwareAccelerationDisabled: isGpuDisabledByFlag(userData),
+    gpuDisabledReason: readGpuDisabledFlagData(userData)?.reason ?? null,
+    gpuAngleFallbackActive: isGpuAngleFallbackApplied(userData),
+    safeMode: inSafeMode,
+    isWindowsStore: (process as NodeJS.Process & { windowsStore?: boolean }).windowsStore === true,
+    runningUnderRosetta: isRunningUnderRosetta(),
+    rosettaWarningDismissed: store.get("rosettaWarningDismissed") === true,
+    crashCount: guard.getCrashCount(),
+    lastCrashAt: guard.getLastCrashTimestamp(),
+    settingsRecovery: options.consumeOneShots ? consumePendingSettingsRecovery() : null,
+    databaseRecovery: options.consumeOneShots
+      ? getDatabaseMaintenanceService().consumeRecovery()
+      : null,
+    // Surface the crash-loop quarantine only when safe mode is also active —
+    // a silent reset on the happy path would be more noise than signal.
+    crashLoopStateRecovery:
+      inSafeMode && guard.getQuarantinedStatePath()
+        ? { quarantinedPath: guard.getQuarantinedStatePath()! }
+        : null,
+    // Folded into the payload so the renderer skips a standalone
+    // `system:get-tmp-dir` round-trip on boot (matches `handleSystemGetTmpDir`).
+    systemTmpDir: os.tmpdir(),
+    keybindingOverrides: getValidatedOverrides(),
+  };
+}
+
+/**
+ * Batched cold-start boot payload. Collapses what was three separate renderer
+ * round-trips (`crash-recovery:get-pending`, `crash-recovery:get-config`,
+ * `app:hydrate`) into one. The destructive one-shot consumers
+ * (`consumePanelFilter`, `consumePendingSettingsRecovery`, `consumeRecovery`)
+ * and the prefetch fast path stay in the hydrate — boot appends this
+ * machine's crash gate fields onto its result.
+ */
+export function composeBootResult(hydrate: HydrateResult): BootResult {
+  const crashService = getCrashRecoveryService();
+  const guard = getCrashLoopGuard();
+  // Mirror crash-recovery:get-pending: suppress in safe mode and inject the
+  // live crash count so the renderer's auto-restore heuristic matches the
+  // standalone path.
+  let crashPending: import("../../../../shared/types/ipc/crashRecovery.js").PendingCrash | null;
+  if (guard.isSafeMode()) {
+    crashPending = null;
+  } else {
+    const pending = crashService.getPendingCrash();
+    crashPending = pending ? { ...pending, crashCount: guard.getCrashCount() } : null;
+  }
+  // Ride-along app theme: only when the stored config is already in its
+  // fully-migrated shape. First-run defaulting and legacy customSchemes
+  // migration stay in the `app-theme:get` handler, which the renderer falls
+  // back to whenever this field is undefined.
+  const rawAppTheme = store.get("appTheme");
+  const appTheme =
+    rawAppTheme &&
+    typeof rawAppTheme === "object" &&
+    !Array.isArray(rawAppTheme) &&
+    typeof rawAppTheme.colorSchemeId === "string" &&
+    rawAppTheme.colorSchemeId &&
+    typeof (rawAppTheme.customSchemes as unknown) !== "string"
+      ? (rawAppTheme as import("../../../../shared/types/appTheme.js").AppThemeConfig)
+      : undefined;
+  // `useAppBootstrap` throws this whole payload away and re-runs `app:hydrate`
+  // once the crash gate resolves (`hadPendingCrash ? null : bootResult`), so a
+  // destructive one-shot consumed above would never reach the user. An unclean
+  // exit is also exactly how the database gets corrupted — hand the recovery
+  // back so the live hydrate that follows delivers it.
+  const droppedRecovery = crashPending !== null ? hydrate.databaseRecovery : null;
+  if (droppedRecovery) {
+    getDatabaseMaintenanceService().restoreRecovery(droppedRecovery);
+  }
+
+  return {
+    ...hydrate,
+    databaseRecovery: droppedRecovery ? null : hydrate.databaseRecovery,
+    crashPending,
+    crashConfig: crashService.getConfig(),
+    appTheme,
+  };
+}
 
 interface HydrationWorkspace {
   project: Project | null;
@@ -58,6 +208,32 @@ interface HydrationWorkspace {
    * null because scratches deliberately have no Project row (#11484).
    */
   workspaceId: string | null;
+}
+
+/**
+ * A local view's write mixes this screen's own fields (sidebar and panel
+ * sizes, palette habits) with the project's host-owned ones (layout, terminal
+ * list, active worktree), so the dispatcher lets it through whole. While
+ * another screen drives the view's project, only the device fields land; the
+ * host-owned ones are the driver's. With no lease service running, as for
+ * anyone who never turned on Host mode, everything lands as before.
+ */
+function withoutUndrivenHostFields(
+  ctx: IpcContext,
+  incoming: object,
+  resolveWorkspaceId: () => string | null
+): object {
+  if (peekDriveLeaseService() === null) return incoming;
+  // A view that writes before its binding lands still writes a workspace's
+  // fields: the same one its MRU write below resolves to.
+  const projectId = ctx.projectId ?? resolveWorkspaceId();
+  if (projectId && mayWriteProjectState(projectId, () => ctx.endpoint)) return incoming;
+  const ownership: Readonly<Record<string, string>> = APP_STATE_FIELD_OWNERSHIP;
+  return Object.fromEntries(
+    Object.entries(incoming).filter(
+      ([field]) => Object.hasOwn(ownership, field) && ownership[field] === "device"
+    )
+  );
 }
 
 export function registerAppStateHandlers(deps?: HandlerDependencies): () => void {
@@ -74,7 +250,14 @@ export function registerAppStateHandlers(deps?: HandlerDependencies): () => void
   };
 
   const handleAppHydrate = async (ctx?: IpcContext) => {
+    // The GPU half of the answer is kept by the view for its lifetime; read
+    // before the GPU process reports it is the provisional all-disabled status.
+    // Only the first few hundred milliseconds of a session ever wait here.
+    await whenGpuReported(GPU_REPORT_WAIT_MS);
     const { project: currentProject, workspaceId } = resolveWorkspaceForHydration(ctx);
+    // A remote Shell merges only this machine's host half of the answer, so
+    // nothing addressed to this machine's own windows may be consumed for it.
+    const forRemoteShell = ctx?.endpoint?.kind === "remote-view";
 
     // Until the legacy global record has an owner, the prefetch cache cannot
     // stand in for this handler: `buildSwitchHydrateResult` performs no writes,
@@ -100,9 +283,10 @@ export function registerAppStateHandlers(deps?: HandlerDependencies): () => void
     // likely to be waiting.
     const crashService = getCrashRecoveryService();
     const canUseCrashPanelFilter =
-      !workspaceId ||
-      (currentProject !== null &&
-        (persistedLegacyOwnerId === undefined || persistedLegacyOwnerId === workspaceId));
+      !forRemoteShell &&
+      (!workspaceId ||
+        (currentProject !== null &&
+          (persistedLegacyOwnerId === undefined || persistedLegacyOwnerId === workspaceId)));
     const panelFilter = canUseCrashPanelFilter ? crashService.consumePanelFilter() : null;
     const crashPanelFilterWithheld =
       !canUseCrashPanelFilter && crashService.hasPendingPanelFilter();
@@ -146,13 +330,16 @@ export function registerAppStateHandlers(deps?: HandlerDependencies): () => void
         // The live sender's identity always wins over whatever the prefetch
         // stamped — only ever a project today, but never assume that.
         workspaceId,
+        // A cold-start prefetch can run before the GPU process reports, so the
+        // GPU answer is read now, not taken from the cached payload.
+        gpuWebGLHardware: isWebGLHardwareAccelerated(getWebGLFeatureStatus(getGpuFeatureStatus())),
         skippedPanelCount: 0,
         crashCount: cacheGuard.getCrashCount(),
         lastCrashAt: cacheGuard.getLastCrashTimestamp(),
-        settingsRecovery: consumePendingSettingsRecovery(),
+        settingsRecovery: forRemoteShell ? null : consumePendingSettingsRecovery(),
         // Boot-time DB recovery is one-shot and predates the prefetch, so it is
         // consumed live here — the cached payload always carries a null for it.
-        databaseRecovery: getDatabaseMaintenanceService().consumeRecovery(),
+        databaseRecovery: forRemoteShell ? null : getDatabaseMaintenanceService().consumeRecovery(),
         // Crash-loop quarantine notifications are gated on safe mode; the
         // fast path runs only when safe mode is inactive, so clear the field.
         crashLoopStateRecovery: null,
@@ -162,6 +349,7 @@ export function registerAppStateHandlers(deps?: HandlerDependencies): () => void
         projects: projectStore.getAllProjects(),
         keybindingOverrides: getValidatedOverrides(),
         userAgentRegistry: loadSanitizedUserAgentRegistry(),
+        ...readHostPlatformFields(),
       };
     }
 
@@ -200,7 +388,14 @@ export function registerAppStateHandlers(deps?: HandlerDependencies): () => void
     // intact when `app:boot`'s payload is discarded behind a pending crash and
     // the renderer hydrates again.
     let legacyWorkspaceStateOwnerId = persistedLegacyOwnerId;
-    if (hasProjectRow && workspaceId && legacyWorkspaceStateOwnerId === undefined) {
+    // A remote Shell's view never claims it: the heir is whichever of this
+    // machine's own projects opens first here.
+    if (
+      hasProjectRow &&
+      workspaceId &&
+      legacyWorkspaceStateOwnerId === undefined &&
+      !forRemoteShell
+    ) {
       legacyWorkspaceStateOwnerId = workspaceId;
       store.set("legacyWorkspaceStateOwnerId", workspaceId);
       console.log(
@@ -549,47 +744,21 @@ export function registerAppStateHandlers(deps?: HandlerDependencies): () => void
       `[AppHydrate] Project: ${currentProject?.name ?? (workspaceId ? "scratch" : "none")} - terminals from ${terminalsSource} (${terminalsToUse.length} valid), focusMode: ${focusModeToUse}`
     );
 
-    const gpuStatus = getGpuFeatureStatus();
-    const gpuWebGLHardware = isWebGLHardwareAccelerated(gpuStatus.webgl2);
-    if (!gpuWebGLHardware) {
-      console.warn(
-        `[AppHydrate] Software-only WebGL2 detected (status: ${gpuStatus.webgl2}). WebGL terminal renderer will be disabled.`
-      );
-    }
-
     return {
+      ...readShellHydrateFields({ consumeOneShots: !forRemoteShell }),
+      ...readHostPlatformFields(),
       appState: appState as import("../../../../shared/types/ipc/app.js").AppState,
       terminalConfig: readHydrateTerminalConfig(),
       project: currentProject,
       workspaceId,
       agentSettings: store.get("agentSettings"),
-      gpuWebGLHardware,
-      gpuHardwareAccelerationDisabled: isGpuDisabledByFlag(app.getPath("userData")),
-      gpuDisabledReason: readGpuDisabledFlagData(app.getPath("userData"))?.reason ?? null,
-      gpuAngleFallbackActive: isGpuAngleFallbackApplied(app.getPath("userData")),
-      safeMode: inSafeMode,
-      isWindowsStore:
-        (process as NodeJS.Process & { windowsStore?: boolean }).windowsStore === true,
-      runningUnderRosetta: isRunningUnderRosetta(),
-      rosettaWarningDismissed: store.get("rosettaWarningDismissed") === true,
+      agentDefaults: readAgentDefaults(),
+      canopyMode: readCanopyMode(),
       skippedPanelCount,
       quarantinedPanels,
-      crashCount: guard.getCrashCount(),
-      lastCrashAt: guard.getLastCrashTimestamp(),
-      settingsRecovery: consumePendingSettingsRecovery(),
-      databaseRecovery: getDatabaseMaintenanceService().consumeRecovery(),
       projectStateRecovery: projectStateQuarantinedPath
         ? { quarantinedPath: projectStateQuarantinedPath }
         : null,
-      // Surface the crash-loop quarantine only when safe mode is also active —
-      // a silent reset on the happy path would be more noise than signal.
-      crashLoopStateRecovery:
-        inSafeMode && guard.getQuarantinedStatePath()
-          ? { quarantinedPath: guard.getQuarantinedStatePath()! }
-          : null,
-      // Folded into the payload so the renderer skips a standalone
-      // `system:get-tmp-dir` round-trip on boot (matches `handleSystemGetTmpDir`).
-      systemTmpDir: os.tmpdir(),
       tabGroups: tabGroupsToUse,
       terminalSizes: terminalSizesToUse,
       draftInputs: draftInputsToUse,
@@ -599,64 +768,12 @@ export function registerAppStateHandlers(deps?: HandlerDependencies): () => void
       // (project:get-all / project:get-current, keybinding:get-overrides,
       // user-agent-registry:get). All three are synchronous reads.
       projects: projectStore.getAllProjects(),
-      keybindingOverrides: getValidatedOverrides(),
       userAgentRegistry: loadSanitizedUserAgentRegistry(),
     };
   };
   handlers.push(typedHandleWithContext(CHANNELS.APP_HYDRATE, handleAppHydrate));
 
-  // Batched cold-start boot payload. Collapses what was three separate renderer
-  // round-trips (`crash-recovery:get-pending`, `crash-recovery:get-config`,
-  // `app:hydrate`) into one. The destructive one-shot consumers
-  // (`consumePanelFilter`, `consumePendingSettingsRecovery`, `consumeRecovery`) and the prefetch
-  // fast path remain inside `handleAppHydrate` — boot just appends the crash
-  // gate fields onto the same result.
-  const handleAppBoot = async (ctx: IpcContext) => {
-    const hydrate = await handleAppHydrate(ctx);
-    const crashService = getCrashRecoveryService();
-    const guard = getCrashLoopGuard();
-    // Mirror crash-recovery:get-pending: suppress in safe mode and inject the
-    // live crash count so the renderer's auto-restore heuristic matches the
-    // standalone path.
-    let crashPending: import("../../../../shared/types/ipc/crashRecovery.js").PendingCrash | null;
-    if (guard.isSafeMode()) {
-      crashPending = null;
-    } else {
-      const pending = crashService.getPendingCrash();
-      crashPending = pending ? { ...pending, crashCount: guard.getCrashCount() } : null;
-    }
-    // Ride-along app theme: only when the stored config is already in its
-    // fully-migrated shape. First-run defaulting and legacy customSchemes
-    // migration stay in the `app-theme:get` handler, which the renderer falls
-    // back to whenever this field is undefined.
-    const rawAppTheme = store.get("appTheme");
-    const appTheme =
-      rawAppTheme &&
-      typeof rawAppTheme === "object" &&
-      !Array.isArray(rawAppTheme) &&
-      typeof rawAppTheme.colorSchemeId === "string" &&
-      rawAppTheme.colorSchemeId &&
-      typeof (rawAppTheme.customSchemes as unknown) !== "string"
-        ? (rawAppTheme as import("../../../../shared/types/appTheme.js").AppThemeConfig)
-        : undefined;
-    // `useAppBootstrap` throws this whole payload away and re-runs `app:hydrate`
-    // once the crash gate resolves (`hadPendingCrash ? null : bootResult`), so a
-    // destructive one-shot consumed above would never reach the user. An unclean
-    // exit is also exactly how the database gets corrupted — hand the recovery
-    // back so the live hydrate that follows delivers it.
-    const droppedRecovery = crashPending !== null ? hydrate.databaseRecovery : null;
-    if (droppedRecovery) {
-      getDatabaseMaintenanceService().restoreRecovery(droppedRecovery);
-    }
-
-    return {
-      ...hydrate,
-      databaseRecovery: droppedRecovery ? null : hydrate.databaseRecovery,
-      crashPending,
-      crashConfig: crashService.getConfig(),
-      appTheme,
-    };
-  };
+  const handleAppBoot = async (ctx: IpcContext) => composeBootResult(await handleAppHydrate(ctx));
   handlers.push(typedHandleWithContext(CHANNELS.APP_BOOT, handleAppBoot));
 
   const handleAppGetState = async () => {
@@ -676,7 +793,11 @@ export function registerAppStateHandlers(deps?: HandlerDependencies): () => void
 
       // Handler performs its own structural validation before writing; cast to the
       // store schema to keep the `updates` object compatible with persistence types.
-      const partialState = incoming as Partial<typeof store.store.appState>;
+      const partialState = withoutUndrivenHostFields(
+        ctx,
+        incoming,
+        () => resolveWorkspaceForHydration(ctx).workspaceId
+      ) as Partial<typeof store.store.appState>;
 
       const updates: Partial<typeof store.store.appState> = {};
 
@@ -1026,7 +1147,7 @@ export function registerAppStateHandlers(deps?: HandlerDependencies): () => void
       // Close the cold-start timeline for a view this window's manager
       // cold-started (input-ready log + trace mark); no-op for warm views.
       // Same per-window resolution as APP_VIEW_PAINTED below.
-      const senderWindow = getWindowForWebContents(ctx.event.sender);
+      const senderWindow = ctx.event && getWindowForWebContents(ctx.event.sender);
       const pvm =
         (senderWindow &&
           deps?.windowRegistry?.getByWindowId(senderWindow.id)?.services?.projectViewManager) ??
@@ -1041,7 +1162,7 @@ export function registerAppStateHandlers(deps?: HandlerDependencies): () => void
       // pending paint gate can release. Mirrors the multi-window resolution
       // pattern used by `project:switch`: prefer the per-window registry
       // entry, fall back to the global PVM ref for single-window setups.
-      const senderWindow = getWindowForWebContents(ctx.event.sender);
+      const senderWindow = ctx.event && getWindowForWebContents(ctx.event.sender);
       const pvm =
         (senderWindow &&
           deps?.windowRegistry?.getByWindowId(senderWindow.id)?.services?.projectViewManager) ??
@@ -1049,7 +1170,7 @@ export function registerAppStateHandlers(deps?: HandlerDependencies): () => void
       pvm?.signalViewPainted(ctx.webContentsId);
       // Flush any pending `daintree://` deep link now the view has painted — its
       // renderer-side listener is guaranteed mounted at this point (#9559).
-      notifyAppViewPainted(ctx.event.sender);
+      if (ctx.event) notifyAppViewPainted(ctx.event.sender);
     })
   );
 
@@ -1061,7 +1182,7 @@ export function registerAppStateHandlers(deps?: HandlerDependencies): () => void
       // background-color cover (#9679). Same per-window resolution as
       // APP_VIEW_PAINTED, but re-fireable across reactivations (unlike the
       // one-shot APP_VIEW_PAINTED).
-      const senderWindow = getWindowForWebContents(ctx.event.sender);
+      const senderWindow = ctx.event && getWindowForWebContents(ctx.event.sender);
       const pvm =
         (senderWindow &&
           deps?.windowRegistry?.getByWindowId(senderWindow.id)?.services?.projectViewManager) ??

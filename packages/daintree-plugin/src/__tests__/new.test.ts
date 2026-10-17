@@ -154,11 +154,54 @@ describe("scaffoldPlugin", () => {
 
     // The runtime (`PluginService.loadPlugin`) registers a panel kind only while
     // iterating declared `panels`, attaching a view's componentPath when ids
-    // match. A view with no matching non-PTY panel is ignored, so the scaffold
-    // must pair every view with a panel of the same id for it to render.
+    // match. The manifest validator rejects a panel view with no matching panel,
+    // and a PTY panel never renders a view, so the scaffold must pair every view with
+    // a non-PTY panel of the same id.
     const panel = contributes.panels.find((p) => p.id === contributes.views[0].id);
     expect(panel).toBeDefined();
     expect(panel?.hasPty ?? false).toBe(false);
+  });
+
+  it("gives view-bearing templates a panel preview, and the others none", async () => {
+    const PREVIEW_FILES = [
+      "review/panel.stories.tsx",
+      "review/panel.spec.ts",
+      "playwright.config.ts",
+    ];
+    for (const template of TEMPLATE_KINDS) {
+      const result = await scaffoldPlugin({
+        cwd: tmpDir,
+        targetDir: `preview-${template}`,
+        publisher: "acme",
+        displayName: "Preview",
+        template,
+      });
+      const pkg = await readJson(path.join(result.dir, "package.json"));
+      const scripts = pkg.scripts as Record<string, string>;
+      const dev = pkg.devDependencies as Record<string, string>;
+      if (template === "view" || template === "full") {
+        expect(result.files).toEqual(expect.arrayContaining(PREVIEW_FILES));
+        // The stories mount the scaffolded panel under the plugin's own id.
+        const stories = await fs.readFile(
+          path.join(result.dir, "review", "panel.stories.tsx"),
+          "utf8"
+        );
+        expect(stories).toContain('import Panel from "../src/panel";');
+        expect(stories).toContain(`pluginId: ${JSON.stringify(result.scopedName)}`);
+        expect(scripts["test:preview"]).toBe("playwright test");
+        for (const name of ["@playwright/test", "esbuild", "tailwindcss"]) {
+          expect(dev[name], name).toBeDefined();
+        }
+      } else {
+        expect(result.files.filter((file) => PREVIEW_FILES.includes(file))).toEqual([]);
+        expect(scripts["test:preview"]).toBeUndefined();
+        expect(dev["@playwright/test"]).toBeUndefined();
+      }
+      const gitignore = await fs.readFile(path.join(result.dir, ".gitignore"), "utf8");
+      expect(gitignore.split("\n")).toEqual(
+        expect.arrayContaining(["test-results/", "playwright-report/"])
+      );
+    }
   });
 
   it("full template pairs its contributed view with a matching panel", async () => {
@@ -506,6 +549,24 @@ describe("scaffoldPlugin --project", () => {
     expect(manifest.name).toBe(path.basename(result.dir));
   });
 
+  it("points the README at the panel preview exactly when the scaffold ships one", async () => {
+    for (const template of TEMPLATE_KINDS) {
+      const result = await scaffoldProject(template, `readme-${template}`);
+      const readme = await fs.readFile(path.join(result.dir, "README.md"), "utf8");
+      const pkg = await readJson(path.join(result.dir, "package.json"));
+      const hasPreview = result.files.includes("review/panel.stories.tsx");
+      expect(hasPreview, template).toBe(template === "view" || template === "full");
+      // The README must not promise a script the plugin lacks, nor stay silent
+      // about the one it has.
+      expect("test:preview" in (pkg.scripts as Record<string, string>), template).toBe(hasPreview);
+      expect(readme.includes("npm run test:preview"), template).toBe(hasPreview);
+      if (hasPreview) {
+        expect(readme).toContain("`review/panel.stories.tsx`");
+        expect(readme).toContain("`--remote-debugging-port`");
+      }
+    }
+  });
+
   it("leaves out the tour-authoring skill, since project plugins can't contribute tours", async () => {
     const result = await scaffoldProject();
     expect(result.files.some((file) => file.startsWith(".claude/"))).toBe(false);
@@ -721,6 +782,50 @@ describe("findProjectRoot", () => {
     const orphan = path.join(tmpDir, "orphan");
     await fs.mkdir(orphan, { recursive: true });
     expect(await findProjectRoot(orphan)).toBeNull();
+  });
+
+  it("does not take the home directory's own .daintree/ for a project", async () => {
+    // ~/.daintree is Daintree's data directory. Counting it put every directory
+    // under home (on Windows, every temp directory too) inside a "project" at ~.
+    const home = path.join(tmpDir, "home");
+    const loose = path.join(home, "notes", "drafts");
+    await fs.mkdir(path.join(home, ".daintree", "plugins"), { recursive: true });
+    await fs.mkdir(loose, { recursive: true });
+    expect(await findProjectRoot(loose, { homeDir: home })).not.toBe(home);
+
+    const project = path.join(home, "code", "app");
+    await fs.mkdir(path.join(project, ".daintree"), { recursive: true });
+    expect(await findProjectRoot(path.join(project), { homeDir: home })).toBe(project);
+  });
+
+  it("does not take home for a project when the walk starts at home", async () => {
+    const home = path.join(tmpDir, "bare-home");
+    await fs.mkdir(path.join(home, ".daintree"), { recursive: true });
+    expect(await findProjectRoot(home, { homeDir: home })).not.toBe(home);
+  });
+
+  it("recognises home through symlinks and Windows junctions in either direction", async () => {
+    const realHome = path.join(tmpDir, "real-home");
+    const linkHome = path.join(tmpDir, "link-home");
+    const loose = path.join(realHome, "notes");
+    await fs.mkdir(path.join(realHome, ".daintree"), { recursive: true });
+    await fs.mkdir(loose, { recursive: true });
+    await fs.symlink(realHome, linkHome, process.platform === "win32" ? "junction" : "dir");
+    expect(await findProjectRoot(loose, { homeDir: linkHome })).not.toBe(realHome);
+    expect(await findProjectRoot(path.join(linkHome, "notes"), { homeDir: realHome })).not.toBe(
+      linkHome
+    );
+
+    const project = path.join(linkHome, "project");
+    await fs.mkdir(path.join(project, ".daintree"), { recursive: true });
+    expect(await findProjectRoot(project, { homeDir: realHome })).toBe(project);
+  });
+
+  it("still accepts a home directory that is itself a git repository", async () => {
+    const home = path.join(tmpDir, "dotfiles-home");
+    await fs.mkdir(path.join(home, ".daintree"), { recursive: true });
+    await fs.mkdir(path.join(home, ".git"), { recursive: true });
+    expect(await findProjectRoot(home, { homeDir: home })).toBe(home);
   });
 });
 

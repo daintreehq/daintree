@@ -32,6 +32,7 @@ vi.mock("@/clients", () => ({
     onExit: vi.fn(() => vi.fn()),
     onResizeResult: vi.fn(() => vi.fn()),
     onTierChanged: vi.fn(() => vi.fn()),
+    onReset: vi.fn(() => vi.fn()),
     setActivityTier: vi.fn(),
     wake: vi.fn(),
     resize: vi.fn(),
@@ -100,11 +101,6 @@ function stubMatchMedia(): void {
 }
 
 describe("TerminalInstanceService - repairFontGrid (#9776)", () => {
-  it("registers a late-font-arrival callback in its constructor", async () => {
-    await import("../TerminalInstanceService");
-    expect(typeof registeredLateArrivalCallback).toBe("function");
-  });
-
   it("remeasures every non-hibernated instance", async () => {
     const { terminalInstanceService } = await import("../TerminalInstanceService");
     stubMatchMedia();

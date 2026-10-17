@@ -23,6 +23,10 @@ import { useCopyTreeRunStore } from "@/store/copyTreeRunStore";
 import { deriveCommitMessageSeed } from "@/lib/worktreeAiNote";
 import { buildWorkingTreeDiffModel } from "@/lib/workingTreeDiff";
 import { basename } from "@shared/utils/path";
+import {
+  WORKTREE_LABEL_COLOR_NAMES,
+  worktreeLabelTokenForName,
+} from "@shared/theme/worktreeColors";
 import { composeFileBrowserTitle } from "@/panels/file-browser/title";
 // Static, unlike the stores below: this module carries the panel types plus a
 // handful of pure predicates over them, so it drags in no client or store graph.
@@ -35,6 +39,11 @@ import { isForegroundDispatch } from "./dispatchSource";
 import { PANEL_LIMIT_ERROR_SUFFIX } from "./panelLimitError";
 import { paginate } from "@shared/utils/boundedOutput";
 import { GIT_PAGE_LIMIT_DEFAULT, GIT_PAGE_LIMIT_MAX } from "@shared/config/gitReadLimits";
+import {
+  WORKTREE_CUSTOM_TITLE_MAX_LENGTH,
+  isWorktreeCustomTitleTooLong,
+  normalizeWorktreeCustomTitle,
+} from "@/lib/worktreeCustomTitle";
 import {
   deriveReviewReadiness,
   REVIEW_READINESS_ITEM_IDS,
@@ -540,6 +549,78 @@ export function registerWorktreeContextActions(
           throw new Error("No worktree selected");
         }
         callbacks.onInject(targetWorktreeId);
+      },
+    })
+  );
+
+  actions.set("worktree.setLabelColor", () =>
+    defineAction({
+      id: "worktree.setLabelColor",
+      title: "Set worktree label colour",
+      description:
+        "Marks a worktree with a colour on its sidebar card so the user can pick it out. The same colour replaces its automatic one in panel headers and pickers. Cosmetic only.",
+      category: "worktree",
+      kind: "command",
+      danger: "safe",
+      scope: "renderer",
+      keywords: ["label", "colour", "color", "tag", "mark", "highlight"],
+      argsSchema: z.object({
+        worktreeId: z.string().min(1).describe("Worktree id, from the worktree list"),
+        color: z
+          .enum(WORKTREE_LABEL_COLOR_NAMES)
+          .nullable()
+          .describe("Label colour; null clears it"),
+      }),
+      run: async (args) => {
+        const { worktreeId, color } = args;
+        if (!getCurrentViewStore().getState().worktrees.has(worktreeId)) {
+          throw new Error(`Worktree not found: ${worktreeId}`);
+        }
+        // Lazy, like the panel stores below: the filter store's persistence
+        // layer reads localStorage at module scope.
+        const { useWorktreeFilterStore } = await import("@/store/worktreeFilterStore");
+        useWorktreeFilterStore
+          .getState()
+          .setWorktreeLabelColor(
+            worktreeId,
+            color === null ? null : worktreeLabelTokenForName(color)
+          );
+      },
+    })
+  );
+
+  actions.set("worktree.setCustomTitle", () =>
+    defineAction({
+      id: "worktree.setCustomTitle",
+      title: "Set worktree title",
+      description:
+        "Names a worktree with a custom title shown in place of its issue, PR or branch headline on its card and in pickers. The computed headline stays visible beneath it. Cosmetic only.",
+      category: "worktree",
+      kind: "command",
+      danger: "safe",
+      scope: "renderer",
+      keywords: ["title", "name", "rename", "label", "custom"],
+      argsSchema: z.object({
+        worktreeId: z.string().min(1).describe("Worktree id, from the worktree list"),
+        title: z
+          .string()
+          .nullable()
+          .describe(
+            `Custom title, at most ${WORKTREE_CUSTOM_TITLE_MAX_LENGTH} characters after whitespace is collapsed; null or blank clears it`
+          ),
+      }),
+      run: async (args) => {
+        const { worktreeId, title } = args;
+        if (!getCurrentViewStore().getState().worktrees.has(worktreeId)) {
+          throw new Error(`Worktree not found: ${worktreeId}`);
+        }
+        const normalized = title === null ? "" : normalizeWorktreeCustomTitle(title);
+        // Rejected rather than truncated: the wire schema can't carry the limit.
+        if (isWorktreeCustomTitleTooLong(normalized)) {
+          throw new Error(`Title is longer than ${WORKTREE_CUSTOM_TITLE_MAX_LENGTH} characters`);
+        }
+        const { useWorktreeFilterStore } = await import("@/store/worktreeFilterStore");
+        useWorktreeFilterStore.getState().setWorktreeCustomTitle(worktreeId, normalized || null);
       },
     })
   );

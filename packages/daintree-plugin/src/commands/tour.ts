@@ -23,6 +23,7 @@ import {
   transcribeSpeech,
 } from "../tour/inworld.js";
 import { roundTiming, timeChapter } from "../tour/timing.js";
+import { parseJsonText } from "../lib/parseJsonText.js";
 
 const RECORDING_EXTENSIONS = [".wav", ".mp3", ".m4a", ".ogg", ".flac", ".aac"];
 
@@ -140,7 +141,7 @@ export async function loadTour(opts: TourCommonOptions): Promise<TourContext> {
   }
   let manifest: unknown;
   try {
-    manifest = JSON.parse(raw);
+    manifest = parseJsonText(raw);
   } catch {
     throw new Error("plugin.json is not valid JSON");
   }
@@ -224,7 +225,7 @@ async function loadNarration(file: string): Promise<NarrationChapter[]> {
   }
   let json: unknown;
   try {
-    json = JSON.parse(raw);
+    json = parseJsonText(raw);
   } catch {
     throw new Error(`${file} is not valid JSON`);
   }

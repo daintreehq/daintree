@@ -1,0 +1,203 @@
+/* Increased contrast mode — heavier borders for visibility.
+ *
+ * macOS "Increase Contrast" fires prefers-contrast: more but NOT
+ * forced-colors: active, so this block is the sole high-contrast surface
+ * for Mac users. Mirrors the structural intent of the forced-colors block
+ * above but keeps theme colors (the user wants more contrast, not a
+ * system-color repaint). */
+@media (prefers-contrast: more) {
+  /* Every quick-state glyph at full strength; the digit still says "empty". */
+  .quick-state-glyph-empty {
+    opacity: 1;
+  }
+
+  /* Skeleton bones double their tint. At 10% a bone is deliberately quiet; a
+   * user who asked for more contrast should not have to hunt for the shape of
+   * what is loading. Still a tint of `--theme-tint`, so it keeps contrasting
+   * with whatever surface it sits on. */
+  [data-skeleton-bone] {
+    background-color: color-mix(in oklab, var(--theme-tint) 20%, transparent);
+  }
+
+  .terminal-selected,
+  .terminal-focused {
+    border-width: 2px;
+  }
+
+  /* The focused root's ring stands in for the border, so it takes the
+     border's widened stroke. */
+  .terminal-selected:focus-visible {
+    outline-width: 2px;
+    outline-offset: -2px;
+  }
+
+  /* The agent composer: placeholder ink steps up, the selected composer's
+     edge doubles with a matching hairline outside it, and the typing ring
+     thickens. The edge stays 1px so nothing in the bar moves. */
+  [data-composer-state] {
+    --ib-placeholder: var(--ib-placeholder-more);
+  }
+
+  [data-composer-state="selected"] {
+    box-shadow: 0 0 0 1px var(--ib-border);
+  }
+
+  [data-composer-state]:has(.cm-content:focus-visible) {
+    outline-width: 3px;
+  }
+
+  /* Segmented toggles have the same shape of problem as those filter chips, and
+     take the same remedy. The selected thumb is a fill roughly 1.3:1 against the
+     surface behind it — deliberate quiet chrome at normal contrast, but in a
+     mode whose whole request is "more contrast" a 1.3:1 step is not an answer.
+     Outline the thumb rather than brighten it: a hairline reads at a glance
+     without turning quiet host chrome into the loudest thing on the surface it
+     frames. Inset so it sits inside the thumb rather than growing it. */
+  [data-slot="segmented-thumb"] {
+    outline: 1px solid var(--color-border-strong);
+    outline-offset: -1px;
+  }
+
+  .assistant-focused {
+    border-left-width: 2px;
+  }
+
+  .panel-state-compiling,
+  .panel-state-waiting,
+  .panel-state-working,
+  .panel-state-hibernated,
+  .panel-voice-dictation-locked,
+  .panel-state-arming {
+    border-width: 2px;
+  }
+
+  /* The highlighted row is a fill everywhere else, and a fill is the quietest
+     mark there is — right for everyday lists, not for a user whose whole
+     request is "more contrast". Here every family outlines it: palette rows
+     (the aria-activedescendant cursor and list-detail selection alike), the
+     forge and commit rows' cursor, and the
+     Radix menu, context-menu and select rows, whether the pointer or the keys
+     put the highlight there. `selection-outline` because it is the one ink held
+     to 3:1 against both the highlight fill and the surface around it
+     (`getPaletteSelectionWarnings`). Width and style are spelled out rather
+     than using the shorthand so a keyboard-focused row still takes the 3px
+     focus width below. */
+  .palette-row[aria-selected="true"],
+  .palette-row[data-selected="true"],
+  .forge-row[data-active="true"],
+  [data-highlighted]:is(
+    [role="menuitem"],
+    [role="menuitemcheckbox"],
+    [role="menuitemradio"],
+    [role="option"]
+  ) {
+    outline-style: solid;
+    outline-width: 2px;
+    outline-color: var(--color-selection-outline);
+    outline-offset: -2px;
+  }
+
+  .palette-row[aria-selected="true"]:focus-visible,
+  [data-highlighted]:is(
+      [role="menuitem"],
+      [role="menuitemcheckbox"],
+      [role="menuitemradio"],
+      [role="option"]
+    ):focus-visible {
+    outline-width: 3px;
+  }
+
+  *:focus-visible {
+    outline-width: 3px;
+  }
+
+  /* Native form controls have border-width:0 from Preflight; restoring a
+   * visible 2px border (with the theme's own color) anchors the click target. */
+  button,
+  [role="button"],
+  [type="button"],
+  [type="submit"],
+  [type="reset"],
+  input,
+  select,
+  textarea {
+    border-width: 2px;
+  }
+
+  /* Same exemption as the forced-colors block, and deliberately restated here
+     rather than merged: the launcher's teaching link must not be framed into a
+     button. Its underline carries the affordance. */
+  .tip-action {
+    border-width: 0;
+  }
+
+  /* Same exemption for every link-variant button, restated here for the same
+     reason as the tip link above. */
+  [data-variant="link"] {
+    border-width: 0;
+  }
+
+  /* Same exemption, same reason: the row, not its inner select button, is the
+     click target's frame. */
+  .row-select-target {
+    border-width: 0;
+  }
+
+  /* Tailwind v4 emits `text-daintree-text/N` with a literal slash in the
+   * class attribute and bakes the alpha into `color-mix()` on the color
+   * property — `opacity: 1` cannot recover the lost contrast. Forcing the
+   * solid token restores it. !important is required because the Tailwind
+   * utility rule has equal specificity (0,1,0) and wins on source order.
+   *
+   * #12065 narrowed this rule by emptying it, not by editing it. What it used
+   * to catch was 1,906 sites, most of them prose expressing a hierarchy through
+   * alpha; those now spell a solid text token and this selector no longer
+   * reaches them. What is left inside it is the reviewed carve-out set — icon
+   * affordances, decorative glyphs, deliberate disabled states, text already
+   * composited by an ancestor's opacity — and flattening exactly those under
+   * Increase Contrast is the right behaviour rather than the bug the rule was
+   * once accused of. Every survivor is named in
+   * `scripts/baselines/text-ramp-manifest.json`.
+   *
+   * Deliberately still keyed on the legacy namespace. Repointing it at
+   * `[class*="text-text-primary/"]` would force-flatten the fifteen semantic
+   * slash-alpha sites that have nothing to do with the ramp — among them two
+   * drag handles resting at `/25` that darken to `/40` on hover, whose whole
+   * affordance is that they stay faint until you reach for them. */
+  [class*="text-daintree-text/"] {
+    color: var(--color-text-primary) !important;
+  }
+
+  /* Project Pulse heatmap (issue #9819). On macOS Increase Contrast the theme
+   * backgrounds still render, but low-alpha heat cells can wash out. A 1px
+   * theme-text border (overriding `border-0` in PulseHeatmap) gives every
+   * cell a visible boundary so the four levels stay distinguishable. */
+  .pulse-heat-cell {
+    border-width: 1px;
+    border-style: solid;
+    border-color: var(--color-text-primary);
+  }
+
+  /* File-browser type icons (issue #11596). Entry icons paint in the secondary
+   * text token so they sit under the filename they label, but that token is
+   * tuned for restraint rather than contrast. Under Increase Contrast the
+   * recession is the expendable half — the glyph still has to be legible — so
+   * lift every entry icon to the solid text token.
+   *
+   * Unlike the rule above, !important is belt-and-braces here rather than
+   * load-bearing: this rule is unlayered while the Tailwind text utility it
+   * overrides lives in the `utilities` layer, and unlayered author CSS already
+   * outranks any layered rule whatever the specificity. It stays because
+   * moving this rule into a layer later would silently reverse that.
+   *
+   * There is deliberately no counterpart in the `forced-colors: active` block
+   * earlier in this file: these icons paint from `currentColor`, and that mode
+   * already forces `color` to a system keyword, so the flattening happens on
+   * its own with no rule at all. */
+  .file-tree-entry-icon {
+    color: var(--color-text-primary) !important;
+  }
+
+  /* Diff-viewer increased-contrast rules live in src/components/Worktree/DiffViewer.css
+     (component-owned: the stylesheet rides the lazy diff chunk). */
+}

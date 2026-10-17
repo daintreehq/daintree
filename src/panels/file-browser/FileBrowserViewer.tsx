@@ -24,7 +24,7 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { Button } from "@/components/ui/button";
 import { actionService } from "@/services/ActionService";
-import { CodeViewer } from "@/components/FileViewer/CodeViewer";
+import { CodeViewer, type CodeViewerHandle } from "@/components/FileViewer/CodeViewer";
 import { FileEditorBanner } from "@/components/FileViewer/FileEditorBanner";
 import {
   FileViewerToolbar,
@@ -49,7 +49,7 @@ import {
   UNSUPPORTED_AUDIO_MESSAGE,
   UNSUPPORTED_VIDEO_MESSAGE,
 } from "@/components/FileViewer/filePreviewKinds";
-import { MarkdownViewer } from "@/components/Markdown/MarkdownViewer";
+import { MarkdownViewer, type MarkdownViewerHandle } from "@/components/Markdown/MarkdownViewer";
 import { isMarkdownFilePath } from "@/components/Markdown/isMarkdownFile";
 import {
   MarkdownTextSizeControl,
@@ -92,6 +92,8 @@ import type { FileViewMode } from "@shared/types/panel";
 import { logError } from "@/utils/logger";
 import type { WorkingTreeFileChange } from "@/lib/workingTreeDiff";
 import { FileBrowserChangeSummary } from "./FileBrowserChangeSummary";
+import { FileContentContextMenu } from "@/components/FileViewer/FileContentContextMenu";
+import type { FileRowMenuController } from "@/hooks/useFileRowMenuItems";
 import { getFileTypeIcon } from "./fileTypeIcons";
 import { basename, join } from "@shared/utils/path";
 import type { MarkdownFontSize } from "@/store/preferencesStore";
@@ -101,6 +103,8 @@ export interface FileBrowserViewerProps {
   editorContext?: { projectId: string; worktreePath: string | null; isFocused: boolean };
   /** Owning panel's id, so a mode chosen in one panel stays in that panel. */
   panelId: string;
+  /** Whether the owning panel has focus, so Cmd+F searches this viewer. */
+  isFocused?: boolean;
   /** Absolute path of the selected file; null when nothing is selected. */
   filePath: string | null;
   /** Absolute worktree root — the containment root for reads and asset loads. */
@@ -200,6 +204,15 @@ export interface FileBrowserViewerProps {
   onSelectEntry: (path: string) => void;
   /** Menu items for a listing row's right-click menu — the tree's own callback. */
   rowContextMenu?: (row: FileEntryLike) => React.ReactNode;
+  /** Menu items for a changed-files summary row (#13423). */
+  changeContextMenu?: ((change: WorkingTreeFileChange) => React.ReactNode) | undefined;
+  /**
+   * The pane's shared file menu, for a right-click on the open file's content
+   * (#13423). The renderer rather than a ready-made row callback: the content's
+   * Open diff has to land on this viewer's own Diff mode, which only the viewer
+   * can switch to.
+   */
+  renderFileMenuItems?: FileRowMenuController["renderItems"] | undefined;
   /** Absolute base the listing's relative paths hang off, for drags (#11576). */
   basePath: string;
   /** Current order for the tree and the listing; driven by the toolbar menu. */
@@ -301,6 +314,7 @@ function DiffLoadingSkeleton() {
 export function FileBrowserViewer({
   editorContext,
   panelId,
+  isFocused = false,
   filePath,
   rootPath,
   fileName,
@@ -327,6 +341,8 @@ export function FileBrowserViewer({
   onShowDotfiles,
   onSelectEntry,
   rowContextMenu,
+  changeContextMenu,
+  renderFileMenuItems,
   basePath,
   sort,
   onSortChange,
@@ -380,6 +396,24 @@ export function FileBrowserViewer({
     filePath !== null && relativePath !== null
       ? changedFiles?.find((change) => change.relativePath === relativePath)?.status
       : undefined;
+  // The open file's own menu. Only for a file: the summary and the folder
+  // listing that share this body give each row a menu of their own.
+  const fileMenuItems =
+    filePath !== null && relativePath !== null && renderFileMenuItems
+      ? renderFileMenuItems(
+          {
+            absolutePath: filePath,
+            relativePath,
+            name: fileName,
+            isDirectory: false,
+            status: changeStatus ?? null,
+          },
+          {
+            hasChanges: changeStatus !== undefined,
+            onOpenDiff: () => setExplicitRenderMode("diff"),
+          }
+        )
+      : null;
   // Reading controls only for content that can be read: a Markdown file that
   // failed as oversized has no rendered view to switch to.
   const readable = state.status !== "error";
@@ -458,6 +492,19 @@ export function FileBrowserViewer({
   // what replaced it instead of dropping it on the document body.
   const focusAfterNavigationRef = useRef(false);
   const bodyRef = useRef<HTMLDivElement>(null);
+  const codeViewerRef = useRef<CodeViewerHandle>(null);
+  const markdownViewerRef = useRef<MarkdownViewerHandle>(null);
+  // Cmd+F opens the source view's find bar while this panel has focus, as it
+  // does in the file panel; rendered and media views have nothing to search.
+  useEffect(() => {
+    if (!isFocused) return;
+    const handleFindInPanel = () => {
+      markdownViewerRef.current?.openSearch();
+      codeViewerRef.current?.openSearch();
+    };
+    window.addEventListener("daintree:find-in-panel", handleFindInPanel);
+    return () => window.removeEventListener("daintree:find-in-panel", handleFindInPanel);
+  }, [isFocused]);
   const handleListingSelect = useCallback(
     (path: string, _isDirectory: boolean, viaKeyboard?: boolean) => {
       if (viaKeyboard) focusAfterNavigationRef.current = true;
@@ -970,18 +1017,20 @@ export function FileBrowserViewer({
           closeAriaLabel={externalErrorCopy.dismiss}
         />
       )}
-      <div ref={bodyRef} className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
-        {/* A selected folder outranks the idle body: the changed-files summary
+      <FileContentContextMenu items={fileMenuItems}>
+        <div ref={bodyRef} className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
+          {/* A selected folder outranks the idle body: the changed-files summary
             answers "nothing is selected", and a folder selection is a
             selection (#11620). */}
-        {filePath
-          ? renderBody()
-          : missingFilePath !== null
-            ? renderMissingBody(missingFilePath)
-            : folderPath !== null
-              ? renderFolderBody()
-              : renderIdleBody()}
-      </div>
+          {filePath
+            ? renderBody()
+            : missingFilePath !== null
+              ? renderMissingBody(missingFilePath)
+              : folderPath !== null
+                ? renderFolderBody()
+                : renderIdleBody()}
+        </div>
+      </FileContentContextMenu>
     </>
   );
 
@@ -992,7 +1041,13 @@ export function FileBrowserViewer({
    */
   function renderIdleBody() {
     if (changedFiles !== null && changedFiles.length > 0) {
-      return <FileBrowserChangeSummary changes={changedFiles} onSelect={onSelectChangedFile} />;
+      return (
+        <FileBrowserChangeSummary
+          changes={changedFiles}
+          onSelect={onSelectChangedFile}
+          changeContextMenu={changeContextMenu}
+        />
+      );
     }
 
     // flex-1 + min-h-0, not h-full: below the now-persistent toolbar a
@@ -1368,7 +1423,14 @@ export function FileBrowserViewer({
         // rendered mode rather than silently showing source: its empty state
         // says why and points at the Source segment, which now exists here.
         if (renderMode === "source") {
-          return <CodeViewer content={state.content} filePath={filePath} className="h-full" />;
+          return (
+            <CodeViewer
+              ref={codeViewerRef}
+              content={state.content}
+              filePath={filePath}
+              className="h-full"
+            />
+          );
         }
         return (
           <HtmlViewer previewUrl={state.previewUrl} reloadNonce={reloadNonce} title={fileName} />
@@ -1376,7 +1438,14 @@ export function FileBrowserViewer({
 
       case "text":
         if (!isMarkdown) {
-          return <CodeViewer content={state.content} filePath={filePath} className="h-full" />;
+          return (
+            <CodeViewer
+              ref={codeViewerRef}
+              content={state.content}
+              filePath={filePath}
+              className="h-full"
+            />
+          );
         }
         // Source mode was never part of #11441: CodeViewer's root is already a
         // scrollport, and at pane height it owns BOTH axes, so its horizontal
@@ -1389,6 +1458,7 @@ export function FileBrowserViewer({
         if (renderMode === "source") {
           return (
             <MarkdownViewer
+              ref={markdownViewerRef}
               content={state.content}
               filePath={filePath}
               rootPath={rootPath}

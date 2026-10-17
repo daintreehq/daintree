@@ -10,8 +10,8 @@
  * re-prompt for trust and strand the resume token on every launch, which is
  * why `HelpSessionService` moved off per-launch UUID dirs in the first place.
  *
- * Every lane of a project shares ONE session directory, the bare project
- * hash. Lanes used to get their own (`<hash>-sN`), which bought isolation of
+ * Every lane of a project on one agent shares ONE session directory. Lanes
+ * used to get their own (`<hash>-sN`), which bought isolation of
  * the per-lane MCP bearer at the price of a fresh workspace-trust prompt and a
  * fresh `.mcp.json` approval prompt for every lane a user opened. Both prompts
  * are per folder, so one folder means one of each per project. What the extra
@@ -19,6 +19,15 @@
  * captured explicitly and passed back with `--resume <id>` rather than
  * inferred from "latest in this cwd", and Claude's per-lane bearer rides in a
  * per-lane `--mcp-config` file instead of the shared `.mcp.json`.
+ *
+ * Lanes on different AGENTS do not share it. The directory holds agent-shaped
+ * files — the user-content mirror writes one agent's skills and retires the
+ * other's, a non-Claude provision strips the Claude hooks, and Claude empties
+ * the `.mcp.json` Copilot reads — so a second agent provisioning into it would
+ * clobber a live sibling's setup. Claude keeps the bare hash, which is where
+ * its trust acceptance and its cwd-scoped `--resume` already point; every
+ * other agent gets `<hash>.<agent key>`. Codex resumes by exact id from any
+ * cwd, so moving it costs a resumed conversation nothing.
  *
  * The single-backend invariant (#7509) is scoped to the slot rather than
  * dropped: at most one assistant PTY per (project, slot). A same-slot
@@ -71,17 +80,27 @@ export function projectIdFromSlotKey(slotKey: string): string {
 }
 
 /**
- * Session directory name for a project. One directory serves every lane, so
- * this takes no slot: the bare project hash, which is also what an existing
- * install's slot 0 already had — its workspace trust and resume token are
- * untouched by lanes sharing it.
+ * Session directory name for a project's lanes on one agent. Every lane of a
+ * project on that agent shares it, so this takes no slot. A null key is the
+ * bare project hash — Claude's, and what an existing install's slot 0 already
+ * had, so its workspace trust and resume tokens are untouched by lanes sharing
+ * it. Any other agent's key qualifies the hash; see `assistantAgentDirKey` in
+ * `HelpSessionService` for how one is derived.
  */
-export function assistantSessionDirName(projectPathHash: string): string {
-  return projectPathHash;
+export function assistantSessionDirName(
+  projectPathHash: string,
+  agentDirKey: string | null = null
+): string {
+  return agentDirKey ? `${projectPathHash}.${agentDirKey}` : projectPathHash;
 }
 
+/** What an agent key may contain: lowercase, digits and inner hyphens, bounded. */
+export const ASSISTANT_AGENT_DIR_KEY_PATTERN = "[a-z0-9]+(?:-[a-z0-9]+)*";
+export const ASSISTANT_AGENT_DIR_KEY_MAX_LENGTH = 32;
+
 /**
- * Whether a name under the sessions root is a live project session directory.
+ * Whether a name under the sessions root is a live project session directory:
+ * the bare project hash, or the hash qualified by an agent key after a `.`.
  *
  * Load-bearing for GC: `gcStaleSessions` recursively deletes every directory
  * it does not recognize, so a name that fails this test is a *deleted* session
@@ -90,10 +109,19 @@ export function assistantSessionDirName(projectPathHash: string): string {
  * per-project model, and the `<hash>-sN` per-lane directories that preceded
  * the shared one. Neither can be resumed from (their agents' resume ids were
  * captured against a cwd that is no longer used), so keeping them alive would
- * only strand transcripts nothing can reach.
+ * only strand transcripts nothing can reach. The agent qualifier uses a `.`,
+ * which neither legacy shape ever did, so it can never revive one.
+ *
+ * Recognition does not depend on the agent still being registered: a
+ * directory for an agent the user since removed keeps its resumable state.
  */
 export function isAssistantSessionDirName(name: string, projectHashLength: number): boolean {
-  return new RegExp(`^[0-9a-f]{${projectHashLength}}$`).test(name);
+  const match = new RegExp(
+    `^[0-9a-f]{${projectHashLength}}(?:\\.(${ASSISTANT_AGENT_DIR_KEY_PATTERN}))?$`
+  ).exec(name);
+  if (!match) return false;
+  const key = match[1];
+  return key === undefined || key.length <= ASSISTANT_AGENT_DIR_KEY_MAX_LENGTH;
 }
 
 /**

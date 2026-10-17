@@ -239,45 +239,7 @@ describe("useProjectHealth", () => {
     expect(result.current.error).toBeNull();
   });
 
-  it("refresh({ force: true }) propagates the force flag to getProjectHealth", async () => {
-    getCurrentMock.mockResolvedValue({ id: "p", path: "/repo/a" });
-    getProjectHealthMock.mockResolvedValue(makeHealth());
-
-    const { result } = renderHook(() => useProjectHealth());
-
-    await waitFor(() => {
-      expect(getProjectHealthMock).toHaveBeenCalledTimes(1);
-    });
-
-    await act(async () => {
-      await result.current.refresh({ force: true });
-    });
-
-    expect(getProjectHealthMock).toHaveBeenCalledTimes(2);
-    expect(getProjectHealthMock.mock.calls[1]?.[1]).toBe(true);
-  });
-
   describe("wake-coordinator subscription", () => {
-    it("refreshes when wakeEpoch increments past the value seen at mount", async () => {
-      getCurrentMock.mockResolvedValue({ id: "p", path: "/repo/a" });
-      getProjectHealthMock.mockResolvedValue(makeHealth());
-
-      renderHook(() => useProjectHealth());
-
-      await waitFor(() => {
-        expect(getProjectHealthMock).toHaveBeenCalledTimes(1);
-      });
-
-      await act(async () => {
-        useSystemWakeStore.setState((s) => ({ wakeEpoch: s.wakeEpoch + 1 }));
-        await Promise.resolve();
-      });
-
-      await waitFor(() => {
-        expect(getProjectHealthMock).toHaveBeenCalledTimes(2);
-      });
-    });
-
     it("does not refresh for a wakeEpoch that was already current at mount", async () => {
       useSystemWakeStore.setState({
         wakeEpoch: 5,

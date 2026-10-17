@@ -35,7 +35,7 @@ const screenHasDialog = () => document.querySelector("[data-testid='tour-dialog-
 
 import type { TourDefinition } from "../tourDefinition";
 import { openTour, TOUR_COMPLETED_EVENT } from "../tourEvents";
-import { TourHost } from "../TourHost";
+import { resolveOpenState, TourHost } from "../TourHost";
 import { registerTour } from "../tourRegistry";
 
 const ACME_TOUR_ID = makePluginTourId("acme.tools", "welcome");
@@ -373,5 +373,22 @@ describe("TourHost", () => {
 
     expect(dialogProps.current).toBeNull();
     expect(notifyMock).not.toHaveBeenCalled();
+  });
+});
+
+describe("resolveOpenState", () => {
+  const base = { completed: false, dismissed: false, lastChapter: 0 };
+  const CHAPTERS = 14;
+
+  it("starts a finished tour over", () => {
+    expect(
+      resolveOpenState({ ...base, completed: true, lastChapter: 4 }, false, CHAPTERS).initialChapter
+    ).toBe(0);
+  });
+
+  it("ignores a chapter index the tour no longer has", () => {
+    expect(
+      resolveOpenState({ ...base, lastChapter: CHAPTERS }, false, CHAPTERS).initialChapter
+    ).toBe(0);
   });
 });

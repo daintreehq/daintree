@@ -40,6 +40,10 @@ vi.mock("@/hooks", () => ({
   useOverlayState: () => {},
   useOverlayClaim: () => {},
 }));
+vi.mock("@/hooks/useOverlayState", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/hooks/useOverlayState")>()),
+  useOverlayState: () => {},
+}));
 
 vi.mock("@/store/paletteStore", () => ({
   usePaletteStore: { getState: () => ({ activePaletteId: null }) },
@@ -104,9 +108,29 @@ vi.mock("@/components/ui/AppPaletteDialog", async () => {
   Dialog.Body = Body;
   Dialog.Footer = Footer;
   Dialog.Divider = (props: React.HTMLAttributes<HTMLDivElement>) => <div {...props} />;
+  Dialog.Empty = ({
+    query,
+    emptyMessage,
+    noMatchMessage,
+    noMatchContent,
+  }: {
+    query: string;
+    emptyMessage?: string;
+    noMatchMessage?: string;
+    noMatchContent?: React.ReactNode;
+  }) =>
+    query.trim() ? (
+      <div>
+        <p>{noMatchMessage}</p>
+        {noMatchContent}
+      </div>
+    ) : (
+      <p>{emptyMessage}</p>
+    );
 
   return {
     AppPaletteDialog: Dialog,
+    PaletteNoMatchHint: () => <p>Press Esc to clear the search</p>,
     KBD_CLASS: "kbd",
     PALETTE_SURFACE_WIDTHS: {
       // Sentinel values, not the production pixels: this mock only has to satisfy

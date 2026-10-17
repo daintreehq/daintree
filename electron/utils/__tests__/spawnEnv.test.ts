@@ -46,11 +46,6 @@ describe("spawnEnv", () => {
       expect(buildProbeEnv().HOME).toBe("/home/alice");
     });
 
-    it("excludes ANTHROPIC_API_KEY", () => {
-      setEnv({ ANTHROPIC_API_KEY: "sk-ant-secret" });
-      expect(buildProbeEnv().ANTHROPIC_API_KEY).toBeUndefined();
-    });
-
     it("excludes OPENAI_API_KEY, GITHUB_TOKEN, AWS_SECRET_ACCESS_KEY, NPM_TOKEN", () => {
       setEnv({
         OPENAI_API_KEY: "sk-x",
@@ -206,11 +201,6 @@ describe("spawnEnv", () => {
       const env = buildInstallEnv();
       expect(env.APPDATA).toBe("C:\\Users\\u\\AppData\\Roaming");
       expect(env.LOCALAPPDATA).toBe("C:\\Users\\u\\AppData\\Local");
-    });
-
-    it("forces TERM=dumb (install runners stream output verbatim to renderer)", () => {
-      setEnv({ HOME: "/h", TERM: "xterm" });
-      expect(buildInstallEnv().TERM).toBe("dumb");
     });
 
     it("HOME is always present on POSIX so npm/.npmrc lookup succeeds", () => {

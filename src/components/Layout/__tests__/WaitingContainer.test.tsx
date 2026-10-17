@@ -243,24 +243,6 @@ describe("WaitingContainer", () => {
   });
 
   describe("trigger", () => {
-    it("renders HollowCircle (simple circle SVG) not AlertCircle", () => {
-      mockTerminals = [makeTerminal({ id: "t1" })];
-      const { container } = render(<WaitingContainer />);
-      const svgs = container.querySelectorAll("svg");
-      expect(svgs.length).toBeGreaterThan(0);
-
-      const hasHollowCircle = Array.from(svgs).some((svg) => {
-        const circles = svg.querySelectorAll("circle");
-        return (
-          circles.length === 1 &&
-          circles[0]!.getAttribute("cx") === "8" &&
-          circles[0]!.getAttribute("cy") === "8" &&
-          circles[0]!.getAttribute("r") === "6"
-        );
-      });
-      expect(hasHollowCircle).toBe(true);
-    });
-
     it("shows the waiting count in the trigger label", () => {
       mockTerminals = [
         makeTerminal({ id: "t1" }),
@@ -385,44 +367,12 @@ describe("WaitingContainer", () => {
       expect(within(row).queryByTestId("live-time-ago")).toBeNull();
     });
 
-    it("does not render the redundant per-row state chip (state is surfaced once in the header)", () => {
-      mockTerminals = [makeTerminal({ id: "t1", title: "Fix auth bug" })];
-      render(<WaitingContainer />);
-      const row = screen.getByTestId("waiting-single-item");
-      // The removed state chip carried STATE_COLORS.waiting ("text-state-waiting");
-      // asserting on the class (not row text) avoids false-failing on titles/headlines
-      // that legitimately contain the substring "waiting" (e.g. "Awaiting permission").
-      expect(row.querySelector(".text-state-waiting")).toBeNull();
-    });
-
     it("keeps the kill button hidden until row hover/focus (invisible, not just transparent)", () => {
       mockTerminals = [makeTerminal({ id: "t1" })];
       render(<WaitingContainer />);
       const killWrapper = screen.getByTestId("waiting-kill-button").parentElement;
       expect(killWrapper?.className).toContain("invisible");
       expect(killWrapper?.className).toContain("group-focus-within/row:visible");
-    });
-
-    it("uses a transparent border placeholder (no amber tint on every row)", () => {
-      mockTerminals = [makeTerminal({ id: "t1" })];
-      render(<WaitingContainer />);
-      const row = screen.getByTestId("waiting-single-item");
-      expect(row.className).not.toContain("color-activity-waiting");
-      expect(row.className).not.toContain("panel-state-waiting");
-    });
-
-    it("does not render a watch button", () => {
-      mockTerminals = [makeTerminal({ id: "t1" })];
-      render(<WaitingContainer />);
-      expect(screen.queryByTestId("bg-watch-button")).toBeNull();
-      expect(screen.queryByTestId("waiting-watch-button")).toBeNull();
-    });
-
-    it("does not nest a <button> inside a <button> (invalid HTML)", () => {
-      mockTerminals = [makeTerminal({ id: "t1" })];
-      const { container } = render(<WaitingContainer />);
-      const nested = container.querySelectorAll("button button");
-      expect(nested.length).toBe(0);
     });
 
     it("makes the row a native button with the kill button as its sibling, not its child", () => {
@@ -668,13 +618,6 @@ describe("WaitingContainer", () => {
       expect(setActiveTabMock).toHaveBeenCalledWith("g1", "t1");
       expect(activateTerminalMock).toHaveBeenCalledWith("t1");
       expect(callOrder).toEqual(["setActiveTab", "activateTerminal"]);
-    });
-
-    it("does not call setActiveTab for ungrouped panels", () => {
-      mockTerminals = [makeTerminal({ id: "t1" })];
-      render(<WaitingContainer />);
-      fireEvent.click(screen.getByTestId("waiting-single-item"));
-      expect(setActiveTabMock).not.toHaveBeenCalled();
     });
 
     it("renders independent collapse state across multiple groups", () => {

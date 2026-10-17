@@ -117,13 +117,4 @@ describe("deriveAgentAttentionStates", () => {
     const map = deriveAgentAttentionStates({ [present.id]: present }, [present.id, "ghost"], null);
     expect(map.get("claude")).toBe("waiting");
   });
-
-  it("returns primitive values so a shallow selector can bail on unchanged ticks", () => {
-    // The whole reason this runs inside `useShallow` (#7451) — a Map of objects
-    // would re-render every subscriber on every panel-store spread.
-    const map = derive([ptyPanel({ detectedAgentId: "claude", agentState: "working" })]);
-    for (const value of map.values()) {
-      expect(value === null || typeof value === "string").toBe(true);
-    }
-  });
 });

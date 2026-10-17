@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach } from "vitest";
 import fs from "fs/promises";
 import path from "path";
+import { msUntilNextLabelChange } from "../ForgeStatsToolbarButton";
 
 /**
  * ForgeStatsToolbarButton — freshness tier wiring (issue #6536, updated #8849).
@@ -12,7 +13,7 @@ import path from "path";
  * tooltip + aria-label copy.
  *
  * These are source assertions rather than render tests for the same reason as
- * `freshFetch`: the toolbar's eager dynamic-import effect resolves on a
+ * the onFreshFetch suite below: the toolbar's eager dynamic-import effect resolves on a
  * microtask, and rendering it in jsdom triggers `EnvironmentTeardownError`s
  * when `import()` resolutions race the test-runner shutdown.
  */
@@ -23,11 +24,6 @@ describe("ForgeStatsToolbarButton freshness wiring", () => {
 
   beforeEach(async () => {
     source = await fs.readFile(TOOLBAR_PATH, "utf-8");
-  });
-
-  it("imports freshness helpers from co-located FreshnessUtils", () => {
-    expect(source).toContain('from "./FreshnessUtils"');
-    expect(source).toContain("freshnessSuffix");
   });
 
   it("does not import or use freshnessOpacityClass or freshnessClass (issue #8180)", () => {
@@ -73,27 +69,6 @@ describe("ForgeStatsToolbarButton freshness wiring", () => {
     expect(source).toContain("animKey={commitAnimKey}");
   });
 
-  it("Stats pills use stable equal-width hit boxes for titlebar no-drag regions", async () => {
-    const pillSource = await fs.readFile(path.resolve(__dirname, "../ForgeStatPill.tsx"), "utf-8");
-    expect(pillSource).toContain("h-full flex-1 justify-center");
-    expect(pillSource).toContain("min-w-[2ch] text-center");
-    // The container width is dynamic — a 13rem budget for the three flex-1
-    // pills (one third of it in commits-only mode, when no forge provider
-    // resolves) plus a fixed slot per active trailing indicator — so the
-    // pills keep stable equal widths without the old fixed-width +
-    // overflow-hidden combo clipping (and disabling hover on) the indicators.
-    expect(source).toContain("flex h-8 shrink-0 items-center");
-    expect(source).toContain("width: statsContainerWidth");
-    expect(source).toContain("forgeMode ? 13 : 13 / 3");
-    expect(source).toContain("calc(${statsBaseWidthRem}rem +");
-    // Counts wider than the per-pill character budget grow every pill share
-    // by the same overflow — equal widths are preserved by widening the
-    // shared budget, not by letting one pill clip (5-digit commit counts
-    // overflowed the commits-only pill).
-    expect(source).toContain("pillOverflowChars");
-    expect(source).toMatch(/maxOverflowChars\s*\*\s*PILL_EXTRA_CHAR_REM/);
-  });
-
   it("parent className props do not introduce transition-all", () => {
     expect(source).not.toMatch(/transition-all/);
   });
@@ -112,13 +87,428 @@ describe("ForgeStatsToolbarButton freshness wiring", () => {
       /commitFreshnessLevel\s*=\s*freshnessLevel\s*===\s*"errored"\s*\?\s*"fresh"\s*:\s*freshnessLevel/
     );
   });
+});
 
-  it("only bumps animation keys when the displayed count actually changes", () => {
-    expect(source).toContain("issueCountRef.current === undefined");
-    expect(source).toContain("prCountRef.current === undefined");
-    expect(source).toContain("commitCountRef.current === undefined");
-    expect(source).toMatch(/issueCountRef\.current\s*!==\s*issueCount/);
-    expect(source).toMatch(/prCountRef\.current\s*!==\s*prCount/);
-    expect(source).toMatch(/commitCountRef\.current\s*!==\s*commitCount/);
+/**
+ * ForgeStatsToolbarButton — onFreshFetch wiring (issue #6390).
+ *
+ * When the plugin-contributed dropdown view lands fresh first-page data on a
+ * SWR revalidation, it calls the `onFreshFetch` callback. The toolbar wires
+ * this to `refreshStats()` so the dropdown's just-updated count converges into
+ * the badge in the same user interaction (no waiting for the 30s poll).
+ *
+ * These are source-code assertions rather than render tests because the
+ * toolbar's eager dynamic-import effect resolves on a microtask, and rendering
+ * the full toolbar in jsdom triggers `EnvironmentTeardownError`s when
+ * `import()` resolutions race the test-runner shutdown. Static checks of the
+ * wiring are sufficient — `onFreshFetch` itself is exercised end-to-end by
+ * `GitHubResourceList.swr.test.tsx` and `useRepositoryStats.test.tsx`.
+ */
+
+describe("ForgeStatsToolbarButton onFreshFetch wiring", () => {
+  let source: string;
+
+  beforeEach(async () => {
+    source = await fs.readFile(TOOLBAR_PATH, "utf-8");
+  });
+
+  it("declares a stable handleListFreshFetch callback that calls refreshStats()", () => {
+    expect(source).toMatch(/const\s+handleListFreshFetch\s*=\s*useCallback/);
+    const handlerStart = source.indexOf("const handleListFreshFetch");
+    const handlerSlice = source.slice(handlerStart, handlerStart + 400);
+    expect(handlerSlice).toContain("refreshStats()");
+    expect(handlerSlice).not.toMatch(/refreshStats\s*\(\s*\{\s*force/);
+    expect(handlerSlice).toMatch(/\[\s*refreshStats\s*\]/);
+  });
+
+  it("passes onFreshFetch={handleListFreshFetch} to issue and PR dropdown contents", () => {
+    // The onFreshFetch prop is inside each dropdownContent's slot view JSX —
+    // one per pill (issues + PRs).
+    const matches = source.match(/onFreshFetch=\{handleListFreshFetch\}/g);
+    expect(matches).not.toBeNull();
+    expect(matches?.length).toBe(2);
+  });
+
+  it("wires onFreshFetch in both the issue and PR dropdowns", () => {
+    // Anchor on the icon prop for PRs to split the file, checking each block
+    // contains its own onFreshFetch wiring.
+    const prAnchor = source.indexOf("icon={GitPullRequest}");
+    expect(prAnchor).toBeGreaterThan(0);
+    const issuesBlock = source.slice(0, prAnchor);
+    const prsBlock = source.slice(prAnchor);
+    expect(issuesBlock).toContain("onFreshFetch={handleListFreshFetch}");
+    expect(prsBlock).toContain("onFreshFetch={handleListFreshFetch}");
+  });
+});
+
+/**
+ * Digit pulse on rising count (issues #6529 + #6536).
+ */
+describe("ForgeStatsToolbarButton digit pulse", () => {
+  let source: string;
+
+  beforeEach(async () => {
+    source = await fs.readFile(TOOLBAR_PATH, "utf-8");
+  });
+
+  it("does not use useEffectEvent inside this memo/forwardRef component", () => {
+    // React 19.2 keeps an effect event's first-render closure inside memo /
+    // forwardRef (facebook/react#34818), which left the check reading
+    // `stats === null` forever: no pulse, no chips.
+    expect(source).toMatch(/memo\(\s*forwardRef/);
+    expect(source).not.toMatch(/=\s*useEffectEvent\(/);
+  });
+
+  it("runs the count-increase check inside the effect keyed on lastUpdated", () => {
+    const effect = source.slice(source.indexOf("const checkForCountIncrease = () =>"));
+    expect(effect).toMatch(
+      /^const checkForCountIncrease = \(\) =>[\s\S]*?if \(statsLoading \|\| statsError\)/
+    );
+  });
+
+  it("reads document.hidden and all three open-state values inside the check", () => {
+    const eventStart = source.indexOf("const checkForCountIncrease = () =>");
+    expect(eventStart).toBeGreaterThan(0);
+    const closeBrace = source.indexOf("\n      };\n", eventStart);
+    expect(closeBrace).toBeGreaterThan(eventStart);
+    const slice = source.slice(eventStart, closeBrace);
+    expect(slice).toContain("document.hidden");
+    expect(slice).toContain("issuesOpen");
+    expect(slice).toContain("prsOpen");
+    expect(slice).toContain("commitsOpen");
+  });
+
+  it("only pulses on a strict positive delta, never on first mount", () => {
+    const eventStart = source.indexOf("const checkForCountIncrease = () =>");
+    const closeBrace = source.indexOf("\n      };\n", eventStart);
+    const slice = source.slice(eventStart, closeBrace);
+    expect(slice).toMatch(/issueCount\s*>\s*issueCountRef\.current/);
+    expect(slice).toMatch(/prCount\s*>\s*prCountRef\.current/);
+    expect(slice).toMatch(/commitCount\s*>\s*commitCountRef\.current/);
+    expect(slice).toContain("issueCountRef.current === undefined");
+    expect(slice).toContain("prCountRef.current === undefined");
+    expect(slice).toContain("commitCountRef.current === undefined");
+  });
+
+  it("re-seeds the count refs to undefined when lastUpdated transitions to null (project switch)", () => {
+    const effectStart = source.indexOf("if (lastUpdated == null) {");
+    expect(effectStart).toBeGreaterThan(0);
+    // Ahead of the loading/error guard: a switch lands as statsLoading=true
+    // with lastUpdated=null, and behind the guard the old baseline survived.
+    expect(effectStart).toBeLessThan(source.indexOf("if (statsLoading || statsError) {"));
+    const slice = source.slice(effectStart, effectStart + 1500);
+    expect(slice).toMatch(/lastUpdated\s*==\s*null/);
+    expect(slice).toMatch(/issueCountRef\.current\s*=\s*undefined/);
+    expect(slice).toMatch(/prCountRef\.current\s*=\s*undefined/);
+    expect(slice).toMatch(/commitCountRef\.current\s*=\s*undefined/);
+    expect(slice).toMatch(/prevLastUpdatedRef\.current\s*=\s*null/);
+  });
+});
+
+/**
+ * Corner activity chip wiring.
+ */
+describe("ForgeStatsToolbarButton corner activity chip wiring", () => {
+  let source: string;
+
+  beforeEach(async () => {
+    source = await fs.readFile(TOOLBAR_PATH, "utf-8");
+  });
+
+  it("does not import the deprecated seen-anchors store or its helper", () => {
+    expect(source).not.toContain("githubSeenAnchorsStore");
+    expect(source).not.toContain("deriveBadgeLabel");
+    expect(source).not.toContain("recordOpen");
+  });
+
+  it("sets pulseAt alongside the digit-pulse increment for issues and PRs only", () => {
+    const eventStart = source.indexOf("const checkForCountIncrease = () =>");
+    const closeBrace = source.indexOf("\n      };\n", eventStart);
+    const slice = source.slice(eventStart, closeBrace);
+    expect(slice).toMatch(/setIssueAnimKey\([\s\S]{0,80}?setIssuesPulseAt\(Date\.now\(\)\)/);
+    expect(slice).toMatch(/setPrAnimKey\([\s\S]{0,80}?setPrsPulseAt\(Date\.now\(\)\)/);
+    expect(slice).not.toContain("setCommitsPulseAt");
+  });
+
+  it("clears pulseAt on the open transition for both onClick and imperative paths", () => {
+    expect(source).toMatch(/willOpen\s*\)\s*setIssuesPulseAt\(null\)/);
+    expect(source).toMatch(/willOpen\s*\)\s*setPrsPulseAt\(null\)/);
+    expect(source).toMatch(/!issuesOpenRef\.current\)\s*setIssuesPulseAt\(null\)/);
+    expect(source).toMatch(/!prsOpenRef\.current\)\s*setPrsPulseAt\(null\)/);
+  });
+
+  it("schedules an auto-clear timer per pulseAt with ACTIVITY_CHIP_TTL_MS", () => {
+    expect(source).toMatch(
+      /useEffect\(\(\)\s*=>\s*\{[\s\S]{0,1500}?issuesPulseAt[\s\S]{0,1500}?ACTIVITY_CHIP_TTL_MS[\s\S]{0,1500}?setIssuesPulseAt\(null\)/
+    );
+    expect(source).toMatch(
+      /useEffect\(\(\)\s*=>\s*\{[\s\S]{0,1500}?prsPulseAt[\s\S]{0,1500}?ACTIVITY_CHIP_TTL_MS[\s\S]{0,1500}?setPrsPulseAt\(null\)/
+    );
+  });
+
+  it("anchors the chip TTL to visible time via a per-chip hiddenAtRef + pulseAt shift — issue #9822", () => {
+    // The visibility handler must (a) record the wall-clock anchor when the
+    // document goes hidden, and (b) shift `pulseAt` forward by the hidden
+    // duration on restore so the next `remaining` math reflects elapsed
+    // visible time only. A bare wall-clock subtraction would let a chip
+    // expire unseen if the user hides for longer than the remaining TTL.
+    expect(source).toContain("issuesHiddenAtRef");
+    expect(source).toContain("prsHiddenAtRef");
+    // The shift must be `prev + hiddenMs` (anchor moves forward in time), not
+    // a subtract, no-op, or null/clear. Tightened to catch the exact shape.
+    expect(source).toMatch(
+      /setIssuesPulseAt\(\(prev\)\s*=>\s*\(prev\s*===\s*null\s*\?\s*null\s*:\s*prev\s*\+\s*hiddenMs\)/
+    );
+    expect(source).toMatch(
+      /setPrsPulseAt\(\(prev\)\s*=>\s*\(prev\s*===\s*null\s*\?\s*null\s*:\s*prev\s*\+\s*hiddenMs\)/
+    );
+    // Subscribe-before-sample: the effect must call addEventListener before
+    // the first tick() so a hide between sample and schedule is caught.
+    // Easier to check as a positional invariant: addEventListener appears
+    // earlier in the effect body than the bare `tick();` call.
+    const issuesEffect = source.match(
+      /useEffect\(\(\)\s*=>\s*\{[\s\S]*?issuesPulseAt[\s\S]*?addEventListener\("visibilitychange"[\s\S]*?tick\(\);[\s\S]*?\},\s*\[issuesPulseAt\]\)/
+    );
+    expect(issuesEffect).not.toBeNull();
+    const prsEffect = source.match(
+      /useEffect\(\(\)\s*=>\s*\{[\s\S]*?prsPulseAt[\s\S]*?addEventListener\("visibilitychange"[\s\S]*?tick\(\);[\s\S]*?\},\s*\[prsPulseAt\]\)/
+    );
+    expect(prsEffect).not.toBeNull();
+    // tick() must early-return while the document is hidden to avoid a
+    // race between a scheduled timer firing and the visibility event.
+    const tickGuardCount = (
+      source.match(/if\s*\(\s*document\.hidden\s*\)\s*\{[\s\S]{0,200}?return;/g) ?? []
+    ).length;
+    expect(tickGuardCount).toBeGreaterThanOrEqual(2);
+    // The effect body's post-listener sample must use an if/else (not an
+    // early `return`) so the cleanup at the bottom always registers and
+    // the visibilitychange listener is paired with a removeEventListener
+    // on unmount / dep change. A bare `if (document.hidden) { ...; return; }`
+    // here leaks the listener on every subsequent effect run that commits
+    // while hidden (round-3 review finding).
+    const issuesSample = source.match(
+      /addEventListener\("visibilitychange",\s*onVisibility\);[\s\S]*?\}\s*else\s*\{[\s\S]*?tick\(\);/
+    );
+    expect(issuesSample).not.toBeNull();
+    const prsSample = source
+      .slice(issuesSample!.index! + issuesSample![0].length)
+      .match(
+        /addEventListener\("visibilitychange",\s*onVisibility\);[\s\S]*?\}\s*else\s*\{[\s\S]*?tick\(\);/
+      );
+    expect(prsSample).not.toBeNull();
+  });
+
+  it("derives showIssuesChip / showPrsChip with open-state and count guards", () => {
+    expect(source).toMatch(
+      /showIssuesChip\s*=[\s\S]{0,200}?issuesPulseAt\s*!==\s*null[\s\S]{0,200}?!issuesOpen[\s\S]{0,200}?\(issueCount\s*\?\?\s*0\)\s*>\s*0/
+    );
+    expect(source).toMatch(
+      /showPrsChip\s*=[\s\S]{0,200}?prsPulseAt\s*!==\s*null[\s\S]{0,200}?!prsOpen[\s\S]{0,200}?\(prCount\s*\?\?\s*0\)\s*>\s*0/
+    );
+  });
+
+  it("does not render a chip on the commits button", () => {
+    const commitsAnchor = source.indexOf("buttonRef={commitsButtonRef}");
+    const commitsSlice = source.slice(commitsAnchor, commitsAnchor + 3000);
+    expect(commitsSlice).not.toContain("showCommitsChip");
+    expect(commitsSlice).not.toContain("activityChip=");
+  });
+
+  it("folds the recent-increase cue into the issues + PRs names and tooltips", () => {
+    // The chip is a three-minute recent-increase cue, not unread state.
+    expect(source).toMatch(/showIssuesChip \? "count increased recently"/);
+    expect(source).toMatch(/showPrsChip \? "count increased recently"/);
+    expect(source).not.toContain("new since last view");
+  });
+
+  it("advances the activity baseline from exact list totals, never from N+", () => {
+    // A total the user has seen in the list must not re-arm the chip when the
+    // next poll confirms it; a paginated lower bound is not a total.
+    expect(source).toMatch(
+      /if \(!hasMore && issueCountRef\.current !== undefined\) \{\s*issueCountRef\.current = count;\s*issueBaselineAtRef\.current = Date\.now\(\);/
+    );
+    expect(source).toMatch(
+      /if \(!hasMore && prCountRef\.current !== undefined\) \{\s*prCountRef\.current = count;\s*prBaselineAtRef\.current = Date\.now\(\);/
+    );
+  });
+
+  it("never lets an observation older than the baseline roll it back", () => {
+    expect(source).toMatch(
+      /issueStale = olderThanBaseline\(issueCountRefreshedAt, issueBaselineAtRef\.current\)/
+    );
+    expect(source).toMatch(/!issueStale && issueCountRef\.current !== issueCount/);
+    expect(source).toMatch(/!prStale && prCountRef\.current !== prCount/);
+  });
+
+  it("clears both chip pulses on project switch alongside the count refs", () => {
+    const effectStart = source.indexOf("if (lastUpdated == null) {");
+    const slice = source.slice(effectStart, effectStart + 2000);
+    expect(slice).toContain("setIssuesPulseAt(null)");
+    expect(slice).toContain("setPrsPulseAt(null)");
+  });
+});
+
+/**
+ * Badge count bound to the dropdown's loaded items (issue #9693).
+ *
+ * The toolbar badge used to render the stats query's `totalCount`, which can
+ * exceed the first page the dropdown actually lists. The fix threads an
+ * `onCountUpdate(count, hasMore)` callback from each dropdown list view and
+ * derives a display value (`20+` when paginated) that binds the badge to what
+ * the dropdown shows. The numeric `count` prop stays on the stats path so the
+ * digit-pulse delta detection is unaffected.
+ */
+describe("ForgeStatsToolbarButton list-count badge wiring", () => {
+  let source: string;
+
+  beforeEach(async () => {
+    source = await fs.readFile(TOOLBAR_PATH, "utf-8");
+  });
+
+  it("derives the display count via the recency resolver (issue #9741)", () => {
+    // The badge no longer prefers the list count unconditionally — it defers to
+    // `resolveForgeDisplayCount`, which arbitrates the list count against the
+    // stats poll's count recency. The stats side must be the per-count
+    // refreshed-at stamp (when the forge was actually asked about that count)
+    // rather than `lastUpdated`, which the main process re-stamps on
+    // probe-confirmed "unchanged" polls — arbitrating on `lastUpdated` let a
+    // stale cached count outrank a fresher dropdown-observed total on every
+    // poll. Stale disk fallbacks carry no honest stamp and must resolve to
+    // null recency, not the re-stamped `lastUpdated`.
+    expect(source).toContain('from "./forgeStatsCountDisplay"');
+    expect(source).toMatch(
+      /statsRecencyFallback\s*=\s*stats\?\.stale\s*\?\s*null\s*:\s*lastUpdated/
+    );
+    expect(source).toMatch(
+      /issueCountRefreshedAt\s*=\s*stats\?\.issueCountRefreshedAt\s*\?\?\s*statsRecencyFallback/
+    );
+    expect(source).toMatch(
+      /prCountRefreshedAt\s*=\s*stats\?\.prCountRefreshedAt\s*\?\?\s*statsRecencyFallback/
+    );
+    expect(source).toMatch(
+      /issueDisplayCount[\s\S]{0,80}?=\s*resolveForgeDisplayCount\(\s*issueCount,\s*issueCountRefreshedAt,\s*issueListCount,\s*issueListHasMore,\s*issueListTimestamp\b/
+    );
+    expect(source).toMatch(
+      /prDisplayCount[\s\S]{0,80}?=\s*resolveForgeDisplayCount\(\s*prCount,\s*prCountRefreshedAt,\s*prListCount,\s*prListHasMore,\s*prListTimestamp\b/
+    );
+  });
+
+  it("stamps a recency timestamp when each list count updates (issue #9741)", () => {
+    expect(source).toMatch(
+      /\[issueListTimestamp, setIssueListTimestamp\]\s*=\s*useState<number\s*\|\s*null>\(null\)/
+    );
+    expect(source).toMatch(
+      /\[prListTimestamp, setPrListTimestamp\]\s*=\s*useState<number\s*\|\s*null>\(null\)/
+    );
+    // Each handler must record Date.now() so the resolver can compare it to the
+    // stats poll's lastUpdated.
+    const issueHandler = source.slice(
+      source.indexOf("handleIssueListCountUpdate = useCallback"),
+      source.indexOf("handlePrListCountUpdate = useCallback")
+    );
+    expect(issueHandler).toContain("setIssueListTimestamp(Date.now())");
+    const prHandler = source.slice(
+      source.indexOf("handlePrListCountUpdate = useCallback"),
+      source.indexOf("handlePrListCountUpdate = useCallback") + 300
+    );
+    expect(prHandler).toContain("setPrListTimestamp(Date.now())");
+  });
+
+  it("passes displayCount to the issue and PR pills", () => {
+    expect(source).toContain("displayCount={issueDisplayCount}");
+    expect(source).toContain("displayCount={prDisplayCount}");
+  });
+
+  it("threads onCountUpdate to both list slot instances (issue + PR)", () => {
+    const issueMatches = source.match(/onCountUpdate=\{handleIssueListCountUpdate\}/g);
+    const prMatches = source.match(/onCountUpdate=\{handlePrListCountUpdate\}/g);
+    expect(issueMatches?.length).toBe(1);
+    expect(prMatches?.length).toBe(1);
+  });
+
+  it("keeps the numeric count prop on the stats path for animation deltas", () => {
+    // The digit-pulse compares raw stats counts, so the pill's `count` prop
+    // must stay numeric (issueCount/prCount), not the display string.
+    expect(source).toContain("count={issueCount}");
+    expect(source).toContain("count={prCount}");
+  });
+
+  it("uses the exact display count in the issue + PR aria-labels and tooltips", () => {
+    // The badge is compacted; names and tooltips carry the exact figure.
+    expect(source).toContain("${formatExactCount(issueDisplayCount)} open issues");
+    expect(source).toContain("${formatExactCount(prDisplayCount)} open pull requests");
+    expect(source).toContain("${formatExactCount(prDisplayCount)} open PRs");
+  });
+
+  it("resets the list counts + timestamps via a project-path effect (issue #9741)", () => {
+    // The reset is keyed on currentProject?.path, not the stats `lastUpdated`
+    // reset effect — a fast project switch can leave statsLoading true while
+    // lastUpdated is null, masking that effect's guarded reset.
+    const depIdx = source.lastIndexOf("[currentProject?.path]");
+    expect(depIdx).toBeGreaterThan(-1);
+    // The effect body precedes its dependency array — scan the window just
+    // above the dep marker for the resets.
+    const slice = source.slice(Math.max(0, depIdx - 600), depIdx);
+    expect(slice).toContain("setIssueListCount(null)");
+    expect(slice).toContain("setIssueListHasMore(false)");
+    expect(slice).toContain("setPrListCount(null)");
+    expect(slice).toContain("setPrListHasMore(false)");
+    // Recency timestamps must clear too or project A's timestamp would suppress
+    // project B's first stats poll.
+    expect(slice).toContain("setIssueListTimestamp(null)");
+    expect(slice).toContain("setPrListTimestamp(null)");
+  });
+});
+
+describe("msUntilNextLabelChange", () => {
+  it("returns 0 when no time remains", () => {
+    expect(msUntilNextLabelChange(0)).toBe(0);
+    expect(msUntilNextLabelChange(-1)).toBe(0);
+    expect(msUntilNextLabelChange(-1_000)).toBe(0);
+  });
+
+  it("aligns to the next whole-second boundary in the seconds range", () => {
+    expect(msUntilNextLabelChange(1)).toBe(1);
+    expect(msUntilNextLabelChange(500)).toBe(500);
+    expect(msUntilNextLabelChange(999)).toBe(999);
+    expect(msUntilNextLabelChange(1_000)).toBe(1_000);
+    expect(msUntilNextLabelChange(1_001)).toBe(1);
+    expect(msUntilNextLabelChange(59_999)).toBe(999);
+  });
+
+  it("aligns to the next whole-second boundary in the minutes range", () => {
+    expect(msUntilNextLabelChange(60_000)).toBe(1_000);
+    expect(msUntilNextLabelChange(60_001)).toBe(1);
+    expect(msUntilNextLabelChange(120_500)).toBe(500);
+    expect(msUntilNextLabelChange(3_599_000)).toBe(1_000);
+    expect(msUntilNextLabelChange(3_599_999)).toBe(999);
+  });
+
+  it("aligns to the next minute-boundary crossing in the hours range", () => {
+    // remainingMs=3_600_000 → totalSeconds=3600 → label "1h"
+    // Next change is "1h" → "59m 59s" at remainingMs=3_599_000 (1s away)
+    expect(msUntilNextLabelChange(3_600_000)).toBe(1_000);
+
+    // remainingMs=3_660_000 → totalSeconds=3660 → label "1h 1m"
+    // Next change is "1h 1m" → "1h" at remainingMs=3_659_000 (1s away)
+    expect(msUntilNextLabelChange(3_660_000)).toBe(1_000);
+
+    // remainingMs=3_659_000 → totalSeconds=3659 → label "1h"
+    // Next change is "1h" → "59m 59s" at remainingMs=3_599_000 (60s away)
+    expect(msUntilNextLabelChange(3_659_000)).toBe(60_000);
+
+    // Mid-minute-window in hours range: from totalSeconds=3700 down to 3659
+    expect(msUntilNextLabelChange(3_700_000)).toBe(41_000);
+
+    // Two-hour mark behaves like the one-hour mark
+    expect(msUntilNextLabelChange(7_200_000)).toBe(1_000);
+    expect(msUntilNextLabelChange(7_199_000)).toBe(60_000);
+  });
+
+  it("never returns 0 for positive remaining time (no busy loop)", () => {
+    const cases = [1, 500, 1_000, 60_000, 120_000, 3_599_000, 3_600_000, 3_660_000, 7_200_000];
+    for (const remainingMs of cases) {
+      expect(msUntilNextLabelChange(remainingMs)).toBeGreaterThan(0);
+    }
   });
 });

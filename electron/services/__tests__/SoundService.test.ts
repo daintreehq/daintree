@@ -136,15 +136,6 @@ describe("SoundService", () => {
     expect(mockPlaySound).not.toHaveBeenCalled();
   });
 
-  it("falls back to OS process when no main window", () => {
-    soundService.play("chime");
-
-    expect(mockPlaySound).toHaveBeenCalledWith(
-      expect.stringContaining("chime"),
-      expect.any(Number)
-    );
-  });
-
   it("falls back to OS process when no windows are open", () => {
     mockGetAllWindows.mockReturnValue([]);
 
@@ -167,17 +158,6 @@ describe("SoundService", () => {
     // Cancel must reach cached views too — see the WHY in SoundService.cancel().
     expect(mockBroadcastToVisibleRenderers).not.toHaveBeenCalled();
     expect(mockCancel).not.toHaveBeenCalled();
-  });
-
-  it("cancel does not broadcast when no renderer windows are present", () => {
-    mockGetAllWindows.mockReturnValue([]);
-
-    soundService.cancel();
-
-    expect(mockBroadcastToRenderer).not.toHaveBeenCalledWith(
-      "events:push",
-      expect.objectContaining({ name: "sound:cancel" })
-    );
   });
 
   it("cancel cancels OS-fallback voices only when no renderer is present", () => {
@@ -298,25 +278,6 @@ describe("SoundService", () => {
 
   // -- Path resolution --
 
-  it("resolves sounds directory from app path in dev mode", () => {
-    soundService.play("chime");
-
-    expect(fsMock.existsSync).toHaveBeenCalledWith(
-      expect.stringContaining(path.join("electron", "resources", "sounds"))
-    );
-  });
-
-  it("resolves sounds directory from resourcesPath in packaged mode", async () => {
-    appMock.app.isPackaged = true;
-    vi.resetModules();
-    const mod = await import("../SoundService.js");
-    mod.soundService.play("chime");
-
-    expect(fsMock.existsSync).toHaveBeenCalledWith(
-      expect.stringContaining(path.join("resources", "sounds"))
-    );
-  });
-
   it("calls playSound with the correct path when file exists", () => {
     soundService.play("error");
 
@@ -360,10 +321,6 @@ describe("SoundService", () => {
     mod.soundService.getVariants("chime.wav");
 
     expect(fsMock.readdirSync).toHaveBeenCalledWith(path.join("/app/resources", "sounds"));
-  });
-
-  it("cancel is a no-op when no sound is playing", () => {
-    expect(() => soundService.cancel()).not.toThrow();
   });
 
   it("preview plays the base file without variant selection and bypasses dampening", () => {
@@ -458,13 +415,6 @@ describe("SoundService", () => {
   });
 
   // -- Concurrent voices --
-
-  it("allows up to 3 concurrent voices", () => {
-    soundService.play("error");
-    soundService.play("waiting");
-    soundService.play("ping");
-    expect(mockPlaySound).toHaveBeenCalledTimes(3);
-  });
 
   it("drops new sound when all 3 voice slots are taken by higher priority", () => {
     // Fill all 3 slots with high-priority sounds

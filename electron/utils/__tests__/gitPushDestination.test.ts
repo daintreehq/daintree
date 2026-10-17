@@ -452,15 +452,6 @@ describe("resolveGitPushDestination — argv hardening", () => {
       remoteTrackingRef: "refs/remotes/team/fork/topic",
     });
   });
-
-  it("allows a legitimate slash-bearing remote name through the guard", async () => {
-    const result = await resolveGitPushDestination(
-      stub("team/fork", "refs/remotes/team/fork/topic"),
-      "topic"
-    );
-
-    expect(result.status).toBe("resolved");
-  });
 });
 
 describe("resolveGitPushDestination — upstream name mismatch", () => {

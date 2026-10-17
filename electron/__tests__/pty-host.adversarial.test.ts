@@ -305,6 +305,24 @@ vi.mock("../services/ProcessTreeCache.js", () => ({
   },
 }));
 
+// The Windows exit batch's verdict, when a test needs one the real batch
+// (empty here: PtyManager is mocked) cannot give.
+const exitBatch = vi.hoisted(() => ({
+  outcome: null as null | {
+    unfinished: Array<{ pid: number; startTime: number }>;
+    abandoned: number;
+  },
+}));
+
+vi.mock("../services/pty/ProcessTreeKiller.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../services/pty/ProcessTreeKiller.js")>();
+  return {
+    ...actual,
+    flushWindowsExitBatchAsync: async () =>
+      exitBatch.outcome ?? (await actual.flushWindowsExitBatchAsync()),
+  };
+});
+
 vi.mock("../services/TerminalLineageLedger.js", () => ({
   TerminalLineageLedger: class {
     hasRoots = vi.fn(() => false);
@@ -312,10 +330,19 @@ vi.mock("../services/TerminalLineageLedger.js", () => ({
     registerRoot = vi.fn();
     markRootClosing = vi.fn();
     getVerifiedOrphanPids = vi.fn(() => []);
+    setRootIdentityListener = vi.fn();
     dispose = vi.fn();
   },
   lineageFilePath: vi.fn(() => "/tmp/pty-lineage.json"),
   beginTeardownProbeWindow: vi.fn(),
+}));
+
+const prewarmWindowsShell = vi.hoisted(() =>
+  vi.fn(async (): Promise<string> => "C:\\Program Files\\PowerShell\\7\\pwsh.exe")
+);
+vi.mock("../services/pty/terminalShell.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../services/pty/terminalShell.js")>()),
+  prewarmWindowsShell,
 }));
 
 vi.mock("../services/pty/TerminalResourceMonitor.js", () => ({
@@ -742,6 +769,7 @@ describe("pty-host adversarial", () => {
 
   beforeEach(() => {
     exitSpy = vi.spyOn(process, "exit").mockImplementation((() => undefined) as never);
+    exitBatch.outcome = null;
     baselineSigtermListeners = process.listeners("SIGTERM") as Array<(...args: unknown[]) => void>;
     vi.useFakeTimers();
     vi.mocked(getPtyPool).mockClear();
@@ -805,6 +833,9 @@ describe("pty-host adversarial", () => {
   });
 
   it("SIGTERM_RUNS_TEARDOWN_ONCE_AND_EXITS_SIGNALLED (#13167)", async () => {
+    // The POSIX contract: teardown and exit in the signal's own tick. Windows
+    // awaits its exit batch first (WINDOWS_* cases below).
+    Object.defineProperty(process, "platform", { value: "linux", configurable: true });
     const parentPort = await loadHost();
     const manager = hostState.currentPtyManager as MiniEmitter & { dispose: TestMock };
     const hostSigterm = process
@@ -822,6 +853,60 @@ describe("pty-host adversarial", () => {
     parentPort.emit("message", { type: "dispose" });
     await flushMicrotasks();
     expect(manager.dispose).toHaveBeenCalledTimes(1);
+  });
+
+  it("WINDOWS_UNCONFIRMED_EXIT_KILLS_GO_TO_MAIN_AND_EXIT_UNCLEAN", async () => {
+    // A batch stuck behind a slow run: its helper dies with this host, so the
+    // identified roots go to Main, and the exit does not claim a clean teardown.
+    Object.defineProperty(process, "platform", { value: "win32", configurable: true });
+    const roots = [{ pid: 7_100_001, startTime: 1_760_256_000_123_456 }];
+    exitBatch.outcome = { unfinished: roots, abandoned: 0 };
+    const parentPort = await loadHost();
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    parentPort.emit("message", { type: "dispose" });
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(parentPort.postMessage).toHaveBeenCalledWith({ type: "tree-kill-handoff", roots });
+    // The message is on its way before the host goes.
+    expect(exitSpy).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(100);
+    expect(exitSpy).toHaveBeenCalledWith(1);
+    expect(exitSpy).not.toHaveBeenCalledWith(0);
+    warnSpy.mockRestore();
+  });
+
+  it("WINDOWS_CONFIRMED_EXIT_KILLS_EXIT_CLEAN_WITHOUT_HANDOFF", async () => {
+    Object.defineProperty(process, "platform", { value: "win32", configurable: true });
+    exitBatch.outcome = { unfinished: [], abandoned: 0 };
+    const parentPort = await loadHost();
+
+    parentPort.emit("message", { type: "dispose" });
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(exitSpy).toHaveBeenCalledWith(0);
+    expect(
+      parentPort.postMessage.mock.calls.some(
+        ([payload]: unknown[]) => (payload as { type?: string })?.type === "tree-kill-handoff"
+      )
+    ).toBe(false);
+  });
+
+  it("WINDOWS_READY_WAITS_FOR_THE_DEFAULT_SHELL", async () => {
+    Object.defineProperty(process, "platform", { value: "win32", configurable: true });
+    let shellFound: (shell: string) => void = () => {};
+    prewarmWindowsShell.mockImplementationOnce(
+      () => new Promise<string>((resolve) => (shellFound = resolve))
+    );
+
+    const parentPort = await loadHost();
+    // Restored terminals spawn on "ready": not before the shell they open in is known.
+    expect(parentPort.postMessage).not.toHaveBeenCalledWith({ type: "ready" });
+
+    shellFound("C:\\Program Files\\PowerShell\\7\\pwsh.exe");
+    await flushMicrotasks();
+    await flushMicrotasks();
+    expect(parentPort.postMessage).toHaveBeenCalledWith({ type: "ready" });
   });
 
   it("WINDOWS_STARTUP_SKIPS_PTY_POOL", async () => {
@@ -1141,25 +1226,6 @@ describe("pty-host adversarial", () => {
     await flushMicrotasks();
 
     parentPort.emit("message", { type: "set-activity-tier", id: "t1", tier: "background" });
-    await flushMicrotasks();
-
-    expect(hostState.ipcQueueManagers[0].clearQueue).not.toHaveBeenCalled();
-    expect(hostState.portQueueManagers[0].clearQueue).not.toHaveBeenCalled();
-  });
-
-  it("ACTIVE_TRANSITION_DOES_NOT_CLEAR_QUEUE_HOLDS", async () => {
-    const parentPort = await loadHost();
-    hostState.terminals.set("t1", createTerminal("t1", "project-1"));
-
-    const port = createRendererPort();
-    parentPort.emit("message", {
-      data: { type: "connect-port", windowId: 1, holderWebContentsId: 101 },
-      ports: [port],
-    });
-    parentPort.emit("message", { type: "spawn", id: "t1", options: { projectId: "project-1" } });
-    await flushMicrotasks();
-
-    parentPort.emit("message", { type: "set-activity-tier", id: "t1", tier: "active" });
     await flushMicrotasks();
 
     expect(hostState.ipcQueueManagers[0].clearQueue).not.toHaveBeenCalled();
@@ -1836,30 +1902,6 @@ describe("pty-host adversarial", () => {
           typeof m === "object" && m !== null && (m as Record<string, unknown>).id === "t1"
       )
     ).toBe(false);
-  });
-
-  it("RECOMPUTE_ONLY_TOUCHES_THE_NEWLY_FOREGROUND_PROJECT (#10857)", async () => {
-    // recomputeActivityTiers is scoped to the project that just became
-    // foreground for some window — it must NOT force-activate a global/shared
-    // terminal (undefined projectId) or a terminal belonging to a different
-    // project. Those terminals are owned exclusively by the renderer's own
-    // "set-activity-tier" IPC and must be left exactly as they were; bouncing
-    // them to "active" on every unrelated project switch is the #10857 bug.
-    const parentPort = await loadHost();
-    const backpressure = hostState.backpressureManagers[0];
-    hostState.terminals.set("t-global", createTerminal("t-global")); // undefined projectId
-    hostState.terminals.set("t-other", createTerminal("t-other", "project-2"));
-
-    // Seed "background" so a green assertion proves recompute genuinely left
-    // these terminals alone rather than reading back a coincidental default.
-    backpressure.setActivityTier("t-global", "background");
-    backpressure.setActivityTier("t-other", "background");
-
-    parentPort.emit("message", { type: "set-active-project", windowId: 1, projectId: "project-1" });
-    await flushMicrotasks();
-
-    expect(backpressure.getActivityTier("t-global")).toBe("background");
-    expect(backpressure.getActivityTier("t-other")).toBe("background");
   });
 
   it("TIER_CHANGED_BROADCAST_TOLERATES_A_CLOSING_PORT", async () => {

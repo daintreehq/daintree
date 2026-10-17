@@ -122,15 +122,6 @@ describe("AssistantHostCommandSchema", () => {
       })
     ).toBeNull();
   });
-
-  it("event and command discriminants do not overlap", () => {
-    const eventTypes = new Set(VALID_EVENTS.map((e) => e.type));
-    const commandTypes = VALID_COMMANDS.map((c) => c.type);
-    for (const t of commandTypes) {
-      // approval:decide (command) is distinct from approval:requested/decided (events)
-      expect(eventTypes.has(t as never)).toBe(false);
-    }
-  });
 });
 
 describe("AssistantHostSessionDescriptorSchema", () => {

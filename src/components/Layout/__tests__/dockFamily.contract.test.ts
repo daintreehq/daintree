@@ -4,10 +4,11 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { DOCK_CHIP_CLASS, DOCK_CHIP_OPEN_CLASS, DOCK_STATE_GLYPH_CLASS } from "../dockChipStyles";
 import { DOCK_STATUS_PILL_CLASS, DOCK_STATUS_PILL_OPEN_CLASS } from "../dockStatusPill";
+import { readIndexCss } from "@/__tests__/support/hostCss";
 
 /**
  * The dock is one family: the worktree's chips, the project's status pills,
- * and the four status popovers. These are the rules that keep it one family,
+ * and the five status popovers. These are the rules that keep it one family,
  * stated as rules rather than as today's class names.
  */
 
@@ -17,7 +18,7 @@ const read = (file: string) => fs.readFileSync(path.join(LAYOUT, file), "utf8");
 
 const CHIPS = ["DockedTerminalItem.tsx", "DockedTabGroup.tsx", "DockedNonPtyPanelItem.tsx"];
 const POPOVERS = [
-  "WaitingContainer.tsx",
+  "AgentStatusContainer.tsx",
   "BackgroundContainer.tsx",
   "StatusContainer.tsx",
   "TrashContainer.tsx",
@@ -43,7 +44,7 @@ describe("dock chips", () => {
     expect(utilities(DOCK_CHIP_OPEN_CLASS).some((u) => /(^|:)ring/.test(u))).toBe(false);
     expect(DOCK_CHIP_OPEN_CLASS).not.toMatch(/accent/);
 
-    const css = fs.readFileSync(path.join(SRC, "index.css"), "utf8");
+    const css = readIndexCss();
     for (const token of ["--dock-item-bg-active", "--dock-item-border-active"]) {
       const declaration = css.match(new RegExp(`${token}:\\s*([^;]+);`));
       expect(declaration, token).not.toBeNull();
@@ -79,7 +80,7 @@ describe("dock chips", () => {
     // Every state or activity glyph in the dock's chips takes the shared size.
     for (const file of ["DockedTerminalItem.tsx", "DockedTabGroup.tsx", "DockActivityCue.tsx"]) {
       const glyphs = Array.from(
-        read(file).matchAll(/<(StateIcon|SpinnerCircle|CheckCircle2)\s+className=\{([^}]+)\}/g),
+        read(file).matchAll(/<(StateIcon|SpinnerCircle|DoneCircle)\s+className=\{([^}]+)\}/g),
         (m) => m[2]!
       );
       expect(glyphs.length, file).toBeGreaterThan(0);
@@ -115,7 +116,7 @@ describe("dock status popovers", () => {
       expect(source, file).toContain("focusHandoff.onContentKeyDown");
     }
     for (const file of [
-      "WaitingContainer.tsx",
+      "AgentStatusContainer.tsx",
       "BackgroundContainer.tsx",
       "StatusContainer.tsx",
       "TrashBinItem.tsx",

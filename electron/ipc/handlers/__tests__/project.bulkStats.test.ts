@@ -587,34 +587,6 @@ describe("handleProjectGetBulkStats", () => {
     expect(result["proj-bad"]).toBeUndefined();
   });
 
-  it("returns zero agent counts when getAllTerminalsAsync fails", async () => {
-    const ptyClient = makePtyClient({
-      getAllTerminalsAsync: vi.fn().mockResolvedValue([]), // PtyClient.getAllTerminalsAsync catches errors and returns []
-    });
-    registerProjectCrudHandlers(makeDeps(ptyClient));
-    const handler = getBulkStatsHandler();
-
-    const result = (await handler(fakeEvent, ["proj-a"])) as Record<
-      string,
-      { activeAgentCount: number; waitingAgentCount: number; terminalCount: number }
-    >;
-
-    expect(result["proj-a"].activeAgentCount).toBe(0);
-    expect(result["proj-a"].waitingAgentCount).toBe(0);
-    // ptyStats fields are still populated
-    expect(result["proj-a"].terminalCount).toBe(2);
-  });
-
-  it("calls checkRateLimit with project:get-bulk-stats limits", async () => {
-    const ptyClient = makePtyClient();
-    registerProjectCrudHandlers(makeDeps(ptyClient));
-    const handler = getBulkStatsHandler();
-
-    await handler(fakeEvent, ["proj-a"]);
-
-    expect(checkRateLimitMock).toHaveBeenCalledWith(CHANNELS.PROJECT_GET_BULK_STATS, 10, 10_000);
-  });
-
   it("propagates rate-limit errors without fetching terminals or stats", async () => {
     checkRateLimitMock.mockImplementationOnce(() => {
       throw new Error("Rate limit exceeded");

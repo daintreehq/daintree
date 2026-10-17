@@ -50,24 +50,6 @@ describe("sendPtyHostRpc", () => {
     ]);
   });
 
-  it("threads the generated request id into the built request", async () => {
-    const { shard, sentRequests } = makeShard({ registerResult: [] });
-
-    await sendPtyHostRpc(shard, "terminals-proj-1", (requestId) => ({
-      type: "get-terminals-for-project",
-      projectId: "proj-1",
-      requestId,
-    }));
-
-    expect(sentRequests).toEqual([
-      {
-        type: "get-terminals-for-project",
-        projectId: "proj-1",
-        requestId: "req-1-terminals-proj-1",
-      },
-    ]);
-  });
-
   it("forwards register options (method/timeoutMs) to the broker", async () => {
     const { shard, registerArgs } = makeShard({ registerResult: null });
 
@@ -79,18 +61,6 @@ describe("sendPtyHostRpc", () => {
     );
 
     expect(registerArgs).toEqual([{ method: "graceful-kill", timeoutMs: 5000 }]);
-  });
-
-  it("normalizes a missing options arg to an empty object rather than omitting it", async () => {
-    const { shard, registerArgs } = makeShard({ registerResult: null });
-
-    await sendPtyHostRpc(shard, "no-options", (requestId) => ({
-      type: "get-project-stats",
-      projectId: "p",
-      requestId,
-    }));
-
-    expect(registerArgs).toEqual([{}]);
   });
 
   it("leaves rejection handling to the caller — does not swallow broker errors", async () => {

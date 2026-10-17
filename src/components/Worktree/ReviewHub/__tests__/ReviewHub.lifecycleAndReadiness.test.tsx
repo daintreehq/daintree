@@ -245,6 +245,21 @@ vi.mock("@/components/ui/dropdown-menu", () => ({
   ),
   DropdownMenuLabel: ({ children }: { children: ReactNode }) => <div>{children}</div>,
   DropdownMenuSeparator: () => <hr />,
+  DropdownMenuItem: ({
+    children,
+    onSelect,
+    "aria-label": ariaLabel,
+  }: {
+    children: ReactNode;
+    onSelect?: () => void;
+    destructive?: boolean;
+    "aria-label"?: string;
+  }) => (
+    <div role="menuitem" tabIndex={-1} aria-label={ariaLabel} onClick={() => onSelect?.()}>
+      {children}
+    </div>
+  ),
+  DropdownMenuMeta: ({ children }: { children: ReactNode }) => <span>{children}</span>,
 }));
 
 vi.mock("@/components/ui/EmptyState", () => ({
@@ -679,12 +694,6 @@ describe("ReviewHub", () => {
       expect(listbox.getAttribute("aria-activedescendant")).toBe("review-hub-row-1");
     });
 
-    it("ArrowUp from no focus jumps to the last row", async () => {
-      const listbox = await renderHub();
-      act(() => void fireEvent.keyDown(document, { key: "ArrowUp" }));
-      expect(listbox.getAttribute("aria-activedescendant")).toBe("review-hub-row-1");
-    });
-
     it("Space unstages the focused staged row and keeps focus", async () => {
       const listbox = await renderHub();
       act(() => void fireEvent.keyDown(document, { key: "ArrowDown" }));
@@ -962,6 +971,26 @@ describe("ReviewHub", () => {
     });
   });
 
+  describe("Escape in a section filter", () => {
+    it("clears a filter with text first, then leaves the empty field without closing", async () => {
+      const onClose = vi.fn();
+      render(<ReviewHubContent isOpen={true} worktreePath={WORKTREE_PATH} onClose={onClose} />);
+      await waitFor(() => screen.getByText("index.ts"));
+
+      const filter = screen.getAllByPlaceholderText("Filter…")[0]! as HTMLInputElement;
+      fireEvent.change(filter, { target: { value: "index" } });
+      filter.focus();
+
+      fireEvent.keyDown(filter, { key: "Escape" });
+      await waitFor(() => expect(filter.value).toBe(""));
+      expect(onClose).not.toHaveBeenCalled();
+
+      fireEvent.keyDown(filter, { key: "Escape" });
+      expect(onClose).not.toHaveBeenCalled();
+      expect(document.activeElement).not.toBe(filter);
+    });
+  });
+
   describe("clean-tree push affordance", () => {
     afterEach(() => {
       // The real (unmocked) confirm store is shared suite-wide — resolve any
@@ -1012,6 +1041,27 @@ describe("ReviewHub", () => {
       await waitFor(() => expect(pushMock).toHaveBeenCalledWith(WORKTREE_PATH));
     });
 
+    it("names the push as an operation in a remote-bound view", async () => {
+      window.__DAINTREE_HOST_ID__ = { id: "build-box" };
+      try {
+        renderCleanHub({ aheadCount: 1, behindCount: 0 });
+        await screen.findByTestId("review-hub-clean-unpushed");
+        act(() => void fireEvent.click(screen.getByTestId("review-hub-clean-push")));
+        await act(async () => {
+          useGitPushConfirmStore.getState().resolveConfirmation(true);
+        });
+        await waitFor(() =>
+          expect(pushMock).toHaveBeenCalledWith(
+            WORKTREE_PATH,
+            undefined,
+            expect.stringMatching(/^[0-9a-f-]{36}$/)
+          )
+        );
+      } finally {
+        delete window.__DAINTREE_HOST_ID__;
+      }
+    });
+
     it("does not push when the preview dialog is declined", async () => {
       renderCleanHub({ aheadCount: 1, behindCount: 0 });
       await screen.findByTestId("review-hub-clean-unpushed");
@@ -1057,15 +1107,6 @@ describe("ReviewHub", () => {
       renderCleanHub({ aheadCount: 2, behindCount: 0 }, false);
       await waitFor(() => screen.getByText(COMPLETION_HEADLINE));
       expect(screen.queryByTestId("review-hub-clean-push")).toBeNull();
-    });
-
-    it("never renders the unpushed state and the completed state together", async () => {
-      // The defect this closes: both states shared one composition, so the
-      // only thing distinguishing "you still have work to publish" from "you
-      // are done" was a 12px subtitle. They must now be mutually exclusive.
-      renderCleanHub({ aheadCount: 2, behindCount: 0 });
-      await screen.findByTestId("review-hub-clean-unpushed");
-      expect(screen.queryByText(COMPLETION_HEADLINE)).toBeNull();
     });
   });
 });

@@ -51,6 +51,12 @@ export interface AgentMetadata {
 export interface ResolvedModelCatalog {
   agentId: string;
   models: AgentModelConfig[];
+  /**
+   * Successor the CLI names for a retired model ID, one hop per entry; follow
+   * it with `followModelUpgrades`. Only agents whose CLI publishes upgrade
+   * pointers (Codex) carry it.
+   */
+  modelUpgrades?: Record<string, string>;
   contextWindow: number | null;
   source: "remote" | "bundled" | "merged";
 }

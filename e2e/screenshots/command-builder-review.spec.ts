@@ -76,7 +76,9 @@ const dialog = (page: Page) => page.getByRole("dialog");
 // The footer's forward action — Next, or the run action on the last step — is
 // always the dialog's last button.
 const primary = (page: Page) => dialog(page).getByRole("button").last();
-const fields = (page: Page) => dialog(page).locator("input, textarea, select, [role='checkbox']");
+// Radix Select's trigger is a button with role=combobox, not a native select.
+const fields = (page: Page) =>
+  dialog(page).locator("input, textarea, select, [role='checkbox'], [role='combobox']");
 
 async function load(page: Page, query: string): Promise<void> {
   await stubViteHmrClient(page);

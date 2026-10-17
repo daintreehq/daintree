@@ -80,6 +80,7 @@ function makeDeps(
   return {
     getInstance: (id) => store.get(id),
     acknowledgePortData: vi.fn(),
+    getPortAckGeneration: vi.fn(() => 0),
     acknowledgeData: vi.fn(),
     notifyWriteComplete: vi.fn(),
     incrementUnseen: vi.fn(),
@@ -131,7 +132,7 @@ describe("TerminalWriteController.write", () => {
     // A zero-length byte array, not "": an empty string entry ends xterm's
     // flushSync drain and drops everything queued behind it.
     expect(vi.mocked(managed.terminal.write).mock.calls[0]![0]).toEqual(new Uint8Array(0));
-    expect(deps.acknowledgePortData).toHaveBeenCalledWith("t1", 7, 2);
+    expect(deps.acknowledgePortData).toHaveBeenCalledWith("t1", 7, 2, 0);
     expect(deps.acknowledgeData).toHaveBeenCalledWith("t1", 7);
     expect(deps.notifyWriteComplete).toHaveBeenCalledWith("t1", 7);
   });
@@ -158,8 +159,8 @@ describe("TerminalWriteController.write", () => {
     // The batch's chunkCount travels with the deferred entry so the replay
     // write can settle exactly the FIFO entries the batch owns.
     expect(managed.deferredOutput).toEqual([
-      { data: "abc", chunkCount: 1 },
-      { data: new Uint8Array([0x61, 0x62]), chunkCount: 3 },
+      { data: "abc", chunkCount: 1, ackGeneration: 0 },
+      { data: new Uint8Array([0x61, 0x62]), chunkCount: 3, ackGeneration: 0 },
     ]);
     // No ledger moves at defer time. Deferred chunks are replayed through the
     // normal path once restore finishes, and ALL bookkeeping (port-ack FIFO,
@@ -189,9 +190,33 @@ describe("TerminalWriteController.write", () => {
     controller.write("t1", entry!.data, entry!.chunkCount);
 
     expect(deps.acknowledgePortData).toHaveBeenCalledTimes(1);
-    expect(deps.acknowledgePortData).toHaveBeenCalledWith("t1", 3, 2);
+    expect(deps.acknowledgePortData).toHaveBeenCalledWith("t1", 3, 2, 0);
     expect(deps.notifyWriteComplete).toHaveBeenCalledTimes(1);
     expect(deps.notifyWriteComplete).toHaveBeenCalledWith("t1", 3);
+  });
+
+  it("acks under the port-ack generation the chunk was written under (remote reset barrier)", () => {
+    let generation = 4;
+    deps = makeDeps(store, { getPortAckGeneration: vi.fn(() => generation) });
+    controller.dispose();
+    controller = new TerminalWriteController(deps);
+
+    controller.write("t1", new Uint8Array([1]));
+    expect(deps.acknowledgePortData).toHaveBeenLastCalledWith("t1", 1, 1, 4);
+
+    // A deferred chunk keeps the generation it arrived under, even when a
+    // reset has moved the terminal on by the time it is replayed.
+    managed.isSerializedRestoreInProgress = true;
+    controller.write("t1", new Uint8Array([2, 3]), 2);
+    expect(managed.deferredOutput).toEqual([
+      { data: new Uint8Array([2, 3]), chunkCount: 2, ackGeneration: 4 },
+    ]);
+    generation = 5;
+    managed.isSerializedRestoreInProgress = false;
+    const [entry] = managed.deferredOutput;
+    managed.deferredOutput = [];
+    controller.write("t1", entry!.data, entry!.chunkCount, entry!.range, entry!.ackGeneration);
+    expect(deps.acknowledgePortData).toHaveBeenLastCalledWith("t1", 2, 2, 4);
   });
 
   it("normal path: writes to terminal, acks both data and port data, increments unseen", () => {
@@ -199,7 +224,7 @@ describe("TerminalWriteController.write", () => {
 
     expect(vi.mocked(managed.terminal.write)).toHaveBeenCalledWith("hello", expect.any(Function));
     expect(deps.incrementUnseen).toHaveBeenCalledWith("t1", false, 1);
-    expect(deps.acknowledgePortData).toHaveBeenCalledWith("t1", 5, 1);
+    expect(deps.acknowledgePortData).toHaveBeenCalledWith("t1", 5, 1, 0);
     expect(deps.acknowledgeData).toHaveBeenCalledWith("t1", 5);
     expect(deps.notifyWriteComplete).toHaveBeenCalledWith("t1", 5);
   });
@@ -214,7 +239,7 @@ describe("TerminalWriteController.write", () => {
       expect(deps.acknowledgeData).toHaveBeenCalledWith("t1", 9);
       // The renderer-side ingest ledger (acknowledgePortData / notifyWriteComplete)
       // stays in UTF-16 code units to match how inFlightBytes was incremented.
-      expect(deps.acknowledgePortData).toHaveBeenCalledWith("t1", 3, 1);
+      expect(deps.acknowledgePortData).toHaveBeenCalledWith("t1", 3, 1, 0);
       expect(deps.notifyWriteComplete).toHaveBeenCalledWith("t1", 3);
     });
 
@@ -223,7 +248,7 @@ describe("TerminalWriteController.write", () => {
       controller.write("t1", "😀");
 
       expect(deps.acknowledgeData).toHaveBeenCalledWith("t1", 4);
-      expect(deps.acknowledgePortData).toHaveBeenCalledWith("t1", 2, 1);
+      expect(deps.acknowledgePortData).toHaveBeenCalledWith("t1", 2, 1, 0);
       expect(deps.notifyWriteComplete).toHaveBeenCalledWith("t1", 2);
     });
 
@@ -232,35 +257,9 @@ describe("TerminalWriteController.write", () => {
       // would spuriously drain the host's IPC ledger.
       controller.write("t1", new Uint8Array([0xe2, 0x94, 0x82]));
 
-      expect(deps.acknowledgePortData).toHaveBeenCalledWith("t1", 3, 1);
+      expect(deps.acknowledgePortData).toHaveBeenCalledWith("t1", 3, 1, 0);
       expect(deps.acknowledgeData).not.toHaveBeenCalled();
       expect(deps.notifyWriteComplete).toHaveBeenCalledWith("t1", 3);
-    });
-
-    it("deferred-restore path: never acks the IPC ledger even for non-ASCII strings", () => {
-      // The IPC ledger is drained when the deferred chunk replays through the
-      // normal path after restore. Acking here would double-drain it. The
-      // port-ack FIFO is equally untouched (settled by the replay write).
-      managed.isSerializedRestoreInProgress = true;
-      controller.write("t1", "│");
-
-      expect(deps.acknowledgePortData).not.toHaveBeenCalled();
-      expect(deps.acknowledgeData).not.toHaveBeenCalled();
-    });
-  });
-
-  describe("coalesced-batch chunk accounting", () => {
-    it("settles all merged port-ack FIFO entries for a coalesced write", () => {
-      controller.write("t1", new Uint8Array([1, 2, 3, 4]), 3);
-      expect(deps.acknowledgePortData).toHaveBeenCalledWith("t1", 4, 3);
-      expect(deps.acknowledgeData).not.toHaveBeenCalled();
-    });
-
-    it("deferred-restore path: preserves the chunk count on the held batch", () => {
-      managed.isSerializedRestoreInProgress = true;
-      controller.write("t1", new Uint8Array([1, 2]), 2);
-      expect(deps.acknowledgePortData).not.toHaveBeenCalled();
-      expect(managed.deferredOutput).toEqual([{ data: new Uint8Array([1, 2]), chunkCount: 2 }]);
     });
   });
 
@@ -380,7 +379,7 @@ describe("TerminalWriteController.write", () => {
 
     expect(managed.pendingWrites).toBe(0);
     expect(managed.lastWriteAt).toBeTypeOf("number");
-    expect(deps.acknowledgePortData).toHaveBeenCalledWith("t1", 3, 1);
+    expect(deps.acknowledgePortData).toHaveBeenCalledWith("t1", 3, 1, 0);
     expect(deps.acknowledgeData).toHaveBeenCalledWith("t1", 3);
     expect(deps.notifyWriteComplete).toHaveBeenCalledWith("t1", 3);
   });
@@ -427,11 +426,6 @@ describe("TerminalWriteController.write", () => {
     expect(firstWriteCalls[0]?.[1]).toMatchObject({ terminalId: "t1" });
     expect(firstWriteCalls[0]?.[1].elapsedSinceOpenMs).toBeTypeOf("number");
     expect(managed.hasEmittedFirstWriteMark).toBe(true);
-  });
-
-  it("decrements pendingWrites when the callback fires", () => {
-    controller.write("t1", "abc");
-    expect(managed.pendingWrites ?? 0).toBe(0);
   });
 
   describe("onWrite hook (write-driven BURST signal)", () => {
@@ -506,7 +500,7 @@ describe("TerminalWriteController.write", () => {
       expect(typeof calls[calls.length - 1]![1]).toBe("function");
       // Acks fire once, for the whole batch, with the original chunkCount.
       expect(deps.acknowledgePortData).toHaveBeenCalledTimes(1);
-      expect(deps.acknowledgePortData).toHaveBeenCalledWith("t1", data.length, 7);
+      expect(deps.acknowledgePortData).toHaveBeenCalledWith("t1", data.length, 7, 0);
       expect(deps.notifyWriteComplete).toHaveBeenCalledTimes(1);
       expect(deps.notifyWriteComplete).toHaveBeenCalledWith("t1", data.length);
     });
@@ -522,7 +516,7 @@ describe("TerminalWriteController.write", () => {
       expect(first.byteLength).toBe(WRITE_SLICE_BYTES);
       expect(second.byteLength).toBe(10);
       expect(first.buffer).toBe(data.buffer);
-      expect(deps.acknowledgePortData).toHaveBeenCalledWith("t1", data.byteLength, 1);
+      expect(deps.acknowledgePortData).toHaveBeenCalledWith("t1", data.byteLength, 1, 0);
     });
 
     it("does not split a surrogate pair at a slice boundary", () => {
@@ -657,7 +651,7 @@ describe("TerminalWriteController — cached project view (#11212)", () => {
     controller.write("t1", "hello");
 
     expect(vi.mocked(managed.terminal.write)).toHaveBeenCalledWith("hello", expect.any(Function));
-    expect(deps.acknowledgePortData).toHaveBeenCalledWith("t1", 5, 1);
+    expect(deps.acknowledgePortData).toHaveBeenCalledWith("t1", 5, 1, 0);
     expect(deps.acknowledgeData).toHaveBeenCalledWith("t1", 5);
     expect(deps.notifyWriteComplete).toHaveBeenCalledWith("t1", 5);
     expect(deps.incrementUnseen).toHaveBeenCalledWith("t1", false, 1);

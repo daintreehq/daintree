@@ -23,6 +23,7 @@ import {
   ROW_MENU_TARGET_CLASS,
 } from "@/components/ui/paletteRowStyles";
 import { getWorktreeBranchLabel, getWorktreeHeadline } from "@/lib/worktreeHeadline";
+import { useWorktreeFilterStore } from "@/store/worktreeFilterStore";
 import { getPrStateColor, getPrStateGlyph } from "@/lib/prStateGlyph";
 import { getCIStatusVisual } from "@/lib/worktreeCIStatus";
 import { deriveTerminalChrome } from "@/utils/terminalChrome";
@@ -52,11 +53,16 @@ import { LiveTimeAgo } from "./LiveTimeAgo";
 import { SECTION_ROW } from "./WorktreeCard/sectionChrome";
 import { CHIP_LABELS, WorktreeStatusTick } from "./WorktreeCard/WorktreeStatusTick";
 import {
-  STATE_COLORS,
-  STATE_ICONS,
-  STATE_LABELS,
+  SESSION_COLORS,
+  SESSION_ICONS,
+  SESSION_LABELS,
   summarizeSessionStates,
 } from "./terminalStateConfig";
+import {
+  resolveSessionPresentation,
+  type SessionPresentationState,
+} from "@/lib/handBackPresentation";
+import { useRunHandBackStates } from "@/hooks/useRunHandBackState";
 import { ActivityLight } from "./ActivityLight";
 import { CollapsedSessionIndicators } from "./WorktreeCard/CollapsedSessionIndicators";
 import { Badge } from "@/components/ui/badge";
@@ -109,32 +115,42 @@ const MAX_INLINE_SESSIONS = 3;
  * user comes first, then live work; an idle agent only when nothing else is
  * going on.
  */
-const LEAD_PRIORITY: Record<AgentState, number> = {
+const LEAD_PRIORITY: Record<SessionPresentationState, number> = {
   waiting: 0,
   directing: 1,
-  working: 2,
-  completed: 3,
-  idle: 4,
-  exited: 5,
+  unread: 2,
+  working: 3,
+  completed: 4,
+  idle: 5,
+  exited: 6,
 };
 
 interface SessionMark {
   terminal: PtyPanelData;
   chrome: ReturnType<typeof deriveTerminalChrome>;
-  state: AgentState | undefined;
+  state: SessionPresentationState | undefined;
 }
 
 function useSessionMarks(worktreeId: string): SessionMark[] {
   const { terminals } = useWorktreeTerminals(worktreeId);
+  const terminalIds = useMemo(() => terminals.map((t) => t.id), [terminals]);
+  const handBackStates = useRunHandBackStates(terminalIds);
   return useMemo(() => {
     const marks = terminals
-      .filter((t) => t.location !== "trash")
-      .map((terminal) => {
+      .map((terminal, i) => ({ terminal, handBack: handBackStates[i] ?? "none" }))
+      .filter(({ terminal }) => terminal.location !== "trash")
+      .map(({ terminal, handBack }) => {
         const chrome = deriveTerminalChrome(terminal);
         // The raw state, not the compact indicator's coerced one: that helper
         // reads idle and completed as waiting, which put amber circles on rows
         // the Attention count beside them did not include.
-        const state = chrome.isAgent && !chrome.hasExited ? terminal.agentState : undefined;
+        const observed = chrome.isAgent && !chrome.hasExited ? terminal.agentState : undefined;
+        const state = resolveSessionPresentation(
+          observed,
+          terminal.agentState,
+          terminal.waitingReason,
+          handBack
+        );
         return { terminal, chrome, state };
       });
     // Agents before plain terminals, then by how much each one needs the user.
@@ -144,7 +160,7 @@ function useSessionMarks(worktreeId: string): SessionMark[] {
       const pb = b.state ? LEAD_PRIORITY[b.state] : 9;
       return pa - pb;
     });
-  }, [terminals]);
+  }, [terminals, handBackStates]);
 }
 
 function leadLine(mark: SessionMark | undefined): { text: string; mono: boolean } | null {
@@ -181,7 +197,9 @@ function SessionLine({ mark, onBeforeOpen }: { mark: SessionMark; onBeforeOpen: 
   const line = leadLine(mark);
   const text = line?.text ?? mark.chrome.label;
   const Glyph =
-    mark.state && mark.state !== "idle" && mark.state !== "exited" ? STATE_ICONS[mark.state] : null;
+    mark.state && mark.state !== "idle" && mark.state !== "exited"
+      ? SESSION_ICONS[mark.state]
+      : null;
   const quietState = mark.chrome.hasExited
     ? "exited"
     : mark.chrome.isAgent && (mark.state === "idle" || mark.state === undefined)
@@ -197,7 +215,7 @@ function SessionLine({ mark, onBeforeOpen }: { mark: SessionMark; onBeforeOpen: 
           e.stopPropagation();
           void openSession(mark.terminal.id, onBeforeOpen);
         }}
-        aria-label={`${mark.chrome.label}${mark.state ? `, ${STATE_LABELS[mark.state]}` : ""}: ${text}`}
+        aria-label={`${mark.chrome.label}${mark.state ? `, ${SESSION_LABELS[mark.state]}` : ""}: ${text}`}
         className={cn(
           "flex h-5 w-full min-w-0 items-center gap-1.5 rounded-[var(--radius-sm)] text-left",
           "text-text-secondary hover:text-text-primary transition-colors",
@@ -212,7 +230,7 @@ function SessionLine({ mark, onBeforeOpen }: { mark: SessionMark; onBeforeOpen: 
           <Glyph
             className={cn(
               "h-3 w-3 shrink-0",
-              STATE_COLORS[mark.state],
+              SESSION_COLORS[mark.state],
               mark.state === "working" && "animate-spin-slow motion-reduce:animate-none"
             )}
             aria-hidden="true"
@@ -261,10 +279,14 @@ export function WorktreeOverviewRow({
   onFocusLost,
 }: WorktreeOverviewRowProps) {
   const marks = useSessionMarks(worktree.id);
-  const headline = getWorktreeHeadline(worktree);
+  const customTitle = useWorktreeFilterStore((state) => state.worktreeCustomTitles[worktree.id]);
+  const headline = getWorktreeHeadline(worktree, customTitle);
   const branchLabel = getWorktreeBranchLabel(worktree);
-  const title =
-    headline.kind === "issue" || headline.kind === "pr"
+  // A custom title (#13409) names the row; the glyph below still follows the
+  // computed kind, so it keeps saying where the worktree came from.
+  const title = headline.customTitle
+    ? headline.customTitle
+    : headline.kind === "issue" || headline.kind === "pr"
       ? (headline.title ?? branchLabel)
       : worktree.isMainWorktree
         ? worktree.name
@@ -278,7 +300,10 @@ export function WorktreeOverviewRow({
   // for a bare branch — whose name then IS the title, set in mono as the
   // sidebar sets it. The branch's own type mark rides with the branch line.
   const isBranchTitled =
-    !worktree.isMainWorktree && headline.kind !== "issue" && headline.kind !== "pr";
+    !headline.customTitle &&
+    !worktree.isMainWorktree &&
+    headline.kind !== "issue" &&
+    headline.kind !== "pr";
   const headlinePr = headline.kind === "pr" ? worktree.linked?.pr : undefined;
   const TypeIcon = worktree.isMainWorktree
     ? Sprout
@@ -319,8 +344,12 @@ export function WorktreeOverviewRow({
       completed: 0,
       exited: 0,
     };
-    for (const mark of marks) if (mark.state) byState[mark.state] += 1;
-    return summarizeSessionStates(byState, marks.length);
+    let unread = 0;
+    for (const mark of marks) {
+      if (mark.state === "unread") unread += 1;
+      else if (mark.state) byState[mark.state] += 1;
+    }
+    return summarizeSessionStates(byState, marks.length, unread);
   }, [marks]);
 
   // The strip's glyph is the sidebar's: the agent's own mark when every
@@ -356,7 +385,7 @@ export function WorktreeOverviewRow({
     id: m.terminal.id,
     kind: m.terminal.kind,
     chrome: m.chrome,
-    name: `${m.chrome.label}${m.state ? `, ${STATE_LABELS[m.state]}` : ""}`,
+    name: `${m.chrome.label}${m.state ? `, ${SESSION_LABELS[m.state]}` : ""}`,
     detail: leadLine(m)?.text,
   }));
   const sessionsLabel = sessionLines
@@ -458,7 +487,27 @@ export function WorktreeOverviewRow({
                     <CheckboxGlyph checked={isSelected} />
                   </span>
                 </span>
-                <TruncatedTooltip content={isBranchTitled ? branchLabel : title}>
+                <TruncatedTooltip
+                  // Shown whether or not the title is cut while a custom title
+                  // hides the computed headline.
+                  isTruncated={headline.computedLabel ? true : undefined}
+                  content={
+                    headline.computedLabel ? (
+                      // What a custom title replaced, so a search that matched it
+                      // can be seen to have (#13409).
+                      <span className="flex flex-col gap-0.5">
+                        <span>{title}</span>
+                        <span className="text-2xs text-text-secondary">
+                          {headline.computedLabel}
+                        </span>
+                      </span>
+                    ) : isBranchTitled ? (
+                      branchLabel
+                    ) : (
+                      title
+                    )
+                  }
+                >
                   <span
                     className={cn(
                       "truncate text-text-primary",
@@ -545,7 +594,7 @@ export function WorktreeOverviewRow({
                       type="button"
                       tabIndex={-1}
                       aria-expanded={sessionsExpanded}
-                      aria-label={`${marks.length} active sessions${sessionSummary.breakdown ? `: ${sessionSummary.breakdown}` : ""}`}
+                      aria-label={`${pluralize(marks.length, "active session")}${sessionSummary.breakdown ? `: ${sessionSummary.breakdown}` : ""}`}
                       onClick={(e) => {
                         e.stopPropagation();
                         setSessionsExpanded((v) => !v);

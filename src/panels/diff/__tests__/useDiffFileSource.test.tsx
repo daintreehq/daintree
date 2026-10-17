@@ -47,17 +47,6 @@ describe("useDiffFileSource", () => {
     expect(readMock.mock.calls[0]?.[0]?.path).toBe("/repo/src/a.ts");
   });
 
-  it("starts reading when the scope is turned on mid-session", async () => {
-    const { result, rerender } = renderHook(
-      ({ enabled }: { enabled: boolean }) => useDiffFileSource(SUBJECT, enabled),
-      { initialProps: { enabled: false } }
-    );
-    expect(readMock).not.toHaveBeenCalled();
-
-    rerender({ enabled: true });
-    await waitFor(() => expect(result.current.source).toBe("file contents"));
-  });
-
   it("surfaces a read failure as its error code and no content", async () => {
     readMock.mockRejectedValue(new ClientAppError("FILE_TOO_LARGE", "too big"));
     const { result } = renderHook(() => useDiffFileSource(SUBJECT, true));

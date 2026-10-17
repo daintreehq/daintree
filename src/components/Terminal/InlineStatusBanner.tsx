@@ -637,7 +637,9 @@ export function InlineStatusBanner({
         stacked
           ? "flex flex-col gap-2 px-3 py-2 shrink-0"
           : isInline
-            ? "flex items-start px-3 py-2 shrink-0"
+            ? // In the title band the row is held to the band's 48px, so it
+              // centres on the traffic lights rather than riding its top.
+              cn("flex px-3 py-2 shrink-0", isTitleBarSurface ? "items-center" : "items-start")
             : "flex items-center justify-between gap-3 px-3 py-2 shrink-0",
         // The strip wraps its controls beneath the text once the container is
         // narrower than a two-line sentence plus three actions can share.
@@ -697,7 +699,9 @@ export function InlineStatusBanner({
           // their own: they follow the sentence on a wide pane, and on a narrow
           // one they wrap beneath it, starting where the text starts.
           <div className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-2">
-            <span className="text-sm font-medium text-text-primary">{title}</span>
+            <span className="min-w-0 wrap-anywhere text-sm font-medium text-text-primary">
+              {title}
+            </span>
             {description && <span className="text-xs text-text-secondary">{description}</span>}
             {controlsRow}
           </div>

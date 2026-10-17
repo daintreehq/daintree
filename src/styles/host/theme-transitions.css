@@ -1,0 +1,28 @@
+/* App theme switches drive the root snapshots from WAAPI, not CSS: `animation: none`
+   kills the UA's default crossfade so `src/lib/appThemeViewTransition.ts` can animate
+   the old snapshot itself — clipped away for a deliberate pick (runThemeReveal), faded
+   out for a programmatic one (runThemeCrossfade). Either way the old snapshot sits on
+   top and the new one is revealed underneath, so a bare startViewTransition() on the
+   document root animates nothing. */
+::view-transition-old(root),
+::view-transition-new(root) {
+  animation: none;
+  mix-blend-mode: normal;
+}
+
+::view-transition-old(root) {
+  z-index: 2;
+}
+
+::view-transition-new(root) {
+  z-index: 1;
+}
+
+@variant reduce-motion {
+  ::view-transition-group(*),
+  ::view-transition-image-pair(*),
+  ::view-transition-old(*),
+  ::view-transition-new(*) {
+    animation: none !important;
+  }
+}

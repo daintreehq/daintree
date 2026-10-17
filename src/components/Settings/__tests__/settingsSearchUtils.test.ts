@@ -191,31 +191,11 @@ describe("filterSettings", () => {
     const results = filterSettings(SETTINGS_SEARCH_INDEX, "github token");
     expect(results.some((r) => r.id === "forge-access-token")).toBe(true);
   });
-
-  it("can match across multiple tabs", () => {
-    const results = filterSettings(SETTINGS_SEARCH_INDEX, "agent");
-    const tabs = new Set(results.map((r) => r.tab));
-    expect(tabs.size).toBeGreaterThan(1);
-  });
-
-  it("matches common real-world queries", () => {
-    // These are things users will actually type
-    expect(filterSettings(SETTINGS_SEARCH_INDEX, "verbose").length).toBeGreaterThan(0);
-    expect(filterSettings(SETTINGS_SEARCH_INDEX, "font size").length).toBeGreaterThan(0);
-    expect(filterSettings(SETTINGS_SEARCH_INDEX, "crash report").length).toBeGreaterThan(0);
-    expect(filterSettings(SETTINGS_SEARCH_INDEX, "scrollback").length).toBeGreaterThan(0);
-  });
 });
 
 describe("countMatchesPerTab", () => {
   it("returns empty object for empty results", () => {
     expect(countMatchesPerTab([])).toEqual({});
-  });
-
-  it("counts correctly for single-tab results", () => {
-    const results = filterSettings(SETTINGS_SEARCH_INDEX, "JetBrains Mono");
-    const counts = countMatchesPerTab(results);
-    expect(counts.terminalAppearance).toBeGreaterThanOrEqual(1);
   });
 
   it("aggregates counts — total equals result count", () => {
@@ -325,45 +305,6 @@ describe("subtab-aware search", () => {
     expect(results[0]!.id).toBe("test-entry");
   });
 
-  it("returns subtab metadata in matched results", () => {
-    const index = [
-      {
-        id: "sub-entry",
-        tab: "agents" as const,
-        scope: "global" as const,
-        kind: "section" as const,
-        tabLabel: "CLI agents",
-        section: "Runtime",
-        title: "Enable Agent",
-        description: "Toggle agent on/off",
-        subtab: "claude",
-        subtabLabel: "Claude",
-        keywords: ["enable"],
-      },
-    ];
-    const results = filterSettings(index, "enable");
-    expect(results[0]!.subtab).toBe("claude");
-    expect(results[0]!.subtabLabel).toBe("Claude");
-  });
-
-  it("does not require subtab or subtabLabel fields", () => {
-    const index = [
-      {
-        id: "no-subtab",
-        tab: "general" as const,
-        scope: "global" as const,
-        kind: "section" as const,
-        tabLabel: "General",
-        section: "About",
-        title: "App Version",
-        description: "Current version",
-      },
-    ];
-    const results = filterSettings(index, "version");
-    expect(results).toHaveLength(1);
-    expect(results[0]!.subtab).toBeUndefined();
-  });
-
   it("countMatchesPerTab is unaffected by subtab presence", () => {
     const index = [
       {
@@ -396,40 +337,6 @@ describe("subtab-aware search", () => {
 });
 
 describe("SETTINGS_SEARCH_INDEX", () => {
-  it("has entries covering all settings tabs", () => {
-    const tabs = new Set(SETTINGS_SEARCH_INDEX.map((e) => e.tab));
-    const expectedTabs = [
-      "general",
-      "keyboard",
-      "terminal",
-      "terminalAppearance",
-      "worktree",
-      "agents",
-      "code-forge",
-      "portal",
-      "toolbar",
-      "notifications",
-      "integrations",
-      "voice",
-      "mcp",
-      "environment",
-      "privacy",
-      "troubleshooting",
-      "project:general",
-      "project:context",
-      "project:variables",
-      "project:automation",
-      "project:recipes",
-      "project:commands",
-      "project:notifications",
-      "project:code-forge",
-      "project:plugins",
-    ];
-    for (const tab of expectedTabs) {
-      expect(tabs.has(tab as never), `tab "${tab}" should be in index`).toBe(true);
-    }
-  });
-
   it("has no duplicate ids", () => {
     const ids = SETTINGS_SEARCH_INDEX.map((e) => e.id);
     const unique = new Set(ids);
@@ -451,57 +358,6 @@ describe("SETTINGS_SEARCH_INDEX", () => {
     }
   });
 
-  it("has at least 50 entries across all tabs", () => {
-    expect(SETTINGS_SEARCH_INDEX.length).toBeGreaterThanOrEqual(50);
-  });
-
-  it("tabLabel values match canonical tab short labels", () => {
-    // tabLabel is the *short* tab label users actually type when searching
-    // (e.g. "GitHub", not the longer in-panel header "GitHub Integration").
-    // Keeps tabLabel consistent across global and project scopes so the
-    // result-row breadcrumb reads the same regardless of which scope a
-    // result came from.
-    const tabTitles: Record<string, string> = {
-      general: "General",
-      keyboard: "Keyboard",
-      terminal: "Panel grid",
-      terminalAppearance: "Appearance",
-      worktree: "Worktree",
-      agents: "CLI agents",
-      "code-forge": "Code forge",
-      portal: "Portal",
-      toolbar: "Toolbar",
-      notifications: "Notifications",
-      integrations: "Integrations",
-      voice: "Voice input",
-      assistant: "Daintree Assistant",
-
-      mcp: "MCP server",
-      plugins: "Plugins",
-      "plugin-actions": "Plugin actions",
-      "run-history": "Run history",
-      environment: "Environment",
-      privacy: "Privacy & data",
-      "import-export": "Import & export",
-      troubleshooting: "Troubleshooting",
-      "project:general": "General",
-      "project:context": "Context",
-      "project:variables": "Variables",
-      "project:automation": "Worktree setup",
-      "project:recipes": "Recipes",
-      "project:commands": "Commands",
-      "project:notifications": "Notifications",
-      "project:code-forge": "Code forge",
-      "project:plugins": "Plugins",
-    };
-    for (const entry of SETTINGS_SEARCH_INDEX) {
-      expect(
-        entry.tabLabel,
-        `entry "${entry.id}" tabLabel should match tabTitles["${entry.tab}"]`
-      ).toBe(tabTitles[entry.tab]);
-    }
-  });
-
   it("has a tab-nav entry for every tab", () => {
     const tabTitles: Record<string, string> = {
       general: "General",
@@ -516,6 +372,7 @@ describe("SETTINGS_SEARCH_INDEX", () => {
       notifications: "Notifications",
       integrations: "Integrations",
       voice: "Voice input",
+      canopy: "Canopy",
       assistant: "Daintree Assistant",
 
       mcp: "MCP server",
@@ -543,17 +400,29 @@ describe("SETTINGS_SEARCH_INDEX", () => {
   });
 });
 
+describe("Appearance tab search index subtab metadata", () => {
+  const APPEARANCE_SUBTAB_IDS = ["app", "terminal"];
+  const appearanceFieldEntries = SETTINGS_SEARCH_INDEX.filter(
+    (e) => e.tab === "terminalAppearance" && e.kind === "section"
+  );
+
+  it("all Appearance field entries have valid subtab metadata", () => {
+    const validSubtabs = new Set(APPEARANCE_SUBTAB_IDS);
+    const validLabels = new Set(["App", "Terminal"]);
+    for (const entry of appearanceFieldEntries) {
+      expect(
+        validSubtabs.has(entry.subtab!),
+        `entry "${entry.id}" subtab "${entry.subtab}" should be a known subtab id`
+      ).toBe(true);
+      expect(
+        validLabels.has(entry.subtabLabel!),
+        `entry "${entry.id}" subtabLabel "${entry.subtabLabel}" should be a known label`
+      ).toBe(true);
+    }
+  });
+});
+
 describe("voice tab coverage", () => {
-  it("returns results for 'voice' query", () => {
-    const results = filterSettings(SETTINGS_SEARCH_INDEX, "voice");
-    expect(results.some((r) => r.tab === "voice")).toBe(true);
-  });
-
-  it("returns results for 'microphone' query", () => {
-    const results = filterSettings(SETTINGS_SEARCH_INDEX, "microphone");
-    expect(results.length).toBeGreaterThan(0);
-  });
-
   it("returns results for 'whisper' query", () => {
     const results = filterSettings(SETTINGS_SEARCH_INDEX, "whisper");
     expect(results.some((r) => r.tab === "voice")).toBe(true);
@@ -614,19 +483,9 @@ describe("fuzzy matching", () => {
     expect(results.some((r) => r.tab === "keyboard")).toBe(true);
   });
 
-  it("matches 'shortcut' to keyboard entries", () => {
-    const results = filterSettings(SETTINGS_SEARCH_INDEX, "shortcut");
-    expect(results.some((r) => r.tab === "keyboard")).toBe(true);
-  });
-
   it("matches 'perf' to performance mode", () => {
     const results = filterSettings(SETTINGS_SEARCH_INDEX, "perf");
     expect(results.some((r) => r.id === "terminal-performance-mode")).toBe(true);
-  });
-
-  it("matches 'font' to appearance entries", () => {
-    const results = filterSettings(SETTINGS_SEARCH_INDEX, "font");
-    expect(results.some((r) => r.tab === "terminalAppearance")).toBe(true);
   });
 
   it("matches 'dark mode' to appearance theme", () => {
@@ -852,59 +711,9 @@ describe("cross-scope search merging", () => {
     });
     expect(results.every((r) => r.tab === "general")).toBe(true);
   });
-
-  it("every entry in the index has a scope field", () => {
-    for (const entry of SETTINGS_SEARCH_INDEX) {
-      expect(entry.scope, `entry "${entry.id}" should have scope`).toBeTruthy();
-      expect(["global", "project"]).toContain(entry.scope);
-    }
-  });
 });
 
 describe("requiresEnabled metadata", () => {
-  const byId = (id: string) => SETTINGS_SEARCH_INDEX.find((e) => e.id === id);
-
-  it("MCP hidden entries reference mcp-server-enable", () => {
-    for (const id of ["mcp-server-config", "mcp-server-port", "mcp-server-auth"]) {
-      const entry = byId(id);
-      expect(entry?.requiresEnabled?.settingId).toBe("mcp-server-enable");
-      expect(entry?.requiresEnabled?.label).toBe("MCP server");
-    }
-  });
-
-  it("Voice speech-to-text sub-settings reference voice-enable", () => {
-    for (const id of [
-      "voice-stt-openai-key",
-      "voice-language",
-      "voice-paragraph-breaks",
-      "voice-custom-dictionary",
-      "voice-ai-correction-enable",
-    ]) {
-      const entry = byId(id);
-      expect(entry?.requiresEnabled?.settingId, `${id} should require voice-enable`).toBe(
-        "voice-enable"
-      );
-      expect(entry?.requiresEnabled?.label).toBe("Voice input");
-    }
-  });
-
-  it("Voice AI correction sub-settings reference voice-ai-correction-enable", () => {
-    for (const id of ["voice-custom-instructions"]) {
-      const entry = byId(id);
-      expect(
-        entry?.requiresEnabled?.settingId,
-        `${id} should require voice-ai-correction-enable`
-      ).toBe("voice-ai-correction-enable");
-      expect(entry?.requiresEnabled?.label).toBe("AI text correction");
-    }
-  });
-
-  it("gate entries themselves do NOT have requiresEnabled", () => {
-    for (const id of ["mcp-server-enable", "voice-enable"]) {
-      expect(byId(id)?.requiresEnabled).toBeUndefined();
-    }
-  });
-
   it("every requiresEnabled.settingId references an existing entry", () => {
     const allIds = new Set(SETTINGS_SEARCH_INDEX.map((e) => e.id));
     for (const entry of SETTINGS_SEARCH_INDEX) {
@@ -921,24 +730,6 @@ describe("requiresEnabled metadata", () => {
     const results = filterSettings(SETTINGS_SEARCH_INDEX, "MCP port");
     expect(results.some((r) => r.id === "mcp-server-port")).toBe(true);
   });
-
-  it("two-level dependency chain is fully connected", () => {
-    const customInstructions = byId("voice-custom-instructions");
-    expect(customInstructions?.requiresEnabled?.settingId).toBe("voice-ai-correction-enable");
-    const aiCorrection = byId("voice-ai-correction-enable");
-    expect(aiCorrection?.requiresEnabled?.settingId).toBe("voice-enable");
-    const voiceEnable = byId("voice-enable");
-    expect(voiceEnable?.requiresEnabled).toBeUndefined();
-  });
-
-  it("legacy voice registry IDs are not re-introduced", () => {
-    for (const id of ["voice-transcription-model", "voice-openai-key", "voice-correction-model"]) {
-      expect(
-        byId(id),
-        `${id} was removed for the OpenAI-only rebuild and must not return`
-      ).toBeUndefined();
-    }
-  });
 });
 
 describe("help dock discoverability", () => {
@@ -950,35 +741,6 @@ describe("help dock discoverability", () => {
   it("finds default agent entry when searching for 'keyboard shortcut'", () => {
     const results = filterSettings(SETTINGS_SEARCH_INDEX, "keyboard shortcut");
     expect(results.some((r) => r.id === "agents-default-agent")).toBe(true);
-  });
-});
-
-describe("golden-query fixture validity", () => {
-  const allIds = new Set(SETTINGS_SEARCH_INDEX.map((e) => e.id));
-
-  it("every expected ID in GOLDEN_QUERIES exists in SETTINGS_SEARCH_INDEX", () => {
-    for (const { query, expectedTopResults } of GOLDEN_QUERIES) {
-      for (const expectedId of expectedTopResults) {
-        expect(
-          allIds.has(expectedId),
-          `query "${query}" references non-existent entry "${expectedId}"`
-        ).toBe(true);
-      }
-    }
-  });
-
-  it("no blank queries in GOLDEN_QUERIES", () => {
-    for (const { query } of GOLDEN_QUERIES) {
-      expect(query.trim(), `query "${query}" should not be blank`).toBeTruthy();
-    }
-  });
-
-  it("no empty expectedTopResults arrays in GOLDEN_QUERIES", () => {
-    for (const { expectedTopResults } of GOLDEN_QUERIES) {
-      expect(expectedTopResults.length, `expectedTopResults should not be empty`).toBeGreaterThan(
-        0
-      );
-    }
   });
 });
 

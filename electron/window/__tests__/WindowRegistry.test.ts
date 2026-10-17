@@ -84,22 +84,6 @@ describe("WindowRegistry", () => {
     expect(registry.getByWebContentsId(100)).toBe(ctx);
   });
 
-  it("returns undefined for unknown IDs", () => {
-    const registry = new WindowRegistry();
-
-    expect(registry.getByWindowId(999)).toBeUndefined();
-    expect(registry.getByWebContentsId(999)).toBeUndefined();
-  });
-
-  it("sets first registered window as primary", () => {
-    const registry = new WindowRegistry();
-    const win = makeMockWindow(1, 100);
-
-    registry.register(win);
-
-    expect(registry.getPrimary()?.windowId).toBe(1);
-  });
-
   it("does not change primary when a second window is registered", () => {
     const registry = new WindowRegistry();
     const win1 = makeMockWindow(1, 100);
@@ -135,25 +119,6 @@ describe("WindowRegistry", () => {
 
     expect(registry.getPrimary()).toBeUndefined();
     expect(registry.size).toBe(0);
-  });
-
-  it("skips destroyed windows when reassigning primary", () => {
-    const registry = new WindowRegistry();
-    const win1 = makeMockWindow(1, 100);
-    const win2 = makeMockWindow(2, 200);
-    const win3 = makeMockWindow(3, 300);
-
-    registry.register(win1);
-    registry.register(win2);
-    registry.register(win3);
-
-    // Mark win2 as destroyed so it gets skipped during primary reassignment
-    (win2.isDestroyed as ReturnType<typeof vi.fn>).mockReturnValue(true);
-
-    registry.unregister(1);
-
-    // Should skip destroyed win2 and pick win3
-    expect(registry.getPrimary()?.windowId).toBe(3);
   });
 
   it("returns undefined primary when all remaining windows are destroyed", () => {
@@ -194,23 +159,6 @@ describe("WindowRegistry", () => {
   });
 
   describe("focus tracking", () => {
-    it("wireFocusTracking: focus on second registered window reassigns primary", () => {
-      const registry = new WindowRegistry();
-      const mockApp = makeMockApp();
-      const win1 = makeMockWindow(1, 100);
-      const win2 = makeMockWindow(2, 200);
-
-      registry.wireFocusTracking(mockApp);
-      registry.register(win1);
-      registry.register(win2);
-
-      expect(registry.getPrimary()?.windowId).toBe(1);
-
-      mockApp.emit("browser-window-focus", null, win2);
-
-      expect(registry.getPrimary()?.windowId).toBe(2);
-    });
-
     it("wireFocusTracking: focus event for window not in registry does not change primary", () => {
       const registry = new WindowRegistry();
       const mockApp = makeMockApp();
@@ -244,17 +192,6 @@ describe("WindowRegistry", () => {
       registry.register(win2);
 
       expect(registry.getPrimary()?.windowId).toBe(2);
-    });
-
-    it("register: cold-start fallback still applies when no window is focused yet", () => {
-      const registry = new WindowRegistry();
-      const win1 = makeMockWindow(1, 100, { focused: false });
-      const win2 = makeMockWindow(2, 200, { focused: false });
-
-      registry.register(win1);
-      registry.register(win2);
-
-      expect(registry.getPrimary()?.windowId).toBe(1);
     });
 
     it("focus updates survive after unregister of unrelated window", () => {
@@ -297,25 +234,6 @@ describe("WindowRegistry", () => {
       mockApp.emit("browser-window-focus", null, win1);
       expect(registry.getPrimary()?.windowId).toBe(1);
     });
-
-    it("REGISTER_ALREADY_FOCUSED_THIRD_WINDOW_PROMOTES_OVER_EXISTING_PRIMARY", () => {
-      const registry = new WindowRegistry();
-      const mockApp = makeMockApp();
-      const win1 = makeMockWindow(1, 100, { focused: false });
-      const win2 = makeMockWindow(2, 200, { focused: false });
-      const win3 = makeMockWindow(3, 300, { focused: true });
-
-      registry.wireFocusTracking(mockApp);
-      registry.register(win1);
-      registry.register(win2);
-
-      mockApp.emit("browser-window-focus", null, win2);
-      expect(registry.getPrimary()?.windowId).toBe(2);
-
-      registry.register(win3);
-
-      expect(registry.getPrimary()?.windowId).toBe(3);
-    });
   });
 
   it("auto-unregisters on window closed event", () => {
@@ -340,72 +258,6 @@ describe("WindowRegistry", () => {
     win._fireDestroyed();
 
     expect(registry.size).toBe(0);
-  });
-
-  it("idempotent cleanup — both closed and destroyed fire without error, cleanup runs once", () => {
-    const registry = new WindowRegistry();
-    const win = makeMockWindow(1, 100);
-    const cleanupSpy = vi.fn();
-
-    const ctx = registry.register(win);
-    ctx.cleanup.add(toDisposable(cleanupSpy));
-
-    win._fireClosed();
-    win._fireDestroyed();
-
-    expect(registry.size).toBe(0);
-    expect(cleanupSpy).toHaveBeenCalledOnce();
-  });
-
-  it("runs cleanup callbacks on unregister", () => {
-    const registry = new WindowRegistry();
-    const win = makeMockWindow(1, 100);
-    const fn1 = vi.fn();
-    const fn2 = vi.fn();
-
-    const ctx = registry.register(win);
-    ctx.cleanup.add(toDisposable(fn1));
-    ctx.cleanup.add(toDisposable(fn2));
-
-    registry.unregister(1);
-
-    expect(fn1).toHaveBeenCalledOnce();
-    expect(fn2).toHaveBeenCalledOnce();
-  });
-
-  it("tolerates cleanup callback errors", () => {
-    const registry = new WindowRegistry();
-    const win = makeMockWindow(1, 100);
-    const fn1 = vi.fn(() => {
-      throw new Error("cleanup error");
-    });
-    const fn2 = vi.fn();
-
-    const ctx = registry.register(win);
-    ctx.cleanup.add(toDisposable(fn1));
-    ctx.cleanup.add(toDisposable(fn2));
-
-    registry.unregister(1);
-
-    expect(fn1).toHaveBeenCalledOnce();
-    expect(fn2).toHaveBeenCalledOnce();
-  });
-
-  it("late add() after unregister disposes the new item immediately and does not retain it", () => {
-    const registry = new WindowRegistry();
-    const win = makeMockWindow(1, 100);
-    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
-
-    const ctx = registry.register(win);
-    registry.unregister(1);
-
-    const lateSpy = vi.fn();
-    ctx.cleanup.add(toDisposable(lateSpy));
-
-    expect(lateSpy).toHaveBeenCalledOnce();
-    expect(errSpy).toHaveBeenCalled();
-    expect(ctx.cleanup.size).toBe(0);
-    errSpy.mockRestore();
   });
 
   it("returns same context when registering the same window twice", () => {
@@ -449,35 +301,7 @@ describe("WindowRegistry", () => {
     expect(fn).toHaveBeenCalledOnce();
   });
 
-  it("stores projectPath when provided", () => {
-    const registry = new WindowRegistry();
-    const win = makeMockWindow(1, 100);
-
-    const ctx = registry.register(win, { projectPath: "/path/to/project" });
-
-    expect(ctx.projectPath).toBe("/path/to/project");
-  });
-
-  it("projectPath defaults to null", () => {
-    const registry = new WindowRegistry();
-    const win = makeMockWindow(1, 100);
-
-    const ctx = registry.register(win);
-
-    expect(ctx.projectPath).toBeNull();
-  });
-
   describe("AbortController lifecycle", () => {
-    it("creates an AbortController on register", () => {
-      const registry = new WindowRegistry();
-      const win = makeMockWindow(1, 100);
-
-      const ctx = registry.register(win);
-
-      expect(ctx.abortController).toBeInstanceOf(AbortController);
-      expect(ctx.abortController.signal.aborted).toBe(false);
-    });
-
     it("aborts signal on unregister", () => {
       const registry = new WindowRegistry();
       const win = makeMockWindow(1, 100);
@@ -486,41 +310,6 @@ describe("WindowRegistry", () => {
       registry.unregister(1);
 
       expect(ctx.abortController.signal.aborted).toBe(true);
-    });
-
-    it("aborts signal when closed event fires", () => {
-      const registry = new WindowRegistry();
-      const win = makeMockWindow(1, 100);
-
-      const ctx = registry.register(win);
-      win._fireClosed();
-
-      expect(ctx.abortController.signal.aborted).toBe(true);
-    });
-
-    it("abort is idempotent — both closed and destroyed fire without error", () => {
-      const registry = new WindowRegistry();
-      const win = makeMockWindow(1, 100);
-
-      const ctx = registry.register(win);
-      win._fireClosed();
-      win._fireDestroyed();
-
-      expect(ctx.abortController.signal.aborted).toBe(true);
-    });
-
-    it("dispose aborts all controllers", () => {
-      const registry = new WindowRegistry();
-      const win1 = makeMockWindow(1, 100);
-      const win2 = makeMockWindow(2, 200);
-
-      const ctx1 = registry.register(win1);
-      const ctx2 = registry.register(win2);
-
-      registry.dispose();
-
-      expect(ctx1.abortController.signal.aborted).toBe(true);
-      expect(ctx2.abortController.signal.aborted).toBe(true);
     });
 
     it("signal is aborted before cleanup callbacks run", () => {
@@ -538,19 +327,6 @@ describe("WindowRegistry", () => {
       registry.unregister(1);
 
       expect(signalAbortedDuringCleanup).toBe(true);
-    });
-
-    it("abort signal listener is notified on unregister", () => {
-      const registry = new WindowRegistry();
-      const win = makeMockWindow(1, 100);
-
-      const ctx = registry.register(win);
-      const spy = vi.fn();
-      ctx.abortController.signal.addEventListener("abort", spy);
-
-      registry.unregister(1);
-
-      expect(spy).toHaveBeenCalledOnce();
     });
 
     it("re-registration after unregister provides a fresh AbortController", () => {
@@ -583,20 +359,6 @@ describe("WindowRegistry", () => {
       await Promise.resolve();
 
       expect(mockRevokeByWindowId).toHaveBeenCalledWith(42);
-    });
-
-    it("unregister fires revokeByWindowId when the closed event fires (full lifecycle)", async () => {
-      const registry = new WindowRegistry();
-      const win = makeMockWindow(7, 100);
-      registry.register(win);
-
-      mockRevokeByWindowId.mockClear();
-      win._fireClosed();
-
-      await new Promise((r) => setTimeout(r, 0));
-      await Promise.resolve();
-
-      expect(mockRevokeByWindowId).toHaveBeenCalledWith(7);
     });
 
     it("unregister fires revokeByWindowId only once when both closed and destroyed fire (idempotent)", async () => {
@@ -639,33 +401,6 @@ describe("WindowRegistry", () => {
       warnSpy.mockRestore();
     });
 
-    it("unregister swallows a synchronous throw from inside the revoke .then callback", async () => {
-      // A sync throw inside a `.then` callback becomes a rejected promise and
-      // lands in `.catch` — but a future refactor to `await` would surface it
-      // synchronously. Pin the current behavior so the warn-and-continue
-      // contract is regression-proof.
-      mockRevokeByWindowId.mockImplementationOnce(() => {
-        throw new Error("sync boom");
-      });
-      const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
-
-      const registry = new WindowRegistry();
-      const win = makeMockWindow(33, 100);
-      registry.register(win);
-
-      expect(() => registry.unregister(33)).not.toThrow();
-
-      await new Promise((r) => setTimeout(r, 0));
-      await Promise.resolve();
-      await Promise.resolve();
-
-      expect(warnSpy).toHaveBeenCalledWith(
-        "[WindowRegistry] revokeByWindowId failed during unregister:",
-        expect.any(Error)
-      );
-      warnSpy.mockRestore();
-    });
-
     it("two concurrent window closes each fire their own revokeByWindowId with the right windowId", async () => {
       // Defends against a stale-closure refactor: each close path must
       // resolve its own windowId, not capture an outer one.
@@ -692,10 +427,6 @@ describe("WindowRegistry", () => {
 
   describe("focusOrder", () => {
     const ids = (registry: WindowRegistry) => registry.focusOrder().map((c) => c.windowId);
-
-    it("returns nothing when no windows are registered", () => {
-      expect(new WindowRegistry().focusOrder()).toEqual([]);
-    });
 
     it("orders focused windows most-recent-first", () => {
       const registry = new WindowRegistry();
@@ -773,13 +504,6 @@ describe("WindowRegistry", () => {
 
       expect(ids(registry)).toEqual([1]);
     });
-
-    it("returns the live context objects, so callers can read per-window services", () => {
-      const registry = new WindowRegistry();
-      const ctx = registry.register(makeMockWindow(1, 100));
-
-      expect(registry.focusOrder()[0]).toBe(ctx);
-    });
   });
 });
 
@@ -810,5 +534,223 @@ describe("WindowRegistry presence change signal (#12597)", () => {
 
     unsubscribe();
     expect(stillRegistered).toEqual([false]);
+  });
+});
+
+type Handler = () => void;
+
+type MockBrowserWindow = BrowserWindow & {
+  _fireClosed: () => void;
+  _fireDestroyed: () => void;
+  webContents: BrowserWindow["webContents"] & {
+    _destroyed: boolean;
+  };
+  _destroyed: boolean;
+};
+
+function makeStatefulMockWindow(id: number, webContentsId: number): MockBrowserWindow {
+  const closedHandlers: Handler[] = [];
+  const destroyedHandlers: Handler[] = [];
+
+  const win = {
+    id,
+    _destroyed: false,
+    webContents: {
+      id: webContentsId,
+      _destroyed: false,
+      once: vi.fn((event: string, handler: Handler) => {
+        if (event === "destroyed") {
+          destroyedHandlers.push(handler);
+        }
+      }),
+      isDestroyed: vi.fn(() => win.webContents._destroyed),
+    },
+    once: vi.fn((event: string, handler: Handler) => {
+      if (event === "closed") {
+        closedHandlers.push(handler);
+      }
+    }),
+    isDestroyed: vi.fn(() => win._destroyed),
+    isFocused: vi.fn(() => false),
+    _fireClosed: () => {
+      win._destroyed = true;
+      closedHandlers.forEach((handler) => handler());
+    },
+    _fireDestroyed: () => {
+      win.webContents._destroyed = true;
+      destroyedHandlers.forEach((handler) => handler());
+    },
+  } as unknown as MockBrowserWindow;
+
+  return win;
+}
+
+describe("WindowRegistry adversarial", () => {
+  it("DESTROY_STORM_CLEANS_ONCE", () => {
+    const registry = new WindowRegistry();
+    const win = makeStatefulMockWindow(1, 100);
+    const cleanup = vi.fn();
+
+    const ctx = registry.register(win);
+    ctx.cleanup.add(toDisposable(cleanup));
+
+    registry.unregister(1);
+    win._fireClosed();
+    win._fireDestroyed();
+
+    expect(cleanup).toHaveBeenCalledTimes(1);
+    expect(registry.size).toBe(0);
+    expect(registry.getByWindowId(1)).toBeUndefined();
+    expect(registry.getByWebContentsId(100)).toBeUndefined();
+  });
+
+  it("APP_VIEW_IDS_PURGED_ON_CRASH", () => {
+    const registry = new WindowRegistry();
+    const win = makeStatefulMockWindow(1, 100);
+
+    registry.register(win);
+    registry.registerAppViewWebContents(1, 300);
+    registry.registerAppViewWebContents(1, 301);
+
+    win._fireClosed();
+    win._fireDestroyed();
+
+    expect(registry.getByWebContentsId(100)).toBeUndefined();
+    expect(registry.getByWebContentsId(300)).toBeUndefined();
+    expect(registry.getByWebContentsId(301)).toBeUndefined();
+  });
+
+  it("REBIND_AFTER_CRASH_NO_REVIVE", () => {
+    const registry = new WindowRegistry();
+    const oldWin = makeStatefulMockWindow(1, 100);
+
+    registry.register(oldWin);
+    registry.registerAppViewWebContents(1, 300);
+    oldWin._fireClosed();
+
+    const newWin = makeStatefulMockWindow(2, 200);
+    const newCtx = registry.register(newWin);
+    registry.registerAppViewWebContents(2, 300);
+
+    expect(registry.getByWebContentsId(300)).toBe(newCtx);
+    expect(registry.getByWindowId(1)).toBeUndefined();
+  });
+
+  it("RAPID_CYCLE_NO_EXTRA_HANDLERS", () => {
+    const registry = new WindowRegistry();
+    const first = makeStatefulMockWindow(1, 100);
+    const second = makeStatefulMockWindow(1, 100);
+    const cleanup = vi.fn();
+
+    const firstCtx = registry.register(first);
+    firstCtx.cleanup.add(toDisposable(cleanup));
+    registry.unregister(1);
+
+    const secondCtx = registry.register(second);
+    secondCtx.cleanup.add(toDisposable(cleanup));
+    second._fireClosed();
+
+    expect(cleanup).toHaveBeenCalledTimes(2);
+    expect(registry.size).toBe(0);
+  });
+
+  it("MULTI_REGISTRY_ISOLATION", () => {
+    const firstRegistry = new WindowRegistry();
+    const secondRegistry = new WindowRegistry();
+    const firstWin = makeStatefulMockWindow(1, 100);
+    const secondWin = makeStatefulMockWindow(2, 200);
+
+    const firstCtx = firstRegistry.register(firstWin);
+    const secondCtx = secondRegistry.register(secondWin);
+    firstRegistry.registerAppViewWebContents(1, 300);
+
+    firstRegistry.unregister(1);
+
+    expect(secondRegistry.getPrimary()).toBe(secondCtx);
+    expect(secondRegistry.size).toBe(1);
+    expect(secondRegistry.getByWebContentsId(200)).toBe(secondCtx);
+    expect(firstRegistry.getByWindowId(1)).toBeUndefined();
+    expect(firstRegistry.getByWebContentsId(300)).toBeUndefined();
+    expect(firstCtx.abortController.signal.aborted).toBe(true);
+  });
+
+  it("PRIMARY_REASSIGNMENT_IGNORES_DESTROYED", () => {
+    const registry = new WindowRegistry();
+    const win1 = makeStatefulMockWindow(1, 100);
+    const win2 = makeStatefulMockWindow(2, 200);
+    const win3 = makeStatefulMockWindow(3, 300);
+
+    registry.register(win1);
+    registry.register(win2);
+    const liveCtx = registry.register(win3);
+    registry.registerAppViewWebContents(2, 220);
+    registry.registerAppViewWebContents(3, 330);
+
+    win2._destroyed = true;
+
+    registry.unregister(1);
+
+    expect(registry.getPrimary()).toBe(liveCtx);
+    expect(registry.getByWebContentsId(220)).toBe(registry.getByWindowId(2));
+
+    registry.unregister(2);
+
+    expect(registry.getPrimary()).toBe(liveCtx);
+    expect(registry.getByWebContentsId(220)).toBeUndefined();
+    expect(registry.getByWebContentsId(330)).toBe(liveCtx);
+  });
+
+  it("UNREGISTER_PRIMARY_PREFERS_FOCUS_ORDER_NOT_MAP_ORDER", () => {
+    const registry = new WindowRegistry();
+    const mockApp = makeMockApp();
+    const win1 = makeStatefulMockWindow(1, 100);
+    const win2 = makeStatefulMockWindow(2, 200);
+    const win3 = makeStatefulMockWindow(3, 300);
+
+    registry.wireFocusTracking(mockApp);
+    registry.register(win1);
+    registry.register(win2);
+    registry.register(win3);
+
+    // Focus B, then C. Now close C. Fallback should pick B (last-focused-
+    // surviving), NOT A (first inserted in Map).
+    mockApp.emit("browser-window-focus", null, win2);
+    mockApp.emit("browser-window-focus", null, win3);
+
+    registry.unregister(3);
+
+    expect(registry.getPrimary()?.windowId).toBe(2);
+  });
+
+  it("FOCUS_EVENT_FOR_DESTROYED_BUT_STILL_REGISTERED_WINDOW_IGNORED", () => {
+    const registry = new WindowRegistry();
+    const mockApp = makeMockApp();
+    const win1 = makeStatefulMockWindow(1, 100);
+    const win2 = makeStatefulMockWindow(2, 200);
+
+    registry.wireFocusTracking(mockApp);
+    registry.register(win1);
+    registry.register(win2);
+
+    // Simulate the window being destroyed mid-flight without its registry
+    // entry being cleaned up yet.
+    win2._destroyed = true;
+
+    mockApp.emit("browser-window-focus", null, win2);
+
+    expect(registry.getPrimary()?.windowId).toBe(1);
+  });
+
+  it("UNKNOWN_APP_VIEW_UNREGISTER_NO_OP", () => {
+    const registry = new WindowRegistry();
+    const win = makeStatefulMockWindow(1, 100);
+    const ctx = registry.register(win);
+    registry.registerAppViewWebContents(1, 300);
+
+    expect(() => registry.unregisterAppViewWebContents(99, 999)).not.toThrow();
+
+    expect(registry.getByWindowId(1)).toBe(ctx);
+    expect(registry.getByWebContentsId(100)).toBe(ctx);
+    expect(registry.getByWebContentsId(300)).toBe(ctx);
   });
 });

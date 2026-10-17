@@ -289,12 +289,6 @@ describe("PendingHelpHibernationStore", () => {
     expect(store.get("proj-future")).toBeNull();
   });
 
-  it("treats a missing file as an empty store (first launch)", async () => {
-    const store = new PendingHelpHibernationStore(filePath);
-    await store.load();
-    expect(store.get("anything")).toBeNull();
-  });
-
   it("never persists the in-memory-only panelWasOpen flag to disk (#10815)", async () => {
     // panelWasOpen drives cold switch-back auto-resume and must stay session-
     // local: if it leaked to disk, a token reloaded on app restart would

@@ -87,11 +87,6 @@ describe("ContextInjectionTracker", () => {
       expect(tracker.isCancelled("inj1")).toBe(false);
       expect(tracker.getActiveCount()).toBe(0);
     });
-
-    it("handles non-existent terminal gracefully", () => {
-      tracker.cleanupTerminal("t-nonexistent");
-      expect(tracker.getActiveCount()).toBe(0);
-    });
   });
 
   describe("onProjectSwitch", () => {

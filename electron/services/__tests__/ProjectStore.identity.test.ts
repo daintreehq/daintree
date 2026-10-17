@@ -28,7 +28,9 @@ const CREATE_TABLES_SQL = `
     stats_pr_count INTEGER,
     stats_provider_id TEXT,
     stats_last_updated INTEGER,
-    git_backed INTEGER
+    git_backed INTEGER,
+    archived_at INTEGER,
+    group_id TEXT
   );
   CREATE TABLE IF NOT EXISTS app_state (
     key TEXT PRIMARY KEY,
@@ -320,6 +322,24 @@ describe("project identity across folder moves", () => {
       expect(reopened.path).toBe(canonicalMoved);
       // One project, not two — the old row was repointed, not orphaned.
       expect(store.getAllProjects()).toHaveLength(1);
+    });
+
+    it("never adopts a moved project's identity for a folder cloned from another machine", async () => {
+      const original = await makeDir("original-fresh");
+      const registered = await store.addProject(original);
+      await writeAnchor(original, registered.id);
+      const moved = path.join(tmpRoot, "cloned-elsewhere");
+      await fs.promises.rename(original, moved);
+      const canonicalMoved = await fs.promises.realpath(moved);
+
+      const cloned = await store.addProject(canonicalMoved, { fresh: true });
+
+      expect(cloned.id).not.toBe(registered.id);
+      expect(store.getAllProjects()).toHaveLength(2);
+      // Nor a project row still registered at the folder.
+      await expect(store.addProject(canonicalMoved, { fresh: true })).rejects.toMatchObject({
+        code: "VALIDATION",
+      });
     });
 
     it("does not copy or re-key state when adopting a moved folder", async () => {

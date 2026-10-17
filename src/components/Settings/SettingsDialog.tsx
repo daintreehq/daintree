@@ -13,6 +13,8 @@ import {
   type KeyboardEvent as ReactKeyboardEvent,
 } from "react";
 import { InsetSurface } from "@/components/ui/insetSurface";
+import { SettingsSubpageProvider, type SettingsSubpage } from "./SettingsSubpage";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { isPointerClaimed } from "@/lib/pointerClaim";
 import { logError } from "@/utils/logger";
 import {
@@ -25,7 +27,7 @@ import {
   usePreferencesStore,
   useSettingsStore,
 } from "@/store";
-import { Search, ChevronRight, ChevronDown, Info } from "lucide-react";
+import { Search, ChevronRight, ChevronDown, ChevronLeft, Info } from "lucide-react";
 import { DismissButton } from "@/components/ui/DismissButton";
 import { SearchField } from "@/components/ui/SearchField";
 import { KbdChord } from "@/components/ui/Kbd";
@@ -57,6 +59,7 @@ import {
   isSettingsTabLoaded,
   scopeForTab,
   contentScopeForTab,
+  ownerForTab,
   isSettingsTab,
   type SettingsTab,
   type SettingsScope,
@@ -86,6 +89,7 @@ import { SettingsFlushProvider, SettingsFlushContext } from "./SettingsFlushRegi
 import { useProgressiveRenderLimit } from "@/hooks/useProgressiveRenderLimit";
 import { COUNT_BADGE_CLASS } from "@/components/ui/badge";
 import { pluralize, pluralNoun } from "@/lib/pluralize";
+import { settingsOwnerHeaderLabel, useRemoteHostName } from "@/hooks/useSettingsOwner";
 
 let rememberedTab: SettingsTab = "general";
 let rememberedProjectTab: SettingsTab = "project:general";
@@ -222,6 +226,18 @@ function SettingsDialogInner({
   const initialTab = defaultTab ?? rememberedTab;
   const [activeScope, setActiveScope] = useState<SettingsScope>(scopeForTab(initialTab));
   const [activeTab, setActiveTab] = useState<SettingsTab>(initialTab);
+  // A page opened inside a tab (one host's details) titles the header and
+  // carries its back control there. Visited tabs stay mounted, so it belongs
+  // to the tab that opened it and shows only while that tab does.
+  const [subpage, setSubpage] = useState<(SettingsSubpage & { tab: SettingsTab }) | null>(null);
+  const activeTabRef = useRef(activeTab);
+  useLayoutEffect(() => {
+    activeTabRef.current = activeTab;
+  }, [activeTab]);
+  const [setTabSubpage] = useState(
+    () => (next: SettingsSubpage | null) =>
+      setSubpage(next ? { ...next, tab: activeTabRef.current } : null)
+  );
   const [visitedTabs, setVisitedTabs] = useState<Set<SettingsTab>>(
     () => new Set<SettingsTab>([initialTab])
   );
@@ -529,6 +545,7 @@ function SettingsDialogInner({
   const matchCounts = useMemo(() => countMatchesPerTab(searchResults), [searchResults]);
 
   const isSearching = searchQuery.trim().length > 0;
+  const shownSubpage = subpage && subpage.tab === activeTab && !isSearching ? subpage : null;
 
   const [panelSettled, markPanelInteracted] = usePanelSettled(
     `${isOpen}|${isSearching}|${activeTab}|${activeSubtabs[activeTab] ?? ""}`
@@ -740,7 +757,7 @@ function SettingsDialogInner({
       // control, so every open painted a focus ring on "Global" and typing did nothing.
       initialFocus="none"
       maxHeight="h-[75vh]"
-      className="settings-shell min-h-[500px] max-h-[800px]"
+      className="settings-shell min-h-[min(500px,100dvh_-_2rem)] max-h-[800px]"
     >
       <div className="flex h-full overflow-hidden">
         <div
@@ -845,234 +862,279 @@ function SettingsDialogInner({
           </div>
         </div>
 
-        <div className="settings-shell flex-1 flex flex-col min-w-0">
-          <AppDialog.Header>
-            <AppDialog.Title
-              as="h3"
-              icon={
-                isSearching ? (
-                  <Search className="w-5 h-5 text-text-secondary" />
-                ) : (
-                  tabIcons[activeTab]
-                )
-              }
-            >
-              {/* The title is what aria-labelledby points at, so the scope has to be part
+        <SettingsSubpageProvider value={setTabSubpage}>
+          <div className="settings-shell flex-1 flex flex-col min-w-0">
+            <AppDialog.Header>
+              <div className="flex min-w-0 flex-1 items-center">
+                {shownSubpage && (
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <Button
+                        variant="ghost"
+                        size="icon-sm"
+                        className="-ml-2 mr-1 shrink-0"
+                        aria-label={`Back to ${shownSubpage.parentLabel}`}
+                        onClick={(event) => shownSubpage.onBack(event.detail === 0)}
+                        data-testid="settings-subpage-back"
+                      >
+                        <ChevronLeft aria-hidden="true" />
+                      </Button>
+                    </TooltipTrigger>
+                    <TooltipContent side="bottom">
+                      Back to {shownSubpage.parentLabel}
+                    </TooltipContent>
+                  </Tooltip>
+                )}
+                <AppDialog.Title
+                  as="h3"
+                  icon={
+                    shownSubpage ? undefined : isSearching ? (
+                      <Search className="w-5 h-5 text-text-secondary" />
+                    ) : (
+                      tabIcons[activeTab]
+                    )
+                  }
+                >
+                  {/* The title is what aria-labelledby points at, so the scope has to be part
                   of it — otherwise opening the modal announces "General, dialog" and never
                   says whose General. It stays screen-reader-only: a second visible heading
                   over every section reads as a double title, and the nav the user just
                   clicked through is the sighted answer to the same question. */}
-              <span className="sr-only">
-                {scopeAnnouncement(headerScope, hasProject ? projectLabel : null)}
-              </span>
-              {isSearching ? "Search results" : tabTitles[activeTab]}
-              {headerScope !== activeScope && (
-                // The one exception to "the nav names the scope": a tab filed under
-                // Global whose controls all write to the project. Hidden from the
-                // accessible name, which already says so through the sr-only clause.
-                <span aria-hidden="true" className="flex font-normal">
-                  <ScopeChip scope={headerScope} projectLabel={hasProject ? projectLabel : null} />
-                </span>
-              )}
-            </AppDialog.Title>
-            <AppDialog.CloseButton aria-label="Close settings" />
-          </AppDialog.Header>
+                  <span className="sr-only">
+                    {scopeAnnouncement(headerScope, hasProject ? projectLabel : null)}
+                  </span>
+                  {isSearching ? (
+                    "Search results"
+                  ) : shownSubpage ? (
+                    <>
+                      <span className="font-normal text-text-secondary">
+                        {tabTitles[activeTab]}
+                      </span>
+                      <ChevronRight
+                        className="h-4 w-4 shrink-0 text-text-secondary"
+                        aria-hidden="true"
+                      />
+                      <span className="min-w-0 truncate">{shownSubpage.title}</span>
+                    </>
+                  ) : (
+                    tabTitles[activeTab]
+                  )}
+                  {headerScope !== activeScope && (
+                    // The one exception to "the nav names the scope": a tab filed under
+                    // Global whose controls all write to the project. Hidden from the
+                    // accessible name, which already says so through the sr-only clause.
+                    <span aria-hidden="true" className="flex font-normal">
+                      <ScopeChip
+                        scope={headerScope}
+                        projectLabel={hasProject ? projectLabel : null}
+                      />
+                    </span>
+                  )}
+                  {/* Search results have no single owner to name. */}
+                  {!isSearching && <SettingsOwnerHeaderChip tab={activeTab} />}
+                </AppDialog.Title>
+              </div>
+              <AppDialog.CloseButton aria-label="Close settings" />
+            </AppDialog.Header>
 
-          {/* Project trouble rides above the scrollport, not inside it: an autosave
+            {/* Project trouble rides above the scrollport, not inside it: an autosave
               failure raised while the user is deep in a long form would otherwise
               render off-screen, and a message that scrolls away is a message the
               user never sees. Naming the project keeps the failure attached to the
               thing it happened to. */}
-          {activeScope === "project" && projectId && (
-            <div className="px-6 pt-6 space-y-2 shrink-0 empty:hidden">
-              {projectForm.projectError && (
-                <SettingsLoadErrorBanner
-                  title={`Couldn't load settings for ${projectLabel}`}
-                  message={projectForm.projectError}
-                  onRetry={projectForm.refreshProjectSettings}
-                />
-              )}
-              {projectForm.projectAutoSaveError && (
-                <SettingsLoadErrorBanner
-                  title={`Couldn't save settings for ${projectLabel}`}
-                  message={projectForm.projectAutoSaveError}
-                  onRetry={() => void projectForm.saveNow()}
-                />
-              )}
-              {showProjectLoading && (
-                <p className="text-xs text-text-secondary" aria-live="polite">
-                  Loading settings for {projectLabel}…
-                </p>
-              )}
-            </div>
-          )}
-
-          <SettingsPageScroll className="flex-1" scrollClassName="py-6 dialog-body-inset">
-            {isSearching && (
-              <div role="region" aria-label="Search results">
-                <SearchResults
-                  results={searchResults}
-                  query={searchQuery}
-                  cleanQuery={cleanSearchQuery}
-                  onResultClick={handleResultClick}
-                  activeIndex={activeResultIndex}
-                  onResultHover={setActiveResultIndex}
-                  activeScope={activeScope}
-                  projectLabel={hasProject ? projectLabel : null}
-                />
+            {activeScope === "project" && projectId && (
+              <div className="px-6 pt-6 space-y-2 shrink-0 empty:hidden">
+                {projectForm.projectError && (
+                  <SettingsLoadErrorBanner
+                    title={`Couldn't load settings for ${projectLabel}`}
+                    message={projectForm.projectError}
+                    onRetry={projectForm.refreshProjectSettings}
+                  />
+                )}
+                {projectForm.projectAutoSaveError && (
+                  <SettingsLoadErrorBanner
+                    title={`Couldn't save settings for ${projectLabel}`}
+                    message={projectForm.projectAutoSaveError}
+                    onRetry={() => void projectForm.saveNow()}
+                  />
+                )}
+                {showProjectLoading && (
+                  <p className="text-xs text-text-secondary" aria-live="polite">
+                    Loading settings for {projectLabel}…
+                  </p>
+                )}
               </div>
             )}
-            {/* Hidden rather than unmounted while search owns the pane. Every nav item
+
+            <SettingsPageScroll className="flex-1" scrollClassName="py-6 dialog-body-inset">
+              {isSearching && (
+                <div role="region" aria-label="Search results">
+                  <SearchResults
+                    results={searchResults}
+                    query={searchQuery}
+                    cleanQuery={cleanSearchQuery}
+                    onResultClick={handleResultClick}
+                    activeIndex={activeResultIndex}
+                    onResultHover={setActiveResultIndex}
+                    activeScope={activeScope}
+                    projectLabel={hasProject ? projectLabel : null}
+                  />
+                </div>
+              )}
+              {/* Hidden rather than unmounted while search owns the pane. Every nav item
                 is a role="tab" whose aria-controls points at one of these panels, and a
                 tab pointing at an id that is not in the document is a broken reference
                 for assistive tech — the panels have to outlive the search overlay. */}
-            <div
-              className={isSearching ? "hidden" : undefined}
-              onPointerDownCapture={markPanelInteracted}
-              onKeyDownCapture={markPanelInteracted}
-            >
-              <>
-                {hiddenSettingBanner && (
-                  // An explanation, not a warning: nothing is wrong, the setting is
-                  // simply behind a switch. So it takes the neutral info treatment the
-                  // dependents' disabled reason uses, and the link does the work.
-                  <div
-                    className="settings-card mb-6 flex items-start gap-2 rounded-[var(--radius-lg)] border border-border-default py-2.5 pl-4 pr-2 text-sm text-text-secondary"
-                    role="status"
-                  >
-                    <Info className="mt-0.5 h-4 w-4 shrink-0" aria-hidden="true" />
-                    <p className="min-w-0 flex-1 py-px">
-                      The setting you opened only appears when{" "}
-                      <Button
-                        variant="link"
-                        onClick={() => {
-                          const parent = SETTINGS_SEARCH_INDEX.find(
-                            (e) => e.id === hiddenSettingBanner.settingId
-                          );
-                          if (parent) {
-                            handleResultClick(
-                              {
-                                tab: parent.tab,
-                                subtab: parent.subtab,
-                                sectionId: parent.id,
-                              },
-                              parent.requiresEnabled
-                            );
-                          }
-                        }}
-                      >
-                        {midSentenceLabel(hiddenSettingBanner.label)}
-                      </Button>{" "}
-                      is on
-                    </p>
-                    <DismissButton
-                      aria-label="Dismiss"
-                      onClick={() => setHiddenSettingBanner(null)}
-                    />
-                  </div>
-                )}
-                {SETTINGS_REGISTRY.filter((e) => e.scope === "global").map((entry) => {
-                  const tabId = entry.id as SettingsTab;
-                  const isActive = activeTab === tabId;
-                  return (
+              <div
+                className={isSearching ? "hidden" : undefined}
+                onPointerDownCapture={markPanelInteracted}
+                onKeyDownCapture={markPanelInteracted}
+              >
+                <>
+                  {hiddenSettingBanner && (
+                    // An explanation, not a warning: nothing is wrong, the setting is
+                    // simply behind a switch. So it takes the neutral info treatment the
+                    // dependents' disabled reason uses, and the link does the work.
                     <div
-                      key={entry.id}
-                      role="tabpanel"
-                      id={`settings-panel-${entry.id}`}
-                      aria-labelledby={`settings-tab-${entry.id}`}
-                      tabIndex={0}
-                      className={isActive ? SETTINGS_PANEL_CLASS : "hidden"}
-                      data-settings-settling={isActive && panelSettled ? undefined : ""}
+                      className="settings-card mb-6 flex items-start gap-2 rounded-[var(--radius-lg)] border border-border-default py-2.5 pl-4 pr-2 text-sm text-text-secondary"
+                      role="status"
                     >
-                      {entry.importKind === "eager" ? (
-                        // Only GeneralTab is eager — render with its specific props
-                        <>
-                          <GeneralTab
-                            appVersion={appVersion}
-                            buildArch={buildArch}
-                            onNavigateToAgents={(agentId?: string) => {
-                              markTabVisited("agents");
-                              setHiddenSettingBanner(null);
-                              if (agentId) {
-                                setActiveSubtabs((prev) => ({ ...prev, agents: agentId }));
-                              }
-                              startTransition(() => setActiveTab("agents"));
-                            }}
-                            activeSubtab={activeSubtabs["general"] ?? null}
-                            onSubtabChange={(id) =>
-                              setActiveSubtabs((prev) => ({ ...prev, general: id }))
+                      <Info className="mt-0.5 h-4 w-4 shrink-0" aria-hidden="true" />
+                      <p className="min-w-0 flex-1 py-px">
+                        The setting you opened only appears when{" "}
+                        <Button
+                          variant="link"
+                          onClick={() => {
+                            const parent = SETTINGS_SEARCH_INDEX.find(
+                              (e) => e.id === hiddenSettingBanner.settingId
+                            );
+                            if (parent) {
+                              handleResultClick(
+                                {
+                                  tab: parent.tab,
+                                  subtab: parent.subtab,
+                                  sectionId: parent.id,
+                                },
+                                parent.requiresEnabled
+                              );
                             }
-                          />
-                          <SettingsTabScrollEffect
-                            isActive={isActive && !isSearching}
-                            scrollToSectionId={scrollToSection}
-                            onScrollToSectionHandled={handleScrollToSectionHandled}
-                          />
-                        </>
-                      ) : visitedTabs.has(tabId) ? (
-                        <Suspense fallback={null}>
-                          <LazyTabContent
-                            entry={entry as LazySettingsTabEntry}
-                            activeSubtabs={activeSubtabs}
-                            setActiveSubtabs={setActiveSubtabs}
-                            // Only the tab that uses it gets it: `handleClose` is
-                            // rebuilt with the project form, and handing it to
-                            // every tab would defeat LazyTabContent's memo.
-                            onClose={
-                              (entry as LazySettingsTabEntry).needsOnClose ? handleClose : undefined
-                            }
-                            onSettingsChange={onSettingsChange}
-                            isActive={isActive && !isSearching}
-                            scrollToSectionId={scrollToSection}
-                            onScrollToSectionHandled={handleScrollToSectionHandled}
-                          />
-                        </Suspense>
-                      ) : null}
-                    </div>
-                  );
-                })}
-
-                {/* Project settings panels */}
-                {activeScope === "project" && projectId && (
-                  <>
-                    {SETTINGS_REGISTRY.filter((e) => e.scope === "project").map((entry) => {
-                      const tabId = entry.id as SettingsTab;
-                      const isActive = activeTab === tabId;
-                      return (
-                        <div
-                          key={entry.id}
-                          role="tabpanel"
-                          id={`settings-panel-${entry.id}`}
-                          aria-labelledby={`settings-tab-${entry.id}`}
-                          tabIndex={0}
-                          className={isActive ? SETTINGS_PANEL_CLASS : "hidden"}
-                          data-settings-settling={isActive && panelSettled ? undefined : ""}
+                          }}
                         >
-                          {visitedTabs.has(tabId) && (
-                            <Suspense fallback={null}>
-                              <ProjectFormTabContent
-                                entry={entry as LazySettingsTabEntry}
-                                projectForm={projectForm}
-                                projectId={projectId}
-                                isOpen={isOpen}
-                                globalEnvVars={globalEnvVars}
-                                globalScrollbackLines={scrollbackLines}
-                                projectLabel={projectLabel}
-                                isActive={isActive && !isSearching}
-                                scrollToSectionId={scrollToSection}
-                                onScrollToSectionHandled={handleScrollToSectionHandled}
-                              />
-                            </Suspense>
-                          )}
-                        </div>
-                      );
-                    })}
-                  </>
-                )}
-              </>
-            </div>
-          </SettingsPageScroll>
-        </div>
+                          {midSentenceLabel(hiddenSettingBanner.label)}
+                        </Button>{" "}
+                        is on
+                      </p>
+                      <DismissButton
+                        aria-label="Dismiss"
+                        onClick={() => setHiddenSettingBanner(null)}
+                      />
+                    </div>
+                  )}
+                  {SETTINGS_REGISTRY.filter((e) => e.scope === "global").map((entry) => {
+                    const tabId = entry.id as SettingsTab;
+                    const isActive = activeTab === tabId;
+                    return (
+                      <div
+                        key={entry.id}
+                        role="tabpanel"
+                        id={`settings-panel-${entry.id}`}
+                        aria-labelledby={`settings-tab-${entry.id}`}
+                        tabIndex={0}
+                        className={isActive ? SETTINGS_PANEL_CLASS : "hidden"}
+                        data-settings-settling={isActive && panelSettled ? undefined : ""}
+                      >
+                        {entry.importKind === "eager" ? (
+                          // Only GeneralTab is eager — render with its specific props
+                          <>
+                            <GeneralTab
+                              appVersion={appVersion}
+                              buildArch={buildArch}
+                              onNavigateToAgents={(agentId?: string) => {
+                                markTabVisited("agents");
+                                setHiddenSettingBanner(null);
+                                if (agentId) {
+                                  setActiveSubtabs((prev) => ({ ...prev, agents: agentId }));
+                                }
+                                startTransition(() => setActiveTab("agents"));
+                              }}
+                              activeSubtab={activeSubtabs["general"] ?? null}
+                              onSubtabChange={(id) =>
+                                setActiveSubtabs((prev) => ({ ...prev, general: id }))
+                              }
+                            />
+                            <SettingsTabScrollEffect
+                              isActive={isActive && !isSearching}
+                              scrollToSectionId={scrollToSection}
+                              onScrollToSectionHandled={handleScrollToSectionHandled}
+                            />
+                          </>
+                        ) : visitedTabs.has(tabId) ? (
+                          <Suspense fallback={null}>
+                            <LazyTabContent
+                              entry={entry as LazySettingsTabEntry}
+                              activeSubtabs={activeSubtabs}
+                              setActiveSubtabs={setActiveSubtabs}
+                              // Only the tab that uses it gets it: `handleClose` is
+                              // rebuilt with the project form, and handing it to
+                              // every tab would defeat LazyTabContent's memo.
+                              onClose={
+                                (entry as LazySettingsTabEntry).needsOnClose
+                                  ? handleClose
+                                  : undefined
+                              }
+                              onSettingsChange={onSettingsChange}
+                              isActive={isActive && !isSearching}
+                              scrollToSectionId={scrollToSection}
+                              onScrollToSectionHandled={handleScrollToSectionHandled}
+                            />
+                          </Suspense>
+                        ) : null}
+                      </div>
+                    );
+                  })}
+
+                  {/* Project settings panels */}
+                  {activeScope === "project" && projectId && (
+                    <>
+                      {SETTINGS_REGISTRY.filter((e) => e.scope === "project").map((entry) => {
+                        const tabId = entry.id as SettingsTab;
+                        const isActive = activeTab === tabId;
+                        return (
+                          <div
+                            key={entry.id}
+                            role="tabpanel"
+                            id={`settings-panel-${entry.id}`}
+                            aria-labelledby={`settings-tab-${entry.id}`}
+                            tabIndex={0}
+                            className={isActive ? SETTINGS_PANEL_CLASS : "hidden"}
+                            data-settings-settling={isActive && panelSettled ? undefined : ""}
+                          >
+                            {visitedTabs.has(tabId) && (
+                              <Suspense fallback={null}>
+                                <ProjectFormTabContent
+                                  entry={entry as LazySettingsTabEntry}
+                                  projectForm={projectForm}
+                                  projectId={projectId}
+                                  isOpen={isOpen}
+                                  globalEnvVars={globalEnvVars}
+                                  globalScrollbackLines={scrollbackLines}
+                                  projectLabel={projectLabel}
+                                  isActive={isActive && !isSearching}
+                                  scrollToSectionId={scrollToSection}
+                                  onScrollToSectionHandled={handleScrollToSectionHandled}
+                                />
+                              </Suspense>
+                            )}
+                          </div>
+                        );
+                      })}
+                    </>
+                  )}
+                </>
+              </div>
+            </SettingsPageScroll>
+          </div>
+        </SettingsSubpageProvider>
       </div>
     </AppDialog>
   );
@@ -1762,6 +1824,33 @@ export function ScopeChip({
           <span className="truncate">{entity}</span>
         </>
       )}
+    </span>
+  );
+}
+
+/**
+ * Whose settings the page edits in a window attached to another host ("Settings on
+ * studio-01", "This Mac"). Nothing in a local window, which has one machine and nothing
+ * to tell apart, nor on a mixed page, whose sections each name their own owner.
+ * Neutral like the scope chip: it answers a question, it doesn't ask for attention.
+ * Part of the title's accessible name, after a pause.
+ */
+export function SettingsOwnerHeaderChip({ tab }: { tab: SettingsTab }) {
+  const remoteHostName = useRemoteHostName();
+  const label = settingsOwnerHeaderLabel(ownerForTab(tab), remoteHostName);
+  if (label === null) return null;
+  return (
+    <span className="flex font-normal" data-settings-owner-chip="">
+      <span className="sr-only">, </span>
+      <span
+        className={cn(
+          "inline-flex items-center max-w-[14rem] min-w-0 shrink-0",
+          "text-3xs font-medium leading-none px-1.5 py-0.5 rounded-full",
+          "bg-tint/10 text-text-secondary"
+        )}
+      >
+        <span className="truncate">{label}</span>
+      </span>
     </span>
   );
 }

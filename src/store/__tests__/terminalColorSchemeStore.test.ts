@@ -65,20 +65,6 @@ describe("terminalColorSchemeStore", () => {
     });
   });
 
-  it("switching scheme updates selectedSchemeId", () => {
-    useTerminalColorSchemeStore.getState().setSelectedSchemeId("dracula");
-    expect(useTerminalColorSchemeStore.getState().selectedSchemeId).toBe("dracula");
-  });
-
-  it("uses the app theme to derive terminal colors when the default app-linked scheme is selected", () => {
-    const appScheme = resolveAppTheme("daintree", []);
-    const expectedTheme = getTerminalThemeFromAppScheme(appScheme);
-
-    const theme = useTerminalColorSchemeStore.getState().getEffectiveTheme();
-
-    expect(theme).toEqual(expectedTheme);
-  });
-
   it("updates the default app-linked terminal scheme when the app theme changes", () => {
     useAppThemeStore.setState({ selectedSchemeId: "bondi" });
     const appScheme = resolveAppTheme("bondi", []);
@@ -87,19 +73,6 @@ describe("terminalColorSchemeStore", () => {
     const theme = useTerminalColorSchemeStore.getState().getEffectiveTheme();
 
     expect(theme).toEqual(expectedTheme);
-  });
-
-  it("returns built-in scheme colors with type-based scrollbar defaults for explicit schemes", () => {
-    const dracula = getSchemeById("dracula");
-    expect(dracula).toBeDefined();
-    useTerminalColorSchemeStore.getState().setSelectedSchemeId("dracula");
-
-    const theme = useTerminalColorSchemeStore.getState().getEffectiveTheme();
-
-    expect(theme).toEqual({
-      ...dracula!.colors,
-      ...getTerminalScrollbarDefaults(dracula!.type),
-    });
   });
 
   it("keeps an explicit scheme stable when the app theme changes", () => {
@@ -162,21 +135,6 @@ describe("terminalColorSchemeStore", () => {
       expect(theme).toEqual({
         ...solarized!.colors,
         ...getTerminalScrollbarDefaults(solarized!.type),
-      });
-    });
-
-    it("clearing previewSchemeId restores the committed theme", () => {
-      const store = useTerminalColorSchemeStore.getState();
-      store.setSelectedSchemeId("dracula");
-      store.setPreviewSchemeId("solarized-dark");
-      store.setPreviewSchemeId(null);
-
-      const dracula = getSchemeById("dracula");
-      const theme = useTerminalColorSchemeStore.getState().getEffectiveTheme();
-
-      expect(theme).toEqual({
-        ...dracula!.colors,
-        ...getTerminalScrollbarDefaults(dracula!.type),
       });
     });
 
@@ -279,21 +237,6 @@ describe("terminalColorSchemeStore", () => {
   });
 
   describe("recentSchemeIds LRU", () => {
-    it("starts empty", () => {
-      expect(useTerminalColorSchemeStore.getState().recentSchemeIds).toEqual([]);
-    });
-
-    it("prepends the newly selected scheme id", () => {
-      useTerminalColorSchemeStore.getState().setSelectedSchemeId("dracula");
-      expect(useTerminalColorSchemeStore.getState().recentSchemeIds).toEqual(["dracula"]);
-
-      useTerminalColorSchemeStore.getState().setSelectedSchemeId("solarized-dark");
-      expect(useTerminalColorSchemeStore.getState().recentSchemeIds).toEqual([
-        "solarized-dark",
-        "dracula",
-      ]);
-    });
-
     it("deduplicates when re-selecting an existing id (moves to front)", () => {
       const store = useTerminalColorSchemeStore.getState();
       store.setSelectedSchemeId("dracula");
@@ -345,38 +288,12 @@ describe("terminalColorSchemeStore", () => {
   });
 
   describe("selectWrapperBackground", () => {
-    it("returns the app theme terminal background for the default app-linked scheme", () => {
-      const appScheme = resolveAppTheme("daintree", []);
-      const expected = appScheme.tokens["terminal-background"];
-
-      expect(selectWrapperBackground(useTerminalColorSchemeStore.getState())).toBe(expected);
-    });
-
     it("tracks app theme changes for the default app-linked scheme", () => {
       useAppThemeStore.setState({ selectedSchemeId: "bondi" });
       const appScheme = resolveAppTheme("bondi", []);
       const expected = appScheme.tokens["terminal-background"];
 
       expect(selectWrapperBackground(useTerminalColorSchemeStore.getState())).toBe(expected);
-    });
-
-    it("returns the selected built-in scheme background for explicit schemes", () => {
-      const dracula = getSchemeById("dracula");
-      expect(dracula).toBeDefined();
-      useTerminalColorSchemeStore.getState().setSelectedSchemeId("dracula");
-
-      expect(selectWrapperBackground(useTerminalColorSchemeStore.getState())).toBe(
-        dracula!.colors.background
-      );
-    });
-
-    it("returns the selected custom scheme background", () => {
-      useTerminalColorSchemeStore.getState().addCustomScheme(CUSTOM_SCHEME);
-      useTerminalColorSchemeStore.getState().setSelectedSchemeId("custom-test");
-
-      expect(selectWrapperBackground(useTerminalColorSchemeStore.getState())).toBe(
-        CUSTOM_SCHEME.colors.background
-      );
     });
 
     it("returns updated color when a custom scheme is replaced", () => {

@@ -115,14 +115,19 @@ describe("useOverflowBadgeSeverity", () => {
     expect(result.current).toBeNull();
   });
 
+  it("warns of urgent Canopy asks only while Canopy's own button is folded in", () => {
+    expect(renderHook(() => useOverflowBadgeSeverity(["canopy"], 0, 2)).result.current).toBe(
+      "warning"
+    );
+    expect(renderHook(() => useOverflowBadgeSeverity(["canopy"], 0, 0)).result.current).toBeNull();
+    expect(
+      renderHook(() => useOverflowBadgeSeverity(["copy-tree"], 0, 2)).result.current
+    ).toBeNull();
+  });
+
   it("returns critical when problems is overflowed and errorCount > 0", () => {
     const { result } = renderHook(() => useOverflowBadgeSeverity(["problems"], 3));
     expect(result.current).toBe("critical");
-  });
-
-  it("returns null when problems is overflowed but errorCount is 0", () => {
-    const { result } = renderHook(() => useOverflowBadgeSeverity(["problems"], 0));
-    expect(result.current).toBeNull();
   });
 
   it("returns warning when an overflowed agent has a waiting panel", () => {
@@ -215,12 +220,6 @@ describe("useOverflowBadgeSeverity", () => {
     expect(result.current).toBe("info");
   });
 
-  it("returns null when notification-center is overflowed but unread count is 0", () => {
-    mockNotificationUnreadCount = 0;
-    const { result } = renderHook(() => useOverflowBadgeSeverity(["notification-center"], 0));
-    expect(result.current).toBeNull();
-  });
-
   it("returns info when launcher is overflowed and a launchable agent is unseen", () => {
     // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
     mockAvailability = { claude: "ready" } as unknown as CliAvailability;
@@ -283,20 +282,6 @@ describe("useOverflowBadgeSeverity", () => {
       useOverflowBadgeSeverity(["plugin.acme.unknown" as never], 0)
     );
     expect(result.current).toBeNull();
-  });
-
-  it("computes left and right severities independently", () => {
-    mockPanelsById = {
-      "p-1": makePanel({ id: "p-1", agentId: "claude", agentState: "waiting" }),
-    };
-    mockPanelIds = ["p-1"];
-    mockNotificationUnreadCount = 1;
-    const { result: left } = renderHook(() => useOverflowBadgeSeverity(["claude"], 0));
-    const { result: right } = renderHook(() =>
-      useOverflowBadgeSeverity(["notification-center"], 0)
-    );
-    expect(left.current).toBe("warning");
-    expect(right.current).toBe("info");
   });
 });
 

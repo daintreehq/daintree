@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useMemo, useCallback } from "react";
-import { Plus, Trash2 } from "lucide-react";
+import { FolderGit2, FolderOpen, GitBranch, Globe, Plus, Trash2 } from "lucide-react";
 import type { TerminalRecipe, RecipeTerminal, RecipeTerminalType } from "@/types";
 import { Button } from "@/components/ui/button";
 import { AppDialog } from "@/components/ui/AppDialog";
@@ -27,14 +27,13 @@ import { formatErrorMessage } from "@shared/utils/errorMessage";
 import {
   FIELD_CONTROL_SIZE,
   FIELD_INPUT,
-  FIELD_SURFACE,
   FormGrid,
   FormRow,
   FormSection,
 } from "@/components/Worktree/views";
 import { RecipeVariablePreview } from "@/components/TerminalRecipe/RecipeVariablePreview";
 import { getAgentConfig } from "@/config/agents";
-import { cn } from "@/lib/utils";
+import { getRecipeScope } from "@/utils/recipeScope";
 
 function cloneTerminal(t: RecipeTerminal): RecipeTerminal {
   return { ...t, env: t.env ? { ...t.env } : {} };
@@ -113,6 +112,31 @@ function terminalTypeLabel(type: RecipeTerminalType): string {
 }
 
 const FAILURE_PRESERVE_CAPTION = "Failures always preserve terminal for debugging";
+
+/**
+ * Where an existing recipe is saved, in the manager's words and with its
+ * section's glyph — a team recipe is a tracked file, so "Project" alone would
+ * hide that saving it changes the repository.
+ */
+function savedScope(recipe: TerminalRecipe): {
+  icon: typeof Globe;
+  label: string;
+  detail: string;
+} {
+  const { label } = getRecipeScope(recipe);
+  if (label === "Team") {
+    return {
+      icon: GitBranch,
+      label,
+      detail: "Saved in .daintree/recipes/ and shared with everyone on the repo",
+    };
+  }
+  if (label === "Global") return { icon: Globe, label, detail: "Yours, in every project" };
+  if (recipe.worktreeId) {
+    return { icon: FolderGit2, label, detail: "Yours, in this worktree only" };
+  }
+  return { icon: FolderOpen, label, detail: "Yours, in this project only" };
+}
 
 export function RecipeEditor({
   recipe,
@@ -240,6 +264,7 @@ export function RecipeEditor({
     setTerminals([...terminals, { type: "terminal", title: "", command: "", env: {} }]);
     setCardKeys([...cardKeys, ...freshCardKeys(1)]);
     pendingFocusIdRef.current = `terminal-type-${terminals.length}`;
+    useAnnouncerStore.getState().announce(`Terminal ${terminals.length + 1} added`);
   };
 
   const handleRemoveTerminal = (index: number) => {
@@ -251,6 +276,7 @@ export function RecipeEditor({
     setCardKeys(cardKeys.filter((_, i) => i !== index));
     // The card that slid into this slot, or the new last one.
     pendingFocusIdRef.current = `terminal-type-${Math.min(index, terminals.length - 2)}`;
+    useAnnouncerStore.getState().announce(`Terminal ${index + 1} removed`);
   };
 
   const handleTerminalChange = (
@@ -392,6 +418,7 @@ export function RecipeEditor({
           onValueChange={(value) =>
             handleTerminalChange(index, "exitBehavior", value === defaultValue ? "" : value)
           }
+          disabled={isSaving}
         >
           <SelectTrigger id={id} aria-describedby={helpId} className={FIELD_CONTROL_SIZE}>
             <SelectValue />
@@ -434,6 +461,7 @@ export function RecipeEditor({
                   value={recipeName}
                   onChange={(e) => setRecipeName(e.target.value)}
                   onKeyDown={submitOnEnter}
+                  readOnly={isSaving}
                   placeholder="e.g., Full Stack Dev"
                   className={FIELD_CONTROL_SIZE}
                 />
@@ -443,23 +471,31 @@ export function RecipeEditor({
 
             {/* No `for` when editing: scope is then a read-only display with no
                 control to name, and `output` — the one labelable element that
-                fits — is a live region, which would announce static text. */}
-            <FormRow label="Scope" htmlFor={recipe ? undefined : "recipe-scope"}>
+                fits — is a live region, which would announce static text. It
+                is drawn as text, not a field, because nothing here changes it. */}
+            <FormRow
+              label="Scope"
+              htmlFor={recipe ? undefined : "recipe-scope"}
+              hint={recipe ? hint("recipe-scope-help", savedScope(recipe).detail) : undefined}
+            >
               {recipe ? (
-                <div
-                  className={cn(
-                    FIELD_SURFACE,
-                    "flex h-8 items-center px-2.5 text-sm text-text-primary opacity-75"
-                  )}
-                >
-                  {isInRepoRecipeId(recipe) || recipe.projectId !== undefined
-                    ? "Project"
-                    : "Global (all projects)"}
-                </div>
+                (() => {
+                  const { icon: ScopeIcon, label } = savedScope(recipe);
+                  return (
+                    <p
+                      className="flex h-8 items-center gap-2 text-sm text-text-primary"
+                      aria-describedby="recipe-scope-help"
+                    >
+                      <ScopeIcon className="h-4 w-4 shrink-0 text-text-secondary" aria-hidden />
+                      {label}
+                    </p>
+                  );
+                })()
               ) : (
                 <Select
                   value={scope}
                   onValueChange={(value) => setScope(value as "global" | "project")}
+                  disabled={isSaving}
                 >
                   <SelectTrigger id="recipe-scope" className={FIELD_CONTROL_SIZE}>
                     <SelectValue />
@@ -486,6 +522,7 @@ export function RecipeEditor({
                 id="show-in-empty-state"
                 checked={showInEmptyState}
                 onCheckedChange={(checked) => setShowInEmptyState(checked === true)}
+                disabled={isSaving}
                 aria-describedby="show-in-empty-state-help"
               />
             </FormRow>
@@ -501,6 +538,7 @@ export function RecipeEditor({
               <Select
                 value={autoAssign}
                 onValueChange={(value) => setAutoAssign(value as "always" | "never" | "prompt")}
+                disabled={isSaving}
               >
                 <SelectTrigger
                   id="auto-assign"
@@ -524,7 +562,7 @@ export function RecipeEditor({
                   variant="outline"
                   size="sm"
                   onClick={handleAddTerminal}
-                  disabled={terminals.length >= MAX_TERMINALS_PER_RECIPE}
+                  disabled={isSaving || terminals.length >= MAX_TERMINALS_PER_RECIPE}
                 >
                   <Plus />
                   Add terminal
@@ -555,7 +593,7 @@ export function RecipeEditor({
                               variant="ghost-danger"
                               size="icon-sm"
                               onClick={() => handleRemoveTerminal(index)}
-                              disabled={terminals.length === 1}
+                              disabled={isSaving || terminals.length === 1}
                               aria-label={`Remove terminal ${index + 1}`}
                             >
                               <Trash2 />
@@ -571,6 +609,7 @@ export function RecipeEditor({
                           onValueChange={(value) =>
                             handleTypeChange(index, value as RecipeTerminalType)
                           }
+                          disabled={isSaving}
                         >
                           <SelectTrigger
                             id={`terminal-type-${index}`}
@@ -595,6 +634,7 @@ export function RecipeEditor({
                           value={terminal.title || ""}
                           onChange={(e) => handleTerminalChange(index, "title", e.target.value)}
                           onKeyDown={submitOnEnter}
+                          readOnly={isSaving}
                           placeholder="Default"
                           className={FIELD_INPUT}
                         />
@@ -611,6 +651,7 @@ export function RecipeEditor({
                                 handleTerminalChange(index, "command", e.target.value)
                               }
                               onKeyDown={submitOnEnter}
+                              readOnly={isSaving}
                               placeholder="e.g., npm run dev"
                               className={FIELD_INPUT}
                             />
@@ -635,6 +676,7 @@ export function RecipeEditor({
                               value={terminal.args || ""}
                               onChange={(e) => handleTerminalChange(index, "args", e.target.value)}
                               onKeyDown={submitOnEnter}
+                              readOnly={isSaving}
                               placeholder="e.g., --model claude-opus-4-5"
                               aria-describedby={`terminal-args-help-${index}`}
                               className={FIELD_INPUT}
@@ -660,6 +702,7 @@ export function RecipeEditor({
                                 handleTerminalChange(index, "initialPrompt", e.target.value)
                               }
                               placeholder="e.g., Review the latest changes and suggest improvements"
+                              readOnly={isSaving}
                               rows={2}
                               density="compact"
                               aria-describedby={`terminal-initial-prompt-help-${index}`}
@@ -692,6 +735,7 @@ export function RecipeEditor({
                                 handleTerminalChange(index, "devCommand", e.target.value)
                               }
                               onKeyDown={submitOnEnter}
+                              readOnly={isSaving}
                               placeholder="e.g., npm run dev"
                               aria-describedby={`terminal-dev-command-help-${index}`}
                               className={FIELD_INPUT}

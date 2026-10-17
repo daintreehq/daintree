@@ -1,7 +1,9 @@
 import path from "path";
 import fs from "fs/promises";
 import { CHANNELS } from "../channels.js";
-import { checkRateLimit, typedHandleValidated } from "../utils.js";
+import { checkRateLimit, typedHandleWithContextValidated } from "../utils.js";
+import type { IpcContext } from "../types.js";
+import { getRemoteService } from "../../remote/runtime.js";
 import { fileSearchService } from "../../services/FileSearchService.js";
 import { buildHtmlPreviewUrl } from "../../setup/htmlPreviewTokens.js";
 import {
@@ -21,17 +23,33 @@ const LFS_POINTER_MAX_SIZE = 1024;
 const LFS_POINTER_HEADER = "version https://git-lfs.github.com/spec/v1\n";
 const LFS_POINTER_HEADER_BYTES = Buffer.from(LFS_POINTER_HEADER, "ascii");
 
+/**
+ * A local view may name any root, as it always could. A remote Shell's view
+ * may only name its own project's folder or one of its worktrees (or a folder
+ * inside one), so the link can't be used to read the rest of this machine.
+ * Fails closed when the host's file service isn't running.
+ */
+export async function remoteCallerHoldsRoot(ctx: IpcContext, root: string): Promise<boolean> {
+  if (ctx.endpoint?.kind !== "remote-view") return true;
+  const projectId = ctx.endpoint.projectId;
+  const files = getRemoteService("hostFileService");
+  if (!projectId || !files) return false;
+  return files.holdsRoot(projectId, root);
+}
+
 export function registerFilesHandlers(): () => void {
   const handlers: Array<() => void> = [];
 
-  const handleSearch = async ({
-    cwd,
-    query,
-    limit,
-  }: FileSearchPayload): Promise<{ files: string[] }> => {
+  const handleSearch = async (
+    ctx: IpcContext,
+    { cwd, query, limit }: FileSearchPayload
+  ): Promise<{ files: string[] }> => {
     checkRateLimit(CHANNELS.FILES_SEARCH, 20, 10_000);
 
     if (!path.isAbsolute(cwd)) {
+      return { files: [] };
+    }
+    if (!(await remoteCallerHoldsRoot(ctx, cwd))) {
       return { files: [] };
     }
 
@@ -44,18 +62,26 @@ export function registerFilesHandlers(): () => void {
     }
   };
 
-  handlers.push(typedHandleValidated(CHANNELS.FILES_SEARCH, FileSearchPayloadSchema, handleSearch));
+  handlers.push(
+    typedHandleWithContextValidated(CHANNELS.FILES_SEARCH, FileSearchPayloadSchema, handleSearch)
+  );
 
-  const handleRead = async ({
-    path: filePath,
-    rootPath,
-    htmlPreview,
-  }: FileReadPayload): Promise<FileReadResult> => {
+  const handleRead = async (
+    ctx: IpcContext,
+    { path: filePath, rootPath, htmlPreview }: FileReadPayload
+  ): Promise<FileReadResult> => {
     if (!path.isAbsolute(filePath) || !path.isAbsolute(rootPath)) {
       throw new AppError({
         code: "INVALID_PATH",
         message: "filePath and rootPath must be absolute",
         context: { filePath, rootPath },
+      });
+    }
+    if (!(await remoteCallerHoldsRoot(ctx, rootPath))) {
+      throw new AppError({
+        code: "OUTSIDE_ROOT",
+        message: "Root is outside the calling view's project",
+        context: { rootPath },
       });
     }
 
@@ -64,6 +90,8 @@ export function registerFilesHandlers(): () => void {
     // from circular symlinks (realpath) or O_NOFOLLOW final-component
     // symlink rejection (open); both are containment failures.
     function fsErrorToAppError(error: unknown, fallbackMessage: string): AppError {
+      // A refusal already decided here keeps its own code.
+      if (error instanceof AppError) return error;
       const errCode = (error as NodeJS.ErrnoException).code;
       if (errCode === "ENOENT") {
         return new AppError({
@@ -169,18 +197,53 @@ export function registerFilesHandlers(): () => void {
       });
     }
 
-    // Open the user-supplied filePath (not realFile) with O_NOFOLLOW so a
-    // final-component symlink injected after the realpath check is rejected
-    // with ELOOP. On Windows O_NOFOLLOW is 0 (no-op); realpath containment
+    // Open the contained realFile, not the path as asked, with O_NOFOLLOW: a
+    // link inside the project resolves to a real path that was just checked,
+    // while a link swapped in for that path after the check is rejected with
+    // ELOOP. Opening the asked path refused every symlinked file, in-project
+    // ones included. On Windows O_NOFOLLOW is 0 (no-op); realpath containment
     // still applies.
+    // O_NONBLOCK so a FIFO swapped in can't hang the open (and a libuv worker
+    // with it); the descriptor is then held to what was checked: a regular
+    // file, in budget, the very file the contained real path names.
     let buffer: Buffer;
     let fileHandle: Awaited<ReturnType<typeof fs.open>>;
     try {
-      fileHandle = await fs.open(filePath, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW);
+      fileHandle = await fs.open(
+        realFile,
+        fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW | (fs.constants.O_NONBLOCK ?? 0)
+      );
     } catch (error) {
       throw fsErrorToAppError(error, "Could not open file");
     }
     try {
+      const opened = await fileHandle.stat();
+      if (opened.isDirectory()) {
+        throw Object.assign(new Error("Path is a directory"), { code: "EISDIR" });
+      }
+      if (!opened.isFile()) {
+        throw new AppError({
+          code: "NOT_A_FILE",
+          message: "Path is not a regular file",
+          userMessage: "This isn't a file that can be previewed.",
+          context: { filePath },
+        });
+      }
+      if (opened.size > FILE_PREVIEW_MAX_BYTES) {
+        throw new AppError({
+          code: "FILE_TOO_LARGE",
+          message: `File exceeds ${FILE_PREVIEW_MAX_BYTES} byte limit`,
+          userMessage: "This file is too large to preview.",
+          context: { filePath, size: opened.size, limit: FILE_PREVIEW_MAX_BYTES },
+        });
+      }
+      if (String(opened.ino) !== String(stat.ino) || String(opened.dev) !== String(stat.dev)) {
+        throw new AppError({
+          code: "OUTSIDE_ROOT",
+          message: "The file changed while it was being opened",
+          context: { filePath, rootPath },
+        });
+      }
       buffer = await fileHandle.readFile();
     } catch (error) {
       throw fsErrorToAppError(error, "Could not read file");
@@ -228,7 +291,9 @@ export function registerFilesHandlers(): () => void {
     };
   };
 
-  handlers.push(typedHandleValidated(CHANNELS.FILES_READ, FileReadPayloadSchema, handleRead));
+  handlers.push(
+    typedHandleWithContextValidated(CHANNELS.FILES_READ, FileReadPayloadSchema, handleRead)
+  );
 
   return () => handlers.forEach((cleanup) => cleanup());
 }

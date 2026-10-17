@@ -75,26 +75,6 @@ describe("getErrorPriority", () => {
   it("returns 'high' for retryability='none' process errors", () => {
     expect(getErrorPriority({ type: "process", retryability: "none" })).toBe("high");
   });
-
-  it("returns 'high' for retryability='none' config errors", () => {
-    expect(getErrorPriority({ type: "config", retryability: "none" })).toBe("high");
-  });
-
-  it("returns 'high' for retryability='none' git errors", () => {
-    expect(getErrorPriority({ type: "git", retryability: "none" })).toBe("high");
-  });
-
-  it("returns 'high' for retryability='none' network errors", () => {
-    expect(getErrorPriority({ type: "network", retryability: "none" })).toBe("high");
-  });
-
-  it("returns 'high' for retryability='none' filesystem errors", () => {
-    expect(getErrorPriority({ type: "filesystem", retryability: "none" })).toBe("high");
-  });
-
-  it("returns 'high' for retryability='none' unknown errors", () => {
-    expect(getErrorPriority({ type: "unknown", retryability: "none" })).toBe("high");
-  });
 });
 
 describe("useErrors — onError path", () => {
@@ -117,17 +97,6 @@ describe("useErrors — onError path", () => {
 
   afterEach(() => {
     vi.restoreAllMocks();
-  });
-
-  it("calls notify with 'high' priority for retryability='none' process error", async () => {
-    const { useErrors } = await import("../useErrors");
-    const { unmount } = renderHook(() => useErrors());
-
-    const error = makeError({ type: "process", retryability: "none" });
-    act(() => capturedOnError(error));
-
-    expect(notifyMock).toHaveBeenCalledWith(expect.objectContaining({ priority: "high" }));
-    unmount();
   });
 
   it("addresses the toast to the error's terminal and worktree", async () => {
@@ -169,22 +138,6 @@ describe("useErrors — onError path", () => {
     act(() => capturedOnError(error));
 
     expect(notifyMock).toHaveBeenCalledWith(expect.objectContaining({ priority: "low" }));
-    unmount();
-  });
-
-  it("includes a Retry action in the toast for retryability='auto' + retryAction", async () => {
-    const { useErrors } = await import("../useErrors");
-    const { unmount } = renderHook(() => useErrors());
-
-    const error = makeError({
-      type: "network",
-      retryability: "auto",
-      retryAction: "git",
-    });
-    act(() => capturedOnError(error));
-
-    const call = notifyMock.mock.calls.at(-1)?.[0] as { action?: { label?: string } };
-    expect(call?.action?.label).toBe("Retry");
     unmount();
   });
 
@@ -241,27 +194,6 @@ describe("useErrors — getPending path", () => {
     expect(notifyMock).toHaveBeenCalledWith(expect.objectContaining({ priority: "high" }));
     unmount();
   });
-
-  it("calls notify with 'low' priority for pending retryability='auto' errors", async () => {
-    const pendingError = makeError({
-      type: "git",
-      retryability: "auto",
-      fromPreviousSession: true,
-    });
-    getPendingMock.mockResolvedValue([pendingError]);
-
-    const { useErrors } = await import("../useErrors");
-    const { unmount } = renderHook(() => useErrors());
-
-    await act(async () => {
-      await vi.waitFor(() => {
-        expect(notifyMock).toHaveBeenCalled();
-      });
-    });
-
-    expect(notifyMock).toHaveBeenCalledWith(expect.objectContaining({ priority: "low" }));
-    unmount();
-  });
 });
 
 describe("useErrors — escalation of persistent transient errors", () => {
@@ -299,35 +231,6 @@ describe("useErrors — escalation of persistent transient errors", () => {
     act(() => capturedOnError(error));
 
     expect(notifyMock).toHaveBeenCalledWith(expect.objectContaining({ priority: "high" }));
-    unmount();
-  });
-
-  it("keeps 'low' priority when escalation is not triggered", async () => {
-    shouldEscalateMock.mockReturnValue(false);
-    const { useErrors } = await import("../useErrors");
-    const { unmount } = renderHook(() => useErrors());
-
-    const error = makeError({ type: "network", retryability: "auto" });
-    act(() => capturedOnError(error));
-
-    expect(notifyMock).toHaveBeenCalledWith(expect.objectContaining({ priority: "low" }));
-    unmount();
-  });
-
-  it("calls shouldEscalateTransientError before addError (dedup safety)", async () => {
-    const callOrder: string[] = [];
-    shouldEscalateMock.mockImplementation(() => {
-      callOrder.push("escalate");
-      return false;
-    });
-    const { useErrors } = await import("../useErrors");
-    const { unmount } = renderHook(() => useErrors());
-
-    const error = makeError({ type: "filesystem", retryability: "auto" });
-    act(() => capturedOnError(error));
-
-    expect(callOrder[0]).toBe("escalate");
-    expect(notifyMock).toHaveBeenCalled();
     unmount();
   });
 

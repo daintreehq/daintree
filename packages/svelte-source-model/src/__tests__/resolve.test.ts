@@ -488,11 +488,6 @@ describe("component invocations", () => {
       reason: "dynamic-expression",
     });
   });
-
-  it("resolves an invocation inside an each block", () => {
-    const node = invocationAt("<Card {plan}");
-    expect(node.tagName).toBe("Card");
-  });
 });
 
 describe("blocks and repetition", () => {

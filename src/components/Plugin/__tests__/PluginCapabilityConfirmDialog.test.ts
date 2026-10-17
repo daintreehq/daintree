@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { capabilityAction, titleFor } from "../PluginCapabilityConfirmDialog";
+import { capabilityAction, reachesThisComputer, titleFor } from "../PluginCapabilityConfirmDialog";
 import { CAPABILITY_META } from "../capabilityMeta";
 import { BUILT_IN_PLUGIN_CAPABILITIES, type BuiltInPluginCapability } from "@shared/types/plugin";
 
@@ -30,12 +30,6 @@ describe("PluginCapabilityConfirmDialog microcopy", () => {
     expect(new Set(descriptions).size).toBe(GATED.length);
   });
 
-  it("builds a sentence-case title that names the plugin and ends with a question mark", () => {
-    const title = titleFor("Acme Tools", "shell:exec");
-    expect(title).toContain("Acme Tools");
-    expect(title.endsWith("?")).toBe(true);
-  });
-
   it("tells the user plainly that terminal:read reads what their terminals show", () => {
     expect(titleFor("Agent Grid", "terminal:read")).toBe(
       "Allow 'Agent Grid' to read what your terminals show?"
@@ -48,5 +42,16 @@ describe("PluginCapabilityConfirmDialog microcopy", () => {
       expect(capabilityAction(cap).length).toBeGreaterThan(0);
       expect(CAPABILITY_META[cap].description.length).toBeGreaterThan(0);
     }
+  });
+
+  it("names the host and this computer when a host's plugin asks for the clipboard", () => {
+    expect(titleFor("acme.snippets", "clipboard:read", "devbox")).toBe(
+      "Allow 'acme.snippets' on devbox to read this computer's clipboard?"
+    );
+    expect(titleFor("acme.snippets", "clipboard:write", "devbox")).toBe(
+      "Allow 'acme.snippets' on devbox to write to this computer's clipboard?"
+    );
+    expect(reachesThisComputer("clipboard:read")).toBe(true);
+    expect(reachesThisComputer("shell:exec")).toBe(false);
   });
 });

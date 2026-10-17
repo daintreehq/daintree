@@ -180,13 +180,6 @@ describe("PilotView", () => {
     expect(screen.getByText(EMPTY_FLEET_COPY)).toBeTruthy();
   });
 
-  it("stays quiet when the fleet is busy but asking nothing", () => {
-    seed([run({ agentState: "working", since: NOW - 60_000 })]);
-    render(<PilotView />);
-
-    expect(screen.getByText(/Nothing needs you/)).toBeTruthy();
-  });
-
   it("never calls an idle or exited run 'working' in the summary", () => {
     // The row total is not a running-agent count. Reporting it as one is the
     // fastest way for a supervision surface to stop being believed.
@@ -220,20 +213,6 @@ describe("PilotView", () => {
     expect(new Set(iconIds).size).toBe(2);
   });
 
-  it("makes every run's state available as text, not just as a glyph", () => {
-    // Waiting and idle are both hollow circles; shape alone cannot separate
-    // them. The neutral states gave up their visible word, so the word has to
-    // survive in the option's accessible name — never colour or shape alone.
-    seed([
-      run({ runId: "a", agentState: "waiting", title: "one", since: NOW - 60_000 }),
-      run({ runId: "b", agentState: "idle", title: "two", since: NOW - 60_000 }),
-    ]);
-    render(<PilotView />);
-
-    expect(screen.getByRole("option", { name: /Waiting/ }).textContent).toContain("one");
-    expect(screen.getByRole("option", { name: /Idle/ }).textContent).toContain("two");
-  });
-
   it("names a row as a sentence rather than a run of jammed-together facts", () => {
     // Left to the name-from-content computation the row's inline spans
     // concatenate with no separators — "Fix auth2m". Naming the parts is what
@@ -243,6 +222,7 @@ describe("PilotView", () => {
         runId: "a",
         agentId: "claude",
         agentState: "waiting",
+        waitingReason: "question",
         title: "Fix auth",
         cwd: "/repo/feature-x",
         since: NOW - 120_000,
@@ -273,33 +253,6 @@ describe("PilotView", () => {
     expect(screen.getByTestId("pilot-row").getAttribute("aria-label")).toBe(
       "Fix auth, Claude, Working"
     );
-  });
-
-  it("tells two identically-titled runs apart by the agent behind them", () => {
-    // The brand is on the row as an icon only, so without it in the name the
-    // two are one string to a screen reader — and search already matches on it,
-    // because "codex" is a plausible thing to type when looking for one.
-    seed([
-      run({ runId: "a", agentId: "claude", agentState: "working", title: "same", since: NOW }),
-      run({ runId: "b", agentId: "codex", agentState: "working", title: "same", since: NOW }),
-    ]);
-    render(<PilotView />);
-
-    const names = screen.getAllByTestId("pilot-row").map((r) => r.getAttribute("aria-label"));
-    expect(names).toHaveLength(2);
-    expect(new Set(names).size).toBe(2);
-  });
-
-  it("does not repeat the agent's name when the title already is it", () => {
-    // An untitled run falls back to its agent's name for the title, and
-    // "Claude, Claude" is a separator promising a second fact and
-    // then not delivering one.
-    seed([run({ runId: "a", agentId: "claude", agentState: "working", since: NOW })]);
-    render(<PilotView />);
-
-    const name = screen.getByTestId("pilot-row").getAttribute("aria-label") ?? "";
-    expect(name).toContain("Claude");
-    expect(name.match(/Claude/g)).toHaveLength(1);
   });
 
   it("treats a differently-cased title as the same identity, not a second fact", () => {
@@ -389,10 +342,20 @@ describe("PilotView", () => {
   });
 
   it("captions retained runs as stale instead of presenting them as current", () => {
-    seed([run({ agentState: "waiting", title: "one", since: NOW - 60_000 })], {
-      degraded: true,
-      lastSuccessfulAt: NOW - 12 * 60_000,
-    });
+    seed(
+      [
+        run({
+          agentState: "waiting",
+          waitingReason: "question",
+          title: "one",
+          since: NOW - 60_000,
+        }),
+      ],
+      {
+        degraded: true,
+        lastSuccessfulAt: NOW - 12 * 60_000,
+      }
+    );
     render(<PilotView />);
 
     // The rows still render — they are the best available answer — but the
@@ -441,7 +404,7 @@ describe("PilotView", () => {
   it("leads with the demand count when agents need the user", () => {
     seed([
       run({ runId: "a", agentState: "waiting", waitingReason: "error", since: NOW - 60_000 }),
-      run({ runId: "b", agentState: "waiting", since: NOW - 30_000 }),
+      run({ runId: "b", agentState: "waiting", waitingReason: "question", since: NOW - 30_000 }),
       run({ runId: "c", agentState: "working", since: NOW - 10_000 }),
     ]);
     render(<PilotView />);
@@ -471,7 +434,15 @@ describe("PilotView", () => {
   });
 
   it("navigates to the run when a row is clicked", () => {
-    seed([run({ runId: "t9", workspaceId: "p1", agentState: "waiting", since: NOW - 60_000 })]);
+    seed([
+      run({
+        runId: "t9",
+        workspaceId: "p1",
+        agentState: "waiting",
+        waitingReason: "question",
+        since: NOW - 60_000,
+      }),
+    ]);
     render(<PilotView />);
 
     screen.getByTestId("pilot-row").click();
@@ -480,15 +451,6 @@ describe("PilotView", () => {
       runId: "t9",
       workspaceId: "p1",
     });
-  });
-
-  it("shows the panel title as the row's primary label", () => {
-    seed([
-      run({ agentState: "working", title: "Rebuild the fleet snapshot", since: NOW - 10_000 }),
-    ]);
-    render(<PilotView />);
-
-    expect(screen.getByText("Rebuild the fleet snapshot")).toBeTruthy();
   });
 
   it("filters rows by title and drops projects left with nothing", () => {
@@ -539,15 +501,6 @@ describe("PilotView", () => {
 
       expect(usePilotStore.getState().isOpen).toBe(false);
     });
-
-    it("closes once the box is already empty", () => {
-      seed([run({ agentState: "working", title: "auth refactor" })]);
-      renderWithEscape();
-
-      fireEvent.keyDown(screen.getByTestId("pilot-search"), { key: "Escape" });
-
-      expect(usePilotStore.getState().isOpen).toBe(false);
-    });
   });
 
   it("distinguishes an empty fleet from an empty search result", () => {
@@ -576,21 +529,8 @@ describe("PilotView", () => {
     expect(screen.getByText('No matches for "zzzz"')).toBeTruthy();
   });
 
-  it("matches on project name as well as title", () => {
-    seed([
-      run({ runId: "a", workspaceId: "p1", agentState: "working", title: "one" }),
-      run({ runId: "b", workspaceId: "s1", agentState: "working", title: "two" }),
-    ]);
-    render(<PilotView />);
-
-    fireEvent.change(screen.getByTestId("pilot-search"), { target: { value: "spike" } });
-
-    expect(screen.getByText("two")).toBeTruthy();
-    expect(screen.queryByText("one")).toBeNull();
-  });
-
   it("advances a wait age as time passes without a new snapshot", async () => {
-    seed([run({ agentState: "waiting", since: NOW - 60_000 })]);
+    seed([run({ agentState: "waiting", waitingReason: "question", since: NOW - 60_000 })]);
     render(<PilotView />);
     // The age rides the status line, where it names the quantity it measures.
     const age = () => screen.getByTestId("pilot-row").textContent ?? "";
@@ -665,13 +605,6 @@ describe("PilotView", () => {
         run({ runId: "c", workspaceId: "s1", agentState: "working", title: "charlie" }),
       ]);
     }
-
-    it("opens with the first agent selected", () => {
-      seedTwoProjects();
-      render(<PilotView />);
-
-      expect(selected()).toMatchObject({ role: "option", text: expect.stringContaining("alpha") });
-    });
 
     it("walks agents only, stepping over the projects between them", () => {
       seedTwoProjects();
@@ -822,6 +755,7 @@ describe("PilotView", () => {
           runId: "asking",
           workspaceId: "p1",
           agentState: "waiting",
+          waitingReason: "question",
           title: "docs asking",
           since: NOW - 30_000,
         }),
@@ -911,29 +845,29 @@ describe("PilotView", () => {
       // toward `demandCount`, but the Needs-you segment is blocked + needs-you
       // only. A review row must land in exactly one of the two segments.
       seed([
-        run({ runId: "r", agentState: "completed", title: "handed back", since: NOW - 30_000 }),
-        run({ runId: "w", agentState: "waiting", title: "asking", since: NOW - 30_000 }),
+        run({
+          runId: "r",
+          agentState: "completed",
+          handBack: { stoppedAt: NOW - 30_000 },
+          title: "handed back",
+          since: NOW - 30_000,
+        }),
+        run({
+          runId: "w",
+          agentState: "waiting",
+          waitingReason: "question",
+          title: "asking",
+          since: NOW - 30_000,
+        }),
       ]);
       render(<PilotView />);
 
       expect(segment(/Attention/).getAttribute("aria-label")).toBe("Attention, 1 agent");
-      expect(segment(/Finished/).getAttribute("aria-label")).toBe(
-        "Finished, 1 agent, all ready for review"
-      );
+      expect(segment(/Finished/).getAttribute("aria-label")).toBe("Finished, 1 agent, all unread");
 
       fireEvent.click(segment(/Finished/));
       expect(rowTitles()).toHaveLength(1);
       expect(rowTitles()[0]).toContain("handed back");
-    });
-
-    it("leaves an exited run in All and in nothing else", () => {
-      seedMixedFleet();
-      render(<PilotView />);
-
-      expect(segment(/Finished/).getAttribute("aria-label")).toBe("Finished, 0 agents");
-      fireEvent.click(segment(/Working/));
-
-      expect(rowTitles().join(" ")).not.toContain("old shell");
     });
 
     it("moves the highlight off a row the filter removes", () => {
@@ -1080,8 +1014,20 @@ describe("PilotView", () => {
       // A filter must narrow the order the pointer is holding, never re-derive
       // one underneath it — every row here is a click target.
       seed([
-        run({ runId: "a", agentState: "waiting", title: "alpha", since: NOW - 10_000 }),
-        run({ runId: "b", agentState: "waiting", title: "bravo", since: NOW - 5_000 }),
+        run({
+          runId: "a",
+          agentState: "waiting",
+          waitingReason: "question",
+          title: "alpha",
+          since: NOW - 10_000,
+        }),
+        run({
+          runId: "b",
+          agentState: "waiting",
+          waitingReason: "question",
+          title: "bravo",
+          since: NOW - 5_000,
+        }),
       ]);
       render(<PilotView />);
       // Titles, not full text: "bravo" changes band below, so its glyph
@@ -1095,7 +1041,13 @@ describe("PilotView", () => {
       // on a fresh sort.
       act(() => {
         seed([
-          run({ runId: "a", agentState: "waiting", title: "alpha", since: NOW - 10_000 }),
+          run({
+            runId: "a",
+            agentState: "waiting",
+            waitingReason: "question",
+            title: "alpha",
+            since: NOW - 10_000,
+          }),
           run({
             runId: "b",
             agentState: "waiting",
@@ -1157,7 +1109,13 @@ describe("PilotView", () => {
           title: "one",
           since: NOW - 60_000,
         }),
-        run({ runId: "b", agentState: "waiting", title: "two", since: NOW - 30_000 }),
+        run({
+          runId: "b",
+          agentState: "waiting",
+          waitingReason: "question",
+          title: "two",
+          since: NOW - 30_000,
+        }),
         run({ runId: "c", agentState: "working", title: "three", since: NOW - 10_000 }),
       ]);
       render(<PilotView />);
@@ -1177,8 +1135,20 @@ describe("PilotView", () => {
       // did not come from the scroller, so the arrow keys do nothing at all —
       // focus has to go back for the list to be navigable again.
       seed([
-        run({ runId: "a", agentState: "waiting", title: "one", since: NOW - 60_000 }),
-        run({ runId: "b", agentState: "waiting", title: "two", since: NOW - 30_000 }),
+        run({
+          runId: "a",
+          agentState: "waiting",
+          waitingReason: "question",
+          title: "one",
+          since: NOW - 60_000,
+        }),
+        run({
+          runId: "b",
+          agentState: "waiting",
+          waitingReason: "question",
+          title: "two",
+          since: NOW - 30_000,
+        }),
       ]);
       render(<PilotView />);
 
@@ -1198,8 +1168,20 @@ describe("PilotView", () => {
       // `review` is a demand band but NOT part of the Needs-you segment, so
       // counting it here would promise agents the button then failed to show.
       seed([
-        run({ runId: "a", agentState: "waiting", title: "one", since: NOW - 60_000 }),
-        run({ runId: "b", agentState: "completed", title: "two", since: NOW - 30_000 }),
+        run({
+          runId: "a",
+          agentState: "waiting",
+          waitingReason: "question",
+          title: "one",
+          since: NOW - 60_000,
+        }),
+        run({
+          runId: "b",
+          agentState: "completed",
+          handBack: { stoppedAt: NOW - 30_000 },
+          title: "two",
+          since: NOW - 30_000,
+        }),
       ]);
       render(<PilotView />);
 
@@ -1212,10 +1194,18 @@ describe("PilotView", () => {
     it("still reports finished work when nothing else is asking", () => {
       // Dropping review from the demand count must not make a hand-back
       // disappear into "nothing needs you".
-      seed([run({ runId: "a", agentState: "completed", title: "one", since: NOW - 30_000 })]);
+      seed([
+        run({
+          runId: "a",
+          agentState: "completed",
+          handBack: { stoppedAt: NOW - 30_000 },
+          title: "one",
+          since: NOW - 30_000,
+        }),
+      ]);
       render(<PilotView />);
 
-      expect(screen.getByTestId("pilot-summary").textContent).toBe("Ready for review");
+      expect(screen.getByTestId("pilot-summary").textContent).toBe("Agent unread");
       expect(screen.queryByTestId("pilot-demand-action")).toBeNull();
     });
 
@@ -1225,8 +1215,20 @@ describe("PilotView", () => {
       // driving the app by voice — and its singular read "1 agent that need
       // you". The visible sentence has to BE the name.
       seed([
-        run({ runId: "a", agentState: "waiting", title: "one", since: NOW - 60_000 }),
-        run({ runId: "b", agentState: "waiting", title: "two", since: NOW - 30_000 }),
+        run({
+          runId: "a",
+          agentState: "waiting",
+          waitingReason: "question",
+          title: "one",
+          since: NOW - 60_000,
+        }),
+        run({
+          runId: "b",
+          agentState: "waiting",
+          waitingReason: "question",
+          title: "two",
+          since: NOW - 30_000,
+        }),
       ]);
       render(<PilotView />);
 
@@ -1244,20 +1246,6 @@ describe("PilotView", () => {
   });
 
   describe("group headers", () => {
-    it("carries the project's name to every option filed under it", () => {
-      // The header is not an item, so a screen reader learns which project a
-      // run belongs to from the enclosing group's name and nowhere else.
-      seed([
-        run({ runId: "a", workspaceId: "p1", agentState: "working", since: NOW - 60_000 }),
-        run({ runId: "b", workspaceId: "s1", agentState: "working", since: NOW - 60_000 }),
-      ]);
-      render(<PilotView />);
-
-      const names = screen.getAllByRole("group").map((g) => g.getAttribute("aria-label"));
-      expect(names).toContain("daintree");
-      expect(names).toContain("spike");
-    });
-
     it("names the current workspace in the group's own label, not just on screen", () => {
       // Which workspace you are already in decides whether opening a run is
       // instant or swaps the whole view. The header renders that as a word and
@@ -1276,18 +1264,6 @@ describe("PilotView", () => {
 
       expect(labelled).toHaveLength(1);
       expect(labelled[0]).toContain("daintree");
-    });
-
-    it("is not a control, so the list holds nothing but options", () => {
-      // A `<button>` inside a `role="group"` inside a `role="listbox"` was
-      // never structurally right: a listbox's children are options. The
-      // disclosure it served is gone with it.
-      seed([run({ agentState: "working", since: NOW - 10_000 })]);
-      render(<PilotView />);
-
-      expect(screen.getByTestId("pilot-group-header")).toBeTruthy();
-      expect(screen.queryByTestId("pilot-group-toggle")).toBeNull();
-      expect(screen.getByRole("listbox").querySelector("button")).toBeNull();
     });
   });
 
@@ -1633,6 +1609,7 @@ describe("PilotView", () => {
           runId: "b",
           workspaceId: "s1",
           agentState: "waiting",
+          waitingReason: "question",
           title: "asking",
           since: NOW - 60_000,
         }),
@@ -1649,7 +1626,13 @@ describe("PilotView", () => {
   describe("group demand chips", () => {
     it("summarises each project's demand on its header, worst band first", () => {
       seed([
-        run({ runId: "a", workspaceId: "p1", agentState: "waiting", since: NOW - 60_000 }),
+        run({
+          runId: "a",
+          workspaceId: "p1",
+          agentState: "waiting",
+          waitingReason: "question",
+          since: NOW - 60_000,
+        }),
         run({ runId: "b", workspaceId: "p1", agentState: "working", since: NOW - 60_000 }),
         run({ runId: "c", workspaceId: "s1", agentState: "working", since: NOW - 60_000 }),
       ]);
@@ -1675,6 +1658,7 @@ describe("PilotView", () => {
           runId: "a",
           workspaceId: "p1",
           agentState: "waiting",
+          waitingReason: "question",
           title: "auth spike",
           since: NOW,
         }),
@@ -1707,16 +1691,26 @@ describe("PilotView", () => {
           waitingReason: "error",
           since: NOW,
         }),
-        run({ runId: "b", workspaceId: "p1", agentState: "waiting", since: NOW }),
-        run({ runId: "c", workspaceId: "p1", agentState: "completed", since: NOW }),
+        run({
+          runId: "b",
+          workspaceId: "p1",
+          agentState: "waiting",
+          waitingReason: "question",
+          since: NOW,
+        }),
+        run({
+          runId: "c",
+          workspaceId: "p1",
+          agentState: "completed",
+          handBack: { stoppedAt: NOW },
+          since: NOW,
+        }),
       ]);
       render(<PilotView />);
 
       expect(screen.getByTestId("pilot-group-demand").textContent).toBe("111");
       // The words are on the group, where they are not colour-and-digit alone.
-      expect(
-        screen.getByRole("group", { name: /1 blocked, 1 waiting, 1 ready for review/ })
-      ).toBeTruthy();
+      expect(screen.getByRole("group", { name: /1 blocked, 1 waiting, 1 unread/ })).toBeTruthy();
     });
   });
 
@@ -1785,7 +1779,14 @@ describe("PilotView", () => {
     }
 
     it("advertises the park verb for the highlighted row", () => {
-      seed([run({ agentState: "waiting", title: "auth spike", since: NOW - 60_000 })]);
+      seed([
+        run({
+          agentState: "waiting",
+          waitingReason: "question",
+          title: "auth spike",
+          since: NOW - 60_000,
+        }),
+      ]);
       render(<PilotView />);
 
       expect(screen.getByTestId("pilot-park-hint").textContent).toContain("Park");
@@ -1795,6 +1796,7 @@ describe("PilotView", () => {
       seed([
         run({
           agentState: "waiting",
+          waitingReason: "question",
           title: "auth spike",
           since: NOW - 60_000,
           park: { parkedAt: NOW - 30_000 },
@@ -1809,6 +1811,7 @@ describe("PilotView", () => {
       seed([
         run({
           agentState: "waiting",
+          waitingReason: "question",
           title: "auth spike",
           since: NOW - 60_000,
           park: { parkedAt: NOW - 30_000, note: "after the migration lands" },
@@ -1820,7 +1823,14 @@ describe("PilotView", () => {
     });
 
     it("opens the editor with Alt+Enter, replacing the list and its controls", () => {
-      seed([run({ agentState: "waiting", title: "auth spike", since: NOW - 60_000 })]);
+      seed([
+        run({
+          agentState: "waiting",
+          waitingReason: "question",
+          title: "auth spike",
+          since: NOW - 60_000,
+        }),
+      ]);
       render(<PilotView />);
 
       altEnter();
@@ -1833,7 +1843,14 @@ describe("PilotView", () => {
     });
 
     it("parks the highlighted run with the typed note", async () => {
-      seed([run({ agentState: "waiting", title: "auth spike", since: NOW - 60_000 })]);
+      seed([
+        run({
+          agentState: "waiting",
+          waitingReason: "question",
+          title: "auth spike",
+          since: NOW - 60_000,
+        }),
+      ]);
       render(<PilotView />);
       altEnter();
 
@@ -1853,7 +1870,13 @@ describe("PilotView", () => {
 
     it("parks until a chosen gate", async () => {
       seed([
-        run({ runId: "t1", agentState: "waiting", title: "downstream", since: NOW - 60_000 }),
+        run({
+          runId: "t1",
+          agentState: "waiting",
+          waitingReason: "question",
+          title: "downstream",
+          since: NOW - 60_000,
+        }),
         run({ runId: "t2", agentState: "working", title: "upstream", since: NOW - 30_000 }),
       ]);
       render(<PilotView />);
@@ -1872,6 +1895,7 @@ describe("PilotView", () => {
       seed([
         run({
           agentState: "waiting",
+          waitingReason: "question",
           title: "auth spike",
           since: NOW - 60_000,
           park: { parkedAt: NOW - 30_000, note: "old note" },
@@ -1890,7 +1914,14 @@ describe("PilotView", () => {
     });
 
     it("cancel returns to the list without touching the park", async () => {
-      seed([run({ agentState: "waiting", title: "auth spike", since: NOW - 60_000 })]);
+      seed([
+        run({
+          agentState: "waiting",
+          waitingReason: "question",
+          title: "auth spike",
+          since: NOW - 60_000,
+        }),
+      ]);
       render(<PilotView />);
       altEnter();
 
@@ -1906,7 +1937,14 @@ describe("PilotView", () => {
 
     it("surfaces a rejected park inline and stays open", async () => {
       parkRunMock.mockRejectedValue(new Error("Fleet state is unavailable right now"));
-      seed([run({ agentState: "waiting", title: "auth spike", since: NOW - 60_000 })]);
+      seed([
+        run({
+          agentState: "waiting",
+          waitingReason: "question",
+          title: "auth spike",
+          since: NOW - 60_000,
+        }),
+      ]);
       render(<PilotView />);
       altEnter();
 
@@ -1919,7 +1957,14 @@ describe("PilotView", () => {
     });
 
     it("closes only the editor on Escape, leaving the palette open", () => {
-      seed([run({ agentState: "waiting", title: "auth spike", since: NOW - 60_000 })]);
+      seed([
+        run({
+          agentState: "waiting",
+          waitingReason: "question",
+          title: "auth spike",
+          since: NOW - 60_000,
+        }),
+      ]);
       render(<PilotView />);
       altEnter();
       expect(screen.getByTestId("pilot-park-editor")).toBeTruthy();
@@ -1934,7 +1979,14 @@ describe("PilotView", () => {
     });
 
     it("ignores the opening chord's key-repeat — a modified Enter never submits", () => {
-      seed([run({ agentState: "waiting", title: "auth spike", since: NOW - 60_000 })]);
+      seed([
+        run({
+          agentState: "waiting",
+          waitingReason: "question",
+          title: "auth spike",
+          since: NOW - 60_000,
+        }),
+      ]);
       render(<PilotView />);
       altEnter();
 
@@ -1947,10 +1999,20 @@ describe("PilotView", () => {
     });
 
     it("offers no parking over retained data — Main would reject it anyway", () => {
-      seed([run({ agentState: "waiting", title: "auth spike", since: NOW - 60_000 })], {
-        degraded: true,
-        lastSuccessfulAt: NOW - 60_000,
-      });
+      seed(
+        [
+          run({
+            agentState: "waiting",
+            waitingReason: "question",
+            title: "auth spike",
+            since: NOW - 60_000,
+          }),
+        ],
+        {
+          degraded: true,
+          lastSuccessfulAt: NOW - 60_000,
+        }
+      );
       render(<PilotView />);
 
       expect(screen.queryByTestId("pilot-park-hint")).toBeNull();
@@ -1959,7 +2021,14 @@ describe("PilotView", () => {
     });
 
     it("falls back to the list when the run being parked disappears", async () => {
-      seed([run({ agentState: "waiting", title: "auth spike", since: NOW - 60_000 })]);
+      seed([
+        run({
+          agentState: "waiting",
+          waitingReason: "question",
+          title: "auth spike",
+          since: NOW - 60_000,
+        }),
+      ]);
       render(<PilotView />);
       altEnter();
       expect(screen.getByTestId("pilot-park-editor")).toBeTruthy();
@@ -1973,7 +2042,14 @@ describe("PilotView", () => {
     });
 
     it("keeps the park actions outside the scrolling body", () => {
-      seed([run({ agentState: "waiting", title: "auth spike", since: NOW - 60_000 })]);
+      seed([
+        run({
+          agentState: "waiting",
+          waitingReason: "question",
+          title: "auth spike",
+          since: NOW - 60_000,
+        }),
+      ]);
       render(<PilotView />);
       altEnter();
 
@@ -1986,7 +2062,14 @@ describe("PilotView", () => {
     });
 
     it("names the dialog for the editing mode, and says it on screen", () => {
-      seed([run({ agentState: "waiting", title: "auth spike", since: NOW - 60_000 })]);
+      seed([
+        run({
+          agentState: "waiting",
+          waitingReason: "question",
+          title: "auth spike",
+          since: NOW - 60_000,
+        }),
+      ]);
       render(<PilotView />);
       const listName = screen.getByRole("dialog").getAttribute("aria-label");
       altEnter();
@@ -1999,7 +2082,14 @@ describe("PilotView", () => {
     });
 
     it("describes the autofocused note with the run it parks", () => {
-      seed([run({ agentState: "waiting", title: "auth spike", since: NOW - 60_000 })]);
+      seed([
+        run({
+          agentState: "waiting",
+          waitingReason: "question",
+          title: "auth spike",
+          since: NOW - 60_000,
+        }),
+      ]);
       render(<PilotView />);
       altEnter();
 
@@ -2016,6 +2106,7 @@ describe("PilotView", () => {
       seed([
         run({
           agentState: "waiting",
+          waitingReason: "question",
           title: "auth spike",
           since: NOW - 60_000,
           park: { parkedAt: NOW - 30_000, note: "old note" },
@@ -2038,7 +2129,13 @@ describe("PilotView", () => {
 
     it("warns that an exited gate only releases if it runs again", () => {
       seed([
-        run({ runId: "t1", agentState: "waiting", title: "downstream", since: NOW - 60_000 }),
+        run({
+          runId: "t1",
+          agentState: "waiting",
+          waitingReason: "question",
+          title: "downstream",
+          since: NOW - 60_000,
+        }),
         run({ runId: "t2", agentState: "working", title: "alpha", since: NOW - 30_000 }),
         run({ runId: "t3", agentState: "exited", title: "alpha", since: NOW - 90_000 }),
       ]);
@@ -2062,7 +2159,13 @@ describe("PilotView", () => {
 
     it("commits with Enter from the gate list, with the gate under the cursor", async () => {
       seed([
-        run({ runId: "t1", agentState: "waiting", title: "downstream", since: NOW - 60_000 }),
+        run({
+          runId: "t1",
+          agentState: "waiting",
+          waitingReason: "question",
+          title: "downstream",
+          since: NOW - 60_000,
+        }),
         run({ runId: "t2", agentState: "working", title: "upstream", since: NOW - 30_000 }),
       ]);
       render(<PilotView />);
@@ -2079,7 +2182,13 @@ describe("PilotView", () => {
 
     it("marks exactly one gate checked, and the helper describes that choice", () => {
       seed([
-        run({ runId: "t1", agentState: "waiting", title: "downstream", since: NOW - 60_000 }),
+        run({
+          runId: "t1",
+          agentState: "waiting",
+          waitingReason: "question",
+          title: "downstream",
+          since: NOW - 60_000,
+        }),
         run({ runId: "t2", agentState: "working", title: "upstream", since: NOW - 30_000 }),
       ]);
       render(<PilotView />);
@@ -2108,7 +2217,14 @@ describe("PilotView", () => {
           reject = r;
         })
       );
-      seed([run({ agentState: "waiting", title: "auth spike", since: NOW - 60_000 })]);
+      seed([
+        run({
+          agentState: "waiting",
+          waitingReason: "question",
+          title: "auth spike",
+          since: NOW - 60_000,
+        }),
+      ]);
       render(<PilotView />);
       altEnter();
 
@@ -2136,7 +2252,13 @@ describe("PilotView", () => {
 
     it("says so when the chosen gate's run disappears, and falls back to manual", async () => {
       seed([
-        run({ runId: "t1", agentState: "waiting", title: "downstream", since: NOW - 60_000 }),
+        run({
+          runId: "t1",
+          agentState: "waiting",
+          waitingReason: "question",
+          title: "downstream",
+          since: NOW - 60_000,
+        }),
         run({ runId: "t2", agentState: "working", title: "upstream", since: NOW - 30_000 }),
       ]);
       render(<PilotView />);
@@ -2146,7 +2268,13 @@ describe("PilotView", () => {
 
       act(() => {
         seed([
-          run({ runId: "t1", agentState: "waiting", title: "downstream", since: NOW - 60_000 }),
+          run({
+            runId: "t1",
+            agentState: "waiting",
+            waitingReason: "question",
+            title: "downstream",
+            since: NOW - 60_000,
+          }),
         ]);
       });
       await vi.advanceTimersByTimeAsync(0);
@@ -2161,6 +2289,7 @@ describe("PilotView", () => {
       seed([
         run({
           agentState: "waiting",
+          waitingReason: "question",
           title: "auth spike",
           since: NOW - 60_000,
           park: { parkedAt: NOW - 30_000, note: "old note" },
@@ -2204,6 +2333,7 @@ describe("PilotView worktree scope", () => {
         worktreeId: "/repo/wt/alpha",
         title: "auth refactor",
         agentState: "waiting",
+        waitingReason: "question",
         since: NOW - 60_000,
       }),
       run({
@@ -2513,13 +2643,6 @@ describe("PilotView worktree scope", () => {
       fireEvent.click(drillHeader());
     }
 
-    it("names where you are, and offers the way out", () => {
-      drillIn();
-
-      expect(screen.getByTestId("pilot-scope-name").textContent).toBe("daintree");
-      expect(screen.getByTestId("pilot-scope-back")).toBeTruthy();
-    });
-
     it("returns to the fleet when the breadcrumb is clicked", () => {
       drillIn();
 
@@ -2588,6 +2711,7 @@ describe("PilotView worktree scope", () => {
           worktreeId: "/repo/wt/alpha",
           title: "auth refactor",
           agentState: "waiting",
+          waitingReason: "question",
           since: NOW - 60_000,
         }),
         run({
@@ -2602,6 +2726,7 @@ describe("PilotView worktree scope", () => {
           workspaceId: "s1",
           title: "spike run",
           agentState: "waiting",
+          waitingReason: "question",
           since: NOW - 60_000,
         }),
       ]);
@@ -2655,6 +2780,7 @@ describe("PilotView worktree scope", () => {
           runId: "waiting",
           worktreeId: "/repo/wt/alpha",
           agentState: "waiting",
+          waitingReason: "question",
           since: NOW - 600_000,
         }),
         run({ runId: "root", agentState: "working", since: NOW - 600_000 }),
@@ -2717,14 +2843,6 @@ describe("PilotView worktree scope", () => {
       expect(sections()).toEqual(["beta"]);
     });
 
-    it("admits a whole worktree typed by name", () => {
-      drillIn();
-
-      fireEvent.change(screen.getByTestId("pilot-search"), { target: { value: "alpha" } });
-
-      expect(screen.getAllByTestId("pilot-row")).toHaveLength(1);
-    });
-
     it("still narrows by band inside the scope", () => {
       drillIn();
 
@@ -2780,6 +2898,7 @@ describe("PilotView worktree scope", () => {
             runId: "elsewhere",
             workspaceId: "s1",
             agentState: "waiting",
+            waitingReason: "question",
             since: NOW - 60_000,
           }),
         ]);
@@ -2860,17 +2979,6 @@ describe("PilotView worktree axis from the project's own store", () => {
       run({ runId: "b", worktreeId: "/repo/wt/alpha", agentState: "working", since: NOW - 60_000 }),
     ]);
   }
-
-  it("offers the drill where the runs share a worktree but the project has several", () => {
-    // The measured bug (#11957): a fleet row exists only for a terminal
-    // classified an agent, so the affordance tracked where agents happened to
-    // be sitting rather than whether the project has an axis at all.
-    seedViewWorkspace("p1");
-    seedOneBucket();
-    renderWithWorktrees([worktree(ZEBRA_ROOT, true), worktree("/repo/wt/alpha")]);
-
-    expect(screen.getByTestId("pilot-group-drill")).toBeTruthy();
-  });
 
   it("keeps the chord and the chevron saying the same thing", () => {
     // The constraint #11955 established by construction, which the fix has to

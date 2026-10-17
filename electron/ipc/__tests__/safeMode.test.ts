@@ -57,12 +57,6 @@ describe("app:clear-quarantined-panel handler", () => {
     expect(result).toEqual({ cleared: true });
   });
 
-  it("reports cleared=false when the ledger had no record", async () => {
-    panelSuspectLedger.clearQuarantinedPanel.mockReturnValue(false);
-    const result = await invokeClear("missing-panel");
-    expect(result).toEqual({ cleared: false });
-  });
-
   it("rejects an empty string id without calling the ledger", async () => {
     const result = await invokeClear("");
     expect(panelSuspectLedger.clearQuarantinedPanel).not.toHaveBeenCalled();

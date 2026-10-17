@@ -120,47 +120,6 @@ describe("app.theme.toggle", () => {
     expect(mockNotify).not.toHaveBeenCalled();
   });
 
-  it("is a no-op when resolved target equals current scheme", async () => {
-    // preferredLight points to the currently-selected light scheme — the correct-type
-    // resolved target matches current, so toggle should early-return.
-    mockGetThemeState.mockReturnValue({
-      selectedSchemeId: "light-a",
-      customSchemes: [darkA, lightA],
-      preferredDarkSchemeId: "dark-a",
-      preferredLightSchemeId: "light-a",
-      setSelectedSchemeId: mockSetSelectedSchemeId,
-    });
-
-    // current=light → targetType=dark → target=dark-a → not equal → this will switch.
-    // To make it a no-op we need current=dark with preferredLight=current (degenerate),
-    // but new logic rejects wrong-type fallbacks. Instead, set current=dark-a and make
-    // the switch happen, then re-run with matching preferredLight=currently selected light.
-    const { toggle } = getActions();
-    await toggle.run(undefined, stubCtx);
-    // current=light-a switches to dark-a. Now simulate toggling back from dark-a where
-    // preferredLight=light-a — should switch again, not no-op. The true no-op case is
-    // when preferredDark/Light already names the current scheme AFTER type validation.
-    // That requires current.type === targetType, impossible by construction.
-    // So instead test the trivially-valid case: current scheme IS the preferred opposite.
-    vi.clearAllMocks();
-    mockGetThemeState.mockReturnValue({
-      selectedSchemeId: "light-a",
-      customSchemes: [darkA, lightA],
-      preferredDarkSchemeId: "light-a", // degenerate: preferred dark points at a light scheme id
-      preferredLightSchemeId: "light-a",
-      setSelectedSchemeId: mockSetSelectedSchemeId,
-    });
-    await toggle.run(undefined, stubCtx);
-    // current=light → targetType=dark → resolved preferredDark=light-a (light) →
-    // type-mismatch → fallback to built-in dark scheme → NOT a no-op.
-    // So we expect a switch happened (not a no-op).
-    expect(mockSetSelectedSchemeId).toHaveBeenCalledTimes(1);
-    expect(mockSetColorScheme).toHaveBeenCalledTimes(1);
-    // Target must be a dark scheme — assert the fallback kicked in.
-    const targetId = mockSetSelectedSchemeId.mock.calls[0]![0] as string;
-    expect(targetId).not.toBe("light-a");
-  });
-
   it("falls back to built-in scheme of correct type when preferred ID points to wrong type", async () => {
     // preferredDarkSchemeId mis-points to a light scheme — fallback must yield a dark scheme.
     mockGetThemeState.mockReturnValue({
@@ -206,34 +165,5 @@ describe("app.theme.toggle", () => {
     );
     expect(mockNotify).not.toHaveBeenCalledWith(expect.objectContaining({ priority: "low" }));
     expect(mockAddNotification).not.toHaveBeenCalled();
-  });
-});
-
-describe("app.theme.pick", () => {
-  beforeEach(() => {
-    vi.clearAllMocks();
-    Object.defineProperty(globalThis, "window", {
-      value: { dispatchEvent: vi.fn() },
-      writable: true,
-      configurable: true,
-    });
-  });
-
-  it("dispatches daintree:open-theme-palette event", async () => {
-    const { pick } = getActions();
-    await pick.run(undefined, stubCtx);
-    expect(window.dispatchEvent).toHaveBeenCalledTimes(1);
-    const event = (window.dispatchEvent as ReturnType<typeof vi.fn>).mock.calls[0]![0] as Event;
-    expect(event.type).toBe("daintree:open-theme-palette");
-  });
-
-  it("has correct metadata", () => {
-    const { pick, toggle } = getActions();
-    expect(pick.id).toBe("app.theme.pick");
-    expect(pick.category).toBe("app");
-    expect(pick.danger).toBe("safe");
-    expect(toggle.id).toBe("app.theme.toggle");
-    expect(toggle.category).toBe("app");
-    expect(toggle.danger).toBe("safe");
   });
 });

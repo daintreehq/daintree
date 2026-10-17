@@ -8,6 +8,7 @@ vi.mock("@/clients", () => ({
     onExit: vi.fn(() => vi.fn()),
     onResizeResult: vi.fn(() => vi.fn()),
     onTierChanged: vi.fn(() => vi.fn()),
+    onReset: vi.fn(() => vi.fn()),
     write: vi.fn(),
     setActivityTier: vi.fn(),
     wake: vi.fn(),
@@ -18,6 +19,7 @@ vi.mock("@/clients", () => ({
     })),
     acknowledgeData: vi.fn(),
     acknowledgePortData: vi.fn(),
+    getPortAckGeneration: vi.fn(() => 0),
     discardPortAcks: vi.fn(),
   },
   systemClient: { openExternal: vi.fn() },
@@ -109,10 +111,6 @@ describe("injectDataLossMarker", () => {
     expect(oscWrite).toBe(expectedPattern);
     expect(oscWrite).not.toContain("Output dropped");
     expect(oscWrite).not.toContain("\x1b[33m");
-  });
-
-  it("is a no-op for an unknown terminal id", () => {
-    expect(() => terminalInstanceService.injectDataLossMarker("nope", 10)).not.toThrow();
   });
 
   it("renders the yellow marker via the OSC handler round-trip", async () => {

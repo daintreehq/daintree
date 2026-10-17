@@ -31,7 +31,6 @@ vi.mock("@/config/agents", () => ({
 
 const { buildRestoreRecoveryLaunchOptions, launchFromRestoreRecovery, siblingHeldSessionIds } =
   await import("../restoreRecoveryLaunch");
-const { escapeShellArg } = await import("@shared/utils/shellEscape");
 
 function heldPane(overrides: Partial<PtyPanelData> = {}): PtyPanelData {
   return {
@@ -103,9 +102,7 @@ describe("buildRestoreRecoveryLaunchOptions (#12434)", () => {
       preserveMaximize: true,
     });
     // The probed executable, not the bare registry name the CLI may not be on PATH as.
-    expect(options?.command).toBe(
-      `/opt/bin/codex --model ${escapeShellArg("gpt-5")} resume sess-1 -C ${escapeShellArg(".")}`
-    );
+    expect(options?.command).toBe(`/opt/bin/codex --model 'gpt-5' resume sess-1 -C '.'`);
     expect(options).not.toHaveProperty("restoreRecovery");
   });
 

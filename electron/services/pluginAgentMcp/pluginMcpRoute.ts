@@ -20,6 +20,9 @@ import {
 import { isPluginMcpGrantAllowed } from "./projectEnablement.js";
 import { createPluginSessionServer } from "./pluginSessionServer.js";
 import { PLUGIN_MCP_ROUTE_PREFIX, type PluginMcpRouteHandler } from "./types.js";
+import { createLogger } from "../../utils/logger.js";
+
+const logger = createLogger("main:PluginAgentMcp");
 
 /**
  * Open sessions one credential may hold. An agent needs one; a few more covers
@@ -43,6 +46,30 @@ const PLUGIN_MCP_HANDSHAKE_TIMEOUT_MS = 10_000;
 const PLUGIN_MCP_RELOAD_WAIT_MS = 15_000;
 /** Requests one credential may have parked on a reload at once; the rest get 503 now. */
 export const MAX_PARKED_PLUGIN_MCP_REQUESTS_PER_CREDENTIAL = 8;
+/**
+ * A rejection is logged once per kind and credential in this window: a client
+ * retrying a dead credential would otherwise write a line per attempt.
+ */
+export const PLUGIN_MCP_REJECTION_LOG_INTERVAL_MS = 60_000;
+export const MAX_TRACKED_PLUGIN_MCP_REJECTIONS = 512;
+
+/**
+ * Why a request was refused, as logged. Categories and public identifiers
+ * only: never the bearer, its digest, or the Authorization header.
+ */
+type PluginMcpRejection =
+  | "missing-bearer"
+  | "unknown-bearer"
+  | "revoked"
+  | "method-not-allowed"
+  | "route-mismatch"
+  | "plugin-not-loaded"
+  | "access-not-allowed"
+  | "reload-pending"
+  | "workspace-rejected"
+  | "session-not-found"
+  | "session-cap"
+  | "listener-stopped";
 
 export interface PluginMcpRouteDeps {
   /** Whether the plugin instance is loaded right now (`PluginService.hasPlugin`). */
@@ -97,6 +124,10 @@ export function parsePluginMcpRoute(pathname: string): { pluginInstanceId: strin
 
 function headerString(value: string | string[] | undefined): string | undefined {
   return Array.isArray(value) ? value[0] : value;
+}
+
+function writeUnauthorized(res: http.ServerResponse, body = "Unauthorized"): void {
+  writeText(res, 401, body, { "WWW-Authenticate": 'Bearer realm="Daintree plugin MCP"' });
 }
 
 function writeText(
@@ -160,6 +191,8 @@ export class PluginMcpRoute implements PluginMcpRouteHandler {
   private readonly maxResultBytes: number | undefined;
   private readonly offRevoked: () => void;
   private readonly offKept: () => void;
+  /** When each rejection kind was last logged, by kind and credential. */
+  private readonly rejectionsLoggedAt = new Map<string, number>();
   /**
    * Bumped by {@link closeAllSessions}, so a handshake still in flight when the
    * listener stops cannot file a session after the sweep that should have
@@ -245,15 +278,18 @@ export class PluginMcpRoute implements PluginMcpRouteHandler {
     // Captured before the first await, so a request that resumes after the
     // listener stopped can tell the sweep already ran.
     const epoch = this.epoch;
-    const grant = this.authenticate(req);
+    const token = extractBearerToken(req.headers.authorization ?? "");
+    const grant = token === null ? null : this.grants.authenticate(token);
     if (!grant) {
-      writeText(res, 401, "Unauthorized", {
-        "WWW-Authenticate": 'Bearer realm="Daintree plugin MCP"',
-      });
+      this.rejectUnauthenticated(res, token, url);
       return;
     }
 
     if (req.method !== "GET" && req.method !== "POST" && req.method !== "DELETE") {
+      this.logRejection(405, "method-not-allowed", grant.credentialId, {
+        credentialId: grant.credentialId,
+        method: req.method ?? null,
+      });
       writeText(res, 405, "Method not allowed", { Allow: "GET, POST, DELETE" });
       return;
     }
@@ -262,6 +298,11 @@ export class PluginMcpRoute implements PluginMcpRouteHandler {
     // credential can never be pointed at another plugin.
     const target = parsePluginMcpRoute(url.pathname);
     if (target === null || target.pluginInstanceId !== grant.pluginInstanceId) {
+      this.logRejection(403, "route-mismatch", grant.credentialId, {
+        credentialId: grant.credentialId,
+        pluginInstanceId: grant.pluginInstanceId,
+        requestedPluginInstanceId: target?.pluginInstanceId ?? null,
+      });
       writeText(res, 403, "Forbidden");
       return;
     }
@@ -284,18 +325,30 @@ export class PluginMcpRoute implements PluginMcpRouteHandler {
     // Re-read after the await: a revocation that landed meanwhile has already
     // closed this credential's sessions and must not be undone by this request.
     if (!this.grants.isLive(grant.credentialId)) {
-      writeText(res, 401, "Unauthorized", {
-        "WWW-Authenticate": 'Bearer realm="Daintree plugin MCP"',
-      });
+      this.rejectUnauthenticated(res, token, url);
       return;
     }
     // Still (or newly) held: neither generation may serve this credential until
     // the new one has been judged. Transient, so its sessions stay open.
     if (this.grants.isHeld(grant.credentialId)) {
+      this.logRejection(503, "reload-pending", grant.credentialId, {
+        credentialId: grant.credentialId,
+        pluginInstanceId: grant.pluginInstanceId,
+      });
       writeText(res, 503, "Plugin is reloading", { "Retry-After": "1" });
       return;
     }
     if (!loaded || !this.isGrantAllowed(grant)) {
+      this.logRejection(
+        403,
+        loaded ? "access-not-allowed" : "plugin-not-loaded",
+        grant.credentialId,
+        {
+          credentialId: grant.credentialId,
+          pluginInstanceId: grant.pluginInstanceId,
+          projectId: grant.projectId,
+        }
+      );
       writeText(res, 403, "Forbidden");
       return;
     }
@@ -307,10 +360,18 @@ export class PluginMcpRoute implements PluginMcpRouteHandler {
       url.searchParams.getAll(MCP_WORKSPACE_ID_QUERY_PARAM)
     );
     if (selector.kind === "reject") {
+      this.logRejection(400, "workspace-rejected", grant.credentialId, {
+        credentialId: grant.credentialId,
+        code: selector.rejection.code,
+      });
       writeWorkspaceRejected(res, selector.rejection.code, selector.rejection.message);
       return;
     }
     if (selector.kind === "selector" && selector.workspaceId !== grant.projectId) {
+      this.logRejection(400, "workspace-rejected", grant.credentialId, {
+        credentialId: grant.credentialId,
+        code: "WORKSPACE_SELECTOR_MISMATCH",
+      });
       writeWorkspaceRejected(
         res,
         "WORKSPACE_SELECTOR_MISMATCH",
@@ -329,6 +390,10 @@ export class PluginMcpRoute implements PluginMcpRouteHandler {
         session.credentialId !== grant.credentialId ||
         session.pluginInstanceId !== grant.pluginInstanceId
       ) {
+        this.logRejection(404, "session-not-found", grant.credentialId, {
+          credentialId: grant.credentialId,
+          pluginInstanceId: grant.pluginInstanceId,
+        });
         writeSessionNotFound(res);
         return;
       }
@@ -346,6 +411,9 @@ export class PluginMcpRoute implements PluginMcpRouteHandler {
     }
 
     if (this.epoch !== epoch) {
+      this.logRejection(503, "listener-stopped", grant.credentialId, {
+        credentialId: grant.credentialId,
+      });
       writeText(res, 503, "Service unavailable");
       return;
     }
@@ -354,6 +422,10 @@ export class PluginMcpRoute implements PluginMcpRouteHandler {
         (this.pendingByCredential.get(grant.credentialId)?.size ?? 0) >=
       MAX_PLUGIN_MCP_SESSIONS_PER_CREDENTIAL
     ) {
+      this.logRejection(429, "session-cap", grant.credentialId, {
+        credentialId: grant.credentialId,
+        pluginInstanceId: grant.pluginInstanceId,
+      });
       writeText(res, 429, "Too many sessions for this credential");
       return;
     }
@@ -401,10 +473,59 @@ export class PluginMcpRoute implements PluginMcpRouteHandler {
     }
   }
 
-  private authenticate(req: http.IncomingMessage): PluginMcpGrant | null {
-    const token = extractBearerToken(req.headers.authorization ?? "");
-    if (token === null) return null;
-    return this.grants.authenticate(token);
+  /**
+   * A 401, told apart in the log: no bearer, one never issued (or revoked too
+   * long ago to remember), or one that was revoked and why. The revoked case
+   * also says so in the body, so an agent CLI that surfaces it can tell its
+   * user to relaunch rather than leave them guessing.
+   */
+  private rejectUnauthenticated(res: http.ServerResponse, token: string | null, url: URL): void {
+    const requestedPluginInstanceId = parsePluginMcpRoute(url.pathname)?.pluginInstanceId ?? null;
+    if (token === null) {
+      this.logRejection(401, "missing-bearer", null, { requestedPluginInstanceId });
+      writeUnauthorized(res);
+      return;
+    }
+    const revoked = this.grants.describeRevoked(token);
+    if (revoked === null) {
+      this.logRejection(401, "unknown-bearer", null, { requestedPluginInstanceId });
+      writeUnauthorized(res);
+      return;
+    }
+    this.logRejection(401, "revoked", revoked.credentialId, {
+      credentialId: revoked.credentialId,
+      pluginInstanceId: revoked.pluginInstanceId,
+      terminalId: revoked.terminalId,
+      reason: revoked.reason,
+      revokedAgoMs: Date.now() - revoked.revokedAt,
+    });
+    writeUnauthorized(
+      res,
+      `Unauthorized: this credential was revoked (${revoked.reason}). Relaunch the agent to get a new one.`
+    );
+  }
+
+  private logRejection(
+    status: number,
+    rejection: PluginMcpRejection,
+    credentialId: string | null,
+    context: Record<string, unknown>
+  ): void {
+    const key = `${rejection}:${credentialId ?? ""}`;
+    const now = Date.now();
+    const last = this.rejectionsLoggedAt.get(key);
+    if (last !== undefined && now - last < PLUGIN_MCP_REJECTION_LOG_INTERVAL_MS) return;
+    if (last === undefined && this.rejectionsLoggedAt.size >= MAX_TRACKED_PLUGIN_MCP_REJECTIONS) {
+      for (const [tracked, at] of this.rejectionsLoggedAt) {
+        if (now - at >= PLUGIN_MCP_REJECTION_LOG_INTERVAL_MS)
+          this.rejectionsLoggedAt.delete(tracked);
+      }
+      // Still full of live suppressions: dropping this line keeps the log
+      // bounded, where clearing would let a cycle of keys log every request.
+      if (this.rejectionsLoggedAt.size >= MAX_TRACKED_PLUGIN_MCP_REJECTIONS) return;
+    }
+    this.rejectionsLoggedAt.set(key, now);
+    logger.warn(`Rejected plugin MCP request: ${status} ${rejection}`, context);
   }
 
   private async handleNewSession(

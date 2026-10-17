@@ -19,12 +19,12 @@ export interface ResumeSessionItem {
   /** The underlying journal record, forwarded to the resume launcher. */
   session: AgentSessionRecord;
   /**
-   * Bare display title: the agent's own task title when it had one, else
-   * `<Agent> session`. This is what a surface dedicated to resuming shows —
+   * Bare display title: the bookmark's label when the session was bookmarked,
+   * else the agent's own task title when it had one, else `<Agent> session`. This is what a surface dedicated to resuming shows —
    * "Resume" is that surface's title, not every row's.
    */
   title: string;
-  /** Whether {@link title} is the agent's task title rather than the untitled fallback. */
+  /** Whether {@link title} is a real title (task title or bookmark label) rather than the untitled fallback. */
   hasTitle: boolean;
   /**
    * Action label for surfaces that list resuming beside other verbs (the panel
@@ -170,8 +170,11 @@ export function buildResumeSessionItems(
         !isUselessTitle(taskTitle) &&
         // An unregistered agent is named by its id, so that is its placeholder too.
         !isAgentPlaceholderTitle(taskTitle, agentConfig ?? { name: agentName, command: agentName });
-      const title = hasTitle ? taskTitle : `${agentName} session`;
-      const name = hasTitle ? `Resume: ${title}` : `Resume ${title}`;
+      // A bookmark's label is the name the user gave the session on purpose,
+      // so it outranks whatever the agent called its task.
+      const bookmarkLabel = session.bookmark?.label.trim() || null;
+      const title = bookmarkLabel ?? (hasTitle ? taskTitle : `${agentName} session`);
+      const name = bookmarkLabel || hasTitle ? `Resume: ${title}` : `Resume ${title}`;
 
       const liveWorktree = resolvedWorktreeId ? worktrees.get(resolvedWorktreeId) : undefined;
       // Stale means the RECORDED worktree no longer resolves — an inferred id
@@ -189,6 +192,8 @@ export function buildResumeSessionItems(
         .join(" · ");
 
       const searchAliases = [
+        // Still findable by the task title the label replaced.
+        bookmarkLabel && hasTitle ? taskTitle : null,
         session.agentId,
         agentName,
         modelName,
@@ -201,7 +206,7 @@ export function buildResumeSessionItems(
         id: `resume:${session.sessionId}`,
         session,
         title,
-        hasTitle,
+        hasTitle: hasTitle || !!bookmarkLabel,
         name,
         agentName,
         iconId: agentConfig?.iconId ?? "terminal",

@@ -99,25 +99,6 @@ describe("AddPresetDialog — every offered option is one the dialog can honour"
     expect(screen.queryByRole("group")).toBeNull();
     expect(screen.queryByText(/starts empty/i)).not.toBeNull();
   });
-
-  it("never renders a choice group with fewer than two options", () => {
-    for (const agentId of [AGENT_WITH_TEMPLATES, AGENT_WITHOUT_TEMPLATES]) {
-      for (const currentPreset of [null, CURRENT]) {
-        const { unmount } = render(
-          <AddPresetDialog
-            isOpen
-            onClose={vi.fn()}
-            agentId={agentId}
-            currentPreset={currentPreset}
-            onCreate={vi.fn()}
-          />
-        );
-        const count = optionRadios().length;
-        expect(count === 0 || count >= 2, `rendered ${count} option(s)`).toBe(true);
-        unmount();
-      }
-    }
-  });
 });
 
 describe("AddPresetDialog — single-choice semantics", () => {

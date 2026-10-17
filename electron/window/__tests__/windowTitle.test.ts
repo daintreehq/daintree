@@ -1,6 +1,9 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import {
   composeWindowTitle,
+  rememberRemoteWorkspaceTitle,
+  setRemoteHostNameResolver,
+  forgetRemoteWorkspaceTitles,
   resolveWindowProjectName,
   type ProjectTitleLookup,
   type ProjectTitleRow,
@@ -45,11 +48,6 @@ describe("composeWindowTitle", () => {
 
   it("counts a waiting prefix onto the fallback too", () => {
     expect(composeWindowTitle(null, 2)).toBe(`(2) ${composeWindowTitle(null, 0)}`);
-  });
-
-  it("does not repeat the app name after a project name", () => {
-    const fallback = composeWindowTitle(null, 0);
-    expect(composeWindowTitle("checkout-api", 0)).not.toContain(fallback);
   });
 
   it("strips surrounding whitespace rather than passing it into the title", () => {
@@ -120,6 +118,41 @@ describe("composeWindowTitle", () => {
 });
 
 describe("resolveWindowProjectName", () => {
+  afterEach(() => {
+    setRemoteHostNameResolver(() => null);
+    for (const hostId of ["studio-01", "studio-02", "studio-03", "studio-03-2"]) {
+      forgetRemoteWorkspaceTitles(hostId);
+    }
+  });
+
+  it("names a host's project with its host, which this machine's store has no row for", () => {
+    setRemoteHostNameResolver(() => null);
+    rememberRemoteWorkspaceTitle("studio-01:proj-9", "daintree", "studio-01");
+    expect(resolveWindowProjectName(pvm("studio-01:proj-9"), () => null)).toBe(
+      "daintree — studio-01"
+    );
+  });
+
+  it("follows a rename of the host", () => {
+    let name = "Studio";
+    setRemoteHostNameResolver((hostId) => (hostId === "studio-02" ? name : null));
+    rememberRemoteWorkspaceTitle("studio-02:proj-1", "api", "studio-02");
+    expect(resolveWindowProjectName(pvm("studio-02:proj-1"), () => null)).toBe("api — Studio");
+    name = "Render box";
+    expect(resolveWindowProjectName(pvm("studio-02:proj-1"), () => null)).toBe("api — Render box");
+    setRemoteHostNameResolver(() => null);
+  });
+
+  it("forgets only the removed host's titles", () => {
+    rememberRemoteWorkspaceTitle("studio-03:proj-1", "api", "studio-03");
+    rememberRemoteWorkspaceTitle("studio-03-2:proj-1", "web", "studio-03-2");
+    forgetRemoteWorkspaceTitles("studio-03");
+    expect(resolveWindowProjectName(pvm("studio-03:proj-1"), () => null)).toBeNull();
+    expect(resolveWindowProjectName(pvm("studio-03-2:proj-1"), () => null)).toBe(
+      "web — studio-03-2"
+    );
+  });
+
   const rows = lookupOf({
     "proj-open": { name: "checkout-api", status: "active" },
     "proj-background": { name: "billing", status: "background" },

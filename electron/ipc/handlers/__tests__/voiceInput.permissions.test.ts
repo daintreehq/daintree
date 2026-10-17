@@ -1,5 +1,4 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { EventEmitter } from "events";
 
 const ipcMainMock = vi.hoisted(() => ({
   handle: vi.fn(),
@@ -20,22 +19,25 @@ vi.mock("electron", () => ({
   BrowserWindow: { fromWebContents: vi.fn(() => null) },
 }));
 
-/** A stand-in ChildProcess whose "error" event we can fire on demand. */
-class FakeChild extends EventEmitter {
-  unref = vi.fn();
-}
-
-const childProcessMock = vi.hoisted(() => ({ spawn: vi.fn() }));
-vi.mock("child_process", () => childProcessMock);
+const linuxSoundSettingsMock = vi.hoisted(() => ({
+  openLinuxSoundSettings: vi.fn<
+    (
+      desktop: string | undefined,
+      onFailure?: (launcher: { command: string }, error: unknown) => void
+    ) => Promise<boolean>
+  >(async () => true),
+}));
+vi.mock("../../../services/voice/linuxSoundSettings.js", () => linuxSoundSettingsMock);
 
 const openExternalUrlMock = vi.hoisted(() => vi.fn(() => Promise.resolve()));
 vi.mock("../../../utils/openExternal.js", () => ({ openExternalUrl: openExternalUrlMock }));
 
 const logDebugMock = vi.hoisted(() => vi.fn());
+const logWarnMock = vi.hoisted(() => vi.fn());
 vi.mock("../../../utils/logger.js", () => ({
   logDebug: logDebugMock,
   logInfo: vi.fn(),
-  logWarn: vi.fn(),
+  logWarn: logWarnMock,
   logError: vi.fn(),
 }));
 
@@ -83,9 +85,10 @@ function getHandler(channel: string) {
 
 const requestMicPermission = () =>
   getHandler("voice-input:request-mic-permission")(fakeEvent) as Promise<boolean>;
-// These two handlers are synchronous — they resolve through IPC, not a promise.
+const openMicSettings = () =>
+  getHandler("voice-input:open-mic-settings")(fakeEvent) as Promise<boolean>;
+// Synchronous — it resolves through IPC, not a promise.
 const checkMicPermission = () => getHandler("voice-input:check-mic-permission")(fakeEvent);
-const openMicSettings = () => getHandler("voice-input:open-mic-settings")(fakeEvent);
 
 describe("voiceInput — microphone permission handlers", () => {
   const originalPlatform = process.platform;
@@ -97,7 +100,6 @@ describe("voiceInput — microphone permission handlers", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
-    childProcessMock.spawn.mockImplementation(() => new FakeChild());
     cleanup = registerVoiceInputHandlers({
       mainWindow: {
         webContents: { send: vi.fn() },
@@ -160,61 +162,60 @@ describe("voiceInput — microphone permission handlers", () => {
   });
 
   describe("openMicSettings", () => {
-    it("contains a missing Linux settings binary instead of crashing the app", () => {
-      // A missing binary arrives as an async "error" event, never a throw. With no
-      // listener attached it becomes an uncaughtException and takes the app into
-      // fatal recovery — so the listener must be on the child before we return.
-      setPlatform("linux");
-      const child = new FakeChild();
-      childProcessMock.spawn.mockReturnValueOnce(child);
+    const originalDesktop = process.env.XDG_CURRENT_DESKTOP;
 
-      openMicSettings();
-
-      expect(child.listenerCount("error")).toBeGreaterThan(0);
-
-      const enoent = Object.assign(new Error("spawn gnome-control-center ENOENT"), {
-        code: "ENOENT",
-      });
-      expect(() => child.emit("error", enoent)).not.toThrow();
-      expect(logDebugMock).toHaveBeenCalledWith(
-        expect.any(String),
-        expect.objectContaining({ error: enoent.message })
-      );
+    afterEach(() => {
+      if (originalDesktop === undefined) delete process.env.XDG_CURRENT_DESKTOP;
+      else process.env.XDG_CURRENT_DESKTOP = originalDesktop;
     });
 
-    it("survives a synchronous spawn failure on Linux", () => {
+    it("on Linux opens the session desktop's sound settings and reports whether one opened", async () => {
       setPlatform("linux");
-      childProcessMock.spawn.mockImplementationOnce(() => {
-        throw new Error("EACCES");
-      });
+      process.env.XDG_CURRENT_DESKTOP = "XFCE";
 
-      expect(() => openMicSettings()).not.toThrow();
-      expect(logDebugMock).toHaveBeenCalledWith(
-        expect.any(String),
-        expect.objectContaining({ error: "EACCES" })
+      await expect(openMicSettings()).resolves.toBe(true);
+      expect(linuxSoundSettingsMock.openLinuxSoundSettings).toHaveBeenCalledWith(
+        "XFCE",
+        expect.any(Function)
       );
+      expect(logWarnMock).not.toHaveBeenCalled();
     });
 
-    it("uses a settings URL rather than a spawned binary on macOS and Windows", () => {
+    it("on Linux says so when no settings app could be started", async () => {
+      setPlatform("linux");
+      linuxSoundSettingsMock.openLinuxSoundSettings.mockImplementationOnce(
+        async (_desktop, onFailure) => {
+          onFailure?.({ command: "pavucontrol" }, new Error("spawn pavucontrol ENOENT"));
+          return false;
+        }
+      );
+
+      await expect(openMicSettings()).resolves.toBe(false);
+      expect(logDebugMock).toHaveBeenCalledWith(
+        expect.any(String),
+        expect.objectContaining({ error: "spawn pavucontrol ENOENT", command: "pavucontrol" })
+      );
+      expect(logWarnMock).toHaveBeenCalledTimes(1);
+    });
+
+    it("uses a settings URL rather than a spawned app on macOS and Windows", async () => {
       setPlatform("darwin");
-      openMicSettings();
+      await expect(openMicSettings()).resolves.toBe(true);
       setPlatform("win32");
-      openMicSettings();
+      await expect(openMicSettings()).resolves.toBe(true);
 
-      expect(childProcessMock.spawn).not.toHaveBeenCalled();
+      expect(linuxSoundSettingsMock.openLinuxSoundSettings).not.toHaveBeenCalled();
       expect(openExternalUrlMock).toHaveBeenCalledTimes(2);
     });
 
-    it("contains a rejected settings-URL open", async () => {
+    it("reports a rejected settings-URL open instead of throwing", async () => {
       setPlatform("win32");
       openExternalUrlMock.mockRejectedValueOnce(new Error("no handler registered"));
 
-      expect(() => openMicSettings()).not.toThrow();
-      await vi.waitFor(() =>
-        expect(logDebugMock).toHaveBeenCalledWith(
-          expect.any(String),
-          expect.objectContaining({ error: "no handler registered" })
-        )
+      await expect(openMicSettings()).resolves.toBe(false);
+      expect(logDebugMock).toHaveBeenCalledWith(
+        expect.any(String),
+        expect.objectContaining({ error: "no handler registered" })
       );
     });
   });

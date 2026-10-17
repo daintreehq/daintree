@@ -124,6 +124,12 @@ export interface CIStatus {
   pending: number;
   /** Whether required-checks gating is currently satisfied, if the provider gates. */
   requiredChecksPassing?: boolean;
+  /**
+   * Commit the provider actually read this verdict from, which can trail the
+   * PR's head for a few seconds after a push. The host never shows a verdict
+   * for a commit other than the head it last observed. Omit when unknown.
+   */
+  headSha?: string;
   /** Opaque freshness token the host round-trips; see {@link FetchOptions}. */
   freshnessToken?: string;
   /** `true` when unchanged since `ifNotChangedSince`; see {@link FetchOptions}. */
@@ -1569,7 +1575,7 @@ export interface ForgeProviderContribution {
    * contract and the multi-field auth path.
    */
   credentialFields?: CredentialField[];
-  /** ID prefix in this plugin's `settings` contributions, used to group provider settings. */
+  /** Exact `contributes.settings[].id` of one of this plugin's settings; the manifest is rejected if no declared setting matches. */
   settingsScopeRef?: string;
   /** IDs of `views` contributions shown under this provider's panel section. */
   viewRefs?: string[];

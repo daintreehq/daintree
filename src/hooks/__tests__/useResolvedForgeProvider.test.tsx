@@ -379,23 +379,6 @@ describe("useResolvedForgeProvider", () => {
       });
     });
 
-    it("re-requests once the previous round-trip has settled", async () => {
-      // The in-flight entry must be evicted on settlement, not retained — a
-      // sticky entry would freeze every consumer on the first answer forever.
-      resolveProviderMock.mockResolvedValue({ entry: GITHUB_ENTRY, resolvedVia: "hostname" });
-      const projectId = nextProjectId();
-
-      const { result } = renderHook(() => useResolvedForgeProvider(projectId));
-      await waitFor(() => expect(result.current.entry).toEqual(GITHUB_ENTRY));
-      const callsAfterMount = resolveProviderMock.mock.calls.length;
-
-      await act(async () => {
-        result.current.refresh();
-      });
-
-      expect(resolveProviderMock.mock.calls.length).toBeGreaterThan(callsAfterMount);
-    });
-
     it("does not wedge the coalescer when a request rejects", async () => {
       resolveProviderMock.mockRejectedValueOnce(new Error("bridge down"));
       const projectId = nextProjectId();

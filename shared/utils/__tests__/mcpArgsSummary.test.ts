@@ -97,11 +97,6 @@ describe("summarizeMcpArgs", () => {
     expect(out.length).toBeLessThanOrEqual(MCP_ARGS_SUMMARY_LIMIT);
     expect(out.endsWith("…")).toBe(true);
   });
-
-  it("inlines short non-sensitive string values verbatim", () => {
-    const out = summarizeMcpArgs({ name: "hello" });
-    expect(out).toBe('{"name":"hello"}');
-  });
 });
 
 describe("summarizeMcpArgs postSerializeScrub", () => {

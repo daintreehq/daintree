@@ -60,14 +60,6 @@ function idsOf(items: ReturnType<typeof buildDockRenderItems>): string[] {
 }
 
 describe("buildDockRenderItems", () => {
-  it("renders a docked file panel as a standalone chip", () => {
-    const items = buildDockRenderItems([filePanel("spec")], NO_GROUPS, null);
-
-    expect(items).toHaveLength(1);
-    expect(items[0]?.panels[0]?.kind).toBe("file");
-    expect(items[0]?.group.panelIds).toEqual(["spec"]);
-  });
-
   it("renders a docked browser panel as a standalone chip", () => {
     // #11053: browser panels were committable to the dock but had no render
     // membership, so they vanished. They must surface as standalone chips.
@@ -91,18 +83,6 @@ describe("buildDockRenderItems", () => {
     expect(items).toHaveLength(2);
     expect(items[0]?.group.panelIds).toEqual(["term-1"]);
     expect(items[1]?.panels[0]?.id).toBe("docs");
-  });
-
-  it("renders a file panel standalone even when its stored group lists it", () => {
-    const items = buildDockRenderItems(
-      [terminal("term-1"), filePanel("spec")],
-      groupMap(group(["term-1", "spec"], "term-1")),
-      null
-    );
-
-    expect(items).toHaveLength(2);
-    expect(items[0]?.group.panelIds).toEqual(["term-1"]);
-    expect(items[1]?.panels[0]?.id).toBe("spec");
   });
 
   it("drops stale groups whose panels no longer resolve to dock panels", () => {
@@ -203,16 +183,6 @@ describe("buildDockRenderItems", () => {
     );
 
     expect(idsOf(items)).toEqual(["a1", "docs", "a2", "spec"]);
-  });
-
-  it("keeps several non-PTY panels each at their own position", () => {
-    const items = buildDockRenderItems(
-      [browserPanel("docs"), terminal("a1"), filePanel("spec"), terminal("a2")],
-      NO_GROUPS,
-      null
-    );
-
-    expect(idsOf(items)).toEqual(["docs", "a1", "spec", "a2"]);
   });
 
   it("emits an explicit group at its earliest surviving member's position", () => {

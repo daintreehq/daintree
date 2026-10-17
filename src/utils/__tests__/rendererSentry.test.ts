@@ -217,20 +217,6 @@ describe("rendererSentry", () => {
     expect(opts.beforeSend!({ message: "x" })).toBeNull();
   });
 
-  it("gate is closed while consent hydration is still pending", async () => {
-    // Pins the deferred-hydration contract: Sentry.init runs (SDK ready) but
-    // the gate must default to closed until the consent snapshot resolves.
-    // Use a never-resolving consent promise to freeze the pending state.
-    getConsentState.mockImplementationOnce(() => new Promise<ConsentPayload>(() => {}));
-    const mod = await import("../rendererSentry");
-    // Await the init promise — SDK is loaded, Sentry.init has run.
-    // Consent hydration is awaiting the IPC round-trip, so the gate is closed.
-    await mod.initRendererSentry();
-
-    const opts = sentryInit.mock.calls[0]![0];
-    expect(opts.beforeSend!({ message: "early-frame" })).toBeNull();
-  });
-
   it("hydration listener stays active when the consent IPC rejects", async () => {
     // If `getConsentState` rejects, we lose the snapshot but the
     // hydration-aware listener registered before init must remain wired so

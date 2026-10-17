@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, type CSSProperties } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { MarkdownImageCacheBust, useMarkdownRenderPolicy } from "./markdownRenderPolicy";
+import { rehypeTableHeadings } from "./MarkdownTable";
 import { useScopedSelectAll, type SelectAllScope } from "@/hooks/useScopedSelectAll";
 import { cn } from "@/lib/utils";
 import type { MarkdownFontSize } from "@/store/preferencesStore";
@@ -35,6 +36,7 @@ export const MARKDOWN_FONT_SIZE_TOKEN = {
 type MarkdownFontStyle = CSSProperties & Record<"--markdown-font-size", string>;
 
 const REMARK_PLUGINS = [remarkGfm];
+const REHYPE_PLUGINS = [rehypeTableHeadings];
 
 export interface MarkdownDocumentProps {
   /** Markdown source text */
@@ -114,6 +116,7 @@ export function MarkdownDocument({
     () => (
       <ReactMarkdown
         remarkPlugins={REMARK_PLUGINS}
+        rehypePlugins={REHYPE_PLUGINS}
         urlTransform={urlTransform}
         components={components}
         skipHtml

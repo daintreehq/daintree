@@ -1,4 +1,7 @@
-import type { PluginMcpCaller } from "../../../shared/types/plugin.js";
+import type {
+  PluginDatabaseQueryContribution,
+  PluginMcpCaller,
+} from "../../../shared/types/plugin.js";
 import { formatErrorMessage } from "../../../shared/utils/errorMessage.js";
 import {
   resolvePluginDatabaseLocation,
@@ -6,13 +9,20 @@ import {
 } from "../plugin/pluginDatabase.js";
 import { runDatabaseToolInProcess } from "./databaseQueryProcess.js";
 import {
+  DATABASE_QUERY_MAX_ROWS,
   DATABASE_QUERY_TOOL,
   DATABASE_SCHEMA_TOOL,
   DATABASE_TOOL_DESCRIPTORS,
+  DATABASE_WRITE_REQUEST,
   type DatabaseQueryParams,
   type DatabaseTarget,
   type DatabaseToolRequest,
 } from "./databaseTools.js";
+import {
+  bindDeclaredQueryArgs,
+  declaredQueryDescriptor,
+  declaredQueryPlaceholders,
+} from "./declaredQueries.js";
 import { agentMcpEndpointRegistry, type AgentMcpEndpointRegistry } from "./endpointRegistry.js";
 import {
   DATABASE_ENDPOINT_ID,
@@ -30,7 +40,10 @@ function databaseTools(): readonly AgentMcpRegisteredTool[] {
 export interface PluginDatabaseEndpointOptions {
   pluginInstanceId: string;
   manifestId: string;
-  declarations: readonly (PluginDatabaseDeclaration & { description?: string })[];
+  declarations: readonly (PluginDatabaseDeclaration & {
+    description?: string;
+    queries?: readonly PluginDatabaseQueryContribution[];
+  })[];
   /**
    * The project a project plugin is bound to; null for an installed plugin,
    * which the manifest never lets declare a `project` database.
@@ -51,11 +64,13 @@ function codedError(code: string, message: string): Error {
 }
 
 /**
- * Serve a plugin's declared databases to agents on {@link DATABASE_ENDPOINT_ID}.
- * The host owns this roster, not the plugin: it is bound at load, before and
- * independent of activation, so neither listing nor calling it runs plugin
- * code, and an idle worker being disposed leaves it in place. Returns the
- * disposer; unloading the plugin also drops it through the registry.
+ * Serve a plugin's declared databases to agents on {@link DATABASE_ENDPOINT_ID}:
+ * the two generic tools, then one tool per declared query, a write marked as
+ * one for the session to serve only with read and write access. The host owns
+ * this roster, not the plugin: it is bound at load, before and independent of
+ * activation, so neither listing nor calling it runs plugin code, and an idle
+ * worker being disposed leaves it in place. Returns the disposer; unloading
+ * the plugin also drops it through the registry.
  */
 export function registerPluginDatabaseEndpoint(options: PluginDatabaseEndpointOptions): () => void {
   const {
@@ -69,6 +84,35 @@ export function registerPluginDatabaseEndpoint(options: PluginDatabaseEndpointOp
     run = runDatabaseToolInProcess,
     registry = agentMcpEndpointRegistry,
   } = options;
+
+  // Keyed by tool name, which the manifest keeps unique across databases. The
+  // SQL and the database come from here, never from the call.
+  const queries = new Map<
+    string,
+    {
+      declaration: PluginDatabaseEndpointOptions["declarations"][number];
+      query: PluginDatabaseQueryContribution;
+      placeholders: ReadonlyMap<string, string>;
+    }
+  >();
+  for (const declaration of declarations) {
+    for (const query of declaration.queries ?? []) {
+      queries.set(query.name, {
+        declaration,
+        query,
+        placeholders: declaredQueryPlaceholders(query.sql),
+      });
+    }
+  }
+  const tools =
+    queries.size === 0
+      ? databaseTools()
+      : Object.freeze([
+          ...databaseTools(),
+          ...[...queries.values()].map(({ query }) =>
+            compileAgentMcpTool(declaredQueryDescriptor(query))
+          ),
+        ]);
 
   const projectRootFor = (caller: PluginMcpCaller): string | null => {
     if (boundProjectId === null) return null;
@@ -122,21 +166,26 @@ export function registerPluginDatabaseEndpoint(options: PluginDatabaseEndpointOp
     return declaration;
   };
 
+  // Nothing to open, so no process to start.
+  const openable = (resolved: DatabaseTarget): DatabaseTarget => {
+    if (!resolved.resolved) {
+      const problem = resolved.problem ?? { code: "DB_UNAVAILABLE", message: "unavailable" };
+      throw codedError(problem.code, problem.message.replace(/^[A-Z_]+: /, ""));
+    }
+    return resolved;
+  };
+
   const invoke: AgentMcpToolInvoker = async (toolName, args, caller, signal) => {
     if (!isCurrent()) throw new Error(`Plugin "${pluginInstanceId}" is not loaded`);
     const projectRoot = projectRootFor(caller);
     let request: DatabaseToolRequest;
+    const declaredQuery = queries.get(toolName);
     if (toolName === DATABASE_SCHEMA_TOOL) {
       const selected = args.databaseId === undefined ? declarations : [declared(args.databaseId)];
       const targets = await Promise.all(selected.map((d) => target(d, projectRoot)));
       request = { tool: DATABASE_SCHEMA_TOOL, targets, selected: args.databaseId !== undefined };
     } else if (toolName === DATABASE_QUERY_TOOL) {
-      const resolved = await target(declared(args.databaseId), projectRoot);
-      // Nothing to open, so no process to start.
-      if (!resolved.resolved) {
-        const problem = resolved.problem ?? { code: "DB_UNAVAILABLE", message: "unavailable" };
-        throw codedError(problem.code, problem.message.replace(/^[A-Z_]+: /, ""));
-      }
+      const resolved = openable(await target(declared(args.databaseId), projectRoot));
       request = {
         tool: DATABASE_QUERY_TOOL,
         target: resolved,
@@ -144,6 +193,25 @@ export function registerPluginDatabaseEndpoint(options: PluginDatabaseEndpointOp
         ...(args.params !== undefined ? { params: args.params as DatabaseQueryParams } : {}),
         ...(args.rowLimit !== undefined ? { rowLimit: args.rowLimit as number } : {}),
       };
+    } else if (declaredQuery) {
+      const { declaration, query, placeholders } = declaredQuery;
+      // Bound before the filesystem is touched: a value that cannot bind is
+      // the agent's mistake whether or not the database exists yet.
+      const params = bindDeclaredQueryArgs(query, placeholders, args);
+      const resolved = openable(await target(declaration, projectRoot));
+      // The author wrote and bounded the statement, so a read gets the most
+      // rows a result may carry, not the default an agent's ad-hoc SQL starts
+      // at. Which connection runs it is the manifest's `mode`, never the call's.
+      request =
+        query.mode === "write"
+          ? { tool: DATABASE_WRITE_REQUEST, target: resolved, sql: query.sql, params }
+          : {
+              tool: DATABASE_QUERY_TOOL,
+              target: resolved,
+              sql: query.sql,
+              params,
+              rowLimit: DATABASE_QUERY_MAX_ROWS,
+            };
     } else {
       throw new Error(`Unknown tool: ${toolName}`);
     }
@@ -155,7 +223,7 @@ export function registerPluginDatabaseEndpoint(options: PluginDatabaseEndpointOp
   return registry.register({
     pluginInstanceId,
     endpointId: DATABASE_ENDPOINT_ID,
-    tools: databaseTools(),
+    tools,
     invoke,
   });
 }

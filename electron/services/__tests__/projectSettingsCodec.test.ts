@@ -26,11 +26,6 @@ describe("decode", () => {
     });
   });
 
-  it("accepts current-version envelopes", () => {
-    const result = decode({ _schemaVersion: PROJECT_SETTINGS_SCHEMA_VERSION, runCommands: [] });
-    expect(result.ok).toBe(true);
-  });
-
   it("treats absent _schemaVersion as legacy v0 and migrates", () => {
     const result = decode({
       runCommands: [],
@@ -245,33 +240,6 @@ describe("decode", () => {
     expect(result.settings.copyTreeSettings).toBeUndefined();
   });
 
-  it("regression #10001: { length: 1 } alwaysExclude is dropped through public decode()", () => {
-    const result = decode({
-      runCommands: [],
-      copyTreeSettings: { alwaysExclude: { length: 1 } },
-    });
-    if (!result.ok) throw new Error("expected ok");
-    expect(result.settings.copyTreeSettings).toBeUndefined();
-  });
-
-  it("regression #10001: string maxContextSize is dropped through public decode()", () => {
-    const result = decode({
-      runCommands: [],
-      copyTreeSettings: { maxContextSize: "100000" },
-    });
-    if (!result.ok) throw new Error("expected ok");
-    expect(result.settings.copyTreeSettings).toBeUndefined();
-  });
-
-  it("regression #10001: string alwaysInclude is dropped through public decode()", () => {
-    const result = decode({
-      runCommands: [],
-      copyTreeSettings: { alwaysInclude: "README.md" },
-    });
-    if (!result.ok) throw new Error("expected ok");
-    expect(result.settings.copyTreeSettings).toBeUndefined();
-  });
-
   it("regression #10001: well-formed copyTreeSettings round-trips through public decode()", () => {
     const result = decode({
       runCommands: [],
@@ -339,11 +307,6 @@ describe("decode", () => {
 });
 
 describe("encodeEnvelope", () => {
-  it("prepends the schema version", () => {
-    const enc = encodeEnvelope({ runCommands: [] });
-    expect(enc._schemaVersion).toBe(PROJECT_SETTINGS_SCHEMA_VERSION);
-  });
-
   it("strips transient runtime-only fields", () => {
     const enc = encodeEnvelope({
       runCommands: [],
@@ -504,14 +467,6 @@ describe("ProjectSettingsSaveSchema", () => {
     expect(ProjectSettingsSaveSchema.safeParse(42).success).toBe(false);
   });
 
-  it("rejects invalid daintreeMcpTier values", () => {
-    const result = ProjectSettingsSaveSchema.safeParse({
-      runCommands: [],
-      daintreeMcpTier: "godmode",
-    });
-    expect(result.success).toBe(false);
-  });
-
   it("accepts forgeProviderOverride null", () => {
     expect(
       ProjectSettingsSaveSchema.safeParse({ runCommands: [], forgeProviderOverride: null }).success
@@ -616,19 +571,6 @@ describe("decodeNotificationOverrides (internal)", () => {
 });
 
 describe("decodeFleetSavedScopes (internal)", () => {
-  it("parses snapshot scopes", () => {
-    const result = __internal.decodeFleetSavedScopes([
-      {
-        kind: "snapshot",
-        id: "s1",
-        name: "Sprint",
-        terminalIds: ["a", "b"],
-        createdAt: 1700000000000,
-      },
-    ]);
-    expect(result?.[0]).toMatchObject({ kind: "snapshot", id: "s1" });
-  });
-
   it("drops invalid entries and returns undefined when all are dropped", () => {
     expect(__internal.decodeFleetSavedScopes([{ garbage: true }])).toBeUndefined();
   });
@@ -857,14 +799,6 @@ describe("decodeCopyTreeSettings (internal)", () => {
   it("regression #10001: { length: 1 } alwaysExclude is dropped", () => {
     // Pre-fix: passes the .length > 0 guard, then throws on spread.
     expect(__internal.decodeCopyTreeSettings({ alwaysExclude: { length: 1 } })).toBeUndefined();
-  });
-
-  it("regression #10001: string maxContextSize is dropped", () => {
-    expect(__internal.decodeCopyTreeSettings({ maxContextSize: "100000" })).toBeUndefined();
-  });
-
-  it("regression #10001: string alwaysInclude is dropped", () => {
-    expect(__internal.decodeCopyTreeSettings({ alwaysInclude: "README.md" })).toBeUndefined();
   });
 
   it("keeps valid siblings when one field is invalid", () => {

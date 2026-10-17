@@ -44,6 +44,7 @@ const {
     setSessionIdResolver: vi.fn(),
     setHelpSessionTerminalResolver: vi.fn(),
     disconnectHelpBearer: vi.fn(),
+    resetHelpTransports: vi.fn(),
     recordTurnOutcome: vi.fn(),
     getRuntimeState: vi.fn<
       () => import("../../../shared/types/ipc/mcpServer.js").McpRuntimeSnapshot
@@ -143,10 +144,17 @@ vi.mock("../AssistantUserConfig.js", async (importOriginal) => {
   };
 });
 
-import { HelpSessionService, codexTrustArgs, projectRuleRoots } from "../HelpSessionService.js";
+import {
+  HelpSessionService,
+  assistantAgentDirKey,
+  codexTrustArgs,
+  projectRuleRoots,
+} from "../HelpSessionService.js";
+import type { RunbooksHostState } from "../helpSessionRunbooks.js";
+import { parse as parseToml } from "smol-toml";
 
 async function makeBundledHelpFolder(root: string): Promise<string> {
-  const helpDir = path.join(root, "help");
+  const helpDir = path.join(root, "assistant");
   await fs.mkdir(path.join(helpDir, ".claude"), { recursive: true });
   await fs.writeFile(
     path.join(helpDir, ".mcp.json"),
@@ -222,6 +230,7 @@ describe("HelpSessionService", () => {
     mockMcpServerService.setHelpSessionWebContentsResolver.mockClear();
     mockMcpServerService.setSessionIdResolver.mockClear();
     mockMcpServerService.disconnectHelpBearer.mockClear();
+    mockMcpServerService.resetHelpTransports.mockClear();
     mockMcpServerService.recordTurnOutcome.mockClear();
     mockProbeMcpServer.mockReset();
     mockProbeMcpServer.mockResolvedValue(undefined);
@@ -285,13 +294,387 @@ describe("HelpSessionService", () => {
     return JSON.parse(await fs.readFile(path.join(sessionPath, ".mcp.json"), "utf-8")) as McpFile;
   }
 
-  it("returns mcpUrl and windowId on the provision result when MCP is enabled", async () => {
-    const result = await service.provisionSession(provisionInput());
-    expect(result).not.toBeNull();
-    if (!result) throw new Error("expected result");
+  describe("a view on a remote Shell (remote hosts)", () => {
+    const HANDLE = -3;
 
-    expect(result.mcpUrl).toBe("http://127.0.0.1:45454/sse");
-    expect(result.windowId).toBe(7);
+    it("provisions under this host's userData, with this host's MCP bearer, pinned to the endpoint handle", async () => {
+      const result = await service.provisionSession({
+        ...provisionInput(),
+        windowId: HANDLE,
+        projectViewWebContentsId: HANDLE,
+      });
+      if (!result) throw new Error("expected result");
+
+      expect(result.windowId).toBe(HANDLE);
+      expect(result.mcpUrl).toBe("http://127.0.0.1:45454/sse");
+      // Daintree-owned files under this machine's userData, nothing else.
+      expect(path.relative(userData, result.sessionPath).startsWith("..")).toBe(false);
+      const lane = await readLaneConfig(result);
+      expect(lane.mcpServers.daintree?.url).toBe("http://127.0.0.1:45454/sse");
+      expect(lane.mcpServers.daintree?.headers?.Authorization).toBe(`Bearer ${result.token}`);
+      // The assistant's tool calls go back to the view that launched it.
+      expect(service.getWebContentsIdForToken(result.token)).toBe(HANDLE);
+
+      await service.revokeByWebContentsId(HANDLE);
+      expect(service.validateToken(result.token)).toBe(false);
+    });
+
+    it("refuses a negative id that isn't the same handle for window and view", async () => {
+      await expect(
+        service.provisionSession({ ...provisionInput(), windowId: 7, projectViewWebContentsId: -3 })
+      ).rejects.toThrow(/windowId|projectViewWebContentsId/);
+      await expect(
+        service.provisionSession({
+          ...provisionInput(),
+          windowId: -3,
+          projectViewWebContentsId: 42,
+        })
+      ).rejects.toThrow(/windowId/);
+      await expect(
+        service.provisionSession({
+          ...provisionInput(),
+          windowId: -3.5,
+          projectViewWebContentsId: -3.5,
+        })
+      ).rejects.toThrow(/windowId/);
+    });
+
+    describe("an assistant outliving its view (#13360)", () => {
+      const NEXT_HANDLE = -4;
+      const liveProbe = vi.fn(async () => ({
+        cwd: "/tmp/project",
+        title: "Claude",
+        agentState: "waiting",
+        waitingReason: "prompt",
+        cols: 120,
+        rows: 40,
+      }));
+      const live = (terminalId: string) => terminalId === "term-remote";
+
+      async function launchRemote() {
+        const result = await service.provisionSession({
+          ...provisionInput(),
+          windowId: HANDLE,
+          projectViewWebContentsId: HANDLE,
+        });
+        if (!result) throw new Error("expected result");
+        expect(service.markTerminalForToken(result.token, "term-remote")).toBe(true);
+        return result;
+      }
+
+      beforeEach(() => {
+        liveProbe.mockClear();
+        mockMcpServerService.resetHelpTransports.mockClear();
+      });
+
+      it("keeps a running assistant when its view's endpoint closes, pinned to nothing live", async () => {
+        const result = await launchRemote();
+
+        await service.detachByWebContentsId(HANDLE);
+
+        expect(service.validateToken(result.token)).toBe("core");
+        expect(mockPtyKill).not.toHaveBeenCalled();
+        expect(mockPtyGracefulKill).not.toHaveBeenCalled();
+        expect(mockMcpServerService.disconnectHelpBearer).not.toHaveBeenCalled();
+        // Still pinned to the closed handle, which no endpoint will ever reuse.
+        expect(service.getWebContentsIdForToken(result.token)).toBe(HANDLE);
+        expect(service.getAssistantBackends("proj-1")).toEqual([
+          { terminalId: "term-remote", webContentsId: HANDLE, slot: 0 },
+        ]);
+      });
+
+      it("revokes a session the closed view provisioned but never launched", async () => {
+        const result = await service.provisionSession({
+          ...provisionInput(),
+          windowId: HANDLE,
+          projectViewWebContentsId: HANDLE,
+        });
+        if (!result) throw new Error("expected result");
+
+        await service.detachByWebContentsId(HANDLE);
+
+        expect(service.validateToken(result.token)).toBe(false);
+      });
+
+      it("never detaches a local view's assistant", async () => {
+        const result = await service.provisionSession(provisionInput());
+        if (!result) throw new Error("expected result");
+        expect(service.markTerminalForToken(result.token, "term-local")).toBe(true);
+
+        await service.detachByWebContentsId(42);
+
+        expect(service.validateToken(result.token)).toBe(false);
+        expect(mockPtyKill).toHaveBeenCalledWith("term-local", "help-session-revoked");
+      });
+
+      it("lists the slots a returning view can take over, and none once taken", async () => {
+        await launchRemote();
+        expect(service.detachedSlots("proj-1")).toEqual([]);
+        await service.detachByWebContentsId(HANDLE);
+        expect(service.detachedSlots("proj-1")).toEqual([0]);
+        expect(service.detachedSlots("proj-2")).toEqual([]);
+        await service.adoptDetachedSession("proj-1", 0, NEXT_HANDLE, liveProbe);
+        expect(service.detachedSlots("proj-1")).toEqual([]);
+      });
+
+      it("retires the MCP transports only when the pin moves, never for the view already holding it", async () => {
+        await launchRemote();
+        await service.detachByWebContentsId(HANDLE);
+        await service.adoptDetachedSession("proj-1", 0, NEXT_HANDLE, liveProbe, {
+          keepRestoreIntent: true,
+        });
+        expect(mockMcpServerService.resetHelpTransports).toHaveBeenCalledTimes(1);
+        // That view's panel binding a pane to it afterwards leaves the connection alone.
+        await service.adoptDetachedSession("proj-1", 0, NEXT_HANDLE, liveProbe);
+        expect(mockMcpServerService.resetHelpTransports).toHaveBeenCalledTimes(1);
+      });
+
+      it("tells listeners when a view takes over an assistant that had none, and only then (#13392)", async () => {
+        const reattached = vi.fn();
+        const off = service.addSessionReattachedListener(reattached);
+        await launchRemote();
+        await service.detachByWebContentsId(HANDLE);
+        await service.adoptDetachedSession("proj-1", 0, NEXT_HANDLE, liveProbe);
+        expect(reattached).toHaveBeenCalledWith({
+          projectId: "proj-1",
+          slot: 0,
+          agentId: provisionInput().agentId,
+        });
+        // The view that already has it showing it again is no take-over.
+        await service.adoptDetachedSession("proj-1", 0, NEXT_HANDLE, liveProbe);
+        expect(reattached).toHaveBeenCalledTimes(1);
+        off();
+      });
+
+      it("keeps the panel's restore intent through a host take-over until the view's own", async () => {
+        await launchRemote();
+        service.reportPanelOpen("proj-1", true);
+        await service.detachByWebContentsId(HANDLE);
+        await service.adoptDetachedSession("proj-1", 0, NEXT_HANDLE, liveProbe, {
+          keepRestoreIntent: true,
+        });
+        const peek = () =>
+          service.peekPendingHibernation("proj-1", 0, {
+            isTerminalLive: live,
+            viewHandle: NEXT_HANDLE,
+          });
+        expect(peek()).toMatchObject({ live: true, panelWasOpen: true });
+        // The view's own take-over consumes it.
+        await service.adoptDetachedSession("proj-1", 0, NEXT_HANDLE, liveProbe);
+        expect(peek()).toMatchObject({ live: true, panelWasOpen: false });
+      });
+
+      it("still offers the running assistant to the view its host handed it to", async () => {
+        await launchRemote();
+        await service.detachByWebContentsId(HANDLE);
+        await service.adoptDetachedSession("proj-1", 0, NEXT_HANDLE, liveProbe);
+
+        // Taken over before that view's panel showed it: shown as running, not resumed.
+        expect(
+          service.peekPendingHibernation("proj-1", 0, {
+            isTerminalLive: live,
+            viewHandle: NEXT_HANDLE,
+          })
+        ).toMatchObject({ live: true, agentId: "claude" });
+        // Another view is never told it can have it.
+        expect(
+          service.peekPendingHibernation("proj-1", 0, { isTerminalLive: live, viewHandle: -9 })
+        ).toBeNull();
+      });
+
+      it("hands the running assistant to the next view of its project", async () => {
+        const result = await launchRemote();
+        await service.detachByWebContentsId(HANDLE);
+
+        const adopted = await service.adoptDetachedSession("proj-1", 0, NEXT_HANDLE, liveProbe);
+
+        expect(adopted).toEqual({
+          status: "adopted",
+          lane: {
+            sessionId: result.sessionId,
+            terminalId: "term-remote",
+            agentId: "claude",
+            cwd: "/tmp/project",
+            title: "Claude",
+            agentState: "waiting",
+            waitingReason: "prompt",
+            lastStateChange: null,
+            cols: 120,
+            rows: 40,
+          },
+        });
+        expect(liveProbe).toHaveBeenCalledWith("term-remote");
+        // Same bearer and PTY; tool calls now go to the new view, after the
+        // client reconnects off the transports the take-over retired.
+        expect(service.validateToken(result.token)).toBe("core");
+        expect(service.getWebContentsIdForToken(result.token)).toBe(NEXT_HANDLE);
+        expect(service.getWebContentsIdForSessionId(result.sessionId)).toBe(NEXT_HANDLE);
+        expect(mockMcpServerService.resetHelpTransports).toHaveBeenCalledWith(result.token);
+        expect(mockMcpServerService.disconnectHelpBearer).not.toHaveBeenCalled();
+        expect(mockPtyKill).not.toHaveBeenCalled();
+      });
+
+      it("refuses a lane another live view holds, and lets the holding view take it again", async () => {
+        const result = await launchRemote();
+
+        expect(await service.adoptDetachedSession("proj-1", 0, NEXT_HANDLE, liveProbe)).toEqual({
+          status: "occupied",
+        });
+        expect(service.getWebContentsIdForToken(result.token)).toBe(HANDLE);
+        expect(mockMcpServerService.resetHelpTransports).not.toHaveBeenCalled();
+
+        // A launch superseded after the host moved the assistant over can claim it again.
+        const again = await service.adoptDetachedSession("proj-1", 0, HANDLE, liveProbe);
+        expect(again.status).toBe("adopted");
+      });
+
+      it("finds nothing in another project's lane or an empty one", async () => {
+        await launchRemote();
+        await service.detachByWebContentsId(HANDLE);
+
+        expect(await service.adoptDetachedSession("proj-2", 0, NEXT_HANDLE, liveProbe)).toEqual({
+          status: "absent",
+        });
+        expect(await service.adoptDetachedSession("proj-1", 1, NEXT_HANDLE, liveProbe)).toEqual({
+          status: "absent",
+        });
+        expect(liveProbe).not.toHaveBeenCalled();
+      });
+
+      it("revokes a detached assistant whose PTY is gone instead of handing it over", async () => {
+        const result = await launchRemote();
+        await service.detachByWebContentsId(HANDLE);
+
+        const adopted = await service.adoptDetachedSession(
+          "proj-1",
+          0,
+          NEXT_HANDLE,
+          async () => null
+        );
+
+        expect(adopted).toEqual({ status: "absent" });
+        expect(service.validateToken(result.token)).toBe(false);
+      });
+
+      it("ends a detached assistant whose PTY exits, and leaves an attached one to its view", async () => {
+        const detached = await launchRemote();
+        await service.detachByWebContentsId(HANDLE);
+        const attached = await service.provisionSession({
+          ...provisionInput(),
+          slot: 1,
+          windowId: NEXT_HANDLE,
+          projectViewWebContentsId: NEXT_HANDLE,
+        });
+        if (!attached) throw new Error("expected result");
+        expect(service.markTerminalForToken(attached.token, "term-attached")).toBe(true);
+
+        service.handleTerminalExit("term-remote");
+        service.handleTerminalExit("term-attached");
+
+        await vi.waitFor(() => expect(service.validateToken(detached.token)).toBe(false));
+        expect(service.validateToken(attached.token)).toBe("core");
+      });
+
+      it("refuses to hand over a terminal the session was rebound away from mid-probe", async () => {
+        const result = await launchRemote();
+
+        const adopted = await service.adoptDetachedSession("proj-1", 0, HANDLE, async () => {
+          expect(service.markTerminalForToken(result.token, "term-respawned")).toBe(true);
+          return {};
+        });
+
+        expect(adopted).toEqual({ status: "occupied" });
+      });
+
+      it("leaves the assistant running when its liveness can't be told", async () => {
+        const result = await launchRemote();
+        await service.detachByWebContentsId(HANDLE);
+
+        const adopted = await service.adoptDetachedSession("proj-1", 0, NEXT_HANDLE, async () => {
+          throw new Error("pty-host timed out");
+        });
+
+        expect(adopted).toEqual({ status: "occupied" });
+        expect(service.validateToken(result.token)).toBe("core");
+        expect(service.getWebContentsIdForToken(result.token)).toBe(HANDLE);
+      });
+
+      it("is still displaced by a launch that means to replace it", async () => {
+        const result = await launchRemote();
+        await service.detachByWebContentsId(HANDLE);
+
+        const replacement = await service.provisionSession({
+          ...provisionInput(),
+          windowId: NEXT_HANDLE,
+          projectViewWebContentsId: NEXT_HANDLE,
+        });
+
+        expect(replacement).not.toBeNull();
+        expect(service.validateToken(result.token)).toBe(false);
+        expect(mockPtyKill).toHaveBeenCalledWith("term-remote", "help-session-displaced");
+        expect(await service.adoptDetachedSession("proj-1", 0, NEXT_HANDLE, liveProbe)).toEqual({
+          status: "absent",
+        });
+      });
+
+      it("waits for a launch already provisioning the lane before taking it over", async () => {
+        await launchRemote();
+        await service.detachByWebContentsId(HANDLE);
+
+        const provisioning = service.provisionSession({
+          ...provisionInput(),
+          windowId: NEXT_HANDLE,
+          projectViewWebContentsId: NEXT_HANDLE,
+        });
+        const adopting = service.adoptDetachedSession("proj-1", 0, NEXT_HANDLE, liveProbe);
+        const [, adopted] = await Promise.all([provisioning, adopting]);
+
+        // Had the take-over run alongside the launch it would have been handed
+        // the assistant the launch then killed; queued behind it, it finds the
+        // lane holding no running assistant.
+        expect(adopted).toEqual({ status: "absent" });
+        expect(liveProbe).not.toHaveBeenCalled();
+      });
+
+      it("tells a remote view about a detached lane, with the panel state it went with", async () => {
+        service.reportPanelOpen("proj-1", true);
+        await launchRemote();
+        await service.detachByWebContentsId(HANDLE);
+        // The next view mounts with its panel closed and says so before it asks.
+        service.reportPanelOpen("proj-1", false);
+
+        expect(service.peekPendingHibernation("proj-1", 0, { isTerminalLive: live })).toEqual({
+          agentId: "claude",
+          agentSessionId: "",
+          cwd: expect.any(String),
+          panelWasOpen: true,
+          live: true,
+        });
+        expect(service.listPendingHibernationSlots("proj-1", { isTerminalLive: live })).toEqual([
+          0,
+        ]);
+        // Without the remote view's liveness there is nothing running to report.
+        expect(service.peekPendingHibernation("proj-1", 0)).toBeNull();
+        expect(service.listPendingHibernationSlots("proj-1")).toEqual([]);
+      });
+
+      it("doesn't report a lane whose assistant is still attached to its view", async () => {
+        await launchRemote();
+
+        expect(service.peekPendingHibernation("proj-1", 0, { isTerminalLive: live })).toBeNull();
+        expect(service.listPendingHibernationSlots("proj-1", { isTerminalLive: live })).toEqual([]);
+      });
+
+      it("drops a detached lane whose PTY has exited instead of reporting it running", async () => {
+        const result = await launchRemote();
+        await service.detachByWebContentsId(HANDLE);
+
+        expect(service.peekPendingHibernation("proj-1", 0, { isTerminalLive: () => false })).toBe(
+          null
+        );
+        await vi.waitFor(() => expect(service.validateToken(result.token)).toBe(false));
+      });
+    });
   });
 
   it("returns mcpUrl=null when daintreeControl is false", async () => {
@@ -634,25 +1017,33 @@ describe("HelpSessionService", () => {
     });
 
     it.each(["copilot", "codex"])(
-      "retires Claude hooks when the project's session switches to %s",
+      "keeps a Claude session's hooks out of, and intact beside, a %s session in the project",
       async (agentId) => {
+        // A hook may be a guard the user relies on. Before lanes on different
+        // agents had directories of their own, a %s provision stripped it from
+        // the folder a live Claude lane was reading; now neither touches the
+        // other's settings.
         const hooks = {
           PreToolUse: [{ matcher: "Bash", hooks: [{ type: "command", command: "guard.sh" }] }],
         };
         mockLoadAssistantUserConfig.mockResolvedValue(emptyUserConfig({ claudeHooks: hooks }));
-        const first = await service.provisionSession(provisionInput());
-        if (!first) throw new Error("expected result");
-        await service.revokeSession(first.sessionId);
+        const claude = await service.provisionSession({ ...provisionInput(), slot: 0 });
+        if (!claude) throw new Error("expected claude provision");
 
-        // Opt-out: the loader now returns no hooks.
         mockLoadAssistantUserConfig.mockResolvedValue(emptyUserConfig());
-        await service.provisionSession({ ...provisionInput(), agentId });
+        const other = await service.provisionSession({ ...provisionInput(), agentId, slot: 1 });
+        if (!other) throw new Error(`expected ${agentId} provision`);
+        expect(other.sessionPath).not.toBe(claude.sessionPath);
 
-        const settings = JSON.parse(
-          await fs.readFile(path.join(first.sessionPath, ".claude", "settings.json"), "utf-8")
+        const claudeSettings = JSON.parse(
+          await fs.readFile(path.join(claude.sessionPath, ".claude", "settings.json"), "utf-8")
         );
-        expect(settings.hooks).toBeUndefined();
-        expect(settings.permissions.allow).toContain("Read(**)");
+        expect(claudeSettings.hooks).toEqual(hooks);
+        const otherSettings = await fs
+          .readFile(path.join(other.sessionPath, ".claude", "settings.json"), "utf-8")
+          .then((raw) => JSON.parse(raw) as { hooks?: unknown })
+          .catch(() => null);
+        expect(otherSettings?.hooks).toBeUndefined();
       }
     );
 
@@ -833,7 +1224,7 @@ describe("HelpSessionService", () => {
     // fixture) catches that drift.
     // Vitest runs from the repo root, so the real bundled file is at a
     // stable relative path — not a test fixture.
-    const bundledPath = path.join(process.cwd(), "help", ".claude", "settings.json");
+    const bundledPath = path.join(process.cwd(), "assistant", ".claude", "settings.json");
     const bundled = JSON.parse(await fs.readFile(bundledPath, "utf-8"));
 
     // Delete the bundled fixture's settings so readBundledSettings is
@@ -892,14 +1283,6 @@ describe("HelpSessionService", () => {
       await fs.readFile(path.join(result.sessionPath, ".claude", "settings.json"), "utf-8")
     );
     expect(settings.defaultMode).toBeUndefined();
-  });
-
-  it("refuses to provision the retired Daintree Assistant even when installed", async () => {
-    mockStoreGet.mockReturnValue({ tier: "system", bypassPermissions: false });
-
-    await expect(
-      service.provisionSession({ ...provisionInput(), agentId: "daintree-assistant" })
-    ).rejects.toThrow('agentId "daintree-assistant" is not assistant-supported');
   });
 
   it.each(["core", "full"] as const)(
@@ -966,12 +1349,6 @@ describe("HelpSessionService", () => {
     expect(service.getBypassPermissions(result.token)).toBe(false);
   });
 
-  it("getBypassPermissions defaults to false when settings have not been touched", async () => {
-    const result = await service.provisionSession(provisionInput());
-    if (!result) throw new Error("expected result");
-    expect(service.getBypassPermissions(result.token)).toBe(false);
-  });
-
   it("getDebugLogging returns the snapshot taken at provision time", async () => {
     mockStoreGet.mockReturnValue({ tier: "core", debugLogging: true });
 
@@ -987,12 +1364,6 @@ describe("HelpSessionService", () => {
     expect(service.getDebugLogging("")).toBe(false);
 
     await service.revokeSession(result.sessionId);
-    expect(service.getDebugLogging(result.token)).toBe(false);
-  });
-
-  it("getDebugLogging defaults to false when settings have not been touched", async () => {
-    const result = await service.provisionSession(provisionInput());
-    if (!result) throw new Error("expected result");
     expect(service.getDebugLogging(result.token)).toBe(false);
   });
 
@@ -1273,16 +1644,6 @@ describe("HelpSessionService", () => {
     expect(a.sessionPath).not.toBe(b.sessionPath);
   });
 
-  it("revokeByWebContentsId removes only sessions bound to the matching webContents", async () => {
-    const a = await service.provisionSession({ ...provisionInput(), projectViewWebContentsId: 1 });
-    const b = await service.provisionSession({ ...provisionInput(), projectViewWebContentsId: 2 });
-    if (!a || !b) throw new Error("expected provisions");
-
-    await service.revokeByWebContentsId(1);
-    expect(service.validateToken(a.token)).toBe(false);
-    expect(service.validateToken(b.token)).toBe("core");
-  });
-
   it("revokeAll wipes every active session", async () => {
     const a = await service.provisionSession(provisionInput());
     const b = await service.provisionSession(provisionInput());
@@ -1371,14 +1732,20 @@ describe("HelpSessionService", () => {
     await fs.access(fresh.sessionPath);
   });
 
-  it("gcStaleSessions keeps the shared project directory and sweeps legacy per-lane ones", async () => {
+  it("gcStaleSessions keeps the shared project directories and sweeps legacy per-lane ones", async () => {
     // Lanes used to get `<hash>-sN` directories of their own. They now share the
     // bare-hash directory, so a leftover `-sN` is a legacy shape with nothing
     // resumable in it — its agent's resume id was captured against a cwd that
     // nothing launches in any more — and GC removes it like any other stranger.
+    // A lane on another agent has a directory of its own, which is live.
     const laneZero = await service.provisionSession({ ...provisionInput(), slot: 0 });
     const laneOne = await service.provisionSession({ ...provisionInput(), slot: 1 });
-    if (!laneZero || !laneOne) throw new Error("expected both provisions");
+    const codexLane = await service.provisionSession({
+      ...provisionInput(),
+      agentId: "codex",
+      slot: 2,
+    });
+    if (!laneZero || !laneOne || !codexLane) throw new Error("expected three provisions");
     expect(laneOne.sessionPath).toBe(laneZero.sessionPath);
 
     const hash = path.basename(laneZero.sessionPath);
@@ -1391,6 +1758,7 @@ describe("HelpSessionService", () => {
     await service.gcStaleSessions();
 
     await fs.access(laneZero.sessionPath);
+    await fs.access(codexLane.sessionPath);
     for (const dir of [legacyLane, outOfRange]) {
       await expect(fs.access(dir)).rejects.toThrow();
     }
@@ -1732,6 +2100,204 @@ describe("HelpSessionService", () => {
   // must track the PTY's whole lifetime — not just its spawn — and must carry
   // the pinned WebContents so only the view that would do the killing is
   // protected.
+  describe("session-ended listeners (#13332)", () => {
+    function listen() {
+      const events: Array<{ projectId: string; slot: number; sessionId: string; reason: string }> =
+        [];
+      const unsubscribe = service.addSessionEndedListener((event) => events.push(event));
+      return { events, unsubscribe };
+    }
+
+    it("reports the running lane session only once a PTY is bound to it", async () => {
+      const result = await service.provisionSession(provisionInput());
+      if (!result) throw new Error("expected result");
+      expect(service.getRunningLaneSession("proj-1", 0)).toBeNull();
+      expect(service.markTerminalForToken(result.token, "term-1")).toBe(true);
+      expect(service.getRunningLaneSession("proj-1", 0)).toEqual({
+        sessionId: result.sessionId,
+        terminalId: "term-1",
+        projectViewWebContentsId: 42,
+      });
+      expect(service.getRunningLaneSession("proj-1", 1)).toBeNull();
+    });
+
+    it("lists every lane running an assistant, with its agent, and drops one once revoked", async () => {
+      const first = await service.provisionSession(provisionInput());
+      const second = await service.provisionSession({ ...provisionInput(), slot: 1 });
+      if (!first || !second) throw new Error("expected results");
+      // Provisioned is not running: nothing listed until a PTY is bound.
+      expect(service.listRunningLanes()).toEqual([]);
+      expect(service.markTerminalForToken(first.token, "term-1")).toBe(true);
+      expect(service.markTerminalForToken(second.token, "term-2")).toBe(true);
+      const agentId = provisionInput().agentId;
+      expect(service.listRunningLanes()).toEqual([
+        { projectId: "proj-1", slot: 0, agentId, attached: true },
+        { projectId: "proj-1", slot: 1, agentId, attached: true },
+      ]);
+      await service.revokeSession(first.sessionId);
+      expect(service.listRunningLanes()).toEqual([
+        { projectId: "proj-1", slot: 1, agentId, attached: true },
+      ]);
+    });
+
+    it("refuses rather than displaces an occupied lane when asked for a vacant one (#13392)", async () => {
+      const first = await service.provisionSession(provisionInput());
+      if (!first) throw new Error("expected result");
+      expect(service.markTerminalForToken(first.token, "term-1")).toBe(true);
+      await expect(
+        service.provisionSession({ ...provisionInput(), vacantOnly: true })
+      ).rejects.toMatchObject({ code: "LANE_OCCUPIED" });
+      // The assistant already there keeps running.
+      expect(service.getRunningLaneSession("proj-1", 0)?.sessionId).toBe(first.sessionId);
+      const beside = await service.provisionSession({
+        ...provisionInput(),
+        slot: 1,
+        vacantOnly: true,
+      });
+      expect(beside?.sessionId).toBeTruthy();
+    });
+
+    it("stops listing a lane the moment its teardown starts, before the PTY is gone", async () => {
+      let resolveKill!: (id: string | null) => void;
+      mockPtyGracefulKill.mockImplementationOnce(
+        () => new Promise<string | null>((resolve) => (resolveKill = resolve))
+      );
+      const result = await service.provisionSession(provisionInput());
+      if (!result) throw new Error("expected result");
+      expect(service.markTerminalForToken(result.token, "term-1")).toBe(true);
+      const revoke = service.revokeSession(result.sessionId, { captureHibernation: true });
+      expect(service.listRunningLanes()).toEqual([]);
+      resolveKill(null);
+      await revoke;
+    });
+
+    it("names a session's lane until the session is revoked (#13335)", async () => {
+      const result = await service.provisionSession({ ...provisionInput(), slot: 1 });
+      if (!result) throw new Error("expected result");
+      expect(service.getSessionLane(result.sessionId)).toEqual({ projectId: "proj-1", slot: 1 });
+      expect(service.getSessionLane("no-such-session")).toBeNull();
+      await service.revokeSession(result.sessionId);
+      expect(service.getSessionLane(result.sessionId)).toBeNull();
+    });
+
+    it("ends a revoked session before its capture finishes, keeping its bearer for the capture", async () => {
+      const store = {
+        get: vi.fn().mockReturnValue(null),
+        set: vi.fn().mockResolvedValue(undefined),
+        clear: vi.fn().mockResolvedValue(undefined),
+        flush: vi.fn().mockResolvedValue(undefined),
+      };
+      service.setPendingHibernationStore(store as never);
+      let resolveKill!: (id: string | null) => void;
+      mockPtyGracefulKill.mockImplementationOnce(
+        () => new Promise<string | null>((resolve) => (resolveKill = resolve))
+      );
+      const result = await service.provisionSession(provisionInput());
+      if (!result) throw new Error("expected result");
+      expect(service.markTerminalForToken(result.token, "term-1")).toBe(true);
+      const { events } = listen();
+
+      const revoke = service.revokeSession(result.sessionId, { captureHibernation: true });
+      expect(events).toEqual([
+        { projectId: "proj-1", slot: 0, sessionId: result.sessionId, reason: "revoked" },
+      ]);
+      expect(service.getRunningLaneSession("proj-1", 0)).toBeNull();
+      expect(service.validateToken(result.token)).toBe("core");
+
+      // A second revoke racing the capture doesn't report the end twice.
+      const again = service.revokeSession(result.sessionId);
+      resolveKill(null);
+      await Promise.all([revoke, again]);
+      expect(events).toHaveLength(1);
+    });
+
+    it("ends the displaced session when its lane is re-provisioned, and only that lane", async () => {
+      const first = await service.provisionSession(provisionInput());
+      if (!first) throw new Error("expected first provision");
+      const sibling = await service.provisionSession({ ...provisionInput(), slot: 1 });
+      if (!sibling) throw new Error("expected sibling provision");
+      const { events } = listen();
+
+      const second = await service.provisionSession(provisionInput());
+      if (!second) throw new Error("expected second provision");
+
+      expect(events).toEqual([
+        { projectId: "proj-1", slot: 0, sessionId: first.sessionId, reason: "displaced" },
+      ]);
+    });
+
+    it("ends a session whose probe failed", async () => {
+      const { events } = listen();
+      mockProbeMcpSseServer.mockRejectedValueOnce(new Error("SSE returned status 401"));
+      await expect(service.provisionSession(provisionInput())).rejects.toMatchObject({
+        code: "MCP_PROBE_FAILED",
+      });
+      expect(events).toEqual([expect.objectContaining({ slot: 0, reason: "probe-failed" })]);
+    });
+
+    it("ends the run when the same session is bound to a new PTY, not when it is re-bound to its own", async () => {
+      const result = await service.provisionSession(provisionInput());
+      if (!result) throw new Error("expected result");
+      const { events } = listen();
+      expect(service.markTerminalForToken(result.token, "term-1")).toBe(true);
+      expect(service.markTerminalForToken(result.token, "term-1")).toBe(true);
+      expect(events).toEqual([]);
+      expect(service.markTerminalForToken(result.token, "term-2")).toBe(true);
+      expect(events).toEqual([
+        { projectId: "proj-1", slot: 0, sessionId: result.sessionId, reason: "relaunched" },
+      ]);
+    });
+
+    it.each([
+      ["without", false],
+      ["with", true],
+    ])(
+      "ends the lane's session when its conversation is discarded, %s a resume store",
+      async (_label, withStore) => {
+        if (withStore) {
+          service.setPendingHibernationStore({
+            get: vi.fn().mockReturnValue(null),
+            set: vi.fn().mockResolvedValue(undefined),
+            clear: vi.fn().mockResolvedValue(undefined),
+            flush: vi.fn().mockResolvedValue(undefined),
+          } as never);
+        }
+        const result = await service.provisionSession(provisionInput());
+        if (!result) throw new Error("expected result");
+        const { events } = listen();
+        await service.discardConversation("proj-1", 1);
+        expect(events).toEqual([]);
+        await service.discardConversation("proj-1", 0);
+        expect(events).toEqual([
+          { projectId: "proj-1", slot: 0, sessionId: result.sessionId, reason: "discarded" },
+        ]);
+      }
+    );
+
+    it("keeps the single MCP revoke callback and the other listeners running when one listener throws", async () => {
+      const result = await service.provisionSession(provisionInput());
+      if (!result) throw new Error("expected result");
+      mockMcpServerService.disconnectHelpBearer.mockClear();
+      service.addSessionEndedListener(() => {
+        throw new Error("listener blew up");
+      });
+      const { events, unsubscribe } = listen();
+      const dropped = listen();
+      dropped.unsubscribe();
+
+      await service.revokeSession(result.sessionId);
+
+      expect(events).toHaveLength(1);
+      expect(dropped.events).toEqual([]);
+      expect(mockMcpServerService.disconnectHelpBearer).toHaveBeenCalledWith(
+        result.token,
+        result.sessionId
+      );
+      expect(service.validateToken(result.token)).toBe(false);
+      unsubscribe();
+    });
+  });
+
   describe("getAssistantBackend (#11157)", () => {
     // These cases predate lanes (#12108) and all describe a project running a
     // single assistant, so they read the first (only) backend. The multi-lane
@@ -1885,7 +2451,6 @@ describe("HelpSessionService", () => {
 
     it("hands Claude its lane file through --mcp-config, and refuses other agents", async () => {
       const claude = await service.provisionSession({ ...provisionInput(), slot: 0 });
-      // A Codex session in ANOTHER project: same-project mixing is refused below.
       const codex = await service.provisionSession({
         ...provisionInput(),
         projectId: "proj-2",
@@ -1903,35 +2468,46 @@ describe("HelpSessionService", () => {
       expect(service.getClaudeLaunchArgs("not-a-token")).toBeNull();
     });
 
-    it("refuses a second agent in a project whose sibling lane is live", async () => {
+    it("runs a second agent beside a live sibling lane, in a directory of its own", async () => {
       // The shared directory holds agent-shaped files — the content mirror, the
       // Copilot `.mcp.json`, Claude's settings overlay — and two agents' versions
-      // of them cannot coexist. Fail closed with a reason rather than let the
-      // newcomer quietly clobber the sibling's setup.
+      // of them cannot coexist, so the newcomer gets its own directory rather
+      // than a refusal, and the sibling's setup is never touched.
       const claude = await service.provisionSession({ ...provisionInput(), slot: 0 });
       if (!claude) throw new Error("expected claude provision");
+      expect(service.markTerminalForToken(claude.token, "term-claude")).toBe(true);
+      const claudeSettingsPath = path.join(claude.sessionPath, ".claude", "settings.json");
+      const claudeSettings = await fs.readFile(claudeSettingsPath, "utf-8");
+      mockPtyKill.mockClear();
 
-      await expect(
-        service.provisionSession({ ...provisionInput(), agentId: "codex", slot: 1 })
-      ).rejects.toMatchObject({ name: "HelpSessionError", code: "MIXED_AGENT_LANES" });
-      // The sibling is untouched.
-      expect(service.validateToken(claude.token)).toBe("core");
-
-      // Once the Claude lane is gone, the project can switch agents.
-      await service.revokeSession(claude.sessionId);
       const codex = await service.provisionSession({
         ...provisionInput(),
         agentId: "codex",
         slot: 1,
       });
-      expect(codex).not.toBeNull();
+      if (!codex) throw new Error("expected codex provision");
+
+      expect(codex.sessionPath).toBe(`${claude.sessionPath}.codex`);
+      // The mirror reconciles only the newcomer's directory, so the skills and
+      // commands it retires are never the Claude lane's.
+      expect(mockSyncAssistantContent).toHaveBeenLastCalledWith(
+        expect.objectContaining({ sessionPath: codex.sessionPath, agentId: "codex" })
+      );
+      expect(service.validateToken(claude.token)).toBe("core");
+      expect(mockPtyKill).not.toHaveBeenCalled();
+      await fs.access(laneFile(claude, 0));
+      expect(await fs.readFile(claudeSettingsPath, "utf-8")).toBe(claudeSettings);
+
+      // A second Codex lane joins the Codex directory, not a third one.
+      const codexTwo = await service.provisionSession({
+        ...provisionInput(),
+        agentId: "codex",
+        slot: 2,
+      });
+      expect(codexTwo?.sessionPath).toBe(codex.sessionPath);
     });
 
-    it("refuses a mixed-agent launch without displacing the caller's own lane", async () => {
-      // The guard has to run BEFORE displacement. Displacement revokes and
-      // kills whatever holds the slot being launched into, so a refusal
-      // ordered after it would charge the user their own live lane for an
-      // error they never get a session out of.
+    it("replaces only its own lane when that lane switches agent", async () => {
       const laneZero = await service.provisionSession({ ...provisionInput(), slot: 0 });
       const laneOne = await service.provisionSession({ ...provisionInput(), slot: 1 });
       if (!laneZero || !laneOne) throw new Error("expected both provisions");
@@ -1939,14 +2515,33 @@ describe("HelpSessionService", () => {
       expect(service.markTerminalForToken(laneOne.token, "term-slot-1")).toBe(true);
       mockPtyKill.mockClear();
 
-      await expect(
-        service.provisionSession({ ...provisionInput(), agentId: "codex", slot: 1 })
-      ).rejects.toMatchObject({ name: "HelpSessionError", code: "MIXED_AGENT_LANES" });
+      const codex = await service.provisionSession({
+        ...provisionInput(),
+        agentId: "codex",
+        slot: 1,
+      });
+      expect(codex).not.toBeNull();
 
-      // The lane the refused launch targeted is still the user's live session.
-      expect(service.validateToken(laneOne.token)).toBe("core");
+      expect(service.validateToken(laneOne.token)).toBe(false);
       expect(service.validateToken(laneZero.token)).toBe("core");
-      expect(mockPtyKill).not.toHaveBeenCalled();
+      expect(mockPtyKill.mock.calls.map(([terminalId]) => terminalId)).toEqual(["term-slot-1"]);
+    });
+
+    it("keys a custom agent's directory by a digest when its id isn't a safe name", async () => {
+      expect(assistantAgentDirKey("claude")).toBeNull();
+      expect(assistantAgentDirKey("codex")).toBe("codex");
+      expect(assistantAgentDirKey("my-agent-2")).toBe("my-agent-2");
+      // Case, dots and length all fall back to a bounded digest, and two ids
+      // that differ only by case never share a directory.
+      const upper = assistantAgentDirKey("My.Agent");
+      const lower = assistantAgentDirKey("my.agent");
+      expect(upper).toMatch(/^[0-9a-f]{16}$/);
+      expect(lower).toMatch(/^[0-9a-f]{16}$/);
+      expect(upper).not.toBe(lower);
+      expect(assistantAgentDirKey("a".repeat(40))).toMatch(/^[0-9a-f]{16}$/);
+      // An id spelled like another agent's digest is digested in turn, so it
+      // can't land in that agent's directory.
+      expect(assistantAgentDirKey(upper!)).not.toBe(upper);
     });
 
     it("removes a lane's --mcp-config file on revoke without touching its sibling's", async () => {
@@ -2501,20 +3096,6 @@ describe("HelpSessionService", () => {
       await expect(service.takePendingHibernation("proj-A", 0, 22)).resolves.toBeNull();
       // ...but the owner can take again, as a crash-reloaded view must.
       await expect(service.takePendingHibernation("proj-A", 0, 11)).resolves.not.toBeNull();
-    });
-
-    it("issues a distinct claim per take, so a stale release can be told apart", async () => {
-      hibernationStore.get.mockReturnValue({
-        agentId: "claude",
-        agentSessionId: "pulled-id",
-        cwd: "/help/dir",
-        capturedAt: Date.now(),
-      });
-
-      const first = await service.takePendingHibernation("proj-A", 0, 0);
-      const second = await service.takePendingHibernation("proj-A", 0, 0);
-
-      expect(first!.claimId).not.toBe(second!.claimId);
     });
 
     it("takePendingHibernation returns null and does not clear when no entry exists", async () => {
@@ -3231,15 +3812,6 @@ describe("HelpSessionService", () => {
       expect(service.isHelpTerminal("term-1")).toBe(true);
     });
 
-    it("returns false after unbindTerminal", async () => {
-      const result = await service.provisionSession(provisionInput());
-      if (!result) throw new Error("expected result");
-      expect(service.markTerminalForToken(result.token, "term-1")).toBe(true);
-
-      service.unbindTerminal("term-1");
-      expect(service.isHelpTerminal("term-1")).toBe(false);
-    });
-
     it("returns false after revokeSession", async () => {
       const result = await service.provisionSession(provisionInput());
       if (!result) throw new Error("expected result");
@@ -3280,7 +3852,7 @@ describe("HelpSessionService", () => {
       const result = await service.provisionSession(codexInput());
       if (!result) throw new Error("expected result");
 
-      // The bundled help template carries .mcp.json from the help/ folder
+      // The bundled help template carries .mcp.json from the assistant/ folder
       // (copied via fs.cp), so the bundled file exists on disk — but the
       // Codex branch must NOT rewrite it with the Claude-shaped daintree
       // entry that bakes a literal bearer token.
@@ -3437,16 +4009,6 @@ describe("HelpSessionService", () => {
       expect(bArgs).not.toBeNull();
       expect(bArgs!.length).toBeGreaterThan(0);
     });
-
-    it("throws MCP_PROBE_FAILED when the post-provision /mcp probe fails", async () => {
-      mockProbeMcpServer.mockResolvedValueOnce(undefined); // ensureMcpServerReady
-      mockProbeMcpServer.mockRejectedValueOnce(new Error("/mcp returned status 500"));
-
-      await expect(service.provisionSession(codexInput())).rejects.toMatchObject({
-        name: "HelpSessionError",
-        code: "MCP_PROBE_FAILED",
-      });
-    });
   });
 
   describe("deprecated agents (#8811)", () => {
@@ -3458,12 +4020,6 @@ describe("HelpSessionService", () => {
       // toolbar — only the assistant overlay path is gone.
       await expect(
         service.provisionSession({ ...provisionInput(), agentId: "gemini" })
-      ).rejects.toThrow(/not assistant-supported/);
-    });
-
-    it("rejects an unknown agentId via the wired-list gate", async () => {
-      await expect(
-        service.provisionSession({ ...provisionInput(), agentId: "not-an-agent" })
       ).rejects.toThrow(/not assistant-supported/);
     });
   });
@@ -3563,17 +4119,6 @@ describe("HelpSessionService", () => {
       return { ...provisionInput(), agentId: "copilot" };
     }
 
-    it("accepts agentId: 'copilot'", async () => {
-      const result = await service.provisionSession(copilotInput());
-      expect(result).not.toBeNull();
-    });
-
-    it("returns the /mcp Streamable HTTP URL for Copilot when daintreeControl is on", async () => {
-      const result = await service.provisionSession(copilotInput());
-      if (!result) throw new Error("expected result");
-      expect(result.mcpUrl).toBe("http://127.0.0.1:45454/mcp");
-    });
-
     it("writes .mcp.json with daintree using type:http + url + $DAINTREE_MCP_TOKEN substitution", async () => {
       const result = await service.provisionSession(copilotInput());
       if (!result) throw new Error("expected result");
@@ -3634,15 +4179,6 @@ describe("HelpSessionService", () => {
       );
       expect(settings.enableAllProjectMcpServers).toBeUndefined();
       expect(settings.permissions?.allow ?? []).not.toContain("mcp__daintree__*");
-    });
-
-    it("probes /mcp (Streamable HTTP) for Copilot with the session token", async () => {
-      const result = await service.provisionSession(copilotInput());
-      if (!result) throw new Error("expected result");
-
-      expect(mockProbeMcpServer).toHaveBeenCalledTimes(2);
-      expect(mockProbeMcpServer).toHaveBeenLastCalledWith(45454, result.token);
-      expect(mockProbeMcpSseServer).not.toHaveBeenCalled();
     });
 
     it("getCopilotLaunchArgs returns no flags for a Copilot session, not read-only --plan (#13193)", async () => {
@@ -3850,45 +4386,33 @@ describe("HelpSessionService", () => {
       expect(stripManagedAddenda(claude)).toBe("# Help");
     });
 
-    it("rewrites the lane file with a fresh bearer on every provision, even when the template copy is skipped", async () => {
-      const first = await service.provisionSession(provisionInput());
-      if (!first) throw new Error("expected first provision");
+    it("strips a dead bearer from .mcp.json on a Codex hash-skip provision (no stale Authorization in cwd)", async () => {
+      // Provision Codex once so its directory and template stamp exist, then
+      // plant a literal Bearer in its `.mcp.json`, the way a Claude provision
+      // in the same folder used to leave one before agents had their own.
+      const first = await service.provisionSession({
+        ...provisionInput(),
+        agentId: "codex",
+      });
+      if (!first) throw new Error("expected first codex provision");
       await service.revokeSession(first.sessionId);
-
-      const second = await service.provisionSession(provisionInput());
-      if (!second) throw new Error("expected second provision");
-      expect(second.token).not.toBe(first.token);
-
-      const lane = await readLaneConfig(second);
-      expect(lane.mcpServers.daintree?.headers?.Authorization).toBe(`Bearer ${second.token}`);
-    });
-
-    it("strips a prior Claude bearer from .mcp.json on Codex hash-skip switch (no stale Authorization in cwd)", async () => {
-      // Provision Claude first — its literal Bearer lands in the lane file. Then
-      // plant one in the shared `.mcp.json` too, the way an install that
-      // predates the per-lane files would have left it.
-      const claudeResult = await service.provisionSession(provisionInput());
-      if (!claudeResult) throw new Error("expected claude provision");
-      expect((await readLaneConfig(claudeResult)).mcpServers.daintree?.headers?.Authorization).toBe(
-        `Bearer ${claudeResult.token}`
-      );
       await fs.writeFile(
-        path.join(claudeResult.sessionPath, ".mcp.json"),
+        path.join(first.sessionPath, ".mcp.json"),
         JSON.stringify({
           mcpServers: {
             "daintree-docs": { type: "http", url: "https://daintree.org/api/mcp" },
             daintree: {
               type: "sse",
               url: "http://127.0.0.1:45454/sse",
-              headers: { Authorization: `Bearer ${claudeResult.token}` },
+              headers: { Authorization: `Bearer ${first.token}` },
             },
           },
         })
       );
 
-      // Provision Codex for the same project. Template is unchanged →
+      // Provision Codex again for the same project. Template is unchanged →
       // hash gate skips fs.cp. Codex skips writeMcpConfig. Without the
-      // stale-strip in the codex branch, the dead Claude bearer would
+      // stale-strip in the codex branch, the dead bearer would
       // remain on disk in cwd (regression vs pre-#7525 behavior, where
       // fs.cp would have restored the bundled `.mcp.json`).
       // The gate must actually be what strips it: if the template were recopied
@@ -3899,7 +4423,7 @@ describe("HelpSessionService", () => {
       expect(cpSpy).not.toHaveBeenCalled();
       cpSpy.mockRestore();
       if (!codexResult) throw new Error("expected codex provision");
-      expect(codexResult.sessionPath).toBe(claudeResult.sessionPath);
+      expect(codexResult.sessionPath).toBe(first.sessionPath);
 
       const after = JSON.parse(
         await fs.readFile(path.join(codexResult.sessionPath, ".mcp.json"), "utf-8")
@@ -3907,41 +4431,6 @@ describe("HelpSessionService", () => {
       expect(after.mcpServers.daintree).toBeUndefined();
       // daintree-docs is not session-bound — must remain.
       expect(after.mcpServers["daintree-docs"]).toBeDefined();
-    });
-
-    it("hashes nested template files deterministically (subdir order independence)", async () => {
-      // Two help folders with identical content but different on-disk
-      // creation order must produce the same hash. The .claude/settings.json
-      // file lives one level deep; sorting by full relative path (not just
-      // basename) ensures order stability.
-      const altHelp = path.join(tmpRoot, "help-alt");
-      await fs.mkdir(path.join(altHelp, ".claude"), { recursive: true });
-      // Write in REVERSE order from makeBundledHelpFolder to test stability.
-      await fs.writeFile(path.join(altHelp, "AGENTS.md"), "# Agents Help");
-      await fs.writeFile(path.join(altHelp, "CLAUDE.md"), "# Help");
-      await fs.writeFile(
-        path.join(altHelp, ".claude", "settings.json"),
-        JSON.stringify({
-          permissions: {
-            allow: [
-              "Read(**)",
-              "WebFetch",
-              "mcp__daintree-docs__*",
-              "Bash(gh *)",
-              "Bash(glab *)",
-              "Bash(tea *)",
-            ],
-          },
-        })
-      );
-      await fs.writeFile(
-        path.join(altHelp, ".mcp.json"),
-        JSON.stringify({
-          mcpServers: { "daintree-docs": { type: "http", url: "https://daintree.org/api/mcp" } },
-        })
-      );
-
-      expect(await expectedTemplateHash(altHelp)).toBe(await expectedTemplateHash(helpFolder));
     });
   });
 
@@ -4045,15 +4534,6 @@ describe("HelpSessionService", () => {
       expect(scratchDir.startsWith(expectedRoot + path.sep)).toBe(true);
       const scratchStat = await fs.stat(scratchDir);
       expect(scratchStat.isDirectory()).toBe(true);
-    });
-
-    it("exposes DAINTREE_ASSISTANT_SCRATCH_DIR via getAssistantScratchEnv", async () => {
-      const result = await service.provisionSession(provisionInput());
-      if (!result) throw new Error("expected result");
-
-      const env = service.getAssistantScratchEnv(result.token);
-      expect(env).not.toBeNull();
-      expect(env!.DAINTREE_ASSISTANT_SCRATCH_DIR).toMatch(/assistant-scratch/);
     });
 
     it("returns null from getAssistantScratchEnv for unknown or revoked tokens", async () => {
@@ -4296,6 +4776,62 @@ describe("HelpSessionService", () => {
     });
   });
 
+  describe("messaging note (#13333)", () => {
+    const START = "<!-- DAINTREE_MESSAGING_START -->";
+
+    afterEach(() => {
+      service.setMessagingReach(null);
+    });
+
+    it("explains the wake line where messaging can reach the lane", async () => {
+      service.setMessagingReach(() => true);
+      const result = await service.provisionSession(provisionInput());
+      if (!result) throw new Error("expected result");
+
+      for (const file of ["CLAUDE.md", "AGENTS.md"]) {
+        const content = await fs.readFile(path.join(result.sessionPath, file), "utf-8");
+        expect(content.match(new RegExp(START, "g")) ?? []).toHaveLength(1);
+      }
+    });
+
+    it.each([
+      ["messaging never can", null],
+      ["messaging can't right now", () => false],
+    ] as const)("writes no note where %s", async (_label, reach) => {
+      service.setMessagingReach(reach);
+      const result = await service.provisionSession(provisionInput());
+      if (!result) throw new Error("expected result");
+
+      const content = await fs.readFile(path.join(result.sessionPath, "AGENTS.md"), "utf-8");
+      expect(content).not.toContain(START);
+    });
+
+    it("writes no note while Daintree control is off", async () => {
+      service.setMessagingReach(() => true);
+      mockStoreGet.mockImplementation((key: string) =>
+        key === "agentSettings" ? {} : { daintreeControl: false }
+      );
+      const result = await service.provisionSession(provisionInput());
+      if (!result) throw new Error("expected result");
+
+      const content = await fs.readFile(path.join(result.sessionPath, "AGENTS.md"), "utf-8");
+      expect(content).not.toContain(START);
+    });
+
+    it("removes the note on re-provision once messaging can't reach the lane", async () => {
+      service.setMessagingReach(() => true);
+      await service.provisionSession(provisionInput());
+      service.setMessagingReach(null);
+      const second = await service.provisionSession(provisionInput());
+      if (!second) throw new Error("expected result");
+
+      for (const file of ["CLAUDE.md", "AGENTS.md"]) {
+        const content = await fs.readFile(path.join(second.sessionPath, file), "utf-8");
+        expect(content).not.toContain(START);
+      }
+    });
+  });
+
   describe("runbook rule", () => {
     const START = "<!-- DAINTREE_RUNBOOKS_START -->";
 
@@ -4348,6 +4884,128 @@ describe("HelpSessionService", () => {
       expect(claude).not.toContain("search_runbooks");
       const lane = await readLaneConfig(result);
       expect(lane.mcpServers["daintree-runbooks"]).toBeUndefined();
+    });
+  });
+
+  describe("runbook host state (#13411)", () => {
+    const RUNBOOKS_URL = "https://assistant.daintree.org/v1/daintree/mcp";
+    const hubWithLane: RunbooksHostState = { hosts: "connected", laneReachable: true };
+
+    afterEach(() => {
+      service.setRunbooksHostState(null);
+    });
+
+    it("hands Claude the state as literal headers on the runbook entry only", async () => {
+      service.setRunbooksHostState(() => hubWithLane);
+      const result = await service.provisionSession(provisionInput());
+      if (!result) throw new Error("expected result");
+
+      const lane = await readLaneConfig(result);
+      expect(lane.mcpServers["daintree-runbooks"]).toEqual({
+        type: "http",
+        url: RUNBOOKS_URL,
+        headers: { "Daintree-Hosts": "connected", "Daintree-Lane": "reachable" },
+      });
+      expect(lane.mcpServers["daintree-docs"]?.headers).toBeUndefined();
+    });
+
+    it("hands Copilot the same headers in its .mcp.json", async () => {
+      service.setRunbooksHostState(() => ({ hosts: "configured", laneReachable: false }));
+      const result = await service.provisionSession({ ...provisionInput(), agentId: "copilot" });
+      if (!result) throw new Error("expected result");
+
+      const mcp = await readSharedMcp(result.sessionPath);
+      expect(mcp.mcpServers["daintree-runbooks"]).toEqual({
+        type: "http",
+        url: RUNBOOKS_URL,
+        headers: { "Daintree-Hosts": "configured" },
+      });
+    });
+
+    it("hands Codex one http_headers override that parses as a TOML table", async () => {
+      service.setRunbooksHostState(() => hubWithLane);
+      const result = await service.provisionSession({ ...provisionInput(), agentId: "codex" });
+      if (!result) throw new Error("expected result");
+
+      const args = service.getCodexLaunchArgs(result.token)!;
+      const prefix = "mcp_servers.daintree-runbooks.http_headers=";
+      const overrides = args.filter((arg) => arg.startsWith(prefix));
+      expect(overrides).toHaveLength(1);
+      expect(args[args.indexOf(overrides[0]) - 1]).toBe("-c");
+      expect(parseToml(`headers = ${overrides[0].slice(prefix.length)}`)).toEqual({
+        headers: { "Daintree-Hosts": "connected", "Daintree-Lane": "reachable" },
+      });
+    });
+
+    it("takes one snapshot per provision, so the next session sees what changed", async () => {
+      const read = vi.fn<() => RunbooksHostState | null>(() => hubWithLane);
+      service.setRunbooksHostState(read);
+      await service.provisionSession(provisionInput());
+      expect(read).toHaveBeenCalledTimes(1);
+
+      read.mockReturnValue({ hosts: "none", laneReachable: false });
+      const second = await service.provisionSession(provisionInput());
+      if (!second) throw new Error("expected result");
+
+      expect(read).toHaveBeenCalledTimes(2);
+      const lane = await readLaneConfig(second);
+      expect(lane.mcpServers["daintree-runbooks"]?.headers).toEqual({ "Daintree-Hosts": "none" });
+    });
+
+    const unreported: [string, (() => RunbooksHostState | null) | null][] = [
+      ["no state is wired", null],
+      ["the state is unreported", () => null],
+      [
+        "reading the state fails",
+        () => {
+          throw new Error("registry gone");
+        },
+      ],
+    ];
+
+    it.each(unreported)("sends no headers when %s", async (_label, read) => {
+      service.setRunbooksHostState(read);
+      const result = await service.provisionSession({ ...provisionInput(), agentId: "codex" });
+      if (!result) throw new Error("expected result");
+
+      expect(service.getCodexLaunchArgs(result.token)!.join(" ")).not.toContain("http_headers");
+      const claude = await service.provisionSession({
+        ...provisionInput(),
+        projectId: "proj-2",
+        projectPath: "/tmp/project-2",
+      });
+      if (!claude) throw new Error("expected result");
+      const lane = await readLaneConfig(claude);
+      expect(lane.mcpServers["daintree-runbooks"]).toEqual({ type: "http", url: RUNBOOKS_URL });
+    });
+
+    it("keeps a Codex session's flags as provisioned when the state changes after", async () => {
+      const read = vi.fn<() => RunbooksHostState | null>(() => ({
+        hosts: "connected",
+        laneReachable: false,
+      }));
+      service.setRunbooksHostState(read);
+      const result = await service.provisionSession({ ...provisionInput(), agentId: "codex" });
+      if (!result) throw new Error("expected result");
+      const provisioned = service.getCodexLaunchArgs(result.token);
+
+      read.mockReturnValue({ hosts: "none", laneReachable: false });
+      expect(service.getCodexLaunchArgs(result.token)).toEqual(provisioned);
+      expect(read).toHaveBeenCalledTimes(1);
+    });
+
+    it.each([
+      ["runbook search is off", { runbookSearch: false }],
+      ["Daintree control is off", { daintreeControl: false, runbookSearch: true }],
+    ])("doesn't read the state while %s", async (_label, settings) => {
+      const read = vi.fn<() => RunbooksHostState | null>(() => hubWithLane);
+      service.setRunbooksHostState(read);
+      mockStoreGet.mockReturnValue(settings);
+      const result = await service.provisionSession(provisionInput());
+      if (!result) throw new Error("expected result");
+
+      expect(read).not.toHaveBeenCalled();
+      expect((await readLaneConfig(result)).mcpServers["daintree-runbooks"]).toBeUndefined();
     });
   });
 });

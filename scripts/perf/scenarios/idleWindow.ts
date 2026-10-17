@@ -322,7 +322,7 @@ export const idleWindowScenarios: PerfScenario[] = [
         // Spawned while the probe is broken, so a cache that reports it has
         // not actually been faulted — the apparatus check that keeps every
         // number below honest.
-        child = spawnProbeChild();
+        child = spawnProbeChild(undefined, undefined, fault.probeChildEnv);
 
         const faultWindow = openIdleWindow();
         await sleep(FAULT_WINDOW_MS);

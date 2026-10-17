@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import fs from "node:fs";
 import path from "node:path";
+import { readIndexCss } from "@/__tests__/support/hostCss";
 
 // The dev preview's output drawer and the diagnostics dock are one control
 // built twice, and they drifted apart once: two tab recipes, two count pills,
@@ -57,7 +58,7 @@ describe("drawer twins", () => {
   });
 
   it("move their height on one rule that reduced motion switches off", () => {
-    const css = read("src/index.css");
+    const css = readIndexCss();
     const block = css.slice(css.indexOf("@variant reduce-motion {\n  .diagnostics-dock"));
     const reduced = block.slice(0, block.indexOf("}\n}"));
     expect(reduced).toMatch(/\.console-drawer-region/);

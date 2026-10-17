@@ -112,6 +112,8 @@ export class GitStatusPass {
   private planFilePathValue: string | undefined;
   private upstreamAheadCount: number | undefined;
   private upstreamBehindCount: number | undefined;
+  private upstreamRefValue: string | null | undefined;
+  private upstreamHeadShaValue: string | null | undefined;
   private baseBranchNameValue: string | null | undefined;
   private baseAheadCountValue: number | null | undefined;
   private baseBehindCountValue: number | null | undefined;
@@ -154,6 +156,14 @@ export class GitStatusPass {
 
   get behindCount(): number | undefined {
     return this.upstreamBehindCount;
+  }
+
+  get upstreamRef(): string | null | undefined {
+    return this.upstreamRefValue;
+  }
+
+  get upstreamHeadSha(): string | null | undefined {
+    return this.upstreamHeadShaValue;
   }
 
   get baseBranchName(): string | null | undefined {
@@ -372,7 +382,10 @@ export class GitStatusPass {
       const nextBehindCount = hasUpstream ? (newChanges.behind ?? 0) : undefined;
 
       // Base-branch divergence — runs in parallel with plan file detection.
-      const baseDivergencePromise = this.baseDivergence.compute(hasUpstream);
+      // Caught where it starts: it is awaited only after the plan-file probes,
+      // so a rejection in between (createGit on a worktree deleted outside
+      // Daintree) went unhandled and took the workspace host down.
+      const baseDivergencePromise = this.baseDivergence.compute(hasUpstream).catch(() => null);
 
       const planResults = await Promise.allSettled(
         PLAN_FILE_CANDIDATES.map((candidate) =>
@@ -395,6 +408,19 @@ export class GitStatusPass {
       const nextBaseBehindCount = baseDivergenceResult?.behindCount ?? undefined;
       const nextBaseMatchesUpstream = baseDivergenceResult?.matchesUpstream ?? undefined;
       const nextBaseCompareRef = baseDivergenceResult?.baseCompareRef ?? undefined;
+      // A divergence pass that failed says nothing about the upstream, so the
+      // last observation stands while it is still configured; dropping it
+      // would leave the PR service no "before" to see the next push against.
+      const keepUpstream = baseDivergenceResult === null && hasUpstream && !branchChanged;
+      const nextUpstreamRef = keepUpstream
+        ? this.upstreamRefValue
+        : (baseDivergenceResult?.upstreamRef ?? undefined);
+      const nextUpstreamHeadSha = keepUpstream
+        ? this.upstreamHeadShaValue
+        : (baseDivergenceResult?.upstreamHeadSha ?? undefined);
+      // Follow the exact upstream ref file so a push to it wakes this pass
+      // within the watcher debounce, wherever it nests (#13400).
+      this.watcherController.setUpstreamRef(nextUpstreamRef ?? null);
 
       const currentHash = this.calculateStateHash(newChanges);
       const stateChanged = currentHash !== this.previousStateHash;
@@ -404,8 +430,12 @@ export class GitStatusPass {
         noteData?.content !== this.noteContent || noteData?.timestamp !== this.noteTimestamp;
       const planChanged =
         nextHasPlanFile !== this.planFileDetected || nextPlanFilePath !== this.planFilePathValue;
+      // The commit counts alone miss a force-push that leaves them unchanged.
       const upstreamChanged =
-        nextAheadCount !== this.upstreamAheadCount || nextBehindCount !== this.upstreamBehindCount;
+        nextAheadCount !== this.upstreamAheadCount ||
+        nextBehindCount !== this.upstreamBehindCount ||
+        nextUpstreamRef !== this.upstreamRefValue ||
+        nextUpstreamHeadSha !== this.upstreamHeadShaValue;
       const baseDivergenceChanged =
         nextBaseBranchName !== this.baseBranchNameValue ||
         nextBaseAheadCount !== this.baseAheadCountValue ||
@@ -482,6 +512,8 @@ export class GitStatusPass {
       this.planFilePathValue = nextPlanFilePath;
       this.upstreamAheadCount = nextAheadCount;
       this.upstreamBehindCount = nextBehindCount;
+      this.upstreamRefValue = nextUpstreamRef;
+      this.upstreamHeadShaValue = nextUpstreamHeadSha;
       this.baseBranchNameValue = nextBaseBranchName;
       this.baseAheadCountValue = nextBaseAheadCount;
       this.baseBehindCountValue = nextBaseBehindCount;

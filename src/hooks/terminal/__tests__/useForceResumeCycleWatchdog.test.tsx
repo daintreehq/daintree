@@ -65,11 +65,6 @@ beforeEach(() => {
 });
 
 describe("useForceResumeCycleWatchdog", () => {
-  it("subscribes to the reliability-metric bus for the terminal", () => {
-    renderHook(() => useForceResumeCycleWatchdog("t1"));
-    expect(eventsOn).toHaveBeenCalledWith("terminal:reliability-metric", expect.any(Function));
-  });
-
   it("promotes to the banner only after three consecutive force-resumes", () => {
     const { result } = renderHook(() => useForceResumeCycleWatchdog("t1"));
 

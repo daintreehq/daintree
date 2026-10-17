@@ -8,8 +8,19 @@ import os from "node:os";
 import path from "node:path";
 import { vi } from "vitest";
 import { markIpcSecurityReady } from "./electron/ipc/ipcGuard.js";
+import { installTestLocale } from "./scripts/lib/testLocale.js";
 
 markIpcSecurityReady();
+
+// vitest.config.ts pins LANG/LC_ALL so en-US formatting holds on any machine,
+// but Node on Windows takes ICU's default from the user's regional settings and
+// ignores both — an en-ZA laptop still grouped digits with spaces and failed
+// the kit suites. A locale-less Intl or toLocale* call gets en-US here instead;
+// an explicit locale passes through untouched.
+const TEST_LOCALE = "en-US";
+if (new Intl.NumberFormat().resolvedOptions().locale !== TEST_LOCALE) {
+  installTestLocale(TEST_LOCALE);
+}
 
 // `hardenedGit` resolves an app-owned `core.hooksPath` from DAINTREE_USER_DATA,
 // falling back to the real home directory when nothing else is available. Any
@@ -24,6 +35,18 @@ markIpcSecurityReady();
 // Keyed by pid so a stale hook file from an earlier run can't be dispatched by
 // a later one.
 process.env.DAINTREE_USER_DATA = path.join(os.tmpdir(), `daintree-vitest-userdata-${process.pid}`);
+
+// A developer's own Canopy settings must not reach the suite: a trace path would
+// have tests append fixture readings to the real training-data file, and a
+// service URL or tier would change what the backend tests send.
+for (const name of [
+  "DAINTREE_CANOPY_TRACE",
+  "DAINTREE_CANOPY_URL",
+  "DAINTREE_CANOPY_TIER",
+  "DAINTREE_CANOPY_BACKGROUND_POLL_MS",
+]) {
+  delete process.env[name];
+}
 
 // Tests render Radix wrappers synchronously, but our production wrappers
 // dynamic-import the Radix primitive chunk on demand. Prime the loader once

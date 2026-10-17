@@ -29,6 +29,7 @@ import { logInfo, logWarn } from "../utils/logger.js";
 import { closeTelemetry } from "../services/TelemetryService.js";
 import { startShutdown } from "./shutdownCoordinator.js";
 import { stripLaunchTargets } from "./launchIntent.js";
+import { armRelaunch } from "./armRelaunch.js";
 
 /** Why the app is restarting itself. Diagnostic only — no behaviour keys off it. */
 export type AppRelaunchReason = "gpu-toggle" | "gpu-mitigation" | "state-reset";
@@ -80,5 +81,5 @@ export function relaunchApp(reason: AppRelaunchReason): void {
   // Armed once the chain is ours but before it settles: `startShutdown` carries
   // an absolute deadline that forces the terminal action even on a wedged
   // chain, and the relaunch only takes effect at process exit.
-  app.relaunch({ args });
+  armRelaunch({ args });
 }

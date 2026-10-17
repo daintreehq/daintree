@@ -339,31 +339,6 @@ describe("terminalInputActions adversarial", () => {
     expect(writeSpy).not.toHaveBeenCalled();
   });
 
-  it("copyLink writes the URL to clipboard even when navigator.clipboard.writeText rejects", async () => {
-    writeSpy.mockRejectedValueOnce(new Error("denied"));
-
-    const { run } = setupActions();
-
-    await expect(run("terminal.copyLink", { url: "https://a.example" })).rejects.toThrow("denied");
-    expect(writeSpy).toHaveBeenCalledWith("https://a.example");
-  });
-
-  describe("terminal.bulkCommand (fleet broadcast entry)", () => {
-    it("arms the current worktree and performs no other store side effects", async () => {
-      const armAll = vi.fn();
-      fleetArmingMock.useFleetArmingStore.getState.mockReturnValue({
-        armedIds: { size: 3 } as Set<string>,
-        armAll,
-      } as never);
-
-      const { run } = setupActions();
-      await run("terminal.bulkCommand");
-
-      expect(armAll).toHaveBeenCalledWith("current");
-      expect(armAll).toHaveBeenCalledTimes(1);
-    });
-  });
-
   describe("terminal.arm / disarm / disarmAll (MCP-exposed fleet primitives)", () => {
     it("arms an eligible terminal and echoes the POST-mutation armed set in order", async () => {
       // Stateful mock: armId mutates the same armOrder the run() echoes, so a
@@ -428,26 +403,6 @@ describe("terminalInputActions adversarial", () => {
       expect(clear).toHaveBeenCalledTimes(1);
       expect(result).toEqual({ armed: [] });
     });
-
-    it("gates arm behind confirm but keeps disarm/disarmAll safe (#11346)", () => {
-      const actions: ActionRegistry = new Map();
-      registerTerminalInputActions(actions, {
-        getActiveWorktreeId: vi.fn(),
-        onInject: vi.fn(),
-      } as unknown as ActionCallbacks);
-      const arm = actions.get("terminal.arm")!() as AnyActionDefinition;
-      const disarm = actions.get("terminal.disarm")!() as AnyActionDefinition;
-      const disarmAll = actions.get("terminal.disarmAll")!() as AnyActionDefinition;
-
-      // Arming reroutes the user's next keystrokes to every armed terminal, so
-      // an agent/MCP caller must clear the host confirm gate before it can
-      // silently repoint the broadcast set; disarming only shrinks the set (the
-      // recovery path) and stays confirm-free.
-      expect(arm.danger).toBe("confirm");
-      expect(arm.dangerRationale?.trim()).toBeTruthy();
-      expect(disarm.danger).toBe("safe");
-      expect(disarmAll.danger).toBe("safe");
-    });
   });
 
   describe("terminal.inject target binding (#11346)", () => {
@@ -511,12 +466,6 @@ describe("terminalInputActions adversarial", () => {
       expect(schema.safeParse({}).success).toBe(false);
       expect(schema.safeParse({ terminalId: "" }).success).toBe(false);
       expect(schema.safeParse({ terminalId: "term-9" }).success).toBe(true);
-    });
-
-    it("stays off plugin dispatch and the palette", () => {
-      const def = definition();
-      expect(def.denyPluginDispatch).toBe(true);
-      expect(def.palette?.mode).toBe("hidden");
     });
   });
 

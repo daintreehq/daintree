@@ -28,6 +28,29 @@ export function evaluatePanelLimit(
   return "ok";
 }
 
+/** The panel count and the limits in force, as `addPanel` judged them. */
+export interface PanelLimitSnapshot {
+  count: number;
+  softWarningLimit: number;
+  confirmationLimit: number;
+  hardLimit: number;
+  tier: PanelLimitTier;
+}
+
+export function buildPanelLimitSnapshot(
+  count: number,
+  limits: { softWarningLimit: number; confirmationLimit: number; hardLimit: number }
+): PanelLimitSnapshot {
+  const { softWarningLimit, confirmationLimit, hardLimit } = limits;
+  return {
+    count,
+    softWarningLimit,
+    confirmationLimit,
+    hardLimit,
+    tier: evaluatePanelLimit(count, limits),
+  };
+}
+
 const GB = 1024 * 1024 * 1024;
 
 export function computeHardwareDefaults(totalMemoryBytes: number): {

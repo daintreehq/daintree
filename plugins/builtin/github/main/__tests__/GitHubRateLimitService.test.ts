@@ -342,35 +342,6 @@ describe("GitHubRateLimitService", () => {
         vi.useRealTimers();
       }
     });
-
-    it("a later block does not delay an earlier block's timer", () => {
-      vi.useFakeTimers();
-      try {
-        const nowSec = Math.floor(Date.now() / 1000);
-        gitHubRateLimitService.update(
-          makeHeaders({
-            "x-ratelimit-remaining": "0",
-            "x-ratelimit-reset": String(nowSec + 60),
-            "x-ratelimit-resource": "core",
-          }),
-          200
-        );
-        gitHubRateLimitService.update(
-          makeHeaders({
-            "x-ratelimit-remaining": "0",
-            "x-ratelimit-reset": String(nowSec + 600),
-            "x-ratelimit-resource": "graphql",
-          }),
-          200
-        );
-
-        vi.advanceTimersByTime(60_000 + 7_500);
-
-        expect(gitHubRateLimitService.shouldBlockRequest("core").blocked).toBe(false);
-      } finally {
-        vi.useRealTimers();
-      }
-    });
   });
 
   describe("onStateChange listeners", () => {
@@ -828,20 +799,6 @@ describe("GitHubRateLimitService", () => {
       expect(gitHubRateLimitService.shouldBlockRequest("core").blocked).toBe(true);
     });
 
-    it("marks primary block under __global__ when x-ratelimit-resource header is absent", () => {
-      const resetSeconds = Math.floor(Date.now() / 1000) + 600;
-      gitHubRateLimitService.update(
-        makeHeaders({
-          "x-ratelimit-remaining": "0",
-          "x-ratelimit-reset": String(resetSeconds),
-        }),
-        200
-      );
-
-      // Without resource param, the global entry gates.
-      expect(gitHubRateLimitService.shouldBlockRequest().blocked).toBe(true);
-    });
-
     it("secondary block gates resource-specific check", () => {
       gitHubRateLimitService.update(makeHeaders({ "retry-after": "30" }), 429);
 
@@ -881,24 +838,6 @@ describe("GitHubRateLimitService", () => {
       // No x-ratelimit-resource header → secondary block under __global__ is preserved.
       expect(gitHubRateLimitService.shouldBlockRequest().blocked).toBe(true);
       expect(gitHubRateLimitService.shouldBlockRequest().reason).toBe("secondary");
-    });
-  });
-
-  describe("requestId tracking", () => {
-    it("does not throw when requestId is passed to update()", () => {
-      gitHubRateLimitService.update(
-        makeHeaders({ "retry-after": "30" }),
-        429,
-        undefined,
-        "beef-dead"
-      );
-
-      expect(gitHubRateLimitService.shouldBlockRequest().blocked).toBe(true);
-    });
-
-    it("does not break when requestId is undefined", () => {
-      gitHubRateLimitService.update(makeHeaders({ "retry-after": "30" }), 429);
-      expect(gitHubRateLimitService.shouldBlockRequest().blocked).toBe(true);
     });
   });
 

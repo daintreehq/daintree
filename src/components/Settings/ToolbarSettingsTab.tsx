@@ -43,6 +43,7 @@ import {
 import { useToolbarPreferencesStore } from "@/store";
 import { useAgentSettingsStore } from "@/store/agentSettingsStore";
 import { useCliAvailabilityStore } from "@/store/cliAvailabilityStore";
+import { useCanopyStore } from "@/store/canopyStore";
 import type { AnyToolbarButtonId, LauncherItemToolbarButtonId } from "@/../../shared/types/toolbar";
 // `@shared/...` because these are value imports — the type-only spelling above
 // is erased at compile time and never has to resolve at runtime.
@@ -99,6 +100,7 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { SettingsEmptyRow, SettingsGroup, SettingsRow } from "./SettingsGroup";
 import { SettingsSection } from "./SettingsSection";
+import { useSettingsOwnerMarker } from "@/hooks/useSettingsOwner";
 import { SettingsSelect } from "./SettingsSelect";
 import { SettingsSwitch } from "./SettingsSwitch";
 import { SettingsSwitchCard } from "./SettingsSwitchCard";
@@ -466,7 +468,11 @@ function restoreUntouched<T extends object>(before: T, afterReset: T, now: T): T
 }
 
 export function ToolbarSettingsTab() {
+  // Button layout is this screen's; which agents are pinned is the host's agent settings,
+  // so the section listing both stays unmarked.
+  const ownerMarker = useSettingsOwnerMarker();
   const layout = useToolbarPreferencesStore((s) => s.layout);
+  const canopyHidden = useCanopyStore((s) => s.mode === "hidden");
   const launcher = useToolbarPreferencesStore((s) => s.launcher);
   const setLeftButtons = useToolbarPreferencesStore((s) => s.setLeftButtons);
   const setRightButtons = useToolbarPreferencesStore((s) => s.setRightButtons);
@@ -661,15 +667,17 @@ export function ToolbarSettingsTab() {
   const liveLeft = dragState?.left ?? groupedLeft;
   const liveRight = dragState?.right ?? groupedRight;
 
-  const allMetadata = useMemo(
-    () =>
-      ({
-        ...TOOLBAR_BUTTON_METADATA,
-        ...buildPluginToolbarMeta(pluginButtonIds, pluginConfigs),
-        ...launcherItemMetadata,
-      }) as AllMetadata,
-    [pluginButtonIds, pluginConfigs, launcherItemMetadata]
-  );
+  const allMetadata = useMemo(() => {
+    const metadata = {
+      ...TOOLBAR_BUTTON_METADATA,
+      ...buildPluginToolbarMeta(pluginButtonIds, pluginConfigs),
+      ...launcherItemMetadata,
+    } as AllMetadata;
+    // Hidden, Canopy has no button to place: its row goes, and its place in
+    // the layout stays for when it is shown again.
+    if (canopyHidden) delete metadata.canopy;
+    return metadata;
+  }, [pluginButtonIds, pluginConfigs, launcherItemMetadata, canopyHidden]);
 
   const getToolbarButtonLabel = useCallback(
     (id: UniqueIdentifier) => allMetadata[toButtonId(id)]?.label,
@@ -1047,6 +1055,7 @@ export function ToolbarSettingsTab() {
     <div className="space-y-8">
       <SettingsSection
         title="Toolbar buttons"
+        badge={ownerMarker("device")}
         description="Drag a button, or use its menu, to reorder it or move it to the other side. Each side keeps its groups in order: launcher, agents, panels, then the rest."
       >
         <DndContext
@@ -1213,7 +1222,7 @@ export function ToolbarSettingsTab() {
         </div>
       )}
 
-      <SettingsSection id="toolbar-launcher" title="Launcher palette">
+      <SettingsSection id="toolbar-launcher" title="Launcher palette" badge={ownerMarker("device")}>
         <SettingsGroup>
           <SettingsSwitchCard
             title="Always show dev server in launcher"

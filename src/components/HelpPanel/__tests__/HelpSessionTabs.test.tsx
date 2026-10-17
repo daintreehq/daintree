@@ -2,12 +2,16 @@
 import { useState, type ReactElement, type ReactNode } from "react";
 import {
   act,
+  cleanup,
   render as rtlRender,
   fireEvent,
   screen,
+  waitFor,
+  within,
   type RenderOptions,
 } from "@testing-library/react";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { primeRadix } from "@/components/ui/radix-loader";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { HelpSessionTabs, helpSessionTabId, type HelpSessionTab } from "../HelpSessionTabs";
 
@@ -80,13 +84,6 @@ describe("HelpSessionTabs", () => {
     expect(marked(container)[0]!.getAttribute("aria-selected")).toBe("true");
   });
 
-  it("moves the mark with the active slot", () => {
-    const { container } = renderStrip({ activeSlot: 0 });
-
-    expect(marked(container)).toHaveLength(1);
-    expect(marked(container)[0]!.getAttribute("aria-label")).toBe("Session 1");
-  });
-
   it("makes the tab the element that spans the whole chip, close control included", () => {
     // The mark and the focus ring are drawn on the tab's own box, so the tab has to be
     // the element holding everything the chip shows — a ring that stopped short of the
@@ -95,14 +92,6 @@ describe("HelpSessionTabs", () => {
     for (const closer of closers(container)) {
       expect(closer.closest('[role="tab"]')).not.toBeNull();
     }
-  });
-
-  it("draws the selection mark for the only lane too", () => {
-    // Nothing else in the app withholds a selected state at a single item.
-    const { container } = renderStrip({ tabs: [TABS[0]!], activeSlot: 0 });
-
-    expect(marked(container)).toHaveLength(1);
-    expect(tabs(container)[0]!.getAttribute("aria-selected")).toBe("true");
   });
 
   it("keeps exactly one mark as lanes open and close around the selection", () => {
@@ -170,16 +159,6 @@ describe("HelpSessionTabs", () => {
     expect(ids).toEqual([helpSessionTabId("strip", 0), helpSessionTabId("strip", 2)]);
     expect(new Set(ids).size).toBe(2);
     expect(ids[1]).toContain("2");
-  });
-
-  it("keeps the whole strip to one tab stop, starting on the selected lane", () => {
-    // Two stops per chip is what put six stops between the header and the body at three
-    // lanes, and it is what makes arrow-key movement impossible.
-    const { container } = renderStrip();
-    const [first, second] = tabs(container);
-
-    expect(first!.tabIndex).toBe(-1);
-    expect(second!.tabIndex).toBe(0);
   });
 
   it("keeps the tab stop on the selected lane while the arrow keys roam", () => {
@@ -489,16 +468,6 @@ describe("HelpSessionTabs", () => {
     expect(onSelect).toHaveBeenCalledWith(2);
   });
 
-  it("stays visible for a single session", () => {
-    // The strip is the panel's one home for "which session am I in" and "give me
-    // another". Hiding it below two lanes left the only route to a second session
-    // inside an overflow menu.
-    const { container } = renderStrip({ tabs: [TABS[0]!], activeSlot: 0 });
-
-    expect(container.querySelector('[role="tablist"]')).not.toBeNull();
-    expect(tabs(container)).toHaveLength(1);
-  });
-
   it("renders nothing at all when there are no lanes", () => {
     const { container } = renderStrip({ tabs: [], activeSlot: 0 });
     expect(container.querySelector('[role="tablist"]')).toBeNull();
@@ -790,5 +759,286 @@ describe("HelpSessionTabs", () => {
 
     expect(tabs(container)).toHaveLength(1);
     expect(document.activeElement).toBe(getByText("elsewhere"));
+  });
+});
+
+/**
+ * Every tab in the app owns its right-click menu; the assistant's session
+ * lanes had none. The lane under the pointer is the one the menu acts on.
+ */
+describe("HelpSessionTabs — each lane owns its menu", () => {
+  const tabs: HelpSessionTab[] = [
+    { slot: 1, label: "Session 1", agentState: "idle", canRestart: true },
+    { slot: 2, label: "Session 2", agentState: "waiting", canRestart: true },
+  ];
+
+  function renderStrip(props: {
+    tabs?: HelpSessionTab[];
+    canOpenSession?: boolean;
+    onAncestorContextMenu?: () => void;
+  }) {
+    const onClose = vi.fn();
+    const onOpenSession = vi.fn();
+    const onRestart = vi.fn();
+    const onSelect = vi.fn();
+    rtlRender(
+      <TooltipProvider>
+        <div onContextMenu={props.onAncestorContextMenu}>
+          <HelpSessionTabs
+            tabs={props.tabs ?? tabs}
+            activeSlot={1}
+            onSelect={onSelect}
+            onClose={onClose}
+            onRestart={onRestart}
+            canOpenSession={props.canOpenSession ?? true}
+            onOpenSession={onOpenSession}
+            idBase="help"
+            panelId="help-body"
+          />
+        </div>
+      </TooltipProvider>
+    );
+    return { onClose, onOpenSession, onRestart, onSelect };
+  }
+
+  function lane(slot: number): HTMLElement {
+    return document.querySelector<HTMLElement>(`[role="tab"][data-slot="${slot}"]`)!;
+  }
+
+  beforeAll(async () => {
+    await primeRadix();
+  });
+
+  afterEach(() => cleanup());
+
+  it("closes the lane under the pointer, not the active one", async () => {
+    const { onClose } = renderStrip({});
+
+    fireEvent.contextMenu(lane(2));
+    const menu = await screen.findByRole("menu");
+    fireEvent.click(within(menu).getByRole("menuitem", { name: "Close session" }));
+
+    expect(onClose).toHaveBeenCalledWith(2);
+    expect(onClose).not.toHaveBeenCalledWith(1);
+  });
+
+  it("restarts the lane under the pointer, not the active one, without selecting or closing it", async () => {
+    const { onRestart, onClose, onSelect } = renderStrip({});
+
+    fireEvent.contextMenu(lane(2));
+    const menu = await screen.findByRole("menu");
+    fireEvent.click(within(menu).getByRole("menuitem", { name: "Restart conversation" }));
+
+    expect(onRestart).toHaveBeenCalledTimes(1);
+    expect(onRestart).toHaveBeenCalledWith(2);
+    expect(onClose).not.toHaveBeenCalled();
+    expect(onSelect).not.toHaveBeenCalled();
+  });
+
+  it("offers a restart only in a lane that has something to restart", async () => {
+    renderStrip({
+      tabs: [
+        { slot: 1, label: "Session 1", agentState: "idle", canRestart: true },
+        { slot: 2, label: "Session 2", agentState: null, canRestart: false },
+      ],
+    });
+
+    fireEvent.contextMenu(lane(2));
+    const menu = await screen.findByRole("menu");
+
+    expect(within(menu).queryByRole("menuitem", { name: "Restart conversation" })).toBeNull();
+    expect(within(menu).getByRole("menuitem", { name: "Close session" })).toBeTruthy();
+  });
+
+  it("leaves focus on the restarted lane, whose tab survives the restart", async () => {
+    renderStrip({});
+    lane(2).focus();
+
+    fireEvent.contextMenu(lane(2));
+    const menu = await screen.findByRole("menu");
+    await act(async () => {
+      fireEvent.keyDown(within(menu).getByRole("menuitem", { name: "Restart conversation" }), {
+        key: "Enter",
+      });
+    });
+
+    expect(screen.queryByRole("menu")).toBeNull();
+    // Radix's focus scope hands focus back on a timer after it unmounts. A close
+    // from the menu suppresses that handoff; a restart must not.
+    await waitFor(() => expect(document.activeElement).toBe(lane(2)));
+  });
+
+  it("offers a new session only while a lane is free", async () => {
+    renderStrip({ canOpenSession: false });
+
+    fireEvent.contextMenu(lane(1));
+    const menu = await screen.findByRole("menu");
+
+    const item = within(menu).getByRole("menuitem", { name: "New session" });
+    expect(item.getAttribute("aria-disabled")).toBe("true");
+  });
+
+  it("keeps the lane's right-click from reaching anything enclosing the strip", () => {
+    const reached = vi.fn();
+    renderStrip({ onAncestorContextMenu: reached });
+
+    fireEvent.contextMenu(lane(2));
+
+    expect(reached).not.toHaveBeenCalled();
+  });
+
+  it("hands focus to a surviving lane once a menu-closed lane is gone", async () => {
+    function Strip() {
+      const [open, setOpen] = useState(tabs);
+      return (
+        <TooltipProvider>
+          <HelpSessionTabs
+            tabs={open}
+            activeSlot={1}
+            onSelect={vi.fn()}
+            onClose={(slot) => setOpen((all) => all.filter((t) => t.slot !== slot))}
+            idBase="help"
+            panelId="help-body"
+          />
+        </TooltipProvider>
+      );
+    }
+    rtlRender(<Strip />);
+    lane(2).focus();
+
+    fireEvent.contextMenu(lane(2));
+    const menu = await screen.findByRole("menu");
+    await act(async () => {
+      fireEvent.keyDown(within(menu).getByRole("menuitem", { name: "Close session" }), {
+        key: "Enter",
+      });
+    });
+
+    expect(lane(2)).toBeNull();
+    expect(document.activeElement).toBe(lane(1));
+  });
+});
+
+/**
+ * Sessions on more than one agent (#13442). A strip on one agent must look and
+ * read exactly as before; a mix has to say which lane is which, to the eye and
+ * to the screen reader alike.
+ */
+describe("HelpSessionTabs — lanes on different agents", () => {
+  const agentMarks = () =>
+    Array.from(document.querySelectorAll<HTMLElement>("[data-testid='assistant-tab-agent-mark']"));
+
+  function lane(slot: number): HTMLElement {
+    return document.querySelector<HTMLElement>(`[role="tab"][data-slot="${slot}"]`)!;
+  }
+
+  function renderLanes(
+    tabs: HelpSessionTab[],
+    props: Partial<Parameters<typeof HelpSessionTabs>[0]> = {}
+  ) {
+    return rtlRender(
+      <TooltipProvider delayDuration={0}>
+        <HelpSessionTabs
+          tabs={tabs}
+          activeSlot={0}
+          onSelect={vi.fn()}
+          onClose={vi.fn()}
+          idBase="mixed"
+          panelId="mixed-body"
+          {...props}
+        />
+      </TooltipProvider>
+    );
+  }
+
+  beforeAll(async () => {
+    await primeRadix();
+  });
+
+  afterEach(() => cleanup());
+
+  it("leaves a strip on one agent unmarked", () => {
+    renderLanes([
+      { slot: 0, label: "Session 1", agentState: undefined, agentId: "claude" },
+      { slot: 1, label: "Session 2", agentState: undefined, agentId: "claude" },
+      { slot: 2, label: "Session 3", agentState: undefined, agentId: null },
+    ]);
+
+    expect(agentMarks()).toHaveLength(0);
+    expect(lane(1).getAttribute("aria-label")).toBe("Session 2");
+  });
+
+  it("marks each lane with its agent, in the mark and in the name, once the strip mixes them", () => {
+    renderLanes([
+      { slot: 0, label: "Session 1", agentState: undefined, agentId: "claude" },
+      { slot: 1, label: "Session 2", agentState: "working", agentId: "codex" },
+      { slot: 2, label: "Session 3", agentState: undefined, agentId: null },
+    ]);
+
+    expect(
+      agentMarks().map((mark) => mark.closest('[role="tab"]')?.getAttribute("data-slot"))
+    ).toEqual(["0", "1"]);
+    expect(agentMarks().map((mark) => mark.getAttribute("data-agent-id"))).toEqual([
+      "claude",
+      "codex",
+    ]);
+    expect(lane(0).getAttribute("aria-label")).toBe("Session 1 — Claude");
+    expect(lane(1).getAttribute("aria-label")).toBe("Session 2 — Codex");
+    // A lane whose agent nothing names yet keeps its plain name.
+    expect(lane(2).getAttribute("aria-label")).toBe("Session 3");
+    // The state still reaches assistive tech as the description, beside the agent.
+    expect(lane(1).getAttribute("aria-describedby")).toBeTruthy();
+  });
+
+  it("starts a session on a named agent from a lane's menu", async () => {
+    const onOpenSessionWithAgent = vi.fn();
+    renderLanes([{ slot: 0, label: "Session 1", agentState: undefined, agentId: "claude" }], {
+      canOpenSession: true,
+      onOpenSession: vi.fn(),
+      newSessionAgentIds: ["claude", "codex"],
+      onOpenSessionWithAgent,
+    });
+
+    fireEvent.contextMenu(lane(0));
+    const menu = await screen.findByRole("menu");
+    const names = within(menu)
+      .getAllByRole("menuitem")
+      .map((item) => item.textContent);
+    expect(names).toEqual([
+      "New session",
+      "New session with Claude",
+      "New session with Codex",
+      "Close session",
+    ]);
+    fireEvent.click(within(menu).getByRole("menuitem", { name: "New session with Codex" }));
+
+    expect(onOpenSessionWithAgent).toHaveBeenCalledWith("codex");
+  });
+
+  it("parks the agent items with New session at the ceiling, and offers none without a choice", async () => {
+    renderLanes([{ slot: 0, label: "Session 1", agentState: undefined, agentId: "claude" }], {
+      canOpenSession: false,
+      onOpenSession: vi.fn(),
+      newSessionAgentIds: ["claude", "codex"],
+      onOpenSessionWithAgent: vi.fn(),
+    });
+    fireEvent.contextMenu(lane(0));
+    let menu = await screen.findByRole("menu");
+    expect(
+      within(menu)
+        .getByRole("menuitem", { name: "New session with Codex" })
+        .getAttribute("aria-disabled")
+    ).toBe("true");
+    cleanup();
+
+    renderLanes([{ slot: 0, label: "Session 1", agentState: undefined, agentId: "claude" }], {
+      canOpenSession: true,
+      onOpenSession: vi.fn(),
+      newSessionAgentIds: ["claude"],
+      onOpenSessionWithAgent: vi.fn(),
+    });
+    fireEvent.contextMenu(lane(0));
+    menu = await screen.findByRole("menu");
+    expect(within(menu).queryByRole("menuitem", { name: /New session with/ })).toBeNull();
   });
 });

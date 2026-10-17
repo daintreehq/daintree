@@ -1,7 +1,10 @@
 import { createHash, randomBytes, randomUUID } from "node:crypto";
 import { projectIdFromPluginInstanceKey } from "../../../shared/types/plugin.js";
 import { isProjectWorkspaceId } from "../../../shared/utils/workspaceIds.js";
+import { createLogger } from "../../utils/logger.js";
 import type { AgentMcpToolScope } from "./types.js";
+
+const logger = createLogger("main:PluginAgentMcp");
 
 /**
  * One credential for one plugin's MCP server, issued to one terminal launch in
@@ -33,7 +36,23 @@ export interface IssuePluginMcpGrantParams {
 }
 
 export type PluginMcpGrantRevokeReason =
-  "terminal-exited" | "plugin-unloaded" | "access-reduced" | "server-stopped";
+  "terminal-exited" | "relaunched" | "plugin-unloaded" | "access-reduced" | "server-stopped";
+
+/** What is remembered of a revoked grant: public identifiers and the reason, never the digest. */
+export interface RevokedPluginMcpGrant {
+  readonly credentialId: string;
+  readonly pluginInstanceId: string;
+  readonly terminalId: string;
+  readonly reason: PluginMcpGrantRevokeReason;
+  readonly revokedAt: number;
+}
+
+/**
+ * Revocations remembered so a rejected bearer can be told apart from one that
+ * was never issued. Enough for every terminal of a busy session to have been
+ * relaunched a few times; older ones read as unknown.
+ */
+export const MAX_REMEMBERED_PLUGIN_MCP_REVOCATIONS = 256;
 
 type RevokeListener = (
   grants: readonly PluginMcpGrant[],
@@ -56,6 +75,8 @@ function digest(token: string): string {
 export class PluginMcpGrantRegistry {
   private readonly byDigest = new Map<string, PluginMcpGrant>();
   private readonly byCredentialId = new Map<string, PluginMcpGrant>();
+  /** Recent revocations by bearer digest, oldest first. Diagnostics only: never authenticates. */
+  private readonly revokedByDigest = new Map<string, RevokedPluginMcpGrant>();
   private readonly listeners = new Set<RevokeListener>();
   /**
    * Grants whose plugin instance is mid-reload, by instance: the declared agent
@@ -87,9 +108,12 @@ export class PluginMcpGrantRegistry {
     if (!params.terminalId) {
       throw new Error("plugin MCP grant: terminal id is required");
     }
-    const { databases, pluginEndpointId } = params.scope;
+    const { databases, databaseWrites, pluginEndpointId } = params.scope;
     if (!databases && !pluginEndpointId) {
       throw new Error("plugin MCP grant: the scope reaches no tools");
+    }
+    if (databaseWrites === true && !databases) {
+      throw new Error("plugin MCP grant: database writes need the database tools");
     }
     const token = randomBytes(32).toString("base64url");
     const grant: PluginMcpGrant = Object.freeze({
@@ -98,6 +122,7 @@ export class PluginMcpGrantRegistry {
       pluginInstanceId: params.pluginInstanceId,
       scope: Object.freeze({
         databases,
+        ...(databaseWrites === true ? { databaseWrites } : {}),
         ...(pluginEndpointId ? { pluginEndpointId } : {}),
       }),
       serverName: params.serverName,
@@ -110,6 +135,12 @@ export class PluginMcpGrantRegistry {
     });
     this.byDigest.set(grant.bearerSha256, grant);
     this.byCredentialId.set(grant.credentialId, grant);
+    logger.info("Issued plugin MCP credential", {
+      credentialId: grant.credentialId,
+      pluginInstanceId: grant.pluginInstanceId,
+      projectId: grant.projectId,
+      terminalId: grant.terminalId,
+    });
     return { grant, token };
   }
 
@@ -117,6 +148,16 @@ export class PluginMcpGrantRegistry {
   authenticate(token: string): PluginMcpGrant | null {
     if (!token) return null;
     return this.byDigest.get(digest(token)) ?? null;
+  }
+
+  /**
+   * Why a bearer that no longer authenticates stopped working, while its
+   * revocation is still among the remembered ones. Null for a bearer that was
+   * never issued, or was revoked too long ago to tell.
+   */
+  describeRevoked(token: string): RevokedPluginMcpGrant | null {
+    if (!token) return null;
+    return this.revokedByDigest.get(digest(token)) ?? null;
   }
 
   get(credentialId: string): PluginMcpGrant | null {
@@ -131,8 +172,11 @@ export class PluginMcpGrantRegistry {
     return this.filter((grant) => grant.terminalId === terminalId);
   }
 
-  revokeTerminal(terminalId: string): PluginMcpGrant[] {
-    return this.revokeWhere((grant) => grant.terminalId === terminalId, "terminal-exited");
+  revokeTerminal(
+    terminalId: string,
+    reason: "terminal-exited" | "relaunched" = "terminal-exited"
+  ): PluginMcpGrant[] {
+    return this.revokeWhere((grant) => grant.terminalId === terminalId, reason);
   }
 
   /**
@@ -155,6 +199,10 @@ export class PluginMcpGrantRegistry {
     }
     if (credentialIds.size === 0) return;
     this.held.set(pluginInstanceId, { surface, credentialIds });
+    logger.info("Holding plugin MCP credentials across a reload", {
+      pluginInstanceId,
+      credentialIds: [...credentialIds],
+    });
   }
 
   /**
@@ -176,6 +224,10 @@ export class PluginMcpGrantRegistry {
     if (kept) {
       const survivors = this.filter((grant) => hold.credentialIds.has(grant.credentialId));
       if (survivors.length > 0) {
+        logger.info("Kept plugin MCP credentials across a reload", {
+          pluginInstanceId,
+          credentialIds: survivors.map((grant) => grant.credentialId),
+        });
         for (const listener of this.keptListeners) {
           try {
             listener(survivors);
@@ -282,6 +334,27 @@ export class PluginMcpGrantRegistry {
     };
   }
 
+  private rememberRevocation(
+    grant: PluginMcpGrant,
+    reason: PluginMcpGrantRevokeReason,
+    revokedAt: number
+  ): void {
+    this.revokedByDigest.set(
+      grant.bearerSha256,
+      Object.freeze({
+        credentialId: grant.credentialId,
+        pluginInstanceId: grant.pluginInstanceId,
+        terminalId: grant.terminalId,
+        reason,
+        revokedAt,
+      })
+    );
+    for (const oldest of this.revokedByDigest.keys()) {
+      if (this.revokedByDigest.size <= MAX_REMEMBERED_PLUGIN_MCP_REVOCATIONS) break;
+      this.revokedByDigest.delete(oldest);
+    }
+  }
+
   private wakeHeldWaiters(): void {
     for (const check of [...this.heldWaiters]) check();
   }
@@ -296,6 +369,7 @@ export class PluginMcpGrantRegistry {
   ): PluginMcpGrant[] {
     const revoked = this.filter(predicate);
     if (revoked.length === 0) return revoked;
+    const revokedAt = Date.now();
     for (const grant of revoked) {
       this.byDigest.delete(grant.bearerSha256);
       this.byCredentialId.delete(grant.credentialId);
@@ -303,7 +377,14 @@ export class PluginMcpGrantRegistry {
       if (hold?.credentialIds.delete(grant.credentialId) && hold.credentialIds.size === 0) {
         this.held.delete(grant.pluginInstanceId);
       }
+      this.rememberRevocation(grant, reason, revokedAt);
     }
+    logger.info("Revoked plugin MCP credentials", {
+      reason,
+      credentialIds: revoked.map((grant) => grant.credentialId),
+      pluginInstanceIds: [...new Set(revoked.map((grant) => grant.pluginInstanceId))],
+      terminalIds: [...new Set(revoked.map((grant) => grant.terminalId))],
+    });
     this.wakeHeldWaiters();
     for (const listener of this.listeners) {
       try {

@@ -11,11 +11,13 @@ export function getHelpFolderPath(): string | null {
   }
 
   const folderPath = app.isPackaged
-    ? path.join(process.resourcesPath, "help")
-    : path.join(app.getAppPath(), "help");
+    ? path.join(process.resourcesPath, "assistant")
+    : path.join(app.getAppPath(), "assistant");
 
   if (!fs.existsSync(folderPath)) {
-    console.warn(`[HelpService] Help folder not found: ${folderPath} (packaged=${app.isPackaged})`);
+    console.warn(
+      `[HelpService] Bundled assistant template not found: ${folderPath} (packaged=${app.isPackaged})`
+    );
     cachedHelpFolderPath = null;
     return null;
   }

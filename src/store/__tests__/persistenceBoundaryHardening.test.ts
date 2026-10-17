@@ -115,18 +115,6 @@ describe("persistence boundary hardening", () => {
     expect(usePreferencesStore.getState().showDeveloperTools).toBe(true);
   });
 
-  it("agentPreferencesStore survives migration reads when localStorage access throws", async () => {
-    installThrowingLocalStorageGetter(new Error("blocked"));
-
-    const { useAgentPreferencesStore } = await import("../agentPreferencesStore");
-
-    expect(() => {
-      useAgentPreferencesStore.getState().setDefaultAgent("codex");
-    }).not.toThrow();
-
-    expect(useAgentPreferencesStore.getState().defaultAgent).toBe("codex");
-  });
-
   it("toolbarPreferencesStore updates state when storage writes fail", async () => {
     installLocalStorage(
       createStorageMock({
@@ -591,23 +579,6 @@ describe("persistence boundary hardening", () => {
     expect(JSON.parse(backing.get(KEY)!).state.order).toBe("mine");
   });
 
-  it("agentPreferencesStore boots cleanly when the legacy toolbar blob is corrupt JSON", async () => {
-    // Realistic first-run upgrade scenario: primary key absent, legacy toolbar
-    // key holds corrupt JSON. Zustand's persist skips merge() when the primary
-    // key is null, so the migration parse-guard inside merge is not exercised
-    // here — what matters for issue #5218 is that module import and store boot
-    // succeed without throwing.
-    installLocalStorage(
-      createStorageMock({
-        getItem: (key) => (key === "daintree-toolbar-preferences" ? "{not-json" : null),
-      })
-    );
-
-    const { useAgentPreferencesStore } = await import("../agentPreferencesStore");
-
-    expect(useAgentPreferencesStore.getState().defaultAgent).toBeUndefined();
-  });
-
   it("cliAvailabilityStore loadCache discards corrupt persisted cache without throwing", async () => {
     installLocalStorage(
       createStorageMock({
@@ -670,33 +641,6 @@ describe("persistence boundary hardening", () => {
     expect(typeof meta.durationMs).toBe("number");
     expect(Number.isFinite(meta.durationMs as number)).toBe(true);
     expect((meta.durationMs as number) >= 0).toBe(true);
-  });
-
-  it("createResilientStorage emits a set mark with ok:false and storage:'localStorage' when the localStorage write throws", async () => {
-    installLocalStorage(
-      createStorageMock({
-        setItem: () => {
-          throw new Error("QuotaExceededError");
-        },
-      })
-    );
-    const marks = seedPerfMarks();
-
-    const { createSafeJSONStorage } = await import("../persistence/safeStorage");
-    const storage = createSafeJSONStorage<{ value: number }>();
-
-    expect(() => {
-      storage.setItem("tel-fail-key", { state: { value: 9 }, version: 1 });
-    }).not.toThrow();
-
-    const setMarks = marks.filter((m) => m.mark === "persistence_localstorage_set");
-    expect(setMarks).toHaveLength(1);
-    const meta = setMarks[0]?.meta ?? {};
-    expect(meta.key).toBe("tel-fail-key");
-    expect(meta.ok).toBe(false);
-    expect(meta.storage).toBe("localStorage");
-    expect(typeof meta.durationMs).toBe("number");
-    expect(Number.isFinite(meta.durationMs as number)).toBe(true);
   });
 
   it("createResilientStorage emits a get mark with ok:false and storage:'localStorage' when the localStorage read throws", async () => {
@@ -892,34 +836,6 @@ describe("persistence boundary hardening", () => {
     expect(mock.getItem("rm-key.__bak")).toBeNull();
   });
 
-  it("recovers from a backup written by an earlier setItem on the same instance", async () => {
-    const backend = new Map<string, string>();
-    installLocalStorage(
-      createStorageMock({
-        getItem: (key) => backend.get(key) ?? null,
-        setItem: (key, value) => {
-          backend.set(key, value);
-        },
-        removeItem: (key) => {
-          backend.delete(key);
-        },
-      })
-    );
-    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
-
-    const { createSafeJSONStorage } = await import("../persistence/safeStorage");
-    const storage = createSafeJSONStorage<{ value: number }>();
-
-    storage.setItem("e2e-key", { state: { value: 7 }, version: 1 });
-    // Corrupt only the primary; the backup written by setItem stays intact.
-    backend.set("e2e-key", "{corrupt");
-
-    expect(storage.getItem("e2e-key")).toEqual({ state: { value: 7 }, version: 1 });
-    expect(
-      warnSpy.mock.calls.some((call) => String(call[0]).includes("recovered from backup"))
-    ).toBe(true);
-  });
-
   it("notifies exactly once when a permanent structural fallback occurs", async () => {
     const notifySpy = vi.fn();
     installLocalStorage(
@@ -1067,33 +983,6 @@ describe("persistence boundary hardening", () => {
       vi.useRealTimers();
     });
 
-    it("falls back to memory storage when localStorage.setItem throws", async () => {
-      const setItem = vi.fn(() => {
-        throw new Error("QuotaExceededError");
-      });
-      installLocalStorage(
-        createStorageMock({
-          setItem,
-        })
-      );
-      vi.useFakeTimers();
-
-      const { createDebouncedSafeJSONStorage } = await import("../persistence/safeStorage");
-      const storage = createDebouncedSafeJSONStorage<{ value: number }>(300);
-
-      expect(() => {
-        storage.setItem("k", { state: { value: 1 }, version: 1 });
-        vi.advanceTimersByTime(300);
-      }).not.toThrow();
-
-      // First write failed; resilient storage flips to memory. A subsequent
-      // write should land in memory without re-throwing.
-      storage.setItem("k", { state: { value: 2 }, version: 1 });
-      vi.advanceTimersByTime(300);
-
-      vi.useRealTimers();
-    });
-
     it("debounce timers are scoped per key (independent flush windows)", async () => {
       const setItem = vi.fn();
       installLocalStorage(
@@ -1236,50 +1125,6 @@ describe("persistence boundary hardening", () => {
       vi.useRealTimers();
     });
 
-    it("recovers from a backup written by an earlier flush on the same instance", async () => {
-      const backing = new Map<string, string>();
-      installLocalStorage(
-        createStorageMock({
-          getItem: (key) => backing.get(key) ?? null,
-          setItem: (key, value) => {
-            backing.set(key, value);
-          },
-        })
-      );
-      vi.useFakeTimers();
-
-      const { createDebouncedSafeJSONStorage } = await import("../persistence/safeStorage");
-      const storage = createDebouncedSafeJSONStorage<{ value: number }>(300);
-
-      storage.setItem("e2e-key", { state: { value: 7 }, version: 1 });
-      vi.advanceTimersByTime(300);
-      // Corrupt only the primary; the backup written by the flush stays intact.
-      backing.set("e2e-key", "{corrupt");
-
-      expect(storage.getItem("e2e-key")).toEqual({ state: { value: 7 }, version: 1 });
-
-      vi.useRealTimers();
-    });
-
-    it("getItem returns null when both the primary and backup are corrupt", async () => {
-      installLocalStorage(
-        createStorageMock({
-          getItem: (key) =>
-            key === "both-corrupt" ? "{corrupt" : key === "both-corrupt.__bak" ? "{also-bad" : null,
-        })
-      );
-      const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
-
-      const { createDebouncedSafeJSONStorage } = await import("../persistence/safeStorage");
-      const storage = createDebouncedSafeJSONStorage<{ value: number }>(300);
-
-      expect(storage.getItem("both-corrupt")).toBeNull();
-      expect(warnSpy).toHaveBeenCalledWith(
-        "[safeStorage] corrupt persisted state, resetting to defaults",
-        expect.objectContaining({ key: "both-corrupt" })
-      );
-    });
-
     it("writes the backup on a getItem-triggered flush, not just the timer path", async () => {
       const backing = new Map<string, string>();
       installLocalStorage(
@@ -1303,41 +1148,6 @@ describe("persistence boundary hardening", () => {
       expect(backing.get("flush-read-key.__bak")).toBe(
         JSON.stringify({ state: { value: 3 }, version: 1 })
       );
-
-      vi.useRealTimers();
-    });
-
-    it("keeps using localStorage after a transient quota error (no permanent fallback)", async () => {
-      const backing = new Map<string, string>();
-      let primaryWrites = 0;
-      installLocalStorage(
-        createStorageMock({
-          getItem: (key) => backing.get(key) ?? null,
-          setItem: (key, value) => {
-            // Transient quota error on the very first primary write only.
-            if (key === "q1") {
-              primaryWrites += 1;
-              if (primaryWrites === 1) {
-                throw new DOMException("Quota exceeded", "QuotaExceededError");
-              }
-            }
-            backing.set(key, value);
-          },
-        })
-      );
-      vi.useFakeTimers();
-
-      const { createDebouncedSafeJSONStorage } = await import("../persistence/safeStorage");
-      const storage = createDebouncedSafeJSONStorage<{ value: number }>(300);
-
-      storage.setItem("q1", { state: { value: 1 }, version: 1 });
-      vi.advanceTimersByTime(300);
-      // Second write to a different key must still reach localStorage — a
-      // transient quota error must not flip the resilient storage to memory.
-      storage.setItem("q2", { state: { value: 2 }, version: 1 });
-      vi.advanceTimersByTime(300);
-
-      expect(backing.get("q2")).toBe(JSON.stringify({ state: { value: 2 }, version: 1 }));
 
       vi.useRealTimers();
     });

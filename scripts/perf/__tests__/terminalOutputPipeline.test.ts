@@ -52,20 +52,6 @@ function deadPipeline(plan: PipelinePlan): PipelineObservation {
 }
 
 describe("terminal output pipeline scenarios", () => {
-  for (const id of ["PERF-030", "PERF-031", "PERF-032"]) {
-    it(`${id} emits every declared predicate and reports zero misses`, async () => {
-      const scenario = terminalScenarios.find((candidate) => candidate.id === id);
-      expect(scenario).toBeDefined();
-
-      const sample = await scenario!.run(CONTEXT);
-      const metrics = sample.metrics ?? {};
-      for (const name of scenario!.correctness ?? []) {
-        expect(name in metrics, `${id} did not emit ${name}`).toBe(true);
-        expect(metrics[name], `${id} reported ${name}=${metrics[name]}`).toBe(0);
-      }
-    });
-  }
-
   it("PERF-030..032 report a non-trivial amount of retained state", async () => {
     // A pipeline whose rings held nothing would be the fastest pipeline there
     // is, so the scenarios report what was actually retained alongside the

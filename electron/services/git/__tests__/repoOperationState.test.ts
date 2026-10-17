@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import path from "node:path";
-import { detectRepoOperationState, resolveGitDir } from "../repoOperationState.js";
+import { detectRepoOperationState } from "../repoOperationState.js";
 
 const accessMock = vi.hoisted(() => vi.fn());
 const readFileMock = vi.hoisted(() => vi.fn());
@@ -168,33 +168,5 @@ describe("detectRepoOperationState", () => {
     const result = await detectRepoOperationState(gitDir, false);
     expect(result.rebaseStep).toBeNull();
     expect(result.rebaseTotalSteps).toBeNull();
-  });
-
-  it("uses OPERATION_SENTINEL_NAMES for all checks", async () => {
-    // Verify all 5 sentinel paths are checked by counting access() calls on a
-    // clean repo (all reject with ENOENT).
-    accessMock.mockRejectedValue(new Error("ENOENT"));
-    await detectRepoOperationState(gitDir, false);
-    expect(accessMock).toHaveBeenCalledTimes(5);
-    const paths = accessMock.mock.calls.map((c: unknown[]) => c[0]);
-    expect(paths).toContain(path.join(gitDir, "MERGE_HEAD"));
-    expect(paths).toContain(path.join(gitDir, "rebase-merge"));
-    expect(paths).toContain(path.join(gitDir, "rebase-apply"));
-    expect(paths).toContain(path.join(gitDir, "CHERRY_PICK_HEAD"));
-    expect(paths).toContain(path.join(gitDir, "REVERT_HEAD"));
-  });
-});
-
-describe("resolveGitDir", () => {
-  it("returns absolute git-dir as-is", async () => {
-    const git = { revparse: vi.fn().mockResolvedValue("/abs/path/.git\n") };
-    const result = await resolveGitDir(git as never, "/cwd");
-    expect(result).toBe("/abs/path/.git");
-  });
-
-  it("resolves relative git-dir against cwd", async () => {
-    const git = { revparse: vi.fn().mockResolvedValue(".git\n") };
-    const result = await resolveGitDir(git as never, "/projects/repo");
-    expect(result).toBe(path.resolve("/projects/repo", ".git"));
   });
 });

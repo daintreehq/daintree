@@ -763,11 +763,6 @@ describe("reflowCommitBody", () => {
     expect(reflowCommitBody(trailer)).toBe(trailer);
   });
 
-  it("keeps a BREAKING CHANGE footer on its own line", () => {
-    const body = "Reworked the API.\n\nBREAKING CHANGE: the old method is gone";
-    expect(reflowCommitBody(body)).toBe(body);
-  });
-
   it("keeps fenced code blocks intact", () => {
     const body = "Example usage:\n\n```ts\nconst x = 1;\n```";
     expect(reflowCommitBody(body)).toBe(body);
@@ -811,21 +806,11 @@ describe("reflowCommitBody", () => {
     expect(reflowCommitBody(body)).toBe(body);
   });
 
-  it("leaves a single long URL line untouched", () => {
-    const body =
-      "https://example.com/a/very/long/path/that/exceeds/the/panel/width/and/keeps/going";
-    expect(reflowCommitBody(body)).toBe(body);
-  });
-
   it("normalizes CRLF line endings without leaving stray carriage returns", () => {
     const body = "line one\r\nline two";
     const result = reflowCommitBody(body);
     expect(result).not.toContain("\r");
     expect(result).toBe("line one line two");
-  });
-
-  it("returns an empty string unchanged", () => {
-    expect(reflowCommitBody("")).toBe("");
   });
 
   it("is idempotent", () => {

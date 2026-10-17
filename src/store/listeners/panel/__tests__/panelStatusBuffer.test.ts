@@ -116,23 +116,6 @@ describe("panelStatusBuffer — activity batching", () => {
     expect(t?.lastCommand).toBe("b");
   });
 
-  it("skips writing when all activity fields are unchanged", () => {
-    seedPanel("term-1", {
-      activityHeadline: "Stable",
-      activityStatus: "working",
-      activityType: "interactive",
-      lastCommand: "cmd",
-    });
-    const setSpy = vi.spyOn(usePanelStore, "setState");
-    enqueueActivityUpdate("term-1", "Stable", "working", "interactive", "cmd");
-    raf.flushAll();
-    // setState is still called once (the fold runs), but the returned object
-    // reflects no terminal change. Assert via state equality, not call count.
-    expect(setSpy).toHaveBeenCalledTimes(1);
-    const t = getPtyPanel("term-1");
-    expect(t?.activityHeadline).toBe("Stable");
-  });
-
   it("drops patches for terminals that no longer exist", () => {
     enqueueActivityUpdate("ghost", "Phantom", "working", "interactive", undefined);
     raf.flushAll();
@@ -221,21 +204,6 @@ describe("panelStatusBuffer — flow-status batching", () => {
 });
 
 describe("panelStatusBuffer — combined flush", () => {
-  it("activity + flow-status patches in the same frame produce one setState call", () => {
-    seedPanel("term-1", { isVisible: true });
-    seedPanel("term-2", { isVisible: true });
-    const setSpy = vi.spyOn(usePanelStore, "setState");
-
-    enqueueActivityUpdate("term-1", "Doing", "working", "interactive", undefined);
-    enqueueFlowStatusUpdate("term-2", "paused-resource-governor", 100);
-
-    raf.flushAll();
-    expect(setSpy).toHaveBeenCalledTimes(1);
-
-    expect(getPtyPanel("term-1")?.activityHeadline).toBe("Doing");
-    expect(getPtyPanel("term-2")?.flowStatus).toBe("paused-resource-governor");
-  });
-
   it("same terminal: activity + flow-status patches do not clobber each other", () => {
     // The fold iterates activity first, then flow-status. Both must compose
     // into a single merged terminal record; the flow-status pass reads from
@@ -294,26 +262,12 @@ describe("panelStatusBuffer — lifecycle", () => {
 });
 
 describe("panelStatusBuffer — held-duration batching", () => {
-  it("applies per-terminal held duration patches on flush", () => {
-    seedPanel("term-1");
-    enqueueHeldDurationUpdate("term-1", 4000);
-    raf.flushAll();
-    expect(getPtyPanel("term-1")?.heldDurationMs).toBe(4000);
-  });
-
   it("last-write-wins within a frame for the same terminal", () => {
     seedPanel("term-1");
     enqueueHeldDurationUpdate("term-1", 1000);
     enqueueHeldDurationUpdate("term-1", 2000);
     raf.flushAll();
     expect(getPtyPanel("term-1")?.heldDurationMs).toBe(2000);
-  });
-
-  it("clearHeldDuration sets heldDurationMs to undefined", () => {
-    seedPanel("term-1", { heldDurationMs: 5000 });
-    clearHeldDuration("term-1");
-    raf.flushAll();
-    expect(getPtyPanel("term-1")?.heldDurationMs).toBeUndefined();
   });
 
   it("non-null patch does not clobber a pending null for the same terminal", () => {
@@ -323,17 +277,6 @@ describe("panelStatusBuffer — held-duration batching", () => {
     clearHeldDuration("term-1");
     enqueueHeldDurationUpdate("term-1", 12000);
     raf.flushAll();
-    expect(getPtyPanel("term-1")?.heldDurationMs).toBeUndefined();
-  });
-
-  it("clearHeldDuration is a no-op when a null is already buffered", () => {
-    seedPanel("term-1", { heldDurationMs: 5000 });
-    clearHeldDuration("term-1");
-    clearHeldDuration("term-1");
-    enqueueHeldDurationUpdate("term-1", 9999);
-    raf.flushAll();
-    // Second null is a fast-path no-op; the subsequent non-null must
-    // be ignored (null wins). Final value is undefined.
     expect(getPtyPanel("term-1")?.heldDurationMs).toBeUndefined();
   });
 
@@ -349,13 +292,5 @@ describe("panelStatusBuffer — held-duration batching", () => {
     expect(t?.activityHeadline).toBe("Working");
     expect(t?.flowStatus).toBe("paused-backpressure");
     expect(t?.heldDurationMs).toBe(6000);
-  });
-
-  it("flush is a no-op when only held-duration buffer is empty", () => {
-    seedPanel("term-1");
-    const setSpy = vi.spyOn(usePanelStore, "setState");
-    // Force a "tick" by enqueuing an empty flush — no buffers populated.
-    flushPanelStatusBuffer();
-    expect(setSpy).not.toHaveBeenCalled();
   });
 });

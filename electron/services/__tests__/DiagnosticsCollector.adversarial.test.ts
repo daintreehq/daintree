@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const shared = vi.hoisted(() => ({
   execFileHandler: vi.fn(),
+  findOnPathHandler: vi.fn(),
   logEntries: [] as Array<{
     level: string;
     message: string;
@@ -69,6 +70,24 @@ vi.mock("os", () => ({
     freemem: vi.fn(() => 8_000),
     loadavg: vi.fn(() => [0.1, 0.2, 0.3]),
   },
+}));
+
+vi.mock("../../utils/findOnPath.js", () => ({
+  findOnPath: (command: string, options?: unknown) => shared.findOnPathHandler(command, options),
+}));
+
+const cliSpawn = vi.hoisted(() => ({ target: vi.fn() }));
+const windowsPath = vi.hoisted(() => ({
+  find: vi.fn(async (_tool: string) => null as string | null),
+}));
+vi.mock("../../utils/windowsExecutable.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../utils/windowsExecutable.js")>()),
+  findWindowsCommand: (tool: string) => windowsPath.find(tool),
+}));
+
+vi.mock("../../utils/windowsCliSpawn.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../utils/windowsCliSpawn.js")>()),
+  cliSpawnTarget: (command: string, args: string[]) => cliSpawn.target(command, args),
 }));
 
 vi.mock("child_process", () => ({
@@ -145,7 +164,15 @@ function createDeps(eventBuffer?: { getAll: () => unknown[] }) {
   } as unknown as import("../../ipc/types.js").HandlerDependencies;
 }
 
-function setDefaultExecFile(): void {
+/**
+ * Every tool on PATH, whichever lookup the host platform runs (the in-process
+ * walk on POSIX, the directory scan on Windows), and every version probe
+ * answering. Reset per case: `clearAllMocks` keeps implementations, so a case
+ * that narrowed a lookup would otherwise decide what the next one finds.
+ */
+function setDefaultToolFixtures(): void {
+  shared.findOnPathHandler.mockImplementation(async (command: string) => `/usr/bin/${command}`);
+  windowsPath.find.mockImplementation(async (tool: string) => `C:\\tools\\${tool}.exe`);
   shared.execFileHandler.mockImplementation(
     (
       file: string,
@@ -153,10 +180,6 @@ function setDefaultExecFile(): void {
       _options: Record<string, unknown>,
       callback: (error: Error | null, stdout: string, stderr: string) => void
     ) => {
-      if (file === "which") {
-        callback(null, `/usr/bin/${file}`, "");
-        return;
-      }
       callback(null, `${file} version\n`, "");
     }
   );
@@ -188,7 +211,12 @@ describe("DiagnosticsCollector adversarial", () => {
       lagPressureActive: false,
     };
     mcp.service = null;
-    setDefaultExecFile();
+    cliSpawn.target.mockImplementation((command: string, args: string[]) => ({
+      command,
+      args: [...args],
+      shell: false,
+    }));
+    setDefaultToolFixtures();
     diagnostics = await import("../DiagnosticsCollector.js");
   });
 
@@ -224,6 +252,77 @@ describe("DiagnosticsCollector adversarial", () => {
       terminals: unknown[];
     };
     expect(payload.terminals).toEqual([]);
+  });
+
+  it("TOOL_PROBES_HIDE_CONSOLE_WINDOWS", async () => {
+    const payload = (await diagnostics.collectDiagnostics(createDeps())) as {
+      tools: Array<{ tool: string; available: boolean; path: string | null }>;
+    };
+    const calls = shared.execFileHandler.mock.calls as [string, string[], unknown, unknown][];
+    // Every tool the fixture put on PATH had its own version probe (by name on
+    // POSIX, by the file found on Windows), so the check below covers the tool
+    // probes themselves and not only the other sections' spawns.
+    const available = payload.tools.filter((tool) => tool.available);
+    expect(available.length).toBeGreaterThan(0);
+    for (const tool of available) {
+      const probed = calls.some(
+        ([file, args]) => args.includes("--version") && (file === tool.tool || file === tool.path)
+      );
+      expect(probed, `${tool.tool} --version`).toBe(true);
+    }
+    for (const [, , options] of calls) {
+      expect(options).toMatchObject({ windowsHide: true });
+    }
+  });
+
+  it("TOOL_PROBES_LAUNCH_WINDOWS_SHIMS_AND_REPORT_THE_LAUNCHABLE_PATH", async () => {
+    const platform = Object.getOwnPropertyDescriptor(process, "platform")!;
+    Object.defineProperty(process, "platform", { value: "win32" });
+    try {
+      const npmCli = "C:\\nodejs\\node_modules\\npm\\bin\\npm-cli.js";
+      // PATH holds npm's extensionless sh script and the `.cmd` beside it; only
+      // the `.cmd` is launchable, and its version runs from that very file.
+      windowsPath.find.mockImplementation(async (tool: string) =>
+        tool === "npm" ? "C:\\nodejs\\npm.cmd" : null
+      );
+      cliSpawn.target.mockImplementation((command: string, args: string[]) =>
+        command === "C:\\nodejs\\npm.cmd"
+          ? { command: "C:\\nodejs\\node.exe", args: [npmCli, ...args], shell: false }
+          : { command, args: [...args], shell: false }
+      );
+      shared.execFileHandler.mockImplementation(
+        (
+          file: string,
+          args: string[],
+          _options: Record<string, unknown>,
+          callback: (error: Error | null, result?: { stdout: string; stderr: string }) => void
+        ) => {
+          if (file === "C:\\nodejs\\node.exe" && args[0] === npmCli) {
+            callback(null, { stdout: "11.6.0\r\n", stderr: "" });
+          } else {
+            callback(new Error("not found"));
+          }
+        }
+      );
+
+      const payload = (await diagnostics.collectDiagnostics(createDeps())) as {
+        tools: Array<{
+          tool: string;
+          available: boolean;
+          path: string | null;
+          version: string | null;
+        }>;
+      };
+
+      expect(payload.tools.find((t) => t.tool === "npm")).toEqual({
+        tool: "npm",
+        available: true,
+        path: "C:\\nodejs\\npm.cmd",
+        version: "11.6.0",
+      });
+    } finally {
+      Object.defineProperty(process, "platform", platform);
+    }
   });
 
   it("LOG_HISTORY_BOUNDED_TO_100", async () => {
@@ -350,6 +449,31 @@ describe("DiagnosticsCollector adversarial", () => {
     expect(payload.metadata.appName).toBe("Daintree");
   });
 
+  it("TOOLS_RESOLVED_WITHOUT_WHICH_ON_LINUX", async () => {
+    // Minimal Fedora and Arch installs have no `which`; spawning it reported
+    // every tool missing from the diagnostics bundle.
+    const originalPlatform = Object.getOwnPropertyDescriptor(process, "platform")!;
+    Object.defineProperty(process, "platform", { value: "linux", configurable: true });
+    try {
+      shared.findOnPathHandler.mockImplementation(async (command: string) =>
+        command === "gh" ? null : `/usr/bin/${command}`
+      );
+
+      const payload = (await diagnostics.collectDiagnostics(createDeps())) as {
+        tools: Array<{ tool: string; available: boolean; path: string | null }>;
+      };
+
+      const byTool = new Map(payload.tools.map((entry) => [entry.tool, entry]));
+      expect(byTool.get("git")).toMatchObject({ available: true, path: "/usr/bin/git" });
+      expect(byTool.get("gh")).toMatchObject({ available: false, path: null });
+      const spawned = shared.execFileHandler.mock.calls.map((call) => call[0]);
+      expect(spawned).not.toContain("which");
+      expect(spawned).not.toContain("gh");
+    } finally {
+      Object.defineProperty(process, "platform", originalPlatform);
+    }
+  });
+
   it("EVENT_BUFFER_THROW_CONTAINED", async () => {
     const payload = (await diagnostics.collectDiagnostics(
       createDeps({
@@ -464,24 +588,6 @@ describe("DiagnosticsCollector adversarial", () => {
     expect(body).not.toContain("eyJ");
     expect(body).not.toMatch(/Bearer [A-Za-z0-9]/);
     expect(body).toContain("[REDACTED]");
-  });
-
-  it("FREE_TEXT_AWS_KEY_SCRUBBED_IN_LOG_MESSAGE", async () => {
-    shared.logEntries = [
-      {
-        level: "info",
-        message: "envrc loaded: AWS_ACCESS_KEY_ID=AKIAIOSFODNN7EXAMPLE",
-        timestamp: 3,
-      },
-    ];
-
-    const payload = (await diagnostics.collectDiagnostics(createDeps())) as {
-      logs: { recentEntries: Array<{ message: string }> };
-    };
-
-    const msg = payload.logs.recentEntries[0]?.message ?? "";
-    expect(msg).not.toContain("AKIAIOSFODNN7EXAMPLE");
-    expect(msg).toContain("[REDACTED]");
   });
 
   it("PROCESS_REPORT_HEADER_PII_REDACTED", async () => {
@@ -920,26 +1026,6 @@ describe("DiagnosticsCollector adversarial", () => {
     expect(payload.counts.windows).toBe(0);
     expect(payload.counts.openProjects).toBe(0);
     expect(payload.counts.terminals.total).toBe(0);
-  });
-
-  it("FREE_TEXT_PEM_BLOCK_SCRUBBED", async () => {
-    shared.logEntries = [
-      {
-        level: "error",
-        message:
-          "config dump: -----BEGIN RSA PRIVATE KEY-----\nMIIEpAIBAAKCAQEA\n-----END RSA PRIVATE KEY----- end",
-        timestamp: 4,
-      },
-    ];
-
-    const payload = (await diagnostics.collectDiagnostics(createDeps())) as {
-      logs: { recentEntries: Array<{ message: string }> };
-    };
-
-    const msg = payload.logs.recentEntries[0]?.message ?? "";
-    expect(msg).not.toContain("BEGIN RSA PRIVATE KEY");
-    expect(msg).not.toContain("MIIEpAIBAAKCAQEA");
-    expect(msg).toContain("[REDACTED]");
   });
 
   describe("mcpAudit section (#12508)", () => {

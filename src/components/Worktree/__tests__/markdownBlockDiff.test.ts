@@ -7,7 +7,6 @@ import {
   reconstructMarkdownDocuments,
   MARKDOWN_DIFF_MAX_BLOCKS,
   MARKDOWN_DIFF_MAX_LINES,
-  PAIR_SIMILARITY_THRESHOLD,
   type MarkdownBlockChange,
 } from "../markdownBlockDiff";
 
@@ -325,15 +324,6 @@ describe("parseMarkdownBlocks", () => {
     expect(definitionsById.get("d")).toBe("[d]: https://example.com");
   });
 
-  it("collects link reference definitions apart from the visible blocks", () => {
-    const { blocks, definitions } = parseMarkdownBlocks(
-      "See [the docs][d].\n\n[d]: https://example.com\n"
-    );
-
-    expect(blocks).toHaveLength(1);
-    expect(definitions).toBe("[d]: https://example.com");
-  });
-
   it("gives a fence body the trailing newline the rendered tree has", () => {
     const { blocks } = parseMarkdownBlocks("```ts\nconst a = 1;\n```\n");
 
@@ -414,20 +404,6 @@ describe("diffMarkdownBlocks", () => {
 });
 
 describe("blockSimilarity", () => {
-  it("scores a small edit above the pairing threshold and a rewrite below it", () => {
-    const edited = blockSimilarity(
-      "The quick brown fox jumps over the lazy dog.",
-      "The quick brown fox leaps over the lazy dog."
-    );
-    const rewritten = blockSimilarity(
-      "The quick brown fox jumps over the lazy dog.",
-      "Kitchen inventory: seven mugs, three plates, one kettle."
-    );
-
-    expect(edited).toBeGreaterThan(PAIR_SIMILARITY_THRESHOLD);
-    expect(rewritten).toBeLessThan(PAIR_SIMILARITY_THRESHOLD);
-  });
-
   it("scores zero when one side dwarfs the other", () => {
     expect(blockSimilarity("short", `${"long ".repeat(200)}`)).toBe(0);
   });

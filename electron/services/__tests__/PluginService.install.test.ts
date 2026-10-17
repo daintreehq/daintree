@@ -120,6 +120,7 @@ import { resilientRename } from "../../utils/fs.js";
 import { PluginBlocklistService } from "../plugin/PluginBlocklistService.js";
 import { broadcastToRenderer } from "../../ipc/utils.js";
 import { CHANNELS } from "../../ipc/channels.js";
+import { pluginMcpGrantRegistry } from "../pluginAgentMcp/grantRegistry.js";
 
 /** A PluginBlocklistService backed by an in-memory list (no network/disk). */
 function fakeBlocklist(entries: Array<Record<string, unknown>>): PluginBlocklistService {
@@ -171,6 +172,24 @@ async function exists(p: string): Promise<boolean> {
   } catch {
     return false;
   }
+}
+
+/** Run `during` inside the service's next `loadPlugin` calls, before each real load. */
+function duringLoad(service: PluginService, during: () => void) {
+  const internals = service as unknown as {
+    loadPlugin: (...args: unknown[]) => Promise<unknown>;
+  };
+  const realLoad = internals.loadPlugin.bind(service);
+  return vi.spyOn(internals, "loadPlugin").mockImplementation(async (...args) => {
+    during();
+    return realLoad(...args);
+  });
+}
+
+function disablePlugin(service: PluginService, pluginId: string): void {
+  (
+    service as unknown as { records: { setEnabled(id: string, enabled: boolean): void } }
+  ).records.setEnabled(pluginId, false);
 }
 
 beforeEach(async () => {
@@ -894,6 +913,185 @@ describe("installPlugin — name collision (#10518)", () => {
   });
 });
 
+describe("installPlugin — running agents' credentials across an upgrade", () => {
+  const TERMINAL = "term-agent-upgrade";
+
+  function issueGrant(pluginId: string): string {
+    return pluginMcpGrantRegistry.issue({
+      pluginInstanceId: pluginId,
+      scope: { databases: false, pluginEndpointId: "data" },
+      serverName: "daintree-ledger",
+      projectId: "a".repeat(64),
+      terminalId: TERMINAL,
+    }).grant.credentialId;
+  }
+
+  afterEach(() => {
+    pluginMcpGrantRegistry.revokeTerminal(TERMINAL);
+  });
+
+  it("keeps them when the new version declares the same agent surface", async () => {
+    const service = new PluginService(pluginsRoot, "0.0.0");
+    try {
+      const v1 = await makeArchive({
+        name: "acme.agent-keep",
+        version: "1.0.0",
+        mcpName: "ledger",
+      });
+      expect((await service.installPlugin(v1)).status).toBe("installed");
+      const credentialId = issueGrant("acme.agent-keep");
+
+      const v2 = await makeArchive({
+        name: "acme.agent-keep",
+        version: "2.0.0",
+        mcpName: "ledger",
+      });
+      expect((await service.installPlugin(v2)).status).toBe("installed");
+
+      expect(pluginMcpGrantRegistry.isLive(credentialId)).toBe(true);
+      expect(pluginMcpGrantRegistry.isHeld(credentialId)).toBe(false);
+    } finally {
+      service.dispose();
+    }
+  });
+
+  it("revokes them when the new version declares a different agent surface", async () => {
+    const service = new PluginService(pluginsRoot, "0.0.0");
+    try {
+      const v1 = await makeArchive({
+        name: "acme.agent-change",
+        version: "1.0.0",
+        mcpName: "ledger",
+      });
+      expect((await service.installPlugin(v1)).status).toBe("installed");
+      const credentialId = issueGrant("acme.agent-change");
+      let heldDuringLoad = false;
+      const spy = duringLoad(service, () => {
+        heldDuringLoad =
+          pluginMcpGrantRegistry.isLive(credentialId) &&
+          pluginMcpGrantRegistry.isHeld(credentialId);
+      });
+
+      const v2 = await makeArchive({
+        name: "acme.agent-change",
+        version: "2.0.0",
+        mcpName: "books",
+      });
+      expect((await service.installPlugin(v2)).status).toBe("installed");
+      spy.mockRestore();
+
+      // Held while the next version loaded, revoked once it was judged.
+      expect(heldDuringLoad).toBe(true);
+      expect(pluginMcpGrantRegistry.isLive(credentialId)).toBe(false);
+    } finally {
+      service.dispose();
+    }
+  });
+
+  it("keeps them when a failed upgrade restores the version they were issued against", async () => {
+    const service = new PluginService(pluginsRoot, "0.0.0");
+    try {
+      const v1 = await makeArchive({ name: "acme.agent-rollback", version: "1.0.0" });
+      expect((await service.installPlugin(v1)).status).toBe("installed");
+      const credentialId = issueGrant("acme.agent-rollback");
+
+      // Passes the schema, throws in loadPlugin: the upgrade rolls back to v1.
+      const v2 = await makeArchive({
+        name: "acme.agent-rollback",
+        version: "2.0.0",
+        contributes: {
+          menuItems: [
+            {
+              label: "Run",
+              location: "terminal",
+              actionId: "acme.agent-rollback.run",
+              when: "foo &&",
+            },
+          ],
+        },
+      });
+      expect((await service.installPlugin(v2)).status).toBe("failed");
+
+      expect(pluginMcpGrantRegistry.isLive(credentialId)).toBe(true);
+      expect(pluginMcpGrantRegistry.isHeld(credentialId)).toBe(false);
+    } finally {
+      service.dispose();
+    }
+  });
+
+  it("keeps them when the swap fails and the old version is reloaded", async () => {
+    const service = new PluginService(pluginsRoot, "0.0.0");
+    try {
+      const v1 = await makeArchive({ name: "acme.agent-swap", version: "1.0.0" });
+      expect((await service.installPlugin(v1)).status).toBe("installed");
+      const credentialId = issueGrant("acme.agent-swap");
+
+      // 1=park-aside, 2=move-new-in (throws), 3=restore-parked.
+      const real = (await vi.importActual<typeof import("../../utils/fs.js")>("../../utils/fs.js"))
+        .resilientRename;
+      vi.mocked(resilientRename)
+        .mockImplementationOnce((s, d) => real(s, d))
+        .mockImplementationOnce(() =>
+          Promise.reject(Object.assign(new Error("disk full"), { code: "ENOSPC" }))
+        )
+        .mockImplementationOnce((s, d) => real(s, d));
+
+      const v2 = await makeArchive({ name: "acme.agent-swap", version: "2.0.0" });
+      const result = await service.installPlugin(v2);
+      expect(result.status === "failed" && result.errors[0].code).toBe("swap_failed");
+
+      expect(service.hasPlugin("acme.agent-swap")).toBe(true);
+      expect(pluginMcpGrantRegistry.isLive(credentialId)).toBe(true);
+      expect(pluginMcpGrantRegistry.isHeld(credentialId)).toBe(false);
+    } finally {
+      service.dispose();
+    }
+  });
+
+  it("revokes them when the plugin is disabled while the upgrade loads it", async () => {
+    const service = new PluginService(pluginsRoot, "0.0.0");
+    try {
+      const v1 = await makeArchive({ name: "acme.agent-race", version: "1.0.0" });
+      expect((await service.installPlugin(v1)).status).toBe("installed");
+      const credentialId = issueGrant("acme.agent-race");
+
+      // The disable lands after the load read the disabled set, while the
+      // plugin is in neither map, so the toggle itself finds nothing to unload.
+      const spy = duringLoad(service, () => disablePlugin(service, "acme.agent-race"));
+
+      const v2 = await makeArchive({ name: "acme.agent-race", version: "2.0.0" });
+      await service.installPlugin(v2);
+      spy.mockRestore();
+
+      expect(pluginMcpGrantRegistry.isLive(credentialId)).toBe(false);
+      expect(pluginMcpGrantRegistry.isHeld(credentialId)).toBe(false);
+    } finally {
+      service.dispose();
+    }
+  });
+
+  it("revokes them when the upgraded plugin is disabled and stays unloaded", async () => {
+    const service = new PluginService(pluginsRoot, "0.0.0");
+    try {
+      const v1 = await makeArchive({ name: "acme.agent-disabled", version: "1.0.0" });
+      expect((await service.installPlugin(v1)).status).toBe("installed");
+      const credentialId = issueGrant("acme.agent-disabled");
+      storeState.set("plugins", {
+        ...(storeState.get("plugins") as Record<string, unknown>),
+        disabled: ["acme.agent-disabled"],
+      });
+
+      const v2 = await makeArchive({ name: "acme.agent-disabled", version: "2.0.0" });
+      expect((await service.installPlugin(v2)).status).toBe("installed");
+
+      expect(service.hasPlugin("acme.agent-disabled")).toBe(false);
+      expect(pluginMcpGrantRegistry.isLive(credentialId)).toBe(false);
+    } finally {
+      service.dispose();
+    }
+  });
+});
+
 describe("installPlugin — consent reset on upgrade (#10518)", () => {
   it("revokes the plugin's consent pins on upgrade but not on a fresh install", async () => {
     const service = new PluginService(pluginsRoot, "0.0.0");
@@ -969,12 +1167,17 @@ describe("dev sessions — full-artifact reconcile (#12277)", () => {
   const DEV_ID = "acme.dev-session";
 
   /** A dev plugin exactly as `daintree-plugin dev` leaves it: marker + built dist. */
-  async function writeDevPlugin(version = "1.0.0"): Promise<string> {
+  async function writeDevPlugin(version = "1.0.0", mcpName?: string): Promise<string> {
     const dir = path.join(pluginsRoot, DEV_ID);
     await fs.mkdir(path.join(dir, "dist"), { recursive: true });
     await fs.writeFile(
       path.join(dir, "plugin.json"),
-      JSON.stringify({ name: DEV_ID, version, main: "dist/index.js" })
+      JSON.stringify({
+        name: DEV_ID,
+        version,
+        main: "dist/index.js",
+        ...(mcpName !== undefined ? { mcpName } : {}),
+      })
     );
     await fs.writeFile(path.join(dir, "dist", "index.js"), "module.exports = {};");
     await fs.writeFile(path.join(dir, ".dev-marker"), "");
@@ -1167,6 +1370,134 @@ describe("dev sessions — full-artifact reconcile (#12277)", () => {
     expect(service.listPlugins().some((p) => p.manifest.name === DEV_ID)).toBe(false);
 
     service.dispose();
+  });
+
+  describe("running agents' credentials", () => {
+    const TERMINAL = "term-dev-rebuild";
+
+    function issueGrant(): string {
+      return pluginMcpGrantRegistry.issue({
+        pluginInstanceId: DEV_ID,
+        scope: { databases: false, pluginEndpointId: "data" },
+        serverName: "daintree-ledger",
+        projectId: "a".repeat(64),
+        terminalId: TERMINAL,
+      }).grant.credentialId;
+    }
+
+    afterEach(() => {
+      pluginMcpGrantRegistry.revokeTerminal(TERMINAL);
+    });
+
+    it("survive a rebuild that declares the same agent surface", async () => {
+      await writeDevPlugin("1.0.0", "ledger");
+      const service = new PluginService(pluginsRoot, "0.0.0");
+      try {
+        await service.loadDevPlugin(DEV_ID);
+        const credentialId = issueGrant();
+
+        await writeDevPlugin("1.0.1", "ledger");
+        expect(await reload(service)).toBe(true);
+
+        expect(pluginMcpGrantRegistry.isLive(credentialId)).toBe(true);
+        expect(pluginMcpGrantRegistry.isHeld(credentialId)).toBe(false);
+      } finally {
+        service.dispose();
+      }
+    });
+
+    it("are revoked by a rebuild that declares a different agent surface", async () => {
+      await writeDevPlugin("1.0.0", "ledger");
+      const service = new PluginService(pluginsRoot, "0.0.0");
+      try {
+        await service.loadDevPlugin(DEV_ID);
+        const credentialId = issueGrant();
+        let heldDuringLoad = false;
+        const spy = duringLoad(service, () => {
+          heldDuringLoad =
+            pluginMcpGrantRegistry.isLive(credentialId) &&
+            pluginMcpGrantRegistry.isHeld(credentialId);
+        });
+
+        await writeDevPlugin("1.0.1", "books");
+        expect(await reload(service)).toBe(true);
+        spy.mockRestore();
+
+        expect(heldDuringLoad).toBe(true);
+        expect(pluginMcpGrantRegistry.isLive(credentialId)).toBe(false);
+      } finally {
+        service.dispose();
+      }
+    });
+
+    it("survive a session restarted over the running plugin", async () => {
+      await writeDevPlugin("1.0.0", "ledger");
+      const service = new PluginService(pluginsRoot, "0.0.0");
+      try {
+        await service.loadDevPlugin(DEV_ID);
+        const credentialId = issueGrant();
+
+        await service.loadDevPlugin(DEV_ID);
+
+        expect(pluginMcpGrantRegistry.isLive(credentialId)).toBe(true);
+        expect(pluginMcpGrantRegistry.isHeld(credentialId)).toBe(false);
+      } finally {
+        service.dispose();
+      }
+    });
+
+    it("are revoked when the plugin is disabled while a rebuild loads it", async () => {
+      await writeDevPlugin("1.0.0", "ledger");
+      const service = new PluginService(pluginsRoot, "0.0.0");
+      try {
+        await service.loadDevPlugin(DEV_ID);
+        const credentialId = issueGrant();
+        const spy = duringLoad(service, () => disablePlugin(service, DEV_ID));
+
+        await writeDevPlugin("1.0.1", "ledger");
+        expect(await reload(service)).toBe(false);
+        spy.mockRestore();
+
+        expect(service.hasPlugin(DEV_ID)).toBe(false);
+        expect(pluginMcpGrantRegistry.isLive(credentialId)).toBe(false);
+        expect(pluginMcpGrantRegistry.isHeld(credentialId)).toBe(false);
+      } finally {
+        service.dispose();
+      }
+    });
+
+    it("are revoked when the session stops behind a rebuild", async () => {
+      await writeDevPlugin("1.0.0", "ledger");
+      const service = new PluginService(pluginsRoot, "0.0.0");
+      try {
+        await service.loadDevPlugin(DEV_ID);
+        const credentialId = issueGrant();
+
+        await writeDevPlugin("1.0.1", "ledger");
+        await Promise.all([reload(service), service.stopDevSession(DEV_ID)]);
+
+        expect(service.hasPlugin(DEV_ID)).toBe(false);
+        expect(pluginMcpGrantRegistry.isLive(credentialId)).toBe(false);
+        expect(pluginMcpGrantRegistry.isHeld(credentialId)).toBe(false);
+      } finally {
+        service.dispose();
+      }
+    });
+
+    it("are revoked when the session stops", async () => {
+      await writeDevPlugin("1.0.0", "ledger");
+      const service = new PluginService(pluginsRoot, "0.0.0");
+      try {
+        await service.loadDevPlugin(DEV_ID);
+        const credentialId = issueGrant();
+
+        await service.stopDevSession(DEV_ID);
+
+        expect(pluginMcpGrantRegistry.isLive(credentialId)).toBe(false);
+      } finally {
+        service.dispose();
+      }
+    });
   });
 });
 
@@ -1389,6 +1720,143 @@ describe("installPlugin — reviewed-update binding (#12612)", () => {
     if (result.status === "failed") expect(result.errors[0]?.code).toBe("archive_mismatch");
     expect(await exists(path.join(pluginsRoot, "acme.dir-bound"))).toBe(false);
     expect(await stagingLeftovers()).toHaveLength(0);
+
+    service.dispose();
+  });
+});
+
+// A package sent from another machine may only replace what is installed when
+// the person asked for exactly that — decided under the install lock, against
+// what is installed at that moment, not before queueing (#11158).
+describe("installPluginFromAnotherMachine — replacement decided under the lock", () => {
+  type InstallerView = { installer: { installPlugin: (...args: unknown[]) => unknown } };
+
+  function installedVersion(service: PluginService, pluginId: string): string | undefined {
+    return service.listPlugins().find((p) => p.manifest.name === pluginId)?.manifest.version;
+  }
+
+  async function onDiskVersion(pluginId: string): Promise<string> {
+    const raw = await fs.readFile(path.join(pluginsRoot, pluginId, "plugin.json"), "utf-8");
+    return (JSON.parse(raw) as { version: string }).version;
+  }
+
+  /** Initialized with the startup activation gate open, as after boot. */
+  async function started(service: PluginService): Promise<PluginService> {
+    await service.initialize();
+    (service as unknown as { resolveInit: (() => void) | null }).resolveInit?.();
+    return service;
+  }
+
+  function spyInstaller(service: PluginService) {
+    return vi.spyOn((service as unknown as InstallerView).installer, "installPlugin");
+  }
+
+  /** Holds the first install's swap until released, so a second request queues behind it. */
+  async function holdFirstSwap(): Promise<() => void> {
+    const real = (await vi.importActual<typeof import("../../utils/fs.js")>("../../utils/fs.js"))
+      .resilientRename;
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    vi.mocked(resilientRename).mockImplementationOnce(async (s, d) => {
+      await gate;
+      return real(s, d);
+    });
+    return release;
+  }
+
+  it("never lets a queued older update replace a newer one that landed first", async () => {
+    const service = await started(
+      new PluginService(pluginsRoot, "0.0.0", { blocklistService: fakeBlocklist([]) })
+    );
+    await service.installPlugin(await makeArchive({ name: "acme.race", version: "1.0.0" }));
+    const v3 = await makeArchive({ name: "acme.race", version: "3.0.0" });
+    const v2 = await makeArchive({ name: "acme.race", version: "2.0.0" });
+
+    const spy = spyInstaller(service);
+    const release = await holdFirstSwap();
+    const first = service.installPluginFromAnotherMachine(v3, {
+      pluginId: "acme.race",
+      update: true,
+    });
+    await vi.waitFor(() => expect(spy).toHaveBeenCalledTimes(1));
+    // v1 is still what's installed when this one is asked for.
+    const second = service.installPluginFromAnotherMachine(v2, {
+      pluginId: "acme.race",
+      update: true,
+    });
+    await vi.waitFor(() => expect(spy).toHaveBeenCalledTimes(2));
+    release();
+
+    await expect(first).resolves.toEqual({ status: "installed", pluginId: "acme.race" });
+    await expect(second).resolves.toMatchObject({
+      status: "failed",
+      errors: [{ code: "archive_mismatch" }],
+    });
+    expect(await onDiskVersion("acme.race")).toBe("3.0.0");
+    expect(installedVersion(service, "acme.race")).toBe("3.0.0");
+
+    service.dispose();
+  });
+
+  it("lets only the first of two concurrent installs of one plugin land", async () => {
+    const service = await started(
+      new PluginService(pluginsRoot, "0.0.0", { blocklistService: fakeBlocklist([]) })
+    );
+    const a = await makeArchive({ name: "acme.twice", version: "1.0.0" });
+    const b = await makeArchive({ name: "acme.twice", version: "1.1.0" });
+
+    const spy = spyInstaller(service);
+    const release = await holdFirstSwap();
+    const first = service.installPluginFromAnotherMachine(a, { pluginId: "acme.twice" });
+    await vi.waitFor(() => expect(spy).toHaveBeenCalledTimes(1));
+    const second = service.installPluginFromAnotherMachine(b, { pluginId: "acme.twice" });
+    await vi.waitFor(() => expect(spy).toHaveBeenCalledTimes(2));
+    release();
+
+    await expect(first).resolves.toEqual({ status: "installed", pluginId: "acme.twice" });
+    await expect(second).resolves.toMatchObject({
+      status: "failed",
+      errors: [{ code: "archive_mismatch", message: expect.stringContaining("already installed") }],
+    });
+    expect(await onDiskVersion("acme.twice")).toBe("1.0.0");
+
+    service.dispose();
+  });
+
+  it("updates a plugin the blocklist refused at launch to a version it doesn't name", async () => {
+    await fs.mkdir(path.join(pluginsRoot, "acme.blocked"), { recursive: true });
+    await fs.writeFile(
+      path.join(pluginsRoot, "acme.blocked", "plugin.json"),
+      JSON.stringify({ name: "acme.blocked", version: "1.0.0" })
+    );
+    const service = new PluginService(pluginsRoot, "0.0.0", {
+      blocklistService: fakeBlocklist([
+        { name: "acme.blocked", ranges: ["<2.0.0"], reason: "cve" },
+      ]),
+    });
+    await started(service);
+    expect(service.listPlugins().find((p) => p.manifest.name === "acme.blocked")?.blocklisted).toBe(
+      true
+    );
+
+    // The incoming package is still checked against the blocklist first.
+    const stillBlocked = await makeArchive({ name: "acme.blocked", version: "1.5.0" });
+    await expect(
+      service.installPluginFromAnotherMachine(stillBlocked, {
+        pluginId: "acme.blocked",
+        update: true,
+      })
+    ).rejects.toMatchObject({ code: "PLUGIN_INCOMPATIBLE" });
+
+    const fixed = await makeArchive({ name: "acme.blocked", version: "2.0.0" });
+    await expect(
+      service.installPluginFromAnotherMachine(fixed, { pluginId: "acme.blocked", update: true })
+    ).resolves.toEqual({ status: "installed", pluginId: "acme.blocked" });
+    const info = service.listPlugins().find((p) => p.manifest.name === "acme.blocked");
+    expect(info?.blocklisted).toBe(false);
+    expect(info?.manifest.version).toBe("2.0.0");
 
     service.dispose();
   });

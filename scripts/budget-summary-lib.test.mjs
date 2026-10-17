@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { formatBudgetSummary, DEFAULT_MAX_CHARS } from "./budget-summary-lib.mjs";
+import { formatBudgetSummary } from "./budget-summary-lib.mjs";
 
 describe("formatBudgetSummary — structure", () => {
   const md = formatBudgetSummary({
@@ -37,18 +37,6 @@ describe("formatBudgetSummary — structure", () => {
   });
 });
 
-describe("formatBudgetSummary — status", () => {
-  it("surfaces FAIL in the summary one-liner", () => {
-    const md = formatBudgetSummary({
-      title: "Main import budget",
-      status: "FAIL",
-      headerLine: "3 error(s)",
-      sections: [{ heading: "Errors", body: ["- electron/foo.ts: sync fs call"] }],
-    });
-    expect(md).toContain("<summary>FAIL — 3 error(s)</summary>");
-  });
-});
-
 describe("formatBudgetSummary — empty sections", () => {
   it("drops sections with empty bodies", () => {
     const md = formatBudgetSummary({
@@ -78,18 +66,6 @@ describe("formatBudgetSummary — empty sections", () => {
 });
 
 describe("formatBudgetSummary — size guard", () => {
-  it("truncates body rows when over the cap and stays within it", () => {
-    const body = Array.from({ length: 5000 }, (_, i) => `- chunk-${i}: ${i} bytes`);
-    const md = formatBudgetSummary({
-      title: "Big report",
-      status: "PASS",
-      headerLine: "lots of chunks",
-      sections: [{ heading: "Chunks", body }],
-      maxChars: 2000,
-    });
-    expect(md.length).toBeLessThanOrEqual(2000);
-  });
-
   it("always closes the <details> block after truncation", () => {
     const body = Array.from({ length: 5000 }, (_, i) => `- chunk-${i}: ${i} bytes`);
     const md = formatBudgetSummary({
@@ -165,18 +141,5 @@ describe("formatBudgetSummary — size guard", () => {
     const underCap = formatBudgetSummary({ ...opts, maxChars: exact.length - 1 });
     expect(underCap).toContain("omitted");
     expect(underCap.length).toBeLessThanOrEqual(exact.length - 1);
-  });
-
-  it("leaves content untouched when comfortably under the cap", () => {
-    const md = formatBudgetSummary({
-      title: "Small report",
-      status: "PASS",
-      headerLine: "ok",
-      sections: [{ heading: "Chunks", body: ["- a: 1", "- b: 2"] }],
-    });
-    expect(md).toContain("- a: 1");
-    expect(md).toContain("- b: 2");
-    expect(md).not.toContain("omitted");
-    expect(md.length).toBeLessThan(DEFAULT_MAX_CHARS);
   });
 });

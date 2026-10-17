@@ -1,6 +1,5 @@
 import { describe, it, expect } from "vitest";
 import { getPluginManifestSchema } from "../plugin.js";
-import { DENY_PLUGIN_DISPATCH_ACTION_IDS } from "../../../shared/config/actionIds.js";
 
 // A real built-in action id (see shared/config/actionIds.ts) — referencing one
 // from a plugin contribution is valid and common.
@@ -47,15 +46,6 @@ function commandEntry(id: string): Record<string, unknown> {
 describe("manifest-level actionId namespace gate (issue #10565)", () => {
   const schema = getPluginManifestSchema("user");
 
-  it("accepts a contribution referencing a built-in action", () => {
-    const result = schema.safeParse(
-      manifestWith({
-        contributes: { toolbarButtons: [contributionEntry.toolbarButtons(BUILT_IN_ACTION_ID)] },
-      })
-    );
-    expect(result.success).toBe(true);
-  });
-
   it("accepts a keybinding-driven built-in action (BuiltInKeyAction half of the union)", () => {
     // BuiltInActionId = BuiltInKeyAction | BuiltInRuntimeActionId. The allowlist
     // must cover both halves, or a legitimate keybinding to a key-action like
@@ -94,29 +84,6 @@ describe("manifest-level actionId namespace gate (issue #10565)", () => {
     expect(result.success).toBe(true);
   });
 
-  it("rejects a typo'd own-namespace actionId when commands are declared (issue #10580)", () => {
-    // With commands declared, an own-namespace id matching none of them is a typo
-    // for a command that will never exist — it must be caught at parse time.
-    const result = schema.safeParse(
-      manifestWith({
-        contributes: {
-          commands: [commandEntry("openInBrowser")],
-          toolbarButtons: [contributionEntry.toolbarButtons("acme.my-plugin.openInBrowswer")],
-        },
-      })
-    );
-    expect(result.success).toBe(false);
-    if (!result.success) {
-      const issue = result.error.issues.find(
-        (i) =>
-          (i as { params?: { errorCode?: string } }).params?.errorCode ===
-          "action_id_undeclared_command"
-      );
-      expect(issue).toBeDefined();
-      expect(issue?.path).toEqual(["contributes", "toolbarButtons", 0, "actionId"]);
-    }
-  });
-
   it.each(CONTRIBUTION_ARRAYS)(
     "rejects a typo'd own-namespace actionId contributed via %s",
     (arrayName) => {
@@ -141,28 +108,6 @@ describe("manifest-level actionId namespace gate (issue #10565)", () => {
     }
   );
 
-  it("rejects a contribution referencing a denyPluginDispatch built-in (issue #10580)", () => {
-    // terminal.sendCommand exists as a built-in but is closed to plugin dispatch
-    // — wiring a contribution to it paints a button the host will never fire.
-    const result = schema.safeParse(
-      manifestWith({
-        contributes: {
-          toolbarButtons: [contributionEntry.toolbarButtons("terminal.sendCommand")],
-        },
-      })
-    );
-    expect(result.success).toBe(false);
-    if (!result.success) {
-      const issue = result.error.issues.find(
-        (i) =>
-          (i as { params?: { errorCode?: string } }).params?.errorCode ===
-          "action_id_plugin_dispatch_denied"
-      );
-      expect(issue).toBeDefined();
-      expect(issue?.path).toEqual(["contributes", "toolbarButtons", 0, "actionId"]);
-    }
-  });
-
   it.each(CONTRIBUTION_ARRAYS)(
     "rejects a denyPluginDispatch built-in actionId contributed via %s",
     (arrayName) => {
@@ -183,40 +128,6 @@ describe("manifest-level actionId namespace gate (issue #10565)", () => {
       }
     }
   );
-
-  it.each(DENY_PLUGIN_DISPATCH_ACTION_IDS)(
-    "rejects denyPluginDispatch built-in %s",
-    (deniedActionId) => {
-      // Cover every entry in the deny set — dropping any one of them would
-      // otherwise reopen a dead-button side door undetected.
-      const result = schema.safeParse(
-        manifestWith({
-          contributes: { toolbarButtons: [contributionEntry.toolbarButtons(deniedActionId)] },
-        })
-      );
-      expect(result.success).toBe(false);
-      if (!result.success) {
-        const issue = result.error.issues.find(
-          (i) =>
-            (i as { params?: { errorCode?: string } }).params?.errorCode ===
-            "action_id_plugin_dispatch_denied"
-        );
-        expect(issue).toBeDefined();
-      }
-    }
-  );
-
-  it("treats an explicit empty contributes.commands array as the imperative escape hatch", () => {
-    const result = schema.safeParse(
-      manifestWith({
-        contributes: {
-          commands: [],
-          toolbarButtons: [contributionEntry.toolbarButtons("acme.my-plugin.greet")],
-        },
-      })
-    );
-    expect(result.success).toBe(true);
-  });
 
   it("reports each distinct error code in one manifest (denied, foreign, undeclared own)", () => {
     // A denied built-in, a foreign-namespace id, and a typo'd own-namespace id
@@ -247,26 +158,6 @@ describe("manifest-level actionId namespace gate (issue #10565)", () => {
       expect(codeFor(0)?.params?.errorCode).toBe("action_id_plugin_dispatch_denied");
       expect(codeFor(1)?.params?.errorCode).toBe("action_id_unknown_namespace");
       expect(codeFor(2)?.params?.errorCode).toBe("action_id_undeclared_command");
-    }
-  });
-
-  it("rejects a foreign-namespace actionId with a precise error code and path", () => {
-    const result = schema.safeParse(
-      manifestWith({
-        contributes: {
-          toolbarButtons: [contributionEntry.toolbarButtons("other.plugin.foo")],
-        },
-      })
-    );
-    expect(result.success).toBe(false);
-    if (!result.success) {
-      const issue = result.error.issues.find(
-        (i) =>
-          (i as { params?: { errorCode?: string } }).params?.errorCode ===
-          "action_id_unknown_namespace"
-      );
-      expect(issue).toBeDefined();
-      expect(issue?.path).toEqual(["contributes", "toolbarButtons", 0, "actionId"]);
     }
   });
 

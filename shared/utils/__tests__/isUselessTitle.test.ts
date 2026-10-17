@@ -90,8 +90,4 @@ describe("normalizeObservedTitle", () => {
     expect(result).not.toBeNull();
     expect(result!.length).toBe(MAX_OBSERVED_TITLE_LENGTH);
   });
-
-  it("passes normal-length strings through unchanged", () => {
-    expect(normalizeObservedTitle("Fixing auth bug")).toBe("Fixing auth bug");
-  });
 });

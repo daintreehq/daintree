@@ -8,6 +8,7 @@ import {
   FLOATING_CARD_SURFACE_CLASS,
   OVERLAY_SHEET_SHADOW_CLASS,
 } from "@/components/ui/floatingSurface";
+import { readIndexCss } from "@/__tests__/support/hostCss";
 
 const TEST_DIR = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(TEST_DIR, "../../..");
@@ -155,7 +156,7 @@ describe("floating elevation contract", () => {
 });
 
 describe("app-level stacking", () => {
-  const css = read("src/index.css");
+  const css = readIndexCss();
 
   it("puts the toolbar strictly between the sheets it covers and the modals that cover it", () => {
     const toolbar = zToken(css, "toolbar");

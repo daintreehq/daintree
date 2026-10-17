@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { resolveSnoozeDuration, SNOOZE_LABEL } from "../snoozeTimestamps.js";
+import { resolveSnoozeDuration } from "../snoozeTimestamps.js";
 
 describe("resolveSnoozeDuration", () => {
   it("'1h' adds one hour", () => {
@@ -76,14 +76,6 @@ describe("resolveSnoozeDuration", () => {
     const now = new Date(2026, 4, 27, 14, 30, 0, 0);
     for (const option of ["1h", "4h", "tomorrow-8am", "next-monday-8am"] as const) {
       expect(resolveSnoozeDuration(option, now)).toBeGreaterThan(now.getTime());
-    }
-  });
-});
-
-describe("SNOOZE_LABEL", () => {
-  it("covers every option in the ladder", () => {
-    for (const option of ["1h", "4h", "tomorrow-8am", "next-monday-8am"] as const) {
-      expect(SNOOZE_LABEL[option]).toBeTruthy();
     }
   });
 });

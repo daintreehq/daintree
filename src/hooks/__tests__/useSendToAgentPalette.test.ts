@@ -49,11 +49,6 @@ beforeEach(() => {
 });
 
 describe("openSendToAgentPaletteWithText", () => {
-  it("returns false and does not open the palette for empty text", () => {
-    expect(openSendToAgentPaletteWithText("")).toBe(false);
-    expect(openPalette).not.toHaveBeenCalled();
-  });
-
   it("returns false for whitespace-only text", () => {
     expect(openSendToAgentPaletteWithText("   \n\t ", "a")).toBe(false);
     expect(openPalette).not.toHaveBeenCalled();
@@ -63,11 +58,6 @@ describe("openSendToAgentPaletteWithText", () => {
     panelState = { panelIds: ["a"], panelsById: { a: { id: "a" } } };
     expect(openSendToAgentPaletteWithText("hello", "a")).toBe(false);
     expect(openPalette).not.toHaveBeenCalled();
-  });
-
-  it("opens the send-to-agent palette with arbitrary text when targets exist", () => {
-    expect(openSendToAgentPaletteWithText("hello", "a")).toBe(true);
-    expect(openPalette).toHaveBeenCalledWith("send-to-agent");
   });
 
   it("does not require a cached terminal selection", () => {

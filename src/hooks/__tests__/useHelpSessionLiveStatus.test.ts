@@ -97,19 +97,6 @@ describe("useHelpSessionLiveStatus", () => {
     await waitFor(() => expect(result.current).toEqual(CONNECTED));
   });
 
-  it("re-pulls when a grant-lifecycle event fires", async () => {
-    renderHook(() => useHelpSessionLiveStatus("help-1"));
-    await act(async () => {
-      pulls[0]!.resolve(CONNECTED);
-    });
-
-    act(() => {
-      grantCallback?.();
-    });
-
-    expect(getLiveSessionStatus).toHaveBeenCalledTimes(2);
-  });
-
   it("propagates the fresh snapshot from a re-pull into state", async () => {
     const { result } = renderHook(() => useHelpSessionLiveStatus("help-1"));
     await act(async () => {

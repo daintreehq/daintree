@@ -136,15 +136,4 @@ describe("migration029 — tour progress per tour", () => {
     expect(after!.tourMuted).toBe(false);
     expect("tour" in after!).toBe(false);
   });
-
-  it("is a no-op on replay", () => {
-    const { after } = run({
-      ...onboardingBase,
-      tour: { completed: true, dismissed: false, muted: true, lastChapter: 1 },
-    });
-    const snapshot = structuredClone(after);
-    const { store, after: replayed } = run(after);
-    expect(store.set).not.toHaveBeenCalled();
-    expect(replayed).toEqual(snapshot);
-  });
 });

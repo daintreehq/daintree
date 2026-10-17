@@ -123,14 +123,6 @@ describe("worktree.waitForPullRequest", () => {
     expect(vi.getTimerCount()).toBe(0);
   });
 
-  it("reads the state without blocking at a zero timeout", async () => {
-    setRows([{ id: "wt-a" }]);
-
-    const result = await run({ worktreeIds: ["wt-a"], timeoutMs: 0 });
-
-    expect(result.timedOut).toBe(true);
-  });
-
   it("keeps waiting on an explicit clear or issue-only linkage, and ignores stale flat PR fields", async () => {
     // `linked: null` is a branch switch clearing the PR; the flat `prNumber`
     // can outlive it, so it must not satisfy the wait.

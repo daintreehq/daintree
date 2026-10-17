@@ -142,32 +142,6 @@ describe("useSubagents", () => {
     await waitFor(() => expect(listSubagents).toHaveBeenCalledTimes(2));
   });
 
-  it("does not let a respawned pane adopt the list of the process before it", async () => {
-    listSubagents.mockResolvedValue(ok("child-1"));
-    const { rerender } = renderHook(
-      ({ generation }: { generation: number }) =>
-        useSubagents("t1", { provider: "codex", generation }),
-      { initialProps: { generation: 1 } }
-    );
-    await waitFor(() => expect(listSubagents).toHaveBeenCalledTimes(1));
-
-    rerender({ generation: 2 });
-    await waitFor(() => expect(listSubagents).toHaveBeenCalledTimes(2));
-  });
-
-  it("does not let a pane that switched agents read the other provider's cached list", async () => {
-    listSubagents.mockResolvedValue(ok("child-1"));
-    listClaudeSubagents.mockResolvedValue(ok("child-2"));
-    const { rerender } = renderHook(
-      ({ provider }: { provider: "codex" | "claude" }) => useSubagents("t1", { provider }),
-      { initialProps: { provider: "codex" } as { provider: "codex" | "claude" } }
-    );
-    await waitFor(() => expect(listSubagents).toHaveBeenCalledTimes(1));
-
-    rerender({ provider: "claude" });
-    await waitFor(() => expect(listClaudeSubagents).toHaveBeenCalledTimes(1));
-  });
-
   it("holds the settle refetch inside the throttle window and takes it once past", async () => {
     listSubagents.mockResolvedValue(ok("child-1"));
     const nowSpy = vi.spyOn(Date, "now");

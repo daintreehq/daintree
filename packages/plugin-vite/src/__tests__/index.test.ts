@@ -11,10 +11,7 @@ import {
   daintreePlugin,
   HOST_IMPORTMAP_SPECIFIERS,
 } from "../index.js";
-import {
-  HOST_IMPORTMAP_RAW_ONLY_SPECIFIERS,
-  HOST_IMPORTMAP_SERVED_SPECIFIERS,
-} from "../hostImportMap.js";
+import { HOST_IMPORTMAP_RAW_ONLY_SPECIFIERS } from "../hostImportMap.js";
 
 function matchesHostExternal(specifier: string): boolean {
   return [...reactExternals, ...tourExternals, ...pluginUiExternals].some((re) =>
@@ -91,12 +88,6 @@ describe("@daintreehq/plugin-vite — pluginUiExternals", () => {
 });
 
 describe("@daintreehq/plugin-vite — daintreePlugin", () => {
-  it("returns a Vite plugin with the expected name", () => {
-    const plugin = daintreePlugin();
-    expect(plugin.name).toBe("daintree-plugin-vite");
-    expect(typeof plugin.config).toBe("function");
-  });
-
   type ExternalFn = (id: string, importer?: string, isResolved?: boolean) => boolean;
   function externalOf(plugin: ReturnType<typeof daintreePlugin>, userConfig = {}): ExternalFn {
     const configFn = plugin.config as unknown as (config: unknown) => {
@@ -122,13 +113,6 @@ describe("@daintreehq/plugin-vite — daintreePlugin", () => {
     const external = externalOf(daintreePlugin());
     expect(() => external("react-dom/server")).toThrow(/import map does not serve/);
     expect(() => external("react/compiler-runtime")).toThrow(/react\/compiler-runtime/);
-  });
-
-  it("throws from the external decision for an unmapped tour subpath", () => {
-    const external = externalOf(daintreePlugin());
-    expect(() => external("@daintreehq/tour/internal")).toThrow(
-      /@daintreehq\/tour\/internal.*import map/
-    );
   });
 
   it("does not let an author external smuggle an unmapped tour subpath past the guard", () => {
@@ -205,71 +189,38 @@ describe("@daintreehq/plugin-vite — real build honours the unmapped subpath gu
     }
   }
 
-  it("rejects a bundle importing react-dom/server instead of emitting an unresolvable import", async () => {
-    await expect(
-      buildEntry('import { renderToString } from "react-dom/server"; export { renderToString };')
-    ).rejects.toThrow(/react-dom\/server.*import map does not serve/);
-  });
+  it.each(["react-dom/server", "@daintreehq/tour/internal", "@daintreehq/plugin-ui/internal"])(
+    "rejects a bundle importing the unserved subpath %s",
+    async (specifier) => {
+      await expect(
+        buildEntry(`import { internal } from "${specifier}"; export { internal };`)
+      ).rejects.toThrow(new RegExp(`${specifier}.*import map does not serve`));
+    }
+  );
 
-  it("leaves a host-mapped specifier external in the emitted chunk", async () => {
-    const chunks = await buildEntry(
-      'import { createRoot } from "react-dom/client"; export const mount = (el) => createRoot(el);'
-    );
+  it.each([
+    ['import { createRoot } from "react-dom/client"; export { createRoot };', ["react-dom/client"]],
+    [
+      'import { TourPlayer } from "@daintreehq/tour"; import { useCue } from "@daintreehq/tour/react"; import { TourCanvas } from "@daintreehq/tour/kit"; import { MockApp } from "@daintreehq/tour/mock-app"; export { TourPlayer, useCue, TourCanvas, MockApp };',
+      [
+        "@daintreehq/tour",
+        "@daintreehq/tour/kit",
+        "@daintreehq/tour/mock-app",
+        "@daintreehq/tour/react",
+      ],
+    ],
+    [
+      'import { Markdown } from "@daintreehq/plugin-ui"; export { Markdown };',
+      ["@daintreehq/plugin-ui"],
+    ],
+  ] as const)("keeps host imports external when building %s", async (source, imports) => {
+    const chunks = await buildEntry(source);
     expect(chunks).toHaveLength(1);
-    expect(chunks[0]?.imports).toEqual(["react-dom/client"]);
-    expect(chunks[0]?.code).toContain('from "react-dom/client"');
-  });
-
-  it("leaves every tour subpath external so a scene shares the host's tour instance", async () => {
-    const chunks = await buildEntry(
-      'import { TourPlayer } from "@daintreehq/tour"; import { useCue } from "@daintreehq/tour/react"; import { TourCanvas } from "@daintreehq/tour/kit"; import { MockApp } from "@daintreehq/tour/mock-app"; export { TourPlayer, useCue, TourCanvas, MockApp };'
-    );
-    expect(chunks).toHaveLength(1);
-    expect([...(chunks[0]?.imports ?? [])].sort()).toEqual([
-      "@daintreehq/tour",
-      "@daintreehq/tour/kit",
-      "@daintreehq/tour/mock-app",
-      "@daintreehq/tour/react",
-    ]);
-    expect(chunks[0]?.code).not.toContain("TourPlayerContext");
-  });
-
-  it("leaves @daintreehq/plugin-ui external, since only the host has an implementation", async () => {
-    const chunks = await buildEntry(
-      'import { Markdown } from "@daintreehq/plugin-ui"; export { Markdown };'
-    );
-    expect(chunks).toHaveLength(1);
-    expect(chunks[0]?.imports).toEqual(["@daintreehq/plugin-ui"]);
-    expect(chunks[0]?.code).toContain('from "@daintreehq/plugin-ui"');
-  });
-
-  it("rejects a bundle importing an unmapped plugin-ui subpath", async () => {
-    await expect(
-      buildEntry('import { internal } from "@daintreehq/plugin-ui/internal"; export { internal };')
-    ).rejects.toThrow(/@daintreehq\/plugin-ui\/internal.*import map does not serve/);
-  });
-
-  it("rejects a bundle importing an unmapped tour subpath", async () => {
-    await expect(
-      buildEntry('import { internal } from "@daintreehq/tour/internal"; export { internal };')
-    ).rejects.toThrow(/@daintreehq\/tour\/internal.*import map does not serve/);
+    expect([...(chunks[0]?.imports ?? [])].sort()).toEqual(imports);
   });
 });
 
 describe("@daintreehq/plugin-vite — HOST_IMPORTMAP_SPECIFIERS", () => {
-  function matchesAny(specifier: string): boolean {
-    return reactExternals.some((re) => re.test(specifier));
-  }
-
-  it("only lists specifiers that the host externals would strip", () => {
-    // The host-mapped set must be a subset of what gets externalized — a mapped
-    // specifier the externals didn't strip would be bundled, never resolved
-    // through the import map.
-    for (const specifier of HOST_IMPORTMAP_SPECIFIERS) {
-      expect(matchesHostExternal(specifier)).toBe(true);
-    }
-  });
-
   it("serves exactly the public subpaths @daintreehq/tour exports", () => {
     // A subpath the tour package publishes but the host does not serve would
     // fail the plugin build; one the host serves but the package does not
@@ -285,19 +236,6 @@ describe("@daintreehq/plugin-vite — HOST_IMPORTMAP_SPECIFIERS", () => {
     const served = HOST_IMPORTMAP_SPECIFIERS.filter((s) => s.startsWith("@daintreehq/tour")).sort();
     expect(served).toEqual(published);
   });
-
-  it("does not list React subpaths the host cannot resolve", () => {
-    // The externals are broader than the import map on purpose; these subpaths
-    // externalize but must NOT be advertised as host-served.
-    const list = HOST_IMPORTMAP_SPECIFIERS as readonly string[];
-    expect(matchesAny("react-dom/server")).toBe(true);
-    expect(list).not.toContain("react-dom/server");
-    expect(list).not.toContain("react/compiler-runtime");
-  });
-
-  it("has no duplicate entries", () => {
-    expect(new Set(HOST_IMPORTMAP_SPECIFIERS).size).toBe(HOST_IMPORTMAP_SPECIFIERS.length);
-  });
 });
 
 describe("@daintreehq/plugin-vite — raw-only import-map specifiers", () => {
@@ -308,24 +246,6 @@ describe("@daintreehq/plugin-vite — raw-only import-map specifiers", () => {
     };
     return configFn({}).build.rollupOptions.external;
   }
-
-  it("serves the SDK's React hooks to raw views", () => {
-    expect([...HOST_IMPORTMAP_RAW_ONLY_SPECIFIERS]).toEqual(["@daintreehq/plugin-sdk/react"]);
-  });
-
-  it("serves the externals contract plus the raw-only entries, with no overlap", () => {
-    const externalized = new Set<string>(HOST_IMPORTMAP_SPECIFIERS);
-    for (const specifier of HOST_IMPORTMAP_RAW_ONLY_SPECIFIERS) {
-      expect(externalized.has(specifier)).toBe(false);
-    }
-    expect([...HOST_IMPORTMAP_SERVED_SPECIFIERS]).toEqual([
-      ...HOST_IMPORTMAP_SPECIFIERS,
-      ...HOST_IMPORTMAP_RAW_ONLY_SPECIFIERS,
-    ]);
-    expect(new Set(HOST_IMPORTMAP_SERVED_SPECIFIERS).size).toBe(
-      HOST_IMPORTMAP_SERVED_SPECIFIERS.length
-    );
-  });
 
   it("never externalizes a raw-only specifier, so a bundled view keeps its pinned copy", () => {
     // Version skew: a bundled view was built against the SDK its author pinned.

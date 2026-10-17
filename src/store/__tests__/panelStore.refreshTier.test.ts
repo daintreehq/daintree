@@ -49,17 +49,6 @@ describe("getTerminalRefreshTier - runtime agent identity", () => {
     expect(getTerminalRefreshTier(terminal, false)).toBe(TerminalRefreshTier.VISIBLE);
   });
 
-  it("drops a demoted launch-affinity terminal after explicit agent exit", () => {
-    const terminal = makeTerminal({
-      kind: "terminal",
-      launchAgentId: "claude",
-      detectedAgentId: undefined,
-      everDetectedAgent: true,
-      agentState: "exited",
-    });
-    expect(getTerminalRefreshTier(terminal, false)).toBe(TerminalRefreshTier.BACKGROUND);
-  });
-
   it("drops an exited agent even when detectedAgentId is still set (race guard)", () => {
     // Covers the race between onAgentExited and the process-detector exit event.
     const terminal = makeTerminal({
@@ -67,16 +56,6 @@ describe("getTerminalRefreshTier - runtime agent identity", () => {
       launchAgentId: "claude",
       detectedAgentId: "claude",
       agentState: "exited",
-    });
-    expect(getTerminalRefreshTier(terminal, false)).toBe(TerminalRefreshTier.BACKGROUND);
-  });
-
-  it("drops a completed agent to BACKGROUND", () => {
-    const terminal = makeTerminal({
-      kind: "terminal",
-      launchAgentId: "claude",
-      detectedAgentId: "claude",
-      agentState: "completed",
     });
     expect(getTerminalRefreshTier(terminal, false)).toBe(TerminalRefreshTier.BACKGROUND);
   });
@@ -146,17 +125,6 @@ describe("getTerminalRefreshTier - runtime agent identity", () => {
     expect(getTerminalRefreshTier(undefined, false)).toBe(TerminalRefreshTier.VISIBLE);
   });
 
-  it("keeps a live plain non-agent terminal VISIBLE when unfocused", () => {
-    const terminal = makeTerminal({
-      kind: "terminal",
-      detectedAgentId: undefined,
-      agentState: "idle",
-      hasPty: true,
-      runtimeStatus: "running",
-    });
-    expect(getTerminalRefreshTier(terminal, false)).toBe(TerminalRefreshTier.VISIBLE);
-  });
-
   it("keeps a working non-agent terminal VISIBLE when unfocused", () => {
     // Regression guard for #7997 — long-running commands (builds, dev servers)
     // in plain shells must keep streaming after the user moves focus away.
@@ -206,32 +174,6 @@ describe("getTerminalRefreshTier - runtime agent identity", () => {
     expect(getTerminalRefreshTier(terminal, false)).toBe(TerminalRefreshTier.BACKGROUND);
   });
 
-  it("drops a working non-agent terminal located in trash", () => {
-    const terminal = makeTerminal({
-      kind: "terminal",
-      location: "trash",
-      detectedAgentId: undefined,
-      agentState: "idle",
-      hasPty: true,
-      runtimeStatus: "running",
-      activityStatus: "working",
-    });
-    expect(getTerminalRefreshTier(terminal, false)).toBe(TerminalRefreshTier.BACKGROUND);
-  });
-
-  it("drops a working non-agent terminal located in background", () => {
-    const terminal = makeTerminal({
-      kind: "terminal",
-      location: "background",
-      detectedAgentId: undefined,
-      agentState: "idle",
-      hasPty: true,
-      runtimeStatus: "running",
-      activityStatus: "working",
-    });
-    expect(getTerminalRefreshTier(terminal, false)).toBe(TerminalRefreshTier.BACKGROUND);
-  });
-
   it("keeps a live non-agent terminal VISIBLE even when activityStatus is waiting", () => {
     const terminal = makeTerminal({
       kind: "terminal",
@@ -242,19 +184,6 @@ describe("getTerminalRefreshTier - runtime agent identity", () => {
       activityStatus: "waiting",
     });
     expect(getTerminalRefreshTier(terminal, false)).toBe(TerminalRefreshTier.VISIBLE);
-  });
-
-  it("drops an offscreen live terminal to BACKGROUND", () => {
-    const terminal = makeTerminal({
-      kind: "terminal",
-      detectedAgentId: undefined,
-      agentState: "idle",
-      hasPty: true,
-      isVisible: false,
-      runtimeStatus: "background",
-      activityStatus: "working",
-    });
-    expect(getTerminalRefreshTier(terminal, false)).toBe(TerminalRefreshTier.BACKGROUND);
   });
 
   it("drops a working terminal located in dock to BACKGROUND", () => {

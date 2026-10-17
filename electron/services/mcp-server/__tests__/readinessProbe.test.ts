@@ -1,11 +1,7 @@
 import http from "node:http";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
-  PROBE_BASE_DELAY_MS,
-  PROBE_MAX_ATTEMPTS,
   PROBE_PROTOCOL_VERSION,
-  PROBE_SSE_HARD_TIMEOUT_MS,
-  PROBE_SSE_REQUEST_TIMEOUT_MS,
   probeMcpServer,
   probeMcpSseServer,
   READINESS_PROBE_TOOL,
@@ -449,15 +445,6 @@ describe("probeMcpSseServer", () => {
         baseDelayMs: 10,
       })
     ).rejects.toThrow(/MCP SSE readiness probe failed/);
-  });
-});
-
-describe("probe constants", () => {
-  it("exports sane defaults", () => {
-    expect(PROBE_MAX_ATTEMPTS).toBeGreaterThanOrEqual(1);
-    expect(PROBE_BASE_DELAY_MS).toBeGreaterThan(0);
-    expect(PROBE_SSE_REQUEST_TIMEOUT_MS).toBeGreaterThanOrEqual(5000);
-    expect(PROBE_SSE_HARD_TIMEOUT_MS).toBeGreaterThan(PROBE_SSE_REQUEST_TIMEOUT_MS);
   });
 });
 

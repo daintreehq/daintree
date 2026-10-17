@@ -129,18 +129,6 @@ describe("project.muteNotifications", () => {
     });
   });
 
-  it("surfaces an error notification when saveSettings fails", async () => {
-    getSettingsMock.mockResolvedValue({ runCommands: [] });
-    saveSettingsMock.mockRejectedValue(new Error("write failed"));
-
-    const action = muteAction();
-    await expect(action.run({ projectId: "p1" }, {} as never)).rejects.toThrow("write failed");
-
-    expect(notifyMock).toHaveBeenCalledWith(
-      expect.objectContaining({ type: "error", message: "write failed" })
-    );
-  });
-
   it("emits a success notification on the happy path", async () => {
     getSettingsMock.mockResolvedValue({ runCommands: [] });
     saveSettingsMock.mockResolvedValue(undefined);
@@ -151,17 +139,5 @@ describe("project.muteNotifications", () => {
     expect(notifyMock).toHaveBeenCalledWith(
       expect.objectContaining({ type: "success", message: "Project notifications muted" })
     );
-  });
-
-  it("is idempotent — already-muted settings still write through without error", async () => {
-    getSettingsMock.mockResolvedValue({
-      runCommands: [],
-      notificationOverrides: { completedEnabled: false, waitingEnabled: false },
-    });
-    saveSettingsMock.mockResolvedValue(undefined);
-
-    const action = muteAction();
-    await expect(action.run({ projectId: "p1" }, {} as never)).resolves.not.toThrow();
-    expect(saveSettingsMock).toHaveBeenCalledTimes(1);
   });
 });

@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const windowStatesStoreMock = vi.hoisted(() => ({
   get: vi.fn(),
@@ -155,6 +155,8 @@ describe("createWindowWithState", () => {
       });
 
       createWindowWithState({ show: false });
+      // Linux maximizes a hidden window at its reveal; elsewhere at once.
+      fireShow();
 
       expect(winInstance.maximize).toHaveBeenCalled();
     });
@@ -220,6 +222,7 @@ describe("createWindowWithState", () => {
       });
 
       createWindowWithState({ show: false }, "/home/user/project");
+      fireShow();
 
       expect(winInstance.maximize).toHaveBeenCalled();
       expect(winInstance.setFullScreen).not.toHaveBeenCalled();
@@ -359,6 +362,7 @@ describe("createWindowWithState", () => {
       winInstance.getBounds.mockReturnValue({ x: 100, y: 100, width: 1200, height: 800 });
 
       createWindowWithState({ show: false }, "/home/user/project");
+      fireShow();
 
       expect(winInstance.setSize).not.toHaveBeenCalled();
       expect(winInstance.maximize).toHaveBeenCalled();
@@ -398,6 +402,7 @@ describe("createWindowWithState", () => {
       winInstance.getBounds.mockReturnValue({ x: 0, y: 0, width: 3840, height: 2160 });
 
       createWindowWithState({ show: false }, "/home/user/project");
+      fireShow();
 
       expect(winInstance.setSize).toHaveBeenCalledWith(1920, 1080);
       expect(winInstance.setBounds).toHaveBeenCalled();
@@ -542,28 +547,6 @@ describe("createWindowWithState", () => {
   });
 
   describe("save", () => {
-    it("saves to windowStatesStore using whole-object pattern", () => {
-      windowStatesStoreMock.get.mockReturnValue({});
-
-      createWindowWithState({ show: false }, "/home/user/project-a");
-
-      const closeHandler = eventHandlers.get("close");
-      expect(closeHandler).toBeDefined();
-      closeHandler!();
-
-      expect(windowStatesStoreMock.set).toHaveBeenCalledWith(
-        "windowStates",
-        expect.objectContaining({
-          "/home/user/project-a": expect.objectContaining({
-            width: expect.any(Number),
-            height: expect.any(Number),
-            isMaximized: false,
-            isFullScreen: false,
-          }),
-        })
-      );
-    });
-
     it("also updates __legacy__ when saving project-specific state", () => {
       windowStatesStoreMock.get.mockReturnValue({});
 
@@ -716,17 +699,62 @@ describe("createWindowWithState", () => {
         })
       );
     });
+  });
 
-    it("closes does NOT call legacy store.set for windowState", () => {
-      windowStatesStoreMock.get.mockReturnValue({});
+  describe("scaling drift on Windows", () => {
+    const realPlatform = process.platform;
+    const setPlatform = (platform: NodeJS.Platform) =>
+      Object.defineProperty(process, "platform", { value: platform, configurable: true });
+    const saved = {
+      x: 200,
+      y: 300,
+      width: 1000,
+      height: 700,
+      isMaximized: false,
+      isFullScreen: false,
+    };
 
+    afterEach(() => setPlatform(realPlatform));
+
+    function closeWithNormalBounds(bounds: {
+      x: number;
+      y: number;
+      width: number;
+      height: number;
+    }) {
+      windowStatesStoreMock.get.mockReturnValue({ "/home/user/project-a": saved });
       createWindowWithState({ show: false }, "/home/user/project-a");
+      winInstance.getNormalBounds.mockReturnValue(bounds);
+      eventHandlers.get("close")!();
+      const written = windowStatesStoreMock.set.mock.calls.at(-1)![1] as Record<
+        string,
+        { width: number; height: number }
+      >;
+      return written["/home/user/project-a"];
+    }
 
-      const closeHandler = eventHandlers.get("close");
-      closeHandler!();
+    it("keeps the restored bounds when the window only came back a few pixels larger", () => {
+      setPlatform("win32");
+      expect(closeWithNormalBounds({ x: 200, y: 300, width: 1006, height: 705 })).toMatchObject({
+        width: 1000,
+        height: 700,
+      });
+    });
 
-      // Should only call windowStatesStore.set, not any legacy store
-      expect(windowStatesStoreMock.set).toHaveBeenCalled();
+    it("saves a real resize", () => {
+      setPlatform("win32");
+      expect(closeWithNormalBounds({ x: 200, y: 300, width: 1240, height: 705 })).toMatchObject({
+        width: 1240,
+        height: 705,
+      });
+    });
+
+    it("saves what the window reports elsewhere", () => {
+      setPlatform("darwin");
+      expect(closeWithNormalBounds({ x: 200, y: 300, width: 1006, height: 705 })).toMatchObject({
+        width: 1006,
+        height: 705,
+      });
     });
   });
 

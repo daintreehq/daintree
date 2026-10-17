@@ -11,7 +11,7 @@ Electron IDE for orchestrating AI coding agents — many agent terminals running
 ```bash
 npm run dev            # Main + Renderer (Vite)
 npm test -- <path>     # the ONLY way to run unit tests locally: the files you changed
-npm test               # full vitest suite: CI only (4 shards). NEVER run it locally
+npm test               # full vitest suite: CI only (6 shards). NEVER run it locally
 npm run check          # typecheck + codegen/guard checks + lint and e2e-wait ratchets + format:check
 npm run fix            # prettier --write + eslint --fix
 npm run build          # production build
@@ -49,7 +49,7 @@ Plugins are manifest-driven, activate out-of-process in unsandboxed `utilityProc
 | `shared/types/ipc/generated*.ts` | `npm run codegen:ipc && npm run codegen:ipc-renderer` |
 | `docs/keyboard-shortcuts.md`     | `npm run codegen:keybindings`                         |
 | drizzle migrations               | `npm run db:generate`                                 |
-| help prompts                     | `npm run build:help`                                  |
+| assistant prompts                | `npm run build:assistant`                             |
 
 Ten ratchet baselines live in `scripts/baselines/` — **regenerate the baseline, never hand-edit the JSON**: `lint:ratchet` (eslint warnings), `e2e-waits` (unannotated `waitForTimeout` / `isVisible({ timeout })` in E2E specs), `compiler-budget` (React Compiler bailouts), `import-budget`, `renderer-import-budget`, `renderer-bundle-budget`, `first-render-chunk-budget`, `test-ratio`, `check:ipc-handwritten`, `theme:text-ramp`. Seven have matching `*:check`/`*:update` scripts; three do not — update `lint:ratchet` with `-- --update`, `check:ipc-handwritten` via `ipc-handwritten:update`, and `theme:text-ramp` with `-- --check` / `-- --plan` (`--plan` rewrites the manifest).
 
@@ -59,13 +59,13 @@ React Compiler is enabled (`babel-plugin-react-compiler`, `target: "19"`). A bai
 
 ## Definition of done
 
-1. **NEVER run the full unit suite locally.** Not mid-work, not before a commit, not before opening a PR, not "at the end", not because a skill or runbook says to. A bare `npm test` / `npx vitest run` takes 15-20 minutes of a locked-up machine, and every task paying that makes the work take forever. GitHub CI runs the full suite on every PR (4 shards); that is the gate. Locally, run only the test files covering what you changed (`npm test -- <path>`), plus typecheck and lint. If CI then finds a failure elsewhere, fix it from the CI log.
+1. **NEVER run the full unit suite locally.** Not mid-work, not before a commit, not before opening a PR, not "at the end", not because a skill or runbook says to. A bare `npm test` / `npx vitest run` takes 15-20 minutes of a locked-up machine, and every task paying that makes the work take forever. GitHub CI runs the full suite on every PR (6 shards); that is the gate. Locally, run only the test files covering what you changed (`npm test -- <path>`), plus typecheck and lint. If CI then finds a failure elsewhere, fix it from the CI log.
 2. Run `npm run check` for anything touching types, IPC, keybindings, plugin manifests, or lint-visible code.
 3. Scale verification to the change. A small edit does not need build + E2E + full check stacked on top.
 4. Report the commands actually run and their real results. `prettier` prints "All files formatted correctly" while exiting 1 — trust the exit code, not the summary.
 5. Never weaken a test, suppress a warning, or widen a baseline to make a change pass.
 
-CI on PRs: `check` + vitest (4 shards) + build + smoke, Ubuntu only, no E2E. `ci-ok` is the sole required check.
+CI on PRs: `npm run check` split into `static` (typecheck, guards, format) and `lint` (ESLint ratchet), vitest (6 shards, plus a separate `perf-liveness` job), and build + smoke, all starting at once with nothing gated on anything else; Ubuntu only, no E2E. `ci-ok` is the sole required check.
 
 **E2E is expensive and locks up the machine — never decide to run it yourself.** Run only the spec or bucket the user names, and only when they ask. Full cross-platform validation goes through the `stabilize` workflow (`.agents/skills/stabilize/`), never a local sweep and never as part of a merge. E2E runs against the built app, so a stale or failed `npm run build:e2e` silently tests the old bundle.
 
@@ -84,7 +84,7 @@ CI on PRs: `check` + vitest (4 shards) + build + smoke, Ubuntu only, no E2E. `ci
 
 **Never modify user-owned agent config** — `~/.claude/`, `~/.gemini/`, `~/.codex/`, user hooks, or CLAUDE.md/AGENTS.md files in the user's own projects — not even additive CLI injection like `--settings`. If a capability needs it, the capability is out of scope; use passive observation instead (output parsing, OSC titles, process tree, `AgentPatternDetector`-style regex). Precedent #4100. The one sanctioned shape is a **display-only** launch switch declared as a registry capability with a user-facing setting — `inlineModeFlag`/`altScreenFlag` and `decorations` (Codex's `-c tui.whimsy=false`, default off since the composer sparkles made every idle pane repaint at 15 fps). Those change how the CLI draws, never what it does or which config it loads. The second sanctioned shape is adding a **Daintree-owned** MCP server beside the user's own: an agent launch in a project, while the MCP listener is running, is handed Daintree's own endpoints — the orchestration server when the project's tier is not `off`, and any plugin endpoints on for that project — through the additive launch mechanism its registry entry declares (`capabilities.launchMcp`, `shared/config/launchMcp.ts`: Claude's `--mcp-config <file>`, Codex's `-c mcp_servers.*`, Gemini's system-defaults file, opencode's `OPENCODE_CONFIG_CONTENT`, …). Any file is written by Daintree under `userData` (0600, deleted on PTY exit); bearers travel in that file or the PTY env, never argv. It adds to the user's config and never replaces it (no `--strict-mcp-config`), and nothing is ever written into the repository or the agent's own config dir.
 
-**Surface observations, not interpretations.** Agent state comes from passive PTY output heuristics (`AgentStateService`, FSM in `shared/utils/agentFsm.ts`) and is frequently wrong; MCP tools and UI should expose what we saw, never what we concluded from it. `running` is a runtime status, not an agent state.
+**Surface observations, not interpretations.** Agent state comes from passive PTY output heuristics (`AgentStateService`, FSM in `shared/utils/agentFsm.ts`) and is frequently wrong; MCP tools and UI should expose what we saw, never what we concluded from it. `running` is a runtime status, not an agent state. One written exception: a reader the user opted into (Canopy, on the paid tier) may suggest where a run lands in the existing attention buckets — `FleetRunRow.canopy`, placed by `canopyPlacement` — provided every placement is attributed and quotes the screen's own words as evidence, sits alongside the observed `agentState`/`waitingReason` and never rewrites them, never clears an approval or error Daintree observed, never changes a park, snooze or read mark and never places a run against a park or snooze (a read mark never hides an ask it read, just as it never hides an observed question), holds one verdict per agent turn, and disappears entirely when the reader is turned off or the tier lapses.
 
 **Never commit credentials, tokens, or customer data**, and never log terminal contents or prompt bodies on paths that leave the machine.
 

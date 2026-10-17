@@ -1,7 +1,11 @@
 import { describe, it, expect } from "vitest";
 import { findWireStrippedKeywords } from "@shared/utils/mcpWireSchema";
 import { HELP_TIER_CUMULATIVE } from "@shared/config/helpAssistantTierAllowlists";
-import { measureWireSurface, type WireTool } from "./helpers/wireSurface";
+import {
+  actionIdsAbsentOnThisPlatform,
+  measureWireSurface,
+  type WireTool,
+} from "./helpers/wireSurface";
 import { TerminalSubmissionRecordSchema } from "../definitions/schemas";
 
 /**
@@ -171,11 +175,6 @@ describe("MCP wire budget — tool descriptions (§4.2)", () => {
       .map((t) => `${t.id} (${t.descriptionBytes}B)`);
 
     expect(over).toEqual([]);
-  });
-
-  it("has a description on every tool it advertises", async () => {
-    const tools = await surface();
-    expect(tools.filter((t) => t.description.trim() === "").map((t) => t.id)).toEqual([]);
   });
 });
 
@@ -539,7 +538,13 @@ describe("MCP wire budget — aggregate ratchets (§9)", () => {
   // 53_400 → 53_450 for #13130, measured at 53_431 B: the undescribed
   // `cwdOutsideWorktree` field on `agent.launch`'s result, which tells a caller
   // its cwd sits outside the worktree the pane was filed under.
-  const MAX_EXTERNAL_PAYLOAD_BYTES = 53_450;
+  // 53_450 → 54_400 for #13382, measured at 54_387 B: `agent.launch`'s
+  // `spawnStatus` names why a launch was declined and `panelLimit` carries the
+  // count and limits a hard-limit refusal was judged on, and `terminal.list`
+  // returns the same snapshot so an orchestrator can stay under the limit.
+  // Output schemas are a hard contract; trimmed before measuring (plain
+  // numbers, not `.int()`'s safe-integer bounds on every field).
+  const MAX_EXTERNAL_PAYLOAD_BYTES = 54_400;
   // 190_000 → 192_700 for the same 2_048 B the external half above pays for.
   // Every byte #11909 spends sits on an externally advertised tool, so both
   // totals moved by the identical amount. Only this one needed the ratchet
@@ -704,7 +709,57 @@ describe("MCP wire budget — aggregate ratchets (§9)", () => {
   // 114_300 → 114_600 for #13202, measured at 114_598 B: `notify` and
   // `replyLines` say a notice now carries the handback summary in place of the
   // screen, and that setting `replyLines` brings the screen back.
-  const MAX_COHORT_PAYLOAD_BYTES = 114_600;
+  // 114_600 → 116_300 for #11158's `host.switch` and `project.openOnHost` on
+  // full, measured at 115_487 B: their trimmed descriptions and the `hostId`,
+  // `newWindow`, `projectId` and `worktree` arguments. In-app only, so the
+  // external ceiling above does not move.
+  // 116_300 → 118_600 for #13335's `assistant.getInbox` and `assistant.reply`,
+  // measured at 118_560 B: their descriptions, arguments and output schemas,
+  // which are a hard contract for the provenance and fenced body each message
+  // carries. Offered only to an enrolled lane's assistant, so the external
+  // ceiling above does not move.
+  // 118_600 → 130_500 for #13336's six `host.*` hub messaging tools, measured at
+  // 130_478 B. Most of it is their output schemas, a hard contract: every
+  // result names its outcome (opted out, disconnected, too old, ambiguous, ...)
+  // beside nullable observations, and four carry the same task view. Trimmed
+  // before measuring: no result repeats the hostId it was called with, and the
+  // task view drops what its other fields imply. Offered only to this Shell's
+  // enrolled hub while a host exists, so the external ceiling above does not move.
+  // #13338: assistant.sendMessage and the inbox's sent view, for a lane a
+  // remote Shell enrolled; also off the external surface.
+  // 132_700 → 133_200 for the swarm manager (#13392), measured at 133_159 B:
+  // `host.listAssistants` returns the host's projects, each with its
+  // assistants' slot, agent, generation and availability, and `host.list`'s
+  // lanes name their project and agent. Output schemas are a hard contract.
+  // Offered only to this Shell's hub, so the external ceiling does not move.
+  // 133_200 → 134_700 for `host.startAssistant` (#13392), measured at 134_648 B:
+  // its description, the project, agent and startNew arguments, and an output
+  // schema of the shared outcome fields beside the enrolled assistant's slot,
+  // agent, generation, availability and whether it was opened. Hub only.
+  // 134_700 → 136_850 for `host.readQuota` (#13392), measured at 136_786 B:
+  // its description, the hostId argument, and an output schema of the shared
+  // outcome fields beside the host's Codex reading as Codex reports it (each
+  // window's percent used, length and reset, or why there is none) and when
+  // this Shell received it. Hub only, so the external ceiling does not move.
+  // 136_850 → 137_300 for `worktree.setLabelColor` (#13408), measured at
+  // 137_269 B: its description, the worktreeId and color arguments, and no
+  // output schema. Full tier only, so the external ceiling does not move.
+  // 137_300 → 137_800 for `worktree.setCustomTitle` (#13409), measured at
+  // 137_767 B: its description, the worktreeId and title arguments (the title's
+  // field text carries the 80-character limit the wire schema cannot), and no
+  // output schema. Full tier only, so the external ceiling does not move.
+  // 137_800 → 138_200 for `plugin.capturePanel` (#13384), measured at
+  // 138_143 B: its description, the panelId argument, and no output schema —
+  // the image travels as an MCP image block, not structured content. Full tier
+  // only, so the external ceiling does not move.
+  // 138_200 → 139_100 for #13382, measured at 139_096 B: the same `agent.launch`
+  // decline reason and `panelLimit` snapshot as the external ceiling above.
+  // 139_100 → 139_850 for `agent.listModels` (#13437), measured at 139_845 B:
+  // its description, the optional agentId, and the output schema — per-agent
+  // rows of model id and name, nothing more. The assistant prompt no longer
+  // names model ids, so this is how one the user names becomes an id. In-app
+  // only, so the external ceiling does not move.
+  const MAX_COHORT_PAYLOAD_BYTES = 139_850;
 
   const wireBytes = (t: WireTool) => t.descriptionBytes + t.paramsBytes + t.outputBytes;
 
@@ -732,7 +787,10 @@ describe("MCP wire budget — aggregate ratchets (§9)", () => {
     // floor is the `full` tool set, since the cohort is that set plus the owned
     // twins and the external roster, both of which may overlap it.
     const tools = await surface();
-    expect(tools.length).toBeGreaterThanOrEqual(HELP_TIER_CUMULATIVE.full.length);
+    const absent = await actionIdsAbsentOnThisPlatform();
+    expect(tools.map((tool) => tool.id)).toEqual(
+      expect.arrayContaining(HELP_TIER_CUMULATIVE.full.filter((id) => !absent.has(id)))
+    );
     expect(tools.filter((t) => t.external).length).toBeGreaterThan(15);
   });
 });

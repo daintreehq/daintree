@@ -26,3 +26,29 @@ export interface HelpPastSession {
   /** Epoch ms of the last activity the store recorded. */
   updatedAt: number;
 }
+
+/**
+ * A running assistant a remote view took over from a view that went away
+ * (#13360). Its PTY never stopped, so the view reconnects a pane to it rather
+ * than launching. Display fields only: no bearer, environment or command line.
+ */
+export interface HelpAdoptedLane {
+  sessionId: string;
+  terminalId: string;
+  agentId: string;
+  cwd: string | null;
+  title: string | null;
+  agentState: string | null;
+  waitingReason: string | null;
+  lastStateChange: number | null;
+  cols: number | null;
+  rows: number | null;
+}
+
+/**
+ * The answer to `help:adopt-detached-session`. `absent`: no running assistant
+ * holds the lane. `occupied`: one does, attached to another view; a launch
+ * that may only restore must stand down rather than displace it.
+ */
+export type HelpAdoptResult =
+  { status: "adopted"; lane: HelpAdoptedLane } | { status: "absent" } | { status: "occupied" };

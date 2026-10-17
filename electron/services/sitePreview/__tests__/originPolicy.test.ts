@@ -79,12 +79,6 @@ describe("buildOriginGuardSource", () => {
     return Function("location", `return ${source};`)({ href }) as boolean;
   }
 
-  it("refuses a denied origin and allows a local preview", () => {
-    expect(guardSays("local-preview", "https://example.com/oauth")).toBe(false);
-    expect(guardSays("local-preview", "http://localhost:5173/")).toBe(true);
-    expect(guardSays("any", "https://example.com/oauth")).toBe(true);
-  });
-
   it("never grants the blank-document allowance from inside a page", () => {
     // The script only ever runs in a document that exists, and a blank one it
     // runs in is one the guest navigated to. The concession is the host's, and

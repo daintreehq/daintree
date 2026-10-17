@@ -5,10 +5,12 @@ import { cn } from "@/lib/utils";
 import { BranchPickerPanel } from "./BranchPickerPanel";
 import { FIELD_TRIGGER } from "./WorktreeFormLayout";
 import type { UseBranchPickerResult } from "../hooks/useBranchPicker";
+import type { ErrorField } from "../hooks/useWorktreeFormErrors";
 
 interface ExistingBranchPickerProps {
   selectedBranch: string | null;
   controller: UseBranchPickerResult;
+  errorField?: ErrorField | null;
   disabled?: boolean;
 }
 
@@ -16,8 +18,10 @@ interface ExistingBranchPickerProps {
 export function ExistingBranchPicker({
   selectedBranch,
   controller,
+  errorField,
   disabled,
 }: ExistingBranchPickerProps) {
+  const hasError = errorField === "existing-branch";
   return (
     <Popover open={controller.open} onOpenChange={controller.setOpen}>
       <PopoverTrigger asChild>
@@ -27,8 +31,21 @@ export function ExistingBranchPicker({
           role="combobox"
           aria-expanded={controller.open}
           aria-haspopup="listbox"
-          className={cn(FIELD_TRIGGER, "gap-2")}
+          aria-controls={controller.open ? "existing-branch-list" : undefined}
+          aria-invalid={hasError ? true : undefined}
+          aria-describedby={hasError ? "validation-error" : undefined}
+          className={cn(
+            FIELD_TRIGGER,
+            "gap-2",
+            hasError && "border-status-error focus-visible:outline-status-error"
+          )}
           disabled={disabled}
+          onKeyDown={(event) => {
+            if (!controller.open && (event.key === "ArrowDown" || event.key === "ArrowUp")) {
+              event.preventDefault();
+              controller.setOpen(true);
+            }
+          }}
           data-testid="existing-branch-picker"
         >
           <span className="flex items-center gap-2 truncate">

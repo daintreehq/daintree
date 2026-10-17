@@ -9,6 +9,7 @@ import { getAppMetricsSnapshot } from "../utils/appMetricsSnapshot.js";
 import { logDebug, logInfo } from "../utils/logger.js";
 import { cleanupEntry, sumGuestMemoryKb } from "./ProjectViewLifecycleController.js";
 import { hasActiveAgent } from "./ProjectViewAgentStateCache.js";
+import { isLocalViewKey } from "./ProjectViewFactory.js";
 import type { ProjectViewManager } from "./ProjectViewManager.js";
 import type { EvictionReason, ViewEntry } from "./ProjectViewManagerTypes.js";
 import { readAvailableSystemMemoryMb } from "../utils/systemMemory.js";
@@ -107,12 +108,21 @@ function readProcessMemoryKb(proc: Electron.ProcessMetric): number {
  * Agent state is deliberately not consulted: the assistant can dispatch a
  * sub-agent or background shell and go idle while that work runs on, which is
  * precisely the case the issue reports losing.
+ *
+ * A view of a host's project is asked of its host instead (#13349). Its
+ * assistant runs there, pinned to this view's endpoint, and closing the view
+ * closes the endpoint and revokes it the same way; the host checks the same
+ * three conditions and tells this Shell the answer.
  */
-function hasLiveAssistantBackend(
+export function hasLiveAssistantBackend(
   host: ProjectViewManager,
   projectId: string,
   entry: ViewEntry
 ): boolean {
+  if (!isLocalViewKey(projectId)) {
+    const wc = entry.view.webContents;
+    return !wc.isDestroyed() && host.remoteAssistantLive?.(wc.id) === true;
+  }
   const backends = host.assistantBackendsForProject?.(projectId) ?? [];
   if (backends.length === 0) return false;
   const wc = entry.view.webContents;
@@ -125,6 +135,22 @@ function hasLiveAssistantBackend(
     (backend) =>
       host.isTerminalLive?.(backend.terminalId) === true && wc.id === backend.webContentsId
   );
+}
+
+/**
+ * The active-agent rank of a cached view. A view of a host's project is asked
+ * of its host (#13359): its agents run there, so this machine's agent-state
+ * cache never sees them, and without the host's answer every such view ranked
+ * as the cheapest to evict.
+ */
+function viewHasActiveAgent(
+  host: ProjectViewManager,
+  projectId: string,
+  entry: ViewEntry
+): boolean {
+  if (isLocalViewKey(projectId)) return hasActiveAgent(host, projectId);
+  const wc = entry.view.webContents;
+  return !wc.isDestroyed() && host.remoteAgentActive?.(wc.id) === true;
 }
 
 /**
@@ -152,7 +178,7 @@ export function evictDeadView(
       projectId,
       reason: trigger,
       ageMs: Date.now() - entry.lastUsed,
-      activeAgent: hasActiveAgent(host, projectId),
+      activeAgent: viewHasActiveAgent(host, projectId, entry),
     });
     host.evictionTimestamps.set(projectId, Date.now());
     cleanupEntry(host, projectId);
@@ -163,7 +189,7 @@ export function evictDeadView(
     // (#12313). A bound MCP session learns from this that its route went away
     // and roughly when, which is the difference between a workspace it can wait
     // for and an id that was never right.
-    recordWorkspaceEviction(projectId, trigger);
+    if (isLocalViewKey(projectId)) recordWorkspaceEviction(projectId, trigger);
   });
 }
 
@@ -452,7 +478,7 @@ export function evictStaleViews(
   const residentGranted: EvictionCandidate[] = [];
   const assistantProtected: EvictionCandidate[] = [];
   for (const [projectId, entry] of evictable) {
-    const activeAgent = hasActiveAgent(host, projectId);
+    const activeAgent = viewHasActiveAgent(host, projectId, entry);
     const mcp = host.mcpActivityFor(projectId, entry.view.webContents);
     // `unknown` (the activity callback threw) deprioritizes but never protects:
     // it must not reach the exclusion set above, or one broken callback would
@@ -585,7 +611,8 @@ export function evictStaleViews(
     cleanupEntry(host, projectId);
     // After the teardown, because the read side is what gates the record on
     // liveness — see `readWorkspaceBindingState` (#12313).
-    recordWorkspaceEviction(projectId, effectiveReason);
+    // A remote project's residency is its host's; only local keys enter this ledger.
+    if (isLocalViewKey(projectId)) recordWorkspaceEviction(projectId, effectiveReason);
     evictedCount++;
     evictedFootprintKb += memoryKb + guestMemoryKb;
   }

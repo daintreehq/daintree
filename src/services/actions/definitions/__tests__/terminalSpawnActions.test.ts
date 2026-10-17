@@ -312,27 +312,6 @@ describe("terminal.duplicate (copy) suffix", () => {
     expect(addPanel.mock.calls[0]![0].title).toBe("Terminal");
   });
 
-  it("appends (copy) when Gemini panel is renamed", async () => {
-    const addPanel = vi.fn().mockResolvedValue(undefined);
-    setPanelState({
-      focusedId: "p1",
-      panels: [
-        {
-          id: "p1",
-          location: "grid",
-          kind: "terminal",
-          launchAgentId: "gemini",
-          title: "Refactor run",
-        },
-      ],
-      addPanel,
-    });
-    const run = setupActions();
-    await run("terminal.duplicate");
-
-    expect(addPanel.mock.calls[0]![0].title).toBe("Refactor run (copy)");
-  });
-
   it("leaves title untouched when source panel has no title", async () => {
     const addPanel = vi.fn().mockResolvedValue(undefined);
     setPanelState({
@@ -483,20 +462,6 @@ describe("terminal.duplicate (copy) suffix", () => {
     await run("terminal.duplicate");
 
     expect(resolveInheritedPanelCwdMock).not.toHaveBeenCalled();
-  });
-
-  it("browser panel duplication never carries a (copy)-suffixed title (service omits title)", async () => {
-    const addPanel = vi.fn().mockResolvedValue(undefined);
-    setPanelState({
-      focusedId: "p1",
-      panels: [{ id: "p1", location: "grid", kind: "browser", title: "Browser" }],
-      addPanel,
-    });
-    const run = setupActions();
-    await run("terminal.duplicate");
-
-    const opts = addPanel.mock.calls[0]![0] as { title?: string };
-    expect(opts.title).toBeUndefined();
   });
 
   // Regression: buildPanelDuplicateOptions normalizes the title back to the

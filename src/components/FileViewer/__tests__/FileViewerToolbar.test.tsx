@@ -290,7 +290,7 @@ describe("FileViewerToolbar.IconButton", () => {
     expect(button.getAttribute("aria-expanded")).toBe("true");
     expect(button.getAttribute("aria-controls")).toBe("tree-region");
     expect(button.hasAttribute("aria-pressed")).toBe(false);
-    // Opts out of the persistent toolbar armed chip (toolbar.css).
+    // Opts out of the persistent toolbar armed chip (toolbar/controls.css).
     expect(button.hasAttribute("data-sidebar-toggle")).toBe(true);
   });
 

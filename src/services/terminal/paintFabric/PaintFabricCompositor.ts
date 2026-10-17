@@ -581,8 +581,24 @@ export class PaintFabricCompositor implements TerminalPaintPlane {
     this.planes().forEach((plane) => plane.refreshWebGLMode());
   }
 
-  notifyUserInput(id: string, data?: string): void {
-    this.plane(id).notifyUserInput(id, data);
+  notifyUserInput(id: string, ...input: [data?: string, options?: { automatic?: boolean }]): void {
+    this.plane(id).notifyUserInput(id, ...input);
+  }
+
+  noteUserInput(id: string): void {
+    this.plane(id).noteUserInput(id);
+  }
+
+  getUserInputEpoch(id: string): number {
+    return this.plane(id).getUserInputEpoch(id);
+  }
+
+  notifyComposerDraft(id: string): void {
+    this.plane(id).notifyComposerDraft(id);
+  }
+
+  releaseComposerDraft(id: string): void {
+    this.plane(id).releaseComposerDraft(id);
   }
 
   notifyEnterPressed(id: string): void {
@@ -613,8 +629,8 @@ export class PaintFabricCompositor implements TerminalPaintPlane {
     return this.plane(id).openHoveredLink(id, event);
   }
 
-  clearDirectingState(id: string): void {
-    this.plane(id).clearDirectingState(id);
+  clearDirectingState(id: string, trigger?: string): void {
+    this.plane(id).clearDirectingState(id, trigger);
   }
 
   async prewarmTerminal(
@@ -651,6 +667,10 @@ export class PaintFabricCompositor implements TerminalPaintPlane {
 
   lockResize(id: string, locked: boolean, customTtlMs?: number): void {
     this.plane(id).lockResize(id, locked, customTtlMs);
+  }
+
+  holdGeometry(id: string): () => void {
+    return this.plane(id).holdGeometry(id);
   }
 
   suppressResizesDuringLayoutTransition(panelIds: string[], durationMs: number): void {
@@ -1147,7 +1167,11 @@ export class PaintFabricCompositor implements TerminalPaintPlane {
     this.planes().forEach((plane) => plane.restoreScrollbackAllForeground());
   }
 
-  addExitListener(id: string, cb: (exitCode: number) => void): () => void {
+  reportLost(id: string, note: string): void {
+    this.plane(id).reportLost(id, note);
+  }
+
+  addExitListener(id: string, cb: (exitCode: number | null) => void): () => void {
     return this.trackSubscription(id, "exit", (plane) => plane.addExitListener(id, cb));
   }
 

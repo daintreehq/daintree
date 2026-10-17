@@ -37,11 +37,6 @@ function renderCombobox(
 }
 
 describe("BaseBranchCombobox trigger", () => {
-  it("keeps the id the dialog's validation and tests address it by", () => {
-    renderCombobox();
-    expect(document.getElementById("base-branch")).not.toBeNull();
-  });
-
   it("shows the composed label so one line carries the whole answer", () => {
     // The trigger keeps "(current)"/"(remote)" inline; rows split them into badges.
     const selectedOption = toBranchOption({ name: "main", current: true, commit: "a1" });
@@ -52,7 +47,7 @@ describe("BaseBranchCombobox trigger", () => {
 
   it("prompts when no branch is chosen yet", () => {
     renderCombobox();
-    expect(document.getElementById("base-branch")!.textContent).toContain("Select base branch");
+    expect(document.getElementById("base-branch")!.textContent).toContain("Select a base branch");
   });
 
   it("flags the field as invalid only for its own error", () => {

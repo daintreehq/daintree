@@ -28,6 +28,9 @@ import { useProjectStore } from "@/store/projectStore";
 import { useEscapeStack } from "@/hooks/useEscapeStack";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
 import { logError } from "@/utils/logger";
+import { useHostConnection } from "@/hooks/useHostConnection";
+import { useHostPlatform } from "@/hooks/useHostPlatform";
+import { pluginViewHostId } from "@/components/Plugin/remotePluginView";
 import type {
   LoadedPluginInfo,
   PluginPickPathRequest,
@@ -157,12 +160,56 @@ interface SettingFieldProps {
   secretIsSet: boolean;
   /** At-rest tier new secret writes use right now, for honest disclosure (#9167). */
   secretTier: PluginSecretStorageTier;
+  /** A failed secret save found the keychain missing or locked for this session. */
+  onSecretTier?: (tier: PluginSecretStorageTier) => void;
   /** Whether the stored secret value is still legacy plaintext, awaiting migration. */
   secretIsPlaintext: boolean;
   /** Whether this field's scope values have finished loading. */
   loaded: boolean;
   /** Whether this field's scope failed to load, so it has nothing safe to edit. */
   failed: boolean;
+}
+
+/**
+ * The host whose storage a remote window's secrets would land in; null for a
+ * window on this machine. Plugin settings and secrets live on each host.
+ */
+function useSecretStorageHost(): { name: string; platform: string } | null {
+  const { hostName } = useHostConnection();
+  const { platform } = useHostPlatform();
+  const hostId = pluginViewHostId();
+  return hostId === null ? null : { name: hostName ?? hostId, platform };
+}
+
+/**
+ * Why a secret can't be saved. On a remote host the reason and the way around
+ * it are that host's: a Linux machine with no desktop session has no keyring,
+ * which is expected there, and the CLI's own login or the environment still
+ * work.
+ */
+export function unavailableSecretStorageText(
+  host: { name: string; platform: string } | null
+): string {
+  if (host === null) return "Secure storage unavailable — secrets can't be saved on this device";
+  const where =
+    host.platform === "linux"
+      ? `No keyring on ${host.name} (headless Linux)`
+      : `No keychain available on ${host.name}`;
+  return `${where} — secrets can't be saved there; use environment variables or the CLI's own login on that host`;
+}
+
+/**
+ * The keychain is there but gave Daintree no key this session. Why isn't known:
+ * on Linux a dismissed unlock prompt and a keyring service that isn't running
+ * end the same way, and Chromium reports a Keychain refusal like any other
+ * Keychain error. Electron asks once per run, so retrying a save can't get past
+ * it; a restart is what tries again.
+ */
+export function lockedSecretStorageText(host: { name: string } | null, platform: string): string {
+  const store = platform === "darwin" ? "Keychain" : "Keyring";
+  return host === null
+    ? `${store} not available this session — restart Daintree to try again`
+    : `${store} on ${host.name} not available this session — restart Daintree there to try again`;
 }
 
 /**
@@ -177,6 +224,7 @@ function SettingField({
   storedValue,
   secretIsSet,
   secretTier,
+  onSecretTier,
   secretIsPlaintext,
   loaded,
   failed,
@@ -197,6 +245,8 @@ function SettingField({
   // would go stale after the first write or reset.
   const [overridden, setOverridden] = useState(false);
   const tierId = useId();
+  const secretHost = useSecretStorageHost();
+  const { platform } = useHostPlatform();
   const [error, setError] = useState<string | null>(null);
   // Set only when `error` is a failed write; a draft rejected before any write
   // (not a number, not JSON) is fixed by editing, so it offers no Retry.
@@ -294,15 +344,25 @@ function SettingField({
         onSaved?.();
         return true;
       } catch (err) {
+        // A keychain that is missing, or gave no key this session, refuses a
+        // retry exactly as it refused this save, so ask which before offering one.
+        const tier = isSecret
+          ? await window.electron.plugin.getSettingValues(pluginId, scope, projectId).then(
+              (res) => res.secretTier,
+              () => null
+            )
+          : null;
+        const retryable = tier !== "locked" && tier !== "unavailable";
+        if (!retryable) onSecretTier?.(tier);
         setError(formatErrorMessage(err, "Couldn't save setting"));
-        setFailedWrite({ kind: "write", value, onSaved });
+        setFailedWrite(retryable ? { kind: "write", value, onSaved } : null);
         logError(`Failed to save plugin setting ${pluginId}.${def.id}`, err);
         return false;
       } finally {
         setSaving(false);
       }
     },
-    [pluginId, def.id, scope, projectId]
+    [pluginId, def.id, scope, projectId, isSecret, onSecretTier]
   );
 
   const handleReset = useCallback(async () => {
@@ -689,14 +749,16 @@ function SettingField({
     );
     const tierText =
       secretTier === "unavailable"
-        ? "Secure storage unavailable — secrets can't be saved on this device"
-        : hasStored && secretIsPlaintext && !migratedToKeychain
-          ? "Stored as plaintext — re-save to move it into the OS keychain"
-          : // Nothing stored yet is not "stored": say where a new value goes,
-            // without implying it saves as it is typed.
-            hasStored
-            ? "Stored in OS keychain"
-            : "New secrets are stored in the OS keychain";
+        ? unavailableSecretStorageText(secretHost)
+        : secretTier === "locked"
+          ? lockedSecretStorageText(secretHost, platform)
+          : hasStored && secretIsPlaintext && !migratedToKeychain
+            ? "Stored as plaintext — re-save to move it into the OS keychain"
+            : // Nothing stored yet is not "stored": say where a new value goes,
+              // without implying it saves as it is typed.
+              hasStored
+              ? "Stored in OS keychain"
+              : "New secrets are stored in the OS keychain";
     return (
       <>
         <SettingsRow
@@ -831,6 +893,9 @@ export function PluginSettingsForm({
   const projectId = useProjectStore((s) => s.currentProject?.id ?? null);
 
   const [reloadKey, setReloadKey] = useState(0);
+  // What a failed secret save learned about the keychain since the scopes
+  // loaded. The keychain is the whole app's, so every secret row says the same.
+  const [learnedSecretTier, setLearnedSecretTier] = useState<PluginSecretStorageTier | null>(null);
   const [userScope, setUserScope] = useState<ScopeValues>(UNLOADED_SCOPE);
   const [projectScope, setProjectScope] = useState<ScopeValues>(UNLOADED_SCOPE);
   const [localScope, setLocalScope] = useState<ScopeValues>(UNLOADED_SCOPE);
@@ -948,7 +1013,8 @@ export function PluginSettingsForm({
                 projectId={projectId}
                 storedValue={values?.[def.id]}
                 secretIsSet={secrets.has(def.id)}
-                secretTier={secretInfo.tier}
+                secretTier={learnedSecretTier ?? secretInfo.tier}
+                onSecretTier={setLearnedSecretTier}
                 secretIsPlaintext={secretInfo.plaintext.has(def.id)}
                 loaded={loaded}
                 failed={state.failed === true}

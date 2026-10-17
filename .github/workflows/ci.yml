@@ -9,7 +9,7 @@ on:
   workflow_dispatch:
     inputs:
       os:
-        description: "OS to run check on (manual dispatch only — push/PR always runs ubuntu)"
+        description: "OS to run the static and lint jobs on (manual dispatch only — push/PR always runs ubuntu)"
         type: choice
         options:
           - ubuntu
@@ -34,12 +34,13 @@ env:
   # (already in the npm tarball) do the work.
   ONNXRUNTIME_NODE_INSTALL: "skip"
 
+# Every job starts at once and none waits on another, so the run takes as long
+# as its slowest job. `npm run check` is split between `static` and `lint`
+# because run back to back they were 17-20 minutes on one runner.
 jobs:
-  # Typecheck + lint + format. The unit suite runs separately in the sharded
-  # `test` job below (gated on this job passing) so the ~1.7k-file suite
-  # parallelises across runners instead of serialising behind check on a single
-  # 2-core runner.
-  check:
+  # Typecheck, the codegen and drift guards, and formatting. Later steps run
+  # even when an earlier one fails, so one push reports every problem.
+  static:
     # Push/PR runs ubuntu only. Manual dispatch can opt into windows or both
     # via `gh workflow run CI --ref <branch> -f os=windows` (or `os=both`).
     strategy:
@@ -47,77 +48,131 @@ jobs:
       matrix:
         os: ${{ fromJSON((inputs.os || 'ubuntu') == 'both' && '["ubuntu-latest","windows-latest"]' || (inputs.os || 'ubuntu') == 'windows' && '["windows-latest"]' || '["ubuntu-latest"]') }}
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 30
+    timeout-minutes: 20
 
     steps:
       - name: Check out repository
         uses: actions/checkout@v6
 
-      - name: Set up Node.js
-        uses: actions/setup-node@v6
+      - name: Install dependencies
+        id: install
+        uses: ./.github/actions/install
         with:
           node-version: ${{ env.NODE_VERSION }}
-          cache: npm
 
-      - name: Install Linux dependencies
-        if: matrix.os == 'ubuntu-latest'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y libarchive-tools
+      - name: Typecheck
+        run: npm run typecheck
 
-      - name: Install dependencies
-        run: npm ci
+      - name: Codegen and drift guards
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
+        run: npm run check:guards
 
-      - name: Check (typecheck + lint + format)
-        run: npm run check
+      # Prettier's cache is keyed on each file's content and a hash of the
+      # Prettier version, Node version and resolved options, so a restored entry
+      # can only skip a file that is byte-identical under identical settings.
+      # Keyed per commit so every run saves what it checked.
+      - name: Restore Prettier cache
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
+        uses: actions/cache@v5
+        with:
+          path: node_modules/.cache/prettier
+          key: prettier-${{ runner.os }}-${{ github.sha }}
+          restore-keys: |
+            prettier-${{ runner.os }}-
 
-  # Unit suite, sharded 4 ways across ubuntu runners. Gated on `check` so a
-  # typecheck/lint failure skips all shards instead of burning 4 runners.
-  # Ubuntu-only by design — Windows unit coverage runs in stabilize.yml, and
-  # adding it here would quadruple cost for no branch-protection benefit.
-  test:
-    needs: [check]
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
+      - name: Format check
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
+        run: npm run format:check -- --cache --cache-strategy content
+
+  # The ESLint ratchet. Each ESLint worker thread builds its own typed program:
+  # two threads peaked at 11.5 GB locally and four at 15.5 GB, against the
+  # runner's 16 GB.
+  lint:
     strategy:
       fail-fast: false
       matrix:
-        shard: [1, 2, 3, 4]
+        os: ${{ fromJSON((inputs.os || 'ubuntu') == 'both' && '["ubuntu-latest","windows-latest"]' || (inputs.os || 'ubuntu') == 'windows' && '["windows-latest"]' || '["ubuntu-latest"]') }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
 
     steps:
       - name: Check out repository
         uses: actions/checkout@v6
 
-      - name: Set up Node.js
-        uses: actions/setup-node@v6
+      - name: Install dependencies
+        uses: ./.github/actions/install
         with:
           node-version: ${{ env.NODE_VERSION }}
-          cache: npm
 
-      - name: Install Linux dependencies
+      - name: Lint (ESLint ratchet)
+        run: npm run lint:ratchet
+        env:
+          ESLINT_CONCURRENCY: "2"
+
+  # Unit suite, sharded across ubuntu runners. Ubuntu-only by design — Windows
+  # unit coverage runs in stabilize.yml.
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    # The matrix list cannot read env, so it stays a literal: keep it [1..SHARD_TOTAL].
+    env:
+      SHARD_TOTAL: 6
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4, 5, 6]
+
+    steps:
+      # A denominator larger than the list skips whole partitions with every
+      # shard green (.lessons/10130.md); this turns any mismatch into a failure.
+      - name: Check shard list matches SHARD_TOTAL
         run: |
-          sudo apt-get update
-          sudo apt-get install -y libarchive-tools
+          if [ "${{ strategy.job-total }}" != "$SHARD_TOTAL" ] || [ "${{ matrix.shard }}" != "$(( ${{ strategy.job-index }} + 1 ))" ]; then
+            echo "::error::shard ${{ matrix.shard }} is job ${{ strategy.job-index }} of ${{ strategy.job-total }}, but the list must be exactly [1..$SHARD_TOTAL]"
+            exit 1
+          fi
+
+      - name: Check out repository
+        uses: actions/checkout@v6
 
       - name: Install dependencies
-        run: npm ci
+        uses: ./.github/actions/install
+        with:
+          node-version: ${{ env.NODE_VERSION }}
 
-      # Vite transform cache — transforms are content-addressed, so all shards
-      # can safely share one cache. Keyed on the lockfile + vitest/vite config so
-      # a dependency or config change invalidates it; the restore-key fallback
-      # tolerates a partial hit (stale entries are regenerated, not trusted).
-      - name: Cache Vite transforms
+      # Vitest runs a shard's files longest-first using the durations it
+      # recorded on the previous run, so the slow files start early instead of
+      # setting the tail. Keyed per commit so the timings stay current; the
+      # shard count is in the key because it decides which files a shard holds.
+      - name: Cache Vitest results
         uses: actions/cache@v5
         with:
-          path: |
-            node_modules/.vite
-            node_modules/.cache
-          key: ${{ runner.os }}-vite-${{ hashFiles('package-lock.json', 'vitest.config.ts', 'vite.config.ts') }}
+          path: node_modules/.vite/vitest
+          key: vitest-results-${{ runner.os }}-${{ matrix.shard }}of${{ env.SHARD_TOTAL }}-${{ github.sha }}
           restore-keys: |
-            ${{ runner.os }}-vite-
+            vitest-results-${{ runner.os }}-${{ matrix.shard }}of${{ env.SHARD_TOTAL }}-
 
-      - name: Test (vitest unit, shard ${{ matrix.shard }}/4)
-        run: npx vitest run --shard=${{ matrix.shard }}/4
+      # The perf liveness guard runs in its own job below: it spawns a child per
+      # scenario and alone took ~380s, which made its shard the long pole.
+      - name: Test (vitest unit, shard ${{ matrix.shard }}/${{ env.SHARD_TOTAL }})
+        run: npx vitest run --shard=${{ matrix.shard }}/${{ env.SHARD_TOTAL }} --exclude scripts/perf/__tests__/scenarioLiveness.test.ts
+
+  # Drives every perf scenario's run() once in a child process.
+  perf-liveness:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+
+      - name: Install dependencies
+        uses: ./.github/actions/install
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Test (perf scenario liveness)
+        run: npx vitest run scripts/perf/__tests__/scenarioLiveness.test.ts
 
   build:
     runs-on: ubuntu-latest
@@ -126,17 +181,6 @@ jobs:
     steps:
       - name: Check out repository
         uses: actions/checkout@v6
-
-      - name: Set up Node.js
-        uses: actions/setup-node@v6
-        with:
-          node-version: ${{ env.NODE_VERSION }}
-          cache: npm
-
-      - name: Install Linux dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y libarchive-tools
 
       - name: Fontconfig cache key
         id: fontconfig-cache-key
@@ -159,7 +203,9 @@ jobs:
         run: fc-cache -fv
 
       - name: Install dependencies
-        run: npm ci
+        uses: ./.github/actions/install
+        with:
+          node-version: ${{ env.NODE_VERSION }}
 
       - name: Build
         run: npm run build
@@ -192,7 +238,7 @@ jobs:
   # Insulates against matrix/job name changes breaking required checks.
   ci-ok:
     if: always()
-    needs: [check, test, build]
+    needs: [static, lint, test, perf-liveness, build]
     runs-on: ubuntu-latest
     timeout-minutes: 2
 

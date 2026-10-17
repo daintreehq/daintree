@@ -1,5 +1,10 @@
 import type { Worktree, WorktreeState } from "@shared/types/worktree";
-import { BRANCH_PREFIX_MAP } from "@shared/config/branchPrefixes";
+import { classifyBranch } from "@shared/config/branchPrefixes";
+import {
+  getWorktreeTypeGroupName,
+  WORKTREE_TYPE_IDS,
+  type WorktreeTypeId,
+} from "@/lib/worktreeTypes";
 import { parseExactNumber } from "@/lib/parseExactNumber";
 import type {
   OrderBy,
@@ -11,19 +16,28 @@ import type {
   DevServerFilter,
 } from "@/store/worktreeFilterStore";
 import type { ChipState } from "@/components/Worktree/utils/computeChipState";
+import {
+  EMPTY_WORKTREE_AGENT_BUCKETS,
+  type WorktreeAgentBuckets,
+} from "@/lib/worktreeAgentBuckets";
 import type { DevPreviewSessionState, DevPreviewSessionStatus } from "@shared/types/ipc/devPreview";
 import { isValidPastTimestamp } from "@/utils/timestamps";
 
 export interface DerivedWorktreeMeta {
   terminalCount: number;
+  /** One or more agent panes, in any state — including none reported yet. */
+  hasAgent: boolean;
   hasWorkingAgent: boolean;
   hasWaitingAgent: boolean;
   hasCompletedAgent: boolean;
   hasExitedAgent: boolean;
   hasMergeConflict: boolean;
+  /** The quick-state buckets, from the agents' fleet bands (`worktreeAgentBuckets`). */
+  buckets: WorktreeAgentBuckets;
   chipState: ChipState;
 }
 
+/** `"waiting"` is the persisted id of the Attention bucket. */
 export type QuickStateFilter = "all" | "working" | "waiting" | "finished";
 
 export function matchesQuickStateFilter(
@@ -34,11 +48,11 @@ export function matchesQuickStateFilter(
     case "all":
       return true;
     case "working":
-      return meta.hasWorkingAgent && meta.chipState === null;
+      return meta.buckets.working;
     case "waiting":
-      return meta.chipState === "waiting";
+      return meta.buckets.attention;
     case "finished":
-      return meta.chipState === "complete" || meta.chipState === "cleanup";
+      return meta.buckets.finished;
   }
 }
 
@@ -70,39 +84,15 @@ export function matchesDevServerFilter(
   }
 }
 
-export type WorktreeTypeId =
-  | "feature"
-  | "bugfix"
-  | "refactor"
-  | "chore"
-  | "docs"
-  | "test"
-  | "release"
-  | "ci"
-  | "deps"
-  | "perf"
-  | "style"
-  | "wip"
-  | "main"
-  | "detached"
-  | "other";
+export type { WorktreeTypeId };
 
 export function getWorktreeType(worktree: Worktree | WorktreeState): WorktreeTypeId {
   if (worktree.isMainWorktree) return "main";
   if (worktree.isDetached || !worktree.branch) return "detached";
 
-  const branch = worktree.branch.toLowerCase();
-  const prefix = branch.split(/[/-]/)[0];
-  if (!prefix) return "other";
-
-  // Own keys only: a branch like `constructor-injection` would otherwise read an
-  // inherited member off the plain-object table, and its missing `id` becomes a
-  // group no section renders — dropping the worktree from grouped orderings.
-  const branchType = Object.hasOwn(BRANCH_PREFIX_MAP, prefix) ? BRANCH_PREFIX_MAP[prefix] : null;
-  if (branchType) {
-    return branchType.id as WorktreeTypeId;
-  }
-
+  const { type, namespace } = classifyBranch(worktree.branch);
+  if (type) return type.id;
+  if (namespace?.kind === "agent") return "agent";
   return "other";
 }
 
@@ -124,7 +114,15 @@ function scoreField(field: string, query: string, startsWith: number, contains: 
   return 0;
 }
 
-export function scoreWorktree(worktree: Worktree | WorktreeState, query: string): number {
+/**
+ * `customTitle` is the worktree's title from the filter store (#13409), scored
+ * at headline weight. Passed in rather than read here so this stays pure.
+ */
+export function scoreWorktree(
+  worktree: Worktree | WorktreeState,
+  query: string,
+  customTitle?: string
+): number {
   const q = query.toLowerCase().trim();
   if (!q) return 0;
 
@@ -134,6 +132,7 @@ export function scoreWorktree(worktree: Worktree | WorktreeState, query: string)
   const prTitle = (worktree.linked?.pr?.title ?? "").toLowerCase();
 
   return Math.max(
+    scoreField((customTitle ?? "").toLowerCase(), q, 4, 3),
     scoreField(issueTitle, q, 4, 3),
     scoreField(name, q, 4, 3),
     scoreField(branch, q, 2, 1),
@@ -151,13 +150,17 @@ export function scoreWorktree(worktree: Worktree | WorktreeState, query: string)
  * the sidebar never has: a query of spaces scores nothing and so hides every
  * row. A caller that wants whitespace to read as empty trims first.
  */
-export function matchesWorktreeQuery(worktree: Worktree | WorktreeState, query: string): boolean {
+export function matchesWorktreeQuery(
+  worktree: Worktree | WorktreeState,
+  query: string,
+  customTitle?: string
+): boolean {
   if (query.length === 0) return true;
   const exactNum = parseExactNumber(query);
   if (exactNum !== null) {
     return worktree.issueNumber === exactNum || worktree.linked?.pr?.ref.number === exactNum;
   }
-  return scoreWorktree(worktree, query) > 0;
+  return scoreWorktree(worktree, query, customTitle) > 0;
 }
 
 export function computeStatus(
@@ -187,8 +190,11 @@ export interface FilterState {
   typeFilters: Set<TypeFilter>;
   prIssueFilters: Set<PrIssueFilter>;
   sessionFilters: Set<SessionFilter>;
+  hasAgentFilter: boolean;
   activityFilters: Set<ActivityFilter>;
   devServerFilters: Set<DevServerFilter>;
+  /** Worktree id → custom title, so the query matches titles too (#13409). */
+  customTitles?: Readonly<Record<string, string>>;
 }
 
 export function matchesFilters(
@@ -198,7 +204,9 @@ export function matchesFilters(
   isActive: boolean,
   sessionsByWorktreeId?: Record<string, DevPreviewSessionState>
 ): boolean {
-  if (!matchesWorktreeQuery(worktree, filters.query)) return false;
+  if (!matchesWorktreeQuery(worktree, filters.query, filters.customTitles?.[worktree.id])) {
+    return false;
+  }
 
   // Status filters (OR within category)
   if (filters.statusFilters.size > 0) {
@@ -244,6 +252,8 @@ export function matchesFilters(
 
     if (!hasMatch) return false;
   }
+
+  if (filters.hasAgentFilter && !derived.hasAgent) return false;
 
   // Activity filters (OR within category)
   if (filters.activityFilters.size > 0) {
@@ -376,12 +386,13 @@ export function sortWorktreesByRelevance<T extends Worktree | WorktreeState>(
   query: string,
   orderBy: OrderBy,
   pinnedWorktrees: string[] = [],
-  manualOrder: string[] = []
+  manualOrder: string[] = [],
+  customTitles?: Readonly<Record<string, string>>
 ): T[] {
   const sorted = sortWorktrees(worktrees, orderBy, pinnedWorktrees, manualOrder);
   if (!query.trim()) return sorted;
 
-  const scores = new Map(sorted.map((w) => [w.id, scoreWorktree(w, query)]));
+  const scores = new Map(sorted.map((w) => [w.id, scoreWorktree(w, query, customTitles?.[w.id])]));
   // Stable sort preserves sortWorktrees order as tiebreaker. The external
   // partition is re-applied as the primary key: a strong query match must not
   // pull an outside-the-project worktree back above the project's own (#11434).
@@ -405,42 +416,6 @@ export interface GroupedSection<T> {
   displayName: string;
   worktrees: T[];
 }
-
-const TYPE_ORDER: WorktreeTypeId[] = [
-  "main",
-  "feature",
-  "bugfix",
-  "refactor",
-  "chore",
-  "docs",
-  "test",
-  "release",
-  "ci",
-  "deps",
-  "perf",
-  "style",
-  "wip",
-  "detached",
-  "other",
-];
-
-const TYPE_DISPLAY_NAMES: Record<WorktreeTypeId, string> = {
-  main: "Main",
-  feature: "Features",
-  bugfix: "Bugfixes",
-  refactor: "Refactors",
-  chore: "Chores",
-  docs: "Documentation",
-  test: "Tests",
-  release: "Releases",
-  ci: "CI/Build",
-  deps: "Dependencies",
-  perf: "Performance",
-  style: "Style",
-  wip: "Work in Progress",
-  detached: "Detached HEAD",
-  other: "Other",
-};
 
 export function groupByType<T extends Worktree | WorktreeState>(
   worktrees: T[],
@@ -471,12 +446,12 @@ export function groupByType<T extends Worktree | WorktreeState>(
 
   // Build sections in predefined order
   const sections: GroupedSection<T>[] = [];
-  for (const type of TYPE_ORDER) {
+  for (const type of WORKTREE_TYPE_IDS) {
     const items = groups.get(type);
     if (items && items.length > 0) {
       sections.push({
         type,
-        displayName: TYPE_DISPLAY_NAMES[type],
+        displayName: getWorktreeTypeGroupName(type),
         worktrees: items,
       });
     }
@@ -549,6 +524,7 @@ export function hasAnyFilters(filters: FilterState): boolean {
     filters.typeFilters.size > 0 ||
     filters.prIssueFilters.size > 0 ||
     filters.sessionFilters.size > 0 ||
+    filters.hasAgentFilter ||
     filters.activityFilters.size > 0 ||
     filters.devServerFilters.size > 0
   );
@@ -559,28 +535,12 @@ export interface ChipCounts {
   branchType: Record<TypeFilter, number>;
   prIssue: Record<PrIssueFilter, number>;
   sessions: Record<SessionFilter, number>;
+  hasAgent: number;
   activity: Record<ActivityFilter, number>;
   devServer: Record<DevServerFilter, number>;
 }
 
 const STATUS_KEYS: StatusFilter[] = ["active", "dirty", "stale", "idle"];
-const TYPE_KEYS: TypeFilter[] = [
-  "feature",
-  "bugfix",
-  "refactor",
-  "chore",
-  "docs",
-  "test",
-  "release",
-  "ci",
-  "deps",
-  "perf",
-  "style",
-  "wip",
-  "main",
-  "detached",
-  "other",
-];
 const PR_ISSUE_KEYS: PrIssueFilter[] = ["hasIssue", "hasPR", "prOpen", "prMerged", "prClosed"];
 const SESSION_KEYS: SessionFilter[] = ["hasTerminals", "working", "waiting", "completed", "exited"];
 const ACTIVITY_KEYS: ActivityFilter[] = ["last15m", "last1h", "last24h", "last7d"];
@@ -602,9 +562,10 @@ function emptyRecord<K extends string>(keys: readonly K[]): Record<K, number> {
 export function emptyChipCounts(): ChipCounts {
   return {
     status: emptyRecord(STATUS_KEYS),
-    branchType: emptyRecord(TYPE_KEYS),
+    branchType: emptyRecord(WORKTREE_TYPE_IDS),
     prIssue: emptyRecord(PR_ISSUE_KEYS),
     sessions: emptyRecord(SESSION_KEYS),
+    hasAgent: 0,
     activity: emptyRecord(ACTIVITY_KEYS),
     devServer: emptyRecord(DEV_SERVER_KEYS),
   };
@@ -612,11 +573,13 @@ export function emptyChipCounts(): ChipCounts {
 
 const DEFAULT_DERIVED_META: DerivedWorktreeMeta = {
   terminalCount: 0,
+  hasAgent: false,
   hasWorkingAgent: false,
   hasWaitingAgent: false,
   hasCompletedAgent: false,
   hasExitedAgent: false,
   hasMergeConflict: false,
+  buckets: EMPTY_WORKTREE_AGENT_BUCKETS,
   chipState: null,
 };
 
@@ -626,6 +589,7 @@ const PR_ISSUE_FACET = 1 << 2;
 const SESSION_FACET = 1 << 3;
 const ACTIVITY_FACET = 1 << 4;
 const DEV_SERVER_FACET = 1 << 5;
+const HAS_AGENT_FACET = 1 << 6;
 
 export function computeChipCounts(
   worktrees: readonly (Worktree | WorktreeState)[],
@@ -643,7 +607,7 @@ export function computeChipCounts(
     if (hasQuery) {
       const matchesQuery =
         exactQuery === null
-          ? scoreWorktree(worktree, filters.query) > 0
+          ? scoreWorktree(worktree, filters.query, filters.customTitles?.[worktree.id]) > 0
           : worktree.issueNumber === exactQuery || worktree.linked?.pr?.ref.number === exactQuery;
       if (!matchesQuery) continue;
     }
@@ -659,7 +623,7 @@ export function computeChipCounts(
 
     // A row contributes to a facet when every other active facet passed. One
     // failure therefore admits it only to that facet; multiple failures admit
-    // it to none. This preserves the six disjunctive bases without six sweeps.
+    // it to none. This preserves the per-facet bases without a sweep per facet.
     if (filters.statusFilters.size > 0) {
       statuses = computeStatus(worktree, isActive);
       if (!statuses.some((status) => filters.statusFilters.has(status))) {
@@ -693,6 +657,8 @@ export function computeChipCounts(
         (filters.sessionFilters.has("exited") && derived.hasExitedAgent);
       if (!matchesSession) failedFacets |= SESSION_FACET;
     }
+
+    if (filters.hasAgentFilter && !derived.hasAgent) failedFacets |= HAS_AGENT_FACET;
 
     if (filters.activityFilters.size > 0) {
       let matchesActivity = false;
@@ -744,6 +710,10 @@ export function computeChipCounts(
       if (derived.hasWaitingAgent) counts.sessions.waiting++;
       if (derived.hasCompletedAgent) counts.sessions.completed++;
       if (derived.hasExitedAgent) counts.sessions.exited++;
+    }
+
+    if ((failedFacets === 0 || failedFacets === HAS_AGENT_FACET) && derived.hasAgent) {
+      counts.hasAgent++;
     }
 
     if (failedFacets === 0 || failedFacets === ACTIVITY_FACET) {

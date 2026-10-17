@@ -20,6 +20,7 @@ vi.mock("../../lifecycle/shutdownCoordinator.js", () => ({
 import {
   buildOpenWindowRecords,
   clearPendingBackgroundRestores,
+  clearPendingRemoteRestoresForHost,
   enableOpenWindowsSaves,
   freezeAndSnapshotOpenWindows,
   initOpenWindowsTracker,
@@ -28,6 +29,7 @@ import {
   saveOpenWindowsNow,
   scheduleOpenWindowsSave,
   setPendingBackgroundRestores,
+  setPendingRemoteRestore,
   suppressOpenWindowsSaves,
 } from "../openWindowsTracker.js";
 import {
@@ -121,6 +123,37 @@ describe("buildOpenWindowRecords", () => {
   it("records a window with no project as a picker window", () => {
     const registry = makeRegistry([{ windowId: 1, projectId: null }]);
     expect(buildOpenWindowRecords(registry)).toEqual([{ projectId: null }]);
+  });
+
+  it("keeps naming a restored window's host project while it waits on the picker", () => {
+    const remote = `studio-01:${"a".repeat(64)}`;
+    const win: FakeWindow = { windowId: 1, projectId: null };
+    const registry = makeRegistry([win]);
+    setPendingRemoteRestore(1, remote);
+    // The host was unreachable this launch: quitting now must not forget it.
+    expect(buildOpenWindowRecords(registry)).toEqual([{ projectId: remote }]);
+    // The person opened a project here instead: the intent is spent for good.
+    win.projectId = "local";
+    expect(buildOpenWindowRecords(registry)).toEqual([{ projectId: "local" }]);
+    win.projectId = null;
+    expect(buildOpenWindowRecords(registry)).toEqual([{ projectId: null }]);
+  });
+
+  it("stops naming a removed host's projects for any window, and only that host's", () => {
+    const registry = makeRegistry([
+      { windowId: 1, projectId: null },
+      { windowId: 2, projectId: null },
+      { windowId: 3, projectId: null },
+    ]);
+    setPendingRemoteRestore(1, `studio:${"a".repeat(64)}`);
+    setPendingRemoteRestore(2, `studio:${"b".repeat(64)}`);
+    setPendingRemoteRestore(3, `studio-2:${"a".repeat(64)}`);
+    clearPendingRemoteRestoresForHost("studio");
+    expect(buildOpenWindowRecords(registry)).toEqual([
+      { projectId: null },
+      { projectId: null },
+      { projectId: `studio-2:${"a".repeat(64)}` },
+    ]);
   });
 
   it("keeps a window whose manager throws, as a picker window", () => {
@@ -274,11 +307,6 @@ describe("recovery launches", () => {
     expect(writeOpenWindowsManifest).not.toHaveBeenCalled();
   });
 
-  it("still writes nothing after a window closes", () => {
-    saveOpenWindowsNow(1);
-    expect(writeOpenWindowsManifest).not.toHaveBeenCalled();
-  });
-
   it("writes again once a single-crash fleet restore lifts the hold (#12801)", () => {
     suppressOpenWindowsSaves();
     enableOpenWindowsSaves();
@@ -329,11 +357,6 @@ describe("saveOpenWindowsNow", () => {
       ]),
       readOnly: false,
     });
-  });
-
-  it("writes immediately, without waiting on the debounce", () => {
-    saveOpenWindowsNow();
-    expect(writeOpenWindowsManifest).toHaveBeenCalledTimes(1);
   });
 
   it("drops a pending debounce so a close does not double-write", () => {
@@ -605,11 +628,6 @@ describe("background project capture (#12320)", () => {
     expect(buildOpenWindowRecords(registry)[0].backgroundProjectIds).toHaveLength(
       MAX_BACKGROUND_PROJECTS_PER_WINDOW
     );
-  });
-
-  it("still records the window as a picker when its manager throws", () => {
-    const registry = makeRegistry([{ windowId: 1, projectId: "a", throwsOnRead: true }]);
-    expect(buildOpenWindowRecords(registry)).toEqual([{ projectId: null }]);
   });
 
   it("persists background ids through the debounced save", () => {

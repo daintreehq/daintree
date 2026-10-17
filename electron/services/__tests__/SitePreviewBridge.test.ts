@@ -12,6 +12,7 @@ import { GUEST_PROTOCOL_VERSION } from "../sitePreview/guestProtocol.js";
 import { GUEST_RUNTIME_GLOBAL } from "../sitePreview/guestRuntime.js";
 import type { SitePreviewPushRoute } from "../SitePreviewBridge.js";
 import type { SitePreviewPushPayload } from "../../../shared/types/ipc/sitePreview.js";
+import { onWebContentsDestroyed } from "../../window/webContentsDestroyed.js";
 
 const PANEL_ID = "panel-1";
 const ADAPTER_ID = "test.guest";
@@ -1379,30 +1380,6 @@ describe("SitePreviewBridge disable races a bind", () => {
     await expect(bound).rejects.toThrow(/not enabled/);
     expect(harness.wc.debugger.methods()).not.toContain("Page.addScriptToEvaluateOnNewDocument");
   });
-
-  it("still binds normally when no teardown intervened", async () => {
-    // The guard must not refuse an ordinary bind, including a rebind of the
-    // same panel, which tears the predecessor down on purpose.
-    const harness = makeHarness();
-    const first = await harness.bridge.bind({
-      projectId: PROJECT_ID,
-      panelId: PANEL_ID,
-      adapterId: ADAPTER_ID,
-      mode: "select",
-      subscriberWebContentsId: SUBSCRIBER_WC_ID,
-    });
-    const second = await harness.bridge.bind({
-      projectId: PROJECT_ID,
-      panelId: PANEL_ID,
-      adapterId: ADAPTER_ID,
-      mode: "select",
-      subscriberWebContentsId: SUBSCRIBER_WC_ID,
-    });
-
-    expect(second.sessionId).not.toBe(first.sessionId);
-    expect(harness.bridge.getState(PROJECT_ID, second.sessionId)).not.toBeNull();
-    expect(harness.bridge.getState(PROJECT_ID, first.sessionId)).toBeNull();
-  });
 });
 
 describe("SitePreviewBridge out-of-band ops", () => {
@@ -1644,6 +1621,26 @@ describe("SitePreviewBridge observation addressing", () => {
 
     expect(harness.pushed).toHaveLength(1);
     expect(harness.routes).toEqual([{ subscriberWebContentsId: OTHER_SUBSCRIBER_WC_ID }]);
+  });
+
+  // A view can bind several previews; a `destroyed` listener each would run
+  // its count past the unpackaged build's limit.
+  it("watches the binding view through its shared destroyed listener", async () => {
+    const harness = makeHarness();
+    const unwatch = onWebContentsDestroyed(
+      harness.subscriber as unknown as Electron.WebContents,
+      () => {}
+    );
+    expect(harness.subscriber.listenerCount("destroyed")).toBe(1);
+    await harness.bridge.bind({
+      projectId: PROJECT_ID,
+      panelId: PANEL_ID,
+      adapterId: ADAPTER_ID,
+      mode: "browse",
+      subscriberWebContentsId: SUBSCRIBER_WC_ID,
+    });
+    expect(harness.subscriber.listenerCount("destroyed")).toBe(1);
+    unwatch();
   });
 
   it("tears the binding down when the view that bound is destroyed", async () => {

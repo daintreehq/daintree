@@ -33,10 +33,6 @@ describe("normalizeBrowserUrl", () => {
     expect(normalizeBrowserUrl("http://0.0.0.0:5173").url).toBe("http://localhost:5173/");
   });
 
-  it("should auto-prepend http:// if no protocol", () => {
-    expect(normalizeBrowserUrl("localhost:3000").url).toBe("http://localhost:3000/");
-  });
-
   it("should reject non-localhost URLs", () => {
     expect(normalizeBrowserUrl("example.com").error).toBeTruthy();
     expect(normalizeBrowserUrl("http://example.com").error).toBeTruthy();

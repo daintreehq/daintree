@@ -2,9 +2,15 @@
 import os from "os";
 import { app } from "electron";
 import { store } from "../store.js";
+import { readCanopyMode } from "./canopy/canopyMode.js";
+import { readAgentDefaults } from "./agentDefaults.js";
 import { projectStore } from "./ProjectStore.js";
 import { filterRestorableTerminalSnapshots } from "./projectStateRestore.js";
-import { getGpuFeatureStatus, isWebGLHardwareAccelerated } from "../utils/gpuDetection.js";
+import {
+  getGpuFeatureStatus,
+  getWebGLFeatureStatus,
+  isWebGLHardwareAccelerated,
+} from "../utils/gpuDetection.js";
 import { isRunningUnderRosetta } from "../utils/rosettaDetection.js";
 import { isGpuDisabledByFlag, isGpuAngleFallbackApplied } from "./GpuCrashMonitorService.js";
 import { readGpuDisabledFlagData } from "./gpuDisabledFlag.js";
@@ -127,14 +133,14 @@ export async function buildSwitchHydrateResult(projectId: string): Promise<Hydra
     mruList: mruListToUse,
   };
 
-  const gpuStatus = getGpuFeatureStatus();
-  const gpuWebGLHardware = isWebGLHardwareAccelerated(gpuStatus.webgl2);
+  const gpuWebGLHardware = isWebGLHardwareAccelerated(getWebGLFeatureStatus(getGpuFeatureStatus()));
 
   return {
     appState: appState as import("../../shared/types/ipc/app.js").AppState,
     terminalConfig: readHydrateTerminalConfig(),
     project: currentProject ?? null,
     agentSettings: store.get("agentSettings"),
+    agentDefaults: readAgentDefaults(),
     gpuWebGLHardware,
     gpuHardwareAccelerationDisabled: isGpuDisabledByFlag(app.getPath("userData")),
     gpuDisabledReason: readGpuDisabledFlagData(app.getPath("userData"))?.reason ?? null,
@@ -143,6 +149,7 @@ export async function buildSwitchHydrateResult(projectId: string): Promise<Hydra
     isWindowsStore: (process as NodeJS.Process & { windowsStore?: boolean }).windowsStore === true,
     runningUnderRosetta: isRunningUnderRosetta(),
     rosettaWarningDismissed: store.get("rosettaWarningDismissed") === true,
+    canopyMode: readCanopyMode(),
     settingsRecovery: null,
     databaseRecovery: null,
     projectStateRecovery: projectStateQuarantinedPath

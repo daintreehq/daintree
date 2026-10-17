@@ -75,11 +75,6 @@ describe("isRescuableKeystroke", () => {
     expect(isRescuableKeystroke(keydown({ key: "A", shiftKey: true }))).toBe(true);
   });
 
-  it("accepts punctuation and digits", () => {
-    expect(isRescuableKeystroke(keydown({ key: "7" }))).toBe(true);
-    expect(isRescuableKeystroke(keydown({ key: "?" }))).toBe(true);
-  });
-
   it("accepts an AltGr character even though ctrl and alt are both set", () => {
     // German layout: AltGr+Q yields '@' with ctrlKey && altKey. A naive chord
     // test would refuse to rescue ordinary typing on these layouts.

@@ -72,7 +72,6 @@ import { comboToAriaKeyshortcuts, describeKeyCap } from "@/lib/kbdShortcut";
 import { isMac } from "@/lib/platform";
 import { SHORTCUT_ROW_GAP } from "@/lib/tooltipShortcut";
 import { cn } from "@/lib/utils";
-import { actionService } from "@/services/ActionService";
 import { keybindingService } from "@/services/KeybindingService";
 import { formatElapsedDuration } from "@/utils/formatElapsedDuration";
 import { formatTimeAgo } from "@/utils/timeAgo";
@@ -95,6 +94,7 @@ import {
 } from "./kitProps";
 import { useKitOverlayZClass, usePluginKitOwner } from "./kitScope";
 import { reportPluginFault, runPluginAction } from "./kitDiagnostics";
+import { getPluginKitHost } from "./kitHost";
 
 // Components that speak Daintree's own concepts. Each reads only what a plugin
 // view may already reach: the action catalogue and dispatch (`host.actions` and
@@ -147,7 +147,7 @@ export function readActionState(actionId: string, args: unknown, revision = 0): 
   const combo = keybindingService.getEffectiveCombo(actionId) || undefined;
   let entry;
   try {
-    entry = actionService.get(id, undefined, { includeSchemas: false });
+    entry = getPluginKitHost().getAction(id);
   } catch {
     entry = null;
   }
@@ -171,7 +171,7 @@ export function readActionState(actionId: string, args: unknown, revision = 0): 
     reason,
     meta,
   });
-  if (actionService.deniesPluginDispatch(id))
+  if (getPluginKitHost().deniesPluginDispatch(id))
     return blocked(PLUGIN_BLOCKED_REASON, PLUGIN_BLOCKED_META);
   let danger: ActionDanger = entry.danger;
   try {
@@ -206,7 +206,9 @@ export async function dispatchActionFromView(
   args: unknown
 ): Promise<PluginActionDispatchOutcome> {
   try {
-    const result = await actionService.dispatch(actionId as ActionId, args, { source: "plugin" });
+    const result = await getPluginKitHost().dispatchAction(actionId as ActionId, args, {
+      source: "plugin",
+    });
     if (result.ok) return { ok: true };
     return { ok: false, error: { code: result.error.code, message: result.error.message } };
   } catch (error) {
@@ -242,7 +244,7 @@ function reportOutcome(
   if (outcome.ok || outcome.error?.code === "DISABLED") return;
   if (
     outcome.error?.code === "EXECUTION_ERROR" &&
-    actionService.selfNotifiesOnExecutionError(actionId as ActionId)
+    getPluginKitHost().selfNotifiesOnExecutionError(actionId as ActionId)
   ) {
     return;
   }
@@ -1190,7 +1192,7 @@ function KitSendToAgentButton(props: PluginSendToAgentButtonProps) {
     try {
       const raw = sendFn
         ? await sendFn(request)
-        : await window.electron.plugin.invoke(
+        : await getPluginKitHost().invokePlugin(
             owner ?? "",
             nonEmpty(channel) ?? "sendToAgent",
             request

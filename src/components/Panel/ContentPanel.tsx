@@ -15,6 +15,7 @@ import { TerminalHeaderContent } from "@/components/Terminal/TerminalHeaderConte
 import { TerminalStatusSlot } from "@/components/Terminal/TerminalStatusSlot";
 import { TerminalAgentIndicator } from "@/components/Terminal/TerminalAgentIndicator";
 import { TerminalContextMenu } from "@/components/Terminal/TerminalContextMenu";
+import { PanelContextMenuTrigger } from "@/components/Terminal/PanelContextMenuTrigger";
 import type { PanelKind, AgentState, PersistableFlowStatus } from "@/types";
 import type { TerminalRuntimeIdentity } from "@shared/types/panel";
 import type { ActivityState } from "@/components/Terminal/TerminalPane";
@@ -695,57 +696,59 @@ const ContentPanelInner = forwardRef<HTMLDivElement, ContentPanelProps>(function
             too would duplicate title/close and expose grid-only affordances
             (rename, move to dock, maximize, trash) that a modal can't honour. */}
       {location !== "dialog" && (
-        <PanelHeader
-          isDragging={isDragging}
-          id={id}
-          title={title}
-          compactTitle={compactTitle}
-          tabPanelId={tabPanelId}
-          kind={kind}
-          agentId={agentId}
-          chrome={terminalChrome}
-          presetColor={presetColor}
-          agentLaunchFlags={agentLaunchFlags}
-          worktreeAccentColor={worktreeAccentColor}
-          worktreeBranch={worktreeBranch}
-          isFocused={isFocused}
-          isMaximized={isMaximized}
-          location={location}
-          isEditingTitle={titleEditing.isEditingTitle}
-          editingValue={titleEditing.editingValue}
-          titleInputRef={titleInputRef}
-          titleRef={titleRef}
-          onEditingValueChange={titleEditing.setEditingValue}
-          onTitleDoubleClick={handleTitleDoubleClick}
-          onTitleKeyDown={handleTitleKeyDown}
-          onTitleInputKeyDown={handleTitleInputKeyDown}
-          onTitleSave={handleTitleSave}
-          onClose={onClose}
-          onFocus={onFocus}
-          onToggleMaximize={onToggleMaximize}
-          onTitleChange={onTitleChange}
-          onMinimize={onMinimize}
-          onRestore={onRestore}
-          showRestoreControl={showRestoreControl}
-          onRestart={onRestart}
-          isPinged={isPinged}
-          wasJustSelected={wasJustSelected}
-          isSelected={isSelected}
-          isFleetFollower={isFleetFollower}
-          isFleetPreviewed={isFleetPreviewed}
-          headerContent={resolvedHeaderContent}
-          headerStatus={resolvedHeaderStatus}
-          agentIndicator={resolvedAgentIndicator}
-          headerActions={headerActions}
-          headerToolbar={headerToolbar}
-          tabs={tabs}
-          groupId={groupId}
-          onTabClick={onTabClick}
-          onTabClose={onTabClose}
-          onTabRename={onTabRename}
-          onAddTab={onAddTab}
-          onTabReorder={onTabReorder}
-        />
+        <PanelContextMenuTrigger>
+          <PanelHeader
+            isDragging={isDragging}
+            id={id}
+            title={title}
+            compactTitle={compactTitle}
+            tabPanelId={tabPanelId}
+            kind={kind}
+            agentId={agentId}
+            chrome={terminalChrome}
+            presetColor={presetColor}
+            agentLaunchFlags={agentLaunchFlags}
+            worktreeAccentColor={worktreeAccentColor}
+            worktreeBranch={worktreeBranch}
+            isFocused={isFocused}
+            isMaximized={isMaximized}
+            location={location}
+            isEditingTitle={titleEditing.isEditingTitle}
+            editingValue={titleEditing.editingValue}
+            titleInputRef={titleInputRef}
+            titleRef={titleRef}
+            onEditingValueChange={titleEditing.setEditingValue}
+            onTitleDoubleClick={handleTitleDoubleClick}
+            onTitleKeyDown={handleTitleKeyDown}
+            onTitleInputKeyDown={handleTitleInputKeyDown}
+            onTitleSave={handleTitleSave}
+            onClose={onClose}
+            onFocus={onFocus}
+            onToggleMaximize={onToggleMaximize}
+            onTitleChange={onTitleChange}
+            onMinimize={onMinimize}
+            onRestore={onRestore}
+            showRestoreControl={showRestoreControl}
+            onRestart={onRestart}
+            isPinged={isPinged}
+            wasJustSelected={wasJustSelected}
+            isSelected={isSelected}
+            isFleetFollower={isFleetFollower}
+            isFleetPreviewed={isFleetPreviewed}
+            headerContent={resolvedHeaderContent}
+            headerStatus={resolvedHeaderStatus}
+            agentIndicator={resolvedAgentIndicator}
+            headerActions={headerActions}
+            headerToolbar={headerToolbar}
+            tabs={tabs}
+            groupId={groupId}
+            onTabClick={onTabClick}
+            onTabClose={onTabClose}
+            onTabRename={onTabRename}
+            onAddTab={onAddTab}
+            onTabReorder={onTabReorder}
+          />
+        </PanelContextMenuTrigger>
       )}
 
       {toolbar}
@@ -770,8 +773,15 @@ const ContentPanelInner = forwardRef<HTMLDivElement, ContentPanelProps>(function
   // would act on a panel the user can only see inside a modal.
   if (location === "dialog") return panelSurface;
 
+  // A terminal's content has no menu of its own, so the whole pane opens the
+  // panel menu. Every other kind's body does — a file's text, a tree row, a
+  // page — so there the menu belongs to the title bar alone (#13422).
   return (
-    <TerminalContextMenu terminalId={id} forceLocation={location}>
+    <TerminalContextMenu
+      terminalId={id}
+      forceLocation={location}
+      triggerScope={isPtyKind ? "surface" : "header"}
+    >
       {panelSurface}
     </TerminalContextMenu>
   );

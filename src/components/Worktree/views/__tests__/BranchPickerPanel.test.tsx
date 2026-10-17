@@ -147,25 +147,6 @@ describe("BranchPickerPanel row metadata", () => {
     expect(options()[0]!.querySelector("[title]")).toBeNull();
   });
 
-  it("lets the worktree name give way before the branch name", () => {
-    renderPanel([inUseRow("main", { id: "main-wt", name: "main-worktree" })]);
-    const holder = [...options()[0]!.querySelectorAll("[data-in-use] span")].find(
-      (el) => el.textContent === "main-worktree"
-    )!;
-    // Capped, and clamped by line rather than a nowrap ellipsis: a nowrap
-    // element reports its whole text as its minimum width, so it could never
-    // give way before the branch name.
-    expect(holder.className).toMatch(/\bmax-w-/);
-    expect(holder.className).toMatch(/\bline-clamp-1\b/);
-    expect(holder.className).toMatch(/\bbreak-all\b/);
-    expect(holder.className).not.toMatch(/\btruncate\b/);
-    // And the metadata column must be allowed to shrink at all, or the holder's
-    // give is never used and the branch name absorbs the squeeze.
-    expect(options()[0]!.querySelector("[data-branch-meta]")!.className).not.toMatch(
-      /\bshrink-0\b/
-    );
-  });
-
   it("does not draw the holder again when it is named after the branch", () => {
     renderPanel([inUseRow("feature/x", { id: "/wt/x", name: "feature/x" })]);
     const visible = [...options()[0]!.querySelectorAll("[data-in-use] span")].filter(

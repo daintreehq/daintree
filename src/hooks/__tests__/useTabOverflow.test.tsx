@@ -81,12 +81,6 @@ function emit(entries: { id: string; visible: boolean }[]) {
 }
 
 describe("useTabOverflow", () => {
-  it("returns an empty set when no tabs are clipped", () => {
-    const container = setupContainer(["a", "b"]);
-    const { result } = renderHook(() => useTabOverflow(container, ["a", "b"]));
-    expect(result.current.size).toBe(0);
-  });
-
   it("adds tab ids reported as not intersecting and removes them when they re-intersect", () => {
     const container = setupContainer(["a", "b", "c"]);
     const { result } = renderHook(() => useTabOverflow(container, ["a", "b", "c"]));

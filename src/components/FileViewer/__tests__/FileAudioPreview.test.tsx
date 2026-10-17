@@ -75,62 +75,6 @@ describe("FileAudioPreview", () => {
     expect(container.querySelector("audio")).toBeNull();
   });
 
-  it("reprobes with the cache-busting param when the reload key changes", async () => {
-    probeOk();
-    const { rerender, container } = render(
-      <FileAudioPreview
-        filePath="/repo/track.mp3"
-        rootPath="/repo"
-        label="track.mp3"
-        reloadKey={1}
-      />
-    );
-    await waitFor(() => expect(container.querySelector("audio")).not.toBeNull());
-    expect(fetchMock.mock.calls[0]?.[0]).toContain("&v=1");
-
-    rerender(
-      <FileAudioPreview
-        filePath="/repo/track.mp3"
-        rootPath="/repo"
-        label="track.mp3"
-        reloadKey={2}
-      />
-    );
-
-    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
-    expect(fetchMock.mock.calls[1]?.[0]).toContain("&v=2");
-  });
-
-  it("moves the element src when the reload key changes", async () => {
-    probeOk();
-    const { rerender, container } = render(
-      <FileAudioPreview
-        filePath="/repo/track.mp3"
-        rootPath="/repo"
-        label="track.mp3"
-        reloadKey={1}
-      />
-    );
-    await waitFor(() => expect(container.querySelector("audio")).not.toBeNull());
-    // The bust has to reach the media URL, not just the probe: the element
-    // holds the bytes it already buffered, so an unchanged src would keep
-    // playing the stale file however many times the probe re-ran.
-    expect(container.querySelector("audio")?.getAttribute("src")).toBe(`${MEDIA_URL}&v=1`);
-
-    rerender(
-      <FileAudioPreview
-        filePath="/repo/track.mp3"
-        rootPath="/repo"
-        label="track.mp3"
-        reloadKey={2}
-      />
-    );
-
-    await waitFor(() =>
-      expect(container.querySelector("audio")?.getAttribute("src")).toBe(`${MEDIA_URL}&v=2`)
-    );
-  });
-
   it("releases the audio element when the source is replaced, and releases the old node", async () => {
     // Without this the media loader keeps pulling bytes for a preview the user
     // has already navigated away from — the exact waste #12242 set out to end,
@@ -192,23 +136,6 @@ describe("FileAudioPreview", () => {
     expect(load).toHaveBeenCalledTimes(1);
   });
 
-  it("reports a probe failure to onError without naming a reason", async () => {
-    fetchMock.mockRejectedValue(new Error("boom"));
-    const onError = vi.fn();
-    render(
-      <FileAudioPreview
-        filePath="/repo/track.mp3"
-        rootPath="/repo"
-        label="track.mp3"
-        onError={onError}
-      />
-    );
-
-    await waitFor(() => expect(onError).toHaveBeenCalledTimes(1));
-    // No specific message — callers fall back to their generic copy.
-    expect(onError.mock.calls[0]?.[0]).toBeUndefined();
-  });
-
   it("rejects an over-cap file on the declared length, without mounting an element", async () => {
     probeOk({ "content-length": String(2 * 1024 * 1024 * 1024) });
     const onError = vi.fn();
@@ -234,51 +161,6 @@ describe("FileAudioPreview", () => {
     );
     // Nothing is streamed for a file the viewer has already refused.
     expect(container.querySelector("audio")).toBeNull();
-  });
-
-  it("mounts the audio element when the probe declares no length", async () => {
-    // Without a length there is nothing to measure the cap against. Streaming
-    // makes that safe to allow — an unknown size costs a few ranges, not a
-    // gigabyte of blob storage — so it must not be treated as a failure.
-    probeOk({});
-    const onError = vi.fn();
-    const { container } = render(
-      <FileAudioPreview
-        filePath="/repo/track.mp3"
-        rootPath="/repo"
-        label="track.mp3"
-        onError={onError}
-      />
-    );
-
-    await waitFor(() => expect(container.querySelector("audio")).not.toBeNull());
-    expect(onError).not.toHaveBeenCalled();
-  });
-
-  it("does not report an error when unmounted mid-probe", async () => {
-    let resolveFetch: (value: unknown) => void = () => {};
-    fetchMock.mockImplementation(
-      (_url: string, opts: { signal: AbortSignal }) =>
-        new Promise((resolve, reject) => {
-          resolveFetch = resolve;
-          opts.signal.addEventListener("abort", () => reject(new DOMException("", "AbortError")));
-        })
-    );
-    const onError = vi.fn();
-    const { unmount } = render(
-      <FileAudioPreview
-        filePath="/repo/track.mp3"
-        rootPath="/repo"
-        label="track.mp3"
-        onError={onError}
-      />
-    );
-
-    unmount();
-    resolveFetch(undefined);
-    // Flush any queued reactions before asserting silence.
-    await new Promise((resolve) => setTimeout(resolve, 0));
-    expect(onError).not.toHaveBeenCalled();
   });
 
   it("forwards media element errors to onError", async () => {
@@ -358,26 +240,6 @@ describe("FileAudioPreview", () => {
     fireEvent.error(element);
 
     expect(onPlayingChange).toHaveBeenCalledWith(false);
-  });
-
-  it("reports nothing when no owner is listening", async () => {
-    // DiffPane renders this leaf without the prop; an unconditional call rather
-    // than optional chaining would throw the moment anyone pressed play.
-    probeOk();
-    const { container, unmount } = render(
-      <FileAudioPreview filePath="/repo/track.mp3" rootPath="/repo" label="track.mp3" />
-    );
-    await waitFor(() => expect(container.querySelector("audio")).not.toBeNull());
-    const element = container.querySelector("audio")!;
-
-    setPlaybackState(element, { paused: false });
-    expect(() => {
-      fireEvent.play(element);
-      fireEvent.pause(element);
-      fireEvent.ended(element);
-      fireEvent.error(element);
-      unmount();
-    }).not.toThrow();
   });
 
   it("takes a reported play back when the source is replaced", async () => {

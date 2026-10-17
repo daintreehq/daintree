@@ -1,7 +1,7 @@
 import { useReducer, useCallback } from "react";
 import type { WorktreeCreationError } from "../worktreeCreationErrors";
 
-export type ErrorField = "base-branch" | "new-branch" | "worktree-path";
+export type ErrorField = "base-branch" | "new-branch" | "existing-branch" | "worktree-path";
 
 export interface WorktreeFormErrors {
   validationError: string | null;

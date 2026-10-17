@@ -179,7 +179,43 @@ type ShotPayload = {
   preview?: string[];
   previewTitle?: string;
   previewPending?: boolean;
+  subject?: string;
+  offerSessionApproval?: boolean;
+  approvalReason?: "above-tier" | "protected-close";
+  typedNameTarget?: string;
+  selectableTargets?: {
+    id: string;
+    name: string;
+    worktree?: string;
+    kindLabel: string;
+    agentRunning: boolean;
+  }[];
+  selectionConfirmLabel?: { verb: string; one: string; many: string };
 };
+
+/** An agent pane: main authenticated it with a per-pane bearer, so it may hold a session grant. */
+const AGENT_PANE = { sessionOrigin: "external" as const, offerSessionApproval: true };
+
+const PANEL_TARGETS = [
+  ["Claude — fanout", "feature/agent-fanout", "Claude", true],
+  ["Dev server", "feature/agent-fanout", "Terminal", false],
+  ["Codex — review", "fix/review-queue", "Codex", false],
+  ["Docs preview", "develop", "Browser", false],
+  ["Gemini — docs sweep", "chore/docs-sweep", "Gemini", true],
+  ["Test watcher", "fix/review-queue", "Terminal", false],
+  ["Storybook", "develop", "Browser", false],
+  ["Claude — migration", "feat/db-migration-0042", "Claude", false],
+  ["Shell", "feat/db-migration-0042", "Terminal", false],
+  ["Release notes", "release/0.9", "Terminal", false],
+  ["opencode — triage", "chore/issue-triage", "opencode", false],
+  ["Logs tail", "develop", "Terminal", false],
+].map(([name, worktree, kindLabel, agentRunning], i) => ({
+  id: `panel-7f3c${String(i).padStart(2, "0")}a91e${i}`,
+  name: name as string,
+  worktree: worktree as string,
+  kindLabel: kindLabel as string,
+  agentRunning: agentRunning as boolean,
+}));
 
 const EXTERNAL_CALLER = { token4LastChars: "8f3a", userAgent: "Claude Code 2.4.1 (darwin)" };
 
@@ -608,6 +644,235 @@ test("MCP approval dialog review — trust hierarchy across caller, danger, and 
       await page.keyboard.press("Tab");
       await snap(page, "71-keyboard-focus-second", DIALOG);
       expectedShots += 2;
+    });
+
+    // ---- Design review: reading sequence across request shapes -------------
+    // The shapes added since the August harness: an agent pane offered a session
+    // grant, the assistant's standing confirmation preference, the per-target
+    // checklist and the typed-name gate — alone and all at once.
+    await step(page, "design", async () => {
+      // Minimal: safe, identified caller, nothing to preview, no arguments.
+      await park(page, [
+        {
+          requestId: "shot-d-minimal",
+          actionId: "worktree.list",
+          actionTitle: "List worktrees",
+          actionDescription: "List every git worktree in the current project.",
+          argsSummary: "",
+          danger: "safe",
+          callerInfo: EXTERNAL_CALLER,
+        },
+      ]);
+      await snap(page, "90-minimal", DIALOG);
+      expectedShots++;
+
+      // Everything an agent pane can carry at once: above-tier, destructive,
+      // consequence, preview, arguments and the session grant.
+      await park(page, [
+        deleteWorktree({
+          requestId: "shot-d-everything-pane",
+          ...AGENT_PANE,
+          approvalReason: "above-tier",
+          subject: "feature/agent-fanout",
+          argsSummary: ARGS_LONG,
+          preview: PREVIEW_DIRTY,
+          previewTitle: "Working tree changes",
+        }),
+      ]);
+      await snap(page, "91-everything-agent-pane", DIALOG);
+      await snap(page, "91b-everything-agent-pane-in-window");
+      expectedShots += 2;
+
+      // The same, with the session grant ticked: the footer has to say what the
+      // click will now do.
+      await page.locator(`${DIALOG} [role="checkbox"]`).last().click();
+      await snap(page, "92-everything-session-checked", DIALOG);
+      expectedShots++;
+
+      // The assistant's own request carrying everything: protected close with a
+      // target checklist, plus the standing confirmation preference.
+      await park(page, [
+        {
+          requestId: "shot-d-everything-assistant",
+          actionId: "terminal.close",
+          actionTitle: "Close panels",
+          actionDescription: "Close panels in the current project.",
+          argsSummary:
+            '{\n  "terminalIds": ["panel-7f3c00a91e0", "panel-7f3c01a91e1", "panel-7f3c02a91e2"]\n}',
+          danger: "confirm",
+          sessionOrigin: "help",
+          approvalReason: "protected-close",
+          dangerRationale:
+            "Closing a panel ends its process. An agent that is mid-task loses the turn it was working on.",
+          selectableTargets: PANEL_TARGETS.slice(0, 3),
+          selectionConfirmLabel: { verb: "Close", one: "panel", many: "panels" },
+        },
+      ]);
+      await snap(page, "93-everything-assistant-preference", DIALOG);
+      await snap(page, "93b-everything-assistant-in-window");
+      expectedShots += 2;
+
+      // Assistant, safe-but-confirmed action, preference visible on its own.
+      await park(page, [
+        deleteWorktree({
+          requestId: "shot-d-assistant-pref",
+          sessionOrigin: "help",
+          subject: "feature/agent-fanout",
+          preview: PREVIEW_DIRTY,
+          previewTitle: "Working tree changes",
+        }),
+      ]);
+      await snap(page, "94-assistant-destructive-preference", DIALOG);
+      expectedShots++;
+
+      // The standing preference opened: a deliberate second step.
+      await page
+        .locator(`${DIALOG} button[aria-expanded]`)
+        .filter({ hasText: /Daintree confirmations/ })
+        .first()
+        .click();
+      await snap(page, "94b-assistant-preference-expanded", DIALOG);
+      expectedShots++;
+
+      // Agent pane, harmless action that is merely above its tier.
+      await park(page, [
+        {
+          requestId: "shot-d-pane-above-tier",
+          actionId: "worktree.create",
+          actionTitle: "Create worktree",
+          actionDescription: "Create a git worktree on a new branch.",
+          argsSummary: '{\n  "branch": "feature/agent-fanout-2"\n}',
+          danger: "safe",
+          ...AGENT_PANE,
+          approvalReason: "above-tier",
+        },
+      ]);
+      await snap(page, "95-agent-pane-above-tier-safe", DIALOG);
+      expectedShots++;
+
+      // The barest session offer: nothing focusable before the grant itself, so
+      // this is where initial focus would land on it if Cancel did not claim it.
+      await park(page, [
+        {
+          requestId: "shot-d-pane-bare",
+          actionId: "worktree.list",
+          actionTitle: "List worktrees",
+          actionDescription: "List every git worktree in the current project.",
+          argsSummary: "",
+          danger: "safe",
+          ...AGENT_PANE,
+          approvalReason: "above-tier",
+        },
+      ]);
+      await snap(page, "95b-agent-pane-bare-session-offer", DIALOG);
+      expectedShots++;
+
+      // Agent pane without a session offer (a target-picking tool).
+      await park(page, [
+        deleteWorktree({
+          requestId: "shot-d-pane-no-session",
+          sessionOrigin: "external",
+          callerInfo: { token4LastChars: "", userAgent: "claude-code/2.4.1" },
+          approvalReason: "above-tier",
+          subject: "feature/agent-fanout",
+          preview: PREVIEW_DIRTY,
+          previewTitle: "Working tree changes",
+        }),
+      ]);
+      await snap(page, "96-destructive-no-session-offer", DIALOG);
+      expectedShots++;
+
+      // Long target list.
+      await park(page, [
+        {
+          requestId: "shot-d-long-targets",
+          actionId: "terminal.killBatch",
+          actionTitle: "Kill terminals",
+          actionDescription: "Terminate running terminal processes.",
+          argsSummary: ARGS_SHORT,
+          danger: "confirm",
+          callerInfo: EXTERNAL_CALLER,
+          dangerRationale:
+            "Ends every selected process immediately. Unsaved shell state and any agent turn in progress are lost.",
+          selectableTargets: PANEL_TARGETS,
+          selectionConfirmLabel: { verb: "Kill", one: "terminal", many: "terminals" },
+        },
+      ]);
+      await snap(page, "97-long-target-list", DIALOG);
+      expectedShots++;
+
+      // Identical titles in one long-named worktree: only the id separates them.
+      const LONG_WT = "feature/agent-fanout-with-a-very-long-descriptive-branch-name";
+      await park(page, [
+        {
+          requestId: "shot-d-twin-targets",
+          actionId: "terminal.killBatch",
+          actionTitle: "Kill terminals",
+          actionDescription: "Terminate running terminal processes.",
+          argsSummary: ARGS_SHORT,
+          danger: "confirm",
+          callerInfo: EXTERNAL_CALLER,
+          selectableTargets: [0, 1, 2].map((i) => ({
+            id: `panel-twin-${i}c8e1f`,
+            name: "Shell",
+            worktree: LONG_WT,
+            kindLabel: "Terminal",
+            agentRunning: false,
+          })),
+          selectionConfirmLabel: { verb: "Kill", one: "terminal", many: "terminals" },
+        },
+      ]);
+      await snap(page, "97b-twin-targets-long-worktree", DIALOG);
+      expectedShots++;
+
+      // Session ticked while the preview is still pending, behind a queue: the
+      // longest label beside the longest hint.
+      await park(page, [
+        deleteWorktree({
+          requestId: "shot-d-session-pending",
+          ...AGENT_PANE,
+          approvalReason: "above-tier",
+          previewPending: true,
+          previewTitle: "Working tree changes",
+        }),
+        deleteWorktree({ requestId: "shot-d-session-pending-2", ...AGENT_PANE }),
+      ]);
+      await page.locator(`${DIALOG} [role="checkbox"]`).last().click();
+      await snap(page, "92b-session-checked-preview-pending", DIALOG);
+      expectedShots++;
+
+      // Long argument payload, disclosed.
+      await park(page, [
+        deleteWorktree({
+          requestId: "shot-d-long-args",
+          callerInfo: EXTERNAL_CALLER,
+          subject: "feature/agent-fanout",
+          argsSummary: ARGS_LONG,
+          preview: PREVIEW_DIRTY,
+          previewTitle: "Working tree changes",
+        }),
+      ]);
+      await page
+        .locator(`${DIALOG} button[aria-expanded]`)
+        .filter({ hasText: /argument/i })
+        .first()
+        .click();
+      await snap(page, "98-long-args-expanded", DIALOG);
+      expectedShots++;
+
+      // Typed-name gate (D3 force delete) on top of a large preview.
+      await park(page, [
+        deleteWorktree({
+          requestId: "shot-d-typed",
+          callerInfo: EXTERNAL_CALLER,
+          subject: "feature/agent-fanout",
+          typedNameTarget: "feature/agent-fanout",
+          preview: PREVIEW_HUGE,
+          previewTitle: "Working tree changes",
+        }),
+      ]);
+      await snap(page, "99-typed-name-large-preview", DIALOG);
+      expectedShots++;
     });
 
     // ---- Accessibility media modes -----------------------------------------

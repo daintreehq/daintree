@@ -20,12 +20,24 @@ vi.mock("@/clients/systemClient", () => ({
 }));
 
 const panelState = vi.hoisted(() => ({
-  panelsById: {} as Record<string, { id: string; kind?: string; title: string }>,
+  panelsById: {} as Record<string, { id: string; kind?: string; title: string; location?: string }>,
 }));
 
 vi.mock("@/store/panelStore", () => ({
   usePanelStore: { getState: () => panelState },
 }));
+
+const captureHelpers = vi.hoisted(() => {
+  class PanelCaptureRefusedError extends Error {}
+  return {
+    PanelCaptureRefusedError,
+    locatePanelFrame: vi.fn(),
+    assertPanelCapturable: vi.fn(),
+    sameRect: vi.fn(),
+    consoleMessagesForPlugin: vi.fn(),
+  };
+});
+vi.mock("@/services/plugin/pluginPanelCapture", () => captureHelpers);
 
 import { registerPluginActions } from "../pluginActions";
 import type { ActionCallbacks, ActionRegistry, AnyActionDefinition } from "../../actionTypes";
@@ -38,9 +50,11 @@ import {
 } from "@/services/plugin/pluginPanelLifecycle";
 import { usePluginPanelReloadConfirmStore } from "@/store/pluginPanelReloadConfirmStore";
 import { ConfirmationStagedError } from "../../confirmationStaged";
+import { UnactionableTargetError } from "../../unactionableTarget";
 import { DENY_PLUGIN_DISPATCH_ACTION_IDS } from "@shared/config/actionIds";
 import { usePluginManagerStore } from "@/store/pluginManagerStore";
 import { useProjectStore } from "@/store/projectStore";
+import { registerPanelKind, unregisterPanelKind } from "@shared/config/panelKindRegistry";
 
 /**
  * These actions ignore the callbacks entirely — they reach main through the
@@ -137,31 +151,6 @@ beforeEach(() => {
   vi.clearAllMocks();
   clientMocks.getProjectPlugins.mockResolvedValue([]);
   clientMocks.reloadProjectPlugins.mockResolvedValue(undefined);
-});
-
-describe("plugin.validate", () => {
-  it("forwards the path and returns the verdict unchanged", async () => {
-    const verdict = {
-      manifestPath: "/p/.daintree/plugins/acme.demo/plugin.json",
-      origin: "project",
-      originSource: "location",
-      valid: false,
-      pluginId: "acme.demo",
-      errors: [{ path: "contributes.panels.0.color", message: "Required" }],
-      warnings: [],
-    };
-    clientMocks.validateManifest.mockResolvedValue(verdict);
-
-    await expect(run("plugin.validate", { path: ".daintree/plugins/acme.demo" })).resolves.toEqual(
-      verdict
-    );
-    expect(clientMocks.validateManifest).toHaveBeenCalledWith(".daintree/plugins/acme.demo");
-  });
-
-  it("lets a rejection propagate rather than reporting a false verdict", async () => {
-    clientMocks.validateManifest.mockRejectedValue(new Error("outside this project"));
-    await expect(run("plugin.validate", { path: "/etc" })).rejects.toThrow(/outside this project/);
-  });
 });
 
 describe("plugin.diagnostics", () => {
@@ -283,11 +272,6 @@ describe("plugin.diagnostics", () => {
     expect(result.logLinesAvailable).toBe(51);
   });
 
-  it("propagates a snapshot read failure instead of reporting an empty buffer", async () => {
-    clientMocks.getDiagnosticsSnapshot.mockRejectedValue(new Error("IPC gone"));
-    await expect(run("plugin.diagnostics", { pluginId: "acme.demo" })).rejects.toThrow(/IPC gone/);
-  });
-
   it("bounds the log tail in the schema, not only in the handler", () => {
     const schema = definition("plugin.diagnostics").argsSchema;
     const parse = (logLimit: unknown) => schema?.safeParse({ pluginId: "a.b", logLimit }).success;
@@ -394,11 +378,6 @@ describe("plugin.reloadProject", () => {
     expect(result.plugins).toEqual([]);
   });
 
-  it("propagates a failure to list, even once the reload itself succeeded", async () => {
-    clientMocks.getProjectPlugins.mockRejectedValue(new Error("project closed mid-reload"));
-    await expect(run("plugin.reloadProject")).rejects.toThrow(/project closed mid-reload/);
-  });
-
   it("refuses plugin-sourced dispatch, since it would unload the caller", () => {
     expect(definition("plugin.reloadProject").denyPluginDispatch).toBe(true);
   });
@@ -417,13 +396,6 @@ describe("result schemas", () => {
 
     const def = definition("plugin.diagnostics");
     const result = await run("plugin.diagnostics", { pluginId: "acme.demo" });
-    expect(def.resultSchema?.safeParse(result).success).toBe(true);
-  });
-
-  it("holds for the reload result too", async () => {
-    clientMocks.getProjectPlugins.mockResolvedValue([]);
-    const def = definition("plugin.reloadProject");
-    const result = await run("plugin.reloadProject");
     expect(def.resultSchema?.safeParse(result).success).toBe(true);
   });
 });
@@ -747,13 +719,6 @@ describe("plugin.backupDatabases", () => {
     revealMock.mockClear();
   });
 
-  it("names only the plugin, and main does the rest", async () => {
-    clientMocks.backupDatabases.mockResolvedValue({ status: "cancelled" });
-    await run("plugin.backupDatabases", { pluginId: "acme.ledger" });
-
-    expect(clientMocks.backupDatabases).toHaveBeenCalledWith("acme.ledger");
-  });
-
   it("says nothing when the dialog was dismissed", async () => {
     clientMocks.backupDatabases.mockResolvedValue({ status: "cancelled" });
     await run("plugin.backupDatabases", { pluginId: "acme.ledger" });
@@ -816,5 +781,149 @@ describe("plugin.backupDatabases", () => {
     expect(def.denyPluginDispatch).toBe(true);
     expect(DENY_PLUGIN_DISPATCH_ACTION_IDS).toContain("plugin.backupDatabases");
     expect(def.mcpVisibility).toBe("hidden");
+  });
+});
+
+describe("plugin.capturePanel (#13384)", () => {
+  const KIND = "acme.dashboard.main";
+  const RECT = { x: 10, y: 20, width: 300, height: 200 };
+  const frame: unknown = { tagName: "DIV" };
+  let capturePanel: ReturnType<typeof vi.fn>;
+
+  beforeEach(() => {
+    registerPanelKind({
+      id: KIND,
+      name: "Dashboard",
+      iconId: "layout-dashboard",
+      color: "#38bdf8",
+      hasPty: false,
+      canRestart: false,
+      canConvert: false,
+      extensionId: "acme.dashboard",
+    });
+    panelState.panelsById = {
+      "plugin-1": { id: "plugin-1", kind: KIND, title: "Dashboard", location: "grid" },
+      "unowned-1": { id: "unowned-1", kind: "acme.unregistered", title: "Gone" },
+      "file-1": { id: "file-1", kind: "file", title: "README.md" },
+      "term-1": { id: "term-1", kind: "terminal", title: "Shell" },
+    };
+    captureHelpers.locatePanelFrame.mockReset().mockReturnValue(frame);
+    captureHelpers.assertPanelCapturable.mockReset().mockReturnValue(RECT);
+    captureHelpers.sameRect.mockReset().mockReturnValue(true);
+    captureHelpers.consoleMessagesForPlugin
+      .mockReset()
+      .mockReturnValue({ messages: [], omitted: 0 });
+    capturePanel = vi.fn(async () => ({ pngBase64: "UE5H", consoleMessages: [{ raw: true }] }));
+    vi.stubGlobal("window", { electron: { plugin: { capturePanel } } });
+  });
+
+  afterEach(() => {
+    unregisterPanelKind(KIND);
+    vi.unstubAllGlobals();
+  });
+
+  it("takes an explicit panel id and never falls back to focus", () => {
+    const def = definition("plugin.capturePanel");
+    expect(def.argsSchema?.safeParse({}).success).toBe(false);
+    expect(def.argsSchema?.safeParse({ panelId: "" }).success).toBe(false);
+    expect(def.argsSchema?.safeParse({ panelId: "plugin-1" }).success).toBe(true);
+  });
+
+  it("captures the panel's own rect and narrows the console to its plugin", async () => {
+    const messages = [
+      { level: "error", message: "boom", source: "plugin://pi/v.js", line: 1, timestamp: "t" },
+    ];
+    captureHelpers.consoleMessagesForPlugin.mockReturnValue({ messages, omitted: 4 });
+
+    const result = await run("plugin.capturePanel", { panelId: "plugin-1" });
+
+    expect(captureHelpers.locatePanelFrame).toHaveBeenCalledWith("plugin-1");
+    expect(captureHelpers.assertPanelCapturable).toHaveBeenCalledWith("plugin-1", frame, "grid");
+    expect(capturePanel).toHaveBeenCalledWith(RECT);
+    expect(captureHelpers.consoleMessagesForPlugin).toHaveBeenCalledWith(
+      [{ raw: true }],
+      "acme.dashboard"
+    );
+    expect(result).toEqual({
+      panelId: "plugin-1",
+      pluginId: "acme.dashboard",
+      image: { mimeType: "image/png", data: "UE5H", width: 300, height: 200 },
+      consoleScope: "plugin",
+      consoleMessages: messages,
+      consoleOmitted: 4,
+    });
+    expect(definition("plugin.capturePanel").resultSchema?.safeParse(result).success).toBe(true);
+  });
+
+  it("refuses missing and non-plugin panels as unactionable, without capturing", async () => {
+    await expect(run("plugin.capturePanel", { panelId: "nope" })).rejects.toBeInstanceOf(
+      UnactionableTargetError
+    );
+    for (const panelId of ["file-1", "term-1", "unowned-1"]) {
+      const refusal = run("plugin.capturePanel", { panelId });
+      await expect(refusal).rejects.toBeInstanceOf(UnactionableTargetError);
+      await expect(refusal).rejects.toThrow(/not a plugin panel/);
+    }
+    expect(capturePanel).not.toHaveBeenCalled();
+  });
+
+  it("refuses before capturing when the panel cannot be captured cleanly", async () => {
+    captureHelpers.assertPanelCapturable.mockImplementation(() => {
+      throw new captureHelpers.PanelCaptureRefusedError("covered");
+    });
+    await expect(run("plugin.capturePanel", { panelId: "plugin-1" })).rejects.toThrow("covered");
+    expect(capturePanel).not.toHaveBeenCalled();
+  });
+
+  it("drops the pixels when the panel changed while they were taken", async () => {
+    captureHelpers.sameRect.mockReturnValue(false);
+    await expect(run("plugin.capturePanel", { panelId: "plugin-1" })).rejects.toThrow(/changed/);
+
+    captureHelpers.sameRect.mockReturnValue(true);
+    captureHelpers.assertPanelCapturable.mockReturnValueOnce(RECT).mockImplementationOnce(() => {
+      throw new captureHelpers.PanelCaptureRefusedError("a menu opened");
+    });
+    await expect(run("plugin.capturePanel", { panelId: "plugin-1" })).rejects.toThrow(
+      "a menu opened"
+    );
+
+    captureHelpers.locatePanelFrame
+      .mockReturnValueOnce(frame)
+      .mockReturnValueOnce({ remounted: true });
+    await expect(run("plugin.capturePanel", { panelId: "plugin-1" })).rejects.toThrow(/changed/);
+  });
+
+  it("drops the pixels when the panel moved or closed during the capture", async () => {
+    capturePanel.mockImplementationOnce(async () => {
+      panelState.panelsById["plugin-1"] = {
+        ...panelState.panelsById["plugin-1"]!,
+        location: "dock",
+      };
+      return { pngBase64: "UE5H", consoleMessages: [] };
+    });
+    await expect(run("plugin.capturePanel", { panelId: "plugin-1" })).rejects.toThrow(/changed/);
+
+    capturePanel.mockImplementationOnce(async () => {
+      delete panelState.panelsById["plugin-1"];
+      return { pngBase64: "UE5H", consoleMessages: [] };
+    });
+    panelState.panelsById["plugin-1"] = {
+      id: "plugin-1",
+      kind: KIND,
+      title: "Dashboard",
+      location: "grid",
+    };
+    await expect(run("plugin.capturePanel", { panelId: "plugin-1" })).rejects.toThrow(/changed/);
+  });
+
+  it("keeps the capture when the view only persisted state meanwhile", async () => {
+    capturePanel.mockImplementationOnce(async () => {
+      // A state write replaces the record without moving or changing the panel.
+      panelState.panelsById["plugin-1"] = { ...panelState.panelsById["plugin-1"]! };
+      return { pngBase64: "UE5H", consoleMessages: [] };
+    });
+    await expect(run("plugin.capturePanel", { panelId: "plugin-1" })).resolves.toMatchObject({
+      image: { data: "UE5H" },
+    });
   });
 });

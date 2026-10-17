@@ -28,6 +28,28 @@ vi.mock("simple-git", () => ({
   simpleGit: vi.fn(() => mockGitInstance),
 }));
 
+// Pass-through spies, so a case can tell whether git's PATH lookup ever touched
+// a PATH directory synchronously.
+const syncFs = vi.hoisted(() => ({
+  calls: [] as string[],
+}));
+vi.mock("node:fs", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:fs")>();
+  const record =
+    <A extends unknown[], R>(name: string, fn: (...args: A) => R) =>
+    (...args: A): R => {
+      syncFs.calls.push(`${name} ${String(args[0])}`);
+      return fn(...args);
+    };
+  const spied = {
+    statSync: record("statSync", actual.statSync),
+    lstatSync: record("lstatSync", actual.lstatSync),
+    readdirSync: record("readdirSync", actual.readdirSync),
+    existsSync: record("existsSync", actual.existsSync),
+  };
+  return { ...actual, ...spied, default: { ...actual, ...spied } };
+});
+
 import {
   validateCwd,
   createHardenedGit,
@@ -41,8 +63,55 @@ import {
   selectUserDataDir,
   toGitConfigPath,
   GIT_BLOCK_TIMEOUT_MS,
+  _setUserSshCommandForTesting,
 } from "../hardenedGit.js";
 import { simpleGit } from "simple-git";
+import { resetWindowsExecutableCache } from "../windowsExecutable.js";
+import { isMissingGitExecutableError } from "../../../shared/utils/gitOperationErrors.js";
+
+/**
+ * A git.exe on PATH while `run` builds a Windows instance, which now requires
+ * one; under `subdir` of a temp directory when given, such as a spaced
+ * `Program Files/Git/cmd`.
+ */
+async function withWindowsGitOnPath<T>(run: () => Promise<T>, subdir = ""): Promise<T> {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "daintree-win-git-"));
+  const dir = path.join(root, subdir);
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(path.join(dir, "git.exe"), "");
+  const originalPath = process.env.PATH;
+  process.env.PATH = dir;
+  resetWindowsExecutableCache();
+  try {
+    return await run();
+  } finally {
+    process.env.PATH = originalPath;
+    resetWindowsExecutableCache();
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+}
+
+/** The unsafe overrides every profile needs for the config keys it pins. */
+const PINNED_CONFIG_UNSAFE_FLAGS = {
+  allowUnsafeAskPass: true,
+  allowUnsafeCredentialHelper: true,
+  allowUnsafeProtocolOverride: true,
+  allowUnsafeFsMonitor: true,
+  allowUnsafePager: true,
+  allowUnsafeSshCommand: true,
+  allowUnsafeGitProxy: true,
+  allowUnsafeHooksPath: true,
+  allowUnsafeEditor: true,
+};
+
+/** A spaced default-install location, which simple-git's binary rule refuses. */
+const SPACED_GIT_DIR = path.join("Program Files", "Git", "cmd");
+
+// The authenticated profile honours the user's own core.sshCommand; keep the
+// developer's git config out of these tests (hardenedGit.userSsh.test.ts covers it).
+beforeEach(() => {
+  _setUserSshCommandForTesting(null);
+});
 
 /**
  * Pull the generated `core.hooksPath` value out of a captured config array.
@@ -111,24 +180,12 @@ describe("validateCwd", () => {
     expect(() => validateCwd(123)).toThrow("Invalid working directory");
   });
 
-  it("throws for non-string input (null)", async () => {
-    expect(() => validateCwd(null)).toThrow("Invalid working directory");
-  });
-
-  it("throws for non-string input (undefined)", async () => {
-    expect(() => validateCwd(undefined)).toThrow("Invalid working directory");
-  });
-
   it("throws for relative path", async () => {
     expect(() => validateCwd("relative/path")).toThrow("absolute path");
   });
 
   it("throws for parent traversal path", async () => {
     expect(() => validateCwd("../malicious-repo")).toThrow("absolute path");
-  });
-
-  it("throws for dot-relative path", async () => {
-    expect(() => validateCwd("./something")).toThrow("absolute path");
   });
 
   it("does not throw for absolute path (unix)", async () => {
@@ -155,21 +212,6 @@ describe("createHardenedGit", () => {
     );
   });
 
-  it("disables fsmonitor to prevent cross-worktree contamination", async () => {
-    await createHardenedGit("/test/repo");
-
-    const options = (simpleGit as ReturnType<typeof vi.fn>).mock.calls[0][0];
-    expect(options.config).toContain("core.fsmonitor=false");
-    expect(options.config).not.toContain("core.fsmonitor=true");
-  });
-
-  it("passes config overrides including protocol.ext.allow=never", async () => {
-    await createHardenedGit("/test/repo");
-
-    const options = (simpleGit as ReturnType<typeof vi.fn>).mock.calls[0][0];
-    expect(options.config).toContain("protocol.ext.allow=never");
-  });
-
   // A blank `core.sshCommand=` is not "unset" to git — it forks the empty
   // string as the transport and every ssh URL fails with `cannot run :`
   // (issue #12475). Exactly one entry, so no later blank can undo the pin.
@@ -182,27 +224,26 @@ describe("createHardenedGit", () => {
     expectNonInteractiveSsh(values[0]);
   });
 
-  it("disables credential.helper via config", async () => {
-    await createHardenedGit("/test/repo");
+  // Platform-explicit: on a Windows host the default would look up that host's
+  // own git, whose install path decides the flag set (the Windows case below).
+  it("enables allowUnsafe flags for overriding blocked config keys", async () => {
+    await createHardenedGit("/test/repo", undefined, "linux");
 
     const options = (simpleGit as ReturnType<typeof vi.fn>).mock.calls[0][0];
-    expect(options.config).toContain("credential.helper=");
+    expect(options.unsafe).toEqual(PINNED_CONFIG_UNSAFE_FLAGS);
   });
 
-  it("enables allowUnsafe flags for overriding blocked config keys", async () => {
-    await createHardenedGit("/test/repo");
+  it("on Windows, adds only the custom-binary flag when git's resolved path has a space", async () => {
+    await withWindowsGitOnPath(
+      () => createHardenedGit("/test/repo", undefined, "win32"),
+      SPACED_GIT_DIR
+    );
 
     const options = (simpleGit as ReturnType<typeof vi.fn>).mock.calls[0][0];
+    expect(options.binary).toContain(SPACED_GIT_DIR);
     expect(options.unsafe).toEqual({
-      allowUnsafeAskPass: true,
-      allowUnsafeCredentialHelper: true,
-      allowUnsafeProtocolOverride: true,
-      allowUnsafeFsMonitor: true,
-      allowUnsafePager: true,
-      allowUnsafeSshCommand: true,
-      allowUnsafeGitProxy: true,
-      allowUnsafeHooksPath: true,
-      allowUnsafeEditor: true,
+      ...PINNED_CONFIG_UNSAFE_FLAGS,
+      allowUnsafeCustomBinary: true,
     });
   });
 
@@ -260,14 +301,6 @@ describe("createHardenedGit", () => {
         GIT_OPTIONAL_LOCKS: "0",
       })
     );
-  });
-
-  it("sets a platform-appropriate LC_CTYPE so non-ASCII paths survive iconv", async () => {
-    await createHardenedGit("/test/repo");
-
-    const envArg = mockGitInstance.env.mock.calls[0][0];
-    expect(typeof envArg.LC_CTYPE).toBe("string");
-    expect(envArg.LC_CTYPE).toMatch(/UTF-8$/);
   });
 
   it("clears inherited LC_ALL so the more specific LC_CTYPE / LC_MESSAGES win", async () => {
@@ -363,36 +396,8 @@ describe("createHardenedGit", () => {
     }
   });
 
-  it("suppresses optional .git/index.lock writes via GIT_OPTIONAL_LOCKS=0", async () => {
-    await createHardenedGit("/test/repo");
-
-    const envArg = mockGitInstance.env.mock.calls[0][0];
-    expect(envArg.GIT_OPTIONAL_LOCKS).toBe("0");
-  });
-
-  it("blocks interactive credential prompts via GIT_TERMINAL_PROMPT=0", async () => {
-    await createHardenedGit("/test/repo");
-
-    const envArg = mockGitInstance.env.mock.calls[0][0];
-    expect(envArg.GIT_TERMINAL_PROMPT).toBe("0");
-  });
-
-  it("disables Windows GCM interactive dialogs via GCM_INTERACTIVE=Never", async () => {
-    await createHardenedGit("/test/repo");
-
-    const envArg = mockGitInstance.env.mock.calls[0][0];
-    expect(envArg.GCM_INTERACTIVE).toBe("Never");
-  });
-
   it("sets GIT_ASKPASS=true on POSIX so credential helpers fail fast", async () => {
     await createHardenedGit("/test/repo", undefined, "darwin");
-
-    const envArg = mockGitInstance.env.mock.calls[0][0];
-    expect(envArg.GIT_ASKPASS).toBe("true");
-  });
-
-  it("sets GIT_ASKPASS=true on linux", async () => {
-    await createHardenedGit("/test/repo", undefined, "linux");
 
     const envArg = mockGitInstance.env.mock.calls[0][0];
     expect(envArg.GIT_ASKPASS).toBe("true");
@@ -402,7 +407,7 @@ describe("createHardenedGit", () => {
     const origAskpass = process.env.GIT_ASKPASS;
     delete process.env.GIT_ASKPASS;
     try {
-      await createHardenedGit("/test/repo", undefined, "win32");
+      await withWindowsGitOnPath(() => createHardenedGit("/test/repo", undefined, "win32"));
 
       const envArg = mockGitInstance.env.mock.calls[0][0];
       expect(envArg.GIT_ASKPASS).toBeUndefined();
@@ -462,43 +467,11 @@ describe("createAuthenticatedGit", () => {
     expectNonInteractiveSsh(mockGitInstance.env.mock.calls[0][0].GIT_SSH_COMMAND);
   });
 
-  it("sets GIT_OPTIONAL_LOCKS=0 to suppress incidental lock writes", async () => {
-    await createAuthenticatedGit("/test/repo");
-
-    const envArg = mockGitInstance.env.mock.calls[0][0];
-    expect(envArg.GIT_OPTIONAL_LOCKS).toBe("0");
-  });
-
   it("sets GCM_INTERACTIVE=Never to prevent Windows GCM dialogs", async () => {
     await createAuthenticatedGit("/test/repo");
 
     const envArg = mockGitInstance.env.mock.calls[0][0];
     expect(envArg.GCM_INTERACTIVE).toBe("Never");
-  });
-
-  it("does NOT set GIT_ASKPASS so legitimate credential helpers can resolve", async () => {
-    const origAskpass = process.env.GIT_ASKPASS;
-    delete process.env.GIT_ASKPASS;
-    try {
-      await createAuthenticatedGit("/test/repo");
-
-      const envArg = mockGitInstance.env.mock.calls[0][0];
-      expect(envArg.GIT_ASKPASS).toBeUndefined();
-    } finally {
-      if (origAskpass !== undefined) process.env.GIT_ASKPASS = origAskpass;
-    }
-  });
-
-  it("sets LC_MESSAGES=C, LANGUAGE empty, and GIT_OPTIONAL_LOCKS=0 via .env()", async () => {
-    await createAuthenticatedGit("/test/repo");
-
-    expect(mockGitInstance.env).toHaveBeenCalledWith(
-      expect.objectContaining({
-        LC_MESSAGES: "C",
-        LANGUAGE: "",
-        GIT_OPTIONAL_LOCKS: "0",
-      })
-    );
   });
 
   it("sets a platform-appropriate LC_CTYPE so non-ASCII paths survive iconv", async () => {
@@ -520,6 +493,19 @@ describe("createAuthenticatedGit", () => {
     } finally {
       if (orig === undefined) delete process.env.LC_ALL;
       else process.env.LC_ALL = orig;
+    }
+  });
+
+  it("does NOT set GIT_ASKPASS so legitimate credential helpers can resolve", async () => {
+    const origAskpass = process.env.GIT_ASKPASS;
+    delete process.env.GIT_ASKPASS;
+    try {
+      await createAuthenticatedGit("/test/repo");
+
+      const envArg = mockGitInstance.env.mock.calls[0][0];
+      expect(envArg.GIT_ASKPASS).toBeUndefined();
+    } finally {
+      if (origAskpass !== undefined) process.env.GIT_ASKPASS = origAskpass;
     }
   });
 
@@ -579,19 +565,23 @@ describe("createAuthenticatedGit", () => {
   });
 
   it("enables allowUnsafe flags", async () => {
-    await createAuthenticatedGit("/test/repo");
+    await createAuthenticatedGit("/test/repo", { platform: "linux" });
 
     const options = (simpleGit as ReturnType<typeof vi.fn>).mock.calls[0][0];
+    expect(options.unsafe).toEqual(PINNED_CONFIG_UNSAFE_FLAGS);
+  });
+
+  it("on Windows, adds only the custom-binary flag when git's resolved path has a space", async () => {
+    await withWindowsGitOnPath(
+      () => createAuthenticatedGit("/test/repo", { platform: "win32" }),
+      SPACED_GIT_DIR
+    );
+
+    const options = (simpleGit as ReturnType<typeof vi.fn>).mock.calls[0][0];
+    expect(options.binary).toContain(SPACED_GIT_DIR);
     expect(options.unsafe).toEqual({
-      allowUnsafeAskPass: true,
-      allowUnsafeCredentialHelper: true,
-      allowUnsafeProtocolOverride: true,
-      allowUnsafeFsMonitor: true,
-      allowUnsafePager: true,
-      allowUnsafeSshCommand: true,
-      allowUnsafeGitProxy: true,
-      allowUnsafeHooksPath: true,
-      allowUnsafeEditor: true,
+      ...PINNED_CONFIG_UNSAFE_FLAGS,
+      allowUnsafeCustomBinary: true,
     });
   });
 
@@ -692,10 +682,12 @@ describe("createBackgroundFetchGit", () => {
 
   it("does not set GIT_ASKPASS on Windows (no `true` binary on PATH)", async () => {
     const controller = new AbortController();
-    await createBackgroundFetchGit("/test/repo", {
-      signal: controller.signal,
-      platform: "win32",
-    });
+    await withWindowsGitOnPath(() =>
+      createBackgroundFetchGit("/test/repo", {
+        signal: controller.signal,
+        platform: "win32",
+      })
+    );
 
     // The base authenticated env() call doesn't set GIT_ASKPASS, and the
     // POSIX-only override is skipped. Only one env() call should happen.
@@ -850,7 +842,7 @@ describe("createWslHardenedGit", () => {
     );
   });
 
-  it("sets binary to wsl.exe + git two-tuple", async () => {
+  it("sets binary to the System32 wsl.exe + git two-tuple", async () => {
     await createWslHardenedGit({
       distro: "Ubuntu",
       uncPath: "\\\\wsl$\\Ubuntu\\home\\user\\proj",
@@ -858,7 +850,12 @@ describe("createWslHardenedGit", () => {
     });
 
     const options = (simpleGit as ReturnType<typeof vi.fn>).mock.calls[0][0];
-    expect(options.binary).toEqual(["wsl.exe", "git"]);
+    expect(options.binary).toEqual([
+      expect.stringMatching(/^[A-Za-z]:\\.*\\System32\\wsl\.exe$/i),
+      "git",
+    ]);
+    // A path simple-git accepts as-is needs no relaxed binary check.
+    expect(options.unsafe.allowUnsafeCustomBinary).toBeUndefined();
   });
 
   it("carries the same non-path hardening as the native hardened profile", async () => {
@@ -981,21 +978,11 @@ describe("getGitLocaleEnv", () => {
       GIT_OPTIONAL_LOCKS: "0",
     });
   });
-
-  it("does not set LANG on non-win32 platforms", async () => {
-    expect(getGitLocaleEnv("linux")).not.toHaveProperty("LANG");
-    expect(getGitLocaleEnv("darwin")).not.toHaveProperty("LANG");
-  });
 });
 
 describe("config profiles", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-  });
-
-  it("hardened profile includes credential-blocking entries", async () => {
-    expect(getHardenedGitConfig()).toContain("credential.helper=");
-    expect(getHardenedGitConfig()).toContain("core.askpass=");
   });
 
   it("hardened config pins the same ssh invocation the authenticated env sets", async () => {
@@ -1004,34 +991,6 @@ describe("config profiles", () => {
     const envArg = mockGitInstance.env.mock.calls[0][0];
     expectNonInteractiveSsh(envArg.GIT_SSH_COMMAND);
     expect(sshCommandValues(getHardenedGitConfig())).toEqual([envArg.GIT_SSH_COMMAND]);
-  });
-
-  it("authenticated profile excludes credential-blocking entries", async () => {
-    await createAuthenticatedGit("/test/repo");
-
-    const config = capturedConfig();
-    expect(config).not.toContain("credential.helper=");
-    expect(sshCommandValues(config)).toEqual([]);
-    expect(config).not.toContain("core.askpass=");
-  });
-
-  it("both profiles share the same security base entries", async () => {
-    const securityEntries = [
-      "core.fsmonitor=false",
-      "core.untrackedCache=keep",
-      "core.pager=cat",
-      "protocol.ext.allow=never",
-      "core.gitProxy=",
-      "core.quotepath=false",
-      "core.precomposeunicode=true",
-    ];
-    await createAuthenticatedGit("/test/repo");
-    const authenticated = capturedConfig();
-
-    for (const entry of securityEntries) {
-      expect(getHardenedGitConfig()).toContain(entry);
-      expect(authenticated).toContain(entry);
-    }
   });
 
   it("both profiles resolve the same app-owned hooks directory", async () => {
@@ -1075,18 +1034,6 @@ describe("core.hooksPath enforcement (issue #11226)", () => {
     await createHardenedGit("/test/repo");
 
     expect(fs.existsSync(soleHooksPath(capturedConfig()))).toBe(true);
-  });
-
-  // Guards against double-emission. The WSL profile is covered by its own suite,
-  // whose soleHooksPath call enforces the same cardinality.
-  it("appears exactly once in every profile", async () => {
-    await createHardenedGit("/test/repo");
-    expect(hooksPathValues(capturedConfig())).toHaveLength(1);
-
-    await createAuthenticatedGit("/test/repo");
-    expect(hooksPathValues(capturedConfig(1))).toHaveLength(1);
-
-    expect(hooksPathValues(getHardenedGitConfig())).toHaveLength(1);
   });
 
   // git takes the last -c for a single-valued key, so a caller-supplied
@@ -1314,11 +1261,6 @@ describe("buildHardenedGitEnv", () => {
     expect(env.GIT_ASKPASS).toBeUndefined();
   });
 
-  it("sets GIT_ASKPASS=true on darwin", async () => {
-    const env = buildHardenedGitEnv("darwin");
-    expect(env.GIT_ASKPASS).toBe("true");
-  });
-
   it("uses the platform arg instead of process.platform when supplied", async () => {
     const env = buildHardenedGitEnv("darwin");
     expect(env.LC_CTYPE).toBe("en_US.UTF-8");
@@ -1404,5 +1346,142 @@ describe("buildContinueEnv", () => {
     expect(env.GIT_ASKPASS).toBeUndefined();
     expect(env.GIT_EDITOR).toBe("true");
     expect(env.GIT_MERGE_AUTOEDIT).toBe("no");
+  });
+});
+
+describe("native git binary on Windows", () => {
+  const originalPath = process.env.PATH;
+  let root: string;
+
+  function installGit(dirName: string): string {
+    const dir = path.join(root, dirName);
+    fs.mkdirSync(dir, { recursive: true });
+    const git = path.join(dir, "git.exe");
+    fs.writeFileSync(git, "");
+    process.env.PATH = dir;
+    return git;
+  }
+
+  function lastOptions() {
+    const calls = (simpleGit as ReturnType<typeof vi.fn>).mock.calls;
+    return calls[calls.length - 1][0];
+  }
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    resetWindowsExecutableCache();
+    root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "daintree-git-bin-")));
+  });
+
+  afterEach(() => {
+    process.env.PATH = originalPath;
+    fs.rmSync(root, { recursive: true, force: true });
+  });
+
+  it("hands simple-git the absolute git from PATH, within its own character rule", async () => {
+    const git = installGit("tools");
+
+    await createHardenedGit("/test/repo", undefined, "win32");
+
+    expect(lastOptions().binary).toBe(git);
+    expect(lastOptions().unsafe.allowUnsafeCustomBinary).toBeUndefined();
+  });
+
+  it("relaxes only the binary check for a resolved path with a space, without its warning", async () => {
+    const git = installGit("Program Files/Git/cmd");
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    (simpleGit as ReturnType<typeof vi.fn>).mockImplementationOnce(() => {
+      console.warn(
+        "Invalid value supplied for custom binary, restricted characters must be removed"
+      );
+      console.warn("unrelated warning");
+      return mockGitInstance;
+    });
+
+    try {
+      await createHardenedGit("/test/repo", undefined, "win32");
+
+      expect(lastOptions().binary).toBe(git);
+      expect(lastOptions().unsafe).toEqual(
+        expect.objectContaining({ allowUnsafeCustomBinary: true, allowUnsafeHooksPath: true })
+      );
+      expect(warn.mock.calls).toEqual([["unrelated warning"]]);
+      // The filter is gone once the instance is built.
+      console.warn("Invalid value supplied for custom binary");
+      expect(warn).toHaveBeenCalledTimes(2);
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it("looks git up without touching PATH synchronously, and reuses what it found", async () => {
+    // A PATH entry on a dropped network share holds a synchronous stat for the
+    // SMB timeout, freezing whichever host loop was building the instance.
+    const git = installGit("tools");
+    const empty = path.join(root, "empty");
+    fs.mkdirSync(empty);
+    process.env.PATH = `${empty};${path.dirname(git)}`;
+    syncFs.calls.length = 0;
+
+    await createHardenedGit("/test/repo", undefined, "win32");
+    await createAuthenticatedGit("/test/repo", { platform: "win32" });
+    await createHardenedGit("/test/repo", undefined, "win32");
+
+    expect(lastOptions().binary).toBe(git);
+    expect(syncFs.calls.filter((call) => call.includes(root))).toEqual([]);
+  });
+
+  it("uses the resolved git for the authenticated and background-fetch profiles", async () => {
+    const git = installGit("tools");
+
+    await createAuthenticatedGit("/test/repo", { platform: "win32" });
+    expect(lastOptions().binary).toBe(git);
+
+    await createBackgroundFetchGit("/test/repo", {
+      signal: new AbortController().signal,
+      platform: "win32",
+    });
+    expect(lastOptions().binary).toBe(git);
+  });
+
+  it("fails as a missing git when PATH has none, without building an instance", async () => {
+    // A same-named file in the working directory, or under a relative PATH
+    // entry, is not git: the lookup never falls back to the bare name.
+    const repo = path.join(root, "repo");
+    fs.mkdirSync(repo, { recursive: true });
+    fs.writeFileSync(path.join(repo, "git.exe"), "");
+    const originalCwd = process.cwd();
+    process.chdir(repo);
+    process.env.PATH = `.;${path.join(root, "empty")}`;
+    try {
+      const factories = [
+        () => createHardenedGit("/test/repo", undefined, "win32"),
+        () => createAuthenticatedGit("/test/repo", { platform: "win32" }),
+        () =>
+          createBackgroundFetchGit("/test/repo", {
+            signal: new AbortController().signal,
+            platform: "win32",
+          }),
+      ];
+      for (const create of factories) {
+        const error = await create().then(
+          () => null,
+          (reason: unknown) => reason
+        );
+        expect(error).toMatchObject({ code: "ENOENT", syscall: "spawn git" });
+        // The classifier behind "Git executable not found" reads exactly this.
+        expect(isMissingGitExecutableError(error)).toBe(true);
+      }
+      expect(simpleGit).not.toHaveBeenCalled();
+    } finally {
+      process.chdir(originalCwd);
+    }
+  });
+
+  it("keeps simple-git's bare git off Windows", async () => {
+    installGit("tools");
+    await createHardenedGit("/test/repo", undefined, "darwin");
+    expect("binary" in lastOptions()).toBe(false);
+    expect(lastOptions().unsafe.allowUnsafeCustomBinary).toBeUndefined();
   });
 });

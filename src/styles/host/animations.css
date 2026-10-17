@@ -1,0 +1,815 @@
+/* Daintree Tour click marker — one ring blooming from the mockup pointer's tip.
+ * Keyed remounts replay it; the scale is the signal, so reduced motion drops it. */
+@keyframes tour-click-ring {
+  0% {
+    opacity: 0.9;
+    transform: scale(0.3);
+  }
+  100% {
+    opacity: 0;
+    transform: scale(1.6);
+  }
+}
+
+.tour-click-ring {
+  animation: tour-click-ring 450ms ease-out 1 both;
+}
+
+/* Daintree Tour end card — the ring around Next drains over the auto-advance
+ * countdown. Its length is the countdown, so the duration comes from the
+ * component (--tour-countdown) rather than a shared tier. */
+@keyframes tour-countdown {
+  from {
+    stroke-dashoffset: 0;
+  }
+  to {
+    stroke-dashoffset: var(--tour-ring-length);
+  }
+}
+
+.tour-countdown-ring {
+  animation: tour-countdown var(--tour-countdown) linear 1 both;
+}
+
+/* Activity light pulse animation for very recent activity */
+@keyframes activity-pulse {
+  0%,
+  100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 0.78;
+    transform: scale(1.05);
+  }
+}
+
+.animate-activity-pulse {
+  animation: activity-pulse 1s ease-in-out infinite;
+  will-change: opacity, transform;
+}
+
+@keyframes checkbox-check-in {
+  from {
+    opacity: 0;
+    transform: scale(0.8);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+/* The indicator mounts with this class already on it and keeps it for the whole
+ * checked lifetime — unlike a one-shot flash, which is dropped on
+ * animationend. Hence `backwards` rather than `both`: it still pins the opening
+ * frame to `from` (no flash of an opaque checkmark before the animation runs),
+ * but releases the element on completion instead of parking a permanent
+ * scale(1) effect on it. For the same reason there is no will-change — the hint
+ * would outlive the 150ms it could help. */
+.animate-checkbox-check {
+  animation: checkbox-check-in var(--duration-150) var(--ease-out-expo) 1 backwards;
+}
+
+/* Organic breathing animation for waiting/loading states
+ * Uses scale + opacity for a more premium feel with asymmetric timing.
+ * Matches the 2s timing of other pulse animations.
+ */
+@keyframes breathe {
+  0%,
+  100% {
+    transform: scale(1);
+    opacity: 1;
+  }
+  45% {
+    transform: scale(1.05);
+    opacity: 0.9;
+  }
+  55% {
+    transform: scale(1.05);
+    opacity: 0.9;
+  }
+}
+
+.animate-breathe {
+  animation: breathe 2s ease-in-out infinite;
+  will-change: transform, opacity;
+}
+
+/* The working glyph: a 270deg arc with round caps, gap from 3:00 to 6:00.
+ * Proportions are SpinnerCircle's old 16-unit svg (r=6, stroke 1.333), in
+ * percentages so any square w-/h- size works. An HTML box so its spin composites.
+ * The shape is all mask and the colour is painted once: layered backgrounds
+ * would stack where the caps meet the arc and darken a translucent tone. */
+.spinner-circle {
+  /* What preflight gives the <svg> this replaced, so it lays out the same. */
+  display: block;
+  vertical-align: middle;
+  background: currentColor;
+  /* caps + (arc within ring): the caps already sit inside the ring's band. */
+  mask:
+    radial-gradient(ellipse 4.167% 4.167% at 50% 87.5%, #000 92%, transparent 100%),
+    radial-gradient(ellipse 4.167% 4.167% at 87.5% 50%, #000 92%, transparent 100%),
+    conic-gradient(from 180deg, #000 270deg, transparent 0),
+    radial-gradient(
+      closest-side,
+      transparent calc(66.67% - 0.25px),
+      #000 calc(66.67% + 0.25px),
+      #000 calc(83.33% - 0.25px),
+      transparent calc(83.33% + 0.25px)
+    );
+  mask-composite: add, add, intersect, add;
+}
+
+/* Slower spinner to reduce "chaos" in dense panel grids */
+@keyframes spin-slow {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.animate-spin-slow {
+  /* Shared phase is set by usePowerSavingMotion, including newly mounted icons.
+   * Stepped so the glyph changes about seventeen times a second, not at display
+   * rate: a composited transform that holds its value across vsyncs leaves the
+   * damage rect empty, so cc aborts the draw and no frame is swapped. The
+   * compositor still wakes every vsync either way, which is what a step rate
+   * cannot buy back — so the rate is set by the eye, at 9 degrees a step. Apply
+   * it to HTML boxes only: Chromium keeps a transform animation whose target is
+   * an <svg> on the main thread (see SpinnerCircle). */
+  animation: spin-slow 2.4s steps(40, end) infinite;
+  transform-origin: center;
+  will-change: transform;
+}
+
+/* An empty bucket's glyph in the quick state filters (sidebar and Pilot).
+ * Faded "slightly — it should still be clearly visible" (#10353): the glyph is
+ * the segment's only visible name, so it has to hold 3:1 against the bar at
+ * rest, hovered and selected, while still reading as quieter than a populated
+ * one. Opacity rather than a slash-alpha colour so one rule covers every hue.
+ * Increase Contrast and forced colors reset it in their own blocks below. */
+.quick-state-glyph-empty {
+  opacity: 0.8;
+}
+
+/* Skeleton bone motion: a one-shot reveal, then a continuous pulse.
+ *
+ * They are two animations on purpose. The gate used to live inside the pulse's
+ * own keyframes (`0% { opacity: 0 }` then `0.1% { opacity: 1 }`), so every 2s
+ * iteration restarted from that invisible frame and each bone blinked out once a
+ * cycle. The reveal runs once, after the anti-flicker gate, filling backwards so
+ * the bone is hidden while the gate runs (prevents a flash of loading state for
+ * sub-400ms operations); the pulse starts where the reveal ends, at full
+ * opacity, and never drops below its floor. */
+@keyframes skeleton-reveal {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes skeleton-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  /* The floor is a visibility budget, not a style choice: at the trough a bone
+   * is 70% of its 10% tint, the faintest it ever gets, and that still has to
+   * read on the palest surface of the lightest theme and the darkest sidebar. */
+  50% {
+    opacity: 0.7;
+  }
+}
+
+.animate-pulse-delayed {
+  animation-name: skeleton-reveal, skeleton-pulse;
+  animation-duration: 200ms, 2s;
+  animation-timing-function: ease-out, cubic-bezier(0.4, 0, 0.6, 1);
+  animation-delay: var(--anti-flicker-delay), calc(var(--anti-flicker-delay) + 200ms);
+  animation-iteration-count: 1, infinite;
+  animation-fill-mode: backwards, none;
+  will-change: opacity;
+}
+
+.animate-pulse-immediate {
+  animation: skeleton-pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+  will-change: opacity;
+}
+
+/* Stale-dim for surfaces during a deferred refresh or filter pass. Two flavors:
+ *
+ * `.palette-results-stale` — palette listbox driven by `useSearchablePalette`'s
+ * `isStale` flag. Typed-input feedback, so it uses the shorter 200ms
+ * `--anti-flicker-delay-palette` gate (keystrokes arrive every ~200ms; a 400ms
+ * gate almost never fires). Opacity floor is 0.6 — less aggressive than the
+ * discrete-action 0.5 so the text stays legible while users keep typing or
+ * arrow-key through results.
+ *
+ * `.surface-stale` — generic discrete-action stale alias used by larger
+ * surfaces (e.g., the Review and Commit modal during a background `git status`
+ * refresh). Stays on the 400ms `--anti-flicker-delay` Doherty gate at 0.5
+ * opacity because the trigger is a background refresh, not live typing.
+ *
+ * Both tokens live in `:root` above. Their JS counterparts (UI_PALETTE_STALE_DELAY,
+ * UI_DOHERTY_THRESHOLD) are in src/lib/animationUtils.ts and parity is
+ * enforced by the drift-contract test in animationUtils.test.ts. */
+.palette-results-stale {
+  opacity: 0.6;
+  transition: opacity 150ms ease-out var(--anti-flicker-delay-palette);
+}
+
+.surface-stale {
+  opacity: 0.5;
+  transition: opacity 150ms ease-out var(--anti-flicker-delay);
+}
+
+/* Opt-in shimmer sweep for skeleton bones. Layered on top of the opacity pulse;
+ * the ::after pseudo-element rides a translateX so the work stays on the
+ * compositor (transform > background-position for GPU cost — see #4738).
+ * Bundles position: relative + overflow: hidden so callers don't need to add
+ * them separately.
+ */
+@keyframes skeleton-shimmer {
+  0% {
+    transform: translateX(-100%);
+  }
+  100% {
+    transform: translateX(100%);
+  }
+}
+
+.animate-skeleton-shimmer {
+  position: relative;
+  overflow: hidden;
+}
+
+.animate-skeleton-shimmer::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(
+    90deg,
+    transparent 0%,
+    color-mix(in oklab, var(--color-text-primary) 8%, transparent) 50%,
+    transparent 100%
+  );
+  animation: skeleton-shimmer 1.8s ease-in-out infinite;
+  will-change: transform;
+}
+
+/* Companion to long-running skeletons. SkeletonHint renders this class on the
+ * copy each time it escalates, and on a recovery button as it surfaces, so new
+ * content fades in rather than snapping. The 200ms entry tier. Opacity-only — no
+ * spatial motion — so reduced-motion bypasses just need to skip past the entry
+ * frame to opacity: 1.
+ */
+@keyframes hint-fade-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+.animate-hint-fade-in {
+  opacity: 0;
+  animation: hint-fade-in var(--duration-200) ease-out forwards;
+  will-change: opacity;
+}
+
+/* Badge bump animation - for count/state changes */
+@keyframes badge-bump {
+  0% {
+    transform: scale(1);
+  }
+  35% {
+    transform: scale(1.06);
+  }
+  100% {
+    transform: scale(1);
+  }
+}
+
+.animate-badge-bump {
+  animation: badge-bump var(--terminal-select-duration, 200ms) var(--ease-out-expo) both;
+  will-change: transform;
+}
+
+/* Action-row success bump — tuned 3% peak for row-sized elements
+ * (the 6% in badge-bump reads as aggressive on a wider container). */
+@keyframes action-row-bump {
+  0% {
+    transform: scale(1);
+  }
+  35% {
+    transform: scale(1.03);
+  }
+  100% {
+    transform: scale(1);
+  }
+}
+
+.animate-action-row-bump {
+  animation: action-row-bump 200ms var(--ease-out-expo) both;
+  will-change: transform;
+}
+
+/* Diagnostics badge state transition flash - one-shot, no looping */
+@keyframes diagnostics-state-flash {
+  0% {
+    opacity: 1;
+  }
+  40% {
+    opacity: 0.3;
+  }
+  100% {
+    opacity: 1;
+  }
+}
+
+.animate-diagnostics-flash {
+  animation: diagnostics-state-flash 200ms var(--ease-out-expo) both;
+}
+
+/* Upstream sync badge value-change flash — one-shot opacity dip when the
+ * displayed ahead/behind counts actually change, not while a poll is in flight.
+ * Issue #8872: fetch-in-flight pulse was firing on every poll cycle. */
+@keyframes upstream-badge-update-flash {
+  0% {
+    opacity: 1;
+  }
+  40% {
+    opacity: 0.4;
+  }
+  100% {
+    opacity: 1;
+  }
+}
+
+.animate-upstream-badge-flash {
+  animation: upstream-badge-update-flash 200ms var(--ease-out-expo) both;
+  will-change: opacity;
+}
+
+/* Activity blip animation - for new activity signals */
+@keyframes activity-blip {
+  0% {
+    transform: scale(1);
+    opacity: 0.9;
+  }
+  35% {
+    transform: scale(1.06);
+    opacity: 1;
+  }
+  100% {
+    transform: scale(1);
+    opacity: 0.9;
+  }
+}
+
+.animate-activity-blip {
+  animation: activity-blip 200ms var(--ease-out-expo) both;
+}
+
+/* Trash pulse animation - for trash icon when panels are added */
+@keyframes trash-pulse {
+  0% {
+    transform: scale(1);
+    opacity: 1;
+  }
+  30% {
+    transform: scale(1.06);
+    opacity: 0.85;
+  }
+  100% {
+    transform: scale(1);
+    opacity: 1;
+  }
+}
+
+.animate-trash-pulse {
+  animation: trash-pulse 200ms var(--ease-out-expo) both;
+}
+
+/* Trash TTL meter: the remaining-time bar on a recently-closed row. Its
+ * duration IS the signal — it is the twenty-second destruction window, not a
+ * transition between two UI states — so it is one of the semantic exceptions
+ * the shared motion tiers exempt. One animation drains the whole window, so
+ * the row's 1Hz re-render costs no extra paint.
+ *
+ * Deliberately NOT in the reduced-motion list below: that block also forces
+ * `transform: none`, which would snap every meter to full width and report
+ * twenty seconds left on a row with two. The element's inline `transform`
+ * already holds the current fraction, so `motion-reduce:animate-none` on the
+ * element leaves a correct bar that steps down once a second instead of
+ * sliding. */
+@keyframes trash-meter-drain {
+  from {
+    transform: scaleX(1);
+  }
+  to {
+    transform: scaleX(0);
+  }
+}
+
+/* Fixed duration, positioned by a negative delay.
+ *
+ * The first cut restated the duration as the row's *remaining* time on every
+ * tick, which is wrong: changing `animation-duration` does not restart an
+ * animation, it keeps the elapsed playback time. Ten seconds in, the duration
+ * became 10s against 10s already elapsed, so the bar hit empty while the label
+ * still read 10s left — the bar said "gone" on a pane with half its window to
+ * run. Holding the duration at the full TTL and seeking with
+ * `animation-delay: -elapsed` puts the bar at the right place by construction,
+ * and re-stating the delay each tick re-syncs rather than drifts. */
+.animate-trash-meter {
+  animation: trash-meter-drain var(--trash-meter-ttl) linear forwards;
+  animation-delay: var(--trash-meter-elapsed);
+}
+
+/* Its own override rather than a line in the shared list below, because that
+ * list also forces `transform: none` — which would snap every meter back to
+ * full width and report twenty seconds left on a row with two. Dropping only
+ * the animation leaves the element's inline `transform`, so the bar stays
+ * correct and steps down once a second instead of sliding. */
+@variant reduce-motion {
+  .animate-trash-meter {
+    animation: none;
+  }
+}
+
+/* Shortcut recorder chord window — drains along the field's bottom edge while
+ * the recorder waits for a second stroke. Its length is the chord window, so
+ * the duration comes from the component (--chord-window, CHORD_TIMEOUT_MS)
+ * rather than a shared tier, and it runs linear because the bar is a clock. */
+@keyframes chord-window-drain {
+  from {
+    transform: scaleX(1);
+  }
+  to {
+    transform: scaleX(0);
+  }
+}
+
+.animate-chord-window {
+  transform-origin: left;
+  animation: chord-window-drain var(--chord-window) linear forwards;
+}
+
+/* All-clear flash: subtle full-screen overlay when all agents complete */
+@keyframes all-clear-flash {
+  0% {
+    opacity: 0;
+  }
+  25% {
+    opacity: var(--all-clear-flash-peak);
+  }
+  100% {
+    opacity: 0;
+  }
+}
+
+/* The all-clear flash is the window's visual bell: an opt-in visual
+ * counterpart of the all-clear sound. It is a neutral luminance shift
+ * (`--theme-tint`: white on dark, black on light), never a status hue, because
+ * "no agent is still working" is not a success and may include agents waiting
+ * for input. The same alpha reads far louder as a dim on a light canvas than
+ * as a lift on a dark one, so the peak is set per polarity. Rest opacity is 0
+ * so a killed animation (performance mode) leaves nothing on screen. The
+ * duration comes from the component (ALL_CLEAR_FLASH_DURATION), never here. */
+:root {
+  --all-clear-flash-peak: 0.09;
+}
+
+.light {
+  --all-clear-flash-peak: 0.07;
+}
+
+.animate-all-clear-flash {
+  opacity: 0;
+  background-color: var(--theme-tint);
+  animation: all-clear-flash var(--all-clear-flash-duration) ease-out forwards;
+  will-change: opacity;
+}
+
+/* Label crossfade — used by AnimatedLabel for text/number swaps. Outgoing
+ * label fades out & lifts up; incoming rises in from below. Opacity +
+ * transform only (no filter): filter was the culprit — `will-change: filter`
+ * promotes the text to a composited layer even at rest, permanently disabling
+ * subpixel antialiasing and softening the glyphs. opacity/transform only
+ * promote transiently during the 150ms swap, not at rest.
+ * Container holds both spans in a CSS grid cell so width is the natural max
+ * of both labels and no layout shift occurs during the swap.
+ */
+@keyframes label-swap-out {
+  0% {
+    opacity: 1;
+    transform: translateY(0);
+  }
+  100% {
+    opacity: 0;
+    transform: translateY(-4px);
+  }
+}
+
+@keyframes label-swap-in {
+  0% {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  100% {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.animate-label-swap-out {
+  animation: label-swap-out var(--duration-150) var(--ease-out-expo) both;
+  will-change: opacity, transform;
+}
+
+.animate-label-swap-in {
+  animation: label-swap-in var(--duration-150) var(--ease-out-expo) both;
+  will-change: opacity, transform;
+}
+
+/* Card border accent flash — opacity-only sibling overlay so we never animate
+ * border-color (paint-bound). Compositor-friendly. Used to briefly highlight
+ * the card edge when an agent transitions between meaningful states.
+ */
+@keyframes border-flash {
+  0% {
+    opacity: 0;
+  }
+  35% {
+    opacity: 0.55;
+  }
+  100% {
+    opacity: 0;
+  }
+}
+
+.animate-border-flash {
+  animation: border-flash var(--duration-200) var(--ease-out-expo) 1 both;
+  will-change: opacity;
+}
+
+/* Card input-time receipt — opacity-only sibling overlay that fires the moment
+ * a row-level input lands (before any polled state change). 150ms ease-out
+ * matches the Tier 1 state-change tier so it reads as a precursor to the
+ * border-flash rather than a competing animation. The 10% peak is the MD3
+ * pressed state-layer level; using `currentColor` keeps it theme-neutral.
+ */
+@keyframes input-receipt-flash {
+  0% {
+    opacity: 0;
+  }
+  35% {
+    opacity: 0.1;
+  }
+  100% {
+    opacity: 0;
+  }
+}
+
+.animate-input-receipt-flash {
+  animation: input-receipt-flash var(--duration-150) ease-out 1 both;
+  will-change: opacity;
+}
+
+/* Figure-rail "just arrived" highlight — a one-shot ring that fades out as the
+ * newest thumbnail mounts (help.displayImage, #9829). Neutral, not accent: a
+ * figure can arrive while another thumbnail holds the accent keyboard-focus
+ * ring, and two accent signals in one focus region is exactly what the accent
+ * rule forbids. The 1200ms decay is the signal itself, so it sits outside the
+ * shared motion tiers. `forwards` settles to transparent, and the stable
+ * `key={imageId}` means it fires once per figure. The ring sits at 5px so it
+ * clears the rail's current-figure outline (offset 1px, 2px wide), which is what
+ * carries "current" once the pulse has gone. */
+@keyframes figure-arrive {
+  0% {
+    box-shadow: 0 0 0 5px var(--color-text-secondary);
+  }
+  100% {
+    box-shadow: 0 0 0 5px transparent;
+  }
+}
+
+.animate-figure-arrive {
+  animation: figure-arrive 1200ms var(--ease-out-expo) 1 forwards;
+  will-change: box-shadow;
+}
+
+/* Fleet broadcast bar refocus pulse — when the OS window regains focus and
+ * fleet is armed, breathe the bar's amber stripe so the user can re-orient
+ * to the active mode without searching for it. ~800ms total, opacity-only.
+ */
+@keyframes fleet-bar-refocus-pulse {
+  0% {
+    opacity: 1;
+  }
+  35% {
+    opacity: 0.45;
+  }
+  100% {
+    opacity: 1;
+  }
+}
+
+.animate-fleet-bar-refocus-pulse::before {
+  animation: fleet-bar-refocus-pulse 800ms var(--ease-out-expo) 1 both;
+  will-change: opacity;
+}
+
+/* Fleet broadcast commit flash — fired on every keystroke/paste that the
+ * fleet handler fans out. 100ms opacity dip on the bar's amber stripe so
+ * the input "thumps" visibly without flashing color.
+ */
+@keyframes fleet-bar-commit-flash {
+  0% {
+    opacity: 1;
+  }
+  40% {
+    opacity: 0.35;
+  }
+  100% {
+    opacity: 1;
+  }
+}
+
+.animate-fleet-bar-commit-flash::before {
+  animation: fleet-bar-commit-flash var(--duration-150) var(--ease-out-expo) 1 both;
+  will-change: opacity;
+}
+
+/* Fleet exit ring pulse — fired once on the panel that becomes the new
+ * primary when the user exits fleet mode. Painted on a dedicated overlay
+ * element so it doesn't fight the panel container's existing border-color
+ * transitions.
+ */
+@keyframes fleet-exit-pulse {
+  0% {
+    opacity: 0;
+  }
+  35% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 0;
+  }
+}
+
+.fleet-exit-pulse-overlay {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  border-radius: inherit;
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--theme-tint) 35%, transparent);
+  animation: fleet-exit-pulse var(--duration-200) var(--ease-out-expo) 1 both;
+  will-change: opacity;
+  z-index: 2;
+}
+
+/* Fleet preview enter cue — a one-shot tint flash on the title bar that
+ * fires when a pane enters the preview set. Distinguishes the transient
+ * hover-preview state from the durable multi-select state, which share
+ * neutral surface tints and would otherwise read identically. Kinetic-only
+ * cue: the static `bg-tint/[0.05]` tint persists; this overlay just
+ * announces the entry. Mounted on a span keyed by a per-pane generation
+ * counter so each false→true transition re-fires the animation cleanly
+ * without forced reflow.
+ */
+@keyframes fleet-preview-enter {
+  0% {
+    opacity: 0;
+  }
+  40% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 0;
+  }
+}
+
+.fleet-preview-enter-overlay {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  border-radius: inherit;
+  /* opacity: 0 rest state — the keyframe drives the pulse, and this keeps the
+   * overlay invisible when the animation is killed (data-performance-mode
+   * wildcard sets `animation: none`), avoiding a frozen static tint. */
+  opacity: 0;
+  background-color: color-mix(in srgb, var(--theme-tint) 20%, transparent);
+  animation: fleet-preview-enter 150ms var(--ease-out-expo) 1 both;
+  will-change: opacity;
+  z-index: 2;
+}
+
+/* FileChangeList row-recency cue — a transient left-edge gutter bar that
+ * acknowledges rows freshly arrived between renders. The 2000ms duration is a
+ * semantic exception to Tier 1 (150ms): the decay IS the "newness" signal,
+ * same category as ActivityLight 1000ms color fade. Hold the bar at full
+ * opacity for the first ~30% (so the eye can land), then decay to invisible
+ * over the remaining ~70%.
+ */
+@keyframes file-change-row-appear {
+  0% {
+    opacity: 1;
+  }
+  30% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 0;
+  }
+}
+
+.file-change-row-new {
+  position: relative;
+}
+
+.file-change-row-new::before {
+  content: "";
+  position: absolute;
+  left: -6px;
+  top: 0;
+  bottom: 0;
+  width: 2px;
+  background-color: var(--color-status-info);
+  border-radius: 1px;
+  animation: file-change-row-appear 2000ms ease-out 1 both;
+  /* No `will-change`: the bar rests invisible for as long as the row stays
+   * "new", and a standing hint kept one composited layer per row inside the
+   * list's scroller — layers that could paint outside it mid-scroll (#12828).
+   * The running opacity animation composites without the hint. */
+  pointer-events: none;
+}
+
+/* Anchored list that unrolls from its trigger (`OVERLAY_DROP_MOTION_CLASS`).
+ * The clip starts at the trigger edge and sweeps away from it, so the panel
+ * holds its full width from the first frame. It hugs the box while it moves:
+ * `shadow-overlay` spreads well past the panel, and a clip wide enough to keep
+ * it drew the moving edge as a hard line straight across that halo. Once the
+ * panel is fully out the clip opens past the shadow, which blooms in over the
+ * last fifth rather than popping when the clip is removed. */
+@keyframes overlay-drop-down {
+  0% {
+    opacity: 0;
+    clip-path: inset(0 0 100% 0);
+  }
+  40% {
+    opacity: 1;
+  }
+  80% {
+    clip-path: inset(0);
+  }
+  100% {
+    opacity: 1;
+    clip-path: inset(-8rem);
+  }
+}
+
+@keyframes overlay-drop-up {
+  0% {
+    opacity: 0;
+    clip-path: inset(100% 0 0 0);
+  }
+  40% {
+    opacity: 1;
+  }
+  80% {
+    clip-path: inset(0);
+  }
+  100% {
+    opacity: 1;
+    clip-path: inset(-8rem);
+  }
+}
+
+@keyframes overlay-fade-in {
+  from {
+    opacity: 0;
+  }
+}
+
+@keyframes overlay-fade-out {
+  to {
+    opacity: 0;
+  }
+}
+
+.overlay-motion-drop[data-state="open"] {
+  animation: overlay-drop-down var(--duration-200) var(--ease-spring-critical);
+}
+
+.overlay-motion-drop[data-state="open"][data-side="top"] {
+  animation-name: overlay-drop-up;
+}
+
+.overlay-motion-drop[data-state="closed"] {
+  animation: overlay-fade-out var(--duration-120) var(--ease-exit) forwards;
+}

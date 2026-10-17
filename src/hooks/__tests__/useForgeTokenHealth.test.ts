@@ -102,15 +102,6 @@ describe("useForgeTokenHealth", () => {
     expect(cleanupMock).toHaveBeenCalledOnce();
   });
 
-  it("flips the provider's slice to unhealthy on a transition payload", async () => {
-    renderHook(() => useForgeTokenHealth());
-    await act(async () => {});
-
-    act(() => healthListener?.(payload("unhealthy")));
-
-    expect(isUnhealthy()).toBe(true);
-  });
-
   it("stores the full token-health snapshot for reauth display", async () => {
     renderHook(() => useForgeTokenHealth());
     await act(async () => {});

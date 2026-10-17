@@ -46,7 +46,8 @@ const PROJECT_VISIBLE_MESSAGE =
  */
 export async function addProjectByPath(
   projectPath: string,
-  options?: ProjectAddOptions
+  options?: ProjectAddOptions,
+  internal?: { fresh?: boolean }
 ): Promise<Project> {
   if (typeof projectPath !== "string" || !projectPath) {
     throw new Error("Invalid project path");
@@ -64,6 +65,7 @@ export async function addProjectByPath(
     // doesn't have, and `addProject` alone decides that a repository was found.
     ...(options?.gitBacked === false ? { gitBacked: false } : {}),
     identity: normalizeCreationIdentity(options?.identity),
+    ...(internal?.fresh ? { fresh: true } : {}),
   });
   broadcastToRenderer(CHANNELS.PROJECT_UPDATED, project);
   return project;
@@ -189,7 +191,7 @@ export function registerProjectCrudCoreHandlers(deps: HandlerDependencies): () =
     const currentProject = projectStore.getCurrentProject();
 
     if (currentProject && deps.worktreeService) {
-      const senderWindow = getWindowForWebContents(ctx.event.sender);
+      const senderWindow = ctx.event && getWindowForWebContents(ctx.event.sender);
       const windowId = senderWindow?.id ?? deps.mainWindow?.id;
       try {
         if (windowId !== undefined) {
@@ -235,6 +237,10 @@ export function registerProjectCrudCoreHandlers(deps: HandlerDependencies): () =
     // renderer that could set it would hand a row a resume promise the restore
     // never intends to keep, and the number is re-derived on the next save
     // anyway, so accepting it would only ever be a lie.
+    // `archivedAt` and `groupId` join them: they have their own channels
+    // (`project-groups:*`), which check the group exists and stamp the archive
+    // time on the host's clock. A generic update could file a project under a
+    // group that was never created.
     const {
       id: _id,
       path: _path,
@@ -243,6 +249,8 @@ export function registerProjectCrudCoreHandlers(deps: HandlerDependencies): () =
       lastAccessedAt: _lat,
       gitBacked: _gitBacked,
       resumableAgentCount: _rac,
+      archivedAt: _archivedAt,
+      groupId: _groupId,
       ...safeUpdates
     } = updates;
     const updated = projectStore.updateProject(projectId, safeUpdates);
@@ -276,7 +284,7 @@ export function registerProjectCrudCoreHandlers(deps: HandlerDependencies): () =
   handlers.push(typedHandle(CHANNELS.PROJECT_UPDATE, handleProjectUpdate));
 
   const handleProjectOpenDialog = async (ctx: import("../../types.js").IpcContext) => {
-    const senderWindow = getWindowForWebContents(ctx.event.sender);
+    const senderWindow = ctx.event && getWindowForWebContents(ctx.event.sender);
     const dialogOpts = {
       properties: ["openDirectory" as const, "createDirectory" as const],
       // Not "Open Git Repository": a folder without one is now openable too,
@@ -478,7 +486,7 @@ export function registerProjectCrudCoreHandlers(deps: HandlerDependencies): () =
       throw new Error(`Project not found: ${projectId}`);
     }
 
-    const senderWindow = getWindowForWebContents(ctx.event.sender);
+    const senderWindow = ctx.event && getWindowForWebContents(ctx.event.sender);
     const openOpts: Electron.OpenDialogOptions = {
       title: `Locate "${project.name}"`,
       properties: ["openDirectory"],

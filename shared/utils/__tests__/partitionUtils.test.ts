@@ -5,6 +5,7 @@ import {
   isDevPreviewPartition,
   buildBrowserPartition,
   isBrowserPartition,
+  partitionProjectKey,
 } from "../partitionUtils.js";
 
 describe("sanitizePartitionToken", () => {
@@ -99,10 +100,6 @@ describe("buildBrowserPartition", () => {
     expect(buildBrowserPartition(undefined)).toBe("persist:browser-default");
     expect(buildBrowserPartition("")).toBe("persist:browser-default");
   });
-
-  it("always produces a scoped partition, never the legacy bare string", () => {
-    expect(buildBrowserPartition(undefined)).not.toBe("persist:browser");
-  });
 });
 
 describe("isBrowserPartition", () => {
@@ -130,5 +127,38 @@ describe("isBrowserPartition", () => {
   it("rejects non-string values", () => {
     expect(isBrowserPartition(undefined)).toBe(false);
     expect(isBrowserPartition(123)).toBe(false);
+  });
+});
+
+describe("partitionProjectKey", () => {
+  it("keeps a local window's partitions as they were", () => {
+    expect(partitionProjectKey("proj-1", null)).toBe("proj-1");
+    expect(buildBrowserPartition(partitionProjectKey("proj-1", undefined))).toBe(
+      "persist:browser-proj-1"
+    );
+  });
+
+  it("gives a host's project its own partitions, even when it claims a local project's id", () => {
+    const local = buildBrowserPartition(partitionProjectKey("proj-1", null));
+    const remote = buildBrowserPartition(partitionProjectKey("proj-1", "studio"));
+    expect(remote).not.toBe(local);
+    expect(isBrowserPartition(remote)).toBe(true);
+    const preview = buildDevPreviewPartition(partitionProjectKey("proj-1", "studio"), "main", "p1");
+    expect(isDevPreviewPartition(preview)).toBe(true);
+    expect(preview).not.toBe(buildDevPreviewPartition("proj-1", "main", "p1"));
+  });
+
+  it("never gives two hosts, or two of a host's projects, the same partition", () => {
+    const keys = [
+      ["studio.a", "p"],
+      ["studio-a", "p"],
+      ["Studio-A", "p"],
+      ["a", "41_x"],
+      ["aA", "x"],
+      ["a_", "b"],
+      ["a", "_b"],
+    ].map(([host, project]) => buildBrowserPartition(partitionProjectKey(project, host)));
+    expect(new Set(keys).size).toBe(keys.length);
+    for (const key of keys) expect(isBrowserPartition(key)).toBe(true);
   });
 });

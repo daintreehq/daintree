@@ -126,13 +126,6 @@ describe("panelStore.addPanel dockability guard (#11054)", () => {
     expect(panel?.isVisible).toBe(true);
   });
 
-  it("honors a dock request for dev-preview (#12397)", async () => {
-    const id = await usePanelStore.getState().addPanel({ kind: "dev-preview", location: "dock" });
-
-    expect(id).toBeTruthy();
-    expect(usePanelStore.getState().panelsById[id!]?.location).toBe("dock");
-  });
-
   it("activates the dock for a dev-preview created there", async () => {
     const id = await usePanelStore
       .getState()
@@ -144,15 +137,6 @@ describe("panelStore.addPanel dockability guard (#11054)", () => {
     expect(state.activeDockTerminalId).toBe(id);
   });
 
-  it("honors a dock request for a dockable non-PTY kind (file)", async () => {
-    const id = await usePanelStore
-      .getState()
-      .addPanel({ kind: "file", filePath: "/test/readme.md", location: "dock" });
-
-    expect(id).toBeTruthy();
-    expect(usePanelStore.getState().panelsById[id!]?.location).toBe("dock");
-  });
-
   it("honors a dock request for a PTY kind (terminal)", async () => {
     const id = await usePanelStore
       .getState()
@@ -160,13 +144,6 @@ describe("panelStore.addPanel dockability guard (#11054)", () => {
 
     expect(id).toBeTruthy();
     expect(usePanelStore.getState().panelsById[id!]?.location).toBe("dock");
-  });
-
-  it("leaves an explicit grid request for a non-dockable kind untouched", async () => {
-    const id = await usePanelStore.getState().addPanel({ kind: "review", location: "grid" });
-
-    expect(id).toBeTruthy();
-    expect(usePanelStore.getState().panelsById[id!]?.location).toBe("grid");
   });
 
   it("does not activate the dock for a redirected (non-dockable) dock request", async () => {

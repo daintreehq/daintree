@@ -7,9 +7,16 @@ import path from "node:path";
 // resolves as `{stdout, stderr}` only because Node's real execFile carries a
 // hidden `customPromisifyArgs` symbol, so the mock has to install a
 // `promisify.custom` implementation rather than a plain callback stub.
-const { mockExecFileAsync, mockSpawnSync } = vi.hoisted(() => ({
+const { mockExecFileAsync, mockSpawnSync, mockTreeKill } = vi.hoisted(() => ({
   mockExecFileAsync: vi.fn(),
   mockSpawnSync: vi.fn(),
+  mockTreeKill: vi.fn(),
+}));
+
+// The Windows tree kill reaps a crashed host's verified entries; it runs its
+// own census, so it is stubbed whole rather than through child_process.
+vi.mock("../../utils/windowsTreeKill.js", () => ({
+  killWindowsProcessTrees: (...args: unknown[]) => mockTreeKill(...args) as unknown,
 }));
 
 vi.mock("node:child_process", async () => {
@@ -323,23 +330,6 @@ describe("TerminalLineageLedger", () => {
       expect(pids).not.toContain(400);
     });
 
-    it("drops a closing root once every tracked PID is gone", async () => {
-      const ledger = new TerminalLineageLedger(null);
-      const census = new FakeCensus([
-        { pid: 100, ppid: 10 },
-        { pid: 200, ppid: 100 },
-      ]);
-      ledger.registerRoot(100);
-      ledger.reconcile(census);
-      await flush();
-
-      ledger.markRootClosing(100);
-      census.set([]);
-      ledger.reconcile(census);
-
-      expect(ledger.hasRoots()).toBe(false);
-    });
-
     it("does not let a recycled root PID inherit the previous lineage", async () => {
       const ledger = new TerminalLineageLedger(null);
       const census = new FakeCensus([
@@ -452,6 +442,81 @@ describe("TerminalLineageLedger", () => {
 
       expect(ledger.getTrackedCount()).toBe(0);
       expect(ledger.hasRoots()).toBe(false);
+    });
+  });
+
+  describe("root identity", () => {
+    const originalPlatform = Object.getOwnPropertyDescriptor(process, "platform")!;
+    // Registered at 08:00:01Z; the shell was created just before.
+    const REGISTERED_AT = new Date("2026-10-12T08:00:01.000Z");
+    const ORIGIN = { kind: "terminal" as const, id: "t1" };
+
+    function registeredLedger() {
+      vi.useFakeTimers({ toFake: ["Date"] });
+      vi.setSystemTime(REGISTERED_AT);
+      const ledger = new TerminalLineageLedger(null);
+      const listener = vi.fn();
+      ledger.setRootIdentityListener(listener);
+      ledger.registerRoot(100, ORIGIN);
+      return { ledger, listener };
+    }
+
+    beforeEach(() => {
+      Object.defineProperty(process, "platform", { value: "win32", configurable: true });
+    });
+
+    afterEach(() => {
+      Object.defineProperty(process, "platform", originalPlatform);
+      vi.useRealTimers();
+    });
+
+    it("keeps the root's creation time from the first census that lists it, and reports it once", () => {
+      const { ledger, listener } = registeredLedger();
+      const start = "2026-10-12T10:00:00.5000000+02:00";
+      const census = new FakeCensus([{ pid: 100, ppid: 10, startTime: start }]);
+
+      ledger.reconcile(census);
+      ledger.reconcile(census);
+
+      expect(ledger.getRootStartTime(100)).toBe(start);
+      expect(listener).toHaveBeenCalledTimes(1);
+      expect(listener).toHaveBeenCalledWith(100, start, ORIGIN);
+    });
+
+    it.each([
+      ["created after the root registered: the PID changed hands", "2026-10-12T08:00:05.0000000Z"],
+      ["created long before: the PID's previous holder", "2026-10-12T07:59:00.0000000Z"],
+    ])("refuses a process %s", (_label, start) => {
+      const { ledger, listener } = registeredLedger();
+
+      ledger.reconcile(new FakeCensus([{ pid: 100, ppid: 10, startTime: start }]));
+
+      expect(ledger.getRootStartTime(100)).toBeUndefined();
+      expect(listener).not.toHaveBeenCalled();
+    });
+
+    it("takes the creation time from a later sighting when the first carried none", () => {
+      const { ledger, listener } = registeredLedger();
+      const start = "2026-10-12T10:00:00.5000000+02:00";
+
+      ledger.reconcile(new FakeCensus([{ pid: 100, ppid: 10 }]));
+      expect(ledger.getRootStartTime(100)).toBeUndefined();
+      ledger.reconcile(new FakeCensus([{ pid: 100, ppid: 10, startTime: start }]));
+
+      expect(ledger.getRootStartTime(100)).toBe(start);
+      expect(listener).toHaveBeenCalledTimes(1);
+    });
+
+    it("records none off Windows", () => {
+      Object.defineProperty(process, "platform", { value: "linux", configurable: true });
+      const { ledger, listener } = registeredLedger();
+
+      ledger.reconcile(
+        new FakeCensus([{ pid: 100, ppid: 10, startTime: "2026-10-12T08:00:00.5000000Z" }])
+      );
+
+      expect(ledger.getRootStartTime(100)).toBeUndefined();
+      expect(listener).not.toHaveBeenCalled();
     });
   });
 
@@ -1043,6 +1108,7 @@ describe("TerminalLineageLedger", () => {
         expect.anything(),
         expect.anything()
       );
+      expect(mockTreeKill).not.toHaveBeenCalled();
     });
 
     it("never signals a recorded PID now held under another start time", async () => {
@@ -1057,6 +1123,62 @@ describe("TerminalLineageLedger", () => {
         expect.anything(),
         expect.anything()
       );
+      expect(mockTreeKill).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("reapLineageEntries on Windows", () => {
+    const original = Object.getOwnPropertyDescriptor(process, "platform")!;
+    const OTHER_PID = (() => {
+      let pid = ORPHAN_PID + 1;
+      while (pid === process.pid || pid === process.ppid) pid += 1;
+      return pid;
+    })();
+    const created = (pid: number) => `2026-01-01T00:00:0${pid % 10}.0000000+00:00`;
+    let killSpy: ReturnType<typeof vi.spyOn>;
+
+    beforeEach(() => {
+      Object.defineProperty(process, "platform", { value: "win32", configurable: true });
+      killSpy = vi.spyOn(process, "kill").mockImplementation(() => true);
+    });
+
+    afterEach(() => {
+      Object.defineProperty(process, "platform", original);
+    });
+
+    it("ends every confirmed entry in one verified run, identity attached, never by taskkill", async () => {
+      const live = new Set([ORPHAN_PID, OTHER_PID]);
+      mockExecFileAsync.mockImplementation(async (_file: string, args: string[]) => {
+        const script = args[args.length - 1];
+        const listed = [...script.matchAll(/ProcessId=(\d+)/g)]
+          .map((m) => Number(m[1]))
+          .filter((pid) => live.has(pid));
+        return { stdout: listed.map((pid) => `${pid} ${created(pid)}`).join("\r\n"), stderr: "" };
+      });
+      mockTreeKill.mockImplementation(async (targets: Array<{ pid: number }>) => {
+        for (const target of targets) live.delete(target.pid);
+        return [];
+      });
+      const entries = [ORPHAN_PID, OTHER_PID].map((pid) => ({
+        pid,
+        startTime: created(pid),
+        rootPid: 100,
+      }));
+
+      const outcome = await reapLineageEntries(entries, { windowsTree: false });
+
+      expect(mockTreeKill).toHaveBeenCalledTimes(1);
+      expect(mockTreeKill).toHaveBeenCalledWith(
+        entries.map(({ pid, startTime }) => ({ pid, startTime, tree: false })),
+        { timeoutMs: 3000 }
+      );
+      expect(mockExecFileAsync).not.toHaveBeenCalledWith(
+        "taskkill",
+        expect.anything(),
+        expect.anything()
+      );
+      expect(killSpy).not.toHaveBeenCalled();
+      expect(outcome).toMatchObject({ found: 2, ended: 2, stillRunning: 0, survivors: [] });
     });
   });
 
@@ -1116,6 +1238,10 @@ describe("TerminalLineageLedger", () => {
         if (signal === "SIGKILL") killed.add(pid);
         return true;
       }) as typeof process.kill);
+      mockTreeKill.mockImplementation(async (targets: Array<{ pid: number }>) => {
+        for (const target of targets) killed.add(target.pid);
+        return [];
+      });
       mockExecFileAsync.mockImplementation(async (file: string, args: string[]) => {
         if (file === "taskkill") {
           killed.add(Number(args[args.length - 1]));
@@ -1162,10 +1288,9 @@ describe("TerminalLineageLedger", () => {
       await reapPersistedLineages(tmpDir);
 
       if (isWindows) {
-        expect(mockExecFileAsync).toHaveBeenCalledWith(
-          "taskkill",
-          ["/T", "/F", "/PID", String(ORPHAN_PID)],
-          expect.anything()
+        expect(mockTreeKill).toHaveBeenCalledWith(
+          [{ pid: ORPHAN_PID, startTime: startTimeFor(ORPHAN_PID), tree: true }],
+          { timeoutMs: 3000 }
         );
       } else {
         expect(killSpy).toHaveBeenCalledWith(ORPHAN_PID, "SIGTERM");
@@ -1195,10 +1320,9 @@ describe("TerminalLineageLedger", () => {
       await reapClaimedLineageFile(claimed!);
 
       if (isWindows) {
-        expect(mockExecFileAsync).toHaveBeenCalledWith(
-          "taskkill",
-          ["/T", "/F", "/PID", String(ORPHAN_PID)],
-          expect.anything()
+        expect(mockTreeKill).toHaveBeenCalledWith(
+          [{ pid: ORPHAN_PID, startTime: startTimeFor(ORPHAN_PID), tree: true }],
+          { timeoutMs: 3000 }
         );
       } else {
         expect(killSpy).toHaveBeenCalledWith(ORPHAN_PID, "SIGTERM");
@@ -1218,6 +1342,7 @@ describe("TerminalLineageLedger", () => {
         expect.anything(),
         expect.anything()
       );
+      expect(mockTreeKill).not.toHaveBeenCalled();
       expect(fs.existsSync(filePath)).toBe(false);
     });
 
@@ -1234,6 +1359,7 @@ describe("TerminalLineageLedger", () => {
         expect.anything(),
         expect.anything()
       );
+      expect(mockTreeKill).not.toHaveBeenCalled();
       expect(fs.existsSync(filePath)).toBe(false);
     });
 
@@ -1252,6 +1378,7 @@ describe("TerminalLineageLedger", () => {
         expect.anything(),
         expect.anything()
       );
+      expect(mockTreeKill).not.toHaveBeenCalled();
     });
 
     it("ignores a ledger written by a future schema version", async () => {

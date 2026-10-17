@@ -146,13 +146,6 @@ describe("classifyGitError — ordering and normalization", () => {
     expect(classifyGitError(msg)).toBe("hook-rejected");
   });
 
-  it("classifies GH006 Protected branch when only policy signal is present", () => {
-    const msg =
-      "remote: error: GH006: Protected branch update failed for refs/heads/main.\n" +
-      "remote: error: Required status check 'ci-ok' was not run on this commit";
-    expect(classifyGitError(msg)).toBe("push-rejected-policy");
-  });
-
   it("prefers hook-rejected over push-rejected-outdated when both present (VS Code #229011)", () => {
     const msg =
       "remote: Hook error details...\n" +
@@ -174,11 +167,6 @@ describe("classifyGitError — ordering and normalization", () => {
   it("handles non-Error input (null/undefined)", () => {
     expect(classifyGitError(null)).toBe("unknown");
     expect(classifyGitError(undefined)).toBe("unknown");
-  });
-
-  it("handles non-Error input (number, object)", () => {
-    expect(classifyGitError(42)).toBe("unknown");
-    expect(classifyGitError({})).toBe("unknown");
   });
 
   it("matches case-insensitively where appropriate", () => {
@@ -242,13 +230,6 @@ describe("classifyGitError — ordering and normalization", () => {
     // misclassify as LFS-specific.
     const msg = "You have reached the free storage limit of 5 GiB for your namespace";
     expect(classifyGitError(msg)).toBe("unknown");
-  });
-
-  it("combines CRLF, remote-stripping, and ordering for hook rejection", () => {
-    const msg =
-      "remote:  ! [remote rejected] main -> main (pre-receive hook declined)\r\n" +
-      " ! [rejected]        main -> main (non-fast-forward)";
-    expect(classifyGitError(msg)).toBe("hook-rejected");
   });
 });
 

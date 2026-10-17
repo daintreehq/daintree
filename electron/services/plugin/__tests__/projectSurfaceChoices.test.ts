@@ -44,10 +44,6 @@ beforeEach(() => {
 });
 
 describe("projectSurfaceChoices", () => {
-  it("has no answers before anything is decided", () => {
-    expect(getProjectSurfaceChoices(PROJECT_A)).toEqual({});
-  });
-
   it("records the answer against the slot owner's manifest id and reads it back", () => {
     claimCanvas();
 

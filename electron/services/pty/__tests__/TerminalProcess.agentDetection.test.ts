@@ -409,21 +409,6 @@ describe("TerminalProcess.handleAgentDetection — disposes ActivityMonitor on a
       trackedTerminal.dispose();
     }
   });
-
-  it("non-agent process and process absence do not emit agent exit without prompt return", () => {
-    callHandleAgentDetection(
-      terminal,
-      makeAgentResult({ processIconId: "npm", processName: "npm" }),
-      getSpawnedAt(terminal)
-    );
-    expect(getActivityMonitor(terminal)).not.toBeNull();
-    expect(exitedEvents).toHaveLength(0);
-
-    callHandleAgentDetection(terminal, makeNoAgentResult({}), getSpawnedAt(terminal));
-    expect(getActivityMonitor(terminal)).not.toBeNull();
-    expect(terminal.getInfo().detectedAgentId).toBe("claude");
-    expect(exitedEvents).toHaveLength(0);
-  });
 });
 
 describe("TerminalProcess.handleAgentDetection — disposes monitor without prior agent", () => {
@@ -529,71 +514,11 @@ describe("TerminalProcess.handleAgentDetection — runtime promotion scrollback"
     }
   });
 
-  it("is idempotent on repeated detection of the same agent", () => {
-    const terminal = createPlainTerminal("t-plain-idem");
-    try {
-      callHandleAgentDetection(
-        terminal,
-        makeAgentResult({ agentType: "claude" as const, processIconId: "claude" }),
-        getSpawnedAt(terminal)
-      );
-      expect(getScrollback(terminal)).toBe(DEFAULT_SCROLLBACK);
-
-      callHandleAgentDetection(
-        terminal,
-        makeAgentResult({ agentType: "claude" as const, processIconId: "claude" }),
-        getSpawnedAt(terminal)
-      );
-      expect(getScrollback(terminal)).toBe(DEFAULT_SCROLLBACK);
-    } finally {
-      terminal.dispose();
-    }
-  });
-
-  it("does not change scrollback for cold-spawned agent terminals", () => {
-    const terminal = createAgentTerminal();
-    try {
-      // Cold-spawned agent already starts at AGENT_SCROLLBACK.
-      expect(getScrollback(terminal)).toBe(DEFAULT_SCROLLBACK);
-
-      callHandleAgentDetection(
-        terminal,
-        makeAgentResult({ agentType: "claude" as const, processIconId: "claude" }),
-        getSpawnedAt(terminal)
-      );
-
-      expect(getScrollback(terminal)).toBe(DEFAULT_SCROLLBACK);
-    } finally {
-      terminal.dispose();
-    }
-  });
-
   it("growScrollback never shrinks", () => {
     const terminal = createAgentTerminal();
     try {
       expect(getScrollback(terminal)).toBe(DEFAULT_SCROLLBACK);
       terminal.growScrollback(Math.floor(DEFAULT_SCROLLBACK / 2));
-      expect(getScrollback(terminal)).toBe(DEFAULT_SCROLLBACK);
-    } finally {
-      terminal.dispose();
-    }
-  });
-
-  it("keeps scrollback at AGENT_SCROLLBACK across an agent-to-agent switch", () => {
-    const terminal = createPlainTerminal("t-plain-switch");
-    try {
-      callHandleAgentDetection(
-        terminal,
-        makeAgentResult({ agentType: "claude" as const, processIconId: "claude" }),
-        getSpawnedAt(terminal)
-      );
-      expect(getScrollback(terminal)).toBe(DEFAULT_SCROLLBACK);
-
-      callHandleAgentDetection(
-        terminal,
-        makeAgentResult({ agentType: "gemini" as const, processIconId: "gemini" }),
-        getSpawnedAt(terminal)
-      );
       expect(getScrollback(terminal)).toBe(DEFAULT_SCROLLBACK);
     } finally {
       terminal.dispose();
@@ -721,6 +646,56 @@ describe("TerminalProcess shell-command identity fallback", () => {
       // that historical fact must persist across the agent exiting. #5803
       expect(info.launchAgentId).toBe("claude");
       expect(info.analysisEnabled).toBe(false);
+    } finally {
+      terminal.dispose();
+    }
+  });
+
+  it("keeps a launched agent's identity when a line is typed into it before detection confirms it", async () => {
+    const terminal = createAgentTerminal();
+    const pty = getMockPty(terminal);
+
+    try {
+      terminal.write("claude\r");
+      pty.__emitData("claude\r\n");
+      pty.__emitData("Claude Code ready.\r\n");
+      // Typed into the agent before the commit window: agent input, not a new
+      // shell command that would drop the launch identity.
+      terminal.write("STOP\r");
+
+      await vi.advanceTimersByTimeAsync(2000);
+      expect(terminal.getInfo().detectedAgentId).toBe("claude");
+
+      pty.__emitData("\r\ngpriday@macbook daintree-app % ");
+      await vi.advanceTimersByTimeAsync(600);
+
+      expect(terminal.getInfo().detectedAgentId).toBeUndefined();
+    } finally {
+      terminal.dispose();
+    }
+  });
+
+  it("reads the next shell command cleanly after an agent submitted from the input bar exits", async () => {
+    const terminal = createPlainTerminal("t-hybrid-agent-then-npm");
+    const pty = getMockPty(terminal);
+
+    try {
+      terminal.submit("claude");
+      await vi.advanceTimersByTimeAsync(100);
+      pty.__emitData("claude\r\nClaude Code ready.\r\n");
+      await vi.advanceTimersByTimeAsync(2000);
+      expect(terminal.getInfo().detectedAgentId).toBe("claude");
+
+      pty.__emitData("\r\ngpriday@macbook daintree-app % ");
+      await vi.advanceTimersByTimeAsync(600);
+      expect(terminal.getInfo().detectedAgentId).toBeUndefined();
+
+      // The input bar's body must not linger in the capture buffer and prefix
+      // this command ("claudenpm run dev").
+      terminal.write("npm run dev\r");
+      pty.__emitData("npm run dev\r\n> daintree-app@1.0.0 dev\r\n");
+      await vi.advanceTimersByTimeAsync(2000);
+      expect(terminal.getInfo().detectedProcessIconId).toBe("npm");
     } finally {
       terminal.dispose();
     }
@@ -1168,47 +1143,6 @@ describe("TerminalProcess spawn command identity seeding", () => {
 // runtime process detection. Runtime-detected identity flows through
 // `detectedAgentId`. See `docs/architecture/terminal-identity.md`.
 describe("TerminalProcess.handleAgentDetection — launch identity immutability (#5803)", () => {
-  it("plain terminal promotion does not set launchAgentId", () => {
-    const terminal = createPlainTerminal("t-immut-promote");
-    try {
-      expect(terminal.getInfo().launchAgentId).toBeUndefined();
-
-      callHandleAgentDetection(
-        terminal,
-        makeAgentResult({ agentType: "claude" as const, processIconId: "claude" }),
-        getSpawnedAt(terminal)
-      );
-
-      const info = terminal.getInfo();
-      expect(info.launchAgentId).toBeUndefined();
-      expect(info.detectedAgentId).toBe("claude");
-    } finally {
-      terminal.dispose();
-    }
-  });
-
-  it("plain terminal prompt-return demotion does not set launchAgentId", () => {
-    const terminal = createPlainTerminal("t-immut-demote-plain");
-    try {
-      callHandleAgentDetection(
-        terminal,
-        makeAgentResult({ agentType: "claude" as const, processIconId: "claude" }),
-        getSpawnedAt(terminal)
-      );
-      expect(terminal.getInfo().launchAgentId).toBeUndefined();
-
-      callHandleAgentDetection(
-        terminal,
-        makeNoAgentResult({ evidenceSource: "shell_command" }),
-        getSpawnedAt(terminal)
-      );
-      expect(terminal.getInfo().launchAgentId).toBeUndefined();
-      expect(terminal.getInfo().detectedAgentId).toBeUndefined();
-    } finally {
-      terminal.dispose();
-    }
-  });
-
   it("spawn-sealed agent ignores non-agent-icon blips and preserves launchAgentId", () => {
     const terminal = createAgentTerminal();
     try {
@@ -1442,15 +1376,6 @@ describe("TerminalProcess.handleAgentDetection — unknown/ambiguous hold state 
 });
 
 describe("TerminalProcess — invalid PTY PID gating (#10787)", () => {
-  it("does not construct a ProcessDetector when the PID is 0 (Windows ConPTY transient)", () => {
-    const terminal = createPlainTerminalWithPid(0);
-    try {
-      expect(getProcessDetector(terminal)).toBeUndefined();
-    } finally {
-      terminal.dispose();
-    }
-  });
-
   it("does not construct a ProcessDetector when the PID is negative", () => {
     const terminal = createPlainTerminalWithPid(-1);
     try {

@@ -1,4 +1,5 @@
 // eager-import-allow: reads portable config via store.get synchronously while building a bundle
+import { createHash } from "node:crypto";
 import { store } from "../store.js";
 import { projectStore } from "./ProjectStore.js";
 import {
@@ -10,8 +11,19 @@ import { getAllowedSoundFiles } from "./getSoundService.js";
 import { appCustomSchemesWriteSchema } from "../schemas/customSchemes.js";
 import { sanitizeNotificationSettingsPatch } from "../utils/notificationSettingsPatch.js";
 import { formatErrorMessage } from "../../shared/utils/errorMessage.js";
-import { UserAgentConfigSchema } from "../../shared/types/index.js";
-import { getEffectiveAgentConfig } from "../../shared/config/agentRegistry.js";
+import { SAFE_AGENT_ID_PATTERN, UserAgentConfigSchema } from "../../shared/types/index.js";
+import {
+  getAgentPreset,
+  getEffectiveAgentConfig,
+  isBuiltInAgent,
+} from "../../shared/config/agentRegistry.js";
+import { isAgentInstalled } from "../../shared/utils/agentAvailability.js";
+import {
+  comboAsReadOn,
+  readShortcutOn,
+  shortcutPlatform,
+} from "../../shared/utils/keybindingPortability.js";
+import type { CliAvailability } from "../../shared/types/ipc/system.js";
 import { buildDefaultKeybindings } from "../../shared/config/defaultKeybindings.js";
 import { BUILT_IN_APP_SCHEMES } from "../../shared/theme/themes.js";
 import type { TerminalRecipe, UserAgentConfig } from "../../shared/types/index.js";
@@ -24,12 +36,62 @@ import {
   CONFIG_BUNDLE_SECTION_LABELS,
   type ConfigBundlePreviewChange,
   type ConfigBundlePreviewSection,
+  type ConfigBundlePreviewSkip,
   type ConfigBundleSectionId,
   type ConfigImportLeafResult,
   type ConfigImportReport,
   type ConfigImportSectionReport,
 } from "../../shared/types/configBundle.js";
 import type { ConfigBundleSections } from "../utils/configBundleIO.js";
+import { readAgentDefaults, restoreAgentDefaults, setAgentDefaults } from "./agentDefaults.js";
+import {
+  isStorableAssistantAgentId,
+  isStorableDefaultAgent,
+  type AgentDefaultsPatch,
+} from "../../shared/types/ipc/agentDefaults.js";
+import {
+  diffRecord,
+  displayScalar,
+  emptyCheck,
+  humanizeKey,
+  isRecord,
+  listLeafValue,
+  recordLeafValue,
+  sameValue,
+  skippedLeaf,
+  stableStringify,
+  unchangedLeaf,
+  withListLeaf,
+  withRecordLeaf,
+  type SectionCheck,
+  type SectionContext,
+  type SectionDiff,
+  type SectionHandler,
+  planUndo,
+  settleUndo,
+  storedMapUndo,
+  type UndoLeaf,
+  type UndoLeafResult,
+  type UndoPlan,
+} from "./configBundle/sectionKit.js";
+import {
+  customPresetIds,
+  mergeAgentEntry,
+  mergeEnv,
+  projectAgentEntry,
+  projectAgents,
+} from "./configBundle/agentSettingsMerge.js";
+import {
+  agentUpdateChecksSection,
+  assistantModelsSection,
+  globalEnvironmentSection,
+  hibernationSection,
+  idleBackgroundAutoCloseSection,
+  idleTerminalNotifySection,
+  permissionBypassSection,
+  pluginUpdateChecksSection,
+  sessionRestoreSection,
+} from "./configBundle/settingsSections.js";
 
 /**
  * Reads and writes the portable configuration sections behind Export/Import
@@ -48,10 +110,24 @@ import type { ConfigBundleSections } from "../utils/configBundleIO.js";
  *    Each `apply` re-reads through the section's own getter and compares against
  *    what was asked for. A resolved write proves nothing.
  *
- * The pre-import snapshot is the value returned by each section's `read()` —
- * the same function the exporter uses — so a section can never be applied
- * without being snapshotted first.
+ * The pre-import snapshot is the value returned by each section's `read()`, so
+ * a section can never be applied without being snapshotted first. What leaves
+ * the machine is that value passed through the section's `export()`, which
+ * keeps only the fields `shared/config/portableSettings.ts` lets travel: a
+ * snapshot restored from the exported projection would erase everything the
+ * projection left out.
  */
+
+/** The leaves one section's apply changed, in the shape an undo takes them back. */
+export interface CapturedSection {
+  section: ConfigBundleSectionId;
+  leaves: UndoLeaf[];
+}
+
+export interface UndoSectionResult {
+  section: ConfigBundleSectionId;
+  leaves: UndoLeafResult[];
+}
 
 export interface ConfigBundleServiceDeps {
   /** Rebuilds the application menu after keybinding overrides change. */
@@ -63,69 +139,16 @@ export interface ConfigBundleServiceDeps {
    * the real theme setters call this on every write.
    */
   refreshTitleBar: () => Promise<void>;
+  /** Which agent CLIs this machine has; null (or absent) before the first scan. */
+  availability?: () => CliAvailability | null;
+  /** Whether a custom agent's command resolves here. Assumed to when absent. */
+  commandAvailable?: (command: string) => Promise<boolean>;
+  /** The platform shortcuts are read for; this process's own by default. */
+  platform?: NodeJS.Platform;
 }
 
-interface SectionDiff {
-  add: string[];
-  update: string[];
-  unchanged: string[];
-}
-
-interface SectionHandler {
-  id: ConfigBundleSectionId;
-  /** Current portable value. Doubles as the exporter payload and the snapshot. */
-  read: () => Promise<unknown>;
-  /** Compare an incoming payload against the current value, per leaf. */
-  diff: (incoming: unknown, current: unknown) => SectionDiff;
-  /** Write + read back. Returns one result per requested leaf. */
-  apply: (incoming: unknown, current: unknown) => Promise<ConfigImportLeafResult[]>;
-  /** Put the snapshot back after a failed import. */
-  restore: (snapshot: unknown) => Promise<void>;
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return value !== null && typeof value === "object" && !Array.isArray(value);
-}
-
-/** Structural equality via canonical JSON — sufficient for config leaves. */
-function sameValue(a: unknown, b: unknown): boolean {
-  return stableStringify(a) === stableStringify(b);
-}
-
-function stableStringify(value: unknown): string {
-  if (value === undefined) return "undefined";
-  if (value === null || typeof value !== "object") return JSON.stringify(value) ?? "undefined";
-  if (Array.isArray(value)) return `[${value.map(stableStringify).join(",")}]`;
-  const entries = Object.entries(value as Record<string, unknown>)
-    .filter(([, v]) => v !== undefined)
-    .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
-  return `{${entries.map(([k, v]) => `${JSON.stringify(k)}:${stableStringify(v)}`).join(",")}}`;
-}
-
-/**
- * Diff a keyed record: present-here-only is an add, different is an update,
- * identical is unchanged. Keys only on the target are untouched and unreported —
- * import merges, it never deletes.
- */
-function diffRecord(incoming: unknown, current: unknown): SectionDiff {
-  const result: SectionDiff = { add: [], update: [], unchanged: [] };
-  if (!isRecord(incoming)) return result;
-  const currentRecord = isRecord(current) ? current : {};
-  for (const [key, value] of Object.entries(incoming)) {
-    if (!Object.prototype.hasOwnProperty.call(currentRecord, key)) result.add.push(key);
-    else if (sameValue(value, currentRecord[key])) result.unchanged.push(key);
-    else result.update.push(key);
-  }
-  return result;
-}
-
-function unchangedLeaf(key: string): ConfigImportLeafResult {
-  return { key, status: "unchanged" };
-}
-
-function skippedLeaf(key: string, reason: string): ConfigImportLeafResult {
-  return { key, status: "skipped", reason };
-}
+const PRESET_MISSING = "That preset isn't defined";
+const CLI_MISSING = "Its CLI isn't installed, so it can't be used until it is";
 
 /** "Keyboard shortcuts" → "keyboard shortcuts", for use mid-sentence. */
 function sectionName(id: ConfigBundleSectionId): string {
@@ -142,12 +165,17 @@ const THEME_FIELD_LABELS: Record<string, string> = {
   accentColorOverride: "Accent color",
 };
 
+const AGENT_DEFAULT_FIELD_LABELS: Record<string, string> = {
+  assistantAgentId: "Assistant agent",
+  defaultAgent: "Default agent",
+};
+
 const NOTIFICATION_FIELD_LABELS: Record<string, string> = {
   enabled: "Notifications",
-  completedEnabled: "Completed alerts",
+  completedEnabled: "Finished alerts",
   waitingEnabled: "Waiting alerts",
   soundEnabled: "Sounds",
-  completedSoundFile: "Completed sound",
+  completedSoundFile: "Finished sound",
   waitingSoundFile: "Waiting sound",
   escalationSoundFile: "Escalation sound",
   waitingEscalationEnabled: "Waiting escalation",
@@ -162,28 +190,6 @@ const NOTIFICATION_FIELD_LABELS: Record<string, string> = {
   quietHoursWeekdays: "Quiet hours days",
   groupByContext: "Group by context",
 };
-
-/** "someNewSetting" → "Some new setting" — the fallback for keys no table names. */
-function humanizeKey(key: string): string {
-  const words = key
-    .replace(/[._-]+/g, " ")
-    .replace(/([a-z0-9])([A-Z])/g, "$1 $2")
-    .trim()
-    .toLowerCase();
-  return words ? words.charAt(0).toUpperCase() + words.slice(1) : key;
-}
-
-/**
- * A scalar as a person would read it, or undefined when it isn't one worth
- * showing. `maxLength` keeps free-form strings from flooding a row; a value the
- * row is built to wrap (a path pattern) passes Infinity.
- */
-function displayScalar(value: unknown, maxLength = 60): string | undefined {
-  if (typeof value === "boolean") return value ? "On" : "Off";
-  if (typeof value === "number" && Number.isFinite(value)) return String(value);
-  if (typeof value === "string" && value.trim() !== "" && value.length <= maxLength) return value;
-  return undefined;
-}
 
 /** Notification settings store minutes-since-midnight and millisecond delays; show them as time. */
 function displayNotificationValue(key: string, value: unknown): string | undefined {
@@ -228,16 +234,18 @@ function recordName(record: unknown, key: string): string | undefined {
 }
 
 /**
- * Name each leaf the diff reported, so the confirmation can list what the
+ * Name one leaf the diff reported, so the confirmation can list what the
  * import replaces. Labels fall back to the raw key rather than dropping an
  * entry — an unnamed row is still better than a count that hides it.
  */
-function describeChanges(
+function describeLeaf(
   id: ConfigBundleSectionId,
-  diff: SectionDiff,
+  key: string,
+  kind: "add" | "update",
   incoming: unknown,
-  current: unknown
-): ConfigBundlePreviewChange[] {
+  current: unknown,
+  ctx: SectionContext
+): ConfigBundlePreviewChange {
   const incomingRecord = isRecord(incoming) ? incoming : {};
   const currentRecord = isRecord(current) ? current : {};
 
@@ -246,8 +254,6 @@ function describeChanges(
    * lose; the incoming name rides along only when the import changes it.
    */
   const named = (
-    key: string,
-    kind: "add" | "update",
     incomingName: string | undefined,
     currentName: string | undefined,
     suffix = ""
@@ -260,86 +266,135 @@ function describeChanges(
     return { key, kind, label: `${label}${suffix}`, ...renamed };
   };
 
-  const describe = (key: string, kind: "add" | "update"): ConfigBundlePreviewChange => {
-    switch (id) {
-      case "userAgentRegistry":
-        return named(key, kind, recordName(incomingRecord, key), recordName(currentRecord, key));
-      case "agentSettings":
-        return { key, kind, label: getEffectiveAgentConfig(key)?.name ?? key };
-      case "keybindingOverrides":
-        return { key, kind, label: shortcutLabel(key) };
-      case "appTheme": {
-        if (key.startsWith("theme:")) {
-          const schemeId = key.slice("theme:".length);
-          return named(
-            key,
-            kind,
-            schemeName(schemeId, incomingRecord.customSchemes),
-            schemeName(schemeId, currentRecord.customSchemes),
-            " (custom theme)"
-          );
-        }
-        const isScheme = key.endsWith("SchemeId");
-        const show = (value: unknown) =>
-          isScheme
-            ? schemeName(value, incomingRecord.customSchemes, currentRecord.customSchemes)
-            : displayScalar(value);
-        return {
-          key,
-          kind,
-          label: THEME_FIELD_LABELS[key] ?? humanizeKey(key),
-          from: kind === "update" ? show(currentRecord[key]) : undefined,
-          to: show(incomingRecord[key]),
-        };
-      }
-      case "notificationSettings":
-        return {
-          key,
-          kind,
-          label: NOTIFICATION_FIELD_LABELS[key] ?? humanizeKey(key),
-          from: kind === "update" ? displayNotificationValue(key, currentRecord[key]) : undefined,
-          to: displayNotificationValue(key, incomingRecord[key]),
-        };
-      case "worktreeConfig":
-        return {
-          key,
-          kind,
-          label: "Path pattern",
-          from: kind === "update" ? displayScalar(currentRecord[key], Infinity) : undefined,
-          to: displayScalar(incomingRecord[key], Infinity),
-        };
-      case "globalRecipes": {
-        const nameIn = (list: unknown) => {
-          const recipe = Array.isArray(list)
-            ? list.find((r) => isRecord(r) && String(r.id) === key)
+  switch (id) {
+    case "userAgentRegistry":
+      return named(recordName(incomingRecord, key), recordName(currentRecord, key));
+    case "agentSettings":
+      return { key, kind, label: getEffectiveAgentConfig(key)?.name ?? key };
+    case "agentDefaults": {
+      const show = (value: unknown) =>
+        value === null
+          ? "None"
+          : typeof value === "string"
+            ? (getEffectiveAgentConfig(value)?.name ?? value)
             : undefined;
-          const name =
-            isRecord(recipe) && typeof recipe.name === "string" ? recipe.name.trim() : "";
-          return name || undefined;
-        };
-        return named(key, kind, nameIn(incoming), nameIn(current));
-      }
+      return {
+        key,
+        kind,
+        label: AGENT_DEFAULT_FIELD_LABELS[key] ?? humanizeKey(key),
+        from: kind === "update" ? show(currentRecord[key]) : undefined,
+        to: show(incomingRecord[key]),
+      };
     }
-  };
+    case "keybindingOverrides": {
+      // Read the way the receiving machine reads it: Cmd is Ctrl off a Mac,
+      // and Linux keeps some combinations clear for the desktop.
+      const target = shortcutPlatform(ctx.platform);
+      const combos = (value: unknown) =>
+        Array.isArray(value)
+          ? value.filter((c): c is string => typeof c === "string" && c.trim() !== "")
+          : [];
+      const reading = readShortcutOn(key, combos(incomingRecord[key]), target);
+      const before = combos(currentRecord[key])
+        .map((combo) => comboAsReadOn(combo, target))
+        .join(", ");
+      return {
+        key,
+        kind,
+        label: shortcutLabel(key),
+        from: kind === "update" ? before || "No shortcut" : undefined,
+        to: reading.readsAs || "No shortcut",
+        ...(reading.note ? { note: reading.note } : {}),
+      };
+    }
+    case "appTheme": {
+      if (key.startsWith("theme:")) {
+        const schemeId = key.slice("theme:".length);
+        return named(
+          schemeName(schemeId, incomingRecord.customSchemes),
+          schemeName(schemeId, currentRecord.customSchemes),
+          " (custom theme)"
+        );
+      }
+      const isScheme = key.endsWith("SchemeId");
+      const show = (value: unknown) =>
+        isScheme
+          ? schemeName(value, incomingRecord.customSchemes, currentRecord.customSchemes)
+          : displayScalar(value);
+      return {
+        key,
+        kind,
+        label: THEME_FIELD_LABELS[key] ?? humanizeKey(key),
+        from: kind === "update" ? show(currentRecord[key]) : undefined,
+        to: show(incomingRecord[key]),
+      };
+    }
+    case "notificationSettings":
+      return {
+        key,
+        kind,
+        label: NOTIFICATION_FIELD_LABELS[key] ?? humanizeKey(key),
+        from: kind === "update" ? displayNotificationValue(key, currentRecord[key]) : undefined,
+        to: displayNotificationValue(key, incomingRecord[key]),
+      };
+    case "worktreeConfig":
+      return {
+        key,
+        kind,
+        label: "Path pattern",
+        from: kind === "update" ? displayScalar(currentRecord[key], Infinity) : undefined,
+        to: displayScalar(incomingRecord[key], Infinity),
+      };
+    case "globalRecipes": {
+      const nameIn = (list: unknown) => {
+        const recipe = Array.isArray(list)
+          ? list.find((r) => isRecord(r) && String(r.id) === key)
+          : undefined;
+        const name = isRecord(recipe) && typeof recipe.name === "string" ? recipe.name.trim() : "";
+        return name || undefined;
+      };
+      return named(nameIn(incoming), nameIn(current));
+    }
+    default:
+      return { key, kind, label: humanizeKey(key) };
+  }
+}
 
-  return [
-    ...diff.update.map((key) => describe(key, "update")),
-    ...diff.add.map((key) => describe(key, "add")),
-  ];
+function refusedNotificationReason(key: string): string {
+  return key.endsWith("SoundFile")
+    ? "That sound file isn't available"
+    : "Not a supported notification setting";
+}
+
+function recipeRefusal(recipe: Record<string, unknown>): string | null {
+  if (typeof recipe.name !== "string" || !recipe.name.trim()) return "Recipe has no name";
+  if (!Array.isArray(recipe.terminals)) return "Recipe has no terminals";
+  return null;
 }
 
 export class ConfigBundleService {
   private readonly handlers: SectionHandler[];
 
   constructor(private readonly deps: ConfigBundleServiceDeps) {
+    const availability = () => this.deps.availability?.() ?? null;
     this.handlers = [
       this.userAgentRegistrySection(),
       this.agentSettingsSection(),
+      this.agentDefaultsSection(),
+      permissionBypassSection(),
+      assistantModelsSection(availability),
       this.keybindingOverridesSection(),
       this.appThemeSection(),
       this.notificationSettingsSection(),
       this.worktreeConfigSection(),
       this.globalRecipesSection(),
+      hibernationSection(),
+      sessionRestoreSection(),
+      idleTerminalNotifySection(),
+      idleBackgroundAutoCloseSection(),
+      agentUpdateChecksSection(),
+      pluginUpdateChecksSection(),
+      globalEnvironmentSection(),
     ];
   }
 
@@ -347,19 +402,55 @@ export class ConfigBundleService {
     return this.handlers.find((h) => h.id === id);
   }
 
-  /** Current value of every portable section, for the exporter. */
-  async collect(): Promise<ConfigBundleSections> {
+  private context(incoming: Partial<Record<ConfigBundleSectionId, unknown>>): SectionContext {
+    return {
+      incoming,
+      availability: this.deps.availability?.() ?? null,
+      platform: this.deps.platform ?? process.platform,
+      commandAvailable: this.deps.commandAvailable ?? (async () => true),
+    };
+  }
+
+  /**
+   * The portable value of each section asked for (every one by default): only
+   * the fields `portableSettings.ts` lets travel, before secret omission.
+   */
+  async collect(ids?: readonly ConfigBundleSectionId[]): Promise<ConfigBundleSections> {
     const sections: ConfigBundleSections = {};
-    for (const handler of this.handlers) {
-      sections[handler.id] = await handler.read();
+    for (const id of CONFIG_BUNDLE_SECTION_IDS) {
+      if (ids && !ids.includes(id)) continue;
+      const handler = this.handlerFor(id);
+      if (!handler) continue;
+      const current = await handler.read();
+      sections[id] = handler.export ? handler.export(current) : current;
     }
     return sections;
   }
 
-  /** Per-section counts, and the named leaves behind them, for the pre-import confirmation. */
+  /**
+   * A digest of everything the given sections could change, as it is now. A
+   * preview made against one revision is only applied while it still holds,
+   * so a setting changed in between is never written over unseen.
+   */
+  async revision(ids: readonly string[]): Promise<string> {
+    const parts: Array<[ConfigBundleSectionId, unknown]> = [];
+    for (const id of CONFIG_BUNDLE_SECTION_IDS) {
+      if (!ids.includes(id)) continue;
+      const handler = this.handlerFor(id);
+      if (handler) parts.push([id, await handler.read()]);
+    }
+    return createHash("sha256").update(stableStringify(parts)).digest("hex");
+  }
+
+  /**
+   * Per-section counts, the named leaves behind them, and the leaves this
+   * machine would refuse with why, for the confirmation before anything is
+   * written.
+   */
   async preview(
     incoming: Partial<Record<ConfigBundleSectionId, unknown>>
   ): Promise<ConfigBundlePreviewSection[]> {
+    const ctx = this.context(incoming);
     const previews: ConfigBundlePreviewSection[] = [];
     for (const id of CONFIG_BUNDLE_SECTION_IDS) {
       const payload = incoming[id];
@@ -367,13 +458,39 @@ export class ConfigBundleService {
       const handler = this.handlerFor(id);
       if (!handler) continue;
       const current = await handler.read();
-      const diff = handler.diff(payload, current);
+      const diff = handler.diff(payload, current, ctx);
+      const check: SectionCheck = handler.check
+        ? await handler.check(payload, current, ctx)
+        : emptyCheck();
+      const describe = (key: string, kind: "add" | "update"): ConfigBundlePreviewChange => {
+        const change = handler.describe
+          ? handler.describe(key, kind, payload, current, ctx)
+          : describeLeaf(id, key, kind, payload, current, ctx);
+        const note = check.notes.get(key);
+        return note && !change.note ? { ...change, note } : change;
+      };
+      const kept = (keys: string[]) => keys.filter((key) => !check.skipped.has(key));
+      const update = kept(diff.update);
+      const add = kept(diff.add);
+      const skipped: ConfigBundlePreviewSkip[] = [...check.skipped].map(([key, reason]) => ({
+        key,
+        reason,
+        label:
+          check.labels?.get(key) ??
+          (diff.add.includes(key) || diff.update.includes(key)
+            ? describe(key, diff.add.includes(key) ? "add" : "update").label
+            : key),
+      }));
       previews.push({
         section: id,
-        add: diff.add.length,
-        update: diff.update.length,
-        unchanged: diff.unchanged.length,
-        changes: describeChanges(id, diff, payload, current),
+        add: add.length,
+        update: update.length,
+        unchanged: kept(diff.unchanged).length,
+        changes: [
+          ...update.map((key) => describe(key, "update")),
+          ...add.map((key) => describe(key, "add")),
+        ],
+        ...(skipped.length > 0 ? { skipped } : {}),
       });
     }
     return previews;
@@ -388,7 +505,8 @@ export class ConfigBundleService {
    * NOT a failure: those leaves are reported skipped and the import stands.
    */
   async apply(
-    incoming: Partial<Record<ConfigBundleSectionId, unknown>>
+    incoming: Partial<Record<ConfigBundleSectionId, unknown>>,
+    options: { capture?: CapturedSection[] } = {}
   ): Promise<ConfigImportReport> {
     const snapshots: Array<{ handler: SectionHandler; snapshot: unknown }> = [];
     const sections: ConfigImportSectionReport[] = [];
@@ -420,6 +538,7 @@ export class ConfigBundleService {
         // Snapshot before the first write of this section, never after.
         snapshots.push({ handler, snapshot: current });
         const leaves = await handler.apply(payload, current);
+        if (options.capture) await this.capture(handler, current, leaves, options.capture);
         sections.push({
           section: id,
           present: true,
@@ -480,6 +599,78 @@ export class ConfigBundleService {
   }
 
   /**
+   * What each applied leaf held before and after, read back from the store
+   * rather than taken from the payload, so an undo compares against what
+   * actually landed. A leaf the read-back shows unchanged isn't kept.
+   */
+  private async capture(
+    handler: SectionHandler,
+    before: unknown,
+    leaves: ConfigImportLeafResult[],
+    into: CapturedSection[]
+  ): Promise<void> {
+    const applied = leaves.filter((leaf) => leaf.status === "applied");
+    if (applied.length === 0) return;
+    const after = await handler.read();
+    const leafOf = handler.leafValue ?? recordLeafValue;
+    const changed: UndoLeaf[] = [];
+    for (const { key } of applied) {
+      const was = leafOf(before, key);
+      const now = leafOf(after, key);
+      if (sameValue(was, now)) continue;
+      changed.push({
+        key,
+        ...(was !== undefined ? { before: was } : {}),
+        ...(now !== undefined ? { after: now } : {}),
+      });
+    }
+    if (changed.length > 0) into.push({ section: handler.id, leaves: changed });
+  }
+
+  /**
+   * Take a copy back, leaf by leaf, latest section first. A leaf still holding
+   * what the copy wrote gets its earlier value back (or goes, if the copy added
+   * it); one already back as it was is left; anything else was edited since and
+   * stays as it is. Nothing outside the copy's leaves is written.
+   */
+  async undo(sections: readonly CapturedSection[]): Promise<UndoSectionResult[]> {
+    const order = (id: ConfigBundleSectionId) => CONFIG_BUNDLE_SECTION_IDS.indexOf(id);
+    const results: UndoSectionResult[] = [];
+    for (const { section, leaves } of [...sections].sort(
+      (a, b) => order(b.section) - order(a.section)
+    )) {
+      const handler = this.handlerFor(section);
+      if (!handler) {
+        results.push({ section, leaves: leaves.map(({ key }) => ({ key, status: "failed" })) });
+        continue;
+      }
+      try {
+        results.push({
+          section,
+          leaves: handler.undo
+            ? await handler.undo(leaves)
+            : await this.undoLeaves(handler, leaves),
+        });
+      } catch (error) {
+        console.error(`[ConfigBundleService] Failed to undo ${section}:`, error);
+        results.push({ section, leaves: leaves.map(({ key }) => ({ key, status: "failed" })) });
+      }
+    }
+    return results;
+  }
+
+  private async undoLeaves(handler: SectionHandler, leaves: UndoLeaf[]): Promise<UndoLeafResult[]> {
+    const leafOf = handler.leafValue ?? recordLeafValue;
+    const plan = planUndo(leaves, await handler.read(), leafOf, handler.withLeaf);
+    if (plan.pending.length === 0) return settleUndo(leaves, plan, undefined, leafOf);
+    // `restore` writes the section as a whole, but from the current value
+    // with only these leaves swapped, so everything else is written back as
+    // it already is.
+    await handler.restore(plan.next);
+    return settleUndo(leaves, plan, await handler.read(), leafOf);
+  }
+
+  /**
    * Restore in reverse order so later sections unwind before earlier ones.
    * Returns the ids that could not be restored — a failed restore is exactly
    * the case the caller must not describe as "nothing changed".
@@ -502,17 +693,69 @@ export class ConfigBundleService {
   // --- Sections ---
 
   private userAgentRegistrySection(): SectionHandler {
+    /**
+     * An update lays the incoming fields over the target's definition rather
+     * than replacing it: a field withheld at the source (an `args` list that
+     * held a secret) is absent, and must leave the target's own alone.
+     */
+    const merged = (incoming: unknown, existing: unknown): unknown =>
+      isRecord(incoming) && isRecord(existing) ? { ...existing, ...incoming } : incoming;
+
     return {
       id: "userAgentRegistry",
       read: async () => loadSanitizedUserAgentRegistry(),
-      diff: diffRecord,
+      diff: (incoming, current) => {
+        const result: SectionDiff = { add: [], update: [], unchanged: [] };
+        if (!isRecord(incoming)) return result;
+        const currentRecord = isRecord(current) ? current : {};
+        for (const [id, config] of Object.entries(incoming)) {
+          const existing = currentRecord[id];
+          if (existing === undefined) result.add.push(id);
+          else if (sameValue(merged(config, existing), existing)) result.unchanged.push(id);
+          else result.update.push(id);
+        }
+        return result;
+      },
+      check: async (incoming, current, ctx) => {
+        const check = emptyCheck();
+        if (!isRecord(incoming)) return check;
+        const currentRecord = isRecord(current) ? current : {};
+        for (const [id, incomingConfig] of Object.entries(incoming)) {
+          const config = merged(incomingConfig, currentRecord[id]);
+          if (sameValue(config, currentRecord[id])) continue;
+          const parsed = UserAgentConfigSchema.safeParse(config);
+          if (!parsed.success) {
+            check.skipped.set(id, "Agent definition is not valid");
+          } else if (parsed.data.id !== id) {
+            check.skipped.set(id, `Agent id doesn't match its key (${parsed.data.id})`);
+          } else if (isBuiltInAgent(id)) {
+            check.skipped.set(id, "Uses the id of a built-in agent");
+          } else if (
+            !SAFE_AGENT_ID_PATTERN.test(id) ||
+            !SAFE_AGENT_ID_PATTERN.test(parsed.data.command)
+          ) {
+            check.skipped.set(id, "Its id or command has characters Daintree doesn't allow");
+          } else {
+            // Copied anyway: the definition is still worth having, and a
+            // custom agent is never made a default by this.
+            const known = ctx.availability?.[id];
+            const installed =
+              known !== undefined
+                ? isAgentInstalled(known)
+                : await ctx.commandAvailable(parsed.data.command);
+            if (!installed) check.notes.set(id, CLI_MISSING);
+          }
+        }
+        return check;
+      },
       apply: async (incoming, current) => {
         const results: ConfigImportLeafResult[] = [];
         if (!isRecord(incoming)) return results;
         const currentRecord = isRecord(current) ? current : {};
         const service = new UserAgentRegistryService();
 
-        for (const [id, config] of Object.entries(incoming)) {
+        for (const [id, incomingConfig] of Object.entries(incoming)) {
+          const config = merged(incomingConfig, currentRecord[id]);
           if (sameValue(config, currentRecord[id])) {
             results.push(unchangedLeaf(id));
             continue;
@@ -549,6 +792,15 @@ export class ConfigBundleService {
         }
         return results;
       },
+      // The stored registry, not the sanitized read: an entry or field the
+      // read drops must survive an undo of some other agent.
+      undo: storedMapUndo(
+        () => store.get("userAgentRegistry"),
+        (registry) => {
+          store.set("userAgentRegistry", registry as Record<string, UserAgentConfig>);
+          new UserAgentRegistryService().reload();
+        }
+      ),
       restore: async (snapshot) => {
         store.set("userAgentRegistry", snapshot as Record<string, UserAgentConfig>);
         new UserAgentRegistryService().reload();
@@ -557,25 +809,99 @@ export class ConfigBundleService {
   }
 
   private agentSettingsSection(): SectionHandler {
-    // Only the per-agent record travels. The root-level globals
-    // (`globalSkipPermissions`, `globalUseAltScreen`) are permission posture
-    // rather than preference, and silently turning one on via an imported file
-    // is not a decision this feature should make for the user.
+    // Field level, both ways (#13346): only the fields `portableSettings.ts`
+    // names leave, and an incoming entry is merged into the target's field by
+    // field, its env maps per name and its presets per id. Bypass travels in
+    // its own opt-in section; the root-level `globalUseAltScreen` doesn't
+    // travel at all, since this payload is the per-agent record.
     const readAgents = (): Record<string, unknown> => {
       const settings = store.get("agentSettings");
       return isRecord(settings) && isRecord(settings.agents) ? settings.agents : {};
     };
 
+    /**
+     * The entry the target ends up with. A default preset the target doesn't
+     * define (built in, already custom there, or arriving in this same entry)
+     * is left as the target has it rather than pointed at nothing.
+     */
+    const resolve = (agentId: string, currentEntry: unknown, entry: Record<string, unknown>) => {
+      const merged = mergeAgentEntry(currentEntry, entry);
+      const wanted =
+        typeof entry.presetId === "string" && entry.presetId !== "" ? entry.presetId : undefined;
+      const known =
+        wanted === undefined ||
+        customPresetIds(merged).includes(wanted) ||
+        getAgentPreset(agentId, wanted) !== undefined;
+      return known
+        ? { merged, presetSkipped: false }
+        : { merged: mergeAgentEntry(currentEntry, entry, false), presetSkipped: true };
+    };
+    const presetKey = (agentId: string) => `${agentId}.presetId`;
+    const NOTHING_PORTABLE = "Nothing in it can be copied";
+
     return {
       id: "agentSettings",
       read: async () => readAgents(),
-      diff: diffRecord,
+      export: (current) => projectAgents(current),
+      diff: (incoming, current) => {
+        const result: SectionDiff = { add: [], update: [], unchanged: [] };
+        if (!isRecord(incoming)) return result;
+        const currentRecord = isRecord(current) ? current : {};
+        for (const [agentId, entry] of Object.entries(incoming)) {
+          const existing = currentRecord[agentId];
+          if (!isRecord(entry)) result.update.push(agentId);
+          else if (!isRecord(existing)) result.add.push(agentId);
+          else if (
+            sameValue(resolve(agentId, existing, entry).merged, mergeAgentEntry(existing, {}))
+          ) {
+            result.unchanged.push(agentId);
+          } else result.update.push(agentId);
+        }
+        return result;
+      },
+      check: async (incoming, current, ctx) => {
+        const check: SectionCheck = { ...emptyCheck(), labels: new Map() };
+        if (!isRecord(incoming)) return check;
+        const currentRecord = isRecord(current) ? current : {};
+        for (const [agentId, entry] of Object.entries(incoming)) {
+          const name = getEffectiveAgentConfig(agentId)?.name ?? agentId;
+          if (!isRecord(entry)) {
+            check.skipped.set(agentId, "Agent settings entry is not an object");
+            continue;
+          }
+          if (projectAgentEntry(entry) === undefined) {
+            check.skipped.set(agentId, NOTHING_PORTABLE);
+            continue;
+          }
+          const { presetSkipped } = resolve(agentId, currentRecord[agentId], entry);
+          // A custom agent arriving in the same copy brings its own presets.
+          const incomingAgent = isRecord(ctx.incoming.userAgentRegistry)
+            ? ctx.incoming.userAgentRegistry[agentId]
+            : undefined;
+          const arriving =
+            isRecord(incomingAgent) && Array.isArray(incomingAgent.presets)
+              ? incomingAgent.presets.some((p) => isRecord(p) && p.id === entry.presetId)
+              : false;
+          if (presetSkipped && !arriving) {
+            check.skipped.set(presetKey(agentId), PRESET_MISSING);
+            check.labels?.set(presetKey(agentId), `${name} default preset`);
+          }
+          if (
+            isBuiltInAgent(agentId) &&
+            ctx.availability &&
+            !isAgentInstalled(ctx.availability[agentId])
+          ) {
+            check.notes.set(agentId, CLI_MISSING);
+          }
+        }
+        return check;
+      },
       apply: async (incoming, current) => {
         const results: ConfigImportLeafResult[] = [];
         if (!isRecord(incoming)) return results;
         const currentRecord = isRecord(current) ? current : {};
 
-        const merged: Record<string, unknown> = { ...currentRecord };
+        const next: Record<string, unknown> = { ...currentRecord };
         const pending: string[] = [];
 
         for (const [agentId, entry] of Object.entries(incoming)) {
@@ -583,43 +909,29 @@ export class ConfigBundleService {
             results.push(skippedLeaf(agentId, "Agent settings entry is not an object"));
             continue;
           }
-          if (sameValue(entry, currentRecord[agentId])) {
+          if (projectAgentEntry(entry) === undefined) {
+            results.push(skippedLeaf(agentId, NOTHING_PORTABLE));
+            continue;
+          }
+          const existing = currentRecord[agentId];
+          const { merged, presetSkipped } = resolve(agentId, existing, entry);
+          if (presetSkipped) results.push(skippedLeaf(presetKey(agentId), PRESET_MISSING));
+          if (sameValue(merged, mergeAgentEntry(existing, {}))) {
             results.push(unchangedLeaf(agentId));
             continue;
           }
-          // Mirrors the `agentSettings:set` handler: merge over the existing
-          // entry, then drop retired legacy keys so they are never written back
-          // (stripping after the merge also clears one already persisted).
-          const mergedEntry = {
-            ...(isRecord(currentRecord[agentId]) ? currentRecord[agentId] : {}),
-            ...entry,
-          };
-          const { selected: _selected, enabled: _enabled, ...safeEntry } = mergedEntry;
-
-          // Compared against `{}` when the agent is new, so an entry made up
-          // entirely of retired keys reads as "nothing to write" rather than as
-          // a difference from `undefined`.
-          const existingEntry = isRecord(currentRecord[agentId]) ? currentRecord[agentId] : {};
-          if (sameValue(safeEntry, existingEntry)) {
-            // Every field the bundle carried for this agent was a retired key,
-            // so nothing it asked for can land. Reporting it applied would
-            // credit a write that never happens.
-            results.push(skippedLeaf(agentId, "Only retired settings, nothing to apply"));
-            continue;
-          }
-
-          merged[agentId] = safeEntry;
+          next[agentId] = merged;
           pending.push(agentId);
         }
 
         if (pending.length > 0) {
-          store.set("agentSettings.agents", merged);
+          store.set("agentSettings.agents", next);
         }
 
         const readBack = readAgents();
         for (const agentId of pending) {
           results.push(
-            sameValue(readBack[agentId], merged[agentId])
+            sameValue(readBack[agentId], next[agentId])
               ? { key: agentId, status: "applied" }
               : skippedLeaf(agentId, "Value did not persist")
           );
@@ -632,11 +944,83 @@ export class ConfigBundleService {
     };
   }
 
+  private agentDefaultsSection(): SectionHandler {
+    // Only leaves the host actually has travel, so exporting from a host that
+    // never chose a default can't turn into a clear on the machine importing it.
+    const isKnownLeaf = (key: string): key is keyof AgentDefaultsPatch =>
+      key === "assistantAgentId" || key === "defaultAgent";
+    const isStorable = (key: keyof AgentDefaultsPatch, value: unknown) =>
+      value === null ||
+      (key === "assistantAgentId"
+        ? isStorableAssistantAgentId(value)
+        : isStorableDefaultAgent(value));
+
+    return {
+      id: "agentDefaults",
+      read: async () => readAgentDefaults(),
+      diff: (incoming, current) => {
+        const known = isRecord(incoming)
+          ? Object.fromEntries(Object.entries(incoming).filter(([key]) => isKnownLeaf(key)))
+          : incoming;
+        return diffRecord(known, current);
+      },
+      apply: async (incoming, current) => {
+        const results: ConfigImportLeafResult[] = [];
+        if (!isRecord(incoming)) return results;
+        const currentRecord = isRecord(current) ? current : {};
+
+        const patch: AgentDefaultsPatch = {};
+        const pending: Array<keyof AgentDefaultsPatch> = [];
+        for (const [key, value] of Object.entries(incoming)) {
+          if (!isKnownLeaf(key)) {
+            results.push(skippedLeaf(key, "Not a supported default agent setting"));
+            continue;
+          }
+          if (!isStorable(key, value)) {
+            results.push(skippedLeaf(key, "Not a valid agent"));
+            continue;
+          }
+          if (Object.hasOwn(currentRecord, key) && sameValue(value, currentRecord[key])) {
+            results.push(unchangedLeaf(key));
+            continue;
+          }
+          (patch as Record<string, unknown>)[key] = value;
+          pending.push(key);
+        }
+
+        if (pending.length > 0) setAgentDefaults(patch);
+
+        const readBack = readAgentDefaults();
+        for (const key of pending) {
+          results.push(
+            Object.hasOwn(readBack, key) && sameValue(readBack[key], patch[key])
+              ? { key, status: "applied" }
+              : skippedLeaf(key, "Value did not persist")
+          );
+        }
+        return results;
+      },
+      restore: async (snapshot) => {
+        restoreAgentDefaults(isRecord(snapshot) ? (snapshot as AgentDefaultsPatch) : {});
+      },
+    };
+  }
+
   private keybindingOverridesSection(): SectionHandler {
     return {
       id: "keybindingOverrides",
       read: async () => getValidatedOverrides(),
       diff: diffRecord,
+      check: async (incoming) => {
+        const check = emptyCheck();
+        if (!isRecord(incoming)) return check;
+        for (const [actionId, combos] of Object.entries(incoming)) {
+          if (!Array.isArray(combos) || combos.some((c) => typeof c !== "string")) {
+            check.skipped.set(actionId, "Shortcut list is not an array of strings");
+          }
+        }
+        return check;
+      },
       apply: async (incoming, current) => {
         const results: ConfigImportLeafResult[] = [];
         if (!isRecord(incoming)) return results;
@@ -677,6 +1061,16 @@ export class ConfigBundleService {
         }
         return results;
       },
+      // On the stored map, not `read()`: that drops overrides for actions this
+      // build doesn't have registered right now (a plugin's), and writing it
+      // back would lose them.
+      undo: storedMapUndo(
+        () => store.get("keybindingOverrides.overrides"),
+        async (overrides) => {
+          store.set("keybindingOverrides.overrides", overrides as Record<string, string[]>);
+          await this.deps.rebuildMenu();
+        }
+      ),
       restore: async (snapshot) => {
         store.set("keybindingOverrides.overrides", (snapshot ?? {}) as Record<string, string[]>);
         await this.deps.rebuildMenu();
@@ -763,6 +1157,32 @@ export class ConfigBundleService {
           }
         }
         return result;
+      },
+      check: async (incoming, current) => {
+        const check = emptyCheck();
+        if (!isRecord(incoming)) return check;
+        const currentRecord = isRecord(current) ? current : {};
+        if (Array.isArray(incoming.customSchemes)) {
+          const currentById = new Map(
+            (Array.isArray(currentRecord.customSchemes) ? currentRecord.customSchemes : [])
+              .filter(isRecord)
+              .map((s) => [String(s.id), s])
+          );
+          for (const scheme of incoming.customSchemes.filter(isRecord)) {
+            const id = String(scheme.id);
+            if (sameValue(scheme, currentById.get(id))) continue;
+            if (!appCustomSchemesWriteSchema.safeParse([scheme]).success) {
+              check.skipped.set(`theme:${id}`, "Theme definition is not valid");
+            }
+          }
+        }
+        for (const field of SCALAR_FIELDS) {
+          const value = incoming[field];
+          if (value === undefined || sameValue(value, currentRecord[field])) continue;
+          const invalid = validateScalar(field, value);
+          if (invalid) check.skipped.set(field, invalid);
+        }
+        return check;
       },
       apply: async (incoming, current) => {
         const results: ConfigImportLeafResult[] = [];
@@ -853,6 +1273,15 @@ export class ConfigBundleService {
 
         return results;
       },
+      leafValue: (value, key) =>
+        key.startsWith("theme:")
+          ? listLeafValue(isRecord(value) ? value.customSchemes : undefined, key.slice(6))
+          : recordLeafValue(value, key),
+      withLeaf: (value, key, leaf) => {
+        if (!key.startsWith("theme:")) return withRecordLeaf(value, key, leaf);
+        const record = isRecord(value) ? value : {};
+        return { ...record, customSchemes: withListLeaf(record.customSchemes, key.slice(6), leaf) };
+      },
       restore: async (snapshot) => {
         const theme = readTheme();
         const snapshotRecord = isRecord(snapshot) ? snapshot : {};
@@ -881,6 +1310,20 @@ export class ConfigBundleService {
       id: "notificationSettings",
       read: async () => readSettings(),
       diff: diffRecord,
+      check: async (incoming) => {
+        const check = emptyCheck();
+        if (!isRecord(incoming)) return check;
+        const sanitized = sanitizeNotificationSettingsPatch(
+          incoming,
+          await getAllowedSoundFiles()
+        ) as Record<string, unknown>;
+        for (const key of Object.keys(incoming)) {
+          if (!Object.prototype.hasOwnProperty.call(sanitized, key)) {
+            check.skipped.set(key, refusedNotificationReason(key));
+          }
+        }
+        return check;
+      },
       apply: async (incoming, current) => {
         const results: ConfigImportLeafResult[] = [];
         if (!isRecord(incoming)) return results;
@@ -902,14 +1345,7 @@ export class ConfigBundleService {
           // `toString` or `__proto__` (an own property once JSON.parse made it)
           // would pass this gate and then be misreported as "unchanged".
           if (!Object.prototype.hasOwnProperty.call(sanitized, key)) {
-            results.push(
-              skippedLeaf(
-                key,
-                key.endsWith("SoundFile")
-                  ? "That sound file isn't available on this machine"
-                  : "Not a supported notification setting"
-              )
-            );
+            results.push(skippedLeaf(key, refusedNotificationReason(key)));
             continue;
           }
           if (sameValue(sanitized[key], currentRecord[key])) {
@@ -950,6 +1386,20 @@ export class ConfigBundleService {
     return {
       id: "worktreeConfig",
       read: async () => ({ pathPattern: readPattern() }),
+      check: async (incoming, current) => {
+        const check = emptyCheck();
+        if (!isRecord(incoming) || incoming.pathPattern === undefined) return check;
+        if (typeof incoming.pathPattern !== "string") {
+          check.skipped.set("pathPattern", "Path pattern is not a string");
+          return check;
+        }
+        if (isRecord(current) && incoming.pathPattern === current.pathPattern) return check;
+        const validation = validatePathPattern(incoming.pathPattern.trim());
+        if (!validation.valid) {
+          check.skipped.set("pathPattern", validation.error ?? "Path pattern is not valid");
+        }
+        return check;
+      },
       diff: (incoming, current) => {
         const result: SectionDiff = { add: [], update: [], unchanged: [] };
         if (!isRecord(incoming) || typeof incoming.pathPattern !== "string") return result;
@@ -996,16 +1446,53 @@ export class ConfigBundleService {
       return new Map(list.map((r) => [String(r.id), r]));
     };
 
+    /**
+     * An existing recipe as the update leaves it. Terminals have no ids, so
+     * each merges with the target's terminal at the same position: a field
+     * the incoming one carries wins, its env merges per name, and a field it
+     * lacks (withheld at the source as a secret, a command holding a token)
+     * keeps the target's own value rather than being erased.
+     */
+    const merged = (
+      recipe: Record<string, unknown>,
+      existing: Record<string, unknown> | undefined
+    ): Record<string, unknown> => {
+      if (!existing) return recipe;
+      const next: Record<string, unknown> = { ...existing, ...recipe };
+      if (Array.isArray(recipe.terminals) && Array.isArray(existing.terminals)) {
+        const before = existing.terminals as unknown[];
+        next.terminals = recipe.terminals.map((terminal, index) => {
+          const prior = before[index];
+          if (!isRecord(terminal) || !isRecord(prior)) return terminal;
+          const next: Record<string, unknown> = { ...prior, ...terminal };
+          if (isRecord(prior.env)) next.env = mergeEnv(prior.env, terminal.env);
+          return next;
+        });
+      }
+      return next;
+    };
+
     return {
       id: "globalRecipes",
       read: async () => projectStore.getGlobalRecipes(),
+      check: async (incoming, current) => {
+        const check = emptyCheck();
+        const currentById = byId(current);
+        for (const [id, recipe] of byId(incoming)) {
+          const existing = currentById.get(id);
+          if (existing && sameValue(merged(recipe, existing), existing)) continue;
+          const reason = recipeRefusal(recipe);
+          if (reason) check.skipped.set(id, reason);
+        }
+        return check;
+      },
       diff: (incoming, current) => {
         const result: SectionDiff = { add: [], update: [], unchanged: [] };
         const currentById = byId(current);
         for (const [id, recipe] of byId(incoming)) {
           const existing = currentById.get(id);
           if (!existing) result.add.push(id);
-          else if (sameValue(recipe, existing)) result.unchanged.push(id);
+          else if (sameValue(merged(recipe, existing), existing)) result.unchanged.push(id);
           else result.update.push(id);
         }
         return result;
@@ -1013,20 +1500,18 @@ export class ConfigBundleService {
       apply: async (incoming, current) => {
         const results: ConfigImportLeafResult[] = [];
         const currentById = byId(current);
-        const pending: string[] = [];
+        const pending = new Map<string, Record<string, unknown>>();
 
         for (const [id, recipe] of byId(incoming)) {
           const existing = currentById.get(id);
-          if (existing && sameValue(recipe, existing)) {
+          const next = merged(recipe, existing);
+          if (existing && sameValue(next, existing)) {
             results.push(unchangedLeaf(id));
             continue;
           }
-          if (typeof recipe.name !== "string" || !recipe.name.trim()) {
-            results.push(skippedLeaf(id, "Recipe has no name"));
-            continue;
-          }
-          if (!Array.isArray(recipe.terminals)) {
-            results.push(skippedLeaf(id, "Recipe has no terminals"));
+          const refusal = recipeRefusal(recipe);
+          if (refusal) {
+            results.push(skippedLeaf(id, refusal));
             continue;
           }
 
@@ -1034,6 +1519,7 @@ export class ConfigBundleService {
             // id/projectId/createdAt are owned by the target store — merging by
             // id is what makes a repeat import a no-op instead of a duplicate.
             const { id: _id, projectId: _projectId, createdAt: _createdAt, ...updates } = recipe;
+            if (next.terminals !== undefined) updates.terminals = next.terminals;
             await projectStore.updateGlobalRecipe(id, updates as Partial<TerminalRecipe>);
           } else {
             await projectStore.addGlobalRecipe({
@@ -1042,27 +1528,28 @@ export class ConfigBundleService {
               createdAt: typeof recipe.createdAt === "number" ? recipe.createdAt : Date.now(),
             });
           }
-          pending.push(id);
+          pending.set(id, next);
         }
 
-        if (pending.length === 0) return results;
+        if (pending.size === 0) return results;
 
         const incomingById = byId(incoming);
         const readBackById = byId(await projectStore.getGlobalRecipes());
-        for (const id of pending) {
+        for (const [id, next] of pending) {
           const stored = readBackById.get(id);
           if (!stored) {
             results.push(skippedLeaf(id, "Recipe did not persist"));
             continue;
           }
-          // Compare the fields the bundle actually asked for. Checking only that
-          // the id exists would report a recipe as applied even when the store
-          // stripped half of it on the way in. `createdAt`/`projectId` are the
-          // target store's to own, so they are excluded from the comparison.
+          // Compare the fields the bundle actually asked for, as the merge
+          // wrote them. Checking only that the id exists would report a recipe
+          // as applied even when the store stripped half of it on the way in.
+          // `createdAt`/`projectId` are the target store's to own, so they are
+          // excluded from the comparison.
           const requested = incomingById.get(id) ?? {};
           const mismatched = Object.keys(requested).filter(
             (key) =>
-              key !== "createdAt" && key !== "projectId" && !sameValue(requested[key], stored[key])
+              key !== "createdAt" && key !== "projectId" && !sameValue(next[key], stored[key])
           );
           results.push(
             mismatched.length === 0
@@ -1071,6 +1558,24 @@ export class ConfigBundleService {
           );
         }
         return results;
+      },
+      leafValue: listLeafValue,
+      // Not `restore`: it deletes and re-adds, and the undo must leave every
+      // recipe it isn't taking back exactly where and as it is. Compared and
+      // written in one turn of the recipe queue, so an edit can't land between.
+      undo: async (leaves) => {
+        let plan: UndoPlan | undefined;
+        await projectStore.transformGlobalRecipes((recipes) => {
+          plan = planUndo(leaves, recipes, listLeafValue, withListLeaf);
+          return plan.pending.length > 0 ? (plan.next as TerminalRecipe[]) : null;
+        });
+        if (!plan) throw new Error("The recipe store did not run the undo");
+        return settleUndo(
+          leaves,
+          plan,
+          plan.pending.length > 0 ? await projectStore.getGlobalRecipes() : undefined,
+          listLeafValue
+        );
       },
       restore: async (snapshot) => {
         const snapshotById = byId(snapshot);

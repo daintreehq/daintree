@@ -137,16 +137,6 @@ describe("useReviewDialogOpenForWorktree", () => {
       expect(countRenders(useReviewDialogOpenForWorktree)).toBe(0);
     });
 
-    it("the previous whole-map subscription re-rendered on every flush", () => {
-      const useLegacy = (id: string) => {
-        const stack = usePanelDialogStore((s) => s.dialogStack);
-        const byId = usePanelStore((s: { panelsById: typeof panelsById.current }) => s.panelsById);
-        return stack.some((p) => byId[p]?.kind === "review" && byId[p]?.worktreeId === id);
-      };
-      // Each of the PANES panes re-rendered once per flush.
-      expect(countRenders(useLegacy)).toBe(FLUSHES * PANES);
-    });
-
     it("does not re-render on unrelated churn while a dialog is open for another worktree", () => {
       panelsById.current = { "review-1": { kind: "review", worktreeId: "other" } };
       setStack(["review-1"]);

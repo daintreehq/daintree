@@ -3,13 +3,9 @@ import { render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { AppPaletteDialog } from "../AppPaletteDialog";
 
-vi.mock("@/hooks", async (importOriginal) => {
-  const actual = (await importOriginal()) as Record<string, unknown>;
-  return {
-    ...actual,
-    useOverlayState: () => {},
-  };
-});
+vi.mock("@/hooks/useOverlayState", () => ({
+  useOverlayState: () => {},
+}));
 
 // Configurable presence mock: lets each test decouple `shouldRender` from
 // `isOpen` so we can exercise the exit-animation window (isOpen=false while the

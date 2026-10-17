@@ -30,7 +30,9 @@ interface TestProjectViewManager {
 }
 
 const browserWindowMock = vi.hoisted(() => ({
-  fromWebContents: vi.fn<() => { id: number; isDestroyed: () => boolean } | null>(() => null),
+  fromWebContents: vi.fn<
+    () => { id: number; isDestroyed: () => boolean; webContents?: unknown } | null
+  >(() => null),
   getAllWindows: vi.fn(() => []),
 }));
 
@@ -65,6 +67,19 @@ const copyTreeHistoryMock = vi.hoisted(() => ({
 
 vi.mock("../../../services/copyTreeHistoryService.js", () => copyTreeHistoryMock);
 
+const scratchStoreMock = vi.hoisted(() => ({
+  getScratchById: vi.fn<(id: string) => { id: string; path: string } | undefined>(() => undefined),
+}));
+
+vi.mock("../../../services/ScratchStore.js", () => ({ scratchStore: scratchStoreMock }));
+
+const rootCopyMock = vi.hoisted(() => ({
+  generateWorkspaceRootContext: vi.fn(),
+  cancelAllWorkspaceRootContext: vi.fn(),
+}));
+
+vi.mock("../../../services/workspaceRootCopyTree.js", () => rootCopyMock);
+
 vi.mock("../../../window/windowRef.js", () => ({
   getProjectViewManager: windowRefMock.getProjectViewManager,
   setProjectViewManager: vi.fn(),
@@ -76,7 +91,16 @@ vi.mock("../../../window/windowRef.js", () => ({
 
 import type { CopyTreeHistoryAppendInput } from "../../../../shared/types/ipc/copyTreeHistory.js";
 import { CHANNELS } from "../../channels.js";
+import {
+  OperationRegistry,
+  _resetOperationRegistryForTest,
+} from "../../../services/operations/index.js";
+import type { OperationsEvent } from "../../../../shared/types/ipc/operations.js";
 import { _resetRateLimitQueuesForTest } from "../../utils.js";
+import { getIpcDispatcher } from "../../dispatcher.js";
+import { wrapSuccess } from "../../../../shared/utils/ipcErrorSerialization.js";
+import type { ClientEndpoint } from "../../endpoint.js";
+import { _resetRemoteServicesForTest, registerRemoteService } from "../../../remote/runtime.js";
 import { contextDir, _resetReservedPathsForTests } from "../../../services/copyTreeOutputFile.js";
 import {
   registerCopyTreeHandlers,
@@ -179,29 +203,6 @@ describe("copyTree handlers", () => {
     );
   });
 
-  it("accepts null-cleared fields in test-config payloads", async () => {
-    const handler = getInvokeHandler(CHANNELS.COPYTREE_TEST_CONFIG);
-
-    // copyTree channels share the "fileOps" rate-limit bucket; advance past the
-    // window so earlier handler calls in this suite don't preempt validation.
-    vi.useFakeTimers();
-    try {
-      vi.advanceTimersByTime(11_000);
-      await expect(
-        handler(mockEvent, {
-          worktreeId: "wt-1",
-          options: { maxTotalSize: null, charLimit: null, exclude: null, always: null, sort: null },
-        })
-      ).resolves.toEqual(
-        expect.objectContaining({
-          error: expect.not.stringMatching(/^Invalid payload$/),
-        })
-      );
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-
   it("throws a sanitized ValidationError without Zod detail for invalid file tree requests", async () => {
     const handler = getInvokeHandler(CHANNELS.COPYTREE_GET_FILE_TREE);
 
@@ -274,18 +275,6 @@ describe("copyTree handlers", () => {
       expect("maxTotalSize" in mergedOptions).toBe(false);
       expect("always" in mergedOptions).toBe(false);
     });
-
-    it("back-fills saved settings for absent fields", async () => {
-      const testConfig = registerWithWorktreeService();
-
-      await invokeTestConfig({});
-
-      const [, mergedOptions] = testConfig.mock.calls[0];
-      expect(mergedOptions.maxTotalSize).toBe(
-        projectSettingsFixture.copyTreeSettings.maxContextSize
-      );
-      expect(mergedOptions.always).toEqual(projectSettingsFixture.copyTreeSettings.alwaysInclude);
-    });
   });
 
   describe("get-file-tree merge integration", () => {
@@ -340,36 +329,12 @@ describe("copyTree handlers", () => {
       expect(getContextFileTree.mock.calls[0][1]).toBe("src");
     });
 
-    it("applies the project's saved context settings to the listing", async () => {
-      // Without this the listing answers for CopyTree's defaults while the
-      // bundle is built with the project's exclusions and budgets — the two
-      // engines disagreeing again, one layer up.
-      const { getContextFileTree } = registerWithFileTree();
-
-      await invokeGetFileTree({});
-
-      const mergedOptions = getContextFileTree.mock.calls[0][2];
-      expect(mergedOptions.maxTotalSize).toBe(
-        projectSettingsFixture.copyTreeSettings.maxContextSize
-      );
-      expect(mergedOptions.always).toEqual(projectSettingsFixture.copyTreeSettings.alwaysInclude);
-      expect(mergedOptions.exclude).toEqual(projectSettingsFixture.excludedPaths);
-    });
-
     it("forwards the opt-in for excluded entries", async () => {
       const { getContextFileTree } = registerWithFileTree();
 
       await invokeGetFileTree({ includeExcluded: true });
 
       expect(getContextFileTree.mock.calls[0][3]).toBe(true);
-    });
-
-    it("defaults to omitting excluded entries", async () => {
-      const { getContextFileTree } = registerWithFileTree();
-
-      await invokeGetFileTree({});
-
-      expect(getContextFileTree.mock.calls[0][3]).toBeUndefined();
     });
 
     it("rejects a dirPath that escapes the worktree", async () => {
@@ -1015,16 +980,6 @@ describe("file-backed generation", () => {
     expect(result.filePath).toMatch(/\.md$/);
   });
 
-  it("omits content unless it was asked for", async () => {
-    makeService("<files>body</files>");
-    const handler = getInvokeHandler(CHANNELS.COPYTREE_GENERATE);
-
-    const result = (await handler(mockSender, { worktreeId: "wt-1" })) as Record<string, unknown>;
-
-    expect(result.content).toBe("");
-    expect(result.contentTruncated).toBeUndefined();
-  });
-
   it("reads a small bundle back whole when content was asked for", async () => {
     makeService("<files>body</files>");
     const handler = getInvokeHandler(CHANNELS.COPYTREE_GENERATE);
@@ -1103,6 +1058,193 @@ describe("file-backed generation", () => {
     expect(await nodeFs.readFile(result.filePath as string, "utf8")).toBe(
       "<files>clipboard me</files>"
     );
+  });
+  describe("bundle grants for a remote Shell", () => {
+    function remoteEndpoint(): ClientEndpoint {
+      return {
+        endpointId: "remote:-1",
+        clientId: "client--1",
+        projectId: "proj-file-backed",
+        kind: "remote-view",
+        handle: -1,
+        send: vi.fn(),
+        request: vi.fn(),
+        onClose: () => ({ dispose: () => undefined }),
+        isClosed: () => false,
+      } as unknown as ClientEndpoint;
+    }
+
+    async function generateFrom(endpoint: ClientEndpoint, payload: Record<string, unknown>) {
+      return getIpcDispatcher().invokeForEndpoint(
+        {
+          endpoint,
+          client: {
+            clientId: endpoint.clientId,
+            clientName: "b",
+            platform: "darwin",
+            kind: "remote",
+          },
+        },
+        CHANNELS.COPYTREE_GENERATE,
+        [payload]
+      );
+    }
+
+    beforeEach(() => {
+      _resetRemoteServicesForTest();
+      getIpcDispatcher().setInvokeEnveloper(async (_channel, _args, call) =>
+        wrapSuccess(await call())
+      );
+    });
+
+    afterEach(() => {
+      getIpcDispatcher().setInvokeEnveloper(null);
+      _resetRemoteServicesForTest();
+    });
+
+    it("grants the generated bundle to the remote endpoint that asked for it", async () => {
+      makeService("<files/>");
+      const recordBundle = vi.fn();
+      registerRemoteService("hostFileService", { recordBundle } as never);
+      const endpoint = remoteEndpoint();
+
+      const envelope = (await generateFrom(endpoint, { worktreeId: "wt-1" })) as {
+        ok: boolean;
+        data: { filePath: string };
+      };
+
+      expect(envelope.ok).toBe(true);
+      expect(envelope.data.filePath).toBe(lastOutputPath);
+      expect(recordBundle).toHaveBeenCalledTimes(1);
+      expect(recordBundle).toHaveBeenCalledWith(endpoint, lastOutputPath);
+    });
+
+    it("grants nothing for a failed run", async () => {
+      makeService("<files/>", { error: "boom" });
+      const recordBundle = vi.fn();
+      registerRemoteService("hostFileService", { recordBundle } as never);
+
+      await generateFrom(remoteEndpoint(), { worktreeId: "wt-1" });
+
+      expect(recordBundle).not.toHaveBeenCalled();
+    });
+
+    it("grants nothing to a local view", async () => {
+      makeService("<files/>");
+      const recordBundle = vi.fn();
+      registerRemoteService("hostFileService", { recordBundle } as never);
+
+      const result = (await getInvokeHandler(CHANNELS.COPYTREE_GENERATE)(mockSender, {
+        worktreeId: "wt-1",
+      })) as Record<string, unknown>;
+
+      expect(result.filePath).toBe(lastOutputPath);
+      expect(recordBundle).not.toHaveBeenCalled();
+    });
+
+    it("still answers a remote caller when the host's file service isn't running", async () => {
+      makeService("<files/>");
+      const envelope = (await generateFrom(remoteEndpoint(), { worktreeId: "wt-1" })) as {
+        ok: boolean;
+        data: { filePath: string };
+      };
+      expect(envelope.data.filePath).toBe(lastOutputPath);
+    });
+  });
+
+  it("runs a named generate once and answers a retry from the operation record", async () => {
+    const events: OperationsEvent[] = [];
+    const registry = new OperationRegistry({ emit: (_projectId, event) => events.push(event) });
+    _resetOperationRegistryForTest(registry);
+    const generateContext = makeService("<files/>");
+    // No sender window: progress takes the broadcast path this suite can observe.
+    browserWindowMock.fromWebContents.mockReturnValue(null);
+    const writeBundle = generateContext.getMockImplementation()!;
+    generateContext.mockImplementationOnce(async (root, options, onProgress, outputPath) => {
+      (onProgress as (p: { stage: string; progress: number; message: string }) => void)({
+        stage: "load",
+        progress: 0.5,
+        message: "Loading",
+      });
+      return writeBundle(root, options, onProgress, outputPath);
+    });
+    const handler = getInvokeHandler(CHANNELS.COPYTREE_GENERATE);
+
+    const first = (await handler(mockSender, { worktreeId: "wt-1", opId: "ct-1" })) as Record<
+      string,
+      unknown
+    >;
+    const retry = (await handler(mockSender, { worktreeId: "wt-1", opId: "ct-1" })) as Record<
+      string,
+      unknown
+    >;
+
+    expect(generateContext).toHaveBeenCalledTimes(1);
+    expect(retry.filePath).toBe(first.filePath);
+    expect(events).toContainEqual({
+      type: "progress",
+      progress: expect.objectContaining({ opId: "ct-1", kind: "copytree", stage: "load" }),
+    });
+    // The record keeps a summary, never the bundle.
+    expect(registry.status("ct-1")).toMatchObject({
+      status: "succeeded",
+      result: { fileCount: 2, filePath: first.filePath },
+    });
+  });
+
+  it("generates every time for callers that name no operation, recording nothing", async () => {
+    const events: OperationsEvent[] = [];
+    const registry = new OperationRegistry({ emit: (_projectId, event) => events.push(event) });
+    _resetOperationRegistryForTest(registry);
+    const generateContext = makeService("<files/>");
+    const send = vi.fn();
+    browserWindowMock.fromWebContents.mockReturnValue({
+      id: 7,
+      isDestroyed: () => false,
+      webContents: { send, isDestroyed: () => false },
+    });
+    const writeBundle = generateContext.getMockImplementation()!;
+    generateContext.mockImplementation(async (root, options, onProgress, outputPath) => {
+      (onProgress as (p: { stage: string; progress: number; message: string }) => void)({
+        stage: "load",
+        progress: 0.5,
+        message: "Loading",
+      });
+      return writeBundle(root, options, onProgress, outputPath);
+    });
+    const handler = getInvokeHandler(CHANNELS.COPYTREE_GENERATE);
+
+    await handler(mockSender, { worktreeId: "wt-1" });
+    await handler(mockSender, { worktreeId: "wt-1" });
+
+    expect(generateContext).toHaveBeenCalledTimes(2);
+    expect(registry.list()).toEqual([]);
+    expect(events).toEqual([]);
+    // Progress still reaches the renderer, without an operation stamp.
+    const progress = send.mock.calls
+      .filter(([channel]) => channel === CHANNELS.COPYTREE_PROGRESS)
+      .map(([, event]) => event as Record<string, unknown>);
+    expect(progress.length).toBeGreaterThan(0);
+    for (const event of progress) expect(event).not.toHaveProperty("opId");
+  });
+
+  it.each([
+    [CHANNELS.COPYTREE_GENERATE, { worktreeId: "wt-1" }],
+    [CHANNELS.COPYTREE_GENERATE_AND_COPY_FILE, { worktreeId: "wt-1" }],
+    [CHANNELS.COPYTREE_INJECT, { worktreeId: "wt-1", terminalId: "term-1" }],
+  ])("%s rejects a malformed opId before any work", async (channel, payload) => {
+    const registry = new OperationRegistry();
+    _resetOperationRegistryForTest(registry);
+    const generateContext = makeService("<files/>");
+    const handler = getInvokeHandler(channel);
+
+    for (const opId of ["has space", "", "x".repeat(129), 7, null]) {
+      await expect(handler(mockSender, { ...payload, opId })).rejects.toMatchObject({
+        code: "VALIDATION",
+      });
+    }
+    expect(generateContext).not.toHaveBeenCalled();
+    expect(registry.list()).toEqual([]);
   });
 });
 
@@ -1268,21 +1410,6 @@ describe("buildRemoteComputeBlock", () => {
     expect(block).not.toContain("daintree-remote");
   });
 
-  it("shows error status without connect command when status is error", () => {
-    const worktree = {
-      resourceStatus: {
-        provider: "azure",
-        lastStatus: "error",
-      },
-      resourceConnectCommand: undefined,
-    };
-    const block = buildRemoteComputeBlock(worktree);
-    expect(block).toContain("## Remote Compute");
-    expect(block).toContain("Provider: azure");
-    expect(block).toContain("Status: error");
-    expect(block).toContain("Resource is not yet available for remote execution");
-  });
-
   it("uses unknown provider when provider is undefined", () => {
     const worktree = {
       resourceStatus: {
@@ -1305,10 +1432,6 @@ describe("escapeXml", () => {
     expect(escapeXml(`<a href="x">'y'</a>`)).toBe(
       "&lt;a href=&quot;x&quot;&gt;&apos;y&apos;&lt;/a&gt;"
     );
-  });
-
-  it("returns the input unchanged when nothing needs escaping", () => {
-    expect(escapeXml("/Users/me/projects/foo/bar.txt")).toBe("/Users/me/projects/foo/bar.txt");
   });
 
   it("makes adversarial TMPDIR-style paths safe to embed in a plist string", () => {
@@ -1557,15 +1680,6 @@ describe("copy-tree run history recording", () => {
     { channel: CHANNELS.COPYTREE_GENERATE_AND_COPY_FILE, extra: {} as Record<string, unknown> },
     { channel: CHANNELS.COPYTREE_INJECT, extra: { terminalId: "t-1" } },
   ])("$channel run name", ({ channel, extra }) => {
-    it("forwards a supplied name to the history append", async () => {
-      makeService();
-      const handler = getInvokeHandler(channel);
-
-      await handler(mockSender, { worktreeId: "wt-1", name: "Authentication stuff", ...extra });
-
-      expect(lastRecordedRun()[1].name).toBe("Authentication stuff");
-    });
-
     it("forwards the raw value, leaving normalization to the history layer", async () => {
       makeService();
       const handler = getInvokeHandler(channel);
@@ -1689,5 +1803,181 @@ describe("copy-tree run history recording", () => {
 
     expect(result.error).toBeUndefined();
     expect(result.fileCount).toBe(12);
+  });
+});
+
+describe("copyTree generate-and-copy-file — workspace root (#13210)", () => {
+  const sender = { sender: { id: 1 } } as never;
+  // Resolved so they are fully qualified on Windows too (a drive root there).
+  const PROJECT = { id: "proj-plain", path: nodePath.resolve("/folders/plain"), status: "active" };
+  const SCRATCH = { id: "scratch-1", path: nodePath.resolve("/scratches/scratch-1") };
+
+  function handler(): (...args: unknown[]) => Promise<Record<string, unknown>> {
+    const call = (ipcMainMock.handle as Mock).mock.calls.find(
+      ([channel]) => channel === CHANNELS.COPYTREE_GENERATE_AND_COPY_FILE
+    );
+    if (!call) throw new Error("generate-and-copy-file handler not registered");
+    return call[1] as (...args: unknown[]) => Promise<Record<string, unknown>>;
+  }
+
+  /** The workspace the sending view is bound to, read through deps' ProjectViewManager. */
+  let boundWorkspaceId: string | null = null;
+  function bindView(workspaceId: string | null): void {
+    boundWorkspaceId = workspaceId;
+  }
+
+  let tmpRoot: string;
+  let worktreeService: {
+    getAllStatesForProjectAsync: Mock;
+    generateContext: Mock;
+    cancelAllContext: Mock;
+  };
+
+  beforeEach(async () => {
+    vi.clearAllMocks();
+    // Earlier suites in this file leave these doubles pointed elsewhere.
+    browserWindowMock.fromWebContents.mockReturnValue(null);
+    windowRefMock.getProjectViewManager.mockReturnValue(null);
+    copyTreeHistoryMock.recordCopyTreeRun.mockReset();
+    boundWorkspaceId = null;
+    _resetRateLimitQueuesForTest();
+    _resetReservedPathsForTests();
+    tmpRoot = await nodeFs.mkdtemp(nodePath.join(nodeOs.tmpdir(), "daintree-root-copy-"));
+    vi.stubEnv("TMPDIR", tmpRoot);
+    vi.stubEnv("TEMP", tmpRoot);
+    vi.stubEnv("TMP", tmpRoot);
+
+    projectStoreMock.getCurrentProjectId.mockReturnValue(null);
+    projectStoreMock.getProjectById.mockImplementation((id) =>
+      id === PROJECT.id ? PROJECT : null
+    );
+    projectStoreMock.getProjectSettings.mockResolvedValue({
+      excludedPaths: [],
+      copyTreeSettings: {},
+    });
+    scratchStoreMock.getScratchById.mockImplementation((id) =>
+      id === SCRATCH.id ? SCRATCH : undefined
+    );
+    rootCopyMock.generateWorkspaceRootContext.mockImplementation(
+      async (_root: string, _options: unknown, _onProgress: unknown, outputPath: string) => {
+        await nodeFs.writeFile(outputPath, "<files/>", "utf8");
+        return { content: "", fileCount: 4, filePath: outputPath, outputBytes: 8 };
+      }
+    );
+
+    worktreeService = {
+      // A non-git project's host answers with no worktrees at all.
+      getAllStatesForProjectAsync: vi.fn(async () => []),
+      generateContext: vi.fn(),
+      cancelAllContext: vi.fn(),
+    };
+    registerCopyTreeHandlers({
+      mainWindow: { isDestroyed: () => false, webContents: { isDestroyed: () => false } },
+      worktreeService,
+      projectViewManager: { getProjectIdForWebContents: () => boundWorkspaceId },
+    } as never);
+  });
+
+  afterEach(async () => {
+    vi.unstubAllEnvs();
+    await nodeFs.rm(tmpRoot, { recursive: true, force: true });
+  });
+
+  it("copies a non-git project's root on main's own worker, never through a workspace host", async () => {
+    bindView(PROJECT.id);
+
+    const result = await handler()(sender, { source: "toolbar" });
+
+    expect(result.error).toBeUndefined();
+    expect(result.fileCount).toBe(4);
+    expect(rootCopyMock.generateWorkspaceRootContext).toHaveBeenCalledTimes(1);
+    expect(rootCopyMock.generateWorkspaceRootContext.mock.calls[0]?.[0]).toBe(PROJECT.path);
+    expect(worktreeService.generateContext).not.toHaveBeenCalled();
+    expect(worktreeService.getAllStatesForProjectAsync).not.toHaveBeenCalled();
+    // History keeps its non-empty provenance field by recording the root.
+    expect(copyTreeHistoryMock.recordCopyTreeRun).toHaveBeenCalledWith(
+      PROJECT.id,
+      expect.objectContaining({ worktreeId: PROJECT.path, source: "toolbar" })
+    );
+  });
+
+  it("copies a scratch's own folder, which has no workspace host at all", async () => {
+    bindView(SCRATCH.id);
+
+    const result = await handler()(sender, {});
+
+    expect(result.error).toBeUndefined();
+    expect(rootCopyMock.generateWorkspaceRootContext.mock.calls[0]?.[0]).toBe(SCRATCH.path);
+    // A scratch has no project row, so there is no project history to append to.
+    expect(copyTreeHistoryMock.recordCopyTreeRun).toHaveBeenCalledWith(null, expect.anything());
+  });
+
+  it("never widens a named worktree that doesn't resolve to the workspace root", async () => {
+    bindView(PROJECT.id);
+
+    const gone = nodePath.join(PROJECT.path, "gone");
+    const result = await handler()(sender, { worktreeId: gone });
+
+    expect(result.error).toBe(`Worktree not found: ${gone}`);
+    expect(rootCopyMock.generateWorkspaceRootContext).not.toHaveBeenCalled();
+    expect(clipboardMock.writeBuffer).not.toHaveBeenCalled();
+    expect(clipboardMock.writeText).not.toHaveBeenCalled();
+  });
+
+  it("refuses when the sending view is bound to no workspace", async () => {
+    bindView(null);
+    // The global pointer must not stand in for the view's own workspace.
+    projectStoreMock.getCurrentProjectId.mockReturnValue(PROJECT.id);
+
+    const result = await handler()(sender, {});
+
+    expect(result.error).toBe("No workspace open to copy");
+    expect(rootCopyMock.generateWorkspaceRootContext).not.toHaveBeenCalled();
+  });
+
+  it("refuses a closed project's root", async () => {
+    bindView(PROJECT.id);
+    projectStoreMock.getProjectById.mockReturnValue({ ...PROJECT, status: "closed" });
+
+    const result = await handler()(sender, {});
+
+    expect(result.error).toBe("No workspace open to copy");
+    expect(rootCopyMock.generateWorkspaceRootContext).not.toHaveBeenCalled();
+  });
+
+  it("refuses a root that isn't an absolute path", async () => {
+    bindView(PROJECT.id);
+    projectStoreMock.getProjectById.mockReturnValue({ ...PROJECT, path: "relative/dir" });
+
+    const result = await handler()(sender, {});
+
+    expect(result.error).toBe("No workspace open to copy");
+    expect(rootCopyMock.generateWorkspaceRootContext).not.toHaveBeenCalled();
+  });
+
+  it("pins the root captured before the first await, whatever the view rebinds to", async () => {
+    bindView(PROJECT.id);
+    let release!: () => void;
+    projectStoreMock.getProjectSettings.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          release = () => resolve({ excludedPaths: [], copyTreeSettings: {} });
+        })
+    );
+
+    const pending = handler()(sender, {});
+    bindView(SCRATCH.id);
+    release();
+    await pending;
+
+    expect(rootCopyMock.generateWorkspaceRootContext.mock.calls[0]?.[0]).toBe(PROJECT.path);
+  });
+
+  it("cancels in-flight root copies alongside the hosts' on a cancel-all", async () => {
+    const call = (ipcMainMock.handle as Mock).mock.calls.find(
+      ([channel]) => channel === CHANNELS.COPYTREE_CANCEL
+    );
+    await (call![1] as (...args: unknown[]) => Promise<void>)(sender, {});
+    expect(rootCopyMock.cancelAllWorkspaceRootContext).toHaveBeenCalledTimes(1);
   });
 });

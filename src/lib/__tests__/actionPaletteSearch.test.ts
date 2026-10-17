@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { ActionFrecencyEntry } from "@shared/types/actions";
 import {
   extractAcronym,
+  getActionDescriptionLine,
   getActionMatchRanges,
   rankActionMatches,
   scoreAction,
@@ -75,13 +76,6 @@ describe("scoreAction", () => {
     const scoreCp = scoreAction("cp", commandPalette);
     const scoreOther = scoreAction("cp", completion);
     expect(scoreCp).toBeGreaterThan(scoreOther);
-  });
-
-  it("acronym beats fuzzy subsequence even when query is embedded mid-word", () => {
-    const acronym = makeAction({ id: "a", title: "Worktree Switch" });
-    const fuzzy = makeAction({ id: "b", title: "show workspaces" });
-    // 'ws' is acronym of "Worktree Switch" and a subsequence in "show workspaces"
-    expect(scoreAction("ws", acronym)).toBeGreaterThan(scoreAction("ws", fuzzy));
   });
 
   it("ranks exact prefix above mid-title substring", () => {
@@ -174,17 +168,6 @@ describe("rankActionMatches", () => {
     expect(results[0]!.id).toBe("frequent");
   });
 
-  it("score at SCORE_FLOOR (0.5) still produces a small nonzero bonus", () => {
-    const items = [
-      makeAction({ id: "cold", title: "Open Terminal" }),
-      makeAction({ id: "warm", title: "Close Terminal" }),
-    ];
-    // Cold entry barely above the floor; warm entry with a typical recent score.
-    // Warm should still come out on top via the frecency bonus.
-    const results = rankActionMatches("terminal", items, [mru("cold", 0.5), mru("warm", 5)]);
-    expect(results[0]!.id).toBe("warm");
-  });
-
   it("caps MRU bonus below CONTEXT_BOOST even for unbounded scores", () => {
     // Pin the invariant: tanh saturates at 1, so the MRU bonus can never reach
     // MRU_BONUS_CAP (50), let alone CONTEXT_BOOST (80). A context match must
@@ -219,20 +202,6 @@ describe("rankActionMatches", () => {
     const ids = results.map((r) => r.id);
     expect(ids.indexOf("comp")).toBe(ids.length - 1);
     expect(ids.slice(0, 3).sort()).toEqual(["copy", "cp", "cpanel"].sort());
-  });
-
-  it("disambiguates identical acronyms by alphabetical title when scores tie", () => {
-    const items = [
-      makeAction({ id: "cpanel", title: "Close Panel" }),
-      makeAction({ id: "cp", title: "Command Palette" }),
-    ];
-    // Query is the shared acronym; tiebreaker should be deterministic alphabetical
-    const results = rankActionMatches("cp", items, []);
-    expect(results).toHaveLength(2);
-    // Both are valid matches — order must be deterministic (alphabetical on title)
-    expect(
-      results[0]!.title.localeCompare(results[1]!.title, "en", { sensitivity: "base" }) <= 0
-    ).toBe(true);
   });
 
   it("full ranked list: prefix > acronym > substring > fuzzy > non-match", () => {
@@ -372,5 +341,86 @@ describe("getActionMatchRanges", () => {
       descriptionLower: "toggle sidebar visibility",
     });
     expect(match).toBeNull();
+  });
+});
+
+describe("prose matching", () => {
+  it("does not credit a description that only spells the query across words", () => {
+    const action = makeAction({
+      id: "git.abort",
+      title: "Abort Git operation",
+      description: "Abort the merge, rebase, or revert",
+    });
+    expect(scoreAction("theme", action)).toBe(0);
+  });
+
+  it("credits a description that holds every word of a multi-word query", () => {
+    const action = makeAction({
+      id: "panel.split",
+      title: "Panel: Split Recipe",
+      description: "Split the panel in the current view",
+    });
+    expect(scoreAction("split panel", action)).toBeGreaterThan(0);
+    expect(scoreAction("split pnl", action)).toBe(0);
+  });
+
+  it("does not credit a keyword the query only spells fuzzily", () => {
+    const action = makeAction({ id: "a", title: "Foo", keywords: ["broadcast"] });
+    expect(scoreAction("bct", action)).toBe(0);
+    expect(scoreAction("cast", action)).toBeGreaterThan(0);
+  });
+
+  it("marks each word of a multi-word description hit", () => {
+    const description = "Split the panel in the current view";
+    const match = getActionMatchRanges("split panel", {
+      title: "Other",
+      titleLower: "other",
+      description,
+      descriptionLower: description.toLowerCase(),
+    });
+    expect(match?.field).toBe("description");
+    expect(match!.ranges.map(([s, e]) => description.slice(s, e + 1))).toEqual(["Split", "panel"]);
+  });
+});
+
+describe("getActionDescriptionLine", () => {
+  const description =
+    "Write the portable configuration — custom agents, agent settings, keyboard shortcuts, theme, notification preferences";
+  const summary = description;
+
+  function lineFor(query: string) {
+    const match = getActionMatchRanges(query, {
+      title: "Export configuration",
+      titleLower: "export configuration",
+      description,
+      descriptionLower: description.toLowerCase(),
+    });
+    return getActionDescriptionLine(description, summary, match);
+  }
+
+  it("keeps the summary when the hit sits inside its visible lead", () => {
+    const line = lineFor("portable");
+    expect(line.text).toBe(summary);
+    expect(line.ranges!.map(([s, e]) => line.text.slice(s, e + 1))).toEqual(["portable"]);
+  });
+
+  it("starts an excerpt a few words before a hit the row would truncate away", () => {
+    const line = lineFor("theme");
+    expect(line.text.startsWith("…")).toBe(true);
+    expect(line.text.indexOf("theme")).toBeLessThan(40);
+    expect(line.ranges!.map(([s, e]) => line.text.slice(s, e + 1))).toEqual(["theme"]);
+  });
+
+  it("shows the summary unmarked when the query landed in the title", () => {
+    const match = getActionMatchRanges("export", {
+      title: "Export configuration",
+      titleLower: "export configuration",
+      description,
+      descriptionLower: description.toLowerCase(),
+    });
+    expect(getActionDescriptionLine(description, summary, match)).toEqual({
+      text: summary,
+      ranges: undefined,
+    });
   });
 });

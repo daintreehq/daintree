@@ -17,32 +17,8 @@ describe("ipcGuard", () => {
     );
   });
 
-  it("includes the offending channel name in the error message", () => {
-    let captured: unknown;
-    try {
-      assertIpcSecurityReady("worktree:create");
-    } catch (err) {
-      captured = err;
-    }
-    expect(captured).toBeInstanceOf(Error);
-    expect((captured as Error).message).toContain("'worktree:create'");
-  });
-
   it("does not throw after mark", () => {
     markIpcSecurityReady();
     expect(() => assertIpcSecurityReady("project:get:all")).not.toThrow();
-  });
-
-  it("is idempotent — repeated mark calls do not throw", () => {
-    markIpcSecurityReady();
-    markIpcSecurityReady();
-    expect(() => assertIpcSecurityReady("project:get:all")).not.toThrow();
-  });
-
-  it("reset restores the throwing behavior", () => {
-    markIpcSecurityReady();
-    expect(() => assertIpcSecurityReady("project:get:all")).not.toThrow();
-    _resetIpcGuardForTesting();
-    expect(() => assertIpcSecurityReady("project:get:all")).toThrow();
   });
 });

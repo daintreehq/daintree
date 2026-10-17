@@ -1,4 +1,4 @@
-import { isMac } from "@/lib/platform";
+import { isMac, isWindows } from "@/lib/platform";
 
 /**
  * Terminal-first key ownership policy, shared by the window capture handler
@@ -42,6 +42,31 @@ export function terminalClipboardCombos(mac: boolean): { copy: string; paste: st
 }
 
 /**
+ * Windows terminals paste on plain Ctrl+V (Windows Terminal, VS Code, the
+ * console host), so a Windows user's Ctrl+V is the terminal's paste — not the
+ * shell's "literal next", which Windows shells don't use. Ctrl+Shift+V and
+ * Shift+Insert keep working too.
+ */
+export function isWindowsTerminalPasteKey(event: KeyboardEvent): boolean {
+  return isWindows() && isCtrlVKey(event);
+}
+
+/**
+ * Plain Ctrl+C on Windows. It copies when the terminal has a selection and is
+ * the interrupt otherwise, as in Windows Terminal — the caller checks which.
+ */
+export function isWindowsTerminalCopyKey(event: KeyboardEvent): boolean {
+  return (
+    isWindows() &&
+    event.ctrlKey &&
+    !event.shiftKey &&
+    !event.metaKey &&
+    !event.altKey &&
+    (event.key === "c" || event.key === "C" || event.code === "KeyC")
+  );
+}
+
+/**
  * Standard terminal clipboard conventions on Windows/Linux: Ctrl+Shift+C /
  * Ctrl+Shift+V and Shift+Insert (pastes the CLIPBOARD selection — the async
  * clipboard API doesn't expose X11 PRIMARY). macOS terminals use Cmd+C/V via
@@ -78,12 +103,31 @@ export function isTerminalClipboardPasteKey(event: KeyboardEvent): boolean {
   );
 }
 
+/**
+ * Plain Ctrl+V — the agent CLI's own clipboard paste ("literal next" in a
+ * shell), never Ctrl+Shift+V, which is the terminal's paste. In an agent
+ * terminal of a remote window it is intercepted when this machine's clipboard
+ * holds an image (see `ctrlVImagePaste.ts`); everywhere else it goes to the
+ * PTY untouched.
+ */
+export function isCtrlVKey(event: KeyboardEvent): boolean {
+  return (
+    event.ctrlKey &&
+    !event.shiftKey &&
+    !event.metaKey &&
+    !event.altKey &&
+    (event.key === "v" || event.key === "V" || event.code === "KeyV")
+  );
+}
+
 /** Any key the terminal owns outright while focused — checked by the window
  *  capture handler before global shortcut resolution. */
 export function isTerminalReservedKey(event: KeyboardEvent): boolean {
   return (
     isTuiReservedKey(event) ||
     isTerminalClipboardCopyKey(event) ||
-    isTerminalClipboardPasteKey(event)
+    isTerminalClipboardPasteKey(event) ||
+    isWindowsTerminalPasteKey(event) ||
+    isWindowsTerminalCopyKey(event)
   );
 }

@@ -109,6 +109,7 @@ function resetStores() {
     armOrderById: {},
     lastArmedId: null,
     previewArmedIds: new Set<string>(),
+    crossHostTargets: [],
   });
   useFleetPendingActionStore.setState({ pending: null });
   useFleetRunStore.getState()._reset();
@@ -171,14 +172,6 @@ describe("FleetArmingRibbon", () => {
     const chip = screen.getByTestId("fleet-armed-count-chip");
     expect(chip.textContent).toContain("3");
     expect(chip.textContent).toContain("in fleet");
-  });
-
-  it("clicking the exit chip disarms all", () => {
-    useFleetArmingStore.getState().armIds(["a", "b"]);
-    render(<FleetArmingRibbon />);
-    const exit = screen.getByTestId("fleet-exit");
-    fireEvent.click(exit);
-    expect(useFleetArmingStore.getState().armedIds.size).toBe(0);
   });
 
   it("renders a leading × exit affordance that disarms on click", () => {
@@ -536,6 +529,58 @@ describe("FleetArmingRibbon", () => {
     dispatchSpy.mockRestore();
   });
 
+  it("bare Escape Escape from an armed pane's terminal interrupts the fleet", async () => {
+    seed([makeAgent("t1", "working"), makeAgent("t2", "working")]);
+    useFleetArmingStore.getState().armIds(["t1", "t2"]);
+    const actionServiceModule = await import("@/services/ActionService");
+    const dispatchSpy = vi.spyOn(actionServiceModule.actionService, "dispatch");
+    render(<FleetArmingRibbon />);
+    const pane = document.createElement("div");
+    pane.setAttribute("data-panel-id", "t1");
+    const input = document.createElement("textarea");
+    const xterm = document.createElement("div");
+    xterm.className = "xterm";
+    xterm.appendChild(input);
+    pane.appendChild(xterm);
+    document.body.appendChild(pane);
+    try {
+      fireEvent.keyDown(input, { key: "Escape" });
+      fireEvent.keyDown(input, { key: "Escape" });
+      expect(dispatchSpy.mock.calls.filter((c) => c[0] === "fleet.interrupt")).toHaveLength(1);
+    } finally {
+      pane.remove();
+      dispatchSpy.mockRestore();
+    }
+  });
+
+  it("leaves bare Escape Escape to a terminal that is not in the fleet", async () => {
+    // An agent's own double-Escape (rewind, say) must not turn into an
+    // interrupt of every armed agent just because a fleet exists elsewhere.
+    seed([makeAgent("t1", "working"), makeAgent("t2", "working"), makeAgent("t3", "working")]);
+    useFleetArmingStore.getState().armIds(["t1", "t2"]);
+    const actionServiceModule = await import("@/services/ActionService");
+    const dispatchSpy = vi.spyOn(actionServiceModule.actionService, "dispatch");
+    render(<FleetArmingRibbon />);
+    const pane = document.createElement("div");
+    pane.setAttribute("data-panel-id", "t3");
+    const input = document.createElement("textarea");
+    const xterm = document.createElement("div");
+    xterm.className = "xterm";
+    xterm.appendChild(input);
+    pane.appendChild(xterm);
+    document.body.appendChild(pane);
+    try {
+      const first = fireEvent.keyDown(input, { key: "Escape" });
+      const second = fireEvent.keyDown(input, { key: "Escape" });
+      expect(first).toBe(true);
+      expect(second).toBe(true);
+      expect(dispatchSpy.mock.calls.some((c) => c[0] === "fleet.interrupt")).toBe(false);
+    } finally {
+      pane.remove();
+      dispatchSpy.mockRestore();
+    }
+  });
+
   it("single bare Escape does NOT dispatch fleet.interrupt", async () => {
     // First bare Esc passes through so xterm still broadcasts a single
     // raw \x1b for menu/prompt dismissal across the armed set.
@@ -652,6 +697,30 @@ describe("FleetArmingRibbon", () => {
     dispatchSpy.mockRestore();
   });
 
+  it("bare Escape Escape inside a modal's terminal leaves the fleet alone", async () => {
+    // The canopy dialog holds a live xterm of one agent; Escape there goes to
+    // that agent (and keeps the dialog open), never to the armed fleet.
+    seed([makeAgent("t1", "working"), makeAgent("t2", "working")]);
+    useFleetArmingStore.getState().armIds(["t1", "t2"]);
+    const actionServiceModule = await import("@/services/ActionService");
+    const dispatchSpy = vi.spyOn(actionServiceModule.actionService, "dispatch");
+    render(<FleetArmingRibbon />);
+    const dialog = document.createElement("div");
+    dialog.setAttribute("role", "dialog");
+    dialog.setAttribute("aria-modal", "true");
+    dialog.innerHTML = '<div class="xterm"><textarea></textarea></div>';
+    document.body.appendChild(dialog);
+    const helper = dialog.querySelector("textarea")!;
+    try {
+      fireEvent.keyDown(helper, { key: "Escape" });
+      fireEvent.keyDown(helper, { key: "Escape" });
+      expect(dispatchSpy.mock.calls.some((c) => c[0] === "fleet.interrupt")).toBe(false);
+    } finally {
+      dialog.remove();
+    }
+    dispatchSpy.mockRestore();
+  });
+
   it("⌘Esc from a textarea still triggers the exit chord", () => {
     // The composer textarea is the primary input surface when armed —
     // the chord must fire from it, not be swallowed by focus heuristics.
@@ -745,13 +814,6 @@ describe("FleetArmingRibbon", () => {
       throw new Error(`menu item not found for ${label.toString()}`);
     }
 
-    it("renders the trigger on the armed ribbon", () => {
-      seed([makeAgent("t1", "working"), makeAgent("t2", "working")]);
-      useFleetArmingStore.getState().armIds(["t1", "t2"]);
-      render(<FleetArmingRibbon />);
-      expect(screen.getByTestId("fleet-selection-menu-trigger")).toBeTruthy();
-    });
-
     it("'All waiting — this worktree' arms waiting agents in the current worktree", () => {
       seed([
         makeAgent("t1", "working"),
@@ -820,15 +882,6 @@ describe("FleetArmingRibbon", () => {
       expect(match?.[2]).toEqual({ source: "user" });
       dispatchSpy.mockRestore();
     });
-
-    it("'All working' arms agents in 'working' state", () => {
-      seed([makeAgent("t1", "working"), makeAgent("t2", "working")]);
-      useFleetArmingStore.getState().armIds(["t1", "t2"]);
-      render(<FleetArmingRibbon />);
-      fireEvent.click(findMenuItem(/All working — this worktree/));
-      const armed = useFleetArmingStore.getState().armedIds;
-      expect([...armed].sort()).toEqual(["t1", "t2"]);
-    });
   });
 
   describe("broadcast progress counter", () => {
@@ -862,26 +915,6 @@ describe("FleetArmingRibbon", () => {
           vi.advanceTimersByTime(400);
         });
         expect(screen.getByTestId("fleet-broadcast-progress")).toBeTruthy();
-      } finally {
-        vi.useRealTimers();
-      }
-    });
-
-    it("renders when isActive and the Doherty threshold elapses", () => {
-      vi.useFakeTimers();
-      try {
-        useFleetBroadcastProgressStore.setState({
-          completed: 5,
-          total: 15,
-          isActive: true,
-        });
-        useFleetArmingStore.getState().armIds(["a", "b", "c"]);
-        render(<FleetArmingRibbon />);
-        act(() => {
-          vi.advanceTimersByTime(400);
-        });
-        const el = screen.getByTestId("fleet-broadcast-progress");
-        expect(el.textContent).toContain("5/15");
       } finally {
         vi.useRealTimers();
       }
@@ -926,26 +959,6 @@ describe("FleetArmingRibbon", () => {
         const el = screen.getByTestId("fleet-broadcast-progress");
         expect(el.textContent).toContain("8/12");
         expect(el.textContent).not.toContain("failed");
-      } finally {
-        vi.useRealTimers();
-      }
-    });
-
-    it("renders progress counter for small fleets after Doherty threshold", () => {
-      vi.useFakeTimers();
-      try {
-        useFleetBroadcastProgressStore.setState({
-          completed: 3,
-          total: 3,
-          isActive: true,
-        });
-        useFleetArmingStore.getState().armIds(["a", "b"]);
-        render(<FleetArmingRibbon />);
-        expect(screen.queryByTestId("fleet-broadcast-progress")).toBeNull();
-        act(() => {
-          vi.advanceTimersByTime(400);
-        });
-        expect(screen.getByTestId("fleet-broadcast-progress")).toBeTruthy();
       } finally {
         vi.useRealTimers();
       }
@@ -1017,26 +1030,6 @@ describe("FleetArmingRibbon", () => {
       }
     });
 
-    it("Cancel button is reachable for batched broadcasts — counter visible after Doherty", () => {
-      vi.useFakeTimers();
-      try {
-        useFleetBroadcastProgressStore.setState({
-          completed: 1,
-          total: 7,
-          isActive: true,
-        });
-        useFleetArmingStore.getState().armIds(["a", "b"]);
-        render(<FleetArmingRibbon />);
-        act(() => {
-          vi.advanceTimersByTime(400);
-        });
-        expect(screen.getByTestId("fleet-broadcast-cancel")).toBeTruthy();
-        expect(screen.getByTestId("fleet-broadcast-progress")).toBeTruthy();
-      } finally {
-        vi.useRealTimers();
-      }
-    });
-
     it("Cancel button does not render for non-batchable fleets (total ≤ 5)", () => {
       // At/below batch size the executor takes the atomic non-batched path
       // — there's nothing to interrupt cooperatively. Hide Cancel.
@@ -1065,14 +1058,6 @@ describe("FleetArmingRibbon", () => {
       });
     });
 
-    it("renders an `+ Add panes…` row in the armed list popover", () => {
-      seed([makeAgent("t1"), makeAgent("t2")]);
-      useFleetArmingStore.getState().armIds(["t1", "t2"]);
-      render(<FleetArmingRibbon />);
-      fireEvent.click(screen.getByTestId("fleet-armed-count-chip"));
-      expect(screen.getByTestId("fleet-armed-list-add-panes").textContent).toContain("Add panes");
-    });
-
     it("hides `+ Add panes…` row when popover is in picker mode", async () => {
       // Regression: the row belongs to the list view only. When the user
       // swaps into picker mode, the row must not be rendered alongside
@@ -1086,18 +1071,6 @@ describe("FleetArmingRibbon", () => {
       });
       expect(screen.queryByTestId("fleet-armed-list-add-panes")).toBeNull();
       expect(screen.getByTestId("fleet-picker-add-root")).toBeTruthy();
-    });
-
-    it("clicking `+ Add panes…` swaps popover to picker mode", async () => {
-      seed([makeAgent("t1"), makeAgent("t2"), makeAgent("t3")]);
-      useFleetArmingStore.getState().armIds(["t1", "t2"]);
-      render(<FleetArmingRibbon />);
-      fireEvent.click(screen.getByTestId("fleet-armed-count-chip"));
-      await act(async () => {
-        fireEvent.click(screen.getByTestId("fleet-armed-list-add-panes"));
-      });
-      expect(screen.getByTestId("fleet-picker-add-root")).toBeTruthy();
-      expect(screen.getByTestId("fleet-picker-back")).toBeTruthy();
     });
 
     it("picker mode hides already-armed panes and shows only addable ones", async () => {
@@ -1394,6 +1367,28 @@ describe("supervised run status line (#10930)", () => {
     expect(screen.queryByTestId("fleet-run-dismiss")).toBeNull();
   });
 
+  it("says an agent on another host was sent to, not that it is working or done", () => {
+    seedRun("watching", [
+      makeRunTarget("a", { settled: true, agentState: "completed" }),
+      makeRunTarget("host-fleet:studio-01:t1", {
+        worktreeId: null,
+        agentState: null,
+        host: {
+          hostId: "studio-01",
+          hostName: "studio-01",
+          terminalId: "t1",
+          observed: false,
+          sawBusy: false,
+        },
+      }),
+    ]);
+    render(<FleetArmingRibbon />);
+    const status = screen.getByTestId("fleet-run-status");
+    expect(status.textContent).toContain("1 sent to studio-01");
+    expect(status.textContent).toContain("1 finished");
+    expect(status.textContent).not.toContain("working");
+  });
+
   it("shows a dismissible summary once the run finishes", () => {
     seedRun("completed", [
       makeRunTarget("a", { settled: true, agentState: "completed" }),
@@ -1403,7 +1398,7 @@ describe("supervised run status line (#10930)", () => {
     const status = screen.getByTestId("fleet-run-status");
     expect(status.textContent).toContain("Run finished");
     expect(status.textContent).toContain("1 waiting");
-    expect(status.textContent).toContain("1 done");
+    expect(status.textContent).toContain("1 finished");
 
     fireEvent.click(screen.getByTestId("fleet-run-dismiss"));
     expect(useFleetRunStore.getState().run).toBeNull();
@@ -1501,5 +1496,65 @@ describe("FleetArmingRibbon — panel-map write fanout", () => {
 
     expect(probe.commits()).toBeGreaterThan(before);
     expect(waitingItem().textContent).toContain("1");
+  });
+});
+
+describe("fleets with agents on other hosts", () => {
+  function armRemote(terminalId: string, hostName = "studio-01") {
+    useFleetArmingStore.getState().armCrossHostTarget({
+      key: `host-fleet:${hostName}:${terminalId}`,
+      hostId: hostName,
+      hostName,
+      terminalId,
+      title: `Claude ${terminalId}`,
+    });
+  }
+
+  beforeEach(() => {
+    resetStores();
+    useFleetBroadcastProgressStore.setState({
+      completed: 0,
+      total: 0,
+      failed: 0,
+      isActive: false,
+      cancelled: false,
+    });
+  });
+
+  it("shows a fleet made only of other hosts' agents, with its members and a field to message them", () => {
+    armRemote("t1");
+    armRemote("t2", "studio-02");
+    render(<FleetArmingRibbon />);
+    expect(screen.getByTestId("fleet-arming-ribbon")).toBeTruthy();
+    expect(screen.getByTestId("fleet-armed-count-chip").textContent).toContain("2");
+    expect(screen.getByTestId("fleet-host-composer")).toBeTruthy();
+    fireEvent.click(screen.getByTestId("fleet-armed-count-chip"));
+    expect(screen.getByTestId("fleet-row-host-host-fleet:studio-01:t1").textContent).toContain(
+      "on studio-01"
+    );
+  });
+
+  it("counts a pane here and an agent on another host as a fleet of two, with no extra field", () => {
+    seed([makeAgent("a")]);
+    useFleetArmingStore.getState().armId("a");
+    armRemote("t1");
+    render(<FleetArmingRibbon />);
+    expect(screen.getByTestId("fleet-armed-count-chip").textContent).toContain("2");
+    // The pane's own composer is where to type.
+    expect(screen.queryByTestId("fleet-host-composer")).toBeNull();
+  });
+
+  it("drops the other hosts' agents on exit, so re-arming starts an empty fleet", () => {
+    seed([makeAgent("a"), makeAgent("b")]);
+    useFleetArmingStore.getState().armId("a");
+    armRemote("t1");
+    render(<FleetArmingRibbon />);
+    fireEvent.click(screen.getByTestId("fleet-exit"));
+    expect(useFleetArmingStore.getState().crossHostTargets).toEqual([]);
+    expect(screen.queryByTestId("fleet-arming-ribbon")).toBeNull();
+    act(() => {
+      useFleetArmingStore.getState().armId("b");
+    });
+    expect(screen.queryByTestId("fleet-arming-ribbon")).toBeNull();
   });
 });

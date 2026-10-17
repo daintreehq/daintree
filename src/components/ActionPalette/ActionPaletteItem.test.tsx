@@ -33,6 +33,20 @@ vi.mock("@/config/categoryColors", () => ({
   ACTION_CATEGORY_DEFAULT_COLOR: "bg-tint/[0.06] text-text-secondary",
 }));
 
+function describedIds(option: HTMLElement): string[] {
+  return (option.getAttribute("aria-describedby") ?? "").split(" ").filter(Boolean);
+}
+
+/** The text each `aria-describedby` reference resolves to, in reading order. */
+function describedTexts(option: HTMLElement): string[] {
+  return describedIds(option).map((id) => document.getElementById(id)?.textContent ?? `#${id}`);
+}
+
+function labelText(option: HTMLElement): string {
+  const id = option.getAttribute("aria-labelledby");
+  return id ? (document.getElementById(id)?.textContent ?? "") : "";
+}
+
 function makeItem(overrides: Partial<ActionPaletteItemType> = {}): ActionPaletteItemType {
   return {
     id: "action-1",
@@ -53,21 +67,6 @@ function makeItem(overrides: Partial<ActionPaletteItemType> = {}): ActionPalette
 
 describe("ActionPaletteItem", () => {
   const onSelect = vi.fn();
-
-  it("renders enabled action without disabled reason", () => {
-    render(
-      <ActionPaletteItem
-        item={makeItem({ enabled: true })}
-        index={0}
-        isSelected={false}
-        onSelect={onSelect}
-      />
-    );
-
-    expect(screen.getByText("Test Action")).toBeTruthy();
-    expect(screen.getByText("Test description")).toBeTruthy();
-    expect(screen.queryByText("No focused terminal")).toBeNull();
-  });
 
   it("renders disabled action with inline disabled reason", () => {
     render(
@@ -237,15 +236,6 @@ describe("ActionPaletteItem", () => {
     expect(onHoverIndex).toHaveBeenCalledWith(3);
   });
 
-  it("does not throw when onHoverIndex is omitted", () => {
-    render(
-      <ActionPaletteItem item={makeItem()} index={0} isSelected={false} onSelect={onSelect} />
-    );
-
-    const row = screen.getByRole("option");
-    expect(() => fireEvent.pointerMove(row)).not.toThrow();
-  });
-
   it("calls onSelect when an enabled item's row body is clicked", () => {
     const item = makeItem({ enabled: true });
     render(<ActionPaletteItem item={item} index={0} isSelected={false} onSelect={onSelect} />);
@@ -281,34 +271,6 @@ describe("ActionPaletteItem", () => {
   });
 
   describe("pin & hide affordances", () => {
-    it("renders the pin button when onPin is provided", () => {
-      render(
-        <ActionPaletteItem
-          item={makeItem()}
-          index={0}
-          isSelected={false}
-          onSelect={onSelect}
-          onPin={() => true}
-        />
-      );
-
-      expect(screen.getByTestId("action-palette-pin")).toBeTruthy();
-    });
-
-    it("renders the hide button when onHide is provided and the item is not pinned or destructive", () => {
-      render(
-        <ActionPaletteItem
-          item={makeItem()}
-          index={0}
-          isSelected={false}
-          onSelect={onSelect}
-          onHide={() => {}}
-        />
-      );
-
-      expect(screen.getByTestId("action-palette-hide")).toBeTruthy();
-    });
-
     it("hides the hide button on destructive (danger:'confirm') items", () => {
       render(
         <ActionPaletteItem
@@ -486,15 +448,6 @@ describe("ActionPaletteItem", () => {
       expect(container.querySelector('[role="option"]')?.getAttribute("aria-haspopup")).toBeNull();
     });
 
-    it("renders a TriangleAlert icon on confirm-tier rows", () => {
-      const { container } = render(
-        <ActionPaletteItem item={confirmItem()} index={0} isSelected={false} onSelect={onSelect} />
-      );
-
-      const icon = container.querySelector('svg[aria-hidden="true"]');
-      expect(icon).toBeTruthy();
-    });
-
     it("does not render the alert icon on safe-tier rows", () => {
       const { container } = render(
         <ActionPaletteItem item={makeItem()} index={0} isSelected={false} onSelect={onSelect} />
@@ -503,66 +456,81 @@ describe("ActionPaletteItem", () => {
       expect(container.querySelector('svg[aria-hidden="true"]')).toBeNull();
     });
 
-    it("links selected confirm-tier rows to their rationale via aria-describedby", () => {
-      const item = confirmItem();
-      const { container } = render(
-        <ActionPaletteItem item={item} index={0} isSelected={true} onSelect={onSelect} />
-      );
-
-      const button = container.querySelector('[role="option"]');
-      const expectedId = `${item.id}-danger-rationale`;
-      expect(button?.getAttribute("aria-describedby")).toBe(expectedId);
-
-      const rationale = container.querySelector(`#${expectedId}`);
-      expect(rationale).toBeTruthy();
-      expect(rationale?.textContent).toBe("Removes the working tree and branch from disk");
+    it("describes a confirm-tier row by its consequence first, selected or not", () => {
+      for (const isSelected of [true, false]) {
+        const { container, unmount } = render(
+          <ActionPaletteItem
+            item={confirmItem()}
+            index={0}
+            isSelected={isSelected}
+            onSelect={onSelect}
+          />
+        );
+        const option = container.querySelector<HTMLElement>('[role="option"]')!;
+        // A row that showed its consequence only under the cursor grew as the
+        // cursor landed on it, so the line and its reference are unconditional.
+        expect(describedTexts(option)[0]).toBe("Removes the working tree and branch from disk");
+        expect(labelText(option)).toBe("Delete worktree…");
+        unmount();
+      }
     });
 
-    it("omits aria-describedby on unselected confirm-tier rows", () => {
-      const item = confirmItem();
-      const { container } = render(
-        <ActionPaletteItem item={item} index={0} isSelected={false} onSelect={onSelect} />
-      );
-
-      expect(
-        container.querySelector('[role="option"]')?.getAttribute("aria-describedby")
-      ).toBeNull();
-      // Rationale node still in DOM (CSS-hidden) so the id target is stable across renders.
-      expect(container.querySelector(`#${item.id}-danger-rationale`)).toBeTruthy();
-    });
-
-    it("omits rationale node and aria-describedby when dangerRationale is missing", () => {
+    it("omits the rationale node and reference when dangerRationale is missing", () => {
       const item = confirmItem({ dangerRationale: undefined });
       const { container } = render(
         <ActionPaletteItem item={item} index={0} isSelected={true} onSelect={onSelect} />
       );
 
-      const button = container.querySelector('[role="option"]');
-      expect(button?.getAttribute("aria-describedby")).toBeNull();
-      expect(container.querySelector(`#${item.id}-danger-rationale`)).toBeNull();
+      const option = container.querySelector<HTMLElement>('[role="option"]')!;
+      expect(describedIds(option).some((id) => id.endsWith("danger-rationale"))).toBe(false);
+      expect(container.querySelector('[id$="-danger-rationale"]')).toBeNull();
       // Suffix and icon still render — they gate on `danger === "confirm"`, not on rationale.
       expect(screen.getByText("Delete worktree…")).toBeTruthy();
       expect(container.querySelector('svg[aria-hidden="true"]')).toBeTruthy();
     });
   });
 
-  describe("footerHintId aria-describedby", () => {
-    it("points aria-describedby at the supplied footerHintId", () => {
+  describe("accessible name and description", () => {
+    it("names the option by its title alone", () => {
+      const { container } = render(
+        <ActionPaletteItem item={makeItem()} index={0} isSelected={false} onSelect={onSelect} />
+      );
+      const option = container.querySelector<HTMLElement>('[role="option"]')!;
+      expect(labelText(option)).toBe("Test Action");
+    });
+
+    it("describes the row by its category, summary and the footer hint, in that order", () => {
+      const { container } = render(
+        <>
+          <ActionPaletteItem
+            item={makeItem()}
+            index={0}
+            isSelected={false}
+            onSelect={onSelect}
+            footerHintId="palette-footer-hint"
+          />
+          <div id="palette-footer-hint">↵ to run</div>
+        </>
+      );
+      const option = container.querySelector<HTMLElement>('[role="option"]')!;
+      expect(describedTexts(option)).toEqual(["terminal", "Test description", "↵ to run"]);
+    });
+
+    it("puts an unavailable row's reason ahead of everything else it says", () => {
       const { container } = render(
         <ActionPaletteItem
-          item={makeItem()}
+          item={makeItem({ enabled: false, disabledReason: "No focused terminal" })}
           index={0}
           isSelected={false}
           onSelect={onSelect}
           footerHintId="palette-footer-hint"
         />
       );
-      expect(container.querySelector('[role="option"]')?.getAttribute("aria-describedby")).toBe(
-        "palette-footer-hint"
-      );
+      const option = container.querySelector<HTMLElement>('[role="option"]')!;
+      expect(describedTexts(option)[0]).toBe("No focused terminal");
     });
 
-    it("appends the rationale id when selected on a confirm-tier row", () => {
+    it("references the rationale before the footer hint on a confirm-tier row", () => {
       const item = {
         ...makeItem(),
         id: "delete-worktree",
@@ -570,22 +538,30 @@ describe("ActionPaletteItem", () => {
         dangerRationale: "Removes the working tree",
       };
       const { container } = render(
-        <ActionPaletteItem
-          item={item}
-          index={0}
-          isSelected={true}
-          onSelect={onSelect}
-          footerHintId="palette-footer-hint"
-        />
+        <>
+          <ActionPaletteItem
+            item={item}
+            index={0}
+            isSelected={true}
+            onSelect={onSelect}
+            footerHintId="palette-footer-hint"
+          />
+          <div id="palette-footer-hint">↵ to delete</div>
+        </>
       );
-      expect(container.querySelector('[role="option"]')?.getAttribute("aria-describedby")).toBe(
-        "palette-footer-hint delete-worktree-danger-rationale"
-      );
+      const texts = describedTexts(container.querySelector<HTMLElement>('[role="option"]')!);
+      expect(texts.indexOf("Removes the working tree")).toBeLessThan(texts.indexOf("↵ to delete"));
     });
 
-    it("omits aria-describedby entirely when no footerHintId and no selected rationale", () => {
+    it("omits aria-describedby entirely when the row has nothing to describe it", () => {
       const { container } = render(
-        <ActionPaletteItem item={makeItem()} index={0} isSelected={false} onSelect={onSelect} />
+        <ActionPaletteItem
+          item={makeItem({ description: "", descriptionLower: "" })}
+          index={0}
+          isSelected={false}
+          onSelect={onSelect}
+          showCategory={false}
+        />
       );
       expect(
         container.querySelector('[role="option"]')?.getAttribute("aria-describedby")

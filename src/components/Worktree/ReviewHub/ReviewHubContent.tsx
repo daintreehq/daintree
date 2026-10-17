@@ -100,7 +100,10 @@ import {
 } from "@/store/forgeProviderHealthStore";
 import { useShallow } from "zustand/react/shallow";
 import { systemClient } from "@/clients/systemClient";
+import { announceOpenInEditorFallback } from "@/utils/openInEditorFallback";
 import { forgeClient } from "@/clients/forgeClient";
+import { mintRemoteOperationId } from "@/clients/operationsClient";
+import { runHostOperation } from "@/hooks/useHostConnection";
 import { actionService } from "@/services/ActionService";
 import { useGitForcePushStore } from "@/store/gitForcePushStore";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
@@ -190,6 +193,13 @@ export interface ReviewHubContentProps {
 }
 
 const selectNoProviderHealth = () => null;
+
+function isTextWidget(target: EventTarget | null): boolean {
+  return (
+    target instanceof HTMLElement &&
+    (target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.isContentEditable)
+  );
+}
 
 /**
  * Self-contained Review & Commit surface. All staging-status fetches,
@@ -330,6 +340,8 @@ export function ReviewHubContent({
   // (a `section:path` key) preserves focus on the same file across list mutations.
   const [focusedIndex, setFocusedIndex] = useState(-1);
   const fileListRef = useRef<HTMLDivElement | null>(null);
+  const rootRef = useRef<HTMLDivElement | null>(null);
+  const movingListFocusRef = useRef(false);
   // Reveal handles for the two windowed sections. Null on the static path,
   // where the DOM query below still finds every row.
   const stagedListRef = useRef<VirtuosoHandle | null>(null);
@@ -866,13 +878,19 @@ export function ReviewHubContent({
   );
 
   /**
-   * What the rail actually renders. Identical to `readinessSummary` except that
-   * the `push-failed` item is dropped while the dedicated push banner is up —
-   * see the note at the `ReadinessRail` call site. Never used for gating.
+   * What the rail actually renders. Identical to `readinessSummary` except for
+   * items the pane already shows elsewhere — `push-failed` while the dedicated
+   * push banner is up (see the note at the `ReadinessRail` call site), and the
+   * two below. Never used for gating.
    */
   const railSummary = useMemo<ReviewReadinessSummary>(() => {
-    if (!showPushBanner) return readinessSummary;
-    const drop = (items: ReviewReadinessItem[]) => items.filter((i) => i.id !== "push-failed");
+    // Conditions this pane already states in its own chrome, so a rail row for
+    // them is the same fact twice: `pr-missing` is the header's "No PR" chip
+    // (same `hasRemote && no PR` condition), and `unpushed-commits` only arises
+    // on a clean tree, whose empty state headlines the very same count.
+    const shownElsewhere = new Set<string>(["pr-missing", "unpushed-commits"]);
+    if (showPushBanner) shownElsewhere.add("push-failed");
+    const drop = (items: ReviewReadinessItem[]) => items.filter((i) => !shownElsewhere.has(i.id));
     const blockers = drop(readinessSummary.blockers);
     const warnings = drop(readinessSummary.warnings);
     return {
@@ -1096,10 +1114,11 @@ export function ReviewHubContent({
         setActionError({
           title: "Couldn't stage all files",
           detail: formatErrorMessage(err, "Failed to stage all files"),
+          retry: () => void handleStageAll(),
         });
       }
     })();
-  }, [isOpen, autoStageOnOpen, status, statusIsFresh, refresh, worktreePath]);
+  }, [isOpen, autoStageOnOpen, status, statusIsFresh, refresh, worktreePath, handleStageAll]);
 
   useEffect(() => {
     if (diffMode === "base-branch" && status?.currentBranch === mainBranch) {
@@ -1214,6 +1233,9 @@ export function ReviewHubContent({
         useDiffViewedStore.getState().clearWorktree(worktreePath);
         await refresh();
       } catch (err) {
+        // No Retry: the message is still in the composer and the Commit button
+        // is the retry — it owns the busy state, the in-flight guard and the
+        // draft clearing that a re-run from here would skip.
         setActionError({
           title: "Couldn't commit changes",
           detail: formatErrorMessage(err, "Failed to commit changes"),
@@ -1239,23 +1261,27 @@ export function ReviewHubContent({
     }
   }, [worktreePath, refresh]);
 
-  const handleContinueOperation = useCallback(async () => {
-    setActionError(null);
-    debouncedBgRefreshRef.current?.cancel();
-    try {
-      await window.electron.git.continueRepositoryOperation(worktreePath);
-      await refresh();
-    } catch (err) {
-      setActionError({
-        title: "Couldn't continue repository operation",
-        detail: formatErrorMessage(err, "Failed to continue repository operation"),
-      });
-      throw err;
-    }
-  }, [worktreePath, refresh]);
+  const handleContinueOperation = useCallback(
+    async function continueOperation(): Promise<void> {
+      setActionError(null);
+      debouncedBgRefreshRef.current?.cancel();
+      try {
+        await window.electron.git.continueRepositoryOperation(worktreePath);
+        await refresh();
+      } catch (err) {
+        setActionError({
+          title: "Couldn't continue repository operation",
+          detail: formatErrorMessage(err, "Failed to continue repository operation"),
+          retry: () => void continueOperation().catch(() => {}),
+        });
+        throw err;
+      }
+    },
+    [worktreePath, refresh]
+  );
 
   const handleOpenInEditor = useCallback(
-    async (args: string | { path: string; line?: number }) => {
+    async function openInEditor(args: string | { path: string; line?: number }): Promise<void> {
       setActionError(null);
       const filePath = typeof args === "string" ? args : args.path;
       const line = typeof args === "string" ? undefined : args.line;
@@ -1271,11 +1297,12 @@ export function ReviewHubContent({
         if (typeof line === "number" && Number.isFinite(line) && line > 0) {
           payload.line = line;
         }
-        await window.electron.system.openInEditor(payload);
+        announceOpenInEditorFallback(await window.electron.system.openInEditor(payload));
       } catch (err) {
         setActionError({
           title: "Couldn't open file in editor",
           detail: formatErrorMessage(err, "Failed to open file in editor"),
+          retry: () => void openInEditor(args),
         });
       }
     },
@@ -1358,7 +1385,15 @@ export function ReviewHubContent({
     // state nobody has observed since.
     useGitForcePushStore.getState().clearRecovery(worktreePath);
     try {
-      await window.electron.git.push(worktreePath);
+      const opId = mintRemoteOperationId();
+      await runHostOperation(
+        opId,
+        () =>
+          opId
+            ? window.electron.git.push(worktreePath, undefined, opId)
+            : window.electron.git.push(worktreePath),
+        { fromResult: () => undefined }
+      );
       setPushError(null);
       setPushAnnouncement(announcedTarget ? `Pushed to ${announcedTarget}` : "Push complete");
     } catch (err) {
@@ -1450,10 +1485,23 @@ export function ReviewHubContent({
       // Defer one frame so the just-expanded DOM is committed before focus.
       requestAnimationFrame(() => {
         if (blocker === "conflicts") {
-          conflictSectionRef.current?.focus();
+          // The first conflicted row's Open — the control that makes progress —
+          // whether the rows are the strip's worklist or the operation panel's.
+          // The strip's wrapper is the fallback, so a list still settling
+          // never swallows the click.
+          const firstOpen = rootRef.current?.querySelector<HTMLElement>(
+            '[data-testid="conflict-worklist"] li button, [data-testid="conflict-panel"] li button'
+          );
+          (firstOpen ?? conflictSectionRef.current)?.focus();
         } else {
-          const stageAllBtn = unstagedSectionRef.current?.querySelector("button");
-          stageAllBtn?.focus();
+          // The section's bulk Stage control by name: the first button in the
+          // header is View options, which is focus without progress. When the
+          // section has nothing to stage there is no such control, and the
+          // file list itself is the next place to act.
+          const stageAllBtn = unstagedSectionRef.current?.querySelector<HTMLElement>(
+            '[data-testid="review-hub-stage-section-button"]'
+          );
+          (stageAllBtn ?? fileListRef.current)?.focus();
         }
       });
     },
@@ -1709,6 +1757,12 @@ export function ReviewHubContent({
       // listener closes the entire hub, so it stands aside on the trigger's own
       // open marker rather than relying on that ordering alone.
       if (document.querySelector(`[${PR_CHECKS_OPEN_ATTR}="true"]`)) return;
+      const nothingTransient = !selectedFile && !selectedBaseBranchFile && selectedPaths.size === 0;
+      // A filter with text clears itself first (SearchField's own Escape);
+      // only an empty one gives Escape over to leaving the field.
+      if (nothingTransient && e.target instanceof HTMLInputElement && e.target.value !== "") {
+        return;
+      }
       e.preventDefault();
       e.stopPropagation();
       if (selectedFile) {
@@ -1719,7 +1773,20 @@ export function ReviewHubContent({
         setSelectedPaths(new Set());
         setSelectionSection(null);
         selectionAnchorRef.current = null;
-      } else {
+      } else if (isTextWidget(e.target)) {
+        // Leaving a text field is as far as Escape goes from inside one: the
+        // commit message lives only in this panel, so closing here would lose
+        // the draft to a key pressed to dismiss something smaller.
+        // With the file list collapsed there is nowhere steadier to go, so
+        // focus stays put rather than dropping to the document.
+        const list = fileListRef.current;
+        if (list && e.target instanceof HTMLElement) {
+          e.target.blur();
+          list.focus();
+        }
+      } else if (!e.repeat) {
+        // Never on auto-repeat: a held Escape that just left the commit box
+        // would otherwise run on into closing the panel and its draft.
         onClose();
       }
       return;
@@ -1729,12 +1796,7 @@ export function ReviewHubContent({
     // a text widget (filter inputs, commit textarea) or an open dropdown menu
     // has focus so normal typing and menu navigation are unaffected.
     const target = e.target instanceof HTMLElement ? e.target : null;
-    if (
-      target &&
-      (target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.isContentEditable)
-    ) {
-      return;
-    }
+    if (isTextWidget(target)) return;
     if (document.activeElement?.closest('[role="menu"]')) return;
     // A radiogroup (the diff mode switch) answers its own arrow keys, the way it
     // does everywhere else; this capture listener would otherwise take Up/Down
@@ -1798,7 +1860,11 @@ export function ReviewHubContent({
       writeCursorKey(`${item.section}:${item.file.path}`);
       // Move DOM focus to the listbox so assistive tech announces the active
       // option via aria-activedescendant. Scroll is handled by the layout effect.
+      // Flagged so the listbox's Tab-entry seeding, which would read the index
+      // from before this keypress, stands down for this focus.
+      movingListFocusRef.current = true;
       fileListRef.current?.focus({ preventScroll: true });
+      movingListFocusRef.current = false;
     };
 
     // A persistent file list, so the arrows stop at its ends rather than wrap.
@@ -1886,6 +1952,9 @@ export function ReviewHubContent({
   const hasConflicts = (status?.conflicted.length ?? 0) > 0;
   const hasStagedSelection = selectionSection === "staged" && selectedPaths.size > 0;
   const hasUnstagedSelection = selectionSection === "unstaged" && selectedPaths.size > 0;
+  const stagedPaths = status?.staged.map((f) => f.path) ?? [];
+  const refreshBusy = diffMode === "base-branch" ? baseBranchLoading : loading;
+  const refreshSpinning = diffMode === "working-tree" && isBackgroundRefreshing;
   const repoState = status?.repoState ?? "CLEAN";
   const isOperationState =
     repoState === "MERGING" ||
@@ -1896,6 +1965,7 @@ export function ReviewHubContent({
   return (
     <>
       <div
+        ref={rootRef}
         className={cn(
           "relative flex flex-col flex-1 min-h-0",
           "bg-surface-canvas",
@@ -1954,29 +2024,34 @@ export function ReviewHubContent({
               ]}
             />
 
-            {diffMode === "working-tree" && (
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <button
-                    onClick={() => {
-                      if (!loading) void refresh();
-                    }}
-                    // Not `disabled`: pressing it would drop keyboard focus to the page.
-                    aria-disabled={loading || undefined}
-                    aria-busy={loading || isBackgroundRefreshing || undefined}
-                    className={PANE_TOOLBAR_ICON_BUTTON_CLASS}
-                    aria-label="Refresh"
-                  >
-                    <SpinningIcon
-                      icon={RefreshCw}
-                      active={loading || isBackgroundRefreshing}
-                      className={PANE_TOOLBAR_ICON_CLASS}
-                    />
-                  </button>
-                </TooltipTrigger>
-                <TooltipContent side="bottom">Refresh</TooltipContent>
-              </Tooltip>
-            )}
+            {/* In both modes: hiding it in base-branch mode slid the mode
+                switch sideways on every toggle, and that comparison goes stale
+                as much as the working tree does. */}
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <button
+                  onClick={() => {
+                    if (diffMode === "base-branch") {
+                      if (!baseBranchLoading) void fetchBaseBranch();
+                    } else if (!loading) {
+                      void refresh();
+                    }
+                  }}
+                  // Not `disabled`: pressing it would drop keyboard focus to the page.
+                  aria-disabled={refreshBusy || undefined}
+                  aria-busy={refreshBusy || refreshSpinning || undefined}
+                  className={PANE_TOOLBAR_ICON_BUTTON_CLASS}
+                  aria-label="Refresh"
+                >
+                  <SpinningIcon
+                    icon={RefreshCw}
+                    active={refreshBusy || refreshSpinning}
+                    className={PANE_TOOLBAR_ICON_CLASS}
+                  />
+                </button>
+              </TooltipTrigger>
+              <TooltipContent side="bottom">Refresh</TooltipContent>
+            </Tooltip>
             {/* Same reason as the title: AppDialog.Header supplies the close
                 control at this location. */}
             {!isDialog && (
@@ -2022,11 +2097,18 @@ export function ReviewHubContent({
             title={actionError.title}
             description={actionError.detail}
             onClose={() => setActionError(null)}
-            action={{
-              id: "review-hub-action-error-retry",
-              label: "Retry",
-              onClick: () => void refresh(),
-            }}
+            // Retry re-runs the failed operation itself. A failure with no safe
+            // re-run (one that would skip a confirmation) offers none rather
+            // than a "Retry" that only re-reads status and changes nothing.
+            action={
+              actionError.retry
+                ? {
+                    id: "review-hub-action-error-retry",
+                    label: "Retry",
+                    onClick: actionError.retry,
+                  }
+                : undefined
+            }
           />
         )}
         <span role="status" className="sr-only" data-testid="review-hub-push-announcement">
@@ -2066,6 +2148,9 @@ export function ReviewHubContent({
             // tailwind-merge collapses the group and keeps the last one — so
             // the reservation below lives on the content wrapper instead.
             "flex-1 overflow-y-auto min-h-0",
+            // A revealed row stops below the sticky section band instead of
+            // under it (WCAG 2.4.11); `scrollIntoView` honours scroll padding.
+            "scroll-pt-10",
             isBackgroundRefreshing && "surface-stale"
           )}
           aria-busy={isBackgroundRefreshing || undefined}
@@ -2165,16 +2250,15 @@ export function ReviewHubContent({
                         </span>
                         <span className={REVIEW_HUB_COUNT_CHIP}>
                           {pluralize(sortedBaseBranchFiles.length, "file")}
-                          {(baseBranchChurn.ins > 0 || baseBranchChurn.del > 0) && (
-                            <>
-                              {" "}
-                              <DiffStat
-                                insertions={baseBranchChurn.ins}
-                                deletions={baseBranchChurn.del}
-                              />
-                            </>
-                          )}
                         </span>
+                        {/* On the band rather than in the chip, as in the
+                            working-tree sections: the status inks fall under
+                            4.5:1 on the chip's fill. */}
+                        <DiffStat
+                          insertions={baseBranchChurn.ins}
+                          deletions={baseBranchChurn.del}
+                          className="ml-2 font-normal normal-case tracking-normal"
+                        />
                       </span>
                     </div>
                   </div>
@@ -2274,12 +2358,16 @@ export function ReviewHubContent({
                         // has to be atomic rather than animated.
                         instant={pushError !== null}
                         icon={<ArrowUpFromLine />}
+                        // "Ready to push" only where Push is actually offered:
+                        // behind the remote, or with the divergence unknown,
+                        // the button is withheld, and a readiness headline over
+                        // no action was the pane contradicting itself.
                         title={
-                          pushError
-                            ? `${pluralize(aheadCount ?? 0, "commit")} not pushed`
-                            : isPushing
-                              ? `Pushing ${pluralize(aheadCount ?? 0, "commit")}`
-                              : `${pluralize(aheadCount ?? 0, "commit")} ready to push`
+                          isPushing
+                            ? `Pushing ${pluralize(aheadCount ?? 0, "commit")}`
+                            : readinessSummary.pushReady && !pushError
+                              ? `${pluralize(aheadCount ?? 0, "commit")} ready to push`
+                              : `${pluralize(aheadCount ?? 0, "commit")} not pushed`
                         }
                         // "Ready to push" is a readiness claim, so it must not
                         // survive a rejection: after a push fails, `pushReady`
@@ -2290,7 +2378,12 @@ export function ReviewHubContent({
                         description={
                           pushError
                             ? `Nothing left to commit — resolve the push above to publish ${aheadCount === 1 ? "it" : "them"}.`
-                            : "Nothing left to commit — these commits just aren't on the remote yet."
+                            : status.pushDestination === null
+                              ? // The commit history dropdown's words for the same case.
+                                "No push destination · set an upstream to push"
+                              : aheadCount === 1
+                                ? "Nothing left to commit — this commit just isn't on the remote yet."
+                                : "Nothing left to commit — these commits just aren't on the remote yet."
                         }
                         action={
                           readinessSummary.pushReady ? (
@@ -2348,122 +2441,171 @@ export function ReviewHubContent({
                           )}
                           aria-hidden="true"
                         />
-                        <span>
-                          {fileListExpanded ? "Hide" : "Show"} files ({totalChanges})
-                        </span>
+                        {/* One label in both states (house rule: toggle labels
+                            never change); the chevron and `aria-expanded`
+                            carry open versus closed. */}
+                        <span>Files ({totalChanges})</span>
                       </button>
                     </div>
                     {fileListExpanded && (
-                      <div
-                        id={`review-hub-files-${worktreePath}`}
-                        ref={fileListRef}
-                        role="listbox"
-                        aria-label="Changed files"
-                        tabIndex={-1}
-                        // Stands the global Shift+F10 / Menu-key handler down so
-                        // the focused row's own menu opens instead of the focused
-                        // panel's (`useGlobalKeybindings`).
-                        data-row-menu=""
-                        aria-activedescendant={
-                          focusedRowIsMounted ? `review-hub-row-${focusedIndex}` : undefined
-                        }
-                        className="outline-hidden"
-                      >
-                        {/* Conflict warning */}
+                      <div id={`review-hub-files-${worktreePath}`}>
+                        {/* Conflicts with no operation behind them (a stash
+                          pop). The rail above already says how many and that
+                          they block the commit; what was missing was the files
+                          themselves — they sit in neither section below, so the
+                          pane could count a conflict it never named. The
+                          worklist rows are ConflictPanel's own, with the same
+                          Open, marker-checked Mark resolved and take-side menu.
+                          Outside the listbox: its controls are real tab stops. */}
                         {hasConflicts && (
                           <div
                             ref={conflictSectionRef}
                             tabIndex={-1}
-                            /* Focusable because `handleFocusBlocker` sends focus
-                             here from the readiness rail's "conflicts" CTA, so
-                             it keeps its own ring — on `focus:`, since a
-                             scripted focus after a pointer click never matches
-                             `:focus-visible`, and inset so the unpadded
-                             scrollport cannot clip it. The banner inside carries
-                             the shared failure grammar; this wrapper only owns
-                             focus. */
+                            /* Focusable as the fallback target for the rail's
+                               "Show conflicts" CTA, which lands on the first
+                               row's Open when there is one. `focus:` because a
+                               scripted focus after a pointer click never
+                               matches `:focus-visible`; inset so the unpadded
+                               scrollport cannot clip it. */
                             className="rounded-[var(--radius-md)] focus:outline focus:outline-2 focus:outline-accent-primary focus:-outline-offset-2"
                           >
-                            <InlineStatusBanner
-                              severity="warning"
-                              role="status"
-                              ariaLive="polite"
-                              icon={AlertTriangle}
-                              title={pluralize(status.conflicted.length, "conflicted file")}
-                              description="Resolve these before committing."
-                              animated={false}
+                            <ConflictPanel
+                              variant="worklist"
+                              // The resolved file is now staged, so the next step
+                              // is the message; the list is the fallback when the
+                              // composer is unavailable.
+                              onWorklistCleared={() =>
+                                requestAnimationFrame(() => {
+                                  const message =
+                                    rootRef.current?.querySelector<HTMLTextAreaElement>(
+                                      '[data-testid="review-hub-commit-message"]:not(:disabled)'
+                                    );
+                                  (message ?? fileListRef.current)?.focus({ preventScroll: true });
+                                })
+                              }
+                              status={status}
+                              worktreePath={worktreePath}
+                              onMarkResolved={handleMarkResolved}
+                              onOpenInEditor={handleOpenInEditor}
+                              onCheckoutOursTheirs={handleCheckoutOursTheirs}
+                              onAbort={handleAbortOperation}
+                              onContinue={handleContinueOperation}
                             />
                           </div>
                         )}
 
-                        {/* Staged section */}
-                        <FileSection
-                          isStaged={true}
-                          files={derivedStaged}
-                          allFiles={status.staged}
-                          indexOffset={0}
-                          virtualized={workingTreeVirtualized}
-                          scrollParent={scrollParent}
-                          listRef={stagedListRef}
-                          onRenderedRangeChange={handleStagedRangeChange}
-                          focusedIndex={focusedIndex}
-                          selectionSection={selectionSection}
-                          selectedPaths={selectedPaths}
-                          hasSelection={hasStagedSelection}
-                          view={stagedView}
-                          setView={setStagedView}
-                          inputRef={stagedInputRef}
-                          setFilterQuery={setStagedFilterQuery}
-                          clearFilter={clearStagedFilter}
-                          onToggle={handleToggleStaged}
-                          onRowClick={handleRowClick}
-                          onBulkAction={() => {
-                            const scope = resolveBulkScope(stagedView, hasStagedSelection);
-                            void (scope === "selection"
-                              ? handleUnstageSelection()
-                              : scope === "shown"
-                                ? handleUnstageFiltered()
-                                : handleUnstageAll());
+                        <div
+                          ref={fileListRef}
+                          role="listbox"
+                          aria-label="Changed files"
+                          aria-multiselectable="true"
+                          // The list's one tab stop (the same roving contract as the
+                          // other file lists): rows never take DOM focus, and their
+                          // diff, Viewed and stage controls sit outside the tab
+                          // order because Enter, V and Space act on the cursor row.
+                          tabIndex={navigableItems.length > 0 ? 0 : -1}
+                          onFocus={(e) => {
+                            // Tabbing in lands the cursor on the first row, so the
+                            // active descendant (and its ring) exists at once.
+                            // The key is what drives the reveal, so it is set with
+                            // the index; re-entry reveals the cursor it left.
+                            if (
+                              e.target !== e.currentTarget ||
+                              navigableItems.length === 0 ||
+                              movingListFocusRef.current
+                            )
+                              return;
+                            if (focusedIndex < 0) {
+                              const first = navigableItems[0]!;
+                              setFocusedIndex(0);
+                              writeCursorKey(`${first.section}:${first.file.path}`);
+                            } else {
+                              fileListRef.current
+                                ?.querySelector<HTMLElement>(`[data-row-index="${focusedIndex}"]`)
+                                ?.scrollIntoView({ behavior: "instant", block: "nearest" });
+                            }
                           }}
-                          viewedFiles={viewedFiles}
-                          onViewedChange={handleViewedChange}
-                          renderRowMenu={renderRowMenu}
-                        />
+                          // Stands the global Shift+F10 / Menu-key handler down so
+                          // the focused row's own menu opens instead of the focused
+                          // panel's (`useGlobalKeybindings`).
+                          data-row-menu=""
+                          aria-activedescendant={
+                            focusedRowIsMounted ? `review-hub-row-${focusedIndex}` : undefined
+                          }
+                          className="outline-hidden"
+                        >
+                          {/* Staged section */}
+                          <FileSection
+                            isStaged={true}
+                            files={derivedStaged}
+                            allFiles={status.staged}
+                            indexOffset={0}
+                            virtualized={workingTreeVirtualized}
+                            setSize={navigableItems.length}
+                            scrollParent={scrollParent}
+                            listRef={stagedListRef}
+                            onRenderedRangeChange={handleStagedRangeChange}
+                            focusedIndex={focusedIndex}
+                            selectionSection={selectionSection}
+                            selectedPaths={selectedPaths}
+                            hasSelection={hasStagedSelection}
+                            view={stagedView}
+                            setView={setStagedView}
+                            inputRef={stagedInputRef}
+                            setFilterQuery={setStagedFilterQuery}
+                            clearFilter={clearStagedFilter}
+                            onToggle={handleToggleStaged}
+                            onRowClick={handleRowClick}
+                            onBulkAction={() => {
+                              const scope = resolveBulkScope(stagedView, hasStagedSelection);
+                              void (scope === "selection"
+                                ? handleUnstageSelection()
+                                : scope === "shown"
+                                  ? handleUnstageFiltered()
+                                  : handleUnstageAll());
+                            }}
+                            viewedFiles={viewedFiles}
+                            onViewedChange={handleViewedChange}
+                            renderRowMenu={renderRowMenu}
+                          />
 
-                        {/* Unstaged section */}
-                        <FileSection
-                          sectionRef={unstagedSectionRef}
-                          isStaged={false}
-                          files={derivedUnstaged}
-                          allFiles={status.unstaged}
-                          indexOffset={derivedStaged.length}
-                          virtualized={workingTreeVirtualized}
-                          scrollParent={scrollParent}
-                          listRef={unstagedListRef}
-                          onRenderedRangeChange={handleUnstagedRangeChange}
-                          focusedIndex={focusedIndex}
-                          selectionSection={selectionSection}
-                          selectedPaths={selectedPaths}
-                          hasSelection={hasUnstagedSelection}
-                          view={changesView}
-                          setView={setChangesView}
-                          inputRef={changesInputRef}
-                          setFilterQuery={setChangesFilterQuery}
-                          clearFilter={clearChangesFilter}
-                          onToggle={handleToggleUnstaged}
-                          onRowClick={handleRowClick}
-                          onBulkAction={() => {
-                            const scope = resolveBulkScope(changesView, hasUnstagedSelection);
-                            void (scope === "selection"
-                              ? handleStageSelection()
-                              : scope === "shown"
-                                ? handleStageFiltered()
-                                : handleStageAll());
-                          }}
-                          viewedFiles={viewedFiles}
-                          onViewedChange={handleViewedChange}
-                          renderRowMenu={renderRowMenu}
-                        />
+                          {/* Unstaged section */}
+                          <FileSection
+                            sectionRef={unstagedSectionRef}
+                            isStaged={false}
+                            otherSectionHasFiles={status.staged.length > 0}
+                            files={derivedUnstaged}
+                            allFiles={status.unstaged}
+                            indexOffset={derivedStaged.length}
+                            virtualized={workingTreeVirtualized}
+                            setSize={navigableItems.length}
+                            scrollParent={scrollParent}
+                            listRef={unstagedListRef}
+                            onRenderedRangeChange={handleUnstagedRangeChange}
+                            focusedIndex={focusedIndex}
+                            selectionSection={selectionSection}
+                            selectedPaths={selectedPaths}
+                            hasSelection={hasUnstagedSelection}
+                            view={changesView}
+                            setView={setChangesView}
+                            inputRef={changesInputRef}
+                            setFilterQuery={setChangesFilterQuery}
+                            clearFilter={clearChangesFilter}
+                            onToggle={handleToggleUnstaged}
+                            onRowClick={handleRowClick}
+                            onBulkAction={() => {
+                              const scope = resolveBulkScope(changesView, hasUnstagedSelection);
+                              void (scope === "selection"
+                                ? handleStageSelection()
+                                : scope === "shown"
+                                  ? handleStageFiltered()
+                                  : handleStageAll());
+                            }}
+                            viewedFiles={viewedFiles}
+                            onViewedChange={handleViewedChange}
+                            renderRowMenu={renderRowMenu}
+                          />
+                        </div>
                       </div>
                     )}
                   </div>
@@ -2500,6 +2642,8 @@ export function ReviewHubContent({
           !isOperationState && (
             <CommitPanel
               stagedCount={status.staged.length}
+              stagedPaths={stagedPaths}
+              unpushedCount={aheadCount ?? null}
               isDetachedHead={status.isDetachedHead}
               hasConflicts={hasConflicts}
               hasRemote={status.hasRemote}

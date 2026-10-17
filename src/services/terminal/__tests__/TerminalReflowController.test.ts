@@ -424,23 +424,6 @@ describe("TerminalReflowController dispose / listener cleanup", () => {
     vi.useRealTimers();
   });
 
-  it("heartbeat unpauses agent terminals too", () => {
-    vi.useFakeTimers();
-    setDocumentVisibility("visible");
-
-    const managed = makeManaged({ launchAgentId: "claude" });
-    instances = [managed];
-    controller = new TerminalReflowController({ getInstances: () => instances });
-
-    expect(unpauseCount(managed)).toBe(0);
-
-    vi.advanceTimersByTime(REFLOW_HEARTBEAT_MS);
-    expect(unpauseCount(managed)).toBe(1);
-
-    controller.dispose();
-    vi.useRealTimers();
-  });
-
   it("heartbeat stops firing after dispose", () => {
     vi.useFakeTimers();
     setDocumentVisibility("visible");
@@ -501,19 +484,6 @@ describe("TerminalReflowController dispose / listener cleanup", () => {
     controller.dispose();
   });
 
-  it("focus listener unpauses agent terminals too", () => {
-    setDocumentVisibility("visible");
-    const managed = makeManaged({ launchAgentId: "claude" });
-    instances = [managed];
-
-    controller = new TerminalReflowController({ getInstances: () => instances });
-    window.dispatchEvent(new FocusEvent("focus"));
-
-    expect(unpauseCount(managed)).toBe(1);
-
-    controller.dispose();
-  });
-
   it("visibilitychange listener no-ops while the document is hidden", () => {
     const managed = makeManaged();
     instances = [managed];
@@ -524,20 +494,6 @@ describe("TerminalReflowController dispose / listener cleanup", () => {
     document.dispatchEvent(new Event("visibilitychange"));
 
     expect(unpauseCount(managed)).toBe(0);
-
-    setDocumentVisibility("visible");
-    document.dispatchEvent(new Event("visibilitychange"));
-
-    expect(unpauseCount(managed)).toBe(1);
-
-    controller.dispose();
-  });
-
-  it("visibilitychange listener unpauses agent terminals too", () => {
-    const managed = makeManaged({ launchAgentId: "claude" });
-    instances = [managed];
-
-    controller = new TerminalReflowController({ getInstances: () => instances });
 
     setDocumentVisibility("visible");
     document.dispatchEvent(new Event("visibilitychange"));

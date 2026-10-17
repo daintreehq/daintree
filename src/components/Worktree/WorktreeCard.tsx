@@ -23,6 +23,12 @@ import {
   areProjectNotificationsMuted,
 } from "../../store/projectSettingsStore";
 import { useWorktreeFilterStore } from "../../store/worktreeFilterStore";
+import {
+  worktreeLabelDisplayName,
+  WORKTREE_LABEL_COLORS,
+  type WorktreeLabelToken,
+} from "@shared/theme/worktreeColors";
+import { worktreeLabelColorStyle } from "./worktreeLabelColorStyle";
 import { errorsClient, worktreeClient } from "@/clients";
 import { actionService } from "@/services/ActionService";
 import { useGitForcePushStore } from "@/store/gitForcePushStore";
@@ -34,6 +40,7 @@ import { getCurrentViewStore } from "@/store/createWorktreeStore";
 import { useWorktreeStore } from "@/hooks/useWorktreeStore";
 import { cn } from "../../lib/utils";
 import { copyableBranchName, isExternalWorktree } from "@/lib/worktreeFilters";
+import { getWorktreeHeadline } from "@/lib/worktreeHeadline";
 import { getAgentConfig, getAgentIds } from "@/config/agents";
 import { isAssistantOnlyAgentId } from "@shared/config/agentIds";
 import { getAgentSettingsEntry } from "@/types";
@@ -74,6 +81,12 @@ import { isAgentFleetActionEligible, isFleetArmEligible } from "@/store/fleetArm
 import { useWorktreeStatus } from "./WorktreeCard/hooks/useWorktreeStatus";
 import { useWorktreeDevServerSession } from "@/hooks/app/useWorktreeDevServerSession";
 import { computeChipState } from "./utils/computeChipState";
+import { isAgentTerminal } from "@/utils/terminalType";
+import { isTerminalVisible } from "@/lib/terminalVisibility";
+import { deriveWorktreeAgentBuckets, isWorktreeMergedForCleanup } from "@/lib/worktreeAgentBuckets";
+import { useWorktreeAgentBucketInputs } from "@/hooks/useWorktreeAgentBucketInputs";
+import { useFleetSnapshotStore } from "@/store/fleetSnapshotStore";
+import { bulkParkAgents, selectParkTargets, type BulkParkVerb } from "@/lib/parkWorktreeAgents";
 import { devServerMenuState } from "./utils/devServerMenuState";
 import { Tooltip, TooltipContent, TooltipTrigger } from "../ui/tooltip";
 import { CHIP_LABELS, WorktreeStatusTick } from "./WorktreeCard/WorktreeStatusTick";
@@ -81,6 +94,7 @@ import { CHIP_LABELS, WorktreeStatusTick } from "./WorktreeCard/WorktreeStatusTi
 const HOVER_REVALIDATE_DELAY = 150;
 const REVALIDATE_FRESHNESS_GATE = 10_000;
 const MAX_CONCURRENT_REVALIDATES = 3;
+const NO_WORKTREE_IDS: Set<string> = new Set();
 const inFlightRevalidates = new Set<string>();
 
 function isRevalidationAllowed(worktreeId: string): boolean {
@@ -212,6 +226,13 @@ export function WorktreeCard({
     state.collapsedWorktrees.includes(worktree.id)
   );
   const toggleWorktreeCollapsed = useWorktreeFilterStore((state) => state.toggleWorktreeCollapsed);
+  const labelColor = useWorktreeFilterStore(
+    (state) => state.worktreeLabelColors[worktree.id] ?? null
+  );
+  const customTitle = useWorktreeFilterStore((state) => state.worktreeCustomTitles[worktree.id]);
+  const labelAriaSuffix = labelColor
+    ? `, Label colour: ${worktreeLabelDisplayName(labelColor)}`
+    : "";
 
   const canCollapse = variant !== "grid";
   const effectiveIsCollapsed = canCollapse && isCollapsed;
@@ -320,6 +341,24 @@ export function WorktreeCard({
     [worktreeTerminals]
   );
   const receiptKey = useInputReceiptKey(pingedId, pingSeq, worktreeTerminalIds);
+  // Parking reads the fleet snapshot, not the panels: only a run the snapshot
+  // carries can be parked, and a plain shell never appears there.
+  const parking = useFleetSnapshotStore(
+    useShallow((state) => ({
+      parked: selectParkTargets(state.snapshot, worktreeTerminalIds, "unpark").length,
+      unparked: selectParkTargets(state.snapshot, worktreeTerminalIds, "park").length,
+    }))
+  );
+  const handleBulkPark = (verb: BulkParkVerb) => {
+    const targets = selectParkTargets(
+      useFleetSnapshotStore.getState().snapshot,
+      worktreeTerminalIds,
+      verb
+    );
+    safeFireAndForget(bulkParkAgents(verb, targets, { worktreeId: worktree.id }), {
+      context: `WorktreeCard bulk ${verb}`,
+    });
+  };
 
   const setFocused = usePanelStore((state) => state.setFocused);
   const pingTerminal = usePanelStore((state) => state.pingTerminal);
@@ -390,8 +429,6 @@ export function WorktreeCard({
     branchLabel,
     isMainOnStandardBranch,
     hasChanges,
-    isComplete,
-    lifecycleStage,
     effectiveNote,
     effectiveSummary,
     computedSubtitle,
@@ -441,6 +478,16 @@ export function WorktreeCard({
     void actionService.dispatch(
       "worktree.openIssue",
       { worktreeId: worktree.id },
+      { source: "user" }
+    );
+  };
+
+  const handleSetLabelColor = (token: WorktreeLabelToken | null) => {
+    const color =
+      token === null ? null : WORKTREE_LABEL_COLORS.find((c) => c.token === token)!.name;
+    void actionService.dispatch(
+      "worktree.setLabelColor",
+      { worktreeId: worktree.id, color },
       { source: "user" }
     );
   };
@@ -542,6 +589,16 @@ export function WorktreeCard({
   };
 
   const [showIssuePicker, setShowIssuePicker] = useState(false);
+  const [showTitleDialog, setShowTitleDialog] = useState(false);
+  // The dialog returns focus to the ⋯ trigger it was opened from on its own;
+  // these are where it lands when the opener was the right-click menu, which
+  // has no trigger: the sidebar card's select button, or the grid cell.
+  const cardRootRef = useRef<HTMLElement | null>(null);
+  const selectButtonRef = useRef<HTMLButtonElement | null>(null);
+  const resolveTitleDialogRestore = () =>
+    selectButtonRef.current ??
+    cardRootRef.current?.closest<HTMLElement>('[role="gridcell"]') ??
+    cardRootRef.current;
 
   // `planFilePath` is a bare candidate filename (`TODO.md` and friends), so
   // `worktree.path` is the root it resolves against, and naming the card's own
@@ -676,12 +733,23 @@ export function WorktreeCard({
   const isStaleCard = spineState === "stale";
   const isWaitingCard = terminalCounts.byState.waiting > 0;
 
-  const chipState = computeChipState({
-    waitingTerminalCount: terminalCounts.byState.waiting,
-    lifecycleStage,
-    isComplete,
-    hasActiveAgent: terminalCounts.byState.working > 0,
-  });
+  // The same buckets the sidebar filter counts this worktree under, so the mark
+  // and the filter cannot disagree.
+  // Membership through `isTerminalVisible`, like the sidebar, the overview and
+  // cycling: a backgrounded agent is not counted there, so it must not mark
+  // the card either. Every terminal here already belongs to this (existing)
+  // worktree, so the orphan check has nothing to do.
+  const { runsById } = useWorktreeAgentBucketInputs();
+  const isInTrash = usePanelStore((state) => state.isInTrash);
+  const chipState = computeChipState(
+    deriveWorktreeAgentBuckets(
+      worktreeTerminals
+        .filter((t) => isAgentTerminal(t) && isTerminalVisible(t, isInTrash, NO_WORKTREE_IDS))
+        .map((t) => t.id),
+      runsById,
+      isWorktreeMergedForCleanup(worktree)
+    )
+  );
 
   // The active card used to opt out of being a drop target entirely — every
   // panel drag originated from the active worktree, so it could only ever be a
@@ -704,6 +772,7 @@ export function WorktreeCard({
 
   const droppableRef = (node: HTMLElement | null) => {
     setNodeRef(node);
+    cardRootRef.current = node;
   };
 
   const activeDragData = active?.data.current as Partial<WorktreeDragData> | undefined;
@@ -926,6 +995,9 @@ export function WorktreeCard({
     onTogglePin: isExternal ? undefined : handleTogglePin,
     onToggleCollapse: canCollapse ? () => toggleWorktreeCollapsed(worktree.id) : undefined,
     isCollapsed: effectiveIsCollapsed,
+    labelColor,
+    onSetLabelColor: handleSetLabelColor,
+    onEditTitle: () => setShowTitleDialog(true),
     onLaunchAgent,
     onMoveUp,
     onMoveDown,
@@ -941,6 +1013,9 @@ export function WorktreeCard({
     onSelectAllAgents: handleSelectAllAgents,
     onSelectWaitingAgents: handleSelectWaitingAgents,
     onSelectWorkingAgents: handleSelectWorkingAgents,
+    parking,
+    onParkAgents: () => handleBulkPark("park"),
+    onUnparkAgents: () => handleBulkPark("unpark"),
     onDeleteWorktree: !isMainWorktree ? () => setShowDeleteDialog(true) : undefined,
     hasResourceConfig,
     worktreeMode: worktree.worktreeMode,
@@ -968,6 +1043,19 @@ export function WorktreeCard({
     ariaStatusParts.push("has uncommitted changes");
   }
   const ariaStatusLabel = ariaStatusParts.join(", ");
+  const computedAriaTitle = worktree.issueTitle ?? worktree.branchDerivedTitle;
+  // A custom title leads, and what it displaced follows in the parenthetical,
+  // so a screen reader hears both names the card shows.
+  // The headline's own computed label rather than the issue fields, so a
+  // PR-originated card names its PR too.
+  const displacedAriaNames = customTitle
+    ? [getWorktreeHeadline(worktree).label, branchLabel].filter(
+        (name, i, names) => name && names.indexOf(name) === i
+      )
+    : [];
+  const ariaName = customTitle
+    ? `${customTitle} (${displacedAriaNames.join(", ")})`
+    : `${computedAriaTitle ?? branchLabel}${computedAriaTitle ? ` (${branchLabel})` : ""}`;
   const cardContent = (
     <ContextMenu>
       <ContextMenuTrigger asChild>
@@ -1026,19 +1114,20 @@ export function WorktreeCard({
           data-drop-target={isPanelDropTarget ? "true" : undefined}
           data-worktree-branch={branchLabel}
           data-worktree-is-main={isMainWorktree ? "true" : undefined}
+          data-label={variant === "sidebar" && labelColor ? labelColor : undefined}
           data-resource-status={resourceStatusLabel ?? undefined}
           data-deleting={isBeingDeleted && !deleteError ? "true" : undefined}
           aria-busy={isBeingDeleted && !deleteError ? "true" : undefined}
           role={variant === "grid" ? "group" : undefined}
           aria-current={variant === "grid" && isActive ? "true" : undefined}
-          aria-label={`Worktree: ${worktree.issueTitle ?? worktree.branchDerivedTitle ?? branchLabel}${(worktree.issueTitle ?? worktree.branchDerivedTitle) ? ` (${branchLabel})` : ""}${worktree.isCurrent ? " (current)" : ""}, Status: ${ariaStatusLabel}`}
+          aria-label={`Worktree: ${ariaName}${worktree.isCurrent ? " (current)" : ""}, Status: ${ariaStatusLabel}${labelAriaSuffix}`}
           onMouseDown={isMultiSelectEnabled ? suppressShiftClickTextSelection : undefined}
           onClick={handleCardClick}
           onDoubleClick={handleDoubleClick}
           onPointerEnter={handlePointerEnter}
           onPointerLeave={handlePointerLeave}
         >
-          {/* Worktree-level state — waiting / ready-for-cleanup / complete — as
+          {/* Worktree-level state — attention / ready-for-cleanup / finished — as
               a mark in the card's top-left corner, not a dot in the title row.
 
               Two things a dot could not do. A 4px vertical is a different
@@ -1057,7 +1146,9 @@ export function WorktreeCard({
               corner.
 
               `computeChipState` returns one state or none, never a
-              combination, so one mark is the whole vocabulary.
+              combination, so one mark is the whole vocabulary. It projects
+              the worktree's quick-state buckets, the same ones the sidebar
+              filter counts it under.
 
               Each state gets its own segment count as well as its own hue, and
               that is a requirement rather than a flourish: three marks that
@@ -1071,7 +1162,7 @@ export function WorktreeCard({
               trails the terminal list is heard after everything it qualifies.
               The root's own `aria-label` does not cover it — that "Status:" is
               the spine's dirty/current/stale, a different axis from
-              waiting/cleanup/complete — so this label is the only place the
+              attention/cleanup/finished — so this label is the only place the
               lifecycle state is spoken.
 
               Which is also why it outranks the content column's own `z-10`
@@ -1088,6 +1179,29 @@ export function WorktreeCard({
 
               The geometry, and the reason every number in it is what it is,
               lives in `WorktreeStatusTick`. */}
+          {/* The colour label: a 3px bar down the leading edge, inside the
+              16px gutter every card already has, so applying or clearing it
+              moves nothing. Identity, not state — hover, selection, collapse
+              and drag leave it alone, and it never takes the accent.
+
+              The status tick shares this edge, and a continuous line under a
+              segmented mark bridges its gaps — the segment count is the only
+              thing telling cleanup from finished. So the bar is cut out around
+              the tick (sidebar.css masks it per `data-cutout`), leaving real
+              transparency rather than a painted patch, which is what makes the
+              cut-out match whatever surface the card is on at the time.
+
+              Above the content column (the grip's hover plate is in there),
+              below the full-card overlays (the drop ring wins its own edge). */}
+          {variant === "sidebar" && labelColor && (
+            <div
+              aria-hidden="true"
+              data-testid="worktree-label-bar"
+              data-cutout={chipState === null ? undefined : effectiveIsCollapsed ? "square" : "bar"}
+              className="worktree-label-bar"
+              style={worktreeLabelColorStyle(labelColor)}
+            />
+          )}
           {chipState !== null && (
             <Tooltip>
               <TooltipTrigger asChild>
@@ -1130,12 +1244,13 @@ export function WorktreeCard({
           {variant === "sidebar" && (
             <button
               type="button"
+              ref={selectButtonRef}
               data-card-select-overlay=""
               className={cn(
                 "absolute inset-0 z-0 outline-hidden",
                 (isDraggingSort || isWorktreeSortDragging) && "pointer-events-none"
               )}
-              aria-label={`Select worktree: ${worktree.issueTitle ?? worktree.branchDerivedTitle ?? branchLabel}${(worktree.issueTitle ?? worktree.branchDerivedTitle) ? ` (${branchLabel})` : ""}`}
+              aria-label={`Select worktree: ${ariaName}${labelAriaSuffix}`}
               // The row's marks are non-focusable, so this button is where a
               // keyboard user meets them: described by each mark's words, and,
               // collapsed, revealing the alarm's tooltip while ringed.
@@ -1359,8 +1474,10 @@ export function WorktreeCard({
                   onToggleCollapse={handleToggleCollapse}
                   contentId={`worktree-body-${worktree.id}`}
                   branchLabel={branchLabel}
+                  customTitle={customTitle}
                   sessionStates={terminalCounts.byState}
                   sessionTotal={terminalCounts.total}
+                  sessionUnread={terminalCounts.unread}
                   environmentIcon={environmentIcon}
                   isLifecycleRunning={isLifecycleRunning}
                   resourceStatusLabel={resourceStatusLabel}
@@ -1486,6 +1603,10 @@ export function WorktreeCard({
             onCloseIssuePicker={() => setShowIssuePicker(false)}
             onAttachIssue={handleAttachIssue}
             onDetachIssue={handleDetachIssue}
+            showTitleDialog={showTitleDialog}
+            onCloseTitleDialog={() => setShowTitleDialog(false)}
+            customTitle={customTitle}
+            restoreTitleDialogFocusTo={resolveTitleDialogRestore}
           />
         </div>
       </ContextMenuTrigger>

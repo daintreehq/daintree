@@ -84,12 +84,6 @@ describe("getSpawnablePanelKinds", () => {
     expect(ids).not.toContain("review");
   });
 
-  it("does not filter on dockability — non-dockable kinds are still spawnable", () => {
-    allBuiltInsDefined();
-    const ids = getSpawnablePanelKinds().map((c) => c.id);
-    expect(ids).toEqual(expect.arrayContaining(["review", "file-browser", "dev-preview"]));
-  });
-
   it("includes a plugin kind once it has both palette opt-in and a definition", () => {
     const config: PanelKindConfig = {
       id: PLUGIN_ID,

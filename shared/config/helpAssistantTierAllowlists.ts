@@ -87,6 +87,10 @@ export const CORE_TIER_TOOLS = [
   // Preset ids are generated, merged from settings, `.daintree/presets/` and
   // CCR discovery; without this the launch argument is undiscoverable (#11859).
   "agent.listPresets",
+  // Model ids come from each CLI's own catalog and change with its releases, so
+  // a model the user names ("use Sol") is resolved here rather than from a slug
+  // the prompt would have to carry (#13437).
+  "agent.listModels",
 
   "terminal.list",
   "terminal.getStatus",
@@ -126,6 +130,19 @@ export const CORE_TIER_TOOLS = [
   "slashCommands.list",
 
   "help.displayImage",
+  // An enrolled lane's own inbox (#13335) and its messages to the hub (#13338).
+  // Offered only while the caller's own lane is enrolled for messaging, and run
+  // only for that lane's help session.
+  "assistant.getInbox",
+  "assistant.reply",
+  "assistant.sendMessage",
+  // The hub's reads of other hosts' assistants (#13336). Offered only to the
+  // help session this Shell's hub was enrolled with, while a host exists.
+  "host.list",
+  "host.listAssistants",
+  "host.getTask",
+  "host.listTasks",
+  "host.readQuota",
   // Logs meant for someone else go through the review the user trims and saves
   // themselves, not an archive the assistant builds from the raw log folder
   // (#12882). Reserved to the assistant below; off the external list.
@@ -157,6 +174,12 @@ export const FULL_TIER_ADDONS = [
   // The teardown command is project-defined and may destroy a remote resource,
   // so it keeps `danger: "confirm"`. The deletes run it implicitly too.
   "worktree.resource.teardown",
+  // The one piece of sidebar organisation an agent is offered (#13408): an
+  // orchestrator can mark the worktree it is steering the user towards. A
+  // per-project label the user sees and clears from the card menu, nothing more.
+  "worktree.setLabelColor",
+  // Its companion (#13409): naming the worktree on its card, same scope.
+  "worktree.setCustomTitle",
 
   // Resume spawns a pane; the record owns its launch directory (#11908).
   "agentSessionHistory.list",
@@ -204,12 +227,28 @@ export const FULL_TIER_ADDONS = [
   "errors.recent",
   "notifications.recent",
 
-  // The plugin-authoring loop (#12214, #12611): two reads, a project reload
-  // and a single-view remount that stages the user's confirm on unsaved work.
+  // The plugin-authoring loop (#12214, #12611, #13384): two reads, a project
+  // reload, a single-view remount that stages the user's confirm on unsaved
+  // work, and a capture of one panel as it renders.
   "plugin.validate",
   "plugin.diagnostics",
   "plugin.reloadProject",
   "plugin.reloadPanel",
+  "plugin.capturePanel",
+
+  // Remote Hosts (#11158): which machine a window runs on, and taking its
+  // project to another host through the switch dialog. Both change what the
+  // person at this screen is looking at, so only a `full` session asks; a host
+  // switch is confirm-gated for any agent, and every push or clone in the
+  // switch dialog is confirmed there. Registered only where Remote Hosts is.
+  "host.switch",
+  "project.openOnHost",
+  // The hub messaging an assistant on another host, and asking it to stop
+  // (#13336): both act on another machine, so only a `full` hub sends. Starting
+  // one there (#13392) is the same reach.
+  "host.sendMessage",
+  "host.cancelTask",
+  "host.startAssistant",
 ] as const satisfies readonly BuiltInActionId[];
 
 /**
@@ -247,6 +286,19 @@ export const RENDERER_OWNED_ORIGIN_ONLY_TOOLS = [
   // Opens a dialog in the window the user is watching, which only the
   // assistant pinned to that window should do.
   "diagnostics.openReview",
+  // A lane's inbox belongs to the assistant enrolled in it, never a pane (#13335).
+  "assistant.getInbox",
+  "assistant.reply",
+  "assistant.sendMessage",
+  // So does the hub's reach to other hosts' assistants (#13336).
+  "host.list",
+  "host.listAssistants",
+  "host.sendMessage",
+  "host.getTask",
+  "host.listTasks",
+  "host.cancelTask",
+  "host.startAssistant",
+  "host.readQuota",
 ] as const satisfies readonly BuiltInActionId[];
 
 /**

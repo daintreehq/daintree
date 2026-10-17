@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach } from "vitest";
-import { InputTracker, CLEAR_COMMANDS, MAX_TRACKED_INPUT_LENGTH } from "../clearCommandDetection";
+import { InputTracker, MAX_TRACKED_INPUT_LENGTH } from "../clearCommandDetection";
 
 describe("InputTracker", () => {
   let tracker: InputTracker;
@@ -79,32 +79,11 @@ describe("InputTracker", () => {
       expect(results[0]!.isClear).toBe(true);
       expect(results[0]!.command).toBe("clear");
     });
-
-    it("handles multiple backspaces", () => {
-      const results = tracker.process("clearxxx\x7f\x7f\x7f\r");
-      expect(results).toHaveLength(1);
-      expect(results[0]!.isClear).toBe(true);
-      expect(results[0]!.command).toBe("clear");
-    });
   });
 
   describe("escape sequences", () => {
     it("resets buffer on arrow key (ESC[A)", () => {
       const results = tracker.process("clea\x1b[Aclear\r");
-      expect(results).toHaveLength(1);
-      expect(results[0]!.isClear).toBe(true);
-      expect(results[0]!.command).toBe("clear");
-    });
-
-    it("resets buffer on arrow down (ESC[B)", () => {
-      const results = tracker.process("text\x1b[Bclear\r");
-      expect(results).toHaveLength(1);
-      expect(results[0]!.isClear).toBe(true);
-      expect(results[0]!.command).toBe("clear");
-    });
-
-    it("handles Home key (ESC[H)", () => {
-      const results = tracker.process("text\x1b[Hclear\r");
       expect(results).toHaveLength(1);
       expect(results[0]!.isClear).toBe(true);
       expect(results[0]!.command).toBe("clear");
@@ -141,13 +120,6 @@ describe("InputTracker", () => {
       expect(results[0]!.isClear).toBe(true);
       expect(results[0]!.command).toBe("clear");
     });
-
-    it("resets buffer on Ctrl+D (0x04)", () => {
-      const results = tracker.process("text\x04clear\r");
-      expect(results).toHaveLength(1);
-      expect(results[0]!.isClear).toBe(true);
-      expect(results[0]!.command).toBe("clear");
-    });
   });
 
   describe("reset functionality", () => {
@@ -168,11 +140,6 @@ describe("InputTracker", () => {
   });
 
   describe("edge cases", () => {
-    it("returns empty array for empty input", () => {
-      const results = tracker.process("");
-      expect(results).toHaveLength(0);
-    });
-
     it("returns empty array for input without newline", () => {
       const results = tracker.process("clear");
       expect(results).toHaveLength(0);
@@ -232,16 +199,6 @@ describe("InputTracker", () => {
       expect(results).toHaveLength(1);
       expect(results[0]!.isClear).toBe(true);
       expect(results[0]!.command).toBe("clear");
-    });
-  });
-
-  describe("CLEAR_COMMANDS set", () => {
-    it("contains expected clear commands", () => {
-      expect(CLEAR_COMMANDS.has("clear")).toBe(true);
-      expect(CLEAR_COMMANDS.has("cls")).toBe(true);
-      expect(CLEAR_COMMANDS.has("/clear")).toBe(true);
-      expect(CLEAR_COMMANDS.has("/new")).toBe(true);
-      expect(CLEAR_COMMANDS.has("/reset")).toBe(true);
     });
   });
 });

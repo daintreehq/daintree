@@ -1,14 +1,22 @@
-import { Circle, CheckCircle2 } from "lucide-react";
 import type { AgentState } from "@/types";
-import { SpinnerCircle, HollowCircle, InteractingCircle, ExitedCircle } from "@/components/icons";
+import {
+  SpinnerCircle,
+  HollowCircle,
+  InteractingCircle,
+  ExitedCircle,
+  DoneCircle,
+  IdleCircle,
+  UnreadCircle,
+} from "@/components/icons";
 import { pluralize } from "@/lib/pluralize";
+import type { SessionPresentationState } from "@/lib/handBackPresentation";
 
 export const STATE_ICONS = {
   working: SpinnerCircle,
   waiting: HollowCircle,
   directing: InteractingCircle,
-  idle: Circle,
-  completed: CheckCircle2,
+  idle: IdleCircle,
+  completed: DoneCircle,
   exited: ExitedCircle,
 } satisfies Record<AgentState, React.ComponentType<{ className?: string }>>;
 
@@ -17,7 +25,7 @@ export const STATE_COLORS = {
   waiting: "text-state-waiting",
   directing: "text-category-blue",
   idle: "text-text-secondary",
-  completed: "text-category-slate",
+  completed: "text-text-secondary",
   exited: "text-text-secondary",
 } as const satisfies Record<AgentState, string>;
 
@@ -26,7 +34,7 @@ export const STATE_LABELS = {
   idle: "idle",
   waiting: "waiting",
   directing: "directing",
-  completed: "done",
+  completed: "finished",
   exited: "exited",
 } as const satisfies Record<AgentState, string>;
 
@@ -38,6 +46,36 @@ export const STATE_PRIORITY = [
   "exited",
   "idle",
 ] as const satisfies readonly AgentState[];
+
+/**
+ * The state maps for a session glyph, which adds the presentation-only `unread`
+ * hand-back to the observed states. Neutral like `completed`: a turn handed
+ * back is not the agent asking for anything, so it never takes the waiting hue.
+ */
+export const SESSION_ICONS = {
+  ...STATE_ICONS,
+  unread: UnreadCircle,
+} satisfies Record<SessionPresentationState, React.ComponentType<{ className?: string }>>;
+
+export const SESSION_COLORS = {
+  ...STATE_COLORS,
+  unread: "text-text-primary",
+} as const satisfies Record<SessionPresentationState, string>;
+
+export const SESSION_LABELS = {
+  ...STATE_LABELS,
+  unread: "unread",
+} as const satisfies Record<SessionPresentationState, string>;
+
+export const SESSION_PRIORITY = [
+  "working",
+  "directing",
+  "waiting",
+  "unread",
+  "completed",
+  "exited",
+  "idle",
+] as const satisfies readonly SessionPresentationState[];
 
 export function getDominantAgentState(states: (AgentState | undefined)[]): AgentState | null {
   const present = new Set<AgentState>();
@@ -102,7 +140,7 @@ export function getEffectiveStateLabel(agentState: AgentState): string {
 }
 
 export interface SessionStateSummary {
-  visibleStates: { state: AgentState; count: number }[];
+  visibleStates: { state: SessionPresentationState; count: number }[];
   /** "3 sessions: 2 working, 1 waiting" — also the collapsed indicator's tooltip. */
   label: string;
   /** "2 working, 1 waiting", or "" when every session is idle. */
@@ -113,17 +151,22 @@ export interface SessionStateSummary {
  * The one derivation behind every collapsed session summary. Idle is left out
  * of the breakdown on purpose, so the total is stated separately rather than
  * left to be added up from the segments — it would come out short.
+ *
+ * `unread` counts hand-backs the user has not read, kept apart from `byState`
+ * because `byState` holds observed states only.
  */
 export function summarizeSessionStates(
   byState: Record<AgentState, number>,
-  total: number
+  total: number,
+  unread = 0
 ): SessionStateSummary {
-  const visibleStates = STATE_PRIORITY.filter((s) => s !== "idle" && byState[s] > 0).map((s) => ({
+  const counts: Record<SessionPresentationState, number> = { ...byState, unread };
+  const visibleStates = SESSION_PRIORITY.filter((s) => s !== "idle" && counts[s] > 0).map((s) => ({
     state: s,
-    count: byState[s],
+    count: counts[s],
   }));
   if (total <= 0) return { visibleStates, label: "", breakdown: "" };
-  const breakdown = visibleStates.map((v) => `${v.count} ${STATE_LABELS[v.state]}`).join(", ");
+  const breakdown = visibleStates.map((v) => `${v.count} ${SESSION_LABELS[v.state]}`).join(", ");
   const sessions = `${pluralize(total, "session")}`;
   return { visibleStates, label: breakdown ? `${sessions}: ${breakdown}` : sessions, breakdown };
 }

@@ -51,6 +51,8 @@ export const HINT_CELL = "col-start-2 -mt-1 min-w-0";
 
 interface FormSectionProps {
   title: string;
+  /** A quiet qualifier beside the title — "Optional" for a section nothing in which is required. */
+  note?: string;
   /** Section-level control (e.g. the branch-mode switch) pinned to the right of the rule. */
   action?: React.ReactNode;
   children: React.ReactNode;
@@ -87,11 +89,14 @@ export function FormGrid({ children }: { children: React.ReactNode }) {
  * rows drop straight into it, so sections group visually without taking the
  * rows out of the shared rail.
  */
-export function FormSection({ title, action, children }: FormSectionProps) {
+export function FormSection({ title, note, action, children }: FormSectionProps) {
   return (
     <>
       <div className="col-span-2 flex items-center gap-3 [&:not(:first-child)]:mt-4">
-        <h3 className="text-xs font-semibold text-text-primary shrink-0">{title}</h3>
+        <h3 className="text-xs font-semibold text-text-primary shrink-0">
+          {title}
+          {note && <span className="ml-2 font-normal text-text-secondary">{note}</span>}
+        </h3>
         <span className="h-px flex-1 bg-border-subtle" aria-hidden="true" />
         {action}
       </div>

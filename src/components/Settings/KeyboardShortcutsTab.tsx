@@ -19,6 +19,9 @@ import { KeybindingProfileActions } from "./KeybindingProfileActions";
 import { SettingsEmptyRow, SettingsGroup, SettingsRow } from "./SettingsGroup";
 import { SettingsSearchField } from "./SettingsSearchField";
 import { SettingsSection } from "./SettingsSection";
+import { SettingsSwitchCard } from "./SettingsSwitchCard";
+import { usePreferencesStore } from "@/store/preferencesStore";
+import { useCanopyStore } from "@/store/canopyStore";
 import { SettingsShortcutCapture } from "@/components/KeyboardShortcuts";
 import { pluralize } from "@/lib/pluralize";
 
@@ -255,6 +258,13 @@ const FIXED_SHORTCUTS: FixedShortcut[] = [
   },
 ];
 
+const DOUBLE_SHIFT_TITLE = "Double-tap Shift opens Canopy";
+const DOUBLE_SHIFT_SUBTITLE =
+  "Works from anywhere, a terminal included. Turn it off if it fires by accident, as it can with Sticky Keys or an input method that uses Shift.";
+/** Before Canopy is on, a double tap opens nothing: Cmd+E and the toolbar button are how to find it. */
+const DOUBLE_SHIFT_SUBTITLE_NOT_ON =
+  "Works once Canopy is on, from anywhere, a terminal included. Turn it off if it fires by accident, as it can with Sticky Keys or an input method that uses Shift.";
+
 function matchesQuery(query: string, ...fields: (string | undefined)[]): boolean {
   return fields.some((field) => field?.toLowerCase().includes(query) ?? false);
 }
@@ -383,7 +393,7 @@ export function KeyboardShortcutsTab() {
     return groups;
   }, [filteredBindings]);
 
-  // An imported profile replaces every binding, which invalidates any edit that
+  // An imported profile can replace any binding, which invalidates any edit that
   // was in flight when it landed: a save resolving afterwards would either raise
   // a banner about a binding that no longer exists, or let its Retry overwrite
   // the freshly imported profile with a stale captured combo. Bump the epoch on
@@ -489,9 +499,23 @@ export function KeyboardShortcutsTab() {
     void handleResetShortcut(error.rowId, error.actionId);
   };
 
+  const doubleShiftOpensCanopy = usePreferencesStore((s) => s.doubleShiftOpensCanopy);
+  const setDoubleShiftOpensCanopy = usePreferencesStore((s) => s.setDoubleShiftOpensCanopy);
+  const canopyOn = useCanopyStore((s) => s.mode === "on");
+  const doubleShiftSubtitle = canopyOn ? DOUBLE_SHIFT_SUBTITLE : DOUBLE_SHIFT_SUBTITLE_NOT_ON;
+  const showGestures =
+    (filterMode !== "modified" || !doubleShiftOpensCanopy) &&
+    matchesQuery(query, DOUBLE_SHIFT_TITLE, doubleShiftSubtitle, "Shift");
+  // Back on its default it leaves the Modified list, taking the focused switch
+  // with it; search is where the keyboard carries on, as for a binding row.
+  const setDoubleShift = (value: boolean) => {
+    if (value && filterMode === "modified") searchRef.current?.focus();
+    setDoubleShiftOpensCanopy(value);
+  };
+
   const overrideCount = bindings.filter((b) => b.isOverridden).length;
   const hasOverrides = overrideCount > 0;
-  const resultCount = filteredBindings.length + filteredFixed.length;
+  const resultCount = filteredBindings.length + filteredFixed.length + (showGestures ? 1 : 0);
   const isFiltered = query !== "" || filterMode !== "all";
 
   const handleFocusRestored = useCallback(() => setFocusRowId(null), []);
@@ -623,11 +647,27 @@ export function KeyboardShortcutsTab() {
         </SettingsSection>
       )}
 
+      {showGestures && (
+        <SettingsSection title="Gestures">
+          <SettingsGroup>
+            <SettingsSwitchCard
+              id="keyboard-double-shift-canopy"
+              title={DOUBLE_SHIFT_TITLE}
+              subtitle={doubleShiftSubtitle}
+              isEnabled={doubleShiftOpensCanopy}
+              onChange={() => setDoubleShift(!doubleShiftOpensCanopy)}
+              isModified={!doubleShiftOpensCanopy}
+              onReset={() => setDoubleShift(true)}
+            />
+          </SettingsGroup>
+        </SettingsSection>
+      )}
+
       <SettingsSection title="Backup and reset">
         <SettingsGroup>
           <SettingsRow
             label="Shortcut profile"
-            description="Save your customized shortcuts to a file, or load one exported on another machine. Importing replaces every customization."
+            description="Save your customized shortcuts to a file, or load one exported on another machine. Importing merges into your customizations: shortcuts in the file replace yours for the same action, and the rest are kept."
             control={<KeybindingProfileActions onImportComplete={handleImportComplete} />}
           />
         </SettingsGroup>

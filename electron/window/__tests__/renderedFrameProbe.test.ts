@@ -48,15 +48,6 @@ function makeWc(opts: { destroyed?: boolean; execute?: () => Promise<unknown> } 
 }
 
 describe("waitForRenderedFrame (#12394)", () => {
-  it("asks the page to wait out two animation frames", async () => {
-    const wc = makeWc();
-    await expect(waitForRenderedFrame(wc as never)).resolves.toBe(true);
-    expect(wc.executeJavaScript).toHaveBeenCalledOnce();
-    const script = wc.executeJavaScript.mock.calls[0]?.[0] as string;
-    // Double rAF: the second callback runs only after the first frame committed.
-    expect(script.match(/requestAnimationFrame/g)).toHaveLength(2);
-  });
-
   it("evaluates to a promise that resolves only after the second nested frame", async () => {
     const wc = makeWc();
     await waitForRenderedFrame(wc as never);

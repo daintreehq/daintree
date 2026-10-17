@@ -88,6 +88,8 @@ type ConfirmDialogBaseProps = {
   cooldownKey?: string | number;
   zIndex?: DialogZIndex;
   initialFocus?: DialogInitialFocus;
+  /** Forwarded to {@link AppDialog.focusResetKey}. */
+  focusResetKey?: string | number;
   /**
    * Forwarded to {@link AppDialog.restoreFocusTo}: a logical successor to
    * receive focus when the trigger has unmounted before close (e.g. the row a
@@ -95,6 +97,10 @@ type ConfirmDialogBaseProps = {
    * or disconnected.
    */
   restoreFocusTo?: RestoreFocusTarget;
+  /** Forwarded to {@link AppDialog.preferRestoreFocusTo}. */
+  preferRestoreFocusTo?: boolean;
+  /** Forwarded to {@link AppDialog.onCloseComplete}. */
+  onCloseComplete?: () => void;
   /**
    * Forwarded to {@link AppDialog.Footer.hint}: a subdued status line rendered
    * beside the action row. Use it to say why the primary action is currently
@@ -126,6 +132,8 @@ type ConfirmDialogBaseProps = {
    * previous item's scroll offset.
    */
   bodyResetKey?: string | number;
+  /** Forwarded to {@link AppDialog.Body.compactShadow}. */
+  compactBodyShadow?: boolean;
 };
 
 export type ConfirmDialogProps =
@@ -163,11 +171,15 @@ export function ConfirmDialog(props: ConfirmDialogProps) {
     variant,
     zIndex,
     initialFocus,
+    focusResetKey,
     restoreFocusTo,
+    preferRestoreFocusTo,
+    onCloseComplete,
     hasPreview = false,
     size = "sm",
     hint,
     bodyResetKey,
+    compactBodyShadow,
   } = props;
   const rawTypedNameTarget = (props as { typedNameTarget?: string }).typedNameTarget;
   const typedNameTarget = variant === "destructive" ? rawTypedNameTarget : undefined;
@@ -281,7 +293,10 @@ export function ConfirmDialog(props: ConfirmDialogProps) {
       hasPreview={hasPreview}
       zIndex={zIndex}
       initialFocus={initialFocus}
+      focusResetKey={focusResetKey}
       restoreFocusTo={restoreFocusTo}
+      preferRestoreFocusTo={preferRestoreFocusTo}
+      onCloseComplete={onCloseComplete}
     >
       <AppDialog.Header>
         <AppDialog.Title icon={titleIcon}>{title}</AppDialog.Title>
@@ -290,7 +305,11 @@ export function ConfirmDialog(props: ConfirmDialogProps) {
         <AppDialog.CloseButton />
       </AppDialog.Header>
 
-      <AppDialog.Body className="space-y-3" resetScrollKey={bodyResetKey}>
+      <AppDialog.Body
+        className="space-y-3"
+        resetScrollKey={bodyResetKey}
+        compactShadow={compactBodyShadow}
+      >
         {description && <AppDialog.Description>{description}</AppDialog.Description>}
         {children}
         {hasTypedNameGate && (

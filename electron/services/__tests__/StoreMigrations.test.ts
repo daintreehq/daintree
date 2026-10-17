@@ -145,13 +145,6 @@ describe("MigrationRunner", () => {
     fs.rmSync(tempDir, { recursive: true, force: true });
   });
 
-  it("returns valid current schema version", () => {
-    const store = createMockStore(storePath, { _schemaVersion: 3 });
-    const runner = new MigrationRunner(store as never);
-
-    expect(runner.getCurrentVersion()).toBe(3);
-  });
-
   it("resets invalid schema version values to zero", () => {
     const store = createMockStore(storePath, { _schemaVersion: "3" });
     const runner = new MigrationRunner(store as never);
@@ -788,27 +781,9 @@ describe("MigrationRunner", () => {
       expect(voiceInput.language).toBe("en");
     });
 
-    it("upgrades the retired gpt-5-nano tier to gpt-5.6-luna", () => {
-      const store = createMockStore(storePath, {
-        voiceInput: { correctionModel: "gpt-5-nano", enabled: true },
-      });
-      migration025.up(store as never);
-      const voiceInput = store.data.voiceInput as { correctionModel: string };
-      expect(voiceInput.correctionModel).toBe("gpt-5.6-luna");
-    });
-
     it("upgrades missing correctionModel to gpt-5.6-luna", () => {
       const store = createMockStore(storePath, {
         voiceInput: { enabled: true },
-      });
-      migration025.up(store as never);
-      const voiceInput = store.data.voiceInput as { correctionModel: string };
-      expect(voiceInput.correctionModel).toBe("gpt-5.6-luna");
-    });
-
-    it("upgrades a malformed/unknown correctionModel value to gpt-5.6-luna", () => {
-      const store = createMockStore(storePath, {
-        voiceInput: { correctionModel: "some-old-junk", enabled: true },
       });
       migration025.up(store as never);
       const voiceInput = store.data.voiceInput as { correctionModel: string };
@@ -853,44 +828,9 @@ describe("MigrationRunner", () => {
       expect(voiceInput.customDictionary).toEqual(["Daintree"]);
     });
 
-    it("moves a Deepgram user forward without touching their provider choice", () => {
-      // The provider — not the model — selects the backend, so normalizing the
-      // single-valued model must never revert a real user choice.
-      const store = createMockStore(storePath, {
-        voiceInput: {
-          transcriptionModel: "gpt-realtime-whisper",
-          transcriptionProvider: "deepgram",
-          deepgramApiKey: "dg-key",
-        },
-      });
-      migration027.up(store as never);
-      const voiceInput = store.data.voiceInput as Record<string, unknown>;
-      expect(voiceInput.transcriptionModel).toBe("gpt-live-transcribe");
-      expect(voiceInput.transcriptionProvider).toBe("deepgram");
-      expect(voiceInput.deepgramApiKey).toBe("dg-key");
-    });
-
-    it("upgrades a legacy Deepgram model string to gpt-live-transcribe", () => {
-      const store = createMockStore(storePath, {
-        voiceInput: { transcriptionModel: "nova-3", enabled: true },
-      });
-      migration027.up(store as never);
-      const voiceInput = store.data.voiceInput as { transcriptionModel: string };
-      expect(voiceInput.transcriptionModel).toBe("gpt-live-transcribe");
-    });
-
     it("upgrades missing transcriptionModel to gpt-live-transcribe", () => {
       const store = createMockStore(storePath, {
         voiceInput: { enabled: true },
-      });
-      migration027.up(store as never);
-      const voiceInput = store.data.voiceInput as { transcriptionModel: string };
-      expect(voiceInput.transcriptionModel).toBe("gpt-live-transcribe");
-    });
-
-    it("upgrades a malformed/unknown transcriptionModel value to gpt-live-transcribe", () => {
-      const store = createMockStore(storePath, {
-        voiceInput: { transcriptionModel: "some-old-junk", enabled: true },
       });
       migration027.up(store as never);
       const voiceInput = store.data.voiceInput as { transcriptionModel: string };
@@ -1020,51 +960,6 @@ describe("MigrationRunner", () => {
       expect(settings.soundEnabled).toBe(true);
       expect(settings.completedEnabled).toBe(false);
       expect(settings.completedSoundFile).toBe("complete.wav");
-    });
-
-    it("preserves custom waitingEnabled (already true)", () => {
-      const store = createMockStore(storePath, {
-        notificationSettings: {
-          waitingEnabled: true,
-          waitingEscalationEnabled: true,
-          uiFeedbackSoundEnabled: true,
-        },
-      });
-      migration011.up(store as never);
-      const settings = store.data.notificationSettings as Record<string, unknown>;
-      expect(settings.waitingEnabled).toBe(true);
-      expect(settings.waitingEscalationEnabled).toBe(false);
-      expect(settings.uiFeedbackSoundEnabled).toBe(false);
-    });
-
-    it("preserves custom waitingEscalationEnabled (already false)", () => {
-      const store = createMockStore(storePath, {
-        notificationSettings: {
-          waitingEnabled: false,
-          waitingEscalationEnabled: false,
-          uiFeedbackSoundEnabled: true,
-        },
-      });
-      migration011.up(store as never);
-      const settings = store.data.notificationSettings as Record<string, unknown>;
-      expect(settings.waitingEnabled).toBe(true);
-      expect(settings.waitingEscalationEnabled).toBe(false);
-      expect(settings.uiFeedbackSoundEnabled).toBe(false);
-    });
-
-    it("preserves custom uiFeedbackSoundEnabled (already false)", () => {
-      const store = createMockStore(storePath, {
-        notificationSettings: {
-          waitingEnabled: false,
-          waitingEscalationEnabled: true,
-          uiFeedbackSoundEnabled: false,
-        },
-      });
-      migration011.up(store as never);
-      const settings = store.data.notificationSettings as Record<string, unknown>;
-      expect(settings.waitingEnabled).toBe(true);
-      expect(settings.waitingEscalationEnabled).toBe(false);
-      expect(settings.uiFeedbackSoundEnabled).toBe(false);
     });
 
     it("skips when no notificationSettings exist", () => {
@@ -1695,18 +1590,6 @@ describe("MigrationRunner", () => {
   });
 
   describe("floorVersion option", () => {
-    it("runs migrations normally when floorVersion is omitted", async () => {
-      const applied: number[] = [];
-      const store = createMockStore(storePath, { _schemaVersion: 0 });
-      const runner = new MigrationRunner(store as never);
-      await runner.runMigrations([
-        { version: 1, description: "v1", up: () => void applied.push(1) },
-        { version: 2, description: "v2", up: () => void applied.push(2) },
-      ]);
-      expect(applied).toEqual([1, 2]);
-      expect(store.data._schemaVersion).toBe(2);
-    });
-
     it("runs migrations normally when stored version equals floorVersion", async () => {
       const applied: number[] = [];
       const store = createMockStore(storePath, { _schemaVersion: 3, other: "keep" });

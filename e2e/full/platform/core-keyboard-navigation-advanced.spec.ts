@@ -6,6 +6,7 @@ import { getGridPanelCount, getGridPanelIds } from "../../helpers/panels";
 import { ensureWindowFocused, expectTerminalFocused } from "../../helpers/focus";
 import { SEL } from "../../helpers/selectors";
 import { T_SHORT, T_MEDIUM, T_LONG } from "../../helpers/timeouts";
+import { NEW_TERMINAL_CHORD } from "../../helpers/shortcuts";
 
 const mod = process.platform === "darwin" ? "Meta" : "Control";
 // terminal.focusNext / terminal.focusPrevious are bound to literal Ctrl on every
@@ -95,7 +96,7 @@ test.describe.serial("Core: Keyboard Navigation", () => {
       const { window } = ctx;
       const initial = await getGridPanelCount(window);
       for (let i = initial; i < 3; i++) {
-        await window.keyboard.press(`${mod}+Alt+t`);
+        await window.keyboard.press(NEW_TERMINAL_CHORD);
         await expect.poll(() => getGridPanelCount(window), { timeout: T_LONG }).toBe(i + 1);
       }
       panelIds = await getGridPanelIds(window);

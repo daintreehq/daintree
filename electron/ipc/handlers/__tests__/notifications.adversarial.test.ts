@@ -28,6 +28,7 @@ const agentNotificationServiceMock = vi.hoisted(() => ({
   syncWatchedPanels: vi.fn(),
   acknowledgeWaiting: vi.fn(),
   acknowledgeWorkingPulse: vi.fn(),
+  setSessionMuteUntil: vi.fn(),
   removeOwner: vi.fn(),
 }));
 
@@ -53,7 +54,8 @@ vi.mock("../../../services/AgentNotificationService.js", () => ({
 vi.mock("../../../services/SoundService.js", () => soundModuleMock);
 vi.mock("../../../store.js", () => ({ store: storeMock }));
 
-import { registerNotificationHandlers } from "../notifications.js";
+import { registerNotificationHandlers, setNotificationHostRelay } from "../notifications.js";
+import { getIpcDispatcher } from "../../dispatcher.js";
 import { CHANNELS } from "../../channels.js";
 import type { HandlerDependencies } from "../../types.js";
 
@@ -390,6 +392,112 @@ describe("notifications IPC adversarial", () => {
 
       expect(agentNotificationServiceMock.syncWatchedPanels).not.toHaveBeenCalled();
       expect(agentNotificationServiceMock.removeOwner).toHaveBeenCalledWith(42);
+    });
+  });
+
+  describe("remote views", () => {
+    function remoteContext(handle: number) {
+      const closers: Array<() => void> = [];
+      return {
+        closers,
+        ctx: {
+          event: null,
+          senderWindow: null,
+          webContentsId: handle,
+          projectId: "p1",
+          endpoint: {
+            kind: "remote-view",
+            isClosed: () => false,
+            onClose: (cb: () => void) => {
+              closers.push(cb);
+              return { dispose: () => undefined };
+            },
+          },
+          client: { clientId: "c", kind: "remote" },
+        },
+      };
+    }
+
+    function linkListener(channel: string) {
+      const spy = vi.spyOn(getIpcDispatcher(), "registerSend");
+      cleanup();
+      cleanup = registerNotificationHandlers({} as HandlerDependencies);
+      const call = spy.mock.calls.find(([registered]) => registered === channel);
+      spy.mockRestore();
+      if (!call) throw new Error(`no link listener for ${channel}`);
+      return call[1] as (ctx: unknown, ...args: unknown[]) => void;
+    }
+
+    it("tracks a remote view's watched panels under its endpoint handle", async () => {
+      const { ctx, closers } = remoteContext(-3);
+      linkListener(CHANNELS.NOTIFICATION_SYNC_WATCHED)(ctx, ["t1", 2]);
+      await drainMicrotasks();
+      expect(agentNotificationServiceMock.syncWatchedPanels).toHaveBeenCalledWith(-3, ["t1"]);
+
+      closers.forEach((close) => close());
+      await drainMicrotasks();
+      expect(agentNotificationServiceMock.removeOwner).toHaveBeenCalledWith(-3);
+    });
+
+    it("acknowledges a remote view's waiting agent", async () => {
+      linkListener(CHANNELS.NOTIFICATION_WAITING_ACKNOWLEDGE)(remoteContext(-3).ctx, {
+        terminalId: "t9",
+      });
+      await drainMicrotasks();
+      expect(agentNotificationServiceMock.acknowledgeWaiting).toHaveBeenCalledWith("t9");
+    });
+
+    it("hands a remote-bound view's sync to its host instead of acting here", async () => {
+      const relay = vi.fn(() => true);
+      const release = setNotificationHostRelay(relay);
+      getListener(CHANNELS.NOTIFICATION_SYNC_WATCHED)(
+        fakeEvent(createSender(5)) as Electron.IpcMainEvent,
+        ["t1"]
+      );
+      await drainMicrotasks();
+      release();
+      expect(relay).toHaveBeenCalledWith(5, CHANNELS.NOTIFICATION_SYNC_WATCHED, [["t1"]]);
+      expect(agentNotificationServiceMock.syncWatchedPanels).not.toHaveBeenCalled();
+    });
+
+    it("applies a session mute here and also relays it to the view's host", async () => {
+      const relay = vi.fn(() => true);
+      const release = setNotificationHostRelay(relay);
+      const payload = { timestampMs: 1_700_000_000_000 };
+      getListener(CHANNELS.NOTIFICATION_SESSION_MUTE_SET)(
+        fakeEvent(createSender(5)) as Electron.IpcMainEvent,
+        payload
+      );
+      await drainMicrotasks();
+      release();
+      expect(relay).toHaveBeenCalledWith(5, CHANNELS.NOTIFICATION_SESSION_MUTE_SET, [payload]);
+      // This machine's own mute: no client scope.
+      expect(agentNotificationServiceMock.setSessionMuteUntil).toHaveBeenCalledWith(
+        1_700_000_000_000,
+        undefined
+      );
+    });
+
+    it("relays nothing for a malformed session mute", async () => {
+      const relay = vi.fn(() => true);
+      const release = setNotificationHostRelay(relay);
+      getListener(CHANNELS.NOTIFICATION_SESSION_MUTE_SET)(
+        fakeEvent(createSender(5)) as Electron.IpcMainEvent,
+        { timestampMs: Number.NaN }
+      );
+      await drainMicrotasks();
+      release();
+      expect(relay).not.toHaveBeenCalled();
+      expect(agentNotificationServiceMock.setSessionMuteUntil).not.toHaveBeenCalled();
+    });
+
+    it("scopes a remote Shell's session mute to that Shell's client, never host-wide", async () => {
+      linkListener(CHANNELS.NOTIFICATION_SESSION_MUTE_SET)(remoteContext(-3).ctx, {
+        timestampMs: 42,
+      });
+      await drainMicrotasks();
+      expect(agentNotificationServiceMock.setSessionMuteUntil).toHaveBeenCalledTimes(1);
+      expect(agentNotificationServiceMock.setSessionMuteUntil).toHaveBeenCalledWith(42, "c");
     });
   });
 });

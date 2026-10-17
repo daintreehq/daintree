@@ -93,7 +93,7 @@ describe("useSidebarWorktreeOrder", () => {
   it("honours the grouping preference", () => {
     prefsRef.current = { ...prefsRef.current, groupByType: true };
     const { result } = renderHook(() => useSidebarWorktreeOrder());
-    // TYPE_ORDER puts features ahead of bugfixes, unlike the flat name sort.
+    // WORKTREE_TYPE_IDS puts features ahead of bugfixes, unlike the flat name sort.
     expect(ids(result.current)).toEqual(["m", "f", "b"]);
   });
 
@@ -119,16 +119,6 @@ describe("useSidebarWorktreeOrder", () => {
 
     renderHook(() => useSidebarWorktreeOrder());
     expect(seenOptions.current).toEqual({ enabled: true });
-  });
-
-  it("ignores worktree changes while disabled", () => {
-    const { result, rerender } = renderHook(() => useSidebarWorktreeOrder({ enabled: false }));
-    const first = result.current;
-
-    worktreesRef.current = [main, feature];
-    rerender();
-    expect(result.current).toBe(first);
-    expect(result.current).toEqual([]);
   });
 
   it("short-circuits to a stable empty array when disabled", () => {

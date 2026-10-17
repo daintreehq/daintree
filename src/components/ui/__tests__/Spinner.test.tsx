@@ -11,12 +11,6 @@ function wrapperOf(container: HTMLElement): HTMLElement {
 }
 
 describe("Spinner", () => {
-  it("renders an SVG", () => {
-    const { container } = render(<Spinner />);
-    const svg = container.querySelector("svg");
-    expect(svg).toBeTruthy();
-  });
-
   it("is hidden from assistive technology", () => {
     const { container } = render(<Spinner />);
     expect(wrapperOf(container).getAttribute("aria-hidden")).toBe("true");

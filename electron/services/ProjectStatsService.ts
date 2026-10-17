@@ -1,9 +1,14 @@
 import { CHANNELS } from "../ipc/channels.js";
 import { typedBroadcast } from "../ipc/utils.js";
+import type { ClientEndpoint } from "../ipc/endpoint.js";
 import { events } from "./events.js";
 import { projectStore } from "./ProjectStore.js";
 import { scratchStore } from "./ScratchStore.js";
 import { computeProjectAgentCounts } from "./projectAgentCounts.js";
+import {
+  canopyRefinementFor,
+  onCanopyRefinementsChanged,
+} from "./canopy/canopyRefinementSource.js";
 import { helpSessionService } from "./HelpSessionService.js";
 import {
   getSharedTerminalSnapshot,
@@ -11,6 +16,7 @@ import {
 } from "./sharedTerminalSnapshot.js";
 import type { PtyClient } from "./PtyClient.js";
 import type { RunAttentionService } from "./RunAttentionService.js";
+import type { RunHandBackService } from "./RunHandBackService.js";
 import type { ProjectStatusMap } from "../../shared/types/ipc/project.js";
 import { MutableDisposable, toDisposable, type IDisposable } from "../utils/lifecycle.js";
 import { setAlignedInterval } from "../utils/setAlignedInterval.js";
@@ -24,6 +30,7 @@ export class ProjectStatsService {
   private eventUnsubscribes: Array<() => void> = [];
   private started = false;
   private lastBroadcast: ProjectStatusMap = {};
+  private acknowledgeableCompletionAt = new Map<string, number>();
   private pollIntervalMs = DEFAULT_POLL_INTERVAL_MS;
   private generation = 0;
 
@@ -34,7 +41,8 @@ export class ProjectStatsService {
    */
   constructor(
     private ptyClient: PtyClient | undefined | null,
-    private runAttention?: RunAttentionService | null
+    private runAttention?: RunAttentionService | null,
+    private runHandBack?: RunHandBackService | null
   ) {}
 
   get isStarted(): boolean {
@@ -70,6 +78,13 @@ export class ProjectStatsService {
     // of a snooze needs this — expiry rides the poll, since a lapsed snooze
     // simply stops being returned by `getActiveSnoozes()`.
     subscribe("terminal:snooze-changed");
+    // Parking and the user seeing a hand-back move a run in or out of the
+    // attention tallies the same way, with nothing else to announce it (#13238).
+    subscribe("terminal:park-changed");
+    subscribe("terminal:hand-back-changed");
+    // Canopy reading an ask or a false alarm moves the same tallies, and the
+    // host has nothing new to say about it.
+    this.eventUnsubscribes.push(onCanopyRefinementsChanged(() => this.debouncedCompute()));
   }
 
   updatePollInterval(ms: number): void {
@@ -97,6 +112,16 @@ export class ProjectStatsService {
   }
 
   /**
+   * The latest completion the project acknowledgement watermark can clear for
+   * this workspace, as of the last compute, or undefined when there is none.
+   * Hand-backs carrying a run record are left out: they are seen per run, and
+   * the watermark has no say over them (#13238).
+   */
+  getAcknowledgeableCompletionAt(projectId: string): number | undefined {
+    return this.acknowledgeableCompletionAt.get(projectId);
+  }
+
+  /**
    * Replay the retained status map to a single freshly-loaded view (cold start,
    * LRU restore, crash reload, DevTools refresh), mirroring
    * `pushRunHistorySnapshotTo`. `computeAndBroadcast` suppresses unchanged
@@ -121,6 +146,21 @@ export class ProjectStatsService {
       webContents.send(CHANNELS.PROJECT_STATS_UPDATED, this.lastBroadcast);
     } catch {
       // Silently ignore send failures during window initialization/disposal.
+    }
+  }
+
+  /** {@link pushSnapshotTo} for a view attached over a link. */
+  pushSnapshotToEndpoint(endpoint: ClientEndpoint): void {
+    if (endpoint.kind !== "remote-view" || endpoint.isClosed()) return;
+    if (Object.keys(this.lastBroadcast).length === 0) return;
+    try {
+      endpoint.send({
+        type: "event",
+        channel: CHANNELS.PROJECT_STATS_UPDATED,
+        args: [this.lastBroadcast],
+      });
+    } catch {
+      // Silently ignore send failures on a closing link.
     }
   }
 
@@ -261,6 +301,7 @@ export class ProjectStatsService {
         // same shape as the prior non-empty broadcast still fires
         // (shallowEqual would otherwise suppress it).
         this.lastBroadcast = {};
+        this.acknowledgeableCompletionAt = new Map();
         typedBroadcast<"project:stats-updated">(CHANNELS.PROJECT_STATS_UPDATED, {});
         return;
       }
@@ -285,6 +326,7 @@ export class ProjectStatsService {
       // also the whole of the feature's "timer": a lapsed snooze stops being
       // returned, and the next poll (5s) recomputes without it.
       const activeSnoozes = this.runAttention?.getActiveSnoozes();
+      const runHandBack = this.runHandBack;
       const agentCounts = computeProjectAgentCounts(
         projectIds,
         allTerminals,
@@ -297,13 +339,22 @@ export class ProjectStatsService {
         (id) => helpSessionService.isPanelVisible(id),
         // Lets concurrent assistants be ranked by who needs the user,
         // rather than by whichever started last (#12108).
-        (terminalId) => helpSessionService.getSlotForTerminal(terminalId)
+        (terminalId) => helpSessionService.getSlotForTerminal(terminalId),
+        // Tells a finished turn from a real ask and keeps parked runs out of
+        // attention. The pull path passes the same two, for the reason above.
+        runHandBack ? (id, spawnedAt) => runHandBack.getRecord(id, spawnedAt) : undefined,
+        this.runAttention?.getAll(),
+        canopyRefinementFor
       );
 
       const statusMap: ProjectStatusMap = {};
+      const acknowledgeable = new Map<string, number>();
       for (const [id, terminalCount] of terminalCounts) {
         const counts = agentCounts.get(id);
         if (!counts) continue;
+        if (counts.latestWatermarkUnacknowledgedAt !== null) {
+          acknowledgeable.set(id, counts.latestWatermarkUnacknowledgedAt);
+        }
         statusMap[id] = {
           // Net out the assistant help PTY the host counted but the switcher
           // must not show; clamp in case stats momentarily lag (#10989).
@@ -345,6 +396,8 @@ export class ProjectStatsService {
         };
       }
 
+      // Not on the wire, so it is kept current whether or not the payload moved.
+      this.acknowledgeableCompletionAt = acknowledgeable;
       if (!this.shallowEqual(statusMap, this.lastBroadcast)) {
         this.lastBroadcast = statusMap;
         typedBroadcast<"project:stats-updated">(CHANNELS.PROJECT_STATS_UPDATED, statusMap);

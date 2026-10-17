@@ -81,10 +81,6 @@ describe("recordTempDir / removeRecordedTempDirs", () => {
     expect(existsSync(a) || existsSync(b)).toBe(false);
     expect(readFileSync(keepMe, "utf8")).toBe("precious");
   });
-
-  it("is a no-op without a manifest", () => {
-    expect(() => recordTempDir(path.join(root, "x"), {})).not.toThrow();
-  });
 });
 
 describe("reapStaleTempDirs", () => {

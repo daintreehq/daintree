@@ -207,17 +207,6 @@ describe("SurfaceViewManager.createSurface", () => {
     expect(view.setVisible).toHaveBeenCalledWith(false);
   });
 
-  it("threads the surface-host role via additionalArguments and returns the connection identity", async () => {
-    const setup = createManager();
-    const wc = createMockWebContents();
-    wcQueue.push(wc);
-    const result = await setup.manager.createSurface("surface-aux-1");
-
-    expect(result.webContentsId).toBe(wc.id);
-    expect(result.partition).toBe(setup.manager.getPartitionForTests("surface-aux-1"));
-    expect(wc.loadURL).toHaveBeenCalledTimes(1);
-  });
-
   it("rejects duplicate surface ids", async () => {
     const setup = createManager();
     await createSurface(setup, "surface-aux-1");

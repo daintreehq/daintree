@@ -1,7 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { KeyboardEvent, KeyboardEventHandler } from "react";
 import { cn } from "@/lib/utils";
-import { getProjectGradient } from "@/lib/colorUtils";
 import { safeFireAndForget } from "@/utils/safeFireAndForget";
 import { useFleetSnapshotStore } from "@/store/fleetSnapshotStore";
 import { usePilotStore } from "@/store/pilotStore";
@@ -48,7 +47,8 @@ import {
   type PaletteTreeGroupInput,
 } from "@/hooks/usePaletteTreeNavigation";
 import { Skeleton, SkeletonBone, SkeletonHint } from "@/components/ui/Skeleton";
-import { CircleHelp, FileText, FolderGit2 } from "@/components/icons";
+import { FolderGit2 } from "@/components/icons";
+import { TILE_BASE, WorkspaceTile } from "./WorkspaceTile";
 // Direction glyphs, not app concepts, so they come straight from Lucide the way
 // every other chevron in the app does rather than through the icon aliases.
 import { ChevronLeft, ChevronRight } from "lucide-react";
@@ -175,7 +175,7 @@ const ATTENTION_WORD: Record<FleetBand, string> = {
   blocked: "blocked",
   "needs-you": "waiting",
   quiet: "quiet",
-  review: "ready for review",
+  review: "unread",
   running: "working",
   done: "finished",
   parked: "parked",
@@ -185,7 +185,7 @@ const ATTENTION_WORD: Record<FleetBand, string> = {
 
 /** Work handed back, plural-aware. The footer's sentence when nothing is asking. */
 function reviewPhrase(count: number): string {
-  return count === 1 ? "Ready for review" : `${count} agents ready for review`;
+  return count === 1 ? "Agent unread" : `${count} agents unread`;
 }
 
 /**
@@ -207,52 +207,6 @@ function quietPhrase(count: number): string {
  * second row of its own.
  */
 const ROW_TONE = "text-text-secondary";
-
-/**
- * 16px, down from the switcher's 32px.
- *
- * At half the size the tile stops being an avatar competing with the rows and
- * becomes a coloured bullet in front of a section label, which is what a
- * project heading actually is here. The colour still identifies the project;
- * it just no longer outweighs the agents it organises.
- */
-const TILE_BASE =
-  "flex h-4 w-4 shrink-0 items-center justify-center rounded-[var(--radius-sm)] text-4xs";
-
-/**
- * The workspace's identity tile, at the switcher's colour and a heading's size.
- *
- * Only a project carries an emoji and a colour. A scratch is an app-managed
- * folder with neither, so the switcher gives it a neutral tile and a glyph —
- * rendering the project tile for one produced an empty coloured square. An
- * unknown workspace is a genuine anomaly (removed while its agents kept
- * running) and is allowed to look like one.
- */
-function WorkspaceTile({ group }: { group: PilotProjectGroup }) {
-  if (group.kind !== "project") {
-    const Glyph = group.kind === "scratch" ? FileText : CircleHelp;
-    return (
-      <div className={cn(TILE_BASE, "bg-tint/[0.04] text-muted-foreground")}>
-        <Glyph className="h-2.5 w-2.5" aria-hidden="true" />
-      </div>
-    );
-  }
-  return (
-    <div
-      className={cn(
-        TILE_BASE,
-        "shadow-[var(--project-tile-shadow,inset_0_1px_2px_rgba(0,0,0,0.3))]"
-      )}
-      style={{
-        background: group.color
-          ? `var(--project-tile-wash, linear-gradient(to bottom, rgba(0,0,0,0.1), rgba(0,0,0,0.2))), ${getProjectGradient(group.color)}`
-          : "var(--project-tile-wash, linear-gradient(to bottom, rgba(0,0,0,0.1), rgba(0,0,0,0.2))), var(--color-surface-sidebar)",
-      }}
-    >
-      <span className="leading-none select-none filter drop-shadow-sm">{group.emoji}</span>
-    </div>
-  );
-}
 
 /**
  * A project, as a heading — never a row, and never a control.
@@ -477,6 +431,9 @@ function RunRow({
     agentLabel,
     row.statusLabel,
     row.parkNote,
+    row.canopyEvidence === null
+      ? null
+      : `${row.canopyEvidence.claim}, ${row.canopyEvidence.attribution}`,
     row.agePhrase,
     row.secondaryPhrase,
   ]
@@ -539,6 +496,21 @@ function RunRow({
           className="max-w-[45%] min-w-0 shrink truncate text-xs leading-tight text-text-secondary"
         >
           {row.parkNote}
+        </span>
+      )}
+
+      {/*
+        The evidence for a row Canopy placed, in the note's slot: a park
+        outranks any reading, so the two never share a row.
+      */}
+      {row.canopyEvidence !== null && (
+        <span
+          aria-hidden="true"
+          data-canopy-evidence=""
+          className="flex max-w-[45%] min-w-0 shrink items-baseline gap-1 text-xs leading-tight text-text-secondary"
+        >
+          <span className="min-w-0 truncate">{row.canopyEvidence.claim}</span>
+          <span className="shrink-0">· {row.canopyEvidence.attribution}</span>
         </span>
       )}
 
@@ -843,9 +815,6 @@ export function PilotView() {
         lastOpened: project.lastOpened,
         ...(project.emoji ? { emoji: project.emoji } : {}),
         ...(project.color ? { color: project.color } : {}),
-        ...(project.lastCompletionSeenAt !== undefined
-          ? { lastCompletionSeenAt: project.lastCompletionSeenAt }
-          : {}),
       });
     }
     for (const scratch of scratches) {
@@ -853,9 +822,6 @@ export function PilotView() {
         kind: "scratch",
         name: scratch.name,
         lastOpened: scratch.lastOpened,
-        ...(scratch.lastCompletionSeenAt !== undefined
-          ? { lastCompletionSeenAt: scratch.lastCompletionSeenAt }
-          : {}),
       });
     }
     return map;
@@ -1881,8 +1847,9 @@ export function PilotView() {
           /*
            * Names the next action rather than the absence. This is not the
            * completed-work state it first looks like: a finished agent stays in
-           * the fleet as a `review` or `done` row, and an exited one as `idle`,
-           * so an empty snapshot means no agent terminals exist at all.
+           * the fleet as a `review` or `done` row (or `idle`, when main never
+           * watched the work), and an exited one as `idle`, so an empty
+           * snapshot means no agent terminals exist at all.
            *
            * No button on the zero-data branch — launching is per-project and
            * this surface spans them all, so a CTA there would name an action it

@@ -3,7 +3,7 @@
 // instance doesn't collide with the production app. Importing it here ensures
 // runBootMigrations, the compile-cache dir, and initializeStore all resolve to
 // the correct directory before main.ts re-imports it (idempotent via ESM cache).
-import "./setup/environment.js";
+import { isSmokeTest } from "./setup/environment.js";
 
 import { enableCompileCache, flushCompileCache, constants as moduleConstants } from "node:module";
 import fs from "node:fs";
@@ -16,6 +16,29 @@ import { initializeStore, _peekStoreInstance, runDeferredStoreBackup } from "./s
 import { formatErrorMessage } from "../shared/utils/errorMessage.js";
 import { installSpawnCensusFromEnv } from "./utils/spawnCensus.js";
 import { getIsIdleHarness } from "./setup/runtimeFlags.js";
+import { isAttachStdioRequested } from "./boot/hostModeLaunch.js";
+import { isRemoteHostSupported } from "./remote/buildGate.js";
+
+// `--attach-stdio` carries a Shell's link to the Daintree already running here
+// (see remote/host/attachStdio.ts). It is dispatched before anything else
+// touches state: no boot migrations, no store, no compile cache, and never
+// main.js, whose single-instance lock would make it a second instance that
+// quits and hands its argv to the running one as a launch. stdout carries the
+// link. The process exits once either side of the pipe closes.
+if (isRemoteHostSupported() && isAttachStdioRequested(process.argv)) {
+  let code = 1;
+  if (__DAINTREE_REMOTE_HOST_ROLE__) {
+    try {
+      const { runAttachStdioCli } = await import("./remote/host/attachStdioCli.js");
+      code = await runAttachStdioCli();
+    } catch (error) {
+      process.stderr.write(`daintree: attach failed: ${String(error)}\n`);
+    }
+  }
+  app.exit(code);
+  // Nothing below may run in this process.
+  await new Promise<never>(() => {});
+}
 
 // Idle harness spawn census (#12521). Needs both the runner's variable and an
 // unpackaged idle-harness launch; anything else drops the variable before a
@@ -100,6 +123,9 @@ await import("./main.js");
 // main.js loaded; the previous session's .bak stays valid for corrupt-config
 // recovery until this fires, so deferring loses nothing.
 setImmediate(() => {
+  // A second launch kept open to ask about a headless Host (see
+  // remote/host/headlessHostTakeover.ts) doesn't own the settings.
+  if (!isSmokeTest && !app.hasSingleInstanceLock()) return;
   runDeferredStoreBackup();
 });
 

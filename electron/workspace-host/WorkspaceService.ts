@@ -1,4 +1,5 @@
 import os from "os";
+import type { InotifyLimit } from "../../shared/types/workspace-host.js";
 import { randomUUID } from "node:crypto";
 import PQueue from "p-queue";
 import { existsSync } from "fs";
@@ -28,6 +29,7 @@ import {
   getGitRecoveryHint,
 } from "../../shared/utils/gitOperationErrors.js";
 import { logError, logWarn } from "../utils/logger.js";
+import { newFileDiff } from "../utils/newFileDiff.js";
 import { isBinaryDiffOutput } from "../../shared/utils/gitDiffParsing.js";
 import type {
   LifecycleCommandReview,
@@ -449,6 +451,52 @@ function samePath(a: string, b: string): boolean {
   return process.platform === "win32" ? left.toLowerCase() === right.toLowerCase() : left === right;
 }
 
+/**
+ * The bytes an untracked or added file contributes to its diff, as git would
+ * show them: a symlink is its target path, never what it points at, and a
+ * file reached through a linked folder (a path git itself never lists) is
+ * refused. The caller names the path and its status, so neither may turn a
+ * diff into a read of something outside the worktree.
+ */
+async function readWorktreeFileForDiff(
+  cwd: string,
+  absolutePath: string,
+  readFile: (file: string) => Promise<Buffer>
+): Promise<Buffer> {
+  const { lstat, open, readlink, realpath } = await import("fs/promises");
+  const { constants } = await import("fs");
+  const { dirname, isAbsolute, relative } = await import("path");
+  const outside = (): never => {
+    const error = new Error("The file is outside the worktree") as NodeJS.ErrnoException;
+    error.code = "EACCES";
+    throw error;
+  };
+  const realRoot = await realpath(cwd);
+  const contained = async (): Promise<void> => {
+    const rel = relative(realRoot, await realpath(dirname(absolutePath)));
+    if (rel.startsWith("..") || isAbsolute(rel)) outside();
+  };
+  await contained();
+  const stats = await lstat(absolutePath);
+  if (stats.isSymbolicLink()) return Buffer.from(await readlink(absolutePath), "utf-8");
+  if (stats.isDirectory()) return readFile(absolutePath);
+  // The last step can't be a link (it would refuse to open), the descriptor
+  // must be the file the contained path still names, and its folder must
+  // still be inside: what was read is what was checked.
+  const handle = await open(
+    absolutePath,
+    constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0) | (constants.O_NONBLOCK ?? 0)
+  );
+  try {
+    const opened = await handle.stat();
+    if (!opened.isFile() || opened.ino !== stats.ino || opened.dev !== stats.dev) outside();
+    await contained();
+    return await handle.readFile();
+  } finally {
+    await handle.close().catch(() => {});
+  }
+}
+
 export class WorkspaceService {
   private monitors = new Map<string, WorktreeMonitor>();
   private readonly statusTiming = new StatusTimingRecorder();
@@ -595,9 +643,9 @@ export class WorkspaceService {
   private fetchCoordinator: RepoFetchCoordinator;
   private _shutdownController = new AbortController();
   readonly resourceActionExecutor: ResourceActionExecutor;
-  /** Session-scoped guard so we notify the user about Linux inotify limits
-   *  only once, even if many worktrees hit ENOSPC concurrently. */
-  private inotifyLimitNotified = false;
+  /** Session-scoped guard so we notify the user about each Linux inotify
+   *  limit only once, even if many worktrees hit it concurrently. */
+  private readonly inotifyLimitsNotified = new Set<InotifyLimit>();
   /** Session-scoped guard so we notify the user about the macOS FSEvents file
    *  descriptor ceiling only once, even if many worktrees hit EMFILE concurrently. */
   private emfileLimitNotified = false;
@@ -1869,7 +1917,7 @@ export class WorkspaceService {
             { origin: "auto-poll" }
           );
         },
-        onInotifyLimitReached: () => this.handleInotifyLimitReached(),
+        onInotifyLimitReached: (_worktreeId, limit) => this.handleInotifyLimitReached(limit),
         onEmfileLimitReached: () => this.handleEmfileLimitReached(),
         onWatcherRecovered: () => this.handleWatcherRecovered(),
         onGitConfigChanged: () => this.scheduleForgeRemoteReprobe({ observedConfigWrite: true }),
@@ -2650,11 +2698,11 @@ export class WorkspaceService {
     this.scheduleForgeReselect();
   }
 
-  private handleInotifyLimitReached(): void {
+  private handleInotifyLimitReached(limit: InotifyLimit): void {
     if (process.platform !== "linux") return;
-    if (this.inotifyLimitNotified) return;
-    this.inotifyLimitNotified = true;
-    this.sendEvent({ type: "inotify-limit-reached" });
+    if (this.inotifyLimitsNotified.has(limit)) return;
+    this.inotifyLimitsNotified.add(limit);
+    this.sendEvent({ type: "inotify-limit-reached", limit });
   }
 
   private handleEmfileLimitReached(): void {
@@ -2672,7 +2720,7 @@ export class WorkspaceService {
    * — firing when nothing was degraded is a harmless no-op downstream.
    */
   private handleWatcherRecovered(): void {
-    this.inotifyLimitNotified = false;
+    this.inotifyLimitsNotified.clear();
     this.emfileLimitNotified = false;
     this.sendEvent({ type: "watcher-recovered" });
   }
@@ -2702,7 +2750,7 @@ export class WorkspaceService {
    * for a live event.
    */
   isWatcherDegraded(): boolean {
-    return this.inotifyLimitNotified || this.emfileLimitNotified;
+    return this.inotifyLimitsNotified.size > 0 || this.emfileLimitNotified;
   }
 
   /**
@@ -4275,6 +4323,17 @@ export class WorkspaceService {
     if (!projectRootPath) throw new Error("Cannot review commands before a project is loaded");
     const review = await this.lifecycleService.getCommandReview(monitor.path, projectRootPath);
     this.applyCommandApprovalFlag(monitor, projectRootPath, review !== null);
+    // What approving sets running straight away is part of what is approved.
+    const intent = this.setupAwaitingApproval.get(monitor);
+    if (review && intent?.provisionResource) {
+      const label = await this.lifecycleService.setupProvisionLabel(
+        monitor.path,
+        projectRootPath,
+        intent.environmentId,
+        monitor.worktreeMode
+      );
+      if (label) return { ...review, provisionAfterSetup: label };
+    }
     return review;
   }
 
@@ -4453,7 +4512,13 @@ export class WorkspaceService {
         await this.guardNestedWorktreeDelete(monitor);
       }
 
-      const wtChanges = monitor.getWorktreeChanges();
+      let wtChanges = monitor.getWorktreeChanges();
+      // The snapshot can be a poll old: a caller that just cleared the tree
+      // (an assistant removing test output, then deleting) would be refused
+      // for files already gone. A read that fails keeps the refusal.
+      if (!force && (wtChanges?.changedFileCount ?? 0) > 0) {
+        wtChanges = await monitor.getFreshChanges().catch(() => wtChanges);
+      }
       if (!force && (wtChanges?.changedFileCount ?? 0) > 0) {
         const fileChanges = wtChanges?.changes ?? [];
         const hasTracked = fileChanges.some(
@@ -5458,7 +5523,7 @@ export class WorkspaceService {
         // claims something the request cannot know.
         let buffer: Buffer | null = null;
         try {
-          buffer = await readFile(absolutePath);
+          buffer = await readWorktreeFileForDiff(cwd, absolutePath, readFile);
         } catch (error) {
           const isDirectory = (error as NodeJS.ErrnoException).code === "EISDIR";
           if (!isDirectory || status !== "added") throw error;
@@ -5479,15 +5544,7 @@ export class WorkspaceService {
             return;
           }
 
-          const content = buffer.toString("utf-8");
-          const lines = content.split("\n");
-
-          const diff = `diff --git a/${gitPath} b/${gitPath}
-new file mode 100644
---- /dev/null
-+++ b/${gitPath}
-@@ -0,0 +1,${lines.length} @@
-${lines.map((l) => "+" + l).join("\n")}`;
+          const diff = newFileDiff(gitPath, buffer.toString("utf-8"));
 
           serve(diff, fileKey, freshness);
           return;

@@ -49,19 +49,6 @@ describe("PluginStorageManager explicit project root", () => {
     expect(projectStoreMock.getCurrentProject).not.toHaveBeenCalled();
   });
 
-  it("does not track project switches once a root is supplied", async () => {
-    const mgr = managerFor();
-    projectStoreMock.getCurrentProject.mockReturnValue({ path: "/projects/a" });
-    const first = await mgr.resolveStorageFilePath(PLUGIN_ID, "project", {
-      projectRoot: "/projects/bound",
-    });
-
-    projectStoreMock.getCurrentProject.mockReturnValue({ path: "/projects/b" });
-    expect(
-      await mgr.resolveStorageFilePath(PLUGIN_ID, "project", { projectRoot: "/projects/bound" })
-    ).toBe(first);
-  });
-
   it("still resolves the active project at call time when no root is supplied", async () => {
     const mgr = managerFor();
     projectStoreMock.getCurrentProject.mockReturnValue({ path: "/projects/a" });

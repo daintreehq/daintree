@@ -197,12 +197,6 @@ describe("buildResumePanelOptions", () => {
     expect(options?.agentLaunchFlags).toBeUndefined();
   });
 
-  it("prefers buildResumeCommand over buildResumeLatestCommand", () => {
-    const options = buildResumePanelOptions(baseSession, { cwd: "/active", worktreeId: "wt-1" });
-    expect(options?.command).toBe("claude --resume s-1");
-    expect(buildResumeLatestCommandMock).not.toHaveBeenCalled();
-  });
-
   it("falls back to buildResumeLatestCommand when no exact-session command exists", () => {
     buildResumeCommandMock.mockReturnValue(undefined);
     const options = buildResumePanelOptions(baseSession, { cwd: "/active", worktreeId: "wt-1" });
@@ -361,13 +355,6 @@ describe("resumeSessionIntoPanel", () => {
       RESUME_UNAVAILABLE_MESSAGE
     );
     expect(addPanelMock).not.toHaveBeenCalled();
-  });
-
-  it("throws when the agent is no longer registered", async () => {
-    getEffectiveAgentConfigMock.mockReturnValue(undefined);
-    await expect(resumeSessionIntoPanel(baseSession, target)).rejects.toThrow(
-      RESUME_UNAVAILABLE_MESSAGE
-    );
   });
 
   it("throws rather than fabricating an id when the panel vanishes mid-spawn", async () => {

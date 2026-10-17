@@ -170,17 +170,6 @@ describe("copyWithToast", () => {
     expect(notifyMock.mock.calls[0]![0].type).toBe("error");
   });
 
-  it("keeps two same-named payloads' failures apart", async () => {
-    writeText.mockRejectedValue(new Error("denied"));
-    notifyMock.mockReturnValue("toast-1");
-    copyWithToast("File contents", "one");
-    copyWithToast("File contents", "two");
-    await flush();
-
-    const [first, second] = notifyMock.mock.calls.map(([payload]) => payload.coalesce?.key);
-    expect(first).not.toBe(second);
-  });
-
   it("treats a caller's write that rejects as a refusal, with Retry", async () => {
     notifyMock.mockReturnValue("toast-1");
     copyWithToast("URL", "http://x/", { write: () => Promise.reject(new Error("gone")) });

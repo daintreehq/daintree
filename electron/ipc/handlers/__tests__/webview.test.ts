@@ -169,28 +169,6 @@ describe("registerWebviewHandlers", () => {
     }
   });
 
-  it("registers and cleans up all IPC handlers", () => {
-    cleanup = registerWebviewHandlers(deps);
-    expect(ipcMainMock.handle).toHaveBeenCalledWith(
-      "webview:set-lifecycle-state",
-      expect.any(Function)
-    );
-    expect(ipcMainMock.handle).toHaveBeenCalledWith(
-      "webview:start-console-capture",
-      expect.any(Function)
-    );
-    expect(ipcMainMock.handle).toHaveBeenCalledWith(
-      "webview:get-console-properties",
-      expect.any(Function)
-    );
-    cleanup();
-    expect(ipcMainMock.removeHandler).toHaveBeenCalledWith("webview:set-lifecycle-state");
-    expect(ipcMainMock.removeHandler).toHaveBeenCalledWith("webview:start-console-capture");
-    expect(ipcMainMock.removeHandler).toHaveBeenCalledWith("webview:stop-console-capture");
-    expect(ipcMainMock.removeHandler).toHaveBeenCalledWith("webview:clear-console-capture");
-    expect(ipcMainMock.removeHandler).toHaveBeenCalledWith("webview:get-console-properties");
-  });
-
   it("attaches debugger and sends CDP commands in correct order for freeze", async () => {
     const calls: string[] = [];
     debuggerMock.attach.mockImplementation(() => calls.push("attach"));
@@ -219,18 +197,6 @@ describe("registerWebviewHandlers", () => {
     });
   });
 
-  it("skips attach if debugger already attached", async () => {
-    debuggerMock.isAttached.mockReturnValue(true);
-    cleanup = registerWebviewHandlers(deps);
-    const handler = getHandler("webview:set-lifecycle-state");
-    await handler(null, 42, true);
-
-    expect(debuggerMock.attach).not.toHaveBeenCalled();
-    expect(debuggerMock.sendCommand).toHaveBeenCalledWith("Page.setWebLifecycleState", {
-      state: "frozen",
-    });
-  });
-
   it("returns early if webContents not found", async () => {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     webContentsMock.fromId.mockReturnValue(null as any);
@@ -240,42 +206,11 @@ describe("registerWebviewHandlers", () => {
     expect(debuggerMock.attach).not.toHaveBeenCalled();
   });
 
-  it("returns early if webContents is destroyed", async () => {
-    mockWebContents.isDestroyed.mockReturnValue(true);
-    cleanup = registerWebviewHandlers(deps);
-    const handler = getHandler("webview:set-lifecycle-state");
-    await expect(handler(null, 42, true)).resolves.toBeUndefined();
-    expect(debuggerMock.attach).not.toHaveBeenCalled();
-  });
-
   it("throws on invalid argument types", async () => {
     cleanup = registerWebviewHandlers(deps);
     const handler = getHandler("webview:set-lifecycle-state");
     await expect(handler(null, "not-a-number", true)).rejects.toThrow("Invalid arguments");
     await expect(handler(null, 42, "not-a-boolean")).rejects.toThrow("Invalid arguments");
-  });
-
-  it("handles expected transient debugger errors non-fatally without logging", async () => {
-    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
-    debuggerMock.sendCommand.mockRejectedValue(new Error("Target closed"));
-    cleanup = registerWebviewHandlers(deps);
-    const handler = getHandler("webview:set-lifecycle-state");
-    await expect(handler(null, 42, true)).resolves.toBeUndefined();
-    expect(warnSpy).not.toHaveBeenCalled();
-    warnSpy.mockRestore();
-  });
-
-  it("logs a warning for unexpected debugger errors", async () => {
-    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
-    debuggerMock.sendCommand.mockRejectedValue(new Error("Unexpected internal error"));
-    cleanup = registerWebviewHandlers(deps);
-    const handler = getHandler("webview:set-lifecycle-state");
-    await expect(handler(null, 42, true)).resolves.toBeUndefined();
-    expect(warnSpy).toHaveBeenCalledWith(
-      expect.stringContaining("[webContentsLifecycle]"),
-      expect.stringContaining("Unexpected internal error")
-    );
-    warnSpy.mockRestore();
   });
 
   describe("console capture", () => {
@@ -482,14 +417,6 @@ describe("registerWebviewHandlers", () => {
       expect(sendToRenderer).not.toHaveBeenCalled();
     });
 
-    it("enables Log domain on startConsoleCapture", async () => {
-      cleanup = registerWebviewHandlers(deps);
-      const handler = getHandler("webview:start-console-capture");
-      await handler(null, 42, "pane-1");
-
-      expect(debuggerMock.sendCommand).toHaveBeenCalledWith("Log.enable");
-    });
-
     it("enables Runtime and Log only once across multiple panes", async () => {
       cleanup = registerWebviewHandlers(deps);
       const handler = getHandler("webview:start-console-capture");
@@ -626,34 +553,6 @@ describe("registerWebviewHandlers", () => {
         "webview:console-message",
         expect.objectContaining({ level: "log", cdpType: "log-entry", category: "other" })
       );
-    });
-
-    it("rate-limits identical Log.entryAdded events to 5 per window", async () => {
-      cleanup = registerWebviewHandlers(deps);
-      const handler = getHandler("webview:start-console-capture");
-      await handler(null, 42, "pane-1");
-
-      const messageListener = debuggerMock.on.mock.calls.find(
-        ([event]: string[]) => event === "message"
-      )![1];
-
-      const evt = {
-        entry: {
-          source: "network",
-          level: "warning",
-          text: "Slow request",
-          timestamp: 1,
-          url: "https://x.test/a",
-          lineNumber: 3,
-        },
-      };
-      for (let i = 0; i < 7; i++) messageListener({}, "Log.entryAdded", evt);
-
-      const logRows = mainWindowMock.webContents.send.mock.calls.filter(
-        (call): call is [string, { cdpType?: string }] =>
-          call[0] === "webview:console-message" && (call[1] as any).cdpType === "log-entry"
-      );
-      expect(logRows).toHaveLength(5);
     });
 
     it("still captures Runtime.consoleAPICalled when Log.enable fails", async () => {

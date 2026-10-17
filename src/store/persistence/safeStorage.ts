@@ -18,6 +18,9 @@ const fallbackStorageData = new Map<string, string>();
 
 const BACKUP_KEY_SUFFIX = ".__bak";
 
+/** Where a persisted store's last known-good copy is kept. */
+export const backupKeyFor = (name: string): string => `${name}${BACKUP_KEY_SUFFIX}`;
+
 /**
  * Synchronous notifier for permanent storage fallback. Registered once at app
  * boot from `notify.ts`; tests register a spy directly. See
@@ -129,8 +132,6 @@ function createResilientStorage(baseStorage: StateStorage | undefined): Resilien
     activeStorage = memoryStorage;
     return activeStorage;
   };
-
-  const backupKeyFor = (name: string): string => `${name}${BACKUP_KEY_SUFFIX}`;
 
   // Fire exactly once per storage instance when a structural failure forces a
   // permanent in-memory fallback. Until then writes never reach localStorage,

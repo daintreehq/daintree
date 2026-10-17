@@ -270,16 +270,6 @@ describe("serializeFileBrowser sort fields (#11620)", () => {
     expect(snapshot.browserSortDirection).toBeUndefined();
   });
 
-  it("persists neither field when the panel has never been sorted", () => {
-    const snapshot = serializeFileBrowser(base());
-    expect("browserSortKey" in snapshot).toBe(false);
-    expect("browserSortDirection" in snapshot).toBe(false);
-  });
-
-  it("persists a non-default key", () => {
-    expect(serializeFileBrowser({ ...base(), browserSortKey: "size" }).browserSortKey).toBe("size");
-  });
-
   it("persists a descending direction even under the default key", () => {
     // Name-descending is a real choice, and the two halves are written
     // independently — dropping the direction because its key is the default

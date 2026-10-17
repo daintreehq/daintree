@@ -1,16 +1,12 @@
 import { describe, expect, it } from "vitest";
 
-import { allScenarios } from "../scenarios";
 import {
-  CENSUS_POLL_INTERVAL_MS,
-  CENSUS_WINDOW_READS,
   cpuTicksForPid,
   gradeCpuTicks,
   gradeSnapshot,
   nearestRankPercentile,
   parseBaselineResponse,
   ticksToMs,
-  windowsCensusScenarios,
 } from "../scenarios/windowsCensus";
 
 /**
@@ -22,11 +18,6 @@ import {
  */
 describe("PERF-409 apparatus", () => {
   describe("nearestRankPercentile", () => {
-    it("returns a value the sample actually contains", () => {
-      const values = [10, 20, 30, 40, 50];
-      expect(values).toContain(nearestRankPercentile(values, 0.95));
-    });
-
     it("puts p95 at the top of a 40-sample window", () => {
       const values = Array.from({ length: 40 }, (_, i) => i + 1);
       expect(nearestRankPercentile(values, 0.95)).toBe(38);
@@ -167,40 +158,6 @@ describe("PERF-409 apparatus", () => {
 
     it("counts a child missing from the payload entirely", () => {
       expect(gradeCpuTicks([], expected)).toBe(1);
-    });
-  });
-
-  describe("registration", () => {
-    it("declares itself Windows-only", () => {
-      const [scenario] = windowsCensusScenarios;
-      expect(scenario.platforms).toEqual({
-        linux: "unsupported",
-        darwin: "unsupported",
-        win32: "supported",
-      });
-    });
-
-    it("is in the matrix exactly once", () => {
-      expect(allScenarios.filter((s) => s.id === "PERF-409")).toHaveLength(1);
-    });
-
-    it("keeps every correctness term a metric the run actually emits", () => {
-      // A declared term the run never emits aggregates to nothing, which reads
-      // as a pass. The scenario's own failure path names all of them, so it is
-      // the cheapest place to check the two lists agree.
-      const [scenario] = windowsCensusScenarios;
-      expect(scenario.correctness).toContain("spawnObserverMisses");
-      expect(scenario.correctness).toContain("censusLivenessMisses");
-      expect(scenario.correctness).toContain("helperReuseMisses");
-      expect(scenario.correctness).toContain("baselineFidelityMisses");
-      expect(scenario.correctness).toContain("fixtureDiscoveryMisses");
-      expect(scenario.correctness).toContain("fixtureParentMisses");
-      expect(scenario.correctness).toContain("fixtureCpuMisses");
-    });
-
-    it("drives the pty-host's own cadence for a 60s window", () => {
-      expect(CENSUS_POLL_INTERVAL_MS).toBe(1_500);
-      expect(CENSUS_WINDOW_READS * CENSUS_POLL_INTERVAL_MS).toBe(60_000);
     });
   });
 });

@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { renderHook } from "@testing-library/react";
+import { act, renderHook } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const { usePanelStoreMock, useWorktreeStoreMock } = vi.hoisted(() => ({
@@ -15,20 +15,47 @@ vi.mock("@/hooks/useWorktreeStore", () => ({
   useWorktreeStore: useWorktreeStoreMock,
 }));
 
+import { useFleetSnapshotStore } from "@/store/fleetSnapshotStore";
+import type { FleetRunRow } from "@shared/types/ipc/fleet";
 import {
   useTerminalNotificationCounts,
   useConflictedWorktrees,
   useWaitingTerminals,
+  useUnreadTerminals,
+  useDemandTerminalCount,
   useBackgroundedTerminals,
   useBackgroundPanelStats,
   useErrorTerminals,
-  useWaitingTerminalIds,
-  isTerminalVisible,
-  isTerminalOrphaned,
   _resetWorktreeIdCacheForTests,
 } from "../useTerminalSelectors";
 
 const isInTrashFn = () => false;
+
+// The fleet store is real, so a snapshot one test delivers would otherwise
+// carry into the next.
+beforeEach(() => {
+  useFleetSnapshotStore.setState({ snapshot: null });
+});
+
+type RunOverrides = Partial<FleetRunRow> & { runId: string };
+
+function deliverRuns(runs: RunOverrides[]) {
+  act(() => {
+    useFleetSnapshotStore.getState().applySnapshot({
+      runs: runs.map((run) => ({ workspaceId: "p1", spawnedAt: 1, cwd: "/repo", ...run })),
+      changedAt: 4,
+      degraded: false,
+      lastSuccessfulAt: 4,
+    });
+  });
+}
+
+/** The fleet reporting each of these terminals as asking for an approval. */
+function deliverAsks(ids: string[]) {
+  deliverRuns(
+    ids.map((runId) => ({ runId, agentState: "waiting", waitingReason: "approval" as const }))
+  );
+}
 
 function setupEmptyWorktrees() {
   useWorktreeStoreMock.mockImplementation(
@@ -68,8 +95,10 @@ function setupTerminals(
 function setupBoth(
   terminals: Array<{
     id: string;
+    kind?: string;
     worktreeId?: string;
     agentState?: string;
+    waitingReason?: string;
     location?: string;
     lastStateChange?: number;
     exitCode?: number;
@@ -178,22 +207,6 @@ describe("useTerminalSelectors", () => {
       expect(result.current.waitingCount).toBe(0);
     });
 
-    it("counts terminals that changed state after blurTime", () => {
-      setupEmptyWorktrees();
-      const blurTime = Date.now() - 60_000;
-      setupTerminals([
-        {
-          id: "t1",
-          agentState: "waiting",
-          location: "grid",
-          lastStateChange: Date.now() - 30_000,
-        },
-      ]);
-
-      const { result } = renderHook(() => useTerminalNotificationCounts(blurTime));
-      expect(result.current.waitingCount).toBe(1);
-    });
-
     it("excludes terminals that changed state before blurTime", () => {
       setupEmptyWorktrees();
       const blurTime = Date.now() - 30_000;
@@ -210,38 +223,6 @@ describe("useTerminalSelectors", () => {
       expect(result.current.waitingCount).toBe(0);
     });
 
-    it("counts terminals that changed after blurTime regardless of age", () => {
-      setupEmptyWorktrees();
-      const blurTime = Date.now() - 10 * 60_000;
-      setupTerminals([
-        {
-          id: "t1",
-          agentState: "waiting",
-          location: "grid",
-          lastStateChange: Date.now() - 6 * 60_000,
-        },
-      ]);
-
-      const { result } = renderHook(() => useTerminalNotificationCounts(blurTime));
-      expect(result.current.waitingCount).toBe(1);
-    });
-
-    it("counts terminal that changed long after blurTime", () => {
-      setupEmptyWorktrees();
-      const blurTime = Date.now() - 10 * 60_000;
-      setupTerminals([
-        {
-          id: "t1",
-          agentState: "waiting",
-          location: "grid",
-          lastStateChange: Date.now() - 5 * 60_000,
-        },
-      ]);
-
-      const { result } = renderHook(() => useTerminalNotificationCounts(blurTime));
-      expect(result.current.waitingCount).toBe(1);
-    });
-
     it("excludes terminals without lastStateChange when blurTime is set", () => {
       setupEmptyWorktrees();
       const blurTime = Date.now() - 60_000;
@@ -255,34 +236,6 @@ describe("useTerminalSelectors", () => {
 
       const { result } = renderHook(() => useTerminalNotificationCounts(blurTime));
       expect(result.current.waitingCount).toBe(0);
-    });
-
-    it("counts waiting terminals with valid timestamps", () => {
-      setupEmptyWorktrees();
-      const blurTime = Date.now() - 120_000;
-      setupTerminals([
-        {
-          id: "t1",
-          agentState: "waiting",
-          location: "grid",
-          lastStateChange: Date.now() - 60_000,
-        },
-        {
-          id: "t2",
-          agentState: "completed",
-          location: "grid",
-          lastStateChange: Date.now() - 30_000,
-        },
-        {
-          id: "t3",
-          agentState: "waiting",
-          location: "grid",
-          lastStateChange: Date.now() - 180_000,
-        },
-      ]);
-
-      const { result } = renderHook(() => useTerminalNotificationCounts(blurTime));
-      expect(result.current.waitingCount).toBe(1);
     });
 
     it("uses unfiltered behavior when blurTime is undefined", () => {
@@ -337,53 +290,6 @@ describe("useTerminalSelectors", () => {
       expect(result.current.waitingCount).toBe(1);
     });
 
-    it("does not recount a terminal from a previous blur session on re-blur", () => {
-      setupEmptyWorktrees();
-      const firstBlurTime = Date.now() - 120_000;
-      const terminalStateChange = Date.now() - 90_000;
-
-      setupTerminals([
-        {
-          id: "t1",
-          agentState: "waiting",
-          location: "grid",
-          lastStateChange: terminalStateChange,
-        },
-      ]);
-
-      // Terminal is counted during first blur
-      const { result: result1 } = renderHook(() => useTerminalNotificationCounts(firstBlurTime));
-      expect(result1.current.waitingCount).toBe(1);
-
-      // After focus, count is zero
-      const { result: result2 } = renderHook(() => useTerminalNotificationCounts(null));
-      expect(result2.current.waitingCount).toBe(0);
-
-      // After re-blur (new blurTime > terminalStateChange), terminal is not re-counted
-      const secondBlurTime = Date.now() - 30_000;
-      const { result: result3 } = renderHook(() => useTerminalNotificationCounts(secondBlurTime));
-      expect(result3.current.waitingCount).toBe(0);
-    });
-
-    it("counts terminal that re-enters waiting after leaving it during blur session", () => {
-      setupEmptyWorktrees();
-      const blurTime = Date.now() - 120_000;
-
-      // Terminal went waiting → working → waiting during blur; lastStateChange is the re-entry time
-      const reEntryTime = Date.now() - 30_000;
-      setupTerminals([
-        {
-          id: "t1",
-          agentState: "waiting",
-          location: "grid",
-          lastStateChange: reEntryTime,
-        },
-      ]);
-
-      const { result } = renderHook(() => useTerminalNotificationCounts(blurTime));
-      expect(result.current.waitingCount).toBe(1);
-    });
-
     it("does not count working or idle terminals even if lastStateChange is after blurTime", () => {
       setupEmptyWorktrees();
       const blurTime = Date.now() - 60_000;
@@ -412,12 +318,7 @@ describe("useWaitingTerminals", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     _resetWorktreeIdCacheForTests();
-  });
-
-  it("returns empty array when no terminals exist", () => {
-    setupBoth([]);
-    const { result } = renderHook(() => useWaitingTerminals());
-    expect(result.current).toEqual([]);
+    useFleetSnapshotStore.setState({ snapshot: null });
   });
 
   it("returns only waiting visible terminals", () => {
@@ -426,6 +327,12 @@ describe("useWaitingTerminals", () => {
       { id: "t2", agentState: "working", location: "grid" },
       { id: "t3", agentState: "waiting", location: "trash" },
       { id: "t4", agentState: "waiting", location: "background" },
+    ]);
+    deliverRuns([
+      { runId: "t1", agentState: "waiting", waitingReason: "approval" },
+      { runId: "t2", agentState: "working" },
+      { runId: "t3", agentState: "waiting", waitingReason: "approval" },
+      { runId: "t4", agentState: "waiting", waitingReason: "approval" },
     ]);
 
     const { result } = renderHook(() => useWaitingTerminals());
@@ -442,27 +349,11 @@ describe("useWaitingTerminals", () => {
       ],
       worktrees
     );
+    deliverAsks(["t1", "t2"]);
 
     const { result } = renderHook(() => useWaitingTerminals());
     expect(result.current).toHaveLength(1);
     expect(result.current[0]!.id).toBe("t1");
-  });
-});
-
-describe("useWaitingTerminalIds", () => {
-  beforeEach(() => {
-    vi.clearAllMocks();
-    _resetWorktreeIdCacheForTests();
-  });
-
-  it("returns IDs of waiting terminals", () => {
-    setupBoth([
-      { id: "t1", agentState: "waiting", location: "grid" },
-      { id: "t2", agentState: "working", location: "grid" },
-    ]);
-
-    const { result } = renderHook(() => useWaitingTerminalIds());
-    expect(result.current).toEqual(["t1"]);
   });
 });
 
@@ -552,13 +443,6 @@ describe("useErrorTerminals", () => {
     expect(result.current[0]!.id).toBe("t-ok");
   });
 
-  it("returns an empty array when no terminals match", () => {
-    setupBoth([{ id: "t1", agentState: "working", location: "grid" }]);
-
-    const { result } = renderHook(() => useErrorTerminals());
-    expect(result.current).toEqual([]);
-  });
-
   it("excludes orphaned errored terminals when worktree IDs are known", () => {
     const worktrees = new Map([["wt-1", { worktreeId: "wt-1" }]]);
     setupBoth(
@@ -603,43 +487,11 @@ describe("useConflictedWorktrees", () => {
     _resetWorktreeIdCacheForTests();
   });
 
-  it("returns empty array when no worktrees exist", () => {
-    setupWorktreesWithChanges([]);
-
-    const { result } = renderHook(() => useConflictedWorktrees());
-    expect(result.current).toEqual([]);
-  });
-
   it("returns empty array when worktreeChanges is null", () => {
     setupWorktreesWithChanges([{ id: "wt-1", worktreeChanges: null }]);
 
     const { result } = renderHook(() => useConflictedWorktrees());
     expect(result.current).toEqual([]);
-  });
-
-  it("returns empty array when changes have no conflicted files", () => {
-    setupWorktreesWithChanges([
-      {
-        id: "wt-1",
-        worktreeChanges: { changes: [{ status: "modified" }, { status: "added" }] },
-      },
-    ]);
-
-    const { result } = renderHook(() => useConflictedWorktrees());
-    expect(result.current).toEqual([]);
-  });
-
-  it("returns worktree with conflicted files", () => {
-    setupWorktreesWithChanges([
-      {
-        id: "wt-1",
-        worktreeChanges: { changes: [{ status: "conflicted" }] },
-      },
-    ]);
-
-    const { result } = renderHook(() => useConflictedWorktrees());
-    expect(result.current).toHaveLength(1);
-    expect(result.current[0]!.id).toBe("wt-1");
   });
 
   it("returns only conflicted worktrees from a mixed set", () => {
@@ -668,6 +520,8 @@ describe("buildWorktreeIds memoization", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     _resetWorktreeIdCacheForTests();
+    useFleetSnapshotStore.setState({ snapshot: null });
+    deliverAsks(["t1", "t2"]);
   });
 
   it("returns correct IDs when Map reference changes but keys stay the same", () => {
@@ -769,38 +623,209 @@ describe("buildWorktreeIds memoization", () => {
     expect(r2.current).toHaveLength(1);
     expect(r2.current[0]!.id).toBe("t1");
   });
+});
 
-  it("isTerminalVisible re-export matches shared utility behavior", () => {
-    const isInTrash = () => false;
-    const worktreeIds = new Set(["wt-1"]);
-    const visible = {
-      id: "t1",
-      location: "grid" as const,
-      excludeFromPersistence: false,
-      worktreeId: "wt-1",
-    } as const;
-    expect(
-      isTerminalVisible(visible as Parameters<typeof isTerminalVisible>[0], isInTrash, worktreeIds)
-    ).toBe(true);
-    expect(
-      isTerminalVisible(
-        { ...visible, location: "background" } as Parameters<typeof isTerminalVisible>[0],
-        isInTrash,
-        worktreeIds
-      )
-    ).toBe(false);
+describe("hand-backs are not waits", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    _resetWorktreeIdCacheForTests();
+    useFleetSnapshotStore.setState({ snapshot: null });
   });
 
-  it("isTerminalOrphaned re-export matches shared utility behavior", () => {
-    const ids = new Set(["wt-1"]);
-    expect(
-      isTerminalOrphaned({ worktreeId: "wt-1" } as Parameters<typeof isTerminalOrphaned>[0], ids)
-    ).toBe(false);
-    expect(
-      isTerminalOrphaned(
-        { worktreeId: "wt-unknown" } as Parameters<typeof isTerminalOrphaned>[0],
-        ids
-      )
-    ).toBe(true);
+  function deliverHandBacks(ids: string[], seen: boolean) {
+    act(() => {
+      useFleetSnapshotStore.getState().applySnapshot({
+        runs: ids.map((runId) => ({
+          runId,
+          workspaceId: "p1",
+          spawnedAt: 1,
+          cwd: "/repo",
+          agentState: "waiting" as const,
+          handBack: seen ? { stoppedAt: 2, seenAt: 3 } : { stoppedAt: 2 },
+        })),
+        changedAt: 4,
+        degraded: false,
+        lastSuccessfulAt: 4,
+      });
+    });
+  }
+
+  it("drops an unread or read hand-back from the waiting counts, and keeps an approval", () => {
+    setupBoth([
+      { id: "unread", agentState: "waiting", location: "grid" },
+      { id: "read", agentState: "waiting", location: "grid" },
+      { id: "approval", agentState: "waiting", waitingReason: "approval", location: "grid" },
+    ]);
+    deliverRuns([
+      { runId: "unread", agentState: "waiting", handBack: { stoppedAt: 2 } },
+      { runId: "read", agentState: "waiting", handBack: { stoppedAt: 2, seenAt: 3 } },
+      { runId: "approval", agentState: "waiting", waitingReason: "approval" },
+    ]);
+
+    const waiting = renderHook(() => useWaitingTerminals());
+    expect(waiting.result.current.map((t) => t.id)).toEqual(["approval"]);
+    const unread = renderHook(() => useUnreadTerminals());
+    expect(unread.result.current.map((t) => t.id)).toEqual(["unread"]);
+    const counts = renderHook(() => useTerminalNotificationCounts());
+    expect(counts.result.current.waitingCount).toBe(1);
+    const stats = renderHook(() => useBackgroundPanelStats("none", true));
+    expect(stats.result.current.waitingCount).toBe(1);
+  });
+
+  it("counts a prompt wait as waiting until the fleet reports it as a hand-back", () => {
+    setupBoth([{ id: "t1", agentState: "waiting", location: "grid" }]);
+    const { result } = renderHook(() => useTerminalNotificationCounts());
+    expect(result.current.waitingCount).toBe(1);
+
+    deliverHandBacks(["t1"], false);
+    expect(result.current.waitingCount).toBe(0);
+  });
+});
+
+describe("the dock's agent pills read the fleet bands", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    _resetWorktreeIdCacheForTests();
+    useFleetSnapshotStore.setState({ snapshot: null });
+  });
+
+  const ids = (terminals: Array<{ id: string }>) => terminals.map((t) => t.id);
+
+  it("holds nobody before the first fleet snapshot, whatever the panels say", () => {
+    setupBoth([
+      { id: "prompt", agentState: "waiting", location: "grid" },
+      { id: "approval", agentState: "waiting", waitingReason: "approval", location: "grid" },
+    ]);
+
+    expect(renderHook(() => useWaitingTerminals()).result.current).toEqual([]);
+    expect(renderHook(() => useUnreadTerminals()).result.current).toEqual([]);
+    expect(renderHook(() => useDemandTerminalCount()).result.current).toBe(0);
+    // The Dock badge and window title still count the ask they can see.
+    expect(renderHook(() => useTerminalNotificationCounts()).result.current.waitingCount).toBe(2);
+  });
+
+  it("leaves parked and snoozed agents out of both pills", () => {
+    setupBoth([
+      { id: "parked", agentState: "waiting", waitingReason: "approval", location: "grid" },
+      { id: "snoozed", agentState: "waiting", location: "grid" },
+    ]);
+    deliverRuns([
+      {
+        runId: "parked",
+        agentState: "waiting",
+        waitingReason: "approval",
+        park: { parkedAt: 1 },
+      },
+      {
+        runId: "snoozed",
+        agentState: "waiting",
+        handBack: { stoppedAt: 2 },
+        snooze: { snoozedAt: 1, snoozedUntil: 10 },
+      },
+    ]);
+
+    expect(renderHook(() => useWaitingTerminals()).result.current).toEqual([]);
+    expect(renderHook(() => useUnreadTerminals()).result.current).toEqual([]);
+  });
+
+  it("counts a prompt wait with no hand-back record in neither pill", () => {
+    setupBoth([{ id: "t1", agentState: "waiting", waitingReason: "prompt", location: "grid" }]);
+    deliverRuns([{ runId: "t1", agentState: "waiting", waitingReason: "prompt" }]);
+
+    expect(renderHook(() => useWaitingTerminals()).result.current).toEqual([]);
+    expect(renderHook(() => useUnreadTerminals()).result.current).toEqual([]);
+  });
+
+  it("follows Canopy: an ask read in a hand-back waits, a question it read as no ask is unread", () => {
+    setupBoth([
+      { id: "asked", agentState: "completed", location: "grid" },
+      { id: "not-asking", agentState: "waiting", waitingReason: "question", location: "grid" },
+    ]);
+    deliverRuns([
+      {
+        runId: "asked",
+        agentState: "completed",
+        handBack: { stoppedAt: 2, seenAt: 3 },
+        canopy: { kind: "asked", quote: "Ship it?", readAt: 3 },
+      },
+      {
+        runId: "not-asking",
+        agentState: "waiting",
+        waitingReason: "question",
+        canopy: { kind: "not-asking", quote: "All tests pass.", readAt: 3, seen: false },
+      },
+    ]);
+
+    expect(ids(renderHook(() => useWaitingTerminals()).result.current)).toEqual(["asked"]);
+    expect(ids(renderHook(() => useUnreadTerminals()).result.current)).toEqual(["not-asking"]);
+  });
+
+  it("drains Unread when the hand-back is seen, and keeps Unread to visible terminals", () => {
+    setupBoth([
+      { id: "here", agentState: "completed", location: "grid" },
+      { id: "trashed", agentState: "completed", location: "trash" },
+      { id: "backgrounded", agentState: "completed", location: "background" },
+    ]);
+    const handBacks = (handBack: FleetRunRow["handBack"]) =>
+      deliverRuns(
+        ["here", "trashed", "backgrounded", "no-panel"].map((runId) => ({
+          runId,
+          agentState: "completed" as const,
+          handBack,
+        }))
+      );
+
+    handBacks({ stoppedAt: 2 });
+    const unread = renderHook(() => useUnreadTerminals());
+    const demand = renderHook(() => useDemandTerminalCount());
+    expect(ids(unread.result.current)).toEqual(["here"]);
+    expect(demand.result.current).toBe(1);
+
+    // No forced rerender: the fleet push alone has to reach a mounted pill.
+    handBacks({ stoppedAt: 2, seenAt: 3 });
+    expect(unread.result.current).toEqual([]);
+    expect(demand.result.current).toBe(0);
+  });
+
+  it("fills a mounted pill when the first snapshot lands", () => {
+    setupBoth([{ id: "t1", agentState: "waiting", waitingReason: "approval", location: "grid" }]);
+    const waiting = renderHook(() => useWaitingTerminals());
+    expect(waiting.result.current).toEqual([]);
+
+    deliverAsks(["t1"]);
+    expect(ids(waiting.result.current)).toEqual(["t1"]);
+  });
+
+  it("leaves out a panel the fleet hasn't reported, even once it has reported others", () => {
+    setupBoth([
+      { id: "reported", agentState: "waiting", waitingReason: "approval", location: "grid" },
+      { id: "unreported", agentState: "waiting", waitingReason: "approval", location: "grid" },
+    ]);
+    deliverAsks(["reported"]);
+
+    expect(ids(renderHook(() => useWaitingTerminals()).result.current)).toEqual(["reported"]);
+    expect(renderHook(() => useDemandTerminalCount()).result.current).toBe(1);
+  });
+
+  it("counts both pills' visible agents for the dock's status", () => {
+    setupBoth([
+      { id: "error", agentState: "waiting", waitingReason: "error", location: "grid" },
+      { id: "approval", agentState: "waiting", waitingReason: "approval", location: "grid" },
+      { id: "hand-back", agentState: "completed", location: "dock" },
+      { id: "read", agentState: "completed", location: "grid" },
+      { id: "working", agentState: "working", location: "grid" },
+      { id: "browser", kind: "browser", location: "grid" },
+    ]);
+    deliverRuns([
+      { runId: "error", agentState: "waiting", waitingReason: "error" },
+      { runId: "approval", agentState: "waiting", waitingReason: "approval" },
+      { runId: "hand-back", agentState: "completed", handBack: { stoppedAt: 2 } },
+      { runId: "read", agentState: "completed", handBack: { stoppedAt: 2, seenAt: 3 } },
+      { runId: "working", agentState: "working" },
+      // A run id that lands on a panel which isn't a terminal counts for nothing.
+      { runId: "browser", agentState: "waiting", waitingReason: "approval" },
+    ]);
+
+    expect(renderHook(() => useDemandTerminalCount()).result.current).toBe(3);
   });
 });

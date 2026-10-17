@@ -197,6 +197,7 @@ function makeWatcherController(): WatcherController {
     markPending: vi.fn(),
     flushPendingIfReady: vi.fn(),
     scheduleDelayedFlush: vi.fn(),
+    setUpstreamRef: vi.fn(),
   } as unknown as WatcherController;
 }
 
@@ -211,7 +212,10 @@ function makeNoteReader(): NoteFileReader {
   return { read: vi.fn().mockResolvedValue({}) } as unknown as NoteFileReader;
 }
 
-function makePass(hostOverrides: Partial<GitStatusPassHost> = {}) {
+function makePass(
+  hostOverrides: Partial<GitStatusPassHost> = {},
+  baseDivergenceOverride?: BaseDivergence
+) {
   const host = makeHost(hostOverrides);
   const statPrecheck = new StatPrecheck({
     abortSignal: host.abortSignal,
@@ -219,19 +223,22 @@ function makePass(hostOverrides: Partial<GitStatusPassHost> = {}) {
       return host.branch;
     },
     lastWatcherEventAt: 0,
+    upstreamRef: null,
   });
-  const baseDivergence = new BaseDivergence(
-    {
-      branch: host.branch,
-      isMainWorktree: false,
-      mainBranch: host.mainBranch,
-      linkedPrBaseRef: undefined,
-      path: host.path,
-      wslInvocation: host.wslInvocation,
-      abortSignal: host.abortSignal,
-    },
-    statPrecheck
-  );
+  const baseDivergence =
+    baseDivergenceOverride ??
+    new BaseDivergence(
+      {
+        branch: host.branch,
+        isMainWorktree: false,
+        mainBranch: host.mainBranch,
+        linkedPrBaseRef: undefined,
+        path: host.path,
+        wslInvocation: host.wslInvocation,
+        abortSignal: host.abortSignal,
+      },
+      statPrecheck
+    );
   const watcherController = makeWatcherController();
   const pollingStrategy = makePollingStrategy();
   const noteReader = makeNoteReader();
@@ -359,6 +366,66 @@ describe("GitStatusPass", () => {
     expect(host.emitUpdate).toHaveBeenCalledTimes(1);
   });
 
+  it("emits a force-push that leaves the ahead/behind counts unchanged (#13400)", async () => {
+    const upstream = (sha: string) => ({
+      baseBranchName: "main",
+      aheadCount: 1,
+      behindCount: 0,
+      matchesUpstream: false,
+      baseCompareRef: "origin/main",
+      baseRemote: "origin",
+      upstreamRef: "refs/remotes/origin/feature/x",
+      upstreamHeadSha: sha,
+    });
+    const compute = vi
+      .fn()
+      .mockResolvedValueOnce(upstream("sha1"))
+      .mockResolvedValueOnce(upstream("sha2"));
+    mockGetWorktreeChangesWithStats.mockResolvedValue(
+      makeChanges({ tracking: "origin/feature/x", ahead: 1, behind: 0 })
+    );
+    const { pass, host, watcherController } = makePass({}, {
+      compute,
+    } as unknown as BaseDivergence);
+    await pass.run(false);
+    expect(pass.upstreamHeadSha).toBe("sha1");
+    expect(watcherController.setUpstreamRef).toHaveBeenCalledWith("refs/remotes/origin/feature/x");
+    vi.mocked(host.emitUpdate).mockClear();
+
+    await pass.run(false);
+
+    expect(host.emitUpdate).toHaveBeenCalledTimes(1);
+    expect(pass.upstreamHeadSha).toBe("sha2");
+    expect(pass.upstreamRef).toBe("refs/remotes/origin/feature/x");
+  });
+
+  it("keeps the last upstream observation through a failed divergence pass", async () => {
+    const compute = vi
+      .fn()
+      .mockResolvedValueOnce({
+        baseBranchName: "main",
+        aheadCount: 1,
+        behindCount: 0,
+        matchesUpstream: false,
+        baseCompareRef: "origin/main",
+        baseRemote: "origin",
+        upstreamRef: "refs/remotes/origin/feature/x",
+        upstreamHeadSha: "sha1",
+      })
+      .mockResolvedValueOnce(null);
+    mockGetWorktreeChangesWithStats.mockResolvedValue(
+      makeChanges({ tracking: "origin/feature/x", ahead: 1, behind: 0 })
+    );
+    const { pass, watcherController } = makePass({}, { compute } as unknown as BaseDivergence);
+    await pass.run(false);
+    await pass.run(true);
+
+    expect(pass.upstreamHeadSha).toBe("sha1");
+    expect(watcherController.setUpstreamRef).toHaveBeenLastCalledWith(
+      "refs/remotes/origin/feature/x"
+    );
+  });
+
   it("advances and emits activity for a clean-to-clean commit", async () => {
     const firstCommitTime = Date.now() - 120_000;
     const secondCommitTime = firstCommitTime + 60_000;
@@ -480,6 +547,22 @@ describe("GitStatusPass", () => {
     await pass.run(false);
 
     expect(pass.lastActivityTimestamp).toBe(commitTime);
+  });
+
+  it("survives a base-divergence failure that lands before it is awaited", async () => {
+    // createGit throws for a worktree removed outside Daintree, and the
+    // divergence is only awaited after the plan-file probes.
+    const compute = vi
+      .spyOn(BaseDivergence.prototype, "compute")
+      .mockRejectedValue(new Error("Cannot use simple-git on a directory that does not exist"));
+    try {
+      mockGetWorktreeChangesWithStats.mockResolvedValue(makeChanges({ changes: [] }));
+      const { pass } = makePass();
+
+      await expect(pass.run(false)).resolves.not.toThrow();
+    } finally {
+      compute.mockRestore();
+    }
   });
 
   it("passes the monitor's signal to status git and reads a cancelled pass as no result (#12460)", async () => {

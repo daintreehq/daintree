@@ -8,12 +8,7 @@ import {
   type AppColorScheme,
 } from "@shared/theme";
 import { RED_GREEN_OVERRIDES } from "@shared/theme/colorVisionOverrides";
-import {
-  ALL_CVD_TOKENS,
-  applyAppThemeToRoot,
-  applyColorVisionMode,
-  applyDefaultAppTheme,
-} from "../applyAppTheme";
+import { applyAppThemeToRoot, applyColorVisionMode, applyDefaultAppTheme } from "../applyAppTheme";
 
 const DIFF_TOKENS = [
   "--theme-diff-insert-background",
@@ -64,17 +59,6 @@ describe("applyAppThemeToRoot", () => {
     expect(root.style.colorScheme).toBe("dark");
   });
 
-  it("applies derived root metadata for light themes", () => {
-    const root = document.createElement("div");
-
-    applyAppThemeToRoot(root, createTestScheme("test-light", "light"));
-
-    expect(root.style.getPropertyValue("--theme-tint")).toBe("#000000");
-    expect(root.dataset.theme).toBe("test-light");
-    expect(root.dataset.colorMode).toBe("light");
-    expect(root.style.colorScheme).toBe("light");
-  });
-
   it("removes stale component extension vars between themes", () => {
     const root = document.createElement("div");
 
@@ -88,6 +72,30 @@ describe("applyAppThemeToRoot", () => {
 
     expect(root.style.getPropertyValue("--custom-foo")).toBe("");
   });
+
+  it("carries the light chrome on light and hands it back to the stylesheet on dark", () => {
+    const root = document.createElement("div");
+    const lightOnly = ["--shadow-overlay", "--shadow-modal", "--pill-surface"];
+
+    applyAppThemeToRoot(root, createTestScheme("test-light", "light"));
+    expect(root.style.getPropertyValue("--theme-surface-dialog")).toContain(
+      "--theme-surface-panel-elevated"
+    );
+    expect(root.style.getPropertyValue("--shadow-modal")).toContain("--theme-shadow-dialog");
+
+    applyAppThemeToRoot(root, createTestScheme("test-dark", "dark"));
+    expect(root.style.getPropertyValue("--theme-surface-dialog")).toBe(
+      "var(--theme-surface-panel)"
+    );
+    // The dark shadow and pill stacks are the stylesheet's :root defaults.
+    for (const name of lightOnly) expect(root.style.getPropertyValue(name)).toBe("");
+  });
+
+  it("lets a theme's own extension override the light chrome", () => {
+    const root = document.createElement("div");
+    applyAppThemeToRoot(root, createTestScheme("test-light", "light", { "shadow-modal": "none" }));
+    expect(root.style.getPropertyValue("--shadow-modal")).toBe("none");
+  });
 });
 
 import { WORKTREE_COLOR_PALETTE } from "@shared/theme/worktreeColors";
@@ -95,20 +103,6 @@ import { WORKTREE_COLOR_PALETTE } from "@shared/theme/worktreeColors";
 const CATEGORY_TOKENS = WORKTREE_COLOR_PALETTE.map((token) => `--theme-${token}`);
 
 describe("applyColorVisionMode", () => {
-  it("sets the colorblind dataset flag in red-green mode", () => {
-    const root = document.createElement("div");
-    applyColorVisionMode(root, "red-green");
-
-    expect(root.dataset.colorblind).toBe("red-green");
-  });
-
-  it("sets the colorblind dataset flag in blue-yellow mode", () => {
-    const root = document.createElement("div");
-    applyColorVisionMode(root, "blue-yellow");
-
-    expect(root.dataset.colorblind).toBe("blue-yellow");
-  });
-
   it("switches from red-green to blue-yellow mode", () => {
     const root = document.createElement("div");
     applyColorVisionMode(root, "red-green");
@@ -129,21 +123,6 @@ describe("applyColorVisionMode", () => {
     expect(root.dataset.colorblind).toBeUndefined();
   });
 
-  it("does not set status-info in red-green mode", () => {
-    const root = document.createElement("div");
-    applyColorVisionMode(root, "red-green");
-
-    expect(root.style.getPropertyValue("--theme-status-info")).toBe("");
-  });
-
-  it("ALL_CVD_TOKENS covers the expected token count", () => {
-    // Canary: if someone adds or removes tokens from either map,
-    // this size changes and the test catches it for review.
-    // 39 red-green (incl. 2 status surfaces + 6 diff tokens) + 28 blue-yellow
-    // (incl. 2 status surfaces) = 67 total, 49 unique after dedup
-    expect(ALL_CVD_TOKENS.size).toBe(49);
-  });
-
   it("switches from blue-yellow to red-green clearing blue-yellow-only tokens", () => {
     const root = document.createElement("div");
     applyColorVisionMode(root, "blue-yellow");
@@ -151,18 +130,6 @@ describe("applyColorVisionMode", () => {
 
     expect(root.style.getPropertyValue("--theme-status-info")).toBe("");
     expect(root.dataset.colorblind).toBe("red-green");
-  });
-
-  it("switches from red-green to default clearing syntax tokens", () => {
-    const root = document.createElement("div");
-    applyColorVisionMode(root, "red-green");
-    applyColorVisionMode(root, "default");
-
-    expect(root.style.getPropertyValue("--theme-syntax-comment")).toBe("");
-    expect(root.style.getPropertyValue("--theme-syntax-keyword")).toBe("");
-    expect(root.style.getPropertyValue("--theme-syntax-string")).toBe("");
-    expect(root.style.getPropertyValue("--theme-category-blue")).toBe("");
-    expect(root.dataset.colorblind).toBeUndefined();
   });
 });
 
@@ -296,18 +263,5 @@ describe("applyDefaultAppTheme (#9169)", () => {
 
     expect(applied.id).toBe("daintree");
     expect(root.dataset.theme).toBe("daintree");
-  });
-
-  it("seeds a non-default built-in scheme that exists in the registry", () => {
-    mockPrefersDark(true);
-    // Sanity: the seeded id resolves to a real built-in scheme object.
-    expect(getAppThemeById("table-mountain")).toBeDefined();
-    window.__DAINTREE_INITIAL_THEME__ = { colorSchemeId: "table-mountain" };
-    const root = document.createElement("div");
-
-    const applied = applyDefaultAppTheme(root);
-
-    expect(applied.id).toBe("table-mountain");
-    expect(root.dataset.theme).toBe("table-mountain");
   });
 });

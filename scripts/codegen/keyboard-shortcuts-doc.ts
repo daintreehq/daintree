@@ -47,15 +47,34 @@ function codeSpan(text: string): string {
   return text.includes("`") ? `\`\` ${text} \`\`` : `\`${text}\``;
 }
 
+// Platform lists are joined by binding identity (action, scope, and which
+// occurrence of that pair), never by array position: the lists differ in
+// length because some bindings exist only on some platforms.
+function identityKeys(bindings: KeybindingConfig[]): string[] {
+  const seen = new Map<string, number>();
+  return bindings.map((b) => {
+    const base = `${b.actionId}\u0000${b.scope}`;
+    const n = seen.get(base) ?? 0;
+    seen.set(base, n + 1);
+    return `${base}\u0000${n}`;
+  });
+}
+
+function indexByIdentity(bindings: KeybindingConfig[]): Map<string, KeybindingConfig> {
+  const keys = identityKeys(bindings);
+  return new Map(bindings.map((b, i) => [keys[i]!, b]));
+}
+
 function generate(): string {
   const core = buildDefaultKeybindings(false);
-  const windows = buildDefaultKeybindings(true);
-  const windowsOnly = windows.filter((b) => !core.includes(b));
-  const linux = buildDefaultKeybindings(false, true);
-  const linuxReplacement = (binding: KeybindingConfig): KeybindingConfig | undefined =>
-    linux.includes(binding)
-      ? undefined
-      : linux.find((b) => b.actionId === binding.actionId && b.scope === binding.scope);
+  const coreKeyList = identityKeys(core);
+  const coreKeys = new Map(core.map((b, i) => [b, coreKeyList[i]!]));
+  const windowsList = buildDefaultKeybindings(true);
+  const windows = indexByIdentity(windowsList);
+  const linux = indexByIdentity(buildDefaultKeybindings(false, true));
+  const coreKeySet = new Set(coreKeyList);
+  const windowsKeys = identityKeys(windowsList);
+  const windowsOnly = windowsList.filter((_, i) => !coreKeySet.has(windowsKeys[i]!));
 
   const byCategory = new Map<string, KeybindingConfig[]>();
   const add = (binding: KeybindingConfig) => {
@@ -110,13 +129,18 @@ function generate(): string {
       const isWindowsOnly = windowsOnly.includes(binding);
       const label = escapeCell(binding.description ?? binding.actionId);
       const mac = isWindowsOnly ? "—" : codeSpan(escapeCell(displayMac(binding.combo)));
-      const replacement = linuxReplacement(binding);
-      const winCode = codeSpan(escapeCell(displayWin(binding.combo)));
-      const win = isWindowsOnly
-        ? `${winCode} (Windows only)`
-        : replacement
-          ? `${winCode} (Windows), ${codeSpan(escapeCell(displayWin(replacement.combo)))} (Linux)`
-          : winCode;
+      const key = coreKeys.get(binding);
+      const winCombo = isWindowsOnly ? binding.combo : key ? windows.get(key)?.combo : undefined;
+      const linuxCombo = isWindowsOnly ? undefined : key ? linux.get(key)?.combo : undefined;
+      const cell = (combo: string) => codeSpan(escapeCell(displayWin(combo)));
+      let win: string;
+      if (isWindowsOnly) win = `${cell(binding.combo)} (Windows only)`;
+      else if (!winCombo && !linuxCombo) win = "—";
+      else if (!winCombo) win = `${cell(linuxCombo!)} (Linux only)`;
+      else if (!linuxCombo) win = `${cell(winCombo)} (Windows only)`;
+      else if (winCombo !== linuxCombo)
+        win = `${cell(winCombo)} (Windows), ${cell(linuxCombo)} (Linux)`;
+      else win = cell(winCombo);
       lines.push(`| ${label} | ${mac} | ${win} |`);
     }
     lines.push("");
@@ -125,7 +149,11 @@ function generate(): string {
   lines.push("## Fixed keys");
   lines.push("");
   lines.push(
-    "A few interactions are fixed and not rebindable: worktree-list navigation (arrows or `j`/`k` to move, PageUp/PageDown and Home/End to jump, Space or Enter to open, Enter/ArrowRight to reach a row's toolbar, `Alt+Up`/`Alt+Down` to reorder) and keyboard drag-and-drop reordering (Space to pick up, arrows to move)."
+    "A few interactions are fixed and not rebindable: worktree-list navigation (arrows or `j`/`k` to move, PageUp/PageDown and Home/End to jump, Space or Enter to open, ArrowRight or F2 to reach a row's toolbar, `Alt+Up`/`Alt+Down` to reorder) and keyboard drag-and-drop reordering (Space to pick up, arrows to move)."
+  );
+  lines.push("");
+  lines.push(
+    "Once Canopy is on, tapping Shift twice opens it from anywhere, a focused terminal included. It is a gesture rather than a binding, so it can't be rebound, only turned off in Settings → Keyboard."
   );
   lines.push("");
   return lines.join("\n");

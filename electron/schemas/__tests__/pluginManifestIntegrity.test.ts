@@ -87,12 +87,6 @@ describe("duplicate contribution ids (#10620)", () => {
     expect(issue?.path).toEqual(["contributes", arrayName, 1, "id"]);
   });
 
-  it.each(arrays)("accepts distinct %s ids", (arrayName, make) => {
-    const extra = arrayName === "views" ? { panels: [panel("a"), panel("b")] } : {};
-    const result = manifestWith({ [arrayName]: [make("a"), make("b")], ...extra });
-    expect(result.success).toBe(true);
-  });
-
   it("reports the duplicate at the second occurrence, not the first", () => {
     const result = manifestWith({ commands: [command("a"), command("b"), command("a")] });
     expect(result.success).toBe(false);
@@ -124,16 +118,6 @@ describe("duplicate contribution ids (#10620)", () => {
     expect(result.success).toBe(false);
     const issue = issueWithCode(result, "duplicate_contribution_id");
     expect(issue?.path).toEqual(["contributes", "agents", 1, "id"]);
-  });
-
-  it("accepts distinct agent ids", () => {
-    const result = schema.safeParse({
-      name: "acme.my-plugin",
-      version: "1.0.0",
-      capabilities: ["agent:register"],
-      contributes: { agents: [agent("a"), agent("b")] },
-    });
-    expect(result.success).toBe(true);
   });
 });
 

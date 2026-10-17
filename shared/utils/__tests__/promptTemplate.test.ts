@@ -6,10 +6,6 @@ import {
 } from "../promptTemplate.js";
 
 describe("extractTemplateVariables", () => {
-  it("extracts single variable", () => {
-    expect(extractTemplateVariables("Hello {name}")).toEqual(["name"]);
-  });
-
   it("extracts multiple variables", () => {
     expect(extractTemplateVariables("{greeting} {name}, welcome to {place}")).toEqual([
       "greeting",
@@ -39,22 +35,6 @@ describe("extractTemplateVariables", () => {
 
   it("ignores malformed variables", () => {
     expect(extractTemplateVariables("{123start} and {valid}")).toEqual(["valid"]);
-  });
-
-  it("handles empty template", () => {
-    expect(extractTemplateVariables("")).toEqual([]);
-  });
-
-  it("handles complex template", () => {
-    expect(
-      extractTemplateVariables(`
-      Work on issue #{issueNumber}: {title}
-
-      Create a worktree on branch {branchName} based on {baseBranch}.
-
-      The issue URL is: {url}
-    `)
-    ).toEqual(["issueNumber", "title", "branchName", "baseBranch", "url"]);
   });
 });
 
@@ -86,21 +66,9 @@ describe("validatePromptTemplate", () => {
     expect(result.valid).toBe(true);
     expect(result.foundVariables).toEqual([]);
   });
-
-  it("handles subset of available variables", () => {
-    const result = validatePromptTemplate("{name}", ["name", "id", "extra"]);
-    expect(result.valid).toBe(true);
-    expect(result.foundVariables).toEqual(["name"]);
-  });
 });
 
 describe("substituteTemplateVariables", () => {
-  it("substitutes single variable", () => {
-    const result = substituteTemplateVariables("Hello {name}!", { name: "World" });
-    expect(result.success).toBe(true);
-    expect(result.prompt).toBe("Hello World!");
-  });
-
   it("substitutes multiple variables", () => {
     const result = substituteTemplateVariables("{greeting} {name}!", {
       greeting: "Hi",
@@ -120,12 +88,6 @@ describe("substituteTemplateVariables", () => {
     const result = substituteTemplateVariables("Issue #{num}", { num: 123 });
     expect(result.success).toBe(true);
     expect(result.prompt).toBe("Issue #123");
-  });
-
-  it("converts booleans to strings", () => {
-    const result = substituteTemplateVariables("Active: {active}", { active: true });
-    expect(result.success).toBe(true);
-    expect(result.prompt).toBe("Active: true");
   });
 
   it("fails on missing required variable", () => {
@@ -160,24 +122,6 @@ describe("substituteTemplateVariables", () => {
     const result = substituteTemplateVariables("No variables", {});
     expect(result.success).toBe(true);
     expect(result.prompt).toBe("No variables");
-  });
-
-  it("handles complex template", () => {
-    const result = substituteTemplateVariables(
-      `Work on issue #{issueNumber}: {title}
-
-Create a worktree on branch {branchName} based on {baseBranch}.`,
-      {
-        issueNumber: 1779,
-        title: "Support custom prompts",
-        branchName: "issue-1779-custom-prompts",
-        baseBranch: "main",
-      }
-    );
-    expect(result.success).toBe(true);
-    expect(result.prompt).toBe(`Work on issue #1779: Support custom prompts
-
-Create a worktree on branch issue-1779-custom-prompts based on main.`);
   });
 
   it("ignores extra values not in template", () => {

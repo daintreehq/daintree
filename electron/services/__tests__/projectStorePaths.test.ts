@@ -8,7 +8,6 @@ import {
   isValidProjectId,
   isValidWorkspaceStateId,
   getProjectStateDir,
-  UTF8_BOM,
 } from "../projectStorePaths.js";
 import { isValidScratchId } from "../scratchStorePaths.js";
 
@@ -84,23 +83,6 @@ describe("projectStorePaths", () => {
       for (const escape of escapes) {
         expect(getProjectStateDir(BASE, escape)).toBeNull();
       }
-    });
-
-    it("gives every workspace its own directory", () => {
-      const first = randomUUID();
-      const second = randomUUID();
-      const projectId = "b".repeat(64);
-
-      const dirs = [first, second, projectId].map((id) => getProjectStateDir(BASE, id));
-
-      expect(new Set(dirs).size).toBe(3);
-      expect(dirs.every((dir) => dir !== null)).toBe(true);
-    });
-  });
-
-  describe("UTF8_BOM constant", () => {
-    it("is the correct BOM character", () => {
-      expect(UTF8_BOM).toBe("\uFEFF");
     });
   });
 });

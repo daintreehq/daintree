@@ -41,14 +41,43 @@ vi.mock("@/components/ui/dropdown-menu", () => ({
     children,
     onSelect,
     destructive,
+    disabled,
   }: {
     children: ReactNode;
     onSelect?: (e: Event) => void;
     destructive?: boolean;
+    disabled?: boolean;
   }) => (
     <button
       data-destructive={destructive || undefined}
+      disabled={disabled}
       onClick={() => onSelect?.(new Event("select"))}
+    >
+      {children}
+    </button>
+  ),
+  DropdownMenuCheckboxItem: ({
+    children,
+    checked,
+    disabled,
+    onCheckedChange,
+    "aria-describedby": describedBy,
+    "aria-labelledby": labelledBy,
+  }: {
+    children: ReactNode;
+    checked?: boolean;
+    disabled?: boolean;
+    onCheckedChange?: (checked: boolean) => void;
+    "aria-describedby"?: string;
+    "aria-labelledby"?: string;
+  }) => (
+    <button
+      role="menuitemcheckbox"
+      aria-describedby={describedBy}
+      aria-labelledby={labelledBy}
+      aria-checked={checked ? "true" : "false"}
+      disabled={disabled}
+      onClick={() => onCheckedChange?.(!checked)}
     >
       {children}
     </button>
@@ -93,13 +122,6 @@ describe("HelpPanelHeader", () => {
     }
   });
 
-  it("renders identically when unfocused and when isFocused is omitted", () => {
-    const { container: a } = renderHeader({ isFocused: false });
-    const { container: b } = renderHeader({ isFocused: undefined });
-
-    expect(a.firstElementChild!.className).toBe(b.firstElementChild!.className);
-  });
-
   it("applies focused-state styling distinct from unfocused", () => {
     const { container: unfocused } = renderHeader({ isFocused: false });
     const { container: focused } = renderHeader({ isFocused: true });
@@ -110,27 +132,6 @@ describe("HelpPanelHeader", () => {
     // focus anchor per CLAUDE.md accent-restraint rules).
     expect(focused.firstElementChild!.className).not.toBe(unfocused.firstElementChild!.className);
     expect([...focused.firstElementChild!.classList].some((c) => c.includes("accent"))).toBe(false);
-  });
-
-  it("keeps the primary header row to overflow and hide", () => {
-    const { container, getByLabelText } = renderHeader({
-      canRestartConversation: true,
-      canEndSession: true,
-    });
-
-    expect(getByLabelText("More actions")).not.toBeNull();
-    expect(getByLabelText("Hide Daintree Assistant")).not.toBeNull();
-    // Stop and docs are overflow items, never dedicated header icons — the
-    // destructive stop must not sit adjacent to the benign hide chevron.
-    const overflow = container.querySelector("[data-testid='overflow-menu']")!;
-    const stop = [...overflow.querySelectorAll("button")].find((b) =>
-      b.textContent?.includes("Stop assistant")
-    );
-    const docs = [...overflow.querySelectorAll("button")].find((b) =>
-      b.textContent?.includes("Open docs")
-    );
-    expect(stop).toBeDefined();
-    expect(docs).toBeDefined();
   });
 
   it("carries no control that could be read as adding a session", () => {
@@ -192,24 +193,6 @@ describe("HelpPanelHeader", () => {
     expect(getByText("Stop assistant").closest("button")!.dataset.destructive).toBe("true");
   });
 
-  it("invokes onEndSession when Stop assistant is selected", () => {
-    const onEndSession = vi.fn();
-    const { getByText } = renderHeader({ canEndSession: true, onEndSession });
-
-    fireEvent.click(getByText("Stop assistant"));
-
-    expect(onEndSession).toHaveBeenCalledTimes(1);
-  });
-
-  it("invokes onOpenDocs when Open docs is selected", () => {
-    const onOpenDocs = vi.fn();
-    const { getByText } = renderHeader({ onOpenDocs });
-
-    fireEvent.click(getByText("Open docs"));
-
-    expect(onOpenDocs).toHaveBeenCalledTimes(1);
-  });
-
   it("offers resuming a past session from the overflow menu, not the header row", () => {
     const onResumePastSession = vi.fn();
     const { container, getByText } = renderHeader({ onResumePastSession });
@@ -222,5 +205,120 @@ describe("HelpPanelHeader", () => {
 
     fireEvent.click(getByText("Resume a past session…"));
     expect(onResumePastSession).toHaveBeenCalledTimes(1);
+  });
+
+  describe("messaging between machines", () => {
+    const controls = (
+      overrides: Partial<NonNullable<ComponentProps<typeof HelpPanelHeader>["messaging"]>> = {}
+    ) => ({
+      enrolled: false,
+      canChangeEnrollment: true,
+      enrollmentHint: null,
+      paused: false,
+      canPause: true,
+      pauseHint: null,
+      onEnrolledChange: vi.fn(),
+      onPausedChange: vi.fn(),
+      ...overrides,
+    });
+    const items = (container: HTMLElement) =>
+      Array.from(container.querySelectorAll('[role="menuitemcheckbox"]')) as HTMLButtonElement[];
+
+    it("offers nothing while there's no host or the platform has no messaging", () => {
+      const { container } = renderHeader({ messaging: null });
+      expect(items(container)).toHaveLength(0);
+    });
+
+    it("keeps both labels the same whatever the state, carrying it in the check", () => {
+      const off = renderHeader({ messaging: controls() });
+      const offLabels = items(off.container).map((item) => item.textContent);
+      const offChecks = items(off.container).map((item) => item.getAttribute("aria-checked"));
+      off.unmount();
+      const on = renderHeader({ messaging: controls({ enrolled: true, paused: true }) });
+      expect(items(on.container).map((item) => item.textContent)).toEqual(offLabels);
+      expect(offChecks).toEqual(["false", "false"]);
+      expect(items(on.container).map((item) => item.getAttribute("aria-checked"))).toEqual([
+        "true",
+        "true",
+      ]);
+    });
+
+    it("hands each toggle's new value to its own handler", () => {
+      const messaging = controls({ paused: true });
+      const { container } = renderHeader({ messaging });
+      const [accept, pause] = items(container);
+      fireEvent.click(accept!);
+      fireEvent.click(pause!);
+      expect(messaging.onEnrolledChange).toHaveBeenCalledWith(true);
+      expect(messaging.onPausedChange).toHaveBeenCalledWith(false);
+    });
+
+    it("disables what this window can't change, and says why under the unchanged label", () => {
+      const { container } = renderHeader({
+        messaging: controls({
+          canChangeEnrollment: false,
+          enrollmentHint: "Start this assistant first",
+          canPause: false,
+          pauseHint: "Change this on the machine running it",
+        }),
+      });
+      const toggles = items(container);
+      expect(toggles.map((item) => item.disabled)).toEqual([true, true]);
+      for (const [item, hint] of [
+        [toggles[0]!, "Start this assistant first"],
+        [toggles[1]!, "Change this on the machine running it"],
+      ] as const) {
+        const describedBy = item.getAttribute("aria-describedby");
+        expect(describedBy).toBeTruthy();
+        expect(container.querySelector(`[id="${describedBy}"]`)?.textContent).toBe(hint);
+        // The hint describes the toggle; its name stays the fixed label.
+        const labelledBy = item.getAttribute("aria-labelledby");
+        expect(container.querySelector(`[id="${labelledBy}"]`)?.textContent).not.toContain(hint);
+      }
+    });
+  });
+
+  describe("new session on a named agent (#13442)", () => {
+    const menuItems = (container: HTMLElement) => [
+      ...container.querySelectorAll<HTMLButtonElement>("[data-testid='overflow-menu'] > button"),
+    ];
+
+    it("lists every agent that can run the assistant, ahead of resuming a past session", () => {
+      const onNewSessionWithAgent = vi.fn();
+      const { container } = renderHeader({
+        newSessionAgentIds: ["claude", "codex"],
+        canStartNewSession: true,
+        onNewSessionWithAgent,
+      });
+      const names = menuItems(container).map((item) => item.textContent);
+      expect(names.slice(0, 3)).toEqual([
+        "New session with Claude",
+        "New session with Codex",
+        "Resume a past session…",
+      ]);
+      fireEvent.click(menuItems(container)[1]!);
+      expect(onNewSessionWithAgent).toHaveBeenCalledWith("codex");
+    });
+
+    it("offers nothing to choose with one agent, and parks the items at the ceiling", () => {
+      const { container: single } = renderHeader({
+        newSessionAgentIds: ["claude"],
+        canStartNewSession: true,
+        onNewSessionWithAgent: vi.fn(),
+      });
+      expect(
+        menuItems(single).some((item) => item.textContent?.startsWith("New session with"))
+      ).toBe(false);
+
+      const { container: full } = renderHeader({
+        newSessionAgentIds: ["claude", "codex"],
+        canStartNewSession: false,
+        onNewSessionWithAgent: vi.fn(),
+      });
+      const agentItems = menuItems(full).filter((item) =>
+        item.textContent?.startsWith("New session with")
+      );
+      expect(agentItems.map((item) => item.disabled)).toEqual([true, true]);
+    });
   });
 });

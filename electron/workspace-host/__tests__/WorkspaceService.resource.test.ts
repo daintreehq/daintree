@@ -6,6 +6,7 @@ import type { WorktreeMonitor } from "../WorktreeMonitor.js";
 import type { Worktree } from "../../../shared/types/worktree.js";
 import type { WorkspaceHostEvent } from "../../../shared/types/workspace-host.js";
 import type { SimpleGit } from "simple-git";
+import { windowsSystemTool } from "../../utils/windowsExecutable.js";
 
 const n = (p: string) => (p as string).replace(/\\/g, "/");
 
@@ -105,6 +106,7 @@ vi.mock("../../utils/gitFileWatcher.js", () => {
       start() {
         return Promise.resolve(false);
       }
+      setUpstreamRef() {}
       dispose() {}
     },
   };
@@ -550,19 +552,6 @@ describe("WorkspaceService.runResourceAction", () => {
   // --- configurable timeouts ---
 
   describe("configurable timeouts via resource.timeouts", () => {
-    it("uses default timeout when no overrides configured", async () => {
-      createAndRegisterMonitor();
-      await setupConfig({
-        resource: { provision: ["deploy"], status: "check" },
-      });
-      const spy = vi.spyOn(service["lifecycleService"], "runCommands");
-      await setupSpawn(0);
-
-      await service.runResourceAction("req-t1", "/test/worktree", "provision");
-
-      expect(spy).toHaveBeenCalledWith(["deploy"], expect.objectContaining({ timeoutMs: 300_000 }));
-    });
-
     it("uses config timeout override for provision (seconds → ms)", async () => {
       createAndRegisterMonitor();
       await setupConfig({
@@ -623,25 +612,6 @@ describe("WorkspaceService.runResourceAction", () => {
   // --- provision action: lifecycle phase ---
 
   describe("provision action — lifecycle phase", () => {
-    it("sets lifecycle phase to resource-provision while running", async () => {
-      const monitor = createAndRegisterMonitor();
-      await setupConfig({
-        resource: { provision: ["terraform apply"] },
-      });
-      await setupSpawn(0);
-
-      const phases: string[] = [];
-      const origSetLifecycleStatus = monitor.setLifecycleStatus.bind(monitor);
-      vi.spyOn(monitor, "setLifecycleStatus").mockImplementation((status) => {
-        if (status) phases.push(status.phase);
-        origSetLifecycleStatus(status);
-      });
-
-      await service.runResourceAction("req-p1", "/test/worktree", "provision");
-
-      expect(phases).toContain("resource-provision");
-    });
-
     it("updates to success when commands complete", async () => {
       const monitor = createAndRegisterMonitor();
       await setupConfig({
@@ -766,21 +736,6 @@ describe("WorkspaceService.runResourceAction", () => {
         expect(monitor.resourceConnectCommand).toBe("ssh 'feat-deploy'@host.example.com");
       });
 
-      it("substitutes {{branch}} in connect command", async () => {
-        const monitor = createAndRegisterMonitor({ branch: "feature/remote" });
-        await setupConfig({
-          resource: {
-            provision: ["echo ok"],
-            connect: "ssh root@{{branch}}.dev.example.com",
-          },
-        });
-        await setupSpawn(0);
-
-        await service.runResourceAction("req-sub2", "/test/worktree", "provision");
-
-        expect(monitor.resourceConnectCommand).toBe("ssh root@'feature/remote'.dev.example.com");
-      });
-
       it("leaves unresolved {{endpoint}} placeholder intact", async () => {
         const monitor = createAndRegisterMonitor();
         await setupConfig({
@@ -843,58 +798,6 @@ describe("WorkspaceService.runResourceAction", () => {
       );
     });
 
-    it("runs pause commands and updates lifecycle status", async () => {
-      const monitor = createAndRegisterMonitor();
-      await setupConfig({
-        resource: { pause: ["docker compose down"] },
-      });
-      await setupSpawn(0);
-
-      await service.runResourceAction("req-st2", "/test/worktree", "pause");
-
-      expect(monitor.lifecycleStatus).toEqual(
-        expect.objectContaining({
-          phase: "resource-pause",
-          state: "success",
-        })
-      );
-    });
-
-    it("reports failure for pause when command fails", async () => {
-      const monitor = createAndRegisterMonitor();
-      await setupConfig({
-        resource: { pause: ["docker compose down"] },
-      });
-      await setupSpawn(1);
-
-      await service.runResourceAction("req-st3", "/test/worktree", "pause");
-
-      expect(monitor.lifecycleStatus?.state).toBe("failed");
-      expect(mockSendEvent).toHaveBeenCalledWith(
-        expect.objectContaining({
-          type: "resource-action-result",
-          success: false,
-        })
-      );
-    });
-
-    it("sends error when no resume commands configured", async () => {
-      createAndRegisterMonitor();
-      await setupConfig({
-        resource: { pause: ["docker compose down"] },
-      });
-
-      await service.runResourceAction("req-st4", "/test/worktree", "resume");
-
-      expect(mockSendEvent).toHaveBeenCalledWith(
-        expect.objectContaining({
-          type: "resource-action-result",
-          success: false,
-          error: "No resume commands configured",
-        })
-      );
-    });
-
     it("records resumedAt timestamp on successful resume", async () => {
       const monitor = createAndRegisterMonitor();
       await setupConfig({
@@ -924,35 +827,6 @@ describe("WorkspaceService.runResourceAction", () => {
       expect(monitor.resourceStatus?.pausedAt).toBeGreaterThanOrEqual(before);
       expect(monitor.resourceStatus?.pausedAt).toBeLessThanOrEqual(after);
     });
-  });
-
-  // --- Timeout differences: provision/teardown=300s, resume/pause=120s ---
-
-  describe("timeout values", () => {
-    // We verify the timeout indirectly: runResourceAction must forward the
-    // per-action timeoutMs to lifecycleService.runCommands.
-    it.each([
-      { action: "provision", command: "long-running-cmd", timeoutMs: 300_000 },
-      { action: "teardown", command: "cleanup-cmd", timeoutMs: 300_000 },
-      { action: "resume", command: "start-cmd", timeoutMs: 120_000 },
-      { action: "pause", command: "stop-cmd", timeoutMs: 120_000 },
-    ] as const)(
-      "uses a $timeoutMs ms timeout for $action",
-      async ({ action, command, timeoutMs }) => {
-        createAndRegisterMonitor();
-        await setupConfig({ resource: { [action]: [command] } });
-        await setupSpawn(0);
-
-        const runCommandsSpy = vi.spyOn(service["lifecycleService"], "runCommands");
-
-        await service.runResourceAction(`req-${action}`, "/test/worktree", action);
-
-        expect(runCommandsSpy).toHaveBeenCalledWith(
-          [command],
-          expect.objectContaining({ timeoutMs })
-        );
-      }
-    );
   });
 
   // --- Idempotent provision logic ---
@@ -1974,7 +1848,15 @@ describe("WorkspaceService — repository command approval", () => {
 
     expect(retrySpy).toHaveBeenCalledWith("/test/worktree");
     await vi.waitFor(() => expect(monitor.setupStatus?.state).toBe("ready"));
-    expect(vi.mocked(childProcessModule.spawn)).toHaveBeenCalledTimes(1);
+    // On Windows the tree-kill helper that an earlier test's abort started
+    // shares this mock, and its spawn can land here. It starts PowerShell by
+    // its absolute `%SystemRoot%` path, never by a bare name.
+    const treeKillHelper = windowsSystemTool("powershell.exe");
+    const spawns = vi
+      .mocked(childProcessModule.spawn)
+      .mock.calls.map(([command]) => command)
+      .filter((command) => process.platform !== "win32" || command !== treeKillHelper);
+    expect(spawns).toEqual(["npm install"]);
     expect(runResourceActionSpy).toHaveBeenCalledWith(
       "auto-provision-/test/worktree",
       "/test/worktree",

@@ -21,6 +21,7 @@ export {
 } from "./projectClient";
 export { globalEnvClient, invalidateGlobalEnvCache } from "./globalEnvClient";
 export { scratchClient } from "./scratchClient";
+export { projectGroupsClient } from "./projectGroupsClient";
 export { sessionRestoreClient } from "./sessionRestoreClient";
 export { windowOpeningClient } from "./windowOpeningClient";
 export { keepAwakeClient } from "./keepAwakeClient";
@@ -40,5 +41,6 @@ export { pluginClient } from "./pluginClient";
 export { pluginRecipesClient } from "./pluginRecipesClient";
 export { telemetryPreviewClient } from "./telemetryPreviewClient";
 export { connectivityClient } from "./connectivityClient";
+export { agentDefaultsClient } from "./agentDefaultsClient";
 export { projectPresenceClient } from "./projectPresenceClient";
 export { watchdogClient } from "./watchdogClient";

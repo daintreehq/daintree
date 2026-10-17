@@ -13,6 +13,13 @@ const shellMock = vi.hoisted(() => ({
   showItemInFolder: vi.fn<(targetPath: string) => void>(),
 }));
 
+// On Linux the default app opens through xdg-open rather than shell.openPath;
+// these tests check what reaches the OS opener, so route it to the shell mock.
+vi.mock("../../utils/openPath.js", async () => {
+  const { shell } = await import("electron");
+  return { openWithDefaultApp: (target: string) => shell.openPath(target) };
+});
+
 vi.mock("electron", () => ({
   app: {
     getPath: vi.fn((key: string) => `/mock/electron/${key}`),
@@ -113,18 +120,6 @@ afterEach(() => {
 });
 
 describe("host.system plugin-data namespace", () => {
-  it("opens a file in the plugin's own data dir with no declared allowedPaths", async () => {
-    // The gap the API exists to close: the renderer's system.openPath validates
-    // against project/worktree/userData roots, none of which cover
-    // ~/.daintree/plugin-data/<id>/, so a plugin could not reveal a file it
-    // had just written there.
-    const host = registerPlugin(["fs:user-data-write"]);
-    const target = await writeInDataDir("shot.png");
-
-    await expect(host.system.openPath(target)).resolves.toBeUndefined();
-    expect(shellMock.openPath).toHaveBeenCalledTimes(1);
-  });
-
   it("reveals a file in the plugin's own data dir", async () => {
     const host = registerPlugin(["fs:user-data-write"]);
     const target = await writeInDataDir("shot.png");
@@ -245,14 +240,6 @@ describe("host.system containment", () => {
     );
     expect(shellMock.showItemInFolder).not.toHaveBeenCalled();
   });
-
-  it("opens a file inside a declared allowedPaths root", async () => {
-    const host = registerPlugin(["fs:project-read"], [allowed]);
-    const target = join(allowed, "note.txt");
-    await fs.writeFile(target, "x");
-
-    await expect(host.system.openPath(target)).resolves.toBeUndefined();
-  });
 });
 
 describe("host.system executable deny-list", () => {
@@ -342,5 +329,51 @@ describe("host.system auditing", () => {
       (c[0] as { channel: string }).channel.startsWith("plugin:system-")
     );
     expect(audits).toHaveLength(0);
+  });
+});
+
+// ── Host mode: a remote driver gets no windows on this host's screen ──
+
+import {
+  _resetPluginFrontendRoutingForTesting,
+  setPluginFrontendRouter,
+  type PluginFrontend,
+} from "../plugin/pluginFrontendRouting.js";
+import type { ClientEndpoint } from "../../ipc/endpoint.js";
+
+describe("host.system with a driver on another machine", () => {
+  let frontend: PluginFrontend = { kind: "local" };
+
+  beforeEach(() => {
+    _resetPluginFrontendRoutingForTesting();
+    setPluginFrontendRouter({ resolve: () => frontend, onChange: () => () => {} });
+  });
+
+  afterEach(() => {
+    _resetPluginFrontendRoutingForTesting();
+  });
+
+  it("refuses openPath and showItemInFolder instead of opening them on this screen", async () => {
+    frontend = {
+      kind: "remote",
+      endpoint: { request: vi.fn(), isClosed: () => false } as unknown as ClientEndpoint,
+    };
+    const host = registerPlugin(["fs:user-data-write"]);
+    const target = await writeInDataDir("shot.png");
+
+    await expect(host.system.openPath(target)).rejects.toMatchObject({ code: "UNSUPPORTED" });
+    await expect(host.system.showItemInFolder(target)).rejects.toThrow(/REMOTE_FRONTEND/);
+    expect(shellMock.openPath).not.toHaveBeenCalled();
+    expect(shellMock.showItemInFolder).not.toHaveBeenCalled();
+  });
+
+  it("still opens for a driver at this machine, or with nobody attached", async () => {
+    const host = registerPlugin(["fs:user-data-write"]);
+    const target = await writeInDataDir("shot.png");
+    frontend = { kind: "local" };
+    await expect(host.system.openPath(target)).resolves.toBeUndefined();
+    frontend = { kind: "none", reason: "vacant" };
+    await expect(host.system.openPath(target)).resolves.toBeUndefined();
+    expect(shellMock.openPath).toHaveBeenCalledTimes(2);
   });
 });

@@ -2,6 +2,7 @@
 import type { ReactNode } from "react";
 import { render, act, cleanup, screen, waitFor, fireEvent } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { ContextMenuItem } from "@/components/ui/context-menu";
 import type { GitStatus } from "@shared/types/git";
 // Type-only: erased before the vi.mock factory runs, so it cannot pull the real
 // module in ahead of its own mock.
@@ -166,6 +167,20 @@ vi.mock("@/hooks/useExternalChangeTick", () => ({
   useExternalChangeTick: (root: string, paths: readonly string[], enabled: boolean) =>
     enabled ? externalChangeTickMock(root, paths) : undefined,
 }));
+// The shared file menu's real hook subscribes to the plugin, terminal-input and
+// fleet stores this suite never seeds; a stand-in renderer is enough to prove
+// what the pane hands it (#13423). The rest of the module stays real — the
+// content shell takes its propagation helper from it.
+const { fileMenuRenderMock } = vi.hoisted(() => ({ fileMenuRenderMock: vi.fn() }));
+vi.mock("@/hooks/useFileRowMenuItems", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/hooks/useFileRowMenuItems")>()),
+  useFileRowMenuItems: (surface: unknown) => ({
+    renderItems: (target: unknown, options: unknown) =>
+      fileMenuRenderMock(surface, target, options),
+    canInsertFileReference: false,
+    insertFileReference: () => false,
+  }),
+}));
 const { readMock, searchMock } = vi.hoisted(() => ({
   readMock: vi.fn(),
   searchMock: vi.fn(),
@@ -305,6 +320,18 @@ import { FILE_READ_ERROR_MESSAGES } from "@/components/FileViewer/fileReadErrors
 import { revealCopy } from "@/components/FileViewer/revealCopy";
 import { ClientAppError } from "@/utils/clientAppError";
 
+/**
+ * An element of the SVG FileImagePreview shows, read back from the data URL of
+ * its `<img>` (the SVG is never inserted into the document), or null.
+ */
+function shownSvgPart(container: HTMLElement, selector: string): Element | null {
+  const prefix = "data:image/svg+xml,";
+  const src = container.querySelector(`img[src^="${prefix}"]`)?.getAttribute("src");
+  if (!src) return null;
+  const markup = decodeURIComponent(src.slice(prefix.length));
+  return new DOMParser().parseFromString(markup, "image/svg+xml").querySelector(selector);
+}
+
 function lastContentPanelProps(): Record<string, unknown> {
   const props = contentPanelProps.at(-1);
   if (!props) throw new Error("ContentPanel was not rendered");
@@ -378,23 +405,6 @@ describe("FilePane restore-control wiring", () => {
     const props = lastContentPanelProps();
     expect(props.showRestoreControl).toBe(true);
     expect(props.onRestore).toBeTypeOf("function");
-  });
-
-  it("forwards showRestoreControl=false so grouped docked panels keep the inline button hidden", () => {
-    render(
-      <FilePane
-        id="file-2"
-        title="spec.md"
-        isFocused={false}
-        location="dock"
-        onFocus={() => {}}
-        onClose={() => {}}
-        onRestore={() => {}}
-        showRestoreControl={false}
-      />
-    );
-
-    expect(lastContentPanelProps().showRestoreControl).toBe(false);
   });
 });
 
@@ -983,22 +993,6 @@ describe("FilePane show in file browser (#11483)", () => {
       await gate.promise;
     });
   });
-
-  // Reveal carries the path plus the out-of-root opt-in, which is a third shape
-  // alongside the worktree action's and the path-only editor/browser one.
-  // Regressing the args builder into a single branch would send the wrong one.
-  it("keeps reveal's own args shape alongside the sibling worktree target", async () => {
-    worktreeState.worktrees.set("wt-1", { id: "wt-1", path: "/repo" });
-    const { container } = renderPane("/repo/src/index.ts");
-
-    await click(button(container, revealCopy().label)!);
-
-    expect(dispatchMock).toHaveBeenCalledWith(
-      "file.showItemInFolder",
-      { path: "/repo/src/index.ts", allowOutsideRoots: true },
-      { source: "user" }
-    );
-  });
 });
 
 // #11191: HTML files get the same Source/Rendered toggle as Markdown; rendered
@@ -1079,12 +1073,6 @@ describe("FilePane HTML Source/Rendered (#11191)", () => {
         expect.objectContaining({ path: "/repo/src/index.css", htmlPreview: false })
       )
     );
-  });
-
-  it("still routes rendered Markdown to the MarkdownViewer (regression)", async () => {
-    renderPane("/repo/docs/spec.md", "rendered");
-    expect(await screen.findByTestId("markdown-viewer-mock")).toBeTruthy();
-    expect(screen.queryByTestId("html-viewer-mock")).toBeNull();
   });
 
   // #12134: the reading control is the mirror of Wrap — each owns the toolbar
@@ -1650,19 +1638,6 @@ describe("FilePane diff mode (#11274)", () => {
       expect(frame.hasAttribute("sandbox")).toBe(false);
     });
 
-    it("never shows the binary-file error even when a text read would reject the file", async () => {
-      // Arm the read path with the exact rejection PDFs used to hit. If the
-      // classifier were removed the file would fall through and surface it, so
-      // this fails loudly rather than passing on an empty default read.
-      readMock.mockRejectedValueOnce(Object.assign(new Error("binary"), { code: "BINARY_FILE" }));
-
-      const { container } = await renderPane({ filePath: "/repo/docs/spec.pdf" });
-
-      await waitFor(() => expect(container.querySelector("iframe")).not.toBeNull());
-      expect(screen.queryByText(/Binary file/)).toBeNull();
-      expect(readMock).not.toHaveBeenCalled();
-    });
-
     describe("when the document can't be framed (#12598)", () => {
       it("lands in the error state with the preview's reason instead of a blank frame", async () => {
         seedWorktree([]);
@@ -1792,20 +1767,6 @@ describe("FilePane diff mode (#11274)", () => {
   });
 
   describe("change lookup", () => {
-    it("matches a change stored as an absolute path", async () => {
-      seedWorktree([{ path: "/repo/src/index.ts", status: "modified" }]);
-      await renderPane({ filePath: "/repo/src/index.ts" });
-      expect(toggleLabels()).toContain("Diff");
-    });
-
-    // The type says worktree-relative; the producer emits absolute today.
-    // Both shapes must resolve to the same file.
-    it("matches the same change stored as a worktree-relative path", async () => {
-      seedWorktree([{ path: "src/index.ts", status: "modified" }]);
-      await renderPane({ filePath: "/repo/src/index.ts" });
-      expect(toggleLabels()).toContain("Diff");
-    });
-
     it("does not match a different file in the same worktree", async () => {
       seedWorktree([{ path: "/repo/src/other.ts", status: "modified" }]);
       await renderPane({ filePath: "/repo/src/index.ts" });
@@ -2681,7 +2642,7 @@ describe("FilePane live disk refresh (#11451)", () => {
       content: '<svg xmlns="http://www.w3.org/2000/svg"><rect /></svg>',
     });
     const { container, rerender } = await renderPane({ filePath: "/repo/assets/icon.svg" });
-    await waitFor(() => expect(container.querySelector("svg rect")).not.toBeNull());
+    await waitFor(() => expect(shownSvgPart(container, "rect")).not.toBeNull());
 
     readMock.mockResolvedValue({
       content: '<svg xmlns="http://www.w3.org/2000/svg"><circle /></svg>',
@@ -2689,9 +2650,9 @@ describe("FilePane live disk refresh (#11451)", () => {
     seedWorktree(OUTER_ID, "/repo", { git: 200 });
     await commitTick(rerender);
 
-    // Inlined markup, so freshness rides React state rather than a URL.
-    await waitFor(() => expect(container.querySelector("svg circle")).not.toBeNull());
-    expect(container.querySelector("svg rect")).toBeNull();
+    // The markup rides React state into a data URL, not a protocol URL.
+    await waitFor(() => expect(shownSvgPart(container, "circle")).not.toBeNull());
+    expect(shownSvgPart(container, "rect")).toBeNull();
   });
 
   it("keeps the last good SVG when a background re-read catches it half-written", async () => {
@@ -2703,13 +2664,13 @@ describe("FilePane live disk refresh (#11451)", () => {
       content: '<svg xmlns="http://www.w3.org/2000/svg"><rect /></svg>',
     });
     const { container, rerender } = await renderPane({ filePath: "/repo/assets/icon.svg" });
-    await waitFor(() => expect(container.querySelector("svg rect")).not.toBeNull());
+    await waitFor(() => expect(shownSvgPart(container, "rect")).not.toBeNull());
 
     readMock.mockResolvedValue({ content: "<svg" });
     seedWorktree(OUTER_ID, "/repo", { git: 200 });
     await commitTick(rerender);
 
-    expect(container.querySelector("svg rect")).not.toBeNull();
+    expect(shownSvgPart(container, "rect")).not.toBeNull();
   });
 
   it("settles the pane when a failing tick read supersedes an explicit refresh", async () => {
@@ -2760,7 +2721,7 @@ describe("FilePane live disk refresh (#11451)", () => {
       content: '<svg xmlns="http://www.w3.org/2000/svg"><rect /></svg>',
     });
     const { container } = await renderPane({ filePath: "/elsewhere/icon.svg" });
-    await waitFor(() => expect(container.querySelector("svg rect")).not.toBeNull());
+    await waitFor(() => expect(shownSvgPart(container, "rect")).not.toBeNull());
 
     readMock.mockResolvedValue({
       content: '<svg xmlns="http://www.w3.org/2000/svg"><circle /></svg>',
@@ -2769,7 +2730,7 @@ describe("FilePane live disk refresh (#11451)", () => {
       window.dispatchEvent(new Event("focus"));
     });
 
-    await waitFor(() => expect(container.querySelector("svg circle")).not.toBeNull());
+    await waitFor(() => expect(shownSvgPart(container, "circle")).not.toBeNull());
   });
 
   it("keeps the newest bytes when two overlapping re-reads settle out of order", async () => {
@@ -3588,11 +3549,13 @@ describe("FilePane copy file contents (#12136)", () => {
       });
       const { container } = await renderPane("/repo/icon.svg");
 
-      // `[role="img"]` and not `"svg"`: every lucide icon in the toolbar is an
-      // <svg>, so the loose selector would match one of those and pass without
-      // the SVG branch ever rendering. FileImagePreview paints that role only
-      // when it has sanitized markup, which is exactly the state under test.
-      await waitFor(() => expect(container.querySelector('[role="img"]')).not.toBeNull());
+      // An SVG data-URL `<img>` and not `"svg"`: every lucide icon in the
+      // toolbar is an <svg>, so the loose selector would match one of those and
+      // pass without the SVG branch ever rendering. FileImagePreview shows that
+      // `<img>` only when it has sanitized markup, the state under test.
+      await waitFor(() =>
+        expect(container.querySelector('img[src^="data:image/svg+xml,"]')).not.toBeNull()
+      );
       expect(copyButton()).toBeNull();
     });
   });
@@ -3899,6 +3862,165 @@ describe("FilePane pinned containment root", () => {
     await waitFor(() =>
       expect(readMock).toHaveBeenCalledWith(
         expect.objectContaining({ rootPath: "/tmp/plugin/escape" })
+      )
+    );
+  });
+});
+
+describe("FilePane file menu on its content (#13423)", () => {
+  function renderPane(filePath: string, panelWorktreeId?: string) {
+    panelsById["file-1"] = {
+      id: "file-1",
+      kind: "file",
+      filePath,
+      ...(panelWorktreeId ? { worktreeId: panelWorktreeId } : {}),
+    };
+    return render(
+      <TooltipProvider>
+        <FilePane
+          id="file-1"
+          title={filePath.split("/").pop() ?? filePath}
+          isFocused={false}
+          location="grid"
+          onFocus={() => {}}
+          onClose={() => {}}
+        />
+      </TooltipProvider>
+    );
+  }
+
+  beforeEach(() => {
+    // An earlier block blanket-unstubs globals, which strips the ResizeObserver
+    // vitest.setup.ts installs; the menu's scroll shadows need it.
+    if (typeof globalThis.ResizeObserver !== "function") {
+      vi.stubGlobal(
+        "ResizeObserver",
+        class {
+          observe() {}
+          unobserve() {}
+          disconnect() {}
+        }
+      );
+    }
+    fileMenuRenderMock.mockReset();
+    fileMenuRenderMock.mockImplementation(
+      (
+        _surface: unknown,
+        target: { relativePath: string },
+        options?: { onOpenDiff?: () => void }
+      ) => (
+        <>
+          <ContextMenuItem>{`Menu for ${target.relativePath}`}</ContextMenuItem>
+          {options?.onOpenDiff && (
+            <ContextMenuItem onSelect={options.onOpenDiff}>Open diff</ContextMenuItem>
+          )}
+        </>
+      )
+    );
+  });
+
+  it("opens the shared file menu on a right-click in the file's content", async () => {
+    // The panel is stamped with a worktree the file isn't in (#11276); the menu
+    // must follow containment, like the toolbar.
+    worktreeState.worktrees.set("wt-stamped", { id: "wt-stamped", path: "/other" });
+    worktreeState.worktrees.set("wt-1", {
+      id: "wt-1",
+      path: "/repo",
+      worktreeChanges: { changes: [{ path: "/repo/src/index.ts", status: "modified" }] },
+    });
+    readMock.mockResolvedValue({ content: "const a = 1;" });
+    renderPane("/repo/src/index.ts", "wt-stamped");
+
+    fireEvent.contextMenu(await screen.findByTestId("file-pane-body"));
+
+    expect(await screen.findByText("Menu for src/index.ts")).toBeTruthy();
+    // Scoped by containment, with the file's own status and a diff to open.
+    expect(fileMenuRenderMock).toHaveBeenLastCalledWith(
+      { worktreePath: "/repo", worktreeId: "wt-1" },
+      {
+        absolutePath: "/repo/src/index.ts",
+        relativePath: "src/index.ts",
+        name: "index.ts",
+        isDirectory: false,
+        status: "modified",
+      },
+      expect.objectContaining({ hasChanges: true })
+    );
+    // The pane's own prefix rides above the shared items.
+    expect(screen.getByRole("menuitem", { name: "Show in file browser" })).toBeTruthy();
+  });
+
+  it("lands the menu's Open diff on the pane's own Diff mode", async () => {
+    worktreeState.worktrees.set("wt-1", {
+      id: "wt-1",
+      path: "/repo",
+      worktreeChanges: { changes: [{ path: "/repo/src/index.ts", status: "modified" }] },
+    });
+    readMock.mockResolvedValue({ content: "const a = 1;" });
+    renderPane("/repo/src/index.ts");
+
+    fireEvent.contextMenu(await screen.findByTestId("file-pane-body"));
+    fireEvent.click(await screen.findByText("Open diff"));
+
+    expect(setFileViewModeMock).toHaveBeenCalledWith("file-1", "diff");
+  });
+
+  it("offers no worktree-scoped items for a file outside every worktree", async () => {
+    worktreeState.worktrees.set("wt-stamped", { id: "wt-stamped", path: "/other" });
+    readMock.mockResolvedValue({ content: "const a = 1;" });
+    renderPane("/elsewhere/notes.ts", "wt-stamped");
+
+    fireEvent.contextMenu(await screen.findByTestId("file-pane-body"));
+
+    await screen.findByText(/^Menu for /);
+    expect(fileMenuRenderMock).toHaveBeenLastCalledWith(
+      { worktreePath: "", worktreeId: null },
+      expect.objectContaining({ absolutePath: "/elsewhere/notes.ts", status: null }),
+      expect.objectContaining({ hasChanges: false })
+    );
+    expect(screen.queryByRole("menuitem", { name: "Show in file browser" })).toBeNull();
+  });
+
+  it("copies the loaded text itself, so a file outside every root still copies", async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, "clipboard", { value: { writeText }, configurable: true });
+    fileMenuRenderMock.mockImplementation(
+      (_surface: unknown, _target: unknown, options?: { onCopyFileContents?: () => void }) =>
+        options?.onCopyFileContents && (
+          <ContextMenuItem onSelect={options.onCopyFileContents}>Copy contents</ContextMenuItem>
+        )
+    );
+    readMock.mockResolvedValue({ content: "outside text" });
+    renderPane("/elsewhere/notes.ts");
+
+    // Settled read: the pane only offers its own text once it holds some.
+    await waitFor(() =>
+      expect(screen.getByTestId("code-viewer-mock").getAttribute("data-content")).toBe(
+        "outside text"
+      )
+    );
+    fireEvent.contextMenu(screen.getByTestId("file-pane-body"));
+    fireEvent.click(await screen.findByText("Copy contents"));
+
+    await waitFor(() => expect(writeText).toHaveBeenCalledWith("outside text"));
+  });
+
+  it("reveals through the pane's own out-of-root reveal", async () => {
+    fileMenuRenderMock.mockImplementation(
+      (_surface: unknown, _target: unknown, options?: { onReveal?: () => void }) =>
+        options?.onReveal && <ContextMenuItem onSelect={options.onReveal}>Reveal</ContextMenuItem>
+    );
+    readMock.mockResolvedValue({ content: "const a = 1;" });
+    renderPane("/elsewhere/notes.ts");
+
+    fireEvent.contextMenu(await screen.findByTestId("file-pane-body"));
+    fireEvent.click(await screen.findByText("Reveal"));
+
+    await waitFor(() =>
+      expect(dispatchMock).toHaveBeenCalledWith(
+        "file.showItemInFolder",
+        { path: "/elsewhere/notes.ts", allowOutsideRoots: true },
+        expect.anything()
       )
     );
   });

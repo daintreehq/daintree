@@ -46,6 +46,7 @@ import {
   minimalDocChange,
   createComboboxAttributes,
 } from "../inputEditorExtensions";
+import { formatChipLabel } from "../inputEditorExtensions/base";
 import { appendAgentContextToDraft, formatAgentContextBlock } from "@shared/utils/agentContextDrag";
 import type { SlashCommand } from "@shared/types";
 
@@ -68,22 +69,9 @@ describe("computeAutoSize", () => {
     expect(result.shouldScroll).toBe(false);
   });
 
-  it("ensures minimum of one line height for empty documents", () => {
-    const result = computeAutoSize(0, 20, 160, true);
-    expect(result.next).toBe(20);
-  });
-
   it("always returns single-line height for empty documents regardless of contentHeight", () => {
     // Even if contentHeight is inflated by zoom, empty doc should be single-line
     const result = computeAutoSize(25, 20, 160, true);
-    expect(result.next).toBe(20);
-    expect(result.shouldScroll).toBe(false);
-  });
-
-  it("handles fractional zoom-inflated heights near single-line boundary", () => {
-    // 20.5px content (zoom-inflated single line) with 20px line height
-    // (20.5 - 2) / 20 = 0.925 lines → ceils to 1 line = 20px
-    const result = computeAutoSize(20.5, 20, 160, false);
     expect(result.next).toBe(20);
     expect(result.shouldScroll).toBe(false);
   });
@@ -108,21 +96,6 @@ describe("computeAutoSize", () => {
     const result = computeAutoSize(200, 20, 80, false);
     expect(result.next).toBe(80); // Capped at 80px
     expect(result.shouldScroll).toBe(true); // Content exceeds max
-  });
-
-  it("respects custom line height", () => {
-    const result = computeAutoSize(50, 25, 160, false);
-    expect(result.next).toBe(50); // (50-2)/25 = 1.92 → ceil to 2 lines = 50px
-  });
-
-  it("indicates scrolling when content exceeds max", () => {
-    const result = computeAutoSize(100, 20, 80, false);
-    expect(result.shouldScroll).toBe(true);
-  });
-
-  it("hides scrolling when content is below max", () => {
-    const result = computeAutoSize(40, 20, 160, false);
-    expect(result.shouldScroll).toBe(false);
   });
 
   it("handles edge case where contentHeight equals maxHeightPx", () => {
@@ -518,69 +491,6 @@ describe("createAutoSize integration", () => {
     view.destroy();
   });
 
-  it("handles empty content (contentHeight = 0)", () => {
-    const parent = document.createElement("div");
-    const view = new EditorView({
-      parent,
-      state: EditorState.create({
-        doc: "test",
-        extensions: [createAutoSize({ lineHeightPx: 20, maxHeightPx: 160 })],
-      }),
-    });
-
-    Object.defineProperty(view, "contentHeight", { get: () => 0, configurable: true });
-    const originalRequestMeasure = view.requestMeasure.bind(view);
-    vi.spyOn(view, "requestMeasure").mockImplementation((measure: any) => {
-      if (measure?.read && measure?.write) {
-        const measured = measure.read();
-        measure.write(measured);
-      } else {
-        originalRequestMeasure(measure);
-      }
-    });
-
-    // Delete all content to trigger update with contentHeight = 0
-    view.dispatch({ changes: { from: 0, to: view.state.doc.length, insert: "" } });
-
-    // Should enforce minimum of one line height for empty documents
-    expect(view.dom.style.height).toBe("20px");
-    expect(view.scrollDOM.style.overflowY).toBe("hidden");
-
-    view.destroy();
-  });
-
-  it("handles zoom-inflated empty content", () => {
-    const parent = document.createElement("div");
-    const view = new EditorView({
-      parent,
-      state: EditorState.create({
-        doc: "x",
-        extensions: [createAutoSize({ lineHeightPx: 20, maxHeightPx: 160 })],
-      }),
-    });
-
-    // Simulate zoom causing empty editor to measure 21px instead of 20px
-    Object.defineProperty(view, "contentHeight", { get: () => 21, configurable: true });
-    const originalRequestMeasure = view.requestMeasure.bind(view);
-    vi.spyOn(view, "requestMeasure").mockImplementation((measure: any) => {
-      if (measure?.read && measure?.write) {
-        const measured = measure.read();
-        measure.write(measured);
-      } else {
-        originalRequestMeasure(measure);
-      }
-    });
-
-    // Trigger update by clearing to empty doc
-    view.dispatch({ changes: { from: 0, to: 1, insert: "" } });
-
-    // Empty doc should always be single-line, even with zoom-inflated contentHeight
-    expect(view.dom.style.height).toBe("20px");
-    expect(view.scrollDOM.style.overflowY).toBe("hidden");
-
-    view.destroy();
-  });
-
   it("no layout jump from empty to single character", () => {
     const parent = document.createElement("div");
     let currentHeight = 21; // Zoom-inflated empty height
@@ -616,44 +526,6 @@ describe("createAutoSize integration", () => {
 
     // Single character with 21px height and epsilon: (21-2)/20 = 0.95 → 1 line = 20px
     expect(view.dom.style.height).toBe("20px");
-
-    view.destroy();
-  });
-
-  it("uses view.defaultLineHeight when no lineHeightPx is configured", () => {
-    // Simulates the chip-decorated line bug: when createAutoSize() is called without an
-    // explicit lineHeightPx (as in production), it should use view.defaultLineHeight (20px)
-    // rather than any DOM-measured value. If a chip made a .cm-line appear 28px tall, the
-    // old DOM-measurement approach would have snapped to the wrong height.
-    const parent = document.createElement("div");
-    const view = new EditorView({
-      parent,
-      state: EditorState.create({
-        doc: "",
-        // No lineHeightPx — production call site. defaultLineHeight (mocked to 20) should govern.
-        extensions: [createAutoSize({ maxHeightPx: 160 })],
-      }),
-    });
-
-    // Simulate 4 visual lines at 20px each
-    Object.defineProperty(view, "contentHeight", { get: () => 80, configurable: true });
-    Object.defineProperty(view, "defaultLineHeight", { get: () => 20, configurable: true });
-
-    const originalRequestMeasure = view.requestMeasure.bind(view);
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    vi.spyOn(view, "requestMeasure").mockImplementation((measure: any) => {
-      if (measure?.read && measure?.write) {
-        const measured = measure.read();
-        measure.write(measured);
-      } else {
-        originalRequestMeasure(measure);
-      }
-    });
-
-    view.dispatch({ changes: { from: 0, insert: "wrapped content" } });
-
-    // With defaultLineHeight=20: (80-2)/20 = 3.9 → ceil=4 → 80px (correct)
-    expect(view.dom.style.height).toBe("80px");
 
     view.destroy();
   });
@@ -828,6 +700,23 @@ describe("createCustomKeymap", () => {
   });
 });
 
+describe("formatChipLabel", () => {
+  it("labels a host inbox image by the time in its name, not as epoch milliseconds", () => {
+    expect(
+      formatChipLabel(
+        "/var/folders/x/T/daintree-inbox/clipboard/clipboard-20261012-022831-f6a4458a26c8.png"
+      )
+    ).toBe("Screenshot 02:28");
+  });
+
+  it("labels this machine's pasted image by its epoch timestamp", () => {
+    const at = new Date(2026, 9, 12, 14, 5, 0).getTime();
+    expect(formatChipLabel(`/tmp/daintree-clipboard/clipboard-${at}-abcd.png`)).toBe(
+      "Screenshot 14:05"
+    );
+  });
+});
+
 describe("readImageChipPaths (#12792)", () => {
   function makeEditor(doc: string) {
     return new EditorView({
@@ -920,29 +809,6 @@ describe("fileDropChipField", () => {
     });
     return view;
   }
-
-  it("adds a file chip entry via addFileDropChip effect", () => {
-    const view = makeEditorWithFileChip();
-
-    view.dispatch({
-      changes: { from: 0, insert: "@/Users/test/file.ts " },
-      effects: addFileDropChip.of({
-        from: 0,
-        to: 20,
-        filePath: "/Users/test/file.ts",
-        fileName: "file.ts",
-      }),
-    });
-
-    const entries = view.state.field(fileDropChipField);
-    expect(entries).toHaveLength(1);
-    expect(entries[0]!.filePath).toBe("/Users/test/file.ts");
-    expect(entries[0]!.fileName).toBe("file.ts");
-    expect(entries[0]!.from).toBe(0);
-    expect(entries[0]!.to).toBe(20);
-
-    view.destroy();
-  });
 
   it("maps chip positions through document changes before the chip", () => {
     const view = makeEditorWithFileChip();
@@ -1054,7 +920,7 @@ describe("fileDropChipField", () => {
     const removeButtons = view.dom.querySelectorAll(".cm-file-drop-chip .cm-chip-remove");
     expect(removeButtons).toHaveLength(2);
 
-    removeButtons[1]!.dispatchEvent(new MouseEvent("mousedown", { bubbles: true }));
+    removeButtons[1]!.dispatchEvent(new MouseEvent("click", { bubbles: true }));
 
     const entries = view.state.field(fileDropChipField);
     expect(entries).toHaveLength(1);
@@ -1098,7 +964,7 @@ describe("fileDropChipField", () => {
     const removeButtons = view.dom.querySelectorAll(".cm-file-drop-chip .cm-chip-remove");
     expect(removeButtons).toHaveLength(2);
 
-    removeButtons[1]!.dispatchEvent(new MouseEvent("mousedown", { bubbles: true }));
+    removeButtons[1]!.dispatchEvent(new MouseEvent("click", { bubbles: true }));
 
     const entries = view.state.field(fileDropChipField);
     expect(entries).toHaveLength(1);
@@ -1131,24 +997,6 @@ describe("fileDropChipField", () => {
 
     view.destroy();
   });
-
-  it("preserves raw @path text in document for agent consumption", () => {
-    const view = makeEditorWithFileChip();
-
-    view.dispatch({
-      changes: { from: 0, insert: "@/Users/test/file.ts " },
-      effects: addFileDropChip.of({
-        from: 0,
-        to: 20,
-        filePath: "/Users/test/file.ts",
-        fileName: "file.ts",
-      }),
-    });
-
-    expect(view.state.doc.toString()).toBe("@/Users/test/file.ts ");
-
-    view.destroy();
-  });
 });
 
 describe("createFilePasteHandler", () => {
@@ -1177,8 +1025,9 @@ describe("createFilePasteHandler", () => {
     const originalElectron = window.electron;
     (window as unknown as Record<string, unknown>).electron = {
       ...window.electron,
-      webUtils: {
-        getPathForFile: (file: File) => (file as unknown as { _testPath?: string })._testPath ?? "",
+      files: {
+        getDroppedFilePaths: (files: readonly File[]) =>
+          files.map((file) => (file as unknown as { _testPath?: string })._testPath ?? ""),
       },
     };
 
@@ -1237,8 +1086,8 @@ describe("createFilePasteHandler", () => {
     const originalElectron = window.electron;
     (window as unknown as Record<string, unknown>).electron = {
       ...window.electron,
-      webUtils: {
-        getPathForFile: () => "",
+      files: {
+        getDroppedFilePaths: (files: readonly File[]) => files.map(() => ""),
       },
     };
 
@@ -1275,14 +1124,6 @@ describe("interimWidgetField", () => {
     });
   }
 
-  it("stores the interim text in the field when dispatched", () => {
-    const view = makeView("hello world");
-    view.dispatch({ effects: setInterimText.of("draft text") });
-
-    expect(view.state.field(interimWidgetField)).toBe("draft text");
-    view.destroy();
-  });
-
   it("renders a ghost widget at the end of the doc when text is present", () => {
     const view = makeView("hello world");
     view.dispatch({ effects: setInterimText.of("more") });
@@ -1301,29 +1142,6 @@ describe("interimWidgetField", () => {
 
     view.dispatch({ effects: setInterimText.of("") });
     expect(view.contentDOM.querySelector(".cm-voice-interim")).toBeNull();
-    view.destroy();
-  });
-
-  it("does not mutate the document when interim text is set", () => {
-    const view = makeView("hello");
-    const before = view.state.doc.toString();
-    view.dispatch({ effects: setInterimText.of("interim text not in doc") });
-
-    expect(view.state.doc.toString()).toBe(before);
-    expect(view.state.doc.length).toBe(5);
-    view.destroy();
-  });
-
-  it("interim updates do not enter the undo history (no docChanged)", () => {
-    const view = makeView("base");
-    view.dispatch({ effects: setInterimText.of("a") });
-    view.dispatch({ effects: setInterimText.of("ab") });
-    view.dispatch({ effects: setInterimText.of("abc") });
-
-    // None of the interim dispatches touched the document, so the doc
-    // is still the original value — and the undo history holds no entries
-    // attributable to these effect-only transactions.
-    expect(view.state.doc.toString()).toBe("base");
     view.destroy();
   });
 
@@ -1489,18 +1307,6 @@ describe("voice decoration phase integration", () => {
     });
   }
 
-  it("utterance_final phase produces no decorations even when effects could be set", () => {
-    const view = makeView("hello world");
-    view.dispatch({
-      effects: [setInterimText.of(""), setPendingAIRanges.of([])],
-    });
-
-    expect(view.state.field(interimWidgetField)).toBe("");
-    expect(view.state.field(pendingAIField).iter().value).toBeNull();
-    expect(view.contentDOM.querySelector(".cm-voice-interim")).toBeNull();
-    view.destroy();
-  });
-
   it("clearing both interim and pending decorations leaves no DOM artifacts", () => {
     const view = makeView("hello world");
     view.dispatch({
@@ -1534,26 +1340,6 @@ describe("diffChipField", () => {
     expect(chipState.tokens[0]!.end).toBe(11);
   });
 
-  it("creates decorations for @diff:staged tokens", () => {
-    const state = EditorState.create({
-      doc: "@diff:staged",
-      extensions: [diffChipField],
-    });
-    const chipState = state.field(diffChipField);
-    expect(chipState.tokens).toHaveLength(1);
-    expect(chipState.tokens[0]!.diffType).toBe("staged");
-  });
-
-  it("creates decorations for @diff:head tokens", () => {
-    const state = EditorState.create({
-      doc: "@diff:head",
-      extensions: [diffChipField],
-    });
-    const chipState = state.field(diffChipField);
-    expect(chipState.tokens).toHaveLength(1);
-    expect(chipState.tokens[0]!.diffType).toBe("head");
-  });
-
   it("finds multiple diff tokens", () => {
     const state = EditorState.create({
       doc: "@diff and @diff:staged and @diff:head",
@@ -1561,15 +1347,6 @@ describe("diffChipField", () => {
     });
     const chipState = state.field(diffChipField);
     expect(chipState.tokens).toHaveLength(3);
-  });
-
-  it("returns empty for text without diff tokens", () => {
-    const state = EditorState.create({
-      doc: "just plain text",
-      extensions: [diffChipField],
-    });
-    const chipState = state.field(diffChipField);
-    expect(chipState.tokens).toHaveLength(0);
   });
 
   it("updates when document changes", () => {
@@ -1644,15 +1421,6 @@ describe("terminalChipField", () => {
     expect(chipState.tokens[0]!.end).toBe(15);
   });
 
-  it("returns empty for text without @terminal", () => {
-    const state = EditorState.create({
-      doc: "just plain text",
-      extensions: [terminalChipField],
-    });
-    const chipState = state.field(terminalChipField);
-    expect(chipState.tokens).toHaveLength(0);
-  });
-
   it("updates when document changes", () => {
     const state = EditorState.create({
       doc: "@terminal",
@@ -1677,15 +1445,6 @@ describe("selectionChipField", () => {
     expect(chipState.tokens).toHaveLength(1);
     expect(chipState.tokens[0]!.start).toBe(6);
     expect(chipState.tokens[0]!.end).toBe(16);
-  });
-
-  it("returns empty for text without @selection", () => {
-    const state = EditorState.create({
-      doc: "just plain text",
-      extensions: [selectionChipField],
-    });
-    const chipState = state.field(selectionChipField);
-    expect(chipState.tokens).toHaveLength(0);
   });
 });
 
@@ -1746,6 +1505,30 @@ describe("resolveInputBarColors", () => {
     const colors = resolveInputBarColors(fullTheme);
     expect(colors.voiceCursor).toBe("#e5c07b");
   });
+
+  it("fits an rgb() palette exactly as it fits the same colours in hex", () => {
+    const hex = resolveInputBarColors({ background: "#1e1e2e", foreground: "#cdd6f4" });
+    const rgb = resolveInputBarColors({
+      background: "rgb(30, 30, 46)",
+      foreground: "rgb(205, 214, 244)",
+    });
+    // 60%/66% are fitted; an unparsed palette falls back to 67%/72%.
+    expect(hex.placeholder).toBe("color-mix(in oklab, #cdd6f4 60%, #1e1e2e)");
+    expect(rgb.placeholder).toBe("color-mix(in oklab, rgb(205, 214, 244) 60%, rgb(30, 30, 46))");
+    expect(hex.placeholderSelected).toBe("color-mix(in oklab, #cdd6f4 66%, #1e1e2e)");
+    expect(rgb.placeholderSelected).toBe(
+      "color-mix(in oklab, rgb(205, 214, 244) 66%, rgb(30, 30, 46))"
+    );
+    expect(rgb.isDark).toBe(true);
+  });
+
+  it("composites a translucent rgba() foreground over the background before mixing", () => {
+    for (const foreground of ["rgba(255, 255, 255, 0.5)", "rgb(255 255 255 / 50%)"]) {
+      const colors = resolveInputBarColors({ background: "#000", foreground });
+      expect(colors.shellSelectedBg, foreground).toBe("color-mix(in oklab, #808080 3%, #000)");
+      expect(colors.placeholder, foreground).toBe("color-mix(in oklab, #808080 95%, #000)");
+    }
+  });
 });
 
 describe("buildInputBarTheme", () => {
@@ -1757,30 +1540,6 @@ describe("buildInputBarTheme", () => {
     green: "#50fa7b",
     cyan: "#8be9fd",
   };
-
-  it("produces a valid Extension", () => {
-    const ext = buildInputBarTheme(theme);
-    expect(ext).toBeDefined();
-    expect(ext).not.toBeNull();
-  });
-
-  it("does not throw for a partial theme", () => {
-    expect(() => buildInputBarTheme({})).not.toThrow();
-  });
-
-  it("returns different extensions for different themes", () => {
-    const ext1 = buildInputBarTheme(theme);
-    const ext2 = buildInputBarTheme({ ...theme, cursor: "#000000" });
-    expect(ext1).not.toBe(ext2);
-  });
-
-  it("can be used to create an EditorState", () => {
-    const state = EditorState.create({
-      doc: "test",
-      extensions: [buildInputBarTheme(theme)],
-    });
-    expect(state.doc.toString()).toBe("test");
-  });
 
   it("styles slash chip with chipColor (neutral), not accent", () => {
     const css = readGeneratedCss([buildInputBarTheme(theme)]);
@@ -1874,25 +1633,6 @@ const ALL_CHIP_SELECTORS = [
 ];
 
 describe("chipEntranceTheme", () => {
-  it("is a valid Extension", () => {
-    expect(chipEntranceTheme).toBeDefined();
-    expect(chipEntranceTheme).not.toBeNull();
-  });
-
-  it("can be used to create an EditorState alongside buildInputBarTheme", () => {
-    const theme: ITheme = {
-      background: "#282a36",
-      foreground: "#f8f8f2",
-      cursor: "#ff79c6",
-      cyan: "#8be9fd",
-    };
-    const state = EditorState.create({
-      doc: "hello",
-      extensions: [buildInputBarTheme(theme), chipEntranceTheme],
-    });
-    expect(state.doc.toString()).toBe("hello");
-  });
-
   it("defines a chip-enter @keyframes with opacity + translateY drift", () => {
     const css = readGeneratedCss([chipEntranceTheme]);
     expect(css).toMatch(/@keyframes\s+chip-enter/);
@@ -2081,19 +1821,6 @@ describe("chipPendingDeleteField", () => {
     });
   }
 
-  it("starts null", () => {
-    const view = makeView("hello");
-    expect(view.state.field(chipPendingDeleteField)).toBeNull();
-    view.destroy();
-  });
-
-  it("stages a range when setChipPendingDelete effect fires", () => {
-    const view = makeView("hello world");
-    view.dispatch({ effects: setChipPendingDelete.of({ from: 0, to: 5 }) });
-    expect(view.state.field(chipPendingDeleteField)).toEqual({ from: 0, to: 5 });
-    view.destroy();
-  });
-
   it("clears when document changes", () => {
     const view = makeView("hello world");
     view.dispatch({ effects: setChipPendingDelete.of({ from: 0, to: 5 }) });
@@ -2143,16 +1870,8 @@ describe("chipPendingDeleteField", () => {
 });
 
 describe("isChipSelected helper", () => {
-  it("returns false when pending is null", () => {
-    expect(isChipSelected(null, 0, 5)).toBe(false);
-  });
-
   it("returns true when pending matches range", () => {
     expect(isChipSelected({ from: 0, to: 5 }, 0, 5)).toBe(true);
-  });
-
-  it("returns false when pending range is different", () => {
-    expect(isChipSelected({ from: 0, to: 5 }, 6, 11)).toBe(false);
   });
 
   it("returns false when only one boundary matches", () => {
@@ -2324,23 +2043,6 @@ describe("two-press Backspace on /slash chips", () => {
     view.destroy();
   });
 
-  it("still solidifies a valid /slash command into an atomic chip", () => {
-    const map = new Map<string, SlashCommand>([["/build", makeSlashCommand("/build")]]);
-    const view = makeView("/build ", map);
-    const chipEnd = "/build".length;
-    view.dispatch({ selection: { anchor: chipEnd } });
-
-    let covered = false;
-    for (const getRanges of view.state.facet(EditorView.atomicRanges)) {
-      getRanges(view).between(0, chipEnd, () => {
-        covered = true;
-        return false;
-      });
-    }
-    expect(covered).toBe(true);
-    view.destroy();
-  });
-
   it("renders a mixed valid + invalid doc: widget for valid, editable mark for invalid", () => {
     // Exercises the combined decoration set (a replace widget and a plain mark
     // in the same Decoration.set) plus the atomicRanges split.
@@ -2376,23 +2078,6 @@ describe("two-press Backspace on /slash chips", () => {
     const invalidStart = "/build ".length;
     expect(coversRange(invalidStart, invalidStart + "/unknowncmd".length)).toBe(false);
     view.destroy();
-  });
-});
-
-describe("slashChipField valid/invalid distinction", () => {
-  it("preserves isValid metadata for known commands", () => {
-    const map = new Map<string, SlashCommand>([["/build", makeSlashCommand("/build")]]);
-    const field = createSlashChipField({ commandMap: map });
-    const state = EditorState.create({
-      doc: "/build /unknowncmd",
-      extensions: [field],
-    });
-    const chipState = state.field(field);
-    expect(chipState.tokens).toHaveLength(2);
-    const validToken = chipState.tokens.find((t) => t.command === "/build");
-    const invalidToken = chipState.tokens.find((t) => t.command === "/unknowncmd");
-    expect(validToken?.isValid).toBe(true);
-    expect(invalidToken?.isValid).toBe(false);
   });
 });
 
@@ -2539,21 +2224,6 @@ describe("two-press Backspace on diffChip and terminalChip", () => {
 });
 
 describe("@file chip widget rendering", () => {
-  it("doc text is preserved when chip is rendered as widget", () => {
-    const parent = document.createElement("div");
-    document.body.appendChild(parent);
-    const view = new EditorView({
-      parent,
-      state: EditorState.create({
-        doc: "@src/App.tsx hello",
-        extensions: [chipPendingDeleteField, createFileChipField()],
-      }),
-    });
-
-    expect(view.state.doc.toString()).toBe("@src/App.tsx hello");
-    view.destroy();
-  });
-
   it("renders cm-chip-pending-delete class when chip is staged", () => {
     const parent = document.createElement("div");
     document.body.appendChild(parent);

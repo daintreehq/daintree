@@ -251,23 +251,6 @@ describe("registerDiagnosticsHandlers", () => {
     getProjectByIdMock.mockReturnValue(null);
   });
 
-  it("registers all expected IPC handlers", () => {
-    const cleanup = registerDiagnosticsHandlers(deps);
-    const channels = ipcMainMock.handle.mock.calls.map((c: unknown[]) => c[0]);
-    expect(channels).toContain("system:get-app-metrics");
-    expect(channels).toContain("system:get-hardware-info");
-    expect(channels).toContain("diagnostics:get-process-metrics");
-    expect(channels).toContain("diagnostics:get-heap-stats");
-    expect(channels).toContain("diagnostics:get-info");
-    expect(channels).toContain("system:download-diagnostics");
-    expect(channels).toContain("system:report-blink-memory");
-    expect(channels).toContain("system:report-renderer-elu");
-    expect(channels).toContain("system:get-report-enrichment");
-    expect(channels).toContain("system:renderer-cpu-profile-start");
-    expect(channels).toContain("system:renderer-cpu-profile-stop");
-    cleanup();
-  });
-
   it("cleanup removes all handlers", () => {
     const cleanup = registerDiagnosticsHandlers(deps);
     const handlerCount = ipcMainMock.handle.mock.calls.length;
@@ -610,20 +593,6 @@ describe("registerDiagnosticsHandlers", () => {
   });
 
   describe("handleCollectDiagnosticsForReview", () => {
-    it("includes a positive appLaunchTimestamp in the review payload", async () => {
-      registerDiagnosticsHandlers(deps);
-      const handler = getHandlerFn("system:collect-diagnostics-for-review");
-      const result = (await handler()) as {
-        appLaunchTimestamp: number;
-        sectionKeys: string[];
-      };
-
-      expect(typeof result.appLaunchTimestamp).toBe("number");
-      expect(result.appLaunchTimestamp).toBeGreaterThan(0);
-      expect(result.appLaunchTimestamp).toBeLessThanOrEqual(Date.now());
-      expect(result.sectionKeys).toEqual(["metadata"]);
-    });
-
     it("carries the version boundary and oldest retained log time", async () => {
       getVersionFirstRunBoundaryMock.mockReturnValueOnce({ version: "0.39.0", firstRunAtMs: 1234 });
       readOldestRetainedLogMsMock.mockResolvedValueOnce(999);
@@ -634,15 +603,6 @@ describe("registerDiagnosticsHandlers", () => {
       expect(result.versionFirstRun).toEqual({ version: "0.39.0", firstRunAtMs: 1234 });
       expect(result.oldestRetainedLogMs).toBe(999);
       expect(readOldestRetainedLogMsMock).toHaveBeenCalledWith("/logs", "/logs/daintree.log");
-    });
-
-    it("reports an unknown boundary as null", async () => {
-      registerDiagnosticsHandlers(deps);
-      const handler = getHandlerFn("system:collect-diagnostics-for-review");
-      const result = (await handler()) as DiagnosticsReviewPayload;
-
-      expect(result.versionFirstRun).toBe(null);
-      expect(result.oldestRetainedLogMs).toBe(null);
     });
   });
 

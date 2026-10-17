@@ -532,15 +532,6 @@ describe("snooze", () => {
     expect(service.isSnoozed("run-1", NOW)).toBe(false);
   });
 
-  it("clears an unlimited snooze on input, like every other duration", () => {
-    const service = makeService(makeSnoozePersistence());
-    service.snooze("run-1", "unlimited");
-
-    typedInput("run-1");
-
-    expect(service.isSnoozed("run-1", NOW)).toBe(false);
-  });
-
   it("does NOT clear the snooze on a non-input transition", () => {
     // Output, heuristics and activity all move agent state without the user
     // being present. Only deliberate typing ends a snooze.

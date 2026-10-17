@@ -3,6 +3,7 @@ import { defineIpcNamespace, op, opValidated } from "../define.js";
 import type { IpcContext } from "../types.js";
 import { PLUGIN_AGENT_MCP_METHOD_CHANNELS } from "./pluginAgentMcp.preload.js";
 import {
+  declaresDatabaseWrites,
   isSharedAcrossProjects,
   listDeclaredAgentMcpPlugins,
 } from "../../services/pluginAgentMcp/declaredEndpoints.js";
@@ -24,6 +25,7 @@ import type * as PluginServiceModule from "../../services/PluginService.js";
 import type * as McpServerServiceModule from "../../services/McpServerService.js";
 import {
   DATABASE_ENDPOINT_ID,
+  DATABASE_WRITES_ACCESS_ID,
   type DeclaredAgentMcpPlugin,
 } from "../../services/pluginAgentMcp/types.js";
 import { isProjectWorkspaceId } from "../../../shared/utils/workspaceIds.js";
@@ -92,7 +94,7 @@ function surfaceOf(
   projectId: string,
   pluginInstanceId: string,
   manifest: LoadedPluginInfo["manifest"] | undefined
-): Pick<DeclaredAgentMcpPlugin, "hasDatabases" | "pluginEndpoint"> {
+): Pick<DeclaredAgentMcpPlugin, "hasDatabases" | "hasDatabaseWrites" | "pluginEndpoint"> {
   if (!manifest) {
     const ownId = listLegacyAgentMcpEndpointIds(projectId, pluginInstanceId).find(
       (endpointId) => endpointId !== DATABASE_ENDPOINT_ID
@@ -105,6 +107,7 @@ function surfaceOf(
   const endpoint = manifest.contributes.agentMcp?.[0];
   return {
     hasDatabases: (manifest.contributes.databases ?? []).length > 0,
+    ...(declaresDatabaseWrites(manifest) ? { hasDatabaseWrites: true as const } : {}),
     ...(endpoint
       ? {
           pluginEndpoint: {
@@ -117,16 +120,20 @@ function surfaceOf(
   };
 }
 
-/** The level that describes which of a plugin's rosters are on. */
-function levelOf(databases: boolean, own: boolean): AgentMcpAccess {
-  return own ? "read-write" : databases ? "read-only" : "off";
+/** The level that describes which of a plugin's rosters are on, its declared writes counting as its own tools do. */
+function levelOf(databases: boolean, own: boolean, writes = false): AgentMcpAccess {
+  return own || writes ? "read-write" : databases ? "read-only" : "off";
 }
 
 function row(
   projectId: string,
   plugin: Pick<
     DeclaredAgentMcpPlugin,
-    "pluginInstanceId" | "pluginDisplayName" | "hasDatabases" | "pluginEndpoint"
+    | "pluginInstanceId"
+    | "pluginDisplayName"
+    | "hasDatabases"
+    | "hasDatabaseWrites"
+    | "pluginEndpoint"
   >,
   available: boolean
 ): ProjectAgentToolPlugin {
@@ -136,12 +143,20 @@ function row(
   const databases =
     plugin.hasDatabases && isAgentMcpEndpointEnabled(projectId, id, DATABASE_ENDPOINT_ID);
   const own = endpointId !== undefined && isAgentMcpEndpointEnabled(projectId, id, endpointId);
+  const writes =
+    databases &&
+    plugin.hasDatabaseWrites === true &&
+    isAgentMcpEndpointEnabled(projectId, id, DATABASE_WRITES_ACCESS_ID);
 
   const answer = projectAgentMcpAccessAnswer(projectId, id);
   const allProjects = installed ? allProjectsAgentMcpAccess(id) : null;
   const repoDatabases = projectDefaultForEndpoint(projectId, id, DATABASE_ENDPOINT_ID);
   const repoOwn =
     endpointId !== undefined ? projectDefaultForEndpoint(projectId, id, endpointId) : null;
+  const repoWrites =
+    plugin.hasDatabaseWrites === true &&
+    repoDatabases === true &&
+    projectDefaultForEndpoint(projectId, id, DATABASE_WRITES_ACCESS_ID) === true;
   const repositoryNamesPlugin = repoDatabases !== null || repoOwn !== null;
   const source: AgentMcpAccessSource =
     (answer !== undefined && answer !== null) || hasLegacyAgentMcpAnswer(projectId, id)
@@ -157,6 +172,7 @@ function row(
     pluginDisplayName: plugin.pluginDisplayName,
     origin: installed ? "installed" : "project",
     hasDatabases: plugin.hasDatabases,
+    ...(plugin.hasDatabaseWrites === true ? { hasDatabaseWrites: true as const } : {}),
     ...(isSharedAcrossProjects(id, plugin.hasDatabases)
       ? { sharedAcrossProjects: true as const }
       : {}),
@@ -170,18 +186,22 @@ function row(
           },
         }
       : {}),
-    access: levelOf(databases, own),
+    access: levelOf(databases, own, writes),
     source,
     ...(installed ? { allProjectsAccess: allProjects ?? "off" } : {}),
     ...(!installed && repositoryNamesPlugin
       ? {
           repositoryAccess: levelOf(
             plugin.hasDatabases && repoDatabases === true,
-            repoOwn === true
+            repoOwn === true,
+            repoWrites
           ),
         }
       : {}),
     ...(own && plugin.hasDatabases && !databases ? { databasesWithheld: true } : {}),
+    ...(own && databases && plugin.hasDatabaseWrites === true && !writes
+      ? { writesWithheld: true as const }
+      : {}),
     available,
   };
 }
@@ -218,10 +238,13 @@ function retainedAccess(
             isAgentMcpEndpointEnabled(projectId, pluginInstanceId, endpointId)
           )
         : isAgentMcpEndpointEnabledByDefault(projectId, pluginInstanceId, UNNAMED_OWN_ENDPOINT);
-    return levelOf(
-      isAgentMcpEndpointEnabled(projectId, pluginInstanceId, DATABASE_ENDPOINT_ID),
-      own
-    );
+    const databases = isAgentMcpEndpointEnabled(projectId, pluginInstanceId, DATABASE_ENDPOINT_ID);
+    // A plugin whose manifest is gone may come back declaring writes.
+    const writes =
+      databases &&
+      (manifest === undefined || declaresDatabaseWrites(manifest)) &&
+      isAgentMcpEndpointEnabled(projectId, pluginInstanceId, DATABASE_WRITES_ACCESS_ID);
+    return levelOf(databases, own, writes);
   }
   return allProjectsAgentMcpAccess(pluginInstanceId) ?? "off";
 }
@@ -265,7 +288,7 @@ async function buildSnapshot(projectId: string | null): Promise<ProjectAgentTool
       },
       false
     );
-    const { databasesWithheld: _withheld, ...rest } = orphan;
+    const { databasesWithheld: _withheld, writesWithheld: _writesWithheld, ...rest } = orphan;
     rows.push({ ...rest, access: retainedAccess(projectId, id, manifest) });
   }
 
@@ -275,7 +298,9 @@ async function buildSnapshot(projectId: string | null): Promise<ProjectAgentTool
 /** Whether a level means something for what the plugin offers. */
 function isMeaningful(plugin: DeclaredAgentMcpPlugin, access: AgentMcpAccess): boolean {
   if (access === "read-only") return plugin.hasDatabases;
-  if (access === "read-write") return plugin.pluginEndpoint !== undefined;
+  if (access === "read-write") {
+    return plugin.pluginEndpoint !== undefined || plugin.hasDatabaseWrites === true;
+  }
   return true;
 }
 

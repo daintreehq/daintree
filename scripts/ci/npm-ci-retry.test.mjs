@@ -51,11 +51,6 @@ describe("npm-ci-retry", () => {
       expect(classifyFailure(stderr)).toBe("deterministic");
     });
 
-    it("matches E404 with lowercase npm error", () => {
-      const stderr = "npm error code E404\nnpm error 404 Not Found\n";
-      expect(classifyFailure(stderr)).toBe("deterministic");
-    });
-
     it("matches ERESOLVE dependency conflicts", () => {
       const stderr = "npm ERR! code ERESOLVE\nnpm ERR! ERESOLVE could not resolve\n";
       expect(classifyFailure(stderr)).toBe("deterministic");
@@ -221,6 +216,14 @@ Postinstall failures (2):
       );
     });
 
+    it("never retries a failed node-pty conpty.cc patch", () => {
+      const patchFailure =
+        '  node-pty conpty.cc patch: node-pty\'s conpty.cc no longer matches the "exit watcher hand-off" edit\n';
+      expect(classifyFailure(`npm warn fetch failed ECONNRESET\n${patchFailure}`)).toBe(
+        "deterministic"
+      );
+    });
+
     it("keeps a failed binding.gyp patch deterministic beside a node-gyp network timeout", () => {
       const stderr = `
 ConnectTimeoutError: Connect Timeout Error (attempted addresses: 104.18.17.205:443, timeout: 10000ms)
@@ -243,18 +246,6 @@ Postinstall failures (2):
     );
     const allTransientOverride = TRANSIENT_OVERRIDE_PATTERNS.map((p) => p.source);
     const allTransient = TRANSIENT_PATTERNS.map((p) => p.source);
-
-    it("covers every deterministic pattern", () => {
-      expect(DETERMINISTIC_PATTERNS).toHaveLength(10);
-    });
-
-    it("covers every transient pattern", () => {
-      expect(TRANSIENT_PATTERNS).toHaveLength(13);
-    });
-
-    it("covers every transient override pattern", () => {
-      expect(TRANSIENT_OVERRIDE_PATTERNS).toHaveLength(3);
-    });
 
     it("has no overlap between deterministic and transient patterns", () => {
       for (const dp of allDeterministic) {

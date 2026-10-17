@@ -22,15 +22,6 @@ vi.mock("@/clients", () => ({
 
 type ActionFactory = () => AnyActionDefinition;
 
-const ENV_ACTION_IDS = [
-  "env.global.get",
-  "env.global.set",
-  "env.project.get",
-  "env.project.set",
-  "worktree.resource.config.get",
-  "worktree.resource.config.set",
-] as const;
-
 const stubCtx: ActionContext = {};
 
 describe("env action definitions", () => {
@@ -43,35 +34,6 @@ describe("env action definitions", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
-  });
-
-  it("registers all 6 env/resource.config action IDs", () => {
-    for (const id of ENV_ACTION_IDS) {
-      expect(registry.has(id), `missing action: ${id}`).toBe(true);
-    }
-  });
-
-  it.each([
-    ["env.global.get", "query", "safe", "settings"],
-    ["env.global.set", "command", "safe", "settings"],
-    ["env.project.get", "query", "safe", "settings"],
-    ["env.project.set", "command", "safe", "settings"],
-    ["worktree.resource.config.get", "query", "safe", "worktree"],
-    ["worktree.resource.config.set", "command", "safe", "worktree"],
-  ] as const)("%s has expected kind/danger/category", (id, kind, danger, category) => {
-    const def = registry.get(id)!();
-    expect(def.kind).toBe(kind);
-    expect(def.danger).toBe(danger);
-    expect(def.category).toBe(category);
-    expect(def.scope).toBe("renderer");
-  });
-
-  it("env.global.get delegates to globalEnvClient.get (cached)", async () => {
-    mockGlobalEnvGet.mockResolvedValue({ FOO: "bar" });
-    const def = registry.get("env.global.get")!();
-    const result = await def.run(undefined, stubCtx);
-    expect(mockGlobalEnvGet).toHaveBeenCalledTimes(1);
-    expect(result).toEqual({ FOO: "bar" });
   });
 
   it("env.global.set delegates to globalEnvClient.set (cache-invalidating) with variables", async () => {

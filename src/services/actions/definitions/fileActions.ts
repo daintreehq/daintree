@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { systemClient } from "@/clients";
+import { systemClient, worktreeClient } from "@/clients";
 import { filesClient } from "@/clients/filesClient";
 import { useProjectStore } from "@/store";
 import { usePanelStore } from "@/store/panelStore";
@@ -7,6 +7,7 @@ import { usePanelDialogStore } from "@/store/panelDialogStore";
 import { isFilePanel, type FileViewMode } from "@shared/types/panel";
 import { isMarkdownFilePath } from "@/components/Markdown/isMarkdownFile";
 import { isHtmlFilePath } from "@/components/Html/isHtmlFile";
+import { primeHostPreviewCapability } from "@/components/FileViewer/filePreviewKinds";
 import {
   isAbsolute,
   isPathInside,
@@ -20,6 +21,8 @@ import type { ActionContext } from "@shared/types/actions";
 import { isClientAppError } from "@/utils/clientAppError";
 import { isForegroundDispatch } from "./dispatchSource";
 import { PANEL_LIMIT_ERROR_SUFFIX } from "./panelLimitError";
+import { requireWorktreeId, requireWorktreePath, withWorktreeLocation } from "./locationArgs";
+import { useFileMutationConfirmStore } from "@/store/fileMutationConfirmStore";
 
 const viewArgsSchema = z.object({
   path: z.string().describe("Absolute or repo-relative file path to open."),
@@ -210,10 +213,16 @@ export function registerFileActions(actions: ActionRegistry, callbacks: ActionCa
       // FilePane derives the same name for its own panel header, but the dialog
       // header reads the stored title through the kind-agnostic host.
       const fileName = absolutePath.split(/[/\\]/).filter(Boolean).pop();
+      const panelWorktreeId = resolveFilePanelWorktreeId(absolutePath, worktreeId, callbacks);
+      // A remote view's preview URL is built once, at render, and the host
+      // refuses one built before this view's capability arrived. A host agent
+      // can ask straight after connect, so wait for it; locally this resolves
+      // at once without IPC.
+      await primeHostPreviewCapability();
       const panelId = await usePanelDialogStore.getState().openPanelDialog({
         kind: "file",
         filePath: absolutePath,
-        worktreeId: resolveFilePanelWorktreeId(absolutePath, worktreeId, callbacks),
+        worktreeId: panelWorktreeId,
         ...(fileName && { title: fileName }),
         ...(effectiveViewMode && { fileViewMode: effectiveViewMode }),
         ...(line != null && { initialLine: line }),
@@ -480,6 +489,43 @@ export function registerFileActions(actions: ActionRegistry, callbacks: ActionCa
         // Deliberately not wrapped: a rejection here is the user's answer, and
         // the unconfined op keeps its own deny-list, realpath and stat guards.
         await systemClient.showItemInFolderUnconfined(path);
+      }
+    },
+  }));
+
+  const fileMutationArgsSchema = withWorktreeLocation({
+    filePath: z.string().min(1).describe("Path of the file, relative to the worktree root."),
+  });
+
+  actions.set("file.trash", () => ({
+    id: "file.trash",
+    title: "Move file to Trash",
+    description:
+      "Move one file in a worktree to the OS Trash, where it can be restored. The git index is left alone, so a tracked file then shows as deleted. Folders are refused, and nothing is deleted permanently: where no Trash exists the call fails.",
+    category: "files",
+    kind: "command",
+    // Recoverable from the Trash, but it still takes a file out from under
+    // whatever is using it — an open editor, a running agent — so it asks
+    // first, naming the file (#13424).
+    danger: "confirm",
+    dangerRationale:
+      "Removes the file from the worktree. It can be restored from the OS Trash, not from git.",
+    scope: "renderer",
+    argsSchema: fileMutationArgsSchema,
+    run: async (args: unknown, ctx: ActionContext) => {
+      const { filePath, ...location } = fileMutationArgsSchema.parse(args);
+      const worktreePath = requireWorktreePath(location, ctx);
+      if (ctx.dispatchSource !== "agent") {
+        const confirmed = await useFileMutationConfirmStore
+          .getState()
+          .requestConfirmation({ kind: "trash", relativePath: filePath });
+        if (!confirmed) return;
+      }
+      await window.electron.files.trash({ worktreePath, relativePath: filePath });
+      try {
+        await worktreeClient.refresh(requireWorktreeId(location, ctx));
+      } catch {
+        // The file is already in the Trash; polling reconciles the list.
       }
     },
   }));

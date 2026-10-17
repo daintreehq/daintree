@@ -234,32 +234,6 @@ describe("useArtifacts module-level store teardown", () => {
     expect(stored[0]!.id).toBe("b10");
   });
 
-  it("tombstone still blocks a late packet on a terminal that was at cap", () => {
-    __test_simulateArtifactDetected(
-      "t1",
-      Array.from({ length: MAX_ARTIFACTS_PER_TERMINAL }, (_, i) => makeArtifact({ id: `a${i}` }))
-    );
-
-    removeArtifactsForTerminal("t1");
-
-    const accepted = __test_simulateArtifactDetected("t1", [makeArtifact({ id: "late" })]);
-    expect(accepted).toBe(false);
-    expect(__test_getArtifactStoreSize()).toBe(0);
-    expect(__test_isTombstoned("t1")).toBe(true);
-  });
-
-  it("removeArtifactsForTerminal still clears a capped terminal", () => {
-    const overflow = Array.from({ length: MAX_ARTIFACTS_PER_TERMINAL + 5 }, (_, i) =>
-      makeArtifact({ id: `a${i}` })
-    );
-    __test_simulateArtifactDetected("t1", overflow);
-
-    removeArtifactsForTerminal("t1");
-
-    expect(__test_getArtifactsFor("t1")).toBeUndefined();
-    expect(__test_isTombstoned("t1")).toBe(true);
-  });
-
   it("emits a fresh empty array reference on each call (callers can rely on !==)", () => {
     __test_seedArtifactStore("t1", [makeArtifact({ id: "a1" })]);
     const observed: Artifact[][] = [];

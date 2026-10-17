@@ -1,15 +1,23 @@
-import { shell } from "electron";
+import { openWithDefaultApp } from "../../utils/openPath.js";
 import { defineIpcNamespace, op } from "../define.js";
 import { HELP_METHOD_CHANNELS } from "./help.preload.js";
 import type * as HelpServiceModule from "../../services/HelpService.js";
 import type * as HelpSessionServiceModule from "../../services/HelpSessionService.js";
 import { getAgentAvailabilityStore } from "../../services/AgentAvailabilityStore.js";
+import type { ClientEndpoint, RemoteEndpointCloseCause } from "../endpoint.js";
+import { getEndpointRegistry } from "../endpointRegistry.js";
+import { peekDriveLeaseService } from "../../services/DriveLeaseService.js";
+import { installDetachedAdoption } from "./helpDetachedAdoption.js";
+import { createLogger } from "../../utils/logger.js";
+import { formatErrorMessage } from "../../../shared/utils/errorMessage.js";
 import type { HelpAssistantTier } from "../../../shared/types/ipc/maps.js";
 import type { ActionContext } from "../../../shared/types/actions.js";
 import type {
+  HelpAdoptResult,
   HelpPastSession,
   PinnedActionContextSnapshot,
 } from "../../../shared/types/ipc/help.js";
+import { getPtyClient } from "../../window/serviceRefs.js";
 import {
   DEFAULT_ASSISTANT_SLOT,
   isValidAssistantSlot,
@@ -46,6 +54,11 @@ async function getHelpSessionService(): Promise<typeof HelpSessionServiceModule>
   return cachedHelpSessionService;
 }
 
+/** The session service if something has loaded it; nothing can be detached before then. */
+function helpSessionServiceIfLoaded(): HelpSessionServiceModule.HelpSessionService | null {
+  return cachedHelpSessionService?.helpSessionService ?? null;
+}
+
 async function handleGetFolderPath(): Promise<string | null> {
   const HelpService = await getHelpService();
   return HelpService.getHelpFolderPath();
@@ -55,9 +68,9 @@ async function handleGetFolderPath(): Promise<string | null> {
  * Scaffolds the global assistant content folder (~/.daintree/assistant —
  * README plus the .claude/.agents layout) and opens it in the OS file
  * manager. Returns null when scaffolding failed; otherwise the path plus
- * whether `shell.openPath` actually opened it (a broken file-manager
- * association fails silently apart from its error string), so the renderer
- * can tell the user where the folder is instead of showing nothing.
+ * whether the OS opener accepted it (a broken file-manager association fails
+ * silently apart from its error string), so the renderer can tell the user
+ * where the folder is instead of showing nothing.
  */
 async function handleOpenAssistantContentFolder(): Promise<{
   path: string;
@@ -71,7 +84,7 @@ async function handleOpenAssistantContentFolder(): Promise<{
     console.warn("[help] Failed to prepare the assistant content folder:", err);
     return null;
   }
-  const openError = await shell.openPath(dir);
+  const openError = await openWithDefaultApp(dir);
   if (openError) {
     console.warn("[help] Failed to open the assistant content folder:", openError);
   }
@@ -100,6 +113,8 @@ async function handleProvisionSession(
     context?: ActionContext;
     /** Assistant lane to provision into (#12108). Absent means slot 0. */
     slot?: number;
+    /** Refuse rather than displace a session already in that lane. */
+    vacantOnly?: boolean;
   }
 ): Promise<{
   sessionId: string;
@@ -109,7 +124,8 @@ async function handleProvisionSession(
   mcpUrl: string | null;
   windowId: number;
 } | null> {
-  if (!ctx.senderWindow) {
+  const remote = ctx.senderWindow ? null : ctx.endpoint;
+  if (!ctx.senderWindow && remote?.kind !== "remote-view") {
     console.warn("[help] provisionSession invoked without a senderWindow — skipping");
     return null;
   }
@@ -119,15 +135,249 @@ async function handleProvisionSession(
     return null;
   }
   const { helpSessionService } = await getHelpSessionService();
+  if (remote) return provisionForRemoteView(helpSessionService, remote, input, slot);
   return helpSessionService.provisionSession({
     projectId: input.projectId,
     projectPath: input.projectPath,
     agentId: input.agentId,
-    windowId: ctx.senderWindow.id,
+    windowId: ctx.senderWindow!.id,
     projectViewWebContentsId: ctx.webContentsId,
     actionContext: input.context,
     slot,
+    vacantOnly: input.vacantOnly === true,
   });
+}
+
+/**
+ * The project each remote view's help sessions were provisioned for. A
+ * session is pinned to the view's endpoint handle, and an endpoint can be
+ * rebound to another project without closing: its sessions go when it moves,
+ * so an assistant launched for one project never acts in another. When it
+ * closes they are detached instead, and outlive it (#13360).
+ */
+const remoteSessionProjects = new WeakMap<ClientEndpoint, { projectId: string | null }>();
+
+const logger = createLogger("main:Help");
+
+/**
+ * Why a remote view's assistant is going. The kill that follows logs only a
+ * terminal id and a graceful shutdown, which reads like a user closing an
+ * agent; this line names the endpoint, its link session and the cause.
+ */
+type RemoteViewRevokeCause =
+  | { cause: RemoteEndpointCloseCause | null }
+  | { cause: "project-rebound"; previousProjectId: string | null };
+
+function remoteViewFields(endpoint: ClientEndpoint, why: RemoteViewRevokeCause) {
+  return {
+    sessionId: endpoint.linkSessionId ?? null,
+    clientId: endpoint.clientId,
+    endpointId: endpoint.endpointId,
+    handle: endpoint.handle,
+    projectId: endpoint.projectId,
+    ...why,
+  };
+}
+
+function revokeRemoteViewSessions(
+  helpSessionService: HelpSessionServiceModule.HelpSessionService,
+  endpoint: ClientEndpoint,
+  why: RemoteViewRevokeCause
+): Promise<void> {
+  const view = remoteViewFields(endpoint, why);
+  const helpSessions = helpSessionService.helpSessionRefsForWebContentsId(endpoint.handle);
+  if (helpSessions.length > 0) {
+    logger.info("Revoking a remote view's help sessions", { ...view, helpSessions });
+  }
+  return helpSessionService.revokeByWebContentsId(endpoint.handle).catch((err: unknown) => {
+    logger.warn("Revoking a remote view's help sessions failed", {
+      ...view,
+      reason: formatErrorMessage(err, "revoke failed"),
+    });
+  });
+}
+
+/**
+ * The view went, and its running assistants outlive it (#13360). Logged like a
+ * revoke, so the trail says they were kept rather than leaving their absence
+ * from the kill log to be inferred.
+ */
+function detachRemoteViewSessions(
+  helpSessionService: HelpSessionServiceModule.HelpSessionService,
+  endpoint: ClientEndpoint,
+  why: { cause: RemoteEndpointCloseCause | null }
+): Promise<void> {
+  const view = remoteViewFields(endpoint, why);
+  const helpSessions = helpSessionService.helpSessionRefsForWebContentsId(endpoint.handle);
+  if (helpSessions.length > 0) {
+    logger.info("Detaching a remote view's help sessions", { ...view, helpSessions });
+  }
+  return helpSessionService.detachByWebContentsId(endpoint.handle).catch((err: unknown) => {
+    logger.warn("Detaching a remote view's help sessions failed", {
+      ...view,
+      reason: formatErrorMessage(err, "detach failed"),
+    });
+  });
+}
+
+function trackRemoteViewSessions(
+  helpSessionService: HelpSessionServiceModule.HelpSessionService,
+  endpoint: ClientEndpoint,
+  projectId: string
+): void {
+  const existing = remoteSessionProjects.get(endpoint);
+  if (existing) {
+    existing.projectId = projectId;
+    return;
+  }
+  const tracked = { projectId: projectId as string | null };
+  remoteSessionProjects.set(endpoint, tracked);
+  const offChange = getEndpointRegistry().onChange(() => {
+    if (endpoint.isClosed() || endpoint.projectId === tracked.projectId) return;
+    const previousProjectId = tracked.projectId;
+    tracked.projectId = endpoint.projectId;
+    void revokeRemoteViewSessions(helpSessionService, endpoint, {
+      cause: "project-rebound",
+      previousProjectId,
+    });
+  });
+  // A remote view has no WebContents here to be destroyed or evicted; its
+  // endpoint closing is that moment. The assistant it launched is a process on
+  // this host, though, and keeps running like the host's grid agents do: the
+  // next view of the project takes it over (#13360).
+  endpoint.onClose(() => {
+    offChange();
+    void detachRemoteViewSessions(helpSessionService, endpoint, {
+      cause: endpoint.closeCause ?? null,
+    });
+  });
+}
+
+/**
+ * Whether the PTY behind a detached assistant still runs, and what a pane
+ * needs to show it. `hasTerminal` is main's own spawn registry, the same
+ * liveness the eviction and idle-sweep floors read; the pty-host's record only
+ * fills in the display fields, so a slow answer never reads as an exit.
+ */
+async function probeAssistantTerminal(
+  terminalId: string
+): Promise<HelpSessionServiceModule.HelpAdoptProbe | null> {
+  const ptyClient = getPtyClient();
+  if (!ptyClient?.hasTerminal(terminalId)) return null;
+  const info = await ptyClient.getTerminalAsync(terminalId);
+  // It can exit while the record is fetched; main's registry is the answer.
+  if (info?.hasPty === false || !ptyClient.hasTerminal(terminalId)) return null;
+  return {
+    cwd: info?.cwd,
+    title: info?.title,
+    agentState: info?.agentState,
+    waitingReason: info?.waitingReason,
+    lastStateChange: info?.lastStateChange,
+    cols: info?.ptyCols,
+    rows: info?.ptyRows,
+  };
+}
+
+function isAssistantTerminalLive(terminalId: string): boolean {
+  return getPtyClient()?.hasTerminal(terminalId) === true;
+}
+
+/**
+ * A remote view taking over the running assistant of its own project's lane
+ * (#13360), ahead of any launch that would displace it. The project is the
+ * one the endpoint is bound to on this host, never the caller's word, so a
+ * view can only ever reach its own project's assistant. A local view never
+ * has a detached assistant to take, and gets `absent`.
+ */
+async function handleAdoptDetachedSession(
+  ctx: import("../types.js").IpcContext,
+  projectId: string,
+  rawSlot?: number
+): Promise<HelpAdoptResult | null> {
+  if (typeof projectId !== "string" || !projectId) return null;
+  const slot = resolveSlot(rawSlot);
+  if (slot === null) return null;
+  const endpoint = ctx.senderWindow ? null : ctx.endpoint;
+  if (endpoint?.kind !== "remote-view") return { status: "absent" };
+  if (endpoint.projectId === null || endpoint.projectId !== projectId) {
+    console.warn("[help] adoptDetachedSession: project is not the remote view's — refusing", {
+      requested: projectId,
+      fromView: endpoint.projectId,
+    });
+    return null;
+  }
+  const { helpSessionService } = await getHelpSessionService();
+  trackRemoteViewSessions(helpSessionService, endpoint, projectId);
+  const result = await helpSessionService.adoptDetachedSession(
+    projectId,
+    slot,
+    endpoint.handle,
+    probeAssistantTerminal
+  );
+  if (result.status !== "adopted") return result;
+  // The view went while this ran. Closed, its close already found nothing
+  // pinned to it, so hand the assistant back to the detached state; moved to
+  // another project, it must not keep an assistant of this one.
+  if (endpoint.isClosed()) {
+    await detachRemoteViewSessions(helpSessionService, endpoint, {
+      cause: endpoint.closeCause ?? null,
+    });
+    return null;
+  }
+  if (endpoint.projectId !== projectId) {
+    await helpSessionService.revokeSession(result.lane.sessionId);
+    return null;
+  }
+  return result;
+}
+
+/**
+ * The assistant for a view on another machine runs here, as an agent PTY on
+ * this host: the session directory, the bearer and the MCP config are this
+ * host's own, written under its own userData and pointing at its own MCP
+ * server, which is where the assistant's process will run. The project is the
+ * one the endpoint is bound to, read from this host's records; the view names
+ * it but cannot choose another, nor where it lives. The endpoint's handle
+ * stands in for both the window and the view the session is pinned to, so the
+ * assistant's tool calls go back to that view through its endpoint.
+ */
+async function provisionForRemoteView(
+  helpSessionService: HelpSessionServiceModule.HelpSessionService,
+  endpoint: ClientEndpoint,
+  input: { projectId: string; agentId: string; context?: ActionContext; vacantOnly?: boolean },
+  slot: number
+): Promise<HelpSessionServiceModule.ProvisionResult | null> {
+  // Loaded on use: the project store reads Electron's paths as it loads.
+  const { projectStore } = await import("../../services/ProjectStore.js");
+  const project =
+    endpoint.projectId !== null && endpoint.projectId === input.projectId
+      ? projectStore.getProjectById(endpoint.projectId)
+      : null;
+  if (!project) {
+    console.warn("[help] provisionSession: project is not the remote view's — refusing", {
+      requested: input.projectId,
+      fromView: endpoint.projectId,
+    });
+    return null;
+  }
+  trackRemoteViewSessions(helpSessionService, endpoint, project.id);
+  const result = await helpSessionService.provisionSession({
+    projectId: project.id,
+    projectPath: project.path,
+    agentId: input.agentId,
+    windowId: endpoint.handle,
+    projectViewWebContentsId: endpoint.handle,
+    actionContext: input.context,
+    slot,
+    vacantOnly: input.vacantOnly === true,
+  });
+  // The view closed or moved while this ran: the revoke for that found no
+  // session yet, so this one would be left live with nobody to end it.
+  if (result && (endpoint.isClosed() || endpoint.projectId !== project.id)) {
+    await helpSessionService.revokeSession(result.sessionId);
+    return null;
+  }
+  return result;
 }
 
 /**
@@ -189,6 +439,9 @@ async function handlePeekPendingHibernation(
   // renderer's pull-on-mount cold switch-back auto-resume; disk-loaded
   // prior-session entries lack it (→ false) so app restart never auto-resumes.
   panelWasOpen: boolean;
+  // #13360: the lane's assistant is still running, detached from the view that
+  // went; the renderer takes it over rather than resuming a transcript.
+  live?: boolean;
 } | null> {
   if (typeof projectId !== "string" || !projectId) return null;
   // Same cross-project guard as the take handler below: a pending entry holds
@@ -204,7 +457,20 @@ async function handlePeekPendingHibernation(
   const slot = resolveSlot(rawSlot);
   if (slot === null) return null;
   const { helpSessionService } = await getHelpSessionService();
-  return helpSessionService.peekPendingHibernation(projectId, slot);
+  return helpSessionService.peekPendingHibernation(projectId, slot, liveLaneOptions(ctx));
+}
+
+/**
+ * A remote view is also told about its project's assistants that outlived
+ * their last view (#13360), so a cold one can bring them back. Only a remote
+ * view can take one over, so only a remote view hears of them.
+ */
+function liveLaneOptions(
+  ctx: import("../types.js").IpcContext
+): { isTerminalLive: (terminalId: string) => boolean; viewHandle: number } | undefined {
+  return !ctx.senderWindow && ctx.endpoint.kind === "remote-view"
+    ? { isTerminalLive: isAssistantTerminalLive, viewHandle: ctx.endpoint.handle }
+    : undefined;
 }
 
 /**
@@ -228,7 +494,7 @@ async function handleListPendingHibernationSlots(
     return [];
   }
   const { helpSessionService } = await getHelpSessionService();
-  return helpSessionService.listPendingHibernationSlots(projectId);
+  return helpSessionService.listPendingHibernationSlots(projectId, liveLaneOptions(ctx));
 }
 
 /**
@@ -263,7 +529,13 @@ async function handleListPastSessions(
   const projectPath =
     projectStore.getProjectById(projectId)?.path ?? scratchStore.getScratchById(projectId)?.path;
   if (!projectPath) return [];
-  return lister.listHelpPastSessions(helpSessionService.getSessionPathForProject(projectPath), {
+  const codexPath = helpSessionService.getSessionPathForProject(projectPath, "codex");
+  const legacyPath = helpSessionService.getLegacySessionPathForProject(projectPath);
+  const paths = {
+    claude: helpSessionService.getSessionPathForProject(projectPath, "claude"),
+    codex: codexPath === legacyPath ? [codexPath] : [codexPath, legacyPath],
+  };
+  return lister.listHelpPastSessions(paths, {
     claudeProjectsRoot:
       claudeStore.resolvePaneClaudeProjectsRoot() ?? lister.defaultClaudeProjectsRoot(),
     listCodexSessions: (cwd) => codex.listCodexSessionsForCwd(cwd),
@@ -426,6 +698,11 @@ export const helpNamespace = defineIpcNamespace({
       handleListPendingHibernationSlots,
       { withContext: true }
     ),
+    adoptDetachedSession: op(
+      HELP_METHOD_CHANNELS.adoptDetachedSession,
+      handleAdoptDetachedSession,
+      { withContext: true }
+    ),
     restorePendingHibernation: op(
       HELP_METHOD_CHANNELS.restorePendingHibernation,
       handleRestorePendingHibernation,
@@ -443,6 +720,86 @@ export const helpNamespace = defineIpcNamespace({
   },
 });
 
+/**
+ * A view of a project coming back takes over that project's detached
+ * assistants at once (#13389), its panel open or not. Until then the
+ * assistant's MCP session is pinned to the view that went, so every Daintree
+ * tool it calls fails: an assistant left working, or one other machines'
+ * assistants are messaging, would be cut off until someone opened its panel.
+ * Nothing launches. Only the view that drives the project takes one (see
+ * `adoptForReturningViews`), and the service re-checks everything under the
+ * lane's lock.
+ */
+function installDetachedAssistantAdoption(): () => void {
+  // The lease service exists only once Host mode is installed, which may be
+  // after this runs; its changes matter too, since a returning Shell gets the
+  // lease back after its view attaches.
+  let offLease: (() => void) | null = null;
+  return installDetachedAdoption({
+    remoteEndpoints: () => getEndpointRegistry().getRemote(),
+    drivingEndpointId: (projectId) =>
+      peekDriveLeaseService()?.getHolderEndpoint(projectId)?.endpointId ?? null,
+    detachedSlots: (projectId) => helpSessionServiceIfLoaded()?.detachedSlots(projectId) ?? [],
+    adopt: async (projectId, slot, endpoint) => {
+      const { helpSessionService } = await getHelpSessionService();
+      return helpSessionService.adoptDetachedSession(
+        projectId,
+        slot,
+        endpoint.handle,
+        probeAssistantTerminal,
+        { keepRestoreIntent: true }
+      );
+    },
+    release: async (endpoint, projectId, adopted) => {
+      const { helpSessionService } = await getHelpSessionService();
+      // As the IPC path does: closed, back to detached; moved, never kept by another project.
+      if (endpoint.isClosed()) {
+        await detachRemoteViewSessions(helpSessionService, endpoint, {
+          cause: endpoint.closeCause ?? null,
+        });
+      } else if (endpoint.projectId !== projectId) {
+        await helpSessionService.revokeSession(adopted.lane.sessionId);
+      }
+    },
+    adopted: (endpoint, projectId, slot, adopted) => {
+      const service = helpSessionServiceIfLoaded();
+      if (service) trackRemoteViewSessions(service, endpoint, projectId);
+      logger.info("A returning view took over its project's running assistant", {
+        ...remoteViewFields(endpoint, { cause: null }),
+        slot,
+        helpSessionId: adopted.lane.sessionId,
+      });
+    },
+    onChange: (listener) => {
+      const watchLease = (): void => {
+        if (offLease) return;
+        const lease = peekDriveLeaseService();
+        if (lease) offLease = lease.onChange(listener);
+      };
+      watchLease();
+      const offRegistry = getEndpointRegistry().onChange(() => {
+        watchLease();
+        listener();
+      });
+      return () => {
+        offRegistry();
+        offLease?.();
+        offLease = null;
+      };
+    },
+    onFailure: (err) => {
+      logger.warn("Taking over a returning view's assistant failed", {
+        reason: formatErrorMessage(err, "adopt failed"),
+      });
+    },
+  });
+}
+
 export function registerHelpHandlers(): () => void {
-  return helpNamespace.register();
+  const unregister = helpNamespace.register();
+  const offAdoption = installDetachedAssistantAdoption();
+  return () => {
+    offAdoption();
+    unregister();
+  };
 }

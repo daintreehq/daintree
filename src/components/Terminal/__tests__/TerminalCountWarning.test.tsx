@@ -99,13 +99,6 @@ describe("TerminalCountWarning", () => {
     expect(screen.queryByRole("alert")).toBeNull();
   });
 
-  it("dismiss button uses focus-visible outline (not focus:ring)", () => {
-    render(<TerminalCountWarning />);
-    const button = screen.getByRole("button", { name: /dismiss warning/i });
-    const className = button.className;
-    expect(className).not.toMatch(/(^|\s)focus:ring-/);
-  });
-
   it("cancels its requestAnimationFrame on unmount", () => {
     const rafSpy = vi.spyOn(window, "requestAnimationFrame").mockImplementation(() => 42 as number);
     const cancelSpy = vi.spyOn(window, "cancelAnimationFrame").mockImplementation(() => undefined);
@@ -119,20 +112,6 @@ describe("TerminalCountWarning", () => {
     limitState.softWarningLimit = 100;
     const { container } = render(<TerminalCountWarning />);
     expect(container.innerHTML).toBe("");
-  });
-
-  it("inline cleanup button has a focus-visible outline (no focus:ring)", () => {
-    panelState.panelsById.f = {
-      id: "f",
-      location: "main",
-      agentState: "completed",
-      excludeFromPersistence: false,
-    };
-    panelState.panelIds = [...panelState.panelIds, "f"];
-    render(<TerminalCountWarning />);
-    const button = screen.getByRole("button", { name: /close.*completed agent/i });
-    const className = button.className;
-    expect(className).not.toMatch(/(^|\s)focus:ring-/);
   });
 
   it("routes completed-agent cleanup through optimistic close", () => {

@@ -7,6 +7,7 @@ import { pathToFileURL } from "url";
 import { app } from "electron";
 import { createLogger } from "../utils/logger.js";
 import { PRODUCT_WEBSITE } from "../utils/productBranding.js";
+import { stripUtf8Bom } from "../utils/stripUtf8Bom.js";
 // Aliased to avoid colliding with Vite's auto-injected ESM shim
 // (`import { createRequire } from 'module'; const require = createRequire(import.meta.url);`),
 // which it adds to every bundled chunk for CJS interop.
@@ -50,8 +51,10 @@ import {
 import { z } from "zod";
 import {
   isBuiltInPluginCapability,
+  PLUGIN_WORKER_SELF_RESTART_COOLDOWN_MS,
   UNBOUND_PLUGIN_HOST_BINDING,
   type ProjectSurfaceSlot,
+  type WorkerRestartResult,
 } from "../../shared/types/plugin.js";
 import type {
   PluginManifest,
@@ -148,6 +151,7 @@ import {
   type PanelLifecycleSourceHandle,
 } from "./plugin/PluginPanelLifecycleBroker.js";
 import { PLUGIN_VIEW_GENERATION_PREFIX } from "../../shared/utils/pluginViewUrl.js";
+import { onWebContentsDestroyed } from "../window/webContentsDestroyed.js";
 import { PluginRendererDispatcher } from "./plugin/PluginRendererDispatcher.js";
 import { PluginPanelReloadDispatcher } from "./plugin/PluginPanelReloadDispatcher.js";
 import { PluginUIPromptDispatcher } from "./plugin/PluginUIPromptDispatcher.js";
@@ -206,6 +210,7 @@ import {
   onPanelKindRegistered,
   onPanelKindUnregistered,
   getPanelKindConfig,
+  toPersistedPanelKindRef,
 } from "../../shared/config/panelKindRegistry.js";
 import {
   registerToolbarButton,
@@ -275,8 +280,12 @@ import { PluginRecipeMetadataStore } from "./plugin/PluginRecipeMetadataStore.js
 import {
   broadcastToRenderer,
   broadcastToProjectRenderers,
+  endpointPushTarget,
   getProjectRendererTargets,
+  type ProjectPushTarget,
 } from "../ipc/utils.js";
+import type { ClientEndpoint } from "../ipc/endpoint.js";
+import { getEndpointRegistry } from "../ipc/endpointRegistry.js";
 import { PLUGIN_INVOKE_MAX_RESULT_BYTES } from "../../shared/config/pluginBudgets.js";
 import { assertPayloadWithinLimit, estimatePayloadBytes } from "./plugin/pluginPayloadLimits.js";
 import { getPluginPushBatcher, routePluginPush } from "./plugin/pluginPushBatcher.js";
@@ -296,7 +305,19 @@ import { stableArgsSha256 } from "../utils/pluginMcpHash.js";
 import { formatErrorMessage } from "../../shared/utils/errorMessage.js";
 import { canDisposeIdlePluginWorker } from "../../shared/utils/workerGovernancePolicy.js";
 import type { WorkerResourceSnapshot } from "../../shared/types/workerGovernance.js";
-import { markAuditedHandlerFailure } from "../utils/pluginAuditMarker.js";
+import { isAuditedHandlerFailure, markAuditedHandlerFailure } from "../utils/pluginAuditMarker.js";
+import {
+  PluginNotOnHostInvokeError,
+  pluginIncompatibleError,
+  pluginNotOnHostError,
+} from "./plugin/parity/errors.js";
+import { buildPluginInventory, type PluginInventory } from "./plugin/parity/inventory.js";
+import {
+  platformDisplayName,
+  pluginInstallRefusal,
+  replacementRefusal,
+} from "./plugin/parity/preflight.js";
+import { readArchiveManifest } from "./PluginArchive.js";
 import { withTimeout, TimeoutError } from "../utils/withTimeout.js";
 import type {
   PluginDiagnosticsAuditRecord,
@@ -364,7 +385,9 @@ const DEV_MARKER_FILENAME = ".dev-marker";
 async function readDevManifestError(pluginDir: string, pluginId: string): Promise<string | null> {
   let json: unknown;
   try {
-    json = JSON.parse(await fs.readFile(path.join(pluginDir, "plugin.json"), "utf-8"));
+    json = JSON.parse(
+      stripUtf8Bom(await fs.readFile(path.join(pluginDir, "plugin.json"), "utf-8"))
+    );
   } catch (err) {
     return formatErrorMessage(err, "plugin.json could not be read");
   }
@@ -1215,7 +1238,8 @@ export class PluginService {
       records: this.records,
       getSettingsRoot: () => this.settings.settingsRoot(),
       loadPlugin: (root, pluginId, opts) => this.loadPlugin(root, pluginId, opts),
-      unloadPlugin: (pluginId) => this.unloadPlugin(pluginId),
+      unloadPlugin: (pluginId, options) => this.unloadPlugin(pluginId, options),
+      settlePluginReload: (pluginId) => this.settlePluginReload(pluginId),
       activatePlugin: (pluginId) => this.activatePlugin(pluginId),
       setPluginArchiveHash: (pluginId, hash) => this.setPluginArchiveHash(pluginId, hash),
       setEnabled: (pluginId, enabled) => this.setEnabled(pluginId, enabled),
@@ -1225,6 +1249,7 @@ export class PluginService {
       reservedNames: this.reservedNames,
       disabledPlugins: this.disabledPlugins,
       blockedPlugins: this.blockedPlugins,
+      getInstalledVersion: (pluginId) => this.installedPluginVersion(pluginId),
     });
 
     const offRegister = onPanelKindRegistered(() => this.broadcaster.schedulePanelKindsBroadcast());
@@ -1310,20 +1335,14 @@ export class PluginService {
       // to prevent.
       this.panelLifecycleBroker.clearSource(sourceId);
     };
+    let unwatch: () => void;
     try {
-      sender.once("destroyed", onDestroyed);
+      unwatch = onWebContentsDestroyed(sender, onDestroyed);
     } catch {
       // An already-torn-down WebContents can throw; nothing to track then.
       return;
     }
-    this.panelLifecycleSourceCleanups.set(sourceId, () => {
-      try {
-        sender.removeListener("destroyed", onDestroyed);
-      } catch {
-        // Electron throws if the WebContents is already gone — the listener
-        // died with it.
-      }
-    });
+    this.panelLifecycleSourceCleanups.set(sourceId, unwatch);
   }
 
   /**
@@ -1874,7 +1893,7 @@ export class PluginService {
 
     let json: unknown;
     try {
-      json = JSON.parse(content);
+      json = JSON.parse(stripUtf8Bom(content));
     } catch {
       console.error(`[PluginService] Invalid JSON in ${manifestPath}`);
       return null;
@@ -3444,9 +3463,19 @@ export class PluginService {
    * and shared by every view the plugin contributes, so a plugin occupies two
    * namespaces at worst no matter how many times the user retries.
    */
+  /**
+   * Whether a loaded plugin declares `"remote": "unsupported"`: it only works
+   * for a person sitting at this machine, so a window attached from another
+   * machine must not start or call it.
+   */
+  isRemoteUnsupported(pluginId: string): boolean {
+    return this.plugins.get(pluginId)?.manifest.remote === "unsupported";
+  }
+
   async activatePluginForView(
     panelKindId: string,
-    requestRecoveryPath = false
+    requestRecoveryPath = false,
+    options: { remoteFrontend?: boolean } = {}
   ): Promise<PluginActivationResult> {
     if (typeof panelKindId !== "string" || panelKindId.length === 0) return { ok: true };
     const settingsPluginId = pluginIdFromSettingsViewKindId(panelKindId);
@@ -3467,6 +3496,16 @@ export class PluginService {
                 projectId
               );
         if (runtimeId === panelKindId) {
+          if (options.remoteFrontend && plugin.manifest.remote === "unsupported") {
+            console.warn(
+              `[PluginService] Refused to activate "${pluginId}" for a window on another machine: the plugin declares "remote": "unsupported"`
+            );
+            return {
+              ok: false,
+              error: `Plugin "${pluginId}" only works on the machine it runs on`,
+              remoteUnsupported: { pluginId },
+            };
+          }
           await this.activatePlugin(pluginId);
           const loadError = this.getPluginLoadError(pluginId);
           if (loadError) {
@@ -3500,6 +3539,12 @@ export class PluginService {
           };
         }
       }
+    }
+    // A window on another machine restored or kept a panel whose plugin this
+    // host doesn't have (any more): say so, rather than letting its import 404.
+    const ref = options.remoteFrontend ? toPersistedPanelKindRef(panelKindId) : null;
+    if (ref && ![...this.plugins.values()].some((p) => p.manifest.name === ref.pluginId)) {
+      throw pluginNotOnHostError(ref.pluginId);
     }
     return { ok: true };
   }
@@ -3812,6 +3857,8 @@ export class PluginService {
       safeArgsHash,
       recordPushRejected: (pluginId) => this.metrics.recordPushOversized(pluginId),
       trackPromptWait: (pluginId) => this.metrics.beginPromptWait(pluginId),
+      requestWorkerSelfRestart: (pluginId, boundPlugin) =>
+        this.requestWorkerSelfRestart(pluginId, boundPlugin),
     };
   }
 
@@ -4607,7 +4654,7 @@ export class PluginService {
     const sameGeneration = (): boolean =>
       generation !== undefined && this.plugins.get(pluginId) === generation;
     try {
-      const result = await this.dispatchHandlerUnmetered(pluginId, channel, ctx, args, timing);
+      const result = await this.dispatchHandlerOnHost(pluginId, channel, ctx, args, timing);
       if (sameGeneration()) {
         this.metrics.recordInvoke(
           pluginId,
@@ -4627,6 +4674,32 @@ export class PluginService {
         );
       }
       throw err;
+    }
+  }
+
+  private async dispatchHandlerOnHost(
+    pluginId: string,
+    channel: string,
+    ctx: PluginIpcContext,
+    args: unknown[],
+    timing: { handlerStart: number; promptMark?: InvokePromptMark }
+  ): Promise<unknown> {
+    if (ctx.origin?.kind !== "remote")
+      return this.dispatchHandlerUnmetered(pluginId, channel, ctx, args, timing);
+    // A window on another machine may still show a plugin this host has since
+    // removed. It is told so in a form it can build its placeholder from, both
+    // up front and for a call the removal cut short.
+    if (!this.plugins.has(pluginId)) throw new PluginNotOnHostInvokeError(pluginId, channel);
+    try {
+      return await this.dispatchHandlerUnmetered(pluginId, channel, ctx, args, timing);
+    } catch (err) {
+      if (this.plugins.has(pluginId)) throw err;
+      // A handler that was running when its plugin went is audited already;
+      // a call cut off before reaching one is an ownership refusal, as ever.
+      if (!isAuditedHandlerFailure(err)) throw new PluginNotOnHostInvokeError(pluginId, channel);
+      const typed = pluginNotOnHostError(pluginId);
+      markAuditedHandlerFailure(typed);
+      throw typed;
     }
   }
 
@@ -4913,6 +4986,101 @@ export class PluginService {
   }
 
   /**
+   * This machine's installed plugins, for another machine to compare with its
+   * own. Only reads; nothing about either machine changes.
+   */
+  async getPluginInventory(options: { includeSecrets?: boolean } = {}): Promise<PluginInventory> {
+    await this.waitForInit();
+    return buildPluginInventory(this, {
+      appVersion: this.appVersion,
+      platform: process.platform,
+      includeSecrets: options.includeSecrets === true,
+    });
+  }
+
+  /**
+   * Install a package another machine sent, through the normal install path.
+   * Before anything reaches the plugins folder, its manifest is read from the
+   * archive and refused if it has no build for this OS or the plugin
+   * blocklist names this version; a package the load-time blocklist would
+   * refuse is never copied into place. `pluginId` pins the package to the
+   * plugin the person asked for, and `update` requires it to be installed
+   * here already. Whether it may replace what is installed is decided inside
+   * the installer's lock, against what is installed at that moment. `jobId`
+   * is a job already registered for progress and cancellation.
+   */
+  async installPluginFromAnotherMachine(
+    archivePath: string,
+    expect: { pluginId?: string; update?: boolean; jobId?: string } = {}
+  ): Promise<PluginInstallResult> {
+    await this.waitForInit();
+    let manifest: PluginManifest;
+    try {
+      manifest = await readArchiveManifest(archivePath);
+    } catch (err) {
+      return {
+        status: "failed",
+        errors: [{ code: "manifest_invalid", message: formatErrorMessage(err, "Invalid plugin") }],
+      };
+    }
+    if (expect.pluginId !== undefined && manifest.name !== expect.pluginId) {
+      return {
+        status: "failed",
+        errors: [
+          {
+            code: "archive_mismatch",
+            message: `The package is for "${manifest.name}", not "${expect.pluginId}"`,
+          },
+        ],
+      };
+    }
+    const blocklist = (await this.blocklistService.getBlocklist()) ?? this.startupBlocklist;
+    const refusal = pluginInstallRefusal(manifest, { platform: process.platform, blocklist });
+    const displayName = manifest.displayName?.trim() || manifest.name;
+    if (refusal?.kind === "platform") {
+      const hostPlatform = process.platform === "darwin" ? "darwin" : "linux";
+      throw pluginIncompatibleError(
+        manifest.name,
+        {
+          kind: "platform",
+          hostPlatform,
+          supported: refusal.supported.filter(
+            (entry): entry is "darwin" | "linux" => entry === "darwin" || entry === "linux"
+          ),
+        },
+        `${displayName} has no build for ${platformDisplayName(process.platform)}.`
+      );
+    }
+    if (refusal?.kind === "blocklisted") {
+      throw pluginIncompatibleError(
+        manifest.name,
+        { kind: "untrusted" },
+        `${displayName} ${manifest.version} is blocked: ${refusal.message}`
+      );
+    }
+    const target = { pluginId: expect.pluginId, update: expect.update };
+    return this.installer.installPlugin(
+      archivePath,
+      { source: "sideload", ...(expect.jobId !== undefined ? { jobId: expect.jobId } : {}) },
+      (installedVersion) => replacementRefusal(manifest, installedVersion, target)
+    );
+  }
+
+  /**
+   * The version installed under `pluginId`, whether it loaded, was skipped as
+   * disabled, or was refused by the blocklist; null when none is.
+   */
+  private installedPluginVersion(pluginId: string): string | null {
+    return (
+      (
+        this.plugins.get(pluginId) ??
+        this.disabledPlugins.get(pluginId) ??
+        this.blockedPlugins.get(pluginId)
+      )?.manifest.version ?? null
+    );
+  }
+
+  /**
    * Manual update check (#9297). Re-fetches the plugin's `originalUrl`, hashes
    * the downloaded archive, and compares it against the installed `archiveHash`.
    * Purely informational — it never installs. Delegates to {@link PluginInstaller}.
@@ -4950,23 +5118,26 @@ export class PluginService {
   }
 
   private async doLoadDevPlugin(pluginId: string): Promise<void> {
-    if (this.plugins.has(pluginId)) {
-      this.unloadPlugin(pluginId);
+    const replacing = this.plugins.has(pluginId);
+    if (replacing) this.unloadPlugin(pluginId, { reload: true });
+    try {
+      // Honor the user's persisted disabled intent — the dev path must not be a
+      // trust escape hatch that force-loads a plugin the user turned off (#10518).
+      // A disabled id makes `loadPlugin` skip + return null, surfacing the clear
+      // error below to the CLI caller rather than silently activating it.
+      const loaded = await this.loadPlugin(this.pluginsRoot, pluginId, {
+        isBuiltin: false,
+        disabled: this.records.getDisabledIds(),
+      });
+      if (!loaded) {
+        throw new Error(
+          `Couldn't load dev plugin "${pluginId}" from ${this.pluginsRoot} — it may be disabled in Preferences, or the symlink/plugin.json may be invalid`
+        );
+      }
+      await this.activatePlugin(pluginId);
+    } finally {
+      if (replacing) this.settlePluginReload(pluginId);
     }
-    // Honor the user's persisted disabled intent — the dev path must not be a
-    // trust escape hatch that force-loads a plugin the user turned off (#10518).
-    // A disabled id makes `loadPlugin` skip + return null, surfacing the clear
-    // error below to the CLI caller rather than silently activating it.
-    const loaded = await this.loadPlugin(this.pluginsRoot, pluginId, {
-      isBuiltin: false,
-      disabled: this.records.getDisabledIds(),
-    });
-    if (!loaded) {
-      throw new Error(
-        `Couldn't load dev plugin "${pluginId}" from ${this.pluginsRoot} — it may be disabled in Preferences, or the symlink/plugin.json may be invalid`
-      );
-    }
-    await this.activatePlugin(pluginId);
   }
 
   // ----- `daintree-plugin dev` sessions (#12277) --------------------------
@@ -5059,6 +5230,16 @@ export class PluginService {
 
   /** In-flight restarts, keyed by instance. Two panels of one plugin await one. */
   private workerRestarts = new Map<string, Promise<void>>();
+
+  /**
+   * When each instance last had a `host.restartWorker()` accepted (#13410).
+   * Keyed by id, not by worker, so the cooldown outlives the restart it
+   * triggered — a fresh worker that asks again at once is refused — and goes
+   * only with a full unload.
+   */
+  private workerSelfRestartAt = new Map<string, number>();
+  /** Self-restarts accepted but not yet started, so an unload can drop them. */
+  private scheduledWorkerSelfRestarts = new Map<string, ReturnType<typeof setImmediate>>();
 
   /**
    * Record a worker lifecycle transition and publish it.
@@ -5226,6 +5407,38 @@ export class PluginService {
     this.workerRestarts.set(pluginId, settled);
     await settled;
     return this.buildRuntimeStatus(pluginId);
+  }
+
+  /**
+   * Admit a plugin's request to restart its own worker (`host.restartWorker`,
+   * #13410). Answers now and starts the restart on a later turn, so the bridge
+   * posts this answer to the old worker before the teardown reaches it — a
+   * microtask would run before that post. The restart itself is the ordinary
+   * {@link restartPluginWorker}, so panels rebind rather than close. A manual
+   * "Restart plugin" is never counted against this budget.
+   */
+  private requestWorkerSelfRestart(
+    pluginId: string,
+    boundPlugin: LoadedPlugin
+  ): WorkerRestartResult {
+    if (this.disposed || this.plugins.get(pluginId) !== boundPlugin) return "unavailable";
+    if (this.records.getDisabledIds().has(pluginId)) return "unavailable";
+    if (!this.hasWorkerCode(pluginId, boundPlugin)) return "unavailable";
+    const now = Date.now();
+    const last = this.workerSelfRestartAt.get(pluginId);
+    if (last !== undefined && now - last < PLUGIN_WORKER_SELF_RESTART_COOLDOWN_MS) {
+      return "rate-limited";
+    }
+    this.workerSelfRestartAt.set(pluginId, now);
+    const scheduled = setImmediate(() => {
+      this.scheduledWorkerSelfRestarts.delete(pluginId);
+      if (this.disposed || this.plugins.get(pluginId) !== boundPlugin) return;
+      this.restartPluginWorker(pluginId).catch((err: unknown) => {
+        console.warn(`[PluginService] Self-restart of "${pluginId}" failed:`, err);
+      });
+    });
+    this.scheduledWorkerSelfRestarts.set(pluginId, scheduled);
+    return "scheduled";
   }
 
   /** Live state of every tracked instance, for a renderer that has just attached. */
@@ -5457,8 +5670,9 @@ export class PluginService {
     // authoritative, and the renderer prunes persisted preferences off ones
     // that claim to be — see the broadcaster's `isReplacingPlugin`.
     this.devReplaceDepth++;
+    const replacing = this.plugins.has(pluginId);
     try {
-      if (this.plugins.has(pluginId)) this.unloadPlugin(pluginId);
+      if (replacing) this.unloadPlugin(pluginId, { reload: true });
       const loaded = await this.loadPlugin(this.pluginsRoot, pluginId, {
         isBuiltin: false,
         disabled: this.records.getDisabledIds(),
@@ -5481,6 +5695,7 @@ export class PluginService {
       }
       await this.activatePlugin(pluginId);
     } finally {
+      if (replacing) this.settlePluginReload(pluginId);
       this.devReplaceDepth--;
       // The registries are whole again, so anything the replacement held back
       // can be published for real.
@@ -5976,6 +6191,31 @@ export class PluginService {
     for (const wc of targets) {
       await this.broadcaster.pushSnapshotTo(wc, projectId);
     }
+    // Remote views attached to the project (Host mode).
+    const registry = getEndpointRegistry();
+    if (!registry.hasRemote()) return;
+    for (const endpoint of registry.getForProject(projectId)) {
+      if (endpoint.kind !== "remote-view" || endpoint.isClosed()) continue;
+      await this.broadcaster.pushSnapshotTo(endpointPushTarget(endpoint), projectId);
+    }
+  }
+
+  /**
+   * Settle a reload that `unloadPlugin(id, { reload: true })` began. Agent
+   * credentials held across it survive only when the generation loaded now
+   * declares the agent surface they were issued against; anything else,
+   * including nothing coming back, revokes them. A disable that landed while
+   * the plugin was out of `this.plugins` found nothing to unload, so the
+   * persisted intent is read here too.
+   */
+  private settlePluginReload(pluginId: string): void {
+    const current = this.records.getDisabledIds().has(pluginId)
+      ? undefined
+      : this.plugins.get(pluginId);
+    pluginMcpGrantRegistry.releasePlugin(
+      pluginId,
+      current ? agentMcpSurfaceOf(current.manifest) : null
+    );
   }
 
   unloadPlugin(pluginId: string, options?: { reload: true }): void {
@@ -5989,8 +6229,9 @@ export class PluginService {
     // deliberately skips this: the instance is still loaded, its grants stay
     // valid, and the roster returns when the worker re-activates.
     //
-    // A reload holds them instead: they reach no plugin code until the
-    // controller settles the reload, and survive only if the generation it
+    // A reload holds them instead: a project plugin's hot reload, a dev
+    // plugin's rebuild, or an installed plugin's upgrade. They reach no plugin
+    // code until the reload settles, and survive only if the generation it
     // leaves loaded declares the same agent surface. Running agents cannot be
     // handed a new bearer, so revoking here would cut them off for good.
     runUnloadStep(pluginId, "revokeAgentMcpGrants", () => {
@@ -6200,6 +6441,10 @@ export class PluginService {
     // plugin is still there to explain (#12278). Emitted further down, once the
     // plugin itself is gone.
     this.workerStatuses.delete(pluginId);
+    const scheduledSelfRestart = this.scheduledWorkerSelfRestarts.get(pluginId);
+    if (scheduledSelfRestart !== undefined) clearImmediate(scheduledSelfRestart);
+    this.scheduledWorkerSelfRestarts.delete(pluginId);
+    this.workerSelfRestartAt.delete(pluginId);
 
     // Drop the diagnostic log ring buffer so a reload of the same plugin
     // doesn't carry forward log lines from the previous session.
@@ -7351,8 +7596,28 @@ export class PluginService {
    * each plugin to next re-emit from a subscription callback.
    */
   async pushSnapshotTo(webContents: Electron.WebContents): Promise<void> {
-    await this.broadcaster.pushSnapshotTo(webContents);
+    await this.pushSnapshot(webContents);
+  }
+
+  /**
+   * {@link pushSnapshotTo} for a view attached from another machine (Host
+   * mode). A remote view has no `did-finish-load` here, so the host replays
+   * when it attaches, scoped to the project its endpoint is bound to.
+   */
+  async pushSnapshotToEndpoint(endpoint: ClientEndpoint): Promise<void> {
+    if (endpoint.kind !== "remote-view") return;
+    await this.pushSnapshot(endpointPushTarget(endpoint), endpoint.projectId);
+  }
+
+  private async pushSnapshot(webContents: ProjectPushTarget, projectId?: string | null) {
+    await this.broadcaster.pushSnapshotTo(webContents, projectId);
     if (webContents.isDestroyed()) return;
+    // A local view's project is read from its registration, which a cached
+    // view keeps; a remote view's is the one its endpoint is bound to.
+    const inView = (owningProjectId: string): boolean =>
+      projectId === undefined
+        ? getProjectRendererTargets(owningProjectId).some((wc) => wc.id === webContents.id)
+        : owningProjectId === projectId;
     // Each send is independently guarded against a TOCTOU destroy, matching the
     // broadcaster's defensive pattern above.
     for (const pluginId of this.pluginBadges.keys()) {
@@ -7369,12 +7634,7 @@ export class PluginService {
     // belong to its own project's views.
     for (const pluginId of this.pluginPanelMenus.keys()) {
       const owningProjectId = projectIdFromPluginInstanceKey(pluginId);
-      if (
-        owningProjectId !== null &&
-        !getProjectRendererTargets(owningProjectId).some((wc) => wc.id === webContents.id)
-      ) {
-        continue;
-      }
+      if (owningProjectId !== null && !inView(owningProjectId)) continue;
       try {
         webContents.send(CHANNELS.EVENTS_PUSH, {
           name: "plugin:panel-menus-changed",
@@ -7386,12 +7646,7 @@ export class PluginService {
     }
     for (const [pluginId, byAction] of this.runningActions) {
       const owningProjectId = projectIdFromPluginInstanceKey(pluginId);
-      if (
-        owningProjectId !== null &&
-        !getProjectRendererTargets(owningProjectId).some((wc) => wc.id === webContents.id)
-      ) {
-        continue;
-      }
+      if (owningProjectId !== null && !inView(owningProjectId)) continue;
       try {
         webContents.send(CHANNELS.EVENTS_PUSH, {
           name: "plugin:actions-running-changed",

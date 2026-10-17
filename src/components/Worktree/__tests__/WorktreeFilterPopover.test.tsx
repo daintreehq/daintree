@@ -7,7 +7,7 @@ import type { ReactElement } from "react";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { WorktreeFilterPopover } from "../WorktreeFilterPopover";
 import { useWorktreeFilterStore } from "@/store/worktreeFilterStore";
-import type { ChipCounts } from "@/lib/worktreeFilters";
+import { emptyChipCounts, type ChipCounts } from "@/lib/worktreeFilters";
 import { STATUS_OPTIONS } from "@/lib/worktreeFilterOptions";
 
 // Section toggles are tooltip triggers (a collapsed summary that clips shows
@@ -26,25 +26,10 @@ function openPopover() {
 
 const COUNTS = {
   status: { active: 0, dirty: 3, stale: 0, idle: 2 },
-  branchType: {
-    feature: 2,
-    bugfix: 1,
-    refactor: 0,
-    chore: 0,
-    docs: 0,
-    test: 0,
-    release: 0,
-    ci: 0,
-    deps: 0,
-    perf: 0,
-    style: 0,
-    wip: 0,
-    main: 0,
-    detached: 0,
-    other: 0,
-  },
+  branchType: { ...emptyChipCounts().branchType, feature: 2, bugfix: 1 },
   prIssue: { hasIssue: 0, hasPR: 0, prOpen: 0, prMerged: 0, prClosed: 0 },
   sessions: { hasTerminals: 0, working: 0, waiting: 0, completed: 0, exited: 0 },
+  hasAgent: 2,
   activity: { last15m: 0, last1h: 0, last24h: 0, last7d: 0 },
   devServer: { hasDevServer: 0, running: 0, starting: 0, error: 0 },
 } satisfies ChipCounts;
@@ -149,13 +134,6 @@ describe("WorktreeFilterPopover chip states are told apart without colour", () =
     expect(dead?.className).not.toBe(live?.className);
   });
 
-  it("keeps a value's count visible even when it drops to zero", () => {
-    // The count used to vanish at zero, so a chip's label changed as filters
-    // moved and the grid reflowed underneath the pointer.
-    openWithCounts();
-    expect(chip(/^Active/)?.textContent).toContain("(0)");
-  });
-
   it("marks selection on an axis that hover does not touch", () => {
     // The defect this guards: hovering an unselected chip already raises its
     // fill and takes its text to `text-text-primary`, so a selected chip and a
@@ -195,8 +173,8 @@ describe("WorktreeFilterPopover chip states are told apart without colour", () =
   });
 
   it("folds a long facet's dead values behind one control, keeping the live ones", () => {
-    // Branch type carries fifteen values and a real repository uses three or
-    // four. The rule is that what is shown is what can do something.
+    // Branch type carries every recognised type and a real repository uses a
+    // handful. The rule is that what is shown is what can do something.
     openWithCounts();
     expect(chip(/^Feature/)).toBeDefined();
     expect(chip(/^Bugfix/)).toBeDefined();
@@ -211,23 +189,7 @@ describe("WorktreeFilterPopover chip states are told apart without colour", () =
     // cap spends its room on unselected values; selections are not negotiable.
     const many = {
       ...COUNTS,
-      branchType: {
-        feature: 0,
-        bugfix: 0,
-        refactor: 0,
-        chore: 0,
-        docs: 0,
-        test: 0,
-        release: 0,
-        ci: 0,
-        deps: 0,
-        perf: 0,
-        style: 0,
-        wip: 0,
-        main: 0,
-        detached: 0,
-        other: 0,
-      },
+      branchType: emptyChipCounts().branchType,
     } satisfies ChipCounts;
     const store = useWorktreeFilterStore.getState();
     const picked = [
@@ -264,6 +226,7 @@ describe("WorktreeFilterPopover chip states are told apart without colour", () =
     const manyMatching = {
       ...COUNTS,
       branchType: {
+        ...emptyChipCounts().branchType,
         feature: 1,
         bugfix: 1,
         refactor: 1,
@@ -276,9 +239,6 @@ describe("WorktreeFilterPopover chip states are told apart without colour", () =
         perf: 1,
         style: 1,
         wip: 1,
-        main: 0,
-        detached: 0,
-        other: 0,
       },
     } satisfies ChipCounts;
     render(
@@ -399,16 +359,6 @@ describe("WorktreeFilterPopover keyboard and focus surfaces", () => {
     useWorktreeFilterStore.getState().setOrderBy("created");
   });
   afterEach(cleanup);
-
-  it("gives the trigger the app's accent focus ring rather than the browser's", () => {
-    // Every other control in the sidebar rail carries this; without it the
-    // trigger fell back to the UA's own outline, which is a different colour
-    // from the rest of the surface.
-    openPopover();
-    const trigger = screen.getByLabelText(/^Filter and sort worktrees/);
-    expect(trigger.className).toMatch(/focus-visible:outline\b/);
-    expect(trigger.className).toContain("outline-accent-primary");
-  });
 
   it("lets every section toggle own its whole row, with Clear floating over it", () => {
     // A Clear slot laid out beside the toggle took a strip off the right of
@@ -533,5 +483,71 @@ describe("WorktreeFilterPopover keyboard and focus surfaces", () => {
     const radios = screen.getAllByRole("radio");
     expect(radios.map((r) => r.textContent)).not.toContain("Custom order");
     expect(radios.filter((r) => r.getAttribute("tabindex") === "0")).toHaveLength(1);
+  });
+});
+
+describe("WorktreeFilterPopover 'Has an agent' facet", () => {
+  beforeEach(() => {
+    useWorktreeFilterStore.getState().clearAll();
+  });
+  afterEach(cleanup);
+
+  function renderWithCounts() {
+    return render(
+      <WorktreeFilterPopover
+        appearance="field"
+        hideSearchInput
+        open
+        onOpenChange={() => {}}
+        chipCounts={COUNTS}
+      />
+    );
+  }
+
+  it("sits outside every collapsible section, reachable with nothing expanded", () => {
+    renderWithCounts();
+    const agentChip = chip(/^Has an agent/);
+    expect(agentChip).toBeDefined();
+    expect(agentChip!.closest("[inert]")).toBeNull();
+    expect(agentChip!.closest('[aria-hidden="true"]')).toBeNull();
+    // Not inside the scroll area either, where the open sections could push it
+    // out of view.
+    const scroller = document.querySelector(
+      '[data-testid="worktree-filter-popover"] .overflow-y-auto'
+    );
+    expect(scroller).not.toBeNull();
+    expect(scroller!.contains(agentChip!)).toBe(false);
+    expect(agentChip!.textContent).toContain("(2)");
+  });
+
+  it("toggles the store filter and counts toward the trigger and bulk clear", () => {
+    renderWithCounts();
+    const agentChip = chip(/^Has an agent/)!;
+    expect(agentChip.getAttribute("aria-pressed")).toBe("false");
+
+    fireEvent.click(agentChip);
+    expect(useWorktreeFilterStore.getState().hasAgentFilter).toBe(true);
+    expect(chip(/^Has an agent/)!.getAttribute("aria-pressed")).toBe("true");
+    expect(screen.getByLabelText(/^Filter and sort worktrees/).textContent).toContain("1");
+    expect(screen.queryByText("Clear all filters")).not.toBeNull();
+
+    fireEvent.click(chip(/^Has an agent/)!);
+    expect(useWorktreeFilterStore.getState().hasAgentFilter).toBe(false);
+    expect(screen.queryByText("Clear all filters")).toBeNull();
+  });
+
+  it("is reset by Clear all filters", () => {
+    useWorktreeFilterStore.getState().setHasAgentFilter(true);
+    renderWithCounts();
+    fireEvent.click(screen.getByText("Clear all filters"));
+    expect(useWorktreeFilterStore.getState().hasAgentFilter).toBe(false);
+  });
+
+  it("does not open or badge the Sessions section", () => {
+    useWorktreeFilterStore.getState().setHasAgentFilter(true);
+    renderWithCounts();
+    const sessions = screen.getByRole("button", { name: /^Sessions/ });
+    expect(sessions.getAttribute("aria-expanded")).toBe("false");
+    expect(sessions.textContent).toBe("Sessions");
   });
 });

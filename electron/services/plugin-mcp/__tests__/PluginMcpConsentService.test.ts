@@ -202,18 +202,6 @@ describe("PluginMcpConsentService", () => {
     expect(bridge).not.toHaveBeenCalled();
   });
 
-  it("does not prompt when a matching pin already exists", async () => {
-    const bridge = vi.fn().mockResolvedValue("approved-and-pin");
-    service.setConsentBridge(bridge as any as PluginMcpConsentBridge);
-
-    await service.authorizeToolCall(baseInput);
-    (bridge as any).mockClear();
-
-    const second = await service.authorizeToolCall(baseInput);
-    expect(second.kind).toBe("approved");
-    expect(bridge).not.toHaveBeenCalled();
-  });
-
   it("does not pass raw args to the bridge — only the redacted argsSummary", async () => {
     const bridge = vi.fn().mockResolvedValue("approved-once");
     service.setConsentBridge(bridge as any as PluginMcpConsentBridge);

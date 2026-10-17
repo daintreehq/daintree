@@ -4,10 +4,17 @@ import { StateField, StateEffect, Prec } from "@codemirror/state";
 import { insertNewline } from "@codemirror/commands";
 import type { ITheme } from "@xterm/xterm";
 import { resolveInputBarColors } from "@/utils/terminalTheme";
-import { UI_PALETTE_ENTER_DURATION, EASE_OUT_EXPO } from "@/lib/animationUtils";
+import {
+  UI_ANIMATION_DURATION,
+  UI_PALETTE_ENTER_DURATION,
+  EASE_OUT_EXPO,
+} from "@/lib/animationUtils";
+import { createTrustedHTML, setTrustedInnerHTML } from "@/lib/trustedTypesPolicy";
 
 const MAX_TEXTAREA_HEIGHT_PX = 160;
 const LINE_HEIGHT_PX = 20;
+
+const X_ICON_SVG = `<svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>`;
 
 export const TERMINAL_ICON_SVG = `<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="4 17 10 11 4 5"/><line x1="12" x2="20" y1="19" y2="19"/></svg>`;
 
@@ -71,8 +78,10 @@ export function buildInputBarTheme(theme: ITheme): Extension {
       ".cm-dropCursor": {
         borderLeftColor: c.accent,
       },
+      // The shell sets `--ib-placeholder` per state; the expanded editor
+      // portals out of the shell and takes the resting ink.
       ".cm-placeholder": {
-        color: `color-mix(in oklab, ${c.foreground} 48%, transparent)`,
+        color: `var(--ib-placeholder, ${c.placeholder})`,
       },
       ".cm-scroller": {
         overflow: "hidden",
@@ -139,33 +148,44 @@ export function buildInputBarTheme(theme: ITheme): Extension {
         ...chipStyle,
       },
       ".cm-file-drop-chip svg": CHIP_SVG_SIZE,
+      // Visible at rest in a quiet ink rather than revealed on hover: the
+      // chip pays for the slot either way, and an affordance that appears only
+      // under the pointer is one most people never find. Opaque mixes over the
+      // shell, because the composer keeps a terminal's polarity under a light
+      // app theme and app tokens would land dark-on-dark here.
       ".cm-chip-remove": {
+        position: "relative",
         display: "inline-flex",
         alignItems: "center",
         justifyContent: "center",
-        width: "14px",
-        height: "14px",
-        marginLeft: "2px",
+        width: "16px",
+        height: "16px",
+        marginRight: "-3px",
         borderRadius: "var(--radius-xs)",
-        color: `color-mix(in oklab, ${c.foreground} 55%, transparent)`,
+        color: `color-mix(in oklab, ${c.foreground} 55%, ${c.shellBg})`,
         cursor: "pointer",
         flexShrink: "0",
-        opacity: "0",
-        pointerEvents: "none",
-        transition: "opacity 100ms ease-out",
-        lineHeight: "1",
-        fontSize: "var(--text-xs)",
-        border: "none",
-        background: "transparent",
-        padding: "0",
+        transition: `color ${UI_ANIMATION_DURATION}ms ease-out, background-color ${UI_ANIMATION_DURATION}ms ease-out`,
       },
-      ".cm-image-chip:hover .cm-chip-remove, .cm-file-drop-chip:hover .cm-chip-remove": {
-        opacity: "1",
-        pointerEvents: "auto",
+      // The 24px row-control floor (ROW_CONTROL_CLASS) without growing the
+      // chip past its 20px line.
+      ".cm-chip-remove::before": {
+        content: '""',
+        position: "absolute",
+        inset: "-4px",
+      },
+      ".cm-chip-remove svg": {
+        width: "12px",
+        height: "12px",
+      },
+      ".cm-chip-remove:hover, .cm-chip-pending-delete .cm-chip-remove": {
+        color: c.foreground,
       },
       ".cm-chip-remove:hover": {
-        color: c.foreground,
-        background: `color-mix(in oklab, ${c.foreground} 10%, transparent)`,
+        background: `color-mix(in oklab, ${c.foreground} 14%, ${c.shellBg})`,
+      },
+      "@media (prefers-reduced-motion: reduce)": {
+        ".cm-chip-remove": { transition: "none" },
       },
       ".cm-diff-chip": {
         ...chipStyle,
@@ -179,10 +199,16 @@ export function buildInputBarTheme(theme: ITheme): Extension {
         ...chipStyle,
       },
       ".cm-selection-chip svg": CHIP_SVG_SIZE,
+      // Opaque, so the label keeps its resting contrast at the one moment the
+      // user has to confirm which chip is about to go; the contour sits inside
+      // the box so the staged chip keeps its geometry.
       ".cm-chip-pending-delete": {
-        background: `color-mix(in oklab, ${c.foreground} 14%, transparent)`,
-        outline: `1px solid color-mix(in oklab, ${c.foreground} 28%, transparent)`,
-        outlineOffset: "0px",
+        background: `color-mix(in oklab, ${c.foreground} 16%, ${c.shellBg})`,
+        outline: `1px solid color-mix(in oklab, ${c.foreground} 55%, ${c.shellBg})`,
+        outlineOffset: "-1px",
+      },
+      "&.cm-chip-staging .cm-selectionBackground": {
+        background: "transparent !important",
       },
       ".cm-voice-interim": {
         opacity: "0.55",
@@ -644,6 +670,33 @@ export function minimalDocChange(
   return { from: start, to: endCurrent, insert: next.slice(start, endNext) };
 }
 
+/**
+ * The remove control an attachment chip ends in. Pointer-only by construction,
+ * like a `RowControlTooltip` control: the chip is `role="img"`, whose children
+ * are presentational, so a button here took a tab stop that assistive tech
+ * could not see and that Enter did nothing on. The keyboard route is the
+ * chip's own Backspace stage. Removal runs on click, so a press dragged off the
+ * control cancels; the press itself is swallowed to keep the editor's focus
+ * and selection where they were.
+ */
+export function createChipRemoveControl(onRemove: () => void): HTMLElement {
+  const control = document.createElement("span");
+  control.className = "cm-chip-remove";
+  control.setAttribute("aria-hidden", "true");
+  setTrustedInnerHTML(control, createTrustedHTML(X_ICON_SVG));
+  control.addEventListener("mousedown", (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+  });
+  control.addEventListener("click", (e) => {
+    if (e.button !== 0) return;
+    e.preventDefault();
+    e.stopPropagation();
+    onRemove();
+  });
+  return control;
+}
+
 export function removeChipRange(view: EditorView, from: number, to: number): void {
   const doc = view.state.doc.toString();
   const deleteTo = to < doc.length && doc[to] === " " ? to + 1 : to;
@@ -652,6 +705,10 @@ export function removeChipRange(view: EditorView, from: number, to: number): voi
 }
 
 export function formatChipLabel(filePath: string): string {
+  // A host's inbox names a pasted image by its own clock (`clipboard-YYYYMMDD-HHMMSS-…`);
+  // this machine's paste uses epoch milliseconds.
+  const stamped = filePath.match(/clipboard-\d{8}-(\d{2})(\d{2})\d{2}-/);
+  if (stamped) return `Screenshot ${stamped[1]}:${stamped[2]}`;
   const match = filePath.match(/clipboard-(\d+)-/);
   if (match) {
     const date = new Date(Number(match[1]));

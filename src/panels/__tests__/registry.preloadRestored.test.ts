@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { beforeAll, describe, expect, it, vi } from "vitest";
 import type { SafeBootResult } from "@/lib/bootPromise";
 import type { BootResult } from "@shared/types/ipc/app";
 
@@ -25,8 +25,17 @@ async function loadRegistry() {
   return { ...registry, loaded };
 }
 
+// The first import transforms the registry's whole graph, which a loaded
+// machine can stretch past a test's timeout. Paid once here, each test's
+// re-import after `resetModules` only re-evaluates it.
+beforeAll(async () => {
+  await loadRegistry();
+}, 60_000);
+
 async function settle(loaded: string[], expected: number): Promise<void> {
-  await vi.waitFor(() => expect(loaded.length).toBeGreaterThanOrEqual(expected));
+  await vi.waitFor(() => expect(loaded.length).toBeGreaterThanOrEqual(expected), {
+    timeout: 10_000,
+  });
   // One more macrotask so an unexpected extra import would also have landed.
   await new Promise((resolve) => setTimeout(resolve, 0));
 }

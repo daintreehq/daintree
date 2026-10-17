@@ -123,12 +123,6 @@ describe("compareEntry / writeEntry / runCheck / runUpdate", () => {
     expect(writeEntry(entries[0], { logger })).toBe(true);
   });
 
-  it("compareEntry reports ok after a matching snapshot is written", () => {
-    writeFileSync(entries[0].dist, "interface A {}\n");
-    writeEntry(entries[0], { logger: makeLogger() });
-    expect(compareEntry(entries[0]).status).toBe("ok");
-  });
-
   it("compareEntry reports stale with a diff when the built surface diverges", () => {
     writeFileSync(entries[0].dist, "interface A {}\n");
     writeEntry(entries[0], { logger: makeLogger() });

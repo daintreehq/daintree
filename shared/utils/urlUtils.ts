@@ -136,11 +136,80 @@ export function normalizeBrowserUrl(
   };
 }
 
+/**
+ * Two copies of the browser panel's allow-list, combined. The list only grows
+ * (nothing removes an approved host), so a copy lacking a host the other has
+ * is older, not a removal. Keeps `kept` in order, then the hosts from
+ * `incoming` it lacks, compared case-insensitively.
+ */
+export function mergeBrowserAllowedHosts(
+  kept: readonly string[] | undefined,
+  incoming: readonly string[] | undefined
+): string[] | undefined {
+  if (!kept?.length) return incoming ? [...incoming] : undefined;
+  const merged = [...kept];
+  const seen = new Set(kept.map((host) => host.toLowerCase()));
+  for (const host of incoming ?? []) {
+    const key = host.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    merged.push(host);
+  }
+  return merged;
+}
+
 export function isLocalhostUrl(url: string): boolean {
   try {
     const parsed = new URL(url);
     const hostname = parsed.hostname.toLowerCase().replace(/^\[|\]$/g, "");
     return LOOPBACK_HOSTS.includes(hostname) && ALLOWED_PROTOCOLS.includes(parsed.protocol);
+  } catch {
+    return false;
+  }
+}
+
+/** A loopback address and port a forward actually holds on this machine. */
+export interface BoundLoopbackEndpoint {
+  /** `127.0.0.1` or `::1`. */
+  address: string;
+  port: number;
+}
+
+const DEFAULT_PORTS: Record<string, number> = {
+  "http:": 80,
+  "https:": 443,
+  "ws:": 80,
+  "wss:": 443,
+};
+
+/**
+ * True for an http(s)/ws(s) URL that connects to one of `bound`: in a window
+ * bound to a remote host, the addresses its forwards hold are the host's
+ * localhost, and every other loopback address and port is this machine's.
+ * Narrower than {@link isLoopbackHostname} on purpose: `127.0.0.2` is loopback
+ * but no forward binds it. `localhost` counts as `127.0.0.1`, which every
+ * forward holds; IPv4-mapped IPv6 counts as the IPv4 address it maps.
+ */
+export function isBoundLoopbackUrl(
+  url: string,
+  bound: ReadonlyArray<BoundLoopbackEndpoint>
+): boolean {
+  if (bound.length === 0) return false;
+  try {
+    const parsed = new URL(url);
+    const defaultPort = DEFAULT_PORTS[parsed.protocol];
+    if (defaultPort === undefined) return false;
+    if (parsed.username || parsed.password) return false;
+    const host = stripBrackets(parsed.hostname.toLowerCase().replace(/\.$/, ""));
+    let address: string;
+    if (host === "localhost") {
+      address = "127.0.0.1";
+    } else {
+      if (!ipaddr.isValid(host)) return false;
+      address = ipaddr.process(host).toString();
+    }
+    const port = parsed.port ? Number(parsed.port) : defaultPort;
+    return bound.some((endpoint) => endpoint.port === port && endpoint.address === address);
   } catch {
     return false;
   }

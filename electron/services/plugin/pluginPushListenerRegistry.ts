@@ -1,4 +1,5 @@
-import { getProjectRendererTargets } from "../../ipc/utils.js";
+import { getProjectPushTargets } from "../../ipc/utils.js";
+import { PLUGIN_PUSH_BATCH_CHANNEL } from "./pluginPushProtocol.js";
 
 /**
  * One renderer's live plugin push subscriptions, as its preload reports them:
@@ -93,8 +94,10 @@ export class PluginPushListenerRegistry {
   private reconcileTimer: ReturnType<typeof setInterval> | null = null;
 
   constructor(
+    // The batcher's own audience, remote views included: a listener counts
+    // wherever a push would be delivered.
     private readonly resolveScope: PluginPushListenerScopeResolver = (projectId) =>
-      getProjectRendererTargets(projectId),
+      getProjectPushTargets(projectId, PLUGIN_PUSH_BATCH_CHANNEL),
     private readonly reconcileIntervalMs: number = RECONCILE_INTERVAL_MS
   ) {}
 

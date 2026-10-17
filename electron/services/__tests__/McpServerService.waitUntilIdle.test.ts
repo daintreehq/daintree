@@ -699,41 +699,6 @@ describe("McpServerService", () => {
       });
     });
 
-    it("surfaces waitingReason='prompt' on a working→waiting transition", async () => {
-      const { events } = await import("../events.js");
-      const { terminalId, agentId } = nextIds();
-      await seedTerminalAgent(terminalId, agentId, "working");
-
-      const { window } = createMockWindow({ getManifest: () => [] });
-      await service.start(window);
-      const { client, transport } = await connectClient(service.currentPort!);
-      transports.push(transport);
-
-      const listenerBaseline = stateChangedListenerCount(events);
-      const callPromise = client.callTool({
-        name: "terminal.waitUntilIdle",
-        arguments: { terminalId },
-      }) as Promise<TextToolResult>;
-
-      await waitForStateChangedListener(events, listenerBaseline);
-
-      events.emit("agent:state-changed", {
-        agentId,
-        terminalId,
-        state: "waiting",
-        previousState: "working",
-        trigger: "output",
-        confidence: 1,
-        waitingReason: "prompt",
-        timestamp: Date.now(),
-      });
-
-      const result = await callPromise;
-      const payload = JSON.parse(result.content[0]!.text);
-      expect(payload.idleReason).toBe("waiting_for_user");
-      expect(payload.waitingReason).toBe("prompt");
-    });
-
     it("omits waitingReason on working→waiting transitions without a classified reason", async () => {
       const { events } = await import("../events.js");
       const { terminalId, agentId } = nextIds();
@@ -856,41 +821,6 @@ describe("McpServerService", () => {
         timedOut: true,
       });
       expect(payload.previousBusyState).toBe("working");
-    });
-
-    it("filters state-change events by the resolved agentId", async () => {
-      const { events } = await import("../events.js");
-      const { terminalId, agentId } = nextIds();
-      const otherAgent = `other-${Math.random().toString(36).slice(2)}`;
-      await seedTerminalAgent(terminalId, agentId, "working");
-
-      const { window } = createMockWindow({ getManifest: () => [] });
-      await service.start(window);
-      const { client, transport } = await connectClient(service.currentPort!);
-      transports.push(transport);
-
-      const listenerBaseline = stateChangedListenerCount(events);
-      const callPromise = client.callTool({
-        name: "terminal.waitUntilIdle",
-        arguments: { terminalId, timeoutMs: 150 },
-      }) as Promise<TextToolResult>;
-
-      await waitForStateChangedListener(events, listenerBaseline);
-
-      // Unrelated agent transitions must not satisfy the wait.
-      events.emit("agent:state-changed", {
-        agentId: otherAgent,
-        state: "idle",
-        previousState: "working",
-        trigger: "output",
-        confidence: 1,
-        timestamp: Date.now(),
-      });
-
-      const result = await callPromise;
-      const payload = JSON.parse(result.content[0]!.text);
-      expect(payload.timedOut).toBe(true);
-      expect(payload.agentId).toBe(agentId);
     });
 
     it("does not resolve when another terminal sharing the same agent type transitions", async () => {

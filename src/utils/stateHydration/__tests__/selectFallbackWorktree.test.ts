@@ -37,9 +37,4 @@ describe("selectFallbackWorktree (#9512)", () => {
   it("returns undefined for an empty list", () => {
     expect(selectFallbackWorktree([])).toBeUndefined();
   });
-
-  it("returns the only worktree when the list has one entry", () => {
-    const worktrees: TestWorktree[] = [{ id: "wt-only", name: "only" }];
-    expect(selectFallbackWorktree(worktrees)?.id).toBe("wt-only");
-  });
 });

@@ -11,6 +11,8 @@ import type {
   AppAgentConfig,
 } from "../shared/types/index.js";
 import type { PendingUpdateInstallStage } from "./utils/updateInstallStages.js";
+import type { TerminalConfig } from "../shared/types/ipc/config.js";
+import type { HostDescriptor } from "../shared/types/remoteHosts.js";
 import type { IssueAssociation } from "../shared/types/ipc/worktree.js";
 import type { InstalledPluginRecord } from "../shared/types/plugin.js";
 import type { ErrorRecord } from "../shared/types/ipc/errors.js";
@@ -32,6 +34,7 @@ import { PLUGIN_MCP_DEFAULT_MAX_TOOLS_PER_SESSION } from "../shared/types/ipc/pl
 import type { ForgeAuditRecord } from "../shared/types/ipc/forge.js";
 import type { RunParkRecord, RunSnoozeRecord } from "../shared/types/ipc/fleet.js";
 import type { RunHistoryRecord } from "../shared/types/ipc/runHistory.js";
+import type { CanopyMode } from "../shared/types/ipc/canopy.js";
 import type { WindowOpeningConfig } from "../shared/types/ipc/windowOpening.js";
 import { DEFAULT_OPEN_FOLDERS_IN_NEW_WINDOW } from "../shared/types/windowOpen.js";
 import type { SuggestedDictionaryEntry } from "../shared/types/ipc/api.js";
@@ -56,11 +59,11 @@ interface WindowStateEntry {
   isFullScreen?: boolean;
 }
 
-interface WindowStatesStoreSchema {
+export interface WindowStatesStoreSchema {
   windowStates: Record<string, WindowStateEntry>;
 }
 
-interface AuditLogsStoreSchema {
+export interface AuditLogsStoreSchema {
   mcpAuditLog: McpLogRecord[];
   mcpTurnOutcomeLog: AssistantTurnRecord[];
   pluginAuditLog: PluginActionAuditRecord[];
@@ -89,6 +92,13 @@ export interface StoreSchema {
     memoryLeakDetectionEnabled?: boolean;
     memoryLeakAutoRestartThresholdMb?: number;
     cachedProjectViews?: number;
+    // Appearance fields written by the terminal-config handlers. Declared so
+    // the device/host split in storeOwnership.ts covers them.
+    fontSize?: TerminalConfig["fontSize"];
+    fontFamily?: TerminalConfig["fontFamily"];
+    colorSchemeId?: TerminalConfig["colorSchemeId"];
+    customSchemes?: TerminalConfig["customSchemes"];
+    recentSchemeIds?: TerminalConfig["recentSchemeIds"];
   };
   hibernation: {
     enabled: boolean;
@@ -266,6 +276,12 @@ export interface StoreSchema {
   projectEnv: Record<string, string>;
   globalEnvironmentVariables: Record<string, string>;
   appAgentConfig: AppAgentConfig;
+  /**
+   * Where the user stands on Canopy: `on` once they agree to send agent screens
+   * off the machine to be read, `hidden` when they don't want it at all. Nothing
+   * is read unless it is `on`.
+   */
+  canopyMode: CanopyMode;
   windowStates: Record<
     string,
     {
@@ -379,6 +395,14 @@ export interface StoreSchema {
     modelIds?: Record<string, string>;
     /** Absent in stores written before #12874; read as `"inherit"`. */
     daintreeConfirmations?: "inherit" | "always-ask" | "never-ask";
+    /** Absent in stores written before #13441; read as on. */
+    acceptRemoteMessages?: boolean;
+    /**
+     * The agent the assistant runs on (#13345). Absent means never set on this
+     * host; `null` is an explicit clear. Written only through
+     * `electron/services/agentDefaults.ts`, never by `helpAssistant.setSettings`.
+     */
+    agentId?: string | null;
   };
   pendingErrors: ErrorRecord[];
   errorFingerprints: Record<string, { count: number; firstSeen: number; lastSeen: number }>;
@@ -702,6 +726,37 @@ export interface StoreSchema {
    * key with no numbered migration; entries are validated on load.
    */
   devPreviewUserStopped?: DevPreviewUserStoppedRecord[];
+  /**
+   * Hosts this client can attach to, and the ids of hosts removed from this
+   * device (never reused). Device-owned: never synced between machines.
+   */
+  remoteHosts?: {
+    hosts: HostDescriptor[];
+    retiredIds?: string[];
+    /** Host id → when a window last landed there; "local" is this machine. */
+    lastUsed?: Record<string, number>;
+  };
+  /** This machine as a host: whether it listens for Shells and starts at login. */
+  hostMode?: { enabled: boolean; startAtLogin: boolean; advertise?: boolean };
+  /** Client-side behaviour while a window is attached to a remote host. */
+  remoteHostsPreferences?: { interceptCtrlVImages: boolean };
+  /**
+   * The person's answers, on this machine, about a host's plugin reading or
+   * writing this machine's clipboard: host id → plugin instance id → access →
+   * decision. Additive key with no numbered migration; a missing entry means
+   * the question has not been asked.
+   */
+  remoteHostPluginClipboardGrants?: Record<
+    string,
+    Record<string, Partial<Record<"read" | "write", "allow" | "deny">>>
+  >;
+  /**
+   * The host plugins this machine lets run their view code here: host id →
+   * plugin instance id → the digest of the exact bundle allowed (the host's
+   * list of the plugin's files and their sha256). Additive key with no
+   * numbered migration; a missing or malformed entry means not allowed.
+   */
+  remoteHostPluginViewConsent?: Record<string, Record<string, { digest: string }>>;
 }
 
 const storeOptions = {
@@ -807,6 +862,7 @@ const storeOptions = {
     projectEnv: {},
     globalEnvironmentVariables: {},
     appAgentConfig: DEFAULT_APP_AGENT_CONFIG,
+    canopyMode: "unset" as const,
     windowStates: {},
     worktreeIssueMap: {},
     wslGitByWorktree: {},
@@ -1189,12 +1245,12 @@ function copyPathForSet(
     Object.setPrototypeOf(Object.fromEntries(Object.entries(node)), Object.getPrototypeOf(node));
   const root = copy(base);
   let parent = root;
-  for (let i = 0; i < segments.length - 1; i++) {
-    const existing = parent[segments[i]];
+  for (const segment of segments.slice(0, -1)) {
+    const existing = parent[segment];
     if (Array.isArray(existing)) return null;
-    if (existing !== undefined && !Object.hasOwn(parent, segments[i])) return null;
+    if (existing !== undefined && !Object.hasOwn(parent, segment)) return null;
     const child = existing !== null && typeof existing === "object" ? copy(existing) : {};
-    parent[segments[i]] = child;
+    parent[segment] = child;
     parent = child;
   }
   return { root, parent };
@@ -1428,7 +1484,7 @@ export const store = new Proxy({} as Store<StoreSchema>, {
         // Serialize under the leaf key so a toJSON(key) sees what conf's
         // whole-store serialize passes it; a toJSON() returning undefined
         // leaves the key out on disk, so it is left out of the snapshot too.
-        const leaf = segments[segments.length - 1];
+        const leaf = segments[segments.length - 1]!;
         const wrapped = JSON.parse(JSON.stringify({ [leaf]: args[1] })) as Record<string, unknown>;
         if (Object.hasOwn(wrapped, leaf)) target.parent[leaf] = wrapped[leaf];
         else delete target.parent[leaf];

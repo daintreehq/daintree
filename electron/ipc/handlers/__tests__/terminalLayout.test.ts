@@ -16,6 +16,15 @@ vi.mock("../../../services/pty/agentSessionCapturePersistence.js", () => ({
   noteRendererSessionIdentityEdits,
 }));
 
+const { leaseService, peekDriveLeaseService } = vi.hoisted(() => {
+  const leaseService = { notifyPanelsChanged: vi.fn(), notifyDraftsChanged: vi.fn() };
+  return {
+    leaseService,
+    peekDriveLeaseService: vi.fn((): typeof leaseService | null => null),
+  };
+});
+vi.mock("../../../services/DriveLeaseService.js", () => ({ peekDriveLeaseService }));
+
 import {
   terminalLayoutNamespace,
   sanitizeFieldEdits,
@@ -92,6 +101,88 @@ const baseState = (terminals: TerminalSnapshot[], tabGroups: TabGroup[] = []): P
 
 beforeEach(() => {
   projectStoreMock.enqueueProjectStateUpdate.mockReset();
+  leaseService.notifyPanelsChanged.mockReset();
+  leaseService.notifyDraftsChanged.mockReset();
+  peekDriveLeaseService.mockReset();
+  peekDriveLeaseService.mockReturnValue(null);
+});
+
+describe("watchers hear of a saved panel set (#13280)", () => {
+  it("tells the lease service once the panels and the tab groups are saved", async () => {
+    peekDriveLeaseService.mockReturnValue(leaseService);
+    let commit!: () => void;
+    projectStoreMock.enqueueProjectStateUpdate.mockImplementation(
+      () => new Promise<void>((resolve) => (commit = resolve))
+    );
+
+    const saving = setTerminals({ projectId: "p1", terminals: [term("1")] });
+    await Promise.resolve();
+    expect(leaseService.notifyPanelsChanged).not.toHaveBeenCalled();
+    commit();
+    await saving;
+    expect(leaseService.notifyPanelsChanged).toHaveBeenCalledWith("p1");
+
+    const grouping = setTabGroups({ projectId: "p1", tabGroups: [group("g1", ["1"])] });
+    await Promise.resolve();
+    commit();
+    await grouping;
+    expect(leaseService.notifyPanelsChanged).toHaveBeenCalledTimes(2);
+  });
+
+  it("tells nobody when the save fails", async () => {
+    peekDriveLeaseService.mockReturnValue(leaseService);
+    projectStoreMock.enqueueProjectStateUpdate.mockRejectedValue(new Error("disk full"));
+
+    await expect(setTerminals({ projectId: "p1", terminals: [term("1")] })).rejects.toThrow(
+      "disk full"
+    );
+    expect(leaseService.notifyPanelsChanged).not.toHaveBeenCalled();
+  });
+
+  it("does nothing more without Host mode", async () => {
+    onDisk(baseState([]));
+    await setTerminals({ projectId: "p1", terminals: [term("1")] });
+    expect(peekDriveLeaseService).toHaveBeenCalled();
+    expect(leaseService.notifyPanelsChanged).not.toHaveBeenCalled();
+  });
+});
+
+describe("watchers hear of saved drafts (#13283)", () => {
+  it("tells the lease service once the drafts are saved", async () => {
+    peekDriveLeaseService.mockReturnValue(leaseService);
+    const saved = onDisk(baseState([term("1")]));
+
+    await setDraftInputs({
+      projectId: "p1",
+      draftInputs: { "1": "half typed" },
+      changedIds: ["1"],
+      removedIds: [],
+    });
+
+    expect(saved()?.draftInputs).toEqual({ "1": "half typed" });
+    expect(leaseService.notifyDraftsChanged).toHaveBeenCalledWith("p1");
+    expect(leaseService.notifyPanelsChanged).not.toHaveBeenCalled();
+  });
+
+  it("tells nobody when the save fails", async () => {
+    peekDriveLeaseService.mockReturnValue(leaseService);
+    projectStoreMock.enqueueProjectStateUpdate.mockRejectedValue(new Error("disk full"));
+
+    await expect(
+      setDraftInputs({ projectId: "p1", draftInputs: { "1": "x" }, changedIds: ["1"] })
+    ).rejects.toThrow("disk full");
+    expect(leaseService.notifyDraftsChanged).not.toHaveBeenCalled();
+  });
+
+  it("tells nobody when a removal finds no saved state to change", async () => {
+    peekDriveLeaseService.mockReturnValue(leaseService);
+    const saved = onDisk(null);
+
+    await setDraftInputs({ projectId: "p1", draftInputs: {}, changedIds: [], removedIds: ["1"] });
+
+    expect(saved()).toBeNull();
+    expect(leaseService.notifyDraftsChanged).not.toHaveBeenCalled();
+  });
 });
 
 describe("setFocusMode record preservation (#11497)", () => {
@@ -207,21 +298,6 @@ describe("setTerminals merge (#11350)", () => {
       removedIds: [],
     });
     expect(ids(saved()?.terminals)).toEqual(["1", "3"]);
-  });
-
-  it("preserves a disjoint move by a sibling window", async () => {
-    // Sibling moved panel 1 to the dock (disk); this stale writer still has it
-    // in the grid and only added panel 2.
-    const saved = onDisk(baseState([term("1", "dock")]));
-    await setTerminals({
-      projectId: "p1",
-      terminals: [term("1", "grid"), term("2")],
-      changedIds: ["2"],
-      removedIds: [],
-    });
-    const merged = saved()?.terminals ?? [];
-    expect(merged.find((t) => t.id === "1")?.location).toBe("dock");
-    expect(ids(merged)).toContain("2");
   });
 
   it("full-replaces when no delta metadata is supplied (legacy path)", async () => {

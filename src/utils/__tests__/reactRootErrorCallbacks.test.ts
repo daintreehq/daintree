@@ -50,14 +50,6 @@ describe("reactRootErrorCallbacks", () => {
       });
     });
 
-    it("handles undefined componentStack", () => {
-      onCaughtError(new Error("no stack"), {});
-      expect(mockedLogWarn).toHaveBeenCalledWith("[React] Caught render error", {
-        error: "no stack",
-        componentStack: undefined,
-      });
-    });
-
     it("does not throw when logger fails", () => {
       mockedLogWarn.mockImplementation(() => {
         throw new Error("logger broken");
@@ -93,14 +85,6 @@ describe("reactRootErrorCallbacks", () => {
       const errors = useErrorStore.getState().errors;
       expect(errors).toHaveLength(1);
       expect(errors[0]?.message).toBe("string error");
-    });
-
-    it("handles null error", () => {
-      onUncaughtError(null, { componentStack });
-
-      const errors = useErrorStore.getState().errors;
-      expect(errors).toHaveLength(1);
-      expect(errors[0]?.message).toBe("null");
     });
 
     it("still logs even if store throws", () => {

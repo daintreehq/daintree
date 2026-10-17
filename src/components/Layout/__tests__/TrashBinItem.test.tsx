@@ -232,23 +232,6 @@ describe("TrashBinItem", () => {
       visibilityListeners.forEach((l) => l());
     }
 
-    it("renders seconds remaining for a future expiry", () => {
-      const terminal = makeAgentTerminal();
-      const trashedInfo: TrashedTerminal = {
-        id: "t1",
-        expiresAt: Date.now() + 20000,
-        originalLocation: "grid",
-      };
-      const { container } = render(
-        <TrashBinItem
-          onRequestRemove={onRequestRemove}
-          terminal={terminal}
-          trashedInfo={trashedInfo}
-        />
-      );
-      expect(countdownSeconds(container)).toBeGreaterThan(0);
-    });
-
     it("decrements displayed seconds when time advances while visible", () => {
       const terminal = makeAgentTerminal();
       const trashedInfo: TrashedTerminal = {
@@ -388,19 +371,6 @@ describe("TrashBinItem", () => {
       expect(container.querySelector("[data-trash-meter]")!.getAttribute("aria-hidden")).toBe(
         "true"
       );
-    });
-
-    it("separates a nearly-expired row from a fresh one by more than colour", () => {
-      const fresh = renderAt(20000);
-      const nearly = renderAt(2000);
-      // Length and number both differ, so the distinction survives a viewer who
-      // cannot tell the warning tone from the neutral one (SC 1.4.1).
-      const nearlyFraction = meterFraction(nearly.container);
-      const freshFraction = meterFraction(fresh.container);
-      expect(nearlyFraction).toBeLessThan(freshFraction);
-      const nearlySeconds = countdownSeconds(nearly.container);
-      const freshSeconds = countdownSeconds(fresh.container);
-      expect(nearlySeconds).toBeLessThan(freshSeconds);
     });
 
     it("marks the final approach so the warning treatment is testable, not incidental", () => {

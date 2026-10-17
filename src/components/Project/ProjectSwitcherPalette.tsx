@@ -8,6 +8,7 @@ import {
   ChevronRight,
   CircleStop,
   Copy,
+  Ellipsis,
   FileText,
   FolderInput,
   FolderOpen,
@@ -22,12 +23,11 @@ import {
   X,
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
-import { FolderDown, Moon } from "@/components/icons";
+import { FolderClosed, FolderDown, Moon } from "@/components/icons";
 import { cn } from "@/lib/utils";
-import { getProjectGradient } from "@/lib/colorUtils";
 import { isMac } from "@/lib/platform";
 import { describeKeyCap, formatChordText } from "@/lib/kbdShortcut";
-import { AppPaletteDialog, KBD_CLASS } from "@/components/ui/AppPaletteDialog";
+import { AppPaletteDialog, KBD_CLASS, PaletteNoMatchHint } from "@/components/ui/AppPaletteDialog";
 import {
   PALETTE_ROW_CLASS,
   PALETTE_ROW_FOCUS_CLASS,
@@ -70,6 +70,7 @@ import { useEffectiveCombo } from "@/hooks/useKeybinding";
 import { useModifierKeys } from "@/hooks/useModifierKeys";
 import { useGlobalMinuteClock } from "@/hooks/useGlobalMinuteTicker";
 import { useScratchDeletionProgress } from "@/hooks/useScratchDeletionProgress";
+import { useRemoteHostName } from "@/hooks/useSettingsOwner";
 import { useOverlayClaim } from "@/hooks";
 // Leaf import, not the `@/hooks` barrel: several palette suites mock that barrel
 // and would throw on an export they don't list.
@@ -78,7 +79,7 @@ import { defaultScratchName } from "@shared/utils/scratchName";
 import type {
   DeleteAllScratchesSnapshot,
   DeleteScratchTarget,
-  ProjectSectionKey,
+  ProjectBandKey,
   ProjectSwitcherBrowseBand,
   ProjectSwitcherMode,
   ProjectSwitcherProjectRow,
@@ -93,6 +94,14 @@ import {
   PROJECT_SWITCHER_SCRATCH_BAND_KEY,
   OTHER_PROJECTS_SORT_CONTROL_MIN_ROWS,
 } from "@/hooks/useProjectSwitcherPalette";
+import { groupBandKey, isGroupBandKey } from "@/lib/projectGroupBands";
+import { useProjectGroupsStore } from "@/store/projectGroupsStore";
+import type { ProjectGroup } from "@shared/types/project";
+import {
+  ProjectFilingMenuItems,
+  ProjectGroupContextMenuItems,
+  ProjectGroupDropdownMenuItems,
+} from "./ProjectGroupMenus";
 import { usePreferencesStore } from "@/store/preferencesStore";
 import {
   isOtherProjectsSortMode,
@@ -110,7 +119,23 @@ import {
 } from "@shared/config/scratchCleanup";
 import { PathSegments } from "@/components/ui/PathSegments";
 import { pluralize } from "@/lib/pluralize";
+import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";
+import { UI_DOHERTY_THRESHOLD } from "@/lib/animationUtils";
 import { keyBelongsToField } from "@/hooks/useListboxCursor";
+import { OpenOnHostSubmenu } from "@/components/Hosts/OpenOnHostSubmenu";
+import { HostNameText } from "@/components/Hosts/HostNameText";
+import { CommandTile, ProjectTile, StatusSlotSpacer } from "./paletteTiles";
+import {
+  OTHER_HOSTS_LIST_ID,
+  OtherHostsSection,
+  useCurrentHostName,
+  activateOtherHostOption,
+  otherHostOptionCloses,
+  otherHostOptionId,
+  useOtherHostProjectOptions,
+  type OtherHostOption,
+} from "@/components/Hosts/OtherHostsSection";
+import { isNewWindowClick } from "@/components/Hosts/hostSwitching";
 
 export interface ProjectSwitcherPaletteProps {
   isOpen: boolean;
@@ -250,6 +275,15 @@ interface ProjectListItemProps {
   nowMs: number;
   /** False only under the "Current project" band header, which already says it. */
   showCurrentLabel: boolean;
+  /** Set when another host lists a project of the same name: which host this one is on. */
+  hostName?: string;
+  /**
+   * Say which group the project is filed under. Only where no band header
+   * already says it — the ranked search list, which drops the bands.
+   */
+  showGroupLabel?: boolean;
+  /** Drawn under band headers (browse) rather than in the flat ranked list. */
+  inBands?: boolean;
   onSelect: (row: ProjectSwitcherProjectRow, source?: ProjectSwitchSelectSource) => void;
   onStopProject?: (projectId: string) => void;
   onCloseProject?: (projectId: string) => void;
@@ -267,6 +301,12 @@ interface ProjectListItemProps {
    * `pointerenter`: rows scrolling under a resting pointer must not steal it.
    */
   onHoverRow?: (rowId: string) => void;
+  /**
+   * Hands focus back to the search box when the row's menu closes. The row
+   * itself is never focusable, so the menu's own restore would land on
+   * `document.body` and strand a keyboard user who opened it with Shift+F10.
+   */
+  onReturnFocus?: () => void;
 }
 
 /**
@@ -570,6 +610,51 @@ function ResumableAgentsLabel({ count }: { count: number }) {
  * and move-to-worktree pickers do. Hidden from readers because every row that
  * draws it already carries the fact in its accessible name or selection state.
  */
+/**
+ * Where a row is filed, said after its name wherever no band header says it:
+ * its group in search, and "Archived" anywhere outside the Archived band. Muted
+ * and plain like the host label beside it — it is provenance, not status.
+ */
+function ProjectFilingLabel({
+  projectName,
+  groupName: rawGroupName,
+  isArchived,
+}: {
+  projectName: string;
+  groupName?: string;
+  isArchived: boolean;
+}) {
+  // "Daintree · Daintree" says nothing the name didn't: a project filed under a
+  // group of its own name is already in the obvious place.
+  const groupName =
+    rawGroupName && rawGroupName.toLocaleLowerCase() !== projectName.toLocaleLowerCase()
+      ? rawGroupName
+      : undefined;
+  if (!groupName && !isArchived) return null;
+  const spoken = [groupName ? `in ${groupName}` : undefined, isArchived ? "archived" : undefined]
+    .filter(Boolean)
+    .join(", ");
+  // Two spans, and only the group name truncates: when space runs out it is
+  // "Archived" that must survive, since that is the fact a row outside the
+  // Archived band exists to say.
+  return (
+    <span className="ml-1.5 flex min-w-0 items-baseline text-xs text-text-secondary">
+      <span className="sr-only">, {spoken}</span>
+      {groupName && (
+        <span aria-hidden="true" className="min-w-0 truncate">
+          · {groupName}
+        </span>
+      )}
+      {isArchived && (
+        <span aria-hidden="true" className={cn("shrink-0", groupName && "ml-1")}>
+          {/* A real space for copy and text extraction; the margin draws it. */}
+          {groupName && " "}· Archived
+        </span>
+      )}
+    </span>
+  );
+}
+
 function CurrentLabel() {
   return (
     <span aria-hidden="true" className="shrink-0 text-xs text-text-secondary">
@@ -621,29 +706,55 @@ export function canSleepProject(project: { isMissing: boolean; status?: string }
 /**
  * Whether the row reads as open in another window (#12597): picking it goes to
  * that window, and the row says so before Enter does. Never on the current row,
- * whose place is here, nor on a missing one, whose Enter goes to Locate.
+ * whose place is here, nor on a missing one, whose Enter goes to Locate. One
+ * another window only keeps cached opens here, so it isn't marked (#13291).
  */
 function isOpenElsewhere(project: SearchableProject): boolean {
-  return project.openInOtherWindow !== undefined && !project.isActive && !project.isMissing;
+  return (
+    project.openInOtherWindow !== undefined &&
+    project.openInOtherWindow !== "cached" &&
+    !project.isActive &&
+    !project.isMissing
+  );
+}
+
+/**
+ * Whether asking for a new window takes the project's one live view out of the
+ * window keeping it in the background, here or elsewhere, rather than going to
+ * where it already is (#13274).
+ */
+function movesCachedView(
+  project: Pick<
+    SearchableProject,
+    "openInOtherWindow" | "isCachedInThisWindow" | "isOpenInThisWindow"
+  >
+): boolean {
+  if (project.isCachedInThisWindow) return true;
+  // One this window is already bringing in front stays here, whatever another
+  // window still caches.
+  return project.openInOtherWindow === "cached" && !project.isOpenInThisWindow;
 }
 
 /**
  * The row's new-window menu item, or null where it has none (#12597).
  *
  * A project has one live view across the app, so asking for a new window for
- * one another window owns brings that window forward — the item says so. A
- * project this window already holds has no second window to go to: the request
- * would just switch here, which the row itself already does.
+ * one another window shows or is activating brings that window forward — the
+ * item says so. One this window shows or is activating has no second window to
+ * go to: the request would just switch here, which the row itself already does.
+ * A view kept cached, in this window or another, moves to the new window.
  *
  * Exported for its own test, like `canSleepProject`.
  */
 export function getNewWindowMenuLabel(
   project: Pick<
     SearchableProject,
-    "isActive" | "isMissing" | "openInOtherWindow" | "isOpenInThisWindow"
+    "isActive" | "isMissing" | "openInOtherWindow" | "isOpenInThisWindow" | "isCachedInThisWindow"
   >
 ): string | null {
-  if (project.isActive || project.isMissing || project.isOpenInThisWindow) return null;
+  if (project.isActive || project.isMissing) return null;
+  if (movesCachedView(project)) return "Open in new window";
+  if (project.isOpenInThisWindow) return null;
   return project.openInOtherWindow !== undefined ? "Go to window" : "Open in new window";
 }
 
@@ -661,9 +772,10 @@ function modEnterOpensWindow(
 
 /**
  * The footer's Enter hint for the highlighted row (#12597). A row another
- * window owns goes there on either key, so both say where it goes rather than
- * "Switch" or "New window". A row this window already holds switches here on
- * either key too. Null with nothing highlighted: Enter no-ops there.
+ * window shows or is activating goes there on either key, so both say where it
+ * goes rather than "Switch" or "New window". A row this window shows or is
+ * activating switches here on either key too. A row only kept cached moves to a
+ * new window on ⌘↵ (#13274). Null with nothing highlighted: Enter no-ops there.
  *
  * Exported for its own test.
  */
@@ -674,16 +786,46 @@ export function getProjectSwitcherEnterHint(
   mac: boolean = isMac()
 ): { keys: string; label: string } | null {
   if (!row) return null;
+  // A missing project's Enter opens the relocation dialog, not a switch.
+  if (row.kind === "project" && row.isMissing) return { keys: "↵", label: "Locate" };
   const opensWindow = modifierHeld && modEnterOpensWindow(row, canOpenWindow);
   // The keydown takes Meta or Control, so the modifier is whichever this
   // platform calls primary — a literal ⌘ tells Windows and Linux to press a key
   // they don't have. The Enter glyph stays the footer family's ↵.
   const modEnter = `${formatChordText("Cmd", mac)}${mac ? "" : "+"}↵`;
-  if (row.kind === "project" && isOpenElsewhere(row)) {
+  if (opensWindow && row.kind === "project" && movesCachedView(row)) {
+    return { keys: modEnter, label: "New window" };
+  }
+  // A row this window is already bringing in front switches here, whatever
+  // another window still caches.
+  if (row.kind === "project" && isOpenElsewhere(row) && !row.isOpenInThisWindow) {
     return { keys: opensWindow ? modEnter : "↵", label: "Go to window" };
   }
   if (opensWindow && !row.isOpenInThisWindow) return { keys: modEnter, label: "New window" };
   return { keys: "↵", label: "Switch" };
+}
+
+/**
+ * The footer's Enter hint for a row of the other-hosts band: Enter opens the
+ * project on its host (connecting first when it isn't), ⌘↵ in a new window;
+ * a host listing nothing is switched to; Retry asks the host again — and says
+ * nothing while that answer is on its way, since Enter then does nothing.
+ * Exported for its own test.
+ */
+export function getOtherHostEnterHint(
+  option: OtherHostOption,
+  modifierHeld: boolean,
+  mac: boolean = isMac()
+): { keys: string; label: string; host?: string } | null {
+  if (option.kind === "retry") return option.busy ? null : { keys: "↵", label: "Retry" };
+  if (modifierHeld) {
+    return { keys: `${formatChordText("Cmd", mac)}${mac ? "" : "+"}↵`, label: "New window" };
+  }
+  if (option.kind === "connect") return { keys: "↵", label: "Connect" };
+  if (option.kind === "host") return { keys: "↵", label: "Switch" };
+  // The host apart from the words, so the footer can clip a long name the way
+  // the band does — keeping the part that tells two machines apart.
+  return { keys: "↵", label: "Open on", host: option.hostName };
 }
 
 function ProjectListItem({
@@ -691,6 +833,9 @@ function ProjectListItem({
   isSelected,
   nowMs,
   showCurrentLabel,
+  hostName,
+  showGroupLabel = false,
+  inBands = false,
   onSelect,
   onStopProject,
   onCloseProject,
@@ -703,6 +848,7 @@ function ProjectListItem({
   onHoverProject,
   onHoverProjectEnd,
   onHoverRow,
+  onReturnFocus,
 }: ProjectListItemProps) {
   const showStop = project.processCount > 0 && !project.isMissing;
   const showSleep = canSleepProject(project);
@@ -753,20 +899,7 @@ function ProjectListItem({
     >
       <StatusDot status={status} showResumeDot={showResumeDot} />
 
-      <div
-        className={cn(
-          // Wash/shadow var fallbacks keep themes without the overrides byte-identical.
-          "flex items-center justify-center rounded-[var(--radius-lg)] shadow-[var(--project-tile-shadow,inset_0_1px_2px_rgba(0,0,0,0.3))] shrink-0",
-          "h-8 w-8 text-base"
-        )}
-        style={{
-          background: project.color
-            ? `var(--project-tile-wash, linear-gradient(to bottom, rgba(0,0,0,0.1), rgba(0,0,0,0.2))), ${getProjectGradient(project.color)}`
-            : "var(--project-tile-wash, linear-gradient(to bottom, rgba(0,0,0,0.1), rgba(0,0,0,0.2))), var(--color-surface-sidebar)",
-        }}
-      >
-        <span className="leading-none select-none filter drop-shadow-sm">{project.emoji}</span>
-      </div>
+      <ProjectTile emoji={project.emoji} color={project.color} />
 
       <div className="flex-1 min-w-0">
         <div className="flex items-center min-w-0">
@@ -782,6 +915,21 @@ function ProjectListItem({
           >
             {project.name}
           </span>
+          {hostName && (
+            <span className="ml-1.5 shrink-0 text-xs text-text-secondary">
+              <span className="sr-only">, on </span>
+              <span aria-hidden="true">· </span>
+              {hostName}
+            </span>
+          )}
+          <ProjectFilingLabel
+            projectName={project.name}
+            groupName={showGroupLabel ? project.groupName : undefined}
+            // Under the Archived header the band already says it. Anywhere else
+            // — the ranked list, which has no headers, or Running, where a live
+            // agent lifted it — the row has to.
+            isArchived={project.isArchived === true && (!inBands || project.section !== "archived")}
+          />
           {/*
            * Said in the name, not just in `aria-current`. In browse the band
            * header carries it, but search drops the bands entirely — and even
@@ -858,7 +1006,17 @@ function ProjectListItem({
   return (
     <ContextMenu>
       <ContextMenuTrigger asChild>{row}</ContextMenuTrigger>
-      <ContextMenuContent>
+      <ContextMenuContent
+        onCloseAutoFocus={() => {
+          // Only a stranded focus is taken back: an item that opened a dialog
+          // (Remove, Sleep, Move) has already handed focus to it.
+          if (!onReturnFocus) return;
+          requestAnimationFrame(() => {
+            const active = document.activeElement;
+            if (active === null || active === document.body) onReturnFocus();
+          });
+        }}
+      >
         {onSelectNewWindow && newWindowLabel !== null && (
           <ContextMenuItem onSelect={() => onSelectNewWindow(project)}>
             <AppWindow className="w-3.5 h-3.5 mr-2" aria-hidden="true" />
@@ -879,6 +1037,18 @@ function ProjectListItem({
               </>
             )}
           </ContextMenuItem>
+        )}
+        {/*
+          Filing rides on the pin's prop: a surface that lets the user pin is
+          one that lets them organise, and the preview/read-only surfaces that
+          omit it omit both.
+        */}
+        {onTogglePinProject && (
+          <ProjectFilingMenuItems
+            projectId={project.id}
+            groupId={project.groupId}
+            isArchived={project.isArchived}
+          />
         )}
         {onCopyPath && (
           <ContextMenuItem onSelect={() => onCopyPath(project.path)}>
@@ -927,6 +1097,7 @@ function ProjectListItem({
             </ContextMenuItem>
           </>
         )}
+        {!project.isMissing && <OpenOnHostSubmenu projectId={project.id} />}
       </ContextMenuContent>
     </ContextMenu>
   );
@@ -1018,7 +1189,7 @@ function ScratchListItem({
 }
 
 interface ProjectSection {
-  key: ProjectSectionKey;
+  key: ProjectBandKey;
   label: string;
   /** The band's VISIBLE rows — empty while collapsed. Always rows of `results`. */
   items: ProjectSwitcherProjectRow[];
@@ -1032,6 +1203,14 @@ interface ProjectSection {
    * lie at best and #11071 at worst.
    */
   collapsible: boolean;
+  /** Set on a user-made group's band. */
+  group?: ProjectGroup;
+  /** Group members shown in a band above — what an empty group says. */
+  liftedCount?: number;
+  /** Agents running across the band, for a folded header. */
+  activeAgentCount?: number;
+  /** Projects with a working assistant, for a folded header. */
+  workingAssistantCount?: number;
 }
 
 /**
@@ -1076,6 +1255,7 @@ function BandCollapseToggle({
   controlsId,
   testId,
   onToggle,
+  leadingIcon,
 }: {
   collapsed: boolean;
   label: string;
@@ -1083,6 +1263,8 @@ function BandCollapseToggle({
   controlsId: string;
   testId: string;
   onToggle: () => void;
+  /** Drawn between the chevron and the label: a user-made group's folder. */
+  leadingIcon?: React.ReactNode;
 }) {
   return (
     <button
@@ -1103,6 +1285,7 @@ function BandCollapseToggle({
         )}
         aria-hidden="true"
       />
+      {leadingIcon}
       <BandLabel label={label} labelId={labelId} />
     </button>
   );
@@ -1117,9 +1300,18 @@ function BandCollapsedCount({ count }: { count: number }) {
   return <span className="shrink-0 text-3xs tabular-nums">{count}</span>;
 }
 
+/**
+ * A band key made safe for an element id. Group keys carry a colon
+ * (`group:<id>`), which is legal in an id but has to be escaped in every
+ * selector that ever looks one up.
+ */
+function bandDomKey(key: ProjectBandKey): string {
+  return key.replace(":", "-");
+}
+
 /** Stable `aria-controls` target for a band's rows. */
-function bandListId(key: ProjectSectionKey): string {
-  return `project-section-list-${key}`;
+function bandListId(key: ProjectBandKey): string {
+  return `project-section-list-${bandDomKey(key)}`;
 }
 
 // Keyed by mode rather than a list, so the lookup below is total: a new mode in
@@ -1135,7 +1327,24 @@ const OTHER_PROJECTS_SORT_OPTIONS: Record<
 };
 
 /**
- * The Other band's header, which doubles as its sort control (#11455). The
+ * What a folded band says is still alive inside it, in the words its rows use:
+ * "2 agents running", "Assistant working", or both.
+ */
+function formatFoldedLiveness(agents: number, assistants: number): string {
+  const parts: string[] = [];
+  if (agents > 0) parts.push(`${pluralize(agents, "agent")} running`);
+  if (assistants > 0) {
+    parts.push(
+      assistants === 1 ? "assistant working" : `${pluralize(assistants, "assistant")} working`
+    );
+  }
+  const text = parts.join(" · ");
+  return text.charAt(0).toUpperCase() + text.slice(1);
+}
+
+/**
+ * The header of every band whose order the user picks — Other projects and
+ * each user-made group — which doubles as its sort control (#11455). The
  * band is the residual catch-all, so its order is the one thing a reader can't
  * infer from the rows — the control's first job is naming that order, changing
  * it second. More so since the rows stopped printing their opened times
@@ -1162,31 +1371,63 @@ const OTHER_PROJECTS_SORT_OPTIONS: Record<
  * inset that positions the row cards below, so a `px-3` here would float the
  * label 12px inside the edge those cards line up on (#11943).
  */
-function OtherProjectsHeader({
+function SortableBandHeader({
+  bandKey,
   headerId,
   label,
   itemCount,
   collapsed,
   collapsible,
+  sortMode,
+  onSortModeChange,
+  group,
+  activeAgentCount = 0,
+  workingAssistantCount = 0,
   onToggleCollapsed,
   onReturnFocus,
 }: {
+  bandKey: ProjectBandKey;
   headerId: string;
   label: string;
   itemCount: number;
   collapsed: boolean;
   collapsible: boolean;
+  sortMode: OtherProjectsSortMode;
+  onSortModeChange: (mode: OtherProjectsSortMode) => void;
+  /** Set on a user-made group: adds its rename/move/delete actions. */
+  group?: ProjectGroup;
+  /** Agents running in the band — said on the header only while it is folded. */
+  activeAgentCount?: number;
+  /** Projects whose assistant is working — said beside the agents, same rule. */
+  workingAssistantCount?: number;
   onToggleCollapsed: () => void;
   onReturnFocus?: () => void;
 }) {
-  const sortMode = usePreferencesStore((state) => state.projectSwitcherOtherSortMode);
-  const setSortMode = usePreferencesStore((state) => state.setProjectSwitcherOtherSortMode);
-
   const active = OTHER_PROJECTS_SORT_OPTIONS[sortMode];
   const ActiveIcon = active.Icon;
+  const isOther = bandKey === "other";
+  const sortLabel = isOther ? "other projects" : label;
 
   const handleValueChange = (value: string) => {
-    if (isOtherProjectsSortMode(value)) setSortMode(value);
+    if (isOtherProjectsSortMode(value)) onSortModeChange(value);
+  };
+
+  // Radix would restore focus to the trigger, which then eats ArrowDown and
+  // Enter to reopen itself — leaving the palette unable to walk or commit a row
+  // until focus moved by hand. The search box owns those keys, so send focus
+  // back there. Deferred a frame: focusing inside Radix's own focus-restore
+  // window loses the race with its teardown (same reason `ContentPanel`'s
+  // rename input defers).
+  //
+  // Only focus left stranded is taken back. Rename and Delete open a dialog
+  // that has claimed focus by the time this frame runs; pulling it back to the
+  // search box would leave the keyboard typing behind a visible modal.
+  const returnFocus = (event: Event) => {
+    event.preventDefault();
+    requestAnimationFrame(() => {
+      const active = document.activeElement;
+      if (active === null || active === document.body) onReturnFocus?.();
+    });
   };
 
   return (
@@ -1196,70 +1437,123 @@ function OtherProjectsHeader({
           role="presentation"
           className={cn(
             PALETTE_SECTION_LABEL_CLASS,
-            "flex items-center justify-between gap-2 px-2 py-1 normal-case tracking-normal"
+            "group/band-header flex items-center justify-between gap-2 px-2 py-1 normal-case tracking-normal"
           )}
         >
-          {collapsible ? (
-            <BandCollapseToggle
-              collapsed={collapsed}
-              label={label}
-              labelId={headerId}
-              controlsId={bandListId("other")}
-              testId="band-collapse-toggle-other"
-              onToggle={onToggleCollapsed}
-            />
-          ) : (
-            <BandLabel label={label} labelId={headerId} />
-          )}
-          {collapsed && <BandCollapsedCount count={itemCount} />}
-          {!collapsed && itemCount >= OTHER_PROJECTS_SORT_CONTROL_MIN_ROWS && (
-            <DropdownMenu>
-              <DropdownMenuTrigger asChild>
-                <button
-                  type="button"
-                  tabIndex={-1}
-                  data-testid="other-projects-sort-trigger"
-                  aria-label={`Sort other projects, currently ${active.label}`}
-                  className="flex shrink-0 items-center gap-1 text-text-secondary hover:text-text-primary transition-colors"
-                >
-                  <ActiveIcon className="w-3 h-3" aria-hidden="true" />
-                  {active.label}
-                </button>
-              </DropdownMenuTrigger>
-              <DropdownMenuContent
-                align="end"
-                onCloseAutoFocus={(event) => {
-                  // Radix would restore focus to the trigger, which then eats
-                  // ArrowDown and Enter to reopen itself — leaving the palette
-                  // unable to walk or commit a row until focus moved by hand.
-                  // The search box owns those keys, so send focus back there.
-                  //
-                  // Deferred a frame: focusing inside Radix's own focus-restore
-                  // window loses the race with its teardown (same reason
-                  // `ContentPanel`'s rename input defers).
-                  event.preventDefault();
-                  requestAnimationFrame(() => onReturnFocus?.());
-                }}
+          <div className="flex min-w-0 items-center gap-2">
+            {collapsible ? (
+              <BandCollapseToggle
+                collapsed={collapsed}
+                label={label}
+                labelId={headerId}
+                controlsId={bandListId(bandKey)}
+                testId={`band-collapse-toggle-${bandDomKey(bandKey)}`}
+                onToggle={onToggleCollapsed}
+                // A user-made group carries the folder its filing actions use,
+                // so the sections the user made read apart from the ones the
+                // switcher makes — same label, same rule, one quiet glyph.
+                leadingIcon={
+                  group ? (
+                    <FolderClosed className="w-3 h-3 shrink-0" aria-hidden="true" />
+                  ) : undefined
+                }
+              />
+            ) : (
+              <BandLabel label={label} labelId={headerId} />
+            )}
+            {collapsed && (activeAgentCount > 0 || workingAssistantCount > 0) && (
+              // A folded group keeps its running projects in place rather than
+              // lifting them out, so the header is the only thing left to say
+              // they are there. Neutral words beside the run hue's own mark —
+              // the same pairing a running row's status line uses. Assistants
+              // are named apart from agents, as everywhere else: they are live
+              // work, but not runs the user launched.
+              <span
+                className="flex min-w-0 items-center gap-1 text-text-secondary"
+                data-testid={`band-running-rollup-${bandDomKey(bandKey)}`}
               >
-                <DropdownMenuRadioGroup value={sortMode} onValueChange={handleValueChange}>
-                  {OTHER_PROJECTS_SORT_MODES.map((value) => {
-                    const { label: optionLabel, Icon } = OTHER_PROJECTS_SORT_OPTIONS[value];
-                    return (
-                      <DropdownMenuRadioItem key={value} value={value}>
-                        <Icon className="w-3.5 h-3.5 mr-2" aria-hidden="true" />
-                        {optionLabel}
-                      </DropdownMenuRadioItem>
-                    );
-                  })}
-                </DropdownMenuRadioGroup>
-              </DropdownMenuContent>
-            </DropdownMenu>
-          )}
+                <span
+                  className="workspace-mark h-1.5 w-1.5 shrink-0 rounded-full bg-activity-working"
+                  aria-hidden="true"
+                />
+                <span className="truncate">
+                  {formatFoldedLiveness(activeAgentCount, workingAssistantCount)}
+                </span>
+              </span>
+            )}
+          </div>
+          <div className="flex shrink-0 items-center gap-1">
+            {group && (
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <button
+                    type="button"
+                    tabIndex={-1}
+                    data-testid={`band-group-menu-${bandDomKey(bandKey)}`}
+                    aria-label={`${group.name} group actions`}
+                    // Revealed with the header rather than always drawn: one
+                    // control per group header, repeated down the list, would
+                    // be a column of dots competing with the rows. Held, and
+                    // lifted, while its own menu is open so the menu has a
+                    // visible owner. Before the count rather than after it, so
+                    // every header's right-hand count or sort still ends on the
+                    // same edge. 24px square for the pointer target floor,
+                    // pulled into the header's line so it doesn't grow it.
+                    className={cn(
+                      "-my-1 flex h-6 w-6 shrink-0 items-center justify-center rounded-[var(--radius-sm)] text-text-secondary transition-[opacity,background-color,color] duration-150 ease-out hover:text-text-primary",
+                      "opacity-0 group-hover/band-header:opacity-100",
+                      "data-[state=open]:opacity-100 data-[state=open]:bg-overlay-subtle data-[state=open]:text-text-primary"
+                    )}
+                  >
+                    <Ellipsis className="w-3.5 h-3.5" aria-hidden="true" />
+                  </button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="end" onCloseAutoFocus={returnFocus}>
+                  <ProjectGroupDropdownMenuItems group={group} />
+                </DropdownMenuContent>
+              </DropdownMenu>
+            )}
+            {collapsed && <BandCollapsedCount count={itemCount} />}
+            {!collapsed && itemCount >= OTHER_PROJECTS_SORT_CONTROL_MIN_ROWS && (
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <button
+                    type="button"
+                    tabIndex={-1}
+                    data-testid={
+                      isOther
+                        ? "other-projects-sort-trigger"
+                        : `band-sort-trigger-${bandDomKey(bandKey)}`
+                    }
+                    aria-label={`Sort ${sortLabel}, currently ${active.label}`}
+                    className="flex shrink-0 items-center gap-1 text-text-secondary hover:text-text-primary transition-colors"
+                  >
+                    <ActiveIcon className="w-3 h-3" aria-hidden="true" />
+                    {active.label}
+                  </button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="end" onCloseAutoFocus={returnFocus}>
+                  <DropdownMenuRadioGroup value={sortMode} onValueChange={handleValueChange}>
+                    {OTHER_PROJECTS_SORT_MODES.map((value) => {
+                      const { label: optionLabel, Icon } = OTHER_PROJECTS_SORT_OPTIONS[value];
+                      return (
+                        <DropdownMenuRadioItem key={value} value={value}>
+                          <Icon className="w-3.5 h-3.5 mr-2" aria-hidden="true" />
+                          {optionLabel}
+                        </DropdownMenuRadioItem>
+                      );
+                    })}
+                  </DropdownMenuRadioGroup>
+                </DropdownMenuContent>
+              </DropdownMenu>
+            )}
+          </div>
         </div>
       </ContextMenuTrigger>
       {/*
        * Right-click keeps the options reachable below the row threshold, where
-       * the visible trigger hides itself — the preference still applies there.
+       * the visible trigger hides itself — the order still applies there — and
+       * is where a group's own actions live for anyone who never hovers.
        */}
       <ContextMenuContent>
         <ContextMenuRadioGroup value={sortMode} onValueChange={handleValueChange}>
@@ -1273,8 +1567,40 @@ function OtherProjectsHeader({
             );
           })}
         </ContextMenuRadioGroup>
+        {group && (
+          <>
+            <ContextMenuSeparator />
+            <ProjectGroupContextMenuItems group={group} />
+          </>
+        )}
       </ContextMenuContent>
     </ContextMenu>
+  );
+}
+
+/**
+ * What an open group with nothing to show says instead of looking abandoned.
+ * Hidden from assistive tech: it is not an option, it sits inside a listbox
+ * that may only hold options, and the band's header already names the group.
+ */
+function EmptyGroupHint({ liftedCount }: { liftedCount: number }) {
+  // Laid out on a row's own frame — the border, inset, status slot and tile
+  // slot it would have — so the sentence starts on the column the project
+  // names start on and reads as this group's content, not a stray note.
+  return (
+    <div
+      aria-hidden="true"
+      className="flex items-center gap-2 border border-transparent px-2 py-1.5 text-xs text-text-secondary"
+      data-testid="empty-group-hint"
+    >
+      <span className="w-2 shrink-0" />
+      <span className="w-8 shrink-0" />
+      <span className="min-w-0 truncate">
+        {liftedCount > 0
+          ? `${pluralize(liftedCount, "project")} shown above`
+          : "Right-click a project and choose Move to group"}
+      </span>
+    </div>
   );
 }
 
@@ -1306,6 +1632,16 @@ interface ProjectListContentProps {
    * for it — printed above real rows it contradicts them.
    */
   scratchesStandAlone: boolean;
+  /**
+   * Other hosts matched even though this one did not. Their band renders below
+   * this list, so a "No workspaces match" here would sit above real results.
+   */
+  hasOtherHostResults: boolean;
+  /**
+   * This window's host, said beside a project whose name another host also
+   * lists, so the two copies can be told apart. Null when nothing collides.
+   */
+  sharedNameHost?: { hostName: string; names: ReadonlySet<string> } | null;
   onStopProject?: (projectId: string) => void;
   onCloseProject?: (projectId: string) => void;
   onSleepProject?: (projectId: string) => void;
@@ -1336,6 +1672,8 @@ function ProjectListContent({
   canAddProject,
   canCreateScratch,
   scratchesStandAlone,
+  hasOtherHostResults,
+  sharedNameHost,
   onStopProject,
   onCloseProject,
   onSleepProject,
@@ -1382,7 +1720,10 @@ function ProjectListContent({
       } else {
         bands.push({
           key: row.section,
-          label: PROJECT_SECTION_LABELS[row.section],
+          // A group band read off `results` has no name to show — only the
+          // declared bands carry one — and this fallback is never the path a
+          // real switcher takes once groups exist.
+          label: isGroupBandKey(row.section) ? "" : PROJECT_SECTION_LABELS[row.section],
           items: [row],
           itemCount: 1,
           collapsed: false,
@@ -1414,6 +1755,10 @@ function ProjectListContent({
         itemCount: band.itemCount,
         collapsed: band.collapsed,
         collapsible: true,
+        group: band.group,
+        liftedCount: band.liftedCount,
+        activeAgentCount: band.activeAgentCount,
+        workingAssistantCount: band.workingAssistantCount,
       };
     });
 
@@ -1443,6 +1788,9 @@ function ProjectListContent({
   const selectedRowId = results[selectedIndex]?.id;
 
   const setBandCollapsed = usePreferencesStore((state) => state.setProjectSwitcherBandCollapsed);
+  const otherSortMode = usePreferencesStore((state) => state.projectSwitcherOtherSortMode);
+  const setOtherSortMode = usePreferencesStore((state) => state.setProjectSwitcherOtherSortMode);
+  const setGroupSortMode = useProjectGroupsStore((state) => state.setGroupSortMode);
 
   const hasBands = sections !== null && sections.length > 0;
 
@@ -1468,6 +1816,19 @@ function ProjectListContent({
             // project that became active mid-session can sit under another
             // header; only the "Current project" band makes the label redundant.
             showCurrentLabel={!hasBands || row.section !== "current"}
+            // Said wherever no header already says it: the ranked list has no
+            // headers at all, and a member drawn outside its own group's band —
+            // current, asking, pinned, or archived — would otherwise lose the
+            // one fact that says where it is filed.
+            showGroupLabel={
+              !hasBands || (row.groupId !== undefined && row.section !== groupBandKey(row.groupId))
+            }
+            inBands={hasBands}
+            hostName={
+              sharedNameHost?.names.has(row.name.toLocaleLowerCase())
+                ? sharedNameHost.hostName
+                : undefined
+            }
             onSelect={onSelect}
             onStopProject={onStopProject}
             onCloseProject={onCloseProject}
@@ -1480,6 +1841,7 @@ function ProjectListContent({
             onHoverProject={onHoverProject}
             onHoverProjectEnd={onHoverProjectEnd}
             onHoverRow={onHoverRow}
+            onReturnFocus={onReturnFocus}
           />
         )}
       </div>
@@ -1491,7 +1853,7 @@ function ProjectListContent({
       <div ref={listRef} id="project-list" role="listbox" aria-label="Workspaces">
         {sections && sections.length > 0 ? (
           sections.map((section, sectionIdx) => {
-            const headerId = `project-section-${section.key}`;
+            const headerId = `project-section-${bandDomKey(section.key)}`;
             const listId = bandListId(section.key);
             const toggle = () => setBandCollapsed(section.key, !section.collapsed);
 
@@ -1515,13 +1877,22 @@ function ProjectListContent({
                    */
                   className="px-1 py-1"
                 >
-                  {section.key === "other" ? (
-                    <OtherProjectsHeader
+                  {section.key === "other" || section.group ? (
+                    <SortableBandHeader
+                      bandKey={section.key}
                       headerId={headerId}
                       label={section.label}
                       itemCount={section.itemCount}
                       collapsed={section.collapsed}
                       collapsible={section.collapsible}
+                      sortMode={section.group ? section.group.sortMode : otherSortMode}
+                      onSortModeChange={(mode) => {
+                        if (section.group) void setGroupSortMode(section.group.id, mode);
+                        else setOtherSortMode(mode);
+                      }}
+                      group={section.group}
+                      activeAgentCount={section.activeAgentCount}
+                      workingAssistantCount={section.workingAssistantCount}
                       onToggleCollapsed={toggle}
                       onReturnFocus={onReturnFocus}
                     />
@@ -1542,7 +1913,7 @@ function ProjectListContent({
                           label={section.label}
                           labelId={headerId}
                           controlsId={listId}
-                          testId={`band-collapse-toggle-${section.key}`}
+                          testId={`band-collapse-toggle-${bandDomKey(section.key)}`}
                           onToggle={toggle}
                         />
                       ) : (
@@ -1557,36 +1928,43 @@ function ProjectListContent({
                     element that comes and goes would leave it dangling on every
                     fold.
                   */}
-                  <div id={listId}>{section.items.map(renderItem)}</div>
+                  <div id={listId}>
+                    {section.items.map(renderItem)}
+                    {section.group && !section.collapsed && section.items.length === 0 && (
+                      <EmptyGroupHint liftedCount={section.liftedCount ?? 0} />
+                    )}
+                  </div>
                 </div>
               </div>
             );
           })
         ) : results.length === 0 ? (
-          scratchesStandAlone ? null : (
-            <div className="px-1 py-1">
-              <div
-                className="px-2 py-8 text-center text-text-secondary text-sm"
-                data-testid="project-empty-state"
-              >
-                {query.trim() ? (
-                  // "Workspaces", not "projects": scratches are ranked into this
-                  // same list now, so naming only half of what was searched would
-                  // read as a scratch still being findable somewhere else.
-                  <div>{`No workspaces match "${query}"`}</div>
-                ) : canAddProject ? (
-                  // Names the button sitting directly below this list.
-                  "Open a project to get started"
-                ) : canCreateScratch ? (
-                  // No project commands on this surface, but Scratch is still
-                  // here — so the nearest action is the create row, not a menu.
-                  "Create a scratch workspace to get started"
-                ) : (
-                  // Nothing on this surface can open anything, so the only honest
-                  // instruction points outside it.
-                  "Open a project from the File menu to get started"
-                )}
-              </div>
+          scratchesStandAlone || hasOtherHostResults ? null : (
+            // The family's empty state rather than a local one, so this palette
+            // says "nothing matched" the way every other does: same type, a
+            // debounced polite announcement, and the Esc hint that turns the
+            // dead end into one keypress back.
+            <div data-testid="project-empty-state">
+              <AppPaletteDialog.Empty
+                query={query}
+                // "Workspaces", not "projects": scratches are ranked into this
+                // same list now, so naming only half of what was searched would
+                // read as a scratch still being findable somewhere else.
+                noMatchMessage={`No workspaces match "${query.trim()}"`}
+                noMatchContent={<PaletteNoMatchHint what="all workspaces" />}
+                emptyMessage={
+                  canAddProject
+                    ? // Names the button sitting directly below this list.
+                      "Open a project to get started"
+                    : canCreateScratch
+                      ? // No project commands on this surface, but Scratch is
+                        // still here — so the nearest action is the create row.
+                        "Create a scratch workspace to get started"
+                      : // Nothing on this surface can open anything, so the only
+                        // honest instruction points outside it.
+                        "Open a project from the File menu to get started"
+                }
+              />
             </div>
           )
         ) : (
@@ -1687,7 +2065,10 @@ function ScratchNameEditor({
 
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent<HTMLInputElement>) => {
-      if (e.nativeEvent.isComposing) return;
+      if (e.nativeEvent.isComposing || e.nativeEvent.keyCode === 229) {
+        if (e.key === "Escape") e.stopPropagation();
+        return;
+      }
       if (e.key === "Enter") {
         e.preventDefault();
         e.stopPropagation();
@@ -1747,6 +2128,12 @@ interface ScratchSectionProps {
    * staying mounted (#11943).
    */
   isSearching: boolean;
+  /**
+   * Nothing else in the palette: no projects, no scratches. The empty state
+   * above then names this section's create row as the next step, so it opens
+   * by default rather than folding that row away behind its header.
+   */
+  isOnlyAction?: boolean;
   onCreate?: (name?: string) => void;
   onSelect?: (scratch: SearchableScratch) => void;
   onRequestDelete?: (scratchId: string) => void;
@@ -1775,6 +2162,7 @@ interface ScratchSectionProps {
 function ScratchSection({
   scratches,
   isSearching,
+  isOnlyAction = false,
   onCreate,
   onSelect,
   onRequestDelete,
@@ -1787,7 +2175,7 @@ function ScratchSection({
     (state) => state.projectSwitcherCollapsedBands[PROJECT_SWITCHER_SCRATCH_BAND_KEY]
   );
   const setBandCollapsed = usePreferencesStore((state) => state.setProjectSwitcherBandCollapsed);
-  const collapsed = storedCollapsed ?? scratches.length === 0;
+  const collapsed = storedCollapsed ?? (scratches.length === 0 && !isOnlyAction);
   const [editor, setEditor] = useState<ScratchEditorState>(null);
   // Radix restores focus to the context-menu trigger on close, but for a rename
   // that trigger has been swapped out for the editor — the restore would steal
@@ -1887,9 +2275,13 @@ function ScratchSection({
       {!collapsed && (
         <div id="scratch-section-list">
           {scratches.length === 0 ? (
-            <div className="px-2 py-1 text-xs text-text-secondary">
-              Create a scratch workspace for a quick one-off task
-            </div>
+            // The palette's empty state already says this when it is the only
+            // thing to do; a second line would be the same instruction twice.
+            isOnlyAction ? null : (
+              <div className="px-2 py-1 text-xs text-text-secondary">
+                Create a scratch workspace for a quick one-off task
+              </div>
+            )
           ) : (
             <div role="listbox" aria-label="Scratch workspaces">
               {scratches.map((scratch) => {
@@ -2110,9 +2502,12 @@ function ScratchSection({
  */
 function ProjectSwitcherFooter({
   selectedRow,
+  hostOption,
   canOpenWindow,
   onOpenPilot,
 }: {
+  /** The other-hosts row under the cursor; it takes the hint over `selectedRow`. */
+  hostOption?: OtherHostOption;
   /**
    * Undefined when nothing is highlighted — an empty list, or every band folded
    * (#11943). Enter no-ops there, so naming it would be the footer promising an
@@ -2130,7 +2525,9 @@ function ProjectSwitcherFooter({
 
   const hasSelection = selectedRow !== undefined;
   const isScratchSelected = selectedRow?.kind === "scratch";
-  const hint = getProjectSwitcherEnterHint(selectedRow, modifiers.meta, canOpenWindow);
+  const hint: ReturnType<typeof getOtherHostEnterHint> = hostOption
+    ? getOtherHostEnterHint(hostOption, modifiers.meta)
+    : getProjectSwitcherEnterHint(selectedRow, modifiers.meta, canOpenWindow);
 
   return (
     // Container-queried rather than fixed: the same footer serves the anchored
@@ -2147,19 +2544,26 @@ function ProjectSwitcherFooter({
     // menu and from ⌘⌫ itself, and both open the same confirmation.
     <div className="@container/switcher-footer w-full flex items-center justify-between gap-3">
       {hint ? (
-        <span className="shrink-0">
+        <span className="flex min-w-0 items-center">
           <span className="sr-only">{describeKeyCap(hint.keys, isMac())}</span>
-          <kbd aria-hidden="true" className={KBD_CLASS}>
+          <kbd aria-hidden="true" className={cn(KBD_CLASS, "shrink-0")}>
             {hint.keys}
           </kbd>
-          <span className="ml-1.5">{hint.label}</span>
+          {hint.host ? (
+            <span className="ml-1.5 flex min-w-0">
+              <span className="shrink-0 whitespace-pre">{`${hint.label} `}</span>
+              <HostNameText name={hint.host} />
+            </span>
+          ) : (
+            <span className="ml-1.5 whitespace-nowrap">{hint.label}</span>
+          )}
         </span>
       ) : (
         // Holds the rail's left slot so "All agents" stays put rather than
         // sliding across as the last band folds.
         <span className="shrink-0" />
       )}
-      <div className="flex items-center gap-3 min-w-0">
+      <div className="flex shrink-0 items-center gap-3">
         {/*
           The switcher answers "which project", so the fleet-wide view belongs
           beside it rather than inside its list: adding a row would put a
@@ -2203,30 +2607,6 @@ function ProjectSwitcherFooter({
  * out past that same edge.
  */
 /**
- * The 32x32 icon tile every non-workspace row wears.
- *
- * Two treatments, and the split is semantic rather than decorative: `manage`
- * acts on something that already exists, `create` brings something new in and
- * wears the dashed outline that has always marked an add affordance here. Both
- * ride the audited overlay ladder rather than a raw tint/muted alpha, so they
- * hold their separation from the row underneath in every theme.
- */
-function CommandTile({ icon: Icon, tone }: { icon: LucideIcon; tone: "manage" | "create" }) {
-  return (
-    <div
-      className={cn(
-        "flex h-8 w-8 shrink-0 items-center justify-center rounded-[var(--radius-lg)] text-daintree-text/50",
-        tone === "create"
-          ? "border border-dashed border-border-strong bg-overlay-soft"
-          : "bg-overlay-medium"
-      )}
-    >
-      <Icon className="h-4 w-4" aria-hidden="true" />
-    </div>
-  );
-}
-
-/**
  * A palette-level command: the actions under the divider, which act on the
  * project list rather than on a workspace in it.
  *
@@ -2260,18 +2640,6 @@ function ProjectCommandRow({
       <span className="font-medium text-sm leading-tight">{label}</span>
     </button>
   );
-}
-
-/**
- * The empty stand-in for `StatusDot` on a row that has no status to report.
- *
- * Every row in this palette puts its tile on one column, and on a workspace row
- * that column is reached across an 8px status mark. A create/command row has no
- * mark, so without this its tile climbed 16px left and the palette grew a
- * second icon column for its actions (#11947).
- */
-function StatusSlotSpacer() {
-  return <div className="w-2 h-2 shrink-0" aria-hidden="true" />;
 }
 
 const PROJECT_ACTION_ROW_CLASS = cn(
@@ -2376,7 +2744,110 @@ function ProjectPaletteInner({
   const projectSwitcherShortcut = useEffectiveCombo("project.switcherPalette");
   const fleetSummary = fleetLiveness ? formatFleetLiveness(fleetLiveness) : null;
 
+  // Other hosts' rows are the tail of the arrow-key order: ArrowDown off the
+  // last result enters them, and moving past either end wraps back into
+  // `results`, the same wrap the hook applies inside them. The hook owns the
+  // selection within `results`; this cursor exists only while it sits in the
+  // band, and only for the query it was set under. It holds a row's key, never
+  // its position: hosts connect and drop while the palette is open, and a
+  // position would hand Enter whichever row slid into it (#13290).
+  const {
+    groups: hostGroups,
+    options: hostOptions,
+    remoteNames,
+  } = useOtherHostProjectOptions(query);
+  const [hostCursorState, setHostCursorState] = useState<{
+    query: string;
+    key: string;
+    /** Placed for an empty result list rather than moved to; local results take it back. */
+    auto?: boolean;
+  } | null>(null);
+  const claimedHostIndex =
+    hostCursorState !== null &&
+    hostCursorState.query === query &&
+    !(hostCursorState.auto && results.length > 0)
+      ? hostOptions.findIndex((option) => option.key === hostCursorState.key)
+      : -1;
+  // Nothing here matched: the first project another host offers is what Enter
+  // opens, the way the first result is when there are results. A search that
+  // named only a host lands on that host's own row instead.
+  const firstHostProject = hostOptions.findIndex((option) => option.kind === "project");
+  const defaultHostIndex =
+    results.length > 0
+      ? -1
+      : firstHostProject >= 0
+        ? firstHostProject
+        : (rankedSearch ?? query.trim().length > 0) && hostOptions.length > 0
+          ? 0
+          : -1;
+  const hostIndex = claimedHostIndex >= 0 ? claimedHostIndex : defaultHostIndex;
+  const hostCursor = hostIndex >= 0 ? hostIndex : null;
+  const activeHostOption: OtherHostOption | undefined =
+    hostCursor === null ? undefined : hostOptions[hostCursor];
+  // The automatic pick is held by key like a chosen one, so a host answering
+  // later, with rows drawn above it, can't move what Enter opens.
+  const defaultHostKey =
+    claimedHostIndex < 0 && defaultHostIndex >= 0 ? hostOptions[defaultHostIndex]!.key : null;
+  // A claim belongs to the query it was made under; left in place it would
+  // come back when the query is cleared, pointing Enter at a row nobody chose.
   useEffect(() => {
+    setHostCursorState((prev) => (prev !== null && prev.query !== query ? null : prev));
+  }, [query]);
+  useEffect(() => {
+    if (defaultHostKey !== null) setHostCursorState({ query, key: defaultHostKey, auto: true });
+  }, [defaultHostKey, query]);
+  const setHostCursor = (index: number | null) => {
+    const option = index === null ? undefined : hostOptions[index];
+    setHostCursorState(option ? { query, key: option.key } : null);
+  };
+  const resultsCursor = hostCursor === null ? selectedIndex : -1;
+
+  // The hook only steps relative to its own selection (its updater composes
+  // batched steps), so returning from the band is a walk the short way round.
+  const moveResultsSelectionTo = (target: number) => {
+    const count = results.length;
+    const from = selectedIndex >= 0 && selectedIndex < count ? selectedIndex : 0;
+    const forward = (target - from + count) % count;
+    const backward = (from - target + count) % count;
+    if (forward <= backward) for (let i = 0; i < forward; i += 1) onSelectNext();
+    else for (let i = 0; i < backward; i += 1) onSelectPrevious();
+  };
+
+  const activeHostOptionId = activeHostOption ? otherHostOptionId(activeHostOption) : null;
+  // Rows a host adds above the cursor push it down without changing its id, and
+  // so do a listing host's header and a path line a query earns; the band's
+  // shape is a reason to bring the cursor back into view too.
+  const hostRowsShape = hostGroups
+    .map((group) =>
+      [
+        group.hostId,
+        ...group.options.map((option) =>
+          option.kind === "project" && option.showPath ? `${option.key}+path` : option.key
+        ),
+      ].join(" ")
+    )
+    .join("\n");
+  useEffect(() => {
+    if (activeHostOptionId === null) return;
+    document.getElementById(activeHostOptionId)?.scrollIntoView?.({ block: "nearest" });
+  }, [activeHostOptionId, hostRowsShape]);
+
+  /**
+   * Puts the cursor on a position in the whole arrow-key order: `results`,
+   * then the other hosts' rows.
+   */
+  const moveCursorTo = (position: number) => {
+    if (position >= results.length) {
+      setHostCursor(position - results.length);
+      return;
+    }
+    setHostCursor(null);
+    if (onHoverRow) onHoverRow(results[position]!.id);
+    else moveResultsSelectionTo(position);
+  };
+
+  useEffect(() => {
+    if (hostCursor !== null) return;
     if (listRef.current && selectedIndex >= 0 && selectedIndex < results.length) {
       const selectedItem = listRef.current.querySelector(
         `#project-option-${results[selectedIndex]!.id}`
@@ -2387,94 +2858,182 @@ function ProjectPaletteInner({
         selectedItem.scrollIntoView({ block: "nearest" });
       }
     }
-  }, [listRef, selectedIndex, results]);
+  }, [listRef, selectedIndex, results, hostCursor]);
 
-  const handleKeyDown = useCallback(
-    (e: React.KeyboardEvent) => {
-      switch (e.key) {
-        case "ArrowUp":
-          e.preventDefault();
-          e.stopPropagation();
+  /** Rows that fit in the scroller, less one so a page keeps a row of context. */
+  const pageStep = () => {
+    const list = listRef.current;
+    const scroller = list?.closest<HTMLElement>("[tabindex]") ?? list;
+    const row = list?.querySelector<HTMLElement>('[role="option"]');
+    if (!scroller || !row || row.offsetHeight === 0) return 5;
+    return Math.max(1, Math.floor(scroller.clientHeight / row.offsetHeight) - 1);
+  };
+
+  /**
+   * Opens a row's context menu from the keyboard, anchored under its name. The
+   * menu returns focus to the search box when it closes (see `ProjectListItem`).
+   */
+  const openRowMenu = (rowId: string) => {
+    const row = document.getElementById(`project-option-${rowId}`);
+    if (!row) return;
+    row.scrollIntoView({ block: "nearest" });
+    const rect = row.getBoundingClientRect();
+    row.dispatchEvent(
+      new MouseEvent("contextmenu", {
+        bubbles: true,
+        cancelable: true,
+        clientX: rect.left + 48,
+        clientY: rect.bottom,
+      })
+    );
+  };
+
+  const handleKeyDown = (e: React.KeyboardEvent) => {
+    // An IME spends Enter, the arrows and Escape on its candidate window, so
+    // none of them may reach the list while a composition is open — Enter would
+    // switch projects on the keypress meant to commit a character.
+    if (e.nativeEvent.isComposing || e.nativeEvent.keyCode === 229) {
+      // Kept from the dialog's document backstop too, which would otherwise
+      // read a composing Escape as "close".
+      if (e.key === "Escape") e.stopPropagation();
+      return;
+    }
+    switch (e.key) {
+      case "ArrowUp":
+        e.preventDefault();
+        e.stopPropagation();
+        if (hostCursor !== null) {
+          if (hostCursor > 0) setHostCursor(hostCursor - 1);
+          else if (results.length > 0) {
+            setHostCursor(null);
+            moveResultsSelectionTo(results.length - 1);
+          } else setHostCursor(hostOptions.length - 1);
+        } else if (hostOptions.length > 0 && (results.length === 0 || selectedIndex <= 0)) {
+          setHostCursor(hostOptions.length - 1);
+        } else {
           onSelectPrevious();
-          break;
-        case "ArrowDown":
-          e.preventDefault();
-          e.stopPropagation();
-          onSelectNext();
-          break;
-        // First and last, as in every other palette. Shift+Home selects the
-        // query instead, and an empty list leaves the keys to the caret.
-        case "Home":
-        case "End":
-          if (keyBelongsToField(e) || results.length === 0 || !onHoverRow) break;
-          e.preventDefault();
-          e.stopPropagation();
-          onHoverRow(results[e.key === "Home" ? 0 : results.length - 1]!.id);
-          break;
-        case "Enter":
-          e.preventDefault();
-          e.stopPropagation();
-          if (results.length > 0 && selectedIndex >= 0 && selectedIndex < results.length) {
-            const selected = results[selectedIndex]!;
-            // Anything ⌘↵ can't open a window for falls through to the plain
-            // switch rather than swallowing the keypress.
-            if (
-              (e.metaKey || e.ctrlKey) &&
-              onSelectNewWindow &&
-              modEnterOpensWindow(selected, true)
-            ) {
-              onSelectNewWindow(selected);
-            } else {
-              onSelect(selected, "keyboard");
-            }
-          }
-          break;
-        case "Escape":
-          // An IME spends Escape cancelling its candidate; leave the query alone.
-          if (e.nativeEvent.isComposing || e.nativeEvent.keyCode === 229) break;
-          // Anchored mode leaves Escape entirely to the shell, which spends the
-          // first press clearing the query. Closing here would beat that: this
-          // runs on bubble, after Radix's capture-phase dismissal has already
-          // been vetoed, so the palette would shut on a press meant to filter.
-          if (mode === "dropdown") break;
-          e.preventDefault();
-          e.stopPropagation();
-          // The dialog spends its first press the same way the shell does.
-          if (query !== "") onQueryChange("");
-          else onClose();
-          break;
-        case "Backspace": {
-          // Projects only. Both paths confirm now, but the chord means "close
-          // the project" — pointing it at a scratch row would overload one key
-          // with a reversible close and an irreversible delete.
-          const target = results[selectedIndex];
-          if ((e.metaKey || e.ctrlKey) && onCloseProject && target?.kind === "project") {
-            e.preventDefault();
-            e.stopPropagation();
-            onCloseProject(target.id);
-          }
-          break;
         }
+        break;
+      case "ArrowDown":
+        e.preventDefault();
+        e.stopPropagation();
+        if (hostCursor !== null) {
+          if (hostCursor < hostOptions.length - 1) setHostCursor(hostCursor + 1);
+          else if (results.length > 0) {
+            setHostCursor(null);
+            moveResultsSelectionTo(0);
+          } else setHostCursor(0);
+        } else if (
+          hostOptions.length > 0 &&
+          (results.length === 0 || selectedIndex >= results.length - 1)
+        ) {
+          setHostCursor(0);
+        } else {
+          onSelectNext();
+        }
+        break;
+      // First and last, as in every other palette, counting the other hosts'
+      // rows as the tail of the list. Shift+Home selects the query instead, and
+      // an empty list leaves the keys to the caret.
+      case "Home":
+      case "End": {
+        const total = results.length + hostOptions.length;
+        if (keyBelongsToField(e) || total === 0) break;
+        e.preventDefault();
+        e.stopPropagation();
+        moveCursorTo(e.key === "Home" ? 0 : total - 1);
+        break;
       }
-    },
-    [
-      results,
-      selectedIndex,
-      onHoverRow,
-      mode,
-      query,
-      onQueryChange,
-      onSelectPrevious,
-      onSelectNext,
-      onSelect,
-      onSelectNewWindow,
-      onClose,
-      onCloseProject,
-    ]
-  );
+      // A page of rows rather than native scrolling, which would walk the
+      // highlighted row off screen and leave Enter committing something the
+      // user can no longer see.
+      case "PageUp":
+      case "PageDown": {
+        const total = results.length + hostOptions.length;
+        if (total === 0) break;
+        e.preventDefault();
+        e.stopPropagation();
+        const step = pageStep();
+        const from =
+          hostCursor !== null
+            ? results.length + hostCursor
+            : selectedIndex >= 0
+              ? selectedIndex
+              : 0;
+        moveCursorTo(
+          e.key === "PageDown" ? Math.min(total - 1, from + step) : Math.max(0, from - step)
+        );
+        break;
+      }
+      // The keyboard's right-click. Without it pin, sleep, copy path and move
+      // were pointer-only: the rows never take focus, so there is nothing for
+      // the platform's own context-menu key to land on.
+      case "F10":
+      case "ContextMenu": {
+        if (e.key === "F10" && !e.shiftKey) break;
+        const target = hostCursor === null ? results[selectedIndex] : undefined;
+        if (target?.kind !== "project") break;
+        e.preventDefault();
+        e.stopPropagation();
+        openRowMenu(target.id);
+        break;
+      }
+      case "Enter":
+        e.preventDefault();
+        e.stopPropagation();
+        if (activeHostOption) {
+          // Same modifier as a click on the row: a new window on ⌘/Ctrl.
+          if (otherHostOptionCloses(activeHostOption)) onClose();
+          activateOtherHostOption(activeHostOption, isNewWindowClick(e));
+        } else if (results.length > 0 && selectedIndex >= 0 && selectedIndex < results.length) {
+          const selected = results[selectedIndex]!;
+          // Anything ⌘↵ can't open a window for falls through to the plain
+          // switch rather than swallowing the keypress.
+          if (
+            (e.metaKey || e.ctrlKey) &&
+            onSelectNewWindow &&
+            modEnterOpensWindow(selected, true)
+          ) {
+            onSelectNewWindow(selected);
+          } else {
+            onSelect(selected, "keyboard");
+          }
+        }
+        break;
+      case "Escape":
+        // Anchored mode leaves Escape entirely to the shell, which spends the
+        // first press clearing the query. Closing here would beat that: this
+        // runs on bubble, after Radix's capture-phase dismissal has already
+        // been vetoed, so the palette would shut on a press meant to filter.
+        if (mode === "dropdown") break;
+        e.preventDefault();
+        e.stopPropagation();
+        // The dialog spends its first press the same way the shell does.
+        if (query !== "") onQueryChange("");
+        else onClose();
+        break;
+      case "Backspace": {
+        // Projects only. Both paths confirm now, but the chord means "close
+        // the project" — pointing it at a scratch row would overload one key
+        // with a reversible close and an irreversible delete.
+        const target = hostCursor === null ? results[selectedIndex] : undefined;
+        if ((e.metaKey || e.ctrlKey) && onCloseProject && target?.kind === "project") {
+          e.preventDefault();
+          e.stopPropagation();
+          onCloseProject(target.id);
+        }
+        break;
+      }
+    }
+  };
 
-  const activeResult = results[selectedIndex];
-  const activeDescendant = activeResult ? `project-option-${activeResult.id}` : undefined;
+  const activeResult = hostCursor === null ? results[selectedIndex] : undefined;
+  const activeDescendant =
+    activeHostOptionId !== null
+      ? activeHostOptionId
+      : activeResult
+        ? `project-option-${activeResult.id}`
+        : undefined;
   // The RANKED list owns the scratches, and it trails the box by a commit.
   // Hiding the pinned section on the live query instead would blank them for
   // that frame — and for a user whose only workspaces are scratches, that frame
@@ -2482,10 +3041,50 @@ function ProjectPaletteInner({
   const isRankedSearch = rankedSearch ?? query.trim().length > 0;
   const hasProjectPresentation =
     (browseBands?.length ?? 0) > 0 || results.some((row) => row.kind === "project");
+  const hasProjectCommands = Boolean(
+    onOpenProjectSettings || onAddProject || onCloneRepo || onCreateFolder
+  );
   const scratchesStandAlone =
     !isRankedSearch && !hasProjectPresentation && (scratchResults?.length ?? 0) > 0;
 
   useWaitAgeTick(results.length > 0 || (scratchResults?.length ?? 0) > 0);
+
+  // "N results" once a search settles, the way `SearchablePalette` says it:
+  // Doherty-gated so a fast typist hears one count, read when the timer fires
+  // so it is the list that settled. Zero stands down — the empty state below
+  // announces its own "No workspaces match …", and two owners would say it twice.
+  const currentHostName = useCurrentHostName();
+  const remoteNamesKey = [...remoteNames].sort().join("\n");
+  const sharedNameHost = useMemo(
+    () =>
+      remoteNamesKey === ""
+        ? null
+        : { hostName: currentHostName, names: new Set(remoteNamesKey.split("\n")) },
+    [remoteNamesKey, currentHostName]
+  );
+  const hostProjectCount = hostOptions.filter((option) => option.kind === "project").length;
+  // While searching, a host row the query named is a match like any other and
+  // counts — except a Retry already under way, which holds its row but does
+  // nothing.
+  const hostMatchCount = isRankedSearch
+    ? hostOptions.filter((option) => !(option.kind === "retry" && option.busy)).length
+    : hostProjectCount;
+  const resultCount = results.length + hostMatchCount;
+  // The band answers the search when it draws anything for it — a host still
+  // listing included, which says more than "nothing matched" would.
+  const bandAnswersSearch = isRankedSearch ? hostGroups.length > 0 : hostProjectCount > 0;
+  const resultCountRef = useRef(resultCount);
+  useEffect(() => {
+    resultCountRef.current = resultCount;
+  });
+  useEffect(() => {
+    if (!isRankedSearch || query.trim() === "") return;
+    const timer = window.setTimeout(() => {
+      const count = resultCountRef.current;
+      if (count > 0) useAnnouncerStore.getState().announce(pluralize(count, "result"), "polite");
+    }, UI_DOHERTY_THRESHOLD);
+    return () => window.clearTimeout(timer);
+  }, [query, isRankedSearch]);
 
   return (
     <>
@@ -2508,10 +3107,15 @@ function ProjectPaletteInner({
           onKeyDown={handleKeyDown}
           placeholder="Search workspaces…"
           role="combobox"
+          aria-autocomplete="list"
           aria-expanded={true}
           aria-haspopup="listbox"
           aria-label="Search workspaces"
-          aria-controls="project-list"
+          aria-controls={
+            // Groups, not options: a band holding only a host still giving its
+            // first list has no options, but it is still this popup's content.
+            hostGroups.length > 0 ? `project-list ${OTHER_HOSTS_LIST_ID}` : "project-list"
+          }
           aria-activedescendant={activeDescendant}
         />
       </AppPaletteDialog.Header>
@@ -2548,21 +3152,35 @@ function ProjectPaletteInner({
          * of each divider only, so every rule sat off centre between the two
          * bands it separates.
          */
+        /*
+         * The shell's 60vh assumes a header, a body and a footer. This palette
+         * also stands up to four 48px command rows under the body, and at 60vh
+         * the ⌘⌥P modal ran past the bottom of a 1000px window, clipping
+         * "Create new folder…" and the footer with the Enter hint. The cap
+         * leaves room for that block below the modal's 15vh offset.
+         */
+        maxHeight={hasProjectCommands ? "max-h-[min(60vh,calc(85vh-20rem))]" : undefined}
         scrollClassName="space-y-0"
         ariaLabel="Workspaces"
         activeDescendant={activeDescendant}
         onNavigationKeyDown={handleKeyDown}
+        // A press on row whitespace must not park focus on the region, where
+        // typing stops filtering. The scratch rows and their controls are
+        // tabbable, so the shell leaves presses on them alone.
+        keepPointerFocusOnInput
       >
         <ProjectListContent
           results={results}
           browseBands={browseBands}
-          selectedIndex={selectedIndex}
+          selectedIndex={resultsCursor}
           query={query}
           onSelect={onSelect}
           listRef={listRef}
           canAddProject={Boolean(onAddProject)}
           canCreateScratch={Boolean(onCreateScratch)}
           scratchesStandAlone={scratchesStandAlone}
+          hasOtherHostResults={bandAnswersSearch}
+          sharedNameHost={sharedNameHost}
           onStopProject={onStopProject}
           onCloseProject={onCloseProject}
           onSleepProject={onSleepProject}
@@ -2573,7 +3191,16 @@ function ProjectPaletteInner({
           onSelectNewWindow={onSelectNewWindow}
           onHoverProject={onHoverProject}
           onHoverProjectEnd={onHoverProjectEnd}
-          onHoverRow={onHoverRow}
+          // A local row under the pointer takes the cursor back from the
+          // other-hosts band, or the highlight and Enter would stay remote.
+          onHoverRow={
+            onHoverRow
+              ? (rowId) => {
+                  setHostCursor(null);
+                  onHoverRow(rowId);
+                }
+              : undefined
+          }
           onReturnFocus={() => inputRef.current?.focus()}
         />
         {(onCreateScratch || (scratchResults && scratchResults.length > 0)) && (
@@ -2583,6 +3210,12 @@ function ProjectPaletteInner({
             <ScratchSection
               scratches={scratchResults ?? []}
               isSearching={isRankedSearch}
+              isOnlyAction={
+                !isRankedSearch &&
+                !hasProjectPresentation &&
+                (scratchResults?.length ?? 0) === 0 &&
+                !onAddProject
+              }
               onCreate={onCreateScratch}
               onSelect={onSelectScratch}
               onRequestDelete={onRequestDeleteScratch}
@@ -2593,9 +3226,35 @@ function ProjectPaletteInner({
             />
           </>
         )}
+        {hostGroups.length > 0 && (
+          // The band's own top edge, drawn like Scratch's: hidden when nothing
+          // sits above it, where it would double the search field's divider.
+          <AppPaletteDialog.Divider
+            hidden={
+              results.length === 0 &&
+              isRankedSearch &&
+              // Nothing local matched and the band answers, so no empty state
+              // is drawn above it either.
+              bandAnswersSearch
+            }
+          />
+        )}
+        <OtherHostsSection
+          groups={hostGroups}
+          activeKey={activeHostOption?.key ?? null}
+          onChosen={onClose}
+          // Also turns an automatic pick under the pointer into a chosen one.
+          onHoverKey={(key) =>
+            setHostCursorState((prev) =>
+              prev !== null && prev.key === key && prev.query === query && !prev.auto
+                ? prev
+                : { query, key }
+            )
+          }
+        />
       </AppPaletteDialog.Body>
 
-      {(onOpenProjectSettings || onAddProject || onCloneRepo || onCreateFolder) && (
+      {hasProjectCommands && (
         <>
           <AppPaletteDialog.Divider />
           <div>
@@ -2640,6 +3299,7 @@ function ProjectPaletteInner({
       <AppPaletteDialog.Footer>
         <ProjectSwitcherFooter
           selectedRow={activeResult}
+          hostOption={activeHostOption}
           canOpenWindow={onSelectNewWindow !== undefined}
           onOpenPilot={() => {
             onClose();
@@ -2673,7 +3333,17 @@ function ModalContent({
   return (
     <AppPaletteDialog
       isOpen={isOpen}
-      onClose={onClose}
+      onClose={(reason) => {
+        // The input spends Escape on a query itself, but once Tab has moved
+        // focus to the results or a command row the shell's backstop is what
+        // hears it — and it would close on the press meant to clear.
+        if (reason === "escape" && innerProps.query !== "") {
+          innerProps.onQueryChange("");
+          inputRef.current?.focus();
+          return;
+        }
+        onClose();
+      }}
       ariaLabel="Project switcher"
       // The modal form is the global ⌘P surface, so it takes the command box.
       // Its dropdown twin below is anchored: same content, same material, a
@@ -2867,6 +3537,7 @@ function DeleteScratchConfirmDialog({
   restoreFocusTo: React.RefObject<HTMLElement | null>;
 }) {
   const progress = useScratchDeletionProgress(isDeleting);
+  const remoteHostName = useRemoteHostName();
 
   return (
     <ConfirmDialog
@@ -2892,7 +3563,7 @@ function DeleteScratchConfirmDialog({
     >
       <div className="space-y-3">
         <div className="text-sm text-text-secondary">
-          Its terminals will be closed and its folder deleted from disk.
+          {`Its terminals will be closed and its folder deleted from ${remoteHostName ?? "disk"}.`}
         </div>
         <div className="text-xs text-text-secondary font-mono">
           <PathSegments path={target.path} />
@@ -2994,6 +3665,8 @@ export function ProjectSwitcherPalette({
   fleetLiveness,
 }: ProjectSwitcherPaletteProps) {
   const paletteInputRef = useRef<HTMLInputElement>(null);
+  // Scratch folders live on the window's host; locally the copy says "disk" as it always has.
+  const scratchFolderHome = useRemoteHostName() ?? "disk";
 
   const hasRunningProcesses = removeConfirmProject
     ? removeConfirmProject.processCount > 0 ||
@@ -3117,13 +3790,24 @@ export function ProjectSwitcherPalette({
                   <Callout severity="warning" title="All running processes will be terminated">
                     <div>
                       {removeConfirmProject.processCount > 0 && (
-                        <div>• {removeConfirmProject.processCount} running process(es)</div>
+                        <div>
+                          •{" "}
+                          {pluralize(
+                            removeConfirmProject.processCount,
+                            "running process",
+                            "running processes"
+                          )}
+                        </div>
                       )}
                       {removeConfirmProject.activeAgentCount > 0 && (
-                        <div>• {removeConfirmProject.activeAgentCount} active agent(s)</div>
+                        <div>
+                          • {pluralize(removeConfirmProject.activeAgentCount, "active agent")}
+                        </div>
                       )}
                       {removeConfirmProject.waitingAgentCount > 0 && (
-                        <div>• {removeConfirmProject.waitingAgentCount} waiting agent(s)</div>
+                        <div>
+                          • {pluralize(removeConfirmProject.waitingAgentCount, "waiting agent")}
+                        </div>
                       )}
                     </div>
                   </Callout>
@@ -3132,13 +3816,24 @@ export function ProjectSwitcherPalette({
                   <Callout severity="warning" title="Active sessions detected">
                     <div>
                       {removeConfirmProject.processCount > 0 && (
-                        <div>• {removeConfirmProject.processCount} running process(es)</div>
+                        <div>
+                          •{" "}
+                          {pluralize(
+                            removeConfirmProject.processCount,
+                            "running process",
+                            "running processes"
+                          )}
+                        </div>
                       )}
                       {removeConfirmProject.activeAgentCount > 0 && (
-                        <div>• {removeConfirmProject.activeAgentCount} active agent(s)</div>
+                        <div>
+                          • {pluralize(removeConfirmProject.activeAgentCount, "active agent")}
+                        </div>
                       )}
                       {removeConfirmProject.waitingAgentCount > 0 && (
-                        <div>• {removeConfirmProject.waitingAgentCount} waiting agent(s)</div>
+                        <div>
+                          • {pluralize(removeConfirmProject.waitingAgentCount, "waiting agent")}
+                        </div>
                       )}
                     </div>
                   </Callout>
@@ -3176,13 +3871,20 @@ export function ProjectSwitcherPalette({
               <Callout severity="warning" title="Running processes will be stopped">
                 <div>
                   {sleepConfirmProject.processCount > 0 && (
-                    <div>• {sleepConfirmProject.processCount} running process(es)</div>
+                    <div>
+                      •{" "}
+                      {pluralize(
+                        sleepConfirmProject.processCount,
+                        "running process",
+                        "running processes"
+                      )}
+                    </div>
                   )}
                   {sleepConfirmProject.activeAgentCount > 0 && (
-                    <div>• {sleepConfirmProject.activeAgentCount} active agent(s)</div>
+                    <div>• {pluralize(sleepConfirmProject.activeAgentCount, "active agent")}</div>
                   )}
                   {sleepConfirmProject.waitingAgentCount > 0 && (
-                    <div>• {sleepConfirmProject.waitingAgentCount} waiting agent(s)</div>
+                    <div>• {pluralize(sleepConfirmProject.waitingAgentCount, "waiting agent")}</div>
                   )}
                 </div>
               </Callout>
@@ -3243,8 +3945,8 @@ export function ProjectSwitcherPalette({
             <div className="space-y-3">
               <div className="text-sm text-text-secondary">
                 {deleteAllScratchesConfirm.length === 1
-                  ? "Its terminals will be closed and its folder deleted from disk."
-                  : "Their terminals will be closed and their folders deleted from disk."}
+                  ? `Its terminals will be closed and its folder deleted from ${scratchFolderHome}.`
+                  : `Their terminals will be closed and their folders deleted from ${scratchFolderHome}.`}
               </div>
               {/*
                * Named, not just counted: the action is one click from "New

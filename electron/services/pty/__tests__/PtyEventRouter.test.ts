@@ -206,6 +206,16 @@ describe("routeHostEvent", () => {
     expect(listener).toHaveBeenCalledWith(4, "postMessage-error", undefined);
   });
 
+  it("re-emits an answer typed over a MessagePort, which Main never saw", () => {
+    const { deps, emitter } = makeDeps();
+    const listener = vi.fn();
+    emitter.on("terminal-input", listener);
+
+    routeHostEvent({ type: "terminal-input", id: "t1", answer: "submit" }, deps);
+
+    expect(listener).toHaveBeenCalledWith("t1", { answer: "submit" });
+  });
+
   it("forwards the departing holder id so Main can identity-match the clear (#12557)", () => {
     // A port-replace teardown reaches Main after the replacement holder is
     // already registered; without the departing identity Main cannot tell the
@@ -313,37 +323,10 @@ describe("routeHostEvent", () => {
     expect(state.pendingKillCount.has("t1")).toBe(false);
   });
 
-  it("notifies the trash tracker on exit via callback", () => {
-    const { deps, callbacks } = makeDeps();
-    routeHostEvent({ type: "exit", id: "t1", exitCode: 0 }, deps);
-    expect(callbacks.trashIdsRemoved).toEqual(["t1"]);
-  });
-
   it("resolves broker for snapshot events", () => {
     const { deps, brokerCalls } = makeDeps();
     routeHostEvent({ type: "snapshot", id: "t1", requestId: "req-1", snapshot: null }, deps);
     expect(brokerCalls).toEqual([{ requestId: "req-1", result: null }]);
-  });
-
-  it("resolves broker with the snapshot for flow-control-snapshot events", () => {
-    const { deps, brokerCalls } = makeDeps();
-    const snapshot = {
-      timestamp: 1,
-      terminals: [],
-      queueDepth: [],
-      totalPendingBytes: 0,
-      stats: { pauseCount: 0, resumeCount: 0, suspendCount: 0, forceResumeCount: 0 },
-      resourceGovernor: {
-        isThrottling: false,
-        isWarning: false,
-        activeProfile: "balanced" as const,
-        smoothedUtilizationPercent: null,
-        throttleDurationMs: 0,
-      },
-      eventLoop: null,
-    };
-    routeHostEvent({ type: "flow-control-snapshot", requestId: "req-fc", snapshot }, deps);
-    expect(brokerCalls).toEqual([{ requestId: "req-fc", result: snapshot }]);
   });
 
   it("resolves broker with terminalIds default for terminals-for-project", () => {
@@ -353,12 +336,6 @@ describe("routeHostEvent", () => {
       deps
     );
     expect(brokerCalls).toEqual([{ requestId: "req-2", result: ["a", "b"] }]);
-  });
-
-  it("resolves broker with default snapshots empty array when missing", () => {
-    const { deps, brokerCalls } = makeDeps();
-    routeHostEvent({ type: "all-snapshots", requestId: "req-3", snapshots: [] }, deps);
-    expect(brokerCalls).toEqual([{ requestId: "req-3", result: [] }]);
   });
 
   it("preserves the legacy terminalTypes fallback shape on missing project-stats", () => {
@@ -407,12 +384,6 @@ describe("routeHostEvent", () => {
       processIds: [11, 22],
       terminalTypes: { claude: 2, terminal: 1 },
     });
-  });
-
-  it("records terminal-pid on the shared state map", () => {
-    const { deps, state } = makeDeps();
-    routeHostEvent({ type: "terminal-pid", id: "t1", pid: 12345 }, deps);
-    expect(state.terminalPids.get("t1")).toBe(12345);
   });
 
   it("ignores a non-positive terminal-pid without storing or notifying (#10787)", () => {

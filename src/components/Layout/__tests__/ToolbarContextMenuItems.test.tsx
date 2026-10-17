@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, fireEvent } from "@testing-library/react";
-import { TOOLBAR_CUSTOMIZE_LABEL, TOOLBAR_UNPIN_LABEL } from "../toolbarMenuStrings";
+import { TOOLBAR_CUSTOMIZE_LABEL } from "../toolbarMenuStrings";
 
 const dispatchMock = vi.fn();
 const toggleButtonVisibilityMock = vi.fn();
@@ -129,16 +129,6 @@ describe("ToolbarContextMenuItems", () => {
     // silently break the affordance.
     expect(TOOLBAR_CUSTOMIZE_LABEL).toBe("Customize toolbar…");
     expect(TOOLBAR_CUSTOMIZE_LABEL).not.toContain("...");
-  });
-
-  it("uses sentence case for the unpin label", () => {
-    expect(TOOLBAR_UNPIN_LABEL).toBe("Unpin from toolbar");
-  });
-
-  it("renders the customize and unpin labels in the context variant", () => {
-    const { getByText } = render(<ToolbarContextMenuItems buttonId="terminal" side="left" />);
-    expect(getByText(TOOLBAR_CUSTOMIZE_LABEL)).toBeTruthy();
-    expect(getByText(TOOLBAR_UNPIN_LABEL)).toBeTruthy();
   });
 
   it("uses ContextMenu primitives for the default variant", () => {

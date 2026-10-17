@@ -10,36 +10,43 @@ export * from "./brands";
 // Each was chosen to fit the metaphor.
 export {
   Activity, // project pulse / live activity heartbeat
-  AppWindow, // where an opened folder lands — a window of its own or the current one
-  ArrowDown, // a branch behind what it tracks — the same ↓ the upstream badge writes beside the count, so the collapsed alarm and the expanded one name the drift alike
+  AppWindow, // where an opened folder or host lands — a window of its own or the current one
+  Archive, // file a project away — out of the switcher's main list, everything about it kept
+  ArchiveRestore, // bring an archived project back to where it was filed
+  ArrowDown, // a branch behind what it tracks — the same ↓ the upstream badge writes beside the count, so the collapsed alarm and the expanded one name the drift alike; also moves a project group down the switcher
   ArrowDownAZ, // alphabetical sort order (A to Z)
   ArrowLeftRight, // a settings search hit that lives in the other scope — following it switches scope
+  ArrowUp, // move a project group up the switcher — paired with ArrowDown
   ArrowUpDown, // card organization — pinning, collapsing and reordering a worktree row
   AtSign, // @file reference handed to an agent's prompt
   BellDot, // watch alert / notify on completion
   BookDashed, // a Scratchpad's notes are temporary — kept only while its terminal is open; the dashed outline reads as a mode, not a warning
   Bot, // a commit author that is a bot account (a `[bot]` name) with no picture — shape says machine where initials would say person
   ChartNoAxesColumn, // frecency sort order ("Most used" — decayed access score)
-  CircleArrowUp, // a CLI below the version Daintree needs — the same up-arrow-in-a-circle plugins show for an available update
-  CircleCheck, // finished run — blue awaiting review, neutral once acknowledged (Pilot's review and done bands)
-  CircleDashed, // run the user snoozed — quiet until it wakes (Pilot's snoozed band)
-  CircleDot, // shell that is alive and doing nothing, so the amber hollow circle means waiting and only waiting (Pilot's idle band)
+  CheckCheck, // Canopy: the readers think an agent's task is done and Daintree sees it stopped — a suggestion to close it, distinct from the observed finished ring (DoneCircle)
+  CircleArrowUp, // a CLI below the version Daintree needs, or a host whose build was refused — the same up-arrow-in-a-circle plugins show for an available update
+  CircleCheck, // a check that passed or a step that is done (setup, forge, review) — a finished agent draws DoneCircle on the family's own ring instead
+  CircleDashed, // a check or step that has not run yet (PR checks, setup) — Pilot's snoozed band draws SnoozedCircle on the family's own ring instead
+  CircleDot, // an open issue on forge surfaces — Pilot's idle band draws IdleCircle on the family's own ring instead
   CircleHelp, // workspace whose metadata is missing (removed while its agents ran)
-  CirclePause, // run the user parked — shelved on purpose (Pilot's parked band)
-  CircleSlash, // agent stopped on an error, distinct in shape from a waiting one (Pilot's blocked band)
+  CirclePause, // the Park action in menus, and paused statuses elsewhere — a parked run's own mark is ParkedCircle on the family's ring
+  CircleSlash, // something refused or skipped (MCP calls, clones, conflicts) — an agent blocked on an error draws BlockedCircle on the family's ring
   CircleX, // anything that failed: CI, an environment, a pane that could not load — the cross the PR badge already uses, enclosed so a glyph standing alone reads as a verdict rather than a dismiss control
-  Clock, // recency sort order (most recently opened first)
+  Clock, // recency sort order (most recently opened first); a canopy row's time in its current state
   CloudOff, // a remote or forge that could not be reached — the same glyph the PR and issue badges show when detection is paused
   Coffee, // Daintree keeping the machine from idle-sleeping while agents work — the long-standing keep-awake metaphor
   FileStack, // artifacts an agent left in a terminal — the code, patches and files pulled from its output
   FileText, // view selected file path in the read-only file viewer
+  FolderClosed, // a project group — related repositories filed together in the switcher
   FolderDown, // clone a repository — a folder arriving, beside Open project's FolderOpen and Create project's FolderPlus
   FolderGit2, // git worktree (single), and any count of worktrees
+  FolderMinus, // take a project out of its group, back to Other projects
   FolderOpen, // reveal in file manager (Finder / Explorer / file manager)
   FolderOutput, // worktree living outside the project directory (external)
   FolderTree, // Daintree's own file browser panel (the worktree file tree)
   Folders, // copy tree / file hierarchy capture (two overlapping folders)
   Gauge, // git that could run faster on this worktree — the suggestion to route a WSL checkout's git through WSL
+  GitBranch, // the branch a folder has checked out — where an agent's work is going, and what continues on another host
   GitBranchPlus, // per-project worktree setup — creating branches, not browsing them
   GitMergeConflict, // a PR whose branch the forge reports as conflicting with its base — takes the CI glyph's place, since the conflict has to be resolved first
   GitPullRequest, // forge provider / code-host plugin category
@@ -62,8 +69,16 @@ export {
   Plug, // agent (integration that plugs into the host system); also a terminal handed to an agent pane, paired with Unplug to take it back
   Plus, // the toolbar launcher — "make me a new thing" (agent, panel)
   Radar, // an agent pane waiting to hear about other terminals, which Daintree may type a notice into — distinct from BellDot, the user's own watch alert
+  ScreenShare, // other machines connected to this one — the host's connected-machines pill
+  Server, // a machine a window runs on — the toolbar's host switcher, beside the project pill
+  ServerOff, // the window's host with its link down — the same machine, crossed out, never an alarm
   ServerCog, // a worktree's runtime — dev-server and remote-environment lifecycle
+  Settings2, // managing a list of things in Settings — hosts, presets — kept apart from Settings, which is project settings
   Sprout, // origin / first step (main worktree, first agent launch)
+  Star, // the default recipe a new worktree launches — kept apart from Pin, which means pinned to the canvas
+  Tag, // a worktree's colour label — the identity a user pins to a card, kept apart from Pin, which is its position
+  Telescope, // Canopy: the long view out over every agent, read off its screen and laid out by what it needs from you — binoculars read clumsy at 16px, and both trees read as the notifications bell beside it
   TriangleAlert, // a setting failing validation, a pane's CPU or memory in its amber band, or a request the app refused (a file reference with no agent to take it) — a shape, not a hue, so it survives forced colors
+  Unplug, // taking a link back — a terminal from an agent pane, or this device's link to a host, which stops nothing there
   Workflow, // terminal recipe / scripted command sequence
 } from "lucide-react";

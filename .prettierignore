@@ -2,6 +2,7 @@
 dist/
 dist-electron/
 dist-typecheck/
+packages/plugin-sdk/browser/
 release/
 
 # Dependencies

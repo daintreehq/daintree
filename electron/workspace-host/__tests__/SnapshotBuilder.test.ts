@@ -51,6 +51,8 @@ function makeHost(overrides: Partial<SnapshotBuilderHost> = {}): SnapshotBuilder
     planFilePath: undefined,
     aheadCount: undefined,
     behindCount: undefined,
+    upstreamRef: undefined,
+    upstreamHeadSha: undefined,
     baseBranchName: null,
     baseAheadCount: null,
     baseBehindCount: null,

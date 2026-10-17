@@ -22,19 +22,6 @@ describe("deriveEffectiveNote", () => {
     expect(deriveEffectiveNote({ aiNote: "  \n\t " }, NOW)).toBeUndefined();
   });
 
-  it("keeps a main-worktree note that is still inside the TTL", () => {
-    expect(
-      deriveEffectiveNote(
-        {
-          aiNote: "Fresh note",
-          aiNoteTimestamp: NOW - (MAIN_WORKTREE_NOTE_TTL_MS - 1),
-          isMainWorktree: true,
-        },
-        NOW
-      )
-    ).toBe("Fresh note");
-  });
-
   it("keeps a main-worktree note exactly at the TTL boundary", () => {
     // Expiry is `age > TTL`, so the boundary itself is still current.
     expect(

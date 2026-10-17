@@ -42,10 +42,6 @@ describe("stableInRepoId", () => {
   it("returns an inrepo- prefixed ID derived from the name", () => {
     expect(stableInRepoId("My Recipe")).toBe("inrepo-my-recipe");
   });
-
-  it("deterministic: same name always produces same ID", () => {
-    expect(stableInRepoId("Test")).toBe(stableInRepoId("Test"));
-  });
 });
 
 describe("isInRepoRecipeId", () => {

@@ -1,55 +1,60 @@
 // @vitest-environment jsdom
 import { render, fireEvent, act } from "@testing-library/react";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 // Captures the live controller instance's spies so tests can assert on the
 // switch path. HelpPanel instantiates exactly one controller per mount.
-const { controllerSpies, helpPanelState, panelStoreState } = vi.hoisted(() => ({
-  controllerSpies: {
-    selectAgent: vi.fn(),
-    newSession: vi.fn(),
-  },
-  helpPanelState: {
-    clearDroppedPreferredAgent: vi.fn(),
-    setAutoLaunchEnabled: vi.fn(),
-    requestFocus: vi.fn(),
-    setActiveFigureNumber: vi.fn(),
-    addFigure: vi.fn(),
-    setActiveSlot: vi.fn(),
-    closeSlot: vi.fn(),
-    openSlot: vi.fn(),
-    // #12108: the panel reads its lane pointer; the mocked selectors
-    // above project this same flat object as that lane.
-    activeSlot: 0,
-    sessions: {} as Record<number, unknown>,
-    isOpen: true,
-    width: 380,
-    terminalId: null as string | null,
-    agentId: null as string | null,
-    preferredAgentId: null as string | null,
-    sessionId: null as string | null,
-    introDismissed: true,
-    conversationTouched: false,
-    hibernateSessions: {} as Record<string, unknown>,
-    focusRequest: 0,
-    figures: [] as unknown[],
-    markConversationStarted: vi.fn(),
-    setWidth: vi.fn(),
-    setOpen: vi.fn(),
-    clearTerminal: vi.fn(),
-    setPreferredAgent: vi.fn(),
-    setTerminal: vi.fn(),
-    dismissIntro: vi.fn(),
-    setHibernateSession: vi.fn(),
-    clearHibernateSession: vi.fn(),
-  },
-  panelStoreState: {
-    panelIds: [] as string[],
-    panelsById: {} as Record<string, { agentState?: string; cwd?: string }>,
-    removePanel: vi.fn(),
-    addPanel: vi.fn().mockResolvedValue(""),
-  },
-}));
+const { controllerSpies, handleAgentExitedMock, helpPanelState, panelStoreState } = vi.hoisted(
+  () => ({
+    controllerSpies: {
+      selectAgent: vi.fn(),
+      newSession: vi.fn(),
+    },
+    handleAgentExitedMock: vi.fn(),
+    helpPanelState: {
+      clearDroppedPreferredAgent: vi.fn(),
+      setAutoLaunchEnabled: vi.fn(),
+      requestFocus: vi.fn(),
+      setActiveFigureNumber: vi.fn(),
+      addFigure: vi.fn(),
+      setActiveSlot: vi.fn(),
+      closeSlot: vi.fn(),
+      openSlot: vi.fn(),
+      // #12108: the panel reads its lane pointer; the mocked selectors
+      // above project this same flat object as that lane.
+      activeSlot: 0,
+      sessions: {} as Record<number, unknown>,
+      isOpen: true,
+      width: 380,
+      terminalId: null as string | null,
+      agentId: null as string | null,
+      preferredAgentId: null as string | null,
+      agentSwitchRequest: null as { id: number; agentId: string } | null,
+      sessionId: null as string | null,
+      introDismissed: true,
+      conversationTouched: false,
+      hibernateSessions: {} as Record<string, unknown>,
+      focusRequest: 0,
+      figures: [] as unknown[],
+      markConversationStarted: vi.fn(),
+      setWidth: vi.fn(),
+      setOpen: vi.fn(),
+      clearTerminal: vi.fn(),
+      setPreferredAgent: vi.fn(),
+      clearAgentSwitchRequest: vi.fn(),
+      setTerminal: vi.fn(),
+      dismissIntro: vi.fn(),
+      setHibernateSession: vi.fn(),
+      clearHibernateSession: vi.fn(),
+    },
+    panelStoreState: {
+      panelIds: [] as string[],
+      panelsById: {} as Record<string, { agentState?: string; cwd?: string; spawnStatus?: string }>,
+      removePanel: vi.fn(),
+      addPanel: vi.fn().mockResolvedValue(""),
+    },
+  })
+);
 
 const snapshot = {
   showResumeBanner: false,
@@ -110,7 +115,7 @@ vi.mock("@/controllers/HelpSessionController", () => ({
     getSnapshot = () => snapshot;
     syncInputs = vi.fn();
     handleTerminalPanelMissing = vi.fn();
-    handleAgentExited = vi.fn();
+    handleAgentExited = (...args: unknown[]) => handleAgentExitedMock(...args);
     selectAgent = (...args: unknown[]) => controllerSpies.selectAgent(...args);
     newSession = (...args: unknown[]) => controllerSpies.newSession(...args);
     runAnyway = vi.fn();
@@ -182,6 +187,7 @@ vi.mock("@/store/helpPanelStore", () => {
     selectSlot: (s: typeof helpPanelState) => s,
     selectActiveSlot: (s: typeof helpPanelState) => s,
     selectOpenSlots: () => [0],
+    selectHasRoomForSession: () => true,
     selectSlotTerminalIds: (s: typeof helpPanelState) => (s.terminalId ? [s.terminalId] : []),
     selectSlotForTerminal: (s: typeof helpPanelState, id: string) =>
       s.terminalId === id && id ? 0 : null,
@@ -292,6 +298,7 @@ function resetState() {
   helpPanelState.terminalId = null;
   helpPanelState.agentId = null;
   helpPanelState.preferredAgentId = null;
+  helpPanelState.agentSwitchRequest = null;
   helpPanelState.sessionId = null;
   helpPanelState.introDismissed = true;
   helpPanelState.conversationTouched = false;
@@ -326,8 +333,39 @@ function bindTerminal(agentId: string, agentState = "idle") {
   panelStoreState.panelsById = { "t-1": { agentState, cwd: "/repo" } };
 }
 
-describe("HelpPanel agent switch (#8353)", () => {
+let requestSeq = 0;
+
+// What a Settings pick in this view does: queue a request for the live session.
+function pickInSettings(agentId: string) {
+  helpPanelState.preferredAgentId = agentId;
+  helpPanelState.agentSwitchRequest = { id: ++requestSeq, agentId };
+}
+
+describe("HelpPanel agent switch (#8353, #13345)", () => {
+  beforeEach(() => {
+    helpPanelState.clearAgentSwitchRequest.mockImplementation((id: number) => {
+      if (helpPanelState.agentSwitchRequest?.id === id) helpPanelState.agentSwitchRequest = null;
+    });
+  });
+
   it("switches immediately when the session is untouched and idle", async () => {
+    bindTerminal("codex", "idle");
+    helpPanelState.preferredAgentId = "codex";
+    const { rerender } = render(<HelpPanel width={380} />);
+
+    await act(async () => {
+      pickInSettings("claude-code");
+      rerender(<HelpPanel width={380} />);
+    });
+
+    expect(controllerSpies.selectAgent).toHaveBeenCalledWith("claude-code");
+    expect(helpPanelState.agentSwitchRequest).toBeNull();
+    expect(document.querySelector('[data-testid="confirm-dialog"]')).toBeNull();
+  });
+
+  it("leaves the live session alone when the host's default changes without a pick here", async () => {
+    // An import, or a pick in another window, moves the host's default under
+    // every window at once — none of them may replace a session for it.
     bindTerminal("codex", "idle");
     helpPanelState.preferredAgentId = "codex";
     const { rerender } = render(<HelpPanel width={380} />);
@@ -337,7 +375,7 @@ describe("HelpPanel agent switch (#8353)", () => {
       rerender(<HelpPanel width={380} />);
     });
 
-    expect(controllerSpies.selectAgent).toHaveBeenCalledWith("claude-code");
+    expect(controllerSpies.selectAgent).not.toHaveBeenCalled();
     expect(document.querySelector('[data-testid="confirm-dialog"]')).toBeNull();
   });
 
@@ -348,7 +386,7 @@ describe("HelpPanel agent switch (#8353)", () => {
     const { rerender } = render(<HelpPanel width={380} />);
 
     await act(async () => {
-      helpPanelState.preferredAgentId = "claude-code";
+      pickInSettings("claude-code");
       rerender(<HelpPanel width={380} />);
     });
 
@@ -363,6 +401,31 @@ describe("HelpPanel agent switch (#8353)", () => {
       fireEvent.click(document.querySelector('[data-testid="dialog-confirm"]')!);
     });
     expect(controllerSpies.selectAgent).toHaveBeenCalledWith("claude-code");
+    expect(helpPanelState.agentSwitchRequest).toBeNull();
+  });
+
+  it("names the picked agent in the confirm even after the host's default moves on", async () => {
+    bindTerminal("codex", "working");
+    helpPanelState.preferredAgentId = "codex";
+    const { rerender } = render(<HelpPanel width={380} />);
+
+    await act(async () => {
+      pickInSettings("claude-code");
+      rerender(<HelpPanel width={380} />);
+    });
+    await act(async () => {
+      // A push from another window changes the default while the dialog is up.
+      helpPanelState.preferredAgentId = "claude";
+      rerender(<HelpPanel width={380} />);
+    });
+
+    expect(document.querySelector('[data-testid="dialog-title"]')?.textContent).toBe(
+      "Switch to Claude Code?"
+    );
+    await act(async () => {
+      fireEvent.click(document.querySelector('[data-testid="dialog-confirm"]')!);
+    });
+    expect(controllerSpies.selectAgent).toHaveBeenCalledWith("claude-code");
   });
 
   it("confirms before switching when the agent is in a close-confirm state", async () => {
@@ -371,7 +434,7 @@ describe("HelpPanel agent switch (#8353)", () => {
     const { rerender } = render(<HelpPanel width={380} />);
 
     await act(async () => {
-      helpPanelState.preferredAgentId = "claude-code";
+      pickInSettings("claude-code");
       rerender(<HelpPanel width={380} />);
     });
 
@@ -385,7 +448,7 @@ describe("HelpPanel agent switch (#8353)", () => {
     const { rerender } = render(<HelpPanel width={380} />);
 
     await act(async () => {
-      helpPanelState.preferredAgentId = "claude-code";
+      pickInSettings("claude-code");
       rerender(<HelpPanel width={380} />);
     });
 
@@ -395,27 +458,29 @@ describe("HelpPanel agent switch (#8353)", () => {
 
     expect(controllerSpies.selectAgent).not.toHaveBeenCalled();
     expect(helpPanelState.preferredAgentId).toBe("claude-code");
+    expect(helpPanelState.agentSwitchRequest).toBeNull();
     expect(document.querySelector('[data-testid="confirm-dialog"]')).toBeNull();
   });
 
-  it("is a no-op when the preferred agent already matches the bound agent", async () => {
+  it("is a no-op when the picked agent already matches the bound agent", async () => {
     bindTerminal("codex", "idle");
-    helpPanelState.preferredAgentId = "codex";
+    pickInSettings("codex");
 
     await act(async () => {
       render(<HelpPanel width={380} />);
     });
 
     expect(controllerSpies.selectAgent).not.toHaveBeenCalled();
+    expect(helpPanelState.agentSwitchRequest).toBeNull();
     expect(document.querySelector('[data-testid="confirm-dialog"]')).toBeNull();
   });
 
-  it("switches when the preference was chosen before the terminal bound", async () => {
-    // Preference chosen while no terminal is bound, then auto-launch binds a
-    // different agent — the change must not be silently consumed (#8353).
+  it("switches when the pick was made before the terminal bound", async () => {
+    // Pick made while no terminal is bound, then auto-launch binds a
+    // different agent — the pick must not be silently consumed (#8353).
     helpPanelState.terminalId = null;
     helpPanelState.agentId = null;
-    helpPanelState.preferredAgentId = "claude-code";
+    pickInSettings("claude-code");
     const { rerender } = render(<HelpPanel width={380} />);
 
     await act(async () => {
@@ -426,19 +491,19 @@ describe("HelpPanel agent switch (#8353)", () => {
     expect(controllerSpies.selectAgent).toHaveBeenCalledWith("claude-code");
   });
 
-  it("closes a stale confirm when the preference reverts to the live agent", async () => {
+  it("closes a stale confirm when the pick reverts to the live agent", async () => {
     bindTerminal("codex", "working");
     helpPanelState.preferredAgentId = "codex";
     const { rerender } = render(<HelpPanel width={380} />);
 
     await act(async () => {
-      helpPanelState.preferredAgentId = "claude-code";
+      pickInSettings("claude-code");
       rerender(<HelpPanel width={380} />);
     });
     expect(document.querySelector('[data-testid="confirm-dialog"]')).not.toBeNull();
 
     await act(async () => {
-      helpPanelState.preferredAgentId = "codex";
+      pickInSettings("codex");
       rerender(<HelpPanel width={380} />);
     });
 
@@ -446,17 +511,17 @@ describe("HelpPanel agent switch (#8353)", () => {
     expect(controllerSpies.selectAgent).not.toHaveBeenCalled();
   });
 
-  it("retargets the confirm when the preference moves to a third agent", async () => {
+  it("retargets the confirm when the pick moves to a third agent", async () => {
     bindTerminal("codex", "working");
     helpPanelState.preferredAgentId = "codex";
     const { rerender } = render(<HelpPanel width={380} />);
 
     await act(async () => {
-      helpPanelState.preferredAgentId = "claude-code";
+      pickInSettings("claude-code");
       rerender(<HelpPanel width={380} />);
     });
     await act(async () => {
-      helpPanelState.preferredAgentId = "claude";
+      pickInSettings("claude");
       rerender(<HelpPanel width={380} />);
     });
 
@@ -470,18 +535,118 @@ describe("HelpPanel agent switch (#8353)", () => {
     expect(controllerSpies.selectAgent).not.toHaveBeenCalledWith("claude-code");
   });
 
-  it("does not switch when no terminal is bound", async () => {
+  it("does not switch when no terminal is bound, and keeps the pick for one", async () => {
     helpPanelState.terminalId = null;
     helpPanelState.agentId = null;
     helpPanelState.preferredAgentId = "codex";
     const { rerender } = render(<HelpPanel width={380} />);
 
     await act(async () => {
-      helpPanelState.preferredAgentId = "claude-code";
+      pickInSettings("claude-code");
       rerender(<HelpPanel width={380} />);
     });
 
     expect(controllerSpies.selectAgent).not.toHaveBeenCalled();
+    expect(helpPanelState.agentSwitchRequest).toMatchObject({ agentId: "claude-code" });
     expect(document.querySelector('[data-testid="confirm-dialog"]')).toBeNull();
+  });
+});
+
+// The /exit self-stop (#10989): when the assistant's agent CLI exits inside a
+// surviving shell PTY, `agentState` settles on "exited" and HelpPanel calls
+// `controller.handleAgentExited(terminalId)` after a debounce so a transient
+// mis-detection flap (#10911) that bounces back via `respawn` can't tear down
+// a live session. These tests cover the DEBOUNCE itself — fire on settle,
+// cancel on flap, cancel on unmount — which the controller tests can't see.
+describe("HelpPanel — agent self-exit debounce (/exit, #10989)", () => {
+  function setAgentState(state: string): void {
+    panelStoreState.panelsById = {
+      "t-1": { ...panelStoreState.panelsById["t-1"], agentState: state },
+    };
+  }
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    handleAgentExitedMock.mockClear();
+
+    helpPanelState.isOpen = true;
+    helpPanelState.terminalId = "t-1";
+    helpPanelState.agentId = "claude";
+    helpPanelState.preferredAgentId = null;
+    helpPanelState.conversationTouched = false;
+    panelStoreState.panelIds = ["t-1"];
+    panelStoreState.panelsById = {
+      "t-1": { agentState: "working", cwd: "/repo", spawnStatus: "ready" },
+    };
+
+    Object.defineProperty(globalThis, "window", {
+      value: {
+        electron: {
+          help: { getPinnedActionContext: vi.fn().mockResolvedValue({}) },
+          app: { onViewRevealed: () => () => {} },
+        },
+      },
+      writable: true,
+      configurable: true,
+    });
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("calls handleAgentExited once agentState stays 'exited' past the settle window", () => {
+    setAgentState("exited");
+    render(<HelpPanel width={380} />);
+
+    act(() => {
+      vi.advanceTimersByTime(749);
+    });
+    expect(handleAgentExitedMock).not.toHaveBeenCalled();
+
+    act(() => {
+      vi.advanceTimersByTime(1);
+    });
+    expect(handleAgentExitedMock).toHaveBeenCalledTimes(1);
+    expect(handleAgentExitedMock).toHaveBeenCalledWith("t-1");
+  });
+
+  it("never fires when a detection flap bounces back to a live state within the window", () => {
+    setAgentState("exited");
+    const { rerender } = render(<HelpPanel width={380} />);
+
+    act(() => {
+      vi.advanceTimersByTime(400);
+    });
+    // Respawn/mis-detection recovery: the FSM leaves "exited" before settle.
+    setAgentState("working");
+    rerender(<HelpPanel width={380} />);
+
+    act(() => {
+      vi.advanceTimersByTime(2000);
+    });
+    expect(handleAgentExitedMock).not.toHaveBeenCalled();
+  });
+
+  it("cancels a pending stop when the panel unmounts mid-debounce", () => {
+    setAgentState("exited");
+    const { unmount } = render(<HelpPanel width={380} />);
+
+    act(() => {
+      vi.advanceTimersByTime(400);
+    });
+    unmount();
+    act(() => {
+      vi.advanceTimersByTime(2000);
+    });
+    expect(handleAgentExitedMock).not.toHaveBeenCalled();
+  });
+
+  it("arms no timer while the agent is live", () => {
+    render(<HelpPanel width={380} />);
+    act(() => {
+      vi.advanceTimersByTime(5000);
+    });
+    expect(handleAgentExitedMock).not.toHaveBeenCalled();
   });
 });

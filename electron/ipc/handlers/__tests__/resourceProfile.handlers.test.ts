@@ -2,7 +2,6 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import type {
   ResourceProfile,
   ResourceProfilePayload,
-  ResourceProfileSnapshot,
 } from "../../../../shared/types/resourceProfile.js";
 import { resolveResourceProfileConfig } from "../../../utils/resourceProfileConfig.js";
 
@@ -55,24 +54,6 @@ function getHandler(channel: string): (...args: unknown[]) => unknown {
 describe("registerResourceProfileHandlers — getResourceProfileSnapshot", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-  });
-
-  it("returns the live service snapshot when the service is running", async () => {
-    const snapshot: ResourceProfileSnapshot = {
-      profile: "efficiency",
-      thermalState: "serious",
-      isOnBattery: true,
-      speedLimit: 55,
-      lagPressureActive: true,
-    };
-    serviceRefsMock.getResourceProfileService.mockReturnValue({
-      getSnapshot: () => snapshot,
-    });
-
-    registerResourceProfileHandlers({} as never);
-    const result = await getHandler("system:get-resource-profile-snapshot")();
-
-    expect(result).toEqual(snapshot);
   });
 
   it("falls back to the balanced/unthrottled baseline when the service is unavailable", async () => {

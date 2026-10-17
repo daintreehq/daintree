@@ -14,8 +14,16 @@ import { useProjectStore } from "@/store/projectStore";
 import { resolvePluginSettingsTarget } from "@/services/plugin/pluginSettingsHome";
 import { usePluginPanelReloadConfirmStore } from "@/store/pluginPanelReloadConfirmStore";
 import { isBuiltInPanelKind } from "@shared/types/panel";
-import { panelKindHasPty } from "@shared/config/panelKindRegistry";
+import { getPanelKindConfig, panelKindHasPty } from "@shared/config/panelKindRegistry";
+import {
+  PanelCaptureRefusedError,
+  assertPanelCapturable,
+  consoleMessagesForPlugin,
+  locatePanelFrame,
+  sameRect,
+} from "@/services/plugin/pluginPanelCapture";
 import { ConfirmationStagedError, confirmationStagedMessage } from "../confirmationStaged";
+import { UnactionableTargetError } from "../unactionableTarget";
 import { actionService } from "@/services/ActionService";
 import { notify } from "@/lib/notify";
 import { systemClient } from "@/clients/systemClient";
@@ -126,6 +134,101 @@ export function registerPluginActions(actions: ActionRegistry, callbacks: Action
           ? "scheduled"
           : "not-mounted";
         return { panelId, outcome };
+      },
+    })
+  );
+  actions.set("plugin.capturePanel", () =>
+    defineAction({
+      id: "plugin.capturePanel",
+      title: "Capture plugin panel",
+      description:
+        "A PNG of one plugin panel as it renders, plus the plugin's recent console warnings and errors. Refused with no image while the panel is hidden, off screen or covered by a dialog, menu or tooltip.",
+      category: "plugins",
+      kind: "query",
+      danger: "safe",
+      // A plugin that can read any panel's pixels reads other plugins' panels.
+      denyPluginDispatch: true,
+      palette: { mode: "hidden" },
+      scope: "renderer",
+      argsSchema: z.object({
+        panelId: z.string().min(1).describe("The plugin panel to capture; focus is never assumed."),
+      }),
+      resultSchema: z.object({
+        panelId: z.string(),
+        pluginId: z.string(),
+        // CSS pixels of the captured frame; the PNG itself is at device pixels.
+        image: z.object({
+          mimeType: z.literal("image/png"),
+          data: z.string(),
+          width: z.number(),
+          height: z.number(),
+        }),
+        // Plugin-wide: every view of this plugin shares the document's console.
+        consoleScope: z.literal("plugin"),
+        consoleMessages: z.array(
+          z.object({
+            level: z.enum(["warning", "error"]),
+            message: z.string(),
+            source: z.string(),
+            line: z.number(),
+            timestamp: z.string(),
+          })
+        ),
+        // Older matching entries left out by the count and size budgets.
+        consoleOmitted: z.number(),
+      }),
+      mcpAnnotations: {
+        readOnlyHint: true,
+        destructiveHint: false,
+        idempotentHint: true,
+        openWorldHint: false,
+      },
+      run: async ({ panelId }) => {
+        const panel = usePanelStore.getState().panelsById[panelId];
+        // Refusals of the target itself: a retry with the same id cannot work.
+        if (!panel) throw new UnactionableTargetError(`No panel with id "${panelId}"`);
+        const kind = panel.kind ?? "terminal";
+        const pluginId = getPanelKindConfig(kind)?.extensionId;
+        if (isBuiltInPanelKind(kind) || panelKindHasPty(kind) || !pluginId) {
+          throw new UnactionableTargetError(`Panel "${panelId}" is not a plugin panel`);
+        }
+        const capture = window.electron?.plugin?.capturePanel;
+        if (!capture) throw new Error("Panel capture isn't available in this window");
+
+        const frame = locatePanelFrame(panelId);
+        const rect = assertPanelCapturable(panelId, frame, panel.location);
+        const shot = await capture(rect);
+        // Anything that opened, moved or closed while the pixels were taken
+        // may be in them; those bytes are dropped rather than returned. The
+        // record itself is replaced whenever the view persists state, so only
+        // what decides where and what the panel shows is compared.
+        const current = usePanelStore.getState().panelsById[panelId];
+        if (
+          !current ||
+          current.kind !== panel.kind ||
+          current.location !== panel.location ||
+          locatePanelFrame(panelId) !== frame ||
+          !sameRect(rect, assertPanelCapturable(panelId, frame, current.location))
+        ) {
+          throw new PanelCaptureRefusedError(
+            `Panel "${panelId}" changed while it was captured; retry`
+          );
+        }
+
+        const { messages, omitted } = consoleMessagesForPlugin(shot.consoleMessages, pluginId);
+        return {
+          panelId,
+          pluginId,
+          image: {
+            mimeType: "image/png" as const,
+            data: shot.pngBase64,
+            width: Math.round(rect.width),
+            height: Math.round(rect.height),
+          },
+          consoleScope: "plugin" as const,
+          consoleMessages: messages,
+          consoleOmitted: omitted,
+        };
       },
     })
   );

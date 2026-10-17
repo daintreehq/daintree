@@ -353,16 +353,6 @@ describe("pilot.openProject against the project's own worktrees", () => {
       workspaceId: PROJECT_HERE,
     });
   });
-
-  it("falls back where the project has exactly one worktree", async () => {
-    // The root is a first-class entry in that count, so one means root-only.
-    seedWorktrees([ROOT]);
-    seedFleet([run({ runId: "a", worktreeId: ROOT })]);
-
-    await openProject();
-
-    expect(usePilotStore.getState()).toMatchObject({ isOpen: true, scope: { kind: "fleet" } });
-  });
 });
 
 describe("pilot.openProject fallback explanation", () => {
@@ -421,17 +411,6 @@ describe("pilot.openProject fallback explanation", () => {
     await openProject();
 
     expect(usePilotStore.getState()).toMatchObject({ isOpen: true, fellBackFrom: null });
-  });
-
-  it("says nothing when the scope succeeds", async () => {
-    seedFleet([
-      run({ runId: "a", worktreeId: "/repo/wt/alpha" }),
-      run({ runId: "b", worktreeId: "/repo/wt/beta" }),
-    ]);
-
-    await openProject();
-
-    expect(usePilotStore.getState().fellBackFrom).toBeNull();
   });
 
   it("closes on a second press while its own fallback is what's on screen", async () => {

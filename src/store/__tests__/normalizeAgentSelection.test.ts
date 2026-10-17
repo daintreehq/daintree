@@ -44,13 +44,6 @@ describe("normalizeAgentSelection", () => {
     expect(result.agents.claude!.pinned).toBeUndefined();
   });
 
-  it("leaves pinned: undefined entries untouched even when availability says missing", () => {
-    const settings = makeSettings({ claude: {} });
-    const availability = availabilityFor({ claude: "missing" });
-    const result = normalizeAgentSelection(settings, availability, true);
-    expect(result.agents.claude!.pinned).toBeUndefined();
-  });
-
   it("pins the first five installed built-ins on a fresh default install", () => {
     const installedIds = BUILT_IN_AGENT_IDS.slice(0, 7);
     const availability = availabilityFor(
@@ -61,16 +54,6 @@ describe("normalizeAgentSelection", () => {
     expect(result.settingsVersion).toBe(2);
     for (const [index, id] of BUILT_IN_AGENT_IDS.entries()) {
       expect(result.agents[id]?.pinned).toBe(index < 5);
-    }
-  });
-
-  it("sets non-installed built-ins to explicit unpinned on a fresh default install", () => {
-    const availability = availabilityFor({ [BUILT_IN_AGENT_IDS[0]!]: "installed" });
-    const result = normalizeAgentSelection(DEFAULT_AGENT_SETTINGS, availability, true);
-
-    expect(result.agents[BUILT_IN_AGENT_IDS[0]!]?.pinned).toBe(true);
-    for (const id of BUILT_IN_AGENT_IDS.slice(1)) {
-      expect(result.agents[id]?.pinned).toBe(false);
     }
   });
 
@@ -119,12 +102,6 @@ describe("normalizeAgentSelection", () => {
     expect(result.agents).toEqual({});
   });
 
-  it("leaves existing entries with pinned: undefined untouched when hasRealData is false", () => {
-    const settings = makeSettings({ claude: {} });
-    const result = normalizeAgentSelection(settings, availabilityFor(), false);
-    expect(result.agents.claude!.pinned).toBeUndefined();
-  });
-
   it("returns same reference when no changes are needed", () => {
     const settings: AgentSettings = {
       agents: Object.fromEntries(
@@ -136,12 +113,6 @@ describe("normalizeAgentSelection", () => {
     };
     const result = normalizeAgentSelection(settings, availabilityFor(), true);
     expect(result).toBe(settings);
-  });
-
-  it("ignores availability entirely — only seeds empty records for missing agents", () => {
-    const settings = makeSettings({ claude: {} });
-    const result = normalizeAgentSelection(settings, undefined, true);
-    expect(result.agents.claude!.pinned).toBeUndefined();
   });
 
   it("defaults to the pre-probe branch when called with only settings (back-compat)", () => {

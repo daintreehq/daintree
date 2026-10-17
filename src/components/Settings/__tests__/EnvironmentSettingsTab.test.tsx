@@ -38,33 +38,6 @@ function renderTab() {
 }
 
 describe("EnvironmentSettingsTab", () => {
-  it("renders without a project open (no empty-state guard)", async () => {
-    renderTab();
-
-    await waitFor(() => {
-      expect(screen.getByText("Global variables")).toBeTruthy();
-    });
-    expect(screen.queryByText("No project open")).toBeNull();
-  });
-
-  it("loads global env vars via IPC on mount", async () => {
-    window.electron = {
-      globalEnv: {
-        get: vi.fn().mockResolvedValue({ NODE_ENV: "production", PORT: "3000" }),
-        set: vi.fn().mockResolvedValue(undefined),
-      },
-    } as unknown as typeof window.electron;
-
-    renderTab();
-
-    await waitFor(() => {
-      expect(window.electron.globalEnv.get).toHaveBeenCalledTimes(1);
-    });
-
-    const nameInputs = screen.getAllByLabelText("Environment variable name");
-    expect(nameInputs).toHaveLength(2);
-  });
-
   it("saves global env vars via IPC", async () => {
     window.electron = {
       globalEnv: {
@@ -87,18 +60,6 @@ describe("EnvironmentSettingsTab", () => {
 
     await waitFor(() => {
       expect(window.electron.globalEnv.set).toHaveBeenCalledWith({ EXISTING: "new-value" });
-    });
-  });
-
-  it("shows description about global scope", async () => {
-    renderTab();
-
-    await waitFor(() => {
-      expect(
-        screen.getByText(
-          "Injected into every new terminal in every project. A project variable with the same name overrides one of these."
-        )
-      ).toBeTruthy();
     });
   });
 

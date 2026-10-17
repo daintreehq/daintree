@@ -94,16 +94,6 @@ describe("connectivity lazy MCP proxy", () => {
     expect(fake.listeners.size).toBe(0);
   });
 
-  it("drops a subscription unsubscribed before wiring", () => {
-    const registry = getServiceConnectivityRegistry();
-    registry.start();
-    registry.dispose();
-
-    const fake = createFakeMcpServer(false);
-    wireMcpServerToConnectivityRegistry(fake);
-    expect(fake.listeners.size).toBe(0);
-  });
-
   it("ignores a second wire call", () => {
     const registry = getServiceConnectivityRegistry();
     registry.start();

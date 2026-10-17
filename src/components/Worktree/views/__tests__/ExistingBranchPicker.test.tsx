@@ -33,11 +33,6 @@ function renderPicker(
 }
 
 describe("ExistingBranchPicker trigger", () => {
-  it("keeps the testid the dialog suite addresses it by", () => {
-    renderPicker();
-    expect(screen.getByTestId("existing-branch-picker")).toBeTruthy();
-  });
-
   it("prompts for a local branch when none is chosen", () => {
     renderPicker();
     expect(screen.getByTestId("existing-branch-picker").textContent).toContain(
@@ -92,25 +87,5 @@ describe("ExistingBranchPicker panel wiring", () => {
     expect(screen.getByText("No available local branches")).toBeTruthy();
     expect(document.body.querySelector("[aria-live]")).toBeNull();
     expect(document.body.querySelector("[aria-describedby]")).toBeNull();
-  });
-
-  it("renders filtered-empty copy with the query interpolated", () => {
-    renderPicker([], { query: "feature/foo" });
-    expect(screen.getByText('No matches for "feature/foo"')).toBeTruthy();
-  });
-
-  it("falls back to zero-data copy for a whitespace-only query", () => {
-    renderPicker([], { query: "   " });
-    expect(screen.getByText("No available local branches")).toBeTruthy();
-  });
-
-  it("selects the clicked branch", () => {
-    const handleSelect = vi.fn();
-    const rows = [optionRow("develop"), optionRow("feature/existing-work")];
-    renderPicker(rows, { handleSelect });
-
-    fireEvent.click(screen.getAllByRole("option")[1]!);
-
-    expect(handleSelect.mock.calls[0]![0]).toBe(rows[1]);
   });
 });

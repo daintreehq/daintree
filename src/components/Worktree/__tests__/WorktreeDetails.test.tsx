@@ -99,11 +99,6 @@ describe("WorktreeDetails last-active line", () => {
     expect(img!.getAttribute("src")).toContain("gravatar.com");
   });
 
-  it("drops the old colon-suffixed 'Last active:' label", () => {
-    renderDetails();
-    expect(screen.queryByText("Last active:")).toBeNull();
-  });
-
   it("omits the Last active line when showTime is false", () => {
     renderDetails({ showTime: false });
     expect(screen.queryByText("Last active")).toBeNull();

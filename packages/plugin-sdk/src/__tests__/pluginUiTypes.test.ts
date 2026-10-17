@@ -675,10 +675,10 @@ afterAll(async () => {
  * resolves from the current directory, which would otherwise be this repo and
  * its own install of the SDK.
  */
-function compileConsumer(options: ts.CompilerOptions): string[] {
+function compileConsumer(options: ts.CompilerOptions, name = "view.ts"): string[] {
   const host = ts.createCompilerHost(options);
   host.getCurrentDirectory = () => consumerDir;
-  const file = path.join(consumerDir, "view.ts");
+  const file = path.join(consumerDir, name);
   const program = ts.createProgram([file], options, host);
   const view = program.getSourceFile(file);
   return [
@@ -725,5 +725,54 @@ describe("@daintreehq/plugin-sdk/plugin-ui", () => {
       types: [],
     });
     expect(messages.some((m) => m.includes("'@daintreehq/plugin-ui'"))).toBe(true);
+  }, 60_000);
+});
+
+/** A page rendering the kit outside Daintree, importing the browser build by its subpath. */
+const PREVIEW_PAGE = `
+import { createElement } from "react";
+import { Button, Dialog, PLUGIN_UI_VERSION, whenPluginUiReady } from "@daintreehq/plugin-sdk/testing/plugin-ui";
+export const version: string = PLUGIN_UI_VERSION;
+export const ready: Promise<void> = whenPluginUiReady();
+export const button = createElement(Button, { variant: "secondary", onClick: () => {} }, "Save");
+export const dialog = createElement(Dialog, { open: true, onClose: () => {}, title: "Rename" });
+// @ts-expect-error the subpath carries the kit's real prop types
+export const wrongVariant = createElement(Button, { variant: "nope" }, "Save");
+`;
+
+describe("@daintreehq/plugin-sdk/testing/plugin-ui", () => {
+  const manifest = () =>
+    JSON.parse(readFileSync(path.join(sdkDir, "package.json"), "utf-8")) as {
+      exports: Record<string, unknown>;
+      files: string[];
+    };
+
+  it("is exported with the kit's types and the browser build beside them", () => {
+    const { exports, files } = manifest();
+    expect(exports["./testing/plugin-ui"]).toEqual({
+      types: "./testing-plugin-ui.d.ts",
+      import: "./browser/plugin-ui.js",
+      default: "./browser/plugin-ui.js",
+    });
+    expect(exports["./testing/preview.css"]).toBe("./browser/preview.css");
+    expect(files).toEqual(expect.arrayContaining(["browser", "testing-plugin-ui.d.ts"]));
+  });
+
+  it("types an import of the subpath with no ambient opt-in", async () => {
+    await fs.writeFile(path.join(consumerDir, "preview.ts"), PREVIEW_PAGE);
+    const diagnostics = compileConsumer(
+      {
+        target: ts.ScriptTarget.ES2022,
+        module: ts.ModuleKind.ESNext,
+        moduleResolution: ts.ModuleResolutionKind.Bundler,
+        strict: true,
+        noEmit: true,
+        skipLibCheck: true,
+        types: [],
+        paths: { "@daintreehq/plugin-sdk/react": [path.join(sdkDir, "src/react.ts")] },
+      },
+      "preview.ts"
+    );
+    expect(diagnostics).toEqual([]);
   }, 60_000);
 });

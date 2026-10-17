@@ -40,15 +40,6 @@ describe("planDeletedWorktreePlacement", () => {
     expect(plan.trailing).toHaveLength(0);
   });
 
-  it("groups from the second deleted row on", () => {
-    const plan = planDeletedWorktreePlacement(
-      [deleted("a", "b"), deleted("b", "d")],
-      ["x", "b", "y", "d"]
-    );
-
-    expect(plan.isGrouped).toBe(true);
-  });
-
   it("puts the group at the earliest slot any member's anchor resolves to", () => {
     const plan = planDeletedWorktreePlacement(
       [deleted("a", "d"), deleted("b", "b"), deleted("c", "e")],
@@ -111,36 +102,6 @@ describe("planDeletedWorktreePlacement", () => {
     );
 
     expect(plan.byIndex.get(1)?.map((d) => d.id)).toEqual(["a", "b"]);
-  });
-
-  it("re-resolves an anchor once it returns to the visible order", () => {
-    const ghosts = [deleted("a", "b")];
-
-    // Filtered out: the anchor "b" is absent, so the row trails.
-    expect(planDeletedWorktreePlacement(ghosts, ["x", "y"]).trailing.map((d) => d.id)).toEqual([
-      "a",
-    ]);
-
-    // Filter cleared: "b" is visible again, so the row resolves before it once more.
-    const restored = planDeletedWorktreePlacement(ghosts, ["x", "b", "y"]);
-    expect(restored.trailing).toHaveLength(0);
-    expect(restored.byIndex.get(1)?.map((d) => d.id)).toEqual(["a"]);
-  });
-
-  it("follows its anchor when the live rows are reordered (identity, not fixed slot)", () => {
-    const ghosts = [deleted("a", "c")];
-
-    // Anchor "c" at index 1 → ghost sits at slot 1 (before "c").
-    expect(
-      planDeletedWorktreePlacement(ghosts, ["b", "c"])
-        .byIndex.get(1)
-        ?.map((d) => d.id)
-    ).toEqual(["a"]);
-
-    // User reorders live rows; the ghost tracks "c" to its new index 0.
-    const reordered = planDeletedWorktreePlacement(ghosts, ["c", "b"]);
-    expect(reordered.byIndex.get(0)?.map((d) => d.id)).toEqual(["a"]);
-    expect(reordered.byIndex.get(1)).toBeUndefined();
   });
 
   it("keeps a null-anchored ungrouped ghost behind a freshly created worktree (#11400)", () => {

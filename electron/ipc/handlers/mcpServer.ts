@@ -4,6 +4,7 @@ import { CHANNELS } from "../channels.js";
 import type * as McpServerServiceModule from "../../services/McpServerService.js";
 import type * as McpPaneConfigServiceModule from "../../services/McpPaneConfigService.js";
 import { defineIpcNamespace, op } from "../define.js";
+import type { IpcContext } from "../types.js";
 import { MCP_SERVER_METHOD_CHANNELS } from "./mcpServer.preload.js";
 import { broadcastToRenderer, checkRateLimit } from "../utils.js";
 import { sanitizePath } from "../../utils/pathScrubber.js";
@@ -71,28 +72,44 @@ function sanitizeAuditRecordQuery(query: unknown): McpAuditRecordQuery | undefin
   return { helpSessionId, limit };
 }
 
+/**
+ * A remote window learns that the host's MCP server has a key, never the key:
+ * it is a reusable bearer for the host's server, and would outlast the link
+ * that showed it. The host's own windows see it as before.
+ */
+function fromRemoteView(ctx: IpcContext): boolean {
+  return ctx.endpoint?.kind === "remote-view";
+}
+
+function redactStatus(ctx: IpcContext, status: McpServerStatusSnapshot): McpServerStatusSnapshot {
+  if (!fromRemoteView(ctx)) return status;
+  return { ...status, apiKey: "", apiKeyRedacted: status.apiKey.length > 0 };
+}
+
 export const mcpServerNamespace = defineIpcNamespace({
   name: "mcpServer",
   ops: {
     getStatus: op(
       MCP_SERVER_METHOD_CHANNELS.getStatus,
-      async (): Promise<McpServerStatusSnapshot> => {
+      async (ctx: IpcContext): Promise<McpServerStatusSnapshot> => {
         const svc = await getMcpServerService();
-        return svc.getStatus();
-      }
+        return redactStatus(ctx, svc.getStatus());
+      },
+      { withContext: true }
     ),
     setEnabled: op(
       MCP_SERVER_METHOD_CHANNELS.setEnabled,
-      async (enabled: boolean): Promise<McpServerStatusSnapshot> => {
+      async (ctx: IpcContext, enabled: boolean): Promise<McpServerStatusSnapshot> => {
         if (typeof enabled !== "boolean") throw new Error("enabled must be a boolean");
         const svc = await getMcpServerService();
         await svc.setEnabled(enabled);
-        return svc.getStatus();
-      }
+        return redactStatus(ctx, svc.getStatus());
+      },
+      { withContext: true }
     ),
     setPort: op(
       MCP_SERVER_METHOD_CHANNELS.setPort,
-      async (port: number | null): Promise<McpServerStatusSnapshot> => {
+      async (ctx: IpcContext, port: number | null): Promise<McpServerStatusSnapshot> => {
         if (
           port !== null &&
           (typeof port !== "number" || port < 1024 || port > 65535 || !Number.isInteger(port))
@@ -101,17 +118,30 @@ export const mcpServerNamespace = defineIpcNamespace({
         }
         const svc = await getMcpServerService();
         await svc.setPort(port);
-        return svc.getStatus();
-      }
+        return redactStatus(ctx, svc.getStatus());
+      },
+      { withContext: true }
     ),
-    rotateApiKey: op(MCP_SERVER_METHOD_CHANNELS.rotateApiKey, async (): Promise<string> => {
-      const svc = await getMcpServerService();
-      return await svc.rotateApiKey();
-    }),
-    getConfigSnippet: op(MCP_SERVER_METHOD_CHANNELS.getConfigSnippet, async (): Promise<string> => {
-      const svc = await getMcpServerService();
-      return svc.getConfigSnippet();
-    }),
+    rotateApiKey: op(
+      MCP_SERVER_METHOD_CHANNELS.rotateApiKey,
+      async (ctx: IpcContext): Promise<string> => {
+        const svc = await getMcpServerService();
+        const key = await svc.rotateApiKey();
+        return fromRemoteView(ctx) ? "" : key;
+      },
+      { withContext: true }
+    ),
+    getConfigSnippet: op(
+      MCP_SERVER_METHOD_CHANNELS.getConfigSnippet,
+      async (ctx: IpcContext): Promise<string> => {
+        const svc = await getMcpServerService();
+        const snippet = svc.getConfigSnippet();
+        if (!fromRemoteView(ctx)) return snippet;
+        const key = svc.getStatus().apiKey;
+        return key ? snippet.split(key).join("<the host's MCP key>") : snippet;
+      },
+      { withContext: true }
+    ),
     listActiveClients: op(
       MCP_SERVER_METHOD_CHANNELS.listActiveClients,
       async (): Promise<McpActiveClientInfo[]> => {

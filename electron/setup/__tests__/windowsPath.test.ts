@@ -28,6 +28,12 @@ vi.mock("child_process", () => ({
   spawn: (...args: unknown[]) => spawnMock(...args),
 }));
 
+const invalidateExecutableCacheMock = vi.hoisted(() => vi.fn());
+vi.mock("../../utils/windowsExecutable.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../utils/windowsExecutable.js")>()),
+  invalidateWindowsExecutableCache: invalidateExecutableCacheMock,
+}));
+
 type ExecFileCallback = (err: Error | null, stdout: string) => void;
 
 /**
@@ -149,6 +155,25 @@ describe("windowsPath", () => {
       const { resolveWindowsRegistryPath } = await importWindowsPath();
 
       expect(await resolveWindowsRegistryPath()).toBeNull();
+    });
+
+    it("drops cached executable paths once each read settles, not before", async () => {
+      // A tool installed since the last read can sit ahead of a cached path in
+      // a PATH whose text has not changed.
+      const settle = stubRegistryDeferred({ hklm: "C:\\Windows", hkcu: "C:\\Tools" });
+      const { resolveWindowsRegistryPath } = await importWindowsPath();
+      invalidateExecutableCacheMock.mockClear();
+
+      const read = resolveWindowsRegistryPath();
+      await Promise.resolve();
+      expect(invalidateExecutableCacheMock).not.toHaveBeenCalled();
+      settle();
+      await read;
+      expect(invalidateExecutableCacheMock).toHaveBeenCalledTimes(1);
+
+      stubRegistry({ hklm: null, hkcu: null });
+      await resolveWindowsRegistryPath();
+      expect(invalidateExecutableCacheMock).toHaveBeenCalledTimes(2);
     });
 
     it("collapses concurrent callers onto one pair of registry reads", async () => {
@@ -372,6 +397,92 @@ describe("windowsPath", () => {
       await refreshWindowsPathForSpawn();
 
       expect(registryReadCount()).toBeGreaterThan(afterFirst);
+    });
+  });
+
+  describe("launch PATH entries", () => {
+    it("keeps entries only the launching shell had, after the registry's own", async () => {
+      const { rememberWindowsLaunchPath, refreshWindowsPathForSpawn } = await importWindowsPath();
+      // Launched from an activated venv: its Scripts dir leads the launch PATH.
+      rememberWindowsLaunchPath("C:\\proj\\.venv\\Scripts;C:\\Windows;C:\\Tools");
+      stubRegistry({ hklm: "C:\\Windows", hkcu: "C:\\Tools" });
+
+      await refreshWindowsPathForSpawn();
+
+      expect(process.env.PATH).toBe("C:\\Windows;C:\\Tools;C:\\proj\\.venv\\Scripts");
+    });
+
+    it("lets the registry's order win for an entry both hold", async () => {
+      const { rememberWindowsLaunchPath, resolveWindowsRegistryPath } = await importWindowsPath();
+      rememberWindowsLaunchPath("C:\\Python311;C:\\Python313;C:\\conda\\bin");
+      // The user moved 3.13 ahead of 3.11 after Daintree started.
+      stubRegistry({ hklm: "C:\\Python313;C:\\Python311", hkcu: "" });
+
+      expect(await resolveWindowsRegistryPath()).toBe("C:\\Python313;C:\\Python311;C:\\conda\\bin");
+    });
+
+    it("treats case and trailing separators as the same directory", async () => {
+      const { rememberWindowsLaunchPath, resolveWindowsRegistryPath } = await importWindowsPath();
+      rememberWindowsLaunchPath("c:\\windows\\;C:\\TOOLS/;C:\\conda\\bin;c:\\CONDA\\bin\\");
+      stubRegistry({ hklm: "C:\\Windows", hkcu: "C:\\Tools" });
+
+      expect(await resolveWindowsRegistryPath()).toBe("C:\\Windows;C:\\Tools;C:\\conda\\bin");
+    });
+
+    it("treats quoted and forward-slash spellings as the same directory", async () => {
+      const { rememberWindowsLaunchPath, resolveWindowsRegistryPath } = await importWindowsPath();
+      rememberWindowsLaunchPath('"c:\\tools";C:/Windows;D:/;"D:\\"');
+      stubRegistry({ hklm: "C:\\Windows;D:\\", hkcu: "C:\\Tools" });
+
+      expect(await resolveWindowsRegistryPath()).toBe("C:\\Windows;D:\\;C:\\Tools");
+    });
+
+    it("keeps a drive root distinct from the bare drive", async () => {
+      const { rememberWindowsLaunchPath, resolveWindowsRegistryPath } = await importWindowsPath();
+      // `D:` is the current directory on D, not its root; neither stands in for the other.
+      rememberWindowsLaunchPath("D:\\;D:");
+      stubRegistry({ hklm: "C:\\Windows", hkcu: "" });
+
+      expect(await resolveWindowsRegistryPath()).toBe("C:\\Windows;D:\\;D:");
+    });
+
+    it("does not pile up across refreshes", async () => {
+      const { rememberWindowsLaunchPath, refreshWindowsPathForSpawn } = await importWindowsPath();
+      rememberWindowsLaunchPath("C:\\Windows;C:\\venv\\Scripts");
+      stubRegistry({ hklm: "C:\\Windows", hkcu: "" });
+
+      await refreshWindowsPathForSpawn();
+      const first = process.env.PATH;
+      now += BEYOND_THROTTLE_MS;
+      await refreshWindowsPathForSpawn();
+
+      expect(process.env.PATH).toBe(first);
+      expect(process.env.PATH).toBe("C:\\Windows;C:\\venv\\Scripts");
+    });
+
+    it("drops an entry the registry lost mid-session that the launch PATH never had", async () => {
+      const { rememberWindowsLaunchPath, refreshWindowsPathForSpawn } = await importWindowsPath();
+      rememberWindowsLaunchPath("C:\\Windows;C:\\venv\\Scripts");
+      stubRegistry({ hklm: "C:\\Windows;C:\\Python313", hkcu: "" });
+      await refreshWindowsPathForSpawn();
+      expect(process.env.PATH).toBe("C:\\Windows;C:\\Python313;C:\\venv\\Scripts");
+
+      // Uninstalled since. Merging against the current PATH instead of the
+      // launch PATH would keep it on every terminal until a restart.
+      stubRegistry({ hklm: "C:\\Windows", hkcu: "" });
+      now += BEYOND_THROTTLE_MS;
+      await refreshWindowsPathForSpawn();
+
+      expect(process.env.PATH).toBe("C:\\Windows;C:\\venv\\Scripts");
+    });
+
+    it("records only the first launch PATH it is given", async () => {
+      const { rememberWindowsLaunchPath, resolveWindowsRegistryPath } = await importWindowsPath();
+      rememberWindowsLaunchPath("C:\\Windows;C:\\venv\\Scripts");
+      rememberWindowsLaunchPath("C:\\Windows;C:\\later\\bin");
+      stubRegistry({ hklm: "C:\\Windows", hkcu: "" });
+
+      expect(await resolveWindowsRegistryPath()).toBe("C:\\Windows;C:\\venv\\Scripts");
     });
   });
 });

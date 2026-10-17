@@ -6,9 +6,11 @@ import {
 } from "../services/KeybindingService";
 import { actionService } from "../services/ActionService";
 import { logError } from "@/utils/logger";
+import { isMac } from "@/lib/platform";
 import { dispatchEscape, hasHandlers } from "@/lib/escapeStack";
 import { ESCAPE_BACKSTOP_DIALOG_ATTR } from "@/lib/dialogEscapeBackstop";
 import { isTerminalReservedKey } from "@/services/terminalReservedKeys";
+import { CLOSE_OWNER_ATTR, requestOwnedClose } from "@/lib/closeRequest";
 import { buildKeybindingWhenContext } from "@/services/keybindingWhenContext";
 import { usePaletteStore, usePanelStore } from "../store";
 import { isStagedConfirmation } from "@/services/actions/confirmationStaged";
@@ -68,6 +70,28 @@ export function useGlobalKeybindings(enabled: boolean = true): void {
       // Skip if user is typing in an input/textarea or editable content
       // Exception: allow shortcuts with modifiers (Cmd, Ctrl)
       const target = e.target as HTMLElement;
+
+      // A surface that types to one terminal outside the grid (the canopy
+      // panel's live view and its composer) keeps every shortcut but its own
+      // toggle away from it: the rest act on the focused pane or the armed
+      // fleet, neither of which is the terminal the user is typing to.
+      // Close is the exception inside a surface that owns it (below).
+      const isolated =
+        typeof target.closest === "function" &&
+        target.closest("[data-keybindings-isolated]") !== null;
+      const ownsClose = isolated && target.closest(`[${CLOSE_OWNER_ATTR}]`) !== null;
+      if (isolated) {
+        // A chord begun outside is abandoned once the user types in here: the
+        // keys are the terminal's, and the surface's own shortcuts are single.
+        if (keybindingService.getPendingChord() !== null) keybindingService.clearPendingChord();
+        // One keystroke only: a chord's first key would have to reach the
+        // resolver, and with it every other binding the surface keeps out.
+        const matches = (actionId: "canopy.toggle" | "terminal.close") =>
+          keybindingService
+            .getTriggerCombos(actionId)
+            .some((combo) => !combo.includes(" ") && keybindingService.matchesEvent(e, combo));
+        if (!matches("canopy.toggle") && !(ownsClose && matches("terminal.close"))) return;
+      }
       const isEditable =
         target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.isContentEditable;
 
@@ -82,8 +106,11 @@ export function useGlobalKeybindings(enabled: boolean = true): void {
 
       // Dead-key keydowns (accent layout first-press, e.g. ´ on macOS Romance
       // layouts) emit `key === "Dead"` and aren't a valid chord step on any
-      // layout. Bail entirely so they neither start nor clear a chord.
-      if (e.key === "Dead") return;
+      // layout. Bail entirely so they neither start nor clear a chord. The
+      // exception is Cmd on macOS: Chromium's dead-key check ignores Command,
+      // so Cmd+Alt+U, I and N report "Dead" on a US layout although nothing
+      // composes, and normalizeKeyForBinding resolves them by physical key.
+      if (e.key === "Dead" && !(e.metaKey && isMac())) return;
 
       // Handle Shift+F10 and ContextMenu key for panel context menus.
       // Must be checked before the editable/terminal bailouts below.
@@ -96,11 +123,20 @@ export function useGlobalKeybindings(enabled: boolean = true): void {
       // `document.body`, outside every `data-row-menu` marker, so a repeat
       // press inside the open menu would otherwise fall through to here and
       // open the focused panel's menu on top of it.
+      const isMenuKey =
+        e.key === "ContextMenu" ||
+        (e.key === "F10" && e.shiftKey && !e.ctrlKey && !e.metaKey && !e.altKey);
+      const ownsMenuKey =
+        target.closest("[data-row-menu]") !== null || target.closest('[role="menu"]') !== null;
+      // A full stand-down, not just a skip of the branch below: these combos
+      // are `terminal.contextMenu`'s own default bindings, so general
+      // resolution further down would consume them all the same.
+      if (isMenuKey && ownsMenuKey) return;
       if (
-        (e.key === "ContextMenu" ||
-          (e.key === "F10" && e.shiftKey && !e.ctrlKey && !e.metaKey && !e.altKey)) &&
-        target.closest("[data-row-menu]") === null &&
-        target.closest('[role="menu"]') === null
+        isMenuKey &&
+        // An isolated surface types to its own terminal: the focused grid
+        // pane's menu is not what these keys mean there.
+        !isolated
       ) {
         const effectiveCombo = keybindingService.getEffectiveCombo("terminal.contextMenu");
         if (effectiveCombo !== undefined) {
@@ -291,6 +327,19 @@ export function useGlobalKeybindings(enabled: boolean = true): void {
       // Use resolveKeybinding for proper chord and priority resolution
       const result = keybindingService.resolveKeybinding(e);
 
+      // The combo let the key into the isolated surface; the action it
+      // resolved to must be one the surface allows too — another binding on
+      // the same keys (a plugin's, say) must not act from inside it. The key
+      // goes on to the terminal or composer untouched.
+      if (
+        isolated &&
+        result.match?.actionId !== "canopy.toggle" &&
+        !(ownsClose && result.match?.actionId === "terminal.close")
+      ) {
+        if (result.chordPrefix) keybindingService.clearPendingChord();
+        return;
+      }
+
       if (result.shouldConsume) {
         e.preventDefault();
         e.stopPropagation();
@@ -304,6 +353,10 @@ export function useGlobalKeybindings(enabled: boolean = true): void {
             // Element (not HTMLElement) — only closest() is needed below, and
             // an unchecked HTMLElement cast trips no-unsafe-type-assertion.
             const active = document.activeElement;
+            // A surface inside an overlay that owns its own close — the canopy
+            // panel's agent pane, which closes the canopy panel rather than
+            // the agent's terminal — takes it before the branches below.
+            if (requestOwnedClose(active)) return;
             // Cmd+W inside the Daintree Assistant closes the assistant itself.
             // Its escape handler intentionally bails when the embedded xterm /
             // CodeMirror has focus (so a bare Escape reaches the running PTY),

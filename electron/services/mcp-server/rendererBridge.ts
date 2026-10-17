@@ -1,13 +1,31 @@
-import { ipcMain, webContents as electronWebContents } from "electron";
+import { webContents as electronWebContents } from "electron";
 import { randomUUID } from "node:crypto";
 import type { WindowRegistry } from "../../window/WindowRegistry.js";
-import { getProjectViewManager } from "../../window/windowRef.js";
+import { isRemoteEndpointHandle, type ClientEndpoint } from "../../ipc/endpoint.js";
+import { getEndpointRegistry } from "../../ipc/endpointRegistry.js";
+import type { IpcContext } from "../../ipc/types.js";
+import { onWithContext } from "../../ipc/utils.js";
 import {
+  MCP_DISPATCH_ACTION_METHOD,
+  MCP_GET_MANIFEST_METHOD,
+  resolveMcpDriveTarget,
+} from "./driveTarget.js";
+import {
+  describeViewlessWorkspace,
+  hasViewlessImplementation,
+  runViewlessAction,
+} from "../viewless/index.js";
+import { getProjectViewManager } from "../../window/windowRef.js";
+import { getRemoteService } from "../../remote/runtime.js";
+import { isLocalHostId, parseHostScopedKey } from "../../../shared/types/remoteHosts.js";
+import {
+  getProjectForWebContents,
   getWebContentsForProject,
   getWindowForWebContents,
 } from "../../window/webContentsRegistry.js";
 import { thawThenSend } from "../../utils/thawThenSend.js";
 import type { WorkspaceViewLeaseRegistry } from "./workspaceViewLease.js";
+import type { RoutedViewWorktreePort } from "./worktreeViewPort.js";
 import type { ActionContext, ActionManifestEntry } from "../../../shared/types/actions.js";
 import type {
   McpBearerIdentity,
@@ -96,6 +114,57 @@ export class WorkspaceBindingError extends McpRouteBindingError {
   }
 }
 
+/**
+ * A workspace-bound dispatch found no frontend attached to its workspace — no
+ * local view, no remote driver — and the action has no host-side form that
+ * could run without one.
+ *
+ * A `WorkspaceBindingError` with reason `not-found`, because that is exactly
+ * what it is to every caller that already handles one: retriable, never routed
+ * elsewhere, answered from the base surface at discovery. The tool result is
+ * where it differs, reporting `NO_FRONTEND_ATTACHED` so a caller can tell "open
+ * a window, or ask for something the host can do alone" from a route it lost.
+ */
+export class NoFrontendAttachedError extends WorkspaceBindingError {
+  readonly frontendCode = "NO_FRONTEND_ATTACHED";
+  /** The action that could not run, or undefined when a manifest was asked for. */
+  readonly actionId: string | undefined;
+
+  constructor(workspaceId: string, actionId?: string) {
+    super(workspaceId, "not-found");
+    this.name = "NoFrontendAttachedError";
+    this.actionId = actionId;
+    this.message =
+      actionId === undefined
+        ? `No Daintree frontend is attached to workspace ${workspaceId}, so it has no live action surface.`
+        : `No Daintree frontend is attached to workspace ${workspaceId}, and the host cannot run ` +
+          `'${actionId}' without one. The action was not run. Open the workspace in Daintree and ` +
+          `retry, or use a tool the host can run on its own.`;
+  }
+}
+
+/**
+ * The workspace has a driver, but it cannot be reached right now: its link
+ * dropped or its view went, and the drive lease is holding its place for it,
+ * or the lease itself could not be read. Retriable — the holder can come back,
+ * or the reservation runs out — and never answered by routing to another
+ * renderer or running the call in main, which would act for someone who is
+ * not driving.
+ */
+export class DriveHolderUnavailableError extends McpRouteBindingError {
+  readonly workspaceId: string;
+  readonly retriable = true;
+
+  constructor(workspaceId: string) {
+    super(
+      `Workspace ${workspaceId} is driven from a Daintree window that is not reachable right now. ` +
+        `The call was not routed anywhere else. Retry shortly.`
+    );
+    this.name = "DriveHolderUnavailableError";
+    this.workspaceId = workspaceId;
+  }
+}
+
 // Thrown when an unpinned dispatch can't reach any live renderer to route a
 // tool call through. For confirm-gated tools this is the "no confirmation
 // channel reachable" case: a headless conductor with no Daintree window open
@@ -107,6 +176,25 @@ export class RendererBridgeUnavailableError extends Error {
   constructor() {
     super("MCP renderer bridge unavailable");
     this.name = "RendererBridgeUnavailableError";
+  }
+}
+
+/**
+ * Thrown when an unbound session finds only windows on a remote host. This
+ * machine's MCP server drives this machine's projects: a host's project runs
+ * under that host's own MCP tier and audit, so nothing is routed there.
+ */
+export class RemoteHostWindowOnlyError extends Error {
+  readonly hostId: string;
+
+  constructor(hostId: string, hostName: string) {
+    super(
+      `The Daintree window in focus shows a project on ${hostName}, and this machine's MCP server ` +
+        `only drives projects on this machine. Open a project on this machine, or connect to ` +
+        `${hostName}'s own MCP server to work there. The call was not run.`
+    );
+    this.name = "RemoteHostWindowOnlyError";
+    this.hostId = hostId;
   }
 }
 
@@ -155,6 +243,60 @@ function routeTimeoutSuffix(route: BridgeRoute | undefined, timeoutMs: number): 
   return ` — the view bound to ${target} did not answer within ${Math.round(timeoutMs / 1000)}s`;
 }
 
+/**
+ * The dispatch request a renderer answers, less the correlation id: the local
+ * IPC send adds a `requestId`, while a remote driver's endpoint correlates the
+ * request itself.
+ */
+function buildDispatchPayload(
+  actionId: string,
+  args: unknown,
+  confirmed: boolean,
+  sessionOrigin: McpSessionOrigin,
+  contextOverride?: ActionContext,
+  callerInfo?: McpBearerIdentity,
+  approval?: Pick<
+    WorkspaceDispatchOptions,
+    "offerSessionApproval" | "approvalOnly" | "approvalReason" | "authorization"
+  >
+) {
+  return {
+    actionId,
+    args,
+    confirmed,
+    // Only help/assistant-pinned and agent-pane dispatch pass a
+    // contextOverride; the external/api-key paths leave this undefined so the
+    // renderer keeps its live context (#8317, #12486).
+    context: contextOverride,
+    // Display-only requesting-bearer identity for the confirm dialog (#9157).
+    // Only the unpinned external path supplies it; absent for pinned
+    // help-session dispatch so the dialog stays provenance-free.
+    callerInfo,
+    // How the dispatching session authenticated (#11808), so the renderer can
+    // stamp a spawn it creates as assistant-launched rather than lumping every
+    // MCP-borne spawn under one origin. Always present: main resolves it, the
+    // caller never sends it.
+    sessionOrigin,
+    // Agent-pane approval controls (#12692). Main decides both; the renderer
+    // only honours them.
+    ...(approval?.offerSessionApproval ? { offerSessionApproval: true } : {}),
+    ...(approval?.approvalOnly ? { approvalOnly: true } : {}),
+    ...(approval?.approvalOnly && approval.approvalReason
+      ? { approvalReason: approval.approvalReason }
+      : {}),
+    // Why a `confirmed` dispatch needs no dialog (#12874). Main decides; the
+    // renderer reads it only to tell the skip preference, which also waives
+    // the typed-name gate, from a native grant, which does not.
+    ...(confirmed && approval?.authorization ? { authorization: approval.authorization } : {}),
+  };
+}
+
+/** Whether a rejection means the endpoint went away before it answered. */
+function isEndpointGone(err: unknown): boolean {
+  const code = (err as { code?: unknown } | null)?.code;
+  return code === "HOST_DISCONNECTED" || code === "STALE_GENERATION";
+}
+
 export function createRendererBridge(
   pendingManifests: Map<string, PendingRequest<ActionManifestEntry[]>>,
   pendingDispatches: Map<string, PendingRequest<DispatchEnvelope>>,
@@ -164,8 +306,17 @@ export function createRendererBridge(
    * without one (tests, older construction paths) simply takes no leases —
    * views then stay ordinary eviction candidates, the pre-#11790 behavior.
    */
-  viewLeases?: WorkspaceViewLeaseRegistry
+  viewLeases?: WorkspaceViewLeaseRegistry,
+  /**
+   * Restores a cached view's worktree port for routed dispatch (#13348).
+   * Optional for the same reason as `viewLeases`: without it a routed dispatch
+   * reaches the view with whatever port it has, the pre-#13348 behavior. Used
+   * only alongside `viewLeases`, whose count is what says a cached view is idle
+   * again — without it there is no safe moment to close a restored port.
+   */
+  worktreePort?: RoutedViewWorktreePort
 ) {
+  const routedWorktreePort = viewLeases ? worktreePort : undefined;
   let cachedManifest: ActionManifestEntry[] | null = null;
 
   // Per-WebContents manifest cache for pinned help sessions (#9887). The shared
@@ -201,6 +352,11 @@ export function createRendererBridge(
     number,
     { promise: Promise<ActionManifestEntry[]>; extendDeadline: () => void }
   >();
+  // A remote driving view's manifest, keyed by endpoint and project: the same warm cache
+  // the per-WebContents map gives a local view, so a bound session driven from
+  // another machine does not pay a link round trip for every call's lookup.
+  const remoteManifestCache = new Map<string, ActionManifestEntry[]>();
+  const remoteManifestEvictionWired = new Set<string>();
 
   // One-shot latch so a persistently broken workspace lookup can't flood the
   // log on every dispatch (#11536).
@@ -246,32 +402,62 @@ export function createRendererBridge(
     };
   }
 
+  /**
+   * The host a view's calls go to, or null for a view on this machine. A
+   * project view's host is in its key, which outlives Remote Hosts stopping at
+   * quit; a view with no project follows its window.
+   */
+  function remoteHostOf(webContents: Electron.WebContents): string | null {
+    const key = getProjectForWebContents(webContents.id);
+    const hostId =
+      key !== null
+        ? parseHostScopedKey(key).hostId
+        : getRemoteService("windowHosts")?.viewHost(webContents.id);
+    return hostId === undefined || isLocalHostId(hostId) ? null : hostId;
+  }
+
+  /**
+   * The view an unbound session acts on: the most recently focused window's
+   * active view on this machine. A window on a remote host is passed over, so
+   * the session moves to a local window rather than reaching the host's
+   * project; with only remote windows open, the error names the host.
+   */
   function getActiveProjectWebContents(): Electron.WebContents {
+    let remoteHostId: string | null = null;
+    for (const webContents of activeViewCandidates()) {
+      if (webContents.isDestroyed()) continue;
+      const hostId = remoteHostOf(webContents);
+      if (hostId === null) return webContents;
+      remoteHostId ??= hostId;
+    }
+    if (remoteHostId !== null) {
+      const hostName = getRemoteService("windowHosts")?.hostName?.(remoteHostId) ?? remoteHostId;
+      throw new RemoteHostWindowOnlyError(remoteHostId, hostName);
+    }
+    throw new RendererBridgeUnavailableError();
+  }
+
+  /**
+   * Each window's active view, most-recently-focused first, not registration
+   * order (#11536). With `all()` an unpinned external/api-key client drove
+   * whichever window happened to register first, regardless of what the user
+   * was looking at. `focusOrder()` keeps never-focused windows (appended in
+   * registration order) and falls back to registration order before the first
+   * focus event, so single-window and cold-start behaviour is unchanged — only
+   * the multi-window pick moves to the focused window. The module-singleton
+   * manager's active view comes last.
+   */
+  function* activeViewCandidates(): Generator<Electron.WebContents> {
     const registry = getRegistry();
     if (registry) {
-      // Most-recently-focused first, not registration order (#11536). With
-      // `all()` an unpinned external/api-key client drove whichever window
-      // happened to register first, regardless of what the user was looking
-      // at. `focusOrder()` keeps never-focused windows (appended in
-      // registration order) and falls back to registration order before the
-      // first focus event, so single-window and cold-start behaviour is
-      // unchanged — only the multi-window pick moves to the focused window.
       for (const ctx of registry.focusOrder()) {
         if (ctx.browserWindow.isDestroyed()) continue;
-        const view = ctx.services.projectViewManager?.getActiveView();
-        const webContents = view?.webContents;
-        if (webContents && !webContents.isDestroyed()) {
-          return webContents;
-        }
+        const webContents = ctx.services.projectViewManager?.getActiveView()?.webContents;
+        if (webContents) yield webContents;
       }
     }
-
     const fallback = getProjectViewManager()?.getActiveView()?.webContents;
-    if (fallback && !fallback.isDestroyed()) {
-      return fallback;
-    }
-
-    throw new RendererBridgeUnavailableError();
+    if (fallback) yield fallback;
   }
 
   /**
@@ -370,7 +556,9 @@ export function createRendererBridge(
         const active = registry
           ?.getByWindowId(win.id)
           ?.services.projectViewManager?.getActiveView()?.webContents;
-        if (active && !active.isDestroyed()) return active;
+        // A window now showing a host's project would read this machine's
+        // workspace id against the host's projects.
+        if (active && !active.isDestroyed() && remoteHostOf(active) === null) return active;
       }
     }
     return getActiveProjectWebContents();
@@ -481,6 +669,20 @@ export function createRendererBridge(
     }
   }
 
+  /**
+   * Hand a routed view's worktree port back to the cache once its last routed
+   * request settles. Manifest requests restore nothing but still count: one can
+   * be the last request out after a dispatch restored the port.
+   */
+  function releaseWorktreePort(webContentsId: number): void {
+    if (!routedWorktreePort || viewLeases?.has(webContentsId)) return;
+    try {
+      routedWorktreePort.release(webContentsId);
+    } catch (err) {
+      console.warn("[MCP] Failed to close a cached view's worktree port:", err);
+    }
+  }
+
   function sendManifestRequest(
     resolveWebContents: () => Electron.WebContents,
     onResolved: (manifest: ActionManifestEntry[]) => void,
@@ -535,6 +737,7 @@ export function createRendererBridge(
         settled = true;
         unwatchDestroyed();
         releaseLease?.();
+        if (route) releaseWorktreePort(webContentsId);
       };
 
       // Taken after every listener that could throw is wired, so a failed setup
@@ -638,6 +841,7 @@ export function createRendererBridge(
         settled = true;
         unwatchDestroyed();
         releaseLease?.();
+        if (route) releaseWorktreePort(webContentsId);
       };
 
       // See sendManifestRequest: after the listener wiring so a throwing setup
@@ -662,36 +866,15 @@ export function createRendererBridge(
         try {
           webContents.send(CHANNELS.MCP_SERVER_DISPATCH_ACTION_REQUEST, {
             requestId,
-            actionId,
-            args,
-            confirmed,
-            // Only help/assistant-pinned and agent-pane dispatch pass a
-            // contextOverride; the external/api-key paths leave this undefined
-            // so the renderer keeps its live context (#8317, #12486).
-            context: contextOverride,
-            // Display-only requesting-bearer identity for the confirm dialog
-            // (#9157). Only the unpinned external path supplies it; absent for
-            // pinned help-session dispatch so the dialog stays provenance-free.
-            callerInfo,
-            // How the dispatching session authenticated (#11808), so the
-            // renderer can stamp a spawn it creates as assistant-launched
-            // rather than lumping every MCP-borne spawn under one origin.
-            // Always present: main resolves it, the caller never sends it.
-            sessionOrigin,
-            // Agent-pane approval controls (#12692). Main decides both; the
-            // renderer only honours them.
-            ...(approval?.offerSessionApproval ? { offerSessionApproval: true } : {}),
-            ...(approval?.approvalOnly ? { approvalOnly: true } : {}),
-            ...(approval?.approvalOnly && approval.approvalReason
-              ? { approvalReason: approval.approvalReason }
-              : {}),
-            // Why a `confirmed` dispatch needs no dialog (#12874). Main decides;
-            // the renderer reads it only to tell the skip preference, which
-            // also waives the typed-name gate, from a native grant, which
-            // does not.
-            ...(confirmed && approval?.authorization
-              ? { authorization: approval.authorization }
-              : {}),
+            ...buildDispatchPayload(
+              actionId,
+              args,
+              confirmed,
+              sessionOrigin,
+              contextOverride,
+              callerInfo,
+              approval
+            ),
           });
         } catch (err) {
           clearTimeout(timer);
@@ -702,7 +885,26 @@ export function createRendererBridge(
       };
 
       if (route) {
-        thawThenSend(webContents, () => pendingDispatches.has(requestId), send);
+        const isPending = () => pendingDispatches.has(requestId);
+        thawThenSend(webContents, isPending, () => {
+          if (!routedWorktreePort) {
+            send();
+            return;
+          }
+          // A cached view's worktree store went quiet when its port closed, so
+          // an action reading it would miss every worktree made since (#13348).
+          // Sent whatever the outcome: most actions never read that store, and
+          // refusing would fail them over a port they do not need.
+          void Promise.resolve()
+            .then(() =>
+              routedWorktreePort.prepare(webContents, resolveDispatchedWorkspace(webContentsId))
+            )
+            .catch(() => false)
+            .then(() => {
+              if (!isPending() || webContents.isDestroyed()) return;
+              send();
+            });
+        });
       } else {
         send();
       }
@@ -839,6 +1041,7 @@ export function createRendererBridge(
    * `lookupManifestEntry` hot path consults to avoid re-fetching every dispatch.
    */
   function requestManifestForWebContents(id: number): Promise<ActionManifestEntry[]> {
+    if (isRemoteEndpointHandle(id)) return requestManifestForPinnedEndpoint(id);
     const inflight = perWebContentsInflight.get(id);
     if (inflight) return inflight.promise;
 
@@ -889,8 +1092,18 @@ export function createRendererBridge(
     confirmed = false,
     contextOverride?: ActionContext,
     sessionOrigin: McpSessionOrigin = "external",
-    approval?: Pick<WorkspaceDispatchOptions, "approvalOnly" | "approvalReason" | "authorization">
+    approval?: Pick<
+      WorkspaceDispatchOptions,
+      "offerSessionApproval" | "approvalOnly" | "approvalReason" | "authorization"
+    >,
+    callerInfo?: McpBearerIdentity
   ): Promise<DispatchEnvelope> {
+    if (isRemoteEndpointHandle(id)) {
+      return dispatchToPinnedEndpoint(id, actionId, args, confirmed, sessionOrigin, {
+        ...(contextOverride ? { contextOverride } : {}),
+        ...approval,
+      });
+    }
     return sendDispatchRequest(
       () => getPinnedWebContents(id),
       actionId,
@@ -898,10 +1111,248 @@ export function createRendererBridge(
       confirmed,
       sessionOrigin,
       contextOverride,
-      undefined,
+      callerInfo,
       { kind: "pinned", webContentsId: id },
       approval
     );
+  }
+
+  /**
+   * Who drives a workspace, according to the drive lease, or `null` when no
+   * lease is installed and routing is exactly what it was before leases
+   * existed.
+   *
+   * A remote driver is the only answer that bypasses local resolution: its
+   * renderer is on another machine and is reached through its endpoint, never
+   * through "the focused window". A local driver is a preference — the view the
+   * lease names wins over the pane's launch view and settles a workspace that
+   * is open in more than one local view — but it is still resolved as a local
+   * view. A driver the lease is holding a place for, but that cannot be reached,
+   * throws: routing around it would act for someone who is not driving.
+   */
+  function resolveDriver(workspaceId: string): {
+    remote?: ClientEndpoint;
+    localWebContentsId?: number;
+  } | null {
+    const target = resolveMcpDriveTarget(workspaceId);
+    if (target === null) return null;
+    if (target.state === "unavailable") throw new DriveHolderUnavailableError(workspaceId);
+    if (target.state === "vacant") return {};
+    const driver = target.endpoint;
+    if (driver.kind === "remote-view") return { remote: driver };
+    const wc = electronWebContents.fromId(driver.handle);
+    return wc && !wc.isDestroyed() ? { localWebContentsId: wc.id } : {};
+  }
+
+  /**
+   * A remote endpoint can be rebound to another project without closing, so its
+   * manifest is keyed by the project it described as well: a rebound view never
+   * serves the previous project's actions, or their danger, to this one.
+   */
+  function remoteManifestKey(endpoint: ClientEndpoint, workspaceId: string): string {
+    return `${endpoint.endpointId}\0${workspaceId}`;
+  }
+
+  /**
+   * Evict a remote driver's cached manifest when its endpoint closes. Wired
+   * once per endpoint, as the per-WebContents eviction is.
+   */
+  function ensureRemoteManifestEviction(endpoint: ClientEndpoint): void {
+    if (remoteManifestEvictionWired.has(endpoint.endpointId)) return;
+    remoteManifestEvictionWired.add(endpoint.endpointId);
+    endpoint.onClose(() => {
+      const prefix = `${endpoint.endpointId}\0`;
+      for (const key of remoteManifestCache.keys()) {
+        if (key.startsWith(prefix)) remoteManifestCache.delete(key);
+      }
+      remoteManifestEvictionWired.delete(endpoint.endpointId);
+    });
+  }
+
+  async function requestManifestFromEndpoint(
+    endpoint: ClientEndpoint,
+    workspaceId: string
+  ): Promise<ActionManifestEntry[]> {
+    let answer: unknown;
+    try {
+      answer = await endpoint.request(
+        MCP_GET_MANIFEST_METHOD,
+        {},
+        { timeoutMs: MCP_MANIFEST_REQUEST_TIMEOUT_MS }
+      );
+    } catch (err) {
+      // The driver left mid-request: the same retriable binding failure a
+      // local view torn down mid-fetch reports.
+      if (isEndpointGone(err)) throw new WorkspaceBindingError(workspaceId, "not-found");
+      throw normalizeError(err, "Failed to request action manifest");
+    }
+    const manifest = Array.isArray(answer) ? (answer as ActionManifestEntry[]) : [];
+    if (!endpoint.isClosed()) {
+      remoteManifestCache.set(remoteManifestKey(endpoint, workspaceId), manifest);
+      ensureRemoteManifestEviction(endpoint);
+    }
+    return manifest;
+  }
+
+  /**
+   * Read a remote driver's answer to a dispatch. The endpoint already checked
+   * that it came from the view it asked; this checks its shape, strictly as the
+   * local response handler does, so a remote view can report no more than a
+   * local one can.
+   */
+  function readDispatchAnswer(answer: unknown, actionId: string): DispatchEnvelope {
+    const payload = answer as {
+      result?: { ok?: unknown };
+      confirmationDecision?: unknown;
+      approvalScope?: unknown;
+    } | null;
+    if (
+      payload === null ||
+      typeof payload !== "object" ||
+      payload.result === null ||
+      typeof payload.result !== "object" ||
+      typeof payload.result.ok !== "boolean"
+    ) {
+      throw new Error(`Malformed answer to ${actionId} from the driving view`);
+    }
+    const confirmationDecision =
+      typeof payload.confirmationDecision === "string"
+        ? (payload.confirmationDecision as DispatchEnvelope["confirmationDecision"])
+        : undefined;
+    return {
+      result: payload.result as DispatchEnvelope["result"],
+      ...(confirmationDecision !== undefined ? { confirmationDecision } : {}),
+      ...(confirmationDecision === "approved" && payload.approvalScope === "session"
+        ? { approvalScope: "session" as const }
+        : {}),
+    };
+  }
+
+  async function dispatchToEndpoint(
+    endpoint: ClientEndpoint,
+    workspaceId: string,
+    actionId: string,
+    args: unknown,
+    confirmed: boolean,
+    sessionOrigin: McpSessionOrigin,
+    options: WorkspaceDispatchOptions
+  ): Promise<DispatchEnvelope> {
+    let answer: unknown;
+    try {
+      answer = await endpoint.request(
+        MCP_DISPATCH_ACTION_METHOD,
+        buildDispatchPayload(
+          actionId,
+          args,
+          confirmed,
+          sessionOrigin,
+          options.contextOverride,
+          undefined,
+          options
+        ),
+        { timeoutMs: MCP_DISPATCH_TIMEOUT_MS }
+      );
+    } catch (err) {
+      if (isEndpointGone(err)) throw new WorkspaceBindingError(workspaceId, "not-found");
+      throw normalizeError(err, `Failed to dispatch action: ${actionId}`);
+    }
+    const envelope = readDispatchAnswer(answer, actionId);
+    const dispatchedWorkspace = await describeViewlessWorkspace(workspaceId).catch(() => undefined);
+    return { ...envelope, ...(dispatchedWorkspace ? { dispatchedWorkspace } : {}) };
+  }
+
+  /**
+   * A workspace with no frontend attached: run the action in main when the
+   * host has its own form of it, and otherwise say so rather than guess.
+   *
+   * An approval request never runs anything, so it keeps the plain binding
+   * failure it always reported — there is no dialog to raise, and nothing here
+   * could stand in for the user's answer.
+   */
+  async function dispatchWithoutFrontend(
+    workspaceId: string,
+    actionId: string,
+    args: unknown,
+    confirmed: boolean,
+    sessionOrigin: McpSessionOrigin,
+    options: WorkspaceDispatchOptions
+  ): Promise<DispatchEnvelope> {
+    if (options.approvalOnly) throw new WorkspaceBindingError(workspaceId, "not-found");
+    if (!hasViewlessImplementation(actionId)) {
+      throw new NoFrontendAttachedError(workspaceId, actionId);
+    }
+    const result = await runViewlessAction({
+      workspaceId,
+      actionId,
+      args,
+      confirmed,
+      sessionOrigin,
+      ...(options.contextOverride ? { context: options.contextOverride } : {}),
+    });
+    if (result === null) throw new NoFrontendAttachedError(workspaceId, actionId);
+    const dispatchedWorkspace = await describeViewlessWorkspace(workspaceId).catch(() => undefined);
+    return { result, ...(dispatchedWorkspace ? { dispatchedWorkspace } : {}) };
+  }
+
+  /**
+   * A session pinned to a view on another machine (the assistant a remote
+   * Shell launched on this host) is pinned to that view's endpoint handle.
+   * Its calls go to that endpoint, never to whichever view here shows the
+   * project, and fail closed, as a destroyed local pin does, once it closes.
+   */
+  function getPinnedEndpoint(id: number): ClientEndpoint {
+    const endpoint = getEndpointRegistry().getByHandle(id);
+    if (!endpoint || endpoint.kind !== "remote-view" || endpoint.isClosed()) {
+      throw new SessionBindingError(id);
+    }
+    return endpoint;
+  }
+
+  async function requestManifestForPinnedEndpoint(id: number): Promise<ActionManifestEntry[]> {
+    const endpoint = getPinnedEndpoint(id);
+    let manifest: ActionManifestEntry[];
+    try {
+      manifest = await requestManifestFromEndpoint(endpoint, endpoint.projectId ?? "");
+    } catch (err) {
+      if (err instanceof WorkspaceBindingError) throw new SessionBindingError(id);
+      throw err;
+    }
+    if (!endpoint.isClosed()) {
+      perWebContentsCache.set(id, manifest);
+      if (!perWebContentsEvictionWired.has(id)) {
+        perWebContentsEvictionWired.add(id);
+        endpoint.onClose(() => {
+          evictWebContentsManifest(id);
+          perWebContentsEvictionWired.delete(id);
+        });
+      }
+    }
+    return manifest;
+  }
+
+  async function dispatchToPinnedEndpoint(
+    id: number,
+    actionId: string,
+    args: unknown,
+    confirmed: boolean,
+    sessionOrigin: McpSessionOrigin,
+    options: WorkspaceDispatchOptions
+  ): Promise<DispatchEnvelope> {
+    const endpoint = getPinnedEndpoint(id);
+    try {
+      return await dispatchToEndpoint(
+        endpoint,
+        endpoint.projectId ?? "",
+        actionId,
+        args,
+        confirmed,
+        sessionOrigin,
+        options
+      );
+    } catch (err) {
+      if (err instanceof WorkspaceBindingError) throw new SessionBindingError(id);
+      throw err;
+    }
   }
 
   /**
@@ -909,16 +1360,32 @@ export function createRendererBridge(
    * the workspace's current view, then reuses the per-WebContents fetch and
    * cache the pinned path already uses — so a bound session gets the same
    * cross-window isolation and the same warm cache, keyed by whichever view
-   * currently owns its workspace.
+   * currently owns its workspace. A remote driver answers through its endpoint.
    */
   function requestManifestForWorkspace(
     workspaceId: string,
     preferredWebContentsId?: number
   ): Promise<ActionManifestEntry[]> {
+    let driver: ReturnType<typeof resolveDriver>;
+    try {
+      driver = resolveDriver(workspaceId);
+    } catch (err) {
+      return Promise.reject(err);
+    }
+    if (driver?.remote) return requestManifestFromEndpoint(driver.remote, workspaceId);
     let id: number;
     try {
-      id = getWorkspaceWebContents(workspaceId, preferredWebContentsId).id;
+      id = getWorkspaceWebContents(
+        workspaceId,
+        driver?.localWebContentsId ?? preferredWebContentsId
+      ).id;
     } catch (err) {
+      // With Host-mode routing, nothing attached at all is answered differently
+      // from a route that was lost: discovery falls back to the base surface
+      // either way, but a call can still run in main.
+      if (driver && err instanceof WorkspaceBindingError && err.reason === "not-found") {
+        return Promise.reject(new NoFrontendAttachedError(workspaceId));
+      }
       return Promise.reject(normalizeError(err, "MCP workspace binding unavailable"));
     }
     return requestManifestForWebContents(id).catch((err: unknown) => {
@@ -934,13 +1401,43 @@ export function createRendererBridge(
   }
 
   /**
+   * Where {@link requestManifestForWorkspace} would answer from right now, as a
+   * key that changes exactly when that answer's source does (#13350): a remote
+   * driver, a local view, or nowhere, which is the base surface. Read
+   * synchronously and without a fetch, so it can be re-read on every routing
+   * event without waking a view.
+   */
+  function describeWorkspaceRoute(workspaceId: string, preferredWebContentsId?: number): string {
+    let driver: ReturnType<typeof resolveDriver>;
+    try {
+      driver = resolveDriver(workspaceId);
+    } catch {
+      return "unavailable";
+    }
+    if (driver?.remote) return `remote:${driver.remote.endpointId}`;
+    try {
+      const wc = getWorkspaceWebContents(
+        workspaceId,
+        driver?.localWebContentsId ?? preferredWebContentsId
+      );
+      return `local:${wc.id}`;
+    } catch {
+      return "none";
+    }
+  }
+
+  /**
    * Action dispatch for a workspace-bound session (#11789). An external
    * session passes no `contextOverride`: it has no launch moment to replay, and
    * the bound view's own live context already describes the right workspace.
    * An agent pane does (#12486) — it replays the snapshot taken when it was
    * launched, as a help session does, so "current worktree" means its own.
+   *
+   * Targets the workspace's driver: a remote driving view through its endpoint,
+   * a local one as the preferred view. With no frontend attached at all, the
+   * host runs the action itself when it can (see `dispatchWithoutFrontend`).
    */
-  function dispatchActionForWorkspace(
+  async function dispatchActionForWorkspace(
     workspaceId: string,
     actionId: string,
     args: unknown,
@@ -948,8 +1445,52 @@ export function createRendererBridge(
     sessionOrigin: McpSessionOrigin = "external",
     options: WorkspaceDispatchOptions = {}
   ): Promise<DispatchEnvelope> {
+    const driver = resolveDriver(workspaceId);
+    if (driver === null) {
+      return sendDispatchRequest(
+        () => getWorkspaceWebContents(workspaceId, options.preferredWebContentsId),
+        actionId,
+        args,
+        confirmed,
+        sessionOrigin,
+        options.contextOverride,
+        undefined,
+        { kind: "workspace", workspaceId },
+        options
+      );
+    }
+    if (driver.remote) {
+      return dispatchToEndpoint(
+        driver.remote,
+        workspaceId,
+        actionId,
+        args,
+        confirmed,
+        sessionOrigin,
+        options
+      );
+    }
+    let target: Electron.WebContents;
+    try {
+      target = getWorkspaceWebContents(
+        workspaceId,
+        driver.localWebContentsId ?? options.preferredWebContentsId
+      );
+    } catch (err) {
+      if (err instanceof WorkspaceBindingError && err.reason === "not-found") {
+        return dispatchWithoutFrontend(
+          workspaceId,
+          actionId,
+          args,
+          confirmed,
+          sessionOrigin,
+          options
+        );
+      }
+      throw err;
+    }
     return sendDispatchRequest(
-      () => getWorkspaceWebContents(workspaceId, options.preferredWebContentsId),
+      () => target,
       actionId,
       args,
       confirmed,
@@ -961,16 +1502,17 @@ export function createRendererBridge(
     );
   }
 
-  const manifestHandler = (
-    event: Electron.IpcMainEvent,
-    payload: { requestId: string; manifest: unknown }
-  ) => {
+  // Both response handlers read the sender off the IPC context rather than a
+  // raw event, so they are registered with the dispatcher too: a response that
+  // arrives over a link carries its endpoint's handle, never a WebContents, and
+  // can match only a request that was addressed to that handle.
+  const manifestHandler = (ctx: IpcContext, payload: { requestId: string; manifest: unknown }) => {
     if (!payload || typeof payload.requestId !== "string") return;
     const pending = pendingManifests.get(payload.requestId);
     if (!pending) return;
-    if (event.sender.id !== pending.webContentsId) {
+    if (ctx.webContentsId !== pending.webContentsId) {
       console.warn(
-        `[MCP] Ignoring manifest response from unexpected sender ${event.sender.id} (expected ${pending.webContentsId}, requestId=${payload.requestId})`
+        `[MCP] Ignoring manifest response from unexpected sender ${ctx.webContentsId} (expected ${pending.webContentsId}, requestId=${payload.requestId})`
       );
       return;
     }
@@ -988,7 +1530,7 @@ export function createRendererBridge(
   };
 
   const dispatchHandler = (
-    event: Electron.IpcMainEvent,
+    ctx: IpcContext,
     payload: {
       requestId: string;
       result: import("../../../shared/types/actions.js").ActionDispatchResult;
@@ -999,9 +1541,9 @@ export function createRendererBridge(
     if (!payload || typeof payload.requestId !== "string") return;
     const pending = pendingDispatches.get(payload.requestId);
     if (!pending) return;
-    if (event.sender.id !== pending.webContentsId) {
+    if (ctx.webContentsId !== pending.webContentsId) {
       console.warn(
-        `[MCP] Ignoring dispatch response from unexpected sender ${event.sender.id} (expected ${pending.webContentsId}, requestId=${payload.requestId})`
+        `[MCP] Ignoring dispatch response from unexpected sender ${ctx.webContentsId} (expected ${pending.webContentsId}, requestId=${payload.requestId})`
       );
       return;
     }
@@ -1026,12 +1568,9 @@ export function createRendererBridge(
   };
 
   function setupListeners(cleanupListeners: Array<() => void>): void {
-    ipcMain.on(CHANNELS.MCP_SERVER_GET_MANIFEST_RESPONSE, manifestHandler);
-    ipcMain.on(CHANNELS.MCP_SERVER_DISPATCH_ACTION_RESPONSE, dispatchHandler);
-
     cleanupListeners.push(
-      () => ipcMain.removeListener(CHANNELS.MCP_SERVER_GET_MANIFEST_RESPONSE, manifestHandler),
-      () => ipcMain.removeListener(CHANNELS.MCP_SERVER_DISPATCH_ACTION_RESPONSE, dispatchHandler)
+      onWithContext(CHANNELS.MCP_SERVER_GET_MANIFEST_RESPONSE, manifestHandler),
+      onWithContext(CHANNELS.MCP_SERVER_DISPATCH_ACTION_RESPONSE, dispatchHandler)
     );
   }
 
@@ -1042,6 +1581,7 @@ export function createRendererBridge(
     requestManifestForWebContents,
     dispatchActionForWebContents,
     requestManifestForWorkspace,
+    describeWorkspaceRoute,
     dispatchActionForWorkspace,
     revealOwnedRun,
     /**
@@ -1069,16 +1609,23 @@ export function createRendererBridge(
      * `null` when the workspace has no single live view, so a bound session can
      * never fall back to the shared cache and serve another workspace's tool
      * surface — the same isolation `getCachedManifestForWebContents` gives the
-     * pinned path.
+     * pinned path. A remote driver reads its own endpoint's entry.
      */
     getCachedManifestForWorkspace: (
       workspaceId: string,
       preferredWebContentsId?: number
     ): ActionManifestEntry[] | null => {
       try {
+        const driver = resolveDriver(workspaceId);
+        if (driver?.remote) {
+          return remoteManifestCache.get(remoteManifestKey(driver.remote, workspaceId)) ?? null;
+        }
         return (
           perWebContentsCache.get(
-            getWorkspaceWebContents(workspaceId, preferredWebContentsId).id
+            getWorkspaceWebContents(
+              workspaceId,
+              driver?.localWebContentsId ?? preferredWebContentsId
+            ).id
           ) ?? null
         );
       } catch {
@@ -1096,6 +1643,7 @@ export function createRendererBridge(
       perWebContentsCache.clear();
       perWebContentsInflight.clear();
       unpinnedInflight.clear();
+      remoteManifestCache.clear();
     },
   };
 }

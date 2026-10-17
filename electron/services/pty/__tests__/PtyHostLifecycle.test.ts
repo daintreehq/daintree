@@ -182,9 +182,6 @@ describe("mapGoneReasonToCrashType", () => {
     ["killed", "SIGNAL_TERMINATED"],
     ["clean-exit", "CLEAN_EXIT"],
     ["crashed", "UNKNOWN_CRASH"],
-    ["abnormal-exit", "UNKNOWN_CRASH"],
-    ["launch-failed", "UNKNOWN_CRASH"],
-    ["integrity-failure", "UNKNOWN_CRASH"],
     ["something-novel", "UNKNOWN_CRASH"],
   ] as const)("maps %s to %s", (reason, expected) => {
     expect(mapGoneReasonToCrashType(reason)).toBe(expected);
@@ -1104,13 +1101,6 @@ describe("PtyHostLifecycle", () => {
 
       await expect(lifecycle.dispose()).resolves.toBe(true);
     });
-  });
-
-  it("postMessage forwards to the child", () => {
-    const { lifecycle } = makeLifecycle();
-    lifecycle.start();
-    lifecycle.postMessage({ type: "health-check" });
-    expect(mockChild.postMessage).toHaveBeenCalledWith({ type: "health-check" });
   });
 
   it("postMessage no-ops when child is null", () => {

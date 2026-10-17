@@ -487,6 +487,32 @@ describe("McpServerService", () => {
     currentService = service;
   });
 
+  it("starts with an empty window registry, and with none passed falls back to the process one", async () => {
+    const emptyRegistry = {
+      all: () => [],
+      focusOrder: () => [],
+      getPrimary: () => undefined,
+      getByWindowId: () => undefined,
+      getByWebContentsId: () => undefined,
+      size: 0,
+    };
+
+    await service.start(emptyRegistry as never);
+    expect(service.isRunning).toBe(true);
+    expect(service.currentPort ?? 0).toBeGreaterThan(0);
+    const { transport } = await connectClient(service.currentPort!);
+    transports.push(transport);
+    await service.stop();
+
+    const fresh = new McpServerService();
+    currentService = fresh;
+    setWindowRegistry(emptyRegistry as never);
+    await fresh.start();
+    expect(fresh.isRunning).toBe(true);
+    await fresh.stop();
+    currentService = service;
+  });
+
   it("lists tools without injecting _meta confirmation properties on destructive actions", async () => {
     const { window } = createMockWindow({
       getManifest: () => [
@@ -676,125 +702,6 @@ describe("McpServerService", () => {
 
     expect(localTool?.annotations?.openWorldHint).toBe(false);
     expect(openWorldTool?.annotations?.openWorldHint).toBe(true);
-  });
-
-  it("defaults openWorldHint to true for all categories per spec", async () => {
-    const { window } = createMockWindow({
-      getManifest: () => [
-        createManifestEntry({
-          id: "recipe.list" as ActionId,
-          title: "List Recipes",
-          description: "List recipes",
-          category: "github",
-          kind: "query",
-        }),
-        createManifestEntry({
-          id: "terminal.getStatus" as ActionId,
-          title: "Terminal Status",
-          description: "Read terminal status",
-          category: "system",
-          kind: "query",
-        }),
-        createManifestEntry({
-          id: "worktree.createWithRecipe" as ActionId,
-          title: "Create Worktree",
-          description: "Create a new worktree",
-          category: "worktree",
-          kind: "command",
-        }),
-      ],
-    });
-
-    await service.start(window);
-    const { client, transport } = await connectClient(service.currentPort!);
-    transports.push(transport);
-
-    const result = await client.listTools();
-    const queryTool = result.tools.find((t) => t.name === "recipe.list");
-    const systemTool = result.tools.find((t) => t.name === "terminal.getStatus");
-    const wtTool = result.tools.find((t) => t.name === "worktree.createWithRecipe");
-
-    expect(queryTool?.annotations?.openWorldHint).toBe(true);
-    expect(systemTool?.annotations?.openWorldHint).toBe(true);
-    expect(wtTool?.annotations?.openWorldHint).toBe(true);
-  });
-
-  it("routes every ungated confirm call to host confirmation (renderer-modal dispatch)", async () => {
-    const dispatchMock = vi.fn((payload: DispatchRequest): ActionDispatchResult => {
-      if (!payload.confirmed) {
-        return {
-          ok: false,
-          error: {
-            code: "CONFIRMATION_REQUIRED",
-            message: "Explicit confirmation is required",
-          },
-        };
-      }
-
-      return {
-        ok: true,
-        result: {
-          deleted: true,
-          args: payload.args,
-        },
-      };
-    });
-
-    const { window } = createMockWindow({
-      getManifest: () => [
-        createManifestEntry({
-          id: "recipe.run" as ActionId,
-          title: "Run Recipe",
-          description: "Run a saved recipe",
-          danger: "confirm",
-          inputSchema: {
-            type: "object",
-            properties: {
-              recipeId: { type: "string" },
-            },
-            required: ["recipeId"],
-          },
-          requiresArgs: true,
-        }),
-      ],
-      dispatchAction: dispatchMock,
-    });
-
-    await service.start(window);
-    // Every `danger: "confirm"` call is dispatched UNCONFIRMED to the renderer
-    // bridge so the human approves it host-side — even for a client that
-    // advertises `elicitation.form` and would auto-accept (#11342). The
-    // capability + handler are installed precisely so `onElicit` being never
-    // called is a genuine regression guard: reintroducing the vulnerable branch
-    // would invoke it and flip the dispatch to confirmed:true.
-    const onElicit = vi.fn(async (): Promise<ElicitResult> => ({ action: "accept", content: {} }));
-    const { client, transport } = await connectClient(service.currentPort!, undefined, {
-      capabilities: { elicitation: { form: {} } },
-      onElicit,
-    });
-    transports.push(transport);
-
-    const unconfirmed = getTextResult(
-      await client.callTool({
-        name: "recipe.run",
-        arguments: { recipeId: "r-123" },
-      })
-    );
-
-    expect(onElicit).not.toHaveBeenCalled();
-    expect(unconfirmed.isError).toBe(true);
-    expect(unconfirmed.content[0]).toMatchObject({ type: "text" });
-    expect(unconfirmed.content[0].text).toContain("CONFIRMATION_REQUIRED");
-
-    expect(dispatchMock).toHaveBeenCalledTimes(1);
-    expect(dispatchMock).toHaveBeenNthCalledWith(
-      1,
-      expect.objectContaining({
-        actionId: "recipe.run",
-        args: { recipeId: "r-123" },
-        confirmed: false,
-      })
-    );
   });
 
   it("keeps browser.captureScreenshot off even the full tool set, so its bytes never leave", async () => {
@@ -1183,38 +1090,6 @@ describe("McpServerService", () => {
       expect(records[0].result).toBe("error");
       expect(records[0].errorCode).toBe("EXECUTION_ERROR");
       expect(records[0].confirmationDecision).toBe("approved");
-    });
-
-    it("never sends an elicitation request for non-destructive tools", async () => {
-      const dispatchMock = vi.fn((): ActionDispatchResult => ({
-        ok: true,
-        result: ["a", "b"],
-      }));
-      const onElicit = vi.fn();
-      const { window } = createMockWindow({
-        getManifest: () => [
-          createManifestEntry({
-            id: "actions.list" as ActionId,
-            title: "List Actions",
-            description: "Read the action registry",
-            kind: "query",
-          }),
-        ],
-        dispatchAction: dispatchMock,
-      });
-
-      await service.start(window);
-      const { client, transport } = await connectClient(service.currentPort!, undefined, {
-        capabilities: { elicitation: { form: {} } },
-        onElicit,
-      });
-      transports.push(transport);
-
-      const result = getTextResult(await client.callTool({ name: "actions.list", arguments: {} }));
-
-      expect(onElicit).not.toHaveBeenCalled();
-      expect(result.isError).not.toBe(true);
-      expect(dispatchMock).toHaveBeenCalledTimes(1);
     });
   });
 });

@@ -32,6 +32,18 @@ export interface GeneratedIpcInvokeMap {
     args: [agentId: string];
     result: boolean;
   };
+  "agent-defaults:get": {
+    args: [];
+    result: import("./agentDefaults.js").AgentDefaultsSnapshot;
+  };
+  "agent-defaults:migrate-legacy": {
+    args: [candidates: import("./agentDefaults.js").AgentDefaultsSnapshot];
+    result: import("./agentDefaults.js").AgentDefaultsSnapshot;
+  };
+  "agent-defaults:set": {
+    args: [patch: import("./agentDefaults.js").AgentDefaultsSnapshot];
+    result: import("./agentDefaults.js").AgentDefaultsSnapshot;
+  };
   "agent-session:clear": {
     args: [payload: { worktreeId?: string | undefined }];
     result: void;
@@ -114,6 +126,182 @@ export interface GeneratedIpcInvokeMap {
     args: [options: import("./agent.js").SaveArtifactOptions];
     result: import("./agent.js").SaveArtifactResult | null;
   };
+  "assistant-messaging:get-state": {
+    args: [input?: import("./assistantMessaging.js").AssistantMessagingLaneRef | undefined];
+    result: import("./assistantMessaging.js").AssistantMessagingState;
+  };
+  "assistant-messaging:set-lane-enrolled": {
+    args: [
+      input: import("./assistantMessaging.js").AssistantMessagingLaneRef & { enrolled: boolean },
+    ];
+    result: import("./assistantMessaging.js").AssistantMessagingEnrollResult;
+  };
+  "assistant-messaging:set-paused": {
+    args: [paused: boolean];
+    result: boolean;
+  };
+  "canopy-host:invoke": {
+    args: [
+      hostId: string,
+      channel:
+        | "canopy:answer"
+        | "canopy:archive"
+        | "canopy:get-snapshot"
+        | "canopy:mark-all-read"
+        | "canopy:mark-seen"
+        | "canopy:refresh"
+        | "canopy:rename"
+        | "canopy:reread"
+        | "canopy:restore-reads"
+        | "canopy:run-branch"
+        | "canopy:set-active"
+        | "canopy:set-mode"
+        | "canopy:set-read"
+        | "canopy:set-scope"
+        | "canopy:set-shown"
+        | "canopy:terminal-input"
+        | "canopy:terminal-send-key"
+        | "canopy:terminal-submit"
+        | "canopy:trash"
+        | "canopy:unarchive"
+        | "canopy:untrash"
+        | "canopy:unwatch-terminal"
+        | "canopy:watch-terminal"
+        | "fleet:get-snapshot",
+      args: unknown[],
+    ];
+    result:
+      | string
+      | number
+      | void
+      | import("./canopy.js").CanopyReadMark
+      | import("./canopy.js").CanopySnapshot
+      | import("./canopy.js").CanopyReadMark[]
+      | import("./canopy.js").CanopyTerminalView
+      | import("./fleet.js").FleetSnapshot
+      | null;
+  };
+  "canopy-host:release": {
+    args: [hostId: string];
+    result: void;
+  };
+  "canopy:answer": {
+    args: [runId: string, target: import("./canopy.js").CanopyTarget, label: string];
+    result: void;
+  };
+  "canopy:archive": {
+    args: [
+      runId: string,
+      target: import("./canopy.js").CanopyTarget,
+      expectTurn?: number | undefined,
+    ];
+    result: import("./canopy.js").CanopyReadMark | null;
+  };
+  "canopy:capture-backdrop": {
+    args: [];
+    result: Uint8Array<ArrayBufferLike> | null;
+  };
+  "canopy:get-snapshot": {
+    args: [];
+    result: import("./canopy.js").CanopySnapshot;
+  };
+  "canopy:mark-all-read": {
+    args: [targets: import("./canopy.js").CanopyReadTarget[]];
+    result: import("./canopy.js").CanopyReadMark[];
+  };
+  "canopy:mark-seen": {
+    args: [
+      runId: string,
+      looking?: boolean | undefined,
+      place?: import("./canopy.js").CanopyLookPlace | undefined,
+    ];
+    result: void;
+  };
+  "canopy:note-sent": {
+    args: [runId: string];
+    result: void;
+  };
+  "canopy:refresh": {
+    args: [];
+    result: void;
+  };
+  "canopy:rename": {
+    args: [runId: string, target: import("./canopy.js").CanopyTarget, title: string];
+    result: void;
+  };
+  "canopy:reread": {
+    args: [runId: string, target: import("./canopy.js").CanopyTarget];
+    result: void;
+  };
+  "canopy:restore-reads": {
+    args: [restores: import("./canopy.js").CanopyReadRestore[]];
+    result: void;
+  };
+  "canopy:run-branch": {
+    args: [runId: string, target: import("./canopy.js").CanopyTarget];
+    result: string | null;
+  };
+  "canopy:set-active": {
+    args: [active: boolean];
+    result: import("./canopy.js").CanopySnapshot;
+  };
+  "canopy:set-mode": {
+    args: [mode: import("./canopy.js").CanopyMode, expectRevision?: number | undefined];
+    result: import("./canopy.js").CanopySnapshot;
+  };
+  "canopy:set-read": {
+    args: [
+      runId: string,
+      target: import("./canopy.js").CanopyTarget,
+      read: boolean,
+      turn?: number | undefined,
+    ];
+    result: import("./canopy.js").CanopyReadMark | null;
+  };
+  "canopy:set-scope": {
+    args: [workspaceId: string | null];
+    result: void;
+  };
+  "canopy:set-shown": {
+    args: [runIds: string[]];
+    result: void;
+  };
+  "canopy:terminal-input": {
+    args: [watchId: number, data: string];
+    result: void;
+  };
+  "canopy:terminal-resize": {
+    args: [watchId: number, cols: number, rows: number];
+    result: void;
+  };
+  "canopy:terminal-send-key": {
+    args: [watchId: number, key: string];
+    result: void;
+  };
+  "canopy:terminal-submit": {
+    args: [watchId: number, text: string, imagePaths?: string[] | undefined];
+    result: void;
+  };
+  "canopy:trash": {
+    args: [runId: string, target: import("./canopy.js").CanopyTarget];
+    result: number | null;
+  };
+  "canopy:unarchive": {
+    args: [runId: string, target: import("./canopy.js").CanopyTarget];
+    result: void;
+  };
+  "canopy:untrash": {
+    args: [receipt: number];
+    result: void;
+  };
+  "canopy:unwatch-terminal": {
+    args: [];
+    result: void;
+  };
+  "canopy:watch-terminal": {
+    args: [runId: string, target: import("./canopy.js").CanopyTarget];
+    result: import("./canopy.js").CanopyTerminalView;
+  };
   "claude:list-subagents": {
     args: [__0: { terminalId: string }];
     result: import("./agentSubagents.js").AgentSubagentsResult;
@@ -139,7 +327,7 @@ export interface GeneratedIpcInvokeMap {
     result: { text: string };
   };
   "clipboard:save-image": {
-    args: [];
+    args: [_options?: import("./fileTransfer.js").ClipboardSaveImageOptions | undefined];
     result: { filePath: string; thumbnailDataUrl: string };
   };
   "clipboard:thumbnail-from-path": {
@@ -378,6 +566,18 @@ export interface GeneratedIpcInvokeMap {
     args: [payload: import("./diffMedia.js").DiffMediaReadFileVersionsPayload];
     result: import("./diffMedia.js").DiffMediaFileVersionsResponse;
   };
+  "drive-lease:get": {
+    args: [payload: import("./driveLease.js").DriveLeaseProjectPayload];
+    result: import("./driveLease.js").DriveLeaseView;
+  };
+  "drive-lease:report-navigation": {
+    args: [payload: import("./driveLease.js").DriveLeaseReportNavigationPayload];
+    result: void;
+  };
+  "drive-lease:take-over": {
+    args: [payload: import("./driveLease.js").DriveLeaseTakeOverPayload];
+    result: import("./driveLease.js").DriveLeaseView;
+  };
   "editor:discover": {
     args: [];
     result: import("../editor.js").DiscoveredEditor[];
@@ -413,13 +613,65 @@ export interface GeneratedIpcInvokeMap {
     args: [payload: import("./fileBrowser.js").FileBrowserStatPathsPayload];
     result: import("./fileBrowser.js").FileBrowserStatPathsResult;
   };
+  "file-transfer:answer-host-pick": {
+    args: [payload: import("./fileTransfer.js").AnswerHostPickPayload];
+    result: void;
+  };
+  "file-transfer:cancel": {
+    args: [payload: { opId: string }];
+    result: void;
+  };
+  "file-transfer:download": {
+    args: [payload: import("./fileTransfer.js").DownloadPayload];
+    result: import("./fileTransfer.js").DownloadResult;
+  };
+  "file-transfer:get-preview-capability": {
+    args: [];
+    result: string | null;
+  };
+  "file-transfer:get-upload-preferences": {
+    args: [];
+    result: import("./fileTransfer.js").UploadPreferences;
+  };
+  "file-transfer:set-upload-preferences": {
+    args: [patch: Partial<import("./fileTransfer.js").UploadPreferences>];
+    result: import("./fileTransfer.js").UploadPreferences;
+  };
+  "file-transfer:stat-local-file": {
+    args: [payload: { localPath: string }];
+    result: import("./fileTransfer.js").LocalFileStat | null;
+  };
+  "file-transfer:upload-bytes": {
+    args: [payload: import("./fileTransfer.js").UploadBytesPayload];
+    result: import("./fileTransfer.js").UploadResult;
+  };
+  "file-transfer:upload-local-file": {
+    args: [payload: import("./fileTransfer.js").UploadLocalFilePayload];
+    result: import("./fileTransfer.js").UploadResult;
+  };
   "file-watch:fingerprint": {
     args: [payload: import("./fileWatch.js").FileWatchFingerprintPayload];
     result: import("./fileWatch.js").FileWatchFingerprintResult;
   };
+  "files:trash": {
+    args: [payload: { worktreePath: string; relativePath: string }];
+    result: void;
+  };
   "fleet:get-snapshot": {
     args: [];
     result: import("./fleet.js").FleetSnapshot | null;
+  };
+  "fleet:mark-run-read": {
+    args: [runId: string];
+    result: boolean;
+  };
+  "fleet:mark-run-unread": {
+    args: [runId: string];
+    result: boolean;
+  };
+  "fleet:note-run-look": {
+    args: [runId: string, looking: boolean];
+    result: void;
   };
   "fleet:park-run": {
     args: [
@@ -631,11 +883,11 @@ export interface GeneratedIpcInvokeMap {
   };
   "forge:open-pr": {
     args: [payload: { cwd: string; prNumber: number }];
-    result: void;
+    result: string | undefined;
   };
   "forge:open-repo": {
     args: [payload: { cwd: string }];
-    result: void;
+    result: string | undefined;
   };
   "forge:preview-credential-import": {
     args: [providerId: string];
@@ -683,6 +935,10 @@ export interface GeneratedIpcInvokeMap {
   "gemini:get-status": {
     args: [];
     result: { exists: boolean; alternateBufferEnabled: boolean; error?: string | undefined };
+  };
+  "git:discard-file-changes": {
+    args: [payload: { worktreePath: string; relativePath: string }];
+    result: void;
   };
   "git:fetch": {
     args: [payload: { cwd: string; prune?: boolean | undefined }];
@@ -777,6 +1033,10 @@ export interface GeneratedIpcInvokeMap {
     args: [patch: Partial<import("./api.js").HelpAssistantSettings>];
     result: void;
   };
+  "help:adopt-detached-session": {
+    args: [projectId: string, rawSlot?: number | undefined];
+    result: import("./help.js").HelpAdoptResult | null;
+  };
   "help:discard-conversation": {
     args: [projectId: string, rawSlot?: number | undefined];
     result: void;
@@ -807,7 +1067,13 @@ export interface GeneratedIpcInvokeMap {
   };
   "help:peek-pending-hibernation": {
     args: [projectId: string, rawSlot?: number | undefined];
-    result: { agentId: string; agentSessionId: string; cwd: string; panelWasOpen: boolean } | null;
+    result: {
+      agentId: string;
+      agentSessionId: string;
+      cwd: string;
+      panelWasOpen: boolean;
+      live?: boolean | undefined;
+    } | null;
   };
   "help:provision-session": {
     args: [
@@ -817,6 +1083,7 @@ export interface GeneratedIpcInvokeMap {
         agentId: string;
         context?: import("../actions.js").ActionContext | undefined;
         slot?: number | undefined;
+        vacantOnly?: boolean | undefined;
       },
     ];
     result: {
@@ -855,6 +1122,82 @@ export interface GeneratedIpcInvokeMap {
   "hibernation:update-config": {
     args: [config: Partial<import("./hibernation.js").HibernationConfig>];
     result: import("./hibernation.js").HibernationConfig;
+  };
+  "host-files:get-picker-roots": {
+    args: [];
+    result: import("./hostFiles.js").HostPickerRoots;
+  };
+  "host-files:list-directory": {
+    args: [payload: import("./hostFiles.js").ListHostDirectoryPayload];
+    result: import("./hostFiles.js").HostDirectoryListing;
+  };
+  "host-metrics:get-snapshots": {
+    args: [];
+    result: import("./hostMetrics.js").HostMetricsSnapshot[];
+  };
+  "host-metrics:list-fleet-targets": {
+    args: [payload: { hostId: string }];
+    result: import("./hostMetrics.js").HostFleetTargetList;
+  };
+  "host-metrics:list-worktrees": {
+    args: [payload: { hostId: string }];
+    result: import("./hostMetrics.js").HostWorktreeEntry[];
+  };
+  "host-metrics:submit-fleet": {
+    args: [payload: import("./hostMetrics.js").HostFleetSubmitPayload];
+    result: void;
+  };
+  "host-mode:get-status": {
+    args: [];
+    result: import("./hostMode.js").HostModeStatus;
+  };
+  "host-mode:run-keychain-preflight": {
+    args: [];
+    result: import("./hostMode.js").HostModeStatus;
+  };
+  "host-mode:set-enabled": {
+    args: [payload: import("./hostMode.js").SetHostModePayload];
+    result: import("./hostMode.js").HostModeStatus;
+  };
+  "host-switch:cancel": {
+    args: [payload: import("./hostSwitch.js").HostSwitchOpPayload];
+    result: boolean;
+  };
+  "host-switch:check-destination": {
+    args: [payload: import("./hostSwitch.js").HostSwitchCheckDestinationPayload];
+    result: import("./projectMatch.js").DestinationCheck;
+  };
+  "host-switch:execute": {
+    args: [payload: import("./hostSwitch.js").HostSwitchExecutePayload];
+    result: import("./hostSwitch.js").HostSwitchExecuteResult;
+  };
+  "host-switch:list-directory": {
+    args: [payload: import("./hostSwitch.js").HostSwitchListDirectoryPayload];
+    result: import("./hostFiles.js").HostDirectoryListing;
+  };
+  "host-switch:locate": {
+    args: [payload: import("./hostSwitch.js").HostSwitchLocatePayload];
+    result: import("./hostSwitch.js").HostProjectPresence[];
+  };
+  "host-switch:picker-roots": {
+    args: [payload: import("./hostSwitch.js").HostSwitchPickerRootsPayload];
+    result: import("./hostFiles.js").HostPickerRoots;
+  };
+  "host-switch:plan": {
+    args: [payload: import("./hostSwitch.js").HostSwitchPlanPayload];
+    result: import("./hostSwitch.js").HostSwitchPlan;
+  };
+  "host-switch:prepare": {
+    args: [payload: import("./hostSwitch.js").HostSwitchPlanPayload];
+    result: import("./hostSwitch.js").HostSwitchPreparation;
+  };
+  "host-switch:status": {
+    args: [payload: import("./hostSwitch.js").HostSwitchOpPayload];
+    result: import("./hostSwitch.js").HostSwitchStatus;
+  };
+  "host-switch:suggest-clone-destination": {
+    args: [payload: import("./hostSwitch.js").HostSwitchSuggestClonePayload];
+    result: import("./projectMatch.js").DestinationCheck;
   };
   "idle-background:get-config": {
     args: [];
@@ -1109,6 +1452,18 @@ export interface GeneratedIpcInvokeMap {
     args: [tourId: string, update: import("./maps.js").TourProgressUpdate];
     result: import("./maps.js").TourOnboardingState;
   };
+  "operations:cancel": {
+    args: [payload: import("./operations.js").OperationIdPayload];
+    result: boolean;
+  };
+  "operations:get-status": {
+    args: [payload: import("./operations.js").OperationIdPayload];
+    result: import("../remoteHosts.js").OperationOutcome;
+  };
+  "operations:list": {
+    args: [payload: import("./operations.js").ListOperationsPayload];
+    result: import("../remoteHosts.js").OperationRecord[];
+  };
   "os-dnd:get-state": {
     args: [];
     result: boolean | undefined;
@@ -1200,6 +1555,22 @@ export interface GeneratedIpcInvokeMap {
     args: [config: import("./pluginMcp.js").PluginMcpConfig];
     result: import("./pluginMcp.js").PluginMcpConfig;
   };
+  "plugin-parity:claim-switch-notice": {
+    args: [payload: import("./pluginParity.js").PluginParityPayload];
+    result: boolean;
+  };
+  "plugin-parity:diff": {
+    args: [payload: import("./pluginParity.js").PluginParityPayload];
+    result: import("./pluginParity.js").PluginParityRow[];
+  };
+  "plugin-parity:install-on-host": {
+    args: [payload: import("./pluginParity.js").InstallOnHostPayload];
+    result: void;
+  };
+  "plugin-parity:update-on-host": {
+    args: [payload: import("./pluginParity.js").InstallOnHostPayload];
+    result: void;
+  };
   "plugin-process:list": {
     args: [pluginId?: string | undefined];
     result: import("./pluginProcess.js").PluginProcessInfo[];
@@ -1243,6 +1614,10 @@ export interface GeneratedIpcInvokeMap {
   "plugin:cancel-install": {
     args: [jobId: string];
     result: boolean;
+  };
+  "plugin:capture-panel": {
+    args: [rect: import("../pluginPanelCapture.js").PluginPanelCaptureRect];
+    result: import("../pluginPanelCapture.js").PluginPanelCaptureResult;
   };
   "plugin:check-for-update": {
     args: [pluginId: string];
@@ -1476,6 +1851,22 @@ export interface GeneratedIpcInvokeMap {
     args: [path: string];
     result: import("../plugin.js").PluginWorktreeStatus | null;
   };
+  "port-forwards:forward": {
+    args: [payload: import("./portForwards.js").ForwardPortPayload];
+    result: import("./portForwards.js").PortForward;
+  };
+  "port-forwards:list": {
+    args: [];
+    result: import("./portForwards.js").PortForward[];
+  };
+  "port-forwards:list-host-ports": {
+    args: [payload: { hostId: string }];
+    result: import("./portForwards.js").HostListeningPort[];
+  };
+  "port-forwards:stop": {
+    args: [payload: { forwardId: string }];
+    result: void;
+  };
   "portal:close-tab": {
     args: [payload: import("../portal.js").PortalCloseTabPayload];
     result: void;
@@ -1552,9 +1943,57 @@ export interface GeneratedIpcInvokeMap {
     args: [targets: import("../processes.js").ClosedProcessKillTarget[]];
     result: import("../processes.js").ClosedProcessKillResult;
   };
+  "project-groups:create": {
+    args: [name: string];
+    result: import("../project.js").ProjectGroup;
+  };
+  "project-groups:delete": {
+    args: [groupId: string];
+    result: import("../project.js").ProjectGroup[];
+  };
+  "project-groups:list": {
+    args: [];
+    result: import("../project.js").ProjectGroup[];
+  };
+  "project-groups:rename": {
+    args: [groupId: string, name: string];
+    result: import("../project.js").ProjectGroup[];
+  };
+  "project-groups:reorder": {
+    args: [orderedIds: string[]];
+    result: import("../project.js").ProjectGroup[];
+  };
+  "project-groups:set-archived": {
+    args: [projectId: string, archived: boolean];
+    result: import("../project.js").Project;
+  };
+  "project-groups:set-membership": {
+    args: [projectId: string, groupId: string | null];
+    result: import("../project.js").Project;
+  };
+  "project-groups:set-sort-mode": {
+    args: [groupId: string, sortMode: "mostUsed" | "recent" | "alphabetical"];
+    result: import("../project.js").ProjectGroup[];
+  };
   "project-history:peek": {
     args: [];
     result: import("./project.js").ProjectHistoryTarget | null;
+  };
+  "project-match:find": {
+    args: [payload: import("./projectMatch.js").FindProjectMatchPayload];
+    result: import("./projectMatch.js").ProjectMatchCandidate[];
+  };
+  "project-match:find-worktree-for-branch": {
+    args: [payload: import("./projectMatch.js").FindWorktreeForBranchPayload];
+    result: import("./projectMatch.js").WorktreeForBranch;
+  };
+  "project-match:scan": {
+    args: [payload: import("./projectMatch.js").ScanProjectMatchPayload];
+    result: import("./projectMatch.js").ProjectMatchCandidate[];
+  };
+  "project-match:take-pending-setup": {
+    args: [payload: import("./projectMatch.js").TakePendingHostSetupPayload];
+    result: import("./projectMatch.js").PendingHostSetup | null;
   };
   "project-presence:get-snapshot": {
     args: [];
@@ -1568,8 +2007,12 @@ export interface GeneratedIpcInvokeMap {
     args: [request: import("../projectRelocation.js").RelocationRequest];
     result: import("../projectRelocation.js").RelocationPreview;
   };
+  "project:add-browser-allowed-host": {
+    args: [payload: { projectId: string; hostname: string }];
+    result: string[];
+  };
   "project:clone-cancel": {
-    args: [];
+    args: [payload?: import("./gitClone.js").CloneCancelPayload | undefined];
     result: void;
   };
   "project:clone-repo": {
@@ -1653,6 +2096,122 @@ export interface GeneratedIpcInvokeMap {
     args: [projectId: string];
     result: import("./project.js").ProjectSleepResult;
   };
+  "remote-hosts:add": {
+    args: [payload: import("./remoteHosts.js").AddHostPayload];
+    result: import("../remoteHosts.js").HostDescriptor;
+  };
+  "remote-hosts:cancel-assistant-exchange": {
+    args: [payload: import("./remoteHosts.js").AssistantExchangeCancelPayload];
+    result: import("./remoteHosts.js").AssistantExchangeView;
+  };
+  "remote-hosts:cancel-install": {
+    args: [payload: { opId: string }];
+    result: boolean;
+  };
+  "remote-hosts:cancel-pending-switch": {
+    args: [payload: import("./remoteHosts.js").CancelPendingSwitchPayload];
+    result: boolean;
+  };
+  "remote-hosts:connect": {
+    args: [payload: { hostId: string }];
+    result: import("../remoteHosts.js").HostConnectionState;
+  };
+  "remote-hosts:disconnect": {
+    args: [payload: { hostId: string }];
+    result: void;
+  };
+  "remote-hosts:discover": {
+    args: [];
+    result: import("./remoteHosts.js").DiscoveredHost[];
+  };
+  "remote-hosts:forget": {
+    args: [payload: { hostId: string }];
+    result: void;
+  };
+  "remote-hosts:get-install-status": {
+    args: [payload: { opId: string }];
+    result: import("../remoteHosts.js").OperationOutcome;
+  };
+  "remote-hosts:get-local-handshake": {
+    args: [];
+    result: import("../remoteHosts.js").HostHandshakeInfo;
+  };
+  "remote-hosts:get-pending-switch": {
+    args: [];
+    result: import("./remoteHosts.js").PendingHostSwitch | null;
+  };
+  "remote-hosts:get-window-host": {
+    args: [];
+    result: import("./remoteHosts.js").WindowHostInfo;
+  };
+  "remote-hosts:install": {
+    args: [payload: import("./remoteHosts.js").InstallHostPayload];
+    result: import("./remoteHosts.js").InstallHostResult;
+  };
+  "remote-hosts:is-in-use": {
+    args: [];
+    result: boolean;
+  };
+  "remote-hosts:list": {
+    args: [];
+    result: import("../remoteHosts.js").HostListEntry[];
+  };
+  "remote-hosts:list-assistant-exchanges": {
+    args: [payload: import("./remoteHosts.js").AssistantExchangeListPayload];
+    result: import("./remoteHosts.js").AssistantExchangeView[];
+  };
+  "remote-hosts:list-clipboard-grants": {
+    args: [payload: import("./remoteHosts.js").ListHostProjectsPayload];
+    result: import("./remoteHosts.js").HostPluginClipboardGrant[];
+  };
+  "remote-hosts:list-host-projects": {
+    args: [payload: import("./remoteHosts.js").ListHostProjectsPayload];
+    result: import("./remoteHosts.js").HostProjectSummary[];
+  };
+  "remote-hosts:list-plugin-view-consents": {
+    args: [payload: import("./remoteHosts.js").ListHostProjectsPayload];
+    result: import("./remoteHosts.js").PluginViewConsentEntry[];
+  };
+  "remote-hosts:list-recent": {
+    args: [];
+    result: import("../remoteHosts.js").HostRecentUse[];
+  };
+  "remote-hosts:plan-install": {
+    args: [payload: import("./remoteHosts.js").PlanInstallPayload];
+    result: import("./remoteHosts.js").HostInstallPlan;
+  };
+  "remote-hosts:prepare-plugin-view": {
+    args: [payload: import("./remoteHosts.js").PreparePluginViewPayload];
+    result: boolean;
+  };
+  "remote-hosts:probe": {
+    args: [payload: import("./remoteHosts.js").HostSetupTarget];
+    result: import("./remoteHosts.js").HostProbeResult;
+  };
+  "remote-hosts:reset-clipboard-grants": {
+    args: [payload: import("./remoteHosts.js").ResetClipboardGrantsPayload];
+    result: void;
+  };
+  "remote-hosts:reset-plugin-view-consent": {
+    args: [payload: import("./remoteHosts.js").ResetPluginViewConsentPayload];
+    result: void;
+  };
+  "remote-hosts:start-host-mode": {
+    args: [payload: import("./remoteHosts.js").HostSetupTarget];
+    result: import("./remoteHosts.js").StartHostModeResult;
+  };
+  "remote-hosts:switch-window-host": {
+    args: [payload: import("./remoteHosts.js").SwitchWindowHostPayload];
+    result: import("./remoteHosts.js").SwitchWindowHostResult;
+  };
+  "remote-hosts:take-project-offer": {
+    args: [];
+    result: string | null;
+  };
+  "remote-hosts:update": {
+    args: [payload: import("./remoteHosts.js").UpdateHostPayload];
+    result: import("../remoteHosts.js").HostDescriptor;
+  };
   "run-history:append": {
     args: [input: import("./runHistory.js").RunHistoryAppendInput];
     result: void;
@@ -1682,7 +2241,7 @@ export interface GeneratedIpcInvokeMap {
     result: void;
   };
   "scratch:save-as-project": {
-    args: [scratchId: string];
+    args: [scratchId: string, remoteDestinationPath?: string | undefined];
     result: import("./scratch.js").ScratchSaveAsProjectResult;
   };
   "scratch:switch": {
@@ -1692,7 +2251,7 @@ export interface GeneratedIpcInvokeMap {
         | { focusIntent?: import("./project.js").ProjectFocusOnActivateIntent | undefined }
         | undefined,
     ];
-    result: import("../scratch.js").Scratch;
+    result: import("../scratch.js").Scratch | null;
   };
   "scratch:update": {
     args: [
@@ -1716,6 +2275,22 @@ export interface GeneratedIpcInvokeMap {
   "session-restore:view-hydrated": {
     args: [];
     result: void;
+  };
+  "settings-copy:apply": {
+    args: [payload: import("./settingsCopy.js").SettingsCopyApplyPayload];
+    result: import("../configBundle.js").ConfigImportReport;
+  };
+  "settings-copy:preview": {
+    args: [payload: import("./settingsCopy.js").SettingsCopyPreviewPayload];
+    result: import("./settingsCopy.js").SettingsCopyPreview;
+  };
+  "settings-copy:status": {
+    args: [payload: import("./settingsCopy.js").SettingsCopyStatusPayload];
+    result: import("./settingsCopy.js").SettingsCopyStatus;
+  };
+  "settings-copy:undo": {
+    args: [payload: import("./settingsCopy.js").SettingsCopyUndoPayload];
+    result: import("./settingsCopy.js").SettingsCopyUndoResult;
   };
   "shortcut-hints:get-counts": {
     args: [];
@@ -1901,7 +2476,7 @@ export interface GeneratedIpcInvokeMap {
     result: void;
   };
   "terminal-config:set-screen-reader-mode": {
-    args: [mode: "off" | "auto" | "on"];
+    args: [mode: "on" | "off" | "auto"];
     result: void;
   };
   "terminal-config:set-scrollback": {
@@ -2073,7 +2648,7 @@ export interface GeneratedIpcInvokeMap {
     result: void;
   };
   "webview:capture-screenshot": {
-    args: [panelId: string];
+    args: [panelId: string, options?: { forHost?: boolean | undefined } | undefined];
     result: { pngBase64: string; width: number; height: number };
   };
   "webview:get-navigation-history": {
@@ -2161,6 +2736,7 @@ export interface GeneratedIpcInvokeMap {
           submoduleInit?: "inherit" | "all" | "none" | undefined;
           collisionPolicy?: "error" | "suffix" | undefined;
         };
+        opId?: string | undefined;
       },
     ];
     result: import("../worktree.js").WorktreeCreateResult;

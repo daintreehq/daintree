@@ -45,19 +45,6 @@ describe("buildCommandLaunchShell", () => {
       expect(decodePowerShellEncodedCommand(result!.args[3])).toBe(command);
     });
 
-    it("preserves paths with embedded apostrophes (PowerShell '' escaping survives intact)", () => {
-      setPlatform("win32");
-
-      const command =
-        "claude --mcp-config 'C:\\Users\\O''Brien\\AppData\\Roaming\\Daintree\\pane.json'";
-      const result = buildCommandLaunchShell(command, "pwsh.exe");
-
-      expect(result).not.toBeNull();
-      // The base64 payload round-trips the exact string; PowerShell parses
-      // '' inside single-quote strings as a literal '.
-      expect(decodePowerShellEncodedCommand(result!.args[3])).toBe(command);
-    });
-
     it("matches powershell.exe (Windows PowerShell 5.1) the same way as pwsh", () => {
       setPlatform("win32");
 
@@ -74,14 +61,6 @@ describe("buildCommandLaunchShell", () => {
   });
 
   describe("Windows + cmd.exe", () => {
-    it("returns /K with the command as a single argv element", () => {
-      setPlatform("win32");
-
-      const result = buildCommandLaunchShell("codex", "cmd.exe");
-
-      expect(result).toEqual({ shell: "cmd.exe", args: ["/K", "codex"] });
-    });
-
     it("passes complex commands with quoting through /K unchanged", () => {
       setPlatform("win32");
 
@@ -141,12 +120,6 @@ describe("buildCommandLaunchShell", () => {
       expect(result?.args.slice(0, 2)).toEqual(["-i", "-c"]);
       expect(result?.args[2]).toContain("trap : INT");
     });
-
-    it("returns null for unsupported POSIX shells (e.g. nushell)", () => {
-      setPlatform("linux");
-
-      expect(buildCommandLaunchShell("claude", "/usr/bin/nu")).toBeNull();
-    });
   });
 
   describe("shell support allowlist", () => {
@@ -181,35 +154,6 @@ describe("buildCommandLaunchShell", () => {
       expect(result?.args[1]).not.toContain("exec");
     });
 
-    it("keeps the interactive -i -c form for plain sh", () => {
-      setPlatform("linux");
-
-      const result = buildCommandLaunchShell("npm run dev", "/bin/sh", "exit");
-
-      expect(result?.args.slice(0, 2)).toEqual(["-i", "-c"]);
-      expect(result?.args[2]).toBe("trap : INT\nnpm run dev\nexit");
-    });
-
-    it("preserves compound shell syntax verbatim", () => {
-      setPlatform("linux");
-
-      const result = buildCommandLaunchShell(
-        "PORT=3000 npm run dev && echo up",
-        "/bin/bash",
-        "exit"
-      );
-
-      expect(result?.args[1]).toContain("PORT=3000 npm run dev && echo up");
-    });
-
-    it("defaults to keep-open so agent launches are unaffected", () => {
-      setPlatform("linux");
-
-      expect(buildCommandLaunchShell("claude", "/bin/zsh")?.args[1]).toContain(
-        "exec '/bin/zsh' -l"
-      );
-    });
-
     it("drops -NoExit and maps PowerShell status onto the exit code", () => {
       setPlatform("win32");
 
@@ -231,6 +175,15 @@ describe("buildCommandLaunchShell", () => {
 
       expect(result?.args[0]).toBe("/C");
       expect(result?.args[1]).toBe("chcp 65001 >NUL & npm run dev");
+    });
+
+    it("keeps the interactive -i -c form for plain sh", () => {
+      setPlatform("linux");
+
+      const result = buildCommandLaunchShell("npm run dev", "/bin/sh", "exit");
+
+      expect(result?.args.slice(0, 2)).toEqual(["-i", "-c"]);
+      expect(result?.args[2]).toBe("trap : INT\nnpm run dev\nexit");
     });
   });
 

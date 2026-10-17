@@ -29,7 +29,7 @@
 import { performance } from "node:perf_hooks";
 import { logInfo, logWarn } from "../utils/logger.js";
 import { formatErrorMessage } from "../../shared/utils/errorMessage.js";
-import { createRegisteredView, loadView } from "./ProjectViewFactory.js";
+import { createRegisteredView, isLocalViewKey, loadView } from "./ProjectViewFactory.js";
 import { cleanupEntry, deactivateEntry } from "./ProjectViewLifecycleController.js";
 import { backgroundRestoreCapacity } from "./ProjectViewEvictionController.js";
 import { notifyProjectPluginsOpened } from "./projectPluginLifecycle.js";
@@ -176,7 +176,8 @@ export async function restoreInBackground(
   // alone fires no contribution broadcast, so a plugin loaded into an
   // unregistered view stays invisible to it until some unrelated mutation
   // publishes a fresh snapshot.
-  notifyProjectPluginsOpened(projectId, projectPath);
+  // A host's project runs its plugins on the host, as a switch to one does.
+  if (isLocalViewKey(projectId)) notifyProjectPluginsOpened(projectId, projectPath);
 
   logInfo("projectview.background-restore.restored", {
     projectId,

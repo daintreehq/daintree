@@ -346,6 +346,8 @@ export function invalidateRepoIssueCachesForAssignment(
 export interface PRRequiredStatusEntry {
   ciStatus: GitHubPRCIStatus | undefined;
   ciSummary: GitHubPRCISummary | undefined;
+  /** Commit the rollup was read from; absent when the response omitted it. */
+  headSha?: string;
 }
 export const MAX_REVIEW_THREAD_PAGES = 5;
 export const REVIEW_THREADS_PER_PAGE = 100;
@@ -361,6 +363,37 @@ export const prRequiredStatusCache = new Cache<string, PRRequiredStatusEntry>({
   maxSize: 200,
   defaultTTL: 60000,
 });
+
+/**
+ * Latest head commit the open-PR probe saw per PR, keyed like
+ * {@link prRequiredStatusCache}. The CI cache is keyed by PR number, so after a
+ * push it would keep serving the previous head's verdict for its full TTL
+ * (#13399); reads go through {@link getPRRequiredStatusForCurrentHead}, which
+ * treats an entry for any other commit as a miss. Guarding the read rather than
+ * invalidating on the probe also covers writes from requests that were already
+ * in flight when the head moved.
+ */
+export const prObservedHeadShaCache = new Cache<string, string>({
+  maxSize: 200,
+  defaultTTL: 30 * 60 * 1000,
+});
+
+// A PR the probe no longer sees open (merged, closed) has no head it can vouch
+// for, so the marker goes rather than pinning a head the PR has since left.
+export function recordObservedPRHead(key: string, headSha: string | null | undefined): void {
+  if (headSha) prObservedHeadShaCache.set(key, headSha);
+  else prObservedHeadShaCache.invalidate(key);
+}
+
+export function describesObservedPRHead(key: string, entry: PRRequiredStatusEntry): boolean {
+  const observed = prObservedHeadShaCache.get(key);
+  return observed === undefined || entry.headSha === observed;
+}
+
+export function getPRRequiredStatusForCurrentHead(key: string): PRRequiredStatusEntry | undefined {
+  const entry = prRequiredStatusCache.get(key);
+  return entry && describesObservedPRHead(key, entry) ? entry : undefined;
+}
 
 /**
  * Response cache for raw forge GraphQL queries, keyed by query + serialized
@@ -424,6 +457,7 @@ export function startCacheSweep(): void {
     prTooltipCache.cleanup();
     forgeQueryCache.cleanup();
     prRequiredStatusCache.cleanup();
+    prObservedHeadShaCache.cleanup();
   }, CACHE_SWEEP_INTERVAL_MS);
   cacheSweepTimer.unref?.();
 }
@@ -461,6 +495,7 @@ export function clearGitHubCaches(): void {
   openPRListETagCache.clear();
   reviewThreadsCache.clear();
   prRequiredStatusCache.clear();
+  prObservedHeadShaCache.clear();
   forgeQueryCache.clear();
   forgeQueryInflight.clear();
   GitHubFirstPageCache.getInstance().clear();
@@ -520,6 +555,7 @@ export function clearPRCaches(): void {
   openPRListETagCache.clear();
   reviewThreadsCache.clear();
   prRequiredStatusCache.clear();
+  prObservedHeadShaCache.clear();
   // PR queries (GET_PR, LIST_PRS, PR CI status, batch-branch) all flow through
   // forgeProvider.runQuery, so a manual PR refresh must drop their forge cache
   // entries too or it would serve stale state for up to the 60s TTL.

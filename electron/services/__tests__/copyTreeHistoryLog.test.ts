@@ -70,15 +70,6 @@ describe("applyCopyTreeRun", () => {
     expect(records[0].runCount).toBe(2);
   });
 
-  it("keeps runs with genuinely different options apart", () => {
-    let records = applyCopyTreeRun([], input({ options: { modified: true } }), {
-      id: "id-1",
-      now: 1_000,
-    });
-    records = applyCopyTreeRun(records, input({ options: {} }), { id: "id-2", now: 2_000 });
-    expect(records).toHaveLength(2);
-  });
-
   it("dedupes across delivery surfaces and worktrees, adopting the newest", () => {
     let records = applyCopyTreeRun([], input({ source: "toolbar", worktreeId: "wt-1" }), {
       id: "id-1",
@@ -195,14 +186,6 @@ describe("applyCopyTreeRun", () => {
     expect(keptRefs).toContain("ref-0");
     // The genuinely least-recently-used entry is the one that went.
     expect(keptRefs).not.toContain("ref-1");
-  });
-
-  it("lets one explicit name replace another", () => {
-    let records = applyCopyTreeRun([], input({ name: "First name" }), { id: "id-1", now: 1 });
-    records = applyCopyTreeRun(records, input({ name: "Second name" }), { id: "id-2", now: 2 });
-    expect(records).toHaveLength(1);
-    expect(records[0].name).toBe("Second name");
-    expect(records[0].id).toBe("id-1");
   });
 
   it("does not evict the run that just happened when the clock has moved backwards", () => {

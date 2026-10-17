@@ -8,12 +8,19 @@ import { CopyButton } from "@/components/ui/CopyButton";
 import { Skeleton, SkeletonBone } from "@/components/ui/Skeleton";
 import { SettingsActions, SettingsEmptyRow, SettingsGroup } from "./SettingsGroup";
 import {
+  AUDIT_ROW_CLASS,
+  AUDIT_ROW_DETAIL_CLASS,
   AUDIT_TIME_RANGE_MS,
   InlineErrorRow,
+  AuditArgs,
   AuditFilterBar,
   AuditFilterInput,
   AuditFilterSelect,
+  AuditId,
+  AUDIT_ROW_META_CLASS,
+  AuditDuration,
   AuditRecordTime,
+  AuditRowMark,
   AuditTimeRangeSelect,
   type AuditTimeRange,
 } from "./auditLogParts";
@@ -227,52 +234,54 @@ export function PluginActionAuditLogViewer({
       ) : (
         <ul className="max-h-80 overflow-y-auto divide-y divide-border-subtle">
           {filteredRecords.map((record) => (
-            <li key={record.id} className="grid grid-cols-[auto_1fr_auto] gap-2 px-4 py-2 text-xs">
-              <SeverityMark
-                severity={RESULT_SEVERITY[record.result]}
-                label={RESULT_LABEL[record.result]}
-                className="mt-0.5 h-3 w-3"
-              />
-              <div className="min-w-0 select-text">
-                <div className="flex items-center gap-2">
-                  <span className="min-w-0 font-mono text-text-primary break-all">
-                    {record.actionId}
-                  </span>
+            <li key={record.id} className={AUDIT_ROW_CLASS}>
+              <AuditRowMark>
+                <SeverityMark
+                  severity={RESULT_SEVERITY[record.result]}
+                  label={RESULT_LABEL[record.result]}
+                  className="h-3 w-3"
+                />
+              </AuditRowMark>
+              <div className={AUDIT_ROW_DETAIL_CLASS}>
+                <div className="flex flex-wrap items-center gap-x-2">
+                  <AuditId className="text-text-primary">{record.actionId}</AuditId>
                   {record.result !== "success" && (
                     <span className="shrink-0 text-text-secondary">
                       {RESULT_LABEL[record.result]}
                     </span>
                   )}
+                  {/* Pulled into the 16px line so the badge doesn't push this row's
+                      details off the age and duration beside them. */}
                   {record.source ? (
-                    <Badge size="xs">{formatSource(record.source)}</Badge>
+                    <Badge size="xs" className="-my-0.5">
+                      {formatSource(record.source)}
+                    </Badge>
                   ) : record.recordType && RECORD_TYPE_LABEL[record.recordType] ? (
-                    <Badge size="xs">{RECORD_TYPE_LABEL[record.recordType]}</Badge>
+                    <Badge size="xs" className="-my-0.5">
+                      {RECORD_TYPE_LABEL[record.recordType]}
+                    </Badge>
                   ) : null}
                 </div>
-                <div className="mt-0.5 font-mono text-text-secondary break-all">
-                  {record.pluginId}
-                </div>
+                <AuditId className="text-text-secondary">{record.pluginId}</AuditId>
                 {record.errorMessage ? (
-                  <div className="mt-0.5 text-text-primary break-words">{record.errorMessage}</div>
+                  <div className="text-text-primary break-words">{record.errorMessage}</div>
                 ) : null}
                 {record.argsPlaintext ? (
-                  <div className="mt-0.5 font-mono text-text-secondary break-all">
-                    {record.argsPlaintext}
-                  </div>
+                  <AuditArgs text={record.argsPlaintext} subject={record.actionId} />
                 ) : record.argsHash ? (
                   // Always shortened, so the full digest is always on offer.
                   <TruncatedTooltip content={`sha256:${record.argsHash}`} isTruncated>
-                    <div className="mt-0.5 font-mono text-text-secondary truncate">
+                    <div className="font-mono text-text-secondary truncate">
                       sha256:{record.argsHash.slice(0, 16)}…
                     </div>
                   </TruncatedTooltip>
                 ) : null}
               </div>
-              <div className="text-right text-text-secondary whitespace-nowrap tabular-nums">
-                <div>
-                  <AuditRecordTime ts={record.ts} now={now} />
-                </div>
-                <div>{record.durationMs}ms</div>
+              <div className={AUDIT_ROW_META_CLASS}>
+                <AuditRecordTime ts={record.ts} now={now} />
+                <span>
+                  <AuditDuration ms={record.durationMs} />
+                </span>
               </div>
             </li>
           ))}

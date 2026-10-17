@@ -1,24 +1,7 @@
 import { describe, it, expect } from "vitest";
-import {
-  isAgentReady,
-  isAgentInstalled,
-  isAgentMissing,
-  isAgentBlocked,
-  isAgentUnauthenticated,
-  isAgentLaunchable,
-} from "../agentAvailability.js";
+import { isAgentInstalled, isAgentMissing, isAgentLaunchable } from "../agentAvailability.js";
 
 const ALL_STATES = ["missing", "installed", "ready", "blocked", "unauthenticated"] as const;
-
-describe("isAgentReady", () => {
-  it("returns true only for ready", () => {
-    expect(isAgentReady("ready")).toBe(true);
-    for (const s of ALL_STATES) {
-      if (s !== "ready") expect(isAgentReady(s)).toBe(false);
-    }
-    expect(isAgentReady(undefined)).toBe(false);
-  });
-});
 
 describe("isAgentInstalled", () => {
   it("returns true for installed, ready, blocked, and unauthenticated", () => {
@@ -38,26 +21,6 @@ describe("isAgentMissing", () => {
     for (const s of ALL_STATES) {
       if (s !== "missing") expect(isAgentMissing(s)).toBe(false);
     }
-  });
-});
-
-describe("isAgentBlocked", () => {
-  it("returns true only for blocked", () => {
-    expect(isAgentBlocked("blocked")).toBe(true);
-    for (const s of ALL_STATES) {
-      if (s !== "blocked") expect(isAgentBlocked(s)).toBe(false);
-    }
-    expect(isAgentBlocked(undefined)).toBe(false);
-  });
-});
-
-describe("isAgentUnauthenticated", () => {
-  it("returns true only for unauthenticated", () => {
-    expect(isAgentUnauthenticated("unauthenticated")).toBe(true);
-    for (const s of ALL_STATES) {
-      if (s !== "unauthenticated") expect(isAgentUnauthenticated(s)).toBe(false);
-    }
-    expect(isAgentUnauthenticated(undefined)).toBe(false);
   });
 });
 

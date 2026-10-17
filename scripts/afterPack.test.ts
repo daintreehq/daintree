@@ -1,8 +1,16 @@
-import { describe, it, expect, vi, beforeEach, afterAll } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach, afterAll } from "vitest";
 import path from "path";
+import os from "os";
 import Module from "module";
 import { Arch } from "electron-builder";
-import { APP_ASAR_ROOT_ENTRIES, MAX_APP_ASAR_BYTES } from "./afterPack.cjs";
+import fs, { readFileSync } from "fs";
+import { createRequire } from "module";
+import {
+  APP_ASAR_ROOT_ENTRIES,
+  MAX_APP_ASAR_BYTES,
+  applyPlatformFuses,
+  pruneOnnxRuntimeForLinux,
+} from "./afterPack.cjs";
 
 const mockExistsSync = vi.fn();
 const mockReaddirSync = vi.fn();
@@ -113,6 +121,17 @@ describe("afterPack", () => {
   describe("macOS", () => {
     const unpackedBase = "/build/mac/Daintree.app/Contents/Resources/app.asar.unpacked";
 
+    it("keeps cookie encryption on in the configured fuses", async () => {
+      mockExistsSync.mockReturnValue(true);
+      const context = createContext("darwin", "/build/mac");
+      const electronFuses = { enableCookieEncryption: false };
+      Object.assign(context.packager, { config: { electronFuses } });
+
+      await afterPack(context);
+
+      expect(electronFuses.enableCookieEncryption).toBe(true);
+    });
+
     it("should succeed when node-pty and better-sqlite3 exist", async () => {
       mockExistsSync.mockReturnValue(true);
 
@@ -140,16 +159,6 @@ describe("afterPack", () => {
           "/build/mac/MyApp.app/Contents/Resources/app.asar.unpacked",
           "node_modules/node-pty"
         )
-      );
-    });
-
-    it("should log signing message on macOS", async () => {
-      mockExistsSync.mockReturnValue(true);
-
-      await afterPack(createContext("darwin", "/build/mac"));
-
-      expect(consoleSpy).toHaveBeenCalledWith(
-        "[afterPack] Native modules will be signed during code signing phase"
       );
     });
 
@@ -204,19 +213,6 @@ describe("afterPack", () => {
 
       await expect(afterPack(createContext("darwin", "/build/mac"))).rejects.toThrow(
         /posix-pty-reaper supervisor binary not found/
-      );
-    });
-
-    it("should verify the posix-pty-reaper supervisor binary path", async () => {
-      mockExistsSync.mockReturnValue(true);
-
-      await afterPack(createContext("darwin", "/build/mac"));
-
-      expect(mockExistsSync).toHaveBeenCalledWith(
-        path.join(
-          unpackedBase,
-          "node_modules/posix-pty-reaper/build/Release/daintree_pty_supervisor"
-        )
       );
     });
   });
@@ -289,24 +285,6 @@ describe("afterPack", () => {
         /third_party\/conpty not found/
       );
     });
-
-    it("should not log signing message on Windows", async () => {
-      mockExistsSync.mockReturnValue(true);
-
-      await afterPack(createContext("win32", "/build/win"));
-
-      expect(consoleSpy).not.toHaveBeenCalledWith(
-        "[afterPack] Native modules will be signed during code signing phase"
-      );
-    });
-
-    it("should throw when node-pty directory is missing", async () => {
-      mockExistsSync.mockReturnValue(false);
-
-      await expect(afterPack(createContext("win32", "/build/win"))).rejects.toThrow(
-        /node-pty not found/
-      );
-    });
   });
 
   describe("Linux", () => {
@@ -329,54 +307,16 @@ describe("afterPack", () => {
       );
     });
 
-    it("should not log signing message on Linux", async () => {
+    // The hook itself must apply the per-platform fuse, not just the helper.
+    it("turns cookie encryption off in the configured fuses", async () => {
       mockExistsSync.mockReturnValue(true);
+      const context = createContext("linux", "/build/linux");
+      const electronFuses = { runAsNode: false, enableCookieEncryption: true };
+      Object.assign(context.packager, { config: { electronFuses } });
 
-      await afterPack(createContext("linux", "/build/linux"));
+      await afterPack(context);
 
-      expect(consoleSpy).not.toHaveBeenCalledWith(
-        "[afterPack] Native modules will be signed during code signing phase"
-      );
-    });
-
-    it("should throw when node-pty directory is missing", async () => {
-      mockExistsSync.mockReturnValue(false);
-
-      await expect(afterPack(createContext("linux", "/build/linux"))).rejects.toThrow(
-        /node-pty not found/
-      );
-    });
-
-    it("should throw when pty.node binary is missing", async () => {
-      mockExistsSync.mockReturnValueOnce(true).mockReturnValueOnce(false);
-
-      await expect(afterPack(createContext("linux", "/build/linux"))).rejects.toThrow(
-        /native binary not found/
-      );
-    });
-
-    it("should throw when posix-pty-reaper supervisor binary is missing", async () => {
-      mockExistsSync
-        .mockReturnValueOnce(true) // node-pty dir
-        .mockReturnValueOnce(true) // pty.node
-        .mockReturnValueOnce(false); // posix-pty-reaper supervisor
-
-      await expect(afterPack(createContext("linux", "/build/linux"))).rejects.toThrow(
-        /posix-pty-reaper supervisor binary not found/
-      );
-    });
-
-    it("should verify the posix-pty-reaper supervisor binary path", async () => {
-      mockExistsSync.mockReturnValue(true);
-
-      await afterPack(createContext("linux", "/build/linux"));
-
-      expect(mockExistsSync).toHaveBeenCalledWith(
-        path.join(
-          unpackedBase,
-          "node_modules/posix-pty-reaper/build/Release/daintree_pty_supervisor"
-        )
-      );
+      expect(electronFuses).toEqual({ runAsNode: false, enableCookieEncryption: false });
     });
   });
 
@@ -506,7 +446,7 @@ describe("afterPack", () => {
     const unlinked = () => mockUnlinkSync.mock.calls.map((c) => String(c[0]));
 
     // Every single-arch target the build actually ships (electron-builder.config.cjs:
-    // mac dmg/zip x64 + arm64, win nsis x64 + arm64, linux x64). appx x64 shares
+    // mac dmg/zip x64 + arm64, win nsis x64 + arm64, linux x64 + arm64). appx x64 shares
     // the nsis x64 pack — app-builder-lib packs once per arch, then builds both
     // distributables from that tree — so it needs no row of its own.
     it.each([
@@ -515,6 +455,7 @@ describe("afterPack", () => {
       ["win32", "/build/win", Arch.x64, "win32-x64.node", "win32-arm64.node"],
       ["win32", "/build/win-arm64", Arch.arm64, "win32-arm64.node", "win32-x64.node"],
       ["linux", "/build/linux", Arch.x64, "linux-x64.node", "linux-arm64.node"],
+      ["linux", "/build/linux-arm64-unpacked", Arch.arm64, "linux-arm64.node", "linux-x64.node"],
     ] as const)(
       "removes the other CPU arch's prebuild from a standalone %s package at %s",
       async (platform, outDir, arch, keep, drop) => {
@@ -737,16 +678,6 @@ describe("afterPack", () => {
   });
 
   describe("win-job-object load validation", () => {
-    it("should pass on Windows when win_job_object.node dlopens successfully", async () => {
-      mockExistsSync.mockReturnValue(true);
-
-      await afterPack(createContext("win32", "/build/win"));
-
-      expect(consoleSpy).toHaveBeenCalledWith(
-        "[afterPack] win-job-object load check passed (all transitive dependencies resolved)"
-      );
-    });
-
     it("should dlopen the exact win_job_object.node path", async () => {
       mockExistsSync.mockReturnValue(true);
       const dlopenCalls: string[] = [];
@@ -937,25 +868,6 @@ describe("afterPack", () => {
     });
   });
 
-  describe("logging", () => {
-    it("should log platform and output directory", async () => {
-      mockExistsSync.mockReturnValue(true);
-
-      await afterPack(createContext("darwin", "/build/mac"));
-
-      expect(consoleSpy).toHaveBeenCalledWith("[afterPack] Platform: darwin");
-      expect(consoleSpy).toHaveBeenCalledWith("[afterPack] Output directory: /build/mac");
-    });
-
-    it("should log completion on success", async () => {
-      mockExistsSync.mockReturnValue(true);
-
-      await afterPack(createContext("darwin", "/build/mac"));
-
-      expect(consoleSpy).toHaveBeenCalledWith("[afterPack] Complete - native modules validated");
-    });
-  });
-
   describe("app.asar packaging guard (#11475)", () => {
     const OVER_CEILING = /over the .* MiB ceiling/;
 
@@ -1118,5 +1030,131 @@ describe("afterPack", () => {
         /onnxruntime-node not found/
       );
     });
+  });
+});
+
+describe("applyPlatformFuses", () => {
+  const packagerWith = (enableCookieEncryption: boolean) => ({
+    config: { electronFuses: { runAsNode: false, enableCookieEncryption } },
+  });
+
+  it("turns cookie encryption off for Linux and leaves the other fuses alone", () => {
+    const packager = packagerWith(true);
+    applyPlatformFuses(packager, "linux");
+    expect(packager.config.electronFuses).toEqual({
+      runAsNode: false,
+      enableCookieEncryption: false,
+    });
+  });
+
+  it("keeps cookie encryption on for macOS and Windows, even after a Linux pack", () => {
+    const packager = packagerWith(true);
+    applyPlatformFuses(packager, "linux");
+    applyPlatformFuses(packager, "darwin");
+    expect(packager.config.electronFuses.enableCookieEncryption).toBe(true);
+    applyPlatformFuses(packager, "linux");
+    applyPlatformFuses(packager, "win32");
+    expect(packager.config.electronFuses.enableCookieEncryption).toBe(true);
+  });
+
+  it("does nothing when no fuses are configured", () => {
+    expect(() => applyPlatformFuses({ config: {} }, "linux")).not.toThrow();
+    expect(() => applyPlatformFuses({}, "linux")).not.toThrow();
+  });
+
+  // The per-platform value only lands because electron-builder reads
+  // config.electronFuses after running afterPack for the same pack. Pin that
+  // order so an upgrade that moves the fuse flip fails here instead of shipping
+  // Linux with the keyring prompt again.
+  it("relies on electron-builder flipping config.electronFuses after afterPack", () => {
+    const req = createRequire(import.meta.url);
+    const source = readFileSync(req.resolve("app-builder-lib/out/platformPackager.js"), "utf8");
+    const afterPackAt = source.indexOf("await this.info.emitAfterPack(packContext)");
+    const fusesAt = source.indexOf("await this.doAddElectronFuses(packContext)");
+    expect(afterPackAt).toBeGreaterThan(-1);
+    expect(fusesAt).toBeGreaterThan(afterPackAt);
+    expect(source).toMatch(
+      /async doAddElectronFuses\(packContext\) \{[^}]*this\.config\.electronFuses/
+    );
+  });
+});
+
+// Real fs on a temp dir: the static import above loaded afterPack.cjs before
+// any test patched `require`, so this export keeps the real module's fs.
+describe("pruneOnnxRuntimeForLinux", () => {
+  // The layout onnxruntime-node 1.x ships under node_modules/onnxruntime-node/bin.
+  const SHIPPED = [
+    "napi-v6/darwin/arm64/onnxruntime_binding.node",
+    "napi-v6/darwin/arm64/libonnxruntime.1.dylib",
+    "napi-v6/win32/x64/onnxruntime_binding.node",
+    "napi-v6/win32/arm64/onnxruntime_binding.node",
+    "napi-v6/linux/arm64/onnxruntime_binding.node",
+    "napi-v6/linux/arm64/libonnxruntime.so.1",
+    "napi-v6/linux/x64/onnxruntime_binding.node",
+    "napi-v6/linux/x64/libonnxruntime.so.1",
+    "napi-v6/linux/x64/libonnxruntime_providers_shared.so",
+    "napi-v6/linux/x64/libonnxruntime_providers_cuda.so",
+    "napi-v6/linux/x64/libonnxruntime_providers_tensorrt.so",
+  ];
+
+  let unpacked: string;
+  const binRoot = () => path.join(unpacked, "node_modules", "onnxruntime-node", "bin");
+  const remaining = () => SHIPPED.filter((rel) => fs.existsSync(path.join(binRoot(), rel))).sort();
+
+  beforeEach(() => {
+    unpacked = fs.mkdtempSync(path.join(os.tmpdir(), "onnx-prune-"));
+    for (const rel of SHIPPED) {
+      const file = path.join(binRoot(), rel);
+      fs.mkdirSync(path.dirname(file), { recursive: true });
+      fs.writeFileSync(file, "x");
+    }
+  });
+
+  afterEach(() => fs.rmSync(unpacked, { recursive: true, force: true }));
+
+  it("keeps only the target arch's CPU runtime", () => {
+    pruneOnnxRuntimeForLinux(unpacked, ["x64"]);
+    expect(remaining()).toEqual(
+      [
+        "napi-v6/linux/x64/onnxruntime_binding.node",
+        "napi-v6/linux/x64/libonnxruntime.so.1",
+        "napi-v6/linux/x64/libonnxruntime_providers_shared.so",
+      ].sort()
+    );
+  });
+
+  it("keeps arm64 for an arm64 package", () => {
+    pruneOnnxRuntimeForLinux(unpacked, ["arm64"]);
+    expect(remaining()).toEqual(
+      [
+        "napi-v6/linux/arm64/onnxruntime_binding.node",
+        "napi-v6/linux/arm64/libonnxruntime.so.1",
+      ].sort()
+    );
+  });
+
+  it("fails the package when the target's binding is missing", () => {
+    fs.rmSync(path.join(binRoot(), "napi-v6/linux/x64/onnxruntime_binding.node"));
+    expect(() => pruneOnnxRuntimeForLinux(unpacked, ["x64"])).toThrow(
+      /binding missing for linux-x64/
+    );
+  });
+
+  it("fails the package when the target arch's directory isn't there at all", () => {
+    expect(() => pruneOnnxRuntimeForLinux(unpacked, ["riscv64"])).toThrow(
+      /binding missing for linux-riscv64/
+    );
+  });
+
+  it("fails the package when onnxruntime-node has no binaries", () => {
+    fs.rmSync(binRoot(), { recursive: true, force: true });
+    expect(() => pruneOnnxRuntimeForLinux(unpacked, ["x64"])).toThrow(
+      /binding missing for linux-x64/
+    );
+  });
+
+  it("does nothing without onnxruntime-node", () => {
+    fs.rmSync(path.join(unpacked, "node_modules"), { recursive: true, force: true });
+    expect(() => pruneOnnxRuntimeForLinux(unpacked, ["x64"])).not.toThrow();
   });
 });

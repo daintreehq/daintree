@@ -55,6 +55,9 @@ import {
   useErrorRetry,
   useActiveWorktreeSync,
   useAgentActivityBroadcast,
+  useCanopySeenTracking,
+  useCanopySnapshotSync,
+  useCanopyDoubleShift,
 } from "./hooks/app";
 import { useResourceProfile } from "./hooks/useResourceProfile";
 import { AppLayout } from "./components/Layout";
@@ -64,6 +67,7 @@ import { useTypeAnywhere } from "./hooks/useTypeAnywhere";
 
 import { useResumeAgentSession } from "./hooks/useResumeAgentSession";
 import { VoiceRecordingAnnouncer } from "./components/Terminal/VoiceRecordingAnnouncer";
+import { usePendingHostSwitchSync } from "./hooks/usePendingHostSwitchSync";
 import { AccessibilityAnnouncer } from "./components/Accessibility/AccessibilityAnnouncer";
 import { CopyFlash } from "./components/ui/CopyFlash";
 import { TooltipProvider } from "./components/ui/tooltip";
@@ -230,6 +234,9 @@ function AppInner() {
 
   const { activeWorktreeId: liveActiveWorktreeId, defaultTerminalCwd } = useActiveWorktreeSync();
   useAgentActivityBroadcast();
+  useCanopySnapshotSync();
+  useCanopySeenTracking();
+  useCanopyDoubleShift();
   const resumeSession = useResumeAgentSession();
 
   const {
@@ -289,6 +296,7 @@ function AppInner() {
     gitPushResetKey,
     gitForcePushResetKey,
     gitPullRebaseResetKey,
+    fileMutationResetKey,
     gitWorktreeOperationResetKey,
     panelLimitResetKey,
     recipeConflictResetKey,
@@ -415,6 +423,9 @@ function AppInner() {
   useCloudSyncWarning(homeDir);
   useRosettaWarning(bootResult);
   useAccessibilityAnnouncements();
+  // A switch to another host that is taking a while says so, can be cancelled,
+  // and holds typing back until it lands.
+  usePendingHostSwitchSync();
 
   useEffect(() => {
     voiceRecordingService.initialize();
@@ -612,6 +623,7 @@ function AppInner() {
                 gitPushResetKey={gitPushResetKey}
                 gitForcePushResetKey={gitForcePushResetKey}
                 gitPullRebaseResetKey={gitPullRebaseResetKey}
+                fileMutationResetKey={fileMutationResetKey}
                 gitWorktreeOperationResetKey={gitWorktreeOperationResetKey}
                 recipeConflictResetKey={recipeConflictResetKey}
                 gitInitDialogOpen={gitInitDialogOpen}

@@ -35,16 +35,6 @@ describe("terminalInputStore voiceSubmitting", () => {
     useTerminalInputStore.setState({ voiceSubmittingPanels: new Set() });
   });
 
-  it("setVoiceSubmitting adds and removes panels", () => {
-    const store = useTerminalInputStore.getState();
-
-    store.setVoiceSubmitting(PANEL_ID, true);
-    expect(useTerminalInputStore.getState().isVoiceSubmitting(PANEL_ID)).toBe(true);
-
-    store.setVoiceSubmitting(PANEL_ID, false);
-    expect(useTerminalInputStore.getState().isVoiceSubmitting(PANEL_ID)).toBe(false);
-  });
-
   it("clearTerminalState clears voiceSubmitting", () => {
     useTerminalInputStore.getState().setVoiceSubmitting(PANEL_ID, true);
     useTerminalInputStore.getState().clearTerminalState(PANEL_ID);

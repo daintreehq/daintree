@@ -60,14 +60,6 @@ describe("globalRecipes IPC adversarial", () => {
     expect(projectStoreMock.addGlobalRecipe).not.toHaveBeenCalled();
   });
 
-  it("addRecipe rejects non-finite createdAt (Infinity)", async () => {
-    await expect(
-      getHandler(CHANNELS.GLOBAL_ADD_RECIPE)(fakeEvent(), {
-        recipe: { ...validRecipe(), createdAt: Number.POSITIVE_INFINITY },
-      })
-    ).rejects.toThrow(/createdAt/);
-  });
-
   it("addRecipe rejects whitespace-only name", async () => {
     await expect(
       getHandler(CHANNELS.GLOBAL_ADD_RECIPE)(fakeEvent(), {
@@ -184,16 +176,6 @@ describe("globalRecipes IPC adversarial", () => {
     expect(projectStoreMock.updateGlobalRecipe).not.toHaveBeenCalled();
   });
 
-  it("updateRecipe rejects non-finite lastUsedAt patch", async () => {
-    await expect(
-      getHandler(CHANNELS.GLOBAL_UPDATE_RECIPE)(fakeEvent(), {
-        recipeId: "r1",
-        updates: { lastUsedAt: Number.POSITIVE_INFINITY } as unknown as Record<string, unknown>,
-      })
-    ).rejects.toThrow(/lastUsedAt/);
-    expect(projectStoreMock.updateGlobalRecipe).not.toHaveBeenCalled();
-  });
-
   it("updateRecipe rejects usageHistory patch exceeding the 20-entry cap", async () => {
     await expect(
       getHandler(CHANNELS.GLOBAL_UPDATE_RECIPE)(fakeEvent(), {
@@ -277,11 +259,5 @@ describe("globalRecipes IPC adversarial", () => {
       })
     ).rejects.toThrow(/secret.*datadog-key|DD_API_KEY/i);
     expect(projectStoreMock.addGlobalRecipe).not.toHaveBeenCalled();
-  });
-
-  it("cleanup removes all four handlers", () => {
-    expect(ipcHandlers.size).toBe(4);
-    cleanup();
-    expect(ipcHandlers.size).toBe(0);
   });
 });

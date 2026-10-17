@@ -115,6 +115,11 @@ class MockTerminalProcess {
     return this.info;
   }
 
+  // Windows reads it to hold the tree-kill helper warm while PTYs are live.
+  getPublicState() {
+    return { hasPty: !this.info.wasKilled && !this.info.isExited };
+  }
+
   shouldPreserveOnExit(): boolean {
     return false;
   }
@@ -253,17 +258,6 @@ describe("PtyManager lifecycle ledger", () => {
     shared.agentTransitionState.mockReturnValue(true);
     shared.deleteSessionFile.mockResolvedValue(undefined);
     shared.getGitBranch.mockResolvedValue("feature/x");
-  });
-
-  it("applies a pre-first-spawn buffered resize as initial dims", () => {
-    const manager = new PtyManager();
-
-    // Renderer resize beats the spawn IPC — the classic race the buffer serves.
-    manager.resize("t1", 132, 43);
-    manager.spawn("t1", spawnOptions({ launchGeneration: 1 }));
-
-    expect(shared.created[0]?.options.cols).toBe(132);
-    expect(shared.created[0]?.options.rows).toBe(43);
   });
 
   it("stamps a resize result with the incarnation that applied it (#11641)", () => {

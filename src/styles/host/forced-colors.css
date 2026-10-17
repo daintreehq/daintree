@@ -1,0 +1,787 @@
+/* Windows High Contrast / forced-colors support
+   In forced-colors mode the UA overrides color, background-color, border-color,
+   outline-color and removes box-shadow entirely. We ensure critical UI boundaries
+   remain visible by using CSS system color keywords. */
+@media (forced-colors: active) {
+  /* Every dock chip already wears a system-colour border here, so the panel
+     transition's receiving cue, drawn on top of one, would vanish into it. */
+  [data-panel-transition-cue] {
+    border: 2px solid Highlight;
+  }
+
+  /* Every mark at full strength; the digit beside it still says "empty". */
+  .quick-state-glyph-empty {
+    opacity: 1;
+  }
+
+  *:focus-visible {
+    outline: 2px solid Highlight !important;
+    outline-offset: 2px !important;
+  }
+
+  /* The UA greys a natively disabled button, but not one that announces
+     unavailability with `aria-disabled` to stay focusable — which is what
+     `Button` does for `disabled`-while-loading and what the full-width CTAs do
+     while blocked. Without this a blocked Commit or Continue reads exactly
+     like an available one. */
+  button[aria-disabled="true"],
+  [role="button"][aria-disabled="true"] {
+    color: GrayText;
+    border-color: GrayText;
+  }
+
+  /* Chromium forces an inherited `currentColor` but not a colour set on the SVG
+     itself, by class or inline style — so a severity glyph kept its amber stroke
+     on the white canvas at ~2.6:1. The glyph's shape carries the severity here;
+     its stroke only has to be seen. The attribute marks glyphs coloured inline;
+     the class match catches every icon tinted with a status utility directly,
+     which is most of them. A category hue is an identity, not a severity, but
+     its stroke fails the same way — the remote host's server glyph kept its
+     purple at ~2.5:1 — and its shape carries it just as well. */
+  [data-severity-glyph],
+  svg[class*="-status-"],
+  svg[class*="-category-"] {
+    color: CanvasText !important;
+  }
+
+  /* The same uncaught class colour greys a menu's own marks: the current-row
+     tick and the leading icons are drawn in secondary ink, which stayed
+     zinc-grey on the white canvas at ~2.6:1. A highlighted row is an outline
+     here, not a fill, so its marks stay on Canvas too. */
+  [role="menu"] svg:is(.text-text-primary, .text-text-secondary, .text-text-muted) {
+    color: CanvasText !important;
+  }
+
+  /* A separator is a 1px background, which forced colours paint as Canvas, so
+     a menu's sections ran together. Drawn as a border it survives. */
+  [role="menu"] [role="separator"] {
+    height: 0;
+    border-top: 1px solid CanvasText;
+  }
+
+  /* Inside a button the forced pair is ButtonText on ButtonFace, which a custom
+     contrast theme can set apart from CanvasText on Canvas. */
+  button [data-severity-glyph],
+  button svg[class*="-status-"],
+  button svg[class*="-category-"] {
+    color: ButtonText !important;
+  }
+
+  /* Rings drawn inset on purpose — inside an overflow-hidden group or an
+     unpadded scroller, where an outward ring is clipped — must stay inset
+     here, or forced colors pushes them back out to be clipped. */
+  [class*="focus-visible:-outline-offset-"]:focus-visible,
+  [class*="focus-visible:outline-offset-[-"]:focus-visible {
+    outline-offset: -2px !important;
+  }
+
+  /* The working glyph is nothing but a masked background, which the forced
+     canvas colour would erase. */
+  .spinner-circle {
+    forced-color-adjust: none;
+    background: CanvasText;
+  }
+
+  .xterm {
+    forced-color-adjust: none;
+  }
+
+  /* An avatar placeholder is only a tinted background, which forced colors
+     erases — the slot would read as a gap in a row of faces. An inset outline
+     keeps its shape and size; the failed glyph takes the text colour. */
+  [data-avatar-fallback] {
+    outline: 1px solid CanvasText;
+    outline-offset: -1px;
+    color: CanvasText;
+  }
+
+  /* The grid scrollbar's thumb survives on its 2px border, which forced colors
+     paints CanvasText; its fill does not. Hover and drag lose their fill steps
+     the same way, so they move to the border and then the fill in Highlight —
+     the same rest / hover / grabbed ladder, in system colours. */
+  [data-grid-scrollbar-thumb][data-phase="hover"] {
+    border-color: Highlight;
+  }
+
+  [data-grid-scrollbar-thumb][data-phase="drag"] {
+    forced-color-adjust: none;
+    background-color: Highlight;
+    border-color: Highlight;
+  }
+
+  /* The trash TTL meter is a coloured background against a coloured track, and
+   * forced colors replaces both — which leaves a bar whose length carries the
+   * remaining-time signal with no edge to see it against. Give the fill a
+   * system colour and the track a visible outline so length survives; the
+   * numeric label beside it carries the value either way. */
+  [data-trash-meter] {
+    outline: 1px solid CanvasText;
+    outline-offset: 0;
+  }
+
+  /* Skeleton bones are nothing but a translucent fill, which forced colors
+   * replaces with the canvas — the whole silhouette would vanish and a loading
+   * pane would read as an empty one. An inset GrayText outline keeps each
+   * bone's shape; GrayText is the system's own "not yet available" colour. */
+  [data-skeleton-bone] {
+    outline: 1px solid GrayText;
+    outline-offset: -1px;
+  }
+
+  [data-trash-meter] > * {
+    background-color: CanvasText;
+    forced-color-adjust: none;
+  }
+
+  /* The recorder's chord window is only a background, which forced colors
+   * would repaint as the field's own Canvas. */
+  [data-chord-window] {
+    background-color: CanvasText;
+    forced-color-adjust: none;
+  }
+
+  /* Command HUD glass — drop the frosted material for a solid system surface;
+   * the UA forces bg to Canvas and removes the shadow anyway. */
+  .command-hud-glass {
+    -webkit-backdrop-filter: none;
+    backdrop-filter: none;
+    background-color: Canvas;
+  }
+
+  /* Empty-state icons carry a 30%-opacity text colour, which the UA maps to a
+     near-Canvas value in forced-colors — measured at roughly 1.06:1 on white,
+     i.e. invisible. These states are often icon-plus-one-line, so losing the
+     icon removes half the state. Repaint with CanvasText and drop the opacity
+     mixing that caused it. */
+  [data-empty-state-icon] {
+    color: CanvasText !important;
+    opacity: 1 !important;
+  }
+
+  .terminal-selected,
+  .terminal-selected:focus-visible {
+    outline: 2px solid Highlight;
+    outline-offset: -2px;
+    border-color: Highlight;
+  }
+
+  /* The global forced-colors ring above pushes every focus outline 2px out
+     with !important; a focused root's ring is its pane edge, so it stays in
+     where a terminal's does. */
+  .terminal-selected:focus-visible {
+    outline-offset: -2px !important;
+  }
+
+  .terminal-focused {
+    outline: 2px solid Highlight;
+    outline-offset: -2px;
+    border-color: Highlight;
+  }
+
+  /* The agent composer's three states, which normally live in fills and
+     terminal-palette mixes the UA throws away. Rest is the plain system edge;
+     the selected composer doubles it; the composer holding the keyboard takes
+     the app's Highlight ring, clear of the edge like every field's. The
+     editor inside would otherwise wear a second Highlight ring of its own. */
+  [data-composer-state] {
+    border-color: ButtonText;
+  }
+
+  [data-composer-state="selected"] {
+    outline: 1px solid CanvasText;
+    outline-offset: 0;
+  }
+
+  [data-composer-state]:has(.cm-content:focus-visible) {
+    outline: 2px solid Highlight;
+    outline-offset: 2px;
+  }
+
+  [data-composer-state] .cm-content:focus-visible {
+    outline: none !important;
+  }
+
+  /* The UA forces the placeholder to CanvasText, the same ink as a typed
+     draft, so an empty composer read as a filled one. GrayText is what a
+     native field's placeholder takes here. */
+  [data-composer-state] .cm-placeholder {
+    color: GrayText;
+  }
+
+  /* Highlight follows the keyboard. A selected pane wears it because its
+     terminal holds the keys; once its own composer takes them, the composer's
+     ring says so and the pane edge steps down to the system ink, rather than
+     two Highlight perimeters nesting. */
+  .terminal-selected:has([data-composer-state] .cm-content:focus-visible) {
+    outline-color: CanvasText;
+    border-color: CanvasText;
+  }
+
+  .assistant-focused:has([data-composer-state] .cm-content:focus-visible) {
+    outline-color: CanvasText;
+    border-left-color: CanvasText;
+  }
+
+  .assistant-focused {
+    outline: 2px solid Highlight;
+    outline-offset: -2px;
+    border-left-color: Highlight;
+  }
+
+  .panel-state-compiling {
+    border-color: GrayText;
+  }
+
+  .panel-state-waiting {
+    border-color: Highlight;
+    outline: 2px solid Highlight;
+    outline-offset: -2px;
+  }
+
+  .panel-state-working {
+    border-color: Highlight;
+    animation: none;
+  }
+
+  .panel-state-hibernated {
+    border-color: GrayText;
+  }
+
+  .panel-voice-dictation-locked,
+  .panel-state-arming {
+    border-color: Highlight;
+    outline: 2px solid Highlight;
+    outline-offset: -2px;
+  }
+
+  .terminal-pane {
+    border-color: ButtonText;
+  }
+
+  /* A segmented toggle marks its selection with one filled thumb, and a fill is
+     exactly what forced-colors strips — leaving two identically-outlined
+     segments and no way to see which view you are actually on. Same problem and
+     same remedy as [data-highlighted] below: repaint the selection as a border,
+     which the UA leaves alone. ButtonText rather than Highlight, because
+     Highlight is spoken for by :focus-visible two rules up and a selected
+     segment that is not focused must not claim the focus cue. */
+  [data-slot="segmented-thumb"] {
+    border: 2px solid ButtonText;
+  }
+
+  /* The Radix item rows carry `outline-hidden`, which Tailwind turns into a 2px
+     transparent outline in this mode so a focus ring can still be recoloured —
+     and the engine paints that transparent outline in CanvasText. Every row of
+     every menu came out boxed, so the highlighted one was the only row that did
+     NOT look different. Canvas gives back the invisibility on the rows that are
+     not highlighted; the rule below outlines the one that is. */
+  :is(
+      [role="menuitem"],
+      [role="menuitemcheckbox"],
+      [role="menuitemradio"],
+      [role="option"]
+    ).outline-hidden:not([data-highlighted]):not(:focus-visible) {
+    outline-color: Canvas;
+  }
+
+  /* Radix highlighted items rely on background-color which is stripped here.
+     Fall back to a system outline so the active menu/select row stays visible. */
+  [data-highlighted] {
+    outline: 2px solid Highlight;
+    outline-offset: -2px;
+  }
+
+  /* The highlighted palette row is a fill, which this mode strips, so it falls
+     back to the same `Highlight` outline as the Radix rule above — one treatment
+     for "the row Enter acts on" whichever family drew it. `Highlight` rather
+     than `SelectedItem`: several OS palettes pair SelectedItem with Canvas at
+     well under 3:1 (Chromium's own default is about 1.7:1), and this is the
+     cursor, not a selection. Deliberately an outline and not a fill: these rows
+     carry independently surfaced children (theme "Active" badges, action
+     category chips, panel-kind icons with inline colour), and a fill would
+     leave them painting on a pair with no contrast guarantee. Scoped to the
+     `.palette-row` marker rather than [role="option"], which the file pane, the
+     settings selectors and the agent/forge dropdowns use too. */
+  /* The row's `border border-transparent` is a layout reservation — it holds
+     every row's content box on one column — but forced colors remaps border
+     colours from the system palette, so a border that paints nothing in every
+     theme painted a `CanvasText` box round every row here. A list of twenty rows
+     read as a stack of input fields, with the doubled rules between adjacent
+     borders competing with the band headings that actually organise it.
+     `Canvas` keeps the reservation and gives back the invisibility; the selected
+     row's own outline below is unaffected, and is what marks the row. */
+  .palette-row,
+  .palette-row[aria-disabled="true"] {
+    border-color: Canvas;
+  }
+
+  .palette-row[aria-selected="true"],
+  .palette-row[data-selected="true"] {
+    outline: 2px solid Highlight;
+    outline-offset: -2px;
+  }
+
+  /* The forge issue/PR and local-commit rows mark their cursor with the
+     highlight fill, keyed on `data-active` because the issue grid spends
+     `aria-selected` on bulk membership. This mode strips the fill, and the
+     `.palette-row` rule above is deliberately scoped away from `[role="row"]`,
+     so without this the cursor vanishes in Windows High Contrast. Membership
+     needs no outline of its own: its filled checkbox is the mark, and the
+     engine redraws that glyph from system colours. */
+  .forge-row[data-active="true"] {
+    outline: 2px solid Highlight;
+    outline-offset: -2px;
+  }
+
+  /* The worktree overview grid has the same two states as the forge rows, and
+     both of its normal-mode marks are stripped here: membership paints a tint
+     plus a Tailwind `ring` (a box-shadow), and the keyboard cursor paints an
+     accent outline that the UA recolours. Split them the same way — membership
+     keeps the outline, the cursor moves to the cell's border, which is a
+     property nothing else on the cell is using. Giving both an outline would
+     let the later rule win and a selected cell under the cursor would lose the
+     cursor. */
+  [role="gridcell"][aria-selected="true"][data-worktree-overview-cell] {
+    outline: 2px solid SelectedItem;
+    outline-offset: -2px;
+  }
+
+  /* Scoped to the focused grid, matching the normal-mode rule. The cursor is
+     `aria-activedescendant`, so its id is deliberately retained after the grid
+     loses focus — but the mark is not meant to survive with it. Unscoped, a
+     user who tabbed back to the search field kept a Highlight-bordered card on
+     screen while the field drew its own focus ring. */
+  [role="grid"]:focus-visible [data-worktree-overview-cell][data-overview-cursor="true"] {
+    border-color: Highlight;
+    border-width: 2px;
+  }
+
+  /* The project switcher's command rows run full-bleed, so their border box
+     reaches the palette's own clipped edge. The blanket `outline-offset: 2px`
+     above would draw their focus ring outside that clip and lose its left and
+     right strokes entirely — the ring has to turn inward here. `!important`
+     because the rule it is answering carries one, and specificity alone does
+     not settle a contest between two important declarations. Same marker-class
+     approach as `.palette-row`, for the same reason: `button` is far too broad
+     a hook to hang this on. */
+  .palette-command-row:focus-visible {
+    outline-offset: -2px !important;
+  }
+
+  /* Macro-focus regions use a Tailwind ring (box-shadow) which is removed here.
+     Fall back to a system outline so the focused region stays visible. */
+  [data-macro-focus="true"] {
+    outline: 2px solid Highlight;
+    outline-offset: -2px;
+  }
+
+  /* A selected document tab (grid, dock, portal and assistant strips) marks
+     itself with a background tint plus a framer-motion underline, both
+     background-color based and stripped here. Fall back to a system-color
+     bottom border so the selected tab stays visible. Scoped to
+     [data-document-tab] so the rule doesn't add a directionally-wrong bottom
+     border to the vertical Settings nav, which uses a different selector. */
+  [role="tab"][aria-selected="true"][data-document-tab] {
+    border-bottom: 2px solid SelectedItem;
+  }
+
+  /* Radix submenu triggers signal their open state with a background tint via
+     data-state="open"; that is stripped here. Scope to [role="menuitem"] so the
+     fallback doesn't collide with dialog/popover/combobox open states. */
+  [role="menuitem"][data-state="open"] {
+    outline: 2px solid Highlight;
+    outline-offset: -2px;
+  }
+
+  /* The file-browser row whose context menu is open marks its target with a
+     background tint via data-state="open", which is stripped here. Right-click
+     no longer moves the selection, so without this the targeted row would carry
+     no forced-colors cue at all. Scoped to [role="treeitem"] so it stays
+     independent of the menuitem fallback above. */
+  [role="treeitem"][data-state="open"] {
+    outline: 2px solid Highlight;
+    outline-offset: -2px;
+  }
+
+  button,
+  [role="button"],
+  [type="button"],
+  [type="submit"],
+  [type="reset"] {
+    border: 1px solid ButtonText;
+  }
+
+  /* The launcher's teaching link is a control that must never read as one.
+     The blanket border above frames it into a pill sitting under the canvas
+     home's tip sentence, which is exactly the "another action module" the tip
+     is designed not to be — and the surface already carries a real primary
+     action four bands above it. Its permanent underline is the affordance in
+     every mode, so dropping the frame costs nothing.
+
+     Deliberately duplicated rather than shared with the `prefers-contrast`
+     block below: macOS fires only `prefers-contrast: more` and Windows swaps
+     in system colours, so the two blocks stay independent (see the rationale
+     at the top of each). */
+  .tip-action {
+    border: none;
+  }
+
+  /* Every link-variant button, for the same reason as the tip link: its
+     standing underline is the affordance in every mode, and a frame would turn
+     a link inside a sentence into a pill. */
+  [data-variant="link"] {
+    border: none;
+  }
+
+  /* A list row whose selection target is a button beside a sibling control
+     (the plugin manager's rows: select button + enable switch). The row is the
+     frame and owns the selected outline; the blanket border drew a second box
+     round the text half and left the switch outside it. */
+  .row-select-target {
+    border: none;
+  }
+
+  /* A destructive button is distinguished only by its fill, and the UA replaces
+   * every fill with a system colour — so "Delete worktree" and "Cancel" render
+   * as the same white pill with the same border, and nothing marks which one
+   * destroys. Stroke WEIGHT is one of the few things the UA leaves alone, so
+   * the destructive action takes a heavier border. Deliberately not an outline:
+   * the focus ring above already owns `outline` and the later rule would win,
+   * erasing the distinction on the button the user is most likely focused on. */
+  button[data-variant="destructive"] {
+    border: 2px solid ButtonText;
+  }
+
+  /* The standard dialog primary has the same problem: its high-contrast fill is
+   * the only thing separating it from the outline and ghost actions beside it,
+   * and the UA flattens all three to one system pill. Same stroke-weight cue,
+   * which reads as the platform's own default-button border. A dialog carries a
+   * destructive or a contrast primary, never both, so the two never compete. */
+  button[data-variant="contrast"] {
+    border: 2px solid ButtonText;
+  }
+
+  /* …and the weight has to be re-asserted on everything else, or the signal
+   * above collapses. The `prefers-contrast: more` block later in this file sets
+   * `border-width: 2px` on bare `button` to anchor click targets, and Chromium
+   * reports `prefers-contrast: more` alongside `forced-colors: active` on a
+   * high-contrast Windows palette — so on the platform this block exists for,
+   * Cancel reached 2px, the destructive button was already 2px, and the two
+   * rendered identically. The same held for a notification's primary action,
+   * whose 2px hook sits at (0,1,0) and lost to this rule until it was exempted.
+   * Pinning the others back to 1px rather than raising the
+   * destructive to 3px: the 1px/2px pair is the distinction that was designed,
+   * and the later block's own purpose — a visible border where Preflight left
+   * none — is already served by the 1px shorthand above.
+   *
+   * The specificity here is calibrated, not incidental, and it has to sit in a
+   * narrow band. `:where()` contributes nothing and `html` supplies the element,
+   * so the whole selector is (0,1,1):
+   *
+   *   - above the later generic `button` at (0,0,1), so it wins on rank rather
+   *     than on which block happens to come last in the file;
+   *   - BELOW `toolbar.css`'s armed/open rules at (0,2,0), which set their own
+   *     2px ButtonText border as the forced-colors fallback for a stripped tint
+   *     and inset ring. Spelling this out per-attribute instead — as
+   *     `[type="button"]:not(…)` — lands at (0,2,0), ties those, and wins on
+   *     source order, which silently flattens every pressed or open toolbar
+   *     control back to idle. */
+  html
+    :where(button, [role="button"], [type="button"], [type="submit"], [type="reset"]):not(
+      [data-variant="destructive"],
+      [data-variant="contrast"],
+      [data-notification-action="primary"]
+    ) {
+    border-width: 1px;
+  }
+
+  input,
+  select,
+  textarea {
+    border: 1px solid FieldText;
+  }
+
+  /* ActivityLight: the active state paints via an inline background-color the
+     UA forces to Canvas (invisible), while the idle ring's border survives as
+     ButtonText — inverting the meaning. Repaint the active dot with CanvasText.
+     !important is required to beat the inline author style under forced colors;
+     this is the only place in this block that needs it. */
+  [data-activity-active="true"] {
+    background-color: CanvasText !important;
+  }
+
+  /* Inbox unread dot. Same problem, same fix: the dot is a solid background, so
+     forced colors pushes it to Canvas and it vanishes. It is load-bearing here
+     in a way it is not elsewhere — an unread inbox row deliberately carries no
+     border and no background tint (weight on the title is the only companion
+     signal), and an untitled row has no title to embolden, so losing the dot
+     leaves that row with no unread indication at all. CanvasText, not
+     Highlight: this block already spends Highlight on `*:focus-visible`, and a
+     row can be both unread and focused. */
+  [data-notification-unread="true"] {
+    background-color: CanvasText !important;
+    /* The dot badges the status icon now instead of sitting off in the row's
+       left gutter, and this block paints the icon CanvasText too — so the two
+       fuse into one malformed glyph without a cut-out between them. The ring
+       that separates them in the normal cascade is a box-shadow, and box
+       shadows are not painted here, so the cut-out has to be an outline.
+       Outlines follow border-radius, so it stays round. */
+    outline: 1.5px solid Canvas;
+  }
+
+  /* Inbox thread-count chip. The tint fill is forced to Canvas, which strips the
+     pill and leaves a bare numeral running on from the title — "Push rejected 3"
+     reads as the title rather than as a count of three grouped events. Borders
+     survive the override, so give it one. */
+  [data-notification-count="true"] {
+    border: 1px solid CanvasText;
+  }
+
+  /* Inbox thread rail. This used to be a `border-l-2`, which survived the
+     override on its own but pushed every threaded row 2px right of every solo
+     one. It is now an absolutely positioned background, and a background is
+     forced to Canvas here — so repaint it, or threaded rows lose their only
+     at-rest marker in the one mode that has no other way to show it. */
+  [data-notification-thread-rail="true"] {
+    background-color: CanvasText !important;
+  }
+
+  /* Filter chips and pressed toggle buttons. Selection is carried by a fill and
+     a ring, which the UA flattens to Canvas and strips, so every chip arrives
+     as the same outlined pill and every toggle as the same button — you cannot
+     tell Archived from All, Dirty from Stale, or whether "Group by turn" is
+     on. Same shape of problem as the destructive button above, and the same
+     remedy: the selected one takes the heavier border. Not Highlight — this
+     block already spends Highlight on `*:focus-visible`, and a chip can be both
+     selected and focused. `:is()` keeps this at (0,2,0), above the (0,1,1)
+     1px border pin on buttons earlier in this block, which would otherwise
+     thin a pressed toggle back to idle. */
+  :is([data-filter-chip="true"], [data-toggle="true"])[aria-pressed="true"] {
+    border: 2px solid ButtonText;
+  }
+
+  /* The quick state filters (sidebar and Pilot) mark the selected segment with
+     an inset box-shadow underline, which forced colors removes entirely. Redraw
+     the underline in the same place rather than borrowing the chips' border —
+     a border would shift the segment's contents by its width. ButtonText, not
+     Highlight, for the same reason as the chips above. */
+  [data-quick-state-segment][aria-checked="true"] {
+    position: relative;
+  }
+
+  [data-quick-state-segment][aria-checked="true"]::after {
+    content: "";
+    position: absolute;
+    inset-inline: 0;
+    bottom: 0;
+    height: 2px;
+    forced-color-adjust: none;
+    background: ButtonText;
+  }
+
+  /* Notification actions, in inbox rows and the grid bar. Primary is marked by
+     a fill and border that forced colours flatten, leaving "Pull and rebase" and
+     "Open review" identical, so the recommended action loses its recommendation
+     at exactly the moment the notification is reporting a failure. */
+  [data-notification-action="primary"] {
+    border: 2px solid ButtonText;
+  }
+
+  /* Shared hook for status marks painted as a background — the small discs and
+     the rotated anomaly diamond scattered across settings, panels, the toolbar
+     and the worktree surfaces (#12000). The UA forces every one of those fills
+     to Canvas, so the mark renders as nothing; `ring-*` is no rescue either
+     since it compiles to box-shadow, which is removed outright and cannot be
+     repainted. Repaint the fill instead.
+
+     One CanvasText fill for all of them on purpose: hue is gone here whatever
+     we do, so for a single mark this rule only owes that it is still THERE.
+     Marks whose severity is the signal do not lean on the fill for it — they
+     carry a glyph from `src/lib/statusSeverity.ts`, whose shape survives where
+     colour cannot.
+
+     A mark MAY still carry meaning under this hook by being more than one
+     element: `WorktreeStatusTick` puts the class on each of its 1-3 segments,
+     so what this rule flattens is three fills that were already the same
+     colour to a forced-colors reader, and the gaps between them — which are
+     real elements, not a background pattern — go on doing the telling apart.
+     Consolidating such a class onto its container would repaint the gaps too
+     and collapse every state into one bar. Put it on the pieces. */
+  .status-mark {
+    background-color: CanvasText !important;
+  }
+
+  /* Marks that live inside a control. The UA paints button surfaces ButtonFace,
+     and only ButtonText is guaranteed to contrast against it — Canvas and
+     ButtonFace happen to be the same colour in the stock high-contrast themes,
+     but a user's own palette is free to separate them. Same repaint, matched
+     pair. */
+  button .status-mark,
+  [role="button"] .status-mark {
+    background-color: ButtonText !important;
+  }
+
+  /* The working glyph is a masked background too, so it takes the same pair. */
+  button .spinner-circle,
+  [role="button"] .spinner-circle,
+  [role="tab"] .spinner-circle,
+  [role="radio"] .spinner-circle {
+    background: ButtonText;
+  }
+
+  /* The stroked state circles (waiting ring, interacting, exited) paint in
+     `currentColor` from a state-hue class, and an SVG keeps a colour it was
+     given outright — so the hue survived onto the forced canvas, where an
+     amber ring on white is 1.7:1. Inheriting instead hands the glyph whatever
+     ink the UA forced onto its parent: CanvasText on the canvas, ButtonText on
+     a real button, HighlightText on a selected row. Naming a system colour
+     here would guess that pairing from the role, and roles do not change it.
+     Their shape is the state in this mode, as with the spinner. */
+  [data-agent-state-glyph] {
+    color: inherit;
+  }
+
+  /* The ring glyphs' faint interior wash keeps its fill-opacity here, so it
+     would land as a grey disc of system ink behind the mark; the ring and its
+     mark carry the state on their own. */
+  [data-glyph-wash] {
+    fill: none;
+  }
+
+  /* Resource readouts' warning marks and the pane badge's CPU line, for the
+     same reason: their hue is an amber or red the forced canvas cannot hold,
+     and the mark's shape and the line's height already say what the hue did. */
+  [data-resource-glyph] {
+    color: inherit;
+  }
+
+  /* The one mark whose emptiness IS the state.
+     The sidebar footer's readout says working with a filled dot and idle with a
+     hollow ring, so the shape carries the distinction where colour cannot — and
+     the blanket repaints above, written for marks whose fill would otherwise
+     vanish, would flatten that ring into a solid disc and lose the only signal
+     forced colors had left. Keep its interior the surface colour and let the
+     border do the telling. Matched pair, same reasoning as above: Canvas
+     outside a control, ButtonFace within one. */
+  .status-mark[data-working="false"] {
+    background-color: Canvas !important;
+    border-color: CanvasText !important;
+  }
+
+  button .status-mark[data-working="false"],
+  [role="button"] .status-mark[data-working="false"] {
+    background-color: ButtonFace !important;
+    border-color: ButtonText !important;
+  }
+
+  /* Project-switcher row marks. The solid states are a CSS background, which
+     forced colors pushes toward Canvas, so the whole 8px slot would read as
+     empty. Repaint them as a CanvasText disc: hue is gone here either way, and
+     the row's own line states both counts in words, so all this has to preserve
+     is that the row is marked at all. */
+  div.workspace-mark {
+    background-color: CanvasText !important;
+    border-color: CanvasText;
+  }
+
+  /* The two-tone mark is an SVG, so it needs its fills forced rather than its
+     background. Both shapes collapse to one CanvasText disc: the split cannot
+     survive a palette with no second colour to carry it. */
+  svg.workspace-mark circle,
+  svg.workspace-mark path {
+    fill: CanvasText;
+  }
+
+  /* SettingsSwitch (Radix Switch). The track's unchecked border is already
+     covered by the global button/[role="button"] rule above. Add the checked
+     fill plus thumb contrast so on/off is distinguishable beyond thumb position.
+     Scoped to a [data-state] parent so the two non-Radix custom role="switch"
+     buttons (plain <span> children, no data-state) are not matched. */
+  [role="switch"][data-state="checked"] {
+    background-color: Highlight;
+    border-color: Highlight;
+  }
+
+  [role="switch"][data-state] span[data-state="checked"] {
+    background-color: HighlightText;
+  }
+
+  [role="switch"][data-state] span[data-state="unchecked"] {
+    background-color: ButtonText;
+  }
+
+  /* Project Pulse heatmap (issue #9819). Theme-authored backgrounds collapse
+   * to Canvas under forced-colors, so the four heat levels become
+   * indistinguishable. Use a system-paint + size-coded inner square (GitHub's
+   * 2023+ contribution-graph approach) keyed off data-heat-level. The shape
+   * span is rendered always (display: none baseline) so theme switches don't
+   * reflow; the !important on the heat cell background is required to beat
+   * the inline author style set in PulseHeatmap.getCellStyle. A zero-commit
+   * day carries no shape at all — quiet, never a failure signal. */
+  .pulse-heat-cell {
+    background: Canvas !important;
+  }
+  .pulse-heat-cell-shape {
+    display: block;
+    background: CanvasText !important;
+  }
+  .pulse-heat-cell[data-heat-level="1"] .pulse-heat-cell-shape {
+    width: 35%;
+    height: 35%;
+  }
+  .pulse-heat-cell[data-heat-level="2"] .pulse-heat-cell-shape {
+    width: 55%;
+    height: 55%;
+  }
+  .pulse-heat-cell[data-heat-level="3"] .pulse-heat-cell-shape {
+    width: 75%;
+    height: 75%;
+  }
+  .pulse-heat-cell[data-heat-level="4"] .pulse-heat-cell-shape {
+    width: 90%;
+    height: 90%;
+  }
+  /* The empty (level 0) legend swatch is a <span>, so it misses both the
+     global button ButtonText border above and the shape-span cue (empty cells
+     carry neither a shape nor a data-heat-level). Left alone it paints Canvas
+     on Canvas — invisible. Grid empty cells stay visible because they're
+     <button>s with the border; give the legend's empty swatch an equivalent
+     CanvasText border so "Less" remains a visible box. */
+  [data-testid="pulse-heatmap-legend"] .pulse-heat-cell {
+    border: 1px solid CanvasText;
+  }
+
+  /* The latest-active ring is a box-shadow, which forced colors drops. Redraw
+     it as a dotted outline — distinct from the solid Highlight focus outline
+     above, so "last active" and "focused here" never read as one mark. */
+  .pulse-heat-cell[data-latest-active] {
+    outline: 1px dotted CanvasText;
+    outline-offset: 1px;
+  }
+
+  /* The canvas-home's collapsed pulse ribbon (ProjectPulseStrip.MiniRibbon).
+     Same span-not-button problem as the legend above, at 6px: a size-coded
+     inner shape is too small to read here, so the ribbon codes activity as
+     filled-vs-outlined instead. Every cell keeps a CanvasText outline so the
+     18-day TRACK stays visible — without it the active days float with no
+     baseline and the strip reads as scattered marks rather than a sequence —
+     and an active day fills solid. */
+  [data-testid="pulse-mini-ribbon"] .pulse-heat-cell {
+    border: 1px solid CanvasText;
+  }
+  [data-testid="pulse-mini-ribbon"] .pulse-heat-cell[data-heat-level] .pulse-heat-cell-shape {
+    width: 100%;
+    height: 100%;
+  }
+
+  /* The streak flame's tier colour is an inline author style, and SVG keeps
+     its parent's colour under forced colors, so it stayed orange on a system
+     Canvas. The day count beside it carries the meaning; the glyph follows the
+     text it sits with. */
+  .pulse-streak-flame {
+    color: CanvasText !important;
+  }
+
+  /* Diff-viewer forced-colors rules live in src/components/Worktree/DiffViewer.css
+     (component-owned: the stylesheet rides the lazy diff chunk). */
+}

@@ -57,9 +57,17 @@ import { app, MessagePortMain } from "electron";
 import { EventEmitter } from "events";
 import os from "os";
 import path from "path";
-import { spawnSync } from "child_process";
 import { fileURLToPath } from "url";
 import { createLogger, ingestHostLogEvent, isValidLogOverrideLevel } from "../utils/logger.js";
+import {
+  describeWindowsTreeKillProblem,
+  killWindowsProcessTrees,
+  type WindowsTreeKillTarget,
+} from "../utils/windowsTreeKill.js";
+import {
+  installWindowsTreeKillNotice,
+  reportWindowsTreeKillUnavailable,
+} from "./windowsTreeKillNotice.js";
 import { store } from "../store.js";
 import { stripAssignedSessionIdArgs } from "../../shared/types/agentSettings.js";
 import { buildCommandLaunchShell } from "../ipc/handlers/terminal/commandLaunch.js";
@@ -113,6 +121,7 @@ import type {
   TrimStateScope,
   TrimStateSummary,
   TerminalSubmitGuard,
+  PtyHostDriveLease,
 } from "../../shared/types/pty-host.js";
 import type {
   ClosedProcessKillResult,
@@ -135,6 +144,7 @@ import type {
 } from "../../shared/types/terminal.js";
 import type { BuiltInAgentId } from "../../shared/config/agentIds.js";
 import type { TerminalSubmissionRecord } from "../../shared/types/terminalSubmission.js";
+import { terminalAnswerOf, type TerminalAnswer } from "../../shared/utils/terminalSubmission.js";
 import type { TerminalHandback } from "../../shared/types/handback.js";
 
 const __filename = fileURLToPath(import.meta.url);
@@ -267,6 +277,14 @@ const MAX_MISSED_HEARTBEATS = 3;
  * before SIGKILL, after it), each bounded at 3s, plus the escalation grace.
  */
 const CLOSED_PROCESS_KILL_TIMEOUT_MS = 15_000;
+/** One run of Main's tree-kill helper for roots a disposing host handed over. */
+const HANDOFF_TREE_KILL_TIMEOUT_MS = 3000;
+/**
+ * How long quit waits, once the hosts have exited, for those kills: Main's
+ * helper is usually cold, and it dies with Main. Only a host that could not
+ * confirm its own kills costs this; the quit chain caps the total anyway.
+ */
+const HANDOFF_QUIT_WAIT_MS = 3500;
 
 /**
  * Centralized per-operation timeout policy for PTY host RPC calls.
@@ -336,6 +354,17 @@ function withCurrentWindowsPath(options: PtyHostSpawnOptions): PtyHostSpawnOptio
   return { ...options, env: { ...(options.env ?? {}), PATH: currentPath } };
 }
 
+/**
+ * Input that answered what a terminal's screen asked, whoever sent it: Return,
+ * a submitted line, or a key that answers an approval menu by itself (see
+ * `terminalAnswerOf`). Emitted as `"terminal-input"` with the terminal id, so a
+ * reader of the screen can tell it was answered without waiting for the screen
+ * to change. Typing that answers nothing is not reported.
+ */
+export interface TerminalInputNotice {
+  answer: TerminalAnswer;
+}
+
 export class PtyClient extends EventEmitter {
   private config: ResolvedPtyClientConfig;
   private isDisposed = false;
@@ -402,7 +431,11 @@ export class PtyClient extends EventEmitter {
    * replay (#12498). Keyed by id, tagged with the displacing generation.
    */
   private displacedSpawns = new Map<string, { byGeneration: number; entry: PtyHostSpawnOptions }>();
+  /** Terminals the host mirrors to Main: an explicit enable or any live lease. */
   private ipcDataMirrorIds = new Set<string>();
+  private ipcDataMirrorExplicit = new Set<string>();
+  /** Live leases by terminal, each its own token so a stale release finds nothing. */
+  private ipcDataMirrorLeases = new Map<string, Set<object>>();
   private pendingKillCount: Map<string, number> = new Map();
   // Main spans every renderer view; a view-local restart guard cannot protect
   // its siblings. Consumed by the old exit or retired when its successor starts.
@@ -431,6 +464,14 @@ export class PtyClient extends EventEmitter {
   private deferInitialPoolWarm = false;
   private hostStartRequested = false;
   private terminalPids: Map<string, number> = new Map();
+  /**
+   * Windows: each terminal shell's creation time (UTC µs), as its host
+   * reported once a census saw it. Used only while the PID still matches
+   * {@link terminalPids}: it lets crash cleanup refuse a reused PID.
+   */
+  private terminalIdentities = new Map<string, { pid: number; startTime: number }>();
+  /** Tree kills a disposing host handed over; quit waits for them, briefly. */
+  private readonly handoffKills = new Set<Promise<void>>();
   private resourceMonitoringEnabled = false;
   private sessionPersistSuppressed = false;
   // Cached for replay in respawnPendingForShard(): both sends are fire-and-forget,
@@ -439,6 +480,8 @@ export class PtyClient extends EventEmitter {
   private lastResourceProfile: ResourceProfile | null = null;
   /** Last fallback-eligible project set pushed to the shards (#12557); replayed on shard boot. */
   private fallbackEligibleProjects: string[] = [];
+  /** Drive leases a remote client is party to; replayed on shard boot. */
+  private driveLeases: PtyHostDriveLease[] = [];
   /** Per-connection holder identity, echoed to the host on every (re)connect (#12557). */
   private windowPortHolders = new Map<number, number>();
   private lastProcessTreePollIntervalMs: number | null = null;
@@ -466,6 +509,9 @@ export class PtyClient extends EventEmitter {
    * restart).
    */
   private onPortRefresh: ((windowId?: number) => void) | null = null;
+
+  /** Refresh callbacks for auxiliary connections, keyed by connection id. */
+  private readonly auxPortRefresh = new Map<number, () => void>();
 
   /** Cached log-level overrides. Replayed on every host spawn/restart via the
    * `ready` event, which is the first moment the child's message listener is
@@ -498,6 +544,7 @@ export class PtyClient extends EventEmitter {
     this.shardMemoryLimitMb = this.fabricEnabled
       ? shardHeapBudgetMb(os.totalmem())
       : this.config.memoryLimitMb;
+    installWindowsTreeKillNotice();
 
     // SharedArrayBuffer cannot be sent to Electron UtilityProcess via postMessage
     // ("An object could not be cloned"). This is a Chromium structured clone limitation
@@ -567,7 +614,10 @@ export class PtyClient extends EventEmitter {
   private shardCallbacks(): ConstructorParameters<typeof PtyShard>[1] {
     if (this.shardCallbacksCache) return this.shardCallbacksCache;
     this.shardCallbacksCache = {
-      onMessage: (shard, event) => this.handleShardEvent(shard, event),
+      onMessage: (shard, event) => {
+        if (this.handleTreeKillEvent(shard, event)) return;
+        this.handleShardEvent(shard, event);
+      },
       // The host already wrote this entry to the shared log file — mirror it
       // into Main's buffer and the renderer, never to disk again (#12544).
       // Shard-agnostic: the entry carries its own source and timestamp.
@@ -630,6 +680,93 @@ export class PtyClient extends EventEmitter {
       logWarn: (message) => logWarn(message),
     };
     return this.shardCallbacksCache;
+  }
+
+  /**
+   * Windows tree-kill traffic, taken before the router because a handoff comes
+   * from a host that is already disposing — its shard retired, and every other
+   * event from it dropped. Returns whether the event was one of these.
+   */
+  private handleTreeKillEvent(shard: PtyShard, event: PtyHostEvent): boolean {
+    switch (event.type) {
+      case "terminal-identity":
+        if (!shard.retired) this.recordTerminalIdentity(event.id, event.pid, event.startTime);
+        return true;
+      case "tree-kill-handoff":
+        this.finishHandedOffTreeKills(shard, event.roots);
+        return true;
+      case "tree-kill-unavailable":
+        reportWindowsTreeKillUnavailable(event.reason, shard.serviceName);
+        return true;
+      default:
+        return false;
+    }
+  }
+
+  private recordTerminalIdentity(id: string, pid: number, startTime: number): void {
+    if (this.terminalPids.get(id) !== pid) return;
+    if (!Number.isSafeInteger(startTime) || startTime <= 0) return;
+    for (const known of this.terminalIdentities.keys()) {
+      if (!this.terminalPids.has(known)) this.terminalIdentities.delete(known);
+    }
+    this.terminalIdentities.set(id, { pid, startTime });
+  }
+
+  /**
+   * End trees a disposing host's exit batch could not confirm. Its helper died
+   * with it, and with it whatever pinned those PIDs, so each goes with the
+   * identity the host recorded: the helper here ends nothing that has taken a
+   * PID over since. Kept on {@link handoffKills} so a quit waits for it.
+   */
+  private finishHandedOffTreeKills(
+    shard: PtyShard,
+    roots: ReadonlyArray<{ pid: number; startTime: number }>
+  ): void {
+    if (process.platform !== "win32" || !Array.isArray(roots)) return;
+    const targets: WindowsTreeKillTarget[] = roots.flatMap((root) =>
+      Number.isSafeInteger(root?.pid) &&
+      root.pid > 0 &&
+      root.pid !== process.pid &&
+      Number.isSafeInteger(root?.startTime) &&
+      root.startTime > 0
+        ? [{ pid: root.pid, startTime: root.startTime }]
+        : []
+    );
+    if (targets.length === 0) return;
+    console.warn(
+      `[PtyClient] ${shard.serviceName} handed over ${targets.length} tree kill(s) its teardown could not confirm; finishing them here`
+    );
+    const kill: Promise<void> = killWindowsProcessTrees(targets, {
+      timeoutMs: HANDOFF_TREE_KILL_TIMEOUT_MS,
+    })
+      .then(
+        (results) => {
+          results.forEach((result, index) => {
+            const problem = describeWindowsTreeKillProblem(result);
+            if (problem)
+              console.warn(`[PtyClient] Handed-over pid=${targets[index].pid}: ${problem}`);
+          });
+        },
+        (err: unknown) => {
+          console.warn("[PtyClient] Handed-over tree kill failed:", err);
+        }
+      )
+      .finally(() => this.handoffKills.delete(kill));
+    this.handoffKills.add(kill);
+  }
+
+  /** Every handed-over kill, or {@link HANDOFF_QUIT_WAIT_MS}, whichever is first. */
+  private async settleHandoffKills(): Promise<void> {
+    if (this.handoffKills.size === 0) return;
+    let timer: NodeJS.Timeout | undefined;
+    await Promise.race([
+      Promise.all([...this.handoffKills]),
+      new Promise<void>((resolve) => {
+        timer = setTimeout(resolve, HANDOFF_QUIT_WAIT_MS);
+        timer.unref?.();
+      }),
+    ]);
+    clearTimeout(timer);
   }
 
   private handleShardEvent(shard: PtyShard, event: PtyHostEvent): void {
@@ -1105,15 +1242,15 @@ export class PtyClient extends EventEmitter {
     // Notify that ports need refresh after the shard restart. Fabric mode
     // targets only the windows whose port lived on this shard; the legacy
     // single-host path keeps the refresh-everything behavior.
-    if (this.onPortRefresh) {
+    if (this.onPortRefresh || this.auxPortRefresh.size > 0) {
       shard.closePendingPorts();
       if (!this.fabricEnabled) {
-        this.onPortRefresh();
+        this.notifyPortRefresh();
       } else {
         for (const [windowId, key] of [...this.windowPortShard]) {
           if (key !== shard.key) continue;
           this.windowPortShard.delete(windowId);
-          this.onPortRefresh(windowId);
+          this.notifyPortRefresh(windowId);
         }
       }
     }
@@ -1135,6 +1272,9 @@ export class PtyClient extends EventEmitter {
       }
       const generation = ledger.recordLaunch(id, ledgerFactsFromSpawnOptions(options));
       this.restartExitSuppression.delete(id);
+      // Whatever a duplicate spawn displaced died with the host: the replay is
+      // the incarnation now, not the one a refusal would put back.
+      this.displacedSpawns.delete(id);
       const stamped: PtyHostSpawnOptions = { ...options, launchGeneration: generation };
       this.pendingSpawns.set(id, stamped);
       this.sendSpawnWithPostInput(shard, id, stamped);
@@ -1187,6 +1327,12 @@ export class PtyClient extends EventEmitter {
         type: "set-fallback-eligible-projects",
         projectIds: this.fallbackEligibleProjects,
       });
+    }
+
+    // Without it a restarted shard lets any port type into or resize terminals
+    // another endpoint is driving.
+    if (this.driveLeases.length > 0) {
+      shard.send({ type: "set-drive-leases", leases: this.driveLeases });
     }
   }
 
@@ -1271,7 +1417,7 @@ export class PtyClient extends EventEmitter {
     for (const [windowId, key] of [...this.windowPortShard]) {
       if (key !== shard.key) continue;
       this.windowPortShard.delete(windowId);
-      this.onPortRefresh?.(windowId);
+      this.notifyPortRefresh(windowId);
     }
 
     this.trackRetiringHost(shard.dispose());
@@ -1352,11 +1498,11 @@ export class PtyClient extends EventEmitter {
       this.connectMessagePort(windowId, pendingPort);
       return;
     }
-    if (!this.onPortRefresh) return;
+    if (!this.onPortRefresh && !this.auxPortRefresh.has(windowId)) return;
     console.log(
       `[PtyClient] Rerouting window ${windowId} PTY port: shard '${currentKey}' → '${targetKey}'`
     );
-    this.onPortRefresh(windowId);
+    this.notifyPortRefresh(windowId);
   }
 
   private cleanupOrphanedPtysForShard(shard: PtyShard, crashType: CrashType): void {
@@ -1414,29 +1560,67 @@ export class PtyClient extends EventEmitter {
       `[PtyClient] Attempting to clean up ${uniquePids.size} orphaned PTY process(es) after host crash`
     );
 
-    for (const pid of uniquePids) {
-      if (!Number.isFinite(pid) || pid <= 0) continue;
-      if (pid === process.pid) continue;
+    const killable = [...uniquePids].filter(
+      (pid) => Number.isFinite(pid) && pid > 0 && pid !== process.pid
+    );
 
-      let killed = false;
-      if (process.platform !== "win32") {
-        try {
-          process.kill(-pid, "SIGKILL");
-          killed = true;
-        } catch {
-          // ignore - fall back to direct kill
+    if (process.platform === "win32") {
+      // One helper run for every tree, never `taskkill /T`, which can follow a
+      // reused parent PID into an unrelated program — and no bare-PID fallback
+      // either: the crashed host's handles no longer pin these PIDs. A shell
+      // whose identity the host reported goes with it, so a PID taken over
+      // since the crash is left alone. Not blocking: this is Main mid-session.
+      // The shard's restart waits for it through the same barrier as the
+      // lineage reap above.
+      const identityOf = new Map<number, number>();
+      for (const id of ownedIds) {
+        const identity = this.terminalIdentities.get(id);
+        if (identity && identity.pid === this.terminalPids.get(id)) {
+          identityOf.set(identity.pid, identity.startTime);
         }
       }
-
-      if (!killed && process.platform === "win32") {
-        const result = spawnSync("taskkill", ["/T", "/F", "/PID", String(pid)], {
-          windowsHide: true,
-          stdio: "ignore",
-          timeout: 3000,
-        });
-        if (result.status === 0 || result.status === 128) {
-          killed = true;
+      // A shell the host never identified (a crash within a second or so of
+      // its spawn) is not walked by bare PID: nothing proves the PID is still
+      // ours. Its pseudoconsole died with the host, which ends it, and the
+      // terminal Job Object holds whatever it started.
+      const identified = killable.filter((pid) => identityOf.has(pid));
+      if (identified.length < killable.length) {
+        console.warn(
+          `[PtyClient] Left ${killable.length - identified.length} unidentified orphaned PTY root(s) to the pseudoconsole close and Job Object`
+        );
+      }
+      const targets: WindowsTreeKillTarget[] = identified.map((pid) => ({
+        pid,
+        startTime: identityOf.get(pid) as number,
+      }));
+      const kill = killWindowsProcessTrees(targets, { timeoutMs: 3000 }).then(
+        (results) => {
+          results.forEach((result, index) => {
+            const problem = describeWindowsTreeKillProblem(result);
+            if (problem) {
+              console.warn(`[PtyClient] Orphaned PTY pid=${identified[index]}: ${problem}`);
+            }
+          });
+        },
+        (err: unknown) => {
+          console.warn("[PtyClient] Orphaned PTY tree kill after host crash failed:", err);
         }
+      );
+      const barrier: Promise<void> = Promise.all([shard.lineageReap, kill])
+        .then(() => {})
+        .finally(() => {
+          if (shard.lineageReap === barrier) shard.lineageReap = null;
+        });
+      shard.lineageReap = barrier;
+    }
+
+    for (const pid of process.platform === "win32" ? [] : killable) {
+      let killed = false;
+      try {
+        process.kill(-pid, "SIGKILL");
+        killed = true;
+      } catch {
+        // ignore - fall back to direct kill
       }
 
       if (!killed) {
@@ -1452,6 +1636,7 @@ export class PtyClient extends EventEmitter {
 
     for (const id of ownedIds) {
       this.terminalPids.delete(id);
+      this.terminalIdentities.delete(id);
       // Their exit events died with the host; release them here so the
       // supervisor never holds a PID that is free to be recycled.
       terminalCrashReapService.detachTerminal(id);
@@ -1465,6 +1650,28 @@ export class PtyClient extends EventEmitter {
    */
   setPortRefreshCallback(callback: (windowId?: number) => void): void {
     this.onPortRefresh = callback;
+  }
+
+  /**
+   * Own the port refresh for an auxiliary connection that no window re-brokers
+   * (a remote endpoint's synthetic window). Its callback replaces the window
+   * callback for that id and also runs on a full-host refresh. Pass null to
+   * unregister.
+   */
+  setAuxConnectionRefresh(connectionId: number, callback: (() => void) | null): void {
+    if (callback) this.auxPortRefresh.set(connectionId, callback);
+    else this.auxPortRefresh.delete(connectionId);
+  }
+
+  private notifyPortRefresh(windowId?: number): void {
+    if (windowId === undefined) {
+      this.onPortRefresh?.();
+      for (const refresh of [...this.auxPortRefresh.values()]) refresh();
+      return;
+    }
+    const aux = this.auxPortRefresh.get(windowId);
+    if (aux) aux();
+    else this.onPortRefresh?.(windowId);
   }
 
   /**
@@ -1840,6 +2047,8 @@ export class PtyClient extends EventEmitter {
 
   write(id: string, data: string, traceId?: string): void {
     this.shardForTerminal(id).send({ type: "write", id, data, traceId });
+    const answer = terminalAnswerOf(data);
+    if (answer !== null) this.emit("terminal-input", id, { answer } satisfies TerminalInputNotice);
   }
 
   submit(
@@ -1859,6 +2068,11 @@ export class PtyClient extends EventEmitter {
       ...(guard !== undefined ? { guard } : {}),
       ...(imagePaths !== undefined && imagePaths.length > 0 ? { imagePaths: [...imagePaths] } : {}),
     });
+    // A guarded submission is Daintree waking an idle agent, not anyone
+    // answering it, and the host may yet refuse it.
+    if (guard === undefined) {
+      this.emit("terminal-input", id, { answer: "submit" } satisfies TerminalInputNotice);
+    }
   }
 
   /**
@@ -1899,6 +2113,10 @@ export class PtyClient extends EventEmitter {
     for (const [shard, shardIds] of this.groupByOwnerShard(validIds)) {
       shard.send({ type: "batch-double-escape", ids: shardIds });
     }
+    // Escape declines an approval, as a single one sent by name does.
+    for (const id of validIds) {
+      this.emit("terminal-input", id, { answer: "key" } satisfies TerminalInputNotice);
+    }
   }
 
   /**
@@ -1914,6 +2132,11 @@ export class PtyClient extends EventEmitter {
     if (validIds.length === 0) return;
     for (const [shard, shardIds] of this.groupByOwnerShard(validIds)) {
       shard.send({ type: "broadcast-write", ids: shardIds, data, reportSuccess });
+    }
+    const answer = terminalAnswerOf(data);
+    if (answer === null) return;
+    for (const id of validIds) {
+      this.emit("terminal-input", id, { answer } satisfies TerminalInputNotice);
     }
   }
 
@@ -1949,6 +2172,8 @@ export class PtyClient extends EventEmitter {
     this.pendingSpawns.delete(id);
     this.displacedSpawns.delete(id);
     this.ipcDataMirrorIds.delete(id);
+    this.ipcDataMirrorExplicit.delete(id);
+    this.ipcDataMirrorLeases.delete(id);
 
     // Only track pendingKillCount for ids we've seen locally. An "exit"
     // decrement only arrives for terminals the host actually owned, so
@@ -1991,6 +2216,32 @@ export class PtyClient extends EventEmitter {
    */
   getLaunchGeneration(id: string): number | null {
     return this.pendingSpawns.get(id)?.launchGeneration ?? null;
+  }
+
+  /**
+   * The launch generation of the incarnation running under `id`, as far as main
+   * can tell: while a duplicate spawn awaits the host's answer, the one it
+   * displaced, which is still running — the host refuses a spawn over a live
+   * id, and that one is put back. Null for an unknown terminal.
+   */
+  getLiveGeneration(id: string): number | null {
+    return (
+      this.displacedSpawns.get(id)?.entry.launchGeneration ??
+      this.pendingSpawns.get(id)?.launchGeneration ??
+      null
+    );
+  }
+
+  /**
+   * Whether `generation` is the incarnation running under `id`: the one main
+   * tracks, or one a duplicate spawn still awaiting the host's answer has
+   * displaced (see `getLiveGeneration`).
+   */
+  isLiveGeneration(id: string, generation: number): boolean {
+    return (
+      this.pendingSpawns.get(id)?.launchGeneration === generation ||
+      this.displacedSpawns.get(id)?.entry.launchGeneration === generation
+    );
   }
 
   /**
@@ -2083,6 +2334,19 @@ export class PtyClient extends EventEmitter {
     }
   }
 
+  /**
+   * The drive leases a remote client is party to: input and resizes arriving on
+   * any port but the holder's are dropped for their terminals, so the driver is
+   * the only one typing and its grid is the one the PTY keeps. An authoritative
+   * replace, sent to every shard because a project's terminals can span them.
+   */
+  setDriveLeases(leases: PtyHostDriveLease[]): void {
+    this.driveLeases = leases.map((lease) => ({ ...lease }));
+    for (const shard of this.shards.values()) {
+      shard.send({ type: "set-drive-leases", leases: this.driveLeases });
+    }
+  }
+
   setResourceMonitoring(enabled: boolean): void {
     this.resourceMonitoringEnabled = enabled;
     for (const shard of this.shards.values()) {
@@ -2120,10 +2384,42 @@ export class PtyClient extends EventEmitter {
    */
   setIpcDataMirror(id: string, enabled: boolean): void {
     if (enabled) {
-      this.ipcDataMirrorIds.add(id);
+      this.ipcDataMirrorExplicit.add(id);
     } else {
-      this.ipcDataMirrorIds.delete(id);
+      this.ipcDataMirrorExplicit.delete(id);
     }
+    this.syncIpcDataMirror(id);
+  }
+
+  /**
+   * Mirror a terminal to Main for as long as the caller holds the lease. Leases
+   * and {@link setIpcDataMirror} stack: the mirror stays on while anyone still
+   * wants it, so a short-lived viewer can never switch off a dev preview's copy.
+   */
+  acquireIpcDataMirror(id: string): () => void {
+    const lease = {};
+    let held = this.ipcDataMirrorLeases.get(id);
+    if (!held) {
+      held = new Set();
+      this.ipcDataMirrorLeases.set(id, held);
+    }
+    held.add(lease);
+    this.syncIpcDataMirror(id);
+    return () => {
+      // A kill drops the terminal's leases; one taken out before it must not
+      // release a lease taken out since, on the terminal's next incarnation.
+      const current = this.ipcDataMirrorLeases.get(id);
+      if (!current?.delete(lease)) return;
+      if (current.size === 0) this.ipcDataMirrorLeases.delete(id);
+      this.syncIpcDataMirror(id);
+    };
+  }
+
+  private syncIpcDataMirror(id: string): void {
+    const enabled = this.ipcDataMirrorExplicit.has(id) || this.ipcDataMirrorLeases.has(id);
+    if (enabled === this.ipcDataMirrorIds.has(id)) return;
+    if (enabled) this.ipcDataMirrorIds.add(id);
+    else this.ipcDataMirrorIds.delete(id);
     this.shardForTerminal(id).send({ type: "set-ipc-data-mirror", id, enabled });
   }
 
@@ -3140,10 +3436,16 @@ export class PtyClient extends EventEmitter {
     // if it has not exited in time), pending ports, and the broker (rejects
     // pending promises with "Broker disposed"; callers convert to sentinel
     // values via .catch()).
+    // A host whose exit batch could not confirm its kills hands them over just
+    // before it exits; those finish here, on Main's helper, which dies with
+    // Main — so quit waits for them too, briefly.
     this.hostsExited = Promise.all([
       ...Array.from(this.shards.values(), (shard) => shard.dispose()),
       ...this.retiringHostExits,
-    ]).then((exits) => exits.every(Boolean));
+    ]).then(async (exits) => {
+      await this.settleHandoffKills();
+      return exits.every(Boolean);
+    });
     this.shards.clear();
 
     this.pendingSpawns.clear();
@@ -3153,7 +3455,10 @@ export class PtyClient extends EventEmitter {
     this.windowProjectContexts.clear();
     this.windowFocusedTerminals.clear();
     this.ipcDataMirrorIds.clear();
+    this.ipcDataMirrorExplicit.clear();
+    this.ipcDataMirrorLeases.clear();
     this.terminalPids.clear();
+    this.terminalIdentities.clear();
     this.terminalOwners.clear();
     this.projectShardOverrides.clear();
     this.windowPortShard.clear();

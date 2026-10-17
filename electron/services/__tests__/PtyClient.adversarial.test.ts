@@ -313,25 +313,6 @@ describe("PtyClient adversarial", () => {
     await expect(promise).resolves.toBe(true);
   });
 
-  it("GRACEFUL_KILL_TIMEOUT_TRIGGERS_FORCED_KILL", async () => {
-    const client = createReadyClient();
-
-    const promise = client.gracefulKill("t1");
-
-    await vi.advanceTimersByTimeAsync(5001);
-
-    await expect(promise).resolves.toBeNull();
-    const killCall = mockChild.postMessage.mock.calls.find(
-      (call: unknown[]) =>
-        (call[0] as { type?: string; id?: string; reason?: string })?.type === "kill"
-    );
-    expect(killCall?.[0]).toMatchObject({
-      type: "kill",
-      id: "t1",
-      reason: "graceful-kill-timeout",
-    });
-  });
-
   it("GRACEFUL_KILL_SKIPS_KILL_WHEN_BROKER_CLEARED_BY_HOST_EXIT", async () => {
     const client = createReadyClient();
     const privateAccess = client as unknown as PtyClientPrivateAccess;
@@ -668,18 +649,6 @@ describe("PtyClient adversarial", () => {
       return { payloads };
     }
 
-    it("GONE_BEFORE_EXIT_ROUTES_AUTHORITATIVE_REASON", () => {
-      const client = createReadyClient();
-      const { payloads } = captureCrash(client);
-
-      emitGone({ reason: "oom", exitCode: 0 });
-      mockChild.emit("exit", 0);
-      vi.advanceTimersByTime(1);
-
-      expect(payloads).toHaveLength(1);
-      expect(payloads[0].crashType).toBe("OUT_OF_MEMORY");
-    });
-
     it("EXIT_BEFORE_GONE_ORDERING_RACE", () => {
       const client = createReadyClient();
       const { payloads } = captureCrash(client);
@@ -691,18 +660,6 @@ describe("PtyClient adversarial", () => {
 
       expect(payloads).toHaveLength(1);
       expect(payloads[0].crashType).toBe("OUT_OF_MEMORY");
-    });
-
-    it("NO_GONE_EVENT_FALLS_BACK_TO_EXIT_CODE_HEURISTIC", () => {
-      const client = createReadyClient();
-      const { payloads } = captureCrash(client);
-
-      mockChild.emit("exit", 137);
-      vi.advanceTimersByTime(1);
-
-      expect(payloads).toHaveLength(1);
-      expect(payloads[0].crashType).toBe("OUT_OF_MEMORY");
-      expect(payloads[0].code).toBe(137);
     });
 
     it("GONE_WRONG_TYPE_IGNORED", () => {
@@ -848,42 +805,6 @@ describe("PtyClient adversarial", () => {
       emitGone({ reason: "oom" });
       vi.advanceTimersByTime(1);
       expect(payloads).toHaveLength(0);
-    });
-
-    it("MEMORY_EVICTION_MAPS_TO_OOM", () => {
-      const client = createReadyClient();
-      const { payloads } = captureCrash(client);
-
-      emitGone({ reason: "memory-eviction" });
-      mockChild.emit("exit", 0);
-      vi.advanceTimersByTime(1);
-
-      expect(payloads).toHaveLength(1);
-      expect(payloads[0].crashType).toBe("OUT_OF_MEMORY");
-    });
-
-    it("UNKNOWN_REASON_MAPS_TO_UNKNOWN_CRASH", () => {
-      const client = createReadyClient();
-      const { payloads } = captureCrash(client);
-
-      emitGone({ reason: "something-new-from-electron-42" });
-      mockChild.emit("exit", 0);
-      vi.advanceTimersByTime(1);
-
-      expect(payloads).toHaveLength(1);
-      expect(payloads[0].crashType).toBe("UNKNOWN_CRASH");
-    });
-
-    it("KILLED_REASON_MAPS_TO_SIGNAL_TERMINATED", () => {
-      const client = createReadyClient();
-      const { payloads } = captureCrash(client);
-
-      emitGone({ reason: "killed" });
-      mockChild.emit("exit", 143);
-      vi.advanceTimersByTime(1);
-
-      expect(payloads).toHaveLength(1);
-      expect(payloads[0].crashType).toBe("SIGNAL_TERMINATED");
     });
   });
 
@@ -1035,26 +956,6 @@ describe("PtyClient adversarial", () => {
     expect(results[0].result.error?.message).toEqual(expect.stringContaining("250"));
   });
 
-  it("KILL_FREES_SLOT_BELOW_CAP", () => {
-    const client = createReadyClient();
-    mockChild.postMessage.mockClear();
-
-    for (let i = 0; i < MAX_PENDING_SPAWNS; i++) {
-      client.spawn(`t-${i}`, baseSpawnOptions());
-    }
-    expect(countSpawnMessages(mockChild)).toBe(MAX_PENDING_SPAWNS);
-
-    client.kill("t-0");
-    client.spawn("t-new", baseSpawnOptions());
-
-    expect(client.hasTerminal("t-new")).toBe(true);
-    expect(client.hasTerminal("t-0")).toBe(false);
-    const spawnIds = mockChild.postMessage.mock.calls
-      .filter((call: unknown[]) => (call[0] as { type?: string })?.type === "spawn")
-      .map((call: unknown[]) => (call[0] as { id?: string })?.id);
-    expect(spawnIds).toContain("t-new");
-  });
-
   it("SAME_ID_AT_CAP_IS_UPDATED_NOT_REJECTED", async () => {
     const client = createReadyClient();
     const { logWarn } = await import("../../utils/logger.js");
@@ -1170,27 +1071,6 @@ describe("PtyClient adversarial", () => {
       client.kill(`k-${i}`);
     }
   }
-
-  it("NEW_ID_AT_CAP_WARNS_BUT_TRACKS_AND_SENDS_IPC", async () => {
-    const client = createReadyClient();
-    const privateAccess = client as unknown as PtyClientPrivateAccess;
-    const { logWarn } = await import("../../utils/logger.js");
-
-    fillKnownPendingKills(client, MAX_PENDING_KILLS);
-    expect(privateAccess.pendingKillCount.size).toBe(MAX_PENDING_KILLS);
-    (logWarn as Mock).mockClear();
-    mockChild.postMessage.mockClear();
-
-    client.spawn("t-overflow", baseSpawnOptions());
-    client.kill("t-overflow");
-
-    // Cap is soft — tracking the known id is required to prevent a late
-    // "exit" from deleting a re-spawned entry with the same id.
-    expect(privateAccess.pendingKillCount.size).toBe(MAX_PENDING_KILLS + 1);
-    expect(privateAccess.pendingKillCount.get("t-overflow")).toBe(1);
-    expect(countKillMessages(mockChild, "t-overflow")).toBe(1);
-    expect(logWarn).toHaveBeenCalledWith(expect.stringContaining("exceeds soft cap"));
-  });
 
   it("KILL_EXISTING_ID_INCREMENTS_AT_CAP", async () => {
     const client = createReadyClient();

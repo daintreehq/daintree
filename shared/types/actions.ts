@@ -506,6 +506,11 @@ export type ActionErrorCode =
   | "ELICITATION_FAILED"
   | "BINDING_STALE"
   | "PLUGIN_UNLOADED"
+  /**
+   * A window attached to a remote host dispatched an action of a plugin that
+   * host doesn't have. `details` carries `{ code, pluginId, hostId }`.
+   */
+  | "PLUGIN_NOT_ON_HOST"
   | "TIER_NOT_PERMITTED"
   /**
    * An `*Owned` MCP cleanup tool was called with a resource the calling session
@@ -535,7 +540,12 @@ export type ActionErrorCode =
    * see this code — main collapses it into the ordinary miss for them.
    */
   | "TERMINAL_IN_OTHER_PROJECT"
-  | "INVALID_URL";
+  | "INVALID_URL"
+  /**
+   * A plugin on a remote host dispatched an action while no frontend drives
+   * its project: nobody is attached whose view could run it.
+   */
+  | "NO_FRONTEND_ATTACHED";
 
 export interface ActionError {
   code: ActionErrorCode;
@@ -632,9 +642,9 @@ export interface PluginActionManifestEntry {
   /**
    * Base danger classification. `host.dispatch()` rejects `"confirm"` actions
    * with `CONFIRMATION_REQUIRED` (plugins cannot bypass the prompt) and never
-   * exposes `"restricted"` actions in the catalog — so a listed entry is always
-   * `"safe"` or `"confirm"`. Use `host.actions.canDispatch(id)` for a pre-flight
-   * check before triggering.
+   * exposes `"restricted"` or plugin-denied actions in the catalog — so a
+   * listed entry is always `"safe"` or `"confirm"`. Use
+   * `host.actions.canDispatch(id)` for a pre-flight check before triggering.
    */
   danger: ActionDanger;
   /** JSON Schema for the action's args, or undefined when it takes none. */
@@ -657,7 +667,8 @@ export interface PluginActionManifestEntry {
  * - `"confirm"` — a `danger:"confirm"` action; `dispatch()` returns
  *   `CONFIRMATION_REQUIRED` (plugins cannot pre-confirm). The plugin should warn
  *   the user or route through an interactive sibling action.
- * - `"restricted"` — the action is `danger:"restricted"`, unknown, or otherwise
- *   not exposed to plugins; `dispatch()` would return `RESTRICTED` / `NOT_FOUND`.
+ * - `"restricted"` — the action is `danger:"restricted"`, unknown, or closed to
+ *   plugin dispatch (`denyPluginDispatch`); `dispatch()` would return
+ *   `RESTRICTED` / `NOT_FOUND`.
  */
 export type PluginCanDispatchResult = "ok" | "confirm" | "restricted";

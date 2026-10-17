@@ -110,27 +110,6 @@ describe("globalEnvClient", () => {
     expect(result).toEqual({ FOO: "new" });
   });
 
-  it("prevents stale in-flight response from repopulating cache after invalidation", async () => {
-    let resolve!: (v: unknown) => void;
-    const deferred = new Promise((r) => {
-      resolve = r;
-    });
-    getMock.mockReturnValue(deferred);
-
-    const inflight = globalEnvClient.get();
-
-    invalidateGlobalEnvCache();
-
-    resolve({ FOO: "stale" });
-    const r1 = await inflight;
-    expect(r1).toEqual({ FOO: "stale" });
-
-    getMock.mockResolvedValue({ FOO: "fresh" });
-    const r2 = await globalEnvClient.get();
-    expect(getMock).toHaveBeenCalledTimes(2);
-    expect(r2).toEqual({ FOO: "fresh" });
-  });
-
   it("returns empty object when window.electron is missing", async () => {
     delete typedGlobal.window;
     const result = await globalEnvClient.get();

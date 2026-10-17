@@ -4,6 +4,7 @@ import { resolveAppTheme } from "@shared/theme/themes";
 import { applyAppThemeToRoot } from "@/theme/applyAppTheme";
 import { installPreviewShims } from "@/components/HelpPanel/__preview__/previewShims";
 import { TooltipProvider } from "@/components/ui/tooltip";
+import { UI_TOOLTIP_DELAY_DURATION, UI_TOOLTIP_SKIP_DELAY_DURATION } from "@/lib/animationUtils";
 import { primeRadix } from "@/components/ui/radix-loader";
 import { useDiagnosticsStore } from "@/store/diagnosticsStore";
 import { useErrorStore } from "@/store/errorStore";
@@ -127,6 +128,7 @@ function seed(f: DiagnosticsFixture) {
   if (f.logFilters) useLogsStore.setState({ filters: f.logFilters });
   if (f.expandLogId) useLogsStore.setState({ expandedIds: new Set([f.expandLogId]) });
   if (f.selectedEventId) useEventStore.setState({ selectedEventId: f.selectedEventId });
+  if (f.eventFilters) useEventStore.setState({ filters: f.eventFilters });
   useTelemetryPreviewStore.setState({
     active: f.telemetryActive ?? false,
     events: f.telemetry ?? [],
@@ -196,7 +198,12 @@ function Harness() {
 
 createRoot(document.getElementById("root")!).render(
   <StrictMode>
-    <TooltipProvider>
+    {/* The app root's provider configuration, so hover and skip-delay behave as they ship. */}
+    <TooltipProvider
+      delayDuration={UI_TOOLTIP_DELAY_DURATION}
+      skipDelayDuration={UI_TOOLTIP_SKIP_DELAY_DURATION}
+      disableHoverableContent
+    >
       <Harness />
     </TooltipProvider>
   </StrictMode>

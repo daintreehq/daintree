@@ -85,6 +85,7 @@ export const CHANNELS = {
 
   FILES_SEARCH: "files:search",
   FILES_READ: "files:read",
+  FILES_TRASH: "files:trash",
 
   DIFF_MEDIA_READ_FILE_VERSIONS: "diff-media:read-file-versions",
 
@@ -239,6 +240,7 @@ export const CHANNELS = {
   PROJECT_BACKGROUND_RESIZE: "project:background-resize",
   PROJECT_GET_SETTINGS: "project:get-settings",
   PROJECT_SAVE_SETTINGS: "project:save-settings",
+  PROJECT_ADD_BROWSER_ALLOWED_HOST: "project:add-browser-allowed-host",
   PROJECT_DETECT_RUNNERS: "project:detect-runners",
   PROJECT_LIST_REMOTES: "project:list-remotes",
   PROJECT_CLOSE: "project:close",
@@ -249,11 +251,45 @@ export const CHANNELS = {
   PROJECT_GET_NOTIFICATION_OVERRIDES: "project:get-notification-overrides",
   PROJECT_STATS_UPDATED: "project:stats-updated",
   FLEET_SNAPSHOT_UPDATED: "fleet:snapshot-updated",
+  CANOPY_SNAPSHOT_UPDATED: "canopy:snapshot-updated",
+  CANOPY_TERMINAL_DATA: "canopy:terminal-data",
+  CANOPY_TRASH_REQUESTED: "canopy:trash-requested",
+  CANOPY_RESTORE_REQUESTED: "canopy:restore-requested",
+  CANOPY_RENAME_REQUESTED: "canopy:rename-requested",
   FLEET_GET_SNAPSHOT: "fleet:get-snapshot",
   FLEET_PARK_RUN: "fleet:park-run",
   FLEET_UNPARK_RUN: "fleet:unpark-run",
   FLEET_SNOOZE_RUN: "fleet:snooze-run",
   FLEET_UNSNOOZE_RUN: "fleet:unsnooze-run",
+  FLEET_NOTE_RUN_LOOK: "fleet:note-run-look",
+  FLEET_MARK_RUN_READ: "fleet:mark-run-read",
+  FLEET_MARK_RUN_UNREAD: "fleet:mark-run-unread",
+  CANOPY_GET_SNAPSHOT: "canopy:get-snapshot",
+  CANOPY_SET_ACTIVE: "canopy:set-active",
+  CANOPY_REFRESH: "canopy:refresh",
+  CANOPY_TRASH: "canopy:trash",
+  CANOPY_UNTRASH: "canopy:untrash",
+  CANOPY_REREAD: "canopy:reread",
+  CANOPY_SET_SHOWN: "canopy:set-shown",
+  CANOPY_ARCHIVE: "canopy:archive",
+  CANOPY_UNARCHIVE: "canopy:unarchive",
+  CANOPY_ANSWER: "canopy:answer",
+  CANOPY_MARK_SEEN: "canopy:mark-seen",
+  CANOPY_SET_READ: "canopy:set-read",
+  CANOPY_MARK_ALL_READ: "canopy:mark-all-read",
+  CANOPY_RESTORE_READS: "canopy:restore-reads",
+  CANOPY_NOTE_SENT: "canopy:note-sent",
+  CANOPY_SET_SCOPE: "canopy:set-scope",
+  CANOPY_RUN_BRANCH: "canopy:run-branch",
+  CANOPY_WATCH_TERMINAL: "canopy:watch-terminal",
+  CANOPY_UNWATCH_TERMINAL: "canopy:unwatch-terminal",
+  CANOPY_CAPTURE_BACKDROP: "canopy:capture-backdrop",
+  CANOPY_SET_MODE: "canopy:set-mode",
+  CANOPY_RENAME: "canopy:rename",
+  CANOPY_TERMINAL_INPUT: "canopy:terminal-input",
+  CANOPY_TERMINAL_RESIZE: "canopy:terminal-resize",
+  CANOPY_TERMINAL_SEND_KEY: "canopy:terminal-send-key",
+  CANOPY_TERMINAL_SUBMIT: "canopy:terminal-submit",
   PROJECT_HISTORY_PEEK: "project-history:peek",
   PROJECT_CREATE_FOLDER: "project:create-folder",
   PROJECT_INIT_GIT: "project:init-git",
@@ -350,6 +386,7 @@ export const CHANNELS = {
   GIT_PUSH: "git:push",
   GIT_PULL_REBASE: "git:pull-rebase",
   GIT_FETCH: "git:fetch",
+  GIT_DISCARD_FILE_CHANGES: "git:discard-file-changes",
   GIT_FORCE_PUSH_WITH_LEASE: "git:force-push-with-lease",
   GIT_LIST_REMOTE_COMMITS: "git:list-remote-commits",
   GIT_LIST_PUSH_COMMITS: "git:list-push-commits",
@@ -391,6 +428,10 @@ export const CHANNELS = {
   KEEP_AWAKE_GET_STATE: "keep-awake:get-state",
   KEEP_AWAKE_UPDATE_CONFIG: "keep-awake:update-config",
   KEEP_AWAKE_STATE_CHANGED: "keep-awake:state-changed",
+  ASSISTANT_MESSAGING_GET_STATE: "assistant-messaging:get-state",
+  ASSISTANT_MESSAGING_SET_LANE_ENROLLED: "assistant-messaging:set-lane-enrolled",
+  ASSISTANT_MESSAGING_SET_PAUSED: "assistant-messaging:set-paused",
+  ASSISTANT_MESSAGING_CHANGED: "assistant-messaging:changed",
   HIBERNATION_GET_CONFIG: "hibernation:get-config",
   HIBERNATION_UPDATE_CONFIG: "hibernation:update-config",
   HIBERNATION_PROJECT_HIBERNATED: "hibernation:project-hibernated",
@@ -591,6 +632,7 @@ export const CHANNELS = {
   HELP_TAKE_PENDING_HIBERNATION: "help:take-pending-hibernation",
   HELP_RESTORE_PENDING_HIBERNATION: "help:restore-pending-hibernation",
   HELP_LIST_PENDING_HIBERNATION_SLOTS: "help:list-pending-hibernation-slots",
+  HELP_ADOPT_DETACHED_SESSION: "help:adopt-detached-session",
   HELP_DISCARD_CONVERSATION: "help:discard-conversation",
   HELP_LIST_PAST_SESSIONS: "help:list-past-sessions",
   HELP_REPORT_PANEL_OPEN: "help:report-panel-open",
@@ -1009,6 +1051,17 @@ export const CHANNELS = {
   FORGE_AUDIT_EXPORT_LOG: "forge-audit:export-log",
   FORGE_AUDIT_SET_ENABLED: "forge-audit:set-enabled",
 
+  // Project groups and archive — user filing in the project switcher. Own
+  // `project-groups:*` prefix so codegen produces a `projectGroups` namespace.
+  PROJECT_GROUPS_LIST: "project-groups:list",
+  PROJECT_GROUPS_CREATE: "project-groups:create",
+  PROJECT_GROUPS_RENAME: "project-groups:rename",
+  PROJECT_GROUPS_DELETE: "project-groups:delete",
+  PROJECT_GROUPS_REORDER: "project-groups:reorder",
+  PROJECT_GROUPS_SET_SORT_MODE: "project-groups:set-sort-mode",
+  PROJECT_GROUPS_SET_MEMBERSHIP: "project-groups:set-membership",
+  PROJECT_GROUPS_SET_ARCHIVED: "project-groups:set-archived",
+
   // Run history channels — durable recipe/fleet automation outcomes (#9949).
   // Dedicated `run-history:*` prefix so codegen produces a `runHistory`
   // renderer namespace.
@@ -1079,6 +1132,7 @@ export const CHANNELS = {
   PLUGIN_REPORT_FOCUSED_PANEL: "plugin:report-focused-panel",
   /** Every tracked plugin's `PluginPerfSnapshot`. */
   PLUGIN_PERF_SNAPSHOTS_GET: "plugin:perf-snapshots-get",
+  PLUGIN_CAPTURE_PANEL: "plugin:capture-panel",
   /** Renderer → main, fire-and-forget: start receiving `PLUGIN_PERF_SNAPSHOTS_CHANGED`. */
   PLUGIN_PERF_SNAPSHOTS_SUBSCRIBE: "plugin:perf-snapshots-subscribe",
   PLUGIN_PERF_SNAPSHOTS_UNSUBSCRIBE: "plugin:perf-snapshots-unsubscribe",
@@ -1209,6 +1263,12 @@ export const CHANNELS = {
   // Performance capture channels
   PERF_FLUSH_RENDERER_MARKS: "perf:flush-renderer-marks",
 
+  // Host-owned agent defaults: assistant agent + default terminal agent (#13345)
+  AGENT_DEFAULTS_GET: "agent-defaults:get",
+  AGENT_DEFAULTS_SET: "agent-defaults:set",
+  AGENT_DEFAULTS_MIGRATE_LEGACY: "agent-defaults:migrate-legacy",
+  AGENT_DEFAULTS_CHANGED: "agent-defaults:changed",
+
   // Per-service connectivity channels
   CONNECTIVITY_GET_STATE: "connectivity:get-state",
   CONNECTIVITY_SERVICE_CHANGED: "connectivity:service-changed",
@@ -1253,6 +1313,123 @@ export const CHANNELS = {
   // and an agent must never be able to grant itself a plugin's tools.
   PLUGIN_AGENT_MCP_LIST_PROJECT_PLUGINS: "plugin-agent-mcp:list-project-plugins",
   PLUGIN_AGENT_MCP_SET_PLUGIN_ACCESS: "plugin-agent-mcp:set-plugin-access",
+
+  // Remote Hosts: remoteHosts (shell).
+  REMOTE_HOSTS_LIST: "remote-hosts:list",
+  REMOTE_HOSTS_LIST_RECENT: "remote-hosts:list-recent",
+  REMOTE_HOSTS_ADD: "remote-hosts:add",
+  REMOTE_HOSTS_UPDATE: "remote-hosts:update",
+  REMOTE_HOSTS_FORGET: "remote-hosts:forget",
+  REMOTE_HOSTS_CONNECT: "remote-hosts:connect",
+  REMOTE_HOSTS_DISCONNECT: "remote-hosts:disconnect",
+  REMOTE_HOSTS_GET_WINDOW_HOST: "remote-hosts:get-window-host",
+  REMOTE_HOSTS_TAKE_PROJECT_OFFER: "remote-hosts:take-project-offer",
+  REMOTE_HOSTS_SWITCH_WINDOW_HOST: "remote-hosts:switch-window-host",
+  REMOTE_HOSTS_GET_PENDING_SWITCH: "remote-hosts:get-pending-switch",
+  REMOTE_HOSTS_CANCEL_PENDING_SWITCH: "remote-hosts:cancel-pending-switch",
+  REMOTE_HOSTS_DISCOVER: "remote-hosts:discover",
+  REMOTE_HOSTS_PROBE: "remote-hosts:probe",
+  REMOTE_HOSTS_GET_LOCAL_HANDSHAKE: "remote-hosts:get-local-handshake",
+  REMOTE_HOSTS_IS_IN_USE: "remote-hosts:is-in-use",
+  REMOTE_HOSTS_PLAN_INSTALL: "remote-hosts:plan-install",
+  REMOTE_HOSTS_INSTALL: "remote-hosts:install",
+  REMOTE_HOSTS_GET_INSTALL_STATUS: "remote-hosts:get-install-status",
+  REMOTE_HOSTS_CANCEL_INSTALL: "remote-hosts:cancel-install",
+  REMOTE_HOSTS_START_HOST_MODE: "remote-hosts:start-host-mode",
+  REMOTE_HOSTS_LIST_HOST_PROJECTS: "remote-hosts:list-host-projects",
+  REMOTE_HOSTS_LIST_CLIPBOARD_GRANTS: "remote-hosts:list-clipboard-grants",
+  REMOTE_HOSTS_RESET_CLIPBOARD_GRANTS: "remote-hosts:reset-clipboard-grants",
+  REMOTE_HOSTS_LIST_PLUGIN_VIEW_CONSENTS: "remote-hosts:list-plugin-view-consents",
+  REMOTE_HOSTS_RESET_PLUGIN_VIEW_CONSENT: "remote-hosts:reset-plugin-view-consent",
+  REMOTE_HOSTS_PREPARE_PLUGIN_VIEW: "remote-hosts:prepare-plugin-view",
+  REMOTE_HOSTS_LIST_ASSISTANT_EXCHANGES: "remote-hosts:list-assistant-exchanges",
+  REMOTE_HOSTS_CANCEL_ASSISTANT_EXCHANGE: "remote-hosts:cancel-assistant-exchange",
+  REMOTE_HOSTS_EVENT: "remote-hosts:event",
+
+  // Remote Hosts: hostMode (shell).
+  HOST_MODE_GET_STATUS: "host-mode:get-status",
+  HOST_MODE_SET_ENABLED: "host-mode:set-enabled",
+  HOST_MODE_RUN_KEYCHAIN_PREFLIGHT: "host-mode:run-keychain-preflight",
+  HOST_MODE_EVENT: "host-mode:event",
+
+  // Remote Hosts: driveLease (host).
+  DRIVE_LEASE_GET: "drive-lease:get",
+  DRIVE_LEASE_TAKE_OVER: "drive-lease:take-over",
+  DRIVE_LEASE_REPORT_NAVIGATION: "drive-lease:report-navigation",
+  DRIVE_LEASE_EVENT: "drive-lease:event",
+
+  // Remote Hosts: operations (host).
+  OPERATIONS_GET_STATUS: "operations:get-status",
+  OPERATIONS_LIST: "operations:list",
+  OPERATIONS_CANCEL: "operations:cancel",
+  OPERATIONS_EVENT: "operations:event",
+
+  // Remote Hosts: hostFiles (host).
+  HOST_FILES_LIST_DIRECTORY: "host-files:list-directory",
+  HOST_FILES_GET_PICKER_ROOTS: "host-files:get-picker-roots",
+
+  // Remote Hosts: fileTransfer (shell).
+  FILE_TRANSFER_UPLOAD_LOCAL_FILE: "file-transfer:upload-local-file",
+  FILE_TRANSFER_UPLOAD_BYTES: "file-transfer:upload-bytes",
+  FILE_TRANSFER_DOWNLOAD: "file-transfer:download",
+  FILE_TRANSFER_CANCEL: "file-transfer:cancel",
+  FILE_TRANSFER_ANSWER_HOST_PICK: "file-transfer:answer-host-pick",
+  FILE_TRANSFER_GET_PREVIEW_CAPABILITY: "file-transfer:get-preview-capability",
+  FILE_TRANSFER_STAT_LOCAL_FILE: "file-transfer:stat-local-file",
+  FILE_TRANSFER_GET_UPLOAD_PREFERENCES: "file-transfer:get-upload-preferences",
+  FILE_TRANSFER_SET_UPLOAD_PREFERENCES: "file-transfer:set-upload-preferences",
+  FILE_TRANSFER_EVENT: "file-transfer:event",
+  // preload → main only: the paths of Files the person dropped or pasted in a remote view.
+  FILE_TRANSFER_GRANT_LOCAL_SOURCES: "file-transfer:grant-local-sources",
+
+  // Remote Hosts: hostSwitch (shell).
+  HOST_SWITCH_PLAN: "host-switch:plan",
+  HOST_SWITCH_PREPARE: "host-switch:prepare",
+  HOST_SWITCH_CHECK_DESTINATION: "host-switch:check-destination",
+  HOST_SWITCH_EXECUTE: "host-switch:execute",
+  HOST_SWITCH_STATUS: "host-switch:status",
+  HOST_SWITCH_CANCEL: "host-switch:cancel",
+  HOST_SWITCH_LOCATE: "host-switch:locate",
+  HOST_SWITCH_SUGGEST_CLONE_DESTINATION: "host-switch:suggest-clone-destination",
+  HOST_SWITCH_LIST_DIRECTORY: "host-switch:list-directory",
+  HOST_SWITCH_PICKER_ROOTS: "host-switch:picker-roots",
+
+  // Remote Hosts: projectMatch (host).
+  PROJECT_MATCH_FIND: "project-match:find",
+  PROJECT_MATCH_SCAN: "project-match:scan",
+  PROJECT_MATCH_FIND_WORKTREE_FOR_BRANCH: "project-match:find-worktree-for-branch",
+  PROJECT_MATCH_TAKE_PENDING_SETUP: "project-match:take-pending-setup",
+
+  // Remote Hosts: hostMetrics (shell).
+  HOST_METRICS_GET_SNAPSHOTS: "host-metrics:get-snapshots",
+  HOST_METRICS_LIST_FLEET_TARGETS: "host-metrics:list-fleet-targets",
+  HOST_METRICS_SUBMIT_FLEET: "host-metrics:submit-fleet",
+  HOST_METRICS_LIST_WORKTREES: "host-metrics:list-worktrees",
+  HOST_METRICS_EVENT: "host-metrics:event",
+
+  // Remote Hosts: canopyHost (shell).
+  CANOPY_HOST_INVOKE: "canopy-host:invoke",
+  CANOPY_HOST_RELEASE: "canopy-host:release",
+  CANOPY_HOST_EVENT: "canopy-host:event",
+
+  // Remote Hosts: portForwards (shell).
+  PORT_FORWARDS_LIST: "port-forwards:list",
+  PORT_FORWARDS_FORWARD: "port-forwards:forward",
+  PORT_FORWARDS_STOP: "port-forwards:stop",
+  PORT_FORWARDS_LIST_HOST_PORTS: "port-forwards:list-host-ports",
+  PORT_FORWARDS_EVENT: "port-forwards:event",
+
+  // Remote Hosts: pluginParity (shell).
+  PLUGIN_PARITY_DIFF: "plugin-parity:diff",
+  PLUGIN_PARITY_INSTALL_ON_HOST: "plugin-parity:install-on-host",
+  PLUGIN_PARITY_UPDATE_ON_HOST: "plugin-parity:update-on-host",
+  PLUGIN_PARITY_CLAIM_SWITCH_NOTICE: "plugin-parity:claim-switch-notice",
+
+  // Remote Hosts: settingsCopy (shell).
+  SETTINGS_COPY_PREVIEW: "settings-copy:preview",
+  SETTINGS_COPY_APPLY: "settings-copy:apply",
+  SETTINGS_COPY_STATUS: "settings-copy:status",
+  SETTINGS_COPY_UNDO: "settings-copy:undo",
 } as const;
 
 export type ChannelName = (typeof CHANNELS)[keyof typeof CHANNELS];

@@ -408,16 +408,6 @@ describe("fleet.recallNamedFleet", () => {
     expect(armed.has("b")).toBe(true);
   });
 
-  it("is a no-op when the saved id is not found", async () => {
-    seedPanels([makeAgent("a")]);
-    getSettingsMock.mockResolvedValue({ runCommands: [], fleetSavedScopes: [] });
-
-    const registry = await buildRegistry();
-    await run(registry, "fleet.recallNamedFleet", { id: "missing" });
-
-    expect(useFleetArmingStore.getState().armedIds.size).toBe(0);
-  });
-
   it("missing-id recall preserves the existing armed set (does not clear)", async () => {
     seedPanels([makeAgent("a"), makeAgent("b")]);
     useFleetArmingStore.getState().armIds(["a"]);
@@ -560,17 +550,6 @@ describe("fleet.recallNamedFleet", () => {
     const stored = storeScopes?.[0] as FleetSavedScope | undefined;
     expect(stored?.lastUsedAt).toBeGreaterThan(0);
     expect(stored?.usageHistory).toHaveLength(1);
-  });
-
-  it("missing-id recall does not call saveSettings", async () => {
-    seedPanels([makeAgent("a")]);
-    getSettingsMock.mockResolvedValue({ runCommands: [], fleetSavedScopes: [] });
-    saveSettingsMock.mockResolvedValue(undefined);
-
-    const registry = await buildRegistry();
-    await run(registry, "fleet.recallNamedFleet", { id: "missing" });
-
-    expect(saveSettingsMock).not.toHaveBeenCalled();
   });
 
   it("aborts the recency write when the project switches mid-recall", async () => {

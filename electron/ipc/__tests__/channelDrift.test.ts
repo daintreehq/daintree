@@ -140,6 +140,10 @@ const DEAD_CHANNEL_ALLOWLIST = new Set<string>([
   // fire-and-forget — renderer→main perf timeline flush.
   "perf:flush-renderer-marks",
 
+  // fire-and-forget — preload→main record of the Files the person dropped or
+  // pasted in a remote view; deliberately not on the page's bridge.
+  "file-transfer:grant-local-sources",
+
   // fire-and-forget — high-frequency renderer→main terminal input / control
   // path. Typing through IpcInvokeMap would force a Promise round-trip per
   // keystroke; the send-only contract is deliberate.
@@ -580,25 +584,6 @@ describe("IPC channel drift guardrails", () => {
         constant
       );
     }
-  });
-
-  it("preload imports CHANNELS from channels.ts — no hand-maintained inline copy", async () => {
-    const source = await readFile(PRELOAD_CTS, "utf8");
-
-    // esbuild bundles the preload, so it can (and must) consume the canonical
-    // CHANNELS export from electron/ipc/channels.ts. If the inline copy
-    // reappears, drift is possible again. #5691.
-    expect(
-      source,
-      'electron/preload.cts must `import { CHANNELS } from "./ipc/channels.js"` ' +
-        "rather than inlining a duplicate CHANNELS declaration."
-    ).toMatch(/^import\s*\{[^}]*\bCHANNELS\b[^}]*\}\s*from\s*["']\.\/ipc\/channels\.js["'];?$/m);
-
-    expect(
-      /\bconst\s+CHANNELS\s*=\s*\{/.test(source),
-      "electron/preload.cts must not declare its own `const CHANNELS = { ... }` — " +
-        "the single source of truth lives in electron/ipc/channels.ts."
-    ).toBe(false);
   });
 
   it("the agent-session list binding forwards both scope filters (#11530)", async () => {

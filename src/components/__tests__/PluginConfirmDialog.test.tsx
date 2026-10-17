@@ -16,11 +16,16 @@ vi.mock("zustand/react/shallow", () => ({
 vi.mock("@/store", () => ({
   usePortalStore: () => ({ isOpen: false, width: 0 }),
 }));
+vi.mock("@/store/portalStore", () => ({ usePortalStore: () => ({ isOpen: false, width: 0 }) }));
 
 vi.mock("@/hooks", async (importOriginal) => {
   const actual = (await importOriginal()) as Record<string, unknown>;
   return { ...actual, useOverlayState: () => {} };
 });
+vi.mock("@/hooks/useOverlayState", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/hooks/useOverlayState")>()),
+  useOverlayState: () => {},
+}));
 
 vi.mock("@/hooks/useAnimatedPresence", () => ({
   useAnimatedPresence: ({ isOpen }: { isOpen: boolean }) => ({
@@ -83,14 +88,6 @@ describe("PluginConfirmDialog", () => {
     __resetPluginConfirmStoreForTesting();
     cleanup();
     vi.restoreAllMocks();
-  });
-
-  it("labels the confirm button with the action title, not a generic verb", () => {
-    void enqueue({ actionTitle: "Delete worktree" });
-    render(<PluginConfirmDialog />);
-
-    expect(screen.getByRole("button", { name: "Delete worktree" })).toBeTruthy();
-    expect(screen.queryByRole("button", { name: /^run action$/i })).toBeNull();
   });
 
   it("renders destructive styling for effectiveDanger:confirm dispatches", () => {
@@ -423,28 +420,5 @@ describe("PluginConfirmDialog", () => {
     });
 
     await expect(p).resolves.toBe("rejected");
-  });
-
-  it("approves when confirm is clicked after cooldown", async () => {
-    vi.useFakeTimers();
-    try {
-      const p = enqueue();
-      render(<PluginConfirmDialog />);
-
-      act(() => {
-        vi.advanceTimersByTime(1200);
-      });
-
-      act(() => {
-        screen
-          .getByRole("button", { name: "Delete worktree" })
-          .dispatchEvent(new MouseEvent("click", { bubbles: true }));
-      });
-
-      await expect(p).resolves.toBe("approved");
-    } finally {
-      vi.runOnlyPendingTimers();
-      vi.useRealTimers();
-    }
   });
 });

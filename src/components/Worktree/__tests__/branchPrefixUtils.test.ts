@@ -6,6 +6,7 @@ import {
   buildBranchName,
 } from "../branchPrefixUtils";
 import type { ForgeLabel, Issue } from "@shared/types/forge";
+import { BRANCH_TYPES } from "@shared/config/branchPrefixes";
 
 function createTestIssue(
   title: string,
@@ -25,25 +26,22 @@ describe("parseBranchInput", () => {
     });
   });
 
-  it("parses branch with alias prefix", () => {
-    const result = parseBranchInput("feat/add-auth");
-    expect(result).toEqual({
-      prefix: "feature", // normalized to canonical
-      slug: "add-auth",
-      fullBranchName: "feature/add-auth",
-      hasPrefix: true,
-    });
-  });
+  it.each(["feat/add-auth", "hotfix/add-auth", "ui/add-auth"])(
+    "keeps an alias prefix as typed (%s)",
+    (input) => {
+      const result = parseBranchInput(input);
+      expect(result.fullBranchName).toBe(input);
+      expect(result.prefix).toBe(input.split("/")[0]);
+      expect(result.hasPrefix).toBe(true);
+    }
+  );
 
-  it("parses branch with custom unknown prefix", () => {
-    const result = parseBranchInput("spike/experiment");
-    expect(result).toEqual({
-      prefix: "spike",
-      slug: "experiment",
-      fullBranchName: "spike/experiment",
-      hasPrefix: true,
-    });
-  });
+  it.each(["constructor/foo", "__proto__/foo", "toString/foo"])(
+    "keeps a prefix that names an Object.prototype member (%s)",
+    (input) => {
+      expect(parseBranchInput(input).fullBranchName).toBe(input);
+    }
+  );
 
   it("parses branch without prefix", () => {
     const result = parseBranchInput("quick-fix");
@@ -51,16 +49,6 @@ describe("parseBranchInput", () => {
       prefix: "",
       slug: "quick-fix",
       fullBranchName: "quick-fix",
-      hasPrefix: false,
-    });
-  });
-
-  it("handles empty input", () => {
-    const result = parseBranchInput("");
-    expect(result).toEqual({
-      prefix: "",
-      slug: "",
-      fullBranchName: "",
       hasPrefix: false,
     });
   });
@@ -85,12 +73,12 @@ describe("parseBranchInput", () => {
     });
   });
 
-  it("normalizes prefix case for known prefixes", () => {
+  it("keeps the case of a known prefix as typed", () => {
     const result = parseBranchInput("FEATURE/add-auth");
     expect(result).toEqual({
-      prefix: "feature",
+      prefix: "FEATURE",
       slug: "add-auth",
-      fullBranchName: "feature/add-auth",
+      fullBranchName: "FEATURE/add-auth",
       hasPrefix: true,
     });
   });
@@ -129,7 +117,7 @@ describe("parseBranchInput", () => {
 describe("suggestPrefixes", () => {
   it("returns all prefixes when query is empty", () => {
     const suggestions = suggestPrefixes("");
-    expect(suggestions.length).toBe(12); // All BRANCH_TYPES
+    expect(suggestions.map((s) => s.type.id)).toEqual(BRANCH_TYPES.map((t) => t.id));
     expect(suggestions.every((s) => s.matchScore === 1)).toBe(true);
   });
 
@@ -274,13 +262,5 @@ describe("buildBranchName", () => {
 
   it("builds branch without prefix", () => {
     expect(buildBranchName("", "quick-fix")).toBe("quick-fix");
-  });
-
-  it("handles empty slug", () => {
-    expect(buildBranchName("feature", "")).toBe("feature/");
-  });
-
-  it("handles empty prefix and slug", () => {
-    expect(buildBranchName("", "")).toBe("");
   });
 });

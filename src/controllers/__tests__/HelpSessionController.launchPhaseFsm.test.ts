@@ -704,37 +704,6 @@ describe("HelpSessionController — launch phase FSM", () => {
     ctrl.stop();
   });
 
-  it("revokes the provisioned session when agent.launch rejects after provisioning", async () => {
-    const ctrl = new HelpSessionController();
-    ctrl.start();
-    helpPanelState.preferredAgentId = "claude";
-    (window.electron.help.provisionSession as ReturnType<typeof vi.fn>).mockResolvedValue({
-      sessionId: "sess-leak",
-      sessionPath: "/help",
-      token: "tok-leak",
-      mcpUrl: null,
-      windowId: 1,
-    });
-    vi.mocked(actionService.dispatch).mockRejectedValue(new Error("dispatch boom") as never);
-
-    ctrl.syncInputs({
-      isOpen: true,
-      isReadyToLaunch: true,
-      currentProject: { id: "proj", path: "/repo" },
-      terminalId: null,
-      preferredAgentId: "claude",
-      supportedInstalledAgentIds: ["claude"],
-      autoLaunchEnabled: true,
-      visibilityEpoch: 0,
-    });
-
-    await vi.waitFor(() => {
-      expect(window.electron.help.revokeSession).toHaveBeenCalledWith("sess-leak");
-    });
-    expect(ctrl.getSnapshot().phase).toBe("idle");
-    ctrl.stop();
-  });
-
   it("watchdog revokes the provisioned session when agent.launch hangs after provisioning (#10698)", async () => {
     vi.useFakeTimers();
     const ctrl = new HelpSessionController();

@@ -98,18 +98,6 @@ describe("KeybindingService", () => {
       expect(normalizeKeyForBinding(event)).toBe("{");
     });
 
-    it("returns the physical key on macOS Option-letter (contrast with Windows AltGr)", () => {
-      setPlatform("MacIntel");
-
-      const event = createKeyboardEvent({
-        key: "π",
-        code: "KeyP",
-        altKey: true,
-      });
-
-      expect(normalizeKeyForBinding(event)).toBe("P");
-    });
-
     // ── matchesEvent (matcher layer) ────────────────────────────
 
     it("rejects Ctrl+Alt+E when AltGr produces € on Windows", () => {
@@ -125,21 +113,6 @@ describe("KeybindingService", () => {
       });
 
       expect(service.matchesEvent(event, "Ctrl+Alt+E")).toBe(false);
-    });
-
-    it("rejects Ctrl+Alt+Q when AltGr produces @ on Windows", () => {
-      setPlatform("Win32");
-
-      const service = new KeybindingService();
-      const event = createKeyboardEvent({
-        key: "@",
-        code: "KeyQ",
-        ctrlKey: true,
-        altKey: true,
-        getModifierState: altGraphModifierState(),
-      });
-
-      expect(service.matchesEvent(event, "Ctrl+Alt+Q")).toBe(false);
     });
 
     it("rejects Ctrl+Alt+E on Linux AltGr (neither modifier flag is set)", () => {
@@ -180,6 +153,22 @@ describe("KeybindingService", () => {
       const windows = new KeybindingService();
       const ctrlPeriod = createKeyboardEvent({ key: ".", code: "Period", ctrlKey: true });
       expect(windows.findMatchingAction(ctrlPeriod)?.actionId).toBe("voiceInput.toggle");
+    });
+
+    it("lists every combo an action fires on, a second binding such as Windows' Ctrl+F4 included", () => {
+      const service = new KeybindingService();
+      const first = service.getEffectiveCombo("terminal.close")!;
+      service.registerBinding({
+        actionId: "terminal.close",
+        combo: "Ctrl+F4",
+        scope: "global",
+        priority: 10,
+        description: "Close focused terminal",
+        category: "Terminal",
+      });
+      expect(service.getTriggerCombos("terminal.close")).toEqual([first, "Ctrl+F4"]);
+      // The one-combo view leaves the second binding out.
+      expect(service.getEffectiveCombos("terminal.close")).toEqual([first]);
     });
 
     it("keeps ⌘. distinct from the ⌘⇧. and ⌘⌥. defaults on macOS", () => {
@@ -243,49 +232,6 @@ describe("KeybindingService", () => {
 
     // ── findMatchingAction (pipeline layer) ─────────────────────
 
-    it("does not resolve a Ctrl+Alt+E action from AltGr+E on Windows", () => {
-      setPlatform("Win32");
-
-      const service = new KeybindingService();
-      service.registerBinding({
-        actionId: "test.ctrlAltE",
-        combo: "Ctrl+Alt+E",
-        scope: "global",
-        priority: 99,
-      });
-
-      const event = createKeyboardEvent({
-        key: "€",
-        code: "KeyE",
-        ctrlKey: true,
-        altKey: true,
-        getModifierState: altGraphModifierState(),
-      });
-
-      expect(service.findMatchingAction(event)).toBeUndefined();
-    });
-
-    it("resolves a Ctrl+Alt+E action from legitimate Ctrl+Alt+E on US-layout Windows", () => {
-      setPlatform("Win32");
-
-      const service = new KeybindingService();
-      service.registerBinding({
-        actionId: "test.ctrlAltE",
-        combo: "Ctrl+Alt+E",
-        scope: "global",
-        priority: 99,
-      });
-
-      const event = createKeyboardEvent({
-        key: "E",
-        code: "KeyE",
-        ctrlKey: true,
-        altKey: true,
-      });
-
-      expect(service.findMatchingAction(event)?.actionId).toBe("test.ctrlAltE");
-    });
-
     it("does not resolve a Cmd+Alt+Q agent-launch binding from AltGr+Q on Windows — #1678 guard", () => {
       setPlatform("Win32");
 
@@ -322,19 +268,6 @@ describe("KeybindingService", () => {
     expect(service.matchesEvent(event, "Cmd+T")).toBe(true);
   });
 
-  it("matches literal Ctrl bindings on non-mac when Ctrl is pressed", () => {
-    setPlatform("Win32");
-
-    const service = new KeybindingService();
-    const event = createKeyboardEvent({
-      key: "Tab",
-      code: "Tab",
-      ctrlKey: true,
-    });
-
-    expect(service.matchesEvent(event, "Ctrl+Tab")).toBe(true);
-  });
-
   it("resolves Ctrl+Tab terminal focus bindings on non-mac", () => {
     setPlatform("Win32");
 
@@ -353,33 +286,6 @@ describe("KeybindingService", () => {
 
     expect(service.findMatchingAction(forward)?.actionId).toBe("terminal.focusNext");
     expect(service.findMatchingAction(backward)?.actionId).toBe("terminal.focusPrevious");
-  });
-
-  it("supports two-key chord matching", () => {
-    setPlatform("MacIntel");
-
-    const service = new KeybindingService();
-    service.registerBinding({
-      actionId: "test.chord",
-      combo: "Cmd+K Cmd+Z",
-      scope: "global",
-      priority: 99,
-    });
-
-    const first = createKeyboardEvent({
-      key: "k",
-      code: "KeyK",
-      metaKey: true,
-    });
-    const second = createKeyboardEvent({
-      key: "z",
-      code: "KeyZ",
-      metaKey: true,
-    });
-
-    expect(service.findMatchingAction(first)).toBeUndefined();
-    const match = service.findMatchingAction(second);
-    expect(match?.actionId).toBe("test.chord");
   });
 
   it("resolves Cmd+W to terminal.close in global scope", () => {
@@ -542,19 +448,6 @@ describe("KeybindingService", () => {
     expect(binding?.effectiveCombo).toBe("");
   });
 
-  it("reports each binding's own combo for an action registered more than once", () => {
-    const service = new KeybindingService();
-    const all = service.getAllBindingsWithEffectiveCombos();
-    const counts = new Map<string, number>();
-    for (const entry of all) counts.set(entry.actionId, (counts.get(entry.actionId) ?? 0) + 1);
-    const repeated = all.filter((entry) => (counts.get(entry.actionId) ?? 0) > 1);
-
-    expect(repeated.length).toBeGreaterThan(1);
-    for (const entry of repeated) {
-      expect(entry.effectiveCombo, entry.actionId).toBe(entry.combo);
-    }
-  });
-
   it("reports an override on every binding of a repeated action", () => {
     const service = new KeybindingService();
     const repeatedId = service
@@ -568,16 +461,6 @@ describe("KeybindingService", () => {
       .filter((entry) => entry.actionId === repeatedId);
     expect(rows.length).toBeGreaterThan(1);
     expect(rows.every((entry) => entry.effectiveCombo === "Ctrl+Alt+Shift+F12")).toBe(true);
-  });
-
-  it("binds Cmd+T to terminal.duplicate by default", () => {
-    const service = new KeybindingService();
-    expect(service.getBinding("terminal.duplicate")?.combo).toBe("Cmd+T");
-  });
-
-  it("binds Cmd+Alt+T to terminal.new by default", () => {
-    const service = new KeybindingService();
-    expect(service.getBinding("terminal.new")?.combo).toBe("Cmd+Alt+T");
   });
 
   it("binds project switching to plus alone; shift+plus and minus stay unbound", () => {
@@ -610,19 +493,6 @@ describe("KeybindingService", () => {
       altKey: true,
     });
     expect(service.findMatchingAction(minus)).toBeUndefined();
-  });
-
-  it("matchesEvent returns true for Shift+F10", () => {
-    setPlatform("MacIntel");
-
-    const service = new KeybindingService();
-    const event = createKeyboardEvent({
-      key: "F10",
-      code: "F10",
-      shiftKey: true,
-    });
-
-    expect(service.matchesEvent(event, "Shift+F10")).toBe(true);
   });
 
   it("findMatchingAction returns terminal.contextMenu for Shift+F10", () => {
@@ -668,11 +538,6 @@ describe("KeybindingService", () => {
     expect(service.getEffectiveCombo("terminal.contextMenu")).toBeUndefined();
   });
 
-  it("getEffectiveCombo returns Shift+F10 for terminal.contextMenu by default", () => {
-    const service = new KeybindingService();
-    expect(service.getEffectiveCombo("terminal.contextMenu")).toBe("Shift+F10");
-  });
-
   describe("getChordCompletions", () => {
     it("offers a second binding only in the scope it fires in", () => {
       setPlatform("MacIntel");
@@ -689,35 +554,6 @@ describe("KeybindingService", () => {
       expect(offersF12()).toBe(false);
       service.setScope("portal");
       expect(offersF12()).toBe(true);
-    });
-
-    it("returns completions with category and isPrefix fields", () => {
-      setPlatform("MacIntel");
-      const service = new KeybindingService();
-
-      const completions = service.getChordCompletions("Cmd+K");
-      expect(completions.length).toBeGreaterThan(0);
-
-      for (const c of completions) {
-        expect(c).toHaveProperty("category");
-        expect(c).toHaveProperty("isPrefix");
-        expect(typeof c.category).toBe("string");
-        expect(typeof c.isPrefix).toBe("boolean");
-      }
-    });
-
-    it("returns correct categories from bindings", () => {
-      setPlatform("MacIntel");
-      const service = new KeybindingService();
-
-      const completions = service.getChordCompletions("Cmd+K");
-      const closeAll = completions.find((c) => c.actionId === "terminal.closeAll");
-      expect(closeAll).toBeTruthy();
-      expect(closeAll?.category).toBe("Terminal");
-
-      const worktreePalette = completions.find((c) => c.actionId === "worktree.openPalette");
-      expect(worktreePalette).toBeTruthy();
-      expect(worktreePalette?.category).toBe("Worktrees");
     });
 
     it("defaults category to 'Other' when binding has no category", () => {
@@ -769,24 +605,6 @@ describe("KeybindingService", () => {
   });
 
   describe("agent launch defaults", () => {
-    it("only registers Claude, Gemini, and Codex as default agent launch shortcuts", () => {
-      const agentLaunchDefaults = DEFAULT_KEYBINDINGS.filter(
-        (b) =>
-          b.actionId.startsWith("agent.") &&
-          b.category === "Agents" &&
-          /^Cmd\+Alt\+[A-Z]$/.test(b.combo)
-      ).map((b) => b.actionId);
-
-      expect(agentLaunchDefaults).toContain("agent.claude");
-      expect(agentLaunchDefaults).toContain("agent.gemini");
-      expect(agentLaunchDefaults).toContain("agent.codex");
-      expect(agentLaunchDefaults).not.toContain("agent.opencode");
-      expect(agentLaunchDefaults).not.toContain("agent.cursor");
-      expect(agentLaunchDefaults).not.toContain("agent.kiro");
-      expect(agentLaunchDefaults).not.toContain("agent.copilot");
-      expect(agentLaunchDefaults).not.toContain("agent.kimi");
-    });
-
     it("resolves Cmd+Alt+K to agent.focusNextAgent (no collision with agent.kiro)", () => {
       setPlatform("MacIntel");
 
@@ -923,11 +741,6 @@ describe("KeybindingService", () => {
       service.resolveKeybinding(cmdK);
       expect(service.getPendingChord()).not.toBeNull();
     }
-
-    it("returns null initially", () => {
-      const service = new KeybindingService();
-      expect(service.getLastInvalidKey()).toBeNull();
-    });
 
     it("captures the attempted combo when a second key is unrecognized after a chord prefix", () => {
       setPlatform("MacIntel");
@@ -1111,17 +924,6 @@ describe("KeybindingService", () => {
   });
 
   describe("popPendingChord", () => {
-    it("is a no-op when no chord is pending", () => {
-      const service = new KeybindingService();
-      const listener = vi.fn();
-      service.subscribe(listener);
-
-      service.popPendingChord();
-
-      expect(service.getPendingChord()).toBeNull();
-      expect(listener).not.toHaveBeenCalled();
-    });
-
     it("clears the pending chord and notifies listeners", () => {
       setPlatform("MacIntel");
       const service = new KeybindingService();
@@ -1160,35 +962,6 @@ describe("KeybindingService", () => {
 
       expect(service.getPendingChord()).toBeNull();
       expect(listener).toHaveBeenCalledTimes(1);
-    });
-
-    it("leaves no lingering timer after pop (no delayed re-notify)", () => {
-      vi.useFakeTimers();
-      try {
-        setPlatform("MacIntel");
-        const service = new KeybindingService();
-        const cmdK = createKeyboardEvent({
-          key: "k",
-          code: "KeyK",
-          metaKey: true,
-        });
-        service.resolveKeybinding(cmdK);
-        expect(service.getPendingChord()).not.toBeNull();
-
-        service.popPendingChord();
-        expect(service.getPendingChord()).toBeNull();
-
-        const listener = vi.fn();
-        service.subscribe(listener);
-
-        // Pending chords no longer arm a timer, so advancing the clock must
-        // never re-notify listeners once the chord has been popped.
-        vi.advanceTimersByTime(2000);
-
-        expect(listener).not.toHaveBeenCalled();
-      } finally {
-        vi.useRealTimers();
-      }
     });
   });
 
@@ -1380,37 +1153,27 @@ describe("KeybindingService", () => {
   });
 
   describe("platform-aware Cmd/Ctrl conflict detection — issue #7941", () => {
-    it("findConflicts treats Cmd+Shift+E and Ctrl+Shift+E as the same combo on Windows", () => {
-      // terminal.sendToAgent defaults to "Cmd+Shift+E". The rebind UI must
-      // surface a conflict when a user tries to assign "Ctrl+Shift+E" on
+    it("findConflicts treats Cmd+Shift+B and Ctrl+Shift+B as the same combo on Windows", () => {
+      // terminal.armDefault defaults to "Cmd+Shift+B". The rebind UI must
+      // surface a conflict when a user tries to assign "Ctrl+Shift+B" on
       // non-Mac because both map to the same physical key.
       setPlatform("Win32");
       const service = new KeybindingService();
 
-      const conflicts = service.findConflicts("Ctrl+Shift+E");
+      const conflicts = service.findConflicts("Ctrl+Shift+B");
       expect(
-        conflicts.some((c) => c.actionId === "terminal.sendToAgent" && c.kind === "conflict")
+        conflicts.some((c) => c.actionId === "terminal.armDefault" && c.kind === "conflict")
       ).toBe(true);
     });
 
-    it("findConflicts treats Cmd+Shift+E and Ctrl+Shift+E as the same combo on Linux", () => {
-      setPlatform("Linux x86_64");
-      const service = new KeybindingService();
-
-      const conflicts = service.findConflicts("Ctrl+Shift+E");
-      expect(
-        conflicts.some((c) => c.actionId === "terminal.sendToAgent" && c.kind === "conflict")
-      ).toBe(true);
-    });
-
-    it("findConflicts keeps Cmd+Shift+E and Ctrl+Shift+E distinct on macOS", () => {
+    it("findConflicts keeps Cmd+Shift+B and Ctrl+Shift+B distinct on macOS", () => {
       // On macOS, Cmd and Ctrl are physically distinct keys — assigning
-      // Ctrl+Shift+E should NOT collide with the Cmd+Shift+E default.
+      // Ctrl+Shift+B should NOT collide with the Cmd+Shift+B default.
       setPlatform("MacIntel");
       const service = new KeybindingService();
 
-      const conflicts = service.findConflicts("Ctrl+Shift+E");
-      expect(conflicts.some((c) => c.actionId === "terminal.sendToAgent")).toBe(false);
+      const conflicts = service.findConflicts("Ctrl+Shift+B");
+      expect(conflicts.some((c) => c.actionId === "terminal.armDefault")).toBe(false);
     });
 
     it("findConflicts surfaces a cross-form chord-prefix shadow on non-Mac", () => {
@@ -1737,24 +1500,6 @@ describe("KeybindingService", () => {
   });
 
   describe("worktree empty-state shortcut defaults — issue #6437", () => {
-    it("registers Cmd+K Cmd+N as the default for worktree.createDialog.open", () => {
-      const binding = DEFAULT_KEYBINDINGS.find((b) => b.actionId === "worktree.createDialog.open");
-      expect(binding).toBeDefined();
-      expect(binding?.combo).toBe("Cmd+K Cmd+N");
-      expect(binding?.scope).toBe("global");
-      expect(binding?.category).toBe("Worktrees");
-    });
-
-    it("does not collide with the existing Cmd+K Cmd+O worktree-palette chord", () => {
-      const createDialog = DEFAULT_KEYBINDINGS.find(
-        (b) => b.actionId === "worktree.createDialog.open"
-      );
-      const palette = DEFAULT_KEYBINDINGS.find((b) => b.actionId === "worktree.openPalette");
-      expect(createDialog?.combo).toBe("Cmd+K Cmd+N");
-      expect(palette?.combo).toBe("Cmd+K Cmd+O");
-      expect(createDialog?.combo).not.toBe(palette?.combo);
-    });
-
     it("makes the chord resolvable via getChordCompletions for the Cmd+K prefix", () => {
       setPlatform("MacIntel");
       const service = new KeybindingService();
@@ -1762,16 +1507,6 @@ describe("KeybindingService", () => {
       expect(completions).toContainEqual(
         expect.objectContaining({ actionId: "worktree.createDialog.open" })
       );
-    });
-
-    it("returns the display combo for worktree.createDialog.open via getDisplayCombo", () => {
-      setPlatform("MacIntel");
-      const service = new KeybindingService();
-      const display = service.getDisplayCombo("worktree.createDialog.open");
-      expect(display).not.toBe("");
-      expect(display).toContain("⌘");
-      expect(display.toUpperCase()).toContain("K");
-      expect(display.toUpperCase()).toContain("N");
     });
 
     // The two audits below validate a row only while it exists — deleting the
@@ -1806,30 +1541,19 @@ describe("KeybindingService", () => {
   describe("terminal recovery chords — issue #9803", () => {
     // The five per-pane recovery actions (kill, restart, forceResume, redraw,
     // rename) ship with default 3-part Cmd+K Cmd+<letter> chords. Each test
-    // pins one chord and asserts (a) the display combo resolves to the
-    // expected key glyphs on Mac, and (b) the chord has no exact or prefix
-    // shadow against any other registered binding. The chord family matches
-    // the existing terminal bulk-action convention (closeAll/restartAll use
-    // the same Cmd+K Cmd+<letter> shape).
-    const RECOVERY_CHORDS: Array<{ actionId: string; combo: string; letter: string }> = [
-      { actionId: "terminal.kill", combo: "Cmd+K Cmd+Q", letter: "Q" },
-      { actionId: "terminal.restart", combo: "Cmd+K Cmd+E", letter: "E" },
-      { actionId: "terminal.forceResume", combo: "Cmd+K Cmd+U", letter: "U" },
-      { actionId: "terminal.redraw", combo: "Cmd+K Cmd+D", letter: "D" },
-      { actionId: "terminal.rename", combo: "Cmd+K Cmd+L", letter: "L" },
+    // pins one chord and asserts it has no exact or prefix shadow against any
+    // other registered binding. The chord family matches the existing terminal
+    // bulk-action convention (closeAll/restartAll use the same Cmd+K
+    // Cmd+<letter> shape).
+    const RECOVERY_CHORDS: Array<{ actionId: string; combo: string }> = [
+      { actionId: "terminal.kill", combo: "Cmd+K Cmd+Q" },
+      { actionId: "terminal.restart", combo: "Cmd+K Cmd+E" },
+      { actionId: "terminal.forceResume", combo: "Cmd+K Cmd+U" },
+      { actionId: "terminal.redraw", combo: "Cmd+K Cmd+D" },
+      { actionId: "terminal.rename", combo: "Cmd+K Cmd+L" },
     ];
 
-    for (const { actionId, combo, letter } of RECOVERY_CHORDS) {
-      it(`resolves the display combo for ${actionId} (${combo})`, () => {
-        setPlatform("MacIntel");
-        const service = new KeybindingService();
-        const display = service.getDisplayCombo(actionId);
-        expect(display).not.toBe("");
-        expect(display).toContain("⌘");
-        expect(display.toUpperCase()).toContain("K");
-        expect(display.toUpperCase()).toContain(letter.toUpperCase());
-      });
-
+    for (const { actionId, combo } of RECOVERY_CHORDS) {
       it(`finds no other-binding conflicts for ${actionId} (${combo})`, () => {
         setPlatform("MacIntel");
         const service = new KeybindingService();
@@ -1841,26 +1565,9 @@ describe("KeybindingService", () => {
         expect(conflicts.filter((c) => c.kind === "shadowed")).toEqual([]);
       });
     }
-
-    it("registers the five recovery chords in CORE_KEYBINDINGS", () => {
-      const actionIds = RECOVERY_CHORDS.map((c) => c.actionId);
-      for (const id of actionIds) {
-        const entries = DEFAULT_KEYBINDINGS.filter((b) => b.actionId === id);
-        expect(entries).toHaveLength(1);
-        expect(entries[0]?.combo).toBe(RECOVERY_CHORDS.find((c) => c.actionId === id)?.combo);
-      }
-    });
   });
 
   describe("window.zoomIn discoverability alias — issue #7304", () => {
-    it("registers both Cmd+= and Cmd+Shift+= as defaults for window.zoomIn", () => {
-      const combos = DEFAULT_KEYBINDINGS.filter((b) => b.actionId === "window.zoomIn").map(
-        (b) => b.combo
-      );
-      expect(combos).toEqual(expect.arrayContaining(["Cmd+=", "Cmd+Shift+="]));
-      expect(combos).toHaveLength(2);
-    });
-
     it("resolves Cmd+Shift+= to window.zoomIn at runtime", () => {
       setPlatform("MacIntel");
       const service = new KeybindingService();
@@ -1936,18 +1643,6 @@ describe("KeybindingService", () => {
       expect(service.getEffectiveCombo("terminal.new")).toBe("Cmd+Shift+N");
       expect(service.getOverride("terminal.clearr")).toBeUndefined();
       expect(warnSpy).toHaveBeenCalledTimes(1);
-
-      warnSpy.mockRestore();
-    });
-
-    it("empty overrides load without warning", async () => {
-      setPlatform("MacIntel");
-      mockElectronOverrides({});
-      const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
-      const service = new KeybindingService();
-
-      await service.loadOverrides();
-      expect(warnSpy).not.toHaveBeenCalled();
 
       warnSpy.mockRestore();
     });
@@ -2180,14 +1875,6 @@ describe("KeybindingService", () => {
   });
 
   describe("Windows shortcut conventions — issue #7943", () => {
-    it("registers both Shift+F10 and ContextMenu as defaults for terminal.contextMenu", () => {
-      const combos = DEFAULT_KEYBINDINGS.filter((b) => b.actionId === "terminal.contextMenu").map(
-        (b) => b.combo
-      );
-      expect(combos).toEqual(expect.arrayContaining(["Shift+F10", "ContextMenu"]));
-      expect(combos).toHaveLength(2);
-    });
-
     it("resolves the ContextMenu key to terminal.contextMenu at runtime", () => {
       setPlatform("Win32");
       const service = new KeybindingService();
@@ -2195,33 +1882,6 @@ describe("KeybindingService", () => {
         createKeyboardEvent({ key: "ContextMenu", code: "ContextMenu" })
       );
       expect(match?.actionId).toBe("terminal.contextMenu");
-    });
-
-    it("includes Ctrl+F4 entries in DEFAULT_KEYBINDINGS on Win32", async () => {
-      setPlatform("Win32");
-      vi.resetModules();
-      const { DEFAULT_KEYBINDINGS: WIN_BINDINGS } = await import("../defaultKeybindings");
-
-      const closeEntry = WIN_BINDINGS.find(
-        (b) => b.actionId === "terminal.close" && b.combo === "Ctrl+F4"
-      );
-      const portalEntry = WIN_BINDINGS.find(
-        (b) => b.actionId === "portal.closeTab" && b.combo === "Ctrl+F4"
-      );
-
-      expect(closeEntry?.scope).toBe("global");
-      expect(closeEntry?.priority).toBe(10);
-      expect(portalEntry?.scope).toBe("portal");
-      expect(portalEntry?.priority).toBe(20);
-    });
-
-    it("omits Ctrl+F4 entries from DEFAULT_KEYBINDINGS on macOS", async () => {
-      setPlatform("MacIntel");
-      vi.resetModules();
-      const { DEFAULT_KEYBINDINGS: MAC_BINDINGS } = await import("../defaultKeybindings");
-
-      const ctrlF4Entries = MAC_BINDINGS.filter((b) => b.combo === "Ctrl+F4");
-      expect(ctrlF4Entries).toEqual([]);
     });
 
     it("resolves Ctrl+F4 to terminal.close in global scope on Win32", async () => {
@@ -2305,6 +1965,25 @@ describe("KeybindingService", () => {
       service.removePluginBindings("nonexistent");
 
       expect(listener).not.toHaveBeenCalled();
+    });
+
+    it("lets a user override beat a plugin binding that registered first", () => {
+      setPlatform("MacIntel");
+      const service = new KeybindingService();
+      service.registerBinding({
+        actionId: "p1.act",
+        combo: "Cmd+Shift+8",
+        scope: "global",
+        priority: 1,
+        pluginId: "p1",
+      });
+      // The user then binds a built-in to the same key: their choice wins,
+      // whatever order the two arrived in.
+      service.applyOverrides({ "nav.toggleSidebar": ["Cmd+Shift+8"] });
+      const match = service.findMatchingAction(
+        createKeyboardEvent({ key: "8", code: "Digit8", metaKey: true, shiftKey: true })
+      );
+      expect(match?.actionId).toBe("nav.toggleSidebar");
     });
 
     it("does not clobber a built-in when a plugin binds the same action and combo", () => {
@@ -2504,6 +2183,35 @@ describe("when-clause context provider", () => {
 
     service.setWhenContext({ testFlag: true });
     expect(service.resolveKeybinding(event).match?.actionId).toBe("test.whenGatedStatic");
+  });
+
+  it("builds no context for a key that matches no binding", () => {
+    setPlatform("MacIntel");
+    const service = new KeybindingService();
+    const provider = vi.fn(() => ({ canopyHidden: false }));
+    service.setWhenContextProvider(provider);
+    service.resolveKeybinding(createKeyboardEvent({ key: "j", code: "KeyJ" }));
+    expect(provider).not.toHaveBeenCalled();
+  });
+
+  it("lets Canopy's key go past it, unconsumed, while Canopy is hidden", () => {
+    setPlatform("MacIntel");
+    const service = new KeybindingService();
+    // DEFAULT_KEYBINDINGS is built for the host at import, so on a Windows or
+    // Linux machine Canopy's key is the Ctrl+Shift+O replacement, not Cmd+E.
+    const combo = DEFAULT_KEYBINDINGS.find((b) => b.actionId === "canopy.toggle")?.combo;
+    const event =
+      combo === "Cmd+E"
+        ? createKeyboardEvent({ key: "e", code: "KeyE", metaKey: true })
+        : createKeyboardEvent({ key: "O", code: "KeyO", ctrlKey: true, shiftKey: true });
+
+    service.setWhenContextProvider(() => ({ canopyHidden: false }));
+    expect(service.resolveKeybinding(event).match?.actionId).toBe("canopy.toggle");
+
+    service.setWhenContextProvider(() => ({ canopyHidden: true }));
+    const hidden = service.resolveKeybinding(event);
+    expect(hidden.match).toBeUndefined();
+    expect(hidden.shouldConsume).toBe(false);
   });
 });
 

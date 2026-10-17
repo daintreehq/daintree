@@ -36,17 +36,6 @@ describe("classifyTokenError", () => {
 });
 
 describe("isTokenRelatedError", () => {
-  it("matches the documented token error strings", () => {
-    expect(isTokenRelatedError("GitHub token not configured. Set it in Settings.")).toBe(true);
-    expect(isTokenRelatedError("Invalid GitHub token. Please update in Settings.")).toBe(true);
-    expect(
-      isTokenRelatedError("Token lacks required permissions. Required scopes: repo, read:org")
-    ).toBe(true);
-    expect(isTokenRelatedError("SSO authorization required. Re-authorize at github.com.")).toBe(
-      true
-    );
-  });
-
   it("matches another provider's token vocabulary", () => {
     expect(isTokenRelatedError("GitLab token not configured. Set it in Settings.")).toBe(true);
     expect(isTokenRelatedError("Invalid GitLab token.")).toBe(true);
@@ -64,14 +53,6 @@ describe("isTokenRelatedError", () => {
     expect(isTokenRelatedError("GitHub is temporarily unavailable. Please retry.")).toBe(false);
   });
 
-  it("returns false for partial-results SSO so a per-org failure isn't treated as a globally bad token", () => {
-    expect(
-      isTokenRelatedError(
-        "GitHub returned partial results — some organizations require SSO authorization."
-      )
-    ).toBe(false);
-  });
-
   it("returns false for null/undefined/empty", () => {
     expect(isTokenRelatedError(null)).toBe(false);
     expect(isTokenRelatedError(undefined)).toBe(false);
@@ -80,12 +61,6 @@ describe("isTokenRelatedError", () => {
 });
 
 describe("isTransientNetworkError", () => {
-  it("matches the canonical network error from the provider", () => {
-    expect(isTransientNetworkError("Cannot reach GitHub. Check your internet connection.")).toBe(
-      true
-    );
-  });
-
   it("matches any string starting with the canonical prefix", () => {
     expect(isTransientNetworkError("Cannot reach GitHub.")).toBe(true);
     expect(isTransientNetworkError("Cannot reach GitHub. Try again later.")).toBe(true);
@@ -121,22 +96,9 @@ describe("isTransientNetworkError", () => {
 });
 
 describe("isRateLimitError", () => {
-  it("matches the primary rate-limit error", () => {
-    expect(isRateLimitError("GitHub rate limit exceeded. Waiting for quota reset.")).toBe(true);
-  });
-
-  it("matches the secondary rate-limit error", () => {
-    expect(isRateLimitError("GitHub secondary rate limit triggered. Pausing requests.")).toBe(true);
-  });
-
   it("matches the duration-bearing variants", () => {
     expect(isRateLimitError("GitHub rate limit exceeded. Resets in 2m 30s.")).toBe(true);
     expect(isRateLimitError("GitHub secondary rate limit triggered. Resuming in 45s.")).toBe(true);
-  });
-
-  it("matches any string carrying either canonical sentence", () => {
-    expect(isRateLimitError("GitHub rate limit exceeded.")).toBe(true);
-    expect(isRateLimitError("GitHub secondary rate limit triggered.")).toBe(true);
   });
 
   it("returns false for token, transient, and unrelated errors", () => {

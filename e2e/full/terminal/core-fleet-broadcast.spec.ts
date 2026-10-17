@@ -1,5 +1,13 @@
 import { test, expect, type Locator, type Page } from "@playwright/test";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "fs";
+import {
+  chmodSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  readdirSync,
+  writeFileSync,
+} from "fs";
 import { tmpdir } from "os";
 import path from "path";
 import { launchApp, closeApp, getActiveAppWindow, type AppContext } from "../../helpers/launch";
@@ -179,8 +187,7 @@ async function resetFleetGroup(): Promise<void> {
   await clearAllFaults(ctx.app);
   await ensureProjectOpen();
   const page = ctx.window;
-  // The shift-click tests' Shift presses can add up to the double-Shift chord
-  // that toggles the command palette; that palette is expected noise.
+  // A palette left open by an earlier test would block the overlay check below.
   await dismissBlockingPalette(page);
   // Check overlays while the fleet is still armed: the ribbon unmounts its
   // menu when disarmed, which would hide a menu left open by the last test.
@@ -526,17 +533,27 @@ async function focusHybridInput(page: Page, panel: Locator, terminalId: string):
 
 function destructiveAppendCommand(targetName: string, runLogName: string): string {
   if (process.platform === "win32") {
-    return `rm -rf ./${targetName}; Add-Content -Path ./${runLogName} -Value ran`;
+    // Add-Content locks the file, so one of two shells appending at the same
+    // moment fails ("being used by another process"). Each shell records its
+    // run in a file of its own instead.
+    return `rm -rf ./${targetName}; New-Item -ItemType File -Path "./${runLogName}.$PID" | Out-Null`;
   }
 
   return `rm -rf ./${targetName}; printf 'ran\\n' >> ./${runLogName}`;
 }
 
 function readRunCount(filePath: string): number {
-  if (!existsSync(filePath)) return 0;
-  return readFileSync(filePath, "utf8")
-    .split(/\r?\n/)
-    .filter((line) => line.trim() === "ran").length;
+  const prefix = `${path.basename(filePath)}.`;
+  const perShell = readdirSync(path.dirname(filePath)).filter((name) =>
+    name.startsWith(prefix)
+  ).length;
+  if (!existsSync(filePath)) return perShell;
+  return (
+    perShell +
+    readFileSync(filePath, "utf8")
+      .split(/\r?\n/)
+      .filter((line) => line.trim() === "ran").length
+  );
 }
 
 // ── Saved fleets and confirm keys ────────────────────────────────────────────

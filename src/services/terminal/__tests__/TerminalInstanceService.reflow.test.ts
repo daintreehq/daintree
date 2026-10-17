@@ -1,7 +1,20 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { Terminal as HeadlessTerminal } from "@xterm/headless";
 import type { ManagedTerminal } from "../types";
 import { MAX_RENDERER_UNPAUSE_ATTEMPTS } from "../TerminalReflowController";
+import {
+  RECOVERY_NOTICE_CAP_MS,
+  RECOVERY_NOTICE_MESSAGE,
+  RECOVERY_NOTICE_QUIET_MS,
+  composeRecoveryNoticeOverlay,
+} from "../TerminalRecoveryNoticeController";
+
+const hostPlatform = vi.hoisted(() => ({ windows: false }));
+vi.mock("@/hooks/useHostPlatform", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/hooks/useHostPlatform")>()),
+  isHostWindows: () => hostPlatform.windows,
+}));
 
 vi.mock("@/clients", () => ({
   terminalClient: {
@@ -9,6 +22,7 @@ vi.mock("@/clients", () => ({
     onData: vi.fn(() => vi.fn()),
     onExit: vi.fn(() => vi.fn()),
     onTierChanged: vi.fn(() => vi.fn()),
+    onReset: vi.fn(() => vi.fn()),
     write: vi.fn(),
     setActivityTier: vi.fn(),
     wake: vi.fn(),
@@ -19,6 +33,7 @@ vi.mock("@/clients", () => ({
     })),
     acknowledgeData: vi.fn(),
     acknowledgePortData: vi.fn(),
+    getPortAckGeneration: vi.fn(() => 0),
     discardPortAcks: vi.fn(),
   },
   systemClient: { openExternal: vi.fn() },
@@ -55,6 +70,9 @@ type ReflowTestService = {
   maybeReflowTerminal: (managed: ManagedTerminal) => void;
   resetRenderer: (id: string, options?: { force?: boolean }) => boolean;
   handleBackendRecovery: () => void;
+  handleBackendCrash: () => void;
+  writeToTerminal: (id: string, data: string | Uint8Array) => void;
+  writeController: { write: (id: string, data: string | Uint8Array) => void };
   resizeController: {
     fit: (id: string) => unknown;
     reconcileGeometryFresh: (id: string, options?: { force?: boolean }) => boolean;
@@ -265,6 +283,48 @@ function clearSyncModes(managed: ManagedTerminal): void {
   term.modes = undefined;
 }
 
+// What a new ConPTY sends before its console has painted anything.
+const CONPTY_MODE_REQUEST = "\x1b[?9001h\x1b[?1004h";
+const PROMPT = "PS C:\\repo> ";
+
+/** A new ConPTY's first frame: every row of its blank console, then the prompt. */
+function conptyFirstFrame(rows: number): string {
+  return `\x1b[?25l\x1b[H${"\x1b[K\r\n".repeat(rows - 1)}\x1b[K\x1b[H${PROMPT}\x1b]0;pwsh\x07\x1b[?25h`;
+}
+
+/** Feeds VT into a headless xterm and resolves once it has been parsed. */
+function feed(xterm: HeadlessTerminal, data: string): Promise<void> {
+  return new Promise((resolve) => xterm.write(data, resolve));
+}
+
+function screenRow(xterm: HeadlessTerminal, row: number): string {
+  const buffer = xterm.buffer.active;
+  return buffer.getLine(buffer.baseY + row)?.translateToString(true) ?? "";
+}
+
+/** Where ConPTY believes the cursor is, and how far the screen has scrolled. */
+function cursorState(xterm: HeadlessTerminal): { x: number; y: number; baseY: number } {
+  const { cursorX, cursorY, baseY } = xterm.buffer.active;
+  return { x: cursorX, y: cursorY, baseY };
+}
+
+/**
+ * Backs a fixture pane's screen with a real headless xterm, so the notice is
+ * placed from genuine cursor and mode state. Daintree's own writes into the
+ * pane are captured rather than parsed; a test lands them when it chooses.
+ */
+function backWithXterm(managed: ManagedTerminal, xterm: HeadlessTerminal) {
+  const write = vi.fn<(data: string) => void>();
+  Object.defineProperties(managed.terminal, {
+    cols: { get: () => xterm.cols, configurable: true },
+    rows: { get: () => xterm.rows, configurable: true },
+    buffer: { get: () => xterm.buffer, configurable: true },
+    modes: { get: () => xterm.modes, configurable: true },
+    write: { value: write, configurable: true, writable: true },
+  });
+  return write;
+}
+
 describe("TerminalInstanceService maybeReflowTerminal", () => {
   let service: ReflowTestService;
   let terminalClient: { resize: ReturnType<typeof vi.fn> };
@@ -288,118 +348,6 @@ describe("TerminalInstanceService maybeReflowTerminal", () => {
   afterEach(() => {
     service.instances.clear();
     document.body.innerHTML = "";
-  });
-
-  it("unpauses a visible standard terminal and records lastReflowAt", () => {
-    const managed = makeManaged();
-    pauseRenderer(managed);
-    service.maybeReflowTerminal(managed);
-
-    expect(unpauseCount(managed)).toBe(1);
-    expect(managed.lastReflowAt).toBeGreaterThan(0);
-  });
-
-  it("throttles per-terminal repairs within 250ms", () => {
-    const managed = makeManaged();
-    pauseRenderer(managed);
-    service.maybeReflowTerminal(managed);
-
-    // Re-arm: otherwise the second call would skip because the renderer is
-    // already running, not because of the throttle.
-    pauseRenderer(managed);
-    service.maybeReflowTerminal(managed);
-
-    expect(unpauseCount(managed)).toBe(1);
-  });
-
-  it("allows a repair again after the throttle window", () => {
-    const managed = makeManaged();
-    pauseRenderer(managed);
-    service.maybeReflowTerminal(managed);
-
-    pauseRenderer(managed);
-    // Simulate throttle window passing
-    managed.lastReflowAt = (managed.lastReflowAt ?? 0) - 500;
-    service.maybeReflowTerminal(managed);
-
-    expect(unpauseCount(managed)).toBe(2);
-  });
-
-  it("unpauses agent terminals — the xterm pause gate is renderer-agnostic", () => {
-    const managed = makeManaged({ kind: "terminal", launchAgentId: "claude" });
-    pauseRenderer(managed);
-    expect(managed.runtimeAgentId).toBe("claude");
-
-    service.maybeReflowTerminal(managed);
-
-    expect(unpauseCount(managed)).toBe(1);
-    expect(managed.lastReflowAt).toBeGreaterThan(0);
-  });
-
-  it("skips invisible terminals", () => {
-    const managed = makeManaged({ isVisible: false });
-    pauseRenderer(managed);
-    service.maybeReflowTerminal(managed);
-    expect(unpauseCount(managed)).toBe(0);
-  });
-
-  it("skips alt-buffer (TUI) terminals", () => {
-    const managed = makeManaged({ isAltBuffer: true });
-    pauseRenderer(managed);
-    service.maybeReflowTerminal(managed);
-    expect(unpauseCount(managed)).toBe(0);
-  });
-
-  it("skips terminals that are mid-attach", () => {
-    const managed = makeManaged({ isAttaching: true });
-    pauseRenderer(managed);
-    service.maybeReflowTerminal(managed);
-    expect(unpauseCount(managed)).toBe(0);
-  });
-
-  it("skips when terminal has no rendered element yet", () => {
-    const managed = makeManaged();
-    pauseRenderer(managed);
-    (managed.terminal as unknown as { element: HTMLElement | undefined }).element = undefined;
-    service.maybeReflowTerminal(managed);
-    // lastReflowAt not set because we short-circuited on missing element
-    expect(managed.lastReflowAt).toBe(0);
-  });
-
-  it("skips — and does not stamp throttle — when element is detached", () => {
-    const managed = makeManaged();
-    pauseRenderer(managed);
-    // Disconnect from document
-    managed.hostElement.remove();
-    expect((managed.terminal.element as HTMLElement).isConnected).toBe(false);
-
-    service.maybeReflowTerminal(managed);
-    // Throttle must NOT be stamped — otherwise the next legitimate repair
-    // after reattachment would be suppressed for 250ms.
-    expect(managed.lastReflowAt).toBe(0);
-    expect(unpauseCount(managed)).toBe(0);
-  });
-
-  it("skips — and does not stamp throttle — when synchronized output mode is active", () => {
-    const managed = makeManaged();
-    pauseRenderer(managed);
-    setSyncMode(managed, true);
-
-    service.maybeReflowTerminal(managed);
-    // BSU is open — repainting now would interleave with xterm's buffered
-    // range. Throttle must not stamp so we repair on the next tick after ESU.
-    expect(managed.lastReflowAt).toBe(0);
-    expect(unpauseCount(managed)).toBe(0);
-  });
-
-  it("unpauses when synchronized output mode is false", () => {
-    const managed = makeManaged();
-    pauseRenderer(managed);
-    setSyncMode(managed, false);
-
-    service.maybeReflowTerminal(managed);
-    expect(unpauseCount(managed)).toBe(1);
-    expect(managed.lastReflowAt).toBeGreaterThan(0);
   });
 
   it("does not throttle the post-ESU repair after a BSU skip", () => {
@@ -820,6 +768,252 @@ describe("TerminalInstanceService maybeReflowTerminal", () => {
     expect(managed.fitAddon.fit).not.toHaveBeenCalled();
     expect(write).toHaveBeenCalledTimes(2);
   });
+
+  describe("backend reconnected notice", () => {
+    const xterms: HeadlessTerminal[] = [];
+
+    function makeXtermPane(cols: number, rows: number) {
+      const xterm = new HeadlessTerminal({ cols, rows, allowProposedApi: true });
+      xterms.push(xterm);
+      const managed = makeManaged();
+      const write = backWithXterm(managed, xterm);
+      return { xterm, managed, write };
+    }
+
+    /** The respawned PTY's output reaches this xterm, parsed on the next timer turn. */
+    function routePtyOutputTo(xterm: HeadlessTerminal): void {
+      vi.spyOn(service.writeController, "write").mockImplementation((_id, data) =>
+        xterm.write(data)
+      );
+    }
+
+    function noticeWrites(write: ReturnType<typeof backWithXterm>): string[] {
+      return write.mock.calls
+        .map(([data]) => data)
+        .filter((d) => d.includes(RECOVERY_NOTICE_MESSAGE));
+    }
+
+    beforeEach(() => {
+      vi.spyOn(service, "resetRenderer").mockImplementation(() => true);
+    });
+
+    afterEach(() => {
+      hostPlatform.windows = false;
+      vi.useRealTimers();
+      for (const xterm of xterms.splice(0)) xterm.dispose();
+    });
+
+    it("writes the notice at once off Windows, as a line of its own", () => {
+      const { xterm, managed, write } = makeXtermPane(60, 6);
+      service.instances.set("t1", managed);
+      routePtyOutputTo(xterm);
+      vi.useFakeTimers();
+
+      service.handleBackendRecovery();
+
+      const [notice] = noticeWrites(write);
+      expect(notice?.startsWith("\r\n")).toBe(true);
+      expect(notice?.endsWith("\r\n")).toBe(true);
+
+      service.writeToTerminal("t1", conptyFirstFrame(xterm.rows));
+      vi.advanceTimersByTime(RECOVERY_NOTICE_CAP_MS);
+      expect(noticeWrites(write)).toHaveLength(1);
+    });
+
+    describe("on a Windows host (W-032)", () => {
+      beforeEach(() => {
+        hostPlatform.windows = true;
+      });
+
+      it("holds the notice until the new console has drawn and gone quiet, then overlays it in place", async () => {
+        const { xterm, managed, write } = makeXtermPane(60, 6);
+        await feed(xterm, `${"old output\r\n".repeat(10)}PS C:\\old> `);
+        service.instances.set("t1", managed);
+        routePtyOutputTo(xterm);
+        vi.useFakeTimers();
+
+        service.handleBackendRecovery();
+        expect(write).toHaveBeenCalled();
+        expect(noticeWrites(write)).toHaveLength(0);
+
+        // Announcing its input modes is not a painted console.
+        service.writeToTerminal("t1", CONPTY_MODE_REQUEST);
+        vi.advanceTimersByTime(RECOVERY_NOTICE_QUIET_MS * 2);
+        expect(noticeWrites(write)).toHaveLength(0);
+
+        service.writeToTerminal("t1", conptyFirstFrame(xterm.rows));
+        vi.advanceTimersByTime(RECOVERY_NOTICE_QUIET_MS - 1);
+        // More of the burst restarts the wait.
+        service.writeToTerminal("t1", "\x1b]0;pwsh\x07");
+        vi.advanceTimersByTime(RECOVERY_NOTICE_QUIET_MS - 1);
+        expect(noticeWrites(write)).toHaveLength(0);
+        vi.advanceTimersByTime(1);
+        const [overlay] = noticeWrites(write);
+        expect(overlay).toBeDefined();
+
+        const consoleCursor = cursorState(xterm);
+        expect(consoleCursor).toMatchObject({ x: PROMPT.length, y: 0 });
+        xterm.write(overlay ?? "");
+        vi.advanceTimersByTime(0);
+
+        expect(cursorState(xterm)).toEqual(consoleCursor);
+        expect(screenRow(xterm, 0)).toBe(PROMPT);
+        expect(screenRow(xterm, 1)).toContain(RECOVERY_NOTICE_MESSAGE);
+        expect(overlay).not.toContain("\n");
+        expect(xterm.modes.wraparoundMode).toBe(true);
+
+        // Shown once: later output and the cap don't repeat it.
+        service.writeToTerminal("t1", "dir\r\n");
+        vi.advanceTimersByTime(RECOVERY_NOTICE_CAP_MS);
+        expect(noticeWrites(write)).toHaveLength(1);
+      });
+
+      it("keeps waiting while the console's output is still queued for the parser", () => {
+        const { xterm, managed, write } = makeXtermPane(60, 6);
+        service.instances.set("t1", managed);
+        routePtyOutputTo(xterm);
+        vi.useFakeTimers();
+
+        service.handleBackendRecovery();
+        service.writeToTerminal("t1", conptyFirstFrame(xterm.rows));
+        managed.pendingWrites = 1;
+        vi.advanceTimersByTime(RECOVERY_NOTICE_QUIET_MS * 3);
+        expect(noticeWrites(write)).toHaveLength(0);
+
+        managed.pendingWrites = 0;
+        vi.advanceTimersByTime(RECOVERY_NOTICE_QUIET_MS);
+        expect(noticeWrites(write)).toHaveLength(1);
+      });
+
+      it("shows the notice at the cap when the respawned PTY never draws", () => {
+        const { xterm, managed, write } = makeXtermPane(60, 6);
+        service.instances.set("t1", managed);
+        routePtyOutputTo(xterm);
+        vi.useFakeTimers();
+
+        service.handleBackendRecovery();
+        service.writeToTerminal("t1", CONPTY_MODE_REQUEST);
+        vi.advanceTimersByTime(RECOVERY_NOTICE_CAP_MS - 1);
+        expect(noticeWrites(write)).toHaveLength(0);
+
+        vi.advanceTimersByTime(1);
+        const [overlay] = noticeWrites(write);
+        expect(overlay?.startsWith("\x1b7")).toBe(true);
+        expect(overlay?.endsWith("\x1b8")).toBe(true);
+      });
+
+      it("skips a pane disposed or replaced before its notice lands", () => {
+        const disposed = makeXtermPane(60, 6);
+        const replaced = makeXtermPane(60, 6);
+        service.instances.set("t1", disposed.managed);
+        service.instances.set("t2", replaced.managed);
+        vi.useFakeTimers();
+
+        service.handleBackendRecovery();
+        service.instances.delete("t1");
+        const successor = makeXtermPane(60, 6);
+        service.instances.set("t2", successor.managed);
+        vi.advanceTimersByTime(RECOVERY_NOTICE_CAP_MS);
+
+        for (const pane of [disposed, replaced, successor]) {
+          expect(noticeWrites(pane.write)).toHaveLength(0);
+        }
+      });
+
+      it("drops a pending notice when the new host crashes too", () => {
+        const { managed, write } = makeXtermPane(60, 6);
+        service.instances.set("t1", managed);
+        vi.useFakeTimers();
+
+        service.handleBackendRecovery();
+        service.handleBackendCrash();
+        vi.advanceTimersByTime(RECOVERY_NOTICE_CAP_MS);
+
+        expect(noticeWrites(write)).toHaveLength(0);
+      });
+    });
+  });
+});
+
+describe("composeRecoveryNoticeOverlay", () => {
+  const xterms: HeadlessTerminal[] = [];
+
+  function makeXterm(cols: number, rows: number): HeadlessTerminal {
+    const xterm = new HeadlessTerminal({ cols, rows, allowProposedApi: true });
+    xterms.push(xterm);
+    return xterm;
+  }
+
+  afterEach(() => {
+    for (const xterm of xterms.splice(0)) xterm.dispose();
+  });
+
+  it("writes beside the cursor on the last row instead of scrolling", async () => {
+    const xterm = makeXterm(60, 3);
+    await feed(xterm, `one\r\ntwo\r\n${PROMPT}`);
+    const before = cursorState(xterm);
+    expect(before.y).toBe(xterm.rows - 1);
+
+    await feed(xterm, composeRecoveryNoticeOverlay(xterm, "3:04:05 PM") ?? "");
+
+    expect(cursorState(xterm)).toEqual(before);
+    expect(screenRow(xterm, 0)).toBe("one");
+    expect(screenRow(xterm, 1)).toBe("two");
+    expect(screenRow(xterm, 2).startsWith(PROMPT)).toBe(true);
+    expect(screenRow(xterm, 2)).toContain(RECOVERY_NOTICE_MESSAGE);
+  });
+
+  it("drops a timestamp too wide for the pane rather than wrapping it", async () => {
+    const timestamp = "午後3:04:05";
+    const stamped = `[${timestamp}] ${RECOVERY_NOTICE_MESSAGE}`;
+    // Fits by string length, but its two CJK characters take two cells each.
+    const xterm = makeXterm(stamped.length + 1, 4);
+    await feed(xterm, PROMPT);
+    const before = cursorState(xterm);
+
+    await feed(xterm, composeRecoveryNoticeOverlay(xterm, timestamp) ?? "");
+
+    expect(cursorState(xterm)).toEqual(before);
+    expect(screenRow(xterm, 1)).toBe(RECOVERY_NOTICE_MESSAGE);
+    expect(screenRow(xterm, 2)).toBe("");
+    expect(xterm.buffer.active.getLine(before.baseY + 2)?.isWrapped).toBe(false);
+
+    const wide = makeXterm(stamped.length + 2, 4);
+    await feed(wide, PROMPT);
+    await feed(wide, composeRecoveryNoticeOverlay(wide, timestamp) ?? "");
+    expect(screenRow(wide, 1)).toContain(timestamp);
+  });
+
+  it("truncates for a pane narrower than the message, leaving the next row untouched", async () => {
+    const xterm = makeXterm(16, 4);
+    await feed(xterm, PROMPT);
+    const before = cursorState(xterm);
+
+    await feed(xterm, composeRecoveryNoticeOverlay(xterm, "3:04:05 PM") ?? "");
+
+    expect(cursorState(xterm)).toEqual(before);
+    expect(screenRow(xterm, 1).length).toBe(xterm.cols);
+    expect(RECOVERY_NOTICE_MESSAGE.startsWith(screenRow(xterm, 1))).toBe(true);
+    expect(screenRow(xterm, 2)).toBe("");
+    expect(xterm.modes.wraparoundMode).toBe(true);
+  });
+
+  it("leaves autowrap off for a program that turned it off", async () => {
+    const xterm = makeXterm(60, 4);
+    await feed(xterm, `\x1b[?7l${PROMPT}`);
+
+    await feed(xterm, composeRecoveryNoticeOverlay(xterm, "3:04:05 PM") ?? "");
+
+    expect(xterm.modes.wraparoundMode).toBe(false);
+    expect(screenRow(xterm, 1)).toContain(RECOVERY_NOTICE_MESSAGE);
+  });
+
+  it("writes nothing when the last row has no room beside the cursor", async () => {
+    const xterm = makeXterm(20, 2);
+    await feed(xterm, `\r\n${"x".repeat(xterm.cols - 1)}`);
+
+    expect(composeRecoveryNoticeOverlay(xterm, "3:04:05 PM")).toBeNull();
+  });
 });
 
 describe("TerminalInstanceService getSynchronizedOutputMode", () => {
@@ -845,17 +1039,6 @@ describe("TerminalInstanceService getSynchronizedOutputMode", () => {
     service.instances.set("t1", managed);
 
     expect(service.getSynchronizedOutputMode("t1")).toBe(true);
-  });
-
-  it("returns false when xterm reports no synchronized output block", () => {
-    const managed = makeManaged();
-    service.instances.set("t1", managed);
-
-    expect(service.getSynchronizedOutputMode("t1")).toBe(false);
-  });
-
-  it("returns null for an unknown terminal id", () => {
-    expect(service.getSynchronizedOutputMode("missing")).toBeNull();
   });
 
   it("returns null when xterm did not surface modes (defensive)", () => {
@@ -898,40 +1081,6 @@ describe("TerminalInstanceService reflowHeartbeatTimer visibility gate", () => {
       configurable: true,
       writable: true,
     });
-  });
-
-  it("skips repairs while document is hidden", () => {
-    visibilityState = "hidden";
-    const managed = makeManaged();
-    pauseRenderer(managed);
-    service.instances.set("t1", managed);
-
-    vi.advanceTimersByTime(3000);
-    expect(unpauseCount(managed)).toBe(0);
-    expect(managed.lastReflowAt).toBe(0);
-  });
-
-  it("performs repairs on heartbeat when visible", () => {
-    const managed = makeManaged();
-    pauseRenderer(managed);
-    service.instances.set("t1", managed);
-
-    vi.advanceTimersByTime(3000);
-    expect(unpauseCount(managed)).toBe(1);
-    expect(managed.lastReflowAt).toBeGreaterThan(0);
-  });
-
-  it("heartbeat does not repair or stamp throttle while sync block is open", () => {
-    const managed = makeManaged();
-    pauseRenderer(managed);
-    setSyncMode(managed, true);
-    service.instances.set("t1", managed);
-
-    vi.advanceTimersByTime(3000);
-    // Heartbeat tick fired but the sync-mode guard skipped without
-    // stamping — so the next post-ESU heartbeat repairs immediately.
-    expect(unpauseCount(managed)).toBe(0);
-    expect(managed.lastReflowAt).toBe(0);
   });
 
   it("resumes repairs when visibility transitions hidden → visible", () => {

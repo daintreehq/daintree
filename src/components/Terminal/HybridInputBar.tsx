@@ -3,6 +3,7 @@ import {
   useCallback,
   useEffect,
   useImperativeHandle,
+  useLayoutEffect,
   useMemo,
   useId,
   useRef,
@@ -30,11 +31,12 @@ import {
 import type { CompletionTrigger } from "@shared/types";
 import { CommandPickerHost } from "@/components/Commands";
 import { PromptHistoryPalette } from "./PromptHistoryPalette";
+import { useCanopyStore } from "@/store/canopyStore";
+import { useMacroFocusStore } from "@/store/macroFocusStore";
 import { useCommandStore } from "@/store/commandStore";
 import { useProjectStore } from "@/store/projectStore";
 import { usePanelStore, useVoiceRecordingStore } from "@/store";
 import { useFleetArmingStore } from "@/store/fleetArmingStore";
-import { tryFleetBroadcastFromEditor } from "@/components/Fleet/fleetEnterBroadcast";
 
 import { useWorktreeStore } from "@/hooks/useWorktreeStore";
 import { VoiceInputButton } from "./VoiceInputButton";
@@ -47,6 +49,7 @@ import {
   COMPOSER_CONTROL_FOCUS_CLASS,
   COMPOSER_CONTROL_HOVER_BG_CLASS,
   COMPOSER_CONTROL_TEXT_CLASS,
+  COMPOSER_MARKER_TEXT_CLASS,
 } from "./composerControlStyles";
 import { useVoiceWaitSubmit } from "./hooks/useVoiceWaitSubmit";
 import { registerInputController, unregisterInputController } from "@/store/terminalInputStore";
@@ -61,7 +64,25 @@ import { resolveInputBarColors } from "@/utils/terminalTheme";
 import { useEditorCompartments } from "./hooks/useEditorCompartments";
 import { useAutocompleteItems } from "./hooks/useAutocompleteItems";
 import { useDragDrop } from "./hooks/useDragDrop";
-import { useAttachFiles } from "./hooks/useAttachFiles";
+import { useAttachFiles, useAttachFromHost } from "./hooks/useAttachFiles";
+import { fileAttachmentEntryFromSource, insertFileAttachments } from "./fileAttachments";
+import {
+  composerUploadSurface,
+  hasPendingUploads,
+  isolatedComposerUploadSurface,
+} from "./uploads/pendingUploads";
+import { tryComposerFleetBroadcast } from "./composerFleetBroadcast";
+import { PendingUploadChips } from "./uploads/PendingUploadChips";
+import { LazyUploadConfirmHost } from "./uploads/LazyUploadConfirmHost";
+import { registerPaneDropTarget } from "./uploads/paneDropRouting";
+import { isRemoteWindow, useHostPlatform } from "@/hooks/useHostPlatform";
+import { isMac } from "@/lib/platform";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { useVoiceDecorations } from "./hooks/useVoiceDecorations";
 import { useContextDetection } from "./hooks/useContextDetection";
 import { draftUnchangedSince, useTokenResolution } from "./hooks/useTokenResolution";
@@ -130,8 +151,43 @@ export interface HybridInputBarProps {
   agentState?: AgentState;
   restartKey?: number;
   disabled?: boolean;
+  /**
+   * Another screen drives the project: the draft shown is the driver's, read
+   * back from the host, so this bar never writes its text to the draft store.
+   */
+  followsDriver?: boolean;
   className?: string;
+  /**
+   * A second composer for a terminal that may also be open in its own pane
+   * (the canopy panel's live view). It sends only to this terminal: never a
+   * fleet broadcast or mirror, and it leaves the terminal's input controller
+   * to the pane that registered it.
+   */
+  isolated?: boolean;
+  /**
+   * The terminal is on another host than this window's (Canopy reading it):
+   * that host's id. Nothing of this machine's — a file, an image, a path from
+   * completion, a diff or a screen expanded at send — is offered or sent,
+   * since it would name something that isn't there; text is typed as text.
+   * Its draft and history are that host's, apart from this one's.
+   */
+  otherHostId?: string;
+  /**
+   * Sends the composer's text and says whether the terminal took it, in place
+   * of the fire-and-forget `onSend`: the draft is cleared and kept in history
+   * only once it resolves `true`, so a refused send leaves the text in place.
+   */
+  submitText?: (text: string, imagePaths: readonly string[]) => Promise<boolean>;
+  /**
+   * Whether this composer's surface is the selected one, for a host whose
+   * selection is not the grid's (the Assistant sidebar). Grid panes leave it
+   * unset and follow the pane frame's own rule.
+   */
+  selected?: boolean;
 }
+
+/** The draft and history scope of an isolated composer, apart from every project's. */
+const ISOLATED_COMPOSER_SCOPE = "isolated-composer";
 
 interface LatestState {
   terminalId: string;
@@ -228,24 +284,48 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
       agentHasLifecycleEvent = false,
       restartKey = 0,
       disabled = false,
+      followsDriver = false,
       className,
+      isolated = false,
+      otherHostId,
+      submitText,
+      selected,
     },
     ref
   ) => {
+    const thisMachineOff = otherHostId !== undefined;
+    const submitTextRef = useRef(submitText);
+    useEffect(() => {
+      submitTextRef.current = submitText;
+    });
     const getDraftInput = useTerminalInputStore((s) => s.getDraftInput);
     const setDraftInput = useTerminalInputStore((s) => s.setDraftInput);
     const clearDraftInput = useTerminalInputStore((s) => s.clearDraftInput);
     const addToHistory = useTerminalInputStore((s) => s.addToHistory);
     const navigateHistory = useTerminalInputStore((s) => s.navigateHistory);
     const resetHistoryIndex = useTerminalInputStore((s) => s.resetHistoryIndex);
-    const projectId = useProjectStore((s) => s.currentProject?.id);
+    const currentProjectId = useProjectStore((s) => s.currentProject?.id);
+    // An isolated composer types to a terminal that may live in another
+    // project, beside that terminal's own composer: its draft and history are
+    // its own, so neither leaks into the pane's (or, through it, the fleet's).
+    const projectId = isolated
+      ? thisMachineOff
+        ? `${ISOLATED_COMPOSER_SCOPE}:${otherHostId}`
+        : ISOLATED_COMPOSER_SCOPE
+      : currentProjectId;
     const isInHistoryMode = useTerminalInputStore((s) => {
       const key = projectId ? `${projectId}:${terminalId}` : terminalId;
       return (s.historyIndex.get(key) ?? -1) !== -1;
     });
     const stashEditorState = useTerminalInputStore((s) => s.stashEditorState);
     const popStashedEditorState = useTerminalInputStore((s) => s.popStashedEditorState);
-    const isFocusedTerminal = usePanelStore((s) => s.focusedId === terminalId);
+    const isFocusedTerminal = usePanelStore((s) => !isolated && s.focusedId === terminalId);
+    // The selected look follows the pane frame (`ContentPanel`): it releases
+    // while the Assistant holds the keyboard, though `focusedId` stays pinned.
+    // Routing and fleet keep reading `isFocusedTerminal`.
+    const isAssistantActive = useMacroFocusStore((s) => s.focusedRegion === "assistant");
+    const showSelectedChrome = selected ?? (isFocusedTerminal && !isAssistantActive);
+    const canopyOpen = useCanopyStore((s) => s.isOpen);
     const hasStash = useTerminalInputStore((s) => {
       const key = projectId ? `${projectId}:${terminalId}` : terminalId;
       return s.stashedEditorStates.has(key);
@@ -286,9 +366,16 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
     const applyEditorValueRef = useRef<ApplyEditorValue>(() => {});
 
     const openPicker = useCommandStore((s) => s.openPicker);
+    // Every agent pane mounts a picker host on the one command store; this
+    // composer's id is what keeps the others' palettes closed when it opens one.
+    const pickerOwnerId = useId();
     const currentProject = useProjectStore((s) => s.currentProject);
     const voiceStatus = useVoiceRecordingStore((s) => s.status);
-    const activeVoicePanelId = useVoiceRecordingStore((s) => s.activeTarget?.panelId ?? null);
+    // Dictation lands in a draft of this machine's project, by terminal id:
+    // never one for a terminal on another host.
+    const activeVoicePanelId = useVoiceRecordingStore((s) =>
+      thisMachineOff ? null : (s.activeTarget?.panelId ?? null)
+    );
     const voiceMicSignal = useVoiceRecordingStore((s) => s.micSignal);
     const externalDraftRevision = useTerminalInputStore((s) => s.externalDraftRevision);
     const panelWorktreeId = usePanelStore((s) => s.panelsById[terminalId]?.worktreeId);
@@ -298,6 +385,9 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
       const worktree = panelWorktreeId ? s.worktrees.get(panelWorktreeId) : undefined;
       return worktree?.isMainWorktree ? worktree.name : worktree?.branch || worktree?.name;
     });
+    const panelWorktreePath = useWorktreeStore((s) =>
+      panelWorktreeId ? s.worktrees.get(panelWorktreeId)?.path : undefined
+    );
     const isVoiceRecording = activeVoicePanelId === terminalId && voiceStatus === "recording";
     const isVoiceConnecting = activeVoicePanelId === terminalId && voiceStatus === "connecting";
     const isVoiceReconnecting = activeVoicePanelId === terminalId && voiceStatus === "reconnecting";
@@ -348,6 +438,42 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
     // bar would (#11809). Called with no argument, which is what keeps the
     // shift/cmd fleet gestures a click carries out of a drop. Absent for the
     // Assistant, whose input bar owns no selectable pane.
+    // In a remote window, what the user drops here is uploaded to the host;
+    // the chips for those uploads live on this composer, and sending waits on them.
+    const uploadSurface = isolated
+      ? isolatedComposerUploadSurface(terminalId)
+      : composerUploadSurface(terminalId);
+    const isRemote = isRemoteWindow();
+    const hostPlatform = useHostPlatform();
+    const cwdRef = useRef(cwd);
+    useEffect(() => {
+      cwdRef.current = cwd;
+    }, [cwd]);
+    const readCwd = useCallback(() => cwdRef.current, []);
+    const addToProjectDirectory = useCallback(
+      () => panelWorktreePath ?? (cwd || null),
+      [panelWorktreePath, cwd]
+    );
+    // Layout phase: a native drop can arrive after a commit that disabled the
+    // bar but before passive effects run, and must not be taken then.
+    const disabledRef = useRef(disabled);
+    const thisMachineOffRef = useRef(thisMachineOff);
+    useLayoutEffect(() => {
+      disabledRef.current = disabled;
+      thisMachineOffRef.current = thisMachineOff;
+    }, [disabled, thisMachineOff]);
+    // A bar that can't take the user's own typing (disabled, or read-only
+    // while a voice submission settles) takes no dropped files either, and
+    // nor does one typing to another host, where this machine's files aren't.
+    const canTakeDrop = useCallback(() => {
+      const view = editorViewRef.current;
+      return (
+        !!view &&
+        !disabledRef.current &&
+        !thisMachineOffRef.current &&
+        view.state.facet(EditorView.editable)
+      );
+    }, []);
     const {
       handleDragEnter,
       handleDragOver,
@@ -355,7 +481,13 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
       handleDrop,
       resetDragState,
       isDragOverFiles,
-    } = useDragDrop(editorViewRef, cwd, onActivate, terminalId);
+    } = useDragDrop(editorViewRef, cwd, onActivate, terminalId, {
+      uploadSurface,
+      addToProjectDirectory,
+      ...(isRemote ? { cwdProvider: readCwd } : {}),
+      sharesPaneDrops: !isolated,
+      canInsert: canTakeDrop,
+    });
 
     // The dialog unmounts its body once its exit animation ends, and can close
     // under a hovering file — a slow submission collapses it mid-drag. Chromium
@@ -368,9 +500,43 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
       },
       [resetDragState]
     );
-    const handleAttachFiles = useAttachFiles(editorViewRef, cwd);
+    const handleAttachFiles = useAttachFiles(editorViewRef, cwd, uploadSurface);
+    const handleAttachFromHost = useAttachFromHost(editorViewRef, cwd);
 
-    const { imagePasteExtension, filePasteExtension, plainPasteKeymap } = usePasteExtensions(cwd);
+    // A drop on this pane's agent terminal lands here while this bar holds the
+    // keyboard, or while nothing in the pane does and a click on the terminal
+    // would focus the bar — in the pane's own composer, never Canopy's reply
+    // box for the same terminal. A bar that can't take the drop declines, and
+    // it falls through to the terminal instead of vanishing.
+    useEffect(() => {
+      if (isolated) return;
+      return registerPaneDropTarget(terminalId, "hybridInput", {
+        ownsFocus: () => {
+          const view = editorViewRef.current;
+          return !!view && editorOwnsDomFocus(view);
+        },
+        canTake: canTakeDrop,
+        take: (sources) => {
+          const view = editorViewRef.current;
+          if (!view || !canTakeDrop()) return false;
+          const entries = sources.map(fileAttachmentEntryFromSource);
+          if (entries.length === 0) return false;
+          usePanelStore.getState().setPreferredTerminalFocusTarget("hybridInput");
+          view.focus();
+          void insertFileAttachments(editorViewRef, view, entries, cwd, {
+            uploadSurface,
+            cwdProvider: readCwd,
+          });
+          return true;
+        },
+      });
+    }, [isolated, terminalId, cwd, uploadSurface, readCwd, canTakeDrop]);
+
+    const { imagePasteExtension, filePasteExtension, plainPasteKeymap } = usePasteExtensions(
+      cwd,
+      uploadSurface,
+      thisMachineOff
+    );
 
     useEffect(() => {
       setInitializationState("initializing");
@@ -400,13 +566,21 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
       }
     }, [terminalId, projectId, getDraftInput]);
 
+    const wasFollowingDriverRef = useRef(followsDriver);
     useEffect(() => {
+      const wasFollowing = wasFollowingDriverRef.current;
+      wasFollowingDriverRef.current = followsDriver;
+      // Written back, the text a render behind would land over a newer draft
+      // the host just sent. That holds for the pass that stops following too:
+      // the store has the host's latest, and the outside-write effect below
+      // brings the editor to it.
+      if (followsDriver || wasFollowing) return;
       setDraftInput(terminalId, value, projectId);
-    }, [terminalId, value, projectId, setDraftInput]);
+    }, [terminalId, value, projectId, setDraftInput, followsDriver]);
 
     // Fleet hybrid-input mirroring
     const armedIds = useFleetArmingStore((s) => s.armedIds);
-    const isArmed = armedIds.has(terminalId);
+    const isArmed = !isolated && armedIds.has(terminalId);
     const fleetSize = armedIds.size;
     const isFleetPrimary = isFocusedTerminal && isArmed && fleetSize >= 2;
     const isFleetFollower = !isFocusedTerminal && isArmed && fleetSize >= 2;
@@ -421,6 +595,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
       isFleetFollower,
       disabled,
       lastEmittedValueRef,
+      isolated,
     });
 
     const placeholder = (() => {
@@ -436,12 +611,14 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
     // completionSources — `/` and Daintree's `@` are always available; `$`
     // (Codex capabilities) is added only when the agent declares a `$` source.
     const activeTriggers = useMemo(() => {
+      // Every menu offers what this machine has: its files, its commands.
+      if (thisMachineOff) return new Set<CompletionTrigger>();
       const triggers = new Set<CompletionTrigger>(["/", "@"]);
       for (const source of agentId ? (getAgentConfig(agentId)?.completionSources ?? []) : []) {
         triggers.add(source.trigger);
       }
       return triggers;
-    }, [agentId]);
+    }, [agentId, thisMachineOff]);
 
     const triggerChar = activeCompletionContext?.triggerChar ?? null;
     // Which Daintree `@` provider claims the query (else `@file` fallback).
@@ -585,7 +762,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
       };
     }, [terminalId]);
 
-    const { sendText } = useTokenResolution({
+    const { sendText: sendResolvedText } = useTokenResolution({
       latestRef,
       applyEditorValue,
       setIsExpanded,
@@ -593,6 +770,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
       terminalId,
       cwd,
       agentId,
+      expandContext: !thisMachineOff,
     });
 
     // The outside-write revision the effect below last brought into the editor.
@@ -603,7 +781,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
     useEffect(() => {
       appliedExternalDraftRevisionRef.current = externalDraftRevision;
       if (externalDraftRevision === 0) return;
-      const draft = useTerminalInputStore.getState().getDraftInput(terminalId, currentProject?.id);
+      const draft = useTerminalInputStore.getState().getDraftInput(terminalId, projectId);
       const view = editorViewRef.current;
       if (!view) return;
       // Only the span that differs is replaced, so an append leaves the
@@ -619,7 +797,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
           scrollIntoView: true,
         });
       }
-    }, [externalDraftRevision, terminalId, currentProject?.id]);
+    }, [externalDraftRevision, terminalId, projectId]);
 
     useVoiceDecorations({ terminalId, editorViewRef });
 
@@ -639,6 +817,25 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
       [editorViewRef, terminalId]
     );
 
+    // Every way this composer sends — Enter, a picked slash command, a prompt
+    // from the command picker — goes through `submitText` when it is given, so
+    // a refused send never eats the draft, whichever path sent it.
+    const sendText = useCallback<typeof sendResolvedText>(
+      (text, options) => {
+        const submit = submitTextRef.current;
+        if (!submit || options?.submit) return sendResolvedText(text, options);
+        const imagePaths = options?.imagePaths ?? [];
+        return sendResolvedText(text, {
+          // Awaited now, so the user can type while it is on its way: only the
+          // text that went out is cleared, whichever path sent it.
+          isDraftUnchanged: guardSentDraft(latestRef.current?.projectId),
+          ...options,
+          submit: (outgoing: string) => submit(outgoing, imagePaths),
+        });
+      },
+      [sendResolvedText, guardSentDraft]
+    );
+
     const resetEditorDoc = () => {
       applyEditorValue("", {
         selection: EditorSelection.create([EditorSelection.cursor(0)]),
@@ -646,21 +843,17 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
     };
 
     const sendFromEditor = () => {
+      // An upload still on its way would leave its reference out of what is sent.
+      if (hasPendingUploads(uploadSurface)) return;
       const view = editorViewRef.current;
       const latest = latestRef.current;
       const text = view?.state.doc.toString() ?? latest?.value ?? "";
 
-      if (
-        isFocusedTerminal &&
-        useFleetArmingStore.getState().armedIds.has(terminalId) &&
-        useFleetArmingStore.getState().armedIds.size >= 2
-      ) {
-        const intercepted = tryFleetBroadcastFromEditor(terminalId, text, () => {
-          clearDraftInput(terminalId, projectId);
-          resetEditorDoc();
-        });
-        if (intercepted) return;
-      }
+      const intercepted = tryComposerFleetBroadcast(isFocusedTerminal, terminalId, text, () => {
+        clearDraftInput(terminalId, projectId);
+        resetEditorDoc();
+      });
+      if (intercepted) return;
 
       sendText(text, {
         imagePaths: readImageChipPaths(view),
@@ -683,6 +876,10 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
       const view = editorViewRef.current;
       if (!view) return;
       view.focus();
+      // The second look a frame later wins focus back from the grid pane's own
+      // focus pass. An isolated composer has no pane behind it, and a late
+      // refocus there would undo the user leaving it in the meantime.
+      if (isolated) return;
       const gen = focusGenerationRef.current;
       requestAnimationFrame(() => {
         if (focusGenerationRef.current !== gen) return;
@@ -811,7 +1008,8 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
     // is exactly what the rescue must never do. While a broadcast is live the
     // user typed to a fleet, not to one agent, so claim nothing.
     const recordTypedTarget = () => {
-      if (agentId === undefined) return;
+      // A canopy view types to a terminal that may live in another project.
+      if (isolated || agentId === undefined) return;
       if (useFleetArmingStore.getState().armedIds.size >= 2) return;
       const workspaceId = getViewWorkspaceId();
       if (workspaceId === null) return;
@@ -920,9 +1118,10 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
     });
 
     useEffect(() => {
+      if (isolated) return;
       registerInputController(terminalId, { stash: handleStash, pop: handlePopStash });
       return () => unregisterInputController(terminalId);
-    }, [terminalId, handleStash, handlePopStash]);
+    }, [terminalId, handleStash, handlePopStash, isolated]);
 
     // --- Compartment reconfigure effects ---
 
@@ -981,15 +1180,27 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
       isExpanded,
     });
 
+    // Three looks: rest; selected (the pane is the one, the keyboard is in its
+    // terminal or elsewhere), a neutral lift; and typing, which adds the accent
+    // outline on top of the selected look. Hover on a selected shell keeps it.
     const shellVars = {
-      "--ib-bg": inputBarColors.shellBg,
-      "--ib-border": inputBarColors.shellBorder,
-      "--ib-border-hover": inputBarColors.shellBorderHover,
-      "--ib-border-focus": inputBarColors.shellBorderFocus,
+      "--ib-bg": showSelectedChrome ? inputBarColors.shellSelectedBg : inputBarColors.shellBg,
+      "--ib-border": showSelectedChrome
+        ? inputBarColors.shellBorderSelected
+        : inputBarColors.shellBorder,
+      "--ib-border-hover": showSelectedChrome
+        ? inputBarColors.shellBorderSelected
+        : inputBarColors.shellBorderHover,
+      "--ib-hover-bg": showSelectedChrome
+        ? inputBarColors.shellSelectedBg
+        : inputBarColors.shellHoverBg,
       "--ib-shadow": inputBarColors.shellShadow,
       "--ib-focus-ring": inputBarColors.shellFocusRing,
-      "--ib-hover-bg": inputBarColors.shellHoverBg,
-      "--ib-focus-bg": inputBarColors.shellFocusBg,
+      "--ib-marker": showSelectedChrome ? inputBarColors.markerSelected : inputBarColors.marker,
+      "--ib-placeholder": showSelectedChrome
+        ? inputBarColors.placeholderSelected
+        : inputBarColors.placeholder,
+      "--ib-placeholder-more": inputBarColors.placeholderMore,
       "--ib-accent": inputBarColors.accent,
       "--ib-fg": inputBarColors.foreground,
     } as React.CSSProperties;
@@ -1034,6 +1245,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
         data-hybrid-input-root={terminalId}
         style={{ backgroundColor: inputBarColors.background, ...shellVars }}
       >
+        {isRemote && <PendingUploadChips surface={uploadSurface} className="mb-1.5" />}
         <div className="flex items-end gap-2">
           <div
             ref={inputShellRef}
@@ -1043,11 +1255,15 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
               // canvas midpoint, so the attach target sat at a different height
               // for every draft length. `flex-wrap` is what lets the canvas take
               // a row of its own once the draft wraps (see the track below).
-              "flex w-full flex-wrap items-end gap-x-1.5 gap-y-1 rounded-md border py-2 transition-[border-color,background-color,box-shadow] duration-150",
+              "flex w-full flex-wrap items-end gap-x-1.5 gap-y-1 rounded-md border py-2 transition-[border-color,background-color,box-shadow] duration-150 ease-out",
               !isSpecialState && [
                 "bg-[var(--ib-bg)] border-[var(--ib-border)] shadow-[var(--ib-shadow)]",
                 "hover:border-[var(--ib-border-hover)] hover:bg-[var(--ib-hover-bg)]",
-                "focus-within:border-[var(--ib-border-focus)] focus-within:ring-1 focus-within:ring-[var(--ib-focus-ring)] focus-within:bg-[var(--ib-focus-bg)]",
+                // The field family's focus: an outline added clear of the
+                // edge, the border left as it was. Keyed to the editor, not
+                // `focus-within` — a Tab onto attach or the mic is that
+                // control's own ring, not the composer taking the keyboard.
+                "has-[.cm-content:focus-visible]:outline-2 has-[.cm-content:focus-visible]:outline-offset-2 has-[.cm-content:focus-visible]:outline-[var(--ib-focus-ring)]",
               ],
               // The one dim for an unavailable composer. Its controls take
               // `disabled` and add no opacity of their own: a second dim inside
@@ -1057,6 +1273,11 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
             )}
             data-voice-active={isVoiceListeningChrome ? "true" : undefined}
             data-fleet-armed={isFleetPrimary ? "true" : undefined}
+            // The high-contrast blocks in index.css key off this; the special
+            // states above paint their own shell and take no part.
+            data-composer-state={
+              isSpecialState ? undefined : showSelectedChrome ? "selected" : "rest"
+            }
             style={specialStyle}
             onDragEnter={handleDragEnter}
             onDragOver={handleDragOver}
@@ -1132,7 +1353,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
                 <button
                   ref={pickerRef}
                   type="button"
-                  onClick={openPicker}
+                  onClick={() => openPicker(pickerOwnerId)}
                   disabled={disabled}
                   // `h-6 w-6` is the WCAG 2.5.8 floor on both axes: at `leading-5`
                   // the button was 20px tall, and at its old `pl-2 pr-1` it was
@@ -1143,6 +1364,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
                   className={cn(
                     "flex h-6 w-6 shrink-0 items-center justify-center select-none rounded-full font-mono text-xs font-semibold leading-5 transition-colors cursor-pointer",
                     COMPOSER_CONTROL_TEXT_CLASS,
+                    COMPOSER_MARKER_TEXT_CLASS,
                     COMPOSER_CONTROL_HOVER_BG_CLASS,
                     COMPOSER_CONTROL_FOCUS_CLASS
                   )}
@@ -1220,25 +1442,61 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
                 confirm itself. */}
             <div className="flex items-center justify-end pr-1.5 group-[[data-composer-narrow]:has([data-composer-multiline])]/shell:basis-full">
               <div ref={trailingGroupRef} className="flex shrink-0 items-center">
-                <Tooltip>
-                  <TooltipTrigger asChild>
-                    <button
-                      type="button"
-                      onClick={() => void handleAttachFiles()}
-                      disabled={disabled}
-                      className={cn(
-                        "flex items-center justify-center h-6 w-6 rounded-full transition-colors cursor-pointer",
-                        COMPOSER_CONTROL_TEXT_CLASS,
-                        COMPOSER_CONTROL_HOVER_BG_CLASS,
-                        COMPOSER_CONTROL_FOCUS_CLASS
-                      )}
-                      aria-label="Attach files"
-                    >
-                      <Paperclip className="h-3.5 w-3.5" />
-                    </button>
-                  </TooltipTrigger>
-                  <TooltipContent side="top">Attach files</TooltipContent>
-                </Tooltip>
+                {/* One control in both modes. In a remote window it opens a
+                    menu, since a file can come from this machine or the host;
+                    the root renders nothing, so a local window keeps a plain
+                    button. */}
+                {!thisMachineOff && (
+                  <DropdownMenu>
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        {isRemote ? (
+                          <DropdownMenuTrigger asChild>
+                            <button
+                              type="button"
+                              disabled={disabled}
+                              className={cn(
+                                "flex items-center justify-center h-6 w-6 rounded-full transition-colors cursor-pointer",
+                                COMPOSER_CONTROL_TEXT_CLASS,
+                                COMPOSER_CONTROL_HOVER_BG_CLASS,
+                                COMPOSER_CONTROL_FOCUS_CLASS
+                              )}
+                              aria-label="Attach files"
+                            >
+                              <Paperclip className="h-3.5 w-3.5" />
+                            </button>
+                          </DropdownMenuTrigger>
+                        ) : (
+                          <button
+                            type="button"
+                            onClick={() => void handleAttachFiles()}
+                            disabled={disabled}
+                            className={cn(
+                              "flex items-center justify-center h-6 w-6 rounded-full transition-colors cursor-pointer",
+                              COMPOSER_CONTROL_TEXT_CLASS,
+                              COMPOSER_CONTROL_HOVER_BG_CLASS,
+                              COMPOSER_CONTROL_FOCUS_CLASS
+                            )}
+                            aria-label="Attach files"
+                          >
+                            <Paperclip className="h-3.5 w-3.5" />
+                          </button>
+                        )}
+                      </TooltipTrigger>
+                      <TooltipContent side="top">Attach files</TooltipContent>
+                    </Tooltip>
+                    {isRemote && (
+                      <DropdownMenuContent align="end" side="top">
+                        <DropdownMenuItem onSelect={() => void handleAttachFiles()}>
+                          {isMac() ? "From this Mac…" : "From this computer…"}
+                        </DropdownMenuItem>
+                        <DropdownMenuItem onSelect={() => void handleAttachFromHost()}>
+                          {`From ${hostPlatform.hostName ?? "the host"}…`}
+                        </DropdownMenuItem>
+                      </DropdownMenuContent>
+                    )}
+                  </DropdownMenu>
+                )}
                 {hasStash && (
                   <Tooltip>
                     <TooltipTrigger asChild>
@@ -1265,15 +1523,20 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
                     </TooltipContent>
                   </Tooltip>
                 )}
-                <VoiceInputButton
-                  panelId={terminalId}
-                  panelTitle={agentId ? getAgentConfig(agentId)?.name : undefined}
-                  projectId={currentProject?.id}
-                  projectName={currentProject?.name}
-                  worktreeId={panelWorktreeId}
-                  worktreeLabel={panelWorktreeLabel}
-                  disabled={disabled}
-                />
+                {/* Dictation writes to the pane's own draft, in the current
+                    project: an isolated composer's draft is its own, so it
+                    offers none rather than filling the pane's behind it. */}
+                {!isolated && (
+                  <VoiceInputButton
+                    panelId={terminalId}
+                    panelTitle={agentId ? getAgentConfig(agentId)?.name : undefined}
+                    projectId={currentProject?.id}
+                    projectName={currentProject?.name}
+                    worktreeId={panelWorktreeId}
+                    worktreeLabel={panelWorktreeLabel}
+                    disabled={disabled}
+                  />
+                )}
               </div>
             </div>
           </div>
@@ -1306,7 +1569,12 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
         >
           {barContent}
         </div>
-        <CommandPickerHost context={commandContext} onCommandExecuted={handleCommandExecuted} />
+        <CommandPickerHost
+          ownerId={pickerOwnerId}
+          context={commandContext}
+          onCommandExecuted={handleCommandExecuted}
+        />
+        {isRemote && <LazyUploadConfirmHost />}
         <AppDialog
           isOpen={isExpanded}
           onClose={collapseEditor}
@@ -1347,6 +1615,10 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
                       node.appendChild(view.dom);
                     }
                   }}
+                  // The expanded editor portals out of the isolated composer's
+                  // wrapper: it keeps that isolation, or the grid's shortcuts
+                  // would act on the pane behind Canopy.
+                  {...(isolated ? { "data-keybindings-isolated": "" } : {})}
                   className="flex-1 min-h-[200px] overflow-auto text-text-primary p-4"
                 />
               </ContextMenuTrigger>
@@ -1357,7 +1629,11 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
             {isDragOverModal && <FileDropOverlay />}
           </div>
         </AppDialog>
-        {isFocusedTerminal && (
+        {/* One palette per id: while Canopy is open its own composer's is the
+            one, not the grid pane's behind it. */}
+        {/* History spans this machine's projects, whose prompts name its files:
+            none is offered for a terminal on another host. */}
+        {((isFocusedTerminal && !canopyOpen) || (isolated && !thisMachineOff)) && (
           <PromptHistoryPalette
             terminalId={terminalId}
             projectId={projectId}

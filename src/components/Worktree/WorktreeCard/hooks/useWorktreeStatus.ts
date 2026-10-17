@@ -5,8 +5,6 @@ import { MAIN_WORKTREE_NOTE_TTL_MS, deriveEffectiveNote } from "@/lib/worktreeAi
 
 export type SpineState = "dirty" | "current" | "stale" | "idle";
 
-export type WorktreeLifecycleStage = "in-review" | "merged" | "ready-for-cleanup";
-
 export type ComputedSubtitleTone = "warning" | "info" | "muted";
 
 export interface ComputedSubtitle {
@@ -79,8 +77,6 @@ export interface UseWorktreeStatusResult {
   branchLabel: string;
   isMainOnStandardBranch: boolean;
   hasChanges: boolean;
-  isComplete: boolean;
-  lifecycleStage: WorktreeLifecycleStage | null;
   effectiveNote?: string;
   effectiveSummary?: string | null;
   computedSubtitle: ComputedSubtitle;
@@ -215,27 +211,6 @@ export function useWorktreeStatus({
     return null;
   }, [worktree.worktreeChanges]);
 
-  const isComplete =
-    !!worktree.issueNumber &&
-    !!worktree.linked?.pr &&
-    worktree.linked.pr.state !== "closed" &&
-    worktree.linked.pr.state !== "declined" &&
-    !hasChanges &&
-    worktree.worktreeChanges !== null;
-
-  const lifecycleStage = useMemo((): WorktreeLifecycleStage | null => {
-    if (isMainWorktree) return null;
-    if (worktree.worktreeChanges === null) return null;
-
-    if (worktree.linked?.pr?.state === "merged") {
-      return worktree.issueNumber ? "ready-for-cleanup" : "merged";
-    }
-
-    if (worktree.linked?.pr?.state === "open") return "in-review";
-
-    return null;
-  }, [isMainWorktree, worktree.worktreeChanges, worktree.linked?.pr?.state, worktree.issueNumber]);
-
   const lifecycle = worktree.lifecycleStatus;
   const isLifecycleRunning = lifecycle?.state === "running";
   const lifecycleLabel = useMemo(() => {
@@ -285,8 +260,6 @@ export function useWorktreeStatus({
     branchLabel,
     isMainOnStandardBranch,
     hasChanges,
-    isComplete,
-    lifecycleStage,
     effectiveNote,
     effectiveSummary,
     computedSubtitle,

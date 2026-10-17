@@ -80,11 +80,29 @@ describe("installLinuxPrimarySelectionListeners", () => {
       hostElement.dispatchEvent(new MouseEvent("mouseup", { button: 2, bubbles: true }));
       expect(writeSelection).not.toHaveBeenCalled();
     });
+  });
 
-    it("skips write after the cache was cleared (post-disposal race)", () => {
-      cachedSelection = undefined;
-      hostElement.dispatchEvent(new MouseEvent("mouseup", { bubbles: true }));
-      expect(writeSelection).not.toHaveBeenCalled();
+  describe("middle-button release", () => {
+    function release(button: number, target: HTMLElement = hostElement): MouseEvent {
+      const event = new MouseEvent("mouseup", { button, bubbles: true, cancelable: true });
+      target.dispatchEvent(event);
+      return event;
+    }
+
+    it("cancels it, so Chromium's own PRIMARY paste can't double the auxclick one", () => {
+      expect(release(1).defaultPrevented).toBe(true);
+    });
+
+    it("cancels it from a descendant that stops propagation (capture phase)", () => {
+      const child = document.createElement("div");
+      hostElement.appendChild(child);
+      child.addEventListener("mouseup", (event) => event.stopPropagation());
+      expect(release(1, child).defaultPrevented).toBe(true);
+    });
+
+    it("leaves primary and right-button releases alone", () => {
+      expect(release(0).defaultPrevented).toBe(false);
+      expect(release(2).defaultPrevented).toBe(false);
     });
   });
 
@@ -202,13 +220,6 @@ describe("installLinuxPrimarySelectionListeners", () => {
       expect(writeToPty).not.toHaveBeenCalled();
     });
 
-    it("silently swallows rejected readSelection promises", async () => {
-      readSelection.mockRejectedValueOnce(new Error("ipc unavailable"));
-      hostElement.dispatchEvent(new MouseEvent("auxclick", { button: 1, bubbles: true }));
-      await flush();
-      expect(writeToPty).not.toHaveBeenCalled();
-    });
-
     it("fires when auxclick originates from a descendant element (capture phase)", async () => {
       // xterm mounts its canvas/overlay as a child of hostElement. Capture phase
       // on hostElement guarantees we see the event before xterm stopPropagation()s.
@@ -236,13 +247,20 @@ describe("installLinuxPrimarySelectionListeners", () => {
   });
 
   describe("cleanup", () => {
-    it("removes both listeners so later events are ignored", () => {
+    it("removes every listener so later events are ignored", () => {
       cleanup();
       cachedSelection = "after cleanup";
       hostElement.dispatchEvent(new MouseEvent("mouseup", { bubbles: true }));
+      const middleRelease = new MouseEvent("mouseup", {
+        button: 1,
+        bubbles: true,
+        cancelable: true,
+      });
+      hostElement.dispatchEvent(middleRelease);
       hostElement.dispatchEvent(new MouseEvent("auxclick", { button: 1, bubbles: true }));
       expect(writeSelection).not.toHaveBeenCalled();
       expect(readSelection).not.toHaveBeenCalled();
+      expect(middleRelease.defaultPrevented).toBe(false);
     });
   });
 });

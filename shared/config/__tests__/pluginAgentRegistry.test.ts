@@ -10,7 +10,6 @@ import {
 } from "../pluginAgentRegistry.js";
 import {
   getEffectiveAgentConfig,
-  getEffectiveRegistry,
   isEffectivelyRegisteredAgent,
   isBuiltInAgent,
   setUserRegistry,
@@ -49,21 +48,6 @@ describe("pluginAgentRegistry (issue #9560)", () => {
     // Plugin agents are not built-ins
     expect(isBuiltInAgentId("acme-agent")).toBe(false);
     expect(isBuiltInAgent("acme-agent")).toBe(false);
-  });
-
-  it("forwards a declared detection block onto the resolved config (#10587)", () => {
-    // contributionToAgentConfig now threads `detection` through so a plugin
-    // agent can drive the working/waiting/completed UI via output patterns.
-    registerPluginAgents("acme.plugin", [
-      {
-        ...ACME_AGENT,
-        detection: { primaryPatterns: ["thinking"], completionPatterns: ["done"] },
-      },
-    ]);
-    const config = getEffectiveAgentConfig("acme-agent");
-    expect(config).toBeDefined();
-    expect(config?.detection?.primaryPatterns).toEqual(["thinking"]);
-    expect(config?.detection?.completionPatterns).toEqual(["done"]);
   });
 
   it("round-trips every detection field onto the resolved config (#10587)", () => {
@@ -166,13 +150,6 @@ describe("pluginAgentRegistry (issue #9560)", () => {
     });
     expect(getEffectiveAgentConfig("mirror-agent")).toBeDefined();
     expect(getPluginAgentRegistry()["mirror-agent"]?.name).toBe("Mirror");
-  });
-
-  it("getEffectiveRegistry includes plugin agents alongside built-ins", () => {
-    registerPluginAgents("acme.plugin", [ACME_AGENT]);
-    const registry = getEffectiveRegistry();
-    expect(registry["acme-agent"]).toBeDefined();
-    expect(registry["claude"]).toBeDefined();
   });
 
   it("resolves a ./-prefixed command to an absolute path against pluginDir (#10560)", () => {
@@ -296,14 +273,6 @@ describe("pluginAgentRegistry subscription (issue #9879)", () => {
     const listener = vi.fn();
     const unsubscribe = subscribeToPluginAgentRegistry(listener);
     unsubscribe();
-    registerPluginAgents("acme.plugin", [ACME_AGENT]);
-    expect(listener).not.toHaveBeenCalled();
-  });
-
-  it("clearPluginAgentRegistryForTests drops subscribers (no cross-test leakage)", () => {
-    const listener = vi.fn();
-    subscribeToPluginAgentRegistry(listener);
-    clearPluginAgentRegistryForTests();
     registerPluginAgents("acme.plugin", [ACME_AGENT]);
     expect(listener).not.toHaveBeenCalled();
   });

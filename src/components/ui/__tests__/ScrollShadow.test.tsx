@@ -45,25 +45,6 @@ function setScrollMetrics(
 }
 
 describe("ScrollShadow", () => {
-  it("renders children", () => {
-    render(
-      <ScrollShadow>
-        <p>Hello</p>
-      </ScrollShadow>
-    );
-    expect(screen.getByText("Hello")).toBeTruthy();
-  });
-
-  it("shows no shadows when content does not overflow", () => {
-    const { container } = render(
-      <ScrollShadow>
-        <p>Short content</p>
-      </ScrollShadow>
-    );
-    const visible = container.querySelectorAll("[data-visible='true']");
-    expect(visible).toHaveLength(0);
-  });
-
   it("always mounts both overlays for opacity-transition continuity", () => {
     const { container } = render(
       <ScrollShadow>

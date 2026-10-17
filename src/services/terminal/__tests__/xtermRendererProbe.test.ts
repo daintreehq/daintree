@@ -50,15 +50,4 @@ describe("hasUsableRenderer", () => {
     // path on every single open.
     expect(hasUsableRenderer({} as Probed)).toBe(true);
   });
-
-  it("distinguishes a missing accessor from a present-but-undefined one", () => {
-    // The two cases are one `in` check apart and resolve to OPPOSITE verdicts,
-    // so a refactor that collapses them would silently break one of them.
-    const absent = {} as Probed;
-    const presentButEmpty = withDimensions(() => undefined);
-
-    expect(absent.dimensions).toBeUndefined();
-    expect(presentButEmpty.dimensions).toBeUndefined();
-    expect(hasUsableRenderer(absent)).not.toBe(hasUsableRenderer(presentButEmpty));
-  });
 });

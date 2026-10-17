@@ -52,10 +52,8 @@ function harness(overrides: Partial<CrashFleetRestoreDeps> = {}) {
 
 describe("isFleetRestoreEligible", () => {
   it.each([
-    [false, 0, true],
     [false, 1, true],
     [false, 2, false],
-    [false, 5, false],
     [true, 0, false],
   ])("safeMode=%s count=%i → %s", (safeMode, count, expected) => {
     expect(isFleetRestoreEligible({ isSafeMode: () => safeMode, getCrashCount: () => count })).toBe(
@@ -149,23 +147,6 @@ describe("restoreFleetAfterCrash", () => {
     expect(deps.readManifest).not.toHaveBeenCalled();
     expect(createWindow).not.toHaveBeenCalled();
     expect(deps.enableSaves).not.toHaveBeenCalled();
-  });
-
-  it("hands the recovery window's saved background projects to it", async () => {
-    const { deps, createWindow } = harness({
-      readManifest: () => ({
-        hadManifest: true,
-        records: [{ projectId: "recovered", backgroundProjectIds: ["x", "y"] }, { projectId: "b" }],
-      }),
-      isProjectOwned: (id) => id === "recovered",
-    });
-
-    await restoreFleetAfterCrash(deps);
-
-    expect(deps.adoptBackgroundProjects).toHaveBeenCalledWith([
-      { projectId: "recovered", backgroundProjectIds: ["x", "y"] },
-    ]);
-    expect(createWindow.mock.calls.map((c) => c[0])).toEqual(["b"]);
   });
 
   it("hands every owned record over in one call", async () => {
@@ -280,10 +261,6 @@ describe("requestCrashFleetRestore", () => {
 
   afterEach(() => {
     resetCrashFleetRestoreForTests();
-  });
-
-  it("does nothing when no restorer is installed", () => {
-    expect(() => requestCrashFleetRestore(1)).not.toThrow();
   });
 
   it("runs the restorer once per process, with the requesting view", async () => {

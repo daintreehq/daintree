@@ -19,7 +19,7 @@ import nodeV8 from "node:v8";
 import vm from "node:vm";
 import { spawn } from "child_process";
 import { randomBytes } from "crypto";
-import { app } from "electron";
+import { app, dialog } from "electron";
 import path from "path";
 import fs from "fs";
 import { existsSync } from "fs";
@@ -27,9 +27,12 @@ import os from "os";
 import {
   applyWindowsExtraPaths,
   deduplicatePath,
+  prewarmWindowsSpawnTargets,
+  rememberWindowsLaunchPath,
   resolveWindowsRegistryPath,
 } from "./windowsPath.js";
 import { isLinuxWaylandHybridGpu } from "../utils/gpuDetection.js";
+import { windowsSystemTool } from "../utils/windowsExecutable.js";
 import { getMaxWebGLContextCeiling } from "../utils/webglContextBudget.js";
 import { recordShellEnvironment } from "./shellEnvironmentObservation.js";
 // Deliberately the tiny pure-fs module, NOT GpuCrashMonitorService — importing
@@ -41,6 +44,12 @@ import {
   shouldRetryGpuAfterUpdate,
 } from "../services/gpuDisabledFlag.js";
 import { formatErrorMessage } from "../../shared/utils/errorMessage.js";
+import {
+  HEADLESS_OZONE_SWITCH,
+  isAttachStdioRequested,
+  shouldUseHeadlessOzone,
+} from "../boot/hostModeLaunch.js";
+import { installHeadlessDialogGuards } from "./headlessDialogs.js";
 import {
   e2eCrashDumpsDir,
   isDemoMode,
@@ -156,9 +165,32 @@ export const gpuAngleFallbackActive = fs.existsSync(gpuAngleFallbackFlagPath);
 // Chromium feature flags: memory reclamation + platform-specific features
 const enabledFeatures = ["PartitionAllocMemoryReclaimer"];
 
+// A windowless Host on a box with no display server runs Chromium headless,
+// with the GPU off since nothing is ever composited. Ozone is chosen before
+// this module runs, so only the switch on the command line selects it (the
+// systemd unit passes it); a launch without it aborts looking for X11. Only
+// when Host mode is requested — a normal launch without a display should
+// still fail loudly.
+export const headlessOzone = shouldUseHeadlessOzone({
+  platform: process.platform,
+  argv: process.argv,
+  env: process.env,
+});
+
 // Enable native Wayland support on Linux (Electron < 38)
 // Electron 38+ auto-detects via XDG_SESSION_TYPE; this flag is ignored.
-if (process.platform === "linux") {
+if (headlessOzone) {
+  installHeadlessDialogGuards(dialog);
+  app.commandLine.appendSwitch("ozone-platform", "headless");
+  app.commandLine.appendSwitch("disable-gpu");
+  if (!gpuHardwareAccelerationDisabled) app.disableHardwareAcceleration();
+  // `--attach-stdio`'s stdout is the link: its diagnostics go to stderr.
+  (isAttachStdioRequested(process.argv) ? console.error : console.log)(
+    process.argv.includes(HEADLESS_OZONE_SWITCH)
+      ? "[GPU] Headless Host mode: ozone-platform=headless, GPU disabled"
+      : `[GPU] No display server: start Host mode with ${HEADLESS_OZONE_SWITCH}, or Chromium aborts looking for X11`
+  );
+} else if (process.platform === "linux") {
   app.commandLine.appendSwitch("ozone-platform-hint", "auto");
   if (process.env.XDG_SESSION_TYPE === "wayland") {
     enabledFeatures.push("WaylandWindowDecorations");
@@ -214,6 +246,9 @@ app.commandLine.appendSwitch("force-gpu-mem-available-mb", getGpuTileMemoryCapMb
 app.commandLine.appendSwitch("max-active-webgl-contexts", String(getMaxWebGLContextCeiling()));
 
 if (process.platform === "win32") {
+  // Before anything below rewrites it: every later registry refresh keeps the
+  // entries only the launching shell had (a venv, a developer prompt).
+  rememberWindowsLaunchPath(process.env.PATH);
   const current = process.env.PATH || "";
   const augmented = applyWindowsExtraPaths(current);
   if (augmented !== current) {
@@ -246,6 +281,7 @@ let shellProbePromise: Promise<string | null> | null = null;
  * native Claude installer bin dir. The shell-env probe covers the common
  * case, but corporate `.zshrc` files can hang shell-env past the timeout.
  * Without this fallback those users would see every CLI as "missing".
+ * POSIX path rules throughout: these lists only ever apply on macOS and Linux.
  */
 export function getUnixFallbackPaths(): string[] {
   const home = os.homedir();
@@ -254,16 +290,20 @@ export function getUnixFallbackPaths(): string[] {
   // mise — env var override, then the standard location.
   const miseData = process.env["MISE_DATA_DIR"];
   candidates.push(
-    miseData ? path.join(miseData, "shims") : path.join(home, ".local/share/mise/shims")
+    miseData ? path.posix.join(miseData, "shims") : path.posix.join(home, ".local/share/mise/shims")
   );
 
   // asdf — env var override, then the standard location.
   const asdfData = process.env["ASDF_DATA_DIR"];
-  candidates.push(asdfData ? path.join(asdfData, "shims") : path.join(home, ".asdf/shims"));
+  candidates.push(
+    asdfData ? path.posix.join(asdfData, "shims") : path.posix.join(home, ".asdf/shims")
+  );
 
   // Volta — env var override, then the standard location.
   const voltaHome = process.env["VOLTA_HOME"];
-  candidates.push(voltaHome ? path.join(voltaHome, "bin") : path.join(home, ".volta/bin"));
+  candidates.push(
+    voltaHome ? path.posix.join(voltaHome, "bin") : path.posix.join(home, ".volta/bin")
+  );
 
   // pnpm — env var override, then the platform-default bin dir. pnpm's
   // installer writes the bin dir path directly (no `bin/` suffix).
@@ -273,13 +313,13 @@ export function getUnixFallbackPaths(): string[] {
   } else {
     candidates.push(
       process.platform === "darwin"
-        ? path.join(home, "Library/pnpm")
-        : path.join(home, ".local/share/pnpm")
+        ? path.posix.join(home, "Library/pnpm")
+        : path.posix.join(home, ".local/share/pnpm")
     );
   }
 
   // Nix — user profile (single-user + home-manager) and system default profile.
-  candidates.push(path.join(home, ".nix-profile/bin"));
+  candidates.push(path.posix.join(home, ".nix-profile/bin"));
   candidates.push("/nix/var/nix/profiles/default/bin");
 
   // Homebrew — Apple Silicon (ARM64) default prefix. Intel Homebrew lives
@@ -288,9 +328,88 @@ export function getUnixFallbackPaths(): string[] {
 
   // User-local bin — catches Anthropic's native installer for Claude
   // (~/.local/bin/claude) and other user-level installs.
-  candidates.push(path.join(home, ".local/bin"));
+  candidates.push(path.posix.join(home, ".local/bin"));
 
   return candidates.filter((p) => {
+    try {
+      return existsSync(p);
+    } catch {
+      return false;
+    }
+  });
+}
+
+function expandHomePrefix(value: string, home: string): string {
+  if (value === "~") return home;
+  return value.startsWith("~/") ? path.posix.join(home, value.slice(2)) : value;
+}
+
+/**
+ * npm's global prefix when the user moved it somewhere they own — the fix npm's
+ * own docs give for EACCES on a system Node (apt, NodeSource), whose default
+ * prefix is root-owned. `NPM_CONFIG_PREFIX` first, then `prefix=` in
+ * `~/.npmrc` (last one wins, as in npm's ini reader, with `${VAR}` expanded).
+ */
+function readNpmUserPrefix(home: string): string | null {
+  let value = process.env["NPM_CONFIG_PREFIX"] || process.env["npm_config_prefix"] || null;
+  if (!value) {
+    let npmrc: string;
+    try {
+      npmrc = fs.readFileSync(path.posix.join(home, ".npmrc"), "utf8");
+    } catch {
+      return null;
+    }
+    for (const line of npmrc.split(/\r?\n/)) {
+      const match = /^\s*prefix\s*=\s*(.*?)\s*$/.exec(line);
+      if (match?.[1]) value = match[1];
+    }
+    if (!value) return null;
+    value = value
+      .replace(/^(["'])(.*)\1$/, "$2")
+      .replace(/\$\{([^}]+)\}/g, (_match, name: string) => process.env[name] ?? "");
+  }
+  const expanded = expandHomePrefix(value, home);
+  return path.posix.isAbsolute(expanded) ? expanded : null;
+}
+
+/**
+ * Linux-only bin dirs where agent CLIs and their runtimes commonly land, for
+ * when the login-shell read fails and Daintree is left with the session's
+ * PATH. Appended, never prepended: each only makes a CLI findable, so none can
+ * shadow a binary the user's own PATH already resolves. Gated by `existsSync`
+ * like the list above.
+ */
+export function getLinuxFallbackPaths(): string[] {
+  const home = os.homedir();
+  const env = process.env;
+  const candidates: string[] = [];
+
+  // npm with a user-owned global prefix: whatever ~/.npmrc names, then the
+  // directory npm's EACCES guide tells people to create.
+  const npmPrefix = readNpmUserPrefix(home);
+  if (npmPrefix) candidates.push(path.posix.join(npmPrefix, "bin"));
+  candidates.push(path.posix.join(home, ".npm-global/bin"));
+
+  // rustup/cargo, Bun and Deno installers, each with its env override.
+  candidates.push(path.posix.join(env["CARGO_HOME"] || path.posix.join(home, ".cargo"), "bin"));
+  candidates.push(path.posix.join(env["BUN_INSTALL"] || path.posix.join(home, ".bun"), "bin"));
+  candidates.push(
+    path.posix.join(env["DENO_INSTALL_ROOT"] || path.posix.join(home, ".deno"), "bin")
+  );
+
+  // Homebrew on Linux: the shared prefix its installer prefers, and the
+  // in-home prefix it falls back to without sudo.
+  if (env["HOMEBREW_PREFIX"]) candidates.push(path.posix.join(env["HOMEBREW_PREFIX"], "bin"));
+  candidates.push("/home/linuxbrew/.linuxbrew/bin");
+  candidates.push(path.posix.join(home, ".linuxbrew/bin"));
+
+  // Debian/Ubuntu's default ~/.profile puts ~/bin on PATH when it exists.
+  candidates.push(path.posix.join(home, "bin"));
+
+  // snapd's profile.d script appends this, so a snap never shadows a deb.
+  candidates.push("/snap/bin");
+
+  return [...new Set(candidates)].filter((p) => {
     try {
       return existsSync(p);
     } catch {
@@ -303,7 +422,12 @@ function applyUnixFallbackPaths(currentPath: string): string {
   const extraPaths = getUnixFallbackPaths();
   const existingEntries = currentPath.split(path.delimiter);
   const missing = extraPaths.filter((p) => !existingEntries.includes(p));
-  return missing.length ? [...missing, currentPath].join(path.delimiter) : currentPath;
+  const appended =
+    process.platform === "linux"
+      ? getLinuxFallbackPaths().filter((p) => !existingEntries.includes(p) && !missing.includes(p))
+      : [];
+  if (missing.length === 0 && appended.length === 0) return currentPath;
+  return [...missing, currentPath, ...appended].join(path.delimiter);
 }
 
 function parseMarkeredPath(stdout: string, marker: string): string | null {
@@ -469,14 +593,15 @@ async function runRefreshPath(): Promise<void> {
     const result = await Promise.race([
       (async () => {
         if (process.platform === "win32") {
-          // Registry read + shim-dir merge live in the dependency-free
+          // Registry read, shim-dir and launch-PATH merge live in the dependency-free
           // `windowsPath.ts` leaf so the terminal spawn path can re-run them
           // per pane without importing this module's startup machinery
           // (#11773). Its single-flight is shared, so a spawn refresh landing
           // mid-startup joins this read instead of racing a second `reg.exe`.
           const resolved = await resolveWindowsRegistryPath();
-          if (!resolved || timedOut) return;
-          process.env.PATH = resolved;
+          if (resolved && !timedOut) process.env.PATH = resolved;
+          // Startup's first PATH search for the shell and git, off this loop.
+          prewarmWindowsSpawnTargets();
         } else if (process.env.DAINTREE_SHELL_PROBE === "1") {
           // Opt-in markered shell-probe path (#6063). Replaces shell-env
           // with a real `$SHELL -i -l -c` invocation so lazy-loaded version
@@ -623,10 +748,14 @@ if (isSmokeTest) {
   // Verify native module (node-pty) loads and bindings work
   try {
     const pty = await import("node-pty");
-    const testProc = pty.spawn(process.platform === "win32" ? "cmd.exe" : "echo", ["smoke"], {
-      cols: 80,
-      rows: 24,
-    });
+    const testProc = pty.spawn(
+      process.platform === "win32" ? windowsSystemTool("cmd.exe") : "echo",
+      ["smoke"],
+      {
+        cols: 80,
+        rows: 24,
+      }
+    );
     testProc.kill();
     console.error("[SMOKE] CHECK: node-pty native module — OK");
   } catch (err) {
@@ -747,6 +876,11 @@ export function clearPendingOpenDirPaths(): void {
  */
 export function setOpenDirConsumer(consumer: ((dirPath: string) => void) | null): void {
   _openDirConsumer = consumer;
+}
+
+/** False until a window has set up and can route external folder opens itself. */
+export function hasOpenDirConsumer(): boolean {
+  return _openDirConsumer !== null;
 }
 
 /** Queue a directory for the first window's drain; dedupes bursts. */

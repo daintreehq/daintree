@@ -1,10 +1,16 @@
 // @vitest-environment jsdom
-import { render, screen } from "@testing-library/react";
+import { act, fireEvent, render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import type { GitStatus } from "@shared/types/git";
 import type { WorkingTreeFileChange } from "@/lib/workingTreeDiff";
 import { FileBrowserChangeSummary } from "../FileBrowserChangeSummary";
-import type { ReactNode } from "react";
+import { cloneElement, type ReactElement, type ReactNode } from "react";
+import {
+  ContextMenu,
+  ContextMenuContent,
+  ContextMenuItem,
+  ContextMenuTrigger,
+} from "@/components/ui/context-menu";
 
 // The app root supplies the TooltipProvider. Triggers render inline; the
 // content is left out so a disclosed label is not counted twice.
@@ -12,7 +18,16 @@ vi.mock("@/components/ui/tooltip", () => ({
   Tooltip: ({ children }: { children: ReactNode }) => <>{children}</>,
   TooltipContent: () => null,
   TooltipProvider: ({ children }: { children: ReactNode }) => <>{children}</>,
-  TooltipTrigger: ({ children }: { children: ReactNode }) => <>{children}</>,
+  // Forwards its props like the real `asChild` trigger: a row's context-menu
+  // trigger wraps this one and hands its handlers through it to the row.
+  TooltipTrigger: ({
+    children,
+    asChild: _asChild,
+    ...props
+  }: {
+    children: ReactElement;
+    asChild?: boolean;
+  }) => cloneElement(children, props),
 }));
 
 function change(
@@ -133,5 +148,94 @@ describe("FileBrowserChangeSummary", () => {
     renderSummary([change("src/app.ts", "modified"), change("src/app.ts", "added")]);
 
     expect(screen.getAllByRole("button")).toHaveLength(2);
+  });
+});
+
+describe("FileBrowserChangeSummary row menu", () => {
+  function renderWithMenu(changes: WorkingTreeFileChange[]) {
+    const menuFor = vi.fn((c: WorkingTreeFileChange) => (
+      <ContextMenuItem>{`Menu for ${c.relativePath} (${c.status})`}</ContextMenuItem>
+    ));
+    // Inside a stand-in for the panel menu, which a row's own must outrank.
+    render(
+      <ContextMenu>
+        <ContextMenuTrigger asChild>
+          <div>
+            <FileBrowserChangeSummary
+              changes={changes}
+              onSelect={vi.fn()}
+              changeContextMenu={menuFor}
+            />
+          </div>
+        </ContextMenuTrigger>
+        <ContextMenuContent>
+          <ContextMenuItem>Panel item</ContextMenuItem>
+        </ContextMenuContent>
+      </ContextMenu>
+    );
+    return menuFor;
+  }
+
+  it("opens the row's file menu instead of the panel's", async () => {
+    renderWithMenu([change("src/app.ts", "modified")]);
+
+    fireEvent.contextMenu(screen.getByRole("button", { name: /src\/app\.ts/ }));
+
+    expect(await screen.findByText("Menu for src/app.ts (modified)")).toBeTruthy();
+    expect(screen.queryByText("Panel item")).toBeNull();
+  });
+
+  it("gives a deleted row a menu too", async () => {
+    renderWithMenu([change("src/gone.ts", "deleted")]);
+
+    fireEvent.contextMenu(screen.getByRole("button", { name: /src\/gone\.ts/ }));
+
+    expect(await screen.findByText("Menu for src/gone.ts (deleted)")).toBeTruthy();
+  });
+
+  it("describes the row that was clicked when a path is listed twice", async () => {
+    renderWithMenu([change("src/app.ts", "modified"), change("src/app.ts", "added")]);
+
+    fireEvent.contextMenu(screen.getAllByRole("button")[1]!);
+
+    expect(await screen.findByText("Menu for src/app.ts (added)")).toBeTruthy();
+    expect(screen.queryByText("Menu for src/app.ts (modified)")).toBeNull();
+  });
+
+  it("opens from the keyboard with Shift+F10", async () => {
+    renderWithMenu([change("src/app.ts", "modified")]);
+    const row = screen.getByRole("button", { name: /src\/app\.ts/ });
+
+    expect(row.hasAttribute("data-row-menu")).toBe(true);
+    act(() => {
+      fireEvent.keyDown(row, { key: "F10", shiftKey: true });
+    });
+
+    expect(await screen.findByText("Menu for src/app.ts (modified)")).toBeTruthy();
+  });
+
+  it("leaves the right-click to the panel when no menu is supplied", async () => {
+    render(
+      <ContextMenu>
+        <ContextMenuTrigger asChild>
+          <div>
+            <FileBrowserChangeSummary
+              changes={[change("src/app.ts", "modified")]}
+              onSelect={vi.fn()}
+            />
+          </div>
+        </ContextMenuTrigger>
+        <ContextMenuContent>
+          <ContextMenuItem>Panel item</ContextMenuItem>
+        </ContextMenuContent>
+      </ContextMenu>
+    );
+
+    const row = screen.getByRole("button", { name: /src\/app\.ts/ });
+    expect(row.hasAttribute("data-row-menu")).toBe(false);
+
+    fireEvent.contextMenu(row);
+
+    expect(await screen.findByText("Panel item")).toBeTruthy();
   });
 });

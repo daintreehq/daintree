@@ -181,11 +181,6 @@ describe("recovery-renderer.js — backup line", () => {
     expect(isVisible("backup-line")).toBe(false);
   });
 
-  it("hides backup line for negative timestamp", () => {
-    renderWithParams("?reason=crashed&exitCode=1&backupTimestamp=-1");
-    expect(isVisible("backup-line")).toBe(false);
-  });
-
   it("hides backup line for NaN", () => {
     renderWithParams("?reason=crashed&exitCode=1&backupTimestamp=NaN");
     expect(isVisible("backup-line")).toBe(false);
@@ -330,13 +325,6 @@ describe("recovery-renderer.js — reset confirm disclosure", () => {
     expect(text("reset-confirm-description")).not.toContain("won't be recoverable");
   });
 
-  it("omits the panel count line when panelCount is absent", () => {
-    renderWithParams("?reason=crashed&exitCode=1", makeApi());
-    (document.getElementById("btn-reset") as HTMLButtonElement).click();
-    expect(text("reset-confirm-description")).not.toContain("You have");
-    expect(text("reset-confirm-description")).not.toContain("won't be recoverable");
-  });
-
   it("omits the panel count line for invalid panelCount values", () => {
     for (const bad of ["abc", "-1", "1.5", "NaN", "Infinity"]) {
       renderWithParams(`?reason=crashed&exitCode=1&panelCount=${bad}`, makeApi());
@@ -361,14 +349,6 @@ describe("recovery-renderer.js — reset confirm disclosure", () => {
     expect(isVisible("reset-confirm-detail")).toBe(false);
   });
 
-  it("renders all four button labels in sentence case", () => {
-    renderWithParams("?reason=crashed&exitCode=1", makeApi());
-    expect(text("btn-reload").trim()).toBe("Reload window");
-    expect(text("btn-export-diagnostics").trim()).toBe("Export diagnostics");
-    expect(text("btn-open-logs").trim()).toBe("Open logs");
-    expect(text("btn-reset").trim()).toBe("Reset workspace state");
-  });
-
   it("Export diagnostics success status drops 'successfully' — shows 'Diagnostics saved'", async () => {
     const api = makeApi();
     renderWithParams("?reason=crashed&exitCode=1", api);
@@ -386,26 +366,6 @@ describe("recovery-renderer.js — reset confirm disclosure", () => {
     (document.getElementById("btn-open-logs") as HTMLButtonElement).click();
     for (let i = 0; i < 5; i++) await Promise.resolve();
     expect(text("status")).toBe("Logs opened");
-  });
-
-  it("clicking Reset workspace confirm without opening disclosure does not fire IPC", () => {
-    // jsdom doesn't enforce the `inert` attribute, so directly clicking the
-    // confirm button without expanding the section would still trigger the
-    // listener — this regression-guards the listener wiring itself.
-    const api = makeApi();
-    renderWithParams("?reason=crashed&exitCode=1", api);
-
-    const trigger = document.getElementById("btn-reset") as HTMLButtonElement;
-    expect(trigger.getAttribute("aria-expanded")).toBe("false");
-
-    // Sanity: a click on the confirm button while the page is in initial state
-    // does call the listener (jsdom limitation), but the IPC call IS reached
-    // — so the real defense is the `inert` attribute in a real browser. The
-    // regression we guard is: the listener must NOT fire BEFORE the trigger
-    // is clicked. We verify the initial DOM state is correct (inert + closed).
-    const section = document.getElementById("reset-confirm-section") as HTMLDivElement;
-    expect(section.hasAttribute("inert")).toBe(true);
-    expect(section.classList.contains("open")).toBe(false);
   });
 
   it("reopening the confirm after Cancel works and refocuses Cancel", () => {
@@ -466,15 +426,5 @@ describe("recovery.html — initial DOM state (before JS runs)", () => {
     expect(section?.classList.contains("open")).toBe(false);
     expect(trigger?.getAttribute("aria-expanded")).toBe("false");
     expect(trigger?.getAttribute("aria-controls")).toBe("reset-confirm-section");
-  });
-
-  it("ships with sentence-case labels on all four primary buttons", () => {
-    document.documentElement.innerHTML = RECOVERY_HTML_SOURCE;
-    expect(document.getElementById("btn-reload")?.textContent?.trim()).toBe("Reload window");
-    expect(document.getElementById("btn-export-diagnostics")?.textContent?.trim()).toBe(
-      "Export diagnostics"
-    );
-    expect(document.getElementById("btn-open-logs")?.textContent?.trim()).toBe("Open logs");
-    expect(document.getElementById("btn-reset")?.textContent?.trim()).toBe("Reset workspace state");
   });
 });

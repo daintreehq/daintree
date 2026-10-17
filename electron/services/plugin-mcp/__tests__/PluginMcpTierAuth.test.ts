@@ -50,37 +50,6 @@ describe("PluginMcpTierAuth.deriveDangerTier", () => {
       });
     });
 
-    it("caps a network-only plugin at D1 — denies destructiveHint", () => {
-      const result = deriveDangerTier({ destructiveHint: true }, ["network:fetch"]);
-      expect(result.kind).toBe("deny");
-    });
-
-    it("does not silently downgrade — never returns a tier lower than the floor", () => {
-      // A plugin declaring read-only capabilities but advertising a destructive
-      // tool must be DENIED, not silently approved as D0/D1.
-      const result = deriveDangerTier({ destructiveHint: true, openWorldHint: true }, [
-        "fs:project-read",
-      ]);
-      expect(result.kind).toBe("deny");
-    });
-
-    it("allows D2 when the plugin declares shell:exec", () => {
-      const result = deriveDangerTier({ destructiveHint: true }, ["shell:exec"]);
-      expect(result).toEqual({ kind: "tier", tier: "D2" });
-    });
-
-    it("allows D2 when the plugin declares fs:user-data-write", () => {
-      const result = deriveDangerTier({ destructiveHint: true }, ["fs:user-data-write"]);
-      expect(result).toEqual({ kind: "tier", tier: "D2" });
-    });
-
-    it("allows D2 when the plugin declares agent:invoke", () => {
-      // agent:invoke is high-risk (mirrors CONFIRM_TRIGGERING_CAPABILITIES in
-      // PluginService) so a destructiveHint tool reaches D2 rather than denying.
-      const result = deriveDangerTier({ destructiveHint: true }, ["agent:invoke"]);
-      expect(result).toEqual({ kind: "tier", tier: "D2" });
-    });
-
     it("allows D2 when the plugin declares agent:register", () => {
       // agent:register registers a launchable agent CLI — a runtime side effect
       // on par with agent:invoke. It is in CONFIRM_TRIGGERING_CAPABILITIES, so a

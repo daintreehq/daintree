@@ -18,6 +18,8 @@ import { useSplitterKeys } from "@/hooks/useSplitterKeys";
 interface SidebarProps {
   width: number;
   onResize: (width: number) => void;
+  /** Resets the width preference; defaults to `onResize(DEFAULT_SIDEBAR_WIDTH)`. */
+  onResetWidth?: () => void;
   /**
    * Fires at the start of a pointer drag-resize so the parent can suppress
    * its `transition-[width]` while the user drags. Issue #7627.
@@ -41,6 +43,7 @@ const ICON_CLASS = "w-3.5 h-3.5 mr-2 shrink-0";
 export function Sidebar({
   width,
   onResize,
+  onResetWidth,
   onResizeStart,
   onResizeEnd,
   isVisible = true,
@@ -112,8 +115,9 @@ export function Sidebar({
   }, []);
 
   const handleResetWidth = useCallback(() => {
-    onResize(DEFAULT_SIDEBAR_WIDTH);
-  }, [onResize]);
+    if (onResetWidth) onResetWidth();
+    else onResize(DEFAULT_SIDEBAR_WIDTH);
+  }, [onResetWidth, onResize]);
 
   const handleKeyDown = useSplitterKeys({
     growKey: "ArrowRight",

@@ -1,23 +1,9 @@
 import { useEffect, useCallback, useId, useRef, useState } from "react";
 import { useShallow } from "zustand/react/shallow";
 import type { PulseRangeDays } from "@shared/types";
-import type { ForgeProjectHealthPayload } from "@shared/types/ipc/forge";
 import { usePulseStore, useProjectStore, PULSE_MAX_RETRIES } from "@/store";
 import { cn } from "@/lib/utils";
-import {
-  XCircle,
-  RefreshCw,
-  GitBranch,
-  CheckCircle2,
-  Clock,
-  CircleMinus,
-  Tag,
-  ShieldAlert,
-  GitPullRequest,
-  CircleDot,
-  GitMerge,
-  WifiOff,
-} from "lucide-react";
+import { XCircle, RefreshCw, GitBranch, WifiOff } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Spinner } from "@/components/ui/Spinner";
 import {
@@ -28,14 +14,11 @@ import { SpinningIcon } from "@/components/ui/SpinningIcon";
 import { Activity } from "@/components/icons";
 import { PulseHeatmap, getPulseHeatLevelBackground } from "./PulseHeatmap";
 import { PulseSummary } from "./PulseSummary";
+import { PulseHealthSignals } from "./PulseHealthSignals";
 import { getCoachLine, getUsableHealth } from "./coachLine";
 import { useProjectHealth } from "@/hooks/useProjectHealth";
 import { useGlobalMinuteTicker } from "@/hooks/useGlobalMinuteTicker";
-import { systemClient } from "@/clients/systemClient";
 import { formatTimeSince } from "@/components/Layout/FreshnessUtils";
-import { formatTimeAgo } from "@/utils/timeAgo";
-import { formatCompactCount, formatCountExact } from "@/lib/formatCount";
-import { pluralize } from "@/lib/pluralize";
 
 // Collapses paired window.focus + visibilitychange events that fire together
 // on restore-from-minimize. Short enough that legitimate user actions
@@ -56,171 +39,6 @@ const RANGE_OPTIONS: SegmentedRadioOption<RangeKey>[] = [
   { value: "120", label: "120d", ariaLabel: "120 days" },
   { value: "180", label: "180d", ariaLabel: "180 days" },
 ];
-
-function CIStatusIcon({ status }: { status: ForgeProjectHealthPayload["ciStatus"] }) {
-  switch (status) {
-    case "success":
-      return <CheckCircle2 className="w-3.5 h-3.5 text-status-success" />;
-    case "failure":
-    case "error":
-      return <XCircle className="w-3.5 h-3.5 text-status-error" />;
-    case "pending":
-    case "expected":
-      return <Clock className="w-3.5 h-3.5 text-status-warning" />;
-    default:
-      return <CircleMinus className="w-3.5 h-3.5 text-text-secondary" />;
-  }
-}
-
-function ciStatusLabel(status: ForgeProjectHealthPayload["ciStatus"]): string {
-  switch (status) {
-    case "success":
-      return "passing";
-    case "failure":
-      return "failing";
-    case "error":
-      return "error";
-    case "pending":
-    case "expected":
-      return "pending";
-    default:
-      return "no CI";
-  }
-}
-
-interface HealthChipProps {
-  icon: React.ReactNode;
-  label: string;
-  /** The chip's full meaning when its visible label is only a number. */
-  ariaLabel?: string;
-  onClick?: () => void;
-  className?: string;
-  tone?: "success" | "working" | "warning" | "danger" | "info" | "accent" | "neutral";
-}
-
-function getPulseChipToneStyle(tone: NonNullable<HealthChipProps["tone"]>): React.CSSProperties {
-  if (tone === "neutral") {
-    return {
-      background: "color-mix(in oklab, var(--color-text-primary) 6%, transparent)",
-      borderColor: "color-mix(in oklab, var(--color-text-primary) 8%, transparent)",
-      color: "var(--color-text-secondary)",
-    };
-  }
-
-  const palette: Record<Exclude<NonNullable<HealthChipProps["tone"]>, "neutral">, string> = {
-    success: "var(--color-status-success)",
-    working: "var(--color-state-working)",
-    warning: "var(--color-status-warning)",
-    danger: "var(--color-status-error)",
-    info: "var(--color-status-info)",
-    accent: "var(--color-accent-primary)",
-  };
-
-  const toneColor = palette[tone];
-  return {
-    background: `color-mix(in oklab, ${toneColor} 14%, transparent)`,
-    borderColor: `color-mix(in oklab, ${toneColor} 20%, transparent)`,
-    color: toneColor,
-  };
-}
-
-function HealthChip({
-  icon,
-  label,
-  ariaLabel,
-  onClick,
-  className,
-  tone = "neutral",
-}: HealthChipProps) {
-  const Wrapper = onClick ? "button" : "span";
-  return (
-    <Wrapper
-      className={cn(
-        "inline-flex items-center gap-1.5 rounded-full border px-2 py-0.5 text-2xs font-medium",
-        onClick && "cursor-pointer transition-colors hover:opacity-85",
-        className
-      )}
-      style={getPulseChipToneStyle(tone)}
-      onClick={onClick}
-      aria-label={ariaLabel}
-    >
-      {icon}
-      <span className="font-mono tabular-nums">{label}</span>
-    </Wrapper>
-  );
-}
-
-function HealthSignals({
-  health,
-  rangeDays,
-}: {
-  health: ForgeProjectHealthPayload;
-  rangeDays: PulseRangeDays;
-}) {
-  const openUrl = (path: string) => {
-    const url = path.startsWith("http") ? path : `${health.repoUrl}${path}`;
-    systemClient.openExternal(url);
-  };
-
-  const mergedInRange = health.mergeVelocity.mergedCounts[rangeDays] ?? 0;
-
-  return (
-    <div className="flex items-center gap-2 flex-wrap">
-      <HealthChip
-        icon={<CIStatusIcon status={health.ciStatus} />}
-        label={ciStatusLabel(health.ciStatus)}
-        onClick={health.ciStatus !== "none" ? () => openUrl("/actions") : undefined}
-        tone={
-          health.ciStatus === "failure" || health.ciStatus === "error"
-            ? "danger"
-            : health.ciStatus === "pending" || health.ciStatus === "expected"
-              ? "warning"
-              : health.ciStatus === "success"
-                ? "success"
-                : "neutral"
-        }
-      />
-      <HealthChip
-        icon={<CircleDot className="w-3.5 h-3.5 text-current" />}
-        label={formatCompactCount(health.issueCount)}
-        ariaLabel={`${formatCountExact(health.issueCount)} open issues`}
-        onClick={() => openUrl("/issues")}
-        tone="info"
-      />
-      <HealthChip
-        icon={<GitPullRequest className="w-3.5 h-3.5 text-current" />}
-        label={formatCompactCount(health.prCount)}
-        ariaLabel={`${formatCountExact(health.prCount)} open pull requests`}
-        onClick={() => openUrl("/pulls")}
-        tone="working"
-      />
-      {health.latestRelease && (
-        <HealthChip
-          icon={<Tag className="w-3.5 h-3.5 text-current" />}
-          label={`${health.latestRelease.tagName}${health.latestRelease.publishedAt ? ` (${formatTimeAgo(health.latestRelease.publishedAt)})` : ""}`}
-          onClick={() => openUrl(health.latestRelease!.url)}
-          tone="accent"
-        />
-      )}
-      {health.securityAlerts.visible && health.securityAlerts.count > 0 && (
-        <HealthChip
-          icon={<ShieldAlert className="w-3.5 h-3.5 text-current" />}
-          label={`${pluralize(health.securityAlerts.count, "alert")}`}
-          onClick={() => openUrl("/security/dependabot")}
-          tone="warning"
-        />
-      )}
-      {mergedInRange > 0 && (
-        <HealthChip
-          icon={<GitMerge className="w-3.5 h-3.5 text-current" />}
-          label={`${mergedInRange} merged (${rangeDays}d)`}
-          onClick={() => openUrl("/pulls?q=is%3Apr+is%3Amerged+sort%3Aupdated-desc")}
-          tone="success"
-        />
-      )}
-    </div>
-  );
-}
 
 // The default 60-day range spans nine or ten week columns; the bones hold
 // that calendar's footprint (weekday gutter, month row, seven rows) so the
@@ -281,10 +99,9 @@ function PulseSkeleton({ className }: { className?: string }) {
 
         <div className="border-t border-border-default pt-3 min-h-9">
           <div className="flex items-center gap-2">
-            <div data-skeleton-bone="" className="h-5 w-16 rounded-full pulse-skeleton-shimmer" />
-            <div data-skeleton-bone="" className="h-5 w-12 rounded-full pulse-skeleton-shimmer" />
-            <div data-skeleton-bone="" className="h-5 w-12 rounded-full pulse-skeleton-shimmer" />
-            <div data-skeleton-bone="" className="h-5 w-24 rounded-full pulse-skeleton-shimmer" />
+            <div data-skeleton-bone="" className="h-6 w-24 rounded-full pulse-skeleton-shimmer" />
+            <div data-skeleton-bone="" className="h-6 w-20 rounded-full pulse-skeleton-shimmer" />
+            <div data-skeleton-bone="" className="h-6 w-16 rounded-full pulse-skeleton-shimmer" />
           </div>
         </div>
 
@@ -312,10 +129,9 @@ function PulseSkeleton({ className }: { className?: string }) {
 function HealthSectionSkeleton() {
   return (
     <div className="animate-pulse-delayed flex items-center gap-2">
-      <div data-skeleton-bone="" className="h-5 pulse-skeleton-shimmer rounded-full w-16" />
-      <div data-skeleton-bone="" className="h-5 pulse-skeleton-shimmer rounded-full w-12" />
-      <div data-skeleton-bone="" className="h-5 pulse-skeleton-shimmer rounded-full w-12" />
-      <div data-skeleton-bone="" className="h-5 pulse-skeleton-shimmer rounded-full w-24" />
+      <div data-skeleton-bone="" className="h-6 pulse-skeleton-shimmer rounded-full w-24" />
+      <div data-skeleton-bone="" className="h-6 pulse-skeleton-shimmer rounded-full w-20" />
+      <div data-skeleton-bone="" className="h-6 pulse-skeleton-shimmer rounded-full w-16" />
     </div>
   );
 }
@@ -578,7 +394,7 @@ export function ProjectPulseCard({ worktreeId, className }: ProjectPulseCardProp
   // there is no signal to wait for, so the section stays out instead of
   // hinting at recovery steps that wouldn't help.
   const healthSection = health?.unsupported ? null : usableHealth ? (
-    <HealthSignals health={usableHealth} rangeDays={pulse.rangeDays} />
+    <PulseHealthSignals health={usableHealth} rangeDays={pulse.rangeDays} />
   ) : healthLoading ? (
     <HealthSectionSkeleton />
   ) : health && !health.hasRemote ? (
@@ -655,7 +471,7 @@ export function ProjectPulseCard({ worktreeId, className }: ProjectPulseCardProp
 
         <p className="text-xs text-text-primary">{getCoachLine(pulse, usableHealth)}</p>
 
-        {/* Health section: the wrapper reserves `min-h-9` (h-5 chip + pt-3) so
+        {/* Health section: the wrapper reserves `min-h-9` (h-6 chip + pt-3) so
             the four sub-variants — signals, skeleton, no-remote hint, offline
             hint — swap without pushing siblings down when health resolves after
             pulse (#7671).

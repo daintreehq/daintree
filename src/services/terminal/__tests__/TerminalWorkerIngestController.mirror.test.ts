@@ -34,6 +34,7 @@ vi.mock("@/clients", () => ({
     sendWorkerIngestRelease: vi.fn(),
     acknowledgeData: vi.fn(),
     acknowledgePortData: vi.fn(),
+    getPortAckGeneration: vi.fn(() => 0),
   },
 }));
 vi.mock("@/utils/logger", () => ({ logWarn: vi.fn() }));

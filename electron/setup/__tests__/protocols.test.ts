@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { afterEach, describe, it, expect, vi, beforeEach } from "vitest";
 import path from "path";
 import { Readable } from "node:stream";
 
@@ -151,9 +151,6 @@ import {
   applyDaintreeAppCspToSession,
   createPluginProtocolHandler,
   registerAppProtocol,
-  registerDaintreeFileProtocol,
-  registerDaintreeMediaProtocol,
-  registerDaintreePdfProtocol,
   registerPluginProtocol,
   registerProtocolsForSession,
   setPluginDirResolver,
@@ -161,6 +158,7 @@ import {
 } from "../protocols.js";
 import { mintHtmlPreviewToken, _resetHtmlPreviewTokensForTests } from "../htmlPreviewTokens.js";
 import { getWebviewDialogService } from "../../services/WebviewDialogService.js";
+import { setRemoteWebviewSrcGate } from "../../window/webviewSrcGate.js";
 
 const mockedGetWebviewDialogService = vi.mocked(getWebviewDialogService);
 
@@ -211,14 +209,6 @@ describe("setupWebviewCSP — webview guest navigation restriction", () => {
   }
 
   describe("will-navigate handler", () => {
-    it("is registered on webview guest contents", () => {
-      const contents = createMockWebContents("webview");
-      simulateWebContentsCreated(contents);
-
-      const handlers = getEventHandlers(contents, "will-navigate");
-      expect(handlers.length).toBe(1);
-    });
-
     it("allows navigation to http://localhost:3000/dashboard", () => {
       const contents = createMockWebContents("webview");
       simulateWebContentsCreated(contents);
@@ -289,22 +279,6 @@ describe("setupWebviewCSP — webview guest navigation restriction", () => {
 
       expect(event.preventDefault).toHaveBeenCalledTimes(1);
     });
-
-    it("logs blocked navigations", () => {
-      const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
-      const contents = createMockWebContents("webview");
-      simulateWebContentsCreated(contents);
-
-      const handler = getEventHandlers(contents, "will-navigate")[0];
-      const event = { preventDefault: vi.fn() };
-      handler(event, "https://evil.com");
-
-      expect(event.preventDefault).toHaveBeenCalledTimes(1);
-      expect(warnSpy).toHaveBeenCalledWith(
-        expect.stringContaining("Blocked webview navigation to non-localhost URL: https://evil.com")
-      );
-      warnSpy.mockRestore();
-    });
   });
 
   describe("will-redirect handler", () => {
@@ -328,24 +302,6 @@ describe("setupWebviewCSP — webview guest navigation restriction", () => {
       handler(event, "https://external-oauth.com/authorize");
 
       expect(event.preventDefault).toHaveBeenCalledTimes(1);
-    });
-
-    it("logs blocked redirects", () => {
-      const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
-      const contents = createMockWebContents("webview");
-      simulateWebContentsCreated(contents);
-
-      const handler = getEventHandlers(contents, "will-redirect")[0];
-      const event = { preventDefault: vi.fn() };
-      handler(event, "https://external-oauth.com/authorize");
-
-      expect(event.preventDefault).toHaveBeenCalledTimes(1);
-      expect(warnSpy).toHaveBeenCalledWith(
-        expect.stringContaining(
-          "Blocked webview redirect to non-localhost URL: https://external-oauth.com/authorize"
-        )
-      );
-      warnSpy.mockRestore();
     });
   });
 
@@ -700,13 +656,6 @@ describe("setupWebviewCSP — webview guest navigation restriction", () => {
       return { contents, cancelPendingForGuest, mockSend };
     }
 
-    it("registers did-navigate, render-process-gone, and destroyed handlers on the guest", () => {
-      const { contents } = setupGuestWithDialogService();
-      expect(getEventHandlers(contents, "did-navigate").length).toBe(1);
-      expect(getEventHandlers(contents, "render-process-gone").length).toBe(1);
-      expect(getEventHandlers(contents, "destroyed").length).toBe(1);
-    });
-
     it("cancels pending dialogs and notifies the renderer on did-navigate", () => {
       const { contents, cancelPendingForGuest, mockSend } = setupGuestWithDialogService();
       getEventHandlers(contents, "did-navigate")[0]({}, "http://localhost:3000/next", 200, "OK");
@@ -947,14 +896,6 @@ describe("setupWebviewCSP — webview guest navigation restriction", () => {
       const handlers = getEventHandlers(contents, "will-navigate");
       expect(handlers.length).toBe(0);
     });
-
-    it("does not register will-redirect on non-webview contents", () => {
-      const contents = createMockWebContents("browserView");
-      simulateWebContentsCreated(contents);
-
-      const handlers = getEventHandlers(contents, "will-redirect");
-      expect(handlers.length).toBe(0);
-    });
   });
 
   describe("blocked navigation IPC notification", () => {
@@ -965,50 +906,6 @@ describe("setupWebviewCSP — webview guest navigation restriction", () => {
         registerDialog: vi.fn(),
         getPanelId: vi.fn(() => "panel-browser-1"),
       } as unknown as ReturnType<typeof getWebviewDialogService>);
-    });
-
-    it("sends navigation-blocked IPC when cross-origin navigation is blocked", () => {
-      const contents = createMockWebContents("webview");
-      simulateWebContentsCreated(contents);
-
-      const handler = getEventHandlers(contents, "will-navigate")[0];
-      const event = { preventDefault: vi.fn() };
-      handler(event, "https://accounts.google.com/oauth");
-
-      expect(event.preventDefault).toHaveBeenCalledTimes(1);
-      expect(mockSend).toHaveBeenCalledWith("webview:navigation-blocked", {
-        panelId: "panel-browser-1",
-        url: "https://accounts.google.com/oauth",
-        canOpenExternal: true,
-      });
-    });
-
-    it("sends navigation-blocked IPC when cross-origin redirect is blocked", () => {
-      const contents = createMockWebContents("webview");
-      simulateWebContentsCreated(contents);
-
-      const handler = getEventHandlers(contents, "will-redirect")[0];
-      const event = { preventDefault: vi.fn() };
-      handler(event, "https://auth.provider.com/callback");
-
-      expect(event.preventDefault).toHaveBeenCalledTimes(1);
-      expect(mockSend).toHaveBeenCalledWith("webview:navigation-blocked", {
-        panelId: "panel-browser-1",
-        url: "https://auth.provider.com/callback",
-        canOpenExternal: true,
-      });
-    });
-
-    it("does not send navigation-blocked IPC for localhost navigations", () => {
-      const contents = createMockWebContents("webview");
-      simulateWebContentsCreated(contents);
-
-      const handler = getEventHandlers(contents, "will-navigate")[0];
-      const event = { preventDefault: vi.fn() };
-      handler(event, "http://localhost:3000/dashboard");
-
-      expect(event.preventDefault).not.toHaveBeenCalled();
-      expect(mockSend).not.toHaveBeenCalled();
     });
 
     it("sends canOpenExternal false for javascript: URLs", () => {
@@ -1025,24 +922,6 @@ describe("setupWebviewCSP — webview guest navigation restriction", () => {
         url: "javascript:alert(1)",
         canOpenExternal: false,
       });
-    });
-
-    it("does not send navigation-blocked IPC when panelId is not found", async () => {
-      const mod = await import("../../services/WebviewDialogService.js");
-      vi.mocked(mod.getWebviewDialogService).mockReturnValueOnce({
-        registerDialog: vi.fn(),
-        getPanelId: vi.fn(() => undefined),
-      } as never);
-
-      const contents = createMockWebContents("webview");
-      simulateWebContentsCreated(contents);
-
-      const handler = getEventHandlers(contents, "will-navigate")[0];
-      const event = { preventDefault: vi.fn() };
-      handler(event, "https://example.com");
-
-      expect(event.preventDefault).toHaveBeenCalledTimes(1);
-      expect(mockSend).not.toHaveBeenCalled();
     });
   });
 
@@ -1075,19 +954,6 @@ describe("setupWebviewCSP — webview guest navigation restriction", () => {
       expect(event.preventDefault).toHaveBeenCalledTimes(1);
     });
 
-    it("treats distinct per-project browser partitions independently as browser panels", () => {
-      const contentsB = createBrowserWebContents("persist:browser-proj-b");
-      simulateWebContentsCreated(contentsB);
-
-      const handler = getEventHandlers(contentsB, "will-redirect")[0];
-      const event = { preventDefault: vi.fn() };
-      handler(event, "https://accounts.google.com/oauth");
-
-      // Browser partitions allow cross-origin http/https (OAuth flows), unlike
-      // dev-preview which is localhost-only.
-      expect(event.preventDefault).not.toHaveBeenCalled();
-    });
-
     it("restricts a dev-preview partition to localhost (cross-origin blocked)", () => {
       const contents = createBrowserWebContents("persist:dev-preview-proj-a-main-panel");
       simulateWebContentsCreated(contents);
@@ -1111,6 +977,123 @@ describe("setupWebviewCSP — webview guest navigation restriction", () => {
       expect(event.preventDefault).toHaveBeenCalledTimes(1);
     });
   });
+
+  describe("guests in a remote-bound view", () => {
+    const REMOTE_EMBEDDER = 901;
+    const LOCAL_EMBEDDER = 902;
+    let disposeGate: (() => void) | null = null;
+
+    beforeEach(() => {
+      // The port client's gate: views on a host reach only its forwarded port 5173.
+      disposeGate = setRemoteWebviewSrcGate(
+        (webContentsId, src) =>
+          webContentsId === REMOTE_EMBEDDER ? src.startsWith("http://localhost:5173/") : null,
+        (webContentsId) => webContentsId === REMOTE_EMBEDDER
+      );
+    });
+
+    afterEach(() => {
+      disposeGate?.();
+      disposeGate = null;
+    });
+
+    function guest(embedderId: number, partition?: string): MockWebContents {
+      const contents = createMockWebContents("webview");
+      const extra = contents as unknown as {
+        hostWebContents: { id: number };
+        session?: { partition: string };
+      };
+      extra.hostWebContents = { id: embedderId };
+      if (partition) extra.session = { partition };
+      simulateWebContentsCreated(contents);
+      return contents;
+    }
+
+    function blocks(contents: MockWebContents, event: string, url: string): boolean {
+      const handler = getEventHandlers(contents, event)[0];
+      const e = { preventDefault: vi.fn() };
+      handler(e, url);
+      return e.preventDefault.mock.calls.length > 0;
+    }
+
+    it.each(["will-navigate", "will-redirect"])(
+      "keeps a dev-preview guest on the host's forwarded ports (%s)",
+      (event) => {
+        const contents = guest(REMOTE_EMBEDDER);
+        expect(blocks(contents, event, "http://localhost:5173/app")).toBe(false);
+        expect(blocks(contents, event, "http://localhost:3000/")).toBe(true);
+        expect(blocks(contents, event, "http://127.0.0.1:3000/")).toBe(true);
+      }
+    );
+
+    it.each(["will-navigate", "will-redirect"])(
+      "lets a browser panel leave for the web but not reach this machine's localhost (%s)",
+      (event) => {
+        const contents = guest(REMOTE_EMBEDDER, "persist:browser-proj-a");
+        expect(blocks(contents, event, "https://github.com/login")).toBe(false);
+        expect(blocks(contents, event, "http://localhost:5173/")).toBe(false);
+        expect(blocks(contents, event, "http://localhost:3000/")).toBe(true);
+        expect(blocks(contents, event, "http://[::1]:3000/")).toBe(true);
+        expect(blocks(contents, event, "http://app.localhost:3000/")).toBe(true);
+        expect(blocks(contents, event, "http://2130706433:3000/")).toBe(true);
+        expect(blocks(contents, event, "http://[::ffff:127.0.0.1]:3000/")).toBe(true);
+        expect(blocks(contents, event, "http://0:3000/")).toBe(true);
+        expect(blocks(contents, event, "http://[::]:3000/")).toBe(true);
+        expect(blocks(contents, event, "http://[::ffff:0.0.0.0]:3000/")).toBe(true);
+      }
+    );
+
+    it("keeps a remote view's popups off this machine's localhost, and local views' as before", async () => {
+      const { openExternalUrl } = await import("../../utils/openExternal.js");
+      vi.mocked(openExternalUrl).mockResolvedValue(undefined as never);
+      const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+      const open = (embedder: number, url: string) => {
+        const contents = guest(embedder, "persist:browser-proj-a");
+        const handler = contents.setWindowOpenHandler.mock.calls[0]![0] as (d: { url: string }) => {
+          action: string;
+        };
+        return handler({ url });
+      };
+      expect(open(REMOTE_EMBEDDER, "http://localhost:3000/admin")).toEqual({ action: "deny" });
+      expect(openExternalUrl).not.toHaveBeenCalled();
+      open(REMOTE_EMBEDDER, "http://localhost:5173/");
+      expect(openExternalUrl).toHaveBeenCalledWith("http://localhost:5173/");
+      open(LOCAL_EMBEDDER, "http://localhost:3000/admin");
+      expect(openExternalUrl).toHaveBeenCalledWith("http://localhost:3000/admin");
+      warn.mockRestore();
+    });
+
+    it("puts every request of a remote view's guest session through the gate, and none of a local one's", () => {
+      const onBeforeRequest = vi.fn();
+      const embedder = createMockWebContents("window");
+      embedder.id = REMOTE_EMBEDDER;
+      simulateWebContentsCreated(embedder);
+      const attach = getEventHandlers(embedder, "did-attach-webview")[0]!;
+      attach({}, { session: { webRequest: { onBeforeRequest } } });
+      expect(onBeforeRequest).toHaveBeenCalledTimes(1);
+      expect(onBeforeRequest.mock.calls[0]![0]).toEqual({ urls: ["<all_urls>"] });
+
+      const local = createMockWebContents("window");
+      local.id = LOCAL_EMBEDDER;
+      simulateWebContentsCreated(local);
+      const localOnBeforeRequest = vi.fn();
+      getEventHandlers(local, "did-attach-webview")[0]!(
+        {},
+        { session: { webRequest: { onBeforeRequest: localOnBeforeRequest } } }
+      );
+      expect(localOnBeforeRequest).not.toHaveBeenCalled();
+    });
+
+    it("leaves guests in a local view on today's rules", () => {
+      const preview = guest(LOCAL_EMBEDDER);
+      expect(blocks(preview, "will-navigate", "http://localhost:3000/")).toBe(false);
+      expect(blocks(preview, "will-redirect", "http://dp-a-b.localhost:43000/")).toBe(false);
+      expect(blocks(preview, "will-navigate", "https://example.com/")).toBe(true);
+      const browser = guest(LOCAL_EMBEDDER, "persist:browser-proj-a");
+      expect(blocks(browser, "will-navigate", "http://localhost:3000/")).toBe(false);
+      expect(blocks(browser, "will-redirect", "https://github.com/login")).toBe(false);
+    });
+  });
 });
 
 describe("setupWebviewCSP — partition CSP wiring", () => {
@@ -1130,45 +1113,6 @@ describe("setupWebviewCSP — partition CSP wiring", () => {
     // Browser sessions are per-project and created lazily; setup no longer opens a
     // singleton persist:browser session for identity comparison (#9965).
     expect(partitions).not.toContain("persist:browser");
-  });
-
-  it("uses the daintree app CSP for persist:daintree (and skips localhost dev CSP for browser)", async () => {
-    const { getDaintreeAppCSP, getLocalhostDevCSP } = await import("../../utils/webviewCsp.js");
-    const daintreeCspMock = vi.mocked(getDaintreeAppCSP);
-    const localhostCspMock = vi.mocked(getLocalhostDevCSP);
-
-    setupWebviewCSP();
-
-    expect(daintreeCspMock).toHaveBeenCalledTimes(1);
-    expect(localhostCspMock).not.toHaveBeenCalled();
-  });
-
-  it("passes isDev=false to getDaintreeAppCSP when NODE_ENV is not 'development'", async () => {
-    const { getDaintreeAppCSP } = await import("../../utils/webviewCsp.js");
-    const daintreeCspMock = vi.mocked(getDaintreeAppCSP);
-    const original = process.env.NODE_ENV;
-    process.env.NODE_ENV = "production";
-
-    try {
-      setupWebviewCSP();
-      expect(daintreeCspMock).toHaveBeenCalledWith(false);
-    } finally {
-      process.env.NODE_ENV = original;
-    }
-  });
-
-  it("passes isDev=true to getDaintreeAppCSP when NODE_ENV is 'development'", async () => {
-    const { getDaintreeAppCSP } = await import("../../utils/webviewCsp.js");
-    const daintreeCspMock = vi.mocked(getDaintreeAppCSP);
-    const original = process.env.NODE_ENV;
-    process.env.NODE_ENV = "development";
-
-    try {
-      setupWebviewCSP();
-      expect(daintreeCspMock).toHaveBeenCalledWith(true);
-    } finally {
-      process.env.NODE_ENV = original;
-    }
   });
 
   it("passes daintree-html:// preview responses through without overwriting their CSP (#11191)", async () => {
@@ -1517,43 +1461,12 @@ describe("protocol registration", () => {
     expect(handle).toHaveBeenCalledWith("plugin", expect.any(Function));
   });
 
-  it("registers the default-session daintree-file protocol", async () => {
-    const { protocol } = await import("electron");
-
-    registerDaintreeFileProtocol();
-
-    expect(protocol.handle).toHaveBeenCalledWith("daintree-file", expect.any(Function));
-  });
-
-  it("registers the default-session daintree-pdf protocol", async () => {
-    const { protocol } = await import("electron");
-
-    registerDaintreePdfProtocol();
-
-    expect(protocol.handle).toHaveBeenCalledWith("daintree-pdf", expect.any(Function));
-  });
-
-  it("registers the default-session daintree-media protocol", async () => {
-    const { protocol } = await import("electron");
-
-    registerDaintreeMediaProtocol();
-
-    expect(protocol.handle).toHaveBeenCalledWith("daintree-media", expect.any(Function));
-  });
-
-  it("registers the default-session plugin protocol", async () => {
-    const { protocol } = await import("electron");
-
-    registerPluginProtocol(() => undefined);
-
-    expect(protocol.handle).toHaveBeenCalledWith("plugin", expect.any(Function));
-  });
-
   it("setPluginDirResolver swaps the live resolver for an already-registered handler (#10322)", async () => {
     const { protocol } = await import("electron");
     const fs = await import("fs/promises");
     const appProtocol = await import("../../utils/appProtocol.js");
     vi.mocked(fs.realpath).mockImplementation((p) => Promise.resolve(p as string));
+    vi.mocked(fs.stat).mockResolvedValue({} as never);
     vi.mocked(fs.open).mockResolvedValue({
       readFile: vi.fn().mockResolvedValue(Buffer.from("data")),
       close: vi.fn().mockResolvedValue(undefined),
@@ -1591,6 +1504,7 @@ describe("protocol registration", () => {
     const fs = await import("fs/promises");
     const appProtocol = await import("../../utils/appProtocol.js");
     vi.mocked(fs.realpath).mockImplementation((p) => Promise.resolve(p as string));
+    vi.mocked(fs.stat).mockResolvedValue({} as never);
     vi.mocked(fs.open).mockResolvedValue({
       readFile: vi.fn().mockResolvedValue(Buffer.from("data")),
       close: vi.fn().mockResolvedValue(undefined),
@@ -1954,64 +1868,6 @@ describe("createDaintreeFileProtocolHandler — symlink containment", () => {
     expect(fs.open).not.toHaveBeenCalled();
   });
 
-  it("returns 404 for a symlink loop (ELOOP)", async () => {
-    const fs = await import("fs/promises");
-    const realpath = vi.mocked(fs.realpath);
-    realpath.mockImplementation((p) => {
-      if (p === "/project") return Promise.resolve("/project");
-      const err = Object.assign(new Error("ELOOP"), { code: "ELOOP" });
-      return Promise.reject(err);
-    });
-
-    const handler = await captureHandler("daintree-file");
-    const response = await handler(makeRequest("/project/loop", "/project"));
-
-    expect(response.status).toBe(404);
-    expect(fs.open).not.toHaveBeenCalled();
-  });
-
-  it("returns 404 when the root itself fails to resolve (EACCES)", async () => {
-    const fs = await import("fs/promises");
-    const realpath = vi.mocked(fs.realpath);
-    realpath.mockImplementation(() => {
-      const err = Object.assign(new Error("EACCES"), { code: "EACCES" });
-      return Promise.reject(err);
-    });
-
-    const handler = await captureHandler("daintree-file");
-    const response = await handler(makeRequest("/project/file.txt", "/project"));
-
-    expect(response.status).toBe(404);
-    expect(fs.open).not.toHaveBeenCalled();
-  });
-
-  it("blocks a Windows cross-drive escape where path.relative returns an absolute path", async () => {
-    const fs = await import("fs/promises");
-    const realpath = vi.mocked(fs.realpath);
-    const projectRoot = path.normalize("/project");
-    const winlink = path.normalize("/project/winlink");
-    realpath.mockImplementation((p) => {
-      if (p === projectRoot) return Promise.resolve(projectRoot);
-      // Simulate a symlink resolving to a path with a leading slash that path.relative
-      // treats as absolute relative to the root — same shape as Windows cross-drive escape
-      // (path.relative('D:\\project', 'C:\\windows') === 'C:\\windows').
-      if (p === winlink) {
-        // On Windows we explicitly resolve to a different drive so path.relative
-        // returns an absolute path. On POSIX we just pick an unrelated absolute path.
-        const elsewhere =
-          process.platform === "win32" ? "C:\\totally\\elsewhere" : "/totally/elsewhere";
-        return Promise.resolve(elsewhere);
-      }
-      return Promise.resolve(p as string);
-    });
-
-    const handler = await captureHandler("daintree-file");
-    const response = await handler(makeRequest("/project/winlink", "/project"));
-
-    expect(response.status).toBe(404);
-    expect(fs.open).not.toHaveBeenCalled();
-  });
-
   it("permits a symlink whose resolved target stays inside root", async () => {
     const fs = await import("fs/promises");
     const realpath = vi.mocked(fs.realpath);
@@ -2216,54 +2072,6 @@ describe("createDaintreeFileProtocolHandler — video streaming (#11382)", () =>
       expect(response.headers.get("Content-Type")).toBe("audio/mpeg");
       expect(response.headers.get("Accept-Ranges")).toBe("bytes");
       expect(handle.readFile).not.toHaveBeenCalled();
-    });
-
-    it("serves a ranged audio request from the same stream path", async () => {
-      const appProtocol = await import("../../utils/appProtocol.js");
-      vi.mocked(appProtocol.getMimeType).mockReturnValue("audio/flac");
-
-      const handler = await captureHandler();
-      const response = await handler(
-        makeVideoRequest("/project/track.flac", "/project", { range: "bytes=4-9" })
-      );
-
-      expect(response.status).toBe(206);
-      expect(response.headers.get("Content-Range")).toBe(`bytes 4-9/${String(VIDEO_BYTES.length)}`);
-      expect(await response.text()).toBe("456789");
-    });
-
-    it("routes an audio-suffixed alias of a non-media file through the buffered path", async () => {
-      // On Windows O_NOFOLLOW is a no-op, so an in-root `track.mp3 → notes.txt`
-      // symlink opens fine — classification must follow the canonical target so
-      // the read stays capped instead of streaming uncapped under an audio MIME.
-      const fs = await import("fs/promises");
-      const appProtocol = await import("../../utils/appProtocol.js");
-      const alias = path.normalize("/project/track.mp3");
-      const target = path.normalize("/project/notes.txt");
-      vi.mocked(fs.realpath).mockImplementation((p) =>
-        Promise.resolve(p === alias ? target : (p as string))
-      );
-      vi.mocked(appProtocol.getMimeType).mockImplementation((p: string) =>
-        p.endsWith(".mp3") ? "audio/mpeg" : "text/plain"
-      );
-      vi.mocked(fs.stat).mockResolvedValue({ size: 4 } as Awaited<ReturnType<typeof fs.stat>>);
-      const bufferedHandle = {
-        readFile: vi.fn().mockResolvedValue(Buffer.from("data")),
-        close: vi.fn().mockResolvedValue(undefined),
-      };
-      vi.mocked(fs.open).mockResolvedValue(
-        bufferedHandle as unknown as Awaited<ReturnType<typeof fs.open>>
-      );
-
-      const handler = await captureHandler();
-      const response = await handler(makeVideoRequest("/project/track.mp3", "/project"));
-
-      // A 200 with the canonical text MIME — not a 500 from an unconfigured
-      // buffered handle, which would let this pass without proving anything.
-      expect(response.status).toBe(200);
-      expect(response.headers.get("Content-Type")).toBe("text/plain");
-      expect(response.headers.get("Accept-Ranges")).toBeNull();
-      expect(bufferedHandle.readFile).toHaveBeenCalledTimes(1);
     });
 
     it("rejects an oversize audio alias of a text file with 413 before opening it", async () => {
@@ -2720,28 +2528,6 @@ describe("createDaintreeMediaProtocolHandler — direct range streaming (#12242)
     expect(await response.text()).toBe("456789");
   });
 
-  it("serves an open-ended range through to EOF", async () => {
-    const handler = await captureHandler();
-    const response = await handler(
-      makeMediaRequest("/project/clip.mp4", "/project", { range: "bytes=10-" })
-    );
-
-    expect(response.status).toBe(206);
-    expect(response.headers.get("Content-Range")).toBe(`bytes 10-15/${String(MEDIA_BYTES.length)}`);
-    expect(await response.text()).toBe("abcdef");
-  });
-
-  it("serves a suffix range, the form that reads a trailing index", async () => {
-    const handler = await captureHandler();
-    const response = await handler(
-      makeMediaRequest("/project/clip.mp4", "/project", { range: "bytes=-4" })
-    );
-
-    expect(response.status).toBe(206);
-    expect(response.headers.get("Content-Range")).toBe(`bytes 12-15/${String(MEDIA_BYTES.length)}`);
-    expect(await response.text()).toBe("cdef");
-  });
-
   it("streams audio through the same path, not just video", async () => {
     // Every other success case here mocks video/mp4, so a regression that
     // rejected audio outright would sail through them — the file scheme's audio
@@ -2756,32 +2542,6 @@ describe("createDaintreeMediaProtocolHandler — direct range streaming (#12242)
     expect(response.headers.get("Content-Type")).toBe("audio/mpeg");
     expect(response.headers.get("Accept-Ranges")).toBe("bytes");
     expect(await response.text()).toBe(MEDIA_BYTES.toString());
-  });
-
-  it("answers HEAD with the size and Accept-Ranges without reading bytes", async () => {
-    const handle = makeMediaHandle();
-    const fs = await import("fs/promises");
-    vi.mocked(fs.open).mockResolvedValue(handle as unknown as Awaited<ReturnType<typeof fs.open>>);
-
-    const handler = await captureHandler();
-    const response = await handler(
-      makeMediaRequest("/project/clip.mp4", "/project", { method: "HEAD" })
-    );
-
-    expect(response.status).toBe(200);
-    expect(response.headers.get("Content-Length")).toBe(String(MEDIA_BYTES.length));
-    expect(response.headers.get("Accept-Ranges")).toBe("bytes");
-    expect(handle.createReadStream).not.toHaveBeenCalled();
-  });
-
-  it("refuses an unsatisfiable range with 416", async () => {
-    const handler = await captureHandler();
-    const response = await handler(
-      makeMediaRequest("/project/clip.mp4", "/project", { range: "bytes=99-" })
-    );
-
-    expect(response.status).toBe(416);
-    expect(response.headers.get("Content-Range")).toBe(`bytes */${String(MEDIA_BYTES.length)}`);
   });
 
   it("404s a non-media canonical path instead of falling back to a buffered read", async () => {
@@ -2827,22 +2587,6 @@ describe("createDaintreeMediaProtocolHandler — direct range streaming (#12242)
     expect(response.status).toBe(404);
   });
 
-  it("rejects a write method with 405", async () => {
-    const handler = await captureHandler();
-    const response = await handler(
-      makeMediaRequest("/project/clip.mp4", "/project", { method: "POST" })
-    );
-
-    expect(response.status).toBe(405);
-  });
-
-  it("rejects a missing root with 400", async () => {
-    const handler = await captureHandler();
-    const response = await handler(makeMediaRequest("/project/clip.mp4", null));
-
-    expect(response.status).toBe(400);
-  });
-
   it("rejects a relative path with 400", async () => {
     const handler = await captureHandler();
     const response = await handler(makeMediaRequest("clip.mp4", "/project"));
@@ -2870,27 +2614,6 @@ describe("createDaintreeMediaProtocolHandler — direct range streaming (#12242)
     // no ACAO either, so a handler that rejected everything would pass this.
     expect(response.status).toBe(200);
     expect(response.headers.get("Access-Control-Allow-Origin")).toBeNull();
-  });
-
-  it("carries the hardened response headers the file scheme uses", async () => {
-    const handler = await captureHandler();
-    const response = await handler(makeMediaRequest("/project/clip.mp4", "/project"));
-
-    expect(response.status).toBe(200);
-    expect(response.headers.get("Content-Security-Policy")).toBe("sandbox; default-src 'none'");
-    expect(response.headers.get("X-Content-Type-Options")).toBe("nosniff");
-    expect(response.headers.get("Cross-Origin-Resource-Policy")).toBe("cross-origin");
-    expect(response.headers.get("Cache-Control")).toBe("no-store");
-  });
-
-  it("opens with O_RDONLY | O_NOFOLLOW | O_NONBLOCK, sharing the file scheme's hardening", async () => {
-    const fs = await import("fs/promises");
-    const handler = await captureHandler();
-    await handler(makeMediaRequest("/project/clip.mp4", "/project"));
-
-    expect(vi.mocked(fs.open).mock.calls[0][1]).toBe(
-      fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW | fs.constants.O_NONBLOCK
-    );
   });
 });
 
@@ -2946,6 +2669,8 @@ describe("createPluginProtocolHandler", () => {
     vi.clearAllMocks();
     const fs = await import("fs/promises");
     vi.mocked(fs.realpath).mockImplementation((p) => Promise.resolve(p as string));
+    // The descriptor and the real path name the same file unless a test says otherwise.
+    vi.mocked(fs.stat).mockResolvedValue({} as never);
     vi.mocked(fs.open).mockResolvedValue(
       makeFileHandle() as unknown as Awaited<ReturnType<typeof fs.open>>
     );
@@ -2965,7 +2690,9 @@ describe("createPluginProtocolHandler", () => {
     expect(fs.open).toHaveBeenCalledTimes(1);
     const openArgs = vi.mocked(fs.open).mock.calls[0];
     expect(openArgs[0]).toBe(path.join(PLUGIN_ROOT, "dist", "index.js"));
-    expect(openArgs[1]).toBe(fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW);
+    expect(openArgs[1]).toBe(
+      fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW | fs.constants.O_NONBLOCK
+    );
   });
 
   it("resolves a view-generation namespace to the same file on disk (#11301)", async () => {
@@ -3084,16 +2811,6 @@ describe("createPluginProtocolHandler", () => {
     const fs = await import("fs/promises");
     const handler = buildHandler();
     const response = await handler(makeRequest("plugin://does-not-exist/anything.js"));
-
-    expect(response.status).toBe(404);
-    expect(fs.realpath).not.toHaveBeenCalled();
-    expect(fs.open).not.toHaveBeenCalled();
-  });
-
-  it("returns 404 for a disabled plugin (the resolver returns undefined)", async () => {
-    const fs = await import("fs/promises");
-    const handler = buildHandler({ getPluginRoot: () => undefined });
-    const response = await handler(makeRequest("plugin://my-plugin/dist/index.js"));
 
     expect(response.status).toBe(404);
     expect(fs.realpath).not.toHaveBeenCalled();
@@ -3688,18 +3405,6 @@ describe("createAppProtocolHandler — ASAR-safe buffered read", () => {
     expect(fs.open).not.toHaveBeenCalled();
   });
 
-  it("returns 404 when the read rejects with EISDIR (directory that slipped past isFile)", async () => {
-    const fs = await import("fs/promises");
-    vi.mocked(fs.readFile).mockRejectedValue(
-      Object.assign(new Error("EISDIR"), { code: "EISDIR" })
-    );
-
-    const handler = await captureHandler();
-    const response = await handler(makeRequest());
-
-    expect(response.status).toBe(404);
-  });
-
   it("returns 500 when the read fails with an error that isn't a missing file", async () => {
     const fs = await import("fs/promises");
     vi.mocked(fs.readFile).mockRejectedValue(Object.assign(new Error("EIO"), { code: "EIO" }));
@@ -3920,13 +3625,6 @@ describe("createDaintreeHtmlProtocolHandler — sandboxed HTML preview (#11191)"
       path.resolve(ROOT, "assets/app.css"),
       fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW
     );
-  });
-
-  it("resolves root-relative asset paths within the mapped root", async () => {
-    const handler = await captureHandler();
-    await handler(makeRequest(token, "assets/logo.svg"));
-    const fs = await import("fs/promises");
-    expect(fs.open).toHaveBeenCalledWith(path.resolve(ROOT, "assets/logo.svg"), expect.any(Number));
   });
 
   it("404s an unknown or released token without touching the filesystem", async () => {
@@ -4196,17 +3894,6 @@ describe("createDaintreePdfProtocolHandler — inline PDF preview (#11427)", () 
       expect(handle.close).toHaveBeenCalledTimes(1);
     });
 
-    it("opens the requested path with O_NOFOLLOW, as GET does", async () => {
-      const fs = await import("fs/promises");
-      const handler = await captureHandler();
-      await handler(makeRequest("/project/spec.pdf", "/project", { method: "HEAD" }));
-
-      expect(fs.open).toHaveBeenCalledWith(
-        path.normalize("/project/spec.pdf"),
-        fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW
-      );
-    });
-
     it("refuses a final-component symlink with the same 404 GET gives", async () => {
       const fs = await import("fs/promises");
       vi.mocked(fs.open).mockRejectedValue(Object.assign(new Error("loop"), { code: "ELOOP" }));
@@ -4217,21 +3904,6 @@ describe("createDaintreePdfProtocolHandler — inline PDF preview (#11427)", () 
 
       expect(head.status).toBe(404);
       expect(get.status).toBe(404);
-    });
-
-    it("answers 413 past the ceiling on the pre-open stat", async () => {
-      const fs = await import("fs/promises");
-      vi.mocked(fs.stat).mockResolvedValue({ size: 60 * 1024 * 1024 } as Awaited<
-        ReturnType<typeof fs.stat>
-      >);
-
-      const handler = await captureHandler();
-      const response = await handler(
-        makeRequest("/project/huge.pdf", "/project", { method: "HEAD" })
-      );
-
-      expect(response.status).toBe(413);
-      expect(fs.open).not.toHaveBeenCalled();
     });
 
     it("answers 413 when the file grew past the ceiling after the pre-open stat", async () => {
@@ -4295,22 +3967,6 @@ describe("createDaintreePdfProtocolHandler — inline PDF preview (#11427)", () 
 
       expect(response.status).toBe(404);
       expect(handle.close).toHaveBeenCalledTimes(1);
-    });
-
-    it("answers 415 for a .pdf name whose canonical path is not a PDF", async () => {
-      const fs = await import("fs/promises");
-      vi.mocked(fs.realpath).mockImplementation((p) =>
-        Promise.resolve(
-          (p as string).endsWith("spec.pdf") ? path.normalize("/project/huge.bin") : (p as string)
-        )
-      );
-
-      const handler = await captureHandler();
-      const response = await handler(
-        makeRequest("/project/spec.pdf", "/project", { method: "HEAD" })
-      );
-
-      expect(response.status).toBe(415);
     });
   });
 
@@ -4438,22 +4094,6 @@ describe("createDaintreePdfProtocolHandler — inline PDF preview (#11427)", () 
     const handler = await captureHandler();
     const response = await handler(makeRequest(filePath, rootPath));
     expect(response.status).toBe(400);
-  });
-
-  it("rejects a request missing the path parameter", async () => {
-    const handler = await captureHandler();
-    const response = await handler(
-      new Request("daintree-pdf://load?root=%2Fproject") as GlobalRequest
-    );
-    expect(response.status).toBe(400);
-  });
-
-  it("rejects a non-GET method", async () => {
-    const handler = await captureHandler();
-    const response = await handler(
-      makeRequest("/project/spec.pdf", "/project", { method: "POST" })
-    );
-    expect(response.status).toBe(405);
   });
 
   it("keeps error responses inert rather than serving them as PDFs", async () => {

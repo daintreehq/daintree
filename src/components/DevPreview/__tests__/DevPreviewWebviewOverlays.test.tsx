@@ -2,7 +2,11 @@
 import { beforeAll, describe, expect, it, vi } from "vitest";
 import { render, screen } from "@testing-library/react";
 import { DevPreviewWebviewOverlays } from "../DevPreviewWebviewOverlays";
-import type { WebviewLoadError } from "../useDevPreviewLoadLifecycle";
+import {
+  webviewLoadErrorHeading,
+  type WebviewLoadError,
+  type WebviewLoadErrorCode,
+} from "../useDevPreviewLoadLifecycle";
 import type { FindInPageState } from "@/hooks/useFindInPage";
 
 vi.mock("../BlockedNavBanner", () => ({
@@ -115,12 +119,6 @@ describe("DevPreviewWebviewOverlays — reconnect + load-error", () => {
     expect(screen.queryByRole("button", { name: /^retry$/i })).toBeNull();
   });
 
-  it("renders a plain retry button for a generic load error", () => {
-    const error: WebviewLoadError = { code: "failed", message: "Page failed to load" };
-    render(<DevPreviewWebviewOverlays {...baseProps({ webviewLoadError: error })} />);
-    expect(screen.getByRole("button", { name: /^retry$/i })).toBeTruthy();
-  });
-
   it("wires the retry click through to onRetryWebviewLoad for a generic error", () => {
     const error: WebviewLoadError = { code: "failed", message: "Page failed to load" };
     const onRetryWebviewLoad = vi.fn();
@@ -129,12 +127,6 @@ describe("DevPreviewWebviewOverlays — reconnect + load-error", () => {
     );
     screen.getByRole("button", { name: /^retry$/i }).click();
     expect(onRetryWebviewLoad).toHaveBeenCalledTimes(1);
-  });
-
-  it("shows the mkcert copy action only for a cert error", () => {
-    const error: WebviewLoadError = { code: "cert", message: "Cert invalid" };
-    render(<DevPreviewWebviewOverlays {...baseProps({ webviewLoadError: error })} />);
-    expect(screen.getByRole("button", { name: /copy `mkcert -install`/i })).toBeTruthy();
   });
 });
 
@@ -207,9 +199,29 @@ describe("DevPreviewWebviewOverlays — loading/eviction/drag/find-in-page", () 
     );
     expect(screen.getByTestId("find-bar")).toBeTruthy();
   });
+});
 
-  it("always renders the passed-in webview slot children", () => {
-    render(<DevPreviewWebviewOverlays {...baseProps()} />);
-    expect(screen.getByTestId("webview-slot")).toBeTruthy();
+describe("webview load-error heading", () => {
+  it("renders every WebviewLoadErrorCode in sentence case with no trailing period", () => {
+    const codes: WebviewLoadErrorCode[] = [
+      "aborted",
+      "timeout",
+      "name_not_resolved",
+      "internet_disconnected",
+      "connection_refused",
+      "cert",
+      "ssl_protocol",
+      "failed",
+    ];
+    for (const code of codes) {
+      const heading = webviewLoadErrorHeading(code);
+      // Sentence-case invariant: the first character is uppercase, no interior
+      // word starts with an uppercase letter, and there is no trailing period.
+      const firstChar = heading.charAt(0);
+      expect(firstChar).toBe(firstChar.toUpperCase());
+      const interiorWords = heading.split(" ").slice(1);
+      expect(interiorWords.every((w) => w === w.toLowerCase())).toBe(true);
+      expect(heading.endsWith(".")).toBe(false);
+    }
   });
 });

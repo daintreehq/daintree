@@ -19,7 +19,6 @@ import {
   tokensInBundle,
   type ProgressRecord,
 } from "../lib/copyTreeFixture";
-import { classifyMetric } from "../lib/comparability";
 import { allScenarios } from "../scenarios";
 
 /**
@@ -319,20 +318,6 @@ describe("perf copytree progress grading", () => {
 });
 
 describe("perf copytree scenarios", () => {
-  const ids = ["PERF-390", "PERF-391", "PERF-392"];
-
-  it("declares all three scenarios with count-class predicates", () => {
-    for (const id of ids) {
-      const scenario = allScenarios.find((candidate) => candidate.id === id);
-      expect(scenario).toBeDefined();
-      const correctness = scenario?.correctness ?? [];
-      expect(correctness.length).toBeGreaterThan(0);
-      for (const name of correctness) {
-        expect(`${name}:${classifyMetric(name)}`).toBe(`${name}:count`);
-      }
-    }
-  });
-
   it("grades every operation generate() performs, one accumulator each", () => {
     const scenario = allScenarios.find((candidate) => candidate.id === "PERF-390");
     expect([...(scenario?.correctness ?? [])].sort()).toEqual([

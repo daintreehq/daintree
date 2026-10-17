@@ -103,6 +103,16 @@ describe("deriveProjectSlug", () => {
       "-Users-x-Projects-daintree-worktrees-feature-a"
     );
   });
+
+  it("turns every other non-alphanumeric character into a dash, as Claude Code does", () => {
+    expect(deriveProjectSlug("/Users/john.smith/.claude/worktrees/my_app v2")).toBe(
+      "-Users-john-smith--claude-worktrees-my-app-v2"
+    );
+  });
+
+  it("encodes a Windows drive path the way Claude Code names its directory", () => {
+    expect(deriveProjectSlug("C:\\Users\\me\\Projects\\app")).toBe("C--Users-me-Projects-app");
+  });
 });
 
 describe("findSubagentsDir", () => {

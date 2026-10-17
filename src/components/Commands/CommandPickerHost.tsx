@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useInsertionEffect, useRef, useState } from "react";
 import { useShallow } from "zustand/react/shallow";
 import { useDohertyGate } from "@/hooks/useDeferredLoading";
 import { useCommandStore } from "@/store/commandStore";
@@ -7,16 +7,24 @@ import { CommandBuilder } from "./CommandBuilder";
 import { AppDialog } from "@/components/ui/AppDialog";
 import { Spinner } from "@/components/ui/Spinner";
 import { InlineStatusBanner } from "@/components/Terminal/InlineStatusBanner";
+import { suppressPaletteFocusRestore } from "@/components/ui/paletteFocusRestore";
 import type { CommandManifestEntry, CommandContext, CommandResult } from "@shared/types/commands";
 
 interface CommandPickerHostProps {
+  /**
+   * The composer this host belongs to, matched against the store's
+   * `pickerOwnerId`. Omitted, the host answers every opening — right only
+   * where it is the one host mounted.
+   */
+  ownerId?: string;
   context: CommandContext;
   onCommandExecuted?: (commandId: string, result: CommandResult) => void;
 }
 
-export function CommandPickerHost({ context, onCommandExecuted }: CommandPickerHostProps) {
+export function CommandPickerHost({ ownerId, context, onCommandExecuted }: CommandPickerHostProps) {
   const {
-    isPickerOpen,
+    isPickerOpen: isAnyPickerOpen,
+    pickerOwnerId,
     closePicker,
     activeCommand,
     builderSteps,
@@ -27,6 +35,7 @@ export function CommandPickerHost({ context, onCommandExecuted }: CommandPickerH
     closeBuilder,
     commands,
     isLoadingCommands,
+    commandsLoadError,
     isExecuting,
     executionError,
     executeCommand,
@@ -34,6 +43,7 @@ export function CommandPickerHost({ context, onCommandExecuted }: CommandPickerH
   } = useCommandStore(
     useShallow((s) => ({
       isPickerOpen: s.isPickerOpen,
+      pickerOwnerId: s.pickerOwnerId,
       closePicker: s.closePicker,
       activeCommand: s.activeCommand,
       builderSteps: s.builderSteps,
@@ -44,12 +54,36 @@ export function CommandPickerHost({ context, onCommandExecuted }: CommandPickerH
       closeBuilder: s.closeBuilder,
       commands: s.commands,
       isLoadingCommands: s.isLoadingCommands,
+      commandsLoadError: s.commandsLoadError,
       isExecuting: s.isExecuting,
       executionError: s.executionError,
       executeCommand: s.executeCommand,
       loadCommands: s.loadCommands,
     }))
   );
+
+  const isOwner = ownerId === undefined || pickerOwnerId === ownerId;
+  const isPickerOpen = isAnyPickerOpen && isOwner;
+  // The builder that follows a selection belongs to the composer that opened
+  // the picker; the owner outlives the close for exactly that reason.
+  const builderCommand = isOwner ? activeCommand : null;
+
+  // The composer control that opened the picker. The picker's own restore
+  // would hand focus back to it, but a builder command closes the picker and
+  // opens a dialog in the same breath: that dialog records the outgoing search
+  // field as its opener, and the field is gone by the time the form closes.
+  // Every dialog in the chain returns here instead. Read in the insertion
+  // phase, as the palette reads its own opener: by the layout phase the palette
+  // has already focused its shell.
+  const invokerRef = useRef<HTMLElement | null>(null);
+  useInsertionEffect(() => {
+    if (!isPickerOpen) return;
+    const active = document.activeElement;
+    if (active instanceof HTMLElement && active !== document.body) {
+      invokerRef.current = active;
+    }
+  }, [isPickerOpen]);
+  const getInvoker = useCallback(() => invokerRef.current, []);
 
   // Sub-400ms builder loads go straight from the picker to CommandBuilder with
   // a single dialog enter animation; the spinner dialog only mounts for
@@ -69,6 +103,9 @@ export function CommandPickerHost({ context, onCommandExecuted }: CommandPickerH
 
   const handleSelect = useCallback(
     async (command: CommandManifestEntry) => {
+      // The form takes the keyboard from here. Without this the palette's exit
+      // animation ends by focusing the composer behind the open form.
+      if (command.hasBuilder) suppressPaletteFocusRestore();
       closePicker();
 
       if (command.hasBuilder) {
@@ -101,6 +138,10 @@ export function CommandPickerHost({ context, onCommandExecuted }: CommandPickerH
     closeBuilder();
   }, [closeBuilder]);
 
+  const handleRetryLoadCommands = useCallback(() => {
+    void loadCommands(context);
+  }, [loadCommands, context]);
+
   const handleBuilderRetry = useCallback(() => {
     if (!activeCommand) return;
     setRetryingError(builderLoadError);
@@ -117,14 +158,22 @@ export function CommandPickerHost({ context, onCommandExecuted }: CommandPickerH
         isOpen={isPickerOpen}
         commands={commands}
         isLoading={isLoadingCommands}
+        loadError={commandsLoadError}
+        onRetryLoad={handleRetryLoadCommands}
         onSelect={handleSelect}
         onDismiss={closePicker}
       />
 
-      {activeCommand && showBuilderLoading && !retryingError && (
-        <AppDialog isOpen={true} onClose={handleBuilderCancel} size="md">
+      {builderCommand && showBuilderLoading && !retryingError && (
+        <AppDialog
+          isOpen={true}
+          onClose={handleBuilderCancel}
+          size="md"
+          restoreFocusTo={getInvoker}
+          preferRestoreFocusTo
+        >
           <AppDialog.Header>
-            <AppDialog.Title>{activeCommand.label}</AppDialog.Title>
+            <AppDialog.Title>{builderCommand.label}</AppDialog.Title>
             <AppDialog.CloseButton />
           </AppDialog.Header>
           <AppDialog.Body>
@@ -140,10 +189,16 @@ export function CommandPickerHost({ context, onCommandExecuted }: CommandPickerH
         </AppDialog>
       )}
 
-      {activeCommand && shownLoadError && (
-        <AppDialog isOpen={true} onClose={handleBuilderCancel} size="md">
+      {builderCommand && shownLoadError && (
+        <AppDialog
+          isOpen={true}
+          onClose={handleBuilderCancel}
+          size="md"
+          restoreFocusTo={getInvoker}
+          preferRestoreFocusTo
+        >
           <AppDialog.Header>
-            <AppDialog.Title>{activeCommand.label}</AppDialog.Title>
+            <AppDialog.Title>{builderCommand.label}</AppDialog.Title>
             <AppDialog.CloseButton />
           </AppDialog.Header>
           <AppDialog.Body>
@@ -167,15 +222,16 @@ export function CommandPickerHost({ context, onCommandExecuted }: CommandPickerH
         </AppDialog>
       )}
 
-      {activeCommand && builderSteps && !isLoadingBuilder && !builderLoadError && (
+      {builderCommand && builderSteps && !isLoadingBuilder && !builderLoadError && (
         <CommandBuilder
-          command={activeCommand}
+          command={builderCommand}
           steps={builderSteps}
           context={builderContext!}
           isExecuting={isExecuting}
           executionError={executionError}
           onExecute={handleBuilderExecute}
           onCancel={handleBuilderCancel}
+          restoreFocusTo={getInvoker}
         />
       )}
     </>

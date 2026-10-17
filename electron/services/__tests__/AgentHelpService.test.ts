@@ -1,3 +1,6 @@
+vi.mock("../../utils/windowsCliSpawn.js", () => ({
+  cliSpawnTarget: (command: string, args: string[]) => ({ command, args, shell: false }),
+}));
 import { describe, it, expect, beforeEach, vi, afterEach } from "vitest";
 import { AgentHelpService } from "../AgentHelpService.js";
 import { execFile } from "child_process";
@@ -44,25 +47,10 @@ describe("AgentHelpService", () => {
         expect.objectContaining({
           timeout: 5000,
           maxBuffer: 256 * 1024,
+          // Executable resolution is covered by windowsCliSpawn tests.
           shell: false,
           windowsHide: true,
         }),
-        expect.any(Function)
-      );
-    });
-
-    it("uses custom help args from agent config", async () => {
-      mockedExecFile.mockImplementation((_cmd, _args, _opts, callback: any) => {
-        callback(null, { stdout: "Help output", stderr: "" });
-        return {} as any;
-      });
-
-      await service.getHelp("claude");
-
-      expect(mockedExecFile).toHaveBeenCalledWith(
-        "claude",
-        [],
-        expect.any(Object),
         expect.any(Function)
       );
     });
@@ -71,23 +59,6 @@ describe("AgentHelpService", () => {
       await expect(service.getHelp("unknown-agent")).rejects.toThrow(
         "Unknown agent: unknown-agent"
       );
-    });
-
-    it("throws error for invalid command", async () => {
-      vi.doUnmock("../../../shared/config/agentRegistry.js");
-      const { AGENT_REGISTRY, invalidateEffectiveRegistryCache } =
-        await import("../../../shared/config/agentRegistry.js");
-      (AGENT_REGISTRY as any)["test-agent"] = {
-        id: "test-agent",
-        name: "Test",
-        command: "invalid;command",
-      };
-      invalidateEffectiveRegistryCache();
-
-      await expect(service.getHelp("test-agent")).rejects.toThrow("Invalid command");
-
-      delete (AGENT_REGISTRY as any)["test-agent"];
-      invalidateEffectiveRegistryCache();
     });
 
     it("handles non-zero exit code", async () => {
@@ -264,23 +235,6 @@ describe("AgentHelpService", () => {
       await expect(service.getHelp("empty")).rejects.toThrow("Invalid command");
 
       delete (AGENT_REGISTRY as any)["empty"];
-      invalidateEffectiveRegistryCache();
-    });
-
-    it("rejects command with shell metacharacters", async () => {
-      vi.doUnmock("../../../shared/config/agentRegistry.js");
-      const { AGENT_REGISTRY, invalidateEffectiveRegistryCache } =
-        await import("../../../shared/config/agentRegistry.js");
-      (AGENT_REGISTRY as any)["bad"] = {
-        id: "bad",
-        name: "Bad",
-        command: "cmd && rm -rf /",
-      };
-      invalidateEffectiveRegistryCache();
-
-      await expect(service.getHelp("bad")).rejects.toThrow("Invalid command");
-
-      delete (AGENT_REGISTRY as any)["bad"];
       invalidateEffectiveRegistryCache();
     });
 

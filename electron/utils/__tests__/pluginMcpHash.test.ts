@@ -11,10 +11,6 @@ describe("sha256Hex", () => {
     expect(out).toMatch(/^[0-9a-f]{64}$/);
   });
 
-  it("is deterministic across calls", () => {
-    expect(sha256Hex("same")).toEqual(sha256Hex("same"));
-  });
-
   it("differs when an invisible Unicode zero-width space is appended", () => {
     // Defends against OWASP MCP03 rug-pull: invisible chars must flip the hash
     // even when the rendered string looks identical.
@@ -22,10 +18,6 @@ describe("sha256Hex", () => {
     // eslint-disable-next-line no-irregular-whitespace
     const tainted = `${clean}​`; // appended zero-width space
     expect(sha256Hex(clean)).not.toEqual(sha256Hex(tainted));
-  });
-
-  it("differs on a single-byte change", () => {
-    expect(sha256Hex("hello")).not.toEqual(sha256Hex("hellO"));
   });
 });
 

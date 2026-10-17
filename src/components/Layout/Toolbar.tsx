@@ -62,6 +62,7 @@ import {
 } from "./PluginTrayButton";
 import { LAUNCHER_PANEL_ITEMS } from "./launcherPanelItems";
 import { deriveAgentAttentionStates } from "@/lib/agentAttentionStates";
+import { useHandBackRunIds } from "@/hooks/useRunHandBackState";
 import { DockLaunchButton } from "./DockLaunchButton";
 import { useRecipeStore } from "@/store/recipeStore";
 import { useLauncherData } from "./useLauncherData";
@@ -114,6 +115,7 @@ import { usePreferencesStore, useToolbarPreferencesStore, useVoiceRecordingStore
 import { useProjectStatsStore } from "@/store/projectStatsStore";
 import { useAgentSettingsStore } from "@/store/agentSettingsStore";
 import { useNotificationSettingsStore } from "@/store/notificationSettingsStore";
+import { useCanopyStore } from "@/store/canopyStore";
 import type { AnyToolbarButtonId } from "@/../../shared/types/toolbar";
 import { usePluginToolbarButtons } from "@/hooks/usePluginToolbarButtons";
 import { useWorktreeSelectionStore } from "@/store/worktreeStore";
@@ -142,11 +144,15 @@ import {
 } from "@/lazyPanels";
 import { VoiceRecordingToolbarButton } from "./VoiceRecordingToolbarButton";
 import { ToolbarProjectPill, ToolbarProjectPillTooltipBody } from "./ToolbarProjectPill";
+import { HostChip } from "@/components/Hosts/HostChip";
+import { AttachedMachinesIndicator } from "@/components/Hosts/AttachedMachinesIndicator";
+import { getViewHostId } from "@/hooks/useHostConnection";
 import { shortSha } from "@/utils/textParsing";
 import { useUIStore } from "@/store/uiStore";
 import { ForgeStatsToolbarButton, type ForgeStatsHandle } from "./ForgeStatsToolbarButton";
 import { useResolvedForgeProvider } from "@/hooks/useResolvedForgeProvider";
 import { NotificationCenterToolbarButton } from "./NotificationCenterToolbarButton";
+import { CanopyToolbarButton, useCanopyUrgentCount } from "./CanopyToolbarButton";
 import { AppMenuButton } from "./AppMenuButton";
 import { ToolbarLauncherButton } from "./ToolbarLauncherButton";
 import { ToolbarCommandPaletteButton } from "./ToolbarCommandPaletteButton";
@@ -223,6 +229,7 @@ for (const [id, meta] of Object.entries(TOOLBAR_BUTTON_METADATA)) {
 const OVERFLOW_KEYBINDING_BY_ID: Partial<Record<string, string>> = {
   "copy-tree": "worktree.copyTree",
   "notification-center": "notifications.toggle",
+  canopy: "canopy.toggle",
   "command-palette": "action.palette.open",
   "resume-sessions": "terminal.resumeSessions",
   "dev-server": "devServer.start",
@@ -242,6 +249,8 @@ interface OverflowMenuProps {
   severity: OverflowBadgeSeverity;
   errorCount: number;
   notificationUnreadCount: number;
+  /** Asks Canopy reads as urgent, said when its button is folded in here. */
+  canopyUrgentCount: number;
   // Per-session agent states behind the badge, already worded — derived by
   // the same rule as `severity`, so the name never says less than the dot.
   agentObservations: readonly string[];
@@ -286,6 +295,7 @@ function OverflowMenu({
   severity,
   errorCount,
   notificationUnreadCount,
+  canopyUrgentCount,
   agentObservations,
   agentAttentionStates,
   canCopyTree,
@@ -352,6 +362,9 @@ function OverflowMenu({
   if (overflowIds.includes("notification-center") && notificationUnreadCount > 0) {
     observations.push(`${notificationUnreadCount} unread`);
   }
+  if (overflowIds.includes("canopy") && canopyUrgentCount > 0) {
+    observations.push(`${canopyUrgentCount} urgent`);
+  }
   observations.push(...agentObservations);
   const tooltipText = `More — ${n} hidden${observations.length > 0 ? ` · ${observations.join(" · ")}` : ""}`;
   const ariaLabel = `More toolbar items — ${n} hidden${observations.length > 0 ? `, ${observations.join(", ")}` : ""}`;
@@ -359,6 +372,7 @@ function OverflowMenu({
   const overflowCount = (id: AnyToolbarButtonId) => {
     if (id === "problems" && errorCount > 0) return errorCount;
     if (id === "notification-center" && notificationUnreadCount > 0) return notificationUnreadCount;
+    if (id === "canopy" && canopyUrgentCount > 0) return canopyUrgentCount;
     return null;
   };
 
@@ -754,13 +768,17 @@ export function Toolbar({
   // AgentButton) rather than extending useOverflowBadgeSeverity to return a
   // composite map (would risk the selector-identity churn of lesson #3730).
   const notificationUnreadCount = useNotificationHistoryStore((s) => s.unreadCount);
+  const canopyUrgentCount = useCanopyUrgentCount();
   // Per-agent pip state across panels in the active worktree, used to draw
   // the agent-state dot on overflow menu items. Shares the launcher's
   // derivation so the overflow dot matches the visible agent button; computed
   // inside useShallow so agent ticks that don't change a pip state don't
   // re-render the whole toolbar (issue #7451 pattern).
+  const handBackRunIds = useHandBackRunIds();
   const agentAttentionStates = usePanelStore(
-    useShallow((s) => deriveAgentAttentionStates(s.panelsById, s.panelIds, activeWorktreeId))
+    useShallow((s) =>
+      deriveAgentAttentionStates(s.panelsById, s.panelIds, activeWorktreeId, handBackRunIds)
+    )
   );
 
   useEffect(() => {
@@ -794,6 +812,7 @@ export function Toolbar({
 
   const showDeveloperTools = usePreferencesStore((state) => state.showDeveloperTools);
   const notificationsEnabled = useNotificationSettingsStore((s) => s.enabled);
+  const canopyHidden = useCanopyStore((s) => s.mode === "hidden");
   const toolbarLayout = useToolbarPreferencesStore((state) => state.layout);
   const positionAgentButton = useToolbarPreferencesStore((state) => state.positionAgentButton);
   const toggleButtonVisibility = useToolbarPreferencesStore(
@@ -1485,6 +1504,12 @@ export function Toolbar({
           ),
         isAvailable: true,
       },
+      canopy: {
+        render: () => <CanopyToolbarButton key="canopy" data-toolbar-item="" />,
+        // Hidden, the slot goes and the pin stays: showing Canopy again puts
+        // the button back where it was.
+        isAvailable: !canopyHidden,
+      },
       "notification-center": {
         render: () => (
           <NotificationCenterToolbarButton key="notification-center" data-toolbar-item="" />
@@ -1736,6 +1761,7 @@ export function Toolbar({
       topologyWatcherDark,
       showDeveloperTools,
       notificationsEnabled,
+      canopyHidden,
       pluginButtonIds,
       pluginConfigs,
       devServerCombo,
@@ -1976,8 +2002,16 @@ export function Toolbar({
     [rightOverflow, hasActiveVoiceRecording]
   );
 
-  const leftOverflowSeverity = useOverflowBadgeSeverity(visibleLeftOverflow, errorCount);
-  const rightOverflowSeverity = useOverflowBadgeSeverity(visibleRightOverflow, errorCount);
+  const leftOverflowSeverity = useOverflowBadgeSeverity(
+    visibleLeftOverflow,
+    errorCount,
+    canopyUrgentCount
+  );
+  const rightOverflowSeverity = useOverflowBadgeSeverity(
+    visibleRightOverflow,
+    errorCount,
+    canopyUrgentCount
+  );
   const leftAgentObservations = useOverflowAgentObservations(visibleLeftOverflow);
   const rightAgentObservations = useOverflowAgentObservations(visibleRightOverflow);
 
@@ -2169,6 +2203,9 @@ export function Toolbar({
       "notification-center": () => {
         void actionService.dispatch("notifications.toggle", undefined, { source: "user" });
       },
+      canopy: () => {
+        void actionService.dispatch("canopy.toggle", undefined, { source: "user" });
+      },
       "copy-tree": () => {
         void handleCopyTreeClick();
       },
@@ -2245,6 +2282,7 @@ export function Toolbar({
       severity={severity}
       errorCount={errorCount}
       notificationUnreadCount={notificationUnreadCount}
+      canopyUrgentCount={canopyUrgentCount}
       agentObservations={agentObservations}
       agentAttentionStates={agentAttentionStates}
       canCopyTree={canCopyTree}
@@ -2407,6 +2445,9 @@ export function Toolbar({
     </ContextMenuTrigger>
   );
 
+  // Static per view: a project view is bound to one host for its life.
+  const remoteWindow = getViewHostId() !== null;
+
   return (
     <header>
       {/* Brand marks in the toolbar are painted on the toolbar surface, not on
@@ -2419,6 +2460,10 @@ export function Toolbar({
             aria-label="Main toolbar"
             onKeyDown={handleToolbarKeyDown}
             onFocusCapture={handleToolbarFocusCapture}
+            // A window working on another machine shows it as light behind the
+            // project pill and host chip (toolbar/surface.css), so the difference reads
+            // before anything is read.
+            data-remote-window={remoteWindow ? "" : undefined}
             className={cn(
               "@container/toolbar relative z-[var(--z-toolbar)] grid grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] gap-x-3 h-12 items-center px-4 shrink-0 app-drag-region surface-toolbar border-b border-divider",
               // macOS paints its window-rim highlight over our top pixel row, and
@@ -2653,6 +2698,8 @@ export function Toolbar({
                   </TooltipContent>
                 )}
               </Tooltip>
+              <HostChip />
+              <AttachedMachinesIndicator />
             </div>
 
             {/* RIGHT GROUP */}

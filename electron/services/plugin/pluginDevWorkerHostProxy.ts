@@ -27,7 +27,7 @@ import type {
   PluginToastOptions,
   PluginQuickPickItem,
   PluginQuickPickOptions,
-  PluginHostCallOptions,
+  PluginPromptCallOptions,
   PluginTypedIpcHandler,
   PluginHandlerOptions,
   PluginWorktreeSnapshot,
@@ -56,6 +56,7 @@ import type {
   PluginProcessDataChunk,
   PluginProcessMode,
 } from "../../../shared/types/plugin.js";
+import { AsyncLocalStorage } from "node:async_hooks";
 import { pathToFileURL } from "node:url";
 import { toRuntimePanelKindId } from "../../../shared/config/panelKindRegistry.js";
 import type {
@@ -75,9 +76,13 @@ import {
   normalizePluginAllAgentsSnapshot,
   UNAVAILABLE_PLUGIN_ALL_AGENTS_SNAPSHOT,
 } from "../../../shared/utils/pluginAllAgentsSnapshot.js";
-import { AGENT_MCP_MAX_RESULT_BYTES } from "../../../shared/types/plugin.js";
+import {
+  AGENT_MCP_MAX_RESULT_BYTES,
+  PLUGIN_HOST_CALL_TIMEOUT_MS,
+} from "../../../shared/types/plugin.js";
 import type {
   PanelReloadResult,
+  WorkerRestartResult,
   PluginAgentPane,
   PluginSendToAgentResult,
   PluginTerminalScreenResult,
@@ -96,7 +101,12 @@ import {
 } from "./pluginPayloadLimits.js";
 import { resolveInvokeTimeoutMs } from "./pluginInvokeDeadline.js";
 import { errorWithFields } from "./pluginHostErrorFields.js";
-import { openPluginDatabase } from "./pluginDatabase.js";
+import {
+  hostCallDeadlineMs,
+  hostCallTimeoutError,
+  isHostCallTimeoutError,
+} from "./pluginHostCallDeadline.js";
+import { checkedSchemaOptions, openPluginDatabase } from "./pluginDatabase.js";
 import { validateAgentMcpTools } from "../pluginAgentMcp/validateTools.js";
 import type {
   PluginHostCallMethod,
@@ -113,7 +123,7 @@ type Post = (message: PluginWorkerToHostMessage) => void;
 interface PendingCall {
   resolve: (value: unknown) => void;
   reject: (error: Error) => void;
-  /** Detach the abort listener once the call settles (no-op when no signal was passed). */
+  /** Detach the abort listener and clear the deadline once the call settles. */
   cleanup?: () => void;
   /**
    * When set, {@link PluginDevWorkerHostProxy.dispose} resolves this call with
@@ -144,6 +154,11 @@ interface RegisteredMcpTool {
  */
 const COMMAND_IMPORT_TIMEOUT_MS = 5000;
 
+/** Only an explicit opt-in to waiting crosses the port; anything else is the default. */
+function promptQueueParam(callOptions?: PluginPromptCallOptions): { whenNoFrontend?: "queue" } {
+  return callOptions?.whenNoFrontend === "queue" ? { whenNoFrontend: "queue" } : {};
+}
+
 /** Push channels one worker may watch for listeners; past it `hasListeners` answers `true`. */
 const MAX_WATCHED_PUSH_CHANNELS = 256;
 
@@ -171,6 +186,12 @@ export class PluginDevWorkerHostProxy {
   private disposed = false;
 
   private readonly pendingCalls = new Map<string, PendingCall>();
+  /**
+   * `process.spawn` calls this worker gave up on (#13410). Main may already
+   * have spawned and answered, and nothing else will ever learn the process id
+   * from that late answer, so it is killed when it arrives.
+   */
+  private readonly abandonedSpawns = new Set<string>();
   private readonly actionHandlers = new Map<string, ActionHandler>();
   private readonly ipcHandlers = new Map<string, RegisteredHandler>();
   private readonly subscriptions = new Map<string, (payload: unknown) => void>();
@@ -205,6 +226,12 @@ export class PluginDevWorkerHostProxy {
    * the worker's life, so `hasListeners` stays a synchronous local read.
    */
   private readonly listenerStates = new Map<string, ListenerState>();
+  /**
+   * The main-side invocation the plugin's current work is answering. Stamped
+   * on each host call so main can put a prompt or clipboard call in front of
+   * the person who made that invocation, not whoever called the plugin last.
+   */
+  private readonly invocation = new AsyncLocalStorage<string>();
 
   constructor(pluginId: string, post: Post, identity: PluginIdentity) {
     this.pluginId = pluginId;
@@ -230,6 +257,7 @@ export class PluginDevWorkerHostProxy {
       }
     }
     this.pendingCalls.clear();
+    this.abandonedSpawns.clear();
     this.actionHandlers.clear();
     this.ipcHandlers.clear();
     this.subscriptions.clear();
@@ -257,7 +285,19 @@ export class PluginDevWorkerHostProxy {
     switch (msg.type) {
       case "host-result": {
         const pending = this.pendingCalls.get(msg.requestId);
-        if (!pending) return true;
+        if (!pending) {
+          if (this.abandonedSpawns.delete(msg.requestId) && msg.ok) {
+            const id = (msg.result as { id?: unknown } | undefined)?.id;
+            if (typeof id === "string") {
+              try {
+                this.notify("process.kill", { processId: id });
+              } catch {
+                // best-effort — the bridge kills it at teardown regardless
+              }
+            }
+          }
+          return true;
+        }
         this.pendingCalls.delete(msg.requestId);
         pending.cleanup?.();
         if (msg.ok) pending.resolve(msg.result);
@@ -266,7 +306,7 @@ export class PluginDevWorkerHostProxy {
       }
       case "invoke":
         if (msg.kind === "mcp-tool") void this.handleMcpToolInvoke(msg);
-        else void this.handleInvoke(msg);
+        else void this.invocation.run(msg.requestId, () => this.handleInvoke(msg));
         return true;
       case "invoke-cancel": {
         // Released here rather than when `execute` settles: a tool that ignores
@@ -589,10 +629,32 @@ export class PluginDevWorkerHostProxy {
       return Promise.reject(abortErrorFor(signal));
     }
     const requestId = `c${this.nextId++}`;
+    const deadlineMs = hostCallDeadlineMs(method, params);
     return new Promise<T>((resolve, reject) => {
       let onAbort: (() => void) | undefined;
+      let deadline: ReturnType<typeof setTimeout> | undefined;
       const cleanup = (): void => {
         if (onAbort && signal) signal.removeEventListener("abort", onAbort);
+        if (deadline !== undefined) clearTimeout(deadline);
+      };
+      // Armed in the worker so the caller is released even when main is the
+      // side that stopped answering (#13410). A timeout rejects even a
+      // grace-bearing call: grace is for unload and cancellation, and a
+      // stalled host is neither.
+      const armDeadline = (ms: number): void => {
+        deadline = setTimeout(() => {
+          if (!this.pendingCalls.has(requestId)) return;
+          this.pendingCalls.delete(requestId);
+          cleanup();
+          if (method === "process.spawn") this.abandonedSpawns.add(requestId);
+          try {
+            this.post({ type: "host-cancel", requestId });
+          } catch {
+            // best-effort — the entry is already claimed
+          }
+          reject(hostCallTimeoutError(this.pluginId, method, ms));
+        }, ms);
+        deadline.unref?.();
       };
       this.pendingCalls.set(requestId, {
         resolve: resolve as (value: unknown) => void,
@@ -611,6 +673,10 @@ export class PluginDevWorkerHostProxy {
               // best-effort — the call itself is still in flight, and its
               // answer (or dispose's grace value) still settles the caller
             }
+            // A call with no deadline of its own (a picker waiting on the
+            // person) is owed main's answer to the cancel, not the person's,
+            // so that answer gets an ordinary deadline.
+            if (deadline === undefined) armDeadline(PLUGIN_HOST_CALL_TIMEOUT_MS);
             return;
           }
           this.pendingCalls.delete(requestId);
@@ -636,8 +702,16 @@ export class PluginDevWorkerHostProxy {
         };
         signal.addEventListener("abort", onAbort, { once: true });
       }
+      if (deadlineMs > 0) armDeadline(deadlineMs);
       try {
-        this.post({ type: "host-call", requestId, method, params });
+        const invocationId = this.invocation.getStore();
+        this.post({
+          type: "host-call",
+          requestId,
+          method,
+          params,
+          ...(invocationId !== undefined ? { invocationId } : {}),
+        });
       } catch (err) {
         // A non-structured-clone-safe `params` makes `postMessage` throw
         // (DataCloneError). Drop the pending entry so it doesn't leak until
@@ -1216,6 +1290,10 @@ export class PluginDevWorkerHostProxy {
         }
         return this.callWithGrace<PanelReloadResult>("reloadPanel", { panelId }, "unavailable");
       },
+      // Main schedules the restart after this answer is posted, so the reply
+      // reaches this worker before its teardown does (#13410).
+      restartWorker: () =>
+        this.callWithGrace<WorkerRestartResult>("restartWorker", undefined, "unavailable"),
       // Built-in action catalog (#10561). list/get relay over the port like
       // dispatch; canDispatch is derived locally from get() (no extra
       // round-trip), mirroring the real host. callWithGrace resolves the
@@ -1289,23 +1367,28 @@ export class PluginDevWorkerHostProxy {
       showQuickPick: ((
         items: PluginQuickPickItem[],
         options?: PluginQuickPickOptions,
-        callOptions?: PluginHostCallOptions
+        callOptions?: PluginPromptCallOptions
       ) =>
         this.callWithGrace<PluginQuickPickItem | PluginQuickPickItem[] | undefined>(
           "showQuickPick",
-          { items, options },
+          { items, options, ...promptQueueParam(callOptions) },
           undefined,
           callOptions?.signal
         )) as PluginHostApi["showQuickPick"],
       showInputBox: (options, callOptions) =>
         this.callWithGrace<string | undefined>(
           "showInputBox",
-          { options },
+          { options, ...promptQueueParam(callOptions) },
           undefined,
           callOptions?.signal
         ),
       showConfirm: (options, callOptions) =>
-        this.callWithGrace<boolean>("showConfirm", { options }, false, callOptions?.signal),
+        this.callWithGrace<boolean>(
+          "showConfirm",
+          { options, ...promptQueueParam(callOptions) },
+          false,
+          callOptions?.signal
+        ),
       logger: {
         info: (message, fields) => this.notify("logger.info", { message, fields }),
         warn: (message, fields) => this.notify("logger.warn", { message, fields }),
@@ -1345,10 +1428,15 @@ export class PluginDevWorkerHostProxy {
             ...(options?.readonly === true && { readonly: true }),
           }),
         open: async (id, options) => {
+          // Checked here, not only in openPluginDatabase: the host prompts for
+          // project-write consent on resolve, and a malformed open must not
+          // bank a grant (#10524).
+          const schema = checkedSchemaOptions(id, options);
           const params = { id, ...(options?.readonly === true && { readonly: true }) };
           const location = await this.call<PluginDatabaseLocation>("db.resolve", params);
           const database: PluginDatabase = await openPluginDatabase(location, {
             ...options,
+            ...schema,
             revalidate: () => this.call<PluginDatabaseLocation>("db.resolve", params),
             prepareBackup: (destPath) => this.call<string>("db.prepareBackup", { id, destPath }),
             onClosed: () => this.databases.delete(database),
@@ -1440,8 +1528,9 @@ export class PluginDevWorkerHostProxy {
             this.subscriptions.delete(subscriptionId);
             // A cancel that reaches main after the watch settled finds no call
             // to abort, so main would keep a watcher nobody listens to; this
-            // releases it (and is a no-op when main never registered one).
-            if (options?.signal?.aborted) {
+            // releases it (and is a no-op when main never registered one). A
+            // timed-out watch is the same race.
+            if (options?.signal?.aborted || isHostCallTimeoutError(err)) {
               try {
                 this.post({ type: "unsubscribe", subscriptionId });
               } catch {

@@ -17,17 +17,26 @@ vi.mock("electron", () => ({
   session: { fromPartition: fromPartitionMock },
 }));
 
+const getWindowForWebContentsMock = vi.hoisted(() =>
+  vi.fn<(sender: unknown) => unknown>(() => null)
+);
+const getAppWebContentsMock = vi.hoisted(() =>
+  vi.fn<(win: unknown) => unknown>(() => ({ isDestroyed: () => false, send: vi.fn() }))
+);
+
 vi.mock("../../../window/webContentsRegistry.js", () => ({
-  getWindowForWebContents: vi.fn(() => null),
-  getAppWebContents: vi.fn(() => ({ isDestroyed: () => false, send: vi.fn() })),
+  getWindowForWebContents: getWindowForWebContentsMock,
+  getAppWebContents: getAppWebContentsMock,
+  getProjectForWebContents: vi.fn(() => null),
 }));
 
 import { CHANNELS } from "../../channels.js";
 import { registerPortalHandlers } from "../portal.js";
+import { setRemoteWebviewSrcGate } from "../../../window/webviewSrcGate.js";
 
 function createPortalManager() {
   return {
-    createTab: vi.fn<(tabId: string, url: string, partition?: string) => void>(),
+    createTab: vi.fn<(tabId: string, url: string, partition?: string, options?: unknown) => void>(),
     markRestoring: vi.fn<(tabId: string) => void>(),
     showTab: vi.fn(),
     hideAll: vi.fn(),
@@ -175,5 +184,157 @@ describe("portal create handler partition override", () => {
     await expect(handler({ sender: {} }, { tabId: "tab-1" })).rejects.toThrow("Invalid url");
     expect(fromPartitionMock).not.toHaveBeenCalled();
     expect(portalManager.createTab).not.toHaveBeenCalled();
+  });
+
+  it("gives a window attached to a host its host's own portal session, never persist:portal", async () => {
+    const dispose = setRemoteWebviewSrcGate(
+      (id, src) => (id === 9 ? src.startsWith("http://localhost:5173/") : null),
+      (id) => id === 9,
+      (id) => (id === 9 ? "studio" : null)
+    );
+    try {
+      const handler = getHandler(CHANNELS.PORTAL_CREATE);
+      await handler({ sender: { id: 9 } }, { tabId: "tab-1", url: "http://localhost:5173/" });
+      const partition = portalManager.createTab.mock.calls[0]![2]!;
+      expect(partition).not.toBe("persist:portal");
+      expect(partition.startsWith("persist:browser-remote__studio__")).toBe(true);
+      // Its popups open outside only where the window's webviews may go.
+      const { isPopupAllowed } = portalManager.createTab.mock.calls[0]![3] as unknown as {
+        isPopupAllowed: (url: string) => boolean;
+      };
+      expect(isPopupAllowed("http://localhost:8080/admin")).toBe(false);
+      expect(isPopupAllowed("http://localhost:5173/")).toBe(true);
+      expect(isPopupAllowed("https://github.com/")).toBe(true);
+
+      // A preview partition of this machine's (or another host's) isn't the host's to open.
+      await handler(
+        { sender: { id: 9 } },
+        {
+          tabId: "tab-2",
+          url: "http://localhost:5173/",
+          partition: "persist:dev-preview-proj-wt-p",
+        }
+      );
+      expect(portalManager.createTab.mock.calls[1]![2]).toBe(partition);
+      const own = "persist:dev-preview-remote__studio__p1-main-panel";
+      await handler(
+        { sender: { id: 9 } },
+        { tabId: "tab-3", url: "http://localhost:5173/", partition: own }
+      );
+      expect(portalManager.createTab.mock.calls[2]![2]).toBe(own);
+    } finally {
+      dispose();
+    }
+  });
+});
+
+type SenderShape = {
+  isDestroyed: ReturnType<typeof vi.fn<() => boolean>>;
+  send: ReturnType<typeof vi.fn<(channel: string, payload: unknown) => void>>;
+};
+
+type WindowShape = {
+  isDestroyed: ReturnType<typeof vi.fn<() => boolean>>;
+  webContents: {
+    isDestroyed: ReturnType<typeof vi.fn<() => boolean>>;
+    send: ReturnType<typeof vi.fn<(channel: string, payload: string) => void>>;
+  };
+};
+
+function createSender(): SenderShape {
+  return {
+    isDestroyed: vi.fn(() => false),
+    send: vi.fn(),
+  };
+}
+
+function createWindow(): WindowShape {
+  return {
+    isDestroyed: vi.fn(() => false),
+    webContents: {
+      isDestroyed: vi.fn(() => false),
+      send: vi.fn(),
+    },
+  };
+}
+
+function deferred<T>() {
+  let resolve!: (value: T | PromiseLike<T>) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((res, rej) => {
+    resolve = res;
+    reject = rej;
+  });
+  return { promise, resolve, reject };
+}
+
+describe("registerPortalHandlers adversarial", () => {
+  let cleanup: (() => void) | null = null;
+  let portalManager: ReturnType<typeof createPortalManager>;
+  let sender: SenderShape;
+  let win: WindowShape;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    portalManager = createPortalManager();
+    sender = createSender();
+    win = createWindow();
+    getWindowForWebContentsMock.mockReturnValue(win);
+    getAppWebContentsMock.mockReturnValue(win.webContents);
+    cleanup = registerPortalHandlers({ portalManager } as never);
+  });
+
+  afterEach(() => {
+    cleanup?.();
+    cleanup = null;
+  });
+
+  it("removes handlers exactly once even if close settles after cleanup", async () => {
+    const closeDeferred = deferred<void>();
+    portalManager.closeTab.mockReturnValue(closeDeferred.promise);
+    const handler = getHandler(CHANNELS.PORTAL_CLOSE_TAB);
+
+    const pending = handler({ sender }, { tabId: "tab-1" });
+
+    cleanup?.();
+    cleanup = null;
+
+    const removeCallsAfterCleanup = ipcMainMock.removeHandler.mock.calls.length;
+    closeDeferred.resolve();
+    await pending;
+
+    expect(ipcMainMock.removeHandler.mock.calls.length).toBe(removeCallsAfterCleanup);
+    expect(new Set(ipcMainMock.removeHandler.mock.calls.map(([channel]) => channel)).size).toBe(
+      removeCallsAfterCleanup
+    );
+  });
+
+  it("rejects malformed bounds instead of forwarding them to the manager", async () => {
+    const showHandler = getHandler(CHANNELS.PORTAL_SHOW);
+    const resizeHandler = getHandler(CHANNELS.PORTAL_RESIZE);
+
+    await expect(
+      showHandler(
+        { sender },
+        {
+          tabId: "tab-1",
+          bounds: { x: Number.NaN, y: 0, width: "100", height: 20 },
+        }
+      )
+    ).rejects.toThrow("Invalid bounds");
+
+    await expect(
+      resizeHandler(
+        { sender },
+        {
+          x: 0,
+          y: 0,
+          width: 100,
+        }
+      )
+    ).rejects.toThrow("Invalid bounds");
+
+    expect(portalManager.showTab).not.toHaveBeenCalled();
+    expect(portalManager.updateBounds).not.toHaveBeenCalled();
   });
 });

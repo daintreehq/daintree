@@ -189,9 +189,13 @@ export type BuiltInKeyAction =
   // Project actions
   | "pilot.toggle"
   | "pilot.openProject"
+  | "canopy.toggle"
   | "project.switcherPalette"
   | "project.mruCycleOlder"
   | "project.openInNewWindow"
+
+  // Remote Hosts (bound only where Remote Hosts is supported)
+  | "host.switch"
 
   // Help/Settings
   | "help.shortcuts"
@@ -379,9 +383,11 @@ export const KEY_ACTION_VALUES: ReadonlySet<string> = new Set<string>([
   "action.repeatLast",
   "pilot.toggle",
   "pilot.openProject",
+  "canopy.toggle",
   "project.switcherPalette",
   "project.mruCycleOlder",
   "project.openInNewWindow",
+  "host.switch",
   "help.shortcuts",
   "help.shortcutsAlt",
   "help.launchAgent",

@@ -1,4 +1,5 @@
 import { watch as fsWatch, FSWatcher } from "fs";
+import type { InotifyLimit } from "../../shared/types/workspace-host.js";
 import { readFile, realpath } from "fs/promises";
 import {
   join as pathJoin,
@@ -20,6 +21,8 @@ const LINUX_INOTIFY_LIMIT_HELP =
   "inotify watch limit reached — file watching may be incomplete. " +
   "Temporary fix: sudo sysctl -w fs.inotify.max_user_watches=524288 fs.inotify.max_user_instances=512. " +
   "Permanent fix: echo 'fs.inotify.max_user_watches=524288' | sudo tee /etc/sysctl.d/99-inotify.conf && sudo sysctl --system";
+const LINUX_INOTIFY_INSTANCE_LIMIT_HELP =
+  "Linux inotify instance limit reached (fs.inotify.max_user_instances); watching this worktree's files falls back to polling. Raise it with: sudo sysctl fs.inotify.max_user_instances=1024";
 
 const MACOS_EMFILE_LIMIT_HELP =
   "FSEvents file descriptor ceiling reached — recursive file watching may be incomplete. " +
@@ -178,17 +181,33 @@ export interface GitFileWatcherOptions {
    *  inotify watch limit (ENOSPC) or macOS FSEvents fd ceiling (EMFILE). */
   onWatcherFailed?: () => void;
   /** Called when the recursive worktree watcher fails specifically because of
-   *  the Linux inotify watch limit (ENOSPC). Fires in addition to `onWatcherFailed`. */
-  onInotifyLimitReached?: () => void;
+   *  a Linux inotify limit: the per-user watches (ENOSPC) or instances
+   *  (EMFILE). Fires in addition to `onWatcherFailed`. */
+  onInotifyLimitReached?: (limit: InotifyLimit) => void;
+  /** Called once the recursive worktree subscription is live. `start()`
+   *  resolves before it is, and a startup failure arrives afterwards. */
+  onWorktreeWatcherReady?: () => void;
   /** Called when the recursive worktree watcher fails specifically because of
    *  the macOS FSEvents file descriptor ceiling (EMFILE). Fires in addition to
    *  `onWatcherFailed`. */
   onEmfileLimitReached?: () => void;
+  /**
+   * Full ref the branch's upstream resolves to (`refs/remotes/origin/feature/x`).
+   * Watched exactly, so a push to a nested or non-`origin` branch is seen
+   * without a recursive watch over `refs/remotes` (#13400).
+   */
+  upstreamRef?: string | null;
+}
+
+// A ref git reported for `@{u}`; anything else must never become a watch path.
+function isWatchableRef(ref: string): boolean {
+  return ref.startsWith("refs/") && !ref.split("/").some((part) => part === "" || part === "..");
 }
 
 export class GitFileWatcher {
   private watchers: FSWatcher[] = [];
   private readonly watchedFilesByDirectory = new Map<string, Set<string>>();
+  private readonly watcherByDirectory = new Map<string, FSWatcher>();
   private debounceTimer: NodeJS.Timeout | null = null;
   private worktreeDebounceTimer: NodeJS.Timeout | null = null;
   private worktreeMaxWaitTimer: NodeJS.Timeout | null = null;
@@ -241,10 +260,21 @@ export class GitFileWatcher {
   /** Directory holding `.git/config` — always the common dir. */
   private gitConfigDir: string | null = null;
   private readonly onWatcherFailed: (() => void) | undefined;
-  private readonly onInotifyLimitReached: (() => void) | undefined;
+  private readonly onInotifyLimitReached: ((limit: InotifyLimit) => void) | undefined;
+  private readonly onWorktreeWatcherReady: (() => void) | undefined;
   private readonly onEmfileLimitReached: (() => void) | undefined;
   private readonly watchWorktree: boolean;
   private currentBranch?: string;
+  private commonDir: string | null = null;
+  private upstreamRef: string | null;
+  /** The upstream ref file currently in a directory's tracked set. */
+  private upstreamRefPath: string | null = null;
+  /**
+   * While the ref's directory doesn't exist: the nearest existing ancestor's
+   * entry on the way down to it, so the push that creates the directory still
+   * wakes a status pass, which then re-arms the exact ref.
+   */
+  private upstreamFallbackPath: string | null = null;
 
   constructor(options: GitFileWatcherOptions) {
     this.worktreePath = options.worktreePath;
@@ -259,8 +289,10 @@ export class GitFileWatcher {
     this.onWorktreeFilesChanged = options.onWorktreeFilesChanged;
     this.onWatcherFailed = options.onWatcherFailed;
     this.onInotifyLimitReached = options.onInotifyLimitReached;
+    this.onWorktreeWatcherReady = options.onWorktreeWatcherReady;
     this.onEmfileLimitReached = options.onEmfileLimitReached;
     this.currentBranch = options.branch;
+    this.upstreamRef = options.upstreamRef ?? null;
     this.watchWorktree = options.watchWorktree ?? false;
   }
 
@@ -351,6 +383,9 @@ export class GitFileWatcher {
       // feature-branch remote refs don't affect the repo-level toolbar counts.
       this.watchRemoteRefsDir(pathJoin(commonDir, "refs", "remotes", "origin"));
 
+      this.commonDir = commonDir;
+      this.armUpstreamRef();
+
       if (this.watchWorktree) {
         // Resolve the canonical root once so burst paths can be proved to live
         // inside this worktree. macOS FSEvents reports realpath'd paths, so a
@@ -406,6 +441,112 @@ export class GitFileWatcher {
     this.closeWatchers();
   }
 
+  /**
+   * Point the upstream-ref watch at a new ref, or drop it. Also retries a
+   * watch whose directory didn't exist yet, so callers can re-assert the same
+   * ref on every status pass.
+   */
+  setUpstreamRef(ref: string | null): void {
+    this.upstreamRef = ref;
+    if (this.disposed || this.commonDir === null) return;
+    this.armUpstreamRef();
+  }
+
+  private armUpstreamRef(): void {
+    const ref = this.upstreamRef;
+    const commonDir = this.commonDir;
+    const nextPath =
+      ref !== null && commonDir !== null && isWatchableRef(ref)
+        ? pathJoin(commonDir, ...ref.split("/"))
+        : null;
+    if (nextPath === this.upstreamRefPath && this.upstreamFallbackPath === null) return;
+
+    // The new watch goes in before the old one comes out, so a ref moving
+    // within one directory keeps that directory's handle.
+    const previousPath = this.upstreamRefPath !== nextPath ? this.upstreamRefPath : null;
+    if (nextPath !== null && commonDir !== null) this.armUpstreamPath(nextPath, commonDir);
+    else this.releaseUpstreamFallback();
+    if (previousPath !== null) {
+      this.releaseWatchedFile(previousPath);
+      if (this.upstreamRefPath === previousPath) this.upstreamRefPath = null;
+    }
+  }
+
+  private armUpstreamPath(path: string, commonDir: string): void {
+    // The fallback already holds this exact entry (the directory it waited
+    // for is the ref itself): take it over rather than release it.
+    if (path === this.upstreamFallbackPath) {
+      this.upstreamRefPath = path;
+      this.upstreamFallbackPath = null;
+      return;
+    }
+    // Already watched for another reason (a local upstream on the current
+    // branch's ref): covered, and never ours to release.
+    if (this.watchedFilesByDirectory.get(dirname(path))?.has(basename(path))) {
+      this.releaseUpstreamFallback();
+      return;
+    }
+    if (this.claimWatchedFile(path)) {
+      this.upstreamRefPath = path;
+      this.releaseUpstreamFallback();
+      return;
+    }
+
+    // Absent directory (a packed ref, or one never fetched). Watch the nearest
+    // ancestor that exists — non-recursively, for the one child on the way
+    // down — no higher than refs/.
+    const boundary = pathJoin(commonDir, "refs");
+    let missing = dirname(path);
+    while (missing !== boundary && dirname(missing) !== missing) {
+      if (missing === this.upstreamFallbackPath) return;
+      if (this.claimWatchedFile(missing)) {
+        this.releaseUpstreamFallback();
+        this.upstreamFallbackPath = missing;
+        return;
+      }
+      missing = dirname(missing);
+    }
+  }
+
+  /**
+   * Add `filePath` to its directory's watch and report whether this call owns
+   * the entry. A name already tracked for another reason is never claimed, so
+   * releasing a claim can't stop that other watch.
+   */
+  private claimWatchedFile(filePath: string): boolean {
+    if (this.watchedFilesByDirectory.get(dirname(filePath))?.has(basename(filePath))) {
+      return false;
+    }
+    this.watchFile(filePath);
+    return this.watchedFilesByDirectory.get(dirname(filePath))?.has(basename(filePath)) ?? false;
+  }
+
+  private releaseUpstreamFallback(): void {
+    if (this.upstreamFallbackPath === null) return;
+    this.releaseWatchedFile(this.upstreamFallbackPath);
+    this.upstreamFallbackPath = null;
+  }
+
+  // Drops the name, and the directory's watch with it once nothing in it is
+  // tracked — an unnamed event would otherwise still wake the pass for it.
+  private releaseWatchedFile(filePath: string): void {
+    const watchDir = dirname(filePath);
+    const tracked = this.watchedFilesByDirectory.get(watchDir);
+    if (!tracked) return;
+    tracked.delete(basename(filePath));
+    if (tracked.size > 0) return;
+    const watcher = this.watcherByDirectory.get(watchDir);
+    this.watchedFilesByDirectory.delete(watchDir);
+    this.watcherByDirectory.delete(watchDir);
+    if (!watcher) return;
+    this.watchers = this.watchers.filter((w) => w !== watcher);
+    try {
+      watcher.close();
+    } catch {
+      // Stale handle (directory deleted underneath it) — nothing left to close.
+    }
+  }
+
   private closeWatchers(): void {
     if (this.debounceTimer) {
       clearTimeout(this.debounceTimer);
@@ -439,6 +580,9 @@ export class GitFileWatcher {
 
     this.watchers = [];
     this.watchedFilesByDirectory.clear();
+    this.watcherByDirectory.clear();
+    this.upstreamRefPath = null;
+    this.upstreamFallbackPath = null;
 
     if (this.worktreeSubscription) {
       this.worktreeSubscription.unsubscribe().catch(() => {
@@ -491,6 +635,7 @@ export class GitFileWatcher {
           sub.unsubscribe();
         } else {
           this.worktreeSubscription = sub;
+          this.onWorktreeWatcherReady?.();
         }
       })
       .catch((error: unknown) => {
@@ -504,9 +649,31 @@ export class GitFileWatcher {
     const code = err?.code;
     const message = err?.message ?? "";
 
-    if (process.platform === "linux" && code === "ENOSPC") {
+    // @parcel/watcher rejects with a bare Error naming the failed call —
+    // "inotify_add_watch on '<dir>' failed: No space left on device" — and no
+    // errno code, so the code alone never matched the real limit.
+    const isInotifyLimit =
+      code === "ENOSPC" || /inotify\w*.*No space left on device/i.test(message);
+    if (process.platform === "linux" && isInotifyLimit) {
       logWarn(LINUX_INOTIFY_LIMIT_HELP, { path: this.worktreePath });
-      this.onInotifyLimitReached?.();
+      this.onInotifyLimitReached?.("watches");
+      this.onWatcherFailed?.();
+      return;
+    }
+
+    // No inotify instance could be opened: Parcel's own "Unable to initialize
+    // inotify" or subscribeParcelWatcher refusing to let Parcel block on it.
+    // EMFILE is the per-user instance limit — parcel's strerror says "Too many
+    // open files"; ENFILE ("... in system") and ENOMEM are not, so raising
+    // max_user_instances wouldn't help them.
+    const isInstanceLimit =
+      /Unable to initialize inotify/i.test(message) &&
+      (code === "EMFILE" ||
+        /max_user_instances/.test(message) ||
+        /Too many open files$/i.test(message.trim()));
+    if (process.platform === "linux" && isInstanceLimit) {
+      logWarn(LINUX_INOTIFY_INSTANCE_LIMIT_HELP, { path: this.worktreePath, error: message });
+      this.onInotifyLimitReached?.("instances");
       this.onWatcherFailed?.();
       return;
     }
@@ -631,6 +798,7 @@ export class GitFileWatcher {
 
       this.watchers.push(watcher);
       this.watchedFilesByDirectory.set(watchDir, trackedFiles);
+      this.watcherByDirectory.set(watchDir, watcher);
     } catch {
       // Silent fallback to polling
     }

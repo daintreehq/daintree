@@ -48,10 +48,14 @@ import { snapshotLines } from "@/components/PluginKit/PluginKitNativeAgents";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { keybindingService } from "@/services/KeybindingService";
 import { useNotificationStore } from "@/store/notificationStore";
+import { installAppPluginKitHost } from "@/services/plugin/appPluginKitHost";
+
+// The app's own kit host, so the kit reaches the app services mocked here.
+installAppPluginKitHost();
 
 beforeAll(async () => {
   await kit.whenPluginUiReady();
-});
+}, 60_000);
 
 const combos = new Map<string, string>();
 

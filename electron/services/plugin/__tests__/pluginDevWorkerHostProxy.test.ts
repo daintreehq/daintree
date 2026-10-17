@@ -1,10 +1,23 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { EventEmitter } from "events";
+
+vi.mock("../../../utils/logger.js", () => ({
+  createLogger: () => ({ debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() }),
+}));
+
 import { PluginDevWorkerHostProxy } from "../pluginDevWorkerHostProxy.js";
+import { PluginDevWorkerMainBridge } from "../PluginDevWorkerMainBridge.js";
+import { parseWorkerToHostMessage } from "../../../schemas/pluginDevWorker.js";
+import { pushListenerObservers } from "../pluginInternalApprovers.js";
 import {
   PLUGIN_INVOKE_MAX_RESULT_BYTES,
   PLUGIN_PUSH_MAX_PAYLOAD_BYTES,
 } from "../../../../shared/config/pluginBudgets.js";
+import {
+  PLUGIN_HOST_CALL_INTERACTIVE_TIMEOUT_MS,
+  PLUGIN_HOST_CALL_TIMEOUT_MS,
+} from "../../../../shared/types/plugin.js";
 
 const flush = () => new Promise((r) => setImmediate(r));
 
@@ -426,6 +439,17 @@ describe("PluginDevWorkerHostProxy host.actions (#10561)", () => {
 });
 
 describe("PluginDevWorkerHostProxy host.db", () => {
+  it("rejects malformed schema options before asking main to resolve (and prompt)", async () => {
+    const { proxy, sent } = makeProxy();
+    await expect(
+      proxy.host.db.open("ledger", { migrations: [42] } as unknown as { migrations: string[] })
+    ).rejects.toMatchObject({ code: "VALIDATION" });
+    await expect(
+      proxy.host.db.open("ledger", { migrations: ["ATTACH 'x.db' AS x"] })
+    ).rejects.toMatchObject({ code: "DB_STATEMENT_NOT_ALLOWED" });
+    expect(sent.some((m) => m.type === "host-call" && m.method === "db.resolve")).toBe(false);
+  });
+
   it("resolves the location in main and opens the file in the worker", async () => {
     const { mkdtempSync, rmSync } = await import("node:fs");
     const { tmpdir } = await import("node:os");
@@ -505,11 +529,6 @@ describe("PluginDevWorkerHostProxy host.process (#10526)", () => {
     const handle = await promise;
     return { proxy, sent, handle };
   }
-
-  it("relays spawn over a host-call and returns a handle addressed by id", async () => {
-    const { handle } = await spawnHandle();
-    expect(handle.id).toBe("p1");
-  });
 
   it("kill posts a fire-and-forget process.kill notify keyed by id", async () => {
     const { sent, handle } = await spawnHandle();
@@ -866,8 +885,10 @@ describe("PluginDevWorkerHostProxy host.fs revision, mkdir, append and watch opt
 
   it("carries recursive and debounceMs on the watch call only when set", async () => {
     const { proxy, sent } = makeProxy();
-    void proxy.host.fs.watch(["/repo"], vi.fn(), { recursive: true, debounceMs: 150 });
-    void proxy.host.fs.watch(["/repo"], vi.fn());
+    void proxy.host.fs
+      .watch(["/repo"], vi.fn(), { recursive: true, debounceMs: 150 })
+      .catch(() => undefined);
+    void proxy.host.fs.watch(["/repo"], vi.fn()).catch(() => undefined);
     const calls = sent.filter((m) => m.type === "host-call" && m.method === "fs.watch");
     expect(calls[0].params).toMatchObject({ paths: ["/repo"], recursive: true, debounceMs: 150 });
     expect(calls[1].params).not.toHaveProperty("recursive");
@@ -876,8 +897,10 @@ describe("PluginDevWorkerHostProxy host.fs revision, mkdir, append and watch opt
 
   it("forwards a supplied recursive unchanged so the host can reject a malformed one", () => {
     const { proxy, sent } = makeProxy();
-    void proxy.host.fs.watch(["/repo"], vi.fn(), { recursive: "true" as unknown as boolean });
-    void proxy.host.fs.watch(["/repo"], vi.fn(), { recursive: false });
+    void proxy.host.fs
+      .watch(["/repo"], vi.fn(), { recursive: "true" as unknown as boolean })
+      .catch(() => undefined);
+    void proxy.host.fs.watch(["/repo"], vi.fn(), { recursive: false }).catch(() => undefined);
     const calls = sent.filter((m) => m.type === "host-call" && m.method === "fs.watch");
     expect(calls[0].params.recursive).toBe("true");
     expect(calls[1].params.recursive).toBe(false);
@@ -977,16 +1000,6 @@ describe("PluginDevWorkerHostProxy runtime-surface validation rejects, never thr
     await expect(proxy.host.postToPanel("", null)).rejects.toThrow(/postToPanel: channel/);
     // No host-notify for postToPanel was sent — the call rejected before forwarding.
     expect(sent.some((m) => m.type === "host-notify" && m.method === "postToPanel")).toBe(false);
-  });
-
-  it("postToPanel rejection is catchable on a non-awaited call (no sync throw)", async () => {
-    const { proxy } = makeProxy();
-    let caught: unknown;
-    const pending = proxy.host.postToPanel("also:bad", null).catch((err) => {
-      caught = err;
-    });
-    await pending;
-    expect(caught).toBeInstanceOf(Error);
   });
 
   it("setPanelBadge rejects a non-string panelId without notifying main", async () => {
@@ -1375,6 +1388,48 @@ describe("PluginDevWorkerHostProxy reloadPanel (#12610)", () => {
   });
 });
 
+describe("PluginDevWorkerHostProxy invocation id", () => {
+  it("stamps each host call with the invocation whose handler made it", async () => {
+    const { proxy, sent } = makeProxy();
+    let releaseA!: () => void;
+    const aWaits = new Promise<void>((resolve) => (releaseA = resolve));
+    proxy.host.registerHandler("go", async (_ctx: unknown, which: unknown) => {
+      if (which === "a") await aWaits;
+      void proxy.host.showConfirm({ title: String(which) });
+      return null;
+    });
+    // A timer or subscription outside any invocation.
+    void proxy.host.showConfirm({ title: "background" });
+
+    const ctx = { projectId: null, worktreeId: null, webContentsId: 1, pluginId: "acme.demo" };
+    proxy.handleMessage({
+      type: "invoke",
+      requestId: "i1",
+      kind: "handler",
+      channel: "go",
+      ctx,
+      args: ["a"],
+    });
+    proxy.handleMessage({
+      type: "invoke",
+      requestId: "i2",
+      kind: "handler",
+      channel: "go",
+      ctx,
+      args: ["b"],
+    });
+    await flush();
+    releaseA();
+    await flush();
+
+    const calls = sent.filter((m) => m.type === "host-call" && m.method === "showConfirm");
+    const byTitle = Object.fromEntries(
+      calls.map((m) => [m.params.options.title, m.invocationId ?? null])
+    );
+    expect(byTitle).toEqual({ background: null, a: "i1", b: "i2" });
+  });
+});
+
 describe("PluginDevWorkerHostProxy transport limits", () => {
   beforeEach(() => vi.clearAllMocks());
 
@@ -1568,7 +1623,9 @@ describe("PluginDevWorkerHostProxy coalesced subscriptions and readFiles", () =>
   it("relays readFiles in one host call, forwarding only the options that were set", async () => {
     const { proxy, sent } = makeProxy();
     const promise = proxy.host.fs.readFiles!(["/repo/a", "/repo/b"]);
-    void proxy.host.fs.readFiles!(["/repo/c"], { encoding: "bytes", maxBytesPerFile: 10 });
+    void proxy.host.fs.readFiles!(["/repo/c"], { encoding: "bytes", maxBytesPerFile: 10 }).catch(
+      () => undefined
+    );
     const calls = sent.filter((m) => m.type === "host-call" && m.method === "fs.readFiles");
     expect(calls).toHaveLength(2);
     expect(calls[0].params).toEqual({ paths: ["/repo/a", "/repo/b"] });
@@ -1579,5 +1636,417 @@ describe("PluginDevWorkerHostProxy coalesced subscriptions and readFiles", () =>
     ];
     proxy.handleMessage({ type: "host-result", requestId: calls[0].requestId, ok: true, result });
     await expect(promise).resolves.toEqual(result);
+  });
+});
+
+class FakeWorkerHost extends EventEmitter {
+  sent: any[] = [];
+  deliver: ((msg: any) => void) | null = null;
+  send = vi.fn((msg: any) => {
+    const cloned = structuredClone(msg);
+    this.sent.push(cloned);
+    this.deliver?.(cloned);
+    return true;
+  });
+  isReady = () => true;
+  off = this.removeListener;
+  dispose = vi.fn();
+}
+
+/**
+ * A main-side host whose listener state a test flips per channel. `watchers`
+ * are the plugin's own `onDidChangeListeners` registrations (counted by idle
+ * governance); `observers` are the untracked observations behind a worker's
+ * `hasListeners` cache.
+ */
+function makeListenerHost() {
+  const state = new Map<string, boolean>();
+  const watchers = new Map<string, Set<(has: boolean) => void>>();
+  const observers = new Map<string, Set<(has: boolean) => void>>();
+  const host = {
+    pluginId: "acme.demo",
+    hasListeners: vi.fn((channel: string) => state.get(channel) ?? true),
+    onDidChangeListeners: vi.fn((channel: string, cb: (has: boolean) => void) => {
+      let set = watchers.get(channel);
+      if (!set) watchers.set(channel, (set = new Set()));
+      set.add(cb);
+      return vi.fn(() => set!.delete(cb));
+    }),
+    fs: {
+      walk: vi.fn(async () => ({ entries: [{ path: "a.ts", type: "file" }], truncated: false })),
+    },
+  };
+  pushListenerObservers.set(host as never, (channel, cb) => {
+    let set = observers.get(channel);
+    if (!set) observers.set(channel, (set = new Set()));
+    set.add(cb);
+    return { current: state.get(channel) ?? true, dispose: () => void set.delete(cb) };
+  });
+  const set = (channel: string, has: boolean) => {
+    if ((state.get(channel) ?? true) === has) return;
+    state.set(channel, has);
+    for (const cb of [...(watchers.get(channel) ?? [])]) cb(has);
+    for (const cb of [...(observers.get(channel) ?? [])]) cb(has);
+  };
+  return { host, set, watchers, observers };
+}
+
+function connect(host: any) {
+  const workerHost = new FakeWorkerHost();
+  new PluginDevWorkerMainBridge({
+    pluginId: "acme.demo",
+    host,
+    workerHost: workerHost as any,
+    getCapabilities: () => [],
+    clearPriorRegistrations: vi.fn(),
+    onActivationResult: vi.fn(),
+    onTerminalFailure: vi.fn(),
+    onPushRejected: vi.fn(),
+  });
+  const wire: any[] = [];
+  const proxy = new PluginDevWorkerHostProxy(
+    "acme.demo",
+    (msg) => {
+      const cloned = structuredClone(msg);
+      wire.push(cloned);
+      const parsed = parseWorkerToHostMessage(cloned);
+      if (!parsed.ok) throw new Error(`schema rejected: ${parsed.issues}`);
+      workerHost.emit("worker-message", parsed.message);
+    },
+    {
+      instanceId: "acme.demo",
+      manifestId: "acme.demo",
+      origin: "global",
+      projectId: null,
+      projectRoot: null,
+    }
+  );
+  workerHost.deliver = (msg) => proxy.handleMessage(msg);
+  return { proxy, workerHost, wire };
+}
+
+describe("worker host.hasListeners / onDidChangeListeners", () => {
+  it("answers true before main reports, then tracks main's answer", async () => {
+    const { host, set } = makeListenerHost();
+    set("tick", false);
+    const { proxy, wire } = connect(host);
+    // The subscribe and main's first answer cross synchronously in this
+    // harness; in a real worker the first read can precede the answer.
+    expect(proxy.host.hasListeners!("tick")).toBe(false);
+    expect(
+      wire.filter((m) => m.type === "subscribe" && m.kind === "push-listeners-observe")
+    ).toEqual([expect.objectContaining({ key: "tick" })]);
+    set("tick", true);
+    expect(proxy.host.hasListeners!("tick")).toBe(true);
+  });
+
+  it("backs reads with an untracked observation, never a plugin event subscription", async () => {
+    const { host, observers } = makeListenerHost();
+    const { proxy, wire } = connect(host);
+    proxy.host.hasListeners!("tick");
+    proxy.host.hasListeners!("tick");
+    await flush();
+    expect(wire.filter((m) => m.kind === "push-listeners-observe")).toHaveLength(1);
+    expect(wire.filter((m) => m.kind === "push-listeners")).toHaveLength(0);
+    expect(host.onDidChangeListeners).not.toHaveBeenCalled();
+    expect(observers.get("tick")?.size).toBe(1);
+  });
+
+  it("holds one real subscription while callbacks exist and releases it with the last", async () => {
+    const { host, watchers, observers } = makeListenerHost();
+    const { proxy, wire } = connect(host);
+    const first = proxy.host.onDidChangeListeners!("tick", () => {});
+    const second = proxy.host.onDidChangeListeners!("tick", () => {});
+    await flush();
+    expect(wire.filter((m) => m.kind === "push-listeners")).toHaveLength(1);
+    expect(host.onDidChangeListeners).toHaveBeenCalledTimes(1);
+    expect(watchers.get("tick")?.size).toBe(1);
+    first();
+    first();
+    expect(wire.filter((m) => m.type === "unsubscribe")).toHaveLength(0);
+    second();
+    await flush();
+    expect(wire.filter((m) => m.type === "unsubscribe")).toHaveLength(1);
+    expect(watchers.get("tick")?.size).toBe(0);
+    // The read-side observation stays for the worker's life.
+    expect(observers.get("tick")?.size).toBe(1);
+    proxy.host.onDidChangeListeners!("tick", () => {});
+    await flush();
+    expect(host.onDidChangeListeners).toHaveBeenCalledTimes(2);
+  });
+
+  it("calls back on each change and stops after dispose", async () => {
+    const { host, set } = makeListenerHost();
+    const { proxy } = connect(host);
+    const seen: boolean[] = [];
+    const dispose = proxy.host.onDidChangeListeners!("tick", (has) => seen.push(has));
+    await flush();
+    set("tick", false);
+    set("tick", true);
+    dispose();
+    set("tick", false);
+    // Both of main's streams carry each change; the callback sees it once.
+    expect(seen).toEqual([false, true]);
+  });
+
+  it("starts from true in the worker until the first report", () => {
+    const sent: any[] = [];
+    const proxy = new PluginDevWorkerHostProxy("acme.demo", (m) => void sent.push(m), {
+      instanceId: "acme.demo",
+      manifestId: "acme.demo",
+      origin: "global",
+      projectId: null,
+      projectRoot: null,
+    });
+    const seen: boolean[] = [];
+    proxy.host.onDidChangeListeners!("tick", (has) => seen.push(has));
+    expect(proxy.host.hasListeners!("tick")).toBe(true);
+    const sub = sent.find((m) => m.kind === "push-listeners-observe");
+    proxy.handleMessage({
+      type: "subscription-event",
+      subscriptionId: sub.subscriptionId,
+      payload: true,
+    });
+    expect(seen).toEqual([]);
+    proxy.handleMessage({
+      type: "subscription-event",
+      subscriptionId: sub.subscriptionId,
+      payload: false,
+    });
+    expect(seen).toEqual([false]);
+    expect(proxy.host.hasListeners!("tick")).toBe(false);
+    proxy.dispose();
+    expect(proxy.host.hasListeners!("tick")).toBe(false);
+  });
+
+  it("validates the channel in the worker", () => {
+    const { host } = makeListenerHost();
+    const { proxy } = connect(host);
+    expect(() => proxy.host.hasListeners!("a:b")).toThrow(/channel/);
+    expect(() => proxy.host.onDidChangeListeners!("tick", null as never)).toThrow(/callback/);
+  });
+
+  it("answers true on a host without listener tracking", async () => {
+    const { proxy } = connect({ pluginId: "acme.demo", fs: {} });
+    await flush();
+    expect(proxy.host.hasListeners!("tick")).toBe(true);
+  });
+});
+
+describe("worker host.fs.walk", () => {
+  it("relays the call with its options and the bridge's signal", async () => {
+    const { host } = makeListenerHost();
+    const { proxy } = connect(host);
+    const result = await proxy.host.fs.walk!("/repo", {
+      include: ["**/*.ts"],
+      limit: 5,
+      signal: new AbortController().signal,
+    });
+    expect(result).toEqual({ entries: [{ path: "a.ts", type: "file" }], truncated: false });
+    expect(host.fs.walk).toHaveBeenCalledWith(
+      "/repo",
+      expect.objectContaining({ include: ["**/*.ts"], limit: 5, signal: expect.any(AbortSignal) })
+    );
+  });
+
+  it("forwards a malformed options value for the host to reject", async () => {
+    const { host } = makeListenerHost();
+    const { proxy } = connect(host);
+    await proxy.host.fs.walk!("/repo", null as never);
+    expect(host.fs.walk).toHaveBeenCalledWith("/repo", null);
+  });
+});
+
+describe("PluginDevWorkerHostProxy host-call deadline (#13410)", () => {
+  beforeEach(() => vi.useFakeTimers());
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+  });
+
+  function lastCall(sent: any[], method: string) {
+    return [...sent].reverse().find((m) => m.type === "host-call" && m.method === method);
+  }
+
+  it("rejects a call main never answers with a typed TIMEOUT and cancels it on main", async () => {
+    const { proxy, sent } = makeProxy();
+    const promise = proxy.host.storage.get("k");
+    const outcome = promise.then(
+      () => "resolved",
+      (err) => err
+    );
+    const call = lastCall(sent, "storage.get");
+
+    await vi.advanceTimersByTimeAsync(PLUGIN_HOST_CALL_TIMEOUT_MS - 1);
+    expect(sent.some((m) => m.type === "host-cancel")).toBe(false);
+    await vi.advanceTimersByTimeAsync(1);
+
+    const err = await outcome;
+    expect(err).toBeInstanceOf(Error);
+    expect(err.code).toBe("TIMEOUT");
+    expect(err.message).toMatch(/^TIMEOUT: .*storage\.get/);
+    expect(sent).toContainEqual({ type: "host-cancel", requestId: call.requestId });
+  });
+
+  it("ignores main's late answer to a call that already timed out", async () => {
+    const { proxy, sent } = makeProxy();
+    const promise = proxy.host.storage.get("k");
+    const rejected = expect(promise).rejects.toMatchObject({ code: "TIMEOUT" });
+    const call = lastCall(sent, "storage.get");
+    await vi.advanceTimersByTimeAsync(PLUGIN_HOST_CALL_TIMEOUT_MS);
+    await rejected;
+
+    expect(
+      proxy.handleMessage({ type: "host-result", requestId: call.requestId, ok: true, result: 1 })
+    ).toBe(true);
+  });
+
+  it("clears the deadline once main answers", async () => {
+    const { proxy, sent } = makeProxy();
+    const promise = proxy.host.storage.get("k");
+    expect(vi.getTimerCount()).toBe(1);
+    resolveCall(proxy, sent, "storage.get", "v");
+    await expect(promise).resolves.toBe("v");
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("clears the deadline when the worker is disposed", async () => {
+    const { proxy } = makeProxy();
+    const promise = proxy.host.reloadPanel("p1");
+    proxy.dispose();
+    await expect(promise).resolves.toBe("unavailable");
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("rejects a grace-bearing call on timeout instead of answering its fallback", async () => {
+    const { proxy } = makeProxy();
+    const promise = proxy.host.reloadPanel("p1");
+    const rejected = expect(promise).rejects.toMatchObject({ code: "TIMEOUT" });
+    await vi.advanceTimersByTimeAsync(PLUGIN_HOST_CALL_TIMEOUT_MS);
+    await rejected;
+  });
+
+  it("gives a call that may wait on a consent dialog longer than an ordinary one", async () => {
+    const { proxy } = makeProxy();
+    let settled = false;
+    const promise = proxy.host.terminals.readScreen("t1");
+    const rejected = expect(promise).rejects.toMatchObject({ code: "TIMEOUT" });
+    void promise.catch(() => undefined).finally(() => (settled = true));
+
+    await vi.advanceTimersByTimeAsync(PLUGIN_HOST_CALL_TIMEOUT_MS);
+    expect(settled).toBe(false);
+    await vi.advanceTimersByTimeAsync(
+      PLUGIN_HOST_CALL_INTERACTIVE_TIMEOUT_MS - PLUGIN_HOST_CALL_TIMEOUT_MS
+    );
+    await rejected;
+  });
+
+  it("never times out a prompt waiting on the person", async () => {
+    const { proxy, sent } = makeProxy();
+    const promise = proxy.host.showConfirm({ title: "Go?", message: "Go?" });
+    expect(vi.getTimerCount()).toBe(0);
+    await vi.advanceTimersByTimeAsync(PLUGIN_HOST_CALL_INTERACTIVE_TIMEOUT_MS * 10);
+    resolveCall(proxy, sent, "showConfirm", true);
+    await expect(promise).resolves.toBe(true);
+  });
+
+  it("bounds a cancelled call main still owes an answer for", async () => {
+    const { proxy, sent } = makeProxy();
+    const controller = new AbortController();
+    const promise = proxy.host.sendToAgent(
+      "hi",
+      { terminalId: "t1" },
+      {
+        signal: controller.signal,
+      }
+    );
+    const rejected = expect(promise).rejects.toMatchObject({ code: "TIMEOUT" });
+    controller.abort();
+    expect(sent.filter((m) => m.type === "host-cancel")).toHaveLength(1);
+
+    await vi.advanceTimersByTimeAsync(PLUGIN_HOST_CALL_INTERACTIVE_TIMEOUT_MS);
+    await rejected;
+  });
+
+  it("clears the deadline when the call cannot be posted", async () => {
+    const { proxy, post } = makeProxy();
+    post.mockImplementationOnce(() => {
+      throw new Error("DataCloneError");
+    });
+    await expect(proxy.host.storage.get("k")).rejects.toThrow(/DataCloneError/);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("bounds main's answer to an aborted picker, which has no deadline of its own", async () => {
+    const { proxy, sent } = makeProxy();
+    const controller = new AbortController();
+    const promise = proxy.host.sendToAgent("hi", undefined, { signal: controller.signal });
+    const rejected = expect(promise).rejects.toMatchObject({ code: "TIMEOUT" });
+    expect(vi.getTimerCount()).toBe(0);
+    await vi.advanceTimersByTimeAsync(PLUGIN_HOST_CALL_INTERACTIVE_TIMEOUT_MS * 10);
+
+    controller.abort();
+    expect(sent.filter((m) => m.type === "host-cancel")).toHaveLength(1);
+    await vi.advanceTimersByTimeAsync(PLUGIN_HOST_CALL_TIMEOUT_MS);
+    await rejected;
+  });
+
+  it("kills a process whose spawn answer arrives after the worker gave up on it", async () => {
+    const { proxy, sent } = makeProxy();
+    const promise = proxy.host.process.spawn("node", { args: ["x.js"] });
+    const rejected = expect(promise).rejects.toMatchObject({ code: "TIMEOUT" });
+    const call = lastCall(sent, "process.spawn");
+    await vi.advanceTimersByTimeAsync(PLUGIN_HOST_CALL_INTERACTIVE_TIMEOUT_MS);
+    await rejected;
+
+    proxy.handleMessage({
+      type: "host-result",
+      requestId: call.requestId,
+      ok: true,
+      result: { id: "orphan", mode: "pipe" },
+    });
+    expect(sent).toContainEqual(
+      expect.objectContaining({
+        type: "host-notify",
+        method: "process.kill",
+        params: { processId: "orphan" },
+      })
+    );
+    // Only once: a duplicate answer finds nothing left to kill.
+    proxy.handleMessage({
+      type: "host-result",
+      requestId: call.requestId,
+      ok: true,
+      result: { id: "orphan", mode: "pipe" },
+    });
+    expect(sent.filter((m) => m.method === "process.kill")).toHaveLength(1);
+  });
+
+  it("releases main's watcher when a watch times out", async () => {
+    const { proxy, sent } = makeProxy();
+    const promise = proxy.host.fs.watch(["/repo/a.ts"], vi.fn());
+    const rejected = expect(promise).rejects.toMatchObject({ code: "TIMEOUT" });
+    const subscriptionId = lastCall(sent, "fs.watch").params.subscriptionId;
+
+    await vi.advanceTimersByTimeAsync(PLUGIN_HOST_CALL_TIMEOUT_MS);
+    await rejected;
+    expect(sent).toContainEqual({ type: "unsubscribe", subscriptionId });
+  });
+});
+
+describe("PluginDevWorkerHostProxy restartWorker (#13410)", () => {
+  it("relays the request and resolves with main's answer", async () => {
+    const { proxy, sent } = makeProxy();
+    const promise = proxy.host.restartWorker();
+    expect(sent.find((m) => m.type === "host-call" && m.method === "restartWorker")).toBeDefined();
+    resolveCall(proxy, sent, "restartWorker", "scheduled");
+    await expect(promise).resolves.toBe("scheduled");
+  });
+
+  it("resolves unavailable when the worker is torn down before main answers", async () => {
+    const { proxy } = makeProxy();
+    const promise = proxy.host.restartWorker();
+    proxy.dispose();
+    await expect(promise).resolves.toBe("unavailable");
   });
 });

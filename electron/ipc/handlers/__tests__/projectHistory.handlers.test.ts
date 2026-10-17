@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { wrapSuccess } from "../../../../shared/utils/ipcErrorSerialization.js";
 
 const ipcHandlers = vi.hoisted(() => new Map<string, unknown>());
 const ipcMainMock = vi.hoisted(() => ({
@@ -15,6 +16,11 @@ const projectStoreMock = vi.hoisted(() => ({
 const scratchStoreMock = vi.hoisted(() => ({
   getScratchById: vi.fn((id: string) => (existingScratchIds.has(id) ? { id } : null)),
   getCurrentScratchId: vi.fn<() => string | null>(() => null),
+}));
+
+// The Shell's remote hosts client: absent until a host is first used.
+const remoteHosts = vi.hoisted(() => ({
+  client: null as { list: () => Array<{ descriptor: { id: string } }> } | null,
 }));
 
 const scopedProjectMock = vi.hoisted(() =>
@@ -37,6 +43,9 @@ vi.mock("electron", () => ({
 }));
 vi.mock("../../../services/ProjectStore.js", () => ({ projectStore: projectStoreMock }));
 vi.mock("../../../services/ScratchStore.js", () => ({ scratchStore: scratchStoreMock }));
+vi.mock("../../../remote/runtime.js", () => ({
+  getRemoteService: (name: string) => (name === "remoteHostsClient" ? remoteHosts.client : null),
+}));
 vi.mock("../../projectContext.js", () => ({
   resolveScopedProjectForIpcContext: scopedProjectMock,
 }));
@@ -52,6 +61,9 @@ import {
   resetProjectHistory,
 } from "../../../services/ProjectHistoryService.js";
 import type { HandlerDependencies } from "../../types.js";
+import { toHostScopedKey } from "../../../../shared/types/remoteHosts.js";
+import { getIpcDispatcher } from "../../dispatcher.js";
+import type { ClientEndpoint } from "../../endpoint.js";
 
 const WINDOW_ID = 41;
 
@@ -115,6 +127,7 @@ describe("projectHistory IPC", () => {
     vi.clearAllMocks();
     existingProjectIds.clear();
     existingScratchIds.clear();
+    remoteHosts.client = null;
     // Reset, not dispose: disposing tombstones the id, and the tombstone is
     // exactly what stops a closed window's history from recording again.
     resetProjectHistory(WINDOW_ID);
@@ -389,5 +402,69 @@ describe("projectHistory IPC", () => {
     expect(lookups(SCRATCH_ONE)).toBe(1);
     expect(lookups(SCRATCH_TWO)).toBe(1);
     expect(lookups(PROJECT_A)).toBe(1);
+  });
+  it("never borrows this machine's primary window for a view attached over a link", async () => {
+    existingProjectIds.add(PROJECT_A);
+    inProject(PROJECT_B);
+    getProjectHistory(WINDOW_ID).record(PROJECT_A);
+    const endpoint: ClientEndpoint = {
+      endpointId: "remote:-3",
+      clientId: "client-b",
+      projectId: PROJECT_B,
+      kind: "remote-view",
+      handle: -3,
+      send: vi.fn(),
+      request: vi.fn(),
+      onClose: () => ({ dispose: () => undefined }),
+      isClosed: () => false,
+    };
+    getIpcDispatcher().setInvokeEnveloper(async (_channel, _args, call) =>
+      wrapSuccess(await call())
+    );
+    try {
+      // The history lives on the Shell's window, so the channel is shell-local
+      // and a link call is refused before any handler here could run.
+      await expect(
+        getIpcDispatcher().invokeForEndpoint(
+          {
+            endpoint,
+            client: { clientId: "client-b", clientName: "b", platform: "darwin", kind: "remote" },
+          },
+          "project-history:peek",
+          []
+        )
+      ).rejects.toMatchObject({ code: "CHANNEL_NOT_REMOTABLE" });
+    } finally {
+      getIpcDispatcher().setInvokeEnveloper(null);
+    }
+  });
+
+  describe("workspaces on another host", () => {
+    const REMOTE_HOST = "studio-02";
+    const REMOTE_PROJECT = toHostScopedKey(REMOTE_HOST, PROJECT_OLDER);
+
+    it("keeps them while the remote hosts client isn't running", async () => {
+      inProject(PROJECT_A);
+      getProjectHistory(WINDOW_ID).record(REMOTE_PROJECT);
+
+      // No client means nothing is known about the host, not that it's gone.
+      await expect(peek()).resolves.toEqual({ workspaceId: REMOTE_PROJECT });
+    });
+
+    it("keeps them while the host is in this machine's list", async () => {
+      remoteHosts.client = { list: () => [{ descriptor: { id: REMOTE_HOST } }] };
+      inProject(PROJECT_A);
+      getProjectHistory(WINDOW_ID).record(REMOTE_PROJECT);
+
+      await expect(peek()).resolves.toEqual({ workspaceId: REMOTE_PROJECT });
+    });
+
+    it("drops them once the host has been removed", async () => {
+      remoteHosts.client = { list: () => [] };
+      inProject(PROJECT_A);
+      getProjectHistory(WINDOW_ID).record(REMOTE_PROJECT);
+
+      await expect(peek()).resolves.toBeNull();
+    });
   });
 });

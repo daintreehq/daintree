@@ -37,14 +37,6 @@ describe("ipc-renderer codegen", () => {
     expect(output).toContain("alpha:");
   });
 
-  it("emits the GeneratedElectronAPI interface and a do-not-edit header", async () => {
-    const output = await runFixture(["alpha.preload.ts"]);
-    expect(output).toContain("export interface GeneratedElectronAPI {");
-    expect(output).toContain("AUTO-GENERATED");
-    expect(output).toContain("do not edit by hand");
-    expect(output).toContain('import type { IpcInvokeMap } from "./maps.js";');
-  });
-
   it("sorts namespaces alphabetically and methods within them", async () => {
     const output = await runFixture(["alpha.preload.ts", "multi-word.preload.ts"]);
     const namespaceOrder: string[] = [];

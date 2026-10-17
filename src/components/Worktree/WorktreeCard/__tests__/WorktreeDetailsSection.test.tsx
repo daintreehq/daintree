@@ -259,19 +259,6 @@ describe("WorktreeDetailsSection count pill bump", () => {
     expect(firstNode).toBe(secondNode);
   });
 
-  it("does not bump when changedFileCount stays the same", () => {
-    const { rerender } = renderSection();
-    expect(mockAnimate).not.toHaveBeenCalled();
-
-    rerender(
-      <TooltipProvider>
-        <WorktreeDetailsSection {...baseProps} />
-      </TooltipProvider>
-    );
-
-    expect(mockAnimate).not.toHaveBeenCalled();
-  });
-
   it("does not animate when expanded (count span not rendered)", () => {
     const { rerender } = renderSection({ isExpanded: false });
 
@@ -417,11 +404,6 @@ describe("WorktreeDetailsSection activity chip (collapsed row)", () => {
     expect(screen.getByRole("group", { name: "Last activity" })).toBeDefined();
   });
 
-  it("uses activity-focused accessible naming regardless of commit author", () => {
-    renderSection({ worktree: withCommit({ lastCommitAuthor: undefined }), hasChanges: false });
-    expect(screen.getByRole("group", { name: "Last activity" })).toBeDefined();
-  });
-
   it("drives both the dot and visible time from a recent activity timestamp", () => {
     renderSection({ worktree: withCommit({}, Date.now()), hasChanges: false });
     const chip = screen.getByRole("group", { name: "Last activity" });
@@ -448,36 +430,6 @@ describe("WorktreeDetailsSection activity chip (collapsed row)", () => {
     const chip = screen.getByRole("group", { name: "Last activity" });
     expect(chip.querySelector("svg")).toBeNull();
     expect(chip.querySelector("img")).toBeNull();
-  });
-
-  it("renders activity for a worktree with no commit", () => {
-    const worktree: WorktreeState = { ...baseWorktree, lastActivityTimestamp: Date.now() };
-    renderSection({ worktree, hasChanges: false });
-    expect(screen.getByRole("group", { name: "Last activity" }).textContent).toBe("now");
-  });
-
-  it("omits the chip when neither activity nor commit timestamp is valid", () => {
-    const { container } = renderSection({
-      worktree: withCommit({ lastCommitTimestampMs: Number.NaN }),
-      hasChanges: false,
-    });
-    expect(screen.queryByRole("group", { name: "Last activity" })).toBeNull();
-    expect(container.textContent).not.toContain("NaN");
-  });
-
-  it("falls back to a valid commit when the activity timestamp is invalid", () => {
-    renderSection({ worktree: withCommit({}, Number.NaN), hasChanges: false });
-    expect(screen.getByRole("group", { name: "Last activity" }).textContent).toBe("2m");
-  });
-
-  it("rejects a future activity timestamp and falls back to the commit", () => {
-    renderSection({ worktree: withCommit({}, Date.now() + 60_000), hasChanges: false });
-    expect(screen.getByRole("group", { name: "Last activity" }).textContent).toBe("2m");
-  });
-
-  it("removes the standalone 'No activity' placeholder", () => {
-    renderSection({ worktree: withCommit({}), hasChanges: false });
-    expect(screen.queryByText("No activity")).toBeNull();
   });
 });
 

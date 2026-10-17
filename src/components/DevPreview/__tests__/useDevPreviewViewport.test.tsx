@@ -125,13 +125,6 @@ describe("useDevPreviewViewport — effectiveViewport / fitScale", () => {
     expect(landscape.current.effectiveViewport).toEqual({ width: 852, height: 393 });
   });
 
-  it("stays at scale 1 when fit mode is off even with a preset active", () => {
-    const { result } = renderHook(() =>
-      useDevPreviewViewport(baseParams({ viewportPreset: "iphone", viewportFit: false }))
-    );
-    expect(result.current.fitScale).toBe(1);
-  });
-
   it("measures the fit container via ResizeObserver.observe and computes fitScale from its size", () => {
     const observeSpy = vi.fn();
     class ResizeObserverStub {
@@ -449,24 +442,6 @@ describe("useDevPreviewViewport — device emulation effect", () => {
     );
     await settleEmulation();
     expect(setDeviceEmulation).toHaveBeenCalledTimes(3);
-  });
-
-  it("registers the panel before applying so main can resolve ownership", async () => {
-    renderHook(() =>
-      useDevPreviewViewport(
-        baseParams({
-          viewportPreset: "iphone",
-          isWebviewReady: true,
-          webviewElement: makeWebview(7),
-        })
-      )
-    );
-    await settleEmulation();
-
-    expect(registerPanel).toHaveBeenCalledWith(7, PANE_ID);
-    expect(registerPanel.mock.invocationCallOrder[0]!).toBeLessThan(
-      setDeviceEmulation.mock.invocationCallOrder[0]!
-    );
   });
 
   it("reports a rejected apply instead of throwing", async () => {

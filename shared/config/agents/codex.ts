@@ -59,6 +59,12 @@ export const config: AgentConfig = {
           label: "npm",
           commands: ["npm install -g @openai/codex"],
         },
+        // OpenAI's standalone installer (a POSIX sh script): the binary goes to
+        // ~/.local/bin without npm or root.
+        {
+          label: "curl",
+          commands: ["curl -fsSL https://chatgpt.com/codex/install.sh | sh"],
+        },
       ],
     },
     troubleshooting: [
@@ -67,18 +73,10 @@ export const config: AgentConfig = {
       "Run 'codex auth login' after installing to authenticate",
     ],
   },
-  // The picker's model set, in the CLI's own `priority` order. Curated, so it
-  // outranks the live `codex debug models --bundled` probe, which still lists
-  // the previous generation; the probe only prunes IDs an older CLI lacks.
-  // Explicit tier slugs: the CLI doesn't validate `--model` against an
-  // allowlist, so an unlisted slug silently falls back to generic metadata
-  // instead of failing loudly.
-  models: [
-    { id: "gpt-6-astra", name: "GPT-6 Astra", shortLabel: "Astra" },
-    { id: "gpt-6-sol", name: "GPT-6 Sol", shortLabel: "Sol" },
-    { id: "gpt-6-luna", name: "GPT-6 Luna", shortLabel: "Luna" },
-  ],
-  curatedModels: true,
+  // No bundled model list: the installed CLI's `codex debug models --bundled`
+  // is the only source of Codex models (see `AgentModelCatalogService`), so a
+  // new release reaches the picker without a version written down here, and a
+  // retired one leaves it when the CLI points it at a successor.
   contextWindow: 128_000,
   capabilities: {
     scrollback: 10000,

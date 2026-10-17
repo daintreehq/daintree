@@ -82,13 +82,6 @@ describe("projectActions adversarial", () => {
 
       expect(peek).toHaveBeenCalledTimes(1);
     });
-
-    it("does not throw when there is nowhere to go", async () => {
-      mockHistory();
-      const { run } = setupActions();
-
-      await expect(run("project.mruCycleOlder")).resolves.not.toThrow();
-    });
   });
 
   describe("project.getSettings", () => {

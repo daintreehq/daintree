@@ -21,7 +21,10 @@ export function BrowserHostApprovalBar({
   onDismiss: () => void;
 }) {
   return (
-    <div className="absolute top-0 left-0 right-0 z-20">
+    // Above the load-error overlay (z-30): leaving a failed page for a new
+    // host is exactly when this prompt shows, and beneath that overlay it can
+    // be neither seen nor clicked.
+    <div className="absolute top-0 left-0 right-0 z-40">
       <InlineStatusBanner
         severity="info"
         title={

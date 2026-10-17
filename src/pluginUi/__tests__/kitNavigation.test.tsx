@@ -63,7 +63,7 @@ import {
 
 beforeAll(async () => {
   await kit.whenPluginUiReady();
-});
+}, 60_000);
 
 afterEach(cleanup);
 

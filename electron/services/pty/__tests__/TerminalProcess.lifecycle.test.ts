@@ -5,6 +5,7 @@ import type { SpawnContext } from "../terminalSpawn.js";
 import { events } from "../../events.js";
 import { AGENT_OUTPUT_ACTIVITY_LINE_COUNT } from "../AgentActivityTemperature.js";
 import { measureVisibleContentDelta } from "../SustainedChangeTracker.js";
+import type { PanelTitleMode } from "../../../../shared/types/panel.js";
 
 vi.mock("node-pty", () => {
   return { spawn: vi.fn() };
@@ -1330,5 +1331,215 @@ describe("TerminalProcess — resize result echo (#11641)", () => {
     } finally {
       terminal.dispose();
     }
+  });
+});
+
+describe("TerminalProcess exit status and spawn args", () => {
+  let exitHandler: ((e: { exitCode: number; signal?: number }) => void) | null = null;
+
+  function createMockPty(): IPty {
+    const pty: Partial<IPty> = {
+      pid: 456,
+      cols: 80,
+      rows: 24,
+      process: "zsh",
+      write: () => {},
+      resize: () => {},
+      kill: () => {},
+      pause: () => {},
+      resume: () => {},
+      onData: () => ({ dispose: () => {} }),
+      onExit: (handler: (e: { exitCode: number; signal?: number }) => void) => {
+        exitHandler = handler;
+        return { dispose: () => {} };
+      },
+    };
+    return pty as IPty;
+  }
+
+  function defaultSpawnContext(overrides?: Partial<SpawnContext>): SpawnContext {
+    return {
+      shell: "/bin/zsh",
+      args: ["-l"],
+      env: {},
+      ...overrides,
+    };
+  }
+
+  function createTerminal(
+    options?: Partial<TerminalProcessOptions>,
+    contextOverrides?: Partial<SpawnContext>
+  ): TerminalProcess {
+    const merged = {
+      cwd: process.cwd(),
+      cols: 80,
+      rows: 24,
+      kind: "terminal" as const,
+      ...options,
+    };
+    const ctx = defaultSpawnContext({
+      ...contextOverrides,
+    });
+    return new TerminalProcess(
+      "t-exit",
+      merged,
+      { emitData: () => {}, onExit: () => {} },
+      {
+        agentStateService: {
+          handleActivityState: () => {},
+          updateAgentState: () => {},
+          emitAgentKilled: () => {},
+          emitAgentCompleted: () => {},
+        } as unknown as ConstructorParameters<typeof TerminalProcess>[3]["agentStateService"],
+        ptyPool: null,
+        processTreeCache: null,
+      },
+      ctx,
+      createMockPty()
+    );
+  }
+
+  describe("TerminalProcess exit code persistence", () => {
+    beforeEach(() => {
+      exitHandler = null;
+    });
+
+    it("stores non-zero exitCode unconditionally, even when the terminal is not preserved (#10638)", () => {
+      const terminal = createTerminal({ kind: "terminal", launchAgentId: "claude" });
+
+      expect(exitHandler).not.toBeNull();
+      exitHandler!({ exitCode: 1 });
+
+      // Non-zero exit for an agent terminal: shouldPreserveOnExit returns false so
+      // the terminal is disposed (not preserved), but the exit code must still be
+      // recorded — MCP supervisors read it to tell a failure from a clean finish.
+      const state = terminal.getPublicState();
+      expect(state.isExited).toBe(true);
+      expect(state.exitCode).toBe(1);
+    });
+
+    it("stores exitCode for non-agent terminals on exit (unconditional capture #10638)", () => {
+      const terminal = createTerminal({ kind: "terminal" });
+
+      expect(exitHandler).not.toBeNull();
+      exitHandler!({ exitCode: 0 });
+
+      // Non-agent terminals are never preserved, but their exit code is captured
+      // all the same so any read path can report the outcome.
+      const state = terminal.getPublicState();
+      expect(state.isExited).toBe(true);
+      expect(state.exitCode).toBe(0);
+    });
+
+    it("records the OS signal number on a signal-terminated exit (#10638)", () => {
+      const terminal = createTerminal({ kind: "terminal", launchAgentId: "claude" });
+
+      expect(exitHandler).not.toBeNull();
+      exitHandler!({ exitCode: 0, signal: 9 });
+
+      const state = terminal.getPublicState();
+      expect(state.isExited).toBe(true);
+      expect(state.exitSignal).toBe(9);
+    });
+
+    it("does not store exitCode for killed terminals", () => {
+      const terminal = createTerminal({ kind: "terminal", launchAgentId: "claude" });
+
+      terminal.kill("test");
+      exitHandler!({ exitCode: 0 });
+
+      const state = terminal.getPublicState();
+      expect(state.exitCode).toBeUndefined();
+    });
+  });
+
+  describe("TerminalProcess spawnArgs persistence", () => {
+    beforeEach(() => {
+      exitHandler = null;
+    });
+
+    it("captures spawnContext.args into getPublicState().spawnArgs", () => {
+      const terminal = createTerminal(undefined, { args: ["-l", "--rcfile", "/tmp/rc"] });
+
+      expect(terminal.getPublicState().spawnArgs).toEqual(["-l", "--rcfile", "/tmp/rc"]);
+    });
+
+    it("preserves an empty args array (does not coerce to undefined)", () => {
+      const terminal = createTerminal(undefined, { args: [] });
+
+      expect(terminal.getPublicState().spawnArgs).toEqual([]);
+      expect(terminal.getInfo().spawnArgs).toEqual([]);
+    });
+  });
+});
+
+/**
+ * `setTitle` is the only writer of a renamed title on the authoritative record.
+ * Its whole contract is that `title` and `titleMode` move together: a title
+ * landing without its mode still reads as `"default"`, and the next agent
+ * detection sweep overwrites the user's rename (#10794, #11830).
+ *
+ * Exercised through the prototype so the real mutator is under test without
+ * standing up a PTY — `setTitle` touches nothing but `terminalInfo`.
+ */
+function applySetTitle(
+  info: { title?: string; titleMode?: PanelTitleMode; lastObservedTitle?: string },
+  title: string,
+  titleMode: PanelTitleMode
+) {
+  TerminalProcess.prototype.setTitle.call({ terminalInfo: info } as never, title, titleMode);
+  return info;
+}
+
+describe("TerminalProcess.setTitle", () => {
+  it("writes the mode in the same call as the title", () => {
+    const info = applySetTitle({ title: "claude", titleMode: "default" }, "Ship the fix", "user");
+
+    expect(info).toMatchObject({ title: "Ship the fix", titleMode: "user" });
+  });
+
+  it("lowers the mode as readily as it raises it, so an unlock is not one-way", () => {
+    const locked = applySetTitle({ title: "Mine", titleMode: "user" }, "Claude", "default");
+
+    // An empty rename resets the panel to its identity default and drops the
+    // lock; a mutator that only ever escalated would strand the terminal.
+    expect(locked.titleMode).toBe("default");
+  });
+
+  it("leaves the observed OSC title alone — it is a separate ingredient", () => {
+    const info = applySetTitle(
+      { title: "old", titleMode: "default", lastObservedTitle: "agent task" },
+      "Renamed",
+      "user"
+    );
+
+    expect(info.lastObservedTitle).toBe("agent task");
+  });
+});
+
+/**
+ * `setWorktreeId` is the mirror of a renderer-side cross-worktree move onto the
+ * authoritative record — the one the fleet palette groups by (#12060). Its
+ * contract is that `null` genuinely un-files the run: the key comes off, rather
+ * than being blanked to a string the palette would read as a worktree named "".
+ */
+function applySetWorktreeId(
+  info: { worktreeId?: string; title?: string },
+  worktreeId: string | null
+) {
+  TerminalProcess.prototype.setWorktreeId.call({ terminalInfo: info } as never, worktreeId);
+  return info;
+}
+
+describe("TerminalProcess.setWorktreeId", () => {
+  it("deletes the key on an explicit clear rather than blanking it", () => {
+    // `worktreeKey` in the palette folds a blank id in with the absent one, so a
+    // blank would land in the right bucket by luck — but every other reader
+    // (session journal, worktree-scoped clears) would see a worktree whose id is
+    // the empty string.
+    const info = applySetWorktreeId({ worktreeId: "/repo", title: "claude" }, null);
+
+    expect("worktreeId" in info).toBe(false);
+    expect(info.title).toBe("claude");
   });
 });

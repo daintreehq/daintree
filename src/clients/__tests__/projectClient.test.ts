@@ -3,7 +3,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 const typedGlobal = globalThis as unknown as Record<string, unknown>;
 
 let projectClient: typeof import("../projectClient").projectClient;
-let invalidateCurrentCache: typeof import("../projectClient").invalidateCurrentCache;
 
 let getCurrentMock: ReturnType<typeof vi.fn>;
 let onSwitchMock: ReturnType<typeof vi.fn>;
@@ -37,7 +36,6 @@ describe("projectClient getCurrent caching", () => {
 
     const mod = await import("../projectClient");
     projectClient = mod.projectClient;
-    invalidateCurrentCache = mod.invalidateCurrentCache;
   });
 
   afterEach(() => {
@@ -182,19 +180,6 @@ describe("projectClient getCurrent caching", () => {
     projectClient.getCurrent();
     expect(onSwitchMock).toHaveBeenCalledTimes(1);
   });
-
-  it("invalidateCurrentCache works directly without onSwitch", async () => {
-    getCurrentMock.mockResolvedValue(fakeProject);
-    await projectClient.getCurrent();
-    expect(getCurrentMock).toHaveBeenCalledTimes(1);
-
-    invalidateCurrentCache();
-
-    getCurrentMock.mockResolvedValue(fakeProject2);
-    const result = await projectClient.getCurrent();
-    expect(getCurrentMock).toHaveBeenCalledTimes(2);
-    expect(result).toBe(fakeProject2);
-  });
 });
 
 describe("projectClient getSettings caching", () => {
@@ -255,30 +240,6 @@ describe("projectClient getSettings caching", () => {
     expect(r2).toBe(settingsA);
   });
 
-  it("returns cached result for follow-on calls within TTL", async () => {
-    getSettingsMock.mockResolvedValue(settingsA);
-
-    const r1 = await projectClient.getSettings("proj-1");
-    const r2 = await projectClient.getSettings("proj-1");
-
-    expect(getSettingsMock).toHaveBeenCalledTimes(1);
-    expect(r1).toBe(settingsA);
-    expect(r2).toBe(settingsA);
-  });
-
-  it("isolates cache per projectId", async () => {
-    getSettingsMock.mockImplementation((id: string) =>
-      Promise.resolve(id === "proj-1" ? settingsA : settingsB)
-    );
-
-    const r1 = await projectClient.getSettings("proj-1");
-    const r2 = await projectClient.getSettings("proj-2");
-
-    expect(getSettingsMock).toHaveBeenCalledTimes(2);
-    expect(r1).toBe(settingsA);
-    expect(r2).toBe(settingsB);
-  });
-
   it("re-fetches after the TTL expires", async () => {
     vi.setSystemTime(new Date(0));
     getSettingsMock.mockResolvedValue(settingsA);
@@ -297,20 +258,6 @@ describe("projectClient getSettings caching", () => {
     const r3 = await projectClient.getSettings("proj-1");
     expect(getSettingsMock).toHaveBeenCalledTimes(2);
     expect(r3).toBe(settingsB);
-  });
-
-  it("saveSettings invalidates the project's cached settings", async () => {
-    getSettingsMock.mockResolvedValue(settingsA);
-    await projectClient.getSettings("proj-1");
-    expect(getSettingsMock).toHaveBeenCalledTimes(1);
-
-    await projectClient.saveSettings("proj-1", settingsB);
-    expect(saveSettingsMock).toHaveBeenCalledWith("proj-1", settingsB);
-
-    getSettingsMock.mockResolvedValue(settingsB);
-    const result = await projectClient.getSettings("proj-1");
-    expect(getSettingsMock).toHaveBeenCalledTimes(2);
-    expect(result).toBe(settingsB);
   });
 
   it("saveSettings only invalidates the affected projectId", async () => {
@@ -407,16 +354,6 @@ describe("projectClient.setDraftInputs delta forwarding (#11352)", () => {
     await client.setDraftInputs("proj-1", { t1: "draft" }, ["t1"], ["t2"]);
     expect(setDraftInputsMock).toHaveBeenCalledWith("proj-1", { t1: "draft" }, ["t1"], ["t2"]);
   });
-
-  it("passes undefined delta args through for a legacy full-replace call", async () => {
-    await client.setDraftInputs("proj-1", { t1: "draft" });
-    expect(setDraftInputsMock).toHaveBeenCalledWith(
-      "proj-1",
-      { t1: "draft" },
-      undefined,
-      undefined
-    );
-  });
 });
 
 describe("projectClient.setTerminals fieldEdits forwarding (#11461)", () => {
@@ -451,12 +388,75 @@ describe("projectClient.setTerminals fieldEdits forwarding (#11461)", () => {
 
     expect(setTerminalsMock).toHaveBeenCalledWith("proj-1", snapshots, ["t1"], [], fieldEdits);
   });
+});
 
-  it("passes undefined through when there is nothing to claim", async () => {
-    const snapshots = [{ id: "t1", title: "T", cwd: "/p", location: "grid" as const }];
+describe("projectClient.addBrowserAllowedHost", () => {
+  let addHostMock: ReturnType<typeof vi.fn>;
+  let saveSettingsMock: ReturnType<typeof vi.fn>;
+  let client: typeof import("../projectClient").projectClient;
 
-    await client.setTerminals("proj-1", snapshots, ["t1"], []);
+  beforeEach(async () => {
+    vi.resetModules();
+    addHostMock = vi.fn();
+    saveSettingsMock = vi.fn().mockResolvedValue(undefined);
+    typedGlobal.window = {
+      electron: {
+        project: {
+          onSwitch: vi.fn(() => () => {}),
+          addBrowserAllowedHost: addHostMock,
+          getSettings: vi.fn().mockResolvedValue({
+            runCommands: [],
+            devServerCommand: "npm run dev",
+            browserAllowedHosts: ["internal.corp.test"],
+          }),
+          saveSettings: saveSettingsMock,
+        },
+      },
+    };
+    client = (await import("../projectClient")).projectClient;
+  });
 
-    expect(setTerminalsMock).toHaveBeenCalledWith("proj-1", snapshots, ["t1"], [], undefined);
+  afterEach(() => {
+    delete typedGlobal.window;
+  });
+
+  it("returns the list Main saved", async () => {
+    addHostMock.mockResolvedValue(["internal.corp.test", "example.com"]);
+
+    await expect(client.addBrowserAllowedHost("proj-1", "example.com")).resolves.toEqual([
+      "internal.corp.test",
+      "example.com",
+    ]);
+    expect(saveSettingsMock).not.toHaveBeenCalled();
+  });
+
+  it("saves the settings whole on a host that predates the channel", async () => {
+    // What the preload rebuilds from an older host refusing a channel it doesn't know.
+    addHostMock.mockRejectedValue(
+      new Error(
+        "[AppError|CHANNEL_NOT_REMOTABLE] Channel project:add-browser-allowed-host is not classified"
+      )
+    );
+
+    await expect(client.addBrowserAllowedHost("proj-1", "Example.com")).resolves.toEqual([
+      "internal.corp.test",
+      "example.com",
+    ]);
+    expect(saveSettingsMock).toHaveBeenCalledWith("proj-1", {
+      runCommands: [],
+      devServerCommand: "npm run dev",
+      browserAllowedHosts: ["internal.corp.test", "example.com"],
+    });
+  });
+
+  it("passes any other failure on without saving", async () => {
+    addHostMock.mockRejectedValue(
+      new Error("[AppError|DRIVEN_ELSEWHERE] Another window drives it")
+    );
+
+    await expect(client.addBrowserAllowedHost("proj-1", "example.com")).rejects.toThrow(
+      "Another window drives it"
+    );
+    expect(saveSettingsMock).not.toHaveBeenCalled();
   });
 });

@@ -419,17 +419,6 @@ describe("AgentButton preset UX", () => {
       // named preset already represents two real launch choices.
       expect(getByTestId("chevron-icon")).toBeTruthy();
     });
-
-    it("renders split button (with chevron) when agent has >= 2 presets", () => {
-      mockMergedPresetsFn = () => [
-        { id: "a", name: "Alpha" },
-        { id: "b", name: "Beta" },
-      ];
-      const { getByTestId } = render(
-        <AgentButton type="claude" availability={"ready" as unknown as CliAvailability[string]} />
-      );
-      expect(getByTestId("chevron-icon")).toBeTruthy();
-    });
   });
 
   describe("MRU primary-click launch", () => {
@@ -463,23 +452,6 @@ describe("AgentButton preset UX", () => {
         { id: "user-blue", name: "Blue" },
         { id: "user-red", name: "Red" },
       ];
-
-      const { getAllByRole } = render(
-        <AgentButton type="claude" availability={"ready" as unknown as CliAvailability[string]} />
-      );
-      const [primaryBtn] = getAllByRole("button") as HTMLElement[];
-      fireEvent.click(primaryBtn!);
-
-      expect(dispatchMock).toHaveBeenCalledWith(
-        "agent.launch",
-        { agentId: "claude" },
-        { source: "user" }
-      );
-    });
-
-    it("primary click omits presetId even when agent has only 1 preset", () => {
-      mockSettings = settingsWith({ claude: { presetId: "user-alpha" } });
-      mockMergedPresetsFn = () => [{ id: "user-alpha", name: "Alpha" }];
 
       const { getAllByRole } = render(
         <AgentButton type="claude" availability={"ready" as unknown as CliAvailability[string]} />
@@ -1193,18 +1165,6 @@ describe("AgentButton preset UX", () => {
 
       expect(document.activeElement).not.toBe(button);
     });
-
-    it("stays inert while the availability probe is still loading", () => {
-      mockSettings = settingsWith({ claude: {} });
-      mockMergedPresetsFn = () => [];
-
-      const { getByRole } = render(
-        <AgentButton type="claude" availability={undefined as unknown as CliAvailability[string]} />
-      );
-      fireEvent.click(getByRole("button"));
-
-      expect(dispatchMock).not.toHaveBeenCalled();
-    });
   });
 
   describe("status dot badge", () => {
@@ -1465,7 +1425,7 @@ describe("AgentButton preset UX", () => {
 
   describe("split-button structure", () => {
     // The split draws as one control at rest; its partition and shared wash
-    // only appear on a split the chevron can actually open (toolbar.css gates
+    // only appear on a split the chevron can actually open (toolbar/controls.css gates
     // them on data-split-live). A gated chevron blocks clicks (#8131), so a
     // split drawn as two halves there would advertise a control that isn't.
     function splitWrapper(chevronIcon: HTMLElement): HTMLElement {

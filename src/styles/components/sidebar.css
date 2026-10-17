@@ -202,6 +202,89 @@ html[data-dragging="true"]
   --card-edge: inset 2px 0 0 var(--theme-selection-outline);
 }
 
+/* A labelled card's leading edge already carries its colour bar, and a neutral
+   2px edge on top of it would read as part of the label. The cursor edge moves
+   to the right there; it already skips the active row, so it never meets the
+   selection edge (#13408). */
+[data-worktree-row]:focus-visible
+  .sidebar-worktree-card[data-label]:not([data-active="true"]):not([data-drop-target="true"]),
+.sidebar-root
+  [role="grid"]:focus-visible
+  [data-worktree-row][data-keyboard-cursor="true"]
+  .sidebar-worktree-card[data-label]:not([data-active="true"]):not([data-drop-target="true"]) {
+  --card-edge: inset -2px 0 0 var(--theme-selection-outline);
+}
+
+/* The colour label's ink, shared by the bar and the menu swatch so the two
+   always match. `--worktree-label-color` is the chosen category token, set
+   inline. 10% of `text-primary` mixed in is what holds every label at 3:1
+   (WCAG 1.4.11) against the resting, hovered and selected card on every
+   built-in theme and colour-vision mode — the raw tokens dip to 2.75:1 (pink,
+   red-green, light themes). Local to the label, so the category tokens and
+   everything else that reads them stay as they are.
+   `worktreeLabelContrast.test.ts` reads the weight from here. */
+.worktree-label-bar,
+.worktree-label-swatch {
+  background-color: color-mix(in oklab, var(--worktree-label-color) 90%, var(--theme-text-primary));
+}
+
+/* The colour label (#13408). Full height of the card's padding box, so it ends
+   at the 2px gutter rather than running into the next card. `z-index: 15` puts
+   it over the content column (`z-10`, where the grip's hover plate lives) and
+   under the `z-20` full-card overlays, so the drop ring keeps its own edge. */
+.worktree-label-bar {
+  position: absolute;
+  inset-block: 0;
+  inset-inline-start: 0;
+  width: 3px;
+  z-index: 15;
+  pointer-events: none;
+}
+
+/* Cut out around the status tick: 2px of card surface above and below it. The
+   tick sits at 4px from the top, 16px tall on an expanded card and 6px square
+   on a collapsed one, and is wider than the bar, so the gap spans the bar's
+   whole width. A mask leaves real transparency, so the gap is whatever surface
+   the card is on — resting, hovered, selected or drop target. */
+.worktree-label-bar[data-cutout="bar"] {
+  mask-image: linear-gradient(to bottom, #000 2px, transparent 2px, transparent 22px, #000 22px);
+}
+
+.worktree-label-bar[data-cutout="square"] {
+  mask-image: linear-gradient(to bottom, #000 2px, transparent 2px, transparent 12px, #000 12px);
+}
+
+.worktree-label-swatch {
+  display: inline-block;
+  flex-shrink: 0;
+  width: 10px;
+  height: 10px;
+  border-radius: var(--radius-xs);
+}
+
+/* Forced colors would flatten the hue to the canvas, and the hue is the whole
+   label. Keep it, and draw a CanvasText boundary so it holds against any
+   system background. The boundary is a border INSIDE the bar's box, not a
+   shadow outside it: the cut-out mask clips to the border box, so an outside
+   shadow vanished on exactly the cards that show a status tick. One pixel
+   wider keeps the full 3px of colour, still well inside the 16px gutter. */
+@media (forced-colors: active) {
+  .worktree-label-bar,
+  .worktree-label-swatch {
+    forced-color-adjust: none;
+  }
+
+  .worktree-label-bar {
+    box-sizing: border-box;
+    width: 4px;
+    border-inline-end: 1px solid CanvasText;
+  }
+
+  .worktree-label-swatch {
+    box-shadow: 0 0 0 1px CanvasText;
+  }
+}
+
 /* Reveal the per-row action toolbar whenever the row has keyboard focus
    (or any descendant does). Uses `:focus-visible` / `:has(:focus-visible)`
    rather than `:focus` / `:focus-within` so mousedown on a button does not
@@ -361,5 +444,43 @@ html[data-dragging="true"]
 
   .deleted-worktree-countdown-fill {
     background-color: Highlight;
+  }
+}
+
+/* The header's host tag: the toolbar host chip's identity at a whisper. The
+   same indigo marks its server glyph, a faint wash of it is the tag's ground,
+   and a soft halo of that light sits behind it, the toolbar's light pool at a
+   fraction of the strength. Flat and rimless, with no hover or press: a lit
+   edge gave it a firmer outline than the header's own buttons, so it read as
+   the more clickable thing in the row. */
+.sidebar-remote-host {
+  --_wash: 9%;
+  --_halo: 16%;
+  background-color: color-mix(in oklab, var(--remote-light) var(--_wash), transparent);
+  box-shadow: 0 0 12px 1px color-mix(in oklab, var(--remote-light) var(--_halo), transparent);
+}
+
+:where(.light, [data-color-mode="light"]) .sidebar-remote-host {
+  --_wash: 10%;
+  --_halo: 22%;
+}
+
+.sidebar-remote-host-source {
+  color: var(--remote-ink);
+}
+
+@media (prefers-contrast: more) {
+  .sidebar-remote-host {
+    background-color: transparent;
+    box-shadow: inset 0 0 0 1px var(--theme-border-strong);
+  }
+}
+
+/* Gradients and shadows are dropped here anyway; the glyph and name carry the
+   meaning, so the tag takes plain text ink and no outline that would read as a
+   button. */
+@media (forced-colors: active) {
+  .sidebar-remote-host-source {
+    color: CanvasText;
   }
 }

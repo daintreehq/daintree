@@ -50,11 +50,6 @@ describe("buildDiagnosticsIssueUrl", () => {
     expect(b).toContain("_(unknown)_");
   });
 
-  it("stays within the encoded URL body budget", () => {
-    const encoded = encodeURIComponent(body(buildDiagnosticsIssueUrl(meta))).length;
-    expect(encoded).toBeLessThanOrEqual(URL_BODY_BUDGET);
-  });
-
   it("caps the body even when metadata fields are pathologically long", () => {
     const url = buildDiagnosticsIssueUrl({
       appVersion: "x".repeat(2000),

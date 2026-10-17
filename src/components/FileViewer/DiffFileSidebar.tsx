@@ -35,6 +35,12 @@ export interface DiffFileSidebarProps {
    * `Copy context` from the row menu — CopyTree is worktree-scoped (#11482).
    */
   worktreeId?: string | null;
+  /**
+   * Whether each entry's status is the working tree's. False for a base-branch
+   * review, whose rows are committed changes; the row menu then drops
+   * `Discard changes` and `Delete file`.
+   */
+  statusIsLocal?: boolean;
   onSelect: (index: number) => void;
 }
 
@@ -53,6 +59,7 @@ interface ShelfRowContext {
   viewedSet: ReadonlySet<string>;
   worktreePath: string;
   hasRowMenu: boolean;
+  statusIsLocal: boolean;
   onSelect: (index: number) => void;
   toggleViewed: (worktreePath: string, viewedKey: string) => void;
   renderFileRowMenuItems: ReturnType<typeof useFileRowMenuItems>["renderItems"];
@@ -208,6 +215,7 @@ function DiffShelfRow({ file, ctx }: { file: IndexedEntry; ctx: ShelfRowContext 
             // a second diff dialog over it.
             onOpenDiff: () => ctx.onSelect(file.index),
             hasChanges: true,
+            statusIsLocal: ctx.statusIsLocal,
           }
         )}
       </ContextMenuContent>
@@ -236,6 +244,7 @@ export function DiffFileSidebar({
   currentIndex,
   worktreePath,
   worktreeId = null,
+  statusIsLocal = true,
   onSelect,
 }: DiffFileSidebarProps) {
   const [filter, setFilter] = useState("");
@@ -352,6 +361,7 @@ export function DiffFileSidebar({
       viewedSet,
       worktreePath,
       hasRowMenu,
+      statusIsLocal,
       onSelect,
       toggleViewed,
       renderFileRowMenuItems,
@@ -365,6 +375,7 @@ export function DiffFileSidebar({
       viewedSet,
       worktreePath,
       hasRowMenu,
+      statusIsLocal,
       onSelect,
       toggleViewed,
       renderFileRowMenuItems,

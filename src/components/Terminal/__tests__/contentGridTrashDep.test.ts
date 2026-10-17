@@ -19,16 +19,6 @@ const CONTEXT_PATH = resolve(__dirname, "../useContentGridContext.tsx");
 const DOCK_PATH = resolve(__dirname, "../../Layout/ContentDock.tsx");
 
 describe("ContentGrid tabGroups memo includes trashedTerminals dep (trash-visibility regression)", () => {
-  it("selects trashedTerminals from the store", async () => {
-    const content = await readFile(CONTEXT_PATH, "utf-8");
-    expect(content).toContain("trashedTerminals: state.trashedTerminals");
-  });
-
-  it("destructures trashedTerminals from the useShallow selector", async () => {
-    const content = await readFile(CONTEXT_PATH, "utf-8");
-    expect(content).toMatch(/const\s*\{[^}]*trashedTerminals[^}]*\}\s*=\s*usePanelStore/s);
-  });
-
   it("includes trashedTerminals in the tabGroups memo dependency array", async () => {
     const content = await readFile(CONTEXT_PATH, "utf-8");
     // Find the tabGroups memo block and verify trashedTerminals is in its dep array

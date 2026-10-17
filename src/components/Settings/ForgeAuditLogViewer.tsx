@@ -7,11 +7,21 @@ import { CopyButton } from "@/components/ui/CopyButton";
 import { Skeleton, SkeletonBone } from "@/components/ui/Skeleton";
 import { SettingsActions, SettingsEmptyRow, SettingsGroup } from "./SettingsGroup";
 import {
+  AUDIT_ANOMALY_KIND_LABEL,
+  AUDIT_ROW_CLASS,
+  AUDIT_ROW_DETAIL_CLASS,
   AUDIT_TIME_RANGE_MS,
+  AuditAnomalyGlyph,
+  AuditAnomalyNote,
+  AuditArgs,
   AuditFilterBar,
   AuditFilterInput,
   AuditFilterSelect,
+  AuditId,
+  AUDIT_ROW_META_CLASS,
+  AuditDuration,
   AuditRecordTime,
+  AuditRowMark,
   AuditTimeRangeSelect,
   InlineErrorRow,
   type AuditTimeRange,
@@ -51,13 +61,6 @@ const RESULT_SEVERITY: Record<ForgeAuditResult, StatusSeverity> = {
   success: "success",
   "not-found": "info",
   error: "error",
-};
-
-const ANOMALY_KIND_LABEL: Record<ForgeAnomalyKind, string> = {
-  "latency-drift": "latency drift",
-  "first-seen-method": "first-seen method",
-  "failure-cluster": "failure cluster",
-  "p95-z-score": "p95 outlier",
 };
 
 const HOUR_MS = 3_600_000;
@@ -141,12 +144,16 @@ export function ForgeAuditLogViewer({
       : anomalySignals;
   }, [anomalySignals, anomalySuppressed, ignoreLastHour, now]);
 
-  const signalRecordIds = useMemo(() => {
-    const set = new Set<string>();
+  const signalKindsByRecordId = useMemo(() => {
+    const map = new Map<string, ForgeAnomalyKind[]>();
     for (const sig of visibleSignals) {
-      for (const id of sig.recordIds) set.add(id);
+      for (const id of sig.recordIds) {
+        const kinds = map.get(id);
+        if (!kinds) map.set(id, [sig.kind]);
+        else if (!kinds.includes(sig.kind)) kinds.push(sig.kind);
+      }
     }
-    return set;
+    return map;
   }, [visibleSignals]);
 
   const anomalyCountsByKind = useMemo(() => {
@@ -224,15 +231,12 @@ export function ForgeAuditLogViewer({
 
       {visibleSignals.length > 0 && (
         <div className="flex items-center gap-2 px-4 py-2.5 text-xs text-text-primary">
-          <span
-            aria-hidden="true"
-            className="status-mark h-2 w-2 rounded-sm rotate-45 shrink-0 bg-status-danger"
-          />
+          <AuditAnomalyGlyph severity="danger" />
           <span>
             {pluralize(visibleSignals.length, "anomaly signal")}
             {anomalyCountsByKind.size > 0 &&
               ` (${Array.from(anomalyCountsByKind.entries())
-                .map(([kind, count]) => `${count} ${ANOMALY_KIND_LABEL[kind]}`)
+                .map(([kind, count]) => `${count} ${AUDIT_ANOMALY_KIND_LABEL[kind].toLowerCase()}`)
                 .join(", ")})`}
           </span>
         </div>
@@ -276,63 +280,56 @@ export function ForgeAuditLogViewer({
         )
       ) : (
         <ul className="max-h-80 overflow-y-auto divide-y divide-border-subtle">
-          {filteredRecords.map((record) => (
-            <li key={record.id} className="grid grid-cols-[auto_1fr_auto] gap-2 px-4 py-2 text-xs">
-              <div className="flex self-start items-center gap-1 mt-0.5">
-                <SeverityMark
-                  severity={RESULT_SEVERITY[record.result]}
-                  label={RESULT_LABEL[record.result]}
-                  className="h-3 w-3"
-                />
-                {signalRecordIds.has(record.id) && (
-                  <span
-                    role="img"
-                    aria-label="Anomaly"
-                    className="status-mark h-2 w-2 rounded-sm rotate-45 shrink-0 bg-status-danger"
-                    title="Anomaly"
+          {filteredRecords.map((record) => {
+            const anomalyKinds = signalKindsByRecordId.get(record.id);
+            const repo = record.repoOwner
+              ? `${record.repoOwner}/${record.repoName ?? ""}`
+              : (record.repoName ?? "");
+            return (
+              <li key={record.id} className={AUDIT_ROW_CLASS}>
+                <AuditRowMark>
+                  <SeverityMark
+                    severity={RESULT_SEVERITY[record.result]}
+                    label={RESULT_LABEL[record.result]}
+                    className="h-3 w-3"
                   />
-                )}
-              </div>
-              <div className="min-w-0 select-text">
-                <div className="flex flex-wrap items-center gap-x-2">
-                  <span className="min-w-0 font-mono text-text-primary break-all">
-                    {record.methodName}
-                  </span>
-                  {record.result !== "success" && (
-                    <span className="shrink-0 text-text-secondary">
-                      {RESULT_LABEL[record.result]}
-                    </span>
-                  )}
-                  {(record.repoOwner || record.repoName) && (
-                    <span className="min-w-0 font-mono text-text-secondary break-all">
-                      {record.repoOwner ? `${record.repoOwner}/` : ""}
-                      {record.repoName ?? ""}
-                    </span>
-                  )}
-                </div>
-                <div className="mt-0.5 font-mono text-text-secondary break-all">
-                  {record.providerId}
-                </div>
-                {record.argsSummary && record.argsSummary !== "{}" && (
-                  <div
-                    className="mt-0.5 font-mono text-text-secondary break-all line-clamp-3"
-                    title={record.argsSummary}
-                  >
-                    {record.argsSummary}
+                </AuditRowMark>
+                <div className={AUDIT_ROW_DETAIL_CLASS}>
+                  <div className="flex flex-wrap items-center gap-x-2">
+                    <AuditId className="text-text-primary">{record.methodName}</AuditId>
+                    {record.result !== "success" && (
+                      <span className="shrink-0 text-text-secondary">
+                        {RESULT_LABEL[record.result]}
+                      </span>
+                    )}
+                    {anomalyKinds && <AuditAnomalyNote severity="danger" kinds={anomalyKinds} />}
                   </div>
-                )}
-                {record.errorMessage && (
-                  <div className="mt-0.5 text-text-primary break-words">{record.errorMessage}</div>
-                )}
-              </div>
-              <div className="text-right text-text-secondary whitespace-nowrap tabular-nums">
-                <div>
-                  <AuditRecordTime ts={record.timestamp} now={now} />
+                  <div className="text-text-secondary">
+                    {/* The no-break space keeps the separator with the provider, so a
+                        wrap never leaves it dangling at a line end. */}
+                    {repo && (
+                      <>
+                        <AuditId>{repo}</AuditId> <span aria-hidden="true">·{"\u00a0"}</span>
+                      </>
+                    )}
+                    <AuditId>{record.providerId}</AuditId>
+                  </div>
+                  {record.errorMessage && (
+                    <div className="text-text-primary break-words">{record.errorMessage}</div>
+                  )}
+                  {record.argsSummary && record.argsSummary !== "{}" && (
+                    <AuditArgs text={record.argsSummary} subject={record.methodName} />
+                  )}
                 </div>
-                <div>{record.durationMs}ms</div>
-              </div>
-            </li>
-          ))}
+                <div className={AUDIT_ROW_META_CLASS}>
+                  <AuditRecordTime ts={record.timestamp} now={now} />
+                  <span>
+                    <AuditDuration ms={record.durationMs} />
+                  </span>
+                </div>
+              </li>
+            );
+          })}
         </ul>
       )}
 

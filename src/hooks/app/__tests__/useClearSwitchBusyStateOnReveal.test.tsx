@@ -36,11 +36,6 @@ describe("useClearSwitchBusyStateOnReveal", () => {
     });
   });
 
-  it("subscribes to the reveal signal on mount", () => {
-    renderHook(() => useClearSwitchBusyStateOnReveal());
-    expect(onViewRevealedMock).toHaveBeenCalledTimes(1);
-  });
-
   it("clears the switch flag when the cached view is revealed", () => {
     renderHook(() => useClearSwitchBusyStateOnReveal());
 

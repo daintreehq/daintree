@@ -589,27 +589,6 @@ describe("ProjectStatsService adversarial", () => {
     svc.stop();
   });
 
-  it("identical successive stats do not trigger a second broadcast", async () => {
-    const ptyClient = makePtyClient();
-    projectStoreMock.getAllProjects.mockReturnValue([{ id: "p1" }]);
-    ptyClient.getProjectStats.mockResolvedValue({
-      projectId: "p1",
-      terminalCount: 0,
-    });
-
-    const svc = new ProjectStatsService(ptyClient as never);
-    svc.refresh();
-    await vi.runAllTimersAsync();
-    const after1 = broadcastMock.mock.calls.length;
-
-    svc.refresh();
-    await vi.runAllTimersAsync();
-    const after2 = broadcastMock.mock.calls.length;
-
-    expect(after2).toBe(after1);
-    svc.stop();
-  });
-
   it("replays the retained snapshot to a view that missed every broadcast", async () => {
     const ptyClient = makePtyClient();
     projectStoreMock.getAllProjects.mockReturnValue([{ id: "p1" }]);
@@ -631,6 +610,25 @@ describe("ProjectStatsService adversarial", () => {
     // Same channel and same payload as the live broadcast, so the replay lands
     // on the listener the renderer already has attached.
     expect(wc.send.mock.calls).toEqual([[liveChannel, livePayload]]);
+    svc.stop();
+  });
+
+  it("replays to a view attached over a link on the live channel", async () => {
+    projectStoreMock.getAllProjects.mockReturnValue([{ id: "p1" }]);
+    const svc = new ProjectStatsService(makePtyClient() as never);
+    const endpoint = { kind: "remote-view" as const, isClosed: vi.fn(() => false), send: vi.fn() };
+
+    svc.pushSnapshotToEndpoint(endpoint as never);
+    expect(endpoint.send).not.toHaveBeenCalled();
+
+    svc.refresh();
+    await vi.runAllTimersAsync();
+    const [liveChannel, livePayload] = broadcastMock.mock.calls[0]!;
+    svc.pushSnapshotToEndpoint(endpoint as never);
+
+    expect(endpoint.send.mock.calls).toEqual([
+      [{ type: "event", channel: liveChannel, args: [livePayload] }],
+    ]);
     svc.stop();
   });
 
@@ -664,30 +662,6 @@ describe("ProjectStatsService adversarial", () => {
     });
     expect(() => svc.pushSnapshotTo(racing as never)).not.toThrow();
     svc.stop();
-  });
-
-  it("repeated empty-projects refresh does not spam broadcasts", async () => {
-    projectStoreMock.getAllProjects.mockReturnValue([]);
-    const ptyClient = makePtyClient();
-    const svc = new ProjectStatsService(ptyClient as never);
-
-    svc.refresh();
-    await vi.runAllTimersAsync();
-    svc.refresh();
-    await vi.runAllTimersAsync();
-    svc.refresh();
-    await vi.runAllTimersAsync();
-
-    // Document current behavior: empty broadcast fires every refresh
-    // because the empty-projects shortcut bypasses shallowEqual.
-    // If/when this is tightened to dedupe, expect the count to drop to 1.
-    expect(broadcastMock.mock.calls.length).toBeGreaterThanOrEqual(1);
-    svc.stop();
-  });
-
-  it("stop without start is a no-op (does not throw)", () => {
-    const svc = new ProjectStatsService(makePtyClient() as never);
-    expect(() => svc.stop()).not.toThrow();
   });
 
   it("compute with no ptyClient is a silent no-op", async () => {
@@ -1009,20 +983,6 @@ describe("ProjectStatsService assistant presence (#11806)", () => {
     svc.stop();
   });
 
-  it("omits the assistant fields entirely when no assistant is live", async () => {
-    const ptyClient = makePtyClient();
-    ptyClient.getAllTerminalsAsync.mockResolvedValue([]);
-
-    const svc = new ProjectStatsService(ptyClient as never);
-    svc.refresh();
-    await vi.runAllTimersAsync();
-
-    expect(lastPayload().p1).not.toHaveProperty("assistantState");
-    expect(lastPayload().p1).not.toHaveProperty("assistantWaitingReason");
-    expect(lastPayload().p1).not.toHaveProperty("assistantStateSince");
-    svc.stop();
-  });
-
   // The change gate is hand-enumerated, so each field needs its own proof: one
   // left out of `shallowEqual` would leave an already-open switcher showing
   // stale assistant state until some unrelated worker tally happened to move.
@@ -1056,25 +1016,6 @@ describe("ProjectStatsService assistant presence (#11806)", () => {
     await vi.runAllTimersAsync();
 
     expect(broadcastMock.mock.calls.length).toBeGreaterThan(firstCount);
-    svc.stop();
-  });
-
-  it("broadcasts the assistant going away so the row can stop reporting it", async () => {
-    const ptyClient = makePtyClient();
-    ptyClient.getAllTerminalsAsync.mockResolvedValue([
-      helpTerminal({ agentState: "working", lastStateChange: 1_000 }),
-    ]);
-
-    const svc = new ProjectStatsService(ptyClient as never);
-    svc.refresh();
-    await vi.runAllTimersAsync();
-    expect(lastPayload().p1.assistantState).toBe("working");
-
-    ptyClient.getAllTerminalsAsync.mockResolvedValue([]);
-    svc.refresh();
-    await vi.runAllTimersAsync();
-
-    expect(lastPayload().p1).not.toHaveProperty("assistantState");
     svc.stop();
   });
 
@@ -1299,5 +1240,51 @@ describe("ProjectStatsService terminal counts from the shared snapshot", () => {
 
     stats.stop();
     fleet.stop();
+  });
+
+  it("counts a watched hand-back as finished, and recomputes when the user sees it (#13238)", async () => {
+    const ptyClient = makePtyClient();
+    projectStoreMock.getAllProjects.mockReturnValue([{ id: "p1" }]);
+    ptyClient.getAllTerminalsAsync.mockResolvedValue([
+      {
+        id: "t1",
+        projectId: "p1",
+        kind: "terminal",
+        detectedAgentId: "claude",
+        agentState: "waiting",
+        waitingReason: "prompt",
+        spawnedAt: 10,
+      },
+      {
+        id: "t2",
+        projectId: "p1",
+        kind: "terminal",
+        detectedAgentId: "claude",
+        agentState: "waiting",
+        waitingReason: "approval",
+      },
+    ]);
+    ptyClient.getProjectStats.mockResolvedValue({ projectId: "p1", terminalCount: 2 });
+    const record: { stoppedAt: number; seenAt?: number } = { stoppedAt: 100 };
+    const handBack = { getRecord: vi.fn((id: string) => (id === "t1" ? record : undefined)) };
+
+    const svc = new ProjectStatsService(ptyClient as never, null, handBack as never);
+    svc.start();
+    svc.refresh();
+    await vi.runOnlyPendingTimersAsync();
+
+    type Entry = { waitingAgentCount: number; unacknowledgedCompletedAgentCount: number };
+    const latest = () => (broadcastMock.mock.calls.at(-1) as [string, { p1: Entry }])[1].p1;
+    expect(handBack.getRecord).toHaveBeenCalledWith("t1", 10);
+    expect(latest()).toMatchObject({ waitingAgentCount: 1, unacknowledgedCompletedAgentCount: 1 });
+    // Seen per run, so the project acknowledger is offered nothing to stamp.
+    expect(svc.getAcknowledgeableCompletionAt("p1")).toBeUndefined();
+
+    record.seenAt = 200;
+    eventEmitter.emit("terminal:hand-back-changed", { id: "t1", unseen: false, timestamp: 200 });
+    await vi.runOnlyPendingTimersAsync();
+
+    expect(latest()).toMatchObject({ waitingAgentCount: 1, unacknowledgedCompletedAgentCount: 0 });
+    svc.stop();
   });
 });

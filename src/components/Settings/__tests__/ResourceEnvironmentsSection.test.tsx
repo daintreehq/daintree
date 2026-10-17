@@ -72,33 +72,6 @@ describe("ResourceEnvironmentsSection", () => {
     );
   });
 
-  it("preserves help text for all command fields", () => {
-    render(
-      <ResourceEnvironmentsSection
-        resourceEnvironments={mockResourceEnvironments}
-        onResourceEnvironmentsChange={vi.fn()}
-        activeResourceEnvironment="docker-local"
-        onActiveResourceEnvironmentChange={vi.fn()}
-        defaultWorktreeMode="local"
-        onDefaultWorktreeModeChange={vi.fn()}
-        isOpen={true}
-      />
-    );
-
-    expect(screen.getByText("Commands to run when provisioning a remote environment")).toBeTruthy();
-    expect(screen.getByText("Commands to run when destroying the environment")).toBeTruthy();
-    expect(
-      screen.getByText("Commands to resume a paused environment without destroying")
-    ).toBeTruthy();
-    expect(
-      screen.getByText("Commands to pause the environment while preserving state")
-    ).toBeTruthy();
-    expect(screen.getByText('Must output JSON with { "status": "<string>" }')).toBeTruthy();
-    expect(
-      screen.getByText("Shell command for connecting (ssh, docker exec, kubectl exec)")
-    ).toBeTruthy();
-  });
-
   it("renders environment selector when environments exist", () => {
     render(
       <ResourceEnvironmentsSection

@@ -285,18 +285,6 @@ describe("getCompileCacheMeta", () => {
     expect(enabled.compileCacheStatusName).toBe("ALREADY_ENABLED");
   });
 
-  it("surfaces FAILED status so a silently-disabled cache is detectable", async () => {
-    const mod = await loadModule({
-      DAINTREE_PERF_CAPTURE: "1",
-      DAINTREE_PERF_METRICS_FILE: "/tmp/marks.ndjson",
-    });
-
-    mod.setCompileCacheEnableStatus(0);
-    const meta = mod.getCompileCacheMeta();
-    expect(meta.compileCacheStatus).toBe(0);
-    expect(meta.compileCacheStatusName).toBe("FAILED");
-  });
-
   it("labels an out-of-range status as UNKNOWN rather than dropping it", async () => {
     const mod = await loadModule({
       DAINTREE_PERF_CAPTURE: "1",

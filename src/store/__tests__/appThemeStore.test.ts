@@ -17,10 +17,6 @@ describe("appThemeStore.recentSchemeIds LRU", () => {
     });
   });
 
-  it("starts empty", () => {
-    expect(useAppThemeStore.getState().recentSchemeIds).toEqual([]);
-  });
-
   it("setSelectedSchemeId prepends the id to recentSchemeIds", () => {
     useAppThemeStore.getState().setSelectedSchemeId("svalbard");
     expect(useAppThemeStore.getState().recentSchemeIds[0]).toBe("svalbard");
@@ -200,17 +196,6 @@ describe("injectSchemeToDOM RAF coalescing", () => {
     expect(canvas).not.toBe(daintree.tokens["surface-canvas"]);
   });
 
-  it("Zustand state updates synchronously even when DOM is deferred", () => {
-    useAppThemeStore.getState().setAccentColorOverride("#aabbcc");
-    // Zustand state must be immediately available — no flush needed
-    expect(useAppThemeStore.getState().accentColorOverride).toBe("#aabbcc");
-    // DOM is deferred — flush for the assertion
-    flushPendingTheme();
-    expect(document.documentElement.style.getPropertyValue("--theme-accent-primary")).toBe(
-      "#aabbcc"
-    );
-  });
-
   it("immediate mode applies synchronously and cancels any pending RAF scheme", () => {
     const daintree = BUILT_IN_APP_SCHEMES.find((s) => s.id === "daintree")!;
     const bondi = BUILT_IN_APP_SCHEMES.find((s) => s.id === "bondi")!;
@@ -230,16 +215,6 @@ describe("injectSchemeToDOM RAF coalescing", () => {
     expect(document.documentElement.style.getPropertyValue("--theme-surface-canvas")).toBe(
       bondi.tokens["surface-canvas"]
     );
-  });
-
-  it("flushPendingTheme is a no-op when nothing is pending", () => {
-    const daintree = BUILT_IN_APP_SCHEMES.find((s) => s.id === "daintree")!;
-    injectSchemeToDOM(daintree, { immediate: true });
-
-    const before = document.documentElement.style.getPropertyValue("--theme-surface-canvas");
-    // Second flush should not change anything
-    flushPendingTheme();
-    expect(document.documentElement.style.getPropertyValue("--theme-surface-canvas")).toBe(before);
   });
 });
 

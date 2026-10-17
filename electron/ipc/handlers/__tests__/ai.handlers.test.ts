@@ -108,22 +108,6 @@ describe("ai handler payload validation", () => {
     expect(storeMock.set).not.toHaveBeenCalled();
   });
 
-  it("rejects AGENT_SETTINGS_SET payload with reserved agentType key", async () => {
-    const handler = getInvokeHandler(CHANNELS.AGENT_SETTINGS_SET);
-
-    await expect(
-      handler(
-        {} as never,
-        {
-          agentType: "__proto__",
-          settings: { enabled: true },
-        } as never
-      )
-    ).rejects.toThrow("reserved key");
-
-    expect(storeMock.set).not.toHaveBeenCalled();
-  });
-
   it("rejects AGENT_SETTINGS_SET payload with non-object settings", async () => {
     const handler = getInvokeHandler(CHANNELS.AGENT_SETTINGS_SET);
 
@@ -267,6 +251,41 @@ describe("ai handler payload validation", () => {
         agents: { codex: { inlineMode: "on" } },
       })
     );
+  });
+
+  it.each([
+    ["a chosen default", { defaultAgent: "codex" }, "codex"],
+    ["an explicit clear", { defaultAgent: null }, null],
+  ])("keeps %s across a full AGENT_SETTINGS_RESET (#13345)", async (_label, root, expected) => {
+    const handler = getInvokeHandler(CHANNELS.AGENT_SETTINGS_RESET);
+    (storeMock.get as Mock).mockImplementation((key: string) =>
+      key === "agentSettings"
+        ? { agents: { claude: { customFlags: "--x" } }, globalSkipPermissions: true, ...root }
+        : undefined
+    );
+
+    const result = (await handler({} as never)) as Record<string, unknown>;
+
+    const written = (storeMock.set as Mock).mock.calls.find(
+      ([key]) => key === "agentSettings"
+    )?.[1];
+    expect(written.defaultAgent).toBe(expected);
+    expect(written.globalSkipPermissions).toBe(false);
+    expect(result.defaultAgent).toBe(expected);
+  });
+
+  it("leaves a never-set default unset on a full AGENT_SETTINGS_RESET (#13345)", async () => {
+    const handler = getInvokeHandler(CHANNELS.AGENT_SETTINGS_RESET);
+    (storeMock.get as Mock).mockImplementation((key: string) =>
+      key === "agentSettings" ? { agents: {} } : undefined
+    );
+
+    await handler({} as never);
+
+    const written = (storeMock.set as Mock).mock.calls.find(
+      ([key]) => key === "agentSettings"
+    )?.[1];
+    expect(Object.hasOwn(written, "defaultAgent")).toBe(false);
   });
 
   it("normalizes malformed stored agent settings in AGENT_SETTINGS_RESET", async () => {

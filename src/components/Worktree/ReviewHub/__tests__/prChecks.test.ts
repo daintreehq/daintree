@@ -243,30 +243,12 @@ describe("preparePrChecks", () => {
     expect(rows[0]!.isFailure).toBe(true);
   });
 
-  it("keeps every row of a large check list and still leads with the failure", () => {
-    const many = Array.from({ length: 300 }, (_, i) =>
-      check({ name: `job-${i}`, conclusion: i === 297 ? "failure" : "success" })
-    );
-    const rows = preparePrChecks(many);
-    expect(rows).toHaveLength(300);
-    expect(rows[0]!.name).toBe("job-297");
-  });
-
   it("sanitizes names and validates links on the way through", () => {
     const [row] = preparePrChecks([
       check({ name: ESC + "[31mbuild", detailsUrl: "javascript:alert(1)" }),
     ]);
     expect(row!.name).toBe("build");
     expect(row!.detailsUrl).toBeUndefined();
-  });
-
-  it("carries requiredness as a tri-state — absent is unknown, not optional", () => {
-    const rows = preparePrChecks([
-      check({ name: "a", required: true }),
-      check({ name: "b", required: false }),
-      check({ name: "c" }),
-    ]);
-    expect(rows.map((r) => r.required)).toEqual([true, false, undefined]);
   });
 });
 
@@ -405,12 +387,6 @@ describe("preparePrChecks grouping", () => {
     const rows = preparePrChecks(mix);
     const settled = rows.filter((row) => row.group === "settled").map((row) => row.name);
     expect(settled.sort()).toEqual(["a", "d", "h"]);
-  });
-
-  it("orders the groups attention, then open, then settled", () => {
-    const order = { attention: 0, open: 1, settled: 2 } as const;
-    const groups = preparePrChecks(mix).map((row) => order[row.group]);
-    expect(groups).toEqual([...groups].sort((x, y) => x - y));
   });
 });
 

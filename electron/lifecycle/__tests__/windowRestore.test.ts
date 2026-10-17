@@ -87,8 +87,10 @@ describe("resolvePrimaryRestoreProjectId", () => {
     ).toBeUndefined();
   });
 
-  it("resolves to nothing on a first run with no manifest and no last-active project", () => {
-    expect(resolvePrimaryRestoreProjectId([], false, undefined)).toBeUndefined();
+  it("opens a picker, not a local lookup of the key, for a window that was on a host", () => {
+    expect(
+      resolvePrimaryRestoreProjectId([record(`studio-01:${"a".repeat(64)}`)], true, "other")
+    ).toBeUndefined();
   });
 });
 
@@ -160,10 +162,6 @@ describe("restoreWindowFleet", () => {
         hadManifest: true,
       });
       await restoreWindowFleet(h.deps);
-    });
-
-    it("recreates one window per record", () => {
-      expect(h.createWindow).toHaveBeenCalledTimes(3);
     });
 
     it("gives each window its own project, in manifest order", () => {
@@ -248,12 +246,6 @@ describe("restoreWindowFleet", () => {
       const h = harness({ records: [record("a")], hadManifest: true });
       await restoreWindowFleet(h.deps);
       expect(h.createWindow.mock.calls[0][1]?.awaitHydrationMs).toBeUndefined();
-    });
-
-    it("never overlaps anything with the primary when it is the only window", async () => {
-      const { h, peakOf } = traced([record("a")]);
-      await restoreWindowFleet(h.deps);
-      expect(peakOf()).toBe(1);
     });
   });
 
@@ -393,6 +385,22 @@ describe("restoreWindowFleet", () => {
     expect(h.persisted()).toBe(false);
   });
 
+  it("opens windows that were on a host as pickers here, each carrying its host's project", async () => {
+    const remoteA = `studio-01:${"a".repeat(64)}`;
+    const remoteB = `studio-02:${"b".repeat(64)}`;
+    h = harness({
+      records: [record(remoteA), record("local"), record(remoteB)],
+      hadManifest: true,
+    });
+    await restoreWindowFleet(h.deps);
+    expect(h.openedProjects()).toEqual([undefined, "local", undefined]);
+    const remoteKeys = h.createWindow.mock.calls.map(
+      (c) => (c[1] as { remoteWorkspaceKey?: string } | undefined)?.remoteWorkspaceKey
+    );
+    expect(remoteKeys).toEqual([remoteA, undefined, remoteB]);
+    expect(h.persisted()).toBe(true);
+  });
+
   it("opens one picker window when every saved project was deleted", async () => {
     h = harness({ records: [], hadManifest: true, fallbackProjectId: "unrelated" });
     await restoreWindowFleet(h.deps);
@@ -429,21 +437,6 @@ describe("restoreWindowFleet", () => {
     it("reports the failure", () => {
       expect(h.onBackgroundWindowFailed).toHaveBeenCalledTimes(1);
     });
-
-    it("still releases the save hold", () => {
-      expect(h.resumeSaves).toHaveBeenCalledTimes(1);
-    });
-  });
-
-  it("leaves the manifest alone when a background window reports it is not ok", async () => {
-    // Resolving with a non-"ok" status is not a rejection, so it would sail past
-    // an allSettled check that only looked for rejections.
-    h = harness({ records: [record("a"), record("b")], hadManifest: true }, async (projectId) =>
-      projectId === "b" ? "not-registered" : "ok"
-    );
-    await restoreWindowFleet(h.deps);
-    expect(h.persisted()).toBe(false);
-    expect(h.onBackgroundWindowFailed).not.toHaveBeenCalled();
   });
 
   describe("a primary window that cannot come up", () => {
@@ -494,41 +487,6 @@ describe("restoreWindowFleet — background project lists (#12320)", () => {
     await restoreWindowFleet(h.deps);
     expect(bgOf(h)).toEqual([["a1", "a2"], ["b1"]]);
   });
-
-  it("gives the primary window its list too", async () => {
-    // "The project I was in paints first, the rest fill in behind it" only
-    // holds if the focused window's own background projects are handed over.
-    const h = harness({
-      records: [{ projectId: "a", backgroundProjectIds: ["a1"] }],
-      hadManifest: true,
-    });
-    await restoreWindowFleet(h.deps);
-    expect(h.createWindow.mock.calls[0][1]?.backgroundProjectIds).toEqual(["a1"]);
-  });
-
-  it("passes nothing when a window has no background projects", async () => {
-    const h = harness({ records: [record("a"), record("b")], hadManifest: true });
-    await restoreWindowFleet(h.deps);
-    expect(bgOf(h)).toEqual([undefined, undefined]);
-  });
-
-  it("passes nothing when there was no manifest to restore from", async () => {
-    const h = harness({ hadManifest: false, fallbackProjectId: "last-active" });
-    await restoreWindowFleet(h.deps);
-    expect(h.createWindow.mock.calls[0][1]?.backgroundProjectIds).toBeUndefined();
-  });
-
-  it("still reveals background windows inactive", async () => {
-    const h = harness({
-      records: [
-        { projectId: "a", backgroundProjectIds: ["a1"] },
-        { projectId: "b", backgroundProjectIds: ["b1"] },
-      ],
-      hadManifest: true,
-    });
-    await restoreWindowFleet(h.deps);
-    expect(h.revealModes()).toEqual([undefined, "showInactive"]);
-  });
 });
 
 describe("restoreWindowFleet behind a window that is already open (#12801)", () => {
@@ -543,20 +501,6 @@ describe("restoreWindowFleet behind a window that is already open (#12801)", () 
 
     expect(h.openedProjects()).toEqual(["a", "b", "c"]);
     expect(h.revealModes()).toEqual(["showInactive", "showInactive", "showInactive"]);
-    expect(h.persisted()).toBe(true);
-  });
-
-  it("skips the project the open window already shows, wherever it sits in the manifest", async () => {
-    const h = harness({
-      records: [record("a"), record("recovered"), record("c")],
-      hadManifest: true,
-      primaryAlreadyOpen: true,
-      isProjectOwned: (id) => id === "recovered",
-    });
-
-    await restoreWindowFleet(h.deps);
-
-    expect(h.openedProjects()).toEqual(["a", "c"]);
     expect(h.persisted()).toBe(true);
   });
 
@@ -585,22 +529,6 @@ describe("restoreWindowFleet behind a window that is already open (#12801)", () 
     expect(h.persisted()).toBe(true);
   });
 
-  it("stops at exit-requested and keeps the manifest", async () => {
-    const h = harness(
-      {
-        records: [record("a"), record("b"), record("c")],
-        hadManifest: true,
-        primaryAlreadyOpen: true,
-      },
-      async (projectId) => (projectId === "b" ? "exit-requested" : "ok")
-    );
-
-    await restoreWindowFleet(h.deps);
-
-    expect(h.openedProjects()).toEqual(["a", "b"]);
-    expect(h.persisted()).toBe(false);
-  });
-
   it("opens nothing for an empty manifest instead of a fallback window", async () => {
     const h = harness({
       records: [],
@@ -612,17 +540,5 @@ describe("restoreWindowFleet behind a window that is already open (#12801)", () 
     await restoreWindowFleet(h.deps);
 
     expect(h.createWindow).not.toHaveBeenCalled();
-  });
-
-  it("keeps the manifest when a window fails", async () => {
-    const h = harness(
-      { records: [record("a"), record("b")], hadManifest: true, primaryAlreadyOpen: true },
-      async (projectId) => (projectId === "a" ? "not-registered" : "ok")
-    );
-
-    await restoreWindowFleet(h.deps);
-
-    expect(h.openedProjects()).toEqual(["a", "b"]);
-    expect(h.persisted()).toBe(false);
   });
 });

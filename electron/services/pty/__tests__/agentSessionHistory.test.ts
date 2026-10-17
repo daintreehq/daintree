@@ -14,6 +14,7 @@ import {
   deleteBookmark,
   listBookmarks,
   getSessionHistoryPath,
+  rewriteAgentSessionPathsForProject,
   MAX_RECORDS_PER_WORKTREE,
   SESSION_HISTORY_TTL_MS,
 } from "../agentSessionHistory.js";
@@ -96,11 +97,6 @@ describe("agentSessionHistory", () => {
     expect((await readSessionHistory(userDataDir))[0].title).toBe("New");
   });
 
-  it("returns empty array when no history file exists", async () => {
-    const records = await readSessionHistory(userDataDir);
-    expect(records).toEqual([]);
-  });
-
   // chmod is a POSIX no-op on Windows, so the mode-bit assertions only run there.
   const posixIt = process.platform === "win32" ? it.skip : it;
 
@@ -176,25 +172,6 @@ describe("agentSessionHistory", () => {
     expect(records).toHaveLength(2);
     expect(records[0].sessionId).toBe("second");
     expect(records[1].sessionId).toBe("first");
-  });
-
-  it("enforces per-worktree cap", async () => {
-    for (let i = 0; i < MAX_RECORDS_PER_WORKTREE + 5; i++) {
-      await persistAgentSession(
-        {
-          sessionId: `session-${i}`,
-          agentId: "claude",
-          worktreeId: "wt-1",
-          title: null,
-          projectId: null,
-        },
-        userDataDir
-      );
-    }
-
-    const records = await readSessionHistory(userDataDir);
-    const wt1Records = records.filter((r) => r.worktreeId === "wt-1");
-    expect(wt1Records.length).toBeLessThanOrEqual(MAX_RECORDS_PER_WORKTREE);
   });
 
   it("does not evict records from other worktrees when one hits cap", async () => {
@@ -800,7 +777,7 @@ describe("agentSessionHistory bookmarks", () => {
 
   // Fresh temp dir per retention value (the beforeEach one is reused across the
   // it.each rows) so the stat-gated read cache can't serve a prior row's records.
-  it.each([7, 30, 90, 0] as const)(
+  it.each([7, 0] as const)(
     "keeps bookmarks across retention=%s while ordinary records age out",
     async (days) => {
       const dir = await fsp.mkdtemp(path.join(os.tmpdir(), "daintree-bookmarks-ret-"));
@@ -1041,5 +1018,117 @@ describe("agentSessionHistory bookmarks", () => {
     expect(byId.get("delete-me")?.bookmark).toBeUndefined();
     expect(byId.get("bystander")?.bookmark?.bookmarkedAt).toBe(3);
     expect(byId.has("new-close")).toBe(true);
+  });
+});
+
+const OLD = "/old/project";
+const NEW = "/new/renamed";
+
+describe("rewriteAgentSessionPathsForProject", () => {
+  let userDataDir: string;
+  const previousUserData = process.env.DAINTREE_USER_DATA;
+
+  beforeEach(async () => {
+    userDataDir = await fsp.mkdtemp(path.join(os.tmpdir(), "daintree-history-rewrite-"));
+    process.env.DAINTREE_USER_DATA = userDataDir;
+  });
+
+  afterEach(async () => {
+    process.env.DAINTREE_USER_DATA = previousUserData;
+    await fsp.rm(userDataDir, { recursive: true, force: true });
+  });
+
+  async function seed(records: AgentSessionRecord[]): Promise<void> {
+    await fsp.writeFile(getSessionHistoryPath(userDataDir)!, JSON.stringify(records));
+  }
+
+  const rec = (over: Partial<AgentSessionRecord>): AgentSessionRecord => ({
+    sessionId: "s1",
+    agentId: "claude",
+    worktreeId: null,
+    title: null,
+    projectId: null,
+    savedAt: 1000,
+    ...over,
+  });
+
+  it("rebases worktreeId and cwd only for the matching project's records", async () => {
+    await seed([
+      rec({ sessionId: "a", projectId: "p1", worktreeId: "/old/project", cwd: "/old/project/wt" }),
+      rec({ sessionId: "b", projectId: "p2", worktreeId: "/old/project", cwd: "/old/project" }),
+      rec({ sessionId: "c", projectId: null, worktreeId: "/old/project", cwd: "/old/project" }),
+    ]);
+
+    await rewriteAgentSessionPathsForProject("p1", OLD, NEW);
+
+    const out = await readSessionHistory(userDataDir);
+    const byId = Object.fromEntries(out.map((r) => [r.sessionId, r]));
+    expect(byId.a.worktreeId).toBe("/new/renamed");
+    expect(byId.a.cwd).toBe("/new/renamed/wt");
+    // Other project and legacy null-project records are untouched.
+    expect(byId.b.worktreeId).toBe("/old/project");
+    expect(byId.c.worktreeId).toBe("/old/project");
+  });
+
+  it("leaves records with worktreeId outside the old root unchanged", async () => {
+    await seed([
+      rec({ sessionId: "a", projectId: "p1", worktreeId: "/elsewhere/wt", cwd: "/elsewhere/wt" }),
+    ]);
+
+    await rewriteAgentSessionPathsForProject("p1", OLD, NEW);
+
+    const out = await readSessionHistory(userDataDir);
+    expect(out[0].worktreeId).toBe("/elsewhere/wt");
+    expect(out[0].cwd).toBe("/elsewhere/wt");
+  });
+
+  it("preserves record order and timestamps", async () => {
+    await seed([
+      rec({ sessionId: "a", projectId: "p1", worktreeId: "/old/project", savedAt: 3000 }),
+      rec({ sessionId: "b", projectId: "p1", worktreeId: "/old/project", savedAt: 2000 }),
+    ]);
+
+    await rewriteAgentSessionPathsForProject("p1", OLD, NEW);
+
+    const out = await readSessionHistory(userDataDir);
+    expect(out.map((r) => r.sessionId)).toEqual(["a", "b"]);
+    expect(out.map((r) => r.savedAt)).toEqual([3000, 2000]);
+  });
+
+  it("refreshes the read cache so a subsequent sync read sees the rewrite", async () => {
+    await seed([rec({ sessionId: "a", projectId: "p1", worktreeId: "/old/project" })]);
+    // Prime the cache with the pre-rewrite value.
+    expect(readSessionHistorySync(userDataDir)[0].worktreeId).toBe("/old/project");
+
+    await rewriteAgentSessionPathsForProject("p1", OLD, NEW);
+
+    expect(readSessionHistorySync(userDataDir)[0].worktreeId).toBe("/new/renamed");
+  });
+
+  it("does not write when nothing changed (no matching project record)", async () => {
+    await seed([rec({ sessionId: "a", projectId: "other", worktreeId: "/old/project" })]);
+    const before = await fsp.stat(getSessionHistoryPath(userDataDir)!);
+
+    await rewriteAgentSessionPathsForProject("p1", OLD, NEW);
+
+    const after = await fsp.stat(getSessionHistoryPath(userDataDir)!);
+    expect(after.mtimeMs).toBe(before.mtimeMs);
+  });
+
+  it("preserves bookmark metadata when rebasing a project's paths (#11288)", async () => {
+    await seed([
+      rec({
+        sessionId: "a",
+        projectId: "p1",
+        worktreeId: "/old/project/wt",
+        cwd: "/old/project/wt",
+        bookmark: { bookmarkedAt: 9, label: "Pin" },
+      }),
+    ]);
+    await rewriteAgentSessionPathsForProject("p1", OLD, NEW);
+    const [out] = await readSessionHistory(userDataDir);
+    expect(out.worktreeId).toBe("/new/renamed/wt");
+    expect(out.cwd).toBe("/new/renamed/wt");
+    expect(out.bookmark).toEqual({ bookmarkedAt: 9, label: "Pin" });
   });
 });

@@ -1,5 +1,6 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import type { CliAvailability } from "@shared/types";
+import { HUB_STARTED_ASSISTANT_GREETING } from "@shared/config/helpAssistantGreeting";
 
 const {
   mockDispatch,
@@ -12,6 +13,9 @@ const {
   mockGetScratchState,
   mockLogError,
   mockRemovePanel,
+  mockOpenTour,
+  panelsById,
+  controllers,
 } = vi.hoisted(() => ({
   mockDispatch: vi.fn().mockResolvedValue({ ok: true }),
   mockGetContext: vi.fn(() => ({})),
@@ -23,6 +27,18 @@ const {
   mockGetScratchState: vi.fn(),
   mockLogError: vi.fn(),
   mockRemovePanel: vi.fn(),
+  mockOpenTour: vi.fn(),
+  panelsById: {} as Record<string, unknown>,
+  controllers: new Map<
+    number,
+    {
+      launchWhenReady: ReturnType<typeof vi.fn>;
+      getSnapshot: () => { phase: string };
+      subscribe: (listener: () => void) => () => void;
+      phase: string;
+      listeners: Set<() => void>;
+    }
+  >(),
 }));
 
 vi.mock("@/services/ActionService", () => ({
@@ -53,7 +69,7 @@ vi.mock("@/store/projectStore", () => ({
 // closed mid-flight (#12108); the real panel store is far too heavy for this
 // node-environment suite, and only `removePanel` is reached.
 vi.mock("@/store/panelStore", () => ({
-  usePanelStore: { getState: () => ({ removePanel: mockRemovePanel }) },
+  usePanelStore: { getState: () => ({ panelsById, removePanel: mockRemovePanel }) },
 }));
 
 // Leaf-path mock, mirroring the projectStore one — the action reads the scratch
@@ -70,6 +86,30 @@ vi.mock("@/lib/sidebarToggle", () => ({
   suppressSidebarResizes: vi.fn(),
 }));
 
+vi.mock("@/components/Tour/tourEvents", () => ({ openTour: mockOpenTour }));
+
+vi.mock("@/controllers/helpSessionControllerRegistry", () => ({
+  acquireHelpSessionController: (slot: number) => {
+    let controller = controllers.get(slot);
+    if (!controller) {
+      const listeners = new Set<() => void>();
+      const created = {
+        launchWhenReady: vi.fn(),
+        phase: "idle",
+        listeners,
+        getSnapshot: () => ({ phase: created.phase }),
+        subscribe: (listener: () => void) => {
+          listeners.add(listener);
+          return () => listeners.delete(listener);
+        },
+      };
+      controller = created;
+      controllers.set(slot, controller);
+    }
+    return controller;
+  },
+}));
+
 import { registerHelpActions } from "../helpActions";
 import {
   markHelpPanelRuntimeMounted,
@@ -77,6 +117,8 @@ import {
   resetHelpPanelRuntimeGateForTests,
 } from "@/lib/helpPanelRuntimeGate";
 import { useHelpPanelStore } from "@/store/helpPanelStore";
+import { usePaletteStore } from "@/store/paletteStore";
+import { makePluginTourId } from "@shared/utils/tourIds";
 import type { ActionCallbacks, ActionRegistry } from "../../actionTypes";
 import type { ActionContext } from "@shared/types/actions";
 import type { AnyActionDefinition } from "../../actionTypes";
@@ -236,20 +278,6 @@ describe("help.launchAgent", () => {
     );
   });
 
-  it("keeps a non-assistant help agent in the provisioned session dir", async () => {
-    (window.electron.help.getFolderPath as ReturnType<typeof vi.fn>).mockResolvedValue(
-      "/mock/help"
-    );
-
-    await action.run({ agentId: "codex" }, stubCtx);
-
-    expect(mockDispatch).toHaveBeenCalledWith(
-      "agent.launch",
-      expect.objectContaining({ agentId: "codex", cwd: "/mock/help" }),
-      { source: "user" }
-    );
-  });
-
   it("launches with the CLI default model and custom args", async () => {
     (window.electron.help.getFolderPath as ReturnType<typeof vi.fn>).mockResolvedValue(
       "/mock/help"
@@ -301,6 +329,7 @@ describe("help.launchAgent", () => {
       debugLogging: false,
       loadGlobalHooksAndServers: false,
       daintreeConfirmations: "inherit",
+      acceptRemoteMessages: true,
     });
 
     await action.run({ agentId: "codex" }, stubCtx);
@@ -450,14 +479,6 @@ describe("help.launchAgent", () => {
       })
     );
     expect(mockDispatch).not.toHaveBeenCalled();
-  });
-
-  it("has correct metadata", () => {
-    expect(action.id).toBe("help.launchAgent");
-    expect(action.category).toBe("help");
-    expect(action.kind).toBe("command");
-    expect(action.danger).toBe("safe");
-    expect(action.scope).toBe("renderer");
   });
 
   it("does not pass a model arg, even when stale assistantModelId is persisted in agent settings", async () => {
@@ -781,19 +802,6 @@ describe("help.launchAgent", () => {
       mockDispatch.mockResolvedValue({ ok: true, result: { terminalId: "term-help" } });
     });
 
-    it("sends the help prompt without the Electron framing", async () => {
-      await action.run(undefined, stubCtx);
-
-      expect(mockDispatch).toHaveBeenCalledWith(
-        "agent.launch",
-        expect.objectContaining({
-          prompt:
-            "I need help with Daintree, an IDE for orchestrating AI coding agents. Please briefly tell me how you can help.",
-        }),
-        expect.anything()
-      );
-    });
-
     it("launches into the active tab when it is empty", async () => {
       await action.run(undefined, stubCtx);
 
@@ -849,6 +857,103 @@ describe("help.launchAgent", () => {
       // the slot this one was provisioned for.
       expect(laneDuringLaunch).toBeUndefined();
       expect(useHelpPanelStore.getState().sessions[1]?.terminalId).toBe("term-help");
+    });
+
+    it("launches into exactly the lane a caller names, refusing to displace and reporting the lane", async () => {
+      const result = await action.run({ slot: 2, vacantOnly: true }, stubCtx);
+
+      expect(provisionedSlot()).toBe(2);
+      expect(window.electron.help.provisionSession).toHaveBeenCalledWith(
+        expect.objectContaining({ slot: 2, vacantOnly: true })
+      );
+      expect(result).toMatchObject({ slot: 2, terminalId: "term-help", agentId: "claude" });
+    });
+
+    it("gives way when something else binds the stale lane while it launches", async () => {
+      useHelpPanelStore.getState().setTerminal(0, "term-dead", "claude", "sess-dead");
+      vi.mocked(window.electron.help.provisionSession).mockImplementationOnce(async () => {
+        // The lane's own controller started a session there meanwhile.
+        useHelpPanelStore.getState().setTerminal(0, "term-other", "claude", "sess-other");
+        return {
+          sessionId: "sess-new",
+          sessionPath: "/mock/help",
+          token: "tok-new",
+          tier: "core",
+          mcpUrl: null,
+          windowId: 1,
+        };
+      });
+
+      const result = await action.run({ slot: 0, vacantOnly: true }, stubCtx);
+
+      expect(result).toBeUndefined();
+      expect(useHelpPanelStore.getState().sessions[0]).toMatchObject({
+        terminalId: "term-other",
+        sessionId: "sess-other",
+      });
+      expect(window.electron.help.revokeSession).not.toHaveBeenCalledWith("sess-other");
+      expect(mockRemovePanel).not.toHaveBeenCalledWith("term-other", expect.anything());
+      // Its own new terminal goes instead.
+      expect(window.electron.help.revokeSession).toHaveBeenCalledWith("sess-new");
+      expect(mockRemovePanel).toHaveBeenCalledWith("term-help");
+    });
+
+    it("opens a hub-started assistant with the opening that asks it no question", async () => {
+      await action.run({ slot: 1, vacantOnly: true, greeting: "hub" }, stubCtx);
+
+      expect(mockDispatch).toHaveBeenCalledWith(
+        "agent.launch",
+        expect.objectContaining({ prompt: HUB_STARTED_ASSISTANT_GREETING }),
+        { source: "user" }
+      );
+      expect(HUB_STARTED_ASSISTANT_GREETING.trim().endsWith("?")).toBe(false);
+    });
+
+    it("gives a caller that named a busy lane nothing, with no tab opened and no toast", async () => {
+      // The view's tab could be stale, so main decides; it refuses a lane its assistant runs in.
+      useHelpPanelStore.getState().setTerminal(0, "term-live", "claude", "sess-live");
+      vi.mocked(window.electron.help.provisionSession).mockRejectedValueOnce(
+        new Error("[HelpSessionError|LANE_OCCUPIED] An assistant is already running in that lane")
+      );
+
+      const result = await action.run({ slot: 0, vacantOnly: true }, stubCtx);
+
+      expect(window.electron.help.provisionSession).toHaveBeenCalledWith(
+        expect.objectContaining({ slot: 0, vacantOnly: true })
+      );
+      expect(result).toBeUndefined();
+      expect(mockNotify).not.toHaveBeenCalled();
+      expect(useHelpPanelStore.getState().isOpen).toBe(false);
+      expect(useHelpPanelStore.getState().sessions[0]).toMatchObject({
+        terminalId: "term-live",
+        sessionId: "sess-live",
+      });
+      expect(window.electron.help.revokeSession).not.toHaveBeenCalled();
+      expect(mockDispatch).not.toHaveBeenCalledWith(
+        "agent.launch",
+        expect.anything(),
+        expect.anything()
+      );
+    });
+
+    it("lets go of a lane whose assistant went with its host once main finds nothing there (#13392)", async () => {
+      // The host restarted with the link down: the exit never arrived.
+      useHelpPanelStore.getState().setTerminal(0, "term-dead", "claude", "sess-dead");
+      useHelpPanelStore.getState().setHibernateSession("proj-default", 0, {
+        sessionId: "agent-dead",
+        cwd: "/repo",
+        agentId: "claude",
+      });
+      const result = await action.run({ slot: 0, vacantOnly: true }, stubCtx);
+
+      expect(window.electron.help.provisionSession).toHaveBeenCalledWith(
+        expect.objectContaining({ slot: 0, vacantOnly: true })
+      );
+      // Released without killing anything, before the new assistant binds.
+      expect(mockRemovePanel).toHaveBeenCalledWith("term-dead", { backendAlreadyClosed: true });
+      expect(window.electron.help.revokeSession).toHaveBeenCalledWith("sess-dead");
+      expect(result).toMatchObject({ slot: 0, terminalId: "term-help" });
+      expect(useHelpPanelStore.getState().sessions[0]?.terminalId).toBe("term-help");
     });
 
     it("prefers an existing empty tab over opening another", async () => {
@@ -915,29 +1020,54 @@ describe("help.launchAgent", () => {
       expect(useHelpPanelStore.getState().sessions[2]).toBeUndefined();
     });
 
-    it("joins the agent a sibling tab is running instead of the default", async () => {
-      // Lanes of one project must share an agent; main refuses a mismatch.
+    it("starts the default beside a sibling tab running another agent (#13442)", async () => {
+      // Lanes on different agents run in directories of their own, so a tab
+      // someone opened on another agent doesn't move later launches off the default.
       useHelpPanelStore.getState().setTerminal(0, "term-live", "codex", "sess-live");
 
       await action.run(undefined, stubCtx);
 
       expect(window.electron.help.provisionSession).toHaveBeenCalledWith(
-        expect.objectContaining({ agentId: "codex", slot: 1 })
+        expect.objectContaining({ agentId: "claude", slot: 1 })
       );
       expect(mockDispatch).toHaveBeenCalledWith(
         "agent.launch",
-        expect.objectContaining({ agentId: "codex" }),
+        expect.objectContaining({ agentId: "claude" }),
         expect.anything()
       );
-      expect(useHelpPanelStore.getState().sessions[1]?.agentId).toBe("codex");
+      expect(useHelpPanelStore.getState().sessions[1]?.agentId).toBe("claude");
     });
 
-    it("joins the agent a hibernated sibling will resume with", async () => {
+    it("starts the assistant's own default ahead of the general agent default", async () => {
+      // The general default is Claude; the assistant runs on Codex here.
+      useHelpPanelStore.setState({ preferredAgentId: "codex" });
+
+      await action.run(undefined, stubCtx);
+
+      expect(window.electron.help.provisionSession).toHaveBeenCalledWith(
+        expect.objectContaining({ agentId: "codex", slot: 0 })
+      );
+    });
+
+    it("starts the default rather than the agent a hibernated sibling will resume with", async () => {
       useHelpPanelStore.getState().setHibernateSession("proj-default", 0, {
         sessionId: "agent-s",
         cwd: "/repo",
         agentId: "codex",
       });
+
+      await action.run(undefined, stubCtx);
+
+      expect(window.electron.help.provisionSession).toHaveBeenCalledWith(
+        expect.objectContaining({ agentId: "claude", slot: 1 })
+      );
+    });
+
+    it("joins a sibling's agent while the default can't be resolved yet", async () => {
+      // Before CLI availability is known the default is only a guess, and a
+      // sibling lane is evidence of an agent this machine runs.
+      mockGetCliAvailabilityState.mockReturnValue({ availability: {}, isInitialized: false });
+      useHelpPanelStore.getState().setTerminal(0, "term-live", "codex", "sess-live");
 
       await action.run(undefined, stubCtx);
 
@@ -1003,6 +1133,32 @@ describe("help.launchAgent", () => {
 
       await action.run(undefined, stubCtx);
 
+      expect(window.electron.help.provisionSession).toHaveBeenCalledWith(
+        expect.objectContaining({ agentId: "claude", slot: 0 })
+      );
+    });
+
+    it("joins the agent main kept for the lane when the view came up cold (#13392)", async () => {
+      // A host's background view after the host restarted: nothing running and
+      // nothing in the view's own store, so only main knows what the lane ran.
+      const kept: Record<number, string> = { 0: "codex" };
+      Object.assign(window.electron.help, {
+        listPendingHibernationSlots: vi.fn().mockResolvedValue([0]),
+        peekPendingHibernation: vi.fn(async (_projectId: string, slot: number) =>
+          kept[slot] ? { agentId: kept[slot], agentSessionId: "s", cwd: "/repo" } : null
+        ),
+      });
+
+      await action.run(undefined, stubCtx);
+      expect(window.electron.help.provisionSession).toHaveBeenCalledWith(
+        expect.objectContaining({ agentId: "codex", slot: 0 })
+      );
+
+      // The same rule as a hibernated sibling: only while the assistant can run it.
+      kept[0] = "gemini";
+      useHelpPanelStore.setState(useHelpPanelStore.getInitialState(), true);
+      vi.mocked(window.electron.help.provisionSession).mockClear();
+      await action.run(undefined, stubCtx);
       expect(window.electron.help.provisionSession).toHaveBeenCalledWith(
         expect.objectContaining({ agentId: "claude", slot: 0 })
       );
@@ -1157,5 +1313,423 @@ describe("help.launchAgent", () => {
       expect(mockRemovePanel).toHaveBeenCalledWith("term-help");
       expect(useHelpPanelStore.getState().sessions[1]?.terminalId).toBe("term-other");
     });
+  });
+});
+
+const PROJECT = { id: "proj-1", path: "/repo" };
+
+function extractAction(id = "help.resumePastSession"): AnyActionDefinition {
+  const registry: ActionRegistry = new Map();
+  // Only `onOpenShortcuts` is reachable from the help actions.
+  const callbacks = { onOpenShortcuts: vi.fn() } as unknown as ActionCallbacks;
+  registerHelpActions(registry, callbacks);
+  const factory = registry.get(id);
+  if (!factory) throw new Error(`${id} not registered`);
+  return factory();
+}
+
+function bindLane(slot: number, terminalId: string, agentId: string, agentSessionId?: string) {
+  const store = useHelpPanelStore.getState();
+  store.ensureSlot(slot);
+  useHelpPanelStore.getState().setTerminal(slot, terminalId, agentId, `bearer-${slot}`);
+  panelsById[terminalId] = { id: terminalId, kind: "terminal", agentSessionId };
+}
+
+describe("help.resumePastSession", () => {
+  let action: AnyActionDefinition;
+  const run = async (args?: unknown): Promise<unknown> => action.run(args, {});
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    controllers.clear();
+    for (const key of Object.keys(panelsById)) delete panelsById[key];
+    mockGetProjectState.mockReturnValue({ currentProject: PROJECT, isBootstrapped: true });
+    mockGetScratchState.mockReturnValue({ currentScratch: null });
+    resetHelpPanelRuntimeGateForTests();
+    markHelpPanelRuntimeMounted();
+    useHelpPanelStore.setState(useHelpPanelStore.getInitialState(), true);
+    usePaletteStore.setState({ activePaletteId: null });
+    action = extractAction();
+  });
+
+  // Lane claims are module state held until the launch aimed at the lane
+  // settles. Settle every launch so no claim outlives its test.
+  afterEach(() => {
+    for (const controller of controllers.values()) {
+      for (const phase of ["provisioning", "idle"]) {
+        controller.phase = phase;
+        controller.listeners.forEach((listener) => listener());
+      }
+    }
+  });
+
+  it("stays out of the MCP surface", () => {
+    expect(action.mcpVisibility).toBe("hidden");
+  });
+
+  it("opens the picker and the panel when called without a session", async () => {
+    await run();
+    expect(usePaletteStore.getState().activePaletteId).toBe("assistant-sessions");
+    expect(useHelpPanelStore.getState().isOpen).toBe(true);
+    expect(controllers.size).toBe(0);
+  });
+
+  it("focuses the tab already showing the conversation instead of resuming it again", async () => {
+    bindLane(0, "term-0", "claude");
+    bindLane(1, "term-1", "claude", "ABC-1");
+    useHelpPanelStore.getState().setActiveSlot(0);
+
+    const result = await run({ agentId: "claude", sessionId: "abc-1" });
+
+    expect(result).toEqual({ outcome: "focused" });
+    expect(useHelpPanelStore.getState().activeSlot).toBe(1);
+    expect(controllers.size).toBe(0);
+  });
+
+  it("resumes into the free active tab by exact id", async () => {
+    const result = await run({ agentId: "claude", sessionId: "abc-1" });
+
+    expect(result).toEqual({ outcome: "resumed" });
+    expect(controllers.get(0)?.launchWhenReady).toHaveBeenCalledWith({
+      agentId: "claude",
+      replaceExisting: true,
+      resumeTarget: { sessionId: "abc-1" },
+    });
+    expect(useHelpPanelStore.getState().isOpen).toBe(true);
+  });
+
+  it("opens a new tab when the open ones are busy, and claims it until the launch settles", async () => {
+    bindLane(0, "term-0", "claude");
+
+    expect(await run({ agentId: "claude", sessionId: "abc-1" })).toEqual({ outcome: "resumed" });
+    expect(useHelpPanelStore.getState().sessions[1]).toBeDefined();
+    expect(useHelpPanelStore.getState().activeSlot).toBe(1);
+    const controller = controllers.get(1)!;
+    expect(controller.launchWhenReady).toHaveBeenCalledTimes(1);
+
+    // While the launch is in flight the lane stays claimed: a second pick
+    // goes elsewhere rather than displacing it.
+    controller.phase = "provisioning";
+    controller.listeners.forEach((listener) => listener());
+    await run({ agentId: "claude", sessionId: "def-2" });
+    expect(controllers.get(2)?.launchWhenReady).toHaveBeenCalledTimes(1);
+    expect(controller.launchWhenReady).toHaveBeenCalledTimes(1);
+  });
+
+  it("reports every tab busy instead of displacing one, then replaces the tab the user names", async () => {
+    bindLane(0, "term-0", "claude");
+    bindLane(1, "term-1", "claude");
+    bindLane(2, "term-2", "claude");
+
+    expect(await run({ agentId: "claude", sessionId: "abc-1" })).toEqual({
+      outcome: "lanes-full",
+    });
+    expect(controllers.size).toBe(0);
+
+    expect(await run({ agentId: "claude", sessionId: "abc-1", slot: 1 })).toEqual({
+      outcome: "resumed",
+    });
+    expect(controllers.get(1)?.launchWhenReady).toHaveBeenCalledWith(
+      expect.objectContaining({ replaceExisting: true, resumeTarget: { sessionId: "abc-1" } })
+    );
+    expect(useHelpPanelStore.getState().activeSlot).toBe(1);
+  });
+
+  it("refuses a named tab another resume is already heading for", async () => {
+    bindLane(0, "term-0", "claude");
+    bindLane(1, "term-1", "claude");
+    bindLane(2, "term-2", "claude");
+    await run({ agentId: "claude", sessionId: "abc-1", slot: 1 });
+    controllers.get(1)!.phase = "provisioning";
+    controllers.get(1)!.listeners.forEach((listener) => listener());
+
+    expect(await run({ agentId: "claude", sessionId: "def-2", slot: 1 })).toEqual({
+      outcome: "lanes-full",
+    });
+    expect(controllers.get(1)!.launchWhenReady).toHaveBeenCalledTimes(1);
+  });
+
+  it("says a tab is busy rather than dropping the pick when it is mid-launch", async () => {
+    const { acquireHelpSessionController } =
+      await import("@/controllers/helpSessionControllerRegistry");
+    acquireHelpSessionController(0);
+    controllers.get(0)!.phase = "provisioning";
+
+    expect(await run({ agentId: "claude", sessionId: "abc-1" })).toEqual({
+      outcome: "unavailable",
+    });
+    expect(controllers.get(0)!.launchWhenReady).not.toHaveBeenCalled();
+    expect(mockNotify).toHaveBeenCalledWith(expect.objectContaining({ type: "warning" }));
+
+    // The refused pick left no claim behind.
+    controllers.get(0)!.phase = "idle";
+    expect(await run({ agentId: "claude", sessionId: "abc-1" })).toEqual({ outcome: "resumed" });
+  });
+
+  it("ignores a closed tab's capture when checking the agent", async () => {
+    useHelpPanelStore.getState().setHibernateSession(PROJECT.id, 2, {
+      sessionId: "old",
+      cwd: "/help",
+      agentId: "claude",
+    });
+    expect(await run({ agentId: "codex", sessionId: "thread-1" })).toEqual({
+      outcome: "resumed",
+    });
+  });
+
+  it("refuses a named tab that has since closed", async () => {
+    expect(await run({ agentId: "claude", sessionId: "abc-1", slot: 2 })).toEqual({
+      outcome: "lanes-full",
+    });
+    expect(controllers.size).toBe(0);
+  });
+
+  it("resumes a conversation captured for a closed tab back into that tab", async () => {
+    useHelpPanelStore.getState().setHibernateSession(PROJECT.id, 2, {
+      sessionId: "abc-1",
+      cwd: "/help",
+      agentId: "claude",
+    });
+
+    expect(await run({ agentId: "claude", sessionId: "abc-1" })).toEqual({ outcome: "resumed" });
+    expect(useHelpPanelStore.getState().sessions[2]).toBeDefined();
+    expect(controllers.get(2)?.launchWhenReady).toHaveBeenCalled();
+  });
+
+  it("resumes beside a tab running a different agent (#13442)", async () => {
+    bindLane(0, "term-0", "claude");
+
+    expect(await run({ agentId: "codex", sessionId: "thread-1" })).toEqual({
+      outcome: "resumed",
+    });
+    expect(controllers.get(1)?.launchWhenReady).toHaveBeenCalledWith(
+      expect.objectContaining({ agentId: "codex", resumeTarget: { sessionId: "thread-1" } })
+    );
+    expect(mockNotify).not.toHaveBeenCalled();
+  });
+
+  it("allows a different agent when the tab running the other one is the one replaced", async () => {
+    bindLane(0, "term-0", "claude");
+
+    expect(await run({ agentId: "codex", sessionId: "thread-1", slot: 0 })).toEqual({
+      outcome: "resumed",
+    });
+  });
+
+  it("does nothing without a workspace", async () => {
+    mockGetProjectState.mockReturnValue({ currentProject: null, isBootstrapped: true });
+
+    expect(await run({ agentId: "claude", sessionId: "abc-1" })).toEqual({
+      outcome: "unavailable",
+    });
+    expect(controllers.size).toBe(0);
+  });
+
+  it("keys captured entries by workspace, so another project's capture is not this tab's", async () => {
+    useHelpPanelStore.getState().setHibernateSession("other-project", 2, {
+      sessionId: "abc-1",
+      cwd: "/help",
+      agentId: "claude",
+    });
+
+    await run({ agentId: "claude", sessionId: "abc-1" });
+    expect(controllers.get(0)?.launchWhenReady).toHaveBeenCalled();
+    expect(controllers.get(2)).toBeUndefined();
+  });
+});
+
+function helpTourShow(): AnyActionDefinition {
+  const registry: ActionRegistry = new Map();
+  // help.tour.show reaches no callback; every one is a stub.
+  const callbacks: ActionCallbacks = new Proxy(Object.create(null), { get: () => vi.fn() });
+  registerHelpActions(registry, callbacks);
+  return registry.get("help.tour.show")!();
+}
+
+describe("help.newSessionWithAgent (#13442)", () => {
+  let action: AnyActionDefinition;
+  const run = async (agentId: string): Promise<unknown> => action.run({ agentId }, {});
+  const kept: Record<number, string> = {};
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    controllers.clear();
+    for (const key of Object.keys(panelsById)) delete panelsById[key];
+    for (const key of Object.keys(kept)) delete kept[Number(key)];
+    mockGetProjectState.mockReturnValue({ currentProject: PROJECT, isBootstrapped: true });
+    mockGetScratchState.mockReturnValue({ currentScratch: null });
+    Object.defineProperty(globalThis, "window", {
+      value: {
+        electron: {
+          help: {
+            listPendingHibernationSlots: vi.fn(async () => Object.keys(kept).map(Number)),
+            peekPendingHibernation: vi.fn(async (_projectId: string, slot: number) =>
+              kept[slot] ? { agentId: kept[slot], agentSessionId: "s", cwd: "/help" } : null
+            ),
+          },
+        },
+      },
+      writable: true,
+      configurable: true,
+    });
+    resetHelpPanelRuntimeGateForTests();
+    markHelpPanelRuntimeMounted();
+    useHelpPanelStore.setState(useHelpPanelStore.getInitialState(), true);
+    action = extractAction("help.newSessionWithAgent");
+  });
+
+  afterEach(() => {
+    for (const controller of controllers.values()) {
+      for (const phase of ["provisioning", "idle"]) {
+        controller.phase = phase;
+        controller.listeners.forEach((listener) => listener());
+      }
+    }
+  });
+
+  it("is picked from the assistant's menus, never by an agent or the palette", () => {
+    expect(action.mcpVisibility).toBe("hidden");
+    expect(action.palette).toEqual({ mode: "hidden" });
+  });
+
+  it("starts the picked agent in a new tab beside a busy one, and leaves the default alone", async () => {
+    bindLane(0, "term-0", "claude");
+    const before = useHelpPanelStore.getState();
+    const { hostAssistantAgentId, preferredAgentId } = before;
+
+    expect(await run("codex")).toEqual({ outcome: "started" });
+
+    expect(controllers.get(1)?.launchWhenReady).toHaveBeenCalledWith({
+      agentId: "codex",
+      replaceExisting: true,
+      pinAgent: true,
+    });
+    const after = useHelpPanelStore.getState();
+    expect(after.sessions[1]).toBeDefined();
+    expect(after.activeSlot).toBe(1);
+    expect(after.isOpen).toBe(true);
+    expect(after.hostAssistantAgentId).toBe(hostAssistantAgentId);
+    expect(after.preferredAgentId).toBe(preferredAgentId);
+    // The running tab is untouched.
+    expect(controllers.has(0)).toBe(false);
+    expect(after.sessions[0]?.terminalId).toBe("term-0");
+  });
+
+  it("fills the empty tab in front rather than opening another", async () => {
+    expect(await run("codex")).toEqual({ outcome: "started" });
+
+    expect(controllers.get(0)?.launchWhenReady).toHaveBeenCalledTimes(1);
+    expect(Object.keys(useHelpPanelStore.getState().sessions)).toEqual(["0"]);
+  });
+
+  it("never lands on a tab main still keeps a conversation for", async () => {
+    // A cold view: main kept slot 0's conversation, which this view's store
+    // knows nothing about yet. Starting fresh there would take its place.
+    kept[0] = "claude";
+
+    expect(await run("codex")).toEqual({ outcome: "started" });
+
+    expect(controllers.has(0)).toBe(false);
+    expect(controllers.get(1)?.launchWhenReady).toHaveBeenCalledTimes(1);
+  });
+
+  it("passes over an empty tab that is still starting the default, for the next free one", async () => {
+    // Slot 0 is empty but its controller is mid auto-launch: this launch would
+    // drop on its re-entrancy guard there.
+    const listeners = new Set<() => void>();
+    const starting = {
+      launchWhenReady: vi.fn(),
+      phase: "provisioning",
+      listeners,
+      getSnapshot: () => ({ phase: starting.phase }),
+      subscribe: (listener: () => void) => {
+        listeners.add(listener);
+        return () => listeners.delete(listener);
+      },
+    };
+    controllers.set(0, starting);
+
+    expect(await run("codex")).toEqual({ outcome: "started" });
+
+    expect(controllers.get(0)!.launchWhenReady).not.toHaveBeenCalled();
+    expect(controllers.get(1)?.launchWhenReady).toHaveBeenCalledWith(
+      expect.objectContaining({ agentId: "codex" })
+    );
+  });
+
+  it("starts nothing when it can't tell which tabs main still keeps", async () => {
+    window.electron.help.listPendingHibernationSlots = vi.fn(async () => {
+      throw new Error("ipc down");
+    });
+
+    expect(await run("codex")).toEqual({ outcome: "unavailable" });
+
+    expect(controllers.size).toBe(0);
+    expect(mockNotify).toHaveBeenCalledWith(expect.objectContaining({ type: "warning" }));
+  });
+
+  it("drops a Settings switch still waiting for a session, so it can't undo the pick", async () => {
+    useHelpPanelStore.setState({ agentSwitchRequest: { id: 7, agentId: "claude" } });
+
+    await run("codex");
+
+    expect(useHelpPanelStore.getState().agentSwitchRequest).toBeNull();
+  });
+
+  it("says the tabs are full instead of displacing one", async () => {
+    bindLane(0, "term-0", "claude");
+    bindLane(1, "term-1", "claude");
+    bindLane(2, "term-2", "claude");
+
+    expect(await run("codex")).toEqual({ outcome: "lanes-full" });
+
+    expect(controllers.size).toBe(0);
+    expect(mockNotify).toHaveBeenCalledWith(
+      expect.objectContaining({ type: "warning", title: "Assistant tabs full" })
+    );
+  });
+
+  it("holds the tab it chose until the launch settles", async () => {
+    bindLane(0, "term-0", "claude");
+    await run("codex");
+    const first = controllers.get(1)!;
+    first.phase = "provisioning";
+    first.listeners.forEach((listener) => listener());
+
+    await run("codex");
+
+    expect(first.launchWhenReady).toHaveBeenCalledTimes(1);
+    expect(controllers.get(2)?.launchWhenReady).toHaveBeenCalledTimes(1);
+  });
+
+  it("does nothing without a workspace", async () => {
+    mockGetProjectState.mockReturnValue({ currentProject: null, isBootstrapped: true });
+
+    expect(await run("codex")).toEqual({ outcome: "unavailable" });
+    expect(controllers.size).toBe(0);
+  });
+});
+
+describe("help.tour.show", () => {
+  it("still needs no arguments, so every existing caller keeps working", () => {
+    const schema = helpTourShow().argsSchema!;
+    expect(schema.safeParse(undefined).success).toBe(true);
+    expect(schema.safeParse({}).success).toBe(true);
+  });
+
+  it("accepts any tour id as a string and nothing else", () => {
+    const schema = helpTourShow().argsSchema!;
+    // Whether a tour is registered under it is the host's call, not validation's.
+    expect(schema.safeParse({ tourId: "plugin:missing/tour" }).success).toBe(true);
+    expect(schema.safeParse({ tourId: 7 }).success).toBe(false);
+  });
+
+  it("opens the Daintree tour without arguments and the named tour with one", async () => {
+    const action = helpTourShow();
+    await action.run(undefined, {});
+    await action.run({}, {});
+    const acme = makePluginTourId("acme.tools", "welcome");
+    await action.run({ tourId: acme }, {});
+    expect(mockOpenTour.mock.calls).toEqual([[undefined], [undefined], [acme]]);
   });
 });

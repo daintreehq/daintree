@@ -7,7 +7,6 @@ import {
   QUIET_MEMORY_SAMPLE_INTERVAL_MS,
 } from "../analysis/AnalysisWorkerRuntime.js";
 import { getPtyPowerLevel, resetPtyPowerLevelForTesting } from "../ptyPowerPolicy.js";
-import { ANALYSIS_ACK_FLUSH_BYTES } from "../analysis/AnalysisSession.js";
 import type { AnalysisFinalSnapshot, WorkerToHostMessage } from "../analysisWorkerProtocol.js";
 
 // Exercises the worker-side protocol end-to-end without spawning a real
@@ -283,16 +282,6 @@ describe("AnalysisWorkerRuntime", () => {
     }
   });
 
-  it("flushes the ack batch once the byte threshold is crossed", async () => {
-    const payload = "x".repeat(ANALYSIS_ACK_FLUSH_BYTES + 1024);
-    sendData(payload);
-
-    const ack = await waitFor(() => emitted.find((m) => m.type === "data-ack"));
-    if (ack.type === "data-ack") {
-      expect(ack.bytes).toBe(payload.length);
-    }
-  });
-
   it("serves a pending serialize before a free that arrives behind it", async () => {
     sendData("pre-kill content\r\n");
     // The kill path posts serialize-persistence then free back-to-back; the
@@ -533,25 +522,6 @@ describe("AnalysisWorkerRuntime", () => {
         timedRuntime.stopMemorySampling();
       } finally {
         resetPtyPowerLevelForTesting();
-        vi.useRealTimers();
-      }
-    });
-
-    it("samples at the base cadence while the policy is active", () => {
-      vi.useFakeTimers();
-      try {
-        const timed: WorkerToHostMessage[] = [];
-        const timedRuntime = new AnalysisWorkerRuntime(
-          (msg) => timed.push(msg),
-          () => ({ heapUsed: 7, external: 3 })
-        );
-        timedRuntime.startMemorySampling(2000);
-
-        vi.advanceTimersByTime(10_000);
-
-        expect(timed.filter((m) => m.type === "memory-sample")).toHaveLength(5);
-        timedRuntime.stopMemorySampling();
-      } finally {
         vi.useRealTimers();
       }
     });

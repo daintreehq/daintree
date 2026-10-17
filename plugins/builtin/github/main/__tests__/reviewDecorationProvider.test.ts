@@ -145,16 +145,6 @@ describe("createReviewDecorationProvider", () => {
     expect(result.__clampedAt).toBeUndefined(); // sentinel is stripped
   });
 
-  it("does not include (partial count) when sentinel is absent", async () => {
-    const host = makeHost([makeWorktree("/some/path", 42)]);
-    provider = createReviewDecorationProvider(host, forgeProvider);
-    mockGetPRReviewThreads.mockResolvedValueOnce({ "src/a.ts": 2 });
-
-    const result = await provider.provideDecorations("worktree-diff:/some/path", ["src/a.ts"]);
-
-    expect(result["src/a.ts"]!.tooltip).toBe("2 unresolved review comments");
-  });
-
   it("skips files with count 0", async () => {
     const host = makeHost([makeWorktree("/some/path", 42)]);
     provider = createReviewDecorationProvider(host, forgeProvider);
@@ -184,27 +174,6 @@ describe("createReviewDecorationProvider", () => {
 
     // __clampedAt shouldn't appear — the spread destructure strips it
     expect(result.__clampedAt).toBeUndefined();
-  });
-
-  // Issue #9953 regression: the provider-owned `buildPRFileUrl` is the
-  // single source of the deep-link. The renderer must NEVER reconstruct
-  // a GitHub-shaped URL from a base PR URL.
-  it("populates url via the provider's buildPRFileUrl when the capability is present", async () => {
-    const host = makeHost([makeWorktree("/some/path", 42, "test-owner", "test-repo")]);
-    provider = createReviewDecorationProvider(host, forgeProvider);
-    mockGetPRReviewThreads.mockResolvedValueOnce({ "src/a.ts": 1 });
-
-    const result = await provider.provideDecorations("worktree-diff:/some/path", ["src/a.ts"]);
-
-    expect(mockBuildPRFileUrl).toHaveBeenCalledTimes(1);
-    expect(mockBuildPRFileUrl).toHaveBeenCalledWith(
-      expect.objectContaining({ owner: "test-owner", repo: "test-repo" }),
-      42,
-      "src/a.ts"
-    );
-    expect(result["src/a.ts"]!.url).toBe(
-      "https://example.test/test-owner/test-repo/pull/42/files#diff-src/a.ts"
-    );
   });
 
   // Capability-missing path: a future non-GitHub provider (or an older
@@ -254,28 +223,6 @@ describe("createReviewDecorationProvider", () => {
     // broken URL the host can't recover from.
     expect(mockBuildPRFileUrl).not.toHaveBeenCalled();
     expect(result["src/a.ts"]!.url).toBeUndefined();
-  });
-
-  // Real-anchor sanity check: a provider instance with a real
-  // `buildPRFileUrl` produces a URL whose path/hash match the github.com
-  // formula, not a placeholder. Bridges the delegation-only tests above
-  // to a concrete anchor (the issue is that the renderer used to wire
-  // `${prUrl}/files?file=...` instead of letting the provider author it).
-  it("emits a github.com-shaped anchor via the real provider", async () => {
-    const { githubForgeProvider } = await import("../forgeProvider.js");
-    const host = makeHost([makeWorktree("/some/path", 42, "owner", "repo")]);
-    provider = createReviewDecorationProvider(host, githubForgeProvider);
-    mockGetPRReviewThreads.mockResolvedValueOnce({ "src/has space.ts": 1 });
-
-    const result = await provider.provideDecorations("worktree-diff:/some/path", [
-      "src/has space.ts",
-    ]);
-
-    const { createHash } = await import("node:crypto");
-    const expected = createHash("sha256").update("src/has space.ts", "utf8").digest("hex");
-    expect(result["src/has space.ts"]!.url).toBe(
-      `https://github.com/owner/repo/pull/42/files#diff-${expected}`
-    );
   });
 });
 

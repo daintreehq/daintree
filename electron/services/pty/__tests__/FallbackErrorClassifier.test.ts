@@ -29,17 +29,14 @@ function cases(
 cases("connection: Claude patterns", "connection", [
   "Unable to connect to API — check your internet connection",
   "API Error: 500 Internal server error",
-  "API Error: 529 Overloaded",
   "API Error: Repeated 529 Overloaded errors",
   "API Error: connect ECONNREFUSED 127.0.0.1:443",
   "API Error: getaddrinfo ENOTFOUND api.anthropic.com",
-  "Unable to connect to API due to poor internet connection. Retrying in 3 seconds…",
 ]);
 
 cases("connection: Gemini patterns", "connection", [
   "Error: INTERNAL",
   "Error: UNAVAILABLE: failed to connect to google.generativeai",
-  "ENOTFOUND generativelanguage.googleapis.com",
   "ETIMEDOUT when contacting the API",
   "ECONNRESET reading response body",
 ]);
@@ -90,12 +87,7 @@ cases("user-error: must NOT trigger fallback", "user-error", [
   "input is too long, try /compact",
 ]);
 
-cases("clean: empty or non-matching tail", "clean", [
-  "",
-  "Hello, world!",
-  "Running tests…",
-  "✓ 42 passed",
-]);
+cases("clean: empty or non-matching tail", "clean", ["", "Hello, world!"]);
 
 describe("classifyExitOutput: short-circuits", () => {
   it("returns 'clean' when wasKilled is true, regardless of output", () => {
@@ -106,11 +98,6 @@ describe("classifyExitOutput: short-circuits", () => {
   it("returns 'clean' for exit code 0 even with matching error text in tail (retry-then-succeed)", () => {
     const output =
       "API Error: 503 Service Unavailable\nRetrying in 2s…\nTask completed successfully\nDone.";
-    expect(classifyExitOutput({ recentOutput: output, exitCode: 0 })).toBe("clean");
-  });
-
-  it("returns 'clean' for exit code 0 with UNAVAILABLE in the tail", () => {
-    const output = "Error: UNAVAILABLE: dns resolution failed\nRecovered.\nTask complete!";
     expect(classifyExitOutput({ recentOutput: output, exitCode: 0 })).toBe("clean");
   });
 

@@ -1,6 +1,5 @@
 import type { CSSProperties } from "react";
-import { CheckCircle2 } from "lucide-react";
-import { SpinnerCircle } from "@/components/icons";
+import { DoneCircle, SpinnerCircle } from "@/components/icons";
 import { cn } from "@/lib/utils";
 import {
   UI_ENTER_DURATION,
@@ -52,7 +51,7 @@ export function DockActivityCue({ state }: DockActivityCueProps) {
           className={cn(DOCK_STATE_GLYPH_CLASS, "animate-spin-slow motion-reduce:animate-none")}
         />
       ) : (
-        <CheckCircle2
+        <DoneCircle
           className={cn(
             DOCK_STATE_GLYPH_CLASS,
             "transition-[opacity,scale] starting:opacity-0 starting:scale-50 motion-reduce:transition-opacity motion-reduce:scale-none"

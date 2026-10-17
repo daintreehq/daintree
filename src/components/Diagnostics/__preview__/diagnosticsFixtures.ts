@@ -1,6 +1,6 @@
 import type { ErrorRecord } from "@/store/errorStore";
 import type { LogEntry } from "@shared/types/ipc/logs";
-import type { EventRecord } from "@shared/types/ipc/events";
+import type { EventFilterOptions, EventRecord } from "@shared/types/ipc/events";
 import type { SanitizedTelemetryEvent } from "@shared/types";
 import type { WhySlowSnapshot } from "@shared/types/whySlow";
 import type { PerfSummaryRow } from "@/store/perfMetricsStore";
@@ -21,6 +21,7 @@ export interface DiagnosticsFixture {
   expandLogId?: string;
   events?: EventRecord[];
   selectedEventId?: string;
+  eventFilters?: EventFilterOptions;
   telemetryActive?: boolean;
   telemetry?: SanitizedTelemetryEvent[];
   selectedTelemetryId?: string;
@@ -261,6 +262,25 @@ export const EVENTS: EventRecord[] = Array.from({ length: 42 }, (_, i) => {
     source: i % 4 === 0 ? "renderer" : "main",
   };
 });
+
+/** One event that carries every context key, with names and ids as long as real ones get. */
+export const LONG_EVENT: EventRecord = {
+  id: "ev-long",
+  timestamp: at(4) + 812,
+  type: "agent:lifecycle:approval-requested:waiting-for-tool-permission",
+  category: "agent",
+  source: "renderer",
+  payload: {
+    worktreeId: "wt-feature-event-inspector-narrow-dock-header-layout",
+    agentId: "claude-opus-7f3a91c2-4b1e-4d0a-9c3e-2f1b8a6d5e40",
+    runId: "run-2026-10-14T15-31-04-812Z-a91c55e0",
+    terminalId: "term-3f2a9c1e-77aa-4b9d-8e21-5c0f",
+    issueNumber: 13327,
+    prNumber: 13330,
+    traceId: "trace-91ab44c0-2d7e-4f19-b3a8-e5d1c7f60b92",
+    tool: "Bash",
+  },
+};
 
 export const TELEMETRY: SanitizedTelemetryEvent[] = [
   {
@@ -536,6 +556,19 @@ export const DIAGNOSTICS_FIXTURES: Record<string, DiagnosticsFixture> = {
     selectedEventId: "ev-35",
   },
   "events-unselected": { tab: "events", what: "42 events, none selected", events: EVENTS },
+  "events-long": {
+    tab: "events",
+    what: "long event name and every context key, selected",
+    events: [...EVENTS, LONG_EVENT],
+    selectedEventId: "ev-long",
+  },
+  "events-long-filtered": {
+    tab: "events",
+    what: "long event selected, filtered by its worktree",
+    events: [...EVENTS, LONG_EVENT],
+    selectedEventId: "ev-long",
+    eventFilters: { worktreeId: "wt-feature-event-inspector-narrow-dock-header-layout" },
+  },
   "telemetry-off": { tab: "telemetry", what: "preview off", telemetryActive: false, telemetry: [] },
   "telemetry-populated": {
     tab: "telemetry",

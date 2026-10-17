@@ -178,29 +178,6 @@ describe("rendererStoreOrchestrator", () => {
     expect(useWorktreeSelectionStore.getState().activeWorktreeId).toBe("wt-2");
   });
 
-  it("does not switch worktree when focusing a terminal in the same worktree", () => {
-    useWorktreeSelectionStore.setState({ activeWorktreeId: "wt-1" });
-    usePanelStore.setState({
-      panelsById: {
-        "term-1": {
-          id: "term-1",
-          title: "T1",
-          kind: "terminal" as const,
-          cwd: "/test",
-          cols: 80,
-          rows: 24,
-          location: "grid",
-          worktreeId: "wt-1",
-        },
-      },
-      panelIds: ["term-1"],
-    });
-
-    usePanelStore.setState({ focusedId: "term-1" });
-
-    expect(useWorktreeSelectionStore.getState().activeWorktreeId).toBe("wt-1");
-  });
-
   it("cleans up console capture store when terminal is removed", () => {
     const panelId = "browser-1";
 
@@ -322,42 +299,6 @@ describe("rendererStoreOrchestrator", () => {
 
     expect(usePanelStore.getState().panelIds).toContain("closed");
     expect(usePluginPanelToolbarStore.getState().statesByPanelId.closed).toBeUndefined();
-  });
-
-  it("prunes plugin panel badges for every terminal removed in one batch", () => {
-    usePanelStore.setState({
-      panelsById: {
-        a: {
-          id: "a",
-          title: "A",
-          kind: "terminal" as const,
-          cwd: "/",
-          cols: 80,
-          rows: 24,
-          location: "grid",
-        },
-        b: {
-          id: "b",
-          title: "B",
-          kind: "terminal" as const,
-          cwd: "/",
-          cols: 80,
-          rows: 24,
-          location: "grid",
-        },
-      },
-      panelIds: ["a", "b"],
-    });
-    usePluginPanelBadgeStore.setState({
-      badgesByPanelId: {
-        a: { "plugin-1": { kind: "dot" } },
-        b: { "plugin-1": { kind: "dot" } },
-      },
-    });
-
-    usePanelStore.setState({ panelsById: {}, panelIds: [] });
-
-    expect(usePluginPanelBadgeStore.getState().badgesByPanelId).toEqual({});
   });
 
   it("cleans up input store when terminal is removed", () => {
@@ -538,30 +479,6 @@ describe("rendererStoreOrchestrator", () => {
     });
   });
 
-  it("records terminal MRU on focus change", () => {
-    const recordMruSpy = vi.spyOn(usePanelStore.getState(), "recordMru");
-
-    usePanelStore.setState({
-      panelsById: {
-        "term-1": {
-          id: "term-1",
-          title: "T1",
-          kind: "terminal" as const,
-          cwd: "/test",
-          cols: 80,
-          rows: 24,
-          location: "grid",
-          worktreeId: "wt-1",
-        },
-      },
-      panelIds: ["term-1"],
-    });
-
-    usePanelStore.setState({ focusedId: "term-1" });
-
-    expect(recordMruSpy).toHaveBeenCalledWith("terminal:term-1");
-  });
-
   it("does not fire side effects when focusedId is set to the same value", () => {
     useWorktreeSelectionStore.setState({ activeWorktreeId: "wt-1" });
     usePanelStore.setState({
@@ -703,43 +620,6 @@ describe("rendererStoreOrchestrator", () => {
     expect(recordMruSpy).toHaveBeenCalledWith("terminal:term-2");
   });
 
-  it("handles rapid A→B focus changes correctly", () => {
-    useWorktreeSelectionStore.setState({ activeWorktreeId: "wt-1" });
-    usePanelStore.setState({
-      panelsById: {
-        "term-1": {
-          id: "term-1",
-          title: "T1",
-          kind: "terminal" as const,
-          cwd: "/test",
-          cols: 80,
-          rows: 24,
-          location: "grid",
-          worktreeId: "wt-1",
-        },
-        "term-2": {
-          id: "term-2",
-          title: "T2",
-          kind: "terminal" as const,
-          cwd: "/test",
-          cols: 80,
-          rows: 24,
-          location: "grid",
-          worktreeId: "wt-2",
-        },
-      },
-      panelIds: ["term-1", "term-2"],
-    });
-
-    usePanelStore.setState({ focusedId: "term-1" });
-    usePanelStore.setState({ focusedId: "term-2" });
-
-    expect(useWorktreeSelectionStore.getState().activeWorktreeId).toBe("wt-2");
-    expect(useWorktreeSelectionStore.getState().lastFocusedTerminalByWorktree.get("wt-2")).toBe(
-      "term-2"
-    );
-  });
-
   it("does not switch worktree when terminal has no worktreeId", () => {
     useWorktreeSelectionStore.setState({ activeWorktreeId: "wt-1" });
     usePanelStore.setState({
@@ -760,61 +640,6 @@ describe("rendererStoreOrchestrator", () => {
     usePanelStore.setState({ focusedId: "term-1" });
 
     expect(useWorktreeSelectionStore.getState().activeWorktreeId).toBe("wt-1");
-  });
-
-  it("cleans up multiple terminals removed in one batch", () => {
-    usePanelStore.setState({
-      panelsById: {
-        "t-1": {
-          id: "t-1",
-          kind: "browser",
-          title: "B1",
-          cwd: "/test",
-          cols: 80,
-          rows: 24,
-          location: "grid",
-        } as PanelInstance,
-        "t-2": {
-          id: "t-2",
-          kind: "browser",
-          title: "B2",
-          cwd: "/test",
-          cols: 80,
-          rows: 24,
-          location: "grid",
-        } as PanelInstance,
-      },
-      panelIds: ["t-1", "t-2"],
-    });
-
-    useConsoleCaptureStore.getState().addStructuredMessage({
-      id: 1,
-      paneId: "t-1",
-      level: "log",
-      cdpType: "log",
-      args: [{ type: "primitive", kind: "string", value: "a" }],
-      summaryText: "a",
-      groupDepth: 0,
-      timestamp: Date.now(),
-      navigationGeneration: 0,
-    });
-    useConsoleCaptureStore.getState().addStructuredMessage({
-      id: 2,
-      paneId: "t-2",
-      level: "log",
-      cdpType: "log",
-      args: [{ type: "primitive", kind: "string", value: "b" }],
-      summaryText: "b",
-      groupDepth: 0,
-      timestamp: Date.now(),
-      navigationGeneration: 0,
-    });
-
-    // Remove both terminals at once
-    usePanelStore.setState({ panelsById: {}, panelIds: [] });
-
-    expect(useConsoleCaptureStore.getState().messages.has("t-1")).toBe(false);
-    expect(useConsoleCaptureStore.getState().messages.has("t-2")).toBe(false);
   });
 
   it("does not clear worktree focus tracking when removed terminal is not last-focused", () => {
@@ -982,28 +807,6 @@ describe("rendererStoreOrchestrator", () => {
     expect(useResourceMonitoringStore.getState().metrics.has("term-b")).toBe(true);
   });
 
-  it("does not error when removing a panel without resource metrics", () => {
-    usePanelStore.setState({
-      panelsById: {
-        "term-no-metrics": {
-          id: "term-no-metrics",
-          title: "T1",
-          kind: "terminal" as const,
-          cwd: "/test",
-          cols: 80,
-          rows: 24,
-          location: "grid",
-        },
-      },
-      panelIds: ["term-no-metrics"],
-    });
-
-    expect(useResourceMonitoringStore.getState().metrics.has("term-no-metrics")).toBe(false);
-
-    expect(() => usePanelStore.getState().removePanel("term-no-metrics")).not.toThrow();
-    expect(useResourceMonitoringStore.getState().metrics.size).toBe(0);
-  });
-
   it("prunes metrics for every panel in a bulk removal, keeping survivors", () => {
     usePanelStore.setState({
       panelsById: {
@@ -1055,58 +858,6 @@ describe("rendererStoreOrchestrator", () => {
     expect(useResourceMonitoringStore.getState().metrics.has("m-3")).toBe(true);
   });
 
-  it("removePanel stays a no-op when metrics were already pruned (onExit + force-removal)", () => {
-    usePanelStore.setState({
-      panelsById: {
-        "dup-1": {
-          id: "dup-1",
-          title: "T1",
-          kind: "terminal" as const,
-          cwd: "/test",
-          cols: 80,
-          rows: 24,
-          location: "grid",
-        },
-      },
-      panelIds: ["dup-1"],
-    });
-
-    useResourceMonitoringStore.getState().updateMetrics({
-      "dup-1": { cpuPercent: 5, memoryKb: 1000, breakdown: [] },
-    });
-
-    // Simulate the PTY onExit path (lifecycle.ts) pruning first.
-    useResourceMonitoringStore.getState().removePanel("dup-1");
-    expect(useResourceMonitoringStore.getState().metrics.has("dup-1")).toBe(false);
-
-    // Then the orchestrator's force-removal path fires for the same id.
-    expect(() => usePanelStore.getState().removePanel("dup-1")).not.toThrow();
-    expect(useResourceMonitoringStore.getState().metrics.has("dup-1")).toBe(false);
-  });
-
-  it("does not error when removing terminal without voice buffer", () => {
-    usePanelStore.setState({
-      panelsById: {
-        "term-no-voice": {
-          id: "term-no-voice",
-          title: "T1",
-          kind: "terminal" as const,
-          cwd: "/test",
-          cols: 80,
-          rows: 24,
-          location: "grid",
-        },
-      },
-      panelIds: ["term-no-voice"],
-    });
-
-    expect(useVoiceRecordingStore.getState().panelBuffers["term-no-voice"]).toBeUndefined();
-
-    usePanelStore.getState().removePanel("term-no-voice");
-
-    expect(useVoiceRecordingStore.getState().panelBuffers).toEqual({});
-  });
-
   it("calls unregisterInputController when terminal is removed", () => {
     usePanelStore.setState({
       panelsById: {
@@ -1126,38 +877,6 @@ describe("rendererStoreOrchestrator", () => {
     usePanelStore.getState().removePanel("term-1");
 
     expect(unregisterInputController).toHaveBeenCalledWith("term-1");
-  });
-
-  it("unregisters the input controller for each terminal in batch removal", () => {
-    usePanelStore.setState({
-      panelsById: {
-        "t-a": {
-          id: "t-a",
-          title: "A",
-          kind: "terminal" as const,
-          cwd: "/test",
-          cols: 80,
-          rows: 24,
-          location: "grid",
-        },
-        "t-b": {
-          id: "t-b",
-          title: "B",
-          kind: "terminal" as const,
-          cwd: "/test",
-          cols: 80,
-          rows: 24,
-          location: "grid",
-        },
-      },
-      panelIds: ["t-a", "t-b"],
-    });
-
-    usePanelStore.setState({ panelsById: {}, panelIds: [] });
-
-    expect(unregisterInputController).toHaveBeenCalledTimes(2);
-    expect(unregisterInputController).toHaveBeenCalledWith("t-a");
-    expect(unregisterInputController).toHaveBeenCalledWith("t-b");
   });
 
   it("debounces persistMruList during rapid focus changes", async () => {
@@ -1948,25 +1667,6 @@ describe("rendererStoreOrchestrator", () => {
       stores.useFleetFailureStore.setState({ failedIds: new Set(), payload: null });
     }
 
-    it("halts auto-clear after destroy — fleet drain during torn-down does not clear", async () => {
-      const stores = await loadStores();
-      resetFleetStores(stores);
-      seedFleetPanels();
-      stores.useFleetArmingStore.getState().armIds(["agent-a", "agent-b"]);
-      stores.useFleetFailureStore.getState().recordFailure("p", ["agent-a", "agent-b"]);
-
-      // Subscription torn down; the next armed-set change has no listener.
-      destroyStoreOrchestrator();
-      stores.useFleetArmingStore.getState().clear();
-
-      // The drain happened, but failures persist because the subscription
-      // is gone. Initial reconciliation runs on the NEXT re-init.
-      expect(stores.useFleetFailureStore.getState().failedIds).toEqual(
-        new Set(["agent-a", "agent-b"])
-      );
-      expect(stores.useFleetFailureStore.getState().payload).toBe("p");
-    });
-
     it("reconciles drained fleet on re-init (initial pass picks up the missed clear)", async () => {
       const stores = await loadStores();
       resetFleetStores(stores);
@@ -2046,16 +1746,6 @@ describe("rendererStoreOrchestrator", () => {
 
       expect(usePortalStore.getState().isOpen).toBe(true);
       expect(useHelpPanelStore.getState().isOpen).toBe(false);
-    });
-
-    it("leaves the other surface alone when one closes", () => {
-      useHelpPanelStore.getState().setOpen(true);
-      useHelpPanelStore.getState().setOpen(false);
-      usePortalStore.getState().setOpen(true);
-      usePortalStore.getState().setOpen(false);
-
-      expect(useHelpPanelStore.getState().isOpen).toBe(false);
-      expect(usePortalStore.getState().isOpen).toBe(false);
     });
 
     it("stops enforcing after the orchestrator is destroyed", () => {

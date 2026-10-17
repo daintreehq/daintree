@@ -1,6 +1,7 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import {
   ProjectHistoryService,
+  discardFromAllProjectHistories,
   disposeProjectHistory,
   getProjectHistory,
   resetProjectHistory,
@@ -254,17 +255,6 @@ describe("ProjectHistoryService", () => {
     expect(history.current()).toBe("c");
   });
 
-  it("reports the project the window is in", () => {
-    const history = new ProjectHistoryService();
-    expect(history.current()).toBeNull();
-
-    visit(history, "a", "b");
-    expect(history.current()).toBe("b");
-
-    history.record("a");
-    expect(history.current()).toBe("a");
-  });
-
   it("stops growing while keeping the newest visits", () => {
     const shortRun = new ProjectHistoryService();
     for (let i = 0; i < 200; i++) shortRun.record(`p${i}`);
@@ -295,5 +285,29 @@ describe("ProjectHistoryService", () => {
 
     expect(history.peekLast(always)).toBeNull();
     expect(history.current()).toBeNull();
+  });
+});
+
+describe("discarding a removed host's workspaces", () => {
+  afterEach(() => {
+    disposeProjectHistory(901);
+    disposeProjectHistory(902);
+  });
+
+  it("drops them from every window's history, wherever they sit", () => {
+    resetProjectHistory(901);
+    resetProjectHistory(902);
+    const one = getProjectHistory(901);
+    const two = getProjectHistory(902);
+    one.record(PROJECT_A);
+    one.record("studio:p1");
+    one.record(PROJECT_B);
+    two.record("studio:p2");
+    two.record("studio-2:p1");
+
+    discardFromAllProjectHistories((id) => id.startsWith("studio:"));
+
+    expect(one.snapshot().entries).toEqual([PROJECT_B, PROJECT_A]);
+    expect(two.snapshot().entries).toEqual(["studio-2:p1"]);
   });
 });

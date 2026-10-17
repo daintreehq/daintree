@@ -14,6 +14,8 @@ import {
 import { formatErrorMessage } from "../../shared/utils/errorMessage.js";
 import { McpServerContributionSchema } from "../schemas/plugin.js";
 import { minimalWorkerEnv } from "../utils/minimalSpawnEnv.js";
+import { findWindowsCommand, windowsExecutableNotFound } from "../utils/windowsExecutable.js";
+import { killWindowsProcessTree, liveChildTreeTarget } from "../utils/windowsTreeKill.js";
 import {
   drainPendingChildTrees,
   PLUGIN_CHILD_DETACHED,
@@ -48,6 +50,9 @@ interface SupervisedSubprocess {
    * POSIX, so teardown signals the whole tree (#13173). Fakes leave it unset.
    */
   ownsProcessTree?: boolean;
+  /** Set once the child has exited (a real `ChildProcess`); its PID is then free for reuse. */
+  exitCode?: number | null;
+  signalCode?: NodeJS.Signals | null;
   kill(): boolean;
 }
 
@@ -93,11 +98,12 @@ export type SubprocessSpawner = (
 ) => SpawnHandle | Promise<SpawnHandle>;
 
 /**
- * Windows process-tree teardown shim. We shell out to
- * `taskkill /T /F /PID <pid>` because Windows does not cascade kills and the
- * supervisor's direct child is often a shell (`npx`, `uvx`, `.bat`) whose
- * actual MCP server is a grandchild. It runs BEFORE the direct child is
- * killed: `taskkill /T` walks parent links, which the direct kill erases.
+ * Windows process-tree teardown shim. The default is the creation-time-verified
+ * tree kill (`windowsTreeKill.ts`, never `taskkill /T`) because Windows does
+ * not cascade kills and the supervisor's direct child is often a shell (`npx`,
+ * `uvx`, `.bat`) whose actual MCP server is a grandchild. It runs BEFORE the
+ * direct child is killed: the walk starts from the live root, and a root that
+ * is already gone leaves it nothing to walk from.
  * Injected so tests can assert the tree-kill is invoked without shelling out.
  *
  * POSIX does not use it: the server leads its own process group there, and
@@ -908,8 +914,8 @@ export class PluginMcpSupervisor {
    * Take down a server and everything it spawned (#13173). The direct child is
    * often a wrapper (`npx`, `uvx`, a `.bat`) whose real server is a grandchild.
    *
-   * Windows: tree-kill first, while the parent links `taskkill /T` walks still
-   * exist — killing the direct child first would orphan the server out of its
+   * Windows: tree-kill first, while the root its walk starts from still lives
+   * — killing the direct child first would orphan the server out of its
    * reach. POSIX: SIGTERM the server's process group, then SIGKILL whatever of
    * it outlives the grace window — even once the direct child has exited,
    * which is when its grandchildren are most likely to be left behind. The
@@ -922,7 +928,9 @@ export class PluginMcpSupervisor {
     pid: number | null,
     killGeneration: number
   ): Promise<void> {
-    if (pid !== null && process.platform === "win32") {
+    // Not once the server has exited: its PID is then free for reuse, and no
+    // walk reaches a dead root's descendants.
+    if (pid !== null && process.platform === "win32" && liveChildTreeTarget(subprocess)) {
       try {
         await this.killTree(pid);
       } catch {
@@ -1236,16 +1244,34 @@ function plainError(code: string, message: string): Error & { code: string } {
   return err;
 }
 
+/**
+ * The program an MCP server starts. On Windows a bare name (`node`, `npx`) is
+ * resolved from the server's own PATH alone: execa would otherwise look in the
+ * working directory first, which is the plugin's directory. A `.cmd` shim such
+ * as `npx.cmd` counts, and execa runs it through cmd.exe with its own escaping.
+ * A name PATH does not hold fails as spawn's ENOENT. A path is the manifest's
+ * own choice and passes through, as does every name off Windows. The lookup is
+ * asynchronous, so a stalled PATH entry cannot block Main.
+ */
+export async function mcpServerProgram(command: string, env: NodeJS.ProcessEnv): Promise<string> {
+  if (process.platform !== "win32" || /[\\/:]/.test(command)) return command;
+  const file = await findWindowsCommand(command, env);
+  if (file === null) throw windowsExecutableNotFound(command);
+  return file;
+}
+
 const defaultSpawner: SubprocessSpawner = async (config) => {
   const { execa } = await import("execa");
-  const subprocess = execa(config.command, config.args, {
+  // The server gets the shared allowlist (with proxy/CA settings, since these
+  // servers make outbound HTTPS) plus what its manifest `env` forwards — not
+  // the rest of the host environment, where API tokens and NODE_OPTIONS live
+  // (#12616).
+  const env = minimalWorkerEnv(config.env);
+  const subprocess = execa(await mcpServerProgram(config.command, env), config.args, {
     cwd: config.cwd,
-    // The server gets the shared allowlist (with proxy/CA settings, since these
-    // servers make outbound HTTPS) plus what its manifest `env` forwards — not
-    // the rest of the host environment, where API tokens and NODE_OPTIONS live
-    // (#12616). `extendEnv: false` is load-bearing: execa otherwise merges
-    // `env` back onto the full `process.env`.
-    env: minimalWorkerEnv(config.env),
+    // `extendEnv: false` is load-bearing: execa otherwise merges `env` back
+    // onto the full `process.env`.
+    env,
     extendEnv: false,
     stdio: ["pipe", "pipe", "pipe"],
     // Inert once `detached` is set; the supervisor's own shutdown, which app
@@ -1274,13 +1300,8 @@ const defaultSpawner: SubprocessSpawner = async (config) => {
 
 const defaultProcessTreeKiller: ProcessTreeKiller = async (pid) => {
   if (process.platform !== "win32") return;
-  const { execa } = await import("execa");
   try {
-    await execa("taskkill", ["/T", "/F", "/PID", String(pid)], {
-      reject: false,
-      windowsHide: true,
-      timeout: TASKKILL_TIMEOUT_MS,
-    });
+    await killWindowsProcessTree(pid, { timeoutMs: TASKKILL_TIMEOUT_MS });
   } catch {
     // best-effort — the process may have already exited cleanly
   }

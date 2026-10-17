@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { render, act, fireEvent } from "@testing-library/react";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 // Regression for #10672: the Daintree Assistant terminal couldn't regain a
 // WebGL context when the fleet was in DOM mode (context count at cap). The
@@ -10,52 +10,54 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 // state through `setFocused`, and that a closed / hidden / blurred panel never
 // claims the pin.
 
-const { setFocusedMock, focusMock, helpPanelState, panelStoreState } = vi.hoisted(() => ({
-  setFocusedMock: vi.fn(),
-  focusMock: vi.fn(),
-  helpPanelState: {
-    clearDroppedPreferredAgent: vi.fn(),
-    setAutoLaunchEnabled: vi.fn(),
-    requestFocus: vi.fn(),
-    setActiveFigureNumber: vi.fn(),
-    addFigure: vi.fn(),
-    setActiveSlot: vi.fn(),
-    closeSlot: vi.fn(),
-    openSlot: vi.fn(),
-    // #12108: the panel reads its lane pointer; the mocked selectors
-    // above project this same flat object as that lane.
-    activeSlot: 0,
-    sessions: {} as Record<number, unknown>,
-    isOpen: true,
-    width: 380,
-    terminalId: "t-1" as string | null,
-    agentId: "claude" as string | null,
-    preferredAgentId: null as string | null,
-    sessionId: null as string | null,
-    introDismissed: true,
-    conversationTouched: false,
-    hibernateSessions: {} as Record<string, unknown>,
-    focusRequest: 0,
-    figures: [] as unknown[],
-    markConversationStarted: vi.fn(),
-    setWidth: vi.fn(),
-    setOpen: vi.fn(),
-    clearTerminal: vi.fn(),
-    setPreferredAgent: vi.fn(),
-    setTerminal: vi.fn(),
-    dismissIntro: vi.fn(),
-    setHibernateSession: vi.fn(),
-    clearHibernateSession: vi.fn(),
-  },
-  panelStoreState: {
-    panelIds: ["t-1"] as string[],
-    panelsById: {
-      "t-1": { agentState: "idle", cwd: "/repo", spawnStatus: "ready" },
-    } as Record<string, { agentState?: string; cwd?: string; spawnStatus?: string }>,
-    removePanel: vi.fn(),
-    addPanel: vi.fn().mockResolvedValue(""),
-  },
-}));
+const { setFocusedMock, focusMock, repaintForRevealMock, helpPanelState, panelStoreState } =
+  vi.hoisted(() => ({
+    setFocusedMock: vi.fn(),
+    focusMock: vi.fn(),
+    repaintForRevealMock: vi.fn(),
+    helpPanelState: {
+      clearDroppedPreferredAgent: vi.fn(),
+      setAutoLaunchEnabled: vi.fn(),
+      requestFocus: vi.fn(),
+      setActiveFigureNumber: vi.fn(),
+      addFigure: vi.fn(),
+      setActiveSlot: vi.fn(),
+      closeSlot: vi.fn(),
+      openSlot: vi.fn(),
+      // #12108: the panel reads its lane pointer; the mocked selectors
+      // above project this same flat object as that lane.
+      activeSlot: 0,
+      sessions: {} as Record<number, unknown>,
+      isOpen: true,
+      width: 380,
+      terminalId: "t-1" as string | null,
+      agentId: "claude" as string | null,
+      preferredAgentId: null as string | null,
+      sessionId: null as string | null,
+      introDismissed: true,
+      conversationTouched: false,
+      hibernateSessions: {} as Record<string, unknown>,
+      focusRequest: 0,
+      figures: [] as unknown[],
+      markConversationStarted: vi.fn(),
+      setWidth: vi.fn(),
+      setOpen: vi.fn(),
+      clearTerminal: vi.fn(),
+      setPreferredAgent: vi.fn(),
+      setTerminal: vi.fn(),
+      dismissIntro: vi.fn(),
+      setHibernateSession: vi.fn(),
+      clearHibernateSession: vi.fn(),
+    },
+    panelStoreState: {
+      panelIds: ["t-1"] as string[],
+      panelsById: {
+        "t-1": { agentState: "idle", cwd: "/repo", spawnStatus: "ready" },
+      } as Record<string, { agentState?: string; cwd?: string; spawnStatus?: string }>,
+      removePanel: vi.fn(),
+      addPanel: vi.fn().mockResolvedValue(""),
+    },
+  }));
 
 const snapshot = {
   showResumeBanner: false,
@@ -117,6 +119,7 @@ vi.mock("@/controllers/HelpSessionController", () => ({
     syncInputs = vi.fn();
     handleTerminalPanelMissing = vi.fn();
     handleAgentExited = vi.fn();
+    handleViewRevealed = vi.fn();
     selectAgent = vi.fn();
     newSession = vi.fn();
     runAnyway = vi.fn();
@@ -149,7 +152,7 @@ vi.mock("@/services/TerminalInstanceService", () => ({
     focus: (...args: unknown[]) => focusMock(...args),
     setFocused: (...args: unknown[]) => setFocusedMock(...args),
     notifyUserInput: vi.fn(),
-    repaintForReveal: vi.fn(),
+    repaintForReveal: (...args: unknown[]) => repaintForRevealMock(...args),
   },
 }));
 vi.mock("@/clients", () => ({ terminalClient: { submit: vi.fn(), sendKey: vi.fn() } }));
@@ -193,6 +196,7 @@ vi.mock("@/store/helpPanelStore", () => {
     selectSlot: (s: typeof helpPanelState) => s,
     selectActiveSlot: (s: typeof helpPanelState) => s,
     selectOpenSlots: () => [0],
+    selectHasRoomForSession: () => true,
     selectSlotTerminalIds: (s: typeof helpPanelState) => (s.terminalId ? [s.terminalId] : []),
     selectSlotForTerminal: (s: typeof helpPanelState, id: string) =>
       s.terminalId === id && id ? 0 : null,
@@ -418,5 +422,101 @@ describe("HelpPanel — WebGL focus pin wiring (#10672)", () => {
       fireEvent.blur(aside, { relatedTarget: child });
     });
     expect(setFocusedMock).not.toHaveBeenCalledWith("t-1", false);
+  });
+});
+
+// Regression guard for #10863: the Daintree Assistant must NOT run its own
+// reveal-repaint cascade. The project-level reveal sweep
+// (`repaintActiveWorktreeTerminals`) already folds the Assistant terminal into
+// its targets (#9637) and is the sole owner of the reveal repaint. A second
+// per-frame/timed cascade in HelpPanel raced the shared sweep's reconcile
+// against live PTY output and corrupted xterm's line-wrap metadata (duplicated /
+// garbled output on reveal). This asserts HelpPanel never calls repaintForReveal
+// on `app:view-revealed` or on any timed backstop.
+describe("HelpPanel — Daintree Assistant reveal (no local repaint cascade, #10863)", () => {
+  // rAF mock: drive the bounded reveal poll synchronously per flushed frame.
+  const rafQueue = new Map<number, FrameRequestCallback>();
+  let rafIdCounter = 0;
+  function flushFrame(): void {
+    const pending = [...rafQueue.values()];
+    rafQueue.clear();
+    for (const cb of pending) cb(0);
+  }
+
+  // The real `onViewRevealed` supports multiple listeners; HelpPanel registers two
+  // (the launch-recovery effect and this repaint effect), so the mock must fan out
+  // to all of them rather than keep only the last-registered slot.
+  let viewRevealedCbs: Array<() => void> = [];
+
+  function setVisibilityState(state: DocumentVisibilityState): void {
+    Object.defineProperty(document, "visibilityState", {
+      configurable: true,
+      get: () => state,
+    });
+  }
+
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    rafQueue.clear();
+    rafIdCounter = 0;
+    repaintForRevealMock.mockClear();
+    viewRevealedCbs = [];
+
+    globalThis.requestAnimationFrame = ((cb: FrameRequestCallback): number => {
+      const id = ++rafIdCounter;
+      rafQueue.set(id, cb);
+      return id;
+    }) as typeof globalThis.requestAnimationFrame;
+    globalThis.cancelAnimationFrame = ((id: number): void => {
+      rafQueue.delete(id);
+    }) as typeof globalThis.cancelAnimationFrame;
+
+    setVisibilityState("visible");
+
+    Object.defineProperty(globalThis, "window", {
+      value: {
+        electron: {
+          help: { getPinnedActionContext: vi.fn().mockResolvedValue({}) },
+          app: {
+            onViewRevealed: (cb: () => void) => {
+              viewRevealedCbs.push(cb);
+              return () => {
+                viewRevealedCbs = viewRevealedCbs.filter((c) => c !== cb);
+              };
+            },
+          },
+        },
+      },
+      writable: true,
+      configurable: true,
+    });
+  });
+
+  afterEach(() => {
+    Reflect.deleteProperty(document, "visibilityState");
+    vi.useRealTimers();
+  });
+
+  // The reveal poll's tick runs on a frame; flush one frame to let the width-gated
+  // repaint land.
+  function fireReveal(): void {
+    act(() => {
+      for (const cb of viewRevealedCbs) cb();
+    });
+    act(() => flushFrame());
+  }
+
+  it("never arms a timed repaint backstop after reveal", () => {
+    render(<HelpPanel width={380} />);
+    repaintForRevealMock.mockClear();
+
+    fireReveal();
+    // Advance well past the old 1s/3s backstop cadence and flush every frame —
+    // a reintroduced local cascade would fire here.
+    act(() => {
+      vi.advanceTimersByTime(10_000);
+    });
+    act(() => flushFrame());
+    expect(repaintForRevealMock).not.toHaveBeenCalled();
   });
 });

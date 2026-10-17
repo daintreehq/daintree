@@ -90,42 +90,6 @@ describe("AutocompleteMenu", () => {
     expect(screen.queryByRole("option")).toBeNull();
   });
 
-  it("does not render the empty status row when isLoading is true", () => {
-    render(
-      <AutocompleteMenu
-        isOpen={true}
-        items={[]}
-        selectedIndex={0}
-        isLoading={true}
-        onSelect={noop}
-        emptyMessage="No files match"
-      />
-    );
-
-    expect(screen.getByRole("status").textContent).toBe("Searching…");
-  });
-
-  it("renders listbox with options when items are present", () => {
-    const items: AutocompleteItem[] = [
-      { key: "a", label: "alpha", insertText: "alpha" },
-      { key: "b", label: "beta", insertText: "beta" },
-    ];
-
-    render(
-      <AutocompleteMenu
-        isOpen={true}
-        items={items}
-        selectedIndex={0}
-        onSelect={noop}
-        emptyMessage="No matches"
-      />
-    );
-
-    expect(screen.getByRole("listbox")).toBeTruthy();
-    expect(screen.getAllByRole("option")).toHaveLength(2);
-    expect(screen.getByRole("status").textContent).toBe("");
-  });
-
   it("offers only the keys that will act on the selected row", () => {
     const run: AutocompleteItem = {
       key: "run",

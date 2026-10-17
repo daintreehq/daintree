@@ -39,9 +39,9 @@ Shared tiers unless the duration itself encodes meaning: state changes 150ms `ea
 
 Semantic exceptions where decay, width, or sequencing *is* the signal (`ActivityLight`, `FileChangeList` recency) are exempt from tier-fixing.
 
-Use the narrowest transition property set — never widen to bare `transition` or `transition-all`. Keep `transform` out of press snaps (copy `src/styles/components/toolbar.css` or `button.tsx`'s `active:scale-[0.98] active:duration-[1ms]`). Box-shadow either interpolates in its own named 150ms slot **or** snaps with `active:shadow-none`, never both.
+Use the narrowest transition property set — never widen to bare `transition` or `transition-all`. Keep `transform` out of press snaps (copy `src/styles/components/toolbar/controls.css` or `button.tsx`'s `active:scale-[0.98] active:duration-[1ms]`). Box-shadow either interpolates in its own named 150ms slot **or** snaps with `active:shadow-none`, never both.
 
-Focus-ring transitions are wired once globally in `src/index.css` `*:focus-visible` — never restate them, and never add a per-element `outline-*` transition. The ring's colour and width are component-owned. Never suppress a ring without a replacement, and use `outline-hidden`, never `outline-none`.
+Focus-ring transitions are wired once globally in `src/styles/host/base.css` `*:focus-visible` — never restate them, and never add a per-element `outline-*` transition. The ring's colour and width are component-owned. Never suppress a ring without a replacement, and use `outline-hidden`, never `outline-none`.
 
 Patterns: `docs/themes/interaction-state-recipes.md`.
 
@@ -66,10 +66,10 @@ Recurring actions wear one glyph each: `RefreshCw` retry/refresh, `RotateCw` rel
 
 Severity glyphs come from `SEVERITY_GLYPH` (`src/lib/statusSeverity.tsx`): error `XCircle`, warning `AlertTriangle`, info `Info`, success `CheckCircle2`. `OctagonAlert` is a severe caution, never a failure; `CircleAlert` is not a severity glyph. Status boxes are `Callout` (error, warning, danger, success, info, neutral), never hand-rolled. Table: `docs/themes/component-contract.md` → Severity glyphs.
 
-Agent-state glyphs (green spinner / amber circle / blue check) are app-wide vocabulary — never swap in a foreign glyph. Never render `SpinnerCircle` static.
+Agent-state glyphs are app-wide vocabulary, all drawn at the spinner's outer diameter: green spinner for working, amber ring for waiting, ring with a check for finished, and a solid white disc with a dot cut out for unread, the one filled glyph. Every mark inside a ring takes the ring's 1.333 stroke, and Pilot's band marks (blocked, parked, snoozed, idle) are drawn on the same ring in `AgentStateCircles.tsx`, never taken from Lucide, whose circles are a size larger. The static rings carry a 10% wash of their own colour inside (`WashedRing`), dropped under forced colours; the spinner, the dashed snooze ring and the unread disc carry none. A pane header draws the glyph alone, never inside a second ring. Never swap in a foreign glyph. Never render `SpinnerCircle` static.
 
 ## High contrast
 
-`@media (prefers-contrast: more)` and `@media (forced-colors: active)` in `src/index.css` are separate on purpose — macOS fires only the former, Windows swaps in system colors. **Never consolidate them.** Rationale is inline in the block comments.
+`@media (prefers-contrast: more)` (`src/styles/host/prefers-contrast.css`) and `@media (forced-colors: active)` (`src/styles/host/forced-colors.css`) are separate on purpose — macOS fires only the former, Windows swaps in system colors. **Never consolidate them.** Rationale is inline in the block comments.
 
 Forced-colors drops `box-shadow`, so Tailwind `ring-*` vanishes there — re-declare badge cut-outs as an outline.

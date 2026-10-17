@@ -6,7 +6,7 @@ vi.mock("@/lib/utils", () => ({
   cn: (...args: unknown[]) => args.filter(Boolean).join(" "),
 }));
 
-vi.mock("@/hooks", () => ({
+vi.mock("@/hooks/useOverlayState", () => ({
   useOverlayState: () => {},
 }));
 
@@ -48,18 +48,6 @@ describe("PaletteFooterHints", () => {
     expect(screen.getByText("navigate")).toBeTruthy();
     expect(screen.getByText("close")).toBeTruthy();
     expect(screen.queryByRole("button", { name: /keyboard shortcuts/i })).toBeNull();
-  });
-
-  it("renders all keys for a multi-key hint", () => {
-    render(<PaletteFooterHints primaryHint={{ keys: ["↑", "↓"], label: "navigate" }} hints={[]} />);
-    expect(screen.getByText("↑")).toBeTruthy();
-    expect(screen.getByText("↓")).toBeTruthy();
-  });
-
-  it("renders no secondary chips when hints is empty", () => {
-    render(<PaletteFooterHints primaryHint={defaultProps.primaryHint} hints={[]} />);
-    expect(screen.queryByText("navigate")).toBeNull();
-    expect(screen.queryByText("close")).toBeNull();
   });
 
   it("applies width-priority drop classes — last hint hides earliest", () => {

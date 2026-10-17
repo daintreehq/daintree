@@ -15,7 +15,6 @@ initBuiltInPanelKinds();
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import latin400Woff2Url from "@fontsource/jetbrains-mono/files/jetbrains-mono-latin-400-normal.woff2?url";
-import "@fontsource/jetbrains-mono/latin-700.css";
 import "./index.css";
 import { applyDefaultAppTheme } from "./theme/applyAppTheme";
 import { publishScrollbarGutter, watchScrollbarGutter } from "./lib/scrollbarGutter";
@@ -40,11 +39,14 @@ import { WorktreeStoreProvider } from "./contexts/WorktreeStoreContext";
 import { installPluginDocumentRuntime } from "./services/plugin/pluginDocumentRuntime";
 import { installProjectSwitchStatusTiming } from "./services/projectSwitchStatusTiming";
 import { installRunningPluginActions } from "./services/plugin/runningPluginActions";
+import { installAppPluginKitHost } from "./services/plugin/appPluginKitHost";
 import { getSafeBootPromise } from "./lib/bootPromise";
+import { isRemoteShellSupported } from "./lib/remoteHosts";
 
 let cleanupGlobalErrorHandlers: (() => void) | undefined;
 let cleanupScrollbarGutterWatch: (() => void) | undefined;
 let cleanupOrchestrator: (() => void) | undefined;
+let cleanupPluginKitHost: (() => void) | undefined;
 
 ensureLatin400Preload(latin400Woff2Url);
 
@@ -103,6 +105,22 @@ async function bootstrap() {
   // Same reason: main replays the running plugin actions at `did-finish-load`,
   // and its events reach only a listener that already exists.
   installRunningPluginActions();
+  // Before the first render: a kit view reads its host as it draws.
+  cleanupPluginKitHost = installAppPluginKitHost();
+
+  // Off the entry chunk, and never loaded where remote hosts can't exist.
+  if (isRemoteShellSupported()) {
+    void import("./components/Hosts/installHostProjectsLoader")
+      .then((m) => m.installHostProjectsLoader())
+      .catch((error: unknown) => {
+        console.warn("[Hosts] Couldn't install the host project listing:", error);
+      });
+    void import("./lib/forgetHostLocalState")
+      .then((m) => m.installForgetHostLocalState())
+      .catch((error: unknown) => {
+        console.warn("[Hosts] Couldn't install removed-host cleanup:", error);
+      });
+  }
 
   // Kick off the agent-settings store so `App.tsx`, `Toolbar`, and the tray
   // all read from a normalized snapshot on cold boot. The install-aware
@@ -171,5 +189,6 @@ if (import.meta.hot) {
     cleanupGlobalErrorHandlers?.();
     cleanupScrollbarGutterWatch?.();
     cleanupOrchestrator?.();
+    cleanupPluginKitHost?.();
   });
 }

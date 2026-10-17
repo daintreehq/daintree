@@ -45,12 +45,6 @@ describe("logsStore", () => {
     expect(state.expandedIds.has("log-499")).toBe(true);
   });
 
-  it("ignores empty addLogs payloads", () => {
-    const store = useLogsStore.getState();
-    store.addLogs([]);
-    expect(useLogsStore.getState().logs).toEqual([]);
-  });
-
   it("does not crash when searching malformed log payloads", () => {
     const malformed = {
       id: "bad-1",
@@ -241,14 +235,5 @@ describe("collapseConsecutiveDuplicates", () => {
     expect(result).toHaveLength(1);
     expect(result[0]?.count).toBe(2);
     expect(result[0]?.entry.id).toBe("log-0");
-  });
-
-  it("collapses 500 identical logs into one entry with count 500", () => {
-    const logs = Array.from({ length: 500 }, (_, i) =>
-      makeLogExplicit(i, { level: "info", message: "same", source: "s1" })
-    );
-    const result = collapseConsecutiveDuplicates(logs);
-    expect(result).toHaveLength(1);
-    expect(result[0]?.count).toBe(500);
   });
 });

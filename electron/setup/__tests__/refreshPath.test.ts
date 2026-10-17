@@ -3,7 +3,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import path from "path";
 
 vi.mock("fs", () => ({
-  default: { existsSync: vi.fn(() => false) },
+  default: {
+    existsSync: vi.fn(() => false),
+    readFileSync: vi.fn(() => {
+      throw Object.assign(new Error("ENOENT"), { code: "ENOENT" });
+    }),
+  },
   existsSync: vi.fn(() => false),
 }));
 
@@ -163,10 +168,10 @@ describe("refreshPath", () => {
     const { refreshPath } = await import("../environment.js");
     await refreshPath();
 
-    // Verify reg query was called for both HKLM and HKCU
+    // Verify reg query was called for both HKLM and HKCU, by absolute path
     expect(execFileMock).toHaveBeenCalledTimes(2);
     expect(execFileMock).toHaveBeenCalledWith(
-      "reg",
+      expect.stringMatching(/^[A-Za-z]:\\.*\\System32\\reg\.exe$/),
       expect.arrayContaining(["query"]),
       expect.any(Object),
       expect.any(Function)
@@ -236,10 +241,12 @@ describe("refreshPath", () => {
     expect(process.env.PATH).toContain("C:\\real\\path");
   });
 
-  it("is idempotent on Windows — repeated calls don't explode PATH", async () => {
+  it("keeps the PATH Daintree was launched with behind the registry's on Windows", async () => {
     Object.defineProperty(process, "platform", { value: "win32", writable: true });
-    process.env.PATH = "C:\\Windows\\System32";
-    process.env.SystemRoot = "C:\\Windows";
+    // Colon-free entries so the assertion holds whatever `path.delimiter` the host has.
+    const venv = "\\\\host\\share\\venv\\Scripts";
+    const registry = "\\\\host\\share\\nodejs";
+    process.env.PATH = [venv, registry].join(path.delimiter);
 
     execFileMock.mockImplementation(
       (
@@ -248,19 +255,14 @@ describe("refreshPath", () => {
         _opts: unknown,
         cb: (err: Error | null, stdout: string) => void
       ) => {
-        cb(null, "    Path    REG_EXPAND_SZ    %SystemRoot%\\system32");
+        cb(null, `    Path    REG_SZ    ${registry}`);
       }
     );
 
     const { refreshPath } = await import("../environment.js");
     await refreshPath();
-    const firstPath = process.env.PATH;
-    await refreshPath();
-    const secondPath = process.env.PATH;
 
-    expect(firstPath).toBe(secondPath);
-
-    delete process.env.SystemRoot;
+    expect(process.env.PATH).toBe([registry, venv].join(path.delimiter));
   });
 
   it("falls back on Windows when reg query fails", async () => {
@@ -282,20 +284,6 @@ describe("refreshPath", () => {
     await refreshPath();
 
     expect(process.env.PATH).toBe("C:\\Windows\\System32");
-  });
-
-  it("is idempotent — repeated calls don't explode PATH", async () => {
-    Object.defineProperty(process, "platform", { value: "darwin", writable: true });
-
-    const shellPath = "/usr/local/bin:/usr/bin";
-    shellEnvMock.mockResolvedValue({ PATH: shellPath });
-
-    const { refreshPath } = await import("../environment.js");
-    await refreshPath();
-    await refreshPath();
-    await refreshPath();
-
-    expect(process.env.PATH).toBe(shellPath);
   });
 });
 
@@ -763,5 +751,176 @@ describe("refreshPath shell observation (#12371)", () => {
     await refreshPath();
 
     expect(getShellEnvironmentObservation()).toBeUndefined();
+  });
+});
+
+describe("refreshPath — Linux fallback bin dirs", () => {
+  const d = path.delimiter;
+  const ENV_KEYS = [
+    "NPM_CONFIG_PREFIX",
+    "npm_config_prefix",
+    "CARGO_HOME",
+    "BUN_INSTALL",
+    "DENO_INSTALL_ROOT",
+    "HOMEBREW_PREFIX",
+    "HOME",
+  ] as const;
+  let savedEnv: Partial<Record<(typeof ENV_KEYS)[number], string | undefined>>;
+
+  beforeEach(() => {
+    vi.resetModules();
+    vi.clearAllMocks();
+    savedPath = process.env.PATH;
+    savedEnv = {};
+    for (const key of ENV_KEYS) {
+      savedEnv[key] = process.env[key];
+      delete process.env[key];
+    }
+    delete process.env.DAINTREE_SHELL_PROBE;
+  });
+
+  afterEach(() => {
+    process.env.PATH = savedPath;
+    for (const key of ENV_KEYS) {
+      if (savedEnv[key] === undefined) delete process.env[key];
+      else process.env[key] = savedEnv[key];
+    }
+    Object.defineProperty(process, "platform", { value: originalPlatform, writable: true });
+  });
+
+  // vi.resetModules re-runs the fs mock factory, so the instances environment.js
+  // will see are the ones imported after the reset.
+  async function stubFs(existing: readonly string[], npmrc?: string): Promise<void> {
+    const fsModule = await import("fs");
+    vi.mocked(fsModule.existsSync).mockImplementation((p) => existing.includes(String(p)));
+    if (npmrc !== undefined) {
+      vi.mocked(fsModule.default.readFileSync).mockImplementation((p) => {
+        if (String(p) === "/home/testuser/.npmrc") return npmrc;
+        throw Object.assign(new Error("ENOENT"), { code: "ENOENT" });
+      });
+    }
+  }
+
+  async function refreshOn(platform: NodeJS.Platform, shellPath: string): Promise<string> {
+    Object.defineProperty(process, "platform", { value: platform, writable: true });
+    shellEnvMock.mockResolvedValue({ PATH: shellPath });
+    const { refreshPath } = await import("../environment.js");
+    await refreshPath();
+    return process.env.PATH ?? "";
+  }
+
+  it("appends the standard Linux dirs that exist, after the shell's PATH", async () => {
+    await stubFs([
+      "/home/testuser/.npm-global/bin",
+      "/home/testuser/.cargo/bin",
+      "/home/testuser/.bun/bin",
+      "/home/linuxbrew/.linuxbrew/bin",
+      "/snap/bin",
+    ]);
+
+    const result = await refreshOn("linux", ["/usr/bin", "/bin"].join(d));
+
+    expect(result).toBe(
+      [
+        "/usr/bin",
+        "/bin",
+        "/home/testuser/.npm-global/bin",
+        "/home/testuser/.cargo/bin",
+        "/home/testuser/.bun/bin",
+        "/home/linuxbrew/.linuxbrew/bin",
+        "/snap/bin",
+      ].join(d)
+    );
+  });
+
+  it("still prepends the version-manager shims and ~/.local/bin", async () => {
+    await stubFs(["/home/testuser/.local/bin", "/home/testuser/.npm-global/bin"]);
+
+    const result = await refreshOn("linux", "/usr/bin");
+
+    expect(result).toBe(
+      ["/home/testuser/.local/bin", "/usr/bin", "/home/testuser/.npm-global/bin"].join(d)
+    );
+  });
+
+  it("finds the CLI dirs when the login-shell read fails", async () => {
+    await stubFs(["/home/testuser/.npm-global/bin", "/snap/bin"]);
+    Object.defineProperty(process, "platform", { value: "linux", writable: true });
+    process.env.PATH = "/usr/bin";
+    shellEnvMock.mockRejectedValue(new Error("broken .bashrc"));
+
+    const { refreshPath } = await import("../environment.js");
+    await refreshPath();
+
+    expect(process.env.PATH).toBe(
+      ["/usr/bin", "/home/testuser/.npm-global/bin", "/snap/bin"].join(d)
+    );
+  });
+
+  it("leaves a dir the shell already put on PATH where the shell put it", async () => {
+    await stubFs(["/home/testuser/.npm-global/bin", "/snap/bin"]);
+
+    const shellPath = ["/home/testuser/.npm-global/bin", "/usr/bin", "/snap/bin"].join(d);
+    expect(await refreshOn("linux", shellPath)).toBe(shellPath);
+  });
+
+  it("follows the npm prefix ~/.npmrc names, with ${VAR} expanded", async () => {
+    process.env.HOME = "/home/testuser";
+    await stubFs(
+      ["/home/testuser/.npm-packages/bin"],
+      "registry=https://registry.npmjs.org/\nprefix=${HOME}/.npm-packages\n"
+    );
+
+    expect(await refreshOn("linux", "/usr/bin")).toBe(
+      ["/usr/bin", "/home/testuser/.npm-packages/bin"].join(d)
+    );
+  });
+
+  it("expands a leading ~ in the npmrc prefix and takes the last one", async () => {
+    await stubFs(["/home/testuser/.node/bin"], "prefix=/opt/old\nprefix = '~/.node'\n");
+
+    expect(await refreshOn("linux", "/usr/bin")).toBe(
+      ["/usr/bin", "/home/testuser/.node/bin"].join(d)
+    );
+  });
+
+  it("prefers NPM_CONFIG_PREFIX over ~/.npmrc", async () => {
+    process.env.NPM_CONFIG_PREFIX = "/home/testuser/.env-prefix";
+    await stubFs(
+      ["/home/testuser/.env-prefix/bin", "/home/testuser/.npmrc-prefix/bin"],
+      "prefix=/home/testuser/.npmrc-prefix\n"
+    );
+
+    expect(await refreshOn("linux", "/usr/bin")).toBe(
+      ["/usr/bin", "/home/testuser/.env-prefix/bin"].join(d)
+    );
+  });
+
+  it("ignores a relative npm prefix rather than resolving it against the cwd", async () => {
+    await stubFs(["relative/bin"], "prefix=relative\n");
+
+    expect(await refreshOn("linux", "/usr/bin")).toBe("/usr/bin");
+  });
+
+  it("honours CARGO_HOME, BUN_INSTALL and HOMEBREW_PREFIX", async () => {
+    process.env.CARGO_HOME = "/opt/cargo";
+    process.env.BUN_INSTALL = "/opt/bun";
+    process.env.HOMEBREW_PREFIX = "/opt/brew";
+    await stubFs(["/opt/cargo/bin", "/opt/bun/bin", "/opt/brew/bin", "/home/testuser/.cargo/bin"]);
+
+    expect(await refreshOn("linux", "/usr/bin")).toBe(
+      ["/usr/bin", "/opt/cargo/bin", "/opt/bun/bin", "/opt/brew/bin"].join(d)
+    );
+  });
+
+  it("adds none of them on macOS", async () => {
+    await stubFs([
+      "/home/testuser/.npm-global/bin",
+      "/home/testuser/.cargo/bin",
+      "/home/testuser/bin",
+      "/snap/bin",
+    ]);
+
+    expect(await refreshOn("darwin", "/usr/bin")).toBe("/usr/bin");
   });
 });

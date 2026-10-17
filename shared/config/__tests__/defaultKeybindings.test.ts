@@ -50,6 +50,142 @@ describe("buildDefaultKeybindings", () => {
 
   it("leaves non-replaced Linux rows identical to the core table", () => {
     const changed = linux.filter((b, i) => b !== mac[i]).map((b) => b.actionId);
-    expect(changed).toEqual(["voiceInput.toggle"]);
+    expect(changed.sort()).toEqual([
+      "canopy.toggle",
+      "fleet.accept",
+      "terminal.focusDown",
+      "terminal.focusLeft",
+      "terminal.focusRight",
+      "terminal.focusUp",
+      "terminal.new",
+      "terminal.scrollToLastActivity",
+      "voiceInput.toggle",
+      "worktree.openFileBrowserPanel",
+    ]);
+  });
+
+  it("gives Canopy the one-modifier E on macOS and keeps All agents on Cmd+Alt+O", () => {
+    expect(globalCombo(mac, "canopy.toggle")).toEqual(["Cmd+E"]);
+    expect(globalCombo(mac, "pilot.toggle")).toEqual(["Cmd+Alt+O"]);
+  });
+
+  it("moves Canopy off Ctrl+E on Windows and Linux, where readline owns it", () => {
+    for (const table of [windows, linux]) {
+      expect(globalCombo(table, "canopy.toggle")).toEqual(["Ctrl+Shift+O"]);
+      expect(table.some((b) => b.scope === "global" && foldCmd(b.combo) === "Ctrl+E")).toBe(false);
+    }
+  });
+
+  it("keeps Windows in core order with replacements in place and additions after", () => {
+    // Remote Hosts appends Switch host to the core list everywhere but Windows.
+    const core = mac.filter((b) => b.actionId !== "host.switch");
+    const changed = windows
+      .slice(0, core.length)
+      .filter((b, i) => b !== core[i])
+      .map((b) => b.actionId);
+    expect(changed).toEqual(["fleet.accept", "canopy.toggle"]);
+    expect(windows.length).toBeGreaterThan(core.length);
+  });
+
+  it("leaves Ctrl+Y to text fields off the Mac, where it is Redo", () => {
+    for (const table of [windows, linux]) {
+      const [accept] = table.filter((b) => b.actionId === "fleet.accept");
+      expect(accept?.when).toBe("fleetArmed && !textInputFocused");
+    }
+  });
+
+  it("keeps the fleet's quick actions inert while nothing is armed", () => {
+    for (const actionId of ["fleet.reject", "fleet.restart", "fleet.kill", "fleet.trash"]) {
+      expect(mac.find((b) => b.actionId === actionId)?.when).toBe("fleetArmed");
+    }
+  });
+
+  it("keeps the remapped defaults off the keys they collided with", () => {
+    expect(globalCombo(mac, "terminal.sendToAgent")).toEqual(["Cmd+K Cmd+I"]);
+    expect(globalCombo(mac, "fleet.kill")).toEqual(["Cmd+K Cmd+Shift+K"]);
+    expect(globalCombo(mac, "dock.focusNextWaiting")).toEqual(["Cmd+K Cmd+/"]);
+    for (const combo of ["Cmd+Shift+E", "Cmd+Shift+K", "Cmd+Shift+/"]) {
+      expect(mac.some((b) => b.scope === "global" && b.combo === combo)).toBe(false);
+    }
+  });
+
+  it("keeps Switch host clear of every other global default where it exists", () => {
+    for (const table of [mac, linux]) {
+      const [hostSwitch] = table.filter((b) => b.actionId === "host.switch");
+      expect(hostSwitch).toBeDefined();
+      const collisions = table.filter(
+        (b) =>
+          b !== hostSwitch &&
+          b.scope === "global" &&
+          foldCmd(b.combo) === foldCmd(hostSwitch!.combo)
+      );
+      expect(collisions).toEqual([]);
+    }
+  });
+
+  it("keeps the Canopy replacement clear of every other global default", () => {
+    for (const table of [windows, linux]) {
+      const [replacement] = table.filter((b) => b.actionId === "canopy.toggle");
+      const collisions = table.filter(
+        (b) =>
+          b !== replacement &&
+          b.scope === "global" &&
+          foldCmd(b.combo) === foldCmd(replacement!.combo)
+      );
+      expect(collisions).toEqual([]);
+    }
+  });
+
+  // Grabbed by GNOME, XFCE or KDE before the window sees them; on XFCE and KDE
+  // Ctrl+Alt+L locks the screen.
+  it("ships none of the Ctrl+Alt letter combos Linux desktops grab", () => {
+    const grabbed = ["T", "L", "F"].map((key) => `Ctrl+Alt+${key}`);
+    expect(linux.filter((b) => grabbed.includes(foldCmd(b.combo)))).toEqual([]);
+  });
+
+  // GNOME 46 and XFCE switch workspaces on Ctrl+Alt+Left/Right/Up/Down.
+  it("ships no Ctrl+Alt+arrow focus keys on Linux, where desktops switch workspaces", () => {
+    const grabbed = ["Up", "Down", "Left", "Right"].map((dir) => `Ctrl+Alt+Arrow${dir}`);
+    expect(linux.filter((b) => grabbed.includes(foldCmd(b.combo)))).toEqual([]);
+    // Ctrl+Shift+arrows select by word in text fields and extend a dialog's
+    // selection (the worktree overview); the bindings stay out of both.
+    for (const dir of ["Up", "Down", "Left", "Right"]) {
+      const binding = linux.find((b) => b.actionId === `terminal.focus${dir}`);
+      expect(binding?.combo).toBe(`Ctrl+Shift+Arrow${dir}`);
+      expect(binding?.when).toBe("!textInputFocused && !modalOpen");
+    }
+    expect(globalCombo(mac, "terminal.focusLeft")).toEqual(["Cmd+Alt+ArrowLeft"]);
+  });
+
+  // A focused terminal offers a key to the bindings only with Ctrl or Meta held
+  // (XtermAdapter), so a Linux replacement without one would type into the shell.
+  it("keeps Ctrl in every Linux replacement", () => {
+    for (const replacement of linux.filter((b, i) => b !== mac[i])) {
+      expect(foldCmd(replacement.combo), replacement.actionId).toMatch(/^Ctrl\+/);
+    }
+  });
+
+  // Normalized so modifier order, Cmd-vs-Ctrl spelling and letter case can't
+  // hide a collision, and compared across scopes (global and a panel scope are
+  // live at once) and against chord first steps.
+  it("keeps every Linux replacement clear of every other default", () => {
+    const step = (combo: string) => {
+      const parts = foldCmd(combo).split("+");
+      const key = parts.pop()!.toLowerCase();
+      return [...parts.sort(), key].join("+");
+    };
+    const replaced = linux.filter((b, i) => b !== mac[i]);
+    for (const replacement of replaced) {
+      const mine = step(replacement.combo);
+      const collisions = linux.filter((b) => {
+        if (b === replacement || !b.combo) return false;
+        const [first] = b.combo.split(" ");
+        return step(first!) === mine;
+      });
+      expect(
+        collisions.map((b) => `${b.actionId}:${b.scope}`),
+        replacement.actionId
+      ).toEqual([]);
+    }
   });
 });

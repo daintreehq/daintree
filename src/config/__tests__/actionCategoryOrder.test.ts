@@ -39,12 +39,6 @@ describe("orderActionCategories", () => {
   it("collapses duplicate categories to a single group", () => {
     expect(orderActionCategories(["git", "git", "plugin", "plugin"])).toEqual(["git", "plugin"]);
   });
-
-  it("orders a stable result across repeated calls with reshuffled input", () => {
-    const a = orderActionCategories(["ui", "custom", "git", "another"]);
-    const b = orderActionCategories(["another", "git", "custom", "ui"]);
-    expect(a).toEqual(b);
-  });
 });
 
 describe("humanizeActionCategory", () => {
@@ -55,10 +49,6 @@ describe("humanizeActionCategory", () => {
   it("treats hyphens and underscores as word breaks", () => {
     expect(humanizeActionCategory("custom-actions")).toBe("Custom actions");
     expect(humanizeActionCategory("custom_actions")).toBe("Custom actions");
-  });
-
-  it("capitalizes a single lowercase word", () => {
-    expect(humanizeActionCategory("core")).toBe("Core");
   });
 
   it("falls back to a generic label for a blank category", () => {

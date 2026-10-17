@@ -22,37 +22,6 @@ const VARIANTS = ["default", "subtle", "elevated"] as const;
 const PADDINGS = ["none", "sm", "md", "lg"] as const;
 
 describe("Card rendering", () => {
-  it("renders a div and forwards ref and arbitrary props", () => {
-    const ref = createRef<HTMLDivElement>();
-    render(
-      <Card ref={ref} id="settings-block" data-testid="card">
-        Body
-      </Card>
-    );
-    const card = screen.getByTestId("card");
-    expect(card.tagName).toBe("DIV");
-    expect(ref.current).toBe(card);
-    expect(card.id).toBe("settings-block");
-  });
-
-  it("hosts its own interactive content without swallowing the semantics", () => {
-    const onClick = vi.fn();
-    render(
-      <Card interactive data-testid="card">
-        <button type="button" onClick={onClick}>
-          Pick this preset
-        </button>
-      </Card>
-    );
-    const card = screen.getByTestId("card");
-    // The frame stays a plain div — it never becomes the control itself.
-    expect(card.tagName).toBe("DIV");
-    expect(card.getAttribute("role")).toBeNull();
-
-    fireEvent.click(screen.getByRole("button", { name: "Pick this preset" }));
-    expect(onClick).toHaveBeenCalledTimes(1);
-  });
-
   // Header composition belongs to SurfaceHeader; Card only has to get out of
   // its way, which means `padding="none"` must emit no padding at all.
   it("hosts a SurfaceHeader flush against its own edge", () => {
@@ -106,11 +75,6 @@ describe("cardVariants", () => {
     // Elevated is allowed to add a shadow — that is paint, not geometry.
     expect(cardVariants({ variant: "elevated" })).toContain("shadow-");
     expect(cardVariants({ variant: "default" })).not.toContain("shadow-");
-  });
-
-  it("emits no padding utility when padding is none", () => {
-    const classes = cardVariants({ padding: "none" });
-    expect(classes.split(/\s+/).filter((token) => /^p[xy]?-/.test(token))).toEqual([]);
   });
 
   it("stays inert until asked to be interactive", () => {

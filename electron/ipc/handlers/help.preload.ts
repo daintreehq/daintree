@@ -11,6 +11,7 @@ export const HELP_METHOD_CHANNELS = {
   takePendingHibernation: "help:take-pending-hibernation",
   restorePendingHibernation: "help:restore-pending-hibernation",
   listPendingHibernationSlots: "help:list-pending-hibernation-slots",
+  adoptDetachedSession: "help:adopt-detached-session",
   discardConversation: "help:discard-conversation",
   listPastSessions: "help:list-past-sessions",
   reportPanelOpen: "help:report-panel-open",

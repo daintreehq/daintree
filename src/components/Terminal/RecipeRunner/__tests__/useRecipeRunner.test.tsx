@@ -718,18 +718,6 @@ describe("useRecipeRunner — suggestions", () => {
     expect(result.current.suggestions.map((s) => s.id)).toEqual(["2"]);
   });
 
-  it("returns an empty array when no detected runners match", () => {
-    projectSettingsState.allDetectedRunners = [
-      makeRunCommand({ id: "1", name: "lint", command: "eslint ." }),
-    ];
-
-    const { result } = renderHook(() =>
-      useRecipeRunner({ activeWorktreeId: "wt-1", defaultCwd: "/tmp" })
-    );
-
-    expect(result.current.suggestions).toEqual([]);
-  });
-
   it("matches the keyword in either the name or the command field", () => {
     projectSettingsState.allDetectedRunners = [
       // keyword only in name
@@ -1024,21 +1012,6 @@ describe("useRecipeRunner — delete confirm flow", () => {
 });
 
 describe("useRecipeRunner — keyboard model", () => {
-  it("starts with focusedIndex 0 and focusedItemId pointing at the first recipe", () => {
-    recipes.push(
-      makeRecipe({ id: "alpha", name: "Alpha" }),
-      makeRecipe({ id: "beta", name: "Beta" }),
-      makeRecipe({ id: "gamma", name: "Gamma" })
-    );
-
-    const { result } = renderHook(() =>
-      useRecipeRunner({ activeWorktreeId: "wt-1", defaultCwd: "/tmp" })
-    );
-
-    expect(result.current.focusedIndex).toBe(0);
-    expect(result.current.focusedItemId).toBe("recipe-option-alpha");
-  });
-
   it("updates focusedItemId when setFocusedIndex is called", () => {
     recipes.push(
       makeRecipe({ id: "alpha", name: "Alpha" }),
@@ -1144,7 +1117,7 @@ describe("useRecipeRunner — a shadowed row describes what it will actually lau
 });
 
 describe("useRecipeRunner — keyboard edit follows the same ownership rule as the menu", () => {
-  it("does not open the editor on a plugin recipe from Cmd+E", () => {
+  it("does not open the editor on a plugin recipe from F2", () => {
     recipes.push(
       makeRecipe({
         id: "acme.tools.rel",
@@ -1165,13 +1138,35 @@ describe("useRecipeRunner — keyboard edit follows the same ownership rule as t
       const { container } = render(
         <div tabIndex={0} onKeyDown={(e) => result.current.handleKeyDown(e)} />
       );
-      const press = () => fireEvent.keyDown(container.firstChild!, { key: "e", metaKey: true });
+      const press = () => fireEvent.keyDown(container.firstChild!, { key: "F2" });
       const flat = result.current.getFlatRecipes();
       for (let i = 0; i < flat.length; i++) {
         act(() => result.current.setFocusedIndex(i));
         press();
       }
       expect(events).toEqual(["mine"]);
+    } finally {
+      window.removeEventListener("daintree:open-recipe-editor", listener);
+    }
+  });
+
+  it("leaves Cmd+E alone, for Canopy", () => {
+    recipes.push(makeRecipe({ id: "mine", name: "Mine" }));
+    const events: string[] = [];
+    const listener = (e: Event) => {
+      if (e instanceof CustomEvent) events.push(String(e.detail.recipeId));
+    };
+    window.addEventListener("daintree:open-recipe-editor", listener);
+    try {
+      const { result } = renderHook(() =>
+        useRecipeRunner({ activeWorktreeId: "wt-1", defaultCwd: "/repo" })
+      );
+      const { container } = render(
+        <div tabIndex={0} onKeyDown={(e) => result.current.handleKeyDown(e)} />
+      );
+      act(() => result.current.setFocusedIndex(0));
+      fireEvent.keyDown(container.firstChild!, { key: "e", metaKey: true });
+      expect(events).toEqual([]);
     } finally {
       window.removeEventListener("daintree:open-recipe-editor", listener);
     }

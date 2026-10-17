@@ -65,7 +65,7 @@ const SIDEBAR_ACTIVE: ExtensionKeyMetadata = {
 };
 
 // toolbar-control-armed-shadow is the inset ring on armed toolbar controls
-// (dropdown open / toggle on). The CSS fallback in toolbar.css is now
+// (dropdown open / toggle on). The CSS fallback in toolbar/controls.css is now
 // `inset 0 0 0 1px var(--theme-border-strong)` — the cool borderInk slate,
 // which is contrast-floored and polarity-correct on BOTH modes, replacing the
 // old hardcoded rgba(0,0,0,0.18) that went near-invisible on dark and read as a

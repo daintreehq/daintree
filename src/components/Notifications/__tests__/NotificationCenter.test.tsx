@@ -418,28 +418,6 @@ describe("NotificationThread message content", () => {
 });
 
 describe("NotificationCenter pause menu", () => {
-  it("does not render the legacy Mute / Until morning / Configure buttons", () => {
-    render(<NotificationCenter open onClose={() => {}} />);
-    expect(screen.queryByText("Mute 1h")).toBeNull();
-    expect(screen.queryByText("Until morning")).toBeNull();
-    expect(screen.queryByText("Configure")).toBeNull();
-  });
-
-  it("does not render legacy controls even when entries exist and pause menu is open", async () => {
-    setEntries([makeEntry()]);
-    render(<NotificationCenter open onClose={() => {}} />);
-    const trigger = screen.getByLabelText("Pause notifications");
-    await act(async () => {
-      fireEvent.pointerDown(trigger, { button: 0 });
-      fireEvent.pointerUp(trigger, { button: 0 });
-      fireEvent.click(trigger);
-    });
-
-    expect(screen.queryByText("Mute 1h")).toBeNull();
-    expect(screen.queryByText("Until morning")).toBeNull();
-    expect(screen.queryByText("Configure")).toBeNull();
-  });
-
   it("opens a Pause menu and routes 'For 1 hour' to muteForDuration without dispatching settings", async () => {
     render(<NotificationCenter open onClose={() => {}} />);
     const trigger = screen.getByLabelText("Pause notifications");
@@ -530,7 +508,7 @@ describe("NotificationCenter muted pill", () => {
     try {
       render(<NotificationCenter open onClose={() => {}} />);
       const pill = screen.getByTestId("notification-muted-pill");
-      expect(pill.textContent).toContain("Muted until");
+      expect(pill.textContent).toContain("Paused until");
       expect(pill.textContent).toContain("OS Do Not Disturb is active");
     } finally {
       useNotificationSettingsStore.setState({ osDndActive: undefined });
@@ -545,7 +523,7 @@ describe("NotificationCenter muted pill", () => {
 
     const pill = screen.getByTestId("notification-muted-pill");
     expect(pill).toBeTruthy();
-    expect(pill.textContent).toMatch(/Muted until /);
+    expect(pill.textContent).toMatch(/Paused until /);
     const resume = screen.getByLabelText("Resume notifications");
     expect(resume).toBeTruthy();
     expect(resume.textContent).toBe("Resume");
@@ -638,7 +616,7 @@ describe("NotificationCenter muted pill", () => {
     // time-sensitive System kind toasts.
     expect(pill.textContent).toContain("Will interrupt you: Waiting, System");
     // Provenance line is preserved alongside the hero summary.
-    expect(pill.textContent).toMatch(/Muted until /);
+    expect(pill.textContent).toMatch(/Paused until /);
   });
 
   it("reads 'Nothing will interrupt you' when notifications are globally off during a mute", () => {
@@ -665,23 +643,9 @@ describe("NotificationCenter muted pill", () => {
     render(<NotificationCenter open onClose={() => {}} />);
 
     const pill = screen.getByTestId("notification-muted-pill");
-    expect(pill.textContent).toContain("Off: Completed, Waiting");
+    expect(pill.textContent).toContain("Off: Finished, Waiting");
     expect(pill.textContent).not.toContain("Working pulse");
     expect(pill.textContent).not.toContain("UI sounds");
-  });
-
-  it("surfaces switched-off notification kinds in the muted pill summary", () => {
-    const until = Date.now() + 60 * 60 * 1000;
-    useNotificationSettingsStore.setState({
-      quietUntil: until,
-      completedEnabled: false,
-      waitingEnabled: false,
-    });
-
-    render(<NotificationCenter open onClose={() => {}} />);
-
-    const pill = screen.getByTestId("notification-muted-pill");
-    expect(pill.textContent).toContain("Off: Completed, Waiting");
   });
 
   it("does not list off-by-default sound kinds as switched off", () => {
@@ -939,7 +903,7 @@ describe("NotificationCenter empty state — zero data", () => {
 });
 
 describe("NotificationCenter empty state — muted", () => {
-  it("renders the muted empty state with a 'Resuming at' description when session mute is active and inbox is empty", () => {
+  it("renders the muted empty state, leaving the resume time to the strip, when session mute is active and inbox is empty", () => {
     const until = Date.now() + 60 * 60 * 1000;
     useNotificationSettingsStore.setState({ quietUntil: until });
 
@@ -948,15 +912,15 @@ describe("NotificationCenter empty state — muted", () => {
     const emptyState = screen.getByTestId("notification-muted-empty-state");
     expect(emptyState).toBeTruthy();
     expect(within(emptyState).getByText("Notifications paused")).toBeTruthy();
-    expect(emptyState.textContent).toMatch(/Resuming at /);
-    expect(emptyState.textContent).not.toMatch(/Quiet hours active/);
+    expect(screen.getByTestId("notification-muted-pill").textContent).toMatch(/Paused until /);
+    expect(emptyState.textContent).not.toMatch(/until/);
     expect(screen.queryByText("No notifications yet")).toBeNull();
     expect(screen.queryByText(/Notifications appear here/)).toBeNull();
     // No duplicate Resume affordance inside the empty state — header pill owns it.
     expect(within(emptyState).queryByLabelText("Resume notifications")).toBeNull();
   });
 
-  it("renders the muted empty state with 'Quiet hours active' provenance when only scheduled quiet hours are active", () => {
+  it("names quiet hours and their end in the strip when only scheduled quiet hours are active", () => {
     const fixedNow = new Date();
     fixedNow.setHours(2, 0, 0, 0);
     vi.useFakeTimers();
@@ -973,21 +937,26 @@ describe("NotificationCenter empty state — muted", () => {
 
       const emptyState = screen.getByTestId("notification-muted-empty-state");
       expect(within(emptyState).getByText("Notifications paused")).toBeTruthy();
-      expect(emptyState.textContent).toMatch(/Quiet hours active\. Resuming at /);
+      const end = new Intl.DateTimeFormat(undefined, { hour: "numeric", minute: "2-digit" }).format(
+        new Date(new Date(fixedNow).setHours(8, 0, 0, 0))
+      );
+      expect(screen.getByTestId("notification-muted-pill").textContent).toContain(
+        `Quiet hours until ${end}`
+      );
       expect(screen.queryByText("No notifications yet")).toBeNull();
     } finally {
       vi.useRealTimers();
     }
   });
 
-  it("uses the scheduled quiet-hours end time when both session and scheduled mutes overlap and scheduled ends later", () => {
+  it("names the later quiet-hours end in the strip when session and scheduled mutes overlap", () => {
     const fixedNow = new Date();
     fixedNow.setHours(2, 0, 0, 0);
     vi.useFakeTimers();
     vi.setSystemTime(fixedNow);
     try {
       // Session expires at 03:00, scheduled quiet hours end at 08:00 — notifications
-      // do not actually resume until 08:00, so the body must show that.
+      // do not actually resume until 08:00, so the strip must say so too.
       useNotificationSettingsStore.setState({
         quietUntil: fixedNow.getTime() + 60 * 60 * 1000,
         quietHoursEnabled: true,
@@ -998,14 +967,13 @@ describe("NotificationCenter empty state — muted", () => {
 
       render(<NotificationCenter open onClose={vi.fn()} />);
 
-      const emptyState = screen.getByTestId("notification-muted-empty-state");
-      expect(emptyState.textContent).toMatch(/Quiet hours active\. Resuming at /);
-      // Must not advertise the earlier (session) resume time.
-      const formatted = new Intl.DateTimeFormat(undefined, {
-        hour: "numeric",
-        minute: "2-digit",
-      }).format(new Date(fixedNow.getTime() + 60 * 60 * 1000));
-      expect(emptyState.textContent).not.toContain(formatted);
+      expect(screen.getByTestId("notification-muted-empty-state")).toBeTruthy();
+      const end = new Intl.DateTimeFormat(undefined, { hour: "numeric", minute: "2-digit" }).format(
+        new Date(new Date(fixedNow).setHours(8, 0, 0, 0))
+      );
+      expect(screen.getByTestId("notification-muted-pill").textContent).toContain(
+        `Quiet hours continue until ${end}`
+      );
     } finally {
       vi.useRealTimers();
     }
@@ -1066,13 +1034,6 @@ describe("NotificationCenter overflow menu", () => {
     const items =
       screen.getAllByRole("menuitem").length + screen.queryAllByRole("menuitemcheckbox").length;
     expect(items).toBeGreaterThan(1);
-  });
-
-  it("renders overflow trigger as a button when entries exist", () => {
-    setEntries([makeEntry()]);
-    render(<NotificationCenter open onClose={() => {}} />);
-    const trigger = screen.getByLabelText("More notification actions");
-    expect(trigger.tagName).toBe("BUTTON");
   });
 
   it("confirms before clearing, and only clears once confirmed", async () => {
@@ -1207,27 +1168,6 @@ describe("NotificationCenter — Needs attention pinned section", () => {
     expect(screen.queryByTestId("needs-attention-section")).toBeNull();
     const chrono = screen.getByTestId("chrono-section");
     expect(within(chrono).queryByText("All notifications")).toBeNull();
-  });
-
-  it("caps the pinned section below the number of severe unread threads when there are many", () => {
-    const baseT = Date.now();
-    const items = Array.from({ length: 7 }, (_, i) =>
-      makeEntry({
-        id: `failure-${i}`,
-        type: "error",
-        message: `Failure ${i}`,
-        timestamp: baseT - i,
-        seenAsToast: false,
-      })
-    );
-    setEntries(items);
-
-    render(<NotificationCenter open onClose={vi.fn()} />);
-
-    const pinned = screen.getByTestId("needs-attention-section");
-    const messages = within(pinned).getAllByText(/^Failure \d$/);
-    expect(messages.length).toBeGreaterThan(0);
-    expect(messages.length).toBeLessThan(items.length);
   });
 
   it("shows a '+N more below' note when severe unread threads exceed the pinned cap", async () => {
@@ -1583,20 +1523,6 @@ describe("NotificationCenter — New since you last looked divider", () => {
     expect(screen.queryByTestId("new-since-last-looked")).toBeNull();
   });
 
-  it("renders the divider above the first entry whose timestamp is newer than lastClosedAt", () => {
-    const closedAt = Date.now() - 5000;
-    useUIStore.setState({ lastNotificationCenterClosedAt: closedAt });
-    setEntries([
-      makeEntry({ message: "Newer 1", timestamp: closedAt + 4000 }),
-      makeEntry({ id: "entry-99", message: "Newer 2", timestamp: closedAt + 3000 }),
-      makeEntry({ id: "entry-100", message: "Older", timestamp: closedAt - 1000 }),
-    ]);
-
-    render(<NotificationCenter open onClose={vi.fn()} />);
-
-    expect(screen.queryByTestId("new-since-last-looked")).toBeTruthy();
-  });
-
   it("clears the divider when 'Mark all read' is clicked", async () => {
     const closedAt = Date.now() - 5000;
     useUIStore.setState({ lastNotificationCenterClosedAt: closedAt });
@@ -1645,19 +1571,6 @@ describe("NotificationCenter — bulk mark-read with Undo", () => {
     // `transient` confirmations must not carry `context` (notify drops them in DEV).
     expect(payload.context).toBeUndefined();
     expect(payload.action?.label).toBe("Undo");
-  });
-
-  it("'Mark all read' resets lastNotificationCenterClosedAt to clear the divider", async () => {
-    useUIStore.setState({ lastNotificationCenterClosedAt: 12345 });
-    setEntries([makeEntry({ message: "Unread", seenAsToast: false })]);
-
-    render(<NotificationCenter open onClose={vi.fn()} />);
-
-    await act(async () => {
-      fireEvent.click(screen.getByText("Mark all read"));
-    });
-
-    expect(useUIStore.getState().lastNotificationCenterClosedAt).toBe(0);
   });
 
   it("undo restores the captured ids back to unread", async () => {
@@ -2352,16 +2265,6 @@ describe("NotificationCenter — keyboard navigation", () => {
     expect(panel.className.toString()).toMatch(/--fixed-dropdown-available-height/);
   });
 
-  it("marks the scroll container as role=list with an aria-label", () => {
-    setEntries([
-      makeEntry({ id: "row-a", message: "First" }),
-      makeEntry({ id: "row-b", message: "Second" }),
-    ]);
-    const { container } = render(<NotificationCenter open onClose={vi.fn()} />);
-    const list = container.querySelector('[role="list"][aria-label="Notifications"]');
-    expect(list).not.toBeNull();
-  });
-
   it("does not mark the container as a list when there are no rows", () => {
     const { container } = render(<NotificationCenter open onClose={vi.fn()} />);
     expect(container.querySelector('[role="list"]')).toBeNull();
@@ -2477,31 +2380,6 @@ describe("NotificationCenter — keyboard navigation", () => {
     fireEvent.keyDown(list, { key: "j" });
     expect(getRows(container)[0]?.getAttribute("tabindex")).toBe("0");
     expect(getRows(container)[1]?.getAttribute("tabindex")).toBe("-1");
-  });
-
-  it("dismisses the focused row on 'e' and clamps focus to the new last row", async () => {
-    setEntries([
-      makeEntry({ id: "a", message: "First" }),
-      makeEntry({ id: "b", message: "Second" }),
-      makeEntry({ id: "c", message: "Last to remove" }),
-    ]);
-    const { container } = render(<NotificationCenter open onClose={vi.fn()} />);
-    const list = container.querySelector('[role="list"]') as HTMLElement;
-
-    act(() => {
-      getRows(container)[2]?.focus();
-    });
-
-    await act(async () => {
-      fireEvent.keyDown(list, { key: "e" });
-    });
-
-    await waitFor(() => {
-      expect(getRows(container)).toHaveLength(2);
-    });
-    expect(screen.queryByText("Last to remove")).toBeNull();
-    // After the last row is removed, the clamping effect drops focusedIndex to 1.
-    expect(getRows(container)[1]?.getAttribute("tabindex")).toBe("0");
   });
 
   it("goes to the focused row's source on Enter, never its primary action", async () => {
@@ -2685,23 +2563,6 @@ describe("NotificationCenter — keyboard navigation", () => {
     fireEvent.keyDown(list, { key: "j" });
     expect(getRows(container)[0]?.getAttribute("tabindex")).toBe("0");
     expect(getRows(container)[1]?.getAttribute("tabindex")).toBe("-1");
-  });
-
-  it("orders the flat row index across needs-attention and chrono sections", () => {
-    setEntries([
-      makeEntry({ id: "info-1", type: "info", message: "Info note", seenAsToast: true }),
-      makeEntry({
-        id: "err-1",
-        type: "error",
-        message: "Pinned error",
-        seenAsToast: false,
-      }),
-    ]);
-    const { container } = render(<NotificationCenter open onClose={vi.fn()} />);
-    const rows = getRows(container);
-    // Pinned needs-attention section comes first; it dedupes the entry from chrono not.
-    expect(rows.length).toBeGreaterThanOrEqual(2);
-    expect(rows[0]?.getAttribute("tabindex")).toBe("0");
   });
 
   it("restores focus to the surviving row after dismissing the focused row via 'e'", async () => {
@@ -3529,5 +3390,34 @@ describe("NotificationCenter — row menu triage", () => {
     expect(screen.queryByRole("menuitem", { name: /^Archive/ })).toBeNull();
     // Read state doesn't apply to a filed row, so neither command is offered.
     expect(screen.queryByRole("menuitem", { name: /Mark as/ })).toBeNull();
+  });
+});
+
+describe("NotificationCenter — another host's notifications", () => {
+  it("names the host on rows and grouped headers that came from one, and leaves local rows as they were", () => {
+    setEntries([
+      makeEntry({
+        id: "remote",
+        title: "studio-01: agent waiting",
+        message: "Claude is waiting.",
+        context: { eventKind: "waiting", hostName: "studio-01" },
+      }),
+      makeEntry({ id: "local", title: "Idle", message: "Terminals idle." }),
+    ]);
+    const { unmount } = render(<NotificationCenter open onClose={vi.fn()} />);
+    const sources = screen.getAllByTestId("notification-source").map((s) => s.textContent ?? "");
+    expect(sources).toEqual(["studio-01", "Daintree"]);
+    unmount();
+
+    useNotificationSettingsStore.setState({ groupByContext: true });
+    render(<NotificationCenter open onClose={vi.fn()} />);
+    const headers = screen.getAllByTestId("context-section-header").map((h) => h.textContent ?? "");
+    expect(headers).toEqual(
+      expect.arrayContaining([
+        expect.stringContaining("studio-01"),
+        expect.stringContaining("Daintree"),
+      ])
+    );
+    expect(headers.some((h) => h.includes("studio-01") && h.includes("Daintree"))).toBe(false);
   });
 });

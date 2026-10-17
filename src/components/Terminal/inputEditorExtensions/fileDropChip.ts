@@ -1,10 +1,12 @@
-import { EditorView, Decoration, WidgetType, hoverTooltip } from "@codemirror/view";
+import { EditorView, Decoration, WidgetType } from "@codemirror/view";
 import type { Extension } from "@codemirror/state";
 import { StateField, StateEffect } from "@codemirror/state";
-import { removeChipRange } from "./base";
+import { createChipRemoveControl, removeChipRange } from "./base";
 import { formatBytes } from "@/lib/formatBytes";
-import { chipPendingDeleteField, isChipSelected } from "./chipBackspace";
+import { chipAriaLabel, chipPendingDeleteField, isChipSelected } from "./chipBackspace";
+import { chipCardMeta, chipCardPath, chipHoverTooltip, chipTooltip } from "./chipCard";
 import { createTrustedHTML, setTrustedInnerHTML } from "@/lib/trustedTypesPolicy";
+import { resolveLocalFileSources } from "@/lib/transferSources";
 
 interface FileDropChipEntry {
   from: number;
@@ -40,7 +42,8 @@ class FileDropChipWidget extends WidgetType {
       ? "cm-file-drop-chip cm-chip-pending-delete"
       : "cm-file-drop-chip";
     span.setAttribute("role", "img");
-    span.setAttribute("aria-label", `File: ${this.filePath}`);
+    span.setAttribute("aria-label", chipAriaLabel(`File: ${this.filePath}`, this.isSelected));
+    if (this.fileSize != null) span.setAttribute("aria-description", formatBytes(this.fileSize));
 
     const icon = document.createElement("span");
     setTrustedInnerHTML(icon, createTrustedHTML(FILE_ICON_SVG));
@@ -54,30 +57,25 @@ class FileDropChipWidget extends WidgetType {
     label.textContent = this.fileName;
     span.appendChild(label);
 
-    const removeBtn = document.createElement("button");
-    removeBtn.className = "cm-chip-remove";
-    removeBtn.setAttribute("aria-label", "Remove file");
-    removeBtn.textContent = "\u00d7";
-    removeBtn.addEventListener("mousedown", (e) => {
-      e.preventDefault();
-      e.stopPropagation();
-      // Resolve the entry by the widget's document position, not by path \u2014
-      // with duplicate chips for the same file, a path lookup removes the
-      // first occurrence rather than the chip that was clicked. Half-open
-      // containment so an adjacent chip's end boundary can't match first.
-      const entries = view.state.field(fileDropChipField, false);
-      if (!entries) return;
-      let pos = -1;
-      try {
-        pos = view.posAtDOM(span);
-      } catch {
-        // Widget DOM already detached \u2014 fall through to the path match.
-      }
-      const byPos = pos >= 0 ? entries.find((en) => pos >= en.from && pos < en.to) : undefined;
-      const entry = byPos ?? entries.find((en) => en.filePath === this.filePath);
-      if (entry) removeChipRange(view, entry.from, entry.to);
-    });
-    span.appendChild(removeBtn);
+    span.appendChild(
+      createChipRemoveControl(() => {
+        // Resolve the entry by the widget's document position, not by path —
+        // with duplicate chips for the same file, a path lookup removes the
+        // first occurrence rather than the chip that was clicked. Half-open
+        // containment so an adjacent chip's end boundary can't match first.
+        const entries = view.state.field(fileDropChipField, false);
+        if (!entries) return;
+        let pos = -1;
+        try {
+          pos = view.posAtDOM(span);
+        } catch {
+          // Widget DOM already detached — fall through to the path match.
+        }
+        const byPos = pos >= 0 ? entries.find((en) => pos >= en.from && pos < en.to) : undefined;
+        const entry = byPos ?? entries.find((en) => en.filePath === this.filePath);
+        if (entry) removeChipRange(view, entry.from, entry.to);
+      })
+    );
 
     return span;
   }
@@ -139,43 +137,18 @@ export const fileDropChipField = StateField.define<FileDropChipEntry[]>({
 });
 
 export function createFileDropChipTooltip() {
-  return hoverTooltip((view, pos) => {
+  return chipHoverTooltip((view, pos) => {
     const entries = view.state.field(fileDropChipField, false);
     if (!entries || entries.length === 0) return null;
 
     const entry = entries.find((e) => pos >= e.from && pos <= e.to);
     if (!entry) return null;
 
-    return {
-      pos: entry.from,
-      end: entry.to,
-      above: true,
-      create() {
-        const dom = document.createElement("div");
-        dom.className = "px-2 py-1 text-xs";
-        dom.style.cssText = `
-          background: var(--theme-surface-panel-elevated);
-          border-radius: var(--radius-xs);
-          box-shadow: 0 2px 8px var(--theme-scrim-soft);
-        `;
-
-        const pathEl = document.createElement("p");
-        pathEl.style.cssText =
-          "font-size: var(--text-3xs); color: var(--theme-text-secondary); word-break: break-all; max-width: 300px; font-family: var(--font-mono, monospace);";
-        pathEl.textContent = entry.filePath;
-        dom.appendChild(pathEl);
-
-        if (entry.fileSize != null) {
-          const sizeEl = document.createElement("p");
-          sizeEl.style.cssText =
-            "font-size: var(--text-3xs); color: var(--theme-text-muted); margin-top: 2px;";
-          sizeEl.textContent = formatBytes(entry.fileSize);
-          dom.appendChild(sizeEl);
-        }
-
-        return { dom };
-      },
-    };
+    return chipTooltip(entry, ".cm-file-drop-chip", () =>
+      entry.fileSize != null
+        ? [chipCardPath(entry.filePath), chipCardMeta(formatBytes(entry.fileSize))]
+        : [chipCardPath(entry.filePath)]
+    );
   });
 }
 
@@ -187,18 +160,21 @@ export function createFilePasteHandler(
       const items = event.clipboardData?.items;
       if (!items) return false;
 
-      const files: { path: string; name: string; size: number }[] = [];
+      // Image items stay with the image paste handler, which saves the
+      // clipboard bitmap rather than referencing a file.
+      const pasted: File[] = [];
       for (const item of items) {
         if (item.kind === "file" && !item.type.startsWith("image/")) {
           const file = item.getAsFile();
-          const filePath = file ? window.electron.webUtils.getPathForFile(file) : undefined;
-          if (file && filePath) {
-            const name =
-              file.name.trim() || filePath.split(/[/\\]/).filter(Boolean).pop() || filePath;
-            files.push({ path: filePath, name, size: file.size });
-          }
+          if (file) pasted.push(file);
         }
       }
+
+      const files = resolveLocalFileSources(pasted).map(({ path, name, size }) => ({
+        path,
+        name: name.trim() || path.split(/[/\\]/).filter(Boolean).pop() || path,
+        size,
+      }));
 
       if (files.length === 0) return false;
 

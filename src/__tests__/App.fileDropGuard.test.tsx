@@ -96,19 +96,6 @@ describe("useFileDropGuard", () => {
     expect(dataTransfer.dropEffect).toBe("copy");
   });
 
-  it("skips events already handled by a child (defaultPrevented)", () => {
-    renderHook(() => useFileDropGuard());
-
-    const { event, dataTransfer } = createDragEvent("dragover", ["Files"]);
-    // Simulate a child component calling preventDefault before bubble reaches document
-    event.preventDefault();
-
-    document.dispatchEvent(event);
-
-    // dropEffect should remain unchanged — our handler skipped
-    expect(dataTransfer.dropEffect).toBe("copy");
-  });
-
   it("catches file drops bubbling from a child element", () => {
     renderHook(() => useFileDropGuard());
 

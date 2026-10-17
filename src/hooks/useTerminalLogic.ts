@@ -1,6 +1,8 @@
 import { useState, useCallback, useEffect } from "react";
 import type { RetryAction } from "@/store/errorStore";
 import { useErrorStore } from "@/store/errorStore";
+import { usePanelStore } from "@/store/panelStore";
+import { isPtyPanel } from "@shared/types/panel";
 import { logError } from "@/utils/logger";
 import { errorsClient } from "@/clients";
 
@@ -21,7 +23,8 @@ export interface UseTerminalLogicReturn {
   // Exit handling
   isExited: boolean;
   exitCode: number | null;
-  handleExit: (code: number) => void;
+  /** Null when the terminal is known to be gone but no exit code was seen. */
+  handleExit: (code: number | null) => void;
 }
 
 export function useTerminalLogic({
@@ -32,6 +35,14 @@ export function useTerminalLogic({
   const [isExited, setIsExited] = useState(false);
   const [exitCode, setExitCode] = useState<number | null>(null);
   const clearRetryProgress = useErrorStore((state) => state.clearRetryProgress);
+  // The exit stream is one-shot: a pane that mounts after it fired, or an exit
+  // only the store heard of (a host that restarted without the terminal), is
+  // read from the store instead. Undefined while the terminal is live.
+  const storeExitCode = usePanelStore((state) => {
+    const panel = state.panelsById[id];
+    if (!panel || !isPtyPanel(panel) || panel.runtimeStatus !== "exited") return undefined;
+    return panel.exitCode ?? null;
+  });
 
   // Reset exit state when terminal ID or restartKey changes
   useEffect(() => {
@@ -39,8 +50,8 @@ export function useTerminalLogic({
     setExitCode(null);
   }, [id, restartKey]);
 
-  const handleExit = useCallback((code: number) => {
-    const safeCode = Number.isFinite(code) ? code : 0;
+  const handleExit = useCallback((code: number | null) => {
+    const safeCode = code === null ? null : Number.isFinite(code) ? code : 0;
     setIsExited(true);
     setExitCode(safeCode);
   }, []);
@@ -68,8 +79,8 @@ export function useTerminalLogic({
     handleErrorRetry,
 
     // Exit handling
-    isExited,
-    exitCode,
+    isExited: isExited || storeExitCode !== undefined,
+    exitCode: isExited ? exitCode : (storeExitCode ?? null),
     handleExit,
   };
 }

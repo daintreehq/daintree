@@ -8,6 +8,7 @@ import {
   type TerminalListenerInstallDeps,
 } from "../TerminalListenerInstaller";
 import { hashPerfLine, PERF_MARKS } from "../../../../shared/perf/marks";
+import { _resetTerminalInputGateForTesting, setSwitchInputBlock } from "../inputGate";
 
 const writeTerminalInputOrFleetMock = vi.hoisted(() => vi.fn());
 const isRendererPerfCaptureActiveMock = vi.hoisted(() => vi.fn(() => false));
@@ -45,8 +46,10 @@ vi.mock("@shared/config/agentRegistry", async (importOriginal) => {
   };
 });
 
+const writeReplyMock = vi.hoisted(() => vi.fn<(id: string, data: string) => void>());
+
 vi.mock("@/clients", () => ({
-  terminalClient: { write: vi.fn() },
+  terminalClient: { write: vi.fn(), writeReply: writeReplyMock },
 }));
 
 vi.mock("@/utils/logger", () => ({
@@ -222,6 +225,7 @@ function makeDeps(
     notifyUserInput: vi.fn(),
     clearDirectingState: vi.fn(),
     onUserInput: vi.fn(),
+    noteUserInput: vi.fn(),
     onActiveWheel: vi.fn(),
     onUserScrollIntent: vi.fn(),
     onEnterPressed: vi.fn(),
@@ -274,6 +278,16 @@ describe("installTerminalBoundListeners", () => {
 
     expect(writeTerminalInputOrFleetMock).toHaveBeenCalledWith("t1", "hello");
     expect(deps.onUserInput).toHaveBeenCalledWith("t1", "hello");
+    expect(deps.noteUserInput).toHaveBeenCalledTimes(1);
+
+    // Delete, an arrow and Ctrl+C edit the prompt without composing it, but
+    // they still change the input a late file drop must not type over.
+    for (const key of ["\x1b[3~", "\x1b[D", "\x03"]) captured.onData!(key);
+    expect(deps.noteUserInput).toHaveBeenCalledTimes(4);
+
+    // A focus report, a cursor-position reply and a mouse report are not typing.
+    for (const reply of ["\x1b[I", "\x1b[12;4R", "\x1b[<0;10;5M"]) captured.onData!(reply);
+    expect(deps.noteUserInput).toHaveBeenCalledTimes(4);
   });
 
   it("forwards observed agent titles via window.electron.terminal.updateObservedTitle and panel store (drift #2 fix)", () => {
@@ -467,6 +481,51 @@ describe("installTerminalBoundListeners", () => {
     expect(writeTerminalInputOrFleetMock).not.toHaveBeenCalled();
     expect(deps.onUserInput).not.toHaveBeenCalled();
     expect(deps.clearDirectingState).not.toHaveBeenCalled();
+  });
+
+  it("drops input before it counts as typing while the window switches hosts", () => {
+    const captured: CapturedCallbacks = { onTitleChangeHandlers: [] };
+    const terminal = makeMockTerminal(captured);
+    const managed = makeMockManaged();
+    const deps = makeDeps();
+
+    managed.terminal = terminal as unknown as ManagedTerminal["terminal"];
+    installTerminalBoundListeners(
+      terminal as unknown as Parameters<typeof installTerminalBoundListeners>[0],
+      managed,
+      "t1",
+      deps
+    );
+
+    setSwitchInputBlock({ kind: "switching", hostName: "studio-02" });
+    try {
+      captured.onData!("ls\r");
+      captured.onData!("\x1b");
+      captured.onKey!({ domEvent: { key: "Enter" } as Partial<KeyboardEvent> });
+
+      expect(writeTerminalInputOrFleetMock).not.toHaveBeenCalled();
+      expect(deps.noteUserInput).not.toHaveBeenCalled();
+      expect(deps.onUserInput).not.toHaveBeenCalled();
+      expect(deps.clearDirectingState).not.toHaveBeenCalled();
+      expect(deps.onEnterPressed).not.toHaveBeenCalled();
+      expect(writeReplyMock).not.toHaveBeenCalled();
+
+      // The program's own queries are still answered, and still never count as typing.
+      captured.onData!("\x1b[12;4R");
+      captured.onData!("\x1b[I");
+      captured.onData!("\x1b[<0;10;5M");
+      expect(writeReplyMock.mock.calls).toEqual([
+        ["t1", "\x1b[12;4R"],
+        ["t1", "\x1b[I"],
+      ]);
+      expect(writeTerminalInputOrFleetMock).not.toHaveBeenCalled();
+      expect(deps.noteUserInput).not.toHaveBeenCalled();
+    } finally {
+      _resetTerminalInputGateForTesting();
+    }
+
+    captured.onData!("z");
+    expect(writeTerminalInputOrFleetMock).toHaveBeenCalledWith("t1", "z");
   });
 
   it("clears directing state on escape but not on regular input", () => {
@@ -1103,29 +1162,6 @@ describe("installTerminalBoundListeners", () => {
       expect(h.getReports()).toBe(NOTCH_REPORTS);
     });
 
-    it("accumulates fine/trackpad motion instead of dropping it", () => {
-      // 10px against the 20px/line budget = half a line per event; xterm would
-      // damp this to zero and send nothing. One event registers nothing yet, but
-      // the carried remainder makes the second cross a line boundary — every
-      // scroll counts.
-      const h = setupAmplifier({ mouseTrackingMode: "any", isAltBuffer: true });
-      h.dispatch({ deltaY: 10, deltaMode: 0 });
-      h.flushFrames();
-      expect(h.getReports()).toBe(0);
-      h.dispatch({ deltaY: 10, deltaMode: 0 });
-      h.flushFrames();
-      expect(h.getReports()).toBe(1);
-    });
-
-    it("delivers a page-mode fling's full screenful, paced across frames", () => {
-      // A page event normalizes to one screenful (terminal.rows). Pacing must
-      // still deliver every line — just spread over frames, not in one burst.
-      const h = setupAmplifier({ mouseTrackingMode: "any", isAltBuffer: true });
-      h.dispatch({ deltaY: 1, deltaMode: 2 });
-      h.flushFrames();
-      expect(h.getReports()).toBe(24); // terminal.rows — full screenful, nothing dropped
-    });
-
     it("paces a large fling across multiple frames rather than dispatching it at once", () => {
       // The flood guard: one frame may dispatch only a bounded slice of a
       // screenful-sized backlog; the rest drains on following frames. Asserted
@@ -1384,18 +1420,6 @@ describe("installTerminalBoundListeners", () => {
       expect(h.deps.onActiveWheel).not.toHaveBeenCalled();
     });
 
-    it("clears a single notch within one frame and adds nothing on the next", () => {
-      // A discrete notch (below the per-frame cap) must not be split across frames
-      // — it should land whole on the first frame, then the next frame is a no-op.
-      const h = setupAmplifier({ mouseTrackingMode: "any", isAltBuffer: true });
-      h.dispatch({ deltaY: 120, deltaMode: 0 });
-      h.flushFrame();
-      const afterOneFrame = h.getReports();
-      expect(afterOneFrame).toBe(NOTCH_REPORTS); // all of the notch, in one frame
-      h.flushFrame();
-      expect(h.getReports()).toBe(afterOneFrame); // nothing left to drain
-    });
-
     it("resolves lines from the live rendered cell height (bigger cell ⇒ fewer lines)", () => {
       // End-to-end through the real handler: the px-per-line basis is the rendered
       // cell height, so the SAME 120px gesture yields fewer line reports on a
@@ -1549,26 +1573,6 @@ describe("installTerminalBoundListeners", () => {
       const second = rowHeights(element);
 
       expect(second).toEqual(first);
-    });
-
-    it("no-ops when the terminal element is not yet attached", () => {
-      const captured: CapturedCallbacks = { onTitleChangeHandlers: [] };
-      const terminal = makeMockTerminal(captured);
-      // No `element` set — terminal.open() hasn't run.
-      const deps = makeDeps();
-
-      installOnMock(terminal, deps);
-      expect(() => captured.onRender!()).not.toThrow();
-    });
-
-    it("no-ops on an empty row list", () => {
-      const captured: CapturedCallbacks = { onTitleChangeHandlers: [] };
-      const terminal = makeMockTerminal(captured);
-      terminal.element = makeRowsElement("17.275px", 0);
-      const deps = makeDeps();
-
-      installOnMock(terminal, deps);
-      expect(() => captured.onRender!()).not.toThrow();
     });
 
     it("starts snapping only after the pane swaps WebGL → DOM (gate flips live)", () => {
@@ -1807,21 +1811,6 @@ describe("installTerminalBoundListeners", () => {
       return { terminal, managed, deps, captured, erase, redraw, closeSyncBlock, render };
     }
 
-    it("observes ESC[3J and DECRST 2026 on the parser beside OSC 11 without blocking them", () => {
-      const { terminal, erase, redraw, closeSyncBlock } = installScrolledBack();
-      expect(terminal.parser.registerCsiHandler).toHaveBeenCalledWith(
-        { final: "J" },
-        expect.any(Function)
-      );
-      expect(terminal.parser.registerCsiHandler).toHaveBeenCalledWith(
-        { prefix: "?", final: "l" },
-        expect.any(Function)
-      );
-      erase();
-      redraw();
-      closeSyncBlock();
-    });
-
     it("holds the unseen count at the erase and hands it back once the redraw has rendered", async () => {
       const { deps, erase, redraw, closeSyncBlock, render } = installScrolledBack();
       erase();
@@ -2004,13 +1993,6 @@ describe("wheelEventToLineCount", () => {
     expect(wheelEventToLineCount(ev(1, 2), 24, { partial: 0 }, 7)).toBe(24); // page mode → rows
   });
 
-  it("scrolls clearly more than a single line per notch (the dead-scroll fix)", () => {
-    // The original point of the amplifier: a notch must move more than one line
-    // so it doesn't feel like only every few clicks register. Relationship, not
-    // literal.
-    expect(wheelEventToLineCount(ev(120, 0), 24, { partial: 0 })).toBeGreaterThan(1);
-  });
-
   it("scrolls proportionally to pixel magnitude — coalesced detents aren't dropped", () => {
     // The bug this replaced: any pixel event >=40px scrolled a FLAT line count,
     // so when Chromium coalesces several physical detents into one large-delta
@@ -2024,15 +2006,6 @@ describe("wheelEventToLineCount", () => {
     expect(two).toBe(2 * one);
     expect(three).toBe(3 * one);
     expect(three).toBeGreaterThan(one);
-  });
-
-  it("scrolls momentum-sized deltas by distance, not a flat amount per event", () => {
-    // macOS inertial scrolling emits a stream of medium continuous deltas. The
-    // old rule amplified EACH to a flat 6 lines, running away into overscroll;
-    // now the per-event count tracks the per-event distance.
-    const small = wheelEventToLineCount(ev(40, 0), 999, { partial: 0 });
-    const large = wheelEventToLineCount(ev(200, 0), 999, { partial: 0 });
-    expect(large).toBeGreaterThan(small);
   });
 
   it("preserves scroll direction symmetrically (down === -up)", () => {

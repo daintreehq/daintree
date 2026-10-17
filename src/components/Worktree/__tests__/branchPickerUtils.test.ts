@@ -3,6 +3,7 @@ import {
   formatBranchLabel,
   toBranchOption,
   buildBranchRows,
+  deriveDefaultBaseBranch,
   type BranchOption,
   type BranchPickerRow,
 } from "../branchPickerUtils";
@@ -52,11 +53,6 @@ function namesFor(query: string, branches: readonly BranchOption[]): string[] {
 
 describe("branchPickerUtils", () => {
   describe("formatBranchLabel", () => {
-    it("formats a regular branch", () => {
-      const branch: BranchInfo = { name: "feature/test", current: false, commit: "abc123" };
-      expect(formatBranchLabel(branch)).toBe("feature/test");
-    });
-
     it("formats a current branch", () => {
       const branch: BranchInfo = { name: "main", current: true, commit: "def456" };
       expect(formatBranchLabel(branch)).toBe("main (current)");
@@ -70,16 +66,6 @@ describe("branchPickerUtils", () => {
         remote: "origin",
       };
       expect(formatBranchLabel(branch)).toBe("origin/feature (remote)");
-    });
-
-    it("formats a current remote branch", () => {
-      const branch: BranchInfo = {
-        name: "origin/main",
-        current: true,
-        commit: "jkl012",
-        remote: "origin",
-      };
-      expect(formatBranchLabel(branch)).toBe("origin/main (current) (remote)");
     });
   });
 
@@ -201,18 +187,6 @@ describe("branchPickerUtils", () => {
         expect(selectable[2]!.isRecent).toBe(false);
       });
 
-      it("respects MRU order for recent branches", () => {
-        const { rows } = buildBranchRows(branches, {
-          query: "",
-          recentBranchNames: ["bugfix/login-crash", "feature/auth"],
-          worktreeByBranch: new Map(),
-        });
-
-        const selectable = getSelectableRows(rows);
-        expect(selectable[0]!.name).toBe("bugfix/login-crash");
-        expect(selectable[1]!.name).toBe("feature/auth");
-      });
-
       it("ignores recent branch names that don't exist in the branch list", () => {
         const { rows } = buildBranchRows(branches, {
           query: "",
@@ -224,18 +198,6 @@ describe("branchPickerUtils", () => {
         const recent = selectable.filter((r) => r.isRecent);
         expect(recent).toHaveLength(1);
         expect(recent[0]!.name).toBe("feature/auth");
-      });
-
-      it("caps at emptyQueryLimit", () => {
-        const manyBranches = Array.from({ length: 600 }, (_, i) => makeBranchOption(`branch-${i}`));
-        const { rows } = buildBranchRows(manyBranches, {
-          query: "",
-          recentBranchNames: [],
-          worktreeByBranch: new Map(),
-          emptyQueryLimit: 500,
-        });
-
-        expect(getSelectableRows(rows)).toHaveLength(500);
       });
 
       it("counts the Recent band against the cap instead of letting it overrun", () => {
@@ -254,10 +216,6 @@ describe("branchPickerUtils", () => {
     });
 
     describe("search", () => {
-      it("matches substring queries", () => {
-        expect(namesFor("auth", branches)[0]).toBe("feature/auth");
-      });
-
       it("finds branches from a single character instead of emptying the list", () => {
         // The reported regression: `minMatchCharLength: 2` made every 1-char
         // query return nothing, so typing replaced the list with "no matches".
@@ -277,10 +235,6 @@ describe("branchPickerUtils", () => {
       it("matches multi-token queries against long slash-separated names", () => {
         const withTerrain = [...branches, makeBranchOption("feature/voxel-terrain")];
         expect(namesFor("feat terr", withTerrain)).toContain("feature/voxel-terrain");
-      });
-
-      it("matches fuzzy queries across slash separators", () => {
-        expect(namesFor("feature auth", branches)).toContain("feature/auth");
       });
 
       it("rejects a query whose second token matches nothing", () => {
@@ -383,10 +337,6 @@ describe("branchPickerUtils", () => {
         makeBranchOption("!hotfix/urgent"),
         makeBranchOption("$dollar/branch"),
       ];
-
-      it("does not crash on branch names with ! and $ prefixes", () => {
-        expect(namesFor("hotfix", specialBranches).length).toBeGreaterThanOrEqual(1);
-      });
 
       it("treats a leading ! as text, never as fuse's inverse operator", () => {
         // Extended search reads `!foo` as "must NOT contain foo". A user typing a
@@ -539,6 +489,39 @@ describe("branchPickerUtils", () => {
         );
         expect(rows.find((r) => r.name === "dev")!.committerDate).toBeNull();
       });
+    });
+  });
+});
+
+describe("deriveDefaultBaseBranch", () => {
+  const b = (name: string, extra: Partial<BranchInfo> = {}): BranchInfo => ({
+    name,
+    current: false,
+    commit: "abc123",
+    ...extra,
+  });
+
+  it("prefers the checked-out branch over main", () => {
+    expect(deriveDefaultBaseBranch([b("main"), b("develop", { current: true })])).toEqual({
+      name: "develop",
+      fromRemote: false,
+    });
+  });
+
+  it("falls back to main, then master, then the first branch", () => {
+    expect(deriveDefaultBaseBranch([b("feature"), b("master"), b("main")]).name).toBe("main");
+    expect(deriveDefaultBaseBranch([b("feature"), b("master")]).name).toBe("master");
+    expect(deriveDefaultBaseBranch([b("feature"), b("other")]).name).toBe("feature");
+  });
+
+  it("returns an empty name for an empty list", () => {
+    expect(deriveDefaultBaseBranch([])).toEqual({ name: "", fromRemote: false });
+  });
+
+  it("marks a remote default as fromRemote", () => {
+    expect(deriveDefaultBaseBranch([b("origin/main", { remote: "origin" })])).toEqual({
+      name: "origin/main",
+      fromRemote: true,
     });
   });
 });

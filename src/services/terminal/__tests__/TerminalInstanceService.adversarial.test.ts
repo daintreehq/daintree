@@ -14,6 +14,7 @@ const testState = vi.hoisted(() => ({
     onData: vi.fn(() => vi.fn()),
     onExit: vi.fn(() => vi.fn()),
     onTierChanged: vi.fn(() => vi.fn()),
+    onReset: vi.fn(() => vi.fn()),
     write: vi.fn(),
     setActivityTier: vi.fn(),
     wake: vi.fn(),
@@ -24,6 +25,7 @@ const testState = vi.hoisted(() => ({
     })),
     acknowledgeData: vi.fn(),
     acknowledgePortData: vi.fn(),
+    getPortAckGeneration: vi.fn(() => 0),
     discardPortAcks: vi.fn(),
   },
 }));
@@ -361,7 +363,7 @@ describe("TerminalInstanceService adversarial", () => {
 
     expect(managed.pendingWrites).toBe(0);
     expect(testState.clientMocks.acknowledgePortData).toHaveBeenCalledTimes(1);
-    expect(testState.clientMocks.acknowledgePortData).toHaveBeenCalledWith("t1", 3, 1);
+    expect(testState.clientMocks.acknowledgePortData).toHaveBeenCalledWith("t1", 3, 1, 0);
     expect(testState.clientMocks.acknowledgeData).toHaveBeenCalledTimes(1);
     expect(testState.clientMocks.acknowledgeData).toHaveBeenCalledWith("t1", 3);
     expect(notifyWriteCompleteSpy).toHaveBeenCalledTimes(1);

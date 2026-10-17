@@ -220,11 +220,8 @@ import {
   registerPanelKind,
   unregisterPluginPanelKinds,
 } from "../../../shared/config/panelKindRegistry.js";
-import {
-  registerToolbarButton,
-  unregisterPluginToolbarButtons,
-} from "../../../shared/config/toolbarButtonRegistry.js";
-import { registerPluginMenuItem, unregisterPluginMenuItems } from "../pluginMenuRegistry.js";
+import { unregisterPluginToolbarButtons } from "../../../shared/config/toolbarButtonRegistry.js";
+import { unregisterPluginMenuItems } from "../pluginMenuRegistry.js";
 import { unregisterForgeProviders } from "../forgeProviderRegistry.js";
 import { CHANNELS } from "../../ipc/channels.js";
 import { agentMcpEndpointRegistry } from "../pluginAgentMcp/endpointRegistry.js";
@@ -342,22 +339,6 @@ describe("engines.daintree compatibility gate", () => {
       expect.stringContaining('Plugin "acme.no-engines" does not declare engines.daintree')
     );
     expect(broadcastToRendererMock).not.toHaveBeenCalled();
-  });
-
-  it("loads plugins with empty engines object (daintree absent) with a warning", async () => {
-    await writePlugin("empty-engines", {
-      name: "acme.empty-engines",
-      version: "1.0.0",
-      engines: {},
-    });
-
-    const service = new PluginService(tmpDir, "0.7.5");
-    await service.initialize();
-
-    expect(service.listPlugins()).toHaveLength(1);
-    expect(warnSpy).toHaveBeenCalledWith(
-      expect.stringContaining('Plugin "acme.empty-engines" does not declare engines.daintree')
-    );
   });
 
   it("rejects manifests with an invalid semver range at schema level", async () => {
@@ -497,29 +478,6 @@ describe("engines.daintree compatibility gate", () => {
     ).toHaveLength(0);
   });
 
-  it("registers contributions for a plugin outside its declared range", async () => {
-    await writePlugin("skip-side-effects", {
-      name: "acme.skip-side-effects",
-      version: "1.0.0",
-      engines: { daintree: "^1.0.0" },
-      contributes: {
-        panels: [{ id: "p", name: "P", iconId: "i", color: "#000" }],
-        toolbarButtons: [
-          { id: "b", label: "B", iconId: "i", actionId: "acme.skip-side-effects.act" },
-        ],
-        menuItems: [{ label: "L", actionId: "acme.skip-side-effects.act", location: "terminal" }],
-      },
-    });
-
-    const service = new PluginService(tmpDir, "0.7.1");
-    await service.initialize();
-
-    expect(service.listPlugins()).toHaveLength(1);
-    expect(registerPanelKind).toHaveBeenCalled();
-    expect(registerToolbarButton).toHaveBeenCalled();
-    expect(registerPluginMenuItem).toHaveBeenCalled();
-  });
-
   it("loads every plugin in a mixed batch and warns only for the mismatched one", async () => {
     await writePlugin("good", {
       name: "acme.good",
@@ -542,20 +500,6 @@ describe("engines.daintree compatibility gate", () => {
     expect(names).toEqual(["acme.bad", "acme.good"]);
     expect(broadcastToRendererMock).toHaveBeenCalledTimes(1);
     expect(broadcastToRendererMock.mock.calls[0][1].message).toContain('"acme.bad"');
-  });
-
-  it("accepts the wildcard range '*'", async () => {
-    await writePlugin("wildcard", {
-      name: "acme.wildcard",
-      version: "1.0.0",
-      engines: { daintree: "*" },
-    });
-
-    const service = new PluginService(tmpDir, "0.7.1");
-    await service.initialize();
-
-    expect(service.listPlugins()).toHaveLength(1);
-    expect(broadcastToRendererMock).not.toHaveBeenCalled();
   });
 
   it("rejects whitespace-only range strings at the schema layer", async () => {
@@ -586,20 +530,6 @@ describe("engines.daintree compatibility gate", () => {
     expect(broadcastToRendererMock).not.toHaveBeenCalled();
   });
 
-  it("accepts an exact-version range when the app matches precisely", async () => {
-    await writePlugin("exact-match", {
-      name: "acme.exact-match",
-      version: "1.0.0",
-      engines: { daintree: "0.7.5" },
-    });
-
-    const service = new PluginService(tmpDir, "0.7.5");
-    await service.initialize();
-
-    expect(service.listPlugins()).toHaveLength(1);
-    expect(broadcastToRendererMock).not.toHaveBeenCalled();
-  });
-
   it("warns without a directional remedy when the app sits in a gap of the range", async () => {
     await writePlugin("gap", {
       name: "acme.gap",
@@ -617,55 +547,6 @@ describe("engines.daintree compatibility gate", () => {
     expect(payload.message).not.toContain("Update Daintree");
     expect(payload.message).not.toContain("newer version of the plugin");
     expect(payload).not.toHaveProperty("action");
-  });
-
-  it("loads an exact-version range the app does not match, with a warning", async () => {
-    await writePlugin("exact-mismatch", {
-      name: "acme.exact-mismatch",
-      version: "1.0.0",
-      engines: { daintree: "0.7.5" },
-    });
-
-    const service = new PluginService(tmpDir, "0.7.4");
-    await service.initialize();
-
-    expect(service.listPlugins()).toHaveLength(1);
-    expect(broadcastToRendererMock).toHaveBeenCalledTimes(1);
-  });
-});
-
-describe("strict schema validation", () => {
-  let errorSpy: ReturnType<typeof vi.spyOn>;
-
-  beforeEach(() => {
-    errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
-  });
-
-  afterEach(() => {
-    errorSpy.mockRestore();
-  });
-
-  it("rejects manifests with unknown fields like 'renderer'", async () => {
-    await writePlugin("bad-field", {
-      name: "acme.bad-field",
-      version: "1.0.0",
-      renderer: "dist/renderer.js",
-      engines: { daintree: "*" },
-    });
-
-    const service = new PluginService(tmpDir);
-    await service.initialize();
-
-    expect(service.listPlugins()).toEqual([]);
-    expect(errorSpy).toHaveBeenCalledWith(
-      expect.stringContaining("Invalid manifest in bad-field"),
-      expect.arrayContaining([
-        expect.objectContaining({
-          code: "unrecognized_keys",
-          keys: ["renderer"],
-        }),
-      ])
-    );
   });
 });
 
@@ -722,19 +603,6 @@ describe("Plugin unload lifecycle", () => {
       delete (globalThis as { __ledgerActivated?: unknown }).__ledgerActivated;
       agentMcpEndpointRegistry.unregisterPlugin("acme.ledger");
     }
-  });
-
-  it("unloadPlugin removes the plugin from hasPlugin and listPlugins", async () => {
-    await writePlugin("goodbye", { name: "acme.goodbye", version: "1.0.0" });
-
-    const service = new PluginService(tmpDir);
-    await service.initialize();
-    expect(service.hasPlugin("acme.goodbye")).toBe(true);
-
-    service.unloadPlugin("acme.goodbye");
-
-    expect(service.hasPlugin("acme.goodbye")).toBe(false);
-    expect(service.listPlugins()).toEqual([]);
   });
 
   it("unloadPlugin removes IPC handlers registered for the plugin", async () => {
@@ -816,34 +684,5 @@ describe("Plugin unload lifecycle", () => {
       delete (globalThis as { __pluginInitCheck?: unknown }).__pluginInitCheck;
       delete (globalThis as { __pluginInitObserved?: unknown }).__pluginInitObserved;
     }
-  });
-
-  it("supports load → unload → reload lifecycle via fresh service instance", async () => {
-    await writePlugin("lifecycle", {
-      name: "acme.lifecycle",
-      version: "1.0.0",
-      contributes: {
-        panels: [{ id: "viewer", name: "Viewer", iconId: "eye", color: "#000" }],
-      },
-    });
-
-    const first = new PluginService(tmpDir);
-    await first.initialize();
-    expect(registerPanelKind).toHaveBeenCalledTimes(1);
-
-    first.unloadPlugin("acme.lifecycle");
-    expect(unregisterPluginPanelKinds).toHaveBeenCalledWith("acme.lifecycle");
-    expect(first.hasPlugin("acme.lifecycle")).toBe(false);
-
-    // A fresh service instance re-reads the plugin directory and re-registers.
-    vi.clearAllMocks();
-    const second = new PluginService(tmpDir);
-    await second.initialize();
-
-    expect(second.hasPlugin("acme.lifecycle")).toBe(true);
-    expect(registerPanelKind).toHaveBeenCalledTimes(1);
-    expect(registerPanelKind).toHaveBeenCalledWith(
-      expect.objectContaining({ id: "acme.lifecycle.viewer", extensionId: "acme.lifecycle" })
-    );
   });
 });

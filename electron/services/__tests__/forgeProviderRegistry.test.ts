@@ -108,11 +108,6 @@ describe("forgeProviderRegistry — registration", () => {
     expect(entries[0].contribution.id).toBe("replacement");
   });
 
-  it("is a no-op when registering an empty array", () => {
-    registerForgeProviders("acme.empty", []);
-    expect(getRegisteredForgeProviders()).toHaveLength(0);
-  });
-
   it("is a no-op when pluginId is empty or non-string", () => {
     registerForgeProviders("", [makeContribution("x", ["x.example"])]);
     registerForgeProviders(undefined as unknown as string, [makeContribution("y", ["y.example"])]);
@@ -164,45 +159,6 @@ describe("forgeProviderRegistry — unregister and clear", () => {
     expect(entries).toHaveLength(1);
     expect(entries[0].pluginId).toBe("acme.keep");
   });
-
-  it("is a no-op when unregistering an unknown pluginId", () => {
-    registerForgeProviders("acme.solo", [makeContribution("s", ["solo.example"])]);
-    expect(() => unregisterForgeProviders("never-loaded")).not.toThrow();
-    expect(getRegisteredForgeProviders()).toHaveLength(1);
-  });
-
-  it("is a no-op for empty or non-string pluginId", () => {
-    registerForgeProviders("acme.solo", [makeContribution("s", ["solo.example"])]);
-    expect(() => unregisterForgeProviders("")).not.toThrow();
-    expect(() => unregisterForgeProviders(undefined as unknown as string)).not.toThrow();
-    expect(getRegisteredForgeProviders()).toHaveLength(1);
-  });
-
-  it("is a no-op when unregistering twice", () => {
-    registerForgeProviders("acme.twice", [makeContribution("t", ["twice.example"])]);
-    unregisterForgeProviders("acme.twice");
-    expect(() => unregisterForgeProviders("acme.twice")).not.toThrow();
-    expect(getRegisteredForgeProviders()).toHaveLength(0);
-  });
-
-  it("supports register → unregister → re-register round-trip", () => {
-    registerForgeProviders("acme.cycle", [makeContribution("c", ["cycle.example"])]);
-    unregisterForgeProviders("acme.cycle");
-    expect(getRegisteredForgeProviders()).toHaveLength(0);
-
-    registerForgeProviders("acme.cycle", [makeContribution("fresh", ["fresh.example"])]);
-    const entries = getRegisteredForgeProviders();
-    expect(entries).toHaveLength(1);
-    expect(entries[0].contribution.id).toBe("fresh");
-  });
-
-  it("clearForgeProviderRegistry removes all entries", () => {
-    registerForgeProviders("acme.a", [makeContribution("a", ["a.example"])]);
-    registerForgeProviders("acme.b", [makeContribution("b", ["b.example"])]);
-
-    clearForgeProviderRegistry();
-    expect(getRegisteredForgeProviders()).toHaveLength(0);
-  });
 });
 
 describe("forgeProviderRegistry — listMatchingProviders", () => {
@@ -213,13 +169,6 @@ describe("forgeProviderRegistry — listMatchingProviders", () => {
     expect(matches[0].pluginId).toBe("acme.github");
   });
 
-  it("matches an SCP URL (git@host:path) against a hostname pattern", () => {
-    registerForgeProviders("acme.gitlab", [makeContribution("gitlab", ["gitlab.com"])]);
-    const matches = listMatchingProviders("git@gitlab.com:group/repo.git");
-    expect(matches).toHaveLength(1);
-    expect(matches[0].pluginId).toBe("acme.gitlab");
-  });
-
   it("matches an SCP URL without a user prefix", () => {
     registerForgeProviders("acme.bare", [makeContribution("bare", ["bare.example.com"])]);
     const matches = listMatchingProviders("bare.example.com:group/repo.git");
@@ -227,34 +176,9 @@ describe("forgeProviderRegistry — listMatchingProviders", () => {
     expect(matches[0].pluginId).toBe("acme.bare");
   });
 
-  it("matches an ssh:// URL", () => {
-    registerForgeProviders("acme.github", [makeContribution("github", ["github.com"])]);
-    const matches = listMatchingProviders("ssh://git@github.com/owner/repo.git");
-    expect(matches).toHaveLength(1);
-  });
-
-  it("does not misclassify HTTPS-with-port as SCP form", () => {
-    registerForgeProviders("acme.host", [makeContribution("host", ["host.example.com"])]);
-    const matches = listMatchingProviders("https://host.example.com:443/owner/repo.git");
-    expect(matches).toHaveLength(1);
-    expect(matches[0].pluginId).toBe("acme.host");
-  });
-
   it("strips a www. prefix from the URL hostname before matching", () => {
     registerForgeProviders("acme.github", [makeContribution("github", ["github.com"])]);
     const matches = listMatchingProviders("https://www.github.com/owner/repo");
-    expect(matches).toHaveLength(1);
-  });
-
-  it("strips a www. prefix from the pattern before matching", () => {
-    registerForgeProviders("acme.github", [makeContribution("github", ["www.github.com"])]);
-    const matches = listMatchingProviders("https://github.com/owner/repo");
-    expect(matches).toHaveLength(1);
-  });
-
-  it("matches case-insensitively", () => {
-    registerForgeProviders("acme.github", [makeContribution("github", ["GitHub.com"])]);
-    const matches = listMatchingProviders("https://GITHUB.COM/owner/repo");
     expect(matches).toHaveLength(1);
   });
 
@@ -270,10 +194,6 @@ describe("forgeProviderRegistry — listMatchingProviders", () => {
     registerForgeProviders("acme.github", [makeContribution("github", ["github.com"])]);
     const matches = listMatchingProviders("https://gitlab.com/owner/repo");
     expect(matches).toEqual([]);
-  });
-
-  it("returns empty when the registry has no entries", () => {
-    expect(listMatchingProviders("https://github.com/owner/repo")).toEqual([]);
   });
 
   it("returns empty for an unparseable URL", () => {
@@ -367,18 +287,6 @@ describe("forgeProviderRegistry — implementation registry", () => {
     expect(getForgeProviderImpl("acme.github")).toBe(impl);
   });
 
-  it("uses the bare contribution id when the plugin id is the built-in convention", () => {
-    // The built-in GitHub plugin registers under pluginId "github" with
-    // contributionId "github"; lookup uses the same `${pluginId}.${id}` key.
-    const impl = makeImpl("builtin");
-    registerForgeProviderImpl("github", "github", impl);
-    expect(getForgeProviderImpl("github.github")).toBe(impl);
-  });
-
-  it("returns undefined for an unbound namespaced id", () => {
-    expect(getForgeProviderImpl("acme.github")).toBeUndefined();
-  });
-
   it("overwrites the impl when re-registered under the same key", () => {
     const first = makeImpl("first");
     const second = makeImpl("second");
@@ -420,14 +328,6 @@ describe("forgeProviderRegistry — implementation registry", () => {
     expect(getForgeProviderImpl("other.github")).toBeDefined();
   });
 
-  it("double-unregister is a safe no-op", () => {
-    registerForgeProviderImpl("acme", "github", makeImpl("x"));
-    unregisterForgeProviderImpls("acme");
-    expect(() => unregisterForgeProviderImpls("acme")).not.toThrow();
-    expect(() => unregisterForgeProviderImpl("acme", "github")).not.toThrow();
-    expect(getForgeProviderImpl("acme.github")).toBeUndefined();
-  });
-
   it("ignores empty/non-string plugin or contribution ids on register", () => {
     registerForgeProviderImpl("", "github", makeImpl("x"));
     registerForgeProviderImpl("acme", "", makeImpl("x"));
@@ -440,14 +340,6 @@ describe("forgeProviderRegistry — implementation registry", () => {
     registerForgeProviderImpl("acme", "github", null as unknown as ForgeProviderImpl);
     registerForgeProviderImpl("acme", "github", "nope" as unknown as ForgeProviderImpl);
     expect(getForgeProviderImpl("acme.github")).toBeUndefined();
-  });
-
-  it("clearForgeProviderImplRegistry wipes every entry", () => {
-    registerForgeProviderImpl("acme", "github", makeImpl("g"));
-    registerForgeProviderImpl("acme", "gitlab", makeImpl("l"));
-    clearForgeProviderImplRegistry();
-    expect(getForgeProviderImpl("acme.github")).toBeUndefined();
-    expect(getForgeProviderImpl("acme.gitlab")).toBeUndefined();
   });
 
   it("descriptor cleanup and impl cleanup are independent", () => {

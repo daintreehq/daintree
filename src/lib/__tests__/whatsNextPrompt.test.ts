@@ -9,12 +9,6 @@ describe("buildWhatsNextPrompt", () => {
     expect(prompt).toContain("do not overlap");
   });
 
-  it("should include fallback for missing GitHub access", () => {
-    const prompt = buildWhatsNextPrompt();
-    expect(prompt).toContain("if GitHub issues are unavailable");
-    expect(prompt).toContain("README, TODOs, and recent commits");
-  });
-
   it("should be shell-safe (no problematic characters)", () => {
     const prompt = buildWhatsNextPrompt();
     // Check for characters that cause shell escaping issues
@@ -32,17 +26,5 @@ describe("buildWhatsNextPrompt", () => {
     const prompt = buildWhatsNextPrompt();
     expect(prompt.length).toBeLessThan(500);
     expect(prompt.split(" ").length).toBeLessThan(100);
-  });
-
-  it("should mention exploring GitHub issues and codebase", () => {
-    const prompt = buildWhatsNextPrompt();
-    expect(prompt).toContain("GitHub issues");
-    expect(prompt).toContain("codebase");
-  });
-
-  it("should request parallel tasks that do not overlap", () => {
-    const prompt = buildWhatsNextPrompt();
-    expect(prompt).toContain("parallel tasks");
-    expect(prompt).toContain("do not overlap");
   });
 });

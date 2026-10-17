@@ -1,10 +1,12 @@
 import type { BrowserWindow } from "electron";
 import type { OpenFoldersInNewWindow } from "../../shared/types/windowOpen.js";
 import type { WindowRegistry } from "./WindowRegistry.js";
+import type { ProjectViewManager } from "./ProjectViewManager.js";
 import type { OpenWorld, OpenWorldWindow, WindowOpenReservation } from "./windowOpenPolicy.js";
 import { getProjectHistory } from "../services/ProjectHistoryService.js";
 import { logError } from "../utils/logger.js";
 import { getPendingActivationProjectIds } from "./projectActivationClaims.js";
+import { isWindowOnRemoteHost } from "./windowHost.js";
 
 /**
  * Process-wide world state behind `decideProjectOpenTarget` (#12593): which
@@ -91,6 +93,19 @@ export function reserveWindowForOpen(
 }
 
 /**
+ * Whether an open holds the window: one in flight, or a folder whose open
+ * settled without binding a workspace (its git-init prompt or failure is on
+ * screen). Such a window reads as the picker but is not idle.
+ */
+export function hasPendingOpen(windowId: number): boolean {
+  if ((reservations.get(windowId)?.size ?? 0) > 0) return true;
+  if (getPendingActivationProjectIds(windowId).length > 0) return true;
+  // A parked folder counts only until the window binds a workspace, as the snapshot reads it.
+  const parked = unboundOpens.get(windowId);
+  return parked !== undefined && getProjectHistory(windowId).current() === parked.historyHead;
+}
+
+/**
  * Whether the window now has a workspace in front. Unknown reads as unbound —
  * the direction that can cost an extra window but never an occupied one.
  */
@@ -135,6 +150,30 @@ export async function holdWindowForOpen(
 }
 
 /**
+ * The cached views an explicit new-window request may take from a window
+ * (#13274). A project with an open or activation in flight here is on its way
+ * to the front, so it stays. A manager that can't answer releases nothing: the
+ * open then falls back to switching the project in where it already is.
+ */
+function readReleasable(
+  pvm: ProjectViewManager | undefined,
+  viewProjectIds: readonly string[],
+  held: readonly WindowOpenReservation[],
+  windowId: number
+): string[] {
+  if (!pvm) return [];
+  try {
+    return viewProjectIds.filter(
+      (projectId) =>
+        !held.some((r) => r.projectId === projectId) && pvm.canReleaseCachedView(projectId)
+    );
+  } catch (error) {
+    logError("window-open-snapshot-releasable-failed", error, { windowId });
+    return [];
+  }
+}
+
+/**
  * Read every live window into the policy's snapshot shape, most recently
  * focused first. Each window is read from its own view manager — never the
  * process-global one, which only knows the last-created window (#11131) — and a
@@ -154,6 +193,7 @@ export function snapshotOpenWorld(
     const win = ctx.browserWindow;
     if (win.isDestroyed()) continue;
     live.add(ctx.windowId);
+    const onRemoteHost = isWindowOnRemoteHost(ctx.windowId);
     // An in-app switch or menu open that has committed to a project but whose
     // view isn't registered yet (#12596) is an open in flight too, so an
     // external open of that project focuses this window rather than building a
@@ -180,18 +220,21 @@ export function snapshotOpenWorld(
       ) {
         unboundOpens.delete(ctx.windowId);
       }
+      const viewProjectIds =
+        pvm
+          ?.getAllViews()
+          .filter((entry) => !entry.view.webContents.isDestroyed())
+          .map((entry) => entry.projectId) ?? [];
       windows.push({
         windowId: ctx.windowId,
         activeProjectId,
         bridgeProjectId,
-        viewProjectIds:
-          pvm
-            ?.getAllViews()
-            .filter((entry) => !entry.view.webContents.isDestroyed())
-            .map((entry) => entry.projectId) ?? [],
+        viewProjectIds,
+        releasableViewProjectIds: readReleasable(pvm, viewProjectIds, held, ctx.windowId),
         ready: pvm !== undefined && readyWindows.has(win),
         reservations: held,
         unboundOpens: [...(unboundOpens.get(ctx.windowId)?.claims ?? [])],
+        onRemoteHost,
       });
     } catch (error) {
       logError("window-open-snapshot-manager-failed", error, { windowId: ctx.windowId });
@@ -203,6 +246,7 @@ export function snapshotOpenWorld(
         ready: false,
         reservations: held,
         unboundOpens: [...(unboundOpens.get(ctx.windowId)?.claims ?? [])],
+        onRemoteHost,
       });
     }
   }

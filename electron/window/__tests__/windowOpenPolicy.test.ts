@@ -65,11 +65,6 @@ describe("decideProjectOpenTarget — external opens (#12593 acceptance)", () =>
     expect(decideProjectOpenTarget(external(), world([]))).toEqual({ kind: "create" });
   });
 
-  it("never replaces the most recently focused window", () => {
-    const decision = decideProjectOpenTarget(external(), world([occupied(7), occupied(3)]));
-    expect(decision).toEqual({ kind: "create" });
-  });
-
   it("picks the most recently focused of several empty windows", () => {
     expect(decideProjectOpenTarget(external(), world([occupied(1), win(4), win(2)]))).toEqual({
       kind: "activate",
@@ -304,5 +299,147 @@ describe("decideProjectOpenTarget — rule 4: preference and origin", () => {
 
   it("off with no windows still creates one", () => {
     expect(decideProjectOpenTarget(external(), world([], "off"))).toEqual({ kind: "create" });
+  });
+});
+
+describe("decideProjectOpenTarget — windows on a remote host", () => {
+  const onHost = (windowId: number, overrides: Partial<OpenWorldWindow> = {}) =>
+    win(windowId, { onRemoteHost: true, ...overrides });
+
+  it("never fills a host window showing the host's project list with a folder from this machine", () => {
+    expect(decideProjectOpenTarget(external(), world([onHost(4), win(2)]))).toEqual({
+      kind: "activate",
+      windowId: 2,
+      reason: "empty",
+    });
+    expect(decideProjectOpenTarget(external(), world([onHost(4)]))).toEqual({ kind: "create" });
+  });
+
+  it("off skips a focused host window for the most recent window on this machine", () => {
+    const windows = [onHost(3, { activeProjectId: "studio-01:p3" }), occupied(1)];
+    expect(decideProjectOpenTarget(external(), world(windows, "off"))).toEqual({
+      kind: "activate",
+      windowId: 1,
+      reason: "current",
+    });
+    expect(
+      decideProjectOpenTarget(
+        external(),
+        world([onHost(3, { activeProjectId: "studio-01:p3" })], "off")
+      )
+    ).toEqual({ kind: "create" });
+  });
+
+  it("current never lands in an asking window that is on a host", () => {
+    const decision = decideProjectOpenTarget(
+      inApp(3, { disposition: "current" }),
+      world([onHost(3, { activeProjectId: "studio-01:p3" }), occupied(1)])
+    );
+    expect(decision).toEqual({ kind: "activate", windowId: 1, reason: "current" });
+  });
+
+  it("still sends the folder to a host window that holds its cached view", () => {
+    const holder = onHost(5, {
+      activeProjectId: "studio-01:p5",
+      viewProjectIds: ["studio-01:p5", "dropped"],
+    });
+    expect(decideProjectOpenTarget(external(), world([win(2), holder]))).toEqual({
+      kind: "activate",
+      windowId: 5,
+      reason: "owner",
+    });
+  });
+});
+
+describe("decideProjectOpenTarget — a new window takes a cached view (#13274)", () => {
+  // Window 2 shows p2 and keeps "dropped" cached behind it.
+  const holder = (overrides: Partial<OpenWorldWindow> = {}) =>
+    win(2, {
+      activeProjectId: "p2",
+      viewProjectIds: ["p2", "dropped"],
+      releasableViewProjectIds: ["dropped"],
+      ...overrides,
+    });
+  const newWindow = (initiatingWindowId: number) =>
+    inApp(initiatingWindowId, { disposition: "new" });
+
+  it("releases it from the holder and opens a new window, asked from another window", () => {
+    expect(decideProjectOpenTarget(newWindow(1), world([occupied(1), holder()]))).toEqual({
+      kind: "create",
+      releaseFromWindowId: 2,
+    });
+  });
+
+  it("releases it into an empty window when there is one", () => {
+    expect(decideProjectOpenTarget(newWindow(1), world([occupied(1), holder(), win(3)]))).toEqual({
+      kind: "activate",
+      windowId: 3,
+      reason: "empty",
+      releaseFromWindowId: 2,
+    });
+  });
+
+  it("releases it from the asking window itself, never landing back there", () => {
+    expect(decideProjectOpenTarget(newWindow(2), world([holder()]))).toEqual({
+      kind: "create",
+      releaseFromWindowId: 2,
+    });
+  });
+
+  it("keeps a view the holder can't release, switching to it there as before", () => {
+    const pinned = holder({ releasableViewProjectIds: [] });
+    expect(decideProjectOpenTarget(newWindow(1), world([occupied(1), pinned]))).toEqual({
+      kind: "activate",
+      windowId: 2,
+      reason: "owner",
+    });
+  });
+
+  it("opens it in a picker window that holds it rather than moving it", () => {
+    const picker = win(2, { viewProjectIds: ["dropped"], releasableViewProjectIds: ["dropped"] });
+    expect(decideProjectOpenTarget(newWindow(1), world([occupied(1), picker]))).toEqual({
+      kind: "activate",
+      windowId: 2,
+      reason: "owner",
+    });
+  });
+
+  it("moves nothing when a legacy fleet holds it cached in two windows", () => {
+    const twin = win(3, {
+      activeProjectId: "p3",
+      viewProjectIds: ["p3", "dropped"],
+      releasableViewProjectIds: ["dropped"],
+    });
+    expect(decideProjectOpenTarget(newWindow(1), world([occupied(1), holder(), twin]))).toEqual({
+      kind: "activate",
+      windowId: 2,
+      reason: "owner",
+    });
+  });
+
+  it("still focuses a window showing the project", () => {
+    expect(
+      decideProjectOpenTarget(newWindow(1), world([occupied(1), occupied(2, "dropped")]))
+    ).toEqual({ kind: "focus", windowId: 2 });
+  });
+
+  it("still focuses a window with an open of it in flight", () => {
+    const claimed = holder({ reservations: [{ projectId: "dropped", projectPath: null }] });
+    expect(decideProjectOpenTarget(newWindow(1), world([occupied(1), claimed]))).toEqual({
+      kind: "focus",
+      windowId: 2,
+    });
+  });
+
+  it.each([
+    ["an external open", external()],
+    ["a plain in-app open under the new-window preference", inApp(1)],
+    ["a switch", inApp(1, { intent: "switch" })],
+  ])("leaves the cached view where it is for %s", (_label, request) => {
+    expect(decideProjectOpenTarget(request, world([occupied(1), holder()], "on"))).toEqual({
+      kind: "activate",
+      windowId: 2,
+      reason: "owner",
+    });
   });
 });

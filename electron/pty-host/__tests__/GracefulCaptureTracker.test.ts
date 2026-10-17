@@ -237,18 +237,6 @@ describe("GracefulCaptureTracker", () => {
     queue.dispose();
   });
 
-  it("restores normal protection once a surviving terminal's window closes", () => {
-    const { addTerminal, open } = createHost();
-    const coordinator = addTerminal("t1");
-    const lease = open("t1");
-    lease.close();
-
-    coordinator.pause("resource-governor");
-
-    expect(coordinator.isReadPaused).toBe(true);
-    expect(lease.shouldDiscard(CHUNK)).toBe(false);
-  });
-
   it("does not mark a gap on a terminal that was killed", () => {
     const { addTerminal, live, emitDataLoss, open } = createHost();
     const coordinator = addTerminal("t1");

@@ -6,7 +6,6 @@ import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import { afterAll, describe, expect, it } from "vitest";
 import { parseArgs } from "../run";
-import { REGISTRY } from "../registry";
 
 /**
  * The evidence-rich rerun, and the rule that keeps it from poisoning the
@@ -45,11 +44,6 @@ async function diagnose(
 }
 
 describe("perf diagnose", () => {
-  it("is reachable from the dispatcher", () => {
-    expect(REGISTRY.diagnose).toBeDefined();
-    expect(REGISTRY.diagnose!.kind).toBe("diagnostic");
-  });
-
   it("requires a scenario", { timeout: 60_000 }, async () => {
     const { code, stderr } = await diagnose([]);
     expect(code).toBe(1);

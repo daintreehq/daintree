@@ -1,6 +1,5 @@
 // eager-import-allow: reads MCP server settings via store.get synchronously during service init
 import { randomUUID } from "node:crypto";
-import { webContents as webContentsModule } from "electron";
 import { store } from "../store.js";
 import { CHANNELS } from "../ipc/channels.js";
 import type { WindowRegistry } from "../window/WindowRegistry.js";
@@ -35,6 +34,9 @@ import type { OrchestratorPaneIdentity } from "./McpPaneConfigService.js";
 import { AuditService, type McpAuditDiagnosticsSnapshot } from "./mcp-server/auditLog.js";
 import { TurnOutcomeService } from "./mcp-server/turnOutcomeLog.js";
 import { createRendererBridge } from "./mcp-server/rendererBridge.js";
+import { onMcpDriveTargetChange } from "./mcp-server/driveTarget.js";
+import { getEndpointRegistry } from "../ipc/endpointRegistry.js";
+import { onRendererScopeChanged } from "../window/webContentsRegistry.js";
 import { handleWaitUntilIdle, handleWaitUntilIdleBatch } from "./mcp-server/waitUntilIdle.js";
 import { handleSkillsSearch, handleSkillsLoad } from "./mcp-server/skills.js";
 import { handleProjectRunCheck } from "./mcp-server/projectCheck.js";
@@ -43,14 +45,20 @@ import {
   isAgentPaneInWorkspace,
 } from "./mcp-server/terminalStatus.js";
 import { handleTerminalReadLastMessageOwned } from "./mcp-server/terminalLastMessage.js";
-import { TerminalNotifyService, paneNotifyKey } from "./mcp-server/terminalNotify.js";
+import {
+  TerminalNotifyService,
+  helpNotifyKey,
+  paneNotifyKey,
+  type LaneWake,
+} from "./mcp-server/terminalNotify.js";
 import { ReplyWaiterService } from "./mcp-server/replyWaiter.js";
 import type { PaneNotifyState } from "../../shared/types/terminalNotify.js";
 import { broadcastToProjectRenderers } from "../ipc/utils.js";
 import { cleanupResourceSubscriptions } from "./mcp-server/sessionServer.js";
-import { HttpLifecycle } from "./mcp-server/httpLifecycle.js";
+import { HttpLifecycle, sendToPinnedView } from "./mcp-server/httpLifecycle.js";
 import { AbusePolicy } from "./mcp-server/abusePolicy.js";
 import { WorkspaceViewLeaseRegistry } from "./mcp-server/workspaceViewLease.js";
+import { routedViewWorktreePort } from "./mcp-server/worktreeViewPort.js";
 import { createPluginMcpRoute } from "./pluginAgentMcp/pluginMcpRoute.js";
 import type * as PluginServiceModule from "./PluginService.js";
 import { getPtyClient, setMcpServerServiceRef } from "../window/serviceRefs.js";
@@ -123,6 +131,7 @@ export class McpServerService {
    * recording the first time the MCP server restarts.
    */
   private readonly persistentListeners: Array<() => void> = [];
+  private hostBridgeListenersInstalled = false;
   private readonly bridge;
   /**
    * Views with an MCP operation in flight (#11790). Instance-owned rather than
@@ -241,7 +250,8 @@ export class McpServerService {
       this.pendingManifests,
       this.pendingDispatches,
       () => this._registry,
-      this.viewLeases
+      this.viewLeases,
+      routedViewWorktreePort
     );
 
     // Subscribes to the bus and the pty-host only while a pane has a notice pending.
@@ -317,6 +327,10 @@ export class McpServerService {
         ),
       requestManifestForWorkspace: (workspaceId, preferredWebContentsId) =>
         this.bridge.requestManifestForWorkspace(workspaceId, preferredWebContentsId),
+      noteToolListRoute: (sessionId, workspaceId, preferredWebContentsId) =>
+        this.sessionStore.toolListRouteWatch.noteListed(sessionId, () =>
+          this.bridge.describeWorkspaceRoute(workspaceId, preferredWebContentsId)
+        ),
       dispatchActionForWorkspace: (
         workspaceId,
         actionId,
@@ -396,7 +410,17 @@ export class McpServerService {
       cleanupListeners: this.cleanupListeners,
       pendingManifests: this.pendingManifests,
       pendingDispatches: this.pendingDispatches,
-      setupIpcListeners: () => this.bridge.setupListeners(this.cleanupListeners),
+      setupIpcListeners: () => {
+        this.bridge.setupListeners(this.cleanupListeners);
+        // Everything a bound session's route is read from: the drive lease,
+        // the endpoints that can hold it, and this machine's own views.
+        const recheckRoutes = () => this.sessionStore.toolListRouteWatch.check();
+        this.cleanupListeners.push(
+          onMcpDriveTargetChange(recheckRoutes),
+          getEndpointRegistry().onChange(recheckRoutes),
+          onRendererScopeChanged(recheckRoutes)
+        );
+      },
       emitStatusChange: () => this.emitStatusChange(),
       emitRuntimeStateChange: () => this.emitRuntimeStateChange(),
       setConfig: (patch) => this.persistConfig(patch),
@@ -465,6 +489,19 @@ export class McpServerService {
 
   setHelpSessionIdResolver(resolver: HelpSessionIdResolver | null): void {
     this.httpLifecycle.setHelpSessionIdResolver(resolver);
+  }
+
+  /**
+   * A lane's messaging enrollment began or ended (#13335). Every assistant
+   * session re-lists, since its inbox tools are offered only while its own
+   * lane is enrolled; a transport closing meanwhile reads the new list anyway.
+   */
+  notifyAssistantMessagingChanged(): void {
+    for (const sessionId of this.sessionStore.sessionHelpIdMap.keys()) {
+      const session =
+        this.sessionStore.httpSessions.get(sessionId) ?? this.sessionStore.sessions.get(sessionId);
+      session?.server.sendToolListChanged().catch(() => {});
+    }
   }
 
   setAssistantPaneWebContentsResolver(resolver: AssistantPaneWebContentsResolver | null): void {
@@ -640,6 +677,18 @@ export class McpServerService {
     return this.terminalNotify.getPaneState(terminalId);
   }
 
+  /** Tell an assistant lane a message is waiting, on the same line its notices use (#13333). */
+  queueLaneWake(
+    lane: { helpSessionId: string; terminalId: string; projectId: string },
+    wake: LaneWake
+  ): void {
+    this.terminalNotify.enqueueWake(
+      { key: helpNotifyKey(lane.helpSessionId), terminalId: lane.terminalId },
+      lane.projectId,
+      wake
+    );
+  }
+
   /** The pane's own "stop": every notice it has pending goes, and nothing more is typed. */
   stopPaneNotices(terminalId: string): void {
     this.terminalNotify.stopPane(terminalId);
@@ -732,7 +781,11 @@ export class McpServerService {
       // leaving it listening after the user turned it off.
       await this.httpLifecycle.stop();
     } else if (wasEnabled !== enabled) {
-      if (!enabled) this.httpLifecycle.setLastError(null);
+      if (!enabled) {
+        // Lane wakes can be queued while the server isn't listening.
+        this.terminalNotify.disposeAll();
+        this.httpLifecycle.setLastError(null);
+      }
       this.emitRuntimeStateChange();
     }
   }
@@ -770,9 +823,20 @@ export class McpServerService {
     }
   }
 
-  async start(registry: WindowRegistry): Promise<void> {
-    this._registry = registry;
-    await this.httpLifecycle.start(registry);
+  /**
+   * The registry may be empty: a windowless Host starts the server before any
+   * window exists, and tools that need a renderer refuse with their usual typed
+   * error until one attaches. Without one passed in, the process registry is
+   * used — it exists from the first line of main, windows or not.
+   */
+  async start(registry?: WindowRegistry | null): Promise<void> {
+    const resolved = registry ?? this._registry ?? getWindowRegistry();
+    if (!resolved) {
+      console.warn("[MCP] No window registry available — skipping start");
+      return;
+    }
+    this._registry = resolved;
+    await this.httpLifecycle.start(resolved);
   }
 
   async ensureReady(): Promise<boolean> {
@@ -827,6 +891,14 @@ export class McpServerService {
    * the workspace id outlives the view, the WebContents id is what identifies
    * the exact renderer a request is waiting on.
    */
+  /**
+   * Whether a routed MCP request is awaiting this exact view (#13348). Caching
+   * then leaves its worktree port to the request, whose settle closes it.
+   */
+  hasDispatchLease(webContentsId: number): boolean {
+    return this.viewLeases.has(webContentsId);
+  }
+
   getWorkspaceViewActivity(
     workspaceId: string,
     webContentsId: number
@@ -1066,10 +1138,24 @@ export class McpServerService {
   disconnectHelpBearer(rawToken: string, helpSessionId: string): void {
     try {
       this.revokeOwnershipPrincipal(helpOwnershipPrincipal(helpSessionId));
+      // The lane's own notices and wakes are held under its session id.
+      this.terminalNotify.revokeOwner(helpNotifyKey(helpSessionId));
     } finally {
       const tokenHash = this.httpLifecycle.findHelpBearerHash(rawToken);
       if (tokenHash !== null) this.disconnectBearer(tokenHash);
     }
+  }
+
+  /**
+   * Retire a help bearer's live transports and nothing else (#13360): a view
+   * took the assistant over, and a transport's pin is fixed when it is built.
+   * The bearer stays valid, so the client's next call reconnects and its
+   * handshake pins it to the new view. The ownership principal is left alone
+   * — the assistant is the same session, and what it launched is still its own.
+   */
+  resetHelpTransports(rawToken: string): void {
+    const tokenHash = this.httpLifecycle.findHelpBearerHash(rawToken);
+    if (tokenHash !== null) this.disconnectBearer(tokenHash);
   }
 
   /**
@@ -1106,13 +1192,37 @@ export class McpServerService {
     if (!this.sessionStore.isRendererOwnedOrigin(sessionId)) return;
     const id = this.sessionStore.sessionWebContentsMap.get(sessionId);
     if (id === undefined) return;
-    const wc = webContentsModule.fromId(id);
-    if (!wc || wc.isDestroyed()) return;
-    try {
-      wc.send(CHANNELS.MCP_GRANT_LIFECYCLE, payload);
-    } catch (err) {
-      console.error("[MCP] grant lifecycle send failed:", err);
-    }
+    sendToPinnedView(id, CHANNELS.MCP_GRANT_LIFECYCLE, () => payload, "grant lifecycle");
+  }
+
+  /**
+   * Remote Hosts: a host's MCP server runs an action in the local view that
+   * drives one of its projects. Answered over the same renderer bridge a
+   * pinned session uses, whether or not this machine's own server is on.
+   */
+  dispatchActionForHost(
+    ...args: Parameters<typeof this.bridge.dispatchActionForWebContents>
+  ): ReturnType<typeof this.bridge.dispatchActionForWebContents> {
+    this.ensureHostBridgeListeners();
+    return this.bridge.dispatchActionForWebContents(...args);
+  }
+
+  /** Remote Hosts: the action manifest of the local view that drives a host's project. */
+  requestManifestForHost(webContentsId: number): Promise<ActionManifestEntry[]> {
+    this.ensureHostBridgeListeners();
+    return this.bridge.requestManifestForWebContents(webContentsId);
+  }
+
+  /**
+   * The renderer answers on the bridge's response channels, which are
+   * otherwise heard only while this machine's server runs. Kept for the
+   * service's life: a second copy while the server also listens finds no
+   * pending request and does nothing.
+   */
+  private ensureHostBridgeListeners(): void {
+    if (this.hostBridgeListenersInstalled) return;
+    this.hostBridgeListenersInstalled = true;
+    this.bridge.setupListeners(this.persistentListeners);
   }
 
   // Delegates for test access — tests call .bind(service) on these.

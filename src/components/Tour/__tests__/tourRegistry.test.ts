@@ -35,10 +35,6 @@ describe("tourRegistry", () => {
     unregister();
   });
 
-  it("knows nothing of an unregistered id", () => {
-    expect(getTour("plugin:missing/tour")).toBeUndefined();
-  });
-
   it("refuses a second tour under the same id, and cleanup withdraws only its own", () => {
     const first = registration("plugin:acme.tools/dup");
     const unregister = registerTour(first);

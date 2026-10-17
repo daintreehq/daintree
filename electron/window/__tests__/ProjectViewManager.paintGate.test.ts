@@ -241,6 +241,8 @@ function createMockWindow() {
     removeListener: vi.fn(),
     getContentBounds: vi.fn(() => ({ x: 0, y: 0, width: 800, height: 600 })),
     contentView: {
+      on: vi.fn(),
+      removeListener: vi.fn(),
       children,
       addChildView: vi.fn((view: unknown, index?: number) => {
         // Re-adding a view whose parent is unchanged reorders it rather than
@@ -752,28 +754,6 @@ describe("ProjectViewManager — paint gate (cold-start visible swap)", () => {
         hardTimeoutOrigin: "gate-armed",
         waitedMs: PAINT_HARD_MS,
       });
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-
-  it("hard timeout drops the pending focus intent", async () => {
-    vi.useFakeTimers();
-    try {
-      const slowWc = createMockWebContents();
-      wcQueue.push(slowWc);
-
-      manager.setPendingFocusIntent("proj-b", { intent: "focus-next-waiting" });
-
-      const switchPromise = manager.switchTo("proj-b", "/path/b");
-      const rejection = expectRejection(switchPromise);
-      await vi.advanceTimersByTimeAsync(0);
-      // Past hard bound — switch abandoned, intent dropped rather than
-      // delivered into a view that never proved it could render.
-      await vi.advanceTimersByTimeAsync(200);
-      await rejection;
-
-      expect(slowWc.send).not.toHaveBeenCalledWith("project:focus-on-activate", expect.anything());
     } finally {
       vi.useRealTimers();
     }
@@ -1381,22 +1361,6 @@ describe("ProjectViewManager — paint gate (cold-start visible swap)", () => {
     expect(win.contentView.removeChildView).toHaveBeenCalledTimes(1);
   });
 
-  it("does not detach outgoing view when cold-start load fails", async () => {
-    const failWc = createMockWebContents({ autoFinishLoad: false });
-    wcQueue.push(failWc);
-
-    const switchPromise = manager.switchTo("proj-b", "/path/b").catch((err) => err);
-    await Promise.resolve();
-    failWc._fireOnce("did-fail-load", {}, -3, "ERR_FAILED");
-
-    await switchPromise;
-
-    // The outgoing view (proj-a) must still be attached and active because
-    // the deferred-deactivation path never reached the swap.
-    expect(manager.getActiveProjectId()).toBe("proj-a");
-    expect(failWc.close).toHaveBeenCalled();
-  });
-
   it("captures paint signal that arrives before did-finish-load resolves", async () => {
     // Regression: the paint gate must be armed BEFORE awaiting loadView,
     // otherwise an immediate signal (renderer's double-rAF firing on the
@@ -1594,23 +1558,6 @@ describe("ProjectViewManager — paint gate (cold-start visible swap)", () => {
     } finally {
       vi.useRealTimers();
     }
-  });
-
-  it("dispose() while paint gate is pending settles the wait without throwing", async () => {
-    const incomingWc = createMockWebContents();
-    wcQueue.push(incomingWc);
-
-    const switchPromise = manager.switchTo("proj-b", "/path/b").catch((err) => err);
-    await Promise.resolve();
-    await Promise.resolve();
-
-    // Dispose while gate is open — the pending paint promise must resolve
-    // (as "cancelled") so the underlying performSwitch chain doesn't leak.
-    expect(() => manager.dispose()).not.toThrow();
-
-    // The switch may resolve or reject depending on subsequent code paths;
-    // we just need it to settle, not hang.
-    await Promise.race([switchPromise, new Promise((r) => setTimeout(r, 100))]);
   });
 
   it("calls unfreezeWebContents on the incoming view after did-finish-load", async () => {
@@ -2264,5 +2211,211 @@ describe("ProjectViewManager — frame confirmation before reveal (#12394)", () 
     expect(manager.pendingPaintGate).not.toBeNull();
     await vi.advanceTimersByTimeAsync(1);
     await expect(gate).resolves.toBe("unpainted");
+  });
+});
+
+describe("ProjectViewManager — pending focus intent", () => {
+  let manager: ProjectViewManager;
+  let win: ReturnType<typeof createMockWindow>;
+  let initialWc: MockWc;
+
+  beforeEach(() => {
+    nextWebContentsId = 800;
+    wcQueue = [];
+
+    win = createMockWindow();
+    manager = new ProjectViewManager(win as never, {
+      dirname: "/test",
+      paintGateTimeoutMs: 50,
+      paintGateHardTimeoutMs: 150,
+      // Resolve the warm anti-flash bridge immediately — these tests assert
+      // focus-intent delivery on reactivation, not the warm gate timing (#9679).
+      warmPaintGateTimeoutMs: 0,
+      warmPaintGateHardTimeoutMs: 0,
+      // Compressed onto the same scale as the paint bounds: the focus-intent
+      // (`painted`) channel stretches its hard bound to this value, and the
+      // hard-timeout test below is written against the 150 ms bound.
+      viewLoadTimeoutMs: 100,
+      cachedProjectViews: 3,
+    });
+
+    initialWc = createMockWebContents();
+    const initialView = { webContents: initialWc, setBounds: vi.fn() };
+    win.contentView.addChildView(initialView);
+    manager.registerInitialView(initialView as never, "proj-a", "/path/a");
+  });
+
+  afterEach(() => {
+    manager.dispose();
+  });
+
+  it("does not deliver focus intent when paint gate hard timeout fires", async () => {
+    vi.useFakeTimers();
+    try {
+      const slowWc = createMockWebContents();
+      wcQueue.push(slowWc);
+
+      manager.setPendingFocusIntent("proj-b", { intent: "focus-next-waiting" });
+      const switchPromise = manager.switchTo("proj-b", "/path/b");
+      // Handler attached in the same tick: the hard timeout abandons the
+      // switch (#11635), so this promise rejects rather than resolving.
+      const rejection = switchPromise.then(
+        () => {
+          throw new Error("Expected the switch to reject");
+        },
+        (err: unknown) => err as Error
+      );
+      await vi.advanceTimersByTimeAsync(0);
+
+      // Past hard bound (150 ms). The soft bound at 50 ms only warns —
+      // intent is dropped on hard fall-through, not on soft warning.
+      await vi.advanceTimersByTimeAsync(200);
+      await rejection;
+
+      const focusSends = slowWc.send.mock.calls.filter(
+        ([channel]) => channel === CHANNELS.PROJECT_FOCUS_ON_ACTIVATE
+      );
+      expect(focusSends).toHaveLength(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("does not deliver focus intent on cold-start load failure", async () => {
+    const failWc = createMockWebContents({ autoFinishLoad: false });
+    wcQueue.push(failWc);
+
+    manager.setPendingFocusIntent("proj-b", { intent: "focus-next-waiting" });
+    const switchPromise = manager.switchTo("proj-b", "/path/b").catch((err) => err);
+    await Promise.resolve();
+    failWc._fireOnce("did-fail-load", {}, -3, "ERR_FAILED");
+    await switchPromise;
+
+    const focusSends = failWc.send.mock.calls.filter(
+      ([channel]) => channel === CHANNELS.PROJECT_FOCUS_ON_ACTIVATE
+    );
+    expect(focusSends).toHaveLength(0);
+  });
+
+  it("delivers focus intent on cached-view reactivation", async () => {
+    // Prime B as a cached view.
+    const bWc = createMockWebContents();
+    wcQueue.push(bWc);
+    const firstSwitch = manager.switchTo("proj-b", "/path/b");
+    await Promise.resolve();
+    await Promise.resolve();
+    manager.signalViewPainted(bWc.id);
+    await firstSwitch;
+
+    // Switch back to A (cached, since maxCachedViews=3).
+    const cachedASwitch = manager.switchTo("proj-a", "/path/a");
+    await cachedASwitch;
+
+    initialWc.send.mockClear();
+
+    // Now switch back to B with a pending focus intent. B is in the LRU cache,
+    // so the cached path fires — it delivers the intent itself once its warm
+    // gate settles, not through the cold paint-gate intent handling.
+    bWc.send.mockClear();
+    manager.setPendingFocusIntent("proj-b", { intent: "focus-next-waiting" });
+    const switchBack = manager.switchTo("proj-b", "/path/b");
+    await switchBack;
+
+    const focusSends = bWc.send.mock.calls.filter(
+      ([channel]) => channel === CHANNELS.PROJECT_FOCUS_ON_ACTIVATE
+    );
+    expect(focusSends).toHaveLength(1);
+    expect(focusSends[0][1]).toEqual({ intent: "focus-next-waiting" });
+  });
+
+  it("consumes focus intent exactly once — later unrelated switch does not refire", async () => {
+    const incomingWc = createMockWebContents();
+    wcQueue.push(incomingWc);
+
+    manager.setPendingFocusIntent("proj-b", { intent: "focus-next-waiting" });
+    const switchPromise = manager.switchTo("proj-b", "/path/b");
+    await Promise.resolve();
+    await Promise.resolve();
+    manager.signalViewPainted(incomingWc.id);
+    await switchPromise;
+
+    expect(
+      incomingWc.send.mock.calls.filter(
+        ([channel]) => channel === CHANNELS.PROJECT_FOCUS_ON_ACTIVATE
+      )
+    ).toHaveLength(1);
+
+    incomingWc.send.mockClear();
+    initialWc.send.mockClear();
+
+    // Switch back to A without a pending intent — must not retrigger the
+    // focus delivery on either view.
+    const back = manager.switchTo("proj-a", "/path/a");
+    await back;
+
+    expect(
+      incomingWc.send.mock.calls.filter(
+        ([channel]) => channel === CHANNELS.PROJECT_FOCUS_ON_ACTIVATE
+      )
+    ).toHaveLength(0);
+    expect(
+      initialWc.send.mock.calls.filter(
+        ([channel]) => channel === CHANNELS.PROJECT_FOCUS_ON_ACTIVATE
+      )
+    ).toHaveLength(0);
+  });
+
+  it("delivers focus intent when switchTo targets the already-active project", async () => {
+    // Same-project switchTo hits the early-return path. The renderer-side
+    // action short-circuits before this point, but a race between two
+    // concurrent switchTo calls can land here.
+    manager.setPendingFocusIntent("proj-a", { intent: "focus-next-waiting" });
+    const result = await manager.switchTo("proj-a", "/path/a");
+
+    expect(result.isNew).toBe(false);
+    const focusSends = initialWc.send.mock.calls.filter(
+      ([channel]) => channel === CHANNELS.PROJECT_FOCUS_ON_ACTIVATE
+    );
+    expect(focusSends).toHaveLength(1);
+
+    // Intent must be cleared — a later switchTo without a fresh intent must
+    // not re-fire.
+    initialWc.send.mockClear();
+    await manager.switchTo("proj-a", "/path/a");
+    expect(
+      initialWc.send.mock.calls.filter(([c]) => c === CHANNELS.PROJECT_FOCUS_ON_ACTIVATE)
+    ).toHaveLength(0);
+  });
+
+  it("does not deliver focus intent for a different projectId than the one switched", async () => {
+    const incomingWc = createMockWebContents();
+    wcQueue.push(incomingWc);
+
+    // Intent is for "proj-c", but we switch to "proj-b". The intent must
+    // not be delivered (different project), and must be cleared so a later
+    // unrelated switch can't pick it up.
+    manager.setPendingFocusIntent("proj-c", { intent: "focus-next-waiting" });
+    const switchPromise = manager.switchTo("proj-b", "/path/b");
+    await Promise.resolve();
+    await Promise.resolve();
+    manager.signalViewPainted(incomingWc.id);
+    await switchPromise;
+
+    expect(
+      incomingWc.send.mock.calls.filter(
+        ([channel]) => channel === CHANNELS.PROJECT_FOCUS_ON_ACTIVATE
+      )
+    ).toHaveLength(0);
+
+    // Subsequent switch to A (no intent set) — also must not fire, confirming
+    // the mismatched intent was discarded rather than queued.
+    initialWc.send.mockClear();
+    const back = manager.switchTo("proj-a", "/path/a");
+    await back;
+    expect(
+      initialWc.send.mock.calls.filter(
+        ([channel]) => channel === CHANNELS.PROJECT_FOCUS_ON_ACTIVATE
+      )
+    ).toHaveLength(0);
   });
 });

@@ -9,10 +9,13 @@ import type { ProjectViewManager } from "../window/ProjectViewManager.js";
 import { scrubSecrets } from "../../shared/utils/secretScrubber.js";
 import { store, windowStatesStore } from "../store.js";
 import { isRunningUnderRosetta } from "../utils/rosettaDetection.js";
+import { findOnPath } from "../utils/findOnPath.js";
 import { getFocusThrottlePollMultiplier, isFocusThrottled } from "../window/focusThrottleState.js";
 import { getPowerPolicy } from "../window/powerPolicy.js";
 import { getRendererTerminalDiagnosticsSamples } from "./RendererTerminalDiagnosticsCache.js";
 import type { HandlerDependencies } from "../ipc/types.js";
+import { cliSpawnTarget } from "../utils/windowsCliSpawn.js";
+import { findWindowsCommand } from "../utils/windowsExecutable.js";
 import type {
   WhySlowFocusThrottleSnapshot,
   WhySlowMemorySnapshot,
@@ -156,10 +159,13 @@ async function runCommand(
   timeoutMs = SECTION_TIMEOUT_MS
 ): Promise<string | null> {
   try {
-    const { stdout } = await execFileAsync(cmd, args, {
+    const target = await cliSpawnTarget(cmd, args);
+    const { stdout } = await execFileAsync(target.command, target.args, {
       encoding: "utf8",
       timeout: timeoutMs,
-      env: process.env,
+      env: { ...process.env, ...target.env },
+      windowsHide: true,
+      windowsVerbatimArguments: target.windowsVerbatimArguments,
     });
     return stdout.trim();
   } catch {
@@ -327,16 +333,26 @@ async function collectProcess() {
   return result;
 }
 
+/** POSIX resolves in-process: the external `which` is absent from minimal Linux installs. */
+async function resolveToolPath(tool: string): Promise<string | null> {
+  // Windows reads PATH's directories directly: `where` prints in the console
+  // code page, which mangles a non-ASCII path, and lists npm's extensionless
+  // sh script ahead of the `.cmd` that runs.
+  if (process.platform === "win32") return findWindowsCommand(tool);
+  return findOnPath(tool, { env: process.env, timeoutMs: 3000 });
+}
+
 async function collectTools() {
   const tools = ["git", "node", "npm", "npx", "gh"];
-  const checkCmd = process.platform === "win32" ? "where" : "which";
+  const isWindows = process.platform === "win32";
 
   const results = await Promise.allSettled(
     tools.map(async (tool) => {
-      const path = await runCommand(checkCmd, [tool], 3000);
+      const path = await resolveToolPath(tool);
       if (!path) return { tool, available: false, path: null, version: null };
 
-      const version = await runCommand(tool, ["--version"], 3000);
+      // The file just found, so the version probe does not search PATH again.
+      const version = await runCommand(isWindows ? path : tool, ["--version"], 3000);
       return {
         tool,
         available: true,

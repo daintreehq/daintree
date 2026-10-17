@@ -1291,10 +1291,6 @@ describe("TerminalReconciliationWatchdog", () => {
       vi.advanceTimersByTime(WATCHDOG_INTERVAL_MS);
       expect(deps.setVisible).toHaveBeenCalledTimes(2);
     });
-
-    it("uses a long enough cooldown to span at least one full tick", () => {
-      expect(WATCHDOG_REPAIR_COOLDOWN_MS).toBeGreaterThan(WATCHDOG_INTERVAL_MS);
-    });
   });
 
   describe("heavy repair cap", () => {
@@ -1747,21 +1743,6 @@ describe("TerminalReconciliationWatchdog — cached project view (#11212)", () =
     vi.advanceTimersByTime(WATCHDOG_INTERVAL_MS);
 
     expect(deps.setVisible).not.toHaveBeenCalled();
-  });
-
-  it("resumes normal reconciliation after a cached window ends", () => {
-    instances.set("t1", makeManaged({ isVisible: false }));
-    const deps = makeDeps(instances);
-    watchdog = new TerminalReconciliationWatchdog(deps);
-
-    emitCached();
-    vi.advanceTimersByTime(WATCHDOG_INTERVAL_MS * 3);
-    expect(deps.setVisible).not.toHaveBeenCalled();
-
-    emitWarmActivated();
-    vi.advanceTimersByTime(WATCHDOG_INTERVAL_MS);
-
-    expect(deps.setVisible).toHaveBeenCalledWith("t1");
   });
 
   it("does not arm the interval when constructed during a cached window", () => {

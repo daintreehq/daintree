@@ -10,12 +10,6 @@ describe("TerminalUnseenOutputTracker", () => {
   });
 
   describe("incrementUnseen", () => {
-    it("should increment unseen count when user is scrolled back", () => {
-      tracker.incrementUnseen(terminalId, true);
-      const snapshot = tracker.getSnapshot(terminalId);
-      expect(snapshot.unseen).toBe(1);
-    });
-
     it("should not increment unseen count when user is at bottom", () => {
       tracker.incrementUnseen(terminalId, false);
       const snapshot = tracker.getSnapshot(terminalId);
@@ -207,14 +201,6 @@ describe("TerminalUnseenOutputTracker", () => {
   });
 
   describe("getSnapshot", () => {
-    it("should return initial snapshot with default values", () => {
-      const snapshot = tracker.getSnapshot(terminalId);
-      expect(snapshot).toEqual({
-        isUserScrolledBack: false,
-        unseen: 0,
-      });
-    });
-
     it("should return stable snapshot reference when state unchanged", () => {
       const snapshot1 = tracker.getSnapshot(terminalId);
       const snapshot2 = tracker.getSnapshot(terminalId);

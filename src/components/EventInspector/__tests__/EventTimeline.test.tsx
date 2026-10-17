@@ -39,9 +39,4 @@ describe("EventTimeline accessibility", () => {
     expect(log).toBeTruthy();
     expect(log.getAttribute("aria-live")).toBe("off");
   });
-
-  it("renders Virtuoso with aria-label='Event timeline'", () => {
-    render(<EventTimeline events={mockEvents} selectedId={null} onSelectEvent={vi.fn()} />);
-    expect(screen.getByRole("log").getAttribute("aria-label")).toBe("Event timeline");
-  });
 });

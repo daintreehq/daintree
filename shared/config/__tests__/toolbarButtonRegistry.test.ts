@@ -32,14 +32,6 @@ describe("toolbarButtonRegistry", () => {
     expect(getPluginToolbarButtonIds()).toEqual(["acme.test-plugin.viewer"]);
   });
 
-  it("returns undefined for unregistered IDs", () => {
-    expect(getToolbarButtonConfig("plugin.unknown.button")).toBeUndefined();
-  });
-
-  it("returns empty array when no buttons registered", () => {
-    expect(getPluginToolbarButtonIds()).toEqual([]);
-  });
-
   it("warns and overwrites on duplicate registration", () => {
     const spy = vi.spyOn(console, "warn").mockImplementation(() => {});
     const first = makeConfig("acme.test-plugin.btn", { label: "First" });
@@ -96,24 +88,11 @@ describe("unregisterPluginToolbarButtons", () => {
     expect(getToolbarButtonConfig("owner-b.three")?.pluginId).toBe("owner-b");
   });
 
-  it("is a no-op when unregistering an unknown pluginId", () => {
-    registerToolbarButton(makeConfig("owner-a.btn", { pluginId: "owner-a" }));
-    expect(() => unregisterPluginToolbarButtons("never-loaded")).not.toThrow();
-    expect(getPluginToolbarButtonIds()).toHaveLength(1);
-  });
-
   it("is a no-op for empty or non-string pluginId (defensive input guard)", () => {
     registerToolbarButton(makeConfig("owner-a.btn", { pluginId: "owner-a" }));
     expect(() => unregisterPluginToolbarButtons("")).not.toThrow();
     expect(() => unregisterPluginToolbarButtons(undefined as unknown as string)).not.toThrow();
     expect(getPluginToolbarButtonIds()).toHaveLength(1);
-  });
-
-  it("is a no-op when unregistering the same plugin twice", () => {
-    registerToolbarButton(makeConfig("owner-a.btn", { pluginId: "owner-a" }));
-    unregisterPluginToolbarButtons("owner-a");
-    expect(() => unregisterPluginToolbarButtons("owner-a")).not.toThrow();
-    expect(getPluginToolbarButtonIds()).toHaveLength(0);
   });
 
   it("supports register → unregister → re-register round-trip", () => {

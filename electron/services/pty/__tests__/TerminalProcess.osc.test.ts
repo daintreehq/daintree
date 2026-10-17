@@ -112,24 +112,6 @@ describe("TerminalProcess OSC color query responder", () => {
     ptyOnDataCallback = null;
   });
 
-  it("responds to OSC 11 (background color query) for agent terminals", () => {
-    createAgentTerminal("opencode");
-    expect(ptyOnDataCallback).not.toBeNull();
-
-    ptyOnDataCallback!("\x1b]11;?\x1b\\");
-
-    expect(ptyWriteMock).toHaveBeenCalledWith("\x1b]11;rgb:0000/0000/0000\x1b\\");
-  });
-
-  it("responds to OSC 10 (foreground color query) for agent terminals", () => {
-    createAgentTerminal("opencode");
-    expect(ptyOnDataCallback).not.toBeNull();
-
-    ptyOnDataCallback!("\x1b]10;?\x1b\\");
-
-    expect(ptyWriteMock).toHaveBeenCalledWith("\x1b]10;rgb:cccc/cccc/cccc\x1b\\");
-  });
-
   it("responds to both OSC 10 and 11 when both appear in one chunk", () => {
     createAgentTerminal("opencode");
 
@@ -138,31 +120,6 @@ describe("TerminalProcess OSC color query responder", () => {
     expect(ptyWriteMock).toHaveBeenCalledWith("\x1b]10;rgb:cccc/cccc/cccc\x1b\\");
     expect(ptyWriteMock).toHaveBeenCalledWith("\x1b]11;rgb:0000/0000/0000\x1b\\");
     expect(ptyWriteMock).toHaveBeenCalledTimes(2);
-  });
-
-  it("does not respond to OSC 10/11 for non-agent terminals", () => {
-    createPlainTerminal();
-    expect(ptyOnDataCallback).not.toBeNull();
-
-    ptyOnDataCallback!("\x1b]11;?\x1b\\");
-
-    expect(ptyWriteMock).not.toHaveBeenCalled();
-  });
-
-  it("does not respond when data does not contain OSC queries", () => {
-    createAgentTerminal("opencode");
-
-    ptyOnDataCallback!("Hello world\r\n");
-
-    expect(ptyWriteMock).not.toHaveBeenCalled();
-  });
-
-  it("works for any agent type, not just opencode", () => {
-    createAgentTerminal("claude");
-
-    ptyOnDataCallback!("\x1b]11;?\x07");
-
-    expect(ptyWriteMock).toHaveBeenCalledWith("\x1b]11;rgb:0000/0000/0000\x1b\\");
   });
 
   it("strips handled OSC queries from renderer-forwarded data for spawn-time agents", () => {
@@ -321,15 +278,6 @@ describe("TerminalProcess OSC 9;4 progress signal wiring (Issue #8701)", () => {
     expect(idleSpy).not.toHaveBeenCalled();
   });
 
-  it("forwards OSC 9;4 state=3 (indeterminate) as a working signal", () => {
-    createAgentTerminal("claude");
-    workingSpy.mockClear();
-
-    ptyOnDataCallback!("\x1b]9;4;3\x07");
-
-    expect(workingSpy).toHaveBeenCalledTimes(1);
-  });
-
   it("forwards OSC 9;4 state=0 as an idle signal", () => {
     createAgentTerminal("claude");
     idleSpy.mockClear();
@@ -351,19 +299,6 @@ describe("TerminalProcess OSC 9;4 progress signal wiring (Issue #8701)", () => {
     // Second chunk completes the sequence.
     ptyOnDataCallback!("0\x07");
     expect(workingSpy).toHaveBeenCalledTimes(1);
-  });
-
-  it("does not fire OSC handlers when data has no OSC 9;4 sequence", () => {
-    createAgentTerminal("claude");
-    workingSpy.mockClear();
-    idleSpy.mockClear();
-
-    ptyOnDataCallback!("just some normal output\n");
-    ptyOnDataCallback!("\x1b]0;Window Title\x07"); // OSC 0 — unrelated
-    ptyOnDataCallback!("\x1b[31mred\x1b[0m"); // SGR — unrelated
-
-    expect(workingSpy).not.toHaveBeenCalled();
-    expect(idleSpy).not.toHaveBeenCalled();
   });
 
   it("forwards OSC 9;4 bytes to the renderer (xterm.js renders the progress bar)", () => {

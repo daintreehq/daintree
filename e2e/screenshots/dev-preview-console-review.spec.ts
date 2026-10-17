@@ -162,17 +162,29 @@ async function drive(page: Page, fixture: ConsoleStackFixture): Promise<void> {
     }
     case "object-open": {
       await page.getByRole("button", { name: /ORC-114/ }).click();
-      await expect(page.locator(FRAME).getByText("sku", { exact: true })).toBeVisible();
+      await expect(page.locator(FRAME).getByText(/^sku:?$/)).toBeVisible();
       await page.mouse.move(0, 0);
       break;
     }
     case "row-focus": {
       // Keyboard focus on the row itself swaps the short source for the full path.
       const row = rowFor(page, fixture, 1);
-      for (let i = 0; i < 20 && !(await row.evaluate((el) => el === document.activeElement)); i++) {
+      for (let i = 0; i < 40 && !(await row.evaluate((el) => el === document.activeElement)); i++) {
         await page.keyboard.press("Tab");
       }
       await expect(row).toBeFocused();
+      break;
+    }
+    case "filter-errors": {
+      await page.getByRole("radio", { name: /^Errors/ }).click();
+      await page.mouse.move(0, 0);
+      break;
+    }
+    case "search-hit":
+    case "search-miss": {
+      const query = fixture.drive === "search-hit" ? "orders" : "checkout-v2";
+      await page.getByLabel("Filter console messages").fill(query);
+      await page.mouse.move(0, 0);
       break;
     }
     case "hover-toggle": {
@@ -188,7 +200,9 @@ async function drive(page: Page, fixture: ConsoleStackFixture): Promise<void> {
 
 /** What each fixture must show before its PNG is written. */
 async function expectFixtureState(page: Page, fixture: ConsoleStackFixture): Promise<void> {
-  await expect(page.locator(`${FRAME} [class~="group/row"]`)).toHaveCount(fixture.rows.length);
+  await expect(page.locator(`${FRAME} [class~="group/row"]`)).toHaveCount(
+    fixture.visible ?? fixture.rows.length
+  );
   for (const index of fixture.expand ?? []) {
     const last = fixture.rows[index]!.stackTrace!.callFrames.at(-1)!;
     await expect(

@@ -1,6 +1,5 @@
-import { readFileSync } from "fs";
-import { resolve } from "path";
 import { buttonVariants } from "@/components/ui/button";
+import { readIndexCss } from "@/__tests__/support/hostCss";
 
 /**
  * Shared motion contracts for the empty-grid launcher (issue #11169). Both
@@ -23,10 +22,7 @@ export const reduceMotionSelectors = (): Set<string> => {
   // Comments are stripped first, or a class merely *mentioned* in prose would
   // count as neutralized — which would let this contract pass against a rule
   // that no longer exists.
-  const css = readFileSync(resolve(__dirname, "../../../index.css"), "utf-8").replace(
-    /\/\*[\s\S]*?\*\//g,
-    ""
-  );
+  const css = readIndexCss().replace(/\/\*[\s\S]*?\*\//g, "");
   const classes = new Set<string>();
 
   const MARKER = "@variant reduce-motion";

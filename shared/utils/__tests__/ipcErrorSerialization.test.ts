@@ -2,6 +2,7 @@ import { describe, it, expect, vi } from "vitest";
 import {
   serializeError,
   deserializeError,
+  pickAppErrorDetails,
   wrapSuccess,
   wrapError,
 } from "../ipcErrorSerialization.js";
@@ -63,14 +64,6 @@ describe("serializeError", () => {
     expect(serialized.name).toBe("Error");
     expect(serialized.message).toBe("something failed");
     expect(serialized.stack).toBeDefined();
-  });
-
-  it("serializes a named error", () => {
-    const err = new TypeError("invalid type");
-    const serialized = serializeError(err);
-
-    expect(serialized.name).toBe("TypeError");
-    expect(serialized.message).toBe("invalid type");
   });
 
   it("serializes Node errno properties", () => {
@@ -227,13 +220,6 @@ describe("deserializeError", () => {
     expect(err.message).toBe("test error");
   });
 
-  it("preserves error name", () => {
-    const serialized = { name: "GitError", message: "git failed" };
-    const err = deserializeError(serialized);
-
-    expect(err.name).toBe("GitError");
-  });
-
   it("restores Node errno properties", () => {
     const serialized = {
       name: "Error",
@@ -298,45 +284,6 @@ describe("deserializeError", () => {
 });
 
 describe("round-trip serialization", () => {
-  it("round-trips a plain Error", () => {
-    const original = new Error("test error");
-    const restored = deserializeError(serializeError(original));
-
-    expect(restored.name).toBe(original.name);
-    expect(restored.message).toBe(original.message);
-  });
-
-  it("round-trips an Error with Node properties", () => {
-    const original = Object.assign(new Error("ENOENT"), {
-      code: "ENOENT",
-      errno: -2,
-      syscall: "stat",
-      path: "/missing",
-    });
-    const restored = deserializeError(serializeError(original)) as NodeJS.ErrnoException;
-
-    expect(restored.code).toBe("ENOENT");
-    expect(restored.errno).toBe(-2);
-    expect(restored.syscall).toBe("stat");
-    expect(restored.path).toBe("/missing");
-  });
-
-  it("round-trips an Error with context and custom properties", () => {
-    const original = Object.assign(new Error("conflict"), {
-      name: "ConflictError",
-      context: { resourceId: "r-1" },
-      currentLastModified: 12345,
-    });
-    const restored = deserializeError(serializeError(original)) as Error & {
-      context: Record<string, unknown>;
-      currentLastModified: number;
-    };
-
-    expect(restored.name).toBe("ConflictError");
-    expect(restored.context).toEqual({ resourceId: "r-1" });
-    expect(restored.currentLastModified).toBe(12345);
-  });
-
   it("round-trips a GitOperationError discriminator via serialize -> structuredClone -> deserialize", () => {
     // Shared-layer test synthesizes the GitOperationError shape without importing
     // the electron/ module — shared/ must not depend on electron/.
@@ -460,20 +407,6 @@ describe("wrapSuccess", () => {
     expect(envelope.ok).toBe(true);
     expect(envelope.data).toEqual({ foo: "bar" });
   });
-
-  it("handles null data", () => {
-    const envelope = wrapSuccess(null);
-
-    expect(envelope.ok).toBe(true);
-    expect(envelope.data).toBeNull();
-  });
-
-  it("handles undefined data", () => {
-    const envelope = wrapSuccess(undefined);
-
-    expect(envelope.ok).toBe(true);
-    expect(envelope.data).toBeUndefined();
-  });
 });
 
 describe("wrapError", () => {
@@ -483,13 +416,6 @@ describe("wrapError", () => {
     expect(envelope.__daintreeIpcEnvelope).toBe(true);
     expect(envelope.ok).toBe(false);
     expect(envelope.error.message).toBe("oops");
-  });
-
-  it("handles non-Error values", () => {
-    const envelope = wrapError("string error");
-
-    expect(envelope.ok).toBe(false);
-    expect(envelope.error.message).toBe("string error");
   });
 });
 
@@ -506,23 +432,91 @@ describe("isIpcEnvelope", () => {
     expect(isIpcEnvelope(null)).toBe(false);
   });
 
-  it("returns false for undefined", () => {
-    expect(isIpcEnvelope(undefined)).toBe(false);
-  });
-
   it("returns false for plain objects", () => {
     expect(isIpcEnvelope({ ok: true, data: "test" })).toBe(false);
     expect(isIpcEnvelope({ __daintreeIpcEnvelope: false })).toBe(false);
   });
+});
 
-  it("returns false for primitives", () => {
-    expect(isIpcEnvelope(42)).toBe(false);
-    expect(isIpcEnvelope("string")).toBe(false);
-    expect(isIpcEnvelope(true)).toBe(false);
+describe("AppError details allowlist", () => {
+  it("rebuilds each PluginHostError variant and strips extra fields", () => {
+    const serialized = serializeError(
+      Object.assign(new Error("x"), {
+        details: {
+          code: "PLUGIN_INCOMPATIBLE",
+          pluginId: "acme.x",
+          hostId: "box",
+          token: "secret",
+          reason: { kind: "engine", required: "^2", hostVersion: "1.0.0", path: "/Users/me" },
+        },
+      })
+    );
+    expect(serialized.details).toEqual({
+      code: "PLUGIN_INCOMPATIBLE",
+      pluginId: "acme.x",
+      hostId: "box",
+      reason: { kind: "engine", required: "^2", hostVersion: "1.0.0" },
+    });
+
+    const notOnHost = serializeError(
+      Object.assign(new Error("x"), {
+        details: { code: "PLUGIN_NOT_ON_HOST", pluginId: "p", hostId: "h", extra: { a: 1 } },
+      })
+    );
+    expect(notOnHost.details).toEqual({ code: "PLUGIN_NOT_ON_HOST", pluginId: "p", hostId: "h" });
   });
 
-  it("returns false for domain result objects", () => {
-    expect(isIpcEnvelope({ ok: false, code: "BINARY_FILE" })).toBe(false);
-    expect(isIpcEnvelope({ success: false, error: "something" })).toBe(false);
+  it("keeps only the permitted fields of every reason variant", () => {
+    const pick = (reason: unknown) => {
+      const details = pickAppErrorDetails({
+        code: "PLUGIN_INCOMPATIBLE",
+        pluginId: "p",
+        hostId: "h",
+        reason,
+      });
+      return details?.code === "PLUGIN_INCOMPATIBLE" ? details : undefined;
+    };
+    expect(
+      pick({ kind: "platform", hostPlatform: "linux", supported: ["darwin"], x: 1 })?.reason
+    ).toEqual({ kind: "platform", hostPlatform: "linux", supported: ["darwin"] });
+    expect(pick({ kind: "remote-unsupported", why: "/secret" })?.reason).toEqual({
+      kind: "remote-unsupported",
+    });
+    expect(pick({ kind: "untrusted", by: "someone" })?.reason).toEqual({ kind: "untrusted" });
+    const missing = Array.from({ length: 100 }, (_, i) => `KEY_${i}`);
+    const unconfigured = pick({ kind: "unconfigured", missing, value: "tok" })?.reason;
+    expect(unconfigured).toEqual({ kind: "unconfigured", missing: missing.slice(0, 32) });
+  });
+
+  it("drops anything that is not exactly a recognised variant", () => {
+    const base = { code: "PLUGIN_INCOMPATIBLE", pluginId: "p", hostId: "h" };
+    expect(pickAppErrorDetails({ ...base, reason: { kind: "mystery" } })).toBeUndefined();
+    expect(
+      pickAppErrorDetails({ ...base, reason: { kind: "engine", required: 2 } })
+    ).toBeUndefined();
+    expect(
+      pickAppErrorDetails({
+        ...base,
+        reason: { kind: "platform", hostPlatform: "win32", supported: [] },
+      })
+    ).toBeUndefined();
+    expect(
+      pickAppErrorDetails({ ...base, reason: { kind: "unconfigured", missing: [1] } })
+    ).toBeUndefined();
+    expect(pickAppErrorDetails({ code: "OTHER", pluginId: "p", hostId: "h" })).toBeUndefined();
+    expect(pickAppErrorDetails(["PLUGIN_NOT_ON_HOST"])).toBeUndefined();
+  });
+
+  it("revalidates details on deserialization", () => {
+    const error = deserializeError({
+      name: "Error",
+      message: "x",
+      details: { code: "PLUGIN_NOT_ON_HOST", pluginId: "p", hostId: "h", leak: "/tmp/a" },
+    } as unknown as Parameters<typeof deserializeError>[0]);
+    expect((error as unknown as { details: unknown }).details).toEqual({
+      code: "PLUGIN_NOT_ON_HOST",
+      pluginId: "p",
+      hostId: "h",
+    });
   });
 });

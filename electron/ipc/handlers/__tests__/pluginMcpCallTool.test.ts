@@ -101,6 +101,8 @@ const ctx: IpcContext = {
   webContentsId: 7,
   senderWindow: null,
   projectId: null,
+  endpoint: {} as IpcContext["endpoint"],
+  client: {} as IpcContext["client"],
 };
 
 const input: PluginMcpCallToolInput = {

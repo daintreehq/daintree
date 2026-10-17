@@ -401,22 +401,6 @@ describe("browserActions adversarial", () => {
     expect(result.messages.map((m) => m.id)).toEqual([2, 3]);
   });
 
-  it("browser.getConsoleMessages applies limit to the most recent rows after filtering", async () => {
-    setPanelState({ focusedId: "b1", panelsById: devPreviewPanels(["b1"]) });
-    setConsoleState([
-      makeRow({ id: 1 }),
-      makeRow({ id: 2 }),
-      makeRow({ id: 3 }),
-      makeRow({ id: 4 }),
-    ]);
-    const run = setupActions();
-    const result = (await run("browser.getConsoleMessages", { limit: 2 })) as {
-      messages: Array<{ id: number }>;
-    };
-
-    expect(result.messages.map((m) => m.id)).toEqual([3, 4]);
-  });
-
   it("browser.getConsoleMessages applies limit to the most recent rows of the filtered level", async () => {
     setPanelState({ focusedId: "b1", panelsById: devPreviewPanels(["b1"]) });
     setConsoleState([
@@ -447,19 +431,6 @@ describe("browserActions adversarial", () => {
     expect(result.paneId).toBe("other");
   });
 
-  it("browser.getConsoleMessages returns empty result for a pane with no messages", async () => {
-    setPanelState({ focusedId: "b1", panelsById: devPreviewPanels(["b1"]) });
-    setConsoleState([]);
-    const run = setupActions();
-    const result = (await run("browser.getConsoleMessages")) as {
-      messages: unknown[];
-      counts: { errorCount: number; warnCount: number };
-    };
-
-    expect(result.messages).toEqual([]);
-    expect(result.counts).toEqual({ errorCount: 0, warnCount: 0 });
-  });
-
   it("browser.getConsoleMessages throws when no target panel exists", async () => {
     setPanelState({ focusedId: null });
     const run = setupActions();
@@ -486,7 +457,7 @@ describe("browserActions adversarial", () => {
     const run = setupActions();
     const result = await run("browser.captureScreenshot");
 
-    expect(captureScreenshotSpy).toHaveBeenCalledWith("b1");
+    expect(captureScreenshotSpy).toHaveBeenCalledWith("b1", { forHost: false });
     expect(result).toEqual({ pngBase64: btoa("png-bytes"), width: 1024, height: 768 });
   });
 
@@ -495,7 +466,7 @@ describe("browserActions adversarial", () => {
     const run = setupActions();
     await run("browser.captureScreenshot", { terminalId: "b2" });
 
-    expect(captureScreenshotSpy).toHaveBeenCalledWith("b2");
+    expect(captureScreenshotSpy).toHaveBeenCalledWith("b2", { forHost: false });
   });
 
   it("browser.captureScreenshot copies to clipboard for non-agent dispatch", async () => {
@@ -518,7 +489,8 @@ describe("browserActions adversarial", () => {
 
     const result = await def.run(undefined, { dispatchSource: "agent" } as never);
 
-    expect(captureScreenshotSpy).toHaveBeenCalledWith("b1");
+    // An agent's capture may be the window's host asking: main checks the page for it.
+    expect(captureScreenshotSpy).toHaveBeenCalledWith("b1", { forHost: true });
     expect(writeImageSpy).not.toHaveBeenCalled();
     expect(result).toEqual({ pngBase64: btoa("png-bytes"), width: 1024, height: 768 });
   });

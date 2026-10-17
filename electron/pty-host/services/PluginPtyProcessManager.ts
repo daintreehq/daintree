@@ -300,7 +300,10 @@ export class PluginPtyProcessManager {
     }
     entry.disposables.length = 0;
     try {
-      this.releaseNative(entry);
+      // A Windows tree kill still in flight owns the release: closing ConPTY
+      // ends the root its walk starts from, so the killer makes the release
+      // (the adapter's kill(), below) when the kill settles or at its backstop.
+      if (!this.treeKillOwnsRelease(entry)) this.releaseNative(entry);
     } catch (error) {
       console.warn(
         `[PluginPty] teardown (${reason}) of "${entry.id}" failed:`,
@@ -337,8 +340,8 @@ export class PluginPtyProcessManager {
         );
       }
     }
-    // A Windows graceful kill was the whole kill — taskkill /T /F is not
-    // escalated — so a second pass would only taskkill a recycled PID.
+    // A Windows graceful kill was the whole kill — the verified tree kill
+    // terminates outright and has no escalation — so there is nothing to linger for.
     if (entry.treeKill === "graceful" && process.platform === "win32") return;
     this.lingeringKillers.set(killer, {
       mode: entry.treeKill === "none" ? "reap" : "escalate",
@@ -376,6 +379,7 @@ export class PluginPtyProcessManager {
         if (entry.exited) return;
         entry.pty.kill("SIGTERM");
       },
+      onExit: (listener) => entry.pty.onExit(() => listener()),
     };
     try {
       return this.createTreeKiller(target, { kind: "plugin", id: entry.id });
@@ -394,14 +398,22 @@ export class PluginPtyProcessManager {
    * killer SIGTERMs and escalates after the plugin grace window itself, so
    * grandchildren that ignore SIGTERM die even when the root exits promptly.
    *
-   * Windows has no graceful step — `taskkill /T /F` is the whole kill — so the
-   * tree is killed at most once there: a second pass would taskkill a PID the
-   * OS may already have handed to something else.
+   * Windows has no graceful step — the verified tree kill terminates outright
+   * and is the whole kill — so a finished kill is never repeated there. A
+   * forced kill while the graceful one is still in flight is passed on: the
+   * killer joins the pending kill rather than starting a second one, except in
+   * the host's exit batch, where it is re-run before `process.exit()`.
    */
   private killTree(entry: PluginPtyEntry, immediate: boolean): void {
     const killer = entry.killer;
     if (!killer || entry.treeKill === "forced") return;
-    if (process.platform === "win32" && entry.treeKill !== "none") return;
+    if (
+      process.platform === "win32" &&
+      entry.treeKill !== "none" &&
+      !(immediate && killer.hasPendingTreeKill())
+    ) {
+      return;
+    }
     this.ensureRootRegistered(entry);
     entry.treeKill = immediate ? "forced" : "graceful";
     try {
@@ -415,6 +427,10 @@ export class PluginPtyProcessManager {
     }
   }
 
+  private treeKillOwnsRelease(entry: PluginPtyEntry): boolean {
+    return process.platform === "win32" && entry.killer?.hasPendingTreeKill() === true;
+  }
+
   /** Release the native handle exactly once per incarnation (#9544, #9551). */
   private releaseNative(entry: PluginPtyEntry): void {
     if (entry.nativeReleased) return;
@@ -426,7 +442,7 @@ export class PluginPtyProcessManager {
 /** The kill-side surface of {@link ProcessTreeKiller} a plugin PTY uses. */
 export type PluginPtyTreeKiller = Pick<
   ProcessTreeKiller,
-  "execute" | "reapAfterRootExit" | "registerRoot"
+  "execute" | "reapAfterRootExit" | "registerRoot" | "hasPendingTreeKill"
 >;
 
 interface LingeringKill {

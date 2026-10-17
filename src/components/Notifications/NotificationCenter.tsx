@@ -15,7 +15,7 @@ import {
   useNotificationHistoryStore,
   type NotificationHistoryEntry,
 } from "@/store/slices/notificationHistorySlice";
-import { NotificationCenterEntry } from "./NotificationCenterEntry";
+import { NotificationCenterEntry, formatSnoozeWake } from "./NotificationCenterEntry";
 import { useSnoozeExpiryTimer } from "./useSnoozeExpiryTimer";
 import { resolveSnoozeDuration, type SnoozeDurationOption } from "@shared/utils/snoozeTimestamps";
 import { EmptyState } from "@/components/ui/EmptyState";
@@ -74,7 +74,10 @@ import {
 } from "@/lib/notificationSourceLabel";
 import { isMac } from "@/lib/platform";
 import { useIsWorktreeUnavailable } from "./notificationSource";
-import { goToNotificationSource } from "./notificationNavigation";
+import {
+  goToNotificationSource,
+  resolveLiveNotificationDestination,
+} from "./notificationNavigation";
 import {
   PANE_TOOLBAR_ICON_BUTTON_CLASS,
   PANE_TOOLBAR_ICON_CLASS,
@@ -109,9 +112,37 @@ function shipsOn(kind: NotificationEventKind): boolean {
 
 /** The per-project silences the row menu writes, with the words the strip uses. */
 const PROJECT_SILENCEABLE = [
-  ["completedEnabled", "Completed"],
+  ["completedEnabled", "Finished"],
   ["waitingEnabled", "Waiting"],
 ] as const;
+
+/**
+ * Says what a row action did. Archive, restore and snooze take the row out of
+ * the tab, and a read toggle changes nothing a screen reader is reading, so
+ * without this the outcome was silent everywhere but the pixels.
+ */
+function announceTriage(message: string): void {
+  useAnnouncerStore.getState().announce(message, "polite");
+}
+
+/**
+ * Why Enter went nowhere. A pointer user sees a row that doesn't dress as a
+ * link; from the keyboard the same row just swallowed the key.
+ */
+function sourceUnreachableMessage(context: NotificationHistoryEntry["context"]): string {
+  const destination = resolveLiveNotificationDestination(context);
+  if (destination.kind !== "none") return "Couldn't open the source";
+  switch (destination.reason) {
+    case "other-project":
+      return "From another project. Switch to it to open the source";
+    case "panel-trashed":
+      return "Its panel is in the trash";
+    case "gone":
+      return "Its source is no longer available";
+    default:
+      return "No source to open";
+  }
+}
 
 function isUnreadGroup(group: ThreadGroup): boolean {
   return group.entries.some((e) => !e.seenAsToast);
@@ -123,13 +154,17 @@ function isAskingGroup(group: ThreadGroup): boolean {
 }
 
 function getGroupContextKey(group: ThreadGroup): string {
+  // Another host's ids can collide with nothing here, but its rows still
+  // belong under that host's name, not this machine's projects.
+  const host = group.entries.find((e) => e.context?.hostName)?.context?.hostName;
+  const prefix = host ? `host:${host}\0` : "";
   for (const e of group.entries) {
     const wt = e.context?.worktreeId;
-    if (wt) return `wt:${wt}`;
+    if (wt) return `${prefix}wt:${wt}`;
     const proj = e.context?.projectId;
-    if (proj) return `proj:${proj}`;
+    if (proj) return `${prefix}proj:${proj}`;
   }
-  return CONTEXT_NONE_KEY;
+  return host ? `${prefix}none` : CONTEXT_NONE_KEY;
 }
 
 interface NotificationCenterProps {
@@ -147,6 +182,7 @@ interface ContextSection {
   key: string;
   worktreeId?: string;
   projectId?: string;
+  hostName?: string;
   groups: ThreadGroup[];
 }
 
@@ -214,6 +250,7 @@ function partitionByContext(groups: ThreadGroup[]): ContextSection[] {
         key,
         worktreeId: first?.context?.worktreeId,
         projectId: first?.context?.projectId,
+        hostName: g.entries.find((e) => e.context?.hostName)?.context?.hostName,
         groups: [],
       });
       order.push(key);
@@ -235,6 +272,8 @@ export function NotificationCenter({ open, onClose }: NotificationCenterProps) {
   const dismissByCorrelationId = useNotificationHistoryStore((s) => s.dismissByCorrelationId);
   const archiveEntry = useNotificationHistoryStore((s) => s.archiveEntry);
   const archiveByCorrelationId = useNotificationHistoryStore((s) => s.archiveByCorrelationId);
+  const unarchiveEntry = useNotificationHistoryStore((s) => s.unarchiveEntry);
+  const unarchiveByCorrelationId = useNotificationHistoryStore((s) => s.unarchiveByCorrelationId);
   const snoozeThread = useNotificationHistoryStore((s) => s.snoozeThread);
   const clearSnooze = useNotificationHistoryStore((s) => s.clearSnooze);
   const clearExpiredSnoozes = useNotificationHistoryStore((s) => s.clearExpiredSnoozes);
@@ -693,8 +732,21 @@ export function NotificationCenter({ open, onClose }: NotificationCenterProps) {
       } else {
         archiveEntry(row.entryId);
       }
+      announceTriage(row.isThread ? "Thread archived" : "Notification archived");
     },
     [archiveByCorrelationId, archiveEntry]
+  );
+
+  const restoreRow = useCallback(
+    (row: FlatRow) => {
+      if (row.isThread && row.correlationId) {
+        unarchiveByCorrelationId(row.correlationId);
+      } else {
+        unarchiveEntry(row.entryId);
+      }
+      announceTriage("Moved to inbox");
+    },
+    [unarchiveByCorrelationId, unarchiveEntry]
   );
 
   // Build a fast index of unread entry IDs grouped by row, so the `u` toggle
@@ -723,6 +775,7 @@ export function NotificationCenter({ open, onClose }: NotificationCenterProps) {
       });
       if (unreadIds.length > 0) {
         markIdsRead(unreadIds);
+        announceTriage("Marked as read");
       } else {
         // Whole row already read — flip the head entry back to unread so the
         // dot reappears. Skip when the head entry no longer exists (a
@@ -730,6 +783,7 @@ export function NotificationCenter({ open, onClose }: NotificationCenterProps) {
         const head = liveById.get(row.entryId);
         if (head && head.seenAsToast && !head.archivedAt) {
           markUnseenAsToast(row.entryId, { silent: true });
+          announceTriage("Marked as unread");
         }
       }
     },
@@ -815,6 +869,8 @@ export function NotificationCenter({ open, onClose }: NotificationCenterProps) {
           // thread-level concept). The dropdown-open guard at the top of
           // this handler keeps subsequent j/k from double-navigating.
           if (e.shiftKey || e.metaKey || e.ctrlKey || e.altKey) return;
+          // Filed rows don't snooze; the row menu doesn't offer it either.
+          if (filter === "archived") return;
           const row = flatRows[activeIndex];
           if (!row || !row.correlationId) return;
           e.preventDefault();
@@ -836,7 +892,9 @@ export function NotificationCenter({ open, onClose }: NotificationCenterProps) {
           }
           if (e.metaKey || e.ctrlKey) return;
           e.preventDefault();
-          void goToNotificationSource(row.context);
+          void goToNotificationSource(row.context).then((arrived) => {
+            if (!arrived) announceTriage(sourceUnreachableMessage(row.context));
+          });
           return;
         }
         default:
@@ -890,7 +948,9 @@ export function NotificationCenter({ open, onClose }: NotificationCenterProps) {
   const handleSnoozeForRow = useCallback(
     (row: FlatRow, option: SnoozeDurationOption) => {
       if (!row.correlationId) return;
-      snoozeThread(row.correlationId, resolveSnoozeDuration(option));
+      const until = resolveSnoozeDuration(option);
+      snoozeThread(row.correlationId, until);
+      announceTriage(`Snoozed until ${formatSnoozeWake(until)}`);
     },
     [snoozeThread]
   );
@@ -899,6 +959,7 @@ export function NotificationCenter({ open, onClose }: NotificationCenterProps) {
     (row: FlatRow) => {
       if (!row.correlationId) return;
       clearSnooze(row.correlationId);
+      announceTriage("Snooze cleared");
     },
     [clearSnooze]
   );
@@ -950,8 +1011,13 @@ export function NotificationCenter({ open, onClose }: NotificationCenterProps) {
   };
 
   const pillLabel = (() => {
-    if (isSessionMuted) return `Muted until ${timeFormatter.format(new Date(quietUntil))}`;
-    if (isScheduledMuted) return "Quiet hours";
+    // "Paused", the Pause menu's own word, and the end time on both kinds: the
+    // strip is the one place that says when this stops, so the empty state
+    // under it doesn't have to say it again.
+    if (isSessionMuted) return `Paused until ${timeFormatter.format(new Date(quietUntil))}`;
+    if (isScheduledMuted) {
+      return `Quiet hours until ${timeFormatter.format(new Date(nextOccurrenceTimestamp(quietHoursEndMin)))}`;
+    }
     // OS DND case — the in-app gates are off, so name the source plainly.
     return osDndDisplayNote(osDndActive) ?? "";
   })();
@@ -1070,17 +1136,6 @@ export function NotificationCenter({ open, onClose }: NotificationCenterProps) {
     return `Removes all ${total} ${noun}${tail}. This clears every tab, not just the one you're looking at.`;
   }, [entries, snoozedThreads]);
   const morningLabel = `Until ${timeFormatter.format(new Date(nextOccurrenceTimestamp(8 * 60)))}`;
-  const mutedEmptyDescription = (() => {
-    if (isScheduledMuted) {
-      const scheduledEnd = nextOccurrenceTimestamp(quietHoursEndMin);
-      // When both mutes overlap, the later end-time is what actually unblocks
-      // notifications — show that, not the session-mute expiry.
-      if (!isSessionMuted || scheduledEnd > quietUntil) {
-        return `Quiet hours active. Resuming at ${timeFormatter.format(new Date(scheduledEnd))}`;
-      }
-    }
-    return `Resuming at ${timeFormatter.format(new Date(quietUntil))}`;
-  })();
 
   const showGroupToggle = entries.length > 0;
   // Hide the Snoozed tab when nothing is snoozed — it would otherwise be a
@@ -1436,13 +1491,17 @@ export function NotificationCenter({ open, onClose }: NotificationCenterProps) {
                 // OS DND alone does not trigger the "Notifications paused" copy
                 // — in-app toasts still fire, so naming them "paused" would be
                 // misleading. The pill above still surfaces the OS state.
+                //
+                // The popover scale and no description, like every other empty
+                // state here: the strip above already says until when and holds
+                // Resume, and at the canvas scale a 40px moon and an 18px title
+                // repeated that strip at three times its size.
                 <div data-testid="notification-muted-empty-state">
                   <EmptyState
                     variant="zero-data"
-                    scale="canvas"
+                    scale="popover"
                     title="Notifications paused"
                     icon={<Moon />}
-                    description={mutedEmptyDescription}
                     className="py-10"
                   />
                 </div>
@@ -1476,6 +1535,7 @@ export function NotificationCenter({ open, onClose }: NotificationCenterProps) {
                     onUnsnoozeRow={handleUnsnoozeForRow}
                     onArchiveRow={filter === "archived" ? undefined : archiveRow}
                     onToggleReadRow={filter === "archived" ? undefined : toggleReadForRow}
+                    onRestoreRow={filter === "archived" ? restoreRow : undefined}
                   />
                 )}
                 {chronoSections.map((section, sectionIdx) => (
@@ -1506,6 +1566,7 @@ export function NotificationCenter({ open, onClose }: NotificationCenterProps) {
                     onUnsnoozeRow={handleUnsnoozeForRow}
                     onArchiveRow={filter === "archived" ? undefined : archiveRow}
                     onToggleReadRow={filter === "archived" ? undefined : toggleReadForRow}
+                    onRestoreRow={filter === "archived" ? restoreRow : undefined}
                   />
                 ))}
               </>
@@ -1603,6 +1664,7 @@ function NeedsAttentionSection({
   onUnsnoozeRow,
   onArchiveRow,
   onToggleReadRow,
+  onRestoreRow,
 }: {
   groups: ThreadGroup[];
   /** Severe unread threads beyond the pinned cap — they remain in the chronological list below. */
@@ -1617,6 +1679,7 @@ function NeedsAttentionSection({
   onUnsnoozeRow: (row: FlatRow) => void;
   onArchiveRow: ((row: FlatRow) => void) | undefined;
   onToggleReadRow: ((row: FlatRow) => void) | undefined;
+  onRestoreRow: ((row: FlatRow) => void) | undefined;
 } & RovingSectionProps) {
   return (
     <div data-testid="needs-attention-section" className="border-b border-divider">
@@ -1649,6 +1712,7 @@ function NeedsAttentionSection({
                 onUnsnooze: onUnsnoozeRow,
                 onArchive: onArchiveRow,
                 onToggleRead: onToggleReadRow,
+                onRestore: onRestoreRow,
               }
             )
           );
@@ -1688,6 +1752,7 @@ function ChronoSection({
   onUnsnoozeRow,
   onArchiveRow,
   onToggleReadRow,
+  onRestoreRow,
   hasPinnedAbove,
 }: {
   section: ContextSection;
@@ -1706,6 +1771,7 @@ function ChronoSection({
   onUnsnoozeRow: (row: FlatRow) => void;
   onArchiveRow: ((row: FlatRow) => void) | undefined;
   onToggleReadRow: ((row: FlatRow) => void) | undefined;
+  onRestoreRow: ((row: FlatRow) => void) | undefined;
   /**
    * Whether the "Needs attention" rail is rendering above this list. That rail
    * is a preview, not a filter — a pinned entry still appears here — so with
@@ -1753,6 +1819,7 @@ function ChronoSection({
           labelId={headerLabelId}
           worktreeId={section.worktreeId}
           projectId={section.projectId}
+          hostName={section.hostName}
           count={section.groups.length}
           newCount={
             lastClosedAt > 0
@@ -1830,6 +1897,7 @@ function ChronoSection({
                     onUnsnooze: onUnsnoozeRow,
                     onArchive: onArchiveRow,
                     onToggleRead: onToggleReadRow,
+                    onRestore: onRestoreRow,
                   }
                 )
               )}
@@ -1861,6 +1929,8 @@ interface SnoozeRowProps {
   /** The pointer's route to what `e` and `u` do from the keyboard. */
   onArchive: (() => void) | undefined;
   onToggleRead: (() => void) | undefined;
+  /** Archive's inverse, offered only in the Archived tab. */
+  onRestore: (() => void) | undefined;
 }
 
 function renderGroup(
@@ -1893,6 +1963,7 @@ function renderGroup(
         onUnsnooze={snooze.onUnsnooze}
         onArchive={snooze.onArchive}
         onToggleRead={snooze.onToggleRead}
+        onRestore={snooze.onRestore}
         compact={roving.compact}
         showSource={roving.showSource}
       />
@@ -1918,6 +1989,7 @@ function renderGroup(
       onUnsnooze={snooze.onUnsnooze}
       onArchive={snooze.onArchive}
       onToggleRead={snooze.onToggleRead}
+      onRestore={snooze.onRestore}
       compact={roving.compact}
       showSource={roving.showSource}
     />
@@ -1945,6 +2017,7 @@ function buildSnoozeProps(
     onUnsnooze: () => handlers.onUnsnooze(row),
     onArchive: handlers.onArchive ? () => handlers.onArchive?.(row) : undefined,
     onToggleRead: handlers.onToggleRead ? () => handlers.onToggleRead?.(row) : undefined,
+    onRestore: handlers.onRestore ? () => handlers.onRestore?.(row) : undefined,
   };
 }
 
@@ -1956,11 +2029,14 @@ interface RowMenuHandlers {
   onArchive: ((row: FlatRow) => void) | undefined;
   /** Absent in the Archived tab too: read state doesn't apply to filed rows. */
   onToggleRead: ((row: FlatRow) => void) | undefined;
+  /** Present only in the Archived tab. */
+  onRestore: ((row: FlatRow) => void) | undefined;
 }
 
 function ContextSectionHeader({
   worktreeId,
   projectId,
+  hostName,
   count,
   newCount,
   unreadIds,
@@ -1971,6 +2047,8 @@ function ContextSectionHeader({
   labelId: string;
   worktreeId?: string;
   projectId?: string;
+  /** The other host the section's rows came from, which then leads its name. */
+  hostName?: string;
   count: number;
   /**
    * Rows here newer than the last look. Grouped, there's no single divider to
@@ -2000,8 +2078,9 @@ function ContextSectionHeader({
     : undefined;
   // A main worktree is named after its folder, usually the project's own name.
   const worktree = resolvedWorktree && resolvedWorktree !== project ? resolvedWorktree : undefined;
+  const host = hostName?.trim() || undefined;
   const label =
-    [project, worktree, worktreeUnavailable ? "unavailable" : undefined]
+    [host, project, worktree, worktreeUnavailable ? "unavailable" : undefined]
       .filter(Boolean)
       .join(" · ") || APP_SOURCE_LABEL;
   const hasUnread = unreadIds.length > 0;
@@ -2033,13 +2112,23 @@ function ContextSectionHeader({
             className="flex min-w-0 items-baseline text-text-primary"
             title={label}
           >
-            {project ? <span className="min-w-0 truncate">{project}</span> : null}
+            {host ? <span className="shrink-0 truncate">{host}</span> : null}
+            {host && (project || worktree) ? (
+              <span aria-hidden="true" className="shrink-0 px-1 text-text-secondary">
+                ·
+              </span>
+            ) : null}
+            {/* Both names give way in proportion to their length, each kept to
+                a readable stub. With the worktree held whole, a long project
+                name went to "daintree-n…" — and a grouped row names neither, so
+                the header is the only place the project is said at all. */}
+            {project ? <span className="min-w-[5ch] truncate">{project}</span> : null}
             {project && worktree ? (
               <span aria-hidden="true" className="shrink-0 px-1 text-text-secondary">
                 ·
               </span>
             ) : null}
-            {worktree ? <span className="max-w-[65%] shrink-0 truncate">{worktree}</span> : null}
+            {worktree ? <span className="min-w-[5ch] truncate">{worktree}</span> : null}
             {worktreeUnavailable ? (
               <span
                 data-testid="context-section-unavailable"
@@ -2048,7 +2137,9 @@ function ContextSectionHeader({
                 · unavailable
               </span>
             ) : null}
-            {!project && !worktree ? <span className="truncate">{APP_SOURCE_LABEL}</span> : null}
+            {!host && !project && !worktree ? (
+              <span className="truncate">{APP_SOURCE_LABEL}</span>
+            ) : null}
           </span>
           {/* Beside the name it counts, not beside the button — at the far end
             it read as part of "Mark read". */}
@@ -2126,6 +2217,7 @@ function NotificationThread({
   onUnsnooze,
   onArchive,
   onToggleRead,
+  onRestore,
   compact = false,
   showSource = true,
 }: {
@@ -2145,6 +2237,7 @@ function NotificationThread({
   onUnsnooze?: () => void;
   onArchive?: () => void;
   onToggleRead?: () => void;
+  onRestore?: () => void;
 }) {
   const latest = group.entries[0];
   const isNew = group.entries.some((e) => !e.seenAsToast);
@@ -2207,6 +2300,7 @@ function NotificationThread({
         onUnsnooze={onUnsnooze}
         onArchive={onArchive}
         onToggleRead={onToggleRead}
+        onRestore={onRestore}
         compact={compact}
         showSource={showSource}
       />

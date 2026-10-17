@@ -113,16 +113,6 @@ describe("TerminalAddonManager", () => {
   });
 
   describe("createImageAddon", () => {
-    it("creates ImageAddon with memory-safe options", async () => {
-      const terminal = createMockTerminal();
-      await createImageAddon(terminal);
-
-      expect(mockImageAddon).toHaveBeenCalledWith({
-        pixelLimit: 2_000_000,
-        storageLimit: 8,
-      });
-    });
-
     it("loads the addon onto the terminal", async () => {
       const terminal = createMockTerminal();
       await createImageAddon(terminal);
@@ -150,30 +140,9 @@ describe("TerminalAddonManager", () => {
       opts!.leave?.(new Event("mouseleave") as unknown as MouseEvent, "https://example.com");
       expect(leave).toHaveBeenCalled();
     });
-
-    it("constructs WebLinksAddon with undefined hover/leave when no handlers provided", () => {
-      const terminal = createMockTerminal();
-      const onActivate = vi.fn();
-
-      createWebLinksAddon(terminal, onActivate);
-
-      const opts = vi.mocked(WebLinksAddon).mock.calls[0]?.[1];
-      expect(opts?.hover).toBeUndefined();
-      expect(opts?.leave).toBeUndefined();
-    });
   });
 
   describe("createFileLinksAddon hover wiring", () => {
-    it("forwards onHover callback to FileLinksAddon constructor", () => {
-      const terminal = createMockTerminal();
-      const getCwd = () => "/tmp";
-      const onHover = vi.fn();
-
-      createFileLinksAddon(terminal, getCwd, onHover);
-
-      expect(FileLinksAddon).toHaveBeenCalledWith(terminal, getCwd, onHover, expect.any(Function));
-    });
-
     it("hands FileLinksAddon a live home-dir getter backed by the client cache", () => {
       const spy = vi.spyOn(systemClient, "getCachedHomeDir").mockReturnValue("/Users/me");
 

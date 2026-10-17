@@ -278,12 +278,30 @@ test("resume sessions palette — states, interactions and themes", async ({ pag
       await expect(dialog.getByText("No closed sessions yet")).toBeVisible({ timeout });
       written.push(await snap(page, dialog, `empty--${theme}.png`));
     }
+
+    // A search that matches nothing, live or removed.
+    {
+      const dialog = await open(page, "populated", theme);
+      await dialog.getByRole("combobox").fill("kubernetes");
+      await expect(dialog.getByText(/No sessions match/)).toBeVisible({ timeout });
+      await expect(options(dialog)).toHaveCount(0);
+      written.push(await snap(page, dialog, `no-match--${theme}.png`));
+    }
+
+    // The journal read failed: not the empty state, and recoverable.
+    {
+      const dialog = await open(page, "failed", theme);
+      await expect(dialog.getByText("Couldn't load closed sessions")).toBeVisible({ timeout });
+      await expect(dialog.getByText("No closed sessions yet")).toHaveCount(0);
+      await expect(dialog.getByRole("button", { name: "Retry" })).toBeVisible({ timeout });
+      written.push(await snap(page, dialog, `failed--${theme}.png`));
+    }
   }
 
   // Count the files ourselves. A harness that trusts its own exit code is how a
   // review ends up reasoning about screenshots that were never written.
   const onDisk = readdirSync(OUT_DIR).filter((f) => f.endsWith(".png"));
   expect(onDisk.length).toBe(written.length);
-  expect(onDisk.length).toBe(THEMES.length * 8);
+  expect(onDisk.length).toBe(THEMES.length * 10);
   console.log(`[resume-shots] ${onDisk.length} PNGs in ${OUT_DIR}`);
 });

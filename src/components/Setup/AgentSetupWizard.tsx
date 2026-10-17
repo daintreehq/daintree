@@ -17,7 +17,19 @@ import { logError } from "@/utils/logger";
 import type { CliAvailability } from "@shared/types";
 import { useAgentSetupPoll } from "./useAgentSetupPoll";
 import { isAgentInstalled, isAgentLaunchable } from "../../../shared/utils/agentAvailability";
-import { Sparkles, ChevronLeft, ArrowRight, Check, Sun, Moon, FolderOpen } from "lucide-react";
+import {
+  Sparkles,
+  ChevronLeft,
+  ArrowRight,
+  Check,
+  Sun,
+  Moon,
+  FolderOpen,
+  Minus,
+  Square,
+  X,
+} from "lucide-react";
+import { isMac } from "@/lib/platform";
 import { AnimatePresence, m, type Variants } from "framer-motion";
 import { useShouldSkipMotion } from "@/hooks/useShouldSkipMotion";
 import { Plug } from "@/components/icons";
@@ -50,6 +62,7 @@ const bondiScheme = BUILT_IN_APP_SCHEMES.find((s) => s.id === "bondi")!;
 
 function ThemeMockup({ scheme }: { scheme: AppColorScheme }) {
   const t = scheme.tokens;
+  const macChrome = isMac();
   return (
     <div
       className="rounded-lg overflow-hidden border"
@@ -62,25 +75,35 @@ function ThemeMockup({ scheme }: { scheme: AppColorScheme }) {
           borderBottom: `1px solid ${t["border-default"]}`,
         }}
       >
-        <div className="flex gap-1">
-          <div
-            className="w-1.5 h-1.5 rounded-full"
-            style={{ backgroundColor: t["status-danger"] }}
-          />
-          <div
-            className="w-1.5 h-1.5 rounded-full"
-            style={{ backgroundColor: t["status-warning"] }}
-          />
-          <div
-            className="w-1.5 h-1.5 rounded-full"
-            style={{ backgroundColor: t["status-success"] }}
-          />
-        </div>
+        {macChrome && (
+          <div className="flex gap-1">
+            <div
+              className="w-1.5 h-1.5 rounded-full"
+              style={{ backgroundColor: t["status-danger"] }}
+            />
+            <div
+              className="w-1.5 h-1.5 rounded-full"
+              style={{ backgroundColor: t["status-warning"] }}
+            />
+            <div
+              className="w-1.5 h-1.5 rounded-full"
+              style={{ backgroundColor: t["status-success"] }}
+            />
+          </div>
+        )}
         <div className="flex-1" />
         <div className="text-[6px] font-medium tracking-wide" style={{ color: t["text-muted"] }}>
           Daintree
         </div>
         <div className="flex-1" />
+        {!macChrome && (
+          // Windows and Linux draw their window controls on the right, as glyphs.
+          <div className="flex items-center gap-1" style={{ color: t["text-muted"] }}>
+            <Minus className="w-1.5 h-1.5" strokeWidth={3} />
+            <Square className="w-1.5 h-1.5" strokeWidth={3} />
+            <X className="w-1.5 h-1.5" strokeWidth={3} />
+          </div>
+        )}
       </div>
 
       <div className="flex" style={{ height: 100 }}>

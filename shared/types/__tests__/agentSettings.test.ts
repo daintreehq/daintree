@@ -23,9 +23,10 @@ import {
   relaunchResumeAsAssignedSession,
   DEFAULT_AGENT_SETTINGS,
   DEFAULT_DANGEROUS_ARGS,
+  agentClipboardDirectory,
 } from "../agentSettings.js";
 import { setUserRegistry } from "../../config/agentRegistry.js";
-import { escapeShellArg } from "../../utils/shellEscape.js";
+import { setAgentCommandDialectResolver } from "../../utils/shellEscape.js";
 import type { AgentConfig } from "../../config/agentRegistry.js";
 
 // Force POSIX shell-escape semantics so the hardcoded single-quote assertions
@@ -54,7 +55,7 @@ describe("buildResumeCommand", () => {
     const cmd = buildResumeCommand("codex", "abc-123");
     // Pinned to the launch directory (#12434), and still readable by the
     // `codex resume <id>` scrape when the shell echoes it.
-    expect(cmd).toBe(`codex resume abc-123 -C ${escapeShellArg(".")}`);
+    expect(cmd).toBe(`codex resume abc-123 -C '.'`);
     expect(cmd).toContain("codex resume abc-123");
     expect(cmd).not.toContain("--resume");
   });
@@ -104,21 +105,12 @@ describe("buildResumeCommand", () => {
       "--dangerously-bypass-approvals-and-sandbox",
     ]);
     expect(cmd).toBe(
-      `codex --no-alt-screen --dangerously-bypass-approvals-and-sandbox resume sess-456 -C ${escapeShellArg(".")}`
+      `codex --no-alt-screen --dangerously-bypass-approvals-and-sandbox resume sess-456 -C '.'`
     );
-  });
-
-  it("prepends launch flags before resume args for gemini", () => {
-    const cmd = buildResumeCommand("gemini", "sess-789", ["--yolo"]);
-    expect(cmd).toBe("gemini --yolo --resume sess-789");
   });
 
   it("handles empty launch flags array like no flags", () => {
     expect(buildResumeCommand("claude", "abc-123", [])).toBe("claude --resume abc-123");
-  });
-
-  it("handles undefined launch flags like no flags", () => {
-    expect(buildResumeCommand("claude", "abc-123", undefined)).toBe("claude --resume abc-123");
   });
 
   it("uses an explicitly resolved executable", () => {
@@ -196,11 +188,6 @@ describe("buildResumeLatestCommand", () => {
     expect(cmd).toBe("opencode --dangerously-skip-permissions --continue");
   });
 
-  it("prepends launch flags before resume-latest args for claude", () => {
-    const cmd = buildResumeLatestCommand("claude", ["--dangerously-skip-permissions"]);
-    expect(cmd).toBe("claude --dangerously-skip-permissions --continue");
-  });
-
   it("prepends launch flags before resume-latest args for codex", () => {
     const cmd = buildResumeLatestCommand("codex", [
       "--no-alt-screen",
@@ -211,17 +198,8 @@ describe("buildResumeLatestCommand", () => {
     );
   });
 
-  it("prepends launch flags before resume-latest args for gemini", () => {
-    const cmd = buildResumeLatestCommand("gemini", ["--yolo"]);
-    expect(cmd).toBe("gemini --yolo -r latest");
-  });
-
   it("handles empty launch flags array like no flags", () => {
     expect(buildResumeLatestCommand("claude", [])).toBe("claude --continue");
-  });
-
-  it("handles undefined launch flags like no flags", () => {
-    expect(buildResumeLatestCommand("claude", undefined)).toBe("claude --continue");
   });
 
   it("uses an explicitly resolved executable", () => {
@@ -261,11 +239,6 @@ describe("buildAgentLaunchFlags", () => {
     expect(flags).toContain("--debug");
   });
 
-  it("includes inline mode flag for codex when enabled", () => {
-    const flags = buildAgentLaunchFlags({ inlineMode: true }, "codex");
-    expect(flags).toContain("--no-alt-screen");
-  });
-
   it("includes inline mode flag for codex by default (inlineMode not explicitly false)", () => {
     const flags = buildAgentLaunchFlags({}, "codex");
     expect(flags).toContain("--no-alt-screen");
@@ -283,11 +256,6 @@ describe("buildAgentLaunchFlags", () => {
     const codex = buildAgentLaunchFlags({}, "codex");
     expect(grok).toContain("--no-alt-screen");
     expect(codex).toContain("--no-alt-screen");
-  });
-
-  it("still lets grok opt into inline mode explicitly", () => {
-    const flags = buildAgentLaunchFlags({ inlineMode: true }, "grok");
-    expect(flags).toContain("--no-alt-screen");
   });
 
   it("injects opencode's --mini on the interactive spawn and drops it when alt-screen is forced", () => {
@@ -338,11 +306,6 @@ describe("buildAgentLaunchFlags", () => {
 
   it("does not include --model flag when modelId is not provided", () => {
     const flags = buildAgentLaunchFlags({}, "claude");
-    expect(flags).not.toContain("--model");
-  });
-
-  it("does not include --model flag when options is undefined", () => {
-    const flags = buildAgentLaunchFlags({}, "claude", undefined);
     expect(flags).not.toContain("--model");
   });
 });
@@ -611,14 +574,6 @@ describe("generateAgentCommand with modelId", () => {
 });
 
 describe("generateAgentCommand with recipeArgs", () => {
-  it("includes single flag from recipeArgs", () => {
-    const cmd = generateAgentCommand("claude", {}, "claude", {
-      recipeArgs: "--model sonnet",
-    });
-    expect(cmd).toContain("--model");
-    expect(cmd).toContain("sonnet");
-  });
-
   it("includes multiple tokens from recipeArgs", () => {
     const cmd = generateAgentCommand("claude", {}, "claude", {
       recipeArgs: "--model opus --verbose",
@@ -678,12 +633,6 @@ describe("buildLaunchCommandFromFlags", () => {
       "--yolo",
     ]);
     expect(cmd).toBe("claude --dangerously-skip-permissions --yolo");
-  });
-
-  it("escapes non-flag positional tokens (e.g. model IDs, file paths)", () => {
-    const cmd = buildLaunchCommandFromFlags("claude", "claude", ["--model", "claude-opus-4-7"]);
-    // `--model` is flag-style (raw); `claude-opus-4-7` is positional (escaped).
-    expect(cmd).toBe("claude --model 'claude-opus-4-7'");
   });
 
   it("quotes tokens containing shell metacharacters to prevent injection", () => {
@@ -1730,12 +1679,74 @@ describe("DEFAULT_AGENT_SETTINGS inline seeding (#10876)", () => {
   });
 });
 
+describe("Windows launch command quoting", () => {
+  const originalPlatform = process.platform;
+  beforeEach(() => {
+    Object.defineProperty(process, "platform", { value: "win32", configurable: true });
+  });
+  afterEach(() => {
+    Object.defineProperty(process, "platform", { value: originalPlatform, configurable: true });
+  });
+
+  it("hands PowerShell a prompt it cannot expand or execute", () => {
+    // The command runs as a PowerShell script (`-EncodedCommand`). In cmd-style
+    // "..." this prompt's `$(...)` ran before the agent started — a recipe or an
+    // issue body could execute code — and `$HOME`, `$5` and the backticks were
+    // rewritten on their way to the agent.
+    const prompt = "Fix the `greet` function in $HOME. Price is $5. Probe: $(Set-Content x pwned)";
+    const command = generateAgentCommand("codex", {}, "codex", { initialPrompt: prompt });
+    expect(command.endsWith(` '${prompt}'`)).toBe(true);
+    expect(command).not.toContain(`"${prompt}"`);
+  });
+
+  it("quotes leading-dash payloads on fresh, resumed and rebuilt launches", () => {
+    const flag = "--value=$(Get-Date)";
+    expect(generateAgentCommand("claude", { customFlags: flag }, "claude")).toContain(`'${flag}'`);
+    expect(buildResumeCommand("claude", "session", [flag])).toContain(`'${flag}'`);
+    expect(buildResumeLatestCommand("claude", [flag])).toContain(`'${flag}'`);
+    expect(buildLaunchCommandFromFlags("claude", "claude", [flag])).toContain(`'${flag}'`);
+  });
+
+  it("doubles apostrophes and preserves double quotes as source literals", () => {
+    const command = generateAgentCommand("claude", {}, "claude", {
+      initialPrompt: `don't print "hi"`,
+    });
+    expect(command.endsWith(` 'don''t print "hi"'`)).toBe(true);
+  });
+});
+
+describe("launch commands built for another machine's shell", () => {
+  const originalPlatform = process.platform;
+  afterEach(() => {
+    setAgentCommandDialectResolver(null);
+    Object.defineProperty(process, "platform", { value: originalPlatform, configurable: true });
+  });
+
+  it("quotes for a WSL host's bash even under a Windows Shell", () => {
+    Object.defineProperty(process, "platform", { value: "win32", configurable: true });
+    setAgentCommandDialectResolver(() => "posix");
+    const command = generateAgentCommand("claude", {}, "claude", { initialPrompt: "don't stop" });
+    // PowerShell's doubled apostrophe would reach bash as "dont stop".
+    expect(command.endsWith(` 'don'\\''t stop'`)).toBe(true);
+    expect(command).not.toContain("'don''t");
+    expect(buildResumeCommand("claude", "session", ["--value=$(x)"])).toContain("'--value=$(x)'");
+  });
+
+  it("leaves this machine's own platform in charge when nothing says otherwise", () => {
+    Object.defineProperty(process, "platform", { value: "win32", configurable: true });
+    setAgentCommandDialectResolver(() => null);
+    const command = generateAgentCommand("claude", {}, "claude", { initialPrompt: "don't" });
+    expect(command.endsWith(` 'don''t'`)).toBe(true);
+  });
+});
+
 describe("decorative effects (registry capabilities.decorations)", () => {
   const OFF = ["-c", "tui.whimsy=false"];
 
   describe.each([
     ["linux", "'tui.whimsy=false'", "'.'"],
-    ["win32", '"tui.whimsy=false"', '"."'],
+    // Windows launches run through PowerShell, so they take its literal quotes too.
+    ["win32", "'tui.whimsy=false'", "'.'"],
   ])("launch commands on %s", (platform, quotedOverride, quotedDir) => {
     const originalPlatform = process.platform;
 
@@ -1801,5 +1812,21 @@ describe("decorative effects (registry capabilities.decorations)", () => {
       presetArgs: [...OFF, "--verbose"],
     });
     expect(kept).not.toContain("tui.whimsy=false");
+  });
+});
+
+describe("agentClipboardDirectory", () => {
+  it("keeps this machine's clipboard folder for a local window", () => {
+    expect(agentClipboardDirectory("/var/folders/tmp", false)).toBe(
+      "/var/folders/tmp/daintree-clipboard"
+    );
+  });
+
+  it("points a remote window's Gemini at the host inbox", () => {
+    const dir = agentClipboardDirectory("/tmp", true);
+    expect(dir).toBe("/tmp/daintree-inbox");
+    expect(
+      buildLaunchCommandFromFlags("gemini", "gemini", [], { clipboardDirectory: dir })
+    ).toContain(`--include-directories '/tmp/daintree-inbox'`);
   });
 });

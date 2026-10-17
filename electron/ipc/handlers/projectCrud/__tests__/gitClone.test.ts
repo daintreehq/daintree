@@ -14,8 +14,9 @@ const sentEvents: CloneRepoProgressEvent[] = [];
 
 vi.mock("../../../utils.js", () => ({
   typedHandle: vi.fn(() => () => {}),
-  typedHandleWithContext: vi.fn((_channel: string, handler: CloneHandler) => {
-    capturedHandler = handler;
+  // Cancel registers with a context too, so capture the clone handler by name.
+  typedHandleWithContext: vi.fn((channel: string, handler: CloneHandler) => {
+    if (channel === "project:clone-repo") capturedHandler = handler;
     return () => {};
   }),
   sendToRenderer: vi.fn((_win: unknown, _channel: string, event: CloneRepoProgressEvent) => {
@@ -122,11 +123,10 @@ vi.mock("../../../../utils/hardenedGit.js", () => ({
     (createAuthenticatedGitMock as unknown as (...a: unknown[]) => unknown)(...args),
 }));
 
-// `spawnSync` is the Windows `taskkill` in `killCloneProcessTree`; it's the
-// only child_process export the handler still uses.
-const spawnSyncMock = vi.fn();
-vi.mock("child_process", () => ({
-  spawnSync: (...args: unknown[]) => spawnSyncMock(...args),
+// The Windows tree kill in `killCloneProcessTree`.
+const treeKillMock = vi.fn();
+vi.mock("../../../../utils/windowsTreeKill.js", () => ({
+  killWindowsProcessTree: (...args: unknown[]) => treeKillMock(...args),
 }));
 
 const statMock = vi.fn();
@@ -204,6 +204,14 @@ describe("registerGitCloneHandlers", () => {
 
   it("kills the git process tree on Windows before cleanup after a failure", async () => {
     setPlatform("win32");
+    const order: string[] = [];
+    treeKillMock.mockImplementation(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 5));
+      order.push("tree");
+    });
+    rmMock.mockImplementation(async () => {
+      order.push("rm");
+    });
     cloneImpl = async () => {
       capturedSpawnAfter?.(undefined, { spawned: { pid: 4242 } });
       throw new Error("network boom");
@@ -214,16 +222,10 @@ describe("registerGitCloneHandlers", () => {
       op: "clone",
     });
 
-    expect(spawnSyncMock).toHaveBeenCalledWith(
-      "taskkill",
-      ["/T", "/F", "/PID", "4242"],
-      expect.objectContaining({ windowsHide: true, timeout: 3000 })
-    );
-    // The kill must run *before* the partial-clone removal, otherwise the
+    expect(treeKillMock).toHaveBeenCalledWith(4242, { timeoutMs: 3000 });
+    // The kill must finish *before* the partial-clone removal, otherwise the
     // orphaned git children still hold the .git/ file locks rm needs.
-    expect(spawnSyncMock.mock.invocationCallOrder[0]).toBeLessThan(
-      rmMock.mock.invocationCallOrder[0]
-    );
+    expect(order).toEqual(["tree", "rm"]);
   });
 
   it("emits cleanup-failed but still throws CANCELLED when an aborted clone can't be cleaned", async () => {
@@ -243,7 +245,7 @@ describe("registerGitCloneHandlers", () => {
     expect(sentEvents.some((e) => e.stage === "error")).toBe(false);
   });
 
-  it("does not invoke taskkill on non-Windows platforms", async () => {
+  it("does not invoke the tree kill on non-Windows platforms", async () => {
     setPlatform("darwin");
     cloneImpl = async () => {
       capturedSpawnAfter?.(undefined, { spawned: { pid: 4242 } });
@@ -251,7 +253,7 @@ describe("registerGitCloneHandlers", () => {
     };
 
     await expect(capturedHandler!(ctx, VALID_OPTIONS)).rejects.toBeTruthy();
-    expect(spawnSyncMock).not.toHaveBeenCalled();
+    expect(treeKillMock).not.toHaveBeenCalled();
   });
 
   it("emits a cleanup-failed progress event when partial cleanup fails", async () => {

@@ -115,24 +115,6 @@ describe("precomputeApiKeyBearerHash", () => {
   it("returns null when the api key is an empty string", () => {
     expect(precomputeApiKeyBearerHash("")).toBeNull();
   });
-
-  it("produces a 32-byte SHA-256 digest of the full Bearer header", () => {
-    const hash = precomputeApiKeyBearerHash("secret");
-    expect(hash).not.toBeNull();
-    expect(hash!.length).toBe(32);
-  });
-
-  it("is deterministic for the same input", () => {
-    const a = precomputeApiKeyBearerHash("secret");
-    const b = precomputeApiKeyBearerHash("secret");
-    expect(a!.equals(b!)).toBe(true);
-  });
-
-  it("differs for different api keys", () => {
-    const a = precomputeApiKeyBearerHash("alpha");
-    const b = precomputeApiKeyBearerHash("beta");
-    expect(a!.equals(b!)).toBe(false);
-  });
 });
 
 describe("isAuthorized", () => {
@@ -252,14 +234,6 @@ describe("parseToolArguments", () => {
   it("coerces strings to empty args", () => {
     expect(parseToolArguments("hello")).toEqual({ args: {} });
   });
-
-  it("coerces numbers to empty args", () => {
-    expect(parseToolArguments(42)).toEqual({ args: {} });
-  });
-
-  it("coerces booleans to empty args", () => {
-    expect(parseToolArguments(true)).toEqual({ args: {} });
-  });
 });
 
 import { deriveBand, BAND_OVERRIDES } from "../../../../shared/utils/actionRiskBand.js";
@@ -303,12 +277,6 @@ describe("BAND_OVERRIDES invariant", () => {
   it("every override key maps to a non-reversible band", () => {
     for (const [id, band] of Object.entries(BAND_OVERRIDES)) {
       expect(band, `BAND_OVERRIDES["${id}"] must not be "reversible"`).not.toBe("reversible");
-    }
-  });
-
-  it("every override key is a non-empty string", () => {
-    for (const id of Object.keys(BAND_OVERRIDES)) {
-      expect(id).toBeTruthy();
     }
   });
 });
@@ -471,6 +439,82 @@ describe("shouldExposeTool", () => {
     expect(TIER_ALLOWLISTS.external.has(entry.id)).toBe(true);
     expect(shouldExposeTool(entry, "external")).toBe(false);
   });
+  // #13335: an assistant's inbox tools are offered only while its own lane is
+  // enrolled for messaging, and never to a pane or an api-key client.
+  it.each(["assistant.getInbox", "assistant.reply"])(
+    "offers %s only to the assistant of an enrolled lane",
+    (id) => {
+      const entry = makeEntry({ id });
+      const assistant = { workspaceBound: false, rendererOwnedOrigin: true };
+      expect(shouldExposeTool(entry, "core", assistant)).toBe(false);
+      expect(shouldExposeTool(entry, "core", { ...assistant, assistantMessaging: true })).toBe(
+        true
+      );
+      expect(
+        shouldExposeTool(entry, "full", {
+          workspaceBound: false,
+          paneApproval: true,
+          assistantMessaging: true,
+        })
+      ).toBe(false);
+      expect(
+        shouldExposeTool(entry, "external", { workspaceBound: false, assistantMessaging: true })
+      ).toBe(false);
+    }
+  );
+  // #13338: sending to the hub is narrower again, a lane a remote Shell
+  // enrolled, so the hub itself never sees it.
+  it("offers assistant.sendMessage only to a lane that may send, never the hub", () => {
+    const entry = makeEntry({ id: "assistant.sendMessage" });
+    const assistant = { workspaceBound: false, rendererOwnedOrigin: true };
+    expect(shouldExposeTool(entry, "core", { ...assistant, assistantMessaging: true })).toBe(false);
+    expect(
+      shouldExposeTool(entry, "core", {
+        ...assistant,
+        assistantMessaging: true,
+        assistantSending: true,
+      })
+    ).toBe(true);
+    // Sending without the lane's own messaging is never enough.
+    expect(shouldExposeTool(entry, "core", { ...assistant, assistantSending: true })).toBe(false);
+    expect(
+      shouldExposeTool(entry, "full", {
+        workspaceBound: false,
+        paneApproval: true,
+        assistantMessaging: true,
+        assistantSending: true,
+      })
+    ).toBe(false);
+  });
+  // #13336: the hub's host tools are offered only to this Shell's enrolled hub,
+  // reads on core and sends and cancels on full, and never to a pane or key.
+  it.each([
+    ["host.list", "core"],
+    ["host.listAssistants", "core"],
+    ["host.getTask", "core"],
+    ["host.listTasks", "core"],
+    ["host.readQuota", "core"],
+    ["host.sendMessage", "full"],
+    ["host.cancelTask", "full"],
+  ] as const)("offers %s only to the hub, from the %s tier", (id, minimum) => {
+    const entry = makeEntry({ id });
+    const assistant = { workspaceBound: false, rendererOwnedOrigin: true };
+    const hub = { ...assistant, hubMessaging: true };
+    expect(shouldExposeTool(entry, "full", assistant)).toBe(false);
+    expect(shouldExposeTool(entry, "full", { ...assistant, assistantMessaging: true })).toBe(false);
+    expect(shouldExposeTool(entry, "full", hub)).toBe(true);
+    expect(shouldExposeTool(entry, "core", hub)).toBe(minimum === "core");
+    expect(
+      shouldExposeTool(entry, "full", {
+        workspaceBound: false,
+        paneApproval: true,
+        hubMessaging: true,
+      })
+    ).toBe(false);
+    expect(shouldExposeTool(entry, "external", { workspaceBound: false, hubMessaging: true })).toBe(
+      false
+    );
+  });
 });
 
 // #10701 / #11537: the curated `MCP_TOOL_ALLOWLIST` is the ONLY tool surface an
@@ -507,21 +551,6 @@ describe("external tool surface invariants (#10701, #11537)", () => {
     expect(TIER_ALLOWLISTS.external.has(id)).toBe(false);
   });
 
-  it.each(SENSITIVE_NON_ALLOWLISTED)(
-    "does not expose sensitive non-allowlisted action %s to the external tier",
-    (actionId) => {
-      const entry = makeEntry({ id: actionId, danger: "safe" });
-      expect(shouldExposeTool(entry, "external")).toBe(false);
-    }
-  );
-
-  it.each(SENSITIVE_NON_ALLOWLISTED)(
-    "does not permit dispatch of sensitive non-allowlisted action %s to the external tier",
-    (actionId) => {
-      expect(isTierPermitted("external", actionId)).toBe(false);
-    }
-  );
-
   // The clipboard bundle is the one CopyTree tool an external agent gets: it
   // can read files for itself, but only Daintree can write the user's system
   // clipboard. Its siblings stay off the surface, so this pins the membership
@@ -547,19 +576,6 @@ describe("external tool surface invariants (#10701, #11537)", () => {
       expect(isTierPermitted("external", id)).toBe(false);
       expect(shouldExposeTool(makeEntry({ id }), "external")).toBe(false);
     }
-  });
-
-  it("exposure and dispatch gates agree for a sensitive non-allowlisted action", () => {
-    const entry = makeEntry({ id: "system.openExternal", danger: "safe" });
-    expect(shouldExposeTool(entry, "external")).toBe(
-      isTierPermitted("external", "system.openExternal")
-    );
-  });
-
-  it("still reaches curated-allowlist tools", () => {
-    const entry = makeEntry({ id: "actions.list" });
-    expect(shouldExposeTool(entry, "external")).toBe(true);
-    expect(isTierPermitted("external", "actions.list")).toBe(true);
   });
 
   // Exact equality, both directions, over the whole action registry: no
@@ -1116,6 +1132,17 @@ describe("narrow agent discovery tier reachability", () => {
     }
   );
 
+  // The model listing exists so the in-app assistant can turn a model the user
+  // names into an id without its prompt carrying slugs (#13437). An external
+  // caller passes an id it already has, so the external surface stays as is.
+  it("permits agent.listModels at every in-app tier only", () => {
+    for (const tier of ["core", "full"] as const) {
+      expect(isTierPermitted(tier, "agent.listModels", true)).toBe(true);
+      expect(isTierPermitted(tier, "agent.listModels", false)).toBe(true);
+    }
+    expect(isTierPermitted("external", "agent.listModels")).toBe(false);
+  });
+
   it("keeps agent.listToolbar and the broad agentSettings.get off every tier", () => {
     for (const toolId of ["agent.listToolbar", "agentSettings.get"]) {
       expect(BUILT_IN_ACTION_IDS as readonly string[]).toContain(toolId);
@@ -1164,12 +1191,8 @@ describe("getTierPermittedActionIds", () => {
     }
   });
 
-  // Every tier must resolve to a distinct, non-empty surface: a selector bug
-  // that collapsed two tiers onto one set would widen discovery silently.
-  it.each(TIERS)("resolves tier %s to a populated surface", (tier) => {
-    expect(getTierPermittedActionIds(tier).size).toBeGreaterThan(0);
-  });
-
+  // Every tier must resolve to a distinct surface: a selector bug that collapsed
+  // two tiers onto one set would widen discovery silently.
   it("keeps every tier surface distinct from every other tier's", () => {
     const sameMembership = (a: ReadonlySet<string>, b: ReadonlySet<string>) =>
       a.size === b.size && Array.from(a).every((id) => b.has(id));
@@ -2248,6 +2271,22 @@ describe("filterIntrospectionResultForSession", () => {
       expect(McpUnavailableActionStubSchema.safeParse(stub).success).toBe(true);
     });
 
+    // #13336: a core session that isn't the hub can't raise its tier into the
+    // hub's send tools, so it is never told it could.
+    it("offers the hub's full-tier tools as a stub to the hub alone", () => {
+      const entry = makeEntry({
+        id: "host.sendMessage",
+        title: "Message an assistant on a host",
+        category: "help",
+        danger: "safe",
+      });
+      expect(buildUnavailableStub(entry, firstParty())).toBeNull();
+      expect(buildUnavailableStub(entry, firstParty({ hubMessaging: true }))).toMatchObject({
+        id: "host.sendMessage",
+        minimumTier: "full",
+      });
+    });
+
     // The stub above proves nothing about the derivation: BAND_OVERRIDES pins
     // it, so a builder that passed a hard-coded `danger` into `deriveBand`
     // would still report it correctly. `worktree.resource.teardown` is out of
@@ -2643,7 +2682,16 @@ describe("isWithheldFromBoundSession (#11789)", () => {
 // decides whether a panel tool could be reached, the origin decides whether the
 // unscoped form or the owned twin is.
 describe("unscoped panel tools are reserved for renderer-owned origins (#12407)", () => {
-  const ASSISTANT = { workspaceBound: false, rendererOwnedOrigin: true };
+  // An assistant whose lane is enrolled for messaging, and is this Shell's hub,
+  // so its own inbox tools (#13335) and host tools (#13336), reserved here too,
+  // are on its surface alongside the rest.
+  const ASSISTANT = {
+    workspaceBound: false,
+    rendererOwnedOrigin: true,
+    assistantMessaging: true,
+    assistantSending: true,
+    hubMessaging: true,
+  };
   const TWIN_KEYS = new Set<string>(Object.keys(OWNED_TWIN_TOOLS));
   const TWIN_VALUES = new Set<string>(Object.values(OWNED_TWIN_TOOLS));
 

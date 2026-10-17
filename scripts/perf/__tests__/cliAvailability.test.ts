@@ -1,3 +1,6 @@
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 
 import type { AgentConfig } from "../../../shared/config/agentRegistry";
@@ -6,24 +9,22 @@ import {
   ALWAYS_ABSENT_AGENT_ID,
   addRefreshGrade,
   authEnvVars,
-  duplicateMilestoneKey,
   emptyRefreshGrade,
   expectedAuthState,
   expectedSpawnsFor,
   foundAgentIds,
   gradeRefresh,
   refreshMisses,
+  startsNpmPrefixLookup,
   type CliArm,
   type CliModules,
 } from "../lib/cliAvailabilityFixture";
-import { classifyMetric } from "../lib/comparability";
-import { allScenarios } from "../scenarios";
 
 /**
  * The stub experiment for the availability family, written down.
  *
- * The scenarios drive the real service against real `which` subprocesses, which
- * needs the module-resolution hooks Vitest does not run. What is pinned here is
+ * The scenarios drive the real service against a real PATH, which needs the
+ * module-resolution hooks Vitest does not run. What is pinned here is
  * the half that matters for review: the spawn arithmetic the oracle compares
  * against, and that each predicate goes non-zero for the specific way its
  * operation breaks — including the two cheap wrong answers, "everything is
@@ -57,7 +58,7 @@ function armFor(plantedIds: string[], viaPrepend = false): CliArm {
     // constant.
     path: "/daintree-perf-nonexistent-a:/daintree-perf-nonexistent-b",
     prepend: viaPrepend ? "/daintree-perf-nonexistent-a" : null,
-    expectedSpawns: expectedSpawnsFor(REGISTRY, plantedIds, viaPrepend),
+    expectedSpawns: expectedSpawnsFor(REGISTRY, plantedIds, true),
     hasDuplicate: false,
   };
 }
@@ -91,21 +92,47 @@ function gradeAgainst(
 }
 
 describe("perf cli-availability spawn arithmetic", () => {
-  it("prices a POSIX miss at two starts and a PATH hit at one", () => {
-    // On POSIX `which -a` exiting non-zero cannot be told apart from a `which`
-    // that rejects `-a`, so the service runs the probe a second time.
-    const perMiss = process.platform === "win32" ? 1 : 2;
-    // beta declares an npm package, so a refresh in which beta misses also
-    // pays one `npm config get prefix`.
-    expect(expectedSpawnsFor(REGISTRY, [], false)).toBe(3 * perMiss + 1);
-    expect(expectedSpawnsFor(REGISTRY, ["alpha"], false)).toBe(1 + 2 * perMiss + 1);
-    expect(expectedSpawnsFor(REGISTRY, ["alpha", "beta"], false)).toBe(2 + perMiss);
+  it("prices a PATH hit or miss at zero starts on every platform", () => {
+    // Every planted, and kiro (the one miss) declares no npm package.
+    expect(expectedSpawnsFor(REGISTRY, ["alpha", "beta"], true)).toBe(0);
+    expect(expectedSpawnsFor(REGISTRY, Object.keys(REGISTRY), true)).toBe(0);
   });
 
-  it("prices a prepended-path hit at zero starts", () => {
-    const perMiss = process.platform === "win32" ? 1 : 2;
-    expect(expectedSpawnsFor(REGISTRY, ["alpha", "beta"], true)).toBe(perMiss);
-    expect(expectedSpawnsFor(REGISTRY, Object.keys(REGISTRY), true)).toBe(0);
+  it("adds one npm-prefix start when a missing agent declares an npm package", () => {
+    expect(expectedSpawnsFor(REGISTRY, [], true)).toBe(1);
+    expect(expectedSpawnsFor(REGISTRY, ["alpha"], true)).toBe(1);
+  });
+
+  it("prices the npm-prefix lookup at zero where the arm starts none", () => {
+    expect(expectedSpawnsFor(REGISTRY, [], false)).toBe(0);
+    expect(expectedSpawnsFor(REGISTRY, ["alpha"], false)).toBe(0);
+  });
+
+  it("starts the npm-prefix lookup on POSIX whatever PATH holds", () => {
+    expect(startsNpmPrefixLookup(["/daintree-perf-nonexistent-a"], "linux")).toBe(true);
+    expect(startsNpmPrefixLookup([], "darwin")).toBe(true);
+  });
+
+  it("starts the npm-prefix lookup on Windows only when PATH holds an npm", () => {
+    const withNpm = mkdtempSync(join(tmpdir(), "daintree-perf-npm-"));
+    const withoutNpm = mkdtempSync(join(tmpdir(), "daintree-perf-no-npm-"));
+    try {
+      writeFileSync(join(withNpm, "npm.cmd"), "");
+      // An extensionless sh script is not something Windows can start.
+      writeFileSync(join(withoutNpm, "npm"), "");
+      expect(startsNpmPrefixLookup([withoutNpm], "win32", ".COM;.EXE;.BAT;.CMD")).toBe(false);
+      expect(startsNpmPrefixLookup([withoutNpm, withNpm], "win32", ".COM;.EXE;.BAT;.CMD")).toBe(
+        true
+      );
+      // PATHEXT decides what a bare name starts as, so without .CMD the shim is not npm.
+      expect(startsNpmPrefixLookup([withNpm], "win32", ".COM;.EXE")).toBe(false);
+      // A directory with the name is not a file to start.
+      mkdirSync(join(withoutNpm, "npm.exe"));
+      expect(startsNpmPrefixLookup([withoutNpm], "win32", ".COM;.EXE;.BAT;.CMD")).toBe(false);
+    } finally {
+      rmSync(withNpm, { recursive: true, force: true });
+      rmSync(withoutNpm, { recursive: true, force: true });
+    }
   });
 });
 
@@ -131,8 +158,9 @@ describe("perf cli-availability graders", () => {
     const grade = gradeAgainst(arm, availabilityWhere([]), 0);
     expect(grade.foundSetMisses).toBe(2);
     // Signed: positive means the ladder did LESS work than it is supposed to.
+    // A PATH hit is free on every platform, so here the found-set term is the
+    // one that catches it.
     expect(grade.spawnCountMisses).toBe(arm.expectedSpawns);
-    expect(grade.spawnCountMisses).toBeGreaterThan(0);
   });
 
   it("catches a probe that answers ready for everything", () => {
@@ -235,10 +263,6 @@ describe("perf cli-availability auth expectations", () => {
     };
     expect(authEnvVars(registry).sort()).toEqual(["ONE_KEY", "TWO_KEY"]);
   });
-
-  it("names the milestone key notifyDuplicateInstalls writes", () => {
-    expect(duplicateMilestoneKey("claude")).toBe("duplicate-cli-warning:claude");
-  });
 });
 
 /**
@@ -275,7 +299,7 @@ describe("perf cli-availability auth grading", () => {
       plantedIds: ["alpha", "beta"],
       path: "/daintree-perf-nonexistent-a:/daintree-perf-nonexistent-b",
       prepend: null,
-      expectedSpawns: expectedSpawnsFor(AUTH_REGISTRY, ["alpha", "beta"], false),
+      expectedSpawns: expectedSpawnsFor(AUTH_REGISTRY, ["alpha", "beta"], true),
       hasDuplicate: false,
     };
   }
@@ -338,29 +362,5 @@ describe("perf cli-availability auth grading", () => {
     // Only one planted agent declares an auth check now, so there is no split
     // to claim and the term must stay silent rather than firing spuriously.
     expect(result.authSplitMisses).toBe(0);
-  });
-});
-
-describe("perf cli-availability scenarios", () => {
-  it("declares both scenarios with count-class predicates", () => {
-    for (const id of ["PERF-393", "PERF-394"]) {
-      const scenario = allScenarios.find((candidate) => candidate.id === id);
-      expect(scenario).toBeDefined();
-      const correctness = scenario?.correctness ?? [];
-      expect(correctness.length).toBeGreaterThan(0);
-      for (const name of correctness) {
-        expect(`${name}:${classifyMetric(name)}`).toBe(`${name}:count`);
-      }
-    }
-  });
-
-  it("marks both scenarios diagnostic on Windows", () => {
-    // The WSL probe path reaches the user's real WSL installation, and the
-    // shell probe costs one start rather than two. Both are stated rather than
-    // silently carried into a cross-platform comparison.
-    for (const id of ["PERF-393", "PERF-394"]) {
-      const scenario = allScenarios.find((candidate) => candidate.id === id);
-      expect(scenario?.platforms?.win32).toBe("diagnostic");
-    }
   });
 });

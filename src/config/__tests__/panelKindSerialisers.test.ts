@@ -28,13 +28,6 @@ describe("panelKindSerialisers", () => {
         browserConsoleOpen: true,
       });
     });
-
-    it("returns undefined for missing optional fields", () => {
-      const deserialize = getDeserializer("browser");
-      const result = deserialize!({ id: "b1" });
-      expect(result.browserUrl).toBeUndefined();
-      expect(result.browserConsoleOpen).toBeUndefined();
-    });
   });
 
   describe("dev-preview", () => {
@@ -67,12 +60,6 @@ describe("panelKindSerialisers", () => {
       const deserialize = getDeserializer("dev-preview");
       const result = deserialize!({ id: "d1", command: "  npm start  " });
       expect(result.devCommand).toBe("npm start");
-    });
-
-    it("returns undefined devCommand when both missing", () => {
-      const deserialize = getDeserializer("dev-preview");
-      const result = deserialize!({ id: "d1" });
-      expect(result.devCommand).toBeUndefined();
     });
 
     it("keeps a known viewportPreset and round-trips emulation fields", () => {
@@ -143,20 +130,6 @@ describe("panelKindSerialisers", () => {
           deserialize()({ id: "fb1", browserSortDirection: "sideways" }).browserSortDirection
         ).toBeUndefined();
       });
-
-      it("round-trips a non-default order through serialize and back", () => {
-        const panel: FileBrowserPanelData = {
-          id: "fb1",
-          kind: "file-browser",
-          title: "Files",
-          location: "grid",
-          browserSortKey: "size",
-          browserSortDirection: "desc",
-        };
-        const restored = deserialize()({ id: "fb1", ...serializeFileBrowser(panel) });
-        expect(restored.browserSortKey).toBe("size");
-        expect(restored.browserSortDirection).toBe("desc");
-      });
     });
 
     it("keeps safe relative paths and drops everything that could escape the root", () => {
@@ -165,6 +138,7 @@ describe("panelKindSerialisers", () => {
         browserExpandedPaths: [
           "src",
           "src/lib",
+          "nested\\..\\..\\escape",
           "/etc",
           "../secrets",
           "a/../../b",
@@ -179,17 +153,6 @@ describe("panelKindSerialisers", () => {
       });
 
       expect(result.browserExpandedPaths).toEqual(["src", "src/lib"]);
-    });
-
-    it("rejects traversal written with backslashes, not just forward slashes", () => {
-      // A snapshot written on Windows can be opened on POSIX and vice versa, so
-      // the sanitizer can't assume one separator convention.
-      const result = deserialize()({
-        id: "fb1",
-        browserExpandedPaths: ["ok", "nested\\..\\..\\escape"],
-      });
-
-      expect(result.browserExpandedPaths).toEqual(["ok"]);
     });
 
     it("deduplicates and caps a pathological expansion list", () => {

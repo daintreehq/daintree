@@ -26,6 +26,7 @@ import {
   type QueuedCommand,
   isAgentReady,
 } from "./slices";
+import type { AddPanelCommitOptions } from "./slices/panelRegistry/types";
 import type { TerminalRefreshTier, AddPanelFocusPolicy } from "@shared/types";
 import {
   isGridPanelLocation,
@@ -352,7 +353,7 @@ export const usePanelStore = create<PanelGridState>()(
         set({ watchdogStatus: "disabled", watchdogDisabledInfo: info }),
       clearWatchdogDisabled: () => set({ watchdogStatus: "active", watchdogDisabledInfo: null }),
 
-      addPanel: async (options: AddPanelOptions) => {
+      addPanel: async (options: AddPanelOptions, commit?: AddPanelCommitOptions) => {
         // Capture the pre-create focus so we can restore previousFocusedId for the
         // dock-activation path (#6590). The registry slice atomically advances
         // focusedId to the new id when activateDockOnCreate is set, so by the
@@ -388,11 +389,22 @@ export const usePanelStore = create<PanelGridState>()(
           resolvedFocusPolicy !== "preserve" &&
           !(resolvedFocusPolicy === "auto" && assistantHasFocus) &&
           nothingFullscreen();
+        // Only the refusal hook is forwarded: focus-on-commit is decided here,
+        // from the gates captured above, never by the caller.
+        const onLimitRefused = commit?.onLimitRefused;
         const id = await registrySlice.addPanel(
           panelOptions,
-          focusesOnCommit
+          focusesOnCommit || onLimitRefused
             ? {
-                focus: { previousFocusedId: focusedBeforeCreate, stillApplies: nothingFullscreen },
+                ...(focusesOnCommit
+                  ? {
+                      focus: {
+                        previousFocusedId: focusedBeforeCreate,
+                        stillApplies: nothingFullscreen,
+                      },
+                    }
+                  : {}),
+                ...(onLimitRefused ? { onLimitRefused } : {}),
               }
             : undefined
         );
@@ -621,7 +633,7 @@ export const usePanelStore = create<PanelGridState>()(
         return moved;
       },
 
-      trashPanel: (id: string) => {
+      trashPanel: (id: string, options?: { hostTrashed?: boolean }) => {
         const state = get();
         const terminalToTrash = state.panelsById[id];
         if (terminalToTrash && terminalToTrash.location !== "trash") {
@@ -637,7 +649,7 @@ export const usePanelStore = create<PanelGridState>()(
         const policy = resolvePanelKindPolicy(terminalToTrash?.kind);
         const preferAgent = Boolean(terminalToTrash && isRuntimeAgentTerminal(terminalToTrash));
 
-        registrySlice.trashPanel(id);
+        registrySlice.trashPanel(id, options);
 
         // Clear watch when panel is trashed (onTerminalRemoved only fires on full removal)
         get().unwatchPanel(id);
@@ -850,12 +862,18 @@ export const usePanelStore = create<PanelGridState>()(
         }
       },
 
-      restoreTerminal: (id: string, targetWorktreeId?: string) => {
-        registrySlice.restoreTerminal(id, targetWorktreeId);
+      restoreTerminal: (
+        id: string,
+        targetWorktreeId?: string,
+        options?: { hostRestored?: boolean; keepFocus?: boolean }
+      ) => {
+        registrySlice.restoreTerminal(id, targetWorktreeId, options);
         // The registry restore is a no-op when the id is gone; don't move
         // focus onto a panel that doesn't exist.
         const restoredPanel = get().panelsById[id];
         if (!restoredPanel) return;
+        // Restored from behind an overlay: the pane is back, and focus stays put.
+        if (options?.keepFocus) return;
         const previousFocusedId = get().focusedId;
         const landsInDock = restoredPanel.location === "dock" && isDockPanel(restoredPanel);
         // A grid restore takes focus, so it must be visible: leave fullscreen

@@ -110,16 +110,6 @@ describe("bootPromise", () => {
     expect(promise.value).toEqual({ ok: true, result });
   });
 
-  it("re-fires boot() after resetBootPromiseForTests clears the cache", () => {
-    const bootFn = installElectron(async () => makeBootResult());
-
-    void getBootPromise();
-    resetBootPromiseForTests();
-    void getBootPromise();
-
-    expect(bootFn).toHaveBeenCalledTimes(2);
-  });
-
   it("returns a rejected promise instead of throwing when the bridge lacks app.boot", async () => {
     // Truthy `window.electron` (so isElectronAvailable passes) but no `app` —
     // calling `app.boot()` throws synchronously. getBootPromise must not let

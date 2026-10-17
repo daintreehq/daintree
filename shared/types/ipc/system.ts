@@ -18,6 +18,19 @@ export interface SystemOpenInEditorPayload {
   col?: number;
 }
 
+/**
+ * What an open-in-editor did instead of opening, when it couldn't. Only a
+ * window attached to a remote host answers this: no editor here could open
+ * the host's file, so its path went to this machine's clipboard. Undefined
+ * means the editor was asked to open it.
+ */
+export interface SystemOpenInEditorFallback {
+  outcome: "copied-host-path";
+  path: string;
+  /** The host's display name, for the notice that says where the path is. */
+  hostName: string;
+}
+
 /** System wake event payload */
 export interface SystemWakePayload {
   /** Duration of sleep in milliseconds */
@@ -98,8 +111,9 @@ export interface AgentCliDetail {
   /** WSL distribution used when `via === "wsl"`. */
   wslDistro?: string;
   /**
-   * All paths emitted by the shell probe (`which -a` / `where.exe`), in PATH
-   * order. Populated only when the probe succeeded via `which`. The first
+   * All distinct paths the PATH probe found (an in-process walk on POSIX, an
+   * in-process PATH search on Windows), in PATH order. Populated only when the
+   * probe succeeded via the PATH layer (`via: "which"`). The first
    * entry equals {@link AgentCliDetail.resolvedPath}; additional entries are
    * the duplicate installs that drove the duplicate-detection notification.
    */
@@ -386,7 +400,7 @@ export type RendererCpuProfileStopResult =
 /**
  * Payload for starting an install job. Either an agent CLI (resolved through
  * the agent registry) or a baseline prerequisite (resolved through
- * `BASELINE_PREREQUISITES`). The renderer names a target; it never supplies
+ * `getBaselinePrerequisites()`). The renderer names a target; it never supplies
  * commands — main owns the mapping from name to command in both cases.
  */
 export type AgentInstallPayload = {

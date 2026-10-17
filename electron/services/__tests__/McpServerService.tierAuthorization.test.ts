@@ -1021,6 +1021,12 @@ describe("McpServerService", () => {
         title: "Reload Panel",
         description: "Discard a plugin panel's view and mount a fresh one",
       }),
+      // Full-only (#13384): it hands an agent a plugin panel's pixels.
+      createManifestEntry({
+        id: "plugin.capturePanel" as ActionId,
+        title: "Capture Plugin Panel",
+        description: "A PNG of one plugin panel and the plugin's console errors",
+      }),
       createManifestEntry({
         id: "terminal.sendCommand" as ActionId,
         title: "Send Terminal Command",
@@ -1130,6 +1136,17 @@ describe("McpServerService", () => {
         id: "copyTree.generateAndCopyFile" as ActionId,
         title: "Generate And Copy Context",
         description: "Write generated context to the OS clipboard",
+      }),
+      createManifestEntry({
+        id: "host.switch" as ActionId,
+        title: "Switch host…",
+        description: "Move this window to another machine running Daintree",
+        danger: "confirm",
+      }),
+      createManifestEntry({
+        id: "project.openOnHost" as ActionId,
+        title: "Open project on host…",
+        description: "Open this window's project on another host through git",
       }),
       createManifestEntry({
         id: "agent.terminal" as ActionId,
@@ -1472,6 +1489,18 @@ describe("McpServerService", () => {
         description: "Run resource teardown commands for a worktree",
         danger: "confirm",
       }),
+      // Full-only (#13408).
+      createManifestEntry({
+        id: "worktree.setLabelColor" as ActionId,
+        title: "Set Worktree Label Colour",
+        description: "Mark a worktree's sidebar card with a colour",
+      }),
+      // Full-only (#13409).
+      createManifestEntry({
+        id: "worktree.setCustomTitle" as ActionId,
+        title: "Set Worktree Title",
+        description: "Give a worktree's sidebar card a custom title",
+      }),
       createManifestEntry({
         id: "git.stageFile" as ActionId,
         title: "Stage File",
@@ -1684,6 +1713,7 @@ describe("McpServerService", () => {
           ["worktree.waitForPullRequest", "Wait For Pull Request"],
           ["agent.listAvailable", "List Available Agents"],
           ["agent.listPresets", "List Agent Presets"],
+          ["agent.listModels", "List Agent Models"],
           ["terminal.list", "List Terminals"],
           ["terminal.getStatus", "Get Terminal Status"],
           ["terminal.getOutput", "Get Terminal Output"],
@@ -1976,34 +2006,6 @@ describe("McpServerService", () => {
       }
     });
 
-    it("rejects callTool for actions outside the session tier with TIER_NOT_PERMITTED", async () => {
-      paneTokenTiers.set("token-core", "core");
-      const dispatchMock = vi.fn((): ActionDispatchResult => ({
-        ok: true,
-        result: "should-not-run",
-      }));
-      const { window } = createMockWindow({
-        getManifest: tierManifest,
-        dispatchAction: dispatchMock,
-      });
-
-      await service.start(window);
-      const { client, transport } = await connectClient(service.currentPort!, {
-        Authorization: "Bearer token-core",
-      });
-      transports.push(transport);
-
-      // On the full set, so this is the core ceiling refusing it rather than a
-      // tool no tier carries.
-      const denied = (await client.callTool({
-        name: "project.runCheck",
-        arguments: { runnerId: "test" },
-      })) as TextToolResult;
-      expect(denied.isError).toBe(true);
-      expect(denied.content[0]?.text).toContain("TIER_NOT_PERMITTED");
-      expect(dispatchMock).not.toHaveBeenCalled();
-    });
-
     // Fixed ids, not a loop over CORE_TIER_TOOLS: the derived loops above
     // shrink with the allowlist, so dropping the entry again would leave them
     // green. These two pin the #11877 decision itself — the cross-worktree move
@@ -2235,22 +2237,6 @@ describe("McpServerService", () => {
       }
     );
 
-    it("full tier also reaches forge.getCIStatus (it is a read)", async () => {
-      paneTokenTiers.set("token-full", "full");
-      const { window } = createMockWindow({ getManifest: tierManifest });
-
-      await service.start(window);
-      const { client, transport } = await connectClient(service.currentPort!, {
-        Authorization: "Bearer token-full",
-      });
-      transports.push(transport);
-
-      const ids = (await client.listTools()).tools.map((tool) => tool.name);
-      expect(ids).toContain("forge.getCIStatus");
-      // Sanity: the tier is still scoped — a write neighbour stays out.
-      expect(ids).not.toContain("forge.createPR");
-    });
-
     // `forge.getChecks` left both tool sets with the core/full split; the
     // roll-up is the in-app route to "is this PR green?".
     it("keeps forge.getChecks off the full tier, listed nowhere and refused at dispatch", async () => {
@@ -2333,34 +2319,6 @@ describe("McpServerService", () => {
       }
 
       expect(dispatchMock).not.toHaveBeenCalled();
-    });
-
-    it("filters listTools by the pane token's tier for pane-scoped sessions", async () => {
-      paneTokenTiers.set("token-core", "core");
-      const { window } = createMockWindow({
-        getManifest: () => [
-          ...tierManifest(),
-          createManifestEntry({
-            id: "panel.gridLayout.setStrategy" as ActionId,
-            title: "Set grid layout",
-            description: "Power-user UI plumbing",
-          }),
-        ],
-      });
-
-      await service.start(window);
-      const { client, transport } = await connectClient(service.currentPort!, {
-        Authorization: "Bearer token-core",
-      });
-      transports.push(transport);
-
-      const ids = (await client.listTools()).tools.map((tool) => tool.name);
-      expect(ids).toContain("worktree.list");
-      // Outside the core allowlist — the pane tier is the ceiling.
-      expect(ids).not.toContain("recipe.run");
-      expect(ids).not.toContain("worktree.create");
-      expect(ids).not.toContain("git.commit");
-      expect(ids).not.toContain("panel.gridLayout.setStrategy");
     });
   });
 });

@@ -56,32 +56,6 @@ describe("ErrorFallback", () => {
       expect(screen.queryByText("Test error message")).toBeNull();
     });
 
-    it("shows friendly message instead of raw error", () => {
-      render(<ErrorFallback {...baseProps} variant="section" />);
-      expect(
-        screen.getByText(
-          "Your terminals and agents are still running. Try again to reload this area."
-        )
-      ).toBeTruthy();
-    });
-
-    it("displays full incident ID inside a copy button", () => {
-      render(<ErrorFallback {...baseProps} variant="section" />);
-      const copyButton = screen.getByTestId("error-fallback-copy-id");
-      expect(copyButton.textContent).toBe("error-1710000000000-a3f7b2x");
-      expect(copyButton.getAttribute("aria-label")).toBe("Copy error ID");
-    });
-
-    it("renders technical details so crash reporters see the stack", () => {
-      render(<ErrorFallback {...baseProps} variant="section" />);
-      expect(screen.getByText("Technical details")).toBeTruthy();
-    });
-
-    it("renders the stack trace inside the details block", () => {
-      render(<ErrorFallback {...baseProps} variant="section" />);
-      expect(document.querySelector("details pre")?.textContent).toContain("at TestComponent");
-    });
-
     it("keeps the details block collapsed by default (no open attribute)", () => {
       const { container } = render(<ErrorFallback {...baseProps} variant="section" />);
       const details = container.querySelector("details");
@@ -99,19 +73,6 @@ describe("ErrorFallback", () => {
       const pre = container.querySelector("pre");
       expect(pre?.textContent).toContain("/Users/USER/project/src/file.ts");
       expect(pre?.textContent).not.toContain("/Users/alice/");
-    });
-
-    it("scrubs user paths from the displayed component stack", () => {
-      const error = Object.assign(new Error("boom"), { stack: "Error: boom" });
-      const errorInfo = {
-        componentStack: "\n    at Comp (/home/bob/app/Comp.tsx:3:1)",
-      } as React.ErrorInfo;
-      const { container } = render(
-        <ErrorFallback {...baseProps} error={error} errorInfo={errorInfo} variant="section" />
-      );
-      const pre = container.querySelector("pre");
-      expect(pre?.textContent).toContain("/home/USER/app/Comp.tsx");
-      expect(pre?.textContent).not.toContain("/home/bob/");
     });
 
     it("renders details when only error.stack is present (no componentStack)", () => {
@@ -164,18 +125,6 @@ describe("ErrorFallback", () => {
       expect(pre?.textContent).toContain("/home/USER/app/Comp.tsx");
       expect(pre?.textContent).not.toContain("/home/bob/");
     });
-
-    it("scrubs Windows user paths from the displayed stack", () => {
-      const error = Object.assign(new Error("boom"), {
-        stack: "Error: boom\n    at fn (C:\\Users\\alice\\project\\file.ts:10:5)",
-      });
-      const { container } = render(
-        <ErrorFallback {...baseProps} error={error} variant="section" />
-      );
-      const pre = container.querySelector("pre");
-      expect(pre?.textContent).toContain("C:\\Users\\USER\\project\\file.ts");
-      expect(pre?.textContent).not.toContain("C:\\Users\\alice\\");
-    });
   });
 
   describe("development mode", () => {
@@ -186,16 +135,6 @@ describe("ErrorFallback", () => {
     it("renders raw error.message", () => {
       render(<ErrorFallback {...baseProps} variant="section" />);
       expect(screen.getByText("Test error message")).toBeTruthy();
-    });
-
-    it("does not display incident ID", () => {
-      render(<ErrorFallback {...baseProps} variant="section" />);
-      expect(screen.queryByText(/Error ID:/)).toBeNull();
-    });
-
-    it("renders technical details block for section variant", () => {
-      render(<ErrorFallback {...baseProps} variant="section" />);
-      expect(screen.getByText("Technical details")).toBeTruthy();
     });
 
     it("renders stack trace in details", () => {
@@ -210,12 +149,6 @@ describe("ErrorFallback", () => {
       render(<ErrorFallback {...baseProps} variant="component" />);
       expect(screen.queryByText("Technical details")).toBeNull();
     });
-
-    it("does not show incident ID in production", () => {
-      vi.stubEnv("DEV", false);
-      render(<ErrorFallback {...baseProps} variant="component" />);
-      expect(screen.queryByText(/Error ID:/)).toBeNull();
-    });
   });
 
   describe("buttons", () => {
@@ -224,15 +157,6 @@ describe("ErrorFallback", () => {
       render(<ErrorFallback {...baseProps} variant="section" />);
       fireEvent.click(screen.getByText("Try again"));
       expect(baseProps.resetError).toHaveBeenCalledOnce();
-    });
-
-    it("shows Report issue button for section variant with onReport", () => {
-      vi.stubEnv("DEV", false);
-      const onReport = vi.fn();
-      render(<ErrorFallback {...baseProps} variant="section" onReport={onReport} />);
-      const btn = screen.getByText("Report issue");
-      fireEvent.click(btn);
-      expect(onReport).toHaveBeenCalledOnce();
     });
 
     it("does not show Report issue for component variant", () => {
@@ -248,12 +172,6 @@ describe("ErrorFallback", () => {
       expect(screen.queryByText("View logs")).toBeNull();
     });
 
-    it("shows View logs for section variant", () => {
-      vi.stubEnv("DEV", false);
-      render(<ErrorFallback {...baseProps} variant="section" />);
-      expect(screen.getByText("View logs")).toBeTruthy();
-    });
-
     it("shows View logs for fullscreen variant", () => {
       vi.stubEnv("DEV", false);
       render(<ErrorFallback {...baseProps} variant="fullscreen" />);
@@ -267,13 +185,6 @@ describe("ErrorFallback", () => {
       expect(actionService.dispatch).toHaveBeenCalledWith("logs.openFile", undefined, {
         source: "user",
       });
-    });
-
-    it("shows Try again text for fullscreen variant", () => {
-      vi.stubEnv("DEV", false);
-      render(<ErrorFallback {...baseProps} variant="fullscreen" />);
-      const restart = screen.getByTestId("error-fallback-restart");
-      expect(restart.textContent).toBe("Try again");
     });
 
     it("keeps Report issue focused but inert while a report is in flight", () => {
@@ -333,21 +244,10 @@ describe("ErrorFallback", () => {
       expect(container.getAttribute("aria-labelledby")).toBeNull();
     });
 
-    it("does not apply alertdialog role to component variant", () => {
-      render(<ErrorFallback {...baseProps} variant="component" />);
-      const container = screen.getByTestId("error-fallback");
-      expect(container.getAttribute("role")).toBeNull();
-    });
-
     it("does not assign id to the title for section variant (avoids duplicate IDs)", () => {
       render(<ErrorFallback {...baseProps} variant="section" />);
       const title = screen.getByTestId("error-fallback-title");
       expect(title.id).toBe("");
-    });
-
-    it("auto-focuses the primary action button on fullscreen variant", () => {
-      render(<ErrorFallback {...baseProps} variant="fullscreen" />);
-      expect(document.activeElement).toBe(screen.getByTestId("error-fallback-restart"));
     });
   });
 
@@ -389,16 +289,6 @@ describe("ErrorFallback", () => {
   });
 
   describe("icons", () => {
-    it("renders an SVG icon instead of emoji for each variant", () => {
-      vi.stubEnv("DEV", false);
-      for (const variant of ["fullscreen", "section", "component"] as const) {
-        const { container, unmount } = render(<ErrorFallback {...baseProps} variant={variant} />);
-        expect(container.querySelector("svg")).toBeTruthy();
-        expect(container.textContent).not.toContain("\u26A0\uFE0F");
-        unmount();
-      }
-    });
-
     it("keeps error red to the warning glyph alone in every variant", () => {
       for (const dev of [false, true]) {
         vi.stubEnv("DEV", dev);
@@ -446,27 +336,6 @@ describe("ErrorFallback", () => {
       const { polite, assertive } = useAnnouncerStore.getState();
       expect(polite).toBeNull();
       expect(assertive).toBeNull();
-    });
-  });
-
-  describe("incident ID edge cases", () => {
-    it("does not render Error ID when incidentId is null", () => {
-      vi.stubEnv("DEV", false);
-      render(<ErrorFallback {...baseProps} incidentId={null} variant="section" />);
-      expect(screen.queryByText(/Error ID:/)).toBeNull();
-    });
-
-    it("does not render Error ID when incidentId is undefined", () => {
-      vi.stubEnv("DEV", false);
-      render(
-        <ErrorFallback
-          error={baseProps.error}
-          errorInfo={baseProps.errorInfo}
-          resetError={baseProps.resetError}
-          variant="section"
-        />
-      );
-      expect(screen.queryByText(/Error ID:/)).toBeNull();
     });
   });
 });

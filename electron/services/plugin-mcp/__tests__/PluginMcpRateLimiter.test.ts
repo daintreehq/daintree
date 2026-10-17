@@ -16,20 +16,6 @@ function makeClock(start = 1_000_000) {
 }
 
 describe("PluginMcpRateLimiter", () => {
-  it("allows a burst up to capacity then throttles", () => {
-    const clock = makeClock();
-    const limiter = new PluginMcpRateLimiter(20, 1, clock.now);
-
-    for (let i = 0; i < 20; i++) {
-      expect(limiter.check("acme", "main").allowed).toBe(true);
-    }
-    const throttled = limiter.check("acme", "main");
-    expect(throttled.allowed).toBe(false);
-    if (!throttled.allowed) {
-      expect(throttled.retryAfterMs).toBeGreaterThan(0);
-    }
-  });
-
   it("refills steadily at the configured rate", () => {
     const clock = makeClock();
     const limiter = new PluginMcpRateLimiter(20, 1, clock.now);

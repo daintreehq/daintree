@@ -23,6 +23,7 @@ Default keyboard shortcuts shipped with Daintree. This page lists defaults only 
 | Repeat last action | `⌘+⇧+.` | `Ctrl+Shift+.` |
 | Toggle sidebar | `⌘+B` | `Ctrl+B` |
 | Toggle focus mode (hide sidebar and assistant) | `⌘+K ⌘+F` | `Ctrl+K Ctrl+F` |
+| Switch host | `⌘+⌥+U` | `Ctrl+Alt+U` (Linux only) |
 
 ## Terminal
 
@@ -30,7 +31,7 @@ Default keyboard shortcuts shipped with Daintree. This page lists defaults only 
 | --- | --- | --- |
 | Close focused terminal | `⌘+W` | `Ctrl+W` |
 | Duplicate focused panel | `⌘+T` | `Ctrl+T` |
-| New terminal | `⌘+⌥+T` | `Ctrl+Alt+T` |
+| New terminal | `⌘+⌥+T` | `Ctrl+Alt+T` (Windows), `Ctrl+Shift+Alt+T` (Linux) |
 | Reopen last closed terminal | `⌘+⇧+T` | `Ctrl+Shift+T` |
 | Resume a closed session | `⌘+K ⌘+R` | `Ctrl+K Ctrl+R` |
 | Close all terminals | `⌘+K ⌘+W` | `Ctrl+K Ctrl+W` |
@@ -41,7 +42,7 @@ Default keyboard shortcuts shipped with Daintree. This page lists defaults only 
 | Redraw focused terminal | `⌘+K ⌘+D` | `Ctrl+K Ctrl+D` |
 | Rename focused terminal | `⌘+K ⌘+L` | `Ctrl+K Ctrl+L` |
 | Toggle watch on focused terminal | `⌘+⇧+W` | `Ctrl+Shift+W` |
-| Scroll to last activity | `⌘+⌥+L` | `Ctrl+Alt+L` |
+| Scroll to last activity | `⌘+⌥+L` | `Ctrl+Alt+L` (Windows), `Ctrl+Shift+Alt+L` (Linux) |
 | Stash current input | `⌘+⇧+S` | `Ctrl+Shift+S` |
 | Restore stashed input | `⌘+⇧+X` | `Ctrl+Shift+X` |
 | Toggle focused terminal dock state | `⌘+⌥+M` | `Ctrl+Alt+M` |
@@ -59,12 +60,12 @@ Default keyboard shortcuts shipped with Daintree. This page lists defaults only 
 | Move terminal to dock | `⌘+⇧+⌥+D` | `Ctrl+Shift+Alt+D` |
 | Move terminal to grid | `⌘+⇧+⌥+G` | `Ctrl+Shift+Alt+G` |
 | Inject context into focused terminal | `⌘+⇧+I` | `Ctrl+Shift+I` |
-| Send selection to another terminal | `⌘+⇧+E` | `Ctrl+Shift+E` |
+| Send selection to another terminal | `⌘+K ⌘+I` | `Ctrl+K Ctrl+I` |
 | Arm all eligible terminals in the current worktree | `⌘+⇧+B` | `Ctrl+Shift+B` |
-| Focus terminal above | `⌘+⌥+↑` | `Ctrl+Alt+Up` |
-| Focus terminal below | `⌘+⌥+↓` | `Ctrl+Alt+Down` |
-| Focus terminal to the left | `⌘+⌥+←` | `Ctrl+Alt+Left` |
-| Focus terminal to the right | `⌘+⌥+→` | `Ctrl+Alt+Right` |
+| Focus terminal above | `⌘+⌥+↑` | `Ctrl+Alt+Up` (Windows), `Ctrl+Shift+Up` (Linux) |
+| Focus terminal below | `⌘+⌥+↓` | `Ctrl+Alt+Down` (Windows), `Ctrl+Shift+Down` (Linux) |
+| Focus terminal to the left | `⌘+⌥+←` | `Ctrl+Alt+Left` (Windows), `Ctrl+Shift+Left` (Linux) |
+| Focus terminal to the right | `⌘+⌥+→` | `Ctrl+Alt+Right` (Windows), `Ctrl+Shift+Right` (Linux) |
 | Focus terminal 1 | `⌘+1` | `Ctrl+1` |
 | Focus terminal 2 | `⌘+2` | `Ctrl+2` |
 | Focus terminal 3 | `⌘+3` | `Ctrl+3` |
@@ -90,7 +91,7 @@ Default keyboard shortcuts shipped with Daintree. This page lists defaults only 
 | Jump to next working agent | `⌘+⌥+.` | `Ctrl+Alt+.` |
 | Cycle to next agent panel | `⌘+⌥+K` | `Ctrl+Alt+K` |
 | Cycle to previous agent panel | `⌘+⌥+J` | `Ctrl+Alt+J` |
-| Jump to next waiting dock agent | `⌘+⇧+/` | `Ctrl+Shift+/` |
+| Jump to next waiting dock agent | `⌘+K ⌘+/` | `Ctrl+K Ctrl+/` |
 
 ## Fleet
 
@@ -102,7 +103,7 @@ Default keyboard shortcuts shipped with Daintree. This page lists defaults only 
 | Accept all armed waiting agents | `⌘+Y` | `Ctrl+Y` |
 | Reject all armed waiting agents | `⌘+⇧+Y` | `Ctrl+Shift+Y` |
 | Restart all armed agents | `⌘+⇧+R` | `Ctrl+Shift+R` |
-| Kill all armed terminals | `⌘+⇧+K` | `Ctrl+Shift+K` |
+| Kill all armed terminals | `⌘+K ⌘+⇧+K` | `Ctrl+K Ctrl+Shift+K` |
 | Trash all armed terminals | `⌘+⇧+Backspace` | `Ctrl+Shift+Backspace` |
 
 ## Worktrees
@@ -125,7 +126,7 @@ Default keyboard shortcuts shipped with Daintree. This page lists defaults only 
 | Toggle worktrees overview | `⌘+⌥+R` | `Ctrl+Alt+R` |
 | Copy tree context for active worktree | `⌘+⇧+C` | `Ctrl+Shift+C` |
 | Open changes for focused worktree | `⌘+⇧+D` | `Ctrl+Shift+D` |
-| Open file browser panel for focused worktree | `⌘+⌥+F` | `Ctrl+Alt+F` |
+| Open file browser panel for focused worktree | `⌘+⌥+F` | `Ctrl+Alt+F` (Windows), `Ctrl+Shift+Alt+F` (Linux) |
 
 ## Worktree sessions
 
@@ -166,6 +167,7 @@ Default keyboard shortcuts shipped with Daintree. This page lists defaults only 
 | Action | macOS | Windows/Linux |
 | --- | --- | --- |
 | View all agents | `⌘+⌥+O` | `Ctrl+Alt+O` |
+| Open Canopy | `⌘+E` | `Ctrl+Shift+O` |
 | View this project's agents by worktree | `⌘+⌥+I` | `Ctrl+Alt+I` |
 | Open project switcher | `⌘+⌥+P` | `Ctrl+Alt+P` |
 | Switch to last workspace | `⌘+⌥+=` | `Ctrl+Alt+=` |
@@ -235,4 +237,6 @@ Default keyboard shortcuts shipped with Daintree. This page lists defaults only 
 
 ## Fixed keys
 
-A few interactions are fixed and not rebindable: worktree-list navigation (arrows or `j`/`k` to move, PageUp/PageDown and Home/End to jump, Space or Enter to open, Enter/ArrowRight to reach a row's toolbar, `Alt+Up`/`Alt+Down` to reorder) and keyboard drag-and-drop reordering (Space to pick up, arrows to move).
+A few interactions are fixed and not rebindable: worktree-list navigation (arrows or `j`/`k` to move, PageUp/PageDown and Home/End to jump, Space or Enter to open, ArrowRight or F2 to reach a row's toolbar, `Alt+Up`/`Alt+Down` to reorder) and keyboard drag-and-drop reordering (Space to pick up, arrows to move).
+
+Once Canopy is on, tapping Shift twice opens it from anywhere, a focused terminal included. It is a gesture rather than a binding, so it can't be rebound, only turned off in Settings → Keyboard.

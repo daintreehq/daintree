@@ -20,12 +20,49 @@ function consumeEvent(event: KeyboardEvent): void {
   event.stopImmediatePropagation();
 }
 
+const ACTION_ID = "project.mruCycleOlder";
+
 /**
- * `Cmd+Alt+=` — toggle to the workspace this window was in before this one.
+ * Numpad `+` sits where `=` does on the main row and has always toggled too. The
+ * matcher reads the physical key, so it is asked about the main-row key the
+ * binding names.
+ */
+function asMainRowEqual(event: KeyboardEvent): KeyboardEvent {
+  // AltGr types characters; the copy below would lose that and read as Ctrl+Alt.
+  if (event.code !== "NumpadAdd" || event.getModifierState?.("AltGraph")) return event;
+  return new KeyboardEvent("keydown", {
+    key: "=",
+    code: "Equal",
+    metaKey: event.metaKey,
+    ctrlKey: event.ctrlKey,
+    altKey: event.altKey,
+    shiftKey: event.shiftKey,
+  });
+}
+
+/**
+ * Claimed ahead of the terminal only with a modifier held, as the default is:
+ * a toggle rebound to a bare key goes through the normal dispatcher, which
+ * leaves typing in a terminal to the terminal.
+ */
+const MODIFIED_COMBO = /(^|\+)(Cmd|Ctrl|Alt)\+/;
+
+/** The binding is the only owner: a rebound or unbound toggle no longer fires on the default keys. */
+function matchesToggleBinding(event: KeyboardEvent): boolean {
+  const combos = keybindingService
+    .getEffectiveCombos(ACTION_ID)
+    .filter((combo) => MODIFIED_COMBO.test(combo));
+  if (combos.length === 0) return false;
+  const candidate = asMainRowEqual(event);
+  return combos.some((combo) => keybindingService.matchesEvent(candidate, combo));
+}
+
+/**
+ * `Cmd+Alt+=` by default — toggle to the workspace this window was in before this one.
  *
- * Shift is explicitly not handled: there is no "forward" from a toggle, and
- * swallowing `Cmd+Shift+Alt+=` would leave a key that consumes the event and
- * does nothing.
+ * Whatever `project.mruCycleOlder` is bound to, read from the binding on each
+ * press, so a rebind or an unbind takes effect here as everywhere else. Shift is
+ * not handled by the default: there is no "forward" from a toggle.
  *
  * Uses a capture-phase window listener so the event fires before xterm's custom
  * key handler and before `KeybindingService` dispatches the matching action.
@@ -36,8 +73,7 @@ export function useProjectMruSwitcher(): UseProjectMruSwitcherReturn {
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
       if (event.isComposing) return;
-      if (!event.metaKey || !event.altKey || event.shiftKey) return;
-      if (event.code !== "Equal" && event.code !== "NumpadAdd") return;
+      if (!matchesToggleBinding(event)) return;
 
       if (isEditableTarget(event.target)) return;
       if (keybindingService.isCapturingShortcut()) return;

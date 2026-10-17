@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
-import { describe, it, expect, beforeEach, vi } from "vitest";
-import { render, act, fireEvent } from "@testing-library/react";
+import { describe, it, expect, beforeAll, beforeEach, afterEach, vi } from "vitest";
+import { render, act, fireEvent, screen, within, cleanup } from "@testing-library/react";
+import { primeRadix } from "@/components/ui/radix-loader";
 import { ToolbarAssistantButton } from "../ToolbarAssistantButton";
 import { useHelpPanelStore } from "@/store/helpPanelStore";
 import { usePanelStore } from "@/store";
@@ -37,11 +38,9 @@ vi.mock("@/components/icons/DaintreeIcon", () => ({
   DaintreeIcon: () => <span data-testid="icon-daintree" />,
 }));
 
-let mockShortcut = "";
-
 vi.mock("@/hooks", () => ({
   useAriaKeyshortcuts: () => "",
-  useEffectiveCombo: () => mockShortcut || undefined,
+  useEffectiveCombo: () => undefined,
   useShortcutHintHover: () => ({}),
 }));
 
@@ -57,6 +56,19 @@ vi.mock("@/lib/sidebarToggle", () => ({
 
 vi.mock("@/hooks/useMcpReadiness", () => ({
   useMcpReadiness: () => mcpReadiness(),
+}));
+
+const { agentChoices, dispatch } = vi.hoisted(() => ({
+  agentChoices: { current: ["claude"] as string[] },
+  dispatch: vi.fn<(...args: unknown[]) => Promise<unknown>>(),
+}));
+
+vi.mock("@/hooks/useAssistantAgentChoices", () => ({
+  useAssistantAgentChoices: () => agentChoices.current,
+}));
+
+vi.mock("@/services/ActionService", () => ({
+  actionService: { dispatch, get: () => undefined, list: () => [] },
 }));
 
 let mockGestureAssistantHidden = false;
@@ -206,14 +218,6 @@ describe("ToolbarAssistantButton — agent state pip", () => {
   it("hides the pip when the panel is open (the user can already see the state)", () => {
     setHelpPanel({ isOpen: true, terminalId: "t-3" });
     setPanel("t-3", "working");
-
-    const { queryByTestId } = render(<ToolbarAssistantButton />);
-    expect(queryByTestId("assistant-working-pip")?.getAttribute("data-visible")).toBe("false");
-  });
-
-  it("hides the pip when the panel is open even for waiting state", () => {
-    setHelpPanel({ isOpen: true, terminalId: "t-3w" });
-    setPanel("t-3w", "waiting");
 
     const { queryByTestId } = render(<ToolbarAssistantButton />);
     expect(queryByTestId("assistant-working-pip")?.getAttribute("data-visible")).toBe("false");
@@ -502,30 +506,6 @@ describe("ToolbarAssistantButton — agent state pip", () => {
       expect(useHelpPanelStore.getState().isOpen).toBe(true);
     });
   });
-
-  it("re-renders when agentState transitions through working → waiting → idle", () => {
-    setHelpPanel({ isOpen: false, terminalId: "t-5" });
-    setPanel("t-5", "working");
-
-    const { queryByTestId } = render(<ToolbarAssistantButton />);
-    let pip = queryByTestId("assistant-working-pip");
-    expect(pip?.getAttribute("data-visible")).toBe("true");
-    expect(pip!.className).toMatch(/bg-state-working/);
-
-    act(() => {
-      setPanel("t-5", "waiting");
-    });
-
-    pip = queryByTestId("assistant-working-pip");
-    expect(pip?.getAttribute("data-visible")).toBe("true");
-    expect(pip!.className).toMatch(/bg-state-waiting/);
-
-    act(() => {
-      setPanel("t-5", "idle");
-    });
-
-    expect(queryByTestId("assistant-working-pip")?.getAttribute("data-visible")).toBe("false");
-  });
 });
 
 describe("ToolbarAssistantButton — tooltip (#12509)", () => {
@@ -534,7 +514,6 @@ describe("ToolbarAssistantButton — tooltip (#12509)", () => {
     useHelpPanelStore.setState({ isOpen: false, sessions: { 0: emptyLane() }, activeSlot: 0 });
     usePanelStore.setState({ panelsById: {}, panelIds: [] } as never);
     mockGestureAssistantHidden = false;
-    mockShortcut = "";
   });
 
   function readLabels(container: HTMLElement) {
@@ -593,16 +572,96 @@ describe("ToolbarAssistantButton — tooltip (#12509)", () => {
       ariaLabel: "Daintree Assistant",
     });
   });
+});
 
-  it("passes the toggle shortcut through to the tooltip", () => {
-    mockShortcut = "Cmd+Shift+A";
-    setHelpPanel({ isOpen: false, terminalId: null });
+/**
+ * A right-click starts one session on a chosen agent (#13442). The plain click
+ * is the default path and must not change at all.
+ */
+describe("ToolbarAssistantButton — new session on a chosen agent", () => {
+  beforeAll(async () => {
+    await primeRadix();
+  });
 
+  beforeEach(() => {
+    mcpReadinessMock.mockReturnValue({ enabled: true, state: "ready", port: 0, lastError: null });
+    useHelpPanelStore.setState({ isOpen: false, sessions: { 0: emptyLane() }, activeSlot: 0 });
+    mockGestureAssistantHidden = false;
+    dispatch.mockReset();
+    dispatch.mockResolvedValue({ ok: true });
+  });
+
+  afterEach(() => {
+    cleanup();
+    agentChoices.current = ["claude"];
+  });
+
+  it("offers every agent that can run the assistant, and starts the one picked", async () => {
+    agentChoices.current = ["claude", "codex"];
     const { container } = render(<ToolbarAssistantButton />);
+
+    fireEvent.contextMenu(container.querySelector("button")!);
+    const menu = await screen.findByRole("menu");
     expect(
-      container
-        .querySelector('[data-testid="assistant-tooltip"] [data-shortcut]')
-        ?.getAttribute("data-shortcut")
-    ).toBe("Cmd+Shift+A");
+      within(menu)
+        .getAllByRole("menuitem")
+        .map((item) => item.textContent)
+    ).toEqual(["New session with Claude", "New session with Codex"]);
+    await act(async () => {
+      fireEvent.click(within(menu).getByRole("menuitem", { name: "New session with Codex" }));
+    });
+
+    expect(dispatch).toHaveBeenCalledWith(
+      "help.newSessionWithAgent",
+      { agentId: "codex" },
+      { source: "user" }
+    );
+    // Picking an agent is not a toggle: the panel is the action's to open.
+    expect(useHelpPanelStore.getState().isOpen).toBe(false);
+  });
+
+  it("opens no menu with only one agent to choose from", () => {
+    const { container } = render(<ToolbarAssistantButton />);
+
+    fireEvent.contextMenu(container.querySelector("button")!);
+
+    expect(screen.queryByRole("menu")).toBeNull();
+  });
+
+  it("parks the choices once every tab holds a session, and not while one is empty", async () => {
+    agentChoices.current = ["claude", "codex"];
+    const busyLane = (n: number) => ({ ...emptyLane(), terminalId: `t-${n}`, sessionId: `s-${n}` });
+    useHelpPanelStore.setState({ sessions: { 0: busyLane(0), 1: busyLane(1), 2: busyLane(2) } });
+    const { container, unmount } = render(<ToolbarAssistantButton />);
+
+    fireEvent.contextMenu(container.querySelector("button")!);
+    let menu = await screen.findByRole("menu");
+    expect(
+      within(menu)
+        .getAllByRole("menuitem")
+        .map((item) => item.getAttribute("aria-disabled"))
+    ).toEqual(["true", "true"]);
+    unmount();
+
+    // An empty tab at the ceiling is still somewhere to start one.
+    useHelpPanelStore.setState({ sessions: { 0: busyLane(0), 1: emptyLane(), 2: busyLane(2) } });
+    const again = render(<ToolbarAssistantButton />);
+    fireEvent.contextMenu(again.container.querySelector("button")!);
+    menu = await screen.findByRole("menu");
+    expect(
+      within(menu)
+        .getAllByRole("menuitem")
+        .map((item) => item.getAttribute("aria-disabled"))
+    ).toEqual([null, null]);
+  });
+
+  it("keeps the plain click a toggle and nothing more, whatever the choice", () => {
+    agentChoices.current = ["claude", "codex"];
+    const { container } = render(<ToolbarAssistantButton />);
+
+    fireEvent.click(container.querySelector("button")!);
+
+    expect(useHelpPanelStore.getState().isOpen).toBe(true);
+    expect(dispatch).not.toHaveBeenCalled();
   });
 });

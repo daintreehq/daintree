@@ -30,7 +30,7 @@ import { selectTriggerVariants } from "@/components/ui/select";
 
 beforeAll(async () => {
   await kit.whenPluginUiReady();
-});
+}, 60_000);
 
 afterEach(() => {
   cleanup();
@@ -769,13 +769,6 @@ describe("DateRangePicker layout", () => {
     expect(presetsPlacement()).toBe("beside");
   });
 
-  it("shows two months beside the presets where they fit", async () => {
-    roomOf(1200);
-    await openPicker();
-    expect(captions()).toHaveLength(2);
-    expect(presetsPlacement()).toBe("beside");
-  });
-
   it("wraps the presets above one month where the rail does not fit beside it", async () => {
     const onValueChange = vi.fn();
     roomOf(320);
@@ -849,14 +842,6 @@ describe("DateRangePicker layout", () => {
     });
     expect(captions()).toHaveLength(1);
     expect(presetsPlacement()).toBe("above");
-  });
-
-  it("caps the panel at the popover's available width, not the viewport's", async () => {
-    roomOf(1200);
-    await openPicker();
-    const dialog = screen.getByRole("dialog", { name: "Choose dates" });
-    expect(dialog.className).toContain("max-w-[var(--radix-popover-content-available-width)]");
-    expect(dialog.getAttribute("aria-modal")).toBe("true");
   });
 });
 

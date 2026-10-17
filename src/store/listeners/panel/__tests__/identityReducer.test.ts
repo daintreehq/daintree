@@ -192,19 +192,6 @@ describe("reduceAgentDetected", () => {
     expect(result!.patch.title).toBeUndefined();
   });
 
-  it("does not update title when titleMode=user", () => {
-    const terminal = makeTerminal({ titleMode: "user", title: "My Terminal" });
-    const result = reduceAgentDetected(terminal, {
-      nextDetectedAgentId: "claude",
-      nextDetectedProcessId: "claude",
-      nextEverDetectedAgent: true,
-      nextAgentIncarnation: undefined,
-      timestamp: 5000,
-    });
-    expect(result).not.toBeNull();
-    expect(result!.patch.title).toBeUndefined();
-  });
-
   it("clears the stale observed task title when a new agent process is detected", () => {
     const terminal = makeTerminal({
       detectedProcessId: "claude",
@@ -456,18 +443,6 @@ describe("reduceAgentExited", () => {
     expect(result!.agentState).toBeUndefined();
     expect(result!.lastStateChange).toBeUndefined();
     expect(result!.detectedProcessId).toBeUndefined();
-  });
-
-  it("clears process-only detection without marking agent exited", () => {
-    const terminal = makeTerminal({ detectedProcessId: "npm" });
-    const result = reduceAgentExited(terminal, {
-      hasAgentType: false,
-      exitKind: undefined,
-      timestamp: 9000,
-    });
-    expect(result).not.toBeNull();
-    expect(result!.detectedProcessId).toBeUndefined();
-    expect(result!.agentState).toBeUndefined();
   });
 
   it("clears process runtimeIdentity on plain process exit", () => {

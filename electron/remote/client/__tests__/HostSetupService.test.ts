@@ -1,0 +1,495 @@
+import crypto from "node:crypto";
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import type { RemoteHostsEvent } from "../../../../shared/types/ipc/remoteHosts.js";
+import type { CommandResult, CommandRunner } from "../commandRunner.js";
+import { HostSetupService, type HostSetupDeps } from "../HostSetupService.js";
+import type { ClientBuild } from "../installPlan.js";
+
+const CLIENT: ClientBuild = {
+  platform: "darwin",
+  arch: "arm64",
+  version: "1.4.0",
+  commit: "abcdef0123",
+  channel: "stable",
+  bundle: { kind: "none" },
+};
+
+const ok = (stdout = ""): CommandResult => ({
+  code: 0,
+  stdout,
+  stderr: "",
+  spawnError: null,
+  timedOut: false,
+});
+
+const LINUX_NO_UNIT = [
+  "@@dt:uname Linux x86_64",
+  "@@dt:install deb /opt/Daintree",
+  "@@dt:version 1.3.0",
+  "@@dt:unit no",
+  "@@dt:end",
+].join("\n");
+
+const MAC_RUNNING_OLD = [
+  "@@dt:uname Darwin arm64",
+  "@@dt:install app-bundle /Applications/Daintree.app",
+  "@@dt:version 1.3.0",
+  "@@dt:running yes",
+  "@@dt:listening yes",
+  "@@dt:download yes",
+  "@@dt:end",
+].join("\n");
+
+let clientDir: string;
+
+beforeEach(async () => {
+  clientDir = await fs.mkdtemp(path.join(os.tmpdir(), "dt-setup-"));
+});
+
+afterEach(async () => {
+  await fs.rm(clientDir, { recursive: true, force: true });
+});
+
+function service(
+  probeOutput: string,
+  overrides: Partial<HostSetupDeps> = {}
+): {
+  setup: HostSetupService;
+  calls: Array<[string, readonly string[]]>;
+  events: RemoteHostsEvent[];
+} {
+  const calls: Array<[string, readonly string[]]> = [];
+  const events: RemoteHostsEvent[] = [];
+  const run: CommandRunner = async (command, args) => {
+    calls.push([command, args]);
+    const script = args[args.length - 1] ?? "";
+    if (command === "ssh" && script.includes("@@dt:uname")) return ok(probeOutput);
+    return ok();
+  };
+  const setup = new HostSetupService({
+    run,
+    clientDir,
+    platform: "darwin",
+    knownConnections: () => [],
+    clientBuild: () => CLIENT,
+    restartImpact: async (hostId) => ({
+      detail: null,
+      agents: hostId ? { working: 1, waiting: 0 } : null,
+    }),
+    download: async () => {},
+    emit: (event) => events.push(event),
+    sleep: async () => {},
+    ...overrides,
+  });
+  return { setup, calls, events };
+}
+
+describe("HostSetupService", () => {
+  it("probes over the shared ControlMaster in BatchMode", async () => {
+    const { setup, calls } = service(LINUX_NO_UNIT);
+    const result = await setup.probe({ connection: { kind: "ssh", target: "greg@bigbox" } });
+    expect(result).toMatchObject({ reachable: true, platform: "linux", matchesClient: false });
+    const [command, args] = calls[0]!;
+    expect(command).toBe("ssh");
+    expect(args).toContain("BatchMode=yes");
+    expect(args).toContain("ControlMaster=auto");
+    expect(args.at(-2)).toBe("greg@bigbox");
+    expect(args.at(-1)).toMatch(/^sh -c '/);
+  });
+
+  it("refuses an SSH target that could be read as an option", async () => {
+    const { setup, calls } = service(LINUX_NO_UNIT);
+    await expect(
+      setup.probe({ connection: { kind: "ssh", target: "-oProxyCommand=evil" } })
+    ).rejects.toMatchObject({
+      code: "VALIDATION",
+    });
+    expect(calls).toEqual([]);
+  });
+
+  it("runs an install as an operation, pushes its outcome as events and keeps it for status", async () => {
+    const { setup, events } = service(MAC_RUNNING_OLD);
+    const result = await setup.install({
+      opId: "op-7",
+      connection: { kind: "ssh", target: "studio" },
+    });
+    const unknown = { detail: null, agents: null };
+    expect(result).toEqual({ status: "needs-confirmation", impact: unknown });
+    expect(events.at(-1)).toMatchObject({
+      type: "install-settled",
+      opId: "op-7",
+      connection: { kind: "ssh", target: "studio" },
+      outcome: {
+        status: "succeeded",
+        result: { status: "needs-confirmation", impact: unknown },
+      },
+    });
+    expect(events.some((e) => e.type === "install-progress")).toBe(true);
+    expect(setup.installStatus({ opId: "op-7" })).toMatchObject({ status: "succeeded" });
+    expect(setup.installStatus({ opId: "never" })).toEqual({ status: "unknown" });
+  });
+
+  it("requires an operation id and a known whileWorking", async () => {
+    const { setup } = service(MAC_RUNNING_OLD);
+    expect(() =>
+      setup.install({ opId: "", connection: { kind: "ssh", target: "studio" } })
+    ).toThrow(/opId/);
+    expect(() =>
+      setup.install({
+        opId: "op-1",
+        connection: { kind: "ssh", target: "studio" },
+        whileWorking: "yolo" as never,
+      })
+    ).toThrow(/whileWorking/);
+    expect(() =>
+      setup.install({
+        opId: "op-2",
+        connection: { kind: "ssh", target: "studio" },
+        whileWorking: "proceed",
+        confirmed: { detail: "everything" } as never,
+      })
+    ).toThrow(/confirmed/);
+  });
+
+  it("bootstraps a fresh Linux host over ssh: the unit on stdin, then a handoff that never starts a backend", async () => {
+    const build = '{"daintreeBuildInfo":1,"version":"1.4.0","commit":"abcdef0123"}';
+    const fresh = [
+      "@@dt:uname Linux x86_64",
+      "@@dt:install deb /opt/Daintree",
+      `@@dt:buildinfo ${build}`,
+      "@@dt:unit no",
+      "@@dt:linger Linger=yes",
+      "@@dt:end",
+    ].join("\n");
+    const state = JSON.stringify({
+      daintreeHostMode: 1,
+      pid: 9,
+      enabled: true,
+      startAtLogin: true,
+      startAtLoginInstalled: true,
+      startAtLoginError: null,
+      keychain: { state: "unavailable", detail: "no keyring (headless)", checked: true },
+    });
+    const on = fresh
+      .replace("@@dt:unit no", "@@dt:unit yes\n@@dt:unitenabled enabled")
+      .replace(
+        "@@dt:end",
+        `@@dt:listening yes\n@@dt:hostpid 9\n@@dt:hostmodestate ${state}\n@@dt:end`
+      );
+    const outputs = [fresh, on];
+    const scripts: Array<{ script: string; input: unknown }> = [];
+    const { setup } = service("", {
+      run: async (_command, args, options) => {
+        const script = args.at(-1) ?? "";
+        if (script.includes("@@dt:uname"))
+          return ok(outputs.length > 1 ? outputs.shift()! : outputs[0]!);
+        scripts.push({ script, input: options?.input });
+        if (script.includes("unitsaved")) return ok("@@dt:unitsaved no\n");
+        return ok(script.includes("--host-mode-handoff") ? "@@dt:handoff 0\n" : "");
+      },
+    });
+    const result = await setup.startHostMode({ connection: { kind: "ssh", target: "bigbox" } });
+    expect(result.probe.hostModeState).toMatchObject({ enabled: true, startAtLogin: true });
+    expect(scripts[1]!.input).toMatchObject({ text: expect.stringContaining("[Service]") });
+    expect(scripts.map((s) => s.script)).toEqual([
+      expect.stringContaining("daintree-setup-backup"),
+      expect.stringMatching(/^sh -c '.*systemctl --user enable daintree-host\.service'$/),
+      "sh -c 'systemctl --user start daintree-host.service'",
+      // The service's restart count when it started, to tell a crash loop from a slow start.
+      expect.stringContaining("NRestarts"),
+      expect.stringContaining("--host-mode --enable-host-mode --host-mode-handoff"),
+    ]);
+  });
+
+  it("says why Host mode wasn't turned on when the host's answer can't be read", async () => {
+    const calls: string[] = [];
+    const { setup } = service("", {
+      run: async (_command, args) => {
+        calls.push(args.at(-1) ?? "");
+        return ok("not a probe");
+      },
+    });
+    await expect(
+      setup.startHostMode({ connection: { kind: "ssh", target: "studio" } })
+    ).rejects.toMatchObject({
+      userMessage: expect.stringContaining("Host mode wasn't turned on"),
+    });
+    // Only the check ran: nothing was changed there.
+    expect(calls).toHaveLength(1);
+  });
+
+  it("starts no install or Host mode setup on a host being removed or re-pointed", async () => {
+    const { setup, calls } = service(MAC_RUNNING_OLD, {
+      isRetiring: (connection) => connection.kind === "ssh" && connection.target === "studio",
+    });
+    const connection = { kind: "ssh", target: "studio" } as const;
+    expect(() => setup.install({ opId: "op-retiring", connection })).toThrow(
+      expect.objectContaining({ code: "VALIDATION" })
+    );
+    await expect(setup.startHostMode({ connection })).rejects.toMatchObject({ code: "VALIDATION" });
+    await expect(setup.ensureHostRunning(connection)).resolves.toBe("not-startable");
+    expect(calls).toEqual([]);
+  });
+
+  it("switches a Mac on through its logged-in session and reads the setting back", async () => {
+    const state = JSON.stringify({
+      daintreeHostMode: 1,
+      pid: 4242,
+      enabled: true,
+      startAtLogin: true,
+      startAtLoginInstalled: true,
+      startAtLoginError: null,
+      keychain: { state: "ok", detail: "Keychain answered", checked: true },
+    });
+    const current = MAC_RUNNING_OLD.replace("@@dt:version 1.3.0", "@@dt:version 1.4.0").replace(
+      "@@dt:end",
+      '@@dt:buildinfo {"daintreeBuildInfo":1,"version":"1.4.0","commit":"abcdef0123"}\n@@dt:end'
+    );
+    const outputs = [
+      current.replace("@@dt:listening yes\n", ""),
+      current.replace(
+        "@@dt:end",
+        `@@dt:hostpid 4242\n@@dt:launchagent yes\n@@dt:hostmodestate ${state}\n@@dt:end`
+      ),
+    ];
+    const calls: string[] = [];
+    const { setup } = service("", {
+      run: async (_command, args) => {
+        const script = args.at(-1) ?? "";
+        calls.push(script);
+        if (script.includes("@@dt:uname"))
+          return ok(outputs.length > 1 ? outputs.shift()! : outputs[0]!);
+        return ok();
+      },
+    });
+    const result = await setup.startHostMode({ connection: { kind: "ssh", target: "studio" } });
+    expect(result.probe.hostModeListening).toBe(true);
+    expect(result.probe.hostModeState?.enabled).toBe(true);
+    expect(
+      calls.some((c) => c.includes("open -n -g -a") && c.includes("--host-mode --enable-host-mode"))
+    ).toBe(true);
+  });
+
+  describe("ensureHostRunning: a host whose Daintree stopped", () => {
+    const hostState = (enabled: boolean) =>
+      JSON.stringify({
+        daintreeHostMode: 1,
+        pid: 4242,
+        enabled,
+        startAtLogin: true,
+        startAtLoginInstalled: true,
+        startAtLoginError: null,
+        keychain: { state: "ok", detail: "Keychain answered", checked: true },
+      });
+    const MAC_STOPPED = (enabled: boolean) =>
+      [
+        "@@dt:uname Darwin arm64",
+        "@@dt:install app-bundle /Applications/Daintree.app",
+        "@@dt:version 1.4.0",
+        '@@dt:buildinfo {"daintreeBuildInfo":1,"version":"1.4.0","commit":"abcdef0123"}',
+        "@@dt:download yes",
+        `@@dt:hostmodestate ${hostState(enabled)}`,
+        "@@dt:end",
+      ].join("\n");
+    const recording = (outputs: string[]) => {
+      const scripts: string[] = [];
+      const run: CommandRunner = async (_command, args) => {
+        const script = args.at(-1) ?? "";
+        scripts.push(script);
+        if (script.includes("@@dt:uname"))
+          return ok(outputs.length > 1 ? outputs.shift()! : outputs[0]!);
+        return ok();
+      };
+      return { run, scripts };
+    };
+    const started = (scripts: string[]) =>
+      scripts.some((c) => c.includes("open -n -g -a") || c.includes("systemctl --user start"));
+    const studio = { kind: "ssh", target: "studio" } as const;
+
+    it("starts a Mac that was a host before, after a power cut left it stopped", async () => {
+      const running = MAC_STOPPED(true).replace(
+        "@@dt:end",
+        "@@dt:running yes\n@@dt:listening yes\n@@dt:hostpid 4242\n@@dt:launchagent yes\n@@dt:end"
+      );
+      const { run, scripts } = recording([MAC_STOPPED(true), MAC_STOPPED(true), running]);
+      const { setup } = service("", { run });
+      await expect(setup.ensureHostRunning(studio)).resolves.toBe("started");
+      expect(started(scripts)).toBe(true);
+      // Started as it was set up: Host mode for this run, no saved setting or login item touched.
+      expect(scripts.some((c) => c.includes("--enable-host-mode"))).toBe(false);
+    });
+
+    it("starts a Linux host's existing service and writes nothing, even after /run was cleared", async () => {
+      const linux = (listening: boolean) =>
+        [
+          "@@dt:uname Linux x86_64",
+          "@@dt:install deb /opt/Daintree",
+          "@@dt:version 1.4.0",
+          "@@dt:unit yes",
+          ...(listening ? ["@@dt:running yes", "@@dt:listening yes"] : []),
+          "@@dt:end",
+        ].join("\n");
+      const { run, scripts } = recording([linux(false), linux(false), linux(true)]);
+      await expect(service("", { run }).setup.ensureHostRunning(studio)).resolves.toBe("started");
+      const actions = scripts.filter((c) => !c.includes("@@dt:uname"));
+      expect(actions).toEqual([
+        expect.stringContaining("systemctl --user start daintree-host.service"),
+      ]);
+
+      const noUnit = recording([linux(false).replace("@@dt:unit yes", "@@dt:unit no")]);
+      await expect(service("", { run: noUnit.run }).setup.ensureHostRunning(studio)).resolves.toBe(
+        "not-startable"
+      );
+      expect(started(noUnit.scripts)).toBe(false);
+    });
+
+    it("starts nothing for a connection already cancelled", async () => {
+      const { run, scripts } = recording([MAC_STOPPED(true)]);
+      const abort = new AbortController();
+      abort.abort();
+      await expect(
+        service("", { run }).setup.ensureHostRunning(studio, abort.signal)
+      ).resolves.toBe("not-startable");
+      expect(started(scripts)).toBe(false);
+    });
+
+    it("leaves alone a host whose user switched Host mode off, or that never ran it", async () => {
+      const off = recording([MAC_STOPPED(false)]);
+      await expect(service("", { run: off.run }).setup.ensureHostRunning(studio)).resolves.toBe(
+        "not-startable"
+      );
+      expect(started(off.scripts)).toBe(false);
+
+      const never = recording([MAC_STOPPED(true).replace(/@@dt:hostmodestate .*\n/, "")]);
+      await expect(service("", { run: never.run }).setup.ensureHostRunning(studio)).resolves.toBe(
+        "not-startable"
+      );
+      expect(started(never.scripts)).toBe(false);
+    });
+
+    it("leaves alone a host its user quit on purpose", async () => {
+      const quit = recording([
+        MAC_STOPPED(true).replace(
+          `@@dt:hostmodestate ${hostState(true)}`,
+          `@@dt:hostmodestate ${JSON.stringify({ ...JSON.parse(hostState(true)), pid: 0, stopped: true })}`
+        ),
+      ]);
+      await expect(service("", { run: quit.run }).setup.ensureHostRunning(studio)).resolves.toBe(
+        "not-startable"
+      );
+      expect(started(quit.scripts)).toBe(false);
+    });
+
+    it("never installs: a host without Daintree is left as it is", async () => {
+      const bare = recording(["@@dt:uname Darwin arm64\n@@dt:download yes\n@@dt:end"]);
+      await expect(service("", { run: bare.run }).setup.ensureHostRunning(studio)).resolves.toBe(
+        "not-startable"
+      );
+      expect(bare.scripts.filter((c) => !c.includes("@@dt:uname"))).toEqual([]);
+    });
+
+    it("does nothing to a host that is already listening", async () => {
+      const up = recording([MAC_RUNNING_OLD]);
+      await expect(service("", { run: up.run }).setup.ensureHostRunning(studio)).resolves.toBe(
+        "listening"
+      );
+      expect(started(up.scripts)).toBe(false);
+    });
+  });
+
+  it("drops the SSH master and cached bundles when a host is forgotten", async () => {
+    const { setup, calls } = service(LINUX_NO_UNIT);
+    const key = crypto.createHash("sha256").update("studio").digest("hex").slice(0, 16);
+    const hostCache = path.join(clientDir, "bundles", key);
+    const otherCache = path.join(clientDir, "bundles", "someone-else");
+    await fs.mkdir(hostCache, { recursive: true });
+    await fs.mkdir(otherCache, { recursive: true });
+    await fs.writeFile(path.join(hostCache, "Daintree.zip"), "partial");
+    await setup.forgetArtifacts({ connection: { kind: "ssh", target: "studio" } });
+    const exit = calls.find(([, args]) => args.includes("-O") && args.includes("exit"));
+    expect(exit?.[1].at(-1)).toBe("studio");
+    await expect(fs.access(hostCache)).rejects.toThrow();
+    await expect(fs.access(otherCache)).resolves.toBeUndefined();
+  });
+});
+
+describe("HostSetupService on Windows (WSL distros)", () => {
+  const LINUX_DISTRO = [
+    "@@dt:uname Linux x86_64",
+    "@@dt:init systemd",
+    "@@dt:unit no",
+    "@@dt:end",
+  ].join("\n");
+
+  function windowsService(overrides: Partial<HostSetupDeps> = {}) {
+    const keepalive = { touched: [] as string[], released: [] as string[] };
+    const calls: Array<[string, readonly string[]]> = [];
+    const result = service(LINUX_DISTRO, {
+      platform: "win32",
+      run: async (command, args) => {
+        calls.push([command, args]);
+        return ok(command.endsWith("wsl.exe") ? LINUX_DISTRO : "");
+      },
+      wslKeepalive: {
+        touch: (distro) => keepalive.touched.push(distro),
+        release: (distro) => keepalive.released.push(distro),
+      },
+      ...overrides,
+    });
+    return { ...result, calls, keepalive };
+  }
+
+  it("checks a distro through wsl.exe --exec, holding it up around the command", async () => {
+    const { setup, calls, keepalive } = windowsService();
+    const result = await setup.probe({ connection: { kind: "wsl", distro: "Ubuntu-24.04" } });
+    expect(result).toMatchObject({ reachable: true, platform: "linux" });
+    expect(result.advice).toMatchObject({ systemd: true, sleepObserved: null });
+    const [command, args] = calls[0]!;
+    expect(command).toMatch(/\\System32\\wsl\.exe$/i);
+    expect(args.slice(0, 7)).toEqual([
+      "-d",
+      "Ubuntu-24.04",
+      "--cd",
+      "~",
+      "--exec",
+      "/bin/sh",
+      "-c",
+    ]);
+    expect(args.at(-1)).toContain("@@dt:uname");
+    expect(keepalive.touched).toEqual(["Ubuntu-24.04", "Ubuntu-24.04"]);
+  });
+
+  it("refuses an ssh host on Windows, and a WSL distro anywhere else", async () => {
+    const { setup, calls } = windowsService();
+    await expect(
+      setup.probe({ connection: { kind: "ssh", target: "greg@studio" } })
+    ).rejects.toMatchObject({ code: "UNSUPPORTED" });
+    expect(calls).toEqual([]);
+    const mac = service(LINUX_DISTRO);
+    await expect(
+      mac.setup.probe({ connection: { kind: "wsl", distro: "Ubuntu" } })
+    ).rejects.toMatchObject({ code: "UNSUPPORTED" });
+    expect(mac.calls).toEqual([]);
+  });
+
+  it("lets a forgotten host's distro go", async () => {
+    const { setup, keepalive } = windowsService();
+    await setup.forgetArtifacts({ connection: { kind: "wsl", distro: "Debian" } });
+    expect(keepalive.released).toEqual(["Debian"]);
+  });
+
+  it("doesn't hold up a distro whose host is being removed or re-pointed", async () => {
+    const { setup, keepalive, calls } = windowsService({ isRetiring: () => true });
+    // A check already under way when removal began still runs, but takes no hold.
+    await (
+      setup as unknown as {
+        probeOutcome(connection: unknown): Promise<unknown>;
+      }
+    ).probeOutcome({ kind: "wsl", distro: "Ubuntu" });
+    expect(calls).toHaveLength(1);
+    expect(keepalive.touched).toEqual([]);
+  });
+});

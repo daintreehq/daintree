@@ -4,7 +4,6 @@ import { projectStore } from "./services/ProjectStore.js";
 import { notificationService } from "./services/NotificationService.js";
 import { openExternalUrl } from "./utils/openExternal.js";
 import { CHANNELS } from "./ipc/channels.js";
-import { broadcastProjectSwitchUpdates } from "./ipc/projectSwitchBroadcast.js";
 import { getProjectHistory } from "./services/ProjectHistoryService.js";
 import { projectSwitchStatusTiming } from "./services/ProjectSwitchStatusTiming.js";
 import { getEffectiveRegistry } from "../shared/config/agentRegistry.js";
@@ -14,12 +13,12 @@ import { isAgentInstalled } from "../shared/utils/agentAvailability.js";
 import * as CliInstallService from "./services/CliInstallService.js";
 import { getWindowRegistry } from "./window/windowRef.js";
 import { toggleWindowFullscreen } from "./window/fullscreen.js";
+import { getLinuxAppIconPath } from "./window/linuxWindowIcon.js";
 import {
   getPtyClient,
   getWorkspaceClientRef,
   getWorktreePortBrokerRef,
 } from "./window/windowServices.js";
-import { distributePortsToView } from "./window/portDistribution.js";
 import type { UpdateMenuState } from "./services/AutoUpdaterService.js";
 import { getAutoUpdaterServiceRef } from "./window/serviceRefs.js";
 import { getPluginMenuItems } from "./services/pluginMenuRegistry.js";
@@ -29,10 +28,17 @@ import { evaluateWhen } from "./services/WhenClauseService.js";
 import { getAppWebContents, getProjectForWebContents } from "./window/webContentsRegistry.js";
 import { openFolderInNewWindow } from "./window/newWindowOpen.js";
 import {
+  isWindowOnRemoteHost,
+  supersedePendingHostSwitch,
+  switchWindowToLocal,
+} from "./window/windowHost.js";
+import { completeLocalProjectActivation } from "./window/localProjectActivation.js";
+import {
   claimProjectActivation,
   findOtherProjectOwner,
   hasLiveProjectView,
   redirectToProjectOwner,
+  releaseCachedOwner,
 } from "./window/projectOwnership.js";
 import {
   CLOSE_WINDOW_MENU_ITEM_ID,
@@ -52,6 +58,7 @@ import { removeProjectWithCleanup } from "./ipc/handlers/projectCrud/crud.js";
 import { isWindowsStoreBuild, getBuildChannelLabel } from "../shared/config/distribution.js";
 import {
   getMenuAccelerator,
+  isAcceleratorClaimedByKeybinding,
   isKeybindingOwnedAction,
   rendererMenuAccelerator,
   resetRendererOwnedAccelerators,
@@ -60,14 +67,17 @@ import {
 // The About panel's build-version slot shows the release channel for
 // prerelease builds (Nightly/Beta/RC) and stays blank for stable releases —
 // an empty string suppresses the secondary line rather than falling back to
-// CFBundleVersion (which would duplicate the version on macOS).
+// CFBundleVersion (which would duplicate the version on macOS). Linux's GTK
+// About dialog has no app icon of its own to fall back on, so it gets the file.
 export function buildAboutPanelOptions(version: string): Electron.AboutPanelOptionsOptions {
+  const iconPath = getLinuxAppIconPath();
   return {
     applicationName: PRODUCT_NAME,
     applicationVersion: version,
     version: getBuildChannelLabel(version) ?? "",
     copyright: `© ${new Date().getFullYear()} ${PRODUCT_COPYRIGHT_ORG}`,
     website: PRODUCT_WEBSITE,
+    ...(iconPath ? { iconPath } : {}),
   };
 }
 
@@ -180,14 +190,19 @@ export function createApplicationMenu(
         // bindings — including "none" when cleared or chord-bound; the
         // registry fallback would silently resurrect the old shortcut. Only
         // agents outside the keybinding system entirely use the registry's
-        // shortcut field, natively registered and executing.
+        // shortcut field, natively registered and executing — unless another
+        // binding already holds that key, which the native item would steal.
         const keybindingOwned = isKeybindingOwnedAction(`agent.${agent.id}`);
+        const registryAccelerator =
+          !keybindingOwned && agent.shortcut
+            ? convertShortcutToAccelerator(agent.shortcut)
+            : undefined;
         items.push({
           label: `New ${agent.name}`,
           accelerator: keybindingOwned
             ? rendererMenuAccelerator(`agent.${agent.id}`)
-            : agent.shortcut
-              ? convertShortcutToAccelerator(agent.shortcut)
+            : registryAccelerator && !isAcceleratorClaimedByKeybinding(registryAccelerator)
+              ? registryAccelerator
               : undefined,
           click: (_item, browserWindow) =>
             sendAction("agent.launch", getTargetBrowserWindow(browserWindow), {
@@ -264,6 +279,13 @@ export function createApplicationMenu(
           click: async (_item, browserWindow) => {
             const win = getTargetBrowserWindow(browserWindow);
             if (!win) return;
+            // A window on a remote host opens the host's folders, which only
+            // its renderer's host picker can browse; this machine's dialog
+            // would hand it a local path.
+            if (isWindowOnRemoteHost(win.id)) {
+              sendAction("project.add", win);
+              return;
+            }
             await promptForDirectoryOpen(win, cliAvailabilityService);
           },
         },
@@ -275,6 +297,10 @@ export function createApplicationMenu(
           click: async (_item, browserWindow) => {
             const win = getTargetBrowserWindow(browserWindow);
             if (!win) return;
+            if (isWindowOnRemoteHost(win.id)) {
+              sendAction("project.openInNewWindow", win);
+              return;
+            }
             await promptForDirectoryOpen(win, cliAvailabilityService, { newWindow: true });
           },
         },
@@ -685,10 +711,13 @@ export function createApplicationMenu(
     },
     {
       label: "Window",
+      // Off macOS the minimize role registers a hidden Ctrl+M accelerator that
+      // fires whenever the focused page leaves the key unhandled (any text field).
+      // Ctrl+M is Enter to a terminal and means nothing like minimize there.
       submenu:
         process.platform === "darwin"
           ? [{ role: "minimize" }, { role: "zoom" }, { type: "separator" }, { role: "front" }]
-          : [{ role: "minimize" }, { role: "close" }],
+          : [{ role: "minimize", registerAccelerator: false }, { role: "close" }],
     },
     {
       role: "help",
@@ -1004,16 +1033,76 @@ async function showProjectOpenFailure(
   }
 }
 
+/**
+ * A folder on this machine, opened in a window that is on a remote host: Open
+ * Recent there, its failure recovery, or a folder whose view that window still
+ * holds in its cache. The window comes back to this machine to show it, its
+ * binding and view together as a host switch moves them. A failure is said in
+ * a native dialog, never the renderer's git-init prompt: that renderer belongs
+ * to the host, and the prompt would act there.
+ */
+async function openLocalFolderInHostWindow(
+  directoryPath: string,
+  targetWindow: BrowserWindow,
+  cliAvailabilityService?: CliAvailabilityService
+): Promise<void> {
+  try {
+    const project = await projectStore.addProject(directoryPath);
+    const registry = getWindowRegistry();
+    const pvm = registry?.getByWindowId(targetWindow.id)?.services.projectViewManager;
+    if (!hasLiveProjectView(pvm, project.id)) {
+      const owner = findOtherProjectOwner(registry ?? undefined, project.id, {
+        windowId: targetWindow.id,
+        projectViewManager: pvm,
+      });
+      // One only keeping it cached lets it go once the switch home has its
+      // turn, in the same tick as this window's claim (#13291).
+      if (owner && owner.state !== "cached") {
+        redirectToProjectOwner(owner, project);
+        return;
+      }
+    }
+    await switchWindowToLocal(targetWindow.id, project.id);
+    if (!targetWindow.isDestroyed()) createApplicationMenu(targetWindow, cliAvailabilityService);
+  } catch (error) {
+    // A folder with no repository gets its guided setup in a window on this
+    // machine instead, which says so if no window opens. Not awaited: an open
+    // routed from outside the app runs on the same serialized chain this one
+    // joins, and waiting on it would hang.
+    if (isAppError(error) && error.code === "NOT_A_GIT_REPO") {
+      void openInNewWindow(directoryPath, targetWindow);
+      return;
+    }
+    console.error("Failed to open project:", error);
+    try {
+      await showProjectOpenFailure(error, directoryPath, targetWindow, cliAvailabilityService);
+    } catch (dialogError) {
+      console.error("Failed to surface project open error:", dialogError);
+    }
+  }
+}
+
 export async function handleDirectoryOpen(
   directoryPath: string,
   targetWindow: BrowserWindow,
   cliAvailabilityService?: CliAvailabilityService
 ): Promise<void> {
   if (targetWindow.isDestroyed()) return;
+  supersedePendingHostSwitch(targetWindow.id);
+  if (isWindowOnRemoteHost(targetWindow.id)) {
+    await openLocalFolderInHostWindow(directoryPath, targetWindow, cliAvailabilityService);
+    return;
+  }
   const requestedAt = Date.now();
 
   try {
     const project = await projectStore.addProject(directoryPath);
+    // A host switch that landed while the folder was being added put this
+    // window on a host; it comes back the way any such open does.
+    if (isWindowOnRemoteHost(targetWindow.id)) {
+      await openLocalFolderInHostWindow(directoryPath, targetWindow, cliAvailabilityService);
+      return;
+    }
 
     // Use the target window's own ProjectViewManager for multi-view switching
     // when available. The process-global manager points at the last-created
@@ -1025,10 +1114,14 @@ export async function handleDirectoryOpen(
     // Same one-live-view rule as the switch handler (#12596): a folder another
     // window already has open goes to that window, and this one stays put.
     if (!hasLiveProjectView(pvm, project.id)) {
-      const owner = findOtherProjectOwner(registry ?? undefined, project.id, {
-        windowId: targetWindow.id,
-        projectViewManager: pvm,
-      });
+      const owner = releaseCachedOwner(
+        findOtherProjectOwner(registry ?? undefined, project.id, {
+          windowId: targetWindow.id,
+          projectViewManager: pvm,
+        }),
+        project.id,
+        project.name
+      );
       if (owner) {
         redirectToProjectOwner(owner, project);
         return;
@@ -1059,77 +1152,34 @@ export async function handleDirectoryOpen(
           throw error;
         })
         .finally(releaseClaim);
-      // Capture the outgoing project id before the pointer flips so we can
-      // broadcast its bumped `lastOpened` to every cached view (#8561).
-      const previousProjectId = projectStore.getCurrentProjectId();
-      await projectStore.setCurrentProject(project.id);
-      // Mirror the IPC switch path: fan out `project:updated` for both
-      // departing and activated rows so cached views' MRU timestamps stay
-      // fresh; otherwise the next `Cmd+Alt+=` targets the wrong project.
-      broadcastProjectSwitchUpdates(previousProjectId, project.id);
-
       // Third switch entry point, and the one that bypasses `activateProjectView`
       // entirely. Without this, opening a project from File → Recent Projects as
       // the very first switch of a session leaves the history holding only the
       // destination, so `Cmd+Alt+=` has nowhere to go back to.
       //
-      // History takes the departing *workspace*, not `previousProjectId`: this
-      // menu stays reachable from a scratch, and the project pointer is null
-      // there. `previousProjectId` still feeds the broadcast above, which is
-      // about a project row's `lastOpened` and has nothing to say about a
-      // scratch.
+      // History takes the departing *workspace*, not the project pointer: this
+      // menu stays reachable from a scratch, and the pointer is null there. The
+      // pointer still names the project row that goes to the background and
+      // whose bumped `lastOpened` every cached view hears (#8561).
       const menuHistory = getProjectHistory(targetWindow.id);
       if (departingWorkspaceId) menuHistory.record(departingWorkspaceId);
       menuHistory.record(project.id);
 
-      // Notify the activated view of the switch so it refreshes its cache, MRU,
-      // and polling, mirroring activateProjectView. Targeted send to the
-      // activated view only (LRU-cached other-project views must not be marked
-      // switched).
-      if (!view.webContents.isDestroyed()) {
-        view.webContents.send(CHANNELS.PROJECT_ON_SWITCH, {
-          project: projectStore.getProjectById(project.id) ?? project,
-          switchId,
-          ...(statusTimingDeadlineAt !== undefined && { statusTimingDeadlineAt }),
-        });
-      }
-
-      // Re-attach producer ports for cached-view reactivation. The IPC switch
-      // handler (projectCrud/switch.ts:activateProjectView) does this in the
-      // primary path; the menu path must mirror it because cached views have
-      // their worktree port + workspace direct port closed on cache to avoid
-      // freeze accumulation (#6273), and the PTY MessagePort is per-window
-      // and was replaced when the user last switched away.
-      if (!view.webContents.isDestroyed()) {
-        const wsClient = getWorkspaceClientRef();
-        const broker = getWorktreePortBrokerRef();
-        if (wsClient) {
-          try {
-            projectSwitchStatusTiming.hostReady(
-              switchId,
-              await wsClient.loadProject(project.path, targetWindow.id)
-            );
-            wsClient.attachDirectPort(targetWindow.id, view.webContents);
-            const host = wsClient.getHostForProject(project.path);
-            if (host && broker) {
-              broker.brokerPort(host, view.webContents);
-            }
-          } catch (err) {
-            projectSwitchStatusTiming.fail(switchId, "load-failed");
-            console.error("[menu] Failed to restore worktree ports:", err);
-          }
-        }
-
-        // Distribute fresh PTY MessagePort + notify pty-host of project switch
-        const ptyClient = getPtyClient();
-        if (ptyClient) {
-          ptyClient.onProjectSwitch(targetWindow.id, project.id, project.path);
-        }
-        const ctx = getWindowRegistry()?.getByWindowId(targetWindow.id);
-        if (!isNew && ctx) {
-          distributePortsToView(targetWindow, ctx, view.webContents, ptyClient ?? null);
-        }
-      }
+      await completeLocalProjectActivation({
+        targetWindow,
+        project,
+        view,
+        isNew,
+        outgoingProjectId: projectStore.getCurrentProjectId(),
+        switchId,
+        statusTimingDeadlineAt,
+        clients: {
+          workspace: getWorkspaceClientRef(),
+          broker: getWorktreePortBrokerRef(),
+          pty: getPtyClient(),
+        },
+        logPrefix: "[menu]",
+      });
     } else {
       // Fallback: legacy single-view switch
       const wCtx = registry?.getByWindowId(targetWindow.id);

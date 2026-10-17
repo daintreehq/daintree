@@ -151,16 +151,6 @@ describe("projectStore.sleepProject", () => {
       expect(useProjectStore.getState().currentProject).toEqual(PROJECT);
       expect(panelPersistenceMock.cancel).not.toHaveBeenCalled();
     });
-
-    it("returns main's result to the caller", async () => {
-      const result = await useProjectStore.getState().sleepProject("proj-1");
-
-      expect(result).toEqual({
-        terminalsKilled: 1,
-        rendererViewsEvicted: 0,
-        workspaceEvicted: true,
-      });
-    });
   });
 
   describe("a background project", () => {

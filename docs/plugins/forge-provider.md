@@ -34,9 +34,9 @@ Keep transport, auth, and normalization in their own modules. `forgeProvider.ts`
 
 ## Builtin plugin wiring
 
-A built-in plugin at `plugins/builtin/<name>/{plugin.json,main/index.ts,renderer/index.tsx}` is fully auto-discovered — adding one requires zero build-config edits. `scripts/build-main.mjs` discovers every `plugins/builtin/*/main/index.ts` as an esbuild entry and copies each `plugin.json` next to the compiled output; `src/registry/builtinPluginRenderers.ts` eagerly imports every `plugins/builtin/*/renderer/index.{ts,tsx}` via `import.meta.glob` so renderer view slots register before first render; `tsconfig.json` includes `plugins/builtin/*/renderer` for typechecking. The renderer entry is optional — main-only plugins simply have no `renderer/` directory.
+A built-in plugin at `plugins/builtin/<name>/{plugin.json,main/index.ts,renderer/index.tsx}` is fully auto-discovered — adding one requires zero build-config edits. `scripts/build-main.mjs` builds every `plugins/builtin/*/main/index.ts` as an esbuild entry (discovered by `scripts/main-build-entries.mjs`) and copies each `plugin.json` next to the compiled output; `src/registry/builtinPluginRenderers.ts` eagerly imports every `plugins/builtin/*/renderer/index.{ts,tsx}` via `import.meta.glob` so renderer view slots register before first render, and `package.json` `sideEffects` already globs those entries so the production bundle keeps them; `tsconfig.json` includes `plugins/builtin/*/renderer` for typechecking. The renderer entry is optional — main-only plugins simply have no `renderer/` directory.
 
-Plugin renderer code must use only relative, `@/` (host `src/`), and `@shared` imports — there is no per-plugin path alias.
+Plugin renderer code must use only relative, `@/` (host `src/`), `@shared` and `@daintreehq/plugin-ui` (the kit, aliased to `src/pluginUi`) imports, plus npm packages — there is no per-plugin path alias.
 
 ## Declare the manifest entry
 
@@ -65,7 +65,7 @@ Add a `forgeProviders` contribution to `plugin.json`. Daintree reads this eagerl
 
 | Field | Required | Notes |
 | --- | --- | --- |
-| `id` | yes | Namespaced at runtime as `{pluginId}.{id}`. The built-in GitHub plugin uses the bare `github`. Must match the `descriptor.id` you pass to `registerForgeProvider`. |
+| `id` | yes | Namespaced at runtime as `{pluginId}.{id}`: the built-in GitHub plugin declares `github`, so its runtime id is `daintree.github.github`. Must match the `descriptor.id` you pass to `registerForgeProvider`. |
 | `name` | yes | Display label in Settings → Code forge. |
 | `matches` | yes | List of exact hostnames, at least one. The host extracts the hostname from the project's git remote (HTTPS, SSH, and SCP-form `git@host:owner/repo.git` URLs all handled), lowercases and trims it, then matches it for **exact string equality** against each entry. Matching is case-insensitive and strips a leading `www.` from both the remote hostname and each pattern before comparing — but there is still no glob, wildcard, or suffix matching. List every distinct hostname your forge serves (e.g. a self-hosted instance and its CI mirror) as separate entries. First matching provider wins, subject to the user's choices — see [Provider resolution](#provider-resolution). |
 | `kind` | no | `"network"` (the default) or `"local"`. Display-only — see [Local / offline providers](#local--offline-providers). |
@@ -121,7 +121,7 @@ export async function activate(host: PluginHostApi): Promise<() => void> {
 }
 ```
 
-`registerForgeProvider` returns `Promise<() => void>`; await it and return the disposer it resolves to (the GitHub and GitLab built-ins both do). `descriptor.id` must match a `contributes.forgeProviders[].id` in `plugin.json` — an undeclared id is rejected so the impl can't drift away from the manifest's routing table. The descriptor mirrors the manifest entry; you can omit anything already declared statically, so `{ id }` alone is enough. All bindings are removed automatically on plugin unload. See [Host API → `registerForgeProvider`](./host-api.md#registerforgeprovider).
+`registerForgeProvider` returns `Promise<() => void>`; await it and return the disposer it resolves to, or call it from your own disposer (the GitHub and GitLab built-ins do the latter, alongside their own cache and timer teardown). `descriptor.id` must match a `contributes.forgeProviders[].id` in `plugin.json` — an undeclared id is rejected so the impl can't drift away from the manifest's routing table. The descriptor mirrors the manifest entry; you can omit anything already declared statically, so `{ id }` alone is enough. All bindings are removed automatically on plugin unload. See [Host API → `registerForgeProvider`](./host-api.md#registerforgeprovider).
 
 ## Implement ForgeProviderImpl
 
@@ -138,7 +138,7 @@ export async function activate(host: PluginHostApi): Promise<() => void> {
 | `getIssue(repo, n, opts?)` | `Promise<Issue \| null>` | `null` when the issue doesn't exist. `opts` is `FetchOptions`. |
 | `getPR(repo, n, opts?)` | `Promise<PR \| null>` | `null` when the PR doesn't exist. `opts` is `FetchOptions`. |
 | `findPRByBranch(repo, branch)` | `Promise<PR \| null>` | Resolve the open PR for a head branch. Escape branch names before interpolating into a search query. |
-| `getCIStatus(repo, prN, opts?)` | `Promise<CIStatus \| null>` | Roll checks up to one `CIStatusState`. The host renders a summary; it does not graph individual checks. Implement the optional `checks` capability if you can also serve the checks behind the verdict. |
+| `getCIStatus(repo, prN, opts?)` | `Promise<CIStatus \| null>` | Roll checks up to one `CIStatusState`. The host renders a summary; it does not graph individual checks. Set `headSha` to the commit the verdict was read from when your forge reports it: a verdict can trail the head for a few seconds after a push, and the host never shows one for a commit other than the head it last observed. Implement the optional `checks` capability if you can also serve the checks behind the verdict. |
 | `getRepoMetadata(repo, opts?)` | `Promise<RepoMetadata>` | Default branch, visibility, fork/archive flags, license, topics. |
 | `buildIssueUrl(repo, n)` | `string` | You own your URL shape. |
 | `buildPRUrl(repo, n)` | `string` | — |
@@ -259,7 +259,7 @@ The capability fields and their sub-interfaces:
 
 | Field | Interface | What it serves |
 | --- | --- | --- |
-| `reviews` | `ReviewCapability` | PR review threads, and optionally approving a PR |
+| `reviews` | `ReviewCapability` | PR review threads, plus optional review writes: `approvePR`, `requestChanges`, `dismissReview`, `requestReviewers` |
 | `issueComments` | `IssueCommentCapability` | Issue comment listing |
 | `checks` | `ChecksCapability` | Per-check results behind `getCIStatus` |
 | `approvals` | `ApprovalCapability` | A PR's approval state |
@@ -278,7 +278,7 @@ The capability fields and their sub-interfaces:
 
 Omitting the field is how you declare non-support — the base interface never changes when a capability is added.
 
-`ChecksCapability.getChecks(repo, prN)` is the per-check counterpart to `getCIStatus`: it returns every check on a PR as a `CheckRun` (`name`, `status`, `conclusion?`, `required?`, `detailsUrl?`), so an agent diagnosing a red PR can name the failing check and follow `detailsUrl` to its log. Return the complete list or reject — a silently truncated list is a wrong answer, not a partial one — and page your forge's API to the end rather than serving only its first page. `null` means the PR doesn't exist; a PR with no checks is `{ checks: [] }`.
+`ChecksCapability.getChecks(repo, prN, opts?)` is the per-check counterpart to `getCIStatus`: it returns every check on a PR as a `CheckRun` (`name`, `status`, `conclusion?`, `required?`, `detailsUrl?`), so an agent diagnosing a red PR can name the failing check and follow `detailsUrl` to its log. Return the complete list or reject — a silently truncated list is a wrong answer, not a partial one — and page your forge's API to the end rather than serving only its first page. `null` means the PR doesn't exist; a PR with no checks is `{ checks: [] }`.
 
 ### Credential import
 
@@ -324,7 +324,7 @@ A local provider typically reads the project on disk rather than a remote. Use `
 
 ## Expose the provider's CLI to the assistant
 
-The Daintree Assistant auto-approves forge CLIs through the allowlist at `help/.claude/settings.json`, which already grants `Bash(gh *)`, `Bash(glab *)` (GitLab), and `Bash(tea *)` (Gitea). There is no deny list: the assistant can do anything a normal agent session can with them.
+The Daintree Assistant auto-approves forge CLIs through the allowlist at `assistant/.claude/settings.json`, which already grants `Bash(gh *)`, `Bash(glab *)` (GitLab), and `Bash(tea *)` (Gitea). There is no deny list: the assistant can do anything a normal agent session can with them.
 
 When you add a provider whose CLI the assistant should be able to drive, add an `allow` entry for the CLI binary (`Bash(bb *)` for Bitbucket, etc.) to both that file and the fallback in `HelpSessionService.readBundledSettings`. Bitbucket's `bb` is still to be added by a future provider.
 
@@ -332,7 +332,7 @@ When you add a provider whose CLI the assistant should be able to drive, add an 
 
 Mirror the GitHub provider's `__tests__/` coverage. A new provider ships unit tests for:
 
-- **`parseRemote`** — HTTPS, SSH, and SCP-form URLs resolve; a hostname that isn't yours returns `null`.
+- **`parseRemote`** — HTTPS, SSH, and SCP-form URLs resolve; a URL you can't serve returns `null`. A self-hostable forge still parses a hostname outside its `matches`, since an override can route one to it (GitLab's does; GitHub's returns `null` for anything but `github.com`).
 - **State normalization** — every provider state value maps to the right `Normalized*` value, and `rawState` round-trips verbatim.
 - **Core CRUD** — `listIssues`, `listPRs`, `getIssue`, `getPR`, `findPRByBranch`, `getCIStatus`, `getRepoMetadata` against a mocked transport, including empty pages and not-found.
 - **`getRateLimit`** — if you implement it, the provider's rate-limit transport projects into `RateLimitInfo` correctly, including the `null`-per-dimension case.
@@ -349,7 +349,7 @@ Forge providers are built-in only, so their tests follow the existing `plugins/b
 - [ ] `state` normalized and `rawState` preserved on every `Issue`/`PR`
 - [ ] Verbatim transport node in `rawData`; no first-party reads of it
 - [ ] Optional capabilities present only when supported; consumers probe with truthiness
-- [ ] CLI allow entry added to `help/.claude/settings.json` and the `readBundledSettings` fallback if the assistant should drive your forge's CLI
+- [ ] CLI allow entry added to `assistant/.claude/settings.json` and the `readBundledSettings` fallback if the assistant should drive your forge's CLI
 - [ ] Unit tests mirroring the GitHub provider's coverage
 
 ## Related

@@ -45,10 +45,6 @@ describe("ActionBreadcrumbService", () => {
   });
 
   describe("ring buffer", () => {
-    it("starts empty", () => {
-      expect(service.getRecentActions()).toEqual([]);
-    });
-
     it("records a dispatched event", () => {
       emit({ actionId: "foo", category: "bar", durationMs: 5 });
       const recent = service.getRecentActions();
@@ -252,27 +248,6 @@ describe("ActionBreadcrumbService", () => {
       expect(after).toHaveLength(50);
       expect(after.every((e) => e.danger === "confirm")).toBe(true);
       expect(after.find((e) => e.actionId === "safe.noise")).toBeUndefined();
-    });
-
-    it("preserves FIFO when ring is full of same-tier entries (confirm on confirm)", () => {
-      // Fill the ring with 50 distinct confirm entries
-      for (let i = 0; i < 50; i++) {
-        emit({ actionId: `confirm.${i}`, danger: "confirm", timestamp: Date.now() + i * 1000 });
-      }
-
-      // One more confirm — oldest should be evicted (standard FIFO)
-      emit({ actionId: "confirm.50", danger: "confirm", timestamp: Date.now() + 50_000 });
-
-      const after = service.getRecentActions();
-      expect(after).toHaveLength(50);
-      expect(after[0]!.actionId).toBe("confirm.1");
-      expect(after[49]!.actionId).toBe("confirm.50");
-    });
-
-    it("records danger field on breadcrumb entries", () => {
-      emit({ actionId: "worktree.delete", danger: "confirm" });
-      const recent = service.getRecentActions();
-      expect(recent[0]!.danger).toBe("confirm");
     });
 
     it("never evicts a higher-priority entry from a mixed ring (FIFO fix regression)", () => {

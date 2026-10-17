@@ -1,4 +1,4 @@
-import type { BrowserWindow, WebContents } from "electron";
+import { dialog, type BrowserWindow, type WebContents } from "electron";
 import { CHANNELS } from "../ipc/channels.js";
 import { getAppWebContents } from "./webContentsRegistry.js";
 import type { ProjectViewManager } from "./ProjectViewManager.js";
@@ -9,6 +9,8 @@ import type {
 } from "../../shared/types/ipc/project.js";
 import type { Project } from "../../shared/types/project.js";
 import { hasPendingActivation } from "./projectActivationClaims.js";
+import { isWindowOnRemoteHost, switchWindowToLocal } from "./windowHost.js";
+import { cachedViewBusy } from "./cachedViewBusy.js";
 
 export { claimProjectActivation } from "./projectActivationClaims.js";
 
@@ -90,6 +92,34 @@ export function findOtherProjectOwner(
   return activatingOwner ?? cachedOwner;
 }
 
+/**
+ * Make way for a project to open in the requesting window when another window
+ * only holds it in its cache (#13291). That window's cached view is released,
+ * so nothing it shows, and not the host it is on, changes. An owner showing the
+ * project, or on its way to it, is answered as the owner to bring forward;
+ * null means the project is free to open here.
+ *
+ * Synchronous, and called in the same tick as the requester's claim, so the
+ * project never has a live view in two windows. `workspaceKey` is the key the
+ * owner's manager holds the view under (a host's view is host-scoped). A view
+ * that can't be released (it backs a running assistant or an MCP request) is
+ * an error: the other window is never switched to the project instead.
+ */
+export function releaseCachedOwner(
+  owner: ProjectOwner | null,
+  workspaceKey: string,
+  projectName: string
+): ProjectOwner | null {
+  if (owner?.state !== "cached") return owner;
+  // A window bringing its own cached view to the front is on its way to it:
+  // the view reads as cached until its switch flips the active pointer.
+  if (hasPendingActivation(workspaceKey, owner.context.windowId)) {
+    return { ...owner, state: "activating" };
+  }
+  if (owner.projectViewManager.releaseCachedView(workspaceKey)) return null;
+  throw cachedViewBusy(projectName);
+}
+
 /** Bring a window to the front, restoring it first if it was minimized. */
 export function revealWindow(browserWindow: BrowserWindow): void {
   if (browserWindow.isDestroyed()) return;
@@ -155,9 +185,47 @@ export function redirectToProjectOwner(
     return { outcome: "focused-elsewhere", project, targetWindowId };
   }
 
+  // A window that has since moved to a remote host can still hold this
+  // machine's view in its cache, but its renderer's switch would ask the host
+  // for a project it doesn't have. The window comes back to this machine
+  // instead, its binding and view together.
+  if (isWindowOnRemoteHost(targetWindowId)) {
+    bringOwnerToThisMachine(browserWindow, targetWindowId, project);
+    revealWindow(browserWindow);
+    return { outcome: "activated-elsewhere", project, targetWindowId };
+  }
+
   requestOwnerSwitch(ownerSwitchRenderer(projectViewManager, browserWindow), project.id);
   revealWindow(browserWindow);
   return { outcome: "activated-elsewhere", project, targetWindowId };
+}
+
+/**
+ * Switch an owner window that is on a host back to this machine. The request
+ * has already been answered, so a switch that fails says so in a dialog on
+ * that window, which stayed on its host.
+ */
+function bringOwnerToThisMachine(
+  browserWindow: BrowserWindow,
+  windowId: number,
+  project: Project
+): void {
+  void switchWindowToLocal(windowId, project.id).catch(async (error: unknown) => {
+    console.error("[projectOwnership] Couldn't bring the window back to this machine:", error);
+    if (browserWindow.isDestroyed()) return;
+    const { response } = await dialog.showMessageBox(browserWindow, {
+      type: "error",
+      title: "Couldn't open project",
+      message: "Couldn't open project",
+      detail: `"${project.name}" didn't open here, so this window stayed on its host.`,
+      buttons: ["Try again", "Cancel"],
+      defaultId: 1,
+      cancelId: 1,
+    });
+    if (response === 0 && !browserWindow.isDestroyed()) {
+      bringOwnerToThisMachine(browserWindow, windowId, project);
+    }
+  });
 }
 
 /**

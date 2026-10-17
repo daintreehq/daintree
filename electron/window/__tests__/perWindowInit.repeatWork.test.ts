@@ -1,30 +1,40 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
 
-const { execFileMock, createApplicationMenuMock, pluginInit } = vi.hoisted(() => {
-  const pluginInit = {
-    promise: Promise.resolve(),
-    resolve: () => {},
-    reset() {
-      this.promise = new Promise<void>((resolve) => {
-        this.resolve = resolve;
-      });
-    },
-  };
-  return {
-    execFileMock: vi.fn((...args: unknown[]) => {
-      const callback = args.find(
-        (a): a is (err: unknown, stdout?: string) => void => typeof a === "function"
-      );
-      const err = Object.assign(new Error("not found"), { code: "ENOENT" });
-      queueMicrotask(() => callback?.(err));
-      return {} as never;
-    }),
-    createApplicationMenuMock: vi.fn(),
-    pluginInit,
-  };
-});
+const { execFileMock, findAllOnPathMock, pathScanMock, createApplicationMenuMock, pluginInit } =
+  vi.hoisted(() => {
+    const pluginInit = {
+      promise: Promise.resolve(),
+      resolve: () => {},
+      reset() {
+        this.promise = new Promise<void>((resolve) => {
+          this.resolve = resolve;
+        });
+      },
+    };
+    return {
+      execFileMock: vi.fn((...args: unknown[]) => {
+        const callback = args.find(
+          (a): a is (err: unknown, stdout?: string) => void => typeof a === "function"
+        );
+        const err = Object.assign(new Error("not found"), { code: "ENOENT" });
+        queueMicrotask(() => callback?.(err));
+        return {} as never;
+      }),
+      // POSIX walks PATH in-process; every agent misses.
+      findAllOnPathMock: vi.fn(async () => [] as string[]),
+      // Windows probes PATH by reading its directories rather than running
+      // `where`; every agent misses there too.
+      pathScanMock: vi.fn(async () => ({ paths: [] as string[], skipped: [] as string[] })),
+      createApplicationMenuMock: vi.fn(),
+      pluginInit,
+    };
+  });
 
 vi.mock("child_process", () => ({ execFile: execFileMock, execFileSync: vi.fn() }));
+vi.mock("../../utils/findOnPath.js", () => ({
+  findAllOnPath: findAllOnPathMock,
+  findOnPath: vi.fn(async () => null),
+}));
 vi.mock("fs/promises", () => ({
   access: vi.fn().mockRejectedValue(new Error("ENOENT")),
   constants: { R_OK: 4, X_OK: 1 },
@@ -39,6 +49,12 @@ vi.mock("../../store.js", () => ({
 }));
 vi.mock("../../ipc/utils.js", () => ({ broadcastToRenderer: vi.fn() }));
 vi.mock("../../utils/wsl.js", () => ({ getDefaultWslDistro: vi.fn(async () => null) }));
+// The host's own PATH never answers a probe: no agent and no npm is found there.
+vi.mock("../../utils/windowsExecutable.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../utils/windowsExecutable.js")>()),
+  scanWindowsPath: pathScanMock,
+  findWindowsCommand: vi.fn(async () => null),
+}));
 
 vi.mock("electron", () => ({
   BrowserWindow: { getFocusedWindow: vi.fn(() => null) },
@@ -130,8 +146,20 @@ interface WindowWork {
   menuWindowIds: number[];
 }
 
+/**
+ * CLI PATH probes so far: in-process walks on POSIX, PATH directory scans on
+ * Windows, plus any subprocess probe that still spawns.
+ */
+function probeCount(): number {
+  return (
+    execFileMock.mock.calls.length +
+    findAllOnPathMock.mock.calls.length +
+    pathScanMock.mock.calls.length
+  );
+}
+
 async function openWindow(id: number, opts: { settlePlugins?: boolean } = {}): Promise<WindowWork> {
-  const probesBefore = execFileMock.mock.calls.length;
+  const probesBefore = probeCount();
   const menusBefore = createApplicationMenuMock.mock.calls.length;
   await initPerWindowServices(fakeWindow(id), fakeContext(id), undefined);
   if (id === 1) {
@@ -141,7 +169,7 @@ async function openWindow(id: number, opts: { settlePlugins?: boolean } = {}): P
   if (opts.settlePlugins) pluginInit.resolve();
   await settle();
   return {
-    probes: execFileMock.mock.calls.length - probesBefore,
+    probes: probeCount() - probesBefore,
     menus: createApplicationMenuMock.mock.calls.length - menusBefore,
     menuWindowIds: createApplicationMenuMock.mock.calls
       .slice(menusBefore)
@@ -160,6 +188,8 @@ describe("initPerWindowServices repeated work across windows", () => {
     setCliAvailabilityServiceRef(null);
     setPtyClientRef({} as PtyClient);
     execFileMock.mockClear();
+    findAllOnPathMock.mockClear();
+    pathScanMock.mockClear();
     createApplicationMenuMock.mockClear();
   });
 
@@ -198,9 +228,9 @@ describe("initPerWindowServices repeated work across windows", () => {
 
   it("keeps explicit refresh a full re-probe on the shared service", async () => {
     await openWindow(1, { settlePlugins: true });
-    const probesBefore = execFileMock.mock.calls.length;
+    const probesBefore = probeCount();
     await getCliAvailabilityServiceRef()!.refresh();
-    expect(execFileMock.mock.calls.length - probesBefore).toBeGreaterThanOrEqual(agentCount);
+    expect(probeCount() - probesBefore).toBeGreaterThanOrEqual(agentCount);
   });
 
   it("joins a refresh in flight and rebuilds the menu from its result", async () => {

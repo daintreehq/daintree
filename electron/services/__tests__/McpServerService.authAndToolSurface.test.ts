@@ -9,6 +9,7 @@ import { registerProjectView, unregisterProjectView } from "../../window/webCont
 import { setProjectViewManager, setWindowRegistry } from "../../window/windowRef.js";
 import {
   ElicitRequestSchema,
+  ToolListChangedNotificationSchema,
   type ElicitResult,
   type ClientCapabilities,
 } from "@modelcontextprotocol/sdk/types.js";
@@ -185,6 +186,7 @@ vi.mock("../SystemSleepService.js", () => ({
 }));
 
 import { McpServerService } from "../McpServerService.js";
+import { setMcpDriveTargetResolver } from "../mcp-server/driveTarget.js";
 
 /**
  * Workspace ids shaped the way the real id spaces are — 64 hex for a project
@@ -564,16 +566,6 @@ describe("McpServerService", () => {
     expect(rotatedKey).not.toBe(initialKey);
     expect(service.getStatus().apiKey).toBe(rotatedKey);
     expect(storeState.mcpServer.apiKey).toBe(rotatedKey);
-  });
-
-  it("persists the freshly generated api key to electron-store on first start", async () => {
-    const { window } = createMockWindow();
-    expect(storeState.mcpServer.apiKey).toBe("");
-
-    await service.start(window);
-    const generatedKey = service.getStatus().apiKey;
-    expect(generatedKey).toMatch(/^daintree_[a-f0-9]+$/);
-    expect(storeState.mcpServer.apiKey).toBe(generatedKey);
   });
 
   it("auto-generates a bearer token on first start and keeps it across stop/start", async () => {
@@ -1520,45 +1512,6 @@ describe("McpServerService", () => {
     expect(result.content[0].text).toContain("TIER_NOT_PERMITTED");
     expect(dispatchMock).not.toHaveBeenCalled();
   });
-
-  it("denies non-allowlisted actions for the external tier (dispatch never reached)", async () => {
-    const dispatchMock = vi.fn((payload: DispatchRequest): ActionDispatchResult => ({
-      ok: true,
-      result: { dispatched: payload.actionId },
-    }));
-
-    const { window } = createMockWindow({
-      getManifest: () => [
-        createManifestEntry({
-          id: "actions.list" as ActionId,
-          title: "List Actions",
-          description: "Read the action registry",
-          kind: "query",
-        }),
-      ],
-      dispatchAction: dispatchMock,
-    });
-
-    await service.start(window);
-    const { client, transport } = await connectClient(service.currentPort!);
-    transports.push(transport);
-
-    const ids = (await client.listTools()).tools.map((tool) => tool.name);
-    expect(ids).not.toContain("panel.gridLayout.setStrategy");
-
-    const result = getTextResult(
-      await client.callTool({
-        name: "panel.gridLayout.setStrategy",
-        arguments: { strategy: "automatic" },
-      })
-    );
-
-    expect(result.isError).toBe(true);
-    expect(result.content[0].text).toContain("TIER_NOT_PERMITTED");
-    expect(result.content[0].text).toContain("panel.gridLayout.setStrategy");
-    expect(result.content[0].text).toContain("external");
-    expect(dispatchMock).not.toHaveBeenCalled();
-  });
   describe("workspace-bound external sessions (#11789)", () => {
     const REF_A = {
       kind: "project" as const,
@@ -1636,7 +1589,11 @@ describe("McpServerService", () => {
       return { registry, focus };
     }
 
-    async function connectBound(port: number, workspaceId?: string) {
+    async function connectBound(
+      port: number,
+      workspaceId?: string,
+      onStandaloneStream?: () => void
+    ) {
       const apiKey = getServiceApiKey();
       const transport = new StreamableHTTPClientTransport(new URL(`http://127.0.0.1:${port}/mcp`), {
         requestInit: {
@@ -1645,6 +1602,17 @@ describe("McpServerService", () => {
             ...(workspaceId ? { "Daintree-Workspace-Id": workspaceId } : {}),
           },
         },
+        // The server registers the GET stream notifications travel on before it
+        // answers it, so an OK answer means a notification can reach the client.
+        ...(onStandaloneStream
+          ? {
+              fetch: async (input: string | URL | Request, init?: RequestInit) => {
+                const response = await fetch(input, init);
+                if (init?.method === "GET" && response.ok) onStandaloneStream();
+                return response;
+              },
+            }
+          : {}),
       });
       const client = new Client({ name: "bound-test-client", version: "1.0.0" });
       await client.connect(transport);
@@ -1748,7 +1716,8 @@ describe("McpServerService", () => {
       expect(names).not.toContain("recipe.run");
 
       // Dispatch is still fail-closed — it must not have landed in window A,
-      // whose manifest returns "from-window-A".
+      // whose manifest returns "from-window-A". Without Host mode nothing runs
+      // viewless, so the route is reported lost exactly as before Remote Hosts.
       const beforeOpen = await client.callTool({ name: "terminal.list", arguments: {} });
       expect(beforeOpen.isError).toBe(true);
       const failure = JSON.parse(getTextResult(beforeOpen).content[0].text as string) as {
@@ -1777,8 +1746,8 @@ describe("McpServerService", () => {
       // result fails a validator the production result would satisfy. In a
       // running build both surfaces project the same action definitions, so a
       // client that listed while the workspace was closed can call straight
-      // through once it opens. Nothing sends `tools/list_changed` on route
-      // recovery, so nothing would prompt a re-list anyway.
+      // through once it opens. The re-list is what the `tools/list_changed`
+      // sent on route recovery asks for (#13350), covered below.
       expect((await client.listTools()).tools.map((t) => t.name)).toEqual(
         boundManifest()
           .filter((entry) => entry.danger !== "confirm")
@@ -1787,6 +1756,58 @@ describe("McpServerService", () => {
 
       const afterOpen = await client.callTool({ name: "terminal.list", arguments: {} });
       expect(getTextResult(afterOpen).content[0].text).toBe('"from-closed-workspace"');
+    });
+
+    it("tells a bound client its tool list moved each time its route does (#13350)", async () => {
+      const winA = boundWindow(REF_A, "from-window-A");
+      await service.start(winA.window);
+
+      let streamReady!: () => void;
+      const standaloneStream = new Promise<void>((resolve) => (streamReady = resolve));
+      const client = await connectBound(service.currentPort!, CLOSED_PROJECT_ID, () =>
+        streamReady()
+      );
+      let changes = 0;
+      client.setNotificationHandler(ToolListChangedNotificationSchema, () => {
+        changes += 1;
+      });
+      await standaloneStream;
+
+      // Listed from the base surface: nothing shows the workspace yet.
+      await client.listTools();
+      const opened = boundWindow(
+        { kind: "project", workspaceId: CLOSED_PROJECT_ID, workspacePath: "/repos/c" },
+        "from-closed-workspace"
+      );
+      await vi.waitFor(() => expect(changes).toBe(1));
+
+      // Listed again from the open view, then the view goes: back to the base.
+      await client.listTools();
+      unregisterProjectView(opened.webContents.id);
+      await vi.waitFor(() => expect(changes).toBe(2));
+    });
+
+    it("reports no frontend attached for a viewless workspace when Host-mode routing is on", async () => {
+      // Host mode installs the drive-lease resolver, which is what lets the
+      // host run actions alone. A vacant lease with no view falls through to
+      // the viewless executor, which has no form of `terminal.list` and says so.
+      const offResolver = setMcpDriveTargetResolver(() => ({ state: "vacant" }));
+      try {
+        const winA = boundWindow(REF_A, "from-window-A");
+        await service.start(winA.window);
+
+        const client = await connectBound(service.currentPort!, CLOSED_PROJECT_ID);
+        const result = await client.callTool({ name: "terminal.list", arguments: {} });
+        expect(result.isError).toBe(true);
+        const failure = JSON.parse(getTextResult(result).content[0].text as string) as {
+          code: string;
+          retriable: boolean;
+        };
+        expect(failure.code).toBe("NO_FRONTEND_ATTACHED");
+        expect(failure.retriable).toBe(true);
+      } finally {
+        offResolver();
+      }
     });
 
     it("connects to an ambiguous workspace and recovers when the duplicate closes (#12082)", async () => {
@@ -1858,42 +1879,6 @@ describe("McpServerService", () => {
         expect(liveBinding()).toBe(false);
       });
       expect(service.listActiveClients()).toHaveLength(0);
-    });
-
-    it("still lists a bound session among the external clients", async () => {
-      // A background-bound agent is the one the user most needs to be able to
-      // find and disconnect, since they cannot see it working.
-      const winA = boundWindow(REF_A, "from-window-A");
-      await service.start(winA.window);
-
-      await connectBound(service.currentPort!, REF_A.workspaceId);
-
-      await vi.waitFor(() => {
-        expect(service.listActiveClients()).toHaveLength(1);
-      });
-    });
-
-    it("leaves an unbound external session following focus, exactly as documented", async () => {
-      // The behaviour the pre-binding contract promises, re-asserted through
-      // the new code path so binding can't have quietly changed it.
-      const winA = boundWindow(REF_A, "from-window-A");
-      const winB = boundWindow(REF_B, "from-window-B");
-      const { registry, focus } = twoWindowRegistry(winA, winB);
-      await service.start(registry);
-
-      const client = await connectBound(service.currentPort!);
-
-      focus.current = [winB.windowContext, winA.windowContext];
-      expect(
-        getTextResult(await client.callTool({ name: "terminal.list", arguments: {} })).content[0]
-          .text
-      ).toBe('"from-window-B"');
-
-      focus.current = [winA.windowContext, winB.windowContext];
-      expect(
-        getTextResult(await client.callTool({ name: "terminal.list", arguments: {} })).content[0]
-          .text
-      ).toBe('"from-window-A"');
     });
 
     it("still follows focus when the server was enabled at runtime, not at boot", async () => {

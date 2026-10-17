@@ -22,6 +22,7 @@
  *     purpose; persisting that would overwrite the user's real fleet with it.
  */
 
+import { parseHostScopedKey } from "../../shared/types/remoteHosts.js";
 import type { ProjectViewManager } from "./ProjectViewManager.js";
 import type { WindowRegistry } from "./WindowRegistry.js";
 import { getActiveShutdown } from "../lifecycle/shutdownCoordinator.js";
@@ -77,6 +78,35 @@ export function setPendingBackgroundRestores(windowId: number, ids: readonly str
 
 export function clearPendingBackgroundRestores(windowId: number): void {
   pendingBackgroundRestores.delete(windowId);
+}
+
+/**
+ * Host-scoped workspaces (`<hostId>:<projectId>`) restored windows are waiting
+ * to switch back to, keyed by window id. Such a window opens on this machine's
+ * picker and moves to the host once Remote Hosts is up; until it shows
+ * something, the manifest keeps naming the host's project, so a launch where
+ * the host was unreachable doesn't forget where the window belongs.
+ */
+const pendingRemoteRestores = new Map<number, string>();
+
+export function setPendingRemoteRestore(windowId: number, workspaceKey: string): void {
+  pendingRemoteRestores.set(windowId, workspaceKey);
+}
+
+export function clearPendingRemoteRestore(windowId: number): void {
+  pendingRemoteRestores.delete(windowId);
+}
+
+/** A host was removed from this device: no window is restored onto it any more. */
+export function clearPendingRemoteRestoresForHost(hostId: string): void {
+  for (const [windowId, key] of pendingRemoteRestores) {
+    if (parseHostScopedKey(key).hostId === hostId) pendingRemoteRestores.delete(windowId);
+  }
+}
+
+/** A restored window's host-scoped workspace, while it is still on the picker it opened with. */
+export function getPendingRemoteRestore(windowId: number): string | null {
+  return pendingRemoteRestores.get(windowId) ?? null;
 }
 
 let state: TrackerState | null = null;
@@ -147,6 +177,15 @@ export function buildOpenWindowRecords(
       // cannot answer for its active view cannot be trusted for its cached ones.
       projectId = null;
       pvm = undefined;
+    }
+
+    const pendingRemote = pendingRemoteRestores.get(ctx.windowId);
+    if (pendingRemote !== undefined) {
+      // Still on the picker its restore opened: it belongs on the host. Once
+      // it shows anything (the host's project, or one the user opened), the
+      // intent is spent.
+      if (projectId === null) projectId = pendingRemote;
+      else pendingRemoteRestores.delete(ctx.windowId);
     }
 
     if (projectId !== null) claimed.add(projectId);
@@ -363,4 +402,5 @@ export function resetOpenWindowsTrackerForTests(): void {
   frozen = false;
   suppressed = false;
   pendingBackgroundRestores.clear();
+  pendingRemoteRestores.clear();
 }

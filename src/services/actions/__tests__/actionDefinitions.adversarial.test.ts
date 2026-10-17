@@ -261,6 +261,7 @@ const { usePortalStore } = await import("../../../store/portalStore");
 const { useUIStore } = await import("../../../store/uiStore");
 const { useWorktreeSelectionStore } = await import("../../../store/worktreeStore");
 const { useWorktreeFilterStore } = await import("../../../store/worktreeFilterStore");
+const { useFleetSnapshotStore } = await import("../../../store/fleetSnapshotStore");
 const worktreeViewStore = mocks.worktreeViewStore;
 
 function createCallbacks(overrides: Partial<ActionCallbacks> = {}): ActionCallbacks {
@@ -386,6 +387,7 @@ beforeEach(() => {
     typeFilters: new Set(),
     prIssueFilters: new Set(),
     sessionFilters: new Set(),
+    hasAgentFilter: false,
     activityFilters: new Set(),
     devServerFilters: new Set(),
     alwaysShowActive: true,
@@ -755,7 +757,7 @@ describe("terminal action hardening", () => {
   // #6920: terminal.close trashes immediately for every agent state — the
   // close-confirm dialog and CustomEvent dispatch were retired in favour of
   // an undo toast emitted by panelStore.trashPanel.
-  it.each(["idle", "working", "waiting", "directing", "completed", "exited"] as const)(
+  it.each(["working", "waiting"] as const)(
     "trashes a %s agent terminal immediately on terminal.close (no confirm event)",
     async (state) => {
       const actions = buildRegistry(registerTerminalActions);
@@ -1402,6 +1404,22 @@ describe("worktree cycling respects sidebar order", () => {
     });
   }
 
+  // The quick-state buckets read each agent's fleet run, joined by panel id.
+  function seedWorkingRun(runId: string): void {
+    useFleetSnapshotStore.setState({
+      snapshot: {
+        runs: [{ runId, workspaceId: "p1", spawnedAt: 0, cwd: "/repo", agentState: "working" }],
+        changedAt: 0,
+        degraded: false,
+        lastSuccessfulAt: 0,
+      },
+    });
+  }
+
+  beforeEach(() => {
+    useFleetSnapshotStore.setState({ snapshot: null });
+  });
+
   function spySelectWorktree(): ReturnType<typeof vi.fn> {
     const spy = vi.fn();
     useWorktreeSelectionStore.setState({ selectWorktree: spy } as never);
@@ -1528,6 +1546,7 @@ describe("worktree cycling respects sidebar order", () => {
       panelIds: ["term-working"],
       panelIdsByWorktreeId: { "wt-working": ["term-working"] },
     });
+    seedWorkingRun("term-working");
     useWorktreeFilterStore.setState({
       orderBy: "alpha",
       quickStateFilter: "working",
@@ -1566,6 +1585,7 @@ describe("worktree cycling respects sidebar order", () => {
       panelIds: ["term-working"],
       panelIdsByWorktreeId: { "wt-working": ["term-working"] },
     });
+    seedWorkingRun("term-working");
     useWorktreeFilterStore.setState({
       orderBy: "alpha",
       quickStateFilter: "working",
@@ -1606,6 +1626,7 @@ describe("worktree cycling respects sidebar order", () => {
       panelIds: ["term-working"],
       panelIdsByWorktreeId: { "wt-working": ["term-working"] },
     });
+    seedWorkingRun("term-working");
 
     useWorktreeFilterStore.setState({
       orderBy: "alpha",

@@ -258,21 +258,11 @@ describe("useWorktreeSidebarKeyboard — keyboard cursor exposure", () => {
     expect(grid.getAttribute("data-cursor-id")).toBe("wt2");
   });
 
-  it("flags exactly one row with data-keyboard-cursor in list mode", () => {
-    const { getByTestId, container } = render(<Harness items={ITEMS} />);
-    const grid = getByTestId("grid");
-    fireEvent.focus(grid);
-    fireEvent.keyDown(grid, { key: "ArrowDown" });
-    const flagged = container.querySelectorAll('[data-keyboard-cursor="true"]');
-    expect(flagged).toHaveLength(1);
-    expect((flagged[0] as HTMLElement).dataset.worktreeRow).toBe("wt2");
-  });
-
   it("clears keyboardCursorId in toolbar mode and restores it on Escape", () => {
     const { getByTestId, container } = render(<Harness items={ITEMS} />);
     const grid = getByTestId("grid");
     grid.focus(); // → wt1 active in list mode
-    fireEvent.keyDown(grid, { key: "Enter" }); // enter toolbar mode
+    fireEvent.keyDown(grid, { key: "ArrowRight" }); // enter toolbar mode
     expect(grid.getAttribute("data-cursor-id")).toBe("");
     expect(container.querySelectorAll('[data-keyboard-cursor="true"]')).toHaveLength(0);
     fireEvent.keyDown(getByTestId("tb-wt1-1"), { key: "Escape" }); // back to list mode
@@ -281,19 +271,29 @@ describe("useWorktreeSidebarKeyboard — keyboard cursor exposure", () => {
 });
 
 describe("useWorktreeSidebarKeyboard — toolbar sub-mode", () => {
-  it("Enter on the active row moves focus into the first toolbar button", () => {
+  it("F2 on the active row moves focus into the first toolbar button", () => {
     const { getByTestId } = render(<Harness items={ITEMS} />);
     const grid = getByTestId("grid");
     grid.focus(); // → wt1 active
-    fireEvent.keyDown(grid, { key: "Enter" });
+    fireEvent.keyDown(grid, { key: "F2" });
     expect(document.activeElement).toBe(getByTestId("tb-wt1-1"));
+  });
+
+  it("Enter opens the active row even though it has a toolbar", () => {
+    const onSelectWorktree = vi.fn();
+    const { getByTestId } = render(<Harness items={ITEMS} onSelectWorktree={onSelectWorktree} />);
+    const grid = getByTestId("grid");
+    grid.focus();
+    fireEvent.keyDown(grid, { key: "Enter" });
+    expect(onSelectWorktree).toHaveBeenCalledWith("wt1");
+    expect(document.activeElement).toBe(grid);
   });
 
   it("ArrowRight inside the toolbar moves to the next button", () => {
     const { getByTestId } = render(<Harness items={ITEMS} />);
     const grid = getByTestId("grid");
     grid.focus();
-    fireEvent.keyDown(grid, { key: "Enter" });
+    fireEvent.keyDown(grid, { key: "ArrowRight" });
     const first = getByTestId("tb-wt1-1");
     fireEvent.keyDown(first, { key: "ArrowRight" });
     expect(document.activeElement).toBe(getByTestId("tb-wt1-2"));
@@ -303,7 +303,7 @@ describe("useWorktreeSidebarKeyboard — toolbar sub-mode", () => {
     const { getByTestId } = render(<Harness items={ITEMS} />);
     const grid = getByTestId("grid");
     grid.focus();
-    fireEvent.keyDown(grid, { key: "Enter" });
+    fireEvent.keyDown(grid, { key: "ArrowRight" });
     const first = getByTestId("tb-wt1-1");
     fireEvent.keyDown(first, { key: "Escape" });
     expect(document.activeElement).toBe(grid);

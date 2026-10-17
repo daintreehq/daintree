@@ -4,7 +4,8 @@ import { z } from "zod";
 import { usePanelStore } from "@/store/panelStore";
 import { usePortalStore } from "@/store/portalStore";
 import { isDevPreviewPanel } from "@shared/types/panel";
-import { buildDevPreviewPartition } from "@shared/utils/partitionUtils";
+import { buildDevPreviewPartition, partitionProjectKey } from "@shared/utils/partitionUtils";
+import { pluginViewHostId } from "@/components/Plugin/remotePluginView";
 import { logError } from "@/utils/logger";
 import { getPortalBoundsWithRetry, showPortalTabIfNoOverlay } from "./portalHelpers";
 
@@ -173,7 +174,11 @@ export function registerDevPreviewActions(
         return;
       }
 
-      const partition = buildDevPreviewPartition(projectId, panel.worktreeId, panelId);
+      const partition = buildDevPreviewPartition(
+        partitionProjectKey(projectId, pluginViewHostId()),
+        panel.worktreeId,
+        panelId
+      );
       const title = panel.title?.trim() || "Dev preview";
       const tabId = `tab-${crypto.randomUUID()}`;
 

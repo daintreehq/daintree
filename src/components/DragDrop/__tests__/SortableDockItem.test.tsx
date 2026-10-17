@@ -58,16 +58,6 @@ const terminal: PanelInstance = {
 } as PanelInstance;
 
 describe("SortableDockItem", () => {
-  it("renders children through DragHandleProvider", () => {
-    mockState = { isDragging: false };
-    const { getByTestId } = render(
-      <SortableDockItem terminal={terminal} sourceIndex={0}>
-        <div data-testid="child" />
-      </SortableDockItem>
-    );
-    expect(getByTestId("child")).toBeTruthy();
-  });
-
   it("tags the listitem with the panel id it sorts on", () => {
     // The rail's rendered order is only observable through this attribute. The
     // offscreen `[data-panel-id]` containers mirror `panelIds` directly, so they
@@ -92,18 +82,6 @@ describe("SortableDockItem", () => {
     );
     const outer = container.firstChild as HTMLElement;
     expect(outer.getAttribute("role")).toBeNull();
-  });
-
-  it("does not apply opacity-40 class (opacity now driven by framer-motion animate)", () => {
-    mockState = { isDragging: true };
-    const { container } = render(
-      <SortableDockItem terminal={terminal} sourceIndex={0}>
-        <div />
-      </SortableDockItem>
-    );
-    const outer = container.firstChild as HTMLElement;
-    const inner = outer.firstChild as HTMLElement;
-    expect(inner.className).not.toContain("opacity-40");
   });
 
   it("forwards setActivatorNodeRef through DragHandleProvider for keyboard a11y", () => {

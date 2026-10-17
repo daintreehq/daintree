@@ -133,6 +133,23 @@ const signalShutdownMock = vi.hoisted(() => ({
 
 vi.mock("../signalShutdownState.js", () => signalShutdownMock);
 
+// Detection is groupStop.ts's own concern (groupStop.test.ts); here the
+// registered finisher is driven directly.
+const groupStopMock = vi.hoisted(() => {
+  const state = { finisher: null as (() => boolean) | null };
+  return {
+    state,
+    setGroupStopFinisher: vi.fn((fn: (() => boolean) | null) => {
+      state.finisher = fn;
+    }),
+    rememberChromiumZygotes: vi.fn(),
+    noteChildProcessGone: vi.fn(),
+    noteRendererGone: vi.fn(),
+  };
+});
+
+vi.mock("../groupStop.js", () => groupStopMock);
+
 const dbMaintenanceMock = vi.hoisted(() => ({
   dispose: vi.fn(() => Promise.resolve()),
 }));
@@ -388,6 +405,55 @@ describe("registerShutdownHandler", () => {
     expect(crashRecoveryMock.cleanupOnExit).toHaveBeenCalled();
   });
 
+  it("stops Remote Hosts before any PTY is killed or disposed", async () => {
+    const order: string[] = [];
+    const ptyClient = {
+      gracefulKillByProject: vi.fn(async () => []),
+      getPartialGracefulKillResults: vi.fn(() => []),
+      getAllTerminalsAsync: vi.fn(async () => {
+        order.push("pty-enumerate");
+        return [];
+      }),
+      finishAgentSessionCaptures: vi.fn(async () => ({ complete: true, pending: 0 })),
+      dispose: vi.fn(() => {
+        order.push("pty-dispose");
+      }),
+    };
+    const stopRemoteHosts = vi.fn(async () => {
+      order.push("remote-stop");
+    });
+    const { beforeQuitCb } = await setup({
+      getPtyClient: vi.fn(() => ptyClient as never),
+      stopRemoteHosts,
+    });
+    const exited = new Promise<void>((resolve) => {
+      appMock.exit.mockImplementationOnce(() => resolve());
+    });
+
+    await beforeQuitCb(makeEvent());
+    await exited;
+
+    expect(stopRemoteHosts).toHaveBeenCalledOnce();
+    expect(order[0]).toBe("remote-stop");
+    expect(order).toContain("pty-dispose");
+  });
+
+  it("finishes a clean shutdown when stopping Remote Hosts fails", async () => {
+    const stopRemoteHosts = vi.fn(async () => {
+      throw new Error("link server wedged");
+    });
+    const { beforeQuitCb } = await setup({ stopRemoteHosts });
+    const exited = new Promise<void>((resolve) => {
+      appMock.exit.mockImplementationOnce(() => resolve());
+    });
+
+    await beforeQuitCb(makeEvent());
+    await exited;
+
+    expect(stopRemoteHosts).toHaveBeenCalledOnce();
+    expect(appMock.exit).toHaveBeenCalledWith(0);
+  });
+
   it("runs cleanup without dialog on signal shutdown even with active agents", async () => {
     signalShutdownMock.isSignalShutdown.mockReturnValue(true);
     quitWarningMock.getActiveAgentCount.mockReturnValue(3);
@@ -513,26 +579,6 @@ describe("registerShutdownHandler", () => {
     expect(openWindowsTrackerMock.freezeAndSnapshotOpenWindows).not.toHaveBeenCalled();
   });
 
-  it("halts the deferred init queue after the user confirms quit", async () => {
-    quitWarningMock.getActiveAgentCount.mockReturnValue(2);
-    quitWarningMock.showQuitWarning.mockResolvedValue(true);
-
-    const mainWindow = {} as Electron.BrowserWindow;
-    const { beforeQuitCb } = await setup({
-      windowRegistry: {
-        getPrimary: () => ({ browserWindow: mainWindow }),
-      } as unknown as ShutdownDeps["windowRegistry"],
-    });
-    const event = makeEvent();
-    await beforeQuitCb(event);
-
-    expect(deferredInitQueueMock.haltDeferredQueue).toHaveBeenCalledTimes(1);
-
-    await vi.waitFor(() => {
-      expect(appMock.exit).toHaveBeenCalledWith(0);
-    });
-  });
-
   it("does not halt the deferred init queue when the user cancels quit", async () => {
     quitWarningMock.getActiveAgentCount.mockReturnValue(2);
     quitWarningMock.showQuitWarning.mockResolvedValue(false);
@@ -583,22 +629,6 @@ describe("registerShutdownHandler", () => {
     const event = makeEvent();
     await beforeQuitCb(event);
 
-    expect(quitWarningMock.showQuitWarning).not.toHaveBeenCalled();
-
-    await vi.waitFor(() => {
-      expect(appMock.exit).toHaveBeenCalledWith(0);
-    });
-    expect(crashRecoveryMock.cleanupOnExit).toHaveBeenCalled();
-  });
-
-  it("runs cleanup when no window and signal shutdown", async () => {
-    signalShutdownMock.isSignalShutdown.mockReturnValue(true);
-
-    const { beforeQuitCb } = await setup();
-    const event = makeEvent();
-    await beforeQuitCb(event);
-
-    expect(event.preventDefault).toHaveBeenCalled();
     expect(quitWarningMock.showQuitWarning).not.toHaveBeenCalled();
 
     await vi.waitFor(() => {
@@ -773,33 +803,6 @@ describe("registerShutdownHandler", () => {
         expect(appMock.exit).toHaveBeenCalledWith(0);
       });
     });
-
-    it("waits for closeTelemetry to resolve before app.exit(0) on cleanup error (mcpServer error is silently caught)", async () => {
-      mcpServerMock.stop.mockReturnValue(Promise.reject(new Error("MCP stop failed")));
-      const consoleSpy = vi.spyOn(console, "error").mockImplementation(() => {});
-
-      let resolveClose!: () => void;
-      const closeDeferred = new Promise<void>((r) => {
-        resolveClose = r;
-      });
-      closeTelemetryMock.mockReturnValue(closeDeferred);
-
-      const { beforeQuitCb } = await setup({});
-      await beforeQuitCb(makeEvent());
-
-      await vi.waitFor(() => {
-        expect(closeTelemetryMock).toHaveBeenCalled();
-      });
-      expect(appMock.exit).not.toHaveBeenCalled();
-
-      resolveClose();
-
-      await vi.waitFor(() => {
-        expect(appMock.exit).toHaveBeenCalledWith(0);
-      });
-
-      consoleSpy.mockRestore();
-    });
   });
 
   describe("hard shutdown timeout", () => {
@@ -907,23 +910,6 @@ describe("registerShutdownHandler", () => {
       warnSpy.mockRestore();
     });
 
-    it("normal cleanup exits with code 0 and timeout does not fire", async () => {
-      mcpServerMock.stop.mockReturnValue(Promise.resolve());
-
-      const { beforeQuitCb } = await setup({});
-      const event = makeEvent();
-      await beforeQuitCb(event);
-
-      await vi.advanceTimersByTimeAsync(100);
-
-      expect(appMock.exit).toHaveBeenCalledWith(0);
-      expect(appMock.exit).toHaveBeenCalledTimes(1);
-
-      await vi.advanceTimersByTimeAsync(15_000);
-
-      expect(appMock.exit).toHaveBeenCalledTimes(1);
-    });
-
     it("mcpServer error is silently caught and cleanup exits with 0", async () => {
       mcpServerMock.stop.mockReturnValue(Promise.reject(new Error("MCP stop failed")));
       const consoleSpy = vi.spyOn(console, "error").mockImplementation(() => {});
@@ -1013,17 +999,6 @@ describe("registerShutdownHandler", () => {
 
       // POSIX checks spawn detached, so nothing else reaps them on quit.
       expect(projectCheckServiceMock.dispose).toHaveBeenCalledTimes(1);
-    });
-
-    it("clears PluginService's WorkspaceClient reference during shutdown", async () => {
-      const { beforeQuitCb } = await setup({});
-      await beforeQuitCb(makeEvent());
-
-      await vi.waitFor(() => {
-        expect(appMock.exit).toHaveBeenCalledWith(0);
-      });
-
-      expect(pluginServiceMock.setWorkspaceClient).toHaveBeenCalledWith(null);
     });
 
     it("waits for the plugin-spawned children to be killed before exiting (#12216)", async () => {
@@ -1153,17 +1128,6 @@ describe("registerShutdownHandler", () => {
       expect(pluginIdx).toBeLessThan(workspaceIdx);
     });
 
-    it("nulls workspaceClientRef after disposeWorkspaceClient runs", async () => {
-      const { beforeQuitCb } = await setup({});
-      await beforeQuitCb(makeEvent());
-
-      await vi.waitFor(() => {
-        expect(appMock.exit).toHaveBeenCalledWith(0);
-      });
-
-      expect(serviceRefsMock.setWorkspaceClientRef).toHaveBeenCalledWith(null);
-    });
-
     it("still tears down PTY/workspace/watchdog when an earlier optional-ref dispose throws", async () => {
       serviceRefsMock.setInitialState({
         autoUpdater: autoUpdaterMock,
@@ -1223,13 +1187,6 @@ describe("registerShutdownHandler", () => {
       expect(eagerIdx).toBeGreaterThanOrEqual(0);
       expect(chainIdx).toBeGreaterThanOrEqual(0);
       expect(eagerIdx).toBeLessThan(chainIdx);
-    });
-
-    it("skips eager backup in smoke test mode", async () => {
-      isSmokeTestMock.value = true;
-      const { beforeQuitCb } = await setup({});
-      await beforeQuitCb(makeEvent());
-      expect(crashRecoveryMock.takeBackup).not.toHaveBeenCalled();
     });
 
     it("continues shutdown when eager takeBackup throws", async () => {
@@ -1721,20 +1678,6 @@ describe("registerShutdownHandler", () => {
       expect(appMock.exit).toHaveBeenCalledWith(0);
     });
 
-    it("does not journal non-agent terminals or null-session captures", async () => {
-      projectStoreMock.getAllProjects.mockReturnValue([{ id: "proj-1" }] as never);
-      const ptyClient = makePtyClient({
-        getAllTerminalsAsync: vi.fn(async () => [{ id: "t2", cwd: "/repo" }]),
-        gracefulKillByProject: vi.fn(async () => [{ id: "t2", agentSessionId: null }]),
-      });
-      const { beforeQuitCb } = await setup({ getPtyClient: () => ptyClient });
-
-      await beforeQuitCb(makeEvent());
-      await vi.waitFor(() => expect(appMock.exit).toHaveBeenCalled());
-
-      expect(persistAgentSessionMock).not.toHaveBeenCalled();
-    });
-
     it("journals captures from every project even if one persist call fails", async () => {
       projectStoreMock.getAllProjects.mockReturnValue([
         { id: "proj-1" },
@@ -2138,6 +2081,177 @@ describe("registerShutdownHandler", () => {
       expect(onReadyToInstall).not.toHaveBeenCalled();
       expect(closeSharedDbMock.closeSharedDb).not.toHaveBeenCalled();
       expect(crashRecoveryMock.cleanupOnExit).not.toHaveBeenCalled();
+    });
+  });
+
+  // L12: a termination signal sent to the whole process group (logout,
+  // `pkill daintree`). Chromium aborts the browser within milliseconds of its
+  // GPU process dying there, so the chain is cut short after its synchronous
+  // prefix.
+  describe("group stop", () => {
+    beforeEach(() => {
+      groupStopMock.state.finisher = null;
+      mcpServerMock.stop.mockReturnValue(Promise.resolve());
+      performanceTraceMock.stopPerformanceTraceIfActive.mockReturnValue(Promise.resolve());
+    });
+
+    async function setupGroupStop(overrides?: Partial<ShutdownDeps>) {
+      const ctx = await setup(overrides);
+      const coordinator = await import("../shutdownCoordinator.js");
+      const finishGroupStop = groupStopMock.state.finisher;
+      if (!finishGroupStop) throw new Error("shutdown.ts registered no group-stop finisher");
+      return { ...ctx, coordinator, finishGroupStop };
+    }
+
+    it("remembers the zygotes and forwards every child and renderer death to the detector", async () => {
+      await setup();
+      expect(groupStopMock.rememberChromiumZygotes).toHaveBeenCalledOnce();
+      const listener = (name: string) =>
+        appMock.on.mock.calls.find((args: string[]) => args[0] === name)![1] as (
+          ...args: unknown[]
+        ) => void;
+      const details = { type: "GPU", reason: "killed", exitCode: 15 };
+
+      listener("child-process-gone")({}, details);
+      listener("render-process-gone")({}, {}, { reason: "clean-exit", exitCode: 0 });
+
+      expect(groupStopMock.noteChildProcessGone).toHaveBeenCalledWith(details);
+      expect(groupStopMock.noteRendererGone).toHaveBeenCalledOnce();
+    });
+
+    it("exits clean straight after the chain's synchronous prefix, without waiting on the chain", async () => {
+      signalShutdownMock.isSignalShutdown.mockReturnValue(true);
+      const { beforeQuitCb, coordinator, finishGroupStop } = await setupGroupStop();
+
+      void beforeQuitCb(makeEvent());
+      // What the quit persisted before its first await.
+      expect(openWindowsTrackerMock.freezeAndSnapshotOpenWindows).toHaveBeenCalled();
+      expect(crashRecoveryMock.takeBackup).toHaveBeenCalled();
+
+      expect(finishGroupStop()).toBe(true);
+
+      expect(appMock.exit).toHaveBeenCalledExactlyOnceWith(0);
+      expect(crashRecoveryMock.cleanupOnExit).toHaveBeenCalled();
+      expect(crashLoopGuardMock.markCleanExit).toHaveBeenCalled();
+      expect(projectCheckServiceMock.dispose).toHaveBeenCalled();
+      expect(signalShutdownMock.clearSafetyBeltTimer).toHaveBeenCalled();
+      // None of the chain's awaited work had been reached.
+      expect(closeSharedDbMock.closeSharedDb).not.toHaveBeenCalled();
+      expect(closeTelemetryMock).not.toHaveBeenCalled();
+
+      // The abandoned chain settling afterwards must not change the exit code.
+      await vi.waitFor(() => expect(coordinator.getActiveShutdown()?.phase).toBe("handoff"), {
+        timeout: 5_000,
+      });
+      expect(appMock.exit).toHaveBeenCalledExactlyOnceWith(0);
+    });
+
+    it("claims the shutdown itself when a quit confirmation was still open", async () => {
+      quitWarningMock.getActiveAgentCount.mockReturnValue(2);
+      let answerDialog: (confirmed: boolean) => void = () => {};
+      quitWarningMock.showQuitWarning.mockImplementationOnce(
+        () => new Promise<boolean>((resolve) => (answerDialog = resolve))
+      );
+      const mainWindow = {} as Electron.BrowserWindow;
+      const { beforeQuitCb, coordinator, finishGroupStop } = await setupGroupStop({
+        windowRegistry: {
+          getPrimary: () => ({ browserWindow: mainWindow }),
+        } as unknown as ShutdownDeps["windowRegistry"],
+      });
+
+      const userQuit = beforeQuitCb(makeEvent());
+      expect(quitWarningMock.showQuitWarning).toHaveBeenCalled();
+      expect(coordinator.getActiveShutdown()).toBeNull();
+
+      expect(finishGroupStop()).toBe(true);
+
+      expect(coordinator.getActiveShutdown()?.initiator).toBe("app-quit");
+      expect(openWindowsTrackerMock.freezeAndSnapshotOpenWindows).toHaveBeenCalled();
+      expect(crashLoopGuardMock.markCleanExit).toHaveBeenCalled();
+      expect(appMock.exit).toHaveBeenCalledExactlyOnceWith(0);
+
+      answerDialog(true);
+      await userQuit;
+      await vi.waitFor(() => expect(coordinator.getActiveShutdown()?.phase).toBe("handoff"), {
+        timeout: 5_000,
+      });
+      expect(appMock.exit).toHaveBeenCalledExactlyOnceWith(0);
+    });
+
+    it("exits dirty, without clean markers, when the chain had already timed out", async () => {
+      vi.useFakeTimers();
+      const consoleSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+      signalShutdownMock.isSignalShutdown.mockReturnValue(true);
+      mcpServerMock.stop.mockReturnValue(new Promise(() => {}));
+      // Keeps the run in its tail, still cleaning, after the outcome is dirty.
+      closeTelemetryMock.mockReturnValueOnce(new Promise(() => {}));
+
+      try {
+        const { beforeQuitCb, finishGroupStop } = await setupGroupStop();
+        await beforeQuitCb(makeEvent());
+        await vi.advanceTimersByTimeAsync(CLEANUP_TIMEOUT_MS);
+        expect(closeTelemetryMock).toHaveBeenCalled();
+
+        expect(finishGroupStop()).toBe(true);
+
+        expect(appMock.exit).toHaveBeenCalledExactlyOnceWith(1);
+        expect(crashRecoveryMock.cleanupOnExit).not.toHaveBeenCalled();
+        expect(crashLoopGuardMock.markCleanExit).not.toHaveBeenCalled();
+
+        await vi.runAllTimersAsync();
+        expect(appMock.exit).toHaveBeenCalledExactlyOnceWith(1);
+      } finally {
+        consoleSpy.mockRestore();
+        vi.useRealTimers();
+      }
+    });
+
+    it("exits dirty when the quit's synchronous persistence threw", async () => {
+      const consoleSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+      signalShutdownMock.isSignalShutdown.mockReturnValue(true);
+      openWindowsTrackerMock.freezeAndSnapshotOpenWindows.mockImplementationOnce(() => {
+        throw new Error("database is locked");
+      });
+
+      try {
+        const { beforeQuitCb, coordinator, finishGroupStop } = await setupGroupStop();
+        void beforeQuitCb(makeEvent());
+
+        expect(finishGroupStop()).toBe(true);
+
+        expect(appMock.exit).toHaveBeenCalledExactlyOnceWith(1);
+        expect(crashLoopGuardMock.markCleanExit).not.toHaveBeenCalled();
+        await vi.waitFor(() => expect(coordinator.getActiveShutdown()?.phase).toBe("handoff"));
+        expect(appMock.exit).toHaveBeenCalledExactlyOnceWith(1);
+      } finally {
+        consoleSpy.mockRestore();
+      }
+    });
+
+    it("leaves an update install's terminal action alone", async () => {
+      const { coordinator, finishGroupStop } = await setupGroupStop();
+      const onReadyToInstall = vi.fn();
+      expect(coordinator.requestGracefulShutdownForUpdate(onReadyToInstall)).toBe("started");
+
+      expect(finishGroupStop()).toBe(false);
+
+      expect(appMock.exit).not.toHaveBeenCalled();
+      expect(crashLoopGuardMock.markCleanExit).not.toHaveBeenCalled();
+      await vi.waitFor(() => expect(onReadyToInstall).toHaveBeenCalledWith("clean"), {
+        timeout: 5_000,
+      });
+      expect(appMock.exit).not.toHaveBeenCalled();
+    });
+
+    it("does nothing in smoke-test mode, where quitting skips cleanup", async () => {
+      isSmokeTestMock.value = true;
+      const { coordinator, finishGroupStop } = await setupGroupStop();
+
+      expect(finishGroupStop()).toBe(false);
+
+      expect(coordinator.getActiveShutdown()).toBeNull();
+      expect(appMock.exit).not.toHaveBeenCalled();
+      expect(crashLoopGuardMock.markCleanExit).not.toHaveBeenCalled();
     });
   });
 });

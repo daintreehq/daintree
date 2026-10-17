@@ -1,4 +1,4 @@
-import type { ActionCallbacks, ActionRegistry } from "../actionTypes";
+import type { ActionCallbacks, ActionRegistry, LaunchDecline } from "../actionTypes";
 import {
   requireExplicitWorktreeForAgentDispatch,
   requireWorktreeId,
@@ -15,6 +15,7 @@ import {
   TerminalSpawnSourceSchema,
   AddPanelFocusPolicySchema,
   AgentFacingSessionRecordSchema,
+  PanelLimitSnapshotSchema,
 } from "./schemas";
 import { z } from "zod";
 import { usePanelStore } from "@/store/panelStore";
@@ -103,6 +104,14 @@ const BookmarkListArgsSchema = z
     offset: SessionListOffsetSchema,
   })
   .optional();
+
+const AgentListModelsArgsSchema = z.object({
+  agentId: z
+    .string()
+    .min(1)
+    .optional()
+    .describe("One agent's models; omit for every listed agent."),
+});
 
 const AgentListPresetsArgsSchema = z.object({
   agentId: AgentIdSchema,
@@ -327,6 +336,14 @@ export function registerAgentActions(actions: ActionRegistry, callbacks: ActionC
     }
   };
 
+  /** The agents a listing reports, in the launcher's order. */
+  const listedAgentIds = (registry: Readonly<Record<string, unknown>>): string[] => [
+    ...LAUNCHABLE_AGENT_IDS.filter((id) => Object.hasOwn(registry, id)),
+    ...Object.keys(registry)
+      .filter((id) => !isBuiltInAgentId(id) && !isAssistantOnlyAgentId(id))
+      .sort(),
+  ];
+
   /** Launch ids the launcher always turns into a panel, never an agent. */
   const HANDBACK_PANEL_LAUNCH_IDS: ReadonlySet<string> = new Set(["browser", "dev-preview"]);
 
@@ -406,7 +423,7 @@ export function registerAgentActions(actions: ActionRegistry, callbacks: ActionC
         .string()
         .optional()
         .describe(
-          "Model passed to the agent CLI for this launch, in its own names. No preset needed."
+          "Omit for the CLI's default; set only when the user names a model. No preset needed."
         ),
       presetId: z
         .string()
@@ -472,7 +489,12 @@ export function registerAgentActions(actions: ActionRegistry, callbacks: ActionC
       launched: z.boolean(),
       terminalId: z.string().nullable(),
       location: z.enum(["grid", "dock"]).nullable(),
-      spawnStatus: z.literal("missing-cli").nullable(),
+      spawnStatus: z
+        .enum(["missing-cli", "panel-limit", "already-launching", "spawn-failed", "unavailable"])
+        .nullable()
+        .describe(
+          "Null on a launch, else why not: panel-limit (see panelLimit), already-launching (retry), missing-cli (setup panel opened)."
+        ),
       worktreeId: z.string().nullable(),
       worktreePath: z.string().nullable(),
       branch: z.string().nullable(),
@@ -481,6 +503,8 @@ export function registerAgentActions(actions: ActionRegistry, callbacks: ActionC
       // a cwd in another repo still files under the resolved worktree (#13130).
       // Null when either path is unknown.
       cwdOutsideWorktree: z.boolean().nullable(),
+      // Nested nullable is safe: only a nullable root disables the output schema.
+      panelLimit: PanelLimitSnapshotSchema.nullable(),
       // Filled in by main when the call waits for the reply.
       reply: AwaitedReplySchema.nullable(),
     }),
@@ -596,6 +620,7 @@ export function registerAgentActions(actions: ActionRegistry, callbacks: ActionC
         );
       }
       const handbackCode = handback === true ? mintHandbackCode() : undefined;
+      let decline: LaunchDecline | null = null;
       const result = await callbacks.onLaunchAgent(agentId, {
         location,
         cwd,
@@ -619,24 +644,31 @@ export function registerAgentActions(actions: ActionRegistry, callbacks: ActionC
         requestedId,
         force,
         name,
+        onDecline: (d) => {
+          decline = d;
+        },
       });
-      // Nothing to report: the launcher declined (Electron unavailable, a
-      // re-entrant launch of the same agent, or a caught spawn failure). Still
-      // an object so the MCP output schema stays satisfiable — `launched:false`
-      // is the honest discriminant, where a bare null read as a success with no
-      // terminal. Genuine rejections (unknown id, unresolvable worktree) throw
-      // out of the launcher and surface as ok:false instead.
+      // The launcher declined (the hard panel limit, a re-entrant launch of the
+      // same agent, a caught spawn failure, Electron unavailable) and says why.
+      // Still an object so the MCP output schema stays satisfiable —
+      // `launched:false` is the honest discriminant, where a bare null read as a
+      // success with no terminal. Genuine rejections (unknown id, unresolvable
+      // worktree) throw out of the launcher and surface as ok:false instead.
       if (!result) {
+        // Widened back: TS narrows a closure-assigned `let` to its initializer.
+        const declined = decline as LaunchDecline | null;
         return {
           launched: false,
           terminalId: null,
           location: null,
-          spawnStatus: null,
+          // A decline the launcher did not name is still a failure to start.
+          spawnStatus: declined?.reason ?? "spawn-failed",
           worktreeId: null,
           worktreePath: null,
           branch: null,
           cwd: null,
           cwdOutsideWorktree: null,
+          panelLimit: declined?.panelLimit ?? null,
           reply: null,
         };
       }
@@ -652,6 +684,7 @@ export function registerAgentActions(actions: ActionRegistry, callbacks: ActionC
         branch: result.branch,
         cwd: result.cwd,
         cwdOutsideWorktree: result.cwdOutsideWorktree,
+        panelLimit: null,
         reply: null,
       };
     },
@@ -1487,12 +1520,7 @@ export function registerAgentActions(actions: ActionRegistry, callbacks: ActionC
     run: async () => {
       const [{ settings, availability, availabilityLive }, registry, userRegistry] =
         await readAvailableAgentSources();
-      const registryIds = [
-        ...LAUNCHABLE_AGENT_IDS.filter((id) => Object.hasOwn(registry, id)),
-        ...Object.keys(registry)
-          .filter((id) => !isBuiltInAgentId(id) && !isAssistantOnlyAgentId(id))
-          .sort(),
-      ];
+      const registryIds = listedAgentIds(registry);
       return {
         complete: true as const,
         // Only certify completeness once a live probe has run: a hydrating cache
@@ -1654,6 +1682,53 @@ export function registerAgentActions(actions: ActionRegistry, callbacks: ActionC
           sources.projectPresets
         ),
       };
+    },
+  }));
+
+  actions.set("agent.listModels", () => ({
+    id: "agent.listModels",
+    title: "List agent models",
+    description:
+      "Each agent CLI's current model ids and names, to turn a model the user names into an id. With none named, launch without a model.",
+    category: "agent",
+    kind: "query",
+    danger: "safe",
+    scope: "renderer",
+    argsSchema: AgentListModelsArgsSchema,
+    examples: [
+      {
+        args: { agentId: "codex" },
+        description: "Find the id of a Codex model the user asked for by name",
+      },
+    ],
+    resultSchema: z.object({
+      agents: z.array(
+        z.object({
+          agentId: z.string(),
+          models: z.array(z.object({ id: z.string(), name: z.string() })),
+        })
+      ),
+    }),
+    mcpOutputSchema: true,
+    run: async (args: unknown) => {
+      const { agentId } = AgentListModelsArgsSchema.parse(args ?? {});
+      const registry = await agentCapabilitiesClient.getRegistry();
+      if (agentId !== undefined && !Object.hasOwn(registry, agentId)) {
+        throw new UnactionableTargetError(unknownAgentIdMessage(agentId));
+      }
+      const ids = agentId !== undefined ? [agentId] : listedAgentIds(registry);
+      const agents = await Promise.all(
+        ids.map(async (id) => {
+          const catalog = await agentCapabilitiesClient.getResolvedModelList(id);
+          // Projected by hand: the catalog also carries context windows and
+          // upgrade pointers, and a result schema filters nothing at runtime.
+          return {
+            agentId: id,
+            models: (catalog?.models ?? []).map((m) => ({ id: m.id, name: m.name })),
+          };
+        })
+      );
+      return { agents };
     },
   }));
 

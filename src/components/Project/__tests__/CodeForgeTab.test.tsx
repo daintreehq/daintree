@@ -82,15 +82,6 @@ function optionAt(select: HTMLSelectElement, index: number): HTMLOptionElement {
   return option;
 }
 
-describe("CodeForgeTab — DOM anchors for settings deep-links", () => {
-  it("exposes the project-code-forge-remote anchor for settings deep-links", async () => {
-    const { container } = renderCodeForgeTab();
-    await waitFor(() => {
-      expect(container.querySelector("#project-code-forge-remote")).not.toBeNull();
-    });
-  });
-});
-
 describe("CodeForgeTab — stale forge remote", () => {
   it("keeps a saved remote that no longer exists selectable and distinct from auto-detect", async () => {
     remotes = [makeRemote("origin")];

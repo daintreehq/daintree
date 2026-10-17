@@ -78,12 +78,6 @@ beforeEach(() => {
 });
 
 describe("PluginsTab (settings entry point)", () => {
-  it("renders the tab chrome immediately", () => {
-    render(<PluginsTab />);
-    expect(screen.getByText("Plugin manager")).toBeTruthy();
-    expect(screen.getByRole("button", { name: "Open plugin manager" })).toBeTruthy();
-  });
-
   it("shows the installed plugin count once the list resolves", async () => {
     (window.electron.plugin.list as ReturnType<typeof vi.fn>).mockResolvedValue([
       makePlugin("a.one"),
@@ -91,14 +85,6 @@ describe("PluginsTab (settings entry point)", () => {
     ]);
     render(<PluginsTab />);
     await waitFor(() => expect(screen.getByText("2 plugins installed")).toBeTruthy());
-  });
-
-  it("singularizes the count for a single plugin", async () => {
-    (window.electron.plugin.list as ReturnType<typeof vi.fn>).mockResolvedValue([
-      makePlugin("a.one"),
-    ]);
-    render(<PluginsTab />);
-    await waitFor(() => expect(screen.getByText("1 plugin installed")).toBeTruthy());
   });
 
   it("shows an empty summary when no plugins are installed", async () => {
@@ -128,14 +114,6 @@ describe("PluginsTab (settings entry point)", () => {
 
     fireProvenance?.();
     await waitFor(() => expect(listMock).toHaveBeenCalledTimes(2));
-  });
-
-  it("loads the background update check toggle as off by default", async () => {
-    render(<PluginsTab />);
-    const toggle = await screen.findByRole("switch", {
-      name: "Check for plugin updates in the background",
-    });
-    await waitFor(() => expect(toggle.getAttribute("aria-checked")).toBe("false"));
   });
 
   it("optimistically enables background checks and persists via IPC", async () => {

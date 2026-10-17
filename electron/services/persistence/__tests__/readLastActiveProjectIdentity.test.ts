@@ -12,7 +12,7 @@ vi.mock("electron", () => ({
   app: { getPath: () => "/userData" },
 }));
 
-type Row = { name: string; emoji: string; color: string | null };
+type Row = { name: string; emoji: string; color: string | null } | { path: string | null };
 
 function fakeConnection(rows: Record<string, Row>) {
   return {
@@ -33,7 +33,7 @@ vi.mock("better-sqlite3", () => ({
 const shared = { current: null as ReturnType<typeof fakeConnection> | null };
 vi.mock("../db.js", () => ({ getSharedSqlite: () => shared.current }));
 
-import { readLastActiveProjectIdentitySync } from "../readLastProjectId.js";
+import { readLastActiveProjectIdentitySync, readProjectPathSync } from "../readLastProjectId.js";
 
 const PROJECT = { name: "Daintree", emoji: "🌲", color: null };
 
@@ -78,5 +78,39 @@ describe("readLastActiveProjectIdentitySync", () => {
     });
     expect(readLastActiveProjectIdentitySync("p1")).toBeNull();
     expect(databaseCtor).not.toHaveBeenCalled();
+  });
+});
+
+describe("readProjectPathSync", () => {
+  beforeEach(() => {
+    existsSync.mockReturnValue(true);
+    databaseCtor.mockClear();
+    throwaway.current = fakeConnection({ p1: { path: "/home/u/projects/hello-web" } });
+    shared.current = null;
+  });
+
+  it("reads a project's folder on a throwaway connection before the shared DB is open", () => {
+    expect(readProjectPathSync("p1")).toBe("/home/u/projects/hello-web");
+    expect(databaseCtor).toHaveBeenCalledWith(path.join("/userData", "daintree.db"), {
+      readonly: true,
+    });
+    expect(throwaway.current.close).toHaveBeenCalledTimes(1);
+  });
+
+  it("reads through the shared connection once it is open", () => {
+    shared.current = fakeConnection({ p1: { path: "/home/u/projects/daintree" } });
+
+    expect(readProjectPathSync("p1")).toBe("/home/u/projects/daintree");
+    expect(databaseCtor).not.toHaveBeenCalled();
+  });
+
+  it("returns null for an id with no project row, an empty path, or a failed read", () => {
+    expect(readProjectPathSync("scratch-1")).toBeNull();
+
+    throwaway.current = fakeConnection({ p1: { path: "" } });
+    expect(readProjectPathSync("p1")).toBeNull();
+
+    existsSync.mockReturnValue(false);
+    expect(readProjectPathSync("p1")).toBeNull();
   });
 });

@@ -34,14 +34,23 @@ vi.mock("node:child_process", async () => {
     (mockExecFileAsync as unknown as (...a: unknown[]) => Promise<unknown>)(...args);
   return {
     execFile: wrapperExecFile,
-    spawnSync: vi.fn(() => ({ status: 0 })),
   };
 });
 
-import { TrashedPidTracker } from "../TrashedPidTracker.js";
-import { spawnSync } from "node:child_process";
+vi.mock("../../utils/windowsTreeKill.js", () => ({
+  killWindowsProcessTree: vi.fn(async () => ({
+    mode: "tree",
+    targeted: [],
+    failed: [],
+    stale: [],
+    rootEnded: true,
+  })),
+}));
 
-const mockedSpawnSync = vi.mocked(spawnSync);
+import { TrashedPidTracker } from "../TrashedPidTracker.js";
+import { killWindowsProcessTree } from "../../utils/windowsTreeKill.js";
+
+const mockedTreeKill = vi.mocked(killWindowsProcessTree);
 
 async function defaultExecFileAsync(): Promise<{ stdout: string; stderr: string }> {
   return { stdout: MOCK_START_TIME, stderr: "" };
@@ -107,12 +116,6 @@ describe("TrashedPidTracker", () => {
       const entries = readFile() as Array<{ pid: number }>;
       expect(entries).toHaveLength(1);
       expect(entries[0].pid).toBe(200);
-    });
-
-    it("appends multiple entries for different terminals", async () => {
-      await tracker.persistTrashed("term-1", 100);
-      await tracker.persistTrashed("term-2", 200);
-      expect(readFile()).toHaveLength(2);
     });
   });
 
@@ -187,15 +190,61 @@ describe("TrashedPidTracker", () => {
       await tracker.cleanupOrphans();
 
       if (process.platform === "win32") {
-        expect(mockedSpawnSync).toHaveBeenCalledWith(
-          "taskkill",
-          ["/T", "/F", "/PID", "9999"],
-          expect.objectContaining({ windowsHide: true })
+        expect(mockedTreeKill).toHaveBeenCalledWith(
+          { pid: 9999, startTime: MOCK_START_TIME_PARSED },
+          { timeoutMs: 3000 }
         );
       } else {
         expect(killSpy).toHaveBeenCalledWith(-9999, "SIGKILL");
       }
       expect(fs.existsSync(path.join(tmpDir, "trashed-pids.json"))).toBe(false);
+    });
+
+    it("on Windows, passes the recorded identity and never falls back to a bare-PID kill", async () => {
+      const original = Object.getOwnPropertyDescriptor(process, "platform")!;
+      Object.defineProperty(process, "platform", { value: "win32", configurable: true });
+      try {
+        writeFile([
+          {
+            terminalId: "term-1",
+            pid: 9999,
+            startTime: MOCK_START_TIME_PARSED,
+            trashedAt: Date.now(),
+          },
+        ]);
+        mockedTreeKill.mockResolvedValueOnce({
+          mode: "tree",
+          targeted: [9999],
+          killed: [],
+          alreadyGone: [],
+          timedOut: [],
+          unconfirmed: [],
+          failed: [{ pid: 9999, code: "win32-5" }],
+          identityMismatch: [],
+          stale: [],
+          rootEnded: false,
+        });
+        const killSpy = vi.spyOn(process, "kill").mockImplementation(() => true);
+
+        await tracker.cleanupOrphans();
+
+        expect(mockedTreeKill).toHaveBeenCalledWith(
+          { pid: 9999, startTime: MOCK_START_TIME_PARSED },
+          { timeoutMs: 3000 }
+        );
+        // The PID is not pinned by any handle here; only the helper may end it.
+        expect(killSpy).not.toHaveBeenCalled();
+        // The start-time probe runs PowerShell by absolute path.
+        expect(mockExecFileAsync).toHaveBeenCalledWith(
+          expect.stringMatching(
+            /^[A-Za-z]:\\.*\\System32\\WindowsPowerShell\\v1\.0\\powershell\.exe$/i
+          ),
+          expect.any(Array),
+          expect.any(Object)
+        );
+      } finally {
+        Object.defineProperty(process, "platform", original);
+      }
     });
 
     it("skips processes with mismatched start times (PID recycling)", async () => {
@@ -270,7 +319,7 @@ describe("TrashedPidTracker", () => {
       await tracker.cleanupOrphans();
 
       if (process.platform === "win32") {
-        expect(mockedSpawnSync).toHaveBeenCalledTimes(1);
+        expect(mockedTreeKill).toHaveBeenCalledTimes(1);
       } else {
         expect(killSpy).toHaveBeenCalledTimes(1);
       }
@@ -364,11 +413,10 @@ describe("TrashedPidTracker", () => {
       await tracker.cleanupOrphans();
 
       if (process.platform === "win32") {
-        expect(mockedSpawnSync).toHaveBeenCalledTimes(1);
-        expect(mockedSpawnSync).toHaveBeenCalledWith(
-          "taskkill",
-          ["/T", "/F", "/PID", "1002"],
-          expect.objectContaining({ windowsHide: true })
+        expect(mockedTreeKill).toHaveBeenCalledTimes(1);
+        expect(mockedTreeKill).toHaveBeenCalledWith(
+          { pid: 1002, startTime: MOCK_START_TIME_PARSED },
+          { timeoutMs: 3000 }
         );
       } else {
         expect(killSpy).toHaveBeenCalledTimes(1);

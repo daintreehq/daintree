@@ -54,6 +54,7 @@ export type {
   PluginPanelLifecycleEvent,
   PluginPanelLifecyclePhase,
   PanelReloadResult,
+  WorkerRestartResult,
 } from "./plugin.js";
 
 // ── Focused panel (worker-facing) ───────────────────────────────────
@@ -78,6 +79,7 @@ export type {
   PluginHostActionsApi,
   PluginActivationApi,
   PluginHostCallOptions,
+  PluginPromptCallOptions,
   PluginHostSubscriptionOptions,
   ActionHandler,
   PluginToastOptions,
@@ -152,6 +154,10 @@ export type { StorageApi, PluginStorageScope } from "./plugin.js";
 
 export type {
   PluginDatabaseContribution,
+  PluginDatabaseQueryContribution,
+  PluginDatabaseQueryParam,
+  PluginDatabaseQueryParamFormat,
+  PluginDatabaseQueryParamType,
   PluginDatabaseApi,
   PluginDatabase,
   PluginDatabaseStatements,
@@ -169,6 +175,7 @@ export type {
 
 export type {
   PluginIpcContext,
+  PluginInvokeOrigin,
   PluginIpcHandler,
   PluginChannelSchema,
   PluginTypedIpcHandler,

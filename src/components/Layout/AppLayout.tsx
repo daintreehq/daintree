@@ -36,6 +36,11 @@ import { useMacroFocusStore } from "@/store/macroFocusStore";
 import { useThemeBrowserStore } from "@/store/themeBrowserStore";
 import { useAnimatedPresence } from "@/hooks/useAnimatedPresence";
 import {
+  resizeCappedPreference,
+  useViewportCappedWidth,
+  viewportAttainableWidth,
+} from "@/hooks/useViewportCappedWidth";
+import {
   getPerformanceModeFloor,
   PANEL_MINIMIZE_DURATION,
   PANEL_MINIMIZE_EASING,
@@ -65,6 +70,25 @@ import { unlockSidebarHydration } from "@/lib/layoutTransitionLock";
 import { logError } from "@/utils/logger";
 import { FileDocumentCloseGuardHost } from "@/panels/file/FileDocumentCloseGuardHost";
 import { onHelpPanelRuntimeRequested } from "@/lib/helpPanelRuntimeGate";
+import { sendHostOwnedWrite } from "@/store/persistence/hostOwnedWrites";
+
+/** Focus mode is the project's, held on its host: saved only while this view drives it. */
+async function persistProjectFocusMode(
+  workspaceId: string,
+  focusMode: boolean,
+  panelState: PanelState | undefined,
+  failureMessage: string
+): Promise<void> {
+  try {
+    await sendHostOwnedWrite(
+      `project-focus-mode:${workspaceId}`,
+      () => window.electron.project.setFocusMode(workspaceId, focusMode, panelState),
+      () => void persistProjectFocusMode(workspaceId, focusMode, panelState, failureMessage)
+    );
+  } catch (error) {
+    logError(failureMessage, error);
+  }
+}
 
 function preloadGlobalBannerCoordinator() {
   return import("../Recovery/GlobalBannerCoordinator");
@@ -143,6 +167,9 @@ interface AppLayoutProps {
 export const MIN_SIDEBAR_WIDTH = 200;
 export const MAX_SIDEBAR_WIDTH = 600;
 export const DEFAULT_SIDEBAR_WIDTH = 350;
+// What the sidebar leaves for the panel grid when the window is too narrow for
+// its saved width (a Linux tiling window manager can go below 800px).
+const MIN_MAIN_WIDTH = 240;
 
 // #10827: upper bound on how long the grid-measurement hydration lock stays
 // armed if the persisted-width restore IPC neither resolves nor rejects. After
@@ -519,15 +546,12 @@ export function AppLayout({
         return;
       }
 
-      try {
-        await window.electron.project.setFocusMode(
-          workspaceId,
-          persistedFocusMode,
-          layout.savedPanelState as PanelState | undefined
-        );
-      } catch (error) {
-        logError("Failed to persist focus mode to project state", error);
-      }
+      await persistProjectFocusMode(
+        workspaceId,
+        persistedFocusMode,
+        layout.savedPanelState as PanelState | undefined,
+        "Failed to persist focus mode to project state"
+      );
     };
 
     const timer = setTimeout(persistFocusMode, 100);
@@ -566,11 +590,12 @@ export function AppLayout({
       }
       // Persist to per-workspace state
       if (workspaceId) {
-        try {
-          await window.electron.project.setFocusMode(workspaceId, false, undefined);
-        } catch (error) {
-          logError("Failed to clear focus panel state", error);
-        }
+        await persistProjectFocusMode(
+          workspaceId,
+          false,
+          undefined,
+          "Failed to clear focus panel state"
+        );
       } else {
         // Fall back to global state only when there is no workspace at all
         try {
@@ -603,11 +628,12 @@ export function AppLayout({
       const persistFocusMode = useFocusStore.getState().isFocusMode || showSidebar || showAssistant;
       if (!persistFocusMode) return;
       if (workspaceId) {
-        try {
-          await window.electron.project.setFocusMode(workspaceId, true, currentPanelState);
-        } catch (error) {
-          logError("Failed to persist focus panel state", error);
-        }
+        await persistProjectFocusMode(
+          workspaceId,
+          true,
+          currentPanelState,
+          "Failed to persist focus panel state"
+        );
       } else {
         // Fall back to global state only when there is no workspace at all
         try {
@@ -784,8 +810,15 @@ export function AppLayout({
   }, [layout.portalOpen]);
 
   const handleSidebarResize = useCallback((newWidth: number) => {
-    const clampedWidth = Math.min(Math.max(newWidth, MIN_SIDEBAR_WIDTH), MAX_SIDEBAR_WIDTH);
-    setSidebarWidth(clampedWidth);
+    const attainable = viewportAttainableWidth(MIN_SIDEBAR_WIDTH, MIN_MAIN_WIDTH);
+    setSidebarWidth((current) =>
+      resizeCappedPreference(newWidth, current, MIN_SIDEBAR_WIDTH, MAX_SIDEBAR_WIDTH, attainable)
+    );
+  }, []);
+
+  // A reset is a new preference whatever the window can show right now.
+  const handleSidebarResetWidth = useCallback(() => {
+    setSidebarWidth(DEFAULT_SIDEBAR_WIDTH);
   }, []);
 
   // While a sidebar/assistant divider is dragged, `<main flex:1>` reflows every
@@ -874,7 +907,12 @@ export function AppLayout({
     onSettings?.();
   }, [onSettings]);
 
-  const effectiveSidebarWidth = showSidebar ? sidebarWidth : 0;
+  const displayedSidebarWidth = useViewportCappedWidth(
+    sidebarWidth,
+    MIN_SIDEBAR_WIDTH,
+    MIN_MAIN_WIDTH
+  );
+  const effectiveSidebarWidth = showSidebar ? displayedSidebarWidth : 0;
 
   const [bannerEl, setBannerEl] = useState<HTMLDivElement | null>(null);
 
@@ -1007,12 +1045,13 @@ export function AppLayout({
               zIndex: 1,
             }}
           >
-            <div className="absolute top-0 left-0 h-full" style={{ width: sidebarWidth }}>
+            <div className="absolute top-0 left-0 h-full" style={{ width: displayedSidebarWidth }}>
               {hasWorkspace && (
                 <ErrorBoundary variant="section" componentName="Sidebar">
                   <Sidebar
-                    width={sidebarWidth}
+                    width={displayedSidebarWidth}
                     onResize={handleSidebarResize}
+                    onResetWidth={handleSidebarResetWidth}
                     onResizeStart={handleSidebarResizeStart}
                     onResizeEnd={handleSidebarResizeEnd}
                     isVisible={showSidebar}

@@ -2,6 +2,7 @@ import { useCallback, useRef, useEffect, useLayoutEffect, useState, useMemo } fr
 import { createPortal } from "react-dom";
 import { useTwoPaneSplitStore } from "@/store";
 import { resolveEffectiveRatio } from "@/store/twoPaneSplitStore";
+import { hostScopedKey } from "@/hooks/useHostPlatform";
 import type { PanelInstance } from "@shared/types/panel";
 import { TwoPaneSplitDivider, DIVIDER_WIDTH_PX } from "./TwoPaneSplitDivider";
 import { MIN_TERMINAL_WIDTH_PX } from "@/lib/terminalLayout";
@@ -71,7 +72,9 @@ export function TwoPaneSplitLayout({
 
   const setWorktreeRatio = useTwoPaneSplitStore((state) => state.setWorktreeRatio);
 
-  const storedEntry = activeWorktreeId ? ratioByWorktreeId[activeWorktreeId] : undefined;
+  const storedEntry = activeWorktreeId
+    ? ratioByWorktreeId[hostScopedKey(activeWorktreeId)]
+    : undefined;
 
   // Backfill panel IDs for legacy entries migrated from v0 (panels are [null, null])
   useEffect(() => {

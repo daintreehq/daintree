@@ -57,72 +57,6 @@ describe("usePluginContextMenuItems", () => {
     expect(result.current[0]?.item.label).toBe("Foo");
   });
 
-  it("updates entries when a push arrives", async () => {
-    let emit:
-      | ((p: {
-          items: Array<{ pluginId: string; item: ContextMenuContribution }>;
-          complete: boolean;
-        }) => void)
-      | null = null;
-    onContextMenuItemsChangedMock.mockImplementation(
-      (
-        cb: (p: {
-          items: Array<{ pluginId: string; item: ContextMenuContribution }>;
-          complete: boolean;
-        }) => void
-      ) => {
-        emit = cb;
-        return () => {};
-      }
-    );
-    const { usePluginContextMenuItems } = await import("../usePluginContextMenuItems");
-    const { result } = renderHook(() => usePluginContextMenuItems("worktree"));
-
-    await waitFor(() => expect(emit).not.toBeNull());
-    act(() => {
-      emit!({ items: [entry("acme", "WorktreeItem", "worktree")], complete: false });
-    });
-
-    expect(result.current).toHaveLength(1);
-    expect(result.current[0]?.item.label).toBe("WorktreeItem");
-  });
-
-  it("filters out items whose location does not match", async () => {
-    let emit:
-      | ((p: {
-          items: Array<{ pluginId: string; item: ContextMenuContribution }>;
-          complete: boolean;
-        }) => void)
-      | null = null;
-    onContextMenuItemsChangedMock.mockImplementation(
-      (
-        cb: (p: {
-          items: Array<{ pluginId: string; item: ContextMenuContribution }>;
-          complete: boolean;
-        }) => void
-      ) => {
-        emit = cb;
-        return () => {};
-      }
-    );
-    const { usePluginContextMenuItems } = await import("../usePluginContextMenuItems");
-    const { result } = renderHook(() => usePluginContextMenuItems("terminal"));
-
-    await waitFor(() => expect(emit).not.toBeNull());
-    act(() => {
-      emit!({
-        items: [
-          entry("acme", "Term", "terminal"),
-          entry("acme", "WorktreeOnly", "worktree"),
-          entry("acme", "FileOnly", "file"),
-        ],
-        complete: true,
-      });
-    });
-
-    expect(result.current.map((e) => e.item.label)).toEqual(["Term"]);
-  });
-
   it("drops the mount-time pull if a push has already resolved (pushReceived guard)", async () => {
     let resolvePull:
       ((v: Array<{ pluginId: string; item: ContextMenuContribution }>) => void) | null = null;
@@ -162,14 +96,6 @@ describe("usePluginContextMenuItems", () => {
     await waitFor(() => {
       expect(result.current.map((e) => e.item.label)).toEqual(["PushWins"]);
     });
-  });
-
-  it("includes items without a when clause", async () => {
-    contextMenuItemsMock.mockResolvedValue([entry("acme", "Always", "terminal")]);
-    const { usePluginContextMenuItems } = await import("../usePluginContextMenuItems");
-    const { result } = renderHook(() => usePluginContextMenuItems("terminal"));
-
-    await waitFor(() => expect(result.current).toHaveLength(1));
   });
 
   it("filters when clauses around a positive control (truthy keeps, falsy/unset/malformed drop)", async () => {

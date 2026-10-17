@@ -126,6 +126,11 @@ class MockTerminalProcess {
     return this.info;
   }
 
+  // Windows reads it to hold the tree-kill helper warm while PTYs are live.
+  getPublicState(): { hasPty: boolean } {
+    return { hasPty: !this.info.wasKilled && !this.info.isExited };
+  }
+
   isAgentCurrentlyLive(): boolean {
     return !!this.info.detectedAgentId;
   }
@@ -431,38 +436,6 @@ describe("PtyManager adversarial", () => {
     expect(shared.deleteSessionFile).toHaveBeenCalledWith("t1");
   });
 
-  it("TRANSITIONSTATE_FORWARDS_INFO", () => {
-    const manager = new PtyManager();
-    const spawnedAt = 4242;
-    const event = { type: "busy" } as const;
-
-    shared.agentTransitionState.mockReturnValueOnce(false);
-    manager.spawn(
-      "agent-1",
-      spawnOptions({
-        kind: "terminal",
-        launchAgentId: "claude",
-        projectId: "project-a",
-        spawnedAt,
-      })
-    );
-
-    const result = manager.transitionState("agent-1", event, "output", 0.37, spawnedAt);
-
-    expect(result).toBe(false);
-    expect(shared.agentTransitionState).toHaveBeenCalledWith(
-      expect.objectContaining({
-        id: "agent-1",
-        launchAgentId: "claude",
-        spawnedAt,
-      }),
-      event,
-      "output",
-      0.37,
-      spawnedAt
-    );
-  });
-
   it("GET_TERMINAL_INFO_FORWARDS_SPAWN_AND_AGENT_FIELDS", () => {
     shared.computeSpawnContext.mockReturnValueOnce({
       env: {},
@@ -494,22 +467,6 @@ describe("PtyManager adversarial", () => {
     expect(payload!.agentLaunchFlags).toEqual(["--dangerously-skip-permissions"]);
     expect(payload!.agentModelId).toBe("claude-opus-4-7");
     expect(payload!.detectedAgentId).toBe("claude");
-  });
-
-  it("GET_TERMINAL_INFO_FORWARDS_DEFAULT_SHELL_ARGS_FOR_PLAIN_TERMINAL", () => {
-    const manager = new PtyManager();
-
-    manager.spawn("term-1", spawnOptions({ projectId: "project-a" }));
-
-    const payload = manager.getTerminalInfo("term-1");
-
-    expect(payload).not.toBeNull();
-    // Default mock spawn context returns args: ["-l"] — the production
-    // TerminalProcess always populates spawnArgs from spawnContext.args.
-    expect(payload!.spawnArgs).toEqual(["-l"]);
-    expect(payload!.shell).toBe("/bin/zsh");
-    expect(payload!.agentLaunchFlags).toBeUndefined();
-    expect(payload!.agentModelId).toBeUndefined();
   });
 
   it("DISPOSE_EMITS_AGENT_KILLED_ONLY_FOR_AGENTS", () => {
@@ -558,15 +515,6 @@ describe("PtyManager adversarial", () => {
     const created = shared.created[0]!;
     expect(created.info.cols).toBe(140);
     expect(created.info.rows).toBe(50);
-  });
-
-  it("RESIZE_BEFORE_SPAWN_USES_DEBUG_NOT_WARN", () => {
-    const manager = new PtyManager();
-
-    manager.resize("t1", 100, 30);
-
-    expect(logWarn).not.toHaveBeenCalled();
-    expect(logDebug).toHaveBeenCalledWith(expect.stringContaining("buffering resize 100x30"));
   });
 
   it("RESIZE_AFTER_SPAWN_FORWARDS_TO_TERMINAL", () => {

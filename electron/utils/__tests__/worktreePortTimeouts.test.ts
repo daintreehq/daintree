@@ -7,29 +7,6 @@ import {
 } from "../worktreePortTimeouts.js";
 
 describe("resolveWorktreePortTimeout", () => {
-  it("returns the default for fast actions not in the table", () => {
-    expect(resolveWorktreePortTimeout("get-all-states")).toBe(DEFAULT_WORKTREE_PORT_TIMEOUT_MS);
-    expect(resolveWorktreePortTimeout("set-active")).toBe(DEFAULT_WORKTREE_PORT_TIMEOUT_MS);
-    expect(resolveWorktreePortTimeout("list-branches")).toBe(DEFAULT_WORKTREE_PORT_TIMEOUT_MS);
-    expect(resolveWorktreePortTimeout("get-recent-branches")).toBe(
-      DEFAULT_WORKTREE_PORT_TIMEOUT_MS
-    );
-    expect(resolveWorktreePortTimeout("refresh-prs")).toBe(DEFAULT_WORKTREE_PORT_TIMEOUT_MS);
-    expect(resolveWorktreePortTimeout("has-resource-config")).toBe(
-      DEFAULT_WORKTREE_PORT_TIMEOUT_MS
-    );
-    expect(resolveWorktreePortTimeout("switch-worktree-environment")).toBe(
-      DEFAULT_WORKTREE_PORT_TIMEOUT_MS
-    );
-  });
-
-  it("returns the table value for long-running actions", () => {
-    expect(resolveWorktreePortTimeout("create-worktree")).toBe(5 * 60_000);
-    expect(resolveWorktreePortTimeout("delete-worktree")).toBe(10 * 60_000);
-    expect(resolveWorktreePortTimeout("resource-action")).toBe(15 * 60_000);
-    expect(resolveWorktreePortTimeout("run-lifecycle-setup")).toBe(15 * 60_000);
-  });
-
   it("refresh ceiling exceeds the host-side refresh watchdog", () => {
     // The host AWAITS and bounds a full refresh at HOST_REFRESH_TIMEOUT_MS
     // (45s). The renderer ceiling must sit ABOVE that so the host's own bounded

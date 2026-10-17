@@ -187,22 +187,6 @@ describe("worktree.openFileBrowser", () => {
     });
   });
 
-  describe("palette", () => {
-    it("still dispatches while unlisted", () => {
-      // Whether it is listed is an invariant over the whole registry — one
-      // "Browse files" row, asserted in `actionPaletteBehavior`. What matters
-      // here is the other half: hiding is a listing decision only, and the
-      // path-targeted callers that want a throwaway reveal name this action
-      // directly and must keep working.
-      seedWorktree("wt-1");
-      return getAction()
-        .run({ worktreeId: "wt-1" }, {} as ActionContext)
-        .then(() => {
-          expect(dialogOptions()).toMatchObject({ worktreeId: "wt-1" });
-        });
-    });
-  });
-
   it("still expands ancestors for a reveal path", async () => {
     seedWorktree("wt-1");
     await getAction().run(

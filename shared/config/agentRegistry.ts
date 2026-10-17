@@ -594,9 +594,9 @@ export interface AgentConfig {
    * models.dev catalog enrich these entries (names, context windows) but never
    * contribute IDs of its own, because models.dev groups by *provider* — every
    * model OpenAI or Anthropic publishes — not by what the CLI's `--model` flag
-   * takes. Leave unset for agents whose list is a partial seed and should keep
-   * growing from remote discovery. A live CLI-derived catalog (Codex's
-   * `debug models --bundled`) still outranks a curated list.
+   * takes. Use it for a list of the CLI's own aliases (Claude's `opus`,
+   * Gemini's `pro`), which never go stale. Leave unset for agents whose list is
+   * a partial seed and should keep growing from remote discovery.
    */
   curatedModels?: boolean;
   /**

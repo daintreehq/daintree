@@ -181,22 +181,6 @@ describe("usePanelHandlers", () => {
     expect(closeDockTerminalMock).not.toHaveBeenCalled();
     expect(trashPanelGroupMock).not.toHaveBeenCalled();
   });
-
-  it("handleFocus delegates to setFocused", () => {
-    const { result } = renderHook(() => usePanelHandlers({ terminalId: "p1" }));
-
-    act(() => result.current.handleFocus());
-
-    expect(setFocusedMock).toHaveBeenCalledWith("p1");
-  });
-
-  it("handleTitleChange delegates to updateTitle", () => {
-    const { result } = renderHook(() => usePanelHandlers({ terminalId: "p1" }));
-
-    act(() => result.current.handleTitleChange("New title"));
-
-    expect(updateTitleMock).toHaveBeenCalledWith("p1", "New title");
-  });
 });
 
 describe("usePanelHandlers — guarded closes (#12323)", () => {

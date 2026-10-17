@@ -2,7 +2,7 @@
 
 ## Overview
 
-Releases are built by **three per-OS workflows** — `.github/workflows/release-macos.yml`, `release-linux.yml`, and `release-windows.yml` (#8052) — each triggered independently by the same `v*` tag (or manual `workflow_dispatch`). Each workflow runs a full vertical slice for its OS (checks → unit tests → e2e → build → R2 upload → website notify) and publishes to Cloudflare R2 the moment its own pipeline is green. A failure or hang in one OS only delays that OS; the other two ship unaffected, and re-running a failed OS is a single-workflow re-trigger. macOS builds universal, Windows x64+arm64, Linux x64.
+Releases are built by **three per-OS workflows** — `.github/workflows/release-macos.yml`, `release-linux.yml`, and `release-windows.yml` (#8052) — each triggered independently by the same `v*` tag (or manual `workflow_dispatch`). Each workflow runs a full vertical slice for its OS (checks → unit tests → e2e → build → R2 upload → website notify) and publishes to Cloudflare R2 the moment its own pipeline is green. A failure or hang in one OS only delays that OS; the other two ship unaffected, and re-running a failed OS is a single-workflow re-trigger. macOS builds universal, Windows x64+arm64, Linux x64+arm64 (native runners, separate `latest-linux.yml` / `latest-linux-arm64.yml` feeds).
 
 Use the `/release` command to execute a full gitflow release.
 
@@ -165,6 +165,7 @@ The hardened runtime entitlements are in `build/entitlements.mac.plist`:
 - `com.apple.security.cs.allow-jit` — required for V8 JIT in Electron 42 (no longer requires `allow-unsigned-executable-memory`, dropped in Electron 12)
 - `com.apple.security.cs.disable-library-validation` — allows loading native .node modules at runtime (pty.node, better_sqlite3.node). Retained until the CI TeamIdentifier audit (`scripts/ci/verify-team-identifier.sh`) confirms every Mach-O in the bundle shares the expected Team ID
 - `com.apple.security.device.audio-input` (`true`) — microphone access for the voice dictation feature. `com.apple.security.device.camera` is explicitly `false`.
+- `com.apple.security.automation.apple-events` (`true`) — lets programs run in Daintree terminals ask to control other apps (`osascript`, `tell app "Finder"`). TCC attributes their Apple Events to Daintree, so without it, and its paired `NSAppleEventsUsageDescription` in `electron-builder.config.cjs`, macOS refuses them with -1743 and never prompts. With it, the first such event shows macOS's Automation consent prompt for Daintree.
 
 ## Local Development Builds
 

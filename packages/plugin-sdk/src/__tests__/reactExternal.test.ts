@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import { execFile } from "node:child_process";
-import { createRequire } from "node:module";
+import { builtinModules, createRequire } from "node:module";
 import { promisify } from "node:util";
 import fs from "node:fs/promises";
 import os from "node:os";
@@ -72,13 +72,6 @@ afterAll(async () => {
 });
 
 describe("@daintreehq/plugin-sdk/react — React stays external", () => {
-  it("pulls no React source into the SDK bundle", () => {
-    const reactInputs = Object.keys(metafile.inputs).filter((input) =>
-      /(^|[/\\])node_modules[/\\]react(-dom)?[/\\]/.test(input)
-    );
-    expect(reactInputs).toEqual([]);
-  });
-
   it("bundles nothing from node_modules at all", () => {
     // Transitive and parser-free: every declared dependency is externalized, so
     // any npm package appearing as a build input means something reachable from
@@ -96,8 +89,82 @@ describe("@daintreehq/plugin-sdk/react — React stays external", () => {
     // `--no-dts`; if it ever became an array again, two builds would race over
     // this file and one of the entries would be missing here.
     const outputs = Object.keys(metafile.outputs).map((out) => path.basename(out));
-    for (const entry of ["index.js", "react.js", "files.js", "data.js", "testing.js"]) {
+    for (const entry of [
+      "index.js",
+      "react.js",
+      "files.js",
+      "data.js",
+      "testing.js",
+      "testing-preview.js",
+      "testing-playwright.js",
+    ]) {
       expect(outputs, `metafile is missing ${entry}`).toContain(entry);
+    }
+  });
+
+  it("keeps the testing/preview entry browser-safe", () => {
+    // The preview mounts a view in a plain page and in jsdom, so nothing it
+    // reaches — through any chunk it shares with other entries — may import a
+    // Node built-in. Walked through the emitted graph, not the source, so a
+    // `shared/` module pulled in later is caught too.
+    const outputs = metafile.outputs;
+    const entry = Object.keys(outputs).find((out) => out.endsWith("testing-preview.js"));
+    expect(entry, "tsup emitted no testing-preview.js entry").toBeDefined();
+    const externals = new Set<string>();
+    const seen = new Set<string>();
+    const pending = [entry!];
+    while (pending.length > 0) {
+      const out = pending.pop()!;
+      if (seen.has(out)) continue;
+      seen.add(out);
+      for (const imported of outputs[out]?.imports ?? []) {
+        if (imported.external) externals.add(imported.path);
+        else pending.push(imported.path);
+      }
+    }
+    const nodeOnly = [...externals].filter(
+      (specifier) =>
+        specifier.startsWith("node:") || builtinModules.includes(specifier.split("/")[0]!)
+    );
+    expect(nodeOnly).toEqual([]);
+    // React and ReactDOM only, both peers the page supplies.
+    for (const specifier of externals) {
+      expect(specifier).toMatch(/^react(-dom)?(\/|$)/);
+    }
+    expect(externals).toContain("react-dom/client");
+  });
+
+  it("keeps the preview's build tools inside the testing/playwright entry", () => {
+    // esbuild, Tailwind and Playwright are optional peers: an entry that
+    // reached one, statically or through a lazy chunk, would fail to load for
+    // a plugin that never installed it.
+    const tooling = /^(@playwright\/test|esbuild|tailwindcss)(\/|$)/;
+    const outputs = metafile.outputs;
+    const reached = (entry: string): Set<string> => {
+      const externals = new Set<string>();
+      const seen = new Set<string>();
+      const pending = [entry];
+      while (pending.length > 0) {
+        const out = pending.pop()!;
+        if (seen.has(out)) continue;
+        seen.add(out);
+        for (const imported of outputs[out]?.imports ?? []) {
+          if (imported.external) externals.add(imported.path);
+          else pending.push(imported.path);
+        }
+      }
+      return externals;
+    };
+    const entries = Object.keys(outputs).filter((out) => !path.basename(out).startsWith("chunk-"));
+    for (const entry of entries) {
+      const tools = [...reached(entry)].filter((specifier) => tooling.test(specifier));
+      if (path.basename(entry) === "testing-playwright.js") {
+        expect(tools).toEqual(
+          expect.arrayContaining(["@playwright/test", "esbuild", "tailwindcss"])
+        );
+      } else {
+        expect(tools, `${path.basename(entry)} reaches the preview's build tools`).toEqual([]);
+      }
     }
   });
 

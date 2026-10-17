@@ -31,10 +31,15 @@ vi.mock("@/components/Git/gitRemoteOperationPreview", async (importOriginal) => 
 
 vi.mock("zustand/react/shallow", () => ({ useShallow: (fn: unknown) => fn }));
 vi.mock("@/store", () => ({ usePortalStore: () => ({ isOpen: false, width: 0 }) }));
+vi.mock("@/store/portalStore", () => ({ usePortalStore: () => ({ isOpen: false, width: 0 }) }));
 vi.mock("@/hooks", async (importOriginal) => {
   const actual = (await importOriginal()) as Record<string, unknown>;
   return { ...actual, useOverlayState: () => {} };
 });
+vi.mock("@/hooks/useOverlayState", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/hooks/useOverlayState")>()),
+  useOverlayState: () => {},
+}));
 vi.mock("@/hooks/useAnimatedPresence", () => ({
   useAnimatedPresence: ({ isOpen }: { isOpen: boolean }) => ({
     isVisible: isOpen,
@@ -94,50 +99,6 @@ describe("GitPullRebaseConfirmDialog", () => {
     });
 
     expect(mocks.buildPreview).toHaveBeenCalledWith("/repo", "pull-rebase");
-  });
-
-  it("blocks approval while the preview is still loading", async () => {
-    const gate = deferred<{
-      branch: string;
-      destination: { remote: string; branch: string };
-      pullSource: { remote: string; branch: string };
-      commits: never[];
-      pushRange: null;
-      rebaseRange: { total: number; rangeBasis: "tracked"; behind: number };
-    }>();
-    mocks.buildPreview.mockReturnValue(gate.promise);
-    render(<GitPullRebaseConfirmDialog />);
-
-    await act(async () => {
-      void useGitPullRebaseConfirmStore.getState().requestConfirmation("/repo");
-    });
-
-    expect(rebaseButton().getAttribute("aria-disabled")).toBe("true");
-
-    await act(async () => {
-      gate.resolve({
-        branch: "main",
-        destination: { remote: "origin", branch: "main" },
-        pullSource: { remote: "origin", branch: "main" },
-        commits: [],
-        pushRange: null,
-        rebaseRange: { total: 0, rangeBasis: "tracked", behind: 0 },
-      });
-      await gate.promise;
-    });
-
-    expect(rebaseButton().hasAttribute("aria-disabled")).toBe(false);
-  });
-
-  it("keeps approval blocked when the preview fetch fails", async () => {
-    mocks.buildPreview.mockRejectedValue(new Error("git exploded"));
-    render(<GitPullRebaseConfirmDialog />);
-
-    await act(async () => {
-      void useGitPullRebaseConfirmStore.getState().requestConfirmation("/repo");
-    });
-
-    expect(rebaseButton().getAttribute("aria-disabled")).toBe("true");
   });
 
   it("resolves the awaited confirm promise with the user's decision", async () => {

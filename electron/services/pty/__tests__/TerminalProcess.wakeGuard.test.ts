@@ -84,6 +84,10 @@ describe("isTerminalReportOnly (#12491)", () => {
     ["colour-scheme report", "\x1b[?997;1n"],
     ["DEC-private cursor position report", "\x1b[?24;80R"],
     ["two reports back to back", "\x1b[O\x1b[I"],
+    ["Kitty graphics probe reply", "\x1b_Gi=31;OK\x1b\\"],
+    ["Kitty graphics reply ended by BEL", "\x1b_Gi=31;OK\x07"],
+    ["Kitty graphics error reply", "\x1b_Gi=31;ENOENT:file not found\x1b\\"],
+    ["two Kitty graphics replies back to back", "\x1b_Gi=1;OK\x1b\\\x1b_Gi=2;OK\x1b\\"],
   ])("treats %s as a report, not typing", (_label, data) => {
     expect(isTerminalReportOnly(data)).toBe(true);
   });
@@ -95,6 +99,10 @@ describe("isTerminalReportOnly (#12491)", () => {
     ["Escape", "\x1b"],
     ["a paste", "\x1b[200~hello\x1b[201~"],
     ["a report followed by a keystroke", "\x1b[Ix"],
+    ["Alt+_", "\x1b_"],
+    ["Alt+_ and then text", "\x1b_hello"],
+    ["a Kitty graphics reply followed by a keystroke", "\x1b_Gi=31;OK\x1b\\x"],
+    ["a multi-line paste framed like a reply", "\x1b_Ghello\nworld\x1b\\"],
   ])("treats %s as typing", (_label, data) => {
     expect(isTerminalReportOnly(data)).toBe(false);
   });

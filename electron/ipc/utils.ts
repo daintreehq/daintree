@@ -24,6 +24,10 @@ import {
 import { AppError } from "../utils/errorTypes.js";
 import { assertIpcSecurityReady } from "./ipcGuard.js";
 import { isE2EFaultMode } from "../setup/runtimeFlags.js";
+import type { ClientEndpoint } from "./endpoint.js";
+import { getIpcDispatcher } from "./dispatcher.js";
+import { getEndpointRegistry } from "./endpointRegistry.js";
+import { getLocalClientRef, getLocalEndpoint } from "./localEndpoint.js";
 
 /**
  * Parse the first argument of an IPC payload against a Zod schema. On
@@ -368,6 +372,8 @@ export function sendToRenderer(
     return;
   }
 
+  if (isWithheldFromView(webContents.id, channel, args)) return;
+
   try {
     webContents.send(channel, ...args);
   } catch {
@@ -375,9 +381,73 @@ export function sendToRenderer(
   }
 }
 
+function sendToEndpoints(
+  endpoints: readonly ClientEndpoint[],
+  exclude: ReadonlySet<number> | null,
+  channel: string,
+  args: unknown[]
+): void {
+  for (const endpoint of endpoints) {
+    if (endpoint.kind !== "remote-view" || endpoint.isClosed()) continue;
+    if (exclude?.has(endpoint.handle)) continue;
+    try {
+      endpoint.send({ type: "event", channel, args });
+    } catch {
+      // A closing link must not break delivery to the remaining endpoints.
+    }
+  }
+}
+
+function broadcastToRemoteEndpoints(
+  exclude: ReadonlySet<number> | null,
+  channel: string,
+  args: unknown[]
+): void {
+  const registry = getEndpointRegistry();
+  if (!registry.hasRemote()) return;
+  sendToEndpoints(registry.getRemote(), exclude, channel, args);
+}
+
+/**
+ * Decides whether a push produced on this machine may reach one of its views.
+ * Returns false for a view bound to a remote host that must not see it: that
+ * view shows the host's agents and projects, not this machine's.
+ */
+export type RemoteBoundViewFilter = (
+  webContentsId: number,
+  channel: string,
+  args: readonly unknown[]
+) => boolean;
+
+// Null until Remote Hosts is actually used, so local delivery pays one null check.
+let remoteBoundViewFilter: RemoteBoundViewFilter | null = null;
+
+/** Installed by the Remote Hosts boot the first time a host is used. */
+export function setRemoteBoundViewFilter(filter: RemoteBoundViewFilter | null): () => void {
+  remoteBoundViewFilter = filter;
+  return () => {
+    if (remoteBoundViewFilter === filter) remoteBoundViewFilter = null;
+  };
+}
+
+/**
+ * Whether a push from this machine is kept from a view: a view bound to a
+ * remote host hears that host's state, not this machine's. Every direct
+ * `send` of a local push to an arbitrary view goes through this.
+ */
+export function isWithheldFromView(
+  webContentsId: number,
+  channel: string,
+  args: unknown[]
+): boolean {
+  const filter = remoteBoundViewFilter;
+  return filter !== null && !filter(webContentsId, channel, args);
+}
+
 export function broadcastToRenderer(channel: string, ...args: unknown[]): void {
   for (const wc of getAllAppWebContents()) {
     if (!wc.isDestroyed()) {
+      if (isWithheldFromView(wc.id, channel, args)) continue;
       try {
         wc.send(channel, ...args);
       } catch {
@@ -385,6 +455,7 @@ export function broadcastToRenderer(channel: string, ...args: unknown[]): void {
       }
     }
   }
+  broadcastToRemoteEndpoints(null, channel, args);
 }
 
 /**
@@ -414,14 +485,68 @@ export function broadcastToProjectRenderers(
 }
 
 /**
- * The live renderers {@link broadcastToProjectRenderers} would reach, for
- * callers that deliver per renderer themselves (the plugin push batcher).
+ * The live local renderers {@link broadcastToProjectRenderers} would reach.
+ * Remote views are not among them; {@link getProjectPushTargets} adds those.
  */
 export function getProjectRendererTargets(projectId: string | null): WebContents[] {
   if (projectId !== null && hasRegisteredProjectViews()) {
     return getWebContentsForProject(projectId);
   }
   return getAllAppWebContents().filter((wc) => !wc.isDestroyed());
+}
+
+/**
+ * One recipient of a push a caller delivers per renderer itself: a local
+ * `WebContents`, or a remote view's endpoint, whose `id` is its (negative)
+ * handle — the same number its IPC context reports as `webContentsId`.
+ */
+export interface ProjectPushTarget {
+  readonly id: number;
+  isDestroyed(): boolean;
+  send(channel: string, ...args: unknown[]): void;
+}
+
+// One adapter per endpoint, so a caller keying recipients by identity sees a
+// remote view as the same target from one flush to the next.
+const endpointPushTargets = new WeakMap<ClientEndpoint, ProjectPushTarget>();
+
+/** A remote view as a {@link ProjectPushTarget}, for a caller replaying state to one view. */
+export function endpointPushTarget(endpoint: ClientEndpoint): ProjectPushTarget {
+  let target = endpointPushTargets.get(endpoint);
+  if (!target) {
+    target = {
+      id: endpoint.handle,
+      isDestroyed: () => endpoint.isClosed(),
+      send: (channel, ...args) => endpoint.send({ type: "event", channel, args }),
+    };
+    endpointPushTargets.set(endpoint, target);
+  }
+  return target;
+}
+
+/**
+ * Everyone {@link broadcastToProjectRenderers} would reach with `channel`, for
+ * callers that deliver per renderer themselves (the plugin push batcher and
+ * its listener signal): the project's local views, less any bound to a remote
+ * host that must not see this machine's `channel`, plus the remote views
+ * attached to the project. `null` is every renderer and every remote view.
+ */
+export function getProjectPushTargets(
+  projectId: string | null,
+  channel: string
+): ProjectPushTarget[] {
+  const targets: ProjectPushTarget[] = getProjectRendererTargets(projectId).filter(
+    (wc) => !isWithheldFromView(wc.id, channel, [])
+  );
+  const registry = getEndpointRegistry();
+  if (!registry.hasRemote()) return targets;
+  const endpoints = projectId !== null ? registry.getForProject(projectId) : registry.getRemote();
+  for (const endpoint of endpoints) {
+    if (endpoint.kind === "remote-view" && !endpoint.isClosed()) {
+      targets.push(endpointPushTarget(endpoint));
+    }
+  }
+  return targets;
 }
 
 /**
@@ -447,29 +572,38 @@ export function broadcastToProjectRenderersExcept(
   channel: string,
   ...args: unknown[]
 ): void {
-  if (projectId !== null && hasRegisteredProjectViews()) {
-    for (const wc of getWebContentsForProject(projectId)) {
-      if (exclude?.has(wc.id)) continue;
-      try {
-        wc.send(channel, ...args);
-      } catch {
-        // Silently ignore send failures during window initialization/disposal.
-      }
+  deliverToLocalProjectViews(projectId, exclude, channel, args);
+  // Remote endpoints are always bound to one project, so a known project
+  // scopes them regardless of local views: a windowless host has none, and
+  // falling back there would push one project's events to every Shell.
+  const registry = getEndpointRegistry();
+  if (!registry.hasRemote()) return;
+  sendToEndpoints(
+    projectId !== null ? registry.getForProject(projectId) : registry.getRemote(),
+    exclude,
+    channel,
+    args
+  );
+}
+
+function deliverToLocalProjectViews(
+  projectId: string | null,
+  exclude: ReadonlySet<number> | null,
+  channel: string,
+  args: unknown[]
+): void {
+  const scoped = projectId !== null && hasRegisteredProjectViews();
+  const targets = scoped ? getWebContentsForProject(projectId) : getAllAppWebContents();
+  for (const wc of targets) {
+    // getWebContentsForProject already drops destroyed views.
+    if (exclude?.has(wc.id) || (!scoped && wc.isDestroyed())) continue;
+    if (isWithheldFromView(wc.id, channel, args)) continue;
+    try {
+      wc.send(channel, ...args);
+    } catch {
+      // Silently ignore send failures during window initialization/disposal.
     }
-    return;
   }
-  if (exclude && exclude.size > 0) {
-    for (const wc of getAllAppWebContents()) {
-      if (exclude.has(wc.id) || wc.isDestroyed()) continue;
-      try {
-        wc.send(channel, ...args);
-      } catch {
-        // Silently ignore send failures during window initialization/disposal.
-      }
-    }
-    return;
-  }
-  broadcastToRenderer(channel, ...args);
 }
 
 /**
@@ -488,29 +622,61 @@ export function broadcastSlicedToProjectRenderers<T>(
   wrap: (slice: Record<string, T>) => unknown
 ): void {
   const views = hasRegisteredProjectViews() ? getRegisteredProjectViews() : [];
-  if (views.length === 0) {
-    broadcastToRenderer(channel, wrap(entries));
-    return;
-  }
+  const registry = getEndpointRegistry();
+  // Remote views are always bound to one project (or none), so they get their
+  // own project's slice whether or not this machine has local views.
+  const remotes = registry.hasRemote()
+    ? registry.getRemote().filter((e) => e.kind === "remote-view" && !e.isClosed())
+    : [];
   const byProject = new Map<string, Record<string, T>>();
   for (const { projectId } of views) byProject.set(projectId, {});
+  for (const endpoint of remotes) {
+    if (endpoint.projectId !== null) byProject.set(endpoint.projectId, {});
+  }
   const shared: Record<string, T> = {};
   for (const [key, value] of Object.entries(entries)) {
     const owner = ownerOf(key);
     const slice = owner === null ? undefined : byProject.get(owner);
     (slice ?? shared)[key] = value;
   }
-  const payloads = new Map<string, unknown>();
-  for (const { webContents, projectId } of views) {
+  const payloads = new Map<string | null, unknown>();
+  const payloadFor = (projectId: string | null): unknown => {
     let payload = payloads.get(projectId);
     if (payload === undefined) {
-      payload = wrap({ ...byProject.get(projectId), ...shared });
+      const own = projectId === null ? undefined : byProject.get(projectId);
+      payload = wrap({ ...own, ...shared });
       payloads.set(projectId, payload);
     }
+    return payload;
+  };
+
+  if (views.length === 0) {
+    // No project views here: every local renderer gets the whole batch, as before.
+    const whole = [wrap(entries)];
+    for (const wc of getAllAppWebContents()) {
+      if (wc.isDestroyed() || isWithheldFromView(wc.id, channel, whole)) continue;
+      try {
+        wc.send(channel, ...whole);
+      } catch {
+        // Silently ignore send failures during window initialization/disposal.
+      }
+    }
+  } else {
+    for (const { webContents, projectId } of views) {
+      const payload = payloadFor(projectId);
+      if (isWithheldFromView(webContents.id, channel, [payload])) continue;
+      try {
+        webContents.send(channel, payload);
+      } catch {
+        // Silently ignore send failures during window initialization/disposal.
+      }
+    }
+  }
+  for (const endpoint of remotes) {
     try {
-      webContents.send(channel, payload);
+      endpoint.send({ type: "event", channel, args: [payloadFor(endpoint.projectId)] });
     } catch {
-      // Silently ignore send failures during window initialization/disposal.
+      // A closing link must not break delivery to the remaining endpoints.
     }
   }
 }
@@ -532,11 +698,15 @@ export function broadcastSlicedToProjectRenderers<T>(
  * reach cached views to stop a voice that started before caching. State
  * broadcasts likewise stay global — cached views have no replay path on warm
  * reactivation (#9490).
+ *
+ * A remote endpoint counts as visible: whether its view is cached is known
+ * only to its own Shell.
  */
 export function broadcastToVisibleRenderers(channel: string, ...args: unknown[]): void {
   for (const wc of getAllAppWebContents()) {
     if (isCachedViewWebContents(wc.id)) continue;
     if (!wc.isDestroyed()) {
+      if (isWithheldFromView(wc.id, channel, args)) continue;
       try {
         wc.send(channel, ...args);
       } catch {
@@ -544,11 +714,91 @@ export function broadcastToVisibleRenderers(channel: string, ...args: unknown[])
       }
     }
   }
+  broadcastToRemoteEndpoints(null, channel, args);
 }
 
+/**
+ * Reply to the renderer that made this call. A remote endpoint has no window,
+ * so its push goes through the endpoint; a local sender with no window still
+ * gets nothing, as before.
+ */
 export function sendToRendererContext(ctx: IpcContext, channel: string, ...args: unknown[]): void {
-  if (ctx.senderWindow === null) return;
+  if (ctx.senderWindow === null) {
+    const endpoint = ctx.endpoint as ClientEndpoint | undefined;
+    if (endpoint?.kind !== "remote-view" || endpoint.isClosed()) return;
+    try {
+      endpoint.send({ type: "event", channel, args });
+    } catch {
+      // Silently ignore send failures on a closing link.
+    }
+    return;
+  }
   sendToRenderer(ctx.senderWindow, channel, ...args);
+}
+
+type InvokeRunner = (args: unknown[], run: () => unknown) => unknown;
+
+/**
+ * Wrap handler execution in the perf-capture marks. With capture disabled the
+ * runner calls straight through, so synchronous handlers stay synchronous.
+ */
+function createInvokeRunner(channel: string): InvokeRunner {
+  if (!isPerformanceCaptureEnabled()) return (_args, run) => run();
+  let requestCounter = 0;
+  return async (args, run) => {
+    const traceId = `${channel}-${Date.now().toString(36)}-${(++requestCounter).toString(36)}`;
+    const startedAt = performance.now();
+    markPerformance(PERF_MARKS.IPC_REQUEST_START, {
+      channel,
+      traceId,
+      argCount: args.length,
+    });
+
+    let responsePayload: unknown;
+    let errored = false;
+
+    try {
+      responsePayload = await run();
+      return responsePayload;
+    } catch (error) {
+      errored = true;
+      throw error;
+    } finally {
+      const durationMs = performance.now() - startedAt;
+      markPerformance(PERF_MARKS.IPC_REQUEST_END, {
+        channel,
+        traceId,
+        durationMs,
+        ok: !errored,
+      });
+      sampleIpcTiming(channel, durationMs, {
+        traceId,
+        requestPayload: args,
+        responsePayload,
+        errored,
+      });
+    }
+  };
+}
+
+/**
+ * Register one invoke handler with both transports: `ipcMain` for local views
+ * (whose listener gets the real event) and the dispatcher for calls that
+ * arrive over a link (whose listener gets a context built from the endpoint).
+ */
+function registerInvokeHandler(
+  channel: string,
+  local: (event: Electron.IpcMainInvokeEvent, args: unknown[]) => unknown,
+  remote: (ctx: IpcContext, args: unknown[]) => unknown
+): () => void {
+  ipcMain.handle(channel, (event, ...args) => local(event, args));
+  const unregister = getIpcDispatcher().registerInvoke(channel, (ctx, ...args) =>
+    remote(ctx, args)
+  );
+  return () => {
+    unregister();
+    ipcMain.removeHandler(channel);
+  };
 }
 
 export function typedHandle<K extends keyof IpcInvokeMap>(
@@ -560,54 +810,13 @@ export function typedHandle<K extends keyof IpcInvokeMap>(
     | ForbidIpcEnvelopeKeys<IpcInvokeMap[K]["result"]>
 ): () => void {
   assertIpcSecurityReady(channel as string);
-  const captureEnabled = isPerformanceCaptureEnabled();
-  let requestCounter = 0;
-
-  // Fast path: when perf capture is disabled, skip the async wrapper so
-  // synchronous handlers stay synchronous (preserves existing behavior for
-  // handlers that returned values directly when registered via ipcMain.handle).
-  if (!captureEnabled) {
-    ipcMain.handle(channel as string, (_event, ...args) =>
-      handler(...(args as IpcInvokeMap[K]["args"]))
-    );
-    return () => ipcMain.removeHandler(channel as string);
-  }
-
-  ipcMain.handle(channel as string, async (_event, ...args) => {
-    const traceId = `${String(channel)}-${Date.now().toString(36)}-${(++requestCounter).toString(36)}`;
-    const startedAt = performance.now();
-    markPerformance(PERF_MARKS.IPC_REQUEST_START, {
-      channel: channel as string,
-      traceId,
-      argCount: args.length,
-    });
-
-    let responsePayload: ForbidIpcEnvelopeKeys<IpcInvokeMap[K]["result"]> | undefined;
-    let errored = false;
-
-    try {
-      responsePayload = await handler(...(args as IpcInvokeMap[K]["args"]));
-      return responsePayload;
-    } catch (error) {
-      errored = true;
-      throw error;
-    } finally {
-      const durationMs = performance.now() - startedAt;
-      markPerformance(PERF_MARKS.IPC_REQUEST_END, {
-        channel: channel as string,
-        traceId,
-        durationMs,
-        ok: !errored,
-      });
-      sampleIpcTiming(channel as string, durationMs, {
-        traceId,
-        requestPayload: args,
-        responsePayload,
-        errored,
-      });
-    }
-  });
-  return () => ipcMain.removeHandler(channel as string);
+  const run = createInvokeRunner(channel as string);
+  const invoke = (args: unknown[]) => handler(...(args as IpcInvokeMap[K]["args"]));
+  return registerInvokeHandler(
+    channel as string,
+    (_event, args) => run(args, () => invoke(args)),
+    (_ctx, args) => run(args, () => invoke(args))
+  );
 }
 
 /**
@@ -654,11 +863,73 @@ export function typedHandleValidated<K extends keyof IpcInvokeMap, S extends z.Z
  */
 function buildIpcContext(event: Electron.IpcMainInvokeEvent): IpcContext {
   const webContentsId = event.sender.id;
+  // Resolved on first read: most local handlers never touch the endpoint, and
+  // creating one subscribes to the sender's `destroyed` event.
+  let endpoint: ClientEndpoint | undefined;
   return {
     event,
     webContentsId,
     senderWindow: getWindowForWebContents(event.sender),
     projectId: getProjectForWebContents(webContentsId),
+    get endpoint(): ClientEndpoint {
+      endpoint ??= getLocalEndpoint(event.sender);
+      return endpoint;
+    },
+    client: getLocalClientRef(),
+  };
+}
+
+/**
+ * The {@link IpcContext} for a local fire-and-forget message. Window and
+ * project are resolved on first read: these listeners include the per-keystroke
+ * and per-chunk-ack paths, and most never look at either.
+ */
+function buildSendContext(event: Electron.IpcMainEvent): IpcContext {
+  const sender = event.sender;
+  let senderWindow: BrowserWindow | null | undefined;
+  let projectId: string | null | undefined;
+  let endpoint: ClientEndpoint | undefined;
+  return {
+    event: event as unknown as Electron.IpcMainInvokeEvent,
+    webContentsId: sender.id,
+    get senderWindow(): BrowserWindow | null {
+      if (senderWindow === undefined) senderWindow = getWindowForWebContents(sender);
+      return senderWindow;
+    },
+    get projectId(): string | null {
+      if (projectId === undefined) projectId = getProjectForWebContents(sender.id);
+      return projectId;
+    },
+    get endpoint(): ClientEndpoint {
+      endpoint ??= getLocalEndpoint(sender);
+      return endpoint;
+    },
+    client: getLocalClientRef(),
+  };
+}
+
+/**
+ * Register a fire-and-forget listener with both transports: `ipcMain.on` for
+ * local views (through the sender-validated wrapper, with a context built from
+ * the event) and the dispatcher for messages that arrive over a link. A plain
+ * `ipcMain.on` listener cannot serve a link send — it needs a real
+ * `IpcMainEvent` — so host-side send channels register here.
+ */
+export function onWithContext<A extends unknown[]>(
+  channel: string,
+  listener: (ctx: IpcContext, ...args: A) => void
+): () => void {
+  assertIpcSecurityReady(channel);
+  // Arguments are whatever the sender put on the wire; listeners validate them.
+  const dispatch = listener as (ctx: IpcContext, ...args: unknown[]) => void;
+  const local = (event: Electron.IpcMainEvent, ...args: unknown[]) => {
+    dispatch(buildSendContext(event), ...args);
+  };
+  ipcMain.on(channel, local);
+  const unregister = getIpcDispatcher().registerSend(channel, dispatch);
+  return () => {
+    unregister();
+    ipcMain.removeListener(channel, local);
   };
 }
 
@@ -672,54 +943,17 @@ export function typedHandleWithContext<K extends keyof IpcInvokeMap>(
     | ForbidIpcEnvelopeKeys<IpcInvokeMap[K]["result"]>
 ): () => void {
   assertIpcSecurityReady(channel as string);
-  const captureEnabled = isPerformanceCaptureEnabled();
-  let requestCounter = 0;
-
-  if (!captureEnabled) {
-    ipcMain.handle(channel as string, (event, ...args) => {
+  const run = createInvokeRunner(channel as string);
+  const invoke = (ctx: IpcContext, args: unknown[]) =>
+    handler(ctx, ...(args as IpcInvokeMap[K]["args"]));
+  return registerInvokeHandler(
+    channel as string,
+    (event, args) => {
       const ctx = buildIpcContext(event);
-      return handler(ctx, ...(args as IpcInvokeMap[K]["args"]));
-    });
-    return () => ipcMain.removeHandler(channel as string);
-  }
-
-  ipcMain.handle(channel as string, async (event, ...args) => {
-    const ctx = buildIpcContext(event);
-
-    const traceId = `${String(channel)}-${Date.now().toString(36)}-${(++requestCounter).toString(36)}`;
-    const startedAt = performance.now();
-    markPerformance(PERF_MARKS.IPC_REQUEST_START, {
-      channel: channel as string,
-      traceId,
-      argCount: args.length,
-    });
-
-    let responsePayload: ForbidIpcEnvelopeKeys<IpcInvokeMap[K]["result"]> | undefined;
-    let errored = false;
-
-    try {
-      responsePayload = await handler(ctx, ...(args as IpcInvokeMap[K]["args"]));
-      return responsePayload;
-    } catch (error) {
-      errored = true;
-      throw error;
-    } finally {
-      const durationMs = performance.now() - startedAt;
-      markPerformance(PERF_MARKS.IPC_REQUEST_END, {
-        channel: channel as string,
-        traceId,
-        durationMs,
-        ok: !errored,
-      });
-      sampleIpcTiming(channel as string, durationMs, {
-        traceId,
-        requestPayload: args,
-        responsePayload,
-        errored,
-      });
-    }
-  });
-  return () => ipcMain.removeHandler(channel as string);
+      return run(args, () => invoke(ctx, args));
+    },
+    (ctx, args) => run(args, () => invoke(ctx, args))
+  );
 }
 
 /**
@@ -759,6 +993,7 @@ export function typedBroadcast<K extends keyof IpcEventMap>(
 ): void {
   for (const wc of getAllAppWebContents()) {
     if (!wc.isDestroyed()) {
+      if (isWithheldFromView(wc.id, channel as string, [payload])) continue;
       try {
         wc.send(channel as string, payload);
       } catch {
@@ -766,6 +1001,7 @@ export function typedBroadcast<K extends keyof IpcEventMap>(
       }
     }
   }
+  broadcastToRemoteEndpoints(null, channel as string, [payload]);
 }
 
 export function typedSend<K extends keyof IpcEventMap>(
@@ -786,6 +1022,8 @@ export function typedSend<K extends keyof IpcEventMap>(
   if (typeof webContents.isDestroyed === "function" && webContents.isDestroyed()) {
     return;
   }
+
+  if (isWithheldFromView(webContents.id, channel as string, [payload])) return;
 
   try {
     webContents.send(channel as string, payload);

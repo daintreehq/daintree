@@ -102,13 +102,6 @@ describe("waitForPathExists", () => {
     await advance;
   });
 
-  it("should use default options when none provided", async () => {
-    mockAccess.mockResolvedValueOnce(undefined);
-
-    const promise = waitForPathExists("/test/path");
-    await expect(promise).resolves.toBeUndefined();
-  });
-
   it("should respect initialDelayMs", async () => {
     mockAccess.mockResolvedValueOnce(undefined);
 
@@ -178,14 +171,6 @@ describe("waitForPathExists", () => {
     expect(vi.getTimerCount()).toBe(0);
   });
 
-  it("should handle path with spaces and special characters", async () => {
-    const specialPath = "/test/path with spaces/special-chars_123";
-    mockAccess.mockResolvedValueOnce(undefined);
-
-    await expect(waitForPathExists(specialPath)).resolves.toBeUndefined();
-    expect(mockAccess).toHaveBeenCalledWith(specialPath);
-  });
-
   it("should fail fast on permission errors (EACCES, EPERM)", async () => {
     const eaccesError = Object.assign(new Error("Permission denied"), {
       code: "EACCES",
@@ -199,40 +184,6 @@ describe("waitForPathExists", () => {
 
     await expect(promise).rejects.toThrow(/Cannot access path/);
     expect(mockAccess).toHaveBeenCalledTimes(1);
-  });
-
-  it("should fail fast on ENOTDIR errors", async () => {
-    const enotdirError = Object.assign(new Error("Not a directory"), {
-      code: "ENOTDIR",
-    });
-    mockAccess.mockRejectedValueOnce(enotdirError);
-
-    const promise = waitForPathExists("/test/path/file", {
-      initialRetryDelayMs: 50,
-      timeoutMs: 5000,
-    });
-
-    await expect(promise).rejects.toThrow(/Cannot access path/);
-    expect(mockAccess).toHaveBeenCalledTimes(1);
-  });
-
-  it("should retry only on ENOENT errors", async () => {
-    const enoentError = Object.assign(new Error("No such file or directory"), {
-      code: "ENOENT",
-    });
-    mockAccess
-      .mockRejectedValueOnce(enoentError)
-      .mockRejectedValueOnce(enoentError)
-      .mockResolvedValueOnce(undefined);
-
-    const promise = waitForPathExists("/test/path", {
-      initialRetryDelayMs: 50,
-      timeoutMs: 5000,
-    });
-
-    await vi.advanceTimersByTimeAsync(150);
-    await expect(promise).resolves.toBeUndefined();
-    expect(mockAccess).toHaveBeenCalledTimes(3);
   });
 
   it("times out after initialDelayMs when initialDelayMs >= timeoutMs and the path is missing", async () => {

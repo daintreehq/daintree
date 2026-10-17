@@ -13,26 +13,17 @@ import {
 } from "./persistence/persistWriteMerge";
 import { registerPersistedStore } from "./persistence/persistedStoreRegistry";
 import type { QuickStateFilter } from "@/lib/worktreeFilters";
+import { isWorktreeTypeId, type WorktreeTypeId } from "@/lib/worktreeTypes";
+import { isWorktreeLabelToken, type WorktreeLabelToken } from "@shared/theme/worktreeColors";
+import {
+  isWorktreeCustomTitleTooLong,
+  normalizeWorktreeCustomTitle,
+} from "@/lib/worktreeCustomTitle";
 
 export type OrderBy = "recent" | "created" | "alpha" | "manual";
 
 export type StatusFilter = "active" | "dirty" | "stale" | "idle";
-export type TypeFilter =
-  | "feature"
-  | "bugfix"
-  | "refactor"
-  | "chore"
-  | "docs"
-  | "test"
-  | "release"
-  | "ci"
-  | "deps"
-  | "perf"
-  | "style"
-  | "wip"
-  | "main"
-  | "detached"
-  | "other";
+export type TypeFilter = WorktreeTypeId;
 export type PrIssueFilter = "hasIssue" | "hasPR" | "prOpen" | "prMerged" | "prClosed";
 export type SessionFilter = "hasTerminals" | "working" | "waiting" | "completed" | "exited";
 export type ActivityFilter = "last15m" | "last1h" | "last24h" | "last7d";
@@ -65,6 +56,12 @@ interface WorktreeFilterState {
   typeFilters: Set<TypeFilter>;
   prIssueFilters: Set<PrIssueFilter>;
   sessionFilters: Set<SessionFilter>;
+  /**
+   * Keep only worktrees with at least one agent pane, whatever its state. A
+   * facet of its own rather than a Sessions value: Sessions ORs its values, so
+   * "Has an agent" + "Waiting" would collapse back to every agent worktree.
+   */
+  hasAgentFilter: boolean;
   activityFilters: Set<ActivityFilter>;
   /** Transient session-only dev-server facet filter (not persisted). */
   devServerFilters: Set<DevServerFilter>;
@@ -73,6 +70,10 @@ interface WorktreeFilterState {
   hideMainWorktree: boolean;
   pinnedWorktrees: string[];
   collapsedWorktrees: string[];
+  /** Worktree id → label colour token. Absent means no label (#13408). */
+  worktreeLabelColors: Record<string, WorktreeLabelToken>;
+  /** Worktree id → custom title, normalised. Absent means the computed headline (#13409). */
+  worktreeCustomTitles: Record<string, string>;
   manualOrder: string[];
   /** Transient session-only quick-state chip filter (not persisted). */
   quickStateFilter: QuickStateFilter;
@@ -87,6 +88,7 @@ interface WorktreeFilterActions {
   toggleTypeFilter: (filter: TypeFilter) => void;
   togglePrIssueFilter: (filter: PrIssueFilter) => void;
   toggleSessionFilter: (filter: SessionFilter) => void;
+  setHasAgentFilter: (enabled: boolean) => void;
   toggleActivityFilter: (filter: ActivityFilter) => void;
   toggleDevServerFilter: (filter: DevServerFilter) => void;
   setAlwaysShowActive: (enabled: boolean) => void;
@@ -99,6 +101,9 @@ interface WorktreeFilterActions {
   expandWorktree: (id: string) => void;
   toggleWorktreeCollapsed: (id: string) => void;
   isWorktreeCollapsed: (id: string) => boolean;
+  setWorktreeLabelColor: (id: string, token: WorktreeLabelToken | null) => void;
+  /** Normalises the title; an empty or over-length result is the caller's to reject, null or blank clears. */
+  setWorktreeCustomTitle: (id: string, title: string | null) => void;
   setManualOrder: (order: string[]) => void;
   pruneStaleWorktreeIds: (validIds: ReadonlySet<string>) => void;
   setQuickStateFilter: (filter: QuickStateFilter) => void;
@@ -146,9 +151,14 @@ interface ProjectScopedState {
   typeFilters: Set<TypeFilter>;
   prIssueFilters: Set<PrIssueFilter>;
   sessionFilters: Set<SessionFilter>;
+  hasAgentFilter: boolean;
   activityFilters: Set<ActivityFilter>;
   pinnedWorktrees: string[];
   collapsedWorktrees: string[];
+  /** Worktree id → label colour token. Absent means no label (#13408). */
+  worktreeLabelColors: Record<string, WorktreeLabelToken>;
+  /** Worktree id → custom title, normalised. Absent means the computed headline (#13409). */
+  worktreeCustomTitles: Record<string, string>;
   manualOrder: string[];
   quickStateFilter: QuickStateFilter;
   devServerFilters: Set<DevServerFilter>;
@@ -168,9 +178,14 @@ interface ProjectPersistedShape {
   typeFilters: TypeFilter[];
   prIssueFilters: PrIssueFilter[];
   sessionFilters: SessionFilter[];
+  hasAgentFilter: boolean;
   activityFilters: ActivityFilter[];
   pinnedWorktrees: string[];
   collapsedWorktrees: string[];
+  /** Worktree id → label colour token. Absent means no label (#13408). */
+  worktreeLabelColors: Record<string, WorktreeLabelToken>;
+  /** Worktree id → custom title, normalised. Absent means the computed headline (#13409). */
+  worktreeCustomTitles: Record<string, string>;
   manualOrder: string[];
 }
 
@@ -234,6 +249,28 @@ function arrayOrUndefined<T>(value: unknown): T[] | undefined {
   return Array.isArray(value) ? (value as T[]) : undefined;
 }
 
+/** Keeps only entries whose value is a known label token, so a retired or hand-edited colour drops out rather than reaching the card as a bare var(). */
+function labelColorsOrUndefined(value: unknown): Record<string, WorktreeLabelToken> | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+  const result: Record<string, WorktreeLabelToken> = {};
+  for (const [id, token] of Object.entries(value)) {
+    if (isWorktreeLabelToken(token)) result[id] = token;
+  }
+  return result;
+}
+
+/** Keeps only titles that still normalise to something within the limit, so a hand-edited entry can't put a blank or oversized headline on a card. */
+function customTitlesOrUndefined(value: unknown): Record<string, string> | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+  const result: Record<string, string> = {};
+  for (const [id, raw] of Object.entries(value)) {
+    if (typeof raw !== "string") continue;
+    const title = normalizeWorktreeCustomTitle(raw);
+    if (title && !isWorktreeCustomTitleTooLong(title)) result[id] = title;
+  }
+  return result;
+}
+
 /**
  * Strip the retired "running" session filter from a persisted list. The
  * adjacent "working" option semantically covers its former intent — see
@@ -285,7 +322,7 @@ function loadLegacySeedForProject(): Partial<ProjectPersistedShape> {
   return {
     query: typeof state.query === "string" ? state.query : undefined,
     statusFilters: arrayOrUndefined<StatusFilter>(state.statusFilters),
-    typeFilters: arrayOrUndefined<TypeFilter>(state.typeFilters),
+    typeFilters: arrayOrUndefined<unknown>(state.typeFilters)?.filter(isWorktreeTypeId),
     prIssueFilters: arrayOrUndefined<PrIssueFilter>(state.githubFilters),
     sessionFilters: stripLegacySessionFilters(
       arrayOrUndefined<SessionFilter>(state.sessionFilters)
@@ -449,12 +486,15 @@ function toProjectFiltersPersisted(
   return {
     query: typeof raw.query === "string" ? raw.query : "",
     statusFilters: arrayOrUndefined<StatusFilter>(raw.statusFilters) ?? [],
-    typeFilters: arrayOrUndefined<TypeFilter>(raw.typeFilters) ?? [],
+    typeFilters: arrayOrUndefined<unknown>(raw.typeFilters)?.filter(isWorktreeTypeId) ?? [],
     prIssueFilters: arrayOrUndefined<PrIssueFilter>(raw.prIssueFilters) ?? [],
     sessionFilters: arrayOrUndefined<SessionFilter>(raw.sessionFilters) ?? [],
+    hasAgentFilter: raw.hasAgentFilter === true,
     activityFilters: arrayOrUndefined<ActivityFilter>(raw.activityFilters) ?? [],
     pinnedWorktrees: arrayOrUndefined<string>(raw.pinnedWorktrees) ?? [],
     collapsedWorktrees: arrayOrUndefined<string>(raw.collapsedWorktrees) ?? [],
+    worktreeLabelColors: labelColorsOrUndefined(raw.worktreeLabelColors) ?? {},
+    worktreeCustomTitles: customTitlesOrUndefined(raw.worktreeCustomTitles) ?? {},
     manualOrder: arrayOrUndefined<string>(raw.manualOrder) ?? [],
   };
 }
@@ -503,6 +543,11 @@ function mergeProjectFiltersPersistedWrite({
         inc.sessionFilters,
         disk.sessionFilters
       ),
+      hasAgentFilter: pickFieldByWriterDelta(
+        base.hasAgentFilter,
+        inc.hasAgentFilter,
+        disk.hasAgentFilter
+      ),
       activityFilters: pickFieldByWriterDelta(
         base.activityFilters,
         inc.activityFilters,
@@ -518,6 +563,16 @@ function mergeProjectFiltersPersistedWrite({
         inc.collapsedWorktrees,
         disk.collapsedWorktrees
       ),
+      worktreeLabelColors: pickFieldByWriterDelta(
+        base.worktreeLabelColors,
+        inc.worktreeLabelColors,
+        disk.worktreeLabelColors
+      ),
+      worktreeCustomTitles: pickFieldByWriterDelta(
+        base.worktreeCustomTitles,
+        inc.worktreeCustomTitles,
+        disk.worktreeCustomTitles
+      ),
       manualOrder: pickFieldByWriterDelta(base.manualOrder, inc.manualOrder, disk.manualOrder),
     },
   };
@@ -532,9 +587,12 @@ const _projectStore = create<ProjectScopedState>()(
       typeFilters: new Set<TypeFilter>(_legacySeed.typeFilters ?? []),
       prIssueFilters: new Set<PrIssueFilter>(_legacySeed.prIssueFilters ?? []),
       sessionFilters: new Set<SessionFilter>(_legacySeed.sessionFilters ?? []),
+      hasAgentFilter: false,
       activityFilters: new Set<ActivityFilter>(_legacySeed.activityFilters ?? []),
       pinnedWorktrees: _legacySeed.pinnedWorktrees ?? [],
       collapsedWorktrees: _legacySeed.collapsedWorktrees ?? [],
+      worktreeLabelColors: {},
+      worktreeCustomTitles: {},
       manualOrder: _legacySeed.manualOrder ?? [],
       quickStateFilter: "all",
       devServerFilters: new Set<DevServerFilter>(),
@@ -551,9 +609,12 @@ const _projectStore = create<ProjectScopedState>()(
         typeFilters: Array.from(state.typeFilters),
         prIssueFilters: Array.from(state.prIssueFilters),
         sessionFilters: Array.from(state.sessionFilters),
+        hasAgentFilter: state.hasAgentFilter,
         activityFilters: Array.from(state.activityFilters),
         pinnedWorktrees: state.pinnedWorktrees,
         collapsedWorktrees: state.collapsedWorktrees,
+        worktreeLabelColors: state.worktreeLabelColors,
+        worktreeCustomTitles: state.worktreeCustomTitles,
         manualOrder: state.manualOrder,
       }),
       migrate: (persistedState, version) => {
@@ -588,12 +649,25 @@ const _projectStore = create<ProjectScopedState>()(
           // search shows in the input and filter immediately after hydration.
           liveQuery: restoredQuery,
           statusFilters: new Set(p?.statusFilters ?? Array.from(current.statusFilters)),
-          typeFilters: new Set(p?.typeFilters ?? Array.from(current.typeFilters)),
+          // Filtered on every load, not in a migration: a type id leaves the
+          // registry without a version bump, and a stale id in the set would
+          // hide every worktree.
+          typeFilters: new Set(
+            Array.isArray(p?.typeFilters)
+              ? p.typeFilters.filter(isWorktreeTypeId)
+              : Array.from(current.typeFilters)
+          ),
           prIssueFilters: new Set(p?.prIssueFilters ?? Array.from(current.prIssueFilters)),
           sessionFilters: new Set(persistedSessionFilters ?? Array.from(current.sessionFilters)),
+          hasAgentFilter:
+            typeof p?.hasAgentFilter === "boolean" ? p.hasAgentFilter : current.hasAgentFilter,
           activityFilters: new Set(p?.activityFilters ?? Array.from(current.activityFilters)),
           pinnedWorktrees: p?.pinnedWorktrees ?? current.pinnedWorktrees,
           collapsedWorktrees: p?.collapsedWorktrees ?? current.collapsedWorktrees,
+          worktreeLabelColors:
+            labelColorsOrUndefined(p?.worktreeLabelColors) ?? current.worktreeLabelColors,
+          worktreeCustomTitles:
+            customTitlesOrUndefined(p?.worktreeCustomTitles) ?? current.worktreeCustomTitles,
           manualOrder: p?.manualOrder ?? current.manualOrder,
         };
       },
@@ -654,6 +728,9 @@ const _actions: WorktreeFilterActions = {
       return { sessionFilters: next };
     });
   },
+  setHasAgentFilter: (enabled) => {
+    _projectStore.setState({ hasAgentFilter: enabled });
+  },
   toggleActivityFilter: (filter) => {
     _projectStore.setState((state) => {
       const next = new Set(state.activityFilters);
@@ -710,6 +787,32 @@ const _actions: WorktreeFilterActions = {
     }
   },
   isWorktreeCollapsed: (id) => _projectStore.getState().collapsedWorktrees.includes(id),
+  setWorktreeLabelColor: (id, token) => {
+    _projectStore.setState((state) => {
+      const current = state.worktreeLabelColors[id];
+      if (token === null) {
+        if (current === undefined) return state;
+        const { [id]: _removed, ...rest } = state.worktreeLabelColors;
+        return { worktreeLabelColors: rest };
+      }
+      if (current === token) return state;
+      return { worktreeLabelColors: { ...state.worktreeLabelColors, [id]: token } };
+    });
+  },
+  setWorktreeCustomTitle: (id, title) => {
+    const next = title === null ? "" : normalizeWorktreeCustomTitle(title);
+    if (isWorktreeCustomTitleTooLong(next)) return;
+    _projectStore.setState((state) => {
+      const current = state.worktreeCustomTitles[id];
+      if (!next) {
+        if (current === undefined) return state;
+        const { [id]: _removed, ...rest } = state.worktreeCustomTitles;
+        return { worktreeCustomTitles: rest };
+      }
+      if (current === next) return state;
+      return { worktreeCustomTitles: { ...state.worktreeCustomTitles, [id]: next } };
+    });
+  },
   setManualOrder: (order) => {
     _projectStore.setState({ manualOrder: order });
   },
@@ -719,10 +822,26 @@ const _actions: WorktreeFilterActions = {
       const collapsed = state.collapsedWorktrees.filter((id) => validIds.has(id));
       const pinnedChanged = pinned.length !== state.pinnedWorktrees.length;
       const collapsedChanged = collapsed.length !== state.collapsedWorktrees.length;
-      if (!pinnedChanged && !collapsedChanged) return state;
+      const labelIds = Object.keys(state.worktreeLabelColors);
+      const keptLabelIds = labelIds.filter((id) => validIds.has(id));
+      const labelsChanged = keptLabelIds.length !== labelIds.length;
+      const titleIds = Object.keys(state.worktreeCustomTitles);
+      const keptTitleIds = titleIds.filter((id) => validIds.has(id));
+      const titlesChanged = keptTitleIds.length !== titleIds.length;
+      if (!pinnedChanged && !collapsedChanged && !labelsChanged && !titlesChanged) return state;
       const patch: Partial<ProjectScopedState> = {};
       if (pinnedChanged) patch.pinnedWorktrees = pinned;
       if (collapsedChanged) patch.collapsedWorktrees = collapsed;
+      if (labelsChanged) {
+        const labels: Record<string, WorktreeLabelToken> = {};
+        for (const id of keptLabelIds) labels[id] = state.worktreeLabelColors[id]!;
+        patch.worktreeLabelColors = labels;
+      }
+      if (titlesChanged) {
+        const titles: Record<string, string> = {};
+        for (const id of keptTitleIds) titles[id] = state.worktreeCustomTitles[id]!;
+        patch.worktreeCustomTitles = titles;
+      }
       return patch;
     });
   },
@@ -758,6 +877,7 @@ const _actions: WorktreeFilterActions = {
       typeFilters: new Set(),
       prIssueFilters: new Set(),
       sessionFilters: new Set(),
+      hasAgentFilter: false,
       activityFilters: new Set(),
       quickStateFilter: "all",
       devServerFilters: new Set(),
@@ -773,6 +893,7 @@ const _actions: WorktreeFilterActions = {
       p.typeFilters.size +
       p.prIssueFilters.size +
       p.sessionFilters.size +
+      (p.hasAgentFilter ? 1 : 0) +
       p.activityFilters.size +
       p.devServerFilters.size +
       (p.quickStateFilter !== "all" ? 1 : 0)
@@ -787,6 +908,7 @@ const _actions: WorktreeFilterActions = {
       p.typeFilters.size > 0 ||
       p.prIssueFilters.size > 0 ||
       p.sessionFilters.size > 0 ||
+      p.hasAgentFilter ||
       p.activityFilters.size > 0 ||
       p.devServerFilters.size > 0 ||
       p.quickStateFilter !== "all"
@@ -799,6 +921,7 @@ const _actions: WorktreeFilterActions = {
       p.typeFilters.size > 0 ||
       p.prIssueFilters.size > 0 ||
       p.sessionFilters.size > 0 ||
+      p.hasAgentFilter ||
       p.activityFilters.size > 0 ||
       p.devServerFilters.size > 0
     );
@@ -825,6 +948,7 @@ function _computeMergedState(): WorktreeFilterStore {
     typeFilters: p.typeFilters,
     prIssueFilters: p.prIssueFilters,
     sessionFilters: p.sessionFilters,
+    hasAgentFilter: p.hasAgentFilter,
     activityFilters: p.activityFilters,
     devServerFilters: p.devServerFilters,
     alwaysShowActive: g.alwaysShowActive,
@@ -832,6 +956,8 @@ function _computeMergedState(): WorktreeFilterStore {
     hideMainWorktree: g.hideMainWorktree,
     pinnedWorktrees: p.pinnedWorktrees,
     collapsedWorktrees: p.collapsedWorktrees,
+    worktreeLabelColors: p.worktreeLabelColors,
+    worktreeCustomTitles: p.worktreeCustomTitles,
     manualOrder: p.manualOrder,
     quickStateFilter: p.quickStateFilter,
     ..._actions,

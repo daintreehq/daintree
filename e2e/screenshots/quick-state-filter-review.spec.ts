@@ -48,6 +48,7 @@ const FIXTURES = [
   "working-active",
   "waiting-active",
   "finished-active",
+  "finished-seen",
   "idle",
   "mixed",
   "busy",

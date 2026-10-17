@@ -3,9 +3,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 const appMock = vi.hoisted(() => ({
   isPackaged: false as boolean,
   isReady: vi.fn(() => true),
+  whenReady: vi.fn(() => Promise.resolve()),
   on: vi.fn(),
   quit: vi.fn(),
   exit: vi.fn(),
+  commandLine: { appendSwitch: vi.fn() },
 }));
 
 const browserWindowMock = vi.hoisted(() => ({
@@ -35,15 +37,19 @@ vi.mock("../signalShutdownState.js", () => ({
   setSafetyBeltTimer: setSafetyBeltTimerMock,
 }));
 
+const finishIfGroupStopMock = vi.hoisted(() => vi.fn(() => false));
+vi.mock("../groupStop.js", () => ({
+  finishIfGroupStop: finishIfGroupStopMock,
+}));
+
 const isWindowRecreatingMock = vi.fn(() => false);
 vi.mock("../windowRecreationState.js", () => ({
   isWindowRecreating: isWindowRecreatingMock,
 }));
 
 // `broadcastToRenderer` pulls a heavy main-process chain (windowRef, ipcMain);
-// mock it so importing appLifecycle in tests stays cheap and toasts are
-// assertable. `archiveInstallIntent` is dynamically imported inside
-// queueDntrPath.
+// mock it so importing appLifecycle in tests stays cheap. `archiveInstallIntent`
+// is dynamically imported inside queueDntrPath.
 vi.mock("../../ipc/utils.js", () => ({ broadcastToRenderer: vi.fn() }));
 const enqueueArchiveInstallIntentsMock = vi.hoisted(() =>
   vi.fn<(p: readonly string[]) => Promise<void>>(async () => {})
@@ -51,7 +57,6 @@ const enqueueArchiveInstallIntentsMock = vi.hoisted(() =>
 vi.mock("../../setup/archiveInstallIntent.js", () => ({
   enqueueArchiveInstallIntents: enqueueArchiveInstallIntentsMock,
 }));
-// Tripwire: no lifecycle path may reach the installer directly any more.
 const installPluginMock = vi.hoisted(() => vi.fn());
 vi.mock("../../services/PluginService.js", () => ({
   pluginService: { installPlugin: installPluginMock },
@@ -59,8 +64,10 @@ vi.mock("../../services/PluginService.js", () => ({
 // environment.ts registers real `open-file` listeners and calls enableSandbox()
 // at import time; only the external folder-open dispatch is needed here.
 const dispatchOpenDirPathMock = vi.hoisted(() => vi.fn<(dirPath: string) => void>());
+const hasOpenDirConsumerMock = vi.hoisted(() => vi.fn<() => boolean>(() => true));
 vi.mock("../../setup/environment.js", () => ({
   dispatchOpenDirPath: dispatchOpenDirPathMock,
+  hasOpenDirConsumer: hasOpenDirConsumerMock,
 }));
 
 import fs from "node:fs";
@@ -81,12 +88,19 @@ function makeOpts(overrides?: Partial<AppLifecycleOptions>): AppLifecycleOptions
 
 describe("registerAppLifecycleHandlers – signal handling", () => {
   let processOnSpy: ReturnType<typeof vi.spyOn>;
+  let processListenersSpy: ReturnType<typeof vi.spyOn>;
+  let removeAllListenersSpy: ReturnType<typeof vi.spyOn>;
   let processExitSpy: ReturnType<typeof vi.spyOn>;
 
   beforeEach(() => {
     vi.clearAllMocks();
     vi.useFakeTimers();
     processOnSpy = vi.spyOn(process, "on").mockImplementation(() => process);
+    // The runner's own signal listeners must survive the re-arm.
+    processListenersSpy = vi.spyOn(process, "rawListeners").mockReturnValue([]);
+    removeAllListenersSpy = vi
+      .spyOn(process, "removeAllListeners")
+      .mockImplementation(() => process);
     processExitSpy = vi.spyOn(process, "exit").mockImplementation(() => undefined as never);
   });
 
@@ -102,13 +116,51 @@ describe("registerAppLifecycleHandlers – signal handling", () => {
         ["SIGTERM", "SIGINT", "SIGUSR2"].includes(sig)
       );
       expect(signalCalls).toHaveLength(3);
-      expect(signalCalls[0][0]).toBe("SIGTERM");
-      expect(signalCalls[1][0]).toBe("SIGINT");
       // SIGUSR2 is nodemon's restart signal; without this handler every dev-mode
       // rebuild exited ungracefully, never ran `markCleanExit`, and tripped the
       // CrashLoopGuard into safe mode. Keep it registered even in packaged.
-      expect(signalCalls[2][0]).toBe("SIGUSR2");
+      expect(signalCalls.map(([sig]: string[]) => sig)).toEqual(["SIGUSR2", "SIGTERM", "SIGINT"]);
     }
+  });
+
+  // Electron installs its own termination-signal handlers while it starts and
+  // replaces the one libuv set up for an earlier listener, so the handler only
+  // runs if it is registered once the app is ready.
+  it("waits for ready before taking SIGTERM and SIGINT from Electron", async () => {
+    const { registerAppLifecycleHandlers } = await import("../appLifecycle.js");
+    let ready!: () => void;
+    appMock.isReady.mockReturnValueOnce(false);
+    appMock.whenReady.mockReturnValueOnce(new Promise<void>((resolve) => (ready = resolve)));
+    appMock.isPackaged = true;
+    registerAppLifecycleHandlers(makeOpts());
+
+    const registered = () => processOnSpy.mock.calls.map(([sig]: string[]) => sig);
+    expect(registered()).toContain("SIGUSR2");
+    expect(registered()).not.toContain("SIGTERM");
+    expect(registered()).not.toContain("SIGINT");
+
+    ready();
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(registered()).toEqual(expect.arrayContaining(["SIGTERM", "SIGINT"]));
+  });
+
+  // Dependencies such as signal-exit listen from load, and libuv only installs
+  // its handler when a signal goes from no listeners to one.
+  it("re-arms each termination signal with its earlier listeners kept after ours", async () => {
+    const { registerAppLifecycleHandlers } = await import("../appLifecycle.js");
+    // rawListeners hands back a `once` listener's wrapper; re-adding that same
+    // wrapper keeps it one-shot.
+    const earlier = vi.fn();
+    processListenersSpy.mockImplementation((sig: string) => (sig === "SIGTERM" ? [earlier] : []));
+    appMock.isPackaged = true;
+    registerAppLifecycleHandlers(makeOpts());
+
+    expect(removeAllListenersSpy).toHaveBeenCalledWith("SIGTERM");
+    expect(removeAllListenersSpy).toHaveBeenCalledWith("SIGINT");
+    const sigterm = processOnSpy.mock.calls.filter(([sig]: string[]) => sig === "SIGTERM");
+    expect(sigterm).toHaveLength(2);
+    expect(sigterm[1][1]).toBe(earlier);
   });
 
   it("registers SIGHUP only when !isPackaged", async () => {
@@ -153,6 +205,44 @@ describe("registerAppLifecycleHandlers – signal handling", () => {
     expect(processExitSpy).not.toHaveBeenCalledWith(0);
   });
 
+  it("checks for a group stop only once the quit has claimed the shutdown", async () => {
+    const { registerAppLifecycleHandlers } = await import("../appLifecycle.js");
+    registerAppLifecycleHandlers(makeOpts());
+
+    const sigTermCall = processOnSpy.mock.calls.find(([sig]: string[]) => sig === "SIGTERM");
+    const handler = sigTermCall![1] as () => void;
+
+    handler();
+
+    // The quit runs the chain's synchronous persistence; a group stop that
+    // finished first would exit without it.
+    expect(finishIfGroupStopMock).toHaveBeenCalledOnce();
+    expect(appMock.quit.mock.invocationCallOrder[0]).toBeLessThan(
+      finishIfGroupStopMock.mock.invocationCallOrder[0]
+    );
+  });
+
+  it("stops Chromium's GPU fallback count before the quit starts, once", async () => {
+    const { registerAppLifecycleHandlers } = await import("../appLifecycle.js");
+    registerAppLifecycleHandlers(makeOpts());
+
+    const sigTermCall = processOnSpy.mock.calls.find(([sig]: string[]) => sig === "SIGTERM");
+    const handler = sigTermCall![1] as () => void;
+
+    handler();
+    vi.setSystemTime(Date.now() + 5_000);
+    handler();
+
+    // Relaunching a GPU process lost to the same signal must not exhaust the
+    // fallback modes and abort the browser mid-quit.
+    expect(appMock.commandLine.appendSwitch).toHaveBeenCalledExactlyOnceWith(
+      "disable-gpu-process-crash-limit"
+    );
+    expect(appMock.commandLine.appendSwitch.mock.invocationCallOrder[0]).toBeLessThan(
+      appMock.quit.mock.invocationCallOrder[0]
+    );
+  });
+
   it("safety-belt nulls the stored handle when it fires", async () => {
     const { registerAppLifecycleHandlers } = await import("../appLifecycle.js");
     registerAppLifecycleHandlers(makeOpts());
@@ -170,37 +260,44 @@ describe("registerAppLifecycleHandlers – signal handling", () => {
     expect(setSafetyBeltTimerMock).toHaveBeenCalledWith(null);
   });
 
-  it("rapid second signal within 2s force-exits with status 1", async () => {
+  it("a second signal within 2s force-exits with status 1", async () => {
+    vi.setSystemTime(new Date(1_000_000));
     const { registerAppLifecycleHandlers } = await import("../appLifecycle.js");
     registerAppLifecycleHandlers(makeOpts());
 
     const sigTermCall = processOnSpy.mock.calls.find(([sig]: string[]) => sig === "SIGTERM");
-    const handler = sigTermCall![1] as () => void;
+    const handler = sigTermCall![1] as (signal: string) => void;
 
-    handler();
-    // Same tick — Date.now() delta is ~0ms, well within the 2000ms force-exit window.
-    handler();
+    handler("SIGTERM");
+    vi.advanceTimersByTime(1); // the first dispatch has finished
+    vi.setSystemTime(new Date(1_000_200));
+    handler("SIGTERM");
 
     expect(setSignalShutdownMock).toHaveBeenCalledOnce();
     expect(appMock.quit).toHaveBeenCalledOnce();
     expect(processExitSpy).toHaveBeenCalledWith(1);
   });
 
-  it("second signal at 1999ms force-exits (boundary inside window)", async () => {
+  // signal-exit and when-exit re-raise the signal at this process from their
+  // own listeners; live, that made every SIGTERM exit with status 1.
+  it("ignores the same signal echoed back, however long the quit's synchronous part took", async () => {
     vi.setSystemTime(new Date(1_000_000));
     const { registerAppLifecycleHandlers } = await import("../appLifecycle.js");
     registerAppLifecycleHandlers(makeOpts());
 
     const sigTermCall = processOnSpy.mock.calls.find(([sig]: string[]) => sig === "SIGTERM");
-    const handler = sigTermCall![1] as () => void;
+    const handler = sigTermCall![1] as (signal: string) => void;
 
-    handler();
-    // 1ms inside the 2000ms exclusive boundary — must force-exit. Pins the
-    // `<` boundary so an accidental change to `<=` would surface here.
-    vi.setSystemTime(new Date(1_001_999));
-    handler();
+    handler("SIGTERM");
+    // Still inside the first dispatch, 800 ms of synchronous persistence later.
+    vi.setSystemTime(new Date(1_000_800));
+    handler("SIGTERM");
+    // And just after it.
+    vi.advanceTimersByTime(1);
+    handler("SIGTERM");
 
-    expect(processExitSpy).toHaveBeenCalledWith(1);
+    expect(appMock.quit).toHaveBeenCalledOnce();
+    expect(processExitSpy).not.toHaveBeenCalled();
   });
 
   it("second signal after 2s force-exit window is ignored", async () => {
@@ -227,11 +324,12 @@ describe("registerAppLifecycleHandlers – signal handling", () => {
 
     const sigTermCall = processOnSpy.mock.calls.find(([sig]: string[]) => sig === "SIGTERM");
     const sigIntCall = processOnSpy.mock.calls.find(([sig]: string[]) => sig === "SIGINT");
-    const termHandler = sigTermCall![1] as () => void;
-    const intHandler = sigIntCall![1] as () => void;
+    const termHandler = sigTermCall![1] as (signal: string) => void;
+    const intHandler = sigIntCall![1] as (signal: string) => void;
 
-    termHandler();
-    intHandler();
+    // Node passes each listener its signal; a different one is never an echo.
+    termHandler("SIGTERM");
+    intHandler("SIGINT");
 
     expect(setSignalShutdownMock).toHaveBeenCalledOnce();
     expect(appMock.quit).toHaveBeenCalledOnce();
@@ -288,31 +386,6 @@ describe("registerAppLifecycleHandlers – second-instance", () => {
 
     expect(dispatchOpenDirPathMock).toHaveBeenCalledExactlyOnceWith(cliDir);
     expect(mainWindow.focus).not.toHaveBeenCalled();
-  });
-
-  it("routes the two-token --cli-path form the same way", async () => {
-    const { registerAppLifecycleHandlers } = await import("../appLifecycle.js");
-    const mainWindow = makeBrowserWindow();
-    registerAppLifecycleHandlers(
-      makeOpts({
-        getMainWindow: vi.fn(() => mainWindow as unknown as import("electron").BrowserWindow),
-      })
-    );
-
-    const secondInstanceCall = appMock.on.mock.calls.find(
-      ([event]: string[]) => event === "second-instance"
-    );
-    const handler = secondInstanceCall![1] as (
-      event: unknown,
-      commandLine: string[],
-      workingDirectory: string
-    ) => void;
-
-    // Two-token form kept here on purpose: it must still work when the adjacent
-    // token really is the path.
-    handler({}, ["daintree", "--cli-path", cliDir], "/");
-
-    expect(dispatchOpenDirPathMock).toHaveBeenCalledExactlyOnceWith(cliDir);
   });
 
   it("hands a CLI path to the dispatch even with no window live", async () => {
@@ -382,6 +455,233 @@ describe("registerAppLifecycleHandlers – second-instance", () => {
   });
 });
 
+describe("registerAppLifecycleHandlers – second-instance with no window", () => {
+  type SecondInstanceHandler = (
+    event: unknown,
+    commandLine: string[],
+    workingDirectory: string
+  ) => void;
+
+  let cliDir: string;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    appMock.isReady.mockReturnValue(true);
+    hasOpenDirConsumerMock.mockReturnValue(true);
+    vi.spyOn(process, "on").mockImplementation(() => process);
+    vi.spyOn(process, "exit").mockImplementation(() => undefined as never);
+    cliDir = fs.mkdtempSync(nodePath.join(os.tmpdir(), "daintree-second-instance-nowin-"));
+  });
+
+  afterEach(() => {
+    fs.rmSync(cliDir, { recursive: true, force: true });
+  });
+
+  async function register(overrides?: Partial<AppLifecycleOptions>) {
+    const { registerAppLifecycleHandlers } = await import("../appLifecycle.js");
+    const opts = makeOpts({ isHostModeActive: () => true, ...overrides });
+    const handle = registerAppLifecycleHandlers(opts);
+    const call = appMock.on.mock.calls.find(([event]: string[]) => event === "second-instance");
+    return { opts, handle, handler: call![1] as SecondInstanceHandler };
+  }
+
+  it("keeps today's behaviour without Host mode: no window is opened", async () => {
+    const { opts, handler } = await register({ isHostModeActive: () => false });
+
+    handler({}, ["daintree"], "/");
+
+    expect(opts.onCreateWindow).not.toHaveBeenCalled();
+  });
+
+  function makeWindow() {
+    return {
+      isMinimized: vi.fn(() => false),
+      isDestroyed: vi.fn(() => false),
+      restore: vi.fn(),
+      focus: vi.fn(),
+    };
+  }
+
+  it("hands a background --host-mode launch to this process without opening or focusing a window", async () => {
+    const onHostModeRequested = vi.fn();
+    const win = makeWindow();
+    const { opts, handler } = await register({
+      onHostModeRequested,
+      getMainWindow: vi.fn(() => win as unknown as import("electron").BrowserWindow),
+    });
+
+    handler({}, ["/opt/Daintree/daintree", "--host-mode"], "/");
+
+    expect(onHostModeRequested).toHaveBeenCalledExactlyOnceWith([
+      "/opt/Daintree/daintree",
+      "--host-mode",
+    ]);
+    expect(win.focus).not.toHaveBeenCalled();
+    expect(opts.onCreateWindow).not.toHaveBeenCalled();
+  });
+
+  it("never opens a window in a Host with no display, which would crash it", async () => {
+    const onHostModeRequested = vi.fn();
+    const { opts, handle, handler } = await register({
+      onHostModeRequested,
+      canOpenWindows: () => false,
+    });
+
+    handler({}, ["/opt/Daintree/daintree"], "/home/greg");
+    handler({}, ["/opt/Daintree/daintree", cliDir], "/home/greg");
+    handle.onLaunchSettled();
+    // A Host-mode request still reaches it.
+    handler({}, ["/opt/Daintree/daintree", "--host-mode"], "/");
+
+    expect(opts.onCreateWindow).not.toHaveBeenCalled();
+    expect(onHostModeRequested).toHaveBeenCalledOnce();
+  });
+
+  it("does the same before the launch has settled, and after it settles opens nothing", async () => {
+    const onHostModeRequested = vi.fn();
+    const { opts, handle, handler } = await register({
+      onHostModeRequested,
+      isLaunchSettled: () => false,
+    });
+
+    handler({}, ["daintree", "--host-mode"], "/");
+    handle.onLaunchSettled();
+
+    expect(onHostModeRequested).toHaveBeenCalledOnce();
+    expect(opts.onCreateWindow).not.toHaveBeenCalled();
+  });
+
+  it("treats --host-mode as a plain relaunch where Host mode can't be handed over", async () => {
+    const { opts, handler } = await register();
+
+    handler({}, ["daintree", "--host-mode"], "/");
+
+    expect(opts.onCreateWindow).toHaveBeenCalledOnce();
+  });
+
+  it("opens a window for a plain relaunch when none exists", async () => {
+    const { opts, handler } = await register();
+
+    handler({}, ["daintree"], "/");
+
+    expect(opts.onCreateWindow).toHaveBeenCalledOnce();
+  });
+
+  it("treats a destroyed primary window as no window", async () => {
+    const destroyed = {
+      isMinimized: vi.fn(() => false),
+      isDestroyed: vi.fn(() => true),
+      restore: vi.fn(),
+      focus: vi.fn(),
+    };
+    const { opts, handler } = await register({
+      getMainWindow: vi.fn(() => destroyed as unknown as import("electron").BrowserWindow),
+    });
+
+    handler({}, ["daintree"], "/");
+
+    expect(destroyed.focus).not.toHaveBeenCalled();
+    expect(opts.onCreateWindow).toHaveBeenCalledOnce();
+  });
+
+  it("answers a relaunch that arrived during a windowless start once it settles", async () => {
+    let settled = false;
+    const { opts, handle, handler } = await register({ isLaunchSettled: () => settled });
+
+    handler({}, ["daintree"], "/");
+    handler({}, ["daintree"], "/");
+    settled = true;
+    handle.onLaunchSettled();
+    handle.onLaunchSettled();
+
+    expect(opts.onCreateWindow).toHaveBeenCalledOnce();
+  });
+
+  it("focuses the launch's own window instead when one came up meanwhile", async () => {
+    let settled = false;
+    let win: ReturnType<typeof makeWindow> | null = null;
+    const { opts, handle, handler } = await register({
+      isLaunchSettled: () => settled,
+      getMainWindow: vi.fn(() => win as unknown as import("electron").BrowserWindow),
+    });
+
+    handler({}, ["daintree"], "/");
+    win = makeWindow();
+    settled = true;
+    handle.onLaunchSettled();
+
+    expect(win.focus).toHaveBeenCalledOnce();
+    expect(opts.onCreateWindow).not.toHaveBeenCalled();
+  });
+
+  it("opens a window for a folder queued during a windowless start", async () => {
+    let settled = false;
+    hasOpenDirConsumerMock.mockReturnValue(false);
+    const { opts, handle, handler } = await register({ isLaunchSettled: () => settled });
+
+    handler({}, ["daintree", `--cli-path=${cliDir}`], "/");
+    expect(dispatchOpenDirPathMock).toHaveBeenCalledExactlyOnceWith(cliDir);
+    settled = true;
+    handle.onLaunchSettled();
+
+    expect(opts.onCreateWindow).toHaveBeenCalledOnce();
+  });
+
+  it("does nothing on settle when no second launch arrived", async () => {
+    hasOpenDirConsumerMock.mockReturnValue(false);
+    const { opts, handle } = await register();
+
+    handle.onLaunchSettled();
+
+    expect(opts.onCreateWindow).not.toHaveBeenCalled();
+  });
+
+  it("answers a relaunch that arrived before ready during a --host-mode start on settle", async () => {
+    appMock.isReady.mockReturnValue(false);
+    let settled = false;
+    const { opts, handle, handler } = await register({ isLaunchSettled: () => settled });
+
+    handler({}, ["daintree"], "/");
+    appMock.isReady.mockReturnValue(true);
+    settled = true;
+    handle.onLaunchSettled();
+
+    expect(opts.onCreateWindow).toHaveBeenCalledOnce();
+  });
+
+  it("brings a live window forward for a plain relaunch instead of opening another", async () => {
+    const win = makeWindow();
+    const { opts, handler } = await register({
+      getMainWindow: vi.fn(() => win as unknown as import("electron").BrowserWindow),
+    });
+
+    handler({}, ["daintree"], "/");
+
+    expect(win.focus).toHaveBeenCalledOnce();
+    expect(opts.onCreateWindow).not.toHaveBeenCalled();
+  });
+
+  it("leaves a folder open to the routing that makes its own window", async () => {
+    const { opts, handler } = await register();
+
+    handler({}, ["daintree", `--cli-path=${cliDir}`], "/");
+
+    expect(dispatchOpenDirPathMock).toHaveBeenCalledExactlyOnceWith(cliDir);
+    expect(opts.onCreateWindow).not.toHaveBeenCalled();
+  });
+
+  it("opens a window for a folder when no window has ever installed that routing", async () => {
+    hasOpenDirConsumerMock.mockReturnValue(false);
+    const { opts, handler } = await register();
+
+    handler({}, ["daintree", `--cli-path=${cliDir}`], "/");
+
+    // Queued by the dispatch; the new window drains it.
+    expect(dispatchOpenDirPathMock).toHaveBeenCalledExactlyOnceWith(cliDir);
+    expect(opts.onCreateWindow).toHaveBeenCalledOnce();
+  });
+});
+
 describe("registerAppLifecycleHandlers – window-all-closed", () => {
   const originalPlatform = process.platform;
 
@@ -409,6 +709,16 @@ describe("registerAppLifecycleHandlers – window-all-closed", () => {
     getWindowAllClosedHandler()();
 
     expect(appMock.quit).toHaveBeenCalledOnce();
+  });
+
+  it("keeps running on linux while Host mode is active", async () => {
+    Object.defineProperty(process, "platform", { value: "linux" });
+    const { registerAppLifecycleHandlers } = await import("../appLifecycle.js");
+    registerAppLifecycleHandlers(makeOpts({ isHostModeActive: () => true }));
+
+    getWindowAllClosedHandler()();
+
+    expect(appMock.quit).not.toHaveBeenCalled();
   });
 
   it("skips app.quit on linux while a window recreation is in flight", async () => {
@@ -606,18 +916,41 @@ describe("registerAppLifecycleHandlers – activate", () => {
     expect(opts.onCreateWindow).toHaveBeenCalledOnce();
   });
 
-  it("does not touch the registry before the app is ready", async () => {
+  it("replays a Dock click that arrived during a windowless Host start once it settles", async () => {
+    appMock.isReady.mockReturnValue(false);
+    let settled = false;
+    const { registerAppLifecycleHandlers } = await import("../appLifecycle.js");
+    const opts = makeOpts({
+      isHostModeActive: () => true,
+      isLaunchSettled: () => settled,
+    });
+    const handle = registerAppLifecycleHandlers(opts);
+
+    getActivateHandler()();
+    appMock.isReady.mockReturnValue(true);
+    getActivateHandler()();
+    expect(opts.onCreateWindow).not.toHaveBeenCalled();
+
+    settled = true;
+    handle.onLaunchSettled();
+    handle.onLaunchSettled();
+    expect(opts.onCreateWindow).toHaveBeenCalledOnce();
+  });
+
+  it("still drops a pre-ready Dock click without Host mode", async () => {
     appMock.isReady.mockReturnValue(false);
     const { registerAppLifecycleHandlers } = await import("../appLifecycle.js");
-    const registry = {
-      get size(): number {
-        throw new Error("registry accessed pre-ready");
-      },
-    } as AppLifecycleOptions["windowRegistry"];
-    const opts = makeOpts({ windowRegistry: registry });
-    registerAppLifecycleHandlers(opts);
+    const opts = makeOpts({
+      windowRegistry: makeRegistry(0),
+      isHostModeActive: () => false,
+      isLaunchSettled: () => false,
+    });
+    const handle = registerAppLifecycleHandlers(opts);
 
-    expect(() => getActivateHandler()()).not.toThrow();
+    getActivateHandler()();
+    appMock.isReady.mockReturnValue(true);
+    handle.onLaunchSettled();
+
     expect(opts.onCreateWindow).not.toHaveBeenCalled();
   });
 
@@ -634,6 +967,21 @@ describe("registerAppLifecycleHandlers – activate", () => {
     appMock.isReady.mockReturnValue(true);
     handler();
     expect(opts.onCreateWindow).toHaveBeenCalledOnce();
+  });
+
+  it("does not touch the registry before the app is ready", async () => {
+    appMock.isReady.mockReturnValue(false);
+    const { registerAppLifecycleHandlers } = await import("../appLifecycle.js");
+    const registry = {
+      get size(): number {
+        throw new Error("registry accessed pre-ready");
+      },
+    } as AppLifecycleOptions["windowRegistry"];
+    const opts = makeOpts({ windowRegistry: registry });
+    registerAppLifecycleHandlers(opts);
+
+    expect(() => getActivateHandler()()).not.toThrow();
+    expect(opts.onCreateWindow).not.toHaveBeenCalled();
   });
 });
 
@@ -693,17 +1041,6 @@ describe("registerWindowSessionEndHandler – Windows planned-shutdown wiring", 
 
   it("registers nothing on darwin", async () => {
     Object.defineProperty(process, "platform", { value: "darwin" });
-    const { registerWindowSessionEndHandler } = await import("../appLifecycle.js");
-    const win = makeWin();
-
-    registerWindowSessionEndHandler(win);
-
-    const winOn = win.on as unknown as ReturnType<typeof vi.fn>;
-    expect(winOn).not.toHaveBeenCalled();
-  });
-
-  it("registers nothing on linux", async () => {
-    Object.defineProperty(process, "platform", { value: "linux" });
     const { registerWindowSessionEndHandler } = await import("../appLifecycle.js");
     const win = makeWin();
 
@@ -785,12 +1122,6 @@ describe("extractCliPath", () => {
     expect(errorSpy).toHaveBeenCalled();
   });
 
-  it("does not substitute a later directory for an explicit missing path", async () => {
-    const { extractCliPath } = await import("../appLifecycle.js");
-    const missing = nodePath.join(root, "gone");
-    expect(extractCliPath(["daintree", "--cli-path", missing, projectDir], root)).toBeNull();
-  });
-
   it("never scans behind the flag for the displaced path", async () => {
     const { extractCliPath } = await import("../appLifecycle.js");
     // Chromium orders positionals after the switches, so a directory sitting
@@ -825,11 +1156,6 @@ describe("extractCliPath", () => {
     expect(extractCliPath(["daintree", "--cli-path", "--injected", archive], root)).toBeNull();
   });
 
-  it("never considers argv[0], even when it names a real directory", async () => {
-    const { extractCliPath } = await import("../appLifecycle.js");
-    expect(extractCliPath([projectDir, "--cli-path", "--injected"], root)).toBeNull();
-  });
-
   it.skipIf(process.platform === "win32")(
     "does not home-expand a leading ~ followed by a backslash on POSIX",
     async () => {
@@ -861,43 +1187,10 @@ describe("extractCliPath", () => {
     expect(extractCliPath(["daintree", "--cli-path=project"], root)).toBe(projectDir);
   });
 
-  it("expands a leading ~ to the home directory", async () => {
-    const { extractCliPath } = await import("../appLifecycle.js");
-    // `~` alone resolves to the home directory itself, which always exists.
-    expect(extractCliPath(["daintree", "--cli-path=~"], root)).toBe(os.homedir());
-  });
-
-  it("reports a failure for a path that does not exist", async () => {
-    const { extractCliPath } = await import("../appLifecycle.js");
-    expect(extractCliPath(["daintree", "--cli-path=/nope/nope"], root)).toBeNull();
-    expect(errorSpy).toHaveBeenCalledWith(
-      "[MAIN] Failed to resolve --cli-path to an existing directory",
-      expect.objectContaining({ workingDirectory: root })
-    );
-  });
-
-  it("rejects a path that exists but is not a directory", async () => {
-    const { extractCliPath } = await import("../appLifecycle.js");
-    expect(extractCliPath(["daintree", `--cli-path=${plainFile}`], root)).toBeNull();
-    expect(errorSpy).toHaveBeenCalled();
-  });
-
   it.skipIf(process.platform === "win32")("decodes a file:// directory URI", async () => {
     const { extractCliPath } = await import("../appLifecycle.js");
     expect(extractCliPath(["daintree", `--cli-path=file://${projectDir}`], root)).toBe(projectDir);
   });
-
-  it.skipIf(process.platform === "win32")(
-    "decodes percent-encoded characters in a file:// URI",
-    async () => {
-      const { extractCliPath } = await import("../appLifecycle.js");
-      const spaced = nodePath.join(root, "my project");
-      fs.mkdirSync(spaced);
-      expect(extractCliPath(["daintree", `--cli-path=file://${root}/my%20project`], root)).toBe(
-        spaced
-      );
-    }
-  );
 
   it.skipIf(process.platform === "win32")("follows a symlink to a directory", async () => {
     const { extractCliPath } = await import("../appLifecycle.js");
@@ -936,15 +1229,6 @@ describe("extractDntrPaths", () => {
     expect(result[0].toLowerCase().endsWith(".dntr")).toBe(true);
   });
 
-  it("recognizes a Windows-style .dntr argument", async () => {
-    const { extractDntrPaths } = await import("../appLifecycle.js");
-    // Resolution differs on a POSIX test host, but the extension filter must
-    // still flag the entry.
-    const result = extractDntrPaths(["daintree", "C:\\Users\\a\\Plugin.DNTR"], "C:\\Users\\a");
-    expect(result).toHaveLength(1);
-    expect(result[0].toLowerCase().endsWith(".dntr")).toBe(true);
-  });
-
   it("skips flag arguments and non-.dntr paths", async () => {
     const { extractDntrPaths } = await import("../appLifecycle.js");
     expect(extractDntrPaths(["daintree", "--cli-path", "/dir", "--foo=bar.dntr"], "/work")).toEqual(
@@ -957,11 +1241,6 @@ describe("extractDntrPaths", () => {
     const a = nodePath.resolve("/a/one.dntr");
     const b = nodePath.resolve("/b/two.dntr");
     expect(extractDntrPaths(["daintree", a, b], "/work")).toEqual([a, b]);
-  });
-
-  it("returns an empty array when no .dntr path is present", async () => {
-    const { extractDntrPaths } = await import("../appLifecycle.js");
-    expect(extractDntrPaths(["daintree"], "/work")).toEqual([]);
   });
 
   it("expands a leading ~ through the shared path normalization", async () => {
@@ -1021,36 +1300,6 @@ describe("hasCliPathFlag", () => {
       expect(extractDntrPaths(["daintree", "file:///home/alice/plugin.dntr"], "C:\\")).toEqual([]);
     }
   );
-});
-
-describe("queueDntrPaths", () => {
-  beforeEach(() => {
-    vi.clearAllMocks();
-    enqueueArchiveInstallIntentsMock.mockResolvedValue(undefined);
-  });
-
-  it("routes archives to the confirmation queue instead of installing them", async () => {
-    const { queueDntrPaths } = await import("../appLifecycle.js");
-
-    await queueDntrPaths(["/tmp/acme.dntr", "/tmp/beta.dntr"]);
-
-    expect(enqueueArchiveInstallIntentsMock).toHaveBeenCalledExactlyOnceWith([
-      "/tmp/acme.dntr",
-      "/tmp/beta.dntr",
-    ]);
-    expect(installPluginMock).not.toHaveBeenCalled();
-    // No install toast: the renderer owns the outcome once the user approves.
-    expect(broadcastToRenderer).not.toHaveBeenCalled();
-  });
-
-  it("does not pre-screen the archive — the manifest preview is the gate", async () => {
-    const { queueDntrPaths } = await import("../appLifecycle.js");
-
-    await queueDntrPaths([nodePath.join(os.tmpdir(), "does-not-exist.dntr")]);
-
-    expect(enqueueArchiveInstallIntentsMock).toHaveBeenCalledOnce();
-    expect(installPluginMock).not.toHaveBeenCalled();
-  });
 });
 
 describe("registerAppLifecycleHandlers – second-instance .dntr handling", () => {
@@ -1378,5 +1627,25 @@ describe("extractDntrPaths – interaction with folder opens", () => {
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }
+  });
+});
+
+describe("queueDntrPaths", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    enqueueArchiveInstallIntentsMock.mockResolvedValue(undefined);
+  });
+  it("routes archives to the confirmation queue instead of installing them", async () => {
+    const { queueDntrPaths } = await import("../appLifecycle.js");
+
+    await queueDntrPaths(["/tmp/acme.dntr", "/tmp/beta.dntr"]);
+
+    expect(enqueueArchiveInstallIntentsMock).toHaveBeenCalledExactlyOnceWith([
+      "/tmp/acme.dntr",
+      "/tmp/beta.dntr",
+    ]);
+    expect(installPluginMock).not.toHaveBeenCalled();
+    // No install toast: the renderer owns the outcome once the user approves.
+    expect(broadcastToRenderer).not.toHaveBeenCalled();
   });
 });

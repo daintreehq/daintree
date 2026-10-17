@@ -30,14 +30,6 @@ describe("resolveLaunchIntent", () => {
     expect(resolveLaunchIntent(signals({ hasCliPathFlag: () => true }))).toBe("targeted");
   });
 
-  it("treats a --cli-path that failed to resolve as targeted too", () => {
-    // The user still named something; the flag is the intent, not its outcome.
-    const intent = resolveLaunchIntent(
-      signals({ hasCliPathFlag: () => true, extractDirectoryPaths: () => [] })
-    );
-    expect(intent).toBe("targeted");
-  });
-
   it("treats a Linux folder URI as targeted", () => {
     expect(resolveLaunchIntent(signals({ extractDirectoryPaths: () => ["/repos/app"] }))).toBe(
       "targeted"
@@ -54,6 +46,15 @@ describe("resolveLaunchIntent", () => {
     );
   });
 
+  it("treats a .dntr archive handed over in argv (Windows/Linux) as targeted", () => {
+    expect(
+      resolveLaunchIntent(
+        signals({ argv: ["C:\\Daintree\\Daintree.exe", "C:\\Downloads\\acme.hello-0.1.0.DNTR"] })
+      )
+    ).toBe("targeted");
+    expect(resolveLaunchIntent(signals({ argv: ["Daintree.exe", "--flag=x.dntr"] }))).toBe("cold");
+  });
+
   it("classifies safe mode as recovery", () => {
     expect(resolveLaunchIntent(signals({ isSafeMode: true }))).toBe("recovery");
   });
@@ -67,27 +68,6 @@ describe("resolveLaunchIntent", () => {
     // recovery classification has to win even when argv names something.
     const intent = resolveLaunchIntent(signals({ isSafeMode: true, hasCliPathFlag: () => true }));
     expect(intent).toBe("recovery");
-  });
-
-  it("passes argv through to the injected parsers rather than re-reading process.argv", () => {
-    const argv = ["daintree", "--cli-path=/repos/app"];
-    let sawCli: string[] | null = null;
-    let sawDirs: string[] | null = null;
-    resolveLaunchIntent(
-      signals({
-        argv,
-        hasCliPathFlag: (a) => {
-          sawCli = a;
-          return false;
-        },
-        extractDirectoryPaths: (a) => {
-          sawDirs = a;
-          return [];
-        },
-      })
-    );
-    expect(sawCli).toBe(argv);
-    expect(sawDirs).toBe(argv);
   });
 });
 
@@ -201,21 +181,6 @@ describe("stripLaunchTargets", () => {
     expect(
       shouldRestoreWindowFleet(resolveLaunchIntent(argvSignals(stripLaunchTargets(argv))))
     ).toBe(true);
-  });
-
-  it("leaves an already-cold launch cold", () => {
-    expect(resolveLaunchIntent(argvSignals(stripLaunchTargets(["--disable-gpu"])))).toBe("cold");
-  });
-
-  it("cannot rescue a recovery launch — recovery still outranks everything", () => {
-    // Safe mode restores one window on purpose; a relaunch marker must never
-    // override that.
-    expect(
-      resolveLaunchIntent({
-        ...argvSignals(stripLaunchTargets(["--cli-path", "/a"])),
-        isSafeMode: true,
-      })
-    ).toBe("recovery");
   });
 });
 

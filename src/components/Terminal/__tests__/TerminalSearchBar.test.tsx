@@ -219,7 +219,7 @@ describe("TerminalSearchBar", () => {
     });
     mock.searchAddon.findNext.mockClear();
 
-    const toggle = screen.getByLabelText("Toggle whole word");
+    const toggle = screen.getByLabelText("Match whole word");
     await act(async () => {
       fireEvent.keyDown(toggle, { key: "Enter" });
     });
@@ -283,7 +283,7 @@ describe("TerminalSearchBar", () => {
     renderSearchBar();
     const input = screen.getByPlaceholderText("Find in terminal");
 
-    const regexButton = screen.getByLabelText("Toggle regex mode");
+    const regexButton = screen.getByLabelText("Use regular expression");
     await act(() => {
       fireEvent.click(regexButton);
     });
@@ -329,43 +329,6 @@ describe("TerminalSearchBar", () => {
     expect(liveRegion.textContent).toBe("");
   });
 
-  it("renders the whole-word toggle initially unpressed", () => {
-    const mock = createMockManaged(true);
-    vi.mocked(terminalInstanceService.get).mockReturnValue(
-      mock as unknown as ReturnType<typeof terminalInstanceService.get>
-    );
-
-    renderSearchBar();
-    const button = screen.getByLabelText("Toggle whole word");
-    expect(button.getAttribute("aria-pressed")).toBe("false");
-  });
-
-  it("passes wholeWord: true to findNext when the toggle is on", async () => {
-    const mock = createMockManaged(true);
-    vi.mocked(terminalInstanceService.get).mockReturnValue(
-      mock as unknown as ReturnType<typeof terminalInstanceService.get>
-    );
-
-    renderSearchBar();
-    const input = screen.getByPlaceholderText("Find in terminal");
-
-    const wholeWordButton = screen.getByLabelText("Toggle whole word");
-    await act(() => {
-      fireEvent.click(wholeWordButton);
-    });
-
-    await act(() => {
-      fireEvent.change(input, { target: { value: "hello" } });
-    });
-    await act(() => {
-      vi.advanceTimersByTime(150);
-    });
-
-    expect(mock.searchAddon.findNext).toHaveBeenCalled();
-    const lastCall = mock.searchAddon.findNext.mock.calls.at(-1) as unknown[];
-    expect(lastCall[1]).toMatchObject({ wholeWord: true });
-  });
-
   it("combines regex and wholeWord in findNext options", async () => {
     const mock = createMockManaged(true);
     vi.mocked(terminalInstanceService.get).mockReturnValue(
@@ -376,10 +339,10 @@ describe("TerminalSearchBar", () => {
     const input = screen.getByPlaceholderText("Find in terminal");
 
     await act(() => {
-      fireEvent.click(screen.getByLabelText("Toggle regex mode"));
+      fireEvent.click(screen.getByLabelText("Use regular expression"));
     });
     await act(() => {
-      fireEvent.click(screen.getByLabelText("Toggle whole word"));
+      fireEvent.click(screen.getByLabelText("Match whole word"));
     });
 
     await act(() => {
@@ -394,7 +357,7 @@ describe("TerminalSearchBar", () => {
     expect(lastCall[1]).toMatchObject({ regex: true, wholeWord: true });
   });
 
-  it("marks the input invalid and surfaces the verbatim regex engine error", async () => {
+  it("marks the input invalid and surfaces the regex engine's reason", async () => {
     const mock = createMockManaged(true);
     vi.mocked(terminalInstanceService.get).mockReturnValue(
       mock as unknown as ReturnType<typeof terminalInstanceService.get>
@@ -404,7 +367,7 @@ describe("TerminalSearchBar", () => {
     const input = screen.getByPlaceholderText("Find in terminal") as HTMLInputElement;
 
     await act(() => {
-      fireEvent.click(screen.getByLabelText("Toggle regex mode"));
+      fireEvent.click(screen.getByLabelText("Use regular expression"));
     });
     await act(() => {
       fireEvent.change(input, { target: { value: "[invalid" } });
@@ -414,11 +377,12 @@ describe("TerminalSearchBar", () => {
     });
 
     expect(input.getAttribute("aria-invalid")).toBe("true");
-    // Tooltip mock renders content inline; require the engine-native message
-    // so a regression that swallows validation.error and shows only the
-    // generic fallback fails the test.
+    // Tooltip mock renders content inline; require the engine's own reason so
+    // a regression that swallows validation.error and shows only the generic
+    // fallback fails the test, without the pattern and flags it repeats.
     const renderedHtml = document.body.textContent ?? "";
-    expect(renderedHtml).toMatch(/Invalid regular expression/);
+    expect(renderedHtml).toMatch(/Unterminated character class/);
+    expect(renderedHtml).not.toMatch(/Invalid regular expression: \//);
   });
 
   it("does not let a pending debounce overwrite an immediate toggle search", async () => {
@@ -437,7 +401,7 @@ describe("TerminalSearchBar", () => {
     // Before the debounce fires, click whole-word — should cancel the
     // pending literal search and run an immediate {wholeWord: true} search.
     await act(() => {
-      fireEvent.click(screen.getByLabelText("Toggle whole word"));
+      fireEvent.click(screen.getByLabelText("Match whole word"));
     });
     // Advance past the (now-cancelled) debounce horizon.
     await act(() => {
@@ -459,7 +423,7 @@ describe("TerminalSearchBar", () => {
     const input = screen.getByPlaceholderText("Find in terminal") as HTMLInputElement;
 
     await act(() => {
-      fireEvent.click(screen.getByLabelText("Toggle regex mode"));
+      fireEvent.click(screen.getByLabelText("Use regular expression"));
     });
     await act(() => {
       fireEvent.change(input, { target: { value: "[invalid" } });
@@ -471,7 +435,7 @@ describe("TerminalSearchBar", () => {
     expect(input.getAttribute("aria-invalid")).toBe("true");
 
     await act(() => {
-      fireEvent.click(screen.getByLabelText("Toggle regex mode"));
+      fireEvent.click(screen.getByLabelText("Use regular expression"));
     });
 
     expect(input.getAttribute("aria-invalid")).toBeNull();
@@ -633,7 +597,7 @@ describe("TerminalSearchBar", () => {
       });
 
       await act(() => {
-        fireEvent.click(screen.getByLabelText("Close search"));
+        fireEvent.click(screen.getByLabelText("Close find bar"));
       });
 
       expect(useTerminalSearchHistoryStore.getState().searches).toEqual(["world"]);
@@ -698,7 +662,7 @@ describe("TerminalSearchBar", () => {
         fireEvent.change(input, { target: { value: "   " } });
       });
       await act(() => {
-        fireEvent.click(screen.getByLabelText("Close search"));
+        fireEvent.click(screen.getByLabelText("Close find bar"));
       });
 
       expect(useTerminalSearchHistoryStore.getState().searches).toEqual([]);
@@ -712,13 +676,13 @@ describe("TerminalSearchBar", () => {
 
       const { unmount } = renderSearchBar();
       await act(() => {
-        fireEvent.click(screen.getByLabelText("Toggle case sensitivity"));
+        fireEvent.click(screen.getByLabelText("Match case"));
       });
       expect(useTerminalSearchHistoryStore.getState().caseSensitive).toBe(true);
       unmount();
 
       renderSearchBar();
-      const toggle = screen.getByLabelText("Toggle case sensitivity");
+      const toggle = screen.getByLabelText("Match case");
       expect(toggle.getAttribute("aria-pressed")).toBe("true");
     });
 
@@ -730,13 +694,13 @@ describe("TerminalSearchBar", () => {
 
       const { unmount } = renderSearchBar();
       await act(() => {
-        fireEvent.click(screen.getByLabelText("Toggle regex mode"));
+        fireEvent.click(screen.getByLabelText("Use regular expression"));
       });
       expect(useTerminalSearchHistoryStore.getState().regexEnabled).toBe(true);
       unmount();
 
       renderSearchBar();
-      const toggle = screen.getByLabelText("Toggle regex mode");
+      const toggle = screen.getByLabelText("Use regular expression");
       expect(toggle.getAttribute("aria-pressed")).toBe("true");
     });
 

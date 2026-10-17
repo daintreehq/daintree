@@ -132,7 +132,7 @@ test.describe.serial("Core: External Git and Worktree Detection", () => {
     // Remove the worktree externally via git CLI
     execSync("git worktree remove --force " + JSON.stringify(featureWorktreePath), {
       cwd: fixtureDir,
-      stdio: "ignore",
+      stdio: "pipe",
     });
 
     // Feature card should disappear

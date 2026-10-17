@@ -7,6 +7,7 @@ import type {
   StatusFilter,
   TypeFilter,
 } from "@/store/worktreeFilterStore";
+import { WORKTREE_TYPE_IDS, getWorktreeTypeLabel } from "@/lib/worktreeTypes";
 
 /**
  * The facet vocabulary — the labels the user reads for every filter value.
@@ -29,23 +30,18 @@ export const STATUS_OPTIONS: readonly FilterOption<StatusFilter>[] = [
   { value: "idle", label: "Idle" },
 ];
 
-export const TYPE_OPTIONS: readonly FilterOption<TypeFilter>[] = [
-  { value: "feature", label: "Feature" },
-  { value: "bugfix", label: "Bugfix" },
-  { value: "refactor", label: "Refactor" },
-  { value: "chore", label: "Chore" },
-  { value: "docs", label: "Docs" },
-  { value: "test", label: "Test" },
-  { value: "release", label: "Release" },
-  { value: "ci", label: "CI" },
-  { value: "deps", label: "Deps" },
-  { value: "perf", label: "Perf" },
-  { value: "style", label: "Style" },
-  { value: "wip", label: "WIP" },
-  { value: "main", label: "Main" },
-  { value: "detached", label: "Detached" },
-  { value: "other", label: "Other" },
+// Branch types first, then the types that are not about a branch's name.
+const TYPE_OPTION_ORDER: readonly TypeFilter[] = [
+  ...WORKTREE_TYPE_IDS.filter((id) => id !== "main" && id !== "detached" && id !== "other"),
+  "main",
+  "detached",
+  "other",
 ];
+
+export const TYPE_OPTIONS: readonly FilterOption<TypeFilter>[] = TYPE_OPTION_ORDER.map((value) => ({
+  value,
+  label: getWorktreeTypeLabel(value),
+}));
 
 export const PR_ISSUE_OPTIONS: readonly FilterOption<PrIssueFilter>[] = [
   { value: "hasIssue", label: "Has issue" },
@@ -59,9 +55,12 @@ export const SESSION_OPTIONS: readonly FilterOption<SessionFilter>[] = [
   { value: "hasTerminals", label: "Has terminals" },
   { value: "working", label: "Working" },
   { value: "waiting", label: "Waiting" },
-  { value: "completed", label: "Completed" },
+  { value: "completed", label: "Finished" },
   { value: "exited", label: "Exited" },
 ];
+
+/** A facet of one value, so it has a label rather than an option list. */
+export const HAS_AGENT_LABEL = "Has an agent";
 
 export const ACTIVITY_OPTIONS: readonly FilterOption<ActivityFilter>[] = [
   { value: "last15m", label: "15m" },
@@ -90,6 +89,7 @@ export interface ActiveFacets {
   typeFilters: ReadonlySet<TypeFilter>;
   prIssueFilters: ReadonlySet<PrIssueFilter>;
   sessionFilters: ReadonlySet<SessionFilter>;
+  hasAgentFilter: boolean;
   activityFilters: ReadonlySet<ActivityFilter>;
   devServerFilters: ReadonlySet<DevServerFilter>;
 }
@@ -116,6 +116,7 @@ function facetPhrase<T extends string>(
  */
 export function describeActiveFacets(facets: ActiveFacets): string {
   return [
+    facets.hasAgentFilter ? HAS_AGENT_LABEL : null,
     facetPhrase("Status", STATUS_OPTIONS, facets.statusFilters),
     facetPhrase("Branch type", TYPE_OPTIONS, facets.typeFilters),
     facetPhrase("Issues & PRs", PR_ISSUE_OPTIONS, facets.prIssueFilters),

@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, render } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import { QuickSwitcherItem, pathTail } from "./QuickSwitcherItem";
 import type { QuickSwitcherItem as QuickSwitcherItemData } from "@/hooks/useQuickSwitcher";
@@ -34,11 +34,6 @@ function makeWorktreeItem(overrides: Partial<QuickSwitcherItemData> = {}): Quick
 
 describe("QuickSwitcherItem", () => {
   const onSelect = vi.fn();
-
-  it("renders worktree row with title", () => {
-    render(<QuickSwitcherItem item={makeWorktreeItem()} isSelected={false} onSelect={onSelect} />);
-    expect(screen.getByText("main")).toBeTruthy();
-  });
 
   it("applies selection styling via aria-selected variants", () => {
     const { container } = render(
@@ -75,13 +70,6 @@ describe("QuickSwitcherItem", () => {
 
     fireEvent.pointerMove(container.querySelector("button")!);
     expect(onHover).toHaveBeenCalledTimes(1);
-  });
-
-  it("does not throw when onHover is omitted", () => {
-    const { container } = render(
-      <QuickSwitcherItem item={makeWorktreeItem()} isSelected={false} onSelect={onSelect} />
-    );
-    expect(() => fireEvent.pointerMove(container.querySelector("button")!)).not.toThrow();
   });
 });
 

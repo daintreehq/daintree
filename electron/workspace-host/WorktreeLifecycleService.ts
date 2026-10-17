@@ -1,4 +1,4 @@
-import { spawn, spawnSync, type ChildProcess } from "child_process";
+import { spawn, type ChildProcess } from "child_process";
 import { readFile, access, cp, mkdir, readdir, unlink } from "fs/promises";
 import { join as pathJoin, basename, dirname } from "path";
 import os from "os";
@@ -7,6 +7,11 @@ import { z } from "zod/mini";
 import { scrubSecrets } from "../../shared/utils/secretScrubber.js";
 import { buildProbeEnv } from "../utils/spawnEnv.js";
 import { resilientAtomicWriteFile } from "../utils/fs.js";
+import { stripUtf8Bom } from "../utils/stripUtf8Bom.js";
+import {
+  killWindowsProcessTreeInBackground,
+  liveChildTreeTarget,
+} from "../utils/windowsTreeKill.js";
 import type { WorktreeMonitor } from "./WorktreeMonitor.js";
 import type {
   LifecycleCommandReview,
@@ -178,7 +183,7 @@ async function fileExists(p: string): Promise<boolean> {
 async function readJsonFile(p: string): Promise<unknown | null> {
   try {
     const raw = await readFile(p, "utf-8");
-    return JSON.parse(raw);
+    return JSON.parse(stripUtf8Bom(raw));
   } catch {
     return null;
   }
@@ -394,7 +399,8 @@ export class WorktreeLifecycleService {
    * Run an array of shell commands sequentially in a given directory.
    * Each command is spawned with a minimal env + DAINTREE_* vars.
    * A shared timeout covers the entire set of commands.
-   * On Unix, process group kill terminates the whole tree; on Windows, taskkill /T is used.
+   * On Unix, process group kill terminates the whole tree; on Windows, a creation-time-verified
+   * tree kill is used (never `taskkill /T`, which can follow a reused parent PID).
    *
    * When `options.logDir` is set, a per-run scrubbed log is persisted there
    * after the run completes. Empty command arrays short-circuit with no log
@@ -521,18 +527,25 @@ export class WorktreeLifecycleService {
         cwd,
         shell: true,
         detached: !isWin,
+        windowsHide: true,
         env: buildSpawnEnv(env),
       });
 
       let timedOut = false;
       let aborted = false;
 
+      let windowsTreeKill: Promise<unknown> | null = null;
       const killProcess = () => {
         if (isWin) {
           if (child.pid !== undefined) {
-            spawnSync("taskkill", ["/F", "/T", "/PID", child.pid.toString()], {
-              windowsHide: true,
-            });
+            // In the background, so a timed-out setup command never stalls the
+            // workspace host's thread on a PowerShell start; the run settles on
+            // the root's `close`, which the kill brings. One kill per run, and
+            // none once the root has exited and its PID is free for reuse.
+            const target = liveChildTreeTarget(child);
+            if (target) {
+              windowsTreeKill ??= killWindowsProcessTreeInBackground(target, "[WorktreeLifecycle]");
+            }
           } else {
             child.kill();
           }
@@ -834,6 +847,79 @@ export class WorktreeLifecycleService {
   }
 
   /**
+   * The resource block a setup run provisions, and the prefix its commands
+   * carry in a command review. Prefers `resources` (plural) over `resource`,
+   * then falls back to the project settings environment the worktree is in.
+   */
+  private async resolveSetupResource(
+    config: DaintreeLifecycleConfig | null,
+    environmentId: string | undefined,
+    worktreeMode: () => string | undefined,
+    projectRootPath: string
+  ): Promise<{
+    resource: ResourceConfig | undefined;
+    environments: ResolvedResourceEnvironments | null;
+    labelPrefix: string | undefined;
+  }> {
+    if (config?.resources) {
+      const named = ownResource(config.resources, environmentId);
+      if (named) {
+        return { resource: named, environments: null, labelPrefix: `Resource "${environmentId}"` };
+      }
+      if (config.resources["default"]) {
+        return {
+          resource: config.resources["default"],
+          environments: null,
+          labelPrefix: 'Resource "default"',
+        };
+      }
+      const [first] = Object.keys(config.resources);
+      if (first !== undefined) {
+        return {
+          resource: config.resources[first],
+          environments: null,
+          labelPrefix: `Resource "${first}"`,
+        };
+      }
+    }
+    if (config?.resource) {
+      return { resource: config.resource, environments: null, labelPrefix: "Resource" };
+    }
+
+    const envKey = worktreeMode();
+    if (envKey && envKey !== "local") {
+      const envs = await this.resolveProjectResourceEnvironments(projectRootPath);
+      const resource = ownResource(envs?.environments, envKey);
+      if (resource) {
+        return { resource, environments: envs, labelPrefix: `Environment "${envKey}"` };
+      }
+    }
+    return { resource: undefined, environments: null, labelPrefix: undefined };
+  }
+
+  /**
+   * Label of the review group whose commands provision the resource a setup
+   * run would provision, when that block has provision commands.
+   */
+  async setupProvisionLabel(
+    worktreePath: string,
+    projectRootPath: string,
+    environmentId: string | undefined,
+    worktreeMode: string | undefined
+  ): Promise<string | undefined> {
+    const config = (await this.resolveConfig(worktreePath, projectRootPath))?.config ?? null;
+    const { resource, labelPrefix } = await this.resolveSetupResource(
+      config,
+      environmentId,
+      () => worktreeMode,
+      projectRootPath
+    );
+    return resource?.provision?.some((command) => command.length > 0)
+      ? `${labelPrefix} provision`
+      : undefined;
+  }
+
+  /**
    * Orchestrate the setup phase for a worktree: load+resolve config, cache
    * resource metadata on the monitor, run any setup commands, and report
    * progress via the monitor's lifecycle status.
@@ -860,34 +946,13 @@ export class WorktreeLifecycleService {
     const projectRootPath = ctx.projectRootPath;
     const resolvedConfig = await this.resolveConfig(worktreePath, projectRootPath);
     const config = resolvedConfig?.config ?? null;
-    let resourceEnvironments: ResolvedResourceEnvironments | null = null;
-
-    // Resolve resource config: prefer resources (plural) over resource (singular)
-    let resolvedResource = config?.resource;
-    if (config?.resources) {
-      const named = ownResource(config.resources, environmentId);
-      if (named) {
-        resolvedResource = named;
-      } else if (config.resources["default"]) {
-        resolvedResource = config.resources["default"];
-      } else {
-        const keys = Object.keys(config.resources);
-        if (keys.length > 0) {
-          resolvedResource = config.resources[keys[0]];
-        }
-      }
-    }
-
-    // Fallback: resolve from project settings resourceEnvironments
-    if (!resolvedResource) {
-      const monitor = ctx.getMonitor(worktreeId);
-      const envKey = monitor?.worktreeMode;
-      if (envKey && envKey !== "local") {
-        const envs = await this.resolveProjectResourceEnvironments(projectRootPath);
-        resolvedResource = ownResource(envs?.environments, envKey);
-        if (resolvedResource) resourceEnvironments = envs;
-      }
-    }
+    const { resource: resolvedResource, environments: resourceEnvironments } =
+      await this.resolveSetupResource(
+        config,
+        environmentId,
+        () => ctx.getMonitor(worktreeId)?.worktreeMode,
+        projectRootPath
+      );
 
     const resourceApproved = resolvedResource
       ? await this.isResourceApproved(resolvedConfig, resourceEnvironments, projectRootPath)

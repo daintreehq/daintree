@@ -4,6 +4,10 @@ import path from "path";
 
 const APP_LAYOUT_PATH = path.resolve(__dirname, "../AppLayout.tsx");
 const SIDEBAR_PATH = path.resolve(__dirname, "../Sidebar.tsx");
+const APP_PATH = path.resolve(__dirname, "../../../App.tsx");
+const TOOLBAR_PATH = path.resolve(__dirname, "../Toolbar.tsx");
+const TERMINAL_DOCK_PATH = path.resolve(__dirname, "../TerminalDockRegion.tsx");
+const PORTAL_DOCK_PATH = path.resolve(__dirname, "../../Portal/PortalDock.tsx");
 
 describe("AppLayout sidebar visibility — issue #5023 hide on welcome screen", () => {
   let source: string;
@@ -238,21 +242,6 @@ describe("AppLayout drag-resize transition gating — issue #7627", () => {
 
   beforeEach(async () => {
     source = await fs.readFile(APP_LAYOUT_PATH, "utf-8");
-  });
-
-  it("imports flushSync so the gating class is removed before the first mousemove", () => {
-    // React 19 batches state updates. Without flushSync, setIsSidebarResizing
-    // doesn't reach the DOM until the next render, which can leave one eased
-    // frame at the start of the drag. flushSync forces the class strip to
-    // happen synchronously inside the mousedown handler.
-    expect(source).toContain('import { createPortal, flushSync } from "react-dom"');
-  });
-
-  it("tracks per-panel drag-resize state in AppLayout", () => {
-    expect(source).toContain("const [isSidebarResizing, setIsSidebarResizing] = useState(false)");
-    expect(source).toContain(
-      "const [isAssistantResizing, setIsAssistantResizing] = useState(false)"
-    );
   });
 
   it("flushes the resize-start setter so the transition class disappears before mousemove", () => {
@@ -586,11 +575,6 @@ describe("AppLayout grid-measurement hydration unlock — issue #10827", () => {
     source = await fs.readFile(APP_LAYOUT_PATH, "utf-8");
   });
 
-  it("imports the hydration unlock from the layout-transition lock module", () => {
-    expect(source).toContain("unlockSidebarHydration");
-    expect(source).toContain('from "@/lib/layoutTransitionLock"');
-  });
-
   it("releases the hydration lock in an effect once the hydrating flag clears", () => {
     // The passive effect runs after React commits the restored sidebarWidth (and
     // the cleared flag) into the DOM, so grid/pane measurement subscribers fire
@@ -620,4 +604,533 @@ describe("AppLayout grid-measurement hydration unlock — issue #10827", () => {
     );
     expect(source).toMatch(/clearTimeout\(fallback\)/);
   });
+});
+
+// Issue #10693: the assistant pane is shown/hidden with an off-canvas slide. A
+// fixed-width wrapper animates `transform: translateX` (composited — no layout,
+// no ResizeObserver, terminal geometry stable) while a sibling layout spacer
+// animates its width 0↔helpPanelWidth to drive the <main> push. The spacer is
+// the grid-reflow driver, so it arms the resize lock; the wrapper's transform
+// settle issues the corrective repaint and parks the wrapper inert on hide.
+describe("AppLayout assistant off-canvas slide — issue #10693", () => {
+  let source: string;
+
+  beforeEach(async () => {
+    source = await fs.readFile(APP_LAYOUT_PATH, "utf-8");
+  });
+
+  it("arms the grid-resize lock on the spacer's width-transition start", () => {
+    const handler = source.match(
+      /const handleAssistantSpacerTransitionStart = useCallback\(([\s\S]*?)\n {2}\);/
+    );
+    expect(handler).not.toBeNull();
+    expect(handler![1]).toContain('event.propertyName === "width"');
+    expect(handler![1]).toContain("event.target === event.currentTarget");
+    expect(handler![1]).toContain("suppressSidebarResizes()");
+  });
+
+  it("repaints and parks inert when the wrapper's transform slide settles", () => {
+    const handler = source.match(
+      /const handleAssistantTransitionEnd = useCallback\(([\s\S]*?)\n {2}\);/
+    );
+    expect(handler).not.toBeNull();
+    // Filters on transform (the property the wrapper now animates), not width.
+    expect(handler![1]).toContain('event.propertyName === "transform"');
+    expect(handler![1]).toContain("event.target === event.currentTarget");
+    // #11070: the settle carries the show/hide direction, so a hide-settle cancels
+    // the reveal obligation instead of arming one against a parked pane.
+    expect(handler![1]).toContain("assistantReveal.settleAfterTransition(showAssistant)");
+    // Inert is only set on a hide (slide-out), never on reveal.
+    expect(handler![1]).toContain("if (!showAssistant) setAssistantInert(true)");
+  });
+
+  // Issue #11070: on a cold first open the slide settles while the assistant
+  // session is still provisioning, so there is no terminalId to repaint. The
+  // repaint must survive as an obligation the coordinator discharges once the
+  // terminal binds — not be dropped on the floor.
+  it("owns a reveal coordinator whose lifetime is the layout's", () => {
+    expect(source).toMatch(
+      /const \[assistantReveal\] = useState\(createAssistantRevealCoordinator\)/
+    );
+    // Subscription installed via effect (never at module scope) and disposed with
+    // the component.
+    expect(source).toContain("useEffect(() => assistantReveal.start(), [assistantReveal])");
+  });
+
+  it("cancels the obligation on the hide STATE change, not at the hide slide's end", () => {
+    // A terminal that binds while the panel is sliding away must not repaint into
+    // a hidden pane, so visibility is tracked as it flips — ahead of transitionend.
+    expect(source).toMatch(/assistantReveal\.setVisible\(showAssistant\)/);
+  });
+
+  it("drives the push with a width-animated spacer that arms the lock", () => {
+    expect(source).toContain("onTransitionStart={handleAssistantSpacerTransitionStart}");
+    // The spacer is the element that animates width now.
+    expect(source).toMatch(
+      /aria-hidden[\s\S]*?transition-\[width\][\s\S]*?style=\{\{ width: effectiveAssistantWidth \}\}/
+    );
+  });
+
+  it("slides the fixed-width wrapper with a composited transform", () => {
+    // The wrapper animates transform, not width: its width is the constant
+    // helpPanelWidth and it translateX-es off-canvas when hidden.
+    expect(source).toContain("transition-transform");
+    expect(source).toMatch(/transform: showAssistant\s*\n?\s*\?\s*"translateX\(0\)"/);
+    expect(source).toMatch(/translateX\(\$\{layout\.helpPanelWidth\}px\)/);
+    expect(source).toContain("onTransitionEnd={handleAssistantTransitionEnd}");
+    expect(source).toContain("inert={assistantInert}");
+  });
+
+  it("gates both the spacer width and wrapper transform transitions during drag-resize", () => {
+    // Both animated properties must be suppressed while isAssistantResizing so a
+    // drag tracks the cursor 1:1 (#7642/#7627). Reduced motion is carried by
+    // the app-aware `motion-reduce:` variant on the same class strings.
+    const gatedBlocks = source.match(/!isAssistantResizing &&\s*\n\s*\(showAssistant/g);
+    expect(gatedBlocks).not.toBeNull();
+    expect(gatedBlocks!.length).toBeGreaterThanOrEqual(2);
+  });
+
+  it("does not wire transitioncancel (the final transitionend resolves rapid toggles)", () => {
+    expect(source).not.toContain("onTransitionCancel");
+  });
+
+  // Issue #10704: the slide must use asymmetric Tier-3 panel-motion timing —
+  // decelerate on enter (200ms ease-out-expo), accelerate on exit (120ms
+  // ease-panel-minimize) — switched on showAssistant, not a symmetric 250ms.
+  it("uses asymmetric panel-motion-tier timing switched on showAssistant", () => {
+    // Anchor to the assistant region (first aria-hidden = the spacer) so the
+    // sidebar width transition isn't captured.
+    const region = source.match(
+      /aria-hidden[\s\S]*?onTransitionEnd=\{handleAssistantTransitionEnd\}/
+    );
+    expect(region).not.toBeNull();
+    const slide = region![0];
+
+    // Bind direction to branch: the enter (200ms decelerate) class must sit on
+    // the `showAssistant ?` true-arm and the exit (120ms accelerate) class on
+    // the `:` false-arm. A bare toContain would pass even if the branches were
+    // swapped (both strings exist either way), so match the ternary shape.
+    // `transitionClass` is the literal (regex-escaped) transition utility: the
+    // spacer animates width via `transition-[width]`, the wrapper slides via
+    // `transition-transform`.
+    const ternary = (transitionClass: string): RegExp =>
+      new RegExp(
+        `showAssistant\\s*\\?\\s*"${transitionClass} duration-\\[var\\(--duration-200\\)\\] ease-\\[var\\(--ease-out-expo\\)\\][^"]*"\\s*:\\s*"${transitionClass} duration-\\[var\\(--duration-120\\)\\] ease-\\[var\\(--ease-panel-minimize\\)\\]`
+      );
+    // The spacer (width push) and the wrapper (transform slide) must carry
+    // identical timing per direction or the push and slide visibly desync.
+    expect(slide).toMatch(ternary("transition-\\[width\\]"));
+    expect(slide).toMatch(ternary("transition-transform"));
+    // The old symmetric 250ms is gone from the assistant slide (it remains
+    // correct for the sidebar above this region).
+    expect(slide).not.toContain("--duration-250");
+  });
+
+  it("settles inert/repaint itself for every path that suppresses the transition", () => {
+    // reduce-animations, performance mode, OS prefers-reduced-motion, and an
+    // in-flight drag-resize all strip the transform transition, so no
+    // transitionend arrives — the effect must settle inert + repaint on its own.
+    const settle = source.match(/const settle = \(\) => \{([\s\S]*?)\n {4}\};/);
+    expect(settle).not.toBeNull();
+    expect(settle![1]).toContain("reduceAnimations");
+    expect(settle![1]).toContain("layout.performanceMode");
+    expect(settle![1]).toContain("isAssistantResizing");
+    expect(settle![1]).toContain("mql?.matches === true");
+    // This path only ever runs on a show, so it settles the obligation as shown —
+    // but NOT during a drag-resize. A drag also strips the transition, and the
+    // reveal repaint's reconcileGeometryFresh is lock-exempt, so settling there
+    // would assert geometry mid-drag against the lock that keeps the handle
+    // tracking the cursor 1:1. The drag owns its own geometry.
+    expect(settle![1]).toContain(
+      "if (noTransition && !isAssistantResizing) assistantReveal.settleAfterTransition(true)"
+    );
+    // The media query is subscribed so an OS reduced-motion flip mid-slide still
+    // parks the wrapper inert (the read alone would not re-run).
+    expect(source).toContain('mql?.addEventListener("change", settle)');
+    expect(source).toContain('mql?.removeEventListener("change", settle)');
+  });
+});
+
+describe("AppLayout global banner mount — issue #9530", () => {
+  let source: string;
+
+  beforeEach(async () => {
+    source = await fs.readFile(APP_LAYOUT_PATH, "utf-8");
+  });
+
+  it("lazily defines and eagerly preloads the GlobalBannerCoordinator", () => {
+    expect(source).toContain(
+      'function preloadGlobalBannerCoordinator() {\n  return import("../Recovery/GlobalBannerCoordinator");'
+    );
+    expect(source).toContain("const LazyGlobalBannerCoordinator = lazy(");
+    // safeMode is set synchronously during hydration, so the chunk must be
+    // inflight before the first post-hydration render can suspend.
+    expect(source).toContain("void preloadGlobalBannerCoordinator();");
+  });
+
+  it("mounts the banner inside the flex column, after PortalVisibilityController and before the inert toolbar wrapper", () => {
+    // Issue #9530: mounting the coordinator as a block-flow sibling above the
+    // 100vh AppLayout root overflowed the viewport and clipped the dock. The
+    // banner must be a direct child of the h-screen flex column so its
+    // shrink-0 height is subtracted from the flex-1 content area instead.
+    // Since #11893 the coordinator sits inside a measured wrapper, which is now
+    // the direct flex child carrying shrink-0 — the ordering invariant is
+    // unchanged, and the wrapper must hold the coordinator and nothing else.
+    expect(source).toMatch(
+      /<PortalVisibilityController \/>\s*(?:\{\/\*[\s\S]*?\*\/\}\s*)?<div(?=[^>]*className="shrink-0")[^>]*>\s*<Suspense fallback=\{null\}>\s*<LazyGlobalBannerCoordinator \/>\s*<\/Suspense>\s*<\/div>\s*<div \{\.\.\.\(chromeInert \? \{ inert: true \}/
+    );
+  });
+});
+
+describe("AppLayout publishes the global banner height — issue #11893", () => {
+  let source: string;
+
+  beforeEach(async () => {
+    source = await fs.readFile(APP_LAYOUT_PATH, "utf-8");
+  });
+
+  // What the publisher DOES — measure, clamp, republish, clean up — is covered
+  // behaviorally in src/hooks/__tests__/useGlobalBannerHeightVar.test.tsx. This
+  // suite only pins the wiring that a source scan can see: that AppLayout hands
+  // the hook the two elements it needs.
+
+  it("measures the wrapper that holds the coordinator and nothing else", () => {
+    // The measured element must contain ONLY the coordinator, so its height IS
+    // the banner height. Measuring a neighbour instead (the toolbar wrapper's
+    // top edge, or the content row's size) goes stale in the degenerate cases:
+    // a banner that grows while FleetArmingRibbon shrinks by the same amount, or
+    // one that grows after the content area has collapsed to 0 — both leave
+    // every other element's size untouched.
+    expect(source).toMatch(/useGlobalBannerHeightVar\(bannerEl\)/);
+    expect(source).toMatch(
+      /<div(?=[^>]*ref=\{setBannerEl\})[^>]*>\s*<Suspense fallback=\{null\}>\s*<LazyGlobalBannerCoordinator \/>\s*<\/Suspense>\s*<\/div>/
+    );
+  });
+});
+
+describe("App.tsx no longer owns the global banner — issue #9530", () => {
+  let source: string;
+
+  beforeEach(async () => {
+    source = await fs.readFile(APP_PATH, "utf-8");
+  });
+
+  it("does not import, lazy-define, or mount the GlobalBannerCoordinator", () => {
+    expect(source).not.toContain("GlobalBannerCoordinator");
+    expect(source).not.toContain("preloadGlobalBannerCoordinator");
+    expect(source).not.toContain("LazyGlobalBannerCoordinator");
+  });
+});
+
+// Issue #9641: focus-mode gesture and the toolbar toggle are independent gates
+// over Assistant visibility. AppLayout must snapshot the toolbar preference
+// (helpPanelStore.isOpen) on gesture entry and restore it on exit — symmetric
+// with the sidebar — without collapsing the two gates into one flag.
+describe("AppLayout focus-mode assistant reconciliation — issue #9641", () => {
+  let source: string;
+
+  beforeEach(async () => {
+    source = await fs.readFile(APP_LAYOUT_PATH, "utf-8");
+  });
+
+  it("captures the toolbar isOpen preference at gesture entry and passes it to toggleFocusMode", () => {
+    // The capture must read from the store imperatively (synchronously) at
+    // entry so the value can't drift before the exit restores it.
+    expect(source).toContain("const assistantWasOpen = useHelpPanelStore.getState().isOpen");
+  });
+
+  it("restores the assistant via helpPanelStore.setOpen on gesture exit", () => {
+    expect(source).toContain("useHelpPanelStore.getState().setOpen(assistantWasOpen)");
+  });
+
+  it("gates the exit restore on the gesture having hidden the assistant", () => {
+    // Symmetric with the sidebar revert ("the snapshot only owns the deltas it
+    // caused"): an assistant the gesture never hid must not be touched on exit.
+    expect(source).toContain("const restoreAssistant = snapshot.hidAssistant");
+    expect(source).toMatch(
+      /if \(restoreAssistant\) \{\s*\n\s*useHelpPanelStore\.getState\(\)\.setOpen/
+    );
+  });
+});
+
+describe("ARIA page landmarks — issue #5416", () => {
+  describe("AppLayout <main>", () => {
+    let source: string;
+    beforeEach(async () => {
+      source = await fs.readFile(APP_LAYOUT_PATH, "utf-8");
+    });
+
+    it("labels the main content landmark", () => {
+      expect(source).toMatch(/<main[^>]*aria-label="Content"/);
+    });
+  });
+
+  describe("Toolbar <header> banner wrapper", () => {
+    let source: string;
+    beforeEach(async () => {
+      source = await fs.readFile(TOOLBAR_PATH, "utf-8");
+    });
+
+    it("wraps the toolbar in a <header> for the banner landmark", () => {
+      expect(source).toMatch(/return \(\s*<header>/);
+      expect(source).toMatch(/<\/header>\s*\);/);
+    });
+
+    it("keeps role=toolbar and toolbarRef on the inner div, not on <header>", () => {
+      // The roving-tabindex contract relies on toolbarRef pointing at the
+      // role=toolbar container so its [data-toolbar-item] descendants can be
+      // queried. Moving the ref onto <header> would break that lookup.
+      //
+      // Matched on the div rather than on `<header>` being adjacent to it: the
+      // toolbar's brand marks are wrapped in a `BrandSurface` provider, which
+      // renders no DOM of its own and so leaves the landmark shape untouched
+      // while sitting between the two tags in source.
+      expect(source).toMatch(/<div\s+ref=\{toolbarRef\}\s+role="toolbar"/);
+      expect(source).not.toMatch(/<header[^>]*(?:role=|ref=)/);
+      // The banner still has to CONTAIN the toolbar — only wrappers that add no
+      // element around it (the brand-surface provider, and the empty-space
+      // context menu, which clones the root rather than wrapping it) are
+      // allowed between the two tags.
+      expect(source).toMatch(/<header>[\s\S]{0,400}?<div\s+ref=\{toolbarRef\}\s+role="toolbar"/);
+    });
+  });
+
+  describe("Sidebar <aside>", () => {
+    let source: string;
+    beforeEach(async () => {
+      source = await fs.readFile(SIDEBAR_PATH, "utf-8");
+    });
+
+    it("uses an <aside> region landmark with an accessible name", () => {
+      expect(source).toMatch(/<aside[\s\S]*?aria-label="Sidebar"/);
+      expect(source).toMatch(/<aside[\s\S]*?role="region"/);
+    });
+  });
+
+  describe("TerminalDockRegion <aside>", () => {
+    let source: string;
+    beforeEach(async () => {
+      source = await fs.readFile(TERMINAL_DOCK_PATH, "utf-8");
+    });
+
+    it("uses an <aside> region landmark with an accessible name when populated", () => {
+      // The landmark role/name are conditional on dock contents (#9527): a
+      // populated dock is a named "Dock" region; an empty one drops both.
+      expect(source).toMatch(/aria-label=\{shouldInertDock \? undefined : "Dock"\}/);
+      expect(source).toMatch(/role=\{shouldInertDock \? "none" : "region"\}/);
+    });
+
+    it("keeps tabIndex=-1 so the macro-focus cycler can target it", () => {
+      expect(source).toMatch(/<aside[\s\S]*?tabIndex=\{-1\}/);
+    });
+
+    it("does not aria-hide the dock landmark", () => {
+      // The dock always renders interactive content (Help Agent button,
+      // status containers), so aria-hidden would trap focusable controls
+      // beneath aria-hidden=true and fail axe's aria-hidden-focus rule.
+      // role="none" drops the empty landmark instead — see test below.
+      expect(source).not.toMatch(/aria-hidden/);
+    });
+
+    it("drops the landmark role instead of inerting the empty dock (#9527)", () => {
+      // When no panels are docked and no status affordances are visible, the
+      // aside is a dead-end landmark, so its role/name are dropped. It must NOT
+      // be `inert` — the launch button and context menu are always rendered and
+      // must stay interactive so users can spawn an agent from an empty dock.
+      expect(source).toMatch(/const shouldInertDock = !hasDocked && !hasStatus;/);
+      expect(source).not.toMatch(/inert=/);
+    });
+
+    it("keeps the macro-focus visibility gate keyed on hasDocked only", () => {
+      // This is the independent keyboard macro-nav guard that excludes an empty
+      // dock from region cycling — it must stay keyed on hasDocked, not hasStatus.
+      expect(source).toMatch(/setVisibility\("dock", hasDocked\)/);
+    });
+  });
+
+  describe("PortalDock <aside>", () => {
+    let source: string;
+    beforeEach(async () => {
+      source = await fs.readFile(PORTAL_DOCK_PATH, "utf-8");
+    });
+
+    it("uses an <aside> region landmark with an accessible name", () => {
+      expect(source).toMatch(/<aside[\s\S]*?aria-label="Portal"/);
+      expect(source).toMatch(/<aside[\s\S]*?role="region"/);
+    });
+
+    it("keeps tabIndex=-1 so the macro-focus cycler can target it", () => {
+      expect(source).toMatch(/<aside[\s\S]*?tabIndex=\{-1\}/);
+    });
+
+    it("links the resize separator to the panel it controls via aria-controls", () => {
+      expect(source).toMatch(/<ResizeHandle[\s\S]*?aria-controls="portal-placeholder"/);
+    });
+  });
+});
+
+describe("AppLayout theme browser mount gate — issue #5738", () => {
+  let source: string;
+
+  beforeEach(async () => {
+    source = await fs.readFile(APP_LAYOUT_PATH, "utf-8");
+  });
+
+  it("reads the mount gate from the store, not from the overlay claim", () => {
+    // The overlay claim is registered by ThemeBrowser's own useEffect, so using
+    // it as the mount gate produces a chicken-and-egg deadlock (the regression
+    // from PR #5721). The gate must be driven by the store's isOpen flag.
+    expect(source).toContain("const themeBrowserOpen = useThemeBrowserStore((s) => s.isOpen)");
+    // The portal stays mounted through the sheet's exit, so it is gated on the
+    // presence the store flag drives rather than on the flag itself.
+    expect(source).toMatch(/useAnimatedPresence\(\{\s*isOpen: themeBrowserOpen,/);
+    expect(source).toMatch(/\{themeBrowserRendered &&\s*\n\s*createPortal\(/);
+  });
+
+  it("keeps the overlay-claim variable for inert on blocked wrappers", () => {
+    // The overlay claim is the correct signal for inert because it fires after
+    // ThemeBrowser has mounted — intended PR #5721 behavior. inert on the
+    // toolbar + main-content wrappers prevents interaction with blocked UI.
+    // Since #9558 the inert guard ORs the theme-browser and plugin-manager
+    // claims into a single `chromeInert` signal, so both full-screen overlays
+    // block the chrome the same way.
+    expect(source).toContain('const isThemeBrowserOpen = useOverlayOpen("theme-browser")');
+    expect(source).toContain("const chromeInert = isThemeBrowserOpen || isPluginManagerOpen");
+    expect(source).toContain("chromeInert ? { inert: true } : {}");
+  });
+});
+
+describe("AppLayout theme browser overlay structure — issue #5791", () => {
+  /**
+   * The theme-browser shield element, from its opening `<div` to the `/>` that
+   * closes it. Assertions about the shield must read only this — the portal
+   * block around it contains a close() call and several other class strings.
+   */
+  function extractShield(src: string): string {
+    const start = src.indexOf('className="fixed inset-0 z-[var(--z-panel-scrim)] bg-scrim-soft');
+    expect(start, "theme-browser shield not found in AppLayout").toBeGreaterThan(-1);
+    const open = src.lastIndexOf("<div", start);
+    const end = src.indexOf("/>", start);
+    expect(end, "theme-browser shield is not a self-closing element").toBeGreaterThan(open);
+    return src.slice(open, end + 2);
+  }
+
+  let source: string;
+
+  beforeEach(async () => {
+    source = await fs.readFile(APP_LAYOUT_PATH, "utf-8");
+  });
+
+  it("portals the ThemeBrowser out of the inert subtree", () => {
+    // Bug 1: rendering inside the inert main-content wrapper made the picker
+    // itself unclickable. Portaling to document.body escapes the inert ancestor.
+    expect(source).toMatch(/import \{ createPortal(?:, flushSync)? \} from "react-dom"/);
+    expect(source).toMatch(/createPortal\([\s\S]*?<LazyThemeBrowser \/>[\s\S]*?document\.body/);
+  });
+
+  it("renders scrim as a sibling of the panel, not an ancestor", () => {
+    // Bug 2: backdrop-filter on an ancestor creates a containing block for
+    // position:fixed children (lesson #2574). The scrim must be a flat sibling
+    // of the panel.
+    expect(source).toMatch(
+      /className="fixed inset-0 z-\[var\(--z-panel-scrim\)\] bg-scrim-soft\/30[^"]*"/
+    );
+  });
+
+  it("blurs the workspace only on hover, and never animates the blur", () => {
+    // The rule is about HOW the blur is applied, not whether one exists. At
+    // rest the shield must be tint-only so the live theme preview stays sharp
+    // enough to judge. The blur may only appear under the pointer, and it must
+    // snap: an animated full-viewport backdrop-filter re-rasterized every
+    // frame while the preview repainted beneath it, which is why the original
+    // hover blur was removed (8fb4b3e672). Colours may transition; the filter
+    // may not.
+    const shield = extractShield(source);
+    expect(shield).toMatch(/hover:backdrop-blur/);
+    expect(shield).not.toMatch(/(?<!hover:)backdrop-blur/);
+    expect(shield).not.toMatch(
+      /transition-\[[^\]]*backdrop|transition-all|(?<![-\w])transition(?![-\w])/
+    );
+  });
+
+  it("cancels the preview when the shield is clicked", () => {
+    // Click-away must dismiss: the panel is modal, the app behind it is inert,
+    // and a click that lands on the shield with no effect reads as a frozen
+    // app. Closing unmounts ThemeBrowser, whose cleanup restores the committed
+    // theme — so dismissal and preview-revert are the same path.
+    //
+    // Scoped to the shield ELEMENT, not to a window of characters around it: a
+    // neighbourhood match here was satisfied by the ErrorBoundary's own close()
+    // call a few lines below and kept passing with the shield's handler deleted.
+    const shield = extractShield(source);
+    expect(shield).toMatch(/onClick=\{/);
+    expect(shield).toMatch(/close\(\)/);
+  });
+
+  it("anchors the panel with fixed positioning below the toolbar", () => {
+    // Bug 3: absolute + h-full inside <main> was bounded by the flex cell.
+    // fixed + bottom-0 anchors to the viewport regardless of docks/panels below,
+    // and the top edge is driven by OVERLAY_TOP_OFFSET (see #11893 below).
+    expect(source).toMatch(
+      /<div(?=[^>]*className="(?=[^"]*\bfixed\b)(?=[^"]*\bbottom-0\b)[^"]*")(?=[^>]*style=\{\{[\s\S]{0,200}?\btop:\s*OVERLAY_TOP_OFFSET\b)[^>]*>[\s\S]{0,100}?<LazyThemeBrowser\s*\/>/
+    );
+  });
+
+  it("offsets the panel by the toolbar height PLUS the banner height — issue #11893", () => {
+    // A global banner pushes the --z-toolbar toolbar below 48px, so the old static
+    // top-12 left the panel's top strip (hero ✕ close) painted under it. The
+    // offset must ADD the measured banner height to the toolbar's own height —
+    // replacing one with the other would just move the clipping around. The
+    // toolbar's base height is deliberately not pinned here: changing it should
+    // not force a mirrored test edit.
+    expect(source).toMatch(
+      /const OVERLAY_TOP_OFFSET = "calc\([^"+]+\+\s*var\(--global-banner-height,\s*0px\)\)"/
+    );
+    // The static offset must not come back.
+    expect(source).not.toContain("fixed top-12 bottom-0");
+  });
+
+  it("anchors ThemeBrowser right edge via shared --right-obstruction-offset (issues #6629, #6800)", () => {
+    // Both the Portal and the Assistant occupy the right edge of the viewport.
+    // ThemeBrowser must step left of whichever is wider — and previously, when
+    // only the Assistant was open, ThemeBrowser used `right: "0px"` and
+    // overlapped the panel. Routing through the shared CSS var fixes both
+    // cases with a single source of truth. The var was renamed from
+    // --portal-right-offset to --right-obstruction-offset in #6800 so that
+    // toolbar dropdowns can keep using --portal-right-offset (portal-only)
+    // without dodging the Assistant.
+    expect(source).toContain('right: "var(--right-obstruction-offset, 0px)"');
+    // The old hand-computed ternary must not be reintroduced.
+    expect(source).not.toMatch(/right: layout\.portalOpen \? `\$\{layout\.portalWidth\}px` :/);
+  });
+});
+
+describe("Right-obstruction CSS var consumers (issue #6800)", () => {
+  // Source-scan guard: every fixed body-portaled consumer that should dodge
+  // both Portal and Assistant must read --right-obstruction-offset, NOT
+  // --portal-right-offset. The latter is portal-only and reserved for
+  // toolbar dropdowns (FixedDropdown).
+  const consumers = [
+    {
+      name: "popover collision boundary",
+      file: path.resolve(__dirname, "../../ui/popover.tsx"),
+    },
+    { name: "toaster", file: path.resolve(__dirname, "../../ui/toaster.tsx") },
+    {
+      name: "ReEntrySummary",
+      file: path.resolve(__dirname, "../../ui/ReEntrySummary.tsx"),
+    },
+    {
+      name: "GettingStartedChecklist",
+      file: path.resolve(__dirname, "../../Onboarding/GettingStartedChecklist.tsx"),
+    },
+  ];
+
+  for (const { name, file } of consumers) {
+    it(`${name} reads --right-obstruction-offset, not --portal-right-offset`, async () => {
+      const source = await fs.readFile(file, "utf-8");
+      expect(source).toContain("--right-obstruction-offset");
+      expect(source).not.toContain("--portal-right-offset");
+    });
+  }
 });

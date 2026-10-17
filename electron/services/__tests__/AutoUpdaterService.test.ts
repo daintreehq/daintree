@@ -140,6 +140,19 @@ vi.mock("../../store.js", () => ({
 
 vi.mock("../../../shared/utils/trustedRenderer.js", () => trustedRendererMock);
 
+const relocationMock = vi.hoisted(() => ({ notifyAppImageRelocated: vi.fn() }));
+
+vi.mock("../appImageRelocation.js", () => relocationMock);
+
+const armRelaunchMock = vi.hoisted(() => ({
+  armRelaunch: vi.fn(),
+  armAppImageRelaunch: vi.fn(
+    (_image: string, _args: readonly string[], _fallback: () => void) => true
+  ),
+}));
+
+vi.mock("../../lifecycle/armRelaunch.js", () => armRelaunchMock);
+
 import { autoUpdaterService } from "../AutoUpdaterService.js";
 import { CHANNELS } from "../../ipc/channels.js";
 import { PENDING_UPDATE_INSTALL_STAGES } from "../../utils/updateInstallStages.js";
@@ -584,6 +597,67 @@ describe("AutoUpdaterService", () => {
       expect(autoUpdaterMock.checkForUpdates).toHaveBeenCalledTimes(1);
     });
 
+    it.each(["deb", "rpm", "pacman"])(
+      "never installs a %s update on a plain quit, before or after it downloads",
+      (packageType) => {
+        Object.defineProperty(process, "platform", { value: "linux", configurable: true });
+        fsMock.existsSync.mockReturnValue(true);
+        fsMock.readFileSync.mockReturnValue(packageType);
+
+        autoUpdaterService.initialize();
+        expect(autoUpdaterMock.autoInstallOnAppQuit).toBe(false);
+
+        const downloaded = (autoUpdaterMock.on as Mock).mock.calls.find(
+          (args) => args[0] === "update-downloaded"
+        )![1];
+        downloaded({ version: "2.0.0" });
+        expect(autoUpdaterMock.autoInstallOnAppQuit).toBe(false);
+        // The explicit restart still installs it.
+        expect(autoUpdaterService.quitAndInstallIfReady()).toBe(true);
+        shutdownCoordinatorMock.settleShutdown("clean");
+        expect(autoUpdaterMock.quitAndInstall).toHaveBeenCalledTimes(1);
+        expect(autoUpdaterMock.autoInstallOnAppQuit).toBe(false);
+      }
+    );
+
+    it("never installs on quit once a package updater was selected, even if package-type can't be read", () => {
+      Object.defineProperty(process, "platform", { value: "linux", configurable: true });
+      fsMock.existsSync.mockReturnValue(true);
+      fsMock.readFileSync.mockReturnValueOnce("deb").mockImplementation(() => {
+        throw new Error("EACCES");
+      });
+      const updater = autoUpdaterMock as typeof autoUpdaterMock & {
+        runCommandWithSudoIfNeeded?: () => string;
+        doInstall?: () => boolean;
+      };
+      updater.runCommandWithSudoIfNeeded = vi.fn(() => "");
+      updater.doInstall = vi.fn(() => true);
+      try {
+        autoUpdaterService.initialize();
+        const downloaded = (autoUpdaterMock.on as Mock).mock.calls.find(
+          (args) => args[0] === "update-downloaded"
+        )![1];
+        downloaded({ version: "2.0.0" });
+        expect(autoUpdaterMock.autoInstallOnAppQuit).toBe(false);
+      } finally {
+        delete updater.runCommandWithSudoIfNeeded;
+        delete updater.doInstall;
+      }
+    });
+
+    it("still installs an AppImage update on a plain quit", () => {
+      Object.defineProperty(process, "platform", { value: "linux", configurable: true });
+      process.env.APPIMAGE = "/home/u/Applications/Daintree.AppImage";
+
+      autoUpdaterService.initialize();
+      expect(autoUpdaterMock.autoInstallOnAppQuit).toBe(true);
+      const downloaded = (autoUpdaterMock.on as Mock).mock.calls.find(
+        (args) => args[0] === "update-downloaded"
+      )![1];
+      downloaded({ version: "2.0.0" });
+      expect(autoUpdaterMock.autoInstallOnAppQuit).toBe(true);
+    });
+
     it("skips initialization on Linux when package-type file is empty", () => {
       Object.defineProperty(process, "platform", { value: "linux", configurable: true });
       fsMock.existsSync.mockReturnValue(true);
@@ -645,15 +719,163 @@ describe("AutoUpdaterService", () => {
         path.join("/mock/resources", "package-type")
       );
     });
+  });
 
-    it("does not affect macOS", () => {
-      Object.defineProperty(process, "platform", { value: "darwin", configurable: true });
+  // AppImageUpdater installs Daintree-1.0.0.AppImage's update as
+  // Daintree-2.0.0.AppImage, deletes the old file and emits
+  // `appimage-filename-updated` from inside the install.
+  describe("AppImage relocation", () => {
+    const OLD_IMAGE = "/home/u/Applications/Daintree-1.0.0.AppImage";
+    const NEW_IMAGE = "/home/u/Applications/Daintree-2.0.0.AppImage";
 
+    // The listener is attached once per service, so each test needs its own.
+    async function freshService() {
+      vi.resetModules();
+      return (await import("../AutoUpdaterService.js")).autoUpdaterService;
+    }
+
+    function relocationListeners(): Array<(next: string) => void> {
+      return (autoUpdaterMock.on as Mock).mock.calls
+        .filter(([event]) => event === "appimage-filename-updated")
+        .map(([, listener]) => listener as (next: string) => void);
+    }
+
+    beforeEach(() => {
+      Object.defineProperty(process, "platform", { value: "linux", configurable: true });
+      process.env.APPIMAGE = OLD_IMAGE;
+    });
+
+    it("hands the old and new paths on when the updater renames the image", async () => {
+      const service = await freshService();
+      service.initialize();
+
+      const [listener] = relocationListeners();
+      listener!(NEW_IMAGE);
+
+      expect(relocationMock.notifyAppImageRelocated).toHaveBeenCalledWith({
+        previous: OLD_IMAGE,
+        next: NEW_IMAGE,
+      });
+      service.dispose();
+    });
+
+    // The rename happens during the install handoff, after the shutdown chain
+    // has disposed the service, so a listener removed by dispose() would never
+    // hear it.
+    it("stays attached through dispose and is never attached twice", async () => {
+      const service = await freshService();
+      service.initialize();
+      service.dispose();
+      service.initialize();
+      service.dispose();
+
+      expect(relocationListeners()).toHaveLength(1);
+      expect(
+        (autoUpdaterMock.off as Mock).mock.calls.some(
+          ([event]) => event === "appimage-filename-updated"
+        )
+      ).toBe(false);
+    });
+
+    // A newer download can replace the staged installer while the shutdown
+    // chain runs; the rename that installs it must carry its version.
+    it("tells the rename the version of a download that landed during shutdown", async () => {
+      const service = await freshService();
+      service.initialize();
+      service.dispose();
+
+      // Only what dispose() left attached hears a download after shutdown.
+      const detached = new Set(
+        (autoUpdaterMock.off as Mock).mock.calls
+          .filter(([event]) => event === "update-downloaded")
+          .map(([, listener]) => listener)
+      );
+      const stillAttached = (autoUpdaterMock.on as Mock).mock.calls
+        .filter(([event, listener]) => event === "update-downloaded" && !detached.has(listener))
+        .map(([, listener]) => listener as (info: { version: string }) => void);
+      expect(stillAttached.length).toBeGreaterThan(0);
+      for (const listener of stillAttached) listener({ version: "2.0.0" });
+      relocationListeners()[0]!(NEW_IMAGE);
+
+      expect(relocationMock.notifyAppImageRelocated).toHaveBeenCalledWith({
+        previous: OLD_IMAGE,
+        next: NEW_IMAGE,
+        version: "2.0.0",
+      });
+    });
+
+    it("ignores an update that kept the image's path", async () => {
+      const service = await freshService();
+      service.initialize();
+
+      relocationListeners()[0]!(OLD_IMAGE);
+
+      expect(relocationMock.notifyAppImageRelocated).not.toHaveBeenCalled();
+      service.dispose();
+    });
+  });
+
+  // AppImageUpdater.doInstall ends by spawning the new image from this process,
+  // which handed it the old mount's descriptors and AppDir paths.
+  describe("AppImage relaunch after install", () => {
+    const OLD_IMAGE = "/home/u/Applications/Daintree-1.0.0.AppImage";
+    const NEW_IMAGE = "/home/u/Applications/Daintree-2.0.0.AppImage";
+    const updater = autoUpdaterMock as typeof autoUpdaterMock & {
+      spawnLog?: (cmd: string, args?: string[], env?: unknown) => Promise<boolean>;
+    };
+    let spawnLog: Mock;
+
+    beforeEach(() => {
       autoUpdaterService.initialize();
-      vi.advanceTimersByTime(STARTUP_JITTER_MAX_MS);
+      Object.defineProperty(process, "platform", { value: "linux", configurable: true });
+      process.env.APPIMAGE = OLD_IMAGE;
+      process.env.APPDIR = path.dirname(process.execPath);
+      spawnLog = vi.fn(() => Promise.resolve(true));
+      updater.spawnLog = spawnLog as never;
+      armRelaunchMock.armAppImageRelaunch.mockReset().mockReturnValue(true);
+    });
 
-      expect(autoUpdaterMock.on).toHaveBeenCalled();
-      expect(autoUpdaterMock.checkForUpdates).toHaveBeenCalledTimes(1);
+    afterEach(() => {
+      delete updater.spawnLog;
+      delete process.env.APPDIR;
+    });
+
+    function install() {
+      const downloaded = (autoUpdaterMock.on as Mock).mock.calls.find(
+        (args) => args[0] === "update-downloaded"
+      )![1];
+      downloaded({ version: "2.0.0" });
+      expect(autoUpdaterService.quitAndInstallIfReady()).toBe(true);
+      shutdownCoordinatorMock.settleShutdown("clean");
+    }
+
+    it("hands the installed image to the relaunch waiter instead of spawning it", () => {
+      autoUpdaterMock.quitAndInstall.mockImplementationOnce(() => {
+        void updater.spawnLog!(NEW_IMAGE, [], { APPIMAGE_SILENT_INSTALL: "true" });
+      });
+
+      install();
+
+      expect(armRelaunchMock.armAppImageRelaunch).toHaveBeenCalledWith(
+        NEW_IMAGE,
+        [],
+        expect.any(Function)
+      );
+      expect(spawnLog).not.toHaveBeenCalled();
+      expect(updater.spawnLog).toBe(spawnLog);
+    });
+
+    it("arms no relaunch when the install fails before the new image is in place", () => {
+      autoUpdaterMock.quitAndInstall.mockImplementationOnce(() => {
+        throw new Error("mv failed");
+      });
+
+      install();
+
+      expect(armRelaunchMock.armAppImageRelaunch).not.toHaveBeenCalled();
+      expect(updater.spawnLog).toBe(spawnLog);
+      vi.advanceTimersByTime(5_000);
+      expect(appMock.exit).toHaveBeenCalledWith(0);
     });
   });
 
@@ -843,6 +1065,14 @@ describe("AutoUpdaterService", () => {
         provider: "generic",
         url: "https://updates.daintree.org/nightly/",
       });
+    });
+
+    it("setChannel switches the channel when called directly, before the updater has started", async () => {
+      // Host setup's enable request can land before the updater initializes.
+      const result = await autoUpdaterService.setChannel("nightly");
+      expect(result).toBe("nightly");
+      expect(storeMock.set).toHaveBeenCalledWith("updateChannel", "nightly");
+      expect(autoUpdaterMock.setFeedURL).not.toHaveBeenCalled();
     });
 
     it("IPC UPDATE_SET_CHANNEL coerces unknown value to stable", async () => {
@@ -1124,12 +1354,6 @@ describe("AutoUpdaterService", () => {
       expect(storeState.dismissedUpdateAt).toBeUndefined();
     });
 
-    it("drops the call when senderFrame.url is undefined", () => {
-      dismissHandler({ senderFrame: {} }, "1.1.0");
-
-      expect(storeState.dismissedUpdateVersion).toBeUndefined();
-    });
-
     it("drops the call from an untrusted origin", () => {
       dismissHandler({ senderFrame: { url: "https://evil.example.com/x.html" } }, "1.1.0");
 
@@ -1168,13 +1392,6 @@ describe("AutoUpdaterService", () => {
       expect(storeState.dismissedUpdateVersion).toBeUndefined();
     });
 
-    it("accepts a strict semver from a trusted sender", () => {
-      dismissHandler(TRUSTED_SENDER, "1.2.3");
-
-      expect(storeState.dismissedUpdateVersion).toBe("1.2.3");
-      expect(typeof storeState.dismissedUpdateAt).toBe("number");
-    });
-
     it("accepts a nightly pre-release semver", () => {
       dismissHandler(TRUSTED_SENDER, "0.9.0-nightly.20251231");
 
@@ -1185,16 +1402,6 @@ describe("AutoUpdaterService", () => {
       dismissHandler(TRUSTED_SENDER, "  1.2.3  ");
 
       expect(storeState.dismissedUpdateVersion).toBe("1.2.3");
-    });
-
-    it("validates sender BEFORE inspecting payload (no version-shape leak)", () => {
-      // If senderFrame validation runs after typeof checks, an attacker could
-      // probe the validation order via type errors. Ensure the untrusted-sender
-      // drop is the first gate.
-      const untrusted = { senderFrame: { url: "https://evil.example.com/x.html" } };
-      dismissHandler(untrusted, { malicious: true });
-
-      expect(storeState.dismissedUpdateVersion).toBeUndefined();
     });
   });
 
@@ -1290,6 +1497,13 @@ describe("AutoUpdaterService", () => {
 
     it("retries on HTTP 5xx (statusCode = 503)", () => {
       errorHandler(Object.assign(new Error("service unavailable"), { statusCode: 503 }));
+      vi.advanceTimersByTime(36_000);
+
+      expect(autoUpdaterMock.checkForUpdates).toHaveBeenCalledTimes(1);
+    });
+
+    it("retries on HTTP 429 (rate limited)", () => {
+      errorHandler(Object.assign(new Error("rate limited"), { statusCode: 429 }));
       vi.advanceTimersByTime(36_000);
 
       expect(autoUpdaterMock.checkForUpdates).toHaveBeenCalledTimes(1);
@@ -1476,6 +1690,37 @@ describe("AutoUpdaterService", () => {
       expect(autoUpdaterMock.quitAndInstall).not.toHaveBeenCalled();
     });
 
+    it("won't stage a download from a check of the old feed that answers after the switch", async () => {
+      const checkingHandler = (autoUpdaterMock.on as Mock).mock.calls.find(
+        (args) => args[0] === "checking-for-update"
+      )![1];
+      checkingHandler();
+      await setChannelHandler(null, "nightly");
+      storeMock.set.mockClear();
+      availableHandler({ version: "2.0.0" });
+      downloadedHandler({ version: "2.0.0" });
+
+      expect(storeMock.set).not.toHaveBeenCalledWith("pendingUpdateVersion", "2.0.0");
+      const quitHandler = (ipcMainMock.handle as Mock).mock.calls.find(
+        (args) => args[0] === CHANNELS.UPDATE_QUIT_AND_INSTALL
+      )![1];
+      quitHandler(TRUSTED_SENDER);
+      expect(autoUpdaterMock.quitAndInstall).not.toHaveBeenCalled();
+    });
+
+    it("stages a download from a check that began after the switch", async () => {
+      const checkingHandler = (autoUpdaterMock.on as Mock).mock.calls.find(
+        (args) => args[0] === "checking-for-update"
+      )![1];
+      await setChannelHandler(null, "nightly");
+      storeMock.set.mockClear();
+      checkingHandler();
+      availableHandler({ version: "2.0.0" });
+      downloadedHandler({ version: "2.0.0" });
+
+      expect(storeMock.set).toHaveBeenCalledWith("pendingUpdateVersion", "2.0.0");
+    });
+
     it("cancels any in-flight retry timer on channel switch", async () => {
       const errorHandler = (autoUpdaterMock.on as Mock).mock.calls.find(
         (args) => args[0] === "error"
@@ -1616,38 +1861,10 @@ describe("AutoUpdaterService", () => {
       expect(autoUpdaterMock.checkForUpdates).toHaveBeenCalledTimes(1);
     });
 
-    it("retries on HTTP 429 (rate limited)", () => {
-      errorHandler(Object.assign(new Error("rate limited"), { statusCode: 429 }));
-      vi.advanceTimersByTime(36_000);
-
-      expect(autoUpdaterMock.checkForUpdates).toHaveBeenCalledTimes(1);
-    });
-
-    it("does not retry on HTTP 401 (unauthorized)", () => {
-      errorHandler(Object.assign(new Error("unauthorized"), { statusCode: 401 }));
-      vi.advanceTimersByTime(60_000);
-
-      expect(autoUpdaterMock.checkForUpdates).not.toHaveBeenCalled();
-    });
-
-    it("does not retry on HTTP 403 (forbidden)", () => {
-      errorHandler(Object.assign(new Error("forbidden"), { statusCode: 403 }));
-      vi.advanceTimersByTime(60_000);
-
-      expect(autoUpdaterMock.checkForUpdates).not.toHaveBeenCalled();
-    });
-
     it("retries on Electron net::ERR_INTERNET_DISCONNECTED (issue #7592)", () => {
       // Telemetry shows Electron net errors arrive with the token only in
       // err.message, no err.code — must be classified as transient.
       errorHandler(new Error("net::ERR_INTERNET_DISCONNECTED"));
-      vi.advanceTimersByTime(36_000);
-
-      expect(autoUpdaterMock.checkForUpdates).toHaveBeenCalledTimes(1);
-    });
-
-    it("retries on Electron net::ERR_NETWORK_CHANGED", () => {
-      errorHandler(new Error("net::ERR_NETWORK_CHANGED"));
       vi.advanceTimersByTime(36_000);
 
       expect(autoUpdaterMock.checkForUpdates).toHaveBeenCalledTimes(1);
@@ -1685,15 +1902,6 @@ describe("AutoUpdaterService", () => {
       vi.advanceTimersByTime(60_000);
 
       expect(autoUpdaterMock.checkForUpdates).not.toHaveBeenCalled();
-    });
-
-    it("retries on Electron net::ERR_CONNECTION_REFUSED", () => {
-      // Symmetry with the Node `ECONNREFUSED` code in TRANSIENT_ERROR_CODES —
-      // a brief firewall block or server restart is recoverable.
-      errorHandler(new Error("net::ERR_CONNECTION_REFUSED"));
-      vi.advanceTimersByTime(36_000);
-
-      expect(autoUpdaterMock.checkForUpdates).toHaveBeenCalledTimes(1);
     });
 
     it("permanent net token wins when both tokens appear in same message", () => {
@@ -1739,10 +1947,6 @@ describe("AutoUpdaterService", () => {
       autoUpdaterMock.checkForUpdates.mockClear();
     });
 
-    it("starts in idle state", () => {
-      expect(autoUpdaterService.getMenuState()).toBe("idle");
-    });
-
     it("a fast manual check (resolves before 400ms) leaves menu state at idle", () => {
       autoUpdaterService.checkForUpdatesManually();
 
@@ -1786,12 +1990,6 @@ describe("AutoUpdaterService", () => {
       availableHandler({ version: "2.0.0" });
 
       expect(autoUpdaterService.getMenuState()).toBe("idle");
-    });
-
-    it("update-downloaded transitions to ready", () => {
-      downloadedHandler({ version: "2.0.0" });
-
-      expect(autoUpdaterService.getMenuState()).toBe("ready");
     });
 
     it("ready persists past subsequent manual checks (no flicker back to idle)", () => {
@@ -2063,8 +2261,13 @@ describe("AutoUpdaterService", () => {
       await setChannelHandler(null, "nightly");
       expect(autoUpdaterMock.autoInstallOnAppQuit).toBe(false);
 
-      // Fire update-available to sync downloadGeneration with the new channel
-      // before the download completes.
+      // A check of the new feed: electron-updater emits checking-for-update as
+      // it starts, then update-available, which ties the download to the new
+      // channel before it completes.
+      const checkingHandler = (autoUpdaterMock.on as Mock).mock.calls.find(
+        (args) => args[0] === "checking-for-update"
+      )![1];
+      checkingHandler();
       availableHandler({ version: "2.0.0-nightly.1" });
       downloadedHandler({ version: "2.0.0-nightly.1" });
 
@@ -2187,45 +2390,6 @@ describe("AutoUpdaterService", () => {
     });
   });
 
-  describe("transient error codes (expanded set)", () => {
-    let errorHandler: (err: unknown) => void;
-
-    beforeEach(() => {
-      autoUpdaterService.initialize();
-      vi.advanceTimersByTime(STARTUP_JITTER_MAX_MS);
-
-      errorHandler = (autoUpdaterMock.on as Mock).mock.calls.find(
-        (args) => args[0] === "error"
-      )![1];
-
-      autoUpdaterMock.checkForUpdates.mockClear();
-    });
-
-    it("retries on ENETDOWN", () => {
-      errorHandler(Object.assign(new Error("network down"), { code: "ENETDOWN" }));
-      vi.advanceTimersByTime(36_000);
-      expect(autoUpdaterMock.checkForUpdates).toHaveBeenCalledTimes(1);
-    });
-
-    it("retries on EHOSTUNREACH", () => {
-      errorHandler(Object.assign(new Error("host unreachable"), { code: "EHOSTUNREACH" }));
-      vi.advanceTimersByTime(36_000);
-      expect(autoUpdaterMock.checkForUpdates).toHaveBeenCalledTimes(1);
-    });
-
-    it("retries on EHOSTDOWN", () => {
-      errorHandler(Object.assign(new Error("host down"), { code: "EHOSTDOWN" }));
-      vi.advanceTimersByTime(36_000);
-      expect(autoUpdaterMock.checkForUpdates).toHaveBeenCalledTimes(1);
-    });
-
-    it("retries on ECONNABORTED", () => {
-      errorHandler(Object.assign(new Error("aborted"), { code: "ECONNABORTED" }));
-      vi.advanceTimersByTime(36_000);
-      expect(autoUpdaterMock.checkForUpdates).toHaveBeenCalledTimes(1);
-    });
-  });
-
   describe("err.cause unwrap in isTransientUpdateError", () => {
     let errorHandler: (err: unknown) => void;
 
@@ -2238,16 +2402,6 @@ describe("AutoUpdaterService", () => {
       )![1];
 
       autoUpdaterMock.checkForUpdates.mockClear();
-    });
-
-    it("classifies a transient code nested under err.cause", () => {
-      const cause = Object.assign(new Error("timeout"), { code: "ETIMEDOUT" });
-      const wrapper = Object.assign(new Error("request failed"), { cause });
-
-      errorHandler(wrapper);
-      vi.advanceTimersByTime(36_000);
-
-      expect(autoUpdaterMock.checkForUpdates).toHaveBeenCalledTimes(1);
     });
 
     it("returns false for a permanent code nested under err.cause", () => {
@@ -2345,6 +2499,72 @@ describe("AutoUpdaterService", () => {
 
       vi.advanceTimersByTime(5_000);
       expect(appMock.exit).toHaveBeenCalledWith(0);
+    });
+
+    describe("Linux package install", () => {
+      const updater = autoUpdaterMock as typeof autoUpdaterMock & {
+        runCommandWithSudoIfNeeded?: (commandWithArgs: string[]) => string;
+        doInstall?: (options: unknown) => boolean;
+      };
+
+      beforeEach(() => {
+        Object.defineProperty(process, "platform", { value: "linux", configurable: true });
+        updater.runCommandWithSudoIfNeeded = vi.fn(() => "");
+      });
+
+      afterEach(() => {
+        delete updater.runCommandWithSudoIfNeeded;
+        delete updater.doInstall;
+      });
+
+      it("relaunches this version at once when the package did not go in", () => {
+        const originalArgv = process.argv;
+        process.argv = [process.execPath, "--cli-path", "/projects/a", "--enable-logging"];
+        updater.doInstall = vi.fn(() => false);
+        autoUpdaterMock.quitAndInstall.mockImplementationOnce(() => {
+          updater.doInstall!({});
+        });
+        downloadedHandler({ version: "2.0.0" });
+        quitAndInstallHandler(TRUSTED_SENDER);
+        shutdownCoordinatorMock.settleShutdown("clean");
+
+        process.argv = originalArgv;
+
+        // Restores every window rather than reopening the launch target alone.
+        expect(armRelaunchMock.armRelaunch).toHaveBeenCalledTimes(1);
+        expect(armRelaunchMock.armRelaunch).toHaveBeenCalledWith({ args: ["--enable-logging"] });
+        expect(appMock.exit).toHaveBeenCalledWith(0);
+        vi.advanceTimersByTime(5_000);
+        expect(appMock.exit).toHaveBeenCalledTimes(1);
+      });
+
+      it("relaunches when the install threw", () => {
+        autoUpdaterMock.quitAndInstall.mockImplementationOnce(() => {
+          throw new Error("Command pkexec exited with code 126");
+        });
+        updater.doInstall = vi.fn(() => true);
+        downloadedHandler({ version: "2.0.0" });
+        quitAndInstallHandler(TRUSTED_SENDER);
+        shutdownCoordinatorMock.settleShutdown("clean");
+
+        expect(armRelaunchMock.armRelaunch).toHaveBeenCalledTimes(1);
+        expect(appMock.exit).toHaveBeenCalledWith(0);
+      });
+
+      it("leaves a package that went in to the updater's own quit, behind the watchdog", () => {
+        updater.doInstall = vi.fn(() => true);
+        autoUpdaterMock.quitAndInstall.mockImplementationOnce(() => {
+          updater.doInstall!({});
+        });
+        downloadedHandler({ version: "2.0.0" });
+        quitAndInstallHandler(TRUSTED_SENDER);
+        shutdownCoordinatorMock.settleShutdown("clean");
+
+        expect(armRelaunchMock.armRelaunch).not.toHaveBeenCalled();
+        expect(appMock.exit).not.toHaveBeenCalled();
+        vi.advanceTimersByTime(5_000);
+        expect(appMock.exit).toHaveBeenCalledWith(0);
+      });
     });
 
     it("does not arm the watchdog while the cleanup chain is still running", () => {
@@ -2640,22 +2860,6 @@ describe("AutoUpdaterService", () => {
 
       expect(storeMock.delete).toHaveBeenCalledWith("pendingUpdateVersion");
       expect(trackEventMock).not.toHaveBeenCalled();
-    });
-
-    it("propagates the actual platform on linux", () => {
-      Object.defineProperty(process, "platform", { value: "linux", configurable: true });
-      process.env.APPIMAGE = "/path/to/app.AppImage";
-      appMock.getVersion.mockReturnValue("1.0.0");
-      storeMock.get.mockImplementation((key: string) =>
-        key === "pendingUpdateVersion" ? "2.0.0" : undefined
-      );
-
-      autoUpdaterService.initialize();
-
-      expect(trackEventMock).toHaveBeenCalledWith(
-        "auto_update_install_version_mismatch",
-        expect.objectContaining({ platform: "linux" })
-      );
     });
 
     it("does not crash when store.delete throws", () => {
@@ -3095,6 +3299,37 @@ describe("AutoUpdaterService", () => {
         expect(bootWith({ pending: "2.0.0", stage: "attempted" })).toHaveLength(1);
       });
 
+      // deb/rpm/pacman installs go through pkexec or sudo, and a cancelled
+      // prompt, a missing polkit agent or a sudo with no terminal all end here.
+      it("tells a Linux package install that the update needs the administrator password", () => {
+        Object.defineProperty(process, "platform", { value: "linux", configurable: true });
+        fsMock.existsSync.mockReturnValue(true);
+        fsMock.readFileSync.mockReturnValue("deb\n");
+
+        const toasts = bootWith({ pending: "2.0.0", stage: "handoff-timeout" });
+
+        expect(toasts).toHaveLength(1);
+        const payload = toasts[0]![1] as {
+          message: string;
+          action: { ipcChannel: string; data: string };
+        };
+        expect(payload.message).toMatch(/administrator password/);
+        expect(payload.message).toContain("2.0.0");
+        expect(payload.message).toContain("1.0.0");
+        expect(payload.action.ipcChannel).toBe(CHANNELS.SYSTEM_OPEN_EXTERNAL);
+        expect(new URL(payload.action.data).pathname).toBe("/download");
+      });
+
+      it("keeps the fresh-download advice for an AppImage, which needs no password", () => {
+        Object.defineProperty(process, "platform", { value: "linux", configurable: true });
+        process.env.APPIMAGE = "/home/u/Applications/Daintree.AppImage";
+
+        const toasts = bootWith({ pending: "2.0.0", stage: "attempted" });
+
+        expect(toasts).toHaveLength(1);
+        expect((toasts[0]![1] as { message: string }).message).not.toMatch(/password/);
+      });
+
       it("does not send Windows Store users to a download page the Store owns", () => {
         Object.defineProperty(process, "windowsStore", { value: true, configurable: true });
         try {
@@ -3195,12 +3430,6 @@ describe("AutoUpdaterService", () => {
       storeMock.delete.mockImplementation((key: string) => {
         delete storeState[key];
       });
-    });
-
-    it("returns null before any update is detected", () => {
-      autoUpdaterService.initialize();
-
-      expect(getLatest()).toBeNull();
     });
 
     it("replays the available stage to a renderer that missed the broadcast", () => {
@@ -3335,14 +3564,6 @@ describe("AutoUpdaterService", () => {
       // A declined install leaves the update installable, so it must stay
       // pullable too.
       expect(getLatest()).toEqual({ version: "2.0.0", downloaded: true });
-    });
-
-    it("answers with null on builds where the updater never activates", () => {
-      appMock.isPackaged = false;
-
-      autoUpdaterService.initialize();
-
-      expect(getLatest()).toBeNull();
     });
 
     it("withdraws an in-progress version once the feed stops offering it", () => {

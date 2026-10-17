@@ -35,18 +35,22 @@ function createWebContents(loading: boolean) {
 
   return Object.assign(emitter, {
     executeJavaScript: vi.fn().mockResolvedValue(rendererCheckResult),
-    isLoading: vi.fn(() => isLoading),
+    isLoadingMainFrame: vi.fn(() => isLoading),
     markLoaded() {
       isLoading = false;
       emitter.emit("did-finish-load");
     },
     failLoad() {
       isLoading = false;
-      emitter.emit("did-fail-load", {}, -105, "ERR_NAME_NOT_RESOLVED", "app://index.html");
+      emitter.emit("did-fail-load", {}, -105, "ERR_NAME_NOT_RESOLVED", "app://index.html", true);
+    },
+    failSubframe() {
+      emitter.emit("did-fail-load", {}, -105, "ERR_NAME_NOT_RESOLVED", "http://x.invalid/", false);
     },
   }) as EventEmitter & {
     executeJavaScript: ReturnType<typeof vi.fn>;
-    isLoading: ReturnType<typeof vi.fn>;
+    isLoadingMainFrame: ReturnType<typeof vi.fn>;
+    failSubframe: () => void;
     markLoaded: () => void;
     failLoad: () => void;
   };
@@ -89,7 +93,7 @@ describe("runSmokeFunctionalChecks", () => {
     expect(wc.executeJavaScript).toHaveBeenCalledOnce();
   });
 
-  it("does not run renderer IPC checks after did-fail-load", async () => {
+  it("keeps waiting for the app page when only a subframe fails to load", async () => {
     const wc = createWebContents(true);
     mockGetAppWebContents.mockReturnValue(wc as unknown as WebContents);
 
@@ -100,6 +104,27 @@ describe("runSmokeFunctionalChecks", () => {
       () => false
     );
 
+    wc.failSubframe();
+    await Promise.resolve();
+    expect(wc.executeJavaScript).not.toHaveBeenCalled();
+
+    wc.markLoaded();
+    await expect(resultPromise).resolves.toBe(false);
+    expect(wc.executeJavaScript).toHaveBeenCalledOnce();
+  });
+
+  it("still fails on a main-frame load error after a subframe one", async () => {
+    const wc = createWebContents(true);
+    mockGetAppWebContents.mockReturnValue(wc as unknown as WebContents);
+
+    const { runSmokeFunctionalChecks } = await import("../smokeTest.js");
+    const resultPromise = runSmokeFunctionalChecks(
+      {} as BrowserWindow,
+      createFailingPtyClient(),
+      () => false
+    );
+
+    wc.failSubframe();
     wc.failLoad();
 
     await expect(resultPromise).resolves.toBe(false);

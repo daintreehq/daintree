@@ -191,6 +191,7 @@ vi.mock("@/store/helpPanelStore", () => {
     selectSlot: (s: typeof helpPanelState) => s,
     selectActiveSlot: (s: typeof helpPanelState) => s,
     selectOpenSlots: () => [0],
+    selectHasRoomForSession: () => true,
     selectSlotTerminalIds: (s: typeof helpPanelState) => (s.terminalId ? [s.terminalId] : []),
     selectSlotForTerminal: (s: typeof helpPanelState, id: string) =>
       s.terminalId === id && id ? 0 : null,
@@ -262,6 +263,7 @@ vi.mock("@/components/ui/ConfirmDialog", () => ({ ConfirmDialog: () => null }));
 vi.mock("../FigureRail", () => ({ FigureRail: () => null }));
 
 import { HelpPanel } from "../HelpPanel";
+import { HelpPanelResizeHandle } from "../HelpPanelResizeHandle";
 import { __resetHelpSessionControllersForTests } from "@/controllers/helpSessionControllerRegistry";
 
 beforeEach(() => {
@@ -300,12 +302,6 @@ function getHandle(): HTMLElement {
 }
 
 describe("HelpPanel — resize handle reset", () => {
-  it("resets to the default width on double-click", () => {
-    render(<HelpPanel width={520} />);
-    fireEvent.doubleClick(getHandle());
-    expect(helpPanelState.setWidth).toHaveBeenLastCalledWith(380);
-  });
-
   it.each(["Enter", " "])("resets to the default width on %j", (key) => {
     render(<HelpPanel width={520} />);
     fireEvent.keyDown(getHandle(), { key });
@@ -324,9 +320,26 @@ describe("HelpPanel — resize handle reset", () => {
     expect(helpPanelState.setWidth.mock.calls.length).toBe(dragWrites + 1);
     expect(helpPanelState.setWidth).toHaveBeenLastCalledWith(380);
   });
+});
 
-  it("advertises the reset in the handle's accessible name", () => {
-    render(<HelpPanel width={520} />);
-    expect(getHandle().getAttribute("aria-label")).toMatch(/double-click to reset/i);
+describe("HelpPanelResizeHandle", () => {
+  function renderHandle(overrides: Partial<Parameters<typeof HelpPanelResizeHandle>[0]> = {}) {
+    const props = {
+      width: 500,
+      isResizing: false,
+      isVisible: true,
+      controlsId: "panel",
+      onMouseDown: vi.fn(),
+      onKeyDown: vi.fn(),
+      onReset: vi.fn(),
+      ...overrides,
+    };
+    const { unmount } = render(<HelpPanelResizeHandle {...props} />);
+    return { props, handle: screen.getByRole("separator"), unmount };
+  }
+
+  it("is reachable by keyboard only while the panel is visible", () => {
+    const { handle } = renderHandle({ isVisible: false });
+    expect(handle.tabIndex).toBe(-1);
   });
 });

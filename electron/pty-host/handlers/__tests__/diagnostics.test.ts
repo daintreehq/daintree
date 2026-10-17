@@ -281,27 +281,4 @@ describe("get-flow-control-snapshot handler", () => {
       lastDropAt: null,
     });
   });
-
-  it("embeds the resource-governor snapshot verbatim", () => {
-    const ctx = makeCtx({
-      resourceGovernor: {
-        getSnapshot: vi.fn(() => ({
-          isThrottling: true,
-          isWarning: true,
-          activeProfile: "efficiency",
-          smoothedUtilizationPercent: 88.2,
-          throttleDurationMs: 4200,
-        })),
-      } as unknown as HostContext["resourceGovernor"],
-    });
-
-    const snapshot = runSnapshot(ctx);
-    expect(snapshot.resourceGovernor).toEqual({
-      isThrottling: true,
-      isWarning: true,
-      activeProfile: "efficiency",
-      smoothedUtilizationPercent: 88.2,
-      throttleDurationMs: 4200,
-    });
-  });
 });

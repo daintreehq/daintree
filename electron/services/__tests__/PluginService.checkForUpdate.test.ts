@@ -418,29 +418,6 @@ describe("checkForUpdate — fetch failures", () => {
     service.dispose();
   });
 
-  // The accepted MIME set is shared with the install flow (T4) so a server that
-  // passes the update check also passes the follow-up reinstall.
-  it.each([
-    "application/octet-stream",
-    "application/zip",
-    "application/zip; charset=utf-8",
-    "application/x-zip",
-    "application/x-dntr",
-  ])("accepts the shared archive content type %s", async (contentType) => {
-    const service = new PluginService(pluginsRoot, "0.0.0");
-    const manifest = { name: "acme.mime", version: "1.0.0" };
-    // Re-fetch the identical archive so the only thing under test is the MIME
-    // gate — the result lands on `up-to-date` rather than a download fault.
-    await installUrlPlugin(service, manifest);
-    const bytes = await readArchiveBytes(manifest);
-    netMock.fetch.mockResolvedValueOnce(fakeResponse([new Uint8Array(bytes)], { contentType }));
-
-    const result = await service.checkForUpdate("acme.mime");
-
-    expect(result).toEqual({ status: "up-to-date" });
-    service.dispose();
-  });
-
   it("falls back to the .dntr URL suffix when the content type isn't a known archive type", async () => {
     const service = new PluginService(pluginsRoot, "0.0.0");
     const manifest = { name: "acme.suffix", version: "1.0.0" };

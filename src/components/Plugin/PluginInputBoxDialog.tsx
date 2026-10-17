@@ -3,6 +3,7 @@ import { AppDialog } from "@/components/ui/AppDialog";
 import { Field, FieldError } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import { PluginProvenance } from "./PluginProvenance";
+import type { PluginUiPromptWaited } from "@shared/types/pluginUiPrompt";
 import { usePluginAttribution } from "@/hooks/usePluginAttribution";
 import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
@@ -27,11 +28,12 @@ function compilePattern(pattern: string | undefined): RegExp | null {
 interface InputBoxFormProps {
   options: PluginInputBoxOptions;
   pluginId: string;
+  waited?: PluginUiPromptWaited;
   onSubmit: (value: string) => void;
   onCancel: () => void;
 }
 
-function InputBoxForm({ options, pluginId, onSubmit, onCancel }: InputBoxFormProps) {
+function InputBoxForm({ options, pluginId, waited, onSubmit, onCancel }: InputBoxFormProps) {
   const [value, setValue] = useState(options.value ?? "");
   // Set by the first rejected submit and never cleared: from then on the field
   // is judged live, so the error stays while the value is still wrong and goes
@@ -92,7 +94,7 @@ function InputBoxForm({ options, pluginId, onSubmit, onCancel }: InputBoxFormPro
       <AppDialog.Footer
         // The one line in this dialog the plugin did not write, so it sits in
         // the host's footer band rather than beside the plugin's own copy.
-        hint={<PluginProvenance id={provenanceId} attribution={attribution} />}
+        hint={<PluginProvenance id={provenanceId} attribution={attribution} waited={waited} />}
         secondaryAction={{ label: "Cancel", onClick: onCancel }}
         primaryAction={{ label: "Submit", onClick: handleSubmit, disabled: showError }}
       />
@@ -116,7 +118,12 @@ export function PluginInputBoxDialog() {
   // item — the object literal pins the narrowed `options` type.
   const inputBox =
     current && current.params.kind === "inputBox"
-      ? { promptId: current.promptId, pluginId: current.pluginId, options: current.params.options }
+      ? {
+          promptId: current.promptId,
+          pluginId: current.pluginId,
+          options: current.params.options,
+          waited: current.params.waited,
+        }
       : null;
   const isInputBox = inputBox !== null;
 
@@ -150,6 +157,7 @@ export function PluginInputBoxDialog() {
             key={inputBox.promptId}
             options={inputBox.options}
             pluginId={inputBox.pluginId}
+            waited={inputBox.waited}
             onSubmit={(value) => resolveOnce(inputBox.promptId, value)}
             onCancel={() => resolveOnce(inputBox.promptId, undefined)}
           />

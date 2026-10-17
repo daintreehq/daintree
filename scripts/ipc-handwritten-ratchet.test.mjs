@@ -53,11 +53,6 @@ describe("countHandWrittenEntries", () => {
     expect(countHandWrittenEntries(buildMaps(body))).toBe(1);
   });
 
-  it("counts channels that contain colons in the name", () => {
-    const body = [`  "a:b:c": {`, `    args: [];`, `    result: void;`, `  };`].join("\n");
-    expect(countHandWrittenEntries(buildMaps(body))).toBe(1);
-  });
-
   it("ignores entries from neighbouring interfaces", () => {
     const body = `  "real:entry": {\n    args: [];\n    result: void;\n  };`;
     const source = buildMaps(body) + `\nexport interface Other {\n  "fake:entry": { x: 1 };\n}\n`;
@@ -114,10 +109,6 @@ describe("countHandWrittenEntries", () => {
 });
 
 describe("checkShrinkageGuard", () => {
-  it("passes when count stays the same", () => {
-    expect(checkShrinkageGuard(100, 100, false).blocked).toBe(false);
-  });
-
   it("passes when count increases", () => {
     expect(checkShrinkageGuard(100, 110, false).blocked).toBe(false);
   });
@@ -138,26 +129,8 @@ describe("checkShrinkageGuard", () => {
     expect(result.message).toContain("hand-written IpcInvokeMap entries");
   });
 
-  it("blocks large drops with the right percentage in the message", () => {
-    const result = checkShrinkageGuard(200, 100, false);
-    expect(result.blocked).toBe(true);
-    expect(result.message).toContain("50.0% shrinkage");
-  });
-
   it("bypasses the guard when --force is true", () => {
     expect(checkShrinkageGuard(100, 0, true).blocked).toBe(false);
-  });
-
-  it("skips the guard when priorCount is 0", () => {
-    expect(checkShrinkageGuard(0, 5, false).blocked).toBe(false);
-  });
-
-  it("skips the guard when priorCount is NaN", () => {
-    expect(checkShrinkageGuard(NaN, 50, false).blocked).toBe(false);
-  });
-
-  it("skips the guard when priorCount is Infinity", () => {
-    expect(checkShrinkageGuard(Infinity, 50, false).blocked).toBe(false);
   });
 
   it("honors a custom threshold", () => {

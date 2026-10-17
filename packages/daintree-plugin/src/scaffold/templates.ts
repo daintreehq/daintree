@@ -47,8 +47,8 @@ const DAINTREE_ENGINE_RANGE = ">=0.11.0";
  * A `contributes.panels` entry paired with a `views` entry of the
  * same `id`. The runtime (`PluginService.loadPlugin`) only registers a panel
  * kind while iterating declared `panels`, attaching the view's `componentPath`
- * when ids match; a view with no matching panel is ignored, so the scaffold
- * must emit both for a generated view to render. The panel points at the
+ * when ids match; the manifest validator rejects a `location: "panel"` view
+ * with no matching panel (#10620), so the scaffold must emit both. The panel points at the
  * plugin's own {@link PANEL_ICON_PATH} so a new author starts from the custom
  * icon form (#13143); swapping it for a generic id like `"puzzle"` still works.
  */
@@ -126,12 +126,19 @@ function packageJson(ctx: ScaffoldContext, needsReact: boolean, needsServer = fa
     vite: "^8.0.0",
   };
   if (needsReact) {
-    devDeps.react = "^19.0.0";
-    devDeps["react-dom"] = "^19.0.0";
+    // 19.2 at least: the panel preview renders with the SDK's browser build of
+    // the kit, which uses `useEffectEvent`.
+    devDeps.react = "^19.2.0";
+    devDeps["react-dom"] = "^19.2.0";
     // React 19 still ships types separately; without these the generated
     // `panel.tsx` fails `tsc` on the `react` import and the JSX namespace.
     devDeps["@types/react"] = "^19.0.0";
     devDeps["@types/react-dom"] = "^19.0.0";
+    // The panel preview (`review/`, `npm run test:preview`): optional peers of
+    // the SDK that only `@daintreehq/plugin-sdk/testing/playwright` loads.
+    devDeps["@playwright/test"] = "^1.63.0";
+    devDeps.esbuild = "^0.28.2";
+    devDeps.tailwindcss = "^4.3.3";
   }
   if (needsServer) {
     // Runtime dependency, not a devDependency: the spawned `node dist/server.js`
@@ -168,6 +175,7 @@ function packageJson(ctx: ScaffoldContext, needsReact: boolean, needsServer = fa
       scripts["dev:server"] = "vite build --watch --config vite.config.server.ts --no-emptyOutDir";
     }
   }
+  if (needsReact) scripts["test:preview"] = "playwright test";
   scripts.validate = "daintree-plugin validate";
   if (!ctx.projectLocal) {
     // A project plugin is distributed by being committed, not as a .dntr.
@@ -294,6 +302,8 @@ dist/
 *.dntr
 .dev-marker
 .tour-preview/
+test-results/
+playwright-report/
 `;
 
 /**
@@ -310,6 +320,8 @@ dist/
 const PROJECT_GITIGNORE = `node_modules/
 *.dntr
 .dev-marker
+test-results/
+playwright-report/
 
 # dist/ is deliberately NOT ignored, and is force-included below.
 #
@@ -332,7 +344,7 @@ const PROJECT_GITIGNORE = `node_modules/
 !dist/**
 `;
 
-function projectReadme(ctx: ScaffoldContext, recipeName: string): string {
+function projectReadme(ctx: ScaffoldContext, recipeName: string, hasPreview: boolean): string {
   const dir = projectPluginRelDir(ctx.scopedName);
   const hasServer = ctx.template === "mcp" || ctx.template === "full";
   const devLine = hasServer
@@ -382,10 +394,39 @@ npx daintree-plugin lint
 
 It flags the patterns that make a panel slow or look foreign — a list pushed
 whole on every change, polling in the view, hand-rolled buttons and inputs,
-stock Tailwind colours — and names the fix. The plugin's Performance section
-in Project settings → Plugins shows what Daintree measured while it ran.
-`;
+stock Tailwind colours — and names the fix. The Performance section of the
+plugin's detail pane in the plugin manager shows what Daintree measured while
+it ran.
+${hasPreview ? PROJECT_README_PREVIEW : ""}`;
 }
+
+// The agent working in this repository reads the README, not Daintree's docs, so
+// without this it reaches for the running app — and asks for Daintree to be
+// relaunched with a debugging port — to see a panel the preview already shows.
+const PROJECT_README_PREVIEW = `
+## Previewing a panel
+
+To see the panel, drive it, or check a change to it, use the panel preview, not
+the running Daintree app. Write a story in \`review/panel.stories.tsx\` for each
+state the panel can be in, then run:
+
+\`\`\`bash
+npx playwright install chromium   # once
+npm run test:preview
+\`\`\`
+
+It renders every story against a mock host in a background browser and saves a
+screenshot of each under \`test-results/\`, which you can read. A capture fails on
+a console error or a story that did not render, so a passing run is evidence
+rather than a guess. Set \`use.viewport\` in \`playwright.config.ts\` to the
+panel size you want.
+
+Do not drive Daintree's own window to test a panel, and do not relaunch Daintree
+with \`--remote-debugging-port\` so a browser tool can attach to it: input aimed
+at the app lands in whichever window the user has focused. Load the plugin in
+Daintree only for what the host alone shows — activation, the worker, real data
+and its performance numbers.
+`;
 
 // Ships commented-out so a fresh plugin excludes nothing extra — it exists to
 // make the mechanism discoverable, since `.gitignore` alone can't express
@@ -462,6 +503,66 @@ export default function Panel(): React.ReactElement {
 `;
 }
 
+function panelStories(ctx: ScaffoldContext): string {
+  return `import type { PanelStoriesMeta, PanelStory } from "@daintreehq/plugin-sdk/testing/preview";
+import Panel from "../src/panel";
+
+/**
+ * The panel's states, rendered outside Daintree against a mock view host. Each
+ * named export is one state: add one per state the panel can be in (empty,
+ * loading, an error, populated), with the channel answers that produce it in
+ * \`fixtures.channels\`. \`npm run test:preview\` captures every story
+ * (review/panel.spec.ts). Nothing in review/ ships: the build reads src/ only.
+ */
+export default {
+  title: ${q(ctx.displayName)},
+  component: Panel,
+  args: { pluginId: ${q(ctx.scopedName)} },
+} satisfies PanelStoriesMeta;
+
+/** The panel as it first opens. */
+export const Default: PanelStory = {};
+`;
+}
+
+const PANEL_SPEC = `import { test } from "@daintreehq/plugin-sdk/testing/playwright";
+
+// Every story in review/panel.stories.tsx under every theme listed here, built
+// and served without Daintree running. Add a built-in theme id to capture it
+// too. The screenshots land in test-results/; a capture fails on a console
+// error or a story that did not render, and finish() on one that never ran.
+test.use({ previewOptions: { themes: ["daintree"] } });
+
+test("every panel story renders", async ({ preview }) => {
+  for (const story of preview.stories) {
+    for (const theme of preview.themes) {
+      await preview.open(story, theme);
+      await preview.snap(\`\${story}-\${theme}\`);
+    }
+  }
+  await preview.finish();
+});
+`;
+
+/** `npm run test:preview`. Install a browser once with `npx playwright install chromium`. */
+const PLAYWRIGHT_CONFIG = `import { defineConfig } from "@playwright/test";
+
+// The panel preview's specs. The viewport is the panel's size.
+export default defineConfig({
+  testDir: "review",
+  use: { browserName: "chromium", viewport: { width: 640, height: 480 } },
+});
+`;
+
+/** The panel preview a view-bearing template starts with. */
+function previewFiles(ctx: ScaffoldContext): Record<string, string> {
+  return {
+    "review/panel.stories.tsx": panelStories(ctx),
+    "review/panel.spec.ts": PANEL_SPEC,
+    "playwright.config.ts": PLAYWRIGHT_CONFIG,
+  };
+}
+
 function mcpEntry(ctx: ScaffoldContext): string {
   return `import type { PluginHostApi } from "@daintreehq/plugin-sdk";
 
@@ -530,7 +631,11 @@ function projectVariant(
   // `.dntrignore` only shapes a `.dntr` archive, and a project plugin is never
   // packaged into one.
   delete next[".dntrignore"];
-  next["README.md"] = projectReadme(ctx, projectRecipeName(ctx.scopedName));
+  next["README.md"] = projectReadme(
+    ctx,
+    projectRecipeName(ctx.scopedName),
+    "review/panel.stories.tsx" in files
+  );
   return next;
 }
 
@@ -579,6 +684,7 @@ function templateFiles(ctx: ScaffoldContext): Record<string, string> {
         "src/index.ts": viewEntry(ctx),
         "src/panel.tsx": panelComponent(ctx),
         [PANEL_ICON_PATH]: PANEL_ICON_SVG,
+        ...previewFiles(ctx),
       };
     }
     case "mcp": {
@@ -647,6 +753,7 @@ function templateFiles(ctx: ScaffoldContext): Record<string, string> {
         "src/panel.tsx": panelComponent(ctx),
         [PANEL_ICON_PATH]: PANEL_ICON_SVG,
         "src/server.ts": mcpServer(ctx),
+        ...previewFiles(ctx),
       };
     }
   }

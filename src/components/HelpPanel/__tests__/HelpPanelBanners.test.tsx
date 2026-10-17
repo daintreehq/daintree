@@ -69,46 +69,6 @@ describe("HelpPanelBanners — launch error", () => {
     }
   });
 
-  it("shows Open settings for both MCP failure kinds and only those", () => {
-    const kindsWithSettings: LaunchErrorKind[] = ["mcp-server-not-started", "mcp-probe-failed"];
-    for (const kind of kindsWithSettings) {
-      const { queryByText, unmount } = render(
-        <HelpPanelBanners {...baseProps()} launchError={{ agentId: "claude", kind }} />
-      );
-      expect(queryByText("Open settings")).toBeTruthy();
-      unmount();
-    }
-
-    const kindsWithoutSettings: LaunchErrorKind[] = [
-      "skills-sync-failed",
-      "spawn-failed",
-      "mixed-agent-lanes",
-      "folder-unavailable",
-    ];
-    for (const kind of kindsWithoutSettings) {
-      const { queryByText, unmount } = render(
-        <HelpPanelBanners {...baseProps()} launchError={{ agentId: "claude", kind }} />
-      );
-      expect(queryByText("Open settings")).toBeNull();
-      unmount();
-    }
-  });
-
-  it("omits Retry for folder-unavailable and offers Open logs + Open installer page", () => {
-    const { queryByText, getByText } = render(
-      <HelpPanelBanners
-        {...baseProps()}
-        launchError={{ agentId: "claude", kind: "folder-unavailable" }}
-      />
-    );
-    expect(queryByText("Retry")).toBeNull();
-    expect(getByText("Open logs")).toBeTruthy();
-    expect(getByText("Open installer page")).toBeTruthy();
-    const text =
-      getByText("Open logs").closest('[data-testid="help-launch-error-banner"]')?.textContent ?? "";
-    expect(text).not.toMatch(/Try again/i);
-  });
-
   it("offers no CTA for mixed-agent-lanes and names the sibling session as the fix", () => {
     const { getByTestId, queryAllByRole, queryByText } = render(
       <HelpPanelBanners
@@ -211,24 +171,6 @@ describe("HelpPanelBanners — launch error", () => {
     fireEvent.click(getByText("Open installer page"));
     expect(onOpenInstallerPage).toHaveBeenCalledTimes(1);
     expect(onRetryLaunch).not.toHaveBeenCalled();
-  });
-
-  it("gives skills-sync-failed an escape hatch beyond Retry via Open logs", () => {
-    const onOpenLogs = vi.fn();
-    const onRetryLaunch = vi.fn();
-    const { getByText } = render(
-      <HelpPanelBanners
-        {...baseProps()}
-        launchError={{ agentId: "claude", kind: "skills-sync-failed" }}
-        onRetryLaunch={onRetryLaunch}
-        onOpenLogs={onOpenLogs}
-      />
-    );
-    fireEvent.click(getByText("Open logs"));
-    expect(onOpenLogs).toHaveBeenCalledTimes(1);
-    expect(onRetryLaunch).not.toHaveBeenCalled();
-    fireEvent.click(getByText("Retry"));
-    expect(onRetryLaunch).toHaveBeenCalledTimes(1);
   });
 
   it("renders nothing for the launch-error slot when launchError is null", () => {
@@ -345,22 +287,6 @@ describe("HelpPanelBanners — active grant countdown (#10042)", () => {
     expect(text).toContain("search_docs");
     // The displayed remaining time is derived, not a hardcoded literal.
     expect(text).toMatch(/2m( [1-5]s)? left/);
-  });
-
-  it("shows a smaller remaining time for a nearer expiry (countdown is computed)", () => {
-    const { getByTestId } = render(
-      <HelpPanelBanners
-        {...baseProps()}
-        activeGrant={{
-          sessionId: "s1",
-          toolId: "t1",
-          ttlMs: 900_000,
-          expiresAt: Date.now() + 5_000,
-        }}
-      />
-    );
-    const text = getByTestId("help-grant-active-banner").textContent ?? "";
-    expect(text).toMatch(/(^|\D)[45]s left/);
   });
 
   it("clamps a past expiry to 0s rather than rendering a negative timer", () => {

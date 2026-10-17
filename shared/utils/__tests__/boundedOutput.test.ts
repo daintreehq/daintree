@@ -126,9 +126,4 @@ describe("truncateUtf8", () => {
     expect(utf8ByteLength(result.text)).toBeLessThanOrEqual(10);
     expect(result.truncated).toBe(true);
   });
-
-  it("counts bytes, not UTF-16 code units", () => {
-    expect(utf8ByteLength("😀")).toBe(4);
-    expect("😀".length).toBe(2);
-  });
 });

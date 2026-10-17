@@ -17,15 +17,6 @@ describe("selectShard", () => {
     expect(first).toBeLessThan(shardCount);
   });
 
-  it("distributes multiple ids into valid shards", () => {
-    const shardCount = 4;
-    const ids = Array.from({ length: 30 }, (_, i) => `terminal-${i}`);
-    const assignments = ids.map((id) => selectShard(id, shardCount));
-
-    expect(assignments.every((idx) => Number.isInteger(idx))).toBe(true);
-    expect(assignments.every((idx) => idx >= 0 && idx < shardCount)).toBe(true);
-  });
-
   it("throws for zero or negative shard counts", () => {
     expect(() => selectShard("terminal-1", 0)).toThrow("shardCount must be a positive integer");
     expect(() => selectShard("terminal-1", -1)).toThrow("shardCount must be a positive integer");

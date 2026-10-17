@@ -111,7 +111,7 @@ export class IdleBackgroundAutoCloseService {
    *
    * Agent state is deliberately NOT consulted. An assistant that scheduled a
    * wakeup or dispatched a sub-agent reads `idle` while that work is still
-   * pending, and `help/CLAUDE.md` tells it to pace long work exactly that way.
+   * pending, and `assistant/CLAUDE.md` tells it to pace long work exactly that way.
    * Nothing main-process-side separates "idle at its prompt" from "idle with
    * work pending" (#11807, and #11157/#11477 before it), so the floor has to
    * be unconditional; it lifts as soon as the PTY exits.

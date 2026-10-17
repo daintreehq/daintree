@@ -304,7 +304,7 @@ async function stopAgent(page: Page, panelId: string, panel: Locator): Promise<v
 
 /**
  * The main worktree's collapsed session summary in the sidebar. It counts the
- * renderer panel store's agent states, and stays on screen while the pane
+ * session presentation states, and stays on screen while the pane
  * itself is unmounted because another worktree is active.
  */
 function mainSessionSummary(page: Page): Locator {
@@ -314,8 +314,8 @@ function mainSessionSummary(page: Page): Locator {
     .first();
 }
 
-async function expectSummaryState(summary: Locator, state: "waiting" | "working", timeout: number) {
-  const other = state === "waiting" ? "working" : "waiting";
+async function expectSummaryState(summary: Locator, state: "unread" | "working", timeout: number) {
+  const other = state === "unread" ? "working" : "unread";
   await expect(summary.locator(`[data-state="${state}"]`)).toHaveCount(1, { timeout });
   await expect(summary.locator(`[data-state="${other}"]`)).toHaveCount(0);
   await expect(summary).toHaveAttribute("aria-label", new RegExp(`\\b1 ${state}\\b`));
@@ -374,8 +374,9 @@ test.describe("Full: agent-state transitions, status surfaces, and hidden-pane d
     await measureWorkingToWaiting(window, "visible.cycle1");
     await expect(agentPanel.locator(SEL.terminal.agentStateChip)).toHaveAttribute(
       "aria-label",
-      "Agent state: waiting"
+      "Agent state: finished"
     );
+    await expect(agentPanel).toHaveAttribute("data-agent-state", "waiting");
     await measureWaitingToWorking(window, "visible.cycle1");
     await expect(agentPanel).toHaveAttribute("data-agent-state", "working", { timeout: T_SHORT });
 
@@ -398,10 +399,10 @@ test.describe("Full: agent-state transitions, status surfaces, and hidden-pane d
     await expect(agentPanel).toBeHidden({ timeout: T_LONG });
     await expectSummaryState(summary, "working", T_LONG);
 
-    // The subject is what the renderer's panel store makes of the host events
-    // while the pane is hidden, read off the surface that draws from it.
-    await agentCommand("idle");
-    await expectSummaryState(summary, "waiting", T_LONG * 3);
+    // The raw observation stays waiting; a hidden hand-back is shown as unread.
+    const stopped = await agentCommand("idle");
+    await waitForObserved(window, "state", "waiting", stopped.at, T_LONG * 3);
+    await expectSummaryState(summary, "unread", T_LONG * 3);
     await expect(agentPanel).toBeHidden();
     await agentCommand("work");
     await expectSummaryState(summary, "working", T_LONG * 3);
@@ -654,11 +655,12 @@ test.describe("Full: agent-state transitions, status surfaces, and hidden-pane d
           intervals: [500, 1000],
         })
         .toBe("waiting");
-      // The visible chip must track the FSM, not lag on the prior label.
+      // Reading the visible hand-back settles its glyph without changing raw waiting.
       await expect(panel.locator(SEL.terminal.agentStateChip)).toHaveAttribute(
         "aria-label",
-        "Agent state: waiting"
+        "Agent state: finished"
       );
+      await expect(panel).toHaveAttribute("data-agent-state", "waiting");
     });
 
     await test.step("agent state clears when the session exits", async () => {

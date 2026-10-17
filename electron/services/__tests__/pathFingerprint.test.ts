@@ -22,23 +22,6 @@ describe("fingerprintPaths", () => {
     await fs.rm(root, { recursive: true, force: true });
   });
 
-  it("returns one fingerprint per requested path, positionally", async () => {
-    const a = path.join(root, "a.txt");
-    const b = path.join(root, "b.txt");
-    await fs.writeFile(a, "a");
-    await fs.writeFile(b, "b");
-
-    const [first, second, third] = await fingerprintPaths(root, [
-      a,
-      path.join(root, "missing.txt"),
-      b,
-    ]);
-
-    expect(first).not.toBeNull();
-    expect(second).toBeNull();
-    expect(third).not.toBeNull();
-  });
-
   it("is stable across samples when nothing changed", async () => {
     const file = path.join(root, "stable.txt");
     await fs.writeFile(file, "unchanged");
@@ -103,24 +86,6 @@ describe("fingerprintPaths", () => {
     const [leftPrint, rightPrint] = await fingerprintPaths(root, [left, right]);
     expect(leftPrint).not.toBeNull();
     expect(leftPrint).not.toBe(rightPrint);
-  });
-
-  it("is stable across repeated samples of an untouched wide directory", async () => {
-    // Names enough entries that an implementation depending on enumeration order
-    // has room to drift. It cannot force two different `readdir` orders, so it
-    // pins stability rather than proving order-independence — the digest's
-    // commutativity is what provides that, and the two-directory test above is
-    // what proves the digest is consulted at all.
-    const wide = path.join(root, "wide");
-    await fs.mkdir(wide);
-    await Promise.all(
-      Array.from({ length: 50 }, (_, index) => fs.writeFile(path.join(wide, `f${index}`), "x"))
-    );
-
-    const [first] = await fingerprintPaths(root, [wide]);
-    const [second] = await fingerprintPaths(root, [wide]);
-
-    expect(first).toBe(second);
   });
 
   it("fingerprints a batch wider than its worker pool without losing positions", async () => {

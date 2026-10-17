@@ -1,4 +1,5 @@
 import type { Project } from "../../shared/types/project.js";
+import type { HostId } from "../../shared/types/remoteHosts.js";
 
 /** Shown when no project is on screen: the picker, a scratch, an unbound window. */
 export const FALLBACK_WINDOW_TITLE = "Daintree";
@@ -53,8 +54,39 @@ export function resolveWindowProjectName(
   return bridged ?? openProjectName(pvm.getActiveProjectId(), lookup);
 }
 
+/**
+ * Host-qualified views ("<project> — <host>") have no row in this machine's
+ * project store, so the project's name is kept here when a window opens it.
+ * The host's name is read when the title is, so a rename reaches the title.
+ */
+const remoteWorkspaceTitles = new Map<string, { projectName: string; hostId: HostId }>();
+
+let remoteHostName: (hostId: HostId) => string | null = () => null;
+
+/** How a host's current name is read; set once Remote Hosts is up. */
+export function setRemoteHostNameResolver(resolve: (hostId: HostId) => string | null): void {
+  remoteHostName = resolve;
+}
+
+export function rememberRemoteWorkspaceTitle(
+  key: string,
+  projectName: string,
+  hostId: HostId
+): void {
+  remoteWorkspaceTitles.set(key, { projectName, hostId });
+}
+
+/** A host was removed from this device: nothing of it is named any more. */
+export function forgetRemoteWorkspaceTitles(hostId: HostId): void {
+  for (const [key, entry] of remoteWorkspaceTitles) {
+    if (entry.hostId === hostId) remoteWorkspaceTitles.delete(key);
+  }
+}
+
 function openProjectName(projectId: string | null, lookup: ProjectTitleLookup): string | null {
   if (!projectId) return null;
+  const remote = remoteWorkspaceTitles.get(projectId);
+  if (remote) return `${remote.projectName} — ${remoteHostName(remote.hostId) ?? remote.hostId}`;
   const project = lookup(projectId);
   if (!project || project.status === "closed") return null;
   return project.name ?? null;

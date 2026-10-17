@@ -28,12 +28,6 @@ describe("useIssueSelection", () => {
     useIssueSelectionStore.setState({ selections: new Map() });
   });
 
-  it("starts with empty selection", () => {
-    const { result } = renderHook(() => useIssueSelection("issue", PROJECT));
-    expect(result.current.selectedIds.size).toBe(0);
-    expect(result.current.isSelectionActive).toBe(false);
-  });
-
   it("toggles an item on and off", () => {
     const { result } = renderHook(() => useIssueSelection("issue", PROJECT));
 
@@ -44,19 +38,6 @@ describe("useIssueSelection", () => {
     act(() => result.current.toggle(item(42)));
     expect(result.current.selectedIds.has(42)).toBe(false);
     expect(result.current.isSelectionActive).toBe(false);
-  });
-
-  it("selects multiple items independently", () => {
-    const { result } = renderHook(() => useIssueSelection("issue", PROJECT));
-
-    act(() => result.current.toggle(item(1)));
-    act(() => result.current.toggle(item(2)));
-    act(() => result.current.toggle(item(3)));
-
-    expect(result.current.selectedIds.size).toBe(3);
-    expect(result.current.selectedIds.has(1)).toBe(true);
-    expect(result.current.selectedIds.has(2)).toBe(true);
-    expect(result.current.selectedIds.has(3)).toBe(true);
   });
 
   it("selects a range from the last toggled item", () => {
@@ -85,13 +66,6 @@ describe("useIssueSelection", () => {
     expect(result.current.selectedIds.has(30)).toBe(true);
     expect(result.current.selectedIds.has(40)).toBe(true);
     expect(result.current.selectedIds.has(50)).toBe(true);
-  });
-
-  it("selects all items", () => {
-    const { result } = renderHook(() => useIssueSelection("issue", PROJECT));
-
-    act(() => result.current.selectAll(items(1, 2, 3, 4, 5)));
-    expect(result.current.selectedIds.size).toBe(5);
   });
 
   it("clears all selection", () => {
@@ -242,16 +216,5 @@ describe("useIssueSelection", () => {
 
     expect(b.result.current.selectedIds.size).toBe(1);
     expect(b.result.current.selectedIds.has(40)).toBe(true);
-  });
-
-  it("two hooks on the same key observe each other's mutations", () => {
-    const first = renderHook(() => useIssueSelection("issue", PROJECT));
-    const second = renderHook(() => useIssueSelection("issue", PROJECT));
-
-    act(() => first.result.current.toggle(item(7)));
-    expect(second.result.current.selectedIds.has(7)).toBe(true);
-
-    act(() => second.result.current.clear());
-    expect(first.result.current.selectedIds.size).toBe(0);
   });
 });

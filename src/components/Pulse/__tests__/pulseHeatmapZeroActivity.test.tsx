@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
-import { describe, it, expect } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { afterEach, beforeEach, describe, it, expect, vi } from "vitest";
+import { act, fireEvent, render, screen } from "@testing-library/react";
 import type { HeatCell } from "@shared/types";
 import { PulseHeatmap } from "../PulseHeatmap";
 import { TooltipProvider } from "../../ui/tooltip";
@@ -40,10 +40,10 @@ const CELLS: HeatCell[] = [
   cell(8, 0),
 ];
 
-function renderHeatmap() {
+function renderHeatmap(cells: HeatCell[] = CELLS) {
   return render(
     <TooltipProvider>
-      <PulseHeatmap cells={CELLS} rangeDays={60} />
+      <PulseHeatmap cells={cells} rangeDays={60} />
     </TooltipProvider>
   );
 }
@@ -110,5 +110,96 @@ describe("PulseHeatmap — a quiet day is never a failure", () => {
     expect(stateOf("2026-01-04")).not.toBe(stateOf("2026-01-03"));
     expect(worked.getAttribute("data-heat-level")).toBe("4");
     expect(worked.querySelector(".pulse-heat-cell-shape")).not.toBeNull();
+  });
+});
+
+describe("PulseHeatmap — today is named, not inferred", () => {
+  // Today is a quiet day here, so the latest-active ring sits elsewhere — the
+  // case where "the ringed cell" and "today" would otherwise be confused.
+  const cells: HeatCell[] = [
+    { date: "2026-09-20", count: 3, level: 3, isMostRecentActive: false },
+    { date: "2026-09-21", count: 2, level: 2 },
+    { date: "2026-09-22", count: 4, level: 4, isMostRecentActive: true },
+    { date: "2026-09-23", count: 0, level: 0, isToday: true },
+  ];
+
+  it("labels today's row beside the grid and names today in its cell", () => {
+    renderHeatmap(cells);
+    const label = document.querySelector<HTMLElement>('[data-testid="pulse-heatmap-today"]')!;
+    expect(label.textContent).toBe("Today");
+
+    const today = cellByDate("2026-09-23");
+    expect(today.getAttribute("aria-label")).toMatch(/^Today, /);
+
+    // Only today says "Today"; the latest-active day keeps its own meaning.
+    expect(cellByDate("2026-09-22").getAttribute("aria-label")).not.toMatch(/Today/);
+    expect(cellByDate("2026-09-22").hasAttribute("data-latest-active")).toBe(true);
+    expect(today.hasAttribute("data-latest-active")).toBe(false);
+  });
+
+  it("moves the label with today's weekday row", () => {
+    // 2026-09-21 is a Monday (top row), 22 a Tuesday, 23 a Wednesday.
+    const topFor = (todayDate: string) => {
+      const { unmount } = renderHeatmap(
+        cells.map((c) => ({ ...c, isToday: c.date === todayDate }))
+      );
+      const top = parseFloat(
+        document.querySelector<HTMLElement>('[data-testid="pulse-heatmap-today"]')!.style.top
+      );
+      unmount();
+      return top;
+    };
+    const monday = topFor("2026-09-21");
+    const tuesday = topFor("2026-09-22");
+    const wednesday = topFor("2026-09-23");
+    expect(monday).toBe(0);
+    expect(tuesday).toBeGreaterThan(0);
+    expect(wednesday).toBe(2 * tuesday);
+  });
+
+  it("draws no today label when the range does not include today", () => {
+    renderHeatmap(cells.map((c) => ({ ...c, isToday: false })));
+    expect(document.querySelector('[data-testid="pulse-heatmap-today"]')).toBeNull();
+  });
+});
+
+describe("PulseHeatmap — a day's tooltip is its readout, not a passing hint", () => {
+  const cells: HeatCell[] = [
+    { date: "2026-09-21", count: 2, level: 2 },
+    { date: "2026-09-22", count: 5, level: 4 },
+    { date: "2026-09-23", count: 0, level: 0 },
+    { date: "2026-09-24", count: 1, level: 1, isToday: true, isMostRecentActive: true },
+  ];
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("keeps the focused day's date and count on screen past the app's hint window", async () => {
+    renderHeatmap(cells);
+    // Radix loads lazily; let the loader settle before driving focus.
+    await act(async () => {
+      await vi.runOnlyPendingTimersAsync();
+    });
+
+    const cell = cellByDate("2026-09-22");
+    act(() => {
+      cell.focus();
+      fireEvent.focus(cell);
+    });
+    const shown = () => document.body.textContent ?? "";
+    expect(shown()).toContain("5 commits");
+
+    // The app-wide tooltip wrapper auto-hides hints after a fixed window. A
+    // heatmap day has no other visible place its count lives, so it must
+    // outlast that window while the cell holds focus.
+    act(() => {
+      vi.advanceTimersByTime(10_000);
+    });
+    expect(shown()).toContain("5 commits");
   });
 });

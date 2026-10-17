@@ -6,7 +6,7 @@ import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";
 import { logError } from "@/utils/logger";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
 import { isPathStrictlyInside } from "@shared/utils/path";
-import { isMac, isWindows } from "@/lib/platform";
+import { isHostMac, isHostWindows } from "@/hooks/useHostPlatform";
 import {
   buildWorktreeDeletePreview,
   fetchWorktreeTeardownPreview,
@@ -677,7 +677,8 @@ export function useWorktreeBulkRemove({
       // slot could fill every slot while its descendants wait behind it.
       // A nested worktree outside the run is the host's to judge: it probes
       // the folder, where this snapshot can only guess.
-      const caseInsensitive = isMac() || isWindows();
+      // The project's host decides: a Linux host's paths are case-sensitive under any Shell.
+      const caseInsensitive = isHostMac() || isHostWindows();
       const runs = new Map<string, Promise<BulkRemoveResult>>();
       const run = (target: BulkRemoveTarget): Promise<BulkRemoveResult> => {
         const existing = runs.get(target.id);

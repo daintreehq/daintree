@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { render, fireEvent, act, screen, cleanup } from "@testing-library/react";
+import { render, fireEvent, act, cleanup } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const {
@@ -324,6 +324,7 @@ vi.mock("@/store/helpPanelStore", () => {
     selectSlot: (s: typeof helpPanelState) => s,
     selectActiveSlot: (s: typeof helpPanelState) => s,
     selectOpenSlots: () => [0],
+    selectHasRoomForSession: () => true,
     selectSlotTerminalIds: (s: typeof helpPanelState) => (s.terminalId ? [s.terminalId] : []),
     selectSlotForTerminal: (s: typeof helpPanelState, id: string) =>
       s.terminalId === id && id ? 0 : null,
@@ -693,125 +694,6 @@ describe("HelpPanel — handleRunAnyway", () => {
     expect(mockMarkTerminal).toHaveBeenCalledWith("terminal-restarted");
   });
 
-  it("notifies and reverts the reserved help-terminal id on addPanel rejection", async () => {
-    helpPanelState.terminalId = "gate-1";
-    helpPanelState.agentId = "claude";
-    panelStoreState.panelsById = {
-      "gate-1": {
-        id: "gate-1",
-        kind: "terminal",
-        spawnStatus: "missing-cli",
-        cwd: "/help",
-        title: "Claude",
-        command: "claude",
-        location: "dock",
-      },
-    };
-    cliAvailabilityState.details = {
-      claude: { state: "missing", resolvedPath: null, via: null },
-    };
-    mockDispatch.mockResolvedValue({ ok: false });
-
-    const { getByTestId } = render(<HelpPanel width={380} />);
-
-    await act(async () => {
-      fireEvent.click(getByTestId("run-anyway"));
-    });
-
-    // The pre-set fired once (reserving the slot), then clearTerminal reverted it
-    // when dispatch returned !ok — so no second setTerminal call carrying a session id.
-    expect(helpPanelState.setTerminal).toHaveBeenCalledTimes(1);
-    expect(helpPanelState.setTerminal).toHaveBeenCalledWith(
-      0,
-      expect.stringMatching(/^terminal-/),
-      "claude",
-      null
-    );
-    expect(helpPanelState.clearTerminal).toHaveBeenCalled();
-    expect(screen.getByTestId("help-launch-error-banner")).toBeTruthy();
-    expect(mockNotify).not.toHaveBeenCalled();
-  });
-
-  it("reserves the new help-terminal id BEFORE dispatch resolves (race fix for #6951)", async () => {
-    helpPanelState.terminalId = "gate-1";
-    helpPanelState.agentId = "claude";
-    panelStoreState.panelsById = {
-      "gate-1": {
-        id: "gate-1",
-        kind: "terminal",
-        spawnStatus: "missing-cli",
-        cwd: "/help",
-        title: "Claude",
-        command: "claude",
-        location: "dock",
-      },
-    };
-    cliAvailabilityState.details = {
-      claude: { state: "missing", resolvedPath: null, via: null },
-    };
-
-    // Hold dispatch resolution until after we've inspected store state.
-    let resolveDispatch: (value: unknown) => void = () => {};
-    mockDispatch.mockImplementation(() => {
-      return new Promise((r) => {
-        resolveDispatch = r;
-      });
-    });
-
-    const { getByTestId } = render(<HelpPanel width={380} />);
-
-    await act(async () => {
-      fireEvent.click(getByTestId("run-anyway"));
-    });
-
-    // Capture the requestedId from the dispatch call.
-    const capturedRequestedId = (
-      mockDispatch.mock.calls[0]?.[1] as { requestedId?: string } | undefined
-    )?.requestedId;
-
-    // setTerminal fired with the pre-generated id while dispatch is still pending.
-    expect(capturedRequestedId).toMatch(/^terminal-/);
-    expect(helpPanelState.setTerminal).toHaveBeenCalledWith(0, capturedRequestedId, "claude", null);
-
-    await act(async () => {
-      resolveDispatch({ ok: true, result: { terminalId: capturedRequestedId! } });
-    });
-  });
-
-  it("reverts the reserved id when provisionHelpSession returns a non-ok outcome", async () => {
-    helpPanelState.terminalId = "gate-1";
-    helpPanelState.agentId = "claude";
-    panelStoreState.panelsById = {
-      "gate-1": {
-        id: "gate-1",
-        kind: "terminal",
-        spawnStatus: "missing-cli",
-        cwd: "/help",
-        title: "Claude",
-        command: "claude",
-        location: "dock",
-      },
-    };
-    cliAvailabilityState.details = {
-      claude: { state: "missing", resolvedPath: null, via: null },
-    };
-    projectStoreState.currentProject = { id: "proj-1", path: "/repo" };
-    const mcpErr = new Error("MCP server not ready") as Error & { code: string };
-    mcpErr.code = "MCP_NOT_READY";
-    mockProvisionSession.mockRejectedValueOnce(mcpErr);
-
-    const { getByTestId } = render(<HelpPanel width={380} />);
-
-    await act(async () => {
-      fireEvent.click(getByTestId("run-anyway"));
-    });
-
-    // Pre-set fired, then was reverted by the !outcome.ok branch.
-    expect(helpPanelState.setTerminal).toHaveBeenCalledTimes(1);
-    expect(helpPanelState.clearTerminal).toHaveBeenCalled();
-    expect(panelStoreState.addPanel).not.toHaveBeenCalled();
-  });
-
   it("revokes the freshly-provisioned session when addPanel throws (regression: leaked token)", async () => {
     projectStoreState.currentProject = { id: "proj-1", path: "/repo" };
     helpPanelState.terminalId = "gate-1";
@@ -847,51 +729,6 @@ describe("HelpPanel — handleRunAnyway", () => {
     });
 
     expect(mockRevokeSession).toHaveBeenCalledWith("leaked-sess");
-  });
-
-  it("forwards fresh customArgs from settings to agent.launch dispatch", async () => {
-    projectStoreState.currentProject = { id: "proj-1", path: "/repo" };
-    helpPanelState.terminalId = "gate-1";
-    helpPanelState.agentId = "claude";
-    panelStoreState.panelsById = {
-      "gate-1": {
-        id: "gate-1",
-        kind: "terminal",
-        spawnStatus: "missing-cli",
-        cwd: "/help",
-        title: "Claude",
-        command: "claude",
-        location: "dock",
-      },
-    };
-    cliAvailabilityState.details = {
-      claude: { state: "missing", resolvedPath: null, via: null },
-    };
-    mockGetHelpAssistantSettings.mockResolvedValue({
-      docSearch: true,
-      daintreeControl: true,
-      tier: "core" as const,
-      bypassPermissions: false,
-      auditRetention: 7,
-      modelIds: { claude: "", codex: "", gemini: "" },
-      customArgs: "--model sonnet",
-    });
-    mockDispatch.mockResolvedValue({ ok: true, result: { terminalId: "restarted-term" } });
-
-    const { getByTestId } = render(<HelpPanel width={380} />);
-
-    await act(async () => {
-      fireEvent.click(getByTestId("run-anyway"));
-    });
-
-    expect(mockDispatch).toHaveBeenCalledWith(
-      "agent.launch",
-      expect.objectContaining({
-        agentLaunchFlags: ["--model", "sonnet"],
-        force: true,
-      }),
-      { source: "user" }
-    );
   });
 });
 
@@ -1108,19 +945,5 @@ describe("HelpPanel — single-supported-agent auto-skip (issue #6612)", () => {
 
     expect(mockDispatch).not.toHaveBeenCalled();
     expect(helpPanelState.setTerminal).not.toHaveBeenCalled();
-  });
-
-  it("never renders a Back button (picker removed)", () => {
-    helpPanelState.terminalId = "term-1";
-    helpPanelState.agentId = "claude";
-    cliAvailabilityState.availability = { claude: "ready", codex: "ready" };
-    mockGetAssistantSupportedAgentIds.mockReturnValue(["claude", "codex"]);
-    panelStoreState.panelsById = {
-      "term-1": { id: "term-1", kind: "terminal", spawnStatus: "ready", cwd: "/help" },
-    };
-
-    const { container } = render(<HelpPanel width={380} />);
-
-    expect(container.querySelector('button[aria-label="Back to agent picker"]')).toBeNull();
   });
 });

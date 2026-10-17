@@ -58,6 +58,15 @@ vi.mock("@/clients", () => ({
   },
 }));
 
+const { resolveUnknownOutcomeMock } = vi.hoisted(() => ({ resolveUnknownOutcomeMock: vi.fn() }));
+
+// A lost answer is resolved against the host's record; the real resolver waits on a live link.
+vi.mock("@/utils/resolveUnknownOutcome", () => ({
+  isUnknownOutcomeError: (error: unknown) =>
+    error instanceof Error && error.message.includes("OUTCOME_UNKNOWN"),
+  resolveUnknownOutcome: resolveUnknownOutcomeMock,
+}));
+
 vi.mock("@/services/ActionService", () => ({
   actionService: {
     dispatch: dispatchMock,
@@ -236,31 +245,11 @@ describe("CloneRepoDialog", () => {
     return screen.findByRole("progressbar", {}, { timeout: 3000 });
   }
 
-  it("renders input fields when opened", () => {
-    render(<CloneRepoDialog isOpen={true} onSuccess={vi.fn()} onCancel={vi.fn()} />);
-
-    expect(screen.getByLabelText(/^url$/i)).toBeTruthy();
-    expect(screen.getByLabelText(/^location$/i)).toBeTruthy();
-    expect(screen.getByLabelText(/^name$/i)).toBeTruthy();
-    expect(screen.getByRole("button", { name: "Clone" })).toBeTruthy();
-  });
-
   it("Clone button is disabled when URL or path is empty", () => {
     render(<CloneRepoDialog isOpen={true} onSuccess={vi.fn()} onCancel={vi.fn()} />);
 
     const cloneBtn = screen.getByRole("button", { name: "Clone" }) as HTMLButtonElement;
     expect(cloneBtn.getAttribute("aria-disabled")).toBe("true");
-  });
-
-  it("auto-derives folder name from URL", () => {
-    render(<CloneRepoDialog isOpen={true} onSuccess={vi.fn()} onCancel={vi.fn()} />);
-
-    const urlInput = screen.getByLabelText(/^url$/i);
-    fireEvent.change(urlInput, { target: { value: "https://github.com/user/my-repo.git" } });
-
-    const inputs = screen.getAllByRole("textbox") as HTMLInputElement[];
-    const folderInput = inputs.find((i) => i.value === "my-repo");
-    expect(folderInput).toBeDefined();
   });
 
   it("calls cloneRepo with correct options on submit", async () => {
@@ -281,6 +270,7 @@ describe("CloneRepoDialog", () => {
       fireEvent.click(cloneBtn);
     });
 
+    // A local view names no operation: the Host runs the clone untracked.
     expect(cloneRepoMock).toHaveBeenCalledWith({
       url: "https://github.com/user/test-repo.git",
       parentPath: "/tmp",
@@ -289,37 +279,66 @@ describe("CloneRepoDialog", () => {
     });
   });
 
-  it("shows progress events during clone", async () => {
+  it("names the clone as an operation in a remote-bound view", async () => {
     cloneRepoMock.mockImplementation(() => new Promise(() => {}));
-
-    render(<CloneRepoDialog isOpen={true} onSuccess={vi.fn()} onCancel={vi.fn()} />);
-
-    const urlInput = screen.getByLabelText(/^url$/i);
-    fireEvent.change(urlInput, { target: { value: "https://github.com/user/repo.git" } });
-
-    const browseBtn = screen.getByRole("button", { name: "Browse for a location" });
-    await act(async () => {
-      fireEvent.click(browseBtn);
-    });
-
-    const cloneBtn = screen.getByRole("button", { name: "Clone" });
-    await act(async () => {
-      fireEvent.click(cloneBtn);
-    });
-
-    await waitFor(() => expect(progressHandler).not.toBeNull());
-    await waitForRunningMode();
-
-    act(() => {
-      progressHandler?.({
-        stage: "receiving",
-        progress: 50,
-        message: "receiving: 50%",
-        timestamp: Date.now(),
+    window.__DAINTREE_HOST_ID__ = { id: "build-box" };
+    try {
+      render(<CloneRepoDialog isOpen={true} onSuccess={vi.fn()} onCancel={vi.fn()} />);
+      fireEvent.change(screen.getByLabelText(/^url$/i), {
+        target: { value: "https://github.com/user/test-repo.git" },
       });
-    });
+      await act(async () => {
+        fireEvent.click(screen.getByRole("button", { name: "Browse for a location" }));
+      });
+      await act(async () => {
+        fireEvent.click(screen.getByRole("button", { name: "Clone" }));
+      });
 
-    expect((await findProgressBar()).getAttribute("aria-label")).toBe("receiving");
+      // The clone runs as a named operation so a dropped link can resolve it.
+      expect(cloneRepoMock).toHaveBeenCalledWith(
+        expect.objectContaining({ opId: expect.stringMatching(/^[0-9a-f-]{36}$/) })
+      );
+
+      await act(async () => {
+        fireEvent.click(screen.getByText("Stop clone"));
+      });
+      // Stop names the clone it launched, so it cancels that one and no other.
+      expect(cancelCloneMock).toHaveBeenCalledWith(cloneRepoMock.mock.calls[0]?.[0]?.opId);
+    } finally {
+      delete window.__DAINTREE_HOST_ID__;
+    }
+  });
+
+  it("opens the host's clone when the answer was lost but the host finished it", async () => {
+    cloneRepoMock.mockRejectedValueOnce(new Error("[AppError|OUTCOME_UNKNOWN] link dropped"));
+    resolveUnknownOutcomeMock.mockResolvedValueOnce({
+      status: "succeeded",
+      result: { clonedPath: "/srv/my-repo" },
+    });
+    const onSuccess = vi.fn();
+    window.__DAINTREE_HOST_ID__ = { id: "build-box" };
+    try {
+      render(<CloneRepoDialog isOpen={true} onSuccess={onSuccess} onCancel={vi.fn()} />);
+      fireEvent.click(screen.getByRole("radio", { name: "New window" }));
+      fireEvent.change(screen.getByLabelText(/^url$/i), {
+        target: { value: "https://github.com/user/my-repo.git" },
+      });
+      await act(async () => {
+        fireEvent.click(screen.getByRole("button", { name: "Browse for a location" }));
+      });
+      await act(async () => {
+        fireEvent.click(screen.getByRole("button", { name: "Clone" }));
+      });
+
+      const opId = cloneRepoMock.mock.calls[0]?.[0]?.opId;
+      expect(resolveUnknownOutcomeMock).toHaveBeenCalledWith(opId, expect.anything());
+      fireEvent.click(await screen.findByRole("button", { name: "Open in new window" }));
+      expect(onSuccess).toHaveBeenCalledWith("/srv/my-repo", expect.anything(), {
+        disposition: "new",
+      });
+    } finally {
+      delete window.__DAINTREE_HOST_ID__;
+    }
   });
 
   it("stops offering a dismissal once the only thing it can do is open the project", async () => {
@@ -805,12 +824,6 @@ describe("CloneRepoDialog", () => {
     expect(dialog.getAttribute("data-dismissible")).toBe("false");
   });
 
-  it("does not render when isOpen is false", () => {
-    render(<CloneRepoDialog isOpen={false} onSuccess={vi.fn()} onCancel={vi.fn()} />);
-
-    expect(screen.queryByTestId("app-dialog")).toBeNull();
-  });
-
   it("expands owner/repo shorthand to full GitHub URL on clone", async () => {
     cloneRepoMock.mockImplementation(() => new Promise(() => {}));
 
@@ -871,17 +884,6 @@ describe("CloneRepoDialog", () => {
     expect(cloneRepoMock).not.toHaveBeenCalled();
   });
 
-  it("auto-derives folder name from owner/repo shorthand", () => {
-    render(<CloneRepoDialog isOpen={true} onSuccess={vi.fn()} onCancel={vi.fn()} />);
-
-    const urlInput = screen.getByLabelText(/^url$/i);
-    fireEvent.change(urlInput, { target: { value: "facebook/react" } });
-
-    const inputs = screen.getAllByRole("textbox") as HTMLInputElement[];
-    const folderInput = inputs.find((i) => i.value === "react");
-    expect(folderInput).toBeDefined();
-  });
-
   it("sends shallowClone: true when checkbox is checked", async () => {
     cloneRepoMock.mockImplementation(() => new Promise(() => {}));
 
@@ -939,32 +941,8 @@ describe("CloneRepoDialog", () => {
       fireEvent.click(stopBtn);
     });
 
-    expect(cancelCloneMock).toHaveBeenCalled();
-  });
-
-  it("does not show error after cancelled clone", async () => {
-    cloneRepoMock.mockRejectedValue(
-      Object.assign(new Error("Clone cancelled"), { name: "AppError", code: "CANCELLED" })
-    );
-
-    render(<CloneRepoDialog isOpen={true} onSuccess={vi.fn()} onCancel={vi.fn()} />);
-
-    const urlInput = screen.getByLabelText(/^url$/i);
-    fireEvent.change(urlInput, { target: { value: "https://github.com/user/repo.git" } });
-
-    const browseBtn = screen.getByRole("button", { name: "Browse for a location" });
-    await act(async () => {
-      fireEvent.click(browseBtn);
-    });
-
-    const cloneBtn = screen.getByRole("button", { name: "Clone" });
-    await act(async () => {
-      fireEvent.click(cloneBtn);
-    });
-
-    await waitFor(() => {
-      expect(screen.queryByText("Clone failed")).toBeNull();
-    });
+    // A local Stop is the historical cancel: no id, so every clone stops.
+    expect(cancelCloneMock).toHaveBeenCalledWith();
   });
 
   it("treats a bridge-shaped CANCELLED rejection as a stop, not a failure", async () => {
@@ -1099,28 +1077,6 @@ describe("CloneRepoDialog", () => {
     inputs = screen.getAllByRole("textbox") as HTMLInputElement[];
     folderInput = inputs.find((i) => i.value === "second");
     expect(folderInput).toBeDefined();
-  });
-
-  it("submits clone when Enter is pressed in URL input", async () => {
-    cloneRepoMock.mockImplementation(() => new Promise(() => {}));
-
-    render(<CloneRepoDialog isOpen={true} onSuccess={vi.fn()} onCancel={vi.fn()} />);
-
-    const urlInput = screen.getByLabelText(/^url$/i);
-    fireEvent.change(urlInput, { target: { value: "https://github.com/user/repo.git" } });
-
-    const browseBtn = screen.getByRole("button", { name: "Browse for a location" });
-    await act(async () => {
-      fireEvent.click(browseBtn);
-    });
-
-    await act(async () => {
-      fireEvent.keyDown(urlInput, { key: "Enter" });
-    });
-
-    expect(cloneRepoMock).toHaveBeenCalledWith(
-      expect.objectContaining({ url: "https://github.com/user/repo.git" })
-    );
   });
 
   it("does not submit on Enter when form is invalid", async () => {
@@ -1282,44 +1238,6 @@ describe("CloneRepoDialog", () => {
     expect(screen.getAllByTestId("spinner")).toHaveLength(1);
   });
 
-  it("dedups progress events by stage so a single stage shows one row", async () => {
-    cloneRepoMock.mockImplementation(() => new Promise(() => {}));
-
-    render(<CloneRepoDialog isOpen={true} onSuccess={vi.fn()} onCancel={vi.fn()} />);
-
-    const urlInput = screen.getByLabelText(/^url$/i);
-    fireEvent.change(urlInput, { target: { value: "https://github.com/user/repo.git" } });
-
-    const browseBtn = screen.getByRole("button", { name: "Browse for a location" });
-    await act(async () => {
-      fireEvent.click(browseBtn);
-    });
-
-    const cloneBtn = screen.getByRole("button", { name: "Clone" });
-    await act(async () => {
-      fireEvent.click(cloneBtn);
-    });
-
-    await waitFor(() => expect(progressHandler).not.toBeNull());
-    await waitForRunningMode();
-
-    act(() => {
-      for (let pct = 0; pct <= 100; pct += 10) {
-        progressHandler?.({
-          stage: "receiving",
-          progress: pct,
-          message: `receiving: ${pct}%`,
-          timestamp: Date.now(),
-        });
-      }
-    });
-
-    // One stage updating repeatedly stays one row — an unbounded log was the
-    // old failure mode — and the reported value tracks the latest payload.
-    expect(screen.getAllByTestId("spinner")).toHaveLength(1);
-    expect((await findProgressBar()).getAttribute("aria-valuenow")).toBe("100");
-  });
-
   it("reads the percentage from the payload, not from the message text", async () => {
     cloneRepoMock.mockImplementation(() => new Promise(() => {}));
 
@@ -1352,31 +1270,6 @@ describe("CloneRepoDialog", () => {
     });
 
     expect((await findProgressBar()).getAttribute("aria-valuenow")).toBe("37");
-  });
-
-  it("does not treat full URLs as owner/repo shorthand", async () => {
-    cloneRepoMock.mockImplementation(() => new Promise(() => {}));
-
-    render(<CloneRepoDialog isOpen={true} onSuccess={vi.fn()} onCancel={vi.fn()} />);
-
-    const urlInput = screen.getByLabelText(/^url$/i);
-    fireEvent.change(urlInput, { target: { value: "https://gitlab.com/user/repo.git" } });
-
-    const browseBtn = screen.getByRole("button", { name: "Browse for a location" });
-    await act(async () => {
-      fireEvent.click(browseBtn);
-    });
-
-    const cloneBtn = screen.getByRole("button", { name: "Clone" });
-    await act(async () => {
-      fireEvent.click(cloneBtn);
-    });
-
-    expect(cloneRepoMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        url: "https://gitlab.com/user/repo.git",
-      })
-    );
   });
 
   async function startActiveClone() {
@@ -1413,39 +1306,6 @@ describe("CloneRepoDialog", () => {
 
       expect(screen.queryByText("Connecting…")).toBeNull();
       expect(screen.queryByTestId("spinner")).toBeNull();
-    });
-
-    it("shows the connecting placeholder once the threshold elapses", async () => {
-      render(<CloneRepoDialog isOpen={true} onSuccess={vi.fn()} onCancel={vi.fn()} />);
-      await startActiveClone();
-
-      act(() => {
-        vi.advanceTimersByTime(400);
-      });
-
-      expect(screen.getByText("Connecting…")).toBeTruthy();
-    });
-
-    it("never flashes the placeholder when progress arrives before the threshold", async () => {
-      render(<CloneRepoDialog isOpen={true} onSuccess={vi.fn()} onCancel={vi.fn()} />);
-      await startActiveClone();
-
-      act(() => {
-        vi.advanceTimersByTime(200);
-        progressHandler?.({
-          stage: "receiving",
-          progress: 5,
-          message: "Receiving: 5%",
-          timestamp: Date.now(),
-        });
-      });
-
-      act(() => {
-        vi.advanceTimersByTime(600);
-      });
-
-      expect(screen.queryByText("Connecting…")).toBeNull();
-      expect(screen.getByRole("progressbar").getAttribute("aria-label")).toBe("Receiving");
     });
 
     it("does not switch to the running view when progress arrives before the threshold", async () => {

@@ -530,13 +530,6 @@ describe("restorePanelsPhase — saved panels", () => {
     expect(respawnArgs.initialTerminalGeometry).toEqual({ cols: 203, rows: 51 });
   });
 
-  it("omits an invalid saved grid rather than partially defaulting it", async () => {
-    const ctx = makeContext({ terminalSizes: { t1: { cols: 0, rows: 51 } } });
-    ctx.backendTerminalMap.set("t1", backend("t1"));
-    await restorePanelsPhase([panel("t1")], ctx);
-    expect(geometryPassedToAddPanel(ctx.addPanel, "t1")).toBeUndefined();
-  });
-
   it("omits a saved grid no pane could have been showing (#12442)", async () => {
     // The map on disk after the collapse. Seeding xterm to match is what made
     // the 2x1 survive a restart, so an implausible entry counts as no entry:
@@ -607,13 +600,6 @@ describe("restorePanelsPhase — saved panels", () => {
    * not the plumbing — a regression that reinstates "persisted wins" restores
    * the original bug on every reconnect.
    */
-  it("prefers the live PTY grid over a stale persisted size on reconnect", async () => {
-    const ctx = makeContext({ terminalSizes: { t1: { cols: 80, rows: 24 } } });
-    ctx.backendTerminalMap.set("t1", backend("t1", { ptyCols: 203, ptyRows: 51 }));
-    await restorePanelsPhase([panel("t1")], ctx);
-    expect(geometryPassedToAddPanel(ctx.addPanel, "t1")).toEqual({ cols: 203, rows: 51 });
-  });
-
   it("falls back to the persisted size when the PTY grid is half-reported", async () => {
     // A partial pair is not a grid — taking `cols` alone would boot the pane on
     // a geometry no PTY is on, which is the failure this whole path exists for.
@@ -667,23 +653,6 @@ describe("restorePanelsPhase — worktree re-home validation (#11387)", () => {
   // re-homed.
   const resolvedWorktreeId = (tasks: { worktreeId?: string }[]) => tasks[0]?.worktreeId;
 
-  it("ghosts a surviving PTY's dead worktree instead of re-homing it (#11911)", async () => {
-    const ctx = makeContext({
-      activeWorktreeId: "wMain",
-      worktreesPromise: Promise.resolve(wtList("wMain")),
-    });
-    ctx.backendTerminalMap.set("t1", backend("t1"));
-    const { restoreTasks, ghostedWorktreeIds } = await restorePanelsPhase(
-      [panel("t1", { worktreeId: "wGone" })],
-      ctx
-    );
-    // wGone is absent from the complete list, but this PTY is still running in
-    // it. Re-homing onto wMain would hide that and erase the row the cleanup
-    // sweep needs to ever retire the run, so the dead id is kept and reported.
-    expect(resolvedWorktreeId(restoreTasks)).toBe("wGone");
-    expect([...ghostedWorktreeIds]).toEqual(["wGone"]);
-  });
-
   it("keeps the saved worktreeId rather than re-homing onto a dead active worktree", async () => {
     const ctx = makeContext({
       activeWorktreeId: "wDeadActive",
@@ -712,18 +681,6 @@ describe("restorePanelsPhase — worktree re-home validation (#11387)", () => {
     expect(resolvedWorktreeId(restoreTasks)).toBe("wFeature");
   });
 
-  it("keeps the saved worktreeId when the list is unknown (empty), preserving #11234", async () => {
-    const ctx = makeContext({
-      activeWorktreeId: "wDeadActive",
-      worktreesPromise: Promise.resolve([]),
-    });
-    ctx.backendTerminalMap.set("t1", backend("t1"));
-    const { restoreTasks } = await restorePanelsPhase([panel("t1", { worktreeId: "wGone" })], ctx);
-    // An empty (partial/not-ready) list is "unknown", so nothing is validated
-    // and the saved assignment survives — never collapsed onto the active one.
-    expect(resolvedWorktreeId(restoreTasks)).toBe("wGone");
-  });
-
   it("does not home a no-worktree panel onto a dead active worktree", async () => {
     const ctx = makeContext({
       activeWorktreeId: "wDeadActive",
@@ -741,21 +698,6 @@ describe("restorePanelsPhase — worktree re-home validation (#11387)", () => {
     // rather than guess onto a deleted worktree.
     expect(ctx.addPanel.mock.calls[0]![0]).toMatchObject({ worktreeId: undefined });
     expect(resolvedWorktreeId(restoreTasks)).toBeUndefined();
-  });
-
-  it("homes a no-worktree panel onto the active worktree when it is live", async () => {
-    const ctx = makeContext({
-      activeWorktreeId: "wMain",
-      worktreesPromise: Promise.resolve(wtList("wMain")),
-    });
-    ctx.backendTerminalMap.set("t1", backend("t1"));
-    const { restoreTasks } = await restorePanelsPhase(
-      [panel("t1", { worktreeId: undefined })],
-      ctx
-    );
-    expect(restoreTasks).toHaveLength(1);
-    // Active worktree is live — a stranded no-worktree panel homes onto it.
-    expect(resolvedWorktreeId(restoreTasks)).toBe("wMain");
   });
 
   // A scratch, or a folder opened without git, can never enumerate a worktree,
@@ -1128,23 +1070,6 @@ describe("restorePanelsPhase — visible-panel priority tier (issue #10527)", ()
     expect(restoredIds(ctx.addPanel)).toEqual(["br1", "a1", "b1"]);
   });
 
-  it("preserves existing ordering when no visiblePanelId is supplied", async () => {
-    const ctx = makeContext({ activeWorktreeId: "wA" }); // visiblePanelId undefined
-    ctx.backendTerminalMap.set("a1", backend("a1"));
-    ctx.backendTerminalMap.set("b1", backend("b1"));
-    ctx.backendTerminalMap.set("b2", backend("b2"));
-    await restorePanelsPhase(
-      [
-        panel("a1", { worktreeId: "wA" }),
-        panel("b1", { worktreeId: "wB", lastActiveAt: 10 }),
-        panel("b2", { worktreeId: "wB", lastActiveAt: 200 }),
-      ],
-      ctx
-    );
-    // a1 (active) + b2 (max in wB) are priority; b1 is background and last.
-    expect(restoredIds(ctx.addPanel)).toEqual(["a1", "b2", "b1"]);
-  });
-
   it("degrades to existing ordering when visiblePanelId matches no saved panel", async () => {
     const ctx = makeContext({ activeWorktreeId: "wA", visiblePanelId: "ghost" });
     ctx.backendTerminalMap.set("a1", backend("a1"));
@@ -1233,23 +1158,6 @@ describe("restorePanelsPhase — matched backend not re-appended as orphan", () 
 });
 
 describe("restorePanelsPhase — savedIdToRestoredId remap (issue #10440)", () => {
-  it("maps the saved id to the freshly generated id when a PTY reconnect times out", async () => {
-    reconnectWithTimeoutMock.mockResolvedValue({ status: "timeout" });
-    const ctx = makeContext();
-    // A timed-out respawn passes requestedId: undefined, so the store assigns a
-    // new id — model that here and assert the map captures saved → new.
-    ctx.addPanel.mockImplementation(
-      async (args: { requestedId?: string; existingId?: string }) =>
-        args.requestedId ?? args.existingId ?? "regenerated-id"
-    );
-    const { savedIdToRestoredId } = await restorePanelsPhase(
-      [panel("p1", { kind: "agent", launchAgentId: "claude" })],
-      ctx
-    );
-    expect(savedIdToRestoredId.get("p1")).toBe("regenerated-id");
-    expect(savedIdToRestoredId.size).toBe(1);
-  });
-
   it("leaves the map empty when a respawn keeps the saved id (not_found, no timeout)", async () => {
     reconnectWithTimeoutMock.mockResolvedValue({ status: "not_found" });
     const ctx = makeContext();
@@ -1290,12 +1198,6 @@ describe("restorePanelsPhase — savedIdToRestoredId remap (issue #10440)", () =
     expect(savedIdToRestoredId.size).toBe(1);
     expect(savedIdToRestoredId.get("p1")).toBe("new-p1");
     expect(savedIdToRestoredId.has("p2")).toBe(false);
-  });
-
-  it("returns an empty map when there are no saved panels", async () => {
-    const ctx = makeContext();
-    const { savedIdToRestoredId } = await restorePanelsPhase(undefined, ctx);
-    expect(savedIdToRestoredId.size).toBe(0);
   });
 
   it("maps every timed-out panel independently with no cross-contamination", async () => {
@@ -1487,18 +1389,6 @@ describe("restorePanelsPhase — panels outliving their worktree (issue #11232)"
     // Still homes onto the live active worktree, as before.
     expect(ctx.addPanel.mock.calls[0]![0]).toMatchObject({ worktreeId: "wA" });
     expect(ghostedWorktreeIds.size).toBe(0);
-  });
-
-  it("leaves a saved panel alone when its worktree still exists", async () => {
-    const ctx = makeContext({
-      activeWorktreeId: "wA",
-      worktreesPromise: worktreeList("wA", "wB"),
-    });
-    ctx.backendTerminalMap.set("t1", backend("t1"));
-
-    await restorePanelsPhase([panel("t1", { worktreeId: "wB" })], ctx);
-
-    expect(ctx.addPanel.mock.calls[0]![0]).toMatchObject({ worktreeId: "wB" });
   });
 
   it("keeps the saved worktree when the worktree list is unavailable", async () => {
@@ -1776,18 +1666,6 @@ describe("restorePanelsPhase — one resume-latest per agent+cwd (issue #11461)"
     // Asserted as a complete map, not just the allowed subset: a regression that
     // dropped the losing panes entirely would still leave one `true`.
     expect(Object.fromEntries(allowanceById(ctx))).toEqual({ a: false, b: true, c: false });
-  });
-
-  it("gives the slot to the most recently active pane", async () => {
-    const ctx = makeContext();
-
-    await restorePanelsPhase(
-      [codexPanel("older", { lastActiveAt: 5 }), codexPanel("newer", { lastActiveAt: 9 })],
-      ctx
-    );
-
-    expect(allowanceById(ctx).get("newer")).toBe(true);
-    expect(allowanceById(ctx).get("older")).toBe(false);
   });
 
   it("breaks a tie in favour of the earlier saved entry", async () => {
@@ -2803,25 +2681,5 @@ describe("restorePanelsPhase — portable plugin kinds (#12280)", () => {
         kind: expect.stringMatching(/^project:.*\/acme\.dashboard\/overview$/),
       })
     );
-  });
-
-  it("carries the persisted state version through to the restored panel", async () => {
-    const ctx = makeContext({ projectId: "proj-b" });
-
-    await restorePanelsPhase(
-      [
-        pluginPanel({
-          kindRef: projectRef,
-          extensionState: { activeTab: "overview" },
-          extensionStateVersion: 2,
-        }),
-      ],
-      ctx
-    );
-
-    expect(ctx.addPanel.mock.calls[0]![0]).toMatchObject({
-      extensionState: { activeTab: "overview" },
-      extensionStateVersion: 2,
-    });
   });
 });

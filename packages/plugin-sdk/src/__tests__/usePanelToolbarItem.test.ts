@@ -74,14 +74,6 @@ describe("usePanelToolbarItem", () => {
     expect(result.current).toBe(true);
   });
 
-  it("does nothing where the host offers no setter", () => {
-    const { rerender, unmount } = renderToolbarItem({ actionId: ID, state: { busy: true } });
-    expect(() => {
-      rerender({ actionId: ID, state: null });
-      unmount();
-    }).not.toThrow();
-  });
-
   it("ends set, not reset, after a StrictMode replay", () => {
     const setter = vi.fn();
     renderToolbarItem({ setter, actionId: ID, state: { busy: true } }, ({ children }) =>

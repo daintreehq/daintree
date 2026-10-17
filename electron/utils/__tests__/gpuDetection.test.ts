@@ -17,6 +17,11 @@ vi.mock("node:fs", () => ({
   readFileSync: fsMock.readFileSync,
 }));
 
+const appMock = vi.hoisted(() => ({
+  getGPUFeatureStatus: vi.fn<() => Record<string, string>>(() => ({})),
+}));
+vi.mock("electron", () => ({ app: appMock }));
+
 const originalPlatform = process.platform;
 const originalSessionType = process.env.XDG_SESSION_TYPE;
 
@@ -31,6 +36,21 @@ describe("isWebGLHardwareAccelerated", () => {
     expect(isWebGLHardwareAccelerated("enabled")).toBe(true);
     expect(isWebGLHardwareAccelerated("enabled_readback")).toBe(false);
     expect(isWebGLHardwareAccelerated("disabled_software")).toBe(false);
+  });
+});
+
+describe("getWebGLFeatureStatus", () => {
+  it("falls back to webgl, which is all Chromium 148 reports", async () => {
+    const { getWebGLFeatureStatus, isWebGLHardwareAccelerated } =
+      await import("../gpuDetection.js");
+    // Measured on Electron 42 with no GPU: no webgl2 key, before and after classification.
+    expect(getWebGLFeatureStatus({ webgl: "disabled_off" })).toBe("disabled_off");
+    expect(isWebGLHardwareAccelerated(getWebGLFeatureStatus({ webgl: "unavailable_off" }))).toBe(
+      false
+    );
+    expect(getWebGLFeatureStatus({ webgl2: "enabled", webgl: "enabled_readback" })).toBe("enabled");
+    expect(getWebGLFeatureStatus({})).toBeUndefined();
+    expect(getWebGLFeatureStatus(null)).toBeUndefined();
   });
 });
 
@@ -97,22 +117,6 @@ describe("detectLinuxGpus", () => {
       hasAmd: true,
       hasIntel: false,
     });
-  });
-
-  it("falls back to card nodes when render nodes are absent", async () => {
-    fsMock.existsSync.mockReturnValue(true);
-    fsMock.readdirSync.mockReturnValue(["card0", "card1"]);
-    fsMock.readFileSync.mockImplementation((p: string) => {
-      if (p === "/sys/class/drm/card0/device/vendor") return "0x8086\n";
-      if (p === "/sys/class/drm/card1/device/vendor") return "0x10de\n";
-      throw new Error("unexpected read: " + p);
-    });
-
-    const { detectLinuxGpus } = await import("../gpuDetection.js");
-    const info = detectLinuxGpus();
-    expect(info?.isMultiGpu).toBe(true);
-    expect(info?.hasNvidia).toBe(true);
-    expect(info?.hasIntel).toBe(true);
   });
 
   it("unions render and card nodes when render-node visibility is partial", async () => {
@@ -309,5 +313,64 @@ describe("isLinuxWaylandHybridGpu", () => {
 
     const { isLinuxWaylandHybridGpu } = await import("../gpuDetection.js");
     expect(isLinuxWaylandHybridGpu()).toBe(false);
+  });
+});
+
+describe("getGpuFeatureStatus", () => {
+  beforeEach(() => {
+    vi.resetModules();
+    appMock.getGPUFeatureStatus.mockReset();
+  });
+
+  it("doesn't keep the provisional status read before the GPU is reported", async () => {
+    const gpu = await import("../gpuDetection.js");
+    appMock.getGPUFeatureStatus.mockReturnValue({ webgl: "disabled_off" });
+    expect(gpu.getGpuFeatureStatus()).toEqual({ webgl: "disabled_off" });
+
+    appMock.getGPUFeatureStatus.mockReturnValue({ webgl: "enabled" });
+    expect(gpu.getGpuFeatureStatus()).toEqual({ webgl: "enabled" });
+  });
+
+  it("keeps the status for the session once the GPU has been reported", async () => {
+    const gpu = await import("../gpuDetection.js");
+    gpu.markGpuInfoSettled();
+    appMock.getGPUFeatureStatus.mockReturnValue({ webgl: "enabled" });
+    expect(gpu.getGpuFeatureStatus()).toEqual({ webgl: "enabled" });
+
+    appMock.getGPUFeatureStatus.mockReturnValue({ webgl: "disabled_off" });
+    expect(gpu.getGpuFeatureStatus()).toEqual({ webgl: "enabled" });
+  });
+
+  it("answers a waiter once the GPU reports, and anyone after that at once", async () => {
+    vi.useFakeTimers();
+    try {
+      const gpu = await import("../gpuDetection.js");
+      let woke = false;
+      void gpu.whenGpuReported(1_500).then(() => (woke = true));
+      await vi.advanceTimersByTimeAsync(300);
+      expect(woke).toBe(false);
+
+      gpu.noteGpuReported();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(woke).toBe(true);
+      await expect(gpu.whenGpuReported(1_500)).resolves.toBeUndefined();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("stops waiting at the timeout when the GPU never reports", async () => {
+    vi.useFakeTimers();
+    try {
+      const gpu = await import("../gpuDetection.js");
+      let woke = false;
+      void gpu.whenGpuReported(1_500).then(() => (woke = true));
+      await vi.advanceTimersByTimeAsync(1_499);
+      expect(woke).toBe(false);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(woke).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

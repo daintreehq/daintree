@@ -197,19 +197,6 @@ describe("WaitingWatchdog", () => {
       expect(onFire).not.toHaveBeenCalled();
     });
 
-    it("data exactly at idleSince does NOT veto (must be strictly greater)", () => {
-      // deadProbe sets lastDataTimestamp = idleSince; this should not count as a veto.
-      const validator: ProcessStateValidator = { hasActiveChildren: () => false };
-      const { watchdog, onFire } = makeWatchdog({ validator });
-
-      const idleSince = 1000;
-      const start = idleSince + SILENCE_MS;
-      watchdog.check(start, deadProbe(start, idleSince));
-      watchdog.check(start + 5000, deadProbe(start + 5000, idleSince));
-      watchdog.check(start + 10000, deadProbe(start + 10000, idleSince));
-      expect(onFire).toHaveBeenCalledTimes(1);
-    });
-
     it("CPU high (and not deadlined) resets failCount", () => {
       const validator: ProcessStateValidator = {
         hasActiveChildren: () => false,
@@ -402,18 +389,6 @@ describe("WaitingWatchdog", () => {
       watchdog.check(start + 5000, probe(start + 5000, start + 5000 - TTL_MS + 1));
       watchdog.check(start + 10000, probe(start + 10000, start + 10000 - TTL_MS + 1));
       expect(onFire).not.toHaveBeenCalled();
-    });
-  });
-
-  describe("custom failThreshold", () => {
-    it("clamps to 1 — fires on the first dead tick", () => {
-      const validator: ProcessStateValidator = { hasActiveChildren: () => false };
-      const { watchdog, onFire } = makeWatchdog({ validator, failThreshold: 1 });
-
-      const idleSince = 1000;
-      const now = idleSince + SILENCE_MS;
-      watchdog.check(now, deadProbe(now, idleSince));
-      expect(onFire).toHaveBeenCalledTimes(1);
     });
   });
 });

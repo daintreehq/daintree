@@ -27,6 +27,9 @@ export function setupResourceListeners(): DisposableStore {
   // documented in `useFlushOnHide`. (Full app quit ends in `app.exit()`, which
   // may not surface a renderer visibility flush — that gap is pre-existing and
   // shared with panel persistence, out of scope here.)
+  // A driver's drafts also go up as they're typed, so watchers can follow them.
+  d.add(toDisposable(draftInputPersistence.startLiveSync()));
+
   const flushOnHide = () => {
     flushPanelPersistence();
     draftInputPersistence.flushAll();

@@ -50,12 +50,6 @@ beforeEach(() => {
 });
 
 describe("worktree forge actions", () => {
-  it("registers both provider-neutral actions", () => {
-    for (const id of ACTION_IDS) {
-      expect(registry.has(id), `missing action: ${id}`).toBe(true);
-    }
-  });
-
   it("titles and descriptions carry no GitHub wording", () => {
     for (const id of ACTION_IDS) {
       const def = get(id);

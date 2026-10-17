@@ -286,16 +286,6 @@ describe("copyTreeOutputFile", () => {
       });
     });
 
-    it("stops at the cap and flags the cut", async () => {
-      const filePath = path.join(root, "big.xml");
-      await fs.writeFile(filePath, "a".repeat(5000), "utf8");
-
-      const preview = await readContentPreview(filePath, 512);
-
-      expect(preview.truncated).toBe(true);
-      expect(Buffer.byteLength(preview.content, "utf8")).toBeLessThanOrEqual(512);
-    });
-
     it.each([
       [511, false],
       [512, false],

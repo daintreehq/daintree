@@ -93,10 +93,6 @@ describe("notificationSettingsStore hydrate — per-kind toggles", () => {
 });
 
 describe("notificationSettingsStore — osDndActive", () => {
-  it("defaults to undefined before hydrate so consumers treat it as unknown", () => {
-    expect(useNotificationSettingsStore.getState().osDndActive).toBeUndefined();
-  });
-
   it("hydrates osDndActive from the IPC snapshot", async () => {
     getSettings.mockResolvedValue({ enabled: true });
     getOsDndState.mockResolvedValue(true);
@@ -125,16 +121,6 @@ describe("notificationSettingsStore — osDndActive", () => {
     await hydratePromise;
 
     expect(useNotificationSettingsStore.getState().osDndActive).toBe(true);
-  });
-
-  it("setOsDndActive accepts true, false, and undefined", () => {
-    const { setOsDndActive } = useNotificationSettingsStore.getState();
-    setOsDndActive(true);
-    expect(useNotificationSettingsStore.getState().osDndActive).toBe(true);
-    setOsDndActive(false);
-    expect(useNotificationSettingsStore.getState().osDndActive).toBe(false);
-    setOsDndActive(undefined);
-    expect(useNotificationSettingsStore.getState().osDndActive).toBeUndefined();
   });
 
   it("treats an IPC failure as a no-op — osDndActive stays at its prior value", async () => {

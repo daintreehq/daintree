@@ -3,6 +3,7 @@ import type { ITerminalOptions } from "@xterm/xterm";
 import "@xterm/xterm/css/xterm.css";
 import type { AgentState } from "@shared/types/agent";
 import { cn } from "@/lib/utils";
+import { reportCanopySent } from "@/lib/canopySeen";
 import {
   UI_ENTER_DURATION,
   UI_EXIT_DURATION,
@@ -33,7 +34,19 @@ import {
   isTerminalClipboardCopyKey,
   isTerminalClipboardPasteKey,
   isTuiReservedKey,
+  isWindowsTerminalCopyKey,
+  isWindowsTerminalPasteKey,
 } from "@/services/terminalReservedKeys";
+import { isRemoteWindow } from "@/hooks/useHostPlatform";
+import {
+  getClipboardImagePaster,
+  isClipboardImageCtrlV,
+  refreshUploadPreferences,
+} from "./uploads/ctrlVImagePaste";
+import { PendingUploadChips } from "./uploads/PendingUploadChips";
+import { LazyUploadConfirmHost } from "./uploads/LazyUploadConfirmHost";
+import { terminalUploadSurface } from "./uploads/pendingUploads";
+import type { TerminalFocusTarget } from "./terminalFocus";
 import { isStagedConfirmation } from "@/services/actions/confirmationStaged";
 
 export interface XtermAdapterProps {
@@ -48,7 +61,7 @@ export interface XtermAdapterProps {
   agentState?: AgentState;
   isInputLocked?: boolean;
   onReady?: () => void;
-  onExit?: (exitCode: number) => void;
+  onExit?: (exitCode: number | null) => void;
   onInput?: (data: string) => void;
   /**
    * Selects the panel that owns this terminal after a file drop writes to it.
@@ -56,6 +69,12 @@ export interface XtermAdapterProps {
    * the Assistant overlay and the Dev Preview console (#11809).
    */
   onDropSelect?: () => void;
+  /**
+   * Where a click on this terminal would put the keyboard, which is where a
+   * file drop lands when neither the terminal nor its pane's input bar holds
+   * it. Omitted where there is no pane to activate, so a click goes to xterm.
+   */
+  dropClickTarget?: () => TerminalFocusTarget;
   /**
    * Fired once per live `attach()`, after the service has been told the
    * terminal is visible. Lets the owning pane re-arm anything that captured an
@@ -83,6 +102,7 @@ export function XtermAdapter({
   onExit,
   onInput,
   onDropSelect,
+  dropClickTarget,
   onAttached,
   className,
   getRefreshTier,
@@ -107,6 +127,7 @@ export function XtermAdapter({
   const initialFitDoneRef = useRef(false);
   const launchAgentIdRef = useRef(launchAgentId);
   const detectedAgentIdRef = useRef(detectedAgentId);
+  const agentStateRef = useRef(agentState);
   const onReadyRef = useRef(onReady);
   const onExitRef = useRef(onExit);
   const onInputRef = useRef(onInput);
@@ -116,12 +137,23 @@ export function XtermAdapter({
   useLayoutEffect(() => {
     launchAgentIdRef.current = launchAgentId;
     detectedAgentIdRef.current = detectedAgentId;
+    agentStateRef.current = agentState;
     onReadyRef.current = onReady;
     onExitRef.current = onExit;
     onInputRef.current = onInput;
     onAttachedRef.current = onAttached;
     cwdRef.current = cwd;
-  }, [launchAgentId, detectedAgentId, onReady, onExit, onInput, onAttached, cwd]);
+  }, [launchAgentId, detectedAgentId, agentState, onReady, onExit, onInput, onAttached, cwd]);
+
+  // The Ctrl+V image preference is device-wide and can change from another view.
+  const isRemote = isRemoteWindow();
+  useEffect(() => {
+    if (!isRemote) return;
+    void refreshUploadPreferences();
+    const onFocus = () => void refreshUploadPreferences();
+    window.addEventListener("focus", onFocus);
+    return () => window.removeEventListener("focus", onFocus);
+  }, [isRemote]);
 
   const stableOnInput = useCallback((data: string) => {
     onInputRef.current?.(data);
@@ -188,6 +220,7 @@ export function XtermAdapter({
     isInputLocked,
     onInput: stableOnInput,
     onDropSelect,
+    dropClickTarget,
     // The same stable reader the instance service gets, so a drop relativizes
     // its `@file` token against the cwd the terminal is in when it lands.
     cwdProvider: stableCwdProvider,
@@ -368,6 +401,35 @@ export function XtermAdapter({
           return false;
         };
 
+        // One clipboard-image paste at a time: a second Ctrl+V (or paste key)
+        // while the first is uploading would send the same image twice.
+        let imagePasteInFlight = false;
+
+        // The Windows/Linux paste keys. Text pastes as before; a clipboard
+        // with no text gets the image route the DOM paste event takes on
+        // macOS, so a screenshot arrives as a path. Text goes first because a
+        // copy that carries both (spreadsheet cells, rich text) means the text.
+        const pasteFromClipboard = () => {
+          void navigator.clipboard
+            .readText()
+            .then((text) => {
+              if (managed.isInputLocked) return;
+              if (text) {
+                managed.terminal.paste(text);
+                return;
+              }
+              const pasteImage = getClipboardImagePaster(terminalId);
+              if (!pasteImage || imagePasteInFlight) return;
+              imagePasteInFlight = true;
+              void pasteImage().finally(() => {
+                imagePasteInFlight = false;
+              });
+            })
+            .catch((error) => {
+              logError("[XtermClipboard] Paste failed", error);
+            });
+        };
+
         const customKeyEventHandler = (event: KeyboardEvent): boolean => {
           // Only process keydown events to avoid double-firing
           if (event.type !== "keydown") {
@@ -437,6 +499,20 @@ export function XtermAdapter({
           // auto-repeats never reach the chord resolution below, where they could
           // complete or invalidate a pending chord the user never re-pressed.
           if (event.repeat) {
+            // A held Ctrl+V belongs to the image paste its first press started,
+            // never to the agent's own read of the host's clipboard.
+            if (
+              isClipboardImageCtrlV(event, {
+                launchAgentId: launchAgentIdRef.current,
+                detectedAgentId: detectedAgentIdRef.current,
+                agentState: agentStateRef.current,
+              }) &&
+              getClipboardImagePaster(terminalId)
+            ) {
+              event.preventDefault();
+              event.stopPropagation();
+              return false;
+            }
             return wordJumpSequence ? writeWordJump(event, wordJumpSequence) : true;
           }
 
@@ -454,6 +530,74 @@ export function XtermAdapter({
 
           // Intercept F6 for macro-region focus cycling before terminal processing
           if (event.key === "F6") {
+            return false;
+          }
+
+          // An agent's own Ctrl+V would read the host's clipboard. In a remote
+          // window, send this machine's clipboard image instead when it holds
+          // one; with none, the agent gets the key exactly as typed. Plain
+          // shells and local windows are never intercepted.
+          if (
+            isClipboardImageCtrlV(event, {
+              launchAgentId: launchAgentIdRef.current,
+              detectedAgentId: detectedAgentIdRef.current,
+              agentState: agentStateRef.current,
+            }) &&
+            // A pending chord (Cmd+K Cmd+V) owns the key.
+            !keybindingService.getPendingChord()
+          ) {
+            const pasteImage = getClipboardImagePaster(terminalId);
+            if (pasteImage) {
+              event.preventDefault();
+              event.stopPropagation();
+              if (!managed.isInputLocked && !imagePasteInFlight) {
+                imagePasteInFlight = true;
+                void pasteImage().then((outcome) => {
+                  imagePasteInFlight = false;
+                  if (outcome !== "empty" || managed.isInputLocked) return;
+                  const literalNext = "\x16";
+                  writeTerminalInputOrFleet(terminalId, literalNext);
+                  terminalInstanceService.notifyUserInput(terminalId);
+                  stableOnInput(literalNext);
+                });
+              }
+              return false;
+            }
+          }
+
+          // Windows conventions: Ctrl+V pastes and Ctrl+C copies a selection.
+          // Ctrl+V sent to the PTY did nothing visible — bash took it as
+          // "literal next", agent CLIs ignored it. With no text on the
+          // clipboard (an image, say) the PTY still gets ^V, so an agent that
+          // pastes images on Ctrl+V keeps doing so.
+          if (isWindowsTerminalPasteKey(event) && !keybindingService.getPendingChord()) {
+            event.preventDefault();
+            event.stopPropagation();
+            if (!managed.isInputLocked) {
+              void navigator.clipboard
+                .readText()
+                .catch(() => "")
+                .then((text) => {
+                  if (managed.isInputLocked) return;
+                  if (text) {
+                    managed.terminal.paste(text);
+                    return;
+                  }
+                  const literalNext = "\x16";
+                  writeTerminalInputOrFleet(terminalId, literalNext);
+                  terminalInstanceService.notifyUserInput(terminalId);
+                  stableOnInput(literalNext);
+                });
+            }
+            return false;
+          }
+          if (isWindowsTerminalCopyKey(event) && managed.terminal.hasSelection()) {
+            event.preventDefault();
+            event.stopPropagation();
+            navigator.clipboard.writeText(managed.terminal.getSelection()).catch((error) => {
+              logError("[XtermClipboard] Copy failed", error);
+            });
+            managed.terminal.clearSelection();
             return false;
           }
 
@@ -482,18 +626,9 @@ export function XtermAdapter({
           if (isTerminalClipboardPasteKey(event)) {
             event.preventDefault();
             event.stopPropagation();
-            if (!managed.isInputLocked) {
-              // terminal.paste() follows the normal typed-input path (onData →
-              // PTY + input accounting) and applies bracketed-paste wrapping.
-              navigator.clipboard
-                .readText()
-                .then((text) => {
-                  if (text && !managed.isInputLocked) managed.terminal.paste(text);
-                })
-                .catch((error) => {
-                  logError("[XtermClipboard] Paste failed", error);
-                });
-            }
+            // terminal.paste() follows the normal typed-input path (onData →
+            // PTY + input accounting) and applies bracketed-paste wrapping.
+            if (!managed.isInputLocked) pasteFromClipboard();
             return false;
           }
 
@@ -597,6 +732,8 @@ export function XtermAdapter({
               const submit = "\r";
               writeTerminalInputOrFleet(terminalId, submit);
               terminalInstanceService.notifyUserInput(terminalId);
+              // Typed here by the user: what it sets going is their own doing.
+              reportCanopySent(terminalId);
               stableOnInput(submit);
               // Plain Enter is a submit. The custom key handler returns `false`
               // before xterm's onKey/onData fire, so the listener-installed
@@ -921,6 +1058,15 @@ export function XtermAdapter({
           Drop to insert
         </span>
       </div>
+      {isRemote && (
+        <>
+          <PendingUploadChips
+            surface={terminalUploadSurface(terminalId)}
+            className="pointer-events-auto absolute bottom-2 left-3 right-3 z-20"
+          />
+          <LazyUploadConfirmHost />
+        </>
+      )}
     </div>
   );
 }

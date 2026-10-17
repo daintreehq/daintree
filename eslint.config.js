@@ -810,8 +810,10 @@ export default tseslint.config(
     files: [
       "src/components/ui/button.tsx",
       "src/components/ui/context-menu.tsx",
+      "src/components/ui/context-menu-base.tsx",
       "src/components/ui/DialogDismissSurface.tsx",
       "src/components/ui/dropdown-menu.tsx",
+      "src/components/ui/dropdown-menu-base.tsx",
       "src/components/ui/popover.tsx",
       "src/components/ui/select.tsx",
       "src/components/ui/tooltip.tsx",
@@ -1251,6 +1253,22 @@ export default tseslint.config(
           "DropdownMenuShortcut",
         ],
       ],
+      // The same primitives, where the kit itself imports them from.
+      [
+        "@/components/ui/dropdown-menu-base",
+        [
+          "DropdownMenu",
+          "DropdownMenuTrigger",
+          "DropdownMenuContent",
+          "DropdownMenuItem",
+          "DropdownMenuCheckboxItem",
+          "DropdownMenuRadioGroup",
+          "DropdownMenuRadioItem",
+          "DropdownMenuLabel",
+          "DropdownMenuSeparator",
+          "DropdownMenuShortcut",
+        ],
+      ],
       ["@/components/ui/EmptyState", ["EmptyState"]],
       ["@/components/ui/input", ["Input"]],
       ["@/components/ui/Kbd", ["Kbd", "KbdChord", "KBD_CLASS", "KBD_COMPACT_CLASS"]],
@@ -1400,6 +1418,8 @@ export default tseslint.config(
       // Built output of the workspace CLI packages (tsup). Bundled JS isn't
       // source and trips no-undef on Node globals when linted locally.
       "packages/*/dist/**",
+      // Browser SDK kit bundled by scripts/build-plugin-ui-browser.mjs.
+      "packages/plugin-sdk/browser/**",
       // Generated API-surface snapshots (raw tsup .d.ts output committed for
       // review by scripts/ci/check-api-surface.mjs) — not hand-authored source.
       "packages/*/api-report/**",

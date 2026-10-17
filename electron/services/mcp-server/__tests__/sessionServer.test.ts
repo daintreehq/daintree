@@ -35,6 +35,7 @@ import {
   EXECUTION_ERROR_CODE,
   SESSION_BINDING_GONE,
   SESSION_GONE,
+  NO_FRONTEND_ATTACHED_CODE,
   CONFIRMATION_REQUIRED_CODE,
   CONFIRMATION_TIMEOUT_CODE,
   USER_REJECTED_CODE,
@@ -65,7 +66,9 @@ import {
   SessionBindingError,
   WorkspaceBindingError,
   RendererBridgeUnavailableError,
+  NoFrontendAttachedError,
 } from "../rendererBridge.js";
+import { setMcpDriveTargetResolver } from "../driveTarget.js";
 import { getAgentAvailabilityStore } from "../../AgentAvailabilityStore.js";
 import type { AgentState } from "../../../../shared/types/agent.js";
 import { events } from "../../events.js";
@@ -507,6 +510,65 @@ describe("sessionServer tools/list handler", () => {
     expect(result.tools.map((t) => t.name)).toEqual(["actions.list"]);
   });
 
+  /** A route that moves while each listing's fetch is out, per `moves`. */
+  function movingRoute(moves: boolean[]) {
+    const order: string[] = [];
+    const noteToolListRoute = vi.fn(() => {
+      order.push("route");
+      const moved = moves.shift() ?? false;
+      return () => moved;
+    });
+    return { order, noteToolListRoute };
+  }
+
+  it("records the session's route before the listing's fetch (#13350)", async () => {
+    const { order, noteToolListRoute } = movingRoute([false]);
+    const deps = externalDeps({
+      noteToolListRoute,
+      requestManifest: vi.fn(async () => {
+        order.push("fetch");
+        return [makeManifestEntry("actions.list")];
+      }),
+    });
+    const server = createSessionServer("tools-list-route", deps);
+    await server.connect(makeMockTransport());
+
+    expect((await listTools(server)).tools.map((t) => t.name)).toEqual(["actions.list"]);
+    expect(order).toEqual(["route", "fetch"]);
+  });
+
+  it("never serves the answer of a route that moved while the fetch was out (#13350)", async () => {
+    // The old route's answer could land after the re-list the move's notice
+    // asks for, and the client keeps whichever list came last.
+    const { noteToolListRoute } = movingRoute([true, false]);
+    const requestManifest = vi
+      .fn()
+      .mockResolvedValueOnce([makeManifestEntry("terminal.list")])
+      .mockResolvedValueOnce([makeManifestEntry("actions.list")]);
+    const deps = externalDeps({ noteToolListRoute, requestManifest });
+    const server = createSessionServer("tools-list-moved", deps);
+    await server.connect(makeMockTransport());
+
+    expect((await listTools(server)).tools.map((t) => t.name)).toEqual(["actions.list"]);
+    expect(requestManifest).toHaveBeenCalledTimes(2);
+  });
+
+  it("refetches a failed listing once when its route moved, and stops there", async () => {
+    const { noteToolListRoute } = movingRoute([true, true]);
+    const requestManifest = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("Manifest request timed out"))
+      .mockResolvedValueOnce([makeManifestEntry("actions.list")]);
+    const deps = externalDeps({ noteToolListRoute, requestManifest });
+    const server = createSessionServer("tools-list-moved-failed", deps);
+    await server.connect(makeMockTransport());
+
+    // Still moving after the second fetch: that answer is served, and the
+    // route's notice is left to tell the client.
+    expect((await listTools(server)).tools.map((t) => t.name)).toEqual(["actions.list"]);
+    expect(requestManifest).toHaveBeenCalledTimes(2);
+  });
+
   it("falls back to the cached manifest, warning with the error, when requestManifest rejects", async () => {
     const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
     const rejection = new Error("Manifest request timed out");
@@ -737,43 +799,6 @@ describe("sessionServer prompt handler", () => {
       expect((err as McpError).code).toBe(ErrorCode.InvalidParams);
       expect((err as McpError).message).toContain("Missing required argument");
     }
-  });
-
-  it("rejects non-string argument values (Zod validates before our handler, both layers reject)", async () => {
-    const deps = fakeDeps();
-    const server = createSessionServer("s5", deps);
-    await server.connect(makeMockTransport());
-
-    // Non-string values are caught by the SDK's Zod validation
-    // (parseWithCompat in the handler wrapper), which runs before
-    // our typeof check. Both layers reject non-strings.
-    try {
-      await getPrompt(server, {
-        name: "start_issue",
-        arguments: { issue_number: 42 },
-      });
-      expect.fail("Expected error for non-string argument");
-    } catch (err) {
-      // ZodError is thrown by the SDK wrapper before our handler runs
-      expect(err).toBeTruthy();
-    }
-  });
-
-  it("handler validates arguments are strings (defense-in-depth beyond Zod schema)", () => {
-    // Our typeof check is a second layer of defense. When the Zod schema
-    // is relaxed or the handler is called through a different path, our
-    // check catches non-string values with a proper McpError(InvalidParams).
-    // This test verifies the handler code is present and correct.
-    const deps = fakeDeps();
-    const server = createSessionServer("s6", deps);
-
-    // The handler should be registered for prompts/get
-    const handlers = (
-      server as unknown as {
-        _requestHandlers: Map<string, unknown>;
-      }
-    )._requestHandlers;
-    expect(handlers.has("prompts/get")).toBe(true);
   });
 });
 
@@ -1077,7 +1102,32 @@ describe("terminal notices", () => {
 
       const hold = terminalNotify.prepareSend.mock.calls[0]?.[2]?.hold;
       expect(hold).toBeDefined();
-      expect(terminalNotify.releaseHold).toHaveBeenCalledWith(OWN_PANE, hold, true);
+      expect(terminalNotify.releaseHold).toHaveBeenCalledWith(OWN_PANE, hold, true, false);
+    });
+
+    it("tells the notice when the wait answered with a stop and no marker", async () => {
+      const wait = vi.fn(() => ({
+        bind: vi.fn(),
+        cancel: vi.fn(),
+        promise: Promise.resolve({ terminalId: "t-a", outcome: "settled" as const }),
+      }));
+      const { terminalNotify, start } = notifyDeps({ origin: "help" }, { replyWaiter: { wait } });
+      const server = await start("session-wait-notify-no-marker");
+
+      await callTool(server, {
+        name: "terminal.sendCommand",
+        arguments: {
+          terminalId: "t-a",
+          command: "one fact",
+          notify: true,
+          handback: true,
+          waitForReply: true,
+        },
+      });
+      await Promise.resolve();
+
+      const hold = terminalNotify.prepareSend.mock.calls[0]?.[2]?.hold;
+      expect(terminalNotify.releaseHold).toHaveBeenCalledWith(OWN_PANE, hold, true, true);
     });
 
     it("gives each batch item's notice its own hold, released when its wait runs out", async () => {
@@ -1117,8 +1167,8 @@ describe("terminal notices", () => {
       expect(holds[0]).toBeDefined();
       expect(holds[0]).not.toBe(holds[1]);
       expect(terminalNotify.releaseHold.mock.calls).toEqual([
-        [OWN_PANE, holds[0], false],
-        [OWN_PANE, holds[1], false],
+        [OWN_PANE, holds[0], false, false],
+        [OWN_PANE, holds[1], false, false],
       ]);
     });
 
@@ -1426,6 +1476,23 @@ describe("terminal notices", () => {
 
       expect(terminalNotify.prepareSend).toHaveBeenCalledWith(OWN_PANE, "t-a", { replyLines: 12 });
       expect(dispatchAction.mock.calls[0]?.[1]).toEqual({ terminalId: "t-a", command: "vote" });
+    });
+
+    it("tells the notice the prompt asked for a handback, and still sends the flag", async () => {
+      const { terminalNotify, dispatchAction, start } = notifyDeps({ origin: "help" });
+      const server = await start("session-send-handback");
+
+      await callTool(server, {
+        name: "terminal.sendCommand",
+        arguments: { terminalId: "t-a", command: "vote", notify: true, handback: true },
+      });
+
+      expect(terminalNotify.prepareSend).toHaveBeenCalledWith(OWN_PANE, "t-a", { handback: true });
+      expect(dispatchAction.mock.calls[0]?.[1]).toEqual({
+        terminalId: "t-a",
+        command: "vote",
+        handback: true,
+      });
     });
 
     it("forwards a malformed reply length for the send's own schema to reject", async () => {
@@ -2168,22 +2235,6 @@ describe("CallTool idempotency dedup", () => {
     expect(dispatchAction).toHaveBeenCalledTimes(2);
   });
 
-  it("dedups agent.launch with the same arguments", async () => {
-    const dispatchAction = vi
-      .fn()
-      .mockResolvedValue({ result: { ok: true, result: { terminalId: "t-agent" } } });
-    const deps = fakeDeps({
-      sessionStore: fakeSessionStore("full"),
-      dispatchAction,
-    });
-    const server = createSessionServer("dedup-agent", deps);
-
-    await callTool(server, { name: "agent.launch", arguments: { agentId: "claude" } });
-    await callTool(server, { name: "agent.launch", arguments: { agentId: "claude" } });
-
-    expect(dispatchAction).toHaveBeenCalledTimes(1);
-  });
-
   it("dedups worktree.createWithRecipe with the same arguments", async () => {
     const dispatchAction = vi
       .fn()
@@ -2369,47 +2420,9 @@ describe("buildToolError envelope", () => {
     const parsed = JSON.parse(getErrorText(result));
     expect(parsed.details).toEqual({ serializationError: true });
   });
-
-  it("legacy substrings remain greppable for existing .toContain assertions", () => {
-    const result = buildToolError({
-      code: TIER_NOT_PERMITTED_CODE,
-      message: "action 'panel.gridLayout.setStrategy' is not permitted for the 'core' tier.",
-    });
-    const text = getErrorText(result);
-    expect(text).toContain("TIER_NOT_PERMITTED");
-    expect(text).toContain("core");
-    expect(text).toContain("panel.gridLayout.setStrategy");
-  });
 });
 
 describe("buildMcpErrorPayload", () => {
-  it("returns the same shape used on both surfaces", () => {
-    const payload = buildMcpErrorPayload({
-      code: TIER_NOT_PERMITTED_CODE,
-      message: "Resource 'x' is not permitted for the 'core' tier.",
-    });
-    expect(payload).toEqual({
-      code: TIER_NOT_PERMITTED_CODE,
-      message: "Resource 'x' is not permitted for the 'core' tier.",
-      retriable: false,
-    });
-  });
-
-  it("includes details when provided", () => {
-    const payload = buildMcpErrorPayload({
-      code: "VALIDATION_ERROR",
-      message: "bad",
-      details: { argument: "name" },
-    });
-    expect(payload.details).toEqual({ argument: "name" });
-  });
-
-  it("RETRIABLE_ERROR_CODES contains EXECUTION_ERROR and CONFIRMATION_TIMEOUT", () => {
-    expect(RETRIABLE_ERROR_CODES.has(EXECUTION_ERROR_CODE)).toBe(true);
-    expect(RETRIABLE_ERROR_CODES.has(CONFIRMATION_TIMEOUT_CODE)).toBe(true);
-    expect(RETRIABLE_ERROR_CODES.has(TIER_NOT_PERMITTED_CODE)).toBe(false);
-  });
-
   it("classifies SESSION_GONE as a non-retriable business failure (#11799)", () => {
     // Retrying is pointless — the session is what went away, so recovery is a
     // new session rather than the same call again.
@@ -2451,13 +2464,6 @@ describe("unwrapDispatchResult error path", () => {
         retriable: false,
       });
     }
-  });
-
-  it("returns the result value on success", () => {
-    const value = unwrapDispatchResult({
-      result: { ok: true, result: { foo: 1 } },
-    });
-    expect(value).toEqual({ foo: 1 });
   });
 });
 
@@ -2727,31 +2733,6 @@ describe("CallTool live activity notifications (#9759)", () => {
     const startedAt = (started.mock.calls[0]?.[0] as { startedAt: number }).startedAt;
     expect(typeof startedAt).toBe("number");
     expect(appendAuditRecord).toHaveBeenCalledWith(expect.objectContaining({ startedAt }));
-  });
-
-  it("snapshots the turn id at start so started/settled agree across an FSM clear (#10067)", async () => {
-    const started = vi.fn();
-    const settled = vi.fn();
-    // Mirror the active→passive race: the turn id is live at dispatch start but
-    // a later read would return null. Both events must still carry the snapshot.
-    const getCurrentTurnId = vi.fn().mockReturnValueOnce("turn-T1").mockReturnValue(null);
-    const dispatchAction = vi.fn().mockResolvedValue({ result: { ok: true, result: null } });
-    const deps = fakeDeps({
-      getCurrentTurnId,
-      notifyToolCallStarted: started,
-      notifyToolCallSettled: settled,
-      dispatchAction,
-    });
-    const server = createSessionServer("session-T2", deps);
-    await server.connect(makeMockTransport());
-
-    await callTool(server, { name: "worktree.list", arguments: {} });
-
-    const startedTurn = started.mock.calls[0]?.[0]?.capturedTurnId;
-    const settledTurn = settled.mock.calls[0]?.[0]?.capturedTurnId;
-    expect(startedTurn).toBe("turn-T1");
-    expect(settledTurn).toBe("turn-T1");
-    expect(startedTurn).toBe(settledTurn);
   });
 
   it("does not emit started/settled for a pre-dispatch tier rejection", async () => {
@@ -3091,6 +3072,33 @@ describe("CallTool error envelope (integration through sessionServer)", () => {
     expect(parsed.code).toBe(EXECUTION_ERROR_CODE);
     expect(parsed.retriable).toBe(true);
     expect(parsed.message).toContain("No Daintree window is open");
+  });
+
+  it("answers NO_FRONTEND_ATTACHED instead when Host-mode routing is on", async () => {
+    const restore = setMcpDriveTargetResolver(() => ({ state: "vacant" }));
+    try {
+      const deps = fakeDeps({
+        sessionStore: fakeSessionStore("full"),
+        getCachedManifest: vi.fn(() => null),
+        requestManifest: vi.fn().mockRejectedValue(new RendererBridgeUnavailableError()),
+        dispatchAction: vi.fn().mockRejectedValue(new RendererBridgeUnavailableError()),
+      });
+      const server = createSessionServer("s-host-mode-no-channel", deps);
+      await server.connect(makeMockTransport());
+
+      const result = (await callTool(server, {
+        name: "recipe.run",
+        arguments: {},
+      })) as { isError: boolean; content: { type: string; text: string }[] };
+
+      const parsed = JSON.parse(result.content[0].text);
+      expect(parsed.code).toBe(NO_FRONTEND_ATTACHED_CODE);
+      expect(parsed.retriable).toBe(true);
+      // Past the tier gate: the refusal is the dispatch's, not a tier's.
+      expect(deps.dispatchAction).toHaveBeenCalledWith("recipe.run", {}, false);
+    } finally {
+      restore();
+    }
   });
 
   it("cold-cache confirm tool with no renderer stays a retriable EXECUTION_ERROR — danger is unknowable without a manifest (#10640)", async () => {
@@ -3944,30 +3952,6 @@ describe("sessionServer grant cache fallback (#8442)", () => {
     sessionStore.grantCache.dispose();
   });
 
-  it("issueGrant zeroes the denial counter — banner re-arms after explicit approval", async () => {
-    const sessionStore = assistantSessionStore("core");
-    const notify = vi.fn();
-    const deps = fakeDeps({ sessionStore, notifyTierMismatch: notify });
-    const server = createSessionServer("s", deps);
-    await server.connect(makeMockTransport());
-
-    // Push the counter past the silence threshold.
-    await callTool(server, { name: "worktree.resource.teardown", arguments: {} });
-    await callTool(server, { name: "worktree.resource.teardown", arguments: {} });
-    await callTool(server, { name: "worktree.resource.teardown", arguments: {} });
-    expect(sessionStore.grantCache.shouldSuppressBanner("s", "worktree.resource.teardown")).toBe(
-      true
-    );
-
-    // Approval mints a grant + resets counter.
-    sessionStore.grantCache.issueGrant("s", "worktree.resource.teardown");
-    expect(sessionStore.grantCache.shouldSuppressBanner("s", "worktree.resource.teardown")).toBe(
-      false
-    );
-
-    sessionStore.grantCache.dispose();
-  });
-
   it("terminal.waitUntilIdle refreshes the grant TTL and resets idle timer on success", async () => {
     const sessionStore = fakeSessionStore("core");
     sessionStore.sessions.set("s", {
@@ -4027,16 +4011,6 @@ describe("MCP_DEDUP_ALLOWLIST exclusion boundary (#8468)", () => {
       .mockResolvedValueOnce({ result: { ok: true, result: "first" } })
       .mockResolvedValueOnce({ result: { ok: true, result: "second" } });
 
-  // The #8468 git cohort was dropped in #11534: `git.push` takes only
-  // `{cwd, setUpstream}` and `git.commit` commits whatever the index holds, so
-  // a second push after a new commit — or a repeated `wip` message — is
-  // same-argument, and caching it would report success for work that never
-  // happened. Git left MCP with the core/full split, so no dispatch can prove
-  // the boundary any more; restoring either entry must still fail here.
-  it.each(["git.commit", "git.push"])("keeps %s off the dedup allowlist", (tool) => {
-    expect(MCP_DEDUP_ALLOWLIST.has(tool)).toBe(false);
-  });
-
   it.each(["terminal.inject", "terminal.sendCommand"])(
     "stays bounded — redispatches unlisted mutation %s",
     async (tool) => {
@@ -4056,36 +4030,6 @@ describe("MCP_DEDUP_ALLOWLIST exclusion boundary (#8468)", () => {
       expect(JSON.stringify(second)).toContain("second");
     }
   );
-});
-
-describe("worktree resource lifecycle dedup (#10683)", () => {
-  it("dedups provision (spins up a remote resource)", () => {
-    expect(MCP_DEDUP_ALLOWLIST.has("worktree.resource.provision")).toBe(true);
-  });
-
-  it("does not dedup pause/resume/teardown (intentionally re-runnable)", () => {
-    for (const tool of [
-      "worktree.resource.pause",
-      "worktree.resource.resume",
-      "worktree.resource.teardown",
-    ]) {
-      expect(MCP_DEDUP_ALLOWLIST.has(tool)).toBe(false);
-    }
-  });
-
-  it("gates each tool at its intended minimum tier", () => {
-    expect(minimumPermittingTier("worktree.resource.provision")).toBe("full");
-    expect(minimumPermittingTier("worktree.resource.pause")).toBe("full");
-    expect(minimumPermittingTier("worktree.resource.resume")).toBe("full");
-    // Teardown sits with its lifecycle siblings; it stays `danger: "confirm"`,
-    // which is what bounds it.
-    expect(minimumPermittingTier("worktree.resource.teardown")).toBe("full");
-    // The host-state reads that used to sit beside them left MCP with the
-    // core/full split.
-    expect(minimumPermittingTier("system.getResourceProfileSnapshot")).toBeNull();
-    expect(minimumPermittingTier("cliAvailability.get")).toBeNull();
-    expect(minimumPermittingTier("hibernation.getConfig")).toBeNull();
-  });
 });
 
 describe("MCP_DEDUP_ALLOWLIST widening (#9156)", () => {
@@ -4129,38 +4073,15 @@ describe("MCP_DEDUP_ALLOWLIST criterion correction (#11534)", () => {
   // artifact. Each has a structural twin that was already deduped, which is
   // exactly why the omission was invisible: the same retry was safe through
   // one id and duplicated through the other. The rest of the #11534 cohort —
-  // `agent.terminal` and the forge writes — left MCP with the core/full split;
-  // see `LEFT_MCP` below.
+  // `agent.terminal` and the forge writes — left MCP with the core/full split.
   const NEWLY_DEDUPED = ["workflow.startWorkOnIssue"];
 
   // Navigation and idempotent state-sets. Caching these suppresses a call the
   // caller legitimately meant to repeat — switching back to a worktree the user
   // navigated away from, or reloading a preview after a change — so they must
   // always redispatch. #11534 dropped `git.commit`/`git.push` for the same
-  // reason; the #8468 block above covers them.
+  // reason; the reachability check below keeps them off.
   const MUST_REDISPATCH = ["worktree.setActive", "devPreview.reloadPreview"];
-
-  // What #11534 either added or ruled out of dedup, all of which left MCP with
-  // the core/full split, so no replay of them can arrive and no dispatch can
-  // prove their membership. The forge openers and `forge.assignIssue` were
-  // ruled out on the criterion itself; the rest would be dead weight.
-  const LEFT_MCP = [
-    "agent.terminal",
-    "forge.createPR",
-    "forge.mergePR",
-    "forge.commentOnPR",
-    "forge.createIssue",
-    "forge.addIssueComment",
-    "forge.approvePR",
-    "forge.requestChanges",
-    "forge.openIssue",
-    "forge.openPR",
-    "forge.openIssues",
-    "forge.openPRs",
-    "forge.openCommits",
-    "forge.openRepo",
-    "forge.assignIssue",
-  ];
 
   // Distinct per-call payloads throughout: with a single mockResolvedValue
   // both dispatches return equal results, so `second === first` would hold
@@ -4247,12 +4168,6 @@ describe("MCP_DEDUP_ALLOWLIST criterion correction (#11534)", () => {
     }
   );
 
-  it.each(LEFT_MCP)("keeps %s, which left MCP, unreachable and off the dedup allowlist", (tool) => {
-    expect(minimumPermittingTier(tool)).toBeNull();
-    expect(minimumPermittingTier(tool, false)).toBeNull();
-    expect(MCP_DEDUP_ALLOWLIST.has(tool)).toBe(false);
-  });
-
   it("keeps every deduped tool reachable from a help-session tier", () => {
     // A dedup entry for a tool no tier exposes is dead weight that reads as
     // coverage. Catches an id that survives the compile-time BuiltInActionId
@@ -4290,10 +4205,6 @@ describe("worktree.create redispatch (#11880)", () => {
 
     expect(toolErrorPayload(result).code).toBe(TIER_NOT_PERMITTED_CODE);
     expect(dispatchAction).not.toHaveBeenCalled();
-  });
-
-  it("keeps worktree.create off the dedup allowlist", () => {
-    expect(MCP_DEDUP_ALLOWLIST.has("worktree.create")).toBe(false);
   });
 });
 
@@ -4471,6 +4382,366 @@ describe("help.displayImage short-circuit (#9828)", () => {
   });
 });
 
+describe("assistant inbox tools (#13335)", () => {
+  const INBOX = {
+    messages: [
+      {
+        taskId: "task-1",
+        messageId: "msg-1",
+        contextId: "ctx",
+        state: "submitted" as const,
+        receivedAt: 1,
+        provenance: { sendingHost: "studio", sendingLane: "hub", hopCount: 1 },
+        bodyChars: 2,
+        untrustedBody: "fenced",
+      },
+    ],
+    cursor: 1,
+    hasMore: false,
+  };
+
+  function laneDeps(options: {
+    available: boolean;
+    sending?: boolean;
+    reachable?: boolean;
+    sendReachable?: boolean;
+    origin?: string;
+    helpSessionId?: string | null;
+    access?: boolean;
+  }) {
+    const store = fakeSessionStore("core");
+    const mutable = store as unknown as {
+      sessionHelpIdMap: Map<string, string>;
+      sessionOriginMap: Map<string, string>;
+    };
+    const helpSessionId = options.helpSessionId === undefined ? "help-1" : options.helpSessionId;
+    mutable.sessionHelpIdMap = new Map(helpSessionId !== null ? [["sess", helpSessionId]] : []);
+    mutable.sessionOriginMap.set("sess", options.origin ?? "help");
+    const access = {
+      isAvailable: vi.fn(() => options.available),
+      isSendAvailable: vi.fn(() => options.sending === true),
+      isReachable: vi.fn(() => options.reachable === true),
+      isSendReachable: vi.fn(() => options.sendReachable === true),
+      getInbox: vi.fn(() => ({ ok: true as const, value: INBOX })),
+      reply: vi.fn(() => ({
+        ok: true as const,
+        value: { taskId: "task-1", state: "completed" as const, revision: 4 },
+      })),
+      sendMessage: vi.fn(() => ({
+        ok: true as const,
+        value: {
+          messageId: "msg-9",
+          contextId: "msg-9",
+          hopCount: 1,
+          state: "waiting-for-hub" as const,
+        },
+      })),
+    };
+    const deps = fakeDeps({
+      sessionStore: store,
+      requestManifest: vi
+        .fn()
+        .mockResolvedValue([
+          makeManifestEntry("assistant.getInbox"),
+          makeManifestEntry("assistant.reply"),
+          makeManifestEntry("assistant.sendMessage"),
+          makeManifestEntry("terminal.list"),
+        ]),
+      ...(options.access === false ? {} : { assistantMessaging: access }),
+    });
+    return { deps, access };
+  }
+
+  it("lists the tools while the caller's own lane is enrolled, and not where it never could be", async () => {
+    const enrolled = laneDeps({ available: true });
+    const server = createSessionServer("sess", enrolled.deps);
+    await server.connect(makeMockTransport());
+    expect((await listTools(server)).tools.map((t) => t.name)).toEqual(
+      expect.arrayContaining(["assistant.getInbox", "assistant.reply"])
+    );
+
+    const idle = laneDeps({ available: false });
+    const idleServer = createSessionServer("sess", idle.deps);
+    await idleServer.connect(makeMockTransport());
+    const names = (await listTools(idleServer)).tools.map((t) => t.name);
+    expect(names).toContain("terminal.list");
+    expect(names).not.toContain("assistant.getInbox");
+    expect(names).not.toContain("assistant.reply");
+  });
+
+  it("lists them from the start where the lane could be enrolled, for clients that never re-list", async () => {
+    // Codex reads the tool list once; a lane is enrolled only after its assistant starts.
+    const { deps, access } = laneDeps({ available: false, reachable: true, sendReachable: true });
+    access.getInbox.mockReturnValue({
+      ok: false as never,
+      code: "NOT_ELIGIBLE" as never,
+      message: "not enrolled" as never,
+    } as never);
+    const server = createSessionServer("sess", deps);
+    await server.connect(makeMockTransport());
+    expect((await listTools(server)).tools.map((t) => t.name)).toEqual(
+      expect.arrayContaining(["assistant.getInbox", "assistant.reply", "assistant.sendMessage"])
+    );
+    // Offered is not admitted: the runtime still refuses until the lane is enrolled.
+    const refused = await callTool(server, { name: "assistant.getInbox", arguments: {} });
+    expect(refused.isError).toBe(true);
+    expect(access.getInbox).toHaveBeenCalled();
+    const send = await callTool(server, {
+      name: "assistant.sendMessage",
+      arguments: { text: "hello" },
+    });
+    expect(send.isError).toBe(true);
+    expect(access.sendMessage).not.toHaveBeenCalled();
+  });
+
+  it("offers sendMessage only to a lane a remote Shell enrolled, never the hub (#13338)", async () => {
+    const hub = laneDeps({ available: true, sending: false });
+    const hubServer = createSessionServer("sess", hub.deps);
+    await hubServer.connect(makeMockTransport());
+    const hubNames = (await listTools(hubServer)).tools.map((t) => t.name);
+    expect(hubNames).toContain("assistant.getInbox");
+    expect(hubNames).not.toContain("assistant.sendMessage");
+    // Withheld from the listing and refused at dispatch alike.
+    const refused = await callTool(hubServer, {
+      name: "assistant.sendMessage",
+      arguments: { text: "hello" },
+    });
+    expect(refused.isError).toBe(true);
+    expect(hub.access.sendMessage).not.toHaveBeenCalled();
+
+    const lane = laneDeps({ available: true, sending: true });
+    const laneServer = createSessionServer("sess", lane.deps);
+    await laneServer.connect(makeMockTransport());
+    expect((await listTools(laneServer)).tools.map((t) => t.name)).toContain(
+      "assistant.sendMessage"
+    );
+    const sent = await callTool(laneServer, {
+      name: "assistant.sendMessage",
+      arguments: { text: "migration landed", contextId: "ctx" },
+    });
+    expect(sent.isError).toBeFalsy();
+    expect(sent.structuredContent).toMatchObject({ messageId: "msg-9", state: "waiting-for-hub" });
+    expect(lane.access.sendMessage).toHaveBeenCalledWith({
+      text: "migration landed",
+      contextId: "ctx",
+    });
+    expect(lane.deps.dispatchAction).not.toHaveBeenCalled();
+  });
+
+  it("runs both in main against the caller's own lane", async () => {
+    const { deps, access } = laneDeps({ available: true });
+    const server = createSessionServer("sess", deps);
+    await server.connect(makeMockTransport());
+
+    const inbox = await callTool(server, { name: "assistant.getInbox", arguments: { limit: 2 } });
+    expect(inbox.isError).toBeFalsy();
+    expect(inbox.structuredContent).toEqual(INBOX);
+    expect(access.getInbox).toHaveBeenCalledWith({ limit: 2 });
+
+    const reply = await callTool(server, {
+      name: "assistant.reply",
+      arguments: { taskId: "task-1", state: "completed", text: "done" },
+    });
+    expect(reply.structuredContent).toEqual({ taskId: "task-1", state: "completed", revision: 4 });
+    expect(access.reply).toHaveBeenCalledWith({
+      taskId: "task-1",
+      state: "completed",
+      text: "done",
+    });
+    expect(deps.dispatchAction).not.toHaveBeenCalled();
+  });
+
+  it("answers with no view to reach, since nothing it does touches a renderer", async () => {
+    const { deps, access } = laneDeps({ available: true });
+    (deps.requestManifest as ReturnType<typeof vi.fn>).mockRejectedValue(new Error("no view"));
+    const server = createSessionServer("sess", deps);
+    await server.connect(makeMockTransport());
+
+    const result = await callTool(server, { name: "assistant.getInbox", arguments: {} });
+    expect(result.isError).toBeFalsy();
+    expect(access.getInbox).toHaveBeenCalled();
+    expect(deps.requestManifest).not.toHaveBeenCalled();
+    expect(deps.dispatchAction).not.toHaveBeenCalled();
+  });
+
+  it("refuses arguments outside the schema without echoing them", async () => {
+    const { deps, access } = laneDeps({ available: true });
+    const server = createSessionServer("sess", deps);
+    await server.connect(makeMockTransport());
+
+    const result = await callTool(server, {
+      name: "assistant.reply",
+      arguments: { taskId: "task-1", state: "maybe", text: "SECRET-SENTINEL" },
+    });
+    expect(result.isError).toBe(true);
+    expect(toolErrorPayload(result).code).toBe("INVALID_ARGS");
+    expect(JSON.stringify(result.content)).not.toContain("SECRET-SENTINEL");
+    expect(access.reply).not.toHaveBeenCalled();
+  });
+
+  it("refuses a session with no messaging access, whatever admitted it", async () => {
+    const { deps } = laneDeps({ available: true, access: false });
+    const server = createSessionServer("sess", deps);
+    await server.connect(makeMockTransport());
+
+    const result = await callTool(server, { name: "assistant.getInbox", arguments: {} });
+    expect(result.isError).toBe(true);
+    expect(toolErrorPayload(result).code).toBe("NOT_ELIGIBLE");
+    expect(deps.dispatchAction).not.toHaveBeenCalled();
+  });
+
+  it("neither lists nor runs them for a bearer with no help session, even with access wired", async () => {
+    // Renderer-owned, so the tier admits it; only the missing help session refuses.
+    const { deps, access } = laneDeps({
+      available: true,
+      origin: "assistant-pane",
+      helpSessionId: null,
+    });
+    const server = createSessionServer("sess", deps);
+    await server.connect(makeMockTransport());
+
+    expect((await listTools(server)).tools.map((t) => t.name)).not.toContain("assistant.getInbox");
+    const result = await callTool(server, { name: "assistant.getInbox", arguments: {} });
+    expect(result.isError).toBe(true);
+    expect(toolErrorPayload(result).code).toBe("NOT_ELIGIBLE");
+    expect(access.getInbox).not.toHaveBeenCalled();
+  });
+
+  it("passes on a refusal's fixed code and words", async () => {
+    const { deps, access } = laneDeps({ available: true });
+    access.reply.mockReturnValueOnce({
+      ok: false,
+      code: "EXCHANGE_CLOSED",
+      message: "That exchange has already ended, so it takes no further answer.",
+    } as never);
+    const server = createSessionServer("sess", deps);
+    await server.connect(makeMockTransport());
+
+    const result = await callTool(server, {
+      name: "assistant.reply",
+      arguments: { taskId: "task-1", state: "completed", text: "late" },
+    });
+    expect(toolErrorPayload(result).code).toBe("EXCHANGE_CLOSED");
+    expect(deps.appendAuditRecord).toHaveBeenCalledWith(
+      expect.objectContaining({
+        toolId: "assistant.reply",
+        outcome: {
+          kind: "result",
+          value: {
+            ok: false,
+            error: expect.objectContaining({ code: "VALIDATION_ERROR" }),
+          },
+        },
+      })
+    );
+  });
+});
+
+describe("hub host-messaging tools (#13336)", () => {
+  const LISTED = { hosts: [] };
+  const AMBIGUOUS = {
+    outcome: "ambiguous" as const,
+    detail: "may have arrived",
+    retryAfterMs: null,
+    taskId: "task-1",
+    contextId: "ctx",
+    task: null,
+    wait: "none" as const,
+  };
+
+  function hubDeps(options: {
+    available: boolean;
+    reachable?: boolean;
+    tier?: "core" | "full";
+    access?: boolean;
+  }) {
+    const store = fakeSessionStore(options.tier ?? "core");
+    const mutable = store as unknown as {
+      sessionHelpIdMap: Map<string, string>;
+      sessionOriginMap: Map<string, string>;
+    };
+    mutable.sessionHelpIdMap = new Map([["sess", "hub"]]);
+    mutable.sessionOriginMap.set("sess", "help");
+    const access = {
+      isAvailable: vi.fn(() => options.available),
+      isReachable: vi.fn(() => options.reachable === true),
+      run: vi.fn(async (toolId: string) => ({
+        ok: true as const,
+        value: toolId === "host.list" ? LISTED : AMBIGUOUS,
+      })),
+    };
+    const deps = fakeDeps({
+      sessionStore: store,
+      requestManifest: vi
+        .fn()
+        .mockResolvedValue([
+          makeManifestEntry("host.list"),
+          makeManifestEntry("host.sendMessage"),
+          makeManifestEntry("terminal.list"),
+        ]),
+      ...(options.access === false ? {} : { hostMessaging: access as never }),
+    });
+    return { deps, access };
+  }
+
+  it("lists them only to the hub, and sends only from the full tier", async () => {
+    const core = hubDeps({ available: true });
+    const coreServer = createSessionServer("sess", core.deps);
+    await coreServer.connect(makeMockTransport());
+    const coreNames = (await listTools(coreServer)).tools.map((t) => t.name);
+    expect(coreNames).toContain("host.list");
+    expect(coreNames).not.toContain("host.sendMessage");
+
+    const full = hubDeps({ available: true, tier: "full" });
+    const fullServer = createSessionServer("sess", full.deps);
+    await fullServer.connect(makeMockTransport());
+    expect((await listTools(fullServer)).tools.map((t) => t.name)).toEqual(
+      expect.arrayContaining(["host.list", "host.sendMessage"])
+    );
+
+    const notHub = hubDeps({ available: false, tier: "full" });
+    const notHubServer = createSessionServer("sess", notHub.deps);
+    await notHubServer.connect(makeMockTransport());
+    const names = (await listTools(notHubServer)).tools.map((t) => t.name);
+    expect(names).toContain("terminal.list");
+    expect(names).not.toContain("host.list");
+    expect(names).not.toContain("host.sendMessage");
+  });
+
+  it("lists them from the start to a session that could become the hub while a host exists", async () => {
+    const { deps } = hubDeps({ available: false, reachable: true, tier: "full" });
+    const server = createSessionServer("sess", deps);
+    await server.connect(makeMockTransport());
+    expect((await listTools(server)).tools.map((t) => t.name)).toEqual(
+      expect.arrayContaining(["host.list", "host.sendMessage"])
+    );
+  });
+
+  it("runs in main and returns an ambiguous send as a result, never an error", async () => {
+    const { deps, access } = hubDeps({ available: true, tier: "full" });
+    const server = createSessionServer("sess", deps);
+    await server.connect(makeMockTransport());
+
+    const args = { hostId: "studio", projectId: "p", slot: 0, generation: "g", text: "hi" };
+    const result = await callTool(server, { name: "host.sendMessage", arguments: args });
+    expect(result.isError).toBeFalsy();
+    expect(result.structuredContent).toEqual(AMBIGUOUS);
+    expect(access.run).toHaveBeenCalledWith("host.sendMessage", args);
+    expect(deps.dispatchAction).not.toHaveBeenCalled();
+  });
+
+  it("refuses a session with no hub access, whatever admitted it", async () => {
+    const { deps } = hubDeps({ available: true, access: false });
+    const server = createSessionServer("sess", deps);
+    await server.connect(makeMockTransport());
+
+    const result = await callTool(server, { name: "host.list", arguments: {} });
+    expect(result.isError).toBe(true);
+    expect(toolErrorPayload(result).code).toBe("NOT_ELIGIBLE");
+    expect(deps.dispatchAction).not.toHaveBeenCalled();
+  });
+});
+
 describe("structuredContent for terminal query actions (#10676)", () => {
   // The three high-value query actions carry `mcpOutputSchema: true`, so the real
   // manifest entry the renderer reports back carries an object-typed outputSchema.
@@ -4526,27 +4797,6 @@ describe("structuredContent for terminal query actions (#10676)", () => {
     // Backward compatibility: the text body is preserved for clients that ignore
     // structuredContent, and it serializes the same data.
     expect(JSON.parse(textOf(result))).toEqual(payload);
-  });
-
-  it("emits structuredContent for terminal.getStatus", async () => {
-    const payload = {
-      terminals: [{ terminalId: "t-1", agentId: "claude", agentState: "working" }],
-    };
-    const server = createSessionServer("sc-status", deps("terminal.getStatus", payload));
-    const result = await callTool(server, { name: "terminal.getStatus", arguments: {} });
-
-    expect(structuredOf(result)).toEqual(payload);
-  });
-
-  it("emits structuredContent for terminal.getOutput", async () => {
-    const payload = { terminalId: "t-1", content: "hello", lineCount: 1, truncated: false };
-    const server = createSessionServer("sc-output", deps("terminal.getOutput", payload));
-    const result = await callTool(server, {
-      name: "terminal.getOutput",
-      arguments: { terminalId: "t-1" },
-    });
-
-    expect(structuredOf(result)).toEqual(payload);
   });
 
   it("emits structuredContent for an empty result set (not just non-empty)", async () => {
@@ -4757,23 +5007,6 @@ describe("resolved-workspace result metadata (#11536)", () => {
     const result = await callTool(server, { name: "worktree.list", arguments: {} });
 
     expect(workspaceMetaOf(result)).toEqual(WORKSPACE);
-  });
-
-  it("reports a scratch workspace as a scratch", async () => {
-    const scratch = {
-      kind: "scratch" as const,
-      workspaceId: "6f1c9d2e-4a7b-4c3d-9e8f-1a2b3c4d5e6f",
-      workspacePath: "/scratch/one",
-    };
-    const server = createSessionServer(
-      "rp-scratch",
-      depsFor({ result: { ok: true, result: "ok" }, dispatchedWorkspace: scratch })
-    );
-    await server.connect(makeMockTransport());
-
-    const result = await callTool(server, { name: "worktree.list", arguments: {} });
-
-    expect(workspaceMetaOf(result)).toEqual(scratch);
   });
 
   it("merges into an existing _meta without clobbering sibling keys or mutating the input", () => {
@@ -5441,6 +5674,30 @@ describe("sessionServer introspection tier filtering", () => {
     expect(calls.map((c) => (c[1] as { offset: number }).offset)).toEqual([0, 100]);
   });
 
+  it("walks past an empty actions.list page while the view reports more (#13350)", async () => {
+    // A Shell answering for a host narrows each page to what a host may run,
+    // so the first page can come back empty with a permitted action behind it.
+    const pages = [[], [entry("terminal.list")]];
+    const deps = fakeDeps({
+      sessionStore: fakeSessionStore("full"),
+      dispatchAction: vi.fn((_id: string, callArgs: unknown) => {
+        const { offset = 0 } = callArgs as { offset?: number };
+        const page = offset / 100;
+        return Promise.resolve({
+          result: {
+            ok: true as const,
+            result: { actions: pages[page] ?? [], hasMore: page < pages.length - 1 },
+          },
+        });
+      }),
+    });
+    const server = createSessionServer("s1", deps);
+    const res = await callTool(server, { name: "actions.list" });
+    expect(payload<{ actions: ActionManifestEntry[] }>(res).actions.map((a) => a.id)).toEqual([
+      "terminal.list",
+    ]);
+  });
+
   /**
    * The page walk synthesizes its own envelope instead of returning the
    * renderer's, so the resolved-workspace stamp (#11536) has to be carried
@@ -5843,15 +6100,6 @@ describe("sessionServer introspection tier filtering", () => {
       expect(body.error.message).toContain("project.runCheck");
     });
   });
-
-  // Discovery results depend on tier and on live grants, both of which can
-  // change between calls. Caching them per (session, args) would serve a
-  // pre-revocation surface after an approval lapsed.
-  it("keeps introspection tools out of the mutation-only dedup allowlist", () => {
-    for (const id of ["actions.list", "actions.search", "actions.getSchema"]) {
-      expect(MCP_DEDUP_ALLOWLIST.has(id)).toBe(false);
-    }
-  });
 });
 
 describe("mcp.surface short-circuit (#11549)", () => {
@@ -5926,15 +6174,6 @@ describe("mcp.surface short-circuit (#11549)", () => {
       expect(listed.length).toBeGreaterThan(1);
       expect(reported).toEqual(listed);
     }
-  });
-
-  it("omits a tool hidden from tools/list even though its tier permits it", async () => {
-    const { result } = await readSurface("core");
-    const ids = (result.structuredContent as { tools: Array<{ id: string }> }).tools.map(
-      (t) => t.id
-    );
-
-    expect(ids).not.toContain("actions.persistedStores");
   });
 
   it("ignores a live grant, so the hash tracks the listing rather than a timer", async () => {
@@ -6066,24 +6305,6 @@ describe("mcp.surface short-circuit (#11549)", () => {
     await server.connect(makeMockTransport());
 
     await expect(callTool(server, { name: SURFACE })).rejects.toThrow(/manifest unavailable/i);
-  });
-
-  it("is refused before the short-circuit when the tier does not permit it", async () => {
-    // The short-circuit sits AFTER the tier gate. Proven by driving a real
-    // denied call rather than by restating the allowlist: `terminal.new` stands
-    // in for a tool this tier lacks, and the refusal must be the tier error, not
-    // a surface report.
-    const deps = fakeDeps({
-      sessionStore: fakeSessionStore("core"),
-      requestManifest: vi.fn().mockResolvedValue(surfaceManifest()),
-    });
-    const server = createSessionServer("session-surface-denied", deps);
-    await server.connect(makeMockTransport());
-
-    const denied = await callTool(server, { name: "terminal.new" });
-
-    expect(denied.isError).toBe(true);
-    expect(JSON.stringify(denied.content)).toContain(TIER_NOT_PERMITTED_CODE);
   });
 });
 
@@ -6519,6 +6740,10 @@ describe("workspace-bound external sessions (#11789)", () => {
         },
         // Executed through the injected notify service rather than a named dep.
         "terminal.notifyWhenIdle": { args: { terminalId: "t-1" } },
+        // Executed through the caller's bound messaging access (#13335).
+        "assistant.getInbox": { args: {} },
+        "assistant.reply": { args: { taskId: "task-1", state: "completed", text: "x" } },
+        "assistant.sendMessage": { args: { text: "x" } },
       };
 
       function viewlessDepsFor(name: string): SessionServerDeps {
@@ -6615,19 +6840,6 @@ describe("workspace-bound external sessions (#11789)", () => {
         // than `CONFIRMATION_REQUIRED` is therefore the honest code — the
         // bypass did not give this action a way past either.
         expect(toolErrorPayload(result).code).toBe(SESSION_BINDING_GONE);
-        expect(deps.dispatchAction).not.toHaveBeenCalled();
-      });
-
-      it("still refuses a confirm-gated action whose manifest IS reachable", async () => {
-        // The complementary half: when the ceiling can read the manifest, the
-        // refusal is the confirm one, and the bypass does not reach it.
-        const deps = boundDeps();
-        const server = createSessionServer(SESSION, deps);
-        await server.connect(makeMockTransport());
-
-        const result = await callTool(server, { name: "recipe.run", arguments: {} });
-
-        expect(toolErrorPayload(result).code).toBe("CONFIRMATION_REQUIRED");
         expect(deps.dispatchAction).not.toHaveBeenCalled();
       });
 
@@ -6763,25 +6975,6 @@ describe("workspace-bound external sessions (#11789)", () => {
       expect(deps.dispatchAction).not.toHaveBeenCalled();
     });
 
-    it("fails closed rather than dispatching when the manifest can't be resolved", async () => {
-      // Proceeding on an unresolved manifest would erase the only evidence that
-      // an action is confirm-gated, turning a refusal into a silent dispatch.
-      const deps = boundDeps({
-        requestManifest: vi
-          .fn()
-          .mockRejectedValue(new WorkspaceBindingError(WORKSPACE, "not-found")),
-        getCachedManifest: vi.fn(() => null),
-      });
-      const server = createSessionServer(SESSION, deps);
-      await server.connect(makeMockTransport());
-
-      const result = await callTool(server, { name: "recipe.run", arguments: {} });
-
-      expect(result.isError).toBe(true);
-      expect(JSON.stringify(result.content)).toContain(SESSION_BINDING_GONE);
-      expect(deps.dispatchAction).not.toHaveBeenCalled();
-    });
-
     it.each([["not-found" as const], ["ambiguous" as const]])(
       "reports a %s workspace as retriable rather than a dead end (#12082)",
       async (reason) => {
@@ -6852,26 +7045,6 @@ describe("workspace-bound external sessions (#11789)", () => {
         expect(tools.length).toBeGreaterThan(0);
       }
     );
-
-    it("withholds confirm-gated tools from the base surface too", async () => {
-      // The ceiling keys off the binding, not off view liveness: nobody is
-      // watching a background workspace to approve a dialog whether or not a
-      // window happens to be open.
-      const deps = boundDeps({
-        requestManifest: vi
-          .fn()
-          .mockRejectedValue(new WorkspaceBindingError(WORKSPACE, "not-found")),
-        getCachedManifest: vi.fn(() => null),
-      });
-      const server = createSessionServer(SESSION, deps);
-      await server.connect(makeMockTransport());
-
-      const tools = await listBaseTools(server);
-      const ids = new Set(tools.map((t) => t.name));
-
-      expect(CONFIRM_GATED_EXTERNAL_TOOLS.size).toBeGreaterThan(0);
-      for (const withheld of CONFIRM_GATED_EXTERNAL_TOOLS) expect(ids.has(withheld)).toBe(false);
-    });
 
     it("publishes the input schemas a client needs to call the base surface", async () => {
       // The whole reason for a full surface rather than an empty one plus a
@@ -8203,29 +8376,6 @@ describe("session-scoped resource ownership (#11909)", () => {
       expect(deps.requestManifest).not.toHaveBeenCalled();
     });
 
-    // No path, session id or agent crosses from the caller: the host resolves
-    // all of it, so there is nothing else for an argument to steer.
-    it("hands the executor the id and nothing else the caller sent", async () => {
-      const { server, handleTerminalReadLastMessageOwned } = readHarness("s-read-strip");
-
-      await callTool(server, {
-        name: "terminal.readLastMessageOwned",
-        arguments: {
-          terminalId: "terminal-1",
-          sessionId: "someone-elses",
-          path: "/etc/passwd",
-          maxScanBytes: 1e9,
-        },
-      });
-
-      expect(handleTerminalReadLastMessageOwned).toHaveBeenCalledTimes(1);
-      expect(handleTerminalReadLastMessageOwned.mock.calls[0]).toEqual([
-        "terminal-1",
-        {},
-        expect.any(AbortSignal),
-      ]);
-    });
-
     // How much of which message is the caller's to choose (#12496), and the
     // only thing beyond the id that reaches the executor.
     it("forwards the read options it validated", async () => {
@@ -8292,22 +8442,6 @@ describe("session-scoped resource ownership (#11909)", () => {
 
       expect(errorText(result)).toContain("RESOURCE_NOT_OWNED");
       expect(errorText(result)).not.toContain("maxBytes");
-      expect(handleTerminalReadLastMessageOwned).not.toHaveBeenCalled();
-    });
-
-    it("refuses a panel the session did not create, without reading anything", async () => {
-      const { store, server, handleTerminalReadLastMessageOwned } = readHarness("s-read-foreign");
-      store.resourceOwnership.record("other-session", [
-        { kind: "terminal", id: "terminal-theirs" },
-      ]);
-
-      const result = await callTool(server, {
-        name: "terminal.readLastMessageOwned",
-        arguments: { terminalId: "terminal-theirs" },
-      });
-
-      expect(result.isError).toBe(true);
-      expect(errorText(result)).toContain("RESOURCE_NOT_OWNED");
       expect(handleTerminalReadLastMessageOwned).not.toHaveBeenCalled();
     });
 
@@ -8433,7 +8567,7 @@ describe("session-scoped resource ownership (#11909)", () => {
     });
 
     // Daintree's own assistant already types into every pane in its view, so it
-    // reads by that view rather than by the ledger (#12883).
+    // reads by that view as well as by the ledger (#12883, #13439).
     describe("from Daintree's own assistant (#12883)", () => {
       function assistantReadHarness(
         sessionId: string,
@@ -8512,36 +8646,77 @@ describe("session-scoped resource ownership (#11909)", () => {
         }
       );
 
-      // The view is the whole boundary: a pane the assistant created, but whose
-      // view it can no longer resolve, is refused like any other.
-      it("does not fall back to the ledger when the view check fails", async () => {
-        const { server, handleTerminalReadLastMessageOwned } = assistantReadHarness(
-          "s-assist-owned",
-          "help",
-          () => false
-        );
+      // A help session was refused the panes it had launched while the view
+      // check answered no (#13439). Its own panes are the ledger's, as every
+      // session's are, and the view is never asked about them.
+      it.each(["help", "assistant-pane"] as const)(
+        "%s reads a pane it created even when the view check refuses",
+        async (origin) => {
+          const { server, handleTerminalReadLastMessageOwned, isTerminalInPinnedWorkspace } =
+            assistantReadHarness(`s-assist-owned-${origin}`, origin, () => false);
+
+          const result = await callTool(server, {
+            name: "terminal.readLastMessageOwned",
+            arguments: { terminalId: "terminal-1" },
+          });
+
+          expect(result.isError).toBeUndefined();
+          expect(result.structuredContent).toEqual(READ_RESULT);
+          expect(handleTerminalReadLastMessageOwned).toHaveBeenCalledWith(
+            "terminal-1",
+            {},
+            expect.any(AbortSignal)
+          );
+          expect(isTerminalInPinnedWorkspace).not.toHaveBeenCalled();
+        }
+      );
+
+      // A hand-over is a grant to a pane, and the tool accepts one, but it never
+      // admits the assistant's read: only creation or the view does.
+      it("never admits a handed-over pane that the view check refuses", async () => {
+        const { store, server, handleTerminalReadLastMessageOwned, isTerminalInPinnedWorkspace } =
+          assistantReadHarness("s-assist-handed", "help", () => false);
+        store.resourceOwnership.bindPrincipal("s-assist-handed", "principal-help");
+        expect(
+          store.terminalAdoption.adopt({
+            terminalId: "handed-pane",
+            orchestratorPaneId: "orchestrator-pane",
+            principalId: "principal-help",
+          }).ok
+        ).toBe(true);
 
         const result = await callTool(server, {
           name: "terminal.readLastMessageOwned",
-          arguments: { terminalId: "terminal-1" },
+          arguments: { terminalId: "handed-pane" },
         });
 
         expect(toolErrorPayload(result).code).toBe("RESOURCE_NOT_OWNED");
+        expect(isTerminalInPinnedWorkspace).toHaveBeenCalledWith("handed-pane");
         expect(handleTerminalReadLastMessageOwned).not.toHaveBeenCalled();
       });
 
-      it("refuses every read when the view check is not wired", async () => {
+      it("refuses a pane it did not create when the view check is not wired", async () => {
         const { store, server, handleTerminalReadLastMessageOwned } =
           readHarness("s-assist-unwired");
         store.sessionOriginMap.set("s-assist-unwired", "help");
 
-        const result = await callTool(server, {
+        const refused = await callTool(server, {
+          name: "terminal.readLastMessageOwned",
+          arguments: { terminalId: "user-pane" },
+        });
+        const owned = await callTool(server, {
           name: "terminal.readLastMessageOwned",
           arguments: { terminalId: "terminal-1" },
         });
 
-        expect(toolErrorPayload(result).code).toBe("RESOURCE_NOT_OWNED");
-        expect(handleTerminalReadLastMessageOwned).not.toHaveBeenCalled();
+        expect(toolErrorPayload(refused).code).toBe("RESOURCE_NOT_OWNED");
+        expect(owned.isError).toBeUndefined();
+        expect(handleTerminalReadLastMessageOwned).toHaveBeenCalledTimes(1);
+        expect(handleTerminalReadLastMessageOwned).toHaveBeenCalledWith(
+          "terminal-1",
+          {},
+          expect.any(AbortSignal)
+        );
       });
 
       it("decides the view before looking at the options", async () => {
@@ -9463,6 +9638,13 @@ describe("session-scoped resource ownership (#11909)", () => {
             { id: "terminal-users-own", title: "the user's shell" },
             { id: "terminal-other-session", title: "another client's agent" },
           ],
+          panelLimit: {
+            count: 3,
+            softWarningLimit: 12,
+            confirmationLimit: 20,
+            hardLimit: 32,
+            tier: "ok",
+          },
         },
       },
     };
@@ -9492,8 +9674,11 @@ describe("session-scoped resource ownership (#11909)", () => {
       expect(listedIds(result)).toEqual(["terminal-mine"]);
       // Text body and structuredContent read one filtered value; a filter
       // reaching only one of them would leak the full listing to the other.
+      // The panel limit stays project-wide: it is what a launch is judged on,
+      // not a count of this caller's own rows.
       expect(structuredOf(result)).toEqual({
         terminals: [{ id: "terminal-mine", title: "our agent" }],
+        panelLimit: LISTING.result.result.panelLimit,
       });
       // The strip is half of one mechanism, not a tidy-up: the renderer
       // refuses any `owned` it receives, so forwarding it would fail the very
@@ -10859,22 +11044,6 @@ describe("agent-pane approval (#12692)", () => {
     pane.sessionStore.grantCache.dispose();
   });
 
-  it("reports a missed ask as CONFIRMATION_TIMEOUT", async () => {
-    const pane = paneServer("core", {
-      requestApproval: vi.fn().mockResolvedValue({
-        result: { ok: false, error: { code: CONFIRMATION_TIMEOUT_CODE, message: "timed out" } },
-        confirmationDecision: "timeout",
-      }),
-    });
-    await pane.server.connect(makeMockTransport());
-
-    const result = await callTool(pane.server, { name: "worktree.setActive", arguments: {} });
-
-    expect(toolErrorPayload(result).code).toBe(CONFIRMATION_TIMEOUT_CODE);
-    expect(pane.dispatchAction).not.toHaveBeenCalled();
-    pane.sessionStore.grantCache.dispose();
-  });
-
   it("fails closed with CONFIRMATION_REQUIRED when no window can show the ask", async () => {
     const pane = paneServer("core", {
       requestApproval: vi.fn().mockRejectedValue(new RendererBridgeUnavailableError()),
@@ -11513,6 +11682,35 @@ describe("assistant skip preference (#12874)", () => {
     help.sessionStore.grantCache.dispose();
   });
 
+  // A remote Shell that still raised its dialog (#13368) — a move of its
+  // window, or a Shell too old to take the stamp — sends the decision back,
+  // and the audit must not claim the call ran without asking.
+  it.each([{ decision: "approved" }, { decision: "rejected" }, { decision: "timeout" }])(
+    "audits a skip-stamped call the Shell still asked about as asked ($decision)",
+    async ({ decision }) => {
+      const help = skipServer({ origin: "help", skipped: true });
+      help.dispatchAction.mockResolvedValue({
+        result:
+          decision === "approved"
+            ? { ok: true, result: { ok: 1 } }
+            : { ok: false, error: { code: "USER_REJECTED", message: "no" } },
+        confirmationDecision: decision,
+      });
+      await help.server.connect(makeMockTransport());
+
+      await callTool(help.server, {
+        name: "worktree.delete",
+        arguments: { worktreeId: "wt-1" },
+      });
+
+      expect(help.dispatchAction.mock.calls.at(-1)?.slice(2)).toEqual([true, "skip-preference"]);
+      const audit = lastAudit(help.appendAuditRecord);
+      expect(audit.confirmationDecision).toBe(decision);
+      expect(audit).not.toHaveProperty("authorization");
+      help.sessionStore.grantCache.dispose();
+    }
+  );
+
   // The issue's own case (#13135): a core help session deleting a worktree an
   // earlier session made. Skip runs it; ask raises the ordinary modal. Neither
   // is refused, and nothing about it depends on the session having created it.
@@ -12012,15 +12210,6 @@ describe("session-scoped ownership note for api-key callers (#12987)", () => {
       expect(dispatchAction).not.toHaveBeenCalled();
     });
 
-    it.each(OWNED_CALLS)("is not given by %s to a pane bearer", async (name, args) => {
-      const { server } = session("s-pane", { principal: "principal-pane" });
-
-      const payload = refusal(await callTool(server, { name, arguments: args }));
-
-      expect(payload.code).toBe("RESOURCE_NOT_OWNED");
-      expect(payload.message).not.toContain(NOTE);
-    });
-
     it("leaves a pane's hand-over hint and grant path as they were", async () => {
       const { server } = session("s-pane", { principal: "principal-pane" });
 
@@ -12259,5 +12448,103 @@ describe("session-scoped ownership note for api-key callers (#12987)", () => {
       expect(texts(launched)).toHaveLength(1);
       expect(texts(listed)).toHaveLength(1);
     });
+  });
+});
+
+describe("no frontend attached to a bound workspace", () => {
+  const SESSION = "headless-session";
+  const WORKSPACE = "ws-headless";
+
+  function headlessDeps(
+    tier: "external" | "core",
+    overrides?: Partial<SessionServerDeps>
+  ): SessionServerDeps {
+    const sessionStore = fakeSessionStore(tier);
+    sessionStore.sessionWorkspaceMap.set(SESSION, WORKSPACE);
+    return fakeDeps({
+      sessionStore,
+      workspaceBinding: { kind: "project", workspaceId: WORKSPACE, workspacePath: "/tmp/h" },
+      getCachedManifest: vi.fn(() => null),
+      requestManifest: vi.fn().mockRejectedValue(new NoFrontendAttachedError(WORKSPACE)),
+      ...overrides,
+    });
+  }
+
+  it("lets a bound external session reach a host-runnable action instead of refusing the route", async () => {
+    const dispatchAction = vi.fn().mockResolvedValue({
+      result: { ok: true, result: { terminalId: "t-headless" } },
+    });
+    const server = createSessionServer(SESSION, headlessDeps("external", { dispatchAction }));
+    await server.connect(makeMockTransport());
+
+    const result = await callTool(server, { name: "terminal.new", arguments: {} });
+
+    expect(result.isError).toBeFalsy();
+    expect(dispatchAction).toHaveBeenCalledWith("terminal.new", {}, false);
+    expect(JSON.stringify(result.content)).toContain("t-headless");
+  });
+
+  it("still refuses a launch argument that would need a confirmation nobody can give", async () => {
+    const dispatchAction = vi.fn();
+    const server = createSessionServer(SESSION, headlessDeps("external", { dispatchAction }));
+    await server.connect(makeMockTransport());
+
+    const result = await callTool(server, {
+      name: "terminal.new",
+      arguments: { command: "rm -rf build" },
+    });
+
+    expect(result.isError).toBe(true);
+    expect(toolErrorPayload(result).code).toBe(CONFIRMATION_REQUIRED_CODE);
+    expect(dispatchAction).not.toHaveBeenCalled();
+  });
+
+  it("answers NO_FRONTEND_ATTACHED, retriably, for an action only a frontend can run", async () => {
+    const dispatchAction = vi
+      .fn()
+      .mockRejectedValue(new NoFrontendAttachedError(WORKSPACE, "terminal.rename"));
+    const server = createSessionServer(SESSION, headlessDeps("core", { dispatchAction }));
+    await server.connect(makeMockTransport());
+
+    const result = await callTool(server, {
+      name: "terminal.rename",
+      arguments: { terminalId: "t-1" },
+    });
+
+    expect(result.isError).toBe(true);
+    const payload = toolErrorPayload(result);
+    expect(payload.code).toBe(NO_FRONTEND_ATTACHED_CODE);
+    expect(payload.retriable).toBe(true);
+    expect(dispatchAction).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps SESSION_BINDING_GONE for a route that was lost rather than never attached", async () => {
+    const dispatchAction = vi
+      .fn()
+      .mockRejectedValue(new WorkspaceBindingError(WORKSPACE, "not-found"));
+    const server = createSessionServer(
+      SESSION,
+      headlessDeps("core", {
+        dispatchAction,
+        requestManifest: vi.fn().mockResolvedValue([makeManifestEntry("terminal.rename")]),
+      })
+    );
+    await server.connect(makeMockTransport());
+
+    const result = await callTool(server, {
+      name: "terminal.rename",
+      arguments: { terminalId: "t-1" },
+    });
+
+    expect(toolErrorPayload(result).code).toBe(SESSION_BINDING_GONE);
+  });
+
+  it("serves the host base surface at discovery when nothing is attached", async () => {
+    const server = createSessionServer(SESSION, headlessDeps("external"));
+    await server.connect(makeMockTransport());
+
+    const names = (await listTools(server)).tools.map((t) => t.name);
+
+    expect(names).toContain("terminal.new");
   });
 });

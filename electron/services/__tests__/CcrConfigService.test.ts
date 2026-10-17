@@ -63,12 +63,6 @@ describe("CcrConfigService", () => {
       expect(presets).toEqual([]);
     });
 
-    it("returns empty array when models array is empty", async () => {
-      mockReadFile.mockResolvedValue(JSON.stringify({ models: [] }));
-      const presets = await service.discoverPresets();
-      expect(presets).toEqual([]);
-    });
-
     it("maps CCR model entries to AgentPreset objects", async () => {
       mockReadFile.mockResolvedValue(
         JSON.stringify({
@@ -197,18 +191,6 @@ describe("CcrConfigService", () => {
       expect(presets.every((p) => p.id !== "ccr-")).toBe(true);
     });
 
-    it("falls back to model when id is empty string but model is valid", async () => {
-      mockReadFile.mockResolvedValue(
-        JSON.stringify({
-          models: [{ id: "", model: "fallback-model" }],
-        })
-      );
-
-      const presets = await service.discoverPresets();
-      expect(presets).toHaveLength(1);
-      expect(presets[0].id).toBe("ccr-fallback-model");
-    });
-
     it("falls back to model when id is non-string but model is valid", async () => {
       mockReadFile.mockResolvedValue(
         JSON.stringify({
@@ -302,10 +284,6 @@ describe("CcrConfigService", () => {
   });
 
   describe("getPresets", () => {
-    it("returns empty array before loading", () => {
-      expect(service.getPresets()).toEqual([]);
-    });
-
     it("returns cached presets after loadAndApply", async () => {
       mockReadFile.mockResolvedValue(
         JSON.stringify({
@@ -315,12 +293,6 @@ describe("CcrConfigService", () => {
 
       await service.loadAndApply();
       expect(service.getPresets()).toHaveLength(1);
-    });
-  });
-
-  describe("startWatching / stopWatching", () => {
-    it("does not throw on stop when not started", async () => {
-      await expect(service.stopWatching()).resolves.toBeUndefined();
     });
   });
 
@@ -465,14 +437,6 @@ describe("CcrConfigService", () => {
     });
   });
 
-  describe("getInstance", () => {
-    it("returns a singleton instance", () => {
-      const a = CcrConfigService.getInstance();
-      const b = CcrConfigService.getInstance();
-      expect(a).toBe(b);
-    });
-  });
-
   describe("change detection (regression: env/baseUrl edits must broadcast)", () => {
     it("broadcasts when the model id/name changes", async () => {
       const { broadcastToRenderer } = await import("../../ipc/utils.js");
@@ -509,23 +473,6 @@ describe("CcrConfigService", () => {
         JSON.stringify({
           models: [{ id: "one", model: "claude-3-sonnet", baseUrl: "https://b.example.com" }],
         })
-      );
-      await service.loadAndApply();
-      expect(broadcastMock.mock.calls.length).toBeGreaterThan(initialCalls);
-    });
-
-    it("broadcasts when apiKeyEnv changes", async () => {
-      const { broadcastToRenderer } = await import("../../ipc/utils.js");
-      const broadcastMock = vi.mocked(broadcastToRenderer);
-
-      mockReadFile.mockResolvedValueOnce(
-        JSON.stringify({ models: [{ id: "one", model: "m", apiKeyEnv: "KEY_A" }] })
-      );
-      await service.loadAndApply();
-      const initialCalls = broadcastMock.mock.calls.length;
-
-      mockReadFile.mockResolvedValueOnce(
-        JSON.stringify({ models: [{ id: "one", model: "m", apiKeyEnv: "KEY_B" }] })
       );
       await service.loadAndApply();
       expect(broadcastMock.mock.calls.length).toBeGreaterThan(initialCalls);

@@ -48,6 +48,7 @@ const HOST_CALL_METHODS = {
   showToast: true,
   dispatch: true,
   reloadPanel: true,
+  restartWorker: true,
   "actions.list": true,
   "actions.get": true,
   "settings.get": true,
@@ -205,6 +206,7 @@ export const PluginWorkerToHostMessageSchema = z.union([
       requestId: CorrelationId,
       method: HostCallMethodSchema,
       params: OpaquePayload,
+      invocationId: CorrelationId.optional(),
     }),
     z.object({ type: z.literal("host-cancel"), requestId: CorrelationId }),
     z.object({

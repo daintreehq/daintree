@@ -20,6 +20,13 @@ import { store } from "../store.js";
 import { CHANNELS } from "../ipc/channels.js";
 import { broadcastToRenderer } from "../ipc/utils.js";
 import { getDefaultWslDistro } from "../utils/wsl.js";
+import { findAllOnPath } from "../utils/findOnPath.js";
+import {
+  findWindowsCommand,
+  scanWindowsPath,
+  windowsSystemTool,
+} from "../utils/windowsExecutable.js";
+import { cliSpawnTarget } from "../utils/windowsCliSpawn.js";
 import { createLogger } from "../utils/logger.js";
 
 const logger = createLogger("main:CliAvailabilityService");
@@ -30,9 +37,10 @@ interface ProbeSuccess {
   via: AgentCliProbeSource;
   wslDistro?: string;
   /**
-   * All resolved paths from a shell probe (`which -a` on Unix, `where.exe`
-   * on Windows), deduplicated by directory. Populated only when the probe
-   * succeeded via `which`; first entry equals {@link ProbeSuccess.path}.
+   * All resolved paths from the PATH probe (an in-process walk on POSIX,
+   * deduplicated by the file each resolves to; an in-process PATH search on
+   * Windows, deduplicated by directory). Populated only when the probe
+   * succeeded via the PATH layer; first entry equals {@link ProbeSuccess.path}.
    */
   allPaths?: string[];
 }
@@ -110,8 +118,8 @@ function synthesisePypiProbePaths(command: string, pypiPackage: string): string[
 
 /**
  * Collapse PATH-resolved binary candidates that live in the same install
- * directory. `where.exe` can return `claude`, `claude.cmd`, `claude.ps1`, and
- * `claude.exe` for a single npm-global install. Counting them as separate
+ * directory. One npm-global install can hold `claude`, `claude.cmd`,
+ * `claude.ps1`, and `claude.exe`. Counting them as separate
  * installs false-positives duplicate detection, and keeping the extensionless
  * shim makes PowerShell execute a file that only echoes the shim path. Keep
  * the first directory order, but prefer launchable Windows wrappers inside a
@@ -492,9 +500,8 @@ export class CliAvailabilityService {
 
   /**
    * Layered binary probe. Tries in order:
-   * 1. `which`/`where` against PATH (existing behavior, now capturing resolved
-   *    path and classifying EACCES/EPERM errors as `blocked` instead of
-   *    `missing`).
+   * 1. PATH, searched in-process (`findAllOnPath` on POSIX, the directory scan
+   *    on Windows), capturing every resolved path. It only finds or misses.
    * 2. Absolute paths declared in `AgentConfig.nativePaths` — covers native
    *    installer locations not on Electron's PATH (e.g. `~/.local/bin/claude`).
    *    On Windows an entry without a launchable extension is probed with
@@ -512,10 +519,10 @@ export class CliAvailabilityService {
    *    against it. Identifying the default by marker rather than list order
    *    matters on multi-distro hosts (issue #7944).
    *
-   * A `blocked` result from the shell probe short-circuits the fallbacks:
-   * the same endpoint security policy that blocked the PATH binary will
-   * typically also block the native-path or npm-global binary, so probing
-   * them would only mask the real problem.
+   * `blocked` comes from the layers that probe a specific file (the prepended
+   * CLI path, native paths, the npm-global shim) and short-circuits the rest:
+   * the same endpoint security policy that blocked one copy of the binary will
+   * typically block the others, so probing them would only mask the problem.
    */
   private async probeCommand(config: AgentConfig): Promise<ProbeResult> {
     const command = config.command;
@@ -617,89 +624,41 @@ export class CliAvailabilityService {
     return { status: "missing" };
   }
 
+  /**
+   * The PATH layer of the probe ladder. Every match is collected, not just the
+   * first, to drive duplicate-install detection (#6054).
+   *
+   * POSIX walks PATH in-process: the external `which` is absent from minimal
+   * Fedora and Arch installs, where spawning it reported every agent missing.
+   * A file without an execute bit is skipped, as `which` skipped it, so a PATH
+   * miss is always `missing` here — `blocked` comes from the layers that probe
+   * a specific path (prepended, native, npm-global).
+   */
   private async probeViaShell(command: string): Promise<ProbeResult> {
-    const isWindows = process.platform === "win32";
-    const checkCmd = isWindows ? "where" : "which";
-    // `where.exe` already prints every PATH match. On Unix, request all
-    // matches via `which -a` to drive duplicate detection (#6054). When
-    // `-a` is rejected by a minimal `which` (e.g. older BusyBox), retry
-    // without the flag so duplicate detection degrades to a single-path
-    // lookup rather than reporting the agent as missing.
-    const runWhich = (
-      extraArgs: string[]
-    ): Promise<{ ok: true; lines: string[] } | { ok: false; err: unknown }> =>
-      new Promise((resolve) => {
-        execFile(
-          checkCmd,
-          [...extraArgs, command],
-          {
-            timeout: CliAvailabilityService.WHICH_TIMEOUT_MS,
-            windowsHide: true,
-          },
-          (err, stdout) => {
-            if (err) {
-              resolve({ ok: false, err });
-              return;
-            }
-            const lines = String(stdout ?? "")
-              .trim()
-              .split(/\r?\n/)
-              .map((line) => line.trim())
-              .filter(Boolean);
-            resolve({ ok: true, lines });
-          }
-        );
+    if (process.platform !== "win32") {
+      const allPaths = await findAllOnPath(command, {
+        timeoutMs: CliAvailabilityService.WHICH_TIMEOUT_MS,
       });
-
-    const classifyError = (err: unknown): ProbeResult | null => {
-      const code = (err as NodeJS.ErrnoException | undefined)?.code;
-      // EACCES / EPERM from which/where itself is rare — most endpoint
-      // security blocks surface on the spawn attempt. Still, when they
-      // do, the binary clearly exists on disk (otherwise we'd have
-      // ENOENT) so "blocked" is the correct classification.
-      if (typeof code === "string" && SECURITY_ERROR_CODES.has(code)) {
-        return {
-          status: "blocked",
-          reason: "security",
-          via: "which",
-          message: `${checkCmd} "${command}" failed with ${code} — likely blocked by security software or missing execute permission`,
-        };
-      }
-      return null;
-    };
-
-    const primary = await runWhich(isWindows ? [] : ["-a"]);
-    if (primary.ok) {
-      if (primary.lines.length === 0) {
-        // Some shells exit 0 with empty stdout. Preserve the historical
-        // contract: fall back to the bare command so the binary is still
-        // launchable via PATH lookup at spawn time.
-        return { status: "found", path: command, via: "which" };
-      }
-      const allPaths = dedupePathsByDirectory(primary.lines, isWindows);
+      if (allPaths.length === 0) return { status: "missing" };
       return { status: "found", path: allPaths[0], via: "which", allPaths };
     }
+    return this.probeWindowsPath(command);
+  }
 
-    // Non-zero exit. On Unix this can be BusyBox/minimal `which`
-    // rejecting `-a`; retry without the flag so a real install isn't
-    // misreported as missing. Skip for security errors so the blocked
-    // verdict surfaces directly.
-    const primaryBlocked = classifyError(primary.err);
-    if (primaryBlocked) {
-      return primaryBlocked;
-    }
-    if (!isWindows) {
-      const fallback = await runWhich([]);
-      if (fallback.ok) {
-        const path = fallback.lines[0] ?? command;
-        return { status: "found", path, via: "which" };
-      }
-      const fallbackBlocked = classifyError(fallback.err);
-      if (fallbackBlocked) {
-        return fallbackBlocked;
-      }
-    }
-    return { status: "missing" };
+  /**
+   * Every PATH match, from absolute PATH entries only, so the working directory
+   * never counts. Read from the directories themselves rather than `where`,
+   * whose console-code-page output mangles a non-ASCII profile path. One install
+   * directory can hold several (`claude.cmd` beside `claude.exe`), which the
+   * dedupe collapses, preferring the launchable wrapper. A PATH entry that does
+   * not answer in time (a dropped network share) is searched past rather than
+   * waited on.
+   */
+  private async probeWindowsPath(command: string): Promise<ProbeResult> {
+    const { paths } = await scanWindowsPath(command, process.env);
+    if (paths.length === 0) return { status: "missing" };
+    const allPaths = dedupePathsByDirectory(paths, true);
+    return { status: "found", path: allPaths[0], via: "which", allPaths };
   }
 
   private async probeNativePaths(paths: string[]): Promise<ProbeResult> {
@@ -792,15 +751,25 @@ export class CliAvailabilityService {
       };
 
       if (!this.npmPrefixCache || this.npmPrefixCache.checkId !== this.checkId) {
-        this.npmPrefixCache = {
-          checkId: this.checkId,
-          promise: new Promise<string | null>((res) => {
+        const readPrefix = async (npm: string | null): Promise<string | null> => {
+          if (npm === null) return null;
+          let target: Awaited<ReturnType<typeof cliSpawnTarget>>;
+          try {
+            target = await cliSpawnTarget(npm, ["config", "get", "prefix"], process.platform, {
+              env: process.env,
+            });
+          } catch {
+            return null;
+          }
+          return new Promise<string | null>((res) => {
             execFile(
-              "npm",
-              ["config", "get", "prefix"],
+              target.command,
+              target.args,
               {
                 timeout: CliAvailabilityService.NPM_PREFIX_TIMEOUT_MS,
                 windowsHide: true,
+                ...(target.windowsVerbatimArguments ? { windowsVerbatimArguments: true } : {}),
+                ...(target.env ? { env: { ...process.env, ...target.env } } : {}),
               },
               (err, stdout) => {
                 if (err) {
@@ -815,7 +784,17 @@ export class CliAvailabilityService {
                 res(prefix);
               }
             );
-          }),
+          });
+        };
+        this.npmPrefixCache = {
+          checkId: this.checkId,
+          // On Windows npm is `npm.cmd`, found in PATH only (asynchronously, so
+          // a stalled PATH entry cannot block Main) and started by absolute path
+          // (Node will not spawn a `.cmd` without a shell).
+          promise:
+            process.platform === "win32"
+              ? findWindowsCommand("npm", process.env).then(readPrefix)
+              : readPrefix("npm"),
         };
       }
 
@@ -829,7 +808,7 @@ export class CliAvailabilityService {
 
     return new Promise((resolve) => {
       execFile(
-        "wsl.exe",
+        windowsSystemTool("wsl.exe"),
         ["-d", distro, "-e", command, "--version"],
         {
           timeout: CliAvailabilityService.WSL_PROBE_TIMEOUT_MS,

@@ -6,6 +6,7 @@ installPreviewShims();
 import { StrictMode, useState, type ReactNode } from "react";
 import { createRoot } from "react-dom/client";
 import { Bell, Clock, Layers, Pencil, Pin, ShieldOff, X } from "lucide-react";
+import { Star } from "@/components/icons";
 import { Box, Cloud, Container, Database, Globe, Laptop, Server, Terminal } from "lucide-react";
 import { resolveAppTheme } from "@shared/theme/themes";
 import type { EventRecord } from "@shared/types/ipc/events";
@@ -174,9 +175,9 @@ function RecipePin({ name, isDefault }: { name: string; isDefault: boolean }) {
           variant="ghost"
           size="icon-sm"
           pressed={isDefault}
-          aria-label={`Pin ${name} as the default worktree recipe`}
+          aria-label={`Make ${name} the default worktree recipe`}
         >
-          <Pin className={isDefault ? "fill-current" : undefined} />
+          <Star className={isDefault ? "fill-current" : undefined} />
         </Button>
         <Button variant="ghost" size="icon-sm" aria-label={`Edit ${name}`}>
           <Pencil />

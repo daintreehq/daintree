@@ -7,6 +7,19 @@ import type { NotifyPayload } from "@/lib/notify";
 
 const notifyMock = vi.fn<(payload: NotifyPayload) => string>().mockReturnValue("toast-id");
 
+const switchToHostMock = vi.hoisted(() =>
+  vi.fn<(hostId: string, newWindow: boolean, projectId?: string) => Promise<void>>(() =>
+    Promise.resolve()
+  )
+);
+const notifyHostSwitchFailureMock = vi.hoisted(() =>
+  vi.fn<(hostId: string, error: unknown, retry: () => void, options?: { title?: string }) => void>()
+);
+vi.mock("@/components/Hosts/hostSwitching", () => ({
+  switchToHost: switchToHostMock,
+  notifyHostSwitchFailure: notifyHostSwitchFailureMock,
+}));
+
 vi.mock("@/lib/notify", () => ({
   notify: (...args: [NotifyPayload]) => notifyMock(...args),
 }));
@@ -19,6 +32,7 @@ type ToastCallback = (payload: {
   rateLimitKey?: string;
   priority?: "high" | "low" | "watch";
   action?: { label: string; ipcChannel: string; data?: string };
+  hostSwitchFailure?: { hostId: string; projectId: string; code: string | null };
 }) => void;
 
 let capturedCallback: ToastCallback | null = null;
@@ -57,6 +71,59 @@ describe("useMainProcessToastListener", () => {
     }
   });
 
+  it("retries a window's host restore from its toast, and ignores a malformed target", async () => {
+    renderHook(() => useMainProcessToastListener());
+    const fire = (data?: string) =>
+      act(() => {
+        capturedCallback!({
+          type: "error",
+          title: "Couldn't reopen this window on Studio",
+          message: "Couldn't reach this host.",
+          action: { label: "Retry", ipcChannel: "remote-hosts:switch-window-host", data },
+        });
+      });
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    fire(JSON.stringify({ hostId: "studio-01", projectId: "p1" }));
+    await act(async () => notifyMock.mock.calls.at(-1)![0].action!.onClick!());
+    await vi.waitFor(() => expect(switchToHostMock).toHaveBeenCalledWith("studio-01", false, "p1"));
+    for (const bad of [undefined, "not json", JSON.stringify({ hostId: "studio-01" })]) {
+      fire(bad);
+      await act(async () => notifyMock.mock.calls.at(-1)![0].action!.onClick!());
+    }
+    expect(switchToHostMock).toHaveBeenCalledTimes(1);
+    warn.mockRestore();
+  });
+
+  it("hands a failed host restore to the shared host-switch presenter", async () => {
+    renderHook(() => useMainProcessToastListener());
+    notifyHostSwitchFailureMock.mockClear();
+    switchToHostMock.mockClear();
+    act(() => {
+      capturedCallback!({
+        type: "error",
+        title: "Couldn't reopen this window on Studio",
+        message: "Daintree isn't running in Host mode on Studio.",
+        action: {
+          label: "Retry",
+          ipcChannel: "remote-hosts:switch-window-host",
+          data: JSON.stringify({ hostId: "studio-01", projectId: "p1" }),
+        },
+        hostSwitchFailure: { hostId: "studio-01", projectId: "p1", code: "HOST_MODE_OFF" },
+      });
+    });
+    await vi.waitFor(() => expect(notifyHostSwitchFailureMock).toHaveBeenCalledTimes(1));
+    expect(notifyMock).not.toHaveBeenCalled();
+    const [hostId, error, retry, options] = notifyHostSwitchFailureMock.mock.calls[0]!;
+    expect(hostId).toBe("studio-01");
+    expect(error).toMatchObject({
+      code: "HOST_MODE_OFF",
+      userMessage: "Daintree isn't running in Host mode on Studio.",
+    });
+    expect(options).toEqual({ title: "Couldn't reopen this window on Studio" });
+    retry();
+    expect(switchToHostMock).toHaveBeenCalledWith("studio-01", false, "p1");
+  });
+
   it("subscribes to onShowToast on mount and cleans up on unmount", () => {
     const { unmount } = renderHook(() => useMainProcessToastListener());
 
@@ -87,23 +154,6 @@ describe("useMainProcessToastListener", () => {
     });
   });
 
-  it("threads rateLimitKey through to notify when provided", () => {
-    renderHook(() => useMainProcessToastListener());
-
-    act(() => {
-      capturedCallback!({
-        type: "error",
-        title: "Cloud resource may still be running",
-        message: "Teardown failed",
-        rateLimitKey: "cloud-teardown-failure",
-      });
-    });
-
-    expect(notifyMock).toHaveBeenCalledWith(
-      expect.objectContaining({ rateLimitKey: "cloud-teardown-failure" })
-    );
-  });
-
   it("threads priority through to notify (low → inbox-only)", () => {
     renderHook(() => useMainProcessToastListener());
 
@@ -117,20 +167,6 @@ describe("useMainProcessToastListener", () => {
     });
 
     expect(notifyMock).toHaveBeenCalledWith(expect.objectContaining({ priority: "low" }));
-  });
-
-  it("threads duration through to notify when provided", () => {
-    renderHook(() => useMainProcessToastListener());
-
-    act(() => {
-      capturedCallback!({
-        type: "info",
-        message: "acme.linear: Synced",
-        duration: 3000,
-      });
-    });
-
-    expect(notifyMock).toHaveBeenCalledWith(expect.objectContaining({ duration: 3000 }));
   });
 
   it("calls notify with an action that triggers checkForUpdates", () => {

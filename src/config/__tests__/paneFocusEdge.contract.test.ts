@@ -1,10 +1,5 @@
 import { describe, expect, it } from "vitest";
-import fs from "node:fs";
-import path from "node:path";
-import { fileURLToPath } from "node:url";
-
-const TEST_DIR = path.dirname(fileURLToPath(import.meta.url));
-const INDEX_CSS = path.resolve(TEST_DIR, "../../index.css");
+import { readIndexCss } from "@/__tests__/support/hostCss";
 
 // A focused grid pane shows one edge, however its focus arrived. A terminal's
 // focus lives in xterm, so its root only ever shows the selected border; a
@@ -44,7 +39,7 @@ function topLevelBlocks(css: string, selector: string): string[] {
 }
 
 describe("pane focus edge", () => {
-  const css = fs.readFileSync(INDEX_CSS, "utf8");
+  const css = readIndexCss();
 
   it("draws a focused root's ring in place of its border, not on top of it", () => {
     const [ring] = topLevelBlocks(css, ".terminal-selected:focus-visible");

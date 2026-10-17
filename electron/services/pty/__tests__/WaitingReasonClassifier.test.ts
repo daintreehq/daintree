@@ -265,6 +265,57 @@ describe("classifyWaitingReason", () => {
       const lines = ["All checks passed.", "> "];
       expect(classifyWaitingReason(lines, true)).toBe("prompt");
     });
+
+    it("a wrapped row that starts with a question word is not a question (#13392)", () => {
+      // A host assistant's 49-column pane, settled after launching two agents.
+      // Read as a question, it blocked every completion notice it had asked for.
+      const lines = [
+        "  I'll check each commit myself as its notice",
+        "  arrives, and reply to the hub once, after both",
+        "  are verified.",
+        "",
+        "✻ Worked for 35s · done 3:44 PM",
+        "",
+        "─────────────────────────────────────────────────",
+        "❯ ",
+        "─────────────────────────────────────────────────",
+        "  ⏵⏵ bypass permissions on (shift+tab to cycle)",
+      ];
+      expect(classifyWaitingReason(lines, true)).toBe("prompt");
+    });
+
+    it("a capitalised question word opens a question whatever sits above it", () => {
+      for (const above of [
+        "Next step",
+        "- src/renderer.ts",
+        "```",
+        "└──────────┘",
+        "⏺ Found two config files",
+        "  I updated the config and reran the build",
+      ]) {
+        expect(classifyWaitingReason([above, "  Which file should I update", "❯ "], true)).toBe(
+          "question"
+        );
+      }
+    });
+
+    it("a lowercase question word mid-sentence is not a question", () => {
+      for (const lines of [
+        ["  The helpers from utils.ts, etc.", "  are covered by tests.", "❯ "],
+        ["  The constraints mean:", "  do the work after both complete.", "❯ "],
+        ["  are covered by tests.", "❯ "],
+      ]) {
+        expect(classifyWaitingReason(lines, true)).toBe("prompt");
+      }
+    });
+
+    it("a wrapped question that ends in a question mark is still a question", () => {
+      const lines = [
+        "  I can push the branch now, or would you rather",
+        "  review the diff first?",
+      ];
+      expect(classifyWaitingReason(lines, true)).toBe("question");
+    });
   });
 
   describe("ANSI stripping", () => {
@@ -343,5 +394,83 @@ describe("hasRateLimitMessage (#12797)", () => {
   it("keeps classifying a rate-limit banner as an error wait", () => {
     expect(classifyWaitingReason(["You've hit your usage limit."], true)).toBe("error");
     expect(classifyWaitingReason(["request failed: too many requests"], true)).toBe("error");
+  });
+
+  it("sees a Claude approval dialog through the task checklist drawn beneath it", () => {
+    const lines = [
+      "Do you want to make this edit to units.ts?",
+      "❯ 1. Yes",
+      "  2. Yes, and switch to accept edits (auto-approve file edits and common file",
+      "  commands) for this session (shift+tab)",
+      "  3. No",
+      "",
+      " Esc to cancel · Tab to amend",
+      "",
+      "  6 tasks (4 done, 1 in progress, 1 open)",
+      "  ◼ Fix test failures",
+      "  ◻ Commit changes",
+      "  ✔ Run npm test to identify failures",
+      "  ✔ Refactor src/server.ts to use router",
+      "  ✔ Create test/server.test.ts with comprehensive tests",
+      "  ✔ Update README",
+      "   … +1 completed",
+    ];
+    expect(classifyWaitingReason(lines, true)).toBe("approval");
+  });
+
+  it("does not read a finished turn's checklist as the question it ends on", () => {
+    const lines = [
+      "⏺ Done. Should I also push the branch?",
+      "",
+      "  2 tasks (2 done, 0 open)",
+      "  ✔ Fix the bug",
+      "  ✔ Commit the fix",
+    ];
+    expect(classifyWaitingReason(lines, true)).toBe("question");
+  });
+
+  it("does not bring back an answered approval from above the old window", () => {
+    const lines = [
+      "Do you want to proceed?",
+      "❯ 1. Yes",
+      "  2. No",
+      ...Array.from({ length: 12 }, () => ""),
+      "⏺ Done.",
+      "",
+      "  2 tasks (2 done, 0 open)",
+      "  ✔ Fix the bug",
+      "  ✔ Commit the fix",
+      "❯ ",
+    ];
+    expect(classifyWaitingReason(lines, true)).toBe("prompt");
+  });
+
+  it("reads a screen not yet filled over the caller's own window, blank rows included", () => {
+    const lines = [
+      "Do you trust the files in this folder?",
+      "❯ 1. Yes, proceed",
+      "  2. No, exit",
+      ...Array.from({ length: 35 }, () => ""),
+    ];
+    // The boot scan's 50 rows reach the dialog; the 12-row window never did.
+    expect(classifyWaitingReason(lines, false, 50)).toBe("approval");
+    expect(classifyWaitingReason(lines, false)).toBe("prompt");
+  });
+
+  it("reads the caller's own window when it is wider than its own", () => {
+    const lines = [
+      "Do you want to proceed?",
+      "❯ 1. Yes",
+      "  2. No",
+      ...Array.from({ length: 12 }, () => ""),
+      "  Esc to cancel",
+    ];
+    expect(classifyWaitingReason(lines, true)).toBe("prompt");
+    expect(classifyWaitingReason(lines, true, 16)).toBe("approval");
+  });
+
+  it("keeps a dialog's own checkbox rows", () => {
+    const lines = ["Allow this tool?", "❯ ☐ Allow once", "  ☐ Always allow"];
+    expect(classifyWaitingReason(lines, true)).toBe("approval");
   });
 });

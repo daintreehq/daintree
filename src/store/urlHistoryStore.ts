@@ -1,5 +1,6 @@
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
+import { hostScopedKey } from "@/hooks/useHostPlatform";
 import type { StorageValue } from "zustand/middleware";
 import type { UrlHistoryEntry } from "@shared/types/browser";
 import { sanitizeUrlForHistory } from "@shared/utils/urlHistory";
@@ -162,7 +163,10 @@ export const useUrlHistoryStore = create<UrlHistoryState>()(
           const canonical = sanitizeUrlForHistory(url);
           if (canonical === null) return state;
           const now = Date.now();
-          let projectEntries = pruneStaleEntries(state.entries[projectId] ?? [], now).slice();
+          let projectEntries = pruneStaleEntries(
+            state.entries[hostScopedKey(projectId)] ?? [],
+            now
+          ).slice();
           const existingIndex = projectEntries.findIndex((e) => e.url === canonical);
 
           if (existingIndex >= 0) {
@@ -189,47 +193,47 @@ export const useUrlHistoryStore = create<UrlHistoryState>()(
             );
           }
 
-          return { entries: { ...state.entries, [projectId]: projectEntries } };
+          return { entries: { ...state.entries, [hostScopedKey(projectId)]: projectEntries } };
         }),
 
       updateTitle: (projectId, url, title) =>
         set((state) => {
           const canonical = sanitizeUrlForHistory(url);
           if (canonical === null) return state;
-          const projectEntries = state.entries[projectId];
+          const projectEntries = state.entries[hostScopedKey(projectId)];
           if (!projectEntries) return state;
           const index = projectEntries.findIndex((e) => e.url === canonical);
           if (index < 0) return state;
           const updated = [...projectEntries];
           updated[index] = { ...updated[index]!, title };
-          return { entries: { ...state.entries, [projectId]: updated } };
+          return { entries: { ...state.entries, [hostScopedKey(projectId)]: updated } };
         }),
 
       updateFavicon: (projectId, url, favicon) =>
         set((state) => {
           const canonical = sanitizeUrlForHistory(url);
           if (canonical === null) return state;
-          const projectEntries = state.entries[projectId];
+          const projectEntries = state.entries[hostScopedKey(projectId)];
           if (!projectEntries) return state;
           const index = projectEntries.findIndex((e) => e.url === canonical);
           if (index < 0) return state;
           const updated = [...projectEntries];
           updated[index] = { ...updated[index]!, favicon };
-          return { entries: { ...state.entries, [projectId]: updated } };
+          return { entries: { ...state.entries, [hostScopedKey(projectId)]: updated } };
         }),
 
       removeUrl: (projectId, url) =>
         set((state) => {
-          const projectEntries = state.entries[projectId];
+          const projectEntries = state.entries[hostScopedKey(projectId)];
           if (!projectEntries) return state;
           const filtered = projectEntries.filter((e) => e.url !== url);
           if (filtered.length === projectEntries.length) return state;
-          return { entries: { ...state.entries, [projectId]: filtered } };
+          return { entries: { ...state.entries, [hostScopedKey(projectId)]: filtered } };
         }),
 
       removeProjectHistory: (projectId) =>
         set((state) => {
-          const { [projectId]: _, ...rest } = state.entries;
+          const { [hostScopedKey(projectId)]: _, ...rest } = state.entries;
           return { entries: rest };
         }),
     }),

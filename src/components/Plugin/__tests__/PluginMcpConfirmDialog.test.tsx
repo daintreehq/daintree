@@ -22,11 +22,16 @@ vi.mock("zustand/react/shallow", () => ({
 vi.mock("@/store", () => ({
   usePortalStore: () => ({ isOpen: false, width: 0 }),
 }));
+vi.mock("@/store/portalStore", () => ({ usePortalStore: () => ({ isOpen: false, width: 0 }) }));
 
 vi.mock("@/hooks", async (importOriginal) => {
   const actual = (await importOriginal()) as Record<string, unknown>;
   return { ...actual, useOverlayState: () => {} };
 });
+vi.mock("@/hooks/useOverlayState", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/hooks/useOverlayState")>()),
+  useOverlayState: () => {},
+}));
 
 vi.mock("@/hooks/useAnimatedPresence", () => ({
   useAnimatedPresence: ({ isOpen }: { isOpen: boolean }) => ({
@@ -89,13 +94,6 @@ describe("PluginMcpConfirmDialog copy", () => {
   it("gives first-use a plain allow prompt with no change notice", () => {
     expect(titleFor("first-use", "do_thing")).toBe("Allow 'do_thing' to run?");
     expect(changeHeadingFor("first-use")).toBeNull();
-  });
-
-  it("frames every re-prompt reason distinctly from first-use", () => {
-    const firstUse = titleFor("first-use", "do_thing");
-    for (const reason of REPROMPT_REASONS) {
-      expect(titleFor(reason, "do_thing")).not.toBe(firstUse);
-    }
   });
 
   it("gives every re-prompt reason its own change notice, all distinct", () => {

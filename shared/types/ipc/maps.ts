@@ -10,7 +10,7 @@ import type {
   TerminalRecipe,
 } from "../project.js";
 import type { GitInitOptions, GitInitProgressEvent, GitInitResult } from "./gitInit.js";
-import type { PushProgressEvent } from "./gitPush.js";
+import type { GitPushPayload, PushProgressEvent } from "./gitPush.js";
 import type { AgentSettings } from "../agentSettings.js";
 import type { AgentPreset } from "../../config/agentRegistry.js";
 import type { UserAgentRegistry, UserAgentConfig } from "../userAgentRegistry.js";
@@ -50,6 +50,7 @@ import type {
   SystemOpenExternalPayload,
   SystemOpenPathPayload,
   SystemOpenInEditorPayload,
+  SystemOpenInEditorFallback,
   SystemWakePayload,
   SystemMemoryPressurePayload,
   CliAvailability,
@@ -99,6 +100,7 @@ import type {
 } from "./files.js";
 import type { DevPreviewStateChangedPayload, DevPreviewAllSessionsPayload } from "./devPreview.js";
 import type { ServiceConnectivityPayload } from "./connectivity.js";
+import type { AgentDefaultsSnapshot } from "./agentDefaults.js";
 import type { SanitizedTelemetryEvent, TelemetryPreviewState } from "./telemetryPreview.js";
 import type { ProjectPulse, PulseRangeDays } from "../pulse.js";
 import type { GitCommitListOptions, GitCommitListResponse } from "../git.js";
@@ -113,6 +115,7 @@ import type {
 } from "../pty-host.js";
 import type { HibernationProjectHibernatedPayload } from "./hibernation.js";
 import type { KeepAwakeState } from "./keepAwake.js";
+import type { AssistantMessagingChangedEvent } from "./assistantMessaging.js";
 import type { IdleTerminalNotifyPayload } from "./idleTerminals.js";
 import type { IdleBackgroundClosedPayload } from "./idleBackgroundAutoClose.js";
 import type { AppThemeConfig } from "../appTheme.js";
@@ -248,6 +251,17 @@ export interface MainProcessToastPayload {
      *  (e.g. the text to copy for a "clipboard:write-text" action). */
     data?: string;
   };
+  /**
+   * A switch to another host that failed, for the renderer's one host-switch
+   * failure presenter: it picks the recovery from the code (Set up…, Update…,
+   * Settings…, Retry), so a launch restore reads like every other entry point.
+   * `action` stays as the Retry for a renderer that doesn't know this field.
+   */
+  hostSwitchFailure?: {
+    hostId: string;
+    projectId: string;
+    code: import("../appError.js").AppErrorCode | null;
+  };
 }
 
 // IPC Contract Maps
@@ -312,7 +326,7 @@ export interface IpcInvokeMap extends GeneratedIpcInvokeMap {
   };
   "system:open-in-editor": {
     args: [payload: SystemOpenInEditorPayload];
-    result: void;
+    result: SystemOpenInEditorFallback | void;
   };
   "system:check-command": {
     args: [command: string];
@@ -841,7 +855,7 @@ export interface IpcInvokeMap extends GeneratedIpcInvokeMap {
     result: { hash: string; summary: string };
   };
   "git:push": {
-    args: [payload: { cwd: string; setUpstream?: boolean }];
+    args: [payload: GitPushPayload];
     /**
      * Resolves on success. Throws `GitOperationError` on failure — the renderer
      * reads `caught.gitReason` to surface a classified recovery hint.
@@ -1086,19 +1100,23 @@ export interface IpcInvokeMap extends GeneratedIpcInvokeMap {
   };
   "forge:open-issues": {
     args: [cwd: string, query?: string, state?: string];
-    result: void;
+    /** The page's URL for a caller on another machine, whose Shell opens it; nothing here. */
+    result: string | undefined;
   };
   "forge:open-prs": {
     args: [cwd: string, query?: string, state?: string];
-    result: void;
+    /** The page's URL for a caller on another machine, whose Shell opens it; nothing here. */
+    result: string | undefined;
   };
   "forge:open-commits": {
     args: [cwd: string, branch?: string];
-    result: void;
+    /** The page's URL for a caller on another machine, whose Shell opens it; nothing here. */
+    result: string | undefined;
   };
   "forge:open-issue": {
     args: [payload: { cwd: string; issueNumber: number }];
-    result: void;
+    /** The page's URL for a caller on another machine, whose Shell opens it; nothing here. */
+    result: string | undefined;
   };
   "forge:get-issue-url": {
     args: [payload: { cwd: string; issueNumber: number }];
@@ -1185,7 +1203,7 @@ export interface IpcInvokeMap extends GeneratedIpcInvokeMap {
   };
   "voice-input:open-mic-settings": {
     args: [];
-    result: void;
+    result: boolean;
   };
   "voice-input:validate-api-key": {
     args: [apiKey: string];
@@ -1396,6 +1414,16 @@ export interface IpcInvokeMap extends GeneratedIpcInvokeMap {
  * IPC Event Contract Map
  */
 export interface IpcEventMap {
+  // Remote Hosts namespaces: one push channel each, carrying a discriminated union.
+  "remote-hosts:event": import("./remoteHosts.js").RemoteHostsEvent;
+  "host-mode:event": import("./hostMode.js").HostModeEvent;
+  "drive-lease:event": import("./driveLease.js").DriveLeaseEvent;
+  "operations:event": import("./operations.js").OperationsEvent;
+  "file-transfer:event": import("./fileTransfer.js").FileTransferEvent;
+  "host-metrics:event": import("./hostMetrics.js").HostMetricsEvent;
+  "canopy-host:event": import("./canopyHost.js").CanopyHostEvent;
+  "port-forwards:event": import("./portForwards.js").PortForwardsEvent;
+
   // Worktree events
   "worktree:remove": { worktreeId: string };
   "worktree:activated": { worktreeId: string };
@@ -1722,6 +1750,11 @@ export interface IpcEventMap {
   "project:background-resize": { width: number; height: number };
   "project:stats-updated": ProjectStatusMap;
   "fleet:snapshot-updated": FleetSnapshot;
+  "canopy:snapshot-updated": import("./canopy.js").CanopySnapshot;
+  "canopy:terminal-data": import("./canopy.js").CanopyTerminalData;
+  "canopy:trash-requested": import("./canopy.js").CanopyTrashRequest;
+  "canopy:restore-requested": import("./canopy.js").CanopyRestoreRequest;
+  "canopy:rename-requested": import("./canopy.js").CanopyRenameRequest;
   "project:updated": Project;
   /**
    * A project was put to sleep. Carries the project id so a window showing it
@@ -1778,7 +1811,7 @@ export interface IpcEventMap {
   "os-dnd:state-changed": import("./osDnd.js").OsDndState;
 
   // Menu events
-  "menu:action": { actionId: string; args?: unknown };
+  "menu:action": { actionId: string; args?: unknown; portalActionId?: string };
 
   // Window events
   "window:fullscreen-change": boolean;
@@ -1923,6 +1956,9 @@ export interface IpcEventMap {
   // Keep-awake events
   "keep-awake:state-changed": KeepAwakeState;
 
+  // Assistant messaging: a change happened; each view reads its own state again
+  "assistant-messaging:changed": AssistantMessagingChangedEvent;
+
   // Idle terminal notification events
   "idle-terminal:notify": IdleTerminalNotifyPayload;
 
@@ -1965,6 +2001,9 @@ export interface IpcEventMap {
 
   // Agent preset events
   "agent-presets:updated": { agentId: string; presets: AgentPreset[] };
+
+  // Host-owned agent defaults changed (#13345)
+  "agent-defaults:changed": AgentDefaultsSnapshot;
 
   // Plugin action registry events
   "plugin:actions-changed": {
@@ -2130,6 +2169,10 @@ export interface IpcEventMap {
   // #10893). Carries the batched set so the renderer can raise one low-priority
   // inbox notification. Broadcast only when at least one update is available.
   "plugin:bg-update-available": import("../plugin.js").PluginBackgroundUpdateCheckResult;
+
+  // Project groups changed (main → renderer). The whole ordered list, so every
+  // view redraws its switcher headers after a create, rename, reorder or delete.
+  "project-groups:update": import("../project.js").ProjectGroup[];
 
   // Run history changed (main → renderer, #9949). Carries the full newest-first
   // snapshot so every live window updates without a reload after a recipe/fleet
@@ -2297,6 +2340,8 @@ export type IpcEventBusMap = Pick<
   | "forge:remote-changed"
   // Background plugin update check found updates (global broadcast)
   | "plugin:bg-update-available"
+  // Project groups changed (global broadcast)
+  | "project-groups:update"
   // Run history changed (global broadcast)
   | "run-history:update"
   // Copy-tree run history changed (project-scoped send)

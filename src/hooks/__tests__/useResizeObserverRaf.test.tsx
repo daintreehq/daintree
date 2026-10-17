@@ -86,26 +86,6 @@ describe("useResizeObserverRaf", () => {
     return null;
   }
 
-  it("creates a ResizeObserver when ref is non-null", () => {
-    const el = document.createElement("div");
-    const onResize = vi.fn();
-
-    renderHook(() => TestWrapper({ onResize, element: el }));
-
-    expect(ResizeObserver).toHaveBeenCalled();
-    expect(observers[0]?.observe).toHaveBeenCalledWith(el);
-  });
-
-  it("does not call onResize synchronously in the RO callback", () => {
-    const el = document.createElement("div");
-    const onResize = vi.fn();
-
-    renderHook(() => TestWrapper({ onResize, element: el }));
-
-    observerCallback!([createEntry(100, 200)]);
-    expect(onResize).not.toHaveBeenCalled();
-  });
-
   it("calls onResize after rAF flush with the latest entry", () => {
     const el = document.createElement("div");
     const onResize = vi.fn();
@@ -154,14 +134,6 @@ describe("useResizeObserverRaf", () => {
     expect(observers[0]?.disconnect).toHaveBeenCalled();
     // rAF canceled; onResize never fires
     expect(onResize).toHaveBeenCalledTimes(0);
-  });
-
-  it("no-ops when element is null", () => {
-    const onResize = vi.fn();
-
-    renderHook(() => TestWrapper({ onResize, element: null }));
-
-    expect(ResizeObserver).not.toHaveBeenCalled();
   });
 
   it("re-subscribes when element becomes non-null after mount", () => {

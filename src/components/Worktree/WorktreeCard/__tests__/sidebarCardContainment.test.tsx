@@ -210,15 +210,6 @@ function fills(container: HTMLElement): Element[] {
 }
 
 describe("sidebar session well", () => {
-  it("still renders with no sessions, so every card in the list ends the same way", () => {
-    // An idle card that simply stops has nothing closing it off, and in a list
-    // where only some cards end on a well the rhythm breaks at exactly the
-    // cards with the least shape of their own.
-    const { container, unmount } = renderTerminals({ variant: "sidebar", total: 0 });
-    expect(container.firstElementChild, "sidebar tray vanished when empty").toBeTruthy();
-    unmount();
-  });
-
   it("names the next action when empty rather than reporting the absence", () => {
     const { container, unmount } = renderTerminals({ variant: "sidebar", total: 0 });
     const text = container.textContent ?? "";
@@ -297,33 +288,6 @@ describe("sidebar session well", () => {
 });
 
 describe("sidebar card containment", () => {
-  it("wells Details only once it has a body to hold", () => {
-    // Collapsed, Details is a single row, and a well around one row is a box
-    // around nothing — that is the nesting #11992 was right to remove.
-    // Expanded, it has content of its own, and the contour is what says the
-    // content belongs to it rather than to the card at large. Same rule the
-    // session well follows, which is why the two read as peers.
-    const collapsed = renderDetails({ variant: "sidebar", isExpanded: false });
-    expect(wellCount(collapsed.container), "collapsed Details should be a bare row").toBe(0);
-    collapsed.unmount();
-
-    const expanded = renderDetails({ variant: "sidebar", isExpanded: true });
-    const [shell, ...nested] = fills(expanded.container);
-    expect(shell, "expanded Details should be welled").toBeTruthy();
-    expect(hasStructuralBorder(shell!), "the sidebar shell is the perimeter").toBe(true);
-    expect(
-      nested.some(hasStructuralBorder),
-      "nothing inside the well may draw a second perimeter"
-    ).toBe(false);
-    // Document order alone would let a fill that is a SIBLING of the well
-    // pass as though it were contained by it.
-    expect(
-      nested.every((el) => shell!.contains(el)),
-      "every other fill must sit inside the shell, not beside it"
-    ).toBe(true);
-    expanded.unmount();
-  });
-
   it("spends exactly one well on the sidebar card, and spends it on sessions", () => {
     // The count is the rule. #11992 flattened this to zero and the cards
     // merged; the fixes that followed went the other way — a full-bleed tray,

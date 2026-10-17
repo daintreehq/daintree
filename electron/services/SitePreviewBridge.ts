@@ -62,6 +62,7 @@ import {
   originPolicyAllows,
   type GuestOriginPolicy,
 } from "./sitePreview/originPolicy.js";
+import { onWebContentsDestroyed } from "../window/webContentsDestroyed.js";
 
 const DEV_PREVIEW_PANEL_KIND = "dev-preview";
 
@@ -154,8 +155,12 @@ export interface SitePreviewBridgeDeps {
    * without this the host would load and evaluate a disabled plugin's guest
    * body for any caller authorised to name the panel. The UI hiding the tool is
    * a different guarantee, made in a different process.
+   *
+   * `projectId` is the binding's project as this process keys it; for a view
+   * bound to a remote host that names the host, whose plugins are the ones the
+   * view uses.
    */
-  isPluginEnabled: (pluginId: string) => Promise<boolean>;
+  isPluginEnabled: (pluginId: string, projectId: string) => Promise<boolean>;
 }
 
 interface Binding {
@@ -402,7 +407,7 @@ export class SitePreviewBridge {
 
     // Asked before the body is read, so a disabled plugin's code is never even
     // loaded, let alone evaluated in the user's page.
-    if (!(await this.deps.isPluginEnabled(adapter.pluginId))) {
+    if (!(await this.deps.isPluginEnabled(adapter.pluginId, projectId))) {
       throw new AppError({
         code: "UNSUPPORTED",
         message: "The plugin that owns that site preview runtime is not enabled",
@@ -415,7 +420,7 @@ export class SitePreviewBridge {
     const runtimeSource = await this.deps.loadGuestAdapterSource(adapterId);
     // Asked again: the read above is an await, and a disable that landed under
     // it would otherwise be beaten by this bind.
-    if (!(await this.deps.isPluginEnabled(adapter.pluginId))) {
+    if (!(await this.deps.isPluginEnabled(adapter.pluginId, projectId))) {
       throw new AppError({
         code: "UNSUPPORTED",
         message: "The plugin that owns that site preview runtime is not enabled",
@@ -723,15 +728,15 @@ export class SitePreviewBridge {
     // It need not be: a second window on the same project can bind to a preview
     // hosted in the first. When that view goes, the binding has no consumer left
     // — every push is addressed to it — so the runtime in the page would keep
-    // observing the user's site with nothing listening. `once`, because the
-    // subscriber can be the guest's own host and a second teardown is a no-op.
+    // observing the user's site with nothing listening. Through the shared
+    // per-view watcher: a view can subscribe to several previews, and a listener
+    // each would run its `destroyed` count past the dev build's limit.
     const subscriber = this.deps.getWebContents(binding.subscriberWebContentsId);
     if (subscriber && subscriber !== wc) {
       const onSubscriberDestroyed = (): void => {
         void this.teardown(binding, "subscriber-destroyed").catch(() => undefined);
       };
-      subscriber.once("destroyed", onSubscriberDestroyed);
-      binding.disposers.push(() => subscriber.off("destroyed", onSubscriberDestroyed));
+      binding.disposers.push(onWebContentsDestroyed(subscriber, onSubscriberDestroyed));
     }
   }
 

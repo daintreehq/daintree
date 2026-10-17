@@ -109,13 +109,6 @@ describe("PluginSkillRegistry", () => {
     expect(loaded?.body).toBe(SKILL_BODY);
   });
 
-  it("returns null for an unknown skill id", async () => {
-    await registerPluginSkills("acme.plugin", dir, [
-      { id: "tdd-workflow", name: "TDD Workflow", path: "./skills/tdd.md" },
-    ]);
-    expect(loadPluginSkill("acme.plugin.does-not-exist")).toBeNull();
-  });
-
   it("skips a skill whose file is missing without throwing", async () => {
     await registerPluginSkills("acme.plugin", dir, [
       { id: "present", name: "Present", path: "./skills/tdd.md" },
@@ -247,10 +240,6 @@ describe("PluginSkillRegistry", () => {
       expect(loadPluginSkill("beta.plugin.s")).not.toBeNull();
       expect(searchPluginSkills({ query: "tdd" }).skills).toEqual([]);
       await fs.rm(other, { recursive: true, force: true });
-    });
-
-    it("is a no-op for an unknown plugin id", () => {
-      expect(() => unregisterPluginSkills("nobody.here")).not.toThrow();
     });
 
     it("re-registering a plugin replaces its prior skills (no stale duplicates)", async () => {

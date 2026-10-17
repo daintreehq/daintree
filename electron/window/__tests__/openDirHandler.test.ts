@@ -44,6 +44,8 @@ interface FakeWindow {
   };
   active: string | null;
   views: string[];
+  /** Cached views the manager refuses to release (a running assistant, say). */
+  pinned: string[];
   destroyed: boolean;
   visible: boolean;
   /** Fires the "show" listeners the router left, as createWindow's paint gate would. */
@@ -68,6 +70,7 @@ function makeWorld() {
       id: nextId++,
       active: opts.active ?? null,
       views: opts.active ? [opts.active] : [],
+      pinned: [] as string[],
       destroyed: false,
       visible: opts.visible ?? true,
     } as FakeWindow;
@@ -107,6 +110,15 @@ function makeWorld() {
               projectId,
               view: { webContents: { isDestroyed: () => false } },
             })),
+          canReleaseCachedView: (projectId: string) =>
+            fake.views.includes(projectId) &&
+            projectId !== fake.active &&
+            !fake.pinned.includes(projectId),
+          releaseCachedView(projectId: string) {
+            if (!this.canReleaseCachedView(projectId)) return false;
+            fake.views = fake.views.filter((id) => id !== projectId);
+            return true;
+          },
         },
       },
     };
@@ -142,6 +154,12 @@ function makeDeps(world: ReturnType<typeof makeWorld>) {
     getWindowRegistry: () => world.registry,
     getPreference: () => "default" as const,
     isProjectClosed: (projectId: string) => world.closed.has(projectId),
+    releaseCachedView: vi.fn(
+      (projectId: string, windowId: number) =>
+        world.registry
+          .getByWindowId(windowId)
+          ?.services.projectViewManager?.releaseCachedView(projectId) === true
+    ),
   };
   return deps satisfies OpenDirHandlerDeps;
 }
@@ -188,15 +206,6 @@ describe("routeExternalOpen (#12593 acceptance)", () => {
     expect(deps.createWindowForPath).not.toHaveBeenCalled();
     expect(empty.win.restore).toHaveBeenCalled();
     expect(empty.win.focus).toHaveBeenCalled();
-  });
-
-  it("creates one window when none are open", async () => {
-    const world = makeWorld();
-    const deps = makeDeps(world);
-
-    await routeExternalOpen("/work/new", deps);
-
-    expect(deps.createWindowForPath).toHaveBeenCalledExactlyOnceWith("/work/new");
   });
 
   it("focuses the window already showing the project instead of opening it again", async () => {
@@ -499,18 +508,82 @@ describe("routeProjectOpen — an explicit new window (#12594)", () => {
     expect(deps.openDirectory).not.toHaveBeenCalled();
   });
 
-  it("lets the owner's own renderer switch to a view it holds cached", async () => {
+  it("fails rather than switching another window to a cached view it can't release (#13291)", async () => {
     const world = makeWorld();
     const owner = world.add({ active: "front" });
     owner.views.push(idFor("/work/known"));
+    owner.pinned.push(idFor("/work/known"));
     const asking = world.add({ active: "other" });
     const deps = { ...makeDeps(world), redirectToOwner: vi.fn(() => true) };
 
+    await expect(
+      routeProjectOpen("/work/known", newWindowFrom(asking.id), deps)
+    ).rejects.toMatchObject({ code: "PROJECT_OPEN_FAILED" });
+
+    expect(deps.releaseCachedView).not.toHaveBeenCalled();
+    expect(deps.redirectToOwner).not.toHaveBeenCalled();
+    expect(deps.openDirectory).not.toHaveBeenCalled();
+    expect(deps.createWindowForPath).not.toHaveBeenCalled();
+    expect(owner.active).toBe("front");
+  });
+
+  it("takes a cached view out of the window holding it and opens it in a new window (#13274)", async () => {
+    const world = makeWorld();
+    const holder = world.add({ active: "front" });
+    holder.views.push(idFor("/work/known"));
+    const asking = world.add({ active: "other" });
+    const deps = { ...makeDeps(world), redirectToOwner: vi.fn(() => true) };
+    // The project's one live view is gone before the new window starts on it.
+    deps.createWindowForPath.mockImplementationOnce(async (dirPath) => {
+      expect(holder.views).toEqual(["front"]);
+      return world.add({ active: idFor(dirPath) }).id;
+    });
+
     const outcome = await routeProjectOpen("/work/known", newWindowFrom(asking.id), deps);
 
-    expect(outcome).toEqual({ kind: "activated", windowId: owner.id });
-    expect(deps.openDirectory).not.toHaveBeenCalled();
-    expect(owner.active).toBe("front");
+    expect(outcome).toEqual({ kind: "created", windowId: 3 });
+    expect(deps.releaseCachedView).toHaveBeenCalledExactlyOnceWith(idFor("/work/known"), holder.id);
+    expect(deps.createWindowForPath).toHaveBeenCalledExactlyOnceWith("/work/known");
+    expect(deps.redirectToOwner).not.toHaveBeenCalled();
+    expect(holder.active).toBe("front");
+    expect(asking.active).toBe("other");
+  });
+
+  it("moves a view the asking window keeps cached into an empty window", async () => {
+    const world = makeWorld();
+    const empty = world.add();
+    const asking = world.add({ active: "front" });
+    asking.views.push(idFor("/work/known"));
+    const deps = makeDeps(world);
+    deps.openDirectory.mockImplementationOnce(async (dirPath, win) => {
+      expect(asking.views).toEqual(["front"]);
+      world.byWin(win).active = idFor(dirPath);
+    });
+
+    const outcome = await routeProjectOpen("/work/known", newWindowFrom(asking.id), deps);
+
+    expect(outcome).toEqual({ kind: "activated", windowId: empty.id });
+    expect(deps.openDirectory).toHaveBeenCalledExactlyOnceWith("/work/known", empty.win);
+    expect(asking.active).toBe("front");
+    expect(asking.views).toEqual(["front"]);
+  });
+
+  it("fails, switching neither window, when the release is refused at the last moment (#13291)", async () => {
+    const world = makeWorld();
+    const holder = world.add({ active: "front" });
+    holder.views.push(idFor("/work/known"));
+    const asking = world.add({ active: "other" });
+    const deps = { ...makeDeps(world), redirectToOwner: vi.fn(() => true) };
+    deps.releaseCachedView.mockReturnValueOnce(false);
+
+    await expect(
+      routeProjectOpen("/work/known", newWindowFrom(asking.id), deps)
+    ).rejects.toMatchObject({ code: "PROJECT_OPEN_FAILED" });
+
+    expect(deps.redirectToOwner).not.toHaveBeenCalled();
+    expect(deps.createWindowForPath).not.toHaveBeenCalled();
+    expect(holder.active).toBe("front");
+    expect(holder.views).toContain(idFor("/work/known"));
   });
 
   it("keeps a window still behind its paint gate on the router's own gated reveal", async () => {
@@ -608,19 +681,6 @@ describe("openFolderInNewWindow", () => {
     _resetOpenDirConsumerForTest();
 
     await expect(early).rejects.toThrow("shut down");
-  });
-
-  it("routes as an explicit new window once installed", async () => {
-    const world = makeWorld();
-    const asking = world.add();
-    const deps = makeDeps(world);
-    installOpenDirConsumer(deps);
-
-    const outcome = await openFolderInNewWindow("/work/a", asking.id);
-
-    expect(outcome.kind).toBe("created");
-    expect(deps.createWindowForPath).toHaveBeenCalledExactlyOnceWith("/work/a");
-    expect(asking.active).toBeNull();
   });
 
   it("waits behind an external open already on the chain, so both can't claim one empty window", async () => {

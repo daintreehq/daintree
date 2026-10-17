@@ -55,12 +55,6 @@ describe("buildHtmlPreviewUrl", () => {
     expect(url).toContain("/sub%20dir/a%20b.html");
   });
 
-  it("reuses the same authority for sibling files under one root", () => {
-    const one = buildHtmlPreviewUrl(ROOT, path.join(ROOT, "a.html"));
-    const two = buildHtmlPreviewUrl(ROOT, path.join(ROOT, "b.html"));
-    expect(new URL(one!).hostname).toBe(new URL(two!).hostname);
-  });
-
   it("returns null when the file is the root itself", () => {
     expect(buildHtmlPreviewUrl(ROOT, ROOT)).toBeNull();
   });

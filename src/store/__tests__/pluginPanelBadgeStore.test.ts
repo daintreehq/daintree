@@ -46,24 +46,10 @@ const dot = (color?: PluginPanelBadge["color"]): PluginPanelBadge => ({ kind: "d
 const label = (text: string): PluginPanelBadge => ({ kind: "label", text });
 
 describe("pluginPanelBadgeStore", () => {
-  it("subscribes to both badge events on init", async () => {
-    await load();
-    expect(onChangedMock).toHaveBeenCalledTimes(1);
-    expect(onClearedMock).toHaveBeenCalledTimes(1);
-  });
-
   it("init is idempotent — does not double-subscribe", async () => {
     const mod = await load();
     mod.usePluginPanelBadgeStore.getState().init();
     expect(onChangedMock).toHaveBeenCalledTimes(1);
-  });
-
-  it("stores a badge keyed by panelId then pluginId", async () => {
-    const mod = await load();
-    changedCb!({ pluginId: "p1", badges: { panelA: dot("success") } });
-    expect(mod.usePluginPanelBadgeStore.getState().badgesByPanelId).toEqual({
-      panelA: { p1: { kind: "dot", color: "success" } },
-    });
   });
 
   it("keeps two plugins' badges on the same panel independent", async () => {

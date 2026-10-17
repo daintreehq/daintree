@@ -71,6 +71,8 @@ export const BUILT_IN_ACTION_IDS = [
   "worktree.openChanges",
   "worktree.overview.open",
   "worktree.overview.close",
+  "worktree.setLabelColor",
+  "worktree.setCustomTitle",
 
   // -- worktreeResourceActions --
   "worktree.resource.provision",
@@ -173,6 +175,7 @@ export const BUILT_IN_ACTION_IDS = [
   "file.openInBrowser",
   "file.openImageViewer",
   "file.showItemInFolder",
+  "file.trash",
   "file.openPanel",
 
   // -- slashCommandsActions --
@@ -200,6 +203,7 @@ export const BUILT_IN_ACTION_IDS = [
   "git.listCommits",
   "git.stageFile",
   "git.unstageFile",
+  "git.discardFileChanges",
   "git.stageAll",
   "git.unstageAll",
   "git.commit",
@@ -275,6 +279,10 @@ export const BUILT_IN_ACTION_IDS = [
   "pilot.toggle",
   "pilot.openProject",
   "pilot.openRun",
+
+  // -- canopyActions --
+  "canopy.toggle",
+  "canopy.markAllRead",
   "project.getAll",
   "project.getCurrent",
   "project.add",
@@ -282,6 +290,11 @@ export const BUILT_IN_ACTION_IDS = [
   "project.switch",
   "project.update",
   "project.remove",
+  "project.archive",
+  "project.unarchive",
+  "project.setGroup",
+  "project.listGroups",
+  "project.createGroup",
   "project.close",
   "project.closeActive",
   "project.openDialog",
@@ -300,12 +313,20 @@ export const BUILT_IN_ACTION_IDS = [
   "plugin.diagnostics",
   "plugin.reloadProject",
   "plugin.reloadPanel",
+  "plugin.capturePanel",
   "plugin.reloadWindow",
   "plugin.openSettings",
   "plugin.backupDatabases",
   "project.getStats",
   "project.settings.open",
   "project.cloneRepo",
+
+  // -- hostActions (registered only where Remote Hosts is supported) --
+  "host.switch",
+  "host.add",
+  "host.overview.open",
+  "project.openOnHost",
+  "host.forwardPort",
 
   // -- appActions --
   "app.pluginManager",
@@ -375,6 +396,7 @@ export const BUILT_IN_ACTION_IDS = [
   "agent.listToolbar",
   "agent.listAvailable",
   "agent.listPresets",
+  "agent.listModels",
   "agentSessionHistory.list",
   "agentSessionHistory.resume",
   // -- session bookmarks (#11288) --
@@ -525,7 +547,23 @@ export const BUILT_IN_ACTION_IDS = [
   "help.tour.show",
   "help.displayImage",
   "help.openCommandsFolder",
+  "help.newSessionWithAgent",
   "help.resumePastSession",
+
+  // -- assistantMessagingActions --
+  "assistant.getInbox",
+  "assistant.reply",
+  "assistant.sendMessage",
+
+  // -- hostMessagingActions (registered only where Remote Hosts is supported) --
+  "host.list",
+  "host.listAssistants",
+  "host.sendMessage",
+  "host.getTask",
+  "host.listTasks",
+  "host.cancelTask",
+  "host.startAssistant",
+  "host.readQuota",
 
   // -- uiActions --
   "ui.sidebar.resetWidth",
@@ -581,6 +619,8 @@ export const DENY_PLUGIN_DISPATCH_ACTION_IDS = [
   // Plugins reload their own views through the rationed `requestReload` prop;
   // this would reach any panel, unrationed (#12611).
   "plugin.reloadPanel",
+  // Plugins never read another panel's pixels (#13384).
+  "plugin.capturePanel",
   "terminal.sendCommand",
   "terminal.sendCommandOwned",
   // Plugins read terminal text through `host.terminals.readScreen` (#13155),
@@ -613,4 +653,18 @@ export const DENY_PLUGIN_DISPATCH_ACTION_IDS = [
   // Main-process only, keyed on the caller's MCP credential: a plugin dispatch
   // has no pane to notify.
   "terminal.notifyWhenIdle",
+  // Main-process only, keyed on the caller's help-session bearer: a plugin has
+  // no lane and no inbox (#13335).
+  "assistant.getInbox",
+  "assistant.reply",
+  "assistant.sendMessage",
+  // Main-process only, for the hub's own help session: a plugin is no hub (#13336).
+  "host.list",
+  "host.listAssistants",
+  "host.sendMessage",
+  "host.getTask",
+  "host.listTasks",
+  "host.cancelTask",
+  "host.startAssistant",
+  "host.readQuota",
 ] as const satisfies readonly BuiltInRuntimeActionId[];

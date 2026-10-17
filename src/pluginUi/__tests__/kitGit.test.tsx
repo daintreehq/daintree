@@ -32,10 +32,14 @@ import {
   portLinkUrl,
   resolveFileLink,
 } from "@/components/PluginKit/PluginKitGit";
+import { installAppPluginKitHost } from "@/services/plugin/appPluginKitHost";
+
+// The app's own kit host, so the kit reaches the app services mocked here.
+installAppPluginKitHost();
 
 beforeAll(async () => {
   await kit.whenPluginUiReady();
-});
+}, 60_000);
 
 beforeEach(() => dispatch.mockClear());
 afterEach(cleanup);

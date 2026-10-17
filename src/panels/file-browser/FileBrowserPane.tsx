@@ -40,8 +40,17 @@ import { useToolbarRoving } from "@/hooks/useToolbarRoving";
 import { useSplitterKeys } from "@/hooks/useSplitterKeys";
 import { ResizeHandle } from "@/components/ui/ResizeHandle";
 import { FileTreeView } from "./FileTreeView";
+import { isRemoteWindow } from "@/hooks/useHostPlatform";
+import { materialize } from "@/services/materialize";
+import type { TransferSource } from "@/lib/transferSources";
+import {
+  fileBrowserUploadSurface,
+  trackUpload,
+} from "@/components/Terminal/uploads/pendingUploads";
+import { PendingUploadChips } from "@/components/Terminal/uploads/PendingUploadChips";
+import { LazyUploadConfirmHost } from "@/components/Terminal/uploads/LazyUploadConfirmHost";
 import { FileBrowserViewer } from "./FileBrowserViewer";
-import { buildWorkingTreeDiffModel } from "@/lib/workingTreeDiff";
+import { buildWorkingTreeDiffModel, type WorkingTreeFileChange } from "@/lib/workingTreeDiff";
 import { buildFileBrowserGitStatusIndex, isReadableRelativePath } from "./fileBrowserGitStatus";
 import { useFileBrowserTree } from "./useFileBrowserTree";
 import {
@@ -754,6 +763,27 @@ export function FileBrowserPane({
     refreshAll({ manual: true });
   }, [refreshAll]);
 
+  // Add to project, in a window attached to a remote host: files from this
+  // machine dropped with Option held are uploaded into the folder they were
+  // dropped on. The only way a dropped file lands in the repository.
+  const isRemote = isRemoteWindow();
+  const uploadSurface = fileBrowserUploadSurface(id);
+  const handleAddFilesToProject = useCallback(
+    (sources: Extract<TransferSource, { kind: "local" }>[], directory: string) => {
+      void Promise.allSettled(
+        sources.map((source) =>
+          trackUpload(uploadSurface, source.name || basename(source.path), (progress) =>
+            materialize(
+              { kind: "local-file", path: source.path },
+              { ...progress, destination: { kind: "worktree", directory } }
+            )
+          )
+        )
+      ).then(() => refreshAll());
+    },
+    [uploadSurface, refreshAll]
+  );
+
   // Returning to a project the user left. A view swap is not a page load and
   // `document.visibilityState` never moves for a cached child WebContentsView
   // (`viewCacheState`), so without this the tree and whatever file is open in
@@ -1127,6 +1157,24 @@ export function FileBrowserPane({
     ]
   );
 
+  // The changed-files summary's rows (#13423): the same core as a tree row,
+  // with the row's own git status rather than the index's. The index merges a
+  // path listed twice (a rename's two halves, say) to its most urgent status,
+  // and the menu should describe the row that was clicked.
+  const changeContextMenu = useCallback(
+    (change: WorkingTreeFileChange): React.ReactNode =>
+      basePath === ""
+        ? null
+        : renderFileRowMenuItems({
+            absolutePath: join(basePath, change.relativePath),
+            relativePath: change.relativePath,
+            name: basename(change.relativePath),
+            isDirectory: false,
+            status: change.status,
+          }),
+    [basePath, renderFileRowMenuItems]
+  );
+
   // A restored panel remembers a selection whose ancestors may be collapsed.
   // Expanding them on demand is what makes the row appear; doing it here rather
   // than in an effect keeps it a response to the user opening the panel.
@@ -1412,6 +1460,7 @@ export function FileBrowserPane({
           >
             <FileBrowserViewer
               panelId={id}
+              isFocused={!!isFocused}
               editorContext={
                 project && (source?.kind === "worktree" || basePath === project.path)
                   ? {
@@ -1455,6 +1504,8 @@ export function FileBrowserPane({
               onShowDotfiles={handleShowDotfiles}
               onSelectEntry={handleSelectListingEntry}
               rowContextMenu={rowContextMenu}
+              changeContextMenu={changeContextMenu}
+              renderFileMenuItems={basePath === "" ? undefined : renderFileRowMenuItems}
               basePath={basePath}
               sort={sort}
               onSortChange={handleSortChange}
@@ -1599,7 +1650,19 @@ export function FileBrowserPane({
           // worktree root or three folders down inside it.
           label={rootPath === "" ? `Files in ${title}` : `Files in ${title}/${rootPath}`}
           gitStatusIndex={gitStatusIndex}
+          {...(isRemote && isWorktreeSource
+            ? { onAddFilesToProject: handleAddFilesToProject }
+            : {})}
         />
+        {isRemote && (
+          <>
+            <PendingUploadChips
+              surface={uploadSurface}
+              className="shrink-0 border-t border-divider p-2"
+            />
+            <LazyUploadConfirmHost />
+          </>
+        )}
         {/* A root failure with a tree on screen: the banner joins the rows
             rather than replacing them, so the last-known files stay usable
             while the error is visible and retryable. Below the rows, like the

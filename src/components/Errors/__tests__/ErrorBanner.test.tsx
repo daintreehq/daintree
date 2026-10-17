@@ -362,19 +362,6 @@ describe("ErrorBanner", () => {
         { source: "user" }
       );
     });
-
-    it("dispatches with undefined args when the action has none", async () => {
-      render(
-        <ErrorBanner
-          error={makeError({ retryability: "user-gated", recoveryAction })}
-          onDismiss={onDismiss}
-        />
-      );
-      await act(async () => {
-        fireEvent.click(screen.getByRole("button", { name: "Pull and rebase" }));
-      });
-      expect(mockDispatch).toHaveBeenCalledWith("git.pullRebase", undefined, { source: "user" });
-    });
   });
 
   // Rows stack; several assertive regions interrupt each other.

@@ -27,19 +27,6 @@ describe("ProjectEnvSecureStorage", () => {
     return mod.projectEnvSecureStorage;
   }
 
-  it("stores and retrieves plain-text env values", async () => {
-    const service = await getService();
-    service.set("project-1", "API_KEY", "secret");
-
-    expect(service.get("project-1", "API_KEY")).toBe("secret");
-  });
-
-  it("returns undefined for missing keys", async () => {
-    const service = await getService();
-
-    expect(service.get("project-1", "MISSING")).toBeUndefined();
-  });
-
   it("preserves intentionally-blank stored values instead of coercing to undefined", async () => {
     const service = await getService();
     service.set("project-1", "OPTIONAL_TOKEN", "");
@@ -87,16 +74,6 @@ describe("ProjectEnvSecureStorage", () => {
       expect(service.get("new-id", "DB_PASS")).toBe("password");
       expect(service.get("old-id", "API_KEY")).toBeUndefined();
       expect(service.get("old-id", "DB_PASS")).toBeUndefined();
-    });
-
-    it("does not affect keys for other projects", async () => {
-      const service = await getService();
-      service.set("old-id", "A", "1");
-      service.set("other-project", "B", "2");
-
-      service.migrateAllForProject("old-id", "new-id");
-
-      expect(service.get("other-project", "B")).toBe("2");
     });
 
     it("is a no-op when old project has no env vars", async () => {

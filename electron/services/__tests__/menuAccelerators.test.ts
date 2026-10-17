@@ -9,7 +9,11 @@ vi.mock("../../store.js", () => ({ store: storeMock }));
 import {
   comboToAccelerator,
   getEffectiveMenuCombo,
+  findActionForInput,
+  findPortalPageAction,
+  findTerminalCycleAction,
   getMenuAccelerator,
+  isAcceleratorClaimedByKeybinding,
   isKeybindingOwnedAction,
   isRendererOwnedShortcut,
   rendererMenuAccelerator,
@@ -106,6 +110,121 @@ describe("getEffectiveMenuCombo", () => {
   });
 });
 
+describe("isAcceleratorClaimedByKeybinding", () => {
+  it("reports a registry shortcut that lands on a bound key", () => {
+    // fleet.armAll ships on Cmd+Alt+A, which Antigravity's registry entry used to claim.
+    expect(isAcceleratorClaimedByKeybinding("CommandOrControl+Alt+A")).toBe(true);
+  });
+
+  it("follows the user's overrides rather than the defaults", () => {
+    storeMock.get.mockReturnValue({ "fleet.armAll": ["Cmd+Alt+Shift+A"] });
+    expect(isAcceleratorClaimedByKeybinding("CommandOrControl+Alt+A")).toBe(false);
+    expect(isAcceleratorClaimedByKeybinding("CommandOrControl+Alt+Shift+A")).toBe(true);
+  });
+
+  it("matches whatever the modifier order or Cmd/Ctrl spelling", () => {
+    setProcessPlatform("linux");
+    storeMock.get.mockReturnValue({ "fleet.armAll": ["Alt+Ctrl+A"] });
+    expect(isAcceleratorClaimedByKeybinding("CommandOrControl+Alt+A")).toBe(true);
+  });
+
+  it("counts a chord's first stroke as claimed", () => {
+    expect(isAcceleratorClaimedByKeybinding("CommandOrControl+K")).toBe(true);
+  });
+
+  it("leaves an unbound key free", () => {
+    expect(isAcceleratorClaimedByKeybinding("CommandOrControl+Alt+Shift+F12")).toBe(false);
+  });
+});
+
+describe("findActionForInput", () => {
+  const PORTAL = ["portal.closeTab", "portal.newTab", "portal.nextTab", "portal.prevTab"];
+
+  it("resolves the portal's default tab keys on macOS", () => {
+    setProcessPlatform("darwin");
+    expect(findActionForInput(input({ key: "w", meta: true }), PORTAL, "portal")).toBe(
+      "portal.closeTab"
+    );
+    expect(findActionForInput(input({ key: "t", meta: true }), PORTAL, "portal")).toBe(
+      "portal.newTab"
+    );
+    expect(findActionForInput(input({ key: "Tab", control: true }), PORTAL, "portal")).toBe(
+      "portal.nextTab"
+    );
+    expect(
+      findActionForInput(input({ key: "Tab", control: true, shift: true }), PORTAL, "portal")
+    ).toBe("portal.prevTab");
+  });
+
+  it("ignores other keys and key-ups", () => {
+    setProcessPlatform("darwin");
+    expect(findActionForInput(input({ key: "r", meta: true }), PORTAL, "portal")).toBeUndefined();
+    expect(
+      findActionForInput(input({ type: "keyUp", key: "w", meta: true }), PORTAL, "portal")
+    ).toBeUndefined();
+  });
+
+  it("honours a rebind, and the old key stops matching", () => {
+    setProcessPlatform("darwin");
+    storeMock.get.mockReturnValue({ "portal.closeTab": ["Cmd+Shift+W"] });
+    expect(findActionForInput(input({ key: "w", meta: true }), PORTAL, "portal")).toBeUndefined();
+    expect(findActionForInput(input({ key: "w", meta: true, shift: true }), PORTAL, "portal")).toBe(
+      "portal.closeTab"
+    );
+  });
+
+  it("uses Ctrl for the primary modifier off the Mac", () => {
+    setProcessPlatform("linux");
+    expect(findActionForInput(input({ key: "w", control: true }), PORTAL, "portal")).toBe(
+      "portal.closeTab"
+    );
+  });
+});
+
+describe("findTerminalCycleAction", () => {
+  it("takes Ctrl+Tab and names the portal tab key it also is", () => {
+    setProcessPlatform("darwin");
+    expect(findTerminalCycleAction(input({ key: "Tab", control: true }))).toEqual({
+      actionId: "terminal.focusNext",
+      portalActionId: "portal.nextTab",
+    });
+    expect(findTerminalCycleAction(input({ key: "Tab", control: true, shift: true }))).toEqual({
+      actionId: "terminal.focusPrevious",
+      portalActionId: "portal.prevTab",
+    });
+  });
+
+  it("leaves a cycle rebound off Tab to the renderer, and releases Ctrl+Tab", () => {
+    setProcessPlatform("linux");
+    storeMock.get.mockReturnValue({ "terminal.focusNext": ["Ctrl+V"] });
+    expect(findTerminalCycleAction(input({ key: "v", control: true }))).toBeUndefined();
+    expect(findTerminalCycleAction(input({ key: "Tab", control: true }))).toBeUndefined();
+  });
+
+  it("omits the portal action once the portal's tab key moves elsewhere", () => {
+    setProcessPlatform("darwin");
+    storeMock.get.mockReturnValue({ "portal.nextTab": ["Ctrl+Alt+Tab"] });
+    expect(findTerminalCycleAction(input({ key: "Tab", control: true }))).toEqual({
+      actionId: "terminal.focusNext",
+    });
+  });
+});
+
+describe("findPortalPageAction", () => {
+  const PORTAL = ["portal.closeTab", "portal.newTab", "portal.nextTab", "portal.prevTab"];
+
+  it("ignores a portal rebind to a key the page types with", () => {
+    setProcessPlatform("darwin");
+    storeMock.get.mockReturnValue({ "portal.closeTab": ["Backspace"] });
+    expect(findPortalPageAction(input({ key: "Backspace" }), PORTAL)).toBeUndefined();
+  });
+
+  it("takes the default Cmd+W", () => {
+    setProcessPlatform("darwin");
+    expect(findPortalPageAction(input({ key: "w", meta: true }), PORTAL)).toBe("portal.closeTab");
+  });
+});
+
 describe("isKeybindingOwnedAction", () => {
   it("owns actions with a shipped default row", () => {
     expect(isKeybindingOwnedAction("nav.toggleSidebar")).toBe(true);
@@ -152,6 +271,19 @@ describe("isRendererOwnedShortcut", () => {
     expect(isRendererOwnedShortcut(input({ key: "†", code: "KeyT", meta: true, alt: true }))).toBe(
       true
     );
+  });
+
+  // The Linux replacement defaults are spelled with Ctrl, which converts to an
+  // explicit Control rather than CommandOrControl; off macOS that is still the
+  // primary key, so the native item must yield to the renderer.
+  it("matches a Linux Ctrl-spelled default via control", () => {
+    setProcessPlatform("linux");
+    rendererMenuAccelerator("terminal.new"); // Ctrl+Shift+Alt+T on Linux
+    expect(
+      isRendererOwnedShortcut(input({ key: "T", control: true, shift: true, alt: true }))
+    ).toBe(true);
+    expect(isRendererOwnedShortcut(input({ key: "T", shift: true, alt: true }))).toBe(false);
+    expect(isRendererOwnedShortcut(input({ key: "T", control: true, alt: true }))).toBe(false);
   });
 
   it("resets between menu builds", () => {

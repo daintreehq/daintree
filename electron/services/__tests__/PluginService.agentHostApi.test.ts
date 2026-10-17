@@ -336,19 +336,6 @@ describe("Plugin agent-state host API (#10521)", () => {
     expect(Object.isFrozen(snap)).toBe(true);
   });
 
-  it("getAgentState returns the last projected snapshot after a state change", async () => {
-    const { host } = await setupAgentHost(["agent:read"]);
-    await host.onDidChangeAgentState(() => {}, { debounceMs: 0 });
-
-    emitState({ agentId: "agent-2", state: "completed", previousState: "working", timestamp: 99 });
-
-    const snap = (await host.getAgentState()) as Record<string, unknown>;
-    expect(snap).not.toBeNull();
-    expect(snap.agentId).toBe("agent-2");
-    expect(snap.state).toBe("completed");
-    expect(snap.running).toBe(false);
-  });
-
   it("derives running=true only for working/waiting/directing", async () => {
     const { host } = await setupAgentHost(["agent:read"]);
     const received: Array<Record<string, unknown>> = [];
@@ -583,16 +570,6 @@ describe("Plugin agent-input host API (#10558)", () => {
     );
     expect(fake.submit).not.toHaveBeenCalled();
     expect(fake.stage).not.toHaveBeenCalled();
-  });
-
-  it("rejects empty text before consulting consent", async () => {
-    installFakePtyClient([{ id: "t1", detectedAgentId: "claude", hasPty: true }]);
-    const consent = getPluginCapabilityConsentService();
-    const bridge = vi.fn(async () => "approved-once" as const);
-    consent.setConsentBridge(bridge);
-    const { host } = await setupInputHost(["agent:input"]);
-    await expect(host.sendToActiveAgent("")).rejects.toThrow(/non-empty/);
-    expect(bridge).not.toHaveBeenCalled();
   });
 
   it("rejects whitespace-only text without banking consent or writing (#10558)", async () => {

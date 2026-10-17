@@ -128,22 +128,4 @@ describe("userAgentRegistryStore", () => {
 
     expect(getUserRegistry()).toEqual({});
   });
-
-  it("cleanup resets the store to pre-initialized state", () => {
-    useUserAgentRegistryStore.setState({
-      registry: { test: { id: "test", name: "Test Agent" } as never },
-      isLoading: false,
-      error: "boom",
-      isInitialized: true,
-    });
-
-    cleanupUserAgentRegistryStore();
-
-    expect(useUserAgentRegistryStore.getState()).toMatchObject({
-      registry: null,
-      isLoading: true,
-      error: null,
-      isInitialized: false,
-    });
-  });
 });

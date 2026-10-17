@@ -8,9 +8,9 @@
  * This drives the preview entry (`worktree-status-tick-preview.html`), which
  * mounts the REAL tick and the REAL `WorktreeHeader` in the sidebar card's and
  * the overview cell's real chrome, with each row's state derived by
- * `computeChipState` from worktree fields. `cleanup` and `complete` need a live
- * forge lookup in the full app, which is why this is not a step in the Electron
- * card harness (that one still owns the real `waiting` shot).
+ * `computeChipState` from worktree fields. `cleanup` needs a live forge lookup
+ * in the full app, which is why this is not a step in the Electron card harness
+ * (that one still owns the real `attention` shot).
  *
  * Opt-in only, like every sibling review harness:
  *
@@ -81,27 +81,27 @@ type Fixture = "sidebar" | "collapsed" | "grid" | "specimen";
  */
 const EXPECTED: Record<Fixture, Record<string, string>> = {
   sidebar: {
-    waiting: "waiting",
+    attention: "attention",
     cleanup: "cleanup",
-    complete: "complete",
+    finished: "finished",
     quiet: "none",
-    "waiting-active": "waiting",
-    "complete-main": "complete",
+    "attention-active": "attention",
+    "finished-main": "finished",
   },
   collapsed: {
-    waiting: "waiting",
+    attention: "attention",
     cleanup: "cleanup",
-    complete: "complete",
+    finished: "finished",
     quiet: "none",
-    "waiting-active": "waiting",
-    "complete-main": "complete",
+    "attention-active": "attention",
+    "finished-main": "finished",
   },
   grid: {
-    waiting: "waiting",
+    attention: "attention",
     cleanup: "cleanup",
-    complete: "complete",
+    finished: "finished",
     quiet: "none",
-    "waiting-active": "waiting",
+    "attention-active": "attention",
   },
   specimen: {},
 };
@@ -109,9 +109,9 @@ const EXPECTED: Record<Fixture, Record<string, string>> = {
 const TICK_COUNT: Record<Fixture, number> = { sidebar: 5, collapsed: 5, grid: 4, specimen: 6 };
 
 const TOOLTIP_ROWS = [
-  { row: "waiting", text: "Agent waiting for input" },
+  { row: "attention", text: "Agent asking for attention" },
   { row: "cleanup", text: "Ready for cleanup" },
-  { row: "complete", text: "Complete: in review" },
+  { row: "finished", text: "Finished, unread: no agent working or asking for anything" },
 ] as const;
 
 let server: Awaited<ReturnType<typeof startPreviewServer>> | undefined;

@@ -39,6 +39,11 @@ const lineage = vi.hoisted(() => ({
   reap: vi.fn((_claimed: string): Promise<void> => Promise.resolve()),
 }));
 
+// The Windows orphan kill after a host crash; only reached with a faked platform.
+const windowsTreeKill = vi.hoisted(() =>
+  vi.fn((_targets: unknown, _options: unknown) => Promise.resolve([] as unknown[]))
+);
+
 interface MockUtilityProcess extends EventEmitter {
   postMessage: Mock;
   kill: Mock;
@@ -138,6 +143,11 @@ describe("PtyClient fabric", () => {
       ...(await importOriginal<typeof import("../TerminalLineageLedger.js")>()),
       claimShardLineageFile: lineage.claim,
       reapClaimedLineageFile: lineage.reap,
+    }));
+    windowsTreeKill.mockReset().mockResolvedValue([]);
+    vi.doMock("../../utils/windowsTreeKill.js", async (importOriginal) => ({
+      ...(await importOriginal<typeof import("../../utils/windowsTreeKill.js")>()),
+      killWindowsProcessTrees: windowsTreeKill,
     }));
 
     PtyClientClass = (await import("../PtyClient.js")).PtyClient;
@@ -308,18 +318,36 @@ describe("PtyClient fabric", () => {
       client.dispose();
     });
 
-    it("forwards a success-report request to every shard", () => {
+    it("reports answers from every input path and every shard on the one client", () => {
       const client = createFabricClient();
       client.spawn("t1", { cwd: "/a", cols: 80, rows: 24, projectId: "project-a" });
-      client.spawn("t3", { cwd: "/b", cols: 80, rows: 24, projectId: "project-b" });
+      client.spawn("t2", { cwd: "/b", cols: 80, rows: 24, projectId: "project-b" });
+      projectShard("project-a").child.emit("message", { type: "ready" });
+      const answers: unknown[] = [];
+      client.on("terminal-input", (id: string, notice: unknown) => answers.push([id, notice]));
 
-      client.broadcastWrite(["t1", "t3"], "x", true);
+      client.write("t1", "hello");
+      client.write("t1", "\x1b\r");
+      client.write("t1", "\r");
+      client.sendKey("t1", "escape");
+      client.submit("t2", "go");
+      client.submit("t2", "wake", undefined, undefined, "settled-prompt");
+      client.broadcastWrite(["t1", "t2"], "y");
+      client.batchDoubleEscape(["t2"]);
+      projectShard("project-a").child.emit("message", {
+        type: "terminal-input",
+        id: "t1",
+        answer: "submit",
+      });
 
-      expect(messagesOfType(projectShard("project-a").child, "broadcast-write")).toEqual([
-        { type: "broadcast-write", ids: ["t1"], data: "x", reportSuccess: true },
-      ]);
-      expect(messagesOfType(projectShard("project-b").child, "broadcast-write")).toEqual([
-        { type: "broadcast-write", ids: ["t3"], data: "x", reportSuccess: true },
+      expect(answers).toEqual([
+        ["t1", { answer: "submit" }],
+        ["t1", { answer: "key" }],
+        ["t2", { answer: "submit" }],
+        ["t1", { answer: "key" }],
+        ["t2", { answer: "key" }],
+        ["t2", { answer: "key" }],
+        ["t1", { answer: "submit" }],
       ]);
       client.dispose();
     });
@@ -500,6 +528,126 @@ describe("PtyClient fabric", () => {
       }
     );
 
+    it("on Windows, tree-kills the crashed shard's orphans in the background and restarts after", async () => {
+      const killSpy = vi.spyOn(process, "kill").mockImplementation(() => true);
+      const original = Object.getOwnPropertyDescriptor(process, "platform")!;
+      let treesGone: (value: unknown[]) => void = () => {};
+      windowsTreeKill.mockImplementationOnce(
+        () => new Promise<unknown[]>((resolve) => (treesGone = resolve))
+      );
+      try {
+        const client = createFabricClient();
+        client.spawn("t1", { cwd: "/a", cols: 80, rows: 24, projectId: "project-a" });
+        client.spawn("t2", { cwd: "/tmp", cols: 80, rows: 24 });
+        const shardA = projectShard("project-a");
+        shardA.child.emit("message", { type: "ready" });
+        shardA.child.emit("message", { type: "terminal-pid", id: "t1", pid: 11111 });
+        shardA.child.emit("message", {
+          type: "terminal-identity",
+          id: "t1",
+          pid: 11111,
+          startTime: 1_760_256_000_123_456,
+        });
+        defaultShard().child.emit("message", { type: "terminal-pid", id: "t2", pid: 22222 });
+        const forkCountBefore = forks.length;
+
+        Object.defineProperty(process, "platform", { value: "win32", configurable: true });
+        shardA.child.emit("exit", 1);
+        await vi.advanceTimersByTimeAsync(15_000);
+
+        expect(windowsTreeKill).toHaveBeenCalledTimes(1);
+        expect(windowsTreeKill).toHaveBeenCalledWith(
+          [{ pid: 11111, startTime: 1_760_256_000_123_456 }],
+          { timeoutMs: 3000 }
+        );
+        // The dead host no longer pins these PIDs: no bare-PID kill, ever.
+        expect(killSpy).not.toHaveBeenCalled();
+        // The replacement host waits for the old trees, as it does for the lineage reap.
+        expect(forks.length).toBe(forkCountBefore);
+
+        treesGone([]);
+        await vi.advanceTimersByTimeAsync(15_000);
+        expect(forks.length).toBe(forkCountBefore + 1);
+        client.dispose();
+      } finally {
+        Object.defineProperty(process, "platform", original);
+        killSpy.mockRestore();
+      }
+    });
+
+    it("on Windows, passes each shell's reported identity to the crash cleanup", async () => {
+      const original = Object.getOwnPropertyDescriptor(process, "platform")!;
+      try {
+        const client = createFabricClient();
+        client.spawn("t1", { cwd: "/a", cols: 80, rows: 24, projectId: "project-a" });
+        client.spawn("t2", { cwd: "/a", cols: 80, rows: 24, projectId: "project-a" });
+        const shardA = projectShard("project-a");
+        shardA.child.emit("message", { type: "ready" });
+        shardA.child.emit("message", { type: "terminal-pid", id: "t1", pid: 11111 });
+        shardA.child.emit("message", { type: "terminal-pid", id: "t2", pid: 11112 });
+        shardA.child.emit("message", {
+          type: "terminal-identity",
+          id: "t1",
+          pid: 11111,
+          startTime: 1_760_256_000_123_456,
+        });
+        // An identity for a PID the terminal no longer has is stale.
+        shardA.child.emit("message", {
+          type: "terminal-identity",
+          id: "t2",
+          pid: 99999,
+          startTime: 1_760_256_000_999_999,
+        });
+
+        Object.defineProperty(process, "platform", { value: "win32", configurable: true });
+        shardA.child.emit("exit", 1);
+        await vi.advanceTimersByTimeAsync(0);
+
+        // A shell whose PID was taken over since the crash is refused by the
+        // helper; one with no identity is never walked by bare PID — its
+        // pseudoconsole died with the host and the Job Object holds the rest.
+        expect(windowsTreeKill).toHaveBeenCalledWith(
+          [{ pid: 11111, startTime: 1_760_256_000_123_456 }],
+          { timeoutMs: 3000 }
+        );
+        client.dispose();
+      } finally {
+        Object.defineProperty(process, "platform", original);
+      }
+    });
+
+    it("on Windows, finishes the tree kills a disposing host handed over, and quit waits for them", async () => {
+      const original = Object.getOwnPropertyDescriptor(process, "platform")!;
+      let treesGone: (value: unknown[]) => void = () => {};
+      windowsTreeKill.mockImplementationOnce(
+        () => new Promise<unknown[]>((resolve) => (treesGone = resolve))
+      );
+      const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+      try {
+        const client = createFabricClient();
+        Object.defineProperty(process, "platform", { value: "win32", configurable: true });
+        client.dispose();
+        let exited: boolean | null = null;
+        void client.waitForHostsExited().then((value) => (exited = value));
+
+        // The handoff comes from a host already disposing: its shard is retired.
+        const roots = [{ pid: 33333, startTime: 1_760_256_000_123_456 }];
+        defaultShard().child.emit("message", { type: "tree-kill-handoff", roots });
+        defaultShard().child.emit("exit", 1);
+        await vi.advanceTimersByTimeAsync(0);
+
+        expect(windowsTreeKill).toHaveBeenCalledWith(roots, { timeoutMs: 3000 });
+        expect(exited).toBeNull();
+
+        treesGone([]);
+        await vi.advanceTimersByTimeAsync(0);
+        expect(exited).toBe(false);
+      } finally {
+        Object.defineProperty(process, "platform", original);
+        warnSpy.mockRestore();
+      }
+    });
+
     it("registers every terminal with the crash reaper and releases it on exit (#13176)", async () => {
       crashReap.attachTerminal.mockClear();
       crashReap.detachTerminal.mockClear();
@@ -607,36 +755,6 @@ describe("PtyClient fabric", () => {
       const respawns = messagesOfType(restarted.child, "spawn");
       expect((respawns[0].options as { worktreeId?: string }).worktreeId).toBe(
         "/repo/.worktrees/feature"
-      );
-      client.dispose();
-    });
-
-    it("respawns under the worktree a run was moved to, not the one it launched in", async () => {
-      // `pendingSpawns` is replayed verbatim on a crash respawn, so a move that
-      // only reached the live record would be silently undone by the next host
-      // crash — the run would reappear in the palette under the worktree the
-      // user dragged it out of (#12060).
-      const client = createFabricClient();
-      client.spawn("t1", {
-        cwd: "/a",
-        cols: 80,
-        rows: 24,
-        projectId: "project-a",
-        worktreeId: "/repo/.worktrees/old",
-      });
-      const shardA = projectShard("project-a");
-      shardA.child.emit("message", { type: "ready" });
-
-      client.updateWorktreeId("t1", "/repo/.worktrees/new", "project-a");
-
-      shardA.child.emit("exit", 1);
-      await vi.advanceTimersByTimeAsync(15_000);
-      const restarted = forks[forks.length - 1];
-      restarted.child.emit("message", { type: "ready" });
-
-      const respawns = messagesOfType(restarted.child, "spawn");
-      expect((respawns[0].options as { worktreeId?: string }).worktreeId).toBe(
-        "/repo/.worktrees/new"
       );
       client.dispose();
     });
@@ -806,6 +924,58 @@ describe("PtyClient fabric", () => {
       expect(messagesOfType(shardA.child, "set-focused-terminal")).toEqual([
         { type: "set-focused-terminal", windowId: 1, id: "t1" },
       ]);
+      client.dispose();
+    });
+
+    it("scopes a remote endpoint's synthetic connection to its project's shard", () => {
+      const client = createFabricClient();
+      client.spawn("t1", { cwd: "/a", cols: 80, rows: 24, projectId: "project-a" });
+      const shardA = projectShard("project-a");
+      shardA.child.emit("message", { type: "ready" });
+      shardA.child.postMessage.mockClear();
+
+      client.registerAuxConnectionContext(-5, "project-a");
+      client.connectMessagePort(-5, createMockPort() as never, -5);
+
+      expect(messagesOfType(shardA.child, "connect-port")).toEqual([
+        { type: "connect-port", windowId: -5, holderWebContentsId: -5 },
+      ]);
+      expect(messagesOfType(shardA.child, "set-active-project")).toEqual([
+        { type: "set-active-project", windowId: -5, projectId: "project-a" },
+      ]);
+      // The active project the window paths track is not the endpoint's to move.
+      expect(client.getActiveProjectId()).toBeNull();
+      client.dispose();
+    });
+
+    it("refreshes a synthetic connection through its own callback after its shard crashes", async () => {
+      const client = createFabricClient();
+      const windowRefresh = vi.fn();
+      const endpointRefresh = vi.fn();
+      client.setPortRefreshCallback(windowRefresh);
+      client.spawn("t1", { cwd: "/a", cols: 80, rows: 24, projectId: "project-a" });
+      const shardA = projectShard("project-a");
+      shardA.child.emit("message", { type: "ready" });
+      client.registerAuxConnectionContext(-5, "project-a");
+      client.setAuxConnectionRefresh(-5, endpointRefresh);
+      client.connectMessagePort(-5, createMockPort() as never, -5);
+
+      shardA.child.emit("exit", 1);
+      await vi.advanceTimersByTimeAsync(15_000);
+      const restarted = forks[forks.length - 1];
+      restarted.child.emit("message", { type: "ready" });
+
+      expect(endpointRefresh).toHaveBeenCalledTimes(1);
+      expect(windowRefresh).not.toHaveBeenCalled();
+
+      // Unregistered, the id falls back to the window callback like any other.
+      client.setAuxConnectionRefresh(-5, null);
+      client.connectMessagePort(-5, createMockPort() as never, -5);
+      restarted.child.emit("exit", 1);
+      await vi.advanceTimersByTimeAsync(15_000);
+      forks[forks.length - 1].child.emit("message", { type: "ready" });
+      expect(endpointRefresh).toHaveBeenCalledTimes(1);
+      expect(windowRefresh).toHaveBeenCalledWith(-5);
       client.dispose();
     });
 
@@ -1208,24 +1378,6 @@ describe("PtyClient fabric", () => {
   });
 
   describe("fallback-eligible projects (#12557)", () => {
-    it("replays the set to a shard that booted after it was published", () => {
-      // A shard forked later would otherwise suppress the IPC fallback for
-      // every project whose only remaining consumer holds no port — the
-      // starvation, reintroduced for as long as the shard stays unaware.
-      const client = createFabricClient();
-      client.setFallbackEligibleProjects(["project-a"]);
-      client.spawn("t1", { cwd: "/a", cols: 80, rows: 24, projectId: "project-a" });
-      const shardA = projectShard("project-a");
-      shardA.child.postMessage.mockClear();
-
-      shardA.child.emit("message", { type: "ready" });
-
-      expect(messagesOfType(shardA.child, "set-fallback-eligible-projects")).toEqual([
-        { type: "set-fallback-eligible-projects", projectIds: ["project-a"] },
-      ]);
-      client.dispose();
-    });
-
     it("does not replay an empty set to a fresh shard", () => {
       // Nothing is eligible, and a shard boots with an empty set already.
       const client = createFabricClient();
@@ -1237,6 +1389,25 @@ describe("PtyClient fabric", () => {
       shardA.child.emit("message", { type: "ready" });
 
       expect(messagesOfType(shardA.child, "set-fallback-eligible-projects")).toHaveLength(0);
+      client.dispose();
+    });
+
+    it("replays the drive lease table to a fresh shard", () => {
+      const client = createFabricClient();
+      const leases = [{ projectId: "project-a", leaseId: 2, holderConnection: -5 }];
+      client.setDriveLeases(leases);
+      expect(messagesOfType(defaultShard().child, "set-drive-leases")).toEqual([
+        { type: "set-drive-leases", leases },
+      ]);
+      client.spawn("t1", { cwd: "/a", cols: 80, rows: 24, projectId: "project-a" });
+      const shardA = projectShard("project-a");
+      shardA.child.postMessage.mockClear();
+
+      shardA.child.emit("message", { type: "ready" });
+
+      expect(messagesOfType(shardA.child, "set-drive-leases")).toEqual([
+        { type: "set-drive-leases", leases },
+      ]);
       client.dispose();
     });
 

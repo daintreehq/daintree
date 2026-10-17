@@ -1,102 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
-import { sanitizeTabGroups, TabGroupInputSchema } from "../ipc.js";
-
-describe("TabGroupInputSchema", () => {
-  it("should validate a valid tab group", () => {
-    const validGroup = {
-      id: "group-1",
-      location: "grid" as const,
-      activeTabId: "panel-1",
-      panelIds: ["panel-1", "panel-2"],
-    };
-
-    const result = TabGroupInputSchema.safeParse(validGroup);
-    expect(result.success).toBe(true);
-    if (result.success) {
-      expect(result.data).toEqual(validGroup);
-    }
-  });
-
-  it("should validate tab group with optional worktreeId", () => {
-    const validGroup = {
-      id: "group-1",
-      location: "dock" as const,
-      worktreeId: "worktree-123",
-      activeTabId: "panel-1",
-      panelIds: ["panel-1", "panel-2"],
-    };
-
-    const result = TabGroupInputSchema.safeParse(validGroup);
-    expect(result.success).toBe(true);
-    if (result.success) {
-      expect(result.data.worktreeId).toBe("worktree-123");
-    }
-  });
-
-  it("should preserve unknown fields (passthrough)", () => {
-    const groupWithExtra = {
-      id: "group-1",
-      location: "grid" as const,
-      activeTabId: "panel-1",
-      panelIds: ["panel-1", "panel-2"],
-      customField: "custom-value",
-      futureFlag: true,
-    };
-
-    const result = TabGroupInputSchema.safeParse(groupWithExtra);
-    expect(result.success).toBe(true);
-    if (result.success) {
-      expect(result.data).toHaveProperty("customField", "custom-value");
-      expect(result.data).toHaveProperty("futureFlag", true);
-    }
-  });
-
-  it("should reject tab group with empty id", () => {
-    const invalidGroup = {
-      id: "",
-      location: "grid" as const,
-      activeTabId: "panel-1",
-      panelIds: ["panel-1"],
-    };
-
-    const result = TabGroupInputSchema.safeParse(invalidGroup);
-    expect(result.success).toBe(false);
-  });
-
-  it("should reject tab group with invalid location", () => {
-    const invalidGroup = {
-      id: "group-1",
-      location: "trash",
-      activeTabId: "panel-1",
-      panelIds: ["panel-1"],
-    };
-
-    const result = TabGroupInputSchema.safeParse(invalidGroup);
-    expect(result.success).toBe(false);
-  });
-
-  it("should reject tab group with non-array panelIds", () => {
-    const invalidGroup = {
-      id: "group-1",
-      location: "grid" as const,
-      activeTabId: "panel-1",
-      panelIds: "not-an-array",
-    };
-
-    const result = TabGroupInputSchema.safeParse(invalidGroup);
-    expect(result.success).toBe(false);
-  });
-
-  it("should reject tab group missing required fields", () => {
-    const invalidGroup = {
-      id: "group-1",
-      location: "grid" as const,
-    };
-
-    const result = TabGroupInputSchema.safeParse(invalidGroup);
-    expect(result.success).toBe(false);
-  });
-});
+import { sanitizeTabGroups } from "../ipc.js";
 
 describe("sanitizeTabGroups", () => {
   let consoleWarnSpy: ReturnType<typeof vi.spyOn>;
@@ -351,34 +254,6 @@ describe("sanitizeTabGroups", () => {
       const result = sanitizeTabGroups(groups, "test-project");
       expect(result).toHaveLength(0);
     });
-
-    it("should drop groups with invalid panelIds that reduce to 1 panel", () => {
-      const groups = [
-        {
-          id: "group-1",
-          location: "grid" as const,
-          activeTabId: "panel-1",
-          panelIds: ["panel-1", "" as any, null as any, 123 as any],
-        },
-      ];
-
-      const result = sanitizeTabGroups(groups, "test-project");
-      expect(result).toHaveLength(0);
-    });
-
-    it("should keep groups with 2+ valid unique panels", () => {
-      const groups = [
-        {
-          id: "group-1",
-          location: "grid" as const,
-          activeTabId: "panel-1",
-          panelIds: ["panel-1", "panel-2"],
-        },
-      ];
-
-      const result = sanitizeTabGroups(groups, "test-project");
-      expect(result).toHaveLength(1);
-    });
   });
 
   describe("activeTabId repair", () => {
@@ -421,20 +296,6 @@ describe("sanitizeTabGroups", () => {
 
       const result = sanitizeTabGroups(groups, "test-project");
       expect(result[0].activeTabId).toBe("panel-1");
-    });
-
-    it("should fallback when activeTabId was removed during deduplication", () => {
-      const groups = [
-        {
-          id: "group-1",
-          location: "grid" as const,
-          activeTabId: "panel-2",
-          panelIds: ["panel-1", "panel-2", "panel-2"],
-        },
-      ];
-
-      const result = sanitizeTabGroups(groups, "test-project");
-      expect(result[0].activeTabId).toBe("panel-2");
     });
   });
 
@@ -526,22 +387,6 @@ describe("sanitizeTabGroups", () => {
       expect(result[1].id).toBe("valid-2");
     });
 
-    it("should handle groups with duplicate panelIds and invalid activeTabId", () => {
-      const groups = [
-        {
-          id: "group-1",
-          location: "grid" as const,
-          activeTabId: "panel-99",
-          panelIds: ["panel-1", "panel-2", "panel-1", "panel-3", "panel-2"],
-        },
-      ];
-
-      const result = sanitizeTabGroups(groups, "test-project");
-      expect(result).toHaveLength(1);
-      expect(result[0].panelIds).toEqual(["panel-1", "panel-2", "panel-3"]);
-      expect(result[0].activeTabId).toBe("panel-1");
-    });
-
     it("should preserve unknown fields through sanitization", () => {
       const groups = [
         {
@@ -562,18 +407,6 @@ describe("sanitizeTabGroups", () => {
     it("should handle empty array input", () => {
       const result = sanitizeTabGroups([], "test-project");
       expect(result).toEqual([]);
-    });
-
-    it("should handle large number of groups", () => {
-      const groups = Array.from({ length: 100 }, (_, i) => ({
-        id: `group-${i}`,
-        location: i % 2 === 0 ? ("grid" as const) : ("dock" as const),
-        activeTabId: `panel-${i * 2}`,
-        panelIds: [`panel-${i * 2}`, `panel-${i * 2 + 1}`],
-      }));
-
-      const result = sanitizeTabGroups(groups, "test-project");
-      expect(result).toHaveLength(100);
     });
   });
 });

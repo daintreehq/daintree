@@ -1,85 +1,118 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-describe("agentPreferencesStore persistence migration", () => {
-  const STORAGE_KEY = "daintree-agent-preferences";
-  const originalLocalStorageDescriptor = Object.getOwnPropertyDescriptor(
-    globalThis,
-    "localStorage"
-  );
+const clientMock = vi.hoisted(() => ({
+  set: vi.fn<(patch: Record<string, unknown>) => Promise<Record<string, unknown>>>(),
+}));
 
-  function installLocalStorage(initial: Record<string, string>): Map<string, string> {
-    const backing = new Map<string, string>(Object.entries(initial));
-    Object.defineProperty(globalThis, "localStorage", {
-      value: {
-        getItem: (key: string) => backing.get(key) ?? null,
-        setItem: (key: string, value: string) => {
-          backing.set(key, value);
-        },
-        removeItem: (key: string) => {
-          backing.delete(key);
-        },
-      },
-      configurable: true,
-      writable: true,
-    });
-    return backing;
-  }
+vi.mock("@/clients/agentDefaultsClient", () => ({ agentDefaultsClient: clientMock }));
+vi.mock("@/utils/logger", () => ({ logError: vi.fn() }));
 
-  function restoreLocalStorage(): void {
-    if (originalLocalStorageDescriptor) {
-      Object.defineProperty(globalThis, "localStorage", originalLocalStorageDescriptor);
-      return;
-    }
-    delete (globalThis as Partial<typeof globalThis>).localStorage;
-  }
-
+describe("agentPreferencesStore (host mirror, #13345)", () => {
   beforeEach(() => {
     vi.resetModules();
+    clientMock.set.mockReset();
+    clientMock.set.mockResolvedValue({});
+    localStorage.clear();
   });
 
   afterEach(() => {
-    restoreLocalStorage();
-    vi.resetModules();
-    vi.restoreAllMocks();
+    localStorage.clear();
   });
 
-  it("rehydrates a legacy unversioned blob with a valid defaultAgent", async () => {
-    const legacyBlob = JSON.stringify({
-      state: { defaultAgent: "claude" },
-    });
-    installLocalStorage({ [STORAGE_KEY]: legacyBlob });
+  async function loadStore() {
+    return (await import("../agentPreferencesStore")).useAgentPreferencesStore;
+  }
 
-    const { useAgentPreferencesStore: store } = await import("../agentPreferencesStore");
-
-    expect(store.getState().defaultAgent).toBe("claude");
-  });
-
-  it("preserves an explicit undefined defaultAgent from a legacy blob", async () => {
-    const legacyBlob = JSON.stringify({
-      state: {},
-    });
-    installLocalStorage({ [STORAGE_KEY]: legacyBlob });
-
-    const { useAgentPreferencesStore: store } = await import("../agentPreferencesStore");
+  it("ignores this machine's localStorage — the default is the host's", async () => {
+    localStorage.setItem(
+      "daintree-agent-preferences",
+      JSON.stringify({ state: { defaultAgent: "claude" }, version: 0 })
+    );
+    const store = await loadStore();
 
     expect(store.getState().defaultAgent).toBeUndefined();
   });
 
-  it("writes version: 0 on the next persist after rehydration", async () => {
-    const legacyBlob = JSON.stringify({ state: { defaultAgent: "claude" } });
-    const backing = installLocalStorage({ [STORAGE_KEY]: legacyBlob });
+  it("saves a choice on the host and never writes localStorage", async () => {
+    const store = await loadStore();
 
-    const { useAgentPreferencesStore: store } = await import("../agentPreferencesStore");
-    store.getState().setDefaultAgent("gemini");
+    await store.getState().setDefaultAgent("codex");
 
-    const written = backing.get(STORAGE_KEY);
-    expect(written).toBeDefined();
-    const parsed = JSON.parse(written!) as {
-      version: number;
-      state: { defaultAgent?: string };
-    };
-    expect(parsed.version).toBe(0);
-    expect(parsed.state.defaultAgent).toBe("gemini");
+    expect(store.getState().defaultAgent).toBe("codex");
+    expect(clientMock.set).toHaveBeenCalledWith({ defaultAgent: "codex" });
+    expect(localStorage.getItem("daintree-agent-preferences")).toBeNull();
+  });
+
+  it("sends a cleared default as an explicit null", async () => {
+    const store = await loadStore();
+
+    await store.getState().setDefaultAgent(undefined);
+
+    expect(clientMock.set).toHaveBeenCalledWith({ defaultAgent: null });
+  });
+
+  it("rolls a failed save back to the previous value", async () => {
+    const store = await loadStore();
+    store.getState().applyHostDefaultAgent("claude");
+    clientMock.set.mockRejectedValueOnce(new Error("link down"));
+
+    await store.getState().setDefaultAgent("codex");
+
+    expect(store.getState().defaultAgent).toBe("claude");
+  });
+
+  it("doesn't let an older failed save undo a newer choice", async () => {
+    const store = await loadStore();
+    let rejectFirst: (error: Error) => void = () => {};
+    clientMock.set.mockImplementationOnce(
+      () => new Promise((_resolve, reject) => (rejectFirst = reject))
+    );
+
+    const first = store.getState().setDefaultAgent("codex");
+    await store.getState().setDefaultAgent("gemini");
+    rejectFirst(new Error("link down"));
+    await first;
+
+    expect(store.getState().defaultAgent).toBe("gemini");
+  });
+
+  it("rolls back to what the host holds, not to an earlier choice that also failed", async () => {
+    const store = await loadStore();
+    store.getState().applyHostDefaultAgent("claude");
+    clientMock.set.mockRejectedValue(new Error("link down"));
+
+    const first = store.getState().setDefaultAgent("codex");
+    await store.getState().setDefaultAgent("gemini");
+    await first;
+
+    expect(store.getState().defaultAgent).toBe("claude");
+  });
+
+  it("keeps a value the host confirmed by push even if the save then fails", async () => {
+    const store = await loadStore();
+    store.getState().applyHostDefaultAgent("claude");
+    let rejectSave: (error: Error) => void = () => {};
+    clientMock.set.mockImplementationOnce(
+      () => new Promise((_resolve, reject) => (rejectSave = reject))
+    );
+
+    const pending = store.getState().setDefaultAgent("codex");
+    store.getState().applyHostDefaultAgent("codex");
+    rejectSave(new Error("link down"));
+    await pending;
+
+    expect(store.getState().defaultAgent).toBe("codex");
+  });
+
+  it("mirrors the host without writing back", async () => {
+    const store = await loadStore();
+
+    store.getState().applyHostDefaultAgent("codex");
+    expect(store.getState().defaultAgent).toBe("codex");
+    store.getState().applyHostDefaultAgent(null);
+    expect(store.getState().defaultAgent).toBeUndefined();
+
+    expect(clientMock.set).not.toHaveBeenCalled();
   });
 });

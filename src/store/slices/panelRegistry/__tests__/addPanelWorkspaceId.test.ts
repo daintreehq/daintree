@@ -7,7 +7,8 @@
  */
 
 import { describe, it, expect, beforeEach, vi } from "vitest";
-import { terminalClient, projectClient } from "@/clients";
+import { terminalClient, projectClient, globalEnvClient } from "@/clients";
+import { mergeTerminalLaunchEnv } from "@shared/utils/terminalLaunchOptions";
 
 vi.mock("@/clients", () => ({
   terminalClient: {
@@ -78,6 +79,7 @@ const { usePanelStore } = await import("../../../panelStore");
 
 const spawnMock = vi.mocked(terminalClient.spawn);
 const getSettingsMock = vi.mocked(projectClient.getSettings);
+const globalEnvMock = vi.mocked(globalEnvClient.get);
 
 /** Seed the view identity main stamps onto every WebContentsView at creation. */
 function setViewWorkspaceId(id: string | undefined): void {
@@ -90,6 +92,10 @@ async function drainMicrotasks(iterations = 100): Promise<void> {
 
 function spawnedProjectId(): string | undefined {
   return spawnMock.mock.calls[0]?.[0]?.projectId;
+}
+
+function spawnedEnv(): Record<string, string> | undefined {
+  return spawnMock.mock.calls[0]?.[0]?.env;
 }
 
 describe("addPanel workspace ownership (#11079)", () => {
@@ -195,5 +201,55 @@ describe("addPanel launch context (#12486)", () => {
     // Premise first: a spawn that never happened would also carry no context.
     expect(spawnMock).toHaveBeenCalledTimes(1);
     expect(spawnMock.mock.calls[0]![0]!.actionContext).toBeUndefined();
+  });
+});
+
+const GLOBAL = { TOOL_HOME: "/g", SHARED: "global", ONLY_GLOBAL: "1" };
+const PROJECT = { SHARED: "project", ONLY_PROJECT: "1" };
+const LAUNCH = { SHARED: "launch" };
+
+/**
+ * The window's launch and the host's viewless launch merge the environment
+ * through one shared function, so a terminal gets the same tool paths whether
+ * or not a window asked for it. This pins the window's side to it.
+ */
+describe("addPanel launch environment parity", () => {
+  beforeEach(async () => {
+    currentProject = { id: "project-abc", path: "/repo" };
+    window.__DAINTREE_INITIAL_PROJECT__ = { id: "project-abc" };
+    const { reset } = usePanelStore.getState();
+    await reset();
+
+    spawnMock.mockReset();
+    spawnMock.mockImplementation(async ({ id }) => id ?? "spawn-id");
+    globalEnvMock.mockResolvedValue(GLOBAL);
+    getSettingsMock.mockResolvedValue({ runCommands: [], environmentVariables: PROJECT });
+  });
+
+  it("layers global under project under the caller's env, as the shared merge does", async () => {
+    await usePanelStore
+      .getState()
+      .addPanel({ requestedId: "env-1", bypassLimits: true, env: LAUNCH });
+    await drainMicrotasks();
+
+    expect(spawnedEnv()).toEqual(mergeTerminalLaunchEnv(GLOBAL, PROJECT, LAUNCH));
+    expect(spawnedEnv()).toEqual({
+      TOOL_HOME: "/g",
+      ONLY_GLOBAL: "1",
+      ONLY_PROJECT: "1",
+      SHARED: "launch",
+    });
+  });
+
+  it("passes the caller's env through untouched when nothing is configured", async () => {
+    globalEnvMock.mockResolvedValue({});
+    getSettingsMock.mockResolvedValue({ runCommands: [] });
+
+    await usePanelStore.getState().addPanel({ requestedId: "env-2", bypassLimits: true });
+    await drainMicrotasks();
+
+    expect(spawnMock).toHaveBeenCalledTimes(1);
+    expect(spawnedEnv()).toBeUndefined();
+    expect(mergeTerminalLaunchEnv({}, {}, undefined)).toBeUndefined();
   });
 });

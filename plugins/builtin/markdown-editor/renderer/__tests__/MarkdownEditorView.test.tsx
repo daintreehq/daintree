@@ -34,6 +34,10 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 import { CHANNELS, identityKey } from "../../shared/protocol";
 import { createFakeMain, type FakeMain } from "./testHost";
 import { whenPluginUiReady } from "@daintreehq/plugin-ui";
+import { installAppPluginKitHost } from "@/services/plugin/appPluginKitHost";
+
+// The app's own kit host, so the kit reaches the app services mocked here.
+installAppPluginKitHost();
 
 const FILE = "/repo/docs/plan.md";
 

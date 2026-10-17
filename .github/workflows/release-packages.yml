@@ -2,10 +2,11 @@ name: Release (Plugin Packages)
 
 # npm publish for the plugin-ecosystem workspace packages
 # (@daintreehq/plugin-sdk, @daintreehq/plugin-vite, daintree-plugin,
-# create-daintree-plugin). Kept separate from the Electron app release
-# workflows (release-{macos,linux,windows}.yml), which fire on `v*` tags. Each
-# package versions independently via its own per-package tag (`sdk-v*`,
-# `plugin-vite-v*`, `daintree-plugin-v*`, `create-daintree-plugin-v*`);
+# create-daintree-plugin, @daintreehq/tour). Kept separate from the Electron app
+# release workflows (release-{macos,linux,windows}.yml), which fire on `v*`
+# tags. Each package versions independently via its own per-package tag
+# (`sdk-v*`, `plugin-vite-v*`, `daintree-plugin-v*`, `create-daintree-plugin-v*`,
+# `tour-v*`);
 # pushing any of them publishes every package whose version is not yet on the
 # registry (the version-existence guard below skips the rest), so a tag for
 # one package re-runs the others as no-ops. `workflow_dispatch` remains for
@@ -34,6 +35,7 @@ on:
       - "plugin-vite-v*"
       - "daintree-plugin-v*"
       - "create-daintree-plugin-v*"
+      - "tour-v*"
 
 permissions:
   contents: read
@@ -49,7 +51,7 @@ concurrency:
 
 env:
   NODE_VERSION: "22"
-  PUBLISH_WORKSPACES: packages/plugin-sdk packages/plugin-vite packages/daintree-plugin packages/create-daintree-plugin
+  PUBLISH_WORKSPACES: packages/plugin-sdk packages/plugin-vite packages/daintree-plugin packages/create-daintree-plugin packages/tour
 
 jobs:
   publish:
@@ -118,6 +120,7 @@ jobs:
             daintree-plugin-v*)        dir=packages/daintree-plugin;        ver="${tag#daintree-plugin-v}" ;;
             plugin-vite-v*)            dir=packages/plugin-vite;            ver="${tag#plugin-vite-v}" ;;
             sdk-v*)                    dir=packages/plugin-sdk;             ver="${tag#sdk-v}" ;;
+            tour-v*)                   dir=packages/tour;                   ver="${tag#tour-v}" ;;
             *) echo "Unrecognized package tag: $tag" >&2; exit 1 ;;
           esac
           pkgver=$(node -p "require('./$dir/package.json').version")
@@ -156,11 +159,11 @@ jobs:
           consumer="$(mktemp -d)"
           cd "$consumer"
           npm init -y >/dev/null
-          # All four tarballs in one install so `create-daintree-plugin`'s
+          # Every tarball in one install so `create-daintree-plugin`'s
           # dependency on `daintree-plugin` resolves to the sibling tarball, not
           # the registry (where it may not exist yet). Peers are installed
           # explicitly so every entry point can actually be imported.
-          npm install --no-audit --no-fund "$tarballs"/*.tgz react@19 react-dom@19 zod@4 vite@8 >/dev/null
+          npm install --no-audit --no-fund "$tarballs"/*.tgz react@19 react-dom@19 zod@4 vite@8 lucide-react@1 >/dev/null
           node --input-type=module -e "
             const sdk = await import('@daintreehq/plugin-sdk');
             if (typeof sdk.PLUGIN_STYLE_ROOT_ATTRIBUTE !== 'string') throw new Error('sdk: PLUGIN_STYLE_ROOT_ATTRIBUTE missing');
@@ -171,6 +174,14 @@ jobs:
             if (typeof testing.createMockHost !== 'function') throw new Error('sdk/testing: createMockHost missing');
             const vite = await import('@daintreehq/plugin-vite');
             if (typeof vite.daintreePlugin !== 'function') throw new Error('plugin-vite: daintreePlugin missing');
+            const tour = await import('@daintreehq/tour');
+            if (typeof tour.TourPlayer !== 'function') throw new Error('tour: TourPlayer missing');
+            const tourReact = await import('@daintreehq/tour/react');
+            if (typeof tourReact.useCue !== 'function') throw new Error('tour/react: useCue missing');
+            const kit = await import('@daintreehq/tour/kit');
+            if (typeof kit.MockCursor !== 'function') throw new Error('tour/kit: MockCursor missing');
+            const mockApp = await import('@daintreehq/tour/mock-app');
+            if (typeof mockApp.MockApp !== 'function') throw new Error('tour/mock-app: MockApp missing');
             console.log('entry points import ok');
           "
           # Through `.bin`, so the `bin` mapping, the shebang and the executable
@@ -182,10 +193,10 @@ jobs:
           echo "tarball smoke install ok"
 
       # Publish in dependency order: plugin-sdk first (others peer/depend on it),
-      # then the vite preset and the CLIs. Each publish is guarded by a
-      # version-existence check so re-running after a partial failure skips
-      # already-published versions instead of erroring on EPUBLISHCONFLICT and
-      # blocking the remaining packages.
+      # then the vite preset and the CLIs, and the standalone tour engine last.
+      # Each publish is guarded by a version-existence check so re-running after
+      # a partial failure skips already-published versions instead of erroring
+      # on EPUBLISHCONFLICT and blocking the remaining packages.
       - name: Publish to npm
         if: ${{ github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.dry_run == false) }}
         run: |

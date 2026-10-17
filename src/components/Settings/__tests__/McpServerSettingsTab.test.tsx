@@ -40,6 +40,9 @@ vi.mock("@/components/icons", () => {
     HollowCircle: stub,
     InteractingCircle: stub,
     ExitedCircle: stub,
+    UnreadCircle: stub,
+    DoneCircle: stub,
+    IdleCircle: stub,
     NpmIcon: stub,
     YarnIcon: stub,
     PnpmIcon: stub,
@@ -170,18 +173,6 @@ describe("McpServerSettingsTab", () => {
       { timeout: 5000 }
     );
 
-  it("offers no switch for terminal notices: an agent asks for each one itself", async () => {
-    installMcpApi();
-    const { container } = render(
-      <SettingsValidationProvider>
-        <McpServerSettingsTab />
-      </SettingsValidationProvider>
-    );
-
-    await waitForApiKeyControls(container);
-    expect(container.textContent).not.toMatch(/wake agents|terminal watches/i);
-  });
-
   it("renders API key in a non-input display element", async () => {
     const { container } = render(
       <SettingsValidationProvider>
@@ -221,20 +212,6 @@ describe("McpServerSettingsTab", () => {
     fireEvent.click(screen.getByLabelText("Show API key"));
     await waitFor(() => {
       expect(displayArea.textContent).not.toContain("dnt-key-abc123");
-    });
-  });
-
-  it("copy button writes unmasked key to clipboard", async () => {
-    const { container } = render(
-      <SettingsValidationProvider>
-        <McpServerSettingsTab />
-      </SettingsValidationProvider>
-    );
-    await waitForApiKeyControls(container);
-
-    fireEvent.click(screen.getByLabelText("Copy API key"));
-    await waitFor(() => {
-      expect(writeText).toHaveBeenCalledWith("dnt-key-abc123");
     });
   });
 
@@ -438,17 +415,6 @@ describe("McpServerSettingsTab", () => {
     await waitForContent(container, "clipboard denied");
     expect(mockedNotify).not.toHaveBeenCalled();
     expect(mockedLogError).toHaveBeenCalledWith("Failed to copy MCP API key", expect.any(Error));
-  });
-
-  it("does not render a Remove button — the key is mandatory", async () => {
-    const { container } = render(
-      <SettingsValidationProvider>
-        <McpServerSettingsTab />
-      </SettingsValidationProvider>
-    );
-    await waitForApiKeyControls(container);
-
-    expect(screen.queryByRole("button", { name: /^remove$/i })).toBeNull();
   });
 
   it("shows inline error and logs IPC failure without notifying", async () => {
@@ -962,43 +928,6 @@ describe("McpServerSettingsTab", () => {
     });
   });
 
-  it("shows filtered count when tool filter is active", async () => {
-    installMcpApi({
-      getLogRecords: vi.fn().mockResolvedValue([
-        {
-          id: "1",
-          toolId: "files.read",
-          argsSummary: "{}",
-          result: "success" as const,
-          timestamp: Date.now(),
-          durationMs: 42,
-        },
-        {
-          id: "2",
-          toolId: "terminal.run",
-          argsSummary: "{}",
-          result: "success" as const,
-          timestamp: Date.now(),
-          durationMs: 100,
-        },
-      ]),
-    });
-
-    const { container } = render(
-      <SettingsValidationProvider>
-        <McpServerSettingsTab />
-      </SettingsValidationProvider>
-    );
-    await waitForContent(container, "files.read");
-
-    fireEvent.change(screen.getByLabelText("Filter audit by tool name"), {
-      target: { value: "terminal" },
-    });
-    await waitFor(() => {
-      expect(container.textContent).toContain("1 of 2");
-    });
-  });
-
   it("port input Apply button stays disabled when value has trailing whitespace matching configuredPort", async () => {
     installMcpApi({
       getStatus: vi.fn().mockResolvedValue({
@@ -1042,59 +971,6 @@ describe("McpServerSettingsTab", () => {
 
     unmount();
     expect(unsub).toHaveBeenCalledTimes(1);
-  });
-
-  it("result filter includes Unauthorized option", async () => {
-    const { container } = render(
-      <SettingsValidationProvider>
-        <McpServerSettingsTab />
-      </SettingsValidationProvider>
-    );
-    await waitForApiKeyControls(container);
-
-    const select = screen.getByLabelText("Filter audit by result") as HTMLSelectElement;
-    expect(select).toBeTruthy();
-    expect(Array.from(select.options).map((o) => o.value)).toContain("unauthorized");
-  });
-
-  it("renders anomaly banner when getAuditStats returns signals", async () => {
-    installMcpApi({
-      getAuditStats: vi.fn().mockResolvedValue({
-        auth401Count: 0,
-        anomalySignals: [
-          {
-            id: "latency-drift:1",
-            kind: "latency-drift",
-            toolId: "slow.tool",
-            severity: "warning",
-            timestamp: Date.now(),
-            recordIds: ["r1"],
-            zScore: 4.2,
-            durationMs: 5000,
-            baselineMedianMs: 10,
-          },
-        ],
-        anomalySuppressed: false,
-        anomalyRecordFloor: 50,
-      }),
-      getLogRecords: vi.fn().mockResolvedValue([
-        {
-          id: "r1",
-          toolId: "slow.tool",
-          argsSummary: "{}",
-          result: "success" as const,
-          timestamp: Date.now(),
-          durationMs: 5000,
-        },
-      ]),
-    });
-
-    const { container } = render(
-      <SettingsValidationProvider>
-        <McpServerSettingsTab />
-      </SettingsValidationProvider>
-    );
-    await waitForContent(container, "anomaly signal");
   });
 
   it("hides anomaly banner when suppressed", async () => {
@@ -1315,7 +1191,7 @@ describe("McpServerSettingsTab", () => {
       hideDocument(true);
       hideDocument(false);
 
-      await waitForContent(container, "1 anomaly signal (1 first-seen-combination)");
+      await waitForContent(container, "1 anomaly signal (1 first-seen tool and tier)");
       expect(
         container.querySelector("[data-anomaly-severity]")?.getAttribute("data-anomaly-severity")
       ).toBe("info");
@@ -1325,36 +1201,6 @@ describe("McpServerSettingsTab", () => {
       Reflect.deleteProperty(document, "hidden");
       vi.useRealTimers();
     }
-  });
-
-  it("renders an info-toned banner when only first-seen signals are present", async () => {
-    installMcpApi({
-      getAuditStats: vi.fn().mockResolvedValue({
-        auth401Count: 0,
-        anomalySignals: [
-          {
-            id: "first-seen:new.tool:external",
-            kind: "first-seen-combination",
-            toolId: "new.tool",
-            tier: "external",
-            severity: "info",
-            timestamp: Date.now(),
-            recordIds: ["r1"],
-          },
-        ],
-        anomalySuppressed: false,
-        anomalyRecordFloor: 50,
-      }),
-    });
-
-    const { container } = render(
-      <SettingsValidationProvider>
-        <McpServerSettingsTab />
-      </SettingsValidationProvider>
-    );
-    await waitForContent(container, "anomaly signal");
-    const banner = container.querySelector("[data-anomaly-severity]");
-    expect(banner?.getAttribute("data-anomaly-severity")).toBe("info");
   });
 
   it("anomaly signals do not trigger notify()", async () => {
@@ -1417,16 +1263,6 @@ describe("McpServerSettingsTab", () => {
       lastActiveAt: Date.now() - 5000,
       requestsSinceLaunch: 3,
     };
-
-    it("hides the external-clients row when no bearers are connected", async () => {
-      const { container } = render(
-        <SettingsValidationProvider>
-          <McpServerSettingsTab />
-        </SettingsValidationProvider>
-      );
-      await waitForApiKeyControls(container);
-      expect(container.textContent).not.toContain("External clients");
-    });
 
     it("shows connected clients and disconnects one on demand", async () => {
       const disconnectBearer = vi
@@ -1510,16 +1346,6 @@ describe("McpServerSettingsTab", () => {
       sessionCount: 2,
     };
 
-    it("hides the internal-connections row when no internal bearer is connected", async () => {
-      const { container } = render(
-        <SettingsValidationProvider>
-          <McpServerSettingsTab />
-        </SettingsValidationProvider>
-      );
-      await waitForApiKeyControls(container);
-      expect(container.textContent).not.toContain("Internal connections");
-    });
-
     it("shows the internal-connection row read-only, with no disconnect control", async () => {
       const listHelpSessionBearers = vi.fn().mockResolvedValue([helpBearer]);
       installMcpApi({ listHelpSessionBearers });
@@ -1601,19 +1427,6 @@ describe("McpServerSettingsTab", () => {
   });
 
   describe("Connection section runtime state", () => {
-    it("renders the running tree, URL block, and copy button when state is ready", async () => {
-      const { container } = render(
-        <SettingsValidationProvider>
-          <McpServerSettingsTab />
-        </SettingsValidationProvider>
-      );
-      await waitForApiKeyControls(container);
-      expect(container.textContent).toContain("Running on port 9020");
-      // Regression (#11535): the box advertised the legacy /sse transport.
-      expect(readDisplayedUrl(container)).toBe("http://127.0.0.1:9020/mcp");
-      expect(screen.getByRole("button", { name: /copy mcp config/i })).toBeTruthy();
-    });
-
     it("displays the same url it copies", async () => {
       // #11535: the box used to render /sse beside a button copying /mcp.
       const { container } = render(

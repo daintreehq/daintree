@@ -47,6 +47,22 @@
       "import": "./dist/testing.js",
       "default": "./dist/testing.js"
     },
+    "./testing/preview": {
+      "types": "./dist/testing-preview.d.ts",
+      "import": "./dist/testing-preview.js",
+      "default": "./dist/testing-preview.js"
+    },
+    "./testing/playwright": {
+      "types": "./dist/testing-playwright.d.ts",
+      "import": "./dist/testing-playwright.js",
+      "default": "./dist/testing-playwright.js"
+    },
+    "./testing/plugin-ui": {
+      "types": "./testing-plugin-ui.d.ts",
+      "import": "./browser/plugin-ui.js",
+      "default": "./browser/plugin-ui.js"
+    },
+    "./testing/preview.css": "./browser/preview.css",
     "./plugin-ui": {
       "types": "./plugin-ui.d.ts"
     },
@@ -56,10 +72,14 @@
   },
   "files": [
     "dist",
+    "browser",
     "plugin-ui.d.ts",
+    "testing-plugin-ui.d.ts",
     "view-globals.d.ts"
   ],
-  "sideEffects": false,
+  "sideEffects": [
+    "*.css"
+  ],
   "engines": {
     "node": ">=22.13"
   },
@@ -67,25 +87,48 @@
     "access": "public"
   },
   "scripts": {
-    "build": "node -e \"fs.rmSync('dist',{recursive:true,force:true})\" && tsup",
+    "build": "node -e \"fs.rmSync('dist',{recursive:true,force:true})\" && tsup && npm run build:browser",
     "typecheck": "tsc --noEmit -p tsconfig.json",
-    "prepare": "node -e \"fs.rmSync('dist',{recursive:true,force:true})\" && tsup"
+    "prepare": "node -e \"fs.rmSync('dist',{recursive:true,force:true})\" && tsup",
+    "build:browser": "node ../../scripts/build-plugin-ui-browser.mjs",
+    "prepack": "npm run build:browser"
   },
   "dependencies": {
     "yaml": "^2.9.1"
   },
   "peerDependencies": {
+    "@playwright/test": "^1.63.0",
+    "esbuild": "^0.28.0",
     "react": "^19.0.0",
+    "react-dom": "^19.0.0",
+    "tailwindcss": "^4.3.0",
     "zod": "^4.0.0"
   },
   "peerDependenciesMeta": {
+    "@playwright/test": {
+      "optional": true
+    },
+    "esbuild": {
+      "optional": true
+    },
     "react": {
+      "optional": true
+    },
+    "react-dom": {
+      "optional": true
+    },
+    "tailwindcss": {
       "optional": true
     }
   },
   "devDependencies": {
+    "@playwright/test": "^1.63.0",
     "@types/react": "^19.3.0",
+    "@types/react-dom": "^19.3.0",
+    "esbuild": "^0.28.2",
     "react": "^19.3.0",
+    "react-dom": "^19.3.0",
+    "tailwindcss": "4.3.3",
     "tsup": "^8.5.1",
     "zod": "^4.6.5"
   }

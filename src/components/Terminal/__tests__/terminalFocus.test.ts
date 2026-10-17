@@ -1,8 +1,10 @@
 import { describe, it, expect } from "vitest";
 import {
+  getTerminalClickTarget,
   getTerminalFocusTarget,
   isLikelyAtSynthesizedPointer,
   resolvePaneFocusAction,
+  shouldRecordXtermFocusPreference,
   shouldShowHybridInputBar,
   shouldSuppressUnfocusedClick,
 } from "../terminalFocus";
@@ -226,6 +228,55 @@ describe("shouldSuppressUnfocusedClick", () => {
   });
 });
 
+describe("getTerminalClickTarget", () => {
+  const remembersBar = {
+    preferredTarget: "hybridInput",
+    hasHybridInputSurface: true,
+    isInputDisabled: false,
+    hybridInputEnabled: true,
+  } as const;
+
+  it("sends the activation click on an unfocused grid pane to the target it remembers", () => {
+    expect(getTerminalClickTarget({ location: "grid", isFocused: false, ...remembersBar })).toBe(
+      "hybridInput"
+    );
+    expect(
+      getTerminalClickTarget({
+        location: "grid",
+        isFocused: false,
+        ...remembersBar,
+        preferredTarget: "xterm",
+      })
+    ).toBe("xterm");
+  });
+
+  it("sends that click to xterm when the remembered bar can't take the keyboard", () => {
+    expect(
+      getTerminalClickTarget({
+        location: "grid",
+        isFocused: false,
+        ...remembersBar,
+        isInputDisabled: true,
+      })
+    ).toBe("xterm");
+    expect(
+      getTerminalClickTarget({
+        location: "grid",
+        isFocused: false,
+        ...remembersBar,
+        hasHybridInputSurface: false,
+      })
+    ).toBe("xterm");
+  });
+
+  it.each([
+    ["an already focused grid pane", "grid", true],
+    ["a docked pane", "dock", false],
+  ])("lets a click on %s reach xterm whatever it remembers", (_, location, isFocused) => {
+    expect(getTerminalClickTarget({ location, isFocused, ...remembersBar })).toBe("xterm");
+  });
+});
+
 describe("isLikelyAtSynthesizedPointer", () => {
   it("treats a pointerdown with no recorded move as AT-synthesized", () => {
     expect(isLikelyAtSynthesizedPointer(null, 1000)).toBe(true);
@@ -246,5 +297,38 @@ describe("isLikelyAtSynthesizedPointer", () => {
   it("honors a custom threshold", () => {
     expect(isLikelyAtSynthesizedPointer(1000, 1030, 20)).toBe(true);
     expect(isLikelyAtSynthesizedPointer(1000, 1010, 20)).toBe(false);
+  });
+});
+
+describe("recording the xterm focus preference on pointerdown", () => {
+  // Only a click that actually reaches xterm is an explicit "I want the
+  // terminal" gesture. Inputs are derived through the production classifiers
+  // rather than passed as bare booleans, so these cases exercise the real
+  // composition the pane handler performs.
+  const classify = (options: { location: string; isFocused: boolean; lastMoveAt: number | null }) =>
+    shouldRecordXtermFocusPreference({
+      isAtSynthesized: isLikelyAtSynthesizedPointer(options.lastMoveAt, 1000),
+      shouldSuppress: shouldSuppressUnfocusedClick({
+        location: options.location,
+        isFocused: options.isFocused,
+        isCursorPointer: false,
+        isShiftKey: false,
+      }),
+    });
+
+  it("records for a physical click on an already-focused pane — the click reaches xterm", () => {
+    expect(classify({ location: "grid", isFocused: true, lastMoveAt: 990 })).toBe(true);
+  });
+
+  it("preserves the remembered target when the same physical click activates an unfocused pane", () => {
+    // Identical gesture to the case above; only the pane's focus state differs,
+    // which makes the click suppressed and therefore never seen by xterm.
+    expect(classify({ location: "grid", isFocused: false, lastMoveAt: 990 })).toBe(false);
+  });
+
+  it("preserves the remembered target for AT cursor routing that does reach xterm", () => {
+    // Pass-through click (already focused), but with no preceding pointermove:
+    // a screen reader reading terminal output must not switch the user's mode.
+    expect(classify({ location: "grid", isFocused: true, lastMoveAt: null })).toBe(false);
   });
 });

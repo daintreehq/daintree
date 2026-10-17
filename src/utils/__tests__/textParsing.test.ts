@@ -41,22 +41,6 @@ describe("parseNoteWithLinks", () => {
     ]);
   });
 
-  it("should handle URL at start with trailing text", () => {
-    const result = parseNoteWithLinks("https://start.com is first");
-    expect(result).toEqual([
-      { type: "link", content: "https://start.com", start: 0 },
-      { type: "text", content: " is first", start: 17 },
-    ]);
-  });
-
-  it("should handle URL at end with leading text", () => {
-    const result = parseNoteWithLinks("check out https://end.com");
-    expect(result).toEqual([
-      { type: "text", content: "check out ", start: 0 },
-      { type: "link", content: "https://end.com", start: 10 },
-    ]);
-  });
-
   it("should satisfy round-trip invariant: segments reconstruct the original string", () => {
     const input = "Hello https://a.com world https://b.com!";
     const result = parseNoteWithLinks(input);

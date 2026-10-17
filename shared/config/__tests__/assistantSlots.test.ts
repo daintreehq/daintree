@@ -14,17 +14,31 @@ import {
 const HASH = "0123456789abcdef";
 
 describe("assistantSlots", () => {
-  it("gives every lane of a project the same session directory", () => {
+  it("gives every lane of a project on one agent the same session directory", () => {
     // One folder per project is what makes the agent's per-folder trust and
     // `.mcp.json` approval prompts fire once per project rather than per lane.
     expect(assistantSessionDirName(HASH)).toBe(HASH);
+    expect(assistantSessionDirName(HASH, null)).toBe(HASH);
+    // Another agent's lanes get a directory of their own beside it.
+    expect(assistantSessionDirName(HASH, "codex")).not.toBe(HASH);
+    expect(isAssistantSessionDirName(assistantSessionDirName(HASH, "codex"), HASH.length)).toBe(
+      true
+    );
   });
 
-  it("recognises only the bare project hash as a live session directory", () => {
+  it("recognises the project hash, bare or agent-qualified, as a live session directory", () => {
     // Load-bearing for GC, which deletes whatever this rejects. The two legacy
     // shapes — per-launch UUIDs and the `-sN` per-lane directories — must be
     // rejected so they are collected, and nothing else may be accepted.
     expect(isAssistantSessionDirName(HASH, HASH.length)).toBe(true);
+    expect(isAssistantSessionDirName(`${HASH}.codex`, HASH.length)).toBe(true);
+    expect(isAssistantSessionDirName(`${HASH}.my-agent-2`, HASH.length)).toBe(true);
+    expect(isAssistantSessionDirName(`${HASH}.s1`, HASH.length)).toBe(true);
+    expect(isAssistantSessionDirName(`${HASH}.Codex`, HASH.length)).toBe(false);
+    expect(isAssistantSessionDirName(`${HASH}.`, HASH.length)).toBe(false);
+    expect(isAssistantSessionDirName(`${HASH}.-codex`, HASH.length)).toBe(false);
+    expect(isAssistantSessionDirName(`${HASH}.codex.extra`, HASH.length)).toBe(false);
+    expect(isAssistantSessionDirName(`${HASH}.${"a".repeat(33)}`, HASH.length)).toBe(false);
     expect(isAssistantSessionDirName(`${HASH}-s1`, HASH.length)).toBe(false);
     expect(isAssistantSessionDirName(`${HASH}-s0`, HASH.length)).toBe(false);
     expect(isAssistantSessionDirName("3f2504e0-4f89-11d3-9a0c-0305e82c3301", HASH.length)).toBe(

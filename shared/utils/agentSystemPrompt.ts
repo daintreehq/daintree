@@ -1,5 +1,5 @@
 import { getEffectiveAgentConfig } from "../config/agentRegistry.js";
-import { isWindows } from "./shellEscape.js";
+import { agentCommandDialect } from "./shellEscape.js";
 
 /**
  * Longest standing instruction `agent.launch` accepts (#12431). The text lands
@@ -68,7 +68,7 @@ export function normalizeSystemPrompt(text: string | undefined): string | undefi
 export function resolveSystemPromptArgs(
   agentId: string,
   systemPrompt: string | undefined,
-  platform: "windows" | "posix" = isWindows() ? "windows" : "posix"
+  platform: "windows" | "posix" = agentCommandDialect()
 ): SystemPromptArgsResult {
   const normalized = normalizeSystemPrompt(systemPrompt);
   if (!normalized) return { ok: true, args: [] };

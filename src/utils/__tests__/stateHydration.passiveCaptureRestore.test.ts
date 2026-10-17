@@ -4,7 +4,7 @@ import fsp from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { getAgentConfig } from "@shared/config/agentRegistry";
-import { escapeShellArgOptional } from "@shared/utils/shellEscape";
+import { quoteLaunchArgOptional } from "@shared/utils/shellEscape";
 
 /**
  * #12433 end to end: a passive exit capture persisted by Main's real writeback,
@@ -123,16 +123,8 @@ interface ElectronSide {
 }
 
 async function loadElectronSide(): Promise<ElectronSide> {
-  const root = "../../../electron/services/";
-  const load = (file: string) => import(/* @vite-ignore */ `${root}${file}`);
-  const [manager, paths, ledger, persistence] = await Promise.all([
-    load("ProjectStateManager.js"),
-    load("projectStorePaths.js"),
-    load("pty/lifecycleLedger.js"),
-    load("pty/agentSessionCapturePersistence.js"),
-  ]);
-  const side: ElectronSide = Object.assign({}, manager, paths, ledger, persistence);
-  return side;
+  const harness = "../../../electron/services/pty/__tests__/passiveCaptureRestoreHarness.ts";
+  return import(/* @vite-ignore */ harness);
 }
 
 const SESSION_ID = "019a0000-0000-7000-8000-0000000012c3";
@@ -262,10 +254,9 @@ describe("passive exit capture → cold restore (#12433)", () => {
       // An exact id per pane, not "most recent in this folder".
       const args = byPane.get(paneId);
       expect(args?.agentSessionId).toBe(sessionId);
-      // Quoted the way the command builder quotes positional values (`-C '.'`).
-      const resumeArgs = resume
-        .args(sessionId)
-        .map((arg) => (arg.startsWith("-") ? arg : escapeShellArgOptional(arg)));
+      // Quoted the way the command builder quotes positional values: `-C '.'`,
+      // a PowerShell literal on Windows as much as a POSIX one elsewhere.
+      const resumeArgs = resume.args(sessionId).map((arg) => quoteLaunchArgOptional(arg));
       expect(args?.command).toContain(resumeArgs.join(" "));
     }
   });

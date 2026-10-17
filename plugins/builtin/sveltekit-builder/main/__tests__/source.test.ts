@@ -341,7 +341,11 @@ describe("sourceChanged", () => {
     );
 
     const external = `${source}\n<!-- agent -->\n`;
-    await fs.writeFile(sandbox.file(NATIVE), external);
+    // Publish one complete save, so background reconciliation cannot observe
+    // writeFile's intermediate truncation as a separate external revision.
+    const temporary = `${sandbox.file(NATIVE)}.tmp`;
+    await fs.writeFile(temporary, external);
+    await fs.rename(temporary, sandbox.file(NATIVE));
     fire();
     await vi.waitFor(
       () =>

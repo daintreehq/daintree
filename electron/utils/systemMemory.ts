@@ -115,8 +115,11 @@ function darwinComponentMb(kb: unknown, mustBePositive: boolean): number | null 
 
 /**
  * `availableMb` is free memory plus, on Darwin, what Activity Monitor calls
- * Cached Files: `fileBacked` + `purgeable`, which Electron reports only there,
- * so Windows and Linux read `free` alone. That is the line macOS itself draws
+ * Cached Files: `fileBacked` + `purgeable`, which Electron reports only there.
+ * On Linux it is the kernel's own MemAvailable, which Electron reports as
+ * `available`: `free` there is MemFree, which leaves out the page cache the
+ * kernel hands back on demand — 3.3 GB beside 11.9 GB available on a 16 GB
+ * machine after a build, the same misread as #12363. Windows reads `free` alone. That is the line macOS itself draws
  * between reclaimable memory and Memory Used (app + wired + compressed).
  *
  * On a large Mac the file cache is most of it: a 64 GB machine with a warm
@@ -156,6 +159,7 @@ export function readSystemMemorySnapshot(): SystemMemorySnapshot | null {
       process as {
         getSystemMemoryInfo?: () => {
           free: number;
+          available?: number;
           purgeable?: number;
           fileBacked?: number;
           total: number;
@@ -164,6 +168,18 @@ export function readSystemMemorySnapshot(): SystemMemorySnapshot | null {
     ).getSystemMemoryInfo;
     if (typeof getInfo !== "function") return null;
     const info = getInfo.call(process);
+    if (process.platform === "linux" && info.available !== undefined) {
+      // Same rule as `free` below: a malformed figure is no signal, not zero.
+      if (!isNonNegativeFinite(info.available) || info.available <= 0) return null;
+      if (!isNonNegativeFinite(info.free)) return null;
+      return {
+        totalMb,
+        freeMb: info.free / 1024,
+        purgeableMb: 0,
+        fileBackedMb: 0,
+        availableMb: info.available / 1024,
+      };
+    }
     // Reject a missing or malformed `free` outright rather than coercing it to
     // 0: a negative reading paired with a plausible `purgeable` would otherwise
     // sum back into a healthy-looking figure.

@@ -1,0 +1,306 @@
+// @vitest-environment jsdom
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import type { ButtonHTMLAttributes, ReactNode } from "react";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+
+vi.mock("@/components/ui/button", () => ({
+  Button: ({ children, ...props }: ButtonHTMLAttributes<HTMLButtonElement>) => (
+    <button type="button" {...props}>
+      {children}
+    </button>
+  ),
+}));
+vi.mock("@/components/ui/AppDialog", () => {
+  const AppDialog = ({ isOpen, children }: { isOpen: boolean; children: ReactNode }) =>
+    isOpen ? <div>{children}</div> : null;
+  AppDialog.Header = ({ children }: { children: ReactNode }) => <div>{children}</div>;
+  AppDialog.Title = ({ children }: { children: ReactNode }) => <h2>{children}</h2>;
+  AppDialog.CloseButton = () => null;
+  AppDialog.Footer = ({ children, hint }: { children: ReactNode; hint?: ReactNode }) => (
+    <div>
+      {hint}
+      {children}
+    </div>
+  );
+  return { AppDialog };
+});
+const pickHostPaths = vi.fn<(request: unknown) => Promise<string[] | null>>();
+vi.mock("@/components/HostFilePicker/hostFilePickerQueue", () => ({
+  pickHostPaths: (request: unknown) => pickHostPaths(request),
+}));
+
+import { HostAddProjectDialog } from "../HostAddProjectDialog";
+
+const URL = "git@github.com:daintreehq/api.git";
+const execute = vi.fn();
+const suggestCloneDestination = vi.fn(async () => ({
+  path: "/home/greg/Projects/api",
+  status: "free" as const,
+  detail: null,
+  suggestion: null,
+}));
+const checkDestination = vi.fn(async ({ path }: { path: string }) => ({
+  path,
+  status: "free" as const,
+  detail: null,
+  suggestion: null,
+}));
+
+beforeEach(() => {
+  execute.mockReset();
+  pickHostPaths.mockReset();
+  suggestCloneDestination.mockClear();
+  checkDestination.mockClear();
+  Object.assign(window, {
+    electron: {
+      hostSwitch: {
+        execute,
+        suggestCloneDestination,
+        checkDestination,
+        status: vi.fn(async () => ({ state: "running" })),
+        cancel: vi.fn(async () => true),
+      },
+    },
+  });
+});
+
+function renderDialog(onOpened = vi.fn()) {
+  render(
+    <HostAddProjectDialog
+      hostId="studio-01"
+      hostName="studio-01"
+      onClose={() => {}}
+      onOpened={onOpened}
+    />
+  );
+  return onOpened;
+}
+
+describe("HostAddProjectDialog", () => {
+  it("clones a URL onto that host into the folder the host suggests, then opens it", async () => {
+    execute.mockResolvedValue({
+      kind: "opened",
+      hostId: "studio-01",
+      projectId: "host-api",
+      projectPath: "/home/greg/Projects/api",
+      projectName: "api",
+      worktreePath: null,
+      canCheckOutBranch: false,
+      branchNote: null,
+      setupRecipeId: null,
+    });
+    const onOpened = renderDialog();
+    const clone = screen.getByRole("button", { name: "Clone and open" }) as HTMLButtonElement;
+    expect(clone.getAttribute("aria-disabled")).toBe("true");
+    fireEvent.change(
+      screen.getByRole("textbox", { name: "Repository URL to clone on studio-01" }),
+      {
+        target: { value: URL },
+      }
+    );
+    const folder = screen.getByRole("textbox", { name: "Folder on studio-01" }) as HTMLInputElement;
+    await waitFor(() => expect(folder.value).toBe("/home/greg/Projects/api"));
+    expect(suggestCloneDestination).toHaveBeenCalledWith({ toHostId: "studio-01", url: URL });
+    await waitFor(() => expect(clone.getAttribute("aria-disabled")).toBeNull());
+    fireEvent.click(clone);
+    await waitFor(() => expect(onOpened).toHaveBeenCalled());
+    expect(execute.mock.calls[0]![0]).toMatchObject({
+      kind: "clone-url",
+      toHostId: "studio-01",
+      url: URL,
+      destination: "/home/greg/Projects/api",
+      options: { submodules: false, depth: "full" },
+    });
+    expect(typeof execute.mock.calls[0]![0].opId).toBe("string");
+  });
+
+  it("picks the folder on that host and names the host when its clone fails", async () => {
+    pickHostPaths.mockResolvedValue(["/data"]);
+    execute.mockResolvedValue({
+      kind: "git-failed",
+      step: "clone",
+      hostId: "studio-01",
+      reason: "auth-failed",
+      message: "Permission denied (publickey).",
+    });
+    const onOpened = renderDialog();
+    fireEvent.change(
+      screen.getByRole("textbox", { name: "Repository URL to clone on studio-01" }),
+      {
+        target: { value: URL },
+      }
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Choose a folder on studio-01" }));
+    const folder = screen.getByRole("textbox", { name: "Folder on studio-01" }) as HTMLInputElement;
+    await waitFor(() => expect(folder.value).toBe("/data/api"));
+    expect(pickHostPaths.mock.calls[0]![0]).toMatchObject({
+      hostId: "studio-01",
+      mode: "directory",
+    });
+    const clone = screen.getByRole("button", { name: "Clone and open" }) as HTMLButtonElement;
+    await waitFor(() => expect(clone.getAttribute("aria-disabled")).toBeNull());
+    expect(checkDestination).toHaveBeenCalledWith({
+      toHostId: "studio-01",
+      path: "/data/api",
+      remoteUrls: [URL],
+    });
+    fireEvent.click(clone);
+    const alert = await screen.findByRole("alert");
+    expect(alert.textContent).toContain(`studio-01 couldn't clone ${URL}`);
+    expect(alert.textContent).toContain("Permission denied (publickey).");
+    expect(onOpened).not.toHaveBeenCalled();
+  });
+
+  it("never clones a new URL into the folder checked for the previous one", async () => {
+    renderDialog();
+    const urlField = screen.getByRole("textbox", { name: "Repository URL to clone on studio-01" });
+    fireEvent.change(urlField, { target: { value: URL } });
+    const clone = screen.getByRole("button", { name: "Clone and open" }) as HTMLButtonElement;
+    await waitFor(() => expect(clone.getAttribute("aria-disabled")).toBeNull());
+    fireEvent.change(urlField, { target: { value: "git@github.com:someone/else.git" } });
+    expect(clone.getAttribute("aria-disabled")).toBe("true");
+  });
+
+  it("names the clone's folder after a URL entered once a folder was already chosen", async () => {
+    pickHostPaths.mockResolvedValue(["/data"]);
+    renderDialog();
+    fireEvent.click(screen.getByRole("button", { name: "Choose a folder on studio-01" }));
+    const folder = screen.getByRole("textbox", { name: "Folder on studio-01" }) as HTMLInputElement;
+    await waitFor(() => expect(folder.value).toBe("/data/project"));
+    fireEvent.change(
+      screen.getByRole("textbox", { name: "Repository URL to clone on studio-01" }),
+      { target: { value: URL } }
+    );
+    expect(folder.value).toBe("/data/api");
+    expect(suggestCloneDestination).not.toHaveBeenCalled();
+  });
+
+  it("keeps a typed name through a later Change…, even one that matches the URL's", async () => {
+    pickHostPaths.mockResolvedValue(["/data"]);
+    renderDialog();
+    const urlField = screen.getByRole("textbox", { name: "Repository URL to clone on studio-01" });
+    fireEvent.change(urlField, { target: { value: URL } });
+    const folder = screen.getByRole("textbox", { name: "Folder on studio-01" }) as HTMLInputElement;
+    await waitFor(() => expect(folder.value).toBe("/home/greg/Projects/api"));
+    // Typed by hand, ending on the URL's own name.
+    fireEvent.change(folder, { target: { value: "/home/greg/Projects/ap" } });
+    fireEvent.change(folder, { target: { value: "/home/greg/Projects/api" } });
+    fireEvent.click(screen.getByRole("button", { name: "Choose a folder on studio-01" }));
+    await waitFor(() => expect(folder.value).toBe("/data/api"));
+    fireEvent.change(urlField, { target: { value: "git@github.com:daintreehq/web.git" } });
+    expect(folder.value).toBe("/data/api");
+  });
+
+  it("keeps a folder name the person typed when the URL changes", async () => {
+    pickHostPaths.mockResolvedValue(["/data"]);
+    renderDialog();
+    fireEvent.click(screen.getByRole("button", { name: "Choose a folder on studio-01" }));
+    const folder = screen.getByRole("textbox", { name: "Folder on studio-01" }) as HTMLInputElement;
+    await waitFor(() => expect(folder.value).toBe("/data/project"));
+    fireEvent.change(folder, { target: { value: "/data/mine" } });
+    fireEvent.change(
+      screen.getByRole("textbox", { name: "Repository URL to clone on studio-01" }),
+      { target: { value: URL } }
+    );
+    expect(folder.value).toBe("/data/mine");
+  });
+
+  it("states a refused request plainly, without the wire prefix, and clears it once the URL changes", async () => {
+    execute.mockRejectedValue(
+      new Error(
+        "[AppError|VALIDATION|Only%20HTTP(S)%20and%20SSH%20remotes%20can%20be%20cloned] Only HTTP(S) and SSH remotes can be cloned"
+      )
+    );
+    renderDialog();
+    const urlField = screen.getByRole("textbox", { name: "Repository URL to clone on studio-01" });
+    fireEvent.change(urlField, { target: { value: URL } });
+    const clone = screen.getByRole("button", { name: "Clone and open" }) as HTMLButtonElement;
+    await waitFor(() => expect(clone.getAttribute("aria-disabled")).toBeNull());
+    fireEvent.click(clone);
+    const alert = await screen.findByRole("alert");
+    expect(alert.textContent).toContain("studio-01 can't clone this");
+    expect(alert.textContent).toContain("Only HTTP(S) and SSH remotes can be cloned");
+    expect(alert.textContent).not.toContain("[AppError");
+    expect(alert.textContent).not.toContain("didn't finish");
+    fireEvent.change(urlField, { target: { value: `${URL}x` } });
+    expect(screen.queryByRole("alert")).toBeNull();
+  });
+
+  it("opens a repository already on the host, picked there, without cloning anything", async () => {
+    const opened = {
+      kind: "opened",
+      hostId: "studio-01",
+      projectId: "host-notes",
+      projectPath: "/home/greg/notes",
+      projectName: "notes",
+      worktreePath: null,
+      canCheckOutBranch: false,
+      branchNote: null,
+      setupRecipeId: null,
+    };
+    execute.mockResolvedValue(opened);
+    pickHostPaths.mockResolvedValue(["/home/greg/notes"]);
+    const onOpened = renderDialog();
+    fireEvent.click(screen.getByRole("button", { name: "Open a folder on studio-01" }));
+    await waitFor(() => expect(onOpened).toHaveBeenCalledWith(opened));
+    expect(pickHostPaths).toHaveBeenCalledWith(
+      expect.objectContaining({ mode: "directory", hostId: "studio-01" })
+    );
+    expect(execute).toHaveBeenCalledWith(
+      expect.objectContaining({
+        kind: "open-folder",
+        toHostId: "studio-01",
+        path: "/home/greg/notes",
+      })
+    );
+  });
+
+  it("does nothing when the folder picker is dismissed, and states a folder the host refuses", async () => {
+    pickHostPaths.mockResolvedValueOnce(null);
+    const onOpened = renderDialog();
+    const open = screen.getByRole("button", { name: "Open a folder on studio-01" });
+    fireEvent.click(open);
+    await waitFor(() => expect(pickHostPaths).toHaveBeenCalledTimes(1));
+    expect(execute).not.toHaveBeenCalled();
+
+    pickHostPaths.mockResolvedValueOnce(["/home/greg/plain"]);
+    execute.mockRejectedValue(
+      new Error(
+        "[AppError|VALIDATION|That%20folder%20isn't%20a%20git%20repository's%20main%20folder.] That folder isn't a git repository's main folder."
+      )
+    );
+    fireEvent.click(open);
+    const alert = await screen.findByRole("alert");
+    expect(alert.textContent).toContain("studio-01 can't open this folder");
+    expect(alert.textContent).toContain("That folder isn't a git repository's main folder.");
+    expect(onOpened).not.toHaveBeenCalled();
+  });
+
+  it("says it's opening while the host registers the folder, and Cancel stops waiting for it", async () => {
+    let answer: (value: unknown) => void = () => {};
+    execute.mockImplementation(() => new Promise((resolve) => (answer = resolve)));
+    pickHostPaths.mockResolvedValue(["/home/greg/notes"]);
+    const onOpened = renderDialog();
+    fireEvent.click(screen.getByRole("button", { name: "Open a folder on studio-01" }));
+    expect(await screen.findByText("Opening")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    expect(screen.queryByText("Opening")).toBeNull();
+    answer({
+      kind: "opened",
+      hostId: "studio-01",
+      projectId: "host-notes",
+      projectPath: "/home/greg/notes",
+      projectName: "notes",
+      worktreePath: null,
+      canCheckOutBranch: false,
+      branchNote: null,
+      setupRecipeId: null,
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(onOpened).not.toHaveBeenCalled();
+    expect(
+      (screen.getByRole("button", { name: "Open a folder on studio-01" }) as HTMLButtonElement)
+        .disabled
+    ).toBe(false);
+  });
+});

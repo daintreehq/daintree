@@ -1,11 +1,13 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import {
-  HELP_PANEL_DEFAULT_WIDTH,
-  HELP_PANEL_MAX_WIDTH,
-  HELP_PANEL_MIN_WIDTH,
-} from "../helpPanelStore";
+import { HELP_PANEL_DEFAULT_WIDTH, HELP_PANEL_MAX_WIDTH } from "../helpPanelStore";
 import { assistantSlotKey as slotKey } from "../../../shared/config/assistantSlots";
+
+const agentDefaultsClientMock = vi.hoisted(() => ({
+  set: vi.fn<(patch: Record<string, unknown>) => Promise<Record<string, unknown>>>(),
+}));
+vi.mock("@/clients/agentDefaultsClient", () => ({ agentDefaultsClient: agentDefaultsClientMock }));
+vi.mock("@/utils/logger", () => ({ logError: vi.fn() }));
 
 describe("helpPanelStore persistence migration", () => {
   const STORAGE_KEY = "help-panel-storage";
@@ -42,6 +44,8 @@ describe("helpPanelStore persistence migration", () => {
 
   beforeEach(() => {
     vi.resetModules();
+    agentDefaultsClientMock.set.mockReset();
+    agentDefaultsClientMock.set.mockResolvedValue({});
   });
 
   afterEach(() => {
@@ -50,19 +54,19 @@ describe("helpPanelStore persistence migration", () => {
     vi.restoreAllMocks();
   });
 
-  it("rehydrates a legacy unversioned blob and preserves an assistant-supported preferredAgentId", async () => {
+  it("ignores a persisted preferredAgentId — the assistant agent is the host's (#13345)", async () => {
     const legacyBlob = JSON.stringify({
-      state: {
-        width: 500,
-        preferredAgentId: "claude",
-      },
+      version: 6,
+      state: { width: 500, preferredAgentId: "claude" },
     });
     installLocalStorage({ [STORAGE_KEY]: legacyBlob });
 
     const { useHelpPanelStore: store } = await import("../helpPanelStore");
 
     expect(store.getState().width).toBe(500);
-    expect(store.getState().preferredAgentId).toBe("claude");
+    expect(store.getState().preferredAgentId).toBeNull();
+    expect(store.getState().hostAssistantAgentId).toBeNull();
+    expect(store.getState().droppedPreferredAgentId).toBeNull();
   });
 
   it("clamps out-of-range legacy width via the existing merge callback", async () => {
@@ -79,158 +83,283 @@ describe("helpPanelStore persistence migration", () => {
     expect(store.getState().width).toBe(HELP_PANEL_MAX_WIDTH);
   });
 
-  it("falls back to defaults when nothing is persisted", async () => {
-    installLocalStorage({});
+  describe("host assistant agent mirror (#13345)", () => {
+    const installedOnly =
+      (...installed: string[]) =>
+      () => ({ hasRealData: true, isInstalled: (id: string) => installed.includes(id) });
 
-    const { useHelpPanelStore: store } = await import("../helpPanelStore");
+    it("launches the host's choice when it's a supported agent", async () => {
+      installLocalStorage({});
+      const { useHelpPanelStore: store } = await import("../helpPanelStore");
 
-    expect(store.getState().width).toBe(HELP_PANEL_DEFAULT_WIDTH);
-    expect(store.getState().width).toBeGreaterThanOrEqual(HELP_PANEL_MIN_WIDTH);
-  });
+      store.getState().syncHostAssistantAgent("claude", null);
 
-  it("clears a legacy preferredAgentId for an agent without assistant wiring (issue #6612)", async () => {
-    const legacyBlob = JSON.stringify({
-      state: { width: 420, preferredAgentId: "gemini" },
+      expect(store.getState().preferredAgentId).toBe("claude");
+      expect(store.getState().droppedPreferredAgentId).toBeNull();
     });
-    installLocalStorage({ [STORAGE_KEY]: legacyBlob });
 
-    const { useHelpPanelStore: store } = await import("../helpPanelStore");
+    it("explains a built-in that's no longer an assistant backend (issue #8775)", async () => {
+      installLocalStorage({});
+      const { useHelpPanelStore: store } = await import("../helpPanelStore");
 
-    expect(store.getState().preferredAgentId).toBeNull();
-    expect(store.getState().width).toBe(420);
-  });
+      store.getState().syncHostAssistantAgent("gemini", null);
 
-  it("captures a dropped unsupported preferredAgentId as droppedPreferredAgentId (issue #8775)", async () => {
-    const legacyBlob = JSON.stringify({
-      state: { width: 420, preferredAgentId: "gemini" },
+      expect(store.getState().preferredAgentId).toBeNull();
+      expect(store.getState().droppedPreferredAgentId).toBe("gemini");
+      expect(store.getState().hostAssistantAgentId).toBe("gemini");
     });
-    installLocalStorage({ [STORAGE_KEY]: legacyBlob });
 
-    const { useHelpPanelStore: store } = await import("../helpPanelStore");
+    it("holds back a user-defined agent without a banner until its registry loads (issue #8775)", async () => {
+      installLocalStorage({});
+      const { useHelpPanelStore: store } = await import("../helpPanelStore");
 
-    expect(store.getState().preferredAgentId).toBeNull();
-    expect(store.getState().droppedPreferredAgentId).toBe("gemini");
-  });
+      store.getState().syncHostAssistantAgent("my-custom-agent", null);
 
-  it("leaves droppedPreferredAgentId null when no preference was persisted (issue #8775)", async () => {
-    const legacyBlob = JSON.stringify({
-      state: { width: 420, preferredAgentId: null },
+      expect(store.getState().preferredAgentId).toBeNull();
+      expect(store.getState().droppedPreferredAgentId).toBeNull();
     });
-    installLocalStorage({ [STORAGE_KEY]: legacyBlob });
 
-    const { useHelpPanelStore: store } = await import("../helpPanelStore");
+    it("drops a choice whose CLI isn't installed on the host, keeping the host's value", async () => {
+      installLocalStorage({});
+      const { useHelpPanelStore: store } = await import("../helpPanelStore");
 
-    expect(store.getState().droppedPreferredAgentId).toBeNull();
-  });
+      store.getState().syncHostAssistantAgent("claude", installedOnly("codex")());
 
-  it("does not flag a non-built-in (user-defined / not-yet-loaded) preferredAgentId as dropped (issue #8775)", async () => {
-    // The user agent registry loads asynchronously after this synchronous
-    // rehydration, so a still-valid user-defined agent must NOT be treated as a
-    // drop or it would false-banner on every restart.
-    const legacyBlob = JSON.stringify({
-      state: { width: 420, preferredAgentId: "my-custom-agent" },
+      expect(store.getState().preferredAgentId).toBeNull();
+      expect(store.getState().droppedPreferredAgentId).toBe("claude");
+      expect(store.getState().hostAssistantAgentId).toBe("claude");
+      expect(agentDefaultsClientMock.set).not.toHaveBeenCalled();
     });
-    installLocalStorage({ [STORAGE_KEY]: legacyBlob });
 
-    const { useHelpPanelStore: store } = await import("../helpPanelStore");
+    it("doesn't count an agent as uninstalled before a real availability probe", async () => {
+      installLocalStorage({});
+      const { useHelpPanelStore: store } = await import("../helpPanelStore");
 
-    expect(store.getState().preferredAgentId).toBeNull();
-    expect(store.getState().droppedPreferredAgentId).toBeNull();
-  });
+      store
+        .getState()
+        .syncHostAssistantAgent("claude", { hasRealData: false, isInstalled: () => false });
 
-  it("setTerminal() clears droppedPreferredAgentId so the banner can't resurface after recovery (issue #8775)", async () => {
-    const legacyBlob = JSON.stringify({
-      state: { width: 420, preferredAgentId: "gemini" },
+      expect(store.getState().preferredAgentId).toBe("claude");
+      expect(store.getState().droppedPreferredAgentId).toBeNull();
     });
-    installLocalStorage({ [STORAGE_KEY]: legacyBlob });
 
-    const { useHelpPanelStore: store } = await import("../helpPanelStore");
-    expect(store.getState().droppedPreferredAgentId).toBe("gemini");
+    it("restores the choice once its CLI is installed", async () => {
+      installLocalStorage({});
+      const { useHelpPanelStore: store } = await import("../helpPanelStore");
 
-    store.getState().setTerminal(0, "term-1", "claude", null);
-    expect(store.getState().droppedPreferredAgentId).toBeNull();
-  });
+      store.getState().syncHostAssistantAgent("claude", installedOnly()());
+      store.getState().syncHostAssistantAgent("claude", installedOnly("claude")());
 
-  it("clearDroppedPreferredAgent() clears the banner state without persisting it (issue #8775)", async () => {
-    const legacyBlob = JSON.stringify({
-      state: { width: 420, preferredAgentId: "gemini" },
+      expect(store.getState().preferredAgentId).toBe("claude");
+      expect(store.getState().droppedPreferredAgentId).toBeNull();
     });
-    const backing = installLocalStorage({ [STORAGE_KEY]: legacyBlob });
 
-    const { useHelpPanelStore: store } = await import("../helpPanelStore");
-    expect(store.getState().droppedPreferredAgentId).toBe("gemini");
+    it("never queues a session switch from a host change", async () => {
+      installLocalStorage({});
+      const { useHelpPanelStore: store } = await import("../helpPanelStore");
 
-    store.getState().clearDroppedPreferredAgent();
-    expect(store.getState().droppedPreferredAgentId).toBeNull();
+      store.getState().syncHostAssistantAgent("claude", null);
+      store.getState().syncHostAssistantAgent("codex", null);
 
-    const written = backing.get(STORAGE_KEY);
-    expect(written).toBeDefined();
-    expect(written!).not.toContain("droppedPreferredAgentId");
-  });
-
-  it("setPreferredAgent() clears droppedPreferredAgentId (issue #8775)", async () => {
-    const legacyBlob = JSON.stringify({
-      state: { width: 420, preferredAgentId: "gemini" },
+      expect(store.getState().agentSwitchRequest).toBeNull();
     });
-    installLocalStorage({ [STORAGE_KEY]: legacyBlob });
 
-    const { useHelpPanelStore: store } = await import("../helpPanelStore");
-    expect(store.getState().droppedPreferredAgentId).toBe("gemini");
+    it("setTerminal() clears the banner so a re-sync can't resurface it after recovery (issue #8775)", async () => {
+      installLocalStorage({});
+      const { useHelpPanelStore: store } = await import("../helpPanelStore");
+      store.getState().syncHostAssistantAgent("gemini", null);
+      expect(store.getState().droppedPreferredAgentId).toBe("gemini");
 
-    store.getState().setPreferredAgent("claude");
-    expect(store.getState().preferredAgentId).toBe("claude");
-    expect(store.getState().droppedPreferredAgentId).toBeNull();
-  });
+      store.getState().setTerminal(0, "term-1", "claude", null);
+      store.getState().syncHostAssistantAgent("gemini", null);
 
-  it("preserves a v0 preferredAgentId when migrating to v1 if the agent is supported", async () => {
-    const v0Blob = JSON.stringify({
-      version: 0,
-      state: { width: 420, preferredAgentId: "claude" },
+      expect(store.getState().droppedPreferredAgentId).toBeNull();
     });
-    installLocalStorage({ [STORAGE_KEY]: v0Blob });
 
-    const { useHelpPanelStore: store } = await import("../helpPanelStore");
+    it("clearDroppedPreferredAgent() dismisses the banner for good, without persisting it (issue #8775)", async () => {
+      vi.useFakeTimers();
+      try {
+        const backing = installLocalStorage({});
+        const { useHelpPanelStore: store } = await import("../helpPanelStore");
+        store.getState().syncHostAssistantAgent("gemini", null);
 
-    expect(store.getState().preferredAgentId).toBe("claude");
-  });
+        store.getState().clearDroppedPreferredAgent();
+        store.getState().syncHostAssistantAgent("gemini", null);
+        vi.advanceTimersByTime(400);
 
-  it("clears a v0 preferredAgentId when migrating to v1 if the agent is unsupported", async () => {
-    const v0Blob = JSON.stringify({
-      version: 0,
-      state: { width: 420, preferredAgentId: "gemini" },
+        expect(store.getState().droppedPreferredAgentId).toBeNull();
+        const written = backing.get(STORAGE_KEY);
+        expect(written).toBeDefined();
+        expect(written!).not.toContain("droppedPreferredAgentId");
+        expect(written!).not.toContain("dismissedDroppedAgentId");
+      } finally {
+        vi.useRealTimers();
+      }
     });
-    installLocalStorage({ [STORAGE_KEY]: v0Blob });
-
-    const { useHelpPanelStore: store } = await import("../helpPanelStore");
-
-    expect(store.getState().preferredAgentId).toBeNull();
   });
 
-  it("writes the current version with a cleared preferredAgentId after rehydrating an unsupported v0 agent", async () => {
+  describe("setPreferredAgent (#8353, #13345)", () => {
+    it("saves the pick on the host, clears the banner and queues a switch for this view", async () => {
+      installLocalStorage({});
+      const { useHelpPanelStore: store } = await import("../helpPanelStore");
+      store.getState().syncHostAssistantAgent("gemini", null);
+
+      store.getState().setPreferredAgent("claude");
+
+      expect(store.getState().preferredAgentId).toBe("claude");
+      expect(store.getState().hostAssistantAgentId).toBe("claude");
+      expect(store.getState().droppedPreferredAgentId).toBeNull();
+      expect(store.getState().agentSwitchRequest).toMatchObject({ agentId: "claude" });
+      await Promise.resolve();
+      await Promise.resolve();
+      expect(agentDefaultsClientMock.set).toHaveBeenCalledWith({ assistantAgentId: "claude" });
+    });
+
+    it("gives every pick its own request, even for the same agent", async () => {
+      installLocalStorage({});
+      const { useHelpPanelStore: store } = await import("../helpPanelStore");
+
+      store.getState().setPreferredAgent("claude");
+      const first = store.getState().agentSwitchRequest!.id;
+      store.getState().setPreferredAgent("claude");
+
+      expect(store.getState().agentSwitchRequest!.id).not.toBe(first);
+    });
+
+    it("queues no switch when the caller launches the pick itself", async () => {
+      installLocalStorage({});
+      const { useHelpPanelStore: store } = await import("../helpPanelStore");
+      store.getState().setPreferredAgent("codex");
+
+      store.getState().setPreferredAgent("claude", { switchSession: false });
+
+      expect(store.getState().agentSwitchRequest).toBeNull();
+    });
+
+    it("clearing the agent drops a pending switch and saves an explicit null", async () => {
+      installLocalStorage({});
+      const { useHelpPanelStore: store } = await import("../helpPanelStore");
+      store.getState().setPreferredAgent("claude");
+
+      store.getState().setPreferredAgent(null);
+      await Promise.resolve();
+      await Promise.resolve();
+
+      expect(store.getState().agentSwitchRequest).toBeNull();
+      expect(agentDefaultsClientMock.set).toHaveBeenLastCalledWith({ assistantAgentId: null });
+    });
+
+    it("rolls a failed save back to the host's value", async () => {
+      installLocalStorage({});
+      const { useHelpPanelStore: store } = await import("../helpPanelStore");
+      store.getState().syncHostAssistantAgent("codex", null);
+      agentDefaultsClientMock.set.mockRejectedValueOnce(new Error("link down"));
+
+      store.getState().setPreferredAgent("claude");
+      for (let i = 0; i < 5; i += 1) await Promise.resolve();
+
+      expect(store.getState().preferredAgentId).toBe("codex");
+      expect(store.getState().hostAssistantAgentId).toBe("codex");
+      expect(store.getState().agentSwitchRequest).toBeNull();
+    });
+
+    it("rolls back to what the host holds, not to an earlier pick that also failed", async () => {
+      installLocalStorage({});
+      const { useHelpPanelStore: store } = await import("../helpPanelStore");
+      store.getState().syncHostAssistantAgent("codex", null);
+      agentDefaultsClientMock.set.mockRejectedValue(new Error("link down"));
+
+      store.getState().setPreferredAgent("claude");
+      store.getState().setPreferredAgent("gemini");
+      for (let i = 0; i < 5; i += 1) await Promise.resolve();
+
+      expect(store.getState().hostAssistantAgentId).toBe("codex");
+      expect(store.getState().preferredAgentId).toBe("codex");
+    });
+
+    it("keeps a value the host confirmed by push even if the save then fails", async () => {
+      installLocalStorage({});
+      const { useHelpPanelStore: store } = await import("../helpPanelStore");
+      store.getState().syncHostAssistantAgent("codex", null);
+      let rejectSave: (error: Error) => void = () => {};
+      agentDefaultsClientMock.set.mockReturnValueOnce(
+        new Promise((_resolve, reject) => (rejectSave = reject))
+      );
+
+      store.getState().setPreferredAgent("claude");
+      await Promise.resolve();
+      // Another window's identical pick reaches the host first.
+      store.getState().syncHostAssistantAgent("claude", null);
+      rejectSave(new Error("link down"));
+      for (let i = 0; i < 5; i += 1) await Promise.resolve();
+
+      expect(store.getState().preferredAgentId).toBe("claude");
+    });
+
+    it("doesn't take an availability refresh as the host's word", async () => {
+      installLocalStorage({});
+      const { useHelpPanelStore: store } = await import("../helpPanelStore");
+      store.getState().syncHostAssistantAgent("codex", null);
+      let rejectSave: (error: Error) => void = () => {};
+      agentDefaultsClientMock.set.mockReturnValueOnce(
+        new Promise((_resolve, reject) => (rejectSave = reject))
+      );
+
+      store.getState().setPreferredAgent("claude");
+      await Promise.resolve();
+      store.getState().refreshAssistantAvailability({ hasRealData: true, isInstalled: () => true });
+      expect(store.getState().preferredAgentId).toBe("claude");
+      rejectSave(new Error("link down"));
+      for (let i = 0; i < 5; i += 1) await Promise.resolve();
+
+      expect(store.getState().preferredAgentId).toBe("codex");
+    });
+
+    it("clearAgentSwitchRequest() only clears the request it names", async () => {
+      installLocalStorage({});
+      const { useHelpPanelStore: store } = await import("../helpPanelStore");
+      store.getState().setPreferredAgent("codex");
+      const stale = store.getState().agentSwitchRequest!.id;
+      store.getState().setPreferredAgent("claude");
+
+      store.getState().clearAgentSwitchRequest(stale);
+      expect(store.getState().agentSwitchRequest).toMatchObject({ agentId: "claude" });
+
+      store.getState().clearAgentSwitchRequest(store.getState().agentSwitchRequest!.id);
+      expect(store.getState().agentSwitchRequest).toBeNull();
+    });
+  });
+
+  it("writes v7 without a preference from memory, carrying a v6 one from disk until it's deleted", async () => {
     vi.useFakeTimers();
     try {
-      const legacyBlob = JSON.stringify({
-        state: { width: 420, preferredAgentId: "gemini" },
+      const backing = installLocalStorage({
+        [STORAGE_KEY]: JSON.stringify({
+          version: 6,
+          state: { width: 420, preferredAgentId: "claude" },
+        }),
       });
-      const backing = installLocalStorage({ [STORAGE_KEY]: legacyBlob });
 
       const { useHelpPanelStore: store } = await import("../helpPanelStore");
+      store.getState().setPreferredAgent("codex");
       store.getState().setWidth(450);
       vi.advanceTimersByTime(400);
 
-      const written = backing.get(STORAGE_KEY);
-      expect(written).toBeDefined();
-      const parsed = JSON.parse(written!) as {
-        version: number;
-        state: {
-          width: number;
-          preferredAgentId: string | null;
-          introDismissed: boolean;
-        };
-      };
-      expect(parsed.version).toBe(6);
-      expect(parsed.state.width).toBe(450);
-      expect(parsed.state.preferredAgentId).toBeNull();
+      const parsed: unknown = JSON.parse(backing.get(STORAGE_KEY)!);
+      // The machine's own value, untouched until a local window has moved it.
+      expect(parsed).toMatchObject({
+        version: 7,
+        state: { width: 450, preferredAgentId: "claude" },
+      });
+
+      // Migration deletes it; a later write must not put anything back.
+      backing.set(STORAGE_KEY, JSON.stringify({ version: 7, state: { width: 450 } }));
+      store.getState().setWidth(460);
+      vi.advanceTimersByTime(400);
+
+      const after: unknown = JSON.parse(backing.get(STORAGE_KEY)!);
+      expect(after).toMatchObject({ state: { width: 460 } });
+      expect(after).not.toHaveProperty("state.preferredAgentId");
     } finally {
       vi.useRealTimers();
     }
@@ -246,7 +375,6 @@ describe("helpPanelStore persistence migration", () => {
     const { useHelpPanelStore: store } = await import("../helpPanelStore");
 
     expect(store.getState().introDismissed).toBe(false);
-    expect(store.getState().preferredAgentId).toBe("claude");
   });
 
   it("preserves introDismissed: true from a v1 blob across rehydration", async () => {
@@ -259,14 +387,6 @@ describe("helpPanelStore persistence migration", () => {
     const { useHelpPanelStore: store } = await import("../helpPanelStore");
 
     expect(store.getState().introDismissed).toBe(true);
-  });
-
-  it("starts with introDismissed: false on a fresh install", async () => {
-    installLocalStorage({});
-
-    const { useHelpPanelStore: store } = await import("../helpPanelStore");
-
-    expect(store.getState().introDismissed).toBe(false);
   });
 
   it("falls back to false when persisted introDismissed has a non-boolean type", async () => {
@@ -296,7 +416,7 @@ describe("helpPanelStore persistence migration", () => {
       expect(written).toBeDefined();
       const parsed: unknown = JSON.parse(written!);
       expect(parsed).toMatchObject({
-        version: 6,
+        version: 7,
         state: { introDismissed: true },
       });
     } finally {
@@ -314,7 +434,6 @@ describe("helpPanelStore persistence migration", () => {
     const { useHelpPanelStore: store } = await import("../helpPanelStore");
 
     expect(store.getState().isOpen).toBe(false);
-    expect(store.getState().preferredAgentId).toBe("claude");
     expect(store.getState().introDismissed).toBe(true);
   });
 
@@ -358,46 +477,11 @@ describe("helpPanelStore persistence migration", () => {
         version: number;
         state: Record<string, unknown>;
       };
-      expect(parsed.version).toBe(6);
+      expect(parsed.version).toBe(7);
       expect(parsed.state).not.toHaveProperty("isOpen");
     } finally {
       vi.useRealTimers();
     }
-  });
-
-  it("starts with isOpen: false on a fresh install", async () => {
-    installLocalStorage({});
-
-    const { useHelpPanelStore: store } = await import("../helpPanelStore");
-
-    expect(store.getState().isOpen).toBe(false);
-  });
-
-  it("starts with conversationTouched: false on a fresh install", async () => {
-    installLocalStorage({});
-
-    const { useHelpPanelStore: store } = await import("../helpPanelStore");
-
-    expect(store.getState().sessions[0]!.conversationTouched).toBe(false);
-  });
-
-  it("markConversationStarted sets conversationTouched to true", async () => {
-    installLocalStorage({});
-
-    const { useHelpPanelStore: store } = await import("../helpPanelStore");
-    store.getState().markConversationStarted(0);
-
-    expect(store.getState().sessions[0]!.conversationTouched).toBe(true);
-  });
-
-  it("markConversationStarted is idempotent (calling twice still yields true)", async () => {
-    installLocalStorage({});
-
-    const { useHelpPanelStore: store } = await import("../helpPanelStore");
-    store.getState().markConversationStarted(0);
-    store.getState().markConversationStarted(0);
-
-    expect(store.getState().sessions[0]!.conversationTouched).toBe(true);
   });
 
   it("setTerminal resets conversationTouched to false", async () => {
@@ -411,14 +495,15 @@ describe("helpPanelStore persistence migration", () => {
     expect(store.getState().sessions[0]!.conversationTouched).toBe(false);
   });
 
-  it("setTerminal initializes preferredAgentId from the bound agent when none is set", async () => {
+  it("setTerminal never seeds the host's preference from a launch (#13345)", async () => {
     installLocalStorage({});
 
     const { useHelpPanelStore: store } = await import("../helpPanelStore");
-    expect(store.getState().preferredAgentId).toBeNull();
-
     store.getState().setTerminal(0, "term-1", "codex", null);
-    expect(store.getState().preferredAgentId).toBe("codex");
+
+    expect(store.getState().preferredAgentId).toBeNull();
+    expect(store.getState().hostAssistantAgentId).toBeNull();
+    expect(agentDefaultsClientMock.set).not.toHaveBeenCalled();
   });
 
   it("setTerminal preserves an explicit preferredAgentId across a re-bind (issue #8353)", async () => {
@@ -443,22 +528,6 @@ describe("helpPanelStore persistence migration", () => {
 
     store.getState().clearTerminal(0);
     expect(store.getState().sessions[0]!.conversationTouched).toBe(false);
-  });
-
-  it("clearTerminal drops figures so a crash/hibernate teardown can't leak them into the next session (#9829)", async () => {
-    installLocalStorage({});
-
-    const { useHelpPanelStore: store } = await import("../helpPanelStore");
-    store.getState().addFigure(0, {
-      imageId: "img-1",
-      figureNumber: 1,
-      figureLabel: "image #1",
-      url: "https://daintree.org/figure-1.png",
-    });
-    expect(store.getState().sessions[0]!.figures).toHaveLength(1);
-
-    store.getState().clearTerminal(0);
-    expect(store.getState().sessions[0]!.figures).toEqual([]);
   });
 
   it("conversationTouched is NOT persisted", async () => {
@@ -650,29 +719,6 @@ describe("helpPanelStore persistence migration", () => {
   });
 
   describe("hibernateSessions", () => {
-    it("starts as an empty record on a fresh install", async () => {
-      installLocalStorage({});
-
-      const { useHelpPanelStore: store } = await import("../helpPanelStore");
-
-      expect(store.getState().hibernateSessions).toEqual({});
-    });
-
-    it("setHibernateSession adds an entry keyed by projectId", async () => {
-      installLocalStorage({});
-
-      const { useHelpPanelStore: store } = await import("../helpPanelStore");
-      store.getState().setHibernateSession("proj-1", 0, {
-        sessionId: "abc-123",
-        cwd: "/tmp/help",
-        agentId: "claude",
-      });
-
-      expect(store.getState().hibernateSessions).toEqual({
-        [slotKey("proj-1", 0)]: { sessionId: "abc-123", cwd: "/tmp/help", agentId: "claude" },
-      });
-    });
-
     it("setHibernateSession isolates entries by projectId", async () => {
       installLocalStorage({});
 
@@ -750,7 +796,7 @@ describe("helpPanelStore persistence migration", () => {
           version: number;
           state: { hibernateSessions: Record<string, unknown> };
         };
-        expect(parsed.version).toBe(6);
+        expect(parsed.version).toBe(7);
         expect(parsed.state.hibernateSessions).toEqual({
           [slotKey("proj-a", 0)]: { sessionId: "session-a", cwd: "/tmp/a", agentId: "claude" },
         });
@@ -851,7 +897,6 @@ describe("helpPanelStore persistence migration", () => {
 
       expect(store.getState().hibernateSessions).toEqual({});
       // Other fields still load correctly
-      expect(store.getState().preferredAgentId).toBe("claude");
       expect(store.getState().introDismissed).toBe(true);
     });
   });
@@ -861,7 +906,7 @@ describe("helpPanelStore persistence migration", () => {
       version: number;
       state: {
         width: number;
-        preferredAgentId: string | null;
+        preferredAgentId?: string | null;
         autoLaunchEnabled: boolean;
         introDismissed: boolean;
         hibernateSessions: Record<string, unknown>;
@@ -1115,7 +1160,7 @@ describe("helpPanelStore persistence migration", () => {
       }
     });
 
-    it("a stale scalar write does not clobber a sibling's preferredAgentId change", async () => {
+    it("keeps this machine's legacy preference through a sibling's write until migration deletes it", async () => {
       vi.useFakeTimers();
       try {
         const backing = installLocalStorage({});
@@ -1124,12 +1169,13 @@ describe("helpPanelStore persistence migration", () => {
         mod.useHelpPanelStore.getState().setWidth(500);
         vi.advanceTimersByTime(400);
 
-        // A sibling view changes preferredAgentId directly on the shared blob.
+        // A pre-#13345 build (or a sibling still holding a v6 blob) left the
+        // machine's assistant agent on disk. A remote-bound view writing first
+        // must not erase it before a local window can move it to the host.
         const disk = JSON.parse(backing.get(STORAGE_KEY)!) as PersistedBlob;
         disk.state.preferredAgentId = "codex";
         backing.set(STORAGE_KEY, JSON.stringify(disk));
 
-        // This stale view changes only width; its in-memory preferredAgentId is still null.
         mod.useHelpPanelStore.getState().setWidth(600);
         vi.advanceTimersByTime(400);
 
@@ -1162,7 +1208,6 @@ describe("helpPanelStore persistence migration", () => {
 
       const { useHelpPanelStore: store } = await import("../helpPanelStore");
 
-      expect(store.getState().preferredAgentId).toBe("claude");
       expect(store.getState().autoLaunchEnabled).toBe(false);
     });
 
@@ -1206,49 +1251,15 @@ describe("helpPanelStore persistence migration", () => {
           version: number;
           state: Record<string, unknown>;
         };
-        expect(parsed.version).toBe(6);
+        expect(parsed.version).toBe(7);
         expect(parsed.state.autoLaunchEnabled).toBe(true);
       } finally {
         vi.useRealTimers();
       }
     });
-
-    it("setAutoLaunchEnabled(false) flips consent back off", async () => {
-      const blob = JSON.stringify({
-        version: 6,
-        state: { width: 400, preferredAgentId: "claude", autoLaunchEnabled: true },
-      });
-      installLocalStorage({ [STORAGE_KEY]: blob });
-
-      const { useHelpPanelStore: store } = await import("../helpPanelStore");
-      expect(store.getState().autoLaunchEnabled).toBe(true);
-
-      store.getState().setAutoLaunchEnabled(false);
-      expect(store.getState().autoLaunchEnabled).toBe(false);
-    });
   });
 
   describe("activeFigureNumber (#9830)", () => {
-    it("starts as null on a fresh install", async () => {
-      installLocalStorage({});
-
-      const { useHelpPanelStore: store } = await import("../helpPanelStore");
-
-      expect(store.getState().sessions[0]!.activeFigureNumber).toBeNull();
-    });
-
-    it("setActiveFigureNumber updates the active figure", async () => {
-      installLocalStorage({});
-
-      const { useHelpPanelStore: store } = await import("../helpPanelStore");
-      store.getState().setActiveFigureNumber(0, 3);
-
-      expect(store.getState().sessions[0]!.activeFigureNumber).toBe(3);
-
-      store.getState().setActiveFigureNumber(0, null);
-      expect(store.getState().sessions[0]!.activeFigureNumber).toBeNull();
-    });
-
     it("clearFigures resets the active figure alongside the figures list", async () => {
       installLocalStorage({});
 
@@ -1362,5 +1373,44 @@ describe("helpPanelStore persistence migration", () => {
         vi.useRealTimers();
       }
     });
+  });
+});
+
+describe("selectHasRoomForSession (#13442)", () => {
+  const lane = (overrides: { terminalId?: string; sessionId?: string } = {}) => ({
+    terminalId: overrides.terminalId ?? null,
+    agentId: null,
+    sessionId: overrides.sessionId ?? null,
+    conversationTouched: false,
+    figures: [],
+    activeFigureNumber: null,
+  });
+
+  it("finds room in a free slot, or an open tab with nothing in it", async () => {
+    const { useHelpPanelStore: store, selectHasRoomForSession } = await import("../helpPanelStore");
+    store.setState({ sessions: { 0: lane({ terminalId: "t0" }) }, hibernateSessions: {} });
+    expect(selectHasRoomForSession(store.getState(), "p1")).toBe(true);
+
+    store.setState({
+      sessions: {
+        0: lane({ terminalId: "t0" }),
+        1: lane({ sessionId: "s1" }),
+        2: lane(),
+      },
+    });
+    expect(selectHasRoomForSession(store.getState(), "p1")).toBe(true);
+  });
+
+  it("finds none once every tab holds a session or a conversation waiting to resume", async () => {
+    const { useHelpPanelStore: store, selectHasRoomForSession } = await import("../helpPanelStore");
+    store.setState({
+      sessions: { 0: lane({ terminalId: "t0" }), 1: lane({ sessionId: "s1" }), 2: lane() },
+      hibernateSessions: {
+        [slotKey("p1", 2)]: { sessionId: "kept", cwd: "/help.codex", agentId: "codex" },
+      },
+    });
+    expect(selectHasRoomForSession(store.getState(), "p1")).toBe(false);
+    // Another project's capture doesn't hold this project's tab.
+    expect(selectHasRoomForSession(store.getState(), "p2")).toBe(true);
   });
 });

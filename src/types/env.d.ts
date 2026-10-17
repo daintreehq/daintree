@@ -9,3 +9,8 @@ declare global {
       }
     | undefined;
 }
+
+/** Whether Remote Hosts is built in; see electron/types/buildDefines.d.ts. */
+declare global {
+  const __DAINTREE_REMOTE_HOSTS__: boolean;
+}

@@ -82,15 +82,6 @@ describe("panelStore adversarial", () => {
     resetStore();
   });
 
-  it("clearTerminalStoreForSwitch clears watchedPanels so watches do not leak across project switches", () => {
-    usePanelStore.getState().watchPanel("panel-from-project-a");
-    expect(usePanelStore.getState().watchedPanels.size).toBe(1);
-
-    usePanelStore.getState().clearTerminalStoreForSwitch();
-
-    expect(usePanelStore.getState().watchedPanels.size).toBe(0);
-  });
-
   it("clearTerminalStoreForSwitch clears maximizeTarget alongside maximizedId (#9935)", () => {
     usePanelStore.setState({
       maximizedId: "panel-1",

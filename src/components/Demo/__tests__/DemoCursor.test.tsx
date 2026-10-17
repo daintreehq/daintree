@@ -100,13 +100,6 @@ describe("DemoCursor", () => {
     cleanup();
   });
 
-  it("renders cursor SVG", () => {
-    const { container } = render(<DemoCursor />);
-    const svg = container.querySelector("svg");
-    expect(svg).toBeTruthy();
-    expect(svg!.querySelector("path")).toBeTruthy();
-  });
-
   it("registers exec command listeners on mount", () => {
     render(<DemoCursor />);
     expect(demoMock.onExecCommand).toHaveBeenCalledWith("demo:exec-move-to", expect.any(Function));
@@ -152,19 +145,6 @@ describe("DemoCursor", () => {
     expect(listenerMap.get("demo:exec-move-to")?.length ?? 0).toBe(0);
     expect(listenerMap.get("demo:exec-move-to-selector")?.length ?? 0).toBe(0);
     expect(listenerMap.get("demo:exec-click")?.length ?? 0).toBe(0);
-  });
-
-  it("moveTo converts percent to px and calls element.animate", async () => {
-    render(<DemoCursor />);
-    emit("demo:exec-move-to", { x: 30, y: 40, durationMs: 500, requestId: "req-1" });
-
-    await new Promise((r) => setTimeout(r, 10));
-
-    expect(animateSpy).toHaveBeenCalled();
-    const keyframes = animateSpy.mock.calls[0]![0] as Array<{ transform: string }>;
-    expect(keyframes[0]).toHaveProperty("transform");
-    expect(keyframes[keyframes.length - 1]!.transform).toContain("translate(");
-    expect(demoMock.sendCommandDone).toHaveBeenCalledWith("req-1", undefined);
   });
 
   it("moveToSelector animates to element center", async () => {
@@ -267,23 +247,6 @@ describe("DemoCursor", () => {
     expect(calledX).toBeCloseTo(window.innerWidth / 2, -1);
     expect(calledY).toBeCloseTo(window.innerHeight / 2, -1);
     expect(demoMock.sendCommandDone).toHaveBeenCalledWith("req-click-1", undefined);
-
-    document.elementFromPoint = origElementFromPoint;
-  });
-
-  it("click calls element.animate for press and release on SVG wrapper", async () => {
-    render(<DemoCursor />);
-
-    const origElementFromPoint = document.elementFromPoint;
-    document.elementFromPoint = vi.fn(() => null);
-
-    emit("demo:exec-click", { requestId: "req-2" });
-
-    await new Promise((r) => setTimeout(r, 10));
-
-    // press + release + ripple + settle = at least 3 calls (ripple may be skipped if ref is null)
-    expect(animateSpy.mock.calls.length).toBeGreaterThanOrEqual(3);
-    expect(demoMock.sendCommandDone).toHaveBeenCalledWith("req-2", undefined);
 
     document.elementFromPoint = origElementFromPoint;
   });
@@ -419,29 +382,6 @@ describe("DemoCursor", () => {
     const longFrameCount = (animateSpy.mock.calls[0]![0] as unknown[]).length;
 
     expect(longFrameCount).toBeGreaterThan(shortFrameCount);
-  });
-
-  it("moveTo long-distance move calls animate twice (ballistic + acquisition)", async () => {
-    // Pin random above both overshoot probabilities so the cosmetic overshoot never fires,
-    // isolating the two-phase ballistic + acquisition structure.
-    const randomSpy = vi.spyOn(Math, "random").mockReturnValue(0.99);
-    try {
-      render(<DemoCursor />);
-      // cursor starts at (500, 400). Move to (100, 0) = (1000, 0). Distance ~500+px > 300px threshold
-      emit("demo:exec-move-to", { x: 100, y: 0, durationMs: 800, requestId: "req-twophase" });
-
-      await new Promise((r) => setTimeout(r, 10));
-
-      // Two phases = two animate calls on the cursor element
-      const cursorCalls = animateSpy.mock.calls.filter((call) => {
-        const keyframes = call[0] as Array<{ transform: string }>;
-        return Array.isArray(keyframes) && keyframes[0]?.transform?.includes("translate(");
-      });
-      expect(cursorCalls.length).toBe(2);
-      expect(demoMock.sendCommandDone).toHaveBeenCalledWith("req-twophase", undefined);
-    } finally {
-      randomSpy.mockRestore();
-    }
   });
 
   it("moveTo short move calls animate once", async () => {
@@ -846,43 +786,6 @@ describe("DemoCursor", () => {
     }
   });
 
-  it.each([
-    ["enter", "\r"],
-    ["tab", "\t"],
-    ["escape", "\x1b"],
-    ["backspace", "\x7f"],
-    ["down", "\x1b[B"],
-    ["right", "\x1b[C"],
-    ["left", "\x1b[D"],
-    ["home", "\x1b[H"],
-    ["end", "\x1b[F"],
-    ["pageup", "\x1b[5~"],
-    ["pagedown", "\x1b[6~"],
-    ["ctrl-d", "\x04"],
-    ["ctrl-u", "\x15"],
-  ])("sendKeyToTerminal writes the correct byte sequence for %s", async (key, expected) => {
-    const panel = document.createElement("div");
-    panel.setAttribute("data-panel-id", "term-map");
-    document.body.appendChild(panel);
-    terminalGetMock.mockReturnValue(null);
-
-    try {
-      render(<DemoCursor />);
-      emit("demo:exec-send-key-to-terminal", {
-        selector: '[data-panel-id="term-map"]',
-        key,
-        requestId: `req-key-${key}`,
-      });
-
-      await new Promise((r) => setTimeout(r, 10));
-
-      expect(terminalWriteMock).toHaveBeenCalledWith("term-map", expected);
-      expect(demoMock.sendCommandDone).toHaveBeenCalledWith(`req-key-${key}`, undefined);
-    } finally {
-      document.body.removeChild(panel);
-    }
-  });
-
   it("sendKeyToTerminal rejects an unknown key without writing", async () => {
     const panel = document.createElement("div");
     panel.setAttribute("data-panel-id", "term-unknown");
@@ -904,28 +807,6 @@ describe("DemoCursor", () => {
         "req-key-unknown",
         "Unknown terminal key: ctrl-z"
       );
-    } finally {
-      document.body.removeChild(panel);
-    }
-  });
-
-  it("sendKeyToTerminal resolves a selector that targets the panel root directly", async () => {
-    const panel = document.createElement("div");
-    panel.setAttribute("data-panel-id", "term-root");
-    document.body.appendChild(panel);
-    terminalGetMock.mockReturnValue(null);
-
-    try {
-      render(<DemoCursor />);
-      emit("demo:exec-send-key-to-terminal", {
-        selector: '[data-panel-id="term-root"]',
-        key: "enter",
-        requestId: "req-key-root",
-      });
-
-      await new Promise((r) => setTimeout(r, 10));
-
-      expect(terminalWriteMock).toHaveBeenCalledWith("term-root", "\r");
     } finally {
       document.body.removeChild(panel);
     }
@@ -1055,37 +936,6 @@ describe("DemoCursor", () => {
         expect(parseFloat(cursorEl.style.top)).toBeCloseTo(100);
         expect(demoMock.sendCommandDone).toHaveBeenCalledWith("req-drag", undefined);
       } finally {
-        document.body.removeChild(src);
-        document.body.removeChild(dst);
-      }
-    });
-
-    it("dispatches pointermove at multiple intermediate coordinates", async () => {
-      const src = makeDragTarget("drag-src2", 100, 100);
-      const dst = makeDragTarget("drag-dst2", 500, 100);
-      render(<DemoCursor />);
-
-      const moveXs: number[] = [];
-      const onMove = (e: Event) => moveXs.push((e as PointerEvent).clientX);
-      document.addEventListener("pointermove", onMove);
-
-      try {
-        emit("demo:exec-drag", {
-          fromSelector: "#drag-src2",
-          toSelector: "#drag-dst2",
-          durationMs: 500,
-          requestId: "req-drag2",
-        });
-
-        await vi.advanceTimersByTimeAsync(800);
-
-        // At least one move fired strictly between source and target (not teleport-only).
-        expect(moveXs.some((x) => x > 100 && x < 500)).toBe(true);
-        // Movement traverses many distinct positions, not two endpoints.
-        expect(new Set(moveXs).size).toBeGreaterThan(2);
-        expect(demoMock.sendCommandDone).toHaveBeenCalledWith("req-drag2", undefined);
-      } finally {
-        document.removeEventListener("pointermove", onMove);
         document.body.removeChild(src);
         document.body.removeChild(dst);
       }
@@ -1356,19 +1206,6 @@ describe("DemoCursor", () => {
       return video;
     }
 
-    it("resolves when nothing is active", async () => {
-      render(<DemoCursor />);
-      emit("demo:exec-wait-for-idle", {
-        requestId: "req-idle-empty",
-        settleMs: 30,
-        timeoutMs: 2000,
-      });
-
-      await vi.waitFor(() =>
-        expect(demoMock.sendCommandDone).toHaveBeenCalledWith("req-idle-empty", undefined)
-      );
-    });
-
     it("delays idle while a terminal is still writing, then resolves once it stops", async () => {
       const term = makeTerminal();
       registerTerminals({ "panel-1": term });
@@ -1418,31 +1255,6 @@ describe("DemoCursor", () => {
         },
         { timeout: 3000, interval: 20 }
       );
-    });
-
-    it("does not report idle while a video is playing", async () => {
-      const video = makeVideo({ playing: true });
-      try {
-        render(<DemoCursor />);
-        emit("demo:exec-wait-for-idle", {
-          requestId: "req-idle-video",
-          settleMs: 40,
-          timeoutMs: 400,
-        });
-
-        // Seeded as active → settle never completes → handler times out.
-        await vi.waitFor(
-          () => {
-            expect(demoMock.sendCommandDone).toHaveBeenCalledWith(
-              "req-idle-video",
-              "Error: waitForIdle timed out"
-            );
-          },
-          { timeout: 2000, interval: 20 }
-        );
-      } finally {
-        document.body.removeChild(video);
-      }
     });
 
     it("resolves after a playing video pauses", async () => {

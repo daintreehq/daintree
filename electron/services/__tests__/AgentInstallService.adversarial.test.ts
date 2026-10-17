@@ -5,6 +5,12 @@ const spawnMock = vi.hoisted(() => vi.fn());
 const getAgentConfigMock = vi.hoisted(() => vi.fn());
 
 vi.mock("child_process", () => ({ spawn: spawnMock }));
+// Windows-path files for the PATH lookup a Windows install makes.
+vi.mock("node:fs", async (importOriginal) =>
+  (await import("../../utils/__tests__/helpers/virtualWindowsFs.js")).withVirtualWindowsFiles(
+    await importOriginal()
+  )
+);
 vi.mock("../../../shared/config/agentRegistry.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../../shared/config/agentRegistry.js")>();
   return {
@@ -18,6 +24,46 @@ import {
   runAgentInstall,
   resetInFlightInstalls,
 } from "../AgentInstallService.js";
+import { virtualWindowsFiles } from "../../utils/__tests__/helpers/virtualWindowsFs.js";
+import { resetWindowsExecutableCache } from "../../utils/windowsExecutable.js";
+
+const NODE_DIR = "C:\\Program Files\\nodejs";
+const WINDOWS_APPS = "C:\\Users\\me\\AppData\\Local\\Microsoft\\WindowsApps";
+
+/** A Windows PATH holding npm's shim and winget, with `.` ahead of them. */
+function windowsInstallPath(): void {
+  process.env.PATH = `.;${NODE_DIR};${WINDOWS_APPS}`;
+  virtualWindowsFiles.set({
+    [`${NODE_DIR}\\npm.cmd`]: "",
+    [`${WINDOWS_APPS}\\winget.exe`]: "",
+  });
+}
+
+/** The `.cmd` npm's cmd-shim writes for a global package (here npm itself, after `npm i -g npm`). */
+const NPM_CMD_SHIM = [
+  "@ECHO off",
+  "GOTO start",
+  ":find_dp0",
+  "SET dp0=%~dp0",
+  "EXIT /b",
+  ":start",
+  "SETLOCAL",
+  "CALL :find_dp0",
+  "",
+  'IF EXIST "%dp0%\\node.exe" (',
+  '  SET "_prog=%dp0%\\node.exe"',
+  ") ELSE (",
+  '  SET "_prog=node"',
+  "  SET PATHEXT=%PATHEXT:;.JS;=;%",
+  ")",
+  "",
+  'endLocal & goto #_undefined_# 2>NUL || title %COMSPEC% & "%_prog%"  "%dp0%\\node_modules\\npm\\bin\\npm-cli.js" %*',
+].join("\r\n");
+
+/** Spawns are made once the asynchronous PATH lookup lands. */
+async function spawned(): Promise<void> {
+  await vi.waitFor(() => expect(spawnMock).toHaveBeenCalled());
+}
 
 interface FakeChild extends EventEmitter {
   stdout: EventEmitter;
@@ -44,15 +90,31 @@ function setPlatform(p: NodeJS.Platform) {
   Object.defineProperty(process, "platform", { value: p });
 }
 
-describe("AgentInstallService adversarial", () => {
+/**
+ * Per-case isolation for a describe whose cases may simulate Windows: the
+ * platform, PATH, the virtual disk and the PATH-lookup cache all go back after
+ * every case, so a synthetic Windows PATH never reaches a later one.
+ */
+function isolateInstallEnvironment(): void {
+  const originalPath = process.env.PATH;
+
   beforeEach(() => {
     vi.clearAllMocks();
     setPlatform("linux");
+    // Each case swaps the whole disk at once; PATH listings must not carry over.
+    resetWindowsExecutableCache();
   });
 
   afterEach(() => {
     setPlatform(originalPlatform);
+    if (originalPath === undefined) delete process.env.PATH;
+    else process.env.PATH = originalPath;
+    virtualWindowsFiles.clear();
   });
+}
+
+describe("AgentInstallService adversarial", () => {
+  isolateInstallEnvironment();
 
   describe("isBlockExecutable — manual-only detection", () => {
     it("rejects piped shell installs (curl | bash)", () => {
@@ -152,17 +214,19 @@ describe("AgentInstallService adversarial", () => {
       expect(spawnMock.mock.calls.some(([bin]) => bin === "wget")).toBe(false);
     });
 
-    it("Windows npm installs append suppression flags and use shell:true with CI env", async () => {
+    it("Windows npm installs run npm.cmd from PATH through cmd.exe, with flags and CI env", async () => {
       setPlatform("win32");
+      windowsInstallPath();
       getAgentConfigMock.mockReturnValue({
         install: {
-          byOs: { windows: [{ commands: ["npm install -g foo"] }] },
+          byOs: { windows: [{ commands: ["npm install -g @scope/foo"] }] },
         },
       });
       const child = makeFakeChild();
       spawnMock.mockReturnValue(child);
 
       const pending = runAgentInstall({ agentId: "a", jobId: "j1" }, vi.fn());
+      await spawned();
       child.emitClose(0);
       await pending;
 
@@ -170,22 +234,141 @@ describe("AgentInstallService adversarial", () => {
       const [bin, args, opts] = spawnMock.mock.calls[0] as [
         string,
         string[],
-        { shell: boolean; env: Record<string, string>; windowsHide?: boolean },
+        {
+          shell: boolean;
+          env: Record<string, string>;
+          windowsHide?: boolean;
+          windowsVerbatimArguments?: boolean;
+        },
       ];
-      expect(bin).toBe("npm");
+      // The in-box cmd.exe by absolute path, never a bare `npm` or `cmd.exe`.
+      expect(bin).toMatch(/^[A-Za-z]:\\.*\\System32\\cmd\.exe$/i);
+      expect(args.slice(0, 4)).toEqual(["/d", "/s", "/v:off", "/c"]);
+      const line = args[4]!;
+      // The batch path reaches cmd.exe in a variable it expands once, as text.
+      expect(line.startsWith(`""%DAINTREE_INSTALL_BATCH_FILE%" install -g @scope/foo `)).toBe(true);
+      expect(opts.env.DAINTREE_INSTALL_BATCH_FILE).toBe(`${NODE_DIR}\\npm.cmd`);
       for (const flag of [
-        "--silent",
+        "--loglevel=error",
         "--no-progress",
         "--no-audit",
         "--no-fund",
         "--no-update-notifier",
       ]) {
-        expect(args).toContain(flag);
+        expect(line).toContain(` ${flag}`);
       }
-      expect(opts.shell).toBe(true);
+      // --silent would swallow npm's own error report, the only stderr the
+      // install step shows when the command fails.
+      expect(line).not.toContain("--silent");
+      expect(opts.shell).toBe(false);
+      expect(opts.windowsVerbatimArguments).toBe(true);
       expect(opts.windowsHide).toBe(true);
       expect(opts.env.CI).toBe("1");
       expect(opts.env.NO_UPDATE_NOTIFIER).toBe("1");
+    });
+
+    it("Windows installs never start a program PATH does not hold", async () => {
+      // `.` comes first on this PATH; a same-named file there must not run.
+      setPlatform("win32");
+      process.env.PATH = `.;${NODE_DIR}`;
+      virtualWindowsFiles.set({});
+      getAgentConfigMock.mockReturnValue({
+        install: { byOs: { windows: [{ commands: ["npm install -g foo"] }] } },
+      });
+      const onProgress = vi.fn();
+
+      const result = await runAgentInstall({ agentId: "a", jobId: "j1" }, onProgress);
+
+      expect(spawnMock).not.toHaveBeenCalled();
+      expect(result.success).toBe(false);
+      expect(result.exitCode).toBe(1);
+      expect(onProgress).toHaveBeenCalledWith({
+        jobId: "j1",
+        chunk: "spawn npm ENOENT\n",
+        stream: "stderr",
+      });
+    });
+
+    it("Windows installs an npm shim under a path holding & by Node and its script, no cmd.exe", async () => {
+      // A profile such as C:\\Users\\Jane & John: the resolved shim path holds
+      // characters cmd.exe reads as syntax, so the shim is unwrapped instead.
+      setPlatform("win32");
+      const npmDir = "C:\\Users\\Jane & John\\AppData\\Roaming\\npm";
+      const npmCli = `${npmDir}\\node_modules\\npm\\bin\\npm-cli.js`;
+      process.env.PATH = `.;${npmDir};${NODE_DIR}`;
+      virtualWindowsFiles.set({
+        [`${npmDir}\\npm.cmd`]: NPM_CMD_SHIM,
+        [npmCli]: "",
+        [`${NODE_DIR}\\node.exe`]: "",
+      });
+      getAgentConfigMock.mockReturnValue({
+        install: { byOs: { windows: [{ commands: ["npm install -g @scope/foo"] }] } },
+      });
+      const child = makeFakeChild();
+      spawnMock.mockReturnValue(child);
+
+      const pending = runAgentInstall({ agentId: "a", jobId: "j1" }, vi.fn());
+      await spawned();
+      child.emitClose(0);
+      const result = await pending;
+
+      expect(result.success).toBe(true);
+      const [bin, args, opts] = spawnMock.mock.calls[0] as [
+        string,
+        string[],
+        { shell: boolean; windowsVerbatimArguments?: boolean },
+      ];
+      expect(bin).toBe(`${NODE_DIR}\\node.exe`);
+      expect(args.slice(0, 4)).toEqual([npmCli, "install", "-g", "@scope/foo"]);
+      expect(args).toContain("--no-audit");
+      expect(opts.shell).toBe(false);
+      expect(opts.windowsVerbatimArguments).toBeUndefined();
+    });
+
+    it("Windows runs a batch file it cannot unwrap from a path holding & through cmd.exe", async () => {
+      // Node's own npm.cmd under an nvm-for-Windows root in the profile.
+      setPlatform("win32");
+      const nodeDir = "C:\\Users\\Jane & John\\AppData\\Roaming\\nvm\\v22.11.0";
+      process.env.PATH = nodeDir;
+      virtualWindowsFiles.set({
+        [`${nodeDir}\\npm.cmd`]:
+          '@ECHO OFF\r\nSETLOCAL\r\nSET "NODE_EXE=%~dp0\\node.exe"\r\n"%NODE_EXE%" "%~dp0\\node_modules\\npm\\bin\\npm-cli.js" %*\r\n',
+        [`${nodeDir}\\node.exe`]: "",
+      });
+      getAgentConfigMock.mockReturnValue({
+        install: { byOs: { windows: [{ commands: ["npm install -g @scope/foo"] }] } },
+      });
+      const child = makeFakeChild();
+      spawnMock.mockReturnValue(child);
+
+      const pending = runAgentInstall({ agentId: "a", jobId: "j1" }, vi.fn());
+      await spawned();
+      child.emitClose(0);
+      expect((await pending).success).toBe(true);
+
+      const [bin, args, opts] = spawnMock.mock.calls[0] as [
+        string,
+        string[],
+        { env: Record<string, string>; windowsVerbatimArguments?: boolean },
+      ];
+      expect(bin).toMatch(/^[A-Za-z]:\\.*\\System32\\cmd\.exe$/i);
+      expect(args[4]).toMatch(/^""%DAINTREE_INSTALL_BATCH_FILE%" install -g @scope\/foo /);
+      expect(args.join(" ")).not.toContain("&");
+      expect(opts.env.DAINTREE_INSTALL_BATCH_FILE).toBe(`${nodeDir}\\npm.cmd`);
+      expect(opts.windowsVerbatimArguments).toBe(true);
+    });
+
+    it("Windows refuses to hand cmd.exe an argument it would read as syntax", async () => {
+      setPlatform("win32");
+      windowsInstallPath();
+      getAgentConfigMock.mockReturnValue({
+        install: { byOs: { windows: [{ commands: ["npm install -g foo&calc"] }] } },
+      });
+
+      const result = await runAgentInstall({ agentId: "a", jobId: "j1" }, vi.fn());
+
+      expect(spawnMock).not.toHaveBeenCalled();
+      expect(result.success).toBe(false);
     });
 
     it("forwards progress events with correct stream + jobId across multiple commands in order", async () => {
@@ -417,14 +600,7 @@ describe("AgentInstallService adversarial", () => {
 });
 
 describe("AgentInstallService — elevation and prerequisite targets (#11763)", () => {
-  beforeEach(() => {
-    vi.clearAllMocks();
-    setPlatform("linux");
-  });
-
-  afterEach(() => {
-    setPlatform(originalPlatform);
-  });
+  isolateInstallEnvironment();
 
   describe("sudo gate", () => {
     it("refuses a bare sudo command", () => {
@@ -616,16 +792,18 @@ describe("AgentInstallService — elevation and prerequisite targets (#11763)", 
   describe("windows git command", () => {
     it("passes the agreement flags winget needs under piped stdio", async () => {
       setPlatform("win32");
+      windowsInstallPath();
       const child = makeFakeChild();
       spawnMock.mockReturnValue(child);
 
       const promise = runAgentInstall({ prerequisiteTool: "git", jobId: "j7" }, vi.fn());
-      await Promise.resolve();
+      await spawned();
       child.emitClose(0);
       await promise;
 
       const args = spawnMock.mock.calls[0]?.[1] as string[];
-      expect(spawnMock.mock.calls[0]?.[0]).toBe("winget");
+      // An .exe from PATH starts directly, by absolute path.
+      expect(spawnMock.mock.calls[0]?.[0]).toBe(`${WINDOWS_APPS}\\winget.exe`);
       expect(args).toContain("--accept-source-agreements");
       expect(args).toContain("--accept-package-agreements");
     });

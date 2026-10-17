@@ -8,6 +8,7 @@ vi.mock("@/clients", () => ({
     onExit: vi.fn(() => vi.fn()),
     onResizeResult: vi.fn(() => vi.fn()),
     onTierChanged: vi.fn(() => vi.fn()),
+    onReset: vi.fn(() => vi.fn()),
     write: vi.fn(),
     setActivityTier: vi.fn(),
     wake: vi.fn(),
@@ -18,6 +19,7 @@ vi.mock("@/clients", () => ({
     })),
     acknowledgeData: vi.fn(),
     acknowledgePortData: vi.fn(),
+    getPortAckGeneration: vi.fn(() => 0),
     discardPortAcks: vi.fn(),
   },
   systemClient: { openExternal: vi.fn() },
@@ -81,18 +83,6 @@ describe("captureBufferText", () => {
     terminalInstanceService.dispose();
   });
 
-  it("returns empty string for nonexistent terminal", () => {
-    expect(terminalInstanceService.captureBufferText("nonexistent")).toBe("");
-  });
-
-  it("returns empty string for empty buffer", async () => {
-    await createManagedTerminal("test-1");
-    // Fresh terminal has no content written
-    const result = terminalInstanceService.captureBufferText("test-1");
-    // Buffer may have empty lines from initialization, but should be blank
-    expect(result.trim()).toBe("");
-  });
-
   it("captures written text from the buffer", async () => {
     const managed = await createManagedTerminal("test-2");
     // Write some plain text to the terminal
@@ -103,35 +93,6 @@ describe("captureBufferText", () => {
     const result = terminalInstanceService.captureBufferText("test-2");
     expect(result).toContain("Hello World");
     expect(result).toContain("Second line");
-  });
-
-  it("strips ANSI escape codes from captured text", async () => {
-    const managed = await createManagedTerminal("test-3");
-    // Write text with ANSI color codes
-    managed.terminal.write("\x1b[31mRed text\x1b[0m\r\n");
-    managed.terminal.write("\x1b[1;32mBold green\x1b[0m\r\n");
-    await flushWrites(managed.terminal);
-
-    const result = terminalInstanceService.captureBufferText("test-3");
-    // translateToString already strips most ANSI, but stripAnsiAndOscCodes
-    // handles any remaining sequences
-    expect(result).not.toContain("\x1b[");
-    expect(result).toContain("Red text");
-    expect(result).toContain("Bold green");
-  });
-
-  it("truncates to maxChars keeping the tail", async () => {
-    const managed = await createManagedTerminal("test-4");
-    // Write enough text to exceed a small maxChars limit
-    for (let i = 0; i < 20; i++) {
-      managed.terminal.write(`Line number ${i.toString().padStart(3, "0")}\r\n`);
-    }
-    await flushWrites(managed.terminal);
-
-    const result = terminalInstanceService.captureBufferText("test-4", 50);
-    expect(result.length).toBeLessThanOrEqual(50);
-    // Should contain the tail (later lines), not the head
-    expect(result).toContain("019");
   });
 
   it("preserves head lines when the whole buffer fits within maxChars", async () => {

@@ -92,11 +92,11 @@ export const SEL = {
     cmEditor: ".cm-content",
     titleButton: '[aria-label*="title"]',
     searchInput: "[data-terminal-search-input]",
-    searchClose: '[aria-label="Close search"]',
+    searchClose: '[aria-label="Close find bar"]',
     searchPrevious: '[aria-label="Previous match"]',
     searchNext: '[aria-label="Next match"]',
-    searchCaseToggle: '[aria-label="Toggle case sensitivity"]',
-    searchRegexToggle: '[aria-label="Toggle regex mode"]',
+    searchCaseToggle: '[aria-label="Match case"]',
+    searchRegexToggle: '[aria-label="Use regular expression"]',
     searchStatus: "[data-terminal-search-status]",
     scrollIndicator: '[aria-label="New output below, scroll to latest output"]',
     agentStateChip: '[role="status"][aria-label^="Agent state:"]',
@@ -365,6 +365,22 @@ export const SEL = {
     markAllReadButton: 'button:text-is("Mark all read")',
     mutedPill: '[data-testid="notification-muted-pill"]',
     mutedEmptyState: '[data-testid="notification-muted-empty-state"]',
+  },
+  remoteHosts: {
+    hostChip: '[data-testid="host-chip"]',
+    /** A row of the host chip's menu; "local" is this machine. */
+    hostMenuRow: (hostId: string) => `[role="menuitem"][data-host-id="${hostId}"]`,
+    settingsTab: '[role="tab"][data-tab="hosts"]',
+    addHostDialog: '[data-testid="add-host-dialog"]',
+    /** The recovery banner for the window's link to its host (every variant). */
+    connectionBanner:
+      '[role="status"]:has-text("Reconnecting…"), [role="status"]:has-text("Connecting to"), [role="alert"]:has-text("is unreachable"), [role="status"]:has-text("runs a different build")',
+    /** Another frontend drives the host project this view shows. */
+    drivenElsewhereBanner: '[role="status"]:has-text("has control of this project")',
+    /** On the host's own screen, once a Shell has taken its project over. */
+    takenFromHostBanner: '[role="status"]:has-text("has control of this project")',
+    projectPickerOption: (projectName: string) =>
+      `[role="option"][id^="host-project-picker-"]:has-text("${projectName}")`,
   },
   actionPalette: {
     dialog: '[role="dialog"][aria-label="Command palette"]',

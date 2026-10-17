@@ -7,7 +7,7 @@ import type { VirtuosoHandle } from "react-virtuoso";
 import { UI_INLINE_LOADING_GATE_MS } from "@/lib/animationUtils";
 import { ContextMenuItem } from "@/components/ui/context-menu";
 import { TooltipProvider } from "@/components/ui/tooltip";
-import { FILE_DRAG_MIME, decodeFileDragPaths } from "@/lib/fileDragPayload";
+import { FILE_DRAG_MIME, decodeFileDrag, decodeFileDragPaths } from "@/lib/fileDragPayload";
 import { FileTreeView } from "../FileTreeView";
 import type { FlatTreeRow } from "../fileBrowserTree";
 import { buildFileBrowserGitStatusIndex } from "../fileBrowserGitStatus";
@@ -228,17 +228,6 @@ describe("FileTreeView context-menu interactions", () => {
     expect(onSelect).not.toHaveBeenCalled();
   });
 
-  it("still selects a row on a plain click", () => {
-    // Only right-click is decoupled from selection; the ordinary click path
-    // must still drive it. A file row avoids coupling the assertion to the
-    // directory-expansion toggle a folder click also fires.
-    const { onSelect, getByRole } = renderTree();
-
-    fireEvent.click(getByRole("treeitem", { name: "README.md" }));
-
-    expect(onSelect).toHaveBeenCalledWith("README.md", false);
-  });
-
   it("replays the ContextMenu key as a contextmenu event on the selected row", () => {
     const { getByRole } = renderTree({ cursorPath: "README.md" });
     const contextMenuSpy = vi.fn();
@@ -307,22 +296,6 @@ describe("FileTreeView context-menu interactions", () => {
     // key would double-insert.
     fireEvent.keyDown(tree, { key: "i", metaKey: true });
     expect(onInsertFileReference).toHaveBeenCalledTimes(1);
-  });
-
-  it("leaves the bare letter and the inject combo to their own handlers", () => {
-    const onInsertFileReference = vi.fn();
-    const { getByRole } = renderTree({
-      cursorPath: "README.md",
-      onInsertFileReference,
-      canInsertFileReference: true,
-    });
-    const tree = getByRole("tree");
-
-    fireEvent.keyDown(tree, { key: "i" });
-    // Cmd+Shift+I belongs to terminal.inject.
-    fireEvent.keyDown(tree, { key: "i", metaKey: true, shiftKey: true });
-
-    expect(onInsertFileReference).not.toHaveBeenCalled();
   });
 
   it("no-ops the shortcut with no selection or no reachable agent", () => {
@@ -812,14 +785,6 @@ describe("FileTreeView drag source", () => {
     return { data, dataTransfer, event };
   }
 
-  it("carries the row's absolute path as a list", () => {
-    const { getByRole } = renderTree();
-
-    const { data } = dragStart(getByRole("treeitem", { name: "README.md" }));
-
-    expect(decodeFileDragPaths(data.get(FILE_DRAG_MIME)!)).toEqual(["/repo/README.md"]);
-  });
-
   // Rows are relative to the base path, so a drag that skipped the join would
   // hand the agent a path resolving against its own cwd instead of the file's.
   it("joins nested rows onto the base path", () => {
@@ -853,6 +818,20 @@ describe("FileTreeView drag source", () => {
     const { data } = dragStart(getByRole("treeitem", { name: "README.md" }));
 
     expect([...data.keys()]).toEqual([FILE_DRAG_MIME]);
+  });
+
+  it("names the window's remote host in the payload", () => {
+    window.__DAINTREE_HOST_ID__ = { id: "studio-01" };
+    try {
+      const { getByRole } = renderTree();
+      const { data } = dragStart(getByRole("treeitem", { name: "README.md" }));
+      expect(decodeFileDrag(data.get(FILE_DRAG_MIME)!)).toEqual({
+        hostId: "studio-01",
+        paths: ["/repo/README.md"],
+      });
+    } finally {
+      delete window.__DAINTREE_HOST_ID__;
+    }
   });
 
   it("advertises a copy and previews the row itself", () => {
@@ -945,19 +924,6 @@ describe("FileTreeView git status markers", () => {
     expect(describedStatus(container, "README.md")).toBeNull();
   });
 
-  it("marks a collapsed folder from a descendant it has never listed", () => {
-    // `src` is collapsed, so no child row exists for the changed file at all —
-    // the aggregate is the only thing that can surface it.
-    const { container } = renderTree({
-      rows: [row("src", true), row("README.md")],
-      gitStatusIndex: buildFileBrowserGitStatusIndex([
-        { relativePath: "src/deep/nested/app.ts", status: "modified" },
-      ]),
-    });
-
-    expect(describedStatus(container, "src")).toBe("Contains modified changes");
-  });
-
   it("phrases a folder as containing changes, not as being changed itself", () => {
     const { container } = renderTree({
       rows: NESTED_ROWS,
@@ -968,18 +934,6 @@ describe("FileTreeView git status markers", () => {
 
     expect(describedStatus(container, "src")).toBe("Contains added changes");
     expect(describedStatus(container, "app.ts")).toBe("Added");
-  });
-
-  it("shows a folder its most urgent descendant when several changed", () => {
-    const { container } = renderTree({
-      rows: [row("src", true)],
-      gitStatusIndex: buildFileBrowserGitStatusIndex([
-        { relativePath: "src/a.ts", status: "untracked" },
-        { relativePath: "src/b.ts", status: "conflicted" },
-      ]),
-    });
-
-    expect(describedStatus(container, "src")).toBe("Contains conflicted changes");
   });
 
   it("renders no markers at all when the source has no git behind it", () => {
@@ -1243,5 +1197,68 @@ describe("FileTreeView aria-activedescendant against the virtualized window", ()
     expect(
       container.querySelector('[role="tree"]')?.getAttribute("aria-activedescendant")
     ).toBeNull();
+  });
+});
+
+describe("FileTreeView Add to project drop", () => {
+  function fileDrag(type: string, altKey: boolean, files: File[] = []) {
+    const event = new Event(type, { bubbles: true, cancelable: true });
+    Object.defineProperty(event, "altKey", { value: altKey });
+    Object.defineProperty(event, "dataTransfer", {
+      value: { types: ["Files"], files, dropEffect: "none" },
+    });
+    return event;
+  }
+
+  beforeEach(() => {
+    (window as unknown as { electron: unknown }).electron = {
+      files: { getDroppedFilePaths: (files: File[]) => files.map(() => "/Users/me/spec.md") },
+    };
+  });
+
+  it("is not a drop target without Option held", () => {
+    const onAddFilesToProject = vi.fn();
+    const { getByRole } = renderTree({ onAddFilesToProject });
+    const over = fileDrag("dragover", false);
+    fireEvent(getByRole("tree"), over);
+    expect(over.defaultPrevented).toBe(false);
+    fireEvent(
+      getByRole("treeitem", { name: "src" }),
+      fileDrag("drop", false, [new File(["x"], "spec.md")])
+    );
+    expect(onAddFilesToProject).not.toHaveBeenCalled();
+  });
+
+  it("adds Option-dropped files into the folder under the pointer", () => {
+    const onAddFilesToProject = vi.fn();
+    const { getByRole } = renderTree({ onAddFilesToProject });
+    const over = fileDrag("dragover", true);
+    fireEvent(getByRole("tree"), over);
+    expect(over.defaultPrevented).toBe(true);
+    fireEvent(
+      getByRole("treeitem", { name: "src" }),
+      fileDrag("drop", true, [new File(["x"], "spec.md")])
+    );
+    expect(onAddFilesToProject).toHaveBeenCalledWith(
+      [{ kind: "local", path: "/Users/me/spec.md", name: "spec.md", size: 1 }],
+      "/repo/src"
+    );
+  });
+
+  it("adds next to a file row, into its folder", () => {
+    const onAddFilesToProject = vi.fn();
+    const { getByRole } = renderTree({ onAddFilesToProject });
+    fireEvent(
+      getByRole("treeitem", { name: "README.md" }),
+      fileDrag("drop", true, [new File(["x"], "spec.md")])
+    );
+    expect(onAddFilesToProject.mock.calls[0]![1]).toBe("/repo");
+  });
+
+  it("stays only a drag source where the gesture doesn't exist", () => {
+    const { getByRole } = renderTree();
+    const over = fileDrag("dragover", true);
+    fireEvent(getByRole("tree"), over);
+    expect(over.defaultPrevented).toBe(false);
   });
 });

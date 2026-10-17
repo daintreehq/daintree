@@ -1,0 +1,710 @@
+/* Terminal restore animation. Closing is instant — no trash animation. */
+@keyframes terminal-restore {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.terminal-restoring {
+  animation: terminal-restore var(--terminal-animation-duration) ease-out;
+}
+
+@variant reduce-motion {
+  .terminal-restoring {
+    animation: none;
+  }
+}
+
+/* The two bottom drawers — the diagnostics dock and the dev preview's output
+ * drawer — move their height on the panel tier: 200ms ease-out opening or
+ * growing, 120ms ease-in closing. Suppressed during an active drag, under
+ * reduced motion (the OS setting and the app's reduce-animations flag) and in
+ * performance mode.
+ * The dock's own open and close take their height at once: they resize the
+ * whole panel grid, and animating that would reflow every terminal in it frame
+ * by frame. Its contents fade in instead (below). */
+.diagnostics-dock,
+.console-drawer-region {
+  transition: height 200ms ease-out;
+}
+
+.console-drawer-region[data-state="closed"] {
+  transition: height 120ms ease-in;
+}
+
+.diagnostics-dock[data-resizing="true"] {
+  transition: none;
+}
+
+/* Opening the dock claims its height at once (the grid reflow above), so what
+ * arrives on the panel tier is its contents: a 200ms fade in, like the output
+ * drawer's 200ms open. */
+.diagnostics-dock {
+  animation: overlay-fade-in 200ms ease-out;
+}
+
+@variant reduce-motion {
+  .diagnostics-dock,
+  .console-drawer-region {
+    transition: none;
+    animation: none;
+  }
+}
+
+body[data-performance-mode="true"] .diagnostics-dock,
+body[data-performance-mode="true"] .console-drawer-region {
+  transition: none;
+  animation: none;
+}
+
+/* Terminal Selection State.
+   panel-focus-border / panel-focus-shadow / panel-selected-bg are OPTIONAL
+   extension keys. The border fallback is deliberately quiet: the focused pane
+   is also carried by its selected background and header, and a 3:1 edge (a 68%
+   mix, tried in #12641) read as a bright outline and was walked back. Users who
+   need a stronger edge get one from the high-contrast blocks. The high-contrast
+   `prefers-contrast: more` and `forced-colors: active` blocks below keep their
+   own hardcoded recipes and continue to win. */
+.terminal-selected {
+  border-color: var(
+    --panel-focus-border,
+    color-mix(in oklab, var(--theme-border-strong) 92%, var(--theme-text-primary))
+  );
+  background-color: var(--panel-selected-bg, var(--color-surface-highlight));
+  box-shadow: var(
+    --panel-focus-shadow,
+    inset 0 0 0 1px var(--theme-overlay-soft),
+    0 0 0 1px var(--theme-overlay-strong)
+  );
+}
+
+/* A non-PTY pane's root takes real DOM focus when it becomes the focused pane
+   (usePanelRootFocus), and after a keyboard move Chromium rings it in its own
+   blue — a second, louder focus language that terminals, whose focus lives in
+   xterm, never show. The ring it gets instead is the selected edge itself,
+   drawn over the border in the same ink, so the pane looks the same however
+   its focus arrived. The border steps aside while the ring shows: the ink is
+   translucent on most themes, and two layers of it composite into a visibly
+   stronger edge than the terminal next door. */
+.terminal-selected:focus-visible {
+  border-color: transparent;
+  outline: 1px solid
+    var(
+      --panel-focus-border,
+      color-mix(in oklab, var(--theme-border-strong) 92%, var(--theme-text-primary))
+    );
+  outline-offset: -1px;
+}
+
+/* Ensure header separator uses overlay token for consistency */
+.terminal-selected > div:first-child {
+  border-bottom-color: var(--border-overlay);
+}
+
+/* Daintree Assistant focus state — anchors the active-surface affordance on
+   the aside edge (border-left + 1px rings) while the surface-lift fill lives
+   on the header only (`HelpPanelHeader` takes `SURFACE_HEADER_FOCUS_LIFT_CLASS`,
+   the grid pane header's lift, when focused). Filling the whole aside floods the launching skeleton, the empty
+   state, and any future no-terminal content with the lift, so the chrome is
+   scoped here to edges only. */
+.assistant-focused {
+  border-left-color: var(
+    --panel-focus-border,
+    color-mix(in oklab, var(--theme-border-strong) 92%, var(--theme-text-primary))
+  );
+  box-shadow: var(
+    --panel-focus-shadow,
+    inset 0 0 0 1px var(--theme-overlay-soft),
+    0 0 0 1px var(--theme-overlay-strong)
+  );
+}
+
+/* Third-party brand marks (agent and product logos). These carry vendor hexes
+   from `AgentConfig.color`, not theme tokens, so they sit outside the semantic
+   palette entirely. `BrandMark.tsx` resolves both inks against the backdrop the
+   mark is actually painted on and publishes them here: at rest the brand colour
+   one perceptual step back, and the brand colour itself once the mark is active
+   — hovered, keyboard-focused, in a selected tab, or in a focused panel.
+
+   Unlayered on purpose — a Tailwind `text-*` utility on the same glyph sits in
+   `@layer utilities` and would otherwise win, repainting a mark the resolver
+   just contrast-checked. */
+.brand-mark {
+  color: var(--brand-mark-rest);
+  transition: color var(--duration-150) ease-out;
+}
+
+/* `:focus-visible` is the keyboard equivalent of each hover selector above —
+   restoring on hover alone strands keyboard users at the resting tint with no
+   way to reach the brand colour. `:focus-visible > .brand-mark` covers a mark
+   whose focusable ancestor is not one of these roles, and the selected-option
+   rule covers a listbox row the keyboard has landed on without the row itself
+   taking focus. `label` is here because the onboarding agent rows wrap their
+   checkbox in one, and `:focus-within` is that row's keyboard state: focus
+   lands on the input inside, never on the label.
+
+   Selection is the third way in, and it is not transient: the selected tab and
+   the focused panel's title bar hold the brand colour for as long as they are
+   the ones you are working in. `[data-brand-active]` is what a container sets
+   when its own notion of "active" is neither hover nor a standard ARIA
+   selection — a focused panel header being the case that asked for it. */
+a:hover .brand-mark,
+button:hover .brand-mark,
+label:hover .brand-mark,
+[role="option"]:hover .brand-mark,
+[role="menuitem"]:hover .brand-mark,
+[role="tab"]:hover .brand-mark,
+a:focus-visible .brand-mark,
+button:focus-visible .brand-mark,
+label:focus-within .brand-mark,
+[role="option"]:focus-visible .brand-mark,
+[role="menuitem"]:focus-visible .brand-mark,
+[role="tab"]:focus-visible .brand-mark,
+[role="option"][aria-selected="true"] .brand-mark,
+[role="tab"][aria-selected="true"] .brand-mark,
+[data-brand-active] .brand-mark,
+:focus-visible > .brand-mark {
+  color: var(--brand-mark-active);
+}
+
+/* Menu icon gutter, allocated only when an item in the SAME menu actually has
+   an icon. Items opt in by marking their icon `data-menu-icon`; a text-only
+   item in a mixed menu then aligns with them, and a menu whose icon-bearing
+   items are all filtered out at runtime collapses the gutter instead of
+   leaving its survivors indented against nothing. That is the NSMenu / WinUI
+   MenuFlyout / GtkPopoverMenu rule, and it is why this cannot be a static
+   class on the text-only item — the item cannot see its siblings.
+   2rem = the item's own px-2.5 plus a 3.5 icon and its mr-2. Submenus portal
+   into their own [role="menu"], so they are scored separately, which is what
+   we want: a submenu of plain durations keeps no gutter. Unlayered and (0,4,0),
+   so it outranks a caller's own `pl-*` utility — an item that needs to opt out
+   has to do it with an inline style.
+   A row that leads with an unmarked icon (the canonical `mr-2` leading glyph)
+   already occupies the gutter, so it is left alone rather than indented a
+   second time: a shared fragment that marks its own icons must not push a host
+   menu's unmarked icon rows out of line. `.mr-2` rather than `:first-child`
+   alone, because a sub-trigger's label is a text node and its trailing chevron
+   is then its first element. */
+[role="menu"]:has([data-menu-icon])
+  [role="menuitem"]:not(:has([data-menu-icon])):not(:has(> svg.mr-2:first-child)) {
+  padding-left: 2rem;
+}
+
+/* Panel Agent State Borders — grid panel container state-driven styling */
+.panel-state-waiting {
+  border-color: color-mix(in oklab, var(--color-activity-waiting) 75%, transparent);
+  box-shadow:
+    inset 0 0 0 1px color-mix(in oklab, var(--color-activity-waiting) 15%, transparent),
+    0 0 0 1px color-mix(in oklab, var(--color-activity-waiting) 10%, transparent);
+}
+
+/* Compiling state — neutral surface treatment surfacing framework compile
+ * activity (HMR rebuilds, lazy-compilation bursts). Uses --color-border-subtle
+ * (not the accent token) per the accent-restraint constraint. Ambient Tier 1
+ * signal: less prominent than working/waiting, more visible than hibernated. */
+.panel-state-compiling {
+  border-color: color-mix(in oklab, var(--color-border-subtle) 60%, transparent);
+  box-shadow:
+    inset 0 0 0 1px color-mix(in oklab, var(--color-border-subtle) 10%, transparent),
+    0 0 0 1px color-mix(in oklab, var(--color-border-subtle) 8%, transparent);
+}
+
+/* Working state hint — static colored border. Was a 4s infinite breathe,
+ * which in peripheral vision across a multi-panel grid was a fatigue trigger
+ * (WCAG COGA). Status being a value doesn't justify continuous motion.
+ */
+.panel-state-working {
+  border-color: color-mix(in oklab, var(--color-activity-working) 35%, transparent);
+  box-shadow:
+    inset 0 0 0 1px color-mix(in oklab, var(--color-activity-working) 12%, transparent),
+    0 0 0 1px color-mix(in oklab, var(--color-activity-working) 8%, transparent);
+}
+
+/* Hibernated state hint — passive background state, dimmer than waiting/working
+ * because the user did not initiate it. Uses the existing idle token (already
+ * mapped to a muted gray-blue across themes). */
+.panel-state-hibernated {
+  border-color: color-mix(in oklab, var(--color-activity-idle) 60%, transparent);
+  box-shadow:
+    inset 0 0 0 1px color-mix(in oklab, var(--color-activity-idle) 10%, transparent),
+    0 0 0 1px color-mix(in oklab, var(--color-activity-idle) 8%, transparent);
+}
+
+/* Voice dictation lock — persistent amber border on the pinned dictation
+ * target. Uses --color-category-amber (not --color-activity-waiting) so the
+ * "I am holding dictation here" signal is visually distinct from the
+ * "agent waiting for input" state. Coexists with panel-state-* borders by
+ * design — a locked panel can also be working/waiting; both signals are
+ * independent and should be readable together. */
+.panel-voice-dictation-locked {
+  border-color: color-mix(in oklab, var(--color-category-amber) 75%, transparent);
+  box-shadow:
+    inset 0 0 0 1px color-mix(in oklab, var(--color-category-amber) 15%, transparent),
+    0 0 0 1px color-mix(in oklab, var(--color-category-amber) 10%, transparent);
+}
+
+/* Arming state — pre-audio confirmation window (~200ms). User pressed the
+ * dictation hotkey; this border paints synchronously so the target panel is
+ * unambiguous before the mic goes hot. Uses the accent token because the
+ * arming panel is the single load-bearing focus signal in its region for the
+ * brief window before "connecting" → "recording" replaces it.
+ *
+ * G2 (round-2 accent-restraint): this stacks three accent cues (accent-mixed
+ * border + inset accent ring + outer accent ring), which would normally be an
+ * accent-restraint violation. It is a DELIBERATE, documented exception: arming
+ * is a momentary (~200ms), destructive-adjacent, high-salience state and is the
+ * single load-bearing signal in its region for that window, so the layered
+ * accent is justified. Owner decision: KEEP the accent here (do not collapse to
+ * one cue). It is intentionally NOT light-branched — the accent reads on both
+ * polarities and the state is too brief to suffer the near-white wash. */
+.panel-state-arming {
+  border-color: color-mix(in oklab, var(--theme-accent-primary) 70%, transparent);
+  box-shadow:
+    inset 0 0 0 1px color-mix(in oklab, var(--theme-accent-primary) 18%, transparent),
+    0 0 0 1px color-mix(in oklab, var(--theme-accent-primary) 12%, transparent);
+}
+
+/* B2 — Light-mode panel-state border hierarchy.
+ *
+ * The default alphas above were tuned for dark, where activity-* is composited
+ * over a near-black pane with a white-glow inset. On a near-white light pane
+ * the same alphas invert the prominence: idle (60%) reads STRONGER than working
+ * (35%). On light the eye's luminance discrimination is compressed near white,
+ * so a low-alpha mix toward `transparent` admits the bright pane and washes the
+ * colored border out. Raise the light alphas so the composited border clears a
+ * ~3:1 graphical-indicator floor and the ordering is restored:
+ *   prominence = working > waiting > idle (hibernated).
+ * The inset/outer ring spread is driven by `--panel-state-edge-width` (the
+ * previously-dead 2px token) so the state ring is a crisp 2px lift without
+ * widening the resting 1px container border (no reflow). Dark inherits the
+ * :root definitions above unchanged. */
+.light .panel-state-working {
+  border-color: color-mix(in oklab, var(--color-activity-working) 95%, transparent);
+  box-shadow:
+    inset 0 0 0 var(--panel-state-edge-width)
+      color-mix(in oklab, var(--color-activity-working) 30%, transparent),
+    0 0 0 1px color-mix(in oklab, var(--color-activity-working) 18%, transparent);
+}
+
+.light .panel-state-waiting {
+  border-color: color-mix(in oklab, var(--color-activity-waiting) 80%, transparent);
+  box-shadow:
+    inset 0 0 0 var(--panel-state-edge-width)
+      color-mix(in oklab, var(--color-activity-waiting) 24%, transparent),
+    0 0 0 1px color-mix(in oklab, var(--color-activity-waiting) 14%, transparent);
+}
+
+.light .panel-state-hibernated {
+  border-color: color-mix(in oklab, var(--color-activity-idle) 55%, transparent);
+  box-shadow:
+    inset 0 0 0 1px color-mix(in oklab, var(--color-activity-idle) 14%, transparent),
+    0 0 0 1px color-mix(in oklab, var(--color-activity-idle) 8%, transparent);
+}
+
+.light .panel-state-compiling {
+  border-color: color-mix(in oklab, var(--color-border-subtle) 70%, transparent);
+  box-shadow:
+    inset 0 0 0 1px color-mix(in oklab, var(--color-border-subtle) 14%, transparent),
+    0 0 0 1px color-mix(in oklab, var(--color-border-subtle) 8%, transparent);
+}
+
+/* Backwards compatibility for older selection class */
+.terminal-focused {
+  border-color: var(
+    --panel-focus-border,
+    color-mix(in oklab, var(--theme-border-strong) 84%, var(--theme-text-primary))
+  );
+  background-color: var(--panel-selected-bg, var(--color-surface-highlight));
+  box-shadow: var(
+    --panel-focus-shadow,
+    inset 0 0 0 1px var(--theme-overlay-medium),
+    0 0 0 1px var(--theme-overlay-emphasis)
+  );
+}
+
+/* Terminal Pane Ping Animation
+   Two distinct animation approaches:
+
+   1. Already selected (animate-terminal-ping):
+      - Uses overlay (::before) for brightness wave
+      - Uses ::after for border pulse
+      - Element stays at selected state throughout
+
+   2. Becoming selected (animate-terminal-ping-select):
+      - Animates ELEMENT properties directly (no overlay)
+      - Disables base CSS transition to prevent fighting
+      - Travels: unselected → overshoot → selected
+      - Same peak timing (35%) as already-selected variant
+*/
+
+.terminal-pane {
+  --terminal-ping-duration: 1600ms;
+  --terminal-select-duration: 200ms;
+  position: relative;
+  transition:
+    background-color var(--terminal-select-duration) cubic-bezier(0.4, 0, 0.2, 1),
+    border-color var(--terminal-select-duration) cubic-bezier(0.4, 0, 0.2, 1),
+    box-shadow var(--terminal-select-duration) cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+/* ALREADY SELECTED: Overlay-based animation */
+@keyframes terminal-ping-overlay {
+  0% {
+    opacity: 0;
+  }
+  35% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 0;
+  }
+}
+
+@keyframes terminal-ping-border {
+  0% {
+    box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--theme-tint) 0%, transparent);
+  }
+  35% {
+    box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--theme-tint) 25%, transparent);
+  }
+  100% {
+    box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--theme-tint) 0%, transparent);
+  }
+}
+
+.animate-terminal-ping::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  border-radius: inherit;
+  background: color-mix(in srgb, var(--theme-tint) 12%, transparent);
+  animation: terminal-ping-overlay var(--terminal-ping-duration) cubic-bezier(0.4, 0, 0.2, 1) both;
+  will-change: opacity;
+}
+
+.animate-terminal-ping::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  border-radius: inherit;
+  animation: terminal-ping-border var(--terminal-ping-duration) cubic-bezier(0.4, 0, 0.2, 1) both;
+  will-change: box-shadow;
+}
+
+/* BECOMING SELECTED: Element-level animation */
+@keyframes terminal-ping-select-element {
+  0% {
+    /* Unselected appearance */
+    background-color: var(--color-surface);
+    border-color: var(--color-border-default);
+    box-shadow: none;
+  }
+  35% {
+    /* Overshoot: selected + extra brightness */
+    background-color: var(--panel-selected-bg, var(--color-surface-highlight));
+    border-color: var(
+      --panel-focus-border,
+      color-mix(in oklab, var(--theme-border-strong) 84%, var(--theme-text-primary))
+    );
+    box-shadow: inset 0 0 0 1px var(--theme-overlay-medium);
+  }
+  100% {
+    /* Settled: matches .terminal-selected exactly */
+    background-color: var(--panel-selected-bg, var(--color-surface-highlight));
+    border-color: var(
+      --panel-focus-border,
+      color-mix(in oklab, var(--theme-border-strong) 92%, var(--theme-text-primary))
+    );
+    box-shadow: var(
+      --panel-focus-shadow,
+      inset 0 0 0 1px var(--theme-overlay-soft),
+      0 0 0 1px var(--theme-overlay-strong)
+    );
+  }
+}
+
+.animate-terminal-ping-select {
+  animation: terminal-ping-select-element var(--terminal-ping-duration) cubic-bezier(0.4, 0, 0.2, 1)
+    both !important;
+  transition: none !important;
+}
+
+@keyframes terminal-header-border {
+  0% {
+    border-bottom-color: color-mix(in srgb, var(--theme-tint) 5%, transparent);
+  }
+  35% {
+    border-bottom-color: color-mix(in srgb, var(--theme-tint) 25%, transparent);
+  }
+  100% {
+    border-bottom-color: color-mix(in srgb, var(--theme-tint) 5%, transparent);
+  }
+}
+
+.animate-terminal-header-ping {
+  animation: terminal-header-border var(--terminal-ping-duration, 1600ms)
+    cubic-bezier(0.4, 0, 0.2, 1) both;
+  will-change: border-bottom-color;
+}
+
+/* Title glow - same animation for both variants */
+@keyframes title-glow {
+  0% {
+    text-shadow: 0 0 0 color-mix(in srgb, var(--theme-tint) 0%, transparent);
+  }
+  35% {
+    text-shadow: 0 0 8px color-mix(in srgb, var(--theme-tint) 30%, transparent);
+  }
+  100% {
+    text-shadow: 0 0 0 color-mix(in srgb, var(--theme-tint) 0%, transparent);
+  }
+}
+
+.animate-eco-title,
+.animate-eco-title-select {
+  animation: title-glow var(--terminal-ping-duration, 1600ms) cubic-bezier(0.4, 0, 0.2, 1) both;
+  will-change: text-shadow;
+}
+
+/* Respect reduced motion — OS + Daintree toggle */
+@variant reduce-motion {
+  .animate-terminal-ping::before,
+  .animate-terminal-ping::after,
+  .animate-terminal-header-ping {
+    animation: none;
+    opacity: 0;
+    background: transparent;
+    box-shadow: none;
+  }
+
+  .animate-terminal-ping-select {
+    animation: none !important;
+    transition: none !important;
+  }
+
+  .animate-eco-title,
+  .animate-eco-title-select {
+    animation: none;
+    text-shadow: none;
+  }
+
+  .terminal-pane {
+    transition: none !important;
+  }
+}
+
+/* GitHub Status Indicator Animations
+ * Refined loading strip for toolbar git status icons.
+ * Uses GPU-accelerated transforms for smooth 60fps animation.
+ */
+
+/* Loading shimmer - left to right sweep */
+@keyframes forge-status-shimmer {
+  0% {
+    transform: translateX(-100%);
+  }
+  100% {
+    transform: translateX(400%);
+  }
+}
+
+.forge-status-loading {
+  background: color-mix(in oklab, var(--color-accent-primary) 20%, transparent);
+}
+
+.forge-status-loading::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 25%;
+  height: 100%;
+  background: linear-gradient(
+    90deg,
+    transparent,
+    color-mix(in oklab, var(--color-accent-primary) 80%, transparent),
+    transparent
+  );
+  animation: forge-status-shimmer 1.5s ease-in-out infinite;
+  will-change: transform;
+}
+
+/* Palette indeterminate loading bar — sits inside AppPaletteDialog.Header */
+@keyframes palette-loading-sweep {
+  0% {
+    transform: translateX(-100%);
+  }
+  100% {
+    transform: translateX(400%);
+  }
+}
+
+.palette-loading-bar {
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  height: 1px;
+  overflow: hidden;
+  background: color-mix(in oklab, var(--color-accent-primary) 18%, transparent);
+  pointer-events: none;
+}
+
+.palette-loading-bar__sweep {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 25%;
+  height: 100%;
+  background: linear-gradient(
+    90deg,
+    transparent,
+    color-mix(in oklab, var(--color-accent-primary) 85%, transparent),
+    transparent
+  );
+  animation: palette-loading-sweep 1.5s ease-in-out infinite;
+  will-change: transform;
+}
+
+/* The highlighted row — the one row a list, palette or picker will act on.
+ *
+ * A fill, and nothing else. It used to carry a 3px leading rail as well, read
+ * as the WCAG 1.4.11 indicator because the fill alone clears only ~1.1-1.2:1
+ * against the surface. That reading asked more of 1.4.11 than it asks: the
+ * Understanding text for WCAG 2.2 says a colour change between states of one
+ * component is not held to 3:1, and hover treatments are supplemental. The rail
+ * also meant the pointer and the keyboard drew different rows differently, and
+ * every shipping palette (VS Code, Linear, Raycast, macOS menus, Radix) marks the
+ * active row with a fill alone. So the rail is gone, the fill is its own
+ * `overlay-highlight` step, and the two increased-contrast blocks further down
+ * draw an outline where the user has asked for one.
+ *
+ * A leading rail still means something in this app — the one place you are, in
+ * a navigation column — which is exactly why it cannot also mean "the row under
+ * the pointer". */
+@variant reduce-motion {
+  /* The row losing the highlight fades too, so this keys on the row, not on
+     the highlighted state. */
+  .palette-row,
+  :is([role="menuitem"], [role="menuitemcheckbox"], [role="menuitemradio"], [role="option"]) {
+    transition: none;
+  }
+}
+
+/* The document tab family (`ui/document-tab`): grid, dock, portal and assistant
+   tabs. Under either reduce-motion trigger their colour fades and the close
+   control's reveal snap, like the palette row's; the sliding underline is
+   Framer's and follows `MotionConfig`. */
+@variant reduce-motion {
+  [data-document-tab],
+  [data-document-tab-close] {
+    transition: none;
+  }
+}
+
+/* Success fade - scale in then fade out */
+@keyframes forge-status-success-fade {
+  0% {
+    opacity: 0;
+    transform: scaleX(0);
+  }
+  30% {
+    opacity: 1;
+    transform: scaleX(1);
+  }
+  100% {
+    opacity: 0;
+    transform: scaleX(1);
+  }
+}
+
+.forge-status-success {
+  background: var(--color-status-success);
+  transform-origin: left;
+  animation: forge-status-success-fade 500ms ease-out forwards;
+  will-change: opacity, transform;
+}
+
+/* Error pulse - subtle breathing animation */
+@keyframes forge-status-error-pulse {
+  0%,
+  100% {
+    opacity: 0.8;
+  }
+  50% {
+    opacity: 1;
+  }
+}
+
+/* Bounded: a running animation keeps the renderer, GPU process and compositor
+ * presenting at display rate, and a forge error can persist for hours (#12584).
+ * Two and a half breaths draw the eye, then the bar rests on the 50% keyframe's
+ * full opacity, which is also its static state, so the end does not snap. */
+.forge-status-error {
+  background: var(--color-status-error);
+  animation: forge-status-error-pulse 2s ease-in-out 2.5;
+}
+
+/* Respect user's motion preferences */
+@variant reduce-motion {
+  .forge-status-loading::after {
+    display: none;
+  }
+
+  .forge-status-loading {
+    background: color-mix(in oklab, var(--color-accent-primary) 60%, transparent);
+  }
+
+  .forge-status-success {
+    animation: none;
+    opacity: 1;
+    transform: scaleX(1);
+  }
+
+  .forge-status-error {
+    animation: none;
+    opacity: 1;
+  }
+
+  .palette-loading-bar__sweep {
+    animation: none;
+    width: 100%;
+    background: color-mix(in oklab, var(--color-accent-primary) 50%, transparent);
+  }
+}
+
+/* Disable in performance mode */
+body[data-performance-mode="true"] .forge-status-loading::after {
+  display: none !important;
+}
+
+body[data-performance-mode="true"] .forge-status-loading {
+  background: color-mix(in oklab, var(--color-accent-primary) 60%, transparent) !important;
+}
+
+body[data-performance-mode="true"] .palette-loading-bar__sweep {
+  animation: none !important;
+  width: 100% !important;
+  background: color-mix(in oklab, var(--color-accent-primary) 50%, transparent) !important;
+}
+
+body[data-performance-mode="true"] .forge-status-success {
+  opacity: 1 !important;
+  transform: scaleX(1) !important;
+}
+
+body[data-performance-mode="true"] .forge-status-error {
+  opacity: 1 !important;
+}
+
+/* Section header pattern - for organizing content hierarchically */
+.section-header {
+  @apply text-xs font-bold tracking-widest text-muted-foreground uppercase;
+}

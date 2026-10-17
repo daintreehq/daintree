@@ -7,6 +7,25 @@
  * Detects if the current platform is Windows.
  * Works in both Node.js and browser environments.
  */
+/**
+ * The shell an agent launch command will run under, for a command built for
+ * another machine: a remote view's renderer reports its host's (a Windows
+ * Shell showing a project in a WSL distro builds commands for bash). Null
+ * leaves it to this process's own platform.
+ */
+let agentCommandDialectResolver: (() => "windows" | "posix" | null) | null = null;
+
+export function setAgentCommandDialectResolver(
+  resolve: (() => "windows" | "posix" | null) | null
+): void {
+  agentCommandDialectResolver = resolve;
+}
+
+/** How agent launch arguments are quoted and checked: the host's shell when it isn't this machine's. */
+export function agentCommandDialect(): "windows" | "posix" {
+  return agentCommandDialectResolver?.() ?? (isWindows() ? "windows" : "posix");
+}
+
 export function isWindows(): boolean {
   // Node.js environment
   if (typeof process !== "undefined" && process.platform) {
@@ -87,7 +106,15 @@ export function escapeWindowsArg(arg: string): string {
  *   // "'C:\\Users\\O''Brien\\config.json'"
  */
 export function quotePowerShellArg(arg: string): string {
-  return `'${arg.replace(/'/g, "''")}'`;
+  return `'${arg.replace(/['\u2018-\u201b]/g, (quote) => quote + quote)}'`;
+}
+
+/** Source quoting for commands assembled for the project's host (its shell unless named). */
+export function quoteLaunchArgOptional(arg: string, platform?: "windows" | "posix"): string {
+  if (isSafeUnescaped(arg) || isSafeShellOption(arg)) return arg;
+  return (platform ?? agentCommandDialect()) === "windows"
+    ? quotePowerShellArg(arg)
+    : escapeShellArg(arg, "posix");
 }
 
 /**
@@ -142,10 +169,7 @@ export function isCmdShell(shellPath: string): boolean {
 export function quoteCommandArg(value: string, shellPath: string): string {
   if (typeof process !== "undefined" && process.platform === "win32") {
     if (isPowerShellShell(shellPath)) {
-      // Windows PowerShell 5.1 and pwsh .cmd shims use legacy native argument
-      // passing. Preserve embedded quotes across that second boundary
-      // (notably Codex's TOML config overrides).
-      return quotePowerShellArg(value.replace(/"/g, '\\"'));
+      return quotePowerShellArg(value);
     }
     if (isCmdShell(shellPath)) {
       return escapeWindowsArg(value);
@@ -176,6 +200,11 @@ function escapePosixArg(arg: string): string {
  * Returns true if the string contains only alphanumeric characters,
  * hyphens, underscores, and forward slashes.
  */
+/** A leading dash is safe only when the entire option is shell-inert. */
+export function isSafeShellOption(arg: string): boolean {
+  return /^-[A-Za-z0-9_\-/.=:+]+$/.test(arg);
+}
+
 export function isSafeUnescaped(arg: string): boolean {
   return /^[a-zA-Z0-9_\-/]+$/.test(arg);
 }

@@ -1,7 +1,16 @@
+import { useRef } from "react";
+import { MoreHorizontal } from "lucide-react";
 import { MemoryStick } from "@/components/icons";
 import { SidebarFooterGlyph } from "@/components/Layout/SidebarFooterGlyph";
 import { Callout } from "@/components/ui/Callout";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { TruncatedTooltip } from "@/components/ui/TruncatedTooltip";
 import { useSleepIdleProjects, type IdleProject } from "@/hooks/useSleepIdleProjects";
 import { pluralize } from "@/lib/pluralize";
@@ -27,11 +36,12 @@ const ACTION_CLASS = cn(
  * Tier-1 chrome: neutral glyph and secondary text, never an accent or a status
  * colour, no dismiss. It states what was measured and nothing else (#12462),
  * clears itself on recovery, and follows the footer's polarity — the reading on
- * the left, its controls on the right, shortened below 280px like "Run".
+ * the left, its controls on the right.
  *
  * Besides the diagnosis it offers to sleep idle background projects (#13223),
  * the one relief Daintree itself can give: their terminals stop and their
- * sessions keep for the reopen.
+ * sessions keep for the reopen. Both sit behind one menu button (#13229): as
+ * two text buttons they took most of the row and truncated the reading.
  */
 export function SidebarMemoryNotice() {
   const notice = useSystemMemoryNoticeStore((s) => s.notice);
@@ -43,6 +53,12 @@ export function SidebarMemoryNotice() {
 function MemoryNoticeRow({ notice }: { notice: SystemMemoryNotice }) {
   const { action } = notice;
   const sleep = useSleepIdleProjects();
+  const canSleep = sleep.idleProjects.length > 0;
+  // A picked action runs once the menu has handed focus back to its trigger.
+  // Run straight from the item, a confirmation or diagnostic panel that opens
+  // during the menu's exit animation has its focus pulled back to the trigger,
+  // and the confirmation captures no opener to return to on cancel.
+  const pendingActionRef = useRef<(() => void) | null>(null);
 
   return (
     <div data-sidebar-memory-notice="" className="flex min-h-7 w-full shrink-0 items-stretch">
@@ -60,31 +76,60 @@ function MemoryNoticeRow({ notice }: { notice: SystemMemoryNotice }) {
           </span>
         </TruncatedTooltip>
       </div>
-      {sleep.idleProjects.length > 0 && (
-        <button
-          type="button"
-          data-sidebar-memory-sleep=""
-          aria-label="Sleep idle projects"
-          onClick={() => void sleep.openPreview()}
-          className={ACTION_CLASS}
+      {(canSleep || action) && (
+        <DropdownMenu
+          onOpenChange={(open) => {
+            if (open) pendingActionRef.current = null;
+          }}
         >
-          <span>
-            Sleep idle<span className="@max-[280px]/footer:hidden"> projects</span>
-          </span>
-        </button>
-      )}
-      {action && (
-        <button
-          type="button"
-          data-sidebar-memory-action=""
-          aria-label={action.label}
-          onClick={() => void action.onClick()}
-          className={ACTION_CLASS}
-        >
-          <span>
-            Ask agent<span className="@max-[280px]/footer:hidden"> about memory</span>
-          </span>
-        </button>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <DropdownMenuTrigger asChild>
+                <button
+                  type="button"
+                  data-sidebar-memory-menu=""
+                  aria-label="Memory actions"
+                  className={ACTION_CLASS}
+                >
+                  <MoreHorizontal className="h-3.5 w-3.5" aria-hidden="true" />
+                </button>
+              </DropdownMenuTrigger>
+            </TooltipTrigger>
+            <TooltipContent side="top">Memory actions</TooltipContent>
+          </Tooltip>
+          <DropdownMenuContent
+            side="top"
+            align="end"
+            onCloseAutoFocus={() => {
+              const run = pendingActionRef.current;
+              pendingActionRef.current = null;
+              // A microtask, so it lands after the restoration this event drives.
+              if (run) queueMicrotask(run);
+            }}
+          >
+            {action && (
+              <DropdownMenuItem
+                data-sidebar-memory-action=""
+                aria-label={action.label}
+                onSelect={() => {
+                  pendingActionRef.current = () => void action.onClick();
+                }}
+              >
+                Ask agent about memory
+              </DropdownMenuItem>
+            )}
+            {canSleep && (
+              <DropdownMenuItem
+                data-sidebar-memory-sleep=""
+                onSelect={() => {
+                  pendingActionRef.current = () => void sleep.openPreview();
+                }}
+              >
+                Sleep idle projects
+              </DropdownMenuItem>
+            )}
+          </DropdownMenuContent>
+        </DropdownMenu>
       )}
       {sleep.preview && (
         <SleepIdleProjectsDialog

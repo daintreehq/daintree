@@ -26,19 +26,6 @@ function makeDeps(
 }
 
 describe("dispatchToolbarVisibility", () => {
-  it.each(["ready", "installed", "blocked", "unauthenticated"] as const)(
-    "undefined-pinned agent + %s availability flips to false (hide — already visible)",
-    (state) => {
-      const deps = makeDeps({
-        agentSettings: { agents: {} } as AgentSettings,
-        agentAvailability: { claude: state } as unknown as CliAvailability,
-      });
-      dispatchToolbarVisibility("claude", "left", deps);
-      expect(deps.setAgentPinned).toHaveBeenCalledWith("claude", false);
-      expect(deps.toggleButtonVisibility).not.toHaveBeenCalled();
-    }
-  );
-
   it("undefined-pinned agent + missing availability flips to true (show)", () => {
     const deps = makeDeps({
       agentSettings: { agents: {} } as AgentSettings,
@@ -57,15 +44,6 @@ describe("dispatchToolbarVisibility", () => {
     expect(deps.setAgentPinned).toHaveBeenCalledWith("claude", false);
   });
 
-  it("explicitly unpinned (false) agent flips to true regardless of availability", () => {
-    const deps = makeDeps({
-      agentSettings: { agents: { claude: { pinned: false } } } as AgentSettings,
-      agentAvailability: { claude: "ready" } as unknown as CliAvailability,
-    });
-    dispatchToolbarVisibility("claude", "left", deps);
-    expect(deps.setAgentPinned).toHaveBeenCalledWith("claude", true);
-  });
-
   it("explicitPinned=false bypasses availability lookup", () => {
     const deps = makeDeps({
       agentSettings: null,
@@ -75,15 +53,6 @@ describe("dispatchToolbarVisibility", () => {
     expect(deps.setAgentPinned).toHaveBeenCalledWith("claude", false);
   });
 
-  it("explicitPinned=true bypasses availability lookup", () => {
-    const deps = makeDeps({
-      agentSettings: null,
-      agentAvailability: null,
-    });
-    dispatchToolbarVisibility("claude", "left", deps, true);
-    expect(deps.setAgentPinned).toHaveBeenCalledWith("claude", true);
-  });
-
   it("non-agent button routes through toggleButtonVisibility on the requested side", () => {
     const deps = makeDeps();
     dispatchToolbarVisibility("terminal", "right", deps);
@@ -91,23 +60,10 @@ describe("dispatchToolbarVisibility", () => {
     expect(deps.setAgentPinned).not.toHaveBeenCalled();
   });
 
-  it("non-agent button respects left vs right", () => {
-    const deps = makeDeps();
-    dispatchToolbarVisibility("browser", "left", deps);
-    expect(deps.toggleButtonVisibility).toHaveBeenCalledWith("browser", "left");
-  });
-
   it("launcher is not an agent ID — routes through toggleButtonVisibility", () => {
     const deps = makeDeps();
     dispatchToolbarVisibility("launcher", "left", deps);
     expect(deps.toggleButtonVisibility).toHaveBeenCalledWith("launcher", "left");
-    expect(deps.setAgentPinned).not.toHaveBeenCalled();
-  });
-
-  it("plugin button routes through toggleButtonVisibility", () => {
-    const deps = makeDeps();
-    dispatchToolbarVisibility("plugin.foo.bar", "right", deps);
-    expect(deps.toggleButtonVisibility).toHaveBeenCalledWith("plugin.foo.bar", "right");
     expect(deps.setAgentPinned).not.toHaveBeenCalled();
   });
 

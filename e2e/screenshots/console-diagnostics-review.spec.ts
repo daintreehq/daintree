@@ -75,7 +75,11 @@ interface Shot {
   drive?: (p: Page) => Promise<void>;
 }
 
-const consoleReady = (p: Page) => drawer(p).getByText("Failed to load orders:").first();
+// The newest row: the console opens scrolled to the end of the session.
+const consoleReady = (p: Page) =>
+  drawer(p)
+    .getByText(/Cannot read properties of undefined/)
+    .first();
 
 const SHOTS: Shot[] = [
   {

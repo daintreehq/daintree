@@ -80,6 +80,13 @@ beforeEach(() => {
 });
 
 const { usePanelStore } = await import("../../../panelStore");
+const { agentLifecycleLedger } = await import("@/services/terminal/lifecycleLedger");
+const { terminalClient } = (await import("@/clients")) as unknown as {
+  terminalClient: {
+    spawn: ReturnType<typeof vi.fn>;
+    kill: ReturnType<typeof vi.fn>;
+  };
+};
 
 function getPtyPanel(id: string): PtyPanelData | undefined {
   return usePanelStore.getState().panelsById[id] as PtyPanelData | undefined;
@@ -378,24 +385,33 @@ describe("optimistic panel spawn (#5789)", () => {
     expect(failed?.agentState).toBeUndefined();
   });
 
-  it("marks reconnect panels as 'ready' without calling spawn", async () => {
+  it("shows a refusal from main by its user message, never the encoded wire prefix", async () => {
     const { terminalClient } = (await import("@/clients")) as unknown as {
       terminalClient: { spawn: ReturnType<typeof vi.fn> };
     };
+    terminalClient.spawn.mockImplementationOnce(async () => {
+      throw new Error(
+        `[AppError|DRIVEN_ELSEWHERE|${encodeURIComponent(
+          "This project is being driven from studio-01. Take it over to make changes."
+        )}] terminal:spawn changes a project another window drives`
+      );
+    });
 
-    const { addPanel } = usePanelStore.getState();
-    const id = await addPanel({
+    const id = await usePanelStore.getState().addPanel({
       kind: "terminal",
-      launchAgentId: "claude",
-      command: "claude",
-      existingId: "reconnect-1",
+      requestedId: "refused-spawn",
       cwd: "/",
       bypassLimits: true,
     });
+    await drainMicrotasks();
 
-    expect(id).toBe("reconnect-1");
-    expect(getPtyPanel("reconnect-1")?.spawnStatus).toBe("ready");
-    expect(terminalClient.spawn).not.toHaveBeenCalled();
+    const failed = usePanelStore.getState().panelsById[id!] as PtyPanelData | undefined;
+    expect(failed?.spawnStatus).toBe("failed");
+    // Not a spawn errno, so the banner's generic copy, with the person's sentence.
+    expect(failed?.spawnError?.code).toBe("UNKNOWN");
+    expect(failed?.spawnError?.message).toBe(
+      "This project is being driven from studio-01. Take it over to make changes."
+    );
   });
 
   it("does not remove a replacement panel when a stale spawn rejects", async () => {
@@ -451,50 +467,6 @@ describe("optimistic panel spawn (#5789)", () => {
     expect(after?.spawnStatus).toBe("ready");
   });
 
-  it("issues a compensating kill when the panel is removed mid-spawn", async () => {
-    // Edge case: user closes panel before spawn IPC arrives at the backend.
-    // removePanel's kill was a no-op then (no terminal yet); when the spawn
-    // eventually succeeds, the success handler must issue a follow-up kill so
-    // the PTY isn't orphaned.
-    const { terminalClient } = (await import("@/clients")) as unknown as {
-      terminalClient: { spawn: ReturnType<typeof vi.fn>; kill: ReturnType<typeof vi.fn> };
-    };
-
-    let release: () => void = () => {};
-    const gate = new Promise<void>((resolve) => {
-      release = resolve;
-    });
-    terminalClient.spawn.mockImplementationOnce(async ({ id }: { id?: string }) => {
-      await gate;
-      return id ?? "late";
-    });
-    terminalClient.kill.mockClear();
-
-    const { addPanel, removePanel } = usePanelStore.getState();
-    await addPanel({
-      kind: "terminal",
-      launchAgentId: "claude",
-      command: "claude",
-      requestedId: "orphan-id",
-      cwd: "/",
-      bypassLimits: true,
-    });
-    await drainMicrotasks();
-    expect(terminalClient.spawn).toHaveBeenCalledTimes(1);
-    removePanel("orphan-id");
-    // removePanel fires kill (no-op on the backend since the PTY isn't spawned yet).
-    expect(terminalClient.kill).toHaveBeenCalledWith("orphan-id");
-    const killCallsAfterRemove = terminalClient.kill.mock.calls.length;
-
-    release();
-    await drainMicrotasks();
-
-    // A compensating kill must have fired after spawn succeeded for the
-    // now-missing panel.
-    expect(terminalClient.kill.mock.calls.length).toBeGreaterThan(killCallsAfterRemove);
-    expect(terminalClient.kill).toHaveBeenLastCalledWith("orphan-id");
-  });
-
   it("does not block the panel render on env fetch latency", async () => {
     // The panel must appear before globalEnvClient.get() and
     // projectClient.getSettings() resolve — env fetch is background, not gating.
@@ -537,26 +509,286 @@ describe("optimistic panel spawn (#5789)", () => {
     await drainMicrotasks();
     expect(getPtyPanel("env-latent")?.spawnStatus).toBe("ready");
   });
+});
 
-  it("propagates the pre-assigned id to terminalClient.spawn", async () => {
+/**
+ * Generation-safety tests for the panel-store lifecycle ledger wiring:
+ * close-before-spawn resolution, stale hydration replay over a live launch,
+ * and idempotent double-hydration re-merge.
+ */
+describe("addPanel lifecycle ledger", () => {
+  beforeEach(async () => {
+    await usePanelStore.getState().reset();
+    agentLifecycleLedger.clear();
+    terminalClient.spawn.mockReset().mockResolvedValue(undefined);
+    terminalClient.kill.mockReset().mockResolvedValue(undefined);
+    // Explicitly reset waitForAttachSettled so the spawn task's post-ready
+    // await resolves immediately. The mock factory sets mockResolvedValue but
+    // a prior test's mockImplementation (or vitest's mock state under load)
+    // can survive into the next test if not explicitly cleared — mirrors the
+    // optimisticPanelSpawn test's beforeEach.
+    const { terminalInstanceService } = await import("@/services/TerminalInstanceService");
+    const waitForAttachSettledMock = vi.mocked(terminalInstanceService.waitForAttachSettled);
+    waitForAttachSettledMock.mockReset();
+    waitForAttachSettledMock.mockResolvedValue(undefined);
+  });
+
+  it("records launch facts, spawn resolution, and env provenance", async () => {
+    const id = await usePanelStore.getState().addPanel({
+      kind: "terminal",
+      requestedId: "term-facts",
+      cwd: "/repo/wt-a",
+      worktreeId: "wt-a",
+      launchAgentId: "claude",
+      agentModelId: "opus",
+      env: { ANTHROPIC_API_KEY: "sk-secret" },
+      location: "grid",
+      bypassLimits: true,
+    });
+
+    expect(id).toBe("term-facts");
+    await drainMicrotasks();
+    expect(getPtyPanel("term-facts")?.spawnStatus).toBe("ready");
+
+    const entry = agentLifecycleLedger.getEntry("term-facts");
+    expect(entry?.generation).toBe(1);
+    expect(entry?.facts).toMatchObject({
+      launchAgentId: "claude",
+      agentModelId: "opus",
+      worktreeId: "wt-a",
+      worktreeSource: "explicit",
+    });
+    expect(entry?.spawnOk).toBe(true);
+    expect(entry?.facts.env?.keys).toEqual(["ANTHROPIC_API_KEY"]);
+    expect(JSON.stringify(entry)).not.toContain("sk-secret");
+  });
+
+  it("close-before-spawn: removal mid-spawn closes the generation and compensates with a kill", async () => {
+    let resolveSpawn!: () => void;
+    terminalClient.spawn.mockImplementation(
+      () =>
+        new Promise<void>((resolve) => {
+          resolveSpawn = resolve;
+        })
+    );
+
+    const id = await usePanelStore.getState().addPanel({
+      kind: "terminal",
+      requestedId: "term-race",
+      cwd: "/repo",
+      location: "grid",
+      bypassLimits: true,
+    });
+    expect(id).toBe("term-race");
+
+    // Wait until the startup queue has issued the spawn IPC.
+    await drainMicrotasks();
+    expect(terminalClient.spawn).toHaveBeenCalledTimes(1);
+
+    // User closes the panel while the spawn IPC is still in flight.
+    usePanelStore.getState().removePanel("term-race");
+    expect(agentLifecycleLedger.getEntry("term-race")?.closedAt).toBeDefined();
+    expect(agentLifecycleLedger.getEntry("term-race")?.closeReason).toBe("removed");
+    const killsAtRemoval = terminalClient.kill.mock.calls.length;
+
+    // Spawn resolves late — the orphaned PTY must be compensating-killed.
+    resolveSpawn();
+    await drainMicrotasks();
+    expect(terminalClient.kill.mock.calls.length).toBeGreaterThan(killsAtRemoval);
+    expect(usePanelStore.getState().panelsById["term-race"]).toBeUndefined();
+  });
+
+  it("stale hydration replay cannot overwrite a live fresh launch", async () => {
+    // Fresh user launch owns the id.
+    await usePanelStore.getState().addPanel({
+      kind: "terminal",
+      requestedId: "term-live",
+      cwd: "/repo/wt-a",
+      worktreeId: "wt-a",
+      launchAgentId: "claude",
+      agentModelId: "opus",
+      location: "grid",
+      bypassLimits: true,
+    });
+    await drainMicrotasks();
+    expect(getPtyPanel("term-live")?.spawnStatus).toBe("ready");
+
+    // A hydration replay for the same id arrives late, carrying a stale
+    // persisted snapshot with different launch metadata.
+    const replayId = await usePanelStore.getState().addPanel({
+      kind: "terminal",
+      existingId: "term-live",
+      cwd: "/repo/old-path",
+      launchAgentId: "codex",
+      agentModelId: "stale-model",
+      location: "grid",
+      bypassLimits: true,
+    });
+
+    // The call reports the id (panel exists) but the live panel is untouched.
+    expect(replayId).toBe("term-live");
+    const panel = getPtyPanel("term-live");
+    expect(panel?.launchAgentId).toBe("claude");
+    expect(panel?.agentModelId).toBe("opus");
+    expect(panel?.cwd).toBe("/repo/wt-a");
+
+    // The rejection is auditable.
+    const anomalies = agentLifecycleLedger.getAnomalies();
+    expect(anomalies.some((a) => a.op === "restore" && a.terminalId === "term-live")).toBe(true);
+  });
+
+  it("allows an idempotent re-merge when the panel itself is restore-born", async () => {
+    // First hydration pass creates the reconnect panel.
+    await usePanelStore.getState().addPanel({
+      kind: "terminal",
+      existingId: "term-restored",
+      cwd: "/repo/wt-a",
+      launchAgentId: "claude",
+      agentModelId: "opus",
+      location: "grid",
+      bypassLimits: true,
+    });
+    expect(getPtyPanel("term-restored")).toBeDefined();
+    expect(agentLifecycleLedger.getEntry("term-restored")?.restoredAt).toBeDefined();
+
+    // Double hydration re-merges the same snapshot — allowed and applied.
+    await usePanelStore.getState().addPanel({
+      kind: "terminal",
+      existingId: "term-restored",
+      cwd: "/repo/wt-a",
+      launchAgentId: "claude",
+      agentModelId: "opus-4.1",
+      location: "grid",
+      bypassLimits: true,
+    });
+
+    expect(getPtyPanel("term-restored")?.agentModelId).toBe("opus-4.1");
+    expect(agentLifecycleLedger.currentGeneration("term-restored")).toBe(2);
+  });
+
+  it("stamps inferred worktree provenance from AddPanelOptions", async () => {
+    await usePanelStore.getState().addPanel({
+      kind: "terminal",
+      requestedId: "term-inferred",
+      cwd: "/repo/wt-b/sub",
+      worktreeId: "wt-b",
+      worktreeIdSource: "inferred",
+      location: "grid",
+      bypassLimits: true,
+    });
+
+    const entry = agentLifecycleLedger.getEntry("term-inferred");
+    expect(entry?.facts.worktreeSource).toBe("inferred");
+
+    // A later explicit move wins; a later divergent inference is rejected.
+    const generation = entry!.generation;
+    expect(
+      agentLifecycleLedger.recordWorktreeAttribution(
+        "term-inferred",
+        generation,
+        "wt-c",
+        "explicit"
+      ).accepted
+    ).toBe(true);
+    expect(
+      agentLifecycleLedger.recordWorktreeAttribution(
+        "term-inferred",
+        generation,
+        "wt-d",
+        "inferred"
+      ).accepted
+    ).toBe(false);
+  });
+});
+
+/**
+ * Tests that addPanel propagates a caller-supplied `titleMode` onto the created
+ * PTY panel (issue #10439).
+ *
+ * `titleMode: "custom"` is how an assistant-named agent launch pins its title so
+ * the identity reducer's agent-detected/exited rewrites skip it. The field was
+ * previously dropped on the floor between AddPanelOptions and the panel object.
+ *
+ * The non-PTY half (#11917) kept dropping it long after the PTY half was fixed:
+ * persistence writes the mode and hydration forwards it, so a restored file
+ * viewer or file browser kept the name a rename gave it while losing the
+ * ownership that stops a derived surface — the dock chip — from overriding it.
+ */
+describe("addPanel titleMode propagation (#10439)", () => {
+  beforeEach(async () => {
+    const { reset } = usePanelStore.getState();
+    await reset();
+
     const { terminalClient } = (await import("@/clients")) as unknown as {
       terminalClient: { spawn: ReturnType<typeof vi.fn> };
     };
+    terminalClient.spawn.mockReset();
+    terminalClient.spawn.mockImplementation(async ({ id }: { id?: string }) => id ?? "spawn-id");
+  });
 
+  it("stamps titleMode 'custom' and the supplied title onto the panel", async () => {
     const { addPanel } = usePanelStore.getState();
-    await addPanel({
+    const id = await addPanel({
       kind: "terminal",
       launchAgentId: "claude",
       command: "claude",
-      requestedId: "stable-id",
+      title: "Claude: auth refactor",
+      titleMode: "custom",
+      requestedId: "named-1",
       cwd: "/",
       bypassLimits: true,
     });
 
-    // Drain microtasks so the background spawn has run.
-    await drainMicrotasks();
+    expect(id).toBe("named-1");
+    const panel = getPtyPanel("named-1");
+    expect(panel?.title).toBe("Claude: auth refactor");
+    expect(panel?.titleMode).toBe("custom");
+  });
 
-    const spawnCall = terminalClient.spawn.mock.calls[0]?.[0] as { id?: string } | undefined;
-    expect(spawnCall?.id).toBe("stable-id");
+  it("leaves titleMode unset when the caller does not supply one", async () => {
+    const { addPanel } = usePanelStore.getState();
+    const id = await addPanel({
+      kind: "terminal",
+      launchAgentId: "claude",
+      command: "claude",
+      requestedId: "default-1",
+      cwd: "/",
+      bypassLimits: true,
+    });
+
+    expect(id).toBe("default-1");
+    const panel = getPtyPanel("default-1");
+    expect(panel?.titleMode).toBeUndefined();
+  });
+
+  it("stamps titleMode onto a non-PTY panel too, the way hydration replays it", async () => {
+    const { addPanel } = usePanelStore.getState();
+    const id = await addPanel({
+      kind: "file-browser",
+      title: "My notes",
+      titleMode: "user",
+      requestedId: "fb-named",
+      cwd: "/",
+      bypassLimits: true,
+    });
+
+    expect(id).toBe("fb-named");
+    const panel = usePanelStore.getState().panelsById["fb-named"];
+    expect(panel?.title).toBe("My notes");
+    expect(panel?.titleMode).toBe("user");
+  });
+
+  it("leaves a non-PTY panel's titleMode unset when the caller supplies none", async () => {
+    const { addPanel } = usePanelStore.getState();
+    const id = await addPanel({
+      kind: "file-browser",
+      title: "Files — develop",
+      requestedId: "fb-default",
+      cwd: "/",
+      bypassLimits: true,
+    });
+
+    expect(id).toBe("fb-default");
+    expect(usePanelStore.getState().panelsById["fb-default"]?.titleMode).toBeUndefined();
   });
 });

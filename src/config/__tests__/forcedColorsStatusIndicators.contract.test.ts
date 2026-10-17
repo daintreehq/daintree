@@ -2,11 +2,11 @@ import { describe, expect, it } from "vitest";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { readToolbarCss } from "@/__tests__/support/cssManifest";
+import { readIndexCss } from "@/__tests__/support/hostCss";
 
 const TEST_DIR = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(TEST_DIR, "../../..");
-const INDEX_CSS = path.join(REPO_ROOT, "src/index.css");
-const TOOLBAR_CSS = path.join(REPO_ROOT, "src/styles/components/toolbar.css");
 const SIDEBAR_CSS = path.join(REPO_ROOT, "src/styles/components/sidebar.css");
 const TOOLBAR_TSX = path.join(REPO_ROOT, "src/components/Layout/Toolbar.tsx");
 
@@ -18,8 +18,7 @@ const TOOLBAR_TSX = path.join(REPO_ROOT, "src/components/Layout/Toolbar.tsx");
 // presence (scoped to the forced-colors block) in CSS source — a regression in
 // the cascade would silently re-break HC users otherwise.
 
-function readForcedColorsBlocks(file: string): string {
-  const content = fs.readFileSync(file, "utf8");
+function readForcedColorsBlocks(content: string): string {
   const blocks: string[] = [];
   const marker = "@media (forced-colors: active)";
 
@@ -53,7 +52,7 @@ function readForcedColorsBlocks(file: string): string {
 
 describe("forced-colors status-indicator contract (#8936)", () => {
   it("index.css repaints severity glyphs coloured on the SVG itself", () => {
-    const block = readForcedColorsBlocks(INDEX_CSS);
+    const block = readForcedColorsBlocks(readIndexCss());
     // Chromium forces an inherited currentColor but not a colour set on the
     // SVG, so both the marker and a status utility on the svg must be caught,
     // and !important must beat the banner glyph's inline colour.
@@ -64,7 +63,7 @@ describe("forced-colors status-indicator contract (#8936)", () => {
   });
 
   it("index.css repaints the ActivityLight active dot with CanvasText !important", () => {
-    const block = readForcedColorsBlocks(INDEX_CSS);
+    const block = readForcedColorsBlocks(readIndexCss());
     expect(block).toContain('[data-activity-active="true"]');
     // !important is load-bearing: it must beat the inline author background-color
     // the UA otherwise forces to Canvas. Removing it silently re-breaks the fix.
@@ -79,7 +78,7 @@ describe("forced-colors status-indicator contract (#8936)", () => {
   // and no background tint, and an untitled one has no title to embolden, so
   // losing the dot left that row with no unread indication at all.
   it("index.css repaints the inbox unread dot with CanvasText !important", () => {
-    const block = readForcedColorsBlocks(INDEX_CSS);
+    const block = readForcedColorsBlocks(readIndexCss());
     expect(block).toContain('[data-notification-unread="true"]');
     // !important for the same reason ActivityLight needs it: it has to beat the
     // background-color the UA otherwise forces to Canvas.
@@ -89,7 +88,7 @@ describe("forced-colors status-indicator contract (#8936)", () => {
   });
 
   it("index.css gives the inbox thread-count chip a border in forced colors", () => {
-    const block = readForcedColorsBlocks(INDEX_CSS);
+    const block = readForcedColorsBlocks(readIndexCss());
     expect(block).toContain('[data-notification-count="true"]');
     // A border, not a background: borders survive the override, backgrounds do
     // not. Without it the count renders as a bare numeral running on from the
@@ -98,13 +97,13 @@ describe("forced-colors status-indicator contract (#8936)", () => {
   });
 
   it("index.css gives the checked SettingsSwitch track a Highlight fill", () => {
-    const block = readForcedColorsBlocks(INDEX_CSS);
+    const block = readForcedColorsBlocks(readIndexCss());
     expect(block).toContain('[role="switch"][data-state="checked"]');
     expect(block).toMatch(/\[role="switch"\]\[data-state="checked"\]\s*\{[^}]*Highlight/);
   });
 
   it("index.css contrasts the switch thumb in both states", () => {
-    const block = readForcedColorsBlocks(INDEX_CSS);
+    const block = readForcedColorsBlocks(readIndexCss());
     expect(block).toMatch(/span\[data-state="checked"\]\s*\{[^}]*HighlightText/);
     expect(block).toMatch(/span\[data-state="unchecked"\]\s*\{[^}]*ButtonText/);
   });
@@ -115,7 +114,7 @@ describe("forced-colors status-indicator contract (#8936)", () => {
   // without an explicit repaint the separator disappears for HC users, a
   // regression the old border didn't have.
   it("sidebar.css repaints the deleted-row separator and its countdown fill", () => {
-    const block = readForcedColorsBlocks(SIDEBAR_CSS);
+    const block = readForcedColorsBlocks(fs.readFileSync(SIDEBAR_CSS, "utf8"));
     expect(block).toMatch(/\.deleted-worktree-separator\s*\{[^}]*background-color:\s*CanvasText/);
     expect(block).toMatch(
       /\.deleted-worktree-countdown-fill\s*\{[^}]*background-color:\s*Highlight/
@@ -123,7 +122,7 @@ describe("forced-colors status-indicator contract (#8936)", () => {
   });
 
   it("toolbar.css repaints every pip type with CanvasText", () => {
-    const block = readForcedColorsBlocks(TOOLBAR_CSS);
+    const block = readForcedColorsBlocks(readToolbarCss());
     // All pip selectors must share a rule whose body sets background-color.
     expect(block).toMatch(
       /\.toolbar-badge\b[\s\S]*\.toolbar-badge-chip\b[\s\S]*\.toolbar-overflow-badge\b[\s\S]*\.toolbar-problems-badge\b\s*\{[^}]*background-color:\s*CanvasText/
@@ -134,7 +133,7 @@ describe("forced-colors status-indicator contract (#8936)", () => {
   // glyph beneath it; without the outline the CanvasText dot fuses with the
   // icon stroke. The overflow menu's agent pip needs the same moat.
   it("toolbar.css gives every corner pip, the overflow menu's included, a Canvas outline", () => {
-    const block = readForcedColorsBlocks(TOOLBAR_CSS);
+    const block = readForcedColorsBlocks(readToolbarCss());
     const rule = block.match(/([^{}]*)\{\s*outline:\s*2px solid Canvas;?\s*\}/);
     expect(rule).not.toBeNull();
     for (const selector of [".toolbar-badge", ".toolbar-problems-badge", ".toolbar-menu-pip"]) {
@@ -151,7 +150,7 @@ describe("forced-colors status-indicator contract (#8936)", () => {
 // rule, so both halves are guarded here.
 describe("forced-colors shared status-mark contract (#12000)", () => {
   it("index.css repaints the shared status mark with CanvasText !important", () => {
-    const block = readForcedColorsBlocks(INDEX_CSS);
+    const block = readForcedColorsBlocks(readIndexCss());
     // !important for the reason ActivityLight needs it: it has to beat the
     // author background the UA otherwise forces to Canvas.
     expect(block).toMatch(/\.status-mark\s*\{[^}]*background-color:\s*CanvasText[^}]*!important/);
@@ -161,14 +160,14 @@ describe("forced-colors shared status-mark contract (#12000)", () => {
   // so dropping this rule looks harmless in testing and only breaks for users on
   // a palette that separates them.
   it("repaints marks inside a control with ButtonText, the pair that matches ButtonFace", () => {
-    const block = readForcedColorsBlocks(INDEX_CSS);
+    const block = readForcedColorsBlocks(readIndexCss());
     expect(block).toMatch(
       /button\s+\.status-mark,[\s\S]{0,80}?\.status-mark\s*\{[^}]*background-color:\s*ButtonText[^}]*!important/
     );
   });
 
   it("does not reach for forced-color-adjust, which would opt out of the user's palette", () => {
-    const block = readForcedColorsBlocks(INDEX_CSS);
+    const block = readForcedColorsBlocks(readIndexCss());
     const rule = block.match(/\.status-mark\s*\{([^}]*)\}/);
     expect(rule).not.toBeNull();
     expect(rule?.[1]).not.toMatch(/forced-color-adjust/);
@@ -215,7 +214,7 @@ describe("forced-colors heavier-border hooks survive the 1px pin-back", () => {
 
   it("exempts every button hook that asserts a 2px ButtonText border", () => {
     // Comments quote these selectors, so match live rules only.
-    const blocks = readForcedColorsBlocks(INDEX_CSS)
+    const blocks = readForcedColorsBlocks(readIndexCss())
       .replace(/\/\*[\s\S]*?\*\//g, "")
       .replace(/'/g, '"');
     const pin = blocks.match(
@@ -242,14 +241,14 @@ describe("forced-colors heavier-border hooks survive the 1px pin-back", () => {
 // regression for High Contrast users.
 describe("forced-colors destructive button distinction (#11981)", () => {
   it("keeps a heavier border on the destructive variant inside the forced-colors block", () => {
-    const blocks = readForcedColorsBlocks(INDEX_CSS);
+    const blocks = readForcedColorsBlocks(readIndexCss());
     const rule =
       /button\[data-variant=["']destructive["']\]\s*\{[^}]*border:\s*2px\s+solid\s+ButtonText/;
     expect(blocks).toMatch(rule);
   });
 
   it("does not use outline for that distinction — the focus ring owns outline and would win", () => {
-    const blocks = readForcedColorsBlocks(INDEX_CSS);
+    const blocks = readForcedColorsBlocks(readIndexCss());
     const match = blocks.match(/button\[data-variant=["']destructive["']\]\s*\{([^}]*)\}/);
     expect(match).not.toBeNull();
     expect(match?.[1]).not.toMatch(/outline\s*:/);
@@ -273,7 +272,7 @@ describe("forced-colors stroked agent-state glyphs", () => {
   // Inherit, not a named system colour: the parent's forced ink is the pair
   // the UA already matched to that surface, which a role cannot tell us.
   it("hands the stroked state circles their parent's forced ink, not their state hue", () => {
-    const block = readForcedColorsBlocks(INDEX_CSS);
+    const block = readForcedColorsBlocks(readIndexCss());
     expect(block).toMatch(/\[data-agent-state-glyph\]\s*\{[^}]*color:\s*inherit/);
     expect(block).not.toMatch(/\[data-agent-state-glyph\][^{]*\{[^}]*(CanvasText|ButtonText)/);
   });
@@ -293,7 +292,7 @@ describe("forced-colors resource glyphs", () => {
   // The CPU line and the amber/red band marks carry their hue on the svg
   // itself, so without the hook the hue survives onto the forced canvas.
   it("hands resource glyphs their parent's forced ink, not their band hue", () => {
-    const block = readForcedColorsBlocks(INDEX_CSS);
+    const block = readForcedColorsBlocks(readIndexCss());
     expect(block).toMatch(/\[data-resource-glyph\]\s*\{[^}]*color:\s*inherit/);
   });
 

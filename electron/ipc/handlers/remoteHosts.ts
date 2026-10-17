@@ -1,0 +1,376 @@
+import { defineIpcNamespace, op } from "../define.js";
+import type { IpcContext } from "../types.js";
+import os from "node:os";
+import { store } from "../../store.js";
+import { AppError } from "../../utils/errorTypes.js";
+import { getRemoteService, requireRemoteService } from "../../remote/runtime.js";
+import { REMOTE_HOSTS_METHOD_CHANNELS } from "./remoteHosts.preload.js";
+import { getLocalHandshakeInfo } from "../../remote/handshakeInfo.js";
+import {
+  LOCAL_HOST_ID,
+  type HostConnectionState,
+  type HostDescriptor,
+  type HostHandshakeInfo,
+  type HostId,
+  type HostListEntry,
+  type HostRecentUse,
+  isLocalHostId,
+  type OperationId,
+  type OperationOutcome,
+} from "../../../shared/types/remoteHosts.js";
+import type {
+  AddHostPayload,
+  AssistantExchangeCancelPayload,
+  AssistantExchangeListPayload,
+  AssistantExchangeView,
+  DiscoveredHost,
+  HostInstallPlan,
+  HostProbeResult,
+  HostSetupTarget,
+  StartHostModeResult,
+  HostProjectSummary,
+  InstallHostPayload,
+  ListHostProjectsPayload,
+  InstallHostResult,
+  HostPluginClipboardGrant,
+  PlanInstallPayload,
+  ResetClipboardGrantsPayload,
+  ResetPluginViewConsentPayload,
+  PluginViewConsentEntry,
+  PreparePluginViewPayload,
+  SwitchWindowHostPayload,
+  SwitchWindowHostResult,
+  CancelPendingSwitchPayload,
+  PendingHostSwitch,
+  UpdateHostPayload,
+  WindowHostInfo,
+} from "../../../shared/types/ipc/remoteHosts.js";
+
+function requireHostId(payload: unknown): string {
+  const hostId = (payload as { hostId?: unknown } | null)?.hostId;
+  if (typeof hostId !== "string" || hostId.length === 0) {
+    throw new AppError({ code: "VALIDATION", message: "hostId is required" });
+  }
+  return hostId;
+}
+
+/** Longer than any messageId a hub mints; refused before it reaches a lookup. */
+const MAX_MESSAGE_ID_LENGTH = 256;
+
+function requireMessageId(payload: unknown): string {
+  const messageId = (payload as { messageId?: unknown } | null)?.messageId;
+  if (
+    typeof messageId !== "string" ||
+    messageId.length === 0 ||
+    messageId.length > MAX_MESSAGE_ID_LENGTH
+  ) {
+    throw new AppError({ code: "VALIDATION", message: "messageId is required" });
+  }
+  return messageId;
+}
+
+/** This machine as a window's host: what a window that never attached anywhere reports. */
+function localWindowHost(): WindowHostInfo {
+  return {
+    hostId: LOCAL_HOST_ID,
+    descriptor: null,
+    connection: { status: "local" },
+    hostPlatform: process.platform as WindowHostInfo["hostPlatform"],
+    hostHomeDir: os.homedir(),
+    hostTmpDir: os.tmpdir(),
+  };
+}
+
+/**
+ * Whether anything here could make a view on this machine be driven from
+ * elsewhere: a configured host, Host mode switched on, or a Host server
+ * running for this launch (`--host-mode`). Reads settings and the service
+ * table only, so it is safe to ask from every view as it opens.
+ */
+function remoteHostsInUse(): boolean {
+  const hosts = store.get("remoteHosts")?.hosts;
+  if (Array.isArray(hosts) && hosts.length > 0) return true;
+  if (store.get("hostMode")?.enabled === true) return true;
+  return getRemoteService("hostServer") !== undefined;
+}
+
+/**
+ * This machine's projects as another window lists them. The store is loaded
+ * on first use: its constructor reads app paths at module load.
+ */
+async function listLocalProjects(): Promise<HostProjectSummary[]> {
+  const { projectStore } = await import("../../services/ProjectStore.js");
+  return projectStore
+    .getProjectSummaries()
+    .map(({ id, name, path, emoji }) => ({ id, name, path, ...(emoji ? { emoji } : {}) }));
+}
+
+export const remoteHostsNamespace = defineIpcNamespace({
+  name: "remoteHosts",
+  ops: {
+    list: op(
+      REMOTE_HOSTS_METHOD_CHANNELS.list,
+      async (): Promise<HostListEntry[]> =>
+        // Empty until the remote runtime has started.
+        getRemoteService("remoteHostsClient")?.list() ?? []
+    ),
+    listRecent: op(
+      REMOTE_HOSTS_METHOD_CHANNELS.listRecent,
+      async (): Promise<HostRecentUse[]> =>
+        getRemoteService("remoteHostsClient")?.listRecent() ?? []
+    ),
+    add: op(
+      REMOTE_HOSTS_METHOD_CHANNELS.add,
+      async (payload: AddHostPayload): Promise<HostDescriptor> =>
+        requireRemoteService("remoteHostsClient").add(payload)
+    ),
+    update: op(
+      REMOTE_HOSTS_METHOD_CHANNELS.update,
+      async (payload: UpdateHostPayload): Promise<HostDescriptor> =>
+        requireRemoteService("remoteHostsClient").update(payload)
+    ),
+    forget: op(
+      REMOTE_HOSTS_METHOD_CHANNELS.forget,
+      async (payload: { hostId: string }): Promise<void> =>
+        requireRemoteService("remoteHostsClient").forget(payload)
+    ),
+    connect: op(
+      REMOTE_HOSTS_METHOD_CHANNELS.connect,
+      async (payload: { hostId: string }): Promise<HostConnectionState> =>
+        requireRemoteService("remoteHostsClient").connect(payload)
+    ),
+    disconnect: op(
+      REMOTE_HOSTS_METHOD_CHANNELS.disconnect,
+      async (payload: { hostId: string }): Promise<void> =>
+        requireRemoteService("remoteHostsClient").disconnect(payload)
+    ),
+    getWindowHost: op(
+      REMOTE_HOSTS_METHOD_CHANNELS.getWindowHost,
+      async (ctx: IpcContext): Promise<WindowHostInfo> =>
+        getRemoteService("remoteHostsClient")?.getWindowHost(ctx) ?? localWindowHost(),
+      { withContext: true }
+    ),
+    takeProjectOffer: op(
+      REMOTE_HOSTS_METHOD_CHANNELS.takeProjectOffer,
+      async (ctx: IpcContext): Promise<HostId | null> =>
+        getRemoteService("remoteHostsClient")?.takeProjectOffer(ctx) ?? null,
+      { withContext: true }
+    ),
+    switchWindowHost: op(
+      REMOTE_HOSTS_METHOD_CHANNELS.switchWindowHost,
+      async (ctx: IpcContext, payload: SwitchWindowHostPayload): Promise<SwitchWindowHostResult> =>
+        requireRemoteService("remoteHostsClient").switchWindowHost(ctx, payload),
+      { withContext: true }
+    ),
+    getPendingSwitch: op(
+      REMOTE_HOSTS_METHOD_CHANNELS.getPendingSwitch,
+      async (ctx: IpcContext): Promise<PendingHostSwitch | null> =>
+        getRemoteService("remoteHostsClient")?.getPendingSwitch(ctx) ?? null,
+      { withContext: true }
+    ),
+    cancelPendingSwitch: op(
+      REMOTE_HOSTS_METHOD_CHANNELS.cancelPendingSwitch,
+      async (ctx: IpcContext, payload: CancelPendingSwitchPayload): Promise<boolean> =>
+        getRemoteService("remoteHostsClient")?.cancelPendingSwitch(ctx, payload) ?? false,
+      { withContext: true }
+    ),
+    discover: op(REMOTE_HOSTS_METHOD_CHANNELS.discover, async (): Promise<DiscoveredHost[]> =>
+      requireRemoteService("hostSetup").discover()
+    ),
+    probe: op(
+      REMOTE_HOSTS_METHOD_CHANNELS.probe,
+      async (payload: HostSetupTarget): Promise<HostProbeResult> =>
+        requireRemoteService("hostSetup").probe(payload)
+    ),
+    planInstall: op(
+      REMOTE_HOSTS_METHOD_CHANNELS.planInstall,
+      async (payload: PlanInstallPayload): Promise<HostInstallPlan> =>
+        requireRemoteService("hostSetup").planInstall(payload)
+    ),
+    install: op(
+      REMOTE_HOSTS_METHOD_CHANNELS.install,
+      async (payload: InstallHostPayload): Promise<InstallHostResult> =>
+        requireRemoteService("hostSetup").install(payload)
+    ),
+    getInstallStatus: op(
+      REMOTE_HOSTS_METHOD_CHANNELS.getInstallStatus,
+      async (payload: { opId: OperationId }): Promise<OperationOutcome> =>
+        getRemoteService("hostSetup")?.installStatus(payload) ?? { status: "unknown" }
+    ),
+    cancelInstall: op(
+      REMOTE_HOSTS_METHOD_CHANNELS.cancelInstall,
+      async (payload: { opId: OperationId }): Promise<boolean> =>
+        getRemoteService("hostSetup")?.cancelInstall(payload) ?? false
+    ),
+    startHostMode: op(
+      REMOTE_HOSTS_METHOD_CHANNELS.startHostMode,
+      async (payload: HostSetupTarget): Promise<StartHostModeResult> =>
+        requireRemoteService("hostSetup").startHostMode(payload)
+    ),
+    listHostProjects: op(
+      REMOTE_HOSTS_METHOD_CHANNELS.listHostProjects,
+      async (payload: ListHostProjectsPayload): Promise<HostProjectSummary[]> => {
+        const hostId = (payload as Partial<ListHostProjectsPayload> | null)?.hostId;
+        if (typeof hostId === "string" && isLocalHostId(hostId)) return listLocalProjects();
+        return requireRemoteService("remoteHostsClient").listHostProjects(payload);
+      }
+    ),
+    // This machine's own answers about a host's plugins and its clipboard.
+    listClipboardGrants: op(
+      REMOTE_HOSTS_METHOD_CHANNELS.listClipboardGrants,
+      async (payload: ListHostProjectsPayload): Promise<HostPluginClipboardGrant[]> => {
+        const hostId = requireHostId(payload);
+        // Loaded lazily behind the raw define so a Windows build drops the module.
+        if (__DAINTREE_REMOTE_HOSTS__) {
+          const { persistedClipboardGrants } =
+            await import("../../remote/plugins/clipboardGrants.js");
+          const { runClipboardReadGrants } = await import("../../remote/plugins/shellRequests.js");
+          // A read allowed "always" lives only in memory this run, and one
+          // kept on disk by an earlier build no longer counts: list what holds.
+          const runReads = new Set(runClipboardReadGrants(hostId));
+          const byPlugin = new Map<string, HostPluginClipboardGrant>();
+          for (const grant of persistedClipboardGrants.list(hostId)) {
+            const entry: HostPluginClipboardGrant = { pluginId: grant.pluginId };
+            if (grant.read === "deny") entry.read = "deny";
+            if (grant.write) entry.write = grant.write;
+            byPlugin.set(grant.pluginId, entry);
+          }
+          for (const pluginId of runReads) {
+            const entry = byPlugin.get(pluginId) ?? { pluginId };
+            entry.read ??= "allow";
+            byPlugin.set(pluginId, entry);
+          }
+          return [...byPlugin.values()]
+            .filter((grant) => grant.read !== undefined || grant.write !== undefined)
+            .sort((a, b) => a.pluginId.localeCompare(b.pluginId));
+        }
+        return [];
+      }
+    ),
+    resetClipboardGrants: op(
+      REMOTE_HOSTS_METHOD_CHANNELS.resetClipboardGrants,
+      async (payload: ResetClipboardGrantsPayload): Promise<void> => {
+        const pluginId = (payload as Partial<ResetClipboardGrantsPayload> | null)?.pluginId;
+        if (pluginId !== undefined && typeof pluginId !== "string") {
+          throw new AppError({ code: "VALIDATION", message: "pluginId must be a string" });
+        }
+        const hostId = requireHostId(payload);
+        if (__DAINTREE_REMOTE_HOSTS__) {
+          const [{ persistedClipboardGrants }, { forgetRunClipboardGrants }] = await Promise.all([
+            import("../../remote/plugins/clipboardGrants.js"),
+            import("../../remote/plugins/shellRequests.js"),
+          ]);
+          // Void open questions first, then clear, with nothing awaited between.
+          forgetRunClipboardGrants(hostId, pluginId);
+          persistedClipboardGrants.reset(hostId, pluginId);
+        }
+      }
+    ),
+    // This machine's yes to running a host plugin's view code here.
+    listPluginViewConsents: op(
+      REMOTE_HOSTS_METHOD_CHANNELS.listPluginViewConsents,
+      async (payload: ListHostProjectsPayload): Promise<PluginViewConsentEntry[]> => {
+        const hostId = requireHostId(payload);
+        if (__DAINTREE_REMOTE_HOSTS__) {
+          const { persistedPluginViewConsent } =
+            await import("../../remote/plugins/pluginViewConsent.js");
+          const { pluginViewRefusals } = await import("../../remote/plugins/install.js");
+          // A "Don't run" this run wins over an earlier yes to another version.
+          const refused = new Set(pluginViewRefusals(hostId));
+          const allowed = persistedPluginViewConsent.list(hostId).filter((id) => !refused.has(id));
+          return [
+            ...allowed.map((pluginId) => ({ pluginId, state: "allowed" as const })),
+            ...[...refused].map((pluginId) => ({ pluginId, state: "refused" as const })),
+          ].sort((a, b) => a.pluginId.localeCompare(b.pluginId));
+        }
+        return [];
+      }
+    ),
+    resetPluginViewConsent: op(
+      REMOTE_HOSTS_METHOD_CHANNELS.resetPluginViewConsent,
+      async (payload: ResetPluginViewConsentPayload): Promise<void> => {
+        const pluginId = (payload as Partial<ResetPluginViewConsentPayload> | null)?.pluginId;
+        if (pluginId !== undefined && typeof pluginId !== "string") {
+          throw new AppError({ code: "VALIDATION", message: "pluginId must be a string" });
+        }
+        const hostId = requireHostId(payload);
+        if (__DAINTREE_REMOTE_HOSTS__) {
+          const [{ persistedPluginViewConsent }, { revokePluginViewDecisions }] = await Promise.all(
+            [
+              import("../../remote/plugins/pluginViewConsent.js"),
+              import("../../remote/plugins/install.js"),
+            ]
+          );
+          // Void anything in flight first, then clear, with nothing awaited between.
+          revokePluginViewDecisions(hostId, pluginId);
+          persistedPluginViewConsent.reset(hostId, pluginId);
+        }
+      }
+    ),
+    // A remote view settles consent for a host plugin's bundle before importing it.
+    preparePluginView: op(
+      REMOTE_HOSTS_METHOD_CHANNELS.preparePluginView,
+      async (ctx, payload: PreparePluginViewPayload): Promise<boolean> => {
+        const url = (payload as Partial<PreparePluginViewPayload> | null)?.url;
+        if (typeof url !== "string" || url.length > 8192) {
+          throw new AppError({ code: "VALIDATION", message: "url must be a string" });
+        }
+        // The direct `if` form: esbuild drops the import only inside it, not after an early return.
+        if (__DAINTREE_REMOTE_HOSTS__) {
+          const { preparePluginView } = await import("../../remote/plugins/install.js");
+          return preparePluginView(ctx.webContentsId, url);
+        }
+        return false;
+      },
+      { withContext: true }
+    ),
+    // This Shell's own journal of the exchanges its hub sent to a host's assistants.
+    listAssistantExchanges: op(
+      REMOTE_HOSTS_METHOD_CHANNELS.listAssistantExchanges,
+      async (payload: AssistantExchangeListPayload): Promise<AssistantExchangeView[]> => {
+        const hostId = requireHostId(payload);
+        if (__DAINTREE_REMOTE_HOSTS__) {
+          const client = getRemoteService("assistantExchangeClient");
+          if (!client) return [];
+          const { toExchangeViews } = await import("../../remote/assistant/exchangeOverview.js");
+          return toExchangeViews(client.listKnown(hostId), Date.now());
+        }
+        return [];
+      }
+    ),
+    cancelAssistantExchange: op(
+      REMOTE_HOSTS_METHOD_CHANNELS.cancelAssistantExchange,
+      async (payload: AssistantExchangeCancelPayload): Promise<AssistantExchangeView> => {
+        const hostId = requireHostId(payload);
+        const messageId = requireMessageId(payload);
+        if (__DAINTREE_REMOTE_HOSTS__) {
+          const client = requireRemoteService("assistantExchangeClient");
+          if (client.known(hostId, messageId)?.record == null) {
+            throw new AppError({
+              code: "VALIDATION",
+              message: `No recorded exchange ${messageId} on host ${hostId}`,
+              userMessage: "This exchange isn't recorded on this machine.",
+            });
+          }
+          await client.cancel(hostId, messageId);
+          const { toExchangeView } = await import("../../remote/assistant/exchangeOverview.js");
+          // The journal, not the answer: a reconcile may already hold a newer revision.
+          const entry = client.known(hostId, messageId);
+          if (entry) return toExchangeView(entry, Date.now());
+        }
+        throw new AppError({
+          code: "UNSUPPORTED",
+          message: "Assistant exchanges are unavailable on this machine",
+        });
+      }
+    ),
+    isInUse: op(REMOTE_HOSTS_METHOD_CHANNELS.isInUse, (): boolean => remoteHostsInUse()),
+    getLocalHandshake: op(REMOTE_HOSTS_METHOD_CHANNELS.getLocalHandshake, (): HostHandshakeInfo =>
+      getLocalHandshakeInfo()
+    ),
+  },
+});
+
+export function registerRemoteHostsHandlers(): () => void {
+  return remoteHostsNamespace.register();
+}

@@ -6,16 +6,18 @@ export type WorktreeStatusTickState = Exclude<ChipState, null>;
 
 /** Shared by the tick's tooltip and its accessible name, so they cannot drift. */
 export const CHIP_LABELS: Record<WorktreeStatusTickState, string> = {
-  waiting: "Agent waiting for input",
+  attention: "Agent asking for attention",
   cleanup: "Ready for cleanup",
-  complete: "Complete: in review",
+  // What was observed, not a verdict: an agent at its prompt is also what a
+  // missed approval dialog looks like.
+  finished: "Finished, unread: no agent working or asking for anything",
 };
 
 /**
  * How many pieces the tick's slot is cut into, one count per state.
  *
  * Colour cannot be the only difference between the states (WCAG 1.4.1), and
- * this mark is the only place on the card where `cleanup` and `complete` are
+ * this mark is the only place on the card where `cleanup` and `finished` are
  * distinguished at all — so the second channel is doing real work, not
  * decoration. Under `forced-colors` it is the ONLY channel: `.status-mark`
  * repaints every state as one system colour, so whatever tells them apart
@@ -35,12 +37,12 @@ export const CHIP_LABELS: Record<WorktreeStatusTickState, string> = {
  * middle state or the smallest. A count of segments is absolute — one glance,
  * no neighbour required — and the ink still descends with urgency:
  *
- *   waiting  — one unbroken bar. The most ink, the only state that is blocking
+ *   attention — one unbroken bar. The most ink, the only state that is blocking
  *              on the person reading it.
  *   cleanup  — two segments. Same slot, same footprint, visibly interrupted:
  *              something to decide, not something to answer.
- *   complete — three segments. The most broken up and the least ink, for the
- *              state that wants nothing.
+ *   finished — three segments. The most broken up and the least ink, for an
+ *              unseen hand-back: something to look at, nothing to answer.
  *
  * That order also puts the coarsest shape on the state that most needs reading
  * at a glance and the fussiest on the one that wants nothing, which is the way
@@ -48,15 +50,15 @@ export const CHIP_LABELS: Record<WorktreeStatusTickState, string> = {
  * the smallest thing here.
  */
 export const CHIP_SEGMENTS: Record<WorktreeStatusTickState, number> = {
-  waiting: 1,
+  attention: 1,
   cleanup: 2,
-  complete: 3,
+  finished: 3,
 };
 
 const CHIP_FILLS: Record<WorktreeStatusTickState, string> = {
-  waiting: "bg-activity-waiting",
+  attention: "bg-activity-waiting",
   cleanup: "bg-pr-merged",
-  complete: "bg-category-blue",
+  finished: "bg-category-blue",
 };
 
 /**
@@ -67,21 +69,21 @@ const CHIP_FILLS: Record<WorktreeStatusTickState, string> = {
  * not change on a collapsed row, only the footprint it is drawn in — and the
  * ink still falls as urgency does, harder here than the bar managed:
  *
- *   waiting  — one piece across both tracks. A solid 6x6, 36 square pixels.
+ *   attention — one piece across both tracks. A solid 6x6, 36 square pixels.
  *   cleanup  — two full-width pieces, one per row. Two 6x2 stripes, 24.
- *   complete — three ordinary cells, placed in reading order, so the empty
+ *   finished — three ordinary cells, placed in reading order, so the empty
  *              fourth corner is what makes three read as three. 12.
  *
  * A stacked bar cut down to a square was the obvious move and the wrong one:
  * the only square where three stacked segments still divide into whole pixels
- * at 2px or more is 10x10, and that is 100 square pixels for `waiting` against
+ * at 2px or more is 10x10, and that is 100 square pixels for `attention` against
  * the 16x4 bar's 64. The mark this issue exists to quieten would have got
  * louder. Two dimensions, not one, is what buys a smaller square.
  */
 const COLLAPSED_SEGMENT_SPANS: Record<WorktreeStatusTickState, string> = {
-  waiting: "col-span-2 row-span-2",
+  attention: "col-span-2 row-span-2",
   cleanup: "col-span-2",
-  complete: "",
+  finished: "",
 };
 
 /**
@@ -114,7 +116,7 @@ const COLLAPSED_SEGMENT_SPANS: Record<WorktreeStatusTickState, string> = {
  *   the gutter is nearly invisible, the mark hung between two cards; and under
  *   `forced-colors` the gutter repaints as a solid CanvasText rule and the first
  *   segment fuses into it — two segments read as one hanging off a line, and a
- *   collapsed `cleanup` and `complete` became the same shape. 4px of the card's
+ *   collapsed `cleanup` and `finished` became the same shape. 4px of the card's
  *   own surface above the mark, twice the gap between its pieces, is what keeps
  *   the rule from ever reading as a piece and puts the mark unmistakably on the
  *   card below it. It also lands a collapsed row's square on the header row's
@@ -140,7 +142,7 @@ const COLLAPSED_SEGMENT_SPANS: Record<WorktreeStatusTickState, string> = {
  * hangs off rather than as a mark on a card — the corner is the statement, and
  * at that height there is no corner left, just an edge. The square keeps the
  * segment count (see `COLLAPSED_SEGMENT_SPANS`), which is not optional: it is
- * the only thing separating `cleanup` from `complete` anywhere on the card, and
+ * the only thing separating `cleanup` from `finished` anywhere on the card, and
  * under `forced-colors` the only thing separating any of the three.
  *
  * A separate flag rather than a third `variant`: `variant` is which card the

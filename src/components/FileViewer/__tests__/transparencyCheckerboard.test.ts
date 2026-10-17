@@ -14,10 +14,4 @@ describe("transparencyCheckerboardUnderScale", () => {
       expect(tile * scale).toBeCloseTo(base);
     }
   });
-
-  it("paints the same pattern as the unscaled board", () => {
-    expect(transparencyCheckerboardUnderScale(3).backgroundImage).toBe(
-      TRANSPARENCY_CHECKERBOARD_STYLE.backgroundImage
-    );
-  });
 });

@@ -6,7 +6,6 @@ import {
   resetHostChannelCache,
   useCachedHostChannel,
 } from "../react/useCachedHostChannel.js";
-import * as sdkReact from "../react.js";
 
 interface Deferred<T> {
   promise: Promise<T>;
@@ -465,10 +464,6 @@ describe("useCachedHostChannel invalidateOn", () => {
 });
 
 describe("resetHostChannelCache", () => {
-  it("is exported from the /react entry", () => {
-    expect(sdkReact.resetHostChannelCache).toBe(resetHostChannelCache);
-  });
-
   it("drops cached results so the next mount fetches, and discards a response to a dropped request", async () => {
     const pending = deferred<string>();
     invoke.mockResolvedValueOnce("first").mockReturnValueOnce(pending.promise);

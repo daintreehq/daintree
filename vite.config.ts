@@ -1622,6 +1622,11 @@ export default defineConfig(({ command, mode }) => {
   const importMapState = createImportMapState();
   return {
     envPrefix: ["VITE_", "DAINTREE_"],
+    // Every platform's renderer carries the Remote Hosts Shell (Windows drives
+    // WSL distros); the Host role is gated in main at runtime and build time.
+    define: {
+      __DAINTREE_REMOTE_HOSTS__: JSON.stringify(true),
+    },
     // xterm 6.0 ships a bundled InputHandler that references an unminified
     // identifier in `requestMode`; Vite's default identifier mangling produces
     // `ReferenceError: i is not defined` at runtime. Disable identifier
@@ -1992,6 +1997,11 @@ export default defineConfig(({ command, mode }) => {
         "@daintreehq/plugin-sdk/react": path.resolve(
           __dirname,
           "./packages/plugin-sdk/src/react.ts"
+        ),
+        // Only the plugin panel preview page imports this.
+        "@daintreehq/plugin-sdk/testing/preview": path.resolve(
+          __dirname,
+          "./packages/plugin-sdk/src/testing-preview.ts"
         ),
         // refractor/core eagerly imports parse-entities, whose browser-condition
         // decode-named-character-reference touches `document` at module scope —

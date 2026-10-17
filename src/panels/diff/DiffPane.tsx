@@ -1206,13 +1206,14 @@ export function DiffPane({
             // Already resolved here; the sidebar would otherwise repeat the
             // path→worktree lookup the pane has done above.
             worktreeId={worktreeId ?? null}
+            statusIsLocal={diffSource !== "base-branch"}
             onSelect={(index) => {
               if (index === currentIndex) return;
               selectFileAt(index);
             }}
           />
         )}
-        {/* `DiffViewer.css` reads `--diff-font-size`; declaring it here is what
+        {/* `DiffViewer.lines.css` reads `--diff-font-size`; declaring it here is what
             makes the size preference reach the rendered diff. */}
         <div
           className="relative flex-1 min-w-0 min-h-0 flex flex-col"

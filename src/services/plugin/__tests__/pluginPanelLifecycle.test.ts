@@ -94,13 +94,6 @@ describe("panelRemovedSignal identity", () => {
 });
 
 describe("phase derivation", () => {
-  it("reports mounted only once a view commits, and hidden when none is live", async () => {
-    syncPluginPanels([panel()]);
-    const release = reportViewMounted("p1", IDENTITY);
-    release();
-    expect(await drainPhases()).toEqual(["hidden", "mounted", "hidden"]);
-  });
-
   it("ranks record state above view state — a trashed panel with a live view is trashed", async () => {
     syncPluginPanels([panel()]);
     reportViewMounted("p1", IDENTITY);

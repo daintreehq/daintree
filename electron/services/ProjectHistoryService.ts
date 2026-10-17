@@ -91,6 +91,11 @@ export class ProjectHistoryService {
     return this.entries[1] ?? null;
   }
 
+  /** Drop every workspace `match` names, wherever it sits in the list. */
+  discard(match: (workspaceId: string) => boolean): void {
+    this.entries = this.entries.filter((workspaceId) => !match(workspaceId));
+  }
+
   private prune(exists: (workspaceId: string) => boolean): void {
     if (this.entries.every((workspaceId) => exists(workspaceId))) return;
     this.entries = this.entries.filter((workspaceId) => exists(workspaceId));
@@ -154,4 +159,9 @@ export function disposeProjectHistory(windowId: number): void {
 export function resetProjectHistory(windowId: number): void {
   historyByWindow.delete(windowId);
   disposedWindowIds.delete(windowId);
+}
+
+/** Drop the workspaces `match` names from every window's history (a removed host's). */
+export function discardFromAllProjectHistories(match: (workspaceId: string) => boolean): void {
+  for (const history of historyByWindow.values()) history.discard(match);
 }

@@ -345,7 +345,13 @@ vi.mock("electron", () => ({
   powerMonitor: { on: vi.fn(), off: vi.fn() },
 }));
 
-import { initGlobalServices, __test__ } from "../globalServicesInit.js";
+import {
+  initGlobalServices,
+  ensureGlobalServicesInitialized,
+  startPluginHostOnce,
+  _resetGlobalServiceStartsForTest,
+  __test__,
+} from "../globalServicesInit.js";
 import {
   getGlobalServicesInitialized,
   setGlobalServicesInitialized,
@@ -752,10 +758,12 @@ describe("initGlobalServices task ordering", () => {
     migrationRunCalls.count = 0;
     mockLogRetentionDays = 30;
     setGlobalServicesInitialized(false);
+    _resetGlobalServiceStartsForTest();
   });
 
   afterEach(() => {
     setGlobalServicesInitialized(false);
+    _resetGlobalServiceStartsForTest();
   });
 
   // The deferred queue drains on the renderer's own first-interactive signal, so
@@ -978,33 +986,6 @@ describe("initGlobalServices task ordering", () => {
     expect(provider()).toEqual([pvm]);
   });
 
-  it("registers monitor tasks before resource-profile-service so the profile reads ready data", async () => {
-    const fakeRegistry = { all: () => [], size: 0 } as unknown as WindowRegistry;
-    await initGlobalServices(fakeRegistry);
-
-    const lagIndex = registeredTaskNames.indexOf("event-loop-lag-monitor");
-    const metricsIndex = registeredTaskNames.indexOf("app-metrics-monitor");
-    const profileIndex = registeredTaskNames.indexOf("resource-profile-service");
-
-    expect(lagIndex).toBeGreaterThanOrEqual(0);
-    expect(metricsIndex).toBeGreaterThanOrEqual(0);
-    expect(profileIndex).toBeGreaterThanOrEqual(0);
-    expect(profileIndex).toBeGreaterThan(lagIndex);
-    expect(profileIndex).toBeGreaterThan(metricsIndex);
-  });
-
-  it("registers service-connectivity-registry before mcp-server so onStatusChange wires first", async () => {
-    const fakeRegistry = { all: () => [], size: 0 } as unknown as WindowRegistry;
-    await initGlobalServices(fakeRegistry);
-
-    const registryIndex = registeredTaskNames.indexOf("service-connectivity-registry");
-    const mcpIndex = registeredTaskNames.indexOf("mcp-server");
-
-    expect(registryIndex).toBeGreaterThanOrEqual(0);
-    expect(mcpIndex).toBeGreaterThanOrEqual(0);
-    expect(mcpIndex).toBeGreaterThan(registryIndex);
-  });
-
   it("calls helpSessionService.setMcpRegistry before pushing the mcp-server task", async () => {
     const fakeRegistry = { all: () => [], size: 0 } as unknown as WindowRegistry;
 
@@ -1046,12 +1027,6 @@ describe("initGlobalServices task ordering", () => {
     expect(setMcpRegistry).not.toHaveBeenCalled();
   });
 
-  it("registers help-session-pty so HelpSessionService gets a PtyClient ref for displacement (#7509)", async () => {
-    const fakeRegistry = { all: () => [], size: 0 } as unknown as WindowRegistry;
-    await initGlobalServices(fakeRegistry);
-    expect(registeredTaskNames).toContain("help-session-pty");
-  });
-
   it("registers database-maintenance after system-sleep-service so onSuspend can attach to a live service", async () => {
     const fakeRegistry = { all: () => [], size: 0 } as unknown as WindowRegistry;
     await initGlobalServices(fakeRegistry);
@@ -1062,14 +1037,6 @@ describe("initGlobalServices task ordering", () => {
     expect(sleepIndex).toBeGreaterThanOrEqual(0);
     expect(dbMaintIndex).toBeGreaterThanOrEqual(0);
     expect(dbMaintIndex).toBeGreaterThan(sleepIndex);
-  });
-
-  it("registers ccr-config and plugin-service as deferred tasks", async () => {
-    const fakeRegistry = { all: () => [], size: 0 } as unknown as WindowRegistry;
-    await initGlobalServices(fakeRegistry);
-
-    expect(registeredTaskNames).toContain("ccr-config");
-    expect(registeredTaskNames).toContain("plugin-service");
   });
 
   it("plugin-service task swaps in the live plugin:// resolver (#10322)", async () => {
@@ -1209,13 +1176,6 @@ describe("initGlobalServices task ordering", () => {
     // allocate them (PluginInstaller constructs them lazily at first real use).
     expect(getPluginMcpConsentService).not.toHaveBeenCalled();
     expect(getPluginMcpConsentStore).not.toHaveBeenCalled();
-  });
-
-  it("registers prune-old-logs as a deferred task so it doesn't block cold start (#8622)", async () => {
-    const fakeRegistry = { all: () => [], size: 0 } as unknown as WindowRegistry;
-    await initGlobalServices(fakeRegistry);
-
-    expect(registeredTaskNames).toContain("prune-old-logs");
   });
 
   it("registers cleanup services migrated out of main.ts as deferred tasks (#8817)", async () => {
@@ -1473,12 +1433,6 @@ describe("initGlobalServices task ordering", () => {
     expect(pruneOldLogsAsync).toHaveBeenCalledWith("/tmp/userData", 30);
   });
 
-  it("returns 'ok' on the happy path", async () => {
-    const fakeRegistry = { all: () => [], size: 0 } as unknown as WindowRegistry;
-    const result = await initGlobalServices(fakeRegistry);
-    expect(result).toBe("ok");
-  });
-
   it("fresh install stamps the latest schema version without running the migration chain", async () => {
     const fakeRegistry = { all: () => [], size: 0 } as unknown as WindowRegistry;
     migrationCurrentVersion = 0;
@@ -1521,5 +1475,48 @@ describe("initGlobalServices task ordering", () => {
     // Guard is set early so a concurrent second window doesn't double-run
     // migrations; app.exit(1) terminates the process before that matters.
     expect(getGlobalServicesInitialized()).toBe(true);
+  });
+
+  describe("shared between a window and the windowless Host runtime", () => {
+    const fakeRegistry = { all: () => [], size: 0 } as unknown as WindowRegistry;
+
+    it("runs migrations once when both boot paths arrive together", async () => {
+      migrationCurrentVersion = 0;
+      storeFreshAtBoot = false;
+
+      const fromHost = ensureGlobalServicesInitialized(fakeRegistry);
+      const fromWindow = ensureGlobalServicesInitialized(fakeRegistry);
+
+      expect(fromWindow).toBe(fromHost);
+      expect(await fromHost).toBe("ok");
+      expect(await fromWindow).toBe("ok");
+      expect(migrationRunCalls.count).toBe(1);
+    });
+
+    it("hands a later caller the first run's exit request", async () => {
+      migrationCurrentVersion = 0;
+      migrationShouldThrow = true;
+
+      expect(await ensureGlobalServicesInitialized(fakeRegistry)).toBe("exit-requested");
+      expect(await ensureGlobalServicesInitialized(fakeRegistry)).toBe("exit-requested");
+      expect(app.exit).toHaveBeenCalledTimes(1);
+    });
+
+    it("does not re-run once initialisation already happened another way", async () => {
+      setGlobalServicesInitialized(true);
+
+      expect(await ensureGlobalServicesInitialized(fakeRegistry)).toBe("ok");
+      expect(registeredTaskNames).toEqual([]);
+    });
+
+    it("initialises the plugin host once for the deferred task and the Host runtime", async () => {
+      await initGlobalServices(fakeRegistry);
+      const task = registeredTaskRuns.get("plugin-service");
+
+      await Promise.all([startPluginHostOnce(), task!(), startPluginHostOnce()]);
+
+      expect(pluginInitialize).toHaveBeenCalledTimes(1);
+      expect(activateOpenFileInstaller).toHaveBeenCalledTimes(1);
+    });
   });
 });

@@ -1,5 +1,6 @@
 import { spawn } from "node:child_process";
 import { getHardenedGitConfig, buildHardenedGitEnv, GIT_BLOCK_TIMEOUT_MS } from "./hardenedGit.js";
+import { resolveExecutableForSpawn } from "./windowsExecutable.js";
 
 /**
  * Direct-spawn wrapper around `git check-ignore --stdin -z`.
@@ -47,6 +48,22 @@ interface RunOptions extends CheckIgnoreOptions {
 /** Spawn one hardened git command and return its NUL-separated stdout tokens. */
 function runGitTokens(cwd: string, gitArgs: string[], options: RunOptions): Promise<Set<string>> {
   const platform = options.platform ?? process.platform;
+  // Windows starts git by the absolute path an asynchronous PATH lookup finds.
+  if (platform === "win32") {
+    return resolveExecutableForSpawn("git", buildHardenedGitEnv(platform), platform).then((git) =>
+      spawnGitTokens(git, cwd, gitArgs, options)
+    );
+  }
+  return spawnGitTokens("git", cwd, gitArgs, options);
+}
+
+function spawnGitTokens(
+  git: string,
+  cwd: string,
+  gitArgs: string[],
+  options: RunOptions
+): Promise<Set<string>> {
+  const platform = options.platform ?? process.platform;
   const env = buildHardenedGitEnv(platform);
   // `git check-ignore` is the one command that cannot run under the hardened
   // env as-is: it refuses pathspec magic outright, so every call dies with
@@ -69,7 +86,7 @@ function runGitTokens(cwd: string, gitArgs: string[], options: RunOptions): Prom
   const args = [...configArgs, ...gitArgs];
 
   return new Promise<Set<string>>((resolve, reject) => {
-    const child = spawn("git", args, {
+    const child = spawn(git, args, {
       cwd,
       env,
       stdio: ["pipe", "pipe", "pipe"],

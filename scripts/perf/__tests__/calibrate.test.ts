@@ -4,7 +4,6 @@ import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import { describe, expect, it } from "vitest";
 import { buildSpreads, describePredicateInstability } from "../calibrate";
-import { REGISTRY } from "../registry";
 import type { MetricStat, ScenarioAggregate } from "../types";
 
 /**
@@ -127,13 +126,6 @@ describe("a metric a round never emitted", () => {
 });
 
 describe("perf calibrate", () => {
-  it("is reachable from the dispatcher", () => {
-    // A benchmark tool nobody can find is one nobody uses — the same rule the
-    // registry coverage test enforces for the specs.
-    expect(REGISTRY.calibrate).toBeDefined();
-    expect(REGISTRY.calibrate!.kind).toBe("diagnostic");
-  });
-
   it("requires a scenario, like every other command here", { timeout: 60_000 }, async () => {
     const { code, stderr } = await calibrate([]);
     expect(code).toBe(1);

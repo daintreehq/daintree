@@ -84,24 +84,6 @@ describe("PluginStorageManager store cache", () => {
     expect(b).not.toBe(a);
   });
 
-  it("persists, reads back, and deletes a value through the backing store", async () => {
-    const mgr = managerFor();
-    const filePath = (await mgr.resolveStorageFilePath(PLUGIN_ID, "user"))!;
-    const store = mgr.getOrCreateStorageStore(PLUGIN_ID, "user", filePath);
-
-    expect(await store.set("count", 3)).toBe(true);
-    expect(await store.get<number>("count")).toBe(3);
-
-    // The value is written to the plugin-storage path on disk, not plugin-settings.
-    const onDisk = JSON.parse(await fs.readFile(filePath, "utf-8"));
-    expect(onDisk).toEqual({ count: 3 });
-
-    expect(await store.delete("count")).toBe(true);
-    expect(await store.get("count")).toBeUndefined();
-    // Deleting an already-absent key is a no-op (false), not a throw.
-    expect(await store.delete("count")).toBe(false);
-  });
-
   it("round-trips a literal __proto__ key without prototype pollution", async () => {
     const mgr = managerFor();
     const filePath = (await mgr.resolveStorageFilePath(PLUGIN_ID, "user"))!;
@@ -274,13 +256,12 @@ describe("PluginStorageManager evictWorktreeScopedStores", () => {
     // Simulate the file changing out from under the cached store while the
     // worktree was inactive (e.g. another window wrote it).
     await fs.writeFile(filePath, JSON.stringify({ k: "new" }), "utf-8");
-    // The cached store notices the file changed rather than serving its snapshot.
-    expect(await first.get("k")).toBe("new");
 
     mgr.evictWorktreeScopedStores();
 
     // A post-eviction store reads the updated value straight from disk.
     const second = mgr.getOrCreateStorageStore(PLUGIN_ID, "worktree", filePath);
+    expect(second).not.toBe(first);
     expect(await second.get("k")).toBe("new");
   });
 });

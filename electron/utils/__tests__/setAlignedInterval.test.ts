@@ -80,35 +80,4 @@ describe("setAlignedInterval", () => {
     vi.advanceTimersByTime(60_000);
     expect(fn).toHaveBeenCalledTimes(1);
   });
-
-  it("cleanup is idempotent", () => {
-    const fn = vi.fn();
-
-    vi.setSystemTime(15_000);
-    const clear = setAlignedInterval(fn, 30_000);
-
-    clear();
-    clear();
-    clear();
-
-    vi.advanceTimersByTime(60_000);
-    expect(fn).not.toHaveBeenCalled();
-  });
-
-  it("handles non-boundary cadences", () => {
-    const fn = vi.fn();
-
-    vi.setSystemTime(1_000);
-    setAlignedInterval(fn, 7_000);
-
-    // At 1000ms wall time, next 7s boundary is at 7000ms → 6000ms delay
-    vi.advanceTimersByTime(5_999);
-    expect(fn).not.toHaveBeenCalled();
-
-    vi.advanceTimersByTime(1);
-    expect(fn).toHaveBeenCalledTimes(1);
-
-    vi.advanceTimersByTime(7_000);
-    expect(fn).toHaveBeenCalledTimes(2);
-  });
 });

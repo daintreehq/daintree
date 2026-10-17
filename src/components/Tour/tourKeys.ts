@@ -1,6 +1,6 @@
 import { buildDefaultKeybindings } from "@shared/config/defaultKeybindings";
 import { describeChord, parseChord } from "@/lib/kbdShortcut";
-import { isMac } from "@/lib/platform";
+import { isLinux, isMac } from "@/lib/platform";
 import type { TourChapter } from "@daintreehq/tour";
 import type { TourKeyboard } from "@daintreehq/tour/kit";
 
@@ -20,12 +20,18 @@ const KEY_TOKEN = /\{\{([^{}]+)\}\}/g;
 const LITERAL_COMBO =
   /^(?:(?:Cmd|Ctrl|Alt|Shift)\+)*(?:[A-Z0-9]|Enter|Escape|Tab|Space|F\d{1,2})(?: (?:(?:Cmd|Ctrl|Alt|Shift)\+)*(?:[A-Z0-9]|Enter|Escape|Tab|Space|F\d{1,2}))*$/;
 
-const DEFAULT_COMBOS = new Map<string, string>();
-for (const binding of buildDefaultKeybindings(false)) {
-  if (binding.combo && !DEFAULT_COMBOS.has(binding.actionId)) {
-    DEFAULT_COMBOS.set(binding.actionId, binding.combo);
+function firstComboByAction(isWindows: boolean, isLinux: boolean): Map<string, string> {
+  const combos = new Map<string, string>();
+  for (const binding of buildDefaultKeybindings(isWindows, isLinux)) {
+    if (binding.combo && !combos.has(binding.actionId)) combos.set(binding.actionId, binding.combo);
   }
+  return combos;
 }
+
+const DEFAULT_COMBOS = firstComboByAction(false, false);
+// Shown, never spoken: Linux replaces a few Ctrl+Alt defaults the desktop takes,
+// and the "pc" recording is shared with Windows.
+const LINUX_COMBOS = firstComboByAction(false, true);
 
 export function currentTourKeyboard(): TourKeyboard {
   return isMac() ? "mac" : "pc";
@@ -53,8 +59,17 @@ export function spokenCombo(combo: string, keyboard: TourKeyboard): string {
  * One keycap per key, as the app's own shortcut chips draw them. Takes the same
  * token the narration names the shortcut by, so the two can't disagree.
  */
+/** The combo drawn on screen, which on Linux is that platform's own default. */
+function shownCombo(token: string, keyboard: TourKeyboard): string {
+  if (keyboard === "pc" && isLinux()) {
+    const combo = LINUX_COMBOS.get(token);
+    if (combo) return combo;
+  }
+  return tourCombo(token);
+}
+
 export function tourKeycaps(token: string, keyboard: TourKeyboard): string[] {
-  const steps = parseChord(tourCombo(token), keyboard === "mac");
+  const steps = parseChord(shownCombo(token, keyboard), keyboard === "mac");
   // One row of caps can't show "then"; a chord belongs in a hint instead.
   if (steps.length !== 1)
     throw new Error(`Tour keycaps take a single-step shortcut, not "${token}"`);
@@ -63,7 +78,7 @@ export function tourKeycaps(token: string, keyboard: TourKeyboard): string[] {
 
 /** A menu row's shortcut hint: "⌘⇧P" on a Mac, "Ctrl+Shift+P" elsewhere. */
 export function tourShortcutHint(token: string, keyboard: TourKeyboard): string {
-  return parseChord(tourCombo(token), keyboard === "mac")
+  return parseChord(shownCombo(token, keyboard), keyboard === "mac")
     .map((keys) => keys.join(keyboard === "mac" ? "" : "+"))
     .join(" ");
 }

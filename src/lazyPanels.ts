@@ -47,6 +47,12 @@ export const LazyPilotView = lazyWithPreload(
 );
 export const preloadPilotView = LazyPilotView.preload;
 
+export const LazyCanopyView = lazyWithPreload(
+  () => import("./components/Canopy/CanopyView"),
+  (m) => m.CanopyView
+);
+export const preloadCanopyView = LazyCanopyView.preload;
+
 export const LazyQuickCreatePalette = lazyWithPreload(
   () => import("./components/Worktree/QuickCreatePalette"),
   (m) => m.QuickCreatePalette
@@ -120,6 +126,12 @@ export const LazyCreateProjectFolderDialog = lazyWithPreload(
   (m) => m.CreateProjectFolderDialog
 );
 export const preloadCreateProjectFolderDialog = LazyCreateProjectFolderDialog.preload;
+
+export const LazyProjectGroupDialogs = lazy(() =>
+  import("./components/Project/ProjectGroupMenus").then((m) => ({
+    default: m.ProjectGroupDialogs,
+  }))
+);
 
 export const LazyThemePalette = lazyWithPreload(
   () => import("./components/ThemePalette/ThemePalette"),
@@ -230,6 +242,12 @@ export const LazyDiagnosticsReviewDialogHost = lazyWithPreload(
 );
 export const preloadDiagnosticsReviewDialogHost = LazyDiagnosticsReviewDialogHost.preload;
 
+// Direct file import so the host picker's chunk is loaded only where remote hosts exist.
+export const LazyHostFilePickerHost = lazyWithPreload(
+  () => import("./components/HostFilePicker/HostFilePickerHost"),
+  (m) => m.HostFilePickerHost
+);
+
 export const LazyGitPushConfirmDialog = lazyWithPreload(
   () => import("./components/Git/GitPushConfirmDialog"),
   (m) => m.GitPushConfirmDialog
@@ -241,6 +259,11 @@ export const LazyGitPullRebaseConfirmDialog = lazyWithPreload(
   (m) => m.GitPullRebaseConfirmDialog
 );
 export const preloadGitPullRebaseConfirmDialog = LazyGitPullRebaseConfirmDialog.preload;
+
+export const LazyFileMutationConfirmDialog = lazyWithPreload(
+  () => import("./components/Git/FileMutationConfirmDialog"),
+  (m) => m.FileMutationConfirmDialog
+);
 
 export const LazyGitWorktreeOperationConfirmDialog = lazyWithPreload(
   () => import("./components/Git/GitWorktreeOperationConfirmDialog"),

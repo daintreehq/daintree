@@ -33,7 +33,7 @@ import {
   ContextMenuContent,
   ContextMenuTrigger,
   stopContextMenuPropagation,
-} from "@/components/ui/context-menu";
+} from "@/components/ui/context-menu-base";
 import {
   LIST_ROW_HOVER_CLASS,
   PALETTE_ROW_CLASS,

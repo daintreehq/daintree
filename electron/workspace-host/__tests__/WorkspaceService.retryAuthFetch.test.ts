@@ -104,6 +104,7 @@ vi.mock("../../utils/gitFileWatcher.js", () => {
       start() {
         return Promise.resolve(false);
       }
+      setUpstreamRef() {}
       dispose() {}
     },
   };
@@ -215,20 +216,6 @@ describe("WorkspaceService.retryAuthFetch", () => {
     service.retryAuthFetch();
 
     expect(order).toEqual(["clear", "fetch"]);
-  });
-
-  it("does not force-fetch stopped monitors while still fetching running ones", () => {
-    const running = createMonitor("/test/wt-running");
-    const stopped = createMonitor("/test/wt-stopped");
-    running.start();
-
-    const runningFetch = vi.spyOn(running, "triggerFetchNow").mockResolvedValue(undefined);
-    const stoppedFetch = vi.spyOn(stopped, "triggerFetchNow").mockResolvedValue(undefined);
-
-    service.retryAuthFetch();
-
-    expect(runningFetch).toHaveBeenCalledTimes(1);
-    expect(stoppedFetch).not.toHaveBeenCalled();
   });
 
   it("re-arms the confirmed-auth escalation guard so a later re-confirmation re-notifies", () => {

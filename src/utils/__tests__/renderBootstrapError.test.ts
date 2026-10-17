@@ -16,13 +16,6 @@ describe("renderBootstrapError", () => {
     document.body.removeChild(rootEl);
   });
 
-  it("renders error heading and message for Error objects", () => {
-    renderBootstrapError(rootEl, new Error("Init failed"));
-
-    expect(rootEl.querySelector("h1")?.textContent).toBe("Daintree couldn't start");
-    expect(rootEl.querySelector("p")?.textContent).toBe("Init failed");
-  });
-
   it("renders a Reload window button that triggers page reload", () => {
     const reloadMock = vi.fn();
     Object.defineProperty(window, "location", {

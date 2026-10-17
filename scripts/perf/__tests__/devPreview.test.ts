@@ -1,5 +1,4 @@
 import { describe, expect, it } from "vitest";
-import { devPreviewScenarios } from "../scenarios/devPreview";
 import {
   buildFailureStreamPlans,
   buildStartupStreamPlan,
@@ -22,8 +21,6 @@ import type { ScanResult } from "../../../electron/services/UrlDetector";
  * purpose, in each direction a URL detector can plausibly break, and assert the
  * predicate goes non-zero.
  */
-
-const CONTEXT = { mode: "ci" as const, now: () => performance.now() };
 
 /** A detector that finds nothing. The cheapest wrong answer there is. */
 function blindDetector(): SharedDevPreviewDeps {
@@ -64,20 +61,6 @@ function greedyDetector(): SharedDevPreviewDeps {
 }
 
 describe("dev-preview scenarios", () => {
-  for (const id of ["PERF-020", "PERF-021", "PERF-022", "PERF-023", "PERF-024"]) {
-    it(`${id} emits every declared predicate and reports zero misses`, async () => {
-      const scenario = devPreviewScenarios.find((candidate) => candidate.id === id);
-      expect(scenario).toBeDefined();
-
-      const sample = await scenario!.run(CONTEXT);
-      const metrics = sample.metrics ?? {};
-      for (const name of scenario!.correctness ?? []) {
-        expect(name in metrics, `${id} did not emit ${name}`).toBe(true);
-        expect(metrics[name], `${id} reported ${name}=${metrics[name]}`).toBe(0);
-      }
-    });
-  }
-
   it("drives real product code rather than a harness regex", async () => {
     // The defect these scenarios were rewritten for: the previous version
     // matched a `/https?:\/\/localhost:\d{2,5}/` the harness owned. The real

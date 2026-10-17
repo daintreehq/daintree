@@ -424,7 +424,8 @@ const CORE_KEYBINDINGS: KeybindingConfig[] = [
   },
   {
     actionId: "dock.focusNextWaiting",
-    combo: "Cmd+Shift+/",
+    // Cmd+Shift+/ is Cmd+? on a US Mac: the Help menu's search field.
+    combo: "Cmd+K Cmd+/",
     scope: "global",
     priority: 0,
     description: "Jump to next waiting dock agent",
@@ -440,7 +441,9 @@ const CORE_KEYBINDINGS: KeybindingConfig[] = [
   },
   {
     actionId: "terminal.sendToAgent",
-    combo: "Cmd+Shift+E",
+    // A chord, not Cmd+Shift+E: that key is the composer's expand-editor
+    // shortcut, which a global binding would swallow.
+    combo: "Cmd+K Cmd+I",
     scope: "global",
     priority: 0,
     description: "Send selection to another terminal",
@@ -456,7 +459,8 @@ const CORE_KEYBINDINGS: KeybindingConfig[] = [
   },
   // Fleet quick-actions. Registered at priority 5 (ELEVATED) so they outrank
   // any future global binding on the same combo while the fleet ribbon is
-  // visible; when nothing is armed each action no-ops so the UI stays intact.
+  // visible. They only match while something is armed, so with an empty fleet
+  // the key reaches whatever has focus (Ctrl+Y redo in an editor, say).
   // fleet.reject is Cmd+Shift+Y — the shifted twin of fleet.accept (Cmd+Y) —
   // NOT Cmd+N: a destructive-adjacent broadcast ("n⏎" to every armed agent)
   // must never sit on a reflexive "new" key whose meaning flips with
@@ -496,6 +500,7 @@ const CORE_KEYBINDINGS: KeybindingConfig[] = [
     priority: 5,
     description: "Accept all armed waiting agents",
     category: "Fleet",
+    when: "fleetArmed",
   },
   {
     actionId: "fleet.reject",
@@ -504,6 +509,7 @@ const CORE_KEYBINDINGS: KeybindingConfig[] = [
     priority: 5,
     description: "Reject all armed waiting agents",
     category: "Fleet",
+    when: "fleetArmed",
   },
   {
     actionId: "fleet.restart",
@@ -512,14 +518,18 @@ const CORE_KEYBINDINGS: KeybindingConfig[] = [
     priority: 5,
     description: "Restart all armed agents",
     category: "Fleet",
+    when: "fleetArmed",
   },
   {
     actionId: "fleet.kill",
-    combo: "Cmd+Shift+K",
+    // Behind the prefix: killing every armed terminal is irreversible, and a
+    // single stroke also took Delete line from code editors.
+    combo: "Cmd+K Cmd+Shift+K",
     scope: "global",
     priority: 5,
     description: "Kill all armed terminals",
     category: "Fleet",
+    when: "fleetArmed",
   },
   {
     actionId: "fleet.trash",
@@ -528,6 +538,7 @@ const CORE_KEYBINDINGS: KeybindingConfig[] = [
     priority: 5,
     description: "Trash all armed terminals",
     category: "Fleet",
+    when: "fleetArmed",
   },
   // Directional terminal navigation (Ghostty-style: Cmd+Option+Arrow)
   {
@@ -880,7 +891,23 @@ const CORE_KEYBINDINGS: KeybindingConfig[] = [
     category: "Project",
   },
   {
-    // The sibling one step IN from the chord above: same surface, same rows,
+    // The app's main view, so it gets the one-modifier slot apps give their
+    // headline feature, and E is the agent-manager letter (Cursor's agent
+    // layout, Antigravity's Agent Manager). Cmd keys never reach the PTY on
+    // macOS, so it works from inside a terminal; Windows and Linux, where Cmd
+    // folds to Ctrl and Ctrl+E is readline's end-of-line, take a replacement
+    // below. Double-Shift (useCanopyDoubleShift) opens it on every platform.
+    actionId: "canopy.toggle",
+    combo: "Cmd+E",
+    scope: "global",
+    priority: 0,
+    description: "Open Canopy",
+    category: "Project",
+    // Hidden, the key is no shortcut at all: it reaches whatever has focus.
+    when: "!canopyHidden",
+  },
+  {
+    // The sibling one step IN from pilot.toggle's Cmd+Alt+O: same surface, same rows,
     // scoped to the project this view owns and grouped by worktree. Adjacent
     // letter because the two are one pair — O for the whole fleet, I for the
     // project you are already inside.
@@ -1148,6 +1175,22 @@ const CORE_KEYBINDINGS: KeybindingConfig[] = [
   },
 ];
 
+// Remote Hosts doesn't exist on Windows, so neither does its action. U sits
+// beside the I, O and P switchers; Cmd+Alt+H would take macOS Hide Others.
+const REMOTE_HOSTS_KEYBINDINGS: KeybindingConfig[] = [
+  {
+    actionId: "host.switch",
+    combo: "Cmd+Alt+U",
+    scope: "global",
+    priority: 0,
+    description: "Switch host",
+    category: "Navigation",
+  },
+];
+
+// Ctrl+F4 is Windows-only on purpose: XFCE binds Ctrl+F1–F12 to workspaces and
+// KDE binds Ctrl+F1–F4 to desktops, so on Linux the window manager takes it
+// before a focused terminal could.
 const WINDOWS_ONLY_KEYBINDINGS: KeybindingConfig[] = [
   {
     actionId: "terminal.close",
@@ -1167,9 +1210,50 @@ const WINDOWS_ONLY_KEYBINDINGS: KeybindingConfig[] = [
   },
 ];
 
+// Windows and Linux replacements for core rows whose Cmd folds to a Ctrl key
+// the terminal owns. Ctrl+E is readline's end-of-line, reserved for the PTY
+// while a terminal has focus, so Canopy would never open from one. O carries
+// over from the overview family, and Ctrl+Shift+O is none of the keys Daintree
+// reserves for the PTY.
+const NON_MAC_REPLACEMENT_KEYBINDINGS: KeybindingConfig[] = [
+  // Ctrl+Y is Redo in text fields and editors off the Mac; it accepts the fleet
+  // only from outside them.
+  {
+    actionId: "fleet.accept",
+    combo: "Cmd+Y",
+    scope: "global",
+    priority: 5,
+    description: "Accept all armed waiting agents",
+    category: "Fleet",
+    when: "fleetArmed && !textInputFocused",
+  },
+  {
+    actionId: "canopy.toggle",
+    combo: "Ctrl+Shift+O",
+    scope: "global",
+    priority: 0,
+    description: "Open Canopy",
+    category: "Project",
+    when: "!canopyHidden",
+  },
+];
+
 // Replacements, not additions: each entry displaces the core row with the same
 // actionId and scope. Ctrl+. is the IBus emoji picker on GNOME, and Ctrl+Alt+.
 // is taken by agent.focusNextWorking once Cmd folds to Ctrl.
+//
+// The desktop grabs these Ctrl+Alt defaults before Daintree sees them: Ctrl+Alt+T
+// opens the system terminal (GNOME, XFCE, KDE), Ctrl+Alt+L locks the screen (XFCE,
+// KDE, Cinnamon, MATE) and Ctrl+Alt+F opens Thunar (XFCE). Adding Shift keeps the
+// letter and the Ctrl a focused terminal needs to hand a key to a binding.
+//
+// GNOME and XFCE also switch workspaces on every Ctrl+Alt+arrow, so directional
+// focus moves to Ctrl+Shift+arrows, WezTerm's pane-focus keys, which GNOME,
+// XFCE, KDE, Cinnamon and MATE leave unbound. They stay "select by word" in a
+// text field and Shift-extend selection in a dialog such as the worktree
+// overview; a TUI in a focused terminal (nano, micro) loses them, as under
+// WezTerm. Ctrl+Shift+Alt+arrows move the window to a workspace on those
+// desktops, so "move terminal" has no free Ctrl combo and keeps its default.
 const LINUX_REPLACEMENT_KEYBINDINGS: KeybindingConfig[] = [
   {
     actionId: "voiceInput.toggle",
@@ -1178,6 +1262,66 @@ const LINUX_REPLACEMENT_KEYBINDINGS: KeybindingConfig[] = [
     priority: 0,
     description: "Toggle voice dictation",
     category: "Voice",
+  },
+  {
+    actionId: "terminal.new",
+    combo: "Ctrl+Shift+Alt+T",
+    scope: "global",
+    priority: 0,
+    description: "New terminal",
+    category: "Terminal",
+  },
+  {
+    actionId: "terminal.scrollToLastActivity",
+    combo: "Ctrl+Shift+Alt+L",
+    scope: "global",
+    priority: 0,
+    description: "Scroll to last activity",
+    category: "Terminal",
+  },
+  {
+    actionId: "worktree.openFileBrowserPanel",
+    combo: "Ctrl+Shift+Alt+F",
+    scope: "global",
+    priority: 0,
+    description: "Open file browser panel for focused worktree",
+    category: "Worktrees",
+  },
+  {
+    actionId: "terminal.focusUp",
+    combo: "Ctrl+Shift+ArrowUp",
+    scope: "global",
+    priority: 0,
+    description: "Focus terminal above",
+    category: "Terminal",
+    when: "!textInputFocused && !modalOpen",
+  },
+  {
+    actionId: "terminal.focusDown",
+    combo: "Ctrl+Shift+ArrowDown",
+    scope: "global",
+    priority: 0,
+    description: "Focus terminal below",
+    category: "Terminal",
+    when: "!textInputFocused && !modalOpen",
+  },
+  {
+    actionId: "terminal.focusLeft",
+    combo: "Ctrl+Shift+ArrowLeft",
+    scope: "global",
+    priority: 0,
+    description: "Focus terminal to the left",
+    category: "Terminal",
+    when: "!textInputFocused && !modalOpen",
+  },
+  {
+    actionId: "terminal.focusRight",
+    combo: "Ctrl+Shift+ArrowRight",
+    scope: "global",
+    priority: 0,
+    description: "Focus terminal to the right",
+    category: "Terminal",
+    when: "!textInputFocused && !modalOpen",
   },
 ];
 
@@ -1188,14 +1332,19 @@ const LINUX_REPLACEMENT_KEYBINDINGS: KeybindingConfig[] = [
  * the host OS it runs on.
  */
 export function buildDefaultKeybindings(isWindows: boolean, isLinux = false): KeybindingConfig[] {
-  if (isWindows) return [...CORE_KEYBINDINGS, ...WINDOWS_ONLY_KEYBINDINGS];
-  if (!isLinux) return [...CORE_KEYBINDINGS];
-  return CORE_KEYBINDINGS.map(
+  const bindings = isWindows
+    ? [...CORE_KEYBINDINGS]
+    : [...CORE_KEYBINDINGS, ...REMOTE_HOSTS_KEYBINDINGS];
+  if (!isWindows && !isLinux) return bindings;
+  const replacements = isLinux
+    ? [...NON_MAC_REPLACEMENT_KEYBINDINGS, ...LINUX_REPLACEMENT_KEYBINDINGS]
+    : NON_MAC_REPLACEMENT_KEYBINDINGS;
+  const replaced = bindings.map(
     (binding) =>
-      LINUX_REPLACEMENT_KEYBINDINGS.find(
-        (r) => r.actionId === binding.actionId && r.scope === binding.scope
-      ) ?? binding
+      replacements.find((r) => r.actionId === binding.actionId && r.scope === binding.scope) ??
+      binding
   );
+  return isWindows ? [...replaced, ...WINDOWS_ONLY_KEYBINDINGS] : replaced;
 }
 
 export const KEYBINDING_PRIORITY = {

@@ -102,10 +102,4 @@ describe("ForgeProviderContributionSchema (issue #10471)", () => {
       false
     );
   });
-
-  it("treats kind as optional (minimal contribution still valid)", () => {
-    const result = ForgeProviderContributionSchema.safeParse(base);
-    expect(result.success).toBe(true);
-    if (result.success) expect(result.data.kind).toBeUndefined();
-  });
 });

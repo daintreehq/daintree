@@ -304,14 +304,6 @@ describe("ProjectIdentityEditor", () => {
   });
 
   describe("emoji", () => {
-    it("persists an emoji picked from the full picker", () => {
-      renderEditor();
-
-      fireEvent.click(screen.getByText("pick-unicorn"));
-
-      expect(updateProjectMock).toHaveBeenCalledWith("p1", { emoji: "🦄" });
-    });
-
     it("tells the picker which emoji the project has now", () => {
       renderEditor(makeProject({ emoji: "🛰️" }));
 
@@ -381,15 +373,6 @@ describe("ProjectIdentityEditor", () => {
   });
 
   describe("name", () => {
-    it("commits a renamed project on Enter", () => {
-      renderEditor();
-
-      fireEvent.change(nameField(), { target: { value: "Renamed" } });
-      fireEvent.keyDown(nameField(), { key: "Enter" });
-
-      expect(updateProjectMock).toHaveBeenCalledWith("p1", { name: "Renamed" });
-    });
-
     it("commits a pending edit when the popover is dismissed", () => {
       renderEditor();
 

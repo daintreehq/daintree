@@ -28,7 +28,7 @@
  * that routinely spawn grandchildren holding the stdout pipe open.
  */
 
-import { spawn, spawnSync, type ChildProcess } from "child_process";
+import { spawn, type ChildProcess } from "child_process";
 import { realpath } from "fs/promises";
 import {
   PROJECT_CHECK_DEFAULT_TIMEOUT_MS,
@@ -41,6 +41,12 @@ import {
 import { scrubSecrets } from "../../shared/utils/secretScrubber.js";
 import { formatErrorMessage } from "../../shared/utils/errorMessage.js";
 import { buildInstallEnv } from "../utils/spawnEnv.js";
+import {
+  describeWindowsTreeKillProblem,
+  killWindowsProcessTreeInBackground,
+  killWindowsProcessTreeSync,
+  liveChildTreeTarget,
+} from "../utils/windowsTreeKill.js";
 
 /**
  * Grace period between `exit` and a forced settle. `exit` does not guarantee
@@ -424,7 +430,12 @@ export class ProjectCheckService {
       // SIGKILL in cleanup(); a check that exited on its own never gets one.
       let killRequested = false;
 
-      const killTree = (force = false): void => {
+      // Windows: the tree kill in flight, so a later cause joins it instead of
+      // walking the same tree again.
+      let windowsKill: Promise<unknown> | null = null;
+
+      /** `quit` (Windows only) blocks until the tree is gone; see `dispose()`. */
+      const killTree = (force = false, quit = false): void => {
         killRequested = true;
         const pid = child.pid;
         if (typeof pid !== "number") {
@@ -433,27 +444,35 @@ export class ProjectCheckService {
         }
         if (!useGroup) {
           // Windows has no process groups here — `child.kill()` would terminate
-          // only the shell and orphan the runner it launched.
-          try {
-            const result = spawnSync("taskkill", ["/T", "/F", "/PID", String(pid)], {
-              windowsHide: true,
-              stdio: "ignore",
-              timeout: 3_000,
-            });
-            // spawnSync reports failure in the result rather than throwing.
-            // status 0 = killed, 128 = already gone (benign).
-            if (result?.error) {
-              console.warn(
-                `[ProjectCheckService] taskkill pid=${pid}: ${formatErrorMessage(result.error, "unknown error")}`
+          // only the shell and orphan the runner it launched. Only while the
+          // shell lives: after its exit the PID is free for reuse, and no walk
+          // reaches a dead root's descendants. Anything that may leave the tree
+          // alive is logged.
+          const target = liveChildTreeTarget(child);
+          if (!target) return;
+          if (quit) {
+            // Synchronous only on the quit path: dispose() must not return
+            // before the tree is gone, and Main exits right after. Repeats a
+            // kill still in flight, which may never get to finish.
+            try {
+              const problem = describeWindowsTreeKillProblem(
+                killWindowsProcessTreeSync(target, { timeoutMs: 3_000 })
               );
-            } else if (result && result.status !== 0 && result.status !== 128) {
-              console.warn(`[ProjectCheckService] taskkill pid=${pid} exited ${result.status}`);
+              if (problem) console.warn(`[ProjectCheckService] tree kill pid=${pid}: ${problem}`);
+            } catch (err) {
+              console.warn(
+                `[ProjectCheckService] tree kill pid=${pid}: ${formatErrorMessage(err, "unknown error")}`
+              );
             }
-          } catch (err) {
-            console.warn(
-              `[ProjectCheckService] taskkill pid=${pid}: ${formatErrorMessage(err, "unknown error")}`
-            );
+            return;
           }
+          // A cancel or deadline runs on Main mid-session: never block it.
+          if (windowsKill) return;
+          windowsKill = killWindowsProcessTreeInBackground(target, "[ProjectCheckService]", {
+            timeoutMs: 3_000,
+          }).finally(() => {
+            windowsKill = null;
+          });
           return;
         }
 
@@ -519,7 +538,7 @@ export class ProjectCheckService {
 
       /**
        * Kill escalation cannot be assumed to work — a process wedged in
-       * uninterruptible I/O, or a failed Windows `taskkill`, emits neither
+       * uninterruptible I/O, or a failed Windows tree kill, emits neither
        * `exit` nor `close`. Without this the promise (and the cwd's
        * concurrency slot) would stay pending past the advertised ceiling
        * forever. Settles with a null exit code, which `passed` already treats
@@ -563,10 +582,10 @@ export class ProjectCheckService {
         if (settled) return;
         // Claims the cause without the polite kill, then issues exactly one
         // forced kill. Routing through onAbort() would run the tree-kill twice
-        // — on Windows that is two serial 3s `taskkill` calls per check,
+        // — on Windows that is two serial 3s tree kills per check,
         // blocking the main thread during quit.
         claimAbort();
-        killTree(true);
+        killTree(true, true);
         armForceSettle();
       };
 

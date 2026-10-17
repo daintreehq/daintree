@@ -23,6 +23,7 @@ import type {
   PersistableFlowStatus,
 } from "@/types";
 import { cn } from "@/lib/utils";
+import { reportCanopySent } from "@/lib/canopySeen";
 import { BANNER_ENTER_DURATION, BANNER_EXIT_DURATION } from "@/lib/animationUtils";
 import { XtermAdapter } from "./XtermAdapter";
 import { ArtifactOverlay } from "./ArtifactOverlay";
@@ -102,12 +103,14 @@ const LazyHybridInputBar = lazy(() =>
   import("./HybridInputBar").then((m) => ({ default: m.HybridInputBar }))
 );
 import {
+  getTerminalClickTarget,
   getTerminalFocusTarget,
   isLikelyAtSynthesizedPointer,
   resolvePaneFocusAction,
   shouldRecordXtermFocusPreference,
   shouldShowHybridInputBar,
   shouldSuppressUnfocusedClick,
+  type TerminalFocusTarget,
 } from "./terminalFocus";
 import { decideChromeAction } from "./multiSelectGestures";
 import { registerPanelFocusHandler } from "@/components/Panel/panelFocusRegistry";
@@ -115,6 +118,9 @@ import { deriveTerminalChrome, type TerminalChromeDescriptor } from "@/utils/ter
 import { isPtyPanel } from "@shared/types/panel";
 import { useSessionLostBanner } from "./useSessionLostBanner";
 import { useWorktreeMoveBanner, resolveWorktreeMoveRoute } from "./useWorktreeMoveBanner";
+import { useTerminalInputBlock } from "@/hooks/useHostConnection";
+import { ControlConfirmedBanner, TerminalInputBlockBanner } from "./TerminalInputBlockBanner";
+import { useControlConfirmed } from "@/components/Recovery/takeControl";
 import { WorktreeMoveBanner } from "./WorktreeMoveBanner";
 import type { TerminalRuntimeIdentity } from "@shared/types/panel";
 
@@ -572,8 +578,28 @@ function TerminalPaneComponent({
   // Single source of truth for "the hybrid editor cannot take input": it gates
   // both the bar's `disabled` prop and focus-target resolution. Resolving focus
   // against a narrower condition would route Enter to a disabled editor.
+  // Typing is held back while the host link is down or another machine
+  // drives the project; the pane says why rather than swallowing keys.
+  const inputBlock = useTerminalInputBlock();
+  // Another screen drives: the composer shows its draft as it types, read-only.
+  const followsDriver = inputBlock?.kind === "driven-elsewhere";
+  // A pending host switch is the window's to explain (its progress notice);
+  // a strip here would flash on every pane for a switch that lands at once.
+  const paneInputBlock = inputBlock?.kind === "switching" ? null : inputBlock;
+  // On its way to another host, the draft stays put rather than going to the
+  // terminal being left (refused submits would otherwise clear it).
+  const hostSwitchPending = inputBlock?.kind === "switching";
   const isHybridInputDisabled =
-    isBackendDisconnected || isBackendRecovering || isInputLocked || isRestarting;
+    isBackendDisconnected ||
+    isBackendRecovering ||
+    isInputLocked ||
+    isRestarting ||
+    followsDriver ||
+    hostSwitchPending;
+  // Focus routing ignores a pending switch: moving focus to xterm for it would
+  // flip the pane's stored preference, so a switch that fails or comes back
+  // would leave the keyboard off the composer the user was in.
+  const isHybridInputDisabledForFocus = isHybridInputDisabled && !hostSwitchPending;
 
   const isHibernated = useIsHibernated(id);
 
@@ -683,6 +709,7 @@ function TerminalPaneComponent({
   // Single gate across waiting → injecting so the banner doesn't flicker on
   // the phase transition; fast injections (<400ms) show nothing.
   const showInjectionBanner = useDohertyGate(isInjecting || isPendingInjection);
+  const controlConfirmed = useControlConfirmed(id);
 
   // Cancel auto-restart if terminal is intentionally trashed/removed
   useEffect(() => {
@@ -1024,6 +1051,18 @@ function TerminalPaneComponent({
     setFocused(id);
   };
 
+  // A file drop that finds neither the terminal nor the input bar holding the
+  // keyboard lands where a click on the terminal would have put it.
+  const getDropClickTarget = (): TerminalFocusTarget =>
+    getTerminalClickTarget({
+      location,
+      isFocused,
+      preferredTarget: usePanelStore.getState().preferredTerminalFocusTarget,
+      hasHybridInputSurface: showHybridInputBar,
+      isInputDisabled: isHybridInputDisabledForFocus,
+      hybridInputEnabled,
+    });
+
   const handleXtermPointerNoop = () => {};
 
   const handleRestart = () => {
@@ -1087,7 +1126,7 @@ function TerminalPaneComponent({
       focusTarget: getTerminalFocusTarget({
         preferredTarget: preferredTerminalFocusTarget,
         hasHybridInputSurface: showHybridInputBar,
-        isInputDisabled: isHybridInputDisabled,
+        isInputDisabled: isHybridInputDisabledForFocus,
         hybridInputEnabled,
       }),
       ...readXtermSelectionState(id),
@@ -1120,7 +1159,7 @@ function TerminalPaneComponent({
     showHybridInputBar,
     hybridInputEnabled,
     preferredTerminalFocusTarget,
-    isHybridInputDisabled,
+    isHybridInputDisabledForFocus,
   ]);
 
   useEffect(() => {
@@ -1140,7 +1179,7 @@ function TerminalPaneComponent({
         focusTarget: getTerminalFocusTarget({
           preferredTarget: usePanelStore.getState().preferredTerminalFocusTarget,
           hasHybridInputSurface: showHybridInputBar,
-          isInputDisabled: isHybridInputDisabled,
+          isInputDisabled: isHybridInputDisabledForFocus,
           hybridInputEnabled,
         }),
         ...readXtermSelectionState(id),
@@ -1162,7 +1201,13 @@ function TerminalPaneComponent({
       terminalInstanceService.focus(id);
       return containerRef.current?.contains(document.activeElement) ?? false;
     });
-  }, [id, isHeldForRecovery, showHybridInputBar, isHybridInputDisabled, hybridInputEnabled]);
+  }, [
+    id,
+    isHeldForRecovery,
+    showHybridInputBar,
+    isHybridInputDisabledForFocus,
+    hybridInputEnabled,
+  ]);
 
   // Sync agent state to terminal service for scroll management
   useEffect(() => {
@@ -1434,6 +1479,13 @@ function TerminalPaneComponent({
       {/* A PTY-backed plugin kind's "needs setup" strip, in flow above the
           terminal rather than over it. Nothing for a plain terminal. */}
       {storedKind !== undefined && <PluginKindSetupStrip kind={storedKind} />}
+      <BannerSlot visible={paneInputBlock !== null || controlConfirmed}>
+        {paneInputBlock ? (
+          <TerminalInputBlockBanner block={paneInputBlock} panelId={id} />
+        ) : (
+          controlConfirmed && <ControlConfirmedBanner />
+        )}
+      </BannerSlot>
 
       <BannerSlot visible={showRestartError}>
         {restartError && (
@@ -1649,6 +1701,7 @@ function TerminalPaneComponent({
                       // gestures behind, since those only fire for a real click
                       // that landed in pane chrome (#11809).
                       onDropSelect={handleClick}
+                      dropClickTarget={getDropClickTarget}
                       onAttached={handleAttached}
                       className="absolute inset-0"
                       getRefreshTier={getRefreshTierCallback}
@@ -1710,6 +1763,7 @@ function TerminalPaneComponent({
                     ref={inputBarRef}
                     terminalId={id}
                     disabled={isHybridInputDisabled}
+                    followsDriver={followsDriver}
                     cwd={cwd}
                     agentId={effectiveAgentId}
                     agentHasLifecycleEvent={stateChangeTrigger !== undefined}
@@ -1719,6 +1773,7 @@ function TerminalPaneComponent({
                     onSend={({ trackerData, text, imagePaths }) => {
                       if (!isInputLocked && !isRestarting) {
                         terminalInstanceService.notifyUserInput(id);
+                        reportCanopySent(id);
                         // submit now rejects when the PTY is gone (#8706); the
                         // single-pane path has no recovery UI for that, so
                         // swallow to log instead of leaking an unhandled
@@ -1735,7 +1790,12 @@ function TerminalPaneComponent({
                     }}
                     onSendKey={(key) => {
                       if (!isInputLocked && !isRestarting) {
-                        terminalInstanceService.notifyUserInput(id);
+                        if (key === "escape") {
+                          terminalInstanceService.clearDirectingState(id, "escape-key");
+                        } else {
+                          terminalInstanceService.notifyUserInput(id);
+                        }
+                        if (key === "enter") reportCanopySent(id);
                         terminalClient.sendKey(id, key);
                       }
                     }}

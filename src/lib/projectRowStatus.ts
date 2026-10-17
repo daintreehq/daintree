@@ -1,3 +1,4 @@
+import { AGENT_STATE_WORD, agentStatePhrase } from "./agentStateVocabulary";
 import type {
   SearchableProject,
   SearchableScratch,
@@ -29,7 +30,7 @@ export type ProjectRowTone =
  * honest today.
  */
 export const ROW_TONE_CLASS: Record<ProjectRowTone, string> = {
-  blocked: "text-status-danger/80",
+  blocked: "text-status-danger",
   waiting: "text-activity-waiting",
   // Finished-awaiting-review: the completed-state hue, distinct from both the
   // warning of a wait and the success-green of a healthy process. Never danger
@@ -58,7 +59,7 @@ export const ROW_TONE_CLASS: Record<ProjectRowTone, string> = {
   assistant: "text-text-secondary",
   // An assistant that failed says so in the danger hue — the severity is real
   // — while its dot stays hollow, so it never reads as a worker run.
-  "assistant-blocked": "text-status-danger/80",
+  "assistant-blocked": "text-status-danger",
 };
 
 /**
@@ -82,7 +83,7 @@ export const ROW_TONE_CLASS: Record<ProjectRowTone, string> = {
  * One standing exception: `review` keeps the completed hue, which derives from
  * `status-success` and so reads green in most palettes even though nothing is
  * executing. It predates this legend and the row's line always names the count
- * ("2 ready for review"), so it is recorded here rather than quietly reconciled.
+ * ("2 agents unread"), so it is recorded here rather than quietly reconciled.
  *
  * A hollow ring must never land on a row with something running. It used to:
  * an assistant waiting beside a working agent took the mark and drew it grey,
@@ -299,17 +300,17 @@ export interface ProjectRowStatus {
   allowsResumeMark?: true;
 }
 
-/** Compact duration for a wait that is already minutes old. Sub-minute reads as "just now". */
+/**
+ * Compact duration for a wait that is already minutes old, in its largest unit
+ * only, so the clock column keeps one width. Sub-minute reads as "just now".
+ */
 export function formatWaitAge(sinceMs: number, nowMs: number): string {
   const elapsed = Math.max(0, nowMs - sinceMs);
   const minutes = Math.floor(elapsed / 60_000);
   if (minutes < 1) return "just now";
   if (minutes < 60) return `${minutes}m`;
   const hours = Math.floor(minutes / 60);
-  if (hours < 24) {
-    const remainder = minutes % 60;
-    return remainder === 0 ? `${hours}h` : `${hours}h ${remainder}m`;
-  }
+  if (hours < 24) return `${hours}h`;
   return `${Math.floor(hours / 24)}d`;
 }
 
@@ -535,7 +536,7 @@ function classifyWorkspaceActivity(
   if (project.waitingAgentCount > 0) {
     // `blockedAgentCount` is a subset of `waitingAgentCount`, so the remainder
     // is still waiting on the user and has to be reported too — collapsing a
-    // "3 waiting, 1 blocked" project to "Agent blocked" would hide two agents
+    // "3 agents waiting, 1 blocked" project to "Agent blocked" would hide two agents
     // that are asking for something.
     const blocked = Math.min(project.blockedAgentCount, project.waitingAgentCount);
     const unblocked = project.waitingAgentCount - blocked;
@@ -546,13 +547,14 @@ function classifyWorkspaceActivity(
       // can compare it against the running count in front of it without
       // re-parsing a sentence.
       //
-      // "waiting", not "need input": an agent that finished its turn settles
-      // into `waiting` at its prompt the same as one that asked a question, so
-      // claiming it needs input overstated what was observed (#13047).
-      parts.push(`${unblocked} waiting`);
-      if (blocked > 0) parts.push(`${blocked} blocked`);
+      // "waiting" is honest again: a turn main watched an agent finish is
+      // counted as finished, not waiting, so what reaches this count is an
+      // approval, a question, or a prompt wait from before main was watching
+      // (#13238, which undoes the softening #13047 needed).
+      parts.push(agentStatePhrase(unblocked, "waiting"));
+      if (blocked > 0) parts.push(`${blocked} ${AGENT_STATE_WORD.blocked}`);
     } else {
-      parts.push(`${blocked} blocked`);
+      parts.push(agentStatePhrase(blocked, "blocked"));
     }
 
     // `oldestWaitingSince` is the earliest transition across ALL waits, blocked
@@ -597,7 +599,7 @@ function classifyWorkspaceActivity(
   }
 
   // Finished work the user hasn't seen — the hand-back the attention band
-  // exists for. States the action ("ready for review") and, in the age beside
+  // exists for. Says it is unread and, in the age beside
   // it, how fresh the hand-back is, so a 3-minute-old completion and a
   // 2-hour-old one stop rendering identically.
   if (project.unacknowledgedCompletedAgentCount > 0) {
@@ -605,7 +607,7 @@ function classifyWorkspaceActivity(
     const latest = project.latestUnacknowledgedCompletionAt;
     const oldest = project.oldestUnacknowledgedCompletionAt;
     const line: ActivityLine = {
-      text: `${count} ready for review`,
+      text: agentStatePhrase(count, "unread"),
       tone: "review",
       demandCount: count,
     };

@@ -27,6 +27,26 @@ const CSI_REPORT_RE = /^\x1b\[[>?]?[\d;]*(?:[Rnct]|\$y)$/;
 // eslint-disable-next-line no-control-regex
 const STRING_REPLY_RE = /^\x1b(?:\]\d+;|P|_G)[^\x00-\x1f\x7f]*(?:\x07|\x1b\\)$/;
 
+/**
+ * A reply xterm writes on the terminal's own behalf — a report the program
+ * asked for (cursor position, device attributes, a mode, colour or version
+ * query) or a focus change — never anything the user typed. Every view of a
+ * terminal parses the same output and would answer it again, so only the one
+ * the program draws for may. A modified F3 (`\x1b[1;2R`) has a cursor report's
+ * shape and goes with it: in a second view of a terminal, a stray report
+ * corrupting the program's input is worse than a lost Shift+F3.
+ */
+export function isTerminalReply(data: string): boolean {
+  if (data === "\x1b[I" || data === "\x1b[O") return true;
+  if (data.startsWith("\x1b[?")) return true;
+  return CSI_REPORT_RE.test(data) || STRING_REPLY_RE.test(data);
+}
+
+/** A mouse report xterm sends for a mouse-tracking program: never typing. */
+export function isMouseReport(data: string): boolean {
+  return data.startsWith("\x1b[M") || data.startsWith("\x1b[<") || URXVT_MOUSE_RE.test(data);
+}
+
 export function isNonKeyboardInput(data: string): boolean {
   // Mouse sequences
   if (data.startsWith("\x1b[M")) return true;

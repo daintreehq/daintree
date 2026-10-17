@@ -124,6 +124,33 @@ function getObservedTask(panel: TitledPanel): ObservedTask | null {
   return value;
 }
 
+/**
+ * Codex 0.160 frames its topic as "[ ! ] Action Required | <topic> | <folder>",
+ * or "<topic> | <folder…>" while it works. Only that exact framing is taken
+ * off, and only for Codex: a bracketed task ("[x] Fix auth") or a task ending
+ * in a word that happens to start the folder name is another agent's real title.
+ */
+const CODEX_BADGE = /^\[\s*[!.?*]\s*\]\s*Action Required\s*\|\s+/i;
+const CODEX_FOLDER_SEGMENT = /\s+\|\s+(\S+?)(\.\.\.|…)?$/;
+/** A clipped folder shorter than this could be a task's own last word. */
+const CLIPPED_FOLDER_MIN = 8;
+
+function withoutCodexFraming(title: string, folder: string | null): string {
+  let out = title.replace(CODEX_BADGE, "");
+  if (folder === null) return out;
+  const match = CODEX_FOLDER_SEGMENT.exec(out);
+  if (match?.index !== undefined) {
+    const segment = match[1]!.toLowerCase();
+    const name = folder.toLowerCase();
+    const isFolder =
+      match[2] !== undefined
+        ? segment.length >= CLIPPED_FOLDER_MIN && name.startsWith(segment)
+        : segment === name;
+    if (isFolder) out = out.slice(0, match.index).trimEnd();
+  }
+  return out;
+}
+
 function computeObservedTask(panel: TitledPanel): ObservedTask | null {
   if ((panel.titleMode ?? "default") === "user") return null;
   if (panel.detectedAgentId === undefined || panel.agentState === "exited") return null;
@@ -148,14 +175,18 @@ function computeObservedTask(panel: TitledPanel): ObservedTask | null {
       ...nameInitials(agent?.name),
     ].filter(Boolean)
   );
+  const folder = cwdBasename(panel.cwd);
   const isNoiseSegment = (segment: string) => noiseLabels.has(normalizeLabel(segment));
+  // Taken off whole, before the segment matcher: worktree folders carry
+  // hyphens, which it reads as separators.
+  const unframed =
+    panel.detectedAgentId === "codex" ? withoutCodexFraming(cleaned, folder) : cleaned;
   // Grok's " - grok" suffix, OpenCode's "OC | " prefix: identity decoration
   // around a real task, stripped segment-wise from the ends.
-  const task = stripIdentityAffixes(cleaned, isNoiseSegment);
+  const task = stripIdentityAffixes(unframed, isNoiseSegment);
   if (!task || isUselessTitle(task)) return null;
   // Workspace echo (Codex idle titles itself with the cwd folder name):
   // where the agent is, not what it's doing — the pane already shows that.
-  const folder = cwdBasename(panel.cwd);
   if (folder && task.toLowerCase() === folder.toLowerCase()) return null;
   const tokens = titleTokens(task);
   if (tokens.length === 0) return null;

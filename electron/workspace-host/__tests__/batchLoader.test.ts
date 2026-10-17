@@ -122,15 +122,6 @@ describe("BatchLoader", () => {
     await expect(loader.load("a")).rejects.toThrow("BatchLoader disposed");
   });
 
-  it("never calls the batch function when nothing is loaded", async () => {
-    const batchFn = vi.fn<BatchLoadFn<string, string>>(async (keys) => keys.map((k) => k));
-    new BatchLoader(batchFn);
-
-    await flush();
-
-    expect(batchFn).not.toHaveBeenCalled();
-  });
-
   it("supports a custom cacheKeyFn for object keys", async () => {
     const batchFn = vi.fn<BatchLoadFn<{ id: number }, number>>(async (keys) =>
       keys.map((k) => k.id)

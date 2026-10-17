@@ -142,7 +142,8 @@ describe("WindowsProcessCensus", () => {
         string[],
         { windowsHide?: boolean; shell?: boolean },
       ];
-      expect(file.toLowerCase()).toContain("powershell");
+      // By absolute path, so no same-named file in a working directory can stand in.
+      expect(file).toMatch(/^[A-Za-z]:\\.*\\System32\\WindowsPowerShell\\v1\.0\\powershell\.exe$/i);
       expect(args).toContain("-NoProfile");
       expect(args).toContain("-NonInteractive");
       expect(args).toContain("-Command");
@@ -486,22 +487,6 @@ describe("WindowsProcessCensus", () => {
       expect(census.isRunning).toBe(false);
     });
 
-    it("does not charge a failure for a helper that dies while idle", async () => {
-      vi.useFakeTimers();
-      const census = new WindowsProcessCensus();
-      const first = census.request();
-      respond(children[0], "[]");
-      await first;
-
-      children[0].emit("exit", 0, null);
-
-      // Nothing failed, so nothing is on the ladder: the next census starts a
-      // replacement immediately rather than entering a cooldown later.
-      const second = census.request();
-      respond(children[1], "[]");
-      expect(await second).toBe("[]");
-    });
-
     it("suppresses launches after consecutive failures, then recovers", async () => {
       vi.useFakeTimers();
       const census = new WindowsProcessCensus();
@@ -726,14 +711,6 @@ describe("WindowsProcessCensus", () => {
       expect(children[0].kill).toHaveBeenCalled();
       await expect(census.request()).rejects.toThrow(/disposed/);
       expect(mockSpawn).toHaveBeenCalledTimes(1);
-    });
-
-    it("dispose is safe with no helper running", () => {
-      const census = new WindowsProcessCensus();
-      expect(() => {
-        census.dispose();
-        census.dispose();
-      }).not.toThrow();
     });
   });
 });

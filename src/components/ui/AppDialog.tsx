@@ -14,10 +14,15 @@ import { InsetSurface } from "@/components/ui/insetSurface";
 import { createPortal } from "react-dom";
 import { useShallow } from "zustand/react/shallow";
 import { cn } from "@/lib/utils";
-import { getVisibleTabbableElements } from "@/lib/accessibility";
+import {
+  getVisibleTabbableElements,
+  INTERACTIVE_CONTROL_SELECTOR,
+  TRUNCATION_DISCLOSURE_ATTR,
+} from "@/lib/accessibility";
 import { logError } from "@/utils/logger";
 import { ScrollShadow } from "@/components/ui/ScrollShadow";
-import { useOverlayState, useEscapeStack } from "@/hooks";
+import { useOverlayState } from "@/hooks/useOverlayState";
+import { useEscapeStack } from "@/hooks/useEscapeStack";
 import {
   registerDialogEscapeBackstop,
   isTopmostDialogBackstop,
@@ -29,7 +34,7 @@ import {
 import { APP_DIALOG_SURFACE_ATTR } from "@/lib/appDialogSurface";
 import { publishScrollbarGutter } from "@/lib/scrollbarGutter";
 import { useDockPopoverOpen } from "@/lib/dockPopoverLayer";
-import { usePortalStore } from "@/store";
+import { usePortalStore } from "@/store/portalStore";
 import { clearDialogOverlays } from "@/lib/dialogOverlayDismissal";
 import { useAnimatedPresence } from "@/hooks/useAnimatedPresence";
 import { AccessibilityAnnouncer } from "@/components/Accessibility/AccessibilityAnnouncer";
@@ -68,6 +73,24 @@ type DialogPlacement = "center" | "right" | "left";
  * identity changes while the dialog is open, e.g. the next row after a delete).
  */
 type RestoreFocusTarget = React.RefObject<HTMLElement | null> | (() => HTMLElement | null);
+
+/**
+ * A dialog opened from a menu item is recorded against the menu's trigger. The
+ * item's select handler runs before the menu closes, so the item still holds
+ * focus when the opener is read — and it unmounts with the menu, which would
+ * leave the close nothing to restore to but the app shell.
+ */
+function resolveOpener(active: HTMLElement | null): HTMLElement | null {
+  let opener = active;
+  // A submenu is labelled by its sub-trigger, itself an item of the parent menu.
+  for (let depth = 0; depth < 4; depth++) {
+    const triggerId = opener?.closest('[role="menu"]')?.getAttribute("aria-labelledby");
+    const trigger = triggerId ? document.getElementById(triggerId) : null;
+    if (!trigger || trigger === opener) break;
+    opener = trigger;
+  }
+  return opener;
+}
 
 /**
  * Resolve a {@link RestoreFocusTarget} to an element. Tolerates a throwing
@@ -116,6 +139,13 @@ export interface AppDialogProps {
   zIndex?: DialogZIndex;
   placement?: DialogPlacement;
   initialFocus?: DialogInitialFocus;
+  /**
+   * Re-applies {@link initialFocus} whenever this value changes while the dialog
+   * stays open. For a queue-driven singleton that promotes the next request into
+   * the same open dialog: without it, focus stays on the button that answered the
+   * last request, so the next request opens with its primary focused.
+   */
+  focusResetKey?: string | number;
   restoreFocusTo?: RestoreFocusTarget;
   /**
    * Try `restoreFocusTo` before the trigger, not only once the trigger is gone —
@@ -123,6 +153,20 @@ export interface AppDialogProps {
    * opened it (a viewer stepped to another item returns focus to that item).
    */
   preferRestoreFocusTo?: boolean;
+  /**
+   * Runs once the dialog has finished closing and handed focus back. A
+   * follow-up dialog opened from here captures the control the user was on as
+   * its opener; opened any earlier, it would capture a closing control and
+   * this dialog's restore would then move focus out behind it. Not called
+   * when the dialog unmounts or reopens before its exit finishes.
+   */
+  onCloseComplete?: () => void;
+  /**
+   * Painted under the scrim, over the app — for a dialog that holds a still of
+   * the app behind itself. The scrim's tint and blur stay live on top of it, and
+   * it fades with the scrim. Takes no pointer events.
+   */
+  backdrop?: React.ReactNode;
   "data-testid"?: string;
 }
 
@@ -197,8 +241,11 @@ export function AppDialog({
   zIndex = "modal",
   placement = "center",
   initialFocus,
+  focusResetKey,
   restoreFocusTo,
   preferRestoreFocusTo = false,
+  onCloseComplete,
+  backdrop,
   "data-testid": dataTestId,
 }: AppDialogProps) {
   // A dock popover renders above the standard modal tier, so a dialog opened
@@ -267,9 +314,11 @@ export function AppDialog({
     }
     if (document.contains(el)) {
       el.focus();
-      return;
+      // A recorded opener can be connected yet refuse focus (a menu labelled
+      // by something other than its trigger), so fall through when it did.
+      if (document.activeElement === el) return;
     }
-    // Trigger was unmounted before close. Prefer a caller-supplied logical
+    // Trigger was unmounted before close, or would not take focus. Prefer a caller-supplied logical
     // successor (e.g. the next row after a delete) when one is still connected
     // and actually accepts focus.
     const target = resolveRestoreFocusTarget(restoreFocusToRef.current);
@@ -284,10 +333,19 @@ export function AppDialog({
     fallback?.focus();
   }, []);
 
+  const onCloseCompleteRef = useRef(onCloseComplete);
+  useEffect(() => {
+    onCloseCompleteRef.current = onCloseComplete;
+  }, [onCloseComplete]);
+  const handleAnimateOut = useCallback(() => {
+    restoreFocus();
+    onCloseCompleteRef.current?.();
+  }, [restoreFocus]);
+
   const { isVisible, shouldRender } = useAnimatedPresence({
     isOpen,
     animationDuration: getUiTransitionDuration("exit"),
-    onAnimateOut: restoreFocus,
+    onAnimateOut: handleAnimateOut,
     syncEnter: true,
   });
 
@@ -341,7 +399,7 @@ export function AppDialog({
     focusAtOpenRef.current = active;
     if (openerCapturedRef.current) return;
     openerCapturedRef.current = true;
-    previousActiveElement.current = active;
+    previousActiveElement.current = resolveOpener(active);
   }, [isOpen]);
 
   useEffect(() => {
@@ -351,6 +409,17 @@ export function AppDialog({
       initialFocusOwedRef.current = false;
     }
   }, [isOpen, effectiveInitialFocus, restoreFocus]);
+
+  const focusResetKeyRef = useRef(focusResetKey);
+  useLayoutEffect(() => {
+    if (focusResetKeyRef.current === focusResetKey) return;
+    focusResetKeyRef.current = focusResetKey;
+    if (!isOpen || effectiveInitialFocus === "none") return;
+    // Focus left on the last request's button is a leftover, not a choice.
+    focusAtOpenRef.current =
+      document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    initialFocusOwedRef.current = true;
+  }, [focusResetKey, isOpen, effectiveInitialFocus]);
 
   useEffect(() => {
     if (!isOpen || !shouldRender || !initialFocusOwedRef.current) return;
@@ -375,7 +444,14 @@ export function AppDialog({
         // control that answers nothing — arriving there makes a reflexive
         // Enter throw the dialog away. Land on it only when nothing else is
         // tabbable.
-        const tabbable = getVisibleTabbableElements(root);
+        // Nor on a truncated label made tabbable only to show its full text:
+        // focus there opens its tooltip the moment the dialog appears.
+        // The marker can also land on a real control (a custom `Button` child
+        // looks non-interactive to the tooltip), so only a non-control counts.
+        const tabbable = getVisibleTabbableElements(root).filter(
+          (el) =>
+            !el.hasAttribute(TRUNCATION_DISCLOSURE_ATTR) || el.matches(INTERACTIVE_CONTROL_SELECTOR)
+        );
         target = tabbable.find((el) => !el.hasAttribute(DIALOG_CLOSE_ATTR)) ?? tabbable[0] ?? null;
       }
       if (target) {
@@ -385,7 +461,7 @@ export function AppDialog({
       }
     });
     return () => cancelAnimationFrame(frame);
-  }, [isOpen, shouldRender, effectiveInitialFocus]);
+  }, [isOpen, shouldRender, effectiveInitialFocus, focusResetKey]);
 
   useEffect(() => {
     return () => {
@@ -564,6 +640,24 @@ export function AppDialog({
         registerDescription,
       }}
     >
+      {backdrop !== undefined && (
+        // Same layer as the scrim, and first, so the scrim paints over it.
+        <div
+          aria-hidden="true"
+          className={cn(
+            "pointer-events-none fixed inset-0 overflow-hidden transition-opacity",
+            effectiveZIndex === "nested" ? "z-[var(--z-nested-dialog)]" : "z-[var(--z-modal)]",
+            isVisible ? "opacity-100" : "opacity-0"
+          )}
+          style={{
+            right: portalOffset,
+            transitionDuration: isVisible ? `${UI_ENTER_DURATION}ms` : `${UI_EXIT_DURATION}ms`,
+            transitionTimingFunction: UI_SCRIM_EASING,
+          }}
+        >
+          {backdrop}
+        </div>
+      )}
       <div
         className={cn(
           "fixed inset-0 flex bg-scrim-medium backdrop-blur-[var(--theme-scrim-blur)] backdrop-saturate-[var(--theme-material-saturation)]",
@@ -754,12 +848,19 @@ interface AppDialogBodyProps {
    * Omit it and nothing changes.
    */
   resetScrollKey?: string | number;
+  /**
+   * The 16px scroll fade rather than the 32px one, for a body that is a list
+   * of short rows: the full fade covers most of a row, so a live row at the
+   * edge reads as disabled.
+   */
+  compactShadow?: boolean;
 }
 
 AppDialog.Body = function AppDialogBody({
   children,
   className,
   resetScrollKey,
+  compactShadow,
 }: AppDialogBodyProps) {
   const scrollRef = useRef<HTMLDivElement>(null);
 
@@ -788,6 +889,7 @@ AppDialog.Body = function AppDialogBody({
       ref={scrollRef}
       className="flex-1 min-h-0"
       scrollClassName={cn("py-6 dialog-body-inset", className)}
+      compact={compactShadow}
     >
       <InsetSurface>{children}</InsetSurface>
     </ScrollShadow>

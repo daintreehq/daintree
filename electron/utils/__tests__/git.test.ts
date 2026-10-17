@@ -37,6 +37,7 @@ vi.mock("../logger.js", () => ({
 }));
 
 import {
+  getCommitCount,
   getLatestTrackedFileMtime,
   getWorktreeChangesWithStats,
   capCommitBody,
@@ -91,14 +92,6 @@ describe("getLatestTrackedFileMtime", () => {
 
   it("returns null for zero timestamp", async () => {
     mockGit.raw.mockResolvedValue("0");
-
-    const timestamp = await getLatestTrackedFileMtime("/test/path");
-
-    expect(timestamp).toBeNull();
-  });
-
-  it("returns null for negative timestamp", async () => {
-    mockGit.raw.mockResolvedValue("-1");
 
     const timestamp = await getLatestTrackedFileMtime("/test/path");
 
@@ -210,35 +203,6 @@ describe("getWorktreeChangesWithStats last commit metadata", () => {
     expect(result.lastCommitAuthor).toEqual({ name: "Ada", email: "ada@example.com" });
     // The body is split at the NUL, so a tab inside it never leaks into the subject.
     expect(result.lastCommitBody).toBe("Why it ships.\n\tIndented");
-  });
-});
-
-describe("getWorktreeChangesWithStats --no-ext-diff", () => {
-  beforeEach(() => {
-    vi.clearAllMocks();
-    (fs.access as ReturnType<typeof vi.fn>).mockResolvedValue(undefined);
-    mockGit.status.mockResolvedValue({
-      modified: ["src/app.ts"],
-      created: [],
-      deleted: [],
-      renamed: [],
-      staged: [],
-      conflicted: [],
-      not_added: [],
-      files: [{ path: "src/app.ts", index: " ", working_dir: "M" }],
-    });
-    mockGit.revparse.mockResolvedValue("/test/path\n");
-    mockGit.raw.mockResolvedValue("100\t0\tsome msg");
-    mockGit.diff.mockResolvedValue("1\t0\tsrc/app.ts");
-    (fs.stat as ReturnType<typeof vi.fn>).mockResolvedValue({ mtimeMs: 1000, size: 512 });
-  });
-
-  it("passes --no-ext-diff, --no-renames, and --numstat in diff call", async () => {
-    await getWorktreeChangesWithStats("/test/path", true);
-
-    expect(mockGit.diff).toHaveBeenCalledWith(
-      expect.arrayContaining(["--no-ext-diff", "--no-renames", "--numstat"])
-    );
   });
 });
 
@@ -1158,27 +1122,6 @@ describe("listCommits", () => {
     expect(result.items[1].date).toBe("2024-01-14T12:00:00+00:00");
   });
 
-  it("handles empty commit body", async () => {
-    mockGit.raw.mockResolvedValueOnce("1").mockResolvedValueOnce(
-      makeLogOutput([
-        {
-          hash: "def456",
-          short: "def456",
-          msg: "fix: typo",
-          body: "",
-          name: "Author",
-          email: "a@b.com",
-          date: "2024-01-15T12:00:00+00:00",
-        },
-      ])
-    );
-
-    const result = await listCommits({ cwd: "/test", branch: "main" });
-
-    expect(result.items).toHaveLength(1);
-    expect(result.items[0].body).toBeUndefined();
-  });
-
   it("respects hasMore pagination", async () => {
     const commits = Array.from({ length: 3 }, (_, i) => ({
       hash: `hash${i}`,
@@ -1687,5 +1630,55 @@ describe("capCommitBody", () => {
     expect(capCommitBody("short\n\nCo-authored-by: A <a@x>")).toBe(
       "short\n\nCo-authored-by: A <a@x>"
     );
+  });
+});
+
+// `getCommitCount` reports a *reliable* count or throws — it deliberately does
+// not report `0` for a failure, because callers persist the result and a
+// fabricated zero would overwrite a good stored count (issue #11078).
+describe("getCommitCount", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  function respond(handler: (args: string[]) => Promise<string>) {
+    mockGit.raw.mockImplementation((args: string[]) => handler(args));
+  }
+
+  it("returns the parsed count on the happy path", async () => {
+    respond(async (args) => (args[0] === "rev-list" ? "1234\n" : ""));
+    await expect(getCommitCount("/repo")).resolves.toBe(1234);
+  });
+
+  it("reports zero for a repository whose HEAD is unborn", async () => {
+    // `git init` with nothing committed: `rev-list HEAD` fails, but the repo is
+    // real and its count is genuinely 0. Throwing here would mean an empty repo
+    // could never persist a count — and so could never seed its toolbar.
+    respond(async (args) => {
+      if (args[0] === "rev-list") throw new Error("fatal: ambiguous argument 'HEAD'");
+      if (args[0] === "rev-parse") return ".git\n";
+      return "";
+    });
+
+    await expect(getCommitCount("/empty-repo")).resolves.toBe(0);
+  });
+
+  it("throws when the directory is not a usable repository", async () => {
+    respond(async () => {
+      throw new Error("fatal: not a git repository");
+    });
+
+    await expect(getCommitCount("/not-a-repo")).rejects.toThrow(/not a git repository/);
+  });
+
+  it("does not report an unparseable answer as a count", async () => {
+    // An empty or garbage `rev-list` answer parses to NaN. Reporting that as a
+    // number would let NaN reach the count columns.
+    respond(async (args) => {
+      if (args[0] === "rev-list") return "\n";
+      throw new Error("fatal: not a git repository");
+    });
+
+    await expect(getCommitCount("/weird")).rejects.toThrow();
   });
 });

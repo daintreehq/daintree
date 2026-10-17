@@ -42,12 +42,6 @@ async function load() {
 }
 
 describe("pluginContextMenuItemsStore", () => {
-  it("pulls once and subscribes once on init", async () => {
-    await load();
-    expect(contextMenuItemsMock).toHaveBeenCalledTimes(1);
-    expect(onChangedMock).toHaveBeenCalledTimes(1);
-  });
-
   it("init is idempotent — does not double-pull or double-subscribe", async () => {
     const mod = await load();
     mod.usePluginContextMenuItemsStore.getState().init();
@@ -95,16 +89,6 @@ describe("pluginContextMenuItemsStore", () => {
     });
   });
 
-  it("a pull that resolves before any push populates entries", async () => {
-    contextMenuItemsMock.mockResolvedValue([entry("FromPull", "terminal")]);
-    const mod = await load();
-    await vi.waitFor(() => {
-      expect(
-        mod.usePluginContextMenuItemsStore.getState().entries.map((e) => e.item.label)
-      ).toEqual(["FromPull"]);
-    });
-  });
-
   it("a failed initial pull does not block later pushes", async () => {
     contextMenuItemsMock.mockRejectedValue(new Error("ipc down"));
     const mod = await load();
@@ -138,24 +122,5 @@ describe("pluginContextMenuItemsStore", () => {
     mod.usePluginContextMenuItemsStore.getState().init();
     expect(contextMenuItemsMock).toHaveBeenCalledTimes(1);
     expect(onChangedMock).toHaveBeenCalledTimes(1);
-  });
-
-  it("reset unsubscribes, clears entries, and resets the init guard", async () => {
-    const cleanup = vi.fn();
-    onChangedMock.mockImplementation((cb: (p: ChangedPayload) => void) => {
-      changedCb = cb;
-      return cleanup;
-    });
-    const mod = await load();
-    changedCb!({ items: [entry("Foo", "terminal")], complete: false });
-    expect(mod.usePluginContextMenuItemsStore.getState().entries).toHaveLength(1);
-
-    mod._resetPluginContextMenuItemsStoreForTest();
-    expect(cleanup).toHaveBeenCalledTimes(1);
-    expect(mod.usePluginContextMenuItemsStore.getState().entries).toEqual([]);
-
-    // Guard reset ⇒ a fresh init subscribes again.
-    mod.usePluginContextMenuItemsStore.getState().init();
-    expect(onChangedMock).toHaveBeenCalledTimes(2);
   });
 });

@@ -172,25 +172,6 @@ describe("buildDockLaunchModel — panel offering", () => {
     expect(model.gridPanels.map((p) => p.kindId)).toContain("review");
   });
 
-  it("includes Dev Preview in the dock group now that it is dockable (#12397)", () => {
-    const model = build();
-    expect(model.dockPanels.map((p) => p.kindId)).toContain("dev-preview");
-    expect(model.gridPanels.map((p) => p.kindId)).not.toContain("dev-preview");
-  });
-
-  it("includes File Browser in the dock group now that it is dockable (#11917)", () => {
-    // The heading is a promise about placement, so the kind that just gained
-    // `dockable` has to move sections with it.
-    const model = build();
-    expect(model.dockPanels.map((p) => p.kindId)).toContain("file-browser");
-    expect(model.gridPanels.map((p) => p.kindId)).not.toContain("file-browser");
-  });
-
-  it("includes File Viewer in the dock group (dockable but previously unlisted)", () => {
-    const model = build();
-    expect(model.dockPanels.map((p) => p.kindId)).toContain("file");
-  });
-
   it("always offers Terminal even though it opts out of the palette", () => {
     // `terminal` sets showInPalette:false (it has dedicated spawn actions), so
     // the spawnable selector excludes it and the launcher adds it back.

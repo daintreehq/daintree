@@ -58,11 +58,10 @@ export const daintreeThemeStyles = [
   // punctuation/type/property fell through to text-primary, collapsing to a
   // near-monochrome render on the light canvas (everything but keyword/string/
   // comment painted in body text). Map them onto the existing syntax roles,
-  // mirroring the highlight.js role assignments used for the markdown renderer
-  // (src/index.css:493-562) so the editor and prose share one vocabulary. No
-  // dedicated syntax-type / syntax-property roles exist, so type folds into the
-  // keyword role and property into the number role, matching the hljs mapping
-  // (.hljs-type -> keyword, .hljs-attr -> number). All roles are still painted
+  // keeping the role assignments the markdown renderer's highlighting has always
+  // used so the editor and prose share one vocabulary. No dedicated
+  // syntax-type / syntax-property roles exist, so type folds into the keyword
+  // role and property into the number role. All roles are still painted
   // from the theme CSS vars and validated against surface-canvas (RC-8).
   { tag: [t.number, t.literal, t.bool], color: "var(--theme-syntax-number)" },
   { tag: t.operator, color: "var(--theme-syntax-operator)" },

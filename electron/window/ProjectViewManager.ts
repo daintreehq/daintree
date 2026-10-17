@@ -48,6 +48,7 @@ import type {
   ProjectSwitchTrace,
 } from "../../shared/types/ipc/project.js";
 import { PERF_MARKS } from "../../shared/perf/marks.js";
+import { toHostScopedKey, type HostId } from "../../shared/types/remoteHosts.js";
 import { markPerformance } from "../utils/performance.js";
 import { collectGuestPids } from "./ProjectViewLifecycleController.js";
 
@@ -232,6 +233,19 @@ export interface ProjectViewManagerOptions {
    */
   isTerminalLive?: (terminalId: string) => boolean;
   /**
+   * The assistant floor for a view of a host's project (#13349). That
+   * assistant runs on the host and is revoked there when the view closes, so
+   * neither of the two readers above can see it: the host computes the same
+   * conditions and tells the Shell. Absent, no remote view is protected.
+   */
+  remoteAssistantLive?: (webContentsId: number) => boolean;
+  /**
+   * The active-agent rank for a view of a host's project (#13359). Its agents
+   * run on the host, so this machine's agent-state cache never sees them; the
+   * host tells the Shell instead. Absent, no remote view ranks as active.
+   */
+  remoteAgentActive?: (webContentsId: number) => boolean;
+  /**
    * Why MCP needs this view kept running right now (#11790) — a live session
    * binding, an in-flight dispatch, or neither. Injected from the composition
    * root for the same reason as `assistantBackendsForProject`: electron/window/
@@ -371,10 +385,13 @@ export class ProjectViewManager {
     webContentsId: number;
   }>;
   isTerminalLive?: (terminalId: string) => boolean;
+  remoteAssistantLive?: (webContentsId: number) => boolean;
+  remoteAgentActive?: (webContentsId: number) => boolean;
   mcpViewActivity?: (workspaceId: string, webContentsId: number) => McpViewActivity | null;
   windowRegistry?: import("./WindowRegistry.js").WindowRegistry;
   private switchChain: Promise<void> = Promise.resolve();
   private resizeHandler: (() => void) | null = null;
+  private contentAreaGrowthHandler: (() => void) | null = null;
   evictionTimestamps = new Map<string, number>();
   /**
    * In-flight background restores, keyed by project id (#12320). Registered
@@ -457,6 +474,8 @@ export class ProjectViewManager {
     this.onViewRendererGone = opts.onViewRendererGone;
     this.assistantBackendsForProject = opts.assistantBackendsForProject;
     this.isTerminalLive = opts.isTerminalLive;
+    this.remoteAssistantLive = opts.remoteAssistantLive;
+    this.remoteAgentActive = opts.remoteAgentActive;
     this.mcpViewActivity = opts.mcpViewActivity;
     this.windowRegistry = opts.windowRegistry;
     if (opts.cachedProjectViews != null) {
@@ -528,6 +547,22 @@ export class ProjectViewManager {
     // the geometry it had before the minimize until the next real resize or its
     // own reveal (#11900).
     win.on("restore", this.resizeHandler);
+
+    // Alt shows the auto-hidden menu bar on Linux inside the window, shrinking the
+    // content area with no `resize`. Views stay full size while it is open (the
+    // bottom strip is clipped) since tracking it would resize every PTY twice per
+    // menu visit. But a view sized while it was open (a resize or switch with the
+    // menu up) must grow back once it hides, or a blank strip stays at the bottom.
+    this.contentAreaGrowthHandler = () => {
+      if (win.isDestroyed() || !this.resizeHandler) return;
+      const view = (this.getActiveView() ?? win.contentView.children[0]) as
+        WebContentsView | undefined;
+      if (!view || view.webContents.isDestroyed()) return;
+      const area = win.getContentBounds();
+      const bounds = view.getBounds();
+      if (bounds.width < area.width || bounds.height < area.height) this.resizeHandler();
+    };
+    win.contentView.on("bounds-changed", this.contentAreaGrowthHandler);
 
     // Per-instance random phase offset: every window has its own sampler, and
     // app.getAppMetrics() costs 5–50ms of synchronous main-thread work. A
@@ -618,6 +653,20 @@ export class ProjectViewManager {
       () => undefined
     );
     return task;
+  }
+
+  /**
+   * Switch to a project on a host. Views are keyed by `toHostScopedKey`, so a
+   * remote project can never collide with a local one of the same id, and a
+   * local project keeps the bare id it has always had.
+   */
+  switchToHostProject(
+    hostId: HostId,
+    projectId: string,
+    projectPath: string,
+    trace?: ProjectSwitchTrace
+  ): Promise<{ view: WebContentsView; isNew: boolean }> {
+    return this.switchTo(toHostScopedKey(hostId, projectId), projectPath, trace);
   }
 
   /**
@@ -776,6 +825,15 @@ export class ProjectViewManager {
     return (
       this.pendingPaintGate?.outgoingProjectId ?? this.pendingColdSwitch?.outgoingProjectId ?? null
     );
+  }
+
+  /**
+   * Whether a switch is holding the outgoing view over the incoming one. Unlike
+   * `getOutgoingBridgeProjectId` this covers an unbound welcome view as the
+   * outgoing side too.
+   */
+  isSwitchBridged(): boolean {
+    return this.pendingPaintGate !== null || this.pendingColdSwitch !== null;
   }
 
   getActiveView(): WebContentsView | null {
@@ -1390,6 +1448,9 @@ export class ProjectViewManager {
       // for as long as the session lives.
       const mcp = this.mcpActivityFor(projectId, wc);
       if (mcp.liveBinding || mcp.dispatchLease || mcp.unknown) continue;
+      // A host's assistant runs its tool calls through this view, often one the
+      // person never shows (a hub started it); frozen, every call would stall.
+      if (this.remoteAssistantLive?.(wc.id) === true) continue;
       void freezeWebContents(wc);
     }
   }
@@ -1485,6 +1546,40 @@ export class ProjectViewManager {
     }
   }
 
+  /**
+   * Whether an explicit new-window request may take this project's cached view
+   * out of this window (#13274). Only a settled view in the background: never
+   * the one in front (a closed project's picker included) or still painted
+   * behind a switch, never one still loading, and never one whose loss would
+   * kill work — a running Daintree Assistant's process tree dies with the view
+   * it pinned, and an MCP dispatch in flight (or one that can't be ruled out)
+   * would lose the renderer it targets.
+   */
+  canReleaseCachedView(projectId: string): boolean {
+    const entry = this.views.get(projectId);
+    if (!entry || entry.state !== "cached") return false;
+    const wc = entry.view.webContents;
+    if (wc.isDestroyed()) return false;
+    if (projectId === this.activeProjectId) return false;
+    if (projectId === this.getOutgoingBridgeProjectId()) return false;
+    // Unlike pressure eviction, a move the user asked for can wait: activity
+    // that can't be read is treated as a dispatch in flight.
+    const mcp = this.mcpActivityFor(projectId, wc);
+    if (mcp.dispatchLease || mcp.unknown) return false;
+    return !EvictionController.hasLiveAssistantBackend(this, projectId, entry);
+  }
+
+  /**
+   * Tear down a cached view so the project can open in another window
+   * (#13274). Grid terminals live in the pty-host and reattach to the new
+   * window's view. False, leaving the view alone, if it can't be released.
+   */
+  releaseCachedView(projectId: string): boolean {
+    if (!this.canReleaseCachedView(projectId)) return false;
+    cleanupEntry(this, projectId);
+    return true;
+  }
+
   /** Returns true if a cached view existed for the project and was torn down. */
   destroyView(projectId: string): boolean {
     const entry = this.views.get(projectId);
@@ -1524,6 +1619,12 @@ export class ProjectViewManager {
       this.win.removeListener("leave-full-screen", this.resizeHandler);
       this.win.removeListener("restore", this.resizeHandler);
       this.resizeHandler = null;
+    }
+    if (this.contentAreaGrowthHandler) {
+      if (!this.win.isDestroyed()) {
+        this.win.contentView.removeListener("bounds-changed", this.contentAreaGrowthHandler);
+      }
+      this.contentAreaGrowthHandler = null;
     }
 
     if (this.efficiencyFreezeTimer) {

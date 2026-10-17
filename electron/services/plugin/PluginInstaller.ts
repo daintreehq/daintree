@@ -16,6 +16,7 @@ import {
 } from "../PluginArchive.js";
 import { pluginInstallJobs, isInstallCancellation } from "./PluginInstallJobRegistry.js";
 import { MAX_DNTR_BYTES } from "../../utils/pluginArchiveConstants.js";
+import { stripUtf8Bom } from "../../utils/stripUtf8Bom.js";
 import {
   PLUGIN_DOWNLOAD_TIMEOUT_MS,
   acceptedMime,
@@ -27,6 +28,7 @@ import { getPluginMcpSupervisor } from "../PluginMcpSupervisor.js";
 import { getPluginMcpConsentService, getPluginMcpRateLimiter } from "../plugin-mcp/instances.js";
 import { getPluginCapabilityConsentService } from "../plugin-capability/instances.js";
 import { clearProjectPluginVisibilityForPlugin } from "./projectPluginVisibility.js";
+import { wipeSettingsFile } from "../PluginSettingsStore.js";
 import type {
   PluginManifest,
   PluginInstallError,
@@ -85,7 +87,9 @@ interface PluginInstallerDeps {
     pluginId: string,
     opts: { isBuiltin: boolean; disabled: Set<string> }
   ) => Promise<unknown>;
-  unloadPlugin: (pluginId: string) => void;
+  unloadPlugin: (pluginId: string, options?: { reload: true }) => void;
+  /** Ends a reload `unloadPlugin(id, { reload: true })` began, judged against whatever is loaded now. */
+  settlePluginReload: (pluginId: string) => void;
   activatePlugin: (pluginId: string) => Promise<void>;
   setPluginArchiveHash: (pluginId: string, archiveHash: string) => void;
   setEnabled: (pluginId: string, enabled: boolean) => Promise<void>;
@@ -104,7 +108,15 @@ interface PluginInstallerDeps {
   disabledPlugins: Map<string, unknown>;
   /** Shared blocklisted-at-launch manifest map (#10891) — stays PluginService-owned. */
   blockedPlugins: Map<string, unknown>;
+  /** Version of the installed plugin under this id, loaded, disabled or blocklisted; null when none. */
+  getInstalledVersion: (pluginId: string) => string | null;
 }
+
+/**
+ * Whether a package may replace what is installed, given the version installed
+ * under its id right now (null when none is). Returns the refusal, or null.
+ */
+export type ReplacementCheck = (installedVersion: string | null) => string | null;
 
 /**
  * Owns the atomic install/upgrade orchestration (lockfile, temp-dir staging,
@@ -235,7 +247,8 @@ export class PluginInstaller {
    *    `daintree.*` namespace, publisher/name agreement). An unmet engine range
    *    doesn't fail the install — the load that follows warns about it (#12589).
    *    A reviewed update must also still name the plugin it was approved for.
-   * 5. If the id already exists: `unloadPlugin` (disposer cascade), then swap via
+   * 5. If the id already exists: `unloadPlugin` as a reload (disposer cascade, agent
+   *    credentials held until the version left loaded is known), then swap via
    *    rename — park old aside → move new in → restore old on failure. Per-plugin
    *    settings/secrets live under a separate `plugin-settings/` root, so the
    *    directory swap never touches them; no preserve/restore step is needed.
@@ -246,9 +259,30 @@ export class PluginInstaller {
    * data, never thrown, so they survive the IPC structured-clone boundary
    * intact (#3769) for the F22/F23/F24 install dialogs.
    */
-  async installPlugin(
+  installPlugin(
     archivePath: string,
-    opts?: PluginInstallOptions
+    opts?: PluginInstallOptions,
+    replacement?: ReplacementCheck
+  ): Promise<PluginInstallResult> {
+    // One install at a time in this process. `install.lock` serializes
+    // processes, but its bounded retries would turn a second in-process install
+    // queued behind a slow one into `lock_failed` instead of letting it run next.
+    const run = this.installQueue.then(() =>
+      this.installPluginSerialized(archivePath, opts, replacement)
+    );
+    this.installQueue = run.then(
+      () => undefined,
+      () => undefined
+    );
+    return run;
+  }
+
+  private installQueue: Promise<void> = Promise.resolve();
+
+  private async installPluginSerialized(
+    archivePath: string,
+    opts: PluginInstallOptions | undefined,
+    replacement: ReplacementCheck | undefined
   ): Promise<PluginInstallResult> {
     // Progress + cancellation ride an optional caller-minted job (#11302). With
     // no `jobId` every registry call below is a no-op and the install behaves
@@ -305,6 +339,9 @@ export class PluginInstaller {
     }
 
     let tmpDir: string | null = null;
+    // Set once an upgrade has unloaded the running version, so every exit below
+    // settles the reload against whichever version ends up loaded.
+    let reloading: string | null = null;
     try {
       // `proper-lockfile` has no signal support, so a cancel issued while we
       // were queued behind another install can only be honoured here — the
@@ -389,7 +426,7 @@ export class PluginInstaller {
       }
       let json: unknown;
       try {
-        json = JSON.parse(rawManifest);
+        json = JSON.parse(stripUtf8Bom(rawManifest));
       } catch {
         return fail("manifest_invalid", "plugin.json is not valid JSON");
       }
@@ -462,6 +499,15 @@ export class PluginInstaller {
         );
       }
 
+      // Checked here, under the lock and against what is installed right now,
+      // so a check made before queueing can't be stale by the time this
+      // replaces anything: an update queued behind a newer one must not
+      // downgrade it, and an install queued behind another must not replace it.
+      if (replacement) {
+        const refusal = replacement(await this.installedVersion(pluginId, finalDir, existing));
+        if (refusal) return fail("archive_mismatch", refusal);
+      }
+
       // Abort before the irreversible swap if the lock was compromised — a
       // second instance may now hold it and racing the rename would corrupt
       // the directory. Nothing has been written to the final location yet.
@@ -478,8 +524,12 @@ export class PluginInstaller {
       pluginInstallJobs.setPhase(jobId, "activating");
 
       if (existing) {
+        // A reload rather than a plain unload: agents running against this
+        // plugin keep their credentials if the version left loaded declares
+        // the same agent surface, since they cannot be handed new ones.
+        reloading = pluginId;
         try {
-          this.deps.unloadPlugin(pluginId);
+          this.deps.unloadPlugin(pluginId, { reload: true });
         } catch (err) {
           return fail(
             "unload_failed",
@@ -594,7 +644,9 @@ export class PluginInstaller {
         // malformed `when` expression rejected by the when-clause parser) must
         // surface as a structured result, not an unhandled rejection. The new
         // version never loaded; on an upgrade, roll back to the parked old one.
-        return this._rollbackPostSwapLoadFailure(
+        // Awaited here, not returned bare: the `finally` releases the lock and
+        // settles the reload, and both must wait for the restore to finish.
+        return await this._rollbackPostSwapLoadFailure(
           pluginId,
           finalDir,
           existing ? parked : null,
@@ -606,7 +658,7 @@ export class PluginInstaller {
         // The new version's manifest never loaded. On a fresh install the dir is
         // intact and the user can retry; on an upgrade, roll back to the parked
         // old version so the previous install isn't lost.
-        return this._rollbackPostSwapLoadFailure(
+        return await this._rollbackPostSwapLoadFailure(
           pluginId,
           finalDir,
           existing ? parked : null,
@@ -632,6 +684,13 @@ export class PluginInstaller {
       this.deps.broadcastProvenanceChanged();
       return { status: "installed", pluginId };
     } finally {
+      if (reloading !== null) {
+        try {
+          this.deps.settlePluginReload(reloading);
+        } catch (err) {
+          console.error(`[PluginService] Settling the reload of "${reloading}" threw:`, err);
+        }
+      }
       if (tmpDir) {
         await fs.rm(tmpDir, { recursive: true, force: true }).catch((err) => {
           console.warn(`[PluginService] Failed to clean up install temp dir ${tmpDir}:`, err);
@@ -641,6 +700,31 @@ export class PluginInstaller {
         console.warn("[PluginService] Failed to release install lock:", err);
       });
     }
+  }
+
+  /**
+   * The version installed under `pluginId` right now: the manifest in its
+   * folder when it has one (a disabled plugin replaced this session keeps its
+   * old manifest in memory), else what the plugin service holds for it, loaded,
+   * disabled or blocklisted.
+   */
+  private async installedVersion(
+    pluginId: string,
+    finalDir: string,
+    existing: boolean
+  ): Promise<string | null> {
+    if (existing) {
+      try {
+        const raw: unknown = JSON.parse(
+          stripUtf8Bom(await fs.readFile(path.join(finalDir, "plugin.json"), "utf-8"))
+        );
+        const version = (raw as { version?: unknown } | null)?.version;
+        if (typeof version === "string") return version;
+      } catch {
+        // Unreadable: fall back to the service's record of it.
+      }
+    }
+    return this.deps.getInstalledVersion(pluginId);
   }
 
   /**
@@ -1146,14 +1230,13 @@ export class PluginInstaller {
         await fs.rm(pluginDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
       }
 
-      // Optionally delete user-scope stored settings/secrets. `force` is a safe
-      // no-op when the file doesn't exist; the retry options mirror the plugin
-      // dir deletion so a still-closing settings writer on Windows doesn't strand
-      // the uninstall. The in-memory store was already dropped by
-      // `unloadPlugin`'s clearPluginSettingsState step.
+      // Optionally delete user-scope stored settings/secrets. The in-memory store
+      // was already dropped by `unloadPlugin`'s clearPluginSettingsState step, but
+      // a write it queued can still be waiting on a keychain prompt, so the file
+      // is deleted through the stores' own write queue, which also keeps any
+      // such write from putting it back.
       if (wipeSettings) {
-        const settingsFile = path.join(this.deps.getSettingsRoot(), `${pluginId}.json`);
-        await fs.rm(settingsFile, { force: true, maxRetries: 5, retryDelay: 100 });
+        await wipeSettingsFile(path.join(this.deps.getSettingsRoot(), `${pluginId}.json`));
       }
 
       // Bookkeeping runs only after the filesystem deletion succeeds — if `fs.rm`

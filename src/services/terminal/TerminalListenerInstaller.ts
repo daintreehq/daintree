@@ -6,7 +6,7 @@ import { getEffectiveAgentConfig } from "@shared/config/agentRegistry";
 import { isUselessTitle, normalizeObservedTitle } from "@shared/utils/isUselessTitle";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
 import type { ManagedTerminal } from "./types";
-import { isNonKeyboardInput } from "./inputUtils";
+import { isMouseReport, isNonKeyboardInput, isTerminalReply } from "./inputUtils";
 import { installLinuxPrimarySelectionListeners } from "./primarySelection";
 import { writeTerminalInputOrFleet } from "./fleetInputRouter";
 import {
@@ -15,6 +15,7 @@ import {
 } from "./TerminalResizeController";
 import { installViewportAnchorController } from "./TerminalViewportAnchorController";
 import { MouseWheelClassifier } from "./mouseWheelClassifier";
+import { isHostSwitchPending } from "./inputGate";
 import { getTerminalMetrics } from "@/config/xtermConfig";
 import { hashPerfLine, PERF_MARKS } from "@shared/perf/marks";
 import { isRendererPerfCaptureActive, markRendererPerformance } from "@/utils/performance";
@@ -291,6 +292,11 @@ export interface TerminalListenerInstallDeps {
   // Input
   clearDirectingState: (id: string, trigger?: string) => void;
   onUserInput: (id: string, data: string) => void;
+  /**
+   * Every key the user sends, editing and control keys included — wider than
+   * `onUserInput`, which leaves out what doesn't compose a prompt.
+   */
+  noteUserInput: (id: string) => void;
   /**
    * Fired when a wheel scroll is actively forwarded to a mouse-reporting TUI.
    * Lets the host boost the renderer tier so an active scroll stays
@@ -959,6 +965,14 @@ export function installTerminalBoundListeners(
 
   const inputDisposable = terminal.onData((data) => {
     if (managed.isInputLocked) return;
+    if (isHostSwitchPending()) {
+      // Typing is dropped before it counts as typing: the window is leaving
+      // this terminal. Its program's queries still get their answers, since
+      // the terminal is live and on screen until the switch lands.
+      if (isTerminalReply(data)) terminalClient.writeReply(id, data);
+      return;
+    }
+    if (!isTerminalReply(data) && !isMouseReport(data)) deps.noteUserInput(id);
     const nonKeyboard = isNonKeyboardInput(data);
     if (nonKeyboard) {
       if (data === "\x1b") {
@@ -987,6 +1001,7 @@ export function installTerminalBoundListeners(
     const keyDisposable = terminal.onKey(({ domEvent }) => {
       if (
         !managed.isInputLocked &&
+        !isHostSwitchPending() &&
         domEvent.key === "Enter" &&
         !domEvent.isComposing &&
         !domEvent.shiftKey &&

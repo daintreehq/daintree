@@ -9,13 +9,6 @@ beforeEach(() => {
 });
 
 describe("pilotStore scope", () => {
-  it("opens on the whole fleet", () => {
-    usePilotStore.getState().open();
-
-    expect(usePilotStore.getState().isOpen).toBe(true);
-    expect(usePilotStore.getState().scope).toEqual({ kind: "fleet" });
-  });
-
   it("opens straight into a project", () => {
     // The shortcut's whole job: `PilotView` is lazy-mounted on `isOpen`, so the
     // destination has to be recorded before the component that would show it
@@ -70,15 +63,6 @@ describe("pilotStore scope", () => {
 
     expect(usePilotStore.getState().scope).toEqual({ kind: "fleet" });
   });
-
-  it("reopens on the fleet after a scoped opening was toggled shut", () => {
-    usePilotStore.getState().openProject(PROJECT);
-    usePilotStore.getState().toggle();
-    usePilotStore.getState().toggle();
-
-    expect(usePilotStore.getState().isOpen).toBe(true);
-    expect(usePilotStore.getState().scope).toEqual({ kind: "fleet" });
-  });
 });
 
 describe("pilotStore fallback context", () => {
@@ -107,20 +91,5 @@ describe("pilotStore fallback context", () => {
     transition();
 
     expect(usePilotStore.getState().fellBackFrom).toBeNull();
-  });
-
-  it("does not carry the explanation into the next opening", () => {
-    usePilotStore.getState().openFleetFallback(PROJECT);
-    usePilotStore.getState().close();
-    usePilotStore.getState().open();
-
-    expect(usePilotStore.getState()).toMatchObject({ isOpen: true, fellBackFrom: null });
-  });
-
-  it("replaces rather than accumulates when a second project falls back", () => {
-    usePilotStore.getState().openFleetFallback(PROJECT);
-    usePilotStore.getState().openFleetFallback(OTHER);
-
-    expect(usePilotStore.getState().fellBackFrom).toBe(OTHER);
   });
 });

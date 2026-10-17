@@ -1,0 +1,448 @@
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { Lane } from "../../link/frames.js";
+import { InteractiveKind } from "../../link/messages.js";
+import type { LinkSession } from "../../link/session.js";
+import {
+  makeTempDir,
+  openSessionPair,
+  removeTempDir,
+  waitFor,
+} from "../../link/__tests__/linkTestUtils.js";
+import { ClientTerminalRelay, type ClientTerminalRelayOptions } from "../ClientTerminalRelay.js";
+import {
+  MAX_RESUME_TERMINALS,
+  TERMINAL_RESUME_METHOD,
+  TerminalResumeRequestSchema,
+  type TerminalResumeRequest,
+} from "../protocol.js";
+import { FakePeer } from "./streamTestUtils.js";
+
+const ENDPOINT = "view-11";
+
+let dir: string;
+const cleanups: (() => void)[] = [];
+
+beforeEach(async () => {
+  dir = await makeTempDir();
+});
+
+afterEach(async () => {
+  for (const cleanup of cleanups.splice(0).reverse()) cleanup();
+  await removeTempDir(dir);
+});
+
+interface Harness {
+  relay: ClientTerminalRelay;
+  renderer: () => FakePeer | null;
+  host: LinkSession;
+  client: LinkSession;
+  resumes: TerminalResumeRequest[];
+  inputs: Array<Record<string, unknown>>;
+  emit(id: string, seq: number, incarnation?: number): void;
+  reset(id: string, seq: number): void;
+  connect(): Promise<void>;
+}
+
+async function setup(options: Partial<ClientTerminalRelayOptions> = {}): Promise<Harness> {
+  let rendererPeer: FakePeer | null = null;
+  const relay = new ClientTerminalRelay({
+    endpointId: ENDPOINT,
+    hostId: "studio-01",
+    openRendererPort: () => {
+      rendererPeer = new FakePeer();
+      return rendererPeer.port;
+    },
+    ...options,
+  });
+  cleanups.push(() => {
+    relay.dispose();
+    rendererPeer?.close();
+  });
+  const h: Harness = {
+    relay,
+    renderer: () => rendererPeer,
+    host: null as unknown as LinkSession,
+    client: null as unknown as LinkSession,
+    resumes: [],
+    inputs: [],
+    emit(id, seq, incarnation = 1) {
+      const data = new TextEncoder().encode(`${id}:${seq}`);
+      h.host.post({
+        lane: Lane.INTERACTIVE,
+        kind: InteractiveKind.TERMINAL_OUT,
+        body: {
+          endpointId: ENDPOINT,
+          terminalId: id,
+          incarnation,
+          seq,
+          message: { type: "data", id, data, bytes: data.byteLength },
+        },
+      });
+    },
+    reset(id, seq) {
+      h.host.post({
+        lane: Lane.INTERACTIVE,
+        kind: InteractiveKind.TERMINAL_RESET,
+        body: {
+          endpointId: ENDPOINT,
+          terminalId: id,
+          incarnation: 1,
+          seq,
+          snapshot: { data: "SNAP", cols: 120, rows: 40 },
+        },
+      });
+    },
+    async connect() {
+      const { host, client } = await openSessionPair(dir);
+      cleanups.push(() => {
+        host.close("test done");
+        client.close("test done");
+      });
+      h.host = host;
+      h.client = client;
+      host.registerCallHandler(TERMINAL_RESUME_METHOD, TerminalResumeRequestSchema, (request) => {
+        h.resumes.push(request);
+        return {
+          terminals: request.terminals.map((t) => ({ id: t.id, outcome: "replayed" as const })),
+        };
+      });
+      host.on(Lane.INTERACTIVE, InteractiveKind.TERMINAL_IN, (body) => {
+        h.inputs.push(body.message as Record<string, unknown>);
+      });
+      relay.attach(client);
+      await waitFor(() => h.resumes.length > 0 && !relay.resumeInFlight);
+    },
+  };
+  return h;
+}
+
+async function dropLink(h: Harness): Promise<void> {
+  const closed = new Promise((resolve) => h.host.onClose(resolve));
+  h.client.close("network gone");
+  await closed;
+  await waitFor(() => !h.relay.isAttached);
+}
+
+describe("ClientTerminalRelay", () => {
+  it("passes a reset's snapshot and grid through to the renderer unchanged", async () => {
+    const h = await setup();
+    h.relay.deliverPort();
+    await h.connect();
+    h.reset("t1", 7);
+    await waitFor(() => h.renderer()!.ofType("reset").length === 1);
+    expect(h.renderer()!.ofType("reset")[0]).toEqual({
+      type: "reset",
+      id: "t1",
+      snapshot: { data: "SNAP", cols: 120, rows: 40 },
+    });
+    expect(h.relay.position("t1")).toEqual({ incarnation: 1, lastSeq: 7 });
+  });
+
+  it("does not count output as seen while the view has no port, and resets once one arrives", async () => {
+    const h = await setup();
+    h.relay.deliverPort();
+    await h.connect();
+    h.emit("t1", 1);
+    await waitFor(() => h.relay.position("t1")?.lastSeq === 1);
+
+    h.renderer()!.close();
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    h.emit("t1", 2);
+    h.emit("t1", 3);
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    // Undelivered frames leave the position alone and ask for nothing yet.
+    expect(h.relay.position("t1")).toEqual({ incarnation: 1, lastSeq: 1 });
+    const before = h.resumes.length;
+
+    h.relay.deliverPort();
+    await waitFor(() => h.resumes.length === before + 1 && !h.relay.resumeInFlight);
+    expect(h.resumes.at(-1)!.terminals).toEqual([
+      { id: "t1", incarnation: 1, lastSeq: 1, reset: true },
+    ]);
+  });
+
+  it("owes a reset for a port replaced while the link was down and asks for it on attach", async () => {
+    const h = await setup();
+    h.relay.deliverPort();
+    await h.connect();
+    h.emit("t1", 1);
+    h.emit("t2", 1);
+    await waitFor(() => h.relay.position("t2") !== null);
+    await dropLink(h);
+
+    h.relay.deliverPort();
+    h.resumes.length = 0;
+    await h.connect();
+    expect(h.resumes[0]!.terminals).toEqual([
+      { id: "t1", incarnation: 1, lastSeq: 1, reset: true },
+      { id: "t2", incarnation: 1, lastSeq: 1, reset: true },
+    ]);
+
+    // Settled: the next reconnect is a plain resume.
+    await dropLink(h);
+    h.resumes.length = 0;
+    await h.connect();
+    expect(h.resumes[0]!.terminals.every((t) => t.reset === undefined)).toBe(true);
+  });
+
+  it("drops input typed while the link is down and holds only the latest resizes", async () => {
+    const h = await setup({ maxPendingResizes: 2 });
+    h.relay.deliverPort();
+    const renderer = h.renderer()!;
+    renderer.post({ type: "write", id: "t1", data: "rm -rf build\r" });
+    renderer.post({ type: "resize", id: "a", cols: 80, rows: 24 });
+    renderer.post({ type: "resize", id: "b", cols: 80, rows: 24 });
+    renderer.post({ type: "resize", id: "c", cols: 80, rows: 24 });
+    renderer.post({ type: "resize", id: "b", cols: 100, rows: 30 });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    await h.connect();
+    await waitFor(() => h.inputs.length === 2);
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(h.inputs).toEqual([
+      { type: "resize", id: "c", cols: 80, rows: 24 },
+      { type: "resize", id: "b", cols: 100, rows: 30 },
+    ]);
+
+    await dropLink(h);
+    h.inputs.length = 0;
+    renderer.post({ type: "write", id: "t1", data: "123456" });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    await h.connect();
+    renderer.post({ type: "write", id: "t1", data: "typed now" });
+    await waitFor(() => h.inputs.length === 1);
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(h.inputs).toEqual([{ type: "write", id: "t1", data: "typed now" }]);
+  });
+
+  it("keeps a bounded set of positions as terminals come and go", async () => {
+    const h = await setup();
+    h.relay.deliverPort();
+    await h.connect();
+    const total = MAX_RESUME_TERMINALS + 500;
+    for (let i = 0; i < total; i++) h.emit(`t${i}`, 1);
+    await waitFor(() => h.relay.position(`t${total - 1}`) !== null, 20_000);
+    expect(h.relay.trackedTerminals).toBe(MAX_RESUME_TERMINALS);
+    // The least recently active went first.
+    expect(h.relay.position("t0")).toBeNull();
+    expect(h.relay.position(`t${total - 1}`)).not.toBeNull();
+  }, 30_000);
+
+  it("splits a resume across calls the host's schema accepts", async () => {
+    const h = await setup({ maxTrackedTerminals: MAX_RESUME_TERMINALS * 2 });
+    h.relay.deliverPort();
+    await h.connect();
+    const total = MAX_RESUME_TERMINALS + 10;
+    for (let i = 0; i < total; i++) h.emit(`t${i}`, 1);
+    await waitFor(() => h.relay.trackedTerminals === total, 20_000);
+    await dropLink(h);
+
+    h.resumes.length = 0;
+    await h.connect();
+    await waitFor(() => h.resumes.length === 2 && !h.relay.resumeInFlight);
+    expect(h.resumes.map((r) => r.terminals.length).sort((a, b) => b - a)).toEqual([
+      MAX_RESUME_TERMINALS,
+      10,
+    ]);
+  }, 30_000);
+
+  it("forgets a terminal the host no longer has", async () => {
+    const h = await setup();
+    h.relay.deliverPort();
+    await h.connect();
+    h.emit("t1", 1);
+    await waitFor(() => h.relay.position("t1") !== null);
+    await dropLink(h);
+
+    const { host, client } = await openSessionPair(dir);
+    cleanups.push(() => {
+      host.close("test done");
+      client.close("test done");
+    });
+    host.registerCallHandler(TERMINAL_RESUME_METHOD, TerminalResumeRequestSchema, (request) => ({
+      terminals: request.terminals.map((t) => ({ id: t.id, outcome: "unknown" as const })),
+    }));
+    h.relay.attach(client);
+    await waitFor(() => !h.relay.resumeInFlight && h.relay.position("t1") === null);
+    expect(h.relay.trackedTerminals).toBe(0);
+  });
+});
+
+/** A session whose post can be refused, as a full link queue refuses it. */
+function backpressuredSession() {
+  let refusing = true;
+  let writable: (() => void) | null = null;
+  let closed: (() => void) | null = null;
+  const posted: Array<Record<string, unknown>> = [];
+  const session = {
+    isOpen: true,
+    on: () => () => {},
+    onClose: (listener: () => void) => {
+      closed = listener;
+      return () => {};
+    },
+    onWritable: (listener: () => void) => {
+      writable = listener;
+      return () => {};
+    },
+    post: (frame: { kind: number; body: { message: Record<string, unknown> } }) => {
+      if (frame.kind !== InteractiveKind.TERMINAL_IN) return "queued";
+      if (refusing) return "refused";
+      posted.push(frame.body.message);
+      return "queued";
+    },
+    call: async () => ({ terminals: [] }),
+  } as unknown as LinkSession;
+  return {
+    session,
+    posted,
+    drain() {
+      refusing = false;
+      writable?.();
+    },
+    refuse() {
+      refusing = true;
+    },
+    close() {
+      (session as { isOpen: boolean }).isOpen = false;
+      closed?.();
+    },
+  };
+}
+
+describe("ClientTerminalRelay held input", () => {
+  function relayWithPort() {
+    const peer = new FakePeer();
+    const relay = new ClientTerminalRelay({
+      endpointId: ENDPOINT,
+      openRendererPort: () => peer.port,
+    });
+    cleanups.push(() => {
+      relay.dispose();
+      peer.close();
+    });
+    relay.deliverPort();
+    return { relay, peer };
+  }
+
+  async function settle() {
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+
+  it("sends input held for backpressure to the same session once it has room", async () => {
+    const { relay, peer } = relayWithPort();
+    const link = backpressuredSession();
+    relay.attach(link.session);
+    peer.post({ type: "write", id: "t1", data: "ls" });
+    peer.post({ type: "write", id: "t1", data: "\r" });
+    await settle();
+    expect(link.posted).toEqual([]);
+
+    link.drain();
+    expect(link.posted).toEqual([
+      { type: "write", id: "t1", data: "ls" },
+      { type: "write", id: "t1", data: "\r" },
+    ]);
+  });
+
+  it("bounds input held for backpressure by messages, bytes and distinct resizes", async () => {
+    const peer = new FakePeer();
+    const relay = new ClientTerminalRelay({
+      endpointId: ENDPOINT,
+      openRendererPort: () => peer.port,
+      maxPendingInputMessages: 3,
+      maxPendingInputBytes: 10,
+      maxPendingResizes: 2,
+    });
+    cleanups.push(() => {
+      relay.dispose();
+      peer.close();
+    });
+    relay.deliverPort();
+    const link = backpressuredSession();
+    relay.attach(link.session);
+    for (let i = 0; i < 5; i++) peer.post({ type: "write", id: "t1", data: "" });
+    peer.post({ type: "resize", id: "a", cols: 80, rows: 24 });
+    peer.post({ type: "resize", id: "b", cols: 80, rows: 24 });
+    peer.post({ type: "resize", id: "c", cols: 80, rows: 24 });
+    peer.post({ type: "resize", id: "b", cols: 100, rows: 30 });
+    await settle();
+
+    link.drain();
+    expect(link.posted).toEqual([
+      { type: "resize", id: "c", cols: 80, rows: 24 },
+      { type: "resize", id: "b", cols: 100, rows: 30 },
+      { type: "write", id: "t1", data: "" },
+      { type: "write", id: "t1", data: "" },
+      { type: "write", id: "t1", data: "" },
+    ]);
+
+    link.posted.length = 0;
+    link.refuse();
+    peer.post({ type: "write", id: "t1", data: "123456" });
+    peer.post({ type: "write", id: "t1", data: "7890ab" });
+    await settle();
+    link.drain();
+    expect(link.posted).toEqual([{ type: "write", id: "t1", data: "123456" }]);
+  });
+
+  it("never replays input held for one session into the next", async () => {
+    const { relay, peer } = relayWithPort();
+    const first = backpressuredSession();
+    relay.attach(first.session);
+    peer.post({ type: "write", id: "t1", data: "git push --force\r" });
+    await settle();
+    first.close();
+    expect(relay.isAttached).toBe(false);
+
+    const second = backpressuredSession();
+    second.drain();
+    relay.attach(second.session);
+    peer.post({ type: "write", id: "t1", data: "y" });
+    await settle();
+    expect(second.posted).toEqual([{ type: "write", id: "t1", data: "y" }]);
+  });
+
+  it("drops input held for a terminal whose PTY restarted", async () => {
+    const { relay, peer } = relayWithPort();
+    const handlers = new Map<number, (body: unknown) => void>();
+    const link = backpressuredSession();
+    (link.session as unknown as { on: unknown }).on = (
+      _lane: number,
+      kind: number,
+      handler: (body: unknown) => void
+    ) => {
+      handlers.set(kind, handler);
+      return () => {};
+    };
+    relay.attach(link.session);
+    const output = (incarnation: number, seq: number) => {
+      const data = new TextEncoder().encode("x");
+      handlers.get(InteractiveKind.TERMINAL_OUT)!({
+        endpointId: ENDPOINT,
+        terminalId: "t1",
+        incarnation,
+        seq,
+        message: { type: "data", id: "t1", data, bytes: data.byteLength },
+      });
+    };
+    output(1, 1);
+    expect(relay.position("t1")).toEqual({ incarnation: 1, lastSeq: 1 });
+
+    peer.post({ type: "write", id: "t1", data: "old" });
+    // t2 has shown nothing yet, so nothing says which PTY this was typed at.
+    peer.post({ type: "write", id: "t2", data: "unknown" });
+    peer.post({ type: "write", id: "t1", data: "old too" });
+    await settle();
+    output(2, 1);
+    expect(relay.position("t1")).toEqual({ incarnation: 2, lastSeq: 1 });
+    peer.post({ type: "write", id: "t1", data: "new" });
+    await settle();
+
+    link.drain();
+    expect(link.posted).toEqual([
+      { type: "write", id: "t2", data: "unknown" },
+      { type: "write", id: "t1", data: "new" },
+    ]);
+  });
+});

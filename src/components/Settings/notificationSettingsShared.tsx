@@ -43,7 +43,7 @@ export function escalationDelayLabel(ms: unknown): string {
 
 export const NOTIFICATION_COPY = {
   completed: {
-    label: "Agent completed",
+    label: "Agent finished",
     description: "Send an OS notification when an agent finishes its task",
   },
   waiting: {
@@ -71,7 +71,7 @@ export const NOTIFICATION_COPY = {
     description: "A quiet periodic sound while a watched or docked agent works in the background",
   },
   soundFiles: {
-    completedSoundFile: "Completed sound",
+    completedSoundFile: "Finished sound",
     waitingSoundFile: "Waiting sound",
     escalationSoundFile: "Escalation sound",
     workingPulseSoundFile: "Working pulse sound",

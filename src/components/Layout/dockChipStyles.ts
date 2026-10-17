@@ -22,8 +22,9 @@ export const DOCK_CHIP_WAITING_CLASS =
 
 /**
  * The trailing agent-state glyph. 12px, as on every other surface that shows
- * it beside a panel's 14px kind icon (tab strip, panel header, sidebar
- * sessions): the kind icon names the panel, the smaller glyph qualifies it.
+ * it beside a panel's 14px kind icon (tab strip, sidebar sessions): the kind
+ * icon names the panel, the smaller glyph qualifies it. The pane header is the
+ * exception: its glyph stands alone past the close button, at 16px.
  */
 export const DOCK_STATE_GLYPH_CLASS = "h-3 w-3";
 

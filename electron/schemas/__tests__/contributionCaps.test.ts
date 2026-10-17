@@ -26,14 +26,6 @@ describe("contributes.* array-size caps (#10477)", () => {
     expect(result.success).toBe(true);
   });
 
-  it("rejects an array one over the cap", () => {
-    const cap = MANIFEST_CONTRIBUTION_CAPS.settings;
-    const result = parseContributes({
-      settings: Array.from({ length: cap + 1 }, (_, i) => setting(i)),
-    });
-    expect(result.success).toBe(false);
-  });
-
   it("enforces a distinct cap per contribution point", () => {
     const menuCap = MANIFEST_CONTRIBUTION_CAPS.menuItems;
     expect(

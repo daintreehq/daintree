@@ -1,4 +1,10 @@
 import fs from "node:fs";
+import {
+  buildBrowserPartition,
+  buildDevPreviewPartition,
+  partitionProjectKey,
+  remotePortalPartition,
+} from "../../../shared/utils/partitionUtils.js";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from "vitest";
@@ -31,6 +37,8 @@ vi.mock("electron", () => ({ app: appMock, session: sessionMock }));
 import {
   _resetSessionCacheCleanerForTesting,
   clearAllSessionCaches,
+  clearHostPartitions,
+  isHostPartitionDirName,
   startSessionCacheTracking,
   trackSession,
 } from "../sessionCacheCleaner.js";
@@ -371,5 +379,85 @@ describe("clearAllSessionCaches — unopened partitions on disk", () => {
     const result = await clearAllSessionCaches();
 
     expect(result).toEqual({ cleared: 1, failed: 1 });
+  });
+});
+
+describe("clearHostPartitions", () => {
+  const dirName = (partition: string) => partition.replace(/^persist:/, "");
+  const browserOf = (hostId: string, projectId: string) =>
+    dirName(buildBrowserPartition(partitionProjectKey(projectId, hostId)));
+  const devPreviewOf = (hostId: string, projectId: string) =>
+    dirName(buildDevPreviewPartition(partitionProjectKey(projectId, hostId), "main", "panel-1"));
+
+  it("names every session a host's projects and portal use, and no other host's", () => {
+    for (const name of [
+      browserOf("studio", "proj-1"),
+      devPreviewOf("studio", "proj-1"),
+      dirName(remotePortalPartition("studio")),
+    ]) {
+      expect(isHostPartitionDirName(name, "studio")).toBe(true);
+    }
+    for (const name of [
+      browserOf("studio-2", "proj-1"),
+      devPreviewOf("studio-2", "proj-1"),
+      dirName(remotePortalPartition("studio-2")),
+      dirName(buildBrowserPartition("proj-1")),
+      "daintree",
+    ]) {
+      expect(isHostPartitionDirName(name, "studio")).toBe(false);
+    }
+  });
+
+  it("wipes the host's partitions whole, open or not, and leaves the rest", async () => {
+    const closed = seedPartition(browserOf("studio", "proj-1"));
+    const open = seedPartition(devPreviewOf("studio", "proj-2"));
+    const neighbour = seedPartition(browserOf("studio-2", "proj-1"));
+    const local = seedPartition(dirName(buildBrowserPartition("proj-1")));
+    const live = { storagePath: open, clearData: vi.fn(() => Promise.resolve()) };
+    trackSession(live as unknown as Electron.Session);
+
+    const result = await clearHostPartitions("studio");
+
+    expect(result).toEqual({ cleared: 2, failed: 0 });
+    expect(fs.existsSync(closed)).toBe(false);
+    expect(live.clearData).toHaveBeenCalledTimes(1);
+    expectPreserved(neighbour);
+    expectPreserved(local);
+    expect(fs.readdirSync(partitionsRoot).some((n) => n.includes("daintree-clearing"))).toBe(false);
+  });
+
+  it("matches a long host id by its hashed part, and no other host's", () => {
+    // Each "-" escapes to five characters, so both parts are past 64 and hashed.
+    const longId = `h${"-".repeat(30)}`;
+    const otherLong = `g${"-".repeat(30)}`;
+    for (const name of [
+      browserOf(longId, "proj-1"),
+      devPreviewOf(longId, "proj-1"),
+      dirName(remotePortalPartition(longId)),
+    ]) {
+      expect(isHostPartitionDirName(name, longId)).toBe(true);
+      expect(isHostPartitionDirName(name, otherLong)).toBe(false);
+    }
+  });
+
+  it("clears a symlinked partition only through its live session, never by its target", async () => {
+    const target = fs.mkdtempSync(path.join(os.tmpdir(), "daintree-partition-target-"));
+    seedFile(path.join(target, "Cookies"));
+    fs.mkdirSync(partitionsRoot, { recursive: true });
+    const link = partitionDir(browserOf("studio", "proj-1"));
+    fs.symlinkSync(target, link);
+
+    expect(await clearHostPartitions("studio")).toEqual({ cleared: 0, failed: 1 });
+    expect(fs.existsSync(path.join(target, "Cookies"))).toBe(true);
+
+    const live = { storagePath: link, clearData: vi.fn(() => Promise.resolve()) };
+    trackSession(live as unknown as Electron.Session);
+    expect(await clearHostPartitions("studio")).toEqual({ cleared: 1, failed: 0 });
+    expect(live.clearData).toHaveBeenCalledTimes(1);
+    fs.rmSync(target, { recursive: true, force: true });
+  });
+
+  it("has nothing to do when no partition was ever made", async () => {
+    await expect(clearHostPartitions("studio")).resolves.toEqual({ cleared: 0, failed: 0 });
   });
 });

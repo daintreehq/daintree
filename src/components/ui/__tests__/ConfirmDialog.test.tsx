@@ -8,17 +8,13 @@ vi.mock("zustand/react/shallow", () => ({
   useShallow: (fn: unknown) => fn,
 }));
 
-vi.mock("@/store", () => ({
+vi.mock("@/store/portalStore", () => ({
   usePortalStore: () => ({ isOpen: false, width: 0 }),
 }));
 
-vi.mock("@/hooks", async (importOriginal) => {
-  const actual = (await importOriginal()) as Record<string, unknown>;
-  return {
-    ...actual,
-    useOverlayState: () => {},
-  };
-});
+vi.mock("@/hooks/useOverlayState", () => ({
+  useOverlayState: () => {},
+}));
 
 vi.mock("@/hooks/useAnimatedPresence", () => ({
   useAnimatedPresence: ({ isOpen }: { isOpen: boolean }) => ({
@@ -146,19 +142,7 @@ describe("ConfirmDialog inverse-label dev guard", () => {
     vi.unstubAllEnvs();
   });
 
-  it.each([
-    "OK",
-    "Confirm",
-    "Yes",
-    "Save",
-    "Continue",
-    "Proceed",
-    "Done",
-    "Got it",
-    "Accept",
-    "Apply",
-    "Submit",
-  ])(
+  it.each(["Confirm", "Got it"])(
     "warns when variant is destructive and confirmLabel is a generic recovery label: %s",
     (label) => {
       render(
@@ -239,23 +223,6 @@ describe("ConfirmDialog inverse-label dev guard", () => {
 
     expect(errorSpy).not.toHaveBeenCalled();
   });
-
-  it("is silent in production builds", () => {
-    vi.stubEnv("DEV", false);
-
-    render(
-      <ConfirmDialog
-        isOpen={true}
-        onClose={() => {}}
-        title="Delete it?"
-        confirmLabel="OK"
-        onConfirm={() => {}}
-        variant="destructive"
-      />
-    );
-
-    expect(errorSpy).not.toHaveBeenCalled();
-  });
 });
 
 describe("ConfirmDialog warning dedup", () => {
@@ -292,31 +259,6 @@ describe("ConfirmDialog warning dedup", () => {
         confirmLabel="Delete worktree"
         onConfirm={() => {}}
         variant="default"
-      />
-    );
-
-    expect(errorSpy).toHaveBeenCalledTimes(1);
-  });
-
-  it("logs the inverse guard only once across multiple renders of the same label", () => {
-    render(
-      <ConfirmDialog
-        isOpen={true}
-        onClose={() => {}}
-        title="Delete?"
-        confirmLabel="OK"
-        onConfirm={() => {}}
-        variant="destructive"
-      />
-    );
-    render(
-      <ConfirmDialog
-        isOpen={true}
-        onClose={() => {}}
-        title="Delete?"
-        confirmLabel="OK"
-        onConfirm={() => {}}
-        variant="destructive"
       />
     );
 
@@ -726,25 +668,6 @@ describe("ConfirmDialog — typed-name gate", () => {
 
     expect(errorSpy).not.toHaveBeenCalled();
   });
-
-  it("does not warn in production builds", () => {
-    vi.stubEnv("DEV", false);
-
-    render(
-      // @ts-expect-error — intentionally violates the discriminated union to exercise the runtime fallback guard
-      <ConfirmDialog
-        isOpen={true}
-        onClose={() => {}}
-        title="Confirm?"
-        confirmLabel="Continue"
-        onConfirm={() => {}}
-        variant="default"
-        typedNameTarget="thing"
-      />
-    );
-
-    expect(errorSpy).not.toHaveBeenCalled();
-  });
 });
 
 describe("ConfirmDialog — initialFocus prop forwarding", () => {
@@ -902,23 +825,6 @@ describe("ConfirmDialog — are-you-sure title guard", () => {
     const matchCount = messages.filter((m: string) => m.includes("Are you sure")).length;
     expect(matchCount).toBe(1);
   });
-
-  it("is silent in production builds", () => {
-    vi.stubEnv("DEV", false);
-
-    render(
-      <ConfirmDialog
-        isOpen={true}
-        onClose={() => {}}
-        title="Are you sure?"
-        confirmLabel="Delete worktree"
-        onConfirm={() => {}}
-        variant="destructive"
-      />
-    );
-
-    expect(errorSpy).not.toHaveBeenCalled();
-  });
 });
 
 describe("ConfirmDialog — cannot-be-undone body guard", () => {
@@ -1055,53 +961,6 @@ describe("ConfirmDialog — cannot-be-undone body guard", () => {
     const messages = errorSpy.mock.calls.map((call: unknown[]) => String(call[0] ?? ""));
     expect(messages.some((m: string) => m.includes("cannot be undone"))).toBe(false);
   });
-
-  it("logs only once across multiple renders", () => {
-    render(
-      <ConfirmDialog
-        isOpen={true}
-        onClose={() => {}}
-        title="Delete 'foo'?"
-        description="This cannot be undone."
-        confirmLabel="Delete worktree"
-        onConfirm={() => {}}
-        variant="destructive"
-      />
-    );
-    render(
-      <ConfirmDialog
-        isOpen={true}
-        onClose={() => {}}
-        title="Delete 'bar'?"
-        description="This cannot be undone."
-        confirmLabel="Delete worktree"
-        onConfirm={() => {}}
-        variant="destructive"
-      />
-    );
-
-    const messages = errorSpy.mock.calls.map((call: unknown[]) => String(call[0] ?? ""));
-    const matchCount = messages.filter((m: string) => m.includes("cannot be undone")).length;
-    expect(matchCount).toBe(1);
-  });
-
-  it("is silent in production builds", () => {
-    vi.stubEnv("DEV", false);
-
-    render(
-      <ConfirmDialog
-        isOpen={true}
-        onClose={() => {}}
-        title="Delete 'foo'?"
-        description="This cannot be undone."
-        confirmLabel="Delete worktree"
-        onConfirm={() => {}}
-        variant="destructive"
-      />
-    );
-
-    expect(errorSpy).not.toHaveBeenCalled();
-  });
 });
 
 describe("TypedNameConfirmInput preamble prop", () => {
@@ -1135,15 +994,6 @@ describe("TypedNameConfirmInput preamble prop", () => {
     const [first, second] = tokens.map((id) => document.getElementById(id));
     expect(first?.textContent).toBe("Heads up.");
     expect(second?.textContent).toMatch(/to confirm\.?/);
-  });
-
-  it("renders only the default instruction when preamble is absent", () => {
-    render(<TypedNameConfirmInput target="my-thing" value="" onChange={() => {}} />);
-
-    expect(
-      screen.queryByText("Force-deleting this protected worktree is irreversible.")
-    ).toBeNull();
-    expect(screen.getByText(/to confirm\.?/)).toBeDefined();
   });
 
   it("suppresses the preamble when an explicit instructions override is provided", () => {

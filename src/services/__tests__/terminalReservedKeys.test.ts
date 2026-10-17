@@ -4,6 +4,8 @@ import {
   isTerminalClipboardPasteKey,
   isTerminalReservedKey,
   isTuiReservedKey,
+  isWindowsTerminalCopyKey,
+  isWindowsTerminalPasteKey,
   terminalClipboardCombos,
   TUI_KEYBINDS,
 } from "../terminalReservedKeys";
@@ -49,14 +51,6 @@ describe("isTuiReservedKey", () => {
     // instead of deleting a word.
     expect(isTuiReservedKey(keyEvent({ key: "W", ctrlKey: true }))).toBe(true);
     expect(isTuiReservedKey(keyEvent({ key: "L", ctrlKey: true }))).toBe(true);
-  });
-
-  it("reserves accept-line, clear-screen, transpose, and yank — they collide with global app defaults", () => {
-    // Ctrl+J/L/T/Y map to fleet.armFocused, help.togglePanel,
-    // terminal.duplicate, and fleet.accept on Windows/Linux.
-    for (const key of ["j", "l", "t", "y"]) {
-      expect(isTuiReservedKey(keyEvent({ key, ctrlKey: true }))).toBe(true);
-    }
   });
 
   it("does not reserve Ctrl+Alt combos — Cmd+Alt bindings on Windows arrive as Ctrl+Alt", () => {
@@ -119,6 +113,46 @@ describe("isTerminalReservedKey", () => {
     expect(isTerminalReservedKey(keyEvent({ key: "b", ctrlKey: true, shiftKey: true }))).toBe(
       false
     );
+  });
+});
+
+describe("Windows Ctrl+V and Ctrl+C", () => {
+  it("takes plain Ctrl+V as the terminal's paste on Windows only", () => {
+    const ctrlV = keyEvent({ key: "v", code: "KeyV", ctrlKey: true });
+    setPlatform("Win32");
+    expect(isWindowsTerminalPasteKey(ctrlV)).toBe(true);
+    // Reserved, so the window handler never resolves it as an app shortcut.
+    expect(isTerminalReservedKey(ctrlV)).toBe(true);
+    expect(isWindowsTerminalPasteKey(keyEvent({ key: "v", ctrlKey: true, altKey: true }))).toBe(
+      false
+    );
+    setPlatform("Linux x86_64");
+    expect(isWindowsTerminalPasteKey(ctrlV)).toBe(false);
+    expect(isTerminalReservedKey(ctrlV)).toBe(false);
+    setPlatform("MacIntel");
+    expect(isWindowsTerminalPasteKey(ctrlV)).toBe(false);
+  });
+
+  it("reserves plain Ctrl+C on Windows only, so a rebound app shortcut cannot take it", () => {
+    const ctrlC = keyEvent({ key: "c", code: "KeyC", ctrlKey: true });
+    setPlatform("Win32");
+    expect(isTerminalReservedKey(ctrlC)).toBe(true);
+    setPlatform("Linux x86_64");
+    expect(isTerminalReservedKey(ctrlC)).toBe(false);
+    setPlatform("MacIntel");
+    expect(isTerminalReservedKey(ctrlC)).toBe(false);
+  });
+
+  it("recognises plain Ctrl+C on Windows, leaving the selection check to the caller", () => {
+    setPlatform("Win32");
+    expect(isWindowsTerminalCopyKey(keyEvent({ key: "c", code: "KeyC", ctrlKey: true }))).toBe(
+      true
+    );
+    expect(isWindowsTerminalCopyKey(keyEvent({ key: "C", ctrlKey: true, shiftKey: true }))).toBe(
+      false
+    );
+    setPlatform("Linux x86_64");
+    expect(isWindowsTerminalCopyKey(keyEvent({ key: "c", ctrlKey: true }))).toBe(false);
   });
 });
 

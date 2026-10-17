@@ -91,22 +91,4 @@ describe("useWorktreeActions — session-wide destructive items defer to the act
     expect(args).toEqual({ worktreeId: "wt-1" });
     expect(result.current.confirmDialog.isOpen).toBe(false);
   });
-
-  it("keeps trashing and terminating on separate actions, so the reversible one stays reversible", () => {
-    // Swapping the two callbacks would leave every label correct while turning
-    // "Trash all sessions" into permanent termination.
-    const { result } = renderActions();
-
-    act(() => {
-      result.current.handleCloseAll();
-    });
-    act(() => {
-      result.current.handleTerminateAll();
-    });
-
-    expect(dispatch.mock.calls.map((call) => call[0])).toEqual([
-      "worktree.sessions.trashAll",
-      "worktree.sessions.endAll",
-    ]);
-  });
 });

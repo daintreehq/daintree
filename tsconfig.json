@@ -40,6 +40,8 @@
     "shared",
     "plugins/builtin/*/renderer",
     "plugins/sample/*/renderer",
+    "plugins/builtin/*/review",
+    "plugins/sample/*/review",
     "packages/plugin-vite/src"
   ],
   "references": [{ "path": "./tsconfig.node.json" }]

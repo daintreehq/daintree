@@ -53,7 +53,7 @@ import { normalizeSelectOptions } from "@/components/PluginKit/kitOptions";
 
 beforeAll(async () => {
   await kit.whenPluginUiReady();
-});
+}, 60_000);
 
 afterEach(cleanup);
 

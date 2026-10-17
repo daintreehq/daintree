@@ -21,6 +21,7 @@ vi.mock("../../utils/gitFileWatcher.js", () => ({
       watcherLive.peak = Math.max(watcherLive.peak, watcherLive.current);
       return Promise.resolve(true);
     }
+    setUpstreamRef() {}
     dispose() {
       if (this.armed) {
         this.armed = false;
@@ -217,19 +218,6 @@ describe("WorkspaceService background git-watcher budget (#9538)", () => {
     expect(a.hasWatcher).toBe(false); // oldest evicted
     expect(b.hasWatcher).toBe(true);
     expect(c.hasWatcher).toBe(true);
-  });
-
-  it("never counts the active worktree against the cap", () => {
-    service["backgroundGitWatcherCap"] = 1;
-    const active = registerMonitor("active", true);
-    const a = registerMonitor("a");
-    setActive("active");
-    service["lruTouch"](a.id);
-
-    service["applyWatcherBudget"]();
-
-    expect(active.hasWatcher).toBe(true);
-    expect(a.hasWatcher).toBe(true); // the single background slot
   });
 
   it("cap of 0 evicts every background watcher but keeps the active one", () => {

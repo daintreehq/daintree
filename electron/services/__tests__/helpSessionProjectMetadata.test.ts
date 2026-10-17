@@ -214,7 +214,7 @@ describe("buildProjectMetadataAddendum", () => {
 
     // The shipped template plus both runtime addenda (the scratch one is ~0.6
     // KiB; 1 KiB allowed) must fit Codex's silent 32 KiB truncation limit.
-    const template = readFileSync(path.resolve(__dirname, "../../../help/AGENTS.md"));
+    const template = readFileSync(path.resolve(__dirname, "../../../assistant/AGENTS.md"));
     expect(template.byteLength + blockBytes + 1024).toBeLessThanOrEqual(32 * 1024);
   });
 });

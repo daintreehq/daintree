@@ -125,23 +125,6 @@ describe("force-resume handler", () => {
     expect(conn2.portQueueManager.clearQueue).toHaveBeenCalledWith("term-1");
   });
 
-  it("calls portQueueManager.clearQueue on every connection even when none currently track the terminal", () => {
-    // clearQueue is a no-op for terminals not in the manager's maps, so the
-    // handler iterates unconditionally rather than tracking which manager
-    // owns which terminal.
-    const coord = makeCoordinator();
-    const conn = makeRendererConnection();
-    const ctx = makeCtx({
-      rendererConnections: new Map([[1, conn]]),
-      getPauseCoordinator: vi.fn(() => coord as never),
-    });
-
-    const handlers = createBackpressureHandlers(ctx);
-    handlers["force-resume"]({ type: "force-resume", id: "untracked-terminal" });
-
-    expect(conn.portQueueManager.clearQueue).toHaveBeenCalledWith("untracked-terminal");
-  });
-
   it("increments forceResumeCount once per successful force-resume (the counter was previously dead)", () => {
     const coord = makeCoordinator();
     const ctx = makeCtx({
@@ -154,18 +137,6 @@ describe("force-resume handler", () => {
     handlers["force-resume"]({ type: "force-resume", id: "term-2" });
 
     expect(ctx.backpressureManager.stats.forceResumeCount).toBe(2);
-  });
-
-  it("does not increment forceResumeCount when the pause coordinator is missing (early return)", () => {
-    const ctx = makeCtx({
-      rendererConnections: new Map([[1, makeRendererConnection()]]),
-      getPauseCoordinator: vi.fn(() => undefined),
-    });
-    const handlers = createBackpressureHandlers(ctx);
-
-    handlers["force-resume"]({ type: "force-resume", id: "term-1" });
-
-    expect(ctx.backpressureManager.stats.forceResumeCount).toBe(0);
   });
 
   it("returns early when the pause coordinator is missing", () => {

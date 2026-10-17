@@ -1,5 +1,4 @@
-import { describe, expect, it } from "vitest";
-import { idleWindowScenarios } from "../scenarios/idleWindow";
+import { describe, expect, it, vi } from "vitest";
 import {
   createProcessTreeHarness,
   closeIdleWindow,
@@ -82,19 +81,6 @@ const DURATION_METRICS = [
   "recoveryMs",
   "postHealDiscoveryMs",
 ];
-
-describe("idleWindow scenario declarations", () => {
-  it("declares PERF-092/093/094 and nothing else", () => {
-    expect(idleWindowScenarios.map((s) => s.id)).toEqual(["PERF-092", "PERF-093", "PERF-094"]);
-  });
-
-  it("reports counts as the headline, so durationMs is the self-timed sentinel", () => {
-    for (const scenario of idleWindowScenarios) {
-      expect(scenario.tier).toBe("heavy");
-      expect(scenario.warmups).toBe(1);
-    }
-  });
-});
 
 describe("idleWindow metric naming", () => {
   it("classifies every count metric as machine-independent", () => {
@@ -197,10 +183,12 @@ describe("idleFixture probe fault", () => {
       // is what makes the blindness assertion below mean anything, and is why
       // PERF-093 does the same before it spawns its probe.
       expect(await waitForRefresh(harness)).toBe(true);
-      child = spawnProbeChild(20_000);
+      await vi.waitFor(() => expect(harness.hasObservedFailure()).toBe(true), { timeout: 20_000 });
+      child = spawnProbeChild(undefined, undefined, fault.probeChildEnv);
 
-      // Long enough for several poll attempts against the failing shim.
-      await sleep(2000);
+      // A completed failing poll proves blindness without assuming probe speed.
+      expect(await waitForRefresh(harness)).toBe(true);
+      expect(() => process.kill(child!.pid!, 0)).not.toThrow();
       expect(harness.cache.getProcess(child.pid!)).toBeUndefined();
       // Blindness alone is also what a poller that simply stopped looks like.
       // The service's own error record is what separates the two, and is the

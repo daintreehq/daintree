@@ -64,6 +64,7 @@ vi.mock("@/store", () => {
 });
 
 import { TerminalContextMenu } from "@/components/Terminal/TerminalContextMenu";
+import { PanelContextMenuTrigger } from "@/components/Terminal/PanelContextMenuTrigger";
 import { TabButton } from "../TabButton";
 
 function tab(id: string, isActive: boolean) {
@@ -190,5 +191,59 @@ describe("TabButton — the tab under the pointer owns the menu", () => {
 
     expect(dispatch).toHaveBeenCalled();
     expect(clicked).not.toHaveBeenCalled();
+  });
+});
+
+/** Outside a terminal the strip sits in the title bar, the panel's only trigger (#13422). */
+function renderHeaderStrip() {
+  return render(
+    <TooltipProvider>
+      <TerminalContextMenu terminalId="front" forceLocation="grid" triggerScope="header">
+        <div>
+          <PanelContextMenuTrigger>
+            <div role="tablist">
+              {tab("front", true)}
+              {tab("back", false)}
+            </div>
+          </PanelContextMenuTrigger>
+          <div>Panel body</div>
+        </div>
+      </TerminalContextMenu>
+    </TooltipProvider>
+  );
+}
+
+describe("TabButton — inside a header-scoped panel trigger", () => {
+  it("scopes a background tab's menu to that tab's panel and opens only that one", async () => {
+    dispatch.mockResolvedValue({ ok: true });
+    renderHeaderStrip();
+
+    fireEvent.contextMenu(tabNode("back"));
+    const menu = await screen.findByRole("menu");
+    expect(screen.getAllByRole("menu")).toHaveLength(1);
+    await act(async () => {
+      fireEvent.click(within(menu).getByRole("menuitem", { name: "Rename browser" }));
+    });
+
+    expect(dispatch).toHaveBeenCalledWith(
+      "terminal.rename",
+      { terminalId: "back" },
+      expect.anything()
+    );
+    expect(dispatch).not.toHaveBeenCalledWith(
+      "terminal.rename",
+      { terminalId: "front" },
+      expect.anything()
+    );
+  });
+
+  it("leaves the panel's keyboard-open marker on the title bar", () => {
+    renderHeaderStrip();
+
+    const triggers = document.querySelectorAll('[data-context-trigger="front"]');
+    expect(triggers).toHaveLength(1);
+    expect(triggers[0]!.contains(tabNode("back"))).toBe(true);
+    expect(triggers[0]!.contains(screen.getByText("Panel body"))).toBe(false);
+    expect(document.querySelector('[data-context-trigger="back"]')).toBeNull();
   });
 });

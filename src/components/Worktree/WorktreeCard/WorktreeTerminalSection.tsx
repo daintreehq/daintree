@@ -11,11 +11,19 @@ import { getAgentConfig } from "@/config/agents";
 import { deriveTerminalChrome } from "@/utils/terminalChrome";
 import { getTerminalAgentDisplayState } from "@/utils/terminalAgentDisplayState";
 import {
-  STATE_LABELS,
+  SESSION_ICONS,
+  SESSION_COLORS,
+  SESSION_LABELS,
   summarizeSessionStates,
-  getEffectiveStateIcon,
-  getEffectiveStateColor,
 } from "../terminalStateConfig";
+import { resolveSessionPresentation } from "@/lib/handBackPresentation";
+import { useRunHandBackState } from "@/hooks/useRunHandBackState";
+import { useRunParkState } from "@/hooks/useRunParkState";
+import { ParkedCircle } from "@/components/icons";
+import { useRunCanopyPlacement } from "@/hooks/useRunCanopyPlacement";
+import { useWallClock } from "@/hooks/useWallClock";
+import { canopyEvidenceParts } from "@/lib/canopyRefinementPresentation";
+import type { RunCanopyRefinement } from "@shared/types/ipc/fleet";
 import { CollapsedSessionIndicators } from "./CollapsedSessionIndicators";
 import { Tooltip, TooltipContent, TooltipTrigger } from "../../ui/tooltip";
 import { TruncatedTooltip } from "@/components/ui/TruncatedTooltip";
@@ -56,6 +64,45 @@ interface TerminalRowProps {
   canArm: boolean;
 }
 
+/** How often a Canopy attribution re-reads the clock: its age is in minutes. */
+const EVIDENCE_TICK_MS = 30_000;
+const nextEvidenceTick = () => EVIDENCE_TICK_MS;
+
+interface CanopyEvidenceLineProps {
+  refinement: RunCanopyRefinement;
+  id: string;
+  pointer: Pick<React.HTMLAttributes<HTMLElement>, "onPointerEnter" | "onPointerLeave">;
+}
+
+/**
+ * What Canopy read that moved this session into its bucket, quoted and
+ * attributed, under the title. The glyph beside it keeps showing what Daintree
+ * observed: a reading sits alongside the observation and never replaces it.
+ */
+function CanopyEvidenceLine({ refinement, id, pointer }: CanopyEvidenceLineProps) {
+  const now = useWallClock(refinement.readAt, nextEvidenceTick);
+  const { claim, attribution } = canopyEvidenceParts(refinement, now);
+  return (
+    <Tooltip autoDismiss={false}>
+      <TooltipTrigger asChild>
+        <span
+          id={id}
+          data-canopy-evidence={refinement.kind}
+          className="flex min-w-0 items-baseline gap-1 text-2xs text-text-secondary"
+          {...pointer}
+        >
+          {/* The quote truncates; who read it never does. */}
+          <span className="min-w-0 truncate">{claim}</span>
+          <span className="shrink-0">· {attribution}</span>
+        </span>
+      </TooltipTrigger>
+      <TooltipContent side="bottom">
+        {claim} · {attribution}
+      </TooltipContent>
+    </Tooltip>
+  );
+}
+
 function TerminalRow({ term, onClick, padY, canArm }: TerminalRowProps) {
   const { ref, isTruncated } = useTruncationDetection();
   const dragHandle = useDragHandle();
@@ -67,6 +114,20 @@ function TerminalRow({ term, onClick, padY, canArm }: TerminalRowProps) {
   // demotes back to a plain terminal (agent exited or never lived), there
   // is nothing for the sidebar row to track either.
   const agentState = getTerminalAgentDisplayState(chrome, term.agentState);
+  // The glyph alone follows the hand-back: the data attribute keeps the
+  // observed state for E2E selectors.
+  const handBack = useRunHandBackState(term.id);
+  // Parked is the user's own intent, not an observed state, so it rides beside
+  // the state glyph rather than replacing it — and leaves the data attribute
+  // alone.
+  const park = useRunParkState(term.id);
+  const canopy = useRunCanopyPlacement(term.id);
+  const glyphState = resolveSessionPresentation(
+    agentState,
+    term.agentState,
+    term.waitingReason,
+    handBack
+  );
   // Only the primary ("last armed") row gets the accent ring — it's the
   // singular focus anchor that will receive keyboard focus when fleet scope
   // exits. Secondary armed peers keep the dashed shape but use a neutral
@@ -74,7 +135,7 @@ function TerminalRow({ term, onClick, padY, canArm }: TerminalRowProps) {
   // badge stays accent-colored as the secondary signal.
   const isPrimary = useFleetArmingStore((s) => s.lastArmedId === term.id);
   const isArmable = canArm && isFleetArmEligible(term);
-  const StateIcon = agentState ? getEffectiveStateIcon(agentState) : null;
+  const StateIcon = glyphState ? SESSION_ICONS[glyphState] : null;
   const placementLabel = term.location === "dock" ? "Docked" : "On grid";
   const showCommand = !chrome.isAgent && term.activityStatus === "working" && !!term.lastCommand;
   // `useId`, not the terminal id: the sidebar card and the overview grid can
@@ -83,6 +144,9 @@ function TerminalRow({ term, onClick, padY, canArm }: TerminalRowProps) {
   const titleId = `${idBase}-title`;
   const placementId = `${idBase}-placement`;
   const commandId = `${idBase}-command`;
+  const evidenceId = `${idBase}-evidence`;
+  const parkId = `${idBase}-park`;
+  const stateId = `${idBase}-state`;
   // The metadata tooltips sit inside the title tooltip's trigger, so pointing
   // at one would otherwise open both.
   const [isOverMeta, setIsOverMeta] = useState(false);
@@ -148,7 +212,15 @@ function TerminalRow({ term, onClick, padY, canArm }: TerminalRowProps) {
               // descriptions, and as descendant text they would otherwise be
               // read twice and change the toggle's name whenever they change.
               aria-labelledby={titleId}
-              aria-describedby={showCommand ? `${commandId} ${placementId}` : placementId}
+              aria-describedby={[
+                StateIcon && glyphState ? stateId : null,
+                showCommand ? commandId : null,
+                canopy !== undefined ? evidenceId : null,
+                park.parked ? parkId : null,
+                placementId,
+              ]
+                .filter((id): id is string => id !== null)
+                .join(" ")}
               className={cn(
                 // The ring is drawn by a pseudo-element reaching back over the
                 // grip's gutter, so it outlines the row rather than clipping the
@@ -180,6 +252,9 @@ function TerminalRow({ term, onClick, padY, canArm }: TerminalRowProps) {
                     <TooltipContent side="bottom">{term.lastCommand}</TooltipContent>
                   </Tooltip>
                 )}
+                {canopy !== undefined && (
+                  <CanopyEvidenceLine refinement={canopy} id={evidenceId} pointer={metaPointer} />
+                )}
               </span>
 
               <span className="flex shrink-0 items-center gap-1.5">
@@ -192,15 +267,49 @@ function TerminalRow({ term, onClick, padY, canArm }: TerminalRowProps) {
                   </span>
                 )}
 
-                {StateIcon && agentState && (
-                  <StateIcon
-                    className={cn(
-                      "w-3 h-3",
-                      getEffectiveStateColor(agentState),
-                      agentState === "working" && "animate-spin-slow motion-reduce:animate-none"
-                    )}
-                    aria-label={STATE_LABELS[agentState]}
-                  />
+                {park.parked && (
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <span
+                        className="text-text-secondary"
+                        data-testid="session-row-parked"
+                        {...metaPointer}
+                      >
+                        <span id={parkId} className="sr-only">
+                          {park.note !== null ? `Parked: ${park.note}` : "Parked"}
+                        </span>
+                        <ParkedCircle className="w-3 h-3" aria-hidden="true" />
+                      </span>
+                    </TooltipTrigger>
+                    <TooltipContent side="bottom" className="max-w-xs">
+                      {park.note !== null ? (
+                        <div className="flex flex-col gap-0.5">
+                          <span className="font-medium">Parked</span>
+                          <span className="break-words">{park.note}</span>
+                        </div>
+                      ) : (
+                        "Parked"
+                      )}
+                    </TooltipContent>
+                  </Tooltip>
+                )}
+
+                {StateIcon && glyphState && (
+                  <>
+                    {/* The glyph is aria-hidden, so its label is never read: the
+                        state rides the row's description instead. */}
+                    <span id={stateId} className="sr-only">
+                      {SESSION_LABELS[glyphState]}
+                    </span>
+                    <StateIcon
+                      className={cn(
+                        "w-3 h-3",
+                        SESSION_COLORS[glyphState],
+                        glyphState === "working" && "animate-spin-slow motion-reduce:animate-none"
+                      )}
+                      aria-label={SESSION_LABELS[glyphState]}
+                    />
+                  </>
                 )}
 
                 <Tooltip>
@@ -284,7 +393,8 @@ export function WorktreeTerminalSection({
   const { visibleTerminalStates, terminalSessionAriaLabel, collapsedTriggerLabel } = useMemo(() => {
     const { visibleStates, label, breakdown } = summarizeSessionStates(
       counts.byState,
-      counts.total
+      counts.total,
+      counts.unread
     );
     // The collapsed trigger names itself once. Left to name-from-content it
     // read "3 active 3 sessions: 2 working, …" — the visible summary, then
@@ -296,7 +406,7 @@ export function WorktreeTerminalSection({
       terminalSessionAriaLabel: label,
       collapsedTriggerLabel: triggerLabel,
     };
-  }, [counts.byState, counts.total]);
+  }, [counts.byState, counts.total, counts.unread]);
 
   const SummaryIcon = useMemo(() => {
     if (terminals.length === 0) return null;

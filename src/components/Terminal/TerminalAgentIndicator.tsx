@@ -3,10 +3,15 @@ import type { AgentState, AgentStateChangeTrigger } from "@/types";
 import { cn } from "@/lib/utils";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import {
-  getEffectiveStateIcon,
-  getEffectiveStateColor,
-  getEffectiveStateLabel,
+  SESSION_ICONS,
+  SESSION_COLORS,
+  SESSION_LABELS,
 } from "@/components/Worktree/terminalStateConfig";
+import {
+  resolveSessionPresentation,
+  type SessionPresentationState,
+} from "@/lib/handBackPresentation";
+import { useRunHandBackState } from "@/hooks/useRunHandBackState";
 import type { ActivityState } from "./TerminalPane";
 import { usePanelStore } from "@/store";
 import { isPtyPanel } from "@shared/types/panel";
@@ -34,6 +39,47 @@ const TRIGGER_LABELS: Record<AgentStateChangeTrigger, string> = {
   title: "Title",
 };
 
+/**
+ * The chip itself: the state's glyph on its own in a fixed 20px slot. Every
+ * glyph is already a ring with its mark inside, so the chip draws no ring or
+ * tint of its own — a ring around a ring read as a circle inside a circle.
+ * Shared with the canopy panel's pane header, which draws a terminal the way
+ * its own pane does without that pane's store entry.
+ */
+export function AgentStateChip({
+  agentState,
+  ariaLabel,
+}: {
+  agentState: SessionPresentationState;
+  ariaLabel: string;
+}) {
+  const StateIcon = SESSION_ICONS[agentState];
+  if (!StateIcon) return null;
+  // Finished is white here rather than the settled grey it wears in lists: the
+  // title bar shows one agent, and its ring has no chip around it to carry it.
+  const tone = agentState === "completed" ? "text-text-primary" : SESSION_COLORS[agentState];
+  return (
+    <div
+      className={cn(
+        "inline-flex items-center justify-center w-5 h-5 shrink-0",
+        "transition-colors duration-150 ease-out reduce-motion:transition-none",
+        tone
+      )}
+      role="status"
+      aria-label={ariaLabel}
+    >
+      <StateIcon
+        className={cn(
+          "w-4 h-4",
+          agentState === "working" && "animate-spin-slow",
+          "motion-reduce:animate-none"
+        )}
+        aria-hidden="true"
+      />
+    </div>
+  );
+}
+
 export interface TerminalAgentIndicatorProps {
   id: string;
   agentState?: AgentState;
@@ -56,6 +102,7 @@ export function TerminalAgentIndicator({
   exitCode = null,
 }: TerminalAgentIndicatorProps) {
   const {
+    rawAgentState,
     startedAt,
     lastStateChange,
     stateChangeTrigger,
@@ -68,6 +115,7 @@ export function TerminalAgentIndicator({
       const t = state.panelsById[id];
       const pty = t && isPtyPanel(t) ? t : undefined;
       return {
+        rawAgentState: pty?.agentState,
         startedAt: pty?.startedAt,
         lastStateChange: pty?.lastStateChange,
         stateChangeTrigger: pty?.stateChangeTrigger,
@@ -92,49 +140,43 @@ export function TerminalAgentIndicator({
   useGlobalMinuteTicker();
   const now = Date.now();
 
+  const handBack = useRunHandBackState(id);
+
   if (!agentState || agentState === "idle") {
     return null;
   }
 
+  // The glyph follows the hand-back; `agentState` stays the observation.
+  const shownState = resolveSessionPresentation(agentState, rawAgentState, waitingReason, handBack);
+  const isHandBack = shownState !== agentState;
+
   // A settled agent only keeps its glyph while there is a session cost to
   // explain in the tooltip; without one the row's "Finished, no changes" pill
-  // is the only trace.
-  if ((agentState === "completed" || agentState === "exited") && sessionCost == null) {
+  // is the only trace. A live agent drawn settled by its hand-back keeps it.
+  if (
+    !isHandBack &&
+    (agentState === "completed" || agentState === "exited") &&
+    sessionCost == null
+  ) {
     return null;
   }
 
-  const StateIcon = getEffectiveStateIcon(agentState);
-  if (!StateIcon) return null;
+  if (!shownState || !SESSION_ICONS[shownState]) return null;
 
-  const effectiveColor = getEffectiveStateColor(agentState);
-
-  const chipStyle =
-    agentState === "working"
-      ? "bg-[color-mix(in_oklab,var(--color-state-working)_15%,transparent)] border-state-working/40"
-      : agentState === "directing"
-        ? "bg-[color-mix(in_oklab,var(--color-category-blue)_15%,transparent)] border-category-blue/40"
-        : // Settled: finished and exited share one neutral chip. Completion is
-          // not asking for anything, so it does not get a hue of its own
-          // (#12002) — and the two stay apart on the channels that survive
-          // without one, `CheckCircle2` against `ExitedCircle` in slate
-          // against secondary.
-          agentState === "completed" || agentState === "exited"
-          ? "bg-overlay-soft border-divider"
-          : "bg-[color-mix(in_oklab,var(--color-state-waiting)_15%,transparent)] border-state-waiting/40";
-
-  const headline = activity?.headline?.trim() || `Agent ${agentState}`;
   const showConfidence = stateChangeConfidence != null && stateChangeConfidence < 1;
-  const stateLabel = getEffectiveStateLabel(agentState);
+  const stateLabel = SESSION_LABELS[shownState];
+  const observedLabel = SESSION_LABELS[rawAgentState ?? agentState];
+  const headline = activity?.headline?.trim() || `Agent ${stateLabel}`;
   const exitStatus = isExited ? describeExitStatus(exitCode) : null;
   const showStateDuration =
-    (agentState === "working" || agentState === "waiting" || agentState === "directing") &&
+    (shownState === "working" || shownState === "waiting" || shownState === "directing") &&
     lastStateChange != null &&
     lastStateChange > 0 &&
     now - lastStateChange > 10_000;
   // Specific reasons only — the classifier's `prompt` fallback stays a
   // plain "waiting" so the chip never overclaims.
   const chipWaitingReason =
-    agentState === "waiting" ? actionableWaitingReason(waitingReason) : null;
+    shownState === "waiting" ? actionableWaitingReason(waitingReason) : null;
   const chipAriaLabel = chipWaitingReason
     ? `Agent state: ${stateLabel} (${WAITING_REASON_BADGE_LABEL[chipWaitingReason].toLowerCase()})`
     : `Agent state: ${stateLabel}`;
@@ -143,25 +185,7 @@ export function TerminalAgentIndicator({
     <Tooltip autoDismiss={false}>
       <TooltipTrigger asChild>
         <div className="relative inline-flex items-center shrink-0">
-          <div
-            className={cn(
-              "inline-flex items-center justify-center w-5 h-5 rounded-full border shrink-0",
-              "transition-[background-color,border-color,color] duration-150 ease-out reduce-motion:transition-none",
-              chipStyle,
-              effectiveColor
-            )}
-            role="status"
-            aria-label={chipAriaLabel}
-          >
-            <StateIcon
-              className={cn(
-                "w-3 h-3",
-                agentState === "working" && "animate-spin-slow",
-                "motion-reduce:animate-none"
-              )}
-              aria-hidden="true"
-            />
-          </div>
+          <AgentStateChip agentState={shownState} ariaLabel={chipAriaLabel} />
           {errorCount > 0 && (
             <span
               className="status-mark absolute -top-0.5 -right-0.5 w-2 h-2 rounded-full bg-status-error"
@@ -200,6 +224,7 @@ export function TerminalAgentIndicator({
             {stateChangeTrigger && <> · {TRIGGER_LABELS[stateChangeTrigger]}</>}
             {showConfidence && <> ({Math.round(stateChangeConfidence * 100)}%)</>}
           </span>
+          {isHandBack && <span className="text-text-secondary">Observed: {observedLabel}</span>}
           {lastStateChange != null && lastStateChange > 0 && (
             <span className="text-text-secondary">Since: {formatTimeAgo(lastStateChange)}</span>
           )}

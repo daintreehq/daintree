@@ -45,6 +45,8 @@ export interface AppContext {
 export interface LaunchOptions {
   env?: Record<string, string>;
   userDataDir?: string;
+  /** The app folder to launch instead of this checkout, e.g. one whose package.json differs. */
+  appRoot?: string;
   waitForSelector?: string;
   extraArgs?: string[];
   /**
@@ -72,6 +74,14 @@ export interface LaunchOptions {
    * `process.env.CI` runners where GPU is unavailable.
    */
   enableWebgl?: boolean;
+  /**
+   * Another app this worker launched keeps running beside this one (two
+   * instances talking to each other, as the Remote Hosts spec runs a Host and
+   * a Shell). The pre-launch reap then targets only this launch's own
+   * user-data dir, instead of every dir this worker has launched with, which
+   * would kill the other app.
+   */
+  alongside?: boolean;
   /**
    * Show the app on screen. Local macOS runs default to background windows —
    * invisible, click-through, never taking OS focus — so a suite can run while
@@ -287,9 +297,9 @@ function cleanupWindowsElectronProcesses(): void {
  */
 const launchedUserDataDirs = new Set<string>();
 
-function cleanupMacElectronE2eProcesses(): void {
+function cleanupMacElectronE2eProcesses(dirs: Iterable<string> = launchedUserDataDirs): void {
   if (process.platform !== "darwin") return;
-  for (const dir of launchedUserDataDirs) {
+  for (const dir of dirs) {
     try {
       // The -f full-command-line match catches every helper type (GPU,
       // Renderer, network-service utility, crashpad_handler) since they all
@@ -483,7 +493,7 @@ export async function launchApp(options: LaunchOptions = {}): Promise<AppContext
     const userDataDir = options.userDataDir ?? mkdtempSync(path.join(tmpdir(), E2E_TEMP_PREFIX));
     if (!options.userDataDir) recordTempDir(userDataDir);
     launchedUserDataDirs.add(userDataDir);
-    const args = [`--user-data-dir=${userDataDir}`, ROOT];
+    const args = [`--user-data-dir=${userDataDir}`, options.appRoot ?? ROOT];
     args.unshift(E2E_MODE_ARG);
     if (options.env?.DAINTREE_E2E_SKIP_FIRST_RUN_DIALOGS !== "0") {
       args.unshift(E2E_SKIP_FIRST_RUN_DIALOGS_ARG);
@@ -534,7 +544,16 @@ export async function launchApp(options: LaunchOptions = {}): Promise<AppContext
     // macOS local: reap any leftover e2e Electron processes from prior specs
     // before each fresh launch. Zombie crashpad helpers from a closed app can
     // hold Mach ports and contribute to first-launch flakes.
-    if (isMacOSLocal) cleanupMacElectronE2eProcesses();
+    if (isMacOSLocal) {
+      cleanupMacElectronE2eProcesses(options.alongside ? [userDataDir] : launchedUserDataDirs);
+    }
+    if (process.platform === "win32" && !process.env.CI && !options.enableWebgl) {
+      // `DAINTREE_DISABLE_WEBGL` is read at build time (Vite envPrefix), so the
+      // launch env above cannot turn WebGL off. Without a GPU flag a local
+      // Windows run renders terminals with WebGL and specs that read
+      // `.xterm-rows` find no DOM rows; CI and local macOS already disable it.
+      args.unshift("--disable-gpu", "--disable-software-rasterizer");
+    }
     if (isMacOSLocal && !options.enableWebgl) {
       // Local macOS Electron E2E can hit Crashpad/GPU-process FATALs during
       // restart-heavy specs. Mirror the screenshot harness mitigation for
@@ -676,23 +695,32 @@ export async function launchApp(options: LaunchOptions = {}): Promise<AppContext
       // Skip for restart tests to preserve persisted window state.
       if (!options.userDataDir || options.windowSize) {
         const explicitSize = options.windowSize;
-        await app.evaluate(({ BrowserWindow, screen }, payload) => {
-          const win = BrowserWindow.getAllWindows()[0];
-          if (!win) return;
-          if (payload) {
-            win.setSize(payload.width, payload.height);
+        // On Windows, Playwright intermittently loses this call's result
+        // ("Resulting promise was garbage collected"), which failed whole
+        // serial describes at launch. Sizing is best-effort, so only that
+        // lost acknowledgement is tolerated.
+        await app
+          .evaluate(({ BrowserWindow, screen }, payload) => {
+            const win = BrowserWindow.getAllWindows()[0];
+            if (!win) return;
+            if (payload) {
+              win.setSize(payload.width, payload.height);
+              win.center();
+              return;
+            }
+            const { width, height } = screen.getPrimaryDisplay().workAreaSize;
+            const targetW = Math.max(width, 1920);
+            const targetH = Math.max(height, 1080);
+            win.setSize(targetW, targetH);
             win.center();
-            return;
-          }
-          const { width, height } = screen.getPrimaryDisplay().workAreaSize;
-          const targetW = Math.max(width, 1920);
-          const targetH = Math.max(height, 1080);
-          win.setSize(targetW, targetH);
-          win.center();
-          if (width >= targetW && height >= targetH) {
-            win.maximize();
-          }
-        }, explicitSize ?? null);
+            if (width >= targetW && height >= targetH) {
+              win.maximize();
+            }
+          }, explicitSize ?? null)
+          .catch((error: unknown) => {
+            if (!String(error).includes("Resulting promise was garbage collected")) throw error;
+            console.warn("[e2e] Window sizing result was lost; continuing with the launch");
+          });
       }
 
       await window.waitForLoadState("domcontentloaded");
@@ -738,7 +766,9 @@ export async function launchApp(options: LaunchOptions = {}): Promise<AppContext
         writeSummary();
         console.warn(`[e2e] Launch attempt ${attempt}/${maxAttempts} failed, retrying...`);
         if (isWindowsCI) cleanupWindowsElectronProcesses();
-        if (isMacOSLocal) cleanupMacElectronE2eProcesses();
+        if (isMacOSLocal) {
+          cleanupMacElectronE2eProcesses(options.alongside ? [userDataDir] : launchedUserDataDirs);
+        }
         // macOS local retry needs to fit inside the 120s test timeout.
         // Keep the retry-prep wait short so the retry attempt has its full budget.
         await wait(isMacOSLocal ? 1000 : 2000 * attempt);
@@ -1070,7 +1100,7 @@ export async function refreshActiveWindow(app: ElectronApplication, oldPage?: Pa
     // silently dropped on macOS even when the document has focus. Pressing
     // and releasing a harmless modifier here ensures the input channel is
     // primed before tests send their real shortcut presses. Avoid bare Shift:
-    // the app intentionally treats double-Shift as the Action Palette toggle.
+    // a double tap of it opens Canopy.
     await newWindow.keyboard.press("Control").catch(() => {});
   } catch {
     // Best-effort focus; tests can still proceed.
@@ -1111,7 +1141,9 @@ export async function closeApp(app: ElectronApplication): Promise<void> {
   for (const childPid of descendantPids) {
     try {
       if (process.platform === "win32") {
-        execSync(`taskkill /F /PID ${childPid} /T 2>nul`, { stdio: "ignore" });
+        // No /T: the list is already the whole verified tree, and taskkill's own
+        // walk trusts stale parent PIDs.
+        execSync(`taskkill /F /PID ${childPid} 2>nul`, { stdio: "ignore" });
       } else {
         process.kill(childPid, "SIGKILL");
       }
@@ -1125,7 +1157,14 @@ function forceKillProcessTree(pid: number | undefined): void {
   if (!pid) return;
   try {
     if (process.platform === "win32") {
-      execSync(`taskkill /F /PID ${pid} /T 2>nul`, { stdio: "ignore" });
+      // Each verified PID on its own: taskkill /T would trust stale parent PIDs.
+      for (const target of [pid, ...getDescendantPids(pid)]) {
+        try {
+          execSync(`taskkill /F /PID ${target} 2>nul`, { stdio: "ignore" });
+        } catch {
+          // Already gone.
+        }
+      }
     } else {
       try {
         execSync(`pkill -9 -P ${pid}`, { stdio: "ignore" });

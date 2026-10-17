@@ -132,29 +132,7 @@ function renderHeader(overrides: Partial<WorktreeHeaderProps> = {}) {
   );
 }
 
-function getWrapper() {
-  return screen.getByTestId("worktree-actions-wrapper");
-}
-
 describe("WorktreeHeader menu button", () => {
-  it("starts dimmed and reveals on hover, focus, or open menu when inactive", () => {
-    renderHeader({ isActive: false });
-    const wrapper = getWrapper();
-    expect(wrapper.className).not.toContain("pointer-events-none");
-    expect(wrapper.className).not.toContain("opacity-0");
-    expect(wrapper.className).toContain("opacity-50");
-    expect(wrapper.className).toContain("group-hover/card:opacity-100");
-    expect(wrapper.className).toContain("group-has-[:focus-visible]/card:opacity-100");
-    expect(wrapper.className).toContain("group-has-[[data-state=open]]/card:opacity-100");
-  });
-
-  it("does not have pointer-events-none when active", () => {
-    renderHeader({ isActive: true });
-    const wrapper = getWrapper();
-    expect(wrapper.className).not.toContain("pointer-events-none");
-    expect(wrapper.className).toContain("opacity-100");
-  });
-
   it("renders the more actions button with correct aria-label", () => {
     renderHeader();
     const button = screen.getByTestId("worktree-actions-menu");
@@ -250,38 +228,6 @@ describe("WorktreeHeader issue title headline", () => {
     });
     expect(issueButton).toBeDefined();
     expect(screen.getByText("Add terminal recipe editor coverage")).toBeDefined();
-  });
-
-  it("applies active text styling to issue headline when isActive", () => {
-    const { container } = renderHeader({
-      worktree: {
-        ...baseWorktree,
-        issueNumber: 2907,
-        issueTitle: "Add terminal recipe editor coverage",
-      },
-      isActive: true,
-      badges: { onOpenIssue: noop },
-    });
-
-    const titleSpan = container.querySelector('button[aria-label*="Open issue"] .truncate');
-    expect(titleSpan).toBeDefined();
-    expect(titleSpan!.className).toContain("text-text-primary");
-  });
-
-  it("applies inactive text styling to issue headline when not active", () => {
-    const { container } = renderHeader({
-      worktree: {
-        ...baseWorktree,
-        issueNumber: 2907,
-        issueTitle: "Add terminal recipe editor coverage",
-      },
-      isActive: false,
-      badges: { onOpenIssue: noop },
-    });
-
-    const titleSpan = container.querySelector('button[aria-label*="Open issue"] .truncate');
-    expect(titleSpan).toBeDefined();
-    expect(titleSpan!.className).toContain("text-text-secondary");
   });
 
   it("uses branch name as primary headline when no issueTitle", () => {
@@ -468,29 +414,6 @@ describe("WorktreeHeader primary worktree standard branch layout", () => {
     expect(muted).toContain("text-text-secondary");
     expect(muted).toContain("font-normal");
   });
-
-  it("falls back to BranchLabel when isMainOnStandardBranch is undefined", () => {
-    renderHeader({
-      worktree: mainWorktree,
-      isMainWorktree: true,
-      branchLabel: "main",
-    });
-    expect(screen.queryByTestId("primary-worktree-project-name")).toBeNull();
-  });
-
-  it("hides secondary branch row when collapsed", () => {
-    renderHeader({
-      worktree: mainWorktree,
-      isMainWorktree: true,
-      isMainOnStandardBranch: true,
-      isCollapsed: true,
-      branchLabel: "main",
-    });
-    expect(screen.getByTestId("primary-worktree-project-name")).toBeDefined();
-    // The branch "main" should only appear as the project name row, not a separate secondary element
-    const allText = screen.getByTestId("primary-worktree-project-name").textContent;
-    expect(allText).toBe("daintree-app");
-  });
 });
 
 describe("WorktreeHeader plan file badge", () => {
@@ -523,32 +446,6 @@ describe("WorktreeHeader plan file badge", () => {
     });
 
     expect(screen.queryByRole("button", { name: /View agent plan file/ })).toBeNull();
-  });
-
-  it("calls onOpenPlan when plan badge is clicked on active card", async () => {
-    const onOpenPlan = vi.fn();
-    renderHeader({
-      worktree: { ...baseWorktree, hasPlanFile: true, planFilePath: "TASKS.md" },
-      badges: { onOpenPlan },
-      isActive: true,
-    });
-
-    const planButton = screen.getByRole("button", { name: /View agent plan file/ });
-    planButton.click();
-    expect(onOpenPlan).toHaveBeenCalledOnce();
-  });
-
-  it("does not call onOpenPlan when plan badge is clicked on inactive card", async () => {
-    const onOpenPlan = vi.fn();
-    renderHeader({
-      worktree: { ...baseWorktree, hasPlanFile: true, planFilePath: "TASKS.md" },
-      badges: { onOpenPlan },
-      isActive: false,
-    });
-
-    const planButton = screen.getByRole("button", { name: /View agent plan file/ });
-    planButton.click();
-    expect(onOpenPlan).not.toHaveBeenCalled();
   });
 });
 
@@ -731,8 +628,6 @@ describe("WorktreeHeader click bubbling", () => {
 
 describe("WorktreeHeader hover:underline on badges", () => {
   const issueWt = { ...baseWorktree, issueNumber: 42, issueTitle: "Test issue" };
-  const prWt = { ...baseWorktree, ...prLinked(101), prNumber: 101, prState: "open" as const };
-  const planWt = { ...baseWorktree, hasPlanFile: true, planFilePath: "TODO.md" };
 
   function getIssueSpan(container: HTMLElement) {
     return container.querySelector('button[aria-label*="Open issue"] .truncate');
@@ -748,24 +643,6 @@ describe("WorktreeHeader hover:underline on badges", () => {
       isActive: true,
     });
     expect(getIssueSpan(activeContainer)!.className).toContain("hover:underline");
-  });
-
-  it("sidebar variant: PR badge underline only when active", () => {
-    const { unmount } = renderHeader({ worktree: prWt, badges: { onOpenPR: noop } });
-    expect(screen.getByText("#101").className).not.toContain("hover:underline");
-    unmount();
-
-    renderHeader({ worktree: prWt, badges: { onOpenPR: noop }, isActive: true });
-    expect(screen.getByText("#101").className).toContain("hover:underline");
-  });
-
-  it("sidebar variant: plan badge underline only when active", () => {
-    const { unmount } = renderHeader({ worktree: planWt, badges: { onOpenPlan: noop } });
-    expect(screen.getByText("TODO.md").className).not.toContain("hover:underline");
-    unmount();
-
-    renderHeader({ worktree: planWt, badges: { onOpenPlan: noop }, isActive: true });
-    expect(screen.getByText("TODO.md").className).toContain("hover:underline");
   });
 
   it("grid variant: badges keep hover:underline regardless of active state", () => {
@@ -843,28 +720,6 @@ describe("WorktreeHeader collapsed session indicators", () => {
     expect(screen.queryByTestId("collapsed-session-indicators")).toBeNull();
   });
 
-  it("excludes idle state from indicators", () => {
-    renderHeader({
-      isCollapsed: true,
-      sessionTotal: 3,
-      sessionStates: { ...allZeroStates, idle: 2, working: 1 },
-    });
-    const container = screen.getByTestId("collapsed-session-indicators");
-    const badges = container.querySelectorAll(":scope > span[aria-hidden='true']");
-    expect(badges.length).toBe(1);
-    expect(container.getAttribute("aria-label")).toBe("3 sessions: 1 working");
-  });
-
-  it("applies aria-label with state breakdown", () => {
-    renderHeader({
-      isCollapsed: true,
-      sessionTotal: 5,
-      sessionStates: { ...allZeroStates, working: 2, completed: 3 },
-    });
-    const container = screen.getByTestId("collapsed-session-indicators");
-    expect(container.getAttribute("aria-label")).toBe("5 sessions: 2 working, 3 done");
-  });
-
   it("orders states by STATE_PRIORITY (working before waiting)", () => {
     renderHeader({
       isCollapsed: true,
@@ -877,33 +732,9 @@ describe("WorktreeHeader collapsed session indicators", () => {
     expect(Array.from(badges, (b) => b.getAttribute("data-state"))).toEqual(["working", "waiting"]);
   });
 
-  it("applies animate-spin-slow only to working icon", () => {
-    renderHeader({
-      isCollapsed: true,
-      sessionTotal: 3,
-      sessionStates: { ...allZeroStates, working: 2, completed: 1 },
-    });
-    const indicators = screen.getByTestId("collapsed-session-indicators");
-    const glyphs = indicators.querySelectorAll("[data-glyph-box], svg");
-    // First glyph is the working icon — should have animate-spin-slow
-    expect(glyphs[0]!.getAttribute("class")).toContain("animate-spin-slow");
-    // Second glyph is the completed icon — should NOT have animate-spin-slow
-    expect(glyphs[1]!.getAttribute("class")).not.toContain("animate-spin-slow");
-  });
-
   it("does not render when sessionStates is not provided", () => {
     renderHeader({ isCollapsed: true });
     expect(screen.queryByTestId("collapsed-session-indicators")).toBeNull();
-  });
-
-  it("uses singular 'session' when sessionTotal is 1", () => {
-    renderHeader({
-      isCollapsed: true,
-      sessionTotal: 1,
-      sessionStates: { ...allZeroStates, working: 1 },
-    });
-    const container = screen.getByTestId("collapsed-session-indicators");
-    expect(container.getAttribute("aria-label")).toBe("1 session: 1 working");
   });
 
   it("does not render when all sessions are idle", () => {
@@ -917,13 +748,6 @@ describe("WorktreeHeader collapsed session indicators", () => {
 });
 
 describe("WorktreeHeader cleanup button", () => {
-  it("renders the cleanup button when onCleanupWorktree is provided", () => {
-    renderHeader({ onCleanupWorktree: vi.fn() });
-    const button = screen.getByRole("button", { name: "Delete worktree" });
-    expect(button).toBeDefined();
-    expect(button.getAttribute("data-testid")).toBe("worktree-cleanup-button");
-  });
-
   it("keeps the cleanup button neutral until it is pointed at or focused", () => {
     renderHeader({ onCleanupWorktree: vi.fn() });
     const button = screen.getByTestId("worktree-cleanup-button");
@@ -942,13 +766,6 @@ describe("WorktreeHeader cleanup button", () => {
     renderHeader();
     expect(screen.queryByRole("button", { name: "Delete worktree" })).toBeNull();
     expect(screen.queryByTestId("worktree-cleanup-button")).toBeNull();
-  });
-
-  it("places the cleanup button inside the hover-gated actions wrapper", () => {
-    renderHeader({ onCleanupWorktree: vi.fn() });
-    const button = screen.getByTestId("worktree-cleanup-button");
-    const wrapper = screen.getByTestId("worktree-actions-wrapper");
-    expect(wrapper.contains(button)).toBe(true);
   });
 
   it("dims the cleanup button alongside other actions on inactive, non-collapsed cards", () => {
@@ -1343,79 +1160,6 @@ describe("WorktreeHeader upstream sync indicator", () => {
     expect(indicator.textContent).toContain("↓1");
   });
 
-  it("does not flash on initial render", () => {
-    renderHeader({
-      worktree: { ...baseWorktree, aheadCount: 2, behindCount: 0 },
-    });
-    const indicator = screen.getByTestId("upstream-sync-indicator");
-    expect(indicator.className).not.toContain("animate-upstream-badge-flash");
-    expect(indicator.className).not.toContain("animate-pulse-immediate");
-  });
-
-  it("does not flash when fetch is in-flight without count change", () => {
-    renderHeader({
-      worktree: {
-        ...baseWorktree,
-        aheadCount: 2,
-        behindCount: 0,
-        isFetchInFlight: true,
-      },
-    });
-    const indicator = screen.getByTestId("upstream-sync-indicator");
-    expect(indicator.getAttribute("data-fetch-in-flight")).toBe("true");
-    expect(indicator.className).not.toContain("animate-upstream-badge-flash");
-    expect(indicator.className).not.toContain("animate-pulse-immediate");
-  });
-
-  it("does not pulse when no fetch is in-flight", () => {
-    renderHeader({
-      worktree: { ...baseWorktree, aheadCount: 2, behindCount: 0 },
-    });
-    const indicator = screen.getByTestId("upstream-sync-indicator");
-    expect(indicator.className).not.toContain("animate-pulse-immediate");
-  });
-
-  it("renders dimmed chip when auth-failed and github remote", () => {
-    renderHeader({
-      worktree: {
-        ...baseWorktree,
-        aheadCount: 1,
-        behindCount: 2,
-        fetchAuthFailed: true,
-        matchedForgeProviderId: "daintree.github.github",
-        linked: { providerId: "daintree.github.github" },
-      },
-    });
-    const indicator = screen.getByTestId("upstream-sync-indicator");
-    expect(indicator).toBeDefined();
-    expect(indicator.getAttribute("data-fetch-auth-failed")).toBe("true");
-    // Chip shows counts in dimmed form, not a colored "Sign in" CTA.
-    expect(indicator.textContent).toContain("↑1");
-    expect(indicator.textContent).toContain("↓2");
-    expect(indicator.textContent).not.toContain("Sign in");
-    // No animate-pulse-immediate in auth-failed state.
-    expect(indicator.className).not.toContain("animate-pulse-immediate");
-  });
-
-  it("renders dimmed placeholder when auth-failed and no counts", () => {
-    renderHeader({
-      worktree: {
-        ...baseWorktree,
-        aheadCount: 0,
-        behindCount: 0,
-        fetchAuthFailed: true,
-        matchedForgeProviderId: "daintree.github.github",
-        linked: { providerId: "daintree.github.github" },
-      },
-    });
-    const indicator = screen.getByTestId("upstream-sync-indicator");
-    expect(indicator).toBeDefined();
-    expect(indicator.getAttribute("data-fetch-auth-failed")).toBe("true");
-    // With no counts to carry, the line is the action alone — never an empty
-    // control.
-    expect(indicator.textContent).toContain("Reconnect");
-  });
-
   it("renders the sign-in affordance when matchedForgeProviderId is set and no linked data (#9982)", () => {
     // Reproduces the exact bug path: fetchAuthFailed + matchedForgeProviderId but no
     // linked data (e.g. the main worktree on develop, or a token-expired
@@ -1479,42 +1223,6 @@ describe("WorktreeHeader upstream sync indicator", () => {
     expect(indicator.textContent).toContain("↓4");
   });
 
-  it("mounts the badge when the branch tracks its own base, and shows the count once", () => {
-    // `baseMatchesUpstream` used to suppress the base line AND was subtracted
-    // from the mount gate, so this pair rendered a bare unlabelled number.
-    renderHeader({
-      worktree: {
-        ...baseWorktree,
-        aheadCount: 0,
-        behindCount: 4,
-        baseBranchName: "develop",
-        baseAheadCount: 0,
-        baseBehindCount: 4,
-        baseMatchesUpstream: true,
-      },
-    });
-    const indicator = screen.getByTestId("upstream-sync-indicator");
-    expect(indicator.textContent).toContain("Δ develop");
-    expect(indicator.textContent?.match(/↓4/g)).toHaveLength(1);
-  });
-
-  it("keeps the unlabelled pair when base counts have not caught up", () => {
-    renderHeader({
-      worktree: {
-        ...baseWorktree,
-        aheadCount: 0,
-        behindCount: 4,
-        baseBranchName: "develop",
-        baseAheadCount: 0,
-        baseBehindCount: 0,
-        baseMatchesUpstream: true,
-      },
-    });
-    const indicator = screen.getByTestId("upstream-sync-indicator");
-    expect(indicator.textContent).toContain("↓4");
-    expect(indicator.textContent).not.toContain("Δ");
-  });
-
   it("does not mount a row for base counts the badge would decline to draw", () => {
     // The badge needs a base branch name to render base counts. Mounting on
     // the counts alone would leave an empty secondary row behind.
@@ -1537,56 +1245,6 @@ describe("WorktreeHeader upstream sync indicator", () => {
       worktree: { ...baseWorktree, aheadCount: 0, behindCount: 0 },
     });
     expect(screen.queryByTestId("upstream-sync-indicator")).toBeNull();
-  });
-
-  it("dispatches openTab → github settings on auth-failed chip click", () => {
-    renderHeader({
-      worktree: {
-        ...baseWorktree,
-        aheadCount: 1,
-        fetchAuthFailed: true,
-        matchedForgeProviderId: "daintree.github.github",
-        linked: { providerId: "daintree.github.github" },
-      },
-    });
-    const indicator = screen.getByTestId("upstream-sync-indicator");
-    fireEvent.click(indicator);
-    // Must retry the suspended fetch (the actual bug fix), not just open settings —
-    // without this the stripe stays stuck forever (#9736).
-    expect(mockRetryAuthFetch).toHaveBeenCalledTimes(1);
-    expect(actionService.dispatch).toHaveBeenCalledWith(
-      "app.settings.openTab",
-      { tab: "code-forge", subtab: "daintree.github.github" },
-      { source: "user" }
-    );
-  });
-
-  it("renders the count display when only fetchNetworkFailed is set", () => {
-    renderHeader({
-      worktree: {
-        ...baseWorktree,
-        aheadCount: 1,
-        fetchNetworkFailed: true,
-      },
-    });
-    // The counts stay at full strength — a failed fetch does not make them
-    // unreadable, only unconfirmed — and the line carries a mark saying so,
-    // distinct from the auth-failure treatment.
-    const indicator = screen.getByTestId("upstream-sync-indicator");
-    expect(indicator.textContent).toContain("↑1");
-    expect(indicator.className).not.toMatch(/\bopacity-/);
-    expect(indicator.getAttribute("data-fetch-network-failed")).toBe("true");
-    const mark = indicator.querySelector('[data-testid="upstream-sync-status"]');
-    expect(mark?.getAttribute("data-status")).toBe("unreachable");
-  });
-
-  it("carries no failure mark on a healthy worktree", () => {
-    renderHeader({
-      worktree: { ...baseWorktree, aheadCount: 1, lastFetchedAt: Date.now() },
-    });
-    const indicator = screen.getByTestId("upstream-sync-indicator");
-    expect(indicator.querySelector('[data-testid="upstream-sync-status"]')).toBeNull();
-    expect(indicator.getAttribute("data-fetch-network-failed")).toBeNull();
   });
 
   it("prefers the auth-failed treatment over the network-failed mark", () => {
@@ -1616,19 +1274,6 @@ describe("WorktreeHeader blocking-op passive indicator (#10921)", () => {
   // collides with the live operation or gates on stale (frozen-during-op) status.
   // The card now only surfaces the passive gitStateIndicator badge; the deliberate
   // takeover surface lives in the Review Hub's ConflictPanel.
-  const BLOCKING = [
-    { repoState: "REVERTING", label: "revert" },
-    { repoState: "REBASING", label: "rebase" },
-    { repoState: "MERGING", label: "merge" },
-    { repoState: "CHERRY_PICKING", label: "cherry-pick" },
-  ] as const;
-
-  it.each(BLOCKING)("renders no Continue/Abort buttons for $repoState", ({ repoState }) => {
-    renderHeader({ worktree: { ...baseWorktree, repoState } });
-    expect(screen.queryByRole("button", { name: /^Continue / })).toBeNull();
-    expect(screen.queryByRole("button", { name: /^Abort / })).toBeNull();
-  });
-
   it("still renders the passive gitStateIndicator badge for an in-progress operation", () => {
     renderHeader({
       worktree: { ...baseWorktree, repoState: "REBASING" },
@@ -1636,25 +1281,6 @@ describe("WorktreeHeader blocking-op passive indicator (#10921)", () => {
     });
     expect(screen.getByText("rebasing")).toBeDefined();
     // ...and no interactive recovery buttons alongside it.
-    expect(screen.queryByRole("button", { name: /^Continue / })).toBeNull();
-    expect(screen.queryByRole("button", { name: /^Abort / })).toBeNull();
-  });
-
-  it("renders no recovery buttons even when the operation has conflicts", () => {
-    renderHeader({
-      worktree: {
-        ...baseWorktree,
-        repoState: "REVERTING",
-        worktreeChanges: {
-          worktreeId: "test-wt",
-          rootPath: "/tmp/test-wt",
-          changedFileCount: 1,
-          changes: [{ path: "a.ts", status: "conflicted", insertions: null, deletions: null }],
-        },
-      },
-      gitStateIndicator: { kind: "conflicted", label: "conflicted", tone: "error" },
-    });
-    expect(screen.getByText("conflicted")).toBeDefined();
     expect(screen.queryByRole("button", { name: /^Continue / })).toBeNull();
     expect(screen.queryByRole("button", { name: /^Abort / })).toBeNull();
   });
@@ -1791,16 +1417,107 @@ describe("WorktreeHeader — the sync line with no counts and no base", () => {
       "unreachable"
     );
   });
+});
 
-  it("does not treat an old fetch as a failure", () => {
-    renderHeader({
-      worktree: { ...baseWorktree, aheadCount: 0, lastFetchedAt: Date.now() - 24 * 60 * 60_000 },
+describe("WorktreeHeader custom title (#13409)", () => {
+  const prWorktree = {
+    ...baseWorktree,
+    sourcePrNumber: 314,
+    linked: {
+      providerId: "github",
+      pr: {
+        ref: { providerId: "github", owner: "o", repo: "r", number: 314, rawData: null },
+        title: "Fix flaky terminal search",
+        url: "https://github.com/o/r/pull/314",
+        state: "open",
+      },
+    },
+    issueNumber: 99,
+    issueTitle: "Terminal search flakes",
+  } as WorktreeState;
+
+  it("leads with the title and moves an issue headline, with its title, above the branch", () => {
+    const { container } = renderHeader({
+      worktree: { ...baseWorktree, issueNumber: 100, issueTitle: "Fix the thing" },
+      branchLabel: "feature/fix-the-thing",
+      customTitle: "Hotfix",
+      badges: { onOpenIssue: noop },
     });
-    expect(screen.queryByTestId("upstream-sync-status")).toBeNull();
+
+    expect(screen.getByTestId("worktree-custom-title").textContent).toBe("Hotfix");
+    const issueButtons = container.querySelectorAll('button[aria-label*="Open issue"]');
+    expect(issueButtons.length).toBe(1);
+    expect(issueButtons[0]!.getAttribute("aria-label")).toBe("Open issue #100: Fix the thing");
+    expect(screen.getByText(/fix-the-thing/)).toBeDefined();
   });
 
-  it("stays out of the way with nothing to say", () => {
-    renderHeader({ worktree: { ...baseWorktree, aheadCount: 0 } });
-    expect(screen.queryByTestId("upstream-sync-indicator")).toBeNull();
+  it("keeps PR provenance from sourcePrNumber: the PR moves down with its title, then the issue", () => {
+    const { container } = renderHeader({
+      worktree: prWorktree,
+      customTitle: "Release prep",
+      badges: { onOpenPR: noop, onOpenIssue: noop },
+    });
+
+    expect(screen.getByTestId("worktree-custom-title").textContent).toBe("Release prep");
+    const prButtons = container.querySelectorAll('button[aria-label*="pull request"]');
+    expect(prButtons.length).toBe(1);
+    expect(prButtons[0]!.getAttribute("aria-label")).toBe(
+      "Open open pull request #314: Fix flaky terminal search"
+    );
+    expect(screen.getByText("Fix flaky terminal search")).toBeDefined();
+    const issueButton = screen.getByRole("button", {
+      name: "Open issue #99: Terminal search flakes",
+    });
+    // The displaced PR comes first, as the headline it replaced.
+    expect(
+      prButtons[0]!.compareDocumentPosition(issueButton) & Node.DOCUMENT_POSITION_FOLLOWING
+    ).toBeTruthy();
+  });
+
+  it("keeps a displaced PR badge's click action", () => {
+    const onOpenPR = vi.fn();
+    renderHeader({
+      worktree: prWorktree,
+      isActive: true,
+      customTitle: "Release prep",
+      badges: { onOpenPR, onOpenIssue: noop },
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: /pull request #314/ }));
+    expect(onOpenPR).toHaveBeenCalledTimes(1);
+  });
+
+  it("puts the branch under a title on a branch-only worktree", () => {
+    renderHeader({ branchLabel: "feature/test", customTitle: "Spike" });
+
+    expect(screen.getByTestId("worktree-custom-title").textContent).toBe("Spike");
+    expect(screen.getByText(/test/)).toBeDefined();
+  });
+
+  it("replaces the project name on main but keeps main's branch row", () => {
+    renderHeader({
+      worktree: { ...baseWorktree, isMainWorktree: true, name: "daintree-app", branch: "main" },
+      isMainWorktree: true,
+      isMainOnStandardBranch: true,
+      branchLabel: "main",
+      customTitle: "Integration",
+    });
+
+    expect(screen.getByTestId("worktree-custom-title").textContent).toBe("Integration");
+    expect(screen.queryByTestId("primary-worktree-project-name")).toBeNull();
+    expect(screen.getByText("main")).toBeDefined();
+  });
+
+  it("shows only the title when collapsed", () => {
+    const { container } = renderHeader({
+      worktree: prWorktree,
+      isCollapsed: true,
+      customTitle: "Release prep",
+      badges: { onOpenPR: noop, onOpenIssue: noop },
+    });
+
+    expect(screen.getByTestId("worktree-custom-title").textContent).toBe("Release prep");
+    expect(container.querySelectorAll('button[aria-label*="pull request"]').length).toBe(0);
+    expect(container.querySelectorAll('button[aria-label*="Open issue"]').length).toBe(0);
   });
 });

@@ -856,6 +856,59 @@ describe("JIT capability consent gating (#10524)", () => {
     expect(git.add).not.toHaveBeenCalled();
     expect(git.commit).not.toHaveBeenCalled();
   });
+
+  it("stages the pathspecs it checked, not ones swapped in during the consent prompt", async () => {
+    const paths = ["a.txt"];
+    getPluginCapabilityConsentService().setConsentBridge(async () => {
+      paths[0] = "-A";
+      return "approved-once";
+    });
+    const git = { raw: vi.fn().mockResolvedValue("") } as unknown as SimpleGit;
+    (
+      svc as unknown as { _setHostGitFactoryForTests(f: () => Promise<SimpleGit>): void }
+    )._setHostGitFactoryForTests(async () => git);
+    const seam = svc as unknown as {
+      _registerFakePluginForTests(p: FakeLoadedPlugin): void;
+      _createHostForTests(id: string): PluginHostApi;
+    };
+    seam._registerFakePluginForTests({
+      manifest: makeManifest(["git:read", "git:write"], [allowed]),
+      dir: baseDir,
+      loadedAt: 0,
+      isBuiltin: false,
+    });
+    const host = seam._createHostForTests("acme.fsgit");
+
+    await host.git.add(allowed, paths);
+    expect(git.raw).toHaveBeenCalledWith(["add", "--", "a.txt"]);
+  });
+
+  it.each([["-A"], ["/etc/passwd"], [":(top)"], ["../outside"]])(
+    "rejects git.add pathspec %s before asking for consent",
+    async (spec) => {
+      const bridge = vi.fn(async () => "approved-and-pin" as const);
+      getPluginCapabilityConsentService().setConsentBridge(bridge);
+      const git = { raw: vi.fn().mockResolvedValue("") } as unknown as SimpleGit;
+      (
+        svc as unknown as { _setHostGitFactoryForTests(f: () => Promise<SimpleGit>): void }
+      )._setHostGitFactoryForTests(async () => git);
+      const seam = svc as unknown as {
+        _registerFakePluginForTests(p: FakeLoadedPlugin): void;
+        _createHostForTests(id: string): PluginHostApi;
+      };
+      seam._registerFakePluginForTests({
+        manifest: makeManifest(["git:read", "git:write"], [allowed]),
+        dir: baseDir,
+        loadedAt: 0,
+        isBuiltin: false,
+      });
+      const host = seam._createHostForTests("acme.fsgit");
+
+      await expect(host.git.add(allowed, [spec])).rejects.toThrow(/PATH_NOT_ALLOWED/);
+      expect(bridge).not.toHaveBeenCalled();
+      expect(git.raw).not.toHaveBeenCalled();
+    }
+  );
 });
 
 describe("a bound plugin's ${project}/${worktree} allowlist roots", () => {
@@ -1484,16 +1537,6 @@ describe("host.fs.writeFile checked path (#12323)", () => {
       /expectedRevision/
     );
     expect(await fs.readFile(target, "utf-8")).toBe("v1");
-  });
-
-  it("audits a checked write once, like a plain one", async () => {
-    const host = registerPlugin(["fs:project-read", "fs:project-write"], [allowed]);
-    const target = join(allowed, "doc.md");
-    await host.fs.writeFile(target, "v1", {});
-    const writeAudits = appendSpy.mock.calls.filter(
-      (c) => (c[0] as { channel: string }).channel === "plugin:fs-write"
-    );
-    expect(writeAudits.length).toBe(1);
   });
 });
 

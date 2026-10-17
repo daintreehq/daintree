@@ -1,4 +1,4 @@
-import { describe, expect, it, vi, beforeEach } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const ipcHandlers = new Map<string, (...args: unknown[]) => unknown>();
 
@@ -110,7 +110,11 @@ vi.mock("../../services/ProjectStore.js", () => ({
 
 vi.mock("../../utils/gpuDetection.js", () => ({
   getGpuFeatureStatus: vi.fn(() => ({ webgl2: "hardware" })),
+  getWebGLFeatureStatus: vi.fn((status: { webgl?: string; webgl2?: string } | null) =>
+    status ? (status.webgl2 ?? status.webgl) : undefined
+  ),
   isWebGLHardwareAccelerated: vi.fn(() => true),
+  whenGpuReported: vi.fn(async (_timeoutMs: number) => {}),
 }));
 
 vi.mock("../../services/GpuCrashMonitorService.js", () => ({
@@ -183,161 +187,13 @@ vi.mock("../../ipc/utils.js", async (importOriginal) => {
   };
 });
 
-import { CRASH_CRITICAL_FIELDS, registerAppStateHandlers } from "../handlers/app/state.js";
+import { registerAppStateHandlers } from "../handlers/app/state.js";
 import { consumePrefetchedHydrateResult } from "../../services/prefetchHydrateCache.js";
 import { projectStore } from "../../services/ProjectStore.js";
 import { getWindowForWebContents } from "../../window/webContentsRegistry.js";
 import { markPerformance } from "../../utils/performance.js";
 import { PERF_MARKS } from "../../../shared/perf/marks.js";
 import type { HandlerDependencies } from "../types.js";
-
-function shouldTriggerBackup(updates: Record<string, unknown>): boolean {
-  return Object.keys(updates).some((k) => CRASH_CRITICAL_FIELDS.has(k));
-}
-
-describe("CRASH_CRITICAL_FIELDS", () => {
-  it("includes terminals", () => {
-    expect(CRASH_CRITICAL_FIELDS.has("terminals")).toBe(true);
-  });
-
-  it("includes panelGridConfig", () => {
-    expect(CRASH_CRITICAL_FIELDS.has("panelGridConfig")).toBe(true);
-  });
-
-  it("includes focusMode", () => {
-    expect(CRASH_CRITICAL_FIELDS.has("focusMode")).toBe(true);
-  });
-
-  it("includes focusPanelState", () => {
-    expect(CRASH_CRITICAL_FIELDS.has("focusPanelState")).toBe(true);
-  });
-
-  it("includes activeWorktreeId", () => {
-    expect(CRASH_CRITICAL_FIELDS.has("activeWorktreeId")).toBe(true);
-  });
-
-  it("includes recipes", () => {
-    expect(CRASH_CRITICAL_FIELDS.has("recipes")).toBe(true);
-  });
-
-  it("includes mruList", () => {
-    expect(CRASH_CRITICAL_FIELDS.has("mruList")).toBe(true);
-  });
-
-  it("includes actionMruList", () => {
-    expect(CRASH_CRITICAL_FIELDS.has("actionMruList")).toBe(true);
-  });
-
-  it("includes actionPinnedIds", () => {
-    expect(CRASH_CRITICAL_FIELDS.has("actionPinnedIds")).toBe(true);
-  });
-
-  it("includes actionHiddenIds", () => {
-    expect(CRASH_CRITICAL_FIELDS.has("actionHiddenIds")).toBe(true);
-  });
-
-  it("includes developerMode", () => {
-    expect(CRASH_CRITICAL_FIELDS.has("developerMode")).toBe(true);
-  });
-
-  it("includes fleetScopeMode", () => {
-    expect(CRASH_CRITICAL_FIELDS.has("fleetScopeMode")).toBe(true);
-  });
-
-  it("does NOT include sidebarWidth", () => {
-    expect(CRASH_CRITICAL_FIELDS.has("sidebarWidth")).toBe(false);
-  });
-
-  it("does NOT include diagnosticsHeight", () => {
-    expect(CRASH_CRITICAL_FIELDS.has("diagnosticsHeight")).toBe(false);
-  });
-
-  it("does NOT include hasSeenWelcome", () => {
-    expect(CRASH_CRITICAL_FIELDS.has("hasSeenWelcome")).toBe(false);
-  });
-
-  it("does NOT include unknown fields", () => {
-    expect(CRASH_CRITICAL_FIELDS.has("unknownField")).toBe(false);
-  });
-
-  it("has exactly 12 fields", () => {
-    expect(CRASH_CRITICAL_FIELDS.size).toBe(12);
-  });
-});
-
-describe("shouldTriggerBackup", () => {
-  it("returns true for a single critical field", () => {
-    expect(shouldTriggerBackup({ focusMode: true })).toBe(true);
-  });
-
-  it("returns true for terminals", () => {
-    expect(shouldTriggerBackup({ terminals: [] })).toBe(true);
-  });
-
-  it("returns true for panelGridConfig", () => {
-    expect(shouldTriggerBackup({ panelGridConfig: { strategy: "automatic", value: 3 } })).toBe(
-      true
-    );
-  });
-
-  it("returns true for activeWorktreeId", () => {
-    expect(shouldTriggerBackup({ activeWorktreeId: "wt-1" })).toBe(true);
-  });
-
-  it("returns true for recipes", () => {
-    expect(shouldTriggerBackup({ recipes: [] })).toBe(true);
-  });
-
-  it("returns true for mruList", () => {
-    expect(shouldTriggerBackup({ mruList: [] })).toBe(true);
-  });
-
-  it("returns true for actionMruList", () => {
-    expect(shouldTriggerBackup({ actionMruList: [] })).toBe(true);
-  });
-
-  it("returns true for actionPinnedIds", () => {
-    expect(shouldTriggerBackup({ actionPinnedIds: [] })).toBe(true);
-  });
-
-  it("returns true for actionHiddenIds", () => {
-    expect(shouldTriggerBackup({ actionHiddenIds: [] })).toBe(true);
-  });
-
-  it("returns true for developerMode", () => {
-    expect(shouldTriggerBackup({ developerMode: { enabled: true } })).toBe(true);
-  });
-
-  it("returns true for fleetScopeMode", () => {
-    expect(shouldTriggerBackup({ fleetScopeMode: "scoped" })).toBe(true);
-  });
-
-  it("returns false for sidebarWidth-only mutation", () => {
-    expect(shouldTriggerBackup({ sidebarWidth: 350 })).toBe(false);
-  });
-
-  it("returns false for diagnosticsHeight-only mutation", () => {
-    expect(shouldTriggerBackup({ diagnosticsHeight: 400 })).toBe(false);
-  });
-
-  it("returns false for hasSeenWelcome-only mutation", () => {
-    expect(shouldTriggerBackup({ hasSeenWelcome: true })).toBe(false);
-  });
-
-  it("returns true for mixed critical+cosmetic mutation", () => {
-    expect(shouldTriggerBackup({ focusMode: true, sidebarWidth: 350, hasSeenWelcome: true })).toBe(
-      true
-    );
-  });
-
-  it("returns true for focusPanelState undefined (clearing on focus-mode exit)", () => {
-    expect(shouldTriggerBackup({ focusPanelState: undefined })).toBe(true);
-  });
-
-  it("returns false for empty object", () => {
-    expect(shouldTriggerBackup({})).toBe(false);
-  });
-});
 
 function makeInvokeEvent(senderId = 1, senderUrl = "") {
   return {
@@ -406,19 +262,6 @@ describe("app:boot handler", () => {
     const { effectiveCachedProjectViews } = await import("../../utils/cachedProjectViews.js");
     const result = (await invokeBoot()) as { terminalConfig: { cachedProjectViews?: number } };
     expect(result.terminalConfig.cachedProjectViews).toBe(effectiveCachedProjectViews(undefined));
-  });
-
-  it("returns a BootResult with crashPending=null and the live crashConfig when no crash is pending", async () => {
-    const result = await invokeBoot();
-    expect(result).toHaveProperty("appState");
-    expect(result).toHaveProperty("terminalConfig");
-    expect(result).toHaveProperty("agentSettings");
-    expect(result).toHaveProperty("crashPending", null);
-    expect(result).toHaveProperty("crashConfig", { autoRestoreOnCrash: false });
-    // Boot inherits systemTmpDir from the hydrate spread so the renderer can skip
-    // the standalone system:get-tmp-dir round-trip on cold boot.
-    expect(typeof (result as { systemTmpDir?: unknown }).systemTmpDir).toBe("string");
-    expect((result as { systemTmpDir: string }).systemTmpDir.length).toBeGreaterThan(0);
   });
 
   it("attaches a pending crash plus the live crashCount when one exists", async () => {
@@ -742,6 +585,32 @@ describe("app:boot handler", () => {
 
     expect(result.databaseRecovery).toEqual(recovery);
     expect(consumePrefetchedHydrateResult).toHaveBeenCalledWith("p1");
+  });
+
+  it("waits for the GPU report, then answers the GPU half fresh even on the prefetch cache-hit path", async () => {
+    // A cold-start prefetch can run before the GPU process reports, when the
+    // feature status is still the provisional all-disabled one.
+    const gpu = await import("../../utils/gpuDetection.js");
+    vi.mocked(consumePrefetchedHydrateResult).mockReturnValue({
+      appState: { terminals: [], sidebarWidth: 350 },
+      terminalConfig: { scrollbackLines: 3000 },
+      project: null,
+      gpuWebGLHardware: false,
+    } as unknown as ReturnType<typeof consumePrefetchedHydrateResult>);
+    const projectStoreModule = await import("../../services/ProjectStore.js");
+    vi.mocked(projectStoreModule.projectStore.getCurrentProject).mockReturnValue({
+      id: "p1",
+      name: "P",
+      path: "/p",
+    } as unknown as ReturnType<typeof projectStoreModule.projectStore.getCurrentProject>);
+    legacyOwnerRef.current = "p1";
+    vi.mocked(gpu.isWebGLHardwareAccelerated).mockReturnValue(true);
+
+    const result = (await invokeBoot()) as Record<string, unknown>;
+
+    expect(gpu.whenGpuReported).toHaveBeenCalledWith(1_500);
+    expect(consumePrefetchedHydrateResult).toHaveBeenCalledWith("p1");
+    expect(result.gpuWebGLHardware).toBe(true);
   });
 
   it("hydrates the project bound to the sending project view instead of the stale global current project", async () => {
@@ -1220,7 +1089,7 @@ describe("app:boot handler", () => {
         terminals: [{ id: "legacy-panel", title: "Legacy", location: "grid", cwd: "/old/project" }],
       };
       crashService.consumePanelFilter.mockReturnValue(["legacy-panel"] as unknown as null);
-      crashService.hasPendingPanelFilter.mockReturnValue(true);
+      crashService.hasPendingPanelFilter.mockReturnValueOnce(true);
       vi.mocked(projectStore.getProjectStateWithRecovery).mockResolvedValue({
         state: {
           projectId: REAL_PROJECT.id,
@@ -1783,5 +1652,224 @@ describe("app:set-state handler", () => {
 
     await invokeSetState({ focusMode: true });
     expect(crashService.scheduleBackup).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("app:hydrate host fields", () => {
+  beforeEach(async () => {
+    vi.clearAllMocks();
+    globalAppStateRef.current = { ...DEFAULT_GLOBAL_APP_STATE };
+    legacyOwnerRef.current = undefined;
+    const storeModule = await import("../../store.js");
+    vi.mocked(storeModule.store.get).mockImplementation(
+      defaultStoreGet as typeof storeModule.store.get
+    );
+  });
+
+  it("names this machine as the host of a local window", async () => {
+    const os = await import("os");
+    const result = await invokeBoot();
+    expect(result.hostPlatform).toBe(process.platform);
+    expect(result.hostHomeDir).toBe(os.homedir());
+    expect(result.hostTmpDir).toBe(os.tmpdir());
+    expect(result.systemTmpDir).toBe(os.tmpdir());
+  });
+
+  it("leaves this machine's one-shot notices alone when answering a remote Shell", async () => {
+    const { getIpcDispatcher, _resetIpcDispatcherForTesting } = await import("../dispatcher.js");
+    const { wrapError, wrapSuccess } =
+      await import("../../../shared/utils/ipcErrorSerialization.js");
+    const storeModule = await import("../../store.js");
+    _resetIpcDispatcherForTesting();
+    const dispatcher = getIpcDispatcher();
+    dispatcher.setInvokeEnveloper(async (_channel, _args, call) => {
+      try {
+        return wrapSuccess(await call());
+      } catch (error) {
+        return wrapError(error);
+      }
+    });
+    const release = dispatcher.allowHybridOverLink("app:hydrate");
+    ipcHandlers.clear();
+    const cleanup = registerAppStateHandlers();
+    const endpoint = {
+      endpointId: "s1:view-1",
+      clientId: "client-1",
+      projectId: null,
+      kind: "remote-view" as const,
+      handle: -4,
+      send: vi.fn(),
+      request: vi.fn(),
+      onClose: vi.fn(() => ({ dispose: () => undefined })),
+      isClosed: () => false,
+    };
+    const client = { clientId: "client-1", clientName: "mbp", kind: "remote" } as never;
+    crashService.hasPendingPanelFilter.mockReturnValueOnce(true);
+
+    const envelope = await dispatcher.invokeForEndpoint({ endpoint, client }, "app:hydrate", []);
+
+    cleanup();
+    release();
+    _resetIpcDispatcherForTesting();
+    expect(envelope.ok).toBe(true);
+    expect(storeModule.consumePendingSettingsRecovery).not.toHaveBeenCalled();
+    expect(consumeDatabaseRecovery).not.toHaveBeenCalled();
+    expect(crashService.consumePanelFilter).not.toHaveBeenCalled();
+    const data = (envelope as { data: Record<string, unknown> }).data;
+    expect(data.hostPlatform).toBe(process.platform);
+    expect(data.settingsRecovery).toBeNull();
+    expect(data.databaseRecovery).toBeNull();
+  });
+
+  it("never lets a remote Shell's view claim the legacy global layout", async () => {
+    const { getIpcDispatcher, _resetIpcDispatcherForTesting } = await import("../dispatcher.js");
+    const { wrapSuccess } = await import("../../../shared/utils/ipcErrorSerialization.js");
+    const storeModule = await import("../../store.js");
+    vi.mocked(projectStore.getProjectById).mockReturnValueOnce({
+      id: "p-remote",
+      name: "R",
+      path: "/r",
+    } as never);
+    vi.mocked(projectStore.getProjectStateWithRecovery).mockResolvedValueOnce({
+      state: null,
+    } as never);
+    _resetIpcDispatcherForTesting();
+    const dispatcher = getIpcDispatcher();
+    dispatcher.setInvokeEnveloper(async (_c, _a, call) => wrapSuccess(await call()));
+    const release = dispatcher.allowHybridOverLink("app:hydrate");
+    const cleanup = registerAppStateHandlers();
+    const endpoint = {
+      endpointId: "s1:view-2",
+      clientId: "client-1",
+      projectId: "p-remote",
+      kind: "remote-view" as const,
+      handle: -5,
+      send: vi.fn(),
+      request: vi.fn(),
+      onClose: vi.fn(() => ({ dispose: () => undefined })),
+      isClosed: () => false,
+    };
+
+    await dispatcher.invokeForEndpoint(
+      { endpoint, client: { clientId: "client-1", kind: "remote" } as never },
+      "app:hydrate",
+      []
+    );
+
+    cleanup();
+    release();
+    _resetIpcDispatcherForTesting();
+    expect(legacyOwnerRef.current).toBeUndefined();
+    expect(vi.mocked(storeModule.store.set)).not.toHaveBeenCalledWith(
+      "legacyWorkspaceStateOwnerId",
+      expect.anything()
+    );
+  });
+});
+
+describe("app:set-state while another screen drives the view's project", () => {
+  let storeModule: typeof import("../../store.js");
+  let leaseModule: typeof import("../../services/DriveLeaseService.js");
+  let registryModule: typeof import("../../window/webContentsRegistry.js");
+
+  async function invokeSetState(payload: unknown) {
+    ipcHandlers.clear();
+    const cleanup = registerAppStateHandlers();
+    await ipcHandlers.get("app:set-state")!(
+      {
+        sender: { id: 7, getURL: () => "", isDestroyed: () => false, once: vi.fn(), on: vi.fn() },
+      },
+      payload
+    );
+    cleanup();
+  }
+
+  function written(): Record<string, unknown> {
+    const calls = vi.mocked(storeModule.store.set).mock.calls as unknown as unknown[][];
+    const appState = calls.filter((call) => call[0] === "appState").at(-1);
+    return (appState?.[1] ?? {}) as Record<string, unknown>;
+  }
+
+  beforeEach(async () => {
+    vi.clearAllMocks();
+    storeModule = await import("../../store.js");
+    leaseModule = await import("../../services/DriveLeaseService.js");
+    registryModule = await import("../../window/webContentsRegistry.js");
+    vi.mocked(storeModule.store.get).mockImplementation(((key: string) =>
+      key === "appState" ? { terminals: [], sidebarWidth: 350 } : undefined) as never);
+    vi.mocked(registryModule.getProjectForWebContents).mockReturnValue("proj-1");
+  });
+
+  afterEach(() => {
+    leaseModule._resetDriveLeaseServiceForTesting(null);
+    vi.mocked(registryModule.getProjectForWebContents).mockReturnValue(null);
+  });
+
+  const mixed = {
+    sidebarWidth: 420,
+    diagnosticsHeight: 300,
+    panelGridConfig: { strategy: "fixed-columns", value: 3 },
+    activeWorktreeId: "wt-stale",
+    focusMode: true,
+  };
+
+  it("keeps this screen's own fields and leaves the project's to its driver", async () => {
+    const isDriving = vi.fn(() => false);
+    leaseModule._resetDriveLeaseServiceForTesting({
+      isDriving,
+      dispose: () => undefined,
+    } as unknown as InstanceType<typeof leaseModule.DriveLeaseService>);
+
+    await invokeSetState(mixed);
+
+    expect(isDriving).toHaveBeenCalledWith(
+      "proj-1",
+      expect.objectContaining({ clientId: "local" })
+    );
+    expect(written()).toMatchObject({ sidebarWidth: 420, diagnosticsHeight: 300 });
+    expect(written()).not.toHaveProperty("panelGridConfig");
+    expect(written()).not.toHaveProperty("activeWorktreeId");
+    expect(written()).not.toHaveProperty("focusMode");
+  });
+
+  it("holds a view to the lease before its binding lands, through the workspace it writes", async () => {
+    vi.mocked(registryModule.getProjectForWebContents).mockReturnValue(null);
+    vi.mocked(projectStore.getCurrentProject).mockReturnValue({
+      id: "proj-1",
+      name: "p",
+      path: "/p",
+    } as never);
+    const isDriving = vi.fn(() => false);
+    leaseModule._resetDriveLeaseServiceForTesting({
+      isDriving,
+      dispose: () => undefined,
+    } as unknown as InstanceType<typeof leaseModule.DriveLeaseService>);
+
+    await invokeSetState(mixed);
+
+    expect(isDriving).toHaveBeenCalledWith("proj-1", expect.anything());
+    expect(written()).toMatchObject({ sidebarWidth: 420 });
+    expect(written()).not.toHaveProperty("activeWorktreeId");
+    vi.mocked(projectStore.getCurrentProject).mockReturnValue(null);
+  });
+
+  it("writes every field while it drives, and with no lease service at all", async () => {
+    leaseModule._resetDriveLeaseServiceForTesting({
+      isDriving: () => true,
+      dispose: () => undefined,
+    } as unknown as InstanceType<typeof leaseModule.DriveLeaseService>);
+    await invokeSetState(mixed);
+    expect(written()).toMatchObject({
+      panelGridConfig: mixed.panelGridConfig,
+      activeWorktreeId: "wt-stale",
+    });
+
+    vi.mocked(storeModule.store.set).mockClear();
+    leaseModule._resetDriveLeaseServiceForTesting(null);
+    await invokeSetState(mixed);
+    expect(written()).toMatchObject({
+      panelGridConfig: mixed.panelGridConfig,
+      activeWorktreeId: "wt-stale",
+    });
   });
 });

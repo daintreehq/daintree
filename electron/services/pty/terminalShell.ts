@@ -1,7 +1,15 @@
 // eager-import-allow: resolves the login shell via a sync fs check
 import { existsSync } from "fs";
-import { execFileSync } from "child_process";
 import { isPowerShellShell } from "../../../shared/utils/shellEscape.js";
+import {
+  isWindowsAbsolutePath,
+  isWindowsLaunchFileAsync,
+  lookupWindowsExecutable,
+  windowsEnvValue,
+  windowsExecutableCacheGeneration,
+  windowsPathEntriesReadable,
+  windowsSystemTool,
+} from "../../utils/windowsExecutable.js";
 
 export interface ShellArgsOptions {
   nonInteractive?: boolean;
@@ -16,39 +24,177 @@ function shellQuote(value: string): string {
   return `'${value.replace(/'/g, "'\\''")}'`;
 }
 
-// Which PowerShell is on PATH is a process-lifetime constant, but
 // `getDefaultShell()` is on the hot path for every terminal spawn and every
-// shell-quoting decision — so an uncached probe ran `where.exe` (twice, when
-// pwsh is absent) per launch, which is where the reporter's 53 `where.exe`
-// spawns came from (#12042). The fallback is memoized too: a machine with
-// neither PowerShell would otherwise keep paying two failed spawns forever.
-// A PATH change now needs an app restart to take effect, which is the right
-// trade for a value read this often.
-let cachedWindowsShell: string | null = null;
-
-export function findWindowsShell(): string {
-  if (cachedWindowsShell !== null) return cachedWindowsShell;
-  cachedWindowsShell = probeWindowsShell();
-  return cachedWindowsShell;
+// shell-quoting decision, and is synchronous, while finding PowerShell 7 means
+// searching PATH, whose entries can include a network share that takes the SMB
+// timeout to fail. So the search runs asynchronously, at startup and again
+// whenever PATH changes or is re-read, and its answer is memoized (an uncached
+// `where.exe` probe is where the reporter's 53 `where.exe` spawns came from,
+// #12042). Until the first answer lands the in-box Windows PowerShell is used,
+// by absolute path and without looking at the disk.
+interface ResolvedWindowsShell {
+  shell: string;
+  stamp: string;
+  /** The PATH it was resolved against. */
+  path: string;
+  /**
+   * Reached past PATH entries that did not answer, so one of them may hold an
+   * earlier PowerShell; resolved again once one of them can be read.
+   */
+  skipped: string[];
+  /** Set when a skipped entry answers again: the next read resolves afresh. */
+  recheck: boolean;
 }
 
-function probeWindowsShell(): string {
-  for (const shell of ["pwsh.exe", "powershell.exe"]) {
-    try {
-      // windowsHide: libuv only sets CREATE_NO_WINDOW when the flag is passed,
-      // so without it this probe flashes a console window.
-      execFileSync("where", [shell], { stdio: "ignore", timeout: 3000, windowsHide: true });
-      return shell;
-    } catch {
-      // not on PATH or timed out, try next
-    }
+// A provisional answer is re-resolved at most this many times per PATH, so a
+// share that stays dead is not polled forever on the shell's behalf.
+const MAX_PROVISIONAL_RECHECKS = 3;
+
+let windowsShell: ResolvedWindowsShell | null = null;
+let windowsShellProbe: { stamp: string; promise: Promise<string> } | null = null;
+let provisionalRechecks: { stamp: string; count: number } | null = null;
+
+/** What a resolved shell was resolved against: the PATH, and the resolver cache's generation. */
+function windowsShellStamp(env: NodeJS.ProcessEnv): string {
+  return `${windowsExecutableCacheGeneration()}\0${windowsEnvValue(env, "PATH") ?? ""}`;
+}
+
+function isSettledFor(resolved: ResolvedWindowsShell | null, stamp: string): boolean {
+  return resolved?.stamp === stamp && !resolved.recheck;
+}
+
+/**
+ * The Windows default shell, never blocking: the last resolved answer, or the
+ * in-box Windows PowerShell before the first one. A stale answer (PATH changed
+ * or was re-read since) is still returned, and starts a fresh resolution.
+ */
+export function findWindowsShell(): string {
+  if (windowsShell && isSettledFor(windowsShell, windowsShellStamp(process.env))) {
+    return windowsShell.shell;
   }
-  return process.env.COMSPEC || "cmd.exe";
+  void prewarmWindowsShell();
+  return windowsShell?.shell ?? windowsSystemTool("powershell.exe");
+}
+
+/**
+ * Resolve the Windows default shell for the current PATH, once per PATH: what
+ * `findWindowsShell` returns from then on. Startup calls it so the first
+ * terminal already gets PowerShell 7 when PATH has it.
+ */
+export function prewarmWindowsShell(env: NodeJS.ProcessEnv = process.env): Promise<string> {
+  // A snapshot: PATH can be replaced while the search runs, and the answer must
+  // describe the PATH its stamp names.
+  const snapshot = { ...env };
+  const stamp = windowsShellStamp(snapshot);
+  if (windowsShell && isSettledFor(windowsShell, stamp)) return Promise.resolve(windowsShell.shell);
+  if (windowsShellProbe?.stamp === stamp) return windowsShellProbe.promise;
+  const promise: Promise<string> = probeWindowsShell(snapshot)
+    .catch(() => ({ shell: windowsSystemTool("powershell.exe", snapshot), skipped: [] }))
+    .then(({ shell, skipped }) => {
+      // Only the newest probe publishes. One a later PATH superseded may finish
+      // after it, and must not put its answer over the newer one.
+      if (windowsShellProbe?.promise !== promise) return shell;
+      windowsShellProbe = null;
+      const resolved: ResolvedWindowsShell = {
+        shell,
+        stamp,
+        path: windowsEnvValue(snapshot, "PATH") ?? "",
+        skipped,
+        recheck: false,
+      };
+      windowsShell = resolved;
+      if (skipped.length > 0) recheckWhenReadable(resolved);
+      return shell;
+    });
+  windowsShellProbe = { stamp, promise };
+  return promise;
+}
+
+/**
+ * A provisional answer is resolved again as soon as one of the PATH entries it
+ * went past can be read (its slow call returned, or its retry window passed),
+ * so PowerShell 7 on a share that was only slow is picked up without waiting
+ * for the next PATH change.
+ */
+function recheckWhenReadable(resolved: ResolvedWindowsShell): void {
+  if (provisionalRechecks?.stamp !== resolved.stamp) {
+    provisionalRechecks = { stamp: resolved.stamp, count: 0 };
+  }
+  const rechecks = provisionalRechecks;
+  if (rechecks.count >= MAX_PROVISIONAL_RECHECKS) return;
+  rechecks.count++;
+  void windowsPathEntriesReadable(resolved.skipped).then(() => {
+    if (windowsShell !== resolved) return;
+    resolved.recheck = true;
+    // Against the PATH in force now: if it changed meanwhile, that answer is
+    // the one wanted anyway.
+    void prewarmWindowsShell();
+  });
+}
+
+/**
+ * Wait, at most `maxWaitMs`, until the default shell has an answer for the
+ * current PATH, for a caller about to use it for something it cannot change
+ * afterwards (the shell a command launch runs in). Returns at once when the
+ * answer is already settled for this PATH, or when it is provisional with
+ * nothing in flight that could improve it; only a PATH it has not been
+ * resolved against yet (startup, a PATH that just changed) or a re-check under
+ * way is waited for. Never rejects.
+ */
+export async function waitForWindowsShell(maxWaitMs: number): Promise<void> {
+  if (process.platform !== "win32") return;
+  const currentPath = windowsEnvValue(process.env, "PATH") ?? "";
+  const resolved = windowsShell;
+  if (resolved && resolved.path === currentPath && !resolved.recheck) {
+    // A re-read of the same PATH (a new cache generation) is re-resolved in
+    // the background, as `findWindowsShell` would.
+    if (resolved.stamp !== windowsShellStamp(process.env)) void prewarmWindowsShell();
+    return;
+  }
+  let timer: NodeJS.Timeout | undefined;
+  try {
+    await Promise.race([
+      prewarmWindowsShell().catch(() => undefined),
+      new Promise<void>((resolve) => {
+        timer = setTimeout(resolve, maxWaitMs);
+        timer.unref?.();
+      }),
+    ]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/**
+ * Always an absolute path: PowerShell 7 or Windows PowerShell from PATH, then
+ * the in-box Windows PowerShell, then cmd.exe. Looked up in PATH only, so a
+ * same-named file in the directory Daintree was started from is never chosen.
+ * `skipped` lists the PATH entries the deciding lookups went past without an
+ * answer; any makes the answer provisional.
+ */
+async function probeWindowsShell(
+  env: NodeJS.ProcessEnv
+): Promise<{ shell: string; skipped: string[] }> {
+  const [pwsh, powershell] = await Promise.all(
+    ["pwsh.exe", "powershell.exe"].map((shell) => lookupWindowsExecutable(shell, env))
+  );
+  if (pwsh.file) return { shell: pwsh.file, skipped: pwsh.skipped };
+  const skipped = [...new Set([...pwsh.skipped, ...powershell.skipped])];
+  if (powershell.file) return { shell: powershell.file, skipped };
+  const inbox = windowsSystemTool("powershell.exe", env);
+  if (await isWindowsLaunchFileAsync(inbox)) return { shell: inbox, skipped };
+  const comspec = windowsEnvValue(env, "COMSPEC");
+  return {
+    shell: comspec && isWindowsAbsolutePath(comspec) ? comspec : windowsSystemTool("cmd.exe", env),
+    skipped,
+  };
 }
 
 /** Test-only: drop the memoized Windows shell so a case can re-probe. */
 export function resetWindowsShellCache(): void {
-  cachedWindowsShell = null;
+  windowsShell = null;
+  windowsShellProbe = null;
+  provisionalRechecks = null;
 }
 
 export function getDefaultShell(): string {

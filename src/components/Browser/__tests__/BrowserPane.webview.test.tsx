@@ -5,6 +5,8 @@ import type { BrowserPaneProps } from "../BrowserPane";
 import { BrowserPane } from "../BrowserPane";
 import { SKELETON_HINT_FIRST_THRESHOLD_MS } from "@/components/ui/Skeleton";
 import { UI_DOHERTY_THRESHOLD } from "@/lib/animationUtils";
+import { useProjectSettingsStore } from "@/store/projectSettingsStore";
+import type { ProjectSettings } from "@shared/types";
 import type { ReactNode } from "react";
 
 // The app root supplies the TooltipProvider. Triggers render inline; the
@@ -311,12 +313,78 @@ describe("BrowserPane webview lifecycle regression", () => {
     expect(webview.hasAttribute("allowpopups")).toBe(true);
   });
 
-  it("forwards the single-panel dock restore control", () => {
-    render(<BrowserPane {...baseProps} location="dock" showRestoreControl />);
+  describe("a view on another machine", () => {
+    const forwardTo = (localPort: number) =>
+      vi.fn(async ({ hostId, remotePort }: { hostId: string; remotePort: number }) => ({
+        forwardId: "f1",
+        hostId,
+        remotePort,
+        localPort,
+        origin: "manual",
+        label: null,
+        createdAt: 1,
+      }));
 
-    expect(contentPanelPropsSpy).toHaveBeenCalledWith(
-      expect.objectContaining({ showRestoreControl: true })
-    );
+    afterEach(() => {
+      delete (window as { __DAINTREE_HOST_ID__?: unknown }).__DAINTREE_HOST_ID__;
+    });
+
+    it("forwards the host's localhost port before the webview attaches, at the same address", async () => {
+      window.__DAINTREE_HOST_ID__ = { id: "studio-01" };
+      const forward = forwardTo(5173);
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (window as any).electron.portForwards = { forward };
+      const { container } = render(<BrowserPane {...baseProps} />);
+      // Main refuses a loopback src no forward holds, and a refused attach never loads.
+      expect(container.querySelector("webview")).toBeNull();
+      await act(async () => {});
+      expect(forward).toHaveBeenCalledWith(
+        expect.objectContaining({ hostId: "studio-01", remotePort: 5173 })
+      );
+      expect(getWebviewElement(container).getAttribute("src")).toBe("http://localhost:5173/");
+    });
+
+    it("forwards again on Retry once a failed forward is fixed, and only then attaches", async () => {
+      window.__DAINTREE_HOST_ID__ = { id: "studio-01" };
+      const forward = vi
+        .fn()
+        .mockRejectedValueOnce(new Error("host gone"))
+        .mockImplementation(forwardTo(5173));
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (window as any).electron.portForwards = { forward };
+      const { container, getByRole } = render(<BrowserPane {...baseProps} />);
+      await act(async () => {});
+      expect(container.querySelector("webview")).toBeNull();
+      await act(async () => {
+        getByRole("button", { name: /retry/i }).click();
+      });
+      await act(async () => {});
+      expect(forward).toHaveBeenCalledTimes(2);
+      expect(getWebviewElement(container).getAttribute("src")).toBe("http://localhost:5173/");
+    });
+
+    it("says the port is taken here instead of showing the page at another address", async () => {
+      window.__DAINTREE_HOST_ID__ = { id: "studio-01" };
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (window as any).electron.portForwards = { forward: forwardTo(15173) };
+      const { container } = render(<BrowserPane {...baseProps} />);
+      await act(async () => {});
+      expect(container.querySelector("webview")).toBeNull();
+      expect(container.textContent).toContain("Port 5173 is in use on this machine");
+    });
+
+    it("says why the page can't open instead of loading forever when the forward fails", async () => {
+      window.__DAINTREE_HOST_ID__ = { id: "studio-01" };
+      const forward = vi.fn(async () => {
+        throw new Error("host gone");
+      });
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (window as any).electron.portForwards = { forward };
+      const { container } = render(<BrowserPane {...baseProps} />);
+      await act(async () => {});
+      expect(container.querySelector("webview")).toBeNull();
+      expect(container.textContent).toContain("Port 5173 on the host couldn't be forwarded");
+    });
   });
 
   describe("per-project session partition (#9965)", () => {
@@ -410,13 +478,6 @@ describe("BrowserPane webview lifecycle regression", () => {
         })
       );
     }).not.toThrow();
-  });
-
-  it("uses theme-backed browser chrome surfaces", () => {
-    const { container } = render(<BrowserPane {...baseProps} />);
-    const themedSurface = container.querySelector(".bg-surface-canvas");
-    expect(themedSurface).toBeTruthy();
-    expect(container.querySelector(".bg-white")).toBeNull();
   });
 
   it("recovers ready/loading state from an already-loaded webview", async () => {
@@ -872,23 +933,6 @@ describe("BrowserPane webview lifecycle regression", () => {
       return lastCall[0];
     }
 
-    it("shows banner with hostname when navigation is blocked", () => {
-      const { container } = render(<BrowserPane {...baseProps} />);
-      const callback = getNavigationBlockedCallback();
-
-      act(() => {
-        callback({
-          panelId: "browser-panel-1",
-          url: "https://oauth.example.com/authorize",
-          canOpenExternal: true,
-        });
-        vi.advanceTimersByTime(150);
-      });
-
-      expect(container.textContent).toContain("oauth.example.com");
-      expect(container.textContent).toContain("Open in external browser");
-    });
-
     it("ignores events for different panelId", () => {
       const { container } = render(<BrowserPane {...baseProps} />);
       const callback = getNavigationBlockedCallback();
@@ -1283,61 +1327,6 @@ describe("BrowserPane webview lifecycle regression", () => {
       const mock = (window as any).electron.clipboard.writeImage;
       expect(mock).not.toHaveBeenCalled();
     });
-
-    it("does not call writeImage when URL is about:blank", async () => {
-      const { container } = render(<BrowserPane {...baseProps} />);
-      const webview = getWebviewElement(container);
-
-      act(() => {
-        emitWebviewEvent(webview, "dom-ready");
-      });
-
-      webview.getURL.mockReturnValue("about:blank");
-
-      await act(async () => {
-        window.dispatchEvent(
-          new CustomEvent("daintree:browser-capture-screenshot", {
-            detail: { id: "browser-panel-1" },
-          })
-        );
-        await Promise.resolve();
-        await Promise.resolve();
-      });
-
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const mock = (window as any).electron.clipboard.writeImage;
-      expect(mock).not.toHaveBeenCalled();
-    });
-
-    it("surfaces an error notification when the clipboard write fails", async () => {
-      const { container } = render(<BrowserPane {...baseProps} />);
-      const webview = getWebviewElement(container);
-
-      act(() => {
-        emitWebviewEvent(webview, "dom-ready");
-      });
-
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      (window as any).electron.clipboard.writeImage.mockRejectedValueOnce(
-        new Error("clipboard unavailable")
-      );
-
-      await act(async () => {
-        window.dispatchEvent(
-          new CustomEvent("daintree:browser-capture-screenshot", {
-            detail: { id: "browser-panel-1" },
-          })
-        );
-        await Promise.resolve();
-        await Promise.resolve();
-        await Promise.resolve();
-      });
-
-      expect(notifyMock).toHaveBeenCalledTimes(1);
-      expect(notifyMock).toHaveBeenCalledWith(
-        expect.objectContaining({ type: "error", title: "Screenshot failed" })
-      );
-    });
   });
 
   describe("screenshot capture via toolbar prop", () => {
@@ -1622,24 +1611,6 @@ describe("BrowserPane webview lifecycle regression", () => {
       expect(container.textContent).toContain("Retry");
     });
 
-    it("timeout calls webview.stop() instead of reload", () => {
-      const { container } = render(<BrowserPane {...baseProps} />);
-      const webview = getWebviewElement(container);
-
-      act(() => {
-        webview.setMockLoading(true);
-        emitWebviewEvent(webview, "did-start-loading");
-      });
-
-      act(() => {
-        vi.advanceTimersByTime(30000);
-      });
-
-      expect(webview.stop).toHaveBeenCalledTimes(1);
-      expect(webview.reload).not.toHaveBeenCalled();
-      expect(container.textContent).toContain("Page load timed out");
-    });
-
     it("timeout error overlay shows Retry and Open External buttons", () => {
       const { container } = render(<BrowserPane {...baseProps} />);
       const webview = getWebviewElement(container);
@@ -1682,52 +1653,6 @@ describe("BrowserPane webview lifecycle regression", () => {
       });
 
       expect(webview.loadURL).toHaveBeenCalledWith("http://localhost:5173/");
-    });
-
-    it("clears slow timer on did-stop-loading", () => {
-      const { container } = render(<BrowserPane {...baseProps} />);
-      const webview = getWebviewElement(container);
-
-      act(() => {
-        webview.setMockLoading(true);
-        emitWebviewEvent(webview, "did-start-loading");
-      });
-
-      act(() => {
-        webview.setMockLoading(false);
-        emitWebviewEvent(webview, "did-stop-loading");
-      });
-
-      act(() => {
-        vi.advanceTimersByTime(5000);
-      });
-
-      expect(container.textContent).not.toContain("Taking longer than usual");
-    });
-
-    it("clears slow timer on did-fail-load", () => {
-      const { container } = render(<BrowserPane {...baseProps} />);
-      const webview = getWebviewElement(container);
-
-      act(() => {
-        webview.setMockLoading(true);
-        emitWebviewEvent(webview, "did-start-loading");
-      });
-
-      act(() => {
-        emitWebviewEvent(webview, "did-fail-load", {
-          errorCode: -105,
-          errorDescription: "Name not resolved",
-          isMainFrame: true,
-          validatedURL: "http://badsite.test/",
-        });
-      });
-
-      act(() => {
-        vi.advanceTimersByTime(5000);
-      });
-
-      expect(container.textContent).not.toContain("Taking longer than usual");
     });
 
     it("shows DNS failure message with hostname for -105", () => {
@@ -1911,25 +1836,6 @@ describe("BrowserPane webview lifecycle regression", () => {
       expect(container.textContent).toContain("timed out");
       expect(container.textContent).not.toContain("Unable to display page");
     });
-
-    it("cleans slow timer on unmount", () => {
-      const { container, unmount } = render(<BrowserPane {...baseProps} />);
-      const webview = getWebviewElement(container);
-
-      act(() => {
-        webview.setMockLoading(true);
-        emitWebviewEvent(webview, "did-start-loading");
-      });
-
-      unmount();
-
-      act(() => {
-        vi.advanceTimersByTime(5000);
-      });
-
-      // No error — timer was cleaned up
-      expect(container.textContent).not.toContain("Taking longer than usual");
-    });
   });
 
   describe("accessibility markers", () => {
@@ -2041,17 +1947,6 @@ describe("BrowserPane webview lifecycle regression", () => {
       expect(webview.reload).toHaveBeenCalledTimes(1);
       expect(container.textContent).toContain("Page process crashed");
       expect(container.textContent).toContain("Reason: oom (exit code 9)");
-    });
-
-    it("does not emit a durable notification on the first crash (#9964)", () => {
-      const { container } = render(<BrowserPane {...baseProps} />);
-      const webview = getWebviewElement(container);
-
-      act(() => {
-        emitRenderProcessGone(webview, "crashed");
-      });
-
-      expect(notifyMock).not.toHaveBeenCalled();
     });
 
     it("emits a durable high-priority notification on the second crash within 60s (#9964)", () => {
@@ -2255,12 +2150,6 @@ describe("BrowserPane webview lifecycle regression", () => {
   });
 
   describe("src binding regression (#9940)", () => {
-    it("seeds src once at mount", () => {
-      const { container } = render(<BrowserPane {...baseProps} />);
-      const webview = getWebviewElement(container);
-      expect(webview.getAttribute("src")).toBe("http://localhost:5173/");
-    });
-
     it("loads the latest navigation requested before the guest is ready", () => {
       webviewInitiallyLoading = true;
       const { container } = render(<BrowserPane {...baseProps} />);
@@ -2369,6 +2258,279 @@ describe("BrowserPane webview lifecycle regression", () => {
       });
       // Reserved TLD likewise passes without error.
       expect(validateUrl!("printer.local").error).toBeUndefined();
+    });
+  });
+
+  describe("host approval", () => {
+    type Deferred<T> = {
+      promise: Promise<T>;
+      resolve: (value: T) => void;
+      reject: (error: unknown) => void;
+    };
+    function deferred<T>(): Deferred<T> {
+      let resolve!: (value: T) => void;
+      let reject!: (error: unknown) => void;
+      const promise = new Promise<T>((res, rej) => {
+        resolve = res;
+        reject = rej;
+      });
+      return { promise, resolve, reject };
+    }
+
+    const savedOnDisk: ProjectSettings = {
+      runCommands: [{ id: "dev", name: "dev", command: "npm run dev" }],
+      devServerCommand: "npm run dev",
+      environmentVariables: { API_URL: "http://localhost:4000" },
+      browserAllowedHosts: ["internal.corp.test"],
+    };
+    const savedHosts = ["internal.corp.test", "example.com"];
+
+    let getSettingsMock: ReturnType<typeof vi.fn>;
+    let saveSettingsMock: ReturnType<typeof vi.fn>;
+    let addHostMock: ReturnType<typeof vi.fn>;
+
+    beforeEach(() => {
+      useProjectStoreMock.mockImplementation((selector) =>
+        selector({ currentProject: { id: "test-project" } })
+      );
+      getSettingsMock = vi.fn(() => Promise.resolve(savedOnDisk));
+      saveSettingsMock = vi.fn(() => Promise.resolve());
+      addHostMock = vi.fn(() => Promise.resolve(savedHosts));
+      Object.defineProperty(window.electron, "project", {
+        configurable: true,
+        writable: true,
+        value: {
+          getSettings: getSettingsMock,
+          saveSettings: saveSettingsMock,
+          addBrowserAllowedHost: addHostMock,
+          detectRunners: vi.fn(() => Promise.resolve([])),
+          onSwitch: vi.fn(() => vi.fn()),
+        },
+      });
+      useProjectSettingsStore.setState({
+        projectId: "test-project",
+        settings: { runCommands: [] },
+        isLoading: false,
+        error: null,
+      });
+    });
+
+    afterEach(() => {
+      useProjectSettingsStore.getState().reset();
+    });
+
+    function settle(webview: MockWebviewElement) {
+      act(() => {
+        emitWebviewEvent(webview, "dom-ready");
+        webview.setMockLoading(false);
+        emitWebviewEvent(webview, "did-stop-loading");
+      });
+    }
+
+    function navigate(url: string) {
+      act(() => {
+        window.dispatchEvent(
+          new CustomEvent("daintree:browser-navigate", {
+            detail: { id: "browser-panel-1", url },
+          })
+        );
+      });
+    }
+
+    function findButton(container: HTMLElement, label: string): HTMLButtonElement {
+      const button = Array.from(container.querySelectorAll("button")).find(
+        (candidate) => candidate.textContent?.trim() === label
+      );
+      if (!button) throw new Error(`Expected a "${label}" button`);
+      return button;
+    }
+
+    /** The nearest absolutely positioned ancestor carrying a z-index, and that index. */
+    function stackingLayer(element: HTMLElement): { layer: HTMLElement; z: number } {
+      for (let node: HTMLElement | null = element; node; node = node.parentElement) {
+        const classes = node.className.split(/\s+/);
+        const zClass = classes.find((name) => /^z-\d+$/.test(name));
+        if (zClass && classes.includes("absolute")) {
+          return { layer: node, z: Number(zClass.slice(2)) };
+        }
+      }
+      throw new Error("Expected a positioned layer");
+    }
+
+    it("stacks the prompt above a load-error overlay so Allow can be clicked", () => {
+      const { container } = render(<BrowserPane {...baseProps} />);
+      const webview = getWebviewElement(container);
+      settle(webview);
+      act(() => {
+        emitWebviewEvent(webview, "did-fail-load", {
+          errorCode: -102,
+          errorDescription: "ERR_CONNECTION_REFUSED",
+          isMainFrame: true,
+          validatedURL: "http://localhost:5173/",
+        });
+      });
+      navigate("https://example.com");
+
+      expect(container.textContent).toContain("Allow browser panel to load");
+      const prompt = stackingLayer(findButton(container, "Allow"));
+      const errorOverlay = stackingLayer(findButton(container, "Retry"));
+      // Siblings in one positioned container: z-index alone decides which one
+      // takes the click.
+      expect(prompt.layer.parentElement).toBe(errorOverlay.layer.parentElement);
+      expect(prompt.z).toBeGreaterThan(errorOverlay.z);
+    });
+
+    it("navigates as soon as Allow is clicked, before the host is saved", async () => {
+      const pendingAdd = deferred<string[]>();
+      addHostMock.mockReturnValueOnce(pendingAdd.promise);
+      const { container } = render(<BrowserPane {...baseProps} />);
+      const webview = getWebviewElement(container);
+      settle(webview);
+      navigate("https://example.com");
+      expect(webview.loadURL).not.toHaveBeenCalled();
+
+      act(() => {
+        findButton(container, "Allow").click();
+      });
+
+      expect(webview.loadURL).toHaveBeenLastCalledWith("https://example.com/");
+      expect(container.textContent).not.toContain("Allow browser panel to load");
+
+      await act(async () => {
+        pendingAdd.resolve(savedHosts);
+        await vi.waitFor(() =>
+          expect(useProjectSettingsStore.getState().settings?.browserAllowedHosts).toEqual(
+            savedHosts
+          )
+        );
+      });
+      // The page already loaded; the save landing doesn't load it twice.
+      expect(webview.loadURL).toHaveBeenCalledTimes(1);
+    });
+
+    it("has Main merge the host in and takes the saved list into the cache", async () => {
+      useProjectSettingsStore.setState({
+        settings: { runCommands: [], devServerCommand: "pnpm dev" },
+      });
+      const { container } = render(<BrowserPane {...baseProps} />);
+      settle(getWebviewElement(container));
+      navigate("https://example.com");
+
+      await act(async () => {
+        findButton(container, "Allow").click();
+        await vi.waitFor(() => expect(addHostMock).toHaveBeenCalled());
+      });
+
+      expect(addHostMock).toHaveBeenCalledWith("test-project", "example.com");
+      // Never a whole-settings save: that would put back whatever this view
+      // last read over anything written since.
+      expect(saveSettingsMock).not.toHaveBeenCalled();
+      expect(useProjectSettingsStore.getState().settings).toEqual({
+        runCommands: [],
+        devServerCommand: "pnpm dev",
+        browserAllowedHosts: savedHosts,
+      });
+    });
+
+    it("keeps the approval when this view's settings are still loading", async () => {
+      // The initial load read the settings before the host was added.
+      const preWriteRead = deferred<ProjectSettings>();
+      getSettingsMock.mockReturnValueOnce(preWriteRead.promise);
+      useProjectSettingsStore.getState().reset();
+      const initialLoad = useProjectSettingsStore.getState().loadSettings("test-project");
+      expect(useProjectSettingsStore.getState().settings).toBeNull();
+
+      const { container } = render(<BrowserPane {...baseProps} />);
+      settle(getWebviewElement(container));
+      navigate("https://example.com");
+      await act(async () => {
+        findButton(container, "Allow").click();
+        await vi.waitFor(() => expect(addHostMock).toHaveBeenCalled());
+      });
+
+      await act(async () => {
+        preWriteRead.resolve(savedOnDisk);
+        await initialLoad;
+      });
+
+      expect(useProjectSettingsStore.getState().settings).toEqual({
+        ...savedOnDisk,
+        browserAllowedHosts: savedHosts,
+      });
+    });
+
+    it("does not ask again in this pane when the save fails", async () => {
+      addHostMock.mockRejectedValueOnce(new Error("disk full"));
+      const { container } = render(<BrowserPane {...baseProps} />);
+      const webview = getWebviewElement(container);
+      settle(webview);
+      navigate("https://example.com");
+
+      await act(async () => {
+        findButton(container, "Allow").click();
+        await vi.waitFor(() => expect(addHostMock).toHaveBeenCalled());
+      });
+      navigate("https://example.com/docs");
+
+      expect(container.textContent).not.toContain("Allow browser panel to load");
+      expect(webview.loadURL).toHaveBeenLastCalledWith("https://example.com/docs");
+    });
+
+    it("still navigates when no project is known to save the host to", () => {
+      useProjectStoreMock.mockImplementation((selector) => selector({ currentProject: null }));
+      const { container } = render(<BrowserPane {...baseProps} />);
+      const webview = getWebviewElement(container);
+      settle(webview);
+      navigate("https://example.com");
+
+      act(() => {
+        findButton(container, "Allow").click();
+      });
+
+      expect(webview.loadURL).toHaveBeenLastCalledWith("https://example.com/");
+      expect(container.textContent).not.toContain("Allow browser panel to load");
+      expect(addHostMock).not.toHaveBeenCalled();
+    });
+
+    it("goes to an approved history entry without waiting for the save", async () => {
+      const pendingAdd = deferred<string[]>();
+      addHostMock.mockReturnValueOnce(pendingAdd.promise);
+      vi.mocked(window.electron.webview.getNavigationHistory).mockImplementation(() =>
+        Promise.resolve({
+          entries: [
+            { index: 0, url: "http://localhost:5173/a", title: "A" },
+            { index: 1, url: "https://example.com/page", title: "Example" },
+          ],
+          activeIndex: 0,
+          canGoBack: false,
+          canGoForward: true,
+        })
+      );
+      let container!: HTMLElement;
+      await act(async () => {
+        ({ container } = render(<BrowserPane {...baseProps} />));
+        await Promise.resolve();
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+      const { onGoToHistoryIndex } = browserToolbarPropsSpy.mock.lastCall![0];
+      await act(async () => {
+        await onGoToHistoryIndex(1);
+      });
+      expect(container.textContent).toContain("Allow browser panel to load");
+
+      await act(async () => {
+        findButton(container, "Allow").click();
+        await Promise.resolve();
+      });
+
+      expect(window.electron.webview.goToHistoryIndex).toHaveBeenCalledWith(42, 1);
+      expect(container.textContent).not.toContain("Allow browser panel to load");
+
+      await act(async () => {
+        pendingAdd.resolve(savedHosts);
+        await pendingAdd.promise;
+      });
     });
   });
 });

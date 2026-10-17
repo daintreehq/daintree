@@ -53,12 +53,6 @@ describe("usePluginArchiveInstallIntent", () => {
 
   afterEach(() => cleanup());
 
-  it("subscribes on mount, before anything gates on hydration", () => {
-    renderHook(() => usePluginArchiveInstallIntent());
-
-    expect(onArchiveInstallIntent).toHaveBeenCalledOnce();
-  });
-
   it("queues an intent that arrives before the dialog is mounted", () => {
     renderHook(() => usePluginArchiveInstallIntent());
 

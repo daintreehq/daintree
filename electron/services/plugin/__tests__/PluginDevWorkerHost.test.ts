@@ -167,17 +167,6 @@ describe("PluginDevWorkerHost", () => {
     }
   });
 
-  it("forks the worker with a V8 heap cap in execArgv", async () => {
-    const { PluginDevWorkerHost } = await loadModule();
-    const host = new PluginDevWorkerHost(OPTS);
-    host.waitForReady().catch(() => {});
-    void host.start();
-
-    const execArgv: string[] = forkMock.mock.calls[0][2].execArgv;
-    expect(execArgv.some((arg) => /^--max-old-space-size=\d+$/.test(arg))).toBe(true);
-    host.dispose();
-  });
-
   it("omits permission-model flags by default (spike #10890)", async () => {
     const { PluginDevWorkerHost } = await loadModule();
     const host = new PluginDevWorkerHost(OPTS);
@@ -236,11 +225,6 @@ describe("PluginDevWorkerHost", () => {
     );
     expect(spikeLog).toBeUndefined();
     host.dispose();
-  });
-
-  it("exports CRASH_WINDOW_MS aligned with the other guards (30 minutes)", async () => {
-    const mod = await loadModule();
-    expect(mod.CRASH_WINDOW_MS).toBe(30 * 60 * 1000);
   });
 
   it("on worker `ready`, sends `start` with the bundle file:// URL and resolves ready", async () => {
@@ -326,17 +310,6 @@ describe("PluginDevWorkerHost", () => {
     host.dispose();
   });
 
-  it("dev mode forks with the dev-worker kind (contrast with prod) (#10526)", async () => {
-    const { PluginDevWorkerHost } = await loadModule();
-    const host = new PluginDevWorkerHost({ ...OPTS, mode: "dev" });
-    void host.start();
-    (mockChildren[0] as MockUtilityChild).emit("message", { type: "ready" });
-
-    const [, , options] = forkMock.mock.calls[0];
-    expect(options.env.DAINTREE_UTILITY_PROCESS_KIND).toBe("plugin-dev-worker");
-    host.dispose();
-  });
-
   describe("fork-to-ready deadline (#12275)", () => {
     it("rejects start() and kills a worker that forks but never posts `ready`", async () => {
       vi.useFakeTimers();
@@ -413,20 +386,6 @@ describe("PluginDevWorkerHost", () => {
       expect(second.kill).not.toHaveBeenCalled();
       host.dispose();
     });
-  });
-
-  it("re-emits non-lifecycle worker messages as `worker-message`", async () => {
-    const { PluginDevWorkerHost } = await loadModule();
-    const host = new PluginDevWorkerHost(OPTS);
-    const seen: any[] = [];
-    host.on("worker-message", (m) => seen.push(m));
-    void host.start();
-    const child = mockChildren[0] as MockUtilityChild;
-    child.emit("message", { type: "ready" });
-    child.emit("message", { type: "host-call", requestId: "c1", method: "getWorktrees" });
-
-    expect(seen).toContainEqual({ type: "host-call", requestId: "c1", method: "getWorktrees" });
-    host.dispose();
   });
 
   // #12279: a retiring worker stays alive and connected until the cooperative

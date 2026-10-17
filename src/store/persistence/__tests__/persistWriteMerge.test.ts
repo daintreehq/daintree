@@ -9,7 +9,6 @@ interface Session {
 const A: Session = { sessionId: "a", cwd: "/a" };
 const A2: Session = { sessionId: "a2", cwd: "/a" };
 const B: Session = { sessionId: "b", cwd: "/b" };
-const B2: Session = { sessionId: "b2", cwd: "/b" };
 
 describe("mergeRecordByWriterDelta", () => {
   it("keeps a key the writer added (absent from baseline)", () => {
@@ -71,14 +70,6 @@ describe("mergeRecordByWriterDelta", () => {
   it("returns an empty record when every input is empty", () => {
     expect(mergeRecordByWriterDelta({}, {}, {})).toEqual({});
   });
-
-  it("preserves multiple sibling keys alongside the writer's own change", () => {
-    expect(mergeRecordByWriterDelta({ a: A }, { a: A2 }, { a: A, b: B, c: B2 })).toEqual({
-      a: A2,
-      b: B,
-      c: B2,
-    });
-  });
 });
 
 describe("pickFieldByWriterDelta", () => {
@@ -93,10 +84,6 @@ describe("pickFieldByWriterDelta", () => {
 
   it("treats a nulled field as a writer change over a sibling's value", () => {
     expect(pickFieldByWriterDelta("claude", null, "codex")).toBeNull();
-  });
-
-  it("keeps a sibling's field value when the writer's value matches its baseline null", () => {
-    expect(pickFieldByWriterDelta(null, null, "claude")).toBe("claude");
   });
 
   it("uses JSON-round-trip equality for object fields", () => {

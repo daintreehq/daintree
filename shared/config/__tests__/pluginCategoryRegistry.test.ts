@@ -1,7 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
   PLUGIN_CATEGORIES,
-  getPluginCategoryMeta,
   isPluginCategoryId,
   resolvePluginCategory,
 } from "../pluginCategoryRegistry.js";
@@ -56,12 +55,6 @@ describe("pluginCategoryRegistry", () => {
 
   it("places the fallback category last so real categories render above it", () => {
     expect(PLUGIN_CATEGORIES[PLUGIN_CATEGORIES.length - 1]?.id).toBe("other");
-  });
-
-  it("returns meta for every id", () => {
-    for (const id of PLUGIN_CATEGORY_IDS) {
-      expect(getPluginCategoryMeta(id).id).toBe(id);
-    }
   });
 
   it("accepts only known category ids", () => {

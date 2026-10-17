@@ -490,6 +490,64 @@ function validateOnnxRuntime(unpackedPath) {
 }
 
 /**
+ * onnxruntime-node ships every platform's binaries, plus the CUDA and TensorRT
+ * execution providers on Linux (~270 MB). Daintree's only session (Silero VAD
+ * in avr-vad) uses the default CPU provider, so a Linux package needs nothing
+ * but `linux/<arch>` without those two libraries — the rest was ~380 MB of
+ * every Linux download. Linux only: a mac universal build merges per-arch
+ * intermediates that must keep identical file sets.
+ */
+const ONNX_GPU_PROVIDER_LIBS = [
+  "libonnxruntime_providers_cuda.so",
+  "libonnxruntime_providers_tensorrt.so",
+];
+
+function pruneOnnxRuntimeForLinux(unpackedPath, arches) {
+  const moduleDir = path.join(unpackedPath, "node_modules", "onnxruntime-node");
+  if (!fs.existsSync(moduleDir)) return;
+  const binRoot = path.join(moduleDir, "bin");
+  const napiDirs = fs.existsSync(binRoot) ? fs.readdirSync(binRoot) : [];
+  for (const napi of napiDirs) {
+    const napiDir = path.join(binRoot, napi);
+    for (const platform of fs.readdirSync(napiDir)) {
+      const platformDir = path.join(napiDir, platform);
+      if (platform !== "linux") {
+        fs.rmSync(platformDir, { recursive: true, force: true });
+        continue;
+      }
+      for (const arch of fs.readdirSync(platformDir)) {
+        const archDir = path.join(platformDir, arch);
+        if (!arches.includes(arch)) {
+          fs.rmSync(archDir, { recursive: true, force: true });
+          continue;
+        }
+        for (const lib of ONNX_GPU_PROVIDER_LIBS)
+          fs.rmSync(path.join(archDir, lib), { force: true });
+        if (!fs.existsSync(path.join(archDir, "onnxruntime_binding.node"))) {
+          throw new Error(
+            `[afterPack] CRITICAL: onnxruntime binding missing for linux-${arch} at ${archDir}. ` +
+              "Voice VAD segmentation would be disabled."
+          );
+        }
+      }
+    }
+  }
+  // onnxruntime's loader requires exactly this file, so check it per expected
+  // arch: a package missing the whole directory passes the loop above.
+  for (const arch of arches) {
+    const binding = path.join(binRoot, "napi-v6", "linux", arch, "onnxruntime_binding.node");
+    if (!fs.existsSync(binding)) {
+      throw new Error(
+        `[afterPack] CRITICAL: onnxruntime binding missing for linux-${arch} at ${binding}. ` +
+          "Voice VAD segmentation would be disabled."
+      );
+    }
+  }
+  console.log(`[afterPack] onnxruntime-node pruned to linux-${arches.join("/")} (CPU provider)`);
+}
+exports.pruneOnnxRuntimeForLinux = pruneOnnxRuntimeForLinux;
+
+/**
  * Get the path to unpacked resources for the platform
  */
 function getUnpackedResourcesPath(appOutDir, electronPlatformName, appName) {
@@ -501,9 +559,30 @@ function getUnpackedResourcesPath(appOutDir, electronPlatformName, appName) {
 }
 
 /**
+ * Per-platform fuse values on top of `electronFuses` in electron-builder.config.cjs.
+ *
+ * Cookie encryption fetches its key from the OS secret store synchronously on the
+ * main thread whenever the network service starts. On Linux that is libsecret:
+ * with no default keyring yet, or a locked one (autologin), it opens a password
+ * dialog and Daintree shows no window until it's answered, and Cancel reopens it.
+ * Nothing relies on cookie encryption (secrets live in electron-store), so Linux
+ * ships with it off.
+ *
+ * electron-builder flips `config.electronFuses` right after this hook for the same
+ * pack (platformPackager `doPack`: afterPack, then doAddElectronFuses), so setting
+ * the value here holds per platform even when one run packs several.
+ */
+function applyPlatformFuses(packager, electronPlatformName) {
+  const fuses = packager?.config?.electronFuses;
+  if (!fuses) return;
+  fuses.enableCookieEncryption = electronPlatformName !== "linux";
+}
+exports.applyPlatformFuses = applyPlatformFuses;
+
+/**
  * electron-builder afterPack hook.
- * Validates that the node-pty native module is properly unpacked.
- * Fuses are configured via the native electronFuses config in package.json.
+ * Validates that the node-pty native module is properly unpacked, and sets the
+ * per-platform fuse values (see applyPlatformFuses).
  */
 exports.default = async function afterPack(context) {
   const { appOutDir, electronPlatformName, packager } = context;
@@ -511,6 +590,8 @@ exports.default = async function afterPack(context) {
 
   console.log(`[afterPack] Platform: ${electronPlatformName}`);
   console.log(`[afterPack] Output directory: ${appOutDir}`);
+
+  applyPlatformFuses(packager, electronPlatformName);
 
   // First: every check below reads app.asar.unpacked and stays green on a
   // bloated archive, so a packaging regression would otherwise surface as a
@@ -722,6 +803,9 @@ exports.default = async function afterPack(context) {
   console.log(`[afterPack] better-sqlite3 verified: ${betterSqlitePath}`);
 
   validateOnnxRuntime(unpackedPath);
+  if (electronPlatformName === "linux" && prebuildTarget.exact) {
+    pruneOnnxRuntimeForLinux(unpackedPath, prebuildTarget.arches);
+  }
 
   console.log("[afterPack] Complete - native modules validated");
 };

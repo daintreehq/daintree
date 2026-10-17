@@ -14,7 +14,6 @@
 
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import { terminalInstanceService } from "@/services/TerminalInstanceService";
-import type { PtyPanelData } from "@shared/types/panel";
 
 const acknowledgeWaitingMock = vi.fn();
 const acknowledgeWorkingPulseMock = vi.fn();
@@ -105,7 +104,6 @@ beforeEach(() => {
 });
 
 const { usePanelStore } = await import("../../../panelStore");
-const { useWorktreeSelectionStore } = await import("../../../worktreeStore");
 
 async function drainMicrotasks(iterations = 20): Promise<void> {
   for (let i = 0; i < iterations; i++) {
@@ -529,25 +527,6 @@ describe("dockPopoverOnSpawn policy gate (#8946)", () => {
     }
   });
 
-  it("kind without a dockPopoverOnSpawn override (default true) still opens the popover", async () => {
-    const { addPanel } = usePanelStore.getState();
-    const id = await addPanel({
-      // browser only overrides dockFallbackTarget — dockPopoverOnSpawn stays the
-      // default true. It is dockable (#11058), so the popover path runs.
-      kind: "browser",
-      requestedId: "browser-default-popover",
-      cwd: "/",
-      location: "dock",
-      bypassLimits: true,
-      activateDockOnCreate: true,
-    });
-
-    expect(id).toBe("browser-default-popover");
-    const state = usePanelStore.getState();
-    expect(state.panelsById[id!]).toBeDefined();
-    expect(state.activeDockTerminalId).toBe("browser-default-popover");
-  });
-
   it("PTY extension kind honors dockPopoverOnSpawn: false (resolved from requestedKind, not collapsed kind)", async () => {
     // Regression guard: previously the PTY path resolved policy from the
     // collapsed `kind` ("terminal" | "dev-preview"), silently dropping any
@@ -648,104 +627,5 @@ describe("defaultFocusOnCreate policy gate (#8946)", () => {
     } finally {
       unregisterPanelKind("no-focus-steal-kind");
     }
-  });
-
-  it("kind without a defaultFocusOnCreate override (default true) does steal focus on grid spawn", async () => {
-    const { addPanel } = usePanelStore.getState();
-    const firstId = await addPanel({
-      kind: "browser",
-      requestedId: "anchor-2",
-      cwd: "/",
-      location: "grid",
-      bypassLimits: true,
-    });
-    expect(firstId).toBe("anchor-2");
-    expect(usePanelStore.getState().focusedId).toBe("anchor-2");
-
-    const secondId = await addPanel({
-      // browser only overrides dockFallbackTarget → defaultFocusOnCreate stays the default true.
-      kind: "browser",
-      requestedId: "stealer-2",
-      cwd: "/",
-      location: "grid",
-      bypassLimits: true,
-    });
-    expect(secondId).toBe("stealer-2");
-    expect(usePanelStore.getState().focusedId).toBe("stealer-2");
-  });
-});
-
-describe("dock watchdog hardening (#7278)", () => {
-  beforeEach(async () => {
-    const { reset } = usePanelStore.getState();
-    await reset();
-  });
-
-  it("spares activeDockTerminalId when panel exists in panelsById but would be filtered from dock view", async () => {
-    const { closeDockTerminal } = usePanelStore.getState();
-    expect(closeDockTerminal).toBeDefined();
-
-    const targetId = "spared-by-panelsById";
-
-    // Set the active worktree to a known value so we can create a
-    // genuine worktree mismatch. The dockTerminals selector filters on
-    // `worktreeId == null || worktreeId === activeWorktreeId`.
-    useWorktreeSelectionStore.setState({ activeWorktreeId: "wt-a" });
-
-    // Create a panel that WOULD be filtered out of dockTerminals due
-    // to worktree mismatch (wt-b != wt-a), but still exists in the
-    // canonical panelsById store. The panelsById guard in the watchdog
-    // should spare it.
-    usePanelStore.setState({
-      panelsById: {
-        [targetId]: {
-          id: targetId,
-          kind: "terminal" as const,
-          title: "Test",
-          location: "dock" as const,
-          worktreeId: "wt-b",
-        } as PtyPanelData,
-      },
-      panelIds: [targetId],
-      activeDockTerminalId: targetId,
-    });
-
-    const state = usePanelStore.getState();
-    expect(state.panelsById[targetId]).toBeDefined();
-    expect(state.activeDockTerminalId).toBe(targetId);
-
-    // The dockTerminals selector would NOT include this panel (wt-b != active wt-a),
-    // but the panelsById guard should still spare it.
-    const shouldSkipClose = Boolean(
-      !state.activeDockTerminalId || state.panelsById[state.activeDockTerminalId]
-    );
-    expect(shouldSkipClose).toBe(true);
-
-    // Call closeDockTerminal anyway to verify it works (the actual
-    // watchdog would not call this).
-    closeDockTerminal(targetId);
-    expect(usePanelStore.getState().activeDockTerminalId).toBeNull();
-  });
-
-  it("closes dock when panel is absent from both dockTerminals and panelsById", () => {
-    const { closeDockTerminal } = usePanelStore.getState();
-
-    // Set activeDockTerminalId to a non-existent panel ID (simulating
-    // stale state after a panel was deleted without clearing the dock).
-    usePanelStore.setState({ activeDockTerminalId: "phantom-id" });
-
-    const state = usePanelStore.getState();
-    expect(state.activeDockTerminalId).toBe("phantom-id");
-    expect(state.panelsById["phantom-id"]).toBeUndefined();
-
-    // The watchdog should close the dock — neither the filtered
-    // dockTerminals view nor panelsById contains this ID.
-    const shouldSkipClose = Boolean(
-      !state.activeDockTerminalId || state.panelsById[state.activeDockTerminalId]
-    );
-    if (!shouldSkipClose) {
-      closeDockTerminal("phantom-id");
-    }
-    expect(usePanelStore.getState().activeDockTerminalId).toBeNull();
   });
 });

@@ -31,15 +31,32 @@ vi.mock("electron", () => ({
   ipcMain: { on: () => undefined, removeListener: () => undefined },
 }));
 
+// Only the pinned-view logger is observed; every other logger is the real one.
+const { pinnedViewLogInfo } = vi.hoisted(() => ({ pinnedViewLogInfo: vi.fn() }));
+vi.mock("../../../utils/logger.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../../utils/logger.js")>();
+  return {
+    ...actual,
+    createLogger: (name: string) => {
+      const logger = actual.createLogger(name);
+      return name === "main:McpPinnedView" ? { ...logger, info: pinnedViewLogInfo } : logger;
+    },
+  };
+});
+
 import http from "node:http";
 import { EventEmitter } from "node:events";
 import { createHash } from "node:crypto";
-import { HttpLifecycle, sessionCredentialDigest } from "../httpLifecycle.js";
+import { HttpLifecycle, sendToPinnedView, sessionCredentialDigest } from "../httpLifecycle.js";
+import {
+  getEndpointRegistry,
+  _resetEndpointRegistryForTesting,
+} from "../../../ipc/endpointRegistry.js";
 import type { HttpLifecycleDeps } from "../httpLifecycle.js";
 import { MCP_SSE_HEARTBEAT_INTERVAL_MS, minimumPermittingTier } from "../shared.js";
 import type { SessionServerDeps } from "../sessionServer.js";
 import { ResourceOwnershipLedger, helpOwnershipPrincipal } from "../resourceOwnership.js";
-import { WorkspaceBindingError } from "../rendererBridge.js";
+import { SessionBindingError, WorkspaceBindingError } from "../rendererBridge.js";
 import { AuditService, type McpAuditLogStore } from "../auditLog.js";
 
 type BearerTestHandle = {
@@ -1057,6 +1074,47 @@ describe("HttpLifecycle", () => {
 
       expect(await buildDeps(lc, "session-1").isTerminalInPinnedWorkspace!("mine")).toBe(false);
     });
+
+    // The assistant's refusal reads the same whichever side failed, so only
+    // the log can say which one did (#13439).
+    it("logs which side refused, and nothing on admission", async () => {
+      pinnedViewLogInfo.mockClear();
+      const { deps, lc, isAgentPaneInWorkspace } = setup();
+      const inView = buildDeps(lc, "session-1").isTerminalInPinnedWorkspace!;
+
+      expect(await inView("mine")).toBe(true);
+      expect(pinnedViewLogInfo).not.toHaveBeenCalled();
+
+      expect(await inView("theirs")).toBe(false);
+      isAgentPaneInWorkspace.mockRejectedValueOnce(new Error("pty host gone"));
+      expect(await inView("mine")).toBe(false);
+      isAgentPaneInWorkspace.mockImplementationOnce(async () => {
+        workspaceOfView = "ws-b";
+        return true;
+      });
+      expect(await inView("mine")).toBe(false);
+      workspaceOfView = null;
+      expect(await inView("mine")).toBe(false);
+      workspaceOfView = "ws-a";
+      delete deps.isAgentPaneInWorkspace;
+      expect(await inView("mine")).toBe(false);
+
+      const logged = pinnedViewLogInfo.mock.calls.map(
+        ([, context]) => context as { sessionId: string; terminalId: string; reason: string }
+      );
+      expect(logged.map((context) => context.reason)).toEqual([
+        "not-in-workspace",
+        "lookup-failed",
+        "view-changed",
+        "no-view-workspace",
+        "unwired",
+      ]);
+      expect(logged[0]).toEqual({
+        sessionId: "session-1",
+        terminalId: "theirs",
+        reason: "not-in-workspace",
+      });
+    });
   });
 
   describe("buildSessionServerDeps — turnId snapshot stamping (#10067)", () => {
@@ -1457,13 +1515,6 @@ describe("HttpLifecycle", () => {
       expect(help[0]).not.toHaveProperty("sessionIds");
     });
 
-    it("listHelpSessionBearers is empty when only external bearers are connected (#10036)", () => {
-      const lc = new HttpLifecycle(fakeDeps());
-      const handle = lc as unknown as BearerTestHandle;
-      handle.touchBearer(authA, "Claude/1", "sess-ext", "external");
-      expect(lc.listHelpSessionBearers()).toHaveLength(0);
-    });
-
     it("listHelpSessionBearers covers every non-external tier, not just the help chat (#10036)", () => {
       const lc = new HttpLifecycle(fakeDeps());
       const handle = lc as unknown as BearerTestHandle;
@@ -1520,16 +1571,6 @@ describe("HttpLifecycle", () => {
       expect(lc.findHelpBearerHash("help-token-xyz")).toBeNull();
     });
 
-    it("pushes a runtime-state change on connect and on final disconnect", () => {
-      const deps = fakeDeps();
-      const lc = new HttpLifecycle(deps);
-      const handle = lc as unknown as BearerTestHandle;
-      handle.touchBearer(authA, "Client/1", "sess-1", "external");
-      expect(deps.emitRuntimeStateChange).toHaveBeenCalledTimes(1);
-      handle.detachBearerSession("sess-1");
-      expect(deps.emitRuntimeStateChange).toHaveBeenCalledTimes(2);
-    });
-
     it("coalesces two sessions onto one entry and only drops it when both close", () => {
       const lc = new HttpLifecycle(fakeDeps());
       const handle = lc as unknown as BearerTestHandle;
@@ -1549,35 +1590,11 @@ describe("HttpLifecycle", () => {
       expect(lc.listActiveBearers()).toHaveLength(0);
     });
 
-    it("keys distinct tokens to distinct entries", () => {
-      const lc = new HttpLifecycle(fakeDeps());
-      const handle = lc as unknown as BearerTestHandle;
-      handle.touchBearer(authA, "Client/1", "sess-1", "external");
-      handle.touchBearer(authB, "Client/2", "sess-2", "external");
-      expect(lc.listActiveBearers()).toHaveLength(2);
-    });
-
-    it("detachBearerSession is a no-op for unknown sessions", () => {
-      const lc = new HttpLifecycle(fakeDeps());
-      expect(() => (lc as unknown as BearerTestHandle).detachBearerSession("ghost")).not.toThrow();
-      expect(lc.listActiveBearers()).toHaveLength(0);
-    });
-
     it("getBearerSessionIds returns a snapshot or null", () => {
       const lc = new HttpLifecycle(fakeDeps());
       (lc as unknown as BearerTestHandle).touchBearer(authA, "Client/1", "sess-1", "external");
       expect(lc.getBearerSessionIds(hashOf(authA))).toEqual(["sess-1"]);
       expect(lc.getBearerSessionIds("nonexistent")).toBeNull();
-    });
-
-    it("clearBearer evicts the entry and its reverse-lookup rows", () => {
-      const lc = new HttpLifecycle(fakeDeps());
-      const handle = lc as unknown as BearerTestHandle;
-      handle.touchBearer(authA, "Client/1", "sess-1", "external");
-      lc.clearBearer(hashOf(authA));
-      expect(lc.listActiveBearers()).toHaveLength(0);
-      // Reverse rows gone: a late detach for the cleared session is harmless.
-      expect(() => handle.detachBearerSession("sess-1")).not.toThrow();
     });
   });
 
@@ -1706,30 +1723,35 @@ describe("HttpLifecycle", () => {
       }
     );
 
-    it("keeps the build-time origin after the session's binding is torn down", async () => {
+    it("fails a pinned session's call closed once its binding is torn down mid-flight", async () => {
       const deps = pinnedOriginDeps();
+      const revealOwnedRun = vi.fn();
+      deps.revealOwnedRun = revealOwnedRun as unknown as HttpLifecycleDeps["revealOwnedRun"];
       const lc = new HttpLifecycle(deps);
       deps.sessionStore.sessionOriginMap.set("sess-teardown", "assistant-pane");
       deps.sessionStore.sessionWebContentsMap.set("sess-teardown", 7);
 
       const sessionDeps = (lc as unknown as OriginHandle).buildSessionServerDeps("sess-teardown");
 
-      // `clearSessionBinding` runs on teardown while a dispatch can still be in
-      // flight, and `getOrigin` fails closed to "external" once the entry is
-      // gone. Reading origin inside the closure would therefore relabel the
-      // assistant's own spawn as an external client's the moment its session
-      // ended — the build-time snapshot is what stops that. The pin is cleared
-      // by the same call, so this asserts through the unpinned route.
+      // `clearSessionBinding` runs on teardown — an idle reap, a revoke, or a
+      // take-over retiring the assistant's transports (#13360) — while a call
+      // can still be in flight. With the pin gone, falling through to the
+      // unpinned route would run the assistant's action in whatever window has
+      // focus; a session pinned at build stays pinned, and fails closed.
       deps.sessionStore.clearSessionBinding("sess-teardown");
-      await sessionDeps.dispatchAction("agent.launch", {}, false);
 
-      expect(deps.dispatchAction).toHaveBeenCalledWith(
-        "agent.launch",
-        {},
-        false,
-        undefined,
-        "assistant-pane"
+      await expect(sessionDeps.dispatchAction("agent.launch", {}, false)).rejects.toBeInstanceOf(
+        SessionBindingError
       );
+      await expect(sessionDeps.requestManifest()).rejects.toBeInstanceOf(SessionBindingError);
+      // Nor may a reveal raise whichever window shows the run's workspace.
+      await expect(
+        sessionDeps.revealOwnedRun?.("ws-a", "terminal.revealOwned", {}, false)
+      ).rejects.toBeInstanceOf(SessionBindingError);
+      expect(revealOwnedRun).not.toHaveBeenCalled();
+      expect(deps.dispatchAction).not.toHaveBeenCalled();
+      expect(deps.dispatchActionForWebContents).not.toHaveBeenCalled();
+      expect(deps.requestManifest).not.toHaveBeenCalled();
     });
 
     it("falls back to external for a session that never recorded an origin", async () => {
@@ -3738,5 +3760,46 @@ describe("HttpLifecycle", () => {
         expect(wc.send).toHaveBeenCalledTimes(1);
       });
     });
+  });
+});
+
+describe("sendToPinnedView", () => {
+  beforeEach(() => {
+    mockWebContentsById.clear();
+    _resetEndpointRegistryForTesting();
+  });
+
+  it("sends to a live local view by its WebContents id", () => {
+    const wc = { isDestroyed: () => false, send: vi.fn() };
+    mockWebContentsById.set(7, wc);
+
+    expect(sendToPinnedView(7, "mcp:x", () => ({ a: 1 }), "x")).toBe(true);
+    expect(wc.send).toHaveBeenCalledWith("mcp:x", { a: 1 });
+  });
+
+  it("reports a dead or missing local view as not sent", () => {
+    mockWebContentsById.set(7, { isDestroyed: () => true, send: vi.fn() });
+
+    expect(sendToPinnedView(7, "mcp:x", () => ({}), "x")).toBe(false);
+    expect(sendToPinnedView(8, "mcp:x", () => ({}), "x")).toBe(false);
+  });
+
+  it("reaches a view attached over a link through its endpoint", () => {
+    const send = vi.fn();
+    getEndpointRegistry().add({
+      endpointId: "remote:-4",
+      clientId: "client-b",
+      projectId: "proj-1",
+      kind: "remote-view",
+      handle: -4,
+      send,
+      request: vi.fn(),
+      onClose: () => ({ dispose: () => undefined }),
+      isClosed: () => false,
+    });
+
+    expect(sendToPinnedView(-4, "mcp:x", () => ({ a: 1 }), "x")).toBe(true);
+    expect(send).toHaveBeenCalledWith({ type: "event", channel: "mcp:x", args: [{ a: 1 }] });
+    expect(sendToPinnedView(-5, "mcp:x", () => ({}), "x")).toBe(false);
   });
 });

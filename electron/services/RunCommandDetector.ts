@@ -6,6 +6,7 @@ import { parse as parseToml } from "smol-toml";
 import type { RunCommand } from "../types/index.js";
 import { Cache } from "../utils/cache.js";
 import { YAML_MERGE_SCHEMA } from "../utils/yamlMergeSchema.js";
+import { stripUtf8Bom } from "../utils/stripUtf8Bom.js";
 
 const RESERVED_SCRIPT_NAMES = new Set(["__proto__", "constructor", "prototype"]);
 const COMPOSER_LIFECYCLE_SCRIPTS = new Set([
@@ -162,7 +163,7 @@ export class RunCommandDetector {
 
     try {
       const content = await fs.readFile(pkgPath, "utf-8");
-      const pkg = JSON.parse(content);
+      const pkg = JSON.parse(stripUtf8Bom(content));
       if (!pkg.scripts || typeof pkg.scripts !== "object") return [];
 
       let runner = "npm run";
@@ -482,7 +483,7 @@ export class RunCommandDetector {
 
     try {
       const content = await fs.readFile(composerPath, "utf-8");
-      const json = JSON.parse(content);
+      const json = JSON.parse(stripUtf8Bom(content));
       if (!json.scripts || typeof json.scripts !== "object") return [];
 
       return Object.keys(json.scripts)
@@ -513,7 +514,7 @@ export class RunCommandDetector {
 
     try {
       const content = await fs.readFile(devcontainerPath, "utf-8");
-      const config = JSON.parse(content);
+      const config = JSON.parse(stripUtf8Bom(content));
       const postStart = config.postStartCommand;
       if (postStart === undefined || postStart === null) return [];
 

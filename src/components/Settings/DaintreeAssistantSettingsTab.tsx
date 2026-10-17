@@ -11,6 +11,7 @@ import { Input } from "@/components/ui/input";
 import { useDeferredLoading, useHelpSessionLiveStatus } from "@/hooks";
 import { useVisibilityAwareInterval } from "@/hooks/useVisibilityAwareInterval";
 import { useMcpReadiness } from "@/hooks/useMcpReadiness";
+import { useAssistantMessagingAvailable } from "@/hooks/useAssistantMessaging";
 import { actionService } from "@/services/ActionService";
 import { Button } from "@/components/ui/button";
 import { CopyButton } from "@/components/ui/CopyButton";
@@ -36,6 +37,7 @@ import { TurnOutcomeDiagnostics } from "./TurnOutcomeDiagnostics";
 import { useSettingsTabValidation } from "./SettingsValidationRegistry";
 import { useSettingsTabFlush } from "./SettingsFlushRegistry";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
+import { followModelUpgrades } from "@shared/utils/modelUpgrades";
 import { useDebounce } from "@/hooks/useDebounce";
 
 import { logError } from "@/utils/logger";
@@ -90,6 +92,7 @@ const SAVE_GROUP_BY_KEY: Record<keyof HelpAssistantSettings, SaveGroup> = {
   daintreeConfirmations: "security",
   auditRetention: "privacy",
   loadGlobalHooksAndServers: "content",
+  acceptRemoteMessages: "security",
 };
 
 const SETTING_KEYS: readonly (keyof HelpAssistantSettings)[] = [
@@ -105,6 +108,7 @@ const SETTING_KEYS: readonly (keyof HelpAssistantSettings)[] = [
   "daintreeConfirmations",
   "auditRetention",
   "loadGlobalHooksAndServers",
+  "acceptRemoteMessages",
 ];
 
 function patchedKeys(patch: Partial<HelpAssistantSettings>): (keyof HelpAssistantSettings)[] {
@@ -183,6 +187,7 @@ const SETTING_LABEL: Record<keyof HelpAssistantSettings, string> = {
   auditRetention: "Audit log retention",
   loadGlobalHooksAndServers: "Load my MCP servers and hooks",
   daintreeConfirmations: "Daintree confirmations",
+  acceptRemoteMessages: "Accept messages from other machines by default",
 };
 
 interface SaveFailure {
@@ -203,6 +208,7 @@ const DEFAULT_SETTINGS: HelpAssistantSettings = {
   debugLogging: false,
   loadGlobalHooksAndServers: false,
   daintreeConfirmations: "inherit",
+  acceptRemoteMessages: true,
 };
 
 // Radix Select rejects an empty-string item value, so the "use the CLI default"
@@ -383,6 +389,8 @@ export function DaintreeAssistantSettingsTab() {
   // separate mcpStatus state still supplies apiKey for copy/rotate (not in
   // the runtime snapshot). Keep both — they update independently (lesson #4958).
   const runtimeSnapshot = useMcpReadiness();
+  // Hidden on Windows and, in a window of this machine, until it has a host.
+  const messagingAvailable = useAssistantMessagingAvailable();
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
   // Failures of one-off actions stay on the section they belong to, not at the page foot.
@@ -475,14 +483,16 @@ export function DaintreeAssistantSettingsTab() {
 
   // Resolved model catalog for the currently-preferred agent. `null` means "not
   // loaded / unavailable" (we render nothing); an empty array means "agent has
-  // no models" (also nothing). The model picker only appears once a non-empty
-  // catalog resolves for the selected agent. A failed read is not "this agent
+  // no models", which shows the row only to keep a saved choice and its reset.
+  // Otherwise the picker appears once a non-empty catalog resolves for the
+  // selected agent. A failed read is not "this agent
   // has no models": the row stays, with Retry. Tagged with the agent it was
   // read for, so a switch never shows the previous agent's models, saved choice
   // or failure for a render.
   const [modelCatalog, setModelCatalog] = useState<{
     agentId: string;
     models: AgentModelConfig[];
+    modelUpgrades?: Record<string, string>;
     failed: boolean;
   } | null>(null);
   const currentCatalog = modelCatalog?.agentId === preferredAgentId ? modelCatalog : null;
@@ -502,7 +512,12 @@ export function DaintreeAssistantSettingsTab() {
       .getResolvedModelList(preferredAgentId)
       .then((catalog) => {
         if (cancelled) return;
-        setModelCatalog({ agentId, models: catalog?.models ?? [], failed: false });
+        setModelCatalog({
+          agentId,
+          models: catalog?.models ?? [],
+          modelUpgrades: catalog?.modelUpgrades,
+          failed: false,
+        });
       })
       .catch((err) => {
         if (cancelled) return;
@@ -522,9 +537,15 @@ export function DaintreeAssistantSettingsTab() {
     ? getSavedAssistantModelId(settings.modelIds, preferredAgentId)
     : null;
   const catalogIds = useMemo(() => resolvedModels?.map((m) => m.id), [resolvedModels]);
-  const effectiveModelId = preferredAgentId
-    ? resolveAssistantModelId(preferredAgentId, savedModelId, catalogIds)
-    : (savedModelId ?? "");
+  // A saved model the CLI has retired shows as the successor it launches as,
+  // matching the launch path; the stored choice is untouched until the user
+  // picks again.
+  const effectiveModelId = followModelUpgrades(
+    preferredAgentId
+      ? resolveAssistantModelId(preferredAgentId, savedModelId, catalogIds)
+      : (savedModelId ?? ""),
+    currentCatalog?.modelUpgrades
+  );
 
   const modelOptions = useMemo(() => {
     const models = resolvedModels ?? [];
@@ -542,9 +563,12 @@ export function DaintreeAssistantSettingsTab() {
   }, [resolvedModels, effectiveModelId]);
 
   const modelSelectValue = effectiveModelId || MODEL_DEFAULT_SENTINEL;
+  // A saved choice keeps the row after an empty catalog (Codex without its CLI's
+  // model list), or the only way to clear it would disappear.
   const showModelPicker =
     Boolean(resolvedModels && resolvedModels.length > 0) ||
-    (modelCatalogFailed && Boolean(preferredAgentId));
+    (modelCatalogFailed && Boolean(preferredAgentId)) ||
+    (resolvedModels !== null && savedModelId !== null);
 
   useEffect(() => {
     let cancelled = false;
@@ -866,6 +890,10 @@ export function DaintreeAssistantSettingsTab() {
 
   const toggleDebugLogging = () => {
     void persist({ debugLogging: !settings.debugLogging });
+  };
+
+  const toggleAcceptRemoteMessages = () => {
+    void persist({ acceptRemoteMessages: !settings.acceptRemoteMessages });
   };
 
   const toggleLoadGlobalHooksAndServers = () => {
@@ -1218,7 +1246,11 @@ export function DaintreeAssistantSettingsTab() {
 
       <SettingsSection
         title="Security"
-        description="How much of Daintree the assistant can reach, and which confirmations it skips"
+        description={
+          messagingAvailable
+            ? "How much of Daintree the assistant can reach, which confirmations it skips, and whether other machines can message it"
+            : "How much of Daintree the assistant can reach, and which confirmations it skips"
+        }
       >
         {saveError("security")}
         <SettingsGroup>
@@ -1293,6 +1325,23 @@ export function DaintreeAssistantSettingsTab() {
             onToggle={() => setShowBlastRadius((v) => !v)}
           />
         </SettingsGroup>
+
+        {messagingAvailable && (
+          <SettingsGroup label="Other machines">
+            <SettingsSwitchCard
+              id="assistant-accept-remote-messages"
+              title="Accept messages from other machines by default"
+              subtitle="As each assistant here starts, it turns on Accept messages from other machines wherever that can be on. Turning it off in an assistant's panel lasts until that assistant restarts."
+              isEnabled={settings.acceptRemoteMessages}
+              onChange={toggleAcceptRemoteMessages}
+              disabled={settingsUnavailable}
+              isModified={settings.acceptRemoteMessages !== DEFAULT_SETTINGS.acceptRemoteMessages}
+              onReset={() =>
+                void persist({ acceptRemoteMessages: DEFAULT_SETTINGS.acceptRemoteMessages })
+              }
+            />
+          </SettingsGroup>
+        )}
 
         <SessionLiveStatusCard configuredTier={settings.tier} />
       </SettingsSection>

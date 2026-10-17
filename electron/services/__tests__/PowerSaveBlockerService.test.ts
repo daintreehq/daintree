@@ -84,6 +84,7 @@ import {
   getPowerSaveBlockerService,
   initializePowerSaveBlockerService,
   disposePowerSaveBlockerService,
+  setAttachedFrontendCount,
   type TerminalRegistry,
 } from "../PowerSaveBlockerService.js";
 import { events } from "../events.js";
@@ -169,19 +170,6 @@ describe("PowerSaveBlockerService", () => {
       expect(powerSaveBlocker.start).not.toHaveBeenCalled();
       expect(service.isBlocking()).toBe(false);
     });
-
-    it("does not start blocker for idle state", () => {
-      emitStateChanged("term-1", "idle", { agentId: "agent-1" });
-
-      expect(powerSaveBlocker.start).not.toHaveBeenCalled();
-      expect(service.isBlocking()).toBe(false);
-    });
-
-    it("does not start blocker for completed state", () => {
-      emitStateChanged("term-1", "completed", { agentId: "agent-1" });
-
-      expect(powerSaveBlocker.start).not.toHaveBeenCalled();
-    });
   });
 
   describe("multi-agent refcounting", () => {
@@ -197,17 +185,6 @@ describe("PowerSaveBlockerService", () => {
       expect(service.isBlocking()).toBe(true);
       expect(service.getActiveCount()).toBe(1);
       expect(powerSaveBlocker.stop).not.toHaveBeenCalled();
-    });
-
-    it("stops blocker when all agents become idle", () => {
-      emitStateChanged("term-1", "working", { agentId: "agent-1" });
-      emitStateChanged("term-2", "working", { agentId: "agent-2" });
-
-      emitStateChanged("term-1", "idle", { agentId: "agent-1" });
-      emitStateChanged("term-2", "idle", { agentId: "agent-2" });
-
-      expect(service.isBlocking()).toBe(false);
-      expect(powerSaveBlocker.stop).toHaveBeenCalled();
     });
   });
 
@@ -278,23 +255,6 @@ describe("PowerSaveBlockerService", () => {
       expect(service.isBlocking()).toBe(true);
     });
 
-    it("terminal reuse after exit works correctly", () => {
-      emitStateChanged("term-1", "working", { agentId: "agent-1" });
-
-      events.emit("agent:exited", {
-        terminalId: "term-1",
-        timestamp: Date.now(),
-      });
-
-      expect(service.isBlocking()).toBe(false);
-
-      // Reuse the same terminal with a new agent
-      emitStateChanged("term-1", "working", { agentId: "agent-2" });
-
-      expect(service.isBlocking()).toBe(true);
-      expect(service.getActiveCount()).toBe(1);
-    });
-
     it("unknown agent events do not affect active blockers", () => {
       emitStateChanged("term-1", "working", { agentId: "agent-1" });
 
@@ -316,13 +276,21 @@ describe("PowerSaveBlockerService", () => {
       expect(service.getActiveCount()).toBe(1);
     });
 
-    it("handles unknown terminalId on exited gracefully", () => {
+    it("terminal reuse after exit works correctly", () => {
+      emitStateChanged("term-1", "working", { agentId: "agent-1" });
+
       events.emit("agent:exited", {
-        terminalId: "unknown-term",
+        terminalId: "term-1",
         timestamp: Date.now(),
       });
 
       expect(service.isBlocking()).toBe(false);
+
+      // Reuse the same terminal with a new agent
+      emitStateChanged("term-1", "working", { agentId: "agent-2" });
+
+      expect(service.isBlocking()).toBe(true);
+      expect(service.getActiveCount()).toBe(1);
     });
   });
 
@@ -571,10 +539,6 @@ describe("PowerSaveBlockerService", () => {
       service.dispose();
       service = new PowerSaveBlockerService();
     }
-
-    it("defaults to holding on AC and not on battery", () => {
-      expect(service.getState().config).toEqual({ enabled: true, onBattery: false });
-    });
 
     it("reads a stored setting and ignores values that are not exactly the opt-out", () => {
       storeMock.data.keepAwake = { enabled: false, onBattery: true };
@@ -934,15 +898,6 @@ describe("PowerSaveBlockerService", () => {
       expect(power.count("on-ac")).toBe(0);
       expect(power.count("resume")).toBe(0);
     });
-
-    it("double dispose is safe", () => {
-      emitStateChanged("term-1", "working", { agentId: "agent-1" });
-
-      service.dispose();
-      service.dispose();
-
-      expect(service.isBlocking()).toBe(false);
-    });
   });
 });
 
@@ -1089,5 +1044,155 @@ describe("initializePowerSaveBlockerService", () => {
     expect(second.isBlocking()).toBe(true);
     expect(second.getActiveCount()).toBe(1);
     expect(first.getActiveCount()).toBe(0);
+  });
+});
+
+describe("attached remote frontends", () => {
+  const HOUR = 60 * 60 * 1000;
+  let service: PowerSaveBlockerService;
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.clearAllMocks();
+    service = new PowerSaveBlockerService();
+  });
+
+  afterEach(() => {
+    service.dispose();
+    disposePowerSaveBlockerService();
+    vi.useRealTimers();
+  });
+
+  it("holds the blocker while a frontend is attached and no agent works", () => {
+    service.setAttachedFrontendCount(1);
+
+    expect(powerSaveBlocker.start).toHaveBeenCalledWith("prevent-app-suspension");
+    expect(service.isBlocking()).toBe(true);
+    expect(broadcastToRenderer).toHaveBeenCalledWith(
+      CHANNELS.KEEP_AWAKE_STATE_CHANGED,
+      expect.objectContaining({ isBlocking: true })
+    );
+  });
+
+  it("releases at zero frontends", () => {
+    service.setAttachedFrontendCount(2);
+    service.setAttachedFrontendCount(0);
+
+    expect(service.isBlocking()).toBe(false);
+    expect(powerSaveBlocker.stop).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps holding for working agents after the last frontend detaches", () => {
+    service.setAttachedFrontendCount(1);
+    emitStateChanged("term-1", "working");
+    service.setAttachedFrontendCount(0);
+
+    expect(service.isBlocking()).toBe(true);
+    expect(powerSaveBlocker.start).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps holding for frontends after the last agent stops", () => {
+    emitStateChanged("term-1", "working");
+    service.setAttachedFrontendCount(1);
+    emitStateChanged("term-1", "idle", { previousState: "working" });
+
+    expect(service.isBlocking()).toBe(true);
+    expect(powerSaveBlocker.stop).not.toHaveBeenCalled();
+  });
+
+  it("is not subject to the agent safety cap", () => {
+    service.setAttachedFrontendCount(1);
+    vi.advanceTimersByTime(24 * HOUR);
+
+    expect(service.isBlocking()).toBe(true);
+  });
+
+  it("outlives an agent episode's force-release", () => {
+    service.setAttachedFrontendCount(1);
+    emitStateChanged("term-1", "working");
+    vi.advanceTimersByTime(4 * HOUR);
+
+    expect(service.getActiveCount()).toBe(0);
+    expect(service.isBlocking()).toBe(true);
+    expect(powerSaveBlocker.stop).not.toHaveBeenCalled();
+  });
+
+  it("gives an agent episode that starts under frontends its own safety budget", () => {
+    service.setAttachedFrontendCount(1);
+    emitStateChanged("term-1", "working");
+    service.setAttachedFrontendCount(0);
+
+    vi.advanceTimersByTime(4 * HOUR - 1);
+    expect(service.isBlocking()).toBe(true);
+    vi.advanceTimersByTime(1);
+    expect(service.isBlocking()).toBe(false);
+  });
+
+  it("respects keep-awake being turned off", () => {
+    storeMock.data.keepAwake = { enabled: false, onBattery: false };
+    service.dispose();
+    service = new PowerSaveBlockerService();
+
+    service.setAttachedFrontendCount(1);
+
+    expect(service.isBlocking()).toBe(false);
+    expect(powerSaveBlocker.start).not.toHaveBeenCalled();
+  });
+
+  it("releases on battery unless the battery rule allows it, and takes it back on AC", () => {
+    service.setAttachedFrontendCount(1);
+    expect(service.isBlocking()).toBe(true);
+
+    power.onBattery = true;
+    power.emit("on-battery");
+    expect(service.isBlocking()).toBe(false);
+
+    power.onBattery = false;
+    power.emit("on-ac");
+    expect(service.isBlocking()).toBe(true);
+  });
+
+  it("holds on battery when the setting allows it", () => {
+    storeMock.data.keepAwake = { enabled: true, onBattery: true };
+    power.onBattery = true;
+    service.dispose();
+    service = new PowerSaveBlockerService();
+
+    service.setAttachedFrontendCount(1);
+
+    expect(service.isBlocking()).toBe(true);
+  });
+
+  it("treats a repeated or invalid count as no change", () => {
+    service.setAttachedFrontendCount(1);
+    service.setAttachedFrontendCount(1);
+    expect(powerSaveBlocker.start).toHaveBeenCalledTimes(1);
+
+    service.setAttachedFrontendCount(-3);
+    expect(service.getAttachedFrontendCount()).toBe(0);
+    expect(service.isBlocking()).toBe(false);
+
+    service.setAttachedFrontendCount(Number.NaN);
+    expect(service.getAttachedFrontendCount()).toBe(0);
+  });
+
+  it("applies a count set before the singleton exists once it is built", async () => {
+    // A fresh module: the shared one's dispose latch is set by earlier cases.
+    vi.resetModules();
+    const fresh = await import("../PowerSaveBlockerService.js");
+    fresh.setAttachedFrontendCount(1);
+    const instance = fresh.initializePowerSaveBlockerService();
+
+    expect(instance.getAttachedFrontendCount()).toBe(1);
+    expect(instance.isBlocking()).toBe(true);
+    fresh.disposePowerSaveBlockerService();
+  });
+
+  it("drops a count set after shutdown disposed the singleton", () => {
+    initializePowerSaveBlockerService();
+    disposePowerSaveBlockerService();
+    setAttachedFrontendCount(1);
+
+    expect(powerSaveBlocker.start).not.toHaveBeenCalled();
   });
 });

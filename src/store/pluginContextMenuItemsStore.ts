@@ -1,6 +1,16 @@
 import { create } from "zustand";
 import type { ContextMenuContribution } from "@shared/types/plugin";
 import { logWarn } from "@/utils/logger";
+import { isRemoteContributionActionAllowed } from "@shared/utils/remotePluginContributions";
+import { pluginViewHostId } from "@/components/Plugin/remotePluginView";
+
+/** In a window attached to a host, drop items naming an action this window won't run for it. */
+function admissible(items: PluginContextMenuItemEntry[]): PluginContextMenuItemEntry[] {
+  if (pluginViewHostId() === null) return items;
+  return items.filter((entry) =>
+    isRemoteContributionActionAllowed(entry.pluginId, entry.item.actionId)
+  );
+}
 
 export interface PluginContextMenuItemEntry {
   pluginId: string;
@@ -63,7 +73,7 @@ export const usePluginContextMenuItemsStore = create<PluginContextMenuItemsState
       .contextMenuItems()
       .then((items) => {
         if (seq !== pullSeq) return;
-        set({ entries: items });
+        set({ entries: admissible(items) });
       })
       .catch((err: unknown) => {
         // A transient pull failure leaves entries empty; the permanent push
@@ -75,7 +85,7 @@ export const usePluginContextMenuItemsStore = create<PluginContextMenuItemsState
 
     unsubscribe = plugin.onContextMenuItemsChanged((payload) => {
       pullSeq++;
-      set({ entries: payload.items });
+      set({ entries: admissible(payload.items) });
     });
 
     // Latch only after the pull is dispatched and the listener is registered, so

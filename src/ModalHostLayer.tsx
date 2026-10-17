@@ -24,12 +24,16 @@ import { notify } from "@/lib/notify";
 import { logError } from "@/utils/logger";
 import { StopProjectConfirmDialog } from "./components/Project/StopProjectConfirmDialog";
 import { usePilotStore } from "@/store/pilotStore";
+import { useCanopyStore } from "@/store/canopyStore";
 import { useScratchStore } from "@/store/scratchStore";
 import { Toaster } from "./components/ui/toaster";
 import { ShortcutHint } from "./components/ui/ShortcutHint";
 import { ReEntrySummary } from "./components/ui/ReEntrySummary";
 import { TerminalInfoDialogHost } from "./components/Terminal/TerminalInfoDialogHost";
 import { PostHydrationListeners } from "./components/PostHydrationListeners";
+import { HostFilePickerMount } from "./components/HostFilePicker/HostFilePickerMount";
+import { HostSwitchMount } from "./components/HostSwitch/HostSwitchMount";
+import { HostsOverviewMount } from "./components/Hosts/Overview/HostsOverviewMount";
 import { PanelTransitionOverlay } from "./components/Panel";
 import { usePluginManagerStore } from "./store";
 import { actionService } from "./services/ActionService";
@@ -47,6 +51,7 @@ import {
   LazyActionPalette,
   LazyWorktreeOverviewModal,
   LazyPilotView,
+  LazyCanopyView,
   LazyCrossWorktreeDiff,
   LazySettingsDialog,
   LazyShortcutReferenceDialog,
@@ -68,12 +73,15 @@ import {
   LazyDiagnosticsReviewDialogHost,
   LazyGitPushConfirmDialog,
   LazyGitPullRebaseConfirmDialog,
+  LazyFileMutationConfirmDialog,
   LazyGitWorktreeOperationConfirmDialog,
   LazyGitForcePushConfirmDialog,
   LazyRecipeConflictDialog,
   LazyOnboardingFlow,
   LazyGettingStartedChecklist,
+  LazyProjectGroupDialogs,
 } from "./lazyPanels";
+import { useProjectGroupsStore } from "./store/projectGroupsStore";
 
 interface ModalHostLayerProps {
   quickSwitcher: UseQuickSwitcherReturn;
@@ -140,6 +148,7 @@ interface ModalHostLayerProps {
   diagnosticsReviewResetKey: number;
   gitPushResetKey: number;
   gitPullRebaseResetKey: number;
+  fileMutationResetKey: number;
   gitWorktreeOperationResetKey: number;
   gitForcePushResetKey: number;
   recipeConflictResetKey: number;
@@ -236,6 +245,7 @@ export function ModalHostLayer({
   diagnosticsReviewResetKey,
   gitPushResetKey,
   gitPullRebaseResetKey,
+  fileMutationResetKey,
   gitWorktreeOperationResetKey,
   gitForcePushResetKey,
   recipeConflictResetKey,
@@ -261,6 +271,8 @@ export function ModalHostLayer({
   // registry, a keybinding and the project switcher, none of which has a prop
   // path into this layer.
   const isPilotOpen = usePilotStore((s) => s.isOpen);
+  const hasProjectGroupDialog = useProjectGroupsStore((s) => s.dialog !== null);
+  const isCanopyOpen = useCanopyStore((s) => s.isOpen);
   const hasScratch = useScratchStore((s) => s.currentScratch !== null);
 
   // Both palette activation paths (click and Enter) launch the same way, and
@@ -481,6 +493,7 @@ export function ModalHostLayer({
               onSelect={projectSwitcherPalette.selectRow}
               onHoverProject={projectSwitcherPalette.onHoverProject}
               onHoverProjectEnd={projectSwitcherPalette.onHoverProjectEnd}
+              onHoverRow={projectSwitcherPalette.hoverRow}
               fleetLiveness={projectSwitcherPalette.fleetLiveness}
               onClose={projectSwitcherPalette.close}
               onStopProject={(projectId) => void projectSwitcherPalette.stopProject(projectId)}
@@ -544,6 +557,16 @@ export function ModalHostLayer({
           </Suspense>
         )}
       </ErrorBoundary>
+      {/*
+        Mounted here, once per view, rather than inside the switcher: the
+        switcher renders in more than one place, and its menus open these from
+        whichever copy the user is in. Loaded only once one is asked for.
+      */}
+      {hasProjectGroupDialog && (
+        <Suspense fallback={null}>
+          <LazyProjectGroupDialogs />
+        </Suspense>
+      )}
       <StopProjectConfirmDialog
         projectId={projectSwitcherPalette.stopConfirmProjectId}
         isStopping={projectSwitcherPalette.isStoppingProject}
@@ -878,6 +901,10 @@ export function ModalHostLayer({
         </ErrorBoundary>
       )}
 
+      {isStateLoaded && <HostFilePickerMount />}
+      {isStateLoaded && <HostSwitchMount />}
+      {isStateLoaded && <HostsOverviewMount />}
+
       {isStateLoaded && (
         <ErrorBoundary
           variant="component"
@@ -898,6 +925,18 @@ export function ModalHostLayer({
         >
           <Suspense fallback={null}>
             <LazyGitPullRebaseConfirmDialog />
+          </Suspense>
+        </ErrorBoundary>
+      )}
+
+      {isStateLoaded && (
+        <ErrorBoundary
+          variant="component"
+          componentName="FileMutationConfirmDialog"
+          resetKeys={[fileMutationResetKey]}
+        >
+          <Suspense fallback={null}>
+            <LazyFileMutationConfirmDialog />
           </Suspense>
         </ErrorBoundary>
       )}
@@ -986,6 +1025,17 @@ export function ModalHostLayer({
         {isPilotOpen && (
           <Suspense fallback={null}>
             <LazyPilotView />
+          </Suspense>
+        )}
+      </ErrorBoundary>
+      <ErrorBoundary
+        variant="component"
+        componentName="CanopyView"
+        resetKeys={[Number(isCanopyOpen)]}
+      >
+        {isCanopyOpen && (
+          <Suspense fallback={null}>
+            <LazyCanopyView />
           </Suspense>
         )}
       </ErrorBoundary>

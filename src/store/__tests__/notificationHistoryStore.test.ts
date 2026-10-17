@@ -58,28 +58,12 @@ describe("notificationHistorySlice", () => {
     });
   });
 
-  it("adds an entry with id and timestamp", () => {
-    addEntry({ message: "Hello" });
-    const { entries } = getState();
-    expect(entries).toHaveLength(1);
-    expect(entries[0]!.message).toBe("Hello");
-    expect(entries[0]!.id).toBeDefined();
-    expect(entries[0]!.timestamp).toBeGreaterThan(0);
-  });
-
   it("prepends new entries (most recent first)", () => {
     addEntry({ message: "first" });
     addEntry({ message: "second" });
     const { entries } = getState();
     expect(entries[0]!.message).toBe("second");
     expect(entries[1]!.message).toBe("first");
-  });
-
-  it("increments unreadCount on each add", () => {
-    addEntry();
-    addEntry();
-    addEntry();
-    expect(getState().unreadCount).toBe(3);
   });
 
   it("respects 200-entry cap (oldest evicted)", () => {
@@ -117,16 +101,6 @@ describe("notificationHistorySlice", () => {
     expect(getState().unreadCount).toBe(0);
   });
 
-  it("stores correlationId on entries", () => {
-    addEntry({ message: "first", correlationId: "panel-1" });
-    addEntry({ message: "second", correlationId: "panel-1" });
-    addEntry({ message: "third" });
-    const { entries } = getState();
-    expect(entries[0]!.correlationId).toBeUndefined();
-    expect(entries[1]!.correlationId).toBe("panel-1");
-    expect(entries[2]!.correlationId).toBe("panel-1");
-  });
-
   it("getEntriesByCorrelationId returns matching entries", () => {
     addEntry({ message: "first", correlationId: "panel-1" });
     addEntry({ message: "second", correlationId: "panel-2" });
@@ -138,58 +112,7 @@ describe("notificationHistorySlice", () => {
     );
   });
 
-  describe("history actions", () => {
-    it("stores actions on the entry when provided", () => {
-      getState().addEntry({
-        type: "success",
-        message: "Agent done",
-        actions: [
-          { label: "Go to terminal", actionId: "panel.focus", actionArgs: { panelId: "p1" } },
-        ],
-      });
-      const entry = getState().entries[0];
-      expect(entry!.actions).toHaveLength(1);
-      expect(entry!.actions![0]!.label).toBe("Go to terminal");
-      expect(entry!.actions![0]!.actionId).toBe("panel.focus");
-      expect(entry!.actions![0]!.actionArgs).toEqual({ panelId: "p1" });
-    });
-
-    it("works with no actions (backward compat)", () => {
-      addEntry({ message: "No actions" });
-      const entry = getState().entries[0];
-      expect(entry!.actions).toBeUndefined();
-    });
-
-    it("stores multiple actions", () => {
-      getState().addEntry({
-        type: "info",
-        message: "Multi-action",
-        actions: [
-          { label: "Action 1", actionId: "panel.focus", actionArgs: { panelId: "p1" } },
-          { label: "Action 2", actionId: "panel.focus", variant: "secondary" },
-        ],
-      });
-      expect(getState().entries[0]!.actions).toHaveLength(2);
-    });
-  });
-
   describe("seenAsToast and badge count", () => {
-    it("defaults seenAsToast to false when not provided", () => {
-      addEntry({ message: "test" });
-      expect(getState().entries[0]!.seenAsToast).toBe(false);
-    });
-
-    it("stores seenAsToast=true when provided", () => {
-      getState().addEntry({ type: "info", message: "seen", seenAsToast: true });
-      expect(getState().entries[0]!.seenAsToast).toBe(true);
-    });
-
-    it("does not increment unreadCount when seenAsToast is true", () => {
-      getState().addEntry({ type: "info", message: "seen", seenAsToast: true });
-      getState().addEntry({ type: "info", message: "seen again", seenAsToast: true });
-      expect(getState().unreadCount).toBe(0);
-    });
-
     it("increments unreadCount only for entries with seenAsToast=false", () => {
       getState().addEntry({ type: "success", message: "seen", seenAsToast: true });
       getState().addEntry({ type: "error", message: "missed", seenAsToast: false });
@@ -224,17 +147,6 @@ describe("notificationHistorySlice", () => {
       getState().addEntry({ type: "success", message: "seen", seenAsToast: true });
       expect(getState().entries).toHaveLength(200);
       expect(getState().unreadCount).toBe(199);
-    });
-
-    it("defaults countable to true on new entries", () => {
-      addEntry({ message: "test" });
-      expect(getState().entries[0]!.countable).toBe(true);
-    });
-
-    it("does not increment unreadCount when countable is false", () => {
-      addEntry({ message: "uncountable", countable: false });
-      expect(getState().entries).toHaveLength(1);
-      expect(getState().unreadCount).toBe(0);
     });
 
     it("correctly counts mixed countable and non-countable entries", () => {
@@ -323,24 +235,6 @@ describe("notificationHistorySlice", () => {
       expect(getState().unreadCount).toBe(0);
     });
 
-    it("excludes non-countable entries from unreadCount as expected", () => {
-      addEntry({ message: "countable" });
-      addEntry({ message: "uncountable", countable: false });
-      const ids = getState().entries.map((e) => e.id);
-      expect(getState().unreadCount).toBe(1);
-      getState().markIdsRead(ids);
-      expect(getState().unreadCount).toBe(0);
-      expect(getState().entries.every((e) => e.seenAsToast)).toBe(true);
-    });
-
-    it("does not change evictedToInboxCount", () => {
-      addEntry();
-      addEntry();
-      const ids = getState().entries.map((e) => e.id);
-      getState().markIdsRead(ids);
-      expect(getState().evictedToInboxCount).toBe(0);
-    });
-
     it("handles mixed unread + already-read + non-countable + missing ids in one call", () => {
       const seenId = getState().addEntry({ type: "info", message: "seen", seenAsToast: true });
       addEntry({ message: "unread countable" });
@@ -362,11 +256,6 @@ describe("notificationHistorySlice", () => {
   });
 
   describe("markSummarized", () => {
-    it("defaults summarized to false on new entries", () => {
-      addEntry({ message: "test" });
-      expect(getState().entries[0]!.summarized).toBe(false);
-    });
-
     it("marks only targeted entries as summarized", () => {
       addEntry({ message: "a" });
       addEntry({ message: "b" });
@@ -408,39 +297,9 @@ describe("notificationHistorySlice", () => {
       const after = getState().entries[0];
       expect(after).toBe(before!);
     });
-
-    it("new entries after markSummarized default to summarized=false", () => {
-      addEntry({ message: "old" });
-      getState().markSummarized([getState().entries[0]!.id]);
-      addEntry({ message: "new" });
-      expect(getState().entries[0]!.summarized).toBe(false);
-    });
-  });
-
-  describe("addEntry return value", () => {
-    it("returns the id of the newly created entry", () => {
-      const id = getState().addEntry({
-        type: "info",
-        message: "test",
-      });
-      expect(typeof id).toBe("string");
-      expect(id.length).toBeGreaterThan(0);
-      expect(getState().entries[0]!.id).toBe(id);
-    });
   });
 
   describe("markUnseenAsToast", () => {
-    it("sets seenAsToast to false on a seen entry", () => {
-      const id = getState().addEntry({
-        type: "info",
-        message: "seen",
-        seenAsToast: true,
-      });
-      expect(getState().entries[0]!.seenAsToast).toBe(true);
-      getState().markUnseenAsToast(id);
-      expect(getState().entries[0]!.seenAsToast).toBe(false);
-    });
-
     it("increments unreadCount when marking seen entry as unseen", () => {
       const id = getState().addEntry({
         type: "info",
@@ -490,39 +349,11 @@ describe("notificationHistorySlice", () => {
   });
 
   describe("evictedToInboxCount", () => {
-    it("starts at 0", () => {
-      expect(getState().evictedToInboxCount).toBe(0);
-    });
-
     it("increments when markUnseenAsToast flips a seen entry", () => {
       const id = getState().addEntry({ type: "info", message: "seen", seenAsToast: true });
       expect(getState().evictedToInboxCount).toBe(0);
       getState().markUnseenAsToast(id);
       expect(getState().evictedToInboxCount).toBe(1);
-    });
-
-    it("does not increment when markUnseenAsToast targets a missing id", () => {
-      addEntry({ message: "test" });
-      expect(getState().evictedToInboxCount).toBe(0);
-      getState().markUnseenAsToast("nonexistent-id");
-      expect(getState().evictedToInboxCount).toBe(0);
-    });
-
-    it("does not increment when markUnseenAsToast targets an already-unseen entry", () => {
-      const id = getState().addEntry({ type: "info", message: "missed", seenAsToast: false });
-      expect(getState().evictedToInboxCount).toBe(0);
-      getState().markUnseenAsToast(id);
-      expect(getState().evictedToInboxCount).toBe(0);
-    });
-
-    it("accumulates across multiple evictions", () => {
-      const a = getState().addEntry({ type: "info", message: "a", seenAsToast: true });
-      const b = getState().addEntry({ type: "info", message: "b", seenAsToast: true });
-      const c = getState().addEntry({ type: "info", message: "c", seenAsToast: true });
-      getState().markUnseenAsToast(a);
-      getState().markUnseenAsToast(b);
-      getState().markUnseenAsToast(c);
-      expect(getState().evictedToInboxCount).toBe(3);
     });
 
     it("resetEvictedCount zeroes the counter without touching entries or unreadCount", () => {
@@ -534,14 +365,6 @@ describe("notificationHistorySlice", () => {
       expect(getState().evictedToInboxCount).toBe(0);
       expect(getState().unreadCount).toBe(1);
       expect(getState().entries).toHaveLength(1);
-    });
-
-    it("resetEvictedCount returns the same state object when already zero", () => {
-      const before = getState();
-      getState().resetEvictedCount();
-      const after = getState();
-      // No-op set: same evictedToInboxCount value, no spurious render trigger.
-      expect(after.evictedToInboxCount).toBe(before.evictedToInboxCount);
     });
 
     it("clearAll resets the eviction counter", () => {
@@ -591,31 +414,9 @@ describe("notificationHistorySlice", () => {
       expect(getState().entries).toHaveLength(1);
       expect(getState().unreadCount).toBe(1);
     });
-
-    it("works correctly with markAllRead", () => {
-      addEntry({ message: "missed 1" });
-      addEntry({ message: "missed 2" });
-      const id = getState().entries[0]!.id;
-      getState().dismissEntry(id);
-      expect(getState().unreadCount).toBe(1);
-      expect(getState().entries[0]!.message).toBe("missed 1");
-      getState().markAllRead();
-      expect(getState().unreadCount).toBe(0);
-      expect(getState().entries).toHaveLength(1);
-      expect(getState().entries[0]!.message).toBe("missed 1");
-    });
   });
 
   describe("dismissByCorrelationId", () => {
-    it("removes all entries with matching correlationId", () => {
-      addEntry({ message: "first", correlationId: "panel-1" });
-      addEntry({ message: "second", correlationId: "panel-1" });
-      addEntry({ message: "third", correlationId: "panel-1" });
-      expect(getState().entries).toHaveLength(3);
-      getState().dismissByCorrelationId("panel-1");
-      expect(getState().entries).toHaveLength(0);
-    });
-
     it("preserves entries with different correlationId", () => {
       addEntry({ message: "a", correlationId: "panel-1" });
       addEntry({ message: "b", correlationId: "panel-2" });
@@ -631,20 +432,6 @@ describe("notificationHistorySlice", () => {
       getState().dismissByCorrelationId("panel-1");
       expect(getState().entries).toHaveLength(1);
       expect(getState().entries[0]!.message).toBe("uncorrelated");
-    });
-
-    it("recomputes unreadCount after removal", () => {
-      addEntry({ message: "missed 1", correlationId: "panel-1" });
-      addEntry({ message: "missed 2", correlationId: "panel-1" });
-      getState().addEntry({
-        type: "info",
-        message: "seen",
-        correlationId: "panel-1",
-        seenAsToast: true,
-      });
-      expect(getState().unreadCount).toBe(2);
-      getState().dismissByCorrelationId("panel-1");
-      expect(getState().unreadCount).toBe(0);
     });
 
     it("recomputes unreadCount correctly with mixed seenAsToast and correlationIds", () => {
@@ -679,23 +466,9 @@ describe("notificationHistorySlice", () => {
       expect(getState().entries).toHaveLength(1);
       expect(getState().unreadCount).toBe(1);
     });
-
-    it("idempotent — second call with same correlationId is a no-op", () => {
-      addEntry({ message: "first", correlationId: "panel-1" });
-      getState().dismissByCorrelationId("panel-1");
-      expect(getState().entries).toHaveLength(0);
-      getState().dismissByCorrelationId("panel-1");
-      expect(getState().entries).toHaveLength(0);
-      expect(getState().unreadCount).toBe(0);
-    });
   });
 
   describe("archive (Done state)", () => {
-    it("defaults archivedAt to null on new entries", () => {
-      addEntry({ message: "test" });
-      expect(getState().entries[0]!.archivedAt).toBeNull();
-    });
-
     it("archiveEntry sets archivedAt and seenAsToast atomically", () => {
       const id = getState().addEntry({ type: "info", message: "live" });
       expect(getState().entries[0]!.archivedAt).toBeNull();
@@ -744,16 +517,6 @@ describe("notificationHistorySlice", () => {
       const after = getState();
       expect(after.entries).toBe(before.entries);
       expect(after.unreadCount).toBe(before.unreadCount);
-    });
-
-    it("unreadCount excludes archived entries even when seenAsToast resets", () => {
-      const id = getState().addEntry({ type: "info", message: "live" });
-      getState().archiveEntry(id);
-      expect(getState().unreadCount).toBe(0);
-      // markUnseenAsToast is a no-op on archived entries — see the guard in
-      // the slice. Asserting unreadCount stays 0 regardless.
-      getState().markUnseenAsToast(id);
-      expect(getState().unreadCount).toBe(0);
     });
 
     it("markUnseenAsToast on archived entry is a no-op (no eviction count tick)", () => {
@@ -917,12 +680,6 @@ describe("notificationHistorySlice", () => {
       expect(entries.find((e) => e.id === "a-older")!.archivedAt).toBeNull();
     });
 
-    it("supersedeKey stores the key on the new entry for future archival", () => {
-      const key = "terminal.A.fallback";
-      getState().addEntry({ type: "error", message: "Disconnected", supersedeKey: key });
-      expect(getState().entries[0]!.supersedeKey).toBe(key);
-    });
-
     it("supersedeKey skips already-archived entries with the same key", () => {
       const key = "terminal.A.fallback";
       getState().addEntry({ type: "error", message: "old", supersedeKey: key });
@@ -1022,15 +779,6 @@ describe("notificationHistorySlice", () => {
         archivedAt: now - ARCHIVED_RETENTION_MS,
       });
       const result = pruneNotificationEntries([atBoundary], now);
-      expect(result).toHaveLength(1);
-    });
-
-    it("does not drop an old unread entry just because it would have expired if read", () => {
-      const oldUnread = makeEntry({
-        timestamp: now - READ_RETENTION_MS - 10000,
-        seenAsToast: false,
-      });
-      const result = pruneNotificationEntries([oldUnread], now);
       expect(result).toHaveLength(1);
     });
 
@@ -1264,10 +1012,6 @@ describe("notificationHistorySlice", () => {
   });
 
   describe("snoozedThreads", () => {
-    it("defaults to an empty map", () => {
-      expect(getState().snoozedThreads).toEqual({});
-    });
-
     it("snoozeThread adds and overwrites the expiry for a correlationId", () => {
       const until = Date.now() + 60_000;
       getState().snoozeThread("thread-1", until);

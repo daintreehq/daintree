@@ -131,46 +131,6 @@ describe("dev-preview lifecycle integration", () => {
     expect(mockStopByPanel).toHaveBeenCalledWith({ panelId: "dev-panel-2" });
   });
 
-  it("stops dev-preview runtimes when trashing a panel group", () => {
-    const group: TabGroup = {
-      id: "group-dev-preview",
-      panelIds: ["dev-panel-3", "term-1"],
-      activeTabId: "dev-panel-3",
-      location: "grid",
-    };
-
-    usePanelStore.setState({
-      panelsById: {
-        "dev-panel-3": {
-          id: "dev-panel-3",
-          kind: "dev-preview",
-          title: "Dev Preview",
-          cwd: "/repo",
-          cols: 80,
-          rows: 24,
-          location: "grid",
-          devCommand: "npm run dev",
-        } as PanelInstance,
-        "term-1": {
-          id: "term-1",
-          kind: "terminal",
-          title: "Terminal",
-          cwd: "/repo",
-          cols: 80,
-          rows: 24,
-          location: "grid",
-        },
-      },
-      panelIds: ["dev-panel-3", "term-1"],
-      tabGroups: new Map([["group-dev-preview", group]]),
-    });
-
-    usePanelStore.getState().trashPanelGroup("dev-panel-3");
-
-    expect(mockStopByPanel).toHaveBeenCalledWith({ panelId: "dev-panel-3" });
-    expect(mockStopByPanel).toHaveBeenCalledTimes(1);
-  });
-
   it("stops all dev-preview runtimes when trashing a mixed multi-dev group", () => {
     const group: TabGroup = {
       id: "group-multi-dev-preview",

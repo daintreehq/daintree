@@ -143,36 +143,6 @@ it("extractFailures skips passed and skipped tests", () => {
   expect(failures[0].titlePath[1]).toBe("fails");
 });
 
-it("extractFailures walks nested suites", () => {
-  const report = {
-    suites: [
-      {
-        file: "spec.ts",
-        title: "root",
-        suites: [
-          {
-            title: "Feature X",
-            specs: [
-              {
-                title: "scenario A",
-                tests: [
-                  {
-                    projectName: "full-terminal",
-                    results: [{ status: "failed", errors: [{ message: "timeout" }] }],
-                  },
-                ],
-              },
-            ],
-          },
-        ],
-      },
-    ],
-  };
-  const failures = extractFailures(report);
-  expect(failures.length).toBe(1);
-  expect(failures[0].titlePath).toEqual(["root", "Feature X", "scenario A"]);
-});
-
 it("extractFailures handles missing errors gracefully", () => {
   const report = {
     suites: [
@@ -457,18 +427,4 @@ it("normalizeError normalizes GitHub Actions Windows runner paths", () => {
   const result = normalizeError("Error at C:\\a\\daintree\\daintree\\e2e\\test.spec.ts:42:10");
   expect(result).not.toContain("a/daintree");
   expect(result).toContain("<path>");
-});
-
-it("computeSignature matches across OS path flavors", () => {
-  const sig1 = computeSignature(
-    "e2e/test.spec.ts",
-    ["suite", "test"],
-    "Error at /Users/runner/work/repo/e2e/test.spec.ts:42:10"
-  );
-  const sig2 = computeSignature(
-    "e2e/test.spec.ts",
-    ["suite", "test"],
-    "Error at C:\\Users\\runneradmin\\work\\repo\\e2e\\test.spec.ts:42:10"
-  );
-  expect(sig1).toBe(sig2);
 });

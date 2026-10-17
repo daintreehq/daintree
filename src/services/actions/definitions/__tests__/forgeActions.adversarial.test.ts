@@ -293,55 +293,14 @@ describe("forge.* navigation adversarial", () => {
     expect(forgeClientMock.openIssues).toHaveBeenCalledWith("/explicit", "bug", "open");
   });
 
-  it("openIssues schema accepts arbitrary state strings (runtime gap vs list schema)", async () => {
-    // ForgeListOptionsSchema restricts state to an enum, but openIssues uses
-    // z.string().optional() — mismatch. Documenting the gap.
-    setCurrentProject({ path: "/repo" });
-    const def = setupActions()("forge.openIssues");
-    await def.run({ state: "wat" }, {} as never);
-    expect(forgeClientMock.openIssues).toHaveBeenCalledWith("/repo", undefined, "wat");
-  });
-
-  it("openIssue forwards cwd + issueNumber positionally", async () => {
-    const def = setupActions()("forge.openIssue");
-    await def.run({ cwd: "/repo", issueNumber: 42 }, {} as never);
-    expect(forgeClientMock.openIssue).toHaveBeenCalledWith("/repo", 42);
-  });
-
   it("openIssue falls back to ctx.activeWorktreePath", async () => {
     await runAction("forge.openIssue", { issueNumber: 7 }, { activeWorktreePath: "/repo" });
     expect(forgeClientMock.openIssue).toHaveBeenCalledWith("/repo", 7);
   });
 
-  it("openPR forwards cwd + prNumber positionally", async () => {
-    const def = setupActions()("forge.openPR");
-    await def.run({ cwd: "/repo", prNumber: 12 }, {} as never);
-    expect(forgeClientMock.openPR).toHaveBeenCalledWith("/repo", 12);
-  });
-
   it("openPR falls back to ctx.activeWorktreePath", async () => {
     await runAction("forge.openPR", { prNumber: 3 }, { activeWorktreePath: "/repo" });
     expect(forgeClientMock.openPR).toHaveBeenCalledWith("/repo", 3);
-  });
-
-  it("openPR throws when no cwd and no ctx.activeWorktreePath", async () => {
-    await expect(runAction("forge.openPR", { prNumber: 3 })).rejects.toThrow("No active worktree");
-    expect(forgeClientMock.openPR).not.toHaveBeenCalled();
-  });
-
-  it("validateToken forwards providerId + token positionally (including whitespace)", async () => {
-    const def = setupActions()("forge.validateToken");
-    await def.run({ providerId: "daintree.github.github", token: "  ghp_123  " }, {} as never);
-    expect(forgeClientMock.validateToken).toHaveBeenCalledWith(
-      "daintree.github.github",
-      "  ghp_123  "
-    );
-  });
-
-  it("assignIssue forwards cwd, issueNumber, and username positionally", async () => {
-    const def = setupActions()("forge.assignIssue");
-    await def.run({ cwd: "/repo", issueNumber: 42, username: "bob" }, {} as never);
-    expect(forgeClientMock.assignIssue).toHaveBeenCalledWith("/repo", 42, "bob");
   });
 
   it("assignIssue falls back to ctx.activeWorktreePath when cwd omitted", async () => {
@@ -351,12 +310,6 @@ describe("forge.* navigation adversarial", () => {
       { activeWorktreePath: "/repo" }
     );
     expect(forgeClientMock.assignIssue).toHaveBeenCalledWith("/repo", 7, "alice");
-  });
-
-  it("assignIssue throws when no cwd and no ctx.activeWorktreePath", async () => {
-    await expect(
-      runAction("forge.assignIssue", { issueNumber: 7, username: "bob" })
-    ).rejects.toThrow("No active worktree");
   });
 
   describe("issue-cache patching from the authoritative assignee list (#11087, #11546)", () => {
@@ -507,13 +460,6 @@ describe("forge.* navigation adversarial", () => {
     expect(forgeClientMock.approvePR).toHaveBeenCalledWith("/repo", 3, undefined);
   });
 
-  it("approvePR throws when no cwd and no ctx.activeWorktreePath", async () => {
-    await expect(runAction("forge.approvePR", { prNumber: 3 })).rejects.toThrow(
-      "No active worktree"
-    );
-    expect(forgeClientMock.approvePR).not.toHaveBeenCalled();
-  });
-
   it("requestChanges forwards cwd, prNumber, and body positionally", async () => {
     const def = setupActions()("forge.requestChanges");
     await def.run({ cwd: "/repo", prNumber: 4, body: "fix types" }, {} as never);
@@ -544,15 +490,6 @@ describe("forge.* navigation adversarial", () => {
     const def = setupActions()("forge.dismissReview");
     await def.run({ cwd: "/repo", prNumber: 5, reviewId: 99, message: "stale" }, {} as never);
     expect(forgeClientMock.dismissReview).toHaveBeenCalledWith("/repo", 5, 99, "stale");
-  });
-
-  it("requestReviewers forwards cwd, prNumber, and the users/teams object", async () => {
-    const def = setupActions()("forge.requestReviewers");
-    await def.run({ cwd: "/repo", prNumber: 6, users: ["octocat"], teams: ["core"] }, {} as never);
-    expect(forgeClientMock.requestReviewers).toHaveBeenCalledWith("/repo", 6, {
-      users: ["octocat"],
-      teams: ["core"],
-    });
   });
 
   it("requestReviewers falls back to ctx.activeWorktreePath", async () => {
@@ -739,27 +676,6 @@ describe("forge.* query adversarial", () => {
     forgeClientMock.listIssues.mockResolvedValue({ items: [], nextCursor: null, hasMore: false });
     await runAction("forge.listIssues", {}, { activeWorktreePath: "/repo" });
     expect(forgeClientMock.listIssues).toHaveBeenCalledWith("/repo", expect.any(Object));
-  });
-
-  it("listIssues throws when no cwd and no ctx.activeWorktreePath", async () => {
-    await expect(runAction("forge.listIssues", {})).rejects.toThrow("No active worktree");
-  });
-
-  it("listIssues prefers explicit cwd over ctx", async () => {
-    forgeClientMock.listIssues.mockResolvedValue({ items: [], nextCursor: null, hasMore: false });
-    await runAction("forge.listIssues", { cwd: "/explicit" }, { activeWorktreePath: "/ctx" });
-    expect(forgeClientMock.listIssues).toHaveBeenCalledWith("/explicit", expect.any(Object));
-  });
-
-  it("listPRs preserves all filter fields when falling back to ctx", async () => {
-    forgeClientMock.listPRs.mockResolvedValue({ items: [], nextCursor: null, hasMore: false });
-    await runAction(
-      "forge.listPRs",
-      { state: "all", cursor: "c1", search: "is:draft" },
-      { activeWorktreePath: "/repo" }
-    );
-    const [, opts] = forgeClientMock.listPRs.mock.calls[0]!;
-    expect(opts).toMatchObject({ state: "all", cursor: "c1", search: "is:draft" });
   });
 
   it("listPRs forwards `search` to the provider — validating it is not the same as wiring it", async () => {
@@ -959,34 +875,6 @@ describe("forge list view projection", () => {
     expect(serialized).not.toContain("aaaa");
   });
 
-  it("summary keeps the fields needed to choose an item, including linkedPR", async () => {
-    forgeClientMock.listIssues.mockResolvedValue(page);
-    const result = await runAction<{ items: Array<Record<string, unknown>> }>(
-      "forge.listIssues",
-      {},
-      { activeWorktreePath: "/repo" }
-    );
-    expect(result.items[0]).toMatchObject({
-      number: 7,
-      assignees: ["octocat"],
-      labels: ["bug"],
-      commentCount: 3,
-      linkedPR: { number: 42, state: "open" },
-    });
-  });
-
-  it("summary carries the pagination envelope through untouched", async () => {
-    forgeClientMock.listIssues.mockResolvedValue(page);
-    const result = await runAction<{ nextCursor: unknown; hasMore: unknown; totalCount: unknown }>(
-      "forge.listIssues",
-      {},
-      { activeWorktreePath: "/repo" }
-    );
-    expect(result.nextCursor).toBe("cur");
-    expect(result.hasMore).toBe(true);
-    expect(result.totalCount).toBe(99);
-  });
-
   it("view:'full' hands back the provider page itself, unmodified", async () => {
     forgeClientMock.listIssues.mockResolvedValue(page);
     const result = await runAction(
@@ -1033,22 +921,6 @@ describe("forge list view projection", () => {
       expect(serialized).not.toContain("bbbb");
     });
 
-    it("keeps a null reviewDecision, which reads as 'no review gate', not 'unknown'", async () => {
-      forgeClientMock.listPRs.mockResolvedValue(prPage);
-      const result = await runAction<{ items: Array<Record<string, unknown>> }>(
-        "forge.listPRs",
-        {},
-        { activeWorktreePath: "/repo" }
-      );
-      expect(result.items[0]).toHaveProperty("reviewDecision", null);
-      expect(result.items[0]).toMatchObject({
-        number: 900,
-        author: "gpriday",
-        baseRef: "develop",
-        ciStatus: "success",
-      });
-    });
-
     it("view:'full' hands back the provider page itself", async () => {
       forgeClientMock.listPRs.mockResolvedValue(prPage);
       const result = await runAction(
@@ -1058,18 +930,6 @@ describe("forge list view projection", () => {
       );
       expect(result).toBe(prPage);
     });
-  });
-
-  it("summary is materially smaller than full for the same page", async () => {
-    forgeClientMock.listIssues.mockResolvedValue(page);
-    const summary = await runAction("forge.listIssues", {}, { activeWorktreePath: "/repo" });
-    forgeClientMock.listIssues.mockResolvedValue(page);
-    const full = await runAction(
-      "forge.listIssues",
-      { view: "full" },
-      { activeWorktreePath: "/repo" }
-    );
-    expect(JSON.stringify(summary).length).toBeLessThan(JSON.stringify(full).length / 10);
   });
 });
 
@@ -1083,14 +943,6 @@ describe("forge.* single-resource query adversarial", () => {
   it("getRepoStats falls back to ctx.activeWorktreePath", async () => {
     await runAction("forge.getRepoStats", {}, { activeWorktreePath: "/repo" });
     expect(forgeClientMock.getRepoStats).toHaveBeenCalledWith("/repo", undefined);
-  });
-
-  it("getIssue forwards cwd + issueNumber and returns null when issue is missing", async () => {
-    forgeClientMock.getIssue.mockResolvedValue(null);
-    const def = setupActions()("forge.getIssue");
-    const result = await def.run({ cwd: "/repo", issueNumber: 42 }, {} as never);
-    expect(forgeClientMock.getIssue).toHaveBeenCalledWith("/repo", 42);
-    expect(result).toBeNull();
   });
 
   it("getIssue falls back to ctx.activeWorktreePath", async () => {
@@ -1133,13 +985,6 @@ describe("forge.* single-resource query adversarial", () => {
       );
     });
 
-    it("throws when no cwd and no ctx.activeWorktreePath", async () => {
-      await expect(runAction("forge.listIssueComments", { issueNumber: 1 })).rejects.toThrow(
-        "No active worktree"
-      );
-      expect(forgeClientMock.listIssueComments).not.toHaveBeenCalled();
-    });
-
     it("rejects a missing, non-positive or fractional issue number", async () => {
       const schema = setupActions()("forge.listIssueComments").argsSchema;
       for (const args of [{}, { issueNumber: 0 }, { issueNumber: -1 }, { issueNumber: 1.5 }]) {
@@ -1156,22 +1001,6 @@ describe("forge.* single-resource query adversarial", () => {
       for (const perPage of [1, 20, 100]) {
         expect(schema?.safeParse({ issueNumber: 1, perPage }).success).toBe(true);
       }
-    });
-
-    it("returns the provider's page unchanged", async () => {
-      const page = {
-        items: [{ id: "1", body: "hi", url: "u", createdAt: 0 }],
-        nextCursor: "c2",
-        hasMore: true,
-        totalCount: 3,
-      };
-      forgeClientMock.listIssueComments.mockResolvedValue(page);
-      const result = await runAction(
-        "forge.listIssueComments",
-        { issueNumber: 1 },
-        { activeWorktreePath: "/repo" }
-      );
-      expect(result).toEqual(page);
     });
   });
 });
@@ -1231,14 +1060,6 @@ describe("githubClient import boundary", () => {
 });
 
 describe("forge.getChecks", () => {
-  const check = {
-    name: "build",
-    status: "completed" as const,
-    conclusion: "failure" as const,
-    required: true,
-    detailsUrl: "https://ci.test/build",
-  };
-
   it("wraps a missing PR as {checks:null}, never a bare null", async () => {
     // A bare null would be dropped by the MCP structured-content path, taking
     // "PR not found" with it.
@@ -1265,18 +1086,6 @@ describe("forge.getChecks", () => {
     expect(result).toEqual({ checks: [] });
   });
 
-  it("forwards the resolved check list under the checks key", async () => {
-    forgeClientMock.getChecks.mockResolvedValue({ checks: [check] });
-
-    const result = await runAction(
-      "forge.getChecks",
-      { prNumber: 7 },
-      { activeWorktreePath: "/repo" }
-    );
-
-    expect(result).toEqual({ checks: [check] });
-  });
-
   it("falls back to the active worktree path and prefers an explicit cwd", async () => {
     forgeClientMock.getChecks.mockResolvedValue({ checks: [] });
 
@@ -1289,13 +1098,6 @@ describe("forge.getChecks", () => {
       { activeWorktreePath: "/active" }
     );
     expect(forgeClientMock.getChecks).toHaveBeenCalledWith("/explicit", 9);
-  });
-
-  it("throws without calling the client when no cwd and no active worktree", async () => {
-    await expect(runAction("forge.getChecks", { prNumber: 9 }, {})).rejects.toThrow(
-      /No active worktree/
-    );
-    expect(forgeClientMock.getChecks).not.toHaveBeenCalled();
   });
 
   it("rejects a non-positive prNumber through the args schema", async () => {

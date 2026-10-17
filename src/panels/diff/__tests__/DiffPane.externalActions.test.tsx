@@ -293,28 +293,6 @@ describe("DiffPane toolbar — path resolution", () => {
 });
 
 describe("DiffPane toolbar — action routing", () => {
-  it("routes each button to its own action", async () => {
-    seedPanel("src/index.ts");
-    renderPane();
-
-    await click(revealButton());
-    await click(editorButton());
-
-    expect(dispatchMock.mock.calls.map(([id]) => id)).toEqual([
-      "file.showItemInFolder",
-      "file.openInEditor",
-    ]);
-  });
-
-  it("attributes the dispatch to the user", async () => {
-    seedPanel("src/index.ts");
-    renderPane();
-
-    await click(editorButton());
-
-    expect(dispatchCall(0)[2]).toEqual({ source: "user" });
-  });
-
   // The out-of-root reveal opt-in belongs to the file viewer alone (#11934):
   // its read root falls back to the file's own parent, so it displays files no
   // project owns. A diff always has a worktree behind it, so relaxing

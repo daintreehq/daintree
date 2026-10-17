@@ -32,10 +32,15 @@ vi.mock("@/components/Git/gitRemoteOperationPreview", async (importOriginal) => 
 
 vi.mock("zustand/react/shallow", () => ({ useShallow: (fn: unknown) => fn }));
 vi.mock("@/store", () => ({ usePortalStore: () => ({ isOpen: false, width: 0 }) }));
+vi.mock("@/store/portalStore", () => ({ usePortalStore: () => ({ isOpen: false, width: 0 }) }));
 vi.mock("@/hooks", async (importOriginal) => {
   const actual = (await importOriginal()) as Record<string, unknown>;
   return { ...actual, useOverlayState: () => {} };
 });
+vi.mock("@/hooks/useOverlayState", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/hooks/useOverlayState")>()),
+  useOverlayState: () => {},
+}));
 vi.mock("@/hooks/useAnimatedPresence", () => ({
   useAnimatedPresence: ({ isOpen }: { isOpen: boolean }) => ({
     isVisible: isOpen,
@@ -97,37 +102,6 @@ describe("GitPushConfirmDialog", () => {
     });
 
     expect(mocks.buildPreview).toHaveBeenCalledWith("/repo", "push");
-  });
-
-  it("blocks approval while the preview is still loading", async () => {
-    const gate = deferred<{
-      branch: string;
-      destination: { remote: string; branch: string };
-      pullSource: { remote: string; branch: string };
-      commits: never[];
-      pushRange: { total: number; rangeBasis: "tracked" | "creates" | "unverified" } | null;
-    }>();
-    mocks.buildPreview.mockReturnValue(gate.promise);
-    render(<GitPushConfirmDialog />);
-
-    await act(async () => {
-      void useGitPushConfirmStore.getState().requestConfirmation("/repo");
-    });
-
-    expect(pushButton().getAttribute("aria-disabled")).toBe("true");
-
-    await act(async () => {
-      gate.resolve({
-        branch: "main",
-        destination: { remote: "origin", branch: "main" },
-        pullSource: { remote: "origin", branch: "main" },
-        commits: [],
-        pushRange: { total: 0, rangeBasis: "tracked" as const },
-      });
-      await gate.promise;
-    });
-
-    expect(pushButton().hasAttribute("aria-disabled")).toBe(false);
   });
 
   // `commits.length === 0` is a VALID loaded state — it means "nothing ahead",

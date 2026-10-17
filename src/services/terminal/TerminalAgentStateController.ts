@@ -18,6 +18,14 @@ const DIRECTING_PHASE2_THRESHOLD = 5;
 // returns to the view.
 const DIRECTING_MAX_WALL_MS = 15000;
 
+// A composer draft holds directing while it sits unsent: the user is mid-reply
+// even when they pause to think, so neither the keystroke debounce nor the
+// 15s wall-clock cap applies. Sending, emptying the draft or Escape releases
+// it; this ceiling (since the last edit) bounds an abandoned draft. The hold
+// deliberately keeps the pane busy for agent-request delivery and fleet
+// settling, both of which treat directing as busy.
+const DIRECTING_DRAFT_ABANDON_MS = 120_000;
+
 type DirectingExitTrigger =
   | "timer"
   | "enter-key"
@@ -32,6 +40,7 @@ export class TerminalAgentStateController {
   private directingTimers = new Map<string, number>();
   private directingEnteredAt = new Map<string, number>();
   private compositionCounts = new Map<string, number>();
+  private composerDraftHolds = new Set<string>();
   private deps: AgentStateControllerDeps;
   private visibilityListenerAttached = false;
 
@@ -70,6 +79,27 @@ export class TerminalAgentStateController {
   }
 
   onUserInput(id: string, data: string): void {
+    this.recordInput(id, data, false);
+  }
+
+  onComposerDraft(id: string): void {
+    this.recordInput(id, "", true);
+  }
+
+  /**
+   * The composer emptied its draft without the user deleting it (a send, a
+   * reset). The hold ends, but directing is bridged by the short debounce so
+   * the pane doesn't flash back to waiting before the agent reports working.
+   */
+  releaseComposerDraft(id: string): void {
+    if (!this.composerDraftHolds.delete(id)) return;
+    const managed = this.deps.getInstance(id);
+    if (!managed || managed.agentState !== "directing") return;
+    this.directingEnteredAt.set(id, Date.now());
+    this.armDirectingTimer(id, this.getDebounceMs(this.compositionCounts.get(id) ?? 0));
+  }
+
+  private recordInput(id: string, data: string, composerDraft: boolean): void {
     const managed = this.deps.getInstance(id);
     if (!managed) return;
 
@@ -93,6 +123,7 @@ export class TerminalAgentStateController {
         debounceCount = newCount;
       }
       this.compositionCounts.set(id, newCount);
+      if (composerDraft) this.composerDraftHolds.add(id);
 
       // Refreshed per keystroke so the wall-clock guardrail measures "time
       // since last input", matching the issue spec. Active typers are
@@ -107,17 +138,26 @@ export class TerminalAgentStateController {
         usePanelStore.getState().updateAgentState(id, "directing");
       }
 
-      const existingTimer = this.directingTimers.get(id);
-      if (existingTimer !== undefined) {
-        clearTimeout(existingTimer);
-      }
-      this.directingTimers.set(
+      this.armDirectingTimer(
         id,
-        window.setTimeout(() => {
-          this.clearDirectingInternal(id, "timer");
-        }, this.getDebounceMs(debounceCount))
+        this.composerDraftHolds.has(id)
+          ? DIRECTING_DRAFT_ABANDON_MS
+          : this.getDebounceMs(debounceCount)
       );
     }
+  }
+
+  private armDirectingTimer(id: string, delayMs: number): void {
+    const existingTimer = this.directingTimers.get(id);
+    if (existingTimer !== undefined) {
+      clearTimeout(existingTimer);
+    }
+    this.directingTimers.set(
+      id,
+      window.setTimeout(() => {
+        this.clearDirectingInternal(id, "timer");
+      }, delayMs)
+    );
   }
 
   private getDebounceMs(count: number): number {
@@ -141,6 +181,7 @@ export class TerminalAgentStateController {
     }
     this.compositionCounts.delete(id);
     this.directingEnteredAt.delete(id);
+    this.composerDraftHolds.delete(id);
 
     if (wasDirecting) {
       logDebug("[directing] exit", { terminalId: id, trigger: "enter-key" });
@@ -178,6 +219,7 @@ export class TerminalAgentStateController {
     }
     this.compositionCounts.delete(id);
     this.directingEnteredAt.delete(id);
+    this.composerDraftHolds.delete(id);
 
     if (wasDirecting) {
       logDebug("[directing] exit", { terminalId: id, trigger: "destroy" });
@@ -191,6 +233,7 @@ export class TerminalAgentStateController {
     this.directingTimers.clear();
     this.compositionCounts.clear();
     this.directingEnteredAt.clear();
+    this.composerDraftHolds.clear();
 
     if (this.visibilityListenerAttached) {
       document.removeEventListener("visibilitychange", this.handleVisibilityChange);
@@ -199,9 +242,8 @@ export class TerminalAgentStateController {
   }
 
   private clearDirectingInternal(id: string, trigger: DirectingExitTrigger): void {
-    const managed = this.deps.getInstance(id);
-    if (!managed || managed.agentState !== "directing") return;
-
+    // Bookkeeping goes first: a hold left behind by a pane that already moved
+    // on would otherwise stretch the next directing spell to the draft ceiling.
     const timer = this.directingTimers.get(id);
     if (timer !== undefined) {
       clearTimeout(timer);
@@ -209,6 +251,10 @@ export class TerminalAgentStateController {
     }
     this.compositionCounts.delete(id);
     this.directingEnteredAt.delete(id);
+    this.composerDraftHolds.delete(id);
+
+    const managed = this.deps.getInstance(id);
+    if (!managed || managed.agentState !== "directing") return;
 
     const revertState = managed.canonicalAgentState ?? "waiting";
     managed.agentState = revertState;
@@ -228,11 +274,14 @@ export class TerminalAgentStateController {
     // a "still pending" timer is not evidence of an active session. The
     // enteredAt timestamp (refreshed on each keystroke) is the source of
     // truth — entries older than the cap mean the user has not typed for
-    // 15s+, so the directing indicator is definitionally stale.
+    // 15s+ (or abandoned a held draft), so the indicator is definitionally stale.
     const now = Date.now();
     const stale: string[] = [];
     for (const [id, enteredAt] of this.directingEnteredAt.entries()) {
-      if (now - enteredAt >= DIRECTING_MAX_WALL_MS) {
+      const cap = this.composerDraftHolds.has(id)
+        ? DIRECTING_DRAFT_ABANDON_MS
+        : DIRECTING_MAX_WALL_MS;
+      if (now - enteredAt >= cap) {
         stale.push(id);
       }
     }

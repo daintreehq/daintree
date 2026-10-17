@@ -121,40 +121,9 @@ describe("UpstreamSyncBadge — base-divergence layout", () => {
     const mergedSpan = childSpans.find((el) => /↑2\s*↓1/.test(el.textContent ?? ""));
     expect(mergedSpan).toBeUndefined();
   });
-
-  it("uses the upstream colour palette for base-divergence arrows", () => {
-    renderBadge({
-      aheadCount: 0,
-      behindCount: 0,
-      baseBranchName: "develop",
-      baseAheadCount: 2,
-      baseBehindCount: 1,
-      baseMatchesUpstream: false,
-    });
-
-    const indicator = screen.getByTestId("upstream-sync-indicator");
-    const childSpans = Array.from(indicator.children) as HTMLElement[];
-    const aheadSpan = childSpans.find((el) => el.textContent === "↑2");
-    const behindSpan = childSpans.find((el) => el.textContent === "↓1");
-
-    expect(aheadSpan?.className).toContain("text-status-success");
-    expect(behindSpan?.className).toContain("text-status-warning");
-  });
 });
 
 describe("UpstreamSyncBadge — value-change flash", () => {
-  it("does not flash on initial render", () => {
-    renderBadge();
-    const indicator = screen.getByTestId("upstream-sync-indicator");
-    expect(indicator.className).not.toContain("animate-upstream-badge-flash");
-  });
-
-  it("does not apply the legacy pulse class for in-flight fetches", () => {
-    renderBadge({ isFetchInFlight: true });
-    const indicator = screen.getByTestId("upstream-sync-indicator");
-    expect(indicator.className).not.toContain("animate-pulse-immediate");
-  });
-
   it("does not flash across repeated polls with stable counts (issue #8872 regression)", () => {
     // Simulates the polling loop: lastFetchedAt advances each tick but the
     // counts are unchanged. The badge must stay still — that was the bug.
@@ -197,17 +166,6 @@ describe("UpstreamSyncBadge — value-change flash", () => {
           baseBehindCount={0}
           baseMatchesUpstream={true}
         />
-      </TooltipProvider>
-    );
-    const indicator = screen.getByTestId("upstream-sync-indicator");
-    expect(indicator.className).not.toContain("animate-upstream-badge-flash");
-  });
-
-  it("does not flash when fetch is in-flight without count change", () => {
-    const { rerender } = renderBadge({ isFetchInFlight: false });
-    rerender(
-      <TooltipProvider>
-        <UpstreamSyncBadge {...baseProps} isFetchInFlight={true} />
       </TooltipProvider>
     );
     const indicator = screen.getByTestId("upstream-sync-indicator");

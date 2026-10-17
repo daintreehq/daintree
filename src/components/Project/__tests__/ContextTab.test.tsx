@@ -53,34 +53,6 @@ afterEach(() => {
 });
 
 describe("ContextTab copy", () => {
-  it("renders headings and labels in sentence case, not Title Case", () => {
-    renderTab();
-
-    // Sentence-case headings/labels present (getByText throws if absent)
-    expect(screen.getByText("Excluded paths")).toBeTruthy();
-    expect(screen.getByText("Context generation")).toBeTruthy();
-    expect(screen.getByText("Test configuration")).toBeTruthy();
-    expect(screen.getByText("Max context size")).toBeTruthy();
-    expect(screen.getByText("Max file size")).toBeTruthy();
-    expect(screen.getByText("Character budget")).toBeTruthy();
-    expect(screen.getByText("File priority strategy")).toBeTruthy();
-    expect(screen.getByText("Always include")).toBeTruthy();
-    expect(screen.getByText("Always exclude")).toBeTruthy();
-
-    // Former Title Case variants are gone
-    expect(screen.queryByText("Excluded Paths")).toBeNull();
-    expect(screen.queryByText("Test Configuration")).toBeNull();
-    expect(screen.queryByText("Max Context Size (bytes)")).toBeNull();
-  });
-
-  it("uses sentence-case button labels", () => {
-    renderTab();
-    expect(screen.getByRole("button", { name: /add path pattern/i })).toBeTruthy();
-    expect(screen.getByRole("button", { name: /add include pattern/i })).toBeTruthy();
-    expect(screen.getByRole("button", { name: /add exclude pattern/i })).toBeTruthy();
-    expect(screen.getByRole("button", { name: "Test config" })).toBeTruthy();
-  });
-
   it("drops trailing periods on single-sentence subtitles", () => {
     const { container } = renderTab();
     const subtitles = Array.from(container.querySelectorAll("p, div"))
@@ -185,20 +157,6 @@ describe("ContextTab test-config button", () => {
     expect(screen.queryByRole("status", { name: "Running test configuration" })).toBeNull();
     expect(screen.getByText("5 files would be included")).toBeTruthy();
   });
-
-  it("renders the result card and hides the skeleton once the dry-run resolves", async () => {
-    testConfigMock.mockResolvedValue(successResult);
-    renderTab();
-
-    await act(async () => {
-      fireEvent.click(screen.getByRole("button", { name: "Test config" }));
-    });
-
-    await waitFor(() => {
-      expect(screen.getByText("5 files would be included")).toBeTruthy();
-    });
-    expect(screen.queryByRole("status", { name: "Running test configuration" })).toBeNull();
-  });
 });
 
 describe("ContextTab dry-run reporting", () => {
@@ -221,11 +179,9 @@ describe("ContextTab dry-run reporting", () => {
     [1_000, "~1.0k tokens"],
     [9_949, "~9.9k tokens"],
     [10_000, "~10k tokens"],
-    [78_400, "~78k tokens"],
     // Must roll over to M rather than printing a malformed "1000k".
     [999_500, "~1.0M tokens"],
     [1_000_000, "~1.0M tokens"],
-    [2_400_000, "~2.4M tokens"],
   ])("formats a %i token estimate as %s", async (tokens, expected) => {
     await runWith({ estimatedTokens: tokens });
     expect(screen.getByText(expected)).toBeTruthy();

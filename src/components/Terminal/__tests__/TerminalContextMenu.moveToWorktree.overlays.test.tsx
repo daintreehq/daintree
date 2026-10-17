@@ -98,7 +98,12 @@ vi.mock("@/hooks/useWorktreeColorMap", () => ({
 
 vi.mock("@/store/worktreeFilterStore", () => ({
   useWorktreeFilterStore: (selector: (state: unknown) => unknown) =>
-    selector({ orderBy: "alpha", pinnedWorktrees: [], manualOrder: [] }),
+    selector({
+      orderBy: "alpha",
+      pinnedWorktrees: [],
+      manualOrder: [],
+      worktreeCustomTitles: {},
+    }),
 }));
 
 import { primeRadix } from "@/components/ui/radix-loader";

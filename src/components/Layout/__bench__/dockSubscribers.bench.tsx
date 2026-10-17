@@ -49,6 +49,9 @@ vi.mock("../BackgroundContainer", async (o) =>
 vi.mock("../WaitingContainer", async (o) =>
   counted(await o<Record<string, unknown>>(), "WaitingContainer")
 );
+vi.mock("../UnreadContainer", async (o) =>
+  counted(await o<Record<string, unknown>>(), "UnreadContainer")
+);
 vi.mock("../TrashContainer", async (o) =>
   counted(await o<Record<string, unknown>>(), "TrashContainer")
 );
@@ -289,6 +292,7 @@ const KEYS = [
   "DockedNonPtyPanelItem",
   "BackgroundContainer",
   "WaitingContainer",
+  "UnreadContainer",
   "ErrorsContainer",
   "TrashContainer",
 ];

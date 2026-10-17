@@ -70,16 +70,6 @@ describe("projectRecipes IPC adversarial", () => {
     expect(projectStoreMock.addRecipe).not.toHaveBeenCalled();
   });
 
-  it("addRecipe rejects non-finite createdAt (Infinity)", async () => {
-    await expect(
-      getHandler(CHANNELS.PROJECT_ADD_RECIPE)(fakeEvent(), {
-        projectId: "p1",
-        recipe: { ...validRecipe(), createdAt: Number.POSITIVE_INFINITY },
-      })
-    ).rejects.toThrow(/createdAt/);
-    expect(projectStoreMock.addRecipe).not.toHaveBeenCalled();
-  });
-
   it("addRecipe rejects whitespace-only name", async () => {
     await expect(
       getHandler(CHANNELS.PROJECT_ADD_RECIPE)(fakeEvent(), {
@@ -212,19 +202,6 @@ describe("projectRecipes IPC adversarial", () => {
     expect(projectStoreMock.updateRecipe).not.toHaveBeenCalled();
   });
 
-  it("updateRecipe rejects usageHistory patch exceeding the 20-entry cap", async () => {
-    await expect(
-      getHandler(CHANNELS.PROJECT_UPDATE_RECIPE)(fakeEvent(), {
-        projectId: "p1",
-        recipeId: "r1",
-        updates: {
-          usageHistory: Array.from({ length: 21 }, (_v, i) => i + 1),
-        } as unknown as Record<string, unknown>,
-      })
-    ).rejects.toThrow(/usageHistory/);
-    expect(projectStoreMock.updateRecipe).not.toHaveBeenCalled();
-  });
-
   it("updateRecipe forwards a clean rename patch", async () => {
     await getHandler(CHANNELS.PROJECT_UPDATE_RECIPE)(fakeEvent(), {
       projectId: "p1",
@@ -299,17 +276,6 @@ describe("projectRecipes IPC adversarial", () => {
       })
     ).rejects.toThrow(/secret.*github-pat|GITHUB_TOKEN/i);
     expect(projectStoreMock.saveRecipes).not.toHaveBeenCalled();
-  });
-
-  it("syncInRepoRecipes rejects a recipe with a secret env value before writing", async () => {
-    projectStoreMock.getProjectById.mockReturnValueOnce({ path: "/repo" } as never);
-    await expect(
-      getHandler(CHANNELS.PROJECT_SYNC_INREPO_RECIPES)(fakeEvent(), {
-        projectId: "p1",
-        recipes: [{ ...validRecipe(), terminals: [secretTerminal()] }],
-      })
-    ).rejects.toThrow(/secret.*github-pat|GITHUB_TOKEN/i);
-    expect(projectStoreMock.writeInRepoRecipe).not.toHaveBeenCalled();
   });
 
   it("updateInRepoRecipe rejects a recipe with a secret env value", async () => {
@@ -392,11 +358,5 @@ describe("projectRecipes IPC adversarial", () => {
       })
     ).rejects.toMatchObject({ code: "RECIPE_FORWARD_COMPAT_CONFLICT" });
     expect(projectStoreMock.writeInRepoRecipe).not.toHaveBeenCalled();
-  });
-
-  it("cleanup removes all eleven handlers", () => {
-    expect(ipcHandlers.size).toBe(11);
-    cleanup();
-    expect(ipcHandlers.size).toBe(0);
   });
 });

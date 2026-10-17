@@ -1,5 +1,7 @@
 import {
   Fragment,
+  lazy,
+  Suspense,
   useCallback,
   useLayoutEffect,
   useMemo,
@@ -7,12 +9,14 @@ import {
   useState,
   useSyncExternalStore,
 } from "react";
-import { isMac, isWindows } from "@/lib/platform";
+import { isMac } from "@/lib/platform";
+import { isHostMac, isHostWindows, isRemoteWindow } from "@/hooks/useHostPlatform";
 import type React from "react";
 import { type PanelLocation } from "@/types";
 import { usePanelStore } from "@/store";
 import { useVoiceRecordingStore } from "@/store/voiceRecordingStore";
 import { useWorktreeSelectionStore } from "@/store/worktreeStore";
+import { useWorktreeFilterStore } from "@/store/worktreeFilterStore";
 
 import { useSidebarWorktreeOrder } from "@/hooks/useSidebarWorktreeOrder";
 import { getWorktreeHeadline } from "@/lib/worktreeHeadline";
@@ -22,6 +26,7 @@ import {
   isFleetArmEligible,
 } from "@/store/fleetArmingStore";
 import { useFleetSnapshotStore } from "@/store/fleetSnapshotStore";
+import { isHandBackUnseen } from "@shared/utils/runHandBack";
 import {
   AGENT_SNOOZE_DURATION_OPTIONS,
   AGENT_SNOOZE_LABEL,
@@ -78,6 +83,12 @@ import {
   TerminalHandOverMenuItems,
   useOrchestratorCandidates,
 } from "./TerminalHandOver";
+
+// Loaded on first use: every pane and session row mounts this menu, and the
+// dialog pulls in Pilot's row and band modules that nothing else here needs.
+const LazyParkRunDialog = lazy(() =>
+  import("@/components/Fleet/ParkRunDialog").then((m) => ({ default: m.ParkRunDialog }))
+);
 import {
   ArrowDownFromLine,
   Bell,
@@ -93,6 +104,8 @@ import {
   Globe,
   Info,
   Lock,
+  Mail,
+  MailOpen,
   Maximize2,
   Mic,
   MicOff,
@@ -113,7 +126,7 @@ import {
   Trash2,
   Unlock,
 } from "lucide-react";
-import { FolderGit2, FolderOpen, FolderTree } from "@/components/icons";
+import { CirclePause, FolderGit2, FolderOpen, FolderTree } from "@/components/icons";
 import {
   ContextMenu,
   ContextMenuContent,
@@ -123,7 +136,6 @@ import {
   ContextMenuSub,
   ContextMenuSubContent,
   ContextMenuSubTrigger,
-  ContextMenuTrigger,
   stopContextMenuPropagation,
 } from "@/components/ui/context-menu";
 import { MenuActionSourceContext, type MenuActionSourceValue } from "@/components/ui/menu-source";
@@ -134,6 +146,7 @@ import {
   subscribeToTourRegistry,
 } from "@/components/Tour/tourRegistry";
 import { MoveToWorktreePicker } from "@/components/Panel/MoveToWorktreePicker";
+import { PanelContextMenuTriggerScope } from "./PanelContextMenuTrigger";
 import {
   GENERIC_PANEL_RELOAD_ACTION_ID,
   GENERIC_PANEL_TOUR_ACTION_ID,
@@ -152,8 +165,8 @@ import {
   getRegisteredPluginActionsSnapshot,
   subscribeToRegisteredPluginActions,
 } from "@/services/plugin/registeredPluginActions";
-import { copyWithToast } from "@/lib/copyWithToast";
 import { usePanelViewMenuItems, usePanelWorkerMenus } from "@/store/pluginPanelMenuStore";
+import { copyWithToast } from "@/lib/copyWithToast";
 
 const ICON_CLASS = "w-3.5 h-3.5 mr-2 shrink-0";
 
@@ -190,6 +203,20 @@ interface TerminalContextMenuProps {
    * menu from the keyboard never lands on a row standing in for it.
    */
   proxy?: boolean;
+  /**
+   * Which part of the panel opens the menu. `"surface"` (the default) makes
+   * every pixel of the children a trigger, which suits a terminal pane whose
+   * content has no menu of its own. `"header"` leaves the children alone and
+   * hands the trigger to a `PanelContextMenuTrigger` inside them — the title
+   * bar — so a file, diff or browser body keeps the right-click for itself.
+   */
+  triggerScope?: "surface" | "header";
+}
+
+/** Named for the host's file manager, which is where the hovered path lives. */
+function revealInFolderLabel(): string {
+  if (isHostMac()) return "Reveal in Finder";
+  return isHostWindows() ? "Show in Explorer" : "Show in folder";
 }
 
 /**
@@ -223,6 +250,8 @@ type MenuPanel = ReturnType<typeof usePanelStore.getState>["panelsById"][string]
  * worktree, and existence. Activity, agent-state and focus writes would
  * otherwise re-render every closed menu. The live menu gets every write.
  */
+const NO_CUSTOM_TITLES: Readonly<Record<string, string>> = {};
+
 function createMenuPanelSelector(terminalId: string, isMenuLive: boolean) {
   let held: MenuPanel | undefined;
   return (state: { panelsById: Record<string, MenuPanel> }): MenuPanel | undefined => {
@@ -287,6 +316,7 @@ function TerminalContextMenuBody({
   children,
   forceLocation,
   proxy = false,
+  triggerScope = "surface",
 }: TerminalContextMenuProps) {
   // Open or still animating out. Raised by the right-click itself, in the same
   // batch as Radix's open, so the first open frame renders live data — Radix
@@ -315,6 +345,9 @@ function TerminalContextMenuBody({
   // the time; only the live menu lists worktrees, so a git-status pass on any
   // worktree doesn't re-render every closed menu.
   const worktrees = useSidebarWorktreeOrder({ enabled: isMenuLive });
+  const customTitles = useWorktreeFilterStore((state) =>
+    isMenuLive ? state.worktreeCustomTitles : NO_CUSTOM_TITLES
+  );
   // What the panel's plugin published for its menus (#13213), read only while
   // the menu is live for the same reason.
   const publishedViewMenuItems = usePanelViewMenuItems(terminalId, isMenuLive);
@@ -383,6 +416,14 @@ function TerminalContextMenuBody({
   if (handOverRequest !== null && handOverRequest.terminalId !== terminalId) {
     setHandOverRequest(null);
   }
+  // "Park…" opens its dialog the same way, and is dropped the same way when
+  // the dock hands this menu another terminal.
+  const [parkRequestId, setParkRequestId] = useState<string | null>(null);
+  if (parkRequestId !== null && parkRequestId !== terminalId) {
+    setParkRequestId(null);
+  }
+  const pendingParkRef = useRef<string | null>(null);
+  const closeParkRequest = useCallback(() => setParkRequestId(null), []);
   // Picking a pane records the request and the root content's close hook
   // opens the dialog — the same handoff as the move picker, so the menu's own
   // focus return can't land after the dialog has taken focus.
@@ -428,6 +469,7 @@ function TerminalContextMenuBody({
         if (cachedHomeDir !== homeDir) setHomeDir(cachedHomeDir);
         pendingMovePickerRef.current = null;
         pendingHandOverRef.current = null;
+        pendingParkRef.current = null;
         pendingMenuDispatchRef.current = null;
         // Only a PTY can be handed over; the other kinds' menus never ask.
         if (terminal !== undefined && panelKindHasPty(terminal.kind ?? "terminal")) {
@@ -462,7 +504,10 @@ function TerminalContextMenuBody({
           : null;
       const focusable =
         hit && pane.contains(hit) ? hit : proxy ? pane.querySelector<HTMLElement>(FOCUSABLE) : null;
-      movePickerReturnFocusRef.current = focusable ?? pane;
+      // A header-scoped trigger wraps the title bar, not the surface that takes focus.
+      const panelRoot =
+        triggerScope === "header" ? pane.closest<HTMLElement>("[data-panel-id]") : null;
+      movePickerReturnFocusRef.current = focusable ?? panelRoot ?? pane;
       capturedMovePickerAnchorRef.current = {
         // Lets Floating UI follow the pane itself when it moves or resizes.
         contextElement: pane,
@@ -477,7 +522,7 @@ function TerminalContextMenuBody({
         },
       };
     },
-    [proxy]
+    [proxy, triggerScope]
   );
 
   const handleTriggerContextMenu = useCallback(
@@ -539,6 +584,14 @@ function TerminalContextMenuBody({
       (s.snapshot?.runs.some((run) => run.runId === terminalId && run.snooze !== undefined) ??
         false)
   );
+  // Whether main watched this run hand work back, and whether it has been seen
+  // since: only a run with a hand-back has anything to mark read or unread.
+  const handBackState = useFleetSnapshotStore((s): "none" | "unseen" | "seen" => {
+    if (!isMenuLive) return "none";
+    const handBack = s.snapshot?.runs.find((run) => run.runId === terminalId)?.handBack;
+    if (handBack === undefined) return "none";
+    return isHandBackUnseen(handBack) ? "unseen" : "seen";
+  });
   const sourceRef = useRef<MenuActionSourceValue>("user");
 
   const handleSnooze = useCallback(
@@ -549,6 +602,42 @@ function TerminalContextMenuBody({
     },
     [terminalId]
   );
+
+  const handleToggleHandBackRead = useCallback(() => {
+    const markRead = handBackState === "unseen";
+    safeFireAndForget(
+      markRead
+        ? window.electron.fleet.markRunRead(terminalId)
+        : window.electron.fleet.markRunUnread(terminalId),
+      {
+        context: markRead ? "TerminalContextMenu markRunRead" : "TerminalContextMenu markRunUnread",
+      }
+    );
+  }, [handBackState, terminalId]);
+
+  // Presence on the snapshot IS "parked", exactly as for snoozes.
+  const isParked = useFleetSnapshotStore(
+    (s) =>
+      isMenuLive &&
+      (s.snapshot?.runs.some((run) => run.runId === terminalId && run.park !== undefined) ?? false)
+  );
+
+  // Main rejects a park over retained (degraded) data; Unpark needs no
+  // healthy snapshot, so only Park… waits for one.
+  const isFleetDegraded = useFleetSnapshotStore(
+    (s) => isMenuLive && (s.snapshot?.degraded ?? false)
+  );
+  const canPark = isKnownRun && !isFleetDegraded;
+
+  const handleRequestPark = useCallback(() => {
+    pendingParkRef.current = terminalId;
+  }, [terminalId]);
+
+  const handleUnpark = useCallback(() => {
+    safeFireAndForget(window.electron.fleet.unparkRun(terminalId), {
+      context: "TerminalContextMenu unparkRun",
+    });
+  }, [terminalId]);
 
   const handleUnsnooze = useCallback(() => {
     safeFireAndForget(window.electron.fleet.unsnoozeRun(terminalId), {
@@ -709,6 +798,12 @@ function TerminalContextMenuBody({
 
       if (actionId.startsWith("reveal-in-finder:")) {
         const path = actionId.slice("reveal-in-finder:".length);
+        // The path is the host's; a remote host's file manager is on a screen
+        // nobody is looking at, so hand the path over instead.
+        if (isRemoteWindow()) {
+          copyWithToast("Host path", path);
+          return;
+        }
         // Unlike copy-link, guard rejections (OUTSIDE_ROOT) and a since-deleted
         // file (NOT_FOUND) are real, expected failure modes here — surface them
         // rather than fire-and-forget. dispatch wraps the thrown error as
@@ -1049,6 +1144,14 @@ function TerminalContextMenuBody({
         }, AFTER_MENU_FOCUS_RESTORE_MS);
         return;
       }
+      const pendingPark = pendingParkRef.current;
+      pendingParkRef.current = null;
+      if (pendingPark !== null && pendingPark === terminalId) {
+        // Restoration is left to run, so the dialog records the pane as where
+        // to return focus — the hand-over's handoff, for the same reason.
+        setParkRequestId(pendingPark);
+        return;
+      }
       const pendingHandOver = pendingHandOverRef.current;
       pendingHandOverRef.current = null;
       if (pendingHandOver !== null && pendingHandOver.terminalId === terminalId) {
@@ -1104,10 +1207,6 @@ function TerminalContextMenuBody({
   if (!terminal) {
     return <div className="contents">{children}</div>;
   }
-
-  const triggerMarker = proxy
-    ? { "data-context-proxy": terminalId }
-    : { "data-context-trigger": terminalId };
 
   const isBrowser = isBrowserPanel(terminal);
   const isDevPreview = isDevPreviewPanel(terminal);
@@ -1204,7 +1303,7 @@ function TerminalContextMenuBody({
               onSelect={() => handleAction(`move-to-worktree:${wt.id}`)}
             >
               <FolderGit2 className={ICON_CLASS} />
-              {getWorktreeHeadline(wt).label}
+              {getWorktreeHeadline(wt, customTitles[wt.id]).label}
             </ContextMenuItem>
           );
         })}
@@ -1310,16 +1409,15 @@ function TerminalContextMenuBody({
             return null;
           }}
         </MenuActionSourceContext.Consumer>
-        <ContextMenuTrigger asChild>
-          <div
-            className="contents"
-            {...triggerMarker}
-            onContextMenu={handleTriggerContextMenu}
-            onPointerDown={captureMovePickerAnchorOnPress}
-          >
-            {children}
-          </div>
-        </ContextMenuTrigger>
+        <PanelContextMenuTriggerScope
+          terminalId={terminalId}
+          proxy={proxy}
+          scope={triggerScope}
+          onContextMenu={handleTriggerContextMenu}
+          onPointerDown={captureMovePickerAnchorOnPress}
+        >
+          {children}
+        </PanelContextMenuTriggerScope>
         <ContextMenuContent onCloseAutoFocus={handleCloseAutoFocus}>
           <MenuContentMountSignal isLive={isMenuLive} onLiveChange={setIsMenuLive} />
           {layoutSection}
@@ -1378,16 +1476,15 @@ function TerminalContextMenuBody({
             return null;
           }}
         </MenuActionSourceContext.Consumer>
-        <ContextMenuTrigger asChild>
-          <div
-            className="contents"
-            {...triggerMarker}
-            onContextMenu={handleTriggerContextMenu}
-            onPointerDown={captureMovePickerAnchorOnPress}
-          >
-            {children}
-          </div>
-        </ContextMenuTrigger>
+        <PanelContextMenuTriggerScope
+          terminalId={terminalId}
+          proxy={proxy}
+          scope={triggerScope}
+          onContextMenu={handleTriggerContextMenu}
+          onPointerDown={captureMovePickerAnchorOnPress}
+        >
+          {children}
+        </PanelContextMenuTriggerScope>
         <ContextMenuContent onCloseAutoFocus={handleCloseAutoFocus}>
           <MenuContentMountSignal isLive={isMenuLive} onLiveChange={setIsMenuLive} />
           {layoutSection}
@@ -1445,16 +1542,15 @@ function TerminalContextMenuBody({
             return null;
           }}
         </MenuActionSourceContext.Consumer>
-        <ContextMenuTrigger asChild>
-          <div
-            className="contents"
-            {...triggerMarker}
-            onContextMenu={handleTriggerContextMenu}
-            onPointerDown={captureMovePickerAnchorOnPress}
-          >
-            {children}
-          </div>
-        </ContextMenuTrigger>
+        <PanelContextMenuTriggerScope
+          terminalId={terminalId}
+          proxy={proxy}
+          scope={triggerScope}
+          onContextMenu={handleTriggerContextMenu}
+          onPointerDown={captureMovePickerAnchorOnPress}
+        >
+          {children}
+        </PanelContextMenuTriggerScope>
         <ContextMenuContent onCloseAutoFocus={handleCloseAutoFocus}>
           <MenuContentMountSignal isLive={isMenuLive} onLiveChange={setIsMenuLive} />
           {layoutSection}
@@ -1502,16 +1598,15 @@ function TerminalContextMenuBody({
             return null;
           }}
         </MenuActionSourceContext.Consumer>
-        <ContextMenuTrigger asChild>
-          <div
-            className="contents"
-            {...triggerMarker}
-            onContextMenu={handleTriggerContextMenu}
-            onPointerDown={captureMovePickerAnchorOnPress}
-          >
-            {children}
-          </div>
-        </ContextMenuTrigger>
+        <PanelContextMenuTriggerScope
+          terminalId={terminalId}
+          proxy={proxy}
+          scope={triggerScope}
+          onContextMenu={handleTriggerContextMenu}
+          onPointerDown={captureMovePickerAnchorOnPress}
+        >
+          {children}
+        </PanelContextMenuTriggerScope>
         <ContextMenuContent onCloseAutoFocus={handleCloseAutoFocus}>
           <MenuContentMountSignal isLive={isMenuLive} onLiveChange={setIsMenuLive} />
           {/* The header's overflow menu renders this same list (#12606). */}
@@ -1552,6 +1647,27 @@ function TerminalContextMenuBody({
     );
   }
 
+  // One label whatever the state: the dialog's own title says whether it is a
+  // new park or an edit. Unpark sits beside it only once there is a park to
+  // lift — the discoverable inverse that lets parking skip a confirm.
+  const parkItems =
+    canPark || isParked ? (
+      <>
+        {canPark && (
+          <ContextMenuItem onSelect={handleRequestPark}>
+            <CirclePause className={ICON_CLASS} aria-hidden="true" />
+            Park…
+          </ContextMenuItem>
+        )}
+        {isParked && (
+          <ContextMenuItem onSelect={handleUnpark}>
+            <Bell className={ICON_CLASS} aria-hidden="true" />
+            Unpark
+          </ContextMenuItem>
+        )}
+      </>
+    ) : null;
+
   return (
     <>
       {destructiveConfirmDialog}
@@ -1564,6 +1680,16 @@ function TerminalContextMenuBody({
           restoreFocusTo={movePickerReturnFocusRef}
         />
       )}
+      {parkRequestId !== null && (
+        <Suspense fallback={null}>
+          <LazyParkRunDialog
+            key={parkRequestId}
+            runId={parkRequestId}
+            onClose={closeParkRequest}
+            restoreFocusTo={movePickerReturnFocusRef}
+          />
+        </Suspense>
+      )}
       <ContextMenu onOpenChange={handleMenuOpenChange}>
         <MenuActionSourceContext.Consumer>
           {(value) => {
@@ -1571,16 +1697,15 @@ function TerminalContextMenuBody({
             return null;
           }}
         </MenuActionSourceContext.Consumer>
-        <ContextMenuTrigger asChild>
-          <div
-            className="contents"
-            {...triggerMarker}
-            onContextMenu={handleContextMenu}
-            onPointerDown={captureMovePickerAnchorOnPress}
-          >
-            {children}
-          </div>
-        </ContextMenuTrigger>
+        <PanelContextMenuTriggerScope
+          terminalId={terminalId}
+          proxy={proxy}
+          scope={triggerScope}
+          onContextMenu={handleContextMenu}
+          onPointerDown={captureMovePickerAnchorOnPress}
+        >
+          {children}
+        </PanelContextMenuTriggerScope>
         <ContextMenuContent onCloseAutoFocus={handleCloseAutoFocus}>
           <MenuContentMountSignal isLive={isMenuLive} onLiveChange={setIsMenuLive} />
           {hasPty && (
@@ -1670,7 +1795,7 @@ function TerminalContextMenuBody({
                     onSelect={() => handleAction(`reveal-in-finder:${hoveredFilePath}`)}
                   >
                     <FolderOpen className={ICON_CLASS} aria-hidden="true" />
-                    {mac ? "Reveal in Finder" : isWindows() ? "Show in Explorer" : "Show in folder"}
+                    {isRemoteWindow() ? "Copy host path" : revealInFolderLabel()}
                   </ContextMenuItem>
                 </>
               )}
@@ -1680,6 +1805,15 @@ function TerminalContextMenuBody({
                   <SelectedFileMenuItems absolutePath={selectionFilePath} />
                 </>
               )}
+              <ContextMenuSeparator />
+            </>
+          )}
+          {/* Parking follows the snapshot, not broadcast eligibility: a docked
+              or exited agent can still be parked, and a parked one must
+              always offer its inverse. */}
+          {!fleetEligible && parkItems !== null && (
+            <>
+              {parkItems}
               <ContextMenuSeparator />
             </>
           )}
@@ -1730,6 +1864,17 @@ function TerminalContextMenuBody({
                     )}
                   </ContextMenuSubContent>
                 </ContextMenuSub>
+              )}
+              {parkItems}
+              {handBackState !== "none" && (
+                <ContextMenuItem onSelect={handleToggleHandBackRead}>
+                  {handBackState === "unseen" ? (
+                    <MailOpen className={ICON_CLASS} aria-hidden="true" />
+                  ) : (
+                    <Mail className={ICON_CLASS} aria-hidden="true" />
+                  )}
+                  {handBackState === "unseen" ? "Mark as read" : "Mark as unread"}
+                </ContextMenuItem>
               )}
               <ContextMenuSeparator />
             </>

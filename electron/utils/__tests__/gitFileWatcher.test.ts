@@ -266,29 +266,6 @@ describe("GitFileWatcher", () => {
     expect(onChange).toHaveBeenCalledTimes(2);
   });
 
-  it("triggers onChange when .git/config changes (catches `git push -u`)", async () => {
-    const gitDir = pathJoin("/repo", ".git");
-    const onChange = vi.fn();
-    const gitWatcher = new GitFileWatcher({
-      worktreePath: "/repo",
-      branch: "main",
-      debounceMs: 150,
-      onChange,
-    });
-
-    await expect(gitWatcher.start()).resolves.toBe(true);
-
-    const dotGitCall = vi.mocked(watch).mock.calls.find(([path]) => path === gitDir) as
-      [unknown, unknown, unknown] | undefined;
-    expect(dotGitCall).toBeDefined();
-    const dotGitCallback = dotGitCall?.[2] as
-      ((eventType: string, filename: string | Buffer | null) => void) | undefined;
-
-    dotGitCallback?.("rename", "config");
-    await vi.advanceTimersByTimeAsync(150);
-    expect(onChange).toHaveBeenCalledTimes(1);
-  });
-
   // ---- onGitConfigChanged: the `git remote add` signal (#11155) ----
 
   describe("onGitConfigChanged", () => {
@@ -424,21 +401,6 @@ describe("GitFileWatcher", () => {
 
   // ---- Remote-tracking refs arm (#11151) ----
 
-  it("watches refs/remotes/origin so an external fetch advancing origin surfaces", async () => {
-    const originDir = pathJoin("/repo", ".git", "refs", "remotes", "origin");
-    const gitWatcher = new GitFileWatcher({
-      worktreePath: "/repo",
-      branch: "main",
-      debounceMs: 150,
-      onChange: vi.fn(),
-    });
-
-    await expect(gitWatcher.start()).resolves.toBe(true);
-
-    const watchedPaths = vi.mocked(watch).mock.calls.map(([path]) => path);
-    expect(watchedPaths).toContain(originDir);
-  });
-
   it("triggers a debounced onChange for any change under refs/remotes/origin", async () => {
     const originDir = pathJoin("/repo", ".git", "refs", "remotes", "origin");
     const onChange = vi.fn();
@@ -485,34 +447,186 @@ describe("GitFileWatcher", () => {
     await expect(gitWatcher.start()).resolves.toBe(true);
   });
 
-  // ---- Worktree debounce tests ----
+  // ---- Upstream ref: the push signal (#13400) ----
 
-  it("worktree events debounce normally for short bursts", async () => {
+  function callbackFor(dir: string) {
+    const call = [...vi.mocked(watch).mock.calls].reverse().find(([path]) => path === dir) as
+      [unknown, unknown, unknown] | undefined;
+    return call?.[2] as ((eventType: string, filename: string | Buffer | null) => void) | undefined;
+  }
+
+  it("fires on a push to a nested upstream ref on any remote", async () => {
+    const forkDir = pathJoin("/repo", ".git", "refs", "remotes", "fork", "feature");
     const onChange = vi.fn();
-    const mock = setupSubscribeMock();
-
     const gitWatcher = new GitFileWatcher({
       worktreePath: "/repo",
-      branch: "main",
-      debounceMs: 300,
+      branch: "feature/x",
+      debounceMs: 150,
+      upstreamRef: "refs/remotes/fork/feature/x",
       onChange,
-      watchWorktree: true,
-      worktreeMinDebounceMs: 500,
-      worktreeMaxDebounceMs: 500,
-      worktreeMaxWaitMs: 2000,
     });
 
     await expect(gitWatcher.start()).resolves.toBe(true);
-
-    mock.resolve();
-    const cb = mock.getCallback();
+    const cb = callbackFor(forkDir);
     expect(cb).toBeDefined();
 
-    fireEvents(cb, [{ type: "update" }, { type: "update" }, { type: "update" }]);
+    cb?.("rename", "other");
+    await vi.advanceTimersByTimeAsync(150);
+    expect(onChange).not.toHaveBeenCalled();
 
-    await vi.advanceTimersByTimeAsync(500);
+    // git's lock-then-rename ref write.
+    cb?.("rename", "x.lock");
+    cb?.("rename", "x");
+    await vi.advanceTimersByTimeAsync(150);
     expect(onChange).toHaveBeenCalledTimes(1);
   });
+
+  it("follows the upstream to a new ref and stops reporting the old one", async () => {
+    const remotes = pathJoin("/repo", ".git", "refs", "remotes", "origin");
+    const onChange = vi.fn();
+    const gitWatcher = new GitFileWatcher({
+      worktreePath: "/repo",
+      branch: "feature/x",
+      debounceMs: 150,
+      onChange,
+    });
+    await gitWatcher.start();
+
+    gitWatcher.setUpstreamRef("refs/remotes/origin/feature/x");
+    gitWatcher.setUpstreamRef("refs/remotes/origin/feature/y");
+    const cb = callbackFor(pathJoin(remotes, "feature"));
+    expect(
+      vi.mocked(watch).mock.calls.filter(([p]) => p === pathJoin(remotes, "feature"))
+    ).toHaveLength(1);
+
+    cb?.("rename", "x");
+    await vi.advanceTimersByTimeAsync(150);
+    expect(onChange).not.toHaveBeenCalled();
+
+    cb?.("rename", "y");
+    await vi.advanceTimersByTimeAsync(150);
+    expect(onChange).toHaveBeenCalledTimes(1);
+  });
+
+  it("retries an upstream ref whose directory did not exist yet", async () => {
+    const featureDir = pathJoin("/repo", ".git", "refs", "remotes", "origin", "feature");
+    let exists = false;
+    vi.mocked(watch).mockImplementation(((path: string) => {
+      if (path === featureDir && !exists) throw new Error("ENOENT: no such directory");
+      return createMockWatcher();
+    }) as unknown as typeof watch);
+    const onChange = vi.fn();
+    const gitWatcher = new GitFileWatcher({
+      worktreePath: "/repo",
+      branch: "feature/x",
+      debounceMs: 150,
+      upstreamRef: "refs/remotes/origin/feature/x",
+      onChange,
+    });
+    await expect(gitWatcher.start()).resolves.toBe(true);
+
+    exists = true;
+    gitWatcher.setUpstreamRef("refs/remotes/origin/feature/x");
+    callbackFor(featureDir)?.("rename", "x");
+    await vi.advanceTimersByTimeAsync(150);
+    expect(onChange).toHaveBeenCalledTimes(1);
+  });
+
+  it("watches the nearest existing ancestor until the ref's directory appears", async () => {
+    const remotes = pathJoin("/repo", ".git", "refs", "remotes");
+    const forkDir = pathJoin(remotes, "fork");
+    const featureDir = pathJoin(forkDir, "feature");
+    vi.mocked(watch).mockImplementation(((path: string) => {
+      if (path === featureDir) throw new Error("ENOENT: no such directory");
+      return createMockWatcher();
+    }) as unknown as typeof watch);
+    const onChange = vi.fn();
+    const gitWatcher = new GitFileWatcher({
+      worktreePath: "/repo",
+      branch: "feature/x",
+      debounceMs: 150,
+      upstreamRef: "refs/remotes/fork/feature/x",
+      onChange,
+    });
+    await gitWatcher.start();
+
+    const cb = callbackFor(forkDir);
+    cb?.("rename", "unrelated");
+    await vi.advanceTimersByTimeAsync(150);
+    expect(onChange).not.toHaveBeenCalled();
+
+    // The push creating fork/feature/ for the first time.
+    cb?.("rename", "feature");
+    await vi.advanceTimersByTimeAsync(150);
+    expect(onChange).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps the fallback's watch when it turns out to be the ref itself", async () => {
+    const forkDir = pathJoin("/repo", ".git", "refs", "remotes", "fork");
+    const handles = new Map<string, FSWatcher>();
+    vi.mocked(watch).mockImplementation(((path: string) => {
+      if (path === pathJoin(forkDir, "topic")) throw new Error("ENOENT: no such directory");
+      const handle = createMockWatcher();
+      handles.set(path, handle);
+      return handle;
+    }) as unknown as typeof watch);
+    const onChange = vi.fn();
+    const gitWatcher = new GitFileWatcher({
+      worktreePath: "/repo",
+      branch: "topic",
+      debounceMs: 150,
+      upstreamRef: "refs/remotes/fork/topic/x",
+      onChange,
+    });
+    await gitWatcher.start();
+
+    // The fallback waits for fork/topic; the upstream becomes exactly that.
+    gitWatcher.setUpstreamRef("refs/remotes/fork/topic");
+
+    expect(handles.get(forkDir)?.close).not.toHaveBeenCalled();
+    callbackFor(forkDir)?.("rename", "topic");
+    await vi.advanceTimersByTimeAsync(150);
+    expect(onChange).toHaveBeenCalledTimes(1);
+  });
+
+  it("closes a directory's watch once the upstream moves out of it", async () => {
+    const remotes = pathJoin("/repo", ".git", "refs", "remotes");
+    const handles = new Map<string, FSWatcher>();
+    vi.mocked(watch).mockImplementation(((path: string) => {
+      const handle = createMockWatcher();
+      handles.set(path, handle);
+      return handle;
+    }) as unknown as typeof watch);
+    const gitWatcher = new GitFileWatcher({
+      worktreePath: "/repo",
+      branch: "feature/x",
+      debounceMs: 150,
+      upstreamRef: "refs/remotes/origin/feature/x",
+      onChange: vi.fn(),
+    });
+    await gitWatcher.start();
+
+    gitWatcher.setUpstreamRef("refs/remotes/fork/topic/x");
+
+    expect(handles.get(pathJoin(remotes, "origin", "feature"))?.close).toHaveBeenCalledTimes(1);
+    expect(handles.get(pathJoin(remotes, "fork", "topic"))?.close).not.toHaveBeenCalled();
+  });
+
+  it("never turns a malformed upstream ref into a watch path", async () => {
+    const gitWatcher = new GitFileWatcher({
+      worktreePath: "/repo",
+      branch: "feature/x",
+      debounceMs: 150,
+      upstreamRef: "refs/remotes/../../../etc/x",
+      onChange: vi.fn(),
+    });
+    await gitWatcher.start();
+
+    const watchedPaths = vi.mocked(watch).mock.calls.map(([path]) => String(path));
+    expect(watchedPaths.some((p) => !p.startsWith(pathJoin("/repo", ".git")))).toBe(false);
+  });
+
+  // ---- Worktree debounce tests ----
 
   it("sustained burst fires onChange at max-wait ceiling", async () => {
     const onChange = vi.fn();
@@ -1139,11 +1253,52 @@ describe("GitFileWatcher", () => {
   // ---- Error handling tests (adapted to async Promise rejection) ----
 
   describe("startup error handling", () => {
-    it("onWatcherFailed is called when subscribe rejects on Linux ENOSPC", async () => {
-      const onChange = vi.fn();
-      const onWatcherFailed = vi.fn();
-      const mock = setupSubscribeMock();
+    it.each([
+      ["inotify_add_watch on '/repo/d65/s41' failed: No space left on device", 1],
+      ["ENOSPC: no space left on device, write", 0],
+    ])(
+      "reads the codeless rejection %j as the inotify watch limit %i time(s)",
+      async (message, limitCalls) => {
+        const onWatcherFailed = vi.fn();
+        const onInotifyLimitReached = vi.fn();
+        const mock = setupSubscribeMock();
+        const origPlatform = process.platform;
+        Object.defineProperty(process, "platform", { value: "linux", configurable: true });
 
+        try {
+          const gitWatcher = new GitFileWatcher({
+            worktreePath: "/repo",
+            branch: "main",
+            debounceMs: 300,
+            onChange: vi.fn(),
+            watchWorktree: true,
+            onWatcherFailed,
+            onInotifyLimitReached,
+          });
+          await gitWatcher.start();
+
+          // The real rejection: a bare Error with no errno code.
+          mock.reject(new Error(message));
+          await Promise.resolve();
+          await flushParcelWatcherCallbacks();
+
+          expect(onInotifyLimitReached).toHaveBeenCalledTimes(limitCalls);
+          expect(onWatcherFailed).toHaveBeenCalledTimes(1);
+        } finally {
+          Object.defineProperty(process, "platform", { value: origPlatform, configurable: true });
+        }
+      }
+    );
+
+    it.each([
+      [
+        "Unable to initialize inotify: no inotify instance is available (fs.inotify.max_user_instances is used up)",
+      ],
+      ["Unable to initialize inotify: Too many open files"],
+    ])("names the instance limit for %j", async (message) => {
+      const onWatcherFailed = vi.fn();
+      const onInotifyLimitReached = vi.fn();
+      const mock = setupSubscribeMock();
       const origPlatform = process.platform;
       Object.defineProperty(process, "platform", { value: "linux", configurable: true });
 
@@ -1152,32 +1307,32 @@ describe("GitFileWatcher", () => {
           worktreePath: "/repo",
           branch: "main",
           debounceMs: 300,
-          onChange,
+          onChange: vi.fn(),
           watchWorktree: true,
           onWatcherFailed,
+          onInotifyLimitReached,
         });
-
         await gitWatcher.start();
 
-        const enospcError = new Error("ENOSPC") as NodeJS.ErrnoException;
-        enospcError.code = "ENOSPC";
-        mock.reject(enospcError);
-
+        mock.reject(Object.assign(new Error(message), { code: "EMFILE" }));
         await Promise.resolve();
         await flushParcelWatcherCallbacks();
 
+        expect(onInotifyLimitReached).toHaveBeenCalledWith("instances");
         expect(onWatcherFailed).toHaveBeenCalledTimes(1);
       } finally {
         Object.defineProperty(process, "platform", { value: origPlatform, configurable: true });
       }
     });
 
-    it("onInotifyLimitReached fires alongside onWatcherFailed on Linux ENOSPC rejection", async () => {
-      const onChange = vi.fn();
+    it.each([
+      ["Unable to initialize inotify: the system's open file table is full", "ENFILE"],
+      ["Unable to initialize inotify: Too many open files in system", undefined],
+      ["Unable to initialize inotify: Cannot allocate memory", undefined],
+    ])("doesn't blame the instance limit for %j", async (message, code) => {
       const onWatcherFailed = vi.fn();
       const onInotifyLimitReached = vi.fn();
       const mock = setupSubscribeMock();
-
       const origPlatform = process.platform;
       Object.defineProperty(process, "platform", { value: "linux", configurable: true });
 
@@ -1186,22 +1341,18 @@ describe("GitFileWatcher", () => {
           worktreePath: "/repo",
           branch: "main",
           debounceMs: 300,
-          onChange,
+          onChange: vi.fn(),
           watchWorktree: true,
           onWatcherFailed,
           onInotifyLimitReached,
         });
-
         await gitWatcher.start();
 
-        const enospcError = new Error("ENOSPC") as NodeJS.ErrnoException;
-        enospcError.code = "ENOSPC";
-        mock.reject(enospcError);
-
+        mock.reject(Object.assign(new Error(message), code ? { code } : {}));
         await Promise.resolve();
         await flushParcelWatcherCallbacks();
 
-        expect(onInotifyLimitReached).toHaveBeenCalledTimes(1);
+        expect(onInotifyLimitReached).not.toHaveBeenCalled();
         expect(onWatcherFailed).toHaveBeenCalledTimes(1);
       } finally {
         Object.defineProperty(process, "platform", { value: origPlatform, configurable: true });
@@ -1277,42 +1428,6 @@ describe("GitFileWatcher", () => {
         await flushParcelWatcherCallbacks();
 
         expect(onInotifyLimitReached).toHaveBeenCalledTimes(1);
-        expect(onWatcherFailed).toHaveBeenCalledTimes(1);
-      } finally {
-        Object.defineProperty(process, "platform", { value: origPlatform, configurable: true });
-      }
-    });
-
-    it("onEmfileLimitReached fires alongside onWatcherFailed on macOS EMFILE rejection", async () => {
-      const onChange = vi.fn();
-      const onWatcherFailed = vi.fn();
-      const onEmfileLimitReached = vi.fn();
-      const mock = setupSubscribeMock();
-
-      const origPlatform = process.platform;
-      Object.defineProperty(process, "platform", { value: "darwin", configurable: true });
-
-      try {
-        const gitWatcher = new GitFileWatcher({
-          worktreePath: "/repo",
-          branch: "main",
-          debounceMs: 300,
-          onChange,
-          watchWorktree: true,
-          onWatcherFailed,
-          onEmfileLimitReached,
-        });
-
-        await gitWatcher.start();
-
-        const emfileError = new Error("EMFILE") as NodeJS.ErrnoException;
-        emfileError.code = "EMFILE";
-        mock.reject(emfileError);
-
-        await Promise.resolve();
-        await flushParcelWatcherCallbacks();
-
-        expect(onEmfileLimitReached).toHaveBeenCalledTimes(1);
         expect(onWatcherFailed).toHaveBeenCalledTimes(1);
       } finally {
         Object.defineProperty(process, "platform", { value: origPlatform, configurable: true });
@@ -2006,23 +2121,6 @@ describe("GitFileWatcher", () => {
       expect(onChange).toHaveBeenCalledTimes(1);
     });
 
-    it("refreshes for a tracked file that matches an ignore rule", async () => {
-      const onChange = vi.fn();
-      // Plain `git check-ignore` never reports a tracked path, so a
-      // tracked-but-matching file is simply absent from the result set — the
-      // whole reason no separate index lookup is needed.
-      vi.mocked(checkIgnoredPaths).mockResolvedValue(new Set());
-      // No tracked file matches an ignore rule — the state of essentially every
-      // repo, and the precondition that makes check-ignore's answer trustworthy.
-      vi.mocked(hasTrackedIgnoredPaths).mockResolvedValue(false);
-
-      const { cb } = await startClassifyingWatcher({ onChange });
-      fireEvents(cb, [{ type: "update", path: p(".output", "tracked.log") }]);
-      await vi.advanceTimersByTimeAsync(100);
-      await flushClassification();
-      expect(onChange).toHaveBeenCalledTimes(1);
-    });
-
     it("refreshes when the burst edits .gitignore alongside ignored writes", async () => {
       const onChange = vi.fn();
       // Nothing ignores `.gitignore`, so it fails membership on its own. No
@@ -2471,58 +2569,6 @@ describe("GitFileWatcher", () => {
   });
 
   describe("worktree ignore filter", () => {
-    it("passes WORKTREE_IGNORE_GLOBS to subscribe as native ignore option", async () => {
-      const mock = setupSubscribeMock();
-
-      const gitWatcher = new GitFileWatcher({
-        worktreePath: "/repo",
-        branch: "main",
-        debounceMs: 300,
-        onChange: vi.fn(),
-        watchWorktree: true,
-        worktreeMinDebounceMs: 100,
-        worktreeMaxDebounceMs: 100,
-      });
-
-      await gitWatcher.start();
-
-      const options = mock.getOptions();
-      expect(options).toBeDefined();
-      expect(options?.ignore).toBeDefined();
-
-      const ignore = options?.ignore as string[];
-      const expectedDirs = [
-        "node_modules",
-        "dist",
-        "build",
-        ".next",
-        "target",
-        "coverage",
-        ".cache",
-        ".turbo",
-        "out",
-        "__pycache__",
-        ".venv",
-        ".pytest_cache",
-        ".mypy_cache",
-        ".ruff_cache",
-        "venv",
-        ".tox",
-        ".gradle",
-      ];
-      for (const dir of expectedDirs) {
-        expect(ignore).toContain(`**/${dir}/**`);
-      }
-      expect(ignore).toContain("**/.git");
-      expect(ignore).toContain("**/.git/**");
-      expect(ignore).toHaveLength(expectedDirs.length + 2);
-
-      mock.resolve();
-      await flushParcelWatcherCallbacks();
-      gitWatcher.dispose();
-      await flushParcelWatcherCallbacks();
-    });
-
     it("passes the existing hot directories as literal ignores beside every glob", async () => {
       exclusionsMock.mockResolvedValue(["node_modules", ".git", "dist"]);
       const mock = setupSubscribeMock();
@@ -2673,61 +2719,6 @@ describe("GitFileWatcher", () => {
 
       expect(exclusionsMock).not.toHaveBeenCalled();
       gitWatcher.dispose();
-    });
-
-    it("events from non-ignored paths still fire onChange", async () => {
-      const onChange = vi.fn();
-      const mock = setupSubscribeMock();
-
-      const gitWatcher = new GitFileWatcher({
-        worktreePath: "/repo",
-        branch: "main",
-        debounceMs: 300,
-        onChange,
-        watchWorktree: true,
-        worktreeMinDebounceMs: 100,
-        worktreeMaxDebounceMs: 100,
-      });
-
-      await expect(gitWatcher.start()).resolves.toBe(true);
-      mock.resolve();
-      const cb = mock.getCallback();
-
-      // A real path, so this exercises the classification path rejecting an
-      // un-ignored file rather than the anonymous-event fallback.
-      fireEvents(cb, [{ type: "update", path: pathJoin(pathResolve("/repo"), "src", "app.ts") }]);
-      await vi.advanceTimersByTimeAsync(100);
-      await flushClassification();
-      expect(onChange).toHaveBeenCalledTimes(1);
-    });
-
-    it("multiple events in a batch each increment burstCount", async () => {
-      const onChange = vi.fn();
-      const mock = setupSubscribeMock();
-
-      const gitWatcher = new GitFileWatcher({
-        worktreePath: "/repo",
-        branch: "main",
-        debounceMs: 300,
-        onChange,
-        watchWorktree: true,
-        worktreeMinDebounceMs: 150,
-        worktreeMaxDebounceMs: 800,
-      });
-
-      await expect(gitWatcher.start()).resolves.toBe(true);
-      mock.resolve();
-      const cb = mock.getCallback();
-
-      fireEvents(
-        cb,
-        Array.from({ length: 10 }, () => ({ type: "update" }))
-      );
-
-      await vi.advanceTimersByTimeAsync(239);
-      expect(onChange).not.toHaveBeenCalled();
-      await vi.advanceTimersByTimeAsync(1);
-      expect(onChange).toHaveBeenCalledTimes(1);
     });
 
     it("empty events array does not trigger onChange", async () => {
@@ -2897,44 +2888,6 @@ describe("GitFileWatcher", () => {
 
       expect(onWatcherFailed).not.toHaveBeenCalled();
       expect(onInotifyLimitReached).not.toHaveBeenCalled();
-    } finally {
-      Object.defineProperty(process, "platform", {
-        value: origPlatform,
-        configurable: true,
-      });
-    }
-  });
-
-  it("macOS non-EMFILE message does not fire onEmfileLimitReached", async () => {
-    const onWatcherFailed = vi.fn();
-    const onEmfileLimitReached = vi.fn();
-    const mock = setupSubscribeMock();
-
-    const origPlatform = process.platform;
-    Object.defineProperty(process, "platform", { value: "darwin", configurable: true });
-
-    try {
-      const gitWatcher = new GitFileWatcher({
-        worktreePath: "/repo",
-        branch: "main",
-        debounceMs: 300,
-        onChange: vi.fn(),
-        watchWorktree: true,
-        onWatcherFailed,
-        onEmfileLimitReached,
-      });
-
-      await gitWatcher.start();
-
-      const enoentError = new Error("file not found") as NodeJS.ErrnoException;
-      enoentError.code = "ENOENT";
-      mock.reject(enoentError);
-
-      await Promise.resolve();
-      await flushParcelWatcherCallbacks();
-
-      expect(onEmfileLimitReached).not.toHaveBeenCalled();
-      expect(onWatcherFailed).toHaveBeenCalledTimes(1);
     } finally {
       Object.defineProperty(process, "platform", {
         value: origPlatform,

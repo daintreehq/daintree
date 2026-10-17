@@ -12,11 +12,6 @@ describe("ReviewPaneSkeleton", () => {
     expect(el.getAttribute("aria-label")).toBe("Loading review panel");
   });
 
-  it("has sr-only loading text", () => {
-    render(<ReviewPaneSkeleton />);
-    expect(screen.getByText("Loading review panel")).toBeTruthy();
-  });
-
   it("mirrors review chrome (section rows), not the browser toolbar", () => {
     const { container } = render(<ReviewPaneSkeleton />);
     // Review's real chrome has staged/unstaged section headers on

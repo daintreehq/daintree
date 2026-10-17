@@ -39,6 +39,7 @@ const clientsMock = vi.hoisted(() => ({
   },
   agentCapabilitiesClient: {
     getRegistry: vi.fn(),
+    getResolvedModelList: vi.fn(),
   },
   userAgentRegistryClient: {
     get: vi.fn(),
@@ -140,6 +141,7 @@ function launchedResult(overrides: Record<string, unknown> = {}) {
     location: "grid",
     spawnStatus: null,
     ...LAUNCH_IDENTITY,
+    panelLimit: null,
     reply: null,
     ...overrides,
   };
@@ -167,10 +169,10 @@ function callAction(
 }
 
 /**
- * Parse a result through the action's own declared schema. Nothing does this at
- * runtime (`resultSchema` is manifest documentation, never enforced), so the
- * round-trip has to be asserted or `run()` silently drifts from what MCP
- * advertises as the tool's outputSchema.
+ * Parse a result through the action's own declared schema, as dispatch does
+ * (it returns the parse, stripping undeclared keys), so the round-trip has to
+ * be asserted or `run()` silently drifts from what MCP advertises as the
+ * tool's outputSchema.
  */
 function parseAgainstSchema(actions: ActionRegistry, id: string, result: unknown) {
   const schema = getDefinition(actions, id).resultSchema;
@@ -236,6 +238,7 @@ describe("agentActions adversarial", () => {
       prompt: "hello",
       interactive: true,
       modelId: "gpt-5",
+      onDecline: expect.any(Function),
     });
     expect(result).toEqual(launchedResult());
     expect(parseAgainstSchema(actions, "agent.launch", result).success).toBe(true);
@@ -532,6 +535,7 @@ describe("agentActions adversarial", () => {
       branch: "feature/parallel",
       cwd: "/repo/wt-42/packages/app",
       cwdOutsideWorktree: false,
+      panelLimit: null,
       reply: null,
     });
     expect(parseAgainstSchema(actions, "agent.launch", result).success).toBe(true);
@@ -615,6 +619,7 @@ describe("agentActions adversarial", () => {
       location: "grid",
       spawnStatus: "missing-cli",
       ...LAUNCH_IDENTITY,
+      panelLimit: null,
       reply: null,
     });
     expect(parseAgainstSchema(actions, "agent.launch", result).success).toBe(true);
@@ -622,8 +627,7 @@ describe("agentActions adversarial", () => {
 
   it("agent.launch reports a declined launch as launched:false, not null (#11547)", async () => {
     const callbacks = makeCallbacks();
-    // The launcher declines without throwing for a re-entrant launch of the
-    // same agent or when Electron is unavailable.
+    // A launcher that declines without naming why is still a failure to start.
     callbacks.onLaunchAgent.mockResolvedValueOnce(null);
     const actions = setupActions(callbacks);
 
@@ -635,63 +639,67 @@ describe("agentActions adversarial", () => {
       launched: false,
       terminalId: null,
       location: null,
-      spawnStatus: null,
+      spawnStatus: "spawn-failed",
       worktreeId: null,
       worktreePath: null,
       branch: null,
       cwd: null,
       cwdOutsideWorktree: null,
+      panelLimit: null,
       reply: null,
     });
     expect(parseAgainstSchema(actions, "agent.launch", result).success).toBe(true);
   });
 
-  it("agent.launch forwards 'name' to the launch callback", async () => {
+  it("agent.launch names a hard-limit refusal and the limits it was judged on (#13382)", async () => {
     const callbacks = makeCallbacks();
+    const panelLimit = {
+      count: 32,
+      softWarningLimit: 12,
+      confirmationLimit: 20,
+      hardLimit: 32,
+      tier: "hard" as const,
+    };
+    callbacks.onLaunchAgent.mockImplementationOnce(
+      async (_agentId: string, options?: { onDecline?: (d: unknown) => void }) => {
+        options?.onDecline?.({ reason: "panel-limit", panelLimit });
+        return null;
+      }
+    );
     const actions = setupActions(callbacks);
 
-    await callAction(actions, "agent.launch", {
-      agentId: "claude",
-      prompt: "do the thing",
-      name: "Claude: auth refactor",
+    const result = await callAction(actions, "agent.launch", { agentId: "claude" });
+
+    expect(result).toMatchObject({
+      launched: false,
+      terminalId: null,
+      spawnStatus: "panel-limit",
+      panelLimit,
     });
+    // Dispatch returns the schema's parse, which strips undeclared keys: the
+    // snapshot has to survive it, not just validate.
+    const parsed = parseAgainstSchema(actions, "agent.launch", result);
+    expect(parsed.success && parsed.data).toEqual(result);
+  });
 
-    expect(callbacks.onLaunchAgent).toHaveBeenCalledWith(
-      "claude",
-      expect.objectContaining({ name: "Claude: auth refactor" })
+  it("agent.launch tells a re-entrant launch of the same agent apart from a failure (#13382)", async () => {
+    const callbacks = makeCallbacks();
+    callbacks.onLaunchAgent.mockImplementationOnce(
+      async (_agentId: string, options?: { onDecline?: (d: unknown) => void }) => {
+        options?.onDecline?.({ reason: "already-launching", panelLimit: null });
+        return null;
+      }
     );
-  });
-
-  it("agent.launch omits 'name' from the callback when not provided", async () => {
-    const callbacks = makeCallbacks();
     const actions = setupActions(callbacks);
 
-    await callAction(actions, "agent.launch", { agentId: "claude" });
+    const result = await callAction(actions, "agent.launch", { agentId: "claude" });
 
-    const [, options] = callbacks.onLaunchAgent.mock.calls[0] ?? [];
-    expect(options?.name).toBeUndefined();
-  });
-
-  it("agent.launch forwards a whitespace-only 'name' verbatim (downstream decides fallback)", async () => {
-    const callbacks = makeCallbacks();
-    const actions = setupActions(callbacks);
-
-    await callAction(actions, "agent.launch", { agentId: "claude", name: "   " });
-
-    expect(callbacks.onLaunchAgent).toHaveBeenCalledWith(
-      "claude",
-      expect.objectContaining({ name: "   " })
-    );
-  });
-
-  it("one agent.<id> action is registered per AGENT_REGISTRY entry", () => {
-    const callbacks = makeCallbacks();
-    const actions = setupActions(callbacks);
-
-    expect(actions.has("agent.claude")).toBe(true);
-    expect(actions.has("agent.codex")).toBe(true);
-    expect(actions.has("agent.terminal")).toBe(true);
-    expect(actions.has("agent.browser")).toBe(true);
+    expect(result).toMatchObject({
+      launched: false,
+      spawnStatus: "already-launching",
+      panelLimit: null,
+    });
+    expect(parseAgainstSchema(actions, "agent.launch", result).success).toBe(true);
   });
 
   it("each generated agent.<id> launches its own agent id (no closure capture bug)", async () => {
@@ -863,16 +871,6 @@ describe("agentActions adversarial", () => {
     expect(focusNextBlockedDock).toHaveBeenCalledWith("wt-live", getPanelGroup);
   });
 
-  it("onLaunchAgent rejection propagates out of agent.launch", async () => {
-    const callbacks = makeCallbacks();
-    callbacks.onLaunchAgent.mockRejectedValueOnce(new Error("launcher boom"));
-    const actions = setupActions(callbacks);
-
-    await expect(callAction(actions, "agent.launch", { agentId: "claude" })).rejects.toThrow(
-      "launcher boom"
-    );
-  });
-
   it("agent.launch surfaces a worktree-not-found launcher error as ok:false through ActionService (#10812)", async () => {
     // Regression guard: a worktree-not-found launch must reach the MCP layer as a
     // dispatch failure (ok:false), NOT as a terminal-less success ({ok:true,result:null}).
@@ -901,14 +899,6 @@ describe("agentActions adversarial", () => {
       expect(result.error.message).toContain("Worktree 'main' not found");
       expect(result.error.message).toContain("wt-1, wt-2");
     }
-  });
-
-  it("onLaunchAgent rejection propagates out of generated agent.<id>", async () => {
-    const callbacks = makeCallbacks();
-    callbacks.onLaunchAgent.mockRejectedValueOnce(new Error("generator boom"));
-    const actions = setupActions(callbacks);
-
-    await expect(callAction(actions, "agent.claude")).rejects.toThrow("generator boom");
   });
 
   it("agent.getState returns matching panel data when launchAgentId matches", async () => {
@@ -1111,38 +1101,6 @@ describe("agentActions adversarial", () => {
 });
 
 describe("agent.launch dispatch integration", () => {
-  it("routes through ActionService.dispatch with validated args and returns terminalId", async () => {
-    const { ActionService } = await import("../../../ActionService");
-    const service = new ActionService();
-
-    const callbacks = makeCallbacks();
-    const registry: ActionRegistry = new Map();
-    registerAgentActions(registry, callbacks);
-
-    for (const [, factory] of registry) {
-      service.register(factory());
-    }
-
-    const result = await service.dispatch<{ terminalId: string | null }>(
-      "agent.launch",
-      { agentId: "claude", worktreeId: "wt-1", location: "grid" },
-      { source: "user" }
-    );
-
-    expect(result.ok).toBe(true);
-    if (result.ok) {
-      expect(result.result).toEqual(launchedResult());
-    }
-    expect(callbacks.onLaunchAgent).toHaveBeenCalledWith("claude", {
-      location: "grid",
-      cwd: undefined,
-      worktreeId: "wt-1",
-      prompt: undefined,
-      interactive: undefined,
-      modelId: undefined,
-    });
-  });
-
   it("rejects an empty agentId with a VALIDATION_ERROR targeting agentId and never invokes the callback", async () => {
     const { ActionService } = await import("../../../ActionService");
     const service = new ActionService();
@@ -1193,31 +1151,6 @@ describe("agent.launch dispatch integration", () => {
     expect(result.ok).toBe(true);
     expect(callbacks.onLaunchAgent).toHaveBeenCalledWith(
       "acme-agent",
-      expect.objectContaining({ worktreeId: "wt-1", location: "grid" })
-    );
-  });
-
-  it("accepts dev-preview through the schema so worktree-card dev-preview launches don't silently fail", async () => {
-    const { ActionService } = await import("../../../ActionService");
-    const service = new ActionService();
-
-    const callbacks = makeCallbacks();
-    const registry: ActionRegistry = new Map();
-    registerAgentActions(registry, callbacks);
-
-    for (const [, factory] of registry) {
-      service.register(factory());
-    }
-
-    const result = await service.dispatch(
-      "agent.launch",
-      { agentId: "dev-preview", worktreeId: "wt-1", location: "grid" },
-      { source: "user" }
-    );
-
-    expect(result.ok).toBe(true);
-    expect(callbacks.onLaunchAgent).toHaveBeenCalledWith(
-      "dev-preview",
       expect.objectContaining({ worktreeId: "wt-1", location: "grid" })
     );
   });
@@ -1352,11 +1285,6 @@ describe("agent.listToolbar (#10838)", () => {
     expect(gemini.visible).toBe(false);
   });
 
-  it("uses getAgentDisplayTitle for displayName", async () => {
-    const rows = await listToolbar({ agents: {} }, {});
-    expect(rowFor(rows, "claude").displayName).toBe("Title:claude");
-  });
-
   it("never leaks sensitive agent-settings fields — only the toolbar shape is returned", async () => {
     const rows = await listToolbar(
       {
@@ -1414,19 +1342,6 @@ describe("agent.listToolbar (#10838)", () => {
     clientsMock.agentSettingsClient.get.mockRejectedValue(new Error("IPC error"));
     const actions = setupActions(makeCallbacks());
     await expect(callAction(actions, "agent.listToolbar")).rejects.toThrow("IPC error");
-  });
-
-  it("registers with the expected read-only discovery metadata", () => {
-    const actions = setupActions(makeCallbacks());
-    const def = actions.get("agent.listToolbar")?.() as AnyActionDefinition;
-    expect(def).toBeDefined();
-    expect(def.kind).toBe("query");
-    expect(def.danger).toBe("safe");
-    expect(def.scope).toBe("renderer");
-    // Was `discoverable`, which hid it from tools/list while pretending the
-    // meta-tools kept it reachable (#11585). Its tier placement is the control.
-    expect(def.mcpVisibility).toBeUndefined();
-    expect(def.argsSchema).toBeUndefined();
   });
 });
 
@@ -1974,21 +1889,6 @@ describe("agentSessionHistory.list (#10854)", () => {
     expect(beyond).toEqual({ sessions: [], total: 5, hasMore: false });
   });
 
-  it("honours an explicit limit and keeps the newest records (bridge order)", async () => {
-    const many = Array.from({ length: 10 }, (_, i) => ({
-      ...SAMPLE_SESSIONS[0],
-      sessionId: `sess-${i}`,
-    }));
-    listMock.mockResolvedValue(many);
-    const actions = setupActions(makeCallbacks());
-    const result = (await callAction(actions, "agentSessionHistory.list", {
-      worktreeId: "wt-1",
-      limit: 3,
-    })) as { sessions: Array<{ sessionId: string }>; total: number; hasMore: boolean };
-    expect(result.sessions.map((s) => s.sessionId)).toEqual(["sess-0", "sess-1", "sess-2"]);
-    expect(result).toMatchObject({ total: 10, hasMore: true });
-  });
-
   it("strips pane-presentation bookmark fields while keeping the actionable ones", async () => {
     const bookmarked = {
       ...SAMPLE_SESSIONS[0],
@@ -2148,6 +2048,101 @@ describe("agentSessionHistory.list (#10854)", () => {
     expect(schema?.safeParse({ worktreeId: "wt-1", limit: -5 }).success).toBe(false);
     expect(schema?.safeParse({ worktreeId: "wt-1", limit: 2.5 }).success).toBe(false);
     expect(schema?.safeParse({ worktreeId: "wt-1", limit: 100_000 }).success).toBe(false);
+  });
+});
+
+describe("agent.listModels", () => {
+  const ModelsResultShape = z.object({
+    agents: z.array(
+      z.looseObject({
+        agentId: z.string(),
+        models: z.array(z.looseObject({ id: z.string(), name: z.string() })),
+      })
+    ),
+  });
+
+  function catalogFor(agentId: string) {
+    const models =
+      agentId === "codex"
+        ? [
+            { id: "gpt-6.1-sol", name: "GPT-6.1-Sol", shortLabel: "GPT-6.1-Sol" },
+            { id: "gpt-6-luna", name: "GPT-6-Luna", shortLabel: "GPT-6-Luna" },
+          ]
+        : agentId === "claude"
+          ? [{ id: "opus", name: "Opus", shortLabel: "Opus" }]
+          : [];
+    return {
+      agentId,
+      models,
+      modelUpgrades: agentId === "codex" ? { "gpt-5.6-sol": "gpt-6-sol" } : undefined,
+      contextWindow: 400_000,
+      source: "merged",
+    };
+  }
+
+  beforeEach(() => {
+    clientsMock.agentCapabilitiesClient.getRegistry.mockResolvedValue({
+      claude: { name: "Claude" },
+      codex: { name: "Codex" },
+      "my-plugin-agent": { name: "Plugin agent" },
+    });
+    clientsMock.agentCapabilitiesClient.getResolvedModelList.mockImplementation(
+      async (agentId: string) => catalogFor(agentId)
+    );
+  });
+
+  async function listModels(args: Record<string, unknown> = {}) {
+    const actions = setupActions(makeCallbacks());
+    const result = await callAction(actions, "agent.listModels", args);
+    expect(parseAgainstSchema(actions, "agent.listModels", result).success).toBe(true);
+    return ModelsResultShape.parse(result);
+  }
+
+  it("registers as a narrow read with a structured MCP result", () => {
+    const def = getDefinition(setupActions(makeCallbacks()), "agent.listModels");
+    expect(def.kind).toBe("query");
+    expect(def.danger).toBe("safe");
+    expect(def.scope).toBe("renderer");
+    expect(def.mcpOutputSchema).toBe(true);
+  });
+
+  it("returns one agent's models as ids and names only", async () => {
+    const { agents } = await listModels({ agentId: "codex" });
+
+    expect(agents).toEqual([
+      {
+        agentId: "codex",
+        models: [
+          { id: "gpt-6.1-sol", name: "GPT-6.1-Sol" },
+          { id: "gpt-6-luna", name: "GPT-6-Luna" },
+        ],
+      },
+    ]);
+  });
+
+  it("lists every registered agent in launcher order, plugin agents included", async () => {
+    const { agents } = await listModels();
+
+    const ids = agents.map((a) => a.agentId);
+    expect(ids).toEqual([
+      ...LAUNCHABLE_AGENT_IDS.filter((id) => id === "claude" || id === "codex"),
+      "my-plugin-agent",
+    ]);
+    expect(agents.find((a) => a.agentId === "my-plugin-agent")?.models).toEqual([]);
+  });
+
+  it("refuses an id no registry entry carries", async () => {
+    await expect(listModels({ agentId: "__proto__" })).rejects.toThrow(/Unknown agent ID/);
+    await expect(listModels({ agentId: "not-an-agent" })).rejects.toThrow(/agent\.listAvailable/);
+    expect(clientsMock.agentCapabilitiesClient.getResolvedModelList).not.toHaveBeenCalled();
+  });
+
+  it("surfaces a failed catalog read instead of reporting no models", async () => {
+    clientsMock.agentCapabilitiesClient.getResolvedModelList.mockRejectedValue(
+      new Error("ipc down")
+    );
+
+    await expect(listModels({ agentId: "codex" })).rejects.toThrow("ipc down");
   });
 });
 

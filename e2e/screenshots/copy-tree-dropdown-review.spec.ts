@@ -435,6 +435,54 @@ test("copy-tree dropdown review — recents panel states", async () => {
       await closePanel(page);
     });
 
+    /* A failed snapshot pull. The store pulls once per mounted view, so the
+       failure is armed first and then reached by a remount: a theme switch
+       tears the view down, and two of them land back on the theme every other
+       shot uses, with the remounted store pulling into the rejecting handler. */
+    await step("error", async () => {
+      await ctx!.app.evaluate(({ ipcMain }) => {
+        ipcMain.removeHandler("copy-tree-history:get-records");
+        ipcMain.handle("copy-tree-history:get-records", () =>
+          Promise.reject(new Error("fixture: history read failed"))
+        );
+      });
+      await setAppTheme(page, "namib");
+      await setAppTheme(page, THEME || "daintree");
+      await page.addStyleTag({ content: POLISH_CSS }).catch(() => {});
+      await settle(page, 800);
+      await openPanel(page);
+      await page
+        .locator(`${PANEL} [role="menuitem"]`, { hasText: "Retry" })
+        .waitFor({ state: "visible", timeout: T_MEDIUM });
+      await settle(page, 500);
+      await snap(page, "65-error", panel(page));
+
+      // Retry from the keyboard against a handler that now answers. The Retry
+      // row unmounts as the pull starts, so focus has to land somewhere the
+      // arrow keys still work: the menu itself.
+      await stubHistoryPull(ctx!.app, FULL_RECENTS);
+      await page.locator(`${PANEL} [role="menuitem"]`, { hasText: "Retry" }).focus();
+      await page.keyboard.press("Enter");
+      await expectRows(page, FULL_RECENTS_ROWS);
+      const focusOnMenu = await page.evaluate(
+        (sel) => document.activeElement?.closest(sel) !== null,
+        PANEL
+      );
+      if (!focusOnMenu) {
+        throw new Error("[copytree-shots] focus left the menu when Retry unmounted");
+      }
+      await page.keyboard.press("ArrowDown");
+      await settle(page, 400);
+      const focusedRole = await page.evaluate(() => document.activeElement?.getAttribute("role"));
+      if (focusedRole !== "menuitem") {
+        throw new Error(
+          `[copytree-shots] ArrowDown after Retry focused ${focusedRole ?? "nothing"}, not a menu row`
+        );
+      }
+      await snap(page, "66-retry-recovered", panel(page));
+      await closePanel(page);
+    });
+
     await step("themes", async () => {
       for (const themeId of THEMES) {
         await setAppTheme(page, themeId);

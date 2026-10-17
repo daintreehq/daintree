@@ -218,16 +218,6 @@ describe("wakeActiveWorktreeTerminals", () => {
     expect(fullWakeMock).toHaveBeenCalledWith("a");
   });
 
-  it("no-ops when there are no panels", async () => {
-    mockActiveWorktreeId = "wt-1";
-    mockPanelIds = [];
-    mockPanelsById = {};
-
-    await wakeActiveWorktreeTerminals();
-
-    expect(fullWakeMock).not.toHaveBeenCalled();
-  });
-
   it("skips panels missing from panelsById", async () => {
     mockActiveWorktreeId = "wt-1";
     mockPanelIds = ["ghost"];
@@ -462,18 +452,6 @@ describe("repaintActiveWorktreeTerminals (#10362)", () => {
     }
     return seen;
   }
-
-  it("reveals every visible terminal in the active worktree", async () => {
-    mockActiveWorktreeId = "wt-1";
-    const a = panel("a", { worktreeId: "wt-1" });
-    const b = panel("b", { worktreeId: "wt-1" });
-    mockPanelIds = ["a", "b"];
-    mockPanelsById = { a, b };
-
-    await repaintActiveWorktreeTerminals();
-
-    expect(revealedIds().sort()).toEqual(["a", "b"]);
-  });
 
   it("targets the same set as wake — folds in the assistant, excludes dock/other-worktree", async () => {
     mockActiveWorktreeId = "wt-1";

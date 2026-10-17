@@ -221,12 +221,42 @@ async function viewTypedShellPid(wcId: number, panelId: string): Promise<number>
   await ctx.app.evaluate(
     async ({ webContents }, { id, text }) => {
       const wc = webContents.fromId(id)!;
-      for (const ch of text) {
-        wc.sendInputEvent({ type: "char", keyCode: ch });
-        await new Promise((r) => setTimeout(r, 15));
+      // Playwright's crashed Page cannot type into the reloaded target. Use
+      // the same Chromium input protocol directly on that WebContents.
+      const attachedHere = !wc.debugger.isAttached();
+      if (attachedHere) wc.debugger.attach("1.3");
+      try {
+        // Playwright normally installs focus emulation for its Page. Its
+        // crashed session cannot restore that state on the new renderer.
+        await wc.debugger.sendCommand("Emulation.setFocusEmulationEnabled", { enabled: true });
+        for (const ch of text) {
+          await wc.debugger.sendCommand("Input.dispatchKeyEvent", {
+            type: "keyDown",
+            key: ch,
+            text: ch,
+            unmodifiedText: ch,
+          });
+          await wc.debugger.sendCommand("Input.dispatchKeyEvent", { type: "keyUp", key: ch });
+        }
+        await wc.debugger.sendCommand("Input.dispatchKeyEvent", {
+          type: "keyDown",
+          key: "Enter",
+          code: "Enter",
+          windowsVirtualKeyCode: 13,
+          nativeVirtualKeyCode: 13,
+          text: "\r",
+          unmodifiedText: "\r",
+        });
+        await wc.debugger.sendCommand("Input.dispatchKeyEvent", {
+          type: "keyUp",
+          key: "Enter",
+          code: "Enter",
+          windowsVirtualKeyCode: 13,
+          nativeVirtualKeyCode: 13,
+        });
+      } finally {
+        if (attachedHere) wc.debugger.detach();
       }
-      wc.sendInputEvent({ type: "keyDown", keyCode: "Return" });
-      wc.sendInputEvent({ type: "keyUp", keyCode: "Return" });
     },
     { id: wcId, text: command }
   );
@@ -235,13 +265,15 @@ async function viewTypedShellPid(wcId: number, panelId: string): Promise<number>
   await expect
     .poll(
       async () => {
-        const match = pattern.exec(await viewTerminalText(wcId, panelId));
+        const text = await viewTerminalText(wcId, panelId);
+        const match = pattern.exec(text);
         pid = match ? Number(match[1]) : 0;
-        return pid;
+        return text;
       },
       { timeout: T_LONG, message: `typed command in ${panelId} should print its shell pid` }
     )
-    .toBeGreaterThan(0);
+    .toMatch(pattern);
+  expect(pid).toBeGreaterThan(0);
   return pid;
 }
 

@@ -2,10 +2,12 @@
 import { cleanup, render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import type { ForgeUser, IssueTooltipData, PRTooltipData } from "@shared/types/forge";
+import { _resetHostPlatformForTests, setHostPlatformInfo } from "@/hooks/useHostPlatform";
 
 import {
   IssueTooltipContent,
   PRTooltipContent,
+  TokenMissingTooltip,
   TooltipFallback,
   describeIssueTooltip,
   describePRTooltip,
@@ -98,12 +100,6 @@ describe("ForgeTooltipContent avatars", () => {
     for (const src of srcs.slice(1)) {
       expect(src).toContain("s=24");
     }
-  });
-
-  it("renders the author login next to an avatar image", () => {
-    const { container } = render(<IssueTooltipContent data={baseIssue} />);
-    expect(screen.getByText("octocat")).toBeDefined();
-    expect(container.querySelectorAll("img")).toHaveLength(1);
   });
 
   it("renders a single assignee as avatar + login", () => {
@@ -264,26 +260,12 @@ describe("IssueTooltipContent freshness item", () => {
 });
 
 describe("PRTooltipContent freshness item", () => {
-  it("renders no freshness item when freshness is absent", () => {
-    const { container } = render(<PRTooltipContent data={prData} />);
-    expect(container.querySelector(".lucide-clock")).toBeNull();
-    expect(container.querySelector(".lucide-circle-pause")).toBeNull();
-  });
-
   it("folds a rate-limit cause onto the metadata row as a Clock + label", () => {
     const { container } = render(
       <PRTooltipContent data={prData} freshness={{ cause: "rate-limit", now: 1000 }} />
     );
     expect(container.querySelector(".lucide-clock")).toBeTruthy();
     expect(screen.getByText(/^Rate limited$/)).toBeTruthy();
-  });
-
-  it("renders a circuit-breaker cause as a PauseCircle", () => {
-    const { container } = render(
-      <PRTooltipContent data={prData} freshness={{ cause: "circuit-breaker", now: 1000 }} />
-    );
-    expect(container.querySelector(".lucide-circle-pause")).toBeTruthy();
-    expect(screen.getByText(/PR detection paused/)).toBeTruthy();
   });
 });
 
@@ -299,14 +281,6 @@ describe("ForgeTooltipContent labels", () => {
     // The row used to stop at four and print "+N more" — a count inside a
     // hover tooltip, which has no further surface to open.
     render(<IssueTooltipContent data={{ ...issueData, labels: manyLabels }} />);
-    for (const label of manyLabels) {
-      expect(screen.getByText(label.name)).toBeTruthy();
-    }
-    expect(screen.queryByText(/more$/)).toBeNull();
-  });
-
-  it("renders every PR label rather than counting the tail (#12001)", () => {
-    render(<PRTooltipContent data={{ ...prData, labels: manyLabels }} />);
     for (const label of manyLabels) {
       expect(screen.getByText(label.name)).toBeTruthy();
     }
@@ -512,5 +486,28 @@ describe("TooltipFallback CI", () => {
     };
     render(<TooltipFallback type="pr" number={7} prState="open" ciStatus={ci} status="loading" />);
     expect(screen.getByText(/CI pending/)).toBeTruthy();
+  });
+});
+
+describe("TokenMissingTooltip", () => {
+  it("asks for a token in a local window", () => {
+    render(<TokenMissingTooltip type="pr" />);
+    expect(screen.getByText("Add a forge access token to see pull request details")).toBeTruthy();
+    expect(screen.getByText("Click the badge to open forge settings")).toBeTruthy();
+    cleanup();
+  });
+
+  it("says the forge isn't connected on the host in a window attached to one", () => {
+    window.__DAINTREE_HOST_ID__ = { id: "studio" };
+    setHostPlatformInfo({ hostName: "studio-01" });
+    try {
+      render(<TokenMissingTooltip type="issue" />);
+      expect(screen.getByText("Your code forge isn't connected on studio-01")).toBeTruthy();
+      expect(screen.getByText("Click the badge to connect it")).toBeTruthy();
+    } finally {
+      cleanup();
+      delete window.__DAINTREE_HOST_ID__;
+      _resetHostPlatformForTests();
+    }
   });
 });

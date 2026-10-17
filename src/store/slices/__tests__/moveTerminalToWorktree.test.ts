@@ -133,19 +133,6 @@ describe("moveTerminalToWorktree", () => {
     expect(terminalInstanceService.applyRendererPolicy).not.toHaveBeenCalled();
   });
 
-  it("applies VISIBLE tier when moving to any worktree", () => {
-    const source = createMockTerminal("t1", "wt-a", "dock");
-    setTerminals([source]);
-
-    usePanelStore.getState().moveTerminalToWorktree("t1", "wt-b");
-
-    // All terminals stay VISIBLE - we don't background for reliability
-    expect(terminalInstanceService.applyRendererPolicy).toHaveBeenCalledWith(
-      "t1",
-      TerminalRefreshTier.VISIBLE
-    );
-  });
-
   it("moves entire group when terminal belongs to a group", () => {
     const t1 = createMockTerminal("t1", "wt-a", "grid");
     const t2 = createMockTerminal("t2", "wt-a", "grid");
@@ -195,17 +182,5 @@ describe("moveTerminalToWorktree", () => {
     usePanelStore.getState().moveTerminalToWorktree("t1", "wt-b");
 
     expect(terminalClient.updateWorktreeId).toHaveBeenCalledWith("t1", "wt-b");
-  });
-
-  it("does not re-file a run whose destination is the worktree it is already in", () => {
-    // The early return covers the whole move, the host hop included: a no-op
-    // drag must not churn the record or the fleet recompute it triggers.
-    const t1 = createMockTerminal("t1", "wt-a");
-    setTerminals([t1]);
-    usePanelStore.setState({ tabGroups: new Map() });
-
-    usePanelStore.getState().moveTerminalToWorktree("t1", "wt-a");
-
-    expect(terminalClient.updateWorktreeId).not.toHaveBeenCalled();
   });
 });

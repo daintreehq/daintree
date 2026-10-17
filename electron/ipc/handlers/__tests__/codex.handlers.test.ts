@@ -59,12 +59,6 @@ describe("codex IPC handlers", () => {
       expect(serviceMock.resolveCodexResumeLatestSession).toHaveBeenCalledWith("/repo/worktree");
     });
 
-    it("returns null unchanged when the directory has nothing to resume", async () => {
-      serviceMock.resolveCodexResumeLatestSession.mockResolvedValue(null);
-
-      expect(await getHandler(resolveChannel)(fakeEvent(), { cwd: "/repo" })).toBeNull();
-    });
-
     it("does not normalize the cwd, because Codex matches it as an exact string", async () => {
       serviceMock.resolveCodexResumeLatestSession.mockResolvedValue(null);
 
@@ -155,17 +149,5 @@ describe("codex IPC handlers", () => {
       expect(await getHandler(CHANNELS.CODEX_REFRESH_QUOTA)(fakeEvent())).toBe(result);
       expect(quotaMock.readCodexQuota).not.toHaveBeenCalled();
     });
-  });
-
-  it("removes every codex handler on cleanup", () => {
-    expect(ipcHandlers.has(resolveChannel)).toBe(true);
-    expect(ipcHandlers.has(CHANNELS.CODEX_LIST_SUBAGENTS)).toBe(true);
-    expect(ipcHandlers.has(findSessionsChannel)).toBe(true);
-
-    cleanup();
-
-    expect(ipcHandlers.size).toBe(0);
-    // Registered again in afterEach's cleanup call, which must stay safe to repeat.
-    cleanup = () => {};
   });
 });

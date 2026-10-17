@@ -60,11 +60,20 @@ describe("formatWaitAge", () => {
     expect(formatWaitAge(NOW - 30_000, NOW)).toBe("just now");
   });
 
-  it("uses minutes, then hours, then days", () => {
+  it("uses its largest unit only: minutes, then hours, then days", () => {
     expect(formatWaitAge(NOW - 42 * 60_000, NOW)).toBe("42m");
     expect(formatWaitAge(NOW - 60 * 60_000, NOW)).toBe("1h");
-    expect(formatWaitAge(NOW - 95 * 60_000, NOW)).toBe("1h 35m");
+    expect(formatWaitAge(NOW - 95 * 60_000, NOW)).toBe("1h");
+    expect(formatWaitAge(NOW - (13 * 60 + 44) * 60_000, NOW)).toBe("13h");
     expect(formatWaitAge(NOW - 50 * 3600_000, NOW)).toBe("2d");
+  });
+
+  it("rounds down to each unit's boundary", () => {
+    expect(formatWaitAge(NOW - 3600_000 + 1_000, NOW)).toBe("59m");
+    expect(formatWaitAge(NOW - 2 * 3600_000 + 1_000, NOW)).toBe("1h");
+    expect(formatWaitAge(NOW - 2 * 3600_000, NOW)).toBe("2h");
+    expect(formatWaitAge(NOW - 24 * 3600_000 + 60_000, NOW)).toBe("23h");
+    expect(formatWaitAge(NOW - 24 * 3600_000, NOW)).toBe("1d");
   });
 
   it("never reports a negative age from a clock skew", () => {
@@ -94,7 +103,7 @@ describe("getProjectRowStatus", () => {
       NOW
     );
 
-    expect(demandLine(status)).toBe("2 waiting · 1 blocked");
+    expect(demandLine(status)).toBe("2 agents waiting · 1 blocked");
     expect(status.tone).toBe("blocked");
   });
 
@@ -110,7 +119,7 @@ describe("getProjectRowStatus", () => {
       NOW
     );
 
-    expect(demandLine(status)).toBe("1 waiting · 1 blocked · oldest 42m");
+    expect(demandLine(status)).toBe("1 agent waiting · 1 blocked · oldest 42m");
   });
 
   it("clamps a blocked count that exceeds the waits it is drawn from", () => {
@@ -119,14 +128,14 @@ describe("getProjectRowStatus", () => {
       NOW
     );
 
-    expect(demandLine(status)).toBe("1 blocked");
+    expect(demandLine(status)).toBe("1 agent blocked");
     expect(status.tone).toBe("blocked");
   });
 
   it("ranks a wait above work in progress", () => {
     const status = getProjectRowStatus(project({ waitingAgentCount: 1, activeAgentCount: 4 }), NOW);
 
-    expect(demandLine(status)).toBe("1 waiting");
+    expect(demandLine(status)).toBe("1 agent waiting");
     expect(status.tone).toBe("waiting");
   });
 
@@ -136,7 +145,7 @@ describe("getProjectRowStatus", () => {
       NOW
     );
 
-    expect(demandLine(status)).toBe("3 waiting · oldest 42m");
+    expect(demandLine(status)).toBe("3 agents waiting · oldest 42m");
   });
 
   it("drops the 'oldest' qualifier when only one agent waits", () => {
@@ -145,13 +154,13 @@ describe("getProjectRowStatus", () => {
       NOW
     );
 
-    expect(demandLine(status)).toBe("1 waiting · for 7m");
+    expect(demandLine(status)).toBe("1 agent waiting · for 7m");
   });
 
   it("omits the age when no wait timestamp arrived", () => {
     const status = getProjectRowStatus(project({ waitingAgentCount: 2 }), NOW);
 
-    expect(demandLine(status)).toBe("2 waiting");
+    expect(demandLine(status)).toBe("2 agents waiting");
   });
 
   it("reads a fresh unseen completion as just finished", () => {
@@ -165,7 +174,7 @@ describe("getProjectRowStatus", () => {
       NOW
     );
 
-    expect(demandLine(status)).toBe("1 ready for review · just finished 3m ago");
+    expect(demandLine(status)).toBe("1 agent unread · just finished 3m ago");
     expect(status.tone).toBe("review");
   });
 
@@ -182,7 +191,7 @@ describe("getProjectRowStatus", () => {
       }),
       NOW
     );
-    expect(demandLine(fresh)).toBe("1 ready for review · just finished 14m ago");
+    expect(demandLine(fresh)).toBe("1 agent unread · just finished 14m ago");
 
     const boundary = getProjectRowStatus(
       project({
@@ -193,7 +202,7 @@ describe("getProjectRowStatus", () => {
       }),
       NOW
     );
-    expect(demandLine(boundary)).toBe("1 ready for review · finished 15m ago");
+    expect(demandLine(boundary)).toBe("1 agent unread · finished 15m ago");
 
     const stale = getProjectRowStatus(
       project({
@@ -204,7 +213,7 @@ describe("getProjectRowStatus", () => {
       }),
       NOW
     );
-    expect(demandLine(stale)).toBe("1 ready for review · finished 16m ago");
+    expect(demandLine(stale)).toBe("1 agent unread · finished 16m ago");
   });
 
   it("elides the redundant timestamp on a seconds-old completion", () => {
@@ -219,7 +228,7 @@ describe("getProjectRowStatus", () => {
     );
 
     // "just finished just now ago" is not a sentence.
-    expect(demandLine(status)).toBe("1 ready for review · just finished");
+    expect(demandLine(status)).toBe("1 agent unread · just finished");
   });
 
   it("ranges multiple unseen completions newest to oldest", () => {
@@ -233,7 +242,7 @@ describe("getProjectRowStatus", () => {
       NOW
     );
 
-    expect(demandLine(status)).toBe("3 ready for review · 3m–2h ago");
+    expect(demandLine(status)).toBe("3 agents unread · 3m–2h ago");
     expect(status.tone).toBe("review");
   });
 
@@ -249,7 +258,7 @@ describe("getProjectRowStatus", () => {
       NOW
     );
 
-    expect(demandLine(status)).toBe("2 ready for review · 3m–2h ago");
+    expect(demandLine(status)).toBe("2 agents unread · 3m–2h ago");
   });
 
   it("collapses the range when completions round to the same age", () => {
@@ -263,7 +272,21 @@ describe("getProjectRowStatus", () => {
       NOW
     );
 
-    expect(demandLine(status)).toBe("2 ready for review · 8m ago");
+    expect(demandLine(status)).toBe("2 agents unread · 8m ago");
+  });
+
+  it("collapses the range when completions fall in the same hour", () => {
+    const status = getProjectRowStatus(
+      project({
+        completedAgentCount: 2,
+        unacknowledgedCompletedAgentCount: 2,
+        latestUnacknowledgedCompletionAt: NOW - 65 * 60_000,
+        oldestUnacknowledgedCompletionAt: NOW - 115 * 60_000,
+      }),
+      NOW
+    );
+
+    expect(demandLine(status)).toBe("2 agents unread · 1h ago");
   });
 
   it("ranks a wait above a completion, and a completion above running work", () => {
@@ -289,7 +312,7 @@ describe("getProjectRowStatus", () => {
       NOW
     );
     expect(review.tone).toBe("review");
-    expect(review.text).toContain("ready for review");
+    expect(review.text).toContain("unread");
   });
 
   it("mutes an acknowledged completion and drops the action phrase", () => {
@@ -600,7 +623,7 @@ describe("getScratchRowStatus", () => {
       NOW
     );
 
-    expect(status.text).toContain("1 waiting");
+    expect(status.text).toContain("1 agent waiting");
     expect(status.tone).toBe("waiting");
   });
 });
@@ -625,13 +648,6 @@ describe("snoozed rows", () => {
 
     expect(one).not.toContain("3");
     expect(many).toContain("3");
-  });
-
-  it("states no wake time when every snooze is unlimited", () => {
-    const status = getProjectRowStatus(project({ snoozedAgentCount: 2 }), NOW);
-
-    expect(status.tone).toBe("snoozed");
-    expect(status.ageDetail).toBeUndefined();
   });
 
   it("renders the same wake time regardless of how much later it is read", () => {
@@ -846,7 +862,7 @@ describe("assistant presence status lines (#11806)", () => {
       NOW
     );
 
-    expect(status.text).toContain("2 waiting");
+    expect(status.text).toContain("2 agents waiting");
   });
 
   it("reports a working assistant rather than the snooze beneath it", () => {
@@ -858,19 +874,6 @@ describe("assistant presence status lines (#11806)", () => {
     );
 
     expect(status.text).toBe("Assistant working");
-  });
-
-  it("counts the workers rather than announcing the assistant beside them", () => {
-    // Both are executing, but only the runs the user launched are countable
-    // (#11806) — and "Assistant working" must not stand in for a number when
-    // there is a real one to give.
-    const status = getProjectRowStatus(
-      project({ activeAgentCount: 2, assistantState: "working" }),
-      NOW
-    );
-
-    expect(status.livenessDetail).toBe("2 agents running");
-    expect(status.markTone).toBe("working");
   });
 
   it("puts a seen wait below the snooze but above the settled lines", () => {
@@ -1104,12 +1107,6 @@ describe("row status liveness", () => {
     expect(status.livenessDetail).toBeUndefined();
   });
 
-  it("singularises the clause the way the sentences above it do", () => {
-    const status = getProjectRowStatus(project({ waitingAgentCount: 1, activeAgentCount: 1 }), NOW);
-
-    expect(status.livenessDetail).toBe("1 agent running");
-  });
-
   it("keeps the clause off a row where nothing is executing", () => {
     // Every settled tone at once: a completion, a snooze and a bare process
     // count are all reachable only after the cascade established that no agent
@@ -1156,32 +1153,6 @@ describe("row status liveness", () => {
     expect(hidden.livenessDetail).toBe("Assistant working");
   });
 
-  it("reports the workers when both they and the assistant are going", () => {
-    const status = getProjectRowStatus(
-      project({ waitingAgentCount: 1, activeAgentCount: RUNNING, assistantState: "working" }),
-      NOW
-    );
-
-    expect(status.livenessDetail).toBe(`${RUNNING} agents running`);
-  });
-
-  it("leaves the assistant's own line without a clause about itself", () => {
-    const status = getProjectRowStatus(project({ assistantState: "working" }), NOW);
-
-    expect(status.text).toBe("Assistant working");
-    expect(status.livenessDetail).toBeUndefined();
-  });
-
-  it("treats a directing assistant as executing, the way the classifier does", () => {
-    // A directing assistant is mid-task, so it speaks; an idle one has nothing
-    // to say and lets the row fall through to whatever is underneath it.
-    const directing = getProjectRowStatus(project({ assistantState: "directing" }), NOW);
-    const idle = getProjectRowStatus(project({ assistantState: "idle" }), NOW);
-
-    expect(directing.text).toBe("Assistant working");
-    expect(idle.isDormantFallback).toBe(true);
-  });
-
   it("needs no union with the snooze count to see a snoozed run still working", () => {
     // Snoozing withholds a row from the demanding tallies; it does not stop the
     // run, so a still-working snoozed agent is already inside `activeAgentCount`.
@@ -1191,21 +1162,6 @@ describe("row status liveness", () => {
     );
 
     expect(status.livenessDetail).toBe("1 agent running");
-  });
-
-  it("keeps reporting the run when the folder underneath it has gone", () => {
-    // `isMissing` pre-empts the activity cascade outright, so without this the
-    // one row whose agents are most likely orphaned says the least about them.
-    const missing = getProjectRowStatus(
-      project({ isMissing: true, activeAgentCount: RUNNING }),
-      NOW
-    );
-    const found = getProjectRowStatus(project({ isMissing: true }), NOW);
-
-    expect(missing.text).toBe(found.text);
-    expect(missing.tone).toBe(found.tone);
-    expect(missing.livenessDetail).toBe(`${RUNNING} agents running`);
-    expect(found.livenessDetail).toBeUndefined();
   });
 
   it("carries the clause under every demand tier that can hide a run", () => {

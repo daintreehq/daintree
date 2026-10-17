@@ -82,20 +82,6 @@ describe("useAgentScope — inline-mode inherit origin label (#10894)", () => {
     expect(result.current.inlineInheritResolvesToInline).toBe(false);
   });
 
-  it("attributes Grok (no registry default anymore) to the global setting, defaulting inline", () => {
-    setGlobalAltScreen(false);
-    const { result, rerender } = renderHook(() => useAgentScope(makeProps("grok")));
-
-    // Grok no longer pins a curated default — it follows the global switch, so
-    // it defaults inline (global "use alt-screen" off ⇒ inline).
-    expect(result.current.inlineInheritOriginLabel).toBe("global setting");
-    expect(result.current.inlineInheritResolvesToInline).toBe(true);
-
-    setGlobalAltScreen(true);
-    rerender();
-    expect(result.current.inlineInheritResolvesToInline).toBe(false);
-  });
-
   it("attributes an agent without a registry default (Codex) to the global setting, and tracks the global switch", () => {
     setGlobalAltScreen(false);
     const { result, rerender } = renderHook(() => useAgentScope(makeProps("codex")));

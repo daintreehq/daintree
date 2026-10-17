@@ -74,6 +74,19 @@ import { usePluginPanelToolbarStore } from "@/store/pluginPanelToolbarStore";
 import { usePluginPanelMenuStore } from "@/store/pluginPanelMenuStore";
 import { normalizePanelMenuItems } from "@shared/utils/pluginPanelMenuItems";
 import { logWarn } from "@/utils/logger";
+import {
+  isPluginNotOnHostError,
+  isRemoteUnsupportedError,
+  pluginViewHostId,
+  pluginViewImportPath,
+} from "./remotePluginView";
+import { PluginRemoteUnsupportedPlaceholder } from "./PluginRemoteUnsupportedPlaceholder";
+import {
+  PluginViewBlockedError,
+  PluginViewBlockedPlaceholder,
+  isPluginViewBlockedError,
+} from "./PluginViewBlockedPlaceholder";
+import { PluginNotOnHostPlaceholder } from "./PluginNotOnHostPlaceholder";
 
 /**
  * The resolved subset of `PanelKindConfig` a plugin view actually needs. Both
@@ -390,6 +403,29 @@ export function makePluginViewContent(
     const refreshPluginRuntime = usePluginRuntimeStore((s) => s.refresh);
     useEffect(() => refreshPluginRuntime(), [refreshPluginRuntime]);
 
+    // Not a failure: the host declined to start this plugin for a window on
+    // another machine. Nothing here is broken, so there are no diagnostics.
+    if (isRemoteUnsupportedError(error)) {
+      return <PluginRemoteUnsupportedPlaceholder pluginDisplayName={pluginDisplayName} />;
+    }
+    // This computer didn't run the host's view: the person's choice, not a bug.
+    if (isPluginViewBlockedError(error)) {
+      return (
+        <PluginViewBlockedPlaceholder pluginDisplayName={pluginDisplayName} onRetry={resetError} />
+      );
+    }
+    // The window's host doesn't have this plugin (any more). Also not broken.
+    if (isPluginNotOnHostError(error)) {
+      return (
+        <PluginNotOnHostPlaceholder
+          pluginId={pluginId}
+          kind={kindId}
+          pluginDisplayName={pluginDisplayName}
+          onRemove={onRequestClose}
+        />
+      );
+    }
+
     return (
       <PluginViewDiagnosticsFallback
         error={error}
@@ -607,6 +643,14 @@ export function makePluginViewContent(
     requestRecoveryPath: boolean,
     timing: ViewLoadTiming
   ): Promise<ComponentType<PanelViewProps>> => {
+    // A host's view runs here only once this computer says so. The question
+    // is settled before the load deadline starts, so reading it can't time
+    // the view out, and it is parented to this window.
+    if (pluginViewHostId() !== null) {
+      const url = pluginViewImportPath(recoveryComponentPath ?? componentPath);
+      const allowed = await window.electron?.remoteHosts?.preparePluginView?.({ url });
+      if (allowed !== true) throw new PluginViewBlockedError(pluginId);
+    }
     const mod: unknown = await withLoadTimeout(
       (async () => {
         // Implicit lazy activation (#10523): force the owning plugin to
@@ -634,7 +678,7 @@ export function makePluginViewContent(
         // Started before activation is awaited so the Tailwind chunk, the
         // ~10ms compile, and the view's own source read all overlap the
         // activation round trip rather than queueing behind it (#12220).
-        const initialPath = recoveryComponentPath ?? componentPath;
+        const initialPath = pluginViewImportPath(recoveryComponentPath ?? componentPath);
         const trackStyles = (path: string): Promise<number> => {
           const stylesStart = performance.now();
           return preparePluginStyles(path).then(() => endPhase("styles", stylesStart));
@@ -657,7 +701,7 @@ export function makePluginViewContent(
         if (typeof recovered === "string" && recovered.length > 0) {
           recoveryComponentPath = recovered;
         }
-        const viewPath = recoveryComponentPath ?? componentPath;
+        const viewPath = pluginViewImportPath(recoveryComponentPath ?? componentPath);
         pluginDocumentRuntime.registerView(pluginId, viewPath);
         pluginViewMetrics.registerViewOrigin(pluginId, viewPath);
         try {
@@ -728,7 +772,7 @@ export function makePluginViewContent(
   ): ComponentType<PanelViewProps> | null => {
     if (requestRecoveryPath || !backendIsLive(builtinComponent !== null)) return null;
     if (builtinComponent) return builtinViews.get(builtinComponent) ?? null;
-    const viewPath = recoveryComponentPath ?? componentPath;
+    const viewPath = pluginViewImportPath(recoveryComponentPath ?? componentPath);
     return loadedModule?.path === viewPath ? loadedModule.view : null;
   };
 
@@ -747,7 +791,7 @@ export function makePluginViewContent(
     timing: ViewLoadTiming
   ): Promise<ComponentType<PanelViewProps>> => {
     if (!builtin) {
-      const viewPath = recoveryComponentPath ?? componentPath;
+      const viewPath = pluginViewImportPath(recoveryComponentPath ?? componentPath);
       pluginDocumentRuntime.registerView(pluginId, viewPath);
       pluginViewMetrics.registerViewOrigin(pluginId, viewPath);
     }

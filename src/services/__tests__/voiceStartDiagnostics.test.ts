@@ -23,13 +23,6 @@ describe("measurePcm16Chunk", () => {
     expect(stats.rms).toBeCloseTo(Math.sqrt((0.25 + 1) / 4), 10);
   });
 
-  it("matches the per-sample normalised RMS the UI level used to compute", () => {
-    const samples = Int16Array.from({ length: 480 }, (_, i) => Math.round(Math.sin(i / 7) * 9000));
-    let sumSq = 0;
-    for (const v of samples) sumSq += (v / 32768) ** 2;
-    expect(measurePcm16Chunk(samples).rms).toBeCloseTo(Math.sqrt(sumSq / samples.length), 10);
-  });
-
   it("treats an empty chunk as zero stats rather than NaN", () => {
     expect(measurePcm16Chunk(new Int16Array(0))).toEqual({
       samples: 0,

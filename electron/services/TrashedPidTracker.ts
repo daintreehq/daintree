@@ -2,9 +2,11 @@
 import { app } from "electron";
 import fs from "node:fs";
 import path from "node:path";
-import { execFile, spawnSync } from "node:child_process";
+import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { resilientAtomicWriteFileSync } from "../utils/fs.js";
+import { killWindowsProcessTree } from "../utils/windowsTreeKill.js";
+import { windowsSystemTool } from "../utils/windowsExecutable.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -22,7 +24,7 @@ async function getProcessStartTime(pid: number): Promise<string | null> {
   try {
     if (process.platform === "win32") {
       const { stdout } = await execFileAsync(
-        "powershell.exe",
+        windowsSystemTool("powershell.exe"),
         [
           "-NoProfile",
           "-NonInteractive",
@@ -159,14 +161,16 @@ export class TrashedPidTracker {
 
         let killed = false;
         if (process.platform === "win32") {
-          const result = spawnSync("taskkill", ["/T", "/F", "/PID", String(entry.pid)], {
-            windowsHide: true,
-            stdio: "ignore",
-            timeout: 3000,
-          });
-          if (result.status === 0 || result.status === 128) {
-            killed = true;
-          }
+          // The recorded start time goes with the PID: the helper ends nothing
+          // unless the process holding it now is the one that was trashed, and
+          // kills each member by a handle checked against its census identity,
+          // so the PID cannot be recycled between that check and the kill. No
+          // bare-PID fallback below for the same reason.
+          const result = await killWindowsProcessTree(
+            { pid: entry.pid, startTime: entry.startTime },
+            { timeoutMs: 3000 }
+          );
+          killed = result.rootEnded;
         } else {
           try {
             process.kill(-entry.pid, "SIGKILL");
@@ -176,7 +180,7 @@ export class TrashedPidTracker {
           }
         }
 
-        if (!killed) {
+        if (!killed && process.platform !== "win32") {
           try {
             process.kill(entry.pid, "SIGKILL");
             killed = true;

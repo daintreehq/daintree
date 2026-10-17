@@ -18,11 +18,16 @@ vi.mock("zustand/react/shallow", () => ({
 vi.mock("@/store", () => ({
   usePortalStore: () => ({ isOpen: false, width: 0 }),
 }));
+vi.mock("@/store/portalStore", () => ({ usePortalStore: () => ({ isOpen: false, width: 0 }) }));
 
 vi.mock("@/hooks", async (importOriginal) => {
   const actual = (await importOriginal()) as Record<string, unknown>;
   return { ...actual, useOverlayState: () => {} };
 });
+vi.mock("@/hooks/useOverlayState", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/hooks/useOverlayState")>()),
+  useOverlayState: () => {},
+}));
 
 const agentSettingsState = vi.hoisted(() => ({ globalSkipPermissions: false }));
 
@@ -158,6 +163,78 @@ describe("McpConfirmDialog", () => {
     __resetMcpConfirmStoreForTesting();
     cleanup();
     vi.restoreAllMocks();
+  });
+
+  describe("a confirmation nobody had on screen (#13392)", () => {
+    let visibility: DocumentVisibilityState;
+    beforeEach(() => {
+      visibility = "hidden";
+      Object.defineProperty(document, "visibilityState", {
+        configurable: true,
+        get: () => visibility,
+      });
+    });
+    afterEach(() => {
+      delete (document as { visibilityState?: unknown }).visibilityState;
+    });
+
+    it("times out as unseen when its window was never on screen", async () => {
+      vi.useFakeTimers();
+      try {
+        const pending = enqueue();
+        render(<McpConfirmDialog />);
+        await act(async () => {
+          await vi.advanceTimersByTimeAsync(30_000);
+        });
+        expect(await pending).toEqual({ decision: "timeout", unseen: true });
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("remembers it was seen when a preview lands after the view went hidden", async () => {
+      vi.useFakeTimers();
+      try {
+        visibility = "visible";
+        const pending = enqueue({ requestId: "req-preview", previewPending: true });
+        render(<McpConfirmDialog />);
+        await act(async () => {
+          await vi.advanceTimersByTimeAsync(2_000);
+        });
+        visibility = "hidden";
+        act(() => {
+          document.dispatchEvent(new Event("visibilitychange"));
+          useMcpConfirmStore.getState().setPreview("req-preview", ["worktree wt-1"]);
+        });
+        await act(async () => {
+          await vi.advanceTimersByTimeAsync(30_000);
+        });
+        expect(await pending).toEqual({ decision: "timeout" });
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("is an ordinary timeout once its window came on screen while it asked", async () => {
+      vi.useFakeTimers();
+      try {
+        const pending = enqueue();
+        render(<McpConfirmDialog />);
+        await act(async () => {
+          await vi.advanceTimersByTimeAsync(5_000);
+        });
+        visibility = "visible";
+        act(() => {
+          document.dispatchEvent(new Event("visibilitychange"));
+        });
+        await act(async () => {
+          await vi.advanceTimersByTimeAsync(30_000);
+        });
+        expect(await pending).toEqual({ decision: "timeout" });
+      } finally {
+        vi.useRealTimers();
+      }
+    });
   });
 
   describe("selectable target checklist (#12123)", () => {
@@ -312,14 +389,6 @@ describe("McpConfirmDialog", () => {
       }
     });
 
-    it("is a dialog, not an alertdialog, because the list is interactive", () => {
-      void enqueue({ actionTitle: "Kill terminals", selectableTargets: BATCH_TARGETS });
-      render(<McpConfirmDialog />);
-
-      expect(screen.queryByRole("alertdialog")).toBeNull();
-      expect(screen.getByRole("dialog")).toBeTruthy();
-    });
-
     it("does not carry one batch's unchecked rows into the next promoted request", async () => {
       vi.useFakeTimers();
       try {
@@ -460,7 +529,7 @@ describe("McpConfirmDialog", () => {
       void enqueue({ offerSessionApproval: true, danger: "safe", actionTitle: "Push" });
       render(<McpConfirmDialog />);
 
-      const box = screen.getByRole("checkbox", { name: "Allow for the rest of this session" });
+      const box = screen.getByRole("checkbox", { name: "Allow for this session" });
       expect(box.getAttribute("aria-checked")).toBe("false");
       expect(screen.getByText("Agent in a terminal pane")).toBeTruthy();
     });
@@ -469,9 +538,7 @@ describe("McpConfirmDialog", () => {
       void enqueue({ danger: "safe" });
       render(<McpConfirmDialog />);
 
-      expect(
-        screen.queryByRole("checkbox", { name: "Allow for the rest of this session" })
-      ).toBeNull();
+      expect(screen.queryByRole("checkbox", { name: "Allow for this session" })).toBeNull();
     });
 
     it("approves for the session when the box is ticked, and once when it is not", async () => {
@@ -490,23 +557,21 @@ describe("McpConfirmDialog", () => {
       render(<McpConfirmDialog />);
 
       act(() => {
-        fireEvent.click(
-          screen.getByRole("checkbox", { name: "Allow for the rest of this session" })
-        );
+        fireEvent.click(screen.getByRole("checkbox", { name: "Allow for this session" }));
       });
       act(() => {
-        fireEvent.click(screen.getByRole("button", { name: "Push" }));
+        fireEvent.click(screen.getByRole("button", { name: "Push and allow for session" }));
       });
       await expect(session).resolves.toEqual({ decision: "approved", scope: "session" });
 
       // The promoted request must not inherit the tick.
       expect(
         screen
-          .getByRole("checkbox", { name: "Allow for the rest of this session" })
+          .getByRole("checkbox", { name: "Allow for this session" })
           .getAttribute("aria-checked")
       ).toBe("false");
       act(() => {
-        fireEvent.click(screen.getByRole("button", { name: "Push" }));
+        fireEvent.click(screen.getByRole("button", { name: "Push once" }));
       });
       await expect(once).resolves.toEqual({ decision: "approved" });
     });
@@ -515,16 +580,8 @@ describe("McpConfirmDialog", () => {
       void enqueue({ approvalReason: "above-tier", danger: "safe" });
       render(<McpConfirmDialog />);
 
-      expect(screen.getByText(/needs your approval to run/)).toBeTruthy();
+      expect(screen.getByText(/needs your approval/)).toBeTruthy();
     });
-  });
-
-  it("labels the confirm button with the action title, not a generic verb", () => {
-    void enqueue({ actionTitle: "Delete worktree" });
-    render(<McpConfirmDialog />);
-
-    expect(screen.getByRole("button", { name: "Delete worktree" })).toBeTruthy();
-    expect(screen.queryByRole("button", { name: /^run action$/i })).toBeNull();
   });
 
   // #11538: a git.push preview is a commit list, not working-tree changes, so
@@ -539,13 +596,6 @@ describe("McpConfirmDialog", () => {
     expect(screen.getByText("Branch and local commits")).toBeTruthy();
     expect(screen.queryByText("Working tree changes")).toBeNull();
     expect(screen.getByText(/Fix the thing/)).toBeTruthy();
-  });
-
-  it("keeps the original working-tree heading when no preview title is supplied", () => {
-    void enqueue({ preview: ["No uncommitted changes."] });
-    render(<McpConfirmDialog />);
-
-    expect(screen.getByText("Working tree changes")).toBeTruthy();
   });
 
   // Must advance PAST the destructive cooldown first: that independently
@@ -609,6 +659,17 @@ describe("McpConfirmDialog", () => {
     expect(screen.getByText("…1234")).toBeTruthy();
   });
 
+  it("names a host's agent with no token suffix when it carries none", () => {
+    void enqueue({
+      actionTitle: "Get current worktree",
+      callerInfo: { token4LastChars: "", userAgent: 'Agent on host "studio-01"' },
+    });
+    render(<McpConfirmDialog />, { wrapper: TooltipProvider });
+
+    expect(screen.getByText('Agent on host "studio-01"')).toBeTruthy();
+    expect(document.body.textContent).not.toContain("…");
+  });
+
   // The client-supplied name leads and the token trails: the user agent is what
   // a human recognises, the token suffix is the corroborating detail.
   it("orders the caller's own name before the token suffix", () => {
@@ -668,6 +729,19 @@ describe("McpConfirmDialog", () => {
     ).toBeTruthy();
   });
 
+  it("keeps the action description beside the rationale, since each can carry its own warning", () => {
+    void enqueue({
+      actionTitle: "Delete worktree",
+      dangerRationale: "Permanently removes the worktree directory and any uncommitted changes.",
+    });
+    render(<McpConfirmDialog />);
+
+    expect(screen.getByText("Permanently delete a worktree.")).toBeTruthy();
+    expect(
+      screen.getByText(/Permanently removes the worktree directory and any uncommitted changes\./)
+    ).toBeTruthy();
+  });
+
   it("omits the rationale block entirely when the action carries no dangerRationale", () => {
     void enqueue({ actionTitle: "Delete worktree" });
     render(<McpConfirmDialog />);
@@ -722,27 +796,6 @@ describe("McpConfirmDialog", () => {
       await expect(pA).resolves.toEqual({ decision: "approved" });
 
       await expectStillPending(pB);
-    } finally {
-      vi.runOnlyPendingTimers();
-      vi.useRealTimers();
-    }
-  });
-
-  it("disables the confirm button on mount for danger:confirm, re-enabling after the cooldown", () => {
-    vi.useFakeTimers();
-    try {
-      void enqueue({ actionTitle: "Delete worktree", danger: "confirm" });
-      render(<McpConfirmDialog />);
-
-      const confirmBtn = screen.getByRole("button", {
-        name: "Delete worktree",
-      }) as HTMLButtonElement;
-      expect(confirmBtn.getAttribute("aria-disabled")).toBe("true");
-
-      act(() => {
-        vi.advanceTimersByTime(1200);
-      });
-      expect(confirmBtn.hasAttribute("aria-disabled")).toBe(false);
     } finally {
       vi.runOnlyPendingTimers();
       vi.useRealTimers();
@@ -1063,11 +1116,18 @@ describe("McpConfirmDialog", () => {
   describe("assistant Daintree confirmations preference (#13137)", () => {
     const PREFERENCE_GROUP = "Daintree confirmations for the assistant";
 
+    // The preference sits behind a collapsed disclosure; open it when present.
+    function expandPreference() {
+      const toggle = screen.queryByRole("button", { name: /Daintree confirmations/ });
+      if (toggle) act(() => fireEvent.click(toggle));
+    }
+
     async function renderLoaded() {
       render(<McpConfirmDialog />);
       await act(async () => {
         await Promise.resolve();
       });
+      expandPreference();
     }
 
     function segment(label: string): HTMLElement {
@@ -1081,17 +1141,15 @@ describe("McpConfirmDialog", () => {
       expect(screen.getByRole("radiogroup", { name: PREFERENCE_GROUP })).toBeTruthy();
       expect(segment("Follow global setting").getAttribute("aria-checked")).toBe("true");
       const text = document.body.textContent ?? "";
-      expect(text).toContain("Settings > Daintree Assistant > Daintree confirmations");
-      expect(text).toContain(
-        "Right now it asks, following Settings > Agents > Skip permission prompts, which is off."
-      );
-      expect(text).toContain("this request still needs your answer");
+      expect(text).toContain("Follow global setting · asks");
+      expect(text).toContain("Follows Settings > Agents > Skip permission prompts (off)");
+      expect(text).toContain("even if you cancel");
     });
 
     it.each([
-      ["inherit", true, "Right now it doesn't ask, following"],
-      ["always-ask", true, "Right now it asks."],
-      ["never-ask", false, "Right now it doesn't ask."],
+      ["inherit", true, "Follow global setting · doesn't ask"],
+      ["always-ask", true, "Always ask · asks"],
+      ["never-ask", false, "Never ask · doesn't ask"],
     ] as const)(
       "states what %s resolves to with the global setting %s",
       async (preference, globalSkip, expected) => {
@@ -1137,6 +1195,7 @@ describe("McpConfirmDialog", () => {
         await act(async () => {
           await vi.advanceTimersByTimeAsync(0);
         });
+        expandPreference();
 
         act(() => {
           fireEvent.click(segment("Never ask"));

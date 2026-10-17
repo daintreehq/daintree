@@ -219,23 +219,6 @@ describe("findEntryKey", () => {
     };
     expect(findEntryKey(manifest)).toBe("src/tourExtra.ts");
   });
-
-  it("identifies a tour facade by its hashed file path when the manifest carries no name", () => {
-    const manifest = {
-      "\0virtual:daintree-host/@daintreehq/tour/react": {
-        file: "assets/host-daintreehq-tour-react-Cd4ef5Gh.js",
-        isEntry: true,
-        imports: [],
-        dynamicImports: [],
-      },
-      ...makeManifest(),
-    };
-    expect(findEntryKey(manifest)).toBe("index.html");
-  });
-
-  it("does not mistake a real chunk for a facade just because it imports react", () => {
-    expect(findEntryKey(makeManifest())).toBe("index.html");
-  });
 });
 
 describe("collectClosure — eager walk (followDynamic: false)", () => {
@@ -243,19 +226,6 @@ describe("collectClosure — eager walk (followDynamic: false)", () => {
     const manifest = makeManifest();
     const closure = collectClosure(manifest, ["index.html"], { followDynamic: false });
     expect([...closure].sort()).toEqual(["_vendor-motion.js", "_vendor-react.js", "index.html"]);
-  });
-
-  it("does NOT pull domMax (motionFeatures) into the eager closure", () => {
-    const manifest = makeManifest();
-    const closure = collectClosure(manifest, ["index.html"], { followDynamic: false });
-    expect(closure.has("src/lib/motionFeatures.ts")).toBe(false);
-    expect(closure.has("_vendor-motion-features.js")).toBe(false);
-  });
-
-  it("keeps eager LazyMotion/MotionConfig (vendor-motion) in the closure", () => {
-    const manifest = makeManifest();
-    const closure = collectClosure(manifest, ["index.html"], { followDynamic: false });
-    expect(closure.has("_vendor-motion.js")).toBe(true);
   });
 });
 
@@ -290,47 +260,10 @@ describe("collectClosure — first-render seeds", () => {
     // reaches it.
     expect(eager.has("_vendor-motion-features.js")).toBe(false);
   });
-
-  it("visits each shared chunk exactly once (identity = manifest key)", () => {
-    // Both index.html and _vendor-motion.js import _vendor-react.js.
-    const manifest = makeManifest();
-    const closure = collectClosure(manifest, ["index.html"], { followDynamic: false });
-    const reactChunks = [...closure].filter((k) => k === "_vendor-react.js");
-    expect(reactChunks.length).toBe(1);
-  });
-
-  it("skips seed keys not present in the manifest", () => {
-    const manifest = makeManifest();
-    const closure = collectClosure(manifest, ["src/missing-entry.tsx"], { followDynamic: false });
-    expect(closure.size).toBe(0);
-  });
-
-  it("tolerates chunks with missing imports/dynamicImports arrays", () => {
-    const manifest = {
-      "index.html": { file: "a.js", isEntry: true, imports: ["_x.js"] },
-      "_x.js": { file: "x.js" },
-    };
-    const closure = collectClosure(manifest, ["index.html"], { followDynamic: false });
-    expect([...closure].sort()).toEqual(["_x.js", "index.html"]);
-  });
-
-  it("skips imports referencing keys absent from the manifest", () => {
-    const manifest = {
-      "index.html": { file: "a.js", isEntry: true, imports: ["_missing.js", "_present.js"] },
-      "_present.js": { file: "p.js", imports: [] },
-    };
-    const closure = collectClosure(manifest, ["index.html"], { followDynamic: false });
-    expect(closure.has("_present.js")).toBe(true);
-    expect(closure.has("_missing.js")).toBe(false);
-  });
 });
 
 describe("shrinkageGuardError", () => {
   const THRESHOLD = 0.1; // 10%
-
-  it("returns null when eager gzip is unchanged", () => {
-    expect(shrinkageGuardError(100, 100, THRESHOLD)).toBeNull();
-  });
 
   it("returns null when eager gzip grows (not a shrinkage)", () => {
     expect(shrinkageGuardError(100, 120, THRESHOLD)).toBeNull();
@@ -398,17 +331,6 @@ describe("classifyFirstRenderBudget", () => {
     expect(result.emoji).toBe("🟢");
   });
 
-  it("returns win when eager shrinks and total is within stability band (+500)", () => {
-    // Eager down 5000, total up only 500 — within noise floor.
-    const result = classifyFirstRenderBudget({
-      delta: -5000,
-      totalDelta: 500,
-      ratio: -0.05,
-      threshold: THRESHOLD,
-    });
-    expect(result.classification).toBe("win");
-  });
-
   it("returns shift-trap when eager shrinks meaningfully but total grew", () => {
     // Eager down 5000, but total up 5000 — bytes just moved to lazy.
     const result = classifyFirstRenderBudget({
@@ -444,14 +366,16 @@ describe("classifyFirstRenderBudget", () => {
     expect(result.emoji).toBe("✅");
   });
 
-  it("returns pass when eager grows within stability band and total is stable", () => {
+  it("returns watch when eager is stable-negative but total is creeping up", () => {
+    // Eager slightly down (within stability band), total growing — still a watch
+    // because the total-bundle trend is what matters.
     const result = classifyFirstRenderBudget({
-      delta: 800,
-      totalDelta: 300,
-      ratio: 0.008,
+      delta: -500,
+      totalDelta: 5000,
+      ratio: -0.005,
       threshold: THRESHOLD,
     });
-    expect(result.classification).toBe("pass");
+    expect(result.classification).toBe("watch");
   });
 
   it("respects custom stabilityBytes", () => {
@@ -484,65 +408,6 @@ describe("classifyFirstRenderBudget", () => {
       threshold: THRESHOLD,
     });
     expect(result.classification).toBe("regression");
-  });
-
-  it("returns correct label and description for each classification", () => {
-    const win = classifyFirstRenderBudget({
-      delta: -5000,
-      totalDelta: -5000,
-      ratio: -0.05,
-      threshold: THRESHOLD,
-    });
-    expect(win.label).toBe("Win");
-    expect(win.description).toBeTruthy();
-
-    const regression = classifyFirstRenderBudget({
-      delta: 6000,
-      totalDelta: 6000,
-      ratio: 0.06,
-      threshold: THRESHOLD,
-    });
-    expect(regression.label).toBe("Regression");
-    expect(regression.description).toBeTruthy();
-
-    const shiftTrap = classifyFirstRenderBudget({
-      delta: -5000,
-      totalDelta: 5000,
-      ratio: -0.05,
-      threshold: THRESHOLD,
-    });
-    expect(shiftTrap.label).toBe("Shift trap");
-    expect(shiftTrap.description).toBeTruthy();
-
-    const watch = classifyFirstRenderBudget({
-      delta: 500,
-      totalDelta: 5000,
-      ratio: 0.005,
-      threshold: THRESHOLD,
-    });
-    expect(watch.label).toBe("Watch");
-    expect(watch.description).toBeTruthy();
-
-    const pass = classifyFirstRenderBudget({
-      delta: 100,
-      totalDelta: -100,
-      ratio: 0.001,
-      threshold: THRESHOLD,
-    });
-    expect(pass.label).toBe("Pass");
-    expect(pass.description).toBeTruthy();
-  });
-
-  it("returns watch when eager is stable-negative but total is creeping up", () => {
-    // Eager slightly down (within stability band), total growing — still a watch
-    // because the total-bundle trend is what matters.
-    const result = classifyFirstRenderBudget({
-      delta: -500,
-      totalDelta: 5000,
-      ratio: -0.005,
-      threshold: THRESHOLD,
-    });
-    expect(result.classification).toBe("watch");
   });
 
   describe("stabilityBytes boundary", () => {

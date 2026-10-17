@@ -46,7 +46,16 @@ import { isAgentTerminal } from "@/utils/terminalType";
 import { isTerminalVisible } from "@/lib/terminalVisibility";
 import { useWorktreeIds } from "@/hooks/useTerminalSelectors";
 import { computeChipState } from "@/components/Worktree/utils/computeChipState";
+import {
+  decodeWorktreeAgentBuckets,
+  deriveWorktreeAgentBuckets,
+  EMPTY_WORKTREE_AGENT_BUCKETS,
+  encodeWorktreeAgentBuckets,
+  isWorktreeMergedForCleanup,
+} from "@/lib/worktreeAgentBuckets";
+import { useWorktreeAgentBucketInputs } from "@/hooks/useWorktreeAgentBucketInputs";
 import { pluralize } from "@/lib/pluralize";
+import { LazyOtherHostsWorktrees } from "@/components/Hosts/Overview/LazyHostOverviewParts";
 
 const LIST_ID = "worktree-overview-list";
 
@@ -54,11 +63,13 @@ const noop = () => {};
 
 const EMPTY_META: DerivedWorktreeMeta = {
   terminalCount: 0,
+  hasAgent: false,
   hasWorkingAgent: false,
   hasWaitingAgent: false,
   hasCompletedAgent: false,
   hasExitedAgent: false,
   hasMergeConflict: false,
+  buckets: EMPTY_WORKTREE_AGENT_BUCKETS,
   chipState: null,
 };
 
@@ -66,6 +77,7 @@ const WORKING_AGENT = 1;
 const WAITING_AGENT = 2;
 const COMPLETED_AGENT = 4;
 const EXITED_AGENT = 8;
+const ANY_AGENT = 16;
 
 export interface WorktreeOverviewModalProps {
   isOpen: boolean;
@@ -103,6 +115,7 @@ export function WorktreeOverviewModal({
     typeFilters,
     prIssueFilters,
     sessionFilters,
+    hasAgentFilter,
     activityFilters,
     devServerFilters,
     alwaysShowActive,
@@ -110,6 +123,7 @@ export function WorktreeOverviewModal({
     pinnedWorktrees,
     manualOrder,
     quickStateFilter,
+    customTitles,
   } = useWorktreeFilterStore(
     useShallow((state) => ({
       // The field's own value, not the debounced persisted `query`: the list has
@@ -122,6 +136,7 @@ export function WorktreeOverviewModal({
       typeFilters: state.typeFilters,
       prIssueFilters: state.prIssueFilters,
       sessionFilters: state.sessionFilters,
+      hasAgentFilter: state.hasAgentFilter,
       activityFilters: state.activityFilters,
       devServerFilters: state.devServerFilters,
       alwaysShowActive: state.alwaysShowActive,
@@ -129,6 +144,7 @@ export function WorktreeOverviewModal({
       pinnedWorktrees: state.pinnedWorktrees,
       manualOrder: state.manualOrder,
       quickStateFilter: state.quickStateFilter,
+      customTitles: state.worktreeCustomTitles,
     }))
   );
   const devServerSessions = useWorktreeDevServerStore((s) => s.sessionsByWorktreeId);
@@ -140,31 +156,38 @@ export function WorktreeOverviewModal({
   const worktreeIds = useWorktreeIds();
 
   // Three primitives per worktree, in `worktrees` order: visible terminal
-  // count, waiting agent count, agent-state flags. Streaming agents replace
-  // their panel objects on every activity-headline flush; a shallow-equal
-  // tally lets those writes pass without recomputing the meta below.
+  // count, encoded quick-state buckets, agent-state flags. Streaming agents
+  // replace their panel objects on every activity-headline flush; a
+  // shallow-equal tally lets those writes pass without recomputing the meta
+  // below. The fleet inputs are read through the closure, so a fleet change
+  // re-renders this component and the selector re-runs against it.
+  const { runsById } = useWorktreeAgentBucketInputs();
   const agentTallies = usePanelStore(
     useShallow((state) => {
       const tallies: number[] = [];
       for (const worktree of worktrees) {
         let terminalCount = 0;
-        let waitingTerminalCount = 0;
         let flags = 0;
+        const agentIds: string[] = [];
         for (const id of state.panelIdsByWorktreeId[worktree.id] ?? []) {
           const t = state.panelsById[id];
           if (!t || !isTerminalVisible(t, state.isInTrash, worktreeIds)) continue;
           terminalCount++;
           if (!isAgentTerminal(t)) continue;
           if (!isPtyPanel(t)) continue;
+          flags |= ANY_AGENT;
+          agentIds.push(id);
           if (t.agentState === "working") flags |= WORKING_AGENT;
-          if (t.agentState === "waiting") {
-            flags |= WAITING_AGENT;
-            waitingTerminalCount++;
-          }
+          if (t.agentState === "waiting") flags |= WAITING_AGENT;
           if (t.agentState === "completed") flags |= COMPLETED_AGENT;
           if (t.agentState === "exited") flags |= EXITED_AGENT;
         }
-        tallies.push(terminalCount, waitingTerminalCount, flags);
+        const buckets = deriveWorktreeAgentBuckets(
+          agentIds,
+          runsById,
+          isWorktreeMergedForCleanup(worktree)
+        );
+        tallies.push(terminalCount, encodeWorktreeAgentBuckets(buckets), flags);
       }
       return tallies;
     })
@@ -174,43 +197,19 @@ export function WorktreeOverviewModal({
     const map = new Map<string, DerivedWorktreeMeta>();
     worktrees.forEach((worktree, index) => {
       const terminalCount = agentTallies[index * 3] ?? 0;
-      const waitingTerminalCount = agentTallies[index * 3 + 1] ?? 0;
+      const buckets = decodeWorktreeAgentBuckets(agentTallies[index * 3 + 1] ?? 0);
       const flags = agentTallies[index * 3 + 2] ?? 0;
-      const hasWorkingAgent = (flags & WORKING_AGENT) !== 0;
-      const hasWaitingAgent = (flags & WAITING_AGENT) !== 0;
-      const hasCompletedAgent = (flags & COMPLETED_AGENT) !== 0;
-      const hasExitedAgent = (flags & EXITED_AGENT) !== 0;
-      const hasChanges = (worktree.worktreeChanges?.changedFileCount ?? 0) > 0;
-      const isComplete =
-        !!worktree.issueNumber &&
-        !!worktree.linked?.pr &&
-        worktree.linked.pr.state !== "closed" &&
-        worktree.linked.pr.state !== "declined" &&
-        !hasChanges &&
-        worktree.worktreeChanges !== null;
-      let lifecycleStage: "in-review" | "merged" | "ready-for-cleanup" | null = null;
-      if (!worktree.isMainWorktree && worktree.worktreeChanges !== null) {
-        if (worktree.linked?.pr?.state === "merged") {
-          lifecycleStage = worktree.issueNumber ? "ready-for-cleanup" : "merged";
-        } else if (worktree.linked?.pr?.state === "open") {
-          lifecycleStage = "in-review";
-        }
-      }
-      const chipState = computeChipState({
-        waitingTerminalCount,
-        lifecycleStage,
-        isComplete,
-        hasActiveAgent: hasWorkingAgent,
-      });
       map.set(worktree.id, {
         terminalCount,
-        hasWorkingAgent,
-        hasWaitingAgent,
-        hasCompletedAgent,
-        hasExitedAgent,
+        hasAgent: (flags & ANY_AGENT) !== 0,
+        hasWorkingAgent: (flags & WORKING_AGENT) !== 0,
+        hasWaitingAgent: (flags & WAITING_AGENT) !== 0,
+        hasCompletedAgent: (flags & COMPLETED_AGENT) !== 0,
+        hasExitedAgent: (flags & EXITED_AGENT) !== 0,
         hasMergeConflict:
           worktree.worktreeChanges?.changes.some((c) => c.status === "conflicted") ?? false,
-        chipState,
+        buckets,
+        chipState: computeChipState(buckets),
       });
     });
     return map;
@@ -223,8 +222,10 @@ export function WorktreeOverviewModal({
       typeFilters,
       prIssueFilters,
       sessionFilters,
+      hasAgentFilter,
       activityFilters,
       devServerFilters,
+      customTitles,
     }),
     [
       liveQuery,
@@ -232,8 +233,10 @@ export function WorktreeOverviewModal({
       typeFilters,
       prIssueFilters,
       sessionFilters,
+      hasAgentFilter,
       activityFilters,
       devServerFilters,
+      customTitles,
     ]
   );
 
@@ -251,71 +254,77 @@ export function WorktreeOverviewModal({
 
   const hasNonMainWorktrees = useMemo(() => worktrees.some((w) => !w.isMainWorktree), [worktrees]);
 
-  const { filteredWorktrees, groupedSections, quickStateCounts } = useMemo(() => {
-    const hasActiveQuery = liveQuery.trim().length > 0;
-    // Counted over what the search and facets leave, before the quick-state
-    // narrowing, so each segment says how many rows pressing it would show.
-    const counts: Record<QuickStateFilter, number> = {
-      all: 0,
-      working: 0,
-      waiting: 0,
-      finished: 0,
-    };
+  const { filteredWorktrees, groupedSections, quickStateCounts, finishedUnseenCount } =
+    useMemo(() => {
+      const hasActiveQuery = liveQuery.trim().length > 0;
+      // Counted over what the search and facets leave, before the quick-state
+      // narrowing, so each segment says how many rows pressing it would show.
+      const counts: Record<QuickStateFilter, number> = {
+        all: 0,
+        working: 0,
+        waiting: 0,
+        finished: 0,
+      };
+      const unseen = { finished: 0 };
 
-    const filtered = worktrees.filter((worktree) => {
-      const derived = derivedMetaMap.get(worktree.id) ?? EMPTY_META;
-      const isActive = worktree.id === activeWorktreeId;
-      const matchesScope = matchesFilters(
-        worktree,
-        facetFilters,
-        derived,
-        isActive,
-        devServerSessions
-      );
-      if (matchesScope) {
-        counts.all++;
-        if (matchesQuickStateFilter("working", derived)) counts.working++;
-        if (matchesQuickStateFilter("waiting", derived)) counts.waiting++;
-        if (matchesQuickStateFilter("finished", derived)) counts.finished++;
-      }
+      const filtered = worktrees.filter((worktree) => {
+        const derived = derivedMetaMap.get(worktree.id) ?? EMPTY_META;
+        const isActive = worktree.id === activeWorktreeId;
+        const matchesScope = matchesFilters(
+          worktree,
+          facetFilters,
+          derived,
+          isActive,
+          devServerSessions
+        );
+        if (matchesScope) {
+          counts.all++;
+          if (matchesQuickStateFilter("working", derived)) counts.working++;
+          if (matchesQuickStateFilter("waiting", derived)) counts.waiting++;
+          if (matchesQuickStateFilter("finished", derived)) counts.finished++;
+          if (derived.buckets.finishedUnseen) unseen.finished++;
+        }
 
-      const bypassesNarrowing =
-        !hasActiveQuery && quickStateFilter === "all" && !hasFacetFiltersActive;
-      if (alwaysShowActive && isActive && bypassesNarrowing) return true;
-      if (alwaysShowWaiting && derived.hasWaitingAgent && bypassesNarrowing) return true;
+        const bypassesNarrowing =
+          !hasActiveQuery && quickStateFilter === "all" && !hasFacetFiltersActive;
+        if (alwaysShowActive && isActive && bypassesNarrowing) return true;
+        if (alwaysShowWaiting && derived.hasWaitingAgent && bypassesNarrowing) return true;
 
-      if (quickStateFilter !== "all" && !matchesQuickStateFilter(quickStateFilter, derived)) {
-        return false;
-      }
+        if (quickStateFilter !== "all" && !matchesQuickStateFilter(quickStateFilter, derived)) {
+          return false;
+        }
 
-      return matchesScope;
-    });
+        return matchesScope;
+      });
 
-    const existingWorktreeIds = new Set(worktrees.map((w) => w.id));
-    const validPinnedWorktrees = pinnedWorktrees.filter((id) => existingWorktreeIds.has(id));
-    const sorted = sortWorktrees(filtered, orderBy, validPinnedWorktrees, manualOrder);
+      const existingWorktreeIds = new Set(worktrees.map((w) => w.id));
+      const validPinnedWorktrees = pinnedWorktrees.filter((id) => existingWorktreeIds.has(id));
+      const sorted = sortWorktrees(filtered, orderBy, validPinnedWorktrees, manualOrder);
 
-    return {
-      filteredWorktrees: sorted,
-      groupedSections: isGroupedByType ? groupByType(sorted, orderBy, validPinnedWorktrees) : null,
-      quickStateCounts: counts,
-    };
-  }, [
-    worktrees,
-    liveQuery,
-    facetFilters,
-    orderBy,
-    isGroupedByType,
-    devServerSessions,
-    alwaysShowActive,
-    alwaysShowWaiting,
-    pinnedWorktrees,
-    manualOrder,
-    derivedMetaMap,
-    activeWorktreeId,
-    quickStateFilter,
-    hasFacetFiltersActive,
-  ]);
+      return {
+        filteredWorktrees: sorted,
+        groupedSections: isGroupedByType
+          ? groupByType(sorted, orderBy, validPinnedWorktrees)
+          : null,
+        quickStateCounts: counts,
+        finishedUnseenCount: unseen.finished,
+      };
+    }, [
+      worktrees,
+      liveQuery,
+      facetFilters,
+      orderBy,
+      isGroupedByType,
+      devServerSessions,
+      alwaysShowActive,
+      alwaysShowWaiting,
+      pinnedWorktrees,
+      manualOrder,
+      derivedMetaMap,
+      activeWorktreeId,
+      quickStateFilter,
+      hasFacetFiltersActive,
+    ]);
 
   // ── Multi-select state ────────────────────────────────────────────────
   // Selection lives on the modal so it resets naturally when the modal
@@ -653,6 +662,7 @@ export function WorktreeOverviewModal({
     typeFilters,
     prIssueFilters,
     sessionFilters,
+    hasAgentFilter,
     activityFilters,
     devServerFilters,
   });
@@ -730,6 +740,7 @@ export function WorktreeOverviewModal({
                   value={quickStateFilter}
                   onChange={setQuickStateFilter}
                   counts={quickStateCounts}
+                  finishedUnseen={finishedUnseenCount}
                   showLabels
                 />
               </div>
@@ -811,6 +822,8 @@ export function WorktreeOverviewModal({
               </div>
             )}
           </ScrollShadow>
+
+          <LazyOtherHostsWorktrees onNavigate={onClose} />
 
           {/* The footer is the action bar: the keyboard contract at rest, the
               bulk actions while a selection is active — next to the count they

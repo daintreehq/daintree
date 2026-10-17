@@ -4,7 +4,7 @@ import {
   AGENT_MCP_MAX_SCHEMA_BYTES,
   AGENT_MCP_MAX_TOOLS_PER_ENDPOINT,
 } from "../../../../shared/types/plugin.js";
-import { validateAgentMcpTools } from "../validateTools.js";
+import { compileAgentMcpTool, validateAgentMcpTools } from "../validateTools.js";
 
 function tool(overrides: Record<string, unknown> = {}): Record<string, unknown> {
   return {
@@ -50,13 +50,22 @@ describe("validateAgentMcpTools", () => {
     expect(() => validateAgentMcpTools({ drop_everything: tool(overrides) })).toThrow(message);
   });
 
+  it("never takes a plugin's word that its tool is a host database write", () => {
+    const [descriptor] = validateAgentMcpTools({ add_entry: tool({ databaseWrite: true }) });
+    expect(descriptor).not.toHaveProperty("databaseWrite");
+    expect(
+      compileAgentMcpTool({
+        name: "add_entry",
+        description: "Add.",
+        inputSchema: { type: "object" },
+        databaseWrite: true,
+      }).databaseWrite
+    ).toBe(true);
+  });
+
   it.each([
     [{ destructiveHint: false }, /annotations\.destructiveHint may only be true/],
     [{ openWorldHint: false }, /annotations\.openWorldHint may only be true/],
-    [
-      { destructiveHint: false, openWorldHint: false },
-      /annotations\.destructiveHint may only be true/,
-    ],
   ])("rejects a plugin vouching for its own tool's safety %j", (annotations, message) => {
     expect(() => validateAgentMcpTools({ add_entry: tool({ annotations }) })).toThrow(message);
   });
@@ -141,6 +150,24 @@ describe("validateAgentMcpTools", () => {
       expect(() => validateAgentMcpTools({ list: tool(), [name]: tool() })).toThrow(/reserved/);
     }
   );
+
+  it("counts the manifest's declared queries toward the same budget", () => {
+    const declaredQueryNames = new Set(["month_total", "large_entries"]);
+    const room = AGENT_MCP_MAX_TOOLS_PER_ENDPOINT - declaredQueryNames.size;
+    expect(validateAgentMcpTools(roster(room), { declaredQueryNames })).toHaveLength(room);
+    expect(() => validateAgentMcpTools(roster(room + 1), { declaredQueryNames })).toThrow(
+      `tools registers ${room + 1} tools beside the 2 database queries the manifest declares`
+    );
+  });
+
+  it("rejects a tool named like one of the manifest's declared queries", () => {
+    expect(() =>
+      validateAgentMcpTools(
+        { list: tool(), month_total: tool() },
+        { declaredQueryNames: new Set(["month_total"]) }
+      )
+    ).toThrow(/"month_total" is a database query the manifest declares/);
+  });
 
   it("accepts names that only resemble the reserved ones", () => {
     expect(

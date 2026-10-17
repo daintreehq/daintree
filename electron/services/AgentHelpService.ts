@@ -1,12 +1,10 @@
-import { execFile } from "child_process";
-import { promisify } from "util";
+import { execFileWithTreeKill } from "../utils/execFileWithTreeKill.js";
 import { getEffectiveAgentConfig } from "../../shared/config/agentRegistry.js";
 import type { AgentHelpResult } from "../../shared/types/ipc/agent.js";
 import { SAFE_AGENT_ID_PATTERN } from "../../shared/types/index.js";
 import { buildProbeEnv } from "../utils/spawnEnv.js";
+import { cliSpawnTarget } from "../utils/windowsCliSpawn.js";
 import { scrubSecrets } from "../../shared/utils/secretScrubber.js";
-
-const execFileAsync = promisify(execFile);
 
 interface CachedResult {
   result: AgentHelpResult;
@@ -60,12 +58,16 @@ export class AgentHelpService {
     let truncated = false;
 
     try {
-      const { stdout: out, stderr: err } = await execFileAsync(command, args, {
+      // An npm-installed agent is a `.cmd` shim on Windows (see windowsCliSpawn).
+      const env = buildProbeEnv();
+      const target = await cliSpawnTarget(command, args, process.platform, { env });
+      const { stdout: out, stderr: err } = await execFileWithTreeKill(target.command, target.args, {
         timeout: this.TIMEOUT_MS,
         maxBuffer: this.MAX_BUFFER,
-        shell: false,
+        shell: target.shell,
+        windowsVerbatimArguments: target.windowsVerbatimArguments,
         windowsHide: true,
-        env: buildProbeEnv(),
+        env: { ...env, ...target.env },
       });
 
       stdout = out || "";

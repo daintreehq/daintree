@@ -13,7 +13,12 @@ const fixture = requireFixture(params.get("fixture") ?? "populated");
 
 const isHarness = !Reflect.get(window, "electron");
 installPreviewShims({
-  agentSessionHistory: { list: () => Promise.resolve(fixture.sessions) },
+  agentSessionHistory: {
+    list: () =>
+      fixture.fails
+        ? Promise.reject(new Error("preview: journal read failed"))
+        : Promise.resolve(fixture.sessions),
+  },
 });
 
 if (isHarness) {

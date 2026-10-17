@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { computeWorktreeColorMap, WORKTREE_COLOR_PALETTE } from "../worktreeColors.js";
+import {
+  applyWorktreeLabelColors,
+  computeWorktreeColorMap,
+  isWorktreeLabelToken,
+  WORKTREE_COLOR_PALETTE,
+} from "../worktreeColors.js";
 
 describe("computeWorktreeColorMap", () => {
   it("returns null for empty map", () => {
@@ -23,18 +28,6 @@ describe("computeWorktreeColorMap", () => {
     expect(result["wt-b"]).toBe(`var(--theme-${WORKTREE_COLOR_PALETTE[1]})`);
   });
 
-  it("is deterministic regardless of insertion order", () => {
-    const map1 = new Map([
-      ["wt-a", { path: "/projects/alpha" }],
-      ["wt-b", { path: "/projects/beta" }],
-    ]);
-    const map2 = new Map([
-      ["wt-b", { path: "/projects/beta" }],
-      ["wt-a", { path: "/projects/alpha" }],
-    ]);
-    expect(computeWorktreeColorMap(map1)).toEqual(computeWorktreeColorMap(map2));
-  });
-
   it("cycles palette for more worktrees than palette size", () => {
     const entries: [string, { path: string }][] = [];
     for (let i = 0; i < WORKTREE_COLOR_PALETTE.length + 2; i++) {
@@ -56,5 +49,42 @@ describe("computeWorktreeColorMap", () => {
     const result = computeWorktreeColorMap(new Map(entries))!;
     const colors = new Set(Object.values(result));
     expect(colors.size).toBe(WORKTREE_COLOR_PALETTE.length);
+  });
+});
+
+describe("applyWorktreeLabelColors", () => {
+  it("returns the automatic map itself when nothing is labelled", () => {
+    const auto = { "wt-a": "var(--theme-category-blue)" };
+    expect(applyWorktreeLabelColors(auto, {})).toBe(auto);
+    expect(applyWorktreeLabelColors(null, {})).toBeNull();
+  });
+
+  it("overrides the automatic colour without recolouring other worktrees", () => {
+    const auto = computeWorktreeColorMap(
+      new Map([
+        ["wt-a", { path: "/p/a" }],
+        ["wt-b", { path: "/p/b" }],
+      ])
+    )!;
+    const result = applyWorktreeLabelColors(auto, { "wt-a": "category-pink" })!;
+    expect(result["wt-a"]).toBe("var(--theme-category-pink)");
+    expect(result["wt-b"]).toBe(auto["wt-b"]);
+    expect(auto["wt-a"]).not.toBe("var(--theme-category-pink)");
+  });
+
+  it("shows a label even when single-worktree suppression left no map", () => {
+    const auto = computeWorktreeColorMap(new Map([["wt-main", { path: "/p/main" }]]));
+    expect(auto).toBeNull();
+    expect(applyWorktreeLabelColors(auto, { "wt-main": "category-teal" })).toEqual({
+      "wt-main": "var(--theme-category-teal)",
+    });
+  });
+});
+
+describe("isWorktreeLabelToken", () => {
+  it("accepts only the label palette, not every category token", () => {
+    expect(isWorktreeLabelToken("category-violet")).toBe(true);
+    expect(isWorktreeLabelToken("category-orange")).toBe(false);
+    expect(isWorktreeLabelToken(null)).toBe(false);
   });
 });

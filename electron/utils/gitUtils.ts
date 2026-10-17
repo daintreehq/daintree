@@ -3,6 +3,7 @@ import { promises as fsPromises } from "fs";
 import { isAbsolute, join as pathJoin } from "path";
 import { logWarn } from "./logger.js";
 import { Cache } from "./cache.js";
+import { resolveExecutableForSpawn } from "./windowsExecutable.js";
 
 // worktreePath → gitDir/commonDir is immutable for a live worktree and all
 // removal/switch paths invalidate explicitly via clearGitDirCache /
@@ -136,14 +137,20 @@ class GitExecError extends Error {
   }
 }
 
-function execGit(args: string[], cwd: string, timeout: number): Promise<string> {
+async function execGit(args: string[], cwd: string, timeout: number): Promise<string> {
+  let git: string;
+  try {
+    git = await resolveExecutableForSpawn("git");
+  } catch (error) {
+    throw new GitExecError(error, "");
+  }
   return new Promise((resolve, reject) => {
     // windowsHide keeps the probe from flashing a console window: libuv only
     // sets CREATE_NO_WINDOW when the flag is passed, and Windows 11's default
     // "let Windows decide" terminal host escalates an unhidden spawn into a
     // full Windows Terminal window (#12042).
     execFile(
-      "git",
+      git,
       args,
       {
         cwd,
@@ -351,6 +358,25 @@ export function getGitCommonDir(
     "Failed to resolve git common directory",
     worktreePath,
     options
+  );
+}
+
+/**
+ * Uncached `--git-common-dir` that keeps the failure kind: `definitive` is
+ * git's own "not a repository", `transient` is every failure to look (timeout,
+ * spawn error, any other fatal), for a caller that must not read the second as
+ * the first.
+ */
+export function probeGitCommonDir(
+  worktreePath: string,
+  timeout: number
+): Promise<{ path: string } | { path: null; failure: "definitive" | "transient" }> {
+  return resolveGitPath(
+    "--git-common-dir",
+    worktreePath,
+    timeout,
+    false,
+    "Failed to resolve git common directory"
   );
 }
 

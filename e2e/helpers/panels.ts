@@ -1,6 +1,7 @@
 import { expect, type Locator, type Page } from "@playwright/test";
 import { dismissBlockingPalette } from "./overlays";
 import { SEL } from "./selectors";
+import { NEW_TERMINAL_CHORD } from "./shortcuts";
 
 const mod = process.platform === "darwin" ? "Meta" : "Control";
 
@@ -48,7 +49,7 @@ function launcherRow(page: Page, name: string): Locator {
 }
 
 const toolbarShortcuts: Record<string, string> = {
-  "Open terminal": `${mod}+Alt+t`,
+  "Open terminal": NEW_TERMINAL_CHORD,
   "Open browser": `${mod}+Alt+b`,
   "Open settings": `${mod}+,`,
   "Copy context": `${mod}+Shift+c`,

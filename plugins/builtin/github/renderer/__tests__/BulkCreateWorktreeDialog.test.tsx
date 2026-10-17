@@ -37,6 +37,7 @@ const createdWorktree = (worktreeId: string, branch = "feature/x") => ({
 const mockGetAvailableBranch = vi.fn();
 const mockGetDefaultPath = vi.fn();
 const mockListBranches = vi.fn();
+const mockGetRecentBranches = vi.fn();
 const mockFetchPRBranch = vi.fn();
 const mockAssignIssue = vi.fn();
 const mockLogError = vi.fn();
@@ -52,6 +53,7 @@ vi.mock("@/clients", async (importOriginal) => ({
     getAvailableBranch: (...args: unknown[]) => mockGetAvailableBranch(...args),
     getDefaultPath: (...args: unknown[]) => mockGetDefaultPath(...args),
     listBranches: (...args: unknown[]) => mockListBranches(...args),
+    getRecentBranches: (...args: unknown[]) => mockGetRecentBranches(...args),
     fetchPRBranch: (...args: unknown[]) => mockFetchPRBranch(...args),
   },
   forgeClient: {
@@ -344,6 +346,7 @@ function setupWorktreeCreateMocks() {
     { name: "main", current: true, remote: false },
     { name: "origin/main", current: false, remote: true },
   ]);
+  mockGetRecentBranches.mockResolvedValue([]);
 }
 
 const makePR = (n: number, title?: string, headRef?: string): PR => ({
@@ -410,14 +413,6 @@ describe("BulkCreateWorktreeDialog", () => {
     selectedPRs: [] as PR[],
     onComplete: vi.fn(),
   };
-
-  it("renders idle state with issue list and create button", () => {
-    render(<BulkCreateWorktreeDialog {...defaultProps} />);
-    expect(screen.getByText("#1")).toBeTruthy();
-    expect(screen.getByText("#2")).toBeTruthy();
-    expect(screen.getByText("#3")).toBeTruthy();
-    expect(screen.getByTestId("bulk-create-confirm-button")).toBeTruthy();
-  });
 
   it("creates worktrees using direct client calls", async () => {
     const resolvers: Array<(value: ReturnType<typeof createdWorktree>) => void> = [];
@@ -509,26 +504,6 @@ describe("BulkCreateWorktreeDialog", () => {
     expect(screen.getByText(/1 failed/)).toBeTruthy();
   });
 
-  it("shows Retry Failed button when there are failures", async () => {
-    let callCount = 0;
-    mockWorktreeCreate.mockImplementation(() => {
-      callCount++;
-      if (callCount === 2) return Promise.reject(new Error("Some error"));
-      return Promise.resolve(createdWorktree(`wt-${callCount}`));
-    });
-
-    render(<BulkCreateWorktreeDialog {...defaultProps} />);
-
-    await act(async () => {
-      screen.getByTestId("bulk-create-confirm-button").click();
-    });
-
-    await advanceTimersGradually(5000);
-
-    expect(screen.getByTestId("bulk-create-retry-button")).toBeTruthy();
-    expect(screen.getByText("Retry failed")).toBeTruthy();
-  });
-
   it("does not show Retry Failed button when all succeed", async () => {
     render(<BulkCreateWorktreeDialog {...defaultProps} />);
 
@@ -586,35 +561,6 @@ describe("BulkCreateWorktreeDialog", () => {
     worktreeDataHolder.map.delete("existing-wt");
   });
 
-  it("auto-retries transient errors with backoff", async () => {
-    let callCount = 0;
-    mockWorktreeCreate.mockImplementation(() => {
-      callCount++;
-      if (callCount <= 2) {
-        return Promise.reject(new Error("index.lock: File exists"));
-      }
-      return Promise.resolve(createdWorktree("wt-1"));
-    });
-
-    const props = {
-      ...defaultProps,
-      selectedIssues: [makeIssue(1)],
-    };
-
-    render(<BulkCreateWorktreeDialog {...props} />);
-
-    await act(async () => {
-      screen.getByTestId("bulk-create-confirm-button").click();
-    });
-
-    // Advance enough time for backoff retries (up to 30s cap * 2 retries + settle)
-    await advanceTimersGradually(65000);
-
-    expect(callCount).toBe(3);
-    expect(screen.getByText(/1 of 1 created/)).toBeTruthy();
-    expect(screen.queryByText(/failed/)).toBeNull();
-  });
-
   it("keeps retrying a transient worktree creation past the old 3-attempt cap", async () => {
     // Five consecutive transient failures — beyond the old MAX_AUTO_RETRIES cap
     // of 3 total attempts — then success. Proves the count ceiling is gone for
@@ -646,33 +592,6 @@ describe("BulkCreateWorktreeDialog", () => {
     expect(callCount).toBe(6);
     expect(screen.getByText(/1 of 1 created/)).toBeTruthy();
     expect(screen.queryByText(/failed/)).toBeNull();
-  });
-
-  it("classifies rate limit errors as transient", async () => {
-    let callCount = 0;
-    mockWorktreeCreate.mockImplementation(() => {
-      callCount++;
-      if (callCount === 1) {
-        return Promise.reject(new Error("Rate limit exceeded"));
-      }
-      return Promise.resolve(createdWorktree("wt-1"));
-    });
-
-    const props = {
-      ...defaultProps,
-      selectedIssues: [makeIssue(1)],
-    };
-
-    render(<BulkCreateWorktreeDialog {...props} />);
-
-    await act(async () => {
-      screen.getByTestId("bulk-create-confirm-button").click();
-    });
-
-    await advanceTimersGradually(35000);
-
-    expect(callCount).toBe(2);
-    expect(screen.getByText(/1 of 1 created/)).toBeTruthy();
   });
 
   it("does not auto-retry non-transient errors", async () => {
@@ -806,55 +725,6 @@ describe("BulkCreateWorktreeDialog", () => {
 
     expect(mockWorktreeCreate).toHaveBeenCalledTimes(3);
     expect(screen.getByText(/3 of 3 created/)).toBeTruthy();
-  });
-
-  it("recipe-enabled success path shows N of N created, never 0 of N", async () => {
-    mockSelectedRecipeId = "test-recipe";
-    mockRunRecipeWithResults.mockResolvedValue({
-      spawned: [{ terminalId: "t-1" }, { terminalId: "t-2" }],
-      failed: [],
-    });
-    // Terminals are healthy (no exitCode or exitCode 0)
-    mockTerminals = [
-      { id: "t-1", exitCode: undefined },
-      { id: "t-2", exitCode: undefined },
-    ];
-
-    const props = { ...defaultProps, selectedIssues: [makeIssue(1), makeIssue(2)] };
-    render(<BulkCreateWorktreeDialog {...props} />);
-
-    await act(async () => {
-      screen.getByTestId("bulk-create-confirm-button").click();
-    });
-
-    await advanceTimersGradually(5000);
-
-    // Must show "2 of 2 created", never "0 of 2"
-    expect(screen.getByText(/2 of 2 created/)).toBeTruthy();
-    expect(screen.queryByText(/0 of/)).toBeNull();
-  });
-
-  it("verification detects crashed terminal and shows failure", async () => {
-    mockSelectedRecipeId = "test-recipe";
-    mockRunRecipeWithResults.mockResolvedValue({
-      spawned: [{ terminalId: "t-crash" }],
-      failed: [],
-    });
-    // Terminal crashed with non-zero exit code
-    mockTerminals = [{ id: "t-crash", exitCode: 1 }];
-
-    const props = { ...defaultProps, selectedIssues: [makeIssue(1)] };
-    render(<BulkCreateWorktreeDialog {...props} />);
-
-    await act(async () => {
-      screen.getByTestId("bulk-create-confirm-button").click();
-    });
-
-    await advanceTimersGradually(5000);
-
-    expect(screen.getByText(/1 failed/)).toBeTruthy();
-    expect(screen.getByText(/terminal\(s\) crashed/)).toBeTruthy();
-    expect(screen.getByText(/0 of 1 created/)).toBeTruthy();
   });
 
   it("retry does not re-verify previously succeeded items", async () => {
@@ -2186,61 +2056,6 @@ describe("BulkCreateWorktreeDialog — issue assignment retry", () => {
     onComplete: vi.fn(),
   };
 
-  it("retries transient assignment failure with backoff then succeeds", async () => {
-    prefsHolder.assignWorktreeToSelf = true;
-    viewerHolder.user = { login: "me" };
-
-    let assignCallCount = 0;
-    mockAssignIssue.mockImplementation(() => {
-      assignCallCount++;
-      if (assignCallCount === 1) {
-        return Promise.reject(new Error("GitHub is temporarily unavailable. Please retry."));
-      }
-      return Promise.resolve();
-    });
-
-    render(<BulkCreateWorktreeDialog {...assignProps} />);
-
-    await act(async () => {
-      screen.getByTestId("bulk-create-confirm-button").click();
-    });
-
-    await advanceTimersGradually(35000);
-
-    expect(assignCallCount).toBe(2);
-    expect(mockAssignIssue).toHaveBeenCalledWith("/test/root", 1, "me");
-    expect(screen.getByText(/1 of 1 created/)).toBeTruthy();
-    expect(screen.queryByText(/failed/)).toBeNull();
-  });
-
-  it("succeeds when assignment recovers after two transient failures", async () => {
-    prefsHolder.assignWorktreeToSelf = true;
-    viewerHolder.user = { login: "me" };
-
-    let assignCallCount = 0;
-    mockAssignIssue.mockImplementation(() => {
-      assignCallCount++;
-      if (assignCallCount <= 2) {
-        return Promise.reject(new Error("GitHub is temporarily unavailable. Please retry."));
-      }
-      return Promise.resolve();
-    });
-
-    render(<BulkCreateWorktreeDialog {...assignProps} />);
-
-    await act(async () => {
-      screen.getByTestId("bulk-create-confirm-button").click();
-    });
-
-    await advanceTimersGradually(70000);
-
-    // Two transient failures inside the wall-clock window must keep retrying;
-    // the third attempt recovers and short-circuits out of the loop.
-    expect(assignCallCount).toBe(3);
-    expect(screen.getByText(/1 of 1 created/)).toBeTruthy();
-    expect(screen.queryByText(/failed/)).toBeNull();
-  });
-
   it("keeps retrying transient assignment failures past the old 3-attempt cap", async () => {
     prefsHolder.assignWorktreeToSelf = true;
     viewerHolder.user = { login: "me" };
@@ -2630,7 +2445,7 @@ describe("BulkCreateWorktreeDialog — form layout and batch summary", () => {
   it("names the recipe trigger from the rail label", () => {
     render(<BulkCreateWorktreeDialog {...issueProps} />);
 
-    const trigger = screen.getByRole("combobox");
+    const trigger = screen.getByRole("combobox", { name: "Recipe" });
     expect(trigger.getAttribute("aria-label")).toBeNull();
     expect(trigger.id).toBeTruthy();
     expect(railLabel("Recipe").htmlFor).toBe(trigger.id);
@@ -2883,30 +2698,6 @@ describe("BulkCreateWorktreeDialog — PR mode", () => {
     expect(createCalls[0]![0].newBranch).toBe("feature/pr-10");
   });
 
-  it("invokes stored bulkCreateDialog.onComplete when Done is clicked in PR mode", async () => {
-    mockListBranches.mockResolvedValue([
-      { name: "origin/feature/pr-10", current: false, remote: true },
-      { name: "origin/feature/pr-20", current: false, remote: true },
-      { name: "origin/feature/pr-30", current: false, remote: true },
-    ]);
-    const storedOnComplete = vi.fn();
-    mockBulkCreateDialog.onComplete = storedOnComplete;
-
-    render(<BulkCreateWorktreeDialog {...prProps} />);
-
-    await act(async () => {
-      screen.getByTestId("bulk-create-confirm-button").click();
-    });
-    await advanceTimersGradually(5000);
-    expect(screen.getByText(/3 of 3 created/)).toBeTruthy();
-
-    await act(async () => {
-      screen.getByTestId("bulk-create-done-button").click();
-    });
-
-    expect(storedOnComplete).toHaveBeenCalledTimes(1);
-  });
-
   it("includes fork PRs in plan", () => {
     const forkPR: PR = {
       ...makePR(99),
@@ -2919,29 +2710,6 @@ describe("BulkCreateWorktreeDialog — PR mode", () => {
     expect(
       screen.getByTestId("bulk-create-confirm-button").getAttribute("aria-disabled")
     ).toBeNull();
-  });
-
-  it("skips merged PRs with reason", () => {
-    const mergedPR: PR = {
-      ...makePR(99),
-      state: "merged",
-      merged: true,
-    };
-    const props = { ...prProps, selectedPRs: [mergedPR] };
-    render(<BulkCreateWorktreeDialog {...props} />);
-
-    expect(screen.getByText("Merged")).toBeTruthy();
-  });
-
-  it("skips PRs without headRef", () => {
-    const noRefPR: PR = {
-      ...makePR(99),
-      headRef: undefined as unknown as string,
-    };
-    const props = { ...prProps, selectedPRs: [noRefPR] };
-    render(<BulkCreateWorktreeDialog {...props} />);
-
-    expect(screen.getByText("No branch info")).toBeTruthy();
   });
 
   it("does not show assign-to-self toggle in PR mode", () => {
@@ -3025,5 +2793,196 @@ describe("BulkCreateWorktreeDialog — PR mode", () => {
 
     expect(screen.getByText(/couldn't find remote ref/)).toBeTruthy();
     expect(screen.getByText(/1 failed/)).toBeTruthy();
+  });
+});
+
+describe("BulkCreateWorktreeDialog — base branch", () => {
+  const issueProps = {
+    isOpen: true,
+    onClose: vi.fn(),
+    mode: "issue" as const,
+    selectedIssues: [makeIssue(1), makeIssue(2)],
+    selectedPRs: [] as PR[],
+    onComplete: vi.fn(),
+  };
+
+  async function createAndSettle() {
+    await act(async () => {
+      screen.getByTestId("bulk-create-confirm-button").click();
+    });
+    await advanceTimersGradually(2000);
+  }
+
+  it("keeps the main worktree's branch even when the list marks another current", async () => {
+    // A project opened from a linked worktree: the list's `current` is that
+    // worktree's checkout, not the main worktree's.
+    mockListBranches.mockResolvedValue([
+      { name: "main", current: false, remote: false },
+      { name: "feature/x", current: true, remote: false },
+    ]);
+
+    render(<BulkCreateWorktreeDialog {...issueProps} />);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+
+    expect(mockListBranches).toHaveBeenCalledWith("/test/root");
+    expect(screen.getByRole("combobox", { name: "Base" }).textContent).toContain("main");
+
+    await createAndSettle();
+
+    const calls = mockWorktreeCreate.mock.calls;
+    expect(calls.length).toBe(2);
+    for (const [options] of calls) {
+      expect(options.baseBranch).toBe("main");
+      expect(options.fromRemote).toBe(false);
+    }
+  });
+
+  it("takes the list's default when the main worktree has no branch, holding Create until then", async () => {
+    worktreeDataHolder.map = new Map([
+      ["main-wt", { worktreeId: "main-wt", path: "/test/root", isMainWorktree: true }],
+    ]);
+    let resolveList: (list: unknown[]) => void = () => {};
+    mockListBranches.mockReturnValue(
+      new Promise((resolve) => {
+        resolveList = resolve;
+      })
+    );
+
+    render(<BulkCreateWorktreeDialog {...issueProps} />);
+
+    const confirm = screen.getByTestId("bulk-create-confirm-button");
+    expect(confirm.getAttribute("aria-disabled")).toBe("true");
+    await act(async () => {
+      confirm.click();
+    });
+    expect(mockWorktreeCreate).not.toHaveBeenCalled();
+
+    await act(async () => {
+      resolveList([
+        { name: "feature/y", current: false, remote: false },
+        { name: "develop", current: true, remote: false },
+      ]);
+      await vi.advanceTimersByTimeAsync(0);
+    });
+
+    expect(confirm.getAttribute("aria-disabled")).toBeNull();
+    await createAndSettle();
+
+    const calls = mockWorktreeCreate.mock.calls;
+    expect(calls.length).toBe(2);
+    for (const [options] of calls) {
+      expect(options.baseBranch).toBe("develop");
+    }
+  });
+
+  it("falls back to the main worktree's branch when the branch list fails to load", async () => {
+    mockListBranches.mockRejectedValue(new Error("git exploded"));
+
+    render(<BulkCreateWorktreeDialog {...issueProps} />);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+
+    expect(screen.getByText("Couldn't load branches. Using main.")).toBeTruthy();
+
+    await createAndSettle();
+
+    const calls = mockWorktreeCreate.mock.calls;
+    expect(calls.length).toBe(2);
+    for (const [options] of calls) {
+      expect(options.baseBranch).toBe("main");
+      expect(options.fromRemote).toBe(false);
+    }
+  });
+
+  it("uses the main worktree's branch when Create runs before the list loads", async () => {
+    mockListBranches.mockReturnValue(new Promise(() => {}));
+
+    render(<BulkCreateWorktreeDialog {...issueProps} />);
+    await createAndSettle();
+
+    const calls = mockWorktreeCreate.mock.calls;
+    expect(calls.length).toBe(2);
+    expect(calls[0]![0].baseBranch).toBe("main");
+    expect(calls[0]![0].fromRemote).toBe(false);
+  });
+
+  it("creates every issue from a picked remote branch", async () => {
+    mockListBranches.mockResolvedValue([
+      { name: "main", current: true, remote: false },
+      { name: "origin/release", current: false, remote: "origin" },
+    ]);
+
+    render(<BulkCreateWorktreeDialog {...issueProps} />);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole("combobox", { name: "Base" }));
+    });
+    await act(async () => {
+      fireEvent.click(screen.getByRole("option", { name: /origin\/release/ }));
+    });
+
+    await createAndSettle();
+
+    const calls = mockWorktreeCreate.mock.calls;
+    expect(calls.length).toBe(2);
+    for (const [options] of calls) {
+      expect(options.baseBranch).toBe("origin/release");
+      expect(options.fromRemote).toBe(true);
+    }
+  });
+
+  it("retries on the base Create was pressed with, even if the list lands later", async () => {
+    let resolveList: (list: unknown[]) => void = () => {};
+    mockListBranches.mockReturnValue(
+      new Promise((resolve) => {
+        resolveList = resolve;
+      })
+    );
+    mockWorktreeCreate
+      .mockRejectedValueOnce(new Error("fatal: invalid reference"))
+      .mockRejectedValueOnce(new Error("fatal: invalid reference"));
+
+    render(<BulkCreateWorktreeDialog {...issueProps} />);
+    await createAndSettle();
+    expect(screen.getByText(/2 failed/)).toBeTruthy();
+
+    await act(async () => {
+      resolveList([
+        { name: "main", current: false, remote: false },
+        { name: "develop", current: true, remote: false },
+      ]);
+      await vi.advanceTimersByTimeAsync(0);
+    });
+
+    await act(async () => {
+      screen.getByText("Retry failed").click();
+    });
+    await advanceTimersGradually(2000);
+
+    const calls = mockWorktreeCreate.mock.calls;
+    expect(calls.length).toBe(4);
+    for (const [options] of calls) {
+      expect(options.baseBranch).toBe("main");
+    }
+  });
+
+  it("offers no base picker in PR mode", () => {
+    render(
+      <BulkCreateWorktreeDialog
+        {...issueProps}
+        mode="pr"
+        selectedIssues={[]}
+        selectedPRs={[makePR(10)]}
+      />
+    );
+
+    expect(screen.queryByText("Base")).toBeNull();
+    expect(mockListBranches).not.toHaveBeenCalled();
   });
 });

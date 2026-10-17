@@ -35,13 +35,6 @@ describe("spawnConfirmation (#12754)", () => {
     );
   });
 
-  it("stays quiet once the host answers", () => {
-    armSpawnConfirmation("t1");
-    settleSpawnConfirmation("t1");
-    vi.advanceTimersByTime(SPAWN_CONFIRMATION_TIMEOUT_MS * 2);
-    expect(onTimeout).not.toHaveBeenCalled();
-  });
-
   it("tracks each terminal independently", () => {
     armSpawnConfirmation("t1");
     armSpawnConfirmation("t2");

@@ -61,20 +61,38 @@ function ShortcutRow({ entry, mac, groupScope, categoryLabel }: ShortcutRowProps
   return (
     <div
       role="listitem"
-      className="flex flex-wrap items-center justify-between gap-x-4 gap-y-0.5 py-1.5"
+      className="relative flex flex-wrap items-center justify-between gap-x-4 gap-y-0.5 py-1.5"
     >
       <span className="min-w-0 text-sm leading-5 text-text-primary">
         {entry.description}
         {categoryLabel && <span className="ml-2 text-xs text-text-secondary">{categoryLabel}</span>}
+        {/* Hidden from the tree: the spoken binding below already says "customized". */}
+        {entry.isCustom && (
+          <span
+            aria-hidden="true"
+            className={
+              categoryLabel ? "text-xs text-text-secondary" : "ml-2 text-xs text-text-secondary"
+            }
+          >
+            {categoryLabel ? " · Custom" : "Custom"}
+          </span>
+        )}
       </span>
-      {/* One spoken string for the whole cluster: read chip by chip, "Custom",
-          the scope and each "or" would arrive as disconnected fragments. */}
+      {/* The Settings editor's modified mark, in the same place: the left edge
+          of the row, out in the body's gutter so the names stay on one column. */}
+      {entry.isCustom && (
+        <span
+          className="status-mark absolute -left-3 top-2 bottom-2 w-0.5 rounded-full bg-state-modified"
+          aria-hidden="true"
+        />
+      )}
+      {/* One spoken string for the whole cluster: read chip by chip, the scope
+          and each "or" would arrive as disconnected fragments. */}
       <span className="sr-only">{spokenBinding(entry, mac, groupScope)}</span>
       <span
         aria-hidden="true"
         className="ml-auto flex min-w-0 max-w-full flex-wrap items-center justify-end gap-x-2 gap-y-0.5 text-xs leading-5 text-text-secondary"
       >
-        {entry.isCustom && <span>Custom</span>}
         {entry.alternatives.length === 0 ? (
           <span>Not set</span>
         ) : (
@@ -87,7 +105,7 @@ function ShortcutRow({ entry, mac, groupScope, categoryLabel }: ShortcutRowProps
                   shortcut={alt.combo}
                   isMac={mac}
                   density="bare"
-                  className="text-text-primary"
+                  foreground="primary"
                   aria-label=""
                 />
                 {scope && <span>{scope.toLowerCase()}</span>}
@@ -175,27 +193,51 @@ export function ShortcutReferenceDialog({ isOpen, onClose }: ShortcutReferenceDi
       size="lg"
       initialFocus="none"
       // A fixed height, so the card doesn't jump as the result count changes
-      // under the user's typing.
-      className="h-[80vh]"
+      // under the user's typing. On a short window (or a zoomed one) 80% leaves
+      // the header and footer only a row or two between them, so the card
+      // takes up to 480px of whatever height there is.
+      className="h-[max(80vh,min(calc(100vh-1rem),480px))]"
+      maxHeight="max-h-[calc(100vh-1rem)]"
     >
       <AppDialog.Header className="flex-col items-stretch gap-4">
         <div className="flex items-center justify-between">
           <AppDialog.Title>Keyboard shortcuts</AppDialog.Title>
           <AppDialog.CloseButton />
         </div>
-        <AppPaletteDialog.Input
-          inputRef={searchInputRef}
-          placeholder="Search by action or key"
-          value={searchQuery}
-          onChange={(e) => setSearchQuery(e.target.value)}
-          aria-label="Search shortcuts"
-          aria-controls={resultsId}
-        />
+        {/* The field clears on Escape from its text; its clear button is part of
+            the same field, so Escape there clears too rather than closing the
+            dialog — and sends focus back to the text, as the button unmounts. */}
+        <div
+          onKeyDown={(event) => {
+            if (
+              event.key !== "Escape" ||
+              event.nativeEvent.isComposing ||
+              !searchQuery ||
+              !(event.target instanceof Element) ||
+              !event.target.closest(".search-field-clear")
+            ) {
+              return;
+            }
+            event.preventDefault();
+            event.stopPropagation();
+            clearSearch();
+          }}
+        >
+          <AppPaletteDialog.Input
+            inputRef={searchInputRef}
+            placeholder="Search by action or key"
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+            aria-label="Search shortcuts"
+            aria-controls={resultsId}
+            onClear={clearSearch}
+          />
+        </div>
       </AppDialog.Header>
 
       {/* A new query is a new list: keep the best match in view rather than
           holding the offset the user had scrolled to in the old one. */}
-      <AppDialog.Body resetScrollKey={trimmedQuery}>
+      <AppDialog.Body resetScrollKey={trimmedQuery} compactShadow>
         <div role="status" aria-live="polite" aria-atomic="true" className="sr-only">
           {trimmedQuery
             ? rowCount === 0

@@ -1,15 +1,19 @@
 import { describe, it, expect } from "vitest";
 import {
+  ATTENTION_FILTER_BANDS,
   bandForRun,
   bandLabel,
   bandTimestamp,
   compareWithinBand,
+  DEMAND_BANDS,
   emptyBandCounts,
   FLEET_BANDS,
+  fleetBandRunKey,
   isAttentionBand,
   isDemandBand,
+  UNREAD_FILTER_BANDS,
 } from "../fleetAttention";
-import type { FleetRunRow } from "@shared/types/ipc/fleet";
+import type { FleetRunRow, FleetSnapshot } from "@shared/types/ipc/fleet";
 
 const NOW = 1_700_000_000_000;
 
@@ -24,17 +28,22 @@ function run(overrides: Partial<FleetRunRow> = {}): FleetRunRow {
 }
 
 describe("bandForRun", () => {
-  it("splits waiting into blocked and needs-you on the error reason", () => {
+  it("splits a specific wait into blocked and needs-you on the error reason", () => {
     expect(bandForRun(run({ agentState: "waiting", waitingReason: "error" }))).toBe("blocked");
-    expect(bandForRun(run({ agentState: "waiting", waitingReason: "prompt" }))).toBe("needs-you");
     expect(bandForRun(run({ agentState: "waiting", waitingReason: "question" }))).toBe("needs-you");
     expect(bandForRun(run({ agentState: "waiting", waitingReason: "approval" }))).toBe("needs-you");
   });
 
-  it("treats a waiting run with no reason as needing input, not blocked", () => {
-    // Escalating an unclassified wait to the top band would make the most
-    // urgent row the least trustworthy one.
-    expect(bandForRun(run({ agentState: "waiting" }))).toBe("needs-you");
+  it("reads a stop with no watched work before it as idle, not a demand", () => {
+    // Sitting at a prompt asks nothing; only a wait that names what it wants is
+    // the agent waiting on the user. A finish main never saw the work for has
+    // handed nothing back either.
+    for (const waitingReason of [undefined, "prompt"] as const) {
+      const band = bandForRun(run({ agentState: "waiting", waitingReason }));
+      expect(band).toBe("idle");
+      expect(isDemandBand(band)).toBe(false);
+    }
+    expect(bandForRun(run({ agentState: "completed", since: NOW }))).toBe("idle");
   });
 
   it("folds directing in with working rather than treating it as a demand", () => {
@@ -70,8 +79,14 @@ describe("parked runs", () => {
   });
 
   it("never counts a parked run as a demand", () => {
-    const band = bandForRun(run({ agentState: "waiting", park: { parkedAt: NOW } }));
-    expect(isDemandBand(band)).toBe(false);
+    const asking = run({ agentState: "waiting", waitingReason: "question" });
+    const handedBack = run({ agentState: "waiting", handBack: { stoppedAt: NOW - 60_000 } });
+    for (const row of [asking, handedBack]) {
+      expect(isDemandBand(bandForRun(row))).toBe(true);
+      const band = bandForRun({ ...row, park: { parkedAt: NOW } });
+      expect(band).toBe("parked");
+      expect(isDemandBand(band)).toBe(false);
+    }
   });
 
   it("ranks parked below every live band but above idle", () => {
@@ -80,39 +95,6 @@ describe("parked runs", () => {
       expect(rank("parked")).toBeGreaterThan(rank(live));
     }
     expect(rank("parked")).toBeLessThan(rank("idle"));
-  });
-});
-
-describe("acknowledged completions", () => {
-  it("demotes a completion the user has already seen out of the demand bands", () => {
-    // Without the watermark every finished run demands attention forever, and a
-    // user who reviewed everything still reads "3 agents need you".
-    const finished = run({ agentState: "completed", since: NOW - 60_000 });
-    expect(bandForRun(finished)).toBe("review");
-    expect(isDemandBand(bandForRun(finished))).toBe(true);
-
-    const seen = bandForRun(finished, NOW);
-    expect(seen).toBe("done");
-    expect(isDemandBand(seen)).toBe(false);
-  });
-
-  it("keeps a completion newer than the watermark outstanding", () => {
-    const finished = run({ agentState: "completed", since: NOW });
-    expect(bandForRun(finished, NOW - 60_000)).toBe("review");
-  });
-
-  it("treats a completion exactly at the watermark as seen", () => {
-    expect(bandForRun(run({ agentState: "completed", since: NOW }), NOW)).toBe("done");
-  });
-
-  it("leaves a completion with no timestamp outstanding", () => {
-    // Unknown is not evidence of having been seen.
-    expect(bandForRun(run({ agentState: "completed" }), NOW)).toBe("review");
-  });
-
-  it("ignores the watermark for states that are not completions", () => {
-    expect(bandForRun(run({ agentState: "waiting", since: NOW - 60_000 }), NOW)).toBe("needs-you");
-    expect(bandForRun(run({ agentState: "working", since: NOW - 60_000 }), NOW)).toBe("running");
   });
 });
 
@@ -138,7 +120,7 @@ describe("bandLabel", () => {
     );
   });
 
-  it("stops calling an acknowledged completion a hand-back", () => {
+  it("stops calling a seen hand-back ready for review", () => {
     // The label has to move at the same moment the band does, or the row sorts
     // as done while still reading "ready for review".
     expect(bandLabel("done", run({ agentState: "completed" }))).not.toBe(
@@ -217,14 +199,6 @@ describe("quiet runs", () => {
   });
 });
 
-describe("isDemandBand", () => {
-  it("classifies at least one band as a demand and at least one as not", () => {
-    const demands = FLEET_BANDS.filter(isDemandBand);
-    expect(demands.length).toBeGreaterThan(0);
-    expect(demands.length).toBeLessThan(FLEET_BANDS.length);
-  });
-});
-
 describe("compareWithinBand", () => {
   /** These cases are all about the ordering itself, so they bind one band. */
   const byNeed = (a: FleetRunRow, b: FleetRunRow) => compareWithinBand(a, b, "needs-you");
@@ -285,8 +259,15 @@ describe("bandForRun — snooze", () => {
   it("keeps a snoozed run out of every demand band", () => {
     // The whole point: a snoozed run must stop counting as a demand no matter
     // how urgent its underlying state looks.
-    for (const state of ["waiting", "completed", "working"] as const) {
-      const band = bandForRun(run({ agentState: state, snooze }));
+    const unseen = { stoppedAt: NOW - 60_000 };
+    for (const row of [
+      run({ agentState: "waiting", waitingReason: "question" }),
+      run({ agentState: "waiting", handBack: unseen }),
+      run({ agentState: "completed", handBack: unseen }),
+    ]) {
+      expect(isDemandBand(bandForRun(row))).toBe(true);
+      const band = bandForRun({ ...row, snooze });
+      expect(band).toBe("snoozed");
       expect(isDemandBand(band)).toBe(false);
     }
   });
@@ -321,22 +302,252 @@ describe("bandForRun — snooze", () => {
     }
   });
 
-  it("bands an unsnoozed run exactly as before", () => {
-    // Snooze is the only new demotion lever; nothing else may shift.
-    expect(bandForRun(run({ agentState: "waiting" }))).toBe("needs-you");
-    expect(bandForRun(run({ agentState: "working" }))).toBe("running");
-  });
-
   it("gives the snoozed band its own label", () => {
     const label = bandLabel("snoozed", run());
     expect(label.length).toBeGreaterThan(0);
     expect(label).not.toBe(bandLabel("parked", run()));
     expect(label).not.toBe(bandLabel("idle", run()));
   });
+});
 
-  it("counts the snoozed band in an empty tally", () => {
-    const counts = emptyBandCounts();
-    // Every band must have a slot, or a snoozed run would increment undefined.
-    for (const band of FLEET_BANDS) expect(counts[band]).toBe(0);
+describe("watched hand-backs", () => {
+  const unseen = { stoppedAt: NOW - 60_000 };
+  const seen = { stoppedAt: NOW - 60_000, seenAt: NOW - 30_000 };
+
+  it("bands a generic wait after a watched hand-back by whether it was seen", () => {
+    expect(bandForRun(run({ agentState: "waiting", handBack: unseen }))).toBe("review");
+    expect(
+      bandForRun(run({ agentState: "waiting", waitingReason: "prompt", handBack: seen }))
+    ).toBe("done");
+  });
+
+  it("bands a completion by its own hand-back's seen state", () => {
+    expect(bandForRun(run({ agentState: "completed", since: NOW, handBack: unseen }))).toBe(
+      "review"
+    );
+    expect(bandForRun(run({ agentState: "completed", since: NOW, handBack: seen }))).toBe("done");
+  });
+
+  it("reads an unseen hand-back marked unread again as review", () => {
+    const remarked = { ...seen, markedUnreadAt: NOW };
+    expect(bandForRun(run({ agentState: "waiting", handBack: remarked }))).toBe("review");
+  });
+
+  it("never lets a hand-back quiet a specific ask or a run back at work", () => {
+    for (const waitingReason of ["approval", "question"] as const) {
+      expect(bandForRun(run({ agentState: "waiting", waitingReason, handBack: seen }))).toBe(
+        "needs-you"
+      );
+    }
+    expect(bandForRun(run({ agentState: "waiting", waitingReason: "error", handBack: seen }))).toBe(
+      "blocked"
+    );
+    expect(bandForRun(run({ agentState: "working", handBack: seen }))).toBe("running");
+  });
+
+  it("dates a hand-back's band from the stop, not the slide after it", () => {
+    const row = run({ agentState: "waiting", since: NOW, handBack: unseen });
+    expect(bandTimestamp(row, bandForRun(row))).toBe(unseen.stoppedAt);
+  });
+});
+
+describe("Canopy refinements", () => {
+  const ASKED = { kind: "asked", quote: "Want me to update the tests too?", readAt: NOW } as const;
+  const NOT_ASKING = {
+    kind: "not-asking",
+    quote: "All 14 tests pass.",
+    readAt: NOW,
+    seen: false,
+  } as const;
+  const STALLED = {
+    kind: "stalled",
+    quote: "Waiting for background terminal",
+    readAt: NOW,
+    stalledSince: NOW - 15 * 60_000,
+  } as const;
+
+  it("promotes a stop that asks something into needs-you, seen or not", () => {
+    for (const handBack of [
+      { stoppedAt: NOW - 60_000 },
+      { stoppedAt: NOW - 60_000, seenAt: NOW - 30_000 },
+      undefined,
+    ]) {
+      for (const agentState of ["completed", "waiting"] as const) {
+        const row = run({ agentState, ...(handBack ? { handBack } : {}), canopy: ASKED });
+        expect(bandForRun(row)).toBe("needs-you");
+      }
+    }
+  });
+
+  it("leaves the user's own decisions above an ask", () => {
+    const asking = { agentState: "completed", canopy: ASKED } as const;
+    expect(bandForRun(run({ ...asking, park: { parkedAt: NOW } }))).toBe("parked");
+    expect(bandForRun(run({ ...asking, snooze: { snoozedAt: NOW } }))).toBe("snoozed");
+  });
+
+  it("drops an ask held from a turn the run has since left", () => {
+    expect(bandForRun(run({ agentState: "working", canopy: ASKED }))).toBe("running");
+  });
+
+  it("clears a question wait that asks nothing into a stop of its own, unseen until its turn is read", () => {
+    // A question wait is never recorded as a hand-back: on a run's first turn
+    // there is no record at all, and that is not a stop that handed nothing back.
+    const wait = {
+      agentState: "waiting",
+      waitingReason: "question",
+      since: NOW - 2_000,
+      canopy: NOT_ASKING,
+    } as const;
+    expect(bandForRun(run(wait))).toBe("review");
+    expect(bandTimestamp(run(wait), "review")).toBe(NOW - 2_000);
+    const read = run({ ...wait, canopy: { ...NOT_ASKING, seen: true } });
+    expect(bandForRun(read)).toBe("done");
+    expect(bandTimestamp(read, "done")).toBe(NOW - 2_000);
+  });
+
+  it("never lets an earlier stop's read mark speak for a question wait that asks nothing", () => {
+    // Later turns carry the record of the stop before, seen before this wait began.
+    const earlier = { stoppedAt: NOW - 60 * 60_000, seenAt: NOW - 50 * 60_000 };
+    const wait = run({
+      agentState: "waiting",
+      waitingReason: "question",
+      since: NOW - 2_000,
+      handBack: earlier,
+      canopy: NOT_ASKING,
+    });
+    expect(bandForRun(wait)).toBe("review");
+    // Dated from this wait, not the old stop.
+    expect(bandTimestamp(wait, "review")).toBe(NOW - 2_000);
+    // Nor does an earlier stop left unseen hold back a turn the user has read.
+    const read = run({
+      agentState: "waiting",
+      waitingReason: "question",
+      handBack: { stoppedAt: NOW - 60 * 60_000 },
+      canopy: { ...NOT_ASKING, seen: true },
+    });
+    expect(bandForRun(read)).toBe("done");
+  });
+
+  it("leaves the user's own decisions above a question wait that asks nothing", () => {
+    const wait = { agentState: "waiting", waitingReason: "question", canopy: NOT_ASKING } as const;
+    expect(bandForRun(run({ ...wait, park: { parkedAt: NOW } }))).toBe("parked");
+    expect(bandForRun(run({ ...wait, snooze: { snoozedAt: NOW } }))).toBe("snoozed");
+  });
+
+  it("never clears an approval or an error Daintree observed itself", () => {
+    for (const waitingReason of ["approval", "error"] as const) {
+      const observed = bandForRun(run({ agentState: "waiting", waitingReason }));
+      expect(bandForRun(run({ agentState: "waiting", waitingReason, canopy: NOT_ASKING }))).toBe(
+        observed
+      );
+    }
+  });
+
+  it("flags a stalled working run quiet and dates it from the stall", () => {
+    const row = run({ agentState: "working", since: NOW - 60 * 60_000, canopy: STALLED });
+    expect(bandForRun(row)).toBe("quiet");
+    expect(bandTimestamp(row, "quiet")).toBe(STALLED.stalledSince);
+  });
+
+  it("keeps Daintree's own silence as the clock when it already called the run quiet", () => {
+    const row = run({ agentState: "working", quietSince: NOW - 5 * 60_000, canopy: STALLED });
+    expect(bandForRun(row)).toBe("quiet");
+    expect(bandTimestamp(row, "quiet")).toBe(NOW - 5 * 60_000);
+  });
+});
+
+describe("Canopy asks keep their age", () => {
+  it("dates an ask on a hand-back from the stop, through the slide into a prompt wait", () => {
+    const canopy = { kind: "asked", quote: "Ship it?", readAt: NOW } as const;
+    const handBack = { stoppedAt: NOW - 10 * 60_000 };
+    const completed = run({ agentState: "completed", since: NOW - 10 * 60_000, handBack, canopy });
+    const slid = run({
+      agentState: "waiting",
+      waitingReason: "prompt",
+      since: NOW,
+      handBack,
+      canopy,
+    });
+    expect(bandTimestamp(completed, "needs-you")).toBe(handBack.stoppedAt);
+    expect(bandTimestamp(slid, "needs-you")).toBe(handBack.stoppedAt);
+    // An ask Daintree observed itself keeps its own clock.
+    const observed = run({ agentState: "waiting", waitingReason: "question", since: NOW - 5_000 });
+    expect(bandTimestamp(observed, "needs-you")).toBe(NOW - 5_000);
+  });
+});
+
+describe("fleetBandRunKey", () => {
+  function snapshot(runs: FleetRunRow[]): FleetSnapshot {
+    return { runs, changedAt: NOW, degraded: false, lastSuccessfulAt: NOW };
+  }
+
+  const unseen = { stoppedAt: NOW - 60_000 };
+  const seen = { stoppedAt: NOW - 60_000, seenAt: NOW - 30_000 };
+  const fleet = snapshot([
+    run({ runId: "approval", agentState: "waiting", waitingReason: "approval" }),
+    run({ runId: "error", agentState: "waiting", waitingReason: "error" }),
+    run({ runId: "unread", agentState: "completed", handBack: unseen }),
+    run({ runId: "read", agentState: "waiting", handBack: seen }),
+    run({ runId: "bare-prompt", agentState: "waiting", waitingReason: "prompt" }),
+    run({
+      runId: "parked-ask",
+      agentState: "waiting",
+      waitingReason: "question",
+      park: { parkedAt: NOW },
+    }),
+    run({
+      runId: "snoozed-hand-back",
+      agentState: "waiting",
+      handBack: unseen,
+      snooze: { snoozedAt: NOW - 60_000, snoozedUntil: NOW + 900_000 },
+    }),
+    run({
+      runId: "canopy-ask",
+      agentState: "completed",
+      handBack: seen,
+      canopy: { kind: "asked", quote: "Ship it?", readAt: NOW },
+    }),
+    run({ runId: "working", agentState: "working" }),
+  ]);
+
+  it("holds the asks for Attention and only the unread hand-backs for Unread", () => {
+    expect(fleetBandRunKey(fleet, ATTENTION_FILTER_BANDS).split("\n")).toEqual([
+      "approval",
+      "canopy-ask",
+      "error",
+    ]);
+    expect(fleetBandRunKey(fleet, UNREAD_FILTER_BANDS)).toBe("unread");
+  });
+
+  it("splits the demands between the two with nothing shared or left over", () => {
+    const attention = fleetBandRunKey(fleet, ATTENTION_FILTER_BANDS).split("\n");
+    const unread = fleetBandRunKey(fleet, UNREAD_FILTER_BANDS).split("\n");
+    expect(attention.filter((id) => unread.includes(id))).toEqual([]);
+    expect(fleetBandRunKey(fleet, DEMAND_BANDS).split("\n")).toEqual(
+      [...attention, ...unread].sort()
+    );
+  });
+
+  it("holds nobody before the first snapshot", () => {
+    expect(fleetBandRunKey(null, ATTENTION_FILTER_BANDS)).toBe("");
+    expect(fleetBandRunKey(snapshot([]), UNREAD_FILTER_BANDS)).toBe("");
+  });
+
+  it("reads the same set from a new snapshot in a different order", () => {
+    const reordered = snapshot([...fleet.runs].reverse());
+    expect(fleetBandRunKey(reordered, ATTENTION_FILTER_BANDS)).toBe(
+      fleetBandRunKey(fleet, ATTENTION_FILTER_BANDS)
+    );
+  });
+
+  it("drops a hand-back from Unread once it is seen, and takes it back when marked unread", () => {
+    const one = (handBack: FleetRunRow["handBack"]) =>
+      fleetBandRunKey(
+        snapshot([run({ runId: "t1", agentState: "waiting", handBack })]),
+        UNREAD_FILTER_BANDS
+      );
+    expect(one(unseen)).toBe("t1");
+    expect(one(seen)).toBe("");
+    expect(one({ ...seen, markedUnreadAt: NOW })).toBe("t1");
   });
 });

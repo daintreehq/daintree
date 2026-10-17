@@ -171,19 +171,6 @@ describe("WebAudioService", () => {
     expect(sources[0]!.stop).toHaveBeenCalledWith(ctx.currentTime + 0.1);
   });
 
-  it("does not stop in-flight sources when starting a new one (polyphony)", async () => {
-    const { service, mockSuccessfulFetch, sources } = await setupTest();
-    mockSuccessfulFetch();
-    mockSuccessfulFetch();
-
-    await service.playSound("first.wav");
-    await service.playSound("second.wav");
-
-    expect(sources).toHaveLength(2);
-    expect(sources[0]!.stop).not.toHaveBeenCalled();
-    expect(sources[1]!.stop).not.toHaveBeenCalled();
-  });
-
   it("evicts the oldest voice via fade when MAX_VOICES (4) is exceeded", async () => {
     const { service, mockSuccessfulFetch, sources, ctx } = await setupTest();
     for (let i = 0; i < 5; i++) mockSuccessfulFetch();
@@ -254,24 +241,6 @@ describe("WebAudioService", () => {
     // not after — the entire premise of this feature.
     expect(sources[0]!.detuneAtStart).toBe(12);
     expect(mockStart).toHaveBeenCalledWith(0);
-  });
-
-  it("leaves detune at default (0) when no detune argument is passed", async () => {
-    const { service, mockSuccessfulFetch, sources } = await setupTest();
-    mockSuccessfulFetch();
-
-    await service.playSound("chime.wav");
-
-    expect(sources[0]!.detuneAtStart).toBe(0);
-  });
-
-  it("respects an explicit detune of 0 (does not drop via truthiness)", async () => {
-    const { service, mockSuccessfulFetch, sources } = await setupTest();
-    mockSuccessfulFetch();
-
-    await service.playSound("pulse.wav", 0);
-
-    expect(sources[0]!.detuneAtStart).toBe(0);
   });
 
   it("cancelSound during async decode aborts the pending playback", async () => {

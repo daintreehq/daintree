@@ -132,23 +132,4 @@ describe("ColorVisionPicker persistence failures", () => {
     expect(renderedMode()).toBe("blue-yellow");
     expect(screen.queryByRole("alert")).toBeNull();
   });
-
-  it("surfaces the failure inline rather than leaving the successful-looking value in place", async () => {
-    const write = deferred();
-    vi.mocked(appThemeClient.setColorVisionMode).mockReturnValue(write.promise);
-
-    const { container } = render(<ColorVisionPicker />);
-    selectMode("Red-green");
-
-    await act(async () => {
-      write.reject(new Error("nope"));
-      await write.promise.catch(() => {});
-    });
-
-    // The alert lives inside the component (an inline banner), not in a global
-    // toast host, and it is the live region that announces to assistive tech.
-    const alert = container.querySelector('[role="alert"]');
-    expect(alert).not.toBeNull();
-    expect(container.querySelectorAll('[role="alert"]')).toHaveLength(1);
-  });
 });

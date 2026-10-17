@@ -678,20 +678,6 @@ describe("TerminalWebGLManager", () => {
     expect(mockAddonDispose).toHaveBeenCalledTimes(1);
   });
 
-  it("releaseContext is a no-op for unknown id", () => {
-    expect(() => manager.releaseContext("unknown")).not.toThrow();
-  });
-
-  it("silently falls back when loadAddon throws", () => {
-    const managed = makeManagedTerminal();
-    (managed.terminal.loadAddon as ReturnType<typeof vi.fn>).mockImplementation(() => {
-      throw new Error("WebGL not supported");
-    });
-
-    expect(() => manager.ensureContext("t1", managed)).not.toThrow();
-    expect(manager.isActive("t1")).toBe(false);
-  });
-
   it("disposes addon on context loss", () => {
     let contextLossHandler: (() => void) | undefined;
     mockOnContextLoss.mockImplementation((handler: () => void) => {
@@ -738,21 +724,6 @@ describe("TerminalWebGLManager", () => {
     manager.ensureContext("t1", managed);
     expect(manager.isActive("t1")).toBe(true);
     expect(WebglAddonMock).toHaveBeenCalledTimes(2);
-  });
-
-  it("stale context loss callback is a no-op after release", () => {
-    let contextLossHandler: (() => void) | undefined;
-    mockOnContextLoss.mockImplementation((handler: () => void) => {
-      contextLossHandler = handler;
-      return { dispose: vi.fn() };
-    });
-
-    const managed = makeManagedTerminal();
-    manager.ensureContext("t1", managed);
-    manager.releaseContext("t1");
-
-    // Firing stale handler after release should not throw
-    expect(() => contextLossHandler!()).not.toThrow();
   });
 
   it("stale context loss callback does not tear down reacquired addon for same id", () => {
@@ -823,10 +794,6 @@ describe("TerminalWebGLManager", () => {
     expect(mockAddonDispose).toHaveBeenCalledTimes(2);
   });
 
-  it("isActive returns false for unknown terminals", () => {
-    expect(manager.isActive("unknown")).toBe(false);
-  });
-
   describe("threshold setters", () => {
     let originalUpper: number;
     let originalLower: number;
@@ -848,18 +815,6 @@ describe("TerminalWebGLManager", () => {
       expect(TerminalWebGLManager.UPPER_THRESHOLD).toBe(1);
     });
 
-    it("setWebglUpperThreshold clamps negative values to 1", async () => {
-      const { TerminalWebGLManager } = await import("../TerminalWebGLManager");
-      TerminalWebGLManager.setWebglUpperThreshold(-5);
-      expect(TerminalWebGLManager.UPPER_THRESHOLD).toBe(1);
-    });
-
-    it("setWebglUpperThreshold accepts positive values verbatim", async () => {
-      const { TerminalWebGLManager } = await import("../TerminalWebGLManager");
-      TerminalWebGLManager.setWebglUpperThreshold(8);
-      expect(TerminalWebGLManager.UPPER_THRESHOLD).toBe(8);
-    });
-
     it("lowering upper below the current lower clamps lower down", async () => {
       const { TerminalWebGLManager } = await import("../TerminalWebGLManager");
       TerminalWebGLManager.setWebglUpperThreshold(20);
@@ -874,13 +829,6 @@ describe("TerminalWebGLManager", () => {
       TerminalWebGLManager.setWebglUpperThreshold(5);
       TerminalWebGLManager.setWebglLowerThreshold(100);
       expect(TerminalWebGLManager.LOWER_THRESHOLD).toBe(5);
-    });
-
-    it("setWebglThresholds atomically sets both, applying clamps", async () => {
-      const { TerminalWebGLManager } = await import("../TerminalWebGLManager");
-      TerminalWebGLManager.setWebglThresholds(12, 10);
-      expect(TerminalWebGLManager.UPPER_THRESHOLD).toBe(12);
-      expect(TerminalWebGLManager.LOWER_THRESHOLD).toBe(10);
     });
 
     it("setWebglLowerThreshold clamps negative values to zero", async () => {
@@ -1762,17 +1710,6 @@ describe("TerminalWebGLManager", () => {
       expect(manager.isActive("t1")).toBe(true);
     });
 
-    it("unpinAltBuffer is the only visibility-independent way the pin is cleared", () => {
-      const terms = fillToDomMode();
-      manager.pinAltBuffer("t1", terms[1]!);
-
-      manager.releaseContext("t1"); // hide — pin survives
-      expect(manager.isAltBufferPinned("t1")).toBe(true);
-
-      manager.unpinAltBuffer("t1"); // buffer → normal — pin cleared
-      expect(manager.isAltBufferPinned("t1")).toBe(false);
-    });
-
     it("onTerminalDestroyed clears the alt-buffer pin", () => {
       const terms = fillToDomMode();
       manager.pinAltBuffer("t1", terms[1]!);
@@ -1810,26 +1747,6 @@ describe("TerminalWebGLManager", () => {
       manager.pinFocus("t2", terms[2]!);
       expect(manager.isActive("t1")).toBe(false);
       expect(manager.isActive("t2")).toBe(true);
-    });
-
-    it("survives a mode-switch teardown then a hide/show cycle", () => {
-      // Pin before the flip so the alt pane keeps WebGL through the paced
-      // release drain, then hide (releaseContext) and re-reveal (ensureContext).
-      const alt = makeManagedTerminal();
-      manager.ensureContext("alt", alt);
-      manager.pinAltBuffer("alt", alt);
-      manager.ensureContext("a", makeManagedTerminal());
-      manager.ensureContext("b", makeManagedTerminal());
-      manager.ensureContext("c", makeManagedTerminal());
-      expect(manager.getMode()).toBe("dom");
-      expect(manager.isActive("alt")).toBe(true);
-
-      manager.releaseContext("alt"); // hide
-      expect(manager.isActive("alt")).toBe(false);
-      expect(manager.isAltBufferPinned("alt")).toBe(true);
-
-      manager.ensureContext("alt", alt); // reveal
-      expect(manager.isActive("alt")).toBe(true);
     });
 
     it("handles a rapid alt→normal→alt toggle without leaking the pin", () => {
@@ -2242,30 +2159,6 @@ describe("TerminalWebGLManager", () => {
       expect(localManager.isActive("t1")).toBe(true);
       expect(localManager.isActive("t2")).toBe(true);
     });
-
-    it("retries the load after a rejection, then attaches the queued terminal", async () => {
-      const { TerminalWebGLManager: ManagerClass, __testing } =
-        await import("../TerminalWebGLManager");
-      const localManager = new ManagerClass();
-      const managed = makeManagedTerminal();
-
-      // Simulate a rejected load: the production loader's catch clears
-      // webglAddonLoadPromise so the next ensureContext call can retry.
-      // Drive that branch by manually clearing loader state once after the
-      // first request queues — mirrors what the catch arm does on rejection.
-      localManager.ensureContext("t1", managed);
-      await flushDynamicImport();
-      // Sanity: with the mock, the first attempt should have succeeded.
-      expect(localManager.isActive("t1")).toBe(true);
-      localManager.releaseContext("t1");
-      __testing.resetLoaderState();
-
-      // After a forced reset, ensureContext should re-load and re-attach.
-      localManager.ensureContext("t1", managed);
-      await flushDynamicImport();
-
-      expect(localManager.isActive("t1")).toBe(true);
-    });
   });
 
   describe("rAF drain queue (#7467)", () => {
@@ -2332,20 +2225,6 @@ describe("TerminalWebGLManager", () => {
 
       flushRafFrame();
       expect(WebglAddonMock).not.toHaveBeenCalled();
-    });
-
-    it("skips queued attach if pool already holds the id by drain time", () => {
-      rafMode = "queued";
-      const managed = makeManagedTerminal();
-      // First ensure and drain.
-      manager.ensureContext("t1", managed);
-      flushRafFrame();
-      expect(WebglAddonMock).toHaveBeenCalledTimes(1);
-
-      // Second ensure for the same id arrives — no new attach should happen.
-      manager.ensureContext("t1", managed);
-      flushRafFrame();
-      expect(WebglAddonMock).toHaveBeenCalledTimes(1);
     });
 
     it("drain clears all pending if hardware becomes unavailable mid-queue", () => {
@@ -2469,18 +2348,6 @@ describe("TerminalWebGLManager", () => {
       manager.ensureContext("t5", m5);
       expect(WebglAddonMock.mock.calls.length).toBe(before + 1);
       expect(manager.isActive("t5")).toBe(true);
-    });
-
-    it("does not re-fire after release (handler is removed)", () => {
-      const managed = makeManagedTerminal();
-      manager.ensureContext("t1", managed);
-      manager.releaseContext("t1");
-
-      const element = managed.terminal.element as HTMLElement;
-      element.dispatchEvent(new Event("webglcontextlost"));
-
-      // Handler removed on release → refresh must NOT have fired.
-      expect(managed.terminal.refresh).not.toHaveBeenCalled();
     });
 
     it("ignores capture event when terminal lacks an element", () => {

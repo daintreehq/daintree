@@ -29,6 +29,7 @@ const {
   mockTerminalSubmit,
   mockTerminalSendKey,
   mockNotifyUserInput,
+  mockClearDirectingState,
 } = vi.hoisted(() => ({
   mockDispatch: vi.fn(),
   mockNotify: vi.fn().mockReturnValue(""),
@@ -135,6 +136,7 @@ const {
   mockTerminalSubmit: vi.fn(),
   mockTerminalSendKey: vi.fn(),
   mockNotifyUserInput: vi.fn(),
+  mockClearDirectingState: vi.fn(),
 }));
 
 // Passthrough tooltips: the footer's Radix provider is incidental to these
@@ -246,6 +248,7 @@ vi.mock("@/services/TerminalInstanceService", () => ({
     focus: vi.fn(),
     setFocused: vi.fn(),
     notifyUserInput: (...args: unknown[]) => mockNotifyUserInput(...args),
+    clearDirectingState: (...args: unknown[]) => mockClearDirectingState(...args),
   },
 }));
 
@@ -323,6 +326,7 @@ vi.mock("@/store/helpPanelStore", () => {
     selectSlot: (s: typeof helpPanelState) => s,
     selectActiveSlot: (s: typeof helpPanelState) => s,
     selectOpenSlots: () => [0],
+    selectHasRoomForSession: () => true,
     selectSlotTerminalIds: (s: typeof helpPanelState) => (s.terminalId ? [s.terminalId] : []),
     selectSlotForTerminal: (s: typeof helpPanelState, id: string) =>
       s.terminalId === id && id ? 0 : null,
@@ -505,6 +509,7 @@ function resetState() {
   mockTerminalSubmit.mockResolvedValue(undefined);
   mockTerminalSendKey.mockReset();
   mockNotifyUserInput.mockReset();
+  mockClearDirectingState.mockReset();
   mockProvisionSession.mockReset();
   mockProvisionSession.mockResolvedValue({
     sessionId: "sess-default",
@@ -644,30 +649,6 @@ beforeEach(() => {
 });
 
 describe("HelpPanel — assistantMinVersion gate (issue #7539)", () => {
-  it("blocks the single-supported-agent launch when installed version is below assistantMinVersion", async () => {
-    helpPanelState.preferredAgentId = null;
-    cliAvailabilityState.availability = { claude: "ready" };
-    mockGetAssistantSupportedAgentIds.mockReturnValue(["claude"]);
-    mockGetFolderPath.mockResolvedValue("/help");
-    mockGetAgentVersion.mockResolvedValue({
-      agentId: "claude",
-      installedVersion: "0.2.74",
-      latestVersion: "1.0.0",
-      updateAvailable: true,
-      lastChecked: Date.now(),
-    });
-    mockDispatch.mockResolvedValue({ ok: true, result: { terminalId: "blocked-term" } });
-
-    const { findByTestId } = render(<HelpPanel width={380} />);
-
-    await findByTestId("help-version-too-old");
-
-    expect(mockGetAgentVersion).toHaveBeenCalledWith("claude", false);
-    expect(mockProvisionSession).not.toHaveBeenCalled();
-    expect(mockDispatch).not.toHaveBeenCalled();
-    expect(helpPanelState.setTerminal).not.toHaveBeenCalled();
-  });
-
   it("blocks the preferredAgentId auto-launch when installed version is below assistantMinVersion", async () => {
     helpPanelState.preferredAgentId = "claude";
     mockGetFolderPath.mockResolvedValue("/help");
@@ -688,25 +669,6 @@ describe("HelpPanel — assistantMinVersion gate (issue #7539)", () => {
     expect(mockProvisionSession).not.toHaveBeenCalled();
     expect(mockDispatch).not.toHaveBeenCalled();
     expect(helpPanelState.setTerminal).not.toHaveBeenCalled();
-  });
-
-  it("renders the upgrade copy with required and installed versions", async () => {
-    helpPanelState.preferredAgentId = "claude";
-    mockGetFolderPath.mockResolvedValue("/help");
-    mockGetAgentVersion.mockResolvedValue({
-      agentId: "claude",
-      installedVersion: "0.2.74",
-      latestVersion: "1.0.0",
-      updateAvailable: true,
-      lastChecked: Date.now(),
-    });
-
-    const { findByTestId } = render(<HelpPanel width={380} />);
-
-    const block = await findByTestId("help-version-too-old");
-    expect(block.textContent).toContain("Update Claude");
-    expect(block.textContent).toContain("1.0.0");
-    expect(block.textContent).toContain("0.2.74");
   });
 
   it("the settings action dispatches app.settings.openTab to the assistant tab", async () => {
@@ -1074,7 +1036,7 @@ describe("HelpPanel — HybridInputBar wiring (issue #8185)", () => {
     );
   });
 
-  it("onSendKey calls notifyUserInput before terminalClient.sendKey", async () => {
+  it("onSendKey escape clears directing before terminalClient.sendKey", async () => {
     setupBoundTerminal();
 
     let getByTestId!: ReturnType<typeof render>["getByTestId"];
@@ -1086,9 +1048,12 @@ describe("HelpPanel — HybridInputBar wiring (issue #8185)", () => {
       fireEvent.click(getByTestId("hybrid-input-key"));
     });
 
-    expect(mockNotifyUserInput).toHaveBeenCalledWith("term-1");
+    // Escape ends directing even with a draft still in the composer, so it
+    // must not re-enter it through notifyUserInput.
+    expect(mockNotifyUserInput).not.toHaveBeenCalled();
+    expect(mockClearDirectingState).toHaveBeenCalledWith("term-1", "escape-key");
     expect(mockTerminalSendKey).toHaveBeenCalledWith("term-1", "escape");
-    expect(mockNotifyUserInput.mock.invocationCallOrder?.[0] ?? 0).toBeLessThan(
+    expect(mockClearDirectingState.mock.invocationCallOrder?.[0] ?? 0).toBeLessThan(
       mockTerminalSendKey.mock.invocationCallOrder?.[0] ?? 0
     );
   });

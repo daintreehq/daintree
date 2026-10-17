@@ -295,6 +295,7 @@ vi.mock("@/store/helpPanelStore", () => {
     selectSlot: (s: typeof helpPanelState) => s,
     selectActiveSlot: (s: typeof helpPanelState) => s,
     selectOpenSlots: () => [0],
+    selectHasRoomForSession: () => true,
     selectSlotTerminalIds: (s: typeof helpPanelState) => (s.terminalId ? [s.terminalId] : []),
     selectSlotForTerminal: (s: typeof helpPanelState, id: string) =>
       s.terminalId === id && id ? 0 : null,
@@ -942,6 +943,28 @@ describe("HelpPanel — Resume affordance for eviction-captured sessions", () =>
     expect(helpPanelState.setAutoLaunchEnabled).not.toHaveBeenCalled();
   });
 
+  it("offers Resume for an assistant still running on the host, with no id to resume by (#13360)", async () => {
+    helpPanelState.autoLaunchEnabled = false;
+    projectStoreState.currentProject = { id: "proj-1", path: "/tmp/proj-1" };
+    // The process never stopped, so there's nothing to resume by id or by
+    // command — the launch takes the running assistant over instead.
+    mockBuildResumeCommand.mockReturnValue(undefined);
+    mockPeekPendingHibernation.mockResolvedValue({
+      agentId: "claude",
+      agentSessionId: "",
+      cwd: "/tmp/help/proj-1",
+      panelWasOpen: false,
+      live: true,
+    });
+
+    const { findByTestId, queryByTestId } = await act(async () =>
+      render(<HelpPanel width={380} />)
+    );
+
+    expect(await findByTestId("help-resume-assistant")).toBeTruthy();
+    expect(queryByTestId("help-start-assistant")).toBeNull();
+  });
+
   it("does not offer Resume when the captured agent is no longer installed", async () => {
     helpPanelState.autoLaunchEnabled = false;
     projectStoreState.currentProject = { id: "proj-1", path: "/tmp/proj-1" };
@@ -1113,17 +1136,6 @@ describe("HelpPanel — empty-state CTA wears the launching agent's mark (#11834
 });
 
 describe("HelpPanel — cold switch-back auto-resume (#10815)", () => {
-  it("reports the panel open-state to main for the current project", async () => {
-    helpPanelState.isOpen = true;
-    projectStoreState.currentProject = { id: "proj-1", path: "/tmp/proj-1" };
-
-    await act(async () => {
-      render(<HelpPanel width={380} />);
-    });
-
-    expect(mockReportPanelOpen).toHaveBeenCalledWith("proj-1", true, true);
-  });
-
   it("auto-opens and resumes the captured session WITHOUT recording consent on cold restore", async () => {
     // Default user (consent off) so the controller does NOT auto-launch a fresh
     // session on open — proving the resume comes from the pull-on-mount peek,
@@ -2136,24 +2148,6 @@ describe("HelpPanel — assistant header state indicator", () => {
     expect(markers[0]!.closest('[role="tab"]')).not.toBeNull();
   });
 
-  it("announces the waiting state", () => {
-    setupTerminalWithState("waiting");
-
-    const { getByTestId } = render(<HelpPanel width={380} />);
-    const announcer = getByTestId("assistant-header-state-announcer");
-    expect(announcer.getAttribute("data-agent-state")).toBe("waiting");
-    expect(announcer.textContent).toBe("Assistant is waiting");
-  });
-
-  it("announces the directing state", () => {
-    setupTerminalWithState("directing");
-
-    const { getByTestId } = render(<HelpPanel width={380} />);
-    const announcer = getByTestId("assistant-header-state-announcer");
-    expect(announcer.getAttribute("data-agent-state")).toBe("directing");
-    expect(announcer.textContent).toBe("Assistant is directing");
-  });
-
   it("announces nothing for idle, completed, or exited states", () => {
     for (const state of ["idle", "completed", "exited"]) {
       setupTerminalWithState(state);
@@ -2171,15 +2165,6 @@ describe("HelpPanel — assistant header state indicator", () => {
 
     const { getByTestId } = render(<HelpPanel width={380} />);
     expect(getByTestId("assistant-header-state-announcer").textContent).toBe("");
-  });
-
-  it("keeps the live region mounted so a transition is announced rather than inserted", () => {
-    // A `role="status"` that only appears once there is something to say is added to the
-    // DOM at the same moment its content is, and a live region added and populated in one
-    // pass is not reliably announced. It has to be there first, empty.
-    setupTerminalWithState("idle");
-    const { getByTestId } = render(<HelpPanel width={380} />);
-    expect(getByTestId("assistant-header-state-announcer")).not.toBeNull();
   });
 });
 

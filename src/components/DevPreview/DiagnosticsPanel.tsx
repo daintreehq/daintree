@@ -11,6 +11,9 @@ import type {
 import type { DevPreviewStatus } from "@/hooks/useDevServer";
 import { COUNT_BADGE_CLASS } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Spinner } from "@/components/ui/Spinner";
+import { useDeferredLoading } from "@/hooks/useDeferredLoading";
+import { UI_DOHERTY_THRESHOLD } from "@/lib/animationUtils";
 import {
   PANE_TOOLBAR_ICON_BUTTON_CLASS,
   PANE_TOOLBAR_ICON_CLASS,
@@ -221,6 +224,7 @@ function SummaryRow({ label, value }: { label: string; value: string }) {
 export function DiagnosticsPanel({ paneId, projectId, status }: DiagnosticsPanelProps) {
   const [result, setResult] = useState<DevPreviewDiagnosticsResult | null>(null);
   const [loadFailed, setLoadFailed] = useState(false);
+  const [isPending, setIsPending] = useState(false);
   const fetchGenerationRef = useRef(0);
 
   const fetchDiagnostics = useCallback(() => {
@@ -230,15 +234,18 @@ export function DiagnosticsPanel({ paneId, projectId, status }: DiagnosticsPanel
     const getDiagnostics = window.electron?.devPreview?.getDiagnostics;
     if (typeof getDiagnostics !== "function") return;
     const generation = ++fetchGenerationRef.current;
+    setIsPending(true);
     getDiagnostics({ panelId: paneId, projectId })
       .then((next) => {
         if (fetchGenerationRef.current !== generation) return;
         setResult(next);
         setLoadFailed(false);
+        setIsPending(false);
       })
       .catch(() => {
         if (fetchGenerationRef.current !== generation) return;
         setLoadFailed(true);
+        setIsPending(false);
       });
   }, [paneId, projectId]);
 
@@ -253,6 +260,11 @@ export function DiagnosticsPanel({ paneId, projectId, status }: DiagnosticsPanel
       fetchGenerationRef.current += 1;
     };
   }, []);
+
+  // Only the first load has nothing to show; a refresh keeps the last snapshot
+  // on screen rather than blanking it.
+  const isFirstLoad = isPending && result === null && !loadFailed;
+  const showLoading = useDeferredLoading(isFirstLoad, UI_DOHERTY_THRESHOLD);
 
   const session = result?.session ?? null;
   const proxy = result?.proxy ?? null;
@@ -282,20 +294,41 @@ export function DiagnosticsPanel({ paneId, projectId, status }: DiagnosticsPanel
       </div>
 
       <div className="min-h-0 flex-1 overflow-y-auto">
-        {loadFailed ? (
+        {isFirstLoad ? (
+          showLoading && (
+            <div className="flex items-center gap-2 px-3 py-4 text-text-secondary">
+              <Spinner size="xs" />
+              Loading diagnostics…
+            </div>
+          )
+        ) : loadFailed && result === null ? (
           <div className="flex flex-col items-start gap-2 p-3">
-            <p className="text-text-secondary">Couldn't load diagnostics for this preview.</p>
+            <p role="alert" className="text-text-secondary">
+              Couldn't load diagnostics for this preview.
+            </p>
             <Button variant="subtle" size="xs" onClick={fetchDiagnostics}>
               Retry
             </Button>
           </div>
         ) : (
           <>
+            {/* A refresh that fails keeps the last snapshot: it is still the
+                best evidence there is while the server misbehaves. */}
+            {loadFailed && (
+              <div className="flex items-center justify-between gap-2 border-b border-overlay px-3 py-1.5">
+                <p role="alert" className="text-text-secondary">
+                  Couldn't refresh diagnostics. Showing the last snapshot.
+                </p>
+                <Button variant="subtle" size="xs" onClick={fetchDiagnostics}>
+                  Retry
+                </Button>
+              </div>
+            )}
             {session && (
               <dl className="grid grid-cols-[auto_minmax(0,1fr)] gap-x-3 gap-y-1 border-b border-overlay px-3 py-2">
                 <SummaryRow
                   label="Status"
-                  value={`${session.status}${session.restoredFromManifest ? " (restored)" : ""}`}
+                  value={`${session.status.charAt(0).toUpperCase()}${session.status.slice(1)}${session.restoredFromManifest ? " (restored)" : ""}`}
                 />
                 <SummaryRow
                   label="Allocated port"
@@ -334,7 +367,7 @@ export function DiagnosticsPanel({ paneId, projectId, status }: DiagnosticsPanel
                   return (
                     <li
                       key={event.seq}
-                      className="grid grid-cols-[auto_auto_minmax(0,1fr)] items-baseline gap-x-2 rounded px-2 py-0.5 hover:bg-overlay-subtle"
+                      className="grid grid-cols-[auto_auto_minmax(0,1fr)] items-baseline gap-x-2 rounded-[var(--radius-sm)] px-2 py-0.5 hover:bg-overlay-subtle"
                     >
                       <span className="font-mono tabular-nums text-text-secondary">
                         {formatTime(event.at)}

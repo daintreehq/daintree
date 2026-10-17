@@ -1,9 +1,12 @@
 import { app, shell } from "electron";
+import { openWithDefaultApp } from "../../utils/openPath.js";
 import os from "os";
 import * as nodePath from "path";
 import * as nodeFs from "fs";
 import { CHANNELS } from "../channels.js";
 import { openExternalUrl } from "../../utils/openExternal.js";
+import { findOnPath } from "../../utils/findOnPath.js";
+import { scanWindowsPath } from "../../utils/windowsExecutable.js";
 import { projectStore } from "../../services/ProjectStore.js";
 import { gitServiceCache } from "../../services/GitServiceCache.js";
 import { AppError } from "../../utils/errorTypes.js";
@@ -251,7 +254,7 @@ export function registerSystemShellHandlers(_deps: HandlerDependencies): () => v
   const handleSystemOpenPath = async ({ path: targetPath }: SystemOpenPathPayload) => {
     try {
       const realTarget = await assertPathAllowed(targetPath);
-      const errorString = await shell.openPath(realTarget);
+      const errorString = await openWithDefaultApp(realTarget);
       if (errorString) {
         throw new Error(`Failed to open path: ${errorString}`);
       }
@@ -371,15 +374,14 @@ export function registerSystemShellHandlers(_deps: HandlerDependencies): () => v
       return false;
     }
 
-    try {
-      const { execFile } = await import("child_process");
-      const { promisify } = await import("util");
-      const checkCmd = process.platform === "win32" ? "where" : "which";
-      await promisify(execFile)(checkCmd, [command], { timeout: 5_000, windowsHide: true });
-      return true;
-    } catch {
-      return false;
+    if (process.platform !== "win32") {
+      // In-process: the external `which` is missing from minimal Fedora and
+      // Arch installs, where it made every command read as absent.
+      return (await findOnPath(command, { timeoutMs: 5_000 })) !== null;
     }
+    // Available means on PATH: a same-named file in the working directory,
+    // which process creation would look in first, does not count.
+    return (await scanWindowsPath(command)).paths.length > 0;
   };
   handlers.push(typedHandle(CHANNELS.SYSTEM_CHECK_COMMAND, handleSystemCheckCommand));
 

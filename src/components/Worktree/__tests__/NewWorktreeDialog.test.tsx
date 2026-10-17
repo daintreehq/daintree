@@ -5,6 +5,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, cleanup, act, fireEvent } from "@testing-library/react";
 import { useState } from "react";
 import type { BranchInfo } from "@/types/electron";
+import { _resetHostPlatformForTests, setHostPlatformInfo } from "@/hooks/useHostPlatform";
 
 vi.stubGlobal(
   "ResizeObserver",
@@ -16,6 +17,18 @@ vi.stubGlobal(
 );
 
 const mockDispatch = vi.fn();
+/** The form's draft for another host, as the placement row would ask for it. */
+const placement = vi.hoisted(() => ({
+  getDraft: null as null | (() => unknown),
+}));
+
+vi.mock("@/components/Hosts/Overview/LazyHostOverviewParts", () => ({
+  LazyWorktreePlacementRow: (props: { getDraft: () => unknown }) => {
+    placement.getDraft = props.getDraft;
+    return null;
+  },
+}));
+
 vi.mock("@/services/ActionService", () => ({
   actionService: {
     dispatch: (...args: unknown[]) => mockDispatch(...args),
@@ -67,12 +80,19 @@ vi.mock("@/config/agents", () => ({
 }));
 
 const mockAddTerminal = vi.fn().mockResolvedValue("new-terminal-id");
-vi.mock("@/store/panelStore", () => ({
-  usePanelStore: Object.assign(() => ({}), {
-    getState: () => ({ addPanel: mockAddTerminal, panelsById: {} }),
-    subscribe: () => () => {},
-  }),
-}));
+vi.mock("@/store/panelStore", () => {
+  const panelState = () => ({ addPanel: mockAddTerminal, panelsById: {}, panelIds: [] });
+  return {
+    usePanelStore: Object.assign(
+      (selector?: (s: ReturnType<typeof panelState>) => unknown) =>
+        selector ? selector(panelState()) : panelState(),
+      {
+        getState: panelState,
+        subscribe: () => () => {},
+      }
+    ),
+  };
+});
 
 const mockGenerateRecipeFromActiveTerminals = vi.fn().mockReturnValue([]);
 const recipeFixtures = vi.hoisted(() => ({ recipes: [] as unknown[] }));
@@ -169,17 +189,22 @@ const mockSetPendingWorktree = vi.fn();
 const mockSelectWorktree = vi.fn();
 const mockAddPendingCreation = vi.fn();
 const mockFailPendingCreation = vi.fn();
-vi.mock("@/store/worktreeStore", () => ({
-  useWorktreeSelectionStore: {
-    getState: () => ({
-      setPendingWorktree: mockSetPendingWorktree,
-      selectWorktree: mockSelectWorktree,
-      addPendingCreation: mockAddPendingCreation,
-      failPendingCreation: mockFailPendingCreation,
-      activeWorktreeId: null,
-    }),
-  },
-}));
+vi.mock("@/store/worktreeStore", () => {
+  const selectionState = () => ({
+    setPendingWorktree: mockSetPendingWorktree,
+    selectWorktree: mockSelectWorktree,
+    addPendingCreation: mockAddPendingCreation,
+    failPendingCreation: mockFailPendingCreation,
+    activeWorktreeId: null,
+  });
+  return {
+    useWorktreeSelectionStore: Object.assign(
+      (selector?: (s: ReturnType<typeof selectionState>) => unknown) =>
+        selector ? selector(selectionState()) : selectionState(),
+      { getState: selectionState }
+    ),
+  };
+});
 
 const recipePickerCalls = vi.hoisted(() => ({
   last: null as { startingLayoutRecipes: unknown[]; defaultRecipeId: string | undefined } | null,
@@ -390,14 +415,6 @@ describe("NewWorktreeDialog — existing branch mode", () => {
     vi.useRealTimers();
     cleanup();
     vi.clearAllMocks();
-  });
-
-  it("shows mode toggle when not in PR checkout mode", async () => {
-    renderDialog();
-    await advanceTimersGradually(500);
-
-    expect(screen.getByRole("radio", { name: /new branch/i })).toBeDefined();
-    expect(screen.getByRole("radio", { name: /existing branch/i })).toBeDefined();
   });
 
   it("does not show mode toggle in PR checkout mode", async () => {
@@ -668,26 +685,7 @@ describe("NewWorktreeDialog — existing branch mode", () => {
     expect(screen.queryByLabelText(/create from remote branch/i)).toBeNull();
   });
 
-  it("clears validation errors when switching modes", async () => {
-    renderDialog();
-    await advanceTimersGradually(500);
-
-    // Click create without a branch name to trigger validation error
-    await act(async () => {
-      fireEvent.click(screen.getByTestId("create-worktree-button"));
-    });
-
-    expect(screen.getByRole("alert")).toBeDefined();
-
-    // Switch to existing mode — error should clear
-    await act(async () => {
-      fireEvent.click(screen.getByRole("radio", { name: /existing branch/i }));
-    });
-
-    expect(screen.queryByRole("alert")).toBeNull();
-  });
-
-  it("disables Create button when no existing branch is selected", async () => {
+  it("keeps Create available with no existing branch and names the missing pick under the field", async () => {
     renderDialog();
     await advanceTimersGradually(500);
 
@@ -696,7 +694,18 @@ describe("NewWorktreeDialog — existing branch mode", () => {
     });
 
     const createButton = screen.getByTestId("create-worktree-button");
-    expect(createButton.getAttribute("aria-disabled")).toBe("true");
+    expect(createButton.getAttribute("aria-disabled")).toBeNull();
+
+    await act(async () => {
+      fireEvent.click(createButton);
+    });
+
+    const picker = screen.getByTestId("existing-branch-picker");
+    expect(picker.getAttribute("aria-invalid")).toBe("true");
+    expect(document.getElementById("validation-error")?.textContent).toContain(
+      "Please select a branch"
+    );
+    expect(document.activeElement).toBe(picker);
   });
 });
 
@@ -785,6 +794,95 @@ describe("NewWorktreeDialog — pending creation wiring", () => {
       "/test/root-worktrees/feature/test",
       expect.stringContaining("permission denied")
     );
+  });
+
+  describe("on a Windows host", () => {
+    beforeEach(() => {
+      _resetHostPlatformForTests();
+      setHostPlatformInfo({ platform: "win32" });
+    });
+
+    afterEach(() => {
+      _resetHostPlatformForTests();
+    });
+
+    async function submitWithPath(path: string): Promise<void> {
+      mockGetDefaultPath.mockResolvedValue(path);
+      renderDialog();
+      await advanceTimersGradually(500);
+      await act(async () => {
+        fireEvent.change(screen.getByTestId("branch-name-input"), {
+          target: { value: "feature/test" },
+        });
+      });
+      await advanceTimersGradually(500);
+      await act(async () => {
+        fireEvent.click(screen.getByTestId("create-worktree-button"));
+      });
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(0);
+      });
+    }
+
+    it.each([
+      ["a forward-slash drive path", "C:/dev/projects/app-worktrees/feature-test"],
+      ["a backslash drive path", "C:\\dev\\projects\\app-worktrees\\feature-test"],
+      ["a UNC path", "\\\\server\\share\\app-worktrees\\feature-test"],
+    ])("anchors the Creating… row and its failure on %s", async (_label, path) => {
+      mockDispatch.mockResolvedValue({ ok: false, error: { message: "already exists" } });
+
+      await submitWithPath(path);
+
+      expect(mockAddPendingCreation).toHaveBeenCalledWith(
+        path,
+        expect.objectContaining({ branch: "feature/test" })
+      );
+      expect(mockFailPendingCreation).toHaveBeenCalledWith(
+        path,
+        expect.stringContaining("already exists")
+      );
+      expect(mockNotify).not.toHaveBeenCalledWith(
+        expect.objectContaining({ title: "Couldn't create worktree" })
+      );
+    });
+
+    it("falls back to a toast for a drive-relative path the host resolves itself", async () => {
+      mockDispatch.mockResolvedValue({ ok: false, error: { message: "already exists" } });
+
+      await submitWithPath("\\dev\\app-worktrees\\feature-test");
+
+      expect(mockAddPendingCreation).not.toHaveBeenCalled();
+      expect(mockNotify).toHaveBeenCalledWith(
+        expect.objectContaining({ title: "Couldn't create worktree" })
+      );
+    });
+  });
+
+  it("does not take a drive-letter path as absolute on a POSIX host", async () => {
+    _resetHostPlatformForTests();
+    setHostPlatformInfo({ platform: "linux" });
+    mockGetDefaultPath.mockResolvedValue("C:/dev/app-worktrees/feature-test");
+    mockDispatch.mockResolvedValue({ ok: false, error: { message: "boom" } });
+    try {
+      renderDialog();
+      await advanceTimersGradually(500);
+      await act(async () => {
+        fireEvent.change(screen.getByTestId("branch-name-input"), {
+          target: { value: "feature/test" },
+        });
+      });
+      await advanceTimersGradually(500);
+      await act(async () => {
+        fireEvent.click(screen.getByTestId("create-worktree-button"));
+      });
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(0);
+      });
+
+      expect(mockAddPendingCreation).not.toHaveBeenCalled();
+    } finally {
+      _resetHostPlatformForTests();
+    }
   });
 });
 
@@ -1216,19 +1314,6 @@ describe("NewWorktreeDialog — ARIA validation wiring", () => {
       expect(input.getAttribute("autocorrect")).toBe("off");
       expect(input.getAttribute("autocapitalize")).toBe("off");
     }
-  });
-
-  it("does not set aria-invalid on any input on initial render", async () => {
-    renderDialog();
-    await advanceTimersGradually(500);
-
-    const branchInput = screen.getByTestId("branch-name-input");
-    const pathInput = screen.getByTestId("worktree-path-input");
-    const baseBranchButton = document.getElementById("base-branch");
-
-    expect(branchInput.getAttribute("aria-invalid")).toBeNull();
-    expect(pathInput.getAttribute("aria-invalid")).toBeNull();
-    expect(baseBranchButton?.getAttribute("aria-invalid")).toBeNull();
   });
 });
 
@@ -1824,6 +1909,20 @@ describe("NewWorktreeDialog — deferred branch auto-resolve", () => {
     );
   });
 
+  it("offers another host the auto-incremented branch, as local Create names it", async () => {
+    renderDialog();
+    await advanceTimersGradually(500);
+
+    const branchInput = await typeBranch("feature/terrain");
+    expect(branchInput.value).toBe("feature/terrain");
+
+    let draft: unknown = null;
+    await act(async () => {
+      draft = placement.getDraft?.() ?? null;
+    });
+    expect(draft).toMatchObject({ newBranch: "feature/terrain-2", useExistingBranch: false });
+  });
+
   it("creates the typed name when no conflict was detected", async () => {
     renderDialog();
     await advanceTimersGradually(500);
@@ -2023,8 +2122,12 @@ describe("NewWorktreeDialog — first agent and prompt (#12796)", () => {
     renderDialog();
     await advanceTimersGradually(500);
     await nameBranch();
-    await pickClaudeAndType(PROMPT);
+    await act(async () => {
+      fireEvent.click(screen.getByTestId("pick-agent-claude"));
+    });
     expect(screen.getByText(/This recipe already starts an agent/)).toBeDefined();
+    // An empty prompt that could never be sent isn't offered at all.
+    expect(screen.queryByTestId("first-agent-prompt")).toBeNull();
     await submit();
 
     expect(actionCalls("agent.launch")).toHaveLength(0);

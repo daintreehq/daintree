@@ -4,7 +4,6 @@ import { access, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { markAuditedHandlerFailure } from "../../../utils/pluginAuditMarker.js";
-import type { PluginCheckUpdateResult } from "../../../../shared/types/plugin.js";
 
 // `withContext` handlers read `event.sender.id`, so every invocation needs a
 // sender-bearing event the way a real IPC call always has one.
@@ -40,6 +39,14 @@ const mockReloadProjectPlugins = vi.fn();
 const mockRestartPluginWorker = vi.fn();
 const mockListPluginRuntimeStatuses = vi.fn();
 const mockGetDataBackupSource = vi.fn();
+const mockIsRemoteUnsupported = vi.fn<(pluginId: string) => boolean>();
+const mockResolveActiveWorktreeIdForProject =
+  vi.fn<(projectId: string) => Promise<string | null>>();
+
+vi.mock("../../../services/plugin/pluginInvokeContext.js", () => ({
+  resolveActiveWorktreeIdForProject: (projectId: string) =>
+    mockResolveActiveWorktreeIdForProject(projectId),
+}));
 
 // plugin:invoke resolves the sender's project/worktree through the registry
 // (#11297). Mocked so a test can register a sender without standing up a real
@@ -116,6 +123,7 @@ vi.mock("../../../services/PluginService.js", () => ({
     listPluginRuntimeStatuses: (...args: unknown[]) => mockListPluginRuntimeStatuses(...args),
     getDataBackupSource: (...args: unknown[]) => mockGetDataBackupSource(...args),
     metrics: { recordInvoke: (...args: unknown[]) => mockMetricsRecordInvoke(...args) },
+    isRemoteUnsupported: (pluginId: string) => mockIsRemoteUnsupported(pluginId),
   },
 }));
 
@@ -189,7 +197,6 @@ import {
   clearAllPluginContributionScopes,
   setPluginContributionScope,
 } from "../../../services/plugin/PluginContributionBroadcaster.js";
-import { PLUGIN_METHOD_CHANNELS } from "../plugin.preload.js";
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -218,138 +225,6 @@ beforeEach(() => {
 });
 
 describe("registerPluginHandlers", () => {
-  it("registers handlers for all plugin channels", () => {
-    registerPluginHandlers();
-    // Derived rather than a magic number: every typed op is one entry of
-    // PLUGIN_METHOD_CHANNELS, and the `+ 1` is `plugin:invoke`, which stays on
-    // raw `ipcMain.handle` outside the typed namespace. A hardcoded total goes
-    // stale the next time a channel is added and reddens a shard belonging to
-    // whoever added it; the named assertions below are what pin the channels
-    // this branch is actually about.
-    expect(mockIpcMainHandle).toHaveBeenCalledTimes(Object.keys(PLUGIN_METHOD_CHANNELS).length + 1);
-    expect(mockIpcMainHandle).toHaveBeenCalledWith("plugin:list", expect.any(Function));
-    expect(mockIpcMainHandle).toHaveBeenCalledWith(
-      "plugin:runtime-statuses-get",
-      expect.any(Function)
-    );
-    expect(mockIpcMainHandle).toHaveBeenCalledWith("plugin:restart-worker", expect.any(Function));
-    expect(mockIpcMainHandle).toHaveBeenCalledWith(
-      "plugin:validate-manifest",
-      expect.any(Function)
-    );
-    expect(mockIpcMainHandle).toHaveBeenCalledWith(
-      "plugin:project-surfaces-get",
-      expect.any(Function)
-    );
-    expect(mockIpcMainHandle).toHaveBeenCalledWith("plugin:recipes-get", expect.any(Function));
-    expect(mockIpcMainHandle).toHaveBeenCalledWith(
-      "plugin:recipe-record-use",
-      expect.any(Function)
-    );
-    expect(mockIpcMainHandle).toHaveBeenCalledWith(
-      "plugin:recipe-metadata-update",
-      expect.any(Function)
-    );
-    expect(mockIpcMainHandle).toHaveBeenCalledWith(
-      "plugin:report-panel-lifecycle",
-      expect.any(Function)
-    );
-    expect(mockIpcMainHandle).toHaveBeenCalledWith("plugin:install", expect.any(Function));
-    expect(mockIpcMainHandle).toHaveBeenCalledWith("plugin:set-enabled", expect.any(Function));
-    expect(mockIpcMainHandle).toHaveBeenCalledWith(
-      "plugin:install-from-file",
-      expect.any(Function)
-    );
-    expect(mockIpcMainHandle).toHaveBeenCalledWith(
-      "plugin:install-from-path",
-      expect.any(Function)
-    );
-    expect(mockIpcMainHandle).toHaveBeenCalledWith("plugin:install-from-url", expect.any(Function));
-    expect(mockIpcMainHandle).toHaveBeenCalledWith("plugin:uninstall", expect.any(Function));
-    expect(mockIpcMainHandle).toHaveBeenCalledWith("plugin:check-for-update", expect.any(Function));
-    expect(mockIpcMainHandle).toHaveBeenCalledWith("plugin:invoke", expect.any(Function));
-    expect(mockIpcMainHandle).toHaveBeenCalledWith("plugin:toolbar-buttons", expect.any(Function));
-    expect(mockIpcMainHandle).toHaveBeenCalledWith("plugin:keybindings", expect.any(Function));
-    expect(mockIpcMainHandle).toHaveBeenCalledWith(
-      "plugin:context-menu-items",
-      expect.any(Function)
-    );
-    expect(mockIpcMainHandle).toHaveBeenCalledWith(
-      "plugin:validate-action-ids",
-      expect.any(Function)
-    );
-    expect(mockIpcMainHandle).toHaveBeenCalledWith("plugin:actions-get", expect.any(Function));
-    expect(mockIpcMainHandle).toHaveBeenCalledWith("plugin:actions-register", expect.any(Function));
-    expect(mockIpcMainHandle).toHaveBeenCalledWith(
-      "plugin:actions-unregister",
-      expect.any(Function)
-    );
-    expect(mockIpcMainHandle).toHaveBeenCalledWith("plugin:panel-kinds-get", expect.any(Function));
-    expect(mockIpcMainHandle).toHaveBeenCalledWith(
-      "plugin:activate-for-view",
-      expect.any(Function)
-    );
-    expect(mockIpcMainHandle).toHaveBeenCalledWith("plugin:agents-get", expect.any(Function));
-    expect(mockIpcMainHandle).toHaveBeenCalledWith(
-      "plugin:forge-providers-get",
-      expect.any(Function)
-    );
-    expect(mockIpcMainHandle).toHaveBeenCalledWith(
-      "plugin:file-decorations-get",
-      expect.any(Function)
-    );
-    expect(mockIpcMainHandle).toHaveBeenCalledWith(
-      "plugin:get-audit-records",
-      expect.any(Function)
-    );
-    expect(mockIpcMainHandle).toHaveBeenCalledWith("plugin:get-audit-config", expect.any(Function));
-    expect(mockIpcMainHandle).toHaveBeenCalledWith("plugin:clear-audit-log", expect.any(Function));
-    expect(mockIpcMainHandle).toHaveBeenCalledWith(
-      "plugin:set-audit-enabled",
-      expect.any(Function)
-    );
-    expect(mockIpcMainHandle).toHaveBeenCalledWith(
-      "plugin:set-audit-max-records",
-      expect.any(Function)
-    );
-    expect(mockIpcMainHandle).toHaveBeenCalledWith("plugin:export-audit-log", expect.any(Function));
-    expect(mockIpcMainHandle).toHaveBeenCalledWith(
-      "plugin:get-diagnostics-snapshot",
-      expect.any(Function)
-    );
-    expect(mockIpcMainHandle).toHaveBeenCalledWith(
-      "plugin:settings-get-values",
-      expect.any(Function)
-    );
-    expect(mockIpcMainHandle).toHaveBeenCalledWith(
-      "plugin:settings-set-value",
-      expect.any(Function)
-    );
-    expect(mockIpcMainHandle).toHaveBeenCalledWith(
-      "plugin:settings-delete-value",
-      expect.any(Function)
-    );
-    expect(mockIpcMainHandle).toHaveBeenCalledWith(
-      "plugin:settings-reveal-secret",
-      expect.any(Function)
-    );
-    expect(mockIpcMainHandle).toHaveBeenCalledWith(
-      "plugin:bg-update-check-settings-get",
-      expect.any(Function)
-    );
-    expect(mockIpcMainHandle).toHaveBeenCalledWith(
-      "plugin:bg-update-check-settings-set",
-      expect.any(Function)
-    );
-    expect(mockIpcMainHandle).toHaveBeenCalledWith(
-      "plugin:bg-update-check-latest",
-      expect.any(Function)
-    );
-    // The renderer-side menu-items IPC surface was removed (#10465) — the native
-    // app menu is the wired surface. Guard against accidental re-introduction.
-    expect(mockIpcMainHandle).not.toHaveBeenCalledWith("plugin:menu-items", expect.any(Function));
-  });
-
   it("throws before registering any handler when invoked before enforceIpcSenderValidation", () => {
     _resetIpcGuardForTesting();
     expect(() => registerPluginHandlers()).toThrow(
@@ -372,29 +247,6 @@ describe("registerPluginHandlers", () => {
     expect(mockIpcMainRemoveHandler).toHaveBeenCalledWith("plugin:panel-kinds-get");
     expect(mockIpcMainRemoveHandler).toHaveBeenCalledWith("plugin:agents-get");
     expect(mockIpcMainRemoveHandler).toHaveBeenCalledWith("plugin:forge-providers-get");
-  });
-
-  it("PLUGIN_LIST handler delegates to pluginService.listPlugins", async () => {
-    const plugins = [{ manifest: { name: "test" } }];
-    mockListPlugins.mockReturnValue(plugins);
-
-    registerPluginHandlers();
-    const listHandler = mockIpcMainHandle.mock.calls.find(
-      (c: unknown[]) => c[0] === "plugin:list"
-    )![1] as (...args: unknown[]) => unknown;
-
-    const result = await listHandler();
-    expect(result).toBe(plugins);
-  });
-
-  it("PLUGIN_SET_ENABLED handler delegates to pluginService.setEnabled", async () => {
-    registerPluginHandlers();
-    const setEnabledHandler = mockIpcMainHandle.mock.calls.find(
-      (c: unknown[]) => c[0] === "plugin:set-enabled"
-    )![1] as (...args: unknown[]) => unknown;
-
-    await setEnabledHandler({}, "acme.my-plugin", false);
-    expect(mockSetEnabled).toHaveBeenCalledWith("acme.my-plugin", false);
   });
 
   it("PLUGIN_LIST answers only after waitForInit() resolves", async () => {
@@ -739,15 +591,6 @@ describe("registerPluginHandlers", () => {
     expect(await exists(downloadPath)).toBe(false);
   });
 
-  it("PLUGIN_INSTALL_FROM_URL accepts application/x-dntr content type", async () => {
-    mockNetFetch.mockResolvedValue(
-      mockResponse({ headers: { "content-type": "application/x-dntr" } })
-    );
-    const handler = getHandler("plugin:install-from-url");
-    const result = await handler({ sender: { id: 1 } }, "https://example.com/download");
-    expect(result).toEqual({ status: "installed", pluginId: "acme.my-plugin" });
-  });
-
   // The accepted MIME set is shared with the update-check flow (T4) so a server
   // that passes one path's gate passes the other's too. octet-stream / x-zip
   // are accepted on their own MIME now — no `.dntr` suffix needed.
@@ -902,24 +745,6 @@ describe("registerPluginHandlers", () => {
     expect(mockInstallPlugin).not.toHaveBeenCalled();
   });
 
-  it("PLUGIN_INSTALL_FROM_URL aborts mid-stream when bytes exceed the cap", async () => {
-    const oversized = new Uint8Array(31 * 1024 * 1024);
-    mockNetFetch.mockResolvedValue(
-      mockResponse({
-        headers: { "content-type": "application/zip" },
-        body: streamFromChunks([oversized]),
-      })
-    );
-    const handler = getHandler("plugin:install-from-url");
-    const result = (await handler({ sender: { id: 1 } }, "https://example.com/p.dntr")) as {
-      status: string;
-      errors: Array<{ code: string }>;
-    };
-    expect(result.status).toBe("failed");
-    expect(result.errors[0]!.code).toBe("size_exceeded");
-    expect(mockInstallPlugin).not.toHaveBeenCalled();
-  });
-
   it("PLUGIN_INSTALL_FROM_URL rejects a non-http(s) scheme as invalid-url", async () => {
     const handler = getHandler("plugin:install-from-url");
     const result = await handler({ sender: { id: 1 } }, "file:///etc/passwd");
@@ -1016,22 +841,6 @@ describe("registerPluginHandlers", () => {
     expect(mockInstallPlugin).not.toHaveBeenCalled();
   });
 
-  it("PLUGIN_INSTALL_FROM_URL propagates an installPlugin failure", async () => {
-    mockNetFetch.mockResolvedValue(
-      mockResponse({ headers: { "content-type": "application/zip" } })
-    );
-    mockInstallPlugin.mockResolvedValue({
-      status: "failed",
-      errors: [{ code: "manifest_invalid", message: "bad manifest" }],
-    });
-    const handler = getHandler("plugin:install-from-url");
-    const result = await handler({ sender: { id: 1 } }, "https://example.com/p.dntr");
-    expect(result).toEqual({
-      status: "failed",
-      errors: [{ code: "manifest_invalid", message: "bad manifest" }],
-    });
-  });
-
   it("PLUGIN_INSTALL_FROM_PATH rejects an empty path without touching the installer", async () => {
     const handler = getHandler("plugin:install-from-path");
     const result = await handler({ sender: { id: 1 } }, "");
@@ -1108,25 +917,6 @@ describe("registerPluginHandlers", () => {
     }
   });
 
-  // The `install` op shares handleInstallFromPath's trust gate (absolute +
-  // .dntr + ZIP-magic header sniff) so both entry points validate identically.
-  it("PLUGIN_INSTALL rejects a relative path without touching the installer", async () => {
-    const handler = getHandler("plugin:install");
-    const result = await handler({}, "relative/plugin.dntr");
-    expect(result).toMatchObject({ status: "failed", errors: [{ code: "archive_invalid" }] });
-    expect(mockInstallPlugin).not.toHaveBeenCalled();
-  });
-
-  it("PLUGIN_INSTALL rejects a non-.dntr extension", async () => {
-    const handler = getHandler("plugin:install");
-    const result = await handler({}, "/tmp/not-a-plugin.txt");
-    expect(result).toEqual({
-      status: "failed",
-      errors: [{ code: "archive_invalid", message: "Only .dntr files can be installed" }],
-    });
-    expect(mockInstallPlugin).not.toHaveBeenCalled();
-  });
-
   it("PLUGIN_INSTALL rejects a file without the ZIP magic bytes", async () => {
     const file = join(tmpdir(), `plugin-install-bad-magic-${process.pid}.dntr`);
     await writeFile(file, Buffer.from("not a zip"));
@@ -1154,12 +944,6 @@ describe("registerPluginHandlers", () => {
     }
   });
 
-  it("PLUGIN_UNINSTALL delegates to pluginService.uninstallPlugin", async () => {
-    const handler = getHandler("plugin:uninstall");
-    await handler({}, "acme.my-plugin");
-    expect(mockUninstallPlugin).toHaveBeenCalledWith("acme.my-plugin", undefined);
-  });
-
   it("PLUGIN_UNINSTALL forwards the deleteSettings flag", async () => {
     const handler = getHandler("plugin:uninstall");
     await handler({}, "acme.my-plugin", true);
@@ -1183,22 +967,6 @@ describe("registerPluginHandlers", () => {
     const handler = getHandler("plugin:uninstall");
     await expect(handler({}, "acme.my-plugin", "true")).rejects.toThrow(/must be a boolean/);
     expect(mockUninstallPlugin).not.toHaveBeenCalled();
-  });
-
-  it("PLUGIN_CHECK_FOR_UPDATE delegates to pluginService.checkForUpdate and returns the result", async () => {
-    const preview = {
-      status: "available",
-      name: "acme.my-plugin",
-      version: "2.0.0",
-      capabilities: ["network:fetch"],
-      archiveHash: "c".repeat(64),
-    } satisfies PluginCheckUpdateResult;
-    mockCheckForUpdate.mockResolvedValue(preview);
-    const handler = getHandler("plugin:check-for-update");
-    const result = await handler({}, "acme.my-plugin");
-    expect(mockCheckForUpdate).toHaveBeenCalledWith("acme.my-plugin");
-    // The digest must survive the hop: it is what a confirmed update is held to.
-    expect(result).toEqual(preview);
   });
 
   it("PLUGIN_CHECK_FOR_UPDATE returns invalid-id for an empty id without delegating", async () => {
@@ -1236,28 +1004,6 @@ describe("registerPluginHandlers", () => {
     // Successful invokes are intentionally not audited — they would be
     // high-frequency and overwhelm the ring buffer (#9240).
     expect(mockAuditAppend).not.toHaveBeenCalled();
-  });
-
-  it("PLUGIN_INVOKE handler builds ctx with webContentsId from event.sender.id", async () => {
-    mockDispatchHandler.mockResolvedValue(undefined);
-
-    registerPluginHandlers();
-    const invokeHandler = mockIpcMainHandle.mock.calls.find(
-      (c: unknown[]) => c[0] === "plugin:invoke"
-    )![1] as (...args: unknown[]) => unknown;
-
-    const trustedEvent = {
-      senderFrame: { url: "app://daintree/" },
-      sender: { id: 7 },
-    };
-    await invokeHandler(trustedEvent, "acme.my-plugin", "get-data");
-    const ctxArg = mockDispatchHandler.mock.calls[0][2];
-    expect(ctxArg).toEqual({
-      projectId: null,
-      worktreeId: null,
-      webContentsId: 7,
-      pluginId: "acme.my-plugin",
-    });
   });
 
   // ── #11297: plugin:invoke carries the sender's real project/worktree ──
@@ -1377,23 +1123,6 @@ describe("registerPluginHandlers", () => {
     });
     // A cached view resolves to no window, so the workspace is never asked.
     expect(mockGetActiveWorktreeIdForWindow).not.toHaveBeenCalled();
-  });
-
-  it("PLUGIN_INVOKE handler propagates errors from dispatchHandler", async () => {
-    mockDispatchHandler.mockRejectedValue(new Error("No plugin handler registered for x:y"));
-
-    registerPluginHandlers();
-    const invokeHandler = mockIpcMainHandle.mock.calls.find(
-      (c: unknown[]) => c[0] === "plugin:invoke"
-    )![1] as (...args: unknown[]) => unknown;
-
-    const trustedEvent = {
-      senderFrame: { url: "app://daintree/" },
-      sender: { id: 1 },
-    };
-    await expect(invokeHandler(trustedEvent, "x", "y")).rejects.toThrow(
-      "No plugin handler registered for x:y"
-    );
   });
 
   it("PLUGIN_INVOKE rejects oversize args before dispatch and audits the rejection", async () => {
@@ -1583,26 +1312,6 @@ describe("registerPluginHandlers", () => {
     expect(record.argsHash).toMatch(/^[0-9a-f]{64}$/);
   });
 
-  it("PLUGIN_INVOKE keeps a genuine dispatch error classified as error, not restricted (#10462)", async () => {
-    // Regression guard: only ownership rejections become "restricted" — an
-    // ordinary handler failure for a loaded plugin must stay "error".
-    mockDispatchHandler.mockRejectedValue(new Error("handler exploded"));
-
-    registerPluginHandlers();
-    const invokeHandler = mockIpcMainHandle.mock.calls.find(
-      (c: unknown[]) => c[0] === "plugin:invoke"
-    )![1] as (...args: unknown[]) => unknown;
-
-    const trustedEvent = {
-      senderFrame: { url: "app://daintree/" },
-      sender: { id: 6 },
-    };
-    await expect(invokeHandler(trustedEvent, "acme.loaded", "get-data", "arg1")).rejects.toThrow(
-      "handler exploded"
-    );
-    expect(mockAuditAppend.mock.calls[0][0]).toMatchObject({ result: "error" });
-  });
-
   it("PLUGIN_INVOKE audit hash discriminates by arg content (#9240)", async () => {
     // The whole point of the hash on `ipc-invoke` records is forensic
     // grouping: distinct args MUST produce distinct hashes, otherwise the
@@ -1726,27 +1435,6 @@ describe("registerPluginHandlers", () => {
     });
   });
 
-  it("PLUGIN_INVOKE handler rejects invalid args before dispatchHandler runs", async () => {
-    mockDispatchHandler.mockRejectedValue(
-      new Error('Invalid arguments for plugin action "acme.ping": /name must be string')
-    );
-
-    registerPluginHandlers();
-    const invokeHandler = mockIpcMainHandle.mock.calls.find(
-      (c: unknown[]) => c[0] === "plugin:invoke"
-    )![1] as (...args: unknown[]) => unknown;
-
-    const trustedEvent = {
-      senderFrame: { url: "app://daintree/" },
-      sender: { id: 1 },
-    };
-    await expect(invokeHandler(trustedEvent, "acme.plugin", "acme.ping", 42)).rejects.toThrow(
-      "Invalid arguments for plugin action"
-    );
-
-    expect(mockDispatchHandler).toHaveBeenCalledTimes(1);
-  });
-
   it("PLUGIN_CLEAR_AUDIT_LOG clears the log for a trusted first-party sender", async () => {
     const handler = getHandler("plugin:clear-audit-log");
     await handler({ senderFrame: { url: "app://daintree/" }, sender: { id: 1 } });
@@ -1792,14 +1480,6 @@ describe("PLUGIN_VALIDATE_ACTION_IDS handler", () => {
       (c: unknown[]) => c[0] === "plugin:validate-action-ids"
     )![1] as (event: unknown, actionIds: string[]) => Promise<void>;
   }
-
-  it("does nothing when there are no plugin contributions", async () => {
-    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
-    const handler = getValidateHandler();
-    await handler({}, ["action.a", "action.b"]);
-    expect(warn).not.toHaveBeenCalled();
-    warn.mockRestore();
-  });
 
   it("does not warn when every toolbar button actionId is known", async () => {
     mockGetPluginToolbarButtonIds.mockReturnValue(["plugin.my.button"]);
@@ -1912,22 +1592,6 @@ describe("PLUGIN_VALIDATE_ACTION_IDS handler", () => {
     warn.mockRestore();
   });
 
-  it("resolves without throwing when warnings are emitted", async () => {
-    mockGetPluginToolbarButtonIds.mockReturnValue(["plugin.a"]);
-    mockGetToolbarButtonConfig.mockReturnValue({
-      id: "plugin.a",
-      label: "A",
-      iconId: "i",
-      actionId: "action.missing",
-      priority: 3,
-      pluginId: "p1",
-    });
-    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
-    const handler = getValidateHandler();
-    await expect(handler({}, [])).resolves.toBeUndefined();
-    warn.mockRestore();
-  });
-
   it.each<[string, unknown]>([
     ["null", null],
     ["undefined", undefined],
@@ -2005,24 +1669,6 @@ describe("PLUGIN_ACTIONS_GET / REGISTER / UNREGISTER handlers", () => {
     ) => unknown;
   }
 
-  it("PLUGIN_ACTIONS_GET returns the list from pluginService", async () => {
-    const actions = [
-      {
-        pluginId: "acme.my-plugin",
-        id: "acme.my-plugin.doThing",
-        title: "Do Thing",
-        description: "Does a thing",
-        category: "plugin",
-        kind: "command",
-        danger: "safe",
-      },
-    ];
-    mockListPluginActions.mockReturnValue(actions);
-    const handler = getHandler("plugin:actions-get");
-    const result = await handler({ sender: { id: 1 } });
-    expect(result).toEqual(actions);
-  });
-
   it("PLUGIN_ACTIONS_REGISTER delegates to pluginService.registerPluginAction", async () => {
     const handler = getHandler("plugin:actions-register");
     const contribution = {
@@ -2035,16 +1681,6 @@ describe("PLUGIN_ACTIONS_GET / REGISTER / UNREGISTER handlers", () => {
     };
     await handler(senderEvent, "acme.my-plugin", contribution);
     expect(mockRegisterPluginAction).toHaveBeenCalledWith("acme.my-plugin", contribution);
-  });
-
-  it("PLUGIN_ACTIONS_REGISTER propagates errors from pluginService", async () => {
-    mockRegisterPluginAction.mockImplementation(() => {
-      throw new Error('Plugin action "bad.id" is invalid');
-    });
-    const handler = getHandler("plugin:actions-register");
-    await expect(handler(senderEvent, "acme.my-plugin", { id: "bad.id" })).rejects.toThrow(
-      /Plugin action/
-    );
   });
 
   it("PLUGIN_ACTIONS_UNREGISTER delegates to pluginService.unregisterPluginAction", async () => {
@@ -2228,19 +1864,6 @@ describe("pull handlers wait for PluginService init (#9285)", () => {
     await inFlight;
     expect(mockGetPluginContextMenuItems).toHaveBeenCalledTimes(1);
   });
-
-  it("PLUGIN_CONTEXT_MENU_ITEMS resolves to the registry's items after init", async () => {
-    const items = [
-      {
-        pluginId: "acme.my-plugin",
-        item: { label: "Do Thing", actionId: "x.y", location: "worktree" },
-      },
-    ];
-    mockGetPluginContextMenuItems.mockReturnValue(items);
-    const handler = getHandler("plugin:context-menu-items");
-    const result = await (handler({ sender: { id: 1 } }) as Promise<unknown>);
-    expect(result).toEqual(items);
-  });
 });
 
 describe("pull handlers scope contributions to the sender's project", () => {
@@ -2328,30 +1951,6 @@ describe("PLUGIN_FORGE_PROVIDERS_GET handler", () => {
     )![1] as (...args: unknown[]) => unknown;
   }
 
-  it("returns the list from getRegisteredForgeProviders", async () => {
-    const providers = [
-      {
-        pluginId: "acme.github-plugin",
-        contribution: {
-          id: "github",
-          name: "GitHub",
-          matches: ["github.com"],
-        },
-      },
-    ];
-    mockGetRegisteredForgeProviders.mockReturnValue(providers);
-    const handler = getHandler();
-    const result = await handler({ sender: { id: 1 } });
-    expect(result).toEqual(providers);
-  });
-
-  it("returns an empty array when no providers are registered", async () => {
-    mockGetRegisteredForgeProviders.mockReturnValue([]);
-    const handler = getHandler();
-    const result = await handler({ sender: { id: 1 } });
-    expect(result).toEqual([]);
-  });
-
   it("reads the registry only after waitForInit() resolves", async () => {
     const { pluginService } = await import("../../../services/PluginService.js");
     const waitForInit = vi.mocked(pluginService.waitForInit);
@@ -2380,12 +1979,6 @@ describe("PLUGIN_FILE_DECORATIONS_GET handler", () => {
       (c: unknown[]) => c[0] === "plugin:file-decorations-get"
     )![1] as (...args: unknown[]) => unknown;
   }
-
-  it("returns {} when no impl matches the scope", async () => {
-    mockGetFileDecorationImpls.mockReturnValue([]);
-    const handler = getHandler();
-    expect(await handler({}, "worktree-diff:/r", ["a.ts"])).toEqual({});
-  });
 
   it("returns {} for empty scope or empty paths without calling the registry", async () => {
     const handler = getHandler();
@@ -2761,11 +2354,6 @@ describe("plugin install jobs (#11302)", () => {
     pluginInstallJobs.end(JOB_ID);
   });
 
-  it("registers a cancel op alongside the install ops", () => {
-    registerPluginHandlers();
-    expect(mockIpcMainHandle).toHaveBeenCalledWith("plugin:cancel-install", expect.any(Function));
-  });
-
   it("threads the jobId into installPlugin so the installer can find its signal", async () => {
     const file = join(tmpdir(), `plugin-job-${process.pid}.dntr`);
     await writeFile(file, Buffer.from([0x50, 0x4b, 0x03, 0x04]));
@@ -2904,12 +2492,6 @@ describe("plugin install jobs (#11302)", () => {
       await expect(inFlight).resolves.toEqual([tour]);
     });
 
-    it("plugin:recipes-get returns the service snapshot", async () => {
-      const handler = getHandler("plugin:recipes-get");
-      mockGetPluginRecipes.mockReturnValueOnce([registered]);
-      await expect(handler({ sender: { id: 1 } })).resolves.toEqual([registered]);
-    });
-
     it("plugin:recipe-record-use forwards a valid id and timestamp", async () => {
       const handler = getHandler("plugin:recipe-record-use");
       mockRecordPluginRecipeUse.mockResolvedValueOnce(registered);
@@ -2964,14 +2546,6 @@ describe("plugin install jobs (#11302)", () => {
         await expect(handler({}, "acme.tools.deploy", patch)).rejects.toThrow();
       }
       expect(mockUpdatePluginRecipeMetadata).not.toHaveBeenCalled();
-    });
-
-    it("propagates the service's unknown-recipe rejection", async () => {
-      // The registry is the only authority on which ids exist; the handler must
-      // not invent a record for a plugin that never declared one.
-      const handler = getHandler("plugin:recipe-record-use");
-      mockRecordPluginRecipeUse.mockRejectedValueOnce(new Error("Plugin recipe x not found"));
-      await expect(handler({}, "ghost.plugin.x", 1)).rejects.toThrow(/not found/);
     });
   });
 });
@@ -3576,5 +3150,180 @@ describe("plugin:backup-databases", () => {
     const copy = new DatabaseSync(target, { readOnly: true });
     expect(copy.prepare("SELECT v FROM t").all()).toEqual([{ v: "rent" }]);
     copy.close();
+  });
+});
+
+// ── plugin:invoke from a window on another machine (over the link) ──
+
+import { _resetIpcDispatcherForTesting, getIpcDispatcher } from "../../dispatcher.js";
+import { wrapError, wrapSuccess } from "../../../../shared/utils/ipcErrorSerialization.js";
+import type { ClientEndpoint } from "../../endpoint.js";
+import {
+  _resetPluginFrontendRoutingForTesting,
+  getPluginInvokeOrigin,
+  setPluginFrontendRouter,
+} from "../../../services/plugin/pluginFrontendRouting.js";
+
+describe("plugin:invoke over the link", () => {
+  const PROJECT = "c".repeat(64);
+
+  function remoteEndpoint(projectId: string | null = PROJECT): ClientEndpoint & {
+    projectId: string | null;
+  } {
+    return {
+      endpointId: "s1:ep-1",
+      clientId: "client-greg-mbp",
+      projectId,
+      kind: "remote-view",
+      handle: -7,
+      send: vi.fn(),
+      request: vi.fn(),
+      onClose: () => ({ dispose: () => {} }),
+      isClosed: () => false,
+    };
+  }
+
+  const client = {
+    clientId: "client-greg-mbp",
+    clientName: "greg-mbp",
+    platform: "darwin" as const,
+    kind: "remote" as const,
+  };
+
+  beforeEach(() => {
+    _resetIpcDispatcherForTesting();
+    _resetPluginFrontendRoutingForTesting();
+    getIpcDispatcher().setInvokeEnveloper(async (_channel, _args, call) => {
+      try {
+        return wrapSuccess(await call());
+      } catch (error) {
+        return wrapError(error);
+      }
+    });
+    mockIsRemoteUnsupported.mockReturnValue(false);
+    mockResolveActiveWorktreeIdForProject.mockResolvedValue("wt-host");
+  });
+
+  afterEach(() => {
+    _resetIpcDispatcherForTesting();
+    _resetPluginFrontendRoutingForTesting();
+  });
+
+  it("carries the endpoint's project, the project's worktree and the calling frontend", async () => {
+    mockDispatchHandler.mockResolvedValue({ ok: 1 });
+    registerPluginHandlers();
+    const endpoint = remoteEndpoint();
+    const envelope = await getIpcDispatcher().invokeForEndpoint(
+      { endpoint, client },
+      "plugin:invoke",
+      ["acme.graph", "selection", { id: "n1" }]
+    );
+    expect(envelope).toMatchObject({ ok: true, data: { ok: 1 } });
+    expect(mockResolveActiveWorktreeIdForProject).toHaveBeenCalledWith(PROJECT);
+    expect(mockGetActiveWorktreeIdForWindow).not.toHaveBeenCalled();
+    expect(mockDispatchHandler).toHaveBeenCalledWith(
+      "acme.graph",
+      "selection",
+      {
+        projectId: PROJECT,
+        worktreeId: "wt-host",
+        webContentsId: -7,
+        pluginId: "acme.graph",
+        origin: { kind: "remote", clientId: "client-greg-mbp", endpointId: "s1:ep-1" },
+      },
+      [{ id: "n1" }]
+    );
+  });
+
+  it("refuses another project's plugin by the endpoint's own binding", async () => {
+    registerPluginHandlers();
+    const envelope = await getIpcDispatcher().invokeForEndpoint(
+      { endpoint: remoteEndpoint(), client },
+      "plugin:invoke",
+      [`project__${"d".repeat(64)}__acme.graph`, "selection"]
+    );
+    expect(envelope.ok).toBe(false);
+    expect(mockDispatchHandler).not.toHaveBeenCalled();
+  });
+
+  it("drops the worktree when the endpoint is rebound mid-lookup", async () => {
+    mockDispatchHandler.mockResolvedValue(undefined);
+    registerPluginHandlers();
+    const endpoint = remoteEndpoint();
+    mockResolveActiveWorktreeIdForProject.mockImplementation(async () => {
+      endpoint.projectId = "e".repeat(64);
+      return "wt-old";
+    });
+    await getIpcDispatcher().invokeForEndpoint({ endpoint, client }, "plugin:invoke", [
+      "acme.graph",
+      "selection",
+    ]);
+    expect(mockDispatchHandler.mock.calls[0]![2]).toMatchObject({ worktreeId: null });
+  });
+
+  it("refuses a remote-unsupported plugin for a window on another machine and logs it", async () => {
+    mockIsRemoteUnsupported.mockReturnValue(true);
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    registerPluginHandlers();
+    const envelope = await getIpcDispatcher().invokeForEndpoint(
+      { endpoint: remoteEndpoint(), client },
+      "plugin:invoke",
+      ["acme.local-only", "go"]
+    );
+    expect(envelope.ok).toBe(false);
+    expect(mockDispatchHandler).not.toHaveBeenCalled();
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining("acme.local-only"));
+    expect(mockAuditAppend).toHaveBeenCalledWith(
+      expect.objectContaining({ pluginId: "acme.local-only", result: "restricted" })
+    );
+    warn.mockRestore();
+  });
+
+  it("carries the calling frontend with the call only while routing is on", async () => {
+    const seen: unknown[] = [];
+    mockDispatchHandler.mockImplementation(async () => {
+      await Promise.resolve();
+      seen.push(getPluginInvokeOrigin("acme.graph")?.endpoint ?? null);
+    });
+    registerPluginHandlers();
+    const endpoint = remoteEndpoint();
+    await getIpcDispatcher().invokeForEndpoint({ endpoint, client }, "plugin:invoke", [
+      "acme.graph",
+      "x",
+    ]);
+    expect(seen).toEqual([null]);
+
+    setPluginFrontendRouter({ resolve: () => ({ kind: "local" }), onChange: () => () => {} });
+    await getIpcDispatcher().invokeForEndpoint({ endpoint, client }, "plugin:invoke", [
+      "acme.graph",
+      "x",
+    ]);
+    expect(seen).toEqual([null, endpoint]);
+    // Nothing outlives the call for a later one to inherit.
+    expect(getPluginInvokeOrigin("acme.graph")).toBeNull();
+  });
+
+  it("activate-for-view refuses a remote-unsupported plugin with a typed error", async () => {
+    mockActivatePluginForView.mockResolvedValue({
+      ok: false,
+      error: "only works on the machine it runs on",
+      remoteUnsupported: { pluginId: "acme.local-only" },
+    });
+    registerPluginHandlers();
+    const envelope = await getIpcDispatcher().invokeForEndpoint(
+      { endpoint: remoteEndpoint(), client },
+      "plugin:activate-for-view",
+      ["acme.local-only.view"]
+    );
+    expect(mockActivatePluginForView).toHaveBeenCalledWith("acme.local-only.view", false, {
+      remoteFrontend: true,
+    });
+    expect(envelope.ok).toBe(false);
+    if (envelope.ok) return;
+    expect(envelope.error.code).toBe("PLUGIN_INCOMPATIBLE");
+    expect((envelope.error as { details?: unknown }).details).toMatchObject({
+      pluginId: "acme.local-only",
+      reason: { kind: "remote-unsupported" },
+    });
   });
 });

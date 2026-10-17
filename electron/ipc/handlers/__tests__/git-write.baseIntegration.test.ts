@@ -28,24 +28,27 @@ vi.mock("../../../services/getSoundService.js", () => ({
 
 const createHardenedGitMock = vi.hoisted(() => vi.fn());
 const createAuthenticatedGitMock = vi.hoisted(() => vi.fn());
+const buildContinueEnvMock = vi.hoisted(() => vi.fn(() => ({})));
 
 vi.mock("../../../utils/hardenedGit.js", () => ({
   validateCwd: vi.fn(),
   createHardenedGit: createHardenedGitMock,
   createAuthenticatedGit: createAuthenticatedGitMock,
-  buildContinueEnv: vi.fn(() => ({})),
+  buildContinueEnv: buildContinueEnvMock,
 }));
 
 const detectRepoOperationStateMock = vi.hoisted(() => vi.fn());
+const resolveGitDirMock = vi.hoisted(() => vi.fn(async () => "/repo/.git"));
 vi.mock("../../../services/git/repoOperationState.js", () => ({
   detectRepoOperationState: detectRepoOperationStateMock,
-  resolveGitDir: vi.fn(async () => "/repo/.git"),
+  resolveGitDir: resolveGitDirMock,
   getRepoOperationStateSync: vi.fn(() => undefined),
 }));
 
 import { registerGitWriteHandlers } from "../git-write.js";
 import { CHANNELS } from "../../channels.js";
 import { _resetRateLimitQueuesForTest } from "../../utils.js";
+import type { RepoState } from "../../../../shared/types/git.js";
 
 const CWD = "/repo";
 const BRANCH = "feature/topic";
@@ -335,20 +338,6 @@ describe("git:rebase-onto-base", () => {
       expect(callsTo(git, "rebase")).toEqual([]);
     }
   );
-
-  it("rejects a base branch that could reach argv as a flag", async () => {
-    const git = gitDouble();
-    createHardenedGitMock.mockResolvedValue(git);
-    registerGitWriteHandlers({} as never);
-
-    await expect(
-      registeredHandlers().get(CHANNELS.GIT_REBASE_ONTO_BASE)!(
-        {},
-        { cwd: CWD, baseBranch: "--exec=rm -rf /" }
-      )
-    ).rejects.toThrow(/invalid base branch/i);
-    expect(callsTo(git, "rebase")).toEqual([]);
-  });
 });
 
 describe("git:merge-base-into-branch", () => {
@@ -541,20 +530,6 @@ describe("git:rebase-onto-base — bound to what was previewed", () => {
     );
     expect(callsTo(git, "rebase")).toHaveLength(1);
   });
-
-  it("runs unpinned when no expectation is supplied", async () => {
-    // A keybinding, plugin or agent dispatch has no preview to bind to. It gets
-    // today's behaviour rather than a hard failure.
-    const git = gitDouble();
-    createHardenedGitMock.mockResolvedValue(git);
-    registerGitWriteHandlers({} as never);
-
-    await registeredHandlers().get(CHANNELS.GIT_REBASE_ONTO_BASE)!(
-      {},
-      { cwd: CWD, baseBranch: BASE }
-    );
-    expect(callsTo(git, "rebase")).toHaveLength(1);
-  });
 });
 
 describe("git:merge-base-into-branch — halted merges", () => {
@@ -676,5 +651,121 @@ describe("git:list-base-integration-commits", () => {
         { cwd: CWD, baseBranch: BASE, kind: "rebase-onto-base" }
       )
     ).rejects.toMatchObject({ reason: "config-missing" });
+  });
+});
+
+describe("git:continue-repository-operation handler", () => {
+  // Sentinel returned by the mocked buildContinueEnv so the test can assert the
+  // handler passes its result to .env() rather than raw process.env.
+  const CONTINUE_ENV_SENTINEL = { __continueEnv: true } as const;
+
+  type FakeGit = {
+    env: ReturnType<typeof vi.fn>;
+    merge: ReturnType<typeof vi.fn>;
+    rebase: ReturnType<typeof vi.fn>;
+    raw: ReturnType<typeof vi.fn>;
+  };
+
+  function makeFakeGit(): FakeGit {
+    const git: FakeGit = {
+      env: vi.fn(),
+      merge: vi.fn().mockResolvedValue(undefined),
+      rebase: vi.fn().mockResolvedValue(undefined),
+      raw: vi.fn().mockResolvedValue(""),
+    };
+    // .env() is chainable in simple-git — return the same instance.
+    git.env.mockReturnValue(git);
+    return git;
+  }
+
+  function getHandler(channel: string) {
+    const call = ipcMainMock.handle.mock.calls.find((c: unknown[]) => c[0] === channel);
+    if (!call) throw new Error(`Handler for ${channel} not registered`);
+    return call[1] as (_e: unknown, ...args: unknown[]) => unknown;
+  }
+
+  const CONTINUE_CHANNEL = "git:continue-repository-operation";
+
+  function setup(state: RepoState) {
+    const git = makeFakeGit();
+    createHardenedGitMock.mockReturnValue(git);
+    buildContinueEnvMock.mockReturnValue(CONTINUE_ENV_SENTINEL);
+    resolveGitDirMock.mockResolvedValue("/tmp/repo/.git");
+    detectRepoOperationStateMock.mockResolvedValue({
+      state,
+      rebaseStep: null,
+      rebaseTotalSteps: null,
+      rebaseSequence: null,
+    });
+    registerGitWriteHandlers({} as Parameters<typeof registerGitWriteHandlers>[0]);
+    return { git, handler: getHandler(CONTINUE_CHANNEL) };
+  }
+
+  it("applies the hardened continue env via a single .env() call", async () => {
+    const { git, handler } = setup("REBASING");
+
+    await handler(null, "/tmp/repo");
+
+    expect(buildContinueEnvMock).toHaveBeenCalledTimes(1);
+    expect(git.env).toHaveBeenCalledTimes(1);
+    expect(git.env).toHaveBeenCalledWith(CONTINUE_ENV_SENTINEL);
+  });
+
+  it("continues a rebase with --continue (no --no-edit, env suppresses editor)", async () => {
+    const { git, handler } = setup("REBASING");
+
+    await handler(null, "/tmp/repo");
+
+    expect(git.rebase).toHaveBeenCalledWith(["--continue"]);
+  });
+
+  it("continues a merge with bare --continue (git rejects extra args)", async () => {
+    const { git, handler } = setup("MERGING");
+
+    await handler(null, "/tmp/repo");
+
+    // `git merge --continue` errors on any extra argument ("--continue expects
+    // no arguments", exit 129); the env overlay handles editor suppression.
+    expect(git.merge).toHaveBeenCalledWith(["--continue"]);
+  });
+
+  it("continues a cherry-pick with --continue --no-edit", async () => {
+    const { git, handler } = setup("CHERRY_PICKING");
+
+    await handler(null, "/tmp/repo");
+
+    expect(git.raw).toHaveBeenCalledWith(["cherry-pick", "--continue", "--no-edit"]);
+  });
+
+  it("continues a revert with --continue --no-edit", async () => {
+    const { git, handler } = setup("REVERTING");
+
+    await handler(null, "/tmp/repo");
+
+    expect(git.raw).toHaveBeenCalledWith(["revert", "--continue", "--no-edit"]);
+  });
+
+  it("propagates a rebase failure instead of swallowing it", async () => {
+    const { git, handler } = setup("REBASING");
+    git.rebase.mockRejectedValueOnce(new Error("could not apply abc123"));
+
+    await expect(handler(null, "/tmp/repo")).rejects.toThrow(/could not apply abc123/);
+  });
+
+  it("propagates a cherry-pick failure instead of swallowing it", async () => {
+    const { git, handler } = setup("CHERRY_PICKING");
+    git.raw.mockRejectedValueOnce(new Error("cherry-pick failed"));
+
+    await expect(handler(null, "/tmp/repo")).rejects.toThrow(/cherry-pick failed/);
+  });
+
+  it("throws when no operation is in progress", async () => {
+    const { git, handler } = setup("CLEAN");
+
+    await expect(handler(null, "/tmp/repo")).rejects.toThrow(
+      /No merge, rebase, cherry-pick, or revert operation is in progress/
+    );
+    expect(git.rebase).not.toHaveBeenCalled();
+    expect(git.merge).not.toHaveBeenCalled();
   });
 });

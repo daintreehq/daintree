@@ -2,17 +2,37 @@ import "./hybridInputShims";
 import { StrictMode, use, useState, type ReactNode } from "react";
 import { createRoot } from "react-dom/client";
 import { EditorState } from "@codemirror/state";
+import { EditorView } from "@codemirror/view";
 import { resolveAppTheme } from "@shared/theme/themes";
 import type { BuiltInAgentId } from "@shared/config/agentIds";
 import type { Project } from "@shared/types/project";
 import { applyAppThemeToRoot } from "@/theme/applyAppTheme";
 import { WorktreeStoreContext, WorktreeStoreProvider } from "@/contexts/WorktreeStoreContext";
 import { TooltipProvider } from "@/components/ui/tooltip";
+import { useAppThemeStore } from "@/store/appThemeStore";
 import { useProjectStore } from "@/store/projectStore";
 import { useTerminalInputStore } from "@/store/terminalInputStore";
 import { usePanelStore, useVoiceRecordingStore } from "@/store";
+import {
+  useTerminalColorSchemeStore,
+  selectEffectiveTheme,
+} from "@/store/terminalColorSchemeStore";
+import { cn } from "@/lib/utils";
 import { HybridInputBar } from "../HybridInputBar";
-import { DRAFTS, TILE_AGENTS, WIDTHS, resolveDraft, type DraftName } from "./hybridInputFixtures";
+import { insertFileAttachments } from "../fileAttachments";
+import { fileDropChipField, imageChipField } from "../inputEditorExtensions";
+import {
+  CHIP_ATTACHMENTS,
+  CHIP_DRAFT,
+  DRAFTS,
+  PANE_AGENTS,
+  PANE_TITLES,
+  TERMINAL_LINES,
+  TILE_AGENTS,
+  WIDTHS,
+  resolveDraft,
+  type DraftName,
+} from "./hybridInputFixtures";
 import "@/index.css";
 
 /**
@@ -39,6 +59,9 @@ import "@/index.css";
  *   ?case=ladder|growth|tiles       which arrangement to render
  *   ?draft=empty|short|reported|overflow   the seeded draft (ladder case)
  *   ?case=controls                  the control row at rest and disabled (the states spec hovers it)
+ *   ?case=panes|fleet               whole grid panes, one of them selected (the selection-states spec)
+ *   ?case=chips                     one composer carrying every chip kind (the chips spec attaches the files)
+ *   ?selected=N                     which pane of `panes`/`fleet` is the focused pane
  *   ?stash=1                        seed a stashed draft, adding the third trailing button
  */
 
@@ -53,6 +76,9 @@ const withStash = params.get("stash") === "1";
 const withVoice = params.get("voice") !== "0";
 
 applyAppThemeToRoot(document.documentElement, resolveAppTheme(themeId));
+// The composer paints from the terminal palette, which follows the app theme by
+// default. Without this every theme's composer wore Daintree's terminal colours.
+useAppThemeStore.setState({ selectedSchemeId: themeId });
 document.body.style.background = "var(--color-surface-canvas)";
 
 const PROJECT_ID = "preview-project";
@@ -77,7 +103,11 @@ useVoiceRecordingStore.setState({ isConfigured: withVoice });
 // In the app exactly one pane is focused, and the focused shell is the only one
 // wearing a ring — so the tile sheet gets one too. Seeded at module scope: a
 // store hook referenced inside a component body is a React Compiler error.
-usePanelStore.setState({ focusedId: "tile-9" });
+const selectedPane = Number(params.get("selected") ?? "1");
+usePanelStore.setState({
+  focusedId:
+    caseName === "panes" || caseName === "fleet" ? `${caseName}-${selectedPane}` : "tile-9",
+});
 
 /**
  * Seed one pane's draft, and optionally its stash, before the bar mounts.
@@ -155,6 +185,8 @@ const GROWTH_DRAFTS: DraftName[] = ["empty", "short", "reported", "overflow"];
 const SIDEBAR_WIDTHS = [380, 430] as const;
 const SIDEBAR_DRAFTS: DraftName[] = ["short", "reported", "sidebar"];
 const CONTROL_STATES = ["enabled", "disabled"] as const;
+const CHIPS_PANE = "chips";
+const CHIPS_WIDTH = 560;
 
 // Every pane the chosen case will mount, seeded here at module scope so no
 // component writes a store during render — a re-render would repeat the write
@@ -171,9 +203,21 @@ switch (caseName) {
   case "controls":
     CONTROL_STATES.forEach((state) => seedPane(`controls-${state}`, DRAFTS.short));
     break;
+  case "chips":
+    seedPane(CHIPS_PANE, CHIP_DRAFT);
+    break;
   case "tiles":
     TILE_AGENTS.forEach((_agent, i) => {
       seedPane(`tile-${i}`, i % 3 === 0 ? DRAFTS.short : DRAFTS.empty);
+    });
+    break;
+  case "panes":
+  case "fleet":
+    // Empty drafts throughout: the reported case is a row of untouched
+    // composers, all showing a placeholder, where nothing but the composer's
+    // own state can say which one is live.
+    PANE_AGENTS.slice(0, caseName === "panes" ? 3 : 6).forEach((_agent, i) => {
+      seedPane(`${caseName}-${i}`, DRAFTS.empty);
     });
     break;
   default: {
@@ -272,8 +316,149 @@ function Controls() {
   );
 }
 
+/**
+ * A grid pane as the composer actually sits in one: the pane's own frame
+ * (`terminal-selected` on the focused pane, exactly as `ContentPanel` resolves
+ * it), its title bar with the focus lift, a terminal body, then the composer.
+ * The body is a stand-in for xterm with a focus target inside it, so the spec
+ * can put the keyboard in the selected pane's terminal rather than in its
+ * composer — the state the report is about.
+ */
+function Pane({
+  prefix,
+  index,
+  agentId,
+}: {
+  prefix: string;
+  index: number;
+  agentId: BuiltInAgentId;
+}) {
+  const id = `${prefix}-${index}`;
+  const selected = index === selectedPane;
+  const theme = useTerminalColorSchemeStore(selectEffectiveTheme);
+  return (
+    <div
+      className={cn(
+        "flex min-w-0 flex-col overflow-hidden rounded-lg border bg-surface shadow-[var(--theme-shadow-ambient)]",
+        selected ? "terminal-selected" : "border-overlay"
+      )}
+      data-preview-pane={id}
+    >
+      <div
+        className={cn(
+          "flex h-8 shrink-0 items-center border-b border-divider px-3 text-xs text-text-secondary",
+          selected &&
+            "bg-[var(--panel-header-focus-bg,var(--color-overlay-medium))] text-text-primary"
+        )}
+      >
+        {PANE_TITLES[index % PANE_TITLES.length]}
+      </div>
+      <div
+        className="relative h-36 overflow-hidden px-3.5 py-2 font-mono text-xs leading-5"
+        style={{ background: theme.background, color: theme.foreground }}
+      >
+        {/* Focus lands on an invisible target, as xterm's does on its helper
+            textarea, so the body draws no ring the real terminal never shows. */}
+        <div
+          tabIndex={-1}
+          data-preview-terminal={id}
+          className="absolute top-0 left-0 size-0 opacity-0"
+        />
+        {TERMINAL_LINES.map((line, i) => (
+          <div key={i} className="truncate">
+            {line}
+          </div>
+        ))}
+      </div>
+      <Bar terminalId={id} agentId={agentId} />
+    </div>
+  );
+}
+
+/** The reported case: three agent panes side by side, every composer empty. */
+function Panes() {
+  return (
+    <div
+      className="grid w-fit gap-1.5 p-6"
+      style={{ gridTemplateColumns: "repeat(3, 440px)" }}
+      data-preview-case="panes"
+    >
+      {PANE_AGENTS.slice(0, 3).map((agent, i) => (
+        <Pane key={i} prefix="panes" index={i} agentId={agent} />
+      ))}
+    </div>
+  );
+}
+
+/** A denser fleet, two rows of three, where finding the live pane is the whole job. */
+function Fleet() {
+  return (
+    <div
+      className="grid w-fit gap-1.5 p-6"
+      style={{ gridTemplateColumns: "repeat(3, 340px)" }}
+      data-preview-case="fleet"
+    >
+      {PANE_AGENTS.map((agent, i) => (
+        <Pane key={i} prefix="fleet" index={i} agentId={agent} />
+      ))}
+    </div>
+  );
+}
+
+function chipsView(): EditorView {
+  const dom = document.querySelector(`[data-hybrid-input-root="${CHIPS_PANE}"] .cm-editor`);
+  const view = dom instanceof HTMLElement ? EditorView.findFromDOM(dom) : null;
+  if (!view) throw new Error("the chips composer has no editor");
+  return view;
+}
+
+/**
+ * Hooks the chips spec drives. `attach` puts the fixture files into the draft
+ * through `insertFileAttachments`, the function a drop, a paste and the attach
+ * picker all end in, so the chips are inserted exactly as the app inserts them.
+ * `caretAfter` parks the caret at a chip's trailing edge, which is where the
+ * spec presses Tab from to see where focus goes next.
+ */
+const chipsHooks = {
+  async attach(): Promise<number> {
+    const view = chipsView();
+    view.dispatch({ selection: { anchor: view.state.doc.length } });
+    await insertFileAttachments({ current: view }, view, CHIP_ATTACHMENTS, CWD);
+    return view.state.field(imageChipField).length + view.state.field(fileDropChipField).length;
+  },
+  caretAfter(kind: "image" | "file-drop"): void {
+    const view = chipsView();
+    const entry =
+      kind === "image"
+        ? view.state.field(imageChipField)[0]
+        : view.state.field(fileDropChipField)[0];
+    if (!entry) throw new Error(`no ${kind} chip to park the caret after`);
+    view.focus();
+    view.dispatch({ selection: { anchor: entry.to } });
+  },
+};
+Reflect.set(window, "__composerChips", chipsHooks);
+
+/**
+ * One composer at a working pane width, holding a draft with every chip kind.
+ * The space above it is room for the hover cards, which open upward, and the
+ * space to the right is room for one opened over the last chip on a line.
+ */
+function Chips() {
+  return (
+    <div className="flex w-fit flex-col px-8 pt-72 pr-48 pb-10" data-preview-case="chips">
+      <Column width={CHIPS_WIDTH} label={`${CHIPS_WIDTH}px · attachments`}>
+        <Bar terminalId={CHIPS_PANE} agentId="claude" />
+      </Column>
+    </div>
+  );
+}
+
 const CASES: Record<string, () => ReactNode> = {
+  chips: Chips,
   controls: Controls,
+  panes: Panes,
+  fleet: Fleet,
   ladder: Ladder,
   growth: Growth,
   sidebar: Sidebar,

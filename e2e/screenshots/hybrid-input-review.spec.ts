@@ -30,6 +30,12 @@
  * DAINTREE_SHOT_COMPOSER_CONTROLS instead; the two share an output directory, so
  * run one at a time.
  *
+ * A third test captures the composer's selection states across whole grid
+ * panes: no pane selected, the pane selected with the keyboard in its terminal,
+ * and the pane selected with the keyboard in its composer — plus the pointer
+ * over an unselected composer, so hover can be told from selection. Run it
+ * alone with DAINTREE_SHOT_COMPOSER_STATES.
+ *
  * Env knobs:
  *   DAINTREE_SHOT_HYBRIDINPUT  required — any truthy value runs the capture
  *   DAINTREE_SHOT_DIR          required — an ABSOLUTE output directory outside the repo.
@@ -44,14 +50,15 @@
  */
 
 import { test, expect, type Locator, type Page } from "@playwright/test";
-import { mkdirSync, readdirSync, realpathSync, rmSync } from "fs";
+import { mkdirSync, readdirSync, realpathSync, rmSync, writeFileSync } from "fs";
 import path from "path";
 import { createServer, type ViteDevServer } from "vite";
 import { WIDTHS, TILE_AGENTS } from "../../src/components/Terminal/__preview__/hybridInputFixtures";
 
 const LAYOUT_ENABLED = !!process.env.DAINTREE_SHOT_HYBRIDINPUT;
 const CONTROLS_ENABLED = !!process.env.DAINTREE_SHOT_COMPOSER_CONTROLS;
-const ENABLED = LAYOUT_ENABLED || CONTROLS_ENABLED;
+const STATES_ENABLED = !!process.env.DAINTREE_SHOT_COMPOSER_STATES;
+const ENABLED = LAYOUT_ENABLED || CONTROLS_ENABLED || STATES_ENABLED;
 const OUT_DIR = process.env.DAINTREE_SHOT_DIR ?? "";
 const THEMES = (process.env.DAINTREE_SHOT_THEMES ?? "daintree,bondi,namib")
   .split(",")
@@ -179,9 +186,17 @@ async function snap(target: Locator, file: string): Promise<string> {
 
 async function open(
   page: Page,
-  query: { case: string; theme: string; draft?: string; stash?: boolean; voice?: false }
+  query: {
+    case: string;
+    theme: string;
+    draft?: string;
+    stash?: boolean;
+    voice?: false;
+    selected?: number;
+  }
 ): Promise<Locator> {
   const params = new URLSearchParams({ case: query.case, theme: query.theme });
+  if (query.selected !== undefined) params.set("selected", String(query.selected));
   if (query.draft) params.set("draft", query.draft);
   if (query.stash) params.set("stash", "1");
   if (query.voice === false) params.set("voice", "0");
@@ -443,4 +458,147 @@ test("composer control row states", async ({ page }) => {
   expect(onDisk.length).toBe(written.length);
   expect(onDisk.length).toBe(THEMES.length * (2 + CONTROL_NAMES.length));
   console.log(`[composer-controls-shots] ${onDisk.length} PNGs in ${OUT_DIR}`);
+});
+
+type KeyboardIn = "terminal" | "composer";
+
+/**
+ * Where the keyboard is, proved from the DOM. A "selected, not focused" capture
+ * whose editor quietly kept focus photographs the focused state under the
+ * wrong name, and the two are exactly what this review compares.
+ */
+async function proveKeyboardIn(page: Page, paneId: string, where: KeyboardIn): Promise<void> {
+  const actual = await page.evaluate((id) => {
+    const active = document.activeElement;
+    if (!active) return "none";
+    if (active.closest(`[data-hybrid-input-root="${id}"] .cm-content`)) return "composer";
+    if (active.matches(`[data-preview-terminal="${id}"]`)) return "terminal";
+    return `elsewhere:${active.tagName.toLowerCase()}`;
+  }, paneId);
+  if (actual !== where) {
+    throw new Error(`${paneId}: keyboard is in ${actual}, wanted ${where} — refusing to write`);
+  }
+}
+
+/** Every shell's painted state, written beside the PNG so a reading can be checked against it. */
+async function shellSidecar(page: Page, file: string): Promise<void> {
+  const shells = await page.evaluate(() =>
+    Array.from(document.querySelectorAll<HTMLElement>("[data-hybrid-input-root]")).map((root) => {
+      const shell = root.querySelector<HTMLElement>(".group\\/shell");
+      const cs = shell ? getComputedStyle(shell) : null;
+      return {
+        id: root.getAttribute("data-hybrid-input-root"),
+        attrs: shell
+          ? Object.fromEntries(
+              Array.from(shell.attributes)
+                .filter((a) => a.name.startsWith("data-"))
+                .map((a) => [a.name, a.value])
+            )
+          : null,
+        borderColor: cs?.borderTopColor,
+        backgroundColor: cs?.backgroundColor,
+        boxShadow: cs?.boxShadow,
+        outline: cs ? `${cs.outlineStyle} ${cs.outlineWidth} ${cs.outlineColor}` : null,
+      };
+    })
+  );
+  writeFileSync(
+    path.join(OUT_DIR, file.replace(/\.png$/, ".json")),
+    JSON.stringify(shells, null, 2)
+  );
+}
+
+const STATE_CASES = [
+  { case: "panes", count: 3, selected: 1, hoverPane: 0 },
+  { case: "fleet", count: 6, selected: 4, hoverPane: 0 },
+] as const;
+
+test("composer selection states", async ({ page }) => {
+  test.info().annotations.push({
+    type: "conditional-skip",
+    description: "DAINTREE_SHOT_COMPOSER_STATES is required for the selection-state capture",
+  });
+  test.skip(!STATES_ENABLED, "set DAINTREE_SHOT_COMPOSER_STATES=1 to run the capture");
+  test.setTimeout(600_000);
+
+  await stubViteHmrClient(page);
+  const written: string[] = [];
+
+  for (const theme of THEMES) {
+    for (const spec of STATE_CASES) {
+      const sheet = await open(page, { case: spec.case, theme, selected: spec.selected });
+      await proveComposersMounted(page, spec.count);
+      await fitViewport(page, sheet);
+      const selectedId = `${spec.case}-${spec.selected}`;
+      const terminal = page.locator(`[data-preview-terminal="${selectedId}"]`);
+      const editor = page.locator(`[data-hybrid-input-root="${selectedId}"] .cm-content`);
+
+      // Selected, keyboard in the terminal: the state the report says reads
+      // exactly like every other composer.
+      await page.mouse.move(1, 1);
+      await terminal.focus();
+      await proveKeyboardIn(page, selectedId, "terminal");
+      let file = `${spec.case}--${theme}--selected.png`;
+      await shellSidecar(page, file);
+      written.push(await snap(sheet, file));
+
+      // The pointer over an unselected composer, with the selection unchanged:
+      // hover must never read as the selected state.
+      if (spec.case === "panes") {
+        const hoverShell = page.locator(
+          `[data-hybrid-input-root="${spec.case}-${spec.hoverPane}"] .cm-content`
+        );
+        await hoverShell.hover();
+        await page.waitForTimeout(120);
+        await proveKeyboardIn(page, selectedId, "terminal");
+        file = `${spec.case}--${theme}--hover.png`;
+        await shellSidecar(page, file);
+        written.push(await snap(sheet, file));
+        await page.mouse.move(1, 1);
+      }
+
+      // Selected and typing: the keyboard in the composer.
+      await editor.click();
+      await page.mouse.move(1, 1);
+      await page.waitForTimeout(120);
+      await proveKeyboardIn(page, selectedId, "composer");
+      file = `${spec.case}--${theme}--focused.png`;
+      await shellSidecar(page, file);
+      written.push(await snap(sheet, file));
+    }
+  }
+
+  // The two high-contrast modes, on the first theme only: both replace the
+  // palette's own mixes (system colours, or the stepped-up placeholder and
+  // doubled edges), so one palette shows them.
+  const contrastModes = [
+    { name: "contrast-more", media: { contrast: "more" as const } },
+    { name: "forced-colors", media: { forcedColors: "active" as const } },
+  ];
+  for (const mode of contrastModes) {
+    const theme = THEMES[0]!;
+    const sheet = await open(page, { case: "panes", theme, selected: 1 });
+    await page.emulateMedia(mode.media);
+    await proveComposersMounted(page, 3);
+    await fitViewport(page, sheet);
+    await page.mouse.move(1, 1);
+    await page.locator('[data-preview-terminal="panes-1"]').focus();
+    await proveKeyboardIn(page, "panes-1", "terminal");
+    let file = `panes--${theme}--${mode.name}--selected.png`;
+    await shellSidecar(page, file);
+    written.push(await snap(sheet, file));
+    await page.locator('[data-hybrid-input-root="panes-1"] .cm-content').click();
+    await page.mouse.move(1, 1);
+    await page.waitForTimeout(120);
+    await proveKeyboardIn(page, "panes-1", "composer");
+    file = `panes--${theme}--${mode.name}--focused.png`;
+    await shellSidecar(page, file);
+    written.push(await snap(sheet, file));
+    await page.emulateMedia({ contrast: null, forcedColors: null });
+  }
+
+  const onDisk = readdirSync(OUT_DIR).filter((f) => f.endsWith(".png"));
+  expect(onDisk.length).toBe(written.length);
+  expect(onDisk.length).toBe(THEMES.length * 5 + contrastModes.length * 2);
+  console.log(`[composer-states-shots] ${onDisk.length} PNGs in ${OUT_DIR}`);
 });

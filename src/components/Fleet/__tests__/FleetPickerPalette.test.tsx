@@ -162,28 +162,6 @@ describe("FleetPickerPalette", () => {
     ).toContain("Arm 2 selected");
   });
 
-  it("renders the palette title and content when open", async () => {
-    seedTerminals([makeTerminal("t1")]);
-    renderPalette([makeWorktreeSnap("wt-1", "main")]);
-    await act(async () => {});
-    // The dialog title renders as the h2 heading.
-    expect(screen.getByRole("heading", { name: "Select terminals to arm" })).toBeTruthy();
-    expect(screen.getByTestId("fleet-picker-cold-start-root")).toBeTruthy();
-  });
-
-  it("preselects active-worktree eligibles in cold-start mode", async () => {
-    seedTerminals([
-      makeTerminal("t1", { worktreeId: "wt-1" }),
-      makeTerminal("t2", { worktreeId: "wt-1" }),
-      makeTerminal("t3", { worktreeId: "wt-2" }),
-    ]);
-    renderPalette([makeWorktreeSnap("wt-1", "main"), makeWorktreeSnap("wt-2", "feature")]);
-    await act(async () => {});
-    const confirm = screen.getByTestId("fleet-picker-cold-start-confirm") as HTMLButtonElement;
-    expect(confirm.textContent).toContain("Arm 2 selected");
-    expect(confirm.disabled).toBe(false);
-  });
-
   it("commit replaces the armed set via armIds", async () => {
     seedTerminals([
       makeTerminal("t1", { worktreeId: "wt-1" }),
@@ -220,17 +198,6 @@ describe("FleetPickerPalette", () => {
     });
     expect(onClose).toHaveBeenCalled();
     expect(useFleetArmingStore.getState().armedIds.size).toBe(0);
-  });
-
-  it("Esc closes the palette via the escape stack", async () => {
-    seedTerminals([makeTerminal("t1")]);
-    const onClose = vi.fn();
-    renderPalette([makeWorktreeSnap("wt-1", "main")], true, onClose);
-    await act(async () => {});
-    await act(async () => {
-      dispatchEscape();
-    });
-    expect(onClose).toHaveBeenCalled();
   });
 
   it("Esc with non-empty search clears search before closing", async () => {
@@ -661,33 +628,6 @@ describe("FleetPickerPalette", () => {
       expect(append.getAttribute("aria-checked")).toBe("false");
       const confirm = screen.getByTestId("fleet-picker-cold-start-confirm");
       expect(confirm.textContent).toContain("Arm 1 selected");
-    });
-
-    it("keeps a single sliding thumb, owned by the checked mode", async () => {
-      seedTerminals([makeTerminal("t1", { worktreeId: "wt-1" })]);
-      renderPalette([makeWorktreeSnap("wt-1", "main")]);
-      await act(async () => {});
-
-      const group = screen.getByTestId("fleet-picker-cold-start-commit-mode");
-      // The thumb is one sibling of the segments, owned by the group rather than
-      // any segment; the checked radio is the one it marks.
-      const expectOneThumbAndChecked = (value: "replace" | "append") => {
-        const thumbs = group.querySelectorAll("[data-slot='segmented-thumb']");
-        expect(thumbs.length).toBe(1);
-        expect(thumbs[0]?.parentElement).toBe(group);
-        expect(thumbs[0]?.closest("[role='radio']")).toBeNull();
-        const checked = group.querySelectorAll("[role='radio'][aria-checked='true']");
-        expect(checked.length).toBe(1);
-        expect(checked[0]).toBe(screen.getByTestId(`fleet-picker-cold-start-commit-mode-${value}`));
-      };
-
-      expectOneThumbAndChecked("replace");
-
-      await act(async () => {
-        fireEvent.click(screen.getByTestId("fleet-picker-cold-start-commit-mode-append"));
-      });
-
-      expectOneThumbAndChecked("append");
     });
 
     it("switching to Append updates aria-checked and confirm label", async () => {

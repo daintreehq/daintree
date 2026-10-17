@@ -1,5 +1,6 @@
 import { readFile } from "fs/promises";
 import path from "path";
+import { stripUtf8Bom } from "./stripUtf8Bom.js";
 import { formatErrorMessage } from "../../shared/utils/errorMessage.js";
 import { BUILT_IN_APP_SCHEMES } from "../../shared/theme/themes.js";
 
@@ -341,7 +342,7 @@ export function parseColorSchemeContent(content: string, filename: string): Impo
   // Try JSON-based formats
   let data: Record<string, unknown>;
   try {
-    data = JSON.parse(content);
+    data = JSON.parse(stripUtf8Bom(content));
   } catch {
     return { ok: false, errors: [`Failed to parse ${filename} as JSON`] };
   }

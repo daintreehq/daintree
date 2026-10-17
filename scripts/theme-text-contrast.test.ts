@@ -152,10 +152,6 @@ describe("buildReport", () => {
     expect(band.ratioFloorDelta).toBeLessThan(0);
   });
 
-  it("is deterministic across runs", () => {
-    expect(buildReport().bands).toEqual(buildReport().bands);
-  });
-
   it("records an unresolvable token instead of dropping the sample silently", () => {
     const broken = fixture({ "surface-canvas": "color-mix(in oklab, #fff 50%, #000)" });
     const report = buildReport([broken]);

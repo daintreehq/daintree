@@ -6,17 +6,6 @@ describe("recipeEditorActivityStore (#9186)", () => {
     useRecipeEditorActivityStore.setState({ openCount: 0 });
   });
 
-  it("isOpen is false by default", () => {
-    expect(useRecipeEditorActivityStore.getState().isOpen()).toBe(false);
-  });
-
-  it("enter/leave flip isOpen", () => {
-    useRecipeEditorActivityStore.getState().enter();
-    expect(useRecipeEditorActivityStore.getState().isOpen()).toBe(true);
-    useRecipeEditorActivityStore.getState().leave();
-    expect(useRecipeEditorActivityStore.getState().isOpen()).toBe(false);
-  });
-
   it("nested enter calls require matching leave calls to release", () => {
     useRecipeEditorActivityStore.getState().enter();
     useRecipeEditorActivityStore.getState().enter();

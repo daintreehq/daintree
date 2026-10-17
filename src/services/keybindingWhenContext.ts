@@ -3,6 +3,7 @@ import { isPtyPanel } from "@shared/types/panel";
 import { usePaletteStore, usePanelStore } from "@/store";
 import { useFleetArmingStore } from "@/store/fleetArmingStore";
 import { useMacroFocusStore } from "@/store/macroFocusStore";
+import { useCanopyStore } from "@/store/canopyStore";
 
 /**
  * Live `when`-clause context for keybinding resolution — the documented
@@ -31,13 +32,23 @@ export function buildKeybindingWhenContext(event: KeyboardEvent): WhenClauseCont
     }
   }
 
+  const inTerminal = target?.closest(".xterm") !== null && target !== null;
+  const editable =
+    target instanceof HTMLElement &&
+    (target.tagName === "INPUT" ||
+      target.tagName === "TEXTAREA" ||
+      target.isContentEditable === true);
+
   return {
-    terminalFocused: target?.closest(".xterm") !== null && target !== null,
+    terminalFocused: inTerminal,
+    // xterm's own input is a textarea; it doesn't count as a text field.
+    textInputFocused: editable && !inTerminal,
     modalOpen: document.querySelector('[role="dialog"][aria-modal="true"]') !== null,
     paletteOpen: paletteId !== null,
     paletteId: paletteId ?? "",
     fleetArmed: armedIds.size > 0,
     fleetWaiting,
     sidebarVisible: useMacroFocusStore.getState().visibility.sidebar,
+    canopyHidden: useCanopyStore.getState().mode === "hidden",
   };
 }

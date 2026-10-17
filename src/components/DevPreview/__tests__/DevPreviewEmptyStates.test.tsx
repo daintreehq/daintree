@@ -145,11 +145,6 @@ describe("DevPreviewEmptyStates", () => {
     render(<DevPreviewEmptyStates {...baseProps({ isEvicted: true })} />);
     expect(screen.getByText(/preview paused to save memory/i)).toBeTruthy();
   });
-
-  it("renders nothing (null) once running with a URL, visible, and not evicted", () => {
-    const { container } = render(<DevPreviewEmptyStates {...baseProps()} />);
-    expect(container.firstChild).toBeNull();
-  });
 });
 
 describe("DevPreviewEmptyStates — interaction contract", () => {

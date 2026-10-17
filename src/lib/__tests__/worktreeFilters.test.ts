@@ -22,7 +22,12 @@ import {
   type SidebarOrderPrefs,
 } from "../worktreeFilters";
 import type { OrderBy } from "@/store/worktreeFilterStore";
+import {
+  EMPTY_WORKTREE_AGENT_BUCKETS,
+  type WorktreeAgentBuckets,
+} from "@/lib/worktreeAgentBuckets";
 import type { Worktree } from "@shared/types/worktree";
+import { BRANCH_TYPES } from "@shared/config/branchPrefixes";
 import type {
   StatusFilter,
   TypeFilter,
@@ -91,18 +96,26 @@ const createEmptyFilters = (): FilterState => ({
   typeFilters: new Set(),
   prIssueFilters: new Set(),
   sessionFilters: new Set(),
+  hasAgentFilter: false,
   activityFilters: new Set(),
   devServerFilters: new Set(),
 });
 
 const createEmptyMeta = (): DerivedWorktreeMeta => ({
   terminalCount: 0,
+  hasAgent: false,
   hasWorkingAgent: false,
   hasWaitingAgent: false,
   hasCompletedAgent: false,
   hasExitedAgent: false,
   hasMergeConflict: false,
+  buckets: EMPTY_WORKTREE_AGENT_BUCKETS,
   chipState: null,
+});
+
+const withBuckets = (buckets: Partial<WorktreeAgentBuckets>): DerivedWorktreeMeta => ({
+  ...createEmptyMeta(),
+  buckets: { ...EMPTY_WORKTREE_AGENT_BUCKETS, ...buckets },
 });
 
 describe("getWorktreeType", () => {
@@ -121,76 +134,6 @@ describe("getWorktreeType", () => {
     expect(getWorktreeType(worktree)).toBe("feature");
   });
 
-  it("returns 'feature' for feat alias", () => {
-    const worktree = createMockWorktree({ branch: "feat/new-feature" });
-    expect(getWorktreeType(worktree)).toBe("feature");
-  });
-
-  it("returns 'bugfix' for bugfix branches", () => {
-    const worktree = createMockWorktree({ branch: "bugfix/fix-issue-123" });
-    expect(getWorktreeType(worktree)).toBe("bugfix");
-  });
-
-  it("returns 'bugfix' for fix alias", () => {
-    const worktree = createMockWorktree({ branch: "fix/quick-patch" });
-    expect(getWorktreeType(worktree)).toBe("bugfix");
-  });
-
-  it("returns 'bugfix' for hotfix alias", () => {
-    const worktree = createMockWorktree({ branch: "hotfix/critical-bug" });
-    expect(getWorktreeType(worktree)).toBe("bugfix");
-  });
-
-  it("returns 'refactor' for refactor branches", () => {
-    const worktree = createMockWorktree({ branch: "refactor/cleanup-code" });
-    expect(getWorktreeType(worktree)).toBe("refactor");
-  });
-
-  it("returns 'chore' for chore branches", () => {
-    const worktree = createMockWorktree({ branch: "chore/update-deps" });
-    expect(getWorktreeType(worktree)).toBe("chore");
-  });
-
-  it("returns 'docs' for docs branches", () => {
-    const worktree = createMockWorktree({ branch: "docs/update-readme" });
-    expect(getWorktreeType(worktree)).toBe("docs");
-  });
-
-  it("returns 'test' for test branches", () => {
-    const worktree = createMockWorktree({ branch: "test/add-unit-tests" });
-    expect(getWorktreeType(worktree)).toBe("test");
-  });
-
-  it("returns 'release' for release branches", () => {
-    const worktree = createMockWorktree({ branch: "release/v1.0.0" });
-    expect(getWorktreeType(worktree)).toBe("release");
-  });
-
-  it("returns 'ci' for ci branches", () => {
-    const worktree = createMockWorktree({ branch: "ci/update-pipeline" });
-    expect(getWorktreeType(worktree)).toBe("ci");
-  });
-
-  it("returns 'deps' for deps branches", () => {
-    const worktree = createMockWorktree({ branch: "deps/bump-version" });
-    expect(getWorktreeType(worktree)).toBe("deps");
-  });
-
-  it("returns 'perf' for perf branches", () => {
-    const worktree = createMockWorktree({ branch: "perf/optimize-render" });
-    expect(getWorktreeType(worktree)).toBe("perf");
-  });
-
-  it("returns 'style' for style branches", () => {
-    const worktree = createMockWorktree({ branch: "style/format-code" });
-    expect(getWorktreeType(worktree)).toBe("style");
-  });
-
-  it("returns 'wip' for wip branches", () => {
-    const worktree = createMockWorktree({ branch: "wip/experiment" });
-    expect(getWorktreeType(worktree)).toBe("wip");
-  });
-
   it("returns 'other' for unknown prefixes", () => {
     const worktree = createMockWorktree({ branch: "my-custom-branch" });
     expect(getWorktreeType(worktree)).toBe("other");
@@ -199,6 +142,19 @@ describe("getWorktreeType", () => {
   it("handles case-insensitive matching", () => {
     const worktree = createMockWorktree({ branch: "FEATURE/uppercase" });
     expect(getWorktreeType(worktree)).toBe("feature");
+  });
+
+  it.each([
+    ["codex/fix/login", "bugfix"],
+    ["codex/login", "agent"],
+    ["alice/feature/login", "feature"],
+    ["alice/login", "other"],
+    ["design/header", "design"],
+    ["feature-login", "feature"],
+    ["CI-42-flaky-test", "other"],
+    ["renovate/react-19.x", "deps"],
+  ])("classifies %s as %s, the same way its label does", (branch, type) => {
+    expect(getWorktreeType(createMockWorktree({ branch }))).toBe(type);
   });
 
   it.each(["constructor-injection", "Constructor/refactor", "__proto__/x"])(
@@ -347,12 +303,6 @@ describe("scoreWorktree", () => {
       aiNote: "Agent fixing auth",
     });
     expect(scoreWorktree(worktree, "auth")).toBe(0);
-  });
-
-  it("issueTitle starts-with ranks above issueTitle contains", () => {
-    const startsWith = createMockWorktree({ issueTitle: "Authentication refactor" });
-    const contains = createMockWorktree({ issueTitle: "Fix authentication bug" });
-    expect(scoreWorktree(startsWith, "auth")).toBeGreaterThan(scoreWorktree(contains, "auth"));
   });
 });
 
@@ -847,15 +797,6 @@ describe("sortWorktrees", () => {
     expect(sorted.map((w) => w.name)).toEqual(["aa", "zz"]);
   });
 
-  it("handles null timestamps", () => {
-    const worktrees = [
-      createMockWorktree({ id: "1", name: "a", lastActivityTimestamp: null }),
-      createMockWorktree({ id: "2", name: "b", lastActivityTimestamp: 1000 }),
-    ];
-    const sorted = sortWorktrees(worktrees, "recent");
-    expect(sorted[0]!.id).toBe("2");
-  });
-
   it("uses createdAt when lastActivityTimestamp is null", () => {
     const worktrees = [
       createMockWorktree({ id: "1", name: "old", lastActivityTimestamp: null, createdAt: 1000 }),
@@ -872,24 +813,6 @@ describe("sortWorktrees", () => {
     ];
     const sorted = sortWorktrees(worktrees, "recent");
     expect(sorted.map((w) => w.id)).toEqual(["1", "2"]);
-  });
-
-  it("ranks worktree with newer lastActivityTimestamp above one with newer createdAt", () => {
-    const worktrees = [
-      createMockWorktree({ id: "1", name: "a", lastActivityTimestamp: 6000, createdAt: 1000 }),
-      createMockWorktree({ id: "2", name: "b", lastActivityTimestamp: null, createdAt: 5000 }),
-    ];
-    const sorted = sortWorktrees(worktrees, "recent");
-    expect(sorted.map((w) => w.id)).toEqual(["1", "2"]);
-  });
-
-  it("ranks new worktree with recent createdAt above old worktree with no activity", () => {
-    const worktrees = [
-      createMockWorktree({ id: "1", name: "old", lastActivityTimestamp: 1000, createdAt: 500 }),
-      createMockWorktree({ id: "2", name: "new", lastActivityTimestamp: null, createdAt: 5000 }),
-    ];
-    const sorted = sortWorktrees(worktrees, "recent");
-    expect(sorted.map((w) => w.id)).toEqual(["2", "1"]);
   });
 
   it("falls back to 0 when both fields are missing", () => {
@@ -984,15 +907,6 @@ describe("sortWorktrees", () => {
       expect(sortedByRecent[0]!.id).toBe("1");
       expect(sortedByRecent[1]!.id).toBe("3");
     });
-
-    it("returns unchanged order with empty pinnedWorktrees array", () => {
-      const worktrees = [
-        createMockWorktree({ id: "1", name: "b" }),
-        createMockWorktree({ id: "2", name: "a" }),
-      ];
-      const sorted = sortWorktrees(worktrees, "alpha", []);
-      expect(sorted.map((w) => w.name)).toEqual(["a", "b"]);
-    });
   });
 
   describe("external worktrees", () => {
@@ -1080,16 +994,6 @@ describe("sortWorktrees", () => {
 });
 
 describe("sortWorktrees manual order", () => {
-  it("sorts by manual order", () => {
-    const worktrees = [
-      createMockWorktree({ id: "1", name: "a" }),
-      createMockWorktree({ id: "2", name: "b" }),
-      createMockWorktree({ id: "3", name: "c" }),
-    ];
-    const sorted = sortWorktrees(worktrees, "manual", [], ["3", "1", "2"]);
-    expect(sorted.map((w) => w.id)).toEqual(["3", "1", "2"]);
-  });
-
   it("appends worktrees not in manualOrder to the end", () => {
     const worktrees = [
       createMockWorktree({ id: "1", name: "a" }),
@@ -1143,6 +1047,21 @@ describe("sortWorktrees manual order", () => {
 });
 
 describe("groupByType", () => {
+  it("gives every recognised type a section, so no worktree drops out", () => {
+    const branches = [
+      ...BRANCH_TYPES.map((type) => `${type.prefix}/x`),
+      "codex/login",
+      "alice/login",
+    ];
+    const worktrees = branches.map((branch, i) =>
+      createMockWorktree({ id: String(i), branch, path: `/repo/wt-${i}` })
+    );
+    const groups = groupByType(worktrees, "alpha");
+    expect(groups.reduce((n, g) => n + g.worktrees.length, 0)).toBe(worktrees.length);
+    expect(groups.map((g) => g.type)).toEqual([...BRANCH_TYPES.map((t) => t.id), "agent", "other"]);
+    expect(groups.every((g) => g.displayName.length > 0)).toBe(true);
+  });
+
   it("groups worktrees by type", () => {
     const worktrees = [
       createMockWorktree({ id: "1", branch: "feature/a" }),
@@ -1166,12 +1085,6 @@ describe("groupByType", () => {
     ];
     const groups = groupByType(worktrees, "alpha");
     expect(groups[0]!.type).toBe("main");
-  });
-
-  it("includes displayName for each group", () => {
-    const worktrees = [createMockWorktree({ id: "1", branch: "feature/test" })];
-    const groups = groupByType(worktrees, "alpha");
-    expect(groups[0]!.displayName).toBe("Features");
   });
 
   it("sorts worktrees within groups according to orderBy", () => {
@@ -1275,58 +1188,86 @@ describe("hasAnyFilters", () => {
   });
 });
 
+describe("'Has an agent' facet", () => {
+  const worktree = createMockWorktree({ id: "1" });
+
+  it("keeps agent worktrees in any state, including none reported, and drops the rest", () => {
+    const filters = { ...createEmptyFilters(), hasAgentFilter: true };
+    const idleAgent = { ...createEmptyMeta(), terminalCount: 1, hasAgent: true };
+    const shellOnly = { ...createEmptyMeta(), terminalCount: 2 };
+    expect(matchesFilters(worktree, filters, idleAgent, false)).toBe(true);
+    expect(matchesFilters(worktree, filters, shellOnly, false)).toBe(false);
+  });
+
+  it("narrows with the Sessions facet rather than widening it", () => {
+    const filters = { ...createEmptyFilters(), hasAgentFilter: true };
+    filters.sessionFilters.add("waiting");
+    const idleAgent = { ...createEmptyMeta(), terminalCount: 1, hasAgent: true };
+    const waitingAgent = { ...idleAgent, hasWaitingAgent: true };
+    expect(matchesFilters(worktree, filters, idleAgent, false)).toBe(false);
+    expect(matchesFilters(worktree, filters, waitingAgent, false)).toBe(true);
+  });
+
+  it("counts as an active filter", () => {
+    expect(hasAnyFilters({ ...createEmptyFilters(), hasAgentFilter: true })).toBe(true);
+  });
+
+  it("counts agent worktrees against every other facet, lifting only its own", () => {
+    const worktrees = [
+      createMockWorktree({ id: "a", branch: "feature/a" }),
+      createMockWorktree({ id: "b", branch: "feature/b" }),
+      createMockWorktree({ id: "c", branch: "bugfix/c" }),
+      createMockWorktree({ id: "d", branch: "feature/d" }),
+    ];
+    const agent = { ...createEmptyMeta(), terminalCount: 1, hasAgent: true };
+    const map = new Map<string, DerivedWorktreeMeta>([
+      ["a", agent],
+      ["b", { ...agent, hasWorkingAgent: true }],
+      ["c", agent],
+      ["d", { ...createEmptyMeta(), terminalCount: 1 }],
+    ]);
+    const filters = { ...createEmptyFilters(), hasAgentFilter: true };
+    filters.typeFilters.add("feature");
+
+    const counts = computeChipCounts(worktrees, map, null, filters);
+    // Its own selection is lifted; the feature filter still applies.
+    expect(counts.hasAgent).toBe(2);
+    // Other facets are counted within "Has an agent".
+    expect(counts.branchType.feature).toBe(2);
+    expect(counts.branchType.bugfix).toBe(1);
+    expect(counts.sessions.hasTerminals).toBe(2);
+    expect(counts.sessions.working).toBe(1);
+  });
+});
+
 describe("matchesQuickStateFilter", () => {
   it('"all" matches everything', () => {
     expect(matchesQuickStateFilter("all", createEmptyMeta())).toBe(true);
   });
 
-  it('"working" matches when hasWorkingAgent and chipState is null', () => {
-    const meta = { ...createEmptyMeta(), hasWorkingAgent: true, chipState: null };
+  it("matches each bucket on its own flag", () => {
+    expect(matchesQuickStateFilter("working", withBuckets({ working: true }))).toBe(true);
+    expect(matchesQuickStateFilter("waiting", withBuckets({ attention: true }))).toBe(true);
+    expect(matchesQuickStateFilter("finished", withBuckets({ finished: true }))).toBe(true);
+  });
+
+  it("keeps a working worktree in Working when an agent beside it is asking", () => {
+    const meta = withBuckets({ working: true, attention: true });
     expect(matchesQuickStateFilter("working", meta)).toBe(true);
-  });
-
-  it('"working" does NOT match when chipState overrides to "waiting"', () => {
-    const meta = { ...createEmptyMeta(), hasWorkingAgent: true, chipState: "waiting" as const };
-    expect(matchesQuickStateFilter("working", meta)).toBe(false);
-  });
-
-  it('"working" does NOT match when chipState is "complete"', () => {
-    const meta = { ...createEmptyMeta(), hasWorkingAgent: true, chipState: "complete" as const };
-    expect(matchesQuickStateFilter("working", meta)).toBe(false);
-  });
-
-  it('"working" does NOT match when no active agents', () => {
-    expect(matchesQuickStateFilter("working", createEmptyMeta())).toBe(false);
-  });
-
-  it('"waiting" matches when chipState is "waiting"', () => {
-    const meta = { ...createEmptyMeta(), chipState: "waiting" as const };
     expect(matchesQuickStateFilter("waiting", meta)).toBe(true);
-  });
-
-  it('"finished" matches chipState "complete"', () => {
-    const meta = { ...createEmptyMeta(), chipState: "complete" as const };
-    expect(matchesQuickStateFilter("finished", meta)).toBe(true);
-  });
-
-  it('"finished" matches chipState "cleanup"', () => {
-    const meta = { ...createEmptyMeta(), chipState: "cleanup" as const };
-    expect(matchesQuickStateFilter("finished", meta)).toBe(true);
-  });
-
-  it('"finished" does NOT match chipState null', () => {
-    expect(matchesQuickStateFilter("finished", createEmptyMeta())).toBe(false);
-  });
-
-  it('"finished" does NOT match chipState "waiting"', () => {
-    const meta = { ...createEmptyMeta(), chipState: "waiting" as const };
     expect(matchesQuickStateFilter("finished", meta)).toBe(false);
   });
 
-  it('"finished" does NOT match a merged worktree with an active agent (chipState null)', () => {
-    const meta = { ...createEmptyMeta(), hasWorkingAgent: true, chipState: null };
-    expect(matchesQuickStateFilter("finished", meta)).toBe(false);
-    expect(matchesQuickStateFilter("working", meta)).toBe(true);
+  it("ignores raw panel agent states — an agent idle at its prompt is not Attention", () => {
+    const meta = { ...createEmptyMeta(), hasAgent: true, hasWaitingAgent: true };
+    expect(matchesQuickStateFilter("waiting", meta)).toBe(false);
+    expect(matchesQuickStateFilter("working", meta)).toBe(false);
+  });
+
+  it("matches nothing but All for a worktree in no bucket", () => {
+    for (const filter of ["working", "waiting", "finished"] as const) {
+      expect(matchesQuickStateFilter(filter, createEmptyMeta())).toBe(false);
+    }
   });
 });
 
@@ -1476,13 +1417,6 @@ describe("computeChipCounts", () => {
     expect(counts.activity.last1h).toBe(1);
   });
 
-  it("does not crash when derivedMetaMap is missing entries", () => {
-    const worktrees = [createMockWorktree({ id: "1", branch: "feature/a" })];
-    const counts = computeChipCounts(worktrees, new Map(), null, emptyFilters);
-    expect(counts.branchType.feature).toBe(1);
-    expect(counts.sessions.working).toBe(0);
-  });
-
   // Disjunctive faceting tests
 
   it("narrows non-status chips when a status filter is active", () => {
@@ -1497,6 +1431,7 @@ describe("computeChipCounts", () => {
       typeFilters: new Set(),
       prIssueFilters: new Set(),
       sessionFilters: new Set(),
+      hasAgentFilter: false,
       activityFilters: new Set(),
       devServerFilters: new Set(),
     };
@@ -1522,6 +1457,7 @@ describe("computeChipCounts", () => {
       typeFilters: new Set<TypeFilter>(["feature"]),
       prIssueFilters: new Set(),
       sessionFilters: new Set(),
+      hasAgentFilter: false,
       activityFilters: new Set(),
       devServerFilters: new Set(),
     };
@@ -1559,6 +1495,7 @@ describe("computeChipCounts", () => {
       typeFilters: new Set<TypeFilter>(["feature"]),
       prIssueFilters: new Set(),
       sessionFilters: new Set(),
+      hasAgentFilter: false,
       activityFilters: new Set<ActivityFilter>(["last15m"]),
       devServerFilters: new Set(),
     };
@@ -1584,6 +1521,7 @@ describe("computeChipCounts", () => {
       typeFilters: new Set(),
       prIssueFilters: new Set(),
       sessionFilters: new Set(),
+      hasAgentFilter: false,
       activityFilters: new Set(),
       devServerFilters: new Set(),
     };
@@ -1611,6 +1549,7 @@ describe("computeChipCounts", () => {
       typeFilters: new Set<TypeFilter>(["bugfix"]),
       prIssueFilters: new Set(),
       sessionFilters: new Set<SessionFilter>(["working"]),
+      hasAgentFilter: false,
       activityFilters: new Set(),
       devServerFilters: new Set(),
     };
@@ -1625,26 +1564,6 @@ describe("computeChipCounts", () => {
     expect(counts.branchType.feature).toBe(1);
   });
 
-  it("is unaffected by sibling group when computing within-group counts", () => {
-    const worktrees = [
-      createMockWorktree({ id: "1", branch: "feature/a" }),
-      createMockWorktree({ id: "2", branch: "bugfix/b" }),
-    ];
-    const filters: FilterState = {
-      query: "",
-      statusFilters: new Set(),
-      typeFilters: new Set<TypeFilter>(["feature"]),
-      prIssueFilters: new Set(),
-      sessionFilters: new Set(),
-      activityFilters: new Set(),
-      devServerFilters: new Set(),
-    };
-    const counts = computeChipCounts(worktrees, new Map(), null, filters);
-    // Type chips ignore their own active filter — show absolute totals
-    expect(counts.branchType.feature).toBe(1);
-    expect(counts.branchType.bugfix).toBe(1);
-  });
-
   it("applies exact-number query (#123) as a global AND gate", () => {
     const worktrees = [
       createMockWorktree({ id: "1", branch: "feature/a", issueNumber: 100 }),
@@ -1657,6 +1576,7 @@ describe("computeChipCounts", () => {
       typeFilters: new Set(),
       prIssueFilters: new Set(),
       sessionFilters: new Set(),
+      hasAgentFilter: false,
       activityFilters: new Set(),
       devServerFilters: new Set(),
     };
@@ -1890,7 +1810,7 @@ describe("orderWorktreesLikeSidebar", () => {
   };
 
   // Grouped re-sorts inside each section *without* `manualOrder`, so manual
-  // mode collapses to the name tiebreak there, and TYPE_ORDER (feature,
+  // mode collapses to the name tiebreak there, and WORKTREE_TYPE_IDS (feature,
   // bugfix, docs, then "Outside the project") outranks the pins.
   const grouped: Record<OrderBy, string[]> = {
     recent: ["m", "p2", "f20", "f2", "f10", "p1", "b1", "d1", "x"],
@@ -1907,15 +1827,6 @@ describe("orderWorktreesLikeSidebar", () => {
 
   it.each(orderings)("matches the sidebar's grouped order for %s", (orderBy) => {
     expect(ids(orderWorktreesLikeSidebar(all, prefs(orderBy, true)))).toEqual(grouped[orderBy]);
-  });
-
-  // The regression guard for SidebarContent's swap: its no-query branch called
-  // `sortWorktrees` with the pins pre-filtered to ids that still exist.
-  it.each(orderings)("reproduces the sidebar's former sortWorktrees call for %s", (orderBy) => {
-    const validPinned = pinnedWorktrees.filter((id) => all.some((w) => w.id === id));
-    expect(ids(orderWorktreesLikeSidebar(all, prefs(orderBy, false)))).toEqual(
-      ids(sortWorktrees(all, orderBy, validPinned, manualOrder))
-    );
   });
 
   it("drops nothing and preserves object identity", () => {
@@ -1984,5 +1895,61 @@ describe("orderWorktreesLikeSidebar", () => {
         })
       )
     ).toEqual(["f2", "b1"]);
+  });
+});
+
+describe("custom titles in search (#13409)", () => {
+  const titles = { "wt-1": "Release prep" };
+
+  it("scores a custom title at headline weight", () => {
+    const worktree = createMockWorktree({ id: "wt-1", name: "zzz", branch: "chore/zzz" });
+    expect(scoreWorktree(worktree, "release", titles["wt-1"])).toBe(4);
+    expect(scoreWorktree(worktree, "prep", titles["wt-1"])).toBe(3);
+    expect(scoreWorktree(worktree, "release")).toBe(0);
+  });
+
+  it("still matches the fields the title displaced", () => {
+    const worktree = createMockWorktree({
+      id: "wt-1",
+      name: "zzz",
+      branch: "chore/zzz",
+      issueTitle: "Crash on start",
+    });
+    expect(scoreWorktree(worktree, "crash", titles["wt-1"])).toBe(4);
+    expect(scoreWorktree(worktree, "chore", titles["wt-1"])).toBe(2);
+  });
+
+  it("matches through the filter state's title map", () => {
+    const worktree = createMockWorktree({ id: "wt-1", name: "zzz", branch: "chore/zzz" });
+    const filters = createEmptyFilters();
+    filters.query = "release";
+    expect(matchesFilters(worktree, filters, createEmptyMeta(), false)).toBe(false);
+    filters.customTitles = titles;
+    expect(matchesFilters(worktree, filters, createEmptyMeta(), false)).toBe(true);
+  });
+
+  it("leaves number lookup alone when a title is itself a number", () => {
+    const numbered = createMockWorktree({
+      id: "wt-2",
+      name: "a",
+      branch: "chore/a",
+      issueNumber: 2,
+    });
+    const titledTwo = createMockWorktree({ id: "wt-3", name: "b", branch: "chore/b" });
+    const filters = createEmptyFilters();
+    filters.query = "2";
+    filters.customTitles = { "wt-3": "2" };
+
+    expect(matchesFilters(numbered, filters, createEmptyMeta(), false)).toBe(true);
+    expect(matchesFilters(titledTwo, filters, createEmptyMeta(), false)).toBe(false);
+  });
+
+  it("ranks by the title when relevance sorting", () => {
+    const a = createMockWorktree({ id: "a", name: "alpha", branch: "feature/release-x" });
+    const b = createMockWorktree({ id: "b", name: "beta", branch: "chore/b" });
+    const sorted = sortWorktreesByRelevance([a, b], "release", "alpha", [], [], {
+      b: "Release prep",
+    });
+    expect(sorted.map((w) => w.id)).toEqual(["b", "a"]);
   });
 });

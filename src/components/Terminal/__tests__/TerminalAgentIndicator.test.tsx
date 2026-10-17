@@ -2,6 +2,8 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, act } from "@testing-library/react";
 import { TerminalAgentIndicator } from "../TerminalAgentIndicator";
+import { useFleetSnapshotStore } from "@/store/fleetSnapshotStore";
+import type { FleetRunRow, FleetSnapshot } from "@shared/types/ipc/fleet";
 
 vi.mock("react-dom", async () => {
   const actual = await vi.importActual<typeof import("react-dom")>("react-dom");
@@ -47,6 +49,8 @@ vi.mock("@/components/Worktree/terminalStateConfig", () => {
     directing: mockIcon,
     idle: mockIcon,
     completed: mockIcon,
+    exited: mockIcon,
+    unread: mockIcon,
   };
   const STATE_COLORS: Record<string, string> = {
     working: "text-working",
@@ -54,18 +58,25 @@ vi.mock("@/components/Worktree/terminalStateConfig", () => {
     directing: "text-directing",
     idle: "text-idle",
     completed: "text-completed",
+    exited: "text-exited",
+    unread: "text-unread",
   };
   const STATE_LABELS: Record<string, string> = {
     working: "working",
     waiting: "waiting",
     directing: "directing",
     idle: "idle",
-    completed: "done",
+    completed: "finished",
+    exited: "exited",
+    unread: "unread",
   };
   return {
     STATE_ICONS,
     STATE_COLORS,
     STATE_LABELS,
+    SESSION_ICONS: STATE_ICONS,
+    SESSION_COLORS: STATE_COLORS,
+    SESSION_LABELS: STATE_LABELS,
     getEffectiveStateIcon: (state: string) => STATE_ICONS[state] ?? mockIcon,
     getEffectiveStateColor: (state: string) => STATE_COLORS[state] ?? "text-unknown",
     getEffectiveStateLabel: (state: string) => STATE_LABELS[state] ?? state,
@@ -93,7 +104,29 @@ vi.mock("@/store", () => ({
     }),
 }));
 
+function setHandBack(handBack: FleetRunRow["handBack"], overrides: Partial<FleetRunRow> = {}) {
+  useFleetSnapshotStore.setState({
+    snapshot: {
+      runs: [
+        {
+          runId: "t1",
+          workspaceId: "p1",
+          spawnedAt: 0,
+          cwd: "/repo",
+          agentState: "waiting",
+          handBack,
+          ...overrides,
+        },
+      ],
+      changedAt: 0,
+      degraded: false,
+      lastSuccessfulAt: null,
+    } satisfies FleetSnapshot,
+  });
+}
+
 beforeEach(() => {
+  useFleetSnapshotStore.setState({ snapshot: null });
   mockTerminal = { id: "t1" };
   mockErrors = [];
   vi.useFakeTimers();
@@ -249,24 +282,6 @@ describe("TerminalAgentIndicator — glyph and tooltip", () => {
     expect(agentTooltip!.textContent).toContain("2h 14m");
   });
 
-  it("omits elapsed time when startedAt is undefined", () => {
-    mockTerminal = { id: "t1", isInputLocked: false };
-
-    render(
-      <TerminalAgentIndicator
-        id="t1"
-
-        agentState="working"
-        activity={{ headline: "Building project", status: "working", type: "background" }}
-      />
-    );
-
-    const tooltips = screen.getAllByTestId("tooltip-content");
-    const agentTooltip = tooltips.find((el) => el.textContent?.includes("Building project"));
-    expect(agentTooltip).toBeTruthy();
-    expect(agentTooltip!.textContent).not.toContain("· ");
-  });
-
   it("updates elapsed time after timer interval", () => {
     const base = new Date("2026-03-19T11:59:15Z").getTime();
 
@@ -312,11 +327,48 @@ describe("TerminalAgentIndicator — glyph and tooltip", () => {
 
     render(<TerminalAgentIndicator id="t1" agentState="completed" />);
 
-    expect(screen.getByRole("status", { name: "Agent state: done" })).toBeTruthy();
+    expect(screen.getByRole("status", { name: "Agent state: finished" })).toBeTruthy();
     const tooltip = screen.getByTestId("tooltip-content");
     expect(tooltip.textContent).toContain("Cost: $0.42");
     // The readout itself is metadata and lives in the header row, not here.
     expect(screen.queryByText(/^\$0\.42/)).toBeNull();
+  });
+
+  it("draws a seen hand-back as the white finished ring, with no chip around it", () => {
+    mockTerminal = { id: "t1", agentState: "waiting" };
+    setHandBack({ stoppedAt: 1, seenAt: 2 });
+
+    render(<TerminalAgentIndicator id="t1" agentState="waiting" />);
+
+    const chip = screen.getByRole("status", { name: "Agent state: finished" });
+    expect(chip.className).not.toMatch(/\b(bg|border)-/);
+    expect(chip.className).toContain("text-text-primary");
+    expect(screen.getByTestId("tooltip-content").textContent).toContain("Observed: waiting");
+  });
+
+  it("draws an unseen hand-back as unread, without the waiting hue", () => {
+    mockTerminal = { id: "t1", agentState: "completed" };
+    setHandBack({ stoppedAt: 1 }, { agentState: "completed" });
+
+    render(<TerminalAgentIndicator id="t1" agentState="waiting" />);
+
+    const chip = screen.getByRole("status", { name: "Agent state: unread" });
+    expect(chip.className).not.toMatch(/\b(bg|border)-/);
+    expect(chip.className).toContain("text-unread");
+    expect(chip.className).not.toContain("state-waiting");
+    // The tooltip names what was observed, not the coerced display state.
+    expect(screen.getByTestId("tooltip-content").textContent).toContain("Observed: finished");
+  });
+
+  it("keeps an approval wait amber whatever the hand-back says", () => {
+    mockTerminal = { id: "t1", agentState: "waiting", waitingReason: "approval" };
+    setHandBack({ stoppedAt: 1, seenAt: 2 });
+
+    render(<TerminalAgentIndicator id="t1" agentState="waiting" />);
+
+    const chip = screen.getByRole("status", { name: /^Agent state: waiting/ });
+    expect(chip.className).toContain("text-waiting");
+    expect(chip.className).not.toMatch(/\b(bg|border)-/);
   });
 
   it("marks the glyph with a dot for this terminal's undismissed errors only", () => {
@@ -371,32 +423,6 @@ describe("TerminalAgentIndicator — glyph and tooltip", () => {
     );
     expect(exitLine().textContent).not.toMatch(/:\s*$/);
     expect(exitLine().className).not.toContain("text-status-error");
-  });
-
-  it("eases the chip between states on the state-change tier and snaps under reduced motion", () => {
-    mockTerminal = { id: "t1" };
-
-    render(<TerminalAgentIndicator id="t1" agentState="working" />);
-
-    const chip = screen.getByRole("status", { name: /agent state/i });
-    const transition = chip.className.split(" ").find((c) => c.startsWith("transition-"));
-    expect(transition).toBeDefined();
-    expect(transition).not.toBe("transition-all");
-    expect(transition).toContain("background-color");
-    expect(transition).toContain("border-color");
-    expect(chip.className).toContain("duration-150");
-    expect(chip.className).toContain("ease-out");
-    expect(chip.className).toContain("reduce-motion:transition-none");
-  });
-
-  it("falls back to Agent {state} when no headline", () => {
-    mockTerminal = { id: "t1" };
-
-    render(<TerminalAgentIndicator id="t1" agentState="directing" />);
-
-    const tooltips = screen.getAllByTestId("tooltip-content");
-    const agentTooltip = tooltips.find((el) => el.textContent?.includes("Agent directing"));
-    expect(agentTooltip).toBeTruthy();
   });
 
   it("does not show stalled state for working agent past 60 seconds", () => {

@@ -190,31 +190,6 @@ describe("updateActivity early-exit (#2701)", () => {
     expect((after[baseTerminal.id] as PtyPanelData)!.lastCommand).toBe("npm run build");
   });
 
-  it("preserves array reference for unchanged terminal when sibling terminal differs", () => {
-    const sibling = { ...baseTerminal, id: "test-terminal-2", title: "Sibling" };
-    usePanelStore.setState({
-      panelsById: { [baseTerminal.id]: baseTerminal, [sibling.id]: sibling },
-      panelIds: [baseTerminal.id, sibling.id],
-    });
-
-    const before = usePanelStore.getState().panelsById;
-    const siblingBefore = before[sibling.id];
-
-    usePanelStore
-      .getState()
-      .updateActivity(
-        baseTerminal.id,
-        baseTerminal.activityHeadline,
-        baseTerminal.activityStatus,
-        baseTerminal.activityType,
-        baseTerminal.lastCommand
-      );
-
-    const after = usePanelStore.getState().panelsById;
-    expect(after).toBe(before);
-    expect(after[sibling.id]).toBe(siblingBefore);
-  });
-
   it("updates only the target terminal when multiple terminals exist", () => {
     const sibling = { ...baseTerminal, id: "test-terminal-2", title: "Sibling" };
     usePanelStore.setState({

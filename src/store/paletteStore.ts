@@ -14,7 +14,8 @@ export type PaletteId =
   | "theme"
   | "resume-sessions"
   | "assistant-sessions"
-  | "log-level";
+  | "log-level"
+  | "host-switcher";
 
 interface PaletteState {
   activePaletteId: PaletteId | null;

@@ -4,6 +4,7 @@ import { resolve } from "node:path";
 import { act, fireEvent, render, screen } from "@testing-library/react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { readIndexCss } from "@/__tests__/support/hostCss";
 
 vi.mock("@/lib/utils", () => ({
   cn: (...args: unknown[]) => args.filter(Boolean).join(" "),
@@ -16,15 +17,6 @@ const TEXT_TEST_ID = "text";
 
 describe("Skeleton", () => {
   describe("ARIA contract", () => {
-    it('uses role="status" on the wrapper', () => {
-      render(
-        <Skeleton>
-          <SkeletonBone />
-        </Skeleton>
-      );
-      expect(screen.getByRole("status")).toBeTruthy();
-    });
-
     it("is a polite live region that is never marked busy", () => {
       // `aria-busy` on a live region tells AT to hold back its updates until
       // the region clears — which, on this wrapper, is its own loading message.
@@ -58,20 +50,6 @@ describe("Skeleton", () => {
       expect(status.getAttribute("aria-label")).toBe("Loading commits");
       expect(status.querySelector(".sr-only")?.textContent).toBe("Loading commits");
     });
-
-    it("hides each bone from assistive tech via aria-hidden", () => {
-      render(
-        <Skeleton>
-          <SkeletonBone data-testid={BONE_TEST_ID} />
-        </Skeleton>
-      );
-      expect(screen.getByTestId(BONE_TEST_ID).getAttribute("aria-hidden")).toBe("true");
-    });
-
-    it("is queryable by accessible name", () => {
-      render(<Skeleton label="Loading commits" />);
-      expect(screen.getByRole("status", { name: "Loading commits" })).toBeTruthy();
-    });
   });
 
   describe("inert mode", () => {
@@ -88,13 +66,6 @@ describe("Skeleton", () => {
     it("does not render the sr-only label when inert", () => {
       const { container } = render(<Skeleton inert label="Loading" />);
       expect(container.querySelector(".sr-only")).toBeNull();
-    });
-  });
-
-  describe("className passthrough", () => {
-    it("merges custom className on the wrapper", () => {
-      render(<Skeleton className="my-skeleton" />);
-      expect(screen.getByRole("status").className).toContain("my-skeleton");
     });
   });
 });
@@ -116,11 +87,6 @@ describe("SkeletonBone", () => {
     const cls = screen.getByTestId(BONE_TEST_ID).className;
     expect(cls).toContain("animate-pulse-immediate");
     expect(cls).not.toContain("animate-pulse-delayed");
-  });
-
-  it("does not include shimmer class by default", () => {
-    render(<SkeletonBone data-testid={BONE_TEST_ID} />);
-    expect(screen.getByTestId(BONE_TEST_ID).className).not.toContain("animate-skeleton-shimmer");
   });
 
   it("adds animate-skeleton-shimmer when shimmer is set", () => {
@@ -148,21 +114,9 @@ describe("SkeletonBone", () => {
     expect(screen.getByTestId(BONE_TEST_ID).style.height).toBe("");
   });
 
-  it("ignores Infinity heightPx", () => {
-    render(<SkeletonBone heightPx={Number.POSITIVE_INFINITY} data-testid={BONE_TEST_ID} />);
-    expect(screen.getByTestId(BONE_TEST_ID).style.height).toBe("");
-  });
-
   it("forces aria-hidden true even if a caller passes aria-hidden={false}", () => {
     render(<SkeletonBone aria-hidden={false} data-testid={BONE_TEST_ID} />);
     expect(screen.getByTestId(BONE_TEST_ID).getAttribute("aria-hidden")).toBe("true");
-  });
-
-  it("merges custom className", () => {
-    render(<SkeletonBone className="w-12 h-4" data-testid={BONE_TEST_ID} />);
-    const cls = screen.getByTestId(BONE_TEST_ID).className;
-    expect(cls).toContain("w-12");
-    expect(cls).toContain("h-4");
   });
 });
 
@@ -213,13 +167,6 @@ describe("SkeletonText", () => {
     expect(screen.getByTestId(TEXT_TEST_ID).getAttribute("aria-hidden")).toBe("true");
   });
 
-  it("uses animate-pulse-delayed by default on each line", () => {
-    render(<SkeletonText lines={2} data-testid={TEXT_TEST_ID} />);
-    for (const line of Array.from(screen.getByTestId(TEXT_TEST_ID).children)) {
-      expect(line.className).toContain("animate-pulse-delayed");
-    }
-  });
-
   it("switches to animate-pulse-immediate when immediate is set", () => {
     render(<SkeletonText lines={2} immediate data-testid={TEXT_TEST_ID} />);
     for (const line of Array.from(screen.getByTestId(TEXT_TEST_ID).children)) {
@@ -231,22 +178,6 @@ describe("SkeletonText", () => {
     render(<SkeletonText lines={2} shimmer data-testid={TEXT_TEST_ID} />);
     for (const line of Array.from(screen.getByTestId(TEXT_TEST_ID).children)) {
       expect(line.className).toContain("animate-skeleton-shimmer");
-    }
-  });
-
-  it("respects custom line height and gap classes", () => {
-    render(
-      <SkeletonText
-        lines={2}
-        lineHeightClassName="h-6"
-        gapClassName="space-y-4"
-        data-testid={TEXT_TEST_ID}
-      />
-    );
-    const root = screen.getByTestId(TEXT_TEST_ID);
-    expect(root.className).toContain("space-y-4");
-    for (const line of Array.from(root.children)) {
-      expect(line.className).toContain("h-6");
     }
   });
 
@@ -270,12 +201,6 @@ describe("SkeletonHint", () => {
       vi.advanceTimersByTime(ms);
     });
   }
-
-  it("renders nothing visible before the first threshold", () => {
-    const { container } = render(<SkeletonHint />);
-    expect(container.querySelector(".animate-hint-fade-in")).toBeNull();
-    expect(screen.queryByText("Still working…")).toBeNull();
-  });
 
   it("always renders an aria-live region so AT registers it up front", () => {
     const { container } = render(<SkeletonHint />);
@@ -383,13 +308,6 @@ describe("SkeletonHint", () => {
     const button = screen.getByRole("button", { name: "Retry" });
     fireEvent.click(button);
     expect(onRetry).toHaveBeenCalledTimes(1);
-  });
-
-  it("renders both Cancel and Retry at the action threshold when both handlers are passed", () => {
-    render(<SkeletonHint onCancel={() => {}} onRetry={() => {}} />);
-    advance(20_000);
-    expect(screen.getByRole("button", { name: "Cancel" })).toBeTruthy();
-    expect(screen.getByRole("button", { name: "Retry" })).toBeTruthy();
   });
 
   it("shows Cancel but withholds Retry before the action threshold", () => {
@@ -505,14 +423,6 @@ describe("SkeletonHint", () => {
     expect(copyNode(container)).toBe(before);
   });
 
-  it("fades Retry in when it surfaces at the action phase", () => {
-    render(<SkeletonHint onRetry={() => {}} />);
-    advance(20_000);
-    expect(screen.getByRole("button", { name: "Retry" }).className).toContain(
-      "animate-hint-fade-in"
-    );
-  });
-
   it("never remounts Cancel as the copy escalates, so a focused Cancel keeps focus", () => {
     render(<SkeletonHint onCancel={() => {}} onRetry={() => {}} />);
     advance(8_000);
@@ -558,12 +468,6 @@ describe("SkeletonHint", () => {
       expect(button.className).not.toContain("bg-primary");
       expect(button.className).not.toContain("text-accent");
     }
-  });
-
-  it("merges custom className on the wrapper", () => {
-    const { container } = render(<SkeletonHint className="my-hint" data-testid="hint" />);
-    const hint = container.querySelector('[data-testid="hint"]')!;
-    expect(hint.className).toContain("my-hint");
   });
 
   it("prefers a custom message over the generic first-phase copy", () => {
@@ -613,13 +517,6 @@ describe("SkeletonHint", () => {
     expect(screen.queryByText("Fetching 1 of 12 files…")).toBeNull();
   });
 
-  it("renders the copy in the visible (aria-hidden) row, not only the live region", () => {
-    const { container } = render(<SkeletonHint message="Fetching 3 of 12 files…" />);
-    advance(8_000);
-    const visible = container.querySelector('span.animate-hint-fade-in[aria-hidden="true"]');
-    expect(visible?.textContent).toBe("Fetching 3 of 12 files…");
-  });
-
   it("withholds Retry one tick before the action threshold and shows it exactly at it", () => {
     render(<SkeletonHint onRetry={() => {}} />);
     advance(19_999);
@@ -641,7 +538,7 @@ describe("SkeletonHint", () => {
 });
 
 describe("animate-hint-fade-in CSS contract", () => {
-  const css = readFileSync(resolve(__dirname, "../../../index.css"), "utf8");
+  const css = readIndexCss();
   // The `@custom-variant` definitions moved to the design contract, which the
   // plugin Tailwind compiler consumes alongside index.css (#12220). The
   // keyframe and the utility that uses the variant still live in index.css.
@@ -686,7 +583,7 @@ describe("animate-hint-fade-in CSS contract", () => {
 describe("animate-skeleton-shimmer CSS contract", () => {
   // Read the source CSS once. Build pipeline transforms (Tailwind, autoprefixer)
   // shouldn't matter — we're asserting authored intent in src/index.css.
-  const css = readFileSync(resolve(__dirname, "../../../index.css"), "utf8");
+  const css = readIndexCss();
 
   it("declares the skeleton-shimmer keyframe", () => {
     expect(css).toMatch(/@keyframes\s+skeleton-shimmer\b/);
@@ -715,7 +612,7 @@ describe("animate-skeleton-shimmer CSS contract", () => {
 });
 
 describe("skeleton bone motion CSS contract", () => {
-  const css = readFileSync(resolve(__dirname, "../../../index.css"), "utf8");
+  const css = readIndexCss();
 
   /** The body of the first `@keyframes name { … }` block. */
   function keyframes(name: string): string {

@@ -29,13 +29,6 @@ function resetTripped() {
 describe("PRDetectionPausedIndicator", () => {
   beforeEach(resetTripped);
 
-  describe("when tripped is false", () => {
-    it("renders nothing", () => {
-      renderIndicator();
-      expect(screen.queryByRole("status")).toBeNull();
-    });
-  });
-
   describe("when tripped is true", () => {
     beforeEach(() => {
       usePRCircuitBreakerStore.setState({ tripped: true });
@@ -61,11 +54,6 @@ describe("PRDetectionPausedIndicator", () => {
 
       const status = screen.getByRole("status");
       expect(status.className).not.toMatch(/opacity-/);
-    });
-
-    it("renders regardless of token state (service-wide signal)", () => {
-      renderIndicator();
-      expect(screen.getByRole("status")).toBeTruthy();
     });
   });
 

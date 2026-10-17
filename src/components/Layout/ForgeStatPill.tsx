@@ -111,7 +111,7 @@ export function ForgeStatPill({
                 onClick={onClick}
                 className={cn(
                   // Press, transition and the open state's fill and inset edge
-                  // all come from toolbar.css, shared with the toolbar's other
+                  // all come from toolbar/controls.css, shared with the toolbar's other
                   // controls. `bg-clip-padding` keeps the hover, press and open
                   // tints off the segment's divider, which would otherwise
                   // brighten on one side of the lit segment only. The ring is

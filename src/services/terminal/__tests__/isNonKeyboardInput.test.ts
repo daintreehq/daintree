@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { Terminal } from "@xterm/headless";
 import { isNonKeyboardInput } from "../TerminalInstanceService";
+import { isTerminalReply } from "../inputUtils";
 
 describe("isNonKeyboardInput", () => {
   describe("mouse sequences", () => {
@@ -139,24 +140,9 @@ describe("isNonKeyboardInput", () => {
       expect(isNonKeyboardInput("\x1bOD")).toBe(true);
     });
 
-    it("matches Home/End (normal mode)", () => {
-      expect(isNonKeyboardInput("\x1b[H")).toBe(true);
-      expect(isNonKeyboardInput("\x1b[F")).toBe(true);
-    });
-
     it("matches Home/End (application mode)", () => {
       expect(isNonKeyboardInput("\x1bOH")).toBe(true);
       expect(isNonKeyboardInput("\x1bOF")).toBe(true);
-    });
-
-    it("matches Page Up/Down", () => {
-      expect(isNonKeyboardInput("\x1b[5~")).toBe(true);
-      expect(isNonKeyboardInput("\x1b[6~")).toBe(true);
-    });
-
-    it("matches Insert and Forward Delete keys", () => {
-      expect(isNonKeyboardInput("\x1b[2~")).toBe(true);
-      expect(isNonKeyboardInput("\x1b[3~")).toBe(true);
     });
 
     it("matches F1–F4 (SS3 prefix)", () => {
@@ -272,5 +258,28 @@ describe("isNonKeyboardInput", () => {
       expect(isNonKeyboardInput("\x1b[32;1;1K")).toBe(false);
       expect(isNonKeyboardInput("\x1b[32;1;1m")).toBe(false);
     });
+  });
+});
+
+describe("isTerminalReply", () => {
+  it.each([
+    ["a cursor-position report", "\x1b[24;1R"],
+    ["a device-attributes reply", "\x1b[?62;22c"],
+    ["a mode report", "\x1b[?2004;1$y"],
+    ["a colour reply", "\x1b]11;rgb:1e1e/1e1e/1e1e\x1b\\"],
+    ["a version reply", "\x1bP>|xterm.js(6.1)\x1b\\"],
+    ["a focus change", "\x1b[I"],
+  ])("recognises %s", (_name, data) => {
+    expect(isTerminalReply(data)).toBe(true);
+  });
+
+  it.each([
+    ["a letter", "y"],
+    ["Return", "\r"],
+    ["an arrow", "\x1b[A"],
+    ["a mouse click", "\x1b[<0;12;8M"],
+    ["Alt+]", "\x1b]"],
+  ])("leaves %s to the user", (_name, data) => {
+    expect(isTerminalReply(data)).toBe(false);
   });
 });

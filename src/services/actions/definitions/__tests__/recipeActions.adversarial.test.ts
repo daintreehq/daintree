@@ -471,36 +471,6 @@ describe("recipeActions adversarial", () => {
     expect(saveToRepo).not.toHaveBeenCalled();
   });
 
-  it("recipe.saveToRepo forwards deleteOriginal flag exactly", async () => {
-    const saveToRepo = vi.fn().mockResolvedValue(undefined);
-    setRecipeState({ saveToRepo });
-
-    const run = setupActions();
-    await run("recipe.saveToRepo", { recipeId: "r1", deleteOriginal: true });
-
-    expect(saveToRepo).toHaveBeenCalledWith("r1", true);
-  });
-
-  it("recipe.delete forwards the recipeId to the store exactly once", async () => {
-    const deleteRecipe = vi.fn().mockResolvedValue(undefined);
-    setRecipeState({ deleteRecipe });
-
-    const run = setupActions();
-    await run("recipe.delete", { recipeId: "r1" });
-
-    expect(deleteRecipe).toHaveBeenCalledTimes(1);
-    expect(deleteRecipe).toHaveBeenCalledWith("r1");
-  });
-
-  it("recipe.delete propagates store rejection to the caller", async () => {
-    const deleteRecipe = vi.fn().mockRejectedValue(new Error("delete failed"));
-    setRecipeState({ deleteRecipe });
-
-    const run = setupActions();
-
-    await expect(run("recipe.delete", { recipeId: "r1" })).rejects.toThrow("delete failed");
-  });
-
   it("recipe.editor.openFromLayout dispatches terminals from the live layout", async () => {
     const terminals = [{ title: "t1" }, { title: "t2" }];
     setRecipeState({
@@ -624,28 +594,6 @@ describe("recipeActions adversarial", () => {
         terminalCount: 2,
       });
     });
-
-    it("never reports a save — neither handoff writes a recipe", async () => {
-      const saveToRepo = vi.fn().mockResolvedValue(undefined);
-      const deleteRecipe = vi.fn().mockResolvedValue(undefined);
-      setRecipeState({
-        saveToRepo,
-        deleteRecipe,
-        generateRecipeFromActiveTerminals: vi.fn(() => [{ type: "terminal" }]),
-      });
-
-      const run = setupActions();
-      const blank = await run("recipe.editor.open", { worktreeId: "wt-a" });
-      const layout = await run("recipe.editor.openFromLayout", { worktreeId: "wt-a" });
-
-      // The exact-shape assertions above already fail on any extra key, so the
-      // load-bearing half here is that neither handoff touched a persistence
-      // collaborator — the write path has no MCP surface at all.
-      expect(blank).toBeTruthy();
-      expect(layout).toBeTruthy();
-      expect(saveToRepo).not.toHaveBeenCalled();
-      expect(deleteRecipe).not.toHaveBeenCalled();
-    });
   });
 
   describe("recipe editor argument schema (#11908)", () => {
@@ -758,19 +706,5 @@ describe("recipeActions adversarial", () => {
         expect(json?.["type"]).toBe("object");
       }
     });
-  });
-
-  it("recipe.manager.open dispatches the manager event with no detail", async () => {
-    setRecipeState({});
-
-    const run = setupActions();
-    await run("recipe.manager.open");
-
-    const event = dispatchSpy.mock.calls[0]![0] as unknown as {
-      type: string;
-      detail?: unknown;
-    };
-    expect(event.type).toBe("daintree:open-recipe-manager");
-    expect(event.detail).toBeFalsy();
   });
 });

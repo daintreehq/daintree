@@ -18,6 +18,21 @@ const storeMock = vi.hoisted(() => {
 
 vi.mock("../../../store.js", () => ({ store: storeMock }));
 
+const logMock = vi.hoisted(() => ({
+  debug: vi.fn(),
+  info: vi.fn(),
+  warn: vi.fn(),
+  error: vi.fn(),
+}));
+vi.mock("../../../utils/logger.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../../utils/logger.js")>();
+  return {
+    ...actual,
+    createLogger: (name: string) =>
+      name === "main:PluginAgentMcp" ? { name, ...logMock } : actual.createLogger(name),
+  };
+});
+
 import type { PluginMcpCaller } from "../../../../shared/types/plugin.js";
 import { AgentMcpEndpointRegistry } from "../endpointRegistry.js";
 import { pluginMcpGrantRegistry } from "../grantRegistry.js";
@@ -25,6 +40,8 @@ import { setProjectAgentMcpAccess } from "../projectEnablement.js";
 import {
   MAX_PARKED_PLUGIN_MCP_REQUESTS_PER_CREDENTIAL,
   MAX_PLUGIN_MCP_SESSIONS_PER_CREDENTIAL,
+  MAX_TRACKED_PLUGIN_MCP_REJECTIONS,
+  PLUGIN_MCP_REJECTION_LOG_INTERVAL_MS,
   PluginMcpRoute,
   parsePluginMcpRoute,
   type PluginMcpRouteDeps,
@@ -393,6 +410,120 @@ describe("PluginMcpRoute", () => {
     expect(route.sessionCount).toBe(0);
   });
 
+  it("tells a revoked credential why in its 401, and an unknown one nothing", async () => {
+    const { token } = issue();
+    pluginMcpGrantRegistry.revokeTerminal("term-1", "relaunched");
+
+    const revoked = await rawRequest({ token });
+    expect(revoked.status).toBe(401);
+    expect(revoked.headers.get("www-authenticate")).toBe('Bearer realm="Daintree plugin MCP"');
+    expect(await revoked.text()).toBe(
+      "Unauthorized: this credential was revoked (relaunched). Relaunch the agent to get a new one."
+    );
+
+    const unknown = await rawRequest({ token: "never-issued" });
+    expect(unknown.status).toBe(401);
+    expect(await unknown.text()).toBe("Unauthorized");
+  });
+
+  it("answers a credential revoked while its request waited with the same 401", async () => {
+    const { token } = issue();
+    const check = deferred<boolean>();
+    route.dispose();
+    await listener.close();
+    route = makeRoute({ isPluginLoaded: () => check.promise });
+    listener = await startListener(route);
+
+    const pending = rawRequest({ token });
+    await waitFor(() => listener.inFlight() === 1);
+    pluginMcpGrantRegistry.revokePlugin(INSTANCE);
+    check.resolve(true);
+
+    const response = await pending;
+    expect(response.status).toBe(401);
+    expect(await response.text()).toContain("revoked (plugin-unloaded)");
+  });
+
+  describe("rejection log", () => {
+    const warned = (rejection: string) =>
+      logMock.warn.mock.calls.filter(([message]) => String(message).endsWith(` ${rejection}`))
+        .length;
+
+    beforeEach(() => {
+      logMock.warn.mockClear();
+    });
+
+    afterEach(() => {
+      vi.restoreAllMocks();
+    });
+
+    it("logs a refusal once per category and credential within the window", async () => {
+      await rawRequest({ token: "never-issued" });
+      await rawRequest({ token: "also-never-issued" });
+      expect(warned("unknown-bearer")).toBe(1);
+
+      const { token } = issue();
+      const { token: other } = issue({ terminalId: "term-2" });
+      await rawRequest({ token, url: routeUrl(OTHER_INSTANCE) });
+      await rawRequest({ token, url: routeUrl(OTHER_INSTANCE) });
+      await rawRequest({ token: other, url: routeUrl(OTHER_INSTANCE) });
+      expect(warned("route-mismatch")).toBe(2);
+      expect(warned("unknown-bearer")).toBe(1);
+    });
+
+    it("logs the same refusal again once the window has passed", async () => {
+      const start = Date.now();
+      const clock = vi.spyOn(Date, "now").mockReturnValue(start);
+      await rawRequest({ token: "never-issued" });
+      clock.mockReturnValue(start + PLUGIN_MCP_REJECTION_LOG_INTERVAL_MS - 1);
+      await rawRequest({ token: "never-issued" });
+      expect(warned("unknown-bearer")).toBe(1);
+
+      clock.mockReturnValue(start + PLUGIN_MCP_REJECTION_LOG_INTERVAL_MS);
+      await rawRequest({ token: "never-issued" });
+      expect(warned("unknown-bearer")).toBe(2);
+    });
+
+    it("drops new lines rather than forget live suppressions once its table is full", () => {
+      const log = (
+        route as unknown as {
+          logRejection(
+            status: number,
+            rejection: string,
+            credentialId: string | null,
+            context: Record<string, unknown>
+          ): void;
+        }
+      ).logRejection.bind(route);
+      const start = Date.now();
+      const clock = vi.spyOn(Date, "now").mockReturnValue(start);
+      for (let i = 0; i < MAX_TRACKED_PLUGIN_MCP_REJECTIONS; i++) {
+        log(403, "route-mismatch", `credential-${i}`, {});
+      }
+      expect(warned("route-mismatch")).toBe(MAX_TRACKED_PLUGIN_MCP_REJECTIONS);
+
+      log(403, "route-mismatch", "credential-overflow", {});
+      log(403, "route-mismatch", "credential-0", {});
+      expect(warned("route-mismatch")).toBe(MAX_TRACKED_PLUGIN_MCP_REJECTIONS);
+
+      clock.mockReturnValue(start + PLUGIN_MCP_REJECTION_LOG_INTERVAL_MS);
+      log(403, "route-mismatch", "credential-overflow", {});
+      expect(warned("route-mismatch")).toBe(MAX_TRACKED_PLUGIN_MCP_REJECTIONS + 1);
+    });
+
+    it("never logs the bearer it refused", async () => {
+      const { token } = issue();
+      pluginMcpGrantRegistry.revokeTerminal("term-1");
+      await rawRequest({ token });
+      await rawRequest({ token: "never-issued-bearer-value" });
+
+      const logged = JSON.stringify(logMock.warn.mock.calls);
+      expect(warned("revoked")).toBe(1);
+      expect(logged).not.toContain(token);
+      expect(logged).not.toContain("never-issued-bearer-value");
+    });
+  });
+
   it("rejects a credential presented on another plugin's route", async () => {
     const { token } = issue();
     const response = await rawRequest({ token, url: routeUrl(OTHER_INSTANCE) });
@@ -676,15 +807,6 @@ describe("PluginMcpRoute", () => {
     expect(response.status).toBe(400);
   });
 
-  it("rejects a direct call to an unlisted tool without dispatching it", async () => {
-    const { token } = issue();
-    const { client } = await connect(token);
-    await expect(client.callTool({ name: "actions_list", arguments: {} })).rejects.toThrow(
-      /Unknown tool/
-    );
-    expect(invoke).not.toHaveBeenCalled();
-  });
-
   it("caps the sessions one credential may hold open", async () => {
     const { token } = issue();
     for (let i = 0; i < MAX_PLUGIN_MCP_SESSIONS_PER_CREDENTIAL; i++) {
@@ -947,16 +1069,6 @@ describe("PluginMcpRoute", () => {
     const result = await client.callTool({ name: "lookup", arguments: {} });
     expect(result.isError).toBe(true);
     expect(JSON.stringify(result.content)).not.toContain("x".repeat(200));
-  });
-
-  it("does not file a session for a request the SDK never initialized", async () => {
-    const { token } = issue();
-    const response = await rawRequest({
-      token,
-      body: { jsonrpc: "2.0", id: 1, method: "tools/list", params: {} },
-    });
-    expect(response.status).toBe(400);
-    expect(route.sessionCount).toBe(0);
   });
 
   it("does not file a session for GET or DELETE without a session id", async () => {

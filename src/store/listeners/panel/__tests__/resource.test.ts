@@ -7,8 +7,10 @@ vi.mock("@/store/slices", () => ({
 }));
 
 const flushDraftsMock = vi.hoisted(() => vi.fn());
+const stopLiveSyncMock = vi.hoisted(() => vi.fn());
+const startLiveSyncMock = vi.hoisted(() => vi.fn(() => stopLiveSyncMock));
 vi.mock("@/store/persistence/draftInputPersistence", () => ({
-  draftInputPersistence: { flushAll: flushDraftsMock },
+  draftInputPersistence: { flushAll: flushDraftsMock, startLiveSync: startLiveSyncMock },
 }));
 
 vi.mock("@/store/resourceMonitoringStore", () => ({
@@ -89,5 +91,13 @@ describe("setupResourceListeners — persistence flush on hide (#9914)", () => {
     d.dispose();
     windowSpy.mockRestore();
     documentSpy.mockRestore();
+  });
+
+  it("keeps drafts syncing live while the listeners are up (#13283)", () => {
+    const d = setupResourceListeners();
+    expect(startLiveSyncMock).toHaveBeenCalledTimes(1);
+    expect(stopLiveSyncMock).not.toHaveBeenCalled();
+    d.dispose();
+    expect(stopLiveSyncMock).toHaveBeenCalledTimes(1);
   });
 });

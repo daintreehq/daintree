@@ -1,7 +1,7 @@
 import { useShallow } from "zustand/react/shallow";
 import { usePanelStore, useWorktreeSelectionStore, useDockStore } from "@/store";
 import { useTerminalInputStore } from "@/store/terminalInputStore";
-import { useTerminalNotificationCounts } from "@/hooks/useTerminalSelectors";
+import { useDemandTerminalCount } from "@/hooks/useTerminalSelectors";
 import { isRuntimeAgentTerminal } from "@/utils/terminalType";
 import type { DockRenderState } from "@shared/types";
 
@@ -15,7 +15,6 @@ export function useDockRenderState(): DockRenderState & {
   hasDocked: boolean;
   dockedCount: number;
   hasStatus: boolean;
-  waitingCount: number;
   trashedCount: number;
   shouldFadeForInput: boolean;
 } {
@@ -45,7 +44,9 @@ export function useDockRenderState(): DockRenderState & {
 
   const trashedCount = usePanelStore((state) => state.trashedTerminals.size);
 
-  const { waitingCount } = useTerminalNotificationCounts();
+  // The agents behind the Waiting and Unread pills, so a dock holding only an
+  // unread hand-back still announces itself as a landmark.
+  const demandCount = useDemandTerminalCount();
 
   const hybridInputEnabled = useTerminalInputStore((state) => state.hybridInputEnabled);
 
@@ -60,7 +61,7 @@ export function useDockRenderState(): DockRenderState & {
 
   const hasDocked = dockTerminals.length > 0;
   const dockedCount = dockTerminals.length;
-  const hasStatus = waitingCount > 0 || trashedCount > 0;
+  const hasStatus = demandCount > 0 || trashedCount > 0;
 
   // Dock is always visible now - no hidden mode
   const shouldShowInLayout = isHydrated;
@@ -74,7 +75,6 @@ export function useDockRenderState(): DockRenderState & {
     hasDocked,
     dockedCount,
     hasStatus,
-    waitingCount,
     trashedCount,
     shouldFadeForInput,
   };

@@ -1,4 +1,13 @@
-import { useState, useCallback, useRef, useEffect, useMemo, useId, type ReactNode } from "react";
+import {
+  useState,
+  useCallback,
+  useRef,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useId,
+  type ReactNode,
+} from "react";
 import { flushSync } from "react-dom";
 import {
   ArrowLeft,
@@ -21,6 +30,8 @@ import {
   ZoomOut,
 } from "lucide-react";
 import { PALETTE_ROW_CLASS } from "@/components/ui/paletteRowStyles";
+import { ROW_CONTROL_CLASS, RowControlTooltip } from "@/components/ui/RowControl";
+import { ScrollShadow } from "@/components/ui/ScrollShadow";
 import { cn } from "@/lib/utils";
 import {
   PANE_TOOLBAR_ICON_BUTTON_CLASS,
@@ -28,9 +39,11 @@ import {
   PANE_TOOLBAR_TEXT_BUTTON_CLASS,
 } from "@/components/ui/paneToolbarStyles";
 import { normalizeBrowserUrl, getDisplayUrl } from "./browserUtils";
+import { SuggestionAddress, addressEmphasis } from "./SuggestionAddress";
 import type { NormalizeResult } from "./browserUtils";
 import { actionService } from "@/services/ActionService";
 import { useUrlHistoryStore, getFrecencySuggestions } from "@/store/urlHistoryStore";
+import { hostScopedKey } from "@/hooks/useHostPlatform";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import {
   DropdownMenu,
@@ -54,6 +67,9 @@ import { CopyButton } from "@/components/ui/CopyButton";
 import { copyWithToast } from "@/lib/copyWithToast";
 import { armTooltipFocusSuppression } from "@/lib/tooltipFocusSuppression";
 import { useResizeObserverRaf } from "@/hooks/useResizeObserverRaf";
+import { isElementTruncated } from "@/hooks/useTruncationDetection";
+import { isMac } from "@/lib/platform";
+import { describeChord } from "@/lib/kbdShortcut";
 import { useAnimatedPresence } from "@/hooks/useAnimatedPresence";
 import { keyBelongsToField, stepListboxCursor } from "@/hooks/useListboxCursor";
 import {
@@ -86,6 +102,9 @@ const ANCHORED_EXIT_STYLE = {
 const LONG_PRESS_MS = 400;
 const COMPACT_ROW_WIDTH = 640;
 const COPIED_FEEDBACK_RESET_MS = 2000;
+// The list's 8px drop from the field plus 8px clear of the pane's bottom edge.
+const LIST_PANE_INSET = 16;
+const LIST_MIN_HEIGHT = 96;
 
 const ZOOM_PRESETS = [
   { value: 0.25, label: "25%" },
@@ -297,9 +316,6 @@ export function BrowserToolbar({
   // console toggle into More, rather than letting the address shrink to nothing.
   const [rowElement, setRowElement] = useState<HTMLDivElement | null>(null);
   const [isCompact, setIsCompact] = useState(false);
-  useResizeObserverRaf(rowElement, (entry) => {
-    setIsCompact(entry.contentRect.width < COMPACT_ROW_WIDTH);
-  });
   const [isZoomPopoverOpen, setIsZoomPopoverOpen] = useState(false);
   const copyButtonRef = useRef<HTMLButtonElement>(null);
   const moreButtonRef = useRef<HTMLButtonElement>(null);
@@ -308,7 +324,7 @@ export function BrowserToolbar({
   const listboxId = useId();
 
   const projectEntries = useUrlHistoryStore(
-    (state) => (projectId ? state.entries[projectId] : undefined) ?? EMPTY_ENTRIES
+    (state) => (projectId ? state.entries[hostScopedKey(projectId)] : undefined) ?? EMPTY_ENTRIES
   );
 
   // Matched against the address people see and type, never the URL underneath:
@@ -349,9 +365,97 @@ export function BrowserToolbar({
     (target: string) => getDisplayUrl(toAddress ? toAddress(target) : target),
     [toAddress]
   );
+  const rowAddresses = useMemo(
+    () => listRows.map((entry) => addressOf(entry.url)),
+    [listRows, addressOf]
+  );
+  const emphasis = addressEmphasis(rowAddresses);
 
+  // Shift+Backspace is the same chord on a Mac keyboard, which has no forward Delete.
+  const removeChord = isMac() ? "Shift+Backspace" : "Shift+Delete";
+  const removeHintId = useId();
+
+  const removeSuggestion = useCallback(
+    (entry: UrlHistoryEntry) => {
+      if (!projectId) return;
+      useUrlHistoryStore.getState().removeUrl(projectId, entry.url);
+      announceHistoryChange(`Removed ${addressOf(entry.url)} from history`);
+    },
+    [projectId, announceHistoryChange, addressOf]
+  );
+
+  // Whether the highlighted row cuts its title or address, which is when the
+  // list spells out the whole destination under its last row.
+  const highlightedEntry = highlightedIndex >= 0 ? listRows[highlightedIndex] : undefined;
+  const [highlightedCut, setHighlightedCut] = useState(false);
+  const measureHighlightedCut = useCallback(() => {
+    const row = highlightedEntry
+      ? document.getElementById(`${listboxId}-option-${highlightedIndex}`)
+      : null;
+    const texts = row?.querySelectorAll<HTMLElement>("[data-suggestion-text]") ?? [];
+    setHighlightedCut(
+      Array.from(texts).some(
+        (text) => text.hasAttribute("data-suggestion-cut") || isElementTruncated(text)
+      )
+    );
+  }, [highlightedEntry, highlightedIndex, listboxId]);
+  useLayoutEffect(() => {
+    measureHighlightedCut();
+  }, [measureHighlightedCut, listRows]);
+  const revealDestination = listOpen && highlightedCut;
+
+  // The pane clips, so the list and its footer keep to the room under the
+  // field: past that the rows scroll and the footer stays where it is.
+  const listboxRef = useRef<HTMLDivElement>(null);
+  const [listMaxHeight, setListMaxHeight] = useState<number | undefined>(undefined);
+  const fitListToPane = useCallback(() => {
+    const field = containerRef.current;
+    const pane = field?.closest<HTMLElement>("[data-panel-id]");
+    if (!field || !pane) {
+      setListMaxHeight(undefined);
+      return;
+    }
+    const room =
+      pane.getBoundingClientRect().bottom - field.getBoundingClientRect().bottom - LIST_PANE_INSET;
+    setListMaxHeight(Math.max(Math.floor(room), LIST_MIN_HEIGHT));
+  }, []);
+  useLayoutEffect(() => {
+    if (listOpen) fitListToPane();
+  }, [listOpen, fitListToPane]);
+  // The pane can lose height with its width, and so its toolbar row, unchanged.
+  useEffect(() => {
+    const pane = listOpen ? containerRef.current?.closest<HTMLElement>("[data-panel-id]") : null;
+    if (!pane || typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver(fitListToPane);
+    observer.observe(pane);
+    return () => observer.disconnect();
+  }, [listOpen, fitListToPane]);
+  useResizeObserverRaf(rowElement, (entry) => {
+    setIsCompact(entry.contentRect.width < COMPACT_ROW_WIDTH);
+    // The list is as wide as the field, which follows the row.
+    measureHighlightedCut();
+  });
+
+  // A scrolled list keeps the row the keys are on in view, clear of its edge
+  // fades (the list's scroll padding); the field keeps focus.
+  useLayoutEffect(() => {
+    const list = listboxRef.current;
+    if (!list || highlightedIndex < 0 || list.scrollHeight <= list.clientHeight) return;
+    document
+      .getElementById(`${listboxId}-option-${highlightedIndex}`)
+      ?.scrollIntoView({ block: "nearest" });
+  }, [highlightedIndex, listboxId, listMaxHeight, revealDestination]);
+
+  // Typing starts the cursor over from the field. Anything else that changes the
+  // rows — a removal, a title arriving for a visited page — leaves it where it
+  // was, so after Shift+Delete the row that moved up under it is the next one
+  // Enter or Shift+Delete acts on, as in Chrome.
   useEffect(() => {
     setHighlightedIndex(-1);
+  }, [inputValue, isEditing]);
+
+  useEffect(() => {
+    setHighlightedIndex((index) => Math.min(index, suggestions.length - 1));
     setIsDropdownOpen(isEditing && suggestions.length > 0 && !suggestionsDismissedRef.current);
   }, [suggestions, isEditing]);
 
@@ -442,18 +546,7 @@ export function BrowserToolbar({
         }
         if (e.shiftKey && (e.key === "Delete" || e.key === "Backspace") && highlightedIndex >= 0) {
           e.preventDefault();
-          const entry = suggestions[highlightedIndex]!;
-          if (projectId) {
-            useUrlHistoryStore.getState().removeUrl(projectId, entry.url);
-          }
-          announceHistoryChange(`Removed ${addressOf(entry.url)} from history`);
-          const remaining = suggestions.length - 1;
-          if (remaining === 0) {
-            setIsDropdownOpen(false);
-            setHighlightedIndex(-1);
-          } else if (highlightedIndex >= remaining) {
-            setHighlightedIndex(remaining - 1);
-          }
+          removeSuggestion(suggestions[highlightedIndex]!);
           return;
         }
       }
@@ -494,9 +587,7 @@ export function BrowserToolbar({
       error,
       onFocusPage,
       onNavigate,
-      projectId,
-      announceHistoryChange,
-      addressOf,
+      removeSuggestion,
     ]
   );
 
@@ -802,6 +893,13 @@ export function BrowserToolbar({
       <span role="status" aria-live="polite" aria-atomic="true" className="sr-only">
         {screenshotCopied ? "Screenshot copied to clipboard" : ""}
       </span>
+      {/* The remove control is a pointer-only span (an option may hold no
+          control), so each row names its keyboard route instead. */}
+      {projectId && (
+        <span id={removeHintId} className="sr-only">
+          {`Press ${describeChord(removeChord, isMac())} to remove from history`}
+        </span>
+      )}
       <div ref={setRowElement} className="flex items-center gap-2 px-2 py-1.5">
         <div className="flex shrink-0 items-center gap-0.5">
           {navButton("back")}
@@ -1002,7 +1100,7 @@ export function BrowserToolbar({
                 id={errorId}
                 role="alert"
                 className={cn(
-                  "absolute left-0 mt-1 max-w-full text-xs text-status-error surface-overlay shadow-overlay border border-status-error rounded-[var(--radius-md)] px-2 py-1 z-10",
+                  "absolute left-0 mt-2 max-w-full text-xs text-status-error surface-overlay shadow-overlay border border-status-error rounded-[var(--radius-md)] px-2 py-1 z-10",
                   ANCHORED_MOTION_CLASS
                 )}
                 style={ANCHORED_ENTER_STYLE}
@@ -1015,96 +1113,160 @@ export function BrowserToolbar({
           {listRendered && (
             <div
               ref={listOpen ? dropdownRef : undefined}
-              id={listOpen ? listboxId : undefined}
-              role={listOpen ? "listbox" : undefined}
               inert={!listOpen || undefined}
               aria-hidden={listOpen ? undefined : true}
               data-visible={listVisible}
               className={cn(
-                "absolute left-0 right-0 top-full mt-1 z-50 rounded-[var(--radius-lg)] surface-overlay shadow-overlay overflow-hidden p-1",
+                // Clear of the field's 2px focus ring, which sits 2px outside it.
+                "absolute left-0 right-0 top-full mt-2 z-50 flex flex-col rounded-[var(--radius-lg)] surface-overlay shadow-overlay overflow-hidden",
                 ANCHORED_MOTION_CLASS
               )}
-              style={listVisible ? ANCHORED_ENTER_STYLE : ANCHORED_EXIT_STYLE}
+              style={{
+                ...(listVisible ? ANCHORED_ENTER_STYLE : ANCHORED_EXIT_STYLE),
+                maxHeight: listMaxHeight,
+              }}
             >
-              {listRows.map((entry, index) => {
-                const entryAddress = addressOf(entry.url);
-                return (
-                  <div
-                    key={entry.url}
-                    id={`${listboxId}-option-${index}`}
-                    role="option"
-                    aria-selected={index === highlightedIndex}
-                    // `pointermove`, not `mouseenter`: rows scrolling under a
-                    // resting pointer must not steal the cursor from the keys.
-                    onPointerMove={
-                      index === highlightedIndex ? undefined : () => setHighlightedIndex(index)
-                    }
-                    onMouseDown={(e) => {
-                      e.preventDefault();
-                      setIsEditing(false);
-                      setIsDropdownOpen(false);
-                      setHighlightedIndex(-1);
-                      onNavigate(entry.url);
-                    }}
-                    className={cn(
-                      PALETTE_ROW_CLASS,
-                      "group/row w-full text-left rounded-[var(--radius-sm)] px-2.5 py-1.5 flex items-center gap-2 cursor-pointer"
-                    )}
-                  >
-                    {entry.favicon ? (
-                      <span className="relative w-4 h-4 shrink-0">
-                        <img
-                          src={entry.favicon}
-                          alt=""
-                          className="w-4 h-4 rounded-[var(--radius-sm)] object-contain"
-                          onError={(e) => {
-                            const img = e.target as HTMLImageElement;
-                            img.style.display = "none";
-                            const fallback = img.nextElementSibling;
-                            if (fallback) (fallback as HTMLElement).style.display = "";
-                          }}
-                        />
-                        <Globe
-                          className="w-4 h-4 text-text-secondary absolute inset-0"
-                          style={{ display: "none" }}
-                        />
-                      </span>
-                    ) : (
-                      <Globe className="w-4 h-4 shrink-0 text-text-secondary" />
-                    )}
-                    <div className="flex-1 min-w-0 flex flex-col gap-0.5 text-left">
-                      {entry.title && (
-                        <span className="text-xs text-text-primary truncate">{entry.title}</span>
+              <ScrollShadow
+                compact
+                ref={listboxRef}
+                id={listOpen ? listboxId : undefined}
+                role={listOpen ? "listbox" : undefined}
+                aria-label={listOpen ? "Suggestions from history" : undefined}
+                scrollClassName="p-1 scroll-py-4"
+              >
+                {listRows.map((entry, index) => {
+                  const entryAddress = rowAddresses[index]!;
+                  return (
+                    <div
+                      key={entry.url}
+                      id={`${listboxId}-option-${index}`}
+                      role="option"
+                      aria-selected={index === highlightedIndex}
+                      aria-describedby={projectId ? removeHintId : undefined}
+                      // `pointermove`, not `mouseenter`: rows scrolling under a
+                      // resting pointer must not steal the cursor from the keys.
+                      onPointerMove={
+                        index === highlightedIndex ? undefined : () => setHighlightedIndex(index)
+                      }
+                      onMouseDown={(e) => {
+                        e.preventDefault();
+                        setIsEditing(false);
+                        setIsDropdownOpen(false);
+                        setHighlightedIndex(-1);
+                        onNavigate(entry.url);
+                      }}
+                      className={cn(
+                        PALETTE_ROW_CLASS,
+                        "group/row w-full text-left rounded-[var(--radius-sm)] py-1.5 pl-2.5 pr-1.5 flex items-center gap-2 cursor-pointer"
                       )}
-                      <span className="text-xs text-text-secondary truncate">{entryAddress}</span>
+                    >
+                      {entry.favicon ? (
+                        <span className="relative w-4 h-4 shrink-0">
+                          <img
+                            src={entry.favicon}
+                            alt=""
+                            className="w-4 h-4 rounded-[var(--radius-sm)] object-contain"
+                            onError={(e) => {
+                              const img = e.currentTarget;
+                              img.style.display = "none";
+                              const fallback = img.nextElementSibling;
+                              if (
+                                fallback instanceof HTMLElement ||
+                                fallback instanceof SVGElement
+                              ) {
+                                fallback.style.display = "";
+                              }
+                            }}
+                          />
+                          <Globe
+                            className="w-4 h-4 text-text-secondary absolute inset-0"
+                            style={{ display: "none" }}
+                          />
+                        </span>
+                      ) : (
+                        <Globe className="w-4 h-4 shrink-0 text-text-secondary" />
+                      )}
+                      <div className="flex-1 min-w-0 flex flex-col gap-0.5 text-left">
+                        {entry.title && (
+                          <span
+                            data-suggestion-text=""
+                            className="text-xs text-text-primary truncate"
+                          >
+                            {entry.title}
+                          </span>
+                        )}
+                        <SuggestionAddress
+                          address={entryAddress}
+                          emphasis={emphasis}
+                          standalone={!entry.title}
+                        />
+                      </div>
+                      {projectId && (
+                        <RowControlTooltip
+                          label="Remove from history"
+                          shortcut={removeChord}
+                          // Out past the list's edge: above or below, it would
+                          // cover the neighbouring row's address.
+                          side="right"
+                        >
+                          <span
+                            aria-hidden="true"
+                            data-testid="browser-history-remove"
+                            // Keeps the field focused and the row from navigating;
+                            // the removal itself waits for the click, so a press
+                            // dragged off the control takes nothing out.
+                            onMouseDown={(e) => {
+                              e.preventDefault();
+                              e.stopPropagation();
+                            }}
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              removeSuggestion(entry);
+                            }}
+                            className={cn(
+                              ROW_CONTROL_CLASS,
+                              "opacity-0 group-hover/row:opacity-100 group-aria-selected/row:opacity-100"
+                            )}
+                          >
+                            <X className="size-3.5" aria-hidden="true" />
+                          </span>
+                        </RowControlTooltip>
+                      )}
                     </div>
-                    {projectId && (
-                      <button
-                        type="button"
-                        tabIndex={-1}
-                        aria-hidden="true"
-                        onMouseDown={(e) => {
-                          e.preventDefault();
-                          e.stopPropagation();
-                          useUrlHistoryStore.getState().removeUrl(projectId, entry.url);
-                          announceHistoryChange(`Removed ${entryAddress} from history`);
-                          const remaining = suggestions.length - 1;
-                          if (remaining === 0) {
-                            setIsDropdownOpen(false);
-                            setHighlightedIndex(-1);
-                          } else if (index === highlightedIndex && highlightedIndex >= remaining) {
-                            setHighlightedIndex(remaining - 1);
-                          }
-                        }}
-                        className="shrink-0 p-0.5 rounded-[var(--radius-sm)] opacity-0 group-hover/row:opacity-100 group-focus-within/row:opacity-100 hover:bg-overlay-strong transition-opacity text-text-secondary hover:text-text-primary"
-                        aria-label={`Remove ${entryAddress} from history`}
-                      >
-                        <X className="w-3 h-3" />
-                      </button>
-                    )}
+                  );
+                })}
+              </ScrollShadow>
+              {/* The highlighted row's whole destination, while its row cuts
+                  the title or the address: part of the list's own panel, under
+                  the last row, so it never covers a row or the field and moves
+                  with the list wherever the list has room to open. The option
+                  already carries all of it as its name. */}
+              {revealDestination && highlightedEntry && (
+                <div
+                  aria-hidden="true"
+                  data-testid="browser-suggestion-destination"
+                  className="shrink-0 border-t border-border-divider px-1 py-2 text-xs"
+                >
+                  {/* A row's own box — its 1px border, inset and favicon
+                      column — so the text sits on the rows' text column. */}
+                  <div className="flex gap-2 border border-transparent pl-2.5 pr-2">
+                    <span className="w-4 shrink-0" />
+                    <span className="flex min-w-0 flex-col gap-0.5">
+                      {highlightedEntry.title && (
+                        <span className="text-text-primary [overflow-wrap:anywhere]">
+                          {highlightedEntry.title}
+                        </span>
+                      )}
+                      <SuggestionAddress
+                        address={toAddress ? toAddress(highlightedEntry.url) : highlightedEntry.url}
+                        emphasis={emphasis}
+                        standalone={!highlightedEntry.title}
+                        wrap
+                      />
+                    </span>
                   </div>
-                );
-              })}
+                </div>
+              )}
             </div>
           )}
         </div>

@@ -199,6 +199,12 @@ interface UseTokenResolutionParams {
   terminalId: string;
   cwd: string;
   agentId?: BuiltInAgentId;
+  /**
+   * Expand `@terminal`, `@selection` and `@diff` into what they name here.
+   * Off for a terminal on another host, where this machine's screens and
+   * working tree are not the agent's: the tokens go as typed.
+   */
+  expandContext?: boolean;
 }
 
 export function useTokenResolution({
@@ -209,6 +215,7 @@ export function useTokenResolution({
   terminalId,
   cwd,
   agentId,
+  expandContext = true,
 }: UseTokenResolutionParams) {
   const isSendingRef = useRef(false);
 
@@ -229,9 +236,9 @@ export function useTokenResolution({
       // could otherwise interleave and double-post.
       isSendingRef.current = true;
       try {
-        const terminalTokens = getAllAtTerminalTokens(text);
-        const selectionTokens = getAllAtSelectionTokens(text);
-        const diffTokens = getAllAtDiffTokens(text);
+        const terminalTokens = expandContext ? getAllAtTerminalTokens(text) : [];
+        const selectionTokens = expandContext ? getAllAtSelectionTokens(text) : [];
+        const diffTokens = expandContext ? getAllAtDiffTokens(text) : [];
 
         const replacements: TokenExpansion[] = [];
 
@@ -341,6 +348,7 @@ export function useTokenResolution({
       applyEditorValue,
       agentId,
       cwd,
+      expandContext,
       terminalId,
       latestRef,
       setActiveCompletionContext,

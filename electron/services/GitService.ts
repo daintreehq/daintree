@@ -4,6 +4,7 @@ import { resolve, dirname, normalize, sep, isAbsolute } from "path";
 import { existsSync, realpathSync } from "fs";
 import { readFile, stat } from "fs/promises";
 import { logDebug, logError, logWarn } from "../utils/logger.js";
+import { newFileDiff } from "../utils/newFileDiff.js";
 import type { GitStatus, WorktreeChanges } from "../../shared/types/index.js";
 import type { BranchInfo, CreateWorktreeOptions } from "../../shared/types/git.js";
 import { WorktreeRemovedError, GitError, toGitOperationError } from "../utils/errorTypes.js";
@@ -75,9 +76,17 @@ export class GitService {
   }
 
   // Lazy so constructing a GitService that is never used cannot leave an
-  // unhandled rejection behind (createHardenedGit is async since #10395).
+  // unhandled rejection behind (createHardenedGit is async since #10395). A
+  // failed build is not kept, so the next call retries: on Windows the build
+  // fails while PATH holds no git, and a git installed since must be found.
   private getGit(): Promise<SimpleGit> {
-    this.git ??= createHardenedGit(this.rootPath);
+    if (!this.git) {
+      const git = Promise.resolve(createHardenedGit(this.rootPath));
+      this.git = git;
+      git.catch(() => {
+        if (this.git === git) this.git = null;
+      });
+    }
     return this.git;
   }
 
@@ -322,15 +331,7 @@ export class GitService {
           return "BINARY_FILE";
         }
 
-        const content = buffer.toString("utf-8");
-        const lines = content.split("\n");
-
-        return `diff --git a/${gitPath} b/${gitPath}
-new file mode 100644
---- /dev/null
-+++ b/${gitPath}
-@@ -0,0 +1,${lines.length} @@
-${lines.map((l) => "+" + l).join("\n")}`;
+        return newFileDiff(gitPath, buffer.toString("utf-8"));
       } catch (error) {
         logError("Failed to read new file for diff", {
           filePath: normalizedPath,

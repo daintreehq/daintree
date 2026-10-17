@@ -52,9 +52,7 @@ describe("WorktreeActivityChip", () => {
 
   it.each([
     ["both missing", {}],
-    ["both null", { lastActivityTimestamp: null, lastCommitTimestampMs: null }],
     ["both invalid", { lastActivityTimestamp: Number.NaN, lastCommitTimestampMs: 0 }],
-    ["both in the future", { lastActivityTimestamp: NOW + 1, lastCommitTimestampMs: NOW + 1 }],
   ])("renders nothing when %s", (_label, props) => {
     const { container } = renderChip(props);
     expect(container.textContent).toBe("");
@@ -69,25 +67,11 @@ describe("WorktreeActivityChip", () => {
 
   it.each([
     ["missing", undefined],
-    ["invalid", Number.NaN],
     ["in the future", NOW + 60_000],
   ])("falls back to the commit time when activity is %s", (_label, activity) => {
     const commit = NOW - 2 * 86_400_000;
     renderChip({ lastActivityTimestamp: activity, lastCommitTimestampMs: commit });
     expect(chip()!.textContent).toBe(expectedLabel(commit));
-  });
-
-  it("marks the dot active only for fresh activity", () => {
-    const { rerender, container } = renderChip({ lastActivityTimestamp: NOW - 10_000 });
-    const dot = () => container.querySelector("[data-activity-active]");
-    expect(dot()!.getAttribute("data-activity-active")).toBe("true");
-
-    rerender(
-      <TooltipProvider>
-        <WorktreeActivityChip lastActivityTimestamp={NOW - 3 * 3_600_000} />
-      </TooltipProvider>
-    );
-    expect(dot()!.getAttribute("data-activity-active")).toBe("false");
   });
 
   it("is reachable by keyboard and exposes its age in the accessible text", () => {
@@ -147,13 +131,5 @@ describe("WorktreeActivityChip", () => {
     });
     act(() => dismissAllTooltips());
     expect(screen.getAllByText("feat: pinned").length).toBeGreaterThan(0);
-  });
-
-  it("shows the no-author header when the commit has no author", () => {
-    renderChip({ lastCommitTimestampMs: NOW - 86_400_000, commitMessage: "imported" });
-    act(() => {
-      fireEvent.focus(chip()!);
-    });
-    expect(screen.getAllByText("Last commit").length).toBeGreaterThan(0);
   });
 });

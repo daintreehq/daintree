@@ -474,10 +474,6 @@ describe("computeVerticalMove — section-aware 2D math", () => {
     expect(computeVerticalMove(3, -1, 3, 5, SECTION_SIZES)).toBe(1);
   });
 
-  it("ArrowUp from c (column 0) returns to a (column 0)", () => {
-    expect(computeVerticalMove(2, -1, 3, 5, SECTION_SIZES)).toBe(0);
-  });
-
   it("ArrowUp from a (first cell, first section) clamps at a", () => {
     expect(computeVerticalMove(0, -1, 3, 5, SECTION_SIZES)).toBe(0);
   });

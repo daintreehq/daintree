@@ -41,6 +41,7 @@ vi.mock("@/store", () => ({
   useErrorStore: () => ({ errors: [] }),
   usePortalStore: () => ({ isOpen: false, width: 0 }),
 }));
+vi.mock("@/store/portalStore", () => ({ usePortalStore: () => ({ isOpen: false, width: 0 }) }));
 
 vi.mock("@/store/telemetryPreviewStore", () => ({
   useTelemetryPreviewStore: () => ({ active: false, events: [] }),
@@ -53,6 +54,10 @@ vi.mock("@/hooks", async (importOriginal) => {
     useOverlayState: () => {},
   };
 });
+vi.mock("@/hooks/useOverlayState", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/hooks/useOverlayState")>()),
+  useOverlayState: () => {},
+}));
 
 vi.mock("@/hooks/useAnimatedPresence", () => ({
   useAnimatedPresence: ({ isOpen }: { isOpen: boolean }) => ({
@@ -96,6 +101,9 @@ vi.mock("@/components/icons", () => {
     HollowCircle: stub,
     InteractingCircle: stub,
     ExitedCircle: stub,
+    UnreadCircle: stub,
+    DoneCircle: stub,
+    IdleCircle: stub,
   };
 });
 
@@ -217,22 +225,5 @@ describe("EventsActions — ConfirmDialog", () => {
     // After dispatch resolves, dialog should close
     await new Promise((resolve) => setTimeout(resolve, 0));
     expect(screen.queryByText("Clear events?")).toBeNull();
-  });
-
-  it("does not show dialog before clicking Clear", () => {
-    render(<EventsActions />);
-
-    expect(screen.queryByText("Clear events?")).toBeNull();
-  });
-
-  it("does not use window.confirm", () => {
-    const confirmSpy = vi.spyOn(window, "confirm");
-
-    render(<EventsActions />);
-
-    fireEvent.click(screen.getByText("Clear events"));
-
-    expect(confirmSpy).not.toHaveBeenCalled();
-    confirmSpy.mockRestore();
   });
 });

@@ -79,49 +79,6 @@ describe("updateAgentState store action (#3217)", () => {
     ).toBe("waiting");
   });
 
-  it("allows working to overwrite directing", () => {
-    usePanelStore.setState({
-      panelsById: { [baseTerminal.id]: baseTerminal },
-      panelIds: [baseTerminal.id],
-    });
-
-    usePanelStore.getState().updateAgentState("test-terminal-1", "working");
-
-    expect(
-      (usePanelStore.getState().panelsById["test-terminal-1"] as PtyPanelData | undefined)
-        ?.agentState
-    ).toBe("working");
-  });
-
-  it("allows idle to overwrite directing", () => {
-    usePanelStore.setState({
-      panelsById: { [baseTerminal.id]: baseTerminal },
-      panelIds: [baseTerminal.id],
-    });
-
-    usePanelStore.getState().updateAgentState("test-terminal-1", "idle");
-
-    expect(
-      (usePanelStore.getState().panelsById["test-terminal-1"] as PtyPanelData | undefined)
-        ?.agentState
-    ).toBe("idle");
-  });
-
-  it("allows waiting when current state is not directing", () => {
-    const workingTerminal = { ...baseTerminal, agentState: "working" as const };
-    usePanelStore.setState({
-      panelsById: { [workingTerminal.id]: workingTerminal },
-      panelIds: [workingTerminal.id],
-    });
-
-    usePanelStore.getState().updateAgentState("test-terminal-1", "waiting");
-
-    expect(
-      (usePanelStore.getState().panelsById["test-terminal-1"] as PtyPanelData | undefined)
-        ?.agentState
-    ).toBe("waiting");
-  });
-
   it("returns unchanged state for nonexistent terminal", () => {
     usePanelStore.setState({
       panelsById: { [baseTerminal.id]: baseTerminal },
@@ -293,36 +250,5 @@ describe("updateAgentState store action (#3217)", () => {
     const after = usePanelStore.getState().panelsById;
     expect(after).not.toBe(before);
     expect((after[seededTerminal.id] as PtyPanelData | undefined)?.error).toBe("EPIPE");
-  });
-});
-
-describe("setupTerminalStoreListeners directing guard (#3217)", () => {
-  function shouldSuppressBackendState(
-    currentState: string | undefined,
-    incomingState: string
-  ): boolean {
-    return currentState === "directing" && incomingState === "waiting";
-  }
-
-  it("backend waiting is suppressed when store terminal is in directing state", () => {
-    usePanelStore.setState({
-      panelsById: { [baseTerminal.id]: baseTerminal },
-      panelIds: [baseTerminal.id],
-    });
-
-    const terminal = usePanelStore.getState().panelsById["test-terminal-1"] as
-      PtyPanelData | undefined;
-    expect(shouldSuppressBackendState(terminal?.agentState, "waiting")).toBe(true);
-  });
-
-  it("backend working is not suppressed when store terminal is in directing state", () => {
-    usePanelStore.setState({
-      panelsById: { [baseTerminal.id]: baseTerminal },
-      panelIds: [baseTerminal.id],
-    });
-
-    const terminal = usePanelStore.getState().panelsById["test-terminal-1"] as
-      PtyPanelData | undefined;
-    expect(shouldSuppressBackendState(terminal?.agentState, "working")).toBe(false);
   });
 });

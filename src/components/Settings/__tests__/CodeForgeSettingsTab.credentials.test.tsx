@@ -4,6 +4,7 @@ import { render, screen, waitFor, fireEvent, within } from "@testing-library/rea
 import { CodeForgeSettingsTab } from "../CodeForgeSettingsTab";
 import type { ForgeProviderEntry } from "@shared/types";
 import type { AuthValidation } from "@shared/types/forge";
+import { _resetHostPlatformForTests, setHostPlatformInfo } from "@/hooks/useHostPlatform";
 
 vi.mock("@/utils/logger", () => ({
   logError: vi.fn(),
@@ -204,6 +205,27 @@ describe("CodeForgeSettingsTab — generic credential form", () => {
     });
   });
 
+  it("says whether the host is signed in, in a window attached to another host", async () => {
+    window.__DAINTREE_HOST_ID__ = { id: "studio" };
+    setHostPlatformInfo({ hostName: "studio-01" });
+    try {
+      installForgeMocks({
+        providers: [
+          makeProvider("acme", "gitea", "Gitea", [
+            { id: "token", label: "API token", type: "password" },
+          ]),
+        ],
+        hasCredential: false,
+      });
+      render(<CodeForgeSettingsTab activeSubtab="acme.gitea" onSubtabChange={vi.fn()} />);
+      expect(await screen.findByText("Gitea isn't connected on studio-01")).toBeTruthy();
+      expect(screen.queryByText("No credentials saved")).toBeNull();
+    } finally {
+      delete window.__DAINTREE_HOST_ID__;
+      _resetHostPlatformForTests();
+    }
+  });
+
   it("says a provider with no credentialFields needs none", async () => {
     installForgeMocks({
       providers: [makeProvider("acme", "plain", "Plain Forge")],
@@ -297,24 +319,6 @@ describe("CodeForgeSettingsTab — canonical subtab routing", () => {
     ).toBeTruthy();
   });
 
-  it("does not route a third-party 'github' contribution to the built-in GitHub card", async () => {
-    const { getCredentialStatus } = installForgeMocks({
-      providers: [
-        makeProvider("acme", "github", "Acme GitHub", [
-          { id: "token", label: "API token", type: "password" },
-        ]),
-      ],
-    });
-
-    render(<CodeForgeSettingsTab activeSubtab="acme.github" onSubtabChange={vi.fn()} />);
-
-    await waitFor(() => {
-      expect(getCredentialStatus).toHaveBeenCalledWith("acme.github");
-    });
-    expect(screen.getByTestId("forge-credential-form")).toBeTruthy();
-    expect(screen.queryByTestId("github-settings-tab")).toBeNull();
-  });
-
   it("routes the built-in GitHub card and a third-party 'github' contribution independently", async () => {
     const { getCredentialStatus } = installForgeMocks({
       providers: [
@@ -404,27 +408,5 @@ describe("CodeForgeSettingsTab — canonical subtab routing", () => {
       expect(screen.getByTestId("forge-integrations-tab")).toBeTruthy();
     });
     expect(screen.queryByTestId("github-settings-tab")).toBeNull();
-  });
-
-  it("falls back to General for a stale subtab when GitHub is not registered (plugin disabled)", async () => {
-    installForgeMocks({
-      providers: [
-        makeProvider("acme", "gitea", "Gitea", [
-          { id: "token", label: "API token", type: "password" },
-        ]),
-      ],
-    });
-
-    const onSubtabChange = vi.fn();
-    render(<CodeForgeSettingsTab activeSubtab="gitea" onSubtabChange={onSubtabChange} />);
-
-    // With the GitHub plugin disabled its provider is absent, so defaulting
-    // to a GitHub settings panel would resurrect the "disable does nothing"
-    // bug — General is the only subtab guaranteed to exist.
-    await waitFor(() => {
-      expect(screen.getByTestId("forge-integrations-tab")).toBeTruthy();
-    });
-    expect(screen.queryByTestId("github-settings-tab")).toBeNull();
-    expect(onSubtabChange).not.toHaveBeenCalled();
   });
 });

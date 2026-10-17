@@ -22,6 +22,7 @@ import {
   escapeTerminalFocus,
   hasVisibleFocusIndicator,
 } from "../../helpers/keyboard-audit";
+import { NEW_TERMINAL_CHORD } from "../../helpers/shortcuts";
 
 // One launch for security, accessibility and focus management: the welcome
 // screen first (security invariants and its axe audit, while exactly one
@@ -221,7 +222,7 @@ test.describe("Core: Accessibility and focus", () => {
         const { window } = ctx;
         const before = await getGridPanelCount(window);
 
-        await window.keyboard.press(`${mod}+Alt+t`);
+        await window.keyboard.press(NEW_TERMINAL_CHORD);
         await expect.poll(() => getGridPanelCount(window), { timeout: T_LONG }).toBe(before + 1);
         await window
           .locator(SEL.terminal.xtermRows)
@@ -403,7 +404,7 @@ test.describe("Core: Accessibility and focus", () => {
         await ensureWindowFocused(ctx.app);
 
         const before = await getGridPanelCount(window);
-        await window.keyboard.press(`${mod}+Alt+t`);
+        await window.keyboard.press(NEW_TERMINAL_CHORD);
         await expect.poll(() => getGridPanelCount(window), { timeout: T_LONG }).toBe(before + 1);
         const panel = window.locator(SEL.panel.gridPanel).nth(before);
         await panel.locator(SEL.terminal.xtermRows).waitFor({
@@ -553,6 +554,12 @@ test.describe("Core: Accessibility and focus", () => {
       test("keyboard focus on toolbar buttons draws a visible focus indicator", async () => {
         const { window } = ctx;
         await ensureWindowFocused(ctx.app);
+        // launchApp widens only the window it started with. The project's window
+        // keeps the default size, and on a 1280px runner screen the fixture's long
+        // project name pushes Settings into the toolbar's overflow menu.
+        await ctx.app.evaluate(({ BrowserWindow }) => {
+          for (const win of BrowserWindow.getAllWindows()) win.setSize(1920, 1080);
+        });
 
         // Reached by arrow keys (roving tabindex), so :focus-visible applies the
         // way it does for a keyboard user; programmatic .focus() alone would not.
@@ -583,7 +590,7 @@ test.describe("Core: Accessibility and focus", () => {
 
         await test.step("Open a terminal and focus it", async () => {
           const before = await getGridPanelCount(window);
-          await window.keyboard.press(`${mod}+Alt+t`);
+          await window.keyboard.press(NEW_TERMINAL_CHORD);
           await expect.poll(() => getGridPanelCount(window), { timeout: T_LONG }).toBe(before + 1);
           await window
             .locator(SEL.terminal.xtermRows)
@@ -678,7 +685,7 @@ test.describe("Core: Accessibility and focus", () => {
 
         await test.step("Open a second terminal so two panels are present", async () => {
           before = await getGridPanelCount(window);
-          await window.keyboard.press(`${mod}+Alt+t`);
+          await window.keyboard.press(NEW_TERMINAL_CHORD);
           await expect.poll(() => getGridPanelCount(window), { timeout: T_LONG }).toBe(before + 1);
           await window
             .locator(SEL.panel.gridPanel)
@@ -723,7 +730,7 @@ test.describe("Core: Accessibility and focus", () => {
         await test.step("Focus terminal as the underlying focus target", async () => {
           if (!(await panel.locator(SEL.terminal.xtermRows).isVisible())) {
             const before = await getGridPanelCount(window);
-            await window.keyboard.press(`${mod}+Alt+t`);
+            await window.keyboard.press(NEW_TERMINAL_CHORD);
             await expect
               .poll(() => getGridPanelCount(window), { timeout: T_LONG })
               .toBeGreaterThan(before);

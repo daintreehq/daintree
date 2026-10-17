@@ -6,6 +6,9 @@ export const FLEET_METHOD_CHANNELS = {
   unparkRun: "fleet:unpark-run",
   snoozeRun: "fleet:snooze-run",
   unsnoozeRun: "fleet:unsnooze-run",
+  noteRunLook: "fleet:note-run-look",
+  markRunRead: "fleet:mark-run-read",
+  markRunUnread: "fleet:mark-run-unread",
 } as const satisfies Record<string, keyof IpcInvokeMap>;
 
 type Methods = typeof FLEET_METHOD_CHANNELS;

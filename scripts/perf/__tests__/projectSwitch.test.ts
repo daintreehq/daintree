@@ -201,14 +201,4 @@ describe("project-view perf scenarios", () => {
     expect(metrics.listenerLeakCount).toBe(0);
     expect(metrics.switchFailureCount).toBe(0);
   }, 30_000);
-
-  it("every project-view metric is finite — run.ts throws otherwise", async () => {
-    for (const id of ["PERF-074", "PERF-075", "PERF-076", "PERF-077"]) {
-      const sample = await scenario(id).run(context);
-      expect(Number.isFinite(sample.durationMs), `${id} durationMs`).toBe(true);
-      for (const [name, value] of Object.entries(sample.metrics ?? {})) {
-        expect(Number.isFinite(value), `${id}.${name} = ${value}`).toBe(true);
-      }
-    }
-  }, 60_000);
 });

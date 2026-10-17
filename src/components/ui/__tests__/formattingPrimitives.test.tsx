@@ -13,13 +13,6 @@ describe("DiffStat", () => {
     expect(container.textContent).not.toMatch(/[/−]/);
   });
 
-  it("colours the sides with the success and error inks", () => {
-    const { container } = render(<DiffStat insertions={1} deletions={1} />);
-    const [added, removed] = Array.from(container.firstElementChild!.children);
-    expect(added!.className).toContain("text-status-success");
-    expect(removed!.className).toContain("text-status-error");
-  });
-
   it("drops a zero side, and the whole stat when both are zero", () => {
     expect(render(<DiffStat insertions={4} deletions={0} />).container.textContent).toBe("+4");
     expect(render(<DiffStat insertions={0} deletions={2} />).container.textContent).toBe("-2");

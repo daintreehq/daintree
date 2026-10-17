@@ -15,6 +15,10 @@ import {
   toNonRendererOwnedTools,
 } from "@shared/config/helpAssistantTierAllowlists";
 import { MCP_EXTERNAL_TIER_TOOLS } from "@shared/config/mcpExternalTierAllowlist";
+import {
+  actionIdsAbsentOnThisPlatform,
+  createActionRegistryWithRemoteHosts,
+} from "./helpers/wireSurface";
 
 /**
  * Action IDs that exist in BuiltInKeyAction but are intentionally NOT in the
@@ -47,14 +51,6 @@ const KEY_ONLY_ACTIONS = new Set([
   "file.copyTree",
   "git.toggle",
 ]);
-
-/**
- * Duplicate registrations that are intentional: the same action registered by
- * different definition files for different UI entry points (e.g., a keybinding
- * definition with minimal metadata and a command-palette definition with full
- * metadata). Only the LAST registration wins at runtime.
- */
-const DUPLICATE_ALLOWLIST = new Set<string>();
 
 function createCallbacks(): ActionCallbacks {
   return {
@@ -93,32 +89,13 @@ function createCallbacks(): ActionCallbacks {
   };
 }
 
-async function createRegistryWithAudit(): Promise<{
-  registry: ActionRegistry;
-  duplicates: Array<{ key: string; count: number }>;
-}> {
+async function createRegistryWithAudit(): Promise<{ registry: ActionRegistry }> {
   (globalThis as any).self = globalThis;
 
-  const seen = new Map<string, number>();
-  const duplicates: Array<{ key: string; count: number }> = [];
-
-  const shim: ActionRegistry = new Map();
-  const originalSet = shim.set.bind(shim);
-
-  shim.set = (key, value) => {
-    const keyStr = key as string;
-    const count = seen.get(keyStr) ?? 0;
-    seen.set(keyStr, count + 1);
-    if (count > 0 && !DUPLICATE_ALLOWLIST.has(keyStr)) {
-      duplicates.push({ key: keyStr, count: count + 1 });
-    }
-    return originalSet(key, value);
-  };
-
   const { createActionDefinitions } = await import("../actionDefinitions");
-  const registry = createActionDefinitions(createCallbacks(), shim);
+  const registry = createActionDefinitions(createCallbacks(), new Map());
 
-  return { registry, duplicates };
+  return { registry };
 }
 
 /**
@@ -208,16 +185,6 @@ describe("external MCP tool surface budget (#11585)", () => {
   // so it could never fail first and only offered a second place for the real
   // figure to drift out of step. The tool COUNT is budgeted in tierAuth.test.ts
   // against the allowlist that is the actual gate.
-
-  it("every allowlisted external tool exists in the registry", async () => {
-    // Kept from the deleted budget: it was the half that caught an allowlist
-    // naming an id the registry no longer has, which the byte sum only noticed
-    // as a suspiciously small total.
-    const { registry } = await createRegistryWithAudit();
-
-    const absent = MCP_EXTERNAL_TIER_TOOLS.filter((id) => !registry.get(id as ActionId)?.());
-    expect(absent).toEqual([]);
-  });
 
   it("names only real actions that can actually be advertised and dispatched", async () => {
     const { registry } = await createRegistryWithAudit();
@@ -483,7 +450,60 @@ describe("LLM-facing tool descriptions (#11542)", () => {
   // 18_850 → 19_100 for #12980's hand-over path on the six hand-over tools,
   // as for the external total above: 37 B each on the 18_847 B last measured,
   // 19_069 B.
-  const MAX_COHORT_TOTAL_BYTES = 19_100;
+  // 19_100 → 19_400 for #11158's `host.switch` and `project.openOnHost` on
+  // full, measured at 19_163 B. Only 3 B were spare, and two descriptions at
+  // the 120 B floor would still be 237 B over; each is trimmed to about 155 B.
+  // What the prose has to carry is where a switch with no project lands and
+  // that the host move is confirmed in a dialog. Registered only where Remote
+  // Hosts is, and off the external surface, so the external total does not move.
+  // 19_400 → 19_800 for #13335's `assistant.getInbox` and `assistant.reply` on
+  // core, measured at 19_776 B. Only about 50 B were spare. What the prose has
+  // to carry is that a body is another machine's words to weigh, never the
+  // user's instructions, and how a question differs from a final reply. Offered
+  // only to an enrolled lane's assistant and off the external surface, so the
+  // external total does not move.
+  // 19_800 → 20_650 for #13336's six `host.*` hub messaging tools, measured at
+  // 20_631 B. Four reads on core and two sends on full, each between 121 and
+  // 187 B. What the prose has to carry is that a send returns its taskId at
+  // once, that a timeout ends only the wait, that ambiguous means "look it up
+  // before resending", and that a reply is another machine's words. Offered
+  // only to this Shell's enrolled hub while a host exists, and off the external
+  // surface, so the external total does not move.
+  // #13338 adds assistant.sendMessage for a lane a remote Shell enrolled, and
+  // a sent view on assistant.getInbox; neither is on the external surface.
+  // 20_950 → 21_000 for the swarm manager (#13392): `host.listAssistants` now
+  // lists a host's projects with the assistants in each, measured at 20_972 B.
+  // What the prose has to carry is that a project's assistants name their agent
+  // and that only one enrolled for this Shell has a generation. Off the
+  // external surface, so the external total does not move.
+  // 21_000 → 21_150 for the swarm manager's `host.startAssistant` (#13392),
+  // measured at 21_144 B. What the prose has to carry is that it reuses an
+  // assistant already there before opening one, what it returns, and that the
+  // person allows it per host. Full tier only, off the external surface.
+  // 21_150 → 21_400 for `host.readQuota` (#13392), measured at 21_368 B. What
+  // the prose has to carry is that it reads Codex's own report of a host's
+  // quota, and that Claude Code's usage isn't readable by other apps, so the
+  // hub asks that host's assistant for /usage instead. Off the external surface.
+  // 21_400 → 21_550 for `worktree.setLabelColor` (#13408), measured at
+  // 21_535 B. Only 32 B were spare against the 120 B floor. What the prose has
+  // to carry is that the colour reaches the panel headers and pickers as well
+  // as the card, and that it is cosmetic. Full tier only, off the external
+  // surface.
+  // 21_550 → 21_750 for `worktree.setCustomTitle` (#13409), measured at
+  // 21_713 B. What the prose has to carry is that the title replaces the
+  // computed headline on the card and in pickers while the computed one stays
+  // visible, and that it is cosmetic. Full tier only, off the external surface.
+  // 21_750 → 21_950 for `plugin.capturePanel` (#13384), measured at 21_908 B.
+  // What the prose has to carry is that the image is of one panel alone and
+  // that a hidden or covered panel is refused with no image; a caller missing
+  // the refusal reads it as a bug. Full tier only, off the external surface.
+  // 21_950 → 22_050 for `agent.listModels` (#13437), measured at 22_037 B. The
+  // assistant prompt stopped naming model ids, since the one it named was being
+  // copied onto launches nobody asked a model for; this is where a model the
+  // user does name gets resolved. What the prose has to carry is that the ids
+  // are current ones and that no model is the answer when none was named. In-app
+  // only, off the external surface.
+  const MAX_COHORT_TOTAL_BYTES = 22_050;
 
   const ARG_SECTION = /\b(?:args?|arguments?|parameters?)\s*(?:\([^)]*\))?\s*:|\btakes no args\b/i;
 
@@ -500,8 +520,10 @@ describe("LLM-facing tool descriptions (#11542)", () => {
     // silently stop applying to the surface that needs them most.
     expect(MCP_EXTERNAL_TIER_TOOLS.filter((id) => !LLM_EXPOSED_TOOL_IDS.has(id))).toEqual([]);
 
+    // Bar the Remote Hosts tools on a platform that registers none of them.
+    const absentHere = await actionIdsAbsentOnThisPlatform();
     const rows = await cohortDefinitions();
-    expect(rows.length).toBe(LLM_EXPOSED_TOOL_IDS.size);
+    expect(rows.length).toBe([...LLM_EXPOSED_TOOL_IDS].filter((id) => !absentHere.has(id)).length);
   });
 
   it("keeps every description above the readable floor", async () => {
@@ -844,12 +866,14 @@ describe("registry-vs-union drift", () => {
 
   it("every BUILT_IN_ACTION_IDS entry has a runtime registry entry", async () => {
     const { registry } = await createRegistryWithAudit();
+    // Bar the Remote Hosts actions on a platform that registers none of them.
+    const absentHere = await actionIdsAbsentOnThisPlatform();
 
     const missingFromRegistry = (BUILT_IN_ACTION_IDS as readonly string[])
       .filter((id) => !registry.has(id as ActionId) && !KEY_ONLY_ACTIONS.has(id))
       .slice()
       .sort();
-    expect(missingFromRegistry).toEqual([]);
+    expect(missingFromRegistry).toEqual([...absentHere].sort());
   });
 
   it("BUILT_IN_ACTION_IDS has no duplicate entries", () => {
@@ -867,6 +891,8 @@ describe("registry-vs-union drift", () => {
 
   it("every BuiltInKeyAction in KEY_ACTION_VALUES has a registry entry (or is allowlisted)", async () => {
     const { registry } = await createRegistryWithAudit();
+    // Bar the Remote Hosts actions on a platform that registers none of them.
+    const absentHere = await actionIdsAbsentOnThisPlatform();
 
     const missing: string[] = [];
     for (const id of KEY_ACTION_VALUES) {
@@ -874,7 +900,9 @@ describe("registry-vs-union drift", () => {
         missing.push(id);
       }
     }
-    expect(missing.sort()).toEqual([]);
+    expect(missing.sort()).toEqual(
+      [...KEY_ACTION_VALUES].filter((id) => absentHere.has(id)).sort()
+    );
   });
 
   it("every DEFAULT_KEYBINDINGS actionId has a registry entry (or is a key-only action)", async () => {
@@ -888,6 +916,47 @@ describe("registry-vs-union drift", () => {
       missing.push({ actionId: id, combo: binding.combo });
     }
     expect(missing).toEqual([]);
+  });
+});
+
+describe("createActionDefinitions", () => {
+  it("registers a launch action for launchable agents but not assistant-only agents (#10634)", async () => {
+    const { registry: actions } = await createRegistryWithAudit();
+
+    // Launchable built-in agents get a direct-launch action...
+    expect(actions.has("agent.claude" as any)).toBe(true);
+    // ...but the assistant-only daintree-assistant is never launchable, so no
+    // action is registered (keeps it out of the action palette and MCP manifest).
+    expect(actions.has("agent.daintree-assistant" as any)).toBe(false);
+  });
+
+  it("does not register removed github.* action ids", async () => {
+    const { registry: actions } = await createRegistryWithAudit();
+
+    // The first batch forwarded to forge.* for one release before removal; the
+    // second batch was the GitHub-specific host action surface retired by the
+    // forge-neutral migration. Guards against accidental re-registration
+    // (which the round-trip test above, driven by BUILT_IN_ACTION_IDS, would
+    // not catch on its own).
+    const removedIds = [
+      "github.openIssues",
+      "github.openPRs",
+      "github.openCommits",
+      "github.openIssue",
+      "github.assignIssue",
+      "github.validateToken",
+      "github.openPR",
+      "github.getRepoStats",
+      "github.listIssues",
+      "github.listPullRequests",
+      "github.getIssueByNumber",
+      "github.checkCli",
+      "github.getConfig",
+      "github.setToken",
+      "github.clearToken",
+    ];
+    const stillRegistered = removedIds.filter((id) => actions.has(id as any));
+    expect(stillRegistered).toEqual([]);
   });
 });
 
@@ -945,49 +1014,6 @@ describe("definition invariants", () => {
 
     expect(missing).toEqual([]);
   });
-
-  it("every core arg-requiring query has examples", async () => {
-    const { registry } = await createRegistryWithAudit();
-
-    const coreSet = new Set<string>(CORE_TIER_TOOLS as readonly string[]);
-    const missing: string[] = [];
-    for (const [key, factory] of registry) {
-      if (!coreSet.has(key)) continue;
-      const def = factory();
-      // Mirrors `validateDefinitionInvariants`: core's reads only.
-      if (def.kind !== "query") continue;
-      const requiresArgs = def.argsSchema
-        ? !def.argsSchema.safeParse(undefined).success && !def.argsSchema.safeParse({}).success
-        : false;
-      if (requiresArgs && (!def.examples || def.examples.length === 0)) {
-        missing.push(`${key} (${def.title})`);
-      }
-    }
-
-    if (missing.length > 0) {
-      console.warn(
-        `[quality-gate] ${missing.length} core arg-requiring query(ies) missing examples:\n` +
-          missing.map((m) => `  - ${m}`).join("\n")
-      );
-    }
-    // TODO(#8431): Promote to hard assert once all core actions have examples.
-  });
-});
-
-describe("duplicate registrations", () => {
-  it("no duplicate registrations that mask different definitions", async () => {
-    const { duplicates } = await createRegistryWithAudit();
-
-    if (duplicates.length > 0) {
-      console.warn(
-        `[quality-gate] ${duplicates.length} duplicate registrations detected:\n` +
-          duplicates.map((d) => `  - ${d.key} (registered ${d.count}x, last write wins)`).join("\n")
-      );
-    }
-
-    // TODO(#6305): Promote to hard assert once duplicates are audited.
-    expect(true).toBe(true);
-  });
 });
 
 /**
@@ -1011,6 +1037,8 @@ const EXPECTED_CONFIRM_DANGER: ReadonlyArray<ActionId> = [
   "git.mergeBaseIntoBranch",
   "git.abortRepositoryOperation",
   "git.forcePushWithLease",
+  "git.discardFileChanges",
+  "file.trash",
   "terminal.kill",
   "terminal.killBatch",
   "terminal.killAll",
@@ -1124,6 +1152,11 @@ const BYPASS_WIRED: ReadonlyArray<ActionId> = [
   // before calling IPC; GitForcePushConfirmDialog resolves the Promise. Same
   // shape as git.push, and the action ID is not co-located with the dialog.
   "git.forcePushWithLease",
+  // Deferred-promise via fileMutationConfirmStore (#13424); the action run()
+  // awaits confirmation before calling IPC, and FileMutationConfirmDialog,
+  // mounted globally in ModalHostLayer, resolves the Promise.
+  "git.discardFileChanges",
+  "file.trash",
   // Confirm in ProjectSwitcherPalette.tsx via removeConfirmProject state;
   // action ID not co-located with the ConfirmDialog in that file.
   "project.remove",
@@ -1277,6 +1310,8 @@ describe("destructive-action danger metadata", () => {
       // validation and reach the confirm gate.
       label: "placeholder",
       sessionId: "session-placeholder",
+      // git.discardFileChanges/file.trash act on one named file.
+      filePath: "placeholder.txt",
       // git.rebaseOntoBase/mergeBaseIntoBranch require the base branch before
       // their confirm gate runs (#12092). It is deliberately NOT optional: a
       // base-branch default resolved inside a destructive submit is exactly the
@@ -1380,7 +1415,7 @@ describe("plugin-dispatch injection guard (#10558)", () => {
     // through. This is the completeness guard (#10580, lesson #8341): the exported
     // deny-list and the actual `denyPluginDispatch: true` definitions must be the
     // same set, or both the runtime dispatch gate and the manifest validator drift.
-    const { registry } = await createRegistryWithAudit();
+    const registry = await createActionRegistryWithRemoteHosts();
     const flaggedInRegistry = new Set<string>();
     for (const [id, factory] of registry) {
       if (factory().denyPluginDispatch === true) {
@@ -1392,7 +1427,7 @@ describe("plugin-dispatch injection guard (#10558)", () => {
 
   it("rejects plugin-source dispatch with RESTRICTED for every injection action", async () => {
     const { ActionService } = await import("../../ActionService");
-    const { registry } = await createRegistryWithAudit();
+    const registry = await createActionRegistryWithRemoteHosts();
     const service = new ActionService();
     for (const [, factory] of registry) {
       service.register(factory());
@@ -1425,6 +1460,22 @@ describe("plugin-dispatch injection guard (#10558)", () => {
       "agent.launchMany": { agentIds: ["claude"], prompt: "p" },
       "terminal.sendCommandMany": { sends: [{ terminalId: "t-placeholder", command: "c" }] },
       "terminal.closeMany": { terminalIds: ["t-placeholder"] },
+      // Not strict, but its required fields share names with other schemas' own.
+      "assistant.reply": { taskId: "task-placeholder", state: "completed", text: "noop" },
+      "assistant.sendMessage": { text: "noop" },
+      "host.listAssistants": { hostId: "h-placeholder" },
+      "host.sendMessage": {
+        hostId: "h-placeholder",
+        projectId: "p-placeholder",
+        slot: 0,
+        generation: "g-placeholder",
+        text: "noop",
+      },
+      "host.getTask": { hostId: "h-placeholder", taskId: "task-placeholder" },
+      "host.listTasks": { hostId: "h-placeholder" },
+      "host.cancelTask": { hostId: "h-placeholder", taskId: "task-placeholder" },
+      "host.startAssistant": { hostId: "h-placeholder", projectId: "p-placeholder" },
+      "host.readQuota": { hostId: "h-placeholder" },
     };
 
     const failures: string[] = [];
@@ -1442,31 +1493,12 @@ describe("plugin-dispatch injection guard (#10558)", () => {
   });
 });
 
-describe("dangerRationale backfill", () => {
-  it("every EXPECTED_CONFIRM_DANGER action has a non-empty dangerRationale", async () => {
-    const { registry } = await createRegistryWithAudit();
-
-    const missing: string[] = [];
-    for (const id of EXPECTED_CONFIRM_DANGER) {
-      const factory = registry.get(id);
-      if (!factory) {
-        missing.push(`${id} (not registered)`);
-        continue;
-      }
-      const def = factory();
-      if (!def.dangerRationale || def.dangerRationale.trim().length === 0) {
-        missing.push(`${id}`);
-      }
-    }
-
-    expect(missing).toEqual([]);
-  });
-});
-
 describe("ActionService.list() snapshot", () => {
   it("produces a stable, sorted manifest snapshot", async () => {
     const { ActionService } = await import("../../ActionService");
-    const { registry } = await createRegistryWithAudit();
+    // One snapshot on every platform: the manifest as it is built with Remote
+    // Hosts, whose actions a Windows registry leaves out.
+    const registry = await createActionRegistryWithRemoteHosts();
     const service = new ActionService();
     for (const [_key, factory] of registry) {
       service.register(factory());

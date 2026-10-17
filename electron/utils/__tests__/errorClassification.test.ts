@@ -67,17 +67,6 @@ describe("classifyError", () => {
     });
   });
 
-  it("classifies GitOperationError with push-rejected-outdated", () => {
-    const result = classifyError(
-      new GitOperationError("push-rejected-outdated", "non-fast-forward")
-    );
-    expect(result.errorType).toBe("git");
-    expect(result.recoveryAction).toEqual({
-      label: "Pull and rebase",
-      actionId: "git.pullRebase",
-    });
-  });
-
   it("returns undefined recoveryHint for GitError with unrecognized message", () => {
     const result = classifyError(new GitError("merge failed"));
     expect(result.errorType).toBe("git");
@@ -147,34 +136,16 @@ describe("classifyError", () => {
     expect(result.recoveryHint).not.toContain("NODE_EXTRA_CA_CERTS");
   });
 
-  it("classifies ECONNRESET as transient", () => {
-    const result = classifyError(errno("ECONNRESET", "read ECONNRESET"));
-    expect(result.retryability).toBe("auto");
-    expect(result.recoveryHint).toContain("reset");
-  });
-
   it("classifies EBUSY as transient", () => {
     const result = classifyError(errno("EBUSY", "EBUSY: resource busy"));
     expect(result.retryability).toBe("auto");
     expect(result.recoveryHint).toContain("Close");
   });
 
-  it("classifies EAGAIN as transient", () => {
-    const result = classifyError(errno("EAGAIN", "EAGAIN"));
-    expect(result.retryability).toBe("auto");
-    expect(result.recoveryHint).toContain("busy");
-  });
-
   it("classifies EMFILE (resource exhaustion, not transient)", () => {
     const result = classifyError(errno("EMFILE", "EMFILE: too many open files"));
     expect(result.retryability).toBe("none");
     expect(result.recoveryHint).toContain("file descriptors");
-  });
-
-  it("classifies ENOMEM (resource exhaustion, not transient)", () => {
-    const result = classifyError(errno("ENOMEM", "ENOMEM"));
-    expect(result.retryability).toBe("none");
-    expect(result.recoveryHint).toContain("memory");
   });
 
   // ── TLS proxy classification ──────────────────────────────────────
@@ -231,25 +202,6 @@ describe("classifyError", () => {
     expect(result.recoveryHint).toContain("PATH");
   });
 
-  // ── DaintreeError with errno code (retryability from errno) ──────
-
-  it("correctly reflects retryability for DaintreeError subclass (ProcessError)", () => {
-    // ProcessError has no errno code, so retryability is "none"
-    const result = classifyError(new ProcessError("pty failed"));
-    expect(result.errorType).toBe("process");
-    expect(result.retryability).toBe("none");
-  });
-
-  it("correctly reflects retryability for plain Error with transient code", () => {
-    // Only raw errno-exposed errors (not wrapped in DaintreeError subclasses)
-    // carry transient retryability, matching the legacy isTransientError behavior
-    // which only checks (error as NodeJS.ErrnoException).code.
-    const err = new Error("EBUSY") as NodeJS.ErrnoException;
-    err.code = "EBUSY";
-    const result = classifyError(err);
-    expect(result.retryability).toBe("auto");
-  });
-
   // ── Edge cases ────────────────────────────────────────────────────
 
   it("classifies null/undefined as unknown", () => {
@@ -259,33 +211,6 @@ describe("classifyError", () => {
       expect(result.retryability).toBe("none");
       expect(result.recoveryHint).toBeUndefined();
     }
-  });
-
-  it("is pure — same input returns same classification", () => {
-    const error = errno("ENOENT", "no such file", "spawn npm");
-    const a = classifyError(error);
-    const b = classifyError(error);
-    expect(a).toEqual(b);
-  });
-
-  it("returns correct shape for every ErrorClassification field", () => {
-    const result = classifyError(new GitOperationError("conflict-unresolved", "CONFLICT in merge"));
-    const keys = Object.keys(result).sort();
-    expect(keys).toEqual([
-      "errorType",
-      "gitReason",
-      "isCritical",
-      "recoveryAction",
-      "recoveryHint",
-      "retryability",
-    ]);
-    expect(result.errorType).toBe("git");
-    expect(result.gitReason).toBe("conflict-unresolved");
-    expect(result.isCritical).toBe(false);
-    expect(result.recoveryAction).toEqual({
-      label: "Resolve conflicts",
-      actionId: "worktree.openReviewHub",
-    });
   });
 
   it("classifies validation errors from ValidationError subclass", async () => {

@@ -1,4 +1,5 @@
 import type { ComponentType } from "react";
+import { isOwnPluginAction } from "@shared/utils/remotePluginContributions";
 import {
   ArrowDownFromLine,
   CirclePlay,
@@ -132,9 +133,12 @@ export function readPanelKindMenuCapabilities(
   const declaredMenu = config?.pluginMenu;
   // An item whose action is not registered would dispatch nothing, so it waits,
   // as a declared tour does; the label falls back to the action's own title.
+  const owner = config?.extensionId;
   const pluginMenuItems =
-    declaredMenu && declaredMenu.length > 0
+    declaredMenu && declaredMenu.length > 0 && owner
       ? declaredMenu.flatMap((item) => {
+          // Only the panel's own plugin's actions: a kind can't wire another plugin's.
+          if (!isOwnPluginAction(owner, item.actionId)) return [];
           const title = registeredPluginActions.get(item.actionId);
           if (title === undefined) return [];
           const label = item.label ?? title;

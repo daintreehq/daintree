@@ -32,7 +32,8 @@ type PortEventName =
   | "emfile-limit-reached"
   | "watcher-recovered"
   | "topology-watcher-dark"
-  | "topology-watcher-recovered";
+  | "topology-watcher-recovered"
+  | "fetch-auth-failure-confirmed";
 
 const listeners = new Map<PortEventName, Set<(data: unknown) => void>>();
 
@@ -280,5 +281,84 @@ describe("WorktreeStoreProvider — topology-watcher-dark indicator (#9908)", ()
       undefined,
       expect.objectContaining({ source: "user" })
     );
+  });
+});
+
+describe("WorktreeStoreProvider — confirmed forge-auth escalation", () => {
+  async function renderProvider() {
+    const { WorktreeStoreProvider, WorktreeStoreContext } = await import("../WorktreeStoreContext");
+    const wrapper = ({ children }: { children: React.ReactNode }) => (
+      <WorktreeStoreProvider>{children}</WorktreeStoreProvider>
+    );
+    const view = renderHook(() => useContext(WorktreeStoreContext), { wrapper });
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    if (!view.result.current) throw new Error("WorktreeStoreContext is null");
+    return view;
+  }
+
+  it("raises a single error toast with a recovery action on fetch-auth-failure-confirmed", async () => {
+    await renderProvider();
+    expect(notifyMock).not.toHaveBeenCalled();
+
+    act(() => {
+      emit("fetch-auth-failure-confirmed", {
+        type: "fetch-auth-failure-confirmed",
+        reason: "auth-failed",
+      });
+    });
+
+    expect(notifyMock).toHaveBeenCalledTimes(1);
+    const payload = notifyMock.mock.calls[0]![0] as {
+      type?: string;
+      priority?: string;
+      title?: string;
+      action?: { label?: string };
+      supersedeKey?: string;
+    };
+    expect(payload.type).toBe("error");
+    // An error toast must never be low-priority (silently dropped — lint-banned).
+    expect(payload.priority).not.toBe("low");
+    expect(payload.title).toBeTruthy();
+    expect(payload.action?.label).toBeTruthy();
+    expect(payload.supersedeKey).toBeTruthy();
+  });
+
+  it("dispatches the forge settings action when the recovery button fires", async () => {
+    await renderProvider();
+
+    act(() => {
+      emit("fetch-auth-failure-confirmed", {
+        type: "fetch-auth-failure-confirmed",
+        reason: "auth-failed",
+      });
+    });
+
+    const payload = notifyMock.mock.calls[0]![0] as { action?: { onClick?: () => void } };
+    act(() => {
+      payload.action?.onClick?.();
+    });
+
+    expect(dispatchMock).toHaveBeenCalledWith(
+      "app.settings.openTab",
+      expect.objectContaining({ tab: "code-forge" }),
+      expect.objectContaining({ source: "user" })
+    );
+  });
+
+  it("stops notifying after the provider unmounts", async () => {
+    const view = await renderProvider();
+    view.unmount();
+
+    act(() => {
+      emit("fetch-auth-failure-confirmed", {
+        type: "fetch-auth-failure-confirmed",
+        reason: "auth-failed",
+      });
+    });
+
+    expect(notifyMock).not.toHaveBeenCalled();
   });
 });

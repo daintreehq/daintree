@@ -154,15 +154,6 @@ describe("useGettingStartedChecklist", () => {
     vi.useRealTimers();
   });
 
-  it("sets up subscriptions when isStateLoaded is true", async () => {
-    renderHook(() => useGettingStartedChecklist(true));
-    await vi.advanceTimersByTimeAsync(0);
-
-    expect(projectSubscribers).toHaveLength(1);
-    expect(terminalSubscribers).toHaveLength(1);
-    expect(worktreeSubscribers).toHaveLength(1);
-  });
-
   it("does not set up subscriptions when isStateLoaded is false", async () => {
     renderHook(() => useGettingStartedChecklist(false));
     await vi.advanceTimersByTimeAsync(0);

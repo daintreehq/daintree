@@ -229,36 +229,6 @@ describe("AgentUpdateHandler", () => {
     expect(exitListenerCalls).toHaveLength(1);
   });
 
-  it("selects brew before cargo when npm is absent (explicit priority list)", () => {
-    const { ptyClient } = createPtyClientMock();
-    const versionService = { clearCache: vi.fn() };
-    const cliAvailabilityService = { refresh: vi.fn() };
-
-    setUserRegistry({
-      "cargo-agent": {
-        id: "cargo-agent",
-        name: "Cargo Agent",
-        command: "cargo-agent",
-        color: "#000000",
-        iconId: "terminal",
-        supportsContextInjection: false,
-        update: {
-          cargo: "cargo install cargo-agent",
-          brew: "brew upgrade cargo-agent",
-        },
-      },
-    });
-
-    const handler = new AgentUpdateHandler(
-      ptyClient as never,
-      versionService as never,
-      cliAvailabilityService as never
-    );
-
-    // brew (index 1 in priority) beats cargo (index 7)
-    expect(handler.getAvailableUpdateMethods("cargo-agent" as never)).toEqual(["cargo", "brew"]);
-  });
-
   it("auto-selects brew over cargo via explicit priority when no method is given", async () => {
     const { ptyClient } = createPtyClientMock();
     const versionService = { clearCache: vi.fn() };

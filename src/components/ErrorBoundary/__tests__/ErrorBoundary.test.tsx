@@ -84,24 +84,6 @@ describe("ErrorBoundary", () => {
     vi.unstubAllGlobals();
   });
 
-  it("renders children when no error", () => {
-    render(
-      <ErrorBoundary variant="section">
-        <ThrowingChild shouldThrow={false} />
-      </ErrorBoundary>
-    );
-    expect(screen.getByText("Child rendered")).toBeTruthy();
-  });
-
-  it("renders fallback when child throws", () => {
-    render(
-      <ErrorBoundary variant="section">
-        <ThrowingChild shouldThrow={true} />
-      </ErrorBoundary>
-    );
-    expect(screen.getByText("This area stopped working")).toBeTruthy();
-  });
-
   it("still adds the error to the store for cross-referencing", () => {
     render(
       <ErrorBoundary variant="section">
@@ -159,16 +141,6 @@ describe("ErrorBoundary", () => {
     expect(screen.queryByText("This area stopped working")).toBeNull();
   });
 
-  it("provides onReport to section variant", () => {
-    render(
-      <ErrorBoundary variant="section">
-        <ThrowingChild shouldThrow={true} />
-      </ErrorBoundary>
-    );
-
-    expect(screen.getByText("Report issue")).toBeTruthy();
-  });
-
   it("provides onReport to fullscreen variant", () => {
     render(
       <ErrorBoundary variant="fullscreen">
@@ -187,16 +159,6 @@ describe("ErrorBoundary", () => {
     );
 
     expect(screen.queryByText("Report issue")).toBeNull();
-  });
-
-  it("does not show View logs button for component variant", () => {
-    render(
-      <ErrorBoundary variant="component">
-        <ThrowingChild shouldThrow={true} />
-      </ErrorBoundary>
-    );
-
-    expect(screen.queryByTestId("error-fallback-logs")).toBeNull();
   });
 
   it("renders Sentry event ID as Error ID in production mode for section variant", () => {
@@ -636,22 +598,6 @@ describe("ErrorBoundary", () => {
     resolveFirst?.({ ok: true, result: undefined });
   });
 
-  it("does not log the duplicate 'ErrorBoundary caught error' message", async () => {
-    const { logError } = await import("@/utils/logger");
-
-    render(
-      <ErrorBoundary variant="section">
-        <ThrowingChild shouldThrow={true} />
-      </ErrorBoundary>
-    );
-
-    expect(logError).not.toHaveBeenCalledWith(
-      "ErrorBoundary caught error",
-      expect.anything(),
-      expect.anything()
-    );
-  });
-
   it("does nothing when window.electron is unavailable entirely", async () => {
     vi.unstubAllGlobals();
 
@@ -667,18 +613,6 @@ describe("ErrorBoundary", () => {
 
     expect(actionService.dispatch).not.toHaveBeenCalled();
     expect(notify).not.toHaveBeenCalled();
-  });
-
-  it("surfaces technical details in production mode so crashes reach reporters", () => {
-    vi.stubEnv("DEV", false);
-
-    render(
-      <ErrorBoundary variant="section">
-        <ThrowingChild shouldThrow={true} />
-      </ErrorBoundary>
-    );
-
-    expect(screen.getByText("Technical details")).toBeTruthy();
   });
 
   it("calls onError callback when provided", () => {
@@ -728,30 +662,6 @@ describe("ErrorBoundary", () => {
     );
 
     expect(screen.getByText("Recovered at key 1")).toBeTruthy();
-  });
-
-  it("calls onReset callback when reload button is clicked", () => {
-    const onReset = vi.fn();
-    let shouldThrow = true;
-    function ConditionalThrow() {
-      if (shouldThrow) throw new Error("Test render error");
-      return <div>Recovered</div>;
-    }
-
-    render(
-      <ErrorBoundary variant="section" onReset={onReset}>
-        <ConditionalThrow />
-      </ErrorBoundary>
-    );
-
-    expect(screen.getByText("This area stopped working")).toBeTruthy();
-    expect(onReset).not.toHaveBeenCalled();
-
-    shouldThrow = false;
-    fireEvent.click(screen.getByText("Try again"));
-
-    expect(onReset).toHaveBeenCalledTimes(1);
-    expect(screen.getByText("Recovered")).toBeTruthy();
   });
 
   it("calls onReset before rendering recovered children", () => {

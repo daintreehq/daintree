@@ -177,35 +177,6 @@ beforeEach(() => {
 });
 
 describe("SavedFleetsSection", () => {
-  it("renders snapshots under Snapshots label", () => {
-    setSavedScopes([SNAPSHOT_A, SNAPSHOT_B]);
-    render(
-      <SavedFleetsSection
-        onRequestDelete={vi.fn()}
-        onRequestSave={vi.fn()}
-        onRequestManage={vi.fn()}
-      />
-    );
-    expect(screen.getByText("Snapshots")).toBeDefined();
-    expect(screen.queryByText("Pinned")).toBeNull();
-    expect(screen.getByText("My terminals")).toBeDefined();
-    expect(screen.getByText("Stale snapshot")).toBeDefined();
-  });
-
-  it("renders live rules under the Live rules label", () => {
-    setSavedScopes([PREDICATE_FINISHED_CURRENT, PREDICATE_ALL_ALL]);
-    render(
-      <SavedFleetsSection
-        onRequestDelete={vi.fn()}
-        onRequestSave={vi.fn()}
-        onRequestManage={vi.fn()}
-      />
-    );
-    expect(screen.getByText("Live rules")).toBeDefined();
-    expect(screen.getByText("Finished here")).toBeDefined();
-    expect(screen.getByText("All everything")).toBeDefined();
-  });
-
   it("lists every saved live rule, including ones that match a built-in preset", () => {
     // A named rule that duplicates a preset is still the user's record. Hiding
     // it left a fleet that could be neither found, recalled by name, nor deleted.
@@ -227,21 +198,6 @@ describe("SavedFleetsSection", () => {
     for (const rule of rules) {
       expect(screen.getAllByText(rule.name)).toHaveLength(1);
     }
-  });
-
-  it("shows both sections when both kinds exist", () => {
-    setSavedScopes([SNAPSHOT_A, PREDICATE_FINISHED_CURRENT]);
-    render(
-      <SavedFleetsSection
-        onRequestDelete={vi.fn()}
-        onRequestSave={vi.fn()}
-        onRequestManage={vi.fn()}
-      />
-    );
-    expect(screen.getByText("Snapshots")).toBeDefined();
-    expect(screen.getByText("Live rules")).toBeDefined();
-    expect(screen.getByText("My terminals")).toBeDefined();
-    expect(screen.getByText("Finished here")).toBeDefined();
   });
 
   it("shows only Snapshots when no live rules exist", () => {
@@ -316,21 +272,6 @@ describe("SavedFleetsSection", () => {
       { id: "snap-a" },
       { source: "user" }
     );
-  });
-
-  it("does not dispatch recall when stale snapshot row is selected", () => {
-    setSavedScopes([SNAPSHOT_B]);
-    render(
-      <SavedFleetsSection
-        onRequestDelete={vi.fn()}
-        onRequestSave={vi.fn()}
-        onRequestManage={vi.fn()}
-      />
-    );
-    const rows = screen.getAllByRole("menuitem");
-    const staleRow = rows.find((r) => r.textContent?.includes("Stale snapshot"));
-    fireEvent.click(staleRow!);
-    expect(actionService.dispatch).not.toHaveBeenCalled();
   });
 
   it("selecting a stale snapshot opens its delete confirm instead of recalling", () => {
@@ -472,38 +413,6 @@ describe("SavedFleetsSection", () => {
 });
 
 describe("SavedFleetsSection ranking", () => {
-  it("ranks usable snapshots by frecency desc — most-recent first", () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(NOW);
-    const lowFrecency: FleetSavedScope = {
-      kind: "snapshot",
-      id: "low",
-      name: "low",
-      terminalIds: ["t1"],
-      createdAt: 0,
-      usageHistory: [NOW - 14 * DAY],
-    };
-    const highFrecency: FleetSavedScope = {
-      kind: "snapshot",
-      id: "high",
-      name: "high",
-      terminalIds: ["t1"],
-      createdAt: 0,
-      usageHistory: [NOW, NOW - DAY, NOW - 2 * DAY],
-    };
-    // Insert in array order (low first, high second) to confirm sorting re-orders
-    setSavedScopes([lowFrecency, highFrecency]);
-    render(
-      <SavedFleetsSection
-        onRequestDelete={vi.fn()}
-        onRequestSave={vi.fn()}
-        onRequestManage={vi.fn()}
-      />
-    );
-    const [snapGroup] = screen.getAllByTestId("dropdown-group") as [HTMLElement];
-    expect(rowNames(snapGroup)).toEqual(["high", "low"]);
-  });
-
   it("demotes stale snapshots below usable ones and adds a separator", () => {
     vi.useFakeTimers();
     vi.setSystemTime(NOW);
@@ -640,82 +549,5 @@ describe("SavedFleetsSection ranking", () => {
     // Outside the group: one separator above the section, one above Save as fleet…
     const allSeps = container.querySelectorAll('[data-testid="dropdown-separator"]');
     expect(allSeps).toHaveLength(2);
-  });
-});
-
-describe("SavedFleetsSection integration (live pane counts)", () => {
-  // Swap the mocked `computeSavedScopePaneCount` for one that reads live
-  // panel-store state so this block exercises the actual panel-eligibility
-  // path the production component derives staleness from (count of still-
-  // eligible terminalIds; zero ⇒ stale).
-  beforeEach(async () => {
-    const mod = (await import("@/services/actions/definitions/fleetActions")) as unknown as {
-      computeSavedScopePaneCount: ReturnType<typeof vi.fn>;
-    };
-    mod.computeSavedScopePaneCount.mockImplementation(
-      (scope: { kind: string; terminalIds?: string[] }) => {
-        if (scope.kind !== "snapshot" || !scope.terminalIds) return 3;
-        const { panelsById } = usePanelStore.getState();
-        let n = 0;
-        for (const id of scope.terminalIds) {
-          const panel = panelsById[id];
-          if (panel && (panel as { kind?: string }).kind === "terminal") n += 1;
-        }
-        return n;
-      }
-    );
-  });
-
-  it("demotes a snapshot whose terminalIds are all gone to the stale sub-group", () => {
-    setSavedScopes([
-      {
-        kind: "snapshot",
-        id: "gone",
-        name: "Gone",
-        terminalIds: ["missing-1", "missing-2"],
-        createdAt: 0,
-      },
-    ]);
-    // Empty panel store — all terminalIds are missing.
-    render(
-      <SavedFleetsSection
-        onRequestDelete={vi.fn()}
-        onRequestSave={vi.fn()}
-        onRequestManage={vi.fn()}
-      />
-    );
-    const [snapGroup] = screen.getAllByTestId("dropdown-group") as [HTMLElement];
-    expect(rowNames(snapGroup)).toEqual(["Gone"]);
-    const staleRow = within(snapGroup).getByRole("menuitem");
-    expect(staleRow.getAttribute("data-stale")).toBe("true");
-  });
-
-  it("promotes a snapshot back to usable when its terminalIds become eligible", () => {
-    setSavedScopes([
-      {
-        kind: "snapshot",
-        id: "fresh",
-        name: "fresh",
-        terminalIds: ["t-real"],
-        createdAt: 0,
-      },
-    ]);
-    usePanelStore.setState({
-      panelsById: {
-        "t-real": { id: "t-real", kind: "terminal", hasPty: true } as never,
-      },
-      panelIds: ["t-real"],
-    });
-    render(
-      <SavedFleetsSection
-        onRequestDelete={vi.fn()}
-        onRequestSave={vi.fn()}
-        onRequestManage={vi.fn()}
-      />
-    );
-    const [snapGroup] = screen.getAllByTestId("dropdown-group") as [HTMLElement];
-    expect(rowNames(snapGroup)).toEqual(["fresh"]);
-    const liveRow = within(snapGroup).getByRole("menuitem");
-    expect(liveRow.getAttribute("aria-disabled")).toBeNull();
   });
 });

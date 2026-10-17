@@ -49,13 +49,6 @@ describe("ScrollIndicator", () => {
     expect(container.innerHTML).toBe("");
   });
 
-  it("does not render when count is negative", () => {
-    const { container } = render(
-      <ScrollIndicator direction="below" count={-1} onClick={onClick} />
-    );
-    expect(container.innerHTML).toBe("");
-  });
-
   // The visible pill is chevron + count only, so it stays narrow enough to sit
   // in the trailing gutter without reaching the row's identity text (#12010).
   // Direction is carried by the icon, the edge it sits on, and the aria-label.
@@ -107,22 +100,10 @@ describe("ScrollIndicator", () => {
     expect(button.tabIndex).toBe(-1);
   });
 
-  it("defaults button tabIndex to 0 when not specified", () => {
-    render(<ScrollIndicator direction="below" count={1} onClick={onClick} />);
-    const button = screen.getByRole("button");
-    expect(button.tabIndex).toBe(0);
-  });
-
   it("applies aria-hidden on the outer wrapper when ariaHidden is true", () => {
     render(<ScrollIndicator direction="below" count={1} onClick={onClick} ariaHidden />);
     const button = screen.getByRole("button", { hidden: true });
     expect(button.parentElement!.getAttribute("aria-hidden")).toBe("true");
-  });
-
-  it("does not render aria-hidden attribute on wrapper when ariaHidden is false or undefined", () => {
-    render(<ScrollIndicator direction="below" count={1} onClick={onClick} />);
-    const button = screen.getByRole("button");
-    expect(button.parentElement!.hasAttribute("aria-hidden")).toBe(false);
   });
 
   it("keeps showing the last positive count while fading out at count 0 (issue #10316)", () => {

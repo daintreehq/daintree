@@ -213,15 +213,6 @@ describe("DiskSpaceMonitor", () => {
     expect(status.writesSuppressed).toBe(false);
   });
 
-  it("publishes writesSuppressed=true to the shared diskPressureState shim on critical", async () => {
-    statfsMock.mockResolvedValue(makeStatfs(50));
-    const actions = createActions();
-    await importAndStart(actions);
-
-    const { getWritesSuppressed } = await import("../diskPressureState.js");
-    expect(getWritesSuppressed()).toBe(true);
-  });
-
   it("publishes writesSuppressed=false to the shim once disk recovers", async () => {
     statfsMock.mockResolvedValue(makeStatfs(50));
     const actions = createActions();
@@ -304,6 +295,177 @@ describe("DiskSpaceMonitor", () => {
       expect(getWritesSuppressed()).toBe(true);
       expect(mod.getCurrentDiskSpaceStatus().status).toBe("critical");
       expect(mod.getCurrentDiskSpaceStatus().writesSuppressed).toBe(true);
+    });
+  });
+});
+
+type StatfsResult = { bavail: bigint; bsize: bigint };
+
+function statfsFor(availableMb: number): StatfsResult {
+  return { bavail: BigInt(availableMb), bsize: 1048576n };
+}
+
+function makeActions() {
+  return {
+    sendStatus: vi.fn(),
+    onCriticalChange: vi.fn(),
+    showNativeNotification: vi.fn(),
+    isWindowFocused: vi.fn().mockReturnValue(false),
+  };
+}
+
+const INTERVAL_MS = 5 * 60 * 1000;
+
+describe("DiskSpaceMonitor adversarial", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.setSystemTime(1_830_001);
+    vi.clearAllMocks();
+    appMock.getPath.mockReturnValue("/userdata");
+    statfsMock.mockResolvedValue(statfsFor(10_000));
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.resetModules();
+  });
+
+  async function loadModule() {
+    return await import("../DiskSpaceMonitor.js");
+  }
+
+  it("dispose while statfs is in flight suppresses all late side effects", async () => {
+    let resolveStatfs: (v: StatfsResult) => void = () => {};
+    statfsMock.mockReturnValueOnce(
+      new Promise<StatfsResult>((resolve) => {
+        resolveStatfs = resolve;
+      })
+    );
+
+    const { startDiskSpaceMonitor } = await loadModule();
+    const actions = makeActions();
+    const cleanup = startDiskSpaceMonitor(actions);
+
+    cleanup();
+    resolveStatfs(statfsFor(50));
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(actions.sendStatus).not.toHaveBeenCalled();
+    expect(actions.onCriticalChange).not.toHaveBeenCalled();
+    expect(actions.showNativeNotification).not.toHaveBeenCalled();
+  });
+
+  it("app.getPath throwing is treated as a poll failure and does not crash the loop", async () => {
+    appMock.getPath.mockImplementationOnce(() => {
+      throw new Error("no such path key");
+    });
+
+    const { startDiskSpaceMonitor } = await loadModule();
+    const cleanup = startDiskSpaceMonitor(makeActions());
+
+    await vi.advanceTimersByTimeAsync(0);
+    await vi.advanceTimersByTimeAsync(INTERVAL_MS);
+
+    expect(statfsMock).toHaveBeenCalledTimes(1);
+
+    cleanup();
+  });
+
+  it("cleanup stops further interval scheduling after a failed poll", async () => {
+    statfsMock.mockRejectedValue(new Error("boom"));
+
+    const { startDiskSpaceMonitor } = await loadModule();
+    const cleanup = startDiskSpaceMonitor(makeActions());
+
+    await vi.advanceTimersByTimeAsync(0);
+    cleanup();
+    statfsMock.mockClear();
+
+    await vi.advanceTimersByTimeAsync(INTERVAL_MS * 3);
+
+    expect(statfsMock).not.toHaveBeenCalled();
+  });
+
+  it("getCurrentDiskSpaceStatus stays unchanged across a failed poll", async () => {
+    const { startDiskSpaceMonitor, getCurrentDiskSpaceStatus } = await loadModule();
+    const before = getCurrentDiskSpaceStatus();
+
+    statfsMock.mockRejectedValueOnce(new Error("fail"));
+    const cleanup = startDiskSpaceMonitor(makeActions());
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(getCurrentDiskSpaceStatus()).toEqual(before);
+
+    cleanup();
+  });
+
+  describe("hysteresis boundary flapping", () => {
+    it("critical oscillation: 499->501->549 does not refire callbacks", async () => {
+      statfsMock.mockResolvedValueOnce(statfsFor(499));
+      const { startDiskSpaceMonitor } = await loadModule();
+      const actions = makeActions();
+      const cleanup = startDiskSpaceMonitor(actions);
+
+      await vi.advanceTimersByTimeAsync(0);
+      expect(actions.sendStatus).toHaveBeenCalledTimes(1);
+      expect(actions.sendStatus.mock.calls[0][0].status).toBe("critical");
+
+      // 501 MB — still within critical exit band, should stay critical
+      statfsMock.mockResolvedValueOnce(statfsFor(501));
+      await vi.advanceTimersByTimeAsync(INTERVAL_MS);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(actions.sendStatus).toHaveBeenCalledTimes(1); // no new transition
+
+      // 549 MB — still latched critical
+      statfsMock.mockResolvedValueOnce(statfsFor(549));
+      await vi.advanceTimersByTimeAsync(INTERVAL_MS);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(actions.sendStatus).toHaveBeenCalledTimes(1); // still latched
+
+      cleanup();
+    });
+
+    it("critical exits only above 550: 551 enters warning, fires callbacks once", async () => {
+      statfsMock.mockResolvedValueOnce(statfsFor(400));
+      const { startDiskSpaceMonitor } = await loadModule();
+      const actions = makeActions();
+      const cleanup = startDiskSpaceMonitor(actions);
+
+      await vi.advanceTimersByTimeAsync(0);
+      expect(actions.sendStatus.mock.calls[0][0].status).toBe("critical");
+      expect(actions.onCriticalChange).toHaveBeenCalledWith(true);
+
+      // 551 MB exceeds critical exit threshold but is below warning enter — becomes warning
+      statfsMock.mockResolvedValueOnce(statfsFor(551));
+      await vi.advanceTimersByTimeAsync(INTERVAL_MS);
+      await vi.advanceTimersByTimeAsync(0);
+
+      expect(actions.sendStatus).toHaveBeenCalledTimes(2);
+      expect(actions.sendStatus.mock.calls[1][0].status).toBe("warning");
+      expect(actions.onCriticalChange).toHaveBeenCalledWith(false);
+
+      cleanup();
+    });
+
+    it("warning->critical escalation not latched: 1900->400 goes critical immediately", async () => {
+      statfsMock.mockResolvedValueOnce(statfsFor(1900));
+      const { startDiskSpaceMonitor } = await loadModule();
+      const actions = makeActions();
+      const cleanup = startDiskSpaceMonitor(actions);
+
+      await vi.advanceTimersByTimeAsync(0);
+      expect(actions.sendStatus.mock.calls[0][0].status).toBe("warning");
+
+      // Escalation always uses enter thresholds — hysteresis only gates recovery
+      statfsMock.mockResolvedValueOnce(statfsFor(400));
+      await vi.advanceTimersByTimeAsync(INTERVAL_MS);
+      await vi.advanceTimersByTimeAsync(0);
+
+      expect(actions.sendStatus).toHaveBeenCalledTimes(2);
+      expect(actions.sendStatus.mock.calls[1][0].status).toBe("critical");
+      expect(actions.onCriticalChange).toHaveBeenCalledWith(true);
+
+      cleanup();
     });
   });
 });

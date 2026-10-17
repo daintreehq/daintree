@@ -529,15 +529,24 @@ describe("ReviewHub", () => {
       expect(screen.getByText("16/72")).toBeTruthy();
     });
 
-    it("counter reflects subject length past the 72-char limit", async () => {
-      render(<ReviewHubContent isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
+    it("Escape in the commit box leaves the field without closing the review or losing the draft", async () => {
+      const onClose = vi.fn();
+      render(<ReviewHubContent isOpen={true} worktreePath={WORKTREE_PATH} onClose={onClose} />);
       await waitFor(() => screen.getByLabelText("Commit message"));
 
-      const textarea = screen.getByLabelText("Commit message");
-      const longSubject = "x".repeat(85);
-      fireEvent.change(textarea, { target: { value: longSubject } });
+      const textarea = screen.getByLabelText<HTMLTextAreaElement>("Commit message");
+      fireEvent.change(textarea, { target: { value: "fix: keep this draft" } });
+      textarea.focus();
 
-      expect(screen.getByText("85/72")).toBeTruthy();
+      fireEvent.keyDown(textarea, { key: "Escape" });
+
+      expect(onClose).not.toHaveBeenCalled();
+      expect(document.activeElement?.getAttribute("aria-label")).toBe("Changed files");
+      expect(textarea.value).toBe("fix: keep this draft");
+
+      // Holding Escape: the repeats land on the list and must not close the hub.
+      fireEvent.keyDown(document.activeElement!, { key: "Escape", repeat: true });
+      expect(onClose).not.toHaveBeenCalled();
     });
   });
 
@@ -795,19 +804,6 @@ describe("ReviewHub", () => {
   });
 
   describe("per-file Viewed checkbox", () => {
-    it("renders an unchecked Viewed checkbox next to each file row", async () => {
-      render(<ReviewHubContent isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
-
-      await waitFor(() => screen.getByText("index.ts"));
-
-      const viewedCheckboxes = screen.getAllByRole("checkbox", { name: /Mark .* as viewed/ });
-      // One per file (1 staged + 1 unstaged from makeStatus).
-      expect(viewedCheckboxes).toHaveLength(2);
-      for (const cb of viewedCheckboxes) {
-        expect(cb.getAttribute("aria-checked")).toBe("false");
-      }
-    });
-
     it("toggles a file's Viewed state when its checkbox is clicked", async () => {
       render(<ReviewHubContent isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
 
@@ -921,16 +917,6 @@ describe("ReviewHub", () => {
       render(<ReviewHubContent isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
       await waitFor(() => screen.getByTestId("file-stage-row-src/x.ts"));
     };
-
-    it("renders the default Stage all / Unstage all labels with no selection", async () => {
-      await renderHub();
-      expect(screen.getByTestId("review-hub-stage-section-button").textContent).toMatch(
-        /Stage all/i
-      );
-      expect(screen.getByTestId("review-hub-unstage-section-button").textContent).toMatch(
-        /Unstage all/i
-      );
-    });
 
     it("cmd-click selects an unstaged row and swaps button label to 'Stage selection (1)'", async () => {
       await renderHub();
@@ -1162,41 +1148,6 @@ describe("ReviewHub", () => {
       // Second Escape with no selection closes the modal.
       fireEvent.keyDown(document, { key: "Escape" });
       await waitFor(() => expect(onClose).toHaveBeenCalled());
-    });
-
-    it("removes a staged-then-no-longer-present path from the selection after refresh", async () => {
-      await renderHub();
-      fireEvent.click(screen.getByTestId("file-stage-row-src/a.ts"), { metaKey: true });
-      fireEvent.click(screen.getByTestId("file-stage-row-src/b.ts"), { metaKey: true });
-
-      await waitFor(() => {
-        expect(screen.getByTestId("review-hub-unstage-section-button").textContent).toMatch(
-          /Unstage selection \(2\)/i
-        );
-      });
-
-      // Background refresh removes src/a.ts from the staged section.
-      const updated = makeStatus({
-        staged: [{ path: "src/b.ts", status: "modified", insertions: 1, deletions: 0 }],
-        unstaged: [
-          { path: "src/x.ts", status: "modified", insertions: 1, deletions: 0 },
-          { path: "src/y.ts", status: "modified", insertions: 1, deletions: 0 },
-          { path: "src/z.ts", status: "modified", insertions: 1, deletions: 0 },
-        ],
-      });
-      getStagingStatusMock.mockResolvedValue(updated);
-
-      await act(async () => {
-        capturedUpdateCallback!(makeWorktreeState());
-        await Promise.resolve();
-      });
-
-      await waitFor(() => {
-        expect(screen.queryByTestId("file-stage-row-src/a.ts")).toBeNull();
-        expect(screen.getByTestId("review-hub-unstage-section-button").textContent).toMatch(
-          /Unstage selection \(1\)/i
-        );
-      });
     });
 
     it("reseats the anchor onto a surviving path when the original anchor is evicted by a refresh", async () => {

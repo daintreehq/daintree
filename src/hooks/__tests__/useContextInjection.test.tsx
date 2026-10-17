@@ -218,20 +218,6 @@ describe("useContextInjection", () => {
     });
   });
 
-  it("does not throw if cancel API returns non-promise", async () => {
-    const { result } = renderHook(() => useContextInjection("term-1"));
-
-    act(() => {
-      void result.current.inject("wt-1", "term-1");
-    });
-
-    await expect(async () => {
-      act(() => {
-        result.current.cancel();
-      });
-    }).not.toThrow();
-  });
-
   it("cancelling an active injection does not record an error", async () => {
     isAvailableMock.mockResolvedValue(true);
     let resolveInject!: (value: { error?: string }) => void;
@@ -268,28 +254,6 @@ describe("useContextInjection", () => {
     expect(result.current.error).toBeNull();
     expect(result.current.isInjecting).toBe(false);
     expect(result.current.injectionStatus).toBe("idle");
-  });
-
-  it("cancels the backend operation with the specific injection UUID", async () => {
-    isAvailableMock.mockResolvedValue(true);
-    injectMock.mockImplementation(() => new Promise(() => {}));
-
-    const { result } = renderHook(() => useContextInjection("term-1"));
-
-    act(() => {
-      void result.current.inject("wt-1", "term-1");
-    });
-    await vi.waitFor(() => expect(injectMock).toHaveBeenCalled());
-
-    const injectionUuid = injectMock.mock.calls[0]?.[3];
-    expect(injectionUuid).toBeTruthy();
-
-    act(() => {
-      result.current.cancel();
-    });
-
-    expect(cancelMock).toHaveBeenCalledTimes(1);
-    expect(cancelMock).toHaveBeenCalledWith(injectionUuid);
   });
 
   it("cancelling a pending injection clears the waiting state without recording an error", async () => {

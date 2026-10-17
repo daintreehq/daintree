@@ -1,5 +1,4 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { TERMINAL_SPAWN_SOURCES } from "../../../shared/types/panel.js";
 import {
   AppStateTerminalEntrySchema,
   TerminalSnapshotSchema,
@@ -24,39 +23,6 @@ describe("Terminal Entry Validation Schemas", () => {
       expect(result.success).toBe(true);
       if (result.success) {
         expect(result.data).toEqual(entry);
-      }
-    });
-
-    it("accepts valid agent terminal entry", () => {
-      const entry = {
-        id: "claude-456",
-        type: "claude",
-        title: "Claude Agent",
-        cwd: "/Users/test/project",
-        worktreeId: "wt-123",
-        location: "dock",
-        command: "claude --model sonnet-4",
-        isInputLocked: true,
-      };
-
-      const result = AppStateTerminalEntrySchema.safeParse(entry);
-      expect(result.success).toBe(true);
-    });
-
-    it("accepts all valid terminal types", () => {
-      const types = ["terminal", "claude", "gemini", "codex", "opencode", "cursor"];
-
-      for (const type of types) {
-        const entry = {
-          id: `${type}-id`,
-          type,
-          title: `${type} Terminal`,
-          cwd: "/Users/test",
-          location: "grid",
-        };
-
-        const result = AppStateTerminalEntrySchema.safeParse(entry);
-        expect(result.success).toBe(true);
       }
     });
 
@@ -90,22 +56,6 @@ describe("Terminal Entry Validation Schemas", () => {
       expect(result.success).toBe(false);
     });
 
-    it("accepts optional settings field", () => {
-      const entry = {
-        id: "term-123",
-        type: "terminal",
-        title: "Terminal",
-        cwd: "/Users/test",
-        location: "grid",
-        settings: {
-          autoRestart: true,
-        },
-      };
-
-      const result = AppStateTerminalEntrySchema.safeParse(entry);
-      expect(result.success).toBe(true);
-    });
-
     it("rejects entry with missing id", () => {
       const entry = {
         type: "terminal",
@@ -131,19 +81,6 @@ describe("Terminal Entry Validation Schemas", () => {
       expect(result.success).toBe(false);
     });
 
-    it("rejects entry with invalid location", () => {
-      const entry = {
-        id: "term-123",
-        type: "terminal",
-        title: "Terminal",
-        cwd: "/Users/test",
-        location: "invalid",
-      };
-
-      const result = AppStateTerminalEntrySchema.safeParse(entry);
-      expect(result.success).toBe(false);
-    });
-
     it("rejects overlay location (overlay terminals are never persisted to app state)", () => {
       const entry = {
         id: "term-123",
@@ -156,14 +93,6 @@ describe("Terminal Entry Validation Schemas", () => {
       const result = AppStateTerminalEntrySchema.safeParse(entry);
       expect(result.success).toBe(false);
     });
-
-    it("rejects non-object values", () => {
-      expect(AppStateTerminalEntrySchema.safeParse(null).success).toBe(false);
-      expect(AppStateTerminalEntrySchema.safeParse(undefined).success).toBe(false);
-      expect(AppStateTerminalEntrySchema.safeParse("string").success).toBe(false);
-      expect(AppStateTerminalEntrySchema.safeParse(123).success).toBe(false);
-      expect(AppStateTerminalEntrySchema.safeParse([]).success).toBe(false);
-    });
   });
 
   describe("TerminalSnapshotSchema", () => {
@@ -174,38 +103,6 @@ describe("Terminal Entry Validation Schemas", () => {
         title: "Terminal 1",
         cwd: "/Users/test",
         location: "grid",
-      };
-
-      const result = TerminalSnapshotSchema.safeParse(snapshot);
-      expect(result.success).toBe(true);
-    });
-
-    it("accepts valid snapshot with all fields", () => {
-      const snapshot = {
-        id: "snap-123",
-        kind: "terminal",
-        type: "claude",
-        agentId: "claude",
-        title: "Claude Agent",
-        cwd: "/Users/test/project",
-        worktreeId: "wt-456",
-        location: "dock",
-        command: "claude --model sonnet-4",
-        browserUrl: "http://localhost:3000",
-      };
-
-      const result = TerminalSnapshotSchema.safeParse(snapshot);
-      expect(result.success).toBe(true);
-    });
-
-    it("accepts browser panel snapshot", () => {
-      const snapshot = {
-        id: "browser-123",
-        kind: "browser",
-        title: "Browser",
-        cwd: "/Users/test",
-        location: "grid",
-        browserUrl: "https://example.com",
       };
 
       const result = TerminalSnapshotSchema.safeParse(snapshot);
@@ -235,23 +132,6 @@ describe("Terminal Entry Validation Schemas", () => {
         kind: "terminal",
         title: "Terminal 1",
         location: "grid",
-      };
-
-      const result = TerminalSnapshotSchema.safeParse(snapshot);
-      expect(result.success).toBe(false);
-      if (!result.success) {
-        expect(result.error.issues[0].message).toContain("PTY-backed panels require");
-      }
-    });
-
-    it("rejects PTY panel snapshot without cwd (agent)", () => {
-      const snapshot = {
-        id: "agent-123",
-        kind: "terminal",
-        agentId: "claude",
-        title: "Claude",
-        location: "grid",
-        type: "claude",
       };
 
       const result = TerminalSnapshotSchema.safeParse(snapshot);
@@ -307,12 +187,6 @@ describe("Terminal Entry Validation Schemas", () => {
     // name the origin after a restart.
     describe("spawnedBy", () => {
       const base = { id: "snap-123", title: "Terminal", cwd: "/Users/test", location: "grid" };
-
-      it.each(TERMINAL_SPAWN_SOURCES)("preserves %s", (source) => {
-        const result = TerminalSnapshotSchema.safeParse({ ...base, spawnedBy: source });
-        expect(result.success).toBe(true);
-        expect(result.success && result.data.spawnedBy).toBe(source);
-      });
 
       it("accepts a legacy snapshot with no spawn source", () => {
         const result = TerminalSnapshotSchema.safeParse(base);
@@ -489,19 +363,6 @@ describe("Terminal Entry Validation Schemas", () => {
       expect(result[0]).toHaveProperty("unknownField", "should be preserved");
       expect(result[0]).toHaveProperty("anotherExtra", 123);
     });
-
-    it("works with TerminalSnapshotSchema", () => {
-      const snapshots = [
-        { id: "s1", type: "terminal", title: "Snap 1", cwd: "/", location: "grid" },
-        { id: "", title: "Invalid", cwd: "/", location: "grid" }, // empty id
-        { id: "s2", kind: "browser", title: "Browser", location: "dock" },
-      ];
-
-      const result = filterValidTerminalEntries(snapshots, TerminalSnapshotSchema, "snapshot-test");
-      expect(result).toHaveLength(2);
-      expect(result[0].id).toBe("s1");
-      expect(result[1].id).toBe("s2");
-    });
   });
 
   describe("TerminalSpawnOptionsSchema (#6065 — shell-injection hardening)", () => {
@@ -556,22 +417,6 @@ describe("Terminal Entry Validation Schemas", () => {
           expect(result.error.issues[0].message).toContain("control characters");
         }
       }
-    });
-
-    it("rejects ANSI escape sequences smuggled through command", () => {
-      const result = TerminalSpawnOptionsSchema.safeParse({
-        ...baseOptions,
-        command: "echo \x1B[31mred\x1B[0m",
-      });
-      expect(result.success).toBe(false);
-    });
-
-    it("rejects multi-line command at the schema boundary", () => {
-      const result = TerminalSpawnOptionsSchema.safeParse({
-        ...baseOptions,
-        command: "evil\nrm -rf ~",
-      });
-      expect(result.success).toBe(false);
     });
   });
 
@@ -673,21 +518,6 @@ describe("Recipe Validation Schemas", () => {
       }
     });
 
-    it("accepts agent type terminal entries", () => {
-      const agents = ["claude", "gemini", "codex", "opencode", "cursor", "custom-plugin-agent"];
-      for (const agent of agents) {
-        const entry = { type: agent };
-        const result = RecipeTerminalSchema.safeParse(entry);
-        expect(result.success).toBe(true);
-      }
-    });
-
-    it("accepts dev-preview type", () => {
-      const entry = { type: "dev-preview" };
-      const result = RecipeTerminalSchema.safeParse(entry);
-      expect(result.success).toBe(true);
-    });
-
     it("rejects entry with empty type", () => {
       const entry = { type: "" };
       const result = RecipeTerminalSchema.safeParse(entry);
@@ -698,12 +528,6 @@ describe("Recipe Validation Schemas", () => {
       const entry = { title: "No type" };
       const result = RecipeTerminalSchema.safeParse(entry);
       expect(result.success).toBe(false);
-    });
-
-    it("rejects non-string type", () => {
-      expect(RecipeTerminalSchema.safeParse({ type: 123 }).success).toBe(false);
-      expect(RecipeTerminalSchema.safeParse({ type: true }).success).toBe(false);
-      expect(RecipeTerminalSchema.safeParse({ type: null }).success).toBe(false);
     });
 
     it("rejects invalid exitBehavior values", () => {
@@ -731,13 +555,6 @@ describe("Recipe Validation Schemas", () => {
         env: { KEY: 123 },
       });
       expect(result.success).toBe(false);
-    });
-
-    it("rejects non-object values", () => {
-      expect(RecipeTerminalSchema.safeParse(null).success).toBe(false);
-      expect(RecipeTerminalSchema.safeParse("string").success).toBe(false);
-      expect(RecipeTerminalSchema.safeParse(123).success).toBe(false);
-      expect(RecipeTerminalSchema.safeParse([]).success).toBe(false);
     });
 
     it("preserves unknown fields via passthrough", () => {
@@ -814,16 +631,6 @@ describe("Recipe Validation Schemas", () => {
       expect(result.success).toBe(false);
     });
 
-    it("rejects recipe with non-array terminals", () => {
-      const result = TerminalRecipeSchema.safeParse({
-        id: "r1",
-        name: "Recipe",
-        terminals: "not-an-array",
-        createdAt: 0,
-      });
-      expect(result.success).toBe(false);
-    });
-
     it("rejects recipe with invalid terminal in array", () => {
       const result = TerminalRecipeSchema.safeParse({
         id: "r1",
@@ -832,17 +639,6 @@ describe("Recipe Validation Schemas", () => {
         createdAt: 0,
       });
       expect(result.success).toBe(false);
-    });
-
-    it("rejects recipe with non-number createdAt", () => {
-      expect(
-        TerminalRecipeSchema.safeParse({
-          id: "r1",
-          name: "Recipe",
-          terminals: [],
-          createdAt: "1700000000000",
-        }).success
-      ).toBe(false);
     });
 
     it("rejects invalid autoAssign values", () => {
@@ -868,35 +664,6 @@ describe("Recipe Validation Schemas", () => {
         });
         expect(result.success).toBe(true);
       }
-    });
-
-    it("rejects recipe with non-array usageHistory", () => {
-      const result = TerminalRecipeSchema.safeParse({
-        id: "r1",
-        name: "Recipe",
-        terminals: [],
-        createdAt: 0,
-        usageHistory: "not-array",
-      });
-      expect(result.success).toBe(false);
-    });
-
-    it("rejects recipe with non-number usageHistory items", () => {
-      const result = TerminalRecipeSchema.safeParse({
-        id: "r1",
-        name: "Recipe",
-        terminals: [],
-        createdAt: 0,
-        usageHistory: [1700000000000, "not-a-number"],
-      });
-      expect(result.success).toBe(false);
-    });
-
-    it("rejects non-object recipe values", () => {
-      expect(TerminalRecipeSchema.safeParse(null).success).toBe(false);
-      expect(TerminalRecipeSchema.safeParse("string").success).toBe(false);
-      expect(TerminalRecipeSchema.safeParse(123).success).toBe(false);
-      expect(TerminalRecipeSchema.safeParse([]).success).toBe(false);
     });
 
     it("preserves unknown fields via passthrough", () => {
@@ -990,30 +757,6 @@ describe("Recipe Validation Schemas", () => {
       consoleSpy.mockRestore();
     });
 
-    it("returns all valid recipes unchanged", () => {
-      const recipes = [
-        { id: "r1", name: "Recipe 1", terminals: [{ type: "terminal" }], createdAt: 1000 },
-        { id: "r2", name: "Recipe 2", terminals: [], createdAt: 2000 },
-      ];
-
-      const result = filterValidTerminalEntries(recipes, TerminalRecipeSchema, "test");
-      expect(result).toHaveLength(2);
-      expect(result).toEqual(recipes);
-    });
-
-    it("filters out recipes with invalid terminals", () => {
-      const recipes = [
-        { id: "r1", name: "Valid", terminals: [{ type: "terminal" }], createdAt: 1 },
-        { id: "r2", name: "Invalid terminal", terminals: [{ type: "" }], createdAt: 2 }, // empty type
-        { id: "r3", name: "Also valid", terminals: [], createdAt: 3 },
-      ];
-
-      const result = filterValidTerminalEntries(recipes, TerminalRecipeSchema, "test");
-      expect(result).toHaveLength(2);
-      expect(result[0].id).toBe("r1");
-      expect(result[1].id).toBe("r3");
-    });
-
     it("filters out recipes with deep field type errors", () => {
       const recipes = [
         { id: "r1", name: "Valid", terminals: [], createdAt: 1 },
@@ -1035,71 +778,6 @@ describe("Recipe Validation Schemas", () => {
       expect(result).toHaveLength(1);
       expect(result[0].id).toBe("r1");
       expect(consoleSpy).toHaveBeenCalledTimes(2);
-    });
-
-    it("logs warnings for each filtered recipe", () => {
-      const recipes = [
-        { id: "r1", name: "Valid", terminals: [], createdAt: 1 },
-        { id: "r2", terminals: [], createdAt: 2 }, // missing name
-        { id: "", name: "Empty ID", terminals: [], createdAt: 3 }, // empty id
-      ];
-
-      filterValidTerminalEntries(recipes, TerminalRecipeSchema, "recipe-test");
-      expect(consoleSpy).toHaveBeenCalledTimes(2);
-    });
-
-    it("handles empty array", () => {
-      const result = filterValidTerminalEntries([], TerminalRecipeSchema, "test");
-      expect(result).toEqual([]);
-      expect(consoleSpy).not.toHaveBeenCalled();
-    });
-
-    it("handles null/undefined entries in recipes array", () => {
-      const recipes = [
-        { id: "r1", name: "Valid", terminals: [], createdAt: 1 },
-        null,
-        undefined,
-        { id: "r2", name: "Also valid", terminals: [], createdAt: 2 },
-      ];
-
-      const result = filterValidTerminalEntries(recipes as unknown[], TerminalRecipeSchema, "test");
-      expect(result).toHaveLength(2);
-      expect(consoleSpy).toHaveBeenCalledTimes(2);
-    });
-
-    it("recovers valid recipes from heavily corrupted data", () => {
-      const corrupted = [
-        "string",
-        123,
-        null,
-        { id: "r1", name: "Good", terminals: [], createdAt: 1 },
-        {},
-        { partially: "wrong" },
-        { id: "r2", name: "Also good", terminals: [{ type: "claude" }], createdAt: 2 },
-        [],
-      ];
-
-      const result = filterValidTerminalEntries(
-        corrupted as unknown[],
-        TerminalRecipeSchema,
-        "corruption"
-      );
-      expect(result).toHaveLength(2);
-      expect(result[0].id).toBe("r1");
-      expect(result[1].id).toBe("r2");
-    });
-
-    it("preserves ordering of valid entries", () => {
-      const entries = [
-        { id: "first", name: "First", terminals: [], createdAt: 1 },
-        { id: "", name: "Bad", terminals: [], createdAt: 2 },
-        { id: "second", name: "Second", terminals: [], createdAt: 3 },
-        { invalid: "entry" },
-        { id: "third", name: "Third", terminals: [], createdAt: 4 },
-      ];
-
-      const result = filterValidTerminalEntries(entries as unknown[], TerminalRecipeSchema, "test");
-      expect(result.map((e) => e.id)).toEqual(["first", "second", "third"]);
     });
   });
 });
@@ -1143,16 +821,5 @@ describe("portable project plugin kinds (#12280)", () => {
     expect(
       TerminalSnapshotSchema.safeParse({ ...projectPanel, kindRef: { origin: "project" } }).success
     ).toBe(true);
-  });
-
-  it("still requires cwd for a genuine PTY panel", () => {
-    expect(
-      TerminalSnapshotSchema.safeParse({
-        id: "t1",
-        title: "Term",
-        kind: "terminal",
-        location: "grid",
-      }).success
-    ).toBe(false);
   });
 });

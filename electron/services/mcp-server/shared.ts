@@ -336,6 +336,14 @@ export const SESSION_BINDING_GONE = "SESSION_BINDING_GONE";
  * route it no longer has any session to route.
  */
 export const SESSION_GONE = "SESSION_GONE";
+/**
+ * No frontend is attached to the project the call needs one for, and the host
+ * has no form of the action it could run on its own. Retriable: attaching a
+ * frontend, locally or from another machine, makes the same call work.
+ * Distinct from {@link SESSION_BINDING_GONE} so a caller can tell "open
+ * Daintree, or ask for something the host can do alone" from a lost route.
+ */
+export const NO_FRONTEND_ATTACHED_CODE = "NO_FRONTEND_ATTACHED";
 export const MCP_DEDUP_KEY_COLLISION_CODE = "MCP_DEDUP_KEY_COLLISION";
 export const PRE_AUTH_FAILED_CODE = "PRE_AUTH_FAILED";
 export const INVALID_URL_CODE = "INVALID_URL";
@@ -456,6 +464,7 @@ export type McpWorkspaceSelectorRejectionCode =
 export const RETRIABLE_ERROR_CODES: ReadonlySet<string> = new Set([
   EXECUTION_ERROR_CODE,
   CONFIRMATION_TIMEOUT_CODE,
+  NO_FRONTEND_ATTACHED_CODE,
 ]);
 
 export interface McpErrorPayload {
@@ -693,7 +702,7 @@ export const MCP_SERVER_INSTRUCTIONS_MAX_BYTES =
  * string is static and origin-agnostic, sent verbatim to api-key clients that
  * never receive that catalog, so a sentence about it would be false for most of
  * its readers. The rule for reading a stub belongs in each first-party client's
- * own prompt — `scripts/help-src/` for the ones this repo ships, and
+ * own prompt — `scripts/assistant-src/` for the ones this repo ships, and
  * `DAINTREE_HOST.md` in `daintreehq/assistant` for the companion CLI, which
  * carries its own.
  *

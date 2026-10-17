@@ -506,16 +506,6 @@ describe("check-pair against a precommit record", () => {
     expect(acknowledged.status).toBe(0);
   });
 
-  it("requires the headline champion to be the precommitted branch point", () => {
-    const dir = scratch();
-    expect(precommit(dir).status).toBe(0);
-    const paths = writeInterleavedArms(dir, [50, 50.4, 50.2], [44, 43.6, 44.2]);
-    // The record's baselineSha is CHAMP_SHA, which the arms carry, so --headline
-    // passes here and would fail against a mid-run champion.
-    const { status } = ab(paths, ["--precommit", join(dir, "precommit.json"), "--headline"]);
-    expect(status).toBe(0);
-  });
-
   it("refuses to rewrite an existing record without --force", () => {
     const dir = scratch();
     expect(precommit(dir).status).toBe(0);

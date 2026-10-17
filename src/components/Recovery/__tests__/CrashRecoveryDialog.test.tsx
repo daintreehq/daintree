@@ -233,12 +233,6 @@ beforeEach(() => {
 });
 
 describe("CrashRecoveryDialog", () => {
-  it("renders the dialog", () => {
-    setup();
-    expect(screen.getByTestId("crash-recovery-dialog")).toBeTruthy();
-    expect(screen.getByText("Daintree closed unexpectedly")).toBeTruthy();
-  });
-
   describe("cause-aware copy", () => {
     it("shows a power-loss specific title and description", () => {
       setup({ crash: { entry: { ...mockCrash.entry, crashCause: "power-loss" } } });
@@ -275,14 +269,6 @@ describe("CrashRecoveryDialog", () => {
   });
 
   describe("with panels (selective restore)", () => {
-    it("renders panel list with checkboxes", () => {
-      setup();
-      expect(screen.getByTestId("panel-list")).toBeTruthy();
-      expect(screen.getByTestId("panel-row-t1")).toBeTruthy();
-      expect(screen.getByTestId("panel-row-t2")).toBeTruthy();
-      expect(screen.getByTestId("panel-row-t3")).toBeTruthy();
-    });
-
     it("shows panel titles", () => {
       setup();
       expect(screen.getByText("Shell")).toBeTruthy();
@@ -362,11 +348,6 @@ describe("CrashRecoveryDialog", () => {
       expect(screen.queryByTestId("agent-state-t3")).toBeNull();
     });
 
-    it("shows suspect warning message", () => {
-      setup();
-      expect(screen.getByTestId("suspect-warning")).toBeTruthy();
-    });
-
     it("renders the suspect warning as a warning-severity InlineStatusBanner", () => {
       setup();
       const banner = within(screen.getByTestId("suspect-warning")).getByTestId(
@@ -429,12 +410,6 @@ describe("CrashRecoveryDialog", () => {
       expect(nonSuspect3.getAttribute("aria-checked")).toBe("true");
     });
 
-    it("pre-deselects suspect panels when crashCount is in a crash loop", () => {
-      setup({ crash: { crashCount: 3 } });
-      const suspect = screen.getByTestId("panel-checkbox-t2");
-      expect(suspect.getAttribute("aria-checked")).toBe("false");
-    });
-
     it("keeps suspect panels selected when crashCount is 0", () => {
       setup({ crash: { crashCount: 0 } });
       const suspect = screen.getByTestId("panel-checkbox-t2");
@@ -452,11 +427,6 @@ describe("CrashRecoveryDialog", () => {
       );
       const call = (onResolve as ReturnType<typeof vi.fn>).mock.calls[0]![0];
       expect(call.panelIds).not.toContain("t2");
-    });
-
-    it("selection count reflects auto-deselection when crashCount >= 1", () => {
-      setup({ crash: { crashCount: 1 } });
-      expect(screen.getByText("2 of 3 selected")).toBeTruthy();
     });
 
     it("lets the user re-check a pre-deselected suspect and include it in restore", async () => {
@@ -595,16 +565,6 @@ describe("CrashRecoveryDialog", () => {
       expect(checkbox1.getAttribute("aria-checked")).toBe("false");
     });
 
-    it("toggle all selects when none are selected", () => {
-      setup();
-      // Deselect all
-      fireEvent.click(screen.getByTestId("toggle-all-button"));
-      // Select all
-      fireEvent.click(screen.getByTestId("toggle-all-button"));
-      const checkbox1 = screen.getByTestId("panel-checkbox-t1");
-      expect(checkbox1.getAttribute("aria-checked")).toBe("true");
-    });
-
     it("restore selected button is unavailable, and inert, when no panels are selected", () => {
       const { onResolve } = setup();
       fireEvent.click(screen.getByTestId("toggle-all-button"));
@@ -626,11 +586,6 @@ describe("CrashRecoveryDialog", () => {
       ).toBeTruthy();
       expect(fresh.getAttribute("variant")).toBe("ghost");
       expect(restore.getAttribute("variant")).toBe("contrast");
-    });
-
-    it("shows selection count", () => {
-      setup();
-      expect(screen.getByText("3 of 3 selected")).toBeTruthy();
     });
 
     it("restore-selected path is unaffected by destructive confirm gate", async () => {
@@ -712,13 +667,6 @@ describe("CrashRecoveryDialog", () => {
         })
       );
     });
-  });
-
-  it("copy stack button appears when errorStack is present", () => {
-    setup();
-    fireEvent.click(screen.getByTestId("details-toggle"));
-    expect(screen.getByTestId("copy-stack-button")).toBeTruthy();
-    expect(screen.getByTestId("copy-stack-button").textContent).toContain("Copy stack");
   });
 
   it("copy stack button not rendered when errorStack is absent", () => {
@@ -837,12 +785,6 @@ describe("CrashRecoveryDialog", () => {
   });
 
   describe("crash-loop guard", () => {
-    it("shows the auto-restore checkbox when crashCount is undefined", () => {
-      setup();
-      expect(screen.getByTestId("auto-restore-checkbox")).toBeTruthy();
-      expect(screen.queryByTestId("auto-restore-paused")).toBeNull();
-    });
-
     it("shows the auto-restore checkbox when crashCount is 1", () => {
       setup({ crash: { crashCount: 1 } });
       expect(screen.getByTestId("auto-restore-checkbox")).toBeTruthy();

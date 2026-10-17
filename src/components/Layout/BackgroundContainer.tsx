@@ -32,7 +32,13 @@ import { TerminalIcon } from "@/components/Terminal/TerminalIcon";
 import { TerminalContextMenu } from "@/components/Terminal/TerminalContextMenu";
 import { deriveTerminalChrome } from "@/utils/terminalChrome";
 import { LiveTimeAgo } from "@/components/Worktree/LiveTimeAgo";
-import { STATE_ICONS, STATE_LABELS, STATE_COLORS } from "@/components/Worktree/terminalStateConfig";
+import {
+  SESSION_COLORS,
+  SESSION_ICONS,
+  SESSION_LABELS,
+} from "@/components/Worktree/terminalStateConfig";
+import { useHandBackRunIds, useSessionPresentation } from "@/hooks/useRunHandBackState";
+import { isAskingWait } from "@/lib/handBackPresentation";
 import { fireWatchNotification } from "@/lib/watchNotification";
 import {
   KILL_TERMINAL_TITLE,
@@ -93,9 +99,11 @@ export function BackgroundContainer({ compact = false }: BackgroundContainerProp
   );
   const worktreeNames = useWorktreeNames();
 
+  // A hand-back is not asking for anything, so the pill does not count it.
+  const handBackRunIds = useHandBackRunIds();
   const waitingCount = useMemo(
-    () => terminals.filter((t) => t.agentState === "waiting").length,
-    [terminals]
+    () => terminals.filter((t) => isAskingWait(handBackRunIds, t)).length,
+    [terminals, handBackRunIds]
   );
   const hereCount = useMemo(
     () => terminals.filter((t) => (t.worktreeId ?? null) === (activeWorktreeId ?? null)).length,
@@ -434,10 +442,11 @@ function BackgroundSingleItem({
   onKill,
   compact = false,
 }: BackgroundSingleItemProps) {
-  const agentState = terminal.agentState;
-  const StateIcon = agentState ? STATE_ICONS[agentState] : null;
-  const stateLabel = agentState ? STATE_LABELS[agentState] : null;
-  const stateColor = agentState ? STATE_COLORS[agentState] : null;
+  // A hand-back draws unread or done, as on the pane's own chip.
+  const agentState = useSessionPresentation(terminal.id, terminal.agentState);
+  const StateIcon = agentState ? SESSION_ICONS[agentState] : null;
+  const stateLabel = agentState ? SESSION_LABELS[agentState] : null;
+  const stateColor = agentState ? SESSION_COLORS[agentState] : null;
   const title = terminal.title || "Terminal";
 
   return (
@@ -447,7 +456,7 @@ function BackgroundSingleItem({
     <TerminalContextMenu terminalId={terminal.id} proxy>
       <div
         data-testid="background-single-item"
-        data-agent-state={agentState ?? "unknown"}
+        data-agent-state={terminal.agentState ?? "unknown"}
         data-dock-row=""
         className={cn(
           "flex items-start gap-2 px-2 py-1.5 rounded-[var(--radius-sm)] group",
@@ -487,7 +496,13 @@ function BackgroundSingleItem({
             )}
             {StateIcon && stateLabel && (
               <span className="inline-flex items-center gap-1 shrink-0">
-                <StateIcon className={cn("h-2.5 w-2.5", stateColor)} />
+                <StateIcon
+                  className={cn(
+                    "h-2.5 w-2.5",
+                    stateColor,
+                    agentState === "working" && "animate-spin-slow motion-reduce:animate-none"
+                  )}
+                />
                 <span>{stateLabel}</span>
               </span>
             )}
@@ -595,7 +610,8 @@ function BackgroundGroupItem({
   const [isExpanded, setIsExpanded] = useState(true);
   const tabCount = terminals.length;
   const groupName = `Tab group (${pluralize(tabCount, "tab")})`;
-  const groupWaiting = terminals.filter((t) => t.agentState === "waiting").length;
+  const handBackRunIds = useHandBackRunIds();
+  const groupWaiting = terminals.filter((t) => isAskingWait(handBackRunIds, t)).length;
   // Named on the header too, so a collapsed group still says where it lives.
   const groupWorktreeId = groupMetadata.worktreeId ?? terminals[0]?.worktreeId;
   const groupWorktreeName =

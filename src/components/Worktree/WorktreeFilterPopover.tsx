@@ -14,6 +14,7 @@ import type { ChipCounts } from "@/lib/worktreeFilters";
 import {
   ACTIVITY_OPTIONS,
   DEV_SERVER_OPTIONS,
+  HAS_AGENT_LABEL,
   ORDER_OPTIONS,
   PR_ISSUE_OPTIONS,
   SESSION_OPTIONS,
@@ -193,8 +194,8 @@ interface ChipGridProps<T extends string> {
   counts?: Record<T, number>;
   /**
    * Past this many options, values that match nothing are folded behind a
-   * "more" toggle. Branch type carries fifteen values and a real repository
-   * uses three or four of them, so the unfolded grid was four rows of mostly
+   * "more" toggle. Branch type carries every recognised type and a real
+   * repository uses a handful of them, so the unfolded grid was rows of mostly
    * dead options sitting between the user and every facet below it.
    */
   overflowAfter?: number;
@@ -353,6 +354,7 @@ export function WorktreeFilterPopover({
     typeFilters,
     prIssueFilters,
     sessionFilters,
+    hasAgentFilter,
     activityFilters,
     devServerFilters,
     quickStateFilter,
@@ -363,6 +365,7 @@ export function WorktreeFilterPopover({
     toggleTypeFilter,
     togglePrIssueFilter,
     toggleSessionFilter,
+    setHasAgentFilter,
     toggleActivityFilter,
     toggleDevServerFilter,
     clearStatusFilters,
@@ -381,6 +384,7 @@ export function WorktreeFilterPopover({
       typeFilters: state.typeFilters,
       prIssueFilters: state.prIssueFilters,
       sessionFilters: state.sessionFilters,
+      hasAgentFilter: state.hasAgentFilter,
       activityFilters: state.activityFilters,
       devServerFilters: state.devServerFilters,
       quickStateFilter: state.quickStateFilter,
@@ -391,6 +395,7 @@ export function WorktreeFilterPopover({
       toggleTypeFilter: state.toggleTypeFilter,
       togglePrIssueFilter: state.togglePrIssueFilter,
       toggleSessionFilter: state.toggleSessionFilter,
+      setHasAgentFilter: state.setHasAgentFilter,
       toggleActivityFilter: state.toggleActivityFilter,
       toggleDevServerFilter: state.toggleDevServerFilter,
       clearStatusFilters: state.clearStatusFilters,
@@ -415,6 +420,7 @@ export function WorktreeFilterPopover({
     typeFilters.size +
     prIssueFilters.size +
     sessionFilters.size +
+    (hasAgentFilter ? 1 : 0) +
     activityFilters.size +
     devServerFilters.size +
     (quickStateFilter !== "all" ? 1 : 0);
@@ -581,6 +587,19 @@ export function WorktreeFilterPopover({
             />
           </div>
         )}
+
+        {/* The one facet asked for often enough to sit outside the scroll
+            area and every disclosure: with many agents running, hiding the
+            worktrees that have none is the first cut people reach for. */}
+        <div className="shrink-0 border-b border-divider px-3 py-2">
+          <FilterChip
+            selected={hasAgentFilter}
+            onClick={() => setHasAgentFilter(!hasAgentFilter)}
+            count={chipCounts?.hasAgent}
+          >
+            {HAS_AGENT_LABEL}
+          </FilterChip>
+        </div>
 
         <div className="min-h-0 flex-1 overflow-y-auto">
           {/* Sort and grouping are one block, and they read as a peer of the

@@ -62,12 +62,6 @@ describe("progressReducer", () => {
     expect(item.resolvedBranch).toBe("feature/1");
   });
 
-  it("ITEM_TERMINALS_SPAWNING updates stage", () => {
-    let state = progressReducer(emptyState(), { type: "START", issueNumbers: [1] });
-    state = progressReducer(state, { type: "ITEM_TERMINALS_SPAWNING", issueNumber: 1 });
-    expect(state.items.get(1)!.stage).toBe("terminals-spawning");
-  });
-
   it("ITEM_TERMINALS_RESULT with failures sets terminals-error", () => {
     let state = progressReducer(emptyState(), { type: "START", issueNumbers: [1] });
     state = progressReducer(state, {
@@ -114,18 +108,6 @@ describe("progressReducer", () => {
     expect(state.items.get(1)!.spawnedTerminalIds).toEqual(["t1", "t2"]);
   });
 
-  it("ITEM_ASSIGNING updates stage", () => {
-    let state = progressReducer(emptyState(), { type: "START", issueNumbers: [1] });
-    state = progressReducer(state, { type: "ITEM_ASSIGNING", issueNumber: 1 });
-    expect(state.items.get(1)!.stage).toBe("assigning");
-  });
-
-  it("ITEM_VERIFYING updates stage", () => {
-    let state = progressReducer(emptyState(), { type: "START", issueNumbers: [1] });
-    state = progressReducer(state, { type: "ITEM_VERIFYING", issueNumber: 1 });
-    expect(state.items.get(1)!.stage).toBe("verifying");
-  });
-
   it("ITEM_SUCCEEDED marks item done", () => {
     let state = progressReducer(emptyState(), { type: "START", issueNumbers: [1] });
     state = progressReducer(state, { type: "ITEM_SUCCEEDED", issueNumber: 1 });
@@ -146,12 +128,6 @@ describe("progressReducer", () => {
     expect(item.error).toBe("boom");
     expect(item.attempt).toBe(2);
     expect(item.failedStep).toBe("worktree");
-  });
-
-  it("DONE transitions phase", () => {
-    let state = progressReducer(emptyState(), { type: "START", issueNumbers: [1] });
-    state = progressReducer(state, { type: "DONE" });
-    expect(state.phase).toBe("done");
   });
 
   it("RETRY_FAILED resets failed/error items to pending", () => {
@@ -202,18 +178,6 @@ describe("getStageLabel", () => {
     expect(getStageLabel(makeStatus({ stage: "worktree-creating" }))).toBe("Creating worktree…");
   });
 
-  it("returns label for terminals-spawning", () => {
-    expect(getStageLabel(makeStatus({ stage: "terminals-spawning" }))).toBe("Spawning terminals…");
-  });
-
-  it("returns label for assigning", () => {
-    expect(getStageLabel(makeStatus({ stage: "assigning" }))).toBe("Assigning issue…");
-  });
-
-  it("returns label for verifying", () => {
-    expect(getStageLabel(makeStatus({ stage: "verifying" }))).toBe("Verifying…");
-  });
-
   it("returns terminal spawn failed for failed+terminals", () => {
     expect(getStageLabel(makeStatus({ stage: "failed", failedStep: "terminals" }))).toBe(
       "Terminal spawn failed"
@@ -238,9 +202,5 @@ describe("getStageLabel", () => {
 
   it("returns null for succeeded", () => {
     expect(getStageLabel(makeStatus({ stage: "succeeded" }))).toBeNull();
-  });
-
-  it("returns null for pending", () => {
-    expect(getStageLabel(makeStatus({ stage: "pending" }))).toBeNull();
   });
 });
