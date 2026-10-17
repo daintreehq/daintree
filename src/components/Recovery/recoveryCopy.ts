@@ -154,10 +154,9 @@ export function getHostConnectionBannerCopy(
 
 /**
  * Copy for a project another device controls. One device controls a project
- * at a time; this names it and offers control here. Its terminals' output
- * streams here live, but its layout, panels, drafts and the terminals it opens
- * later don't follow, so the copy says only what holds: this view is
- * read-only, in the pane strips' word.
+ * at a time; this names it and offers control here. This view follows its
+ * terminals, panels, navigation and composer drafts live but can't change
+ * them, so it is read-only, in the pane strips' word.
  */
 export function getDriveLeaseBannerCopy(
   state:
@@ -171,8 +170,7 @@ export function getDriveLeaseBannerCopy(
       : state.driverName;
   return {
     title: `${controller} has control of this project`,
-    description:
-      "Read-only. Terminal output streams here live, but layout, panels and drafts don't follow.",
+    description: "Read-only. Its terminals, panels and drafts show here live.",
     actionLabel: "Take control",
   };
 }
