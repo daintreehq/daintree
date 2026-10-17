@@ -18,6 +18,8 @@
  *   DESIGN_CAPTURE_DIR          output dir (default artifacts/new-worktree-shots)
  *   DAINTREE_SHOT_THEMES        theme sweep for the populated state
  *                               (default daintree,bondi,namib,hokkaido,redwoods,serengeti)
+ *   DAINTREE_SHOT_ONLY          comma-separated state filter (the STATES names below);
+ *                               the theme sweep runs only when it names the sweep state
  *
  * Output: <state>-<theme>.png. The test counts the files itself rather than
  * trusting its own exit code.
@@ -42,6 +44,10 @@ const THEMES = (
 )
   .split(",")
   .map((t) => t.trim())
+  .filter(Boolean);
+const ONLY = (process.env.DAINTREE_SHOT_ONLY ?? "")
+  .split(",")
+  .map((s) => s.trim())
   .filter(Boolean);
 
 const ATTACH_TIMEOUT_MS = 30_000;
@@ -187,6 +193,15 @@ const STATES: State[] = [
     },
   },
   {
+    name: "26-mode-focus",
+    run: async (page) => {
+      // Back from the field below, so the ring is a keyboard one.
+      await page.locator("#base-branch").focus();
+      await page.keyboard.press("Shift+Tab");
+      await page.waitForTimeout(300);
+    },
+  },
+  {
     name: "30-base-picker",
     viewport: true,
     run: async (page) => {
@@ -284,10 +299,13 @@ test("new worktree dialog preview — every state, theme sweep", async ({ contex
   test.skip(!ENABLED, "set DAINTREE_SHOT_NEW_WORKTREE=1 to run the capture");
   test.setTimeout(10 * 60_000);
 
+  const unknown = ONLY.filter((name) => !STATES.some((s) => s.name === name));
+  expect(unknown, "DAINTREE_SHOT_ONLY names states that do not exist").toEqual([]);
+
   await settleDevServer(context);
   const written: string[] = [];
 
-  for (const state of STATES) {
+  for (const state of STATES.filter((s) => ONLY.length === 0 || ONLY.includes(s.name))) {
     written.push(
       await withPage(context, `${state.name} daintree`, async (page) => {
         const dialog = await open(page, "daintree", state.query);
@@ -297,7 +315,8 @@ test("new worktree dialog preview — every state, theme sweep", async ({ contex
   }
 
   const sweep = STATES.find((s) => s.name === SWEEP_STATE)!;
-  for (const theme of THEMES.filter((t) => t !== "daintree")) {
+  const sweepThemes = ONLY.length === 0 || ONLY.includes(SWEEP_STATE) ? THEMES : [];
+  for (const theme of sweepThemes.filter((t) => t !== "daintree")) {
     written.push(
       await withPage(context, `${sweep.name} ${theme}`, async (page) => {
         const dialog = await open(page, theme, sweep.query);
