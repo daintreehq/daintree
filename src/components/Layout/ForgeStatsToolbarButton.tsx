@@ -199,7 +199,6 @@ export const ForgeStatsToolbarButton = memo(
     const [issuesOpen, setIssuesOpen] = useState(false);
     const [prsOpen, setPrsOpen] = useState(false);
     const [commitsOpen, setCommitsOpen] = useState(false);
-    const [statsJustUpdated, setStatsJustUpdated] = useState(false);
     const [rateLimitCountdown, setRateLimitCountdown] = useState<string | null>(null);
     const [rateLimitTooltipOpen, setRateLimitTooltipOpen] = useState(false);
     const [rateLimitDetails, setRateLimitDetails] = useState<RateLimitDetails | null | undefined>(
@@ -861,20 +860,16 @@ export const ForgeStatsToolbarButton = memo(
         prevLastUpdatedRef.current = null;
         setIssuesPulseAt(null);
         setPrsPulseAt(null);
-        setStatsJustUpdated(false);
         // List-loaded counts and their recency timestamps are reset by the
         // dedicated project-path effect above (issue #9741).
         return;
       }
-      if (statsLoading || statsError) {
-        setStatsJustUpdated(false);
-        return;
-      }
-      if (prevLastUpdatedRef.current != null && lastUpdated > prevLastUpdatedRef.current) {
-        setStatsJustUpdated(true);
-        checkForCountIncrease();
-      } else if (prevLastUpdatedRef.current == null) {
-        // First successful poll — seed the count refs without pulsing.
+      if (statsLoading || statsError) return;
+      // A poll that lands is not itself news: the provider re-stamps
+      // `lastUpdated` even when nothing changed, so only a count that moved
+      // earns a signal, and it already has its own (pulse and chip). The first
+      // successful poll seeds the count refs without pulsing.
+      if (prevLastUpdatedRef.current == null || lastUpdated > prevLastUpdatedRef.current) {
         checkForCountIncrease();
       }
       prevLastUpdatedRef.current = lastUpdated;
@@ -902,13 +897,8 @@ export const ForgeStatsToolbarButton = memo(
       // indicator + countdown tooltip, so the stripe stays off until the block
       // lifts and the resume refresh also keeps failing.
       if (errorSeverity === "persistent" && !isTokenError && !rateLimitActive) return "error";
-      if (statsJustUpdated) return "success";
       return "idle";
-    }, [statsLoading, errorSeverity, isTokenError, rateLimitActive, statsJustUpdated]);
-
-    const handleForgeStatusTransitionEnd = useCallback(() => {
-      setStatsJustUpdated(false);
-    }, []);
+    }, [statsLoading, errorSeverity, isTokenError, rateLimitActive]);
 
     const openSettingsForToken = useCallback(() => {
       if (!providerId) return;
@@ -1291,11 +1281,7 @@ export const ForgeStatsToolbarButton = memo(
             if (!open) commitsButtonRef.current?.focus();
           }}
         />
-        <ForgeStatusIndicator
-          status={getForgeIndicatorStatus()}
-          error={statsError ?? undefined}
-          onTransitionEnd={handleForgeStatusTransitionEnd}
-        />
+        <ForgeStatusIndicator status={getForgeIndicatorStatus()} error={statsError ?? undefined} />
         {rateLimitActive ? (
           <Tooltip
             open={rateLimitTooltipOpen}
@@ -1349,7 +1335,10 @@ export const ForgeStatsToolbarButton = memo(
                     aria-hidden="true"
                     className="flex h-full w-7 shrink-0 items-center justify-center"
                   >
-                    <TriangleAlert className="h-3.5 w-3.5 text-text-secondary" />
+                    <TriangleAlert
+                      data-severity-glyph=""
+                      className="h-3.5 w-3.5 text-text-secondary"
+                    />
                   </div>
                 </TooltipTrigger>
               </ContextMenuTrigger>

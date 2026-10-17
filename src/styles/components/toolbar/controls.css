@@ -310,6 +310,12 @@
   background: var(--toolbar-control-armed-bg, var(--theme-overlay-emphasis));
 }
 
+/* The inset ring shares the capsule's bottom rows with the forge status bar,
+ * which comes later in the DOM and would otherwise paint across the ring. */
+.toolbar-stat-pill:focus-visible {
+  z-index: 1;
+}
+
 .toolbar-stat-pill:active {
   background: var(--toolbar-control-active-bg, var(--theme-overlay-emphasis));
 }
