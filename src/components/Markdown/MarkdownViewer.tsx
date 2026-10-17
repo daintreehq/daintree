@@ -11,6 +11,28 @@ const LazyMarkdownDocument = lazy(() =>
   import("./MarkdownDocument").then((m) => ({ default: m.MarkdownDocument }))
 );
 
+/** The rendered document's inset; the loading placeholder occupies the same box. */
+const DOCUMENT_INSET = "px-6 py-5";
+
+/**
+ * The placeholder's text bars, per reading rung, so each bar lands on the line
+ * that replaces it. A body line box is 1.75× the rung (the prose line height);
+ * to the nearest stock step, the bar is the glyph height, the gap is the rest
+ * of the line box, and `lead` is half of it, centring the first bar on the
+ * first line. At `sm` that half-leading is why the bars start 24px down a box
+ * whose inset is 20px.
+ */
+const SKELETON_LINES = {
+  "2xs": { bar: "h-3", gap: "space-y-1.75", lead: "py-1" },
+  xs: { bar: "h-3.5", gap: "space-y-1.75", lead: "py-1" },
+  sm: { bar: "h-4", gap: "space-y-2", lead: "py-1" },
+  base: { bar: "h-4.5", gap: "space-y-2.5", lead: "py-1.25" },
+  lg: { bar: "h-5", gap: "space-y-3", lead: "py-1.5" },
+  xl: { bar: "h-6", gap: "space-y-2.75", lead: "py-1.5" },
+  "2xl": { bar: "h-7", gap: "space-y-3.5", lead: "py-1.75" },
+  "3xl": { bar: "h-8", gap: "space-y-5", lead: "py-2.5" },
+} satisfies Record<MarkdownFontSize, { bar: string; gap: string; lead: string }>;
+
 export interface MarkdownViewerHandle {
   /** Opens CodeMirror's find bar; no-op in rendered mode. */
   openSearch: () => void;
@@ -93,12 +115,24 @@ export const MarkdownViewer = forwardRef<MarkdownViewerHandle, MarkdownViewerPro
       );
     }
 
+    // No rung means the stylesheet's own fallback size, which is `sm`.
+    const lines = SKELETON_LINES[fontSize ?? "sm"];
+
     return (
       <Suspense
         fallback={
-          <div className="p-6">
+          // MarkdownDocument.css centres the document in a 48rem reading column,
+          // but that stylesheet ships in the lazy chunk, so the placeholder
+          // restates the column (`max-w-3xl` is 48rem). Without it a maximized
+          // pane's bars run the full width and snap inward on the swap.
+          <div className={cn(DOCUMENT_INSET, "mx-auto max-w-3xl")}>
             <Skeleton label="Loading markdown">
-              <SkeletonText lines={10} />
+              <SkeletonText
+                lines={10}
+                lineHeightClassName={lines.bar}
+                gapClassName={lines.gap}
+                className={lines.lead}
+              />
             </Skeleton>
           </div>
         }
@@ -109,7 +143,7 @@ export const MarkdownViewer = forwardRef<MarkdownViewerHandle, MarkdownViewerPro
           rootPath={rootPath}
           cacheBust={cacheBust}
           fontSize={fontSize}
-          className={cn("px-6 py-5", className)}
+          className={cn(DOCUMENT_INSET, className)}
           onRendered={onRendered}
         />
       </Suspense>
