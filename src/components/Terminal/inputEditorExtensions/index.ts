@@ -5,6 +5,7 @@ export {
   interimWidgetField,
   setPendingAIRanges,
   pendingAIField,
+  COMPOSER_GEOMETRY_EVENT,
   computeAutoSize,
   createAutoSize,
   createCustomKeymap,

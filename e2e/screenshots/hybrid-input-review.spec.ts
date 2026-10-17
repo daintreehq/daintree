@@ -13,11 +13,18 @@
  * autosize, the real theme tokens and `index.css`, placed in a column of a
  * named width with a seeded draft.
  *
- * Three arrangements, each answering one of the questions this review is about:
- *   ladder — one draft at every width, so the reflow behaviour is a single picture
- *   growth — one width at every draft length, so the vertical behaviour is too
- *   tiles  — ten panes at a fleet-realistic width, which is where repeated
- *            trailing icons are actually judged
+ * Five arrangements, each answering one of the questions this review is about:
+ *   ladder  — one draft at every width, so the reflow behaviour is a single picture
+ *   growth  — one width at every draft length, so the vertical behaviour is too
+ *   typing  — one prompt at a run of lengths, foot-aligned, so what a keystroke
+ *             near a wrap does to the controls and the height is one picture
+ *   tiles   — ten panes at a fleet-realistic width, which is where repeated
+ *             trailing icons are actually judged
+ *   sidebar — the Assistant's widths, with and without the mic
+ *
+ * Every layout capture writes a JSON sidecar beside its PNG with each
+ * composer's measured shell height, line count and arrangement, and refuses
+ * to write at all if a control covers any text.
  *
  * Opt-in only: skips itself unless DAINTREE_SHOT_HYBRIDINPUT is set.
  *
@@ -53,7 +60,13 @@ import { test, expect, type Locator, type Page } from "@playwright/test";
 import { mkdirSync, readdirSync, realpathSync, rmSync, writeFileSync } from "fs";
 import path from "path";
 import { createServer, type ViteDevServer } from "vite";
-import { WIDTHS, TILE_AGENTS } from "../../src/components/Terminal/__preview__/hybridInputFixtures";
+import {
+  PILL_PANES,
+  WIDTHS,
+  TILE_AGENTS,
+  TYPING_DRAFT,
+  TYPING_LENGTHS,
+} from "../../src/components/Terminal/__preview__/hybridInputFixtures";
 
 const LAYOUT_ENABLED = !!process.env.DAINTREE_SHOT_HYBRIDINPUT;
 const CONTROLS_ENABLED = !!process.env.DAINTREE_SHOT_COMPOSER_CONTROLS;
@@ -201,10 +214,69 @@ async function open(
   if (query.stash) params.set("stash", "1");
   if (query.voice === false) params.set("voice", "0");
   await page.goto(`${baseURL}/hybrid-input-preview.html?${params.toString()}`);
-  await page.addStyleTag({ content: FREEZE_CSS });
   const sheet = page.locator(ROOT_SHEET);
-  await expect(sheet).toBeAttached();
+  // JetBrains Mono 400 is `font-display: optional`: a page that misses its
+  // first ~100ms paints the fallback mono for its whole life, and Menlo wraps
+  // at different points — a layout review captured in it is the wrong picture.
+  // The face is cached once fetched, so a reload paints in it.
+  for (let attempt = 0; ; attempt++) {
+    await page.addStyleTag({ content: FREEZE_CSS });
+    await expect(sheet).toBeAttached();
+    await expect(page.locator(".cm-content").first()).toBeAttached();
+    const faces = await composerFaces(page);
+    if (faces.length > 0 && faces.every((face) => face === "JetBrains Mono")) break;
+    if (attempt === 3) {
+      throw new Error(`composer painted in ${faces.join(", ")}, not JetBrains Mono — refusing`);
+    }
+    await page.reload();
+  }
   return sheet;
+}
+
+/**
+ * The faces the first composer's text actually painted in, read over CDP.
+ * CodeMirror can redraw the probed line between the tag and the query, which
+ * CDP reports as a missing node: probe again rather than reload.
+ */
+async function composerFaces(page: Page): Promise<string[]> {
+  for (let attempt = 0; ; attempt++) {
+    try {
+      const faces = await probeComposerFaces(page);
+      // A line redrawn after the tag reports no fonts at all, not a wrong one.
+      if (faces.length > 0 || attempt === 5) return faces;
+    } catch (error) {
+      if (attempt === 5 || !String(error).includes("Could not find node")) throw error;
+    }
+    await page.waitForTimeout(150);
+  }
+}
+
+async function probeComposerFaces(page: Page): Promise<string[]> {
+  await page.evaluate(() => {
+    document.querySelector("[data-font-probe]")?.removeAttribute("data-font-probe");
+    const lines = Array.from(document.querySelectorAll(".cm-line"));
+    const withText = lines.find((line) =>
+      Array.from(line.childNodes).some(
+        (node) => node.nodeType === Node.TEXT_NODE && (node.textContent ?? "").trim() !== ""
+      )
+    );
+    (withText ?? document.querySelector(".cm-placeholder"))?.setAttribute("data-font-probe", "");
+  });
+  const cdp = await page.context().newCDPSession(page);
+  try {
+    await cdp.send("DOM.enable");
+    await cdp.send("CSS.enable");
+    const { root } = await cdp.send("DOM.getDocument", { depth: -1 });
+    const { nodeId } = await cdp.send("DOM.querySelector", {
+      nodeId: root.nodeId,
+      selector: "[data-font-probe]",
+    });
+    if (!nodeId) return [];
+    const { fonts } = await cdp.send("CSS.getPlatformFontsForNode", { nodeId });
+    return fonts.map((font) => font.familyName);
+  } finally {
+    await cdp.detach();
+  }
 }
 
 /**
@@ -243,42 +315,284 @@ async function proveComposersMounted(
   }
 }
 
+interface ComposerLayout {
+  id: string;
+  frameWidth: number;
+  shellHeight: number;
+  rows: number;
+  arrangement: "rail" | "inline" | "column";
+  lastRowRight: number;
+  trailingLeft: number;
+  overlaps: boolean;
+}
+
 /**
- * Prove which arrangement each named composer is showing before it is
- * photographed. A rail is the trailing group sitting below the editor's
- * bottom edge; inline is the two sharing a row. Without this, a capture
- * of six empty editors with the right buttons would satisfy every other
- * check and photograph nothing the review is about.
+ * Every composer's arrangement, read from what is actually on screen.
+ *
+ * Runs in the page, so it is self-contained. Text is clipped to the editor's
+ * scroll viewport: a draft past the height cap scrolls, and its unclipped
+ * rows would report the last line far below the shell. "Rail" is the trailing
+ * group sitting below the bottom visible row, "inline" the two sharing it,
+ * "column" the canvas having given up the controls' width on every row.
+ * The caret counts as text — a control over it hides where typing lands.
+ *
+ * What counts as covered is what is painted: every run of text, and the
+ * whole box of anything that paints one (a pill chip's tint, a thumbnail). An
+ * element that paints nothing is looked through to its text, so a control
+ * beside the last row of a wrapped `@file` chip, inside its transparent box
+ * but over none of its glyphs, is not a collision.
  */
-async function proveArrangement(
-  page: Page,
-  expected: Record<string, "rail" | "inline">
-): Promise<void> {
-  const actual = await page.evaluate((ids) => {
-    const out: Record<string, string> = {};
-    for (const id of ids) {
-      const root = document.querySelector(`[data-hybrid-input-root="${id}"]`);
-      const editor = root?.querySelector(".cm-editor");
-      const trailing = root?.querySelector('[aria-label="Attach files"]')?.parentElement
-        ?.parentElement;
-      if (!root || !editor || !trailing) {
-        out[id] = "missing";
-        continue;
-      }
-      const e = editor.getBoundingClientRect();
+function measureComposers(): (ComposerLayout | { id: string; missing: true })[] {
+  return Array.from(document.querySelectorAll<HTMLElement>("[data-hybrid-input-root]")).map(
+    (root) => {
+      const id = root.getAttribute("data-hybrid-input-root") ?? "?";
+      const shell = root.querySelector<HTMLElement>(".group\\/shell");
+      const content = root.querySelector<HTMLElement>(".cm-content");
+      const scroller = root.querySelector<HTMLElement>(".cm-scroller");
+      const trailing = root.querySelector('[aria-label="Attach files"]')?.parentElement;
+      const frame = root.closest<HTMLElement>("[data-preview-frame]") ?? root;
+      if (!shell || !content || !scroller || !trailing) return { id, missing: true as const };
       const t = trailing.getBoundingClientRect();
-      out[id] = t.top >= e.bottom - 2 ? "rail" : "inline";
+      const view = scroller.getBoundingClientRect();
+      const rects: DOMRect[] = [];
+      const collect = (node: Node) => {
+        for (const child of Array.from(node.childNodes)) {
+          if (child.nodeType === Node.TEXT_NODE) {
+            const range = document.createRange();
+            range.selectNodeContents(child);
+            rects.push(...Array.from(range.getClientRects()));
+          } else if (child instanceof Element) {
+            const style = getComputedStyle(child);
+            const paints =
+              child instanceof HTMLImageElement ||
+              child instanceof SVGElement ||
+              (style.backgroundColor !== "rgba(0, 0, 0, 0)" &&
+                style.backgroundColor !== "transparent") ||
+              style.backgroundImage !== "none";
+            if (paints) rects.push(...Array.from(child.getClientRects()));
+            else collect(child);
+          }
+        }
+      };
+      for (const line of Array.from(content.querySelectorAll<HTMLElement>(".cm-line"))) {
+        collect(line);
+      }
+      for (const caret of Array.from(root.querySelectorAll<HTMLElement>(".cm-cursor"))) {
+        rects.push(caret.getBoundingClientRect());
+      }
+      const visible = rects
+        .map((r) => ({
+          left: Math.max(r.left, view.left),
+          right: Math.min(r.right, view.right),
+          top: Math.max(r.top, view.top),
+          bottom: Math.min(r.bottom, view.bottom),
+          width: r.width,
+        }))
+        .filter((r) => r.right - r.left > 0.5 && r.bottom - r.top > 0.5);
+      const text = visible.filter((r) => r.width > 0.5);
+      const bottom = Math.max(...text.map((r) => r.bottom), view.top);
+      const lastRow = text.filter((r) => r.bottom > bottom - 4);
+      const lastRowRight = lastRow.length ? Math.max(...lastRow.map((r) => r.right)) : view.left;
+      // 3px of grace: the 24px controls are centred on a 20px row, so their
+      // box reaches 2px into the half-leading of the row above by design.
+      const overlaps = visible.some(
+        (r) => r.left < t.right && r.right > t.left && r.top < t.bottom - 3 && r.bottom > t.top + 3
+      );
+      return {
+        id,
+        frameWidth: Math.round(frame.getBoundingClientRect().width),
+        shellHeight: Math.round(shell.getBoundingClientRect().height),
+        rows: Math.round(scroller.clientHeight / 20),
+        arrangement:
+          t.top >= bottom - 4
+            ? ("rail" as const)
+            : root.querySelector<HTMLElement>("[data-composer-canvas]")?.style.paddingRight
+              ? ("column" as const)
+              : ("inline" as const),
+        lastRowRight: Math.round(lastRowRight),
+        trailingLeft: Math.round(t.left),
+        overlaps,
+      };
     }
-    return out;
-  }, Object.keys(expected));
-  const wrong = Object.entries(expected).filter(([id, want]) => actual[id] !== want);
-  if (wrong.length > 0) {
+  );
+}
+
+async function measured(page: Page): Promise<ComposerLayout[]> {
+  const layouts = await page.evaluate(measureComposers);
+  const missing = layouts.filter((l) => "missing" in l);
+  if (missing.length > 0) {
+    throw new Error(`${missing.length} composers could not be measured — refusing to write`);
+  }
+  return layouts as ComposerLayout[];
+}
+
+/**
+ * Measure every composer and prove its controls cover no text, writing the
+ * measurements beside the PNG so a review can check a reading of the picture
+ * — how tall each shell is, how many rows its draft took — against numbers
+ * rather than estimating them from pixels.
+ *
+ * The overlap check is the invariant every arrangement must hold: the
+ * controls never sit over a glyph, a chip, the placeholder or the caret. It is
+ * what stops a placement rule that is wrong at one width photographing as a
+ * plausible composer with its last word under the paperclip.
+ */
+async function recordLayout(page: Page, file: string): Promise<ComposerLayout[]> {
+  const layouts = await measured(page);
+  const covered = layouts.filter((l) => l.overlaps);
+  if (covered.length > 0) {
     throw new Error(
-      `arrangement mismatch — refusing to write: ${wrong
-        .map(([id, want]) => `${id} wanted ${want}, got ${actual[id]}`)
-        .join("; ")}`
+      `controls cover text in ${covered.map((l) => l.id).join(", ")} — refusing to write`
     );
   }
+  writeFileSync(
+    path.join(OUT_DIR, file.replace(/\.png$/, ".json")),
+    JSON.stringify(layouts, null, 2)
+  );
+  return layouts;
+}
+
+/** Two frames: one for CodeMirror's measure pass, one for anything it scheduled. */
+async function settle(page: Page): Promise<void> {
+  await page.evaluate(
+    () => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)))
+  );
+}
+
+/**
+ * Drag one live composer, ending on a dropped file's wrapped pill, wider and
+ * back, measuring at every step once it has settled.
+ *
+ * The pill is the one shape where the column beside the text can win, so its
+ * arrangement turns over as the pane widens: column, then rail, then corner.
+ * A rule whose readings leaned on the editor's current height would hold the
+ * column on the way up that a fresh mount at the same width would not take —
+ * so every width must lay out the same in both directions, and the same as
+ * the freshly mounted composers on the sheet at 270px and 300px.
+ */
+async function recordPillResize(page: Page, theme: string, fresh: ComposerLayout[]): Promise<void> {
+  const id = "pills-270-file";
+  const widths = Array.from({ length: 13 }, (_, i) => 240 + i * 10);
+  const at = async (width: number) => {
+    await page.evaluate(
+      ({ id, width }) => {
+        const frame = document
+          .querySelector(`[data-hybrid-input-root="${id}"]`)
+          ?.closest<HTMLElement>("[data-preview-frame]");
+        if (!frame) throw new Error(`${id} has no frame`);
+        frame.style.width = `${width}px`;
+      },
+      { id, width }
+    );
+    // A width change can reach the editor's height a few frames late — its
+    // lines are re-measured, then the autosize writes. Read every frame until
+    // eight in a row agree: each frame on the way is kept and must cover no
+    // text, and `settledFrames` is when the last change arrived.
+    let previous = "";
+    let stable = 0;
+    let settledFrames = 0;
+    const frames: string[] = [];
+    for (let frame = 1; frame <= 60; frame++) {
+      await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(resolve)));
+      const layout = (await measured(page)).find((l) => l.id === id);
+      if (!layout) throw new Error(`${id} could not be measured`);
+      if (layout.overlaps) throw new Error(`${id} covers text at ${width}px, frame ${frame}`);
+      const key = `${layout.arrangement}:${layout.shellHeight}`;
+      frames.push(key);
+      if (key === previous) stable++;
+      else {
+        stable = 0;
+        settledFrames = frame;
+      }
+      previous = key;
+      if (stable === 8) return { width, settledFrames, frames, ...layout };
+    }
+    throw new Error(`${id} never settled at ${width}px`);
+  };
+  const up = [];
+  for (const width of widths) up.push(await at(width));
+  const down = [];
+  for (const width of [...widths].reverse()) down.push(await at(width));
+  writeFileSync(path.join(OUT_DIR, `resize--${theme}.json`), JSON.stringify({ up, down }, null, 2));
+
+  const problems: string[] = [];
+  for (const step of [...up, ...down]) {
+    if (step.overlaps) problems.push(`controls cover text at ${step.width}px`);
+  }
+  for (const step of up) {
+    const back = down.find((d) => d.width === step.width)!;
+    if (back.shellHeight !== step.shellHeight || back.arrangement !== step.arrangement) {
+      problems.push(
+        `${step.width}px: ${step.arrangement} ${step.shellHeight}px widening, ${back.arrangement} ${back.shellHeight}px narrowing`
+      );
+    }
+  }
+  for (const pane of fresh.filter((l) => l.id.endsWith("-file"))) {
+    for (const step of [...up, ...down].filter((s) => s.width === pane.frameWidth)) {
+      if (step.shellHeight !== pane.shellHeight || step.arrangement !== pane.arrangement) {
+        problems.push(
+          `${step.width}px: ${step.arrangement} ${step.shellHeight}px resized, ${pane.arrangement} ${pane.shellHeight}px freshly mounted`
+        );
+      }
+    }
+  }
+  if (problems.length > 0) throw new Error(`pill resize: ${problems.join("; ")}`);
+}
+
+/**
+ * Type a prompt into one live composer a character at a time, then delete it
+ * the same way, measuring after every keystroke.
+ *
+ * The typing sheet mounts each length fresh, so it cannot show what only a
+ * live editor can: a placement that flips back and forth, or one that
+ * remembers how it got here. This proves three things on the real sequence —
+ * the controls never cover the text or the caret, the composer never changes
+ * height by anything but whole 20px lines, and every length lays out the same
+ * whether it was reached by typing or by deleting.
+ */
+async function recordLiveTyping(page: Page, theme: string): Promise<void> {
+  await open(page, { case: "live", theme });
+  await proveComposersMounted(page, 1);
+  await page.locator('[data-hybrid-input-root="live"] .cm-content').click();
+  await settle(page);
+
+  const at = async (length: number) => ({ length, ...(await measured(page))[0]! });
+  const forward = [await at(0)];
+  for (const char of TYPING_DRAFT) {
+    await page.keyboard.type(char);
+    await settle(page);
+    forward.push(await at(forward.length));
+  }
+  const backward = [forward[forward.length - 1]!];
+  for (let length = TYPING_DRAFT.length - 1; length >= 0; length--) {
+    await page.keyboard.press("Backspace");
+    await settle(page);
+    backward.push(await at(length));
+  }
+  writeFileSync(
+    path.join(OUT_DIR, `live--${theme}.json`),
+    JSON.stringify({ forward, backward }, null, 2)
+  );
+
+  const problems: string[] = [];
+  for (const step of [...forward, ...backward]) {
+    if (step.overlaps) problems.push(`controls cover text at length ${step.length}`);
+  }
+  for (let i = 1; i < forward.length; i++) {
+    const delta = forward[i]!.shellHeight - forward[i - 1]!.shellHeight;
+    if (delta !== 0 && delta !== 20) {
+      problems.push(`typing to ${i} changed the height by ${delta}px`);
+    }
+  }
+  for (const back of backward) {
+    const fwd = forward[back.length]!;
+    if (fwd.shellHeight !== back.shellHeight || fwd.arrangement !== back.arrangement) {
+      problems.push(
+        `length ${back.length}: ${fwd.arrangement} ${fwd.shellHeight}px typing, ${back.arrangement} ${back.shellHeight}px deleting`
+      );
+    }
+  }
+  if (problems.length > 0) throw new Error(`live typing: ${problems.join("; ")}`);
 }
 
 /**
@@ -313,88 +627,113 @@ test("hybrid input layout review", async ({ page }) => {
     description: "DAINTREE_SHOT_HYBRIDINPUT is required for the hybrid-input capture",
   });
   test.skip(!LAYOUT_ENABLED, "set DAINTREE_SHOT_HYBRIDINPUT=1 to run the capture");
-  test.setTimeout(240_000);
+  test.setTimeout(360_000);
 
   await stubViteHmrClient(page);
   const written: string[] = [];
 
+  const capture = async (
+    query: Parameters<typeof open>[1],
+    count: number,
+    file: string,
+    { mic = true }: { mic?: boolean } = {}
+  ) => {
+    const sheet = await open(page, query);
+    await proveComposersMounted(page, count, { mic });
+    await fitViewport(page, sheet);
+    await recordLayout(page, file);
+    written.push(await snap(sheet, file));
+  };
+
   for (const theme of THEMES) {
-    // The reflow ladder, at the reported draft and at a single line. Two drafts
-    // because the width behaviour and the wrap behaviour are separate questions
-    // and a single picture conflates them.
-    for (const draft of ["reported", "short"] as const) {
-      const sheet = await open(page, { case: "ladder", theme, draft });
-      await proveComposersMounted(page, WIDTHS.length);
-      await fitViewport(page, sheet);
-      written.push(await snap(sheet, `ladder--${theme}--${draft}.png`));
+    // The reflow ladder, one draft per sheet: the reported three-liner, a
+    // single line, a two-line prose prompt with a short last line, and a list
+    // whose last line is short by construction. The width behaviour and the
+    // wrap behaviour are separate questions and one picture conflates them.
+    for (const draft of ["reported", "short", "prose", "list", "path"] as const) {
+      await capture(
+        { case: "ladder", theme, draft },
+        WIDTHS.length,
+        `ladder--${theme}--${draft}.png`
+      );
     }
 
     // The ladder again with a stashed draft, which adds the third trailing
     // button. The narrow end of this row is where the trailing group's cost is
     // most visible.
+    await capture(
+      { case: "ladder", theme, draft: "reported", stash: true },
+      WIDTHS.length,
+      `ladder--${theme}--stash.png`
+    );
+
+    // A pasted screenshot ending the prompt, at six widths, and at the two
+    // narrowest again with the draft ending on the pill itself: the tinted
+    // pill whose label wraps in a narrow pane, the case a column can win.
     {
-      const sheet = await open(page, { case: "ladder", theme, draft: "reported", stash: true });
-      await proveComposersMounted(page, WIDTHS.length);
+      const sheet = await open(page, { case: "pills", theme });
+      await proveComposersMounted(page, PILL_PANES.length);
+      for (const pane of PILL_PANES) {
+        const chips = await page.evaluate(
+          async ({ id, tight, file }) => {
+            const hooks = (
+              window as unknown as {
+                __composerChips: {
+                  attachOne: (id: string, which: 0 | 1) => Promise<number>;
+                  trimAfterChip: (id: string) => void;
+                };
+              }
+            ).__composerChips;
+            const count = await hooks.attachOne(id, file ? 1 : 0);
+            if (tight) hooks.trimAfterChip(id);
+            return count;
+          },
+          { id: pane.id, tight: pane.tight, file: pane.file }
+        );
+        expect(chips, `${pane.id} holds its screenshot chip`).toBe(1);
+      }
+      await expect(page.locator("[data-hybrid-input-root] .cm-image-chip img")).toHaveCount(
+        PILL_PANES.filter((pane) => !pane.file).length
+      );
+      await expect(page.locator("[data-hybrid-input-root] .cm-file-drop-chip")).toHaveCount(
+        PILL_PANES.filter((pane) => pane.file).length
+      );
+      await settle(page);
       await fitViewport(page, sheet);
-      written.push(await snap(sheet, `ladder--${theme}--stash.png`));
+      const fresh = await recordLayout(page, `pills--${theme}.png`);
+      written.push(await snap(sheet, `pills--${theme}.png`));
+      // The live resize once: placement is geometry, the same in every theme.
+      if (theme === THEMES[0]) await recordPillResize(page, theme, fresh);
     }
 
     // Vertical growth at one narrow width.
-    {
-      const sheet = await open(page, { case: "growth", theme });
-      await proveComposersMounted(page, 4);
-      await proveArrangement(page, {
-        "growth-empty": "inline",
-        "growth-short": "inline",
-        "growth-reported": "rail",
-        "growth-overflow": "rail",
-      });
-      await fitViewport(page, sheet);
-      written.push(await snap(sheet, `growth--${theme}.png`));
-    }
+    await capture({ case: "growth", theme }, 4, `growth--${theme}.png`);
+
+    // One prompt at a run of lengths, foot-aligned: the keystroke-by-keystroke
+    // behaviour around each wrap.
+    await capture({ case: "typing", theme }, TYPING_LENGTHS.length, `typing--${theme}.png`);
 
     // Ten tiled panes.
-    {
-      const sheet = await open(page, { case: "tiles", theme });
-      await proveComposersMounted(page, TILE_AGENTS.length);
-      await fitViewport(page, sheet);
-      written.push(await snap(sheet, `tiles--${theme}.png`));
-    }
+    await capture({ case: "tiles", theme }, TILE_AGENTS.length, `tiles--${theme}.png`);
 
-    // A wide pane, one to three lines, with the mic and without. The rail
-    // beneath a wrapped draft has the most empty width to carry here, and the
-    // paperclip-only variant is the sparsest it ever gets.
-    // At both sidebar widths the icon column is well over 6% of the shell,
-    // so a wrapped draft takes the rail and a one-line draft stays inline.
-    const sidebarArrangement = {
-      "sidebar-380-short": "inline",
-      "sidebar-380-reported": "rail",
-      "sidebar-380-sidebar": "rail",
-      "sidebar-430-short": "inline",
-      "sidebar-430-reported": "rail",
-      "sidebar-430-sidebar": "rail",
-    } as const;
-    {
-      const sheet = await open(page, { case: "sidebar", theme });
-      await proveComposersMounted(page, 6);
-      await proveArrangement(page, sidebarArrangement);
-      await fitViewport(page, sheet);
-      written.push(await snap(sheet, `sidebar--${theme}.png`));
-    }
-    {
-      const sheet = await open(page, { case: "sidebar", theme, voice: false });
-      await proveComposersMounted(page, 6, { mic: false });
-      await proveArrangement(page, sidebarArrangement);
-      await fitViewport(page, sheet);
-      written.push(await snap(sheet, `sidebar--${theme}--no-mic.png`));
-    }
+    // The Assistant sidebar widths, one to three lines, with the mic and
+    // without. The paperclip-only variant is the sparsest the trailing group
+    // ever gets.
+    await capture({ case: "sidebar", theme }, 6, `sidebar--${theme}.png`);
+    await capture({ case: "sidebar", theme, voice: false }, 6, `sidebar--${theme}--no-mic.png`, {
+      mic: false,
+    });
   }
+
+  // The live sequence once: placement is geometry, and geometry is the same in
+  // every theme.
+  await recordLiveTyping(page, THEMES[0]!);
 
   // Count the files ourselves. A harness that trusts its own exit code is how a
   // review ends up reasoning about screenshots that were never written.
   const onDisk = readdirSync(OUT_DIR).filter((f) => f.endsWith(".png"));
   expect(onDisk.length).toBe(written.length);
-  expect(onDisk.length).toBe(THEMES.length * 7);
+  expect(onDisk.length).toBe(THEMES.length * 12);
   console.log(`[hybrid-input-shots] ${onDisk.length} PNGs in ${OUT_DIR}`);
 });
 
