@@ -99,6 +99,10 @@ function normalizeConnection(value: unknown): HostConnection {
   return requireSupportedConnection(connection);
 }
 
+function storedSwitch(value: unknown, connection: HostConnection): boolean {
+  return value === undefined ? connection.kind === "ssh" : value === true;
+}
+
 /** A readable id from the name, falling back to random when nothing usable is left. */
 function slugFor(name: string): string {
   const slug = name
@@ -160,8 +164,9 @@ function sanitize(raw: unknown): HostDescriptor[] {
       lastSeenAt: typeof host.lastSeenAt === "number" ? host.lastSeenAt : null,
       addedAt: typeof host.addedAt === "number" ? host.addedAt : 0,
       notificationsEnabled: host.notificationsEnabled === true,
-      assistantMessagingEnabled: host.assistantMessagingEnabled === true,
-      assistantStartEnabled: host.assistantStartEnabled === true,
+      // A field the record never had reads as an SSH host's default, on (#13469).
+      assistantMessagingEnabled: storedSwitch(host.assistantMessagingEnabled, connection),
+      assistantStartEnabled: storedSwitch(host.assistantStartEnabled, connection),
     });
   }
   return out;
@@ -221,9 +226,9 @@ export class HostRegistry {
       addedAt: this.now(),
       notificationsEnabled: false,
       // A Shell that reaches a host over SSH can already run anything there as
-      // that user; a message is no more. A host already listed keeps its value.
+      // that user; a message, or an assistant started there, is no more.
       assistantMessagingEnabled: connection.kind === "ssh",
-      assistantStartEnabled: false,
+      assistantStartEnabled: connection.kind === "ssh",
     };
     this.write([...hosts, descriptor]);
     return descriptor;
@@ -252,9 +257,6 @@ export class HostRegistry {
         next.arch = null;
         next.lastHandshake = null;
         next.lastSeenAt = null;
-        // Consent was given to the machine that answered before, not this one.
-        next.assistantMessagingEnabled = false;
-        next.assistantStartEnabled = false;
       }
     }
     if (payload.notificationsEnabled !== undefined) {

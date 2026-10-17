@@ -398,7 +398,7 @@ export function HostDetail({
             <>
               <SettingsRow
                 label="Allow assistant messaging with this host"
-                description={`Your assistant and ${hostName}'s assistants can message each other. On by default for hosts added over SSH.`}
+                description={`Your assistant and ${hostName}'s assistants can message each other. On by default.`}
                 error={messagingError ?? undefined}
                 control={({ labelId, descriptionId, disabled }) => (
                   <SettingsSwitch
@@ -416,7 +416,7 @@ export function HostDetail({
               >
                 <SettingsRow
                   label="Let the assistant start assistants on this host"
-                  description={`The assistant can start one in any of ${hostName}'s projects and message it, with nobody at ${hostName}. Each runs on ${hostName}'s own agent sign-in. Off by default.`}
+                  description={`The assistant can start one in any of ${hostName}'s projects and message it, with nobody at ${hostName}. Each runs on ${hostName}'s own agent sign-in. On by default.`}
                   error={startError ?? undefined}
                   control={({ labelId, descriptionId, disabled }) => (
                     <SettingsSwitch

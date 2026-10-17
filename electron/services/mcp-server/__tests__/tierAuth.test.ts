@@ -486,16 +486,17 @@ describe("shouldExposeTool", () => {
       })
     ).toBe(false);
   });
-  // #13336: the hub's host tools are offered only to this Shell's enrolled hub,
-  // reads on core and sends and cancels on full, and never to a pane or key.
+  // #13336 / #13469: the hub's host tools are offered only to this Shell's
+  // enrolled hub, all of them from core, and never to a pane or key.
   it.each([
     ["host.list", "core"],
     ["host.listAssistants", "core"],
     ["host.getTask", "core"],
     ["host.listTasks", "core"],
     ["host.readQuota", "core"],
-    ["host.sendMessage", "full"],
-    ["host.cancelTask", "full"],
+    ["host.sendMessage", "core"],
+    ["host.cancelTask", "core"],
+    ["host.startAssistant", "core"],
   ] as const)("offers %s only to the hub, from the %s tier", (id, minimum) => {
     const entry = makeEntry({ id });
     const assistant = { workspaceBound: false, rendererOwnedOrigin: true };
@@ -2271,21 +2272,16 @@ describe("filterIntrospectionResultForSession", () => {
       expect(McpUnavailableActionStubSchema.safeParse(stub).success).toBe(true);
     });
 
-    // #13336: a core session that isn't the hub can't raise its tier into the
-    // hub's send tools, so it is never told it could.
-    it("offers the hub's full-tier tools as a stub to the hub alone", () => {
-      const entry = makeEntry({
-        id: "host.sendMessage",
-        title: "Message an assistant on a host",
-        category: "help",
-        danger: "safe",
-      });
-      expect(buildUnavailableStub(entry, firstParty())).toBeNull();
-      expect(buildUnavailableStub(entry, firstParty({ hubMessaging: true }))).toMatchObject({
-        id: "host.sendMessage",
-        minimumTier: "full",
-      });
-    });
+    // #13469: the hub's sends sit on core, so a core session is never told to
+    // raise its tier for them, hub or not.
+    it.each(["host.sendMessage", "host.cancelTask", "host.startAssistant"])(
+      "offers no upgrade stub for %s",
+      (id) => {
+        const entry = makeEntry({ id, title: "Host messaging", category: "help", danger: "safe" });
+        expect(buildUnavailableStub(entry, firstParty())).toBeNull();
+        expect(buildUnavailableStub(entry, firstParty({ hubMessaging: true }))).toBeNull();
+      }
+    );
 
     // The stub above proves nothing about the derivation: BAND_OVERRIDES pins
     // it, so a builder that passed a hard-coded `danger` into `deriveBand`

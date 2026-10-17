@@ -41,9 +41,9 @@ describe("HostRegistry", () => {
       lastSeenAt: null,
       addedAt: 1_000,
       notificationsEnabled: false,
-      // Reached over SSH, so messaging starts on (#13441); starting assistants doesn't.
+      // Reached over SSH, so messaging (#13441) and starting assistants (#13469) start on.
       assistantMessagingEnabled: true,
-      assistantStartEnabled: false,
+      assistantStartEnabled: true,
     });
     expect(isValidRemoteHostId(added.id)).toBe(true);
     expect(registry.list()).toEqual([added]);
@@ -177,37 +177,68 @@ describe("HostRegistry", () => {
     expect(registry.get(host.id)?.assistantMessagingEnabled).toBe(true);
   });
 
-  it("keeps assistant messaging through a rename but not onto a different machine", () => {
+  it("keeps both assistant switches across a rename and a change of target (#13469)", () => {
     const registry = new HostRegistry(memoryStore());
     const host = registry.add({ name: "box", connection: { kind: "ssh", target: "box.example" } });
-    registry.update({ hostId: host.id, assistantMessagingEnabled: true });
-    expect(registry.update({ hostId: host.id, name: "Box" }).assistantMessagingEnabled).toBe(true);
+    expect(registry.update({ hostId: host.id, name: "Box" })).toMatchObject({
+      assistantMessagingEnabled: true,
+      assistantStartEnabled: true,
+    });
     const moved = registry.update({
       hostId: host.id,
       connection: { kind: "ssh", target: "other.example" },
     });
-    expect(moved.assistantMessagingEnabled).toBe(false);
+    expect(moved).toMatchObject({ assistantMessagingEnabled: true, assistantStartEnabled: true });
   });
 
-  it("keeps starting assistants off until turned on, and never carries it onto a different machine", () => {
+  it("starts assistants on for an SSH host, and keeps a turned-off switch off across a change of target", () => {
     const registry = new HostRegistry(memoryStore());
     const host = registry.add({ name: "box", connection: { kind: "ssh", target: "box.example" } });
-    expect(host.assistantStartEnabled).toBe(false);
-    registry.update({ hostId: host.id, assistantMessagingEnabled: true });
-    expect(registry.get(host.id)?.assistantStartEnabled).toBe(false);
-    expect(registry.update({ hostId: host.id, assistantStartEnabled: true })).toMatchObject({
+    expect(host.assistantStartEnabled).toBe(true);
+    expect(registry.update({ hostId: host.id, assistantStartEnabled: false })).toMatchObject({
       assistantMessagingEnabled: true,
-      assistantStartEnabled: true,
+      assistantStartEnabled: false,
     });
     expect(() =>
       registry.update({ hostId: host.id, assistantStartEnabled: 1 as unknown as boolean })
     ).toThrow(expect.objectContaining({ code: "VALIDATION" }));
-    expect(registry.update({ hostId: host.id, name: "Box" }).assistantStartEnabled).toBe(true);
+    registry.update({ hostId: host.id, assistantMessagingEnabled: false });
     const moved = registry.update({
       hostId: host.id,
       connection: { kind: "ssh", target: "other.example" },
     });
     expect(moved).toMatchObject({ assistantMessagingEnabled: false, assistantStartEnabled: false });
+  });
+
+  it("keeps an explicit off a stored host saved, and reads a missing switch as on only for SSH", () => {
+    const base = { name: "box", addedAt: 1, notificationsEnabled: false };
+    const registry = new HostRegistry(
+      memoryStore({
+        hosts: [
+          {
+            ...base,
+            id: "off",
+            connection: { kind: "ssh", target: "off.example" },
+            assistantMessagingEnabled: false,
+            assistantStartEnabled: false,
+          },
+          {
+            ...base,
+            id: "missing",
+            name: "box2",
+            connection: { kind: "ssh", target: "m.example" },
+          },
+        ],
+      })
+    );
+    expect(registry.get("off")).toMatchObject({
+      assistantMessagingEnabled: false,
+      assistantStartEnabled: false,
+    });
+    expect(registry.get("missing")).toMatchObject({
+      assistantMessagingEnabled: true,
+      assistantStartEnabled: true,
+    });
   });
 
   it("forgets a host and reports changes", () => {
@@ -350,8 +381,9 @@ describe("HostRegistry", () => {
         lastSeenAt: 5,
         addedAt: 1,
         notificationsEnabled: true,
-        assistantMessagingEnabled: false,
-        assistantStartEnabled: false,
+        // Saved before either switch existed, so both read as an SSH host's default.
+        assistantMessagingEnabled: true,
+        assistantStartEnabled: true,
       },
     ]);
     // Reading changes nothing on disk; the next write saves the new shape.
@@ -381,8 +413,11 @@ describe("HostRegistry", () => {
       const registry = new HostRegistry(memoryStore());
       const added = registry.add({ name: "Ubuntu", connection: { kind: "wsl", distro: "Ubuntu" } });
       expect(added.connection).toEqual({ kind: "wsl", distro: "Ubuntu" });
-      // Only an SSH host starts with messaging on; Windows doesn't offer it at all.
-      expect(added.assistantMessagingEnabled).toBe(false);
+      // Only an SSH host starts with the assistant switches on; Windows doesn't offer them.
+      expect(added).toMatchObject({
+        assistantMessagingEnabled: false,
+        assistantStartEnabled: false,
+      });
       expect(() =>
         registry.add({ name: "Ubuntu again", connection: { kind: "wsl", distro: "ubuntu" } })
       ).toThrow();

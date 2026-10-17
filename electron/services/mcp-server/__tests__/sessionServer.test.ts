@@ -4684,13 +4684,13 @@ describe("hub host-messaging tools (#13336)", () => {
     return { deps, access };
   }
 
-  it("lists them only to the hub, and sends only from the full tier", async () => {
+  it("lists them only to the hub, sends included, from the core tier up", async () => {
     const core = hubDeps({ available: true });
     const coreServer = createSessionServer("sess", core.deps);
     await coreServer.connect(makeMockTransport());
-    const coreNames = (await listTools(coreServer)).tools.map((t) => t.name);
-    expect(coreNames).toContain("host.list");
-    expect(coreNames).not.toContain("host.sendMessage");
+    expect((await listTools(coreServer)).tools.map((t) => t.name)).toEqual(
+      expect.arrayContaining(["host.list", "host.sendMessage"])
+    );
 
     const full = hubDeps({ available: true, tier: "full" });
     const fullServer = createSessionServer("sess", full.deps);
