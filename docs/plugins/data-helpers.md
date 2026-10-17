@@ -91,7 +91,7 @@ The one to reach for when a panel edits a file an agent also edits. It changes o
 - **Tags.** A core tag — `!!str`, `!!int`, `!!float`, `!!bool`, `!!null`, `!!map`, `!!seq` — is dropped when its value is replaced, so the new value reads back as the type you passed (`!!str 1` patched with `2` becomes the number `2`). Any other tag — `!!binary`, `!!timestamp`, a custom `!foo` — names a type a plain value cannot carry, so patching that key throws rather than silently changing its type.
 - **Anchors and aliases.** A replaced value keeps its anchor, so an `*alias` to it still resolves. The result is read back before it is returned, and an edit that would leave the frontmatter unreadable — typically deleting the anchored key while another key still uses `*alias` — throws.
 - **Flow mappings.** A block whose whole mapping is written in flow style (`{ name: Acme, stage: lead }`) cannot be edited in place, so a non-empty patch re-serialises the whole mapping, under the same tag and anchor rules, keeping each replaced value's comments.
-- **Complex keys.** A key that is not a plain scalar cannot be edited in place and throws.
+- **Complex keys.** Only scalar keys are matched. A key written as a collection (`? [a, b]`) never matches a patch key: patching the name `parseFrontmatter` gives it (`"[ a, b ]"`) adds a new key beside it, and deleting that name leaves the entry in place.
 
 Every failure is a [`FrontmatterError`](#frontmattererror). Pair it with [`editFile`](#editfile) so the write is conflict-checked too:
 
@@ -109,7 +109,7 @@ class FrontmatterError extends Error {
 }
 ```
 
-Thrown by `parseFrontmatter` and `updateFrontmatter`. `line` and `column` are positions in the whole file, not in the YAML block, and are appended to the message, so a listing can report "card 12: line 4" and carry on with the rest. Two failures have no better position and report line 1, column 1: a block that is never closed, and an edit to a complex key.
+Thrown by `parseFrontmatter` and `updateFrontmatter`. `line` and `column` are positions in the whole file, not in the YAML block, and are appended to the message, so a listing can report "card 12: line 4" and carry on with the rest. A block that is never closed has no better position and reports line 1, column 1.
 
 Branch on `err.code === "FRONTMATTER_INVALID"`, not `instanceof FrontmatterError`: two copies of the SDK (a bundled one and the worker's shipped one, say) have two different classes, and `instanceof` fails across them.
 

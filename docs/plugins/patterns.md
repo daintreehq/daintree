@@ -161,7 +161,7 @@ A list whose length the user controls — search results, a table of records, a 
 | A table of records | `DataTable` from `@daintreehq/plugin-ui`: sticky header, a virtualised body by default (`virtualize={false}` for a short ledger that sizes to its rows), controlled sort (`sort` + `onSortChange`; you sort `rows`), keyboard grid with `onRowClick`, `empty` for the zero state |
 | A list of any length | `VirtualList` with `ListRow` rows; add `useListNavigation` for a keyboard listbox |
 | Up to a few hundred rows you render yourself | `useProgressiveList(items, { initial, step })` from `@daintreehq/plugin-sdk/react`: the first screenful paints at once, the rest arrives in non-blocking transitions |
-| Thousands of rows in your own markup | `useVirtualList({ count, estimateSize, getScrollElement })`, the headless windowing hook behind a custom layout |
+| Thousands of rows in your own markup | `useVirtualList({ count, estimateSize, getScrollElement })` from `@daintreehq/plugin-sdk/react`, the headless windowing hook behind a custom layout |
 
 Both kit lists fill their container's height, so give the container one (`flex-1 min-h-0` inside the panel root, or a fixed height). `onEndReached` on either is where the next page loads. Filter and sort in memory or in the worker, but keep the rendered set windowed.
 
@@ -234,7 +234,7 @@ Your own writes come back through the watch too. Keep the revision each write re
 
 Watchers and badges are both released on unload; `dispose()` the watcher yourself when the panel that needed it is removed (`onDidChangePanelLifecycle`, phase `removed`).
 
-The host's own bursty subscriptions coalesce without being asked: `onDidChangeWorktrees`, `onDidChangeActiveWorktree`, `onDidChangeAgentState` and `onDidChangeAllAgents` deliver one trailing callback 100 ms after a burst (and at least every four windows while it lasts), always with the latest state; `onDidChangeWorktrees` also hands you `{ added, removed, changed }` ids for the net change. Pass `{ debounceMs: 0 }` only when you need every event, or a larger window when you need fewer. `host.fs.watch` is the exception, with no debounce unless you pass one.
+The host's own bursty subscriptions coalesce without being asked: `onDidChangeWorktrees`, `onDidChangeActiveWorktree`, `onDidChangeAgentState` and `onDidChangeAllAgents` deliver one trailing callback 100 ms after a burst (`onDidChangeFocusedPanel` 250 ms), and at least every four windows while it lasts, always with the latest state; `onDidChangeWorktrees` also hands you `{ added, removed, changed }` ids for the net change. Pass `{ debounceMs: 0 }` only when you need every event, or a larger window when you need fewer. `host.fs.watch` is the exception, with no debounce unless you pass one.
 
 ## Build a file UI
 
@@ -345,6 +345,7 @@ const {
 When the list is large and changes a row at a time, a synced collection the worker updates from its own writes ([Push deltas](#push-deltas-not-the-whole-state)) avoids the refetch altogether; keep the invalidation for changes the worker didn't make, such as an agent's `sqlite3` session.
 
 - **Rules live in the schema**, because agents write with the `sqlite3` CLI, which does not enforce foreign keys. `CHECK` constraints plus `BEFORE INSERT` / `BEFORE UPDATE` triggers with `RAISE(ABORT, 'category must be one of the rows in categories')` — the agent reads the message and corrects itself. The message must be a string literal, so name the rule rather than the bad value.
+- **Give agents tools, not just the file.** Declaring the database puts the host's read-only `database_schema` and `database_query` on your plugin's MCP server with no code, and a write one statement can express is a [declared query](./contribution-points.md#declared-queries) with `mode: "write"`: typed, constrained params the host checks before the statement runs, in its own transaction under the same policy as a writable `host.db` open, so your constraints and triggers still decide. See [Agent extensions → Database tools](./agent-extensions.md#database-tools).
 - **Arithmetic lives in views**, declared in `definitions` (`DROP VIEW IF EXISTS month_totals; CREATE VIEW month_totals AS …`). The panel, a report script and an agent's `sqlite3` query then read the same numbers. `definitions` re-applies only when its text changes, so opening the panel does not dirty a committed database.
 - **A dashboard over agent-written data** opens with `{ readonly: true }`: no consent prompt, nothing created, writes refused with `DB_READONLY`.
 - **Money is integer cents**, and an integer past 2^53 comes back as a `bigint`.
@@ -414,7 +415,7 @@ useEffect(() => {
 
 ## Clocks and relative times
 
-"5m ago", "due in 2h", an elapsed timer: text that changes because time passes, not because data did. Don't give each row its own `setInterval` — `daintree-plugin lint` flags a view interval as `interval-polling-in-view` — and don't poll the worker to re-render. `useNow({ intervalMs })` from `@daintreehq/plugin-sdk/react` returns `Date.now()` and re-renders every `intervalMs` (default 60,000, at least 1,000), aligned to whole multiples so every time on screen turns over together. One timer per interval is shared by every component that asks, it pauses while nobody can see the view, and it catches up at once when they can.
+"5m ago", "due in 2h", an elapsed timer: text that changes because time passes, not because data did. Don't give each row its own `setInterval` — `daintree-plugin lint` flags a view interval faster than 30 seconds, or one that fetches, as `interval-polling-in-view` — and don't poll the worker to re-render. `useNow({ intervalMs })` from `@daintreehq/plugin-sdk/react` returns `Date.now()` and re-renders every `intervalMs` (default 60,000, at least 1,000), aligned to whole multiples so every time on screen turns over together. One timer per interval is shared by every component that asks, it pauses while nobody can see the view, and it catches up at once when they can.
 
 ```js
 import { useNow } from "@daintreehq/plugin-sdk/react";
@@ -476,7 +477,7 @@ The core token groups — surfaces, text, borders, accent, `focus-ring`, status 
 
 ## Open files the Daintree way
 
-Don't build a markdown renderer or an audio player before checking what `host.dispatch` already reaches. Markdown that belongs inside your own view — a record's notes, a card's body — renders with [`Markdown` from `@daintreehq/plugin-ui`](./views.md#host-ui-components), Daintree's own renderer. A whole file goes to one of these instead; all are `danger: "safe"` and take a `path` (absolute, or relative to `rootPath` / the project root):
+Don't build a markdown renderer or an audio player before checking what `host.dispatch` already reaches. Markdown that belongs inside your own view — a record's notes, a card's body — renders with [`Markdown` from `@daintreehq/plugin-ui`](./views.md#host-ui-components), Daintree's own renderer. A whole file goes to one of these instead; all are `danger: "safe"`. `file.openPanel` and `file.view` resolve a relative `path` against `rootPath` or the project root; `file.openInEditor`, `file.openInBrowser` and `file.showItemInFolder` need an absolute one:
 
 | Action | Args | What it does |
 | --- | --- | --- |
@@ -485,7 +486,7 @@ Don't build a markdown renderer or an audio player before checking what `host.di
 | `file.openInEditor` | `{ path, line?, col? }` | The user's configured editor |
 | `file.openInBrowser` | `{ path }` | The OS default handler for that file type, despite the name; for an `.html` deck that may be an editor rather than a browser |
 | `file.showItemInFolder` | `{ path }` | Reveal in Finder / Explorer |
-| `worktree.openFileBrowserPanel` | `{ revealPath?, revealKind?: "file" \| "directory", surface?: "grid" \| "dock" }` | Daintree's file browser, opened at your folder |
+| `worktree.openFileBrowserPanel` | `{ revealPath?, revealKind?: "file" \| "directory", location?: "grid" \| "dock" }` | Daintree's file browser, opened at your folder; `revealPath` is relative to the worktree or project root |
 | `system.openExternal` | `{ url }` | A URL in the default browser |
 
 ```js
@@ -496,7 +497,7 @@ await host.dispatch("file.openPanel", {
 await host.dispatch("file.openPanel", { path: `${videoDir}/final/teleprompter.mp3` }); // audio preview
 ```
 
-Check a result: `dispatch` resolves `{ ok: false, error: { code } }` rather than throwing, and `host.actions.canDispatch(id)` tells you in advance whether an action will confirm.
+Check a result: `dispatch` resolves `{ ok: false, error: { code } }` rather than throwing. A `confirm` action never runs from a plugin — `dispatch` refuses it with `CONFIRMATION_REQUIRED` and shows the user nothing — and `host.actions.canDispatch(id)` tells you in advance: `"ok"`, `"confirm"` or `"restricted"`.
 
 ## Export a document
 
@@ -626,7 +627,7 @@ A project plugin can replace what the grid shows when no panels are open, so the
 "surfaces": { "emptyCanvas": { "viewId": "main" } }
 ```
 
-That surface is visible only while the grid is empty. The moment a terminal opens it gives way. Above it the host draws a thin strip of its own, outside your view's box: a switch between your panel and the stock launcher and, while your surface shows, a "No panels open" label and the launcher's search entry. You never need to reserve space for it, so a top-right toolbar is fine. The first time the surface shows in a project, the user is asked whether to keep it, and the answer is remembered for that project. For a navigation that stays put, the same panel kind is dockable by default; a docked instance survives everything the grid does. Give the user both: the canvas for the cold open, the dock for the working session. Details under [Surfaces](./project-local.md#surfaces).
+That surface is visible only while the grid is empty. The moment a terminal opens it gives way. Above it the host draws a thin strip of its own, outside your view's box: a switch between your panel and the stock launcher and, while your surface shows, an icon button for the launcher's search. You never need to reserve space for it, so a top-right toolbar is fine. The first time the surface shows in a project, the user is asked whether to keep it, and the answer is remembered for that project. For a navigation that stays put, the same panel kind is dockable by default; a docked instance survives everything the grid does. Give the user both: the canvas for the cold open, the dock for the working session. Details under [Surfaces](./project-local.md#surfaces).
 
 ## Open your own panel from a command
 
@@ -687,10 +688,10 @@ import { Badge, ListRow, PaneHeader, VirtualList } from "@daintreehq/plugin-ui";
 
 The example is JSX, so it needs a build; a zero-build `dist/panel.js` writes the same tree with `createElement`, importing the same components. Tailwind utility classes on Daintree's semantic tokens do the rest: the layout around the kit, and anything bespoke the kit has no component for. The host compiles the classes your view uses at runtime, so this needs no build step and works identically in a raw `dist/panel.js` and a bundled view, and the tokens are what make a panel follow theme switches for free. Nothing is locked down — the whole token vocabulary is there for UI of your own.
 
-Three things that trip up a first plugin:
+Four things that trip up a first plugin:
 
 - **The stock palette is gone.** `bg-red-500` generates nothing at all — Daintree's theme deletes Tailwind's own colours so plugin panels cannot drift out of the design system. Use `status-danger` for the alarming thing and a `category-<hue>` for the categorical one.
-- **A conditional class must be a complete string.** `selected ? "bg-surface-active" : ""` works because both branches are whole class names. `` `bg-surface-${tone}` `` never compiles, because that name exists in neither your source nor the DOM.
+- **A conditional class must be a complete string.** `selected ? "bg-surface-active" : ""` works because both branches are whole class names. `` `bg-surface-${tone}` `` exists only in the DOM, so the host styles it when it appears — before the next paint, but too late for a `useLayoutEffect` that measures on the first commit.
 - **`min-h-0` on every flex ancestor of a scroller.** Without it the panel's own scrollbar takes the overflow instead of your list. This is the single most common reason a plugin panel scrolls wrong.
 - **A container query needs an ancestor container.** `@md:grid-cols-4` answers to the nearest ancestor with `@container`, never to its own element, so `@container @md:grid-cols-4` on one `div` never applies. Put `@container` on the wrapper.
 
@@ -698,7 +699,7 @@ Three things that trip up a first plugin:
 
 ## Keep commands one click
 
-Declaring any of `shell:exec`, `git:write`, `fs:project-write`, `fs:user-data-write`, `agent:input`, `agent:invoke` or `agent:register` raises every command the plugin registers to a confirm dialog — so an app that writes its own data files confirms its Open command. Narrow it per command with `requires`: `"requires": []` on the ones that only open a panel, the real list on the ones that write or run something. Put it on the `contributes.commands` entry and on the `registerAction` descriptor, which replaces the manifest entry once registered. Give each command two or three `keywords` and a shared `category` so the palette groups them.
+Declaring any of `shell:exec`, `git:write`, `fs:project-write`, `fs:user-data-write`, `agent:input`, `agent:invoke` or `agent:register` raises every command the plugin registers to a confirm dialog — so an app that writes its own data files confirms its Open command. So does a read capability (`fs:*-read`, `git:read`, `agent:read`, `terminal:read`) alongside a `network:fetch` with no `scopes.network.allowedUrls`. Narrow it per command with `requires`: `"requires": []` on the ones that only open a panel, the real list on the ones that write or run something. Put it on the `contributes.commands` entry and on the `registerAction` descriptor, which replaces the manifest entry once registered. Give each command two or three `keywords` and a shared `category` so the palette groups them.
 
 ## What survives what
 

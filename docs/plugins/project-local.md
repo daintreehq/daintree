@@ -38,14 +38,14 @@ cd <somewhere inside your project>
 npx daintree-plugin new dashboard --publisher acme --project
 ```
 
-`--project` is a boolean flag; the plugin name is still the positional argument. It walks up from the current directory for the nearest ancestor holding a `.daintree/` directory or a `.git` (a file, in a worktree), and fails with a message rather than guessing if it finds neither. The plugin is written to `<projectRoot>/.daintree/plugins/acme.dashboard/`.
+`--project` is a boolean flag; the plugin name is still the positional argument. It walks up from the current directory for the nearest ancestor holding a `.daintree/` directory or a `.git` (a file, in a worktree), and fails with a message rather than guessing if it finds neither. Your home directory's `.daintree/` is Daintree's own data folder, not a project, so in the home directory only a `.git` counts. The plugin is written to `<projectRoot>/.daintree/plugins/acme.dashboard/`.
 
 What `--project` changes relative to an installed scaffold:
 
 - `plugin.json` gains `"scope": "project"`
 - `package.json` gains a `dev` script running `vite build --watch`, and drops the `package` script — a project plugin is distributed by being committed, not as a `.dntr`
 - `vite.config.ts` emits **inline** source maps with absolute `sources`, so DevTools breakpoints land in the real `.tsx` without a sidecar `.map` having to be served over `plugin://`
-- `.gitignore` force-includes `dist/`, and a generated `README.md` explains why — and, for the `view` template, points at the [panel preview](./dev-loop.md#preview-a-panel-outside-daintree) rather than the running app
+- `.gitignore` force-includes `dist/`, and a generated `README.md` explains why — and, for the `view` template, points at the [panel preview](./dev-loop.md#preview-a-panel-outside-daintree) rather than the running app (the preview is not in the 0.1.0 release on npm; it ships in the next one)
 - no `.dntrignore` — that file only shapes a `.dntr` archive
 - a watcher recipe lands in `<projectRoot>/.daintree/recipes/`, so Daintree can start the build alongside the rest of the project environment
 
@@ -92,15 +92,15 @@ There is no package-and-install step. The plugin is already where the host reads
 
 Project plugin code is code from a repository. It runs with your account, unsandboxed, exactly like an installed plugin — and unlike an installed plugin, you did not choose to install it: it arrived with a clone, a pull, or an agent's commit. So there is a gate.
 
-**One gate, at the folder, once.** Opening a project that has at least one valid manifest under `.daintree/plugins/` and no decision on record raises a dialog naming the plugins, and offers three answers:
+**One gate, at the folder, once.** Opening a project that has at least one valid manifest under `.daintree/plugins/` and no decision on record puts a strip at the top of the panel grid naming the plugins, with three answers:
 
 | Answer | Effect |
 | --- | --- |
-| **Keep disabled** | Remembered. Nothing runs, and you are never asked again for this project. The plugin manager offers to enable later. |
+| **Keep disabled** | Remembered. Nothing runs, and you are never asked again for this project. The plugin manager and the project-plugins row in the sidebar footer offer to enable later. |
 | **Enable for this session** | Held in memory only. Nothing is written, and the next launch asks again. |
 | **Always enable** | Persisted for this project, in Daintree's own store — never in the repository. |
 
-Dismissing the dialog records nothing, which means nothing runs and the project may ask again next time.
+Dismissing the strip (**Decide later**) records nothing: nothing runs, the sidebar footer keeps the offer, and the project asks again next launch.
 
 **The default is disabled, and no record means no code runs.** Discovery still parses every manifest so the plugin manager can tell you what is there, but with no decision on record it reads no `dist/`, imports nothing, and spawns no worker.
 
@@ -111,6 +111,8 @@ Dismissing the dialog records nothing, which means nothing runs and the project 
 **A manifest id the project has never had is staged, not run.** This is the one content signal worth spending your attention on: "something new wants to execute here" is materially different from "the file you are editing changed". A new plugin id in a trusted project is parsed, announced once, and listed in the plugin manager with a one-click **Activate**; it does not run until you click. Ignoring the announcement is enough — the plugin stays staged and is not announced again, and for a persisted trust decision that staging survives a restart. A plugin that disappears and comes back — a rebase, a branch round trip — is treated as returning, not as new.
 
 **Revoking is stronger than closing.** Turning project plugins off in the plugin manager unloads everything immediately, unregisters its contributions, invalidates its `plugin://` authorities, and purges that project's capability grants. Closing a project unloads its plugins too, but keeps the trust decision — a close is not a revoke.
+
+**One plugin can be switched off on its own.** Each plugin's page in Project settings → Plugins has its own switch. Off unloads that plugin and keeps it off through branch switches and reloads — and across launches under **Always enable**, since a session-only answer writes nothing — while the project's other plugins keep running; it stays known, so it is never re-staged, and its capability grants survive, so switching it back on runs it again without asking. It is a preference, not a second trust gate.
 
 A clone that Daintree registers as a separate project decides independently. A clone it recognises as the _same_ project moved — `.daintree/project.json` is git-tracked, and Daintree adopts the folder when the originally registered path is gone — keeps that project's identity, and with it its trust decision.
 
@@ -130,6 +132,7 @@ Trusting the folder lets the plugin run; it does not pre-approve what the plugin
 | `agent:input` | `host.sendToAgent` or `host.sendToActiveAgent` |
 | `shell:exec` | `host.process.spawn` |
 | `git:write` | `host.git.add` or `commit` |
+| `terminal:read` | `host.terminals.readScreen` |
 
 One grant covers every call of that capability, so a plugin that already writes files asks for nothing new to render a PDF. Only an approval the user pins is remembered. A one-time approval lets that one call through; a refusal, or a prompt left to time out, rejects it with `PERMISSION_REQUIRED:`. None of the three is remembered and the next call asks again — so a plugin must not retry a refused write from a timer or a watch callback, and should not start a write-class call from `activate()`, whose 5-second budget a waiting prompt would outlast. Reads (`fs:*-read`, `agent:read`, `git:read`) and a `readonly` database open are gated by the manifest alone and never prompt.
 
@@ -141,7 +144,7 @@ Scoped to the owning project, and visible only in its views:
 
 | Contribution | Behaviour under `scope: "project"` |
 | --- | --- |
-| `panels` | Registered against the project; the panel kind is qualified at runtime so two projects can contribute the same id — ask `host.panelKindId(id)` for it. A panel's `menu` puts up to five of your actions on its ⋯ and right-click menus |
+| `panels` | Registered against the project; the panel kind is qualified at runtime so two projects can contribute the same id — ask `host.panelKindId(id)` for it. A panel's `menu` puts up to five of your actions on its ⋯ and right-click menus, and its `toolbar` up to three as buttons in its header |
 | `views` | Served and mounted only in the owning project's renderer. One view may be `location: "settings"`, mounted in Project settings → Plugins below the generated fields |
 | `commands` | In that project's palette, dispatched into that project's renderer |
 | `toolbarButtons` | Only in the owning project's toolbar |
@@ -149,7 +152,7 @@ Scoped to the owning project, and visible only in its views:
 | `keybindings` | Renderer-level, so they resolve within the focused project |
 | `settings` | All of a project plugin's fields live in Project settings → Plugins; `scope: "project"` values resolve from the bound project root, not from whatever is focused. See [Settings and storage](#settings-and-storage) |
 | `surfaces` | Project-scope only — see [Surfaces](#surfaces) |
-| `databases` | SQLite files opened with `host.db`. A `"project"` database resolves against the bound project root, so it is the same file an agent in the project's terminal opens with `sqlite3`; `"local"` stays in this machine's plugin data, per project, where agents read it through the plugin's database tools. See [Databases](./contribution-points.md#databases--shipped) |
+| `databases` | SQLite files opened with `host.db`. A `"project"` database resolves against the bound project root, so it is the same file an agent in the project's terminal opens with `sqlite3`; `"local"` stays in this machine's plugin data, per project, where agents read it through the plugin's database tools. Each entry in a database's `queries` is served to agents as a tool of its own, with no code. See [Databases](./contribution-points.md#databases--shipped) |
 | `agentMcp` | Tools served to agents in this project's terminals only, on the plugin's one server beside its database tools. Every credential is minted for one terminal launch in one project, and a project plugin's server can only be granted to the project that loaded it. Off until the user, or the project's `.daintree/mcp.json`, turns the plugin's agent access on — trusting the folder does not do it. See [Agent MCP endpoints](./agent-extensions.md#agent-mcp-endpoints) |
 
 Forbidden under `scope: "project"`, each rejected at manifest validation with an error naming the real obstacle:
@@ -162,7 +165,7 @@ Forbidden under `scope: "project"`, each rejected at manifest validation with an
 | `recipes` | The plugin recipe registry is broadcast to every renderer unfiltered, so the recipe would appear in every project's launcher and empty state |
 | `fileDecorationProviders` | Decoration requests carry a resource path with no owning-project routing, so the provider would be consulted for files in every open project |
 | `processTools` | Process-tool detections are mirrored into the shared pty-host as one detection table for every terminal in the app |
-| `mcpServers` | Daintree is the client of a contributed server, and the plugin-MCP IPC surface that reaches it is app-global: servers are addressed by plugin and server id alone, and a tool call from the settings UI or the in-app assistant carries no project to check the contribution against. (These tools never reach terminal agents at all — for that, use `agentMcp`.) |
+| `mcpServers` | Daintree is the client of a contributed server, and the plugin-MCP IPC surface that reaches it is app-global: servers are addressed by plugin and server id alone, so a call through it carries no project to check the contribution against. (These tools never reach terminal agents at all — for that, use `agentMcp`.) |
 | `tours` | Plugin tours are offered from the app-wide Help menu and command palette with no project axis, and tour playback has no per-project visibility to narrow a panel tour to the owning project's views |
 | `forgeProviders` | Forge providers need synchronous host methods (`parseRemote`, the URL builders) that cannot cross the plugin worker's async message port, so the descriptor could never be given an implementation |
 
@@ -190,9 +193,9 @@ One slot exists today.
 
 Rules:
 
-- **Slot-replacing, never removing.** The surrounding chrome is untouched: the project switcher, the sidebar and the worktree dashboard stay exactly where they were. Above the surface the host draws a thin strip of its own, laid out outside your view's box rather than over it: a switch between your panel name and the stock launcher in both directions and, while your surface shows, a "No panels open" label so the region reads as the empty canvas plus the launcher's search entry. The launcher is always one click away, a half-finished surface can never strand the user, and your view never needs to leave room for host controls.
+- **Slot-replacing, never removing.** The surrounding chrome is untouched: the project switcher, the sidebar and the worktree dashboard stay exactly where they were. Above the surface the host draws a thin strip of its own, laid out outside your view's box rather than over it: a switch between your panel name and the stock launcher in both directions and, while your surface shows, an icon button for the launcher's search. The launcher is always one click away, a half-finished surface can never strand the user, and your view never needs to leave room for host controls.
 - **The user decides whether it stays.** The first time a claimed surface would show in a project, a notice names your plugin and offers to keep it or use the launcher. That answer, or any later flip of the strip's switch, is remembered for the project in Daintree's own settings, never in the repository, and the project's plugin settings show which plugin owns the canvas with a reset. The answer belongs to your plugin: if the slot later passes to another plugin, the user is asked again. Unloading, reloading or distrusting your plugin still releases the slot straight away.
-- **`viewId` must name a declared `contributes.views` entry**, cross-checked at manifest validation like any other dangling reference. It must not name a panel with `hasPty: true` — a PTY panel is rendered by the terminal host and never loads the view module, so the claim would hold the slot and draw nothing.
+- **`viewId` must name a declared `contributes.views` entry**, cross-checked at manifest validation like any other dangling reference. It must not name a `location: "settings"` view, which has no panel to draw, or a panel with `hasPty: true` — a PTY panel is rendered by the terminal host and never loads the view module, so the claim would hold the slot and draw nothing.
 - **At most one plugin per slot per project.** The first claim stands and a second is refused, with both plugin names logged — fixing it means editing one of the two manifests, and you cannot do that without knowing the other. It is never a silent last-wins. The refused plugin still loads and everything else it contributes works, and its claim is remembered: if the incumbent later unloads, the slot passes to it rather than reverting to stock.
 - The surface view receives the standard `PanelViewProps` (`panelId`, `pluginId`, `disposeSignal`) and sits inside the standard plugin error boundary, so a crash falls back with a working "Try again" rather than a blank region.
 - **The box is the region below the strip, at its full height.** A surface gets the same container a panel view does — `flex flex-col flex-1 min-h-0 w-full` — so the root shape in [Views](./views.md#where-you-render) applies here unchanged, and a view with its own bottom bar can rely on that bar sitting on the region's bottom edge.
@@ -261,7 +264,7 @@ Each reload mints a fresh view-module generation so the renderer actually re-imp
 
 A panel whose kind no longer resolves — you switched to a branch without the plugin, or trust is off — renders the standard "plugin missing" placeholder and is **retained, not deleted**. Switching back restores the layout intact.
 
-A project plugin's panel kind is qualified at runtime as `project:{projectId}/{manifestId}/{kindId}` so two projects can contribute the same panel id. That qualified form is not meant to reach saved layouts — a re-clone at a different path would orphan every panel that named it — and `toPersistedPanelKindRef` / `toRuntimePanelKindId` in `shared/config/panelKindRegistry.ts` are the conversion the save path is meant to use. The save path does not use them yet, so today a saved layout holds the qualified id. Treat panel restore across a re-clone as unfinished rather than guaranteed.
+A project plugin's panel kind is qualified at runtime as `project:{projectId}/{manifestId}/{kindId}` so two projects can contribute the same panel id. That qualified form is not what a layout saves: it would pin the panel to one machine's project id. The save path stores the portable `{manifestId}.{kindId}` with a `kindRef` naming its origin, and restore re-qualifies it against the project it opens in (`toPersistedKindFields` and `requalifyPersistedKind` in `shared/utils/panelKindPersistence.ts`), so a layout moved or reused under another project id still finds its plugin panels. A layout saved in the older qualified form is re-qualified the same way when it loads.
 
 ## Gotchas
 

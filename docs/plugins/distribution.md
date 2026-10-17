@@ -45,8 +45,8 @@ Produces `{pluginId}-{version}.dntr` in the project root, e.g. `acme.my-plugin-0
 1. Validates the manifest via the same Zod schema Daintree uses at load.
 2. Builds the plugin with the plugin's own Vite (unless `--skip-build` or `--dry-run` is passed) — never `npm run build`; a `vite.config.server.*` gets a second pass. See [Development loop → How the CLI builds](./dev-loop.md#how-the-cli-builds).
 3. Collects the file list. The candidates are every file `.gitignore` does not exclude, **plus** everything under the build-output directories even when they are gitignored — `dist/` always, and the top-level directory of `main` and of every view `componentPath` — because build output is ignored by convention and is exactly what ships. `.dntrignore` (root only, `.gitignore` syntax) then prunes that union, protected directories included, so `dist/docs/**` can be kept out of the archive; it is strictly subtractive and cannot re-include something `.gitignore` dropped. `plugin.json` is always added. Dotfiles never ship.
-4. Applies the normative exclusion list on top: `node_modules/`, `.git/`, source files (`*.ts`/`*.tsx`), source maps (unless `--sourcemaps`), root-level dev metadata (`package.json`, lockfiles, `tsconfig*.json`, `*.config.*`, `.dntrignore` itself) and any `*.dntr`. Then it checks that `main`, every view `componentPath` and every skill `path` survived, and fails naming the missing file rather than writing an archive the installer would reject.
-5. Writes the zip.
+4. Applies the normative exclusion list on top: `node_modules/`, `.git/`, source files (`*.ts`/`*.tsx`), source maps (unless `--sourcemaps`), root-level dev metadata (`package.json`, lockfiles, `tsconfig*.json`, `*.config.*`, `.dntrignore` itself) and any `*.dntr`. Then it checks that `main`, every view `componentPath`, every skill `path` and every custom SVG `iconId` on a panel, toolbar button or process tool survived, and fails naming the missing file rather than writing an archive the installer would reject.
+5. Writes the zip, then verifies it against the archive spec below.
 
 The output is deterministic — the same source tree + `daintree-plugin` version produces a byte-identical `.dntr` file on the same OS. This matters if you're signing releases or publishing reproducible artifacts. The archive writer (entry order, `plugin.json` first, fixed timestamps) and the normative exclusion list in step 4 are shared with Daintree's own packer, so the host produces the identical archive when it packs the same file set; the selection rules in step 3 — `.gitignore`, the protected build directories, `.dntrignore`, the dotfile skip, and dropping `*.dntr` — are CLI-side policy that the host's `readdir`-based collector does not apply.
 
@@ -82,7 +82,7 @@ Index 3: icons/logo.svg
 ...
 ```
 
-Lexicographic sort uses byte-level comparison of UTF-8 path strings (`String.localeCompare` is not deterministic across Node versions; use `Array.sort()` on the raw strings).
+Lexicographic sort compares the raw path strings by UTF-16 code unit — JavaScript's default `<` comparison, which `sortEntries` in `PluginArchive.ts` uses — never `String.localeCompare`, which is not deterministic across Node versions. The installer enforces only the `plugin.json`-first rule; the sort order is what makes an archive reproducible.
 
 ### Path rules
 
@@ -91,6 +91,7 @@ Lexicographic sort uses byte-level comparison of UTF-8 path strings (`String.loc
 - No drive letters (Windows `C:\` is rejected).
 - No `..` segments (path traversal is rejected at verification time).
 - No backslash characters anywhere in the path.
+- No two entries whose paths differ only in case or Unicode normalization (`Plugin.json` beside `plugin.json`); the installer refuses such an archive.
 - Directory entries (paths ending in `/`) are not emitted. The installer creates directories on extraction from file paths.
 
 ### `plugin.json` as first entry
@@ -106,9 +107,9 @@ The following are never included in a `.dntr` archive:
 - `.gitignore`'d entries — matched at pack time by the CLI packager, except for the build-output directories it preserves (`dist/` and whatever directory `main` or a view `componentPath` points into), which ship even when gitignored; `.dntrignore` prunes after that and is the way to drop a file from inside one of them
 - Source files (`*.ts`, `*.tsx`) — the archive ships compiled output
 - Source maps (`*.js.map`, `*.mjs.map`) — excluded by default, included only when `--sourcemaps` is passed to the packager
-- Root-level dev metadata — `package.json`, lockfiles (`package-lock.json`, `npm-shrinkwrap.json`, `yarn.lock`, `pnpm-lock.yaml`, `bun.lock`, `bun.lockb`), `tsconfig*.json`, and any root `*.config.*` (e.g. `vite.config.ts`, `tsup.config.mjs`). Scoped to the archive root only — a runtime asset like `dist/app.config.json` is kept. `package.json` is excluded because it carries the author's full dependency layout and, in a monorepo/`file:` setup, leaks the author's absolute home path into every distributed copy.
+- Root-level dev metadata — `package.json`, lockfiles (`package-lock.json`, `npm-shrinkwrap.json`, `yarn.lock`, `pnpm-lock.yaml`, `bun.lock`, `bun.lockb`), `.dntrignore`, `tsconfig*.json`, and any root `*.config.*` (e.g. `vite.config.ts`, `tsup.config.mjs`). Scoped to the archive root only — a runtime asset like `dist/app.config.json` is kept. `package.json` is excluded because it carries the author's full dependency layout and, in a monorepo/`file:` setup, leaks the author's absolute home path into every distributed copy.
 
-The reference implementation in `PluginArchive.ts` applies the explicit exclusion list (`REQUIRED_EXCLUSIONS`, `SOURCE_EXTS`, `ROOT_DEV_FILE_NAMES`, `ROOT_CONFIG_FILE`) at both pack and verify time. `.gitignore` matching, the preserved build-output directories, and `.dntrignore` are the CLI packager's responsibility (`packages/daintree-plugin/src/commands/package.ts`), in that order; the host's own packer sees none of them.
+The reference implementation in `PluginArchive.ts` applies the explicit exclusion list (`REQUIRED_EXCLUSIONS`, `SOURCE_EXTS`, `ROOT_DEV_FILE_NAMES`, `ROOT_CONFIG_FILE`) at both pack and verify time; verification allows source maps, so a `--sourcemaps` archive installs. `.gitignore` matching, the preserved build-output directories, and `.dntrignore` are the CLI packager's responsibility (`packages/daintree-plugin/src/commands/package.ts`), in that order; the host's own packer sees none of them.
 
 ### SHA-256 archive hash
 
@@ -169,13 +170,14 @@ A user with a `.dntr` file can install it by:
 Daintree:
 
 1. Computes a SHA-256 hash of the archive.
-2. Validates the manifest against the Zod schema. An unmet `engines.daintree` range doesn't fail the install; the plugin loads with a compatibility warning.
-3. Extracts into a temp dir and atomically swaps into `~/.daintree/plugins/{publisher}.{name}/`.
-4. Loads the plugin.
+2. Extracts it into a temp dir.
+3. Validates the manifest against the Zod schema. An unmet `engines.daintree` range doesn't fail the install; the plugin loads with a compatibility warning.
+4. Atomically swaps the temp dir into `~/.daintree/plugins/{publisher}.{name}/`.
+5. Loads and activates the plugin.
 
 Only the double-click route shows that preview. Drag-and-drop, **Install from file**, URL installs and `daintree-plugin install` install without a pre-install confirmation enumerating capabilities or publisher; the only other interstitial prompt is the update confirm when re-fetching an already-installed plugin's URL ([Updating a plugin](#updating-a-plugin)). On every route, capabilities are also enforced at use: the gated calls ask through the TOFU consent prompt the first time — see [Trust model](./trust-model.md).
 
-If a plugin with the same `name` is already installed, Daintree replaces it: it unloads the old plugin and atomically swaps the new directory into place (`electron/services/plugin/PluginInstaller.ts`). There is no semver comparison between installed and incoming versions, no downgrade confirmation, and no identical-version block. The swap preserves the original `installedAt` and records `updatedAt`. (Version-aware upgrade/downgrade gating is not yet implemented.) Two cases are refused or undone:
+If a plugin with the same `name` is already installed, Daintree replaces it: it unloads the old plugin and atomically swaps the new directory into place (`electron/services/plugin/PluginInstaller.ts`). There is no semver comparison between installed and incoming versions, no downgrade confirmation, and no identical-version block. The swap preserves the original `installedAt` and records `updatedAt`, and it revokes the plugin's MCP consent pins and capability grants, so the new code asks again. (Version-aware upgrade/downgrade gating is not yet implemented.) Two cases are refused or undone:
 
 - An archive whose `name` is a built-in plugin's id is refused before anything is written (`name_collision`) — a built-in can never be replaced by an installed plugin.
 - If the new version is swapped in but then fails to load, an upgrade rolls back to the previous version, which stays installed; the install reports the failure.
@@ -224,7 +226,7 @@ Any other `daintree://` link is ignored.
 
 ## Updating a plugin
 
-An update offered by the update check is installed only after the user confirms it. Sideloaded and file-installed plugins are updated by installing another archive through the same route, and installing an archive whose manifest name matches an installed plugin replaces it without a separate update confirmation. Plugins installed from a URL remember that URL, and Daintree can re-fetch it:
+An update offered by the update check is installed only after the user confirms it. Sideloaded and file-installed plugins are updated by installing another archive through the same route, and installing an archive whose manifest name matches an installed plugin replaces it without a separate update confirmation. Plugins installed from a URL remember that URL, and Daintree can re-fetch it; installing a file over one replaces the remembered URL, after which it is no longer checked:
 
 - **Check for updates** — the refresh button in a plugin's detail pane in the plugin manager re-downloads the original URL and compares its SHA-256 with the installed archive's.
 - **Update all** — the plugin manager's header button checks every URL-installed plugin, then walks through each one that has an update.
@@ -263,7 +265,7 @@ Daintree:
 
 1. Unloads the plugin (disposer cascade runs).
 2. Terminates any MCP subprocesses the plugin had spawned.
-3. Revokes every TOFU consent pin for the plugin (always, regardless of the settings choice) so a reinstall re-prompts rather than inheriting prior approvals.
+3. Revokes every MCP consent pin and capability grant for the plugin (always, regardless of the settings choice) so a reinstall re-prompts rather than inheriting prior approvals.
 4. Deletes `~/.daintree/plugins/{publisher}.{name}/`.
 5. By default, **keeps** the plugin's user-scope settings file (`~/.daintree/plugin-settings/{publisher}.{name}.json`) so an API token survives a reinstall. The CLI's `--delete-settings` flag (or the dialog's "Also delete this plugin's saved settings" checkbox) deletes that file instead.
 
@@ -279,7 +281,7 @@ For authors who want to share plugins publicly:
 
 - **GitHub Releases** is the default recommendation. `.dntr` files are small; releases are free; versioning maps cleanly to git tags.
 - **README with install instructions.** Include the literal URL to paste into Daintree.
-- **Semver your releases.** Daintree uses `semver` only for the `engines.daintree` host-compatibility gate — not for update detection. "Check for update" re-fetches the original URL and compares the SHA-256 archive hash against the installed one, so a new build is detected by content change regardless of its version string.
+- **Semver your releases.** Update detection doesn't read the version: "Check for updates" re-fetches the original URL and compares the SHA-256 archive hash against the installed one, so a new build is detected by content change regardless of its version string. The version still matters elsewhere — the update confirm shows it, the plugin blocklist matches against it, and a remote host is offered **Update on _host_** only when this machine's version is newer.
 - **Set `engines.daintree` honestly** — an open-ended lower bound at the version you tested against (`">=0.34.0"`), never a caret. Under semver's 0.x rule `"^0.34.0"` means `>=0.34.0 <0.35.0`, so a caret flags the plugin as possibly incompatible from the very next Daintree minor. Don't set `*` either — you'll get bug reports from users on versions you never supported. See [Manifest → `engines.daintree`](./manifest.md#enginesdaintree).
 - **Don't commit `.dntr` files to the source repo.** Build them in CI on release-tag.
 - **Pin `@daintreehq/plugin-sdk` tightly.** Pre-1.0, minor versions can break APIs.

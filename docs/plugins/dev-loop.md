@@ -14,7 +14,7 @@ npx daintree-plugin <command>
 
 The CLI needs Node.js 22.13 or newer (`engines.node` is `>=22.13` in every published package).
 
-> **What the npm release has.** `daintree-plugin` 0.1.0 is the version on npm today, and parts of this page describe the CLI in this repository, which is ahead of it: [`lint`](#daintree-plugin-lint-dir), [`skill add`](#daintree-plugin-skill-add-name), the [`tour`](#daintree-plugin-tour) commands, the optional `[dir]` on `validate`, `dev`'s metrics table and `--no-metrics`, and `doctor`'s lint pass and `--no-lint`. Each is marked where it appears. The 0.1.0 CLI also embeds an older manifest schema, so its `validate`, `doctor` and `package` refuse a manifest that declares `databases`, `tours` or a `location: "settings"` view; use a CLI built from this repository for those. The same goes for the SDK: `@daintreehq/plugin-sdk` 0.1.0 exports `.`, `./files`, `./react` and `./testing`, but not `./data`, `./plugin-ui` or `./view-globals`, and its `/react` has only `useHostChannel`, `usePluginEvent`, `usePluginPanelEvent` and `loadDocumentPackage`.
+> **What the npm release has.** `daintree-plugin` 0.1.0 is the version on npm today, and parts of this page describe the CLI in this repository, which is ahead of it: [`lint`](#daintree-plugin-lint-dir), [`skill add`](#daintree-plugin-skill-add-name), the [`tour`](#daintree-plugin-tour) commands, the optional `[dir]` on `validate`, `dev`'s metrics table and `--no-metrics`, and `doctor`'s lint pass and `--no-lint`. Each is marked where it appears. The 0.1.0 CLI also embeds an older manifest schema, so its `validate`, `doctor` and `package` refuse a manifest that uses anything added since — `databases`, `tours`, a `location: "settings"` view, the settings fields `required` and `editor`, a panel `toolbar`, `mcpName`, `platforms`, `remote`, or the `terminal:read`, `project:dispatch` and `panel:focus-read` capabilities; use a CLI built from this repository for those. The same goes for the SDK: `@daintreehq/plugin-sdk` 0.1.0 exports `.`, `./files`, `./react` and `./testing`, but not `./data`, `./plugin-ui` or `./view-globals`, and its `/react` has only `useHostChannel`, `usePluginEvent`, `usePluginPanelEvent` and `loadDocumentPackage`. `@daintreehq/plugin-vite` 0.1.0 externalizes React alone: its `HOST_IMPORTMAP_SPECIFIERS` has neither `@daintreehq/plugin-ui` nor the `@daintreehq/tour` entries, so a view or tour scene importing them has to name them in `daintreePlugin({ externals: [...] })` or build with a `@daintreehq/plugin-vite` from this repository.
 
 ## Commands
 
@@ -28,16 +28,17 @@ npx daintree-plugin new my-plugin [--publisher acme] [--template command|view|mc
 
 `--publisher` and `--template` pre-fill their prompts and skip them; the display name has no flag and is only ever asked for interactively. For an unattended run, `--yes` skips every prompt: it requires a positional name and `--publisher`, defaults the template to `command`, and derives the display name from the plugin name (`issue-helper` → `Issue Helper`). That is the form to use from CI or from an agent.
 
-Interactively, an invalid name, publisher or `--template` value (or an `mcp`/`full` template with `--project`) cancels the prompt and exits 0 without writing anything. Under `--yes` the same mistakes, and a missing name or `--publisher`, exit 1. Either way an existing target directory is an error (exit 1), never overwritten.
+Interactively, an invalid name, publisher or `--template` value (or an `mcp`/`full` template with `--project`, or `--project` outside a project) cancels the prompt and exits 0 without writing anything. Under `--yes` the same mistakes, and a missing name or `--publisher`, exit 1. Either way an existing target directory is an error (exit 1), never overwritten.
 
 Creates `./my-plugin/` with:
 
 - `plugin.json` — starter manifest, with a `$schema` pointing at the generated JSON Schema so an editor flags a misspelled field (see [`schema`](#daintree-plugin-schema))
-- `package.json` — `build`, `validate` and `package` scripts, and dev dependencies on `@daintreehq/plugin-sdk`, `@daintreehq/plugin-vite` and `daintree-plugin` (each the hard-coded range `^0.1.0`), `typescript` `^6.0.0` and `vite` `^8.0.0`. The `view` and `full` templates add `react` and `react-dom` (`^19.2.0`), `@types/react` and `@types/react-dom` (`^19.0.0`), the [panel preview](#preview-a-panel-outside-daintree)'s `@playwright/test`, `esbuild` and `tailwindcss`, and a `test:preview` script; `mcp` and `full` add the runtime dependency `@modelcontextprotocol/sdk` `^1.12.0`, because the spawned server imports it
+- `package.json` — `build`, `validate` and `package` scripts, and dev dependencies on `@daintreehq/plugin-sdk`, `@daintreehq/plugin-vite` and `daintree-plugin` (each the hard-coded range `^0.1.0`), `typescript` `^6.0.0` and `vite` `^8.0.0`. The `view` and `full` templates add `react` and `react-dom` (`^19.2.0`), `@types/react` and `@types/react-dom` (`^19.0.0`), the [panel preview](#preview-a-panel-outside-daintree)'s `@playwright/test`, `esbuild` and `tailwindcss`, and a `test:preview` script (the 0.1.0 scaffold on npm pins `react` and `react-dom` at `^19.0.0` and adds no preview dependencies or script); `mcp` and `full` add the runtime dependency `@modelcontextprotocol/sdk` `^1.12.0`, because the spawned server imports it
 - `vite.config.ts` — pre-configured for plugin builds; `mcp` and `full` also get `vite.config.server.ts`, a second, Node-target config for the MCP server entry
 - `tsconfig.json` — for a template with a view, `compilerOptions.types` lists `@daintreehq/plugin-sdk/view-globals` and `@daintreehq/plugin-sdk/plugin-ui`, so `window.electron.plugin` and the [UI kit](./ui-kit.md) typecheck. Not in the 0.1.0 release on npm; it ships in the next one — the 0.1.0 scaffold writes no `types`, and SDK 0.1.0 has neither entry
 - `src/` — starter code based on template choice
-- `review/panel.stories.tsx`, `review/panel.spec.ts` and `playwright.config.ts` — for a template with a view, one story of the starter panel and a spec that captures every story, the [panel preview](#preview-a-panel-outside-daintree). `review/` is never built or packaged into `dist/`
+- `icons/panel.svg` — for a template with a view, a monochrome 24×24 starter glyph the panel's `iconId` points at (`"./icons/panel.svg"`); the host draws a custom icon as a mask in the current text colour, so only its shape matters. Not in the 0.1.0 release on npm, whose scaffold gives the panel the built-in `puzzle` icon
+- `review/panel.stories.tsx`, `review/panel.spec.ts` and `playwright.config.ts` — for a template with a view, one story of the starter panel and a spec that captures every story, the [panel preview](#preview-a-panel-outside-daintree). `review/` is never built or packaged into `dist/`. Not in the 0.1.0 release on npm; it ships in the next one
 - `.gitignore` — excludes `node_modules/`, `dist/`, `*.dntr`, `.dev-marker`, `.tour-preview/`, and the preview's `test-results/` and `playwright-report/`
 - `.dntrignore` — commented-out examples of files to keep out of the packaged archive (see [Distribution → Packaging](./distribution.md#packaging))
 - `.claude/skills/daintree-tour/` — the tour-authoring Claude Code skill (`SKILL.md` plus its reference files), so a Claude Code session in the plugin can build a [tour](./tours.md) without a Daintree checkout. Not written under `--project`, since project plugins cannot contribute tours. Not in the 0.1.0 release on npm; it ships in the next one — [`skill add`](#daintree-plugin-skill-add-name) adds it to an existing plugin
@@ -144,9 +145,9 @@ Performance — acme.builds (worker)
 
 The rows and what each is compared with are in [Performance](#performance) below. A row reads `over budget: 612ms > 500ms` when the host's snapshot lists that budget as exceeded; the table states where a value sits and never what to do about it.
 
-Press Ctrl-C (or send SIGTERM) to stop: the watcher is killed, Daintree is asked to unload the plugin (`plugin.dev.stop`), and the `.dev-marker` plus the symlink Daintree-`dev` created are removed. A second Ctrl-C while teardown is in flight exits immediately.
+Press Ctrl-C (or send SIGTERM) to stop: the watcher is killed, Daintree is asked to unload the plugin (`plugin.dev.stop`), and the `.dev-marker` plus the symlink `dev` created are removed. A second Ctrl-C while teardown is in flight exits immediately.
 
-One host method is a no-op for `dev`-loaded plugins: `registerForgeProvider`. Forge providers require synchronous host methods (`parseRemote`, URL builders) that can't cross the worker's async MessagePort boundary, so a `registerForgeProvider` call logs a warning and is skipped. Everything else — including `host.process.spawn` and `host.fs.watch`, whose handles and subscriptions are proxied over the port and survive a reload — works under `dev`. Note this is **not** a dev-only limitation: every user-installed plugin runs in a worker (see [Architecture → Activation](./architecture.md#activation)), so packaging and installing the plugin doesn't restore forge support either. Only Daintree's built-in plugins run in-process and can register forge providers — a known architectural gap, not something a third-party plugin can work around today.
+One host method is a no-op for `dev`-loaded plugins: `registerForgeProvider`. Forge providers require synchronous host methods (`parseRemote`, URL builders) that can't cross the worker's async MessagePort boundary, so a `registerForgeProvider` call logs a warning and is skipped. Everything else — including `host.process.spawn` and `host.fs.watch`, whose handles and subscriptions are proxied over the port — works under `dev`. A reload kills the processes and disposes the watches the outgoing worker made; the new worker's `activate()` makes its own. Note this is **not** a dev-only limitation: every user-installed plugin runs in a worker (see [Architecture → Activation](./architecture.md#activation)), so packaging and installing the plugin doesn't restore forge support either. Only Daintree's built-in plugins run in-process and can register forge providers — a known architectural gap, not something a third-party plugin can work around today.
 
 ### `daintree-plugin lint [dir]`
 
@@ -219,6 +220,8 @@ npx daintree-plugin validate [dir] [--env]
 ```
 
 `dir` defaults to the current directory. Not in the 0.1.0 release on npm; it ships in the next one — the 0.1.0 `validate` takes no argument, so run it from the plugin directory. It exits 1 when the manifest fails.
+
+Beyond the schema it also fails on a custom `./….svg` icon the manifest names that is missing or unusable (the host would draw the fallback glyph), and prints advisory warnings that never change the exit code: an omitted `engines.daintree`, an empty command `keywords`, an `iconId` the host doesn't recognise, a view `iconId` (ignored at runtime), a deprecated contribution alias, and a `main` or `componentPath` naming a missing file in an existing folder.
 
 `--env` additionally resolves `${settings:…}` tokens against a `.daintree-plugin-env` file, so you can confirm an MCP server's `command` / `args` / `env` substitute the way you expect before spawning it for real. The file sits beside `plugin.json` and holds one `KEY=VALUE` per line; blank lines and lines starting with `#` are skipped, keys and values are trimmed, and one pair of matching surrounding quotes (`"…"` or `'…'`) is stripped from a value. Only keys matching `[a-zA-Z0-9._-]+` are resolved, the same grammar the host substitutes. A referenced key with no line in the file is an error, as is a missing file when the manifest references any key.
 
@@ -299,7 +302,7 @@ The second form needs a release asset with a fixed name; `package` writes a vers
 npx daintree-plugin uninstall acme.linear-planner [--delete-settings]
 ```
 
-Equivalent to **Uninstall plugin** in the plugin manager (Settings → Plugins → Plugin manager). User-scope settings are **kept** by default so an API token survives a reinstall; `--delete-settings` removes them. Project-scope settings under a repository's `.daintree/` are never touched either way. TOFU consent pins are always revoked, so a reinstall re-prompts rather than inheriting prior approvals.
+Equivalent to **Uninstall plugin** in the plugin manager (Settings → Plugins → Plugin manager). User-scope settings are **kept** by default so an API token survives a reinstall; `--delete-settings` removes them. Project-scope settings under a repository's `.daintree/` are never touched either way. MCP consent pins and capability grants are always revoked, so a reinstall re-prompts rather than inheriting prior approvals.
 
 ### `daintree-plugin doctor <projectRoot>`
 
@@ -421,14 +424,14 @@ Measurements start when main first records the plugin and cover this session onl
 
 ### In Settings → Plugins
 
-A plugin's detail page gains two tabs, for installed, built-in and project plugins alike:
+An installed or built-in plugin's detail page in the plugin manager gains two tabs; a project plugin's detail pane in the same manager, under the project's plugins, gains the same two as sections:
 
 - **Performance** appears once main has measured something. It shows each figure against its budget, with the explainer "Measured since …, in this session only. These are observations, not a verdict: a plugin that was active during a slow frame didn't necessarily cause it. Budgets are guides, and Daintree never slows or stops a plugin for going over one."
-- **Styles** appears for a running plugin with a rendered panel view. It reads the open views in that window — including popups a panel opens with its style-root attributes — and lists the classes Daintree's plugin styles generate no CSS for, split into stock Tailwind colours (with the semantic token to use instead) and classes with no matching utility (usually a typo, a utility from another Tailwind version, or a class your own CSS styles). **Check again** re-reads. It is the live counterpart of `lint`'s `class-compiles-to-nothing`.
+- **Styles** appears for an enabled plugin that contributes a panel view (for a project plugin, once it is active and one of its views has loaded this session). It reads the open views in that window — including popups a panel opens with its style-root attributes — and lists the classes Daintree's plugin styles generate no CSS for, split into stock Tailwind colours (with the semantic token to use instead) and classes with no matching utility (usually a typo, a utility from another Tailwind version, or a class your own CSS styles). **Check again** re-reads. It is the live counterpart of `lint`'s `class-compiles-to-nothing`.
 
 ### In DevTools
 
-Every view load puts its phases on the renderer's Performance timeline as User Timing measures named `daintree:plugin:<pluginId>:<phase>`, so they sit beside your own frames in a recording:
+Every view load puts its phases on the renderer's Performance timeline as User Timing measures named `daintree:plugin:<pluginId>:<phase>`, so they sit beside your own frames in a recording (DevTools opens only in a Daintree run from source; see [Debugging → DevTools](#devtools)):
 
 | Phase         | Covers                                                               |
 | ------------- | -------------------------------------------------------------------- |
@@ -451,18 +454,18 @@ Daintree logs plugin lifecycle events prefixed with `[PluginService]`:
 - Action registrations
 - Worktree subscription state
 
-These appear in the main-process terminal (the one running `npm run dev` for Daintree) and in `daintree.log` inside the app's userData logs directory (in dev: `<cwd>/logs/daintree.log`). See `getLogFilePath()` in `electron/utils/logger.ts` for resolution.
+These appear in the main-process terminal (the one running `npm run dev` for Daintree) and in `daintree.log` inside the `logs/` folder of the app's userData directory (a Daintree run from source uses `<appData>/daintree-dev/`, or `DAINTREE_DEV_USER_DATA_DIR` when set). See `getLogFilePath()` in `electron/utils/logger.ts` for resolution.
 
 Where your own output goes depends on where it runs:
 
-- **Worker code** (`activate()` and everything it registers). Every user-installed, dev and project plugin runs in its own `utilityProcess` worker. The worker's stdout and stderr are forwarded to the main log line by line as `[plugin-dev:<pluginId>] …` — stdout at info, stderr at warn — so a `console.log` lands in the main-process terminal and in `daintree.log`. Only Daintree's built-in plugins run in the main process itself.
+- **Worker code** (`activate()` and everything it registers). Every user-installed, dev and project plugin runs in its own `utilityProcess` worker. The worker's stdout and stderr are forwarded to the main log as `[plugin-dev:<pluginId>] …`, one entry per chunk of output — stdout at info, stderr at warn — so a `console.log` lands in the main-process terminal and in `daintree.log`. Only Daintree's built-in plugins run in the main process itself.
 - **`host.logger`** lines are kept in a per-plugin ring of the most recent ~500 entries, shown on the plugin's **Logs** tab in the plugin manager's detail pane, and mirrored to the main console as `[plugin:<pluginId>] …`. Only `warn` and `error` lines are also written to `daintree.log`; `info` stays in the ring.
-- **View code** logs to the renderer's DevTools console.
+- **View code** logs to the renderer's DevTools console. Its warnings and errors never reach `daintree.log`; the most recent are kept per project view for the `plugin.capturePanel` MCP tool.
 
 ### DevTools
 
 - **Worker:** a plugin worker can't be attached to. Launching Daintree with `--inspect` or `--inspect-brk` debugs the main process only — the worker is forked with its own `execArgv`, which carries no inspector flag — so debug worker code through logs, or test it against the [mock host](#testing).
-- **Renderer:** open Daintree's DevTools from View → Toggle Developer Tools, or run the Toggle DevTools command from the command palette. Your view modules load from the `plugin://` scheme under an opaque per-load authority rather than your plugin id, so find them in the Sources panel under `plugin://` by file name.
+- **Renderer:** in a Daintree run from source (`npm run dev`), open DevTools from View → Toggle Developer Tools, or run the Toggle DevTools command from the command palette. A packaged Daintree has neither: the menu item is absent and the command does nothing. There, render the view in the [panel preview](#preview-a-panel-outside-daintree), or have an agent call the `plugin.capturePanel` MCP tool, which returns a PNG of one open panel plus the plugin's recent view warnings and errors. Your view modules load from the `plugin://` scheme under an opaque per-load authority rather than your plugin id, so find them in the Sources panel under `plugin://` by file name.
 - **MCP subprocess:** the spawn command can be prefixed with `node --inspect` (or Python's `debugpy`, etc.) and you attach however you normally would for that runtime.
 
 ### Common issues
@@ -509,7 +512,7 @@ If neither explains it:
 
 ## Testing
 
-> `createMockHost` ships as the `@daintreehq/plugin-sdk/testing` entry of the SDK and installs from npm with the rest of it (`npm install --save-dev @daintreehq/plugin-sdk`), 0.1.0 included, though the 0.1.0 mock has no `databases` option and no agent-pane drivers (`agents`, `simulateSendToAgentPick`): Not in the 0.1.0 release on npm; it ships in the next one; inside the Daintree repo the workspace link resolves the same import to the local build. The entry re-exports the mock and its record types. The example below mirrors `plugins/sample/hello-daintree/__tests__/activate.test.ts`.
+> `createMockHost` ships as the `@daintreehq/plugin-sdk/testing` entry of the SDK and installs from npm with the rest of it (`npm install --save-dev @daintreehq/plugin-sdk`), 0.1.0 included, though the 0.1.0 mock has no `databases` option, no agent-pane drivers (`agents`, `simulateSendToAgentPick`) and no `terminals.readScreen` or `onDidChangeFocusedPanel`; those ship in the next release. Inside the Daintree repo the workspace link resolves the same import to the local build. The entry re-exports the mock and its record types. The example below mirrors `plugins/sample/hello-daintree/__tests__/activate.test.ts`.
 
 Drive the plugin the way the host does: call `activate(host)`, then reach what it registered through the mock's recorders. A command runs through `host.dispatch` with its fully namespaced id, `{pluginId}.{commandId}`, which calls the handler with the args alone; a channel handler on `registeredHandlers` is called context first, payload second.
 
@@ -550,7 +553,7 @@ describe("acme.linear-planner", () => {
 
 A filesystem-convention handler (a compiled `src/{id}.js` default export) receives the args only, never `host`, so it can be imported and called directly with an args object.
 
-`createMockHost` implements the `PluginHostApi` surface with in-memory state and records the calls a plugin makes for assertion — dispatched actions land on `host.dispatchedActions` as `{ actionId, args }` (the `DispatchedActionRecord` type), alongside `registeredActions`, `registeredHandlers`, `postToPanelCalls`, `shownToasts`, and the rest. It validates argument shapes the way the real host does (`registerAction` descriptors, toast and badge options, quick-pick items, and channel names: a colon in a `registerHandler`, `postToPanel` or `broadcastToRenderer` channel is refused with the host's own error) and gates the agent APIs (`getAgentState`, `agents.list`, `sendToActiveAgent`, `sendToAgent`) on the `capabilities` you pass in, so a malformed call fails the test rather than the app. `host.db` runs against real SQLite files, `host.fs` against an in-memory tree, and `sendToAgent` against the panes you seed. Good for covering handler logic without spinning up an Electron instance. [Host API → Testing against a mock host](./host-api.md#testing-against-a-mock-host) is the full reference — every option, recorder and `simulate*` driver — and lists what the mock deliberately does not model: consent prompts, filesystem containment, process handles, git, the manifest gates. A test that passes against it is not proof the real host will accept the plugin.
+`createMockHost` implements the `PluginHostApi` surface with in-memory state and records the calls a plugin makes for assertion — dispatched actions land on `host.dispatchedActions` as `{ actionId, args }` (the `DispatchedActionRecord` type), alongside `registeredActions`, `registeredHandlers`, `postToPanelCalls`, `shownToasts`, and the rest. It validates argument shapes the way the real host does (`registerAction` descriptors, toast and badge options, quick-pick items, and channel names: a colon in a `registerHandler`, `postToPanel` or `broadcastToRenderer` channel is refused with the host's own error) and gates the agent APIs (`getAgentState`, `agents.list`, `agents.listAll`, `onDidChangeAllAgents`, `sendToActiveAgent`, `sendToAgent`), `terminals.readScreen` and `onDidChangeFocusedPanel` on the `capabilities` you pass in, so a malformed call fails the test rather than the app. `capabilities` defaults to `["agent:read", "agent:input"]`, so a test of `readScreen` or of panel focus passes `terminal:read` or `panel:focus-read` itself. `host.db` runs against real SQLite files, `host.fs` against an in-memory tree, and `sendToAgent` against the panes you seed. Good for covering handler logic without spinning up an Electron instance. [Host API → Testing against a mock host](./host-api.md#testing-against-a-mock-host) is the full reference — every option, recorder and `simulate*` driver — and lists what the mock deliberately does not model: consent prompts, filesystem containment, process handles, git, the manifest gates. A test that passes against it is not proof the real host will accept the plugin.
 
 ### Testing a raw-ESM project plugin
 
@@ -640,9 +643,9 @@ For an app whose data agents also edit, the test worth having is the one that pl
 - **Your arithmetic.** Import the pure module (`dist/core.mjs`) the panel and `scripts/*-report.mjs` share and test it directly with the awkward cases agents get wrong — a streak across a missed day, a week that straddles a month, a total with a refund in it.
 - **Hand-off.** Seed `agents` with a pane that can draft and one that cannot, drive `simulateSendToAgentPick`, and assert your view is told `drafted`, `cancelled` or `refused` rather than assuming success.
 
-The mock grants every capability except the agent ones and never raises a consent prompt, so the refused-consent path — a `PERMISSION_REQUIRED:` rejection from the first write — has to be tested by making the call throw yourself.
+Outside the capability-gated calls above, the mock grants everything and never raises a consent prompt, so the refused-consent path — a `PERMISSION_REQUIRED:` rejection from the first write — has to be tested by making the call throw yourself.
 
-A headless-Daintree Playwright harness for full-lifecycle E2E (contribution registration, MCP spawn) is planned but does not exist yet — `@daintreehq/plugin-sdk/testing` is the in-memory mock only; there is no Electron-backed entry point today.
+A headless-Daintree Playwright harness for full-lifecycle E2E (contribution registration, MCP spawn) is planned but does not exist yet — `@daintreehq/plugin-sdk/testing` is the in-memory mock, and `testing/preview` and `testing/playwright` render a view in a plain browser; there is no Electron-backed entry point today.
 
 ## Publishing to npm (optional)
 

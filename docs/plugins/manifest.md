@@ -99,7 +99,7 @@ Daintree reads the manifest eagerly at startup. Contribution points declared her
   // The plugin's UI and functional contributions. Every key is optional.
   "contributes": {
     "commands": [/* palette actions */],
-    "panels": [/* panel kinds, each with an optional menu of your own actions */],
+    "panels": [/* panel kinds, each with an optional menu and toolbar of your own actions */],
     "views": [/* the component for a panel, or the plugin's settings section */],
     "settings": [/* values Daintree stores and renders a form for */],
     "databases": [/* SQLite files opened with host.db */],
@@ -145,7 +145,7 @@ Names are unique per root. Built-ins load first, so an installed plugin that reu
 
 ### `version`
 
-Standard semver. `0.1.0`, `1.2.3-beta.1`, etc. Required for update detection.
+Standard semver. `0.1.0`, `1.2.3-beta.1`, etc. Update detection compares archive hashes, not versions ([Distribution → Updating a plugin](./distribution.md#updating-a-plugin)); the version is what the plugin blocklist matches against, what `daintree-plugin package` names the archive after, and what decides whether a remote host is offered **Update on _host_**.
 
 ## Optional fields
 
@@ -156,7 +156,7 @@ The URL of the manifest's JSON Schema, so an editor can complete and check `plug
 - `https://raw.githubusercontent.com/daintreehq/daintree/develop/schemas/plugin.schema.json` for an installed plugin
 - `https://raw.githubusercontent.com/daintreehq/daintree/develop/schemas/plugin.project.schema.json` for a project plugin
 
-Both are generated from the host's schema (`npx daintree-plugin schema [--project]` prints the one your installed SDK was built with) and are structural only: the cross-field rules under [Validation](#validation) are enforced at load, not by the editor.
+Both are generated from the host's schema (`npx daintree-plugin schema [--project]` prints the one your installed `daintree-plugin` was built with) and are structural only: the cross-field rules under [Validation](#validation) are enforced at load, not by the editor.
 
 ### `displayName`
 
@@ -223,7 +223,7 @@ Semver range expressing which Daintree versions the plugin supports. The scaffol
 
 If the running Daintree version doesn't satisfy the range, the plugin still installs and loads, and Daintree shows a warning toast (once per session for each plugin version and range) that it may not work on this version. A local dev build such as `0.37.0-dev.<stamp>` is also checked against the release it precedes, so it satisfies `>=0.37.0`. If `engines.daintree` is omitted entirely, Daintree warns in the console but loads the plugin anyway.
 
-Daintree is pre-1.0. Pin to a current minor during this phase — a plugin that works on Daintree 0.11 may not work on 0.12 without changes.
+Daintree is pre-1.0, and a plugin that works on Daintree 0.11 may not work on 0.12 without changes. Because an unmet range only warns, set the lower bound to the release you tested against and test again when a new minor ships.
 
 `engines` is the one manifest object that is not strict: `daintree` is its only recognised key, and any other key (`"node"`, `"vscode"`) is dropped without an error rather than rejected.
 
@@ -250,7 +250,7 @@ Declare `"remote": "unsupported"` when the plugin only works for a person sittin
 
 Optional. A list drawn from `"darwin"`, `"linux"` and `"win32"` (Node's `process.platform` names) naming the operating systems the package has a build for. Omit it for a plugin that runs anywhere, which is nearly all of them.
 
-Declare it when the package carries native modules built for only some systems. Installing the plugin on a machine whose OS isn't listed is refused before anything is copied, with a message naming the plugin and the machine. When an installed plugin has native modules (`*.node`) but no `platforms`, Daintree reads the modules' binary headers and treats the plugin as built only for the OSes they name, so **Install on _host_** for another machine is refused before copying. A `.dntr` dropped straight onto a remote window is checked against its declared `platforms` only.
+Declare it when the package carries native modules built for only some systems. It is checked when a plugin is installed on a remote host: a package sent to a host whose OS isn't listed is refused before anything is copied, with a message naming the plugin and the machine. When an installed plugin has native modules (`*.node`) but no `platforms`, Daintree reads the modules' binary headers and treats the plugin as built only for the OSes they name, so **Install on _host_** for another machine is refused before copying. A `.dntr` dropped straight onto a remote window is checked against its declared `platforms` only. An ordinary install on this machine — from a file, a URL or `daintree-plugin install` — does not check `platforms`.
 
 ### `capabilities`
 
@@ -268,8 +268,8 @@ Array of capability tokens the plugin wants. The model is **disclosure-first wit
 | `agent:register` | Register a launchable agent CLI as a selectable agent |
 | `terminal:read` | Read a terminal's current screen as plain text (`host.terminals.readScreen`). Terminals show secrets, so this is separate from `agent:read` and asks for JIT consent on first use |
 | `agent:input` | Send text to the active agent terminal (`host.sendToActiveAgent`) or append it to a chosen agent's draft (`host.sendToAgent`); JIT consent on first use |
-| `git:read` | Read git state (branches, status, log) |
-| `git:write` | Make git changes (commits, branches) |
+| `git:read` | Read git state through `host.git.status` and `host.git.diff` |
+| `git:write` | Stage and commit through `host.git.add` and `host.git.commit`; JIT consent on first use |
 | `clipboard:read` | Read from the system clipboard |
 | `clipboard:write` | Write to the system clipboard (text, and PNG images via `host.clipboard.writeImage`) |
 | `shell:exec` | Spawn subprocesses (managed via `host.process`) |
@@ -330,37 +330,37 @@ List `"onStartupFinished"` to opt a plugin into eager activation when it genuine
 
 Object containing an array per contribution type (`panels`, `toolbarButtons`, `menuItems`, `keybindings`, `contextMenus`, `commands`, `views`, `mcpServers`, `agentMcp`, `databases`, `tours`, `skills`, `forgeProviders`, `fileDecorationProviders`, `agents`, `processTools`, `settings`, `recipes`, and the built-in-only `fileEditors`, `previewTools`, `guestAdapters`) — plus the non-array `surfaces` object. All are optional; unlisted types default to empty. Each array has an upper bound (`MANIFEST_CONTRIBUTION_CAPS` in `electron/schemas/plugin.ts`) generous for any real plugin and there to reject pathological manifests:
 
-| Contribution              | Max entries                 |
-| ------------------------- | --------------------------- |
-| `panels`                  | 50 (each panel's `menu`: 5) |
-| `toolbarButtons`          | 100                         |
-| `menuItems`               | 200                         |
-| `keybindings`             | 200                         |
-| `contextMenus`            | 200                         |
-| `commands`                | 200                         |
-| `views`                   | 50                          |
-| `mcpServers`              | 20                          |
-| `agentMcp`                | 1                           |
-| `databases`               | 16                          |
-| `skills`                  | 50                          |
-| `recipes`                 | 50                          |
-| `tours`                   | 10                          |
-| `forgeProviders`          | 20                          |
-| `fileDecorationProviders` | 50                          |
-| `agents`                  | 50                          |
-| `processTools`            | 100                         |
-| `settings`                | 200                         |
-| `fileEditors`             | 10                          |
-| `previewTools`            | 10                          |
-| `guestAdapters`           | 10                          |
+| Contribution              | Max entries                               |
+| ------------------------- | ----------------------------------------- |
+| `panels`                  | 50 (each panel's `menu`: 5, `toolbar`: 3) |
+| `toolbarButtons`          | 100                                       |
+| `menuItems`               | 200                                       |
+| `keybindings`             | 200                                       |
+| `contextMenus`            | 200                                       |
+| `commands`                | 200                                       |
+| `views`                   | 50                                        |
+| `mcpServers`              | 20                                        |
+| `agentMcp`                | 1                                         |
+| `databases`               | 16                                        |
+| `skills`                  | 50                                        |
+| `recipes`                 | 50                                        |
+| `tours`                   | 10                                        |
+| `forgeProviders`          | 20                                        |
+| `fileDecorationProviders` | 50                                        |
+| `agents`                  | 50                                        |
+| `processTools`            | 100                                       |
+| `settings`                | 200                                       |
+| `fileEditors`             | 10                                        |
+| `previewTools`            | 10                                        |
+| `guestAdapters`           | 10                                        |
 
-Validation is structural as well as per-field: duplicate ids within one array are rejected (`duplicate_contribution_id`), and cross-references have to resolve — a panel view's `id` must name a declared panel (a settings view must not), a panel `menu` entry, toolbar button, menu item, keybinding or context menu naming an action in your own namespace must match a declared command when you declare any, a tour's `panelKind` must name a declared panel, a forge provider's `settingsScopeRef` / `viewRefs` must name declared settings / views, a `surfaces` slot's `viewId` must name a declared panel view, and a `${settings:…}` token in an MCP server's `command` / `args` / `env` must name a declared setting. Capability rules are checked too: `agents` needs `agent:register`, `agentMcp` needs `mcp:expose`, and a `"project"` database needs `scope: "project"` and `fs:project-write`.
+Validation is structural as well as per-field: duplicate ids within one array are rejected (`duplicate_contribution_id`), and cross-references have to resolve — a panel view's `id` must name a declared panel (a settings view must not), a panel `menu` or `toolbar` entry, toolbar button, menu item, keybinding or context menu naming an action in your own namespace must match a declared command when you declare any, a tour's `panelKind` must name a declared panel, a forge provider's `settingsScopeRef` / `viewRefs` must name declared settings / views, a `surfaces` slot's `viewId` must name a declared panel view, and a `${settings:…}` token in an MCP server's `command` / `args` / `env` must name a declared setting. Capability rules are checked too: `agents` needs `agent:register`, `agentMcp` needs `mcp:expose`, and a `"project"` database needs `scope: "project"` and `fs:project-write`.
 
 A few notes on individual points; the [Contribution points reference](./contribution-points.md) has the full shape and per-point status for every one, and marks the three only a built-in plugin may declare.
 
 - `views` — a `location: "panel"` view is the component for the panel with the same `id`, wherever that panel sits. A `location: "settings"` view is the plugin's one custom settings section, mounted below its generated settings fields; it names no panel. `location: "sidebar"` is rejected at manifest validation — the sidebar host does not exist yet, so accepting it would validate a view the runtime cannot render. See [Views](./contribution-points.md#views--shipped).
-- `mcpServers` — the declared `command` is lazily spawned as a real subprocess the first time its tools are enumerated, and is supervised (killed on Daintree exit; on crash it transitions to `crashed` and tool calls reject until an explicit manual restart — there is no automatic retry or backoff). Treat a contributed MCP server as trust-gated, not inert. Daintree is the server's client: its tools reach Daintree's own UI and the in-app Assistant, not agents running in terminals.
-- `panels` — a panel's optional `menu` offers up to five of the plugin's own actions in that panel's ⋯ and right-click menus, each `{ actionId, label? }` and dispatched with `{ panelId }`; a built-in or another plugin's action is refused, and so are menu entries on a `hasPty: true` panel. The host adds its own entries for the plugin below them. See [Panel menu](./contribution-points.md#panel-menu).
+- `mcpServers` — the declared `command` is lazily spawned as a real subprocess the first time its tools are listed or called, and is supervised (killed on Daintree exit; on crash it transitions to `crashed`, the calls in flight reject, and the next listing or call spawns it again — there is no automatic retry or backoff). Treat a contributed MCP server as trust-gated, not inert. Daintree is the server's client: the plugin manager lists and restarts it, nothing in Daintree calls its tools today, and agents running in terminals never see them.
+- `panels` — a panel's optional `menu` offers up to five of the plugin's own actions in that panel's ⋯ and right-click menus (on a `hasPty: true` panel, the right-click menu only), each `{ actionId, label? }` and dispatched with `{ panelId }`; a built-in or another plugin's action is refused. The host adds its own entries for the plugin below them. An optional `toolbar` draws up to three of the plugin's own actions as buttons in the panel header, each `{ actionId, label?, iconId?, status? }`, under the same namespace rule; a `toolbar` on a `hasPty: true` panel is refused. See [Panel menu](./contribution-points.md#panel-menu) and [Panel toolbar](./contribution-points.md#panel-toolbar).
 - `databases` — SQLite files the plugin opens with `host.db`. A `"project"` database (the default) lives in the repository, at `path` relative to the project root or `.daintree/data/<manifestId>/<id>.db`, and needs `scope: "project"` plus `fs:project-write`; a `"local"` one lives in the plugin's own data directory and needs no capability. Declaring one also puts the host's read-only `database_schema` and `database_query` on the plugin's MCP server for agents, plus a tool for each of its declared `queries`, and gives every panel of the plugin a **Back up data…** menu entry. See [Databases](./contribution-points.md#databases--shipped).
 - `tours` — welcome tours that play in Daintree's tour dialog, offered from Help and the palette, or from one panel's menus when `panelKind` names it. Installed plugins only. See [Tours](./contribution-points.md#tours--shipped-installed-plugins).
 - `agentMcp` — the inbound direction: an MCP tools endpoint Daintree hosts for agents in its terminals, with the tools registered from `activate()` through `host.mcp.registerTools`. Requires the `mcp:expose` capability; one endpoint per plugin, served on the plugin's one MCP server beside the host's database tools; allowed under `scope: "project"`. See [Agent MCP endpoints](./contribution-points.md#agent-mcp-endpoints--shipped).
@@ -487,6 +487,7 @@ Where a rejection shows up depends on how the plugin reached Daintree:
 - **A project plugin** that fails validation is listed in the plugin manager with a one-line reason.
 - **A `daintree-plugin dev` session** reports the same one-line reason to the CLI.
 - **An installed plugin at startup** is skipped, and the issues go to the console log only. The one exception is a reserved `daintree.*` name, which also shows an error toast and records a load error on the plugin.
+- **A malformed `contributes.tours` entry** is the one issue the load forgives: at startup and in a dev session that tour is dropped with a console warning and the rest of the plugin loads. Installing an archive and `daintree-plugin validate` still reject the manifest for it.
 
 Run `npx daintree-plugin validate` in your plugin directory to check the manifest locally before packaging.
 
