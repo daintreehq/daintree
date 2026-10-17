@@ -101,6 +101,16 @@ async function loadRegistry(): Promise<ActionRegistry> {
   }
 }
 
+/**
+ * Exits explicitly once the message is flushed. The SSR load constructs the
+ * renderer's `TerminalInstanceService` singleton, whose reflow heartbeat and
+ * reconciliation watchdog arm intervals that outlive `server.close()`, so the
+ * process would otherwise never exit on its own.
+ */
+function finish(stream: NodeJS.WriteStream, message: string, code: number): void {
+  stream.write(`${message}\n`, () => process.exit(code));
+}
+
 const registry = await loadRegistry();
 const expected = renderPluginActionsDoc(registry);
 const isCheck = process.argv.includes("--check");
@@ -113,14 +123,16 @@ if (isCheck) {
     // A missing file fails the comparison below.
   }
   if (actual !== expected) {
-    console.error(
-      "docs/plugins/actions.md is stale. Run `npm run codegen:plugin-actions` and commit the result."
+    finish(
+      process.stderr,
+      "docs/plugins/actions.md is stale. Run `npm run codegen:plugin-actions` and commit the result.",
+      1
     );
-    process.exit(1);
+  } else {
+    finish(process.stdout, "docs/plugins/actions.md is up to date.", 0);
   }
-  console.log("docs/plugins/actions.md is up to date.");
 } else {
   mkdirSync(path.dirname(DOC_PATH), { recursive: true });
   writeFileSync(DOC_PATH, expected);
-  console.log(`Wrote docs/plugins/actions.md (${expected.split("\n").length} lines)`);
+  finish(process.stdout, `Wrote docs/plugins/actions.md (${expected.split("\n").length} lines)`, 0);
 }
