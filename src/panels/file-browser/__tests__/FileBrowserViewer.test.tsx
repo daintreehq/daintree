@@ -717,6 +717,7 @@ describe("FileBrowserViewer video preview (#11382)", () => {
   // Chromium's custom-scheme media loader can't do follow-up range requests
   // (electron#51442) — so the suite stubs the fetch/object-URL boundary.
   const videoFetchMock = vi.fn();
+  const realFetch = globalThis.fetch;
   beforeEach(() => {
     videoFetchMock.mockResolvedValue({
       ok: true,
@@ -729,7 +730,7 @@ describe("FileBrowserViewer video preview (#11382)", () => {
     URL.revokeObjectURL = vi.fn();
   });
   afterEach(() => {
-    vi.unstubAllGlobals();
+    vi.stubGlobal("fetch", realFetch);
     videoFetchMock.mockReset();
   });
 
@@ -758,6 +759,7 @@ describe("FileBrowserViewer video preview (#11382)", () => {
 describe("FileBrowserViewer audio preview (#11425)", () => {
   // Same fetch/object-URL boundary as the video suite above.
   const audioFetchMock = vi.fn();
+  const realFetch = globalThis.fetch;
   beforeEach(() => {
     audioFetchMock.mockResolvedValue({
       ok: true,
@@ -770,7 +772,7 @@ describe("FileBrowserViewer audio preview (#11425)", () => {
     URL.revokeObjectURL = vi.fn();
   });
   afterEach(() => {
-    vi.unstubAllGlobals();
+    vi.stubGlobal("fetch", realFetch);
     audioFetchMock.mockReset();
   });
 
