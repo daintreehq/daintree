@@ -75,7 +75,7 @@ export type AssistantMessagingErrorCode = AssistantMessagingRefusalCode;
  */
 const ERROR_MESSAGES: Record<AssistantMessagingErrorCode, string> = {
   NOT_ELIGIBLE:
-    "Only an assistant that takes messages from other machines, or this machine's hub, in the session it runs in now, has an inbox.",
+    "Only an assistant that can take messages from other machines, in the session it runs in now, has an inbox.",
   INVALID_ARGS: "The arguments don't match this tool's schema.",
   UNKNOWN_TASK: "No message in this assistant's inbox has that taskId.",
   EXCHANGE_CLOSED: "That exchange has already ended, so it takes no further answer.",
@@ -100,13 +100,13 @@ export class AssistantMessagingError extends Error {
 export interface LaneCaller {
   lane: LaneRef;
   /**
-   * Whose entries it reads and answers: its open address while this machine
-   * listens as a host, and its enrollment's when it is this machine's hub.
+   * Whose entries it reads and answers: its open address, while this machine
+   * listens as a host or has hosts of its own.
    */
   receivers: ExchangeReceiver[];
   /**
-   * What it is enrolled as, in this session: this machine's hub, or a lane
-   * whose own messages go to the remote Shell that started it.
+   * What it is enrolled as, in this session: a lane whose own messages go to
+   * the remote Shell that started it.
    */
   enrollment: LaneEnrollment | null;
 }
@@ -120,9 +120,9 @@ export interface AssistantMessagingRuntimeDeps {
   inbox: AssistantInbox;
   /** The lane a live help session was provisioned for; null once it is revoked or ending. */
   getSessionLane(helpSessionId: string): LaneRef | null;
-  /** Messages a host's lanes start to their Shell's hub (#13338); read at each call. */
+  /** Messages a host's lanes start to their Shell (#13338); read at each call. */
   outbox?: () => AssistantHostOutboxHandle | undefined;
-  /** Whether this machine has a host of its own, so a lane here may become its hub. */
+  /** Whether this machine has a host of its own, whose assistants may message lanes here. */
   hasHosts?: () => boolean;
   /**
    * Types the wake line for an exchange into its lane again, outside the one
@@ -164,9 +164,9 @@ function isLive(record: ExchangeRecord, now: number): boolean {
  * receivers and which exchanges follow from that alone.
  *
  * A caller must be the session its lane runs now, so a revoked or displaced
- * session reads nothing. What remote Shells sent the lane is filed under its
- * open address, so a run that replaced another reads it; what reached it as
- * this machine's hub stays with the run that was enrolled. Pause, the
+ * session reads nothing. What remote Shells and this Shell's hosts sent the
+ * lane is filed under its open address, so a run that replaced another reads
+ * it. Pause, the
  * machine's setting and the person turning the run off don't stop it: a lane
  * may still read and answer what reached it, as the policy's `reply` kind
  * allows.
@@ -187,7 +187,7 @@ export class AssistantMessagingRuntime {
     if (lane === null) return { ok: false, reason: "not-a-lane" };
     const receivers: ExchangeReceiver[] = [];
     let denial: MessagingDenial = "not-enrolled";
-    if (this.listensAsHost()) {
+    if (this.hasOpenAddresses()) {
       const open = this.deps.policy.checkOpen(lane, "reply");
       // The run its lane answers in now; a session it replaced is not it.
       if (open.ok && open.run.sessionId === helpSessionId) receivers.push(openReceiverFor(lane));
@@ -207,8 +207,6 @@ export class AssistantMessagingRuntime {
     } else {
       enrollment = null;
     }
-    // Only a hub is sent messages under its enrollment; a remote Shell's go to the open address.
-    if (enrollment?.enrolledBy.kind === "local") receivers.push(exchangeReceiverFor(enrollment));
     if (receivers.length === 0 && enrollment === null) return { ok: false, reason: denial };
     return { ok: true, caller: { lane, receivers, enrollment } };
   }
@@ -218,9 +216,9 @@ export class AssistantMessagingRuntime {
   }
 
   /**
-   * Whether the caller may start a message to a hub: a lane a remote Shell's
-   * view started, on a machine whose host side is listening, writes to that
-   * Shell's hub. A hub has no hub of its own to write to.
+   * Whether the caller may start a message to a Shell: a lane a remote
+   * Shell's view started, on a machine whose host side is listening, writes
+   * to that Shell's assistants.
    */
   isSendAvailable(helpSessionId: string): boolean {
     const resolved = this.resolveCaller(helpSessionId);
@@ -246,7 +244,7 @@ export class AssistantMessagingRuntime {
     );
   }
 
-  /** Whether a lane here could be one a remote Shell starts, and so write to its hub. */
+  /** Whether a lane here could be one a remote Shell starts, and so write to that Shell. */
   isSendReachable(helpSessionId: string): boolean {
     return this.listensAsHost() && this.deps.getSessionLane(helpSessionId) !== null;
   }
@@ -254,6 +252,17 @@ export class AssistantMessagingRuntime {
   /** Whether a Shell on another machine could message a lane here: this machine listens as a host. */
   listensAsHost(): boolean {
     return this.deps.policy.isSupported() && this.deps.outbox?.() !== undefined;
+  }
+
+  /**
+   * Whether lanes here read their open address: another machine's Shell may
+   * message them, or a host of this Shell's own may (#13468), which files what
+   * its assistants start under the open address of the one it goes to.
+   */
+  private hasOpenAddresses(): boolean {
+    return (
+      this.listensAsHost() || (this.deps.policy.isSupported() && this.deps.hasHosts?.() === true)
+    );
   }
 
   getInbox(
@@ -282,10 +291,10 @@ export class AssistantMessagingRuntime {
   }
 
   /**
-   * Queues a message to the hub of the Shell the caller's lane was enrolled
-   * for, the one whose view started it. Nothing names the hub: it is
-   * whichever one that Shell has when the message reaches it, and no other
-   * Shell can be addressed at all.
+   * Queues a message to the Shell the caller's lane was enrolled for, the one
+   * whose view started it. Nothing names an assistant there: that Shell hands
+   * it to the one that last spoke to this lane, or another taking messages
+   * (#13468), and no other Shell can be addressed at all.
    */
   private start(helpSessionId: string, args: AssistantSendMessageArgs): AssistantSendMessageResult {
     const resolved = this.resolveCaller(helpSessionId);
@@ -461,12 +470,11 @@ export class AssistantMessagingRuntime {
    * Hands a message's body to the lane it was admitted for. The link call
    * that admits an exchange (#13334) calls this once the store has the
    * record; a record addressed to anything but a lane's open address while
-   * this machine listens as a host, or a standing enrollment here, is
-   * refused.
+   * lanes here read theirs, or a standing enrollment here, is refused.
    */
   admit(record: ExchangeRecord, envelope: InboxEnvelope): void {
     const admissible = isOpenReceiver(record.receiver)
-      ? this.listensAsHost()
+      ? this.hasOpenAddresses()
       : this.isStanding(record.receiver);
     if (!admissible) throw new AssistantMessagingError("NOT_ELIGIBLE");
     this.deps.inbox.admit(record, envelope);
@@ -487,25 +495,14 @@ export class AssistantMessagingRuntime {
     if (!rewake) return 0;
     const receivers: ExchangeReceiver[] = [];
     let waiting = false;
-    if (this.listensAsHost()) {
+    if (this.hasOpenAddresses()) {
       const open = this.deps.policy.checkOpen(lane, "wake");
       // Anything that closes it may lift (the pause, the setting, a run not up yet): owed till then.
       if (open.ok) receivers.push(openReceiverFor(lane));
       else waiting = true;
     } else if (this.deps.inbox.list(openReceiverFor(lane), 0).length > 0) {
-      // Kept for when this machine listens as a host again.
+      // Kept for when lanes here read their open address again.
       waiting = true;
-    }
-    const enrollment = this.deps.policy.getEnrollment(lane);
-    if (enrollment?.enrolledBy.kind === "local") {
-      const wakeable = this.deps.policy.checkLane({
-        lane,
-        generation: enrollment.generation,
-        shell: enrollment.enrolledBy,
-        kind: "wake",
-      });
-      if (wakeable.ok) receivers.push(exchangeReceiverFor(enrollment));
-      else waiting = true;
     }
     if (receivers.length === 0) return waiting ? null : 0;
     let announced = 0;

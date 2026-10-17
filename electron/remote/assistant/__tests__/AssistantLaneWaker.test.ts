@@ -6,6 +6,7 @@ import {
   AssistantMessagingPolicy,
   OPEN_LANE_GENERATION,
   type MessagingShell,
+  type OpenRun,
 } from "../AssistantMessagingPolicy.js";
 
 const SHELL_A: MessagingShell = { kind: "remote", linkSessionId: "link-a" };
@@ -16,11 +17,12 @@ function harness() {
   const running = new Map<string, RunningLaneSession>();
   const launchGenerations = new Map<string, number>();
   let nextGeneration = 0;
+  let accepting = true;
   const policy = new AssistantMessagingPolicy({
     getRunningLaneSession: (projectId, slot) => running.get(`${projectId}#${slot}`) ?? null,
     getLiveGeneration: (terminalId) => launchGenerations.get(terminalId) ?? null,
     isHostMessagingEnabled: () => true,
-    acceptsRemoteMessages: () => true,
+    acceptsRemoteMessages: () => accepting,
     onSessionEnded: () => () => {},
     platform: "darwin",
     newGeneration: () => `gen-${++nextGeneration}`,
@@ -61,6 +63,15 @@ function harness() {
     driveBy: (shell: MessagingShell | null) => {
       driver = shell;
     },
+    accept: (on: boolean) => {
+      accepting = on;
+    },
+    /** The open run on the lane now, as an asker's exchange was bound to it. */
+    current: (): OpenRun => {
+      const open = policy.checkOpen(LANE, "inspect");
+      if (!open.ok) throw new Error(open.reason);
+      return open.run;
+    },
   };
 }
 
@@ -87,7 +98,7 @@ describe("AssistantLaneWaker", () => {
     expect(h.outcomes).toEqual([]);
   });
 
-  it("carries a hub update's kind through to the pane, and leaves a message's unset", () => {
+  it("carries an update's kind through to the pane, and leaves a message's unset", () => {
     const h = enrolled();
     h.waker.wake({ ...h.request(h.generation), kind: "update" });
     h.waker.wake({ ...h.request(h.generation), exchangeId: "task-2" });
@@ -214,6 +225,84 @@ describe("AssistantLaneWaker", () => {
       idle.waker.wake(idle.request(OPEN_LANE_GENERATION));
       expect(idle.queued).toEqual([]);
       expect(idle.outcomes).toEqual([{ kind: "unavailable", reason: "unavailable" }]);
+    });
+  });
+
+  describe("an asker's own exchange having moved (#13468)", () => {
+    const askerRequest = (h: ReturnType<typeof harness>, run: OpenRun): LaneWakeRequest => ({
+      ...h.request(OPEN_LANE_GENERATION, { kind: "local" }),
+      kind: "update",
+      run,
+    });
+
+    it("is typed into the run that sent it while that run is the one running", () => {
+      const h = harness();
+      h.run("s1");
+      const asker = h.current();
+      h.driveBy(SHELL_B);
+      h.waker.wake(askerRequest(h, asker));
+      expect(h.queued).toHaveLength(1);
+      expect(h.queued[0].lane).toEqual({
+        helpSessionId: "s1",
+        terminalId: "t-s1",
+        projectId: "proj",
+      });
+      expect(h.queued[0].wake.kind).toBe("update");
+      expect(h.queued[0].wake.recheck()).toEqual({ kind: "ready" });
+      expect(h.outcomes).toEqual([]);
+    });
+
+    it("never reaches a run that replaced the asker, before queueing or at the last check", () => {
+      const h = harness();
+      h.run("s1");
+      const asker = h.current();
+      h.run("s1");
+      h.waker.wake(askerRequest(h, asker));
+      expect(h.queued).toEqual([]);
+      expect(h.outcomes).toEqual([{ kind: "unavailable", reason: "relaunched" }]);
+
+      const later = harness();
+      later.run("s1");
+      later.waker.wake(askerRequest(later, later.current()));
+      expect(later.queued).toHaveLength(1);
+      later.run("s2");
+      expect(later.queued[0].wake.recheck()).toEqual({
+        kind: "unavailable",
+        reason: "relaunched",
+      });
+    });
+
+    it("reports an asker that is no longer running", () => {
+      const h = harness();
+      h.run("s1");
+      const asker = h.current();
+      const idle = harness();
+      idle.waker.wake(askerRequest(idle, asker));
+      expect(idle.queued).toEqual([]);
+      expect(idle.outcomes).toEqual([{ kind: "unavailable", reason: "unavailable" }]);
+    });
+
+    it("waits while paused, and is ready again once the pause lifts", () => {
+      const h = harness();
+      h.run("s1");
+      h.policy.setPaused(true);
+      h.waker.wake(askerRequest(h, h.current()));
+      expect(h.queued).toHaveLength(1);
+      expect(h.queued[0].wake.recheck()).toEqual({ kind: "held", reason: "paused" });
+      h.policy.setPaused(false);
+      expect(h.queued[0].wake.recheck()).toEqual({ kind: "ready" });
+    });
+
+    it("isn't stopped by the run being turned off to other machines, or the setting", () => {
+      const h = harness();
+      h.run("s1");
+      const asker = h.current();
+      h.policy.declineRun(LANE, { kind: "local" });
+      h.accept(false);
+      h.waker.wake(askerRequest(h, asker));
+      expect(h.queued).toHaveLength(1);
+      expect(h.queued[0].wake.recheck()).toEqual({ kind: "ready" });
+      expect(h.outcomes).toEqual([]);
     });
   });
 });

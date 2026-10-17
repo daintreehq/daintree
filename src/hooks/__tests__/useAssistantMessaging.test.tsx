@@ -160,7 +160,7 @@ describe("useAssistantMessaging", () => {
     act(() => result.current.setLaneEnrolled(true));
     rerender({ slot: 1 });
     expect(result.current.state).toBeNull();
-    await act(async () => answerEnroll({ state: makeState(9, true), refusal: "hub-taken" }));
+    await act(async () => answerEnroll({ state: makeState(9, true), refusal: "not-running" }));
     expect(result.current.state).toBeNull();
     expect(result.current.refusal).toBeNull();
     await act(async () => reads[1]!(makeState(2)));

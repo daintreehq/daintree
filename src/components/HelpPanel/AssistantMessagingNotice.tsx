@@ -17,7 +17,6 @@ const ENDED_DESCRIPTION: Record<AssistantMessagingEndReason, string> = {
 const REFUSAL_TITLE: Record<AssistantMessagingEnrollDenial, string> = {
   "not-running": "Start this assistant before it can accept messages",
   "wrong-shell": "Another machine turned messages on for this assistant",
-  "hub-taken": "Another assistant on this machine already accepts messages",
   unsupported: "Messages between machines aren't available here",
   unavailable: "Couldn't change whether this assistant accepts messages",
 };

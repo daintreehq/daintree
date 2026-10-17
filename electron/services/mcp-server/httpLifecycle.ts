@@ -2376,7 +2376,7 @@ export class HttpLifecycle {
       assistantMessaging: bindAssistantMessaging(() =>
         this.deps.sessionStore.sessionHelpIdMap.get(sessionId)
       ),
-      // The hub is whichever help session this transport is bound to, if it is the hub (#13336).
+      // Whichever help session this transport is bound to; the runtime decides if it may (#13336).
       hostMessaging: bindHostMessaging(() =>
         this.deps.sessionStore.sessionHelpIdMap.get(sessionId)
       ),

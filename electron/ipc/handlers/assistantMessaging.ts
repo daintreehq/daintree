@@ -55,15 +55,8 @@ function isAvailable(shell: MessagingShell | null): shell is MessagingShell {
   if (!controls || !getRemoteService("assistantMessagingPolicy")) return false;
   // A remote view's host exists by definition; this machine's own windows wait
   // for a host of their own, or for other machines to be able to message them.
+  // Either way, other machines' assistants can then reach this one's lanes.
   return shell.kind === "remote" || controls.hasHosts() || controls.listensAsHost();
-}
-
-/**
- * Whether other machines' assistants can reach lanes here at all: a remote
- * view's host listens by definition.
- */
-function listensAsHost(shell: MessagingShell): boolean {
-  return shell.kind === "remote" || surface()?.listensAsHost() === true;
 }
 
 function readState(ctx: IpcContext, lane: LaneRef | null): AssistantMessagingState {
@@ -74,24 +67,18 @@ function readState(ctx: IpcContext, lane: LaneRef | null): AssistantMessagingSta
   if (!policy || !isAvailable(shell)) {
     return { available: false, paused: false, canPause: false, lane: empty, revision };
   }
-  // Open to every Shell, from whichever window or machine it runs in (#13467).
-  const open = lane !== null && listensAsHost(shell) && policy.checkOpen(lane, "inspect").ok;
-  const enrollment = lane ? policy.getEnrollment(lane) : null;
+  // Open to every Shell, and this Shell's own hosts, from whichever window or
+  // machine it runs in (#13467, #13468).
+  const open = lane !== null && policy.checkOpen(lane, "inspect").ok;
   const ended = lane ? policy.getEnded(lane) : null;
-  const mine = enrollment !== null && sameShell(enrollment.enrolledBy, shell);
-  // Consent whose Shell is away shows as on to anyone viewing the lane, so
-  // turning it off withdraws it; turning it on again then enrolls this Shell.
-  const waiting = enrollment !== null && !mine && lane !== null && policy.isWaiting(lane);
-  // This machine's hub: what its own window turns on where it doesn't listen as a host.
-  const hub = shell.kind === "local" && mine;
   return {
     available: true,
     paused: policy.isPaused(),
     canPause: shell.kind === "local",
     lane: {
-      enrolled: open || hub || (!listensAsHost(shell) && waiting),
-      // Nobody holds a lane open to every Shell; only a hub can be another's.
-      enrolledElsewhere: !open && !listensAsHost(shell) && enrollment !== null && !mine && !waiting,
+      enrolled: open,
+      // Nobody holds a lane open to every Shell.
+      enrolledElsewhere: false,
       // Another Shell's lapsed consent is that Shell's to hear about.
       ended:
         !open && ended && sameShell(ended.enrolledBy, shell)
@@ -106,8 +93,6 @@ function denialFor(reason: MessagingDenial): AssistantMessagingEnrollDenial {
   switch (reason) {
     case "unsupported-platform":
       return "unsupported";
-    case "hub-taken":
-      return "hub-taken";
     case "wrong-shell":
       return "wrong-shell";
     case "unavailable":
@@ -143,39 +128,17 @@ async function handleSetLaneEnrolled(
   if (!policy || lane === null || typeof input?.enrolled !== "boolean" || !isAvailable(shell)) {
     return refuse("unavailable");
   }
-  const existing = policy.getEnrollment(lane);
-  if (listensAsHost(shell)) {
-    // The person's off holds for this run, whoever views it; the saved default
-    // doesn't turn it back on. Only this machine's own window ends it as the hub.
-    if (!input.enrolled) {
-      policy.declineRun(lane, shell);
-      return done();
-    }
-    policy.acceptRun(lane, shell);
-    // On this machine, also its hub when it has hosts and nothing holds the lane. A remote
-    // view's on never routes the lane's own messages: only a run its view started does.
-    if (existing === null && shell.kind === "local" && surface()?.hasHosts() === true) {
-      policy.enroll(lane, shell);
-    }
-    const open = policy.checkOpen(lane, "inspect");
-    // Still off when this machine's setting is, which the person changes in Settings.
-    return open.ok ? done() : refuse(denialFor(open.reason));
-  }
+  // The person's off holds for this run, whoever views it; the saved default
+  // doesn't turn it back on. It stops what other machines send this run, never
+  // what it sends them: only this machine's setting and the pause do (#13468).
   if (!input.enrolled) {
-    if (existing === null) return done();
-    // A lane whose Shell is away can be turned off from here; withdrawing never gives access.
-    if (!sameShell(existing.enrolledBy, shell) && !policy.isWaiting(lane)) {
-      return refuse("wrong-shell");
-    }
-    // The person's off holds for this run, so the saved default doesn't turn it back on.
-    policy.unenroll(lane, shell, existing.generation, { decline: true });
+    policy.declineRun(lane, shell);
     return done();
   }
-  // Already on for this Shell: a fresh enrollment would only invalidate its generation.
-  if (existing !== null && sameShell(existing.enrolledBy, shell)) return done();
-  // A Shell's hub is never moved from another lane behind the person's back.
-  const result = policy.enroll(lane, shell);
-  return result.ok ? done() : refuse(denialFor(result.reason));
+  policy.acceptRun(lane, shell);
+  const open = policy.checkOpen(lane, "inspect");
+  // Still off when this machine's setting is, which the person changes in Settings.
+  return open.ok ? done() : refuse(denialFor(open.reason));
 }
 
 async function handleSetPaused(ctx: IpcContext, paused: boolean): Promise<boolean> {

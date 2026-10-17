@@ -357,7 +357,7 @@ export function installAssistantExchangeHostWith(
       }
       const result = deps.store.create(sender, input);
       if (result.disposition !== "created") return result;
-      // The hub on the sending Shell is the only lane that can address a host's lanes.
+      // The sending Shell's assistants are the only callers that can address a host's lanes.
       const envelope: InboxEnvelope = {
         body: payload.body,
         provenance: { sendingHost, sendingLane: "hub", hopCount: 1 },

@@ -37,15 +37,16 @@ import {
 } from "../../../shared/types/hostMessaging.js";
 
 /**
- * What the MCP server needs of the hub's messaging runtime (#13336), which
- * Remote Hosts owns and installs (electron/remote/assistant/install.ts). Core
- * code never imports the runtime, so a build or platform without Remote Hosts
- * leaves this empty and offers none of the tools. Every call names the help
- * session it came from; the runtime decides whether that is the hub.
+ * What the MCP server needs of the Shell's host messaging runtime (#13336),
+ * which Remote Hosts owns and installs (electron/remote/assistant/install.ts).
+ * Core code never imports the runtime, so a build or platform without Remote
+ * Hosts leaves this empty and offers none of the tools. Every call names the
+ * help session it came from; the runtime decides whether that is one of this
+ * machine's assistants (#13468).
  */
 export interface HostMessagingRuntimeHandle {
   isAvailable(helpSessionId: string): boolean;
-  /** Whether this session could become the hub: offered from its start, refused until it is. */
+  /** Whether this session's tools are offered: from its start, before its run is confirmed. */
   isReachable?(helpSessionId: string): boolean;
   list(helpSessionId: string): Promise<HostMessagingOutcome<HostListResult>>;
   listAssistants(
@@ -80,7 +81,7 @@ export interface HostMessagingRuntimeHandle {
 
 let installedRuntime: HostMessagingRuntimeHandle | null = null;
 
-/** Installs the process's hub messaging runtime; the returned call removes it again. */
+/** Installs the process's host messaging runtime; the returned call removes it again. */
 export function setHostMessagingRuntime(runtime: HostMessagingRuntimeHandle): () => void {
   installedRuntime = runtime;
   return () => {
@@ -89,14 +90,14 @@ export function setHostMessagingRuntime(runtime: HostMessagingRuntimeHandle): ()
 }
 
 export const HOST_MESSAGING_NOT_ELIGIBLE_MESSAGE =
-  "Only this Shell's hub assistant, in the session it was enrolled with, can reach assistants on other hosts.";
+  "Only a Daintree Assistant running on this machine can reach assistants on other hosts.";
 const INVALID_ARGS_MESSAGE = "The arguments don't match this tool's schema.";
 
-/** One MCP session's view of the hub runtime, keyed on the help session bound to it. */
+/** One MCP session's view of the host messaging runtime, keyed on the help session bound to it. */
 export interface HostMessagingAccess {
-  /** Whether this session is the hub and a host exists right now. */
+  /** Whether this session is one of this machine's assistants and a host exists right now. */
   isAvailable(): boolean;
-  /** Whether it could become the hub while a host exists; listing goes by this. */
+  /** Whether it is an assistant session while a host exists; listing goes by this. */
   isReachable?(): boolean;
   run(toolId: string, args: unknown): Promise<HostMessagingOutcome<HostMessagingToolResult>>;
 }
@@ -188,7 +189,7 @@ export function bindHostMessaging(
   };
 }
 
-/** Runs one hub tool for the caller's session; no access means the caller isn't a hub at all. */
+/** Runs one host tool for the caller's session; no access means the caller isn't an assistant at all. */
 export function runHostMessagingTool(
   toolId: string,
   args: unknown,

@@ -23,8 +23,8 @@ import {
   hostOfSender,
 } from "../AssistantHubReceiver.js";
 import { AssistantInbox } from "../AssistantInbox.js";
-import { AssistantMessagingPolicy, type LaneEnrollment } from "../AssistantMessagingPolicy.js";
-import { AssistantMessagingRuntime } from "../AssistantMessagingRuntime.js";
+import { AssistantMessagingPolicy, type LaneRef } from "../AssistantMessagingPolicy.js";
+import { AssistantMessagingRuntime, openReceiverFor } from "../AssistantMessagingRuntime.js";
 import type { SendToHubPayload } from "../linkMethods.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -55,18 +55,20 @@ describe("AssistantHubReceiver", () => {
   let policy: AssistantMessagingPolicy;
   let runtime: AssistantMessagingRuntime;
   let receiver: AssistantHubReceiver;
-  let woken: Array<{ record: ExchangeRecord; hub: LaneEnrollment }>;
+  let accepting: boolean;
+  let woken: Array<{ record: ExchangeRecord; recipient: LaneRef }>;
   let told: Array<{ hostId: string; messageId: string }>;
+  let recipientLane: LaneRef | null;
+  let asked: Array<{ hostId: string; sourceLane: LaneRef }>;
 
-  const enrollHub = (): LaneEnrollment => {
+  /** An assistant running here, taking messages from other machines: the recipient picked. */
+  const startHub = (): void => {
     running.set(`${HUB.projectId}#${HUB.slot}`, {
       sessionId: HUB_SESSION,
       terminalId: "t-hub",
       projectViewWebContentsId: 1,
     });
-    const result = policy.enroll(HUB, { kind: "local" });
-    if (!result.ok) throw new Error(result.reason);
-    return result.enrollment;
+    recipientLane = HUB;
   };
 
   beforeEach(() => {
@@ -75,14 +77,18 @@ describe("AssistantHubReceiver", () => {
     clock = 1_000_000;
     optedIn = new Set(["host-a", "host-b"]);
     running = new Map();
+    accepting = true;
     woken = [];
     told = [];
+    recipientLane = null;
+    asked = [];
     let generation = 0;
     store = new AssistantExchangeStore(sqlite, { now: () => clock });
     policy = new AssistantMessagingPolicy({
       getRunningLaneSession: (projectId, slot) => running.get(`${projectId}#${slot}`) ?? null,
       getLiveGeneration: () => 1,
       isHostMessagingEnabled: (hostId) => optedIn.has(hostId),
+      acceptsRemoteMessages: () => accepting,
       onSessionEnded: () => () => {},
       platform: "darwin",
       now: () => clock,
@@ -93,14 +99,19 @@ describe("AssistantHubReceiver", () => {
       store,
       inbox: new AssistantInbox({ now: () => clock }),
       getSessionLane: (sessionId) => (sessionId === HUB_SESSION ? HUB : null),
+      hasHosts: () => true,
       now: () => clock,
     });
     receiver = new AssistantHubReceiver({
       policy,
       store,
       runtime,
+      recipient: (hostId, sourceLane) => {
+        asked.push({ hostId, sourceLane });
+        return recipientLane;
+      },
       hostName: (hostId) => (hostId === "host-a" ? "Studio 04" : "Other"),
-      wake: (record, hub) => woken.push({ record, hub }),
+      wake: (record, recipient) => woken.push({ record, recipient }),
       tellHost: (hostId, messageId) => told.push({ hostId, messageId }),
       now: () => clock,
     });
@@ -114,8 +125,8 @@ describe("AssistantHubReceiver", () => {
     fs.rmSync(tmpDir, { recursive: true, force: true });
   });
 
-  it("puts a host's message in the hub's inbox with its provenance, and wakes the hub", () => {
-    const hub = enrollHub();
+  it("files a host's message at the recipient's open address with its provenance, and wakes it", () => {
+    startHub();
     const answer = receiver.receive("host-a", payload());
     expect(answer).toMatchObject({
       status: "accepted",
@@ -138,12 +149,15 @@ describe("AssistantHubReceiver", () => {
     });
     expect(inbox.value.messages[0]!.untrustedBody).toContain("migration landed on feature/x");
     expect(woken).toHaveLength(1);
-    expect(woken[0]!.hub.generation).toBe(hub.generation);
+    expect(woken[0]!.recipient).toEqual(HUB);
+    expect(woken[0]!.record.receiver).toEqual(openReceiverFor(HUB));
     expect(hostOfSender(woken[0]!.record.senderId)).toBe("host-a");
+    // The recipient is picked for the lane the message came from, as the payload names it.
+    expect(asked).toEqual([{ hostId: "host-a", sourceLane: { projectId: "proj-2", slot: 1 } }]);
   });
 
   it("answers a resend from its record without admitting or waking twice", () => {
-    enrollHub();
+    startHub();
     const first = receiver.receive("host-a", payload());
     if (first.status !== "accepted") throw new Error("not accepted");
     // Paused since: a resend still answers from what was admitted.
@@ -157,8 +171,30 @@ describe("AssistantHubReceiver", () => {
     expect(woken).toHaveLength(2);
   });
 
+  it("answers a resend from where it was filed, whoever would take it now", () => {
+    startHub();
+    const first = receiver.receive("host-a", payload());
+    if (first.status !== "accepted") throw new Error("not accepted");
+    const OTHER = { projectId: "other-proj", slot: 2 };
+    recipientLane = OTHER;
+    expect(receiver.receive("host-a", payload())).toMatchObject({
+      status: "accepted",
+      taskId: first.taskId,
+    });
+    recipientLane = null;
+    expect(receiver.receive("host-a", payload())).toMatchObject({
+      status: "accepted",
+      taskId: first.taskId,
+    });
+    expect(asked).toHaveLength(1);
+    expect(woken).toHaveLength(1);
+    expect(receiver.lookUp("host-a", "m-1")).toMatchObject({ taskId: first.taskId });
+    const inbox = runtime.getInbox(HUB_SESSION, {});
+    expect(inbox.ok && inbox.value.messages.map((m) => m.taskId)).toEqual([first.taskId]);
+  });
+
   it("refuses a messageId reused for different words, without touching the first", () => {
-    enrollHub();
+    startHub();
     receiver.receive("host-a", payload());
     expect(receiver.receive("host-a", payload({ body: "something else" }))).toEqual({
       status: "refused",
@@ -171,7 +207,7 @@ describe("AssistantHubReceiver", () => {
   });
 
   it("keeps counting a conversation's hops across a Shell restart, from the records", () => {
-    enrollHub();
+    startHub();
     receiver.receive("host-a", payload({ messageId: "m-1" }));
     receiver.receive("host-a", payload({ messageId: "m-2" }));
     // A new receiver over the same records, as after a restart, holds nothing in memory.
@@ -180,6 +216,7 @@ describe("AssistantHubReceiver", () => {
       policy,
       store,
       runtime,
+      recipient: () => recipientLane,
       hostName: () => "Studio 04",
       now: () => clock,
     });
@@ -189,9 +226,11 @@ describe("AssistantHubReceiver", () => {
     });
   });
 
-  it("refuses without the host's opt-in, a hub, or while paused", () => {
+  it("refuses without the host's opt-in, this machine's setting, a recipient, or while paused", () => {
+    startHub();
+    accepting = false;
     expect(receiver.receive("host-a", payload())).toEqual({ status: "refused", refusal: "no_hub" });
-    enrollHub();
+    accepting = true;
     optedIn.delete("host-a");
     expect(receiver.receive("host-a", payload())).toEqual({
       status: "refused",
@@ -201,16 +240,20 @@ describe("AssistantHubReceiver", () => {
     policy.setPaused(true);
     expect(receiver.receive("host-a", payload())).toEqual({ status: "refused", refusal: "paused" });
     policy.setPaused(false);
-    running.clear();
+    // None of this Shell's assistants takes it now: nothing is filed for a later one.
+    recipientLane = null;
     expect(receiver.receive("host-a", payload())).toEqual({
       status: "refused",
       refusal: "hub_unavailable",
     });
+    expect(receiver.lookUp("host-a", "m-1")).toBeNull();
     expect(woken).toEqual([]);
+    // Refused before a recipient is picked, the setting and opt-in never ask for one.
+    expect(asked).toHaveLength(1);
   });
 
-  it("refuses a body too large for the hub to be handed whole", () => {
-    enrollHub();
+  it("refuses a body too large for the recipient to be handed whole", () => {
+    startHub();
     expect(receiver.receive("host-a", payload({ body: "\u0001".repeat(15_000) }))).toEqual({
       status: "refused",
       refusal: "too_large",
@@ -218,7 +261,7 @@ describe("AssistantHubReceiver", () => {
   });
 
   it("counts hops itself, so a host that claims fewer still hits the limit", () => {
-    enrollHub();
+    startHub();
     expect(receiver.receive("host-a", payload({ messageId: "m-1", hopCount: 1 }))).toMatchObject({
       hopCount: 1,
     });
@@ -241,7 +284,7 @@ describe("AssistantHubReceiver", () => {
   });
 
   it("rate-limits one host's messages and recovers as the bucket refills", () => {
-    enrollHub();
+    startHub();
     for (let i = 0; i < HUB_INBOUND_PER_HOST_PER_MINUTE; i++) {
       expect(
         receiver.receive("host-a", payload({ messageId: `m-${i}`, contextId: `c-${i}` })).status
@@ -258,8 +301,8 @@ describe("AssistantHubReceiver", () => {
     ).toBe("accepted");
   });
 
-  it("hands the hub's replies back, and tells the host each time it answers", () => {
-    enrollHub();
+  it("hands the recipient's replies back, and tells the host each time it answers", () => {
+    startHub();
     receiver.receive("host-a", payload());
     const [message] = (
       runtime.getInbox(HUB_SESSION, {}) as {

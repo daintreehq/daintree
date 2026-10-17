@@ -623,7 +623,7 @@ export interface LaneWake {
   id: string;
   /**
    * `message` (the default) tells a receiving lane a message arrived;
-   * `update` tells the hub one of its own exchanges changed state (#13337).
+   * `update` tells an assistant one of its own exchanges changed state (#13337).
    */
   kind?: "message" | "update";
   /** Asked synchronously immediately before the line is typed, and while it waits. */
@@ -652,7 +652,7 @@ export function formatLaneWakeLine(ids: readonly string[]): string {
     : `${LANE_WAKE_LINE_PREFIX} has ${ids.length} new messages (exchanges ${handles}). Read them with ${LANE_INBOX_TOOL}.`;
 }
 
-/** The fixed line telling a hub its exchanges moved: Daintree's own wording and the handles. */
+/** The fixed line telling an assistant its exchanges moved: Daintree's own wording and the handles. */
 export function formatExchangeUpdateLine(ids: readonly string[]): string {
   const noun = ids.length === 1 ? "exchange" : "exchanges";
   return `${EXCHANGE_UPDATE_LINE_PREFIX} update (${noun} ${ids.join(", ")}).`;

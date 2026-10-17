@@ -9,18 +9,15 @@ import type { ExchangeKey, ExchangeRecord, SenderActor } from "../exchange/types
 import { inboxBodyFits, type InboxResponse } from "./AssistantInbox.js";
 import type {
   AssistantMessagingPolicy,
-  LaneEnrollment,
+  LaneRef,
   MessagingDenial,
 } from "./AssistantMessagingPolicy.js";
-import {
-  exchangeReceiverFor,
-  type AssistantMessagingRuntime,
-} from "./AssistantMessagingRuntime.js";
+import { openReceiverFor, type AssistantMessagingRuntime } from "./AssistantMessagingRuntime.js";
 import { MAX_EXCHANGE_RESPONSES, type HubExchange, type SendToHubPayload } from "./linkMethods.js";
 import { TokenBucket } from "./tokenBucket.js";
 
 const MINUTE_MS = 60_000;
-/** Messages one host's assistants may start to the hub, and all hosts', per minute. */
+/** Messages one host's assistants may start to this Shell, and all hosts', per minute. */
 export const HUB_INBOUND_PER_HOST_PER_MINUTE = 10;
 export const HUB_INBOUND_PER_MINUTE = 30;
 
@@ -40,10 +37,16 @@ export interface AssistantHubReceiverDeps {
   policy: Pick<AssistantMessagingPolicy, "checkHost">;
   store: AssistantExchangeStore;
   runtime: Pick<AssistantMessagingRuntime, "admit" | "getResponses" | "onResponse">;
-  /** The host's display name, for the hub to read beside the message. */
+  /**
+   * Which of this Shell's assistants a message from `sourceLane` on `hostId`
+   * goes to, of those taking messages from other machines now; null when none
+   * is.
+   */
+  recipient(hostId: HostId, sourceLane: LaneRef): LaneRef | null;
+  /** The host's display name, for the recipient to read beside the message. */
   hostName(hostId: HostId): string;
-  /** Tells the hub an admitted message is waiting; absent, it waits in the inbox unannounced. */
-  wake?(record: ExchangeRecord, hub: LaneEnrollment): void;
+  /** Tells the recipient an admitted message is waiting; absent, it waits in the inbox unannounced. */
+  wake?(record: ExchangeRecord, recipient: LaneRef): void;
   /** Tells the host one of its messages changed; absent or unreachable, the host reads it on reconnect. */
   tellHost?(hostId: HostId, messageId: string): void;
   now?: () => number;
@@ -65,11 +68,14 @@ function refusalFor(reason: MessagingDenial): AssistantSendRefusal {
 }
 
 /**
- * The Shell's side of a host assistant starting a conversation with the hub
- * (#13338). A message is admitted only with the host's opt-in on, messaging
- * not paused and a hub enrolled and running, within the rate limits and the
- * conversation's hop limit; it then waits in the hub's inbox like any other,
- * and the hub's `assistant.reply` is read back by the host.
+ * The Shell's side of a host assistant starting a conversation with it
+ * (#13338). A message is admitted only with the host's opt-in on, this
+ * machine's setting on, messaging not paused and an assistant here to take
+ * it, within the rate limits and the conversation's hop limit. It goes to the
+ * assistant that last spoke to the lane it came from, or another one taking
+ * messages (#13468), and waits at that lane's open address like any other
+ * machine's message, so a run that replaces the recipient reads it; the
+ * recipient's `assistant.reply` is read back by the host.
  *
  * The host is whichever one the connection belongs to, never anything the
  * payload says. Hops are counted here, from the exchange records the host's
@@ -120,7 +126,6 @@ export class AssistantHubReceiver {
 
     const decision = this.deps.policy.checkHost({ hostId, kind: "admit" });
     if (!decision.ok) return { status: "refused", refusal: refusalFor(decision.reason) };
-    const hub = decision.enrollment;
     if (!inboxBodyFits(payload.body)) return { status: "refused", refusal: "too_large" };
 
     const now = this.now();
@@ -132,11 +137,15 @@ export class AssistantHubReceiver {
     const wait = Math.max(bucket.waitFor(now), this.overall.waitFor(now));
     if (wait > 0) return { status: "rate_limited", retryAfterMs: wait };
 
+    // Nobody here to take it now: the host's outbox holds it and offers it again.
+    const recipient = this.deps.recipient(hostId, payload.sourceLane);
+    if (recipient === null) return { status: "refused", refusal: "hub_unavailable" };
+
     const created = this.deps.store.create(sender, {
       messageId: payload.messageId,
       contextId: payload.contextId,
       referenceTaskIds: payload.referenceTaskIds,
-      receiver: exchangeReceiverFor(hub),
+      receiver: openReceiverFor(recipient),
       body: payload.body,
     });
     if (created.disposition !== "created") return this.snapshot(created.record);
@@ -154,7 +163,7 @@ export class AssistantHubReceiver {
         },
       });
     } catch (err) {
-      console.warn("[AssistantHubReceiver] Couldn't hand a host's message to the hub:", err);
+      console.warn("[AssistantHubReceiver] Couldn't hand a host's message to an assistant:", err);
       try {
         const rejected = this.deps.store.setState(
           { kind: "receiver", ...record.receiver },
@@ -169,10 +178,10 @@ export class AssistantHubReceiver {
       }
     }
     try {
-      this.deps.wake?.(record, hub);
+      this.deps.wake?.(record, recipient);
     } catch (err) {
-      // The message is in the hub's inbox either way; only the announcement failed.
-      console.warn("[AssistantHubReceiver] Waking the hub failed:", err);
+      // The message is in the recipient's inbox either way; only the announcement failed.
+      console.warn("[AssistantHubReceiver] Waking the recipient failed:", err);
     }
     return this.snapshot(record, hop);
   }

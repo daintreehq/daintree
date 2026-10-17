@@ -371,22 +371,14 @@ describe("AssistantMessagingRuntime", () => {
     expect(runtime.getResponses({ senderId: "shell-a", messageId: "same-id" })).toEqual([]);
   });
 
-  it("gives this machine's hub both its own messages and other machines', on one cursor", () => {
+  it("files other machines' messages and its hosts' at one open address, on one cursor (#13468)", () => {
     runLane("s1");
-    const hub = policy.enroll(LANE, { kind: "local" });
-    if (!hub.ok) throw new Error(hub.reason);
     const remote = send(LANE, "from another Shell");
-    const { record: fromHost } = store.create(
-      { kind: "sender", senderId: "host-x" },
-      {
-        messageId: "from-host",
-        contextId: "ctx-h",
-        referenceTaskIds: [],
-        receiver: exchangeReceiverFor(hub.enrollment),
-        body: "from a host's lane",
-      }
-    );
-    runtime.admit(fromHost, { body: "from a host's lane", provenance: PROVENANCE });
+    // What a host's lane starts to this Shell goes to the open address of the lane it picks.
+    const fromHost = send(LANE, "from a host's lane", "from-host", {
+      kind: "sender",
+      senderId: "host-x",
+    });
     const first = runtime.getInbox("s1", { limit: 1 });
     if (!first.ok) throw new Error(first.code);
     expect(first.value.messages.map((m) => m.taskId)).toEqual([remote.taskId]);
@@ -395,8 +387,29 @@ describe("AssistantMessagingRuntime", () => {
     expect(
       runtime.reply("s1", { taskId: fromHost.taskId, state: "completed", text: "ok" })
     ).toMatchObject({ ok: true });
-    // Answering the hub's message left its enrollment as it was.
-    expect(policy.getHub()?.generation).toBe(hub.enrollment.generation);
+  });
+
+  it("reads nothing under an enrollment on this machine itself: there is no hub (#13468)", () => {
+    runLane("s1");
+    const local = policy.enroll(LANE, { kind: "local" });
+    if (!local.ok) throw new Error(local.reason);
+    const resolved = runtime.resolveCaller("s1");
+    expect(resolved.ok && resolved.caller.receivers).toEqual([openReceiverFor(LANE)]);
+    const rewake = vi.fn();
+    newRuntime({ rewake });
+    const { record } = store.create(SENDER, {
+      messageId: "under-enrollment",
+      contextId: "ctx",
+      referenceTaskIds: [],
+      receiver: exchangeReceiverFor(local.enrollment),
+      body: "unread",
+    });
+    runtime.admit(record, { body: "unread", provenance: PROVENANCE });
+    const page = runtime.getInbox("s1", {});
+    expect(page.ok && page.value.messages).toEqual([]);
+    // Nor is it re-announced: only the open address is.
+    expect(runtime.reannounce(LANE)).toBe(0);
+    expect(rewake).not.toHaveBeenCalled();
   });
 
   it("still reads and answers while messaging is paused", () => {
@@ -518,27 +531,80 @@ describe("AssistantMessagingRuntime", () => {
     expect(() => runtime.admit(open, { body: "hello", provenance: PROVENANCE })).toThrow();
   });
 
-  it("drops a hub's bodies when its enrollment ends, and keeps a lane's open mail for its next run", () => {
+  it("keeps a lane's open mail for its next run, whichever machine sent it", () => {
     runLane("s1");
-    const hub = policy.enroll(LANE, { kind: "local" });
-    if (!hub.ok) throw new Error(hub.reason);
-    const { record: fromHost } = store.create(SENDER, {
-      messageId: "for-the-hub",
-      contextId: "ctx",
-      referenceTaskIds: [],
-      receiver: exchangeReceiverFor(hub.enrollment),
-      body: "secret",
-    });
-    runtime.admit(fromHost, { body: "secret", provenance: PROVENANCE });
     send(LANE, "for the lane");
-    const changed = vi.fn();
-    runtime.onAvailabilityChanged(changed);
+    send(LANE, "from a host's lane", "from-host", { kind: "sender", senderId: "host-x" });
+    running.delete(laneKey(LANE));
     for (const listener of [...endedListeners]) {
       listener({ projectId: "proj", slot: 0, sessionId: "s1", reason: "revoked" });
     }
-    expect(changed).toHaveBeenCalled();
-    expect(inbox.list(exchangeReceiverFor(hub.enrollment), 0)).toEqual([]);
-    expect(inbox.list(openReceiverFor(LANE), 0)).toHaveLength(1);
+    expect(inbox.list(openReceiverFor(LANE), 0)).toHaveLength(2);
+    runLane("s2");
+    const next = runtime.getInbox("s2", {});
+    expect(next.ok && next.value.messages).toHaveLength(2);
+  });
+
+  it("gives a lane its open address on a Shell with hosts, though it doesn't listen as one (#13468)", () => {
+    const rewake = vi.fn();
+    newRuntime({ outbox: () => undefined, hasHosts: () => true, rewake });
+    runLane("s1");
+    const resolved = runtime.resolveCaller("s1");
+    expect(resolved).toEqual({
+      ok: true,
+      caller: { lane: LANE, receivers: [openReceiverFor(LANE)], enrollment: null },
+    });
+    // What one of its hosts' lanes starts is admitted at that address.
+    const record = send(LANE, "from a host's lane", "from-host", {
+      kind: "sender",
+      senderId: "host-x",
+    });
+    const page = runtime.getInbox("s1", {});
+    expect(page.ok && page.value.messages.map((m) => m.taskId)).toEqual([record.taskId]);
+    expect(runtime.reannounce(LANE)).toBe(1);
+    expect(rewake).toHaveBeenCalledWith(
+      LANE,
+      expect.objectContaining({ taskId: record.taskId }),
+      expect.any(Function)
+    );
+    // Still never a sender: it writes to no Shell of its own.
+    expect(runtime.isSendAvailable("s1")).toBe(false);
+  });
+
+  it("refuses an open address with neither a host side nor hosts, or where messaging is unsupported", () => {
+    runLane("s1");
+    const refused = (): unknown => {
+      const { record } = store.create(SENDER, {
+        messageId: `refused-${++messageCounter}`,
+        contextId: "ctx",
+        referenceTaskIds: [],
+        receiver: openReceiverFor(LANE),
+        body: "hello",
+      });
+      try {
+        runtime.admit(record, { body: "hello", provenance: PROVENANCE });
+      } catch (error) {
+        return error;
+      }
+      return null;
+    };
+    newRuntime({ outbox: () => undefined, hasHosts: () => false });
+    expect(refused()).toMatchObject({ code: "NOT_ELIGIBLE" });
+    expect(runtime.resolveCaller("s1").ok).toBe(false);
+    // Nothing reached it, so nothing is owed either.
+    expect(runtime.reannounce(LANE)).toBe(0);
+
+    policy.dispose();
+    policy = new AssistantMessagingPolicy({
+      getRunningLaneSession: (projectId, slot) => running.get(laneKey({ projectId, slot })) ?? null,
+      getLiveGeneration: (terminalId) => launchGenerations.get(terminalId) ?? null,
+      isHostMessagingEnabled: () => true,
+      acceptsRemoteMessages: () => true,
+      onSessionEnded: () => () => {},
+      platform: "win32",
+    });
+    newRuntime({ outbox: () => undefined, hasHosts: () => true });
+    expect(refused()).toMatchObject({ code: "NOT_ELIGIBLE" });
   });
 
   it("takes nothing new on a run the person turned off or a machine that doesn't accept, but still answers", () => {
@@ -576,7 +642,7 @@ describe("AssistantMessagingRuntime", () => {
     expect(!result.ok && result.message).not.toContain("hi");
   });
 
-  describe("starting a message to the hub (#13338)", () => {
+  describe("starting a message to a Shell (#13338)", () => {
     const outbox = (): AssistantHostOutboxHandle & {
       enqueue: ReturnType<typeof vi.fn>;
       listSent: ReturnType<typeof vi.fn>;
@@ -637,7 +703,7 @@ describe("AssistantMessagingRuntime", () => {
       expect(handle.enqueue).toHaveBeenCalledWith(enrollment, { text: "landed" });
     });
 
-    it("is never available to the hub, a session that isn't the lane's, or without an outbox", () => {
+    it("is never available to a lane enrolled on this machine itself, a session that isn't the lane's, or without an outbox", () => {
       const handle = outbox();
       withOutbox(handle);
       running.set(laneKey(LANE), {
@@ -685,7 +751,7 @@ describe("AssistantMessagingRuntime", () => {
       expect(!refused.ok && refused.message).toMatch(/hop limit/);
     });
 
-    it("reads the lane's sent messages through view sent, and none for the hub", () => {
+    it("reads the lane's sent messages through view sent", () => {
       const handle = outbox();
       withOutbox(handle);
       runLane("s1");

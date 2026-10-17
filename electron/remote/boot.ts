@@ -265,15 +265,14 @@ function startClient(options: StartRemoteHostsOptions): void {
       hostForView: client.hostForView,
     })
   );
-  // Holds consent only; nothing reaches an assistant through it until a lane is
-  // enrolled, by the person or by this machine's saved default as a run starts.
+  // Holds consent only: this machine's setting, the pause, each run's own off,
+  // and which remote Shell a lane here writes to when it starts a message.
   teardowns.push(
     installAssistantMessagingPolicy({
       isHostMessagingEnabled: (hostId) =>
         client.registry.get(hostId)?.assistantMessagingEnabled === true,
       acceptsByDefault: () => getHelpAssistantSettings().acceptRemoteMessages,
       onDefaultChanged: (listener) => onHelpAssistantSettingsChanged(listener),
-      hasMessagingHost: () => client.registry.list().some((host) => host.assistantMessagingEnabled),
       hasHosts: () => client.registry.list().length > 0,
       onHostsChanged: (listener) => client.registry.onChange(listener),
       observeHosts: () =>
@@ -328,7 +327,7 @@ function startClient(options: StartRemoteHostsOptions): void {
           return envelope.data;
         },
       },
-      // An enrolled lane's inbox tools, and the hub's host tools, come and go with its enrollment.
+      // A lane's inbox tools, and its host tools, come and go with hosts and enrollment.
       onAvailabilityChanged: () => {
         void import("../services/McpServerService.js")
           .then(({ mcpServerService }) => mcpServerService.notifyAssistantMessagingChanged())
