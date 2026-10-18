@@ -2255,13 +2255,18 @@ export class PtyClient extends EventEmitter {
   }
 
   /**
-   * Whether the terminal main tracks under `id` backs the Daintree Assistant,
-   * from the stamp sealed onto its spawn options. Read locally so a write path
-   * can refuse the assistant without a host query, which resolves `null` on a
-   * timeout and would leave the answer unknown.
+   * Whether the terminal running under `id` backs the Daintree Assistant, from
+   * the stamp sealed onto its spawn options. Read locally so a write path can
+   * refuse the assistant without a host query, which resolves `null` on a
+   * timeout and would leave the answer unknown. While a duplicate spawn awaits
+   * the host's answer, the one it displaced is still running and still counts
+   * (see `getLiveGeneration`).
    */
   isAssistantTerminal(id: string): boolean {
-    return this.pendingSpawns.get(id)?.isAssistantTerminal === true;
+    return (
+      this.pendingSpawns.get(id)?.isAssistantTerminal === true ||
+      this.displacedSpawns.get(id)?.entry.isAssistantTerminal === true
+    );
   }
 
   /**

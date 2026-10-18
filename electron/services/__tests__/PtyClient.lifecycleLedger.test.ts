@@ -425,6 +425,22 @@ describe("PtyClient lifecycle ledger", () => {
       expect(client.getTerminalProjectId("t1")).toBe("p-live");
     });
 
+    it("keeps a running assistant's identity while an unstamped duplicate awaits the host", () => {
+      const client = createReadyClient();
+      client.spawn("t1", { ...baseOptions, isAssistantTerminal: true }); // generation 1
+      mockChild.emit("message", {
+        type: "spawn-result",
+        id: "t1",
+        result: { success: true, id: "t1", launchGeneration: 1 },
+      });
+
+      client.spawn("t1", baseOptions); // generation 2, a duplicate without the stamp
+      expect(client.isAssistantTerminal("t1")).toBe(true);
+
+      refuseAsLive(2);
+      expect(client.isAssistantTerminal("t1")).toBe(true);
+    });
+
     it("reports the running incarnation as live while a duplicate awaits the host", () => {
       const client = createReadyClient();
       client.spawn("t1", baseOptions); // generation 1
