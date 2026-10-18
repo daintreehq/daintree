@@ -109,8 +109,11 @@ export interface ViewlessPtyReader {
     terminals: ViewlessTerminalRecord[];
     degraded: boolean;
   }>;
-  /** A project's live terminals, ownership inferred where unstamped; no trash. */
-  getTerminalsForProjectAsync(projectId: string): Promise<string[]>;
+  /**
+   * A project's live terminals, ownership inferred where unstamped; no trash.
+   * `strict` rejects on a host that didn't answer, rather than resolving `[]`.
+   */
+  getTerminalsForProjectAsync(projectId: string, options?: { strict?: boolean }): Promise<string[]>;
   getSerializedStateAsync(
     id: string,
     options?: { tailRows: number }

@@ -141,7 +141,7 @@ async function readProjectPanelsReporting(
     // The per-project inventory infers ownership for a terminal spawned
     // without a project stamp, which a raw listing cannot; it leaves trash out.
     pty
-      ? pty.getTerminalsForProjectAsync(project.id).catch(() => {
+      ? pty.getTerminalsForProjectAsync(project.id, { strict: true }).catch(() => {
           complete = false;
           return [];
         })

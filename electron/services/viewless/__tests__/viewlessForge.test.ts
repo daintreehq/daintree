@@ -105,13 +105,19 @@ describe("forge reads with no frontend (#13501)", () => {
     expect(await read("/repo/packages/app")).toMatchObject({ ok: true });
     expect(await read("/repo/")).toMatchObject({ ok: true });
     expect(await read("/repo-wt/feature/src")).toMatchObject({ ok: true });
+    expect(await read("/repo/..cache/src")).toMatchObject({ ok: true });
     for (const outside of ["/repo/../etc", "/repo-other", "relative/path"]) {
       expect(await read(outside)).toMatchObject({ ok: false, error: { code: "VALIDATION_ERROR" } });
     }
     const cwds = invoke.mock.calls
       .filter(([, channel]) => channel === CHANNELS.FORGE_GET_PR)
       .map(([, , args]) => (args[0] as { cwd: string }).cwd);
-    expect(cwds).toEqual(["/repo/packages/app", "/repo/", "/repo-wt/feature/src"]);
+    expect(cwds).toEqual([
+      "/repo/packages/app",
+      "/repo/",
+      "/repo-wt/feature/src",
+      "/repo/..cache/src",
+    ]);
   });
 
   it("falls back to the worktree a view last made active", async () => {

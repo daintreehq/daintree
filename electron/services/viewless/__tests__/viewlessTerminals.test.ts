@@ -353,6 +353,23 @@ describe("terminal.getStatus with no frontend", () => {
       expect(readTerminalStatus).not.toHaveBeenCalled();
     });
 
+    it("refuses a fleet whose project inventory went unanswered", async () => {
+      const { deps, readTerminalStatus } = fleet();
+      const pty = deps.getPtyReader()!;
+      deps.getPtyReader = () => ({
+        ...pty,
+        getTerminalsForProjectAsync: async (_projectId, options) => {
+          if (options?.strict) throw new Error("shard didn't answer");
+          return [];
+        },
+      });
+
+      const result = await executeViewlessAction(request("terminal.getStatus", {}), deps);
+
+      expect(result).toMatchObject({ ok: false, error: { code: "EXECUTION_ERROR" } });
+      expect(readTerminalStatus).not.toHaveBeenCalled();
+    });
+
     it("reads a fleet larger than one status read takes in batches, in layout order", async () => {
       const records = Object.fromEntries(
         Array.from({ length: 300 }, (_, i) => [

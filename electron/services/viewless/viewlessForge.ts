@@ -1,4 +1,4 @@
-import { isAbsolute, relative, resolve } from "node:path";
+import { isAbsolute, relative, resolve, sep } from "node:path";
 import { z } from "zod";
 import { CHANNELS } from "../../ipc/channels.js";
 import type { ActionDispatchResult } from "../../../shared/types/actions.js";
@@ -74,7 +74,7 @@ async function resolveForgeCwd(
     const target = resolve(path);
     return roots.some((root) => {
       const rel = relative(resolve(root), target);
-      return rel === "" || (!rel.startsWith("..") && !isAbsolute(rel));
+      return rel === "" || (rel !== ".." && !rel.startsWith(`..${sep}`) && !isAbsolute(rel));
     });
   };
   if (args.worktreeId !== undefined) {
