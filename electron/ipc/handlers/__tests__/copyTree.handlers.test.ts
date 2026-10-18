@@ -481,7 +481,7 @@ describe("copyTree handlers", () => {
         },
         ptyClient: {
           hasTerminal: vi.fn(() => true),
-          getTerminalAsync: vi.fn(async (id: string) => ({ id })),
+          isAssistantTerminal: vi.fn(() => false),
           write: vi.fn(),
         },
         worktreeService: {
@@ -901,7 +901,7 @@ describe("file-backed generation", () => {
       },
       ptyClient: {
         hasTerminal: vi.fn(() => true),
-        getTerminalAsync: vi.fn(async (id: string) => ({ id })),
+        isAssistantTerminal: vi.fn(() => false),
         write: vi.fn(),
       },
       worktreeService: {
@@ -1567,7 +1567,11 @@ describe("copy-tree run history recording", () => {
    * run. `overrides` shapes what the host returns so a test can drive the
    * failure paths.
    */
-  let ptyWrite: ReturnType<typeof vi.fn>;
+  let ptyClient: {
+    hasTerminal: ReturnType<typeof vi.fn>;
+    isAssistantTerminal: ReturnType<typeof vi.fn>;
+    write: ReturnType<typeof vi.fn>;
+  };
 
   function makeService(
     overrides: Record<string, unknown> = {},
@@ -1594,17 +1598,17 @@ describe("copy-tree run history recording", () => {
 
     browserWindowMock.fromWebContents.mockReturnValue({ id: 7, isDestroyed: () => false });
     ipcMainMock.handle.mockClear();
-    ptyWrite = vi.fn();
+    ptyClient = {
+      hasTerminal: vi.fn(() => hasTerminal),
+      isAssistantTerminal: vi.fn(() => isAssistantTerminal),
+      write: vi.fn(),
+    };
     registerCopyTreeHandlers({
       mainWindow: {
         isDestroyed: () => false,
         webContents: { isDestroyed: () => false, send: vi.fn() },
       },
-      ptyClient: {
-        hasTerminal: vi.fn(() => hasTerminal),
-        getTerminalAsync: vi.fn(async (id: string) => ({ id, isAssistantTerminal })),
-        write: ptyWrite,
-      },
+      ptyClient,
       worktreeService: {
         getAllStatesForProjectAsync: vi.fn(async () => [
           { id: "wt-1", path: "/repos/daintree", branch: "main" },
@@ -1812,18 +1816,23 @@ describe("copy-tree run history recording", () => {
     });
 
     expect(result).toMatchObject({ fileCount: 0, error: expect.stringContaining("Assistant") });
+    expect(ptyClient.isAssistantTerminal).toHaveBeenCalledWith("t-assistant");
     expect(generateContext).not.toHaveBeenCalled();
-    expect(ptyWrite).not.toHaveBeenCalled();
+    expect(ptyClient.write).not.toHaveBeenCalled();
     expect(copyTreeHistoryMock.recordCopyTreeRun).not.toHaveBeenCalled();
   });
 
-  it("still injects into an ordinary terminal", async () => {
-    makeService();
+  it("releases the terminal after a refusal, so a later injection into it goes through", async () => {
+    makeService({}, true, true);
     const handler = getInvokeHandler(CHANNELS.COPYTREE_INJECT);
-
     await handler(mockSender, { terminalId: "t-1", worktreeId: "wt-1" });
 
-    expect(ptyWrite).toHaveBeenCalledWith("t-1", expect.any(String), expect.any(String));
+    ptyClient.isAssistantTerminal.mockReturnValue(false);
+    const result = await handler(mockSender, { terminalId: "t-1", worktreeId: "wt-1" });
+
+    expect(result).toMatchObject({ fileCount: 12 });
+    expect(result).not.toHaveProperty("error");
+    expect(ptyClient.write).toHaveBeenCalledWith("t-1", "<files/>", expect.any(String));
   });
 
   it("does not record a rejected payload", async () => {

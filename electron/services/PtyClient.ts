@@ -2255,6 +2255,16 @@ export class PtyClient extends EventEmitter {
   }
 
   /**
+   * Whether the terminal main tracks under `id` backs the Daintree Assistant,
+   * from the stamp sealed onto its spawn options. Read locally so a write path
+   * can refuse the assistant without a host query, which resolves `null` on a
+   * timeout and would leave the answer unknown.
+   */
+  isAssistantTerminal(id: string): boolean {
+    return this.pendingSpawns.get(id)?.isAssistantTerminal === true;
+  }
+
+  /**
    * Workspaces that currently own at least one tracked terminal (#12320).
    *
    * The open-window manifest needs this because a project's agents outlive its

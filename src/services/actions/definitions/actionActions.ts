@@ -14,6 +14,10 @@ export function registerActionActions(actions: ActionRegistry): void {
     // Read fresh on every invocation — closing over lastAction at registration
     // time would always capture null.
     nonRepeatable: true,
+    // The replay dispatches as "keybinding", so a plugin calling this would
+    // re-run the user's last action — a plugin-denied one such as
+    // `terminal.paste` included — past the gate that refuses it (#13494).
+    denyPluginDispatch: true,
     run: async () => {
       const last = actionService.getLastAction();
       if (!last) {

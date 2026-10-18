@@ -880,9 +880,13 @@ export function registerCopyTreeHandlers(deps: HandlerDependencies): () => void 
       // `terminal.inject`, `worktree.inject` and `copyTree.injectToTerminal` take
       // any panel id and are open to plugin dispatch with no capability, so
       // without this a plugin could type a codebase dump into the Daintree
-      // Assistant (#13494). A failed lookup still consults the fallback by id.
-      const target = await deps.ptyClient!.getTerminalAsync(validated.terminalId);
-      if (isAssistantTerminalRecord(target ?? { id: validated.terminalId })) {
+      // Assistant (#13494).
+      if (
+        isAssistantTerminalRecord({
+          id: validated.terminalId,
+          isAssistantTerminal: deps.ptyClient!.isAssistantTerminal(validated.terminalId),
+        })
+      ) {
         return {
           content: "",
           fileCount: 0,

@@ -667,4 +667,7 @@ export const DENY_PLUGIN_DISPATCH_ACTION_IDS = [
   "host.cancelTask",
   "host.startAssistant",
   "host.readQuota",
+  // Replays the user's last action as a keybinding, which would carry a plugin
+  // past every other entry in this list (#13494).
+  "action.repeatLast",
 ] as const satisfies readonly BuiltInRuntimeActionId[];

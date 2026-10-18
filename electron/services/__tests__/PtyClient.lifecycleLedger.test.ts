@@ -383,6 +383,16 @@ describe("PtyClient lifecycle ledger", () => {
     expect(entry?.spawnOk).toBeUndefined();
   });
 
+  it("reads whether a tracked terminal backs the assistant from its spawn stamp (#13494)", () => {
+    const client = createReadyClient();
+    client.spawn("t-assistant", { ...baseOptions, isAssistantTerminal: true });
+    client.spawn("t-grid", baseOptions);
+
+    expect(client.isAssistantTerminal("t-assistant")).toBe(true);
+    expect(client.isAssistantTerminal("t-grid")).toBe(false);
+    expect(client.isAssistantTerminal("t-unknown")).toBe(false);
+  });
+
   describe("a spawn refused because the id is still live (#11341, #12498)", () => {
     function refuseAsLive(launchGeneration: number) {
       mockChild.emit("message", {
