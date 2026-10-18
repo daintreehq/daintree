@@ -438,9 +438,7 @@ describe("recipeActions adversarial", () => {
     const run = setupActions();
     const result = (await run("recipe.list")) as { recipes: Array<{ id: string }> };
 
-    // Quietly (#13500): a listing relayed from another machine runs in whichever
-    // window drives the project, so nothing is promoted or raised there.
-    expect(loadRecipes).toHaveBeenCalledWith("p1", { quiet: true });
+    expect(loadRecipes).toHaveBeenCalledWith("p1");
     expect(result.recipes.map((r) => r.id)).toEqual(["inrepo-pair"]);
   });
 

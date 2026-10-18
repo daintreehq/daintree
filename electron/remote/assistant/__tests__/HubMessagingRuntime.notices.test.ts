@@ -237,6 +237,69 @@ describe("HubMessagingRuntime notices from hosts (#13500)", () => {
     expect(queued[0]!.wake.recheck()).toEqual({ kind: "ready" });
   });
 
+  it("holds a waiting notice while a later prompt's call is unanswered, and frees it if refused", async () => {
+    await runtime.call("a", LAUNCH, { tier: "core" });
+    runtime.receiveNotices("studio", { notices: [notice()] });
+    now += 1_000;
+    let answer!: (value: McpCallAnswer) => void;
+    relayCall.mockImplementationOnce(
+      () => new Promise<McpCallAnswer>((resolve) => (answer = resolve))
+    );
+    const prompt = runtime.call(
+      "a",
+      {
+        ...LAUNCH,
+        tool: "terminal.sendCommandOwned",
+        args: { terminalId: "host-t-1", command: "x" },
+      },
+      { tier: "core" }
+    );
+    await vi.waitFor(() => expect(answer).toBeTypeOf("function"));
+    expect(queued[0]!.wake.recheck()).toEqual({ kind: "held", reason: "prompt-pending" });
+
+    answer({ status: "refused", reason: "control-off" });
+    await prompt;
+    expect(queued[0]!.wake.recheck()).toEqual({ kind: "ready" });
+  });
+
+  it("leaves nothing stale when overlapping prompts to a terminal are both refused", async () => {
+    await runtime.call("a", LAUNCH, { tier: "core" });
+    runtime.receiveNotices("studio", { notices: [notice()] });
+    now += 1_000;
+    const answers: Array<(value: McpCallAnswer) => void> = [];
+    relayCall.mockImplementation(
+      () => new Promise<McpCallAnswer>((resolve) => answers.push(resolve))
+    );
+    const prompt = {
+      ...LAUNCH,
+      tool: "terminal.sendCommandOwned",
+      args: { terminalId: "host-t-1", command: "x" },
+    };
+    const first = runtime.call("a", prompt, { tier: "core" });
+    const second = runtime.call("a", prompt, { tier: "core" });
+    await vi.waitFor(() => expect(answers).toHaveLength(2));
+    answers[0]!({ status: "refused", reason: "control-off" });
+    answers[1]!({ status: "refused", reason: "control-off" });
+    await Promise.all([first, second]);
+    expect(queued[0]!.wake.recheck()).toEqual({ kind: "ready" });
+  });
+
+  it("lets a batch prompt to the terminal make a waiting notice stale", async () => {
+    await runtime.call("a", LAUNCH, { tier: "core" });
+    runtime.receiveNotices("studio", { notices: [notice()] });
+    now += 1_000;
+    await runtime.call(
+      "a",
+      {
+        ...LAUNCH,
+        tool: "terminal.sendCommandMany",
+        args: { sends: [{ terminalId: "host-t-1", command: "next" }] },
+      },
+      { tier: "core" }
+    );
+    expect(queued[0]!.wake.recheck()).toEqual({ kind: "unavailable", reason: "superseded" });
+  });
+
   it("holds its host's link while a recent call may still send a notice", async () => {
     expect(runtime.awaitsNotices("studio")).toBe(false);
     await runtime.call("a", LAUNCH, { tier: "core" });

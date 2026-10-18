@@ -217,15 +217,9 @@ interface RecipeState {
   /**
    * `background` marks a silent refresh of an already-loaded project (window
    * focus): it leaves `isLoading` alone and skips re-raising an unchanged
-   * collision notice. `quiet` reads what is on disk for a reader that must
-   * change nothing (#13500): nothing is promoted into the repo and no
-   * conflict is raised, and an already-loaded project refreshes in the
-   * background.
+   * collision notice.
    */
-  loadRecipes: (
-    projectId: string,
-    options?: { background?: boolean; quiet?: boolean }
-  ) => Promise<void>;
+  loadRecipes: (projectId: string, options?: { background?: boolean }) => Promise<void>;
   /** Replace the plugin tier wholesale from main's authoritative snapshot. */
   setPluginRecipes: (recipes: TerminalRecipe[]) => void;
   exportRecipeToFile: (id: string) => Promise<boolean>;
@@ -415,12 +409,11 @@ const createRecipeStore: StateCreator<RecipeState> = (set, get) => ({
     }));
   },
 
-  loadRecipes: async (projectId: string, options?: { background?: boolean; quiet?: boolean }) => {
+  loadRecipes: async (projectId: string, options?: { background?: boolean }) => {
     const requestId = ++loadRecipesRequestId;
     const previousProjectId = get().currentProjectId;
     const clearRecipes = previousProjectId && previousProjectId !== projectId;
-    const quiet = options?.quiet === true;
-    const background = (options?.background === true || quiet) && previousProjectId === projectId;
+    const background = options?.background === true && previousProjectId === projectId;
     if (!background) {
       set({
         isLoading: true,
@@ -446,10 +439,9 @@ const createRecipeStore: StateCreator<RecipeState> = (set, get) => ({
         // swallowed errors itself; keep loadRecipes resilient now that it does
         // not.
         globalRecipesClient.getRecipes().catch(() => [] as TerminalRecipe[]),
-        (quiet
-          ? projectClient.getRecipes(projectId, { reconcile: false })
-          : projectClient.getRecipes(projectId)
-        ).catch(() => ({ recipes: [] as TerminalRecipe[], collisions: [] })),
+        projectClient
+          .getRecipes(projectId)
+          .catch(() => ({ recipes: [] as TerminalRecipe[], collisions: [] })),
         projectClient.getInRepoRecipes(projectId).catch(() => [] as TerminalRecipe[]),
       ]);
       if (requestId !== loadRecipesRequestId || get().currentProjectId !== projectId) {
@@ -501,8 +493,6 @@ const createRecipeStore: StateCreator<RecipeState> = (set, get) => ({
       // priority, project-scoped supersede) instead of a console-only log:
       // it's a non-urgent, ignorable conflict whose fix (rename) lives in the
       // recipe manager, so the least-restricted surface is correct.
-      // A quiet read reconciled nothing, so it found no conflicts to remember either.
-      if (quiet) return;
       const collisions = projectRecipesResult.collisions;
       const collisionSignature = JSON.stringify(collisions);
       const collisionsUnchanged =

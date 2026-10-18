@@ -1185,6 +1185,9 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
       },
     },
     kind: "query",
+    mcpAnnotations: {
+      readOnlyHint: false,
+    },
     name: "recipe.list",
     requiresArgs: false,
     title: "List recipes",

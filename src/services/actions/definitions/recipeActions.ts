@@ -136,6 +136,11 @@ export function registerRecipeActions(actions: ActionRegistry, _callbacks: Actio
       kind: "query",
       danger: "safe",
       scope: "renderer",
+      // Listing reloads from disk, and main reconciles on the way: recipes are
+      // promoted into .daintree/recipes, and a name conflict is raised in the
+      // view it runs in. It is the write it is, so a call another machine's
+      // assistant relays runs only in its own Shell's driving view (#13500).
+      mcpAnnotations: { readOnlyHint: false },
       argsSchema: z
         .object({
           worktreeId: z
@@ -154,16 +159,13 @@ export function registerRecipeActions(actions: ActionRegistry, _callbacks: Actio
         const worktreeId = args?.worktreeId;
         // Read from disk first: a view can hold a store that never loaded this
         // project (a live run listed nothing while .daintree/recipes held one).
-        // Quietly (#13500): a listing promotes nothing into the repo and raises
-        // no conflict, since a call another machine's assistant relayed here
-        // runs in whichever window drives the project. Not while an editor is
-        // open, for the same reason the focus reload waits: a refreshed cache
-        // would let the open form save over disk.
+        // Not while an editor is open, for the same reason the focus reload
+        // waits: a refreshed cache would let the open form save over disk.
         const projectId = useProjectStore.getState().currentProject?.id;
         if (projectId && !useRecipeEditorActivityStore.getState().isOpen()) {
           await useRecipeStore
             .getState()
-            .loadRecipes(projectId, { quiet: true })
+            .loadRecipes(projectId)
             .catch(() => undefined);
         }
         const recipeState = useRecipeStore.getState();

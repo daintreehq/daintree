@@ -1560,4 +1560,11 @@ describe("main-process runners under the relay's drive rule (#13493)", () => {
       expect(def?.mcpAnnotations?.readOnlyHint, id).toBe(false);
     }
   });
+
+  it("never advertises recipe.list as read-only: its reload reconciles recipes into the repo (#13500)", async () => {
+    const { registry } = await createRegistryWithAudit();
+    const def = registry.get("recipe.list" as ActionId)?.();
+    expect(def?.kind).toBe("query");
+    expect(def?.mcpAnnotations?.readOnlyHint).toBe(false);
+  });
 });

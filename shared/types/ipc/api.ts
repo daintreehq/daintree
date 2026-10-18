@@ -788,8 +788,7 @@ export interface ElectronAPI extends GeneratedElectronAPI {
     /** Cancel an in-progress clone operation */
     cancelClone(opId?: string): Promise<void>;
     getRecipes(
-      projectId: string,
-      options?: { reconcile?: boolean }
+      projectId: string
     ): Promise<{ recipes: TerminalRecipe[]; collisions: RecipeNameCollision[] }>;
     saveRecipes(projectId: string, recipes: TerminalRecipe[]): Promise<void>;
     addRecipe(projectId: string, recipe: TerminalRecipe): Promise<void>;

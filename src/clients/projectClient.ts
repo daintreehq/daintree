@@ -340,12 +340,9 @@ export const projectClient = {
   },
 
   getRecipes: (
-    projectId: string,
-    options?: { reconcile?: boolean }
+    projectId: string
   ): Promise<{ recipes: TerminalRecipe[]; collisions: RecipeNameCollision[] }> => {
-    return options === undefined
-      ? window.electron.project.getRecipes(projectId)
-      : window.electron.project.getRecipes(projectId, options);
+    return window.electron.project.getRecipes(projectId);
   },
 
   saveRecipes: (projectId: string, recipes: TerminalRecipe[]): Promise<void> => {

@@ -3944,38 +3944,3 @@ describe("recipeStore", () => {
     });
   });
 });
-
-describe("loadRecipes quietly (#13500)", () => {
-  beforeEach(() => {
-    vi.clearAllMocks();
-    useRecipeStore.getState().reset();
-  });
-
-  it("reads what is on disk without reconciling, and raises no conflict", async () => {
-    getRecipesMock.mockResolvedValueOnce({
-      recipes: [
-        { id: "local-1", name: "Local", projectId: "project-1", terminals: [], createdAt: 1 },
-      ],
-      collisions: [{ droppedName: "Local", filename: "local.json" }],
-    });
-
-    await useRecipeStore.getState().loadRecipes("project-1", { quiet: true });
-
-    expect(getRecipesMock).toHaveBeenCalledWith("project-1", { reconcile: false });
-    expect(notifyMock).not.toHaveBeenCalled();
-    expect(useRecipeStore.getState().recipes.map((r) => r.id)).toEqual(["local-1"]);
-  });
-
-  it("refreshes a project already loaded in the background", async () => {
-    await useRecipeStore.getState().loadRecipes("project-1");
-    const pending = useRecipeStore.getState().loadRecipes("project-1", { quiet: true });
-    expect(useRecipeStore.getState().isLoading).toBe(false);
-    await pending;
-  });
-
-  it("leaves an ordinary load reconciling", async () => {
-    await useRecipeStore.getState().loadRecipes("project-1");
-    expect(getRecipesMock).toHaveBeenCalledWith("project-1");
-    expect(getRecipesMock.mock.calls[0]).toHaveLength(1);
-  });
-});

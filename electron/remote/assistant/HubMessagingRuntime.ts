@@ -150,8 +150,10 @@ const NOTICE_PIN_TTL_MS = 24 * 60 * 60_000;
 const NOTICE_LINK_HOLD_MS = 2 * 60 * 60_000;
 /** Notices already queued, remembered so a host's resend is typed once. */
 const MAX_SEEN_NOTICES = 1024;
-/** Host terminals whose last prompt from here is remembered, for superseding. */
+/** Host terminals whose recent prompts from here are remembered, for superseding. */
 const MAX_PROMPTED_TERMINALS = 512;
+/** Prompts remembered per host terminal, newest kept. */
+const MAX_PROMPTS_PER_TERMINAL = 8;
 
 /** A call that may arm notices on its host, and the run here that made it. */
 interface NoticePin {
@@ -166,9 +168,36 @@ function armsNotice(tool: string, args: Record<string, unknown>): boolean {
   return tool === TERMINAL_NOTIFY_WHEN_IDLE_TOOL || args.notify === true;
 }
 
-/** A prompt, or keys with `notify`, makes an undelivered notice about its target stale. */
-function supersedesNotice(tool: string, args: Record<string, unknown>): boolean {
-  return NOTIFY_PROMPT_TOOLS.has(tool) || (NOTIFY_KEY_TOOLS.has(tool) && args.notify === true);
+/** A prompt sent from here to a host terminal; until its call answers, it may not have run. */
+interface PromptMark {
+  at: number;
+  callId: string;
+  ran: boolean;
+}
+
+/** What a call settles as, once its host has answered or not. */
+interface NotedCall {
+  /** The host ran it, or may have. */
+  ran(): void;
+  /** The host is known not to have run it. */
+  notRun(): void;
+}
+
+const NOTHING_NOTED: NotedCall = { ran: () => {}, notRun: () => {} };
+
+/**
+ * The host terminals a prompt, or keys with `notify`, makes an undelivered
+ * notice about stale: typed after it, the notice would read as its answer.
+ */
+function promptTargets(tool: string, args: Record<string, unknown>): string[] {
+  if (tool === "terminal.sendCommandMany" && Array.isArray(args.sends)) {
+    return args.sends
+      .map((send) => (send as { terminalId?: unknown } | null)?.terminalId)
+      .filter((id): id is string => typeof id === "string");
+  }
+  const single =
+    NOTIFY_PROMPT_TOOLS.has(tool) || (NOTIFY_KEY_TOOLS.has(tool) && args.notify === true);
+  return single && typeof args.terminalId === "string" ? [args.terminalId] : [];
 }
 
 /** Insert as newest, dropping the oldest once the map holds more than `max`. */
@@ -585,8 +614,8 @@ export class HubMessagingRuntime implements HostMessagingRuntimeHandle {
   private readonly noticePins = new Map<string, NoticePin>();
   /** Notices already queued, by host and noticeId. */
   private readonly seenNotices = new Map<string, true>();
-  /** The last prompt sent from here to each host terminal, by host and terminal. */
-  private readonly prompted = new Map<string, { at: number; callId: string }>();
+  /** Recent prompts sent from here to each host terminal, by host and terminal. */
+  private readonly prompted = new Map<string, PromptMark[]>();
   private waits = 0;
   private disposed = false;
 
@@ -731,12 +760,15 @@ export class HubMessagingRuntime implements HostMessagingRuntimeHandle {
       return { kind: "unavailable", reason: "control-off" };
     }
     // Typed after a later prompt to the same terminal, it would read as that
-    // one's answer. A notice for the prompt itself is never stale by it.
-    const prompted = this.prompted.get(`${pin.hostId}\u0000${notice.terminalId}`);
-    if (prompted !== undefined && prompted.callId !== notice.callId && prompted.at > receivedAt) {
-      return { kind: "unavailable", reason: "superseded" };
+    // one's answer; it waits while that prompt's call is unanswered. A notice
+    // for the prompt itself is never stale by it.
+    let pending = false;
+    for (const mark of this.prompted.get(`${pin.hostId}\u0000${notice.terminalId}`) ?? []) {
+      if (mark.callId === notice.callId || mark.at <= receivedAt) continue;
+      if (mark.ran) return { kind: "unavailable", reason: "superseded" };
+      pending = true;
     }
-    return { kind: "ready" };
+    return pending ? { kind: "held", reason: "prompt-pending" } : { kind: "ready" };
   }
 
   private stillRunning(run: OpenRun): boolean {
@@ -753,7 +785,8 @@ export class HubMessagingRuntime implements HostMessagingRuntimeHandle {
    * A first send, noted before it goes out so a notice it arms can't arrive
    * ahead of its pin. A resend notes nothing: its first send was pinned to the
    * run that made it, and a run that replaced that one must not take it over.
-   * Returns how to take it back once the host is known not to have run it.
+   * A call the host is known not to have run is taken back: it armed
+   * nothing, and its prompt made nothing stale.
    */
   private noteCall(
     callId: string,
@@ -761,19 +794,23 @@ export class HubMessagingRuntime implements HostMessagingRuntimeHandle {
     run: OpenRun,
     tool: string,
     args: Record<string, unknown>
-  ): () => void {
-    const undo: Array<() => void> = [];
-    if (supersedesNotice(tool, args) && typeof args.terminalId === "string") {
-      const key = `${hostId}\u0000${args.terminalId}`;
-      const before = this.prompted.get(key);
-      remember(this.prompted, key, { at: this.now(), callId }, MAX_PROMPTED_TERMINALS);
-      undo.push(() => {
-        if (this.prompted.get(key)?.callId !== callId) return;
-        if (before === undefined) this.prompted.delete(key);
-        else this.prompted.set(key, before);
-      });
+  ): NotedCall {
+    const marks: PromptMark[] = [];
+    const keys: string[] = [];
+    for (const terminalId of new Set(promptTargets(tool, args))) {
+      const key = `${hostId}\u0000${terminalId}`;
+      const mark: PromptMark = { at: this.now(), callId, ran: false };
+      remember(
+        this.prompted,
+        key,
+        [...(this.prompted.get(key) ?? []), mark].slice(-MAX_PROMPTS_PER_TERMINAL),
+        MAX_PROMPTED_TERMINALS
+      );
+      marks.push(mark);
+      keys.push(key);
     }
-    if (armsNotice(tool, args)) {
+    const pinned = armsNotice(tool, args);
+    if (pinned) {
       const note =
         tool === TERMINAL_NOTIFY_WHEN_IDLE_TOOL && typeof args.note === "string"
           ? sanitizeNotifyNote(args.note)
@@ -784,10 +821,24 @@ export class HubMessagingRuntime implements HostMessagingRuntimeHandle {
         { hostId, run: { ...run }, armedAt: this.now(), ...(note !== undefined ? { note } : {}) },
         MAX_NOTICE_PINS
       );
-      undo.push(() => this.noticePins.delete(callId));
     }
-    return () => {
-      for (const step of undo) step();
+    let settled = false;
+    return {
+      ran: () => {
+        if (settled) return;
+        settled = true;
+        for (const mark of marks) mark.ran = true;
+      },
+      notRun: () => {
+        if (settled) return;
+        settled = true;
+        if (pinned) this.noticePins.delete(callId);
+        for (const key of keys) {
+          const left = (this.prompted.get(key) ?? []).filter((mark) => mark.callId !== callId);
+          if (left.length > 0) this.prompted.set(key, left);
+          else this.prompted.delete(key);
+        }
+      },
     };
   }
 
@@ -842,9 +893,8 @@ export class HubMessagingRuntime implements HostMessagingRuntimeHandle {
         args: toolArgs,
         runMs,
       };
-      // Taken back once the host is known not to have run a first send.
-      const unpin = resend
-        ? () => {}
+      const noted = resend
+        ? NOTHING_NOTED
         : this.noteCall(callId, args.hostId, caller, args.tool, toolArgs);
       this.callsOut.set(args.hostId, (this.callsOut.get(args.hostId) ?? 0) + 1);
       let answer: McpCallAnswer;
@@ -857,28 +907,34 @@ export class HubMessagingRuntime implements HostMessagingRuntimeHandle {
       } catch (error) {
         switch (codeOf(error)) {
           case "OUTCOME_UNKNOWN":
+            noted.ran();
             return { ...this.outcomeWith("ambiguous", CALL_AMBIGUOUS_DETAIL), ...sent };
           // Never written to the link: a first send is simply not sent.
           case "HOST_DISCONNECTED":
-            unpin();
+            noted.notRun();
             return resend
               ? { ...this.outcomeWith("disconnected", CALL_RESEND_DISCONNECTED_DETAIL), ...sent }
               : { ...this.outcomeWith("disconnected", CALL_NOT_SENT_DETAIL), ...unsent };
           case "RATE_LIMITED":
-            unpin();
+            noted.notRun();
             return { ...this.outcome("rate_limited", 1_000), ...unsent };
           case "UNSUPPORTED":
-            unpin();
+            noted.notRun();
             return { ...this.outcomeWith("unsupported", unsupportedCallDetail(host)), ...unsent };
           case "PERMISSION":
-            unpin();
+            noted.notRun();
             return {
               ...this.outcomeWith("policy_rejected", CALL_SENDER_REFUSED_DETAIL),
               ...unsent,
             };
           default:
-            if (error instanceof RefusalError) throw error;
+            // No client to send it with: nothing went out.
+            if (error instanceof RefusalError) {
+              noted.notRun();
+              throw error;
+            }
             // Sent, then something unreadable came back: it may have run.
+            noted.ran();
             console.warn("[HubMessaging] A relayed call ended without a known outcome:", error);
             return { ...this.outcomeWith("ambiguous", CALL_AMBIGUOUS_DETAIL), ...sent };
         }
@@ -888,15 +944,18 @@ export class HubMessagingRuntime implements HostMessagingRuntimeHandle {
         else this.callsOut.delete(args.hostId);
       }
       switch (answer.status) {
-        // A tool error may still have armed some of a batch before it failed.
+        // A tool error may still have run some of a batch before it failed.
         case "done":
+          noted.ran();
           return { ...this.ok(), callId, result: answer.result };
         case "unknown":
+          noted.ran();
           return { ...this.outcomeWith("expired", CALL_UNKNOWN_DETAIL), ...sent };
         case "conflict":
+          noted.ran();
           return { ...this.outcomeWith("conflict", CALL_CONFLICT_DETAIL), ...sent };
         case "refused": {
-          unpin();
+          noted.notRun();
           const { code, detail } = RELAY_REFUSAL_DETAILS[answer.reason];
           return { ...this.outcomeWith(code, detail), ...sent };
         }

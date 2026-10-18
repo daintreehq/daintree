@@ -60,20 +60,6 @@ describe("projectRecipes IPC adversarial", () => {
     cleanup();
   });
 
-  it("getRecipes reconciles the repo's recipes before reading, as the UI's loads expect", async () => {
-    projectStoreMock.getProjectById.mockReturnValueOnce({ id: "p1", path: "/repo" } as never);
-    await getHandler(CHANNELS.PROJECT_GET_RECIPES)(fakeEvent(), "p1");
-    expect(projectStoreMock.reconcileProjectRecipes).toHaveBeenCalledWith("/repo", "p1");
-    expect(projectStoreMock.getRecipes).toHaveBeenCalledWith("p1");
-  });
-
-  it("getRecipes with reconcile off reads without promoting anything into the repo (#13500)", async () => {
-    projectStoreMock.getProjectById.mockReturnValueOnce({ id: "p1", path: "/repo" } as never);
-    await getHandler(CHANNELS.PROJECT_GET_RECIPES)(fakeEvent(), "p1", { reconcile: false });
-    expect(projectStoreMock.reconcileProjectRecipes).not.toHaveBeenCalled();
-    expect(projectStoreMock.getRecipes).toHaveBeenCalledWith("p1");
-  });
-
   it("addRecipe rejects non-finite createdAt (NaN)", async () => {
     await expect(
       getHandler(CHANNELS.PROJECT_ADD_RECIPE)(fakeEvent(), {
