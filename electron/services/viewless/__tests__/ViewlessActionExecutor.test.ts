@@ -1,71 +1,13 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { CHANNELS } from "../../../ipc/channels.js";
-import type { Project, ProjectState } from "../../../../shared/types/project.js";
 import { MAX_ECHOED_COMMAND_CHARS } from "../../../../shared/utils/terminalSendCommandResult.js";
 import {
   executeViewlessAction,
   hasViewlessImplementation,
   type ViewlessDeps,
   type ViewlessPtyReader,
-  type ViewlessWorkspaceHosts,
 } from "../ViewlessActionExecutor.js";
-
-const PROJECT: Project = {
-  id: "proj-1",
-  path: "/repo",
-  name: "Repo",
-  emoji: "tree",
-  lastOpened: 0,
-} as Project;
-
-/**
- * An in-memory project state store that queues updates the way the real one
- * does, so "the next hydrate sees it" is a read of what was written.
- */
-function makeStateStore(initial: ProjectState | null = null) {
-  let state = initial;
-  return {
-    read: () => state,
-    getProjectState: vi.fn(async () => state),
-    enqueueProjectStateUpdate: vi.fn(
-      async (
-        _projectId: string,
-        updater: (
-          existing: ProjectState | null
-        ) => ProjectState | null | Promise<ProjectState | null>
-      ) => {
-        const next = await updater(state);
-        if (next !== null) state = next;
-      }
-    ),
-  };
-}
-
-function makeDeps(overrides: Partial<ViewlessDeps> = {}) {
-  const store = makeStateStore();
-  const invoke = vi.fn(async (_projectId: string, channel: string, args: unknown[]) => {
-    if (channel === CHANNELS.TERMINAL_SPAWN) return (args[0] as { id: string }).id;
-    if (channel === CHANNELS.WORKTREE_CREATE) {
-      return { worktreeId: "/repo-wt/feature", branch: "feature", setupState: "pending" };
-    }
-    return undefined;
-  });
-  const deps: ViewlessDeps = {
-    getProject: (id) => (id === PROJECT.id ? PROJECT : null),
-    getLaunchEnvLayers: async () => ({ global: {}, project: {} }),
-    getProjectState: store.getProjectState,
-    stateWriter: store,
-    getPtyReader: () => null,
-    getWorkspaceHosts: () => null,
-    invoke: invoke as ViewlessDeps["invoke"],
-    ...overrides,
-  };
-  return { deps, store, invoke };
-}
-
-function request(actionId: string, args: unknown, extra: { confirmed?: boolean } = {}) {
-  return { workspaceId: PROJECT.id, actionId, args, confirmed: extra.confirmed ?? false };
-}
+import { makeDeps, makeHosts, makeStateStore, PROJECT, request } from "./viewlessTestDeps.js";
 
 describe("viewless actions", () => {
   it("covers exactly the agent-facing actions", () => {
@@ -75,6 +17,66 @@ describe("viewless actions", () => {
     // Opens a palette: inherently a frontend's job.
     expect(hasViewlessImplementation("terminal.sendToAgent")).toBe(false);
     expect(hasViewlessImplementation("terminal.moveToDock")).toBe(false);
+  });
+
+  it("covers the loop an orchestrator drives with no window open", () => {
+    for (const id of [
+      "agent.launch",
+      "agent.listAvailable",
+      "terminal.list",
+      "terminal.getOutput",
+      "terminal.getStatus",
+      "terminal.close",
+      "terminal.interrupt",
+      "terminal.sendKeys",
+      "worktree.list",
+      "worktree.waitUntilReady",
+      "worktree.delete",
+      "project.getAll",
+      "project.detectRunners",
+    ]) {
+      expect(hasViewlessImplementation(id)).toBe(true);
+    }
+    // A composite with recipe terminals and preference reads stays a view's.
+    expect(hasViewlessImplementation("worktree.createWithRecipe")).toBe(false);
+  });
+
+  it("refuses an argument that raises a safe action to confirmation, unapproved", async () => {
+    const { deps, invoke } = makeDeps({ getWorkspaceHosts: () => makeHosts() });
+
+    const result = await executeViewlessAction(
+      request("worktree.create", { worktreeId: "/repo", options: {}, recipeId: "r-1" }),
+      deps
+    );
+
+    expect(result).toMatchObject({
+      ok: false,
+      error: { code: "CONFIRMATION_REQUIRED", details: { confirmationChannel: "unavailable" } },
+    });
+    expect(invoke).not.toHaveBeenCalled();
+  });
+
+  it("asks the caller's write check before a write, and never before a read", async () => {
+    const { deps, invoke } = makeDeps();
+    const assertCanWrite = vi.fn(async () => ({
+      ok: false as const,
+      error: { code: "EXECUTION_ERROR" as const, message: "Driven elsewhere" },
+    }));
+
+    const write = await executeViewlessAction(
+      { ...request("terminal.new", {}), assertCanWrite },
+      deps
+    );
+    const read = await executeViewlessAction(
+      { ...request("project.getAll", undefined), assertCanWrite },
+      deps
+    );
+
+    expect(write).toMatchObject({ ok: false, error: { message: "Driven elsewhere" } });
+    expect(assertCanWrite).toHaveBeenCalledTimes(1);
+    expect(assertCanWrite).toHaveBeenCalledWith(PROJECT.id, "terminal.new");
+    expect(read).toMatchObject({ ok: true });
+    expect(invoke).not.toHaveBeenCalledWith(PROJECT.id, CHANNELS.TERMINAL_SPAWN, expect.anything());
   });
 
   it("answers null for a workspace that is not a registered project", async () => {
@@ -281,6 +283,8 @@ describe("viewless actions", () => {
       pty = {
         getTerminalProjectId: vi.fn(() => PROJECT.id),
         getTerminalAsync: vi.fn(async () => ({ kind: "terminal", hasPty: true })),
+        getTerminalsForProjectAsync: vi.fn(async () => []),
+        getSerializedStateAsync: vi.fn(async () => null),
       };
     });
 
@@ -419,17 +423,6 @@ describe("viewless actions", () => {
   });
 
   describe("worktree.create", () => {
-    function makeHosts(loaded: boolean) {
-      return {
-        getHostForProject: vi.fn((_path: string): unknown => (loaded ? {} : undefined)),
-        prewarmProject: vi.fn((_path: string) => {}),
-        waitForReady: vi.fn(async () => {}),
-        isWorktreeOwnedByProject: vi.fn(
-          async (_id: string, _path: string, _projectId: string): Promise<boolean | null> => true
-        ),
-      } satisfies ViewlessWorkspaceHosts;
-    }
-
     const OPTIONS = { baseBranch: "main", newBranch: "feature", path: "/repo-wt/feature" };
 
     it("loads the project into a workspace host with no window, then creates", async () => {

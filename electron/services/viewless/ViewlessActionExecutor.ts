@@ -5,9 +5,15 @@ import { CHANNELS } from "../../ipc/channels.js";
 import type {
   ActionContext,
   ActionDispatchResult,
-  ActionErrorCode,
+  ActionDanger,
 } from "../../../shared/types/actions.js";
 import type { PanelSnapshot, Project, ProjectState } from "../../../shared/types/project.js";
+import type { AgentPreset } from "../../../shared/config/agentRegistry.js";
+import type { AgentSettings } from "../../../shared/types/agentSettings.js";
+import type { AgentAvailabilityState, AgentCliDetail } from "../../../shared/types/ipc/system.js";
+import type { AgentState, WaitingReason } from "../../../shared/types/agent.js";
+import type { TerminalStatusResult } from "../../../shared/types/terminalStatus.js";
+import { resolveEffectiveActionDanger } from "../../../shared/utils/effectiveActionDanger.js";
 import type { WorktreeCreateResult } from "../../../shared/types/worktree.js";
 import { getDefaultPanelTitle, panelKindHasPty } from "../../../shared/config/panelKindRegistry.js";
 import {
@@ -26,45 +32,66 @@ import {
 } from "../../../shared/utils/terminalLaunchOptions.js";
 import type { McpSessionOrigin } from "../../../shared/types/ipc/mcpServer.js";
 import { recordViewlessTerminal, type ProjectStateWriter } from "./projectStateAuthoring.js";
+import { VIEWLESS_ACTIONS } from "./viewlessActionCatalog.js";
+import {
+  viewlessFailure as failure,
+  viewlessValidationFailure as validationFailure,
+} from "./viewlessResult.js";
+import {
+  runTerminalClose,
+  runTerminalGetOutput,
+  runTerminalGetStatus,
+  runTerminalInterrupt,
+  runTerminalList,
+  runTerminalSendKeys,
+} from "./viewlessTerminals.js";
+import { runAgentLaunch, runAgentListAvailable } from "./viewlessAgents.js";
+import {
+  runWorktreeDelete,
+  runWorktreeList,
+  runWorktreeWaitUntilReady,
+} from "./viewlessWorktrees.js";
+import { runProjectDetectRunners, runProjectGetAll } from "./viewlessProjects.js";
 
 const TERMINAL_SEND_COMMAND_ACTION_ID = "terminal.sendCommand";
 const WORKTREE_CREATE_ACTION_ID = "worktree.create";
 
-/**
- * The actions the host can run itself when no frontend is attached to their
- * project: the ones agents use to keep working — open a terminal, submit to
- * one, make a worktree. Everything else is a question for a renderer, and is
- * refused as "no frontend attached" rather than guessed at.
- *
- * `terminal.sendCommandOwned` needs no entry: main delegates it to
- * `terminal.sendCommand` after its ownership check, and the delegate is what
- * reaches this executor.
- */
-export const VIEWLESS_ACTION_IDS: ReadonlySet<string> = new Set([
-  TERMINAL_LAUNCH_ACTION_ID,
-  TERMINAL_SEND_COMMAND_ACTION_ID,
-  WORKTREE_CREATE_ACTION_ID,
-]);
+export const VIEWLESS_ACTION_IDS: ReadonlySet<string> = new Set(Object.keys(VIEWLESS_ACTIONS));
 
 export function hasViewlessImplementation(actionId: string): boolean {
   return VIEWLESS_ACTION_IDS.has(actionId);
 }
 
+/** A pty-host terminal record, as much of it as the viewless actions read. */
+export interface ViewlessTerminalRecord {
+  id?: string;
+  kind?: string;
+  title?: string;
+  cwd?: string;
+  worktreeId?: string;
+  launchAgentId?: string;
+  detectedAgentId?: string;
+  agentState?: AgentState | string;
+  waitingReason?: WaitingReason;
+  everDetectedAgent?: boolean;
+  isTrashed?: boolean;
+  isExited?: boolean;
+  hasPty?: boolean;
+  isAssistantTerminal?: boolean;
+}
+
 /** The pty-host reads a viewless action needs, as `PtyClient` answers them. */
 export interface ViewlessPtyReader {
   getTerminalProjectId(id: string): string | null;
-  getTerminalAsync(id: string): Promise<{
-    kind?: string;
-    launchAgentId?: string;
-    detectedAgentId?: string;
-    agentState?: string;
-    everDetectedAgent?: boolean;
-    isTrashed?: boolean;
-    hasPty?: boolean;
-  } | null>;
+  getTerminalAsync(id: string): Promise<ViewlessTerminalRecord | null>;
+  getTerminalsForProjectAsync(projectId: string): Promise<string[]>;
+  getSerializedStateAsync(
+    id: string,
+    options?: { tailRows: number }
+  ): Promise<{ data: string; partial?: true } | null>;
 }
 
-/** The workspace-host calls a viewless worktree creation needs. */
+/** The workspace-host calls a viewless worktree action needs. */
 export interface ViewlessWorkspaceHosts {
   getHostForProject(projectPath: string): unknown;
   prewarmProject(projectPath: string): void;
@@ -82,6 +109,30 @@ export interface ViewlessLaunchEnvLayers {
   project: Record<string, string>;
 }
 
+/**
+ * Where a viewless agent launch reads what a view's launcher reads from its
+ * stores: the user's agent settings, discovered and repository presets, and
+ * the CLI probe. Each is the host-side source the view's store is fed from.
+ */
+export interface ViewlessAgentSources {
+  getSettings(): Promise<AgentSettings | null>;
+  getCcrPresets(agentId: string): Promise<AgentPreset[] | undefined>;
+  getProjectPresets(projectPath: string): Promise<Record<string, AgentPreset[]>>;
+  getCliDetail(agentId: string): Promise<AgentCliDetail | undefined>;
+  /** The probe's per-agent states, and whether a live probe has completed. */
+  getAvailability(): Promise<{
+    availability: Record<string, AgentAvailabilityState | undefined>;
+    live: boolean;
+  }>;
+}
+
+/** The host machine a viewless launch runs on. */
+export interface ViewlessHostPlatform {
+  shellDialect: "posix" | "windows";
+  tmpDir: string;
+  totalMemoryBytes: number;
+}
+
 export interface ViewlessDeps {
   getProject(projectId: string): Project | null;
   /** Global and project environment variables, as the renderer's launch reads them. */
@@ -91,6 +142,14 @@ export interface ViewlessDeps {
   getPtyReader(): ViewlessPtyReader | null;
   getWorkspaceHosts(): ViewlessWorkspaceHosts | null;
   invoke<T>(projectId: string, channel: string, args: unknown[]): Promise<T>;
+  /** One-way IPC, for what a view sends with `ipcRenderer.send`. */
+  send(projectId: string, channel: string, args: unknown[]): void;
+  agents: ViewlessAgentSources;
+  /** The pty-host `terminal.getStatus` answer main already serves with no view. */
+  readTerminalStatus(args: unknown, projectId: string): Promise<TerminalStatusResult>;
+  hostPlatform: ViewlessHostPlatform;
+  /** Pacing for key presses and readiness polls; real timers outside tests. */
+  sleep(ms: number): Promise<void>;
 }
 
 export interface ViewlessActionRequest {
@@ -108,17 +167,14 @@ export interface ViewlessActionRequest {
   context?: ActionContext;
   /** How the dispatching MCP session authenticated; decides the spawn's provenance. */
   sessionOrigin?: McpSessionOrigin;
-}
-
-function failure(code: ActionErrorCode, message: string, details?: unknown): ActionDispatchResult {
-  return { ok: false, error: { code, message, ...(details !== undefined ? { details } : {}) } };
-}
-
-function validationFailure(actionId: string, error: z.ZodError): ActionDispatchResult {
-  return failure(
-    "VALIDATION_ERROR",
-    `Invalid arguments for ${actionId}: ${z.prettifyError(error)}`
-  );
+  /**
+   * Checked before an action that writes runs. Absent, the call is the host's
+   * own and passes, as it always has: the drive lease was already consulted on
+   * the way here. A relayed call from another machine (#13493) supplies one
+   * that checks that machine's standing on the project, and a refusal it
+   * returns is the call's answer, unchanged.
+   */
+  assertCanWrite?: (projectId: string, actionId: string) => Promise<ActionDispatchResult | null>;
 }
 
 const TerminalNewArgsSchema = z
@@ -174,24 +230,6 @@ async function runTerminalNew(
 ): Promise<ActionDispatchResult> {
   const parsed = TerminalNewArgsSchema.safeParse(request.args);
   if (!parsed.success) return validationFailure(request.actionId, parsed.error);
-
-  // The same two arguments the renderer elevates to "confirm" for an agent
-  // dispatch, read by the same readers so the two can never disagree.
-  const launchArg =
-    readDispatchTerminalCommand(request.args) !== undefined
-      ? "command"
-      : readDispatchTerminalCwd(request.args) !== undefined
-        ? "cwd"
-        : undefined;
-  if (launchArg !== undefined && !request.confirmed) {
-    return failure(
-      "CONFIRMATION_REQUIRED",
-      `Action '${request.actionId}' was called with a '${launchArg}', so it would start a shell and ` +
-        `requires confirmation, but no Daintree frontend is attached to this project to ask. The ` +
-        `action was not run.`,
-      { confirmationChannel: "unavailable" }
-    );
-  }
 
   const { cwd: requestedCwd, command } = parsed.data ?? {};
   const state = await deps.getProjectState(project.id).catch(() => null);
@@ -396,6 +434,37 @@ async function runWorktreeCreate(
 }
 
 /**
+ * Whether a viewless call may run unattended. A `danger: "confirm"` action, and
+ * a safe one whose arguments raise it (a `terminal.new` with a command or cwd,
+ * any `recipeId`), runs only with an approval main already holds: with no
+ * frontend there is nobody to ask, so an unapproved one is refused rather than
+ * run. The same resolver the renderer's dispatch reads decides, so a call is
+ * never confirm-gated on one side and not the other.
+ */
+function admit(request: ViewlessActionRequest, danger: ActionDanger): ActionDispatchResult | null {
+  const effective = resolveEffectiveActionDanger(request.actionId, danger, "agent", request.args);
+  if (effective === "safe" || request.confirmed) return null;
+  const launchArg =
+    request.actionId === TERMINAL_LAUNCH_ACTION_ID
+      ? readDispatchTerminalCommand(request.args) !== undefined
+        ? "command"
+        : readDispatchTerminalCwd(request.args) !== undefined
+          ? "cwd"
+          : undefined
+      : undefined;
+  const why =
+    launchArg !== undefined
+      ? `was called with a '${launchArg}', so it would start a shell and requires confirmation`
+      : "requires confirmation";
+  return failure(
+    "CONFIRMATION_REQUIRED",
+    `Action '${request.actionId}' ${why}, but no Daintree frontend is attached to this project to ` +
+      `ask. The action was not run.`,
+    { confirmationChannel: "unavailable" }
+  );
+}
+
+/**
  * Run one agent-facing action in main for a project with no frontend attached.
  *
  * Resolves `null` when the host cannot act for this workspace on its own —
@@ -407,9 +476,20 @@ export async function executeViewlessAction(
   request: ViewlessActionRequest,
   deps: ViewlessDeps
 ): Promise<ActionDispatchResult | null> {
-  if (!hasViewlessImplementation(request.actionId)) return null;
+  const entry = Object.hasOwn(VIEWLESS_ACTIONS, request.actionId)
+    ? VIEWLESS_ACTIONS[request.actionId]
+    : undefined;
+  if (!entry) return null;
   const project = deps.getProject(request.workspaceId);
   if (!project) return null;
+
+  const refusal = admit(request, entry.danger);
+  if (refusal) return refusal;
+  if (entry.writes && request.assertCanWrite) {
+    const denied = await request.assertCanWrite(project.id, request.actionId);
+    if (denied) return denied;
+  }
+
   switch (request.actionId) {
     case TERMINAL_LAUNCH_ACTION_ID:
       return runTerminalNew(request, project, deps);
@@ -417,6 +497,32 @@ export async function executeViewlessAction(
       return runTerminalSendCommand(request, project, deps);
     case WORKTREE_CREATE_ACTION_ID:
       return runWorktreeCreate(request, project, deps);
+    case "terminal.list":
+      return runTerminalList(request, project, deps);
+    case "terminal.getOutput":
+      return runTerminalGetOutput(request, project, deps);
+    case "terminal.getStatus":
+      return runTerminalGetStatus(request, project, deps);
+    case "terminal.close":
+      return runTerminalClose(request, project, deps);
+    case "terminal.interrupt":
+      return runTerminalInterrupt(request, project, deps);
+    case "terminal.sendKeys":
+      return runTerminalSendKeys(request, project, deps);
+    case "agent.launch":
+      return runAgentLaunch(request, project, deps);
+    case "agent.listAvailable":
+      return runAgentListAvailable(request, project, deps);
+    case "worktree.list":
+      return runWorktreeList(request, project, deps);
+    case "worktree.waitUntilReady":
+      return runWorktreeWaitUntilReady(request, project, deps);
+    case "worktree.delete":
+      return runWorktreeDelete(request, project, deps);
+    case "project.getAll":
+      return runProjectGetAll(request, project, deps);
+    case "project.detectRunners":
+      return runProjectDetectRunners(request, project, deps);
     default:
       return null;
   }

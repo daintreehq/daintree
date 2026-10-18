@@ -42,3 +42,59 @@ export async function recordViewlessTerminal(
     return { ...state, terminals: [...terminals, snapshot] };
   });
 }
+
+function withoutKey<T>(
+  record: Record<string, T> | undefined,
+  key: string
+): Record<string, T> | undefined {
+  if (!record || !Object.hasOwn(record, key)) return record;
+  const { [key]: _removed, ...rest } = record;
+  return rest;
+}
+
+/**
+ * Take a panel a viewless action closed out of the saved layout, the way a
+ * view's own save drops a trashed panel: the next frontend to attach should
+ * not hydrate a panel the agent already closed. The process keeps its trash
+ * grace in the pty-host either way; this only changes what the layout says.
+ *
+ * Queued like the record above, and a no-op for a panel the layout never
+ * held, so a close racing a view's save can't resurrect or lose anything else.
+ */
+export async function forgetViewlessTerminal(
+  writer: ProjectStateWriter,
+  projectId: string,
+  terminalId: string
+): Promise<void> {
+  await writer.enqueueProjectStateUpdate(projectId, (existing) => {
+    if (!existing || !Array.isArray(existing.terminals)) return null;
+    if (!existing.terminals.some((terminal) => terminal.id === terminalId)) return null;
+    const tabGroups = existing.tabGroups
+      ?.map((group) => {
+        const panelIds = group.panelIds.filter((id) => id !== terminalId);
+        return {
+          ...group,
+          panelIds,
+          activeTabId:
+            group.activeTabId === terminalId
+              ? (panelIds[0] ?? group.activeTabId)
+              : group.activeTabId,
+        };
+      })
+      .filter((group) => group.panelIds.length > 0);
+    return {
+      ...existing,
+      terminals: existing.terminals.filter((terminal) => terminal.id !== terminalId),
+      ...(tabGroups !== undefined ? { tabGroups } : {}),
+      ...(existing.mruList !== undefined
+        ? { mruList: existing.mruList.filter((id) => id !== terminalId) }
+        : {}),
+      ...(existing.terminalSizes !== undefined
+        ? { terminalSizes: withoutKey(existing.terminalSizes, terminalId) }
+        : {}),
+      ...(existing.draftInputs !== undefined
+        ? { draftInputs: withoutKey(existing.draftInputs, terminalId) }
+        : {}),
+    };
+  });
+}
