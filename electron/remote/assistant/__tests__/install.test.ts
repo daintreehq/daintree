@@ -286,6 +286,24 @@ describe("installRetiredSendsNotice (#13496)", () => {
     off();
   });
 
+  it("waits out a held line, and tries again once it expires unsent", async () => {
+    journal("studio", "m-open", { state: "working" });
+    runLocally("proj-1", 0, "hub");
+    const off = installRetiredSendsNotice(sqlite, { hostName: names });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(queued).toHaveLength(1);
+
+    queued[0]!.wake.report({ kind: "held", reason: "driven-elsewhere" });
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(queued).toHaveLength(1);
+
+    queued[0]!.wake.report({ kind: "unavailable", reason: "expired" });
+    expect(journalled()).toBe(1);
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(queued).toHaveLength(2);
+    off();
+  });
+
   it("never tells an assistant no view here shows, or one a remote Shell's view runs", async () => {
     journal("studio", "m-open", { state: "working" });
     runLocally("proj-1", 0, "detached");

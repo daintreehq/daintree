@@ -353,12 +353,14 @@ export class TerminalInputController {
     }
 
     const admit =
-      guard === "settled-prompt"
+      guard !== undefined
         ? () =>
             !this.isInputLocked &&
             evaluateWakeGate(
               wakeGateSnapshot(this.host.terminalInfo),
-              wakeGateOptionsFor(this.host.terminalInfo.detectedAgentId)
+              guard === "settled-prompt-strict"
+                ? { acceptWorking: false }
+                : wakeGateOptionsFor(this.host.terminalInfo.detectedAgentId)
             ).kind === "ready"
         : undefined;
     this.host.writeQueue.submit(text, token, onPtyWritten, admit, imagePaths);

@@ -264,6 +264,17 @@ describe("HelpSessionService", () => {
     await fs.rm(tmpRoot, { recursive: true, force: true });
   });
 
+  it("hands the MCP server assistant control once, however often it's asked (#13496)", async () => {
+    mockMcpServerService.setAssistantControl.mockClear();
+    await Promise.all([service.ensureAssistantControl(), service.ensureAssistantControl()]);
+    await service.ensureAssistantControl();
+    expect(mockMcpServerService.setAssistantControl).toHaveBeenCalledTimes(1);
+    const [binding] = mockMcpServerService.setAssistantControl.mock.calls[0]! as [
+      { sessionProject(sessionId: string): string | null },
+    ];
+    expect(binding.sessionProject("no-such-session")).toBeNull();
+  });
+
   function provisionInput() {
     return {
       projectId: "proj-1",

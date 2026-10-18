@@ -1324,8 +1324,12 @@ export type TerminalSubmitStatusState = "slow" | "stalled" | "settled" | "failed
  * since it settled there (`evaluateWakeGate`), and abandons the trailing Enter
  * if input arrives between the body and the Enter. A refusal finalises the
  * submission `cancelled` with nothing written.
+ *
+ * `settled-prompt-strict` is the same check without mid-turn queueing, even
+ * for a CLI that queues input while it works: a brief one assistant sends
+ * another (#13496) is refused rather than taken in the middle of a turn.
  */
-export type TerminalSubmitGuard = "settled-prompt";
+export type TerminalSubmitGuard = "settled-prompt" | "settled-prompt-strict";
 
 export interface TerminalSubmitStatusPayload {
   id: string;

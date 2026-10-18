@@ -2385,7 +2385,7 @@ describe("lane wakes (#13333)", () => {
     await vi.advanceTimersByTimeAsync(MIN_NOTIFY_INTERVAL_MS + NOTIFY_COALESCE_MS);
     expect(h.client.submitted).toHaveLength(2);
     expect(h.client.submitted[1].text).toContain("t-a");
-    expect(h.client.submitted[1].text).not.toContain("task-1");
+    expect(h.client.submitted[1].text).not.toContain(RETIRED_LINE);
     expect(w.outcomes).toHaveLength(1);
   });
 
@@ -2551,7 +2551,7 @@ describe("lane wakes (#13333)", () => {
     expect(h.client.submitted).toEqual([]);
     expect(w.outcomes).toEqual([
       { kind: "held", reason: "driven-elsewhere" },
-      { kind: "held", reason: "expired" },
+      { kind: "unavailable", reason: "expired" },
     ]);
   });
 

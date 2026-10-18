@@ -2971,6 +2971,38 @@ export class HelpSessionService {
    */
   private mcpServerModule: Promise<typeof import("./McpServerService.js")> | null = null;
 
+  /**
+   * Hands the MCP server what one assistant addressing another needs (#13496),
+   * once, before any session that may name an assistant is admitted. A session
+   * reads it when it opens, so this runs at the server's start, at a help
+   * session's provision, and before a host opens a session for another
+   * machine's assistant, which can come before this process ran one of its own.
+   */
+  async ensureAssistantControl(): Promise<void> {
+    if (this.assistantControlWired) return;
+    const [
+      { mcpServerService },
+      { liveAssistantTerminalControl },
+      { extractReply },
+      { getPtyClient },
+    ] = await Promise.all([
+      this.loadMcpServerModule(),
+      import("./assistants/AssistantTerminalControl.js"),
+      import("./mcp-server/terminalNotify.js"),
+      import("../window/serviceRefs.js"),
+    ]);
+    if (this.assistantControlWired) return;
+    mcpServerService.setAssistantControl({
+      control: liveAssistantTerminalControl({
+        help: this,
+        pty: () => getPtyClient(),
+        extractReply,
+      }),
+      sessionProject: (sessionId) => this.getSessionLane(sessionId)?.projectId ?? null,
+    });
+    this.assistantControlWired = true;
+  }
+
   private loadMcpServerModule(): Promise<typeof import("./McpServerService.js")> {
     this.mcpServerModule ??= import("./McpServerService.js");
     return this.mcpServerModule;
@@ -3213,25 +3245,7 @@ export class HelpSessionService {
     mcpServerService.setHelpSessionTerminalResolver((sessionId) =>
       this.getTerminalIdForSession(sessionId)
     );
-    // One assistant addressing another (#13496), within the project each
-    // session's lane is in. Idempotent re-set.
-    if (!this.assistantControlWired) {
-      const [{ liveAssistantTerminalControl }, { extractReply }, { getPtyClient }] =
-        await Promise.all([
-          import("./assistants/AssistantTerminalControl.js"),
-          import("./mcp-server/terminalNotify.js"),
-          import("../window/serviceRefs.js"),
-        ]);
-      mcpServerService.setAssistantControl({
-        control: liveAssistantTerminalControl({
-          help: this,
-          pty: () => getPtyClient(),
-          extractReply,
-        }),
-        sessionProject: (sessionId) => this.getSessionLane(sessionId)?.projectId ?? null,
-      });
-      this.assistantControlWired = true;
-    }
+    await this.ensureAssistantControl();
     // Eager MCP-session teardown on revoke (#9151). Idempotent re-set.
     this.setOnMcpSessionRevoked((token, sessionId) =>
       mcpServerService.disconnectHelpBearer(token, sessionId)

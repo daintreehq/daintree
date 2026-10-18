@@ -170,8 +170,8 @@ const MAX_SWEEP_BATCHES = 20;
 /**
  * Wire sender authentication and the retired exchanges into a host server.
  * Whatever was still open when this build first ran is ended first, before a
- * Shell can read it, so it never reads as under way; the hourly sweep then
- * expires and purges the rest.
+ * Shell can read it, so it never reads as under way; each hourly pass ends
+ * anything a failed write left open, then expires and purges the rest.
  */
 export async function installAssistantSenderHost(
   server: MetricsSessionSource & {
@@ -188,14 +188,14 @@ export async function installAssistantSenderHost(
   const retired = sqlite ? new RetiredExchangeStore(sqlite) : undefined;
   let timer: ReturnType<typeof setInterval> | undefined;
   if (retired) {
-    try {
-      while (retired.retireOpen().hasMore) {
-        // Each batch ends what it read, so the next reads past it.
+    const maintain = (): void => {
+      try {
+        while (retired.retireOpen().hasMore) {
+          // Each batch ends what it read, so the next reads past it.
+        }
+      } catch (error) {
+        console.warn("[AssistantSenders] Couldn't end exchanges left open:", error);
       }
-    } catch (error) {
-      console.warn("[AssistantSenders] Couldn't end exchanges left open:", error);
-    }
-    const sweep = (): void => {
       try {
         for (let batch = 0; batch < MAX_SWEEP_BATCHES && retired.sweep().hasMore; batch++) {
           // Bounded: the next interval takes what's left.
@@ -204,8 +204,8 @@ export async function installAssistantSenderHost(
         console.warn("[AssistantSenders] Sweep failed:", error);
       }
     };
-    sweep();
-    timer = setInterval(sweep, SWEEP_INTERVAL_MS);
+    maintain();
+    timer = setInterval(maintain, SWEEP_INTERVAL_MS);
     timer.unref?.();
   }
   const senders = new SenderSessions();

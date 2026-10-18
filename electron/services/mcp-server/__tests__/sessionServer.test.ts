@@ -4624,6 +4624,7 @@ describe("one assistant addressing another (#13496)", () => {
     tier?: "core" | "full" | "external";
     relay?: boolean;
     refuseWrite?: { code: string; message: string } | null;
+    requestCloseApproval?: SessionServerDeps["requestCloseApproval"];
   }) {
     const store = fakeSessionStore(options.tier ?? "core");
     const mutable = store as unknown as {
@@ -4667,13 +4668,18 @@ describe("one assistant addressing another (#13496)", () => {
             "terminal.sendCommandOwned",
             "terminal.closeOwned",
             "terminal.close",
+            "terminal.closeMany",
             "terminal.interruptOwned",
             "terminal.readLastMessageOwned",
             "terminal.getStatus",
+            "terminal.getOutput",
             "terminal.waitUntilIdle",
             "terminal.list",
           ].map(makeManifestEntry)
         ),
+      ...(options.requestCloseApproval !== undefined
+        ? { requestCloseApproval: options.requestCloseApproval }
+        : {}),
       assistantControl: control as never,
       assistantCaller: () => options.caller,
       readCodexQuota: vi.fn(async () => ({
@@ -4834,6 +4840,8 @@ describe("one assistant addressing another (#13496)", () => {
     ["terminal.closeOwned", { terminalId: ASSISTANT_TERMINAL }],
     ["terminal.getStatus", { terminalIds: [ASSISTANT_TERMINAL] }],
     ["terminal.waitUntilIdle", { terminalId: ASSISTANT_TERMINAL }],
+    // Read off the pty-host by id, past any view's panels.
+    ["terminal.getOutput", { terminalId: ASSISTANT_TERMINAL }],
   ])("answers a worker pane naming an assistant in %s as no such terminal", async (name, args) => {
     const { deps, control } = assistantDeps({ caller: null, origin: "external", tier: "full" });
     const server = await serve(deps);
@@ -4844,6 +4852,22 @@ describe("one assistant addressing another (#13496)", () => {
     expect(control.close).not.toHaveBeenCalled();
     expect(deps.handleWaitUntilIdle).not.toHaveBeenCalled();
     expect(deps.handleTerminalGetStatusViewless).not.toHaveBeenCalled();
+    expect(deps.dispatchAction).not.toHaveBeenCalled();
+  });
+
+  it("closes an assistant in a closeMany without putting it to the person", async () => {
+    const requestCloseApproval = vi.fn();
+    const { deps, control } = assistantDeps({ caller: CALLER, requestCloseApproval });
+    const server = await serve(deps);
+    const result = await callTool(server, {
+      name: "terminal.closeMany",
+      arguments: { terminalIds: [ASSISTANT_TERMINAL] },
+    });
+    expect(requestCloseApproval).not.toHaveBeenCalled();
+    expect(control.close).toHaveBeenCalledWith(CALLER, TARGET);
+    expect(result.structuredContent).toMatchObject({
+      results: [{ target: ASSISTANT_TERMINAL, ok: true }],
+    });
     expect(deps.dispatchAction).not.toHaveBeenCalled();
   });
 

@@ -508,13 +508,16 @@ const ASSISTANT_INTERRUPT_TOOLS: ReadonlySet<string> = new Set([
 /**
  * The tools that watch or read named terminals, which already answer for an
  * assistant in the caller's project (#13496): only an assistant caller may
- * name one.
+ * name one. The output and info reads go to the pty-host by id, past any
+ * view's panels, so they are here too.
  */
 const ASSISTANT_WATCH_TOOLS: ReadonlySet<string> = new Set([
   TERMINAL_GET_STATUS_TOOL,
   TERMINAL_WAIT_UNTIL_IDLE_TOOL,
   TERMINAL_WAIT_UNTIL_IDLE_BATCH_TOOL,
   TERMINAL_NOTIFY_WHEN_IDLE_TOOL,
+  "terminal.getOutput",
+  "terminal.info.get",
 ]);
 
 /** Every terminal id a call's arguments name, by `terminalId` or `terminalIds`. */
@@ -3324,9 +3327,14 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
           // preference (#12989) nothing is asked and the batch is audited as
           // run under it; its items carry the same answer, never an approval.
           let closeApproved: ReadonlySet<string> | undefined;
+          // An assistant is never put to the person here: its own item
+          // checks who started it, and one this caller can't reach is
+          // answered as missing (#13496).
           const closeIds =
             actionId === "terminal.closeMany" && rendererOwnedOrigin
-              ? [...new Set((parsed.data as TerminalCloseManyArgs).terminalIds)]
+              ? [...new Set((parsed.data as TerminalCloseManyArgs).terminalIds)].filter(
+                  (id) => assistantControl?.isAssistantTerminal(id) !== true
+                )
               : [];
           const closeWouldAsk = (await Promise.all(closeIds.map(closeNeedsApproval))).some(Boolean);
           if (closeWouldAsk && confirmationsSkipped) {

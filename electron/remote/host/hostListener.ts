@@ -190,7 +190,13 @@ async function buildHostListener(
       deliverNotices,
       requestApproval,
     }) => {
-      const { mcpServerService } = await import("../../services/McpServerService.js");
+      const [{ mcpServerService }, { helpSessionService }] = await Promise.all([
+        import("../../services/McpServerService.js"),
+        import("../../services/HelpSessionService.js"),
+      ]);
+      // A host that hasn't run an assistant of its own still lists and starts
+      // its assistants for another machine's (#13496).
+      await helpSessionService.ensureAssistantControl();
       return mcpServerService.openRelaySession({
         tier,
         workspaceId: projectId,

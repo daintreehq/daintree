@@ -181,6 +181,33 @@ describe("TerminalProcess typed-input stamp and settled-prompt guard (#12491)", 
     expect(terminal.getSubmission("tok-1")).toMatchObject({ phase: "pty_written" });
   });
 
+  it("refuses a strict guarded submission mid-turn, even for a CLI that queues input (#13496)", async () => {
+    const terminal = createTerminal();
+    settleAtPrompt(terminal, Date.now() - 5_000);
+    Object.assign(info(terminal), { agentState: "working", lastStateChange: Date.now() - 1_000 });
+
+    terminal.submit("brief", "tok-1", undefined, "settled-prompt-strict");
+    await vi.advanceTimersByTimeAsync(3_000);
+
+    expect(ptyWriteMock).not.toHaveBeenCalled();
+    expect(terminal.getSubmission("tok-1")).toMatchObject({ phase: "cancelled" });
+  });
+
+  it("writes a strict guarded submission to a settled prompt, and refuses one behind the turn it started (#13496)", async () => {
+    const terminal = createTerminal();
+    settleAtPrompt(terminal, Date.now() - 5_000);
+
+    terminal.submit("first", "tok-1", undefined, "settled-prompt-strict");
+    // The first brief starts a turn before the second reaches the lane.
+    info(terminal).agentState = "working";
+    terminal.submit("second", "tok-2", undefined, "settled-prompt-strict");
+    await vi.advanceTimersByTimeAsync(3_000);
+
+    expect(ptyWriteMock.mock.calls.map((c) => c[0])).toEqual(["first", "\r"]);
+    expect(terminal.getSubmission("tok-1")).toMatchObject({ phase: "pty_written" });
+    expect(terminal.getSubmission("tok-2")).toMatchObject({ phase: "cancelled" });
+  });
+
   it("holds even a queueing CLI when something was typed since its turn began", async () => {
     const terminal = createTerminal();
     settleAtPrompt(terminal, Date.now() - 5_000);

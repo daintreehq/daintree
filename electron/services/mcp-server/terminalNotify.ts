@@ -1705,7 +1705,8 @@ export class TerminalNotifyService {
       if (entry.token !== undefined) continue;
       if (now >= entry.deadline) {
         owner.wakes.delete(id);
-        reportWake(entry.wake, { kind: "held", reason: "expired" });
+        // Ends it: whoever queued it may try again, and nothing else will.
+        reportWake(entry.wake, { kind: "unavailable", reason: "expired" });
         continue;
       }
       const check = recheckWake(entry.wake);

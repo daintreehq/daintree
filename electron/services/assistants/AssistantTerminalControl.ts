@@ -77,7 +77,7 @@ export interface AssistantTerminalControlDeps {
     terminalId: string,
     options?: { tailRows: number }
   ): Promise<{ data: string; partial?: true } | null>;
-  /** Under the settled-prompt guard, so the lane admits it only while the gate still holds. */
+  /** Under the strict settled-prompt guard, so the lane admits it only while the gate still holds. */
   submit(terminalId: string, text: string, submissionToken: string, handbackCode?: string): void;
   doubleEscape(terminalId: string): void;
   launch(request: AssistantLaunchRequest): Promise<AssistantLaunchResult>;
@@ -303,8 +303,9 @@ export class AssistantTerminalControl {
    * and no other, stamped with where it came from, and only while it waits at
    * its prompt with nothing typed there since it settled. Refused rather than
    * queued otherwise, so a person's draft is never sent along with it or
-   * interleaved with it, whichever machine asks. The settled-prompt guard
-   * closes the gap between that read and the write.
+   * interleaved with it, whichever machine asks. The strict settled-prompt
+   * guard closes the gap between that read and the write, mid-turn included,
+   * so a second brief sent alongside the first never lands in its turn.
    */
   async submit(
     caller: AssistantCaller,
@@ -501,7 +502,7 @@ export function liveAssistantTerminalControl(deps: {
     serializedState: (terminalId, options) =>
       deps.pty()?.getSerializedStateAsync(terminalId, options) ?? Promise.resolve(null),
     submit: (terminalId, text, submissionToken, handbackCode) =>
-      deps.pty()?.submit(terminalId, text, submissionToken, handbackCode, "settled-prompt"),
+      deps.pty()?.submit(terminalId, text, submissionToken, handbackCode, "settled-prompt-strict"),
     doubleEscape: (terminalId) => deps.pty()?.batchDoubleEscape([terminalId]),
     launch: async (request) => {
       const { liveAssistantLaunchDeps, startAssistantWithoutView } =
