@@ -289,7 +289,89 @@ describe("installHostMcpRelay", () => {
   });
 });
 
+describe("installHostMcpRelay races and retention", () => {
+  it("closes a session opened for a link that ended while its call was being admitted", async () => {
+    let admit!: (found: boolean) => void;
+    const { links, opened, relay, expire } = harness([["link-1", "sender-a"]], {
+      hasProject: () => new Promise<boolean>((resolve) => (admit = resolve)),
+    });
+    const call = links[0]!.call({ callId: "late" });
+    await vi.waitFor(() => expect(admit).toBeTypeOf("function"));
+    expire("link-1");
+    admit(true);
+
+    await expect(call).resolves.toMatchObject({ status: "done" });
+    expect(opened).toHaveLength(1);
+    expect(opened[0]!.closed).toBe(true);
+    relay.dispose();
+  });
+
+  it("leaves no unhandled rejection when a session still opening fails after teardown", async () => {
+    let fail!: (error: Error) => void;
+    const unhandled = vi.fn();
+    process.on("unhandledRejection", unhandled);
+    try {
+      const { links, relay } = harness([["link-1", "sender-a"]], {
+        openSession: () => new Promise<RelayMcpSession | null>((_, reject) => (fail = reject)),
+      });
+      const call = links[0]!.call({ callId: "c1" });
+      await vi.waitFor(() => expect(fail).toBeTypeOf("function"));
+      relay.dispose();
+      fail(new Error("server stopped"));
+
+      await expect(call).resolves.toEqual({ status: "refused", reason: "server-off" });
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      expect(unhandled).not.toHaveBeenCalled();
+    } finally {
+      process.off("unhandledRejection", unhandled);
+    }
+  });
+
+  it("retires a help session's hold here once unused for a day, never one with a session open", async () => {
+    vi.useFakeTimers();
+    let clock = 0;
+    const retirePrincipal = vi.fn();
+    const { links, relay } = harness([["link-1", "sender-a"]], {
+      now: () => clock,
+      idleMs: 60 * 60_000,
+      retirePrincipal,
+    });
+    await links[0]!.call({ callId: "c1", helpSessionId: "old" });
+    clock = 25 * 60 * 60_000;
+    await links[0]!.call({ callId: "c2", helpSessionId: "fresh" });
+    vi.advanceTimersByTime(60_000);
+
+    expect(retirePrincipal).toHaveBeenCalledWith("sender-a", "old");
+    expect(retirePrincipal).not.toHaveBeenCalledWith("sender-a", "fresh");
+    relay.dispose();
+  });
+
+  it("retires the least recent help sessions past a sender's bound", async () => {
+    const retirePrincipal = vi.fn();
+    const { links, opened, relay } = harness([["link-1", "sender-a"]], { retirePrincipal });
+    for (let i = 0; i < 65; i++) {
+      await links[0]!.call({ callId: `c${i}`, helpSessionId: `help-${i}` });
+      // Each closed once used, as the idle sweep would, so its hold may go.
+      opened.at(-1)!.close();
+    }
+
+    expect(retirePrincipal).toHaveBeenCalledTimes(1);
+    expect(retirePrincipal).toHaveBeenCalledWith("sender-a", "help-0");
+    relay.dispose();
+  });
+});
+
 describe("projectRelayResult", () => {
+  it("fits a cut result as it is carried, escaping and all", () => {
+    const escaping = '"\\\n'.repeat(MAX_RELAY_RESULT_BYTES);
+    const projected = projectRelayResult({ content: [{ type: "text", text: escaping }] });
+
+    expect(Buffer.byteLength(JSON.stringify(projected), "utf8")).toBeLessThanOrEqual(
+      MAX_RELAY_RESULT_BYTES
+    );
+    expect(projected.text).toMatch(/^\[The host's result was cut to fit/);
+  });
+
   it("carries the structured half when there is one, else the text", () => {
     expect(
       projectRelayResult({

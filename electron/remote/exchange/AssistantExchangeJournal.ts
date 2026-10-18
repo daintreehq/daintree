@@ -93,13 +93,16 @@ export class AssistantExchangeJournal {
    * credential only because older builds read it from there.
    */
   credential(hostId: string): string {
-    const credential = this.credentials.credential(hostId);
-    this.sqlite
-      .prepare(
-        "INSERT INTO assistant_exchange_hosts (host_id, sender_credential, cursor) VALUES (?, ?, 0) ON CONFLICT(host_id) DO NOTHING"
-      )
-      .run(hostId, credential);
-    return credential;
+    // One write, so the two never disagree on what this Shell presented.
+    return this.sqlite.transaction(() => {
+      const credential = this.credentials.credential(hostId);
+      this.sqlite
+        .prepare(
+          "INSERT INTO assistant_exchange_hosts (host_id, sender_credential, cursor) VALUES (?, ?, 0) ON CONFLICT(host_id) DO NOTHING"
+        )
+        .run(hostId, credential);
+      return credential;
+    })();
   }
 
   /** Null for a host this Shell never authenticated to. */

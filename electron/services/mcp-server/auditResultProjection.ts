@@ -525,13 +525,33 @@ function projectHostCallArgs(args: unknown): Record<string, unknown> {
     tool,
     callId: auditId(record?.callId),
   };
-  for (const [key, value] of Object.entries(projected ?? {})) {
-    out[`args.${key}`] =
+  for (const [key, value] of Object.entries(withoutWrittenText(projected ?? {}))) {
+    out[`args.${key}`] = value;
+  }
+  return out;
+}
+
+/** A projection with every string someone wrote kept to its length. */
+function withoutWrittenText(projected: Record<string, unknown>): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(projected)) {
+    out[key] =
       typeof value === "string" && RELAYED_TEXT_KEY_PATTERN.test(key)
         ? `<string: ${value.length} chars>`
         : value;
   }
   return out;
+}
+
+/**
+ * A tool's arguments as a host audits a call another machine's assistant ran
+ * here (#13493): the tool's own projection, and nothing anyone wrote, however
+ * short, since the words are that machine's to keep.
+ */
+export function projectRelayedAuditArgs(toolId: string, args: unknown): unknown {
+  const projected = projectAuditArgs(toolId, args);
+  const record = asRecord(projected);
+  return record === null ? projected : withoutWrittenText(record);
 }
 
 /** The arguments to summarize for `toolId`'s audit record and activity strip. */

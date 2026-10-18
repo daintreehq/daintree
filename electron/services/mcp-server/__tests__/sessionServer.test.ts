@@ -176,9 +176,8 @@ function fakeSessionStore(tier: "core" | "full" | "external" = "core"): SessionS
     resetHttpIdleTimer: vi.fn(),
     clearDedupState: vi.fn(),
     // The real predicate over this fixture's own maps.
-    hasLiveTransport(sessionId: string) {
-      return this.sessions.has(sessionId) || this.httpSessions.has(sessionId);
-    },
+    hasLiveTransport: (sessionId: string) =>
+      store.sessions.has(sessionId) || store.httpSessions.has(sessionId),
   } as unknown as SessionStore;
   return store;
 }

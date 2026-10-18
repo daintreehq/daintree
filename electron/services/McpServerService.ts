@@ -27,7 +27,11 @@ import type {
   TurnOutcomeClass,
 } from "../../shared/types/ipc/mcpServer.js";
 import { SessionStore } from "./mcp-server/sessionStore.js";
-import { helpOwnershipPrincipal, principalOwnerKey } from "./mcp-server/resourceOwnership.js";
+import {
+  helpOwnershipPrincipal,
+  principalOwnerKey,
+  relayOwnershipPrincipal,
+} from "./mcp-server/resourceOwnership.js";
 import type { TerminalAdoptionRecord } from "./mcp-server/terminalAdoption.js";
 import { isTierPermitted } from "./mcp-server/tierAuth.js";
 import type { OrchestratorPaneIdentity } from "./McpPaneConfigService.js";
@@ -374,7 +378,8 @@ export class McpServerService {
         handleWaitUntilIdleBatch(rawArgs, signal, options),
       handleSkillsSearch: (rawArgs) => handleSkillsSearch(rawArgs),
       handleSkillsLoad: (rawArgs) => handleSkillsLoad(rawArgs),
-      handleProjectRunCheck: (rawArgs, signal) => handleProjectRunCheck(rawArgs, signal),
+      handleProjectRunCheck: (rawArgs, signal, authorize) =>
+        handleProjectRunCheck(rawArgs, signal, authorize),
       handleProjectRunCommand: (rawArgs, signal) => handleProjectRunCommand(rawArgs, signal),
       handleTerminalGetStatusViewless: (rawArgs, workspaceId) =>
         handleTerminalGetStatusViewless(rawArgs, workspaceId),
@@ -1218,6 +1223,16 @@ export class McpServerService {
     ...args: Parameters<HttpLifecycle["openRelaySession"]>
   ): ReturnType<HttpLifecycle["openRelaySession"]> {
     return this.httpLifecycle.openRelaySession(...args);
+  }
+
+  /**
+   * Remote Hosts (#13493): another machine's assistant no longer holds what it
+   * made here. Its terminals and worktrees stay; only the authority goes.
+   */
+  retireRelayPrincipal(senderId: string, helpSessionId: string): void {
+    this.sessionStore.resourceOwnership.revokePrincipal(
+      relayOwnershipPrincipal(senderId, helpSessionId)
+    );
   }
 
   /** Remote Hosts: the action manifest of the local view that drives a host's project. */

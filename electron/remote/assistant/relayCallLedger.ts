@@ -102,6 +102,11 @@ export class RelayCallLedger<T> {
     return answer(outcome);
   }
 
+  /** Drops every caller's expired records, so a Shell that never calls again keeps none. */
+  sweep(): void {
+    for (const owner of [...this.owners.keys()]) this.prune(owner);
+  }
+
   /** Forgets everything; used when the host stops serving relayed calls. */
   clear(): void {
     this.owners.clear();

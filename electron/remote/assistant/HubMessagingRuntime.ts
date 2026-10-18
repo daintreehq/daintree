@@ -188,7 +188,7 @@ const CONTROL_OFF_DETAIL =
   "Assistant control is turned off for this host in this Shell's host settings. Only the person can turn it on.";
 const CALL_NO_HOST_DETAIL = "This Shell has no host with that id. List the hosts it knows.";
 const CALL_AMBIGUOUS_DETAIL =
-  "The call reached the host, but its answer was lost: it may have run. Resend it under this callId, which never runs it twice.";
+  "No answer came back, so the call may have reached the host and run. Resend it under this callId, which never runs it twice.";
 const CALL_NOT_SENT_DETAIL =
   "The host can't be reached right now, so nothing was sent. Try again once it is back.";
 const CALL_RESEND_DISCONNECTED_DETAIL =

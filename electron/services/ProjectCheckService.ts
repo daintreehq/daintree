@@ -90,7 +90,15 @@ export class ProjectCheckService {
    */
   async runCheck(
     args: ProjectCheckRunArgs,
-    options?: { signal?: AbortSignal }
+    options?: {
+      signal?: AbortSignal;
+      /**
+       * Asked once more right before the spawn, after every await: throws to
+       * refuse. A check relayed from another machine (#13493) may run only
+       * while that machine still drives the project.
+       */
+      authorize?: () => void;
+    }
   ): Promise<ProjectCheckRunResult> {
     if (this.disposed) {
       throw new ProjectCheckError("Daintree is shutting down; no new checks can start.");
@@ -140,6 +148,8 @@ export class ProjectCheckService {
     if (this.disposed) {
       throw new ProjectCheckError("Daintree is shutting down; no new checks can start.");
     }
+    // With no await between this and the spawn.
+    options?.authorize?.();
 
     const existing = this.active.get(cwd);
     if (existing) {

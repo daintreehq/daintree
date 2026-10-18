@@ -1037,7 +1037,9 @@ export interface SessionServerDeps extends OwnedMainExecutors {
    */
   handleProjectRunCheck: (
     rawArgs: unknown,
-    signal: AbortSignal
+    signal: AbortSignal,
+    /** Asked once more right before the spawn; throws to refuse (#13493). */
+    authorize?: () => void
   ) => Promise<import("../../../shared/types/projectCheck.js").ProjectCheckRunResult>;
   /**
    * Execute `project.runCommand` in the main process (#13495), for the same
@@ -1308,6 +1310,14 @@ function sessionGoneError(): McpError {
     SESSION_GONE_MESSAGE,
     buildMcpErrorPayload({ code: SESSION_GONE, message: SESSION_GONE_MESSAGE })
   );
+}
+
+/** A relayed write refused at its last check, just before its side effect (#13493). */
+class RelayWriteRefused extends Error {
+  constructor(readonly refusal: { code: string; message: string }) {
+    super(refusal.message);
+    this.name = "RelayWriteRefused";
+  }
 }
 
 export function createSessionServer(sessionId: string, deps: SessionServerDeps): Server {
@@ -3693,19 +3703,32 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
           // declares, so the strip shows a plain in-flight row.
           emitToolCallStarted(false);
           // A relayed check runs only where its session is bound, and only while
-          // the requesting Shell drives it there (#13493).
-          const relayRefusal = deps.relay?.refuseWrite(readStringArg(args, "projectId"));
-          if (relayRefusal) {
+          // the requesting Shell drives it there (#13493): asked now, and again
+          // right before the spawn, since the checks between can take a while.
+          const relay = deps.relay;
+          const checkProjectId = readStringArg(args, "projectId");
+          const refuseRelayed = (refusal: { code: string; message: string }) => {
             const auditCode =
-              relayRefusal.code === "VALIDATION_ERROR" ? "VALIDATION_ERROR" : "RESTRICTED";
+              refusal.code === "VALIDATION_ERROR" ? "VALIDATION_ERROR" : "RESTRICTED";
             outcome = {
               kind: "result",
-              value: { ok: false, error: { code: auditCode, message: relayRefusal.message } },
+              value: { ok: false, error: { code: auditCode, message: refusal.message } },
             };
-            return buildToolError(relayRefusal);
-          }
+            return buildToolError(refusal);
+          };
+          const relayRefusal = relay?.refuseWrite(checkProjectId);
+          if (relayRefusal) return refuseRelayed(relayRefusal);
           try {
-            const result = await handleProjectRunCheck(args, extra.signal);
+            const result = await handleProjectRunCheck(
+              args,
+              extra.signal,
+              relay
+                ? () => {
+                    const late = relay.refuseWrite(checkProjectId);
+                    if (late) throw new RelayWriteRefused(late);
+                  }
+                : undefined
+            );
             outcome = { kind: "result", value: { ok: true, result } };
             // A check can outlive the 15-min grant window, so mirror the main
             // path's post-dispatch grant refresh — otherwise a long suite
@@ -3727,6 +3750,7 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
               structuredContent: result as unknown as Record<string, unknown>,
             });
           } catch (err) {
+            if (err instanceof RelayWriteRefused) return refuseRelayed(err.refusal);
             outcome = { kind: "throw", error: err };
             if (err instanceof McpError) {
               throw err;

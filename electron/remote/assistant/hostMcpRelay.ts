@@ -47,6 +47,11 @@ export interface HostMcpRelayDeps {
   hasProject(projectId: string): Promise<boolean>;
   /** A session admitted through this host's own MCP gates; null while its MCP server is off. */
   openSession(spec: RelayMcpSessionSpec): Promise<RelayMcpSession | null>;
+  /**
+   * Ends a relay principal's hold on what it made here, once unused for long
+   * enough or crowded out; the terminals and worktrees themselves stay.
+   */
+  retirePrincipal?(senderId: string, helpSessionId: string): void;
   now?: () => number;
   /** How long an unused session stays open. */
   idleMs?: number;
@@ -58,9 +63,17 @@ export interface HostMcpRelaySource extends MetricsSessionSource {
 
 const RELAY_SESSION_IDLE_MS = 10 * 60_000;
 const SWEEP_INTERVAL_MS = 60_000;
+/** How long a Shell assistant's hold on what it made here outlasts its last call. */
+const RELAY_PRINCIPAL_RETENTION_MS = 24 * 60 * 60_000;
+/** Help sessions one Shell's sender holds things here for at once; the least recent go first. */
+const RELAY_PRINCIPALS_PER_SENDER = 64;
+/** Ended links remembered, for calls still being admitted when theirs went. */
+const MAX_EXPIRED_LINKS = 256;
 
 interface CachedSession {
   linkSessionId: string;
+  senderId: string;
+  helpSessionId: string;
   opening: Promise<RelayMcpSession | null>;
   session: RelayMcpSession | null;
   inFlight: number;
@@ -108,16 +121,22 @@ export function projectRelayResult(
       ? result.structuredContent
       : null;
   const projected = { isError, structured, text: structured ? null : textOf(result.content) };
-  const full = JSON.stringify(projected);
-  const fullBytes = Buffer.byteLength(full, "utf8");
+  const fullBytes = Buffer.byteLength(JSON.stringify(projected), "utf8");
   if (fullBytes <= MAX_RELAY_RESULT_BYTES) return projected;
   const body = structured ? JSON.stringify(structured) : (projected.text ?? "");
-  const shown = head(body, MAX_RELAY_RESULT_BYTES - 512);
-  return {
-    isError,
-    structured: null,
-    text: `[The host's result was cut to fit: ${Buffer.byteLength(shown, "utf8")} of ${fullBytes} bytes shown. The call ran; don't run it again to see the rest.]\n${shown}`,
-  };
+  // Measured as it is carried: escaping can grow text past what its raw bytes say.
+  let budget = MAX_RELAY_RESULT_BYTES - 512;
+  for (;;) {
+    const shown = head(body, budget);
+    const cut = {
+      isError,
+      structured: null,
+      text: `[The host's result was cut to fit: ${Buffer.byteLength(shown, "utf8")} of ${fullBytes} bytes shown. The call ran; don't run it again to see the rest.]\n${shown}`,
+    };
+    const size = Buffer.byteLength(JSON.stringify(cut), "utf8");
+    if (size <= MAX_RELAY_RESULT_BYTES || budget === 0) return cut;
+    budget = Math.max(0, budget - (size - MAX_RELAY_RESULT_BYTES) - 64);
+  }
 }
 
 /** A failure the host's MCP server raised rather than answered, as the tool error it reads like. */
@@ -152,15 +171,56 @@ export function installHostMcpRelay(
   const idleMs = deps.idleMs ?? RELAY_SESSION_IDLE_MS;
   const ledger = new RelayCallLedger<McpCallAnswer>({ now });
   const sessions = new Map<string, CachedSession>();
+  // Links that can't resume, for a call that was still being admitted when its link went.
+  const expiredLinks = new Set<string>();
+  // Each relay principal this host admitted, by sender then help session, with its last call.
+  const principals = new Map<string, Map<string, number>>();
+  // Running a call, still opening, or open: a closed one waiting to be swept holds nothing.
+  const principalInUse = (senderId: string, helpSessionId: string): boolean =>
+    [...sessions.values()].some(
+      (cached) =>
+        cached.senderId === senderId &&
+        cached.helpSessionId === helpSessionId &&
+        (cached.inFlight > 0 || cached.session === null || cached.session.isOpen())
+    );
+  const retire = (senderId: string, helpSessionId: string): void => {
+    const held = principals.get(senderId);
+    held?.delete(helpSessionId);
+    if (held?.size === 0) principals.delete(senderId);
+    try {
+      deps.retirePrincipal?.(senderId, helpSessionId);
+    } catch (error) {
+      console.warn("[HostMcpRelay] Couldn't retire a relay principal:", error);
+    }
+  };
+  const touchPrincipal = (senderId: string, helpSessionId: string): void => {
+    let held = principals.get(senderId);
+    if (!held) {
+      held = new Map();
+      principals.set(senderId, held);
+    }
+    held.delete(helpSessionId);
+    held.set(helpSessionId, now());
+    // Least recent first, in insertion order; one with a session open stays.
+    for (const other of [...held.keys()]) {
+      if (held.size <= RELAY_PRINCIPALS_PER_SENDER) break;
+      if (other !== helpSessionId && !principalInUse(senderId, other)) retire(senderId, other);
+    }
+  };
   const wired = new WeakSet<LinkSession>();
   let disposed = false;
 
   const closeCached = (key: string, cached: CachedSession): void => {
     if (sessions.get(key) === cached) sessions.delete(key);
     cached.session?.close();
-    void cached.opening.then((opened) => {
-      if (opened && opened !== cached.session) opened.close();
-    });
+    void cached.opening.then(
+      (opened) => {
+        if (opened && opened !== cached.session) opened.close();
+      },
+      () => {
+        // Nothing opened, so nothing to close.
+      }
+    );
   };
 
   const sessionFor = async (
@@ -181,6 +241,8 @@ export function installHostMcpRelay(
     if (!cached) {
       const entry: CachedSession = {
         linkSessionId: spec.linkSessionId,
+        senderId: spec.senderId,
+        helpSessionId: spec.helpSessionId,
         opening: deps.openSession(spec),
         session: null,
         inFlight: 0,
@@ -207,6 +269,11 @@ export function installHostMcpRelay(
     const opened = await cached.opening.catch(() => null);
     if (opened === null || !opened.isOpen()) return null;
     if (cached.session === null && sessions.get(key) === cached) cached.session = opened;
+    // Its link ended while this was being admitted: serve this call, then close.
+    if (expiredLinks.has(spec.linkSessionId)) {
+      if (sessions.get(key) === cached) sessions.delete(key);
+      cached.retired = true;
+    }
     return { cached, session: opened };
   };
 
@@ -218,6 +285,7 @@ export function installHostMcpRelay(
     if (!(await deps.hasProject(payload.projectId))) {
       return { status: "refused", reason: "no-project" };
     }
+    touchPrincipal(spec.senderId, spec.helpSessionId);
     const found = await sessionFor(spec);
     if (found === null) return { status: "refused", reason: "server-off" };
     const { cached, session } = found;
@@ -278,6 +346,15 @@ export function installHostMcpRelay(
     for (const [key, cached] of sessions) {
       if (cached.inFlight === 0 && cached.usedAt < cutoff) closeCached(key, cached);
     }
+    const stale = now() - RELAY_PRINCIPAL_RETENTION_MS;
+    for (const [senderId, held] of [...principals]) {
+      for (const [helpSessionId, usedAt] of [...held]) {
+        if (usedAt < stale && !principalInUse(senderId, helpSessionId)) {
+          retire(senderId, helpSessionId);
+        }
+      }
+    }
+    ledger.sweep();
   }, SWEEP_INTERVAL_MS);
   sweep.unref?.();
 
@@ -286,6 +363,10 @@ export function installHostMcpRelay(
   // A Shell that can't resume its link takes its sessions with it; a new one opens its
   // own. A call still running finishes first, so a resend can still read its answer.
   const offExpired = server.onSessionExpired(({ sessionId }) => {
+    expiredLinks.add(sessionId);
+    if (expiredLinks.size > MAX_EXPIRED_LINKS) {
+      expiredLinks.delete(expiredLinks.values().next().value!);
+    }
     for (const [key, cached] of [...sessions]) {
       if (cached.linkSessionId !== sessionId) continue;
       sessions.delete(key);

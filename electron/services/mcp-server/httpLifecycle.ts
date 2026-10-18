@@ -40,6 +40,7 @@ import {
   auditVerbatimArgKeys,
   projectAuditArgs,
   projectAuditResult,
+  projectRelayedAuditArgs,
 } from "./auditResultProjection.js";
 import { helpOwnershipPrincipal, relayOwnershipPrincipal } from "./resourceOwnership.js";
 import {
@@ -63,6 +64,7 @@ import type {
   McpTurnOutcomeAlertPayload,
 } from "../../../shared/types/ipc/mcpServer.js";
 import {
+  buildAnnotations,
   extractBearerToken,
   isAuthorized,
   precomputeApiKeyBearerHash,
@@ -235,7 +237,9 @@ export interface HttpLifecycleDeps {
   handleSkillsLoad: (rawArgs: unknown) => import("../../../shared/types/skills.js").SkillLoadResult;
   handleProjectRunCheck: (
     rawArgs: unknown,
-    signal: AbortSignal
+    signal: AbortSignal,
+    /** Asked once more right before the spawn; throws to refuse (#13493). */
+    authorize?: () => void
   ) => Promise<import("../../../shared/types/projectCheck.js").ProjectCheckRunResult>;
   handleProjectRunCommand: (
     rawArgs: unknown,
@@ -2171,13 +2175,18 @@ export class HttpLifecycle {
         // the payload is built the same way on all three routes rather than one
         // of them relying on a default that a later binding rule could falsify.
         // A relayed call names who asked (#13493): anything but a read goes only
-        // to that Shell's own driving view. A kind the cache can't say is a write.
+        // to that Shell's own driving view. A read is what the tool advertises as
+        // one, so a query that writes a file counts as the write it is, and one
+        // the cache can't describe is a write too.
+        const relayEntry = relay
+          ? getCachedManifest()?.find((entry) => entry.id === actionId)
+          : undefined;
         const relayOptions: WorkspaceDispatchOptions | undefined = relay
           ? {
               relay: {
                 linkSessionId: relay.linkSessionId,
                 readOnly:
-                  getCachedManifest()?.find((entry) => entry.id === actionId)?.kind === "query",
+                  relayEntry !== undefined && buildAnnotations(relayEntry).readOnlyHint === true,
               },
             }
           : undefined;
@@ -2548,9 +2557,12 @@ export class HttpLifecycle {
         // public field).
         const { capturedTurnId, relayCallId, ...recordInput } = input;
         const turnId = capturedTurnId ?? null;
-        const resultSummary = summarizeAuditOutcome(input.toolId, input.outcome, (s) =>
-          scrubSecrets(sanitizePath(s))
-        );
+        // A relayed call's output is the asking machine's to keep (#13493).
+        const resultSummary = relay
+          ? null
+          : summarizeAuditOutcome(input.toolId, input.outcome, (s) =>
+              scrubSecrets(sanitizePath(s))
+            );
         // `summarizeAuditOutcome` returns null for all gate outcomes by
         // contract — the wait-time hint for `rate_limited` reaches the audit
         // record through `resultMeta` instead, so the recent-calls popover
@@ -2565,7 +2577,9 @@ export class HttpLifecycle {
         this.deps.auditService.appendRecord({
           ...recordInput,
           argsSummary: summarizeMcpArgs(
-            projectAuditArgs(input.toolId, input.args),
+            relay
+              ? projectRelayedAuditArgs(input.toolId, input.args)
+              : projectAuditArgs(input.toolId, input.args),
             (s) => scrubSecrets(sanitizePath(s)),
             auditVerbatimArgKeys(input.toolId)
           ),

@@ -214,6 +214,32 @@ describe("a relayed session (#13493)", () => {
     expect(relay.deps.handleProjectRunCheck).toHaveBeenCalledTimes(1);
   });
 
+  it("asks once more right before a check spawns, refusing if its Shell lost control meanwhile", async () => {
+    const refuseWrite = vi.fn(() => null as { code: string; message: string } | null);
+    const handleProjectRunCheck = vi.fn(
+      async (_args: unknown, _signal: AbortSignal, authorize?: () => void) => {
+        // A takeover lands while the check resolves its runner.
+        refuseWrite.mockReturnValue({
+          code: "DRIVEN_ELSEWHERE",
+          message: "studio-02 has control of this project.",
+        });
+        authorize?.();
+        return { passed: true };
+      }
+    );
+    const relay = await relayed("full", {
+      relay: { shellName: "greg-mbp", refuseWrite },
+      handleProjectRunCheck: handleProjectRunCheck as never,
+    });
+
+    const result = await relay.client.callTool({
+      name: "project.runCheck",
+      arguments: { projectId: "project-1", runnerId: "test" },
+    });
+    expect(errorCode(result as { content: unknown })).toBe("DRIVEN_ELSEWHERE");
+    expect(refuseWrite).toHaveBeenCalledTimes(2);
+  });
+
   it("stamps the Shell's callId on this host's audit record of the call", async () => {
     const relay = await relayed("core");
     await relay.client.callTool({

@@ -70,16 +70,19 @@ describe("AssistantSenderCredentials (#13493)", () => {
     expect(minted).toBe(0);
   });
 
-  it("keeps its own credential over a different one the journal holds", () => {
+  it("takes the journal's credential where the two disagree: an older build presented it last", () => {
     const store = new AssistantSenderCredentials(sqlite, { newCredential: mint });
-    const own = store.credential("studio");
+    store.credential("studio");
+    // An older build forgot the host, then minted its own when it was added again.
     sqlite
       .prepare(
         "INSERT INTO assistant_exchange_hosts (host_id, sender_credential, cursor) VALUES (?, ?, 0)"
       )
-      .run("studio", "stale");
+      .run("studio", "minted-by-older-build");
 
-    expect(new AssistantSenderCredentials(sqlite).credential("studio")).toBe(own);
+    expect(new AssistantSenderCredentials(sqlite).credential("studio")).toBe(
+      "minted-by-older-build"
+    );
   });
 
   it("is what the journal authenticates with, and goes with a removed host", () => {

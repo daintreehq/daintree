@@ -58,8 +58,10 @@ export class AssistantSenderCredentials {
   }
 
   /**
-   * Every credential the journal holds that this store doesn't, on each start:
-   * a build from before the store, run in between, may have minted one since.
+   * Every credential the journal holds, on each start, over whatever this
+   * store has: this build only ever writes the journal the same credential it
+   * keeps here, so a different one there is what a build from before the store
+   * minted and presented since, after forgetting the host or before this ran.
    */
   private adoptJournalCredentials(): void {
     const journal = this.sqlite
@@ -70,7 +72,7 @@ export class AssistantSenderCredentials {
     if (!journal) return;
     this.sqlite
       .prepare(
-        "INSERT OR IGNORE INTO assistant_sender_credentials (host_id, sender_credential) SELECT host_id, sender_credential FROM assistant_exchange_hosts"
+        "INSERT INTO assistant_sender_credentials (host_id, sender_credential) SELECT host_id, sender_credential FROM assistant_exchange_hosts WHERE true ON CONFLICT(host_id) DO UPDATE SET sender_credential = excluded.sender_credential"
       )
       .run();
   }

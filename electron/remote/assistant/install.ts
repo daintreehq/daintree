@@ -646,9 +646,14 @@ export function installAssistantExchangeClient(
       })
     : () => {};
   client.start();
-  // Bounded by each exchange's expiry. Holding the link never keeps the host awake.
+  // Bounded by each exchange's expiry, and by each relayed call while it runs.
+  // Holding the link never keeps the host awake.
   const offUseCheck =
-    deps.addUseCheck?.((hostId) => journal.hasOpen(hostId, EXCHANGE_RETRY_WINDOW_MS)) ?? (() => {});
+    deps.addUseCheck?.(
+      (hostId) =>
+        journal.hasOpen(hostId, EXCHANGE_RETRY_WINDOW_MS) ||
+        getRemoteService("hostCallRelayClient")?.hasCallInFlight(hostId) === true
+    ) ?? (() => {});
   const unregister = registerRemoteService("assistantExchangeClient", client);
   return () => {
     disposed = true;

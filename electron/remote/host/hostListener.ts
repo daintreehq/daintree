@@ -190,6 +190,15 @@ async function buildHostListener(
         caller: { linkSessionId, senderId, helpSessionId, shellName },
       });
     },
+    retirePrincipal: (senderId, helpSessionId) => {
+      void import("../../services/McpServerService.js")
+        .then(({ mcpServerService }) =>
+          mcpServerService.retireRelayPrincipal(senderId, helpSessionId)
+        )
+        .catch((error: unknown) => {
+          console.warn("[RemoteHosts] Couldn't retire a relay principal:", error);
+        });
+    },
   });
   teardowns.push(() => relay.dispose());
 

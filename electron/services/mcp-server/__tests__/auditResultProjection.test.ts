@@ -3,6 +3,7 @@ import {
   auditVerbatimArgKeys,
   projectAuditArgs,
   projectAuditResult,
+  projectRelayedAuditArgs,
 } from "../auditResultProjection.js";
 import { summarizeMcpArgs, summarizeMcpResult } from "../../../../shared/utils/mcpArgsSummary.js";
 
@@ -581,6 +582,24 @@ describe("host.call audit projection (#13493)", () => {
         args: { tool: "agent.launch", args: { prompt: "nested" } },
       })
     ).toEqual({ hostId: "studio-01", projectId: null, tool: "host.call", callId: null });
+  });
+
+  it("keeps nothing anyone wrote when the host audits a call relayed to it, however short", () => {
+    const projected = projectRelayedAuditArgs("agent.launch", {
+      agentId: "claude",
+      prompt: "fix it",
+      notify: false,
+    });
+
+    expect(projected).toEqual({
+      agentId: "claude",
+      prompt: "<string: 6 chars>",
+      notify: false,
+    });
+    // A tool with a projection of its own keeps it.
+    expect(
+      projectRelayedAuditArgs("assistant.sendMessage", { contextId: CALL_ID, text: "secret" })
+    ).toEqual(projectAuditArgs("assistant.sendMessage", { contextId: CALL_ID, text: "secret" }));
   });
 
   it("records only the outcome, callId and whether the tool failed, never its result", () => {

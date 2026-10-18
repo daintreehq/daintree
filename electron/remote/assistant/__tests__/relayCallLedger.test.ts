@@ -126,6 +126,25 @@ describe("RelayCallLedger", () => {
     await expect(joined).resolves.toEqual({ status: "answered", value: "finished" });
   });
 
+  it("drops every caller's expired records on a sweep, so one that never calls again keeps none", async () => {
+    let clock = 0;
+    const ledger = new RelayCallLedger<string>({ now: () => clock, retentionMs: 1_000 });
+    const gate = deferred<string>();
+    await ledger.run("gone", "c1", "d1", false, async () => "a");
+    const running = ledger.run("busy", "c1", "d1", false, () => gate.promise);
+    clock = 5_000;
+    ledger.sweep();
+
+    await expect(ledger.run("gone", "c1", "d1", true, async () => "x")).resolves.toEqual({
+      status: "unknown",
+    });
+    // One still running is never swept.
+    const joined = ledger.run("busy", "c1", "d1", true, async () => "x");
+    gate.resolve("finished");
+    await expect(joined).resolves.toEqual({ status: "answered", value: "finished" });
+    await running;
+  });
+
   it("bounds settled records by their size", async () => {
     const ledger = new RelayCallLedger<string>({
       maxSettledBytes: 10,
