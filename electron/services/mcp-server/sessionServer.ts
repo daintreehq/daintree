@@ -1050,7 +1050,9 @@ export interface SessionServerDeps extends OwnedMainExecutors {
    */
   handleProjectRunCommand: (
     rawArgs: unknown,
-    signal: AbortSignal
+    signal: AbortSignal,
+    /** Asked once more right before the spawn; throws to refuse (#13493). */
+    authorize?: () => void
   ) => Promise<import("../../../shared/types/projectCommand.js").ProjectCommandRunResult>;
   /**
    * Read `terminal.getStatus` off the pty-host for one workspace, with no
@@ -3690,6 +3692,16 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
           }
         }
 
+        // A relayed write main makes itself answers with the drive rule's refusal (#13493).
+        const refuseRelayed = (refusal: { code: string; message: string }) => {
+          const auditCode = refusal.code === "VALIDATION_ERROR" ? "VALIDATION_ERROR" : "RESTRICTED";
+          outcome = {
+            kind: "result",
+            value: { ok: false, error: { code: auditCode, message: refusal.message } },
+          };
+          return buildToolError(refusal);
+        };
+
         // Short-circuit: project.runCheck runs entirely in the main process
         // (#11548). The action manifest entry (renderer) carries schema, tier,
         // and audit metadata, but execution must stay here because (a) it
@@ -3707,15 +3719,6 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
           // right before the spawn, since the checks between can take a while.
           const relay = deps.relay;
           const checkProjectId = readStringArg(args, "projectId");
-          const refuseRelayed = (refusal: { code: string; message: string }) => {
-            const auditCode =
-              refusal.code === "VALIDATION_ERROR" ? "VALIDATION_ERROR" : "RESTRICTED";
-            outcome = {
-              kind: "result",
-              value: { ok: false, error: { code: auditCode, message: refusal.message } },
-            };
-            return buildToolError(refusal);
-          };
           const relayRefusal = relay?.refuseWrite(checkProjectId);
           if (relayRefusal) return refuseRelayed(relayRefusal);
           try {
@@ -3772,10 +3775,13 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
         // into this branch can skip it. Never `danger: "confirm"`: the same
         // assistant already reaches a shell through `terminal.new` and
         // `terminal.sendCommand`. A call relayed from another machine
-        // (#13493) has to be lease-checked as a write before it gets here,
-        // since no IPC channel's lease policy covers it.
+        // (#13493) is a write under the drive rule, as a check is, since no
+        // IPC channel's lease policy covers it: asked now, and again right
+        // before the spawn.
         if (actionId === PROJECT_RUN_COMMAND_TOOL) {
           emitToolCallStarted(false);
+          const relay = deps.relay;
+          const commandProjectId = readStringArg(args, "projectId");
           try {
             if (!mayRunProjectCommand(tier, rendererOwnedOrigin)) {
               const message = PROJECT_RUN_COMMAND_REFUSAL;
@@ -3785,7 +3791,18 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
               };
               return buildToolError({ code: TIER_NOT_PERMITTED_CODE, message });
             }
-            const result = await handleProjectRunCommand(args, extra.signal);
+            const relayRefusal = relay?.refuseWrite(commandProjectId);
+            if (relayRefusal) return refuseRelayed(relayRefusal);
+            const result = await handleProjectRunCommand(
+              args,
+              extra.signal,
+              relay
+                ? () => {
+                    const late = relay.refuseWrite(commandProjectId);
+                    if (late) throw new RelayWriteRefused(late);
+                  }
+                : undefined
+            );
             outcome = { kind: "result", value: { ok: true, result } };
             // A command can outlive the grant window, as a check can.
             if (grantIssuedAt !== undefined || nativeGrantId !== undefined) {
@@ -3805,6 +3822,7 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
               structuredContent: result as unknown as Record<string, unknown>,
             });
           } catch (err) {
+            if (err instanceof RelayWriteRefused) return refuseRelayed(err.refusal);
             outcome = { kind: "throw", error: err };
             if (err instanceof McpError) {
               throw err;

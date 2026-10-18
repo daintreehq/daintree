@@ -95,7 +95,8 @@ function optionalTimeout(args: Record<string, unknown>): number | undefined {
 
 export async function handleProjectRunCommand(
   rawArgs: unknown,
-  signal?: AbortSignal
+  signal?: AbortSignal,
+  authorize?: () => void
 ): Promise<ProjectCommandRunResult> {
   const args = asArgsObject(rawArgs);
 
@@ -106,7 +107,7 @@ export async function handleProjectRunCommand(
       cwd: optionalCwd(args),
       timeoutMs: optionalTimeout(args),
     },
-    { signal }
+    authorize ? { signal, authorize } : { signal }
   );
 
   // A second cap behind the service's own, keeping the newest end as it does.

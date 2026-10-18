@@ -243,7 +243,9 @@ export interface HttpLifecycleDeps {
   ) => Promise<import("../../../shared/types/projectCheck.js").ProjectCheckRunResult>;
   handleProjectRunCommand: (
     rawArgs: unknown,
-    signal: AbortSignal
+    signal: AbortSignal,
+    /** Asked once more right before the spawn; throws to refuse (#13493). */
+    authorize?: () => void
   ) => Promise<import("../../../shared/types/projectCommand.js").ProjectCommandRunResult>;
   handleTerminalGetStatusViewless: (
     rawArgs: unknown,

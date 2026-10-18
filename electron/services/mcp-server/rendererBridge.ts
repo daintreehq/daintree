@@ -1334,6 +1334,13 @@ export function createRendererBridge(
       sessionOrigin,
       ...(options.contextOverride ? { context: options.contextOverride } : {}),
       ...(confirmed && options.authorization ? { authorization: options.authorization } : {}),
+      // A relayed change runs only in its Shell's own driving view (#13493),
+      // and a workspace with no frontend has none, whatever the tool advertised.
+      ...(options.relay
+        ? {
+            assertCanWrite: () => Promise.reject(new RelayDrivenElsewhereError(workspaceId, null)),
+          }
+        : {}),
     });
     if (result === null) throw new NoFrontendAttachedError(workspaceId, actionId);
     const dispatchedWorkspace = await describeViewlessWorkspace(workspaceId).catch(() => undefined);

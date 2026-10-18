@@ -35,6 +35,7 @@ const MANIFEST = [
   entry("terminal.list"),
   entry("agent.launch", "command"),
   entry("project.runCheck", "command"),
+  entry("project.runCommand", "command"),
   entry("host.switch", "command", "confirm"),
   entry("host.call", "command"),
   entry("help.displayImage", "command"),
@@ -238,6 +239,92 @@ describe("a relayed session (#13493)", () => {
     });
     expect(errorCode(result as { content: unknown })).toBe("DRIVEN_ELSEWHERE");
     expect(refuseWrite).toHaveBeenCalledTimes(2);
+  });
+
+  it("never lists or runs the command runner: a relayed session is not this machine's assistant", async () => {
+    const refuseWrite = vi.fn(() => null);
+    const relay = await relayed("full", { relay: { shellName: "greg-mbp", refuseWrite } });
+
+    const listed = (await relay.client.listTools()).tools.map((tool) => tool.name);
+    expect(listed).toContain("project.runCheck");
+    expect(listed).not.toContain("project.runCommand");
+
+    const result = await relay.client.callTool({
+      name: "project.runCommand",
+      arguments: { projectId: "project-1", command: "git status" },
+    });
+    expect(errorCode(result as { content: unknown })).toBe("TIER_NOT_PERMITTED");
+    expect(relay.deps.handleProjectRunCommand).not.toHaveBeenCalled();
+  });
+
+  // The runner answers only a renderer-owned origin (#13495), which a relayed
+  // session never has; these hold it to the drive rule regardless.
+  describe("the command runner, past its own caller gate", () => {
+    async function admitted(overrides: Partial<SessionServerDeps>) {
+      const relay = await relayed("full", overrides);
+      relay.store.sessionOriginMap.set("relay-session", "help");
+      return relay;
+    }
+
+    it("runs only where it is bound, and only while its Shell drives there", async () => {
+      const refuseWrite = vi.fn((projectId: string | undefined) =>
+        projectId === "elsewhere"
+          ? { code: "VALIDATION_ERROR", message: "This call can only act in project project-1." }
+          : { code: "DRIVEN_ELSEWHERE", message: "studio-02 has control of this project." }
+      );
+      const handleProjectRunCommand = vi.fn().mockResolvedValue({ exitCode: 0 });
+      const relay = await admitted({
+        relay: { shellName: "greg-mbp", refuseWrite },
+        handleProjectRunCommand,
+      });
+
+      const elsewhere = await relay.client.callTool({
+        name: "project.runCommand",
+        arguments: { projectId: "elsewhere", command: "git status" },
+      });
+      expect(errorCode(elsewhere as { content: unknown })).toBe("VALIDATION_ERROR");
+      const driven = await relay.client.callTool({
+        name: "project.runCommand",
+        arguments: { projectId: "project-1", command: "git status" },
+      });
+      expect(errorCode(driven as { content: unknown })).toBe("DRIVEN_ELSEWHERE");
+      expect(handleProjectRunCommand).not.toHaveBeenCalled();
+
+      refuseWrite.mockReturnValue(null as never);
+      const ran = await relay.client.callTool({
+        name: "project.runCommand",
+        arguments: { projectId: "project-1", command: "git status" },
+      });
+      expect(ran.isError).not.toBe(true);
+      expect(handleProjectRunCommand).toHaveBeenCalledTimes(1);
+      expect(typeof handleProjectRunCommand.mock.calls[0]?.[2]).toBe("function");
+    });
+
+    it("asks once more right before the spawn, refusing if its Shell lost control meanwhile", async () => {
+      const refuseWrite = vi.fn(() => null as { code: string; message: string } | null);
+      const handleProjectRunCommand = vi.fn(
+        async (_args: unknown, _signal: AbortSignal, authorize?: () => void) => {
+          // A takeover lands while the command resolves its project.
+          refuseWrite.mockReturnValue({
+            code: "DRIVEN_ELSEWHERE",
+            message: "studio-02 has control of this project.",
+          });
+          authorize?.();
+          return { exitCode: 0 };
+        }
+      );
+      const relay = await admitted({
+        relay: { shellName: "greg-mbp", refuseWrite },
+        handleProjectRunCommand: handleProjectRunCommand as never,
+      });
+
+      const result = await relay.client.callTool({
+        name: "project.runCommand",
+        arguments: { projectId: "project-1", command: "git status" },
+      });
+      expect(errorCode(result as { content: unknown })).toBe("DRIVEN_ELSEWHERE");
+      expect(refuseWrite).toHaveBeenCalledTimes(2);
+    });
   });
 
   it("stamps the Shell's callId on this host's audit record of the call", async () => {

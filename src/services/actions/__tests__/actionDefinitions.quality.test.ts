@@ -1546,3 +1546,18 @@ describe("ActionService.list() snapshot", () => {
     expect(entries).toMatchSnapshot();
   });
 });
+
+describe("main-process runners under the relay's drive rule (#13493)", () => {
+  // A relayed call to a renderer action is classed a read only by its
+  // advertised readOnlyHint; these run in main and are lease-checked as writes
+  // there. Neither may ever advertise itself as a read.
+  it("never advertises project.runCheck or project.runCommand as read-only", async () => {
+    const { registry } = await createRegistryWithAudit();
+    for (const id of ["project.runCheck", "project.runCommand"] as const) {
+      const def = registry.get(id as ActionId)?.();
+      expect(def, id).toBeDefined();
+      expect(def?.kind, id).not.toBe("query");
+      expect(def?.mcpAnnotations?.readOnlyHint, id).toBe(false);
+    }
+  });
+});

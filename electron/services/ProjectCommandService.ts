@@ -188,7 +188,15 @@ export class ProjectCommandService {
    */
   async run(
     args: ProjectCommandRunArgs,
-    options?: { signal?: AbortSignal }
+    options?: {
+      signal?: AbortSignal;
+      /**
+       * Asked once more right before the spawn, after every await: throws to
+       * refuse. A command relayed from another machine (#13493) may run only
+       * while that machine still drives the project.
+       */
+      authorize?: () => void;
+    }
   ): Promise<ProjectCommandRunResult> {
     this.assertOpen();
 
@@ -215,6 +223,8 @@ export class ProjectCommandService {
     // Re-checked after the awaits above: `dispose()` only aborts what is
     // already admitted, so a command must not spawn detached after it ran.
     this.assertOpen();
+    // With no await between this and the spawn.
+    options?.authorize?.();
     if (this.active.size >= PROJECT_COMMAND_MAX_CONCURRENT) {
       throw new ProjectCommandError(
         `${PROJECT_COMMAND_MAX_CONCURRENT} commands are already running on this host. Wait for one to finish before starting another.`

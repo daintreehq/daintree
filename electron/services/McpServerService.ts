@@ -380,7 +380,8 @@ export class McpServerService {
       handleSkillsLoad: (rawArgs) => handleSkillsLoad(rawArgs),
       handleProjectRunCheck: (rawArgs, signal, authorize) =>
         handleProjectRunCheck(rawArgs, signal, authorize),
-      handleProjectRunCommand: (rawArgs, signal) => handleProjectRunCommand(rawArgs, signal),
+      handleProjectRunCommand: (rawArgs, signal, authorize) =>
+        handleProjectRunCommand(rawArgs, signal, authorize),
       handleTerminalGetStatusViewless: (rawArgs, workspaceId) =>
         handleTerminalGetStatusViewless(rawArgs, workspaceId),
       handleTerminalReadLastMessageOwned: (terminalId, options, signal) =>

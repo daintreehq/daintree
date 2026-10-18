@@ -649,6 +649,28 @@ describe("rendererBridge — relayed calls (#13493)", () => {
     expect(viewless.runViewlessAction).not.toHaveBeenCalled();
   });
 
+  it("hands main's no-frontend run a write check that refuses, so a read that writes runs nothing", async () => {
+    setMcpDriveTargetResolver(() => ({ state: "vacant" }));
+    viewless.runViewlessAction.mockResolvedValue({ ok: true, result: { terminals: [] } });
+
+    await bridge.dispatchActionForWorkspace(
+      WORKSPACE,
+      "terminal.list",
+      {},
+      false,
+      "external",
+      read
+    );
+
+    const [request] = viewless.runViewlessAction.mock.calls[0] as [
+      { assertCanWrite?: (projectId: string, actionId: string) => Promise<unknown> },
+    ];
+    expect(request.assertCanWrite).toBeTypeOf("function");
+    const err = await request.assertCanWrite!(WORKSPACE, "terminal.new").catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(RelayDrivenElsewhereError);
+    expect((err as RelayDrivenElsewhereError).holderName).toBeNull();
+  });
+
   it("lets a read through wherever the project is driven", async () => {
     const other = ownEndpoint("shell-b");
     setMcpDriveTargetResolver(() => ({ state: "live", endpoint: other, holderName: "studio-02" }));
