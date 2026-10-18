@@ -24,8 +24,6 @@ function host(id: string, connection: HostConnectionState): HostListEntry {
       lastSeenAt: null,
       addedAt: 0,
       notificationsEnabled: false,
-      assistantMessagingEnabled: false,
-      assistantStartEnabled: false,
       assistantControlEnabled: false,
     },
     connection,

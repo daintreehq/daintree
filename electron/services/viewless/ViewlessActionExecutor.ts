@@ -3,6 +3,7 @@ import { isAbsolute } from "node:path";
 import { z } from "zod";
 import { CHANNELS } from "../../ipc/channels.js";
 import { CHANNEL_LEASE_POLICY } from "../../ipc/channelLeasePolicy.js";
+import { isAssistantTerminalRecord } from "../assistantTerminal.js";
 import type {
   ActionContext,
   ActionDispatchResult,
@@ -275,6 +276,7 @@ const TerminalSendCommandArgsSchema = z.object({
   terminalId: z.string().min(1).max(512),
   command: z.string().min(1),
   handback: z.boolean().optional(),
+  generation: z.number().int().min(0).optional(),
   notify: z.boolean().optional(),
   replyLines: NotifyReplyLinesSchema,
   waitForReply: WaitForReplySchema,
@@ -407,7 +409,11 @@ async function runTerminalSendCommand(
   // other project answers exactly as one that does not exist.
   const owner = pty.getTerminalProjectId(terminalId);
   const info = owner === project.id ? await pty.getTerminalAsync(terminalId) : null;
-  if (!info) return failure("EXECUTION_ERROR", "Terminal not found");
+  // An assistant is addressed only through main's assistant path (#13496),
+  // never as a pane here, so it answers as no terminal at all.
+  if (!info || isAssistantTerminalRecord({ ...info, id: terminalId })) {
+    return failure("EXECUTION_ERROR", "Terminal not found");
+  }
   if (info.isTrashed) {
     return failure("EXECUTION_ERROR", "Cannot send commands to trashed terminals");
   }

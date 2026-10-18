@@ -27,6 +27,11 @@ import type { McpSessionOrigin } from "../../../../shared/types/ipc/mcpServer.js
 import { SessionStore as RealSessionStore } from "../sessionStore.js";
 import { GrantCache } from "../grantCache.js";
 import { ResourceOwnershipLedger } from "../resourceOwnership.js";
+import {
+  AssistantTargetError,
+  type AssistantCaller,
+  type AssistantTarget,
+} from "../../assistants/AssistantTerminalControl.js";
 import type { AgentLastMessageResult } from "../../../../shared/types/agentLastMessage.js";
 import { encodeMessageCursor } from "../../claude/ClaudeMessageCursor.js";
 import {
@@ -4520,275 +4525,10 @@ describe("help.displayImage short-circuit (#9828)", () => {
   });
 });
 
-describe("assistant inbox tools (#13335)", () => {
-  const INBOX = {
-    messages: [
-      {
-        taskId: "task-1",
-        messageId: "msg-1",
-        contextId: "ctx",
-        state: "submitted" as const,
-        receivedAt: 1,
-        provenance: { sendingHost: "studio", sendingLane: "hub", hopCount: 1 },
-        bodyChars: 2,
-        untrustedBody: "fenced",
-      },
-    ],
-    cursor: 1,
-    hasMore: false,
-  };
-
-  function laneDeps(options: {
-    available: boolean;
-    sending?: boolean;
-    reachable?: boolean;
-    sendReachable?: boolean;
-    origin?: string;
-    helpSessionId?: string | null;
-    access?: boolean;
-  }) {
-    const store = fakeSessionStore("core");
-    const mutable = store as unknown as {
-      sessionHelpIdMap: Map<string, string>;
-      sessionOriginMap: Map<string, string>;
-    };
-    const helpSessionId = options.helpSessionId === undefined ? "help-1" : options.helpSessionId;
-    mutable.sessionHelpIdMap = new Map(helpSessionId !== null ? [["sess", helpSessionId]] : []);
-    mutable.sessionOriginMap.set("sess", options.origin ?? "help");
-    const access = {
-      isAvailable: vi.fn(() => options.available),
-      isSendAvailable: vi.fn(() => options.sending === true),
-      isReachable: vi.fn(() => options.reachable === true),
-      isSendReachable: vi.fn(() => options.sendReachable === true),
-      getInbox: vi.fn(() => ({ ok: true as const, value: INBOX })),
-      reply: vi.fn(() => ({
-        ok: true as const,
-        value: { taskId: "task-1", state: "completed" as const, revision: 4 },
-      })),
-      sendMessage: vi.fn(() => ({
-        ok: true as const,
-        value: {
-          messageId: "msg-9",
-          contextId: "msg-9",
-          hopCount: 1,
-          state: "waiting-for-hub" as const,
-        },
-      })),
-    };
-    const deps = fakeDeps({
-      sessionStore: store,
-      requestManifest: vi
-        .fn()
-        .mockResolvedValue([
-          makeManifestEntry("assistant.getInbox"),
-          makeManifestEntry("assistant.reply"),
-          makeManifestEntry("assistant.sendMessage"),
-          makeManifestEntry("terminal.list"),
-        ]),
-      ...(options.access === false ? {} : { assistantMessaging: access }),
-    });
-    return { deps, access };
-  }
-
-  it("lists the tools while the caller's own lane is enrolled, and not where it never could be", async () => {
-    const enrolled = laneDeps({ available: true });
-    const server = createSessionServer("sess", enrolled.deps);
-    await server.connect(makeMockTransport());
-    expect((await listTools(server)).tools.map((t) => t.name)).toEqual(
-      expect.arrayContaining(["assistant.getInbox", "assistant.reply"])
-    );
-
-    const idle = laneDeps({ available: false });
-    const idleServer = createSessionServer("sess", idle.deps);
-    await idleServer.connect(makeMockTransport());
-    const names = (await listTools(idleServer)).tools.map((t) => t.name);
-    expect(names).toContain("terminal.list");
-    expect(names).not.toContain("assistant.getInbox");
-    expect(names).not.toContain("assistant.reply");
-  });
-
-  it("lists them from the start where the lane could be enrolled, for clients that never re-list", async () => {
-    // Codex reads the tool list once; a lane is enrolled only after its assistant starts.
-    const { deps, access } = laneDeps({ available: false, reachable: true, sendReachable: true });
-    access.getInbox.mockReturnValue({
-      ok: false as never,
-      code: "NOT_ELIGIBLE" as never,
-      message: "not enrolled" as never,
-    } as never);
-    const server = createSessionServer("sess", deps);
-    await server.connect(makeMockTransport());
-    expect((await listTools(server)).tools.map((t) => t.name)).toEqual(
-      expect.arrayContaining(["assistant.getInbox", "assistant.reply", "assistant.sendMessage"])
-    );
-    // Offered is not admitted: the runtime still refuses until the lane is enrolled.
-    const refused = await callTool(server, { name: "assistant.getInbox", arguments: {} });
-    expect(refused.isError).toBe(true);
-    expect(access.getInbox).toHaveBeenCalled();
-    const send = await callTool(server, {
-      name: "assistant.sendMessage",
-      arguments: { text: "hello" },
-    });
-    expect(send.isError).toBe(true);
-    expect(access.sendMessage).not.toHaveBeenCalled();
-  });
-
-  it("offers sendMessage only to a lane a remote Shell enrolled, never the hub (#13338)", async () => {
-    const hub = laneDeps({ available: true, sending: false });
-    const hubServer = createSessionServer("sess", hub.deps);
-    await hubServer.connect(makeMockTransport());
-    const hubNames = (await listTools(hubServer)).tools.map((t) => t.name);
-    expect(hubNames).toContain("assistant.getInbox");
-    expect(hubNames).not.toContain("assistant.sendMessage");
-    // Withheld from the listing and refused at dispatch alike.
-    const refused = await callTool(hubServer, {
-      name: "assistant.sendMessage",
-      arguments: { text: "hello" },
-    });
-    expect(refused.isError).toBe(true);
-    expect(hub.access.sendMessage).not.toHaveBeenCalled();
-
-    const lane = laneDeps({ available: true, sending: true });
-    const laneServer = createSessionServer("sess", lane.deps);
-    await laneServer.connect(makeMockTransport());
-    expect((await listTools(laneServer)).tools.map((t) => t.name)).toContain(
-      "assistant.sendMessage"
-    );
-    const sent = await callTool(laneServer, {
-      name: "assistant.sendMessage",
-      arguments: { text: "migration landed", contextId: "ctx" },
-    });
-    expect(sent.isError).toBeFalsy();
-    expect(sent.structuredContent).toMatchObject({ messageId: "msg-9", state: "waiting-for-hub" });
-    expect(lane.access.sendMessage).toHaveBeenCalledWith({
-      text: "migration landed",
-      contextId: "ctx",
-    });
-    expect(lane.deps.dispatchAction).not.toHaveBeenCalled();
-  });
-
-  it("runs both in main against the caller's own lane", async () => {
-    const { deps, access } = laneDeps({ available: true });
-    const server = createSessionServer("sess", deps);
-    await server.connect(makeMockTransport());
-
-    const inbox = await callTool(server, { name: "assistant.getInbox", arguments: { limit: 2 } });
-    expect(inbox.isError).toBeFalsy();
-    expect(inbox.structuredContent).toEqual(INBOX);
-    expect(access.getInbox).toHaveBeenCalledWith({ limit: 2 });
-
-    const reply = await callTool(server, {
-      name: "assistant.reply",
-      arguments: { taskId: "task-1", state: "completed", text: "done" },
-    });
-    expect(reply.structuredContent).toEqual({ taskId: "task-1", state: "completed", revision: 4 });
-    expect(access.reply).toHaveBeenCalledWith({
-      taskId: "task-1",
-      state: "completed",
-      text: "done",
-    });
-    expect(deps.dispatchAction).not.toHaveBeenCalled();
-  });
-
-  it("answers with no view to reach, since nothing it does touches a renderer", async () => {
-    const { deps, access } = laneDeps({ available: true });
-    (deps.requestManifest as ReturnType<typeof vi.fn>).mockRejectedValue(new Error("no view"));
-    const server = createSessionServer("sess", deps);
-    await server.connect(makeMockTransport());
-
-    const result = await callTool(server, { name: "assistant.getInbox", arguments: {} });
-    expect(result.isError).toBeFalsy();
-    expect(access.getInbox).toHaveBeenCalled();
-    expect(deps.requestManifest).not.toHaveBeenCalled();
-    expect(deps.dispatchAction).not.toHaveBeenCalled();
-  });
-
-  it("refuses arguments outside the schema without echoing them", async () => {
-    const { deps, access } = laneDeps({ available: true });
-    const server = createSessionServer("sess", deps);
-    await server.connect(makeMockTransport());
-
-    const result = await callTool(server, {
-      name: "assistant.reply",
-      arguments: { taskId: "task-1", state: "maybe", text: "SECRET-SENTINEL" },
-    });
-    expect(result.isError).toBe(true);
-    expect(toolErrorPayload(result).code).toBe("INVALID_ARGS");
-    expect(JSON.stringify(result.content)).not.toContain("SECRET-SENTINEL");
-    expect(access.reply).not.toHaveBeenCalled();
-  });
-
-  it("refuses a session with no messaging access, whatever admitted it", async () => {
-    const { deps } = laneDeps({ available: true, access: false });
-    const server = createSessionServer("sess", deps);
-    await server.connect(makeMockTransport());
-
-    const result = await callTool(server, { name: "assistant.getInbox", arguments: {} });
-    expect(result.isError).toBe(true);
-    expect(toolErrorPayload(result).code).toBe("NOT_ELIGIBLE");
-    expect(deps.dispatchAction).not.toHaveBeenCalled();
-  });
-
-  it("neither lists nor runs them for a bearer with no help session, even with access wired", async () => {
-    // Renderer-owned, so the tier admits it; only the missing help session refuses.
-    const { deps, access } = laneDeps({ available: true, helpSessionId: null });
-    const server = createSessionServer("sess", deps);
-    await server.connect(makeMockTransport());
-
-    expect((await listTools(server)).tools.map((t) => t.name)).not.toContain("assistant.getInbox");
-    const result = await callTool(server, { name: "assistant.getInbox", arguments: {} });
-    expect(result.isError).toBe(true);
-    expect(toolErrorPayload(result).code).toBe("NOT_ELIGIBLE");
-    expect(access.getInbox).not.toHaveBeenCalled();
-  });
-
-  it("passes on a refusal's fixed code and words", async () => {
-    const { deps, access } = laneDeps({ available: true });
-    access.reply.mockReturnValueOnce({
-      ok: false,
-      code: "EXCHANGE_CLOSED",
-      message: "That exchange has already ended, so it takes no further answer.",
-    } as never);
-    const server = createSessionServer("sess", deps);
-    await server.connect(makeMockTransport());
-
-    const result = await callTool(server, {
-      name: "assistant.reply",
-      arguments: { taskId: "task-1", state: "completed", text: "late" },
-    });
-    expect(toolErrorPayload(result).code).toBe("EXCHANGE_CLOSED");
-    expect(deps.appendAuditRecord).toHaveBeenCalledWith(
-      expect.objectContaining({
-        toolId: "assistant.reply",
-        outcome: {
-          kind: "result",
-          value: {
-            ok: false,
-            error: expect.objectContaining({ code: "VALIDATION_ERROR" }),
-          },
-        },
-      })
-    );
-  });
-});
-
-describe("hub host-messaging tools (#13336)", () => {
+describe("host control tools (#13493)", () => {
   const LISTED = { hosts: [] };
-  const AMBIGUOUS = {
-    outcome: "ambiguous" as const,
-    detail: "may have arrived",
-    retryAfterMs: null,
-    taskId: "task-1",
-    contextId: "ctx",
-    task: null,
-    wait: "none" as const,
-  };
 
-  function hubDeps(options: {
-    available: boolean;
-    reachable?: boolean;
-    tier?: "core" | "full";
-    access?: boolean;
-  }) {
+  function hubDeps(options: { reachable: boolean; tier?: "core" | "full"; access?: boolean }) {
     const store = fakeSessionStore(options.tier ?? "core");
     const mutable = store as unknown as {
       sessionHelpIdMap: Map<string, string>;
@@ -4797,12 +4537,8 @@ describe("hub host-messaging tools (#13336)", () => {
     mutable.sessionHelpIdMap = new Map([["sess", "hub"]]);
     mutable.sessionOriginMap.set("sess", "help");
     const access = {
-      isAvailable: vi.fn(() => options.available),
-      isReachable: vi.fn(() => options.reachable === true),
-      run: vi.fn(async (toolId: string) => ({
-        ok: true as const,
-        value: toolId === "host.list" ? LISTED : AMBIGUOUS,
-      })),
+      isCallReachable: vi.fn(() => options.reachable),
+      run: vi.fn(async () => ({ ok: true as const, value: LISTED })),
     };
     const deps = fakeDeps({
       sessionStore: store,
@@ -4810,62 +4546,46 @@ describe("hub host-messaging tools (#13336)", () => {
         .fn()
         .mockResolvedValue([
           makeManifestEntry("host.list"),
-          makeManifestEntry("host.sendMessage"),
+          makeManifestEntry("host.call"),
           makeManifestEntry("terminal.list"),
         ]),
-      ...(options.access === false ? {} : { hostMessaging: access as never }),
+      ...(options.access === false ? {} : { hostControl: access as never }),
     });
     return { deps, access };
   }
 
-  it("lists them only to the hub, sends included, from the core tier up", async () => {
-    const core = hubDeps({ available: true });
-    const coreServer = createSessionServer("sess", core.deps);
-    await coreServer.connect(makeMockTransport());
-    expect((await listTools(coreServer)).tools.map((t) => t.name)).toEqual(
-      expect.arrayContaining(["host.list", "host.sendMessage"])
-    );
-
-    const full = hubDeps({ available: true, tier: "full" });
-    const fullServer = createSessionServer("sess", full.deps);
-    await fullServer.connect(makeMockTransport());
-    expect((await listTools(fullServer)).tools.map((t) => t.name)).toEqual(
-      expect.arrayContaining(["host.list", "host.sendMessage"])
-    );
-
-    const notHub = hubDeps({ available: false, tier: "full" });
-    const notHubServer = createSessionServer("sess", notHub.deps);
-    await notHubServer.connect(makeMockTransport());
-    const names = (await listTools(notHubServer)).tools.map((t) => t.name);
+  it("lists them to one of this machine's assistants, from the core tier up, and no one else", async () => {
+    for (const tier of ["core", "full"] as const) {
+      const { deps } = hubDeps({ reachable: true, tier });
+      const server = createSessionServer("sess", deps);
+      await server.connect(makeMockTransport());
+      expect((await listTools(server)).tools.map((t) => t.name)).toEqual(
+        expect.arrayContaining(["host.list", "host.call"])
+      );
+    }
+    const { deps } = hubDeps({ reachable: false, tier: "full" });
+    const server = createSessionServer("sess", deps);
+    await server.connect(makeMockTransport());
+    const names = (await listTools(server)).tools.map((t) => t.name);
     expect(names).toContain("terminal.list");
     expect(names).not.toContain("host.list");
-    expect(names).not.toContain("host.sendMessage");
+    expect(names).not.toContain("host.call");
   });
 
-  it("lists them from the start to a session that could become the hub while a host exists", async () => {
-    const { deps } = hubDeps({ available: false, reachable: true, tier: "full" });
-    const server = createSessionServer("sess", deps);
-    await server.connect(makeMockTransport());
-    expect((await listTools(server)).tools.map((t) => t.name)).toEqual(
-      expect.arrayContaining(["host.list", "host.sendMessage"])
-    );
-  });
-
-  it("runs in main and returns an ambiguous send as a result, never an error", async () => {
-    const { deps, access } = hubDeps({ available: true, tier: "full" });
+  it("runs host.list in main", async () => {
+    const { deps, access } = hubDeps({ reachable: true });
     const server = createSessionServer("sess", deps);
     await server.connect(makeMockTransport());
 
-    const args = { hostId: "studio", projectId: "p", slot: 0, generation: "g", text: "hi" };
-    const result = await callTool(server, { name: "host.sendMessage", arguments: args });
+    const result = await callTool(server, { name: "host.list", arguments: {} });
     expect(result.isError).toBeFalsy();
-    expect(result.structuredContent).toEqual(AMBIGUOUS);
-    expect(access.run).toHaveBeenCalledWith("host.sendMessage", args);
+    expect(result.structuredContent).toEqual(LISTED);
+    expect(access.run).toHaveBeenCalledWith("host.list", {});
     expect(deps.dispatchAction).not.toHaveBeenCalled();
   });
 
-  it("refuses a session with no hub access, whatever admitted it", async () => {
-    const { deps } = hubDeps({ available: true, access: false });
+  it("refuses a session with no host access, whatever admitted it", async () => {
+    const { deps } = hubDeps({ reachable: true, access: false });
     const server = createSessionServer("sess", deps);
     await server.connect(makeMockTransport());
 
@@ -4873,6 +4593,334 @@ describe("hub host-messaging tools (#13336)", () => {
     expect(result.isError).toBe(true);
     expect(toolErrorPayload(result).code).toBe("NOT_ELIGIBLE");
     expect(deps.dispatchAction).not.toHaveBeenCalled();
+  });
+});
+
+describe("one assistant addressing another (#13496)", () => {
+  const ASSISTANT_TERMINAL = "terminal-assistant";
+  const CALLER: AssistantCaller = {
+    kind: "local",
+    helpSessionId: "hub",
+    projectId: "proj-1",
+    machineName: "studio-01",
+  };
+  const TARGET: AssistantTarget = {
+    projectId: "proj-1",
+    slot: 1,
+    sessionId: "session-1",
+    terminalId: ASSISTANT_TERMINAL,
+    attached: true,
+  };
+  const LISTED = { projectId: "proj-1", assistants: [], vacantSlots: [2, 3] };
+  const RECEIPT = {
+    terminalId: ASSISTANT_TERMINAL,
+    submissionToken: "tok-1",
+    command: "Run the suite",
+  };
+
+  function assistantDeps(options: {
+    caller: AssistantCaller | null;
+    origin?: string;
+    tier?: "core" | "full" | "external";
+    relay?: boolean;
+    refuseWrite?: { code: string; message: string } | null;
+    requestCloseApproval?: SessionServerDeps["requestCloseApproval"];
+  }) {
+    const store = fakeSessionStore(options.tier ?? "core");
+    const mutable = store as unknown as {
+      sessionHelpIdMap: Map<string, string>;
+      sessionOriginMap: Map<string, string>;
+    };
+    mutable.sessionHelpIdMap = new Map([["sess", "hub"]]);
+    mutable.sessionOriginMap.set("sess", options.origin ?? "help");
+    const control = {
+      isAssistantTerminal: vi.fn((terminalId: string) => terminalId === ASSISTANT_TERMINAL),
+      resolve: vi.fn((_caller: AssistantCaller, terminalId: string) =>
+        terminalId === ASSISTANT_TERMINAL ? TARGET : null
+      ),
+      list: vi.fn(async () => LISTED),
+      start: vi.fn(async () => ({ assistant: {}, ready: true, notReadyReason: null })),
+      submit: vi.fn(async () => RECEIPT),
+      interrupt: vi.fn(async () => ({
+        terminalId: ASSISTANT_TERMINAL,
+        agentId: "codex",
+        agentStateAtDispatch: "working",
+        status: "requested" as const,
+      })),
+      close: vi.fn(async () => ({ closedIds: [ASSISTANT_TERMINAL] })),
+      readReply: vi.fn(async () => ({
+        status: "observed" as const,
+        source: "handback" as const,
+        text: "done",
+        truncated: false,
+      })),
+    };
+    const deps = fakeDeps({
+      sessionStore: store,
+      requestManifest: vi
+        .fn()
+        .mockResolvedValue(
+          [
+            "assistant.list",
+            "assistant.start",
+            "agent.readQuota",
+            "terminal.sendCommand",
+            "terminal.sendCommandOwned",
+            "terminal.closeOwned",
+            "terminal.close",
+            "terminal.closeMany",
+            "terminal.interruptOwned",
+            "terminal.readLastMessageOwned",
+            "terminal.getStatus",
+            "terminal.getOutput",
+            "terminal.waitUntilIdle",
+            "terminal.list",
+          ].map(makeManifestEntry)
+        ),
+      ...(options.requestCloseApproval !== undefined
+        ? { requestCloseApproval: options.requestCloseApproval }
+        : {}),
+      assistantControl: control as never,
+      assistantCaller: () => options.caller,
+      readCodexQuota: vi.fn(async () => ({
+        status: "unavailable" as const,
+        reason: "cli-missing" as const,
+        fetchedAt: 3,
+      })),
+      ...(options.relay
+        ? {
+            relay: {
+              shellName: "studio-01",
+              refuseWrite: vi.fn(() => options.refuseWrite ?? null),
+            },
+          }
+        : {}),
+    });
+    return { deps, control };
+  }
+
+  async function serve(deps: SessionServerDeps) {
+    const server = createSessionServer("sess", deps);
+    await server.connect(makeMockTransport());
+    return server;
+  }
+
+  it("lists the assistant tools only to an assistant caller", async () => {
+    const assistant = await serve(assistantDeps({ caller: CALLER }).deps);
+    expect((await listTools(assistant)).tools.map((t) => t.name)).toEqual(
+      expect.arrayContaining(["assistant.list", "assistant.start", "agent.readQuota"])
+    );
+
+    const pane = await serve(
+      assistantDeps({ caller: null, origin: "external", tier: "full" }).deps
+    );
+    const names = (await listTools(pane)).tools.map((t) => t.name);
+    expect(names).not.toContain("assistant.list");
+    expect(names).not.toContain("assistant.start");
+    expect(names).not.toContain("agent.readQuota");
+  });
+
+  it("runs assistant.list and agent.readQuota in main for the caller", async () => {
+    const { deps, control } = assistantDeps({ caller: CALLER });
+    const server = await serve(deps);
+
+    const listed = await callTool(server, { name: "assistant.list", arguments: {} });
+    expect(listed.structuredContent).toEqual(LISTED);
+    expect(control.list).toHaveBeenCalledWith(CALLER);
+
+    const quota = await callTool(server, { name: "agent.readQuota", arguments: {} });
+    expect(quota.structuredContent).toEqual({
+      codex: { status: "unavailable", reason: "cli-missing", fetchedAt: 3 },
+    });
+    expect(deps.dispatchAction).not.toHaveBeenCalled();
+  });
+
+  it("refuses the assistant tools to anyone else, whatever its tier", async () => {
+    const { deps, control } = assistantDeps({ caller: null, origin: "external", tier: "full" });
+    const server = await serve(deps);
+    for (const name of ["assistant.list", "assistant.start", "agent.readQuota"]) {
+      const result = await callTool(server, { name, arguments: {} });
+      expect(toolErrorPayload(result).code).toBe(TIER_NOT_PERMITTED_CODE);
+    }
+    expect(control.list).not.toHaveBeenCalled();
+    expect(control.start).not.toHaveBeenCalled();
+  });
+
+  it("refuses a relayed start the drive rule refuses, starting nothing", async () => {
+    const { deps, control } = assistantDeps({
+      caller: { ...CALLER, kind: "relay", senderId: "s", linkSessionId: "l" } as AssistantCaller,
+      origin: "external",
+      relay: true,
+      refuseWrite: { code: "DRIVEN_ELSEWHERE", message: "Another machine drives it." },
+    });
+    const server = await serve(deps);
+    const result = await callTool(server, { name: "assistant.start", arguments: {} });
+    expect(toolErrorPayload(result).code).toBe("DRIVEN_ELSEWHERE");
+    expect(control.start).not.toHaveBeenCalled();
+  });
+
+  it("sends to an assistant in main, with the generation and handback it was given", async () => {
+    const { deps, control } = assistantDeps({ caller: CALLER });
+    const server = await serve(deps);
+    const result = await callTool(server, {
+      name: "terminal.sendCommand",
+      arguments: {
+        terminalId: ASSISTANT_TERMINAL,
+        command: "Run the suite",
+        handback: true,
+        generation: 4,
+      },
+    });
+    expect(result.isError).toBeFalsy();
+    expect(control.submit).toHaveBeenCalledWith(CALLER, TARGET, {
+      command: "Run the suite",
+      generation: 4,
+      handback: true,
+    });
+    expect(deps.dispatchAction).not.toHaveBeenCalled();
+  });
+
+  it("passes an assistant's refusal on in its own words", async () => {
+    const { deps, control } = assistantDeps({ caller: CALLER });
+    control.submit.mockRejectedValueOnce(
+      new AssistantTargetError("ASSISTANT_BUSY", "The assistant is mid-turn. Nothing was sent.")
+    );
+    const server = await serve(deps);
+    const result = await callTool(server, {
+      name: "terminal.sendCommand",
+      arguments: { terminalId: ASSISTANT_TERMINAL, command: "x", generation: 4 },
+    });
+    expect(toolErrorPayload(result).code).toBe("ASSISTANT_BUSY");
+  });
+
+  it("routes a relayed owned close, interrupt and read to the assistant, past the ledger", async () => {
+    const { deps, control } = assistantDeps({
+      caller: { ...CALLER, kind: "relay", senderId: "s", linkSessionId: "l" } as AssistantCaller,
+      origin: "external",
+      relay: true,
+    });
+    const server = await serve(deps);
+    const args = { terminalId: ASSISTANT_TERMINAL };
+    expect(
+      (await callTool(server, { name: "terminal.closeOwned", arguments: args })).isError
+    ).toBeFalsy();
+    expect(
+      (await callTool(server, { name: "terminal.interruptOwned", arguments: args })).isError
+    ).toBeFalsy();
+    const read = await callTool(server, {
+      name: "terminal.readLastMessageOwned",
+      arguments: args,
+    });
+    const [first] = read.content as Array<{ text: string }>;
+    expect(JSON.parse(first!.text)).toMatchObject({ status: "observed", text: "done" });
+    expect(control.close).toHaveBeenCalledTimes(1);
+    expect(control.interrupt).toHaveBeenCalledTimes(1);
+    expect(control.readReply).toHaveBeenCalledWith(TARGET, expect.any(Number));
+    expect(deps.handleTerminalReadLastMessageOwned).not.toHaveBeenCalled();
+    expect(deps.dispatchAction).not.toHaveBeenCalled();
+  });
+
+  it("reads an assistant's status off the pty-host, admitting only what it named", async () => {
+    const { deps } = assistantDeps({ caller: CALLER });
+    const server = await serve(deps);
+    await callTool(server, {
+      name: "terminal.getStatus",
+      arguments: { terminalIds: [ASSISTANT_TERMINAL, "terminal-pane"] },
+    });
+    expect(deps.handleTerminalGetStatusViewless).toHaveBeenCalledWith(
+      { terminalIds: [ASSISTANT_TERMINAL, "terminal-pane"] },
+      "proj-1",
+      new Set([ASSISTANT_TERMINAL])
+    );
+    expect(deps.dispatchAction).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["terminal.sendCommandOwned", { terminalId: ASSISTANT_TERMINAL, command: "x" }],
+    ["terminal.closeOwned", { terminalId: ASSISTANT_TERMINAL }],
+    ["terminal.getStatus", { terminalIds: [ASSISTANT_TERMINAL] }],
+    ["terminal.waitUntilIdle", { terminalId: ASSISTANT_TERMINAL }],
+    // Read off the pty-host by id, past any view's panels.
+    ["terminal.getOutput", { terminalId: ASSISTANT_TERMINAL }],
+  ])("answers a worker pane naming an assistant in %s as no such terminal", async (name, args) => {
+    const { deps, control } = assistantDeps({ caller: null, origin: "external", tier: "full" });
+    const server = await serve(deps);
+    const result = await callTool(server, { name, arguments: args });
+    expect(result.isError).toBe(true);
+    expect(toolErrorPayload(result).code).toBe("NOT_FOUND");
+    expect(control.submit).not.toHaveBeenCalled();
+    expect(control.close).not.toHaveBeenCalled();
+    expect(deps.handleWaitUntilIdle).not.toHaveBeenCalled();
+    expect(deps.handleTerminalGetStatusViewless).not.toHaveBeenCalled();
+    expect(deps.dispatchAction).not.toHaveBeenCalled();
+  });
+
+  it("closes an assistant in a closeMany without putting it to the person", async () => {
+    const requestCloseApproval = vi.fn();
+    const { deps, control } = assistantDeps({ caller: CALLER, requestCloseApproval });
+    const server = await serve(deps);
+    const result = await callTool(server, {
+      name: "terminal.closeMany",
+      arguments: { terminalIds: [ASSISTANT_TERMINAL] },
+    });
+    expect(requestCloseApproval).not.toHaveBeenCalled();
+    expect(control.close).toHaveBeenCalledWith(CALLER, TARGET);
+    expect(result.structuredContent).toMatchObject({
+      results: [{ target: ASSISTANT_TERMINAL, ok: true }],
+    });
+    expect(deps.dispatchAction).not.toHaveBeenCalled();
+  });
+
+  it("routes an assistant in a closeMany the person was asked about for its other panels", async () => {
+    const requestCloseApproval = vi.fn().mockResolvedValue({
+      result: { ok: true, result: { selectedTargetIds: [] } },
+      confirmationDecision: "approved",
+    });
+    const { deps, control } = assistantDeps({ caller: CALLER, requestCloseApproval });
+    const server = await serve(deps);
+    const result = await callTool(server, {
+      name: "terminal.closeMany",
+      arguments: { terminalIds: [ASSISTANT_TERMINAL, "t-user"] },
+    });
+    expect(requestCloseApproval).toHaveBeenCalledWith("terminal.closeMany", {
+      terminalIds: ["t-user"],
+    });
+    expect(control.close).toHaveBeenCalledWith(CALLER, TARGET);
+    expect(result.structuredContent).toMatchObject({
+      results: [
+        { target: ASSISTANT_TERMINAL, ok: true },
+        { target: "t-user", ok: false, error: { code: "USER_REJECTED" } },
+      ],
+    });
+  });
+
+  it("keeps an assistant's scrollback and prompt context from anyone else", async () => {
+    const { deps } = assistantDeps({ caller: null, origin: "external", tier: "full" });
+    const server = await serve(deps);
+    await expect(
+      callHandler(server, "resources/read", {
+        uri: `daintree://terminal/${ASSISTANT_TERMINAL}/scrollback`,
+      })
+    ).rejects.toThrow(/Unknown resource URI/);
+
+    await getPrompt(server, {
+      name: "triage_failed_agent",
+      arguments: { terminal_id: ASSISTANT_TERMINAL },
+    });
+    const dispatched = vi.mocked(deps.dispatchAction).mock.calls.map((call) => call[0]);
+    expect(dispatched).not.toContain("terminal.getOutput");
+  });
+
+  it("refuses an assistant in another project, or the caller itself, before anything runs", async () => {
+    const { deps, control } = assistantDeps({ caller: CALLER });
+    control.resolve.mockReturnValue(null as never);
+    const server = await serve(deps);
+    const result = await callTool(server, {
+      name: "terminal.sendCommand",
+      arguments: { terminalId: ASSISTANT_TERMINAL, command: "x", generation: 4 },
+    });
+    expect(toolErrorPayload(result).code).toBe("ASSISTANT_NOT_FOUND");
+    expect(control.submit).not.toHaveBeenCalled();
   });
 });
 
@@ -6878,10 +6926,10 @@ describe("workspace-bound external sessions (#11789)", () => {
         },
         // Executed through the injected notify service rather than a named dep.
         "terminal.notifyWhenIdle": { args: { terminalId: "t-1" } },
-        // Executed through the caller's bound messaging access (#13335).
-        "assistant.getInbox": { args: {} },
-        "assistant.reply": { args: { taskId: "task-1", state: "completed", text: "x" } },
-        "assistant.sendMessage": { args: { text: "x" } },
+        // Executed through main's assistant control, for an assistant caller (#13496).
+        "assistant.list": { args: {} },
+        "assistant.start": { args: {} },
+        "agent.readQuota": { args: {} },
       };
 
       function viewlessDepsFor(name: string): SessionServerDeps {

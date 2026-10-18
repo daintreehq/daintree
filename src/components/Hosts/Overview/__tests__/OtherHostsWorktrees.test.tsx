@@ -34,8 +34,6 @@ function entry(id: string, connected: boolean): HostListEntry {
       lastSeenAt: null,
       addedAt: 0,
       notificationsEnabled: false,
-      assistantMessagingEnabled: false,
-      assistantStartEnabled: false,
       assistantControlEnabled: false,
     },
     connection: connected

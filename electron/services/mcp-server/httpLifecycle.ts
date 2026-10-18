@@ -28,6 +28,7 @@ import type {
   PaneOwnershipPrincipalResolver,
   PaneTerminalResolver,
   HelpSessionTerminalResolver,
+  AssistantControlBinding,
   WorkspaceDispatchOptions,
   McpRelayCaller,
   McpTier,
@@ -73,8 +74,8 @@ import {
   resolveTokenTier,
 } from "./tierAuth.js";
 import { createSessionServer, cleanupResourceSubscriptions } from "./sessionServer.js";
-import { bindAssistantMessaging } from "./assistantMessagingTools.js";
-import { bindHostMessaging } from "./hostMessagingTools.js";
+import { bindHostControl } from "./hostControlTools.js";
+import type { AssistantCaller } from "../assistants/AssistantTerminalControl.js";
 import type { SessionStore } from "./sessionStore.js";
 import type { AuditService } from "./auditLog.js";
 import { classifyMcpDispatchResult } from "./auditLog.js";
@@ -258,11 +259,12 @@ export interface HttpLifecycleDeps {
     /** Asked once more right before the spawn; throws to refuse (#13493). */
     authorize?: () => void
   ) => Promise<import("../../../shared/types/projectCommand.js").ProjectCommandRunResult>;
-  handleTerminalGetStatusViewless: (
-    rawArgs: unknown,
-    workspaceId: string
-  ) => Promise<import("../../../shared/types/terminalStatus.js").TerminalStatusResult>;
+  handleTerminalGetStatusViewless: import("./sessionServer.js").SessionServerDeps["handleTerminalGetStatusViewless"];
   handleTerminalReadLastMessageOwned: import("./sessionServer.js").OwnedMainExecutors["handleTerminalReadLastMessageOwned"];
+  /** How this machine names itself to people, for the stamp on what its assistants send. */
+  machineName?: () => string;
+  /** This machine's Codex quota, as `agent.readQuota` reports it. */
+  readCodexQuota?: import("./sessionServer.js").SessionServerDeps["readCodexQuota"];
   isTerminalIdInUse: (terminalId: string) => boolean;
   readTerminalCloseContext?: import("./sessionServer.js").SessionServerDeps["readTerminalCloseContext"];
   /**
@@ -446,6 +448,24 @@ export class HttpLifecycle {
   private paneOwnershipPrincipalResolver: PaneOwnershipPrincipalResolver | null = null;
   private paneTerminalResolver: PaneTerminalResolver | null = null;
   private helpSessionTerminalResolver: HelpSessionTerminalResolver | null = null;
+  private assistantControlBinding: AssistantControlBinding | null = null;
+  /**
+   * Main's side of one assistant addressing another (#13496) as each call
+   * finds it, so a session opened before the binding was set is held to it
+   * from then on. Unbound, nothing is an assistant: none can run before then.
+   */
+  private readonly assistantControl: AssistantControlBinding["control"] = {
+    isAssistantTerminal: (terminalId) =>
+      this.assistantControlBinding?.control.isAssistantTerminal(terminalId) ?? false,
+    resolve: (caller, terminalId) =>
+      this.assistantControlBinding?.control.resolve(caller, terminalId) ?? null,
+    list: (...args) => this.boundAssistantControl().list(...args),
+    start: (...args) => this.boundAssistantControl().start(...args),
+    submit: (...args) => this.boundAssistantControl().submit(...args),
+    interrupt: (...args) => this.boundAssistantControl().interrupt(...args),
+    close: (...args) => this.boundAssistantControl().close(...args),
+    readReply: (...args) => this.boundAssistantControl().readReply(...args),
+  };
   private lastError: string | null = null;
   private intentionalStop = false;
   private restartAttempts = 0;
@@ -550,6 +570,16 @@ export class HttpLifecycle {
 
   setHelpSessionTerminalResolver(resolver: HelpSessionTerminalResolver | null): void {
     this.helpSessionTerminalResolver = resolver;
+  }
+
+  setAssistantControl(binding: AssistantControlBinding | null): void {
+    this.assistantControlBinding = binding;
+  }
+
+  private boundAssistantControl(): AssistantControlBinding["control"] {
+    const binding = this.assistantControlBinding;
+    if (binding === null) throw new Error("Assistant control isn't available yet");
+    return binding.control;
   }
 
   /**
@@ -2120,6 +2150,37 @@ export class HttpLifecycle {
       new WorkspaceBindingError(boundWorkspaceId ?? "", "not-found");
 
     /**
+     * This session as an assistant addressing another (#13496), from its own
+     * state alone: a relay principal in the project it was admitted for, or a
+     * live help session in the project its lane is in. Null for every other
+     * session, and for a help session whose bearer has since been unbound.
+     */
+    const assistantCallerFor = (): AssistantCaller | null => {
+      if (this.assistantControlBinding === null) return null;
+      if (relay) {
+        if (boundWorkspaceId === null) return null;
+        return {
+          kind: "relay",
+          senderId: relay.senderId,
+          linkSessionId: relay.linkSessionId,
+          helpSessionId: relay.helpSessionId,
+          projectId: boundWorkspaceId,
+          machineName: relay.shellName,
+        };
+      }
+      if (sessionOrigin !== "help" || helpSessionId === null) return null;
+      if (this.deps.sessionStore.sessionHelpIdMap.get(sessionId) !== helpSessionId) return null;
+      const projectId = this.assistantControlBinding?.sessionProject(helpSessionId) ?? null;
+      if (projectId === null) return null;
+      return {
+        kind: "local",
+        helpSessionId,
+        projectId,
+        machineName: this.deps.machineName?.() ?? "this machine",
+      };
+    };
+
+    /**
      * Pinned at handshake and torn down since — a take-over retiring the
      * assistant's transports (#13360), a revoke, an idle reap — while a call
      * was still on its way. Such a call fails closed, as a gone pin does,
@@ -2604,15 +2665,16 @@ export class HttpLifecycle {
                   },
                 }
               : {}),
-            // The lane is whichever help session this transport is bound to (#13335).
-            assistantMessaging: bindAssistantMessaging(() =>
-              this.deps.sessionStore.sessionHelpIdMap.get(sessionId)
-            ),
-            // Whichever help session this transport is bound to; the runtime decides if it may (#13336).
-            hostMessaging: bindHostMessaging(() =>
+            // Whichever help session this transport is bound to; the runtime decides if it may (#13493).
+            hostControl: bindHostControl(() =>
               this.deps.sessionStore.sessionHelpIdMap.get(sessionId)
             ),
           }),
+      assistantControl: this.assistantControl,
+      assistantCaller: () => assistantCallerFor(),
+      ...(this.deps.readCodexQuota !== undefined
+        ? { readCodexQuota: this.deps.readCodexQuota }
+        : {}),
       // A pane bearer's own terminal is fixed for the bearer's life and was
       // resolved at handshake; a help lane's is read per call, because its
       // binding follows the PTY that currently serves it.

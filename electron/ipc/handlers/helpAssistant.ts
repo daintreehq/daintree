@@ -45,7 +45,6 @@ const HELP_ASSISTANT_DEFAULTS: HelpAssistantSettings = {
   idleHibernateMinutes: 5,
   loadGlobalHooksAndServers: false,
   daintreeConfirmations: "inherit",
-  acceptRemoteMessages: true,
   acceptRemoteControl: true,
 };
 
@@ -61,7 +60,6 @@ const HELP_ASSISTANT_KEYS = [
   "idleHibernateMinutes",
   "loadGlobalHooksAndServers",
   "daintreeConfirmations",
-  "acceptRemoteMessages",
   "acceptRemoteControl",
 ] as const satisfies ReadonlyArray<keyof HelpAssistantSettings>;
 
@@ -118,9 +116,6 @@ function sanitizeStored(stored: unknown): Partial<HelpAssistantSettings> {
   if (typeof record.runbookSearch === "boolean") out.runbookSearch = record.runbookSearch;
   if (typeof record.loadGlobalHooksAndServers === "boolean") {
     out.loadGlobalHooksAndServers = record.loadGlobalHooksAndServers;
-  }
-  if (typeof record.acceptRemoteMessages === "boolean") {
-    out.acceptRemoteMessages = record.acceptRemoteMessages;
   }
   if (typeof record.acceptRemoteControl === "boolean") {
     out.acceptRemoteControl = record.acceptRemoteControl;
@@ -204,7 +199,6 @@ export const helpAssistantNamespace = defineIpcNamespace({
               field === "runbookSearch" ||
               field === "bypassPermissions" ||
               field === "loadGlobalHooksAndServers" ||
-              field === "acceptRemoteMessages" ||
               field === "acceptRemoteControl") &&
             typeof value !== "boolean"
           ) {

@@ -11,7 +11,7 @@ import {
   type HostListEntry,
 } from "@shared/types/remoteHosts";
 import { SettingsSection } from "../SettingsSection";
-import { SettingsDependents, SettingsEmptyRow, SettingsGroup, SettingsRow } from "../SettingsGroup";
+import { SettingsEmptyRow, SettingsGroup, SettingsRow } from "../SettingsGroup";
 import { SettingsInput } from "../SettingsInput";
 import { SettingsSwitch } from "../SettingsSwitch";
 import { useSettingsSubpage } from "../SettingsSubpage";
@@ -162,20 +162,6 @@ export function HostDetail({
     );
   };
 
-  const [messagingDraft, setMessagingDraft] = useState<boolean | null>(null);
-  const [messagingError, setMessagingError] = useState<string | null>(null);
-  const messagingEnabled = messagingDraft ?? descriptor.assistantMessagingEnabled;
-  const setMessaging = (next: boolean) => {
-    setMessagingDraft(next);
-    setMessagingError(null);
-    remoteHostsClient.update({ hostId: descriptor.id, assistantMessagingEnabled: next }).then(
-      () => setMessagingDraft(null),
-      (err: unknown) => {
-        setMessagingDraft(null);
-        setMessagingError(clientErrorText(err, "Couldn't save this setting"));
-      }
-    );
-  };
   const [controlDraft, setControlDraft] = useState<boolean | null>(null);
   const [controlError, setControlError] = useState<string | null>(null);
   const controlEnabled = controlDraft ?? descriptor.assistantControlEnabled;
@@ -187,20 +173,6 @@ export function HostDetail({
       (err: unknown) => {
         setControlDraft(null);
         setControlError(clientErrorText(err, "Couldn't save this setting"));
-      }
-    );
-  };
-  const [startDraft, setStartDraft] = useState<boolean | null>(null);
-  const [startError, setStartError] = useState<string | null>(null);
-  const startEnabled = startDraft ?? descriptor.assistantStartEnabled;
-  const setStart = (next: boolean) => {
-    setStartDraft(next);
-    setStartError(null);
-    remoteHostsClient.update({ hostId: descriptor.id, assistantStartEnabled: next }).then(
-      () => setStartDraft(null),
-      (err: unknown) => {
-        setStartDraft(null);
-        setStartError(clientErrorText(err, "Couldn't save this setting"));
       }
     );
   };
@@ -407,57 +379,22 @@ export function HostDetail({
               />
             )}
           />
-          {/* Cross-machine messaging isn't offered on Windows. */}
+          {/* Not offered on Windows. */}
           {!isWindows() && (
-            <>
-              <SettingsRow
-                label="Allow assistant messaging with this host"
-                description={`Your assistant and ${hostName}'s assistants can message each other. On by default.`}
-                error={messagingError ?? undefined}
-                control={({ labelId, descriptionId, disabled }) => (
-                  <SettingsSwitch
-                    checked={messagingEnabled}
-                    onCheckedChange={setMessaging}
-                    disabled={disabled}
-                    aria-labelledby={labelId}
-                    aria-describedby={descriptionId}
-                  />
-                )}
-              />
-              <SettingsDependents
-                disabled={!messagingEnabled}
-                reason="Turn on assistant messaging to let the assistant start assistants here"
-              >
-                <SettingsRow
-                  label="Let the assistant start assistants on this host"
-                  description={`The assistant can start one in any of ${hostName}'s projects and message it, with nobody at ${hostName}. Each runs on ${hostName}'s own agent sign-in. On by default.`}
-                  error={startError ?? undefined}
-                  control={({ labelId, descriptionId, disabled }) => (
-                    <SettingsSwitch
-                      checked={startEnabled}
-                      onCheckedChange={setStart}
-                      disabled={disabled}
-                      aria-labelledby={labelId}
-                      aria-describedby={descriptionId}
-                    />
-                  )}
+            <SettingsRow
+              label="Let the assistant work on this host"
+              description={`Your assistant can run ${hostName}'s Daintree tools and find, start and message the assistants there. On by default.`}
+              error={controlError ?? undefined}
+              control={({ labelId, descriptionId, disabled }) => (
+                <SettingsSwitch
+                  checked={controlEnabled}
+                  onCheckedChange={setControl}
+                  disabled={disabled}
+                  aria-labelledby={labelId}
+                  aria-describedby={descriptionId}
                 />
-              </SettingsDependents>
-              <SettingsRow
-                label="Let the assistant work on this host"
-                description={`Your assistant can run Daintree's own tools on ${hostName}: start and read agents, run checks, close what it opened. A change needs a window here that controls the project. On by default.`}
-                error={controlError ?? undefined}
-                control={({ labelId, descriptionId, disabled }) => (
-                  <SettingsSwitch
-                    checked={controlEnabled}
-                    onCheckedChange={setControl}
-                    disabled={disabled}
-                    aria-labelledby={labelId}
-                    aria-describedby={descriptionId}
-                  />
-                )}
-              />
-            </>
+              )}
+            />
           )}
         </SettingsGroup>
       </SettingsSection>

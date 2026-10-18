@@ -130,27 +130,17 @@ export const CORE_TIER_TOOLS = [
   "slashCommands.list",
 
   "help.displayImage",
-  // An enrolled lane's own inbox (#13335) and its messages to the hub (#13338).
-  // Offered only while the caller's own lane is enrolled for messaging, and run
-  // only for that lane's help session.
-  "assistant.getInbox",
-  "assistant.reply",
-  "assistant.sendMessage",
-  // The hub's reach into other hosts' assistants: reads, messages and cancels
-  // (#13336), and starting one there (#13392). Offered only to the help session
-  // this Shell's hub was enrolled with, while a host exists; each host's own
-  // switches in Settings still decide what reaches it (#13469).
+  // One assistant finding and starting another (#13496), and this machine's
+  // Codex quota. Offered only to an assistant caller: this machine's own, or
+  // another machine's through its Shell's `host.call`.
+  "assistant.list",
+  "assistant.start",
+  "agent.readQuota",
+  // This Shell's hosts, and their own tools run there for this machine's
+  // assistant (#13493). Offered from every such session's start, hosts or
+  // not; each wrapped tool keeps the host's own gates, and the person's
+  // per-host switch decides what it reaches.
   "host.list",
-  "host.listAssistants",
-  "host.getTask",
-  "host.listTasks",
-  "host.readQuota",
-  "host.sendMessage",
-  "host.cancelTask",
-  "host.startAssistant",
-  // A host's own tools, run there for this machine's assistant (#13493). Offered
-  // from every such session's start, hosts or not; each wrapped tool keeps the
-  // host's own gates, and the person's per-host switch decides what it reaches.
   "host.call",
   // Logs meant for someone else go through the review the user trims and saves
   // themselves, not an archive the assistant builds from the raw log folder
@@ -293,19 +283,13 @@ export const RENDERER_OWNED_ORIGIN_ONLY_TOOLS = [
   // Opens a dialog in the window the user is watching, which only the
   // assistant pinned to that window should do.
   "diagnostics.openReview",
-  // A lane's inbox belongs to the assistant enrolled in it, never a pane (#13335).
-  "assistant.getInbox",
-  "assistant.reply",
-  "assistant.sendMessage",
-  // So does the hub's reach to other hosts' assistants (#13336).
+  // Assistants are an assistant's to find and start, never a pane's (#13496);
+  // a relayed assistant is admitted to them by its own rule.
+  "assistant.list",
+  "assistant.start",
+  "agent.readQuota",
+  // So is the Shell's reach into its hosts (#13493).
   "host.list",
-  "host.listAssistants",
-  "host.sendMessage",
-  "host.getTask",
-  "host.listTasks",
-  "host.cancelTask",
-  "host.startAssistant",
-  "host.readQuota",
   "host.call",
   // A shell command is the assistant's to run, never a worker pane's (#13495).
   "project.runCommand",

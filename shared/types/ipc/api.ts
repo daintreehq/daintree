@@ -154,7 +154,6 @@ import type {
 import type { TerminalConfig } from "./config.js";
 import type { HibernationProjectHibernatedPayload } from "./hibernation.js";
 import type { KeepAwakeState } from "./keepAwake.js";
-import type { AssistantMessagingChangedEvent } from "./assistantMessaging.js";
 import type { IdleTerminalNotifyPayload } from "./idleTerminals.js";
 import type { IdleBackgroundClosedPayload } from "./idleBackgroundAutoClose.js";
 import type { KeyAction } from "../keymap.js";
@@ -1336,10 +1335,6 @@ export interface ElectronAPI extends GeneratedElectronAPI {
   // Invoke methods come from GeneratedElectronAPI; the rest are renderer-only subscriptions.
   keepAwake: GeneratedElectronAPI["keepAwake"] & {
     onStateChanged(callback: (state: KeepAwakeState) => void): () => void;
-  };
-  // Invoke methods come from GeneratedElectronAPI; the rest are renderer-only subscriptions.
-  assistantMessaging: GeneratedElectronAPI["assistantMessaging"] & {
-    onChanged(callback: (event: AssistantMessagingChangedEvent) => void): () => void;
   };
   // Invoke methods come from GeneratedElectronAPI; the rest are renderer-only subscriptions.
   hibernation: GeneratedElectronAPI["hibernation"] & {
@@ -2791,18 +2786,11 @@ export interface HelpAssistantSettings {
    */
   daintreeConfirmations: HelpAssistantDaintreeConfirmations;
   /**
-   * This machine's assistants accept messages from other machines as soon as
-   * they're running, without being turned on in the panel: on this Shell its
-   * first running assistant becomes the hub for hosts with messaging on, and
-   * on a host each assistant accepts the Shell whose view it runs in. The
-   * panel turns one run off. Machine-owned; never travels. Defaults to true.
-   */
-  acceptRemoteMessages: boolean;
-  /**
-   * Whether this machine, as a host, runs its own Daintree tools for another
-   * machine's assistant through `host.call` (#13493). Each call still passes
-   * this machine's own tiers and drive lease. Machine-owned; never travels.
-   * Defaults to true.
+   * Whether this machine, as a host, takes another machine's assistant's
+   * `host.call` (#13493): runs its own Daintree tools for it, including
+   * finding, starting and messaging this machine's assistants (#13496). Each
+   * call still passes this machine's own tiers and drive lease.
+   * Machine-owned; never travels. Defaults to true.
    */
   acceptRemoteControl: boolean;
 }

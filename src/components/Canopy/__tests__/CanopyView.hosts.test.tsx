@@ -117,8 +117,6 @@ function host(
       lastSeenAt: null,
       addedAt: 1,
       notificationsEnabled: false,
-      assistantMessagingEnabled: false,
-      assistantStartEnabled: false,
       assistantControlEnabled: false,
     },
     connection,

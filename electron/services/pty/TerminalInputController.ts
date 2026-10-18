@@ -87,6 +87,12 @@ function wakeGateSnapshot(terminal: TerminalInfo): WakeGateSnapshot {
 export class TerminalInputController {
   private shutdownLockDepth = 0;
   private inputGeneration = 0;
+  /**
+   * When the submit lane last wrote to the prompt (#13496). A strict
+   * submission waits for the agent's state to change after it, so a brief
+   * never follows another line into a turn the analysis hasn't reported yet.
+   */
+  private laneSubmittedAt: number | undefined;
 
   constructor(private readonly host: TerminalInputControllerHost) {}
 
@@ -353,15 +359,30 @@ export class TerminalInputController {
     }
 
     const admit =
-      guard === "settled-prompt"
-        ? () =>
-            !this.isInputLocked &&
-            evaluateWakeGate(
-              wakeGateSnapshot(this.host.terminalInfo),
-              wakeGateOptionsFor(this.host.terminalInfo.detectedAgentId)
-            ).kind === "ready"
-        : undefined;
+      guard === "settled-prompt-strict"
+        ? () => this.admitStrict()
+        : guard === "settled-prompt"
+          ? () =>
+              !this.isInputLocked &&
+              evaluateWakeGate(
+                wakeGateSnapshot(this.host.terminalInfo),
+                wakeGateOptionsFor(this.host.terminalInfo.detectedAgentId)
+              ).kind === "ready"
+          : undefined;
     this.host.writeQueue.submit(text, token, onPtyWritten, admit, imagePaths);
+  }
+
+  /** Only at a prompt settled since the lane last wrote to it, and never mid-turn. */
+  private admitStrict(): boolean {
+    if (this.isInputLocked) return false;
+    const terminal = this.host.terminalInfo;
+    if (
+      this.laneSubmittedAt !== undefined &&
+      this.laneSubmittedAt >= (terminal.lastStateChange ?? 0)
+    ) {
+      return false;
+    }
+    return evaluateWakeGate(wakeGateSnapshot(terminal), { acceptWorking: false }).kind === "ready";
   }
 
   /**
@@ -414,6 +435,7 @@ export class TerminalInputController {
       return;
     }
     terminal.lastInputTime = Date.now();
+    this.laneSubmittedAt = terminal.lastInputTime;
 
     if (terminal.isExited) {
       return;

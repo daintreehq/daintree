@@ -174,271 +174,48 @@ describe("projectAuditResult — handback carriers (#12488)", () => {
   });
 });
 
-describe("assistant messaging audit entries carry no body (#13335)", () => {
-  const SHORT = "BODY-SENTINEL ok";
-  const LONG = `BODY-SENTINEL ${"x".repeat(10_000)}`;
-  const HOST = "HOST-SENTINEL";
-  const TASK = "0f8fad5b-d9cb-469f-a165-70867728950e";
-
-  it.each([SHORT, LONG])("summarizes a reply's arguments without its text", (text) => {
-    const summary = summarizeMcpArgs(
-      projectAuditArgs("assistant.reply", { taskId: TASK, state: "completed", text })
-    );
-    expect(summary).not.toContain("BODY-SENTINEL");
-    expect(JSON.parse(summary)).toEqual({
-      taskId: TASK,
-      state: "completed",
-      textChars: text.length,
+describe("another assistant's reply read off its screen (#13496)", () => {
+  it("keeps its source and size, never its words", () => {
+    const projected = projectAuditResult(TOOL, {
+      status: "observed",
+      source: "handback",
+      text: PROSE,
+      truncated: false,
     });
+    expect(projected).toEqual({
+      status: "observed",
+      source: "handback",
+      textChars: PROSE.length,
+      truncated: false,
+    });
+    expect(JSON.stringify(summarizeMcpResult(projected))).not.toContain("PROSE-SENTINEL");
   });
 
-  it("drops a task id that is not one the store mints, however id-shaped", () => {
-    const summary = summarizeMcpArgs(
-      projectAuditArgs("assistant.reply", {
-        taskId: "BODY-SENTINEL",
-        state: "completed",
-        text: "x",
-      })
-    );
-    expect(summary).not.toContain("BODY-SENTINEL");
-    expect(JSON.parse(summary).taskId).toBeNull();
-  });
-
-  it("measures, never keeps, a malformed reply's fields", () => {
-    const summary = summarizeMcpArgs(
-      projectAuditArgs("assistant.reply", {
-        taskId: "BODY-SENTINEL smuggled in an id",
-        state: "BODY-SENTINEL",
-        text: 42,
-        extra: SHORT,
-      })
-    );
-    expect(summary).not.toContain("BODY-SENTINEL");
-    expect(JSON.parse(summary)).toEqual({ taskId: null, state: null, textChars: null });
-  });
-
-  it("summarizes an inbox page by its size, without bodies or sender labels", () => {
-    const result = {
-      messages: [SHORT, LONG].map((body, i) => ({
-        taskId: i === 0 ? TASK : "not-a-uuid",
-        messageId: `msg-${i}`,
-        contextId: "ctx",
-        state: "submitted",
-        receivedAt: 1,
-        provenance: { sendingHost: HOST, sendingLane: HOST, hopCount: 1 },
-        bodyChars: body.length,
-        untrustedBody: body,
-      })),
-      cursor: 2,
-      hasMore: false,
-    };
-    const summary = summarizeMcpResult(projectAuditResult("assistant.getInbox", result));
-    expect(summary).not.toContain("BODY-SENTINEL");
-    expect(summary).not.toContain("HOST-SENTINEL");
-    expect(projectAuditResult("assistant.getInbox", result)).toEqual({
-      messageCount: 2,
-      bodyChars: SHORT.length + LONG.length,
-      taskIds: [TASK, null],
-      cursor: 2,
-      hasMore: false,
-    });
-    expect(projectAuditResult("assistant.getInbox", { text: SHORT })).toEqual({
-      status: "unrecognized",
-    });
-  });
-
-  it.each([SHORT, LONG])("measures, never keeps, what a lane sends the hub (#13338)", (text) => {
-    const summary = summarizeMcpArgs(
-      projectAuditArgs("assistant.sendMessage", {
-        text,
-        contextId: "BODY-SENTINEL as a context",
-        referenceTaskIds: [TASK, "BODY-SENTINEL"],
-      })
-    );
-    expect(summary).not.toContain("BODY-SENTINEL");
-    expect(JSON.parse(summary)).toEqual({
-      contextId: null,
-      referenceTaskIds: 2,
-      textChars: text.length,
-    });
+  it("drops a source it doesn't know", () => {
     expect(
-      projectAuditResult("assistant.sendMessage", {
-        messageId: TASK,
-        contextId: TASK,
-        hopCount: 1,
-        state: "waiting-for-hub",
-      })
-    ).toEqual({ messageId: TASK, contextId: TASK, hopCount: 1, state: "waiting-for-hub" });
-  });
-
-  it("summarizes the sent view by state and reply size, never the hub's words (#13338)", () => {
-    const result = {
-      messages: [],
-      sent: [
-        {
-          messageId: TASK,
-          contextId: "ctx",
-          hopCount: 1,
-          state: "completed",
-          refusal: null,
-          sentAt: 1,
-          expiresAt: 2,
-          replies: [{ state: "completed", at: 1, untrustedText: LONG }],
-        },
-        {
-          messageId: "BODY-SENTINEL",
-          contextId: "ctx",
-          hopCount: 2,
-          state: "BODY-SENTINEL",
-          refusal: "hop_limit",
-          sentAt: 1,
-          expiresAt: 2,
-          replies: [],
-        },
-      ],
-      cursor: 4,
-      hasMore: false,
-    };
-    const summary = summarizeMcpResult(projectAuditResult("assistant.getInbox", result));
-    expect(summary).not.toContain("BODY-SENTINEL");
-    expect(projectAuditResult("assistant.getInbox", result)).toEqual({
-      messageCount: 0,
-      bodyChars: 0,
-      taskIds: [],
-      sentCount: 2,
-      sent: [
-        { messageId: TASK, state: "completed", refusal: null },
-        { messageId: null, state: null, refusal: "hop_limit" },
-      ],
-      replyCount: 1,
-      replyChars: LONG.length,
-      cursor: 4,
-      hasMore: false,
-    });
-  });
-
-  it("leaves other tools' arguments to the generic summarizer", () => {
-    const args = { url: "https://daintree.org/a.png" };
-    expect(projectAuditArgs("help.displayImage", args)).toBe(args);
+      projectAuditResult(TOOL, { status: "observed", source: PROSE, text: "x" })
+    ).toMatchObject({ source: null, textChars: 1 });
   });
 });
 
-describe("hub messaging audit entries carry no message or reply text (#13336)", () => {
-  const TEXT = "rebase it now";
-
-  it("measures, never keeps, what a send says", () => {
-    const projected = projectAuditArgs("host.sendMessage", {
-      hostId: "studio",
-      projectId: "proj-2",
-      slot: 1,
-      generation: "gen",
-      text: TEXT,
-      taskId: "my words here",
-      referenceTaskIds: ["a", "b"],
-      waitMs: 500,
-    });
-    expect(JSON.stringify(projected)).not.toContain("rebase");
-    expect(JSON.stringify(projected)).not.toContain("my words");
-    expect(projected).toMatchObject({
-      hostId: "studio",
-      slot: 1,
-      taskId: null,
-      referenceTaskIds: 2,
-      waitMs: 500,
-      textChars: TEXT.length,
-    });
-  });
-
-  it("reduces a task's replies to their count and size", () => {
-    const taskId = "0b6b7c2e-1d55-4f6f-9a3a-4f3d2b1c0a99";
-    const projected = projectAuditResult("host.getTask", {
-      outcome: "ok",
-      detail: null,
-      retryAfterMs: null,
-      task: { taskId, state: "completed" },
-      observedAt: 1,
-      replies: [{ state: "completed", at: 1, untrustedText: TEXT }],
-      repliesOmitted: 0,
-    });
-    expect(JSON.stringify(projected)).not.toContain("rebase");
-    expect(projected).toEqual({
-      outcome: "ok",
-      taskId,
-      state: "completed",
-      replyCount: 1,
-      replyChars: TEXT.length,
-      repliesOmitted: 0,
-    });
-  });
-
-  it("keeps only a known outcome, and summarizes a host list by its ids", () => {
-    expect(projectAuditResult("host.cancelTask", { outcome: TEXT, hostId: "h" })).toMatchObject({
-      outcome: null,
-    });
-    expect(
-      projectAuditResult("host.list", { hosts: [{ hostId: "studio", name: "Greg's studio" }] })
-    ).toEqual({ hostCount: 1, hostIds: ["studio"] });
-  });
-
-  it("counts a host's projects and assistants, never naming either", () => {
-    const projected = projectAuditResult("host.listAssistants", {
-      outcome: "ok",
-      detail: null,
-      retryAfterMs: null,
-      projects: [
+describe("host.list audit projection (#13493)", () => {
+  it("names hosts by id and counts their projects, never naming one", () => {
+    const projected = projectAuditResult("host.list", {
+      hosts: [
         {
-          projectId: "p-secret",
-          name: "acquisition-plans",
-          path: "/Users/someone/acquisition-plans",
-          assistants: [
-            { slot: 0, agentId: "claude", generation: "g", available: true },
-            { slot: 1, agentId: "claude", generation: null, available: false },
-          ],
+          hostId: "studio",
+          name: "Greg's studio",
+          projects: [{ projectId: "p-1", name: "PROJECT-SENTINEL" }],
         },
-        { projectId: "p-2", name: "notes", path: "/Users/someone/notes", assistants: [] },
+        { hostId: "laptop", name: "laptop", projects: null },
       ],
-      projectsOmitted: 7,
     });
-    expect(projected).toMatchObject({
-      outcome: "ok",
-      projectCount: 2,
-      assistantCount: 2,
-      projectsOmitted: 7,
+    expect(projected).toEqual({
+      hostCount: 2,
+      hostIds: ["studio", "laptop"],
+      projectCounts: [1, null],
     });
-    expect(JSON.stringify(projected)).not.toMatch(/acquisition|notes|someone|p-secret/);
-  });
-
-  it("records whether a host's Codex quota came back and how many windows, never their values", () => {
-    expect(projectAuditArgs("host.readQuota", { hostId: "studio", extra: TEXT })).toEqual({
-      hostId: "studio",
-    });
-    const projected = projectAuditResult("host.readQuota", {
-      outcome: "ok",
-      detail: null,
-      retryAfterMs: null,
-      codex: {
-        status: "ok",
-        planType: "enterprise-secret-plan",
-        windows: [
-          { usedPercent: 83.25, windowDurationMins: 300, resetsAt: 1_712_345_678_901 },
-          { usedPercent: 12, windowDurationMins: 10_080, resetsAt: null },
-        ],
-        fetchedAt: 1_712_000_000_000,
-      },
-      observedAt: 1_712_000_000_500,
-    });
-    expect(projected).toMatchObject({ outcome: "ok", codexStatus: "ok", windowCount: 2 });
-    expect(JSON.stringify(projected)).not.toMatch(/secret|83\.25|1712/);
-
-    expect(
-      projectAuditResult("host.readQuota", {
-        outcome: "disconnected",
-        detail: "The host can't be reached right now.",
-        retryAfterMs: null,
-        codex: null,
-        observedAt: null,
-      })
-    ).toMatchObject({ outcome: "disconnected", codexStatus: null, windowCount: null });
+    expect(JSON.stringify(projected)).not.toContain("PROJECT-SENTINEL");
   });
 });
 
@@ -556,15 +333,17 @@ describe("host.call audit projection (#13493)", () => {
     expect(summarizeMcpArgs(projected)).not.toContain("rm -rf");
   });
 
-  it("applies the relayed tool's own projection, so a message's text never reaches the log", () => {
+  it("applies the relayed tool's own projection, and keeps what it names to its length", () => {
     const projected = projectAuditArgs("host.call", {
       hostId: "studio-01",
-      tool: "assistant.sendMessage",
-      args: { contextId: CALL_ID, text: "TEXT-SENTINEL" },
+      tool: "project.runCommand",
+      args: { projectId: "p", command: "COMMAND-SENTINEL", timeoutMs: 5, extra: "dropped" },
     }) as Record<string, unknown>;
 
-    expect(projected["args.textChars"]).toBe("TEXT-SENTINEL".length);
-    expect(JSON.stringify(projected)).not.toContain("TEXT-SENTINEL");
+    expect(projected["args.command"]).toBe(`<string: ${"COMMAND-SENTINEL".length} chars>`);
+    expect(projected["args.timeoutMs"]).toBe(5);
+    expect(Object.hasOwn(projected, "args.extra")).toBe(false);
+    expect(JSON.stringify(projected)).not.toContain("COMMAND-SENTINEL");
   });
 
   it("drops a tool name that isn't one, and never projects a relay of a relay", () => {
@@ -602,10 +381,10 @@ describe("host.call audit projection (#13493)", () => {
     expect(projectRelayedAuditArgs("terminal.sendKeys", { choose: "2" })).toEqual({
       choose: "<string: 1 chars>",
     });
-    // A tool with a projection of its own keeps it.
+    // A tool with a projection of its own keeps it, and its text to its length.
     expect(
-      projectRelayedAuditArgs("assistant.sendMessage", { contextId: CALL_ID, text: "secret" })
-    ).toEqual(projectAuditArgs("assistant.sendMessage", { contextId: CALL_ID, text: "secret" }));
+      projectRelayedAuditArgs("project.runCommand", { projectId: "p", command: "ls", extra: "x" })
+    ).toEqual({ projectId: "p", command: "<string: 2 chars>", cwd: null, timeoutMs: null });
   });
 
   it("records only the outcome, callId and whether the tool failed, never its result", () => {

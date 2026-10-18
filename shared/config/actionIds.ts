@@ -551,20 +551,13 @@ export const BUILT_IN_ACTION_IDS = [
   "help.newSessionWithAgent",
   "help.resumePastSession",
 
-  // -- assistantMessagingActions --
-  "assistant.getInbox",
-  "assistant.reply",
-  "assistant.sendMessage",
+  // -- assistantControlActions --
+  "assistant.list",
+  "assistant.start",
+  "agent.readQuota",
 
-  // -- hostMessagingActions (registered only where Remote Hosts is supported) --
+  // -- hostControlActions (registered only where Remote Hosts is supported) --
   "host.list",
-  "host.listAssistants",
-  "host.sendMessage",
-  "host.getTask",
-  "host.listTasks",
-  "host.cancelTask",
-  "host.startAssistant",
-  "host.readQuota",
   "host.call",
 
   // -- uiActions --
@@ -657,21 +650,12 @@ export const DENY_PLUGIN_DISPATCH_ACTION_IDS = [
   // Main-process only, keyed on the caller's MCP credential: a plugin dispatch
   // has no pane to notify.
   "terminal.notifyWhenIdle",
-  // Main-process only, keyed on the caller's help-session bearer: a plugin has
-  // no lane and no inbox (#13335).
-  "assistant.getInbox",
-  "assistant.reply",
-  "assistant.sendMessage",
-  // Main-process only, for the hub's own help session: a plugin is no hub (#13336).
-  "host.list",
-  "host.listAssistants",
-  "host.sendMessage",
-  "host.getTask",
-  "host.listTasks",
-  "host.cancelTask",
-  "host.startAssistant",
-  "host.readQuota",
+  // Main-process only, for an assistant caller: a plugin is no assistant (#13496).
+  "assistant.list",
+  "assistant.start",
+  "agent.readQuota",
   // Main-process only, for one of this machine's own assistants (#13493).
+  "host.list",
   "host.call",
   // Replays the user's last action as a keybinding, which would carry a plugin
   // past every other entry in this list (#13494).

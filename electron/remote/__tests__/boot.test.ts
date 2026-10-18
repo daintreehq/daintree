@@ -70,9 +70,9 @@ const m = vi.hoisted(() => {
     registry: {
       get: vi.fn(
         (hostId: string) =>
-          ({ "messaging-on": { assistantMessagingEnabled: true } })[hostId] ?? null
+          ({ "control-on": { assistantControlEnabled: true, name: "studio-01" } })[hostId] ?? null
       ),
-      list: vi.fn(() => [{ id: "messaging-on" }]),
+      list: vi.fn(() => [{ id: "control-on" }]),
       onChange: vi.fn((_l: unknown) => () => {}),
     },
     router: { name: "router" },
@@ -419,25 +419,25 @@ vi.mock("../canopy/clientInstall.js", () => ({
 vi.mock("../canopy/hostInstall.js", () => ({
   installCanopyHost: canopy.installCanopyHost,
 }));
-const messaging = vi.hoisted(() => {
+const control = vi.hoisted(() => {
   const uninstall = vi.fn();
-  const uninstallExchanges = vi.fn();
-  const uninstallExchangeHost = vi.fn();
+  const uninstallLink = vi.fn();
+  const uninstallSenderHost = vi.fn();
   return {
     uninstall,
-    uninstallExchanges,
-    uninstallExchangeHost,
-    installAssistantMessagingPolicy: vi.fn((_deps: unknown) => uninstall),
-    installAssistantExchangeClient: vi.fn((_deps: unknown) => uninstallExchanges),
-    installAssistantExchangeHost: vi.fn(async (_server: unknown) => uninstallExchangeHost),
+    uninstallLink,
+    uninstallSenderHost,
+    installHostControl: vi.fn((_deps: unknown) => uninstall),
+    installHostControlLinkClient: vi.fn((_deps: unknown) => uninstallLink),
+    installAssistantSenderHost: vi.fn(async (_server: unknown) => uninstallSenderHost),
   };
 });
 vi.mock("../assistant/install.js", () => ({
-  installAssistantMessagingPolicy: messaging.installAssistantMessagingPolicy,
-  installAssistantExchangeClient: messaging.installAssistantExchangeClient,
+  installHostControl: control.installHostControl,
+  installHostControlLinkClient: control.installHostControlLinkClient,
 }));
-vi.mock("../assistant/hostExchanges.js", () => ({
-  installAssistantExchangeHost: messaging.installAssistantExchangeHost,
+vi.mock("../assistant/hostSenders.js", () => ({
+  installAssistantSenderHost: control.installAssistantSenderHost,
 }));
 vi.mock("../assistant/hostMcpRelay.js", () => ({
   installHostMcpRelay: vi.fn(() => ({ dispose: vi.fn() })),
@@ -478,11 +478,7 @@ vi.mock("../host/hostModeDefaults.js", async () => {
 
 import { startRemoteHosts, stopRemoteHosts } from "../boot.js";
 import { notifyMcpDriveTargetChange } from "../../services/mcp-server/driveTarget.js";
-import {
-  _resetRemoteServicesForTest,
-  getRemoteService,
-  registerRemoteService,
-} from "../runtime.js";
+import { _resetRemoteServicesForTest, getRemoteService } from "../runtime.js";
 import { Lane } from "../link/frames.js";
 import { ControlKind } from "../link/messages.js";
 
@@ -555,49 +551,39 @@ describe("startRemoteHosts", () => {
     expect(m.ensureWorkspaceClient).not.toHaveBeenCalled();
   });
 
-  it("holds the assistant messaging policy from start, reading each host's opt-in live", async () => {
+  it("installs host control from start, reading each host's switch live", async () => {
     await startRemoteHosts({ hostMode: false });
-    expect(messaging.installAssistantMessagingPolicy).toHaveBeenCalledTimes(1);
-    const [deps] = messaging.installAssistantMessagingPolicy.mock.calls[0] as [
-      {
-        isHostMessagingEnabled(hostId: string): boolean;
-        hasHosts(): boolean;
-        onHostsChanged(listener: () => void): () => void;
-      },
+    expect(control.installHostControl).toHaveBeenCalledTimes(1);
+    const [deps] = control.installHostControl.mock.calls[0] as [
+      { isHostControlEnabled(hostId: string): boolean; hasHosts(): boolean },
     ];
-    expect(deps.isHostMessagingEnabled("messaging-on")).toBe(true);
-    expect(deps.isHostMessagingEnabled("unknown-host")).toBe(false);
+    expect(deps.isHostControlEnabled("control-on")).toBe(true);
+    expect(deps.isHostControlEnabled("unknown-host")).toBe(false);
     expect(deps.hasHosts()).toBe(true);
-    expect(typeof deps.onHostsChanged(() => {})).toBe("function");
     await stopRemoteHosts();
-    expect(messaging.uninstall).toHaveBeenCalledTimes(1);
+    expect(control.uninstall).toHaveBeenCalledTimes(1);
   });
 
-  it("journals assistant exchanges from start, and reaches only hosts the Shell still knows", async () => {
+  it("proves this Shell's sender to hosts from start, and reaches only hosts it still knows", async () => {
     await startRemoteHosts({ hostMode: false });
-    expect(messaging.installAssistantExchangeClient).toHaveBeenCalledTimes(1);
-    const [deps] = messaging.installAssistantExchangeClient.mock.calls[0] as [
+    expect(control.installHostControlLinkClient).toHaveBeenCalledTimes(1);
+    const [deps] = control.installHostControlLinkClient.mock.calls[0] as [
       {
         session(hostId: string): Promise<unknown>;
         addUseCheck(check: (hostId: string) => boolean): () => void;
-        onExchangesChanged(hostId: string): void;
+        hostName(hostId: string): string;
       },
     ];
-    // Every view on this machine hears that a host's journal changed, as a hint to read it.
-    deps.onExchangesChanged("studio-01");
-    expect(m.client.emitLocal).toHaveBeenCalledWith({
-      type: "exchanges-changed",
-      hostId: "studio-01",
-    });
-    // Open exchanges keep their host's link through the manager's own idle sweep.
+    // Relayed calls keep their host's link through the manager's own idle sweep.
     const check = () => true;
     deps.addUseCheck(check);
     expect(m.client.manager.addUseCheck).toHaveBeenCalledWith(check);
-    // A host removed from the list is never dialled for an exchange.
+    expect(deps.hostName("control-on")).toBe("studio-01");
+    // A host removed from the list is never dialled.
     await expect(deps.session("unknown-host")).resolves.toBeNull();
     expect(m.client.manager.touch).not.toHaveBeenCalledWith("unknown-host");
     await stopRemoteHosts();
-    expect(messaging.uninstallExchanges).toHaveBeenCalledTimes(1);
+    expect(control.uninstallLink).toHaveBeenCalledTimes(1);
   });
 
   it("answers hosts' view requests from start, and releases them on stop", async () => {
@@ -1107,19 +1093,6 @@ describe("startRemoteHosts", () => {
       "remote:s1:view-11",
       "remote:s1:view-12",
     ]);
-  });
-
-  it("releases a Shell's assistant lanes when its session expires, and every Shell's when Host mode stops", async () => {
-    const policy = { releaseLinkSession: vi.fn(), releaseRemoteShells: vi.fn() };
-    registerRemoteService("assistantMessagingPolicy", policy as never);
-    await startRemoteHosts({ hostMode: true });
-
-    for (const l of m.server.expiredListeners) l({ sessionId: "s1", clientId: "c" });
-    expect(policy.releaseLinkSession.mock.calls).toEqual([["s1"]]);
-    expect(policy.releaseRemoteShells).not.toHaveBeenCalled();
-
-    await getRemoteService("hostMode")!.stopListening();
-    expect(policy.releaseRemoteShells).toHaveBeenCalledTimes(1);
   });
 
   it("admits hybrid host legs and routes MCP to the lease holder in Host mode", async () => {

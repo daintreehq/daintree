@@ -96,7 +96,27 @@ export interface AgentLastMessageUnavailable {
   reason: AgentLastMessageUnavailableReason;
 }
 
+/**
+ * Another assistant's reply as its pane shows it (#13496), whatever agent it
+ * runs: read off the screen, never a transcript. An observation of what was
+ * drawn, not a reconstructed message.
+ */
+export interface AgentLastMessageObserved {
+  status: "observed";
+  /**
+   * `handback`: ends at the handback marker its current prompt asked for, or
+   * is that marker's summary once it scrolled away. `screen`: no marker seen
+   * since that prompt, so the latest screen.
+   */
+  source: "handback" | "screen";
+  text: string;
+  truncated: boolean;
+}
+
 export type AgentLastMessageResult = AgentLastMessageOk | AgentLastMessageUnavailable;
+
+/** What `terminal.readLastMessageOwned` answers: a transcript read, or another assistant's screen. */
+export type TerminalLastMessageResult = AgentLastMessageResult | AgentLastMessageObserved;
 
 /** Default cap on `message.text`, measured as the bytes it costs once JSON-escaped, keeping the tail. */
 export const LAST_MESSAGE_TEXT_MAX_BYTES = 24 * 1024;

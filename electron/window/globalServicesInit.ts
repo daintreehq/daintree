@@ -384,6 +384,9 @@ export function startMcpServerOnce(registry: WindowRegistry): Promise<void> {
       helpSessionService.setOnMcpSessionRepinned((token) =>
         mcpServerService.resetHelpTransports(token)
       );
+      // Before the first session, so none opens without what keeps assistants
+      // out of its reach (#13496).
+      await helpSessionService.ensureAssistantControl();
       await mcpServerService.start(registry);
     } catch (err) {
       console.error("[MAIN] MCP server failed to start:", err);

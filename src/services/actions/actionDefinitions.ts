@@ -42,9 +42,9 @@ import { registerPluginActions } from "./definitions/pluginActions";
 import { registerSkillActions } from "./definitions/skillActions";
 import { registerHostActions } from "./definitions/hostActions";
 import { registerPortActions } from "./definitions/portActions";
-import { isEitherRemoteRoleSupported, isRemoteShellSupported } from "@/lib/remoteHosts";
-import { registerAssistantMessagingActions } from "./definitions/assistantMessagingActions";
-import { registerHostMessagingActions } from "./definitions/hostMessagingActions";
+import { isRemoteShellSupported } from "@/lib/remoteHosts";
+import { registerAssistantControlActions } from "./definitions/assistantControlActions";
+import { registerHostControlActions } from "./definitions/hostControlActions";
 
 export type { ActionCallbacks, ActionRegistry } from "./actionTypes";
 
@@ -95,15 +95,14 @@ export function createActionDefinitions(
   registerFileActions(actions, callbacks);
   registerVoiceActions(actions);
   registerActionActions(actions);
+  // One assistant addressing another (#13496): on every machine, hosts or not.
+  registerAssistantControlActions(actions);
   if (isRemoteShellSupported()) {
     registerHostActions(actions, callbacks);
     registerPortActions(actions, callbacks);
-    // The hub's tools for other hosts' assistants: a Shell's only, absent on Windows (#13336).
-    registerHostMessagingActions(actions);
+    // A Shell's reach into its hosts: a Shell's only, absent on Windows (#13493).
+    registerHostControlActions(actions);
   }
-  // Absent where Remote Hosts are: no host, no inbox (#13335). Registered on a
-  // Shell too, since a host is shown the manifest of the view driving it.
-  if (isEitherRemoteRoleSupported()) registerAssistantMessagingActions(actions);
 
   return actions;
 }

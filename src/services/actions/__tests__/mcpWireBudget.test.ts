@@ -544,7 +544,13 @@ describe("MCP wire budget — aggregate ratchets (§9)", () => {
   // returns the same snapshot so an orchestrator can stay under the limit.
   // Output schemas are a hard contract; trimmed before measuring (plain
   // numbers, not `.int()`'s safe-integer bounds on every field).
-  const MAX_EXTERNAL_PAYLOAD_BYTES = 54_400;
+  // 54_400 → 54_700 for #13496, measured at 54_686 B: the `observed` arm of
+  // `terminal.readLastMessageOwned`'s output schema, which every client
+  // validates a result against, so it is paid on the external surface too
+  // though only an assistant ever reads another assistant's screen. Trimmed
+  // to its source, text and truncation before measuring; the `generation`
+  // argument on the owned send is withheld from external clients.
+  const MAX_EXTERNAL_PAYLOAD_BYTES = 54_700;
   // 190_000 → 192_700 for the same 2_048 B the external half above pays for.
   // Every byte #11909 spends sits on an externally advertised tool, so both
   // totals moved by the identical amount. Only this one needed the ratchet
@@ -773,7 +779,13 @@ describe("MCP wire budget — aggregate ratchets (§9)", () => {
   // per tool, each of which would cost the whole surface again. `host.list`
   // grows by the per-host control flag. Offered to this machine's assistant
   // only, so the external ceiling does not move.
-  const MAX_COHORT_PAYLOAD_BYTES = 142_800;
+  // 142_800 → 129_000 for #13496, measured at 128_980 B: the inbox goes —
+  // `assistant.getInbox`, `assistant.reply`, `assistant.sendMessage` and the
+  // seven `host.*` messaging tools — for `assistant.list`, `assistant.start`,
+  // `agent.readQuota`, the `generation` on both sends and the `observed`
+  // reply arm, with `host.list` naming each controlled host's projects
+  // instead of its lanes.
+  const MAX_COHORT_PAYLOAD_BYTES = 129_000;
 
   const wireBytes = (t: WireTool) => t.descriptionBytes + t.paramsBytes + t.outputBytes;
 

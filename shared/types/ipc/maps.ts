@@ -115,7 +115,6 @@ import type {
 } from "../pty-host.js";
 import type { HibernationProjectHibernatedPayload } from "./hibernation.js";
 import type { KeepAwakeState } from "./keepAwake.js";
-import type { AssistantMessagingChangedEvent } from "./assistantMessaging.js";
 import type { IdleTerminalNotifyPayload } from "./idleTerminals.js";
 import type { IdleBackgroundClosedPayload } from "./idleBackgroundAutoClose.js";
 import type { AppThemeConfig } from "../appTheme.js";
@@ -1957,9 +1956,6 @@ export interface IpcEventMap {
 
   // Keep-awake events
   "keep-awake:state-changed": KeepAwakeState;
-
-  // Assistant messaging: a change happened; each view reads its own state again
-  "assistant-messaging:changed": AssistantMessagingChangedEvent;
 
   // Idle terminal notification events
   "idle-terminal:notify": IdleTerminalNotifyPayload;

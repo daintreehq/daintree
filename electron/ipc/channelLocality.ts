@@ -103,12 +103,6 @@ export const CHANNEL_LOCALITY = {
   "artifact:apply-patch": "host",
   "artifact:detected": "host",
   "artifact:save-to-file": "hybrid",
-  // Consent and the pause live with the assistants they govern: a remote
-  // window's lanes are the host's, enrolled as that window's link session.
-  "assistant-messaging:changed": "host",
-  "assistant-messaging:get-state": "host",
-  "assistant-messaging:set-lane-enrolled": "host",
-  "assistant-messaging:set-paused": "host",
   // Canopy on a host the view names, which this Shell reaches itself: This
   // Mac's handlers, or another host's through its session.
   "canopy-host:event": "shell",
@@ -834,8 +828,6 @@ export const CHANNEL_LOCALITY = {
   "remote-hosts:list-plugin-view-consents": "shell",
   "remote-hosts:reset-plugin-view-consent": "shell",
   "remote-hosts:prepare-plugin-view": "shell",
-  "remote-hosts:list-assistant-exchanges": "shell",
-  "remote-hosts:cancel-assistant-exchange": "shell",
   "run-history:append": "host",
   "run-history:clear": "host",
   "run-history:get-records": "host",

@@ -1,9 +1,8 @@
-import { useId, useState } from "react";
+import { useState } from "react";
 import { ChevronRight, CircleHelp, CircleStop, Ellipsis, History, RotateCw } from "lucide-react";
 import { DaintreeIcon } from "@/components/icons/DaintreeIcon";
 import {
   DropdownMenu,
-  DropdownMenuCheckboxItem,
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuSeparator,
@@ -56,45 +55,6 @@ function AssistantStateAnnouncer({ agentState }: { agentState: AgentState | null
   );
 }
 
-/** Cross-machine messaging for the lane on screen; absent while there's nothing to control. */
-export interface HelpPanelMessagingControls {
-  enrolled: boolean;
-  /** False while the lane isn't running, or another machine holds its consent. */
-  canChangeEnrollment: boolean;
-  /** Why enrollment can't be changed, shown under its label while it can't. */
-  enrollmentHint: string | null;
-  paused: boolean;
-  /** A remote window shows the host's pause but can't change it. */
-  canPause: boolean;
-  pauseHint: string | null;
-  onEnrolledChange: (enrolled: boolean) => void;
-  onPausedChange: (paused: boolean) => void;
-}
-
-/** A toggle's fixed label, with why it can't be changed right now under it. */
-function MenuToggleLabel({
-  label,
-  labelId,
-  hint,
-  hintId,
-}: {
-  label: string;
-  labelId: string;
-  hint: string | null;
-  hintId: string;
-}) {
-  return (
-    <span className="flex min-w-0 flex-col">
-      <span id={labelId}>{label}</span>
-      {hint && (
-        <span id={hintId} className="text-text-secondary">
-          {hint}
-        </span>
-      )}
-    </span>
-  );
-}
-
 interface HelpPanelHeaderProps {
   /** The state of the lane on screen. Announced only — the strip draws it. */
   agentState: AgentState | null | undefined;
@@ -106,7 +66,6 @@ interface HelpPanelHeaderProps {
   onOpenDocs: () => void;
   onClose: () => void;
   isFocused?: boolean;
-  messaging?: HelpPanelMessagingControls | null;
   /** Agents a session can be started on by name; offered only when there are several. */
   newSessionAgentIds?: readonly string[];
   /** False at the session ceiling, which parks the agent items rather than hiding them. */
@@ -124,7 +83,6 @@ export function HelpPanelHeader({
   onOpenDocs,
   onClose,
   isFocused = false,
-  messaging = null,
   newSessionAgentIds = [],
   canStartNewSession = false,
   onNewSessionWithAgent,
@@ -134,7 +92,6 @@ export function HelpPanelHeader({
   // An open overflow menu registers above the panel so Escape closes the menu
   // first, not the whole assistant.
   const [isMenuOpen, setIsMenuOpen] = useState(false);
-  const hintId = useId();
   useEscapeStack(isMenuOpen, () => setIsMenuOpen(false));
   return (
     <SurfaceHeader
@@ -222,42 +179,6 @@ export function HelpPanelHeader({
             <CircleHelp className="w-3.5 h-3.5 mr-2" aria-hidden="true" />
             Open docs
           </DropdownMenuItem>
-          {messaging && (
-            <>
-              <DropdownMenuSeparator />
-              {/* Labels stay put whatever the state; the check mark carries it. */}
-              <DropdownMenuCheckboxItem
-                checked={messaging.enrolled}
-                disabled={!messaging.canChangeEnrollment}
-                onCheckedChange={(checked) => messaging.onEnrolledChange(checked === true)}
-                aria-labelledby={`${hintId}-accept-label`}
-                aria-describedby={messaging.enrollmentHint ? `${hintId}-accept` : undefined}
-                data-testid="assistant-header-accept-messages"
-              >
-                <MenuToggleLabel
-                  label="Accept messages from other machines"
-                  labelId={`${hintId}-accept-label`}
-                  hint={messaging.enrollmentHint}
-                  hintId={`${hintId}-accept`}
-                />
-              </DropdownMenuCheckboxItem>
-              <DropdownMenuCheckboxItem
-                checked={messaging.paused}
-                disabled={!messaging.canPause}
-                onCheckedChange={(checked) => messaging.onPausedChange(checked === true)}
-                aria-labelledby={`${hintId}-pause-label`}
-                aria-describedby={messaging.pauseHint ? `${hintId}-pause` : undefined}
-                data-testid="assistant-header-pause-messages"
-              >
-                <MenuToggleLabel
-                  label="Pause messages between machines"
-                  labelId={`${hintId}-pause-label`}
-                  hint={messaging.pauseHint}
-                  hintId={`${hintId}-pause`}
-                />
-              </DropdownMenuCheckboxItem>
-            </>
-          )}
           {canEndSession && (
             <>
               <DropdownMenuSeparator />

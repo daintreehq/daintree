@@ -141,6 +141,16 @@ export type PaneTerminalResolver = (token: string) => string | null;
  * when it is displaced.
  */
 export type HelpSessionTerminalResolver = (helpSessionId: string) => string | null;
+
+/**
+ * Main's side of one assistant addressing another (#13496), wired by the help
+ * session service: the control itself, and the project a live help session's
+ * lane is in, which is all a local assistant caller may reach.
+ */
+export interface AssistantControlBinding {
+  control: NonNullable<import("./sessionServer.js").SessionServerDeps["assistantControl"]>;
+  sessionProject(helpSessionId: string): string | null;
+}
 /**
  * What an agent pane's workspace-bound dispatch carries beyond an external
  * session's (#12486). Every field is optional, so an external bound session

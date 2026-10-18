@@ -187,12 +187,17 @@ function parseArgs(rawArgs: unknown): ParsedArgs {
  * {@link buildViewlessTerminalStatus}, which is what actually keeps a foreign
  * id from being looked up.
  */
-function isVisibleToBoundSession(record: TerminalRecord, workspaceId: string): boolean {
+function isVisibleToBoundSession(
+  record: TerminalRecord,
+  workspaceId: string,
+  admittedAssistants?: ReadonlySet<string>
+): boolean {
   if (record.projectId !== workspaceId) return false;
   // A record with no `kind` is a plain terminal from an older pty-host entry;
   // it came from the terminal backend, so it has a PTY by construction.
   if (record.kind !== undefined && !panelKindHasPty(record.kind)) return false;
-  if (isAssistantTerminalRecord(record)) return false;
+  // Only an assistant caller's own resolution names one it may read (#13496).
+  if (isAssistantTerminalRecord(record)) return admittedAssistants?.has(record.id) === true;
   return true;
 }
 
@@ -302,7 +307,8 @@ function buildEntry(record: TerminalRecord, submissionToken?: string): TerminalS
 export async function buildViewlessTerminalStatus(
   deps: ViewlessTerminalStatusDeps,
   workspaceId: string,
-  rawArgs: unknown
+  rawArgs: unknown,
+  admittedAssistants?: ReadonlySet<string>
 ): Promise<TerminalStatusResult> {
   const { terminalIds, lines, stripAnsi, includeOutput, submissionToken } = parseArgs(rawArgs);
   const uniqueIds = [...new Set(terminalIds)];
@@ -335,7 +341,9 @@ export async function buildViewlessTerminalStatus(
     const record = fetched[index];
     // `getTerminalAsync` folds an RPC failure into `null`, so this means "not
     // found or unreadable" — never evidence that the terminal has exited.
-    if (record && isVisibleToBoundSession(record, workspaceId)) records.set(id, record);
+    if (record && isVisibleToBoundSession(record, workspaceId, admittedAssistants)) {
+      records.set(id, record);
+    }
   });
 
   const outputs = new Map<string, CapturedTail | null>();
@@ -409,7 +417,8 @@ export async function buildViewlessTerminalStatus(
  */
 export async function handleTerminalGetStatusViewless(
   rawArgs: unknown,
-  workspaceId: string
+  workspaceId: string,
+  admittedAssistants?: ReadonlySet<string>
 ): Promise<TerminalStatusResult> {
   const ptyClient = getPtyClient();
   if (!ptyClient) {
@@ -418,5 +427,5 @@ export async function handleTerminalGetStatusViewless(
       "The terminal backend is not available, so terminal status cannot be read without a live view."
     );
   }
-  return buildViewlessTerminalStatus({ ptyClient }, workspaceId, rawArgs);
+  return buildViewlessTerminalStatus({ ptyClient }, workspaceId, rawArgs, admittedAssistants);
 }

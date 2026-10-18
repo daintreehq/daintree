@@ -4,7 +4,7 @@ import type {
   McpBearerIdentity,
   McpConfirmationDecision,
 } from "../../../shared/types/ipc/mcpServer.js";
-import type { RelayApprovalQuestion } from "../assistant/HubMessagingRuntime.js";
+import type { RelayApprovalQuestion } from "../assistant/HostCallRuntime.js";
 import {
   MCP_DISPATCH_ACTION_METHOD,
   MCP_GET_MANIFEST_METHOD,

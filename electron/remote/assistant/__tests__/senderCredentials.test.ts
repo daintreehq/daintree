@@ -14,7 +14,6 @@ vi.mock("electron", () => ({
 }));
 
 import { openDb } from "../../../services/persistence/db.js";
-import { AssistantExchangeJournal } from "../../exchange/AssistantExchangeJournal.js";
 import { AssistantSenderCredentials } from "../senderCredentials.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -85,21 +84,23 @@ describe("AssistantSenderCredentials (#13493)", () => {
     );
   });
 
-  it("is what the journal authenticates with, and goes with a removed host", () => {
-    const credentials = new AssistantSenderCredentials(sqlite, { newCredential: mint });
-    const journal = new AssistantExchangeJournal(sqlite, { credentials });
-    const credential = journal.credential("studio");
+  it("goes with a removed host, the journal's copy included, so it is never adopted back", () => {
+    sqlite
+      .prepare(
+        "INSERT INTO assistant_exchange_hosts (host_id, sender_credential, cursor) VALUES (?, ?, 0)"
+      )
+      .run("studio", "credential-from-before");
+    const store = new AssistantSenderCredentials(sqlite, { newCredential: mint });
+    store.credential("relay-only");
+    expect(store.hosts().sort()).toEqual(["relay-only", "studio"]);
 
-    expect(credentials.existing("studio")).toBe(credential);
-    expect(journal.existingCredential("studio")).toBe(credential);
-    expect(journal.cursor("studio")).toBe(0);
+    store.forget("studio");
+    store.forget("relay-only");
+    expect(store.hosts()).toEqual([]);
 
-    // A host known only by its credential is still one the journal can forget.
-    credentials.credential("relay-only");
-    expect(journal.hosts().sort()).toEqual(["relay-only", "studio"]);
-    journal.forgetHost("studio");
-    journal.forgetHost("relay-only");
-    expect(credentials.hosts()).toEqual([]);
-    expect(journal.hosts()).toEqual([]);
+    reopen();
+    const again = new AssistantSenderCredentials(sqlite, { newCredential: mint });
+    expect(again.existing("studio")).toBeNull();
+    expect(again.credential("studio")).toBe("credential-2");
   });
 });

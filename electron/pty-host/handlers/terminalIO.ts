@@ -14,9 +14,12 @@ export function createTerminalIOHandlers(ctx: HostContext): HandlerMap {
     },
 
     submit: (msg) => {
-      // Only the one known guard crosses; anything else is dropped rather than
+      // Only the known guards cross; anything else is dropped rather than
       // trusted to mean "no check".
-      const guard = msg.guard === "settled-prompt" ? msg.guard : undefined;
+      const guard =
+        msg.guard === "settled-prompt" || msg.guard === "settled-prompt-strict"
+          ? msg.guard
+          : undefined;
       const imagePaths = Array.isArray(msg.imagePaths)
         ? msg.imagePaths.filter((path: unknown): path is string => typeof path === "string")
         : undefined;

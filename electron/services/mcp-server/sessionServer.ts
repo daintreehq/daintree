@@ -116,6 +116,7 @@ import {
   shouldExposeTool,
   isWithheldFromBoundSession,
   isWithheldFromRelaySession,
+  mayControlAssistants,
   mayRunProjectCommand,
   type SessionSurfacePolicy,
   isTierPermitted,
@@ -146,6 +147,7 @@ import { buildSurfaceManifest, MCP_SURFACE_TOOL_ID } from "./surfaceManifest.js"
 import { viewlessStatusArgsAreAnswerable } from "./terminalStatus.js";
 import { viewlessActionDanger } from "../viewless/viewlessActionCatalog.js";
 import { parseLastMessageReadArgs, type LastMessageReadArgs } from "./lastMessageArgs.js";
+import { LAST_MESSAGE_TEXT_MAX_BYTES } from "../../../shared/types/agentLastMessage.js";
 import {
   extractOwnedResourcesFromDispatch,
   type OwnedResourceKind,
@@ -176,22 +178,26 @@ import {
 import { REPLY_WAIT_DEFAULT_SECONDS, WaitSecondsSchema } from "../../../shared/types/replyWait.js";
 import type { ReplyWait, ReplyWaiterService } from "./replyWaiter.js";
 import {
-  ASSISTANT_GET_INBOX_TOOL,
-  ASSISTANT_MESSAGING_TOOL_IDS,
-  ASSISTANT_REPLY_TOOL,
-  ASSISTANT_SEND_MESSAGE_TOOL,
-} from "../../../shared/types/assistantMessaging.js";
+  AGENT_READ_QUOTA_TOOL,
+  ASSISTANT_CONTROL_TOOL_IDS,
+  ASSISTANT_LIST_TOOL,
+  ASSISTANT_START_TOOL,
+  ASSISTANT_TARGET_REFUSALS,
+  AssistantStartArgsSchema,
+} from "../../../shared/types/assistantControl.js";
+import type { CodexQuotaResult } from "../../../shared/types/ipc/agentQuota.js";
+import { HOST_CALL_TOOL, HOST_CONTROL_TOOL_IDS } from "../../../shared/types/hostControl.js";
 import {
-  auditCodeForMessagingRefusal,
-  runAssistantMessagingTool,
-  type AssistantMessagingAccess,
-} from "./assistantMessagingTools.js";
-import { HOST_CALL_TOOL, HOST_MESSAGING_TOOL_IDS } from "../../../shared/types/hostMessaging.js";
+  auditCodeForHostControlRefusal,
+  runHostControlTool,
+  type HostControlAccess,
+} from "./hostControlTools.js";
 import {
-  auditCodeForHostMessagingRefusal,
-  runHostMessagingTool,
-  type HostMessagingAccess,
-} from "./hostMessagingTools.js";
+  AssistantTargetError,
+  type AssistantCaller,
+  type AssistantTarget,
+  type AssistantTerminalControl,
+} from "../assistants/AssistantTerminalControl.js";
 
 /**
  * Backstop on the `actions.list` page walk. The registry is a few hundred
@@ -209,6 +215,7 @@ const PROJECT_RUN_COMMAND_TOOL = "project.runCommand";
 
 const PROJECT_RUN_COMMAND_REFUSAL =
   "project.runCommand is only available to Daintree's own assistant at the full tier.";
+const ASSISTANT_CONTROL_REFUSAL = "Only a Daintree Assistant can find or start assistants.";
 const TERMINAL_GET_STATUS_TOOL = "terminal.getStatus";
 const TERMINAL_READ_LAST_MESSAGE_OWNED_TOOL = "terminal.readLastMessageOwned";
 
@@ -254,11 +261,11 @@ export const VIEWLESS_MAIN_PROCESS_TOOLS: ReadonlySet<string> = new Set([
   // Terminal notices live in main and read the pty-host, so arming one needs
   // no project view.
   TERMINAL_NOTIFY_WHEN_IDLE_TOOL,
-  // An enrolled lane's inbox lives in main beside its exchange records
-  // (#13335); the lane is read from the caller's bearer, never a view.
-  ASSISTANT_GET_INBOX_TOOL,
-  ASSISTANT_REPLY_TOOL,
-  ASSISTANT_SEND_MESSAGE_TOOL,
+  // Assistants are found, started and quota read in main (#13496), from the
+  // caller's own session, never a view.
+  ASSISTANT_LIST_TOOL,
+  ASSISTANT_START_TOOL,
+  AGENT_READ_QUOTA_TOOL,
 ]);
 /**
  * The main-process executors an owned tool can name. Kept apart from the rest
@@ -473,6 +480,57 @@ const OWNED_RESOURCE_TOOLS: Record<string, OwnedResourceTool> = {
     acceptsAdoption: true,
   },
 };
+
+/**
+ * The agent messaging tools an assistant caller may point at another
+ * assistant by the terminal id `assistant.list` gave it (#13496). They run in
+ * main for such a target, whichever origin's twin was called: an assistant is
+ * no grid pane, so no view's panels hold it.
+ */
+const ASSISTANT_TARGET_TOOLS: ReadonlySet<string> = new Set([
+  "terminal.sendCommand",
+  "terminal.sendCommandOwned",
+  "terminal.interrupt",
+  "terminal.interruptOwned",
+  "terminal.close",
+  "terminal.closeOwned",
+  TERMINAL_READ_LAST_MESSAGE_OWNED_TOOL,
+]);
+const ASSISTANT_SEND_TOOLS: ReadonlySet<string> = new Set([
+  "terminal.sendCommand",
+  "terminal.sendCommandOwned",
+]);
+const ASSISTANT_INTERRUPT_TOOLS: ReadonlySet<string> = new Set([
+  "terminal.interrupt",
+  "terminal.interruptOwned",
+]);
+
+/**
+ * The tools that watch or read named terminals, which already answer for an
+ * assistant in the caller's project (#13496): only an assistant caller may
+ * name one. The output and info reads go to the pty-host by id, past any
+ * view's panels, so they are here too.
+ */
+const ASSISTANT_WATCH_TOOLS: ReadonlySet<string> = new Set([
+  TERMINAL_GET_STATUS_TOOL,
+  TERMINAL_WAIT_UNTIL_IDLE_TOOL,
+  TERMINAL_WAIT_UNTIL_IDLE_BATCH_TOOL,
+  TERMINAL_NOTIFY_WHEN_IDLE_TOOL,
+  "terminal.getOutput",
+  "terminal.info.get",
+]);
+
+/** Every terminal id a call's arguments name, by `terminalId` or `terminalIds`. */
+function namedTerminalIds(args: unknown): string[] {
+  if (typeof args !== "object" || args === null || Array.isArray(args)) return [];
+  const record = args as Record<string, unknown>;
+  const ids: string[] = [];
+  if (typeof record.terminalId === "string") ids.push(record.terminalId);
+  if (Array.isArray(record.terminalIds)) {
+    for (const id of record.terminalIds) if (typeof id === "string") ids.push(id);
+  }
+  return ids;
+}
 
 /**
  * The launchers whose arguments can name an agent, and the one that can name
@@ -1057,7 +1115,9 @@ export interface SessionServerDeps extends OwnedMainExecutors {
    */
   handleTerminalGetStatusViewless: (
     rawArgs: unknown,
-    workspaceId: string
+    workspaceId: string,
+    /** Assistant terminals an assistant caller named and may read (#13496). */
+    admittedAssistants?: ReadonlySet<string>
   ) => Promise<import("../../../shared/types/terminalStatus.js").TerminalStatusResult>;
   /**
    * Whether a terminal with this id is already live anywhere in the app, read
@@ -1091,17 +1151,33 @@ export interface SessionServerDeps extends OwnedMainExecutors {
    */
   terminalNotify?: TerminalNotifyHandlers;
   /**
-   * The caller's own lane's messaging (#13335), bound to this session's
-   * help-session bearer. Absent for every other bearer; then
-   * `assistant.getInbox` and `assistant.reply` are neither listed nor run.
+   * The assistant's reach to this Shell's hosts (#13493), bound to this
+   * session's help-session bearer. Absent for every other bearer; then
+   * `host.list` and `host.call` are neither listed nor run.
    */
-  assistantMessaging?: AssistantMessagingAccess;
+  hostControl?: HostControlAccess;
   /**
-   * The assistant's reach to other hosts' assistants (#13336), bound to this
-   * session's help-session bearer. Absent for every other bearer; then the
-   * `host.*` messaging tools are neither listed nor run.
+   * The caller as an assistant (#13496): one of this machine's help sessions,
+   * or another machine's assistant reaching this one through its Shell, with
+   * the project it works in. Read per call from the session's own state;
+   * null for every other session, an agent pane or an api-key client. Absent,
+   * no session is.
    */
-  hostMessaging?: HostMessagingAccess;
+  assistantCaller?: () => AssistantCaller | null;
+  /** Main's side of one assistant addressing another (#13496); absent, none can. */
+  assistantControl?: Pick<
+    AssistantTerminalControl,
+    | "isAssistantTerminal"
+    | "resolve"
+    | "list"
+    | "start"
+    | "submit"
+    | "interrupt"
+    | "close"
+    | "readReply"
+  >;
+  /** This machine's Codex quota, as `agent.readQuota` reports it. */
+  readCodexQuota?: () => Promise<CodexQuotaResult>;
   /** Blocking replies for `waitForReply`. Optional; absent, the flag is ignored. */
   replyWaiter?: Pick<ReplyWaiterService, "wait">;
   /**
@@ -1316,6 +1392,25 @@ function sessionGoneError(): McpError {
   );
 }
 
+/**
+ * An assistant tool's or target's refusal as the audit records it: its own
+ * code goes to the caller, the shared vocabulary to the log.
+ */
+function auditCodeForAssistantRefusal(
+  code: string
+): import("../../../shared/types/actions.js").ActionErrorCode {
+  switch (code) {
+    case "VALIDATION_ERROR":
+      return "VALIDATION_ERROR";
+    case EXECUTION_ERROR_CODE:
+      return "EXECUTION_ERROR";
+    case ASSISTANT_TARGET_REFUSALS.notFound:
+      return "NOT_FOUND";
+    default:
+      return "RESTRICTED";
+  }
+}
+
 /** A relayed write refused at its last check, just before its side effect (#13493). */
 class RelayWriteRefused extends Error {
   constructor(readonly refusal: { code: string; message: string }) {
@@ -1349,8 +1444,8 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
     notifyDisplayImage,
     workspaceBinding,
     terminalNotify,
-    assistantMessaging,
-    hostMessaging,
+    hostControl,
+    assistantControl,
     replyWaiter,
     resolveOwnPane,
     requestApproval,
@@ -1379,50 +1474,25 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
     relay: deps.relay !== undefined,
   };
 
-  // Whether this session is an enrolled lane's own assistant right now
-  // (#13335): a help-session bearer whose lane the messaging runtime still
-  // recognises. Read per listing, never cached.
-  const laneMessagingAvailable = (): boolean =>
-    assistantMessaging !== undefined &&
-    sessionStore.sessionHelpIdMap.has(sessionId) &&
-    assistantMessaging.isAvailable();
-
-  // Whether this session may also start a message to its Shell's hub
-  // (#13338): a lane a remote Shell enrolled, never the hub itself.
-  const laneSendingAvailable = (): boolean =>
-    laneMessagingAvailable() && assistantMessaging?.isSendAvailable() === true;
-
-  // Whether this session is one of this Shell's own assistants while a host
-  // exists (#13336, #13468). Read per listing, never cached.
-  const hubMessagingAvailable = (): boolean =>
-    hostMessaging !== undefined &&
-    sessionStore.sessionHelpIdMap.has(sessionId) &&
-    hostMessaging.isAvailable();
-
-  // What a listing offers: the tools above from the session's start wherever
-  // its lane could be enrolled, not only once it is. Codex reads the tool
-  // list once and never acts on `tools/list_changed`, and a lane can only be
-  // enrolled after its assistant starts, so enrollment-gated listing never
-  // reached it. The calls themselves still refuse until the lane is enrolled.
-  const laneMessagingOffered = (): boolean =>
-    laneMessagingAvailable() ||
-    (assistantMessaging !== undefined &&
-      sessionStore.sessionHelpIdMap.has(sessionId) &&
-      assistantMessaging.isReachable?.() === true);
-  const laneSendingOffered = (): boolean =>
-    laneSendingAvailable() ||
-    (laneMessagingOffered() && assistantMessaging?.isSendReachable?.() === true);
-  const hubMessagingOffered = (): boolean =>
-    hubMessagingAvailable() ||
-    (hostMessaging !== undefined &&
-      sessionStore.sessionHelpIdMap.has(sessionId) &&
-      hostMessaging.isReachable?.() === true);
-  // `host.call` (#13493): any of this machine's own assistants, from its start
-  // and whether or not a host exists yet. Read per listing, never cached.
+  // `host.list` and `host.call` (#13493): any of this machine's own
+  // assistants, from its start and whether or not a host exists yet. Read per
+  // listing, never cached.
   const hostCallOffered = (): boolean =>
-    hostMessaging !== undefined &&
+    hostControl !== undefined &&
     sessionStore.sessionHelpIdMap.has(sessionId) &&
-    hostMessaging.isCallReachable?.() === true;
+    hostControl.isCallReachable();
+  // Whether this session is an assistant that may address another (#13496).
+  // Read per listing and per call, never cached: a help session's lane can
+  // end under it.
+  const assistantCallerNow = (): AssistantCaller | null =>
+    assistantControl !== undefined ? (deps.assistantCaller?.() ?? null) : null;
+  // Whether a read outside the tool calls' own gate may name this terminal
+  // (#13496): an assistant's only for an assistant caller it resolves for.
+  const mayNameTerminal = (tier: McpTier, terminalId: string): boolean => {
+    if (assistantControl?.isAssistantTerminal(terminalId) !== true) return true;
+    const caller = tier === "external" ? null : assistantCallerNow();
+    return caller !== null && assistantControl.resolve(caller, terminalId) !== null;
+  };
 
   const server = new Server(
     { name: "Daintree", version: app.getVersion() },
@@ -1564,10 +1634,8 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
     const listSurface: SessionSurfacePolicy = {
       ...sessionSurface,
       rendererOwnedOrigin: sessionStore.isRendererOwnedOrigin(sessionId),
-      assistantMessaging: laneMessagingOffered(),
-      assistantSending: laneSendingOffered(),
-      hubMessaging: hubMessagingOffered(),
       hostCall: hostCallOffered(),
+      assistantCaller: assistantCallerNow() !== null,
     };
     const tools = manifest
       .filter((entry) => shouldExposeTool(entry, tier, listSurface))
@@ -1660,6 +1728,62 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
       rendererOwnedOrigin,
       relay: sessionSurface.relay === true,
     });
+    // The assistant this call comes from, when it is one (#13496), read once so
+    // the assistant tools' listing, discovery and admission below agree, and
+    // so every assistant target this call names is resolved for the same one.
+    const assistantCaller = tier === "external" ? null : assistantCallerNow();
+    const assistantControlCaller = mayControlAssistants(tier, {
+      assistantCaller: assistantCaller !== null,
+    });
+    // A change main makes itself for an assistant answers to the drive rule
+    // (#13493): a relayed one as its Shell's view would, a host's own
+    // assistant with no view as nobody's. Null while it may go ahead.
+    const assistantWriteRefusal = (projectId: string): { code: string; message: string } | null =>
+      deps.relay !== undefined
+        ? deps.relay.refuseWrite(projectId)
+        : (deps.refuseWrite?.(projectId) ?? null);
+    // One agent-messaging call against an assistant this call named (#13496):
+    // a send, an interrupt, a close or a read, with only what that tool takes.
+    const runAssistantTarget = async (
+      target: AssistantTarget,
+      caller: AssistantCaller
+    ): Promise<unknown> => {
+      const control = assistantControl!;
+      const record =
+        typeof args === "object" && args !== null && !Array.isArray(args)
+          ? (args as Record<string, unknown>)
+          : {};
+      if (actionId === TERMINAL_READ_LAST_MESSAGE_OWNED_TOOL) {
+        const read = parseLastMessageReadArgs(args);
+        if (!read.ok) throw new AssistantTargetError("VALIDATION_ERROR", read.message);
+        if (read.options.cursor !== undefined || (read.options.messageIndex ?? 0) > 0) {
+          throw new AssistantTargetError(
+            "VALIDATION_ERROR",
+            "An assistant's reply is read off its screen, latest only: it takes `maxBytes` alone."
+          );
+        }
+        return control.readReply(target, read.options.maxBytes ?? LAST_MESSAGE_TEXT_MAX_BYTES);
+      }
+      const refusal = assistantWriteRefusal(target.projectId);
+      if (refusal) throw new AssistantTargetError(refusal.code, refusal.message);
+      if (ASSISTANT_SEND_TOOLS.has(actionId)) {
+        const command = typeof record.command === "string" ? record.command : "";
+        if (command.trim().length === 0) {
+          throw new AssistantTargetError("VALIDATION_ERROR", "A send needs a non-empty `command`.");
+        }
+        const generation =
+          typeof record.generation === "number" && Number.isInteger(record.generation)
+            ? record.generation
+            : undefined;
+        return control.submit(caller, target, {
+          command,
+          generation,
+          handback: record.handback === true,
+        });
+      }
+      if (ASSISTANT_INTERRUPT_TOOLS.has(actionId)) return control.interrupt(target);
+      return control.close(caller, target);
+    };
     // Daintree's own assistant only (#12874): not agent panes, not api-key
     // clients. Read live per call, and a
     // failed read keeps the dialog. A batch item inherits its batch's answer.
@@ -1821,22 +1945,20 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
             ...perToolGrantedActionIds,
             ...nativeGrantedActionIds,
           ]);
-          // The inbox tools are offered only where this session's own lane
-          // could be enrolled (#13335), whatever its tier or grants; discovery agrees.
-          if (!laneMessagingOffered()) {
-            for (const id of ASSISTANT_MESSAGING_TOOL_IDS) permittedActionIds.delete(id);
-          } else if (!laneSendingOffered()) {
-            permittedActionIds.delete(ASSISTANT_SEND_MESSAGE_TOOL);
-          }
-          // Likewise the host tools, offered only to an assistant session while a host exists (#13336).
-          if (!hubMessagingOffered()) {
-            for (const id of HOST_MESSAGING_TOOL_IDS) permittedActionIds.delete(id);
+          // The host tools are offered only to this machine's own assistants (#13493),
+          // whatever its tier or grants; discovery agrees.
+          if (!hostCallOffered()) {
+            for (const id of HOST_CONTROL_TOOL_IDS) permittedActionIds.delete(id);
           }
           // A grant never makes the command runner callable, so it never makes it findable;
           // a relayed full-tier session that may run it finds it, whatever its tier list says.
           if (commandRunnerCaller) permittedActionIds.add(PROJECT_RUN_COMMAND_TOOL);
           else permittedActionIds.delete(PROJECT_RUN_COMMAND_TOOL);
-          if (!hostCallOffered()) permittedActionIds.delete(HOST_CALL_TOOL);
+          // Likewise the assistant tools, for exactly the assistants that may call them (#13496).
+          for (const id of ASSISTANT_CONTROL_TOOL_IDS) {
+            if (assistantControlCaller) permittedActionIds.add(id);
+            else permittedActionIds.delete(id);
+          }
           // A relayed session finds nothing it would be refused (#13493).
           if (sessionSurface.relay === true) {
             for (const id of [...permittedActionIds]) {
@@ -1856,7 +1978,7 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
               relay: sessionSurface.relay === true,
               paneApproval: sessionSurface.paneApproval === true,
               paneSkipConfirmations: sessionSurface.paneSkipConfirmations === true,
-              hubMessaging: hubMessagingOffered(),
+              hostCall: hostCallOffered(),
               perToolGrantedActionIds,
               nativeGrantedActionIds,
               confirmationsSkipped,
@@ -2098,7 +2220,9 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
       !relayWithheld &&
       (actionId === PROJECT_RUN_COMMAND_TOOL
         ? commandRunnerCaller
-        : isTierPermitted(tier, actionId, rendererOwnedOrigin));
+        : ASSISTANT_CONTROL_TOOL_IDS.has(actionId)
+          ? assistantControlCaller
+          : isTierPermitted(tier, actionId, rendererOwnedOrigin));
     // An agent pane's tier is an auto-approval line, not a ceiling (#12692).
     const paneApproval = sessionSurface.paneApproval === true;
     let grantIssuedAt: number | undefined;
@@ -2466,7 +2590,10 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
     // Refused here, past the tier gate but before a grant's use is spent or a
     // pane asks: a grant or a pane approval admits a call, and this one admits
     // only its own caller.
-    if (actionId === PROJECT_RUN_COMMAND_TOOL && !commandRunnerCaller) {
+    if (
+      (actionId === PROJECT_RUN_COMMAND_TOOL && !commandRunnerCaller) ||
+      (ASSISTANT_CONTROL_TOOL_IDS.has(actionId) && !assistantControlCaller)
+    ) {
       try {
         appendAuditRecord({
           toolId: actionId,
@@ -2484,7 +2611,10 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
       }
       return buildToolError({
         code: TIER_NOT_PERMITTED_CODE,
-        message: PROJECT_RUN_COMMAND_REFUSAL,
+        message:
+          actionId === PROJECT_RUN_COMMAND_TOOL
+            ? PROJECT_RUN_COMMAND_REFUSAL
+            : ASSISTANT_CONTROL_REFUSAL,
       });
     }
 
@@ -2891,13 +3021,79 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
     // hook that fires before any other awaiter sees the resolved result.
     const dispatchPromise: Promise<CallToolResultLike> = (async () => {
       try {
+        // An assistant named by agent messaging (#13496), resolved for the
+        // assistant this call came from: in its own project, never itself. No
+        // other caller may name one at all, so its refusal reads the same as
+        // an id nothing here holds, and nothing reaches a view or a terminal.
+        const assistantIds =
+          assistantControl !== undefined &&
+          (ASSISTANT_TARGET_TOOLS.has(actionId) || ASSISTANT_WATCH_TOOLS.has(actionId))
+            ? namedTerminalIds(args).filter((id) => assistantControl.isAssistantTerminal(id))
+            : [];
+        if (assistantIds.length > 0) {
+          const unreachable =
+            assistantCaller === null
+              ? assistantIds[0]
+              : assistantIds.find((id) => assistantControl!.resolve(assistantCaller, id) === null);
+          if (unreachable !== undefined) {
+            const message =
+              assistantCaller === null
+                ? `No terminal '${unreachable}' is available to this connection.`
+                : `No assistant in this project runs as terminal '${unreachable}'. List them with 'assistant.list'.`;
+            outcome = {
+              kind: "result",
+              value: { ok: false, error: { code: "NOT_FOUND", message } },
+            };
+            return buildToolError({
+              code: assistantCaller === null ? "NOT_FOUND" : ASSISTANT_TARGET_REFUSALS.notFound,
+              message,
+            });
+          }
+        }
+        const assistantTarget: AssistantTarget | undefined =
+          assistantIds.length > 0 &&
+          assistantCaller !== null &&
+          ASSISTANT_TARGET_TOOLS.has(actionId)
+            ? (assistantControl!.resolve(assistantCaller, assistantIds[0]!) ?? undefined)
+            : undefined;
+
+        // Status for named assistants is read off the pty-host (#13496): no
+        // view's panels hold one. Ids that aren't assistants are read the same
+        // way, from the caller's own project.
+        if (
+          actionId === TERMINAL_GET_STATUS_TOOL &&
+          assistantIds.length > 0 &&
+          assistantCaller !== null
+        ) {
+          emitToolCallStarted(false);
+          try {
+            const result = await handleTerminalGetStatusViewless(
+              args,
+              assistantCaller.projectId,
+              new Set(assistantIds)
+            );
+            outcome = { kind: "result", value: { ok: true, result } };
+            return buildToolCallResult(result, {
+              structuredContent: result as unknown as Record<string, unknown>,
+            });
+          } catch (err) {
+            outcome = { kind: "throw", error: err };
+            if (err instanceof McpError) throw err;
+            return buildToolError({
+              code: EXECUTION_ERROR_CODE,
+              message: formatErrorMessage(err, `${actionId} failed`),
+            });
+          }
+        }
+
         // Ownership gate for the `*Owned` tools (#11909). Placed at the
         // very top of the IIFE: a session that does not own the named resource
         // is refused here, before the activity strip is told a call started,
         // before any confirmation is raised, and — the acceptance criterion
         // that matters — before anything reaches a renderer, so a refused call
         // cannot have mutated a panel or a worktree.
-        if (ownedResource !== undefined) {
+        // An assistant target answers to its own rules below, not the ledger.
+        if (ownedResource !== undefined && assistantTarget === undefined) {
           const resourceId = readOwnedResourceId(args, ownedResource.idArg);
           if (resourceId === undefined) {
             const message =
@@ -2997,6 +3193,7 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
         if (
           rendererOwnedOrigin &&
           actionId === "terminal.close" &&
+          assistantTarget === undefined &&
           batchItem?.closeApproved !== true
         ) {
           const terminalId = readStringArg(args, "terminalId");
@@ -3137,9 +3334,15 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
           // preference (#12989) nothing is asked and the batch is audited as
           // run under it; its items carry the same answer, never an approval.
           let closeApproved: ReadonlySet<string> | undefined;
+          // An assistant is never put to the person here: its own item
+          // checks who started it, and one this caller can't reach is
+          // answered as missing (#13496).
+          const isAssistantId = (id: string) => assistantControl?.isAssistantTerminal(id) === true;
           const closeIds =
             actionId === "terminal.closeMany" && rendererOwnedOrigin
-              ? [...new Set((parsed.data as TerminalCloseManyArgs).terminalIds)]
+              ? [...new Set((parsed.data as TerminalCloseManyArgs).terminalIds)].filter(
+                  (id) => !isAssistantId(id)
+                )
               : [];
           const closeWouldAsk = (await Promise.all(closeIds.map(closeNeedsApproval))).some(Boolean);
           if (closeWouldAsk && confirmationsSkipped) {
@@ -3171,7 +3374,11 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
           for (const item of batch.expand(parsed.data, rendererOwnedOrigin)) {
             // A cancelled call starts nothing more; what already went out stands.
             if (extra.signal.aborted) break;
-            if (closeApproved !== undefined && !closeApproved.has(item.target)) {
+            if (
+              closeApproved !== undefined &&
+              !closeApproved.has(item.target) &&
+              !isAssistantId(item.target)
+            ) {
               waits.push(undefined);
               results.push({
                 target: item.target,
@@ -3522,27 +3729,27 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
           }
         }
 
-        // Short-circuit: an enrolled lane's inbox, replies (#13335) and its
-        // messages to the hub (#13338) live in main beside the exchange records. The lane comes from this session's
-        // help bearer alone, so the access check is the call itself: every
-        // other bearer, and a lane no longer enrolled as it was, is refused
-        // here whatever admitted the call above. Refusals are fixed text and
-        // results never carry a body into the audit (see its projections).
-        if (ASSISTANT_MESSAGING_TOOL_IDS.has(actionId)) {
+        // Short-circuit: a Shell assistant's host tools (#13493) run in main
+        // over the link. Only an assistant running in one of this machine's
+        // own views gets past the runtime's own check (#13468), whatever
+        // admitted the call above. Named outcomes (opted out, unreachable,
+        // ambiguous, ...) are results; refusals are fixed text, and the audit
+        // projections keep results out of the log.
+        if (HOST_CONTROL_TOOL_IDS.has(actionId)) {
           emitToolCallStarted(false);
           try {
-            // Help-session bearers only, as for help.displayImage: a pane or
-            // api-key bearer has no lane, whatever its tier admitted.
-            // Sending is narrower again: only a lane a remote Shell enrolled,
-            // so the hub, which has the inbox tools, is refused it here too.
-            const eligible =
-              assistantMessaging !== undefined &&
-              sessionStore.sessionHelpIdMap.has(sessionId) &&
-              (actionId !== ASSISTANT_SEND_MESSAGE_TOOL || laneSendingAvailable());
-            const settled = runAssistantMessagingTool(
+            // `host.call` carries the tier it was admitted at here: all it may have on the host.
+            const callContext =
+              actionId === HOST_CALL_TOOL && (tier === "core" || tier === "full")
+                ? { tier }
+                : undefined;
+            const settled = await runHostControlTool(
               actionId,
               args,
-              eligible ? assistantMessaging : undefined
+              hostControl !== undefined && sessionStore.sessionHelpIdMap.has(sessionId)
+                ? hostControl
+                : undefined,
+              callContext
             );
             if (!settled.ok) {
               outcome = {
@@ -3550,7 +3757,7 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
                 value: {
                   ok: false,
                   error: {
-                    code: auditCodeForMessagingRefusal(settled.code),
+                    code: auditCodeForHostControlRefusal(settled.code),
                     message: settled.message,
                   },
                 },
@@ -3572,52 +3779,58 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
           }
         }
 
-        // Short-circuit: a Shell assistant's tools for other hosts' assistants
-        // (#13336) run in main over the link. Only an assistant running in one
-        // of this machine's own views gets past the runtime's own check
-        // (#13468), whatever admitted the call above. Named outcomes (opted out, unreachable, ambiguous,
-        // ...) are results; refusals are fixed text, and the audit projections
-        // keep message and reply text out of the log.
-        if (HOST_MESSAGING_TOOL_IDS.has(actionId) || actionId === HOST_CALL_TOOL) {
+        // Short-circuit: finding and starting an assistant, and this machine's
+        // quota (#13496), run in main for the assistant this call came from,
+        // whatever admitted it above. A start is a change this process makes
+        // itself, so a relayed one answers to the drive rule as a check does.
+        if (ASSISTANT_CONTROL_TOOL_IDS.has(actionId)) {
           emitToolCallStarted(false);
+          const refuseAssistant = (code: string, message: string) => {
+            outcome = {
+              kind: "result",
+              value: { ok: false, error: { code: auditCodeForAssistantRefusal(code), message } },
+            };
+            return buildToolError({ code, message });
+          };
+          if (assistantCaller === null || assistantControl === undefined) {
+            return refuseAssistant("RESTRICTED", ASSISTANT_CONTROL_REFUSAL);
+          }
           try {
-            // `host.call` carries the tier it was admitted at here: all it may have on the host.
-            const callContext =
-              actionId === HOST_CALL_TOOL && (tier === "core" || tier === "full")
-                ? { tier }
-                : undefined;
-            const settled = await runHostMessagingTool(
-              actionId,
-              args,
-              hostMessaging !== undefined && sessionStore.sessionHelpIdMap.has(sessionId)
-                ? hostMessaging
-                : undefined,
-              callContext
-            );
-            if (!settled.ok) {
-              outcome = {
-                kind: "result",
-                value: {
-                  ok: false,
-                  error: {
-                    code: auditCodeForHostMessagingRefusal(settled.code),
-                    message: settled.message,
-                  },
-                },
-              };
-              return buildToolError({ code: settled.code, message: settled.message });
+            let result: unknown;
+            if (actionId === ASSISTANT_LIST_TOOL) {
+              result = await assistantControl.list(assistantCaller);
+            } else if (actionId === ASSISTANT_START_TOOL) {
+              const parsed = AssistantStartArgsSchema.safeParse(args ?? {});
+              if (!parsed.success) {
+                return refuseAssistant(
+                  "VALIDATION_ERROR",
+                  "The arguments don't match this tool's schema."
+                );
+              }
+              const startRefusal = assistantWriteRefusal(assistantCaller.projectId);
+              if (startRefusal) return refuseAssistant(startRefusal.code, startRefusal.message);
+              result = await assistantControl.start(assistantCaller, parsed.data);
+            } else {
+              const readQuota = deps.readCodexQuota;
+              if (readQuota === undefined) {
+                return refuseAssistant(
+                  EXECUTION_ERROR_CODE,
+                  "This machine can't read its Codex quota."
+                );
+              }
+              result = { codex: await readQuota() };
             }
-            const result = settled.value;
             outcome = { kind: "result", value: { ok: true, result } };
             return buildToolCallResult(result, {
-              structuredContent: result as unknown as Record<string, unknown>,
+              structuredContent: result as Record<string, unknown>,
             });
           } catch (err) {
+            if (err instanceof AssistantTargetError) return refuseAssistant(err.code, err.message);
             outcome = { kind: "throw", error: err };
             if (err instanceof McpError) throw err;
             return buildToolError({
               code: EXECUTION_ERROR_CODE,
-              message: `${actionId} failed`,
+              message: formatErrorMessage(err, `${actionId} failed`),
             });
           }
         }
@@ -3686,10 +3899,8 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
               {
                 ...sessionSurface,
                 rendererOwnedOrigin,
-                assistantMessaging: laneMessagingOffered(),
-                assistantSending: laneSendingOffered(),
-                hubMessaging: hubMessagingOffered(),
                 hostCall: hostCallOffered(),
+                assistantCaller: assistantCaller !== null,
               }
             );
             outcome = { kind: "result", value: { ok: true, result } };
@@ -4081,6 +4292,34 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
           };
         };
 
+        // An assistant target runs in main (#13496), with the notice and the
+        // reply wait set up above around it like any send. Its refusals are
+        // its own words, and a refused send cancels the notice in `finally`.
+        let assistantEnvelope: DispatchEnvelope | undefined;
+        if (assistantTarget !== undefined && assistantCaller !== null && assistantControl) {
+          try {
+            const result = await runAssistantTarget(assistantTarget, assistantCaller);
+            assistantEnvelope = { result: { ok: true, result } };
+          } catch (err) {
+            if (err instanceof AssistantTargetError) {
+              outcome = {
+                kind: "result",
+                value: {
+                  ok: false,
+                  error: { code: auditCodeForAssistantRefusal(err.code), message: err.message },
+                },
+              };
+              return buildToolError({ code: err.code, message: err.message });
+            }
+            outcome = { kind: "throw", error: err };
+            if (err instanceof McpError) throw err;
+            return buildToolError({
+              code: EXECUTION_ERROR_CODE,
+              message: formatErrorMessage(err, `${actionId} failed`),
+            });
+          }
+        }
+
         try {
           // An `*Owned` tool that cleared the gate above delegates to the real
           // action under its own id, with arguments rebuilt from scratch rather
@@ -4093,8 +4332,9 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
           // where the public tool takes `terminalId` (#12315).
           // `raised` answers the second half of a reveal — whether a window
           // actually came forward — and is vacuously true for everything else.
-          const { envelope, raised } =
-            listPaging || ownedResource?.executor !== "renderer" || ownedResourceId === undefined
+          const { envelope, raised } = assistantEnvelope
+            ? { envelope: assistantEnvelope, raised: true }
+            : listPaging || ownedResource?.executor !== "renderer" || ownedResourceId === undefined
               ? {
                   envelope: listPaging
                     ? await collectListPages()
@@ -4495,6 +4735,9 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
         buildMcpErrorPayload({ code: TIER_NOT_PERMITTED_CODE, message })
       );
     }
+    if (parsed.kind === "scrollback" && !mayNameTerminal(tier, parsed.id)) {
+      throw new McpError(ErrorCode.InvalidRequest, `Unknown resource URI: ${uri}`);
+    }
     // `agentState` deliberately has no view-residency probe (#12316). It answers
     // from the process-global `AgentAvailabilityStore` with no renderer
     // involved, so requiring the bound workspace to hold a live view made an
@@ -4573,7 +4816,8 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
     // belongs behind the same liveness gate as `tools/call` — otherwise a
     // revoked bearer still reads worktree and terminal data through the prompt
     // surface, which is the leak this issue is about wearing a different hat.
-    if (sessionStore.getTier(sessionId) === null) throw sessionGoneError();
+    const promptTier = sessionStore.getTier(sessionId);
+    if (promptTier === null) throw sessionGoneError();
     const name = request.params.name;
     const definition = PROMPT_DEFINITIONS.find((def) => def.name === name);
     if (!definition) {
@@ -4606,7 +4850,15 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
       }
     }
 
-    const context = await collectPromptContext(definition, args, dispatchAction);
+    // An assistant's output goes only to an assistant that may reach it (#13496).
+    const namedTerminal = args.terminal_id?.trim();
+    const context = await collectPromptContext(
+      definition,
+      namedTerminal && !mayNameTerminal(promptTier, namedTerminal)
+        ? { ...args, terminal_id: "" }
+        : args,
+      dispatchAction
+    );
     const text = definition.render(args, context);
 
     return {

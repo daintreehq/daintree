@@ -311,7 +311,6 @@ describe("help.launchAgent", () => {
       idleHibernateMinutes: 5,
       loadGlobalHooksAndServers: false,
       daintreeConfirmations: "inherit",
-      acceptRemoteMessages: true,
       acceptRemoteControl: true,
     });
 

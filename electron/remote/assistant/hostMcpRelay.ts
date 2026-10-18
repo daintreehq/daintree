@@ -53,7 +53,7 @@ export interface RelayMcpSession {
 }
 
 export interface HostMcpRelayDeps {
-  /** Read at each call: the exchange host registers it with the authenticate call. */
+  /** Read at each call: the sender host registers it with the authenticate call. */
   senders(): Pick<SenderSessions, "senderOf"> | undefined;
   /** This machine's own consent to tools run for other machines' assistants, read at each call. */
   acceptsRemoteControl(): boolean;

@@ -8,7 +8,7 @@ import {
 import { HANDBACK_MESSAGE_DESCRIPTION, LAST_HANDBACK_DESCRIPTION } from "@shared/types/handback";
 import {
   AGENT_LAST_MESSAGE_UNAVAILABLE_REASONS,
-  type AgentLastMessageResult,
+  type TerminalLastMessageResult,
 } from "@shared/types/agentLastMessage";
 import {
   GLOBAL_SETTINGS_TAB_IDS,
@@ -692,8 +692,16 @@ export const TerminalLastMessageResultSchema = z
           "'provider-mismatch': an agent this cannot read. 'store-unknown': the pane's store is uncertain; nothing read. 'search-cap-reached': no reply within the bounded read; no older one substituted. 'message-not-found': no reply at that index, or the cursor's message changed."
         ),
     }),
+    z.object({
+      status: z.literal("observed"),
+      source: z
+        .enum(["handback", "screen"])
+        .describe("Another assistant's screen, to its handback or before one."),
+      text: z.string(),
+      truncated: z.boolean(),
+    }),
   ])
-  .meta({ type: "object" }) satisfies z.ZodType<AgentLastMessageResult>;
+  .meta({ type: "object" }) satisfies z.ZodType<TerminalLastMessageResult>;
 
 export const PersistedStoreInfoSchema = z.object({
   storeId: z.string(),

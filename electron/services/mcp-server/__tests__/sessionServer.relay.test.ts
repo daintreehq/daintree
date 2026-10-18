@@ -458,9 +458,7 @@ describe("host.call on this machine's own assistant session (#13493)", () => {
       isTerminalIdInUse: vi.fn(() => false),
       appendAuditRecord: vi.fn(),
       getCachedManifest: vi.fn(() => MANIFEST),
-      hostMessaging: {
-        isAvailable: () => false,
-        isReachable: () => false,
+      hostControl: {
         isCallReachable: () => true,
         run,
       },
@@ -480,7 +478,7 @@ describe("host.call on this machine's own assistant session (#13493)", () => {
       },
     });
 
-    // The messaging tools need a host to exist; this one is listed without.
+    // Listed from the session's start, whether or not a host exists yet.
     expect((await client.listTools()).tools.map((tool) => tool.name)).toContain("host.call");
 
     const args = { hostId: "studio", projectId: "p", tool: "terminal.list", args: {} };
