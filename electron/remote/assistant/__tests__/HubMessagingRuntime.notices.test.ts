@@ -40,7 +40,10 @@ describe("HubMessagingRuntime notices from hosts (#13500)", () => {
   let runs: Map<string, OpenRun>;
   let control: Set<string>;
   let relayCall: ReturnType<typeof vi.fn>;
-  let queued: Array<{ lane: { helpSessionId: string; terminalId: string; projectId: string }; wake: LaneWake }>;
+  let queued: Array<{
+    lane: { helpSessionId: string; terminalId: string; projectId: string };
+    wake: LaneWake;
+  }>;
   let ids: number;
   let runtime: HubMessagingRuntime;
 
@@ -89,7 +92,12 @@ describe("HubMessagingRuntime notices from hosts (#13500)", () => {
         hostName: "studio-01",
         notice: {
           terminalId: "host-t-1",
-          observation: { kind: "state", state: "waiting", waitingReason: "prompt", handback: false },
+          observation: {
+            kind: "state",
+            state: "waiting",
+            waitingReason: "prompt",
+            handback: false,
+          },
         },
       },
     });
@@ -139,7 +147,11 @@ describe("HubMessagingRuntime notices from hosts (#13500)", () => {
     now += 1_000;
     await runtime.call(
       "a",
-      { ...LAUNCH, tool: "terminal.sendCommand", args: { terminalId: "host-t-1", command: "next" } },
+      {
+        ...LAUNCH,
+        tool: "terminal.sendCommand",
+        args: { terminalId: "host-t-1", command: "next" },
+      },
       { tier: "core" }
     );
     expect(queued[0]!.wake.recheck()).toEqual({ kind: "unavailable", reason: "superseded" });
@@ -155,11 +167,74 @@ describe("HubMessagingRuntime notices from hosts (#13500)", () => {
   it("keeps a notifyWhenIdle note on this Shell rather than reading it back from the host", async () => {
     await runtime.call(
       "a",
-      { ...LAUNCH, tool: "terminal.notifyWhenIdle", args: { terminalId: "host-t-1", note: "the build" } },
+      {
+        ...LAUNCH,
+        tool: "terminal.notifyWhenIdle",
+        args: { terminalId: "host-t-1", note: "the build" },
+      },
       { tier: "core" }
     );
     runtime.receiveNotices("studio", { notices: [notice()] });
     expect(queued[0]!.wake.hostNotice?.notice.note).toBe("the build");
+  });
+
+  it("takes a notice that arrives before its call has answered", async () => {
+    let answer!: (value: McpCallAnswer) => void;
+    relayCall.mockImplementationOnce(
+      () => new Promise<McpCallAnswer>((resolve) => (answer = resolve))
+    );
+    const call = runtime.call("a", LAUNCH, { tier: "core" });
+    await vi.waitFor(() => expect(answer).toBeTypeOf("function"));
+    runtime.receiveNotices("studio", { notices: [notice()] });
+    answer(DONE);
+    await call;
+    expect(queued).toHaveLength(1);
+  });
+
+  it("never pins a resend: a run that replaced the asker can't take over its call", async () => {
+    runs.set("a", { ...RUN_A, launchGeneration: 2 });
+    await runtime.call("a", { ...LAUNCH, callId: "call-old" }, { tier: "core" });
+    runtime.receiveNotices("studio", { notices: [notice({ callId: "call-old" })] });
+    expect(queued).toEqual([]);
+  });
+
+  it("keeps the pin of a call whose tool failed, since a batch may have armed some of it", async () => {
+    relayCall.mockResolvedValueOnce({
+      status: "done",
+      result: { isError: true, structured: null, text: "timed out" },
+    });
+    await runtime.call("a", LAUNCH, { tier: "core" });
+    runtime.receiveNotices("studio", { notices: [notice()] });
+    expect(queued).toHaveLength(1);
+  });
+
+  it("types a send's own notice, however soon it comes", async () => {
+    await runtime.call(
+      "a",
+      {
+        ...LAUNCH,
+        tool: "terminal.sendCommandOwned",
+        args: { terminalId: "host-t-1", command: "go", notify: true },
+      },
+      { tier: "core" }
+    );
+    runtime.receiveNotices("studio", { notices: [notice()] });
+    expect(queued[0]!.wake.recheck()).toEqual({ kind: "ready" });
+  });
+
+  it("leaves a waiting notice alone for a prompt that was resent or refused", async () => {
+    await runtime.call("a", LAUNCH, { tier: "core" });
+    runtime.receiveNotices("studio", { notices: [notice()] });
+    now += 1_000;
+    const prompt = {
+      ...LAUNCH,
+      tool: "terminal.sendCommandOwned",
+      args: { terminalId: "host-t-1", command: "next" },
+    };
+    await runtime.call("a", { ...prompt, callId: "call-earlier" }, { tier: "core" });
+    relayCall.mockResolvedValueOnce({ status: "refused", reason: "control-off" });
+    await runtime.call("a", prompt, { tier: "core" });
+    expect(queued[0]!.wake.recheck()).toEqual({ kind: "ready" });
   });
 
   it("holds its host's link while a recent call may still send a notice", async () => {

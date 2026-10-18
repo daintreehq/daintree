@@ -2,7 +2,11 @@ import { randomUUID } from "node:crypto";
 import type { RelayedNotice } from "../../services/mcp-server/terminalNotify.js";
 import type { LinkSession } from "../link/session.js";
 import type { MetricsSessionSource } from "../metrics/hostMetricsHost.js";
-import { AssistantLinkMethod, MAX_RELAY_NOTICES_PER_CALL, type RelayNotice } from "./linkMethods.js";
+import {
+  AssistantLinkMethod,
+  MAX_RELAY_NOTICES_PER_CALL,
+  type RelayNotice,
+} from "./linkMethods.js";
 
 /** How long a notice waits for its Shell: as long as a dropped link may take to resume. */
 export const RELAY_NOTICE_TTL_MS = 10 * 60_000;
@@ -175,7 +179,10 @@ export class RelayNoticeOutbox {
     let oldest: LinkQueue | null = null;
     for (const queue of this.queues.values()) {
       const head = queue.entries[0];
-      if (head !== undefined && (oldest === null || head.expiresAt < oldest.entries[0]!.expiresAt)) {
+      if (
+        head !== undefined &&
+        (oldest === null || head.expiresAt < oldest.entries[0]!.expiresAt)
+      ) {
         oldest = queue;
       }
     }

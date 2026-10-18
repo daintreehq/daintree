@@ -108,7 +108,9 @@ describe("AssistantExchangeClient.relayCall (#13493)", () => {
 });
 
 describe("AssistantExchangeClient relay notices (#13500)", () => {
-  function opened(receiver?: { receiveNotices(hostId: string, payload: RelayNoticesPayload): null }) {
+  function opened(receiver?: {
+    receiveNotices(hostId: string, payload: RelayNoticesPayload): null;
+  }) {
     const handlers = new Map<string, (payload: unknown) => unknown>();
     const session = {
       isOpen: true,

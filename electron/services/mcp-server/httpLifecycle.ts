@@ -2543,15 +2543,12 @@ export class HttpLifecycle {
           // held under the relay principal so the session closing keeps them.
           const deliver = relay.deliverNotices;
           if (deliver === undefined || boundWorkspaceId === null) return null;
-          return relayNoticePane(
-            relayOwnershipPrincipal(relay.senderId, relay.helpSessionId),
-            {
-              projectId: boundWorkspaceId,
-              linkSessionId: relay.linkSessionId,
-              helpSessionId: relay.helpSessionId,
-              deliver,
-            }
-          );
+          return relayNoticePane(relayOwnershipPrincipal(relay.senderId, relay.helpSessionId), {
+            projectId: boundWorkspaceId,
+            linkSessionId: relay.linkSessionId,
+            helpSessionId: relay.helpSessionId,
+            deliver,
+          });
         }
         if (ownPane) return ownPane;
         if (helpSessionId === null) return null;

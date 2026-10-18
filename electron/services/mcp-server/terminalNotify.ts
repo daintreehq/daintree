@@ -940,6 +940,8 @@ export class TerminalNotifyService {
   private readonly teardownEpochs = new Map<string, number>();
   /** Notices whose history is being replayed into them right now. */
   private readonly replaying = new Set<Notice>();
+  /** Shells' link sessions that ended for good, so nothing more is armed for them. */
+  private readonly endedRelayLinks = new Map<string, true>();
   private globalTeardownEpoch = 0;
   private epoch = 0;
   private disposed = false;
@@ -1113,7 +1115,7 @@ export class TerminalNotifyService {
           result !== null &&
           (result as Record<string, unknown>).launched === true &&
           (result as Record<string, unknown>).spawnStatus == null;
-        if (owner.disposed || !launched || terminalId === undefined) {
+        if (owner.disposed || !launched || terminalId === undefined || this.relayEnded(pane)) {
           this.maybeDispose(owner);
           if (!owner.disposed) this.publish(owner);
           return;
@@ -1302,6 +1304,9 @@ export class TerminalNotifyService {
    * nowhere left to go, so it stops taking a relay principal's notice slots.
    */
   dropRelayLink(linkSessionId: string): void {
+    // Remembered, so a call still being admitted over it, or a launch still
+    // running, arms nothing for it afterwards.
+    remember(this.endedRelayLinks, linkSessionId, true);
     for (const owner of [...this.ownersByKey.values()]) {
       if (owner.relay === undefined) continue;
       for (const notice of [...owner.notices.values()]) {
@@ -1382,6 +1387,12 @@ export class TerminalNotifyService {
           "This pane's notices were stopped while this one was being set up."
         );
       }
+      if (this.relayEnded(pane)) {
+        throw new TerminalNotifyError(
+          NOTIFY_NOT_ELIGIBLE,
+          "The link this call came over ended, so its notice could not reach the assistant that asked."
+        );
+      }
       let projectId: string;
       if (relay !== undefined) {
         projectId = relay.projectId;
@@ -1445,6 +1456,10 @@ export class TerminalNotifyService {
     // Never pruned under an admission still reading: evicting its pane's mark
     // would let it bring the notices back.
     remember(this.teardownEpochs, mark, ++this.epoch, this.pendingAdmissions === 0);
+  }
+
+  private relayEnded(pane: OwnPane): boolean {
+    return pane.relay !== undefined && this.endedRelayLinks.has(pane.relay.linkSessionId);
   }
 
   private torndownSince(pane: OwnPane, epoch: number): boolean {

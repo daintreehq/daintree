@@ -68,6 +68,7 @@ import {
   type LaneList,
   type McpCallAnswer,
   type McpCallPayload,
+  type RelayNotice,
   type RelayNoticesPayload,
   type RelayRefusal,
 } from "./linkMethods.js";
@@ -147,7 +148,7 @@ const MAX_NOTICE_PINS = 256;
 const NOTICE_PIN_TTL_MS = 24 * 60 * 60_000;
 /** How long a call's notices keep its host's link open when nothing else does. */
 const NOTICE_LINK_HOLD_MS = 2 * 60 * 60_000;
-/** Notice ids already queued, so a host's resend is typed once. */
+/** Notices already queued, remembered so a host's resend is typed once. */
 const MAX_SEEN_NOTICES = 1024;
 /** Host terminals whose last prompt from here is remembered, for superseding. */
 const MAX_PROMPTED_TERMINALS = 512;
@@ -582,9 +583,10 @@ export class HubMessagingRuntime implements HostMessagingRuntimeHandle {
   private readonly callsOut = new Map<HostId, number>();
   /** Calls that may arm notices on their host, by callId (#13500). */
   private readonly noticePins = new Map<string, NoticePin>();
+  /** Notices already queued, by host and noticeId. */
   private readonly seenNotices = new Map<string, true>();
-  /** When a prompt last went from here to each host terminal, by host and terminal. */
-  private readonly promptedAt = new Map<string, number>();
+  /** The last prompt sent from here to each host terminal, by host and terminal. */
+  private readonly prompted = new Map<string, { at: number; callId: string }>();
   private waits = 0;
   private disposed = false;
 
@@ -679,8 +681,8 @@ export class HubMessagingRuntime implements HostMessagingRuntimeHandle {
       this.deps.hosts().find((host) => host.hostId === hostId)?.name ?? "remote host";
     const receivedAt = this.now();
     for (const notice of payload.notices) {
-      if (this.seenNotices.has(notice.noticeId)) continue;
-      remember(this.seenNotices, notice.noticeId, true, MAX_SEEN_NOTICES);
+      const seenKey = `${hostId}\u0000${notice.noticeId}`;
+      if (this.seenNotices.has(seenKey)) continue;
       const pin = this.noticePins.get(notice.callId);
       if (
         pin === undefined ||
@@ -690,8 +692,9 @@ export class HubMessagingRuntime implements HostMessagingRuntimeHandle {
       ) {
         continue;
       }
-      const check = this.checkNotice(pin, notice.terminalId, receivedAt);
+      const check = this.checkNotice(pin, notice, receivedAt);
       if (check.kind !== "ready") continue;
+      remember(this.seenNotices, seenKey, true, MAX_SEEN_NOTICES);
       const fired: FiredNotice = {
         terminalId: notice.terminalId,
         observation: notice.observation,
@@ -699,12 +702,16 @@ export class HubMessagingRuntime implements HostMessagingRuntimeHandle {
         ...(notice.awaitingHandback === true ? { awaitingHandback: true } : {}),
       };
       queue(
-        { helpSessionId: pin.run.sessionId, terminalId: pin.run.terminalId, projectId: pin.run.projectId },
+        {
+          helpSessionId: pin.run.sessionId,
+          terminalId: pin.run.terminalId,
+          projectId: pin.run.projectId,
+        },
         {
           id: notice.noticeId,
           kind: "notice",
           hostNotice: { hostName, notice: fired },
-          recheck: () => this.checkNotice(pin, notice.terminalId, receivedAt),
+          recheck: () => this.checkNotice(pin, notice, receivedAt),
           beforeType: () => true,
           report: () => {},
         }
@@ -714,13 +721,19 @@ export class HubMessagingRuntime implements HostMessagingRuntimeHandle {
   }
 
   /** Whether a received notice may still be typed: its run, the switch, and no newer prompt. */
-  private checkNotice(pin: NoticePin, terminalId: string, receivedAt: number): LaneWakeCheck {
+  private checkNotice(
+    pin: NoticePin,
+    notice: Pick<RelayNotice, "terminalId" | "callId">,
+    receivedAt: number
+  ): LaneWakeCheck {
     if (!this.stillRunning(pin.run)) return { kind: "unavailable", reason: "relaunched" };
     if (this.deps.controlEnabled?.(pin.hostId) !== true) {
       return { kind: "unavailable", reason: "control-off" };
     }
-    // Typed after a later prompt to the same terminal, it would read as that one's answer.
-    if ((this.promptedAt.get(`${pin.hostId}\u0000${terminalId}`) ?? 0) >= receivedAt) {
+    // Typed after a later prompt to the same terminal, it would read as that
+    // one's answer. A notice for the prompt itself is never stale by it.
+    const prompted = this.prompted.get(`${pin.hostId}\u0000${notice.terminalId}`);
+    if (prompted !== undefined && prompted.callId !== notice.callId && prompted.at > receivedAt) {
       return { kind: "unavailable", reason: "superseded" };
     }
     return { kind: "ready" };
@@ -736,29 +749,46 @@ export class HubMessagingRuntime implements HostMessagingRuntimeHandle {
     );
   }
 
-  /** Before a call goes out, so a notice it arms can't arrive ahead of its pin. */
+  /**
+   * A first send, noted before it goes out so a notice it arms can't arrive
+   * ahead of its pin. A resend notes nothing: its first send was pinned to the
+   * run that made it, and a run that replaced that one must not take it over.
+   * Returns how to take it back once the host is known not to have run it.
+   */
   private noteCall(
     callId: string,
     hostId: HostId,
     run: OpenRun,
     tool: string,
     args: Record<string, unknown>
-  ): void {
+  ): () => void {
+    const undo: Array<() => void> = [];
     if (supersedesNotice(tool, args) && typeof args.terminalId === "string") {
-      remember(this.promptedAt, `${hostId}\u0000${args.terminalId}`, this.now(), MAX_PROMPTED_TERMINALS);
+      const key = `${hostId}\u0000${args.terminalId}`;
+      const before = this.prompted.get(key);
+      remember(this.prompted, key, { at: this.now(), callId }, MAX_PROMPTED_TERMINALS);
+      undo.push(() => {
+        if (this.prompted.get(key)?.callId !== callId) return;
+        if (before === undefined) this.prompted.delete(key);
+        else this.prompted.set(key, before);
+      });
     }
-    // A resend keeps the run its first send was pinned to.
-    if (!armsNotice(tool, args) || this.noticePins.has(callId)) return;
-    const note =
-      tool === TERMINAL_NOTIFY_WHEN_IDLE_TOOL && typeof args.note === "string"
-        ? sanitizeNotifyNote(args.note)
-        : undefined;
-    remember(
-      this.noticePins,
-      callId,
-      { hostId, run: { ...run }, armedAt: this.now(), ...(note !== undefined ? { note } : {}) },
-      MAX_NOTICE_PINS
-    );
+    if (armsNotice(tool, args)) {
+      const note =
+        tool === TERMINAL_NOTIFY_WHEN_IDLE_TOOL && typeof args.note === "string"
+          ? sanitizeNotifyNote(args.note)
+          : undefined;
+      remember(
+        this.noticePins,
+        callId,
+        { hostId, run: { ...run }, armedAt: this.now(), ...(note !== undefined ? { note } : {}) },
+        MAX_NOTICE_PINS
+      );
+      undo.push(() => this.noticePins.delete(callId));
+    }
+    return () => {
+      for (const step of undo) step();
+    };
   }
 
   /** Stops outstanding waits; exchanges on hosts are left as they are. */
@@ -768,7 +798,7 @@ export class HubMessagingRuntime implements HostMessagingRuntimeHandle {
     this.callsOut.clear();
     this.noticePins.clear();
     this.seenNotices.clear();
-    this.promptedAt.clear();
+    this.prompted.clear();
   }
 
   /**
@@ -812,11 +842,10 @@ export class HubMessagingRuntime implements HostMessagingRuntimeHandle {
         args: toolArgs,
         runMs,
       };
-      this.noteCall(callId, args.hostId, caller, args.tool, toolArgs);
-      // A first send that never ran armed nothing; a resend may follow one that did.
-      const unpin = (): void => {
-        if (!resend) this.noticePins.delete(callId);
-      };
+      // Taken back once the host is known not to have run a first send.
+      const unpin = resend
+        ? () => {}
+        : this.noteCall(callId, args.hostId, caller, args.tool, toolArgs);
       this.callsOut.set(args.hostId, (this.callsOut.get(args.hostId) ?? 0) + 1);
       let answer: McpCallAnswer;
       try {
@@ -859,8 +888,8 @@ export class HubMessagingRuntime implements HostMessagingRuntimeHandle {
         else this.callsOut.delete(args.hostId);
       }
       switch (answer.status) {
+        // A tool error may still have armed some of a batch before it failed.
         case "done":
-          if (answer.result.isError) unpin();
           return { ...this.ok(), callId, result: answer.result };
         case "unknown":
           return { ...this.outcomeWith("expired", CALL_UNKNOWN_DETAIL), ...sent };

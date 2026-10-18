@@ -27,7 +27,11 @@ function fakeSession(sessionId: string) {
     session,
     payloads,
     answers,
-    ctx: { session: session as unknown as LinkSession, sessionId, client: {} } as MetricsSessionContext,
+    ctx: {
+      session: session as unknown as LinkSession,
+      sessionId,
+      client: {},
+    } as MetricsSessionContext,
   };
 }
 
@@ -92,7 +96,12 @@ describe("RelayNoticeOutbox (#13500)", () => {
             helpSessionId: "help-1",
             callId: "call-1",
             terminalId: "t-1",
-            observation: { kind: "state", state: "waiting", waitingReason: "prompt", handback: false },
+            observation: {
+              kind: "state",
+              state: "waiting",
+              waitingReason: "prompt",
+              handback: false,
+            },
           },
         ],
       },
@@ -141,7 +150,9 @@ describe("RelayNoticeOutbox (#13500)", () => {
   it("sends again under the same ids when an answer is lost", async () => {
     const h = harness();
     const link = fakeSession("link-1");
-    link.answers.push(() => Promise.reject(Object.assign(new Error("lost"), { code: "OUTCOME_UNKNOWN" })));
+    link.answers.push(() =>
+      Promise.reject(Object.assign(new Error("lost"), { code: "OUTCOME_UNKNOWN" }))
+    );
     h.attach(link.ctx);
     h.outbox.enqueue([notice()]);
     await vi.advanceTimersByTimeAsync(0);
@@ -158,7 +169,9 @@ describe("RelayNoticeOutbox (#13500)", () => {
   it("gives up on a Shell that can't take notices", async () => {
     const h = harness();
     const link = fakeSession("link-1");
-    link.answers.push(() => Promise.reject(Object.assign(new Error("old"), { code: "UNSUPPORTED" })));
+    link.answers.push(() =>
+      Promise.reject(Object.assign(new Error("old"), { code: "UNSUPPORTED" }))
+    );
     h.attach(link.ctx);
     h.outbox.enqueue([notice()]);
     await vi.advanceTimersByTimeAsync(60_000);

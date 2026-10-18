@@ -148,7 +148,7 @@ const runHistoryAppendMock = vi.fn().mockResolvedValue(undefined);
   },
 };
 
-import { readRecipesQuietly, useRecipeStore } from "../recipeStore";
+import { useRecipeStore } from "../recipeStore";
 import { usePanelLimitStore } from "../panelLimitStore";
 import type { RecipeTerminal } from "@shared/types/project";
 import { recipeApprovalDigest } from "@/utils/recipeApprovalDigest";
@@ -3945,51 +3945,37 @@ describe("recipeStore", () => {
   });
 });
 
-describe("readRecipesQuietly (#13500)", () => {
+describe("loadRecipes quietly (#13500)", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     useRecipeStore.getState().reset();
   });
 
-  it("reads every tier from disk without reconciling, notifying, or touching the store", async () => {
-    globalGetRecipesMock.mockResolvedValueOnce([
-      { id: "g1", name: "Global", terminals: [], createdAt: 1 },
-    ]);
+  it("reads what is on disk without reconciling, and raises no conflict", async () => {
     getRecipesMock.mockResolvedValueOnce({
       recipes: [
         { id: "local-1", name: "Local", projectId: "project-1", terminals: [], createdAt: 1 },
-        // A stale local copy of a team recipe: the repo's own file stands for it.
-        { id: "inrepo-pair", name: "Old name", projectId: "project-1", terminals: [], createdAt: 1 },
       ],
       collisions: [{ droppedName: "Local", filename: "local.json" }],
     });
-    getInRepoRecipesMock.mockResolvedValueOnce([
-      { id: "inrepo-pair", name: "Pair", projectId: "project-1", terminals: [{}, {}], createdAt: 1 },
-    ]);
-    const before = useRecipeStore.getState();
 
-    const recipes = await readRecipesQuietly("project-1");
+    await useRecipeStore.getState().loadRecipes("project-1", { quiet: true });
 
     expect(getRecipesMock).toHaveBeenCalledWith("project-1", { reconcile: false });
-    expect(recipes.map((r) => [r.id, r.name])).toEqual([
-      ["g1", "Global"],
-      ["local-1", "Local"],
-      ["inrepo-pair", "Pair"],
-    ]);
     expect(notifyMock).not.toHaveBeenCalled();
-    const after = useRecipeStore.getState();
-    expect(after.recipes).toBe(before.recipes);
-    expect(after.isLoading).toBe(false);
-    expect(after.currentProjectId).toBeNull();
+    expect(useRecipeStore.getState().recipes.map((r) => r.id)).toEqual(["local-1"]);
   });
 
-  it("lists what it could read when a source fails", async () => {
-    getRecipesMock.mockRejectedValueOnce(new Error("unreadable"));
-    getInRepoRecipesMock.mockResolvedValueOnce([
-      { id: "inrepo-pair", name: "Pair", projectId: "project-1", terminals: [], createdAt: 1 },
-    ]);
-    await expect(readRecipesQuietly("project-1")).resolves.toEqual([
-      expect.objectContaining({ id: "inrepo-pair" }),
-    ]);
+  it("refreshes a project already loaded in the background", async () => {
+    await useRecipeStore.getState().loadRecipes("project-1");
+    const pending = useRecipeStore.getState().loadRecipes("project-1", { quiet: true });
+    expect(useRecipeStore.getState().isLoading).toBe(false);
+    await pending;
+  });
+
+  it("leaves an ordinary load reconciling", async () => {
+    await useRecipeStore.getState().loadRecipes("project-1");
+    expect(getRecipesMock).toHaveBeenCalledWith("project-1");
+    expect(getRecipesMock.mock.calls[0]).toHaveLength(1);
   });
 });

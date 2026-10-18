@@ -58,8 +58,7 @@ export interface AssistantExchangeClientDeps {
   messagingEnabled?: (hostId: HostId) => boolean;
   /** Takes what a host saw of terminals this Shell's assistants asked it about (#13500). */
   noticeReceiver?: () =>
-    | { receiveNotices(hostId: HostId, payload: RelayNoticesPayload): null }
-    | undefined;
+    { receiveNotices(hostId: HostId, payload: RelayNoticesPayload): null } | undefined;
   callTimeoutMs?: number;
 }
 
@@ -207,7 +206,9 @@ export class AssistantExchangeClient {
           AssistantLinkMethod.RELAY_NOTICES,
           RelayNoticesPayloadSchema,
           (payload) =>
-            this.disposed ? null : (this.deps.noticeReceiver?.()?.receiveNotices(hostId, payload) ?? null)
+            this.disposed
+              ? null
+              : (this.deps.noticeReceiver?.()?.receiveNotices(hostId, payload) ?? null)
         );
         // A host this Shell may message proves its sender at once, so lanes
         // enrolled over an earlier session follow it here (#13332).

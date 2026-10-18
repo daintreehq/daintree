@@ -38,7 +38,10 @@ class FakePtyClient implements TerminalNotifyPtyClient {
     const info = this.terminals.get(id);
     if (info === undefined) return null;
     if (submissionToken === undefined) return { ...info };
-    return { ...info, submission: { token: submissionToken, phase: "pty_written" as const, at: Date.now() } };
+    return {
+      ...info,
+      submission: { token: submissionToken, phase: "pty_written" as const, at: Date.now() },
+    };
   }
 
   submit(id: string, text: string) {
@@ -103,7 +106,8 @@ function setup() {
   return { client, service, published, delivered, pane, settle };
 }
 
-const flushNotice = () => vi.advanceTimersByTimeAsync(NOTIFY_TARGET_SETTLE_MS + NOTIFY_COALESCE_MS + 100);
+const flushNotice = () =>
+  vi.advanceTimersByTimeAsync(NOTIFY_TARGET_SETTLE_MS + NOTIFY_COALESCE_MS + 100);
 
 describe("relayed notices (#13500)", () => {
   beforeEach(() => {
@@ -134,7 +138,12 @@ describe("relayed notices (#13500)", () => {
           helpSessionId: "help-1",
           callId: "call-1",
           terminalId: "t-a",
-          observation: { kind: "state", state: "waiting", waitingReason: "prompt", handback: false },
+          observation: {
+            kind: "state",
+            state: "waiting",
+            waitingReason: "prompt",
+            handback: false,
+          },
         },
       ],
     ]);
@@ -215,6 +224,21 @@ describe("relayed notices (#13500)", () => {
     h.settle("t-a");
     await flushNotice();
     expect(h.delivered).toEqual([]);
+  });
+
+  it("arms nothing for a link that ended while its launch ran", async () => {
+    const h = setup();
+    const pending = await h.service.prepareLaunch(h.pane());
+    h.service.dropRelayLink("link-1");
+    h.client.terminals.set("t-new", working());
+    pending.complete({ launched: true, terminalId: "t-new" });
+
+    h.settle("t-new");
+    await flushNotice();
+    expect(h.delivered).toEqual([]);
+    await expect(h.service.whenIdle(h.pane(), { terminalId: "t-a" })).rejects.toMatchObject({
+      code: NOTIFY_NOT_ELIGIBLE,
+    });
   });
 
   it("drops what a link that ended armed, and keeps what another link did", async () => {

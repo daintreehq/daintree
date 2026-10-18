@@ -217,9 +217,15 @@ interface RecipeState {
   /**
    * `background` marks a silent refresh of an already-loaded project (window
    * focus): it leaves `isLoading` alone and skips re-raising an unchanged
-   * collision notice.
+   * collision notice. `quiet` reads what is on disk for a reader that must
+   * change nothing (#13500): nothing is promoted into the repo and no
+   * conflict is raised, and an already-loaded project refreshes in the
+   * background.
    */
-  loadRecipes: (projectId: string, options?: { background?: boolean }) => Promise<void>;
+  loadRecipes: (
+    projectId: string,
+    options?: { background?: boolean; quiet?: boolean }
+  ) => Promise<void>;
   /** Replace the plugin tier wholesale from main's authoritative snapshot. */
   setPluginRecipes: (recipes: TerminalRecipe[]) => void;
   exportRecipeToFile: (id: string) => Promise<boolean>;
@@ -409,11 +415,12 @@ const createRecipeStore: StateCreator<RecipeState> = (set, get) => ({
     }));
   },
 
-  loadRecipes: async (projectId: string, options?: { background?: boolean }) => {
+  loadRecipes: async (projectId: string, options?: { background?: boolean; quiet?: boolean }) => {
     const requestId = ++loadRecipesRequestId;
     const previousProjectId = get().currentProjectId;
     const clearRecipes = previousProjectId && previousProjectId !== projectId;
-    const background = options?.background === true && previousProjectId === projectId;
+    const quiet = options?.quiet === true;
+    const background = (options?.background === true || quiet) && previousProjectId === projectId;
     if (!background) {
       set({
         isLoading: true,
@@ -439,9 +446,10 @@ const createRecipeStore: StateCreator<RecipeState> = (set, get) => ({
         // swallowed errors itself; keep loadRecipes resilient now that it does
         // not.
         globalRecipesClient.getRecipes().catch(() => [] as TerminalRecipe[]),
-        projectClient
-          .getRecipes(projectId)
-          .catch(() => ({ recipes: [] as TerminalRecipe[], collisions: [] })),
+        (quiet
+          ? projectClient.getRecipes(projectId, { reconcile: false })
+          : projectClient.getRecipes(projectId)
+        ).catch(() => ({ recipes: [] as TerminalRecipe[], collisions: [] })),
         projectClient.getInRepoRecipes(projectId).catch(() => [] as TerminalRecipe[]),
       ]);
       if (requestId !== loadRecipesRequestId || get().currentProjectId !== projectId) {
@@ -493,6 +501,8 @@ const createRecipeStore: StateCreator<RecipeState> = (set, get) => ({
       // priority, project-scoped supersede) instead of a console-only log:
       // it's a non-urgent, ignorable conflict whose fix (rename) lives in the
       // recipe manager, so the least-restricted surface is correct.
+      // A quiet read reconciled nothing, so it found no conflicts to remember either.
+      if (quiet) return;
       const collisions = projectRecipesResult.collisions;
       const collisionSignature = JSON.stringify(collisions);
       const collisionsUnchanged =
@@ -1602,29 +1612,3 @@ const createRecipeStore: StateCreator<RecipeState> = (set, get) => ({
 });
 
 export const useRecipeStore = create<RecipeState>()(createRecipeStore);
-
-/**
- * The recipes on disk for `projectId`, for a reader that must change nothing
- * (#13500): nothing is promoted into the repo, no conflict is raised, and this
- * store, which the view renders from, is left as it is. The repo's own files
- * stand for team recipes, rather than a local copy a reconcile has not caught
- * up. Plugin recipes are the ones this view already holds. Never rejects: a
- * source that can't be read lists nothing.
- */
-export async function readRecipesQuietly(projectId: string): Promise<TerminalRecipe[]> {
-  const [globalRecipes, projectRecipesResult, inRepoRecipes] = await Promise.all([
-    globalRecipesClient.getRecipes().catch(() => [] as TerminalRecipe[]),
-    projectClient
-      .getRecipes(projectId, { reconcile: false })
-      .catch(() => ({ recipes: [] as TerminalRecipe[], collisions: [] })),
-    projectClient.getInRepoRecipes(projectId).catch(() => [] as TerminalRecipe[]),
-  ]);
-  return mergeRecipes(
-    globalRecipes.map(stripSessionOverridesFromRecipe),
-    projectRecipesResult.recipes
-      .filter((recipe) => !isInRepoRecipeId(recipe))
-      .map(stripSessionOverridesFromRecipe),
-    inRepoRecipes.map(stripSessionOverridesFromRecipe),
-    useRecipeStore.getState().pluginRecipes
-  );
-}
