@@ -134,6 +134,8 @@ function makeHarness(): Harness {
     pluginActionOwners: new Map(),
     actionValidators: new Map(),
     pluginBadges: new Map(),
+    pluginToolbarBadges: new Map(),
+    emitToolbarBadges: () => {},
     pluginPanelMenus: new Map(),
     pluginFsWatchers: new Map(),
     broadcaster: { schedulePluginActionsBroadcast: vi.fn() },

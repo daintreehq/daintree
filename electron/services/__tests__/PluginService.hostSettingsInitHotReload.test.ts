@@ -739,6 +739,32 @@ describe("init gate — waitForInit() and pushSnapshotTo() (#9285)", () => {
     ]);
   });
 
+  it("pushSnapshotTo() replays a global plugin's toolbar badges, and skips a project plugin's for another view (#13503)", async () => {
+    const service = new PluginService(tmpDir);
+    await service.activateStartupFinishedPlugins();
+    const badges = (
+      service as unknown as {
+        pluginToolbarBadges: Map<string, Map<string, { kind: string; text?: string }>>;
+      }
+    ).pluginToolbarBadges;
+    badges.set("acme.global", new Map([["needs", { kind: "label", text: "3" }]]));
+    badges.set("project__other-project__acme.local", new Map([["needs", { kind: "dot" }]]));
+    const send = vi.fn();
+    const wc = { id: 4243, send, isDestroyed: () => false } as unknown as Electron.WebContents;
+
+    await service.pushSnapshotTo(wc);
+
+    const badgeEvents = send.mock.calls
+      .map((c) => c[1] as { name?: string; payload?: unknown })
+      .filter((event) => event.name === "plugin:toolbar-badges-changed");
+    expect(badgeEvents).toEqual([
+      {
+        name: "plugin:toolbar-badges-changed",
+        payload: { pluginId: "acme.global", badges: { needs: { kind: "label", text: "3" } } },
+      },
+    ]);
+  });
+
   it("pushSnapshotToEndpoint() replays to a remote view scoped to its endpoint's project", async () => {
     const service = new PluginService(tmpDir);
     await service.activateStartupFinishedPlugins();

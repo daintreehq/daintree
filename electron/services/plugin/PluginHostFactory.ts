@@ -509,6 +509,10 @@ export interface PluginHostFactoryDeps {
   pluginActionOwners: Map<string, Set<string>>;
   actionValidators: Map<string, ValidateFn>;
   pluginBadges: Map<string, Map<string, PluginPanelBadge>>;
+  /** Live toolbar-button badges set via `host.setToolbarButtonBadge`, `pluginId → buttonId → badge`. */
+  pluginToolbarBadges: Map<string, Map<string, PluginPanelBadge>>;
+  /** Publish one plugin's complete toolbar-badge map to the views entitled to it. */
+  emitToolbarBadges: (pluginId: string) => void;
   /** Runtime panel menus set via `host.setPanelMenuItems`, `pluginId → panelId → items`. */
   pluginPanelMenus: Map<string, Map<string, readonly PublishedPanelMenuItem[]>>;
   pluginFsWatchers: Map<string, Set<() => void>>;
@@ -2203,6 +2207,56 @@ export function createHost(
         name: "plugin:panel-badges-changed",
         payload: { pluginId, badges: deps.serializePluginBadges(pluginId) },
       });
+      return Promise.resolve();
+    },
+    // NOT revoke-guarded, like setPanelBadge: a count is set from the same
+    // post-activation subscriptions. The id must be one this plugin's manifest
+    // contributed, so a plugin can never light another plugin's button.
+    setToolbarButtonBadge: (buttonId, badge) => {
+      const boundPlugin = deps.plugins.get(pluginId);
+      if (!boundPlugin) return Promise.resolve();
+      if (typeof buttonId !== "string" || buttonId.length === 0) {
+        // Reject (not sync throw): runtime-surface Promise method (#10617).
+        return Promise.reject(
+          new Error(
+            `Plugin "${pluginId}" setToolbarButtonBadge: buttonId must be a non-empty string`
+          )
+        );
+      }
+      if (!boundPlugin.manifest.contributes.toolbarButtons.some((btn) => btn.id === buttonId)) {
+        return Promise.reject(
+          new Error(
+            `Plugin "${pluginId}" setToolbarButtonBadge: "${buttonId}" is not one of this plugin's contributes.toolbarButtons`
+          )
+        );
+      }
+      let validated: PluginPanelBadge | null = null;
+      if (badge !== null && badge !== undefined) {
+        const parsed = PluginPanelBadgeSchema.safeParse(badge);
+        if (!parsed.success) {
+          return Promise.reject(
+            new Error(
+              `Plugin "${pluginId}" setToolbarButtonBadge: invalid badge — ${parsed.error.issues
+                .map((i) => `${i.path.join(".") || "(root)"}: ${i.message}`)
+                .join("; ")}`
+            )
+          );
+        }
+        validated = parsed.data;
+      }
+      let buttonMap = deps.pluginToolbarBadges.get(pluginId);
+      if (validated === null) {
+        if (!buttonMap || !buttonMap.has(buttonId)) return Promise.resolve();
+        buttonMap.delete(buttonId);
+        if (buttonMap.size === 0) deps.pluginToolbarBadges.delete(pluginId);
+      } else {
+        if (!buttonMap) {
+          buttonMap = new Map<string, PluginPanelBadge>();
+          deps.pluginToolbarBadges.set(pluginId, buttonMap);
+        }
+        buttonMap.set(buttonId, validated);
+      }
+      deps.emitToolbarBadges(pluginId);
       return Promise.resolve();
     },
     // NOT revoke-guarded, like setPanelBadge: a plugin republishes its menu

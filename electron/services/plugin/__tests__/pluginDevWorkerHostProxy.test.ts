@@ -1010,6 +1010,27 @@ describe("PluginDevWorkerHostProxy runtime-surface validation rejects, never thr
     expect(sent.some((m) => m.type === "host-notify" && m.method === "setPanelBadge")).toBe(false);
   });
 
+  it("setToolbarButtonBadge rejects an empty buttonId and forwards a valid call (#13503)", async () => {
+    const { proxy, sent } = makeProxy();
+    await expect(proxy.host.setToolbarButtonBadge("", { kind: "dot" })).rejects.toThrow(
+      /setToolbarButtonBadge: buttonId/
+    );
+    expect(sent.some((m) => m.type === "host-notify" && m.method === "setToolbarButtonBadge")).toBe(
+      false
+    );
+
+    await expect(proxy.host.setToolbarButtonBadge("needs", undefined as never)).resolves.toBe(
+      undefined
+    );
+    expect(sent).toContainEqual(
+      expect.objectContaining({
+        type: "host-notify",
+        method: "setToolbarButtonBadge",
+        params: { buttonId: "needs", badge: null },
+      })
+    );
+  });
+
   it("setPanelMenuItems vets the list locally and notifies main with a plain copy (#13213)", async () => {
     const { proxy, sent } = makeProxy();
     await expect(proxy.host.setPanelMenuItems("", [])).rejects.toThrow(

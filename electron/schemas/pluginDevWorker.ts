@@ -94,6 +94,7 @@ const HOST_NOTIFY_METHODS = {
   postToPanel: true,
   invalidateFileDecorations: true,
   setPanelBadge: true,
+  setToolbarButtonBadge: true,
   setPanelMenuItems: true,
   registerFileDecorationProvider: true,
   unregisterFileDecorationProvider: true,

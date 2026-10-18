@@ -750,6 +750,14 @@ export class PluginService {
    */
   private pluginBadges = new Map<string, Map<string, PluginPanelBadge>>();
   /**
+   * Live toolbar-button badges set via `host.setToolbarButtonBadge`, keyed
+   * `pluginId → buttonId → badge` (#13503), with `buttonId` the manifest's own
+   * id. Held and replayed like {@link pluginBadges}, but scoped to the owning
+   * project like {@link runningActions}, since a project plugin's toolbar
+   * buttons only exist in that project's views.
+   */
+  private pluginToolbarBadges = new Map<string, Map<string, PluginPanelBadge>>();
+  /**
    * Runtime panel menus set via `host.setPanelMenuItems`, keyed `pluginId →
    * panelId → items` (#13213). Held here for the same reason as
    * {@link pluginBadges}: a cold-restored view gets them back through
@@ -3812,6 +3820,8 @@ export class PluginService {
       pluginActionOwners: this.pluginActionOwners,
       actionValidators: this.actionValidators,
       pluginBadges: this.pluginBadges,
+      pluginToolbarBadges: this.pluginToolbarBadges,
+      emitToolbarBadges: (pluginId) => this.emitToolbarBadges(pluginId),
       pluginPanelMenus: this.pluginPanelMenus,
       pluginFsWatchers: this.pluginFsWatchers,
       broadcaster: this.broadcaster,
@@ -5515,6 +5525,27 @@ export class PluginService {
    * Publish the complete set of `pluginId`'s running actions, scoped like
    * {@link emitRuntimeStatus}. An empty list means none are running.
    */
+  private emitToolbarBadges(pluginId: string): void {
+    if (this.disposed) return;
+    const event = {
+      name: "plugin:toolbar-badges-changed" as const,
+      payload: { pluginId, badges: this.serializePluginToolbarBadges(pluginId) },
+    };
+    const owningProjectId = projectIdFromPluginInstanceKey(pluginId);
+    if (owningProjectId === null) {
+      broadcastToRenderer(CHANNELS.EVENTS_PUSH, event);
+      return;
+    }
+    broadcastToProjectRenderers(owningProjectId, CHANNELS.EVENTS_PUSH, event);
+  }
+
+  /** One plugin's toolbar badges (`buttonId → badge`), empty when it has none. */
+  private serializePluginToolbarBadges(pluginId: string): Record<string, PluginPanelBadge> {
+    const buttonMap = this.pluginToolbarBadges.get(pluginId);
+    if (!buttonMap || buttonMap.size === 0) return {};
+    return Object.fromEntries(buttonMap);
+  }
+
   private emitActionsRunning(pluginId: string): void {
     if (this.disposed) return;
     const event = {
@@ -6509,6 +6540,10 @@ export class PluginService {
           payload: { pluginId },
         });
       });
+    }
+
+    if (this.pluginToolbarBadges.delete(pluginId)) {
+      runUnloadStep(pluginId, "clearToolbarBadges", () => this.emitToolbarBadges(pluginId));
     }
 
     runUnloadStep(pluginId, "clearPanelMenus", () => this.clearPluginPanelMenus(pluginId));
@@ -7625,6 +7660,18 @@ export class PluginService {
         webContents.send(CHANNELS.EVENTS_PUSH, {
           name: "plugin:panel-badges-changed",
           payload: { pluginId, badges: this.serializePluginBadges(pluginId) },
+        });
+      } catch {
+        // Silently ignore send failures during window initialization/disposal.
+      }
+    }
+    for (const pluginId of this.pluginToolbarBadges.keys()) {
+      const owningProjectId = projectIdFromPluginInstanceKey(pluginId);
+      if (owningProjectId !== null && !inView(owningProjectId)) continue;
+      try {
+        webContents.send(CHANNELS.EVENTS_PUSH, {
+          name: "plugin:toolbar-badges-changed",
+          payload: { pluginId, badges: this.serializePluginToolbarBadges(pluginId) },
         });
       } catch {
         // Silently ignore send failures during window initialization/disposal.

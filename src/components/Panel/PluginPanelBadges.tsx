@@ -30,6 +30,9 @@ const DOT_COLOR: Record<PluginPanelBadgeColor, string> = {
   error: "bg-status-error",
 };
 
+/** The dot fills, shared with the toolbar's own badge marks. */
+export const PLUGIN_BADGE_DOT_COLOR: Readonly<Record<PluginPanelBadgeColor, string>> = DOT_COLOR;
+
 const LABEL_COLOR: Record<PluginPanelBadgeColor, string> = {
   default: "bg-overlay-subtle text-text-secondary",
   success: "bg-overlay-medium text-text-primary",
@@ -37,7 +40,17 @@ const LABEL_COLOR: Record<PluginPanelBadgeColor, string> = {
   error: "bg-status-error/15 text-status-error",
 };
 
-function BadgeIndicator({ pluginId, badge }: { pluginId: string; badge: PluginPanelBadge }) {
+/**
+ * One plugin badge drawn in full — the panel header's form, also used by a
+ * toolbar button's tray and overflow rows (#13503).
+ */
+export function PluginBadgeIndicator({
+  pluginId,
+  badge,
+}: {
+  pluginId: string;
+  badge: PluginPanelBadge;
+}) {
   const color = badge.color ?? "default";
   // A primitive selector, read per badge rather than once over the whole map in
   // the parent: the meta record is rebuilt on every provenance pull, so
@@ -124,7 +137,7 @@ export function PluginPanelBadges({ panelId }: { panelId: string }) {
   return (
     <>
       {entries.map(([pluginId, badge]) => (
-        <BadgeIndicator key={pluginId} pluginId={pluginId} badge={badge} />
+        <PluginBadgeIndicator key={pluginId} pluginId={pluginId} badge={badge} />
       ))}
     </>
   );

@@ -85,7 +85,9 @@
  * a cut-out but fell to 3.2:1 on the light themes' darker ambers, and 9px
  * digits need 4.5. The 0.56 OKLCH split sits between the lightest fill that
  * wants white (bali, 0.54) and the darkest that wants black (table-mountain,
- * 0.57), so every built-in theme clears 4.5:1. */
+ * 0.57), so every built-in theme clears 4.5:1. A pill on another fill (a
+ * plugin's badge colour) names it in --toolbar-count-fill so the digits pick
+ * their ink off that fill instead. */
 .toolbar-count {
   position: absolute;
   top: -5px;
@@ -95,13 +97,29 @@
   padding: 0 3px;
   border-radius: 9999px;
   box-shadow: 0 0 0 1px var(--color-surface-sidebar);
-  color: oklch(from var(--color-state-waiting) clamp(0, (0.56 - l) * 1000, 1) 0 0);
+  color: oklch(
+    from var(--toolbar-count-fill, var(--color-state-waiting)) clamp(0, (0.56 - l) * 1000, 1) 0 0
+  );
   font-size: var(--text-4xs);
   font-weight: 700;
   font-variant-numeric: tabular-nums;
   line-height: 12px;
   letter-spacing: -0.02em;
   text-align: center;
+}
+
+/* A plugin's count pill (#13503): the same fills PluginPanelBadges' dots draw. */
+.toolbar-count[data-badge-color="default"] {
+  --toolbar-count-fill: var(--color-text-muted);
+}
+.toolbar-count[data-badge-color="success"] {
+  --toolbar-count-fill: var(--color-text-primary);
+}
+.toolbar-count[data-badge-color="warning"] {
+  --toolbar-count-fill: var(--color-status-warning);
+}
+.toolbar-count[data-badge-color="error"] {
+  --toolbar-count-fill: var(--color-status-error);
 }
 
 /* ── Badge entrance / exit ──

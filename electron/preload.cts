@@ -978,6 +978,8 @@ const _eventBusReplayable: ReadonlySet<keyof IpcEventBusMap> = new Set([
   // A restored view's runtime panel menus arrive in the did-finish-load
   // replay, before the store behind the boot gate subscribes (#13213).
   "plugin:panel-menus-changed",
+  // Same replay, landing before the toolbar has mounted its badge store (#13503).
+  "plugin:toolbar-badges-changed",
 ]);
 // Replayable events that accumulate instead of superseding. A double-clicked
 // `.dntr` archive (#11280) is one decision per file, so collapsing two
@@ -993,6 +995,13 @@ const _eventBusFifoReplay: ReadonlySet<keyof IpcEventBusMap> = new Set([
   // Each event is one plugin's whole map, so only the latest per plugin
   // matters — but the latest of all would drop every other plugin's.
   "plugin:panel-menus-changed",
+  "plugin:toolbar-badges-changed",
+]);
+// FIFO events whose every payload is one plugin's whole map: a newer one for the
+// same plugin supersedes the buffered one.
+const _eventBusPerPluginLatest: ReadonlySet<keyof IpcEventBusMap> = new Set([
+  "plugin:panel-menus-changed",
+  "plugin:toolbar-badges-changed",
 ]);
 const _eventBusBuffered = new Map<keyof IpcEventBusMap, unknown[]>();
 
@@ -1010,10 +1019,10 @@ function _ensureEventBusWired(): void {
         let prior = _eventBusFifoReplay.has(envelope.name)
           ? (_eventBusBuffered.get(envelope.name) ?? [])
           : [];
-        // Each runtime-menu event is one plugin's whole map, so only its latest
+        // Each such event is one plugin's whole map, so only its latest
         // is worth keeping: a busy plugin during a slow boot replaces rather
         // than piles up.
-        if (envelope.name === "plugin:panel-menus-changed") {
+        if (_eventBusPerPluginLatest.has(envelope.name)) {
           const pluginId = (envelope.payload as { pluginId?: unknown } | null)?.pluginId;
           prior = prior.filter(
             (payload) => (payload as { pluginId?: unknown } | null)?.pluginId !== pluginId
@@ -3739,6 +3748,9 @@ function buildElectronApi(): ElectronAPI {
       ) => _eventBusOn("plugin:panel-badges-changed", callback),
       onPanelBadgesCleared: (callback: (payload: { pluginId: string }) => void) =>
         _eventBusOn("plugin:panel-badges-cleared", callback),
+      onToolbarBadgesChanged: (
+        callback: (payload: { pluginId: string; badges: Record<string, PluginPanelBadge> }) => void
+      ) => _eventBusOn("plugin:toolbar-badges-changed", callback),
       onPanelMenusChanged: (
         callback: (payload: {
           pluginId: string;

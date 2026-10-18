@@ -1240,6 +1240,20 @@ export class PluginDevWorkerHostProxy {
         this.notify("setPanelBadge", { panelId, badge: badge ?? null });
         return Promise.resolve();
       },
+      // Same fire-and-forget shape: the real host checks the id is one of this
+      // plugin's own toolbar buttons and re-validates the badge.
+      setToolbarButtonBadge: (buttonId, badge) => {
+        if (typeof buttonId !== "string" || buttonId.length === 0) {
+          // Reject (not sync throw): runtime-surface Promise method (#10617).
+          return Promise.reject(
+            new Error(
+              `Plugin "${this.pluginId}" setToolbarButtonBadge: buttonId must be a non-empty string`
+            )
+          );
+        }
+        this.notify("setToolbarButtonBadge", { buttonId, badge: badge ?? null });
+        return Promise.resolve();
+      },
       // Vetted here with the host's own rules, so an authoring mistake rejects
       // back to the caller rather than only being logged in main, then sent as
       // a plain copy that always survives the port. Main vets it again and
