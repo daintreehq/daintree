@@ -24,7 +24,8 @@ vi.mock("../panelStore", () => ({
   },
 }));
 
-const { usePanelDialogStore, selectTopDialogPanelId } = await import("../panelDialogStore");
+const { usePanelDialogStore, selectTopDialogPanelId, findPanelDialogsOfKind } =
+  await import("../panelDialogStore");
 
 /** Topmost presented panel id — the single-dialog cases below all assert on it. */
 const topId = () => selectTopDialogPanelId(usePanelDialogStore.getState());
@@ -34,7 +35,7 @@ const stack = () => usePanelDialogStore.getState().dialogStack;
 describe("panelDialogStore", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    usePanelDialogStore.setState({ dialogStack: [], requestSeq: 0 });
+    usePanelDialogStore.setState({ dialogStack: [], dialogFrames: {}, requestSeq: 0 });
     addPanelMock.mockImplementation(async (options: { requestedId?: string }) => {
       return options.requestedId ?? "generated";
     });
@@ -364,6 +365,60 @@ describe("panelDialogStore", () => {
 
       expect(usePanelDialogStore.getState().promoteToGrid()).toBe(false);
       expect(stack()).toEqual([parent, child]);
+    });
+  });
+
+  describe("frame metadata (#13504)", () => {
+    const frames = () => usePanelDialogStore.getState().dialogFrames;
+
+    it("records the kind and requested size synchronously, before addPanel resolves", () => {
+      addPanelMock.mockImplementation(() => new Promise(() => {}));
+      void usePanelDialogStore
+        .getState()
+        .openPanelDialog({ kind: "review", requestedId: "d1" }, { size: "workspace" });
+
+      expect(frames()).toEqual({ d1: { kind: "review", size: "workspace" } });
+      // An in-flight reservation is still findable by kind.
+      expect(findPanelDialogsOfKind(usePanelDialogStore.getState(), "review")).toEqual(["d1"]);
+    });
+
+    it("leaves size unset when none is requested", async () => {
+      await usePanelDialogStore.getState().openPanelDialog({ kind: "review", requestedId: "d1" });
+      expect(frames()).toEqual({ d1: { kind: "review" } });
+    });
+
+    it("drops a superseded frame's metadata", async () => {
+      const open = usePanelDialogStore.getState().openPanelDialog;
+      await open({ kind: "review", requestedId: "d1" }, { size: "sm" });
+      await open({ kind: "diff", requestedId: "d2" });
+      expect(frames()).toEqual({ d2: { kind: "diff" } });
+    });
+
+    it("prunes metadata on close, close-by-id, reconcile and promote", async () => {
+      const s = usePanelDialogStore.getState;
+      await s().openPanelDialog({ kind: "review", requestedId: "a" }, { size: "sm" });
+      await s().pushPanelDialog({ kind: "diff", requestedId: "b" }, "a");
+      await s().pushPanelDialog({ kind: "diff", requestedId: "c" }, "b");
+      await s().pushPanelDialog({ kind: "diff", requestedId: "d" }, "c");
+      expect(Object.keys(frames())).toEqual(["a", "b", "c", "d"]);
+
+      s().closePanelDialog();
+      expect(Object.keys(frames())).toEqual(["a", "b", "c"]);
+      s().promoteToGrid();
+      expect(Object.keys(frames())).toEqual(["a", "b"]);
+      s().reconcileRemovedPanel("b");
+      expect(Object.keys(frames())).toEqual(["a"]);
+      s().closePanelDialogById("a");
+      expect(frames()).toEqual({});
+    });
+
+    it("clears the reservation's metadata when the panel fails to commit", async () => {
+      addPanelMock.mockResolvedValue(null);
+      await usePanelDialogStore
+        .getState()
+        .openPanelDialog({ kind: "review", requestedId: "d1" }, { size: "lg" });
+      expect(stack()).toEqual([]);
+      expect(frames()).toEqual({});
     });
   });
 });

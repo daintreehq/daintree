@@ -6,7 +6,7 @@ import {
   getPanelKindDefinitionsSnapshot,
   subscribeToPanelKindDefinitions,
 } from "@/panels/registry";
-import { AppDialog } from "@/components/ui/AppDialog";
+import { AppDialog, type DialogSize } from "@/components/ui/AppDialog";
 import { Button } from "@/components/ui/button";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
 import { buildPanelProps } from "@/utils/panelProps";
@@ -69,6 +69,11 @@ function PanelDialogFrame({
   const closePanelDialogById = usePanelDialogStore((state) => state.closePanelDialogById);
   const promoteToGrid = usePanelDialogStore((state) => state.promoteToGrid);
   const reconcileRemovedPanel = usePanelDialogStore((state) => state.reconcileRemovedPanel);
+  // Chosen by whoever opened the frame (a plugin's `panel.openPluginPanel`
+  // `size`); every other opener keeps the host's default surface.
+  const size = usePanelDialogStore(
+    useCallback((state) => state.dialogFrames[panelId]?.size ?? DEFAULT_DIALOG_SIZE, [panelId])
+  );
 
   // Keyed read, not a subscription to the whole `panelsById` map: that map
   // churns on every panel update and would re-render the dialog with it.
@@ -138,7 +143,7 @@ function PanelDialogFrame({
     <AppDialog
       isOpen={true}
       onClose={handleClose}
-      size="6xl"
+      size={size}
       maxHeight="max-h-[85vh]"
       // Full-height kinds pin the surface at the max rather than sizing to
       // content, so the dialog doesn't grow and shrink as the tree loads.
@@ -194,6 +199,8 @@ function PanelDialogFrame({
     </AppDialog>
   );
 }
+
+const DEFAULT_DIALOG_SIZE: DialogSize = "6xl";
 
 // Focus inside a dialog is owned by AppDialog's trap; the panel's grid focus
 // pointer must not move, so `onFocus` is intentionally inert here.

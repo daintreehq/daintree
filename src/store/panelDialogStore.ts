@@ -1,5 +1,6 @@
 import { create } from "zustand";
 import type { AddPanelOptions } from "@shared/types/addPanelOptions";
+import type { DialogSize } from "@/components/ui/AppDialog";
 import { usePanelStore } from "./panelStore";
 import { logError } from "@/utils/logger";
 
@@ -16,6 +17,21 @@ import { logError } from "@/utils/logger";
  * mount/unmount effects. React 19 StrictMode double-invokes effects in dev, so
  * an effect-owned record would be destroyed and recreated on every mount.
  */
+/**
+ * What the store knows about a presented frame without its panel record: the
+ * record is only committed once `addPanel` resolves, so an in-flight
+ * reservation would otherwise be anonymous to a same-kind lookup.
+ */
+export interface PanelDialogFrameMeta {
+  kind: string;
+  /** Surface size for this frame; the host falls back to its default when unset. */
+  size?: DialogSize;
+}
+
+export interface OpenPanelDialogPresentation {
+  size?: DialogSize;
+}
+
 interface PanelDialogState {
   /**
    * Panels presented as dialogs, bottom-first. The last entry is the topmost
@@ -28,6 +44,12 @@ interface PanelDialogState {
    * opens still supersede — only an explicit `pushPanelDialog` layers.
    */
   dialogStack: string[];
+  /**
+   * Per-frame metadata keyed by the ids in `dialogStack`. Written in the same
+   * update that publishes an id and pruned whenever an id leaves the stack, so
+   * it never outlives the frame it describes.
+   */
+  dialogFrames: Record<string, PanelDialogFrameMeta>;
   /**
    * Monotonic open counter. Stack depth would stay `1` across back-to-back
    * opens while a dialog is already open, so an ErrorBoundary keyed on it
@@ -42,7 +64,10 @@ interface PanelDialogState {
    * in-flight window still has an id to act on (#6953). Returns null if the
    * panel could not be created.
    */
-  openPanelDialog: (options: AddPanelOptions) => Promise<string | null>;
+  openPanelDialog: (
+    options: AddPanelOptions,
+    presentation?: OpenPanelDialogPresentation
+  ) => Promise<string | null>;
   /**
    * Layer a dialog above `expectedParentId` instead of replacing it, keeping the
    * parent's component — and therefore all of its local state — mounted.
@@ -79,22 +104,54 @@ interface PanelDialogState {
   promoteToGrid: () => boolean;
 }
 
+/**
+ * Presented ids whose frame is of `kind`, bottom-first — including an in-flight
+ * reservation whose record has not been committed yet.
+ */
+export function findPanelDialogsOfKind(state: PanelDialogState, kind: string): string[] {
+  return state.dialogStack.filter((id) => state.dialogFrames[id]?.kind === kind);
+}
+
 /** Topmost presented panel id, or null when no dialog is open. */
 export const selectTopDialogPanelId = (state: PanelDialogState): string | null =>
   state.dialogStack[state.dialogStack.length - 1] ?? null;
 
+/**
+ * The stack plus its frame metadata trimmed to match, for every update that
+ * removes ids. Pass `added` to describe a newly published id.
+ */
+function withStack(
+  state: PanelDialogState,
+  dialogStack: string[],
+  added?: { id: string; meta: PanelDialogFrameMeta }
+): Pick<PanelDialogState, "dialogStack" | "dialogFrames"> {
+  const dialogFrames: Record<string, PanelDialogFrameMeta> = {};
+  for (const id of dialogStack) {
+    const meta = id === added?.id ? added.meta : state.dialogFrames[id];
+    if (meta) dialogFrames[id] = meta;
+  }
+  return { dialogStack, dialogFrames };
+}
+
 export const usePanelDialogStore = create<PanelDialogState>((set, get) => ({
   dialogStack: [],
+  dialogFrames: {},
   requestSeq: 0,
 
-  openPanelDialog: async (options) => {
+  openPanelDialog: async (options, presentation) => {
     const supersededIds = get().dialogStack;
     // Mint the id up front and publish it before the first await: the host
     // renders against it, and a close arriving mid-flight must be able to
     // target this panel rather than an empty stack.
     const requestedId = options.requestedId ?? `${options.kind}-${crypto.randomUUID()}`;
 
-    set((state) => ({ dialogStack: [requestedId], requestSeq: state.requestSeq + 1 }));
+    set((state) => ({
+      ...withStack(state, [requestedId], {
+        id: requestedId,
+        meta: { kind: options.kind, ...(presentation?.size ? { size: presentation.size } : {}) },
+      }),
+      requestSeq: state.requestSeq + 1,
+    }));
 
     // A plain open supersedes everything already presented — drop those
     // ephemeral records so dialog panels can't accumulate in the registry.
@@ -121,7 +178,10 @@ export const usePanelDialogStore = create<PanelDialogState>((set, get) => ({
     if (dialogStack.includes(requestedId)) return null;
 
     set((state) => ({
-      dialogStack: [...state.dialogStack, requestedId],
+      ...withStack(state, [...state.dialogStack, requestedId], {
+        id: requestedId,
+        meta: { kind: options.kind },
+      }),
       requestSeq: state.requestSeq + 1,
     }));
 
@@ -132,7 +192,7 @@ export const usePanelDialogStore = create<PanelDialogState>((set, get) => ({
     const { dialogStack } = get();
     const topId = dialogStack[dialogStack.length - 1];
     if (!topId) return;
-    set((state) => ({ dialogStack: state.dialogStack.slice(0, -1) }));
+    set((state) => withStack(state, state.dialogStack.slice(0, -1)));
     // removePanel, never trashPanel: an ephemeral panel must not linger under
     // the trash TTL where it could be restored into the grid.
     usePanelStore.getState().removePanel(topId);
@@ -140,7 +200,12 @@ export const usePanelDialogStore = create<PanelDialogState>((set, get) => ({
 
   closePanelDialogById: (panelId) => {
     if (!get().dialogStack.includes(panelId)) return;
-    set((state) => ({ dialogStack: state.dialogStack.filter((id) => id !== panelId) }));
+    set((state) =>
+      withStack(
+        state,
+        state.dialogStack.filter((id) => id !== panelId)
+      )
+    );
     usePanelStore.getState().removePanel(panelId);
   },
 
@@ -150,7 +215,12 @@ export const usePanelDialogStore = create<PanelDialogState>((set, get) => ({
     // record; drop the entry so the store agrees rather than holding a dangling
     // id that a later close/promote would act on.
     if (!get().dialogStack.includes(removedId)) return;
-    set((state) => ({ dialogStack: state.dialogStack.filter((id) => id !== removedId) }));
+    set((state) =>
+      withStack(
+        state,
+        state.dialogStack.filter((id) => id !== removedId)
+      )
+    );
   },
 
   promoteToGrid: () => {
@@ -161,7 +231,12 @@ export const usePanelDialogStore = create<PanelDialogState>((set, get) => ({
     if (!promoted) return false;
     // Pop without removing the panel — it now lives in the grid, and whatever
     // dialog sat beneath it is revealed again.
-    set((state) => ({ dialogStack: state.dialogStack.filter((id) => id !== topId) }));
+    set((state) =>
+      withStack(
+        state,
+        state.dialogStack.filter((id) => id !== topId)
+      )
+    );
     usePanelStore.getState().activateTerminal(topId);
     return true;
   },
@@ -201,7 +276,12 @@ async function commitDialogPanel(
     // Clear the reservation on every failure path so the host doesn't render a
     // dialog around a panel that never materialized. Filter rather than pop:
     // another dialog may have been layered on top while this one was in flight.
-    set((state) => ({ dialogStack: state.dialogStack.filter((id) => id !== requestedId) }));
+    set((state) =>
+      withStack(
+        state,
+        state.dialogStack.filter((id) => id !== requestedId)
+      )
+    );
     return null;
   }
 

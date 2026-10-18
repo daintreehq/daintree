@@ -4,15 +4,31 @@ import { useDiagnosticsStore } from "@/store/diagnosticsStore";
 import { useErrorStore } from "@/store/errorStore";
 import { usePortalStore } from "@/store/portalStore";
 import { usePanelStore } from "@/store/panelStore";
+import { usePanelDialogStore, findPanelDialogsOfKind } from "@/store/panelDialogStore";
+import type { DialogSize } from "@/components/ui/AppDialog";
 import { focusPanelInput } from "@/components/Panel/panelFocusRegistry";
 import { isPtyPanel, type PanelInstance } from "@shared/types/panel";
 import { getPanelKindConfig } from "@shared/config/panelKindRegistry";
+
+const PLUGIN_PANEL_DIALOG_SIZES = [
+  "sm",
+  "md",
+  "lg",
+  "4xl",
+  "5xl",
+  "6xl",
+  "7xl",
+  "workspace",
+] as const satisfies readonly DialogSize[];
 
 const openPluginPanelArgsSchema = z.object({
   kind: z.string().min(1),
   initialArgs: z.record(z.string(), z.unknown()).optional(),
   worktreeId: z.string().optional(),
   reuseExisting: z.boolean().optional(),
+  presentation: z.enum(["panel", "dialog"]).optional(),
+  size: z.enum(PLUGIN_PANEL_DIALOG_SIZES).optional(),
+  toggle: z.boolean().optional(),
 });
 
 export function registerPanelCoreActions(
@@ -145,14 +161,14 @@ export function registerPanelCoreActions(
     id: "panel.openPluginPanel",
     title: "Open plugin panel",
     description:
-      "Spawn (or focus an existing) plugin-contributed panel kind, handing it an initial argument. Args: `kind` (required) — the plugin panel kind id from `contributes.panels`; `initialArgs` (optional) — an opaque bag delivered to the view as `PanelViewProps.initialArgs` (e.g. `{ path }` to open a file); `worktreeId` (optional) — target worktree, which must belong to the current project; `reuseExisting` (optional, default true) — focus an existing panel of this kind in the worktree instead of spawning a second one. Returns `{ panelId }`. Errors when `kind` is not a registered plugin panel kind, when `worktreeId` belongs to another project, or — transiently, retry — when the project's worktrees haven't loaded yet.",
+      "Spawn (or focus an existing) plugin-contributed panel kind, handing it an initial argument. Args: `kind` (required) — the plugin panel kind id from `contributes.panels`; `initialArgs` (optional) — an opaque bag delivered to the view as `PanelViewProps.initialArgs` (e.g. `{ path }` to open a file); `worktreeId` (optional) — target worktree, which must belong to the current project; `reuseExisting` (optional, default true) — focus an existing panel of this kind in the worktree instead of spawning a second one; `presentation` (optional, `panel` or `dialog`, default `panel`) — `dialog` presents the view as a modal dialog instead of a grid panel, replacing any dialog already open, and returns the id of the open dialog when one of this kind is already presented; `size` (optional, dialog only — `sm`, `md`, `lg`, `4xl`, `5xl`, `6xl`, `7xl` or `workspace`, default `6xl`) — the dialog width; `toggle` (optional, dialog only, default false) — close this kind's dialog instead when it is the topmost one. A dialog panel is ephemeral: closing it removes the panel and its persisted view state. Returns `{ panelId }`. Errors when `kind` is not a registered plugin panel kind, when `worktreeId` belongs to another project, or — transiently, retry — when the project's worktrees haven't loaded yet.",
     category: "panel",
     kind: "command",
     danger: "safe",
     scope: "renderer",
     argsSchema: openPluginPanelArgsSchema,
     run: async (args: unknown) => {
-      const { kind, initialArgs, worktreeId, reuseExisting } =
+      const { kind, initialArgs, worktreeId, reuseExisting, presentation, size, toggle } =
         openPluginPanelArgsSchema.parse(args);
       const kindConfig = getPanelKindConfig(kind);
       // Only plugin-contributed kinds are reachable here — built-in kinds carry
@@ -185,6 +201,34 @@ export function registerPanelCoreActions(
 
       const state = usePanelStore.getState();
       const targetWorktreeId = worktreeId ?? callbacks.getActiveWorktreeId();
+
+      if (presentation === "dialog") {
+        const dialogs = usePanelDialogStore.getState();
+        const openOfKind = findPanelDialogsOfKind(dialogs, kind);
+        const topId = dialogs.dialogStack[dialogs.dialogStack.length - 1];
+        if (toggle === true && topId !== undefined && openOfKind.includes(topId)) {
+          dialogs.closePanelDialogById(topId);
+          return { panelId: topId };
+        }
+        // A plain open never closes or re-creates a presented dialog of this
+        // kind — that would discard the view's state for a "show it" request.
+        const existingDialogId = openOfKind[openOfKind.length - 1];
+        if (existingDialogId !== undefined) return { panelId: existingDialogId };
+
+        const dialogId = await dialogs.openPanelDialog(
+          // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- documented extension-panel spawn boundary, as the grid spawn below
+          {
+            kind,
+            worktreeId: targetWorktreeId,
+            extensionState: initialArgs,
+          } as Parameters<typeof dialogs.openPanelDialog>[0],
+          size ? { size } : undefined
+        );
+        if (!dialogId) {
+          throw new Error(`Failed to open plugin panel "${kind}" as a dialog`);
+        }
+        return { panelId: dialogId };
+      }
 
       if (reuseExisting !== false) {
         const existing = state.panelIds
