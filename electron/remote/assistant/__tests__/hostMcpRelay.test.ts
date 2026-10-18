@@ -19,12 +19,19 @@ import { SenderSessions } from "../senderSessions.js";
 interface FakeLink {
   ctx: MetricsSessionContext;
   call(payload: Partial<McpCallPayload>): Promise<unknown>;
+  /** What this host called on the Shell over the link. */
+  sent: Array<{ method: string; payload: unknown }>;
 }
 
 function fakeLink(sessionId: string): FakeLink {
   const handlers = new Map<string, (payload: unknown) => unknown>();
+  const sent: FakeLink["sent"] = [];
   const session = {
     isOpen: true,
+    call: async (method: string, payload: unknown) => {
+      sent.push({ method, payload });
+      return null;
+    },
     registerCallHandler: (
       method: string,
       schema: { parse(v: unknown): unknown },
@@ -34,6 +41,7 @@ function fakeLink(sessionId: string): FakeLink {
     },
   } as unknown as LinkSession;
   return {
+    sent,
     ctx: {
       session,
       sessionId,
@@ -137,6 +145,7 @@ describe("installHostMcpRelay", () => {
       projectId: "project-1",
       tier: "core",
       shellName: "greg-mbp",
+      deliverNotices: expect.any(Function),
     });
     expect(opened[0]!.calls).toEqual([
       { tool: "terminal.list", args: { owned: true }, timeoutMs: 90_000, callId: "call-1" },
@@ -458,5 +467,47 @@ describe("projectRelayResult", () => {
     expect(Buffer.byteLength(JSON.stringify(projected), "utf8")).toBeLessThanOrEqual(
       MAX_RELAY_RESULT_BYTES
     );
+  });
+});
+
+describe("installHostMcpRelay notices (#13500)", () => {
+  const notice = (linkSessionId: string) => ({
+    linkSessionId,
+    helpSessionId: "help-1",
+    callId: "call-1",
+    terminalId: "t-1",
+    observation: { kind: "closed" as const },
+  });
+
+  it("carries a session's notices back over the link its call came in on", async () => {
+    const { links, opened, relay } = harness([
+      ["link-1", "sender-a"],
+      ["link-2", "sender-a"],
+    ]);
+    await links[0]!.call({});
+    opened[0]!.spec.deliverNotices([notice("link-1")]);
+
+    await vi.waitFor(() => expect(links[0]!.sent).toHaveLength(1));
+    expect(links[0]!.sent[0]).toMatchObject({
+      method: AssistantLinkMethod.RELAY_NOTICES,
+      payload: { notices: [expect.objectContaining({ callId: "call-1", terminalId: "t-1" })] },
+    });
+    expect(links[1]!.sent).toEqual([]);
+    relay.dispose();
+  });
+
+  it("drops what an ended link's calls armed, here and in the notice service", async () => {
+    const dropLinkNotices = vi.fn();
+    const { links, opened, relay, expire } = harness([["link-1", "sender-a"]], {
+      dropLinkNotices,
+    });
+    await links[0]!.call({});
+    expire("link-1");
+    opened[0]!.spec.deliverNotices([notice("link-1")]);
+
+    await Promise.resolve();
+    expect(dropLinkNotices).toHaveBeenCalledWith("link-1");
+    expect(links[0]!.sent).toEqual([]);
+    relay.dispose();
   });
 });

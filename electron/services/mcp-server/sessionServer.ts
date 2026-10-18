@@ -1618,6 +1618,13 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
         : undefined);
     const appendAuditRecord: SessionServerDeps["appendAuditRecord"] = (input) =>
       appendSessionAuditRecord(relayCallId !== undefined ? { ...input, relayCallId } : input);
+    // The caller's pane for its notices. A relayed call's go back to its
+    // Shell, pinned there to the run that made this call (#13500).
+    const ownPane = (): OwnPane | null => {
+      const pane = resolveOwnPane?.() ?? null;
+      if (pane?.relay === undefined || relayCallId === undefined) return pane;
+      return { ...pane, relay: { ...pane.relay, callId: relayCallId } };
+    };
     const startedAt = Date.now();
     const tier = sessionStore.getTier(sessionId);
     // Gate 0 (#11799): no live session, no authorization. The SDK's own
@@ -3147,7 +3154,7 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
           // Each item's notice holds while its reply wait runs.
           const noticePane =
             batchArgs.notify === true && terminalNotify !== undefined && tier !== "external"
-              ? (resolveOwnPane?.() ?? null)
+              ? ownPane()
               : null;
           // Every item is sent first and waited on together, so the call lasts
           // as long as the slowest agent, not the sum of them.
@@ -3275,7 +3282,7 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
             };
             return buildToolError({ code, message });
           };
-          const pane = tier === "external" ? null : (resolveOwnPane?.() ?? null);
+          const pane = tier === "external" ? null : ownPane();
           if (pane === null || terminalNotify === undefined) {
             return refuse(
               NOTIFY_NOT_ELIGIBLE,
@@ -3329,7 +3336,7 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
 
         // A pane closing a terminal it asked about needs no notice saying so.
         if (NOTIFY_CLOSE_TOOLS.has(actionId) && terminalNotify !== undefined) {
-          const pane = tier === "external" ? null : (resolveOwnPane?.() ?? null);
+          const pane = tier === "external" ? null : ownPane();
           const targetId = ownedResourceId ?? readStringArg(args, "terminalId");
           if (pane !== null && targetId !== undefined) terminalNotify.forgetTarget(pane, targetId);
         }
@@ -3482,7 +3489,7 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
           };
           // An api-key client has no pane of its own. The external allowlist
           // already withholds this tool; this keeps it true if that drifts.
-          const pane = tier === "external" ? null : (resolveOwnPane?.() ?? null);
+          const pane = tier === "external" ? null : ownPane();
           if (pane === null || terminalNotify === undefined) {
             return refuse(
               NOTIFY_NOT_ELIGIBLE,
@@ -4118,7 +4125,7 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
             // A prompt without `notify` still makes the pane's undelivered
             // notice about the target stale: typed after this prompt, it
             // would read as the answer to it.
-            const pane = resolveOwnPane?.() ?? null;
+            const pane = ownPane();
             const targetId = ownedResourceId ?? readStringArg(args, "terminalId");
             if (pane !== null && targetId !== undefined) terminalNotify.supersede(pane, targetId);
           }

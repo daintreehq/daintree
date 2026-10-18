@@ -54,6 +54,7 @@ import {
   TerminalNotifyService,
   helpNotifyKey,
   paneNotifyKey,
+  relayNotifyKey,
   type LaneWake,
 } from "./mcp-server/terminalNotify.js";
 import { ReplyWaiterService } from "./mcp-server/replyWaiter.js";
@@ -1231,9 +1232,17 @@ export class McpServerService {
    * made here. Its terminals and worktrees stay; only the authority goes.
    */
   retireRelayPrincipal(senderId: string, helpSessionId: string): void {
-    this.sessionStore.resourceOwnership.revokePrincipal(
-      relayOwnershipPrincipal(senderId, helpSessionId)
-    );
+    const principal = relayOwnershipPrincipal(senderId, helpSessionId);
+    this.sessionStore.resourceOwnership.revokePrincipal(principal);
+    this.terminalNotify.revokeOwner(relayNotifyKey(principal));
+  }
+
+  /**
+   * Remote Hosts (#13500): a Shell's link session ended for good, so the
+   * notices its assistants' calls armed have nowhere left to go.
+   */
+  dropRelayLinkNotices(linkSessionId: string): void {
+    this.terminalNotify.dropRelayLink(linkSessionId);
   }
 
   /** Remote Hosts: the action manifest of the local view that drives a host's project. */

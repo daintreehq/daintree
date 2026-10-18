@@ -6,7 +6,7 @@ import type { TerminalRecipe } from "@shared/types";
 import { isPluginRecipe } from "@shared/types/project";
 import { isInRepoRecipeId } from "@shared/utils/recipeFilename";
 import { MAX_TERMINALS_PER_RECIPE } from "@shared/utils/recipeSanitizer";
-import { useRecipeStore } from "@/store/recipeStore";
+import { readRecipesQuietly, useRecipeStore } from "@/store/recipeStore";
 import { useProjectStore } from "@/store/projectStore";
 import { useRecipeEditorActivityStore } from "@/store/recipeEditorActivityStore";
 import { getCurrentViewStore } from "@/store/createWorktreeStore";
@@ -152,19 +152,14 @@ export function registerRecipeActions(actions: ActionRegistry, _callbacks: Actio
       }),
       run: async (args) => {
         const worktreeId = args?.worktreeId;
-        // Read from disk first: a view can hold a store that never loaded this
-        // project (a live run listed nothing while .daintree/recipes held one).
-        // Not while an editor is open, for the same reason the focus reload
-        // waits: a refreshed cache would let the open form save over disk.
+        // Read from disk: a view can hold a store that never loaded this project
+        // (a live run listed nothing while .daintree/recipes held one). Quietly
+        // (#13500): a listing promotes nothing into the repo, raises no conflict
+        // and leaves the store alone, since a call another machine's assistant
+        // relayed here runs in whichever window drives the project.
         const projectId = useProjectStore.getState().currentProject?.id;
-        if (projectId && !useRecipeEditorActivityStore.getState().isOpen()) {
-          await useRecipeStore
-            .getState()
-            .loadRecipes(projectId)
-            .catch(() => undefined);
-        }
         const recipeState = useRecipeStore.getState();
-        const recipes = recipeState.recipes;
+        const recipes = projectId ? await readRecipesQuietly(projectId) : recipeState.recipes;
 
         // Filter by worktree if specified, otherwise return all recipes
         const filtered = worktreeId
@@ -180,7 +175,7 @@ export function registerRecipeActions(actions: ActionRegistry, _callbacks: Actio
             showInEmptyState: r.showInEmptyState ?? false,
             origin: describeRecipeOrigin(r),
           })),
-          isLoading: recipeState.isLoading,
+          isLoading: projectId ? false : recipeState.isLoading,
         };
       },
     })
@@ -244,6 +239,20 @@ export function registerRecipeActions(actions: ActionRegistry, _callbacks: Actio
           worktreePath,
           branchName: worktree?.branch,
         };
+        // A listing reads disk without loading the store, so a recipe it named
+        // may not be here yet. Not while an editor is open: a refreshed cache
+        // would let the open form save over disk.
+        const projectId = useProjectStore.getState().currentProject?.id;
+        if (
+          projectId &&
+          useRecipeStore.getState().getRecipeById(recipeId) === undefined &&
+          !useRecipeEditorActivityStore.getState().isOpen()
+        ) {
+          await useRecipeStore
+            .getState()
+            .loadRecipes(projectId)
+            .catch(() => undefined);
+        }
         // Always forward dispatchSource so runRecipeWithResults can apply the
         // agent-source terminal cap, and the host's record of what an approver
         // was shown so the cap is sized to that rather than to the unapproved

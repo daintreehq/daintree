@@ -37,6 +37,7 @@ import { MCP_WORKSPACE_ID_HEADER as MCP_WORKSPACE_ID_HEADER_CANONICAL } from "..
 import { MCP_RESPONSE_TEXT_MAX_BYTES } from "../../../shared/config/mcpLimits.js";
 import { safeSerializeToolResult } from "../../utils/safeSerializeToolResult.js";
 import { buildToolCallTextResult } from "./toolCallResult.js";
+import type { RelayedNotice } from "./terminalNotify.js";
 
 // Re-exported for SDK-free consumers that historically imported from here.
 // `readinessProbe.ts` and `pluginMcpHash.ts` import from the standalone homes
@@ -1212,6 +1213,11 @@ export interface McpRelayCaller {
   senderId: string;
   helpSessionId: string;
   shellName: string;
+  /**
+   * Takes the notices this session's calls arm (#13500), for the Shell to
+   * type into the run that asked. Absent, a relayed call can't ask for one.
+   */
+  deliverNotices?: (notices: readonly RelayedNotice[]) => void;
 }
 
 const RESOURCE_URI_PATTERN =

@@ -12,14 +12,16 @@ export function registerProjectRecipesHandlers(_deps: HandlerDependencies): () =
   const handlers: Array<() => void> = [];
 
   const handleProjectGetRecipes = async (
-    projectId: string
+    projectId: string,
+    options?: { reconcile?: boolean }
   ): Promise<{ recipes: TerminalRecipe[]; collisions: RecipeNameCollision[] }> => {
     if (typeof projectId !== "string" || !projectId) {
       throw new Error("Invalid project ID");
     }
     const project = projectStore.getProjectById(projectId);
     let collisions: RecipeNameCollision[] = [];
-    if (project) {
+    // A quiet read (#13500) promotes nothing into the repo, so it reports no conflicts either.
+    if (project && options?.reconcile !== false) {
       try {
         collisions = await projectStore.reconcileProjectRecipes(project.path, projectId);
       } catch (error) {

@@ -11,6 +11,7 @@ import { createSessionServer, type SessionServerDeps } from "../sessionServer.js
 import { SessionStore } from "../sessionStore.js";
 import { RelayDrivenElsewhereError } from "../rendererBridge.js";
 import { RELAY_CALL_ID_META_KEY } from "../shared.js";
+import { relayNoticePane, type OwnPane, type TerminalNotifyHandlers } from "../terminalNotify.js";
 
 function entry(
   id: string,
@@ -39,6 +40,7 @@ const MANIFEST = [
   entry("host.switch", "command", "confirm"),
   entry("host.call", "command"),
   entry("help.displayImage", "command"),
+  entry("terminal.notifyWhenIdle", "command"),
 ];
 
 interface Harness {
@@ -156,7 +158,7 @@ describe("a relayed session (#13493)", () => {
     expect(relay.deps.dispatchAction).not.toHaveBeenCalled();
   });
 
-  it("refuses a notice before anything is sent: it has no pane here to type into", async () => {
+  it("refuses a notice before anything is sent when its relay has no way back to the Shell", async () => {
     const relay = await relayed("core");
     const result = await relay.client.callTool({
       name: "agent.launch",
@@ -166,6 +168,67 @@ describe("a relayed session (#13493)", () => {
     expect(result.isError).toBe(true);
     expect(errorCode(result as { content: unknown })).toBe("NOTIFY_NOT_ELIGIBLE");
     expect(relay.deps.dispatchAction).not.toHaveBeenCalled();
+  });
+
+  describe("notices, typed on the Shell into the run that asked (#13500)", () => {
+    const routePane = (): OwnPane =>
+      relayNoticePane("relay-principal", {
+        projectId: "project-1",
+        linkSessionId: "link-1",
+        helpSessionId: "help-1",
+        deliver: vi.fn(),
+      });
+
+    function notifyHandlers() {
+      const pending = { complete: vi.fn(), cancel: vi.fn() };
+      const handlers = {
+        whenIdle: vi.fn().mockResolvedValue({ armed: true, terminalId: "t-1" }),
+        prepareSend: vi.fn().mockResolvedValue(pending),
+        prepareLaunch: vi.fn().mockResolvedValue(pending),
+        prepareKeys: vi.fn().mockResolvedValue(pending),
+        forgetTarget: vi.fn(),
+        supersede: vi.fn(),
+        releaseHold: vi.fn(),
+      } satisfies TerminalNotifyHandlers;
+      return { handlers, pending };
+    }
+
+    it("arms a relayed launch's notice on the relay principal's pane, pinned to its callId", async () => {
+      const { handlers, pending } = notifyHandlers();
+      const relay = await relayed("core", {
+        terminalNotify: handlers,
+        resolveOwnPane: routePane,
+      });
+      const result = await relay.client.callTool({
+        name: "agent.launch",
+        arguments: { agentId: "claude", prompt: "fix it", notify: true },
+        _meta: { [RELAY_CALL_ID_META_KEY]: "call-9" },
+      });
+
+      expect(result.isError).not.toBe(true);
+      const [pane] = handlers.prepareLaunch.mock.calls[0]!;
+      expect(pane.relay).toMatchObject({ linkSessionId: "link-1", callId: "call-9" });
+      expect(relay.deps.dispatchAction).toHaveBeenCalledTimes(1);
+      expect(pending.complete).toHaveBeenCalledWith({ ran: true });
+    });
+
+    it("arms terminal.notifyWhenIdle the same way", async () => {
+      const { handlers } = notifyHandlers();
+      const relay = await relayed("core", {
+        terminalNotify: handlers,
+        resolveOwnPane: routePane,
+      });
+      const result = await relay.client.callTool({
+        name: "terminal.notifyWhenIdle",
+        arguments: { terminalId: "t-1" },
+        _meta: { [RELAY_CALL_ID_META_KEY]: "call-10" },
+      });
+
+      expect(result.isError).not.toBe(true);
+      const [pane, args] = handlers.whenIdle.mock.calls[0]!;
+      expect(pane.relay?.callId).toBe("call-10");
+      expect(args).toMatchObject({ terminalId: "t-1" });
+    });
   });
 
   it("reports a change refused where its Shell doesn't drive as DRIVEN_ELSEWHERE", async () => {

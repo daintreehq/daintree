@@ -81,6 +81,15 @@ export const AssistantLinkMethod = {
    * it twice. A host from before this answers UNSUPPORTED.
    */
   MCP_CALL: "assistant.mcp-call",
+  /**
+   * Host → Shell: what this host saw of terminals one of the Shell's
+   * assistants asked to hear about through MCP_CALL (#13500). Each names the
+   * call that armed it, so the Shell types it only into the run that made
+   * that call. Observations only, never anything read off a screen, and a
+   * resent noticeId is typed once. A Shell from before this answers
+   * UNSUPPORTED.
+   */
+  RELAY_NOTICES: "assistant.relay-notices",
 } as const;
 
 export const MAX_EXCHANGE_BODY_CHARS = 256 * 1024;
@@ -390,3 +399,56 @@ export const McpCallAnswerSchema = z.discriminatedUnion("status", [
     .strip(),
 ]);
 export type McpCallAnswer = z.infer<typeof McpCallAnswerSchema>;
+
+/** Notices one relay-notices call carries; the host sends the rest in the next. */
+export const MAX_RELAY_NOTICES_PER_CALL = 32;
+
+const agentStateSchema = z.enum(["idle", "working", "waiting", "directing", "completed", "exited"]);
+const waitingReasonSchema = z.enum(["prompt", "question", "approval", "error"]);
+
+/** A host's observation of a terminal, as `terminalNotify`'s NoticeObservation has it. */
+const relayObservationSchema = z.discriminatedUnion("kind", [
+  z
+    .object({
+      kind: z.literal("state"),
+      state: agentStateSchema,
+      waitingReason: waitingReasonSchema.optional(),
+      handback: z.boolean(),
+    })
+    .strip(),
+  z
+    .object({
+      kind: z.literal("exit"),
+      exitCode: z.number().int().optional(),
+      handback: z.boolean(),
+    })
+    .strip(),
+  z.object({ kind: z.literal("closed") }).strip(),
+  z
+    .object({
+      kind: z.literal("not-written"),
+      phase: z.enum(["failed", "cancelled", "unknown", "unconfirmed"]),
+    })
+    .strip(),
+  z.object({ kind: z.literal("handback") }).strip(),
+]);
+
+export const RelayNoticeSchema = z
+  .object({
+    /** The host's own id for it, the same on every resend. */
+    noticeId: z.string().regex(/^[A-Za-z0-9-]{1,64}$/),
+    helpSessionId: id,
+    /** The MCP_CALL that armed it. */
+    callId: id,
+    terminalId: id,
+    observation: relayObservationSchema,
+    /** It stopped without the done marker its prompt asked for; one more notice may follow. */
+    awaitingHandback: z.boolean().optional(),
+  })
+  .strip();
+export type RelayNotice = z.infer<typeof RelayNoticeSchema>;
+
+export const RelayNoticesPayloadSchema = z
+  .object({ notices: z.array(RelayNoticeSchema).min(1).max(MAX_RELAY_NOTICES_PER_CALL) })
+  .strip();
+export type RelayNoticesPayload = z.infer<typeof RelayNoticesPayloadSchema>;

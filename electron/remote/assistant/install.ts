@@ -64,7 +64,10 @@ declare module "../runtime.js" {
     assistantMessagingRuntime: AssistantMessagingRuntime;
     assistantHubReceiver: AssistantHubReceiver;
     /** What a host's dialogs are checked against: whether this Shell has a call out to it. */
-    hostCallRelayClient: Pick<HubMessagingRuntime, "hasCallInFlight">;
+    hostCallRelayClient: Pick<
+      HubMessagingRuntime,
+      "hasCallInFlight" | "awaitsNotices" | "receiveNotices"
+    >;
   }
 }
 
@@ -413,6 +416,14 @@ export function installAssistantMessagingPolicy(
       return handle !== null && !isRemoteEndpointHandle(handle);
     },
     controlEnabled: (hostId) => deps.isHostControlEnabled?.(hostId) === true,
+    // A host's notice rides its run's own notice line, as a wake does (#13500).
+    queueNotice: (lane, wake) => {
+      void import("../../services/McpServerService.js")
+        .then(({ mcpServerService }) => mcpServerService.queueLaneWake(lane, wake))
+        .catch((err: unknown) => {
+          console.error("[HubMessaging] queueing a host's notice failed:", err);
+        });
+    },
   });
   const unregisterHub = setHostMessagingRuntime(hub);
   const unregisterCallRelay = registerRemoteService("hostCallRelayClient", hub);
@@ -618,6 +629,7 @@ export function installAssistantExchangeClient(
     policy: () => getRemoteService("assistantMessagingPolicy"),
     hubReceiver: () => getRemoteService("assistantHubReceiver"),
     messagingEnabled: deps.messagingEnabled,
+    noticeReceiver: () => getRemoteService("hostCallRelayClient"),
     onExchangesMoved: (_hostId, moved) =>
       wakeAskersForMoved(moved, getRemoteService("assistantLaneWaker")),
   });
@@ -646,14 +658,18 @@ export function installAssistantExchangeClient(
       })
     : () => {};
   client.start();
-  // Bounded by each exchange's expiry, and by each relayed call while it runs.
-  // Holding the link never keeps the host awake.
+  // Bounded by each exchange's expiry, by each relayed call while it runs, and
+  // by the notices those calls armed (#13500). Holding the link never keeps
+  // the host awake.
   const offUseCheck =
-    deps.addUseCheck?.(
-      (hostId) =>
+    deps.addUseCheck?.((hostId) => {
+      const relay = getRemoteService("hostCallRelayClient");
+      return (
         journal.hasOpen(hostId, EXCHANGE_RETRY_WINDOW_MS) ||
-        getRemoteService("hostCallRelayClient")?.hasCallInFlight(hostId) === true
-    ) ?? (() => {});
+        relay?.hasCallInFlight(hostId) === true ||
+        relay?.awaitsNotices(hostId) === true
+      );
+    }) ?? (() => {});
   const unregister = registerRemoteService("assistantExchangeClient", client);
   return () => {
     disposed = true;

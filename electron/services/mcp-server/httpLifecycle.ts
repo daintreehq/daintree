@@ -80,7 +80,7 @@ import { computeMcpAuditSeverity } from "../../../shared/types/ipc/mcpServer.js"
 import { buildMcpClientConfig } from "../../../shared/config/mcpClientConfigs.js";
 import { isGenericNativeGrantEligible } from "../../../shared/config/nativeGrantUsePolicies.js";
 import type { TurnOutcomeService } from "./turnOutcomeLog.js";
-import { helpNotifyKey, paneNotifyKey } from "./terminalNotify.js";
+import { helpNotifyKey, paneNotifyKey, relayNoticePane } from "./terminalNotify.js";
 import type { AbusePolicy } from "./abusePolicy.js";
 import {
   DEFAULT_PORT,
@@ -2495,9 +2495,8 @@ export class HttpLifecycle {
       ...(this.deps.terminalNotify !== undefined
         ? { terminalNotify: this.deps.terminalNotify }
         : {}),
-      // A relayed session is never this machine's assistant: no lane, no hosts
-      // of its own to reach (so a call never chains), and no pane here to type
-      // a notice into (#13493).
+      // A relayed session is never this machine's assistant: no lane, and no
+      // hosts of its own to reach, so a call never chains (#13493).
       ...(relay
         ? {
             relay: {
@@ -2539,7 +2538,21 @@ export class HttpLifecycle {
       // resolved at handshake; a help lane's is read per call, because its
       // binding follows the PTY that currently serves it.
       resolveOwnPane: () => {
-        if (relay) return null;
+        if (relay) {
+          // Its pane is on the Shell (#13500): notices go back over the link,
+          // held under the relay principal so the session closing keeps them.
+          const deliver = relay.deliverNotices;
+          if (deliver === undefined || boundWorkspaceId === null) return null;
+          return relayNoticePane(
+            relayOwnershipPrincipal(relay.senderId, relay.helpSessionId),
+            {
+              projectId: boundWorkspaceId,
+              linkSessionId: relay.linkSessionId,
+              helpSessionId: relay.helpSessionId,
+              deliver,
+            }
+          );
+        }
         if (ownPane) return ownPane;
         if (helpSessionId === null) return null;
         const terminalId = this.helpSessionTerminalResolver?.(helpSessionId) ?? null;

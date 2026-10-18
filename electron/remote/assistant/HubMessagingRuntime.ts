@@ -41,6 +41,15 @@ import type {
 import { formatErrorMessage } from "../../../shared/utils/errorMessage.js";
 import { fenceFor } from "../../../shared/utils/quoteFence.js";
 import type { HostMessagingRuntimeHandle } from "../../services/mcp-server/hostMessagingTools.js";
+import {
+  NOTIFY_KEY_TOOLS,
+  NOTIFY_PROMPT_TOOLS,
+  TERMINAL_NOTIFY_WHEN_IDLE_TOOL,
+  type FiredNotice,
+  type LaneWake,
+  type LaneWakeCheck,
+} from "../../services/mcp-server/terminalNotify.js";
+import { sanitizeNotifyNote } from "../../../shared/types/terminalNotify.js";
 import { TERMINAL_EXCHANGE_STATES, type ExchangeRecord } from "../exchange/types.js";
 import { RetryWindowPassedError, type AssistantExchangeClient } from "./AssistantExchangeClient.js";
 import type {
@@ -59,6 +68,7 @@ import {
   type LaneList,
   type McpCallAnswer,
   type McpCallPayload,
+  type RelayNoticesPayload,
   type RelayRefusal,
 } from "./linkMethods.js";
 import { HOST_MESSAGING_PAUSED_MESSAGE, LANE_NOT_RUNNING_MESSAGE } from "./hostExchanges.js";
@@ -107,6 +117,14 @@ export interface HubMessagingRuntimeDeps {
   inLocalView?(helpSessionId: string): boolean;
   /** The person's per-host "assistant control" switch, read at each call (#13493). */
   controlEnabled?(hostId: HostId): boolean;
+  /**
+   * Queues a wake on a run's own notice line, the one writer that types into
+   * its prompt, under its gate (#13500). Absent, hosts' notices are dropped.
+   */
+  queueNotice?(
+    lane: { helpSessionId: string; terminalId: string; projectId: string },
+    wake: LaneWake
+  ): void;
   hosts(): ObservedHost[];
   /** A connected host's projects, most used first; names what its assistants work in. */
   listHostProjects?(hostId: HostId): Promise<readonly HostProjectSummary[]>;
@@ -122,6 +140,42 @@ export interface HubMessagingRuntimeDeps {
 }
 
 const ERROR_MESSAGE = "Hosts can't be reached for assistant messaging right now.";
+
+/** Calls whose notices this Shell still takes, the oldest forgotten first (#13500). */
+const MAX_NOTICE_PINS = 256;
+/** How long a call's notices are taken: as long as its host holds what the call made. */
+const NOTICE_PIN_TTL_MS = 24 * 60 * 60_000;
+/** How long a call's notices keep its host's link open when nothing else does. */
+const NOTICE_LINK_HOLD_MS = 2 * 60 * 60_000;
+/** Notice ids already queued, so a host's resend is typed once. */
+const MAX_SEEN_NOTICES = 1024;
+/** Host terminals whose last prompt from here is remembered, for superseding. */
+const MAX_PROMPTED_TERMINALS = 512;
+
+/** A call that may arm notices on its host, and the run here that made it. */
+interface NoticePin {
+  hostId: HostId;
+  run: OpenRun;
+  armedAt: number;
+  /** `terminal.notifyWhenIdle`'s note, kept here rather than read back from the host. */
+  note?: string;
+}
+
+function armsNotice(tool: string, args: Record<string, unknown>): boolean {
+  return tool === TERMINAL_NOTIFY_WHEN_IDLE_TOOL || args.notify === true;
+}
+
+/** A prompt, or keys with `notify`, makes an undelivered notice about its target stale. */
+function supersedesNotice(tool: string, args: Record<string, unknown>): boolean {
+  return NOTIFY_PROMPT_TOOLS.has(tool) || (NOTIFY_KEY_TOOLS.has(tool) && args.notify === true);
+}
+
+/** Insert as newest, dropping the oldest once the map holds more than `max`. */
+function remember<V>(map: Map<string, V>, key: string, value: V, max: number): void {
+  map.delete(key);
+  map.set(key, value);
+  while (map.size > max) map.delete(map.keys().next().value!);
+}
 
 const START_OFF_DETAIL =
   "Starting assistants is turned off for this host in this Shell's host settings. Only the person can turn it on.";
@@ -526,6 +580,11 @@ export class HubMessagingRuntime implements HostMessagingRuntimeHandle {
   private readonly lanes = new Map<HostId, { lanes: HostAssistantLane[]; at: number }>();
   /** Relayed calls out to each host right now, for the host's dialogs to be believed by. */
   private readonly callsOut = new Map<HostId, number>();
+  /** Calls that may arm notices on their host, by callId (#13500). */
+  private readonly noticePins = new Map<string, NoticePin>();
+  private readonly seenNotices = new Map<string, true>();
+  /** When a prompt last went from here to each host terminal, by host and terminal. */
+  private readonly promptedAt = new Map<string, number>();
   private waits = 0;
   private disposed = false;
 
@@ -592,11 +651,124 @@ export class HubMessagingRuntime implements HostMessagingRuntimeHandle {
     return (this.callsOut.get(hostId) ?? 0) > 0;
   }
 
+  /**
+   * Whether a recent call to `hostId` from an assistant still running here
+   * may yet send a notice (#13500). A link closed as idle can't be resumed,
+   * and what its calls armed would go with it.
+   */
+  awaitsNotices(hostId: HostId): boolean {
+    const holdFrom = this.now() - NOTICE_LINK_HOLD_MS;
+    for (const pin of this.noticePins.values()) {
+      if (pin.hostId === hostId && pin.armedAt >= holdFrom && this.stillRunning(pin.run)) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  /**
+   * What a host saw of terminals this Shell's assistants asked it about
+   * (#13500). The host is the connection's, never the payload's, and each
+   * notice goes only to the run whose call armed it, while that run is the
+   * one running: a run that replaced it never hears it.
+   */
+  receiveNotices(hostId: HostId, payload: RelayNoticesPayload): null {
+    const queue = this.deps.queueNotice;
+    if (this.disposed || queue === undefined) return null;
+    const hostName =
+      this.deps.hosts().find((host) => host.hostId === hostId)?.name ?? "remote host";
+    const receivedAt = this.now();
+    for (const notice of payload.notices) {
+      if (this.seenNotices.has(notice.noticeId)) continue;
+      remember(this.seenNotices, notice.noticeId, true, MAX_SEEN_NOTICES);
+      const pin = this.noticePins.get(notice.callId);
+      if (
+        pin === undefined ||
+        pin.hostId !== hostId ||
+        pin.run.sessionId !== notice.helpSessionId ||
+        receivedAt - pin.armedAt > NOTICE_PIN_TTL_MS
+      ) {
+        continue;
+      }
+      const check = this.checkNotice(pin, notice.terminalId, receivedAt);
+      if (check.kind !== "ready") continue;
+      const fired: FiredNotice = {
+        terminalId: notice.terminalId,
+        observation: notice.observation,
+        ...(pin.note !== undefined ? { note: pin.note } : {}),
+        ...(notice.awaitingHandback === true ? { awaitingHandback: true } : {}),
+      };
+      queue(
+        { helpSessionId: pin.run.sessionId, terminalId: pin.run.terminalId, projectId: pin.run.projectId },
+        {
+          id: notice.noticeId,
+          kind: "notice",
+          hostNotice: { hostName, notice: fired },
+          recheck: () => this.checkNotice(pin, notice.terminalId, receivedAt),
+          beforeType: () => true,
+          report: () => {},
+        }
+      );
+    }
+    return null;
+  }
+
+  /** Whether a received notice may still be typed: its run, the switch, and no newer prompt. */
+  private checkNotice(pin: NoticePin, terminalId: string, receivedAt: number): LaneWakeCheck {
+    if (!this.stillRunning(pin.run)) return { kind: "unavailable", reason: "relaunched" };
+    if (this.deps.controlEnabled?.(pin.hostId) !== true) {
+      return { kind: "unavailable", reason: "control-off" };
+    }
+    // Typed after a later prompt to the same terminal, it would read as that one's answer.
+    if ((this.promptedAt.get(`${pin.hostId}\u0000${terminalId}`) ?? 0) >= receivedAt) {
+      return { kind: "unavailable", reason: "superseded" };
+    }
+    return { kind: "ready" };
+  }
+
+  private stillRunning(run: OpenRun): boolean {
+    const now = this.caller(run.sessionId);
+    return (
+      now !== null &&
+      now.projectId === run.projectId &&
+      now.terminalId === run.terminalId &&
+      now.launchGeneration === run.launchGeneration
+    );
+  }
+
+  /** Before a call goes out, so a notice it arms can't arrive ahead of its pin. */
+  private noteCall(
+    callId: string,
+    hostId: HostId,
+    run: OpenRun,
+    tool: string,
+    args: Record<string, unknown>
+  ): void {
+    if (supersedesNotice(tool, args) && typeof args.terminalId === "string") {
+      remember(this.promptedAt, `${hostId}\u0000${args.terminalId}`, this.now(), MAX_PROMPTED_TERMINALS);
+    }
+    // A resend keeps the run its first send was pinned to.
+    if (!armsNotice(tool, args) || this.noticePins.has(callId)) return;
+    const note =
+      tool === TERMINAL_NOTIFY_WHEN_IDLE_TOOL && typeof args.note === "string"
+        ? sanitizeNotifyNote(args.note)
+        : undefined;
+    remember(
+      this.noticePins,
+      callId,
+      { hostId, run: { ...run }, armedAt: this.now(), ...(note !== undefined ? { note } : {}) },
+      MAX_NOTICE_PINS
+    );
+  }
+
   /** Stops outstanding waits; exchanges on hosts are left as they are. */
   dispose(): void {
     this.disposed = true;
     this.lanes.clear();
     this.callsOut.clear();
+    this.noticePins.clear();
+    this.seenNotices.clear();
+    this.promptedAt.clear();
   }
 
   /**
@@ -614,7 +786,7 @@ export class HubMessagingRuntime implements HostMessagingRuntimeHandle {
     args: HostCallArgs,
     context: { tier: "core" | "full" }
   ): Promise<HostMessagingOutcome<HostCallResult>> {
-    return this.settle(helpSessionId, async () => {
+    return this.settle(helpSessionId, async (caller) => {
       const resend = args.callId !== undefined;
       const callId = args.callId ?? this.newId();
       const sent = { callId, result: null };
@@ -640,6 +812,11 @@ export class HubMessagingRuntime implements HostMessagingRuntimeHandle {
         args: toolArgs,
         runMs,
       };
+      this.noteCall(callId, args.hostId, caller, args.tool, toolArgs);
+      // A first send that never ran armed nothing; a resend may follow one that did.
+      const unpin = (): void => {
+        if (!resend) this.noticePins.delete(callId);
+      };
       this.callsOut.set(args.hostId, (this.callsOut.get(args.hostId) ?? 0) + 1);
       let answer: McpCallAnswer;
       try {
@@ -654,14 +831,18 @@ export class HubMessagingRuntime implements HostMessagingRuntimeHandle {
             return { ...this.outcomeWith("ambiguous", CALL_AMBIGUOUS_DETAIL), ...sent };
           // Never written to the link: a first send is simply not sent.
           case "HOST_DISCONNECTED":
+            unpin();
             return resend
               ? { ...this.outcomeWith("disconnected", CALL_RESEND_DISCONNECTED_DETAIL), ...sent }
               : { ...this.outcomeWith("disconnected", CALL_NOT_SENT_DETAIL), ...unsent };
           case "RATE_LIMITED":
+            unpin();
             return { ...this.outcome("rate_limited", 1_000), ...unsent };
           case "UNSUPPORTED":
+            unpin();
             return { ...this.outcomeWith("unsupported", unsupportedCallDetail(host)), ...unsent };
           case "PERMISSION":
+            unpin();
             return {
               ...this.outcomeWith("policy_rejected", CALL_SENDER_REFUSED_DETAIL),
               ...unsent,
@@ -679,12 +860,14 @@ export class HubMessagingRuntime implements HostMessagingRuntimeHandle {
       }
       switch (answer.status) {
         case "done":
+          if (answer.result.isError) unpin();
           return { ...this.ok(), callId, result: answer.result };
         case "unknown":
           return { ...this.outcomeWith("expired", CALL_UNKNOWN_DETAIL), ...sent };
         case "conflict":
           return { ...this.outcomeWith("conflict", CALL_CONFLICT_DETAIL), ...sent };
         case "refused": {
+          unpin();
           const { code, detail } = RELAY_REFUSAL_DETAILS[answer.reason];
           return { ...this.outcomeWith(code, detail), ...sent };
         }

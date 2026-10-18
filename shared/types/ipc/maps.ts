@@ -702,7 +702,8 @@ export interface IpcInvokeMap extends GeneratedIpcInvokeMap {
     result: GitInitResult;
   };
   "project:get-recipes": {
-    args: [projectId: string];
+    /** `reconcile: false` reads what is on disk without promoting anything to the repo. */
+    args: [projectId: string, options?: { reconcile?: boolean }];
     result: { recipes: TerminalRecipe[]; collisions: RecipeNameCollision[] };
   };
   "project:save-recipes": {

@@ -2227,9 +2227,12 @@ function buildElectronApi(): ElectronAPI {
         _unwrappingInvoke(CHANNELS.PROJECT_CLONE_CANCEL, opId ? { opId } : undefined),
 
       getRecipes: (
-        projectId: string
+        projectId: string,
+        options?: { reconcile?: boolean }
       ): Promise<{ recipes: TerminalRecipe[]; collisions: RecipeNameCollision[] }> =>
-        _unwrappingInvoke(CHANNELS.PROJECT_GET_RECIPES, projectId),
+        options === undefined
+          ? _unwrappingInvoke(CHANNELS.PROJECT_GET_RECIPES, projectId)
+          : _unwrappingInvoke(CHANNELS.PROJECT_GET_RECIPES, projectId, options),
 
       saveRecipes: (projectId: string, recipes: TerminalRecipe[]): Promise<void> =>
         _unwrappingInvoke(CHANNELS.PROJECT_SAVE_RECIPES, { projectId, recipes }),
