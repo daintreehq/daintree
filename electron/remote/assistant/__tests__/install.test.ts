@@ -598,6 +598,26 @@ describe("installAssistantMessagingPolicy applying the saved default (#13441)", 
     });
   });
 
+  it("lets the Shell that asked enroll its host-started run from a fresh session (#13511)", async () => {
+    accepts = false;
+    install();
+    start("proj:0", "s1", 0);
+    running.get("proj:0")!.startedBy = {
+      senderId: "sender-a",
+      linkSessionId: "link-a",
+      askingHelpSessionId: "hub-help-1",
+    };
+    // The start's own session is gone; the same Shell proves itself on another.
+    policy().bindSender("link-a2", "sender-a");
+    expect(
+      policy().enrollStarted(
+        { projectId: "proj", slot: 0 },
+        { kind: "remote", linkSessionId: "link-a2" },
+        "s1"
+      )
+    ).toMatchObject({ ok: true });
+  });
+
   it("enrolls a run in a remote Shell's open view for that Shell once it proved its sender", async () => {
     remoteView(-5, "link-a");
     install();

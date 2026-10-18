@@ -1,6 +1,11 @@
+import { EventEmitter } from "node:events";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { NO_VIEW_HANDLE } from "../../../ipc/endpoint.js";
-import { startHostAssistant, type HostAssistantLaunchDeps } from "../hostAssistantLaunch.js";
+import {
+  spawnAndConfirm,
+  startHostAssistant,
+  type HostAssistantLaunchDeps,
+} from "../hostAssistantLaunch.js";
 
 const PROJECT = { id: "proj-1", path: "/repos/one" };
 const SESSION_FOLDER =
@@ -40,7 +45,12 @@ describe("startHostAssistant (#13511)", () => {
     writes = [];
     deps = {
       getProject: (projectId) => (projectId === PROJECT.id ? PROJECT : null),
-      launchableAgents: async () => ["codex", "claude", "gemini"],
+      launchableAgents: async () => [
+        { id: "copilot", byDefault: false },
+        { id: "codex", byDefault: true },
+        { id: "claude", byDefault: true },
+        { id: "gemini", byDefault: true },
+      ],
       provision: vi.fn(async () => ({
         sessionId: "session-1",
         sessionPath: SESSION_FOLDER,
@@ -48,7 +58,7 @@ describe("startHostAssistant (#13511)", () => {
         mcpUrl: "http://127.0.0.1:45454/mcp",
       })),
       revoke: vi.fn(async () => {}),
-      launchFlags: () => ["--model", "gpt-6.1"],
+      launchFlags: async () => ["--model", "gpt-6.1"],
       spawn: vi.fn(async () => true),
       isRunning: () => running,
       serializedState: async () => ({ data: screens[0]! }),
@@ -117,9 +127,18 @@ describe("startHostAssistant (#13511)", () => {
       status: "refused",
       reason: "launch-failed",
     });
-    deps.launchableAgents = async () => ["gemini"];
+    deps.launchableAgents = async () => [{ id: "gemini", byDefault: true }];
     await expect(start()).resolves.toEqual({ status: "refused", reason: "launch-failed" });
     expect(deps.provision).not.toHaveBeenCalled();
+  });
+
+  it("runs a backend the picker doesn't offer only when it's named", async () => {
+    await expect(start({ agentId: "copilot" })).resolves.toMatchObject({
+      status: "started",
+      lane: { agentId: "copilot" },
+    });
+    deps.launchableAgents = async () => [{ id: "copilot", byDefault: false }];
+    await expect(start()).resolves.toEqual({ status: "refused", reason: "launch-failed" });
   });
 
   it("refuses a lane in use without touching it, and an unknown project", async () => {
@@ -151,5 +170,38 @@ describe("startHostAssistant (#13511)", () => {
     screens = [READY_SCREEN.replace("• Ready.", "■ You've hit your usage limit.")];
     await expect(start()).resolves.toEqual({ status: "refused", reason: "agent-error" });
     expect(deps.revoke).not.toHaveBeenCalled();
+  });
+});
+
+describe("spawnAndConfirm (#13511)", () => {
+  it("answers whether the PTY really started, not just that its spawn was queued", async () => {
+    const pty = new EventEmitter();
+    const failed = spawnAndConfirm(
+      pty as never,
+      async () => {
+        pty.emit("spawn-result", "other-terminal", { success: true });
+        pty.emit("spawn-result", "t-1", { success: false });
+        return true;
+      },
+      "t-1"
+    );
+    await expect(failed).resolves.toBe(false);
+
+    const started = spawnAndConfirm(
+      pty as never,
+      async () => {
+        setTimeout(() => pty.emit("spawn-result", "t-2", { success: true }), 0);
+        return true;
+      },
+      "t-2"
+    );
+    await expect(started).resolves.toBe(true);
+    expect(pty.listenerCount("spawn-result")).toBe(0);
+  });
+
+  it("never waits on a spawn the handler refused outright", async () => {
+    const pty = new EventEmitter();
+    await expect(spawnAndConfirm(pty as never, async () => false, "t-1")).resolves.toBe(false);
+    await expect(spawnAndConfirm(null, async () => true, "t-1")).resolves.toBe(false);
   });
 });

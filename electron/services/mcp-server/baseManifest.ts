@@ -40,8 +40,9 @@ export function getExternalBaseManifest(): ActionManifestEntry[] {
 
 /**
  * The tool surface of a help session with no view (#13511): the external
- * surface, plus each action the host runs itself (#13498) that it lacks, all
- * generated from the action registry as the external one is. The session's
+ * surface, plus each action the host runs itself (#13498) and each tool main
+ * runs that it lacks, all generated from the action registry as the external
+ * one is. The session's
  * own tier then filters it, as a view's manifest is filtered.
  *
  * Discovery only, as above. A listed tool only a view can run answers

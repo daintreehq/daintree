@@ -225,10 +225,15 @@ export class HostAssistantStarter {
         );
     if (mine) {
       // Its tool calls run through a view of the project when the host has a
-      // window for one; with none, the host runs them itself (#13511).
+      // window for one; with none, a host that runs them itself does (#13511).
       if (!authorized()) return refused("consent-withdrawn");
       const view = await this.view(hostId, projectId, path, authorized);
-      if (view.status !== "ready" && view.reason !== "no-window") return refused(view.reason);
+      if (
+        view.status !== "ready" &&
+        !(view.reason === "no-window" && listed.viewlessTools === true)
+      ) {
+        return refused(view.reason);
+      }
       if (!authorized()) return refused("consent-withdrawn");
       return {
         status: "ready",

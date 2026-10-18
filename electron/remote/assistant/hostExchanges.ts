@@ -296,7 +296,7 @@ export function installAssistantExchangeHostWith(
         .listOpen()
         .slice(0, MAX_LISTED_LANES)
         .map((run) => openLane(policy, run, agentOf(run.projectId, run.slot)));
-      return { lanes, open, assistants } satisfies LaneList;
+      return { lanes, open, assistants, viewlessTools: true } satisfies LaneList;
     });
 
     session.registerCallHandler(AssistantLinkMethod.READ_QUOTA, EmptyPayloadSchema, async () => {

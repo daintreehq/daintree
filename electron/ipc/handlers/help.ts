@@ -765,6 +765,13 @@ export const helpNamespace = defineIpcNamespace({
   },
 });
 
+function localViewIsUp(handle: number): boolean {
+  const view = webContents.fromId(handle);
+  return (
+    view !== undefined && !view.isDestroyed() && !view.isCrashed() && !view.isLoadingMainFrame()
+  );
+}
+
 /**
  * A view of a project coming back takes over that project's detached
  * assistants at once (#13389), its panel open or not: another machine's, or
@@ -783,7 +790,13 @@ function installDetachedAssistantAdoption(): () => void {
   let offLease: (() => void) | null = null;
   return installDetachedAdoption({
     detachedProjects: () => helpSessionServiceIfLoaded()?.detachedProjectIds() ?? [],
-    endpointsFor: (projectId) => getEndpointRegistry().getForProject(projectId),
+    // A window here whose renderer crashed or is reloading keeps its id, but
+    // has nothing to run the assistant's calls yet; once loaded, it takes the
+    // assistant over through its own panel.
+    endpointsFor: (projectId) =>
+      getEndpointRegistry()
+        .getForProject(projectId)
+        .filter((endpoint) => endpoint.kind === "remote-view" || localViewIsUp(endpoint.handle)),
     drivingEndpointId: (projectId) =>
       peekDriveLeaseService()?.getHolderEndpoint(projectId)?.endpointId ?? null,
     detachedSlots: (projectId) => helpSessionServiceIfLoaded()?.detachedSlots(projectId) ?? [],

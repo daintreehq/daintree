@@ -9,6 +9,8 @@ import {
 } from "../../../shared/utils/terminalKeys.js";
 import { NO_VIEW_HANDLE } from "../../ipc/endpoint.js";
 import type { HelpSessionStartedBy } from "../../services/HelpSessionService.js";
+import type { PtyClient } from "../../services/PtyClient.js";
+import type { AssistantLaunchSettings } from "../../../shared/utils/assistantLaunchFlags.js";
 import { READY_SCREEN_LINES, untilAssistantReady } from "./assistantReadiness.js";
 import type { StartPayload, StartResult } from "./linkMethods.js";
 
@@ -21,8 +23,12 @@ export const HOST_START_AGENT_IDS: readonly string[] = ["claude", "codex", "copi
 
 export interface HostAssistantLaunchDeps {
   getProject(projectId: string): { id: string; path: string } | null;
-  /** The agents this host can start as its assistant right now, its default first. */
-  launchableAgents(): Promise<string[]>;
+  /**
+   * The agents this host can start as its assistant right now, its default
+   * first. `byDefault`: one a start that names no agent may pick, as the
+   * assistant's own picker offers it; any other runs only when named.
+   */
+  launchableAgents(): Promise<Array<{ id: string; byDefault: boolean }>>;
   /** `HelpSessionService.provisionSession`; throws `LANE_OCCUPIED` for a lane in use. */
   provision(input: {
     projectId: string;
@@ -41,7 +47,7 @@ export interface HostAssistantLaunchDeps {
   } | null>;
   revoke(sessionId: string): Promise<void>;
   /** The flags a launch of the assistant as `agentId` carries: its saved model, its custom args. */
-  launchFlags(agentId: string): string[];
+  launchFlags(agentId: string): Promise<string[]>;
   /** Spawn the assistant's PTY; false when nothing started. */
   spawn(
     project: { id: string; path: string },
@@ -90,11 +96,13 @@ export async function startHostAssistant(
   const project = deps.getProject(payload.projectId);
   if (!project) return refused("no-project");
 
-  const launchable = (await deps.launchableAgents()).filter((id) =>
+  const launchable = (await deps.launchableAgents()).filter(({ id }) =>
     HOST_START_AGENT_IDS.includes(id)
   );
-  const agentId = payload.agentId ?? launchable[0];
-  if (agentId === undefined || !launchable.includes(agentId)) return refused("launch-failed");
+  const agentId = payload.agentId ?? launchable.find((agent) => agent.byDefault)?.id ?? undefined;
+  if (agentId === undefined || !launchable.some(({ id }) => id === agentId)) {
+    return refused("launch-failed");
+  }
 
   let session: Awaited<ReturnType<HostAssistantLaunchDeps["provision"]>>;
   try {
@@ -128,7 +136,7 @@ export async function startHostAssistant(
       cwd: session.sessionPath,
       env,
       prompt: HUB_STARTED_ASSISTANT_GREETING,
-      agentLaunchFlags: deps.launchFlags(agentId),
+      agentLaunchFlags: await deps.launchFlags(agentId).catch(() => []),
     })
     .catch(() => false);
   if (!spawned) {
@@ -187,11 +195,13 @@ export async function liveHostAssistantLaunchDeps(): Promise<HostAssistantLaunch
   const [
     { helpSessionService },
     { projectStore },
-    { getPtyClient, getCliAvailabilityServiceRef },
+    { getPtyClient, getCliAvailabilityServiceRef, getAgentModelCatalogService },
     { spawnHostAssistantLive },
     { store },
-    { getAssistantSupportedAgentIds, getSavedAssistantModelId, resolveAssistantModelId },
+    { getAssistantSupportedAgentIds, getAssistantWiredAgentIds, getEffectiveAgentConfig },
     { isAgentLaunchable },
+    { readAgentDefaults },
+    { assistantLaunchFlags, assistantModelNeedsCatalog },
   ] = await Promise.all([
     import("../../services/HelpSessionService.js"),
     import("../../services/ProjectStore.js"),
@@ -200,6 +210,8 @@ export async function liveHostAssistantLaunchDeps(): Promise<HostAssistantLaunch
     import("../../store.js"),
     import("../../../shared/config/agentRegistry.js"),
     import("../../../shared/utils/agentAvailability.js"),
+    import("../../services/agentDefaults.js"),
+    import("../../../shared/utils/assistantLaunchFlags.js"),
   ]);
   return {
     getProject: (projectId) => {
@@ -211,42 +223,81 @@ export async function liveHostAssistantLaunchDeps(): Promise<HostAssistantLaunch
       const availability = service
         ? (service.getAvailability() ?? (await service.checkAvailability()))
         : null;
-      const supported = new Set(getAssistantSupportedAgentIds());
+      // Wired takes an experimental backend run by name; the picker offers stable ones only.
+      const wired = new Set(getAssistantWiredAgentIds());
+      const offered = new Set(getAssistantSupportedAgentIds());
       const usable = HOST_START_AGENT_IDS.filter(
         (id) =>
-          supported.has(id) &&
+          wired.has(id) &&
           isAgentLaunchable(availability?.[id as keyof typeof availability] ?? undefined)
       );
-      // The person's default agent first, as a launch from a view picks it.
-      const preferred = store.get("agentSettings")?.defaultAgent ?? null;
-      return preferred !== null && usable.includes(preferred)
-        ? [preferred, ...usable.filter((id) => id !== preferred)]
-        : usable;
+      // The assistant's own pick first, then the general default, as a view's launch reads them.
+      const { assistantAgentId, defaultAgent } = readAgentDefaults();
+      const preferred = [assistantAgentId, defaultAgent].filter(
+        (id): id is string => typeof id === "string" && usable.includes(id)
+      );
+      return [...new Set([...preferred, ...usable])].map((id) => ({
+        id,
+        byDefault: offered.has(id),
+      }));
     },
     provision: (input) => helpSessionService.provisionSession(input),
     revoke: (sessionId) => helpSessionService.revokeSession(sessionId),
-    launchFlags: (agentId) => {
-      // The assistant's saved model and custom args, as a view's launch reads
-      // them; with no catalog here, a saved model goes as saved.
-      const settings = (store.get("helpAssistant") ?? {}) as {
-        modelIds?: Record<string, string | null>;
-        customArgs?: string;
-      };
-      const modelId = resolveAssistantModelId(
+    launchFlags: async (agentId) => {
+      const settings = (store.get("helpAssistant") ?? {}) as AssistantLaunchSettings;
+      if (!assistantModelNeedsCatalog(agentId, settings)) {
+        return assistantLaunchFlags(agentId, settings, null);
+      }
+      // As a view's catalog read answers: the live one, else the bundled models.
+      const catalog = await (getAgentModelCatalogService()
+        ?.getResolvedModels(agentId)
+        .catch(() => null) ?? Promise.resolve(null));
+      return assistantLaunchFlags(
         agentId,
-        getSavedAssistantModelId(settings.modelIds, agentId)
-      ).trim();
-      const custom = typeof settings.customArgs === "string" ? settings.customArgs.trim() : "";
-      return [
-        ...(modelId ? ["--model", modelId] : []),
-        ...(custom ? custom.split(/\s+/).filter(Boolean) : []),
-      ];
+        settings,
+        catalog ?? { models: getEffectiveAgentConfig(agentId)?.models ?? [] }
+      );
     },
-    spawn: (project, spec) => spawnHostAssistantLive(project, spec),
+    spawn: (project, spec) =>
+      spawnAndConfirm(getPtyClient(), () => spawnHostAssistantLive(project, spec), spec.terminalId),
     isRunning: (projectId, slot, sessionId) =>
       helpSessionService.getRunningLaneSession(projectId, slot)?.sessionId === sessionId,
     serializedState: (terminalId, options) =>
       getPtyClient()?.getSerializedStateAsync(terminalId, options) ?? Promise.resolve(null),
     write: (terminalId, data) => getPtyClient()?.write(terminalId, data),
   };
+}
+
+/**
+ * How long a spawn the handler queued gets to report how it went. No report
+ * in that time isn't a failure: the readiness wait that follows decides.
+ */
+const SPAWN_RESULT_WAIT_MS = 15_000;
+
+/**
+ * Whether the assistant's PTY actually started. The spawn handler only queues
+ * it; a bad shell or a full spawn queue is reported afterwards, as its spawn
+ * result, so that is listened for before the spawn is asked for.
+ */
+export async function spawnAndConfirm(
+  pty: Pick<PtyClient, "on" | "off"> | null,
+  spawn: () => Promise<boolean>,
+  terminalId: string
+): Promise<boolean> {
+  if (!pty) return false;
+  let settle: (started: boolean) => void = () => {};
+  const reported = new Promise<boolean>((resolve) => {
+    settle = resolve;
+  });
+  const onResult = (id: string, result: { success?: boolean } | undefined) => {
+    if (id === terminalId) settle(result?.success === true);
+  };
+  pty.on("spawn-result", onResult);
+  const timer = setTimeout(() => settle(true), SPAWN_RESULT_WAIT_MS);
+  try {
+    return (await spawn()) && (await reported);
+  } finally {
+    clearTimeout(timer);
+    pty.off("spawn-result", onResult);
+  }
 }

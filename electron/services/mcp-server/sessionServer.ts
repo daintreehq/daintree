@@ -3892,6 +3892,16 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
               };
               return buildToolError({ code: TIER_NOT_PERMITTED_CODE, message });
             }
+            // A session with no view has nowhere to show the figure (#13511).
+            if (sessionStore.sessionViewlessHelpMap.has(sessionId)) {
+              const message =
+                "help.displayImage needs a Daintree window showing this assistant, and none does. Nothing was displayed.";
+              outcome = {
+                kind: "result",
+                value: { ok: false, error: { code: NO_FRONTEND_ATTACHED_CODE, message } },
+              };
+              return buildToolError({ code: NO_FRONTEND_ATTACHED_CODE, message, retriable: true });
+            }
             const params = (args ?? {}) as {
               url?: unknown;
               caption?: unknown;

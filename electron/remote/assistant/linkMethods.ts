@@ -237,6 +237,12 @@ export const LaneListSchema = z
     open: z.array(EnrolledLaneSchema).max(MAX_LISTED_LANES).optional(),
     /** Absent from a host older than the listing of every assistant. */
     assistants: z.array(RunningAssistantSchema).max(MAX_LISTED_LANES).optional(),
+    /**
+     * True from a host whose assistants keep their Daintree tools with no view
+     * (#13511). Absent from an older one: there an assistant with no view has
+     * none until a view takes it over.
+     */
+    viewlessTools: z.boolean().optional(),
   })
   .strip();
 export type LaneList = z.infer<typeof LaneListSchema>;

@@ -880,6 +880,17 @@ describe("HelpSessionService", () => {
       await vi.waitFor(() => expect(service.validateToken(result.token)).toBe(false));
     });
 
+    it("ends when its PTY exits while a view shows it, so that view going later keeps nothing", async () => {
+      const result = await startWithoutView();
+      await service.adoptDetachedSession("proj-1", 0, LOCAL_VIEW, liveProbe, {
+        windowId: LOCAL_WINDOW,
+      });
+
+      service.handleTerminalExit("term-host-0");
+
+      await vi.waitFor(() => expect(service.validateToken(result.token)).toBe(false));
+    });
+
     it("tells listeners once its PTY is bound, so a view already driving can take it", async () => {
       const detached = vi.fn();
       const off = service.addLaneDetachedListener(detached);

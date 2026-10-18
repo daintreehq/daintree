@@ -38,11 +38,32 @@ const VIEWLESS_ARTIFACT_PATH = path.resolve(
 );
 
 /**
- * The actions a host runs itself with no view (#13498) that the external tier
- * doesn't already describe: what a help session with no view lists besides
- * the external surface (#13511).
+ * The tools the session server runs in main whatever views are open: its
+ * `VIEWLESS_MAIN_PROCESS_TOOLS`, which can't be imported into this renderer
+ * test. `sessionServer.test.ts` holds the generated surface to that set, so a
+ * tool added there and missed here fails.
  */
-const VIEWLESS_EXTRA_TOOLS = Object.keys(VIEWLESS_ACTIONS)
+const MAIN_PROCESS_TOOLS = [
+  "terminal.waitUntilIdle",
+  "terminal.waitUntilIdleBatch",
+  "skills.search",
+  "skills.load",
+  "mcp.surface",
+  "project.runCheck",
+  "project.runCommand",
+  "terminal.readLastMessageOwned",
+  "terminal.notifyWhenIdle",
+  "assistant.getInbox",
+  "assistant.reply",
+  "assistant.sendMessage",
+];
+
+/**
+ * What a help session with no view lists besides the external surface
+ * (#13511): the actions the host runs itself (#13498) and the tools main
+ * runs, where the external tier doesn't already describe them.
+ */
+const VIEWLESS_EXTRA_TOOLS = [...new Set([...Object.keys(VIEWLESS_ACTIONS), ...MAIN_PROCESS_TOOLS])]
   .filter((id) => !(MCP_EXTERNAL_TIER_TOOLS as readonly string[]).includes(id))
   .sort();
 
@@ -195,8 +216,8 @@ describe("MCP external base manifest artifact", () => {
       "MCP_VIEWLESS_BASE_MANIFEST",
       [
         "// What a help session with no view lists besides the external surface",
-        "// (#13511): the actions the host runs itself (#13498) that the external",
-        "// tier doesn't already describe.",
+        "// (#13511): the actions the host runs itself (#13498) and the tools main",
+        "// runs, where the external tier doesn't already describe them.",
       ].join("\n")
     );
     await expectArtifact(VIEWLESS_ARTIFACT_PATH, rendered);

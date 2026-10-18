@@ -2783,14 +2783,16 @@ export class HelpSessionService {
    * ended it — otherwise its bearer would stay valid and its lane look taken
    * for as long as nobody asks after the project. The conversation pointer
    * written at spawn stays, so the next view resumes it. An attached session
-   * is left to its view, as before.
+   * is left to its view, as before, unless it has run with no view (#13511):
+   * its view going later would otherwise keep the exited run as a detached one.
    */
   handleTerminalExit(terminalId: string): void {
     if (!terminalId) return;
     for (const [sessionId, boundId] of [...this.terminalBySessionId]) {
       if (boundId !== terminalId) continue;
       const record = this.sessionsById.get(sessionId);
-      if (!record || record.revoked || record.detachedAt === undefined) continue;
+      if (!record || record.revoked) continue;
+      if (record.detachedAt === undefined && record.outlivesView !== true) continue;
       void this.revokeSession(sessionId).catch((err: unknown) => {
         console.warn("[HelpSessionService] Revoking an exited detached assistant failed:", err);
       });

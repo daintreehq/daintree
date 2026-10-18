@@ -318,7 +318,8 @@ describe("HostAssistantStarter", () => {
       );
       noWindowStarter = new HostAssistantStarter({
         ...(deps as unknown as HostAssistantStarterDeps),
-        startWithoutView,
+        startWithoutView:
+          startWithoutView as unknown as HostAssistantStarterDeps["startWithoutView"],
         now: () => clock,
         sleep: async (ms) => {
           clock += ms;
@@ -349,6 +350,7 @@ describe("HostAssistantStarter", () => {
     });
 
     it("answers with an assistant already enrolled for this Shell, whose tools now run on the host", async () => {
+      lanes.viewlessTools = true;
       lanes.lanes = [
         { projectId: PROJECT, slot: 2, generation: "g2", available: true, agentId: "codex" },
       ];
@@ -356,6 +358,15 @@ describe("HostAssistantStarter", () => {
         noWindowStarter.start(HOST, PROJECT, { askingHelpSessionId: "hub-help-1", authorized })
       ).resolves.toMatchObject({ status: "ready", slot: 2, started: false });
       expect(startWithoutView).not.toHaveBeenCalled();
+    });
+
+    it("still needs a window for an enrolled assistant on a host whose tools need a view", async () => {
+      lanes.lanes = [
+        { projectId: PROJECT, slot: 2, generation: "g2", available: true, agentId: "codex" },
+      ];
+      await expect(
+        noWindowStarter.start(HOST, PROJECT, { askingHelpSessionId: "hub-help-1", authorized })
+      ).resolves.toEqual({ status: "refused", reason: "no-window" });
     });
 
     it("passes on the host's refusal, and enrolls nothing", async () => {

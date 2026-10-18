@@ -184,15 +184,17 @@ export function installAssistantMessagingPolicy(
   // has a live generation, and the lifecycle ledger can't stand in for this: a
   // refused duplicate leaves it describing the failed attempt, and it evicts.
   const spawned = new Map<string, number>();
-  const policy = new AssistantMessagingPolicy({
+  const policy: AssistantMessagingPolicy = new AssistantMessagingPolicy({
     getRunningLaneSession: (projectId, slot) =>
       helpSessionService.getRunningLaneSession(projectId, slot),
     listRunningLanes: () => helpSessionService.listRunningLanes(),
-    // A run the host started with no view names who asked for it (#13511);
+    // A run the host started with no view names who asked for it (#13511),
+    // which a fresh session of the same Shell proves again with its sender;
     // any other came through one of the Shell's own views.
     startedThrough: (running, linkSessionId) =>
       running.startedBy !== undefined
-        ? running.startedBy.linkSessionId === linkSessionId
+        ? running.startedBy.linkSessionId === linkSessionId ||
+          policy.sessionSender(linkSessionId) === running.startedBy.senderId
         : getEndpointRegistry()
             .getRemote()
             .some(

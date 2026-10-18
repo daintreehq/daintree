@@ -101,7 +101,7 @@ export interface AssistantReadinessIo {
   screen(): Promise<string | null>;
   /** Choose `answer` on the trust question now on screen. */
   answerTrust(answer: string): Promise<void>;
-  /** Asked again before anything is typed; false stops the wait. */
+  /** Asked again before each look at the screen and before anything is typed; false stops the wait. */
   authorized(): boolean;
   now(): number;
   sleep(ms: number): Promise<void>;
@@ -120,6 +120,7 @@ export async function untilAssistantReady(io: AssistantReadinessIo): Promise<Ass
   // Ready is what the latest screen shows, never one seen earlier.
   let atPromptNow = false;
   while (io.now() < deadline) {
+    if (!io.authorized()) return "consent-withdrawn";
     const screen = await io.screen();
     atPromptNow = false;
     if (screen !== null) {
