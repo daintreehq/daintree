@@ -22,6 +22,12 @@ import { isPtyPanel, type PanelInstance, type PtyPanelData } from "@shared/types
 const findSessions = vi.hoisted(() => vi.fn());
 const launchFromRestoreRecovery = vi.hoisted(() => vi.fn());
 
+const viewObservable = vi.hoisted(() => ({ value: true }));
+vi.mock("@/lib/viewCacheState", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/viewCacheState")>()),
+  isProjectViewObservable: () => viewObservable.value,
+}));
+
 vi.mock("@/clients/codexClient", () => ({
   codexClient: { findSessions },
 }));
@@ -71,11 +77,8 @@ vi.mock("../../../store/slices/panelRegistry/persistence", async () => {
 });
 
 const { usePanelStore } = await import("@/store/panelStore");
-const {
-  RestoreRecoveryGate,
-  __resetRestoreRecoveryAutoResumeForTests,
-  requestRestoreRecoveryAutoResume,
-} = await import("../RestoreRecoveryGate");
+const { RestoreRecoveryGate, __resetRestoreRecoveryAutoResumeForTests } =
+  await import("../RestoreRecoveryGate");
 const { useAgentSettingsStore } = await import("@/store/agentSettingsStore");
 
 function heldPanel(id: string, overrides: Partial<PtyPanelData> = {}): PtyPanelData {
@@ -312,6 +315,7 @@ describe("RestoreRecoveryGate — held by the resume setting (#13509)", () => {
   let windowFocused = true;
   beforeEach(() => {
     windowFocused = true;
+    viewObservable.value = true;
     vi.spyOn(document, "hasFocus").mockImplementation(() => windowFocused);
     __resetRestoreRecoveryAutoResumeForTests();
     setPolicy("on-focus");
@@ -322,7 +326,7 @@ describe("RestoreRecoveryGate — held by the resume setting (#13509)", () => {
     useAgentSettingsStore.setState({ settings: null, isInitialized: false });
   });
 
-  it("resumes the conversation it kept when the user selects the pane, and not before", async () => {
+  it("resumes the conversation it kept once the pane is selected, and not before", async () => {
     seed(deferred("sess-c"));
 
     const { rerender } = render(<RestoreRecoveryGate panelId="p-1" isFocused={false} />);
@@ -336,27 +340,8 @@ describe("RestoreRecoveryGate — held by the resume setting (#13509)", () => {
     );
   });
 
-  it("starts nothing for a pane that was already selected when it appeared", () => {
+  it("resumes a pane that is already selected when it appears", async () => {
     seed(deferred("sess-c"));
-
-    render(<RestoreRecoveryGate panelId="p-1" isFocused />);
-
-    expect(launchFromRestoreRecovery).not.toHaveBeenCalled();
-  });
-
-  it("starts nothing when the setting changes under an already selected pane", () => {
-    setPolicy("never");
-    seed(deferred("sess-c"));
-    render(<RestoreRecoveryGate panelId="p-1" isFocused />);
-
-    act(() => setPolicy("on-focus"));
-
-    expect(launchFromRestoreRecovery).not.toHaveBeenCalled();
-  });
-
-  it("resumes when the pane is handed focus, even before the surface has subscribed", async () => {
-    seed(deferred("sess-c"));
-    requestRestoreRecoveryAutoResume("p-1");
 
     render(<RestoreRecoveryGate panelId="p-1" isFocused />);
 
@@ -365,19 +350,50 @@ describe("RestoreRecoveryGate — held by the resume setting (#13509)", () => {
     );
   });
 
-  it("resumes on a click on the surface, but leaves a pressed button to its own choice", async () => {
+  it("starts nothing when the setting is switched on under a selected pane", () => {
+    setPolicy("never");
     seed(deferred("sess-c"));
     render(<RestoreRecoveryGate panelId="p-1" isFocused />);
 
+    act(() => setPolicy("on-focus"));
+
+    expect(launchFromRestoreRecovery).not.toHaveBeenCalled();
+    expect(screen.getByRole("heading", { name: "Not resumed after restart" })).toBeTruthy();
+  });
+
+  it("arms from the first setting it sees once the settings load", async () => {
+    useAgentSettingsStore.setState({ settings: null, isInitialized: false });
+    seed(deferred("sess-c"));
+    render(<RestoreRecoveryGate panelId="p-1" isFocused />);
+    expect(launchFromRestoreRecovery).not.toHaveBeenCalled();
+
+    act(() => setPolicy("on-focus"));
+
+    await waitFor(() => expect(launchFromRestoreRecovery).toHaveBeenCalledTimes(1));
+  });
+
+  it("leaves a pressed button to its own choice", async () => {
+    seed(deferred("sess-c"));
+    const { rerender } = render(<RestoreRecoveryGate panelId="p-1" isFocused={false} />);
+
     const startNew = screen.getByRole("button", { name: "Start new session" });
     fireEvent.pointerDown(startNew);
+    rerender(<RestoreRecoveryGate panelId="p-1" isFocused />);
     fireEvent.click(startNew);
 
     await waitFor(() =>
       expect(launchFromRestoreRecovery).toHaveBeenCalledWith("p-1", { kind: "fresh" })
     );
-    fireEvent.click(screen.getByRole("heading"));
     expect(launchFromRestoreRecovery).toHaveBeenCalledTimes(1);
+  });
+
+  it("resumes nothing while the view is cached behind another project", () => {
+    viewObservable.value = false;
+    seed(deferred("sess-c"));
+
+    render(<RestoreRecoveryGate panelId="p-1" isFocused />);
+
+    expect(launchFromRestoreRecovery).not.toHaveBeenCalled();
   });
 
   it("waits for the window to have focus before resuming", async () => {

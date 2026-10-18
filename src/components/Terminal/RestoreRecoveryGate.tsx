@@ -1,4 +1,4 @@
-import { useEffect, useState, type MouseEvent, type PointerEvent, type Ref } from "react";
+import { useEffect, useState, type PointerEvent, type Ref } from "react";
 import { TruncatedTooltip } from "@/components/ui/TruncatedTooltip";
 import { useShallow } from "zustand/react/shallow";
 import { FolderClock, Play, RotateCcw } from "lucide-react";
@@ -90,25 +90,8 @@ function FolderRow({ label, path }: { label: string; path: string }) {
 // worktree switch, a tab group reusing the pane — never tries again (#13509).
 const autoResumeAttempts = new Set<string>();
 
-const autoResumeRequests = new Map<string, () => void>();
-// A handoff can land before the surface it is for has subscribed.
-const pendingAutoResumeRequests = new Set<string>();
-
-/**
- * The pane's own focus handler calls this when it is handed focus on purpose —
- * a tab switch, a jump to the pane — which the selection alone can't tell
- * apart from a restore picking it.
- */
-export function requestRestoreRecoveryAutoResume(panelId: string): void {
-  const request = autoResumeRequests.get(panelId);
-  if (request) request();
-  else pendingAutoResumeRequests.add(panelId);
-}
-
 export function __resetRestoreRecoveryAutoResumeForTests(): void {
   autoResumeAttempts.clear();
-  autoResumeRequests.clear();
-  pendingAutoResumeRequests.clear();
 }
 
 function isInsideControl(target: EventTarget): boolean {
@@ -117,7 +100,7 @@ function isInsideControl(target: EventTarget): boolean {
 
 export interface RestoreRecoveryGateProps {
   panelId: string;
-  /** The pane is the selected one. Only a change to it counts as the user's doing. */
+  /** The pane is the selected one — what a pane held by the resume setting waits for. */
   isFocused?: boolean;
   /** The pane's focus handler moves keyboard focus into this surface. */
   containerRef?: Ref<HTMLDivElement>;
@@ -133,13 +116,12 @@ export interface RestoreRecoveryGateProps {
  * pane now runs.
  *
  * The one exception is a pane the resume setting held (#13509) while it allows
- * resuming: the user turning to it resumes the conversation it carries, once.
- * That is the pane becoming the selected one while this surface is up, the
- * pane being handed focus, or a click on the surface — and it waits until the
- * window has focus and the view is on screen, so a project restoring behind
- * another starts nothing until it is looked at. A pane that is merely on
- * screen, or already selected when the setting changes, starts nothing, and a
- * press on one of the buttons is that button's choice.
+ * resuming: once it is the selected pane, in a window that has focus and a view
+ * that is on screen, it resumes the conversation it carries, once. A pane that
+ * is merely visible starts nothing, nor does a project restoring behind
+ * another until it is looked at, and a press on one of the buttons is that
+ * button's choice. Only the setting a pane first sees arms it, so switching
+ * the setting on doesn't start the pane behind the settings dialog.
  */
 export function RestoreRecoveryGate({
   panelId,
@@ -174,30 +156,23 @@ export function RestoreRecoveryGate({
       : undefined;
   const attemptKey =
     resumesOnFocusId !== undefined ? `${panelId}\u0000${resumesOnFocusId}` : undefined;
-  // The user turned to this pane; cleared once acted on, or when they turn away.
-  const [wantsResume, setWantsResume] = useState(false);
-  const [wasFocused, setWasFocused] = useState(isFocused);
-  if (isFocused !== wasFocused) {
-    setWasFocused(isFocused);
-    setWantsResume(isFocused);
+  // The setting this surface first saw. A later change takes effect from the
+  // next restart, not under a pane that is already selected.
+  const [firstKnownPolicy, setFirstKnownPolicy] = useState(resumePolicy);
+  if (firstKnownPolicy === undefined && resumePolicy !== undefined) {
+    setFirstKnownPolicy(resumePolicy);
   }
+  const armed = firstKnownPolicy !== undefined && firstKnownPolicy !== "never";
 
   useEffect(() => {
-    autoResumeRequests.set(panelId, () => setWantsResume(true));
-    if (pendingAutoResumeRequests.delete(panelId)) setWantsResume(true);
-    return () => {
-      autoResumeRequests.delete(panelId);
-    };
-  }, [panelId]);
-
-  useEffect(() => {
-    if (!wantsResume || attemptKey === undefined || resumesOnFocusId === undefined) return;
+    if (!isFocused || !armed || attemptKey === undefined || resumesOnFocusId === undefined) {
+      return;
+    }
     const sessionId = resumesOnFocusId;
     const attempt = () => {
       if (autoResumeAttempts.has(attemptKey)) return;
       if (!isProjectViewObservable() || !document.hasFocus()) return;
       autoResumeAttempts.add(attemptKey);
-      setWantsResume(false);
       setIsLaunching(true);
       setOutcome(null);
       void launchFromRestoreRecovery(panelId, { kind: "resume", sessionId })
@@ -215,7 +190,7 @@ export function RestoreRecoveryGate({
       window.removeEventListener("focus", attempt);
       unsubscribe();
     };
-  }, [wantsResume, attemptKey, resumesOnFocusId, panelId]);
+  }, [isFocused, armed, attemptKey, resumesOnFocusId, panelId]);
 
   if (!recovery) return null;
 
@@ -223,7 +198,7 @@ export function RestoreRecoveryGate({
   const awaitingDestination = recovery.awaitingDestination === true;
   const copy = awaitingDestination
     ? AWAITING_DESTINATION_COPY
-    : resumesOnFocusId !== undefined
+    : armed && resumesOnFocusId !== undefined
       ? RESUMES_ON_FOCUS_COPY
       : REASON_COPY[recovery.reason];
   const outcomeMessage = outcome ? OUTCOME_MESSAGES[outcome] : undefined;
@@ -247,20 +222,11 @@ export function RestoreRecoveryGate({
     }
   };
 
-  const onSurfaceClick = (event: MouseEvent<HTMLDivElement>) => {
-    const target = event.target;
-    // Portalled content (an open picker) bubbles here through React too.
-    if (!(target instanceof Node) || !event.currentTarget.contains(target)) return;
-    if (isInsideControl(target)) return;
-    setWantsResume(true);
-  };
-
   return (
     <div
       ref={containerRef}
       tabIndex={-1}
       onPointerDownCapture={onPointerDownCapture}
-      onClick={onSurfaceClick}
       className="flex-1 min-h-0 bg-surface-canvas flex flex-col items-center overflow-auto focus-visible:-outline-offset-2"
     >
       <div className="my-auto w-full max-w-lg space-y-4 px-6 py-8">

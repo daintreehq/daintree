@@ -18,6 +18,9 @@ vi.mock("@/services/agentResume", () => ({
 
 vi.mock("@/utils/logger", () => ({ logError: vi.fn() }));
 
+const reconcileMovedPanel = vi.hoisted(() => vi.fn());
+vi.mock("@/services/terminal/crossWorktreeMove", () => ({ reconcileMovedPanel }));
+
 const resolvedCli = vi.hoisted((): { path: string | undefined } => ({ path: undefined }));
 
 vi.mock("@/utils/agentLaunchCommand", () => ({
@@ -72,6 +75,7 @@ function livePane(id: string, sessionId: string, agentId = "codex"): PtyPanelDat
 }
 
 beforeEach(() => {
+  reconcileMovedPanel.mockReset();
   resolvedCli.path = undefined;
   storeState.panelsById = {};
   storeState.addPanel.mockReset();
@@ -202,6 +206,28 @@ describe("launchFromRestoreRecovery (#12434)", () => {
       requestedId: "pane-a",
       replacesRestoreRecovery: true,
     });
+  });
+
+  it("raises the move notice when a conversation resumes away from where the pane is filed (#13509)", async () => {
+    const claude = {
+      launchAgentId: "claude",
+      command: "claude",
+      agentLaunchFlags: undefined,
+      env: undefined,
+      restoreRecovery: { reason: "resume-deferred" as const, sessionId: "sess-c" },
+    };
+    storeState.panelsById = { "pane-a": heldPane(claude) };
+
+    await launchFromRestoreRecovery("pane-a", { kind: "resume", sessionId: "sess-c" });
+
+    expect(storeState.addPanel.mock.calls[0]?.[0].cwd).toBe("/repo");
+    expect(reconcileMovedPanel).toHaveBeenCalledWith("pane-a", "/worktrees/task-a");
+
+    reconcileMovedPanel.mockReset();
+    storeState.panelsById = { "pane-a": heldPane(claude) };
+    await launchFromRestoreRecovery("pane-a", { kind: "fresh" });
+
+    expect(reconcileMovedPanel).not.toHaveBeenCalled();
   });
 
   it("launches the probed executable", async () => {

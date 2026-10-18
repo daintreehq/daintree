@@ -41,7 +41,7 @@ import {
   dismissAgentResumeOffer,
   resumeFromAgentEndOffer,
 } from "@/services/terminal/agentEndRecovery";
-import { RestoreRecoveryGate, requestRestoreRecoveryAutoResume } from "./RestoreRecoveryGate";
+import { RestoreRecoveryGate } from "./RestoreRecoveryGate";
 import { InlineStatusBanner } from "./InlineStatusBanner";
 import { PluginKindSetupStrip } from "@/components/Plugin/PluginSetupStrip";
 import { useForceResumeCycleWatchdog } from "@/hooks/terminal/useForceResumeCycleWatchdog";
@@ -1172,7 +1172,6 @@ function TerminalPaneComponent({
       if (isHeldForRecovery) {
         const gate = recoveryGateRef.current;
         if (!gate) return false;
-        requestRestoreRecoveryAutoResume(id);
         (gate.querySelector<HTMLElement>("button:not([disabled])") ?? gate).focus();
         return gate.contains(document.activeElement);
       }

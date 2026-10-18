@@ -10,6 +10,7 @@ import {
   resolveAgentLaunchBaseCommand,
 } from "@/utils/agentLaunchCommand";
 import { logError } from "@/utils/logger";
+import { reconcileMovedPanel } from "@/services/terminal/crossWorktreeMove";
 
 export type RestoreRecoveryChoice = { kind: "resume"; sessionId: string } | { kind: "fresh" };
 
@@ -194,7 +195,13 @@ export async function launchFromRestoreRecovery(
     });
     if (!options) return "unavailable";
     const launchedId = await latest.addPanel(options);
-    return launchedId === null ? "unavailable" : "launched";
+    if (launchedId === null) return "unavailable";
+    // A conversation resumed in the folder it began in, while the pane is filed
+    // under another worktree, gets the same notice a live pane moved there gets.
+    if (options.cwd !== current.cwd && options.worktreeId) {
+      reconcileMovedPanel(launchedId, options.worktreeId);
+    }
+    return "launched";
   } catch (error) {
     logError("[restoreRecovery] Failed to launch held pane", error);
     return "unavailable";
