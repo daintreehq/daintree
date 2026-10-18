@@ -796,6 +796,21 @@ describe("NotificationService", () => {
       expect(first.close).toHaveBeenCalledTimes(1);
     });
 
+    it("stops tracking the oldest keyed banners past the cap", () => {
+      for (let i = 0; i < 51; i++) {
+        notificationService.showNativeNotification("t", `${i}`, { replaceKey: `k${i}` });
+        electronMock.notificationInstances.at(-1)!.trigger("close", { reason: "timedOut" });
+      }
+      const oldest = electronMock.notificationInstances.at(-51)!;
+      const newest = electronMock.notificationInstances.at(-1)!;
+
+      notificationService.closeNotificationByKey("k0");
+      notificationService.closeNotificationByKey("k50");
+
+      expect(oldest.close).not.toHaveBeenCalled();
+      expect(newest.close).toHaveBeenCalledTimes(1);
+    });
+
     it("leaves banners under other keys, and unkeyed ones, alone", () => {
       notificationService.showNativeNotification("t", "a", { replaceKey: "a" });
       const keyed = electronMock.notificationInstances.at(-1)!;

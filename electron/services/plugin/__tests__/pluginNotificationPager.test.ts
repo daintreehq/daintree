@@ -42,6 +42,7 @@ import {
   _resetPluginNotificationPagerForTests,
   type PluginNotificationPage,
 } from "../pluginNotificationPager.js";
+import { CHANNELS } from "../../../ipc/channels.js";
 
 const page = (overrides: Partial<PluginNotificationPage> = {}): PluginNotificationPage => ({
   pluginId: "acme",
@@ -194,6 +195,36 @@ describe("pagePluginNotification", () => {
       { id: "p1", name: "p1" },
       { intent: "run-plugin-action", pluginId: "acme", actionId: "acme.openRun" }
     );
+  });
+
+  it("hands the intent straight to a scratch workspace's view, which no owner lookup finds", () => {
+    const send = vi.fn();
+    registryMock.registry = {
+      all: () => [],
+      getPrimary: () => ({
+        windowId: 7,
+        browserWindow: { isDestroyed: () => false },
+        services: {
+          projectViewManager: {
+            getActiveProjectId: () => "scratch-1",
+            getActiveView: () => ({
+              webContents: { isDestroyed: () => false, send, focus: vi.fn() },
+            }),
+          },
+        },
+      }),
+    };
+    projectMock.getProjectById.mockReturnValueOnce(null);
+    pagePluginNotification(page({ firstAction: { actionId: "acme.openRun" } }));
+
+    clickLastBanner();
+
+    expect(send).toHaveBeenCalledWith(CHANNELS.PROJECT_FOCUS_ON_ACTIVATE, {
+      intent: "run-plugin-action",
+      pluginId: "acme",
+      actionId: "acme.openRun",
+    });
+    expect(ownershipMock.redirectToProjectOwner).not.toHaveBeenCalled();
   });
 
   it("only brings a window showing a remote host's project forward", () => {

@@ -342,6 +342,7 @@ describe("createMockHost", () => {
         actions: [{ id: "a", label: "A", actionId: "acme.demo.a", args } as never],
       });
     await expect(withArgs([1])).rejects.toThrow(/args/);
+    await expect(withArgs(new Date(0))).rejects.toThrow(/args/);
     await expect(withArgs({ text: "界".repeat(2000) })).rejects.toThrow(/args/);
     const circular: Record<string, unknown> = {};
     circular.self = circular;

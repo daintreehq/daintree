@@ -647,7 +647,9 @@ const NOTIFY_ACTION_KEYS = new Set(["id", "label", "actionId", "args"]);
 const NOTIFY_ARGS_MAX_BYTES = 4096;
 
 function isNotifyArgs(args: unknown): boolean {
-  if (args === null || typeof args !== "object" || Array.isArray(args)) return false;
+  if (args === null || typeof args !== "object") return false;
+  const proto: unknown = Object.getPrototypeOf(args);
+  if (proto !== Object.prototype && proto !== null) return false;
   try {
     const json = JSON.stringify(args);
     return json !== undefined && new TextEncoder().encode(json).length <= NOTIFY_ARGS_MAX_BYTES;

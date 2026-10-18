@@ -219,6 +219,9 @@ describe("notify()", () => {
         .entries.filter((e) => !e.archivedAt && e.supersedeKey === "k");
       expect(rows.map((e) => e.message)).toEqual(["v2"]);
       expect(rows[0]!.actions?.[0]?.actionArgs).toEqual({ runId: "new" });
+      // No overflow summary beside it: the replacement's own row is the record.
+      const active = useNotificationHistoryStore.getState().entries.filter((e) => !e.archivedAt);
+      expect(active.map((e) => e.message).sort()).toEqual(["burst 1", "burst 2", "burst 3", "v2"]);
     });
 
     it("replaceKey retires the old toast even when the replacement is held back", () => {

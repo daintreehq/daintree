@@ -761,6 +761,10 @@ function checkAndApplyRateLimit(payload: NotifyPayload): boolean {
     return false;
   }
 
+  // A held-back replacement keeps its own inbox row (the caller writes it),
+  // so it isn't counted again in a summary row.
+  if (payload.replaceKey !== undefined) return true;
+
   bucket.overflowCount += 1;
   const historyStore = useNotificationHistoryStore.getState();
 

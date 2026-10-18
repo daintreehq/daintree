@@ -1,3 +1,4 @@
+import { CHANNELS } from "../../ipc/channels.js";
 import { isScheduledQuietNow } from "../../../shared/utils/quietHours.js";
 import type { ProjectFocusOnActivateIntent } from "../../../shared/types/ipc/project.js";
 import { getWindowRegistry } from "../../window/windowRef.js";
@@ -114,11 +115,18 @@ function activatePluginNotification(page: PluginNotificationPage): void {
       ? projectStore.getProjectById(activeProjectId)
       : undefined;
   const owner = project ? findOtherProjectOwner(registry, project.id, {}) : null;
-  if (!project || !owner) {
-    revealWindow(primary.browserWindow);
+  if (project && owner) {
+    redirectToProjectOwner(owner, project, intent);
     return;
   }
-  redirectToProjectOwner(owner, project, intent);
+  revealWindow(primary.browserWindow);
+  // A scratch workspace isn't a project, so no owner lookup finds it: its
+  // view, already on screen, takes the intent directly.
+  if (!intent || activeProjectId === null || isWindowOnRemoteHost(primary.windowId)) return;
+  const webContents = primary.services.projectViewManager?.getActiveView()?.webContents;
+  if (!webContents || webContents.isDestroyed()) return;
+  webContents.focus();
+  webContents.send(CHANNELS.PROJECT_FOCUS_ON_ACTIVATE, intent);
 }
 
 /**

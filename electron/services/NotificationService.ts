@@ -77,6 +77,13 @@ export interface NativeNotificationOptions extends WatchNotificationOptions {
 
 const DEBOUNCE_MS = 300;
 
+/**
+ * Most keyed banners kept for replacement. One that timed out into Action
+ * Center is otherwise held until something replaces it, so a plugin paging
+ * under ever-new keys would grow the set without end.
+ */
+const MAX_KEYED_NOTIFICATIONS = 50;
+
 /** A decided notification whose owner is a view on a remote Shell. */
 export interface RemoteNotification {
   /** The owning remote endpoint's handle (negative). */
@@ -471,7 +478,15 @@ class NotificationService {
     const icon = getLinuxWindowIcon();
     const notification = new Notification({ title, body, silent, ...(icon ? { icon } : {}) });
     this.activeNotifications.add(notification);
-    if (replaceKey !== undefined) this.notificationsByReplaceKey.set(replaceKey, notification);
+    if (replaceKey !== undefined) {
+      this.notificationsByReplaceKey.set(replaceKey, notification);
+      for (const [key, held] of this.notificationsByReplaceKey) {
+        if (this.notificationsByReplaceKey.size <= MAX_KEYED_NOTIFICATIONS) break;
+        this.notificationsByReplaceKey.delete(key);
+        this.forgetNotification(held);
+        held.removeAllListeners();
+      }
+    }
     if (closeWithPanels && closeWithPanels.length > 0) {
       this.pendingPanelsByNotification.set(notification, new Set(closeWithPanels));
     }
