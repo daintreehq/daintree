@@ -295,6 +295,72 @@ describe("createMockHost", () => {
     await expect(host.showToast({ message: "" })).rejects.toThrow(/non-empty/);
   });
 
+  it("records notify calls with a fresh id each (#13505)", async () => {
+    const host = createMockHost({ pluginId: "acme.demo" });
+    const options = {
+      title: "Run needs you",
+      body: "Approve",
+      actions: [{ id: "open", label: "Open", actionId: "acme.demo.openRun", args: { r: 1 } }],
+      dedupeKey: "r1",
+    };
+    const first = await host.notify(options);
+    const second = await host.notify({ title: "t", body: "b" });
+
+    expect(first.id).not.toBe(second.id);
+    expect(host.notifications).toEqual([
+      { id: first.id, options },
+      { id: second.id, options: { title: "t", body: "b" } },
+    ]);
+  });
+
+  it("rejects notify options the real host would reject", async () => {
+    const host = createMockHost({ pluginId: "acme.demo" });
+    const action = (id: string, actionId = `acme.demo.${id}`) => ({ id, label: id, actionId });
+
+    await expect(host.notify({ title: "", body: "b" })).rejects.toThrow(/title/);
+    await expect(
+      host.notify({ title: "t", body: "b", actions: [action("a"), action("b"), action("c")] })
+    ).rejects.toThrow(/at most 2/);
+    await expect(
+      host.notify({ title: "t", body: "b", actions: [action("a", "other.open")] })
+    ).rejects.toThrow(/own actions/);
+    await expect(
+      host.notify({ title: "t", body: "b", actions: [action("a"), action("a")] })
+    ).rejects.toThrow(/unique/);
+    await expect(host.notify({ title: "t", body: "b", sound: true } as never)).rejects.toThrow(
+      /unrecognized/
+    );
+    await expect(host.notify({ title: "t", body: "b", os: true })).rejects.toThrow(
+      /PERMISSION_REQUIRED/
+    );
+    expect(host.notifications).toEqual([]);
+
+    const withArgs = (args: unknown) =>
+      host.notify({
+        title: "t",
+        body: "b",
+        actions: [{ id: "a", label: "A", actionId: "acme.demo.a", args } as never],
+      });
+    await expect(withArgs([1])).rejects.toThrow(/args/);
+    await expect(withArgs(new Date(0))).rejects.toThrow(/args/);
+    await expect(withArgs({ text: "界".repeat(2000) })).rejects.toThrow(/args/);
+    const circular: Record<string, unknown> = {};
+    circular.self = circular;
+    await expect(withArgs(circular)).rejects.toThrow(/args/);
+    await expect(
+      host.notify({
+        title: "t",
+        body: "b",
+        actions: [action("open"), { ...action("x"), id: " open " }],
+      })
+    ).rejects.toThrow(/unique/);
+
+    const paging = createMockHost({ pluginId: "acme.demo", capabilities: ["notification:os"] });
+    await expect(paging.notify({ title: "t", body: "b", os: true })).resolves.toEqual({
+      id: expect.any(String),
+    });
+  });
+
   it("rejects toast options the production schema would reject (#10617)", async () => {
     const host = createMockHost();
     // Message past the 2000-char cap.

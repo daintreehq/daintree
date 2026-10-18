@@ -57,6 +57,7 @@ import type {
   StorageSetParams,
   StorageDeleteParams,
   ShowToastParams,
+  NotifyParams,
   ShowQuickPickParams,
   ShowInputBoxParams,
   ShowConfirmParams,
@@ -824,6 +825,10 @@ export class PluginDevWorkerMainBridge {
           durationMs: p.durationMs,
         });
         return undefined;
+      }
+      case "notify": {
+        const p = params as NotifyParams;
+        return this.host.notify(p.options as Parameters<PluginHostApi["notify"]>[0]);
       }
       case "dispatch": {
         const p = params as DispatchParams;

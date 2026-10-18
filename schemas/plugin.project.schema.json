@@ -133,7 +133,8 @@
           "socket:connect",
           "mcp:expose",
           "project:dispatch",
-          "panel:focus-read"
+          "panel:focus-read",
+          "notification:os"
         ]
       }
     },
@@ -567,7 +568,8 @@
                     "socket:connect",
                     "mcp:expose",
                     "project:dispatch",
-                    "panel:focus-read"
+                    "panel:focus-read",
+                    "notification:os"
                   ]
                 }
               }

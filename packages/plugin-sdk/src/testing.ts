@@ -7,6 +7,7 @@ export type {
   RegisteredHandlerRecord,
   BroadcastRecord,
   ShownToastRecord,
+  NotificationRecord,
   DispatchedActionRecord,
   SentToAgentRecord,
   ReadScreenRecord,

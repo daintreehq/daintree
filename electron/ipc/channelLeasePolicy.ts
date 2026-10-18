@@ -391,7 +391,9 @@ export const CHANNEL_LEASE_POLICY = {
   // Grants or revokes a plugin's agent tools for the caller's project, or as
   // the default for every project, so an observing window cannot do it.
   "plugin-agent-mcp:set-plugin-access": "driver",
+  "plugin-capability:get-os-notifications": "free",
   "plugin-capability:get-project-targeting": "free",
+  "plugin-capability:set-os-notifications": "free",
   "plugin-capability:set-project-targeting": "free",
   "plugin-mcp:call-tool": "free",
   "plugin-mcp:get-config": "free",

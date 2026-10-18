@@ -1625,7 +1625,7 @@ type PluginPanelBadge = {
     color?: PluginPanelBadgeColor;
     tooltip?: string;
 };
-declare const BUILT_IN_PLUGIN_CAPABILITIES: readonly ["fs:project-read", "fs:project-write", "fs:user-data-read", "fs:user-data-write", "network:fetch", "agent:invoke", "agent:read", "agent:register", "agent:input", "terminal:read", "git:read", "git:write", "clipboard:read", "clipboard:write", "shell:exec", "socket:connect", "mcp:expose", "project:dispatch", "panel:focus-read"];
+declare const BUILT_IN_PLUGIN_CAPABILITIES: readonly ["fs:project-read", "fs:project-write", "fs:user-data-read", "fs:user-data-write", "network:fetch", "agent:invoke", "agent:read", "agent:register", "agent:input", "terminal:read", "git:read", "git:write", "clipboard:read", "clipboard:write", "shell:exec", "socket:connect", "mcp:expose", "project:dispatch", "panel:focus-read", "notification:os"];
 type BuiltInPluginCapability = (typeof BUILT_IN_PLUGIN_CAPABILITIES)[number];
 /** Third argument to {@link PluginHostApi.dispatch} (#13119). */
 interface PluginDispatchOptions {
@@ -2818,6 +2818,45 @@ interface PluginToastOptions {
     type?: NotificationType;
     /** Auto-dismiss delay in milliseconds. Defaults to the app's per-type default. */
     durationMs?: number;
+}
+/** A button on a {@link PluginHostApi.notify} notification. */
+interface PluginNotifyAction {
+    /** Unique within the notification. */
+    id: string;
+    /** Button text on the toast and inbox row. */
+    label: string;
+    /**
+     * One of the caller's own actions, written `"{manifest name}.{id}"` as in
+     * `contributes.menu`. The host runs it in the plugin's instance namespace.
+     */
+    actionId: ActionId;
+    /** Passed to the action, validated against its `argsSchema` at dispatch. */
+    args?: Record<string, unknown>;
+}
+/** Options for {@link PluginHostApi.notify}. */
+interface PluginNotifyOptions {
+    title: string;
+    body: string;
+    /** At most {@link PLUGIN_NOTIFY_MAX_ACTIONS}. */
+    actions?: PluginNotifyAction[];
+    /**
+     * Also page the operating system. A request, never a bypass: the host drops
+     * the banner when the user hasn't turned it on, during quiet hours or a
+     * session mute, while the user is looking at the plugin's project, and when
+     * the plugin pages faster than the host allows. Needs the `notification:os`
+     * capability.
+     */
+    os?: boolean;
+    /**
+     * A later notification with the same key replaces this one — its toast, its
+     * inbox row and its OS banner — instead of stacking beside it.
+     */
+    dedupeKey?: string;
+}
+/** What {@link PluginHostApi.notify} resolves with. */
+interface PluginNotifyResult {
+    /** A fresh id per call; it doesn't say which surfaces showed it. */
+    id: string;
 }
 /**
  * One selectable row in a {@link PluginHostApi.showQuickPick} list. `id` is the
@@ -4543,6 +4582,23 @@ interface PluginHostApi extends PluginActivationApi {
      */
     showToast(options: PluginToastOptions): Promise<void>;
     /**
+     * Raise a notification with up to {@link PLUGIN_NOTIFY_MAX_ACTIONS} buttons,
+     * each running one of the caller's own actions (#13505). It routes through
+     * the app's notification path like {@link showToast} — inbox, focus, quiet
+     * hours, session mute and the plugin's rate limit — and the title carries
+     * the plugin's display name for provenance.
+     *
+     * `os: true` also asks for an OS banner. Banners carry no buttons: clicking
+     * one brings the plugin's project forward and runs the first action. The
+     * call rejects when `notification:os` isn't declared; with it declared and
+     * the user's switch off, the banner is quietly dropped.
+     *
+     * NOT revoke-guarded, like {@link showToast}: it resolves with an id and
+     * shows nothing once the plugin is unloaded. Invalid options and actions
+     * outside the plugin's namespace reject.
+     */
+    notify(options: PluginNotifyOptions): Promise<PluginNotifyResult>;
+    /**
      * Dispatch an action by id through the app's `ActionService` with a `"plugin"`
      * source. Plugins use this to invoke their own registered actions, actions
      * contributed by other plugins, or any built-in action — always through the
@@ -4822,6 +4878,11 @@ interface ShownToastRecord {
     type: NotificationType | undefined;
     durationMs: number | undefined;
 }
+/** Captured `host.notify(options)` calls that passed validation (#13505). */
+interface NotificationRecord {
+    id: string;
+    options: PluginNotifyOptions;
+}
 /** Captured `host.process.spawn(command, options)` calls. */
 interface SpawnRecord {
     command: string;
@@ -4928,6 +4989,8 @@ interface MockHostState {
     readonly broadcastCalls: ReadonlyArray<BroadcastRecord>;
     readonly postToPanelCalls: ReadonlyArray<PostToPanelRecord>;
     readonly shownToasts: ReadonlyArray<ShownToastRecord>;
+    /** Every `host.notify` call that got past validation, in order. */
+    readonly notifications: ReadonlyArray<NotificationRecord>;
     readonly dispatchedActions: ReadonlyArray<DispatchedActionRecord>;
     readonly sentToActiveAgentCalls: ReadonlyArray<SentToActiveAgentRecord>;
     /** Every `host.sendToAgent` call that got past validation, in order. */
@@ -5219,4 +5282,4 @@ interface CreateMockHostOptions {
 }
 declare function createMockHost(options?: CreateMockHostOptions): PluginHostApi & MockHostState;
 
-export { type BroadcastRecord, type CreateMockHostOptions, type DispatchedActionRecord, type InvalidationRecord, type MockHostState, type PluginActionManifestEntry, type PluginCanDispatchResult, type ReadScreenRecord, type RegisteredActionRecord, type RegisteredFileDecorationProviderRecord, type RegisteredForgeProviderRecord, type RegisteredHandlerRecord, type RegisteredMcpToolsRecord, type SentToAgentRecord, type ShowConfirmRecord, type ShowInputBoxRecord, type ShowQuickPickRecord, type ShownToastRecord, createMockHost };
+export { type BroadcastRecord, type CreateMockHostOptions, type DispatchedActionRecord, type InvalidationRecord, type MockHostState, type NotificationRecord, type PluginActionManifestEntry, type PluginCanDispatchResult, type ReadScreenRecord, type RegisteredActionRecord, type RegisteredFileDecorationProviderRecord, type RegisteredForgeProviderRecord, type RegisteredHandlerRecord, type RegisteredMcpToolsRecord, type SentToAgentRecord, type ShowConfirmRecord, type ShowInputBoxRecord, type ShowQuickPickRecord, type ShownToastRecord, createMockHost };

@@ -1,7 +1,7 @@
 import fs, { type FileHandle } from "fs/promises";
 import type { BigIntStats } from "fs";
 import path from "path";
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { resilientAtomicWriteFile } from "../../utils/fs.js";
 import { runExclusive } from "../../utils/keyedMutex.js";
 import { watchShared } from "../FileObservationService.js";
@@ -120,7 +120,12 @@ import { maskTerminalInOtherProject } from "../../../shared/utils/terminalInOthe
 import type { ActionDispatchResult } from "../../../shared/types/actions.js";
 import { CHANNELS } from "../../ipc/channels.js";
 import { getPluginActionAuditService } from "../PluginActionAuditService.js";
-import { PluginPanelBadgeSchema, PluginToastOptionsSchema } from "../../schemas/plugin.js";
+import {
+  isBuiltInActionId,
+  PluginNotifyOptionsSchema,
+  PluginPanelBadgeSchema,
+  PluginToastOptionsSchema,
+} from "../../schemas/plugin.js";
 import {
   normalizePanelMenuItems,
   samePanelMenuItems,
@@ -2419,6 +2424,104 @@ export function createHost(
           });
       }
     },
+    // NOT revoke-guarded, like showToast (#13505). Each action is held to the
+    // caller's own namespace here, where the caller is known, and rewritten to
+    // its instance's, the same rule as setPanelMenuItems: a button can only run
+    // what the plugin could already put in its own panel menu.
+    notify: async (options) => {
+      const id = randomUUID();
+      if (!deps.plugins.has(pluginId)) return { id };
+      const parsed = PluginNotifyOptionsSchema.safeParse(options);
+      if (!parsed.success) {
+        throw new Error(
+          `Plugin "${pluginId}" notify: invalid options — ${parsed.error.issues
+            .map((i) => `${i.path.join(".") || "(root)"}: ${i.message}`)
+            .join("; ")}`
+        );
+      }
+      const { title, body, os, dedupeKey } = parsed.data;
+      const ownPrefix = `${manifestId}.`;
+      const actions = (parsed.data.actions ?? []).map((action, index) => {
+        if (!action.actionId.startsWith(ownPrefix) || action.actionId.length === ownPrefix.length) {
+          throw new Error(
+            `Plugin "${pluginId}" notify: actions.${index}.actionId "${action.actionId.slice(0, 200)}" must be one of this plugin's own actions, written "${manifestId}.<id>"`
+          );
+        }
+        const actionId = `${pluginId}.${action.actionId.slice(ownPrefix.length)}`;
+        // A manifest name can spell a built-in's prefix ("worktree.resource"),
+        // and a click runs with the user's authority, so the rewritten id must
+        // still be the plugin's and never a built-in's.
+        if (isBuiltInActionId(actionId)) {
+          throw new Error(
+            `Plugin "${pluginId}" notify: actions.${index}.actionId "${actionId}" is a built-in action, not one of this plugin's own`
+          );
+        }
+        return {
+          label: action.label,
+          actionId,
+          ...(action.args !== undefined ? { args: action.args } : {}),
+        };
+      });
+      if (os && !deps.declaredCapabilities(pluginId).has("notification:os")) {
+        throw new Error(
+          `PERMISSION_REQUIRED: plugin "${pluginId}" notify with os: true requires "notification:os", which is not declared in manifest.capabilities`
+        );
+      }
+
+      const displayTitle = `${deps.pluginDisplayName(pluginId)}: ${title}`;
+      const replaceKey = dedupeKey !== undefined ? `plugin:${pluginId}:${dedupeKey}` : undefined;
+      pushToRenderers(CHANNELS.NOTIFICATION_SHOW_TOAST, {
+        type: "info",
+        title: displayTitle,
+        message: body,
+        rateLimitKey: `plugin:${pluginId}:notify`,
+        ...(actions.length > 0 ? { pluginActions: actions } : {}),
+        ...(replaceKey !== undefined ? { replaceKey } : {}),
+      });
+      // The switch is the whole grant: no first-use prompt, no builtin bypass.
+      // A notification that doesn't page still retires the banner it replaces.
+      // The pager is loaded only here, since it pulls in the notification and
+      // window services that nothing else in the host needs.
+      const frontend = resolvePluginFrontend(boundProjectId, pluginId);
+      const pages = os === true && frontend.kind !== "remote" && hasOsNotificationsGrant(pluginId);
+      if (
+        pages ||
+        (replaceKey !== undefined && deps.declaredCapabilities(pluginId).has("notification:os"))
+      ) {
+        const pager = await import("./pluginNotificationPager.js");
+        if (!deps.plugins.has(pluginId)) return { id };
+        if (pages) {
+          pager.pagePluginNotification({
+            pluginId,
+            projectId: boundProjectId,
+            title: displayTitle,
+            body,
+            ...(replaceKey !== undefined ? { replaceKey } : {}),
+            ...(actions[0]
+              ? { firstAction: { actionId: actions[0].actionId, args: actions[0].args } }
+              : {}),
+          });
+        } else if (replaceKey !== undefined) {
+          pager.retirePluginNotification(replaceKey);
+        }
+      }
+      // A Shell driving the project gets the plain toast. The banner belongs
+      // on that Shell's screen, which this machine can't page, so it is
+      // dropped rather than shown here to nobody. The reverse toast carries no
+      // replacement key, so a Shell's toasts for one key stack.
+      if (frontend.kind === "remote") {
+        frontend.endpoint
+          .request(
+            PluginFrontendMethod.TOAST,
+            { pluginId, type: "info", message: `${displayTitle} — ${body}` },
+            { timeoutMs: 10_000 }
+          )
+          .catch(() => {
+            // Best-effort, like the local push.
+          });
+      }
+      return { id };
+    },
     // NOT revoke-guarded for the same reason as invalidateFileDecorations and
     // showToast: plugins dispatch actions from post-activation callbacks and
     // timers. Liveness is plugin membership — once the plugin unloads this
@@ -3085,6 +3188,15 @@ function hasProjectTargetingGrant(pluginId: string): boolean {
   return getPluginCapabilityConsentStore().hasGrant({
     pluginId,
     capability: "project:dispatch",
+    scopeKey: "global",
+  });
+}
+
+/** Whether the user turned on "Allow OS notifications" for this plugin (#13505). */
+function hasOsNotificationsGrant(pluginId: string): boolean {
+  return getPluginCapabilityConsentStore().hasGrant({
+    pluginId,
+    capability: "notification:os",
     scopeKey: "global",
   });
 }

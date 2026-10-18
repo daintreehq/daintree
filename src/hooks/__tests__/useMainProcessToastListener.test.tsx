@@ -20,6 +20,13 @@ vi.mock("@/components/Hosts/hostSwitching", () => ({
   notifyHostSwitchFailure: notifyHostSwitchFailureMock,
 }));
 
+const dispatchMock = vi.hoisted(() =>
+  vi.fn<(id: string, args?: unknown, options?: unknown) => Promise<{ ok: boolean }>>(() =>
+    Promise.resolve({ ok: true })
+  )
+);
+vi.mock("@/services/ActionService", () => ({ actionService: { dispatch: dispatchMock } }));
+
 vi.mock("@/lib/notify", () => ({
   notify: (...args: [NotifyPayload]) => notifyMock(...args),
 }));
@@ -33,6 +40,8 @@ type ToastCallback = (payload: {
   priority?: "high" | "low" | "watch";
   action?: { label: string; ipcChannel: string; data?: string };
   hostSwitchFailure?: { hostId: string; projectId: string; code: string | null };
+  pluginActions?: Array<{ label: string; actionId: string; args?: Record<string, unknown> }>;
+  replaceKey?: string;
 }) => void;
 
 let capturedCallback: ToastCallback | null = null;
@@ -69,6 +78,48 @@ describe("useMainProcessToastListener", () => {
     if (originalPlatformDescriptor) {
       Object.defineProperty(process, "platform", originalPlatformDescriptor);
     }
+  });
+
+  it("turns a plugin notification's actions into buttons that run them (#13505)", async () => {
+    renderHook(() => useMainProcessToastListener());
+    act(() => {
+      capturedCallback!({
+        type: "info",
+        title: "Acme: Run needs you",
+        message: "Approve",
+        pluginActions: [
+          { label: "Open", actionId: "acme.openRun", args: { runId: "r1" } },
+          { label: "Undo", actionId: "acme.undoRun" },
+        ],
+        replaceKey: "plugin:acme:k",
+      });
+    });
+
+    const payload = notifyMock.mock.calls[0]![0];
+    expect(payload.replaceKey).toBe("plugin:acme:k");
+    // An action labelled "Undo" must not pick up the internal urgent bypass.
+    expect(payload.urgent).toBe(false);
+    expect(payload.actions?.map((a) => [a.label, a.actionId, a.actionArgs, a.variant])).toEqual([
+      ["Open", "acme.openRun", { runId: "r1" }, "primary"],
+      ["Undo", "acme.undoRun", undefined, "secondary"],
+    ]);
+
+    await payload.actions![0]!.onClick();
+    expect(dispatchMock).toHaveBeenCalledWith("acme.openRun", { runId: "r1" }, { source: "user" });
+    await payload.actions![1]!.onClick();
+    expect(dispatchMock).toHaveBeenLastCalledWith("acme.undoRun", undefined, { source: "user" });
+  });
+
+  it("leaves an ordinary toast without plugin buttons or replacement", () => {
+    renderHook(() => useMainProcessToastListener());
+    act(() => {
+      capturedCallback!({ type: "info", message: "plain" });
+    });
+
+    const payload = notifyMock.mock.calls[0]![0];
+    expect(payload.actions).toBeUndefined();
+    expect(payload.replaceKey).toBeUndefined();
+    expect(payload.urgent).toBeUndefined();
   });
 
   it("retries a window's host restore from its toast, and ignores a malformed target", async () => {

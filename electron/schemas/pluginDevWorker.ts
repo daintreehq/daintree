@@ -45,6 +45,7 @@ const HOST_CALL_METHODS = {
   "terminals.readScreen": true,
   sendToAgent: true,
   showToast: true,
+  notify: true,
   dispatch: true,
   reloadPanel: true,
   restartWorker: true,

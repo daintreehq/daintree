@@ -1241,6 +1241,11 @@ export const CHANNELS = {
   // on `host.dispatch`. Set only from the Plugin Manager, never by a prompt.
   PLUGIN_CAPABILITY_GET_PROJECT_TARGETING: "plugin-capability:get-project-targeting",
   PLUGIN_CAPABILITY_SET_PROJECT_TARGETING: "plugin-capability:set-project-targeting",
+  // The per-plugin "Allow OS notifications" switch (#13505): the
+  // `notification:os` grant behind `host.notify({ os: true })`. Set only from
+  // the Plugin Manager, never by a prompt.
+  PLUGIN_CAPABILITY_GET_OS_NOTIFICATIONS: "plugin-capability:get-os-notifications",
+  PLUGIN_CAPABILITY_SET_OS_NOTIFICATIONS: "plugin-capability:set-os-notifications",
 
   // Plugin managed-process channels (#9234) — child processes spawned by a
   // plugin via `host.process.spawn` (gated on `shell:exec`). `list` is the

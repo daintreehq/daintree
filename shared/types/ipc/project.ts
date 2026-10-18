@@ -89,7 +89,18 @@ export interface ProjectSwitchOutgoingState {
  * destination again and could pick a different one.
  */
 export type ProjectFocusOnActivateIntent =
-  { intent: "focus-next-waiting" } | { intent: "focus-panel"; panelId: string };
+  | { intent: "focus-next-waiting" }
+  | { intent: "focus-panel"; panelId: string }
+  | {
+      /**
+       * A plugin's OS banner was clicked (#13505): run its first action, which
+       * main held to the plugin's own namespace when the notification was raised.
+       */
+      intent: "run-plugin-action";
+      pluginId: string;
+      actionId: string;
+      args?: Record<string, unknown>;
+    };
 
 /** Which surface started a project switch — the first field of its perf trace. */
 export type ProjectSwitchEntryPoint =

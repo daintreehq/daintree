@@ -25,6 +25,8 @@ import type {
   PluginSettingsScope,
   PluginStorageScope,
   PluginToastOptions,
+  PluginNotifyOptions,
+  PluginNotifyResult,
   PluginQuickPickItem,
   PluginQuickPickOptions,
   PluginPromptCallOptions,
@@ -1287,6 +1289,8 @@ export class PluginDevWorkerHostProxy {
           type: options?.type,
           durationMs: options?.durationMs,
         }),
+      notify: (options: PluginNotifyOptions) =>
+        this.call<PluginNotifyResult>("notify", { options }),
       dispatch: (actionId, args, options) =>
         this.call<ActionDispatchResult>(
           "dispatch",
