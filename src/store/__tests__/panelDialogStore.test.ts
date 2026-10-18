@@ -379,7 +379,9 @@ describe("panelDialogStore", () => {
 
       expect(frames()).toEqual({ d1: { kind: "review", size: "workspace" } });
       // An in-flight reservation is still findable by kind.
-      expect(findPanelDialogsOfKind(usePanelDialogStore.getState(), "review", undefined)).toEqual(["d1"]);
+      expect(findPanelDialogsOfKind(usePanelDialogStore.getState(), "review", undefined)).toEqual([
+        "d1",
+      ]);
     });
 
     it("leaves size unset when none is requested", async () => {
