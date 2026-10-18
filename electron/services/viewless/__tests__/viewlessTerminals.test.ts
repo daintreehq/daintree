@@ -531,6 +531,26 @@ describe("terminal.close with no frontend", () => {
     expect(store.read()?.terminals).toEqual([]);
   });
 
+  it("stops a dev preview's server, which runs under its own terminal id", async () => {
+    const { deps, store, invoke } = makeDeps(
+      { getPtyReader: () => makePty() },
+      {
+        state: savedState([{ id: "p-1", kind: "dev-preview", title: "Preview", location: "grid" }]),
+      }
+    );
+
+    const result = await executeViewlessAction(
+      request("terminal.close", { terminalId: "p-1" }),
+      deps
+    );
+
+    expect(result).toEqual({ ok: true, result: { closedIds: ["p-1"] } });
+    expect(invoke).toHaveBeenCalledWith(PROJECT.id, CHANNELS.DEV_PREVIEW_STOP_BY_PANEL, [
+      { panelId: "p-1" },
+    ]);
+    expect(store.read()?.terminals).toEqual([]);
+  });
+
   it("rejects an id this project has no panel for", async () => {
     const { deps } = makeDeps({ getPtyReader: () => makePty() });
 

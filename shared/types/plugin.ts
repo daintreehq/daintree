@@ -5134,8 +5134,8 @@ export interface PluginHostApi extends PluginActivationApi {
    * it, or the call rejects with `PERMISSION_REQUIRED`. A project-bound plugin
    * may only name its own project. A project with no live view rejects with
    * `PROJECT_VIEW_UNAVAILABLE` — nothing opens or wakes a closed project —
-   * except a targeted `terminal.close`, which Daintree runs itself and answers
-   * with `{ closedIds }` (#13507).
+   * except an installed plugin's targeted `terminal.close`, which Daintree
+   * runs itself and answers with `{ closedIds }` (#13507).
    */
   dispatch(
     actionId: ActionId,

@@ -819,6 +819,24 @@ describe("createHost dispatch with an explicit project (#13119)", () => {
       );
     });
 
+    it("hands main only the terminal id, so a stray field cannot ask for a confirmation", async () => {
+      const h = makeHarness();
+      const host = unboundWithTargeting(h, true);
+      h.sendDispatchToRenderer.mockRejectedValueOnce(noView());
+      viewless.runViewlessAction.mockResolvedValueOnce({ ok: true, result: { closedIds: [] } });
+
+      await host.dispatch(
+        "terminal.close",
+        { terminalId: "t-1", recipeId: "r-1" },
+        { projectId: PROJECT_A }
+      );
+
+      expect(viewless.runViewlessAction).toHaveBeenCalledWith(
+        expect.objectContaining({ args: { terminalId: "t-1" } })
+      );
+      expect(h.deps.safeAppendAudit).toHaveBeenCalledTimes(1);
+    });
+
     it("gives a terminal in another project the uniform miss", async () => {
       const h = makeHarness();
       const host = unboundWithTargeting(h, true);

@@ -292,10 +292,13 @@ async function closeWithNoView(
 ): Promise<ActionDispatchResult> {
   if (actionId !== "terminal.close" || !isProjectViewUnavailable(error)) throw error;
   const { runViewlessAction } = await import("../viewless/index.js");
+  // Only the id goes on: main admits the call on its raw args, where a stray
+  // field (a `recipeId`) could ask for a confirmation a view would never need.
+  const terminalId = (args as { terminalId?: unknown } | null | undefined)?.terminalId;
   const result = await runViewlessAction({
     workspaceId: projectId,
     actionId,
-    args,
+    args: typeof terminalId === "string" ? { terminalId } : args,
     confirmed: false,
   });
   if (result === null) throw error;

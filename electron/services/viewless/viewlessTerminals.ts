@@ -477,7 +477,8 @@ export async function runTerminalClose(
     }
   }
   const state = await deps.getProjectState(project.id).catch(() => null);
-  const saved = state?.terminals?.some((terminal) => terminal.id === terminalId) ?? false;
+  const savedPanel = state?.terminals?.find((terminal) => terminal.id === terminalId);
+  const saved = savedPanel !== undefined;
   if (!record && !saved) {
     return failure("EXECUTION_ERROR", formatNoPanelMessage(request.actionId, terminalId));
   }
@@ -492,6 +493,13 @@ export async function runTerminalClose(
       return success({ closedIds: [] });
     }
     if (record) await deps.invoke<void>(project.id, CHANNELS.TERMINAL_TRASH, [terminalId]);
+    if (savedPanel?.kind === "dev-preview") {
+      // A preview's server runs under its own terminal id, which the trash
+      // never reaches; a view's close stops it by panel, best-effort, as here.
+      await deps
+        .invoke<void>(project.id, CHANNELS.DEV_PREVIEW_STOP_BY_PANEL, [{ panelId: terminalId }])
+        .catch(() => undefined);
+    }
     await forgetViewlessTerminal(deps.stateWriter, project.id, terminalId);
   } catch (err) {
     return failure("EXECUTION_ERROR", formatErrorMessage(err, "Failed to close terminal"));
