@@ -1471,7 +1471,7 @@ export class HelpSessionService {
         // hooks. Same fail-closed policy as the mirror: an existing file that
         // can't be read, or an opted-in hooks.json that can't be parsed, blocks
         // the launch — a hook or instruction may be a guard the user relies on.
-        // Agents that read nothing from the session cwd get an empty config so
+        // An agent with no assistant-content mapping gets an empty config so
         // any blocks a previous agent left in the shared markdown are cleared.
         let userConfig: AssistantUserConfig = {
           instructions: [],

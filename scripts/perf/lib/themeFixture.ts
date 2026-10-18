@@ -101,7 +101,7 @@ export function srgbToLinear(channel: number): number {
 }
 
 // Memoized because the crossfade grid re-measures the same interpolated hexes
-// across 1,620 resolutions; the value is a pure function of the string.
+// across 1,530 resolutions; the value is a pure function of the string.
 const luminanceCache = new Map<string, number>();
 
 function oracleLuminance(hex: string): number {
@@ -881,7 +881,7 @@ export interface InkSweep {
 
 /**
  * Every shipped brand mark against every theme on every surface it can be
- * painted on — 18 x 15 x 6. The sweep exceeds `brandIcon`'s 512-entry FIFO
+ * painted on — 17 x 15 x 6. The sweep exceeds `brandIcon`'s 512-entry FIFO
  * cache, so a repeat of the full sweep re-resolves rather than hitting; the
  * warm reading in PERF-305 uses a bounded subset for that reason.
  */
@@ -963,15 +963,15 @@ const ORACLE_CROSSFADE_SAMPLES = Array.from({ length: 17 }, (_, index) => index 
  * placed at, and the hue a correction has to preserve.
  *
  * The endpoints alone were not enough to grade this. The APCA floor is where the
- * cheap wrong answer hid: 153 of the 1,620 marks clear WCAG's 3:1 on the raw
- * brand hex while sitting under Lc 35, so a resolver that stops at WCAG is
+ * cheap wrong answer hid: on the 18-agent cohort, 153 of 1,620 marks cleared
+ * WCAG's 3:1 on the raw brand hex while sitting under Lc 35, so a resolver that stops at WCAG is
  * faster and no endpoint check would say so.
  *
  * The crossfade is graded as a grid for the same reason the resolver searches
  * one — both inks are in flight, so the minimum can sit between the endpoints.
  * On the shipped matrix the interior never binds: shortening the resolver's own
  * grid to its two endpoints halves its cost and returns byte-identical ink for
- * all 1,620 resolutions. That is a finding about the resolver rather than a hole
+ * every resolution. That is a finding about the resolver rather than a hole
  * here — a pair that does dip between its endpoints is rejected.
  *
  * A resolver that hands back the brand hex unchanged scores on `rest === active`

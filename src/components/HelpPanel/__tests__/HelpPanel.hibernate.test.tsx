@@ -986,8 +986,8 @@ describe("HelpPanel — Resume affordance for eviction-captured sessions", () =>
     helpPanelState.autoLaunchEnabled = false;
     projectStoreState.currentProject = { id: "proj-1", path: "/tmp/proj-1" };
     // claude is installed/supported here, but buildResumeCommand undefined
-    // models a non-resumable agent (e.g. the built-in assistant). Resuming would
-    // dead-end and silently start fresh, so the CTA must NOT promise a resume.
+    // models a non-resumable agent. Resuming would dead-end and silently start
+    // fresh, so the CTA must NOT promise a resume.
     mockBuildResumeCommand.mockReturnValue(undefined);
     mockPeekPendingHibernation.mockResolvedValue({
       agentId: "claude",

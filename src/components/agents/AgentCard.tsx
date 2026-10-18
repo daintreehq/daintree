@@ -191,8 +191,8 @@ export function AgentInstallSection({
   // would be misleading, but we do want to show why it isn't runnable and
   // where it was found. "installed" covers the WSL cap.
   if (availability === "ready" && !authMissing) return null;
-  // Not part of CLI detection (the built-in assistant, say): there is nothing to
-  // install and no probe result to report, so a "Not installed" heading would be a guess.
+  // Not part of CLI detection: there is nothing to install and no probe result to
+  // report, so a "Not installed" heading would be a guess.
   if (availability === undefined && !isCliLoading) return null;
 
   if (isCliLoading) {
