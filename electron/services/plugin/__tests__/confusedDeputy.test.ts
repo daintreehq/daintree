@@ -113,6 +113,11 @@ vi.mock("../../../utils/webContentsLifecycle.js", () => ({
 vi.mock("../../forge/forgeCredentialUtils.js", () => ({
   buildStoredCredentials: vi.fn(() => null),
 }));
+// Main's own close for a project with no view (#13507).
+const viewless = vi.hoisted(() => ({
+  runViewlessAction: vi.fn(async (_request: unknown): Promise<unknown> => null),
+}));
+vi.mock("../../viewless/index.js", () => ({ runViewlessAction: viewless.runViewlessAction }));
 
 // ── Extra module mocks for the PluginService-level process-stream test ──
 // PluginService imports these at module scope; none of them participate in the
@@ -668,6 +673,23 @@ describe("an explicit dispatch target (#13119)", () => {
       host.dispatch("terminal.focus", null, { projectId: PROJECT_A })
     );
     await flushThaw();
+    expect(wcB.send).not.toHaveBeenCalled();
+  });
+
+  it("closes a terminal in the named project with no view in main, never in the focused one", async () => {
+    declaredCapabilities.push("project:dispatch");
+    projectTargetingGrant.granted = true;
+    closeProjectViews(PROJECT_A);
+    viewless.runViewlessAction.mockResolvedValueOnce({ ok: true, result: { closedIds: ["t-a"] } });
+    const host = hostBoundTo(UNBOUND_PLUGIN_HOST_BINDING);
+
+    await expect(
+      host.dispatch("terminal.close", { terminalId: "t-a" }, { projectId: PROJECT_A })
+    ).resolves.toEqual({ ok: true, result: { closedIds: ["t-a"] } });
+    await flushThaw();
+    expect(viewless.runViewlessAction).toHaveBeenCalledWith(
+      expect.objectContaining({ workspaceId: PROJECT_A, actionId: "terminal.close" })
+    );
     expect(wcB.send).not.toHaveBeenCalled();
   });
 

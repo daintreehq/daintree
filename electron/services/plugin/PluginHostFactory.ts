@@ -116,6 +116,8 @@ import { runWalk, validateWalkCall } from "./pluginFsWalk.js";
 import { checkIgnoredPaths, hasTrackedIgnoredPaths } from "../../utils/gitCheckIgnore.js";
 import { AppError, isAppError } from "../../utils/errorTypes.js";
 import { formatErrorMessage } from "../../../shared/utils/errorMessage.js";
+import { maskTerminalInOtherProject } from "../../../shared/utils/terminalInOtherProject.js";
+import type { ActionDispatchResult } from "../../../shared/types/actions.js";
 import { CHANNELS } from "../../ipc/channels.js";
 import { getPluginActionAuditService } from "../PluginActionAuditService.js";
 import { PluginPanelBadgeSchema, PluginToastOptionsSchema } from "../../schemas/plugin.js";
@@ -269,6 +271,39 @@ function isSameProjectPath(a: string, b: string): boolean {
  */
 function isProjectViewUnavailable(error: unknown): boolean {
   return isAppError(error) && error.code === "PROJECT_VIEW_UNAVAILABLE";
+}
+
+/**
+ * A targeted `terminal.close` for a project with no live view (#13507): main
+ * closes it as it does for an MCP call with no frontend (#13498), trashing the
+ * process and dropping the panel from the saved layout, so finished work no
+ * longer waits for someone to open the project. Nothing opens a view.
+ *
+ * Exactly one action: the main-side path never passes through ActionService's
+ * plugin gates (`denyPluginDispatch`, restricted, confirm), so widening this to
+ * every action main can run would hand a targeting grant a side door.
+ * Anything else, or a project main does not know, keeps the original rejection.
+ */
+async function closeWithNoView(
+  error: unknown,
+  actionId: string,
+  args: unknown,
+  projectId: string
+): Promise<ActionDispatchResult> {
+  if (actionId !== "terminal.close" || !isProjectViewUnavailable(error)) throw error;
+  const { runViewlessAction } = await import("../viewless/index.js");
+  // Only the id goes on: main admits the call on its raw args, where a stray
+  // field (a `recipeId`) could ask for a confirmation a view would never need.
+  const terminalId = (args as { terminalId?: unknown } | null | undefined)?.terminalId;
+  const result = await runViewlessAction({
+    workspaceId: projectId,
+    actionId,
+    args: typeof terminalId === "string" ? { terminalId } : args,
+    confirmed: false,
+  });
+  if (result === null) throw error;
+  // The same uniform miss a view's answer gets for a terminal in another project (#13120).
+  return maskTerminalInOtherProject(result);
 }
 
 /**
@@ -2333,7 +2368,8 @@ export function createHost(
     // returns PLUGIN_UNLOADED without attempting a round-trip. Args are
     // validated by ActionService against the action's argsSchema, and
     // danger:"restricted"/"confirm" are rejected there with the "plugin"
-    // source, so the host does not re-check them.
+    // source, so the host does not re-check them. The one exception runs in
+    // main and validates there: see closeWithNoView.
     dispatch: async (actionId, args, options) => {
       if (!deps.plugins.has(pluginId)) {
         return {
@@ -2392,12 +2428,9 @@ export function createHost(
         });
       };
       try {
-        const result = await dispatcher.sendDispatchToRenderer(
-          actionId,
-          args,
-          requestedProjectId,
-          pluginId
-        );
+        const result = await dispatcher
+          .sendDispatchToRenderer(actionId, args, requestedProjectId, pluginId)
+          .catch((err: unknown) => closeWithNoView(err, actionId, args, requestedProjectId));
         if (result.ok) audit("success", "");
         else audit("error", result.error.code);
         return result;
