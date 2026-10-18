@@ -166,6 +166,20 @@ describe("panel.openPluginPanel", () => {
   });
 });
 
+/** Dispatch a dialog open and return the `panelId` it resolves with. */
+async function openDialog(args: Record<string, unknown>): Promise<string> {
+  const result: unknown = await setup({ kind: "acme.dash", presentation: "dialog", ...args });
+  if (
+    typeof result !== "object" ||
+    result === null ||
+    !("panelId" in result) ||
+    typeof result.panelId !== "string"
+  ) {
+    throw new Error("expected { panelId }");
+  }
+  return result.panelId;
+}
+
 describe("panel.openPluginPanel presentation: dialog (#13504)", () => {
   const dialogStack = () => usePanelDialogStore.getState().dialogStack;
   const frames = () => usePanelDialogStore.getState().dialogFrames;
@@ -192,12 +206,7 @@ describe("panel.openPluginPanel presentation: dialog (#13504)", () => {
 
   it("opens the kind as an ephemeral dialog with initialArgs and the requested size", async () => {
     const initialArgs = { filter: "needs-you" };
-    const result = (await setup({
-      kind: "acme.dash",
-      presentation: "dialog",
-      size: "workspace",
-      initialArgs,
-    })) as { panelId: string };
+    const panelId = await openDialog({ size: "workspace", initialArgs });
 
     expect(activateTerminal).not.toHaveBeenCalled();
     expect(addPanel).toHaveBeenCalledTimes(1);
@@ -209,27 +218,29 @@ describe("panel.openPluginPanel presentation: dialog (#13504)", () => {
       extensionState: initialArgs,
       excludeFromPersistence: true,
     });
-    expect(dialogStack()).toEqual([result.panelId]);
-    expect(frames()[result.panelId]).toEqual({ kind: "acme.dash", size: "workspace" });
+    expect(dialogStack()).toEqual([panelId]);
+    expect(frames()[panelId]).toEqual({
+      kind: "acme.dash",
+      worktreeId: "wt-active",
+      size: "workspace",
+    });
   });
 
   it("leaves the size to the host default when none is given", async () => {
-    const result = (await setup({ kind: "acme.dash", presentation: "dialog" })) as {
-      panelId: string;
-    };
-    expect(frames()[result.panelId]?.size).toBeUndefined();
+    const panelId = await openDialog({});
+    expect(frames()[panelId]?.size).toBeUndefined();
   });
 
   it("returns the open dialog of the kind on a plain open instead of replacing it", async () => {
-    const first = (await setup({ kind: "acme.dash", presentation: "dialog" })) as {
-      panelId: string;
-    };
-    const second = await setup({ kind: "acme.dash", presentation: "dialog" });
+    const first = await openDialog({});
+    const second = await openDialog({ size: "sm" });
 
-    expect(second).toEqual({ panelId: first.panelId });
+    expect(second).toBe(first);
     expect(addPanel).toHaveBeenCalledTimes(1);
     expect(removePanel).not.toHaveBeenCalled();
-    expect(dialogStack()).toEqual([first.panelId]);
+    expect(dialogStack()).toEqual([first]);
+    // A reopen leaves the presented instance as it is.
+    expect(frames()[first]?.size).toBeUndefined();
   });
 
   it("treats a dialog still being created as already open", async () => {
@@ -239,53 +250,66 @@ describe("panel.openPluginPanel presentation: dialog (#13504)", () => {
     const reserved = dialogStack()[0];
     expect(reserved).toBeDefined();
 
-    expect(await setup({ kind: "acme.dash", presentation: "dialog" })).toEqual({
-      panelId: reserved,
-    });
+    expect(await openDialog({})).toBe(reserved);
     expect(addPanel).toHaveBeenCalledTimes(1);
   });
 
   it("closes the kind's dialog on toggle when it is topmost", async () => {
-    const first = (await setup({ kind: "acme.dash", presentation: "dialog" })) as {
-      panelId: string;
-    };
-    const toggled = await setup({ kind: "acme.dash", presentation: "dialog", toggle: true });
+    const first = await openDialog({});
+    const toggled = await openDialog({ toggle: true });
 
-    expect(toggled).toEqual({ panelId: first.panelId });
+    expect(toggled).toBe(first);
     expect(dialogStack()).toEqual([]);
     expect(frames()).toEqual({});
-    expect(removePanel).toHaveBeenCalledWith(first.panelId);
+    expect(removePanel).toHaveBeenCalledWith(first);
   });
 
   it("opens the dialog on toggle when none of the kind is presented", async () => {
-    const result = (await setup({ kind: "acme.dash", presentation: "dialog", toggle: true })) as {
-      panelId: string;
-    };
-    expect(dialogStack()).toEqual([result.panelId]);
+    const panelId = await openDialog({ toggle: true });
+    expect(dialogStack()).toEqual([panelId]);
   });
 
   it("does not close a dialog of the kind that another dialog sits above", async () => {
-    const bottom = (await setup({ kind: "acme.dash", presentation: "dialog" })) as {
-      panelId: string;
-    };
-    await usePanelDialogStore.getState().pushPanelDialog({ kind: "diff" }, bottom.panelId);
+    const bottom = await openDialog({});
+    await usePanelDialogStore.getState().pushPanelDialog({ kind: "diff" }, bottom);
     const stackBefore = dialogStack();
 
-    const result = await setup({ kind: "acme.dash", presentation: "dialog", toggle: true });
-
-    expect(result).toEqual({ panelId: bottom.panelId });
+    expect(await openDialog({ toggle: true })).toBe(bottom);
     expect(dialogStack()).toEqual(stackBefore);
     expect(removePanel).not.toHaveBeenCalled();
+  });
+
+  it("neither returns nor toggles closed a dialog of the kind for another worktree", async () => {
+    const active = await openDialog({});
+
+    const other = await openDialog({ worktreeId: "wt-1", toggle: true });
+
+    expect(other).not.toBe(active);
+    expect(dialogStack()).toEqual([other]);
+    expect(frames()[other]?.worktreeId).toBe("wt-1");
+  });
+
+  it("refuses a PTY-backed kind before touching the open dialogs", async () => {
+    await usePanelDialogStore.getState().openPanelDialog({ kind: "review", requestedId: "r1" });
+    registryMock.getPanelKindConfig.mockReturnValue({
+      id: "acme.shell",
+      extensionId: "acme",
+      hasPty: true,
+    });
+
+    await expect(setup({ kind: "acme.shell", presentation: "dialog" })).rejects.toThrow(
+      /PTY-backed/
+    );
+    expect(dialogStack()).toEqual(["r1"]);
+    expect(addPanel).toHaveBeenCalledTimes(1);
   });
 
   it("replaces a dialog of another kind", async () => {
     await usePanelDialogStore.getState().openPanelDialog({ kind: "review", requestedId: "r1" });
 
-    const result = (await setup({ kind: "acme.dash", presentation: "dialog" })) as {
-      panelId: string;
-    };
+    const panelId = await openDialog({});
 
-    expect(dialogStack()).toEqual([result.panelId]);
+    expect(dialogStack()).toEqual([panelId]);
     expect(removePanel).toHaveBeenCalledWith("r1");
   });
 
@@ -311,11 +335,18 @@ describe("panel.openPluginPanel presentation: dialog (#13504)", () => {
     expect(addPanel).not.toHaveBeenCalled();
   });
 
-  it("keeps the grid path when toggle is passed without presentation", async () => {
-    const result = await setup({ kind: "acme.dash", toggle: true });
-    expect(activateTerminal).toHaveBeenCalledWith("p-grid");
+  it.each([{ toggle: true }, { size: "workspace" }, { presentation: "panel", toggle: true }])(
+    "rejects dialog-only args without presentation: dialog (%o)",
+    async (extra) => {
+      await expect(setup({ kind: "acme.dash", ...extra })).rejects.toThrow(/only with/);
+      expect(activateTerminal).not.toHaveBeenCalled();
+      expect(addPanel).not.toHaveBeenCalled();
+    }
+  );
+
+  it("accepts toggle: false on a panel open", async () => {
+    const result = await setup({ kind: "acme.dash", toggle: false });
     expect(result).toEqual({ panelId: "p-grid" });
-    expect(dialogStack()).toEqual([]);
   });
 });
 

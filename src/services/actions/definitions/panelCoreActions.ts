@@ -26,9 +26,22 @@ const openPluginPanelArgsSchema = z.object({
   initialArgs: z.record(z.string(), z.unknown()).optional(),
   worktreeId: z.string().optional(),
   reuseExisting: z.boolean().optional(),
-  presentation: z.enum(["panel", "dialog"]).optional(),
-  size: z.enum(PLUGIN_PANEL_DIALOG_SIZES).optional(),
-  toggle: z.boolean().optional(),
+  presentation: z
+    .enum(["panel", "dialog"])
+    .optional()
+    .describe(
+      "Default `panel`. `dialog` presents the view as a modal, replacing any panel dialog already open; when one of this kind is already open for the worktree, returns its id instead. PTY-backed kinds can't be presented as a dialog."
+    ),
+  size: z
+    .enum(PLUGIN_PANEL_DIALOG_SIZES)
+    .optional()
+    .describe("Dialog width; dialog only. Default `6xl`."),
+  toggle: z
+    .boolean()
+    .optional()
+    .describe(
+      "Dialog only. Close this kind's dialog instead when it is the topmost one for the worktree."
+    ),
 });
 
 export function registerPanelCoreActions(
@@ -161,7 +174,7 @@ export function registerPanelCoreActions(
     id: "panel.openPluginPanel",
     title: "Open plugin panel",
     description:
-      "Spawn (or focus an existing) plugin-contributed panel kind, handing it an initial argument. Args: `kind` (required) — the plugin panel kind id from `contributes.panels`; `initialArgs` (optional) — an opaque bag delivered to the view as `PanelViewProps.initialArgs` (e.g. `{ path }` to open a file); `worktreeId` (optional) — target worktree, which must belong to the current project; `reuseExisting` (optional, default true) — focus an existing panel of this kind in the worktree instead of spawning a second one; `presentation` (optional, `panel` or `dialog`, default `panel`) — `dialog` presents the view as a modal dialog instead of a grid panel, replacing any dialog already open, and returns the id of the open dialog when one of this kind is already presented; `size` (optional, dialog only — `sm`, `md`, `lg`, `4xl`, `5xl`, `6xl`, `7xl` or `workspace`, default `6xl`) — the dialog width; `toggle` (optional, dialog only, default false) — close this kind's dialog instead when it is the topmost one. A dialog panel is ephemeral: closing it removes the panel and its persisted view state. Returns `{ panelId }`. Errors when `kind` is not a registered plugin panel kind, when `worktreeId` belongs to another project, or — transiently, retry — when the project's worktrees haven't loaded yet.",
+      "Spawn (or focus an existing) plugin-contributed panel kind, handing it an initial argument. Args: `kind` (required) — the plugin panel kind id from `contributes.panels`; `initialArgs` (optional) — an opaque bag delivered to the view as `PanelViewProps.initialArgs` (e.g. `{ path }` to open a file); `worktreeId` (optional) — target worktree, which must belong to the current project; `reuseExisting` (optional, default true) — focus an existing panel of this kind in the worktree instead of spawning a second one; `presentation`, `size`, `toggle` (optional) — present the view as a modal dialog instead, which is ephemeral: closing it removes the panel and its persisted view state. Returns `{ panelId }`. Errors when `kind` is not a registered plugin panel kind, when `worktreeId` belongs to another project, or — transiently, retry — when the project's worktrees haven't loaded yet.",
     category: "panel",
     kind: "command",
     danger: "safe",
@@ -199,12 +212,26 @@ export function registerPanelCoreActions(
         }
       }
 
+      // Both only mean something for a dialog. Ignoring them on a panel open
+      // would turn a forgotten `presentation` into a silent grid spawn.
+      if (presentation !== "dialog" && (toggle === true || size !== undefined)) {
+        throw new Error('`toggle` and `size` apply only with `presentation: "dialog"`');
+      }
+
       const state = usePanelStore.getState();
       const targetWorktreeId = worktreeId ?? callbacks.getActiveWorktreeId();
 
       if (presentation === "dialog") {
+        // A PTY-backed kind commits its record only after the spawn resolves,
+        // and the dialog host reads a missing record as a removal — the
+        // reservation would be dropped before the terminal ever appeared.
+        if (kindConfig.hasPty) {
+          throw new Error(`"${kind}" is PTY-backed and can't be presented as a dialog`);
+        }
         const dialogs = usePanelDialogStore.getState();
-        const openOfKind = findPanelDialogsOfKind(dialogs, kind);
+        // Same rule as grid reuse: a dialog for another worktree is not this
+        // one, so it is neither returned nor toggled closed.
+        const openOfKind = findPanelDialogsOfKind(dialogs, kind, targetWorktreeId);
         const topId = dialogs.dialogStack[dialogs.dialogStack.length - 1];
         if (toggle === true && topId !== undefined && openOfKind.includes(topId)) {
           dialogs.closePanelDialogById(topId);

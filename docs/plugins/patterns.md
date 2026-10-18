@@ -662,7 +662,7 @@ await host.registerAction(
 
 ### Open it as a dialog
 
-Pass `presentation: "dialog"` to present the panel as a modal instead of a grid panel, the way Canopy opens from its toolbar button. The view renders with `location: "dialog"` inside the host's dialog chrome, and the dialog replaces any dialog already open. `size` picks its width from the host's dialog sizes (`sm`, `md`, `lg`, `4xl`, `5xl`, `6xl`, `7xl`, `workspace`); it defaults to `6xl`.
+Pass `presentation: "dialog"` to present the panel as a modal instead of a grid panel, the way Canopy opens from its toolbar button. The view renders with `location: "dialog"` inside the host's dialog chrome, and the dialog replaces any panel dialog already open. A PTY-backed kind can't be presented this way. `size` picks its width from the host's dialog sizes (`sm`, `md`, `lg`, `4xl`, `5xl`, `6xl`, `7xl`, `workspace`); it defaults to `6xl`.
 
 ```js
 await host.dispatch("panel.openPluginPanel", {
@@ -673,7 +673,7 @@ await host.dispatch("panel.openPluginPanel", {
 });
 ```
 
-If a dialog of the kind is already open, a plain open resolves with its `panelId` and leaves it alone. Add `toggle: true` to close it instead when it is the topmost dialog, so one keybinding opens and closes it. A keybinding fires inside the dialog only if its `when` does not exclude `modalOpen`. A second click on a toolbar button already closes the dialog, because the click lands on its backdrop. `reuseExisting` does not apply to dialogs, and a grid or dock panel of the kind is never reused as one.
+If a dialog of the kind is already open for the target worktree, a plain open resolves with its `panelId` and leaves it alone. Add `toggle: true` to close it instead when it is the topmost dialog, so one keybinding opens and closes it. A keybinding fires inside the dialog only if its `when` does not exclude `modalOpen`. A second click on a toolbar button already closes the dialog, because the click lands on its backdrop. `reuseExisting` does not apply to dialogs, and a grid or dock panel of the kind is never reused as one.
 
 A dialog panel is ephemeral. Closing it removes the panel, so `panelRemovedSignal` aborts and whatever the view wrote through `persistState` goes with it. Keep anything that should outlive a close in `host.storage` or your worker.
 

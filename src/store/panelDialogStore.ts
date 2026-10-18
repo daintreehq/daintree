@@ -24,6 +24,7 @@ import { logError } from "@/utils/logger";
  */
 export interface PanelDialogFrameMeta {
   kind: string;
+  worktreeId?: string;
   /** Surface size for this frame; the host falls back to its default when unset. */
   size?: DialogSize;
 }
@@ -105,16 +106,30 @@ interface PanelDialogState {
 }
 
 /**
- * Presented ids whose frame is of `kind`, bottom-first — including an in-flight
- * reservation whose record has not been committed yet.
+ * Presented ids whose frame is of `kind` in `worktreeId`, bottom-first —
+ * including an in-flight reservation whose record has not been committed yet.
  */
-export function findPanelDialogsOfKind(state: PanelDialogState, kind: string): string[] {
-  return state.dialogStack.filter((id) => state.dialogFrames[id]?.kind === kind);
+export function findPanelDialogsOfKind(
+  state: PanelDialogState,
+  kind: string,
+  worktreeId: string | undefined
+): string[] {
+  return state.dialogStack.filter((id) => {
+    const frame = state.dialogFrames[id];
+    return frame?.kind === kind && frame.worktreeId === worktreeId;
+  });
 }
 
 /** Topmost presented panel id, or null when no dialog is open. */
 export const selectTopDialogPanelId = (state: PanelDialogState): string | null =>
   state.dialogStack[state.dialogStack.length - 1] ?? null;
+
+function frameMeta(options: AddPanelOptions): PanelDialogFrameMeta {
+  return {
+    kind: options.kind ?? "terminal",
+    ...(options.worktreeId ? { worktreeId: options.worktreeId } : {}),
+  };
+}
 
 /**
  * The stack plus its frame metadata trimmed to match, for every update that
@@ -148,7 +163,7 @@ export const usePanelDialogStore = create<PanelDialogState>((set, get) => ({
     set((state) => ({
       ...withStack(state, [requestedId], {
         id: requestedId,
-        meta: { kind: options.kind, ...(presentation?.size ? { size: presentation.size } : {}) },
+        meta: { ...frameMeta(options), ...(presentation?.size ? { size: presentation.size } : {}) },
       }),
       requestSeq: state.requestSeq + 1,
     }));
@@ -180,7 +195,7 @@ export const usePanelDialogStore = create<PanelDialogState>((set, get) => ({
     set((state) => ({
       ...withStack(state, [...state.dialogStack, requestedId], {
         id: requestedId,
-        meta: { kind: options.kind },
+        meta: frameMeta(options),
       }),
       requestSeq: state.requestSeq + 1,
     }));
