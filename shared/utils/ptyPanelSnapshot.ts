@@ -1,0 +1,86 @@
+import { sanitizeAgentEnv } from "./agentPresets.js";
+import { stripAssignedSessionIdArgs } from "../types/agentSettings.js";
+import type { PtyPanelData } from "../types/panel.js";
+import type { PanelSnapshot } from "../types/project.js";
+
+/**
+ * The PTY-specific half of a terminal panel's saved snapshot. Shared by the
+ * renderer's persistence and the host's viewless launch (#13495), so a panel
+ * an agent launched with no window open is recorded exactly as a view would
+ * have recorded it.
+ */
+
+/** The fields the PTY fragment is built from; any full panel record carries them. */
+export type PtySerializeInput = Pick<
+  PtyPanelData,
+  | "launchAgentId"
+  | "cwd"
+  | "command"
+  | "exitBehavior"
+  | "agentSessionId"
+  | "agentLaunchFlags"
+  | "callerLaunchFlags"
+  | "env"
+  | "agentModelId"
+  | "spawnedBy"
+  | "agentPresetId"
+  | "agentPresetColor"
+  | "originalPresetId"
+  | "isUsingFallback"
+  | "fallbackChainIndex"
+  | "conversationCwd"
+  | "restoreRecovery"
+  | "scratchpad"
+  | "agentState"
+  | "lastStateChange"
+>;
+
+export function serializePtyPanel(t: PtySerializeInput): Partial<PanelSnapshot> {
+  // Sanitize the captured launch env on write so a compromised/edited on-disk
+  // snapshot can't smuggle PATH/LD_PRELOAD or shell-injection values back in on
+  // the next restore (#10922). Omitted entirely when nothing safe remains.
+  const env = sanitizeAgentEnv(t.env);
+  // A session-id-assigning flag is one-shot: the CLI rejects an id it has
+  // already issued (#11782). Persisting it would hand that spent flag to any
+  // restore path that replays the stored command instead of rebuilding one, and
+  // the pane would come back failing to launch at all. The id itself is
+  // persisted separately below, which is what restore actually resumes from.
+  const command = stripAssignedSessionIdArgs(t.command?.trim() || "", t.launchAgentId);
+  // A held pane has no process, so nothing about one is written for it — a
+  // stale session id or agent state would let the next restore launch what the
+  // hold is keeping back (#12434).
+  const held = t.restoreRecovery !== undefined;
+  return {
+    launchAgentId: t.launchAgentId,
+    cwd: t.cwd,
+    command: command || undefined,
+    ...(t.exitBehavior !== undefined && { exitBehavior: t.exitBehavior }),
+    ...(t.agentSessionId && !held && { agentSessionId: t.agentSessionId }),
+    ...(t.agentLaunchFlags?.length && { agentLaunchFlags: t.agentLaunchFlags }),
+    ...(t.agentLaunchFlags?.length &&
+      t.callerLaunchFlags?.length && { callerLaunchFlags: t.callerLaunchFlags }),
+    ...(env && { env }),
+    ...(t.agentModelId && { agentModelId: t.agentModelId }),
+    ...(t.spawnedBy && { spawnedBy: t.spawnedBy }),
+    ...(t.agentPresetId && { agentPresetId: t.agentPresetId }),
+    ...(t.agentPresetColor && { agentPresetColor: t.agentPresetColor }),
+    ...(t.originalPresetId && { originalPresetId: t.originalPresetId }),
+    ...(t.isUsingFallback && { isUsingFallback: true }),
+    ...(typeof t.fallbackChainIndex === "number" && { fallbackChainIndex: t.fallbackChainIndex }),
+    ...(t.conversationCwd && { conversationCwd: t.conversationCwd }),
+    ...(held && { restoreRecovery: t.restoreRecovery }),
+    // Written for a held pane too: the notes belong to the pane, not its process.
+    ...(t.scratchpad && { scratchpad: t.scratchpad }),
+    // worktreeMoveNotice intentionally omitted — it's a live prompt to tell a
+    // running agent where to go (#11853). Persisting it would resurface the
+    // banner for a process that no longer exists after a restart.
+    // sessionLostOnRestore intentionally omitted — it's a transient restore-time
+    // signal. Persisting it would resurface the "Session no longer reachable"
+    // banner on every subsequent restart (issue #9802).
+    // "directing" is a renderer-only ephemeral state owned by
+    // TerminalAgentStateController; persisting it could resurrect a stuck
+    // indicator on the next reload (issue #5832).
+    ...(t.agentState && t.agentState !== "directing" && !held && { agentState: t.agentState }),
+    ...(t.lastStateChange !== undefined && !held && { lastStateChange: t.lastStateChange }),
+  };
+}

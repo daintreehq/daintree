@@ -1,13 +1,10 @@
 import type { AgentPreset } from "@/config/agents";
 import { getMergedPreset, sanitizeAgentEnv } from "@/config/agents";
-import {
-  buildAgentLaunchFlags,
-  combineDangerousModes,
-  combineInlineModes,
-  resolveDangerousMode,
-  resolveInlineMode,
-} from "@shared/types";
+import { buildAgentLaunchFlags } from "@shared/types";
+import { applyPresetBehaviorOverrides } from "@shared/utils/agentPresets";
 import type { AgentSettingsEntry } from "@shared/types/agentSettings";
+
+export { applyPresetBehaviorOverrides };
 
 export interface AgentRuntimeSettingsResolution {
   preset: AgentPreset | undefined;
@@ -22,35 +19,6 @@ export interface ResolveAgentRuntimeSettingsOptions {
   entry?: AgentSettingsEntry;
   ccrPresets?: AgentPreset[];
   projectPresets?: AgentPreset[];
-}
-
-export function applyPresetBehaviorOverrides(
-  entry: AgentSettingsEntry,
-  preset: AgentPreset | undefined
-): AgentSettingsEntry {
-  if (!preset) return entry;
-  // Layer the preset's tri-state bypass mode on top of the agent's resolved
-  // mode and bake the combined result onto the effective entry, so the single
-  // `resolveEffectiveBypass` chokepoint sees the final intent (a preset "off"
-  // vetoes an agent/global "on"). `dangerousEnabled` is mirrored for any
-  // legacy boolean reader of the merged entry.
-  const combinedMode = combineDangerousModes(
-    resolveDangerousMode(entry),
-    resolveDangerousMode(preset)
-  );
-  // Layer the preset's tri-state inline mode on top of the agent's resolved mode
-  // and bake the combined result onto the effective entry, so the single
-  // resolveEffectiveInlineMode chokepoint sees the final intent (#10876) — a
-  // preset "off" (alt-screen) vetoes an agent/global "on" (inline), just like
-  // the bypass tri-state above.
-  const combinedInline = combineInlineModes(resolveInlineMode(entry), resolveInlineMode(preset));
-  return {
-    ...entry,
-    dangerousMode: combinedMode,
-    dangerousEnabled: combinedMode === "on",
-    inlineMode: combinedInline,
-    ...(preset.customFlags !== undefined && { customFlags: preset.customFlags }),
-  };
 }
 
 export function mergeAgentRuntimeEnv(

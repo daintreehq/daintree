@@ -12,10 +12,17 @@ import { isPtyPanel } from "@shared/types/panel";
 import { formatForTerminalPaste } from "@shared/utils/terminalInputProtocol";
 import { readTailSnapshot, tailCapturedOutput } from "@shared/utils/artifactParser";
 import { planChoice } from "@shared/utils/terminalChoice";
+import {
+  CHOOSE_SCREEN_LINES,
+  keySequence,
+  SEND_KEYS_GAP_MS,
+  SEND_KEYS_SCREEN_LINES,
+  SEND_KEYS_SETTLE_MS,
+  SendKeysArgsSchema,
+} from "@shared/utils/terminalKeys";
 import { requireExplicitTerminalIdForAgentDispatch } from "./terminalTargetBinding";
 import { assessTerminalInterrupt } from "@/utils/terminalInterrupt";
 import { UnactionableTargetError } from "@/services/actions/unactionableTarget";
-import { NotifyReplyLinesSchema } from "@shared/types/terminalNotify";
 
 /**
  * What an interrupt request can honestly report (#12338).
@@ -54,55 +61,8 @@ const TerminalInterruptResultSchema = z.object({
     ),
 });
 
-const SEND_KEY_NAMES = {
-  Up: "\x1b[A",
-  Down: "\x1b[B",
-  Right: "\x1b[C",
-  Left: "\x1b[D",
-  Enter: "\r",
-  Escape: "\x1b",
-  Tab: "\t",
-  Space: " ",
-  Backspace: "\x7f",
-} as const;
-
-const SEND_KEYS_GAP_MS = 80;
-
-function keySequence(key: string): string {
-  return Object.hasOwn(SEND_KEY_NAMES, key)
-    ? SEND_KEY_NAMES[key as keyof typeof SEND_KEY_NAMES]
-    : key;
-}
-
 const SEND_KEYS_DESCRIPTION =
   "Answer a CLI's own dialog in a terminal (trust, permission, a list) by option label or named keys. A send can't: it types text then Enter, taking whatever is highlighted.";
-
-const SendKeysArgsSchema = z.object({
-  terminalId: z.string().min(1).describe("The terminal to press keys in."),
-  choose: z
-    .string()
-    .min(1)
-    .max(200)
-    .optional()
-    .describe(
-      "An option's label as shown; Daintree moves to it and presses Enter. Prefer it to `keys`."
-    ),
-  keys: z
-    .array(z.string().regex(/^(Up|Down|Left|Right|Enter|Escape|Tab|Space|Backspace|[a-z0-9])$/))
-    .min(1)
-    .max(16)
-    .optional()
-    .describe(
-      "Or up to 16 of: Up, Down, Left, Right, Enter, Escape, Tab, Space, Backspace, a-z, 0-9."
-    ),
-  // Acted on in main, like the send's: after answering a dialog, be told when
-  // the agent finishes the turn it unblocked.
-  notify: z
-    .boolean()
-    .optional()
-    .describe("As on a send: hear, with its reply, when the turn these keys unblock ends."),
-  replyLines: NotifyReplyLinesSchema,
-});
 
 const SendKeysResultSchema = z.object({
   terminalId: z.string(),
@@ -112,11 +72,6 @@ const SendKeysResultSchema = z.object({
     .optional()
     .describe("The terminal's last lines shortly after the keys, to check the dialog went."),
 });
-
-/** How long after the last key the screen is read back. */
-const SEND_KEYS_SETTLE_MS = 700;
-const SEND_KEYS_SCREEN_LINES = 12;
-const CHOOSE_SCREEN_LINES = 40;
 
 export function registerTerminalInputActions(
   actions: ActionRegistry,
