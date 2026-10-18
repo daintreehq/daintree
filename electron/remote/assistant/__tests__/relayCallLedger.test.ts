@@ -133,11 +133,11 @@ describe("RelayCallLedger", () => {
     await ledger.run("gone", "c1", "d1", false, async () => "a");
     const running = ledger.run("busy", "c1", "d1", false, () => gate.promise);
     clock = 5_000;
+    expect(ledger.size).toBe(2);
     ledger.sweep();
 
-    await expect(ledger.run("gone", "c1", "d1", true, async () => "x")).resolves.toEqual({
-      status: "unknown",
-    });
+    // Read without a call of its own, which would prune it anyway.
+    expect(ledger.size).toBe(1);
     // One still running is never swept.
     const joined = ledger.run("busy", "c1", "d1", true, async () => "x");
     gate.resolve("finished");

@@ -102,6 +102,13 @@ export class RelayCallLedger<T> {
     return answer(outcome);
   }
 
+  /** Records held across every caller, running ones included. */
+  get size(): number {
+    let count = 0;
+    for (const entries of this.owners.values()) count += entries.size;
+    return count;
+  }
+
   /** Drops every caller's expired records, so a Shell that never calls again keeps none. */
   sweep(): void {
     for (const owner of [...this.owners.keys()]) this.prune(owner);

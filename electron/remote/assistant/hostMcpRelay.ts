@@ -173,15 +173,17 @@ export function installHostMcpRelay(
   const sessions = new Map<string, CachedSession>();
   // Links that can't resume, for a call that was still being admitted when its link went.
   const expiredLinks = new Set<string>();
-  // Each relay principal this host admitted, by sender then help session, with its last call.
-  const principals = new Map<string, Map<string, number>>();
-  // Running a call, still opening, or open: a closed one waiting to be swept holds nothing.
+  // Each relay principal this host admitted, by sender then help session, least recent
+  // first: when it last ran a call, and how many it runs now.
+  const principals = new Map<string, Map<string, { usedAt: number; running: number }>>();
+  // Running a call, or with a session open or opening: a closed one waiting to be swept holds nothing.
   const principalInUse = (senderId: string, helpSessionId: string): boolean =>
+    (principals.get(senderId)?.get(helpSessionId)?.running ?? 0) > 0 ||
     [...sessions.values()].some(
       (cached) =>
         cached.senderId === senderId &&
         cached.helpSessionId === helpSessionId &&
-        (cached.inFlight > 0 || cached.session === null || cached.session.isOpen())
+        (cached.session === null || cached.session.isOpen())
     );
   const retire = (senderId: string, helpSessionId: string): void => {
     const held = principals.get(senderId);
@@ -193,19 +195,32 @@ export function installHostMcpRelay(
       console.warn("[HostMcpRelay] Couldn't retire a relay principal:", error);
     }
   };
-  const touchPrincipal = (senderId: string, helpSessionId: string): void => {
+  /** Retires the least recent of a sender's principals past its bound; one in use stays. */
+  const boundPrincipals = (senderId: string): void => {
+    const held = principals.get(senderId);
+    if (!held) return;
+    for (const helpSessionId of [...held.keys()]) {
+      if (held.size <= RELAY_PRINCIPALS_PER_SENDER) return;
+      if (!principalInUse(senderId, helpSessionId)) retire(senderId, helpSessionId);
+    }
+  };
+  /** Held from before admission until the call settles, wherever its session went meanwhile. */
+  const holdPrincipal = (senderId: string, helpSessionId: string): (() => void) => {
     let held = principals.get(senderId);
     if (!held) {
       held = new Map();
       principals.set(senderId, held);
     }
+    const record = held.get(helpSessionId) ?? { usedAt: now(), running: 0 };
     held.delete(helpSessionId);
-    held.set(helpSessionId, now());
-    // Least recent first, in insertion order; one with a session open stays.
-    for (const other of [...held.keys()]) {
-      if (held.size <= RELAY_PRINCIPALS_PER_SENDER) break;
-      if (other !== helpSessionId && !principalInUse(senderId, other)) retire(senderId, other);
-    }
+    record.usedAt = now();
+    record.running += 1;
+    held.set(helpSessionId, record);
+    boundPrincipals(senderId);
+    return () => {
+      record.running -= 1;
+      record.usedAt = now();
+    };
   };
   const wired = new WeakSet<LinkSession>();
   let disposed = false;
@@ -281,11 +296,22 @@ export function installHostMcpRelay(
     spec: RelayMcpSessionSpec,
     payload: McpCallPayload
   ): Promise<McpCallAnswer> => {
+    const release = holdPrincipal(spec.senderId, spec.helpSessionId);
+    try {
+      return await executeHeld(spec, payload);
+    } finally {
+      release();
+    }
+  };
+
+  const executeHeld = async (
+    spec: RelayMcpSessionSpec,
+    payload: McpCallPayload
+  ): Promise<McpCallAnswer> => {
     if (!deps.acceptsRemoteControl()) return { status: "refused", reason: "control-off" };
     if (!(await deps.hasProject(payload.projectId))) {
       return { status: "refused", reason: "no-project" };
     }
-    touchPrincipal(spec.senderId, spec.helpSessionId);
     const found = await sessionFor(spec);
     if (found === null) return { status: "refused", reason: "server-off" };
     const { cached, session } = found;
@@ -348,11 +374,12 @@ export function installHostMcpRelay(
     }
     const stale = now() - RELAY_PRINCIPAL_RETENTION_MS;
     for (const [senderId, held] of [...principals]) {
-      for (const [helpSessionId, usedAt] of [...held]) {
+      for (const [helpSessionId, { usedAt }] of [...held]) {
         if (usedAt < stale && !principalInUse(senderId, helpSessionId)) {
           retire(senderId, helpSessionId);
         }
       }
+      boundPrincipals(senderId);
     }
     ledger.sweep();
   }, SWEEP_INTERVAL_MS);
@@ -382,6 +409,10 @@ export function installHostMcpRelay(
       offSession();
       offExpired();
       for (const [key, cached] of [...sessions]) closeCached(key, cached);
+      // Nothing here will retire them later: the holds go with the relay.
+      for (const [senderId, held] of [...principals]) {
+        for (const helpSessionId of [...held.keys()]) retire(senderId, helpSessionId);
+      }
       ledger.clear();
     },
   };

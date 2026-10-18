@@ -497,9 +497,12 @@ const AUDIT_ARGS_PROJECTIONS: ReadonlyMap<string, (args: unknown) => unknown> = 
 
 /** A tool id as the manifest spells them: never a few words of a message. */
 const RELAYED_TOOL_ID_PATTERN = /^[a-z][A-Za-z0-9]*(?:\.[A-Za-z0-9]+){1,4}$/;
-/** Keys whose short strings are still someone's words: kept to their length, whatever the tool. */
+/**
+ * Keys whose short strings are still someone's words: kept to their length,
+ * whatever the tool. Matched as a suffix, so `systemPrompt` is a prompt too.
+ */
 const RELAYED_TEXT_KEY_PATTERN =
-  /^(?:prompt|text|command|body|message|input|keys|data|content|reply|query)$/i;
+  /(?:prompt|text|command|body|message|input|keys?|data|content|reply|query|title|choose|description|comment)$/i;
 
 /**
  * A `host.call` as the Shell audits it (#13493): the host, project, tool and

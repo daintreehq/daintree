@@ -346,6 +346,63 @@ describe("installHostMcpRelay races and retention", () => {
     relay.dispose();
   });
 
+  it("never retires a principal while its call still runs, however old or crowded", async () => {
+    vi.useFakeTimers();
+    let clock = 0;
+    let finish!: (result: CallToolResult) => void;
+    let first = true;
+    const retirePrincipal = vi.fn();
+    const { links, opened, relay, expire } = harness(
+      [["link-1", "sender-a"]],
+      { now: () => clock, idleMs: 60 * 60_000, retirePrincipal },
+      () => {
+        if (!first) return Promise.resolve({ content: [{ type: "text", text: "ok" }] });
+        first = false;
+        return new Promise<CallToolResult>((resolve) => (finish = resolve));
+      }
+    );
+    const slow = links[0]!.call({ callId: "slow", helpSessionId: "busy" });
+    await vi.waitFor(() => expect(opened[0]?.calls).toHaveLength(1));
+    // Its link ends while it runs, so its session is no longer cached as live.
+    expire("link-1");
+    for (let i = 0; i < 64; i++) {
+      await links[0]!.call({ callId: `c${i}`, helpSessionId: `other-${i}` });
+      opened.at(-1)!.close();
+    }
+    clock = 25 * 60 * 60_000;
+    vi.advanceTimersByTime(60_000);
+
+    expect(retirePrincipal).not.toHaveBeenCalledWith("sender-a", "busy");
+    finish({ content: [{ type: "text", text: "done" }] });
+    await slow;
+    relay.dispose();
+  });
+
+  it("holds a sender to its bound on the sweep too, once its sessions close", async () => {
+    vi.useFakeTimers();
+    const retirePrincipal = vi.fn();
+    const { links, opened, relay } = harness([["link-1", "sender-a"]], { retirePrincipal });
+    for (let i = 0; i < 65; i++) {
+      await links[0]!.call({ callId: `c${i}`, helpSessionId: `help-${i}` });
+    }
+    // Every one had a session open when it was added, so none could go then.
+    expect(retirePrincipal).not.toHaveBeenCalled();
+    for (const session of opened) session.close();
+    vi.advanceTimersByTime(60_000);
+
+    expect(retirePrincipal).toHaveBeenCalledTimes(1);
+    expect(retirePrincipal).toHaveBeenCalledWith("sender-a", "help-0");
+    relay.dispose();
+  });
+
+  it("gives up every hold it tracks when the relay goes, since nothing would retire them later", async () => {
+    const retirePrincipal = vi.fn();
+    const { links, relay } = harness([["link-1", "sender-a"]], { retirePrincipal });
+    await links[0]!.call({ callId: "c1", helpSessionId: "help-1" });
+    relay.dispose();
+    expect(retirePrincipal).toHaveBeenCalledWith("sender-a", "help-1");
+  });
+
   it("retires the least recent help sessions past a sender's bound", async () => {
     const retirePrincipal = vi.fn();
     const { links, opened, relay } = harness([["link-1", "sender-a"]], { retirePrincipal });

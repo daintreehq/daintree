@@ -596,6 +596,12 @@ describe("host.call audit projection (#13493)", () => {
       prompt: "<string: 6 chars>",
       notify: false,
     });
+    expect(
+      projectRelayedAuditArgs("agent.launch", { systemPrompt: "be terse", title: "Fix login" })
+    ).toEqual({ systemPrompt: "<string: 8 chars>", title: "<string: 9 chars>" });
+    expect(projectRelayedAuditArgs("terminal.sendKeys", { choose: "2" })).toEqual({
+      choose: "<string: 1 chars>",
+    });
     // A tool with a projection of its own keeps it.
     expect(
       projectRelayedAuditArgs("assistant.sendMessage", { contextId: CALL_ID, text: "secret" })
