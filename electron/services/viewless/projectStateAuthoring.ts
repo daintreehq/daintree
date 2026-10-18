@@ -43,6 +43,22 @@ export async function recordViewlessTerminal(
   });
 }
 
+function withoutPanelReferences(
+  layout: NonNullable<ProjectState["terminalLayout"]>,
+  terminalId: string
+): NonNullable<ProjectState["terminalLayout"]> {
+  const { focusedTerminalId, maximizedTerminalId, ...rest } = layout;
+  return {
+    ...rest,
+    ...(focusedTerminalId !== undefined && focusedTerminalId !== terminalId
+      ? { focusedTerminalId }
+      : {}),
+    ...(maximizedTerminalId !== undefined && maximizedTerminalId !== terminalId
+      ? { maximizedTerminalId }
+      : {}),
+  };
+}
+
 function withoutKey<T>(
   record: Record<string, T> | undefined,
   key: string
@@ -86,8 +102,16 @@ export async function forgetViewlessTerminal(
       ...existing,
       terminals: existing.terminals.filter((terminal) => terminal.id !== terminalId),
       ...(tabGroups !== undefined ? { tabGroups } : {}),
+      // MRU entries are keyed `terminal:<id>`; a bare id is dropped too.
       ...(existing.mruList !== undefined
-        ? { mruList: existing.mruList.filter((id) => id !== terminalId) }
+        ? {
+            mruList: existing.mruList.filter(
+              (key) => key !== terminalId && key !== `terminal:${terminalId}`
+            ),
+          }
+        : {}),
+      ...(existing.terminalLayout !== undefined
+        ? { terminalLayout: withoutPanelReferences(existing.terminalLayout, terminalId) }
         : {}),
       ...(existing.terminalSizes !== undefined
         ? { terminalSizes: withoutKey(existing.terminalSizes, terminalId) }

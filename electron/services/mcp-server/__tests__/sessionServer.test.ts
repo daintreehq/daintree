@@ -1905,6 +1905,26 @@ describe("project.runCommand short-circuit (#13495)", () => {
     expect(handleProjectRunCommand).not.toHaveBeenCalled();
   });
 
+  it("spends no grant's use on a caller it refuses", async () => {
+    const handleProjectRunCommand = vi.fn().mockResolvedValue(ranResult);
+    const sessionStore = storeWithOrigin("core", "help");
+    sessionStore.grantCache.issueGrant("session-run-command", "project.runCommand");
+    sessionStore.grantCache.issueNativeGrant({
+      sessionId: "session-run-command",
+      actorId: "help-1",
+      actorType: "help-session",
+      allowedTools: ["project.runCommand"],
+      maxUses: 1,
+    });
+    const consume = vi.spyOn(sessionStore.grantCache, "consumeNativeGrantUse");
+    const result = await call(fakeDeps({ sessionStore, handleProjectRunCommand }));
+
+    expect(toolErrorPayload(result).code).toBe(TIER_NOT_PERMITTED_CODE);
+    expect(consume).not.toHaveBeenCalled();
+    expect(handleProjectRunCommand).not.toHaveBeenCalled();
+    sessionStore.grantCache.dispose();
+  });
+
   it("surfaces a command that could not start as a tool error", async () => {
     const handleProjectRunCommand = vi
       .fn()

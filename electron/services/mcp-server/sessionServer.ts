@@ -202,6 +202,19 @@ const SKILLS_SEARCH_TOOL = "skills.search";
 const SKILLS_LOAD_TOOL = "skills.load";
 const PROJECT_RUN_CHECK_TOOL = "project.runCheck";
 const PROJECT_RUN_COMMAND_TOOL = "project.runCommand";
+
+/**
+ * `project.runCommand` runs whatever command it is given, so it answers to its
+ * caller, not its tier alone (#13495): Daintree's own assistant at the full
+ * tier, never a worker pane, an api-key client or a core session, and no grant
+ * widens that. Discovery and admission ask the same question.
+ */
+function mayRunProjectCommand(tier: string | null, origin: string | undefined): boolean {
+  return tier === "full" && origin === "help";
+}
+
+const PROJECT_RUN_COMMAND_REFUSAL =
+  "project.runCommand is only available to Daintree's own assistant at the full tier.";
 const TERMINAL_GET_STATUS_TOOL = "terminal.getStatus";
 const TERMINAL_READ_LAST_MESSAGE_OWNED_TOOL = "terminal.readLastMessageOwned";
 
@@ -1748,6 +1761,10 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
           if (!hubMessagingOffered()) {
             for (const id of HOST_MESSAGING_TOOL_IDS) permittedActionIds.delete(id);
           }
+          // A grant never makes the command runner callable, so it never makes it findable.
+          if (!mayRunProjectCommand(tier, sessionStore.getOrigin(sessionId))) {
+            permittedActionIds.delete(PROJECT_RUN_COMMAND_TOOL);
+          }
           return {
             permittedActionIds,
             callerLimit: searchLimit ?? ACTIONS_SEARCH_DEFAULT_LIMIT,
@@ -2356,6 +2373,34 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
           details: { confirmationChannel: "workspace-bound" },
         });
       }
+    }
+
+    // Refused here, past the tier gate but before a grant's use is spent or a
+    // pane asks: a grant or a pane approval admits a call, and this one admits
+    // only its own caller.
+    if (
+      actionId === PROJECT_RUN_COMMAND_TOOL &&
+      !mayRunProjectCommand(tier, sessionStore.getOrigin(sessionId))
+    ) {
+      try {
+        appendAuditRecord({
+          toolId: actionId,
+          sessionId,
+          tier,
+          args,
+          durationMs: Date.now() - startedAt,
+          startedAt,
+          outcome: { kind: "unauthorized" },
+          capturedTurnId,
+          rendererOwnedOrigin,
+        });
+      } catch (err) {
+        console.error("[MCP] Failed to append audit record:", err);
+      }
+      return buildToolError({
+        code: TIER_NOT_PERMITTED_CODE,
+        message: PROJECT_RUN_COMMAND_REFUSAL,
+      });
     }
 
     // Charge the native automation grant's use now that the call has cleared
@@ -3622,20 +3667,18 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
         }
 
         // Short-circuit: project.runCommand runs in main for the same reasons
-        // as project.runCheck (#13495), and is the one tool here held to a
-        // caller rather than a tier alone. It runs whatever command it is
-        // given, so only Daintree's own assistant at the full tier may call
-        // it: never a worker pane, an api-key client or a core session, and
-        // no grant widens that — the tier floor above can be widened by a
-        // per-tool or native grant, which is exactly what this must not
-        // honour. Never `danger: "confirm"`: the same assistant already
-        // reaches a shell through `terminal.new` and `terminal.sendCommand`.
+        // as project.runCheck (#13495). Its caller was admitted above by
+        // `mayRunProjectCommand`, and is asked again here so no future path
+        // into this branch can skip it. Never `danger: "confirm"`: the same
+        // assistant already reaches a shell through `terminal.new` and
+        // `terminal.sendCommand`. A call relayed from another machine
+        // (#13493) has to be lease-checked as a write before it gets here,
+        // since no IPC channel's lease policy covers it.
         if (actionId === PROJECT_RUN_COMMAND_TOOL) {
           emitToolCallStarted(false);
           try {
-            if (tier !== "full" || sessionStore.getOrigin(sessionId) !== "help") {
-              const message =
-                "project.runCommand is only available to Daintree's own assistant at the full tier.";
+            if (!mayRunProjectCommand(tier, sessionStore.getOrigin(sessionId))) {
+              const message = PROJECT_RUN_COMMAND_REFUSAL;
               outcome = {
                 kind: "result",
                 value: { ok: false, error: { code: TIER_NOT_PERMITTED_CODE, message } },

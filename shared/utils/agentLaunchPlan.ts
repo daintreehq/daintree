@@ -47,6 +47,12 @@ export interface AgentLaunchPlanInput {
   getCliDetail: (agentId: string) => Promise<AgentCliDetail | undefined>;
   /** The directory Gemini is pointed at for clipboard images, when it can be found. */
   getClipboardDirectory: () => Promise<string | undefined>;
+  /**
+   * Told, as soon as it is known and before anything is awaited, which saved
+   * preset slot named a preset that no longer exists, so the caller can clear
+   * it and the next launch resolves directly against the fallback.
+   */
+  onStalePreset?: (scope: "worktree" | "agent") => void;
 }
 
 export interface AgentLaunchPlan {
@@ -60,11 +66,6 @@ export interface AgentLaunchPlan {
   preset: AgentPreset | undefined;
   /** The availability detail the command was resolved from, reused by the launch gate. */
   cliDetail: AgentCliDetail | undefined;
-  /**
-   * The saved preset slot that named a preset which no longer exists, for the
-   * caller to clear so the next launch resolves directly against the fallback.
-   */
-  stalePresetScope: "worktree" | "agent" | undefined;
   title: string;
   /** "custom" when the title is the caller's name or a preset's, so detection keeps it. */
   titleMode: "custom" | undefined;
@@ -92,7 +93,6 @@ export async function buildAgentLaunchPlan(input: AgentLaunchPlanInput): Promise
   let env: Record<string, string> | undefined;
   let preset: AgentPreset | undefined;
   let cliDetail: AgentCliDetail | undefined;
-  let stalePresetScope: AgentLaunchPlan["stalePresetScope"];
 
   if (agentConfig) {
     const entry = input.settings?.agents?.[agentId] ?? {};
@@ -142,13 +142,14 @@ export async function buildAgentLaunchPlan(input: AgentLaunchPlanInput): Promise
       );
     }
 
-    // The worktree slot wins at resolution time, so only fall through to the
-    // agent-level default when that's what the launch used.
+    // Stale presetId cleanup: clear whichever scope held the vanished ID. The
+    // worktree slot wins at resolution time, so only fall through to clearing
+    // the agent-level default when that's what the launch used.
     if (resolvedPresetId && !primaryPreset) {
       if (scopedId && scopedId === resolvedPresetId && worktreeId) {
-        stalePresetScope = "worktree";
+        input.onStalePreset?.("worktree");
       } else if (entry.presetId && entry.presetId === resolvedPresetId) {
-        stalePresetScope = "agent";
+        input.onStalePreset?.("agent");
       }
     }
 
@@ -250,7 +251,6 @@ export async function buildAgentLaunchPlan(input: AgentLaunchPlanInput): Promise
     env,
     preset,
     cliDetail,
-    stalePresetScope,
     title: trimmedName || presetTitle,
     // Any non-default title is pinned so the agent-detected title sync can't
     // clobber it with the bare agent name.

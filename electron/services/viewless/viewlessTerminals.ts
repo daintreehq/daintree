@@ -96,21 +96,19 @@ interface ListedPanel {
  * The project's panels as a view would hydrate them: every panel the saved
  * layout records, joined with its live process, then any live terminal the
  * layout never mentions — hydration adopts those too. The assistant's own
- * terminal is never one of them.
+ * terminal is never one of them. Read off every terminal the pty-host holds,
+ * trashed ones included, since the per-project inventory leaves those out and
+ * a panel in its recovery grace is still the trash's to list.
  */
 async function readProjectPanels(project: Project, deps: ViewlessDeps): Promise<ListedPanel[]> {
   const pty = deps.getPtyReader();
-  const [state, ids] = await Promise.all([
+  const [state, all] = await Promise.all([
     deps.getProjectState(project.id).catch(() => null),
-    pty ? pty.getTerminalsForProjectAsync(project.id) : Promise.resolve([]),
+    pty ? pty.getAllTerminalsAsync().catch(() => []) : Promise.resolve([]),
   ]);
   const records = new Map<string, ViewlessTerminalRecord>();
-  if (pty) {
-    const read = await Promise.all(ids.map((id) => pty.getTerminalAsync(id).catch(() => null)));
-    ids.forEach((id, index) => {
-      const record = read[index];
-      if (record) records.set(id, record);
-    });
+  for (const record of all) {
+    if (record.id && record.projectId === project.id) records.set(record.id, record);
   }
 
   const panels: ListedPanel[] = [];
@@ -119,11 +117,11 @@ async function readProjectPanels(project: Project, deps: ViewlessDeps): Promise<
     if (seen.has(snapshot.id)) continue;
     seen.add(snapshot.id);
     const record = records.get(snapshot.id);
-    if (record && isAssistantTerminalRecord({ id: snapshot.id, ...record })) continue;
+    if (record && isAssistantTerminalRecord({ ...record, id: snapshot.id })) continue;
     panels.push({ id: snapshot.id, snapshot, ...(record ? { record } : {}) });
   }
   for (const [id, record] of records) {
-    if (seen.has(id) || isAssistantTerminalRecord({ id, ...record })) continue;
+    if (seen.has(id) || isAssistantTerminalRecord({ ...record, id })) continue;
     panels.push({ id, record });
   }
   return panels;
@@ -132,6 +130,16 @@ async function readProjectPanels(project: Project, deps: ViewlessDeps): Promise<
 function panelLocation(panel: ListedPanel) {
   if (panel.record?.isTrashed) return "trash" as const;
   return panel.snapshot?.location ?? ("grid" as const);
+}
+
+/**
+ * How many of the project's panels hold a slot against the panel limit, by the
+ * rule a view counts with: neither the trash nor the assistant's own terminal.
+ */
+export async function countProjectPanels(project: Project, deps: ViewlessDeps): Promise<number> {
+  const panels = await readProjectPanels(project, deps);
+  return panels.filter((panel) => countsTowardPanelLimit({ location: panelLocation(panel) }))
+    .length;
 }
 
 export async function runTerminalList(
@@ -305,16 +313,36 @@ export async function runTerminalClose(
   }
   const { terminalId } = parsed.data;
   const pty = deps.getPtyReader();
-  const record = pty ? await readOwnTerminal(pty, project.id, terminalId) : null;
+  const live = pty !== null && pty.getTerminalProjectId(terminalId) === project.id;
+  let record: ViewlessTerminalRecord | null = null;
+  if (live) {
+    // Strict, so a pty-host that is slow to answer is never read as the
+    // process being gone: forgetting a panel whose agent still runs would
+    // report it closed and leave it for the next view to adopt.
+    try {
+      record = await pty.getTerminalAsync(terminalId, undefined, { strict: true });
+    } catch (err) {
+      return failure(
+        "EXECUTION_ERROR",
+        formatErrorMessage(err, "Could not read the terminal to close it")
+      );
+    }
+  }
   const state = await deps.getProjectState(project.id).catch(() => null);
   const saved = state?.terminals?.some((terminal) => terminal.id === terminalId) ?? false;
   if (!record && !saved) {
     return failure("EXECUTION_ERROR", formatNoPanelMessage(request.actionId, terminalId));
   }
-  // Re-trashing resets the recovery TTL, so a panel already there is left be.
-  if (record?.isTrashed) return success({ closedIds: [] });
 
   try {
+    if (record?.isTrashed) {
+      // Re-trashing resets the recovery TTL, so the process is left be and
+      // nothing is reported closed. A layout that still names it — an earlier
+      // close whose save failed — is reconciled, or a view attaching during
+      // the grace would bring it back.
+      if (saved) await forgetViewlessTerminal(deps.stateWriter, project.id, terminalId);
+      return success({ closedIds: [] });
+    }
     if (record) await deps.invoke<void>(project.id, CHANNELS.TERMINAL_TRASH, [terminalId]);
     await forgetViewlessTerminal(deps.stateWriter, project.id, terminalId);
   } catch (err) {

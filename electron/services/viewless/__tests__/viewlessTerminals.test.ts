@@ -66,13 +66,27 @@ describe("terminal.list with no frontend", () => {
     expect(terminals[1]).toMatchObject({ agentState: null, title: "Old shell" });
   });
 
-  it("never lists the assistant's own terminal", async () => {
+  it("never lists or counts the assistant's own terminal", async () => {
     const pty = makePty({ "t-help": { kind: "terminal", isAssistantTerminal: true } });
     const { deps } = makeDeps({ getPtyReader: () => pty });
 
     const result = await executeViewlessAction(request("terminal.list", {}), deps);
 
     expect((result as { result: ListResult }).result.terminals).toEqual([]);
+    expect((result as { result: ListResult }).result.panelLimit.count).toBe(0);
+  });
+
+  it("lists only this project's terminals", async () => {
+    const pty = makePty({ "t-1": { kind: "terminal" } });
+    pty.getAllTerminalsAsync.mockResolvedValue([
+      { id: "t-1", projectId: PROJECT.id, kind: "terminal" },
+      { id: "t-other", projectId: "proj-2", kind: "terminal" },
+    ]);
+    const { deps } = makeDeps({ getPtyReader: () => pty });
+
+    const result = await executeViewlessAction(request("terminal.list", {}), deps);
+
+    expect((result as { result: ListResult }).result.terminals.map((t) => t.id)).toEqual(["t-1"]);
   });
 
   it("leaves trashed terminals out unless asked for the trash", async () => {
@@ -113,7 +127,7 @@ describe("terminal.list with no frontend", () => {
   });
 
   it("reads client metadata only off a panel the writer could have written", async () => {
-    const pty = makePty({ "t-1": { kind: "terminal" } });
+    const pty = makePty({ "t-1": { kind: "terminal" }, "p-1": { kind: "terminal" } });
     const { deps } = makeDeps(
       { getPtyReader: () => pty },
       {
@@ -125,17 +139,32 @@ describe("terminal.list with no frontend", () => {
             location: "grid",
             extensionState: { mcp: { ticket: "T-1" }, presetEnv: { SECRET: "x" } },
           },
+          {
+            id: "p-1",
+            kind: "terminal",
+            title: "Plugin's",
+            location: "grid",
+            pluginId: "acme",
+            extensionState: { mcp: { ticket: "P-1" } },
+          },
         ]),
       }
     );
 
-    const result = await executeViewlessAction(
+    const asked = await executeViewlessAction(
       request("terminal.list", { includeClientMetadata: true }),
       deps
     );
+    const plain = await executeViewlessAction(request("terminal.list", {}), deps);
 
-    const row = (result as { result: ListResult }).result.terminals[0];
-    expect(JSON.stringify(row)).not.toContain("SECRET");
+    const rows = (asked as { result: ListResult }).result.terminals;
+    expect(rows.find((row) => row.id === "t-1")?.clientMetadata).toEqual({ ticket: "T-1" });
+    // A plugin owns its whole bag, so a key it chose to call `mcp` is not read.
+    expect(rows.find((row) => row.id === "p-1")?.clientMetadata).toBeNull();
+    expect(JSON.stringify(rows)).not.toContain("SECRET");
+    for (const row of (plain as { result: ListResult }).result.terminals) {
+      expect(row).not.toHaveProperty("clientMetadata");
+    }
   });
 
   it("refuses an ownership filter, which only main can answer", async () => {
@@ -232,8 +261,9 @@ describe("terminal.close with no frontend", () => {
           ],
           {
             tabGroups: [{ id: "g", location: "grid", activeTabId: "t-1", panelIds: ["t-1"] }],
-            mruList: ["t-1", "t-2"],
+            mruList: ["terminal:t-1", "terminal:t-2"],
             terminalSizes: { "t-1": { cols: 80, rows: 24 } },
+            terminalLayout: { focusedTerminalId: "t-1", maximizedTerminalId: "t-2" },
           }
         ),
       }
@@ -249,8 +279,45 @@ describe("terminal.close with no frontend", () => {
     const state = store.read();
     expect(state?.terminals.map((t) => t.id)).toEqual(["t-2"]);
     expect(state?.tabGroups).toEqual([]);
-    expect(state?.mruList).toEqual(["t-2"]);
+    expect(state?.mruList).toEqual(["terminal:t-2"]);
     expect(state?.terminalSizes).toEqual({});
+    expect(state?.terminalLayout).toEqual({ maximizedTerminalId: "t-2" });
+  });
+
+  it("never reports a terminal closed when the pty-host could not be read", async () => {
+    const pty = makePty({ "t-1": { kind: "terminal" } });
+    pty.getTerminalAsync.mockRejectedValue(new Error("pty-host timed out"));
+    const { deps, store, invoke } = makeDeps(
+      { getPtyReader: () => pty },
+      { state: savedState([{ id: "t-1", kind: "terminal", title: "One", location: "grid" }]) }
+    );
+
+    const result = await executeViewlessAction(
+      request("terminal.close", { terminalId: "t-1" }),
+      deps
+    );
+
+    expect(result).toMatchObject({ ok: false, error: { code: "EXECUTION_ERROR" } });
+    expect(pty.getTerminalAsync).toHaveBeenCalledWith("t-1", undefined, { strict: true });
+    expect(invoke).not.toHaveBeenCalled();
+    expect(store.read()?.terminals.map((t) => t.id)).toEqual(["t-1"]);
+  });
+
+  it("drops a trashed terminal the layout still names, without trashing it again", async () => {
+    const pty = makePty({ "t-1": { kind: "terminal", isTrashed: true } });
+    const { deps, store, invoke } = makeDeps(
+      { getPtyReader: () => pty },
+      { state: savedState([{ id: "t-1", kind: "terminal", title: "One", location: "grid" }]) }
+    );
+
+    const result = await executeViewlessAction(
+      request("terminal.close", { terminalId: "t-1" }),
+      deps
+    );
+
+    expect(result).toEqual({ ok: true, result: { closedIds: [] } });
+    expect(invoke).not.toHaveBeenCalled();
+    expect(store.read()?.terminals).toEqual([]);
   });
 
   it("reports nothing closed for a terminal already in the trash", async () => {

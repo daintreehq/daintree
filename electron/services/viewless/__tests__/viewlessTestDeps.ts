@@ -39,7 +39,11 @@ export function makeStateStore(initial: ProjectState | null = null) {
   };
 }
 
-/** A pty-host holding the given records, all owned by {@link PROJECT}. */
+/**
+ * A pty-host holding the given records, all owned by {@link PROJECT}. Its
+ * listing answers as the real one does: every terminal, trashed ones included,
+ * each stamped with its project.
+ */
 export function makePty(
   records: Record<string, ViewlessTerminalRecord> = {},
   screens: Record<string, string> = {}
@@ -47,11 +51,12 @@ export function makePty(
   return {
     records,
     getTerminalProjectId: vi.fn((id: string) => (Object.hasOwn(records, id) ? PROJECT.id : null)),
-    getTerminalAsync: vi.fn(async (id: string) =>
-      Object.hasOwn(records, id) ? (records[id] ?? null) : null
+    getTerminalAsync: vi.fn(
+      async (id: string, _submissionToken?: string, _options?: { strict?: boolean }) =>
+        Object.hasOwn(records, id) ? (records[id] ?? null) : null
     ),
-    getTerminalsForProjectAsync: vi.fn(async (projectId: string) =>
-      projectId === PROJECT.id ? Object.keys(records) : []
+    getAllTerminalsAsync: vi.fn(async () =>
+      Object.entries(records).map(([id, record]) => ({ projectId: PROJECT.id, ...record, id }))
     ),
     getSerializedStateAsync: vi.fn(async (id: string, _options?: { tailRows: number }) =>
       Object.hasOwn(screens, id) ? { data: screens[id] ?? "" } : null

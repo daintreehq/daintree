@@ -270,6 +270,38 @@ describe("buildProjectCommandEnv", () => {
     expect(env.GH_PROMPT_DISABLED).toBe("1");
   });
 
+  it("lets a later layer win over every spelling of a name on Windows", () => {
+    installEnvMock.mockReturnValue({ Path: "C:\\Windows", TERM: "dumb" });
+    const env = buildProjectCommandEnv(
+      { global: {}, project: { PATH: "C:\\tools;C:\\Windows" } },
+      {},
+      "win32"
+    );
+
+    expect(Object.keys(env).filter((key) => key.toUpperCase() === "PATH")).toEqual(["PATH"]);
+    expect(env.PATH).toBe("C:\\tools;C:\\Windows");
+  });
+
+  it("keeps distinct spellings apart where names are case-sensitive", () => {
+    installEnvMock.mockReturnValue({ PATH: "/usr/bin" });
+    const env = buildProjectCommandEnv({ global: {}, project: { Path: "/other" } }, {}, "linux");
+
+    expect(env.PATH).toBe("/usr/bin");
+    expect(env.Path).toBe("/other");
+  });
+
+  it("reports an environment it cannot build as a failure to start", async () => {
+    installEnvMock.mockImplementation(() => {
+      throw new Error("no home directory");
+    });
+    const service = makeService();
+
+    await expect(service.run({ projectId: "proj-1", command: "ls" })).rejects.toThrow(
+      /Failed to start "command": no home directory/
+    );
+    expect(spawnMock).not.toHaveBeenCalled();
+  });
+
   it("is the environment a run is spawned with", async () => {
     const service = makeService({ global: {}, project: { PROJECT_ONLY: "yes" } });
     const promise = service.run({ projectId: "proj-1", command: "env" });

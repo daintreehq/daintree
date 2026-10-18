@@ -150,7 +150,11 @@ export interface BoundedProcessOutcome {
 export interface BoundedProcessOptions {
   command: string;
   cwd: string;
-  env: Record<string, string>;
+  /**
+   * Built inside the spawn's error boundary, once per run, so a failure to
+   * assemble the environment is a failure to start rather than a stray throw.
+   */
+  env: () => Record<string, string>;
   timeoutMs: number;
   maxOutputBytes: number;
   /** Names the run in a start or run failure, e.g. a runner's name. */
@@ -184,7 +188,7 @@ export function runBoundedProcess(options: BoundedProcessOptions): Promise<Bound
         shell: true,
         windowsHide: true,
         detached: useGroup,
-        env,
+        env: env(),
         stdio: ["ignore", "pipe", "pipe"],
       });
     } catch (err) {

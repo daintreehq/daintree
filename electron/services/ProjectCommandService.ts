@@ -97,6 +97,38 @@ function isDeniedKey(key: string): boolean {
   return DENIED_KEYS.has(upper) || DENIED_PREFIXES.some((prefix) => upper.startsWith(prefix));
 }
 
+const NON_INTERACTIVE_ENV: Readonly<Record<string, string>> = {
+  CI: "1",
+  NONINTERACTIVE: "1",
+  GIT_TERMINAL_PROMPT: "0",
+  GH_PROMPT_DISABLED: "1",
+  DEBIAN_FRONTEND: "noninteractive",
+  PAGER: "cat",
+  GIT_PAGER: "cat",
+  NO_COLOR: "1",
+};
+
+/**
+ * Windows treats variable names case-insensitively, and given two spellings of
+ * one name (`Path` from the process, `PATH` from a project) Node forwards
+ * whichever sorts first, not the later layer. So a later layer replaces every
+ * spelling of a name there, and precedence holds.
+ */
+function setVariable(
+  env: Record<string, string>,
+  key: string,
+  value: string,
+  caseInsensitive: boolean
+): void {
+  if (caseInsensitive) {
+    const upper = key.toUpperCase();
+    for (const existing of Object.keys(env)) {
+      if (existing !== key && existing.toUpperCase() === upper) delete env[existing];
+    }
+  }
+  env[key] = value;
+}
+
 /**
  * The environment a command runs with: the install allowlist (PATH, HOME,
  * locale, proxy and CA settings, version-manager roots), the SSH agent socket,
@@ -110,27 +142,25 @@ function isDeniedKey(key: string): boolean {
  */
 export function buildProjectCommandEnv(
   layers: ProjectCommandEnvLayers | null,
-  ambient: NodeJS.ProcessEnv = process.env
+  ambient: NodeJS.ProcessEnv = process.env,
+  platform: NodeJS.Platform = process.platform
 ): Record<string, string> {
+  const caseInsensitive = platform === "win32";
   const env: Record<string, string> = { ...buildInstallEnv() };
   for (const [key, value] of Object.entries(ambient)) {
-    if (value !== undefined && EXTRA_INHERITED_KEYS.has(key.toUpperCase())) env[key] = value;
+    if (value !== undefined && EXTRA_INHERITED_KEYS.has(key.toUpperCase())) {
+      setVariable(env, key, value, caseInsensitive);
+    }
   }
-  Object.assign(env, layers?.global, layers?.project);
+  for (const layer of [layers?.global, layers?.project, NON_INTERACTIVE_ENV]) {
+    for (const [key, value] of Object.entries(layer ?? {})) {
+      setVariable(env, key, value, caseInsensitive);
+    }
+  }
   for (const key of Object.keys(env)) {
     if (isDeniedKey(key)) delete env[key];
   }
-  return {
-    ...env,
-    CI: "1",
-    NONINTERACTIVE: "1",
-    GIT_TERMINAL_PROMPT: "0",
-    GH_PROMPT_DISABLED: "1",
-    DEBIAN_FRONTEND: "noninteractive",
-    PAGER: "cat",
-    GIT_PAGER: "cat",
-    NO_COLOR: "1",
-  };
+  return env;
 }
 
 function clampTimeout(requested: number | undefined): number {
@@ -200,7 +230,7 @@ export class ProjectCommandService {
       const outcome = await runBoundedProcess({
         command: args.command,
         cwd,
-        env: buildProjectCommandEnv(layers),
+        env: () => buildProjectCommandEnv(layers),
         timeoutMs: clampTimeout(args.timeoutMs),
         maxOutputBytes: PROJECT_COMMAND_MAX_OUTPUT_BYTES,
         label: "command",

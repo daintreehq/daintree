@@ -490,18 +490,18 @@ export function useAgentLauncher(): UseAgentLauncherReturn {
               await resolveHostTmpDir(() => systemClient.getTmpDir()),
               isRemoteWindow()
             ),
+          onStalePreset: (scope) => {
+            if (scope === "worktree" && effectiveWorktreeId) {
+              void useAgentSettingsStore
+                .getState()
+                .updateWorktreePreset(agentId, effectiveWorktreeId, undefined);
+            } else if (scope === "agent") {
+              void useAgentSettingsStore.getState().updateAgent(agentId, { presetId: undefined });
+            }
+          },
         });
         const { command, assignedSessionId, preset } = plan;
         const cachedLaunchCliDetail = plan.cliDetail;
-
-        // Stale presetId cleanup: clear whichever scope held the vanished ID.
-        if (plan.stalePresetScope === "worktree" && effectiveWorktreeId) {
-          void useAgentSettingsStore
-            .getState()
-            .updateWorktreePreset(agentId, effectiveWorktreeId, undefined);
-        } else if (plan.stalePresetScope === "agent") {
-          void useAgentSettingsStore.getState().updateAgent(agentId, { presetId: undefined });
-        }
 
         if (isAgent && !command) {
           logWarn(`Cannot launch ${agentId} agent: command could not be generated`);

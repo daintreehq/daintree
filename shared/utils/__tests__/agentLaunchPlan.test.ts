@@ -48,7 +48,8 @@ describe("buildAgentLaunchPlan", () => {
     expect(plan.titleMode).toBe("custom");
   });
 
-  it("falls back to the agent default when the worktree's pick is gone, and reports the stale slot", async () => {
+  it("falls back to the agent default when the worktree's pick is gone, and reports the stale slot first", async () => {
+    const events: string[] = [];
     const plan = await buildAgentLaunchPlan(
       input({
         settings: settingsWith({
@@ -56,11 +57,29 @@ describe("buildAgentLaunchPlan", () => {
           worktreePresets: { "/repo-wt/a": "deleted" },
           customPresets: PRESETS,
         }),
+        onStalePreset: (scope) => events.push(`stale:${scope}`),
+        getCliDetail: async () => {
+          events.push("probe");
+          return undefined;
+        },
       })
     );
 
     expect(plan.preset?.id).toBe("global");
-    expect(plan.stalePresetScope).toBe("worktree");
+    // Cleared before the probe's await, so a selection made meanwhile survives.
+    expect(events).toEqual(["stale:worktree", "probe"]);
+  });
+
+  it("reports a stale agent-level default", async () => {
+    const onStalePreset = vi.fn();
+    await buildAgentLaunchPlan(
+      input({
+        settings: settingsWith({ presetId: "deleted", customPresets: PRESETS }),
+        onStalePreset,
+      })
+    );
+
+    expect(onStalePreset).toHaveBeenCalledExactlyOnceWith("agent");
   });
 
   it("launches the bare agent for an explicit null, ignoring every saved pick", async () => {

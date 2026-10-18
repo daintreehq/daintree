@@ -35,7 +35,6 @@ import {
   buildPanelLimitSnapshot,
   computeHardwareDefaults,
 } from "../../../shared/utils/panelLimit.js";
-import { countsTowardPanelLimit } from "../../../shared/utils/panelCount.js";
 import {
   serializePtyPanel,
   type PtySerializeInput,
@@ -46,6 +45,7 @@ import {
 } from "../../../shared/utils/terminalLaunchOptions.js";
 import type { ViewlessActionRequest, ViewlessDeps } from "./ViewlessActionExecutor.js";
 import { recordViewlessTerminal } from "./projectStateAuthoring.js";
+import { countProjectPanels } from "./viewlessTerminals.js";
 import { readProjectWorktrees } from "./viewlessWorktrees.js";
 import {
   viewlessFailure as failure,
@@ -215,7 +215,7 @@ export async function runAgentLaunch(
       ? request.context?.activeWorktreeId
       : undefined;
   let worktreeId: string | null;
-  let worktree: { path?: string; branch?: string } | null;
+  let worktree: { path?: string; branch?: string; gitDir?: string } | null;
   if (args.worktreeId !== undefined) {
     const match = worktrees?.find((candidate) => candidate.id === args.worktreeId) ?? null;
     if (args.worktreeId && worktrees !== null && !match) {
@@ -241,18 +241,11 @@ export async function runAgentLaunch(
     caseInsensitive: process.platform === "darwin" || process.platform === "win32",
   });
 
-  // The hard limit a fresh view would hold the launch to. A view counts its
-  // panels; with none attached the saved layout and the live terminals are
-  // what a view would hydrate into.
+  // The hard limit a fresh view would hold the launch to, counted over what a
+  // view would hydrate: the saved layout and the live terminals, by the same
+  // rule the listing counts with.
   const defaults = computeHardwareDefaults(deps.hostPlatform.totalMemoryBytes);
-  const liveIds = pty ? await pty.getTerminalsForProjectAsync(project.id) : [];
-  const counted = new Set([
-    ...(state?.terminals ?? [])
-      .filter((terminal) => countsTowardPanelLimit({ location: terminal.location }))
-      .map((terminal) => terminal.id),
-    ...liveIds,
-  ]);
-  const panelLimit = buildPanelLimitSnapshot(counted.size, {
+  const panelLimit = buildPanelLimitSnapshot(await countProjectPanels(project, deps), {
     softWarningLimit: defaults.soft,
     confirmationLimit: defaults.confirm,
     hardLimit: defaults.hard,
@@ -299,6 +292,9 @@ export async function runAgentLaunch(
       ),
     getCliDetail: (id) => deps.agents.getCliDetail(id),
     getClipboardDirectory: async () => agentClipboardDirectory(deps.hostPlatform.tmpDir, false),
+    // No `onStalePreset`: a saved preset that no longer exists is still fallen
+    // back from here, and clearing it is left to the next launch from a view,
+    // whose settings store owns that write and tells every window about it.
   });
   if (isAgent && !plan.command) return declined("spawn-failed", null, identity);
   // A CLI that cannot launch would only start and fail. A view opens its setup
@@ -394,6 +390,9 @@ export async function runAgentLaunch(
     title: plan.title,
     ...(plan.titleMode !== undefined ? { titleMode: plan.titleMode } : {}),
     ...(worktreeId !== null ? { worktreeId } : {}),
+    // The stable handle restore follows a `git worktree move` by, as a view's
+    // persistence records it (#11388).
+    ...(worktree?.gitDir ? { worktreeGitDir: worktree.gitDir } : {}),
     location,
     ...serializePtyPanel(panel),
   };

@@ -65,6 +65,7 @@ export function hasViewlessImplementation(actionId: string): boolean {
 /** A pty-host terminal record, as much of it as the viewless actions read. */
 export interface ViewlessTerminalRecord {
   id?: string;
+  projectId?: string;
   kind?: string;
   title?: string;
   cwd?: string;
@@ -83,8 +84,14 @@ export interface ViewlessTerminalRecord {
 /** The pty-host reads a viewless action needs, as `PtyClient` answers them. */
 export interface ViewlessPtyReader {
   getTerminalProjectId(id: string): string | null;
-  getTerminalAsync(id: string): Promise<ViewlessTerminalRecord | null>;
-  getTerminalsForProjectAsync(projectId: string): Promise<string[]>;
+  /** `strict` rejects on a live host that did not answer, rather than resolving null. */
+  getTerminalAsync(
+    id: string,
+    submissionToken?: string,
+    options?: { strict?: boolean }
+  ): Promise<ViewlessTerminalRecord | null>;
+  /** Every terminal the pty-host holds, trashed ones included. */
+  getAllTerminalsAsync(): Promise<ViewlessTerminalRecord[]>;
   getSerializedStateAsync(
     id: string,
     options?: { tailRows: number }

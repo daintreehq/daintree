@@ -192,7 +192,7 @@ describe("agent.launch with no frontend", () => {
   });
 
   it("holds the launch to the hard panel limit a fresh view would apply", async () => {
-    const records = Object.fromEntries(
+    const records: Record<string, Record<string, unknown>> = Object.fromEntries(
       Array.from({ length: 24 }, (_, i) => [`t-${i}`, { kind: "terminal" }])
     );
     const { deps, invoke } = launchDeps({ getPtyReader: () => makePty(records) });
@@ -214,6 +214,51 @@ describe("agent.launch with no frontend", () => {
     expect(invoke.mock.calls.some(([, channel]) => channel === CHANNELS.TERMINAL_SPAWN)).toBe(
       false
     );
+  });
+
+  it("counts what a view counts: not the assistant's terminal, not a saved panel twice", async () => {
+    const records: Record<string, Record<string, unknown>> = Object.fromEntries(
+      Array.from({ length: 23 }, (_, i) => [`t-${i}`, { kind: "terminal" }])
+    );
+    records["t-help"] = { kind: "terminal", isAssistantTerminal: true };
+    const { deps, invoke } = makeDeps(
+      { getPtyReader: () => makePty(records), getWorkspaceHosts: () => makeHosts() },
+      {
+        worktrees: [makeWorktree(), WORKTREE],
+        state: {
+          projectId: PROJECT.id,
+          sidebarWidth: 350,
+          terminals: [{ id: "t-0", kind: "terminal", title: "Saved", location: "grid" }],
+        },
+      }
+    );
+    deps.hostPlatform = { ...deps.hostPlatform, totalMemoryBytes: 8 * 1024 ** 3 };
+
+    const result = await executeViewlessAction(
+      request("agent.launch", { agentId: "claude" }),
+      deps
+    );
+
+    expect(result).toMatchObject({ ok: true, result: { launched: true } });
+    expect(invoke.mock.calls.some(([, channel]) => channel === CHANNELS.TERMINAL_SPAWN)).toBe(true);
+  });
+
+  it("records the worktree's stable handle so restore follows a worktree move", async () => {
+    const moved = makeWorktree({ ...WORKTREE, gitDir: "/repo/.git/worktrees/feature" });
+    const { deps, store } = makeDeps(
+      { getPtyReader: () => makePty(), getWorkspaceHosts: () => makeHosts() },
+      { worktrees: [makeWorktree(), moved] }
+    );
+
+    await executeViewlessAction(
+      request("agent.launch", { agentId: "claude", worktreeId: moved.id }),
+      deps
+    );
+
+    expect(store.read()?.terminals[0]).toMatchObject({
+      worktreeId: moved.id,
+      worktreeGitDir: "/repo/.git/worktrees/feature",
+    });
   });
 
   it("names the worktrees there are when the one asked for is not one", async () => {

@@ -161,7 +161,7 @@ export class ProjectCheckService {
       outcome = await runBoundedProcess({
         command: runner.command,
         cwd,
-        env: buildCheckEnv(cwd),
+        env: () => buildCheckEnv(cwd),
         timeoutMs,
         maxOutputBytes: PROJECT_CHECK_MAX_OUTPUT_BYTES,
         label: runner.name,
