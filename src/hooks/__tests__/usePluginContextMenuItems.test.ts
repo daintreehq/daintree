@@ -266,18 +266,26 @@ describe("usePluginContextMenuItems", () => {
     contextMenuItemsMock.mockResolvedValue([
       entry("acme.beads", "Answer", "terminal", { when: "acme.beads.needsYou" }),
       entry("acme.beads", "Mine", "terminal", { when: "panelKind == 'terminal'" }),
+      entry("acme.other", "Clash", "terminal", { when: "acme.other.on" }),
     ]);
     const { usePluginContextMenuItems } = await import("../usePluginContextMenuItems");
-    const ctx: WhenClauseContext = { panelKind: "terminal" };
+    // The caller's own `acme` key shadows the whole plugin namespace under it.
+    const ctx: WhenClauseContext = { panelKind: "terminal", acme: { other: { on: false } } };
     const { result } = renderHook(() => usePluginContextMenuItems("terminal", ctx));
 
     await waitFor(() => expect(result.current.map((e) => e.item.label)).toEqual(["Mine"]));
     expect(emitKeys).not.toBeNull();
 
+    act(() => emitKeys!({ pluginId: "acme.other", keys: { on: true } }));
+    expect(result.current.map((e) => e.item.label)).toEqual(["Mine"]);
+
+    const { result: uncontested } = renderHook(() =>
+      usePluginContextMenuItems("terminal", { panelKind: "terminal" })
+    );
     act(() => emitKeys!({ pluginId: "acme.beads", keys: { needsYou: true } }));
-    expect(result.current.map((e) => e.item.label)).toEqual(["Answer", "Mine"]);
+    expect(uncontested.current.map((e) => e.item.label)).toEqual(["Answer", "Mine", "Clash"]);
 
     act(() => emitKeys!({ pluginId: "acme.beads", keys: null }));
-    expect(result.current.map((e) => e.item.label)).toEqual(["Mine"]);
+    expect(uncontested.current.map((e) => e.item.label)).toEqual(["Mine", "Clash"]);
   });
 });

@@ -280,6 +280,10 @@ describe("when clause parser", () => {
     it("rejects bare numbers rather than reading them as identifiers", () => {
       expect(() => parse("count == 1")).toThrow(/numeric literals/);
       expect(() => parse("1.5")).toThrow(ParseError);
+      expect(() => parse("missing == 1e3")).toThrow(/numeric literals/);
+      expect(() => parse("missing == 1e-3")).toThrow(/numeric literals/);
+      expect(() => parse("missing == 0x10")).toThrow(/numeric literals/);
+      expect(() => parse("3m.tools")).toThrow(/numeric literals/);
     });
 
     it("rejects numeric comparison <", () => {

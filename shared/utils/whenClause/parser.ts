@@ -4,7 +4,10 @@ import type { ASTNode, BinaryOpNode, IdentifierNode, LiteralNode, UnaryOpNode } 
 // (`publisher.name`, e.g. `acme.linear-planner`, `3m.tools`) is a valid path
 // root for the keys that plugin publishes with `host.setContext` (#13506).
 const IDENT_RE = /^\w[\w-]*(?:\.\w[\w-]*)*/;
-const NUMERIC_RE = /^\d+(?:\.\d+)*$/;
+// A digit-leading path is a plugin key only as `publisher.name.key`; anything
+// shorter (`1`, `1.5`, `1e3`, `0x10`) is a number this grammar doesn't support.
+const DIGIT_LEADING_RE = /^\d/;
+const MIN_PLUGIN_KEY_SEGMENTS = 3;
 const UNSUPPORTED_OPS: Array<[RegExp, string]> = [
   [/^=~/, "regex operator `=~` is not yet supported"],
   // `in` is an operator only as a whole word: `in.tools.key` and
@@ -44,7 +47,7 @@ class Tokenizer {
     if (m) {
       const ident = m[0]!;
       if (ident === "true" || ident === "false") return "bool";
-      if (NUMERIC_RE.test(ident)) {
+      if (DIGIT_LEADING_RE.test(ident) && ident.split(".").length < MIN_PLUGIN_KEY_SEGMENTS) {
         throw new ParseError("numeric literals are not supported", this.pos);
       }
       return "ident";

@@ -32,6 +32,12 @@ const windowRefMock = vi.hoisted(() => ({
   getProjectViewManager: vi.fn(() => null),
 }));
 const broadcastToRendererMock = vi.hoisted(() => vi.fn());
+// Defaults: no remote-bound views and no project views. A test that needs
+// either overrides the implementation and restores it.
+const ipcViewMocks = vi.hoisted(() => ({
+  isWithheldFromView: vi.fn((_id: number, _channel: string, _args: unknown[]) => false),
+  getProjectRendererTargets: vi.fn((_projectId: string): Array<{ id: number }> => []),
+}));
 const projectStoreMock = vi.hoisted(() => ({
   getCurrentProject: vi.fn((): { id?: string; path: string } | null => null),
   getProjectById: vi.fn((_id: string): { path: string } | null => null),
@@ -79,12 +85,14 @@ vi.mock("../../window/windowRef.js", () => ({
 }));
 vi.mock("../../ipc/utils.js", () => ({
   broadcastToRenderer: broadcastToRendererMock,
-  // No remote-bound views here: every local push reaches its view.
-  isWithheldFromView: () => false,
+  // No remote-bound views here unless a test says so: every local push reaches its view.
+  isWithheldFromView: (id: number, channel: string, args: unknown[]) =>
+    ipcViewMocks.isWithheldFromView(id, channel, args),
   // A project plugin's settings writes are announced to its own project only.
   broadcastToProjectRenderers: vi.fn(),
-  // No project views: a project plugin's replay has nowhere to go.
-  getProjectRendererTargets: () => [],
+  // No project views unless a test says so: a project plugin's replay has nowhere to go.
+  getProjectRendererTargets: (projectId: string) =>
+    ipcViewMocks.getProjectRendererTargets(projectId),
   getProjectPushTargets: () => [],
   endpointPushTarget: (endpoint: {
     handle: number;
@@ -765,30 +773,71 @@ describe("init gate — waitForInit() and pushSnapshotTo() (#9285)", () => {
     ]);
   });
 
-  it("pushSnapshotTo() replays a global plugin's context keys, empty ones too, and skips a project plugin's for another view (#13506)", async () => {
+  it("pushSnapshotTo() replays context keys to the views entitled to them, empty ones too (#13506)", async () => {
     const service = new PluginService(tmpDir);
     await service.activateStartupFinishedPlugins();
     const keys = (
       service as unknown as { pluginContextKeys: Map<string, Map<string, boolean | string>> }
     ).pluginContextKeys;
     keys.set("acme.global", new Map<string, boolean | string>([["needsYou", true]]));
-    keys.set("acme.emptied", new Map());
+    keys.set("project__proj-a__acme.mine", new Map());
     keys.set("project__other-project__acme.local", new Map([["busy", true]]));
     const send = vi.fn();
     const wc = { id: 4244, send, isDestroyed: () => false } as unknown as Electron.WebContents;
+    ipcViewMocks.getProjectRendererTargets.mockImplementation((projectId) =>
+      projectId === "proj-a" ? [{ id: 4244 }] : []
+    );
+    const keyEvents = () =>
+      send.mock.calls
+        .map((c) => c[1] as { name?: string; payload?: unknown })
+        .filter((event) => event.name === "plugin:context-keys-changed");
 
-    await service.pushSnapshotTo(wc);
+    try {
+      await service.pushSnapshotTo(wc);
+      expect(keyEvents()).toEqual([
+        {
+          name: "plugin:context-keys-changed",
+          payload: { pluginId: "acme.global", keys: { needsYou: true } },
+        },
+        {
+          name: "plugin:context-keys-changed",
+          payload: { pluginId: "project__proj-a__acme.mine", keys: {} },
+        },
+      ]);
 
-    const keyEvents = send.mock.calls
-      .map((c) => c[1] as { name?: string; payload?: unknown })
-      .filter((event) => event.name === "plugin:context-keys-changed");
-    expect(keyEvents).toEqual([
-      {
-        name: "plugin:context-keys-changed",
-        payload: { pluginId: "acme.global", keys: { needsYou: true } },
-      },
-      { name: "plugin:context-keys-changed", payload: { pluginId: "acme.emptied", keys: {} } },
-    ]);
+      // A view bound to a remote host takes that host's keys, not this machine's.
+      send.mockClear();
+      ipcViewMocks.isWithheldFromView.mockImplementation(
+        (_id, _channel, args) =>
+          (args[0] as { name?: string } | undefined)?.name === "plugin:context-keys-changed"
+      );
+      await service.pushSnapshotTo(wc);
+      expect(keyEvents()).toEqual([]);
+    } finally {
+      ipcViewMocks.getProjectRendererTargets.mockImplementation(() => []);
+      ipcViewMocks.isWithheldFromView.mockImplementation(() => false);
+    }
+  });
+
+  it("a project instance keeps its context namespace through worker retirement; an installed one lets go (#13506)", () => {
+    const service = new PluginService(tmpDir);
+    const internals = service as unknown as {
+      pluginContextKeys: Map<string, Map<string, boolean | string>>;
+      claimProjectContextNamespace: (pluginId: string) => void;
+      resetPluginContextKeys: (pluginId: string) => void;
+    };
+    internals.claimProjectContextNamespace("acme.global");
+    expect(internals.pluginContextKeys.has("acme.global")).toBe(false);
+
+    internals.claimProjectContextNamespace("project__proj-a__acme.mine");
+    expect(internals.pluginContextKeys.get("project__proj-a__acme.mine")?.size).toBe(0);
+
+    internals.pluginContextKeys.get("project__proj-a__acme.mine")!.set("busy", true);
+    internals.pluginContextKeys.set("acme.global", new Map([["ready", true]]));
+    internals.resetPluginContextKeys("project__proj-a__acme.mine");
+    internals.resetPluginContextKeys("acme.global");
+    expect(internals.pluginContextKeys.get("project__proj-a__acme.mine")?.size).toBe(0);
+    expect(internals.pluginContextKeys.has("acme.global")).toBe(false);
   });
 
   it("pushSnapshotToEndpoint() replays to a remote view scoped to its endpoint's project", async () => {

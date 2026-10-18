@@ -1421,9 +1421,11 @@ describe("PluginDevWorkerHostProxy setContext (#13506)", () => {
     resolveCall(proxy, sent, "setContext", undefined);
     await expect(set).resolves.toBeUndefined();
 
-    void proxy.host.setContext("needsYou", undefined as never);
+    const clear = proxy.host.setContext("needsYou", undefined as never);
     const clears = sent.filter((m) => m.type === "host-call" && m.method === "setContext");
     expect(clears.at(-1)?.params).toEqual({ key: "needsYou", value: null });
+    resolveCall(proxy, sent, "setContext", undefined);
+    await expect(clear).resolves.toBeUndefined();
   });
 
   it("passes main's cap rejection back to the caller", async () => {
@@ -1452,6 +1454,8 @@ describe("PluginDevWorkerHostProxy setContext (#13506)", () => {
     proxy.dispose();
     await expect(promise).resolves.toBeUndefined();
     await expect(proxy.host.setContext("k", true)).resolves.toBeUndefined();
+    // Even an invalid call is a silent no-op once torn down, as in process.
+    await expect(proxy.host.setContext("a.b", 7 as never)).resolves.toBeUndefined();
   });
 });
 

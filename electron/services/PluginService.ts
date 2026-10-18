@@ -283,6 +283,7 @@ import {
   broadcastToProjectRenderers,
   endpointPushTarget,
   getProjectRendererTargets,
+  isWithheldFromView,
   type ProjectPushTarget,
 } from "../ipc/utils.js";
 import type { ClientEndpoint } from "../ipc/endpoint.js";
@@ -2356,6 +2357,7 @@ export class PluginService {
     // authority is resolvable the instant the plugin is addressable.
     const authority = this.mintPluginAuthority(pluginId, plugin.dir);
     this.plugins.set(pluginId, plugin);
+    this.claimProjectContextNamespace(pluginId);
     if (customIconAssets.length > 0) {
       registerPluginCustomIcons(pluginId, customIconAssets);
       this.broadcaster.schedulePluginIconsBroadcast();
@@ -3093,7 +3095,7 @@ export class PluginService {
         // toolbar count (#13503).
         this.clearPluginPanelMenus(pluginId);
         if (this.pluginToolbarBadges.delete(pluginId)) this.emitToolbarBadges(pluginId);
-        if (this.pluginContextKeys.delete(pluginId)) this.emitContextKeys(pluginId);
+        this.resetPluginContextKeys(pluginId);
       },
       // A protocol violation terminates the worker for good (#12276). Provenance
       // is already recorded by `onActivationResult`; this releases the runtime
@@ -5584,6 +5586,34 @@ export class PluginService {
     broadcastToProjectRenderers(owningProjectId, CHANNELS.EVENTS_PUSH, event);
   }
 
+  /**
+   * A project copy of a plugin owns its `when` namespace in its project's views
+   * from the moment it loads, over an installed copy of the same manifest —
+   * not only once it first publishes a key. Installed instances need no claim.
+   */
+  private claimProjectContextNamespace(pluginId: string): void {
+    if (projectIdFromPluginInstanceKey(pluginId) === null) return;
+    if (this.pluginContextKeys.has(pluginId)) return;
+    this.pluginContextKeys.set(pluginId, new Map());
+    this.emitContextKeys(pluginId);
+  }
+
+  /**
+   * Drop a retiring worker's keys so the next generation republishes its own. A
+   * project instance keeps its (now empty) claim; an installed one lets go.
+   */
+  private resetPluginContextKeys(pluginId: string): void {
+    const keys = this.pluginContextKeys.get(pluginId);
+    if (!keys) return;
+    if (projectIdFromPluginInstanceKey(pluginId) !== null) {
+      if (keys.size === 0) return;
+      keys.clear();
+    } else {
+      this.pluginContextKeys.delete(pluginId);
+    }
+    this.emitContextKeys(pluginId);
+  }
+
   /** One plugin's context keys (`key → value`), empty when it has none. */
   private serializePluginContextKeys(pluginId: string): Record<string, PluginContextValue> {
     const keys = this.pluginContextKeys.get(pluginId);
@@ -7729,11 +7759,20 @@ export class PluginService {
     for (const pluginId of this.pluginContextKeys.keys()) {
       const owningProjectId = projectIdFromPluginInstanceKey(pluginId);
       if (owningProjectId !== null && !inView(owningProjectId)) continue;
+      const envelope = {
+        name: "plugin:context-keys-changed",
+        payload: { pluginId, keys: this.serializePluginContextKeys(pluginId) },
+      };
+      // A local view bound to a remote host takes that host's keys, never this
+      // machine's: they would gate its bindings on state it cannot see.
+      if (
+        projectId === undefined &&
+        isWithheldFromView(webContents.id, CHANNELS.EVENTS_PUSH, [envelope])
+      ) {
+        continue;
+      }
       try {
-        webContents.send(CHANNELS.EVENTS_PUSH, {
-          name: "plugin:context-keys-changed",
-          payload: { pluginId, keys: this.serializePluginContextKeys(pluginId) },
-        });
+        webContents.send(CHANNELS.EVENTS_PUSH, envelope);
       } catch {
         // Silently ignore send failures during window initialization/disposal.
       }

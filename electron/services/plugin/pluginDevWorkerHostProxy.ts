@@ -1262,6 +1262,7 @@ export class PluginDevWorkerHostProxy {
       // back to the caller too. Resolves (not rejects) once the worker is torn
       // down, matching the in-process host's silent no-op after unload.
       setContext: (key, value) => {
+        if (this.disposed) return Promise.resolve();
         const entry = validatePluginContextEntry(key, value);
         if (!entry.ok) {
           // Reject (not sync throw): runtime-surface Promise method (#10617).

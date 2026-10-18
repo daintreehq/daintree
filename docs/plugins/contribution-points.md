@@ -749,7 +749,7 @@ Adds entries to right-click menus on specific UI elements.
 | `terminal` | `panelId` — the clicked pane's id; `panelKind` — its panel kind |
 | `file`     | None                                                            |
 
-An identifier that names no key evaluates false, so `"worktree.hasBranch"` hides the item everywhere while `"!worktree.hasBranch"` shows it everywhere; an expression that fails to parse hides the item. Because `file` supplies no keys, a `when` on a `file` item can only be a constant.
+An identifier that names no key evaluates false, so `"worktree.hasBranch"` hides the item everywhere while `"!worktree.hasBranch"` shows it everywhere; an expression that fails to parse hides the item. Every location also sees the keys plugins publish with [`host.setContext`](./host-api.md#setcontext), under each plugin's manifest name; a location's own key wins a clash. Because `file` supplies no keys of its own, a `when` on a `file` item can only test those plugin keys or a constant.
 
 **Dispatch arguments.** A `worktree` or `terminal` item is dispatched with no arguments, so its handler cannot tell which worktree or pane was clicked; use it for actions that act on the user's current context. A `file` item is dispatched with the clicked file, as described next.
 
