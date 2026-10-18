@@ -4930,6 +4930,9 @@ export interface PluginHostApi extends PluginActivationApi {
    * `terminal.sendCommand` action is closed to plugin dispatch — this is the
    * sanctioned injection path.
    *
+   * The Daintree Assistant is never the target, whatever the plugin's consent:
+   * a project whose only agent is the assistant is treated as having none.
+   *
    * `options.submit` controls whether the text is executed. It defaults to
    * `false` — the **stage-only** default-safe mode: the text is pasted into the
    * agent's input for the user to review and submit, with no Enter appended.

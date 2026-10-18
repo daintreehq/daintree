@@ -107,6 +107,7 @@ import {
   admitPluginTerminalScreenRead,
   readPluginTerminalScreen,
 } from "./pluginTerminalScreenRead.js";
+import { isAssistantTerminalRecord } from "../assistantTerminal.js";
 import { assertPayloadWithinLimit, snapshotPayload } from "./pluginPayloadLimits.js";
 import { resolveInvokeTimeoutMs, runWithInvokeDeadline } from "./pluginInvokeDeadline.js";
 import { flushPluginPushes, routePluginPush, withPushFlushBarrier } from "./pluginPushBatcher.js";
@@ -3079,6 +3080,13 @@ async function ensureCapabilityConsent(
  * no agent or in an ended state (`exited` / `completed`, or no live PTY) are
  * excluded.
  *
+ * So is the Daintree Assistant (#13494), whatever the plugin's consent: it runs
+ * a real agent CLI, so it passes every other test, and a waiting assistant
+ * outscores a busy grid agent. It holds the project's full MCP surface, which
+ * consent to "send text to the active agent" never covered. Filtered before
+ * ranking, so a project whose only agent is the assistant takes the same
+ * no-agent path as one with none.
+ *
  * `boundProjectId` is the host's binding. Bound: only that project's terminals
  * are eligible, and `null` comes back when it has none, so the caller can
  * no-op instead of injecting into a project the user never consented to.
@@ -3101,7 +3109,8 @@ async function resolveActiveAgentTerminalId(boundProjectId: string | null): Prom
     Boolean(t.detectedAgentId ?? t.launchAgentId) &&
     t.hasPty !== false &&
     t.agentState !== "exited" &&
-    t.agentState !== "completed";
+    t.agentState !== "completed" &&
+    !isAssistantTerminalRecord(t);
   // Scope to the bound project, or to the focused one; never cross into another
   // project's terminals.
   const scopeProjectId = boundProjectId ?? ptyClient.getActiveProjectId();
