@@ -131,6 +131,11 @@ export const CAPABILITY_META = {
       "Know whether you're in a terminal, browser, diff or other panel, never what it shows",
     severity: "neutral",
   },
+  "notification:os": {
+    label: "Send system notifications",
+    description: "Show notifications outside Daintree, once you turn it on",
+    severity: "neutral",
+  },
 } satisfies Record<BuiltInPluginCapability, CapabilityMeta>;
 
 export const SEVERITY_TEXT_CLASS: Record<CapabilitySeverity, string> = {

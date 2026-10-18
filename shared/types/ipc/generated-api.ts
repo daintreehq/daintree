@@ -962,12 +962,18 @@ export interface GeneratedElectronAPI {
     acknowledgeConsent(
       ...args: IpcInvokeMap["plugin-capability:acknowledge-consent"]["args"]
     ): Promise<IpcInvokeMap["plugin-capability:acknowledge-consent"]["result"]>;
+    getOsNotifications(
+      ...args: IpcInvokeMap["plugin-capability:get-os-notifications"]["args"]
+    ): Promise<IpcInvokeMap["plugin-capability:get-os-notifications"]["result"]>;
     getProjectTargeting(
       ...args: IpcInvokeMap["plugin-capability:get-project-targeting"]["args"]
     ): Promise<IpcInvokeMap["plugin-capability:get-project-targeting"]["result"]>;
     resolveConsent(
       ...args: IpcInvokeMap["plugin-capability:resolve-consent"]["args"]
     ): Promise<IpcInvokeMap["plugin-capability:resolve-consent"]["result"]>;
+    setOsNotifications(
+      ...args: IpcInvokeMap["plugin-capability:set-os-notifications"]["args"]
+    ): Promise<IpcInvokeMap["plugin-capability:set-os-notifications"]["result"]>;
     setProjectTargeting(
       ...args: IpcInvokeMap["plugin-capability:set-project-targeting"]["args"]
     ): Promise<IpcInvokeMap["plugin-capability:set-project-targeting"]["result"]>;

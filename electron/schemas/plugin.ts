@@ -15,6 +15,7 @@ import {
   PANEL_MENU_MAX_ITEMS,
   PANEL_TOOLBAR_MAX_ITEMS,
   PLUGIN_CATEGORY_IDS,
+  PLUGIN_NOTIFY_MAX_ACTIONS,
   PLUGIN_PANEL_BADGE_LABEL_MAX,
 } from "../../shared/types/plugin.js";
 import { isBuiltInAgentId } from "../../shared/config/agentIds.js";
@@ -1639,6 +1640,52 @@ export const PluginToastOptionsSchema = z
     message: z.string().trim().min(1).max(2000),
     type: z.enum(["info", "success", "warning", "error"]).default("info"),
     durationMs: z.number().int().positive().max(60_000).optional(),
+  })
+  .strict();
+
+/** Serialized size cap for one `host.notify` action's `args`. */
+const PLUGIN_NOTIFY_ARGS_MAX_BYTES = 4096;
+
+const PluginNotifyActionSchema = z
+  .object({
+    id: z.string().trim().min(1).max(64),
+    label: z.string().trim().min(1).max(40),
+    actionId: z.string().min(1).max(200),
+    args: z
+      .record(z.string(), z.unknown())
+      .optional()
+      .refine(
+        (args) => {
+          if (args === undefined) return true;
+          try {
+            const json = JSON.stringify(args);
+            return json !== undefined && json.length <= PLUGIN_NOTIFY_ARGS_MAX_BYTES;
+          } catch {
+            return false;
+          }
+        },
+        { message: `must be JSON-serializable and at most ${PLUGIN_NOTIFY_ARGS_MAX_BYTES} bytes` }
+      ),
+  })
+  .strict();
+
+/**
+ * Validates `host.notify` options (#13505). Strict like the toast schema. The
+ * action ids' namespace is checked by the host, which knows the caller.
+ */
+export const PluginNotifyOptionsSchema = z
+  .object({
+    title: z.string().trim().min(1).max(200),
+    body: z.string().trim().min(1).max(2000),
+    actions: z
+      .array(PluginNotifyActionSchema)
+      .max(PLUGIN_NOTIFY_MAX_ACTIONS)
+      .optional()
+      .refine((actions) => !actions || new Set(actions.map((a) => a.id)).size === actions.length, {
+        message: "action ids must be unique",
+      }),
+    os: z.boolean().optional(),
+    dedupeKey: z.string().trim().min(1).max(200).optional(),
   })
   .strict();
 

@@ -4,6 +4,9 @@ import { safeFireAndForget } from "@/utils/safeFireAndForget";
 import { ClientAppError } from "@/utils/clientAppError";
 import type { MainProcessToastPayload } from "@shared/types/ipc/maps";
 import { useDistributionStore } from "@/store/distributionStore";
+import { actionService } from "@/services/ActionService";
+import type { NotificationAction } from "@/store/notificationStore";
+import type { ActionId } from "@shared/types/actions";
 
 const TRUSTED_EXTERNAL_HOST = "daintree.org";
 
@@ -74,6 +77,35 @@ function presentHostSwitchFailure(
   );
 }
 
+/**
+ * Buttons for a plugin's `host.notify` (#13505). Main held each action to the
+ * plugin's own namespace before sending it. A click is the user's, so the
+ * action runs with the user's source, as the same plugin's toolbar button
+ * would; `successLabel` stays unset because a resolved dispatch says nothing
+ * about what the plugin's handler then did.
+ */
+function toPluginNotificationActions(
+  pluginActions: NonNullable<MainProcessToastPayload["pluginActions"]>
+): NotificationAction[] {
+  return pluginActions.map((action, index) => ({
+    label: action.label,
+    variant: index === 0 ? "primary" : "secondary",
+    actionId: action.actionId as ActionId,
+    ...(action.args !== undefined ? { actionArgs: action.args } : {}),
+    onClick: async () => {
+      const result = await actionService.dispatch(action.actionId as ActionId, action.args, {
+        source: "user",
+      });
+      if (!result.ok) {
+        console.warn(
+          `[MainProcessToast] plugin notification action "${action.actionId}" failed:`,
+          result.error
+        );
+      }
+    },
+  }));
+}
+
 export function useMainProcessToastListener(): void {
   useEffect(() => {
     if (!window.electron?.notification?.onShowToast) return;
@@ -138,6 +170,11 @@ export function useMainProcessToastListener(): void {
           }
         : undefined;
 
+      const pluginActions =
+        payload.pluginActions && payload.pluginActions.length > 0
+          ? toPluginNotificationActions(payload.pluginActions)
+          : undefined;
+
       notify({
         type: payload.type,
         title: payload.title,
@@ -146,6 +183,8 @@ export function useMainProcessToastListener(): void {
         rateLimitKey: payload.rateLimitKey,
         priority: payload.priority,
         action,
+        ...(pluginActions ? { actions: pluginActions, urgent: false } : {}),
+        ...(payload.replaceKey !== undefined ? { replaceKey: payload.replaceKey } : {}),
       });
     });
 

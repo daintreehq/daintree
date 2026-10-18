@@ -10,6 +10,7 @@
  */
 
 import {
+  PLUGIN_NOTIFY_MAX_ACTIONS,
   pluginManifestIdFromInstanceKey,
   projectIdFromPluginInstanceKey,
 } from "../types/plugin.js";
@@ -72,6 +73,8 @@ import type {
   PluginSettingsScope,
   PluginStorageScope,
   PluginToastOptions,
+  PluginNotifyOptions,
+  PluginNotifyResult,
   PluginTypedIpcHandler,
   PluginHandlerOptions,
   PluginWorktreeSnapshot,
@@ -128,6 +131,12 @@ export interface ShownToastRecord {
   message: string;
   type: NotificationType | undefined;
   durationMs: number | undefined;
+}
+
+/** Captured `host.notify(options)` calls that passed validation (#13505). */
+export interface NotificationRecord {
+  id: string;
+  options: PluginNotifyOptions;
 }
 
 /** Captured `host.process.spawn(command, options)` calls. */
@@ -258,6 +267,8 @@ export interface MockHostState {
   readonly broadcastCalls: ReadonlyArray<BroadcastRecord>;
   readonly postToPanelCalls: ReadonlyArray<PostToPanelRecord>;
   readonly shownToasts: ReadonlyArray<ShownToastRecord>;
+  /** Every `host.notify` call that got past validation, in order. */
+  readonly notifications: ReadonlyArray<NotificationRecord>;
   readonly dispatchedActions: ReadonlyArray<DispatchedActionRecord>;
   readonly sentToActiveAgentCalls: ReadonlyArray<SentToActiveAgentRecord>;
   /** Every `host.sendToAgent` call that got past validation, in order. */
@@ -631,6 +642,78 @@ function validateToastOptions(opts: PluginToastOptions): void {
   }
 }
 
+const NOTIFY_OPTION_KEYS = new Set(["title", "body", "actions", "os", "dedupeKey"]);
+const NOTIFY_ACTION_KEYS = new Set(["id", "label", "actionId", "args"]);
+
+/**
+ * Validate `host.notify` options against the constraints production's
+ * `PluginNotifyOptionsSchema` and namespace check apply (#13505), so a plugin
+ * tested against the mock fails on a shape the real host would reject.
+ */
+function validateNotifyOptions(
+  opts: PluginNotifyOptions,
+  manifestId: string,
+  capabilities: ReadonlySet<string>
+): void {
+  const issues: string[] = [];
+  if (!opts || typeof opts !== "object") {
+    throw new Error("notify: invalid options — (root): must be an object");
+  }
+  for (const key of Object.keys(opts)) {
+    if (!NOTIFY_OPTION_KEYS.has(key)) issues.push(`${key}: unrecognized option`);
+  }
+  const text = (name: string, value: unknown, max: number) => {
+    if (typeof value !== "string" || value.trim().length < 1) {
+      issues.push(`${name}: must be a non-empty string`);
+    } else if (value.trim().length > max) {
+      issues.push(`${name}: must be at most ${max} characters`);
+    }
+  };
+  text("title", opts.title, 200);
+  text("body", opts.body, 2000);
+  if (opts.actions !== undefined) {
+    if (!Array.isArray(opts.actions)) {
+      issues.push("actions: must be an array");
+    } else {
+      if (opts.actions.length > PLUGIN_NOTIFY_MAX_ACTIONS) {
+        issues.push(`actions: at most ${PLUGIN_NOTIFY_MAX_ACTIONS} entries`);
+      }
+      const ids = new Set<string>();
+      opts.actions.forEach((action, i) => {
+        for (const key of Object.keys(action ?? {})) {
+          if (!NOTIFY_ACTION_KEYS.has(key)) issues.push(`actions.${i}.${key}: unrecognized option`);
+        }
+        text(`actions.${i}.id`, action?.id, 64);
+        text(`actions.${i}.label`, action?.label, 40);
+        if (typeof action?.id === "string") {
+          if (ids.has(action.id)) issues.push("actions: action ids must be unique");
+          ids.add(action.id);
+        }
+        const actionId: unknown = action?.actionId;
+        if (
+          typeof actionId !== "string" ||
+          !actionId.startsWith(`${manifestId}.`) ||
+          actionId.length === manifestId.length + 1
+        ) {
+          issues.push(
+            `actions.${i}.actionId: must be one of this plugin's own actions, written "${manifestId}.<id>"`
+          );
+        }
+      });
+    }
+  }
+  if (opts.os !== undefined && typeof opts.os !== "boolean") issues.push("os: must be a boolean");
+  if (opts.dedupeKey !== undefined) text("dedupeKey", opts.dedupeKey, 200);
+  if (issues.length > 0) {
+    throw new Error(`notify: invalid options — ${issues.join("; ")}`);
+  }
+  if (opts.os && !capabilities.has("notification:os")) {
+    throw new Error(
+      'PERMISSION_REQUIRED: notify with os: true requires "notification:os", which is not declared in manifest.capabilities'
+    );
+  }
+}
+
 /**
  * Validate a `setPanelBadge` badge against the same constraints as production's
  * `PluginPanelBadgeSchema` (discriminated on `kind`; label `text` rejected past
@@ -858,6 +941,7 @@ export function createMockHost(options: CreateMockHostOptions = {}): PluginHostA
   const broadcastCalls: BroadcastRecord[] = [];
   const postToPanelCalls: PostToPanelRecord[] = [];
   const shownToasts: ShownToastRecord[] = [];
+  const notifications: NotificationRecord[] = [];
   const dispatchedActions: DispatchedActionRecord[] = [];
   const sentToActiveAgentCalls: SentToActiveAgentRecord[] = [];
   const sentToAgentCalls: SentToAgentRecord[] = [];
@@ -2039,6 +2123,12 @@ export function createMockHost(options: CreateMockHostOptions = {}): PluginHostA
         durationMs: opts.durationMs,
       });
     },
+    async notify(opts: PluginNotifyOptions): Promise<PluginNotifyResult> {
+      validateNotifyOptions(opts, mockManifestId, capabilities);
+      const id = `mock-notification-${notifications.length + 1}`;
+      notifications.push({ id, options: opts });
+      return { id };
+    },
     async dispatch(actionId, args, dispatchOptions) {
       dispatchedActions.push(
         dispatchOptions === undefined
@@ -2627,6 +2717,7 @@ export function createMockHost(options: CreateMockHostOptions = {}): PluginHostA
     broadcastCalls,
     postToPanelCalls,
     shownToasts,
+    notifications,
     dispatchedActions,
     sentToActiveAgentCalls,
     sentToAgentCalls,

@@ -116,21 +116,50 @@ function PluginCapabilityList({
         ))}
       </ul>
       {plugin.origin === "global" && granted.includes("project:dispatch") && (
-        <ProjectTargetingSwitch pluginId={plugin.instanceId} />
+        <GrantSwitch pluginId={plugin.instanceId} grant="project-targeting" />
+      )}
+      {granted.includes("notification:os") && (
+        <GrantSwitch pluginId={plugin.instanceId} grant="os-notifications" />
       )}
     </div>
   );
 }
 
+const GRANT_SWITCHES = {
+  "project-targeting": {
+    label: "Allow project targeting",
+    description:
+      "Lets this plugin run actions in any open project, not just the one in front. Each targeted action is recorded in the plugin audit log.",
+    read: (pluginId: string) => window.electron.pluginCapability.getProjectTargeting({ pluginId }),
+    write: (pluginId: string, enabled: boolean) =>
+      window.electron.pluginCapability.setProjectTargeting({ pluginId, enabled }),
+  },
+  "os-notifications": {
+    label: "Allow OS notifications",
+    description:
+      "Lets this plugin's notifications also appear outside Daintree when you're away. Quiet hours and mute still apply.",
+    read: (pluginId: string) => window.electron.pluginCapability.getOsNotifications({ pluginId }),
+    write: (pluginId: string, enabled: boolean) =>
+      window.electron.pluginCapability.setOsNotifications({ pluginId, enabled }),
+  },
+} as const;
+
 /**
- * The "Allow project targeting" switch (#13119). Declaring `project:dispatch`
- * only lets a plugin ask; this is the grant, off until the user turns it on.
- * Deliberately not a first-use prompt: the plugins that want it orchestrate
- * agents unattended, and a dialog at 3am would stall every launch behind it.
- * Only for app-wide plugins — a project plugin can only ever reach its own
- * project, so there is nothing to grant.
+ * A per-plugin grant the user turns on from the Plugin Manager: "Allow project
+ * targeting" (#13119) and "Allow OS notifications" (#13505). Declaring the
+ * capability only lets a plugin ask; this is the grant, off until the user
+ * turns it on. Deliberately not a first-use prompt: the plugins that want them
+ * orchestrate agents unattended, and a dialog at 3am would stall every launch
+ * behind it.
  */
-function ProjectTargetingSwitch({ pluginId }: { pluginId: string }) {
+function GrantSwitch({
+  pluginId,
+  grant,
+}: {
+  pluginId: string;
+  grant: keyof typeof GRANT_SWITCHES;
+}) {
+  const { label, description, read, write } = GRANT_SWITCHES[grant];
   const [enabled, setEnabled] = useState<boolean | null>(null);
   const [busy, setBusy] = useState(true);
   const [readFailed, setReadFailed] = useState(false);
@@ -141,7 +170,6 @@ function ProjectTargetingSwitch({ pluginId }: { pluginId: string }) {
   // Only the latest request may settle the row, so a slow read can't overwrite
   // the result of a save that started after it.
   const requestSeq = useRef(0);
-
   const [readNonce, setReadNonce] = useState(0);
 
   useEffect(() => {
@@ -149,8 +177,7 @@ function ProjectTargetingSwitch({ pluginId }: { pluginId: string }) {
     const seq = ++requestSeq.current;
     const current = () => !cancelled && seq === requestSeq.current;
     setBusy(true);
-    window.electron.pluginCapability
-      .getProjectTargeting({ pluginId })
+    read(pluginId)
       .then((value) => {
         if (!current()) return;
         setEnabled(value);
@@ -165,13 +192,12 @@ function ProjectTargetingSwitch({ pluginId }: { pluginId: string }) {
     return () => {
       cancelled = true;
     };
-  }, [pluginId, readNonce]);
+  }, [pluginId, read, readNonce]);
 
   const save = (next: boolean) => {
     const seq = ++requestSeq.current;
     setBusy(true);
-    window.electron.pluginCapability
-      .setProjectTargeting({ pluginId, enabled: next })
+    write(pluginId, next)
       .then((persisted) => {
         if (seq !== requestSeq.current) return;
         setEnabled(persisted);
@@ -186,7 +212,7 @@ function ProjectTargetingSwitch({ pluginId }: { pluginId: string }) {
       });
   };
 
-  const switchId = `plugin-project-targeting-${pluginId}`;
+  const switchId = `plugin-${grant}-${pluginId}`;
   const descriptionId = `${switchId}-description`;
   const errorId = `${switchId}-error`;
   const errorText =
@@ -202,11 +228,10 @@ function ProjectTargetingSwitch({ pluginId }: { pluginId: string }) {
     <div className="flex items-start justify-between gap-3 pt-2 border-t border-border-default">
       <div className="min-w-0">
         <label htmlFor={switchId} className="block text-xs text-text-primary">
-          Allow project targeting
+          {label}
         </label>
         <div id={descriptionId} className="text-2xs text-text-secondary">
-          Lets this plugin run actions in any open project, not just the one in front. Each targeted
-          action is recorded in the plugin audit log.
+          {description}
         </div>
         {errorText && (
           <div id={errorId} className="flex items-center gap-2 mt-0.5">
@@ -230,7 +255,7 @@ function ProjectTargetingSwitch({ pluginId }: { pluginId: string }) {
         disabled={enabled === null || busy}
         aria-describedby={errorText ? `${descriptionId} ${errorId}` : descriptionId}
         aria-invalid={unsaved !== null}
-        data-testid="plugin-project-targeting-switch"
+        data-testid={`plugin-${grant}-switch`}
       />
     </div>
   );

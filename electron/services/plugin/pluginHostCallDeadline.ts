@@ -40,6 +40,7 @@ const HOST_CALL_DEADLINES = {
       ? INTERACTIVE
       : NONE,
   showToast: DEFAULT,
+  notify: DEFAULT,
   dispatch: DEFAULT,
   reloadPanel: DEFAULT,
   restartWorker: DEFAULT,

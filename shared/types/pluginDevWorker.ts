@@ -58,6 +58,7 @@ export type PluginHostCallMethod =
   | "terminals.readScreen"
   | "sendToAgent"
   | "showToast"
+  | "notify"
   | "dispatch"
   | "reloadPanel"
   | "restartWorker"
@@ -534,6 +535,14 @@ export interface ShowToastParams {
   message: string;
   type?: string;
   durationMs?: number;
+}
+
+/**
+ * Params for `notify` (`host-call`, #13505): the options object as the plugin
+ * wrote it, relayed whole so the host's strict schema sees any unknown key.
+ */
+export interface NotifyParams {
+  options: unknown;
 }
 
 /** Params for `reloadPanel` (`host-call`, #12610). */

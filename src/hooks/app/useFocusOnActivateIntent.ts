@@ -1,6 +1,8 @@
 import { useEffect, useState } from "react";
 import { actionService } from "@/services/ActionService";
 import type { ProjectFocusOnActivateIntent } from "@shared/types/ipc/project";
+import type { ActionId } from "@shared/types/actions";
+import { logWarn } from "@/utils/logger";
 
 /**
  * Cross-project focus intent receiver.
@@ -26,7 +28,13 @@ export function useFocusOnActivateIntent(isStateLoaded: boolean): void {
 
   useEffect(() => {
     return window.electron.project.onFocusOnActivate((payload) => {
-      if (payload?.intent !== "focus-next-waiting" && payload?.intent !== "focus-panel") return;
+      if (
+        payload?.intent !== "focus-next-waiting" &&
+        payload?.intent !== "focus-panel" &&
+        payload?.intent !== "run-plugin-action"
+      ) {
+        return;
+      }
       setPending(payload);
     });
   }, []);
@@ -34,6 +42,21 @@ export function useFocusOnActivateIntent(isStateLoaded: boolean): void {
   useEffect(() => {
     if (!isStateLoaded || pending === null) return;
     setPending(null);
+    if (pending.intent === "run-plugin-action") {
+      // A plugin's banner may only ever run that plugin's own action.
+      if (!pending.actionId.startsWith(`${pending.pluginId}.`)) return;
+      void actionService
+        .dispatch(pending.actionId as ActionId, pending.args, { source: "user" })
+        .then((result) => {
+          if (!result.ok) {
+            logWarn("Plugin notification action failed", {
+              actionId: pending.actionId,
+              error: result.error,
+            });
+          }
+        });
+      return;
+    }
     if (pending.intent === "focus-panel") {
       void actionService.dispatch("panel.focus", { panelId: pending.panelId });
       return;

@@ -155,6 +155,43 @@ describe("notify()", () => {
       expect(useNotificationHistoryStore.getState().entries[0]!.correlationId).toBe("panel-abc");
     });
 
+    it("replaceKey dismisses the live toast and retires the inbox row it replaces (#13505)", () => {
+      vi.spyOn(document, "hasFocus").mockReturnValue(true);
+      const firstId = notify({
+        type: "info",
+        message: "Run r1 waiting",
+        replaceKey: "plugin:acme:r1",
+        rateLimitKey: "a",
+      });
+      notify({ type: "info", message: "Other", replaceKey: "plugin:acme:r2", rateLimitKey: "b" });
+      const secondId = notify({
+        type: "info",
+        message: "Run r1 still waiting",
+        replaceKey: "plugin:acme:r1",
+        rateLimitKey: "c",
+      });
+
+      const live = useNotificationStore.getState().notifications.filter((n) => !n.dismissed);
+      expect(live.map((n) => n.message)).toEqual(["Other", "Run r1 still waiting"]);
+      expect(live.some((n) => n.id === firstId)).toBe(false);
+      expect(secondId).not.toBe("");
+
+      const rows = useNotificationHistoryStore.getState().entries;
+      const active = rows.filter((e) => !e.archivedAt).map((e) => e.message);
+      expect(active).toContain("Run r1 still waiting");
+      expect(active).toContain("Other");
+      expect(active).not.toContain("Run r1 waiting");
+    });
+
+    it("replaceKey retires the old toast even when the replacement is held back", () => {
+      vi.spyOn(document, "hasFocus").mockReturnValue(true);
+      notify({ type: "info", message: "first", replaceKey: "k" });
+      _setQuietUntil(Date.now() + 60_000);
+      notify({ type: "info", message: "second", replaceKey: "k" });
+
+      expect(useNotificationStore.getState().notifications.filter((n) => !n.dismissed)).toEqual([]);
+    });
+
     it("forwards supersedeKey to the history entry", () => {
       vi.spyOn(document, "hasFocus").mockReturnValue(true);
       notify({

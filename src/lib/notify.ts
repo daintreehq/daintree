@@ -284,6 +284,13 @@ interface NotifyPayloadBase {
    * or already archived.
    */
   supersedes?: string;
+  /**
+   * Replace an earlier notification with the same key: its live toast is
+   * dismissed and, unless `supersedeKey` says otherwise, its inbox row is
+   * retired. Unlike `coalesce` there is no window and no count — the new one
+   * stands alone. Retirement happens whether or not the new one toasts.
+   */
+  replaceKey?: string;
   /** When set, rapidly fired notifications with the same key coalesce into a single updating toast */
   coalesce?: CoalesceOptions;
   /**
@@ -908,6 +915,18 @@ export function notify(payload: NotifyPayload): string {
   payload = resolveEventPolicyDefaults(payload);
   if (payload.urgent === undefined && carriesUndo(payload)) {
     payload = { ...payload, urgent: true };
+  }
+
+  if (payload.replaceKey !== undefined) {
+    const store = useNotificationStore.getState();
+    for (const live of store.notifications) {
+      if (live.replaceKey === payload.replaceKey && !live.dismissed) {
+        store.dismissNotification(live.id);
+      }
+    }
+    if (payload.supersedeKey === undefined) {
+      payload = { ...payload, supersedeKey: payload.replaceKey };
+    }
   }
 
   const priority = payload.priority ?? "high";

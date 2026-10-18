@@ -85,8 +85,10 @@ vi.mock("../../../window/windowRef.js", () => ({
 
 import {
   handleAcknowledgeConsent,
+  handleGetOsNotifications,
   handleGetProjectTargeting,
   handleResolveConsent,
+  handleSetOsNotifications,
   handleSetProjectTargeting,
   registerPluginCapabilityHandlers,
   _resetCapabilityConsentBridgeForTest,
@@ -635,6 +637,46 @@ describe("pluginCapability project targeting switch (#13119)", () => {
       handleSetProjectTargeting({ pluginId: "acme.orchestrator", enabled: "yes" as never })
     ).rejects.toThrow(/enabled/);
     expect(await handleGetProjectTargeting({ pluginId: "acme.orchestrator" })).toBe(false);
+  });
+});
+
+describe("pluginCapability OS notifications switch (#13505)", () => {
+  it("is its own grant, separate from project targeting", async () => {
+    expect(await handleGetOsNotifications({ pluginId: "acme.orchestrator" })).toBe(false);
+
+    expect(await handleSetOsNotifications({ pluginId: "acme.orchestrator", enabled: true })).toBe(
+      true
+    );
+    expect(
+      getPluginCapabilityConsentStore().hasGrant({
+        pluginId: "acme.orchestrator",
+        capability: "notification:os",
+        scopeKey: "global",
+      })
+    ).toBe(true);
+    expect(await handleGetProjectTargeting({ pluginId: "acme.orchestrator" })).toBe(false);
+    expect(await handleGetOsNotifications({ pluginId: "acme.other" })).toBe(false);
+
+    expect(await handleSetOsNotifications({ pluginId: "acme.orchestrator", enabled: false })).toBe(
+      false
+    );
+  });
+
+  it("is purged with the plugin's other grants on uninstall", async () => {
+    await handleSetOsNotifications({ pluginId: "acme.orchestrator", enabled: true });
+    getPluginCapabilityConsentService().revokeAllForPlugin("acme.orchestrator");
+    expect(await handleGetOsNotifications({ pluginId: "acme.orchestrator" })).toBe(false);
+  });
+
+  it("rejects a failed save and malformed input", async () => {
+    await expect(handleGetOsNotifications({ pluginId: "" })).rejects.toThrow(/pluginId/);
+    await expect(
+      handleSetOsNotifications({ pluginId: "acme.orchestrator", enabled: 1 as never })
+    ).rejects.toThrow(/enabled/);
+    vi.spyOn(getPluginCapabilityConsentStore(), "setGrant").mockReturnValue(false);
+    await expect(
+      handleSetOsNotifications({ pluginId: "acme.orchestrator", enabled: true })
+    ).rejects.toThrow(/could not be saved/);
   });
 });
 

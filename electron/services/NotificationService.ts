@@ -62,6 +62,17 @@ export interface WatchNotificationOptions {
 export interface NativeNotificationOptions extends WatchNotificationOptions {
   /** Attach to make the notification clickable. Without it, a click does nothing. */
   navigation?: NotificationNavigation;
+  /**
+   * Handles a click in main instead of routing `navigation` to a renderer.
+   * Local banners only: a remote Shell's view never receives it.
+   */
+  onClick?: () => void;
+  /**
+   * A banner still showing with the same key is closed before this one goes
+   * up, so a re-sent notification replaces its predecessor instead of
+   * stacking. Electron's main-process `Notification` has no tag.
+   */
+  replaceKey?: string;
 }
 
 const DEBOUNCE_MS = 300;
@@ -109,6 +120,7 @@ class NotificationService {
   private activeNotifications = new Set<Notification>();
   /** Panels still outstanding for each banner that asked to close with them. */
   private pendingPanelsByNotification = new Map<Notification, Set<string>>();
+  private notificationsByReplaceKey = new Map<string, Notification>();
 
   private remoteSink: RemoteNotificationSink | null = null;
 
@@ -388,6 +400,26 @@ class NotificationService {
   private forgetNotification(notification: Notification): void {
     this.activeNotifications.delete(notification);
     this.pendingPanelsByNotification.delete(notification);
+    for (const [key, held] of this.notificationsByReplaceKey) {
+      if (held === notification) this.notificationsByReplaceKey.delete(key);
+    }
+  }
+
+  /**
+   * Take down the banner showing under `replaceKey`. Its listeners go first:
+   * `close()` can emit synchronously, and a late click must not run on behalf
+   * of the banner that replaced it.
+   */
+  closeNotificationByKey(replaceKey: string): void {
+    const previous = this.notificationsByReplaceKey.get(replaceKey);
+    if (!previous) return;
+    this.forgetNotification(previous);
+    previous.removeAllListeners();
+    try {
+      previous.close();
+    } catch (err) {
+      console.warn("[NotificationService] failed to close native notification:", err);
+    }
   }
 
   showNativeNotification(
@@ -418,6 +450,8 @@ class NotificationService {
       navigation,
       closeWithPanels,
       category = "info",
+      onClick,
+      replaceKey,
     } = options;
     if (isRemoteNotificationOwner(ownerWebContentsId)) {
       try {
@@ -429,6 +463,7 @@ class NotificationService {
     }
 
     if (!Notification.isSupported()) return;
+    if (replaceKey !== undefined) this.closeNotificationByKey(replaceKey);
 
     // On Linux Electron sends no app icon, only a `desktop-entry` hint that the
     // spec leaves daemons free to ignore, and an AppImage has no installed
@@ -436,6 +471,7 @@ class NotificationService {
     const icon = getLinuxWindowIcon();
     const notification = new Notification({ title, body, silent, ...(icon ? { icon } : {}) });
     this.activeNotifications.add(notification);
+    if (replaceKey !== undefined) this.notificationsByReplaceKey.set(replaceKey, notification);
     if (closeWithPanels && closeWithPanels.length > 0) {
       this.pendingPanelsByNotification.set(notification, new Set(closeWithPanels));
     }
@@ -463,7 +499,16 @@ class NotificationService {
       cleanup();
     });
 
-    if (navigation) {
+    if (onClick) {
+      notification.once("click", () => {
+        cleanup();
+        try {
+          onClick();
+        } catch (err) {
+          console.warn("[NotificationService] notification click handler failed:", err);
+        }
+      });
+    } else if (navigation) {
       notification.once("click", () => {
         cleanup();
         this.routeNavigation(navigation.channel, navigation.context, ownerWebContentsId);
@@ -547,6 +592,7 @@ class NotificationService {
     }
     this.activeNotifications.clear();
     this.pendingPanelsByNotification.clear();
+    this.notificationsByReplaceKey.clear();
 
     this.registry = null;
     this.projectLookup = null;

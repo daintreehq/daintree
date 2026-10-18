@@ -1497,6 +1497,10 @@ export interface GeneratedIpcInvokeMap {
     args: [input: import("../pluginCapabilityConsent.js").PluginCapabilityAcknowledgeConsentInput];
     result: void;
   };
+  "plugin-capability:get-os-notifications": {
+    args: [input: import("../pluginCapabilityConsent.js").PluginOsNotificationsQuery];
+    result: boolean;
+  };
   "plugin-capability:get-project-targeting": {
     args: [input: import("../pluginCapabilityConsent.js").PluginProjectTargetingQuery];
     result: boolean;
@@ -1504,6 +1508,10 @@ export interface GeneratedIpcInvokeMap {
   "plugin-capability:resolve-consent": {
     args: [input: import("../pluginCapabilityConsent.js").PluginCapabilityResolveConsentInput];
     result: void;
+  };
+  "plugin-capability:set-os-notifications": {
+    args: [input: import("../pluginCapabilityConsent.js").PluginOsNotificationsUpdate];
+    result: boolean;
   };
   "plugin-capability:set-project-targeting": {
     args: [input: import("../pluginCapabilityConsent.js").PluginProjectTargetingUpdate];

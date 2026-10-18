@@ -251,6 +251,17 @@ export interface MainProcessToastPayload {
     data?: string;
   };
   /**
+   * Buttons from a plugin's `host.notify` (#13505). Main has already held each
+   * `actionId` to that plugin's own namespace; a click dispatches it with its
+   * `args`.
+   */
+  pluginActions?: Array<{ label: string; actionId: string; args?: Record<string, unknown> }>;
+  /**
+   * Replaces the live toast and the inbox row of an earlier notification with
+   * the same key (#13505).
+   */
+  replaceKey?: string;
+  /**
    * A switch to another host that failed, for the renderer's one host-switch
    * failure presenter: it picks the recovery from the code (Set up…, Update…,
    * Settings…, Retry), so a launch restore reads like every other entry point.

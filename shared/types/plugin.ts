@@ -275,6 +275,12 @@ export const BUILT_IN_PLUGIN_CAPABILITIES = [
   // #13221): the kind, an agent flag and the worktree id, never a panel's id,
   // title, URL or content. Disclosure-only and not confirm-triggering.
   "panel:focus-read",
+  // Page the operating system from `host.notify({ os: true })` (#13505).
+  // Declaring it enables nothing: banners stay off until the user turns on
+  // "Allow OS notifications" for this plugin in the Plugin Manager. Not
+  // confirm-triggering — it changes where a notification is shown, not what a
+  // plugin can do.
+  "notification:os",
 ] as const;
 
 export type BuiltInPluginCapability = (typeof BUILT_IN_PLUGIN_CAPABILITIES)[number];
@@ -3261,6 +3267,51 @@ export interface PluginToastOptions {
   durationMs?: number;
 }
 
+/** Most buttons one {@link PluginHostApi.notify} call may carry. */
+export const PLUGIN_NOTIFY_MAX_ACTIONS = 2;
+
+/** A button on a {@link PluginHostApi.notify} notification. */
+export interface PluginNotifyAction {
+  /** Unique within the notification. */
+  id: string;
+  /** Button text on the toast and inbox row. */
+  label: string;
+  /**
+   * One of the caller's own actions, written `"{manifest name}.{id}"` as in
+   * `contributes.menu`. The host runs it in the plugin's instance namespace.
+   */
+  actionId: ActionId;
+  /** Passed to the action, validated against its `argsSchema` at dispatch. */
+  args?: Record<string, unknown>;
+}
+
+/** Options for {@link PluginHostApi.notify}. */
+export interface PluginNotifyOptions {
+  title: string;
+  body: string;
+  /** At most {@link PLUGIN_NOTIFY_MAX_ACTIONS}. */
+  actions?: PluginNotifyAction[];
+  /**
+   * Also page the operating system. A request, never a bypass: the host drops
+   * the banner when the user hasn't turned it on, during quiet hours or a
+   * session mute, while the user is looking at the plugin's project, and when
+   * the plugin pages faster than the host allows. Needs the `notification:os`
+   * capability.
+   */
+  os?: boolean;
+  /**
+   * A later notification with the same key replaces this one — its toast, its
+   * inbox row and its OS banner — instead of stacking beside it.
+   */
+  dedupeKey?: string;
+}
+
+/** What {@link PluginHostApi.notify} resolves with. */
+export interface PluginNotifyResult {
+  /** A fresh id per call; it doesn't say which surfaces showed it. */
+  id: string;
+}
+
 /**
  * One selectable row in a {@link PluginHostApi.showQuickPick} list. `id` is the
  * stable identity used for selection tracking and search keys; `label` is the
@@ -5130,6 +5181,23 @@ export interface PluginHostApi extends PluginActivationApi {
    * unknown `type`) reject so authoring mistakes surface loudly.
    */
   showToast(options: PluginToastOptions): Promise<void>;
+  /**
+   * Raise a notification with up to {@link PLUGIN_NOTIFY_MAX_ACTIONS} buttons,
+   * each running one of the caller's own actions (#13505). It routes through
+   * the app's notification path like {@link showToast} — inbox, focus, quiet
+   * hours, session mute and the plugin's rate limit — and the title carries
+   * the plugin's display name for provenance.
+   *
+   * `os: true` also asks for an OS banner. Banners carry no buttons: clicking
+   * one brings the plugin's project forward and runs the first action. The
+   * call rejects when `notification:os` isn't declared; with it declared and
+   * the user's switch off, the banner is quietly dropped.
+   *
+   * NOT revoke-guarded, like {@link showToast}: it resolves with an id and
+   * shows nothing once the plugin is unloaded. Invalid options and actions
+   * outside the plugin's namespace reject.
+   */
+  notify(options: PluginNotifyOptions): Promise<PluginNotifyResult>;
   /**
    * Dispatch an action by id through the app's `ActionService` with a `"plugin"`
    * source. Plugins use this to invoke their own registered actions, actions

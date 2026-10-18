@@ -35,6 +35,8 @@ export interface Notification {
   action?: NotificationAction;
   actions?: NotificationAction[];
   correlationId?: string;
+  /** A later `notify()` with the same `replaceKey` dismisses this toast. */
+  replaceKey?: string;
   /** Set to true synchronously on dismiss to avoid flicker */
   dismissed?: boolean;
   /** Bumped on each coalesced update so useEffect deps can detect changes */
