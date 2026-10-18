@@ -284,6 +284,7 @@ describe("viewless actions", () => {
         getTerminalProjectId: vi.fn(() => PROJECT.id),
         getTerminalAsync: vi.fn(async () => ({ kind: "terminal", hasPty: true })),
         getAllTerminalsAsync: vi.fn(async () => []),
+        getTerminalsForProjectAsync: vi.fn(async () => []),
         getSerializedStateAsync: vi.fn(async () => null),
       };
     });

@@ -152,6 +152,17 @@ export async function runWorktreeDelete(
   const parsed = WorktreeDeleteArgsSchema.safeParse(request.args);
   if (!parsed.success) return validationFailure(request.actionId, parsed.error);
   const { worktreeId, force, deleteBranch, closeTerminals } = parsed.data;
+  // A force delete can discard tracked work, which a view guards with a typed
+  // name on top of the ordinary approval. Only the assistant's skip preference
+  // stands in for that, as it does there; with no frontend to type the name
+  // into, anything else is refused before the worktree is touched.
+  if (force === true && request.authorization !== "skip-preference") {
+    return failure(
+      "CONFIRMATION_REQUIRED",
+      `${request.actionId} with force can discard uncommitted work, which needs a typed confirmation, but no Daintree frontend is attached to this project to take it. The worktree was not deleted.`,
+      { confirmationChannel: "unavailable" }
+    );
+  }
   // A view closes the worktree's panels from its own store, and restores them
   // if the delete fails. With no view there is no store to restore them into.
   if (closeTerminals === true) {

@@ -1885,6 +1885,16 @@ describe("project.runCommand short-circuit (#13495)", () => {
     expect((result.structuredContent as { exitCode: number }).exitCode).toBe(128);
   });
 
+  it("answers Daintree's own assistant by the same origin rule tools/list applies", async () => {
+    const handleProjectRunCommand = vi.fn().mockResolvedValue(ranResult);
+    const result = await call(
+      fakeDeps({ sessionStore: storeWithOrigin("full", "assistant-pane"), handleProjectRunCommand })
+    );
+
+    expect(result.isError).not.toBe(true);
+    expect(handleProjectRunCommand).toHaveBeenCalled();
+  });
+
   it("refuses a full-tier session that is not the assistant, such as a worker pane", async () => {
     const handleProjectRunCommand = vi.fn().mockResolvedValue(ranResult);
     const result = await call(
@@ -11779,6 +11789,30 @@ describe("assistant skip preference (#12874)", () => {
   function lastAudit(appendAuditRecord: ReturnType<typeof vi.fn>) {
     return appendAuditRecord.mock.calls.at(-1)?.[0] as Record<string, unknown>;
   }
+
+  it("covers a host-run confirm-gated action when no frontend can describe it (#13495)", async () => {
+    // The base surface a frontend-less host falls back to describes only the
+    // external tier, which leaves `worktree.delete` out; its danger comes from
+    // the host's own catalog instead.
+    const help = skipServer({
+      origin: "help",
+      skipped: true,
+      extraDeps: {
+        getCachedManifest: vi.fn(() => null),
+        requestManifest: vi.fn().mockRejectedValue(new NoFrontendAttachedError("ws-1")),
+      },
+    });
+    await help.server.connect(makeMockTransport());
+
+    await callTool(help.server, { name: "worktree.delete", arguments: { worktreeId: "wt-1" } });
+
+    expect(help.dispatchAction).toHaveBeenCalledWith(
+      "worktree.delete",
+      expect.objectContaining({ worktreeId: "wt-1" }),
+      true,
+      "skip-preference"
+    );
+  });
 
   it("runs a help session's confirm-gated call pre-confirmed and audits it as the skip preference", async () => {
     const help = skipServer({ origin: "help", skipped: true });

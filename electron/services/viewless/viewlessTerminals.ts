@@ -97,18 +97,25 @@ interface ListedPanel {
  * layout records, joined with its live process, then any live terminal the
  * layout never mentions — hydration adopts those too. The assistant's own
  * terminal is never one of them. Read off every terminal the pty-host holds,
- * trashed ones included, since the per-project inventory leaves those out and
- * a panel in its recovery grace is still the trash's to list.
+ * trashed ones included — the per-project inventory leaves those out, and a
+ * panel in its recovery grace is still the trash's to list — joined with that
+ * inventory for the ones only it can place in the project.
  */
 async function readProjectPanels(project: Project, deps: ViewlessDeps): Promise<ListedPanel[]> {
   const pty = deps.getPtyReader();
-  const [state, all] = await Promise.all([
+  const [state, all, owned] = await Promise.all([
     deps.getProjectState(project.id).catch(() => null),
     pty ? pty.getAllTerminalsAsync().catch(() => []) : Promise.resolve([]),
+    // The per-project inventory infers ownership for a terminal spawned
+    // without a project stamp, which a raw listing cannot; it leaves trash out.
+    pty ? pty.getTerminalsForProjectAsync(project.id).catch(() => []) : Promise.resolve([]),
   ]);
+  const ownedIds = new Set(owned);
   const records = new Map<string, ViewlessTerminalRecord>();
   for (const record of all) {
-    if (record.id && record.projectId === project.id) records.set(record.id, record);
+    if (record.id && (record.projectId === project.id || ownedIds.has(record.id))) {
+      records.set(record.id, record);
+    }
   }
 
   const panels: ListedPanel[] = [];

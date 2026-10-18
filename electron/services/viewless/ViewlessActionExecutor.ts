@@ -30,7 +30,10 @@ import {
   mergeTerminalLaunchEnv,
   spawnSourceForMcpOrigin,
 } from "../../../shared/utils/terminalLaunchOptions.js";
-import type { McpSessionOrigin } from "../../../shared/types/ipc/mcpServer.js";
+import type {
+  McpDispatchAuthorization,
+  McpSessionOrigin,
+} from "../../../shared/types/ipc/mcpServer.js";
 import { recordViewlessTerminal, type ProjectStateWriter } from "./projectStateAuthoring.js";
 import { VIEWLESS_ACTIONS } from "./viewlessActionCatalog.js";
 import {
@@ -92,6 +95,8 @@ export interface ViewlessPtyReader {
   ): Promise<ViewlessTerminalRecord | null>;
   /** Every terminal the pty-host holds, trashed ones included. */
   getAllTerminalsAsync(): Promise<ViewlessTerminalRecord[]>;
+  /** A project's live terminals, ownership inferred where unstamped; no trash. */
+  getTerminalsForProjectAsync(projectId: string): Promise<string[]>;
   getSerializedStateAsync(
     id: string,
     options?: { tailRows: number }
@@ -174,6 +179,12 @@ export interface ViewlessActionRequest {
   context?: ActionContext;
   /** How the dispatching MCP session authenticated; decides the spawn's provenance. */
   sessionOrigin?: McpSessionOrigin;
+  /**
+   * Where `confirmed` came from. Only the assistant's skip preference stands
+   * in for a typed-name confirmation, as it does in a view; any other approval
+   * covers the ordinary dialog and nothing more.
+   */
+  authorization?: McpDispatchAuthorization;
   /**
    * Checked before an action that writes runs. Absent, the call is the host's
    * own and passes, as it always has: the drive lease was already consulted on

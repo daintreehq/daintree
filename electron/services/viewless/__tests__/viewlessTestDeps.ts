@@ -55,8 +55,15 @@ export function makePty(
       async (id: string, _submissionToken?: string, _options?: { strict?: boolean }) =>
         Object.hasOwn(records, id) ? (records[id] ?? null) : null
     ),
-    getAllTerminalsAsync: vi.fn(async () =>
+    getAllTerminalsAsync: vi.fn<() => Promise<ViewlessTerminalRecord[]>>(async () =>
       Object.entries(records).map(([id, record]) => ({ projectId: PROJECT.id, ...record, id }))
+    ),
+    getTerminalsForProjectAsync: vi.fn(async (projectId: string) =>
+      projectId === PROJECT.id
+        ? Object.entries(records)
+            .filter(([, record]) => record.isTrashed !== true)
+            .map(([id]) => id)
+        : []
     ),
     getSerializedStateAsync: vi.fn(async (id: string, _options?: { tailRows: number }) =>
       Object.hasOwn(screens, id) ? { data: screens[id] ?? "" } : null

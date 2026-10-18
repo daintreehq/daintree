@@ -46,3 +46,8 @@ export const VIEWLESS_ACTIONS: Readonly<Record<string, ViewlessActionEntry>> = {
   "project.getAll": read(),
   "project.detectRunners": read(),
 };
+
+/** The declared danger of an action the host can run itself, or undefined. */
+export function viewlessActionDanger(actionId: string): ActionDanger | undefined {
+  return Object.hasOwn(VIEWLESS_ACTIONS, actionId) ? VIEWLESS_ACTIONS[actionId]?.danger : undefined;
+}

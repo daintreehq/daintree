@@ -141,6 +141,7 @@ import { buildImageToolCallResult, isImageResultTool } from "./imageToolResult.j
 import { safeSerializeToolResultCompact } from "../../utils/safeSerializeToolResult.js";
 import { buildSurfaceManifest, MCP_SURFACE_TOOL_ID } from "./surfaceManifest.js";
 import { viewlessStatusArgsAreAnswerable } from "./terminalStatus.js";
+import { viewlessActionDanger } from "../viewless/viewlessActionCatalog.js";
 import { parseLastMessageReadArgs, type LastMessageReadArgs } from "./lastMessageArgs.js";
 import {
   extractOwnedResourcesFromDispatch,
@@ -207,10 +208,11 @@ const PROJECT_RUN_COMMAND_TOOL = "project.runCommand";
  * `project.runCommand` runs whatever command it is given, so it answers to its
  * caller, not its tier alone (#13495): Daintree's own assistant at the full
  * tier, never a worker pane, an api-key client or a core session, and no grant
- * widens that. Discovery and admission ask the same question.
+ * widens that. The origin is the renderer-owned one `tools/list` reads, so
+ * discovery and admission ask the same question.
  */
-function mayRunProjectCommand(tier: string | null, origin: string | undefined): boolean {
-  return tier === "full" && origin === "help";
+function mayRunProjectCommand(tier: string | null, rendererOwnedOrigin: boolean): boolean {
+  return tier === "full" && rendererOwnedOrigin;
 }
 
 const PROJECT_RUN_COMMAND_REFUSAL =
@@ -1762,7 +1764,7 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
             for (const id of HOST_MESSAGING_TOOL_IDS) permittedActionIds.delete(id);
           }
           // A grant never makes the command runner callable, so it never makes it findable.
-          if (!mayRunProjectCommand(tier, sessionStore.getOrigin(sessionId))) {
+          if (!mayRunProjectCommand(tier, rendererOwnedOrigin)) {
             permittedActionIds.delete(PROJECT_RUN_COMMAND_TOOL);
           }
           return {
@@ -2378,10 +2380,7 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
     // Refused here, past the tier gate but before a grant's use is spent or a
     // pane asks: a grant or a pane approval admits a call, and this one admits
     // only its own caller.
-    if (
-      actionId === PROJECT_RUN_COMMAND_TOOL &&
-      !mayRunProjectCommand(tier, sessionStore.getOrigin(sessionId))
-    ) {
+    if (actionId === PROJECT_RUN_COMMAND_TOOL && !mayRunProjectCommand(tier, rendererOwnedOrigin)) {
       try {
         appendAuditRecord({
           toolId: actionId,
@@ -3677,7 +3676,7 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
         if (actionId === PROJECT_RUN_COMMAND_TOOL) {
           emitToolCallStarted(false);
           try {
-            if (!mayRunProjectCommand(tier, sessionStore.getOrigin(sessionId))) {
+            if (!mayRunProjectCommand(tier, rendererOwnedOrigin)) {
               const message = PROJECT_RUN_COMMAND_REFUSAL;
               outcome = {
                 kind: "result",
@@ -3854,9 +3853,13 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
         // under the skip there is no typed-name gate either. The grant's use is
         // still spent. The assistant's protected close (#12881) settles the
         // preference above, where it would otherwise ask.
+        // With no frontend attached the host's base surface describes only the
+        // external tier, so an action the host runs itself is read from its own
+        // catalog, which restates each one's renderer danger (#13495).
+        const declaredDanger = entry?.danger ?? viewlessActionDanger(actionId);
         const confirmGated =
-          entry !== undefined &&
-          resolveEffectiveActionDanger(actionId, entry.danger, "agent", args) === "confirm";
+          declaredDanger !== undefined &&
+          resolveEffectiveActionDanger(actionId, declaredDanger, "agent", args) === "confirm";
         if (
           (dispatchAuthorization === undefined || dispatchAuthorization === "native-grant") &&
           confirmationsSkipped &&

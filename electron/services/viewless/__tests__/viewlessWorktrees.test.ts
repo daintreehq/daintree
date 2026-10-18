@@ -116,6 +116,41 @@ describe("worktree.delete with no frontend", () => {
     ]);
   });
 
+  it("refuses a force delete that only an ordinary approval covers", async () => {
+    const { deps, invoke } = makeDeps({ getWorkspaceHosts: () => makeHosts() });
+
+    const result = await executeViewlessAction(
+      {
+        ...request("worktree.delete", { worktreeId: FEATURE.id, force: true }, { confirmed: true }),
+        authorization: "native-grant" as const,
+      },
+      deps
+    );
+
+    expect(result).toMatchObject({
+      ok: false,
+      error: { code: "CONFIRMATION_REQUIRED", details: { confirmationChannel: "unavailable" } },
+    });
+    expect(invoke).not.toHaveBeenCalled();
+  });
+
+  it("runs a force delete the assistant's skip preference covers, as a view does", async () => {
+    const { deps, invoke } = makeDeps({ getWorkspaceHosts: () => makeHosts() });
+
+    const result = await executeViewlessAction(
+      {
+        ...request("worktree.delete", { worktreeId: FEATURE.id, force: true }, { confirmed: true }),
+        authorization: "skip-preference" as const,
+      },
+      deps
+    );
+
+    expect(result).toEqual({ ok: true, result: undefined });
+    expect(invoke).toHaveBeenCalledWith(PROJECT.id, CHANNELS.WORKTREE_DELETE, [
+      { worktreeId: FEATURE.id, force: true, deleteBranch: undefined },
+    ]);
+  });
+
   it("will not delete a worktree the host cannot place in this project", async () => {
     const hosts = makeHosts();
     hosts.isWorktreeOwnedByProject.mockResolvedValue(false);

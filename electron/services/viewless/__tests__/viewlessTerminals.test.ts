@@ -76,6 +76,19 @@ describe("terminal.list with no frontend", () => {
     expect((result as { result: ListResult }).result.panelLimit.count).toBe(0);
   });
 
+  it("lists a terminal only the project inventory can place, one spawned unstamped", async () => {
+    const pty = makePty({ "t-legacy": { kind: "terminal" } });
+    pty.getAllTerminalsAsync.mockResolvedValue([{ id: "t-legacy", kind: "terminal" }]);
+    const { deps } = makeDeps({ getPtyReader: () => pty });
+
+    const result = await executeViewlessAction(request("terminal.list", {}), deps);
+
+    expect((result as { result: ListResult }).result.terminals.map((t) => t.id)).toEqual([
+      "t-legacy",
+    ]);
+    expect((result as { result: ListResult }).result.panelLimit.count).toBe(1);
+  });
+
   it("lists only this project's terminals", async () => {
     const pty = makePty({ "t-1": { kind: "terminal" } });
     pty.getAllTerminalsAsync.mockResolvedValue([
