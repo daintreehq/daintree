@@ -40,6 +40,7 @@ const MANIFEST = [
   entry("agent.launch", "command"),
   // A query that writes: classified by what it advertises, not by its kind.
   entry("copyTree.generate", "query", false),
+  entry("terminal.notifyWhenIdle", "command"),
 ];
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -73,7 +74,7 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-async function startedLifecycle() {
+async function startedLifecycle(overrides: Partial<HttpLifecycleDeps> = {}) {
   vi.spyOn(http, "createServer").mockImplementation((() =>
     listeningServer()) as unknown as typeof http.createServer);
   const store = new SessionStore(() => {});
@@ -123,6 +124,7 @@ async function startedLifecycle() {
       clear: vi.fn(),
       getSnapshot: vi.fn(() => null),
     },
+    ...overrides,
   } as unknown as HttpLifecycleDeps;
   const lc = new HttpLifecycle(deps);
   lc.isEnabled = () => true;
@@ -195,6 +197,45 @@ describe("HttpLifecycle.openRelaySession (#13493)", () => {
     expect(relayOf("terminal.list")).toEqual({ linkSessionId: "link-1", readOnly: true });
     expect(relayOf("agent.launch")).toEqual({ linkSessionId: "link-1", readOnly: false });
     expect(relayOf("copyTree.generate")).toEqual({ linkSessionId: "link-1", readOnly: false });
+    session.close();
+  });
+
+  it("gives its notices the relay principal's pane, routed back over its link (#13500)", async () => {
+    const whenIdle = vi.fn().mockResolvedValue({ armed: true, terminalId: "t-1" });
+    const { lc } = await startedLifecycle({
+      terminalNotify: {
+        whenIdle,
+        prepareSend: vi.fn(),
+        prepareLaunch: vi.fn(),
+        prepareKeys: vi.fn(),
+        forgetTarget: vi.fn(),
+        supersede: vi.fn(),
+        releaseHold: vi.fn(),
+      },
+    } as Partial<HttpLifecycleDeps>);
+    const deliverNotices = vi.fn();
+    const session = (await lc.openRelaySession({
+      tier: "core",
+      workspaceId: "project-1",
+      caller: { ...CALLER, deliverNotices },
+    }))!;
+
+    const result = await session.callTool(
+      "terminal.notifyWhenIdle",
+      { terminalId: "t-1" },
+      { timeoutMs: 5_000, callId: "call-7" }
+    );
+    expect(result.isError).not.toBe(true);
+    const [pane] = whenIdle.mock.calls[0]!;
+    expect(pane.relay).toMatchObject({
+      projectId: "project-1",
+      linkSessionId: "link-1",
+      helpSessionId: "help-1",
+      callId: "call-7",
+    });
+    expect(pane.relay.deliver).toBe(deliverNotices);
+    // Held under the principal, not the session, which closes when idle.
+    expect(pane.key).toContain(relayOwnershipPrincipal(CALLER.senderId, CALLER.helpSessionId));
     session.close();
   });
 

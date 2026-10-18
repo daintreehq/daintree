@@ -25,6 +25,7 @@ import {
   MAX_EXCHANGE_PAGE,
   McpCallAnswerSchema,
   MessageIdPayloadSchema,
+  RelayNoticesPayloadSchema,
   SendResultSchema,
   SendToHubPayloadSchema,
   type AssistantSendPayload,
@@ -35,6 +36,7 @@ import {
   type LaneList,
   type McpCallAnswer,
   type McpCallPayload,
+  type RelayNoticesPayload,
 } from "./linkMethods.js";
 
 export interface AssistantExchangeClientDeps {
@@ -54,6 +56,9 @@ export interface AssistantExchangeClientDeps {
   hubReceiver?: () => Pick<AssistantHubReceiver, "receive" | "lookUp"> | undefined;
   /** This Shell's per-host opt-in; a host with it on is authenticated on every new session. */
   messagingEnabled?: (hostId: HostId) => boolean;
+  /** Takes what a host saw of terminals this Shell's assistants asked it about (#13500). */
+  noticeReceiver?: () =>
+    { receiveNotices(hostId: HostId, payload: RelayNoticesPayload): null } | undefined;
   callTimeoutMs?: number;
 }
 
@@ -195,6 +200,15 @@ export class AssistantExchangeClient {
           AssistantLinkMethod.GET_HUB_EXCHANGE,
           MessageIdPayloadSchema,
           ({ messageId }) => this.requireReceiver().lookUp(hostId, messageId)
+        );
+        // Notices for calls this Shell's assistants made there; nobody to take them drops them.
+        session.registerCallHandler(
+          AssistantLinkMethod.RELAY_NOTICES,
+          RelayNoticesPayloadSchema,
+          (payload) =>
+            this.disposed
+              ? null
+              : (this.deps.noticeReceiver?.()?.receiveNotices(hostId, payload) ?? null)
         );
         // A host this Shell may message proves its sender at once, so lanes
         // enrolled over an earlier session follow it here (#13332).

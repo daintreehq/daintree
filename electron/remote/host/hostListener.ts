@@ -182,12 +182,20 @@ async function buildHostListener(
     senders: () => getRemoteService("assistantSenderSessions"),
     acceptsRemoteControl: () => getHelpAssistantSettings().acceptRemoteControl,
     hasProject: async (projectId) => projectStore.getProjectById(projectId) !== null,
-    openSession: async ({ tier, projectId, linkSessionId, senderId, helpSessionId, shellName }) => {
+    openSession: async ({
+      tier,
+      projectId,
+      linkSessionId,
+      senderId,
+      helpSessionId,
+      shellName,
+      deliverNotices,
+    }) => {
       const { mcpServerService } = await import("../../services/McpServerService.js");
       return mcpServerService.openRelaySession({
         tier,
         workspaceId: projectId,
-        caller: { linkSessionId, senderId, helpSessionId, shellName },
+        caller: { linkSessionId, senderId, helpSessionId, shellName, deliverNotices },
       });
     },
     retirePrincipal: (senderId, helpSessionId) => {
@@ -197,6 +205,13 @@ async function buildHostListener(
         )
         .catch((error: unknown) => {
           console.warn("[RemoteHosts] Couldn't retire a relay principal:", error);
+        });
+    },
+    dropLinkNotices: (linkSessionId) => {
+      void import("../../services/McpServerService.js")
+        .then(({ mcpServerService }) => mcpServerService.dropRelayLinkNotices(linkSessionId))
+        .catch((error: unknown) => {
+          console.warn("[RemoteHosts] Couldn't drop an ended link's notices:", error);
         });
     },
   });

@@ -3,7 +3,11 @@ import { AppError } from "../../../utils/errorTypes.js";
 import type { AssistantExchangeJournal } from "../../exchange/AssistantExchangeJournal.js";
 import type { LinkSession } from "../../link/session.js";
 import { AssistantExchangeClient } from "../AssistantExchangeClient.js";
-import { AssistantLinkMethod, type McpCallPayload } from "../linkMethods.js";
+import {
+  AssistantLinkMethod,
+  type McpCallPayload,
+  type RelayNoticesPayload,
+} from "../linkMethods.js";
 
 const CREDENTIAL = "C".repeat(43);
 const PAYLOAD: McpCallPayload = {
@@ -100,5 +104,67 @@ describe("AssistantExchangeClient.relayCall (#13493)", () => {
     await expect(garbled.relay.relayCall("studio", PAYLOAD, 105_000)).rejects.toMatchObject({
       code: "INTERNAL",
     });
+  });
+});
+
+describe("AssistantExchangeClient relay notices (#13500)", () => {
+  function opened(receiver?: {
+    receiveNotices(hostId: string, payload: RelayNoticesPayload): null;
+  }) {
+    const handlers = new Map<string, (payload: unknown) => unknown>();
+    const session = {
+      isOpen: true,
+      call: vi.fn(async () => null),
+      registerCallHandler: (
+        method: string,
+        schema: { parse(v: unknown): unknown },
+        handler: (p: unknown) => unknown
+      ) => {
+        handlers.set(method, (payload) => handler(schema.parse(payload)));
+      },
+    } as unknown as LinkSession;
+    let open: (hostId: string, session: LinkSession) => void = () => {};
+    const relay = new AssistantExchangeClient({
+      journal: {
+        existingCredential: () => null,
+        hosts: () => [],
+        hasOpen: () => false,
+      } as unknown as AssistantExchangeJournal,
+      session: async () => session,
+      onSessionOpened: (listener) => {
+        open = listener;
+        return () => {};
+      },
+      ...(receiver ? { noticeReceiver: () => receiver } : {}),
+    });
+    relay.start();
+    open("studio", session);
+    return { relay, handlers };
+  }
+
+  const PAYLOAD_NOTICES = {
+    notices: [
+      {
+        noticeId: "n-1",
+        helpSessionId: "help-1",
+        callId: "call-1",
+        terminalId: "t-1",
+        observation: { kind: "closed" },
+      },
+    ],
+  };
+
+  it("hands a host's notices on with the host the connection names", () => {
+    const receiveNotices = vi.fn((_hostId: string, _payload: RelayNoticesPayload): null => null);
+    const { relay, handlers } = opened({ receiveNotices });
+    expect(handlers.get(AssistantLinkMethod.RELAY_NOTICES)!(PAYLOAD_NOTICES)).toBeNull();
+    expect(receiveNotices).toHaveBeenCalledWith("studio", PAYLOAD_NOTICES);
+    relay.dispose();
+  });
+
+  it("drops them quietly with nobody to take them", () => {
+    const { relay, handlers } = opened();
+    expect(handlers.get(AssistantLinkMethod.RELAY_NOTICES)!(PAYLOAD_NOTICES)).toBeNull();
+    relay.dispose();
   });
 });

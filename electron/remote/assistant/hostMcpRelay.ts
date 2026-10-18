@@ -12,7 +12,9 @@ import {
   type McpCallPayload,
 } from "./linkMethods.js";
 import { RelayCallLedger } from "./relayCallLedger.js";
+import { RelayNoticeOutbox } from "./relayNoticeOutbox.js";
 import type { SenderSessions } from "./senderSessions.js";
+import type { RelayedNotice } from "../../services/mcp-server/terminalNotify.js";
 
 /** Who a relayed session acts for, as this host established it. */
 export interface RelayMcpSessionSpec {
@@ -26,6 +28,8 @@ export interface RelayMcpSessionSpec {
   tier: "core" | "full";
   /** The Shell's machine name from its handshake: display only, never identity. */
   shellName: string;
+  /** Carries the notices the session's calls arm back to the Shell (#13500). */
+  deliverNotices(notices: readonly RelayedNotice[]): void;
 }
 
 /** One MCP session this host admitted for a relay principal and project. */
@@ -52,6 +56,8 @@ export interface HostMcpRelayDeps {
    * enough or crowded out; the terminals and worktrees themselves stay.
    */
   retirePrincipal?(senderId: string, helpSessionId: string): void;
+  /** A Shell's link session ended for good: the notices armed over it go (#13500). */
+  dropLinkNotices?(linkSessionId: string): void;
   now?: () => number;
   /** How long an unused session stays open. */
   idleMs?: number;
@@ -170,6 +176,9 @@ export function installHostMcpRelay(
   const now = deps.now ?? Date.now;
   const idleMs = deps.idleMs ?? RELAY_SESSION_IDLE_MS;
   const ledger = new RelayCallLedger<McpCallAnswer>({ now });
+  // What relayed calls ask to hear about goes back over the link each came in on.
+  const notices = new RelayNoticeOutbox({ server, now });
+  const deliverNotices = (fired: readonly RelayedNotice[]): void => notices.enqueue(fired);
   const sessions = new Map<string, CachedSession>();
   // Links that can't resume, for a call that was still being admitted when its link went.
   const expiredLinks = new Set<string>();
@@ -349,6 +358,7 @@ export function installHostMcpRelay(
           projectId: payload.projectId,
           tier: payload.tier,
           shellName: client?.clientName || "Remote Shell",
+          deliverNotices,
         };
         const digest = canonicalArgsHash(payload.tool, {
           helpSessionId: payload.helpSessionId,
@@ -394,6 +404,12 @@ export function installHostMcpRelay(
     if (expiredLinks.size > MAX_EXPIRED_LINKS) {
       expiredLinks.delete(expiredLinks.values().next().value!);
     }
+    notices.endLink(sessionId);
+    try {
+      deps.dropLinkNotices?.(sessionId);
+    } catch (error) {
+      console.warn("[HostMcpRelay] Couldn't drop an ended link's notices:", error);
+    }
     for (const [key, cached] of [...sessions]) {
       if (cached.linkSessionId !== sessionId) continue;
       sessions.delete(key);
@@ -409,6 +425,7 @@ export function installHostMcpRelay(
       offSession();
       offExpired();
       for (const [key, cached] of [...sessions]) closeCached(key, cached);
+      notices.dispose();
       // Nothing here will retire them later: the holds go with the relay.
       for (const [senderId, held] of [...principals]) {
         for (const helpSessionId of [...held.keys()]) retire(senderId, helpSessionId);

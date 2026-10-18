@@ -136,6 +136,11 @@ export function registerRecipeActions(actions: ActionRegistry, _callbacks: Actio
       kind: "query",
       danger: "safe",
       scope: "renderer",
+      // Listing reloads from disk, and main reconciles on the way: recipes are
+      // promoted into .daintree/recipes, and a name conflict is raised in the
+      // view it runs in. It is the write it is, so a call another machine's
+      // assistant relays runs only in its own Shell's driving view (#13500).
+      mcpAnnotations: { readOnlyHint: false },
       argsSchema: z
         .object({
           worktreeId: z
