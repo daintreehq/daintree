@@ -3,7 +3,15 @@ import { afterEach, beforeEach, describe, expect, expectTypeOf, it, vi } from "v
 const broadcastToRenderer = vi.hoisted(() => vi.fn());
 const running = vi.hoisted(
   () =>
-    new Map<string, { sessionId: string; terminalId: string; projectViewWebContentsId?: number }>()
+    new Map<
+      string,
+      {
+        sessionId: string;
+        terminalId: string;
+        projectViewWebContentsId?: number;
+        startedBy?: { senderId: string; linkSessionId: string; askingHelpSessionId: string };
+      }
+    >()
 );
 /**
  * The lane each help session was provisioned for, by session id, kept apart
@@ -557,6 +565,37 @@ describe("installAssistantMessagingPolicy applying the saved default (#13441)", 
     nudge();
     await settle();
     expect(policy().getEnrollment({ projectId: "proj", slot: 0 })).not.toBeNull();
+  });
+
+  it("enrolls a run the host started with no view for the Shell that asked, and no other (#13511)", async () => {
+    install();
+    start("proj:0", "s1", 0);
+    running.get("proj:0")!.startedBy = {
+      senderId: "sender-a",
+      linkSessionId: "link-a",
+      askingHelpSessionId: "hub-help-1",
+    };
+    policy().bindSender("link-b", "sender-b");
+    await settle();
+    expect(
+      policy().enrollStarted(
+        { projectId: "proj", slot: 0 },
+        { kind: "remote", linkSessionId: "link-b" },
+        "s1"
+      )
+    ).toEqual({ ok: false, reason: "wrong-session" });
+    expect(policy().getEnrollment({ projectId: "proj", slot: 0 })).toBeNull();
+    policy().bindSender("link-a", "sender-a");
+    expect(
+      policy().enrollStarted(
+        { projectId: "proj", slot: 0 },
+        { kind: "remote", linkSessionId: "link-a" },
+        "s1"
+      )
+    ).toMatchObject({
+      ok: true,
+      enrollment: { enrolledBy: { kind: "remote", linkSessionId: "link-a" } },
+    });
   });
 
   it("enrolls a run in a remote Shell's open view for that Shell once it proved its sender", async () => {

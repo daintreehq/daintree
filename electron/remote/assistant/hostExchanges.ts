@@ -32,12 +32,15 @@ import {
   MAX_LISTED_LANES,
   MessageIdPayloadSchema,
   SendPayloadSchema,
+  StartPayloadSchema,
   type CodexQuotaReading,
   type EnrolledLane,
   type EnrollStartedResult,
   type ExchangeResponse,
   type LaneList,
   type RunningAssistant,
+  type StartPayload,
+  type StartResult,
 } from "./linkMethods.js";
 
 declare module "../runtime.js" {
@@ -72,6 +75,15 @@ export interface AssistantExchangeHostDeps {
   onSessionRebound?: (rebind: SessionRebind) => void;
   /** Where each session's proven sender is kept, for the host's other calls to read; private when absent. */
   senders?: SenderSessions;
+  /**
+   * Starts this host's own assistant for a Shell with no view here (#13511),
+   * recording who asked: the sender the session proved and the session.
+   * Absent, `assistant.start` answers UNSUPPORTED.
+   */
+  startAssistant?: (
+    payload: StartPayload,
+    startedBy: { senderId: string; linkSessionId: string }
+  ) => Promise<StartResult>;
 }
 
 /**
@@ -319,6 +331,19 @@ export function installAssistantExchangeHostWith(
       }
     );
 
+    session.registerCallHandler(
+      AssistantLinkMethod.START,
+      StartPayloadSchema,
+      async (payload): Promise<StartResult> => {
+        // Who asked is the sender this session proved, never the payload's word.
+        const { senderId } = requireSender(session);
+        requirePolicy();
+        const start = deps.startAssistant;
+        if (!start) throw unsupported();
+        return start(payload, { senderId, linkSessionId: sessionId });
+      }
+    );
+
     session.registerCallHandler(AssistantLinkMethod.SEND, SendPayloadSchema, (payload) => {
       const sender = requireSender(session);
       // Filed under the lane's stable address whatever generation the Shell
@@ -532,6 +557,11 @@ export async function installAssistantExchangeHost(
       });
     },
     responses: (key) => getRemoteService("assistantMessagingRuntime")?.getResponses(key) ?? [],
+    startAssistant: async (payload, startedBy) => {
+      const { liveHostAssistantLaunchDeps, startHostAssistant } =
+        await import("./hostAssistantLaunch.js");
+      return startHostAssistant(payload, startedBy, await liveHostAssistantLaunchDeps());
+    },
     onSessionRebound: (rebind) => {
       getRemoteService("assistantHostOutbox")?.rebindSession(rebind);
       // The Shell proved itself on a new session, so its old one, held for a

@@ -9,7 +9,7 @@ function endpoint(endpointId: string, projectId: string | null, handle: number) 
     endpointId,
     projectId,
     handle,
-    kind: "remote-view",
+    kind: handle < 0 ? "remote-view" : "local-view",
     isClosed: () => closed,
     close: () => {
       closed = true;
@@ -40,7 +40,10 @@ function harness(options: {
 }) {
   const detached = new Map<string, number[]>([["proj", [0, 1]]]);
   const deps = {
-    remoteEndpoints: () => options.views,
+    detachedProjects: () => [...detached].filter(([, slots]) => slots.length > 0).map(([id]) => id),
+    // As the registry answers it: open views of the project only.
+    endpointsFor: (projectId: string) =>
+      options.views.filter((view) => view.projectId === projectId && !view.isClosed()),
     drivingEndpointId: (projectId: string) => options.drivers[projectId] ?? null,
     detachedSlots: (projectId: string) => detached.get(projectId) ?? [],
     adopt: vi.fn(async (_projectId: string, slot: number, _endpoint: ClientEndpoint) =>
@@ -64,6 +67,17 @@ describe("adoptForReturningViews (#13389)", () => {
       ]
     );
     expect(deps.adopted).toHaveBeenCalledTimes(2);
+  });
+
+  it("hands them to one of this machine's own windows that drives the project (#13511)", async () => {
+    const remote = endpoint("e-remote", "proj", -2);
+    const local = endpoint("e-local", "proj", 42);
+    const { deps } = harness({ views: [remote, local], drivers: { proj: "e-local" } });
+    await adoptForReturningViews(deps);
+    expect(deps.adopt.mock.calls.map(([, slot, view]) => [slot, view])).toEqual([
+      [0, local],
+      [1, local],
+    ]);
   });
 
   it("never hands one to a watching view, a closed one or a view of another project", async () => {

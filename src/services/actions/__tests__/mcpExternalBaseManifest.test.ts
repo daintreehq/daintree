@@ -25,12 +25,26 @@ vi.mock("@/lib/notify", () => ({ notify: vi.fn() }));
 import type { ActionId } from "@shared/types/actions";
 import { MCP_EXTERNAL_TIER_TOOLS } from "@shared/config/mcpExternalTierAllowlist";
 import { ActionService } from "@/services/ActionService";
+import { VIEWLESS_ACTIONS } from "../../../../electron/services/viewless/viewlessActionCatalog";
 import { createActionRegistry } from "./helpers/wireSurface";
 
 const ARTIFACT_PATH = path.resolve(
   __dirname,
   "../../../../electron/services/mcp-server/generated/mcpExternalBaseManifest.ts"
 );
+const VIEWLESS_ARTIFACT_PATH = path.resolve(
+  __dirname,
+  "../../../../electron/services/mcp-server/generated/mcpViewlessBaseManifest.ts"
+);
+
+/**
+ * The actions a host runs itself with no view (#13498) that the external tier
+ * doesn't already describe: what a help session with no view lists besides
+ * the external surface (#13511).
+ */
+const VIEWLESS_EXTRA_TOOLS = Object.keys(VIEWLESS_ACTIONS)
+  .filter((id) => !(MCP_EXTERNAL_TIER_TOOLS as readonly string[]).includes(id))
+  .sort();
 
 /**
  * Fields `ActionService` computes from the *reporting view's* live state, which
@@ -61,7 +75,7 @@ const VIEW_DEPENDENT_FIELDS = [
  */
 type BaseManifestEntry = Record<string, unknown>;
 
-async function buildExpectedEntries(): Promise<BaseManifestEntry[]> {
+async function buildExpectedEntries(ids: readonly string[]): Promise<BaseManifestEntry[]> {
   const registry = await createActionRegistry();
   const service = new ActionService();
   for (const factory of registry.values()) {
@@ -77,13 +91,13 @@ async function buildExpectedEntries(): Promise<BaseManifestEntry[]> {
   // view-independent artifact. Refused rather than documented, because the
   // failure is silent: the tool would simply be missing from every viewless
   // session's surface.
-  const contextual = [...MCP_EXTERNAL_TIER_TOOLS].filter((id) => {
+  const contextual = [...ids].filter((id) => {
     const definition = registry.get(id as ActionId)?.();
     return definition?.isVisible !== undefined || definition?.isEnabled !== undefined;
   });
   if (contextual.length > 0) {
     throw new Error(
-      `External-tier actions must not gate on context to appear in the host base ` +
+      `Actions must not gate on context to appear in a host base ` +
         `manifest, but these declare isVisible/isEnabled: ${contextual.join(", ")}`
     );
   }
@@ -92,15 +106,15 @@ async function buildExpectedEntries(): Promise<BaseManifestEntry[]> {
   const listed = service.list({}, { includeSchemas: true });
   const byId = new Map(listed.map((entry) => [entry.id, entry]));
 
-  const missing = MCP_EXTERNAL_TIER_TOOLS.filter((id) => !byId.has(id as ActionId));
+  const missing = ids.filter((id) => !byId.has(id as ActionId));
   if (missing.length > 0) {
     // An allowlisted id absent from the registry is a broken tier, not an entry
     // to skip — silently dropping it would shrink the served surface and let
     // this test pass by describing less than production exposes.
-    throw new Error(`MCP_EXTERNAL_TIER_TOOLS names unregistered action(s): ${missing.join(", ")}`);
+    throw new Error(`A host base manifest names unregistered action(s): ${missing.join(", ")}`);
   }
 
-  return [...MCP_EXTERNAL_TIER_TOOLS].sort().map((id) => {
+  return [...ids].sort().map((id) => {
     const source = byId.get(id as ActionId);
     if (!source) throw new Error(`Unreachable: ${id} was present a moment ago`);
     const entry: BaseManifestEntry = { ...source };
@@ -120,11 +134,15 @@ async function buildExpectedEntries(): Promise<BaseManifestEntry[]> {
   });
 }
 
-async function renderArtifact(entries: BaseManifestEntry[]): Promise<string> {
+async function renderArtifact(
+  entries: BaseManifestEntry[],
+  artifactPath: string,
+  constName: string,
+  purpose: string
+): Promise<string> {
   const source = `// GENERATED FILE — do not edit by hand.
 //
-// The tool surface served to a workspace-bound external MCP session whose
-// workspace has no single live view — none open, or more than one (#12082).
+${purpose}
 // Regenerate with:
 //
 //   UPDATE_MCP_BASE_MANIFEST=1 npx vitest run src/services/actions/__tests__/mcpExternalBaseManifest.test.ts
@@ -135,31 +153,52 @@ async function renderArtifact(entries: BaseManifestEntry[]): Promise<string> {
 
 import type { ActionManifestEntry } from "../../../../shared/types/actions.js";
 
-export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = ${JSON.stringify(
-    entries,
-    null,
-    2
-  )};
+export const ${constName}: readonly ActionManifestEntry[] = ${JSON.stringify(entries, null, 2)};
 `;
   const prettier = await import("prettier");
-  const config = await prettier.resolveConfig(ARTIFACT_PATH);
-  return prettier.format(source, { ...config, filepath: ARTIFACT_PATH });
+  const config = await prettier.resolveConfig(artifactPath);
+  return prettier.format(source, { ...config, filepath: artifactPath });
+}
+
+async function expectArtifact(artifactPath: string, rendered: string): Promise<void> {
+  if (process.env.UPDATE_MCP_BASE_MANIFEST === "1") {
+    writeFileSync(artifactPath, rendered, "utf8");
+  }
+  const onDisk = readFileSync(artifactPath, "utf8");
+  expect(
+    onDisk,
+    "Generated MCP base manifest is stale. Regenerate with:\n" +
+      "  UPDATE_MCP_BASE_MANIFEST=1 npx vitest run src/services/actions/__tests__/mcpExternalBaseManifest.test.ts"
+  ).toBe(rendered);
 }
 
 describe("MCP external base manifest artifact", () => {
   it("matches the surface the real action registry produces", async () => {
-    const entries = await buildExpectedEntries();
-    const rendered = await renderArtifact(entries);
+    const entries = await buildExpectedEntries(MCP_EXTERNAL_TIER_TOOLS);
+    const rendered = await renderArtifact(
+      entries,
+      ARTIFACT_PATH,
+      "MCP_EXTERNAL_BASE_MANIFEST",
+      [
+        "// The tool surface served to a workspace-bound external MCP session whose",
+        "// workspace has no single live view — none open, or more than one (#12082).",
+      ].join("\n")
+    );
+    await expectArtifact(ARTIFACT_PATH, rendered);
+  }, 60_000);
 
-    if (process.env.UPDATE_MCP_BASE_MANIFEST === "1") {
-      writeFileSync(ARTIFACT_PATH, rendered, "utf8");
-    }
-
-    const onDisk = readFileSync(ARTIFACT_PATH, "utf8");
-    expect(
-      onDisk,
-      "Generated MCP base manifest is stale. Regenerate with:\n" +
-        "  UPDATE_MCP_BASE_MANIFEST=1 npx vitest run src/services/actions/__tests__/mcpExternalBaseManifest.test.ts"
-    ).toBe(rendered);
+  it("describes every action the host runs with no view that the external tier lacks", async () => {
+    const entries = await buildExpectedEntries(VIEWLESS_EXTRA_TOOLS);
+    const rendered = await renderArtifact(
+      entries,
+      VIEWLESS_ARTIFACT_PATH,
+      "MCP_VIEWLESS_BASE_MANIFEST",
+      [
+        "// What a help session with no view lists besides the external surface",
+        "// (#13511): the actions the host runs itself (#13498) that the external",
+        "// tier doesn't already describe.",
+      ].join("\n")
+    );
+    await expectArtifact(VIEWLESS_ARTIFACT_PATH, rendered);
   }, 60_000);
 });

@@ -29,6 +29,7 @@ import {
   RelayNoticesPayloadSchema,
   SendResultSchema,
   SendToHubPayloadSchema,
+  StartResultSchema,
   type AssistantSendPayload,
   type CodexQuotaReading,
   type EnrollStartedPayload,
@@ -40,6 +41,8 @@ import {
   type RelayApproveAnswer,
   type RelayApprovePayload,
   type RelayNoticesPayload,
+  type StartPayload,
+  type StartResult,
 } from "./linkMethods.js";
 
 export interface AssistantExchangeClientDeps {
@@ -94,6 +97,11 @@ const CALL_TIMEOUT_MS = 15_000;
  * outlasts it, so that answer arrives rather than an unknown outcome.
  */
 const QUOTA_CALL_TIMEOUT_MS = 30_000;
+/**
+ * A host's start with no view (#13511) provisions, spawns and waits out the
+ * new assistant's readiness, up to 45 s of it, before it answers.
+ */
+const START_CALL_TIMEOUT_MS = 120_000;
 
 /**
  * This Shell's own refusal to resend a message whose outcome stayed unknown
@@ -353,6 +361,22 @@ export class AssistantExchangeClient {
       await this.call(hostId, session, AssistantLinkMethod.ENROLL_STARTED, payload)
     );
     if (!parsed.success) throw invalidAnswer(hostId, AssistantLinkMethod.ENROLL_STARTED);
+    return parsed.data;
+  }
+
+  /**
+   * Have the host start an assistant in one of its projects for this Shell
+   * with no view there (#13511). Enrolling it is still `enrollStarted`.
+   */
+  async startWithoutView(hostId: HostId, payload: StartPayload): Promise<StartResult> {
+    this.checkHost(hostId, "admit");
+    const session = await this.open(hostId);
+    // The host records who asked from the sender this session proved.
+    await this.authenticate(hostId, session);
+    const parsed = StartResultSchema.safeParse(
+      await this.call(hostId, session, AssistantLinkMethod.START, payload, START_CALL_TIMEOUT_MS)
+    );
+    if (!parsed.success) throw invalidAnswer(hostId, AssistantLinkMethod.START);
     return parsed.data;
   }
 

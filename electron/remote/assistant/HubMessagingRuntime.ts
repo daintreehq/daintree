@@ -320,7 +320,7 @@ const START_REFUSALS: Record<
   "no-window": {
     code: "lane_unavailable",
     detail:
-      "No window here shows this host, so an assistant there would have nothing to work through. The person can open the host in a window.",
+      "No window here shows this host, and the host can't start an assistant without one, so it would have nothing to work through. The person can open the host in a window, or update Daintree on it.",
   },
   "no-room": {
     code: "lane_unavailable",
@@ -1246,6 +1246,8 @@ export class HubMessagingRuntime implements HostMessagingRuntimeHandle {
         const result = await starter.start(args.hostId, args.projectId, {
           ...(args.agentId === undefined ? {} : { agentId: args.agentId }),
           ...(args.startNew === undefined ? {} : { startNew: args.startNew }),
+          // What a host starting it with no window records as who asked (#13511).
+          askingHelpSessionId: helpSessionId,
           // Asked again at every step: the person can turn either opt-in off,
           // or pause messaging, while a start is under way.
           authorized: () =>

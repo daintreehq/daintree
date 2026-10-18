@@ -413,6 +413,91 @@ export async function runAgentLaunch(
   });
 }
 
+/**
+ * Spawn the host's own assistant with no view (#13511): the agent's launch
+ * plan as a view's launcher builds it, in the assistant's session folder,
+ * through the same spawn handler, which binds the PTY to its help session by
+ * the bearer in `env`. Never recorded in the saved layout: an assistant is no
+ * project panel, and the view that takes it over shows it in its own tab.
+ * False when nothing was started.
+ */
+export async function spawnHostAssistant(
+  project: Pick<Project, "id" | "path">,
+  spec: {
+    terminalId: string;
+    agentId: string;
+    cwd: string;
+    env: Record<string, string>;
+    prompt: string;
+    agentLaunchFlags: string[];
+  },
+  deps: ViewlessDeps
+): Promise<boolean> {
+  const { agentId } = spec;
+  const settings = await deps.agents.getSettings().catch(() => null);
+  const [ccrPresets, projectPresets] = await Promise.all([
+    deps.agents.getCcrPresets(agentId).catch(() => undefined),
+    deps.agents.getProjectPresets(project.path).catch(() => ({}) as Record<string, never>),
+  ]);
+  const plan = await buildAgentLaunchPlan({
+    agentId,
+    agentConfig: getEffectiveAgentConfig(agentId),
+    isAgent: true,
+    worktreeId: null,
+    settings,
+    ccrPresets,
+    projectPresets: projectPresets[agentId],
+    options: {
+      env: spec.env,
+      prompt: spec.prompt,
+      ...(spec.agentLaunchFlags.length > 0 ? { agentLaunchFlags: spec.agentLaunchFlags } : {}),
+    },
+    shellDialect: deps.hostPlatform.shellDialect,
+    resolveBaseCommand: (registryCommand, detail) =>
+      resolveAgentLaunchBaseCommandFor(
+        registryCommand,
+        detail,
+        deps.hostPlatform.shellDialect,
+        undefined
+      ),
+    getCliDetail: (id) => deps.agents.getCliDetail(id),
+    getClipboardDirectory: async () => agentClipboardDirectory(deps.hostPlatform.tmpDir, false),
+  });
+  if (!plan.command) return false;
+  if (plan.cliDetail && !isAgentLaunchable(plan.cliDetail.state)) return false;
+  const layers = await deps.getLaunchEnvLayers(project.id).catch((err: unknown) => {
+    console.warn("[Viewless] Could not read environment variables for an assistant:", err);
+    return null;
+  });
+  const env = mergeTerminalLaunchEnv(layers?.global, layers?.project, plan.env);
+  try {
+    await deps.invoke<string>(project.id, CHANNELS.TERMINAL_SPAWN, [
+      {
+        id: spec.terminalId,
+        kind: "terminal",
+        projectId: project.id,
+        cwd: spec.cwd,
+        cols: 80,
+        rows: 24,
+        title: plan.title,
+        ...(plan.titleMode !== undefined ? { titleMode: plan.titleMode } : {}),
+        command: plan.command,
+        ...(env !== undefined ? { env } : {}),
+        launchAgentId: agentId,
+        agentLaunchFlags: plan.launchFlags,
+        agentSessionId: plan.assignedSessionId,
+        agentPresetId: plan.preset?.id,
+        agentPresetColor: plan.preset?.color,
+        originalAgentPresetId: plan.preset?.id,
+      },
+    ]);
+    return true;
+  } catch (err) {
+    console.warn("[Viewless] Assistant launch failed:", formatErrorMessage(err, "unknown"));
+    return false;
+  }
+}
+
 export async function runAgentListAvailable(
   _request: ViewlessActionRequest,
   _project: Project,

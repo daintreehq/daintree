@@ -4,7 +4,10 @@ import type { ClientEndpoint } from "../endpoint.js";
 type Adopted = Extract<HelpAdoptResult, { status: "adopted" }>;
 
 export interface DetachedAdoptionDeps {
-  remoteEndpoints(): readonly ClientEndpoint[];
+  /** The projects with an assistant running with no view. */
+  detachedProjects(): readonly string[];
+  /** The views attached to a project, this machine's own and other machines'. */
+  endpointsFor(projectId: string): readonly ClientEndpoint[];
   /** The endpoint that drives the project now, or null when none attached does. */
   drivingEndpointId(projectId: string): string | null;
   detachedSlots(projectId: string): number[];
@@ -23,17 +26,19 @@ function drives(deps: DetachedAdoptionDeps, endpoint: ClientEndpoint, projectId:
 }
 
 /**
- * Hands each project's detached assistants (#13360) to the remote view that
- * drives the project, as soon as there is one (#13389). Only the driver, as
- * the renderer's own take-over is driver-only: a watching view would pin the
+ * Hands each project's detached assistants (#13360) to the view that drives
+ * the project, as soon as there is one (#13389): another machine's, or since
+ * #13511 one of this machine's own windows. Only the driver, as the
+ * renderer's own take-over is driver-only: a watching view would pin the
  * assistant where its tool calls can't act, and keep it from the driver.
  * Each lane is re-checked before it is taken, since the view can close, move
  * or lose the lease while an earlier one is out.
  */
 export async function adoptForReturningViews(deps: DetachedAdoptionDeps): Promise<void> {
-  for (const endpoint of deps.remoteEndpoints()) {
-    const projectId = endpoint.projectId;
-    if (projectId === null || !drives(deps, endpoint, projectId)) continue;
+  for (const projectId of deps.detachedProjects()) {
+    const driving = deps.drivingEndpointId(projectId);
+    const endpoint = deps.endpointsFor(projectId).find((view) => view.endpointId === driving);
+    if (!endpoint || !drives(deps, endpoint, projectId)) continue;
     for (const slot of deps.detachedSlots(projectId)) {
       if (!drives(deps, endpoint, projectId)) break;
       const result = await deps.adopt(projectId, slot, endpoint);

@@ -36,6 +36,15 @@ export const AssistantLinkMethod = {
    */
   ENROLL_STARTED: "assistant.enroll-started",
   /**
+   * Shell → Host: start an assistant in one of the host's projects for this
+   * session's Shell with no view there (#13511): in the lane named, only while
+   * nobody uses it, past its folder-trust question for its own session
+   * folder. The host records who asked, from the sender this session proved;
+   * enrolling the run is still ENROLL_STARTED. A host from before this
+   * answers UNSUPPORTED, which leaves a start needing a window there.
+   */
+  START: "assistant.start",
+  /**
    * Shell → Host: the host's Codex account quota, as Codex reports it there
    * (#13392), so the hub can tell which host has allowance left.
    */
@@ -173,6 +182,39 @@ export const RunningAssistantSchema = z
   .strip();
 
 export const EnrollStartedPayloadSchema = z.object({ projectId: id, slot, sessionId: id }).strict();
+
+export const StartPayloadSchema = z
+  .object({
+    projectId: id,
+    slot,
+    /** Absent: the host's own default among the agents it starts this way. */
+    agentId: id.optional(),
+    /** The Shell's help session whose `host.startAssistant` asked for it. */
+    askingHelpSessionId: id,
+  })
+  .strict();
+export type StartPayload = z.infer<typeof StartPayloadSchema>;
+
+/** Why a host didn't start an assistant with no view; the Shell's own words for a refused start. */
+export const START_REFUSALS = [
+  "no-project",
+  "no-slot",
+  "launch-failed",
+  "agent-error",
+  "timed-out",
+] as const;
+
+export const StartResultSchema = z.discriminatedUnion("status", [
+  z
+    .object({
+      status: z.literal("started"),
+      /** The run as `assistant.enroll-started` names it. */
+      lane: z.object({ slot, sessionId: id, agentId: id }).strip(),
+    })
+    .strip(),
+  z.object({ status: z.literal("refused"), reason: z.enum(START_REFUSALS) }).strip(),
+]);
+export type StartResult = z.infer<typeof StartResultSchema>;
 export type EnrollStartedPayload = z.infer<typeof EnrollStartedPayloadSchema>;
 
 export const EnrollStartedResultSchema = z

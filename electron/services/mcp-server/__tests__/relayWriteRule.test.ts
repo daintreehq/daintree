@@ -53,6 +53,17 @@ describe("relayWriteStanding (#13501)", () => {
     expect(relayWriteStanding("project-1", "link-a")).toEqual({ kind: "unavailable" });
   });
 
+  it("gives the host's own assistant with no view no view to call its own (#13511)", () => {
+    setMcpDriveTargetResolver(() => ({ state: "vacant" }));
+    expect(relayWriteStanding("project-1", null)).toEqual({ kind: "vacant" });
+    const local = { ...view("link-a"), kind: "local-view", linkSessionId: undefined } as never;
+    setMcpDriveTargetResolver(() => ({ state: "live", endpoint: local, holderName: "this Mac" }));
+    expect(relayWriteStanding("project-1", null)).toEqual({
+      kind: "elsewhere",
+      holderName: "this Mac",
+    });
+  });
+
   it("never acts for another machine without Host-mode routing", () => {
     expect(relayWriteStanding("project-1", "link-a")).toEqual({
       kind: "elsewhere",
