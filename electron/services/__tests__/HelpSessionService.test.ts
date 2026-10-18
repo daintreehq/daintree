@@ -901,6 +901,20 @@ describe("HelpSessionService", () => {
       off();
     });
 
+    it("announces its project again when a view finishes loading, and nothing without one", async () => {
+      const detached = vi.fn();
+      const off = service.addLaneDetachedListener(detached);
+      service.noteViewReady();
+      expect(detached).not.toHaveBeenCalled();
+
+      await startWithoutView();
+      detached.mockClear();
+      service.noteViewReady();
+
+      expect(detached).toHaveBeenCalledWith("proj-1");
+      off();
+    });
+
     it("is never handed to the no-view pin itself", async () => {
       await startWithoutView();
 

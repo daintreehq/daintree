@@ -791,8 +791,8 @@ function installDetachedAssistantAdoption(): () => void {
   return installDetachedAdoption({
     detachedProjects: () => helpSessionServiceIfLoaded()?.detachedProjectIds() ?? [],
     // A window here whose renderer crashed or is reloading keeps its id, but
-    // has nothing to run the assistant's calls yet; once loaded, it takes the
-    // assistant over through its own panel.
+    // has nothing to run the assistant's calls yet; its load finishing runs
+    // this again (`noteViewReady`).
     endpointsFor: (projectId) =>
       getEndpointRegistry()
         .getForProject(projectId)

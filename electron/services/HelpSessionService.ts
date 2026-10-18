@@ -867,6 +867,15 @@ export class HelpSessionService {
     };
   }
 
+  /**
+   * One of this machine's project views finished loading (#13511). A view
+   * passed over while it crashed or loaded may now take over its project's
+   * assistant left with no view, so each project with one is announced again.
+   */
+  noteViewReady(): void {
+    for (const projectId of this.detachedProjectIds()) this.emitLaneDetached(projectId);
+  }
+
   private emitLaneDetached(projectId: string): void {
     for (const listener of [...this.laneDetachedListeners]) {
       try {
