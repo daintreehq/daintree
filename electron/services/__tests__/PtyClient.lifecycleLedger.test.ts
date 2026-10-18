@@ -383,6 +383,16 @@ describe("PtyClient lifecycle ledger", () => {
     expect(entry?.spawnOk).toBeUndefined();
   });
 
+  it("reads whether a tracked terminal backs the assistant from its spawn stamp (#13494)", () => {
+    const client = createReadyClient();
+    client.spawn("t-assistant", { ...baseOptions, isAssistantTerminal: true });
+    client.spawn("t-grid", baseOptions);
+
+    expect(client.isAssistantTerminal("t-assistant")).toBe(true);
+    expect(client.isAssistantTerminal("t-grid")).toBe(false);
+    expect(client.isAssistantTerminal("t-unknown")).toBe(false);
+  });
+
   describe("a spawn refused because the id is still live (#11341, #12498)", () => {
     function refuseAsLive(launchGeneration: number) {
       mockChild.emit("message", {
@@ -413,6 +423,22 @@ describe("PtyClient lifecycle ledger", () => {
 
       expect(client.hasTerminal("t1")).toBe(true);
       expect(client.getTerminalProjectId("t1")).toBe("p-live");
+    });
+
+    it("keeps a running assistant's identity while an unstamped duplicate awaits the host", () => {
+      const client = createReadyClient();
+      client.spawn("t1", { ...baseOptions, isAssistantTerminal: true }); // generation 1
+      mockChild.emit("message", {
+        type: "spawn-result",
+        id: "t1",
+        result: { success: true, id: "t1", launchGeneration: 1 },
+      });
+
+      client.spawn("t1", baseOptions); // generation 2, a duplicate without the stamp
+      expect(client.isAssistantTerminal("t1")).toBe(true);
+
+      refuseAsLive(2);
+      expect(client.isAssistantTerminal("t1")).toBe(true);
     });
 
     it("reports the running incarnation as live while a duplicate awaits the host", () => {

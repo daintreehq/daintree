@@ -22,6 +22,7 @@ import {
 import type { ClientEndpoint } from "../endpoint.js";
 import { getRemoteService } from "../../remote/runtime.js";
 import { resolveScopedProjectForIpcContext } from "../projectContext.js";
+import { isAssistantTerminalRecord } from "../../services/assistantTerminal.js";
 import type { HandlerDependencies, IpcContext } from "../types.js";
 import type {
   CopyTreeGeneratePayload,
@@ -873,6 +874,23 @@ export function registerCopyTreeHandlers(deps: HandlerDependencies): () => void 
           content: "",
           fileCount: 0,
           error: "Terminal no longer exists",
+        };
+      }
+
+      // `terminal.inject`, `worktree.inject` and `copyTree.injectToTerminal` take
+      // any panel id and are open to plugin dispatch with no capability, so
+      // without this a plugin could type a codebase dump into the Daintree
+      // Assistant (#13494).
+      if (
+        isAssistantTerminalRecord({
+          id: validated.terminalId,
+          isAssistantTerminal: deps.ptyClient!.isAssistantTerminal(validated.terminalId),
+        })
+      ) {
+        return {
+          content: "",
+          fileCount: 0,
+          error: "Context can't be injected into the Daintree Assistant",
         };
       }
 

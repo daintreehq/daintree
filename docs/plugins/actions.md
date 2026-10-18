@@ -43,7 +43,6 @@ An argument shown as `name?` is optional. Argument names come from each action's
 
 | Action | Title | Danger | Arguments |
 | --- | --- | --- | --- |
-| `action.repeatLast` | Repeat last action | safe | — |
 | `app.developerMode.set` | Set developer mode | safe | `enabled`, `autoOpenDiagnostics?`, `focusEventsTab?` |
 | `app.exportConfig` | Export configuration… | safe | — |
 | `app.importConfig` | Import configuration… | confirm | — |

@@ -933,6 +933,74 @@ describe("createHost sendToActiveAgent", () => {
 
     expect(pty.submit).toHaveBeenCalledWith("term-b", "hello");
   });
+
+  // A waiting assistant scores above a working grid agent, so ranking alone
+  // would hand it the plugin's text (#13494).
+  const assistantTerminal = (id: string, projectId: string) => ({
+    ...agentTerminal(id, projectId),
+    isAssistantTerminal: true,
+    lastOutputTime: 99,
+  });
+
+  it.each([
+    ["stage", undefined],
+    ["submit", { submit: true }],
+  ] as const)("never picks the assistant over a grid agent (%s)", async (method, options) => {
+    const h = makeHarness();
+    const pty = installPty(
+      [
+        assistantTerminal("term-assistant", PROJECT_A),
+        { ...agentTerminal("term-grid", PROJECT_A), agentState: "working" },
+      ],
+      PROJECT_A
+    );
+    const { host } = createHost(h.deps, PLUGIN_ID, BOUND);
+
+    await host.sendToActiveAgent("hello", options);
+
+    const other = method === "stage" ? pty.submit : pty.stage;
+    expect(pty[method]).toHaveBeenCalledTimes(1);
+    expect(pty[method]).toHaveBeenCalledWith("term-grid", "hello");
+    expect(other).not.toHaveBeenCalled();
+  });
+
+  it("no-ops with a warning when the bound project's only agent is the assistant", async () => {
+    const h = makeHarness();
+    const pty = installPty(
+      [assistantTerminal("term-assistant", PROJECT_A), agentTerminal("term-b", "project-b")],
+      "project-b"
+    );
+    const { host } = createHost(h.deps, PLUGIN_ID, BOUND);
+
+    await expect(host.sendToActiveAgent("hello", { submit: true })).resolves.toBeUndefined();
+
+    expect(pty.stage).not.toHaveBeenCalled();
+    expect(pty.submit).not.toHaveBeenCalled();
+    expect(h.recordPluginLog).toHaveBeenCalledWith(
+      expect.anything(),
+      PLUGIN_ID,
+      "warn",
+      expect.stringContaining("no agent terminal")
+    );
+  });
+
+  it.each([
+    ["the focused project", "project-b"],
+    ["no active project", null],
+  ])(
+    "throws NO_ACTIVE_AGENT for an unbound host whose only agent is the assistant (%s)",
+    async (_label, activeProjectId) => {
+      const h = makeHarness();
+      const pty = installPty([assistantTerminal("term-assistant", "project-b")], activeProjectId);
+      const { host } = createHost(h.deps, PLUGIN_ID, UNBOUND_PLUGIN_HOST_BINDING);
+
+      await expect(host.sendToActiveAgent("hello", { submit: true })).rejects.toThrow(
+        "NO_ACTIVE_AGENT"
+      );
+      expect(pty.stage).not.toHaveBeenCalled();
+      expect(pty.submit).not.toHaveBeenCalled();
+    }
+  );
 });
 
 describe("createHost onDidChangeAgentState", () => {
