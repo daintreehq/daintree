@@ -97,6 +97,23 @@ describe("forge reads with no frontend (#13501)", () => {
     expect(unknown).toMatchObject({ ok: false, error: { code: "EXECUTION_ERROR" } });
   });
 
+  it("reads from anywhere inside the project or its worktrees, and nowhere outside", async () => {
+    const { deps, invoke } = forgeDeps({ [CHANNELS.FORGE_GET_PR]: PR });
+    const read = (cwd: string) =>
+      executeViewlessAction(request("forge.getPR", { prNumber: 7, cwd }), deps);
+
+    expect(await read("/repo/packages/app")).toMatchObject({ ok: true });
+    expect(await read("/repo/")).toMatchObject({ ok: true });
+    expect(await read("/repo-wt/feature/src")).toMatchObject({ ok: true });
+    for (const outside of ["/repo/../etc", "/repo-other", "relative/path"]) {
+      expect(await read(outside)).toMatchObject({ ok: false, error: { code: "VALIDATION_ERROR" } });
+    }
+    const cwds = invoke.mock.calls
+      .filter(([, channel]) => channel === CHANNELS.FORGE_GET_PR)
+      .map(([, , args]) => (args[0] as { cwd: string }).cwd);
+    expect(cwds).toEqual(["/repo/packages/app", "/repo/", "/repo-wt/feature/src"]);
+  });
+
   it("falls back to the worktree a view last made active", async () => {
     const { deps, invoke, store } = forgeDeps({ [CHANNELS.FORGE_GET_PR]: PR });
     await store.enqueueProjectStateUpdate(PROJECT.id, () => ({

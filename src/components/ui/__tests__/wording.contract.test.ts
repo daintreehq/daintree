@@ -134,7 +134,7 @@ describe("wording", () => {
               ? n.name.text
               : null
             : null;
-      if (declared && /^plural/i.test(declared) && r !== "src/lib/pluralize.ts") {
+      if (declared && /^plural/i.test(declared) && r !== "shared/utils/pluralize.ts") {
         localPlurals.push(`${r}:${lineOf(source, n)} ${declared}`);
       }
 

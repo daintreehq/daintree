@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { CHANNELS } from "../../../ipc/channels.js";
 import { executeViewlessAction } from "../ViewlessActionExecutor.js";
 import { makeDeps, makeHosts, makeWorktree, PROJECT, request } from "./viewlessTestDeps.js";
@@ -121,16 +121,18 @@ describe("worktree.createWithRecipe with no frontend (#13501)", () => {
     expect(channelsCalled(failing.invoke)).not.toContain(CHANNELS.WORKTREE_CREATE);
   });
 
-  it("refuses a recipe before creating anything, saying only a window runs one", async () => {
+  it("refuses a recipe before asking anyone or creating anything, saying only a window runs one", async () => {
     const { deps, invoke } = creationDeps();
+    const requestApproval = vi.fn();
 
     const result = await executeViewlessAction(
-      request(
-        "worktree.createWithRecipe",
-        { source: { kind: "newBranch", branchName: "topic" }, recipeId: "r-1" },
-        // Approved, so the refusal is about the recipe, not the confirmation it needs.
-        { confirmed: true }
-      ),
+      {
+        ...request("worktree.createWithRecipe", {
+          source: { kind: "newBranch", branchName: "topic" },
+          recipeId: "r-1",
+        }),
+        requestApproval,
+      },
       deps
     );
 
@@ -138,7 +140,8 @@ describe("worktree.createWithRecipe with no frontend (#13501)", () => {
       ok: false,
       error: { code: "VALIDATION_ERROR", message: expect.stringContaining("Nothing was created") },
     });
-    expect(channelsCalled(invoke)).not.toContain(CHANNELS.WORKTREE_CREATE);
+    expect(requestApproval).not.toHaveBeenCalled();
+    expect(invoke).not.toHaveBeenCalled();
   });
 
   it("assigns the issue only when asked, and says why it didn't with no choice given", async () => {

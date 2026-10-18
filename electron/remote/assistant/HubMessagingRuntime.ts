@@ -191,6 +191,8 @@ interface CallInFlight {
   run: OpenRun;
   /** A host asked about it once already: an approval is for the call, not each ask. */
   asked: boolean;
+  /** Sends of it still out, a resend's included; the record goes with the last. */
+  sends: number;
 }
 
 /**
@@ -1040,16 +1042,26 @@ export class HubMessagingRuntime implements HostMessagingRuntimeHandle {
         ? NOTHING_NOTED
         : this.noteCall(callId, args.hostId, caller, args.tool, toolArgs);
       this.callsOut.set(args.hostId, (this.callsOut.get(args.hostId) ?? 0) + 1);
-      const inFlight: CallInFlight = {
-        hostId: args.hostId,
-        helpSessionId,
-        projectId: args.projectId,
-        tool: args.tool,
-        args: toolArgs,
-        run: caller,
-        asked: false,
-      };
-      this.callsInFlight.set(callId, inFlight);
+      // A resend while its first send is still out is the same call: it shares
+      // that record, so an approval the host is asking for still counts.
+      const sharing = this.callsInFlight.get(callId);
+      const inFlight: CallInFlight =
+        sharing !== undefined &&
+        sharing.hostId === args.hostId &&
+        sharing.helpSessionId === helpSessionId
+          ? sharing
+          : {
+              hostId: args.hostId,
+              helpSessionId,
+              projectId: args.projectId,
+              tool: args.tool,
+              args: toolArgs,
+              run: caller,
+              asked: false,
+              sends: 0,
+            };
+      inFlight.sends += 1;
+      if (inFlight !== sharing) this.callsInFlight.set(callId, inFlight);
       let answer: McpCallAnswer;
       try {
         answer = await this.requireClient().relayCall(
@@ -1095,7 +1107,10 @@ export class HubMessagingRuntime implements HostMessagingRuntimeHandle {
         const left = (this.callsOut.get(args.hostId) ?? 1) - 1;
         if (left > 0) this.callsOut.set(args.hostId, left);
         else this.callsOut.delete(args.hostId);
-        if (this.callsInFlight.get(callId) === inFlight) this.callsInFlight.delete(callId);
+        inFlight.sends -= 1;
+        if (inFlight.sends === 0 && this.callsInFlight.get(callId) === inFlight) {
+          this.callsInFlight.delete(callId);
+        }
       }
       switch (answer.status) {
         // A tool error may still have run some of a batch before it failed.

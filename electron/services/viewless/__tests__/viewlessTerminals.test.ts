@@ -336,6 +336,69 @@ describe("terminal.getStatus with no frontend", () => {
       expect(readTerminalStatus).not.toHaveBeenCalled();
     });
 
+    it("refuses a fleet the pty-host couldn't list whole, rather than reporting it short", async () => {
+      const { deps, readTerminalStatus } = fleet();
+      const pty = deps.getPtyReader()!;
+      deps.getPtyReader = () => ({
+        ...pty,
+        getAllTerminalsWithCompletenessAsync: async () => ({
+          terminals: await pty.getAllTerminalsAsync(),
+          degraded: true,
+        }),
+      });
+
+      const result = await executeViewlessAction(request("terminal.getStatus", {}), deps);
+
+      expect(result).toMatchObject({ ok: false, error: { code: "EXECUTION_ERROR" } });
+      expect(readTerminalStatus).not.toHaveBeenCalled();
+    });
+
+    it("reads a fleet larger than one status read takes in batches, in layout order", async () => {
+      const records = Object.fromEntries(
+        Array.from({ length: 300 }, (_, i) => [
+          `t-${String(i).padStart(3, "0")}`,
+          { kind: "terminal" },
+        ])
+      );
+      const readTerminalStatus = vi.fn(async (args: unknown) => ({
+        terminals: (args as { terminalIds: string[] }).terminalIds.map((terminalId) => ({
+          terminalId,
+          agentId: null,
+          agentState: null,
+        })),
+        source: "pty" as const,
+        unavailableFields: [],
+      }));
+      const { deps } = makeDeps({
+        getPtyReader: () => makePty(records),
+        readTerminalStatus: readTerminalStatus as never,
+      });
+
+      const result = await executeViewlessAction(request("terminal.getStatus", {}), deps);
+
+      expect(
+        readTerminalStatus.mock.calls.map(
+          ([args]) => (args as { terminalIds: string[] }).terminalIds.length
+        )
+      ).toEqual([256, 44]);
+      const ids = (
+        result as { result: { terminals: Array<{ terminalId: string }> } }
+      ).result.terminals.map((entry) => entry.terminalId);
+      expect(ids).toEqual(Object.keys(records));
+    });
+
+    it("refuses arguments a view would refuse, whatever the fleet holds", async () => {
+      const { deps, readTerminalStatus } = fleet();
+
+      const result = await executeViewlessAction(
+        request("terminal.getStatus", { worktreeId: "/repo-wt/none", includeOutput: "yes" }),
+        deps
+      );
+
+      expect(result).toMatchObject({ ok: false, error: { code: "VALIDATION_ERROR" } });
+      expect(readTerminalStatus).not.toHaveBeenCalled();
+    });
+
     it("refuses a delivery check that names no terminals, as a view does", async () => {
       const { deps, readTerminalStatus } = fleet();
 

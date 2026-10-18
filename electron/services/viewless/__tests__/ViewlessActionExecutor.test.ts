@@ -11,6 +11,7 @@ import {
 import {
   makeDeps,
   makeHosts,
+  makePty,
   makeStateStore,
   makeWorktree,
   PROJECT,
@@ -147,6 +148,74 @@ describe("viewless actions", () => {
         CHANNELS.WORKTREE_DELETE,
         expect.anything()
       );
+    });
+
+    it("keeps a check that throws as the stop, never as a failure to carry on from", async () => {
+      const { deps, invoke } = makeDeps();
+      const broken = new Error("lease lookup threw");
+      let asks = 0;
+      const checkWrite = vi.fn(() => {
+        if (++asks > 1) throw broken;
+        return null;
+      });
+
+      const err = await executeViewlessAction(
+        { ...request("terminal.new", {}), checkWrite },
+        deps
+      ).catch((caught: unknown) => caught);
+
+      expect(err).toBe(broken);
+      expect(invoke).not.toHaveBeenCalledWith(
+        PROJECT.id,
+        CHANNELS.TERMINAL_SPAWN,
+        expect.anything()
+      );
+    });
+
+    it("holds a layout write that is the call's only change to the same check", async () => {
+      // A panel whose process is gone: closing it only edits the saved layout.
+      const store = makeStateStore({
+        projectId: PROJECT.id,
+        sidebarWidth: 350,
+        terminals: [{ id: "t-gone", kind: "terminal", title: "Gone", location: "grid" }],
+      });
+      const { deps } = makeDeps({
+        getProjectState: store.getProjectState,
+        stateWriter: store,
+        getPtyReader: () => makePty(),
+      });
+      const takenOver = new Error("studio-02 has control");
+      let asks = 0;
+      const checkWrite = () => (++asks > 1 ? takenOver : null);
+
+      const err = await executeViewlessAction(
+        { ...request("terminal.close", { terminalId: "t-gone" }), checkWrite },
+        deps
+      ).catch((caught: unknown) => caught);
+
+      expect(err).toBe(takenOver);
+      expect(store.read()?.terminals.map((t) => t.id)).toEqual(["t-gone"]);
+    });
+
+    it("still records a launch that landed, whoever takes the project after it", async () => {
+      const { deps, store, invoke } = makeDeps();
+      let spawned = false;
+      invoke.mockImplementation(async (_projectId, channel, args) => {
+        if (channel === CHANNELS.TERMINAL_SPAWN) {
+          spawned = true;
+          return (args[0] as { id: string }).id;
+        }
+        return undefined;
+      });
+      const takenOver = new Error("studio-02 has control");
+
+      const result = await executeViewlessAction(
+        { ...request("terminal.new", {}), checkWrite: () => (spawned ? takenOver : null) },
+        deps
+      );
+
+      expect(result).toMatchObject({ ok: true });
+      expect(store.read()?.terminals).toHaveLength(1);
     });
   });
 

@@ -1,4 +1,4 @@
-import { isAbsolute } from "node:path";
+import { isAbsolute, relative, resolve } from "node:path";
 import { z } from "zod";
 import { CHANNELS } from "../../ipc/channels.js";
 import type { ActionDispatchResult } from "../../../shared/types/actions.js";
@@ -65,8 +65,18 @@ async function resolveForgeCwd(
     };
   }
   const worktrees = await readProjectWorktrees(project, deps).catch(() => null);
-  const owned = (path: string) =>
-    path === project.path || (worktrees ?? []).some((worktree) => worktree.path === path);
+  // Inside the project or one of its worktrees, as the forge resolves a
+  // repository from any directory in it. Compared as resolved paths, so a
+  // trailing slash or a `..` can't step outside.
+  const roots = [project.path, ...(worktrees ?? []).map((worktree) => worktree.path)];
+  const owned = (path: string) => {
+    if (!isAbsolute(path)) return false;
+    const target = resolve(path);
+    return roots.some((root) => {
+      const rel = relative(resolve(root), target);
+      return rel === "" || (!rel.startsWith("..") && !isAbsolute(rel));
+    });
+  };
   if (args.worktreeId !== undefined) {
     const path =
       worktrees?.find((worktree) => worktree.id === args.worktreeId)?.path ??
@@ -89,7 +99,7 @@ async function resolveForgeCwd(
         ok: false,
         result: failure(
           "VALIDATION_ERROR",
-          `'${supplied}' is not a worktree of this project, so ${request.actionId} will not read it.`
+          `'${supplied}' is not inside this project or one of its worktrees, so ${request.actionId} will not read it.`
         ),
       };
     }

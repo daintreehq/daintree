@@ -63,7 +63,7 @@ import {
 } from "./viewlessWorktrees.js";
 import { runProjectDetectRunners, runProjectGetAll } from "./viewlessProjects.js";
 import { runForgeRead } from "./viewlessForge.js";
-import { runWorktreeCreateWithRecipe } from "./viewlessWorktreeCreation.js";
+import { refuseRecipeWithNoView, runWorktreeCreateWithRecipe } from "./viewlessWorktreeCreation.js";
 
 const TERMINAL_SEND_COMMAND_ACTION_ID = "terminal.sendCommand";
 const WORKTREE_CREATE_ACTION_ID = "worktree.create";
@@ -104,6 +104,11 @@ export interface ViewlessPtyReader {
   ): Promise<ViewlessTerminalRecord | null>;
   /** Every terminal the pty-host holds, trashed ones included. */
   getAllTerminalsAsync(): Promise<ViewlessTerminalRecord[]>;
+  /** The same, saying whether every pty-host shard answered. */
+  getAllTerminalsWithCompletenessAsync?(): Promise<{
+    terminals: ViewlessTerminalRecord[];
+    degraded: boolean;
+  }>;
   /** A project's live terminals, ownership inferred where unstamped; no trash. */
   getTerminalsForProjectAsync(projectId: string): Promise<string[]>;
   getSerializedStateAsync(
@@ -560,6 +565,10 @@ export async function executeViewlessAction(
   const checkWrite = entry.writes ? request.checkWrite : undefined;
   const admitted = checkWrite?.(false);
   if (admitted) throw admitted;
+  if (request.actionId === "worktree.createWithRecipe") {
+    const recipe = refuseRecipeWithNoView(request);
+    if (recipe) return recipe;
+  }
 
   let approvedUntil: number | undefined;
   const refusal = admit(request, entry.danger);
@@ -608,10 +617,16 @@ class ViewlessRefusal extends Error {
 
 /**
  * The deps an action runs with when its standing has to be checked right
- * before each change (#13501): every host call it makes asks first, and a
- * refusal is kept rather than left to the action's own error handling, which
- * would report it as a failure of the call it stopped. A call that reaches a
- * channel which changes a project counts as a change for the next ask.
+ * before each change (#13501): every host call it makes asks first, at the
+ * boundary the drive lease holds every caller to — the dispatcher's own gate
+ * admits a driving view's call there too, and a call admitted is the change
+ * under way. A refusal, returned or thrown, is kept rather than left to the
+ * action's own error handling, which would report it as a failure of the call
+ * it stopped. A call that reaches a channel which changes a project counts as
+ * a change for the next ask, and so does a write to the saved layout. That
+ * write is checked only while it is the call's first change: recording a
+ * change that already landed is never stopped, or the next view would hydrate
+ * a layout missing a process that runs.
  */
 function guardWrites(
   deps: ViewlessDeps,
@@ -619,28 +634,45 @@ function guardWrites(
 ): { deps: ViewlessDeps; stopped(): Error | null } {
   let stopped: Error | null = null;
   let changed = false;
-  const ask = (channel: string): void => {
-    const refusal = stopped ?? check(changed);
+  const ask = (changes: boolean): void => {
+    let refusal: Error | null;
+    try {
+      refusal = stopped ?? check(changed);
+    } catch (err) {
+      refusal = err instanceof Error ? err : new Error(String(err));
+    }
     if (refusal !== null) {
       stopped = refusal;
       throw refusal;
     }
-    if (!isFreeLeaseChannel(channel)) changed = true;
+    if (changes) changed = true;
   };
   return {
     deps: {
       ...deps,
       invoke: <T>(projectId: string, channel: string, args: unknown[]): Promise<T> => {
         try {
-          ask(channel);
+          ask(!isFreeLeaseChannel(channel));
         } catch (err) {
           return Promise.reject(err);
         }
         return deps.invoke<T>(projectId, channel, args);
       },
       send: (projectId, channel, args) => {
-        ask(channel);
+        ask(!isFreeLeaseChannel(channel));
         deps.send(projectId, channel, args);
+      },
+      stateWriter: {
+        enqueueProjectStateUpdate: (projectId, updater) => {
+          if (!changed) {
+            try {
+              ask(true);
+            } catch (err) {
+              return Promise.reject(err);
+            }
+          }
+          return deps.stateWriter.enqueueProjectStateUpdate(projectId, updater);
+        },
       },
     },
     stopped: () => stopped,

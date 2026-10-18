@@ -2178,6 +2178,28 @@ describe("filterIntrospectionResultForSession", () => {
     // A manifest entry is only as well-formed as whatever built it, and
     // JSON.stringify throws on a cycle. Fail closed rather than letting it
     // escape the tool call as an exception.
+    // #13501: the command runner answers its caller, so a full-tier relay is
+    // described as its listing and its admission treat it.
+    it("describes the command runner for a full-tier relay, and nobody a relay can't be", () => {
+      const runner = makeEntry({ id: "project.runCommand", kind: "command" });
+      const relay = (tier: "core" | "full") =>
+        buildTargetPolicy(runner, {
+          ...snap,
+          tier,
+          rendererOwnedOrigin: false,
+          relay: true,
+        });
+
+      expect(relay("full")).toMatchObject({ authorizedBy: "tier", minimumTier: "full" });
+      expect(relay("core")).toBeNull();
+      expect(
+        buildTargetPolicy(runner, { ...snap, tier: "full", rendererOwnedOrigin: false })
+      ).toBeNull();
+      expect(shouldExposeTool(runner, "full", { workspaceBound: true, relay: true })).toBe(true);
+      expect(shouldExposeTool(runner, "core", { workspaceBound: true, relay: true })).toBe(false);
+      expect(shouldExposeTool(runner, "full", { workspaceBound: false })).toBe(false);
+    });
+
     it("returns null instead of throwing on a schema that cannot be canonicalised", () => {
       const cyclic: Record<string, unknown> = { type: "object" };
       cyclic["self"] = cyclic;

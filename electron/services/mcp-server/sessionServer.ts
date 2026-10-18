@@ -1847,6 +1847,7 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
               // Grant issuance gates on the origin too, which is why the
               // policy record carries it rather than re-deriving it.
               rendererOwnedOrigin,
+              relay: sessionSurface.relay === true,
               paneApproval: sessionSurface.paneApproval === true,
               paneSkipConfirmations: sessionSurface.paneSkipConfirmations === true,
               hubMessaging: hubMessagingOffered(),

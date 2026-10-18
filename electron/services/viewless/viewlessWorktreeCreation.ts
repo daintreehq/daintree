@@ -15,6 +15,25 @@ import {
 import { ensureWorkspaceHost, readProjectWorktrees } from "./viewlessWorktrees.js";
 
 /**
+ * A `createWithRecipe` that names a recipe, refused before it is put to
+ * anyone or anything is created: a recipe starts its terminals through a
+ * window's recipes and panels, so no approval here could make it run.
+ */
+export function refuseRecipeWithNoView(
+  request: Pick<ViewlessActionRequest, "actionId" | "args">
+): ActionDispatchResult | null {
+  const recipeId =
+    request.args !== null && typeof request.args === "object"
+      ? (request.args as { recipeId?: unknown }).recipeId
+      : undefined;
+  if (typeof recipeId !== "string" || recipeId === "") return null;
+  return failure(
+    "VALIDATION_ERROR",
+    `${request.actionId} can't run recipe '${recipeId}' with no Daintree window open on this project: a recipe starts its terminals through a window's recipes and panels. Nothing was created. Call it without recipeId, then start terminals or agents in the new worktree.`
+  );
+}
+
+/**
  * `worktree.createWithRecipe` on a host with no window open (#13501): the
  * managed creator a view runs, in all three modes — a new branch, an existing
  * one, a pull request's head — with the same collision handling, done by the
@@ -31,13 +50,8 @@ export async function runWorktreeCreateWithRecipe(
 ): Promise<ActionDispatchResult> {
   const parsed = WorktreeCreateWithRecipeArgsSchema.safeParse(request.args);
   if (!parsed.success) return validationFailure(request.actionId, parsed.error);
-  const { source, recipeId } = parsed.data;
-  if (recipeId) {
-    return failure(
-      "VALIDATION_ERROR",
-      `${request.actionId} can't run recipe '${recipeId}' with no Daintree window open on this project: a recipe starts its terminals through a window's recipes and panels. Nothing was created. Call it without recipeId, then start terminals or agents in the new worktree.`
-    );
-  }
+  // A recipe was refused before admission: see `refuseRecipeWithNoView`.
+  const { source } = parsed.data;
 
   const rootPath = project.path;
   const invoke = <T>(channel: string, payload: unknown) =>

@@ -88,6 +88,19 @@ describe("HubMessagingRuntime answering a host's approval ask (#13501)", () => {
     });
   });
 
+  const deleteCallWith = (callId: string) =>
+    runtime.call(
+      "a",
+      {
+        hostId: "studio",
+        projectId: "proj-2",
+        tool: "worktree.delete",
+        args: { worktreeId: "/wt/feature" },
+        callId,
+      },
+      { tier: "full" }
+    );
+
   const deleteCall = (
     tool = "worktree.delete",
     args: Record<string, unknown> = { worktreeId: "/wt/feature" }
@@ -155,6 +168,25 @@ describe("HubMessagingRuntime answering a host's approval ask (#13501)", () => {
 
     expect(asked).toEqual([]);
     expect(answers.map((answer) => answer.decision)).toEqual(new Array(8).fill("refused"));
+  });
+
+  it("keeps the ask good when the same call is resent while the person decides", async () => {
+    let resent: Promise<unknown> | undefined;
+    let resending = false;
+    duringCall = async (r, callId) => {
+      // The resend's own send arrives here too, possibly before it returns.
+      if (resending) return { decision: "skipped" };
+      resending = true;
+      resent = deleteCallWith(callId);
+      return r.receiveApproval("studio", ask({ callId }));
+    };
+
+    await deleteCall();
+    await resent;
+
+    expect(answers.find((answer) => answer.approvalId === "approval-1")?.decision).toBe(
+      "approved"
+    );
   });
 
   it("refuses once the call has settled", async () => {
