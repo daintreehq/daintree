@@ -194,6 +194,12 @@ const PERMISSIVE_ALLOWLIST: ReadonlyArray<{ actionId: string; pointer: string; r
     pointer: "/properties/results/items",
     reason: "self-describing: same manifest entries as actions.list",
   },
+  {
+    actionId: "host.call",
+    pointer: "/properties/result/anyOf/0/properties/structured/anyOf/0/additionalProperties",
+    reason:
+      "self-describing: a host tool's own structured result, shaped by that tool's schema on the host (#13493); a closed node would strip the very payload the call relays",
+  },
 
   // --- open by nature ------------------------------------------------------
   {
