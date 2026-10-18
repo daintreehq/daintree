@@ -98,11 +98,10 @@ describe("buildAgentLaunchContext (#12486)", () => {
     expect("isSettingsOpen" in context!).toBe(false);
   });
 
-  it.each([["codex"], ["daintree-assistant"], [undefined]])(
+  it.each([["codex"], [undefined]])(
     "returns undefined for %s, whose spawn payload stays unchanged",
     (launchAgentId) => {
-      // The assistant's context comes from its own caller (#10647), and no
-      // other agent is bound to its launch workspace.
+      // Only Claude is bound to its launch workspace.
       expect(buildAgentLaunchContext({ launchAgentId, terminalId: "pane-1" })).toBeUndefined();
     }
   );

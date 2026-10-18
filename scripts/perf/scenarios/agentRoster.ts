@@ -16,7 +16,7 @@ import {
 } from "../lib/agentRosterFixture";
 
 /**
- * The agent roster — 43 KB of config covering 18 CLIs, read on every terminal
+ * The agent roster — 43 KB of config covering 17 CLIs, read on every terminal
  * launch and every agent-state decision, and previously unmeasured.
  *
  * `lib/agentRosterFixture.ts` states the scope; the short version is that
@@ -145,7 +145,7 @@ export const agentRosterScenarios: PerfScenario[] = [
           builtInAgentCount: mods.BUILT_IN_AGENT_IDS.length,
           agentConfigFileCount: onDisk.length,
           effectiveAgentCount: effectiveIds.size,
-          launchableAgentCount: mods.LAUNCHABLE_AGENT_IDS.length,
+          launchableAgentCount: mods.BUILT_IN_AGENT_IDS.length,
           declaredPatternSourceCount: patternSourceCount,
           declaredModelCount: modelCount,
           rosterJsonBytes: Buffer.byteLength(JSON.stringify(effective), "utf8"),
@@ -393,7 +393,7 @@ export const agentRosterScenarios: PerfScenario[] = [
     correctness: ["launchCommandMisses"],
     async run() {
       const mods = await loadRosterModules();
-      const ids = [...mods.LAUNCHABLE_AGENT_IDS];
+      const ids = [...mods.BUILT_IN_AGENT_IDS];
 
       interface BuiltCommand {
         agentId: string;

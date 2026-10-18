@@ -81,7 +81,7 @@ describe("resolveSystemPromptArgs", () => {
     expect(resolveSystemPromptArgs("claude", undefined)).toEqual({ ok: true, args: [] });
   });
 
-  it.each(["gemini", "qwen", "cursor", "opencode", "daintree-assistant"])(
+  it.each(["gemini", "qwen", "cursor", "opencode"])(
     "refuses %s, which has no way to append to its system prompt",
     (agentId) => {
       const result = resolveSystemPromptArgs(agentId, INSTRUCTION);

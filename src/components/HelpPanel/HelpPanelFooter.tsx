@@ -1,7 +1,7 @@
 import { useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import { cn } from "@/lib/utils";
 import { UI_TOOLTIP_DELAY_DURATION, UI_TOOLTIP_SKIP_DELAY_DURATION } from "@/lib/animationUtils";
-import { ArrowLeftRight, DaintreeIcon, FolderGit2 } from "@/components/icons";
+import { ArrowLeftRight, FolderGit2 } from "@/components/icons";
 import { PANE_STATUS_FOOTER_CLASS } from "@/components/ui/paneToolbarStyles";
 import { TerminalNotifyChip } from "@/components/Terminal/TerminalNotifyChip";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
@@ -22,7 +22,6 @@ interface HelpPanelFooterProps {
   pinnedContext: PinnedActionContextSnapshot | null;
   isPinnedWorktreeDiverged: boolean;
   onReturnToPinnedWorktree: () => void;
-  agentId: string;
   agentConfig: AgentConfig;
   launchedModelLabel: string | null;
 }
@@ -167,12 +166,11 @@ export function HelpPanelFooter({
   pinnedContext,
   isPinnedWorktreeDiverged,
   onReturnToPinnedWorktree,
-  agentId,
   agentConfig,
   launchedModelLabel,
 }: HelpPanelFooterProps) {
-  const agentName = agentId === "daintree-assistant" ? "Assistant" : agentConfig.name;
-  const AgentIcon = agentId === "daintree-assistant" ? DaintreeIcon : agentConfig.icon;
+  const agentName = agentConfig.name;
+  const AgentIcon = agentConfig.icon;
   const agentDescription = launchedModelLabel
     ? `${agentConfig.name} · ${launchedModelLabel}`
     : agentConfig.name;

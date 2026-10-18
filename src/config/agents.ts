@@ -62,7 +62,6 @@ export const AGENT_DESCRIPTIONS: Record<string, string> = {
   interpreter: "Open Interpreter's CLI",
   mistral: "Mistral's CLI",
   kimi: "Moonshot AI's CLI",
-  "daintree-assistant": "Daintree's built-in assistant",
 };
 
 export {

@@ -1541,7 +1541,7 @@ interface FileDecorationProviderDescriptor {
     scopes?: string[];
 }
 
-declare const BUILT_IN_AGENT_IDS: readonly ["claude", "opencode", "aider", "gemini", "antigravity", "codex", "grok", "cursor", "copilot", "goose", "amp", "crush", "qwen", "kimi", "interpreter", "mistral", "kiro", "daintree-assistant"];
+declare const BUILT_IN_AGENT_IDS: readonly ["claude", "opencode", "aider", "gemini", "antigravity", "codex", "grok", "cursor", "copilot", "goose", "amp", "crush", "qwen", "kimi", "interpreter", "mistral", "kiro"];
 type BuiltInAgentId = (typeof BUILT_IN_AGENT_IDS)[number];
 type AgentKeyAction = `agent.${BuiltInAgentId}`;
 

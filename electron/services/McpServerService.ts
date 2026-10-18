@@ -75,8 +75,6 @@ import type {
   HelpSessionWebContentsResolver,
   HelpSessionActionContextResolver,
   HelpSessionIdResolver,
-  AssistantPaneWebContentsResolver,
-  AssistantPaneActionContextResolver,
   PaneWorkspaceBindingResolver,
   PaneOwnershipPrincipalResolver,
   PaneTerminalResolver,
@@ -511,14 +509,6 @@ export class McpServerService {
         this.sessionStore.httpSessions.get(sessionId) ?? this.sessionStore.sessions.get(sessionId);
       session?.server.sendToolListChanged().catch(() => {});
     }
-  }
-
-  setAssistantPaneWebContentsResolver(resolver: AssistantPaneWebContentsResolver | null): void {
-    this.httpLifecycle.setAssistantPaneWebContentsResolver(resolver);
-  }
-
-  setAssistantPaneActionContextResolver(resolver: AssistantPaneActionContextResolver | null): void {
-    this.httpLifecycle.setAssistantPaneActionContextResolver(resolver);
   }
 
   setPaneWorkspaceBindingResolver(resolver: PaneWorkspaceBindingResolver | null): void {

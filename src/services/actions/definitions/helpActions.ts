@@ -23,7 +23,7 @@ import { getDefaultAgentId } from "@/lib/resolveAgentId";
 import { loadCustomLaunchFlags } from "@/lib/assistantLaunchFlags";
 import { ensureHelpPanelRuntime } from "@/lib/helpPanelRuntimeGate";
 import { openTour } from "@/components/Tour/tourEvents";
-import { isAssistantOnlyAgentId, isBuiltInAgentId } from "@shared/config/agentIds";
+import { isBuiltInAgentId } from "@shared/config/agentIds";
 import {
   ASSISTANT_SLOTS,
   MAX_ASSISTANT_SLOTS,
@@ -843,13 +843,9 @@ export function registerHelpActions(actions: ActionRegistry, callbacks: ActionCa
           return;
         }
 
-        // The Daintree Assistant is env-only (MCP via DAINTREE_MCP_* env vars)
-        // and ships its own skills, so it reads nothing from cwd. Run it in the
-        // workspace root so its file tools (read/list/grep/edit) and the terminal's
-        // file-link resolution operate on the actual workspace; other help agents
-        // stay in the session dir that owns their .mcp.json / settings. The
-        // session token still scopes the assistant's MCP surface to this workspace.
-        const cwd = isAssistantOnlyAgentId(agentId) ? workspace.path : session.sessionPath;
+        // The session dir owns the agent's .mcp.json / settings; the session
+        // token scopes the assistant's MCP surface to this workspace.
+        const cwd = session.sessionPath;
         const env: Record<string, string> = {
           DAINTREE_MCP_TOKEN: session.token,
           DAINTREE_WINDOW_ID: String(session.windowId),

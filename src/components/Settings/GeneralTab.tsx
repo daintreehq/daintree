@@ -20,7 +20,7 @@ import { AgentIdentityBlock, resolveIdentity } from "@/components/agents/AgentCa
 import { Button } from "@/components/ui/button";
 import { KbdChord } from "@/components/ui/Kbd";
 import { Badge } from "@/components/ui/badge";
-import { LAUNCHABLE_AGENT_IDS } from "@shared/config/agentIds";
+import { BUILT_IN_AGENT_IDS } from "@shared/config/agentIds";
 import type {
   HibernationConfig,
   SessionRestoreConfig,
@@ -64,7 +64,7 @@ const CURATED_SHORTCUTS = [
     category: "Agents",
     actionIds: [
       "panel.palette",
-      ...LAUNCHABLE_AGENT_IDS.map((id) => `agent.${id}`),
+      ...BUILT_IN_AGENT_IDS.map((id) => `agent.${id}`),
       "agent.terminal",
       "terminal.inject",
     ],
@@ -972,7 +972,7 @@ export function GeneralTab({
 
                   return (
                     <SettingsGroup className="divide-y-0 overflow-hidden">
-                      {/* A list, not a stack of divs: eighteen agents is a collection, and a
+                      {/* A list, not a stack of divs: seventeen agents is a collection, and a
                         screen-reader user gets the count and the position from the role.
                         Agents needing attention always show; the healthy remainder is an
                         inventory the section summary already counts, so it sits behind a

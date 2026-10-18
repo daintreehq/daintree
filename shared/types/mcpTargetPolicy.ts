@@ -204,8 +204,7 @@ export const McpGetSchemaResultSchema = z.object({
  * inheriting the staging one.
  *
  * Discriminated on a literal `ok`, so a consumer narrows on it and gets
- * non-null `entry`/`policy` on the success arm without re-checking. This is the
- * contract the companion CLI (daintreehq/assistant#368) codes against.
+ * non-null `entry`/`policy` on the success arm without re-checking.
  *
  * Strict all the way down, which is what makes the conformance test a real
  * guard: a plain `z.object` silently STRIPS unknown keys, so a field added to
@@ -221,8 +220,7 @@ export const McpGetSchemaResultSchema = z.object({
  * against this contract's usual "read `ok`, never the key set" rule: an
  * external client's payload has to stay byte-for-byte what it was, and a
  * required-nullable key would change it for every denial. A third union arm
- * would have done the same to consumers narrowing on the two that exist —
- * `daintreehq/assistant#368` among them.
+ * would have done the same to consumers narrowing on the two that exist.
  */
 export const McpGetSchemaWireResultSchema = z
   .discriminatedUnion("ok", [

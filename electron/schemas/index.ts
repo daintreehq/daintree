@@ -53,13 +53,6 @@ export {
   type WorktreeCreatePayload as ValidatedWorktreeCreatePayload,
   type TabGroupInput,
   type TerminalSnapshotEntry,
-  AssistantHostEventSchema,
-  AssistantHostCommandSchema,
-  AssistantHostSessionDescriptorSchema,
-  parseAssistantHostEvent,
-  parseAssistantHostCommand,
-  parseAssistantHostSessionDescriptor,
-  ASSISTANT_HOST_PROTOCOL_VERSION,
 } from "./ipc.js";
 
 export {

@@ -120,7 +120,7 @@ When `actionService.dispatch(actionId, args, options)` is called:
 11. Return      → { ok: true, result } or { ok: false, error }
 ```
 
-`dispatchSource` on the context is written by `dispatch()` from the resolved `source`, overwriting anything a `contextOverride` supplied — a definition can trust it, and callers cannot spoof it. Note that every MCP origin (external client, in-app assistant, assistant pane) dispatches as `"agent"`; the finer-grained origin split lives on the MCP session, not on `ActionSource`.
+`dispatchSource` on the context is written by `dispatch()` from the resolved `source`, overwriting anything a `contextOverride` supplied — a definition can trust it, and callers cannot spoof it. Note that every MCP origin (external client, in-app assistant) dispatches as `"agent"`; the finer-grained origin split lives on the MCP session, not on `ActionSource`.
 
 ### Result Types
 

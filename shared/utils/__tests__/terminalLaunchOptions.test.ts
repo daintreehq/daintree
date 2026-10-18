@@ -23,9 +23,8 @@ describe("mergeTerminalLaunchEnv", () => {
 });
 
 describe("spawnSourceForMcpOrigin", () => {
-  it("credits only Daintree's own assistant surfaces to the assistant", () => {
+  it("credits only Daintree's own assistant panel to the assistant", () => {
     expect(spawnSourceForMcpOrigin("help")).toBe("assistant");
-    expect(spawnSourceForMcpOrigin("assistant-pane")).toBe("assistant");
     expect(spawnSourceForMcpOrigin("external")).toBe("mcp");
     expect(spawnSourceForMcpOrigin(undefined)).toBe("mcp");
   });

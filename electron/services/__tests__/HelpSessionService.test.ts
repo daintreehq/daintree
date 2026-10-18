@@ -768,7 +768,7 @@ describe("HelpSessionService", () => {
 
     it("never reads the folder for an agent the assistant refuses", async () => {
       await expect(
-        service.provisionSession({ ...provisionInput(), agentId: "daintree-assistant" })
+        service.provisionSession({ ...provisionInput(), agentId: "gemini" })
       ).rejects.toThrow("not assistant-supported");
       expect(mockLoadAssistantUserConfig).not.toHaveBeenCalled();
     });
@@ -1347,24 +1347,6 @@ describe("HelpSessionService", () => {
 
     await service.revokeSession(result.sessionId);
     expect(service.getBypassPermissions(result.token)).toBe(false);
-  });
-
-  it("getDebugLogging returns the snapshot taken at provision time", async () => {
-    mockStoreGet.mockReturnValue({ tier: "core", debugLogging: true });
-
-    const result = await service.provisionSession(provisionInput());
-    if (!result) throw new Error("expected result");
-
-    // Mutate the store after provisioning: the accessor must return the
-    // value captured at provision time, not re-read the live store.
-    mockStoreGet.mockReturnValue({ tier: "core", debugLogging: false });
-
-    expect(service.getDebugLogging(result.token)).toBe(true);
-    expect(service.getDebugLogging("not-a-token")).toBe(false);
-    expect(service.getDebugLogging("")).toBe(false);
-
-    await service.revokeSession(result.sessionId);
-    expect(service.getDebugLogging(result.token)).toBe(false);
   });
 
   it("omits the daintree MCP server when daintreeControl is false", async () => {

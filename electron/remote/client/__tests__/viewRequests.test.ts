@@ -169,8 +169,10 @@ describe("view reverse requests", () => {
   });
 
   it.each([
-    ["an agent pane", { sessionOrigin: "assistant-pane", authorization: "skip-preference" }],
-    ["an api-key client", { sessionOrigin: "external", authorization: "skip-preference" }],
+    [
+      "an agent pane or api-key client",
+      { sessionOrigin: "external", authorization: "skip-preference" },
+    ],
     ["another authorization", { sessionOrigin: "help", authorization: "native-grant" }],
     ["no authorization", { sessionOrigin: "help" }],
     [
@@ -260,6 +262,22 @@ describe("view reverse requests", () => {
     });
     // A reason without approval-only changes nothing about the dispatch.
     expect(m.dispatchActionForHost.mock.calls[1]?.[6]).toBeUndefined();
+  });
+
+  // Only the retired assistant CLI's pane ever authenticated this way, so a
+  // host from before its removal can still send it. Refused like any other bad
+  // request: the reverse request rejects, nothing dispatches, the link stays.
+  it("refuses an origin this Shell no longer knows", async () => {
+    installViewReverseRequests();
+    await expect(
+      ask("mcp:dispatch-action", {
+        actionId: "terminal.new",
+        args: {},
+        confirmed: false,
+        sessionOrigin: "assistant-pane",
+      })
+    ).rejects.toMatchObject({ code: "VALIDATION" });
+    expect(m.dispatchActionForHost).not.toHaveBeenCalled();
   });
 
   it("refuses an approval reason this Shell does not know", async () => {

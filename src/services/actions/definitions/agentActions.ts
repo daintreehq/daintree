@@ -31,7 +31,7 @@ import {
 } from "@/config/agents";
 import { agentCapabilitiesClient, agentSettingsClient, cliAvailabilityClient } from "@/clients";
 import { userAgentRegistryClient } from "@/clients/userAgentRegistryClient";
-import { isAssistantOnlyAgentId, LAUNCHABLE_AGENT_IDS } from "@shared/config/agentIds";
+import { BUILT_IN_AGENT_IDS } from "@shared/config/agentIds";
 import { isAgentToolbarVisible } from "@shared/utils/agentPinned";
 import { buildAvailableAgentListing, listedAgentIds } from "@shared/utils/agentListing";
 import { unknownAgentIdMessage } from "@/utils/agentLaunchValidation";
@@ -711,11 +711,6 @@ export function registerAgentActions(actions: ActionRegistry, callbacks: ActionC
     .nullable();
 
   for (const [id, config] of Object.entries(AGENT_REGISTRY)) {
-    // Assistant-only agents (e.g. daintree-assistant) have no direct-launch
-    // action — they're never spawned as a standalone agent, only used by the
-    // Daintree Assistant overlay. Skipping registration keeps them out of the
-    // action palette and the MCP action manifest.
-    if (isAssistantOnlyAgentId(id)) continue;
     const actionId = `agent.${id}` as ActionId;
     actions.set(actionId, () => ({
       id: actionId,
@@ -1459,7 +1454,7 @@ export function registerAgentActions(actions: ActionRegistry, callbacks: ActionC
     run: async () => {
       const { settings, availability } = await readAgentDiscoveryState();
       return {
-        agents: LAUNCHABLE_AGENT_IDS.map((id) => {
+        agents: BUILT_IN_AGENT_IDS.map((id) => {
           const entry = settings.agents?.[id];
           const state = availability[id];
           // Omit `pinned` unless it's an explicit boolean (tri-state): an

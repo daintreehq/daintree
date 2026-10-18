@@ -173,11 +173,7 @@ import { useCopyTreeCompletionNotice } from "@/hooks/useCopyTreeCompletionNotice
 import { useCopyTreeRunStore } from "@/store/copyTreeRunStore";
 import type { CopyTreeHistoryRecord } from "@shared/types";
 
-import {
-  LAUNCHABLE_AGENT_IDS,
-  isBuiltInAgentId,
-  type BuiltInAgentId,
-} from "@shared/config/agentIds";
+import { BUILT_IN_AGENT_IDS, isBuiltInAgentId, type BuiltInAgentId } from "@shared/config/agentIds";
 import { pluralize } from "@/lib/pluralize";
 
 type OverflowMenuMeta = { label: string; icon: React.ComponentType<{ className?: string }> };
@@ -1352,7 +1348,7 @@ export function Toolbar({
         isAvailable: true,
       },
       ...Object.fromEntries(
-        LAUNCHABLE_AGENT_IDS.map((id) => [
+        BUILT_IN_AGENT_IDS.map((id) => [
           id,
           {
             render: () => (
@@ -1792,7 +1788,7 @@ export function Toolbar({
   // this issue removed.
   const unpositionedAgentPins = useMemo(() => {
     const onEitherSide = new Set([...toolbarLayout.leftButtons, ...toolbarLayout.rightButtons]);
-    return LAUNCHABLE_AGENT_IDS.filter(
+    return BUILT_IN_AGENT_IDS.filter(
       (id) => !onEitherSide.has(id) && isAgentPinned(effectiveAgentSettings?.agents?.[id])
     );
   }, [toolbarLayout.leftButtons, toolbarLayout.rightButtons, effectiveAgentSettings]);
@@ -2193,7 +2189,7 @@ export function Toolbar({
 
   const overflowActions = useMemo<Partial<Record<AnyToolbarButtonId, () => void>>>(
     () => ({
-      ...Object.fromEntries(LAUNCHABLE_AGENT_IDS.map((id) => [id, () => onLaunchAgent(id)])),
+      ...Object.fromEntries(BUILT_IN_AGENT_IDS.map((id) => [id, () => onLaunchAgent(id)])),
       terminal: () => onLaunchAgent("terminal"),
       browser: () => onLaunchAgent("browser"),
       "file-browser": openFileBrowser,
@@ -2266,7 +2262,7 @@ export function Toolbar({
   // Same filter the launcher's own Launch section applies, so the rows the
   // overflow menu inlines are exactly the rows the dropdown would have shown.
   const launcherAgentIds = useMemo(
-    () => LAUNCHABLE_AGENT_IDS.filter((id) => isAgentLaunchable(agentAvailability?.[id])),
+    () => BUILT_IN_AGENT_IDS.filter((id) => isAgentLaunchable(agentAvailability?.[id])),
     [agentAvailability]
   );
 

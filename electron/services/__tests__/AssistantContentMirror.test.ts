@@ -54,19 +54,19 @@ afterEach(async () => {
 });
 
 describe("agentSupportsAssistantContent", () => {
-  it("maps claude, codex, and copilot but not assistant-only or unknown agents", () => {
+  it("maps claude, codex, and copilot but not other built-in or unknown agents", () => {
     expect(agentSupportsAssistantContent("claude")).toBe(true);
     expect(agentSupportsAssistantContent("codex")).toBe(true);
     expect(agentSupportsAssistantContent("copilot")).toBe(true);
-    expect(agentSupportsAssistantContent("daintree-assistant")).toBe(false);
     expect(agentSupportsAssistantContent("gemini")).toBe(false);
+    expect(agentSupportsAssistantContent("my-custom-agent")).toBe(false);
   });
 });
 
 describe("syncAssistantContent", () => {
   it("returns null for agents without a content mapping", async () => {
-    expect(await sync("daintree-assistant")).toBeNull();
     expect(await sync("gemini")).toBeNull();
+    expect(await sync("my-custom-agent")).toBeNull();
   });
 
   it("mirrors claude commands and skills from the global source", async () => {

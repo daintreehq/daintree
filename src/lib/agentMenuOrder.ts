@@ -21,7 +21,7 @@ export interface PinnableAgent {
  * icon on its row can never contradict each other. It deliberately is NOT
  * `isAgentToolbarVisible`: that one resolves an unset pin to "the binary is
  * installed", which stopped meaning "has a toolbar button" when #11680 dropped
- * the `LAUNCHABLE_AGENT_IDS` spread from `DEFAULT_LEFT_BUTTONS`. Under the old
+ * the `BUILT_IN_AGENT_IDS` spread from `DEFAULT_LEFT_BUTTONS`. Under the old
  * predicate a fresh profile's installed-but-unpositioned agent landed under
  * "Pinned" wearing an unfilled pin.
  *

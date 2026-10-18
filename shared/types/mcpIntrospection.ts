@@ -17,8 +17,8 @@ import type { HelpAssistantTier } from "./ipc/maps.js";
  * call; the assistant can now name the tier that would permit it instead of
  * denying the capability exists.
  *
- * Only ever built for a renderer-owned session (`help` / `assistant-pane`) —
- * a pinned panel with a human watching, whose prompt carries the rule for
+ * Only ever built for a renderer-owned session (`help`) — a pinned panel with
+ * a human watching, whose prompt carries the rule for
  * reading these. Every other caller, external clients included, receives the
  * payload it received before, with no key added.
  */

@@ -30,7 +30,7 @@ describe("agent roster fixture oracles", () => {
   it("reads the roster off disk and agrees with the product's own id list", async () => {
     const mods = await loadRosterModules();
     const onDisk = agentIdsOnDisk();
-    expect(onDisk.length).toBeGreaterThanOrEqual(18);
+    expect(onDisk.length).toBeGreaterThanOrEqual(17);
     expect([...onDisk].sort()).toEqual([...mods.BUILT_IN_AGENT_IDS].sort());
     expect(onDisk).not.toContain("completionSourceHelpers");
   });

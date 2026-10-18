@@ -86,7 +86,6 @@ describe("registerHelpAssistantHandlers", () => {
       modelIds: {},
       customArgs: "",
       idleHibernateMinutes: 5,
-      debugLogging: false,
       loadGlobalHooksAndServers: false,
       daintreeConfirmations: "inherit",
       acceptRemoteMessages: true,
@@ -114,7 +113,6 @@ describe("registerHelpAssistantHandlers", () => {
       modelIds: {},
       customArgs: "",
       idleHibernateMinutes: 5,
-      debugLogging: false,
       loadGlobalHooksAndServers: false,
       daintreeConfirmations: "inherit",
       acceptRemoteMessages: true,
@@ -199,18 +197,6 @@ describe("registerHelpAssistantHandlers", () => {
     expect(storeMock.set).toHaveBeenCalledTimes(2);
   });
 
-  it("persists debugLogging and rejects a non-boolean value", async () => {
-    registerHelpAssistantHandlers();
-    const handler = ipcMainMock._handlers.get(SET_CHANNEL)!;
-
-    await handler(null, { debugLogging: true });
-    expect(storeMock.set).toHaveBeenCalledWith("helpAssistant.debugLogging", true);
-
-    storeMock.set.mockClear();
-    await handler(null, { debugLogging: "yes" as unknown as boolean });
-    expect(storeMock.set).not.toHaveBeenCalled();
-  });
-
   it("persists loadGlobalHooksAndServers and rejects a non-boolean value", async () => {
     registerHelpAssistantHandlers();
     const handler = ipcMainMock._handlers.get(SET_CHANNEL)!;
@@ -278,15 +264,6 @@ describe("registerHelpAssistantHandlers", () => {
       daintreeConfirmations: "skip" as unknown as "inherit",
     });
     expect(await handler(null)).toMatchObject({ daintreeConfirmations: "inherit" });
-  });
-
-  it("returns a stored debugLogging=true over the default", async () => {
-    storeMock.get.mockReturnValue({ debugLogging: true });
-    registerHelpAssistantHandlers();
-    const handler = ipcMainMock._handlers.get(GET_CHANNEL)!;
-
-    const result = await handler(null);
-    expect(result).toMatchObject({ debugLogging: true });
   });
 
   it("persists tier when set to a valid value", async () => {
@@ -466,7 +443,6 @@ describe("registerHelpAssistantHandlers", () => {
       modelIds: {},
       customArgs: "",
       idleHibernateMinutes: 5,
-      debugLogging: false,
       loadGlobalHooksAndServers: false,
       daintreeConfirmations: "inherit",
       acceptRemoteMessages: true,

@@ -76,10 +76,9 @@ export interface TerminalSpawnOptions {
   handbackCode?: string;
   /**
    * Launch-time `ActionContext` snapshot, captured synchronously in the
-   * renderer when the user launched the agent. Consumed only by the
-   * `daintree-assistant` pinned-session path (#10647) to replay tool dispatch
-   * against the worktree/terminal focused at launch even if focus later
-   * changes. Ignored for every other agent.
+   * renderer when the user launched the agent. An agent pane's workspace
+   * binding replays it (#12486) so tool dispatch targets the worktree/terminal
+   * focused at launch even if focus later changes.
    */
   actionContext?: ActionContext;
 }

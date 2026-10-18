@@ -27,14 +27,14 @@ describe("AgentInventorySection", () => {
       "claude",
       "codex",
       "copilot",
-      "daintree-assistant",
+      "gemini",
     ]);
     fireEvent.click(screen.getByRole("button", { name: /that isn't installed$/ }));
     const listed = Array.from(document.querySelectorAll("[data-inventory-agent]")).map(
       (el) => (el as HTMLElement).dataset.inventoryAgent
     );
     expect(listed).toContain("copilot");
-    expect(listed).not.toContain("daintree-assistant");
+    expect(listed).not.toContain("gemini");
     expect(document.body.textContent).toContain("1 of 2 installed agents ready");
   });
 

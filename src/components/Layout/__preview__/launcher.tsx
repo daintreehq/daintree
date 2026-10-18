@@ -5,7 +5,7 @@ import { resolveAppTheme } from "@shared/theme/themes";
 import type { AgentAvailabilityState } from "@shared/types/ipc/system";
 import type { TerminalRecipe } from "@shared/types";
 import type { AnyToolbarButtonId } from "@shared/types/toolbar";
-import { LAUNCHABLE_AGENT_IDS } from "@shared/config/agentIds";
+import { BUILT_IN_AGENT_IDS } from "@shared/config/agentIds";
 import { applyAppThemeToRoot } from "@/theme/applyAppTheme";
 import { initBuiltInPanelKinds, registerPanelKindDefinition } from "@/panels/registry";
 import { registerPanelKind } from "@shared/config/panelKindRegistry";
@@ -53,7 +53,7 @@ function availabilityFor(): Record<string, AgentAvailabilityState> {
     fixture === "few"
       ? ["claude", "codex"]
       : fixture === "all"
-        ? LAUNCHABLE_AGENT_IDS.slice()
+        ? BUILT_IN_AGENT_IDS.slice()
         : [...PINNED, ...OTHERS];
   for (const id of launchable) availability[id] = "ready";
   if (fixture === "setup") {

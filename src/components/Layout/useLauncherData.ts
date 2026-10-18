@@ -9,7 +9,7 @@ import { useWorktreeStore } from "@/hooks/useWorktreeStore";
 import { resolveWorkspaceCwd } from "@/utils/workspaceCwd";
 import { sortAgentsByToolbarPin } from "@/lib/agentMenuOrder";
 import { getAgentConfig, getAgentIds } from "@/config/agents";
-import { isAssistantOnlyAgentId, LAUNCHABLE_AGENT_IDS } from "@shared/config/agentIds";
+import { BUILT_IN_AGENT_IDS } from "@shared/config/agentIds";
 import { isAgentInstalled, isAgentLaunchable } from "@shared/utils/agentAvailability";
 import type { DockLaunchAgent, DockLaunchInventoryState } from "./dockLaunchItems";
 import type { RecipeContext } from "@/utils/recipeVariables";
@@ -100,10 +100,7 @@ export function useLauncherData(): LauncherData {
       };
     };
 
-    const offered = [...baseIds, ...extraIds]
-      // Assistant-only agents are never offered in a launch menu.
-      .filter((id) => !isAssistantOnlyAgentId(id))
-      .map(toAgent);
+    const offered = [...baseIds, ...extraIds].map(toAgent);
     const installed = offered.filter((agent) => isAgentInstalled(agent.availability));
 
     // Nothing installed on this machine: offer every built-in with a Setup
@@ -112,7 +109,7 @@ export function useLauncherData(): LauncherData {
     // someone who has agents (#11681).
     if (!isAvailabilityLoading && installed.length === 0) {
       return {
-        agents: LAUNCHABLE_AGENT_IDS.map(toAgent),
+        agents: BUILT_IN_AGENT_IDS.map(toAgent),
         pinnedCount: 0,
         agentInventoryState: "fallback" as DockLaunchInventoryState,
       };

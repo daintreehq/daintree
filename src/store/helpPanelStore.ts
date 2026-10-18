@@ -12,7 +12,7 @@ import { legacyHelpPanelAgentId } from "./persistence/agentDefaultsLegacy";
 import { agentDefaultsClient } from "@/clients/agentDefaultsClient";
 import { logError } from "@/utils/logger";
 import { getAssistantSupportedAgentIds } from "../../shared/config/agentRegistry";
-import { isBuiltInAgentId } from "../../shared/config/agentIds";
+import { isBuiltInAgentId, isRetiredAgentId } from "../../shared/config/agentIds";
 import {
   DEFAULT_ASSISTANT_SLOT,
   MAX_ASSISTANT_SLOTS,
@@ -363,6 +363,8 @@ function sanitizeHibernateSessions(value: unknown): Record<string, HelpHibernate
     if (typeof sessionId !== "string") continue;
     if (typeof cwd !== "string" || !cwd) continue;
     if (typeof agentId !== "string" || !agentId) continue;
+    // Resume needs the same agent, and a retired one never launches again.
+    if (isRetiredAgentId(agentId)) continue;
     out[key] = { sessionId, cwd, agentId };
   }
   return out;

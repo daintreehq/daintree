@@ -26,8 +26,8 @@ export function resolveTerminalRunIcon(
   // Own-key check: `iconId` can come from a plugin manifest, and a bare index
   // would hand back an inherited `Object.prototype` method as a "component".
   if (Object.hasOwn(TERMINAL_RUN_ICON_MAP, iconId)) return TERMINAL_RUN_ICON_MAP[iconId];
-  // An agent's registry id isn't always its icon id (`daintree-assistant` maps
-  // to `daintreeassistant`). `PanelKindIcon` resolves the registry id via
+  // An agent's registry id isn't always its icon id (a plugin or user agent can
+  // name any brand mark). `PanelKindIcon` resolves the registry id via
   // `getAgentConfig`, so accept it here too — otherwise the same manifest
   // `iconId` shows a brand mark in the palette and a terminal glyph in the tab.
   const agentIconId = getAgentConfig(iconId)?.iconId;

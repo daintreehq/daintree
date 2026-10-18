@@ -1966,7 +1966,6 @@ export function HelpPanel({
           pinnedContext={pinnedContext}
           isPinnedWorktreeDiverged={isPinnedWorktreeDiverged}
           onReturnToPinnedWorktree={returnToPinnedWorktree}
-          agentId={agentId}
           agentConfig={agentConfig}
           launchedModelLabel={launchedModelLabel}
         />

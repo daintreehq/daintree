@@ -4,7 +4,7 @@ import { agentSettingsClient } from "@/clients";
 import { getSafeBootPromise } from "@/lib/bootPromise";
 import { DEFAULT_AGENT_SETTINGS } from "@shared/types";
 import { getEffectiveAgentIds } from "../../shared/config/agentRegistry";
-import { BUILT_IN_AGENT_IDS, LAUNCHABLE_AGENT_IDS } from "../../shared/config/agentIds";
+import { BUILT_IN_AGENT_IDS } from "../../shared/config/agentIds";
 import { isAgentPinned } from "../../shared/utils/agentPinned";
 import { isAgentInstalled } from "../../shared/utils/agentAvailability";
 import { useCliAvailabilityStore } from "./cliAvailabilityStore";
@@ -94,7 +94,7 @@ export function buildInitialAgentPinUpdates(
   if (!isFreshDefaultAgentSettings(settings)) return null;
 
   const selected = new Set(
-    LAUNCHABLE_AGENT_IDS.filter((id) => isAgentInstalled(availability[id])).slice(
+    BUILT_IN_AGENT_IDS.filter((id) => isAgentInstalled(availability[id])).slice(
       0,
       INITIAL_PIN_LIMIT
     )

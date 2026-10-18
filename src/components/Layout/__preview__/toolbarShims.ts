@@ -1,5 +1,5 @@
 import { installPreviewShims } from "@/components/HelpPanel/__preview__/previewShims";
-import { LAUNCHABLE_AGENT_IDS } from "@shared/config/agentIds";
+import { BUILT_IN_AGENT_IDS } from "@shared/config/agentIds";
 import type { Project } from "@shared/types";
 import type { HostListEntry } from "@shared/types/remoteHosts";
 import { COMMITS_FIXTURES, listCommitsFrom, listPushCommitsFrom } from "./localCommitsFixtures";
@@ -128,7 +128,7 @@ installPreviewShims({
   // Every agent already seen, so no first-run discovery dot sits on the launcher.
   onboarding: withFallback({
     get: async () => ({
-      seenAgentIds: LAUNCHABLE_AGENT_IDS.slice(),
+      seenAgentIds: BUILT_IN_AGENT_IDS.slice(),
       availabilityFirstSeen: {},
       welcomeCardDismissed: true,
       setupBannerDismissed: true,

@@ -22,8 +22,6 @@ import type {
   HelpSessionWebContentsResolver,
   HelpSessionActionContextResolver,
   HelpSessionIdResolver,
-  AssistantPaneWebContentsResolver,
-  AssistantPaneActionContextResolver,
   PaneWorkspaceBinding,
   PaneWorkspaceBindingResolver,
   PaneOwnershipPrincipalResolver,
@@ -431,8 +429,6 @@ export class HttpLifecycle {
   private helpSessionWebContentsResolver: HelpSessionWebContentsResolver | null = null;
   private helpSessionActionContextResolver: HelpSessionActionContextResolver | null = null;
   private helpSessionIdResolver: HelpSessionIdResolver | null = null;
-  private assistantPaneWebContentsResolver: AssistantPaneWebContentsResolver | null = null;
-  private assistantPaneActionContextResolver: AssistantPaneActionContextResolver | null = null;
   private paneWorkspaceBindingResolver: PaneWorkspaceBindingResolver | null = null;
   private paneOwnershipPrincipalResolver: PaneOwnershipPrincipalResolver | null = null;
   private paneTerminalResolver: PaneTerminalResolver | null = null;
@@ -523,14 +519,6 @@ export class HttpLifecycle {
     this.helpSessionIdResolver = resolver;
   }
 
-  setAssistantPaneWebContentsResolver(resolver: AssistantPaneWebContentsResolver | null): void {
-    this.assistantPaneWebContentsResolver = resolver;
-  }
-
-  setAssistantPaneActionContextResolver(resolver: AssistantPaneActionContextResolver | null): void {
-    this.assistantPaneActionContextResolver = resolver;
-  }
-
   setPaneWorkspaceBindingResolver(resolver: PaneWorkspaceBindingResolver | null): void {
     this.paneWorkspaceBindingResolver = resolver;
   }
@@ -548,12 +536,11 @@ export class HttpLifecycle {
   }
 
   /**
-   * Parses a Bearer header and asks the help-session resolver — then the
-   * assistant-pane resolver (#10647) — which renderer minted it, keeping *which*
-   * resolver matched (#11789).
+   * Parses a Bearer header and asks the help-session resolver which renderer
+   * minted it, keeping the origin that match confers (#11789).
    *
-   * The origin is the part that cannot be re-derived later: both resolvers
-   * produce a bare WebContents id, and once it lands in `sessionWebContentsMap`
+   * The origin is the part that cannot be re-derived later: the resolver
+   * produces a bare WebContents id, and once it lands in `sessionWebContentsMap`
    * there is no way to tell a Daintree assistant surface from anything else that
    * happens to route to a renderer. Authorization, notification routing, and
    * external-client inventory all need that distinction, so it is recorded here
@@ -571,14 +558,12 @@ export class HttpLifecycle {
     if (!token) return null;
     const fromHelp = this.helpSessionWebContentsResolver?.(token) ?? null;
     if (fromHelp !== null) return { origin: "help", webContentsId: fromHelp };
-    const fromPane = this.assistantPaneWebContentsResolver?.(token) ?? null;
-    if (fromPane !== null) return { origin: "assistant-pane", webContentsId: fromPane };
     return null;
   }
 
   /**
    * The launch workspace of an ordinary agent pane bearer (#12486), for a
-   * bearer neither pin resolver matched.
+   * bearer the help-session resolver didn't match.
    *
    * Server-derived, never client-supplied: the binding was recorded when the
    * pane was spawned, so the pane cannot choose or change its target, and a
@@ -601,9 +586,7 @@ export class HttpLifecycle {
    * Resolved before any session state is written, like the pane's workspace
    * binding, and bound with no await in between, so no revocation can land
    * between the two — a revoked token resolves to nothing, and the session
-   * keeps session-scoped ownership. Looked up whatever the session's origin:
-   * the assistant pane's bearer is a pane token too, minted and revoked on the
-   * same path.
+   * keeps session-scoped ownership. Looked up whatever the session's origin.
    */
   private resolveOwnershipPrincipal(authHeader: string): string | null {
     const token = extractBearerToken(authHeader);
@@ -656,8 +639,8 @@ export class HttpLifecycle {
    * session may bind to, or a rejection the caller turns into a 400 — creating
    * no session, no transport, and no `Mcp-Session-Id`.
    *
-   * Only `external` sessions may bind. A help or assistant-pane bearer already
-   * routes through the renderer that minted it, so a selector from one is a
+   * Only `external` sessions may bind. A help bearer already routes through
+   * the renderer that minted it, so a selector from one is a
    * configuration mistake with two plausible targets; refusing it keeps the two
    * binding models disjoint instead of silently letting one win.
    *
@@ -766,20 +749,17 @@ export class HttpLifecycle {
   }
 
   /**
-   * Parses a Bearer header and asks the help-session resolver — then the
-   * assistant-pane resolver (#10647) — for the `ActionContext` snapshot bound
-   * to it at launch time (#8317). Returns null for non-pinned bearers so
-   * external/api-key/generic-pane sessions keep their live focused-window
-   * context in `buildSessionServerDeps`.
+   * Parses a Bearer header and asks the help-session resolver for the
+   * `ActionContext` snapshot bound to it at launch time (#8317). Returns null
+   * for non-pinned bearers so external/api-key/generic-pane sessions keep their
+   * live focused-window context in `buildSessionServerDeps`.
    */
   private resolveActionContext(
     authHeader: string
   ): import("../../../shared/types/actions.js").ActionContext | null {
     const token = extractBearerToken(authHeader);
     if (!token) return null;
-    const fromHelp = this.helpSessionActionContextResolver?.(token) ?? null;
-    if (fromHelp !== null) return fromHelp;
-    return this.assistantPaneActionContextResolver?.(token) ?? null;
+    return this.helpSessionActionContextResolver?.(token) ?? null;
   }
 
   /**
@@ -1972,8 +1952,8 @@ export class HttpLifecycle {
    *    the session survives its view being replaced and fails closed rather
    *    than following focus when the workspace has no single live view. A
    *    pane's launch view is preferred while it still shows the workspace.
-   * 2. **WebContents-pinned** (#7002) — help-session and assistant-pane
-   *    bearers, routed to the renderer that minted them, with a cache-free
+   * 2. **WebContents-pinned** (#7002) — help-session bearers, routed to the
+   *    renderer that minted them, with a cache-free
    *    manifest lookup so window A's manifest can never be served to window B.
    * 3. **Unbound** — api-key tokens with no selector, which keep the shared
    *    dispatch and cached-manifest path and follow window focus, as
@@ -1981,7 +1961,7 @@ export class HttpLifecycle {
    *
    * The two bound routes are mutually exclusive by construction: a selector
    * from a pinned bearer is refused at handshake, and a pane binding is only
-   * looked up for a bearer neither pin resolver matched.
+   * looked up for a bearer the pin resolver didn't match.
    */
   private buildSessionServerDeps(
     sessionId: string,

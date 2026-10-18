@@ -82,7 +82,6 @@ type SaveGroup = "agent" | "launch" | "behavior" | "security" | "privacy" | "con
 const SAVE_GROUP_BY_KEY: Record<keyof HelpAssistantSettings, SaveGroup> = {
   modelIds: "agent",
   customArgs: "launch",
-  debugLogging: "launch",
   docSearch: "behavior",
   daintreeControl: "behavior",
   runbookSearch: "behavior",
@@ -99,7 +98,6 @@ const SAVE_GROUP_BY_KEY: Record<keyof HelpAssistantSettings, SaveGroup> = {
 const SETTING_KEYS: readonly (keyof HelpAssistantSettings)[] = [
   "modelIds",
   "customArgs",
-  "debugLogging",
   "docSearch",
   "daintreeControl",
   "runbookSearch",
@@ -179,7 +177,6 @@ function revertSettingsPatch(
 const SETTING_LABEL: Record<keyof HelpAssistantSettings, string> = {
   modelIds: "Model",
   customArgs: "Custom CLI args",
-  debugLogging: "Debug logging",
   docSearch: "Search documentation",
   daintreeControl: "Daintree control",
   runbookSearch: "Follow runbooks",
@@ -208,7 +205,6 @@ const DEFAULT_SETTINGS: HelpAssistantSettings = {
   modelIds: {},
   customArgs: "",
   idleHibernateMinutes: 5,
-  debugLogging: false,
   loadGlobalHooksAndServers: false,
   daintreeConfirmations: "inherit",
   acceptRemoteMessages: true,
@@ -354,17 +350,6 @@ function getBypassCopy(
   if (!agentId) return null;
 
   const safeguard = tierBoundsNewSessions(tier, confirmationsSkipped);
-
-  // The assistant has no CLI flag: bypass skips its own confirm sheet via
-  // DAINTREE_ASSISTANT_AUTO_APPROVE, which is why it carries no
-  // DEFAULT_DANGEROUS_ARGS entry and declares `permissionBypass: false`.
-  if (agentId === "daintree-assistant") {
-    return {
-      title: "Auto-approve assistant actions",
-      subtitle: "Skip the assistant's own per-action confirmation sheet",
-      warning: `With this on, the assistant acts without asking — it skips its own confirmation sheet for everything it does. ${safeguard}`,
-    };
-  }
 
   const flag = DEFAULT_DANGEROUS_ARGS[agentId];
   const config = getAgentConfig(agentId);
@@ -892,10 +877,6 @@ export function DaintreeAssistantSettingsTab() {
     void persist({ daintreeConfirmations: value });
   };
 
-  const toggleDebugLogging = () => {
-    void persist({ debugLogging: !settings.debugLogging });
-  };
-
   const toggleAcceptRemoteMessages = () => {
     void persist({ acceptRemoteMessages: !settings.acceptRemoteMessages });
   };
@@ -1275,7 +1256,7 @@ export function DaintreeAssistantSettingsTab() {
 
           {/* The stored preference is agent-agnostic but its effect is not, so the
               row only renders once an agent with a real bypass mechanism is
-              selected — mirroring the agent-gated Debug logging switch above. */}
+              selected. */}
           {bypassCopy && (
             <SettingsSwitchCard
               id="assistant-skip-permissions"
@@ -1508,18 +1489,6 @@ export function DaintreeAssistantSettingsTab() {
             isModified={settings.idleHibernateMinutes !== DEFAULT_SETTINGS.idleHibernateMinutes}
             onReset={() => setHibernateMinutes(String(DEFAULT_SETTINGS.idleHibernateMinutes))}
           />
-          {preferredAgentId === "daintree-assistant" && (
-            <SettingsSwitchCard
-              title="Debug logging"
-              subtitle="Write a full-fidelity per-session trace to ~/.daintree/logs"
-              isEnabled={settings.debugLogging}
-              onChange={toggleDebugLogging}
-              ariaLabel="Enable Daintree Assistant debug logging"
-              disabled={settingsUnavailable}
-              isModified={settings.debugLogging !== DEFAULT_SETTINGS.debugLogging}
-              onReset={() => void persist({ debugLogging: DEFAULT_SETTINGS.debugLogging })}
-            />
-          )}
         </SettingsGroup>
       </SettingsSection>
 

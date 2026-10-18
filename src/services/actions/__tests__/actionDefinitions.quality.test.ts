@@ -6,6 +6,7 @@ import type { WorktreeViewStore, WorktreeViewStoreApi } from "@/store/createWork
 import type { WorktreeSnapshot } from "@shared/types";
 import { KEY_ACTION_VALUES } from "@shared/types/keymap";
 import { BUILT_IN_ACTION_IDS, DENY_PLUGIN_DISPATCH_ACTION_IDS } from "@shared/config/actionIds";
+import { BUILT_IN_AGENT_IDS } from "@shared/config/agentIds";
 import type { ActionId } from "@shared/types/actions";
 import type { ActionRegistry, ActionCallbacks } from "../actionTypes";
 import { DEFAULT_KEYBINDINGS } from "../../defaultKeybindings";
@@ -929,14 +930,11 @@ describe("registry-vs-union drift", () => {
 });
 
 describe("createActionDefinitions", () => {
-  it("registers a launch action for launchable agents but not assistant-only agents (#10634)", async () => {
+  it("registers a direct-launch action for every built-in agent", async () => {
     const { registry: actions } = await createRegistryWithAudit();
 
-    // Launchable built-in agents get a direct-launch action...
-    expect(actions.has("agent.claude" as any)).toBe(true);
-    // ...but the assistant-only daintree-assistant is never launchable, so no
-    // action is registered (keeps it out of the action palette and MCP manifest).
-    expect(actions.has("agent.daintree-assistant" as any)).toBe(false);
+    const missing = BUILT_IN_AGENT_IDS.filter((id) => !actions.has(`agent.${id}` as ActionId));
+    expect(missing).toEqual([]);
   });
 
   it("does not register removed github.* action ids", async () => {

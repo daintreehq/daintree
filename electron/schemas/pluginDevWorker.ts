@@ -14,8 +14,7 @@
 // `import type`, so keeping the schema out of `shared/` keeps Zod out of the
 // worker bundle's dependency graph.
 //
-// Mirrors the `AssistantHostEventSchema` pattern in `./ipc.ts` — a
-// `z.discriminatedUnion` on the envelope tag, which fails closed on `null`,
+// A `z.discriminatedUnion` on the envelope tag, which fails closed on `null`,
 // primitives and a missing/unknown tag without ever throwing.
 
 import { z } from "zod";

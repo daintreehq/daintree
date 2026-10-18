@@ -20,7 +20,6 @@ export { KimiIcon } from "./KimiIcon";
 export { AmpIcon } from "./AmpIcon";
 export { AiderIcon } from "./AiderIcon";
 export { GrokIcon } from "./GrokIcon";
-export { DaintreeAssistantIcon } from "./DaintreeAssistantIcon";
 
 // JavaScript ecosystem
 export { NpmIcon } from "./NpmIcon";

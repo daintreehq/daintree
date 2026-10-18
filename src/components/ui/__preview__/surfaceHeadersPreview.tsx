@@ -313,7 +313,6 @@ function AssistantFooter() {
       }}
       isPinnedWorktreeDiverged={false}
       onReturnToPinnedWorktree={noop}
-      agentId="claude"
       agentConfig={agentConfig}
       launchedModelLabel={null}
     />

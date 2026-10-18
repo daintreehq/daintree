@@ -43,6 +43,11 @@ describe("legacy agent defaults (#13345)", () => {
     expect(readLegacyAgentDefaults()).toEqual({});
   });
 
+  it("offers no candidate for the retired assistant CLI", () => {
+    put(LEGACY_HELP_PANEL_KEY, { width: 400, preferredAgentId: "daintree-assistant" }, 6);
+    expect(readLegacyAgentDefaults()).toEqual({});
+  });
+
   it("reads a saved default agent", () => {
     put(LEGACY_AGENT_PREFERENCES_KEY, { defaultAgent: "codex" });
     expect(readLegacyAgentDefaults()).toEqual({ defaultAgent: "codex" });

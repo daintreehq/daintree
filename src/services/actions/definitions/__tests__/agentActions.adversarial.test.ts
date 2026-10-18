@@ -106,7 +106,7 @@ vi.mock("@/clients", async (importOriginal) => {
 });
 
 import { registerAgentActions } from "../agentActions";
-import { LAUNCHABLE_AGENT_IDS } from "@shared/config/agentIds";
+import { BUILT_IN_AGENT_IDS } from "@shared/config/agentIds";
 
 /**
  * The identity the launcher resolves before spawning and now returns alongside
@@ -1226,11 +1226,9 @@ describe("agent.listToolbar (#10838)", () => {
     return row;
   }
 
-  it("returns one row per launchable agent, in registry order", async () => {
+  it("returns one row per built-in agent, in registry order", async () => {
     const rows = await listToolbar({ agents: {} }, {});
-    expect(rows.map((r) => r.id)).toEqual([...LAUNCHABLE_AGENT_IDS]);
-    // assistant-only agents are never launchable and must not appear
-    expect(rows.some((r) => r.id === "daintree-assistant")).toBe(false);
+    expect(rows.map((r) => r.id)).toEqual([...BUILT_IN_AGENT_IDS]);
   });
 
   it("explicit pin (pinned:true) wins over a missing binary — visible:true, installed:false", async () => {
@@ -1383,7 +1381,6 @@ describe("agent.listAvailable", () => {
       "plugin-agent": { name: "Plugin" },
       "custom-agent": { name: "Custom" },
       claude: { name: "Claude" },
-      "daintree-assistant": { name: "Assistant" },
     });
     clientsMock.userAgentRegistryClient.get.mockResolvedValue({
       "custom-agent": { name: "Custom" },
@@ -2125,7 +2122,7 @@ describe("agent.listModels", () => {
 
     const ids = agents.map((a) => a.agentId);
     expect(ids).toEqual([
-      ...LAUNCHABLE_AGENT_IDS.filter((id) => id === "claude" || id === "codex"),
+      ...BUILT_IN_AGENT_IDS.filter((id) => id === "claude" || id === "codex"),
       "my-plugin-agent",
     ]);
     expect(agents.find((a) => a.agentId === "my-plugin-agent")?.models).toEqual([]);

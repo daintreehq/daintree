@@ -1,8 +1,4 @@
-import {
-  isAssistantOnlyAgentId,
-  isBuiltInAgentId,
-  LAUNCHABLE_AGENT_IDS,
-} from "../config/agentIds.js";
+import { isBuiltInAgentId, BUILT_IN_AGENT_IDS } from "../config/agentIds.js";
 import type { AgentSettings } from "../types/agentSettings.js";
 import type { AgentAvailabilityState } from "../types/ipc/system.js";
 import { isAgentInstalled, isAgentLaunchable } from "./agentAvailability.js";
@@ -11,9 +7,9 @@ import { isAgentToolbarVisible } from "./agentPinned.js";
 /** The agents a listing reports, in the launcher's order. */
 export function listedAgentIds(registry: Readonly<Record<string, unknown>>): string[] {
   return [
-    ...LAUNCHABLE_AGENT_IDS.filter((id) => Object.hasOwn(registry, id)),
+    ...BUILT_IN_AGENT_IDS.filter((id) => Object.hasOwn(registry, id)),
     ...Object.keys(registry)
-      .filter((id) => !isBuiltInAgentId(id) && !isAssistantOnlyAgentId(id))
+      .filter((id) => !isBuiltInAgentId(id))
       .sort(),
   ];
 }

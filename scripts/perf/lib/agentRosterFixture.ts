@@ -6,17 +6,17 @@ import type { AgentConfig } from "../../../shared/config/agentRegistry";
 /**
  * The REAL agent roster for PERF-350..353, in a plain Node process.
  *
- * `shared/config/agentRegistry.ts` is 43 KB describing 18 agent CLIs, and every
+ * `shared/config/agentRegistry.ts` is 43 KB describing 17 agent CLIs, and every
  * terminal launch and every agent-state decision reads it. Nothing measured it.
  * Unusually for this harness, nothing has to be stubbed: the whole roster graph
  * — the registry, `shared/config/agentIds.ts`, `shared/config/pluginAgentRegistry.ts`,
- * all 18 files under `shared/config/agents/`, `shared/types/agentSettings.ts`,
+ * all 17 files under `shared/config/agents/`, `shared/types/agentSettings.ts`,
  * `electron/services/pty/terminalActivityPatterns.ts` and
  * `electron/services/pty/AgentPatternDetector.ts` — imports no `electron`, no
  * `import.meta.env`, no Node builtin and no path alias. It is loaded unmodified.
  *
  * WHAT IS REAL
- *   - `AGENT_REGISTRY` and all 18 agent config objects, built at module eval.
+ *   - `AGENT_REGISTRY` and all 17 agent config objects, built at module eval.
  *   - `getEffectiveRegistry` / `getEffectiveAgentConfig` / `setUserRegistry` /
  *     `invalidateEffectiveRegistryCache` — the plugin ⊕ user ⊕ built-in merge and
  *     its memoization.
@@ -123,7 +123,6 @@ export interface PatternDetectionResultLike {
 export interface RosterModules {
   AGENT_REGISTRY: Record<string, AgentConfig>;
   BUILT_IN_AGENT_IDS: readonly string[];
-  LAUNCHABLE_AGENT_IDS: readonly string[];
   getAgentIds: () => string[];
   getAgentConfig: (agentId: string) => AgentConfig | undefined;
   getEffectiveRegistry: () => Record<string, AgentConfig>;
@@ -180,7 +179,6 @@ export function loadRosterModules(): Promise<RosterModules> {
     return {
       AGENT_REGISTRY: registry.AGENT_REGISTRY as Record<string, AgentConfig>,
       BUILT_IN_AGENT_IDS: ids.BUILT_IN_AGENT_IDS,
-      LAUNCHABLE_AGENT_IDS: ids.LAUNCHABLE_AGENT_IDS,
       getAgentIds: registry.getAgentIds,
       getAgentConfig: registry.getAgentConfig,
       getEffectiveRegistry: registry.getEffectiveRegistry as RosterModules["getEffectiveRegistry"],

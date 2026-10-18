@@ -44,7 +44,7 @@ export interface ToolbarVisibilityDispatchDeps {
  * rather than to the opposite of raw `pinned`.
  *
  * Pinning an agent also asks for a position. Since #11680 removed the
- * `LAUNCHABLE_AGENT_IDS` spread from `DEFAULT_LEFT_BUTTONS`, a fresh profile's
+ * `BUILT_IN_AGENT_IDS` spread from `DEFAULT_LEFT_BUTTONS`, a fresh profile's
  * agent ids sit in neither side array, so the pin alone would leave the button
  * with nowhere to render — the same gap `setPanelButtonOnToolbar` closes for
  * `browser`/`dev-server`. Both surfaces that can pin an agent (the launcher and
@@ -125,9 +125,8 @@ export interface ToolbarButtonPlacementActions {
  * side arrays that predicate's "absent means visible" default reports a fresh
  * profile's `browser` and an installed-but-unpositioned agent as on while
  * neither is anywhere on the toolbar (#11667, #11680). For a positioned id the
- * two agree — assistant-only agents aside, which no toolbar surface lists —
- * and that is what lets a surface draw checkmarks from this and still match the
- * toolbar it describes.
+ * two agree, and that is what lets a surface draw checkmarks from this and
+ * still match the toolbar it describes.
  */
 export function isToolbarButtonOnToolbar(
   buttonId: AnyToolbarButtonId,

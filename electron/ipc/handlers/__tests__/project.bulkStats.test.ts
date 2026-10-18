@@ -930,7 +930,7 @@ describe("bulk stats assistant presence (#11806)", () => {
       id: HELP_TERMINAL_ID,
       projectId: PROJECT_ID,
       kind: "terminal",
-      launchAgentId: "daintree-assistant",
+      launchAgentId: "claude",
       hasPty: true,
       ...over,
     };

@@ -7,7 +7,7 @@ import { useCliAvailabilityStore } from "@/store/cliAvailabilityStore";
 import { useAgentDiscoveryOnboarding } from "@/hooks/app/useAgentDiscoveryOnboarding";
 import { agentStateDotColor } from "@/components/Worktree/terminalStateConfig";
 import { getRuntimeOrBootAgentId } from "@/utils/terminalType";
-import { LAUNCHABLE_AGENT_IDS, isBuiltInAgentId } from "@shared/config/agentIds";
+import { BUILT_IN_AGENT_IDS, isBuiltInAgentId } from "@shared/config/agentIds";
 import type { AgentState, PanelInstance } from "@shared/types";
 import { isAgentLaunchable } from "../../../shared/utils/agentAvailability";
 import { isPtyPanel } from "@shared/types/panel";
@@ -171,7 +171,7 @@ export function useOverflowBadgeSeverity(
 
     if (overflowIds.includes("launcher") && onboardingLoaded) {
       const seenSet = new Set(seenAgentIds);
-      for (const id of LAUNCHABLE_AGENT_IDS) {
+      for (const id of BUILT_IN_AGENT_IDS) {
         if (isAgentLaunchable(availability?.[id]) && !seenSet.has(id)) {
           info = true;
           break;

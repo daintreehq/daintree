@@ -11,7 +11,7 @@ import {
 import { cn } from "@/lib/utils";
 import { AGENT_REGISTRY, getAgentConfig } from "@/config/agents";
 import { BrandMark } from "@/components/icons";
-import { LAUNCHABLE_AGENT_IDS } from "@shared/config/agentIds";
+import { BUILT_IN_AGENT_IDS } from "@shared/config/agentIds";
 import {
   classifyNpmPermissionFailure,
   detectOS,
@@ -36,7 +36,7 @@ import type { CliAvailability } from "@shared/types";
 import { isAgentInstalled, isAgentLaunchable } from "@shared/utils/agentAvailability";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
 
-const AGENT_ORDER = LAUNCHABLE_AGENT_IDS;
+const AGENT_ORDER = BUILT_IN_AGENT_IDS;
 
 type CardStatus = "idle" | "installing" | "installed" | "error" | "manual";
 

@@ -258,81 +258,6 @@ describe("McpPaneConfigService", () => {
     expect(service.getTierForToken(token)).toBeUndefined();
   });
 
-  describe("assistant-session pinning (#10647)", () => {
-    it("getWebContentsIdForToken / getActionContextForToken return null for generic pane tokens", async () => {
-      const { token } = await service.preparePaneConfig({
-        paneId: "pane-generic",
-        port: 45454,
-        tier: "core",
-      });
-      // Never promoted to an assistant bearer → no pinning metadata.
-      expect(service.getWebContentsIdForToken(token)).toBeNull();
-      expect(service.getActionContextForToken(token)).toBeNull();
-      expect(service.getWebContentsIdForToken("")).toBeNull();
-      expect(service.getActionContextForToken("not-a-token")).toBeNull();
-    });
-
-    it("registerAssistantPaneBearer binds the token to a WebContents id and ActionContext", async () => {
-      const { token } = await service.preparePaneConfig({
-        paneId: "pane-assistant",
-        port: 45454,
-        tier: "core",
-      });
-      const ctx = { projectId: "p1", activeWorktreeId: "wt-9" };
-
-      service.registerAssistantPaneBearer(token, 42, ctx);
-
-      expect(service.getWebContentsIdForToken(token)).toBe(42);
-      expect(service.getActionContextForToken(token)).toEqual(ctx);
-      // The token is still a valid pane token at its minted tier.
-      expect(service.isValidPaneToken(token)).toBe(true);
-      expect(service.getTierForToken(token)).toBe("core");
-    });
-
-    it("registerAssistantPaneBearer accepts a binding with no ActionContext", async () => {
-      const { token } = await service.preparePaneConfig({
-        paneId: "pane-assistant-noctx",
-        port: 45454,
-        tier: "core",
-      });
-
-      service.registerAssistantPaneBearer(token, 7);
-
-      expect(service.getWebContentsIdForToken(token)).toBe(7);
-      expect(service.getActionContextForToken(token)).toBeNull();
-    });
-
-    it("registerAssistantPaneBearer no-ops for an unknown or revoked token", async () => {
-      // Never minted — nothing to bind, must not throw or resurrect a record.
-      expect(() => service.registerAssistantPaneBearer("ghost-token", 42)).not.toThrow();
-      expect(service.getWebContentsIdForToken("ghost-token")).toBeNull();
-
-      const { token } = await service.preparePaneConfig({
-        paneId: "pane-race",
-        port: 45454,
-        tier: "core",
-      });
-      await service.revokePaneConfig("pane-race");
-      service.registerAssistantPaneBearer(token, 42);
-      expect(service.getWebContentsIdForToken(token)).toBeNull();
-    });
-
-    it("revokePaneConfig tears down the assistant pinning metadata", async () => {
-      const { token } = await service.preparePaneConfig({
-        paneId: "pane-assistant-revoke",
-        port: 45454,
-        tier: "core",
-      });
-      service.registerAssistantPaneBearer(token, 42, { projectId: "p1" });
-      expect(service.getWebContentsIdForToken(token)).toBe(42);
-
-      await service.revokePaneConfig("pane-assistant-revoke");
-
-      expect(service.getWebContentsIdForToken(token)).toBeNull();
-      expect(service.getActionContextForToken(token)).toBeNull();
-    });
-  });
-
   describe("orchestrator panes for a terminal hand-over (#12490)", () => {
     it("resolves a pane's bearer identity before it ever connects", async () => {
       const { token } = await service.preparePaneConfig({
@@ -352,16 +277,8 @@ describe("McpPaneConfigService", () => {
       expect(service.listOrchestratorPanes()).toEqual([{ paneId: "pane-orch", ...identity }]);
     });
 
-    it("resolves nothing for an unknown pane, the assistant, or a revoked bearer", async () => {
+    it("resolves nothing for an unknown pane or a revoked bearer", async () => {
       expect(service.getOrchestratorPane("pane-never")).toBeNull();
-
-      const { token: assistantToken } = await service.preparePaneConfig({
-        paneId: "pane-assistant",
-        port: 45454,
-        tier: "core",
-      });
-      service.registerAssistantPaneBearer(assistantToken, 42);
-      expect(service.getOrchestratorPane("pane-assistant")).toBeNull();
 
       await service.preparePaneConfig({ paneId: "pane-gone", port: 45454, tier: "core" });
       await service.revokePaneConfig("pane-gone");
@@ -419,38 +336,6 @@ describe("McpPaneConfigService", () => {
         skipConfirmations: true,
       });
       await service.revokePaneConfig("pane-agent-skip");
-      expect(service.getPaneWorkspaceBindingForToken(token)).toBeNull();
-    });
-
-    it("never surfaces through the assistant resolvers, which confer a renderer-owned origin", async () => {
-      // The handshake stamps `assistant-pane` on anything those resolvers
-      // match, and that origin unlocks surfaces an agent pane must never reach
-      // (#12407). Routing it to a view must not make it the assistant.
-      const { token } = await service.preparePaneConfig({
-        paneId: "pane-agent-origin",
-        port: 45454,
-        tier: "full",
-      });
-
-      service.registerPaneWorkspaceBinding(token, {
-        workspaceId: "p1",
-        launchWebContentsId: 42,
-        actionContext: { projectId: "p1" },
-      });
-
-      expect(service.getWebContentsIdForToken(token)).toBeNull();
-      expect(service.getActionContextForToken(token)).toBeNull();
-    });
-
-    it("keeps an assistant bearer out of the pane binding resolver", async () => {
-      const { token } = await service.preparePaneConfig({
-        paneId: "pane-assistant-only",
-        port: 45454,
-        tier: "core",
-      });
-
-      service.registerAssistantPaneBearer(token, 42, { projectId: "p1" });
-
       expect(service.getPaneWorkspaceBindingForToken(token)).toBeNull();
     });
 

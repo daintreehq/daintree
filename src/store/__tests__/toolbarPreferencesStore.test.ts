@@ -14,6 +14,7 @@ vi.mock("@shared/config/agentIds", () => {
     "gemini",
     "antigravity",
     "codex",
+    "grok",
     "cursor",
     "copilot",
     "goose",
@@ -24,24 +25,8 @@ vi.mock("@shared/config/agentIds", () => {
     "interpreter",
     "mistral",
     "kiro",
-    "daintree-assistant",
   ] as const;
-  const ASSISTANT_ONLY_AGENT_IDS = ["daintree-assistant"] as const;
-  const LAUNCHABLE_AGENT_IDS = BUILT_IN_AGENT_IDS.filter(
-    (id) => !(ASSISTANT_ONLY_AGENT_IDS as readonly string[]).includes(id)
-  );
-  return {
-    BUILT_IN_AGENT_IDS,
-    ASSISTANT_ONLY_AGENT_IDS,
-    LAUNCHABLE_AGENT_IDS,
-    isAssistantOnlyAgentId: (
-      value: unknown
-    ): value is (typeof ASSISTANT_ONLY_AGENT_IDS)[number] => {
-      return (
-        typeof value === "string" && (ASSISTANT_ONLY_AGENT_IDS as readonly string[]).includes(value)
-      );
-    },
-  };
+  return { BUILT_IN_AGENT_IDS };
 });
 
 let useToolbarPreferencesStore: typeof import("../toolbarPreferencesStore").useToolbarPreferencesStore;

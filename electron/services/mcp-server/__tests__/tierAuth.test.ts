@@ -2000,7 +2000,7 @@ describe("filterIntrospectionResultForSession", () => {
       // The renderer's own `resultSchema` check runs before main substitutes the
       // policy, so it only ever validates the null placeholder. Nothing else
       // validates what main builds — this is the check that the finished record
-      // satisfies the contract the companion CLI codes against.
+      // satisfies the contract clients code against.
       it("builds a record that satisfies the published wire contract", () => {
         for (const target of [
           makeEntry({ id: "terminal.list" }),

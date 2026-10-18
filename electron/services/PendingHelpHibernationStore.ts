@@ -8,6 +8,7 @@ import {
   assistantSlotKey,
   projectIdFromSlotKey,
 } from "../../shared/config/assistantSlots.js";
+import { isRetiredAgentId } from "../../shared/config/agentIds.js";
 
 const FILE_NAME = "help-pending-hibernation.json";
 // v2 keys entries by `assistantSlotKey(projectId, slot)` instead of bare
@@ -146,10 +147,12 @@ export class PendingHelpHibernationStore {
     // An empty `agentSessionId` is valid: a lane whose conversation id is not
     // known yet (a fresh Codex launch, or a capture placeholder, #9639). It
     // keeps the lane's tab but resumes nothing — recovery is by exact id only
-    // (#13205). Only the field's type is required, not non-emptiness.
+    // (#13205). Only the field's type is required, not non-emptiness. A
+    // retired agent never launches again, so its token can never resume.
     return (
       typeof v.agentId === "string" &&
       v.agentId !== "" &&
+      !isRetiredAgentId(v.agentId) &&
       typeof v.agentSessionId === "string" &&
       typeof v.cwd === "string" &&
       v.cwd !== "" &&

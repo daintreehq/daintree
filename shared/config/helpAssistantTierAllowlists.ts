@@ -282,7 +282,7 @@ export const OWNED_TWIN_TOOLS = {
 
 /**
  * Unscoped tools with no owned form, reserved for Daintree's own assistant
- * surfaces — `help` and `assistant-pane` sessions — for the reason above.
+ * surface — `help` sessions — for the reason above.
  * Withheld from every other session at discovery and at dispatch.
  */
 export const RENDERER_OWNED_ORIGIN_ONLY_TOOLS = [

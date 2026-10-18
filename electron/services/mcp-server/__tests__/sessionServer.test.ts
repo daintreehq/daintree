@@ -155,10 +155,9 @@ function fakeSessionStore(tier: "core" | "full" | "external" = "core"): SessionS
     sessionWebContentsMap: new Map(),
     sessionOriginMap,
     getOrigin: vi.fn((sessionId: string) => sessionOriginMap.get(sessionId) ?? "external"),
-    isRendererOwnedOrigin: vi.fn((sessionId: string) => {
-      const origin = sessionOriginMap.get(sessionId) ?? "external";
-      return origin === "help" || origin === "assistant-pane";
-    }),
+    isRendererOwnedOrigin: vi.fn(
+      (sessionId: string) => (sessionOriginMap.get(sessionId) ?? "external") === "help"
+    ),
     sessionWorkspaceMap: new Map(),
     resourceSubscriptions: new Map(),
     dedupInFlight: new Map(),
@@ -411,16 +410,12 @@ describe("sessionServer initialize instructions", () => {
     await expect(initializeClient(server)).resolves.toBe(MCP_SERVER_INSTRUCTIONS);
   });
 
-  it("sends Daintree's own assistants the short instructions, and every other session the full ones", async () => {
-    for (const origin of ["help", "assistant-pane"]) {
-      const store = fakeSessionStore("core");
-      store.sessionOriginMap.set(`session-${origin}`, origin as never);
-      await expect(
-        initializeClient(
-          createSessionServer(`session-${origin}`, fakeDeps({ sessionStore: store }))
-        )
-      ).resolves.toBe(MCP_ASSISTANT_SERVER_INSTRUCTIONS);
-    }
+  it("sends Daintree's own assistant the short instructions, and every other session the full ones", async () => {
+    const help = fakeSessionStore("core");
+    help.sessionOriginMap.set("session-help", "help" as never);
+    await expect(
+      initializeClient(createSessionServer("session-help", fakeDeps({ sessionStore: help })))
+    ).resolves.toBe(MCP_ASSISTANT_SERVER_INSTRUCTIONS);
     const pane = fakeSessionStore("core");
     pane.sessionOriginMap.set("session-pane", "external" as never);
     await expect(
@@ -1886,16 +1881,6 @@ describe("project.runCommand short-circuit (#13495)", () => {
 
     expect(result.isError).not.toBe(true);
     expect((result.structuredContent as { exitCode: number }).exitCode).toBe(128);
-  });
-
-  it("answers Daintree's own assistant by the same origin rule tools/list applies", async () => {
-    const handleProjectRunCommand = vi.fn().mockResolvedValue(ranResult);
-    const result = await call(
-      fakeDeps({ sessionStore: storeWithOrigin("full", "assistant-pane"), handleProjectRunCommand })
-    );
-
-    expect(result.isError).not.toBe(true);
-    expect(handleProjectRunCommand).toHaveBeenCalled();
   });
 
   it("refuses a full-tier session that is not the assistant, such as a worker pane", async () => {
@@ -4723,11 +4708,7 @@ describe("assistant inbox tools (#13335)", () => {
 
   it("neither lists nor runs them for a bearer with no help session, even with access wired", async () => {
     // Renderer-owned, so the tier admits it; only the missing help session refuses.
-    const { deps, access } = laneDeps({
-      available: true,
-      origin: "assistant-pane",
-      helpSessionId: null,
-    });
+    const { deps, access } = laneDeps({ available: true, helpSessionId: null });
     const server = createSessionServer("sess", deps);
     await server.connect(makeMockTransport());
 
@@ -8704,17 +8685,13 @@ describe("session-scoped resource ownership (#11909)", () => {
     // Daintree's own assistant already types into every pane in its view, so it
     // reads by that view as well as by the ledger (#12883, #13439).
     describe("from Daintree's own assistant (#12883)", () => {
-      function assistantReadHarness(
-        sessionId: string,
-        origin: "help" | "assistant-pane",
-        inView: (terminalId: string) => boolean
-      ) {
+      function assistantReadHarness(sessionId: string, inView: (terminalId: string) => boolean) {
         const isTerminalInPinnedWorkspace = vi.fn(async (id: string) => inView(id));
         const h = readHarness(sessionId);
         // The assistant's own tier, not the external one the harness seeds:
         // the external allowlist admits this tool too, so it would prove nothing.
         h.store.sessionTierMap.set(sessionId, "core");
-        h.store.sessionOriginMap.set(sessionId, origin);
+        h.store.sessionOriginMap.set(sessionId, "help");
         const deps = { ...h.deps, isTerminalInPinnedWorkspace };
         return {
           ...h,
@@ -8724,93 +8701,81 @@ describe("session-scoped resource ownership (#11909)", () => {
         };
       }
 
-      it.each(["help", "assistant-pane"] as const)(
-        "%s reads a pane the user started in its pinned view, without claiming it",
-        async (origin) => {
-          const { store, server, handleTerminalReadLastMessageOwned, isTerminalInPinnedWorkspace } =
-            assistantReadHarness(`s-assist-${origin}`, origin, (id) => id === "user-pane");
+      it("reads a pane the user started in its pinned view, without claiming it", async () => {
+        const { store, server, handleTerminalReadLastMessageOwned, isTerminalInPinnedWorkspace } =
+          assistantReadHarness("s-assist", (id) => id === "user-pane");
 
-          const result = await callTool(server, {
-            name: "terminal.readLastMessageOwned",
-            arguments: { terminalId: "user-pane", maxBytes: 4096 },
-          });
+        const result = await callTool(server, {
+          name: "terminal.readLastMessageOwned",
+          arguments: { terminalId: "user-pane", maxBytes: 4096 },
+        });
 
-          expect(result.isError).toBeUndefined();
-          expect(result.structuredContent).toEqual(READ_RESULT);
-          expect(isTerminalInPinnedWorkspace).toHaveBeenCalledWith("user-pane");
-          expect(handleTerminalReadLastMessageOwned).toHaveBeenCalledWith(
-            "user-pane",
-            { maxBytes: 4096 },
-            expect.any(AbortSignal)
-          );
-          expect(store.resourceOwnership.owns(`s-assist-${origin}`, "terminal", "user-pane")).toBe(
-            false
-          );
-        }
-      );
+        expect(result.isError).toBeUndefined();
+        expect(result.structuredContent).toEqual(READ_RESULT);
+        expect(isTerminalInPinnedWorkspace).toHaveBeenCalledWith("user-pane");
+        expect(handleTerminalReadLastMessageOwned).toHaveBeenCalledWith(
+          "user-pane",
+          { maxBytes: 4096 },
+          expect.any(AbortSignal)
+        );
+        expect(store.resourceOwnership.owns("s-assist", "terminal", "user-pane")).toBe(false);
+      });
 
-      it.each(["help", "assistant-pane"] as const)(
-        "%s is refused a pane outside its pinned view, without reading",
-        async (origin) => {
-          const { server, deps, handleTerminalReadLastMessageOwned } = assistantReadHarness(
-            `s-assist-foreign-${origin}`,
-            origin,
-            () => false
-          );
+      it("is refused a pane outside its pinned view, without reading", async () => {
+        const { server, deps, handleTerminalReadLastMessageOwned } = assistantReadHarness(
+          "s-assist-foreign",
+          () => false
+        );
 
-          const result = await callTool(server, {
-            name: "terminal.readLastMessageOwned",
-            arguments: { terminalId: "elsewhere" },
-          });
+        const result = await callTool(server, {
+          name: "terminal.readLastMessageOwned",
+          arguments: { terminalId: "elsewhere" },
+        });
 
-          expect(result.isError).toBe(true);
-          expect(toolErrorPayload(result).code).toBe("RESOURCE_NOT_OWNED");
-          expect(errorText(result)).toContain("project this assistant is open in");
-          expect(handleTerminalReadLastMessageOwned).not.toHaveBeenCalled();
-          expect(deps.appendAuditRecord).toHaveBeenCalledWith(
-            expect.objectContaining({
-              outcome: {
-                kind: "result",
-                value: expect.objectContaining({
-                  ok: false,
-                  error: expect.objectContaining({ code: "RESOURCE_NOT_OWNED" }),
-                }),
-              },
-            })
-          );
-        }
-      );
+        expect(result.isError).toBe(true);
+        expect(toolErrorPayload(result).code).toBe("RESOURCE_NOT_OWNED");
+        expect(errorText(result)).toContain("project this assistant is open in");
+        expect(handleTerminalReadLastMessageOwned).not.toHaveBeenCalled();
+        expect(deps.appendAuditRecord).toHaveBeenCalledWith(
+          expect.objectContaining({
+            outcome: {
+              kind: "result",
+              value: expect.objectContaining({
+                ok: false,
+                error: expect.objectContaining({ code: "RESOURCE_NOT_OWNED" }),
+              }),
+            },
+          })
+        );
+      });
 
       // A help session was refused the panes it had launched while the view
       // check answered no (#13439). Its own panes are the ledger's, as every
       // session's are, and the view is never asked about them.
-      it.each(["help", "assistant-pane"] as const)(
-        "%s reads a pane it created even when the view check refuses",
-        async (origin) => {
-          const { server, handleTerminalReadLastMessageOwned, isTerminalInPinnedWorkspace } =
-            assistantReadHarness(`s-assist-owned-${origin}`, origin, () => false);
+      it("reads a pane it created even when the view check refuses", async () => {
+        const { server, handleTerminalReadLastMessageOwned, isTerminalInPinnedWorkspace } =
+          assistantReadHarness("s-assist-owned", () => false);
 
-          const result = await callTool(server, {
-            name: "terminal.readLastMessageOwned",
-            arguments: { terminalId: "terminal-1" },
-          });
+        const result = await callTool(server, {
+          name: "terminal.readLastMessageOwned",
+          arguments: { terminalId: "terminal-1" },
+        });
 
-          expect(result.isError).toBeUndefined();
-          expect(result.structuredContent).toEqual(READ_RESULT);
-          expect(handleTerminalReadLastMessageOwned).toHaveBeenCalledWith(
-            "terminal-1",
-            {},
-            expect.any(AbortSignal)
-          );
-          expect(isTerminalInPinnedWorkspace).not.toHaveBeenCalled();
-        }
-      );
+        expect(result.isError).toBeUndefined();
+        expect(result.structuredContent).toEqual(READ_RESULT);
+        expect(handleTerminalReadLastMessageOwned).toHaveBeenCalledWith(
+          "terminal-1",
+          {},
+          expect.any(AbortSignal)
+        );
+        expect(isTerminalInPinnedWorkspace).not.toHaveBeenCalled();
+      });
 
       // A hand-over is a grant to a pane, and the tool accepts one, but it never
       // admits the assistant's read: only creation or the view does.
       it("never admits a handed-over pane that the view check refuses", async () => {
         const { store, server, handleTerminalReadLastMessageOwned, isTerminalInPinnedWorkspace } =
-          assistantReadHarness("s-assist-handed", "help", () => false);
+          assistantReadHarness("s-assist-handed", () => false);
         store.resourceOwnership.bindPrincipal("s-assist-handed", "principal-help");
         expect(
           store.terminalAdoption.adopt({
@@ -8857,7 +8822,6 @@ describe("session-scoped resource ownership (#11909)", () => {
       it("decides the view before looking at the options", async () => {
         const { server, handleTerminalReadLastMessageOwned } = assistantReadHarness(
           "s-assist-foreign-options",
-          "help",
           () => false
         );
 
@@ -8901,7 +8865,6 @@ describe("session-scoped resource ownership (#11909)", () => {
       it("keeps the ledger for the assistant's other owned tools", async () => {
         const { server, dispatchAction, isTerminalInPinnedWorkspace } = assistantReadHarness(
           "s-assist-interrupt",
-          "help",
           () => true
         );
 
@@ -10541,7 +10504,6 @@ describe("session-scoped resource ownership (#11909)", () => {
       it.each([
         ["help", "terminal.interruptOwned"],
         ["help", "terminal.readLastMessageOwned"],
-        ["assistant-pane", "terminal.interruptOwned"],
       ] as const)(
         "is not given to Daintree's own assistant (%s origin, %s)",
         async (origin, name) => {
@@ -10781,7 +10743,7 @@ describe("session-scoped resource ownership (#11909)", () => {
 describe("unscoped terminal input by session origin (#12407)", () => {
   const RESERVED = ["terminal.sendCommand", "terminal.inject", "copyTree.injectToTerminal"];
 
-  function originDeps(origin: "help" | "assistant-pane" | "external", tier: "core" | "full") {
+  function originDeps(origin: "help" | "external", tier: "core" | "full") {
     const manifest = [
       ...RESERVED.map((id) => ({ ...makeManifestEntry(id), kind: "command" as const })),
       { ...makeManifestEntry("terminal.sendCommandOwned"), kind: "command" as const },
@@ -10815,7 +10777,6 @@ describe("unscoped terminal input by session origin (#12407)", () => {
   it.each([
     ["external", false],
     ["help", true],
-    ["assistant-pane", true],
   ] as const)("reports the same surface as tools/list for a %s session", async (origin, full) => {
     const server = createSessionServer("s-origin", originDeps(origin, "full"));
     await server.connect(makeMockTransport());
@@ -10829,17 +10790,14 @@ describe("unscoped terminal input by session origin (#12407)", () => {
     expect(reported.includes("terminal.sendCommandOwned")).toBe(!full);
   });
 
-  it.each(["help", "assistant-pane"] as const)(
-    "lists unscoped terminal input to the assistant's %s session",
-    async (origin) => {
-      const server = createSessionServer("s-origin", originDeps(origin, "full"));
-      const names = (await listTools(server)).tools.map((t) => t.name);
-      for (const id of RESERVED) expect(names).toContain(id);
-      // The assistant holds the unscoped forms in place of the owned ones.
-      expect(names).not.toContain("terminal.sendCommandOwned");
-      expect(names).not.toContain("terminal.injectOwned");
-    }
-  );
+  it("lists unscoped terminal input to the assistant's help session", async () => {
+    const server = createSessionServer("s-origin", originDeps("help", "full"));
+    const names = (await listTools(server)).tools.map((t) => t.name);
+    for (const id of RESERVED) expect(names).toContain(id);
+    // The assistant holds the unscoped forms in place of the owned ones.
+    expect(names).not.toContain("terminal.sendCommandOwned");
+    expect(names).not.toContain("terminal.injectOwned");
+  });
 
   it.each(Object.keys(OWNED_TWIN_TOOLS))(
     "refuses the unscoped %s from a non-renderer-owned session without dispatching",
@@ -10902,25 +10860,22 @@ describe("unscoped terminal input by session origin (#12407)", () => {
     expect(deps.dispatchAction).not.toHaveBeenCalled();
   });
 
-  it.each(["help", "assistant-pane"] as const)(
-    "dispatches unscoped submission for the assistant's %s session",
-    async (origin) => {
-      const deps = originDeps(origin, "full");
-      const server = createSessionServer("s-origin", deps);
+  it("dispatches unscoped submission for the assistant's help session", async () => {
+    const deps = originDeps("help", "full");
+    const server = createSessionServer("s-origin", deps);
 
-      const result = await callTool(server, {
-        name: "terminal.sendCommand",
-        arguments: { terminalId: "user-agent", command: "run the tests" },
-      });
+    const result = await callTool(server, {
+      name: "terminal.sendCommand",
+      arguments: { terminalId: "user-agent", command: "run the tests" },
+    });
 
-      expect(result.isError).toBeUndefined();
-      expect(deps.dispatchAction).toHaveBeenCalledWith(
-        "terminal.sendCommand",
-        { terminalId: "user-agent", command: "run the tests" },
-        expect.anything()
-      );
-    }
-  );
+    expect(result.isError).toBeUndefined();
+    expect(deps.dispatchAction).toHaveBeenCalledWith(
+      "terminal.sendCommand",
+      { terminalId: "user-agent", command: "run the tests" },
+      expect.anything()
+    );
+  });
 
   // A caller-chosen id that is already live does not create a terminal — the
   // spawn is refused and the original keeps running — so recording it would
@@ -10959,30 +10914,7 @@ describe("unscoped terminal input by session origin (#12407)", () => {
     expect(deps.dispatchAction).toHaveBeenCalledTimes(1);
   });
 
-  // Launching the assistant mints its pinned, renderer-owned bearer — the one
-  // origin that still carries unscoped terminal input.
-  it.each(["agent.launch", "workflow.startWorkOnIssue"])(
-    "%s will not start Daintree's own assistant for a non-renderer-owned session",
-    async (tool) => {
-      const deps = originDeps("external", "full");
-      const server = createSessionServer("s-origin", deps);
-
-      const result = await callTool(server, {
-        name: tool,
-        arguments: { agentId: "daintree-assistant", issueNumber: 1 },
-      });
-
-      expect(result.isError).toBe(true);
-      const text = JSON.stringify(result.content);
-      expect(text).toContain("TIER_NOT_PERMITTED");
-      // The tier admits both tools, so this is the launch guard refusing, not
-      // the tier gate.
-      expect(text).toContain("cannot start Daintree's own assistant");
-      expect(deps.dispatchAction).not.toHaveBeenCalled();
-    }
-  );
-
-  it("still lets a non-renderer-owned session start an ordinary agent", async () => {
+  it("lets a non-renderer-owned session start an agent", async () => {
     const deps = originDeps("external", "full");
     const server = createSessionServer("s-origin", deps);
 
@@ -11486,7 +11418,7 @@ describe("assistant close approval (#12881)", () => {
     "asks before closing its own panel whose agent is %s",
     async (state) => {
       const requestCloseApproval = vi.fn().mockResolvedValue(approve(["t-own"]));
-      const { start } = closeDeps("assistant-pane", requestCloseApproval, { "t-own": state });
+      const { start } = closeDeps("help", requestCloseApproval, { "t-own": state });
       const server = await start(`s-close-own-${state}`, ["t-own"]);
 
       await callTool(server, { name: "terminal.close", arguments: { terminalId: "t-own" } });
@@ -11513,7 +11445,7 @@ describe("assistant close approval (#12881)", () => {
 
     it("closes one nobody ever typed into without asking", async () => {
       const requestCloseApproval = vi.fn();
-      const { dispatchAction, start } = closeDeps("assistant-pane", requestCloseApproval, {
+      const { dispatchAction, start } = closeDeps("help", requestCloseApproval, {
         "t-own": { agentState: "waiting", lastHandback: handback },
       });
       const server = await start("s-close-handed-back-untyped", ["t-own"]);
@@ -11925,25 +11857,22 @@ describe("assistant skip preference (#12874)", () => {
     help.sessionStore.grantCache.dispose();
   });
 
-  it.each(["assistant-pane", "external"])(
-    "never applies to a %s session, whatever the preference says",
-    async (origin) => {
-      const other = skipServer({ origin, skipped: true, tier: "core" });
-      await other.server.connect(makeMockTransport());
+  it("never applies to an external session, whatever the preference says", async () => {
+    const other = skipServer({ origin: "external", skipped: true, tier: "core" });
+    await other.server.connect(makeMockTransport());
 
-      await callTool(other.server, { name: "worktree.list", arguments: {} });
-      await callTool(other.server, {
-        name: "worktree.deleteOwned",
-        arguments: { worktreeId: "wt-1" },
-      });
+    await callTool(other.server, { name: "worktree.list", arguments: {} });
+    await callTool(other.server, {
+      name: "worktree.deleteOwned",
+      arguments: { worktreeId: "wt-1" },
+    });
 
-      expect(other.readAssistantConfirmationsSkipped).not.toHaveBeenCalled();
-      for (const call of other.dispatchAction.mock.calls) {
-        expect(call[3]).not.toBe("skip-preference");
-      }
-      other.sessionStore.grantCache.dispose();
+    expect(other.readAssistantConfirmationsSkipped).not.toHaveBeenCalled();
+    for (const call of other.dispatchAction.mock.calls) {
+      expect(call[3]).not.toBe("skip-preference");
     }
-  );
+    other.sessionStore.grantCache.dispose();
+  });
 
   it("does not stamp a safe call, which could never have asked", async () => {
     const help = skipServer({ origin: "help", skipped: true });
@@ -12102,33 +12031,6 @@ describe("assistant skip preference (#12874)", () => {
       expect(call[0]).toMatchObject({ danger: false });
     }
     help.sessionStore.grantCache.dispose();
-  });
-
-  it("still asks before an assistant-pane session's closeMany, whatever the preference says", async () => {
-    const requestCloseApproval = vi.fn().mockResolvedValue({
-      result: { ok: false, error: { code: "USER_REJECTED", message: "declined" } },
-      confirmationDecision: "rejected",
-    });
-    const pane = skipServer({
-      origin: "assistant-pane",
-      skipped: true,
-      entries: [makeManifestEntry("terminal.close"), makeManifestEntry("terminal.closeMany")],
-      extraDeps: {
-        requestCloseApproval,
-        readTerminalCloseContext: vi.fn(async () => null),
-      },
-    });
-    await pane.server.connect(makeMockTransport());
-
-    await callTool(pane.server, {
-      name: "terminal.closeMany",
-      arguments: { terminalIds: ["t-user"] },
-    });
-
-    expect(pane.readAssistantConfirmationsSkipped).not.toHaveBeenCalled();
-    expect(requestCloseApproval).toHaveBeenCalledTimes(1);
-    expect(pane.dispatchAction).not.toHaveBeenCalled();
-    pane.sessionStore.grantCache.dispose();
   });
 
   it("still asks before a protected close while the preference resolves to ask", async () => {
@@ -12397,23 +12299,20 @@ describe("session-scoped ownership note for api-key callers (#12987)", () => {
       expect(refusal(result).message).not.toContain(NOTE);
     });
 
-    it.each(["help", "assistant-pane"] as const)(
-      "is given to a %s session no bearer bound, whose records are session-scoped too",
-      async (origin) => {
-        const { server } = session("s-unbound", { origin });
+    it("is given to a help session no bearer bound, whose records are session-scoped too", async () => {
+      const { server } = session("s-unbound", { origin: "help" });
 
-        const payload = refusal(
-          await callTool(server, {
-            name: "terminal.interruptOwned",
-            arguments: { terminalId: "t-users" },
-          })
-        );
+      const payload = refusal(
+        await callTool(server, {
+          name: "terminal.interruptOwned",
+          arguments: { terminalId: "t-users" },
+        })
+      );
 
-        expect(payload.code).toBe("RESOURCE_NOT_OWNED");
-        expect(payload.message).toContain(NOTE);
-        expect(payload.details).toBeUndefined();
-      }
-    );
+      expect(payload.code).toBe("RESOURCE_NOT_OWNED");
+      expect(payload.message).toContain(NOTE);
+      expect(payload.details).toBeUndefined();
+    });
 
     it("is not given on the assistant's view-scoped read, which is not a ledger miss", async () => {
       const { server } = session("s-unbound", { origin: "help" });

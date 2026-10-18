@@ -102,7 +102,6 @@ vi.mock("@/config/agents", () => ({
   getAgentConfig: (id: string) =>
     ({
       claude: { name: "Claude", assistantMinVersion: "1.0.0" },
-      "daintree-assistant": { name: "Daintree Assistant", assistantMinVersion: "1.0.0" },
     })[id],
 }));
 

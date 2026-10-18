@@ -35,7 +35,7 @@ import {
  * `useAgentSetupPoll` calls `cliAvailabilityClient.refresh()` every **3000 ms**
  * for as long as the wizard is open, and `refresh()` is deliberately
  * cache-bypassing: it awaits a PATH refresh, bumps `checkId`, drops any
- * in-flight check and re-probes all 18 agents from scratch. On a machine with
+ * in-flight check and re-probes all 17 agents from scratch. On a machine with
  * nothing installed — a brand-new user, which is exactly who has the wizard
  * open — every one of those probes misses. A miss searches PATH in-process and
  * starts no subprocess on any platform (it used to cost two `which` starts, and

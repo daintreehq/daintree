@@ -156,10 +156,7 @@ vi.mock("../../../utils.js", () => ({
     ipcMainMock.handle(
       channel,
       async (
-        event:
-          | { sender?: { id?: number }; senderWindow?: { id: number }; projectId?: string }
-          | null
-          | undefined,
+        event: { sender?: { id?: number }; projectId?: string } | null | undefined,
         ...args: unknown[]
       ) => {
         const parsed = schema.safeParse(args[0]);
@@ -167,13 +164,12 @@ vi.mock("../../../utils.js", () => ({
           throw new Error(`IPC validation failed: ${channel}`);
         }
         // Mirror the real `typedHandleWithContextValidated` ctx shape. Tests
-        // drive `senderWindow` / `projectId` by setting them on the event
-        // object they pass to the handler (the real wrapper derives
-        // `senderWindow` from `BrowserWindow.fromWebContents`).
+        // drive `projectId` by setting it on the event object they pass to the
+        // handler.
         const ctx = {
           event: event as unknown,
           webContentsId: event?.sender?.id ?? 0,
-          senderWindow: event?.senderWindow ?? null,
+          senderWindow: null,
           projectId: event?.projectId ?? null,
         };
         return (handler as (ctx: unknown, payload: unknown) => unknown)(ctx, parsed.data);
@@ -189,10 +185,7 @@ const {
   mockCurrentPort,
   mockPreparePaneConfig,
   mockRevokePaneConfig,
-  mockRegisterAssistantPaneBearer,
   mockRegisterPaneWorkspaceBinding,
-  mockSetAssistantPaneWebContentsResolver,
-  mockSetAssistantPaneActionContextResolver,
   mockSetPaneWorkspaceBindingResolver,
   mockSetPaneOwnershipPrincipalResolver,
   mockRevokeOwnershipPrincipal,
@@ -207,11 +200,7 @@ const {
   mockCurrentPort: vi.fn<() => number | null>(),
   mockPreparePaneConfig: vi.fn(),
   mockRevokePaneConfig: vi.fn<(paneId: string) => Promise<void>>(),
-  mockRegisterAssistantPaneBearer:
-    vi.fn<(token: string, webContentsId: number, actionContext?: unknown) => void>(),
   mockRegisterPaneWorkspaceBinding: vi.fn<(token: string, binding: unknown) => void>(),
-  mockSetAssistantPaneWebContentsResolver: vi.fn(),
-  mockSetAssistantPaneActionContextResolver: vi.fn(),
   mockSetPaneWorkspaceBindingResolver: vi.fn(),
   mockSetPaneOwnershipPrincipalResolver:
     vi.fn<(resolver: ((token: string) => string | null) | null) => void>(),
@@ -247,8 +236,6 @@ const mockUnbindTerminal = vi.hoisted(() => vi.fn<(terminalId: string) => void>(
 
 const mockGetBypassPermissions = vi.hoisted(() => vi.fn<(token: string) => boolean>(() => false));
 
-const mockGetDebugLogging = vi.hoisted(() => vi.fn<(token: string) => boolean>(() => false));
-
 const mockGetAssistantScratchEnv = vi.hoisted(() =>
   vi.fn<(token: string) => Record<string, string> | null>(() => null)
 );
@@ -267,7 +254,6 @@ vi.mock("../../../../services/HelpSessionService.js", () => ({
     getClaudeLaunchArgs: (token: string) => mockGetClaudeLaunchArgs(token),
     getAssistantScratchEnv: (token: string) => mockGetAssistantScratchEnv(token),
     getBypassPermissions: (token: string) => mockGetBypassPermissions(token),
-    getDebugLogging: (token: string) => mockGetDebugLogging(token),
     markTerminalForToken: (token: string, terminalId: string, expectedAgentId?: string) =>
       mockMarkTerminalForToken(token, terminalId, expectedAgentId),
     unbindTerminal: (terminalId: string) => mockUnbindTerminal(terminalId),
@@ -290,10 +276,6 @@ vi.mock("../../../../services/McpServerService.js", () => ({
       return mockCurrentPort();
     },
     ensureReady: () => mockEnsureReady(),
-    setAssistantPaneWebContentsResolver: (...args: unknown[]) =>
-      mockSetAssistantPaneWebContentsResolver(...args),
-    setAssistantPaneActionContextResolver: (...args: unknown[]) =>
-      mockSetAssistantPaneActionContextResolver(...args),
     setPaneWorkspaceBindingResolver: (...args: unknown[]) =>
       mockSetPaneWorkspaceBindingResolver(...args),
     setPaneOwnershipPrincipalResolver: (resolver: ((token: string) => string | null) | null) =>
@@ -308,8 +290,6 @@ vi.mock("../../../../services/McpPaneConfigService.js", () => ({
   mcpPaneConfigService: {
     preparePaneConfig: (...args: unknown[]) => mockPreparePaneConfig(...args),
     revokePaneConfig: (paneId: string) => mockRevokePaneConfig(paneId),
-    registerAssistantPaneBearer: (token: string, webContentsId: number, actionContext?: unknown) =>
-      mockRegisterAssistantPaneBearer(token, webContentsId, actionContext),
     registerPaneWorkspaceBinding: (token: string, binding: unknown) =>
       mockRegisterPaneWorkspaceBinding(token, binding),
     getOwnershipPrincipalForToken: (token: string) => mockGetOwnershipPrincipalForToken(token),
@@ -1490,61 +1470,6 @@ describe("terminal spawn handler - help session detection (#6524)", () => {
     expect(mockPreparePaneConfig).not.toHaveBeenCalled();
   });
 
-  // The Daintree Assistant is retired as a backend (deprecated tier), so even
-  // an installed CLI carrying a valid bearer never gets the assistant env.
-  it("treats a retired Daintree Assistant launch as a plain spawn, even with bypass and debug on", async () => {
-    mockValidateToken.mockImplementation((token) =>
-      token === "assistant-bypass" ? "core" : false
-    );
-    mockGetBypassPermissions.mockImplementation((token) => token === "assistant-bypass");
-    mockGetDebugLogging.mockImplementation((token) => token === "assistant-bypass");
-
-    const deps = { ptyClient } as unknown as HandlerDependencies;
-    registerTerminalLifecycleHandlers(deps);
-
-    const handler = getSpawnHandler();
-    await handler(
-      {} as Electron.IpcMainInvokeEvent,
-      {
-        cols: 80,
-        rows: 24,
-        cwd: tmpDir,
-        command: "daintree-assistant",
-        launchAgentId: "daintree-assistant",
-        env: { DAINTREE_MCP_TOKEN: "assistant-bypass" },
-      } as unknown as Parameters<typeof handler>[1]
-    );
-
-    const spawnArgs = ptyClient.spawn.mock.calls[0][1];
-    expect(spawnArgs.env?.DAINTREE_ASSISTANT_AUTO_APPROVE).toBeUndefined();
-    expect(spawnArgs.env?.DAINTREE_ASSISTANT_DEBUG_LOG).toBeUndefined();
-  });
-
-  it("does NOT inject DAINTREE_ASSISTANT_DEBUG_LOG for a non-assistant help agent even when debugLogging is on", async () => {
-    // The var is scoped to the daintree-assistant CLI; a claude help launch
-    // with debugLogging on must never receive it.
-    mockValidateToken.mockImplementation((token) => (token === "claude-debug" ? "core" : false));
-    mockGetDebugLogging.mockImplementation(() => true);
-
-    const deps = { ptyClient } as unknown as HandlerDependencies;
-    registerTerminalLifecycleHandlers(deps);
-
-    const handler = getSpawnHandler();
-    await handler(
-      {} as Electron.IpcMainInvokeEvent,
-      {
-        cols: 80,
-        rows: 24,
-        cwd: tmpDir,
-        command: "claude",
-        launchAgentId: "claude",
-        env: { DAINTREE_MCP_TOKEN: "claude-debug" },
-      } as unknown as Parameters<typeof handler>[1]
-    );
-
-    const spawnArgs = ptyClient.spawn.mock.calls[0][1];
-    expect(spawnArgs.env?.DAINTREE_ASSISTANT_DEBUG_LOG).toBeUndefined();
-  });
   it("appends --dangerously-skip-permissions even at core tier when bypassPermissions is on", async () => {
     // Tier and bypassPermissions are decoupled (#7532): a core session with
     // bypass on should still skip the CLI confirmation gate.
@@ -2483,341 +2408,6 @@ describe("terminal spawn handler - help session detection (#6524)", () => {
   });
 });
 
-describe("terminal spawn handler - daintree-assistant MCP env injection (#10639)", () => {
-  let ptyClient: {
-    spawn: ReturnType<typeof vi.fn>;
-    hasTerminal: ReturnType<typeof vi.fn>;
-    write: ReturnType<typeof vi.fn>;
-  };
-  let tmpDir: string;
-
-  beforeEach(async () => {
-    vi.clearAllMocks();
-    const os = await import("os");
-    tmpDir = os.tmpdir();
-    ptyClient = {
-      spawn: vi.fn(),
-      hasTerminal: vi.fn(() => false),
-      write: vi.fn(),
-    };
-    mockGetCurrentProject.mockReturnValue({ id: "p1", path: tmpDir, name: "p" });
-    mockGetProjectById.mockReturnValue(null);
-    mockGetProjectSettings.mockResolvedValue({ daintreeMcpTier: "core" });
-    mockValidateToken.mockReturnValue(false);
-    mockIsRunning.mockReturnValue(true);
-    mockCurrentPort.mockReturnValue(45454);
-    mockPreparePaneConfig.mockReset();
-    mockPreparePaneConfig.mockResolvedValue({
-      configPath: "/tmp/pane-config.json",
-      args: ["--mcp-config", "/tmp/pane-config.json"],
-      env: {},
-      token: "assistant-token",
-    });
-    mockRevokePaneConfig.mockReset();
-    mockRevokePaneConfig.mockResolvedValue(undefined);
-  });
-
-  it("injects MCP url, token, and window id into the env, without --mcp-config", async () => {
-    const deps = { ptyClient } as unknown as HandlerDependencies;
-    registerTerminalLifecycleHandlers(deps);
-
-    const handler = getSpawnHandler();
-    await handler(
-      { senderWindow: { id: 7 } } as unknown as Electron.IpcMainInvokeEvent,
-      {
-        id: "assistant-pane",
-        cols: 80,
-        rows: 24,
-        cwd: tmpDir,
-        command: "daintree-assistant",
-        launchAgentId: "daintree-assistant",
-      } as unknown as Parameters<typeof handler>[1]
-    );
-
-    const spawnArgs = ptyClient.spawn.mock.calls[0][1];
-    // Token is minted through the same registered-bearer path as Claude.
-    expect(mockPreparePaneConfig).toHaveBeenCalledWith({
-      paneId: "assistant-pane",
-      port: 45454,
-      tier: "core",
-    });
-    expect(spawnArgs.env?.DAINTREE_MCP_URL).toBe("http://127.0.0.1:45454/mcp");
-    expect(spawnArgs.env?.DAINTREE_MCP_TOKEN).toBe("assistant-token");
-    expect(spawnArgs.env?.DAINTREE_WINDOW_ID).toBe("7");
-    // env-only: no config flag is appended, and the handler does not set
-    // DAINTREE_PROJECT_ID (injectDaintreeMetadata owns that downstream).
-    expect(spawnArgs.command).toBe("daintree-assistant");
-    expect(spawnArgs.env?.DAINTREE_PROJECT_ID).toBeUndefined();
-  });
-
-  it("omits DAINTREE_WINDOW_ID when no sender window is in scope", async () => {
-    const deps = { ptyClient } as unknown as HandlerDependencies;
-    registerTerminalLifecycleHandlers(deps);
-
-    const handler = getSpawnHandler();
-    await handler(
-      {} as Electron.IpcMainInvokeEvent,
-      {
-        id: "assistant-pane",
-        cols: 80,
-        rows: 24,
-        cwd: tmpDir,
-        command: "daintree-assistant",
-        launchAgentId: "daintree-assistant",
-      } as unknown as Parameters<typeof handler>[1]
-    );
-
-    const spawnArgs = ptyClient.spawn.mock.calls[0][1];
-    expect(spawnArgs.env?.DAINTREE_MCP_TOKEN).toBe("assistant-token");
-    expect(spawnArgs.env?.DAINTREE_MCP_URL).toBe("http://127.0.0.1:45454/mcp");
-    expect("DAINTREE_WINDOW_ID" in (spawnArgs.env ?? {})).toBe(false);
-  });
-
-  it("pins the assistant bearer to the sender WebContents and replays the launch ActionContext (#10647)", async () => {
-    const deps = { ptyClient } as unknown as HandlerDependencies;
-    registerTerminalLifecycleHandlers(deps);
-
-    const launchContext = {
-      projectId: "p1",
-      activeWorktreeId: "wt-7",
-      focusedTerminalId: "term-3",
-    };
-
-    const handler = getSpawnHandler();
-    await handler(
-      { sender: { id: 42 }, senderWindow: { id: 7 } } as unknown as Electron.IpcMainInvokeEvent,
-      {
-        id: "assistant-pane",
-        cols: 80,
-        rows: 24,
-        cwd: tmpDir,
-        command: "daintree-assistant",
-        launchAgentId: "daintree-assistant",
-        actionContext: launchContext,
-      } as unknown as Parameters<typeof handler>[1]
-    );
-
-    // The minted pane token is promoted to a pinned bearer bound to the sender
-    // WebContents id (42), carrying the launch-time ActionContext snapshot.
-    expect(mockRegisterAssistantPaneBearer).toHaveBeenCalledWith(
-      "assistant-token",
-      42,
-      launchContext
-    );
-    // Resolvers are wired so the handshake can consult the pane config service.
-    expect(mockSetAssistantPaneWebContentsResolver).toHaveBeenCalled();
-    expect(mockSetAssistantPaneActionContextResolver).toHaveBeenCalled();
-    // Env contract is unchanged.
-    const spawnArgs = ptyClient.spawn.mock.calls[0][1];
-    expect(spawnArgs.env?.DAINTREE_MCP_TOKEN).toBe("assistant-token");
-  });
-
-  it("skips assistant pinning when the sender WebContents is unknown (#10647)", async () => {
-    const deps = { ptyClient } as unknown as HandlerDependencies;
-    registerTerminalLifecycleHandlers(deps);
-
-    const handler = getSpawnHandler();
-    // No `sender` on the event → webContentsId resolves to the 0 sentinel.
-    await handler(
-      { senderWindow: { id: 7 } } as unknown as Electron.IpcMainInvokeEvent,
-      {
-        id: "assistant-pane",
-        cols: 80,
-        rows: 24,
-        cwd: tmpDir,
-        command: "daintree-assistant",
-        launchAgentId: "daintree-assistant",
-      } as unknown as Parameters<typeof handler>[1]
-    );
-
-    // Degrade to generic pane-token behaviour rather than pinning to nothing.
-    expect(mockRegisterAssistantPaneBearer).not.toHaveBeenCalled();
-    // Ownership still follows the unpinned bearer (#12487).
-    expect(mockSetPaneOwnershipPrincipalResolver).toHaveBeenCalled();
-    expect(mockSetOwnershipPrincipalRevokedListener).toHaveBeenCalled();
-    const spawnArgs = ptyClient.spawn.mock.calls[0][1];
-    expect(spawnArgs.env?.DAINTREE_MCP_TOKEN).toBe("assistant-token");
-    expect(spawnArgs.env?.DAINTREE_MCP_URL).toBe("http://127.0.0.1:45454/mcp");
-  });
-
-  it("starts the MCP server on demand when it is not already running", async () => {
-    mockIsRunning.mockReturnValue(false);
-    mockEnsureReady.mockImplementation(async () => {
-      mockIsRunning.mockReturnValue(true);
-      return true;
-    });
-
-    const deps = { ptyClient } as unknown as HandlerDependencies;
-    registerTerminalLifecycleHandlers(deps);
-
-    const handler = getSpawnHandler();
-    await handler(
-      { senderWindow: { id: 3 } } as unknown as Electron.IpcMainInvokeEvent,
-      {
-        id: "assistant-pane",
-        cols: 80,
-        rows: 24,
-        cwd: tmpDir,
-        command: "daintree-assistant",
-        launchAgentId: "daintree-assistant",
-      } as unknown as Parameters<typeof handler>[1]
-    );
-
-    const spawnArgs = ptyClient.spawn.mock.calls[0][1];
-    expect(mockEnsureReady).toHaveBeenCalledTimes(1);
-    expect(mockPreparePaneConfig).toHaveBeenCalled();
-    expect(spawnArgs.env?.DAINTREE_MCP_TOKEN).toBe("assistant-token");
-  });
-
-  it("continues without MCP injection when the server cannot be made ready", async () => {
-    mockIsRunning.mockReturnValue(false);
-    mockCurrentPort.mockReturnValue(null);
-    mockEnsureReady.mockResolvedValue(false);
-
-    const deps = { ptyClient } as unknown as HandlerDependencies;
-    registerTerminalLifecycleHandlers(deps);
-
-    const handler = getSpawnHandler();
-    await handler(
-      { senderWindow: { id: 7 } } as unknown as Electron.IpcMainInvokeEvent,
-      {
-        cols: 80,
-        rows: 24,
-        cwd: tmpDir,
-        command: "daintree-assistant",
-        launchAgentId: "daintree-assistant",
-      } as unknown as Parameters<typeof handler>[1]
-    );
-
-    const spawnArgs = ptyClient.spawn.mock.calls[0][1];
-    expect(mockPreparePaneConfig).not.toHaveBeenCalled();
-    expect(spawnArgs.command).toBe("daintree-assistant");
-    expect(spawnArgs.env?.DAINTREE_MCP_TOKEN).toBeUndefined();
-    expect(spawnArgs.env?.DAINTREE_MCP_URL).toBeUndefined();
-  });
-
-  it("skips MCP injection when the resolved tier is off", async () => {
-    mockGetProjectSettings.mockResolvedValue({ daintreeMcpTier: "off" });
-
-    const deps = { ptyClient } as unknown as HandlerDependencies;
-    registerTerminalLifecycleHandlers(deps);
-
-    const handler = getSpawnHandler();
-    await handler(
-      { senderWindow: { id: 7 } } as unknown as Electron.IpcMainInvokeEvent,
-      {
-        cols: 80,
-        rows: 24,
-        cwd: tmpDir,
-        command: "daintree-assistant",
-        launchAgentId: "daintree-assistant",
-      } as unknown as Parameters<typeof handler>[1]
-    );
-
-    const spawnArgs = ptyClient.spawn.mock.calls[0][1];
-    expect(mockPreparePaneConfig).not.toHaveBeenCalled();
-    expect(spawnArgs.env?.DAINTREE_MCP_TOKEN).toBeUndefined();
-  });
-
-  it("continues spawning when token minting throws", async () => {
-    mockPreparePaneConfig.mockRejectedValue(new Error("mint failed"));
-
-    const deps = { ptyClient } as unknown as HandlerDependencies;
-    registerTerminalLifecycleHandlers(deps);
-
-    const handler = getSpawnHandler();
-    await handler(
-      { senderWindow: { id: 7 } } as unknown as Electron.IpcMainInvokeEvent,
-      {
-        cols: 80,
-        rows: 24,
-        cwd: tmpDir,
-        command: "daintree-assistant",
-        launchAgentId: "daintree-assistant",
-      } as unknown as Parameters<typeof handler>[1]
-    );
-
-    expect(ptyClient.spawn).toHaveBeenCalledTimes(1);
-    const spawnArgs = ptyClient.spawn.mock.calls[0][1];
-    expect(spawnArgs.command).toBe("daintree-assistant");
-    expect(spawnArgs.env?.DAINTREE_MCP_TOKEN).toBeUndefined();
-  });
-
-  it('sets DAINTREE_WINDOW_ID to "0" when the window id is 0 (not omitted)', async () => {
-    // The injection guard is `windowId !== null`, so a legitimate window id of
-    // 0 must still be forwarded. A regression to a falsy check (`!windowId`)
-    // would silently drop it.
-    const deps = { ptyClient } as unknown as HandlerDependencies;
-    registerTerminalLifecycleHandlers(deps);
-
-    const handler = getSpawnHandler();
-    await handler(
-      { senderWindow: { id: 0 } } as unknown as Electron.IpcMainInvokeEvent,
-      {
-        cols: 80,
-        rows: 24,
-        cwd: tmpDir,
-        command: "daintree-assistant",
-        launchAgentId: "daintree-assistant",
-      } as unknown as Parameters<typeof handler>[1]
-    );
-
-    const spawnArgs = ptyClient.spawn.mock.calls[0][1];
-    expect(spawnArgs.env?.DAINTREE_WINDOW_ID).toBe("0");
-  });
-
-  it("revokes the minted pane config when the PTY spawn throws", async () => {
-    ptyClient.spawn.mockImplementation(() => {
-      throw new Error("spawn boom");
-    });
-
-    const deps = { ptyClient } as unknown as HandlerDependencies;
-    registerTerminalLifecycleHandlers(deps);
-
-    const handler = getSpawnHandler();
-    await expect(
-      handler(
-        { senderWindow: { id: 7 } } as unknown as Electron.IpcMainInvokeEvent,
-        {
-          id: "assistant-pane",
-          cols: 80,
-          rows: 24,
-          cwd: tmpDir,
-          command: "daintree-assistant",
-          launchAgentId: "daintree-assistant",
-        } as unknown as Parameters<typeof handler>[1]
-      )
-    ).rejects.toThrow(/Failed to spawn terminal/);
-
-    expect(mockPreparePaneConfig).toHaveBeenCalled();
-    expect(mockRevokePaneConfig).toHaveBeenCalledWith("assistant-pane");
-  });
-
-  it("skips MCP injection when no project can be resolved", async () => {
-    mockGetCurrentProject.mockReturnValue(null);
-    mockGetProjectById.mockReturnValue(null);
-
-    const deps = { ptyClient } as unknown as HandlerDependencies;
-    registerTerminalLifecycleHandlers(deps);
-
-    const handler = getSpawnHandler();
-    await handler(
-      { senderWindow: { id: 7 } } as unknown as Electron.IpcMainInvokeEvent,
-      {
-        cols: 80,
-        rows: 24,
-        command: "daintree-assistant",
-        launchAgentId: "daintree-assistant",
-      } as unknown as Parameters<typeof handler>[1]
-    );
-
-    expect(ptyClient.spawn).toHaveBeenCalledTimes(1);
-    expect(mockPreparePaneConfig).not.toHaveBeenCalled();
-    const spawnArgs = ptyClient.spawn.mock.calls[0][1];
-    expect(spawnArgs.env?.DAINTREE_MCP_TOKEN).toBeUndefined();
-  });
-});
-
 describe("terminal spawn handler - Claude pane launch-workspace binding (#12486)", () => {
   let ptyClient: {
     spawn: ReturnType<typeof vi.fn>;
@@ -2888,8 +2478,6 @@ describe("terminal spawn handler - Claude pane launch-workspace binding (#12486)
     expect(mockRegisterPaneWorkspaceBinding.mock.invocationCallOrder[0]).toBeLessThan(
       ptyClient.spawn.mock.invocationCallOrder[0]!
     );
-    // An ordinary pane is never promoted to the assistant's renderer-owned pin.
-    expect(mockRegisterAssistantPaneBearer).not.toHaveBeenCalled();
     expect(ptyClient.spawn.mock.calls[0][1].env?.DAINTREE_MCP_TOKEN).toBe("pane-token");
   });
 
@@ -3042,6 +2630,51 @@ describe("terminal spawn handler - Claude pane launch-workspace binding (#12486)
     await launchClaude({ sender: { id: 42 }, projectId: "p1" });
 
     expect(mockRegisterPaneWorkspaceBinding).not.toHaveBeenCalled();
+    expect(ptyClient.spawn.mock.calls[0][1].env?.DAINTREE_MCP_TOKEN).toBeUndefined();
+  });
+
+  it("revokes the pane bearer it minted when the PTY spawn throws", async () => {
+    ptyClient.spawn.mockImplementation(() => {
+      throw new Error("spawn boom");
+    });
+
+    await expect(launchClaude({ sender: { id: 42 }, projectId: "p1" })).rejects.toThrow(
+      /Failed to spawn terminal/
+    );
+
+    expect(mockRegisterPaneWorkspaceBinding).toHaveBeenCalledWith(
+      "pane-token",
+      expect.objectContaining({ workspaceId: "p1" })
+    );
+    expect(mockRevokePaneConfig).toHaveBeenCalledWith("claude-pane");
+  });
+
+  it("launches without MCP when preparing the pane config fails", async () => {
+    mockPreparePaneConfig.mockRejectedValue(new Error("mint failed"));
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      await launchClaude({ sender: { id: 42 }, projectId: "p1" });
+    } finally {
+      errorSpy.mockRestore();
+    }
+
+    expect(ptyClient.spawn).toHaveBeenCalledTimes(1);
+    const spawned = ptyClient.spawn.mock.calls[0][1];
+    expect(spawned.command).not.toContain("--mcp-config");
+    expect(spawned.env?.DAINTREE_MCP_TOKEN).toBeUndefined();
+    // Nothing was handed over, so nothing of a previous launch under this id
+    // is revoked either.
+    expect(mockRevokePaneConfig).not.toHaveBeenCalled();
+  });
+
+  it("prepares no MCP for a launch with no project to bind", async () => {
+    mockGetCurrentProject.mockReturnValue(null);
+    mockGetProjectById.mockReturnValue(null);
+
+    await launchClaude({ sender: { id: 42 } }, { projectId: undefined });
+
+    expect(ptyClient.spawn).toHaveBeenCalledTimes(1);
+    expect(mockPreparePaneConfig).not.toHaveBeenCalled();
     expect(ptyClient.spawn.mock.calls[0][1].env?.DAINTREE_MCP_TOKEN).toBeUndefined();
   });
 });
@@ -3405,25 +3038,25 @@ describe("terminal spawn handler - Windows PATH refresh", () => {
   it("releases the pane config when the agent executable cannot be resolved", async () => {
     setPlatform("win32");
     resolveWindowsCliTargetMock.mockImplementationOnce(async () => {
-      throw Object.assign(new Error("Cannot launch CLI: daintree-assistant"), { code: "ENOENT" });
+      throw Object.assign(new Error("Cannot launch CLI: claude"), { code: "ENOENT" });
     });
     const handler = spawnHandlerForTest();
 
     await expect(
       handler(
-        { senderWindow: { id: 7 } } as unknown as Electron.IpcMainInvokeEvent,
+        {} as Electron.IpcMainInvokeEvent,
         {
-          id: "assistant-pane",
+          id: "claude-pane",
           cols: 80,
           rows: 24,
-          command: "daintree-assistant",
-          launchAgentId: "daintree-assistant",
+          command: "claude",
+          launchAgentId: "claude",
         } as unknown as Parameters<typeof handler>[1]
       )
     ).rejects.toThrow(/Failed to spawn terminal: Cannot launch CLI/);
 
     expect(ptyClient.spawn).not.toHaveBeenCalled();
-    expect(mockRevokePaneConfig).toHaveBeenCalledWith("assistant-pane");
+    expect(mockRevokePaneConfig).toHaveBeenCalledWith("claude-pane");
   });
 
   it("resolves the agent against the pane's PATH whatever its casing", async () => {
@@ -3437,8 +3070,8 @@ describe("terminal spawn handler - Windows PATH refresh", () => {
         {
           cols: 80,
           rows: 24,
-          command: "daintree-assistant",
-          launchAgentId: "daintree-assistant",
+          command: "claude",
+          launchAgentId: "claude",
           env: { Path: "C:\\project-tools" },
         } as unknown as Parameters<typeof handler>[1]
       );
