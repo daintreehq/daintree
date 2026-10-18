@@ -4871,6 +4871,46 @@ describe("one assistant addressing another (#13496)", () => {
     expect(deps.dispatchAction).not.toHaveBeenCalled();
   });
 
+  it("routes an assistant in a closeMany the person was asked about for its other panels", async () => {
+    const requestCloseApproval = vi.fn().mockResolvedValue({
+      result: { ok: true, result: { selectedTargetIds: [] } },
+      confirmationDecision: "approved",
+    });
+    const { deps, control } = assistantDeps({ caller: CALLER, requestCloseApproval });
+    const server = await serve(deps);
+    const result = await callTool(server, {
+      name: "terminal.closeMany",
+      arguments: { terminalIds: [ASSISTANT_TERMINAL, "t-user"] },
+    });
+    expect(requestCloseApproval).toHaveBeenCalledWith("terminal.closeMany", {
+      terminalIds: ["t-user"],
+    });
+    expect(control.close).toHaveBeenCalledWith(CALLER, TARGET);
+    expect(result.structuredContent).toMatchObject({
+      results: [
+        { target: ASSISTANT_TERMINAL, ok: true },
+        { target: "t-user", ok: false, error: { code: "USER_REJECTED" } },
+      ],
+    });
+  });
+
+  it("keeps an assistant's scrollback and prompt context from anyone else", async () => {
+    const { deps } = assistantDeps({ caller: null, origin: "external", tier: "full" });
+    const server = await serve(deps);
+    await expect(
+      callHandler(server, "resources/read", {
+        uri: `daintree://terminal/${ASSISTANT_TERMINAL}/scrollback`,
+      })
+    ).rejects.toThrow(/Unknown resource URI/);
+
+    await getPrompt(server, {
+      name: "triage_failed_agent",
+      arguments: { terminal_id: ASSISTANT_TERMINAL },
+    });
+    const dispatched = vi.mocked(deps.dispatchAction).mock.calls.map((call) => call[0]);
+    expect(dispatched).not.toContain("terminal.getOutput");
+  });
+
   it("refuses an assistant in another project, or the caller itself, before anything runs", async () => {
     const { deps, control } = assistantDeps({ caller: CALLER });
     control.resolve.mockReturnValue(null as never);

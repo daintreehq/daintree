@@ -193,19 +193,42 @@ describe("TerminalProcess typed-input stamp and settled-prompt guard (#12491)", 
     expect(terminal.getSubmission("tok-1")).toMatchObject({ phase: "cancelled" });
   });
 
-  it("writes a strict guarded submission to a settled prompt, and refuses one behind the turn it started (#13496)", async () => {
+  it("writes one strict guarded submission per settle, before the analysis reports the turn (#13496)", async () => {
     const terminal = createTerminal();
     settleAtPrompt(terminal, Date.now() - 5_000);
 
+    // Nothing reports the first brief's turn before the second reaches the lane.
     terminal.submit("first", "tok-1", undefined, "settled-prompt-strict");
-    // The first brief starts a turn before the second reaches the lane.
-    info(terminal).agentState = "working";
     terminal.submit("second", "tok-2", undefined, "settled-prompt-strict");
     await vi.advanceTimersByTimeAsync(3_000);
 
     expect(ptyWriteMock.mock.calls.map((c) => c[0])).toEqual(["first", "\r"]);
     expect(terminal.getSubmission("tok-1")).toMatchObject({ phase: "pty_written" });
     expect(terminal.getSubmission("tok-2")).toMatchObject({ phase: "cancelled" });
+
+    // Once the agent has settled at its prompt again, the next one goes.
+    vi.setSystemTime(Date.now() + 1_000);
+    settleAtPrompt(terminal, Date.now());
+    vi.setSystemTime(Date.now() + 1_000);
+    ptyWriteMock.mockClear();
+    terminal.submit("third", "tok-3", undefined, "settled-prompt-strict");
+    await vi.advanceTimersByTimeAsync(3_000);
+    expect(ptyWriteMock.mock.calls.map((c) => c[0])).toEqual(["third", "\r"]);
+    expect(terminal.getSubmission("tok-3")).toMatchObject({ phase: "pty_written" });
+  });
+
+  it("holds a strict submission behind any line the lane wrote since the prompt settled", async () => {
+    const terminal = createTerminal();
+    settleAtPrompt(terminal, Date.now() - 5_000);
+
+    terminal.submit("a person's prompt");
+    terminal.submit("brief", "tok-1", undefined, "settled-prompt-strict");
+    // An ordinary guarded line still queues, as it always did.
+    terminal.submit("notice", "tok-2", undefined, "settled-prompt");
+    await vi.advanceTimersByTimeAsync(5_000);
+
+    expect(terminal.getSubmission("tok-1")).toMatchObject({ phase: "cancelled" });
+    expect(terminal.getSubmission("tok-2")).toMatchObject({ phase: "pty_written" });
   });
 
   it("holds even a queueing CLI when something was typed since its turn began", async () => {

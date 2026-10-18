@@ -449,6 +449,23 @@ export class HttpLifecycle {
   private paneTerminalResolver: PaneTerminalResolver | null = null;
   private helpSessionTerminalResolver: HelpSessionTerminalResolver | null = null;
   private assistantControlBinding: AssistantControlBinding | null = null;
+  /**
+   * Main's side of one assistant addressing another (#13496) as each call
+   * finds it, so a session opened before the binding was set is held to it
+   * from then on. Unbound, nothing is an assistant: none can run before then.
+   */
+  private readonly assistantControl: AssistantControlBinding["control"] = {
+    isAssistantTerminal: (terminalId) =>
+      this.assistantControlBinding?.control.isAssistantTerminal(terminalId) ?? false,
+    resolve: (caller, terminalId) =>
+      this.assistantControlBinding?.control.resolve(caller, terminalId) ?? null,
+    list: (...args) => this.boundAssistantControl().list(...args),
+    start: (...args) => this.boundAssistantControl().start(...args),
+    submit: (...args) => this.boundAssistantControl().submit(...args),
+    interrupt: (...args) => this.boundAssistantControl().interrupt(...args),
+    close: (...args) => this.boundAssistantControl().close(...args),
+    readReply: (...args) => this.boundAssistantControl().readReply(...args),
+  };
   private lastError: string | null = null;
   private intentionalStop = false;
   private restartAttempts = 0;
@@ -557,6 +574,12 @@ export class HttpLifecycle {
 
   setAssistantControl(binding: AssistantControlBinding | null): void {
     this.assistantControlBinding = binding;
+  }
+
+  private boundAssistantControl(): AssistantControlBinding["control"] {
+    const binding = this.assistantControlBinding;
+    if (binding === null) throw new Error("Assistant control isn't available yet");
+    return binding.control;
   }
 
   /**
@@ -2133,6 +2156,7 @@ export class HttpLifecycle {
      * session, and for a help session whose bearer has since been unbound.
      */
     const assistantCallerFor = (): AssistantCaller | null => {
+      if (this.assistantControlBinding === null) return null;
       if (relay) {
         if (boundWorkspaceId === null) return null;
         return {
@@ -2646,12 +2670,8 @@ export class HttpLifecycle {
               this.deps.sessionStore.sessionHelpIdMap.get(sessionId)
             ),
           }),
-      ...(this.assistantControlBinding !== null
-        ? {
-            assistantControl: this.assistantControlBinding.control,
-            assistantCaller: () => assistantCallerFor(),
-          }
-        : {}),
+      assistantControl: this.assistantControl,
+      assistantCaller: () => assistantCallerFor(),
       ...(this.deps.readCodexQuota !== undefined
         ? { readCodexQuota: this.deps.readCodexQuota }
         : {}),

@@ -1486,6 +1486,13 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
   // end under it.
   const assistantCallerNow = (): AssistantCaller | null =>
     assistantControl !== undefined ? (deps.assistantCaller?.() ?? null) : null;
+  // Whether a read outside the tool calls' own gate may name this terminal
+  // (#13496): an assistant's only for an assistant caller it resolves for.
+  const mayNameTerminal = (tier: McpTier, terminalId: string): boolean => {
+    if (assistantControl?.isAssistantTerminal(terminalId) !== true) return true;
+    const caller = tier === "external" ? null : assistantCallerNow();
+    return caller !== null && assistantControl.resolve(caller, terminalId) !== null;
+  };
 
   const server = new Server(
     { name: "Daintree", version: app.getVersion() },
@@ -3330,10 +3337,11 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
           // An assistant is never put to the person here: its own item
           // checks who started it, and one this caller can't reach is
           // answered as missing (#13496).
+          const isAssistantId = (id: string) => assistantControl?.isAssistantTerminal(id) === true;
           const closeIds =
             actionId === "terminal.closeMany" && rendererOwnedOrigin
               ? [...new Set((parsed.data as TerminalCloseManyArgs).terminalIds)].filter(
-                  (id) => assistantControl?.isAssistantTerminal(id) !== true
+                  (id) => !isAssistantId(id)
                 )
               : [];
           const closeWouldAsk = (await Promise.all(closeIds.map(closeNeedsApproval))).some(Boolean);
@@ -3366,7 +3374,11 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
           for (const item of batch.expand(parsed.data, rendererOwnedOrigin)) {
             // A cancelled call starts nothing more; what already went out stands.
             if (extra.signal.aborted) break;
-            if (closeApproved !== undefined && !closeApproved.has(item.target)) {
+            if (
+              closeApproved !== undefined &&
+              !closeApproved.has(item.target) &&
+              !isAssistantId(item.target)
+            ) {
               waits.push(undefined);
               results.push({
                 target: item.target,
@@ -4723,6 +4735,9 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
         buildMcpErrorPayload({ code: TIER_NOT_PERMITTED_CODE, message })
       );
     }
+    if (parsed.kind === "scrollback" && !mayNameTerminal(tier, parsed.id)) {
+      throw new McpError(ErrorCode.InvalidRequest, `Unknown resource URI: ${uri}`);
+    }
     // `agentState` deliberately has no view-residency probe (#12316). It answers
     // from the process-global `AgentAvailabilityStore` with no renderer
     // involved, so requiring the bound workspace to hold a live view made an
@@ -4801,7 +4816,8 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
     // belongs behind the same liveness gate as `tools/call` — otherwise a
     // revoked bearer still reads worktree and terminal data through the prompt
     // surface, which is the leak this issue is about wearing a different hat.
-    if (sessionStore.getTier(sessionId) === null) throw sessionGoneError();
+    const promptTier = sessionStore.getTier(sessionId);
+    if (promptTier === null) throw sessionGoneError();
     const name = request.params.name;
     const definition = PROMPT_DEFINITIONS.find((def) => def.name === name);
     if (!definition) {
@@ -4834,7 +4850,15 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
       }
     }
 
-    const context = await collectPromptContext(definition, args, dispatchAction);
+    // An assistant's output goes only to an assistant that may reach it (#13496).
+    const namedTerminal = args.terminal_id?.trim();
+    const context = await collectPromptContext(
+      definition,
+      namedTerminal && !mayNameTerminal(promptTier, namedTerminal)
+        ? { ...args, terminal_id: "" }
+        : args,
+      dispatchAction
+    );
     const text = definition.render(args, context);
 
     return {
