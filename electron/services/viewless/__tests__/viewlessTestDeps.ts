@@ -79,6 +79,24 @@ export function makeHosts(loaded = true) {
     isWorktreeOwnedByProject: vi.fn(
       async (_id: string, _path: string, _projectId: string): Promise<boolean | null> => true
     ),
+    getDeletePreview: vi.fn(
+      async (
+        _path: string,
+        _projectId: string,
+        worktreeId: string
+      ): ReturnType<ViewlessWorkspaceHosts["getDeletePreview"]> => ({
+        changes: { worktreeId, rootPath: worktreeId, changedFileCount: 0, changes: [] },
+        risk: {
+          entries: [],
+          dirtyFiles: [],
+          untrackedFiles: [],
+          atRiskCommits: [],
+          requiresMechanicalForce: false,
+          incomplete: false,
+        },
+        teardown: null,
+      })
+    ),
   } satisfies ViewlessWorkspaceHosts;
 }
 

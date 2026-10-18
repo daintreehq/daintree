@@ -637,11 +637,52 @@ describe("rendererBridge — relayed calls (#13493)", () => {
     expect(other.request).not.toHaveBeenCalled();
   });
 
-  it("refuses a change with no window of the Shell's on the project, never running it in main", async () => {
+  it("runs a change on the host as the Shell while nobody drives the project (#13501)", async () => {
     setMcpDriveTargetResolver(() => ({ state: "vacant" }));
+    viewless.runViewlessAction.mockResolvedValue({ ok: true, result: { terminalId: "t-1" } });
+
+    const envelope = await bridge.dispatchActionForWorkspace(
+      WORKSPACE,
+      "terminal.new",
+      {},
+      false,
+      "external",
+      write
+    );
+
+    expect(envelope.result).toEqual({ ok: true, result: { terminalId: "t-1" } });
+    const [request] = viewless.runViewlessAction.mock.calls[0] as [
+      { checkWrite?: (changed: boolean) => Error | null },
+    ];
+    expect(request.checkWrite?.(false)).toBeNull();
+  });
+
+  it("never sends a change into a window here that only shows the project", async () => {
+    setMcpDriveTargetResolver(() => ({ state: "vacant" }));
+    const view = makeWebContents(7);
+    mockWebContentsRegistry.set(7, view);
+    mockProjectViews.set(WORKSPACE, [view]);
+    viewless.runViewlessAction.mockResolvedValue({ ok: true, result: {} });
+
+    await bridge.dispatchActionForWorkspace(
+      WORKSPACE,
+      "terminal.new",
+      {},
+      false,
+      "external",
+      write
+    );
+
+    expect(view.send).not.toHaveBeenCalled();
+    expect(viewless.runViewlessAction).toHaveBeenCalledTimes(1);
+  });
+
+  it("refuses a change nobody drives when the host has no form of it to run", async () => {
+    setMcpDriveTargetResolver(() => ({ state: "vacant" }));
+    viewless.hasViewlessImplementation.mockReturnValue(false);
 
     const err = await bridge
-      .dispatchActionForWorkspace(WORKSPACE, "terminal.new", {}, false, "external", write)
+      .dispatchActionForWorkspace(WORKSPACE, "terminal.moveToDock", {}, false, "external", write)
       .catch((e: unknown) => e);
 
     expect(err).toBeInstanceOf(RelayDrivenElsewhereError);
@@ -649,8 +690,9 @@ describe("rendererBridge — relayed calls (#13493)", () => {
     expect(viewless.runViewlessAction).not.toHaveBeenCalled();
   });
 
-  it("hands main's no-frontend run a write check that refuses, so a read that writes runs nothing", async () => {
-    setMcpDriveTargetResolver(() => ({ state: "vacant" }));
+  it("hands the host's run a write check that stops it once someone else takes the project", async () => {
+    let target: Parameters<typeof setMcpDriveTargetResolver>[0] = () => ({ state: "vacant" });
+    setMcpDriveTargetResolver((projectId) => target!(projectId));
     viewless.runViewlessAction.mockResolvedValue({ ok: true, result: { terminals: [] } });
 
     await bridge.dispatchActionForWorkspace(
@@ -663,12 +705,50 @@ describe("rendererBridge — relayed calls (#13493)", () => {
     );
 
     const [request] = viewless.runViewlessAction.mock.calls[0] as [
-      { assertCanWrite?: (projectId: string, actionId: string) => Promise<unknown> },
+      { checkWrite: (changed: boolean) => Error | null },
     ];
-    expect(request.assertCanWrite).toBeTypeOf("function");
-    const err = await request.assertCanWrite!(WORKSPACE, "terminal.new").catch((e: unknown) => e);
-    expect(err).toBeInstanceOf(RelayDrivenElsewhereError);
-    expect((err as RelayDrivenElsewhereError).holderName).toBeNull();
+    expect(request.checkWrite(false)).toBeNull();
+
+    // The requesting Shell's own view taking it over is no reason to stop.
+    target = () => ({ state: "live", endpoint: ownEndpoint("shell-a"), holderName: "greg-mbp" });
+    expect(request.checkWrite(true)).toBeNull();
+
+    target = () => ({ state: "live", endpoint: ownEndpoint("shell-b"), holderName: "studio-02" });
+    const before = request.checkWrite(false);
+    expect(before).toBeInstanceOf(RelayDrivenElsewhereError);
+    expect((before as Error).message).toContain("studio-02 has control");
+    expect((before as Error).message).toContain("Nothing was run");
+    const after = request.checkWrite(true);
+    expect(after).toBeInstanceOf(RelayDrivenElsewhereError);
+    expect((after as Error).message).toContain("studio-02 took control");
+    expect((after as Error).message).toContain("Part of it may already have run");
+
+    target = () => ({ state: "unavailable", reason: "reserved" });
+    expect(request.checkWrite(false)).toBeInstanceOf(DriveHolderUnavailableError);
+    expect(request.checkWrite(true)).toBeInstanceOf(RelayDrivenElsewhereError);
+  });
+
+  it("asks the requesting Shell about a confirm-gated change, and reports what it decided", async () => {
+    setMcpDriveTargetResolver(() => ({ state: "vacant" }));
+    const requestApproval = vi.fn(async () => ({ decision: "rejected" as const }));
+    viewless.runViewlessAction.mockImplementation(
+      async (request: { requestApproval?: (ask: unknown) => Promise<unknown> }) => {
+        await request.requestApproval?.({ actionId: "worktree.delete", args: {}, lines: [] });
+        return { ok: false, error: { code: "USER_REJECTED", message: "User rejected" } };
+      }
+    );
+
+    const envelope = await bridge.dispatchActionForWorkspace(
+      WORKSPACE,
+      "worktree.delete",
+      { worktreeId: "/repo-wt/x" },
+      false,
+      "external",
+      { relay: { ...write.relay, requestApproval } }
+    );
+
+    expect(requestApproval).toHaveBeenCalledTimes(1);
+    expect(envelope.confirmationDecision).toBe("rejected");
   });
 
   it("lets a read through wherever the project is driven", async () => {

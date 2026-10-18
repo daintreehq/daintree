@@ -117,6 +117,7 @@ import {
   shouldExposeTool,
   isWithheldFromBoundSession,
   isWithheldFromRelaySession,
+  mayRunProjectCommand,
   type SessionSurfacePolicy,
   isTierPermitted,
   isApprovalRequestable,
@@ -206,17 +207,6 @@ const SKILLS_SEARCH_TOOL = "skills.search";
 const SKILLS_LOAD_TOOL = "skills.load";
 const PROJECT_RUN_CHECK_TOOL = "project.runCheck";
 const PROJECT_RUN_COMMAND_TOOL = "project.runCommand";
-
-/**
- * `project.runCommand` runs whatever command it is given, so it answers to its
- * caller, not its tier alone (#13495): Daintree's own assistant at the full
- * tier, never a worker pane, an api-key client or a core session, and no grant
- * widens that. The origin is the renderer-owned one `tools/list` reads, so
- * discovery and admission ask the same question.
- */
-function mayRunProjectCommand(tier: string | null, rendererOwnedOrigin: boolean): boolean {
-  return tier === "full" && rendererOwnedOrigin;
-}
 
 const PROJECT_RUN_COMMAND_REFUSAL =
   "project.runCommand is only available to Daintree's own assistant at the full tier.";
@@ -952,7 +942,13 @@ export interface SessionServerDeps extends OwnedMainExecutors {
      * preference (#12874) — the one reason the renderer treats differently,
      * since it alone also waives the typed-name gate on a force delete.
      */
-    authorization?: McpDispatchAuthorization
+    authorization?: McpDispatchAuthorization,
+    /**
+     * A relayed call's callId from its Shell (#13493), passed only for a
+     * relayed session, so an approval the call needs asks about this very
+     * call (#13501).
+     */
+    relayCallId?: string
   ) => Promise<DispatchEnvelope>;
   /**
    * Take the user to a run, and bring the window it lands in with them
@@ -1652,6 +1648,12 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
     // Captured once so discovery, the tier gate and `mcp.surface` all describe
     // the same session (#12407).
     const rendererOwnedOrigin = sessionStore.isRendererOwnedOrigin(sessionId);
+    // Who may run the command runner (#13495, #13501), asked once so its
+    // listing, discovery and admission below agree.
+    const commandRunnerCaller = mayRunProjectCommand(tier, {
+      rendererOwnedOrigin,
+      relay: sessionSurface.relay === true,
+    });
     // Daintree's own assistant only (#12874): not the retired `assistant-pane`
     // origin, not agent panes, not api-key clients. Read live per call, and a
     // failed read keeps the dialog. A batch item inherits its batch's answer.
@@ -1824,10 +1826,10 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
           if (!hubMessagingOffered()) {
             for (const id of HOST_MESSAGING_TOOL_IDS) permittedActionIds.delete(id);
           }
-          // A grant never makes the command runner callable, so it never makes it findable.
-          if (!mayRunProjectCommand(tier, rendererOwnedOrigin)) {
-            permittedActionIds.delete(PROJECT_RUN_COMMAND_TOOL);
-          }
+          // A grant never makes the command runner callable, so it never makes it findable;
+          // a relayed full-tier session that may run it finds it, whatever its tier list says.
+          if (commandRunnerCaller) permittedActionIds.add(PROJECT_RUN_COMMAND_TOOL);
+          else permittedActionIds.delete(PROJECT_RUN_COMMAND_TOOL);
           if (!hostCallOffered()) permittedActionIds.delete(HOST_CALL_TOOL);
           // A relayed session finds nothing it would be refused (#13493).
           if (sessionSurface.relay === true) {
@@ -1845,6 +1847,7 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
               // Grant issuance gates on the origin too, which is why the
               // policy record carries it rather than re-deriving it.
               rendererOwnedOrigin,
+              relay: sessionSurface.relay === true,
               paneApproval: sessionSurface.paneApproval === true,
               paneSkipConfirmations: sessionSurface.paneSkipConfirmations === true,
               hubMessaging: hubMessagingOffered(),
@@ -2085,7 +2088,11 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
     // A relayed session is refused what it is never listed (#13493), whatever
     // its tier, and no grant stands in for that: it has none to consult.
     const relayWithheld = sessionSurface.relay === true && isWithheldFromRelaySession(actionId);
-    const tierPermitted = !relayWithheld && isTierPermitted(tier, actionId, rendererOwnedOrigin);
+    const tierPermitted =
+      !relayWithheld &&
+      (actionId === PROJECT_RUN_COMMAND_TOOL
+        ? commandRunnerCaller
+        : isTierPermitted(tier, actionId, rendererOwnedOrigin));
     // An agent pane's tier is an auto-approval line, not a ceiling (#12692).
     const paneApproval = sessionSurface.paneApproval === true;
     let grantIssuedAt: number | undefined;
@@ -2453,7 +2460,7 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
     // Refused here, past the tier gate but before a grant's use is spent or a
     // pane asks: a grant or a pane approval admits a call, and this one admits
     // only its own caller.
-    if (actionId === PROJECT_RUN_COMMAND_TOOL && !mayRunProjectCommand(tier, rendererOwnedOrigin)) {
+    if (actionId === PROJECT_RUN_COMMAND_TOOL && !commandRunnerCaller) {
       try {
         appendAuditRecord({
           toolId: actionId,
@@ -2672,9 +2679,17 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
     // Read at call time, not captured: the skip preference is settled once the
     // manifest entry is known, well after this is defined.
     const dispatchToRenderer = (id: string, dispatchArgs: unknown): Promise<DispatchEnvelope> =>
-      dispatchAuthorization === "skip-preference"
-        ? dispatchAction(id, dispatchArgs, dispatchConfirmed, dispatchAuthorization)
-        : dispatchAction(id, dispatchArgs, dispatchConfirmed);
+      relayCallId !== undefined
+        ? dispatchAction(
+            id,
+            dispatchArgs,
+            dispatchConfirmed,
+            dispatchAuthorization === "skip-preference" ? dispatchAuthorization : undefined,
+            relayCallId
+          )
+        : dispatchAuthorization === "skip-preference"
+          ? dispatchAction(id, dispatchArgs, dispatchConfirmed, dispatchAuthorization)
+          : dispatchAction(id, dispatchArgs, dispatchConfirmed);
 
     /**
      * Mint the per-tool grant behind "Allow for this session" (#12692), unless
@@ -3790,7 +3805,7 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
           const relay = deps.relay;
           const commandProjectId = readStringArg(args, "projectId");
           try {
-            if (!mayRunProjectCommand(tier, rendererOwnedOrigin)) {
+            if (!commandRunnerCaller) {
               const message = PROJECT_RUN_COMMAND_REFUSAL;
               outcome = {
                 kind: "result",

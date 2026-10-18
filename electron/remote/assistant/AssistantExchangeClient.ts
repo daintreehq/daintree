@@ -25,6 +25,7 @@ import {
   MAX_EXCHANGE_PAGE,
   McpCallAnswerSchema,
   MessageIdPayloadSchema,
+  RelayApprovePayloadSchema,
   RelayNoticesPayloadSchema,
   SendResultSchema,
   SendToHubPayloadSchema,
@@ -36,6 +37,8 @@ import {
   type LaneList,
   type McpCallAnswer,
   type McpCallPayload,
+  type RelayApproveAnswer,
+  type RelayApprovePayload,
   type RelayNoticesPayload,
 } from "./linkMethods.js";
 
@@ -59,6 +62,15 @@ export interface AssistantExchangeClientDeps {
   /** Takes what a host saw of terminals this Shell's assistants asked it about (#13500). */
   noticeReceiver?: () =>
     { receiveNotices(hostId: HostId, payload: RelayNoticesPayload): null } | undefined;
+  /**
+   * Answers a host asking the person here about one of this Shell's relayed
+   * calls (#13501); absent, every ask is refused.
+   */
+  approvalReceiver?: () =>
+    | {
+        receiveApproval(hostId: HostId, payload: RelayApprovePayload): Promise<RelayApproveAnswer>;
+      }
+    | undefined;
   callTimeoutMs?: number;
 }
 
@@ -209,6 +221,22 @@ export class AssistantExchangeClient {
             this.disposed
               ? null
               : (this.deps.noticeReceiver?.()?.receiveNotices(hostId, payload) ?? null)
+        );
+        // A host asking about a call one of this Shell's assistants is making
+        // there; nobody to take it refuses it, which approves nothing.
+        session.registerCallHandler(
+          AssistantLinkMethod.RELAY_APPROVE,
+          RelayApprovePayloadSchema,
+          (payload): Promise<RelayApproveAnswer> | RelayApproveAnswer => {
+            const receiver = this.disposed ? undefined : this.deps.approvalReceiver?.();
+            return (
+              receiver?.receiveApproval(hostId, payload) ?? {
+                approvalId: payload.approvalId,
+                argsHash: payload.argsHash,
+                decision: "refused",
+              }
+            );
+          }
         );
         // A host this Shell may message proves its sender at once, so lanes
         // enrolled over an earlier session follow it here (#13332).

@@ -22,7 +22,9 @@ import type {
   WorktreeLifecyclePhaseResult,
   WorktreeResourceStatus,
   WslGitEligibility,
+  WorktreeTeardownPreview,
 } from "./worktree.js";
+import type { SubmoduleDeleteRisk } from "./submodule.js";
 import type { CIStatusState, Credentials, RepoRef } from "./forge.js";
 import type { ForgeProviderMatcher } from "../utils/forgeHostnames.js";
 import type { PluginWorktreeLinked } from "./plugin.js";
@@ -560,6 +562,12 @@ export type WorkspaceHostRequest =
       force?: boolean;
       deleteBranch?: boolean;
     }
+  /**
+   * What deleting the worktree would discard and run, read fresh, for a
+   * delete main puts to the person itself with no view open (#13501): the
+   * same three reads a view's dialog makes over its worktree port.
+   */
+  | { type: "get-delete-preview"; requestId: string; worktreeId: string }
   // Branch operations
   | { type: "list-branches"; requestId: string; rootPath: string }
   | { type: "get-recent-branches"; requestId: string; rootPath: string }
@@ -851,6 +859,18 @@ export type WorkspaceHostEvent =
       gitBacked?: boolean | null;
     }
   | { type: "monitor"; requestId: string; state: WorktreeSnapshot | null }
+  /**
+   * Each part null when the worktree's monitor no longer exists, and
+   * `unreadable` when that read failed, which a preview must say rather than
+   * drop.
+   */
+  | {
+      type: "delete-preview-result";
+      requestId: string;
+      changes: WorktreeChanges | null | "unreadable";
+      risk: SubmoduleDeleteRisk | null | "unreadable";
+      teardown: WorktreeTeardownPreview | null | "unreadable";
+    }
   // Worktree operation responses
   | { type: "set-active-result"; requestId: string; success: boolean }
   | { type: "refresh-result"; requestId: string; success: boolean; error?: string }

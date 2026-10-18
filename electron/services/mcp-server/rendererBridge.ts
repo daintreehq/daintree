@@ -10,10 +10,12 @@ import {
   MCP_GET_MANIFEST_METHOD,
   resolveMcpDriveTarget,
 } from "./driveTarget.js";
+import { relayWriteStanding } from "./relayWriteRule.js";
 import {
   describeViewlessWorkspace,
   hasViewlessImplementation,
   runViewlessAction,
+  type ViewlessApprovalAsk,
 } from "../viewless/index.js";
 import { getProjectViewManager } from "../../window/windowRef.js";
 import { getRemoteService } from "../../remote/runtime.js";
@@ -168,19 +170,26 @@ export class DriveHolderUnavailableError extends McpRouteBindingError {
 /**
  * A call one of another machine's assistants relayed here (#13493) would
  * change a workspace its Shell does not drive: someone else's window holds
- * the drive lease, or no window of that Shell's shows it. Never retried
- * elsewhere, and never run by main, which would act for whoever drives.
+ * the drive lease, or no window of that Shell's shows it and the host has no
+ * form of the action it can run itself. Never retried elsewhere, and never
+ * run by main, which would act for whoever drives.
+ *
+ * `stopped` is a call the host was running itself while nobody drove the
+ * project (#13501), stopped by a view that took the lease after part of it
+ * had already run.
  */
 export class RelayDrivenElsewhereError extends Error {
   readonly code = "DRIVEN_ELSEWHERE";
   readonly workspaceId: string;
   readonly holderName: string | null;
 
-  constructor(workspaceId: string, holderName: string | null) {
+  constructor(workspaceId: string, holderName: string | null, options?: { stopped?: boolean }) {
     super(
-      holderName !== null
-        ? `${holderName} has control of this project on the host, so this call can't change it. Nothing was run. The person can take control in a window on this Shell.`
-        : `No window on this Shell has control of this project on the host, so this call can't change it. Nothing was run. The person can open the project on the host in a window here.`
+      options?.stopped === true
+        ? `${holderName ?? "Another window"} took control of this project on the host, so this call stopped before changing anything more. Part of it may already have run. The person can take control in a window on this Shell.`
+        : holderName !== null
+          ? `${holderName} has control of this project on the host, so this call can't change it. Nothing was run. The person can take control in a window on this Shell.`
+          : `No window on this Shell has control of this project on the host, so this call can't change it. Nothing was run. The person can open the project on the host in a window here.`
     );
     this.name = "RelayDrivenElsewhereError";
     this.workspaceId = workspaceId;
@@ -280,7 +289,7 @@ function buildDispatchPayload(
   callerInfo?: McpBearerIdentity,
   approval?: Pick<
     WorkspaceDispatchOptions,
-    "offerSessionApproval" | "approvalOnly" | "approvalReason" | "authorization"
+    "offerSessionApproval" | "approvalOnly" | "approvalReason" | "authorization" | "hostPreview"
   >
 ) {
   return {
@@ -306,6 +315,11 @@ function buildDispatchPayload(
     ...(approval?.approvalOnly ? { approvalOnly: true } : {}),
     ...(approval?.approvalOnly && approval.approvalReason
       ? { approvalReason: approval.approvalReason }
+      : {}),
+    // Another machine's own preview of a call it runs itself (#13501); only
+    // ever shown, and only beside a question that dispatches nothing.
+    ...(approval?.approvalOnly && approval.hostPreview
+      ? { hostPreview: approval.hostPreview }
       : {}),
     // Why a `confirmed` dispatch needs no dialog (#12874). Main decides; the
     // renderer reads it only to tell the skip preference, which also waives
@@ -824,7 +838,7 @@ export function createRendererBridge(
     route?: BridgeRoute,
     approval?: Pick<
       WorkspaceDispatchOptions,
-      "offerSessionApproval" | "approvalOnly" | "approvalReason" | "authorization"
+      "offerSessionApproval" | "approvalOnly" | "approvalReason" | "authorization" | "hostPreview"
     >
   ): Promise<DispatchEnvelope> {
     return new Promise((resolve, reject) => {
@@ -1117,7 +1131,7 @@ export function createRendererBridge(
     sessionOrigin: McpSessionOrigin = "external",
     approval?: Pick<
       WorkspaceDispatchOptions,
-      "offerSessionApproval" | "approvalOnly" | "approvalReason" | "authorization"
+      "offerSessionApproval" | "approvalOnly" | "approvalReason" | "authorization" | "hostPreview"
     >,
     callerInfo?: McpBearerIdentity
   ): Promise<DispatchEnvelope> {
@@ -1157,11 +1171,13 @@ export function createRendererBridge(
     remote?: ClientEndpoint;
     localWebContentsId?: number;
     holderName?: string;
+    /** Nobody holds the lease. */
+    vacant?: true;
   } | null {
     const target = resolveMcpDriveTarget(workspaceId);
     if (target === null) return null;
     if (target.state === "unavailable") throw new DriveHolderUnavailableError(workspaceId);
-    if (target.state === "vacant") return {};
+    if (target.state === "vacant") return { vacant: true };
     const driver = target.endpoint;
     const named = target.holderName !== undefined ? { holderName: target.holderName } : {};
     if (driver.kind === "remote-view") return { remote: driver, ...named };
@@ -1170,19 +1186,57 @@ export function createRendererBridge(
   }
 
   /**
-   * A relayed call that changes something goes only to the requesting
-   * Shell's own driving view (#13493). Asked of the driver this dispatch
-   * resolved, so a takeover between the caller's check and here still
-   * refuses; that view's own calls back are lease-checked again as they land.
+   * Where a relayed call that changes something runs (#13493): in the
+   * requesting Shell's own driving view, or — while nobody drives the project
+   * — on this host as that Shell, through the host's own form of the action
+   * (#13501), never in a window here that only shows it. Asked of the driver
+   * this dispatch resolved, so a takeover between the caller's check and here
+   * still refuses; the driving view's calls back are lease-checked again as
+   * they land, and a host-run call before each change it makes.
+   *
+   * True when the call runs on the host itself.
    */
-  function refuseRelayedWrite(
+  function admitRelayedWrite(
     workspaceId: string,
+    actionId: string,
     driver: ReturnType<typeof resolveDriver>,
     relay: WorkspaceDispatchOptions["relay"]
-  ): void {
-    if (relay === undefined || relay.readOnly) return;
-    if (driver?.remote !== undefined && driver.remote.linkSessionId === relay.linkSessionId) return;
+  ): boolean {
+    if (relay === undefined || relay.readOnly) return false;
+    if (driver?.remote !== undefined && driver.remote.linkSessionId === relay.linkSessionId) {
+      return false;
+    }
+    if (driver?.vacant === true && hasViewlessImplementation(actionId)) return true;
     throw new RelayDrivenElsewhereError(workspaceId, driver?.holderName ?? null);
+  }
+
+  /**
+   * The check a relayed call the host runs itself makes right before each
+   * change (#13501): still nobody else's to drive. The requesting Shell's own
+   * view taking it over is not a refusal; anyone else's is, naming them.
+   */
+  function relayWriteCheck(
+    workspaceId: string,
+    relay: NonNullable<WorkspaceDispatchOptions["relay"]>
+  ): (changed: boolean) => Error | null {
+    return (changed) => {
+      const standing = relayWriteStanding(workspaceId, relay.linkSessionId);
+      switch (standing.kind) {
+        case "vacant":
+        case "own-view":
+          return null;
+        case "unavailable":
+          return changed
+            ? new RelayDrivenElsewhereError(workspaceId, null, { stopped: true })
+            : new DriveHolderUnavailableError(workspaceId);
+        case "elsewhere":
+          return new RelayDrivenElsewhereError(
+            workspaceId,
+            standing.holderName,
+            changed ? { stopped: true } : undefined
+          );
+      }
+    };
   }
 
   /**
@@ -1326,6 +1380,9 @@ export function createRendererBridge(
     if (!hasViewlessImplementation(actionId)) {
       throw new NoFrontendAttachedError(workspaceId, actionId);
     }
+    const relay = options.relay;
+    const askRelay = relay?.requestApproval;
+    let confirmationDecision: DispatchEnvelope["confirmationDecision"];
     const result = await runViewlessAction({
       workspaceId,
       actionId,
@@ -1334,17 +1391,27 @@ export function createRendererBridge(
       sessionOrigin,
       ...(options.contextOverride ? { context: options.contextOverride } : {}),
       ...(confirmed && options.authorization ? { authorization: options.authorization } : {}),
-      // A relayed change runs only in its Shell's own driving view (#13493),
-      // and a workspace with no frontend has none, whatever the tool advertised.
-      ...(options.relay
+      // A relayed change runs here only while nobody else drives the project
+      // (#13501), asked again right before each change, whatever the tool
+      // advertised. Its confirmation is the requesting Shell's to ask for.
+      ...(relay ? { checkWrite: relayWriteCheck(workspaceId, relay) } : {}),
+      ...(askRelay
         ? {
-            assertCanWrite: () => Promise.reject(new RelayDrivenElsewhereError(workspaceId, null)),
+            requestApproval: async (ask: ViewlessApprovalAsk) => {
+              const answer = await askRelay(ask);
+              if (answer.decision !== "unavailable") confirmationDecision = answer.decision;
+              return answer;
+            },
           }
         : {}),
     });
     if (result === null) throw new NoFrontendAttachedError(workspaceId, actionId);
     const dispatchedWorkspace = await describeViewlessWorkspace(workspaceId).catch(() => undefined);
-    return { result, ...(dispatchedWorkspace ? { dispatchedWorkspace } : {}) };
+    return {
+      result,
+      ...(confirmationDecision !== undefined ? { confirmationDecision } : {}),
+      ...(dispatchedWorkspace ? { dispatchedWorkspace } : {}),
+    };
   }
 
   /**
@@ -1499,7 +1566,16 @@ export function createRendererBridge(
     options: WorkspaceDispatchOptions = {}
   ): Promise<DispatchEnvelope> {
     const driver = resolveDriver(workspaceId);
-    refuseRelayedWrite(workspaceId, driver, options.relay);
+    if (admitRelayedWrite(workspaceId, actionId, driver, options.relay)) {
+      return dispatchWithoutFrontend(
+        workspaceId,
+        actionId,
+        args,
+        confirmed,
+        sessionOrigin,
+        options
+      );
+    }
     if (driver === null) {
       return sendDispatchRequest(
         () => getWorkspaceWebContents(workspaceId, options.preferredWebContentsId),

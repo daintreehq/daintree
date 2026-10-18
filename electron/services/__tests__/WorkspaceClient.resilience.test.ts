@@ -1166,6 +1166,50 @@ describe("WorkspaceClient multi-process manager", () => {
   // belongs to a project (#11653). The tri-state is the contract: only `false`
   // is evidence of a mismatch, `null` means the question could not be answered
   // and the caller must not treat it as an accusation.
+  // A delete main puts to the person itself with no view open (#13501) reads
+  // what it would discard from the project's own host.
+  describe("getDeletePreview", () => {
+    const idFor = (p: string) => `id-for-${path.resolve(p)}`;
+
+    it("asks the project's own host for the delete's three reads, and returns them", async () => {
+      const loadA = client.loadProject("/project-a", 1);
+      await readyAndResolveLoad(0);
+      await loadA;
+
+      const pending = client.getDeletePreview("/project-a", idFor("/project-a"), "wt-a");
+      await tick();
+      const req = h(0)
+        .getAllRequests()
+        .find((r: any) => r.type === "get-delete-preview")!;
+      expect(req.worktreeId).toBe("wt-a");
+      h(0).resolveRequest(req.requestId, {
+        type: "delete-preview-result",
+        requestId: req.requestId,
+        changes: null,
+        risk: "unreadable",
+        teardown: null,
+        success: true,
+      });
+
+      await expect(pending).resolves.toEqual({ changes: null, risk: "unreadable", teardown: null });
+    });
+
+    it("asks nobody for a project it doesn't hold, or whose identity doesn't match", async () => {
+      const loadA = client.loadProject("/project-a", 1);
+      await readyAndResolveLoad(0);
+      await loadA;
+      const callsBefore = h(0).sendWithResponse.mock.calls.length;
+
+      await expect(
+        client.getDeletePreview("/no-such-project", idFor("/no-such-project"), "wt-a")
+      ).resolves.toBeNull();
+      await expect(
+        client.getDeletePreview("/project-a", idFor("/project-b"), "wt-a")
+      ).resolves.toBeNull();
+      expect(h(0).sendWithResponse.mock.calls.length).toBe(callsBefore);
+    });
+  });
+
   describe("isWorktreeOwnedByProject", () => {
     const idFor = (p: string) => `id-for-${path.resolve(p)}`;
 

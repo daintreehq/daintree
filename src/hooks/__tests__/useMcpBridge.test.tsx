@@ -153,6 +153,7 @@ describe("useMcpBridge", () => {
         offerSessionApproval?: boolean;
         approvalOnly?: boolean;
         approvalReason?: "above-tier" | "protected-close";
+        hostPreview?: { subject?: string; lines: string[] };
         authorization?: "tier" | "user" | "session-grant" | "native-grant" | "skip-preference";
       }) => void | Promise<void>)
     | undefined;
@@ -734,6 +735,43 @@ describe("useMcpBridge", () => {
         confirmationDecision: "rejected",
       })
     );
+  });
+
+  // #13501: a host with no view of its own asks about a call it runs itself,
+  // with its own preview; this view's stores know nothing of that host.
+  it("shows a host's own preview of a call it runs itself, building none here", async () => {
+    mocks.get.mockReturnValue(confirmManifestEntry({ id: "worktree.delete", title: "Delete" }));
+
+    renderHook(() => useMcpBridge());
+
+    const dispatched = dispatchHandler?.({
+      requestId: "req-host",
+      actionId: "worktree.delete",
+      args: { worktreeId: "/host/wt" },
+      sessionOrigin: "external",
+      callerInfo: { token4LastChars: "", userAgent: 'Your assistant, through host "studio-01"' },
+      approvalOnly: true,
+      hostPreview: { subject: "feature/thing", lines: ["No uncommitted changes."] },
+    });
+
+    await Promise.resolve();
+    const pending = useMcpConfirmStore.getState().current;
+    expect(pending?.preview).toEqual(["No uncommitted changes."]);
+    expect(pending?.subject).toBe("feature/thing");
+    expect(pending?.previewPending).toBe(false);
+    expect(pending?.approvalReason).toBeUndefined();
+    expect(pending?.callerInfo?.userAgent).toContain("studio-01");
+    expect(mocks.buildPreview).not.toHaveBeenCalled();
+
+    useMcpConfirmStore.getState().resolveCurrent("approved");
+    await dispatched;
+
+    expect(mocks.dispatch).not.toHaveBeenCalled();
+    expect(sendDispatchActionResponse).toHaveBeenCalledWith({
+      requestId: "req-host",
+      result: { ok: true, result: null },
+      confirmationDecision: "approved",
+    });
   });
 
   // #12881: the assistant closing panels it did not open is asked about as a

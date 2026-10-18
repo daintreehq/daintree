@@ -575,6 +575,23 @@ port.on("message", async (rawMsg: any) => {
         workspaceService.getMonitor(request.requestId, request.worktreeId);
         break;
 
+      case "get-delete-preview": {
+        const unreadable = () => "unreadable" as const;
+        const [changes, risk, teardown] = await Promise.all([
+          workspaceService.getFreshWorktreeChanges(request.worktreeId).catch(unreadable),
+          workspaceService.getSubmoduleDeleteRisk(request.worktreeId).catch(unreadable),
+          workspaceService.getDeleteTeardownPreview(request.worktreeId).catch(unreadable),
+        ]);
+        sendEvent({
+          type: "delete-preview-result",
+          requestId: request.requestId,
+          changes,
+          risk,
+          teardown,
+        });
+        break;
+      }
+
       case "set-active":
         workspaceService.setActiveWorktree(request.requestId, request.worktreeId, {
           silent: request.silent,

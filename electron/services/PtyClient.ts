@@ -2897,15 +2897,22 @@ export class PtyClient extends EventEmitter {
     this.shardForTerminal(id).send({ type: "force-resume", id });
   }
 
-  /** Get terminal IDs for a specific project */
-  async getTerminalsForProjectAsync(projectId: string): Promise<string[]> {
+  /**
+   * Get terminal IDs for a specific project. `strict` rejects when the host
+   * doesn't answer instead of resolving `[]`, for a caller that must not
+   * mistake an unread inventory for an empty one.
+   */
+  async getTerminalsForProjectAsync(
+    projectId: string,
+    options?: { strict?: boolean }
+  ): Promise<string[]> {
     const shard = this.shardForProjectQuery(projectId);
     const promise = sendPtyHostRpc<string[]>(shard, `terminals-${projectId}`, (requestId) => ({
       type: "get-terminals-for-project",
       projectId,
       requestId,
     }));
-    return promise.catch(() => []);
+    return options?.strict === true ? promise : promise.catch(() => []);
   }
 
   /**

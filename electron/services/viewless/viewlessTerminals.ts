@@ -28,7 +28,14 @@ import {
   SEND_KEYS_SETTLE_MS,
   SendKeysArgsSchema,
 } from "../../../shared/utils/terminalKeys.js";
-import { fitTerminalOutputResult } from "../../../shared/utils/terminalOutputBudget.js";
+import {
+  boundTerminalStatusOutput,
+  fitTerminalOutputResult,
+} from "../../../shared/utils/terminalOutputBudget.js";
+import {
+  VIEWLESS_STATUS_UNAVAILABLE_FIELDS,
+  type TerminalStatusResult,
+} from "../../../shared/types/terminalStatus.js";
 import { isAssistantTerminalRecord } from "../assistantTerminal.js";
 import type {
   ViewlessActionRequest,
@@ -102,13 +109,43 @@ interface ListedPanel {
  * inventory for the ones only it can place in the project.
  */
 async function readProjectPanels(project: Project, deps: ViewlessDeps): Promise<ListedPanel[]> {
+  return (await readProjectPanelsReporting(project, deps)).panels;
+}
+
+/**
+ * {@link readProjectPanels}, saying whether the pty-host's inventory was read
+ * whole: with a shard silent or a listing failed, a live terminal the layout
+ * never recorded can be missing, so the list is not the whole fleet.
+ */
+async function readProjectPanelsReporting(
+  project: Project,
+  deps: ViewlessDeps
+): Promise<{ panels: ListedPanel[]; complete: boolean }> {
   const pty = deps.getPtyReader();
+  let complete = pty !== null;
+  const readAll = async (): Promise<ViewlessTerminalRecord[]> => {
+    if (!pty) return [];
+    if (pty.getAllTerminalsWithCompletenessAsync) {
+      const listed = await pty.getAllTerminalsWithCompletenessAsync();
+      if (listed.degraded) complete = false;
+      return listed.terminals;
+    }
+    return pty.getAllTerminalsAsync();
+  };
   const [state, all, owned] = await Promise.all([
     deps.getProjectState(project.id).catch(() => null),
-    pty ? pty.getAllTerminalsAsync().catch(() => []) : Promise.resolve([]),
+    readAll().catch(() => {
+      complete = false;
+      return [];
+    }),
     // The per-project inventory infers ownership for a terminal spawned
     // without a project stamp, which a raw listing cannot; it leaves trash out.
-    pty ? pty.getTerminalsForProjectAsync(project.id).catch(() => []) : Promise.resolve([]),
+    pty
+      ? pty.getTerminalsForProjectAsync(project.id, { strict: true }).catch(() => {
+          complete = false;
+          return [];
+        })
+      : Promise.resolve([]),
   ]);
   const ownedIds = new Set(owned);
   const records = new Map<string, ViewlessTerminalRecord>();
@@ -131,7 +168,7 @@ async function readProjectPanels(project: Project, deps: ViewlessDeps): Promise<
     if (seen.has(id) || isAssistantTerminalRecord({ ...record, id })) continue;
     panels.push({ id, record });
   }
-  return panels;
+  return { panels, complete };
 }
 
 function panelLocation(panel: ListedPanel) {
@@ -280,13 +317,117 @@ export async function runTerminalGetOutput(
  * (#12316). It answers only for named terminals: the fleet path filters on
  * panel locations, which a status read off processes cannot apply honestly.
  */
+/** The fleet filters `terminal.getStatus` takes when it names no terminals. */
+/** The fleet filters `terminal.getStatus` takes when it names no terminals, checked as a view checks them. */
+const FleetStatusArgsSchema = z
+  .object({
+    worktreeId: z.string().optional(),
+    location: z.enum(["grid", "dock", "trash", "background"]).optional(),
+    submissionToken: z.string().min(1).max(128).optional(),
+    includeOutput: z
+      .union([
+        z.boolean(),
+        z.object({
+          lines: z.number().int().min(1).max(50).optional(),
+          stripAnsi: z.boolean().optional(),
+        }),
+      ])
+      .optional(),
+  })
+  .passthrough();
+
+/** Ids one pty-host status read takes; a larger fleet is read in batches. */
+const MAX_STATUS_IDS = 256;
+
+/**
+ * `terminal.getStatus` for named terminals, read off the pty-host; or, naming
+ * none, for the project's fleet (#13501) as a view picks it: its panels in
+ * layout order, filtered by worktree and by location, leaving out the trash
+ * and background ones unless that location is asked for, then read the same
+ * way. Panel locations come from the saved layout a view would hydrate. A
+ * fleet the pty-host could not list whole is refused rather than reported
+ * short, since a missing terminal would read as one that isn't there.
+ */
 export async function runTerminalGetStatus(
   request: ViewlessActionRequest,
   project: Project,
   deps: ViewlessDeps
 ): Promise<ActionDispatchResult> {
+  const args = request.args;
+  const named =
+    args !== null &&
+    typeof args === "object" &&
+    !Array.isArray(args) &&
+    (args as Record<string, unknown>).terminalIds !== undefined;
+  if (named) return readStatus(request, args, project, deps);
+
+  const parsed = FleetStatusArgsSchema.safeParse(args ?? {});
+  if (!parsed.success) return validationFailure(request.actionId, parsed.error);
+  const { worktreeId, location, submissionToken } = parsed.data;
+  if (submissionToken !== undefined) {
+    return failure(
+      "EXECUTION_ERROR",
+      "terminal.getStatus requires `terminalIds` when `submissionToken` is set."
+    );
+  }
+  const { panels, complete } = await readProjectPanelsReporting(project, deps);
+  if (!complete) {
+    return failure(
+      "EXECUTION_ERROR",
+      "The terminal backend didn't list every terminal, so this project's fleet can't be told right now. Retry shortly, or name the terminals in `terminalIds`."
+    );
+  }
+  const ids = panels
+    .filter((panel) => {
+      const where = panelLocation(panel);
+      if (
+        location !== undefined ? where !== location : where === "trash" || where === "background"
+      ) {
+        return false;
+      }
+      return (
+        worktreeId === undefined ||
+        (panel.record?.worktreeId ?? panel.snapshot?.worktreeId) === worktreeId
+      );
+    })
+    .map((panel) => panel.id);
+  if (ids.length === 0) {
+    return success({
+      terminals: [],
+      source: "pty",
+      unavailableFields: [...VIEWLESS_STATUS_UNAVAILABLE_FIELDS],
+    } satisfies TerminalStatusResult);
+  }
+  const batches: string[][] = [];
+  for (let start = 0; start < ids.length; start += MAX_STATUS_IDS) {
+    batches.push(ids.slice(start, start + MAX_STATUS_IDS));
+  }
+  if (batches.length === 1) {
+    return readStatus(request, { ...parsed.data, terminalIds: batches[0] }, project, deps);
+  }
+  const read: TerminalStatusResult[] = [];
+  for (const terminalIds of batches) {
+    const answer = await readStatus(request, { ...parsed.data, terminalIds }, project, deps);
+    if (!answer.ok) return answer;
+    read.push(answer.result as TerminalStatusResult);
+  }
+  // Fitted again as one answer, as a view's answer is.
+  return success(
+    boundTerminalStatusOutput<TerminalStatusResult>(
+      { ...read[0]!, terminals: read.flatMap((batch) => batch.terminals) },
+      MCP_RESPONSE_TEXT_MAX_BYTES
+    )
+  );
+}
+
+async function readStatus(
+  request: ViewlessActionRequest,
+  args: unknown,
+  project: Project,
+  deps: ViewlessDeps
+): Promise<ActionDispatchResult> {
   try {
-    return success(await deps.readTerminalStatus(request.args, project.id));
+    return success(await deps.readTerminalStatus(args, project.id));
   } catch (err) {
     if (err instanceof McpError) {
       return failure(

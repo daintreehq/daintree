@@ -164,10 +164,31 @@ export function shouldExposeTool(
   if (session.relay === true && isWithheldFromRelaySession(entry.id)) {
     return false;
   }
+  if (entry.id === PROJECT_RUN_COMMAND_TOOL) return mayRunProjectCommand(tier, session);
   return (
     isTierPermitted(tier, entry.id, session.rendererOwnedOrigin === true) ||
     isApprovalRequestable(tier, entry.id, session.paneApproval === true)
   );
+}
+
+const PROJECT_RUN_COMMAND_TOOL = "project.runCommand";
+
+/**
+ * `project.runCommand` runs whatever command it is given, so it answers to its
+ * caller, not its tier alone (#13495): Daintree's own assistant at the full
+ * tier. That includes another machine's own assistant reaching this host at
+ * the full tier through its Shell's `host.call` (#13501): a relay is only
+ * ever offered to that Shell's assistant in one of its own windows, already
+ * reaches a shell here through `terminal.new` and `terminal.sendCommand`, and
+ * is held to the drive rule like any change it makes. Never a worker pane, an
+ * api-key client or a core session, and no grant widens that. Discovery and
+ * admission ask this same question.
+ */
+export function mayRunProjectCommand(
+  tier: string | null,
+  session: Pick<SessionSurfacePolicy, "rendererOwnedOrigin" | "relay">
+): boolean {
+  return tier === "full" && (session.rendererOwnedOrigin === true || session.relay === true);
 }
 
 /** This machine's own assistant-panel tools, which mean nothing to another machine's assistant. */
@@ -541,6 +562,11 @@ export interface TargetPolicySessionSnapshot {
    */
   rendererOwnedOrigin: boolean;
   /**
+   * Whether another machine's assistant reaches this session through its Shell
+   * (#13493) — see {@link SessionSurfacePolicy.relay}. Read as `=== true`.
+   */
+  relay?: boolean;
+  /**
    * Whether the session is an agent pane (#12692) — see
    * {@link SessionSurfacePolicy.paneApproval}. Optional and read as `=== true`.
    */
@@ -678,12 +704,17 @@ export function buildTargetPolicy(
   // which answers "how far would an in-app session have to elevate" — reports
   // either a rung this caller can never reach or nothing at all for a tool that
   // is external-only.
+  // The command runner answers to its caller, not its tier list (#13501).
+  const commandRunner =
+    id === PROJECT_RUN_COMMAND_TOOL ? mayRunProjectCommand(snapshot.tier, snapshot) : undefined;
   const minimumTier: McpTargetTier | null =
-    snapshot.tier === "external"
-      ? TIER_ALLOWLISTS.external.has(id)
-        ? "external"
-        : null
-      : minimumPermittingTier(id, snapshot.rendererOwnedOrigin === true);
+    commandRunner === true
+      ? "full"
+      : snapshot.tier === "external"
+        ? TIER_ALLOWLISTS.external.has(id)
+          ? "external"
+          : null
+        : minimumPermittingTier(id, snapshot.rendererOwnedOrigin === true);
   // A ladder target with no permitting tier cannot be described honestly, and
   // cannot legitimately be granted either: both issuance paths refuse a tool
   // `minimumPermittingTier` does not place. Fail closed.
@@ -693,7 +724,8 @@ export function buildTargetPolicy(
   // grant, then native grant — so a client reading this learns which mechanism
   // would actually admit its next call, and therefore whether that access can
   // lapse.
-  const tierPermitted = isTierPermitted(snapshot.tier, id, snapshot.rendererOwnedOrigin);
+  const tierPermitted =
+    commandRunner ?? isTierPermitted(snapshot.tier, id, snapshot.rendererOwnedOrigin);
   const authorizedBy = tierPermitted
     ? "tier"
     : perToolGranted

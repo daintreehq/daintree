@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { isAbsolute } from "node:path";
 import { z } from "zod";
 import { CHANNELS } from "../../ipc/channels.js";
+import { CHANNEL_LEASE_POLICY } from "../../ipc/channelLeasePolicy.js";
 import type {
   ActionContext,
   ActionDispatchResult,
@@ -14,7 +15,12 @@ import type { AgentAvailabilityState, AgentCliDetail } from "../../../shared/typ
 import type { AgentState, WaitingReason } from "../../../shared/types/agent.js";
 import type { TerminalStatusResult } from "../../../shared/types/terminalStatus.js";
 import { resolveEffectiveActionDanger } from "../../../shared/utils/effectiveActionDanger.js";
-import type { WorktreeCreateResult } from "../../../shared/types/worktree.js";
+import type {
+  WorktreeCreateResult,
+  WorktreeTeardownPreview,
+} from "../../../shared/types/worktree.js";
+import type { WorktreeChanges } from "../../../shared/types/git.js";
+import type { SubmoduleDeleteRisk } from "../../../shared/types/submodule.js";
 import { getDefaultPanelTitle, panelKindHasPty } from "../../../shared/config/panelKindRegistry.js";
 import {
   readDispatchTerminalCommand,
@@ -50,11 +56,14 @@ import {
 } from "./viewlessTerminals.js";
 import { runAgentLaunch, runAgentListAvailable } from "./viewlessAgents.js";
 import {
+  previewWorktreeDelete,
   runWorktreeDelete,
   runWorktreeList,
   runWorktreeWaitUntilReady,
 } from "./viewlessWorktrees.js";
 import { runProjectDetectRunners, runProjectGetAll } from "./viewlessProjects.js";
+import { runForgeRead } from "./viewlessForge.js";
+import { refuseRecipeWithNoView, runWorktreeCreateWithRecipe } from "./viewlessWorktreeCreation.js";
 
 const TERMINAL_SEND_COMMAND_ACTION_ID = "terminal.sendCommand";
 const WORKTREE_CREATE_ACTION_ID = "worktree.create";
@@ -95,8 +104,16 @@ export interface ViewlessPtyReader {
   ): Promise<ViewlessTerminalRecord | null>;
   /** Every terminal the pty-host holds, trashed ones included. */
   getAllTerminalsAsync(): Promise<ViewlessTerminalRecord[]>;
-  /** A project's live terminals, ownership inferred where unstamped; no trash. */
-  getTerminalsForProjectAsync(projectId: string): Promise<string[]>;
+  /** The same, saying whether every pty-host shard answered. */
+  getAllTerminalsWithCompletenessAsync?(): Promise<{
+    terminals: ViewlessTerminalRecord[];
+    degraded: boolean;
+  }>;
+  /**
+   * A project's live terminals, ownership inferred where unstamped; no trash.
+   * `strict` rejects on a host that didn't answer, rather than resolving `[]`.
+   */
+  getTerminalsForProjectAsync(projectId: string, options?: { strict?: boolean }): Promise<string[]>;
   getSerializedStateAsync(
     id: string,
     options?: { tailRows: number }
@@ -113,6 +130,20 @@ export interface ViewlessWorkspaceHosts {
     projectPath: string,
     expectedProjectId: string
   ): Promise<boolean | null>;
+  /**
+   * What deleting the worktree would discard and run, read fresh; each part
+   * null once the worktree is gone and `unreadable` when its read failed.
+   * Null when the project has no host running.
+   */
+  getDeletePreview(
+    projectPath: string,
+    expectedProjectId: string,
+    worktreeId: string
+  ): Promise<{
+    changes: WorktreeChanges | null | "unreadable";
+    risk: SubmoduleDeleteRisk | null | "unreadable";
+    teardown: WorktreeTeardownPreview | null | "unreadable";
+  } | null>;
 }
 
 /** The ambient environment layers a terminal launch merges under its own. */
@@ -186,14 +217,47 @@ export interface ViewlessActionRequest {
    */
   authorization?: McpDispatchAuthorization;
   /**
-   * Checked before an action that writes runs. Absent, the call is the host's
-   * own and passes, as it always has: the drive lease was already consulted on
-   * the way here. A relayed call from another machine (#13493) supplies one
-   * that checks that machine's standing on the project, and a refusal it
-   * returns is the call's answer, unchanged.
+   * Asked as an action that writes is admitted, and again right before each
+   * host call it makes: null to go on, or the error that is the call's answer,
+   * thrown unchanged. `changed` says whether an earlier call already changed
+   * something. Absent, the call is the host's own and passes, as it always
+   * has: the drive lease was already consulted on the way here. A call relayed
+   * from another machine (#13493) supplies one that checks that machine's
+   * standing on the project, so a view that takes the lease while it runs
+   * stops it before its next change (#13501).
    */
-  assertCanWrite?: (projectId: string, actionId: string) => Promise<ActionDispatchResult | null>;
+  checkWrite?: (changed: boolean) => Error | null;
+  /**
+   * Asks the person, somewhere other than a view here, about this one
+   * confirm-gated call (#13501): the Shell a relayed call came from, in its
+   * own window. Absent, or answering `unavailable`, an unapproved call is
+   * refused as it always was.
+   */
+  requestApproval?: (ask: ViewlessApprovalAsk) => Promise<ViewlessApprovalDecision>;
 }
+
+/** What the person is asked about a call the host would run itself. */
+export interface ViewlessApprovalAsk {
+  actionId: string;
+  /** Exactly the arguments the action runs with once approved. */
+  args: unknown;
+  /** What the dialog's question names, such as the worktree's branch. */
+  subject?: string;
+  /** What the call would do, read on this host from the target it will act on. */
+  lines: string[];
+}
+
+/**
+ * The person's answer. An approval covers this call until `deadline` (this
+ * host's clock), and nothing after it: a change the call has not reached by
+ * then is refused.
+ */
+export type ViewlessApprovalDecision =
+  { decision: "approved"; deadline: number } | { decision: "rejected" | "timeout" | "unavailable" };
+
+/** A preview to put to the person, or the answer the call gets without asking. */
+export type ViewlessApprovalPreview =
+  { ok: true; subject?: string; lines: string[] } | { ok: false; result: ActionDispatchResult };
 
 const TerminalNewArgsSchema = z
   .object({
@@ -501,13 +565,195 @@ export async function executeViewlessAction(
   const project = deps.getProject(request.workspaceId);
   if (!project) return null;
 
-  const refusal = admit(request, entry.danger);
-  if (refusal) return refusal;
-  if (entry.writes && request.assertCanWrite) {
-    const denied = await request.assertCanWrite(project.id, request.actionId);
-    if (denied) return denied;
+  const checkWrite = entry.writes ? request.checkWrite : undefined;
+  const admitted = checkWrite?.(false);
+  if (admitted) throw admitted;
+  if (request.actionId === "worktree.createWithRecipe") {
+    const recipe = refuseRecipeWithNoView(request);
+    if (recipe) return recipe;
   }
 
+  let approvedUntil: number | undefined;
+  const refusal = admit(request, entry.danger);
+  if (refusal) {
+    const asked = await askForApproval(request, project, deps);
+    if (asked === null) return refusal;
+    if (asked.kind === "answered") return asked.result;
+    approvedUntil = asked.deadline;
+  }
+
+  if (checkWrite === undefined && approvedUntil === undefined) {
+    return runAction(request, project, deps);
+  }
+  const guarded = guardWrites(deps, (changed) => {
+    if (approvedUntil !== undefined && Date.now() > approvedUntil) {
+      return new ViewlessRefusal(
+        failure(
+          "CONFIRMATION_TIMEOUT",
+          `The approval for ${request.actionId} ran out before the host reached it, so ${
+            changed ? "it stopped before changing anything more" : "nothing was changed"
+          }. Ask again.`
+        )
+      );
+    }
+    return checkWrite?.(changed) ?? null;
+  });
+  const result = await runAction(request, project, guarded.deps).catch((err: unknown) => {
+    if (guarded.stopped() === null) throw err;
+    return null;
+  });
+  // A stop is the call's answer, whatever the action made of the error it
+  // was handed: it never ran the change it stopped.
+  const stopped = guarded.stopped();
+  if (stopped instanceof ViewlessRefusal) return stopped.result;
+  if (stopped !== null) throw stopped;
+  return result;
+}
+
+/** A stop that answers the call with a result rather than an error. */
+class ViewlessRefusal extends Error {
+  constructor(readonly result: ActionDispatchResult) {
+    super(result.ok ? "" : result.error.message);
+    this.name = "ViewlessRefusal";
+  }
+}
+
+/**
+ * The deps an action runs with when its standing has to be checked right
+ * before each change (#13501): every host call it makes asks first, at the
+ * boundary the drive lease holds every caller to — the dispatcher's own gate
+ * admits a driving view's call there too, and a call admitted is the change
+ * under way. A refusal, returned or thrown, is kept rather than left to the
+ * action's own error handling, which would report it as a failure of the call
+ * it stopped. A call that reaches a channel which changes a project counts as
+ * a change for the next ask, and so does a write to the saved layout. That
+ * write is checked only while it is the call's first change: recording a
+ * change that already landed is never stopped, or the next view would hydrate
+ * a layout missing a process that runs.
+ */
+function guardWrites(
+  deps: ViewlessDeps,
+  check: (changed: boolean) => Error | null
+): { deps: ViewlessDeps; stopped(): Error | null } {
+  let stopped: Error | null = null;
+  let changed = false;
+  const ask = (changes: boolean): void => {
+    let refusal: Error | null;
+    try {
+      refusal = stopped ?? check(changed);
+    } catch (err) {
+      refusal = err instanceof Error ? err : new Error(String(err));
+    }
+    if (refusal !== null) {
+      stopped = refusal;
+      throw refusal;
+    }
+    if (changes) changed = true;
+  };
+  return {
+    deps: {
+      ...deps,
+      invoke: <T>(projectId: string, channel: string, args: unknown[]): Promise<T> => {
+        try {
+          ask(!isFreeLeaseChannel(channel));
+        } catch (err) {
+          return Promise.reject(err);
+        }
+        return deps.invoke<T>(projectId, channel, args);
+      },
+      send: (projectId, channel, args) => {
+        ask(!isFreeLeaseChannel(channel));
+        deps.send(projectId, channel, args);
+      },
+      stateWriter: {
+        enqueueProjectStateUpdate: (projectId, updater) => {
+          if (!changed) {
+            try {
+              ask(true);
+            } catch (err) {
+              return Promise.reject(err);
+            }
+          }
+          return deps.stateWriter.enqueueProjectStateUpdate(projectId, updater);
+        },
+      },
+    },
+    stopped: () => stopped,
+  };
+}
+
+/** Whether a host channel only reads, by the drive lease's own account of it. */
+function isFreeLeaseChannel(channel: string): boolean {
+  return (CHANNEL_LEASE_POLICY as Readonly<Record<string, string>>)[channel] === "free";
+}
+
+/**
+ * Put a confirm-gated call to the person through `requestApproval`, with a
+ * preview read on this host from the target it would act on. Null when it
+ * can't be asked about: no one to ask, an action with no preview here, or
+ * an asker that answered `unavailable`. A preview that finds the call
+ * couldn't run answers with that, before anyone is asked.
+ */
+async function askForApproval(
+  request: ViewlessActionRequest,
+  project: Project,
+  deps: ViewlessDeps
+): Promise<
+  { kind: "approved"; deadline: number } | { kind: "answered"; result: ActionDispatchResult } | null
+> {
+  const ask = request.requestApproval;
+  const preview = Object.hasOwn(VIEWLESS_APPROVAL_PREVIEWS, request.actionId)
+    ? VIEWLESS_APPROVAL_PREVIEWS[request.actionId]
+    : undefined;
+  if (ask === undefined || preview === undefined) return null;
+  const built = await preview(request, project, deps);
+  if (!built.ok) return { kind: "answered", result: built.result };
+  const answer = await ask({
+    actionId: request.actionId,
+    args: request.args,
+    ...(built.subject !== undefined ? { subject: built.subject } : {}),
+    lines: built.lines,
+  });
+  switch (answer.decision) {
+    case "approved":
+      return { kind: "approved", deadline: answer.deadline };
+    case "rejected":
+      return {
+        kind: "answered",
+        result: failure("USER_REJECTED", "User rejected the confirmation request."),
+      };
+    case "timeout":
+      return {
+        kind: "answered",
+        result: failure(
+          "CONFIRMATION_TIMEOUT",
+          "Confirmation request timed out before the user responded."
+        ),
+      };
+    case "unavailable":
+      return null;
+  }
+}
+
+/** The confirm-gated actions the host can put to someone else, each with its preview. */
+const VIEWLESS_APPROVAL_PREVIEWS: Readonly<
+  Record<
+    string,
+    (
+      request: ViewlessActionRequest,
+      project: Project,
+      deps: ViewlessDeps
+    ) => Promise<ViewlessApprovalPreview>
+  >
+> = {
+  "worktree.delete": previewWorktreeDelete,
+};
+
+async function runAction(
+  request: ViewlessActionRequest,
+  project: Project,
+  deps: ViewlessDeps
+): Promise<ActionDispatchResult | null> {
   switch (request.actionId) {
     case TERMINAL_LAUNCH_ACTION_ID:
       return runTerminalNew(request, project, deps);
@@ -541,7 +787,9 @@ export async function executeViewlessAction(
       return runProjectGetAll(request, project, deps);
     case "project.detectRunners":
       return runProjectDetectRunners(request, project, deps);
+    case "worktree.createWithRecipe":
+      return runWorktreeCreateWithRecipe(request, project, deps);
     default:
-      return null;
+      return runForgeRead(request, project, deps);
   }
 }

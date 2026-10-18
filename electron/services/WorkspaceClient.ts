@@ -31,6 +31,7 @@ import type {
   BranchInfo,
   WorkspaceHostGovernanceSnapshot,
   WorkspaceFetchResult,
+  WorkspaceHostEvent,
 } from "../../shared/types/workspace-host.js";
 import type { WorktreeCreateResult, WorktreeSetupState } from "../../shared/types/worktree.js";
 import type {
@@ -1043,6 +1044,28 @@ export class WorkspaceClient extends EventEmitter {
     } catch {
       return null;
     }
+  }
+
+  /**
+   * What deleting one of a project's worktrees would discard and run, read
+   * fresh by that project's own host (#13501), for a delete main puts to the
+   * person itself. Null when the project has no host running here.
+   */
+  async getDeletePreview(
+    projectPath: string,
+    expectedProjectId: string,
+    worktreeId: string
+  ): Promise<Omit<
+    Extract<WorkspaceHostEvent, { type: "delete-preview-result" }>,
+    "type" | "requestId"
+  > | null> {
+    const entry = this.pool.entries.get(this.pool.normalizeProjectPath(projectPath));
+    if (entry === undefined || entry.projectId !== expectedProjectId) return null;
+    const requestId = entry.host.generateRequestId();
+    const { changes, risk, teardown } = await entry.host.sendWithResponse<
+      Extract<WorkspaceHostEvent, { type: "delete-preview-result" }>
+    >({ type: "get-delete-preview", requestId, worktreeId });
+    return { changes, risk, teardown };
   }
 
   async getMonitorAsync(worktreeId: string): Promise<WorktreeSnapshot | null> {

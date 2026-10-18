@@ -1,6 +1,6 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { CHANNELS } from "../../../ipc/channels.js";
-import type { ViewlessTerminalRecord } from "../ViewlessActionExecutor.js";
+import type { ViewlessApprovalAsk, ViewlessTerminalRecord } from "../ViewlessActionExecutor.js";
 import { executeViewlessAction } from "../ViewlessActionExecutor.js";
 import {
   makeDeps,
@@ -11,6 +11,64 @@ import {
   request,
 } from "./viewlessTestDeps.js";
 
+/** A host whose pty-host and workspace host remember what the loop did to them. */
+function loopHost() {
+  const records: Record<string, ViewlessTerminalRecord> = {};
+  const screens: Record<string, string> = {};
+  const pty = makePty(records, screens);
+  const worktrees = [makeWorktree()];
+  const { deps, invoke, store } = makeDeps(
+    { getPtyReader: () => pty, getWorkspaceHosts: () => makeHosts() },
+    { worktrees }
+  );
+  invoke.mockImplementation(async (_projectId: string, channel: string, args: unknown[]) => {
+    if (channel === CHANNELS.WORKTREE_GET_ALL_WITH_STATUS) return { worktrees, gitBacked: true };
+    if (channel === CHANNELS.WORKTREE_GET_DEFAULT_PATH) {
+      return `/repo-wt/${(args[0] as { branchName: string }).branchName}`;
+    }
+    if (channel === CHANNELS.WORKTREE_CREATE) {
+      worktrees.push(
+        makeWorktree({
+          id: "/repo-wt/feature",
+          worktreeId: "/repo-wt/feature",
+          path: "/repo-wt/feature",
+          branch: "feature",
+          isMainWorktree: false,
+          isCurrent: false,
+        })
+      );
+      return { worktreeId: "/repo-wt/feature", branch: "feature" };
+    }
+    if (channel === CHANNELS.TERMINAL_SPAWN) {
+      const spawn = args[0] as { id: string; launchAgentId?: string; worktreeId?: string };
+      records[spawn.id] = {
+        kind: "terminal",
+        launchAgentId: spawn.launchAgentId,
+        worktreeId: spawn.worktreeId,
+        agentState: "idle",
+      };
+      screens[spawn.id] = "All 42 tests passed\n";
+      return spawn.id;
+    }
+    if (channel === CHANNELS.TERMINAL_TRASH) {
+      const id = args[0] as string;
+      records[id] = { ...records[id], isTrashed: true };
+      return undefined;
+    }
+    if (channel === CHANNELS.WORKTREE_DELETE) {
+      const { worktreeId } = args[0] as { worktreeId: string };
+      worktrees.splice(
+        worktrees.findIndex((worktree) => worktree.id === worktreeId),
+        1
+      );
+      return undefined;
+    }
+    return undefined;
+  });
+
+  return { deps, invoke, store, worktrees };
+}
+
 /**
  * The orchestration loop a hub drives on a host with no window open (#13495),
  * run through the executor with a pty-host and workspace host that remember
@@ -20,55 +78,7 @@ import {
  */
 describe("the orchestration loop with no frontend", () => {
   it("creates, launches, reads, closes and deletes, leaving a layout a view can adopt", async () => {
-    const records: Record<string, ViewlessTerminalRecord> = {};
-    const screens: Record<string, string> = {};
-    const pty = makePty(records, screens);
-    const worktrees = [makeWorktree()];
-    const { deps, invoke, store } = makeDeps(
-      { getPtyReader: () => pty, getWorkspaceHosts: () => makeHosts() },
-      { worktrees }
-    );
-    invoke.mockImplementation(async (_projectId: string, channel: string, args: unknown[]) => {
-      if (channel === CHANNELS.WORKTREE_GET_ALL_WITH_STATUS) return { worktrees, gitBacked: true };
-      if (channel === CHANNELS.WORKTREE_CREATE) {
-        worktrees.push(
-          makeWorktree({
-            id: "/repo-wt/feature",
-            worktreeId: "/repo-wt/feature",
-            path: "/repo-wt/feature",
-            branch: "feature",
-            isMainWorktree: false,
-            isCurrent: false,
-          })
-        );
-        return { worktreeId: "/repo-wt/feature", branch: "feature" };
-      }
-      if (channel === CHANNELS.TERMINAL_SPAWN) {
-        const spawn = args[0] as { id: string; launchAgentId?: string; worktreeId?: string };
-        records[spawn.id] = {
-          kind: "terminal",
-          launchAgentId: spawn.launchAgentId,
-          worktreeId: spawn.worktreeId,
-          agentState: "idle",
-        };
-        screens[spawn.id] = "All 42 tests passed\n";
-        return spawn.id;
-      }
-      if (channel === CHANNELS.TERMINAL_TRASH) {
-        const id = args[0] as string;
-        records[id] = { ...records[id], isTrashed: true };
-        return undefined;
-      }
-      if (channel === CHANNELS.WORKTREE_DELETE) {
-        const { worktreeId } = args[0] as { worktreeId: string };
-        worktrees.splice(
-          worktrees.findIndex((worktree) => worktree.id === worktreeId),
-          1
-        );
-        return undefined;
-      }
-      return undefined;
-    });
+    const { deps, store } = loopHost();
 
     const created = await executeViewlessAction(
       request("worktree.create", {
@@ -131,5 +141,71 @@ describe("the orchestration loop with no frontend", () => {
         (w) => w.id
       )
     ).toEqual([PROJECT.path]);
+  });
+
+  it("runs it for a Shell's assistant while nobody drives the project, its delete approved there (#13501)", async () => {
+    const { deps, store } = loopHost();
+    const readTerminalStatus = vi.fn(async (args: unknown) => ({
+      terminals: (args as { terminalIds: string[] }).terminalIds.map((terminalId) => ({
+        terminalId,
+        agentId: "claude",
+        agentState: "idle" as const,
+      })),
+      source: "pty" as const,
+      unavailableFields: [],
+    }));
+    deps.readTerminalStatus = readTerminalStatus as never;
+    // The relay's own check: nobody else holds the lease until the end.
+    let heldBy: Error | null = null;
+    const asked: ViewlessApprovalAsk[] = [];
+    const run = (actionId: string, args: unknown) =>
+      executeViewlessAction(
+        {
+          ...request(actionId, args),
+          checkWrite: () => heldBy,
+          requestApproval: async (ask) => {
+            asked.push(ask);
+            return { decision: "approved", deadline: Date.now() + 40_000 };
+          },
+        },
+        deps
+      );
+
+    const created = await run("worktree.createWithRecipe", {
+      source: { kind: "existingBranch", branchName: "feature" },
+    });
+    expect(created).toMatchObject({ ok: true, result: { worktreeId: "/repo-wt/feature" } });
+
+    const launched = await run("agent.launch", {
+      agentId: "claude",
+      worktreeId: "/repo-wt/feature",
+      prompt: "Run the tests",
+    });
+    const terminalId = (launched as { result: { terminalId: string } }).result.terminalId;
+
+    const status = await run("terminal.getStatus", { worktreeId: "/repo-wt/feature" });
+    expect(status).toMatchObject({ ok: true, result: { terminals: [{ terminalId }] } });
+
+    const output = await run("terminal.getOutput", { terminalId });
+    expect((output as { result: { content: string } }).result.content).toContain("42 tests passed");
+
+    expect(await run("terminal.close", { terminalId })).toEqual({
+      ok: true,
+      result: { closedIds: [terminalId] },
+    });
+    const deleted = await run("worktree.delete", { worktreeId: "/repo-wt/feature" });
+    expect(deleted).toMatchObject({ ok: true });
+    expect(asked).toEqual([
+      expect.objectContaining({
+        actionId: "worktree.delete",
+        args: { worktreeId: "/repo-wt/feature" },
+        subject: "feature",
+      }),
+    ]);
+    expect(store.read()?.terminals).toEqual([]);
+
+    // A view that takes the project over stops the next change before it is made.
+    heldBy = new Error("studio-02 has control of this project on the host");
+    await expect(run("terminal.new", {})).rejects.toBe(heldBy);
   });
 });

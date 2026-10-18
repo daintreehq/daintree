@@ -1,5 +1,5 @@
 import { z } from "zod";
-import type { Issue, PR, Page } from "@shared/types/forge";
+import type { Issue, PR, Page } from "../types/forge.js";
 
 /**
  * How much of each list row `forge.listIssues`/`forge.listPRs` return.

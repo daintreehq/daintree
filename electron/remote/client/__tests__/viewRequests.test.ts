@@ -32,7 +32,11 @@ import {
   answerReverseRequest,
   registerReverseRequestMethod,
 } from "../reverseRequests.js";
-import { HOST_DISPATCHABLE_ACTION_IDS, installViewReverseRequests } from "../viewRequests.js";
+import {
+  askHostApprovalInWindow,
+  HOST_DISPATCHABLE_ACTION_IDS,
+  installViewReverseRequests,
+} from "../viewRequests.js";
 
 function ask(method: string, payload: unknown = {}) {
   return answerReverseRequest({ hostId: "studio", webContentsId: 11, method, payload });
@@ -515,5 +519,49 @@ describe("view reverse requests", () => {
     const uninstall = installViewReverseRequests();
     uninstall();
     await expect(ask("mcp:get-manifest")).rejects.toMatchObject({ code: "UNSUPPORTED" });
+  });
+});
+
+describe("askHostApprovalInWindow (#13501)", () => {
+  const QUESTION = {
+    hostId: "studio",
+    helpSessionId: "help-1",
+    actionId: "worktree.delete",
+    args: { worktreeId: "/wt/feature" },
+    subject: "feature/thing",
+    lines: ["No uncommitted changes."],
+  };
+
+  it("raises the action's own dialog approval-only, with the host's preview and the host named", async () => {
+    m.dispatchActionForHost.mockResolvedValue({
+      result: { ok: true, result: null },
+      confirmationDecision: "approved",
+    });
+
+    await expect(askHostApprovalInWindow(7, QUESTION)).resolves.toBe("approved");
+
+    expect(m.dispatchActionForHost).toHaveBeenCalledWith(
+      7,
+      "worktree.delete",
+      { worktreeId: "/wt/feature" },
+      false,
+      undefined,
+      "external",
+      {
+        approvalOnly: true,
+        hostPreview: { lines: ["No uncommitted changes."], subject: "feature/thing" },
+      },
+      { userAgent: 'Your assistant, through host "Studio Mac"', token4LastChars: "" }
+    );
+  });
+
+  it("reads a window that couldn't ask as no decision at all", async () => {
+    m.dispatchActionForHost.mockResolvedValueOnce({
+      result: { ok: false, error: { code: "NOT_FOUND", message: "not in this view" } },
+    });
+    await expect(askHostApprovalInWindow(7, QUESTION)).resolves.toBeNull();
+
+    m.dispatchActionForHost.mockRejectedValueOnce(new Error("window gone"));
+    await expect(askHostApprovalInWindow(7, QUESTION)).resolves.toBeNull();
   });
 });

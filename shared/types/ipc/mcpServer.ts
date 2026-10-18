@@ -77,6 +77,18 @@ export type McpApprovalScope = "once" | "session";
 export type McpApprovalReason = "above-tier" | "protected-close";
 
 /**
+ * What another machine shows the person about a call it would run itself
+ * with no view of its own open (#13501): read there, from the target the call
+ * acts on, and shown here as given, in place of a preview this view would
+ * build from its own stores, which know nothing of that machine.
+ */
+export interface McpHostPreview {
+  /** What the dialog's question names, such as the worktree's branch. */
+  subject?: string;
+  lines: string[];
+}
+
+/**
  * What authorized an agent pane's dispatch past the ordinary confirmation
  * (#12692), stamped on its audit record so an automatic run can be told apart
  * from one a person approved.

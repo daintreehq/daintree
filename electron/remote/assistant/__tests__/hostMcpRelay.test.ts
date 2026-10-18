@@ -146,6 +146,7 @@ describe("installHostMcpRelay", () => {
       tier: "core",
       shellName: "greg-mbp",
       deliverNotices: expect.any(Function),
+      requestApproval: expect.any(Function),
     });
     expect(opened[0]!.calls).toEqual([
       { tool: "terminal.list", args: { owned: true }, timeoutMs: 90_000, callId: "call-1" },
@@ -508,6 +509,41 @@ describe("installHostMcpRelay notices (#13500)", () => {
     await Promise.resolve();
     expect(dropLinkNotices).toHaveBeenCalledWith("link-1");
     expect(links[0]!.sent).toEqual([]);
+    relay.dispose();
+  });
+});
+
+describe("installHostMcpRelay approvals (#13501)", () => {
+  it("puts a call's confirmation to the Shell over the link it came in on, about that call", async () => {
+    const { links, opened, relay } = harness([
+      ["link-1", "a".repeat(64)],
+      ["link-2", "b".repeat(64)],
+    ]);
+    await links[0]!.call({ projectId: "project-1", helpSessionId: "help-1" });
+    const spec = opened[0]!.spec;
+
+    // The Shell's answer here is a stub's null: nothing approved.
+    const decision = await spec.requestApproval({
+      callId: "call-1",
+      actionId: "worktree.delete",
+      args: { worktreeId: "/wt/feature" },
+      lines: ["No uncommitted changes."],
+    });
+
+    expect(decision).toEqual({ decision: "unavailable" });
+    expect(links[1]!.sent).toEqual([]);
+    expect(links[0]!.sent).toEqual([
+      {
+        method: AssistantLinkMethod.RELAY_APPROVE,
+        payload: expect.objectContaining({
+          helpSessionId: "help-1",
+          callId: "call-1",
+          projectId: "project-1",
+          actionId: "worktree.delete",
+          args: { worktreeId: "/wt/feature" },
+        }),
+      },
+    ]);
     relay.dispose();
   });
 });

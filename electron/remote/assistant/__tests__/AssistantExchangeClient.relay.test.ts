@@ -6,6 +6,8 @@ import { AssistantExchangeClient } from "../AssistantExchangeClient.js";
 import {
   AssistantLinkMethod,
   type McpCallPayload,
+  type RelayApproveAnswer,
+  type RelayApprovePayload,
   type RelayNoticesPayload,
 } from "../linkMethods.js";
 
@@ -165,6 +167,91 @@ describe("AssistantExchangeClient relay notices (#13500)", () => {
   it("drops them quietly with nobody to take them", () => {
     const { relay, handlers } = opened();
     expect(handlers.get(AssistantLinkMethod.RELAY_NOTICES)!(PAYLOAD_NOTICES)).toBeNull();
+    relay.dispose();
+  });
+});
+
+describe("AssistantExchangeClient relay approvals (#13501)", () => {
+  const ASK = {
+    approvalId: "approval-1",
+    helpSessionId: "help-1",
+    callId: "call-1",
+    projectId: "p",
+    actionId: "worktree.delete",
+    args: { worktreeId: "/wt/feature" },
+    argsHash: "a".repeat(64),
+    lines: ["No uncommitted changes."],
+  };
+
+  function opened(receiver?: {
+    receiveApproval(hostId: string, payload: RelayApprovePayload): Promise<RelayApproveAnswer>;
+  }) {
+    const handlers = new Map<string, (payload: unknown) => unknown>();
+    const session = {
+      isOpen: true,
+      call: vi.fn(async () => null),
+      registerCallHandler: (
+        method: string,
+        schema: { parse(v: unknown): unknown },
+        handler: (p: unknown) => unknown
+      ) => {
+        handlers.set(method, (payload) => handler(schema.parse(payload)));
+      },
+    } as unknown as LinkSession;
+    let open: (hostId: string, session: LinkSession) => void = () => {};
+    const relay = new AssistantExchangeClient({
+      journal: {
+        existingCredential: () => null,
+        hosts: () => [],
+        hasOpen: () => false,
+      } as unknown as AssistantExchangeJournal,
+      session: async () => session,
+      onSessionOpened: (listener) => {
+        open = listener;
+        return () => {};
+      },
+      ...(receiver ? { approvalReceiver: () => receiver } : {}),
+    });
+    relay.start();
+    open("studio", session);
+    return { relay, handlers };
+  }
+
+  it("hands a host's ask on with the host the connection names", async () => {
+    const receiveApproval = vi.fn(
+      async (_hostId: string, payload: RelayApprovePayload): Promise<RelayApproveAnswer> => ({
+        approvalId: payload.approvalId,
+        argsHash: payload.argsHash,
+        decision: "approved",
+      })
+    );
+    const { relay, handlers } = opened({ receiveApproval });
+
+    await expect(handlers.get(AssistantLinkMethod.RELAY_APPROVE)!(ASK)).resolves.toEqual({
+      approvalId: "approval-1",
+      argsHash: ASK.argsHash,
+      decision: "approved",
+    });
+    expect(receiveApproval).toHaveBeenCalledWith("studio", ASK);
+    relay.dispose();
+  });
+
+  it("refuses an ask with nobody to put it to, approving nothing", async () => {
+    const { relay, handlers } = opened();
+    expect(await handlers.get(AssistantLinkMethod.RELAY_APPROVE)!(ASK)).toMatchObject({
+      decision: "refused",
+    });
+    relay.dispose();
+  });
+
+  it("refuses to read an ask with unbounded preview lines", () => {
+    const { relay, handlers } = opened();
+    expect(() =>
+      handlers.get(AssistantLinkMethod.RELAY_APPROVE)!({
+        ...ASK,
+        lines: new Array(201).fill("row"),
+      })
+    ).toThrow();
     relay.dispose();
   });
 });

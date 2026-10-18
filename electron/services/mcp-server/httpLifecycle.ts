@@ -44,11 +44,12 @@ import {
 } from "./auditResultProjection.js";
 import { helpOwnershipPrincipal, relayOwnershipPrincipal } from "./resourceOwnership.js";
 import {
+  DriveHolderUnavailableError,
   RelayDrivenElsewhereError,
   SessionBindingError,
   WorkspaceBindingError,
 } from "./rendererBridge.js";
-import { resolveMcpDriveTarget } from "./driveTarget.js";
+import { relayWriteStanding } from "./relayWriteRule.js";
 import { PLUGIN_MCP_ROUTE_PREFIX, type PluginMcpRouteHandler } from "../pluginAgentMcp/types.js";
 import { isProjectWorkspaceId, isScratchWorkspaceId } from "../../../shared/utils/workspaceIds.js";
 import type {
@@ -2157,7 +2158,8 @@ export class HttpLifecycle {
       actionId,
       args,
       confirmed,
-      authorization
+      authorization,
+      relayCallId
     ) => {
       if (boundWorkspaceId !== null) {
         // A bound external session records no context: unlike a help session,
@@ -2183,12 +2185,18 @@ export class HttpLifecycle {
         const relayEntry = relay
           ? getCachedManifest()?.find((entry) => entry.id === actionId)
           : undefined;
+        // Its confirmation, with no view here to raise one, is put to the
+        // person at that Shell about this very call (#13501).
+        const askShell = relay?.requestApproval;
         const relayOptions: WorkspaceDispatchOptions | undefined = relay
           ? {
               relay: {
                 linkSessionId: relay.linkSessionId,
                 readOnly:
                   relayEntry !== undefined && buildAnnotations(relayEntry).readOnlyHint === true,
+                ...(askShell !== undefined && relayCallId !== undefined
+                  ? { requestApproval: (ask) => askShell({ ...ask, callId: relayCallId }) }
+                  : {}),
               },
             }
           : undefined;
@@ -2509,18 +2517,15 @@ export class HttpLifecycle {
                     message: `This call can only act in project ${boundWorkspaceId}, the one it was made for. Nothing was run.`,
                   };
                 }
-                const target = resolveMcpDriveTarget(boundWorkspaceId);
-                if (
-                  target?.state === "live" &&
-                  target.endpoint.linkSessionId === relay.linkSessionId
-                ) {
-                  return null;
-                }
-                const refused = new RelayDrivenElsewhereError(
-                  boundWorkspaceId,
-                  target?.state === "live" ? (target.holderName ?? null) : null
-                );
-                return { code: refused.code, message: refused.message };
+                // Run while nobody drives the project, or while the
+                // requesting Shell's own view does (#13501).
+                const standing = relayWriteStanding(boundWorkspaceId, relay.linkSessionId);
+                if (standing.kind === "vacant" || standing.kind === "own-view") return null;
+                const refused =
+                  standing.kind === "unavailable"
+                    ? new DriveHolderUnavailableError(boundWorkspaceId)
+                    : new RelayDrivenElsewhereError(boundWorkspaceId, standing.holderName);
+                return { code: "DRIVEN_ELSEWHERE", message: refused.message };
               },
             },
           }

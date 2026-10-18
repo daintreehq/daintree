@@ -90,6 +90,14 @@ export const AssistantLinkMethod = {
    * UNSUPPORTED.
    */
   RELAY_NOTICES: "assistant.relay-notices",
+  /**
+   * Host → Shell: ask the person about one confirm-gated call a Shell
+   * assistant is making through MCP_CALL, while no view here can (#13501).
+   * Bound to that call, its action and exact arguments, and answered once;
+   * the host keeps nothing to reuse. A Shell from before this answers
+   * UNSUPPORTED, which leaves the call refused as needing a view.
+   */
+  RELAY_APPROVE: "assistant.relay-approve",
 } as const;
 
 export const MAX_EXCHANGE_BODY_CHARS = 256 * 1024;
@@ -452,3 +460,46 @@ export const RelayNoticesPayloadSchema = z
   .object({ notices: z.array(RelayNoticeSchema).min(1).max(MAX_RELAY_NOTICES_PER_CALL) })
   .strip();
 export type RelayNoticesPayload = z.infer<typeof RelayNoticesPayloadSchema>;
+
+/** Lines a relayed approval's preview may carry, and how long each may be. */
+export const MAX_RELAY_APPROVAL_LINES = 200;
+const MAX_RELAY_APPROVAL_LINE_CHARS = 1_000;
+
+const argsHash = z.string().regex(/^[0-9a-f]{64}$/);
+
+export const RelayApprovePayloadSchema = z
+  .object({
+    /** The host's own id for this ask; the answer echoes it. */
+    approvalId: z.string().regex(/^[A-Za-z0-9-]{1,64}$/),
+    helpSessionId: id,
+    /** The MCP_CALL being made. */
+    callId: id,
+    projectId: id,
+    /** The action the host would run: the call's own tool, or the one an owned tool stands in for. */
+    actionId: z.string().min(1).max(128),
+    args: z
+      .record(z.string(), z.unknown())
+      .refine((args) => Buffer.byteLength(JSON.stringify(args), "utf8") <= MAX_RELAY_ARGS_BYTES),
+    /** The canonical hash of `args`, which the answer echoes. */
+    argsHash,
+    /** What the dialog's question names, read on the host. */
+    subject: z.string().min(1).max(256).optional(),
+    /** What the call would do, read on the host from the target it acts on. */
+    lines: z.array(z.string().max(MAX_RELAY_APPROVAL_LINE_CHARS)).max(MAX_RELAY_APPROVAL_LINES),
+  })
+  .strict();
+export type RelayApprovePayload = z.infer<typeof RelayApprovePayloadSchema>;
+
+/**
+ * `refused`: the Shell couldn't put it to anyone — the call isn't one of its
+ * own in flight, its assistant's window is gone, or it doesn't ask about that
+ * action. Nothing was approved.
+ */
+export const RelayApproveAnswerSchema = z
+  .object({
+    approvalId: z.string().regex(/^[A-Za-z0-9-]{1,64}$/),
+    argsHash,
+    decision: z.enum(["approved", "rejected", "timeout", "refused"]),
+  })
+  .strip();
+export type RelayApproveAnswer = z.infer<typeof RelayApproveAnswerSchema>;
