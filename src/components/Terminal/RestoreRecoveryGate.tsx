@@ -1,4 +1,4 @@
-import { useRef, useState, type PointerEvent, type Ref } from "react";
+import { useEffect, useState, type MouseEvent, type PointerEvent, type Ref } from "react";
 import { TruncatedTooltip } from "@/components/ui/TruncatedTooltip";
 import { useShallow } from "zustand/react/shallow";
 import { FolderClock, Play, RotateCcw } from "lucide-react";
@@ -8,7 +8,7 @@ import { FindCodexSessionAction } from "@/components/Terminal/FindCodexSessionAc
 import { getAgentConfig } from "@/config/agents";
 import { usePanelStore } from "@/store/panelStore";
 import { useAgentSettingsStore } from "@/store/agentSettingsStore";
-import { isProjectViewObservable } from "@/lib/viewCacheState";
+import { isProjectViewObservable, subscribeProjectViewObservability } from "@/lib/viewCacheState";
 import {
   launchFromRestoreRecovery,
   type RestoreRecoveryChoice,
@@ -90,12 +90,35 @@ function FolderRow({ label, path }: { label: string; path: string }) {
 // worktree switch, a tab group reusing the pane — never tries again (#13509).
 const autoResumeAttempts = new Set<string>();
 
+const autoResumeRequests = new Map<string, () => void>();
+// A handoff can land before the surface it is for has subscribed.
+const pendingAutoResumeRequests = new Set<string>();
+
+/**
+ * The pane's own focus handler calls this when it is handed focus on purpose —
+ * a tab switch, a jump to the pane — which the selection alone can't tell
+ * apart from a restore picking it.
+ */
+export function requestRestoreRecoveryAutoResume(panelId: string): void {
+  const request = autoResumeRequests.get(panelId);
+  if (request) request();
+  else pendingAutoResumeRequests.add(panelId);
+}
+
 export function __resetRestoreRecoveryAutoResumeForTests(): void {
   autoResumeAttempts.clear();
+  autoResumeRequests.clear();
+  pendingAutoResumeRequests.clear();
+}
+
+function isInsideControl(target: EventTarget): boolean {
+  return target instanceof Element && target.closest("button, a, [role='button']") !== null;
 }
 
 export interface RestoreRecoveryGateProps {
   panelId: string;
+  /** The pane is the selected one. Only a change to it counts as the user's doing. */
+  isFocused?: boolean;
   /** The pane's focus handler moves keyboard focus into this surface. */
   containerRef?: Ref<HTMLDivElement>;
 }
@@ -110,13 +133,19 @@ export interface RestoreRecoveryGateProps {
  * pane now runs.
  *
  * The one exception is a pane the resume setting held (#13509) while it allows
- * resuming: moving focus into it resumes the conversation it carries, once.
- * Only real focus counts — keyboard focus arriving in this surface, in a view
- * someone is looking at. A pane that is merely on screen, or selected by a
- * restore, never starts anything, and a press on one of the buttons is that
- * button's choice, not a focus.
+ * resuming: the user turning to it resumes the conversation it carries, once.
+ * That is the pane becoming the selected one while this surface is up, the
+ * pane being handed focus, or a click on the surface — and it waits until the
+ * window has focus and the view is on screen, so a project restoring behind
+ * another starts nothing until it is looked at. A pane that is merely on
+ * screen, or already selected when the setting changes, starts nothing, and a
+ * press on one of the buttons is that button's choice.
  */
-export function RestoreRecoveryGate({ panelId, containerRef }: RestoreRecoveryGateProps) {
+export function RestoreRecoveryGate({
+  panelId,
+  isFocused = false,
+  containerRef,
+}: RestoreRecoveryGateProps) {
   const { recovery, agentId, cwd, originCwd } = usePanelStore(
     useShallow((state) => {
       const panel = state.panelsById[panelId];
@@ -143,8 +172,50 @@ export function RestoreRecoveryGate({ panelId, containerRef }: RestoreRecoveryGa
     resumePolicy !== "never"
       ? recovery.sessionId
       : undefined;
-  // Set by a press on a button, which focuses it a moment before its click.
-  const pressingButtonRef = useRef(false);
+  const attemptKey =
+    resumesOnFocusId !== undefined ? `${panelId}\u0000${resumesOnFocusId}` : undefined;
+  // The user turned to this pane; cleared once acted on, or when they turn away.
+  const [wantsResume, setWantsResume] = useState(false);
+  const [wasFocused, setWasFocused] = useState(isFocused);
+  if (isFocused !== wasFocused) {
+    setWasFocused(isFocused);
+    setWantsResume(isFocused);
+  }
+
+  useEffect(() => {
+    autoResumeRequests.set(panelId, () => setWantsResume(true));
+    if (pendingAutoResumeRequests.delete(panelId)) setWantsResume(true);
+    return () => {
+      autoResumeRequests.delete(panelId);
+    };
+  }, [panelId]);
+
+  useEffect(() => {
+    if (!wantsResume || attemptKey === undefined || resumesOnFocusId === undefined) return;
+    const sessionId = resumesOnFocusId;
+    const attempt = () => {
+      if (autoResumeAttempts.has(attemptKey)) return;
+      if (!isProjectViewObservable() || !document.hasFocus()) return;
+      autoResumeAttempts.add(attemptKey);
+      setWantsResume(false);
+      setIsLaunching(true);
+      setOutcome(null);
+      void launchFromRestoreRecovery(panelId, { kind: "resume", sessionId })
+        .then((result) => {
+          if (result !== "launched") setOutcome(result);
+        })
+        .finally(() => setIsLaunching(false));
+    };
+    attempt();
+    window.addEventListener("focus", attempt);
+    const unsubscribe = subscribeProjectViewObservability((observable) => {
+      if (observable) attempt();
+    });
+    return () => {
+      window.removeEventListener("focus", attempt);
+      unsubscribe();
+    };
+  }, [wantsResume, attemptKey, resumesOnFocusId, panelId]);
 
   if (!recovery) return null;
 
@@ -168,21 +239,20 @@ export function RestoreRecoveryGate({ panelId, containerRef }: RestoreRecoveryGa
       .finally(() => setIsLaunching(false));
   };
 
+  // A press on a control is a choice of its own, made before the selection the
+  // same press causes could start anything.
   const onPointerDownCapture = (event: PointerEvent<HTMLDivElement>) => {
-    pressingButtonRef.current =
-      event.target instanceof Element && event.target.closest("button") !== null;
+    if (attemptKey !== undefined && isInsideControl(event.target)) {
+      autoResumeAttempts.add(attemptKey);
+    }
   };
 
-  const onFocus = () => {
-    const pressingButton = pressingButtonRef.current;
-    pressingButtonRef.current = false;
-    if (resumesOnFocusId === undefined || pressingButton || isLaunching) return;
-    if (!isProjectViewObservable() || !document.hasFocus()) return;
-    const sessionId = resumesOnFocusId;
-    const key = `${panelId}\u0000${sessionId}`;
-    if (autoResumeAttempts.has(key)) return;
-    autoResumeAttempts.add(key);
-    void launch({ kind: "resume", sessionId });
+  const onSurfaceClick = (event: MouseEvent<HTMLDivElement>) => {
+    const target = event.target;
+    // Portalled content (an open picker) bubbles here through React too.
+    if (!(target instanceof Node) || !event.currentTarget.contains(target)) return;
+    if (isInsideControl(target)) return;
+    setWantsResume(true);
   };
 
   return (
@@ -190,7 +260,7 @@ export function RestoreRecoveryGate({ panelId, containerRef }: RestoreRecoveryGa
       ref={containerRef}
       tabIndex={-1}
       onPointerDownCapture={onPointerDownCapture}
-      onFocus={onFocus}
+      onClick={onSurfaceClick}
       className="flex-1 min-h-0 bg-surface-canvas flex flex-col items-center overflow-auto focus-visible:-outline-offset-2"
     >
       <div className="my-auto w-full max-w-lg space-y-4 px-6 py-8">

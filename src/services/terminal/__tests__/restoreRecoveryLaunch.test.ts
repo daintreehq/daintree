@@ -129,6 +129,29 @@ describe("buildRestoreRecoveryLaunchOptions (#12434)", () => {
     expect(options?.command).toBe("/opt/bin/codex --model gpt-5");
   });
 
+  // Claude reopens a conversation only in the folder it began in (#13509).
+  it("resumes an agent bound to its conversation's folder there, and starts new where it lives", () => {
+    const pane = heldPane({
+      launchAgentId: "claude",
+      command: "claude",
+      agentLaunchFlags: undefined,
+      env: undefined,
+      restoreRecovery: { reason: "resume-deferred", sessionId: "sess-c" },
+    });
+
+    const resumed = buildRestoreRecoveryLaunchOptions(
+      pane,
+      { kind: "resume", sessionId: "sess-c" },
+      NO_INPUTS
+    );
+    const fresh = buildRestoreRecoveryLaunchOptions(pane, { kind: "fresh" }, NO_INPUTS);
+
+    expect(resumed?.cwd).toBe("/repo");
+    expect(resumed?.conversationCwd).toBeUndefined();
+    expect(resumed?.worktreeId).toBe("/worktrees/task-a");
+    expect(fresh?.cwd).toBe("/worktrees/task-a");
+  });
+
   it("launches nothing while the pane still has no destination", () => {
     const pane = heldPane({
       restoreRecovery: { reason: "destination-unavailable", awaitingDestination: true },

@@ -695,8 +695,9 @@ describe("moveTerminalToWorktreeAndFollowRescue — panes held for recovery (#12
     expect(heldOf("t1")?.restoreRecovery).toEqual({ reason: "destination-unavailable" });
   });
 
-  // Claude reopens a conversation only in the folder it began in (#13509).
-  it("keeps the folder of a held pane that can't resume anywhere else", () => {
+  // Claude reopens a conversation only in the folder it began in (#13509), so
+  // the move files it under the destination and remembers where to resume.
+  it("remembers where a held conversation began for an agent that resumes only there", () => {
     seedPanels([
       heldPanel({
         launchAgentId: "claude",
@@ -706,7 +707,8 @@ describe("moveTerminalToWorktreeAndFollowRescue — panes held for recovery (#12
 
     moveTerminalToWorktreeAndFollowRescue("t1", "wt-b");
 
-    expect(cwdOf("t1")).toBe("/repo/wt-a");
+    expect(cwdOf("t1")).toBe("/repo/wt-b");
+    expect(heldOf("t1")?.conversationCwd).toBe("/repo/wt-a");
     expect(heldOf("t1")?.restoreRecovery).toEqual({
       reason: "resume-deferred",
       sessionId: "sess-c",
@@ -721,6 +723,7 @@ describe("moveTerminalToWorktreeAndFollowRescue — panes held for recovery (#12
     moveTerminalToWorktreeAndFollowRescue("t1", "wt-b");
 
     expect(cwdOf("t1")).toBe("/repo/wt-b");
+    expect(heldOf("t1")?.conversationCwd).toBeUndefined();
   });
 
   it("leaves a destination it can't resolve for the user to choose", () => {

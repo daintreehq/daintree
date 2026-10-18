@@ -41,7 +41,7 @@ import {
   dismissAgentResumeOffer,
   resumeFromAgentEndOffer,
 } from "@/services/terminal/agentEndRecovery";
-import { RestoreRecoveryGate } from "./RestoreRecoveryGate";
+import { RestoreRecoveryGate, requestRestoreRecoveryAutoResume } from "./RestoreRecoveryGate";
 import { InlineStatusBanner } from "./InlineStatusBanner";
 import { PluginKindSetupStrip } from "@/components/Plugin/PluginSetupStrip";
 import { useForceResumeCycleWatchdog } from "@/hooks/terminal/useForceResumeCycleWatchdog";
@@ -1172,6 +1172,7 @@ function TerminalPaneComponent({
       if (isHeldForRecovery) {
         const gate = recoveryGateRef.current;
         if (!gate) return false;
+        requestRestoreRecoveryAutoResume(id);
         (gate.querySelector<HTMLElement>("button:not([disabled])") ?? gate).focus();
         return gate.contains(document.activeElement);
       }
@@ -1648,7 +1649,12 @@ function TerminalPaneComponent({
       <div className="flex-1 min-h-0 flex">
         <div className="flex-1 min-w-0 min-h-0 bg-surface-canvas flex flex-col">
           {isHeldForRecovery ? (
-            <RestoreRecoveryGate key={id} panelId={id} containerRef={recoveryGateRef} />
+            <RestoreRecoveryGate
+              key={id}
+              panelId={id}
+              isFocused={isFocused}
+              containerRef={recoveryGateRef}
+            />
           ) : spawnStatus === "missing-cli" && agentId ? (
             <MissingCliGate
               agentId={agentId}
