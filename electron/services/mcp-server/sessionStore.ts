@@ -111,6 +111,12 @@ export class SessionStore {
   // focused-window fallback, and for help sessions, which
   // route through `sessionWebContentsMap` instead.
   readonly sessionWorkspaceMap = new Map<string, string>();
+  // sessionId → the project of a help-session bearer running with no view
+  // (#13511), bound at handshake in place of a `sessionWebContentsMap` pin.
+  // Its calls run through the host's own form of each action for that
+  // project, never in a window. Kept apart from `sessionWorkspaceMap`, whose
+  // binding is an external session's, with an external session's ceiling.
+  readonly sessionViewlessHelpMap = new Map<string, string>();
   // sessionId → digest of the credential that created the session, written at
   // handshake. A session id is a routing handle that travels in URLs and
   // headers, not proof of ownership: `isAuthorized` only establishes that a
@@ -323,6 +329,7 @@ export class SessionStore {
     this.sessionContextMap.delete(sessionId);
     this.sessionOriginMap.delete(sessionId);
     this.sessionWorkspaceMap.delete(sessionId);
+    this.sessionViewlessHelpMap.delete(sessionId);
     this.sessionCredentialMap.delete(sessionId);
     this.sessionRelayMap.delete(sessionId);
     this.resourceOwnership.clearSession(sessionId);
@@ -951,6 +958,7 @@ export class SessionStore {
     this.sessionContextMap.clear();
     this.sessionOriginMap.clear();
     this.sessionWorkspaceMap.clear();
+    this.sessionViewlessHelpMap.clear();
     this.sessionCredentialMap.clear();
     this.toolListRouteWatch.clear();
     // Authority only — the terminals and worktrees these records named are

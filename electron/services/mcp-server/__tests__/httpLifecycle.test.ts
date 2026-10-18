@@ -57,6 +57,11 @@ import { MCP_SSE_HEARTBEAT_INTERVAL_MS, minimumPermittingTier } from "../shared.
 import type { SessionServerDeps } from "../sessionServer.js";
 import { ResourceOwnershipLedger, helpOwnershipPrincipal } from "../resourceOwnership.js";
 import { SessionBindingError, WorkspaceBindingError } from "../rendererBridge.js";
+import { NO_VIEW_HANDLE } from "../../../ipc/endpoint.js";
+import {
+  _resetMcpDriveTargetResolverForTesting,
+  setMcpDriveTargetResolver,
+} from "../driveTarget.js";
 import { AuditService, type McpAuditLogStore } from "../auditLog.js";
 
 type BearerTestHandle = {
@@ -117,6 +122,7 @@ function fakeDeps(overrides?: Partial<HttpLifecycleDeps>): HttpLifecycleDeps {
       sessionContextMap: new Map(),
       sessionOriginMap: new Map(),
       sessionWorkspaceMap: new Map(),
+      sessionViewlessHelpMap: new Map(),
       sessionHelpIdMap: new Map(),
       resourceSubscriptions: new Map(),
       // Real behaviour, not a stub: these are authorization predicates, and a
@@ -133,6 +139,7 @@ function fakeDeps(overrides?: Partial<HttpLifecycleDeps>): HttpLifecycleDeps {
         this.sessionContextMap.delete(sessionId);
         this.sessionOriginMap.delete(sessionId);
         this.sessionWorkspaceMap.delete(sessionId);
+        this.sessionViewlessHelpMap.delete(sessionId);
         this.sessionCredentialMap.delete(sessionId);
         this.resourceOwnership.clearSession(sessionId);
       },
@@ -3772,5 +3779,136 @@ describe("sendToPinnedView", () => {
     expect(sendToPinnedView(-4, "mcp:x", () => ({ a: 1 }), "x")).toBe(true);
     expect(send).toHaveBeenCalledWith({ type: "event", channel: "mcp:x", args: [{ a: 1 }] });
     expect(sendToPinnedView(-5, "mcp:x", () => ({}), "x")).toBe(false);
+  });
+});
+
+describe("HttpLifecycle — a help session with no view (#13511)", () => {
+  const TOKEN = "help-tok-noview";
+  const AUTH = `Bearer ${TOKEN}`;
+  const PROJECT = "proj-1";
+
+  type NoViewDeps = Pick<
+    SessionServerDeps,
+    "dispatchAction" | "requestManifest" | "getCachedManifest" | "refuseWrite"
+  >;
+  const buildDeps = (lc: HttpLifecycle, sessionId: string): NoViewDeps =>
+    (
+      lc as unknown as { buildSessionServerDeps: (id: string) => NoViewDeps }
+    ).buildSessionServerDeps(sessionId);
+
+  function noViewLifecycle(deps: HttpLifecycleDeps, project: string | null = PROJECT) {
+    const lc = new HttpLifecycle(deps);
+    lc.setApiKey("test-api-key");
+    lc.setHelpTokenValidator((token) => (token === TOKEN ? "core" : false));
+    lc.setHelpSessionWebContentsResolver((token) => (token === TOKEN ? NO_VIEW_HANDLE : null));
+    lc.setHelpSessionViewlessProjectResolver((token) => (token === TOKEN ? project : null));
+    (lc as unknown as { port: number }).port = 45454;
+    return lc;
+  }
+
+  afterEach(() => {
+    _resetMcpDriveTargetResolverForTesting();
+  });
+
+  it("binds the handshake to its project, a help session still, with no view to pin", async () => {
+    const deps = fakeDeps();
+    const lc = noViewLifecycle(deps);
+    const res = new EventEmitter() as EventEmitter & Record<string, unknown>;
+    res.writeHead = vi.fn();
+    res.write = vi.fn(() => true);
+    res.end = vi.fn();
+    res.headersSent = false;
+    await (
+      lc as unknown as {
+        handleRequest: (req: http.IncomingMessage, res: http.ServerResponse) => Promise<void>;
+      }
+    ).handleRequest(
+      {
+        method: "GET",
+        url: "/sse",
+        headers: { host: "127.0.0.1:45454", authorization: AUTH },
+      } as unknown as http.IncomingMessage,
+      res as unknown as http.ServerResponse
+    );
+    const [sessionId] = Array.from(deps.sessionStore.sessions.keys());
+
+    expect(deps.sessionStore.getOrigin(sessionId!)).toBe("help");
+    expect(deps.sessionStore.sessionViewlessHelpMap.get(sessionId!)).toBe(PROJECT);
+    expect(deps.sessionStore.sessionWebContentsMap.has(sessionId!)).toBe(false);
+    expect(deps.sessionStore.sessionWorkspaceMap.has(sessionId!)).toBe(false);
+  });
+
+  it("keeps a bare pin, which no view answers, when its project can't be read", () => {
+    const lc = noViewLifecycle(fakeDeps(), null);
+    const resolve = (
+      lc as unknown as { resolveSessionPin: (h: string) => unknown }
+    ).resolveSessionPin.bind(lc);
+    expect(resolve(AUTH)).toEqual({ origin: "help", webContentsId: NO_VIEW_HANDLE });
+  });
+
+  it("runs its calls through the host's own route, with its launch context, never focus", async () => {
+    const withoutView = vi.fn().mockResolvedValue({ result: { ok: true, result: null } });
+    const deps = fakeDeps({ dispatchActionWithoutView: withoutView });
+    deps.sessionStore.sessionViewlessHelpMap.set("s1", PROJECT);
+    deps.sessionStore.sessionOriginMap.set("s1", "help");
+    deps.sessionStore.sessionContextMap.set("s1", { projectId: PROJECT, activeWorktreeId: "wt" });
+    const lc = noViewLifecycle(deps);
+    const sessionDeps = buildDeps(lc, "s1");
+
+    await sessionDeps.dispatchAction("worktree.create", { branch: "x" }, true, "skip-preference");
+
+    expect(withoutView).toHaveBeenCalledWith(
+      PROJECT,
+      "worktree.create",
+      { branch: "x" },
+      true,
+      "help",
+      {
+        contextOverride: { projectId: PROJECT, activeWorktreeId: "wt" },
+        authorization: "skip-preference",
+      }
+    );
+    expect(deps.dispatchAction).not.toHaveBeenCalled();
+    const listed = await sessionDeps.requestManifest();
+    expect(listed.map((entry) => entry.id)).toEqual(
+      expect.arrayContaining(["terminal.list", "worktree.create", "agent.launch"])
+    );
+    expect(sessionDeps.getCachedManifest()).not.toBeNull();
+    expect(deps.requestManifest).not.toHaveBeenCalled();
+  });
+
+  it("fails closed once torn down, rather than following focus", async () => {
+    const withoutView = vi.fn();
+    const deps = fakeDeps({ dispatchActionWithoutView: withoutView });
+    deps.sessionStore.sessionViewlessHelpMap.set("s1", PROJECT);
+    const sessionDeps = buildDeps(noViewLifecycle(deps), "s1");
+    deps.sessionStore.sessionViewlessHelpMap.delete("s1");
+
+    await expect(sessionDeps.dispatchAction("terminal.list", {})).rejects.toBeInstanceOf(
+      SessionBindingError
+    );
+    await expect(sessionDeps.requestManifest()).rejects.toBeInstanceOf(SessionBindingError);
+    expect(withoutView).not.toHaveBeenCalled();
+    expect(deps.dispatchAction).not.toHaveBeenCalled();
+  });
+
+  it("runs a project's command only in its own project, while nobody drives it", () => {
+    const deps = fakeDeps();
+    deps.sessionStore.sessionViewlessHelpMap.set("s1", PROJECT);
+    const { refuseWrite } = buildDeps(noViewLifecycle(deps), "s1");
+    if (!refuseWrite) throw new Error("expected a write check");
+
+    setMcpDriveTargetResolver(() => ({ state: "vacant" }));
+    expect(refuseWrite(PROJECT)).toBeNull();
+    expect(refuseWrite("proj-2")).toMatchObject({ code: "VALIDATION_ERROR" });
+    setMcpDriveTargetResolver(() => ({
+      state: "live",
+      endpoint: { linkSessionId: "link-a", isClosed: () => false } as never,
+      holderName: "studio-02",
+    }));
+    expect(refuseWrite(PROJECT)).toEqual({
+      code: "DRIVEN_ELSEWHERE",
+      message: expect.stringContaining("studio-02 has control"),
+    });
   });
 });

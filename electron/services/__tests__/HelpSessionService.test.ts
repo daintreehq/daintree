@@ -5,6 +5,7 @@ import path from "node:path";
 import fs from "node:fs/promises";
 import type { McpRuntimeSnapshot } from "../../../shared/types/ipc/mcpServer.js";
 import { assistantSlotKey as slotKey } from "../../../shared/config/assistantSlots.js";
+import { NO_VIEW_HANDLE } from "../../ipc/endpoint.js";
 import {
   setUserRegistry,
   type AgentConfig,
@@ -39,6 +40,7 @@ const {
     setEnabled: vi.fn().mockResolvedValue(undefined),
     setHelpTokenValidator: vi.fn(),
     setHelpSessionWebContentsResolver: vi.fn(),
+    setHelpSessionViewlessProjectResolver: vi.fn(),
     setHelpSessionActionContextResolver: vi.fn(),
     setHelpSessionIdResolver: vi.fn(),
     setSessionIdResolver: vi.fn(),
@@ -367,7 +369,7 @@ describe("HelpSessionService", () => {
         mockMcpServerService.resetHelpTransports.mockClear();
       });
 
-      it("keeps a running assistant when its view's endpoint closes, pinned to nothing live", async () => {
+      it("keeps a running assistant when its view's endpoint closes, its tools moved to the host (#13511)", async () => {
         const result = await launchRemote();
 
         await service.detachByWebContentsId(HANDLE);
@@ -376,10 +378,13 @@ describe("HelpSessionService", () => {
         expect(mockPtyKill).not.toHaveBeenCalled();
         expect(mockPtyGracefulKill).not.toHaveBeenCalled();
         expect(mockMcpServerService.disconnectHelpBearer).not.toHaveBeenCalled();
-        // Still pinned to the closed handle, which no endpoint will ever reuse.
-        expect(service.getWebContentsIdForToken(result.token)).toBe(HANDLE);
+        // Pinned to no view, so its client reconnects onto the host's own route.
+        expect(service.getWebContentsIdForToken(result.token)).toBe(NO_VIEW_HANDLE);
+        expect(service.getViewlessProjectForToken(result.token)).toBe("proj-1");
+        expect(service.getWebContentsIdForSessionId(result.sessionId)).toBeNull();
+        expect(mockMcpServerService.resetHelpTransports).toHaveBeenCalledWith(result.token);
         expect(service.getAssistantBackends("proj-1")).toEqual([
-          { terminalId: "term-remote", webContentsId: HANDLE, slot: 0 },
+          { terminalId: "term-remote", webContentsId: NO_VIEW_HANDLE, slot: 0 },
         ]);
       });
 
@@ -420,13 +425,15 @@ describe("HelpSessionService", () => {
       it("retires the MCP transports only when the pin moves, never for the view already holding it", async () => {
         await launchRemote();
         await service.detachByWebContentsId(HANDLE);
+        // Off the closed view onto the host's own route.
+        expect(mockMcpServerService.resetHelpTransports).toHaveBeenCalledTimes(1);
         await service.adoptDetachedSession("proj-1", 0, NEXT_HANDLE, liveProbe, {
           keepRestoreIntent: true,
         });
-        expect(mockMcpServerService.resetHelpTransports).toHaveBeenCalledTimes(1);
+        expect(mockMcpServerService.resetHelpTransports).toHaveBeenCalledTimes(2);
         // That view's panel binding a pane to it afterwards leaves the connection alone.
         await service.adoptDetachedSession("proj-1", 0, NEXT_HANDLE, liveProbe);
-        expect(mockMcpServerService.resetHelpTransports).toHaveBeenCalledTimes(1);
+        expect(mockMcpServerService.resetHelpTransports).toHaveBeenCalledTimes(2);
       });
 
       it("tells listeners when a view takes over an assistant that had none, and only then (#13392)", async () => {
@@ -596,7 +603,7 @@ describe("HelpSessionService", () => {
 
         expect(adopted).toEqual({ status: "occupied" });
         expect(service.validateToken(result.token)).toBe("core");
-        expect(service.getWebContentsIdForToken(result.token)).toBe(HANDLE);
+        expect(service.getWebContentsIdForToken(result.token)).toBe(NO_VIEW_HANDLE);
       });
 
       it("is still displaced by a launch that means to replace it", async () => {
@@ -673,6 +680,246 @@ describe("HelpSessionService", () => {
           null
         );
         await vi.waitFor(() => expect(service.validateToken(result.token)).toBe(false));
+      });
+    });
+  });
+
+  describe("a host's own assistant with no view (#13511)", () => {
+    const LOCAL_VIEW = 42;
+    const LOCAL_WINDOW = 7;
+    const REMOTE_VIEW = -3;
+    const startedBy = {
+      senderId: "sender-a",
+      linkSessionId: "link-a",
+      askingHelpSessionId: "hub-help-1",
+    };
+    const liveProbe = vi.fn(async () => ({ cwd: "/tmp/project" }));
+
+    async function startWithoutView(slot = 0) {
+      const result = await service.provisionSession({
+        ...provisionInput(),
+        slot,
+        windowId: NO_VIEW_HANDLE,
+        projectViewWebContentsId: NO_VIEW_HANDLE,
+        vacantOnly: true,
+        startedBy,
+      });
+      if (!result) throw new Error("expected result");
+      expect(service.markTerminalForToken(result.token, `term-host-${slot}`)).toBe(true);
+      return result;
+    }
+
+    beforeEach(() => {
+      mockMcpServerService.resetHelpTransports.mockClear();
+    });
+
+    it("runs with no view, its tools on the host's own route, recording who asked", async () => {
+      const result = await startWithoutView();
+
+      expect(service.getWebContentsIdForToken(result.token)).toBe(NO_VIEW_HANDLE);
+      expect(service.getViewlessProjectForToken(result.token)).toBe("proj-1");
+      // No view minted it, so none may read it as its own.
+      expect(service.getWebContentsIdForSessionId(result.sessionId)).toBeNull();
+      expect(service.getRunningLaneSession("proj-1", 0)).toEqual({
+        sessionId: result.sessionId,
+        terminalId: "term-host-0",
+        projectViewWebContentsId: NO_VIEW_HANDLE,
+        startedBy,
+      });
+      expect(service.listRunningLanes()).toEqual([
+        { projectId: "proj-1", slot: 0, agentId: "claude", attached: false },
+      ]);
+      // The first view of its project takes it over.
+      expect(service.detachedProjectIds()).toEqual(["proj-1"]);
+      expect(service.detachedSlots("proj-1")).toEqual([0]);
+    });
+
+    it("answers no project for a bearer that runs through a view", async () => {
+      const result = await service.provisionSession(provisionInput());
+      if (!result) throw new Error("expected result");
+
+      expect(service.getViewlessProjectForToken(result.token)).toBeNull();
+      expect(service.getRunningLaneSession("proj-1", 0)).toBeNull();
+    });
+
+    it("refuses a start with no view that doesn't say who asked, and a named start with a view", async () => {
+      await expect(
+        service.provisionSession({
+          ...provisionInput(),
+          windowId: NO_VIEW_HANDLE,
+          projectViewWebContentsId: NO_VIEW_HANDLE,
+        })
+      ).rejects.toThrow(/who started it/);
+      await expect(service.provisionSession({ ...provisionInput(), startedBy })).rejects.toThrow(
+        /who started it/
+      );
+      await expect(
+        service.provisionSession({
+          ...provisionInput(),
+          windowId: NO_VIEW_HANDLE,
+          projectViewWebContentsId: NO_VIEW_HANDLE,
+          startedBy: { ...startedBy, linkSessionId: "" },
+        })
+      ).rejects.toThrow(/startedBy/);
+    });
+
+    it("never displaces an assistant already in the lane", async () => {
+      const running = await service.provisionSession(provisionInput());
+      if (!running) throw new Error("expected result");
+
+      await expect(
+        service.provisionSession({
+          ...provisionInput(),
+          windowId: NO_VIEW_HANDLE,
+          projectViewWebContentsId: NO_VIEW_HANDLE,
+          vacantOnly: true,
+          startedBy,
+        })
+      ).rejects.toMatchObject({ code: "LANE_OCCUPIED" });
+      expect(service.validateToken(running.token)).toBe("core");
+    });
+
+    it("hands it to one of this machine's own views, with that view's window", async () => {
+      const result = await startWithoutView();
+
+      const adopted = await service.adoptDetachedSession("proj-1", 0, LOCAL_VIEW, liveProbe, {
+        windowId: LOCAL_WINDOW,
+      });
+
+      expect(adopted.status).toBe("adopted");
+      expect(service.getWebContentsIdForToken(result.token)).toBe(LOCAL_VIEW);
+      expect(service.getWebContentsIdForSessionId(result.sessionId)).toBe(LOCAL_VIEW);
+      expect(mockMcpServerService.resetHelpTransports).toHaveBeenCalledWith(result.token);
+      // Who asked outlives the view that shows it.
+      expect(service.getRunningLaneSession("proj-1", 0)?.startedBy).toEqual(startedBy);
+      expect(service.detachedSlots("proj-1")).toEqual([]);
+      expect(
+        service.peekPendingHibernation("proj-1", 0, {
+          isTerminalLive: () => true,
+          viewHandle: LOCAL_VIEW,
+        })
+      ).toMatchObject({ live: true, agentId: "claude" });
+    });
+
+    it("is left with no view again, not ended, when the local view that took it over goes", async () => {
+      const result = await startWithoutView();
+      await service.adoptDetachedSession("proj-1", 0, LOCAL_VIEW, liveProbe, {
+        windowId: LOCAL_WINDOW,
+      });
+      mockMcpServerService.resetHelpTransports.mockClear();
+      const detached = vi.fn();
+      const off = service.addLaneDetachedListener(detached);
+
+      await service.revokeByWebContentsId(LOCAL_VIEW);
+
+      expect(service.validateToken(result.token)).toBe("core");
+      expect(mockPtyKill).not.toHaveBeenCalled();
+      expect(mockPtyGracefulKill).not.toHaveBeenCalled();
+      expect(service.getWebContentsIdForToken(result.token)).toBe(NO_VIEW_HANDLE);
+      expect(mockMcpServerService.resetHelpTransports).toHaveBeenCalledWith(result.token);
+      expect(detached).toHaveBeenCalledWith("proj-1");
+      expect(service.detachedSlots("proj-1")).toEqual([0]);
+      off();
+    });
+
+    it("is left with no view again when the window that took it over closes", async () => {
+      const result = await startWithoutView();
+      await service.adoptDetachedSession("proj-1", 0, LOCAL_VIEW, liveProbe, {
+        windowId: LOCAL_WINDOW,
+      });
+
+      await service.revokeByWindowId(LOCAL_WINDOW);
+
+      expect(service.validateToken(result.token)).toBe("core");
+      expect(service.getWebContentsIdForToken(result.token)).toBe(NO_VIEW_HANDLE);
+    });
+
+    it("still ends an assistant a local view launched when that view goes", async () => {
+      const result = await service.provisionSession(provisionInput());
+      if (!result) throw new Error("expected result");
+      expect(service.markTerminalForToken(result.token, "term-local")).toBe(true);
+
+      await service.revokeByWebContentsId(LOCAL_VIEW);
+
+      expect(service.validateToken(result.token)).toBe(false);
+    });
+
+    it("keeps a remote view's detached assistant alive through a local view that took it over", async () => {
+      const result = await service.provisionSession({
+        ...provisionInput(),
+        windowId: REMOTE_VIEW,
+        projectViewWebContentsId: REMOTE_VIEW,
+      });
+      if (!result) throw new Error("expected result");
+      expect(service.markTerminalForToken(result.token, "term-remote")).toBe(true);
+      await service.detachByWebContentsId(REMOTE_VIEW);
+      await service.adoptDetachedSession("proj-1", 0, LOCAL_VIEW, liveProbe, {
+        windowId: LOCAL_WINDOW,
+      });
+
+      await service.revokeByWebContentsId(LOCAL_VIEW);
+
+      expect(service.validateToken(result.token)).toBe("core");
+      expect(service.getWebContentsIdForToken(result.token)).toBe(NO_VIEW_HANDLE);
+      expect(service.getRunningLaneSession("proj-1", 0)?.startedBy).toBeUndefined();
+    });
+
+    it("ends with its project when the person closes or sleeps it", async () => {
+      const result = await startWithoutView();
+
+      await service.revokeByProjectId("proj-1");
+
+      expect(service.validateToken(result.token)).toBe(false);
+    });
+
+    it("ends when its PTY exits with nobody to see it", async () => {
+      const result = await startWithoutView();
+
+      service.handleTerminalExit("term-host-0");
+
+      await vi.waitFor(() => expect(service.validateToken(result.token)).toBe(false));
+    });
+
+    it("ends when its PTY exits while a view shows it, so that view going later keeps nothing", async () => {
+      const result = await startWithoutView();
+      await service.adoptDetachedSession("proj-1", 0, LOCAL_VIEW, liveProbe, {
+        windowId: LOCAL_WINDOW,
+      });
+
+      service.handleTerminalExit("term-host-0");
+
+      await vi.waitFor(() => expect(service.validateToken(result.token)).toBe(false));
+    });
+
+    it("tells listeners once its PTY is bound, so a view already driving can take it", async () => {
+      const detached = vi.fn();
+      const off = service.addLaneDetachedListener(detached);
+
+      await startWithoutView();
+
+      expect(detached).toHaveBeenCalledWith("proj-1");
+      off();
+    });
+
+    it("announces its project again when a view finishes loading, and nothing without one", async () => {
+      const detached = vi.fn();
+      const off = service.addLaneDetachedListener(detached);
+      service.noteViewReady();
+      expect(detached).not.toHaveBeenCalled();
+
+      await startWithoutView();
+      detached.mockClear();
+      service.noteViewReady();
+
+      expect(detached).toHaveBeenCalledWith("proj-1");
+      off();
+    });
+
+    it("is never handed to the no-view pin itself", async () => {
+      await startWithoutView();
+
+      expect(await service.adoptDetachedSession("proj-1", 0, NO_VIEW_HANDLE, liveProbe)).toEqual({
+        status: "absent",
       });
     });
   });

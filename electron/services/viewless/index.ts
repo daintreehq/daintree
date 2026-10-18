@@ -111,6 +111,18 @@ export async function runViewlessAction(
   return executeViewlessAction(request, deps ?? (await loadLiveDeps()));
 }
 
+/** Spawn the host's own assistant with no view (#13511); see `spawnHostAssistant`. */
+export async function spawnHostAssistantLive(
+  project: Parameters<typeof import("./viewlessAgents.js").spawnHostAssistant>[0],
+  spec: Parameters<typeof import("./viewlessAgents.js").spawnHostAssistant>[1]
+): Promise<boolean> {
+  const [{ spawnHostAssistant }, deps] = await Promise.all([
+    import("./viewlessAgents.js"),
+    loadLiveDeps(),
+  ]);
+  return spawnHostAssistant(project, spec, deps);
+}
+
 /** The workspace identity a viewless result is stamped with, when it is a project. */
 export async function describeViewlessWorkspace(
   workspaceId: string

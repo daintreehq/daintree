@@ -746,6 +746,9 @@ if (!gotTheLock) {
         // Re-distribute PTY MessagePort on every view load/reload.
         // This ensures terminals work after view creation, crash recovery, or DevTools refresh.
         if (win.isDestroyed() || wc.isDestroyed()) return;
+        // A view back from a crash or a reload may take its project's
+        // assistant over again, panel open or not (#13511).
+        helpSessionService.noteViewReady();
         const wCtx = windowRegistry.getByWindowId(win.id);
         if (wCtx) {
           distributePortsToView(win, wCtx, wc, getPtyClient());

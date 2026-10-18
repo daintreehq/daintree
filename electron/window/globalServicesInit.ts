@@ -369,6 +369,9 @@ export function startMcpServerOnce(registry: WindowRegistry): Promise<void> {
       mcpServerService.setHelpSessionWebContentsResolver((token) =>
         helpSessionService.getWebContentsIdForToken(token)
       );
+      mcpServerService.setHelpSessionViewlessProjectResolver((token) =>
+        helpSessionService.getViewlessProjectForToken(token)
+      );
       mcpServerService.setHelpSessionIdResolver((token) =>
         helpSessionService.getSessionIdForToken(token)
       );

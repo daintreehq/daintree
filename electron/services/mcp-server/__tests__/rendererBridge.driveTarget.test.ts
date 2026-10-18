@@ -767,3 +767,102 @@ describe("rendererBridge — relayed calls (#13493)", () => {
     expect(envelope.result).toEqual({ ok: true, result: { ran: true } });
   });
 });
+
+describe("rendererBridge — a help session with no view (#13511)", () => {
+  let bridge: ReturnType<typeof createRendererBridge>;
+
+  function holder(sessionId: string): ClientEndpoint {
+    return {
+      ...makeRemoteEndpoint(async () => ({ result: { ok: true, result: { ran: true } } })),
+      endpointId: `remote:${sessionId}:view-1`,
+      linkSessionId: sessionId,
+    };
+  }
+
+  beforeEach(() => {
+    mockIpcMain.removeAllListeners();
+    mockWebContentsRegistry.clear();
+    mockProjectViews.clear();
+    _resetMcpDriveTargetResolverForTesting();
+    viewless.runViewlessAction.mockReset();
+    viewless.describeViewlessWorkspace.mockReset().mockResolvedValue(undefined);
+    viewless.hasViewlessImplementation.mockReset().mockReturnValue(true);
+    bridge = createRendererBridge(new Map(), new Map(), () => null);
+    bridge.setupListeners([]);
+  });
+
+  afterEach(() => {
+    _resetMcpDriveTargetResolverForTesting();
+  });
+
+  it("runs its calls on the host, with its launch context and skip preference, never in a window here", async () => {
+    setMcpDriveTargetResolver(() => ({ state: "vacant" }));
+    const view = makeWebContents(7);
+    mockWebContentsRegistry.set(7, view);
+    mockProjectViews.set(WORKSPACE, [view]);
+    viewless.runViewlessAction.mockResolvedValue({ ok: true, result: { terminalId: "t-1" } });
+    const authorization = "skip-preference" as const;
+
+    const envelope = await bridge.dispatchActionWithoutView(
+      WORKSPACE,
+      "agent.launch",
+      { agentId: "codex" },
+      true,
+      "help",
+      { contextOverride: { projectId: WORKSPACE }, authorization }
+    );
+
+    expect(envelope.result).toEqual({ ok: true, result: { terminalId: "t-1" } });
+    expect(view.send).not.toHaveBeenCalled();
+    const [request] = viewless.runViewlessAction.mock.calls[0] as [
+      {
+        sessionOrigin: string;
+        confirmed: boolean;
+        context?: unknown;
+        authorization?: unknown;
+        checkWrite: (changed: boolean) => Error | null;
+      },
+    ];
+    expect(request).toMatchObject({
+      sessionOrigin: "help",
+      confirmed: true,
+      context: { projectId: WORKSPACE },
+      authorization,
+    });
+    expect(request.checkWrite(false)).toBeNull();
+  });
+
+  it("stops a change once anyone takes the project, naming them, with no view of its own to except", async () => {
+    let target: Parameters<typeof setMcpDriveTargetResolver>[0] = () => ({ state: "vacant" });
+    setMcpDriveTargetResolver((projectId) => target!(projectId));
+    viewless.runViewlessAction.mockResolvedValue({ ok: true, result: {} });
+
+    await bridge.dispatchActionWithoutView(WORKSPACE, "terminal.new", {}, false, "help");
+    const [request] = viewless.runViewlessAction.mock.calls[0] as [
+      { checkWrite: (changed: boolean) => Error | null },
+    ];
+
+    target = () => ({ state: "live", endpoint: holder("shell-a"), holderName: "greg-mbp" });
+    const before = request.checkWrite(false);
+    expect(before).toBeInstanceOf(RelayDrivenElsewhereError);
+    expect((before as RelayDrivenElsewhereError).code).toBe("DRIVEN_ELSEWHERE");
+    expect((before as Error).message).toContain("greg-mbp has control");
+    expect((before as Error).message).not.toContain("Shell");
+    expect((request.checkWrite(true) as Error).message).toContain("greg-mbp took control");
+
+    target = () => ({ state: "unavailable", reason: "reserved" });
+    expect(request.checkWrite(false)).toBeInstanceOf(DriveHolderUnavailableError);
+  });
+
+  it("answers an action only a view can run as no frontend attached", async () => {
+    setMcpDriveTargetResolver(() => ({ state: "vacant" }));
+    viewless.hasViewlessImplementation.mockReturnValue(false);
+
+    const err = await bridge
+      .dispatchActionWithoutView(WORKSPACE, "terminal.moveToDock", {}, false, "help")
+      .catch((e: unknown) => e);
+
+    expect(err).toBeInstanceOf(NoFrontendAttachedError);
+    expect(viewless.runViewlessAction).not.toHaveBeenCalled();
+  });
+});

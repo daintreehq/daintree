@@ -301,6 +301,120 @@ describe("HostAssistantStarter", () => {
     });
   });
 
+  describe("with no window on the host (#13511)", () => {
+    let startWithoutView: ReturnType<typeof vi.fn>;
+    let noWindowStarter: HostAssistantStarter;
+
+    beforeEach(() => {
+      view = { status: "no-window" };
+      startWithoutView = vi.fn(
+        async (_host: string, payload: { slot: number; agentId?: string }) => {
+          calls.push(`start ${JSON.stringify(payload)}`);
+          return {
+            status: "started",
+            lane: { slot: payload.slot, sessionId: `session-${payload.slot}`, agentId: "codex" },
+          };
+        }
+      );
+      noWindowStarter = new HostAssistantStarter({
+        ...(deps as unknown as HostAssistantStarterDeps),
+        startWithoutView:
+          startWithoutView as unknown as HostAssistantStarterDeps["startWithoutView"],
+        now: () => clock,
+        sleep: async (ms) => {
+          clock += ms;
+        },
+      });
+    });
+
+    it("has the host start it in a lane nobody uses, naming who asked, then enrolls that run", async () => {
+      lanes.assistants = [{ projectId: PROJECT, slot: 0, agentId: "claude" }];
+      const result = await noWindowStarter.start(HOST, PROJECT, {
+        agentId: "codex",
+        askingHelpSessionId: "hub-help-1",
+        authorized,
+      });
+      expect(result).toEqual({
+        status: "ready",
+        projectId: PROJECT,
+        slot: 1,
+        agentId: "claude",
+        generation: "gen-1",
+        available: true,
+        started: true,
+      });
+      expect(calls).toEqual([
+        `start ${JSON.stringify({ projectId: PROJECT, slot: 1, agentId: "codex", askingHelpSessionId: "hub-help-1" })}`,
+        "enroll 1 session-1",
+      ]);
+    });
+
+    it("answers with an assistant already enrolled for this Shell, whose tools now run on the host", async () => {
+      lanes.viewlessTools = true;
+      lanes.lanes = [
+        { projectId: PROJECT, slot: 2, generation: "g2", available: true, agentId: "codex" },
+      ];
+      await expect(
+        noWindowStarter.start(HOST, PROJECT, { askingHelpSessionId: "hub-help-1", authorized })
+      ).resolves.toMatchObject({ status: "ready", slot: 2, started: false });
+      expect(startWithoutView).not.toHaveBeenCalled();
+    });
+
+    it("still needs a window for an enrolled assistant on a host whose tools need a view", async () => {
+      lanes.lanes = [
+        { projectId: PROJECT, slot: 2, generation: "g2", available: true, agentId: "codex" },
+      ];
+      await expect(
+        noWindowStarter.start(HOST, PROJECT, { askingHelpSessionId: "hub-help-1", authorized })
+      ).resolves.toEqual({ status: "refused", reason: "no-window" });
+    });
+
+    it("passes on the host's refusal, and enrolls nothing", async () => {
+      startWithoutView.mockResolvedValueOnce({ status: "refused", reason: "agent-error" });
+      await expect(
+        noWindowStarter.start(HOST, PROJECT, { askingHelpSessionId: "hub-help-1", authorized })
+      ).resolves.toEqual({ status: "refused", reason: "agent-error" });
+      expect(deps.enrollStarted).not.toHaveBeenCalled();
+    });
+
+    it("reads a host from before this as having no window, and any other failure as a failed launch", async () => {
+      startWithoutView.mockRejectedValueOnce(
+        Object.assign(new Error("old"), { code: "UNSUPPORTED" })
+      );
+      await expect(
+        noWindowStarter.start(HOST, PROJECT, { askingHelpSessionId: "hub-help-1", authorized })
+      ).resolves.toEqual({ status: "refused", reason: "no-window" });
+      startWithoutView.mockRejectedValueOnce(new Error("timed out"));
+      await expect(
+        noWindowStarter.start(HOST, PROJECT, { askingHelpSessionId: "hub-help-1", authorized })
+      ).resolves.toEqual({ status: "refused", reason: "launch-failed" });
+    });
+
+    it("refuses a run in another lane than the one it asked for", async () => {
+      startWithoutView.mockResolvedValueOnce({
+        status: "started",
+        lane: { slot: 2, sessionId: "session-2", agentId: "codex" },
+      });
+      await expect(
+        noWindowStarter.start(HOST, PROJECT, { askingHelpSessionId: "hub-help-1", authorized })
+      ).resolves.toEqual({ status: "refused", reason: "launch-failed" });
+      expect(deps.enrollStarted).not.toHaveBeenCalled();
+    });
+
+    it("never starts one without consent, or without the help session that asked", async () => {
+      allowed = false;
+      await expect(
+        noWindowStarter.start(HOST, PROJECT, { askingHelpSessionId: "hub-help-1", authorized })
+      ).resolves.toEqual({ status: "refused", reason: "consent-withdrawn" });
+      allowed = true;
+      await expect(noWindowStarter.start(HOST, PROJECT, { authorized })).resolves.toEqual({
+        status: "refused",
+        reason: "no-window",
+      });
+      expect(startWithoutView).not.toHaveBeenCalled();
+    });
+  });
+
   it("refuses an assistant whose CLI answers its greeting with its own failure, and enrolls nothing", async () => {
     for (const answer of [
       ["⏺ Login expired · Please run /login"],

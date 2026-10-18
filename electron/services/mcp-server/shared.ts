@@ -67,6 +67,13 @@ export type HelpTokenValidator = (token: string) => HelpAssistantTier | false;
  */
 export type HelpSessionWebContentsResolver = (token: string) => number | null;
 /**
+ * The project of a help bearer running with no view (#13511), for which the
+ * WebContents resolver answers `NO_VIEW_HANDLE`. The session is then routed
+ * to the host's own form of each action for that project, never to a window;
+ * null for every other bearer.
+ */
+export type HelpSessionViewlessProjectResolver = (token: string) => string | null;
+/**
  * Resolver used at MCP transport handshake to bind a help-session bearer to
  * the `ActionContext` snapshot captured in the renderer at provision time
  * (#8317). Returning a non-null context causes `httpLifecycle` to record it

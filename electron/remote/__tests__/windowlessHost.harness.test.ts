@@ -134,6 +134,9 @@ vi.mock("../../services/HelpSessionService.js", () => ({
       };
     },
     revokeSession: async () => undefined,
+    detachedProjectIds: () => [],
+    detachedSlots: () => [],
+    addLaneDetachedListener: () => () => {},
     addSessionEndedListener: () => () => {},
 
     addSessionReattachedListener: () => () => {},

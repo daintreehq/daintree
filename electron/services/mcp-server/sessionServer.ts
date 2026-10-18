@@ -1120,6 +1120,13 @@ export interface SessionServerDeps extends OwnedMainExecutors {
     refuseWrite(projectId: string | undefined): { code: string; message: string } | null;
   };
   /**
+   * Set for this host's own assistant running with no view (#13511), and asked
+   * as `relay.refuseWrite` is, right before a change this process makes
+   * itself: why it may not, or null while nobody drives its project and
+   * `projectId`, when named, is that one.
+   */
+  refuseWrite?: (projectId: string | undefined) => { code: string; message: string } | null;
+  /**
    * The caller's own pane, from its credential: a pane bearer's terminal, or
    * the terminal a help session is bound to. Null for everything else — an
    * api-key client has no pane to notify.
@@ -3727,16 +3734,19 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
           // the requesting Shell drives it there (#13493): asked now, and again
           // right before the spawn, since the checks between can take a while.
           const relay = deps.relay;
+          const refuseWrite = relay
+            ? (projectId: string | undefined) => relay.refuseWrite(projectId)
+            : deps.refuseWrite;
           const checkProjectId = readStringArg(args, "projectId");
-          const relayRefusal = relay?.refuseWrite(checkProjectId);
+          const relayRefusal = refuseWrite?.(checkProjectId);
           if (relayRefusal) return refuseRelayed(relayRefusal);
           try {
             const result = await handleProjectRunCheck(
               args,
               extra.signal,
-              relay
+              refuseWrite
                 ? () => {
-                    const late = relay.refuseWrite(checkProjectId);
+                    const late = refuseWrite(checkProjectId);
                     if (late) throw new RelayWriteRefused(late);
                   }
                 : undefined
@@ -3790,6 +3800,9 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
         if (actionId === PROJECT_RUN_COMMAND_TOOL) {
           emitToolCallStarted(false);
           const relay = deps.relay;
+          const refuseWrite = relay
+            ? (projectId: string | undefined) => relay.refuseWrite(projectId)
+            : deps.refuseWrite;
           const commandProjectId = readStringArg(args, "projectId");
           try {
             if (!commandRunnerCaller) {
@@ -3800,14 +3813,14 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
               };
               return buildToolError({ code: TIER_NOT_PERMITTED_CODE, message });
             }
-            const relayRefusal = relay?.refuseWrite(commandProjectId);
+            const relayRefusal = refuseWrite?.(commandProjectId);
             if (relayRefusal) return refuseRelayed(relayRefusal);
             const result = await handleProjectRunCommand(
               args,
               extra.signal,
-              relay
+              refuseWrite
                 ? () => {
-                    const late = relay.refuseWrite(commandProjectId);
+                    const late = refuseWrite(commandProjectId);
                     if (late) throw new RelayWriteRefused(late);
                   }
                 : undefined
@@ -3865,6 +3878,16 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
                 value: { ok: false, error: { code: TIER_NOT_PERMITTED_CODE, message } },
               };
               return buildToolError({ code: TIER_NOT_PERMITTED_CODE, message });
+            }
+            // A session with no view has nowhere to show the figure (#13511).
+            if (sessionStore.sessionViewlessHelpMap.has(sessionId)) {
+              const message =
+                "help.displayImage needs a Daintree window showing this assistant, and none does. Nothing was displayed.";
+              outcome = {
+                kind: "result",
+                value: { ok: false, error: { code: NO_FRONTEND_ATTACHED_CODE, message } },
+              };
+              return buildToolError({ code: NO_FRONTEND_ATTACHED_CODE, message, retriable: true });
             }
             const params = (args ?? {}) as {
               url?: unknown;

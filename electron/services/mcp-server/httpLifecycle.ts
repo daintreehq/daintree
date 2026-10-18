@@ -20,6 +20,7 @@ import { sanitizePath } from "../../utils/pathScrubber.js";
 import type {
   HelpTokenValidator,
   HelpSessionWebContentsResolver,
+  HelpSessionViewlessProjectResolver,
   HelpSessionActionContextResolver,
   HelpSessionIdResolver,
   PaneWorkspaceBinding,
@@ -48,6 +49,8 @@ import {
   WorkspaceBindingError,
 } from "./rendererBridge.js";
 import { relayWriteStanding } from "./relayWriteRule.js";
+import { getViewlessHelpBaseManifest } from "./baseManifest.js";
+import { NO_VIEW_HANDLE } from "../../ipc/endpoint.js";
 import { PLUGIN_MCP_ROUTE_PREFIX, type PluginMcpRouteHandler } from "../pluginAgentMcp/types.js";
 import { isProjectWorkspaceId, isScratchWorkspaceId } from "../../../shared/utils/workspaceIds.js";
 import type {
@@ -190,6 +193,15 @@ export interface HttpLifecycleDeps {
     preferredWebContentsId?: number
   ) => () => boolean;
   dispatchActionForWorkspace?: (
+    workspaceId: string,
+    actionId: string,
+    args: unknown,
+    confirmed?: boolean,
+    sessionOrigin?: McpSessionOrigin,
+    options?: WorkspaceDispatchOptions
+  ) => Promise<import("./shared.js").DispatchEnvelope>;
+  /** A help session with no view (#13511): the host's own form of the action, in its project. */
+  dispatchActionWithoutView?: (
     workspaceId: string,
     actionId: string,
     args: unknown,
@@ -427,6 +439,7 @@ export class HttpLifecycle {
   private stopPromise: Promise<void> | null = null;
   private helpTokenValidator: HelpTokenValidator | null = null;
   private helpSessionWebContentsResolver: HelpSessionWebContentsResolver | null = null;
+  private helpSessionViewlessProjectResolver: HelpSessionViewlessProjectResolver | null = null;
   private helpSessionActionContextResolver: HelpSessionActionContextResolver | null = null;
   private helpSessionIdResolver: HelpSessionIdResolver | null = null;
   private paneWorkspaceBindingResolver: PaneWorkspaceBindingResolver | null = null;
@@ -511,6 +524,10 @@ export class HttpLifecycle {
     this.helpSessionWebContentsResolver = resolver;
   }
 
+  setHelpSessionViewlessProjectResolver(resolver: HelpSessionViewlessProjectResolver | null): void {
+    this.helpSessionViewlessProjectResolver = resolver;
+  }
+
   setHelpSessionActionContextResolver(resolver: HelpSessionActionContextResolver | null): void {
     this.helpSessionActionContextResolver = resolver;
   }
@@ -550,13 +567,24 @@ export class HttpLifecycle {
    * pane tokens — which are classified `external`. An api-key client follows
    * window focus unless it names a workspace; an agent pane is bound to its
    * launch workspace by {@link resolvePaneWorkspaceBinding} instead.
+   *
+   * A help bearer with no view (#13511) pins `NO_VIEW_HANDLE` and names its
+   * project, which routes it to the host's own form of each action. One whose
+   * project can't be read keeps the bare pin, which no view answers: it fails
+   * closed rather than following focus.
    */
   private resolveSessionPin(
     authHeader: string
-  ): { origin: McpSessionOrigin; webContentsId: number } | null {
+  ): { origin: McpSessionOrigin; webContentsId: number; viewlessProjectId?: string } | null {
     const token = extractBearerToken(authHeader);
     if (!token) return null;
     const fromHelp = this.helpSessionWebContentsResolver?.(token) ?? null;
+    if (fromHelp === NO_VIEW_HANDLE) {
+      const viewlessProjectId = this.helpSessionViewlessProjectResolver?.(token) ?? null;
+      return viewlessProjectId !== null
+        ? { origin: "help", webContentsId: fromHelp, viewlessProjectId }
+        : { origin: "help", webContentsId: fromHelp };
+    }
     if (fromHelp !== null) return { origin: "help", webContentsId: fromHelp };
     return null;
   }
@@ -1464,9 +1492,10 @@ export class HttpLifecycle {
       if (ownershipPrincipal !== null) {
         this.deps.sessionStore.resourceOwnership.bindPrincipal(sessionId, ownershipPrincipal);
       }
-      const pinnedWebContentsId = pin?.webContentsId ?? null;
-      if (pinnedWebContentsId !== null) {
-        this.deps.sessionStore.sessionWebContentsMap.set(sessionId, pinnedWebContentsId);
+      if (pin?.viewlessProjectId !== undefined) {
+        this.deps.sessionStore.sessionViewlessHelpMap.set(sessionId, pin.viewlessProjectId);
+      } else if (pin !== null) {
+        this.deps.sessionStore.sessionWebContentsMap.set(sessionId, pin.webContentsId);
       }
 
       if (workspaceBinding !== null) {
@@ -1713,7 +1742,9 @@ export class HttpLifecycle {
       "streamable-http"
     );
 
-    if (pin !== null) {
+    if (pin?.viewlessProjectId !== undefined) {
+      this.deps.sessionStore.sessionViewlessHelpMap.set(newSessionId, pin.viewlessProjectId);
+    } else if (pin !== null) {
       this.deps.sessionStore.sessionWebContentsMap.set(newSessionId, pin.webContentsId);
     }
 
@@ -2009,6 +2040,11 @@ export class HttpLifecycle {
     // per-WebContents cache, so a session torn down mid-call can never flip to
     // the shared cache and leak another window's tool surface (#7003 / #9887).
     const pinnedWebContentsId = this.deps.sessionStore.sessionWebContentsMap.get(sessionId) ?? null;
+    // A help session with no view (#13511) is bound to its project instead of
+    // a pin, snapshotted for the pin's reason: torn down mid-call, it keeps
+    // failing closed to its own project rather than following focus.
+    const viewlessProjectId = this.deps.sessionStore.sessionViewlessHelpMap.get(sessionId) ?? null;
+    const viewlessDispatch = this.deps.dispatchActionWithoutView;
     // Snapshotted for the same reason as the pin: `clearSessionBinding` deletes
     // the origin entry on teardown, and `getOrigin` fails closed to `external`
     // — so an in-flight dispatch settling after that would downgrade one of the
@@ -2029,6 +2065,11 @@ export class HttpLifecycle {
      * window's or the active project's.
      */
     const pinnedWorkspaceId = (): string | null => {
+      if (viewlessProjectId !== null) {
+        return this.deps.sessionStore.sessionViewlessHelpMap.get(sessionId) === viewlessProjectId
+          ? viewlessProjectId
+          : null;
+      }
       if (pinnedWebContentsId === null || !pinnedWebContents) return null;
       if (this.deps.sessionStore.sessionWebContentsMap.get(sessionId) !== pinnedWebContentsId) {
         return null;
@@ -2084,10 +2125,19 @@ export class HttpLifecycle {
      * was still on its way. Such a call fails closed, as a gone pin does,
      * rather than falling through to a route that follows focus.
      */
-    const goneBinding = (): SessionBindingError | null =>
-      pinnedWebContentsId !== null && !this.deps.sessionStore.sessionWebContentsMap.has(sessionId)
-        ? new SessionBindingError(pinnedWebContentsId)
-        : null;
+    const goneBinding = (): SessionBindingError | null => {
+      if (pinnedWebContentsId !== null) {
+        return this.deps.sessionStore.sessionWebContentsMap.has(sessionId)
+          ? null
+          : new SessionBindingError(pinnedWebContentsId);
+      }
+      if (viewlessProjectId !== null) {
+        return this.deps.sessionStore.sessionViewlessHelpMap.has(sessionId)
+          ? null
+          : new SessionBindingError(NO_VIEW_HANDLE);
+      }
+      return null;
+    };
 
     const requestManifest: import("./sessionServer.js").SessionServerDeps["requestManifest"] =
       () => {
@@ -2095,6 +2145,12 @@ export class HttpLifecycle {
           return workspaceManifest
             ? workspaceManifest(boundWorkspaceId, preferredWebContentsId)
             : Promise.reject(missingWorkspaceRoute());
+        }
+        // No view to describe one, so the host's own: a tool only a view can
+        // run is still listed, and answers NO_FRONTEND_ATTACHED when called.
+        if (viewlessProjectId !== null) {
+          const gone = goneBinding();
+          return gone ? Promise.reject(gone) : Promise.resolve(getViewlessHelpBaseManifest());
         }
         const id = this.deps.sessionStore.sessionWebContentsMap.get(sessionId);
         if (id !== undefined && pinnedManifest) {
@@ -2117,7 +2173,8 @@ export class HttpLifecycle {
      * except a bound one, and no window raise.
      */
     // A relayed reveal takes the ordinary dispatch, and with it the relay's drive check.
-    const bridgeReveal = relay ? undefined : this.deps.revealOwnedRun;
+    // One with no view has no window to raise, and takes the ordinary dispatch's refusal.
+    const bridgeReveal = relay || viewlessProjectId !== null ? undefined : this.deps.revealOwnedRun;
     const revealOwnedRun: import("./sessionServer.js").SessionServerDeps["revealOwnedRun"] =
       bridgeReveal
         ? (workspaceId, actionId, args, confirmed) => {
@@ -2191,6 +2248,17 @@ export class HttpLifecycle {
               authorization !== undefined ? { ...options, authorization } : options
             )
           : Promise.reject(missingWorkspaceRoute());
+      }
+      if (viewlessProjectId !== null) {
+        const gone = goneBinding();
+        if (gone) return Promise.reject(gone);
+        // Never an unwired fallback to focus: no route is a dead binding.
+        if (!viewlessDispatch) return Promise.reject(new SessionBindingError(NO_VIEW_HANDLE));
+        const boundContext = this.deps.sessionStore.sessionContextMap.get(sessionId);
+        return viewlessDispatch(viewlessProjectId, actionId, args, confirmed, sessionOrigin, {
+          ...(boundContext ? { contextOverride: boundContext } : {}),
+          ...(authorization !== undefined ? { authorization } : {}),
+        });
       }
       const id = this.deps.sessionStore.sessionWebContentsMap.get(sessionId);
       if (id !== undefined && pinnedDispatch) {
@@ -2290,6 +2358,7 @@ export class HttpLifecycle {
         if (pinnedWebContentsId !== null) {
           return this.deps.getCachedManifestForWebContents?.(pinnedWebContentsId) ?? null;
         }
+        if (viewlessProjectId !== null) return getViewlessHelpBaseManifest();
         return this.deps.getCachedManifest();
       };
 
@@ -2510,6 +2579,31 @@ export class HttpLifecycle {
             },
           }
         : {
+            // A project's runner is a change this process makes itself, so one
+            // with no view runs it only while nobody drives the project (#13511).
+            ...(viewlessProjectId !== null
+              ? {
+                  refuseWrite: (projectId: string | undefined) => {
+                    if (projectId !== undefined && projectId !== viewlessProjectId) {
+                      return {
+                        code: "VALIDATION_ERROR",
+                        message: `This assistant can only act in project ${viewlessProjectId}, its own, while no window shows it. Nothing was run.`,
+                      };
+                    }
+                    const standing = relayWriteStanding(viewlessProjectId, null);
+                    if (standing.kind === "vacant") return null;
+                    const refused =
+                      standing.kind === "unavailable"
+                        ? new DriveHolderUnavailableError(viewlessProjectId)
+                        : new RelayDrivenElsewhereError(
+                            viewlessProjectId,
+                            standing.kind === "elsewhere" ? standing.holderName : null,
+                            { withoutView: true }
+                          );
+                    return { code: "DRIVEN_ELSEWHERE", message: refused.message };
+                  },
+                }
+              : {}),
             // The lane is whichever help session this transport is bound to (#13335).
             assistantMessaging: bindAssistantMessaging(() =>
               this.deps.sessionStore.sessionHelpIdMap.get(sessionId)

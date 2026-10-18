@@ -176,20 +176,33 @@ export class DriveHolderUnavailableError extends McpRouteBindingError {
  *
  * `stopped` is a call the host was running itself while nobody drove the
  * project (#13501), stopped by a view that took the lease after part of it
- * had already run.
+ * had already run. `withoutView` is the same refusal for this host's own
+ * assistant running with no view (#13511), which has no Shell to send the
+ * person to.
  */
 export class RelayDrivenElsewhereError extends Error {
   readonly code = "DRIVEN_ELSEWHERE";
   readonly workspaceId: string;
   readonly holderName: string | null;
 
-  constructor(workspaceId: string, holderName: string | null, options?: { stopped?: boolean }) {
+  constructor(
+    workspaceId: string,
+    holderName: string | null,
+    options?: { stopped?: boolean; withoutView?: boolean }
+  ) {
+    const holder = holderName ?? "Another window";
     super(
-      options?.stopped === true
-        ? `${holderName ?? "Another window"} took control of this project on the host, so this call stopped before changing anything more. Part of it may already have run. The person can take control in a window on this Shell.`
-        : holderName !== null
-          ? `${holderName} has control of this project on the host, so this call can't change it. Nothing was run. The person can take control in a window on this Shell.`
-          : `No window on this Shell has control of this project on the host, so this call can't change it. Nothing was run. The person can open the project on the host in a window here.`
+      options?.withoutView === true
+        ? options.stopped === true
+          ? `${holder} took control of this project, so this call stopped before changing anything more. Part of it may already have run. Your calls go through their window once it takes this assistant over.`
+          : holderName !== null
+            ? `${holderName} has control of this project, so this call can't change it. Nothing was run. Your calls go through their window once it takes this assistant over.`
+            : `Nothing on this host can tell who has control of this project, so this call can't change it with no window open. Nothing was run.`
+        : options?.stopped === true
+          ? `${holder} took control of this project on the host, so this call stopped before changing anything more. Part of it may already have run. The person can take control in a window on this Shell.`
+          : holderName !== null
+            ? `${holderName} has control of this project on the host, so this call can't change it. Nothing was run. The person can take control in a window on this Shell.`
+            : `No window on this Shell has control of this project on the host, so this call can't change it. Nothing was run. The person can open the project on the host in a window here.`
     );
     this.name = "RelayDrivenElsewhereError";
     this.workspaceId = workspaceId;
@@ -1219,22 +1232,34 @@ export function createRendererBridge(
     workspaceId: string,
     relay: NonNullable<WorkspaceDispatchOptions["relay"]>
   ): (changed: boolean) => Error | null {
+    return writeCheckFor(workspaceId, relay.linkSessionId);
+  }
+
+  /**
+   * The same check for this host's own assistant running with no view
+   * (#13511), with no Shell whose view could drive for it: only a project
+   * nobody drives is one it may change.
+   */
+  function writeCheckFor(
+    workspaceId: string,
+    linkSessionId: string | null
+  ): (changed: boolean) => Error | null {
+    const withoutView = linkSessionId === null;
     return (changed) => {
-      const standing = relayWriteStanding(workspaceId, relay.linkSessionId);
+      const standing = relayWriteStanding(workspaceId, linkSessionId);
       switch (standing.kind) {
         case "vacant":
         case "own-view":
           return null;
         case "unavailable":
           return changed
-            ? new RelayDrivenElsewhereError(workspaceId, null, { stopped: true })
+            ? new RelayDrivenElsewhereError(workspaceId, null, { stopped: true, withoutView })
             : new DriveHolderUnavailableError(workspaceId);
         case "elsewhere":
-          return new RelayDrivenElsewhereError(
-            workspaceId,
-            standing.holderName,
-            changed ? { stopped: true } : undefined
-          );
+          return new RelayDrivenElsewhereError(workspaceId, standing.holderName, {
+            stopped: changed,
+            withoutView,
+          });
       }
     };
   }
@@ -1374,7 +1399,8 @@ export function createRendererBridge(
     args: unknown,
     confirmed: boolean,
     sessionOrigin: McpSessionOrigin,
-    options: WorkspaceDispatchOptions
+    options: WorkspaceDispatchOptions,
+    checkWrite = options.relay ? relayWriteCheck(workspaceId, options.relay) : undefined
   ): Promise<DispatchEnvelope> {
     if (options.approvalOnly) throw new WorkspaceBindingError(workspaceId, "not-found");
     if (!hasViewlessImplementation(actionId)) {
@@ -1394,7 +1420,7 @@ export function createRendererBridge(
       // A relayed change runs here only while nobody else drives the project
       // (#13501), asked again right before each change, whatever the tool
       // advertised. Its confirmation is the requesting Shell's to ask for.
-      ...(relay ? { checkWrite: relayWriteCheck(workspaceId, relay) } : {}),
+      ...(checkWrite ? { checkWrite } : {}),
       ...(askRelay
         ? {
             requestApproval: async (ask: ViewlessApprovalAsk) => {
@@ -1632,6 +1658,35 @@ export function createRendererBridge(
     );
   }
 
+  /**
+   * Action dispatch for this host's own assistant running with no view
+   * (#13511): started from main, or left by the view it ran through until
+   * another takes it over. Every call runs here, through the host's own form
+   * of the action, never in a window that only shows the project; one with
+   * no such form is NO_FRONTEND_ATTACHED. A change runs only while nobody
+   * drives the project, and is asked again right before each change it makes,
+   * as a relayed one is; while someone does, it is DRIVEN_ELSEWHERE, naming
+   * them. Its confirmations are the assistant's own skip preference or none.
+   */
+  function dispatchActionWithoutView(
+    workspaceId: string,
+    actionId: string,
+    args: unknown,
+    confirmed = false,
+    sessionOrigin: McpSessionOrigin = "help",
+    options: WorkspaceDispatchOptions = {}
+  ): Promise<DispatchEnvelope> {
+    return dispatchWithoutFrontend(
+      workspaceId,
+      actionId,
+      args,
+      confirmed,
+      sessionOrigin,
+      options,
+      writeCheckFor(workspaceId, null)
+    );
+  }
+
   // Both response handlers read the sender off the IPC context rather than a
   // raw event, so they are registered with the dispatcher too: a response that
   // arrives over a link carries its endpoint's handle, never a WebContents, and
@@ -1713,6 +1768,7 @@ export function createRendererBridge(
     requestManifestForWorkspace,
     describeWorkspaceRoute,
     dispatchActionForWorkspace,
+    dispatchActionWithoutView,
     revealOwnedRun,
     /**
      * Validate a handshake workspace selector and describe what it resolved to

@@ -4,7 +4,13 @@ import { HELP_METHOD_CHANNELS } from "./help.preload.js";
 import type * as HelpServiceModule from "../../services/HelpService.js";
 import type * as HelpSessionServiceModule from "../../services/HelpSessionService.js";
 import { getAgentAvailabilityStore } from "../../services/AgentAvailabilityStore.js";
-import type { ClientEndpoint, RemoteEndpointCloseCause } from "../endpoint.js";
+import { webContents } from "electron";
+import { getWindowForWebContents } from "../../window/webContentsRegistry.js";
+import {
+  isRemoteEndpointHandle,
+  type ClientEndpoint,
+  type RemoteEndpointCloseCause,
+} from "../endpoint.js";
 import { getEndpointRegistry } from "../endpointRegistry.js";
 import { peekDriveLeaseService } from "../../services/DriveLeaseService.js";
 import { installDetachedAdoption } from "./helpDetachedAdoption.js";
@@ -283,11 +289,11 @@ function isAssistantTerminalLive(terminalId: string): boolean {
 }
 
 /**
- * A remote view taking over the running assistant of its own project's lane
- * (#13360), ahead of any launch that would displace it. The project is the
- * one the endpoint is bound to on this host, never the caller's word, so a
- * view can only ever reach its own project's assistant. A local view never
- * has a detached assistant to take, and gets `absent`.
+ * A view taking over the running assistant of its own project's lane
+ * (#13360), ahead of any launch that would displace it: another machine's, or
+ * since #13511 one of this machine's own windows. The project is the one the
+ * view is bound to on this host, never the caller's word, so a view can only
+ * ever reach its own project's assistant.
  */
 async function handleAdoptDetachedSession(
   ctx: import("../types.js").IpcContext,
@@ -297,7 +303,8 @@ async function handleAdoptDetachedSession(
   if (typeof projectId !== "string" || !projectId) return null;
   const slot = resolveSlot(rawSlot);
   if (slot === null) return null;
-  const endpoint = ctx.senderWindow ? null : ctx.endpoint;
+  if (ctx.senderWindow) return adoptForLocalView(ctx, ctx.senderWindow.id, projectId, slot);
+  const endpoint = ctx.endpoint;
   if (endpoint?.kind !== "remote-view") return { status: "absent" };
   if (endpoint.projectId === null || endpoint.projectId !== projectId) {
     console.warn("[help] adoptDetachedSession: project is not the remote view's — refusing", {
@@ -326,6 +333,41 @@ async function handleAdoptDetachedSession(
   }
   if (endpoint.projectId !== projectId) {
     await helpSessionService.revokeSession(result.lane.sessionId);
+    return null;
+  }
+  return result;
+}
+
+/**
+ * One of this machine's own windows taking over its project's assistant
+ * (#13511). Its WebContents going is when the assistant is left with no view
+ * again (`revokeByWebContentsId`), so a view torn down while this ran hands
+ * it straight back.
+ */
+async function adoptForLocalView(
+  ctx: import("../types.js").IpcContext,
+  windowId: number,
+  projectId: string,
+  slot: number
+): Promise<HelpAdoptResult | null> {
+  if (!ctx.projectId || ctx.projectId !== projectId) {
+    console.warn("[help] adoptDetachedSession: project is not the view's — refusing", {
+      requested: projectId,
+      fromView: ctx.projectId,
+    });
+    return null;
+  }
+  const { helpSessionService } = await getHelpSessionService();
+  const result = await helpSessionService.adoptDetachedSession(
+    projectId,
+    slot,
+    ctx.webContentsId,
+    probeAssistantTerminal,
+    { windowId }
+  );
+  if (result.status !== "adopted") return result;
+  if (ctx.endpoint.isClosed()) {
+    await helpSessionService.revokeByWebContentsId(ctx.webContentsId);
     return null;
   }
   return result;
@@ -461,14 +503,17 @@ async function handlePeekPendingHibernation(
 }
 
 /**
- * A remote view is also told about its project's assistants that outlived
- * their last view (#13360), so a cold one can bring them back. Only a remote
- * view can take one over, so only a remote view hears of them.
+ * A view is also told about its project's assistants that outlived their last
+ * view (#13360), so a cold one can bring them back rather than launch beside
+ * them: another machine's view, and since #13511 one of this machine's own.
  */
 function liveLaneOptions(
   ctx: import("../types.js").IpcContext
 ): { isTerminalLive: (terminalId: string) => boolean; viewHandle: number } | undefined {
-  return !ctx.senderWindow && ctx.endpoint.kind === "remote-view"
+  if (ctx.senderWindow) {
+    return { isTerminalLive: isAssistantTerminalLive, viewHandle: ctx.webContentsId };
+  }
+  return ctx.endpoint.kind === "remote-view"
     ? { isTerminalLive: isAssistantTerminalLive, viewHandle: ctx.endpoint.handle }
     : undefined;
 }
@@ -720,15 +765,23 @@ export const helpNamespace = defineIpcNamespace({
   },
 });
 
+function localViewIsUp(handle: number): boolean {
+  const view = webContents.fromId(handle);
+  return (
+    view !== undefined && !view.isDestroyed() && !view.isCrashed() && !view.isLoadingMainFrame()
+  );
+}
+
 /**
  * A view of a project coming back takes over that project's detached
- * assistants at once (#13389), its panel open or not. Until then the
- * assistant's MCP session is pinned to the view that went, so every Daintree
- * tool it calls fails: an assistant left working, or one other machines'
- * assistants are messaging, would be cut off until someone opened its panel.
- * Nothing launches. Only the view that drives the project takes one (see
- * `adoptForReturningViews`), and the service re-checks everything under the
- * lane's lock.
+ * assistants at once (#13389), its panel open or not: another machine's, or
+ * since #13511 one of this machine's own windows. Until then the assistant's
+ * Daintree tools run on the host with no view, and a change is refused while
+ * someone drives the project, so an assistant left working, or one other
+ * machines' assistants are messaging, would be held back until someone opened
+ * its panel. Nothing launches. Only the view that drives the project takes
+ * one (see `adoptForReturningViews`), and the service re-checks everything
+ * under the lane's lock.
  */
 function installDetachedAssistantAdoption(): () => void {
   // The lease service exists only once Host mode is installed, which may be
@@ -736,24 +789,37 @@ function installDetachedAssistantAdoption(): () => void {
   // lease back after its view attaches.
   let offLease: (() => void) | null = null;
   return installDetachedAdoption({
-    remoteEndpoints: () => getEndpointRegistry().getRemote(),
+    detachedProjects: () => helpSessionServiceIfLoaded()?.detachedProjectIds() ?? [],
+    // A window here whose renderer crashed or is reloading keeps its id, but
+    // has nothing to run the assistant's calls yet; its load finishing runs
+    // this again (`noteViewReady`).
+    endpointsFor: (projectId) =>
+      getEndpointRegistry()
+        .getForProject(projectId)
+        .filter((endpoint) => endpoint.kind === "remote-view" || localViewIsUp(endpoint.handle)),
     drivingEndpointId: (projectId) =>
       peekDriveLeaseService()?.getHolderEndpoint(projectId)?.endpointId ?? null,
     detachedSlots: (projectId) => helpSessionServiceIfLoaded()?.detachedSlots(projectId) ?? [],
     adopt: async (projectId, slot, endpoint) => {
       const { helpSessionService } = await getHelpSessionService();
+      const view = isRemoteEndpointHandle(endpoint.handle)
+        ? undefined
+        : webContents.fromId(endpoint.handle);
+      const windowId = view ? getWindowForWebContents(view)?.id : undefined;
       return helpSessionService.adoptDetachedSession(
         projectId,
         slot,
         endpoint.handle,
         probeAssistantTerminal,
-        { keepRestoreIntent: true }
+        { keepRestoreIntent: true, ...(windowId !== undefined ? { windowId } : {}) }
       );
     },
     release: async (endpoint, projectId, adopted) => {
       const { helpSessionService } = await getHelpSessionService();
       // As the IPC path does: closed, back to detached; moved, never kept by another project.
-      if (endpoint.isClosed()) {
+      if (endpoint.kind !== "remote-view") {
+        if (endpoint.isClosed()) await helpSessionService.revokeByWebContentsId(endpoint.handle);
+      } else if (endpoint.isClosed()) {
         await detachRemoteViewSessions(helpSessionService, endpoint, {
           cause: endpoint.closeCause ?? null,
         });
@@ -762,8 +828,12 @@ function installDetachedAssistantAdoption(): () => void {
       }
     },
     adopted: (endpoint, projectId, slot, adopted) => {
+      // A window here going is its WebContents going, which main already
+      // follows; a remote view's endpoint is watched from here.
       const service = helpSessionServiceIfLoaded();
-      if (service) trackRemoteViewSessions(service, endpoint, projectId);
+      if (service && endpoint.kind === "remote-view") {
+        trackRemoteViewSessions(service, endpoint, projectId);
+      }
       logger.info("A returning view took over its project's running assistant", {
         ...remoteViewFields(endpoint, { cause: null }),
         slot,
@@ -781,10 +851,24 @@ function installDetachedAssistantAdoption(): () => void {
         watchLease();
         listener();
       });
+      // An assistant left with no view while someone already drives its project.
+      let disposed = false;
+      let offDetached: (() => void) | null = null;
+      void getHelpSessionService()
+        .then(({ helpSessionService }) => {
+          if (!disposed) offDetached = helpSessionService.addLaneDetachedListener(listener);
+        })
+        .catch((err: unknown) => {
+          logger.warn("Watching for assistants left with no view failed", {
+            reason: formatErrorMessage(err, "subscribe failed"),
+          });
+        });
       return () => {
+        disposed = true;
         offRegistry();
         offLease?.();
         offLease = null;
+        offDetached?.();
       };
     },
     onFailure: (err) => {

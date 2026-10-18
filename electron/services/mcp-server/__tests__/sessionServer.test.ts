@@ -19,6 +19,8 @@ import {
   VIEWLESS_MAIN_PROCESS_TOOLS,
 } from "../sessionServer.js";
 import { MCP_SURFACE_TOOL_ID } from "../surfaceManifest.js";
+import { getViewlessHelpBaseManifest } from "../baseManifest.js";
+import { VIEWLESS_ACTIONS } from "../../viewless/viewlessActionCatalog.js";
 import type { SessionServerDeps, TerminalCloseContext } from "../sessionServer.js";
 import type { SessionStore } from "../sessionStore.js";
 import type { McpSessionOrigin } from "../../../../shared/types/ipc/mcpServer.js";
@@ -159,6 +161,7 @@ function fakeSessionStore(tier: "core" | "full" | "external" = "core"): SessionS
       (sessionId: string) => (sessionOriginMap.get(sessionId) ?? "external") === "help"
     ),
     sessionWorkspaceMap: new Map(),
+    sessionViewlessHelpMap: new Map(),
     resourceSubscriptions: new Map(),
     dedupInFlight: new Map(),
     dedupResultCache: new Map(),
@@ -4459,6 +4462,25 @@ describe("help.displayImage short-circuit (#9828)", () => {
     expect(id1).not.toBe(id2);
   });
 
+  it("refuses with no view to show the figure, spending no figure number (#13511)", async () => {
+    const notifyDisplayImage = vi.fn();
+    const store = helpSessionStore("sess-nv", "help-nv");
+    store.sessionViewlessHelpMap.set("sess-nv", "proj-1");
+    const deps = fakeDeps({ sessionStore: store, notifyDisplayImage });
+    const server = createSessionServer("sess-nv", deps);
+    await server.connect(makeMockTransport());
+
+    const result = (await callTool(server, {
+      name: "help.displayImage",
+      arguments: { url: "https://daintree.org/a.png" },
+    })) as { isError?: boolean; content: { text: string }[] };
+
+    expect(result.isError).toBe(true);
+    expect(JSON.parse(result.content[0].text).code).toBe("NO_FRONTEND_ATTACHED");
+    expect(notifyDisplayImage).not.toHaveBeenCalled();
+    expect(store.nextFigureNumber("help-nv")).toBe(1);
+  });
+
   it("rejects a non-daintree URL with INVALID_URL and does not notify", async () => {
     const notifyDisplayImage = vi.fn();
     const deps = fakeDeps({
@@ -6878,6 +6900,15 @@ describe("workspace-bound external sessions (#11789)", () => {
         expect(new Set(Object.keys(MAIN_PROCESS_CALLS))).toEqual(
           new Set(VIEWLESS_MAIN_PROCESS_TOOLS)
         );
+      });
+
+      it("lists every one of them, and every action the host runs, to a help session with no view (#13511)", () => {
+        const listed = new Set(getViewlessHelpBaseManifest().map((entry) => entry.id));
+        expect(
+          [...VIEWLESS_MAIN_PROCESS_TOOLS, ...Object.keys(VIEWLESS_ACTIONS)].filter(
+            (id) => !listed.has(id)
+          )
+        ).toEqual([]);
       });
 
       // The bypass widens reachability, never authority — the tier gate runs

@@ -1,5 +1,6 @@
 import type { ActionManifestEntry } from "../../../shared/types/actions.js";
 import { MCP_EXTERNAL_BASE_MANIFEST } from "./generated/mcpExternalBaseManifest.js";
+import { MCP_VIEWLESS_BASE_MANIFEST } from "./generated/mcpViewlessBaseManifest.js";
 
 /**
  * The tool surface a workspace-bound external session is served when its
@@ -35,4 +36,21 @@ export function getExternalBaseManifest(): ActionManifestEntry[] {
   // as read-only, and deep-cloning the whole catalog on every `tools/list`
   // would be real work for a hazard nothing exercises.
   return MCP_EXTERNAL_BASE_MANIFEST.map((entry) => ({ ...entry }));
+}
+
+/**
+ * The tool surface of a help session with no view (#13511): the external
+ * surface, plus each action the host runs itself (#13498) and each tool main
+ * runs that it lacks, all generated from the action registry as the external
+ * one is. The session's
+ * own tier then filters it, as a view's manifest is filtered.
+ *
+ * Discovery only, as above. A listed tool only a view can run answers
+ * NO_FRONTEND_ATTACHED when called, and a change goes through the host's own
+ * drive check at dispatch.
+ */
+export function getViewlessHelpBaseManifest(): ActionManifestEntry[] {
+  return [...MCP_EXTERNAL_BASE_MANIFEST, ...MCP_VIEWLESS_BASE_MANIFEST].map((entry) => ({
+    ...entry,
+  }));
 }

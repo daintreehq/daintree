@@ -73,6 +73,7 @@ import type {
   DispatchEnvelope,
   HelpTokenValidator,
   HelpSessionWebContentsResolver,
+  HelpSessionViewlessProjectResolver,
   HelpSessionActionContextResolver,
   HelpSessionIdResolver,
   PaneWorkspaceBindingResolver,
@@ -351,6 +352,15 @@ export class McpServerService {
           sessionOrigin,
           options
         ),
+      dispatchActionWithoutView: (workspaceId, actionId, args, confirmed, sessionOrigin, options) =>
+        this.bridge.dispatchActionWithoutView(
+          workspaceId,
+          actionId,
+          args,
+          confirmed,
+          sessionOrigin,
+          options
+        ),
       // Deliberately not this session's own route (#12315): a reveal runs in
       // the view that is being replaced, in the window that already holds the
       // destination workspace.
@@ -488,6 +498,10 @@ export class McpServerService {
 
   setHelpSessionWebContentsResolver(resolver: HelpSessionWebContentsResolver | null): void {
     this.httpLifecycle.setHelpSessionWebContentsResolver(resolver);
+  }
+
+  setHelpSessionViewlessProjectResolver(resolver: HelpSessionViewlessProjectResolver | null): void {
+    this.httpLifecycle.setHelpSessionViewlessProjectResolver(resolver);
   }
 
   setHelpSessionActionContextResolver(resolver: HelpSessionActionContextResolver | null): void {

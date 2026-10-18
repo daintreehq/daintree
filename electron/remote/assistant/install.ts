@@ -102,7 +102,10 @@ export interface AssistantMessagingPolicyInstallDeps {
   /** A session to a host opened (or reopened): lanes enrolled there may need their views back. */
   onHostSessionOpened?(listener: (hostId: HostId) => void): () => void;
   /** What starting an assistant in a host's project takes from the windows here. */
-  hostAssistants?: Omit<HostAssistantStarterDeps, "listLanes" | "enrollStarted" | "sleep" | "now">;
+  hostAssistants?: Omit<
+    HostAssistantStarterDeps,
+    "listLanes" | "enrollStarted" | "startWithoutView" | "sleep" | "now"
+  >;
   /**
    * This machine's "accept messages from other machines", read at each check:
    * whether its assistants take messages from other machines at all, and
@@ -181,19 +184,25 @@ export function installAssistantMessagingPolicy(
   // has a live generation, and the lifecycle ledger can't stand in for this: a
   // refused duplicate leaves it describing the failed attempt, and it evicts.
   const spawned = new Map<string, number>();
-  const policy = new AssistantMessagingPolicy({
+  const policy: AssistantMessagingPolicy = new AssistantMessagingPolicy({
     getRunningLaneSession: (projectId, slot) =>
       helpSessionService.getRunningLaneSession(projectId, slot),
     listRunningLanes: () => helpSessionService.listRunningLanes(),
+    // A run the host started with no view names who asked for it (#13511),
+    // which a fresh session of the same Shell proves again with its sender;
+    // any other came through one of the Shell's own views.
     startedThrough: (running, linkSessionId) =>
-      getEndpointRegistry()
-        .getRemote()
-        .some(
-          (endpoint) =>
-            endpoint.handle === running.projectViewWebContentsId &&
-            endpoint.linkSessionId === linkSessionId &&
-            !endpoint.isClosed()
-        ),
+      running.startedBy !== undefined
+        ? running.startedBy.linkSessionId === linkSessionId ||
+          policy.sessionSender(linkSessionId) === running.startedBy.senderId
+        : getEndpointRegistry()
+            .getRemote()
+            .some(
+              (endpoint) =>
+                endpoint.handle === running.projectViewWebContentsId &&
+                endpoint.linkSessionId === linkSessionId &&
+                !endpoint.isClosed()
+            ),
     getLiveGeneration: (terminalId) => getPtyClient()?.getLiveGeneration(terminalId) ?? null,
     spawnConfirmed: (terminalId, launchGeneration) => {
       if (spawned.get(terminalId) === launchGeneration) return true;
@@ -382,6 +391,7 @@ export function installAssistantMessagingPolicy(
         listLanes: (hostId) => exchangeClient().listLanes(hostId),
         listOwnLanes: (hostId) => exchangeClient().listOwnLanes(hostId),
         enrollStarted: (hostId, payload) => exchangeClient().enrollStarted(hostId, payload),
+        startWithoutView: (hostId, payload) => exchangeClient().startWithoutView(hostId, payload),
       })
     : null;
   const hub = new HubMessagingRuntime({
