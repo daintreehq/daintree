@@ -13,7 +13,8 @@ import type { ClientEndpoint } from "../../ipc/endpoint.js";
 export type McpDriveTarget =
   | { state: "vacant" }
   | { state: "unavailable"; reason: "reserved" | "lookup-failed" }
-  | { state: "live"; endpoint: ClientEndpoint };
+  /** `holderName`: the driving machine's name, for refusals that say who drives. */
+  | { state: "live"; endpoint: ClientEndpoint; holderName?: string };
 
 /**
  * The drive lease is a remote-hosts service, so core code never imports it:

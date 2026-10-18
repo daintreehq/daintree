@@ -27,7 +27,11 @@ import type {
   TurnOutcomeClass,
 } from "../../shared/types/ipc/mcpServer.js";
 import { SessionStore } from "./mcp-server/sessionStore.js";
-import { helpOwnershipPrincipal, principalOwnerKey } from "./mcp-server/resourceOwnership.js";
+import {
+  helpOwnershipPrincipal,
+  principalOwnerKey,
+  relayOwnershipPrincipal,
+} from "./mcp-server/resourceOwnership.js";
 import type { TerminalAdoptionRecord } from "./mcp-server/terminalAdoption.js";
 import { isTierPermitted } from "./mcp-server/tierAuth.js";
 import type { OrchestratorPaneIdentity } from "./McpPaneConfigService.js";
@@ -374,8 +378,10 @@ export class McpServerService {
         handleWaitUntilIdleBatch(rawArgs, signal, options),
       handleSkillsSearch: (rawArgs) => handleSkillsSearch(rawArgs),
       handleSkillsLoad: (rawArgs) => handleSkillsLoad(rawArgs),
-      handleProjectRunCheck: (rawArgs, signal) => handleProjectRunCheck(rawArgs, signal),
-      handleProjectRunCommand: (rawArgs, signal) => handleProjectRunCommand(rawArgs, signal),
+      handleProjectRunCheck: (rawArgs, signal, authorize) =>
+        handleProjectRunCheck(rawArgs, signal, authorize),
+      handleProjectRunCommand: (rawArgs, signal, authorize) =>
+        handleProjectRunCommand(rawArgs, signal, authorize),
       handleTerminalGetStatusViewless: (rawArgs, workspaceId) =>
         handleTerminalGetStatusViewless(rawArgs, workspaceId),
       handleTerminalReadLastMessageOwned: (terminalId, options, signal) =>
@@ -1207,6 +1213,27 @@ export class McpServerService {
   ): ReturnType<typeof this.bridge.dispatchActionForWebContents> {
     this.ensureHostBridgeListeners();
     return this.bridge.dispatchActionForWebContents(...args);
+  }
+
+  /**
+   * Remote Hosts (#13493): a session for another machine's assistant reaching
+   * this host through its Shell, admitted through this server's own gates and
+   * bound to one project. Null while the server is off.
+   */
+  openRelaySession(
+    ...args: Parameters<HttpLifecycle["openRelaySession"]>
+  ): ReturnType<HttpLifecycle["openRelaySession"]> {
+    return this.httpLifecycle.openRelaySession(...args);
+  }
+
+  /**
+   * Remote Hosts (#13493): another machine's assistant no longer holds what it
+   * made here. Its terminals and worktrees stay; only the authority goes.
+   */
+  retireRelayPrincipal(senderId: string, helpSessionId: string): void {
+    this.sessionStore.resourceOwnership.revokePrincipal(
+      relayOwnershipPrincipal(senderId, helpSessionId)
+    );
   }
 
   /** Remote Hosts: the action manifest of the local view that drives a host's project. */

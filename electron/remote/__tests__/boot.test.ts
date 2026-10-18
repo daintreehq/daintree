@@ -439,6 +439,9 @@ vi.mock("../assistant/install.js", () => ({
 vi.mock("../assistant/hostExchanges.js", () => ({
   installAssistantExchangeHost: messaging.installAssistantExchangeHost,
 }));
+vi.mock("../assistant/hostMcpRelay.js", () => ({
+  installHostMcpRelay: vi.fn(() => ({ dispose: vi.fn() })),
+}));
 vi.mock("../client/viewRequests.js", () => ({
   installViewReverseRequests: vi.fn(() => m.uninstallViewRequests),
 }));

@@ -397,6 +397,8 @@ export interface StoreSchema {
     daintreeConfirmations?: "inherit" | "always-ask" | "never-ask";
     /** Absent in stores written before #13441; read as on. */
     acceptRemoteMessages?: boolean;
+    /** Absent in stores written before #13493; read as on. */
+    acceptRemoteControl?: boolean;
     /**
      * The agent the assistant runs on (#13345). Absent means never set on this
      * host; `null` is an explicit clear. Written only through

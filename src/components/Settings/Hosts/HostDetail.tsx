@@ -176,6 +176,20 @@ export function HostDetail({
       }
     );
   };
+  const [controlDraft, setControlDraft] = useState<boolean | null>(null);
+  const [controlError, setControlError] = useState<string | null>(null);
+  const controlEnabled = controlDraft ?? descriptor.assistantControlEnabled;
+  const setControl = (next: boolean) => {
+    setControlDraft(next);
+    setControlError(null);
+    remoteHostsClient.update({ hostId: descriptor.id, assistantControlEnabled: next }).then(
+      () => setControlDraft(null),
+      (err: unknown) => {
+        setControlDraft(null);
+        setControlError(clientErrorText(err, "Couldn't save this setting"));
+      }
+    );
+  };
   const [startDraft, setStartDraft] = useState<boolean | null>(null);
   const [startError, setStartError] = useState<string | null>(null);
   const startEnabled = startDraft ?? descriptor.assistantStartEnabled;
@@ -429,6 +443,20 @@ export function HostDetail({
                   )}
                 />
               </SettingsDependents>
+              <SettingsRow
+                label="Let the assistant work on this host"
+                description={`Your assistant can run Daintree's own tools on ${hostName}: start and read agents, run checks, close what it opened. A change needs a window here that controls the project. On by default.`}
+                error={controlError ?? undefined}
+                control={({ labelId, descriptionId, disabled }) => (
+                  <SettingsSwitch
+                    checked={controlEnabled}
+                    onCheckedChange={setControl}
+                    disabled={disabled}
+                    aria-labelledby={labelId}
+                    aria-describedby={descriptionId}
+                  />
+                )}
+              />
             </>
           )}
         </SettingsGroup>

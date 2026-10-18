@@ -245,6 +245,24 @@ export interface McpAuditRecord {
   severity: McpAuditSeverity;
   /** Number of times this event repeated within the coalesce window. Absent when the event occurred once. */
   repeatCount?: number;
+  /**
+   * Set when another machine's assistant ran this tool here through its Shell
+   * (`host.call`, #13493); absent for every call made on this machine.
+   */
+  relay?: McpAuditRelay;
+}
+
+/**
+ * Who a relayed call came from, as this host established it (#13493). `sender`
+ * is the start of the id the Shell's credential derives, which is one-way and
+ * never lets anyone authenticate as it. `callId` is the one the Shell's own
+ * record of the `host.call` carries.
+ */
+export interface McpAuditRelay {
+  shellName: string;
+  sender: string;
+  helpSessionId: string;
+  callId?: string;
 }
 
 /**

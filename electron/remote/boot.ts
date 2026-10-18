@@ -294,6 +294,8 @@ function startClient(options: StartRemoteHostsOptions): void {
           descriptor.assistantStartEnabled === true
         );
       },
+      isHostControlEnabled: (hostId) =>
+        client.registry.get(hostId)?.assistantControlEnabled === true,
       hostAssistants: {
         projectPath: async (hostId, projectId) =>
           (await client.client.listHostProjects({ hostId })).find(

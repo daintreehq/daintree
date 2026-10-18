@@ -251,6 +251,7 @@ const hostEntry = (id: string, name: string): HostListEntry => ({
     notificationsEnabled: false,
     assistantMessagingEnabled: false,
     assistantStartEnabled: false,
+    assistantControlEnabled: false,
   },
   connection: { status: "connected", rttMs: 38, handshake: PREVIEW_HANDSHAKE },
   summary: null,

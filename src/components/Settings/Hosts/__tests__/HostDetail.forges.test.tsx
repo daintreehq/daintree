@@ -43,6 +43,7 @@ function entry(forges: HostMetricsSummary["forges"], connected = true): HostList
       notificationsEnabled: false,
       assistantMessagingEnabled: false,
       assistantStartEnabled: false,
+      assistantControlEnabled: false,
     },
     connection: connected
       ? { status: "connected", rttMs: 3, handshake: HANDSHAKE }
@@ -133,6 +134,7 @@ describe("HostDetail notifications toggle", () => {
         notificationsEnabled,
         assistantMessagingEnabled: false,
         assistantStartEnabled: false,
+        assistantControlEnabled: false,
       },
       connection: { status: "disconnected" },
       summary: null,

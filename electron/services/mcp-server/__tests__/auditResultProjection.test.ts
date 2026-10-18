@@ -3,6 +3,7 @@ import {
   auditVerbatimArgKeys,
   projectAuditArgs,
   projectAuditResult,
+  projectRelayedAuditArgs,
 } from "../auditResultProjection.js";
 import { summarizeMcpArgs, summarizeMcpResult } from "../../../../shared/utils/mcpArgsSummary.js";
 
@@ -528,5 +529,96 @@ describe("project.runCommand audit entries keep the command, never its output (#
 
   it("keeps every other tool's long strings collapsed", () => {
     expect(auditVerbatimArgKeys("terminal.sendCommand")).toBeUndefined();
+  });
+});
+
+describe("host.call audit projection (#13493)", () => {
+  const CALL_ID = "8f14e45f-ceea-467a-9b2c-5a1f6a2b9c11";
+
+  it("keeps the host, tool and callId, and the tool's own arguments flat, never short prompts", () => {
+    const projected = projectAuditArgs("host.call", {
+      hostId: "studio-01",
+      projectId: "not a uuid",
+      tool: "agent.launch",
+      callId: CALL_ID,
+      args: { agentId: "claude", prompt: "rm -rf now", notify: false },
+    });
+
+    expect(projected).toEqual({
+      hostId: "studio-01",
+      projectId: null,
+      tool: "agent.launch",
+      callId: CALL_ID,
+      "args.agentId": "claude",
+      "args.prompt": "<string: 10 chars>",
+      "args.notify": false,
+    });
+    expect(summarizeMcpArgs(projected)).not.toContain("rm -rf");
+  });
+
+  it("applies the relayed tool's own projection, so a message's text never reaches the log", () => {
+    const projected = projectAuditArgs("host.call", {
+      hostId: "studio-01",
+      tool: "assistant.sendMessage",
+      args: { contextId: CALL_ID, text: "TEXT-SENTINEL" },
+    }) as Record<string, unknown>;
+
+    expect(projected["args.textChars"]).toBe("TEXT-SENTINEL".length);
+    expect(JSON.stringify(projected)).not.toContain("TEXT-SENTINEL");
+  });
+
+  it("drops a tool name that isn't one, and never projects a relay of a relay", () => {
+    expect(
+      projectAuditArgs("host.call", {
+        hostId: "studio-01",
+        tool: "say hello to the team",
+        args: { prompt: "x" },
+      })
+    ).toEqual({ hostId: "studio-01", projectId: null, tool: null, callId: null });
+    expect(
+      projectAuditArgs("host.call", {
+        hostId: "studio-01",
+        tool: "host.call",
+        args: { tool: "agent.launch", args: { prompt: "nested" } },
+      })
+    ).toEqual({ hostId: "studio-01", projectId: null, tool: "host.call", callId: null });
+  });
+
+  it("keeps nothing anyone wrote when the host audits a call relayed to it, however short", () => {
+    const projected = projectRelayedAuditArgs("agent.launch", {
+      agentId: "claude",
+      prompt: "fix it",
+      notify: false,
+    });
+
+    expect(projected).toEqual({
+      agentId: "claude",
+      prompt: "<string: 6 chars>",
+      notify: false,
+    });
+    expect(
+      projectRelayedAuditArgs("agent.launch", { systemPrompt: "be terse", title: "Fix login" })
+    ).toEqual({ systemPrompt: "<string: 8 chars>", title: "<string: 9 chars>" });
+    expect(projectRelayedAuditArgs("terminal.sendKeys", { choose: "2" })).toEqual({
+      choose: "<string: 1 chars>",
+    });
+    // A tool with a projection of its own keeps it.
+    expect(
+      projectRelayedAuditArgs("assistant.sendMessage", { contextId: CALL_ID, text: "secret" })
+    ).toEqual(projectAuditArgs("assistant.sendMessage", { contextId: CALL_ID, text: "secret" }));
+  });
+
+  it("records only the outcome, callId and whether the tool failed, never its result", () => {
+    const projected = projectAuditResult("host.call", {
+      outcome: "ok",
+      detail: null,
+      retryAfterMs: null,
+      callId: CALL_ID,
+      result: { isError: false, structured: { output: "OUTPUT-SENTINEL" }, text: null },
+    });
+
+    expect(projected).toEqual({ outcome: "ok", callId: CALL_ID, isError: false });
+    expect(JSON.stringify(summarizeMcpResult(projected))).not.toContain("OUTPUT-SENTINEL");
+    expect(projectAuditResult("host.call", "nope")).toEqual({ status: "unrecognized" });
   });
 });

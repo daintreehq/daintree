@@ -301,6 +301,7 @@ export class AuditService {
     helpSessionId?: string;
     resultSummary?: string;
     resultMeta?: McpAuditRecord["resultMeta"];
+    relay?: McpAuditRecord["relay"];
     /**
      * Whether the calling session is Daintree's own assistant. Not persisted:
      * it only decides which surface `tierHint` is read from, since the two
@@ -367,6 +368,9 @@ export class AuditService {
     }
     if (input.resultMeta !== undefined) {
       record.resultMeta = input.resultMeta;
+    }
+    if (input.relay !== undefined) {
+      record.relay = { ...input.relay };
     }
 
     this.enqueueAndTrim(record);

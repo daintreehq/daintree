@@ -177,6 +177,13 @@ export interface WorkspaceDispatchOptions {
   approvalReason?: McpApprovalReason;
   /** What pre-authorized a `confirmed` dispatch — see `SessionServerDeps.dispatchAction`. */
   authorization?: McpDispatchAuthorization;
+  /**
+   * A call one of another machine's assistants made here through its Shell
+   * (#13493). Anything but a read runs only in that Shell's own view of the
+   * workspace, the one the drive lease says drives it; never in another
+   * machine's, whose authority the relay would then be borrowing.
+   */
+  relay?: { linkSessionId: string; readOnly: boolean };
 }
 export type { HelpAssistantTier };
 
@@ -556,6 +563,13 @@ export function buildToolError(input: {
  * MCP clients read it by name, so changing it is a breaking change.
  */
 export const RESOLVED_WORKSPACE_META_KEY = "org.daintree/resolved-workspace";
+
+/**
+ * `_meta` key a relayed call carries its Shell's callId under (#13493), so
+ * this host's audit record of the tool shares it with the Shell's record of
+ * the `host.call`. Read only on relayed sessions.
+ */
+export const RELAY_CALL_ID_META_KEY = "org.daintree/relay-call-id";
 
 /**
  * Stamp the resolved workspace onto a tool result (#11536).
@@ -1175,6 +1189,29 @@ export interface McpHttpSession {
   transport: import("@modelcontextprotocol/sdk/server/streamableHttp.js").StreamableHTTPServerTransport;
   server: import("@modelcontextprotocol/sdk/server/index.js").Server;
   idleTimer: ReturnType<typeof setTimeout>;
+}
+
+/**
+ * A session a Shell's assistant reaches over the link (#13493), served
+ * in-process: no socket, no bearer. The relay that opened it closes it when
+ * it goes unused, so the store keeps no idle timer of its own for it.
+ */
+export interface McpRelaySession {
+  transport: import("@modelcontextprotocol/sdk/shared/transport.js").Transport;
+  server: import("@modelcontextprotocol/sdk/server/index.js").Server;
+}
+
+/**
+ * Who a relayed session acts for (#13493), as the host established it: the
+ * requesting Shell's link session (its drive-lease identity), the sender it
+ * proved, the Shell assistant's own help session, and the Shell's name for
+ * display. Never one of this machine's own help sessions.
+ */
+export interface McpRelayCaller {
+  linkSessionId: string;
+  senderId: string;
+  helpSessionId: string;
+  shellName: string;
 }
 
 const RESOURCE_URI_PATTERN =

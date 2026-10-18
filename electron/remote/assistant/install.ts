@@ -63,6 +63,8 @@ declare module "../runtime.js" {
     assistantLaneWaker: AssistantLaneWaker;
     assistantMessagingRuntime: AssistantMessagingRuntime;
     assistantHubReceiver: AssistantHubReceiver;
+    /** What a host's dialogs are checked against: whether this Shell has a call out to it. */
+    hostCallRelayClient: Pick<HubMessagingRuntime, "hasCallInFlight">;
   }
 }
 
@@ -92,6 +94,8 @@ export interface AssistantMessagingPolicyInstallDeps {
   listHostProjects?(hostId: HostId): Promise<readonly HostProjectSummary[]>;
   /** The person's consent to this Shell's assistants starting assistants on a host, read at each call. */
   isHostStartEnabled?(hostId: HostId): boolean;
+  /** The person's "assistant control" switch for a host: whether `host.call` reaches it (#13493). */
+  isHostControlEnabled?(hostId: HostId): boolean;
   /** A session to a host opened (or reopened): lanes enrolled there may need their views back. */
   onHostSessionOpened?(listener: (hostId: HostId) => void): () => void;
   /** What starting an assistant in a host's project takes from the windows here. */
@@ -403,8 +407,15 @@ export function installAssistantMessagingPolicy(
     listHostProjects: deps.listHostProjects,
     startEnabled: (hostId) => deps.isHostStartEnabled?.(hostId) === true,
     starter: () => starter,
+    // From provisioning, before the run is confirmed: the view a session was opened in.
+    inLocalView: (helpSessionId) => {
+      const handle = helpSessionService.getWebContentsIdForSessionId(helpSessionId);
+      return handle !== null && !isRemoteEndpointHandle(handle);
+    },
+    controlEnabled: (hostId) => deps.isHostControlEnabled?.(hostId) === true,
   });
   const unregisterHub = setHostMessagingRuntime(hub);
+  const unregisterCallRelay = registerRemoteService("hostCallRelayClient", hub);
   // An assistant this Shell started works through a hidden view of its project,
   // which no window restores after a restart: give each enrolled lane's project
   // a view again once the link is back, retrying while windows come back too.
@@ -503,6 +514,7 @@ export function installAssistantMessagingPolicy(
     stopListening();
     unregisterReceiver();
     receiver.dispose();
+    unregisterCallRelay();
     unregisterHub();
     hub.dispose();
     routes.clear();
@@ -634,9 +646,14 @@ export function installAssistantExchangeClient(
       })
     : () => {};
   client.start();
-  // Bounded by each exchange's expiry. Holding the link never keeps the host awake.
+  // Bounded by each exchange's expiry, and by each relayed call while it runs.
+  // Holding the link never keeps the host awake.
   const offUseCheck =
-    deps.addUseCheck?.((hostId) => journal.hasOpen(hostId, EXCHANGE_RETRY_WINDOW_MS)) ?? (() => {});
+    deps.addUseCheck?.(
+      (hostId) =>
+        journal.hasOpen(hostId, EXCHANGE_RETRY_WINDOW_MS) ||
+        getRemoteService("hostCallRelayClient")?.hasCallInFlight(hostId) === true
+    ) ?? (() => {});
   const unregister = registerRemoteService("assistantExchangeClient", client);
   return () => {
     disposed = true;

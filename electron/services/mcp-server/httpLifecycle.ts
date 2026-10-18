@@ -1,10 +1,13 @@
 // eager-import-allow: reads MCP server config via store.get synchronously during lifecycle setup
 import http from "node:http";
-import { createHash, randomUUID } from "node:crypto";
+import { createHash, randomBytes, randomUUID } from "node:crypto";
 import type { AddressInfo } from "node:net";
+import { Client } from "@modelcontextprotocol/sdk/client/index.js";
+import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { SSEServerTransport } from "@modelcontextprotocol/sdk/server/sse.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
-import { webContents as webContentsModule } from "electron";
+import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
+import { app, webContents as webContentsModule } from "electron";
 import type { WindowRegistry } from "../../window/WindowRegistry.js";
 import { store } from "../../store.js";
 import { CHANNELS } from "../../ipc/channels.js";
@@ -27,6 +30,7 @@ import type {
   PaneTerminalResolver,
   HelpSessionTerminalResolver,
   WorkspaceDispatchOptions,
+  McpRelayCaller,
   McpTier,
   McpSessionOrigin,
   McpWorkspaceBinding,
@@ -36,9 +40,15 @@ import {
   auditVerbatimArgKeys,
   projectAuditArgs,
   projectAuditResult,
+  projectRelayedAuditArgs,
 } from "./auditResultProjection.js";
-import { helpOwnershipPrincipal } from "./resourceOwnership.js";
-import { SessionBindingError, WorkspaceBindingError } from "./rendererBridge.js";
+import { helpOwnershipPrincipal, relayOwnershipPrincipal } from "./resourceOwnership.js";
+import {
+  RelayDrivenElsewhereError,
+  SessionBindingError,
+  WorkspaceBindingError,
+} from "./rendererBridge.js";
+import { resolveMcpDriveTarget } from "./driveTarget.js";
 import { PLUGIN_MCP_ROUTE_PREFIX, type PluginMcpRouteHandler } from "../pluginAgentMcp/types.js";
 import { isProjectWorkspaceId, isScratchWorkspaceId } from "../../../shared/utils/workspaceIds.js";
 import type {
@@ -54,6 +64,7 @@ import type {
   McpTurnOutcomeAlertPayload,
 } from "../../../shared/types/ipc/mcpServer.js";
 import {
+  buildAnnotations,
   extractBearerToken,
   isAuthorized,
   precomputeApiKeyBearerHash,
@@ -91,6 +102,7 @@ import {
   MCP_WORKSPACE_ID_HEADER,
   MCP_WORKSPACE_ID_QUERY_PARAM,
   MCP_HANDSHAKE_REJECTED_CODE,
+  RELAY_CALL_ID_META_KEY,
   minimumPermittingTier,
 } from "./shared.js";
 import { createLogger } from "../../utils/logger.js";
@@ -225,11 +237,15 @@ export interface HttpLifecycleDeps {
   handleSkillsLoad: (rawArgs: unknown) => import("../../../shared/types/skills.js").SkillLoadResult;
   handleProjectRunCheck: (
     rawArgs: unknown,
-    signal: AbortSignal
+    signal: AbortSignal,
+    /** Asked once more right before the spawn; throws to refuse (#13493). */
+    authorize?: () => void
   ) => Promise<import("../../../shared/types/projectCheck.js").ProjectCheckRunResult>;
   handleProjectRunCommand: (
     rawArgs: unknown,
-    signal: AbortSignal
+    signal: AbortSignal,
+    /** Asked once more right before the spawn; throws to refuse (#13493). */
+    authorize?: () => void
   ) => Promise<import("../../../shared/types/projectCommand.js").ProjectCommandRunResult>;
   handleTerminalGetStatusViewless: (
     rawArgs: unknown,
@@ -323,6 +339,18 @@ function startSseHeartbeat(res: http.ServerResponse): ReturnType<typeof setInter
  * header and is equally privileged. The two inputs are prefixed so a header
  * can never collide with a token.
  */
+/** One relayed session as its opener holds it: call its tools, close it. */
+export interface McpRelaySessionHandle {
+  readonly sessionId: string;
+  isOpen(): boolean;
+  callTool(
+    tool: string,
+    args: Record<string, unknown>,
+    options: { timeoutMs: number; callId: string }
+  ): Promise<CallToolResult>;
+  close(): void;
+}
+
 export function sessionCredentialDigest(authHeader: string): string {
   const token = extractBearerToken(authHeader);
   const material = token !== null ? `token:${token}` : `raw:${authHeader}`;
@@ -1867,6 +1895,73 @@ export class HttpLifecycle {
   }
 
   /**
+   * Admit a session for another machine's assistant reaching this host over
+   * the link (#13493), through the same chain an HTTP handshake builds: its
+   * tier, origin, owner and workspace binding, then the real session server,
+   * on an in-memory transport. `external` origin, so it is never one of this
+   * machine's assistant surfaces and never takes its assistant's confirmation
+   * preference; bound to the one project, so nothing it does follows focus.
+   * No bearer is involved: nothing an HTTP request presents can address it.
+   * Null while the server isn't running.
+   */
+  async openRelaySession(spec: {
+    tier: "core" | "full";
+    workspaceId: string;
+    caller: McpRelayCaller;
+  }): Promise<McpRelaySessionHandle | null> {
+    if (!this.isRunning) return null;
+    const store = this.deps.sessionStore;
+    const sessionId = randomUUID();
+    const workspaceBinding = this.describePaneWorkspaceBinding(spec.workspaceId);
+    store.sessionTierMap.set(sessionId, spec.tier);
+    store.sessionOriginMap.set(sessionId, "external");
+    store.resourceOwnership.bindPrincipal(
+      sessionId,
+      relayOwnershipPrincipal(spec.caller.senderId, spec.caller.helpSessionId)
+    );
+    store.sessionWorkspaceMap.set(sessionId, workspaceBinding.workspaceId);
+    store.sessionRelayMap.set(sessionId, { ...spec.caller });
+    // Held only here: no bearer this host ever saw digests to it.
+    store.bindSessionCredential(
+      sessionId,
+      sessionCredentialDigest(`Relay ${randomBytes(32).toString("base64url")}`)
+    );
+    const server = createSessionServer(
+      sessionId,
+      this.buildSessionServerDeps(sessionId, workspaceBinding, undefined, null, spec.caller)
+    );
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    store.relaySessions.set(sessionId, { transport: serverTransport, server });
+    // Whichever side closes first, every map written above goes with it.
+    serverTransport.onclose = () => {
+      store.revokeSession(sessionId);
+    };
+    const client = new Client({ name: "daintree-host-call", version: app.getVersion() });
+    try {
+      await server.connect(serverTransport);
+      await client.connect(clientTransport);
+    } catch (err) {
+      store.revokeSession(sessionId);
+      await client.close().catch(() => {});
+      throw err;
+    }
+    return {
+      sessionId,
+      isOpen: () => store.relaySessions.has(sessionId),
+      callTool: async (tool, args, { timeoutMs, callId }) =>
+        (await client.callTool(
+          { name: tool, arguments: args, _meta: { [RELAY_CALL_ID_META_KEY]: callId } },
+          undefined,
+          { timeout: timeoutMs }
+        )) as CallToolResult,
+      close: () => {
+        store.revokeSession(sessionId);
+        void client.close().catch(() => {});
+      },
+    };
+  }
+
+  /**
    * Builds per-session dispatch deps, routing on how the session was bound at
    * handshake. Three routes, in precedence order:
    *
@@ -1891,7 +1986,8 @@ export class HttpLifecycle {
     sessionId: string,
     workspaceBinding?: McpWorkspaceBinding,
     paneBinding?: PaneWorkspaceBinding,
-    ownPane?: import("./terminalNotify.js").OwnPane | null
+    ownPane?: import("./terminalNotify.js").OwnPane | null,
+    relay?: McpRelayCaller
   ): import("./sessionServer.js").SessionServerDeps {
     const pinnedDispatch = this.deps.dispatchActionForWebContents;
     const pinnedManifest = this.deps.requestManifestForWebContents;
@@ -2039,7 +2135,8 @@ export class HttpLifecycle {
      * reveal on the ordinary dispatch: the right target for every session
      * except a bound one, and no window raise.
      */
-    const bridgeReveal = this.deps.revealOwnedRun;
+    // A relayed reveal takes the ordinary dispatch, and with it the relay's drive check.
+    const bridgeReveal = relay ? undefined : this.deps.revealOwnedRun;
     const revealOwnedRun: import("./sessionServer.js").SessionServerDeps["revealOwnedRun"] =
       bridgeReveal
         ? (workspaceId, actionId, args, confirmed) => {
@@ -2079,6 +2176,23 @@ export class HttpLifecycle {
         // bind — a selector from a pinned bearer is refused at handshake — so
         // the payload is built the same way on all three routes rather than one
         // of them relying on a default that a later binding rule could falsify.
+        // A relayed call names who asked (#13493): anything but a read goes only
+        // to that Shell's own driving view. A read is what the tool advertises as
+        // one, so a query that writes a file counts as the write it is, and one
+        // the cache can't describe is a write too.
+        const relayEntry = relay
+          ? getCachedManifest()?.find((entry) => entry.id === actionId)
+          : undefined;
+        const relayOptions: WorkspaceDispatchOptions | undefined = relay
+          ? {
+              relay: {
+                linkSessionId: relay.linkSessionId,
+                readOnly:
+                  relayEntry !== undefined && buildAnnotations(relayEntry).readOnlyHint === true,
+              },
+            }
+          : undefined;
+        const options = relayOptions ?? paneDispatchOptions;
         return workspaceDispatch
           ? workspaceDispatch(
               boundWorkspaceId,
@@ -2086,9 +2200,7 @@ export class HttpLifecycle {
               args,
               confirmed,
               sessionOrigin,
-              authorization !== undefined
-                ? { ...paneDispatchOptions, authorization }
-                : paneDispatchOptions
+              authorization !== undefined ? { ...options, authorization } : options
             )
           : Promise.reject(missingWorkspaceRoute());
       }
@@ -2383,18 +2495,51 @@ export class HttpLifecycle {
       ...(this.deps.terminalNotify !== undefined
         ? { terminalNotify: this.deps.terminalNotify }
         : {}),
-      // The lane is whichever help session this transport is bound to (#13335).
-      assistantMessaging: bindAssistantMessaging(() =>
-        this.deps.sessionStore.sessionHelpIdMap.get(sessionId)
-      ),
-      // Whichever help session this transport is bound to; the runtime decides if it may (#13336).
-      hostMessaging: bindHostMessaging(() =>
-        this.deps.sessionStore.sessionHelpIdMap.get(sessionId)
-      ),
+      // A relayed session is never this machine's assistant: no lane, no hosts
+      // of its own to reach (so a call never chains), and no pane here to type
+      // a notice into (#13493).
+      ...(relay
+        ? {
+            relay: {
+              shellName: relay.shellName,
+              refuseWrite: (projectId: string | undefined) => {
+                if (boundWorkspaceId === null) return null;
+                if (projectId !== undefined && projectId !== boundWorkspaceId) {
+                  return {
+                    code: "VALIDATION_ERROR",
+                    message: `This call can only act in project ${boundWorkspaceId}, the one it was made for. Nothing was run.`,
+                  };
+                }
+                const target = resolveMcpDriveTarget(boundWorkspaceId);
+                if (
+                  target?.state === "live" &&
+                  target.endpoint.linkSessionId === relay.linkSessionId
+                ) {
+                  return null;
+                }
+                const refused = new RelayDrivenElsewhereError(
+                  boundWorkspaceId,
+                  target?.state === "live" ? (target.holderName ?? null) : null
+                );
+                return { code: refused.code, message: refused.message };
+              },
+            },
+          }
+        : {
+            // The lane is whichever help session this transport is bound to (#13335).
+            assistantMessaging: bindAssistantMessaging(() =>
+              this.deps.sessionStore.sessionHelpIdMap.get(sessionId)
+            ),
+            // Whichever help session this transport is bound to; the runtime decides if it may (#13336).
+            hostMessaging: bindHostMessaging(() =>
+              this.deps.sessionStore.sessionHelpIdMap.get(sessionId)
+            ),
+          }),
       // A pane bearer's own terminal is fixed for the bearer's life and was
       // resolved at handshake; a help lane's is read per call, because its
       // binding follows the PTY that currently serves it.
       resolveOwnPane: () => {
+        if (relay) return null;
         if (ownPane) return ownPane;
         if (helpSessionId === null) return null;
         const terminalId = this.helpSessionTerminalResolver?.(helpSessionId) ?? null;
@@ -2412,11 +2557,14 @@ export class HttpLifecycle {
         // `capturedTurnId` is the transport-only carrier — peel it off so it
         // never lands in the persisted record (the stamped `turnId` is the
         // public field).
-        const { capturedTurnId, ...recordInput } = input;
+        const { capturedTurnId, relayCallId, ...recordInput } = input;
         const turnId = capturedTurnId ?? null;
-        const resultSummary = summarizeAuditOutcome(input.toolId, input.outcome, (s) =>
-          scrubSecrets(sanitizePath(s))
-        );
+        // A relayed call's output is the asking machine's to keep (#13493).
+        const resultSummary = relay
+          ? null
+          : summarizeAuditOutcome(input.toolId, input.outcome, (s) =>
+              scrubSecrets(sanitizePath(s))
+            );
         // `summarizeAuditOutcome` returns null for all gate outcomes by
         // contract — the wait-time hint for `rate_limited` reaches the audit
         // record through `resultMeta` instead, so the recent-calls popover
@@ -2431,7 +2579,9 @@ export class HttpLifecycle {
         this.deps.auditService.appendRecord({
           ...recordInput,
           argsSummary: summarizeMcpArgs(
-            projectAuditArgs(input.toolId, input.args),
+            relay
+              ? projectRelayedAuditArgs(input.toolId, input.args)
+              : projectAuditArgs(input.toolId, input.args),
             (s) => scrubSecrets(sanitizePath(s)),
             auditVerbatimArgKeys(input.toolId)
           ),
@@ -2439,6 +2589,17 @@ export class HttpLifecycle {
           ...(helpSessionId !== null ? { helpSessionId } : {}),
           ...(resultSummary !== null ? { resultSummary } : {}),
           ...(resultMeta !== undefined ? { resultMeta } : {}),
+          // Who asked from another machine, told apart from this machine's own calls (#13493).
+          ...(relay
+            ? {
+                relay: {
+                  shellName: relay.shellName,
+                  sender: relay.senderId.slice(0, 16),
+                  helpSessionId: relay.helpSessionId,
+                  ...(relayCallId !== undefined ? { callId: relayCallId } : {}),
+                },
+              }
+            : {}),
         });
       },
       getCachedManifest,

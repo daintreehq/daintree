@@ -148,6 +148,10 @@ export const CORE_TIER_TOOLS = [
   "host.sendMessage",
   "host.cancelTask",
   "host.startAssistant",
+  // A host's own tools, run there for this machine's assistant (#13493). Offered
+  // from every such session's start, hosts or not; each wrapped tool keeps the
+  // host's own gates, and the person's per-host switch decides what it reaches.
+  "host.call",
   // Logs meant for someone else go through the review the user trims and saves
   // themselves, not an archive the assistant builds from the raw log folder
   // (#12882). Reserved to the assistant below; off the external list.
@@ -302,6 +306,7 @@ export const RENDERER_OWNED_ORIGIN_ONLY_TOOLS = [
   "host.cancelTask",
   "host.startAssistant",
   "host.readQuota",
+  "host.call",
   // A shell command is the assistant's to run, never a worker pane's (#13495).
   "project.runCommand",
 ] as const satisfies readonly BuiltInActionId[];

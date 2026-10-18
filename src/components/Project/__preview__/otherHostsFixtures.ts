@@ -200,6 +200,7 @@ function entry(spec: HostSpec, connection: HostConnectionState): HostListEntry {
       notificationsEnabled: false,
       assistantMessagingEnabled: false,
       assistantStartEnabled: false,
+      assistantControlEnabled: false,
     },
     connection,
     summary: null,

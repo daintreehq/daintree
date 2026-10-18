@@ -1,5 +1,7 @@
 import type { ActionRegistry } from "../actionTypes";
 import {
+  HostCallArgsSchema,
+  HostCallResultSchema,
   HostCancelTaskArgsSchema,
   HostCancelTaskResultSchema,
   HostGetTaskArgsSchema,
@@ -219,5 +221,32 @@ export function registerHostMessagingActions(actions: ActionRegistry): void {
     mcpOutputSchema: true,
     mcpAnnotations: READ_ANNOTATIONS,
     run: mainProcessOnly("host.readQuota"),
+  }));
+
+  // Listed to every assistant session in one of this machine's own views,
+  // hosts or not (#13493); each call needs the person's per-host switch.
+  actions.set("host.call", () => ({
+    id: "host.call",
+    title: "Run a tool on a host",
+    description:
+      "Run one of a host's own Daintree tools in one of its projects and get its result. Changes need a window here that controls that project. ambiguous: resend under its callId, which never runs twice.",
+    category: "help",
+    kind: "command",
+    danger: "safe",
+    denyPluginDispatch: true,
+    scope: "renderer",
+    keywords: ["host", "remote", "call", "tool", "relay", "control"],
+    palette: { mode: "hidden" },
+    argsSchema: HostCallArgsSchema,
+    resultSchema: HostCallResultSchema,
+    mcpOutputSchema: true,
+    mcpAnnotations: {
+      readOnlyHint: false,
+      // A resend under its callId is; a new call runs again.
+      idempotentHint: false,
+      destructiveHint: false,
+      openWorldHint: true,
+    },
+    run: mainProcessOnly("host.call"),
   }));
 }

@@ -36,6 +36,7 @@ function entry(id: string, connected: boolean): HostListEntry {
       notificationsEnabled: false,
       assistantMessagingEnabled: false,
       assistantStartEnabled: false,
+      assistantControlEnabled: false,
     },
     connection: connected
       ? { status: "connected", rttMs: 5, handshake: HANDSHAKE }

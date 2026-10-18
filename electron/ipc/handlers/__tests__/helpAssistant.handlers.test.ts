@@ -90,6 +90,7 @@ describe("registerHelpAssistantHandlers", () => {
       loadGlobalHooksAndServers: false,
       daintreeConfirmations: "inherit",
       acceptRemoteMessages: true,
+      acceptRemoteControl: true,
     });
   });
 
@@ -117,6 +118,7 @@ describe("registerHelpAssistantHandlers", () => {
       loadGlobalHooksAndServers: false,
       daintreeConfirmations: "inherit",
       acceptRemoteMessages: true,
+      acceptRemoteControl: true,
     });
   });
 
@@ -468,6 +470,7 @@ describe("registerHelpAssistantHandlers", () => {
       loadGlobalHooksAndServers: false,
       daintreeConfirmations: "inherit",
       acceptRemoteMessages: true,
+      acceptRemoteControl: true,
     });
   });
 

@@ -93,6 +93,7 @@ const SAVE_GROUP_BY_KEY: Record<keyof HelpAssistantSettings, SaveGroup> = {
   auditRetention: "privacy",
   loadGlobalHooksAndServers: "content",
   acceptRemoteMessages: "security",
+  acceptRemoteControl: "security",
 };
 
 const SETTING_KEYS: readonly (keyof HelpAssistantSettings)[] = [
@@ -109,6 +110,7 @@ const SETTING_KEYS: readonly (keyof HelpAssistantSettings)[] = [
   "auditRetention",
   "loadGlobalHooksAndServers",
   "acceptRemoteMessages",
+  "acceptRemoteControl",
 ];
 
 function patchedKeys(patch: Partial<HelpAssistantSettings>): (keyof HelpAssistantSettings)[] {
@@ -188,6 +190,7 @@ const SETTING_LABEL: Record<keyof HelpAssistantSettings, string> = {
   loadGlobalHooksAndServers: "Load my MCP servers and hooks",
   daintreeConfirmations: "Daintree confirmations",
   acceptRemoteMessages: "Accept messages from other machines by default",
+  acceptRemoteControl: "Let other machines' assistants work here",
 };
 
 interface SaveFailure {
@@ -209,6 +212,7 @@ const DEFAULT_SETTINGS: HelpAssistantSettings = {
   loadGlobalHooksAndServers: false,
   daintreeConfirmations: "inherit",
   acceptRemoteMessages: true,
+  acceptRemoteControl: true,
 };
 
 // Radix Select rejects an empty-string item value, so the "use the CLI default"
@@ -896,6 +900,10 @@ export function DaintreeAssistantSettingsTab() {
     void persist({ acceptRemoteMessages: !settings.acceptRemoteMessages });
   };
 
+  const toggleAcceptRemoteControl = () => {
+    void persist({ acceptRemoteControl: !settings.acceptRemoteControl });
+  };
+
   const toggleLoadGlobalHooksAndServers = () => {
     void persist({ loadGlobalHooksAndServers: !settings.loadGlobalHooksAndServers });
   };
@@ -1338,6 +1346,18 @@ export function DaintreeAssistantSettingsTab() {
               isModified={settings.acceptRemoteMessages !== DEFAULT_SETTINGS.acceptRemoteMessages}
               onReset={() =>
                 void persist({ acceptRemoteMessages: DEFAULT_SETTINGS.acceptRemoteMessages })
+              }
+            />
+            <SettingsSwitchCard
+              id="assistant-accept-remote-control"
+              title="Let other machines' assistants work here"
+              subtitle="An assistant on a machine connected to this one as its host can run Daintree's tools here, within this machine's own tool sets. Changing a project needs that machine's window to control it."
+              isEnabled={settings.acceptRemoteControl}
+              onChange={toggleAcceptRemoteControl}
+              disabled={settingsUnavailable}
+              isModified={settings.acceptRemoteControl !== DEFAULT_SETTINGS.acceptRemoteControl}
+              onReset={() =>
+                void persist({ acceptRemoteControl: DEFAULT_SETTINGS.acceptRemoteControl })
               }
             />
           </SettingsGroup>

@@ -136,6 +136,28 @@ describe("ProjectCommandService.run", () => {
     expect(spawnMock).not.toHaveBeenCalled();
   });
 
+  it("asks its caller once more after resolving the project, and spawns nothing when refused (#13493)", async () => {
+    let resolved = false;
+    const service = new ProjectCommandService({
+      getProject: async (id) => ({ id, path: "/repo" }),
+      getEnvLayers: async () => {
+        resolved = true;
+        return { global: {}, project: {} };
+      },
+    });
+    const authorize = vi.fn(() => {
+      // Asked only once everything it waited on is done.
+      expect(resolved).toBe(true);
+      throw new Error("another machine has control now");
+    });
+
+    await expect(
+      service.run({ projectId: "proj-1", command: "git status" }, { authorize })
+    ).rejects.toThrow("another machine has control now");
+    expect(authorize).toHaveBeenCalledTimes(1);
+    expect(spawnMock).not.toHaveBeenCalled();
+  });
+
   it("lets several commands share a directory and refuses past the host-wide bound", async () => {
     const service = makeService();
     const running = Array.from({ length: PROJECT_COMMAND_MAX_CONCURRENT }, () =>

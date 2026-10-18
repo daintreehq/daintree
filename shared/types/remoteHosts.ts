@@ -288,6 +288,12 @@ export interface HostDescriptor {
    * an SSH host like messaging, and only acts with messaging on.
    */
   assistantStartEnabled: boolean;
+  /**
+   * Whether this Shell's assistants may run the host's own Daintree tools
+   * there through `host.call` (#13493). On for an SSH host; a host the person
+   * turned messaging off for starts with it off. Independent of messaging.
+   */
+  assistantControlEnabled: boolean;
 }
 
 export type HostConnectionState =

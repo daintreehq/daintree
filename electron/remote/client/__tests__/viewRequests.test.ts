@@ -4,6 +4,8 @@ const m = vi.hoisted(() => ({
   dispatchActionForHost: vi.fn(),
   requestManifestForHost: vi.fn(),
   showHostNotification: vi.fn(() => true),
+  // Hosts this Shell's assistant has a `host.call` out to right now (#13493).
+  callsOut: new Set<string>(),
 }));
 
 vi.mock("../../../services/McpServerService.js", () => ({
@@ -16,7 +18,9 @@ vi.mock("../../runtime.js", () => ({
   getRemoteService: (key: string) =>
     key === "remoteHostsClient"
       ? { list: () => [{ descriptor: { id: "studio", name: "Studio Mac" } }] }
-      : undefined,
+      : key === "hostCallRelayClient"
+        ? { hasCallInFlight: (hostId: string) => m.callsOut.has(hostId) }
+        : undefined,
 }));
 vi.mock("../../hybrid/notifications.js", () => ({
   NOTIFICATION_SHOW_METHOD: "notification.show",
@@ -36,6 +40,7 @@ function ask(method: string, payload: unknown = {}) {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  m.callsOut.clear();
   _resetReverseRequestMethodsForTesting();
 });
 
@@ -102,6 +107,36 @@ describe("view reverse requests", () => {
       result: { ok: true, result: 1 },
       confirmationDecision: "approved",
     });
+  });
+
+  it("names this Shell's own assistant as asking only while it has a call out to that host (#13493)", async () => {
+    installViewReverseRequests();
+    m.dispatchActionForHost.mockResolvedValue({ result: { ok: true, result: 1 } });
+    const relayed = {
+      actionId: "worktree.delete",
+      args: { worktreeId: "/srv/wt" },
+      confirmed: false,
+      sessionOrigin: "external",
+      relayed: true,
+    };
+    const askedBy = () => m.dispatchActionForHost.mock.calls.at(-1)?.[7];
+
+    // A host can say anything; with no call out, it is just an agent there.
+    await ask("mcp:dispatch-action", relayed);
+    expect(askedBy()).toEqual({ userAgent: 'Agent on host "Studio Mac"', token4LastChars: "" });
+
+    m.callsOut.add("studio");
+    await ask("mcp:dispatch-action", relayed);
+    expect(askedBy()).toEqual({
+      userAgent: 'Your assistant, through host "Studio Mac"',
+      token4LastChars: "",
+    });
+    // Still never pre-confirmed: the person answers this Shell's own dialog.
+    expect(m.dispatchActionForHost.mock.calls.at(-1)?.[3]).toBe(false);
+
+    m.callsOut.clear();
+    await ask("mcp:dispatch-action", relayed);
+    expect(askedBy()).toEqual({ userAgent: 'Agent on host "Studio Mac"', token4LastChars: "" });
   });
 
   it("runs the host assistant's call under its Never ask without this Shell's dialog", async () => {

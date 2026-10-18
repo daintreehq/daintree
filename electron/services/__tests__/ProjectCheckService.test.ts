@@ -184,6 +184,26 @@ describe("ProjectCheckService.runCheck — refusing to start", () => {
     expect(spawnMock).not.toHaveBeenCalled();
   });
 
+  it("asks its caller once more after resolving the runner, and spawns nothing when refused (#13493)", async () => {
+    const service = new ProjectCheckService();
+    let resolved = false;
+    detectMock.mockImplementation(async () => {
+      resolved = true;
+      return [{ id: "npm-test", name: "test", command: "npm run test" }];
+    });
+    const authorize = vi.fn(() => {
+      // Asked only once everything it waited on is done.
+      expect(resolved).toBe(true);
+      throw new Error("another machine has control now");
+    });
+
+    await expect(
+      service.runCheck({ projectId: "proj-1", runnerId: "npm-test" }, { authorize })
+    ).rejects.toThrow("another machine has control now");
+    expect(authorize).toHaveBeenCalledTimes(1);
+    expect(spawnMock).not.toHaveBeenCalled();
+  });
+
   it("throws for an unknown runner and enumerates the valid ids", async () => {
     const service = new ProjectCheckService();
     await expect(service.runCheck({ projectId: "proj-1", runnerId: "npm-nope" })).rejects.toThrow(

@@ -2802,6 +2802,13 @@ export interface HelpAssistantSettings {
    * panel turns one run off. Machine-owned; never travels. Defaults to true.
    */
   acceptRemoteMessages: boolean;
+  /**
+   * Whether this machine, as a host, runs its own Daintree tools for another
+   * machine's assistant through `host.call` (#13493). Each call still passes
+   * this machine's own tiers and drive lease. Machine-owned; never travels.
+   * Defaults to true.
+   */
+  acceptRemoteControl: boolean;
 }
 
 /**

@@ -75,6 +75,7 @@ function entry(spec: HostSpec): HostListEntry {
       notificationsEnabled: false,
       assistantMessagingEnabled: false,
       assistantStartEnabled: false,
+      assistantControlEnabled: false,
     },
     connection: spec.connection,
     summary: spec.summary ? summary(spec.id, platform, spec.summary) : null,

@@ -1,11 +1,15 @@
 import { randomUUID } from "node:crypto";
 import { MAX_ASSISTANT_SLOTS, assistantSlotKey } from "../../../shared/config/assistantSlots.js";
+import { PROJECT_CHECK_DEFAULT_TIMEOUT_MS } from "../../../shared/types/projectCheck.js";
+import { REPLY_WAIT_DEFAULT_SECONDS } from "../../../shared/types/replyWait.js";
 import {
   HOST_LIST_PROJECTS_MAX,
   HOST_SEND_MAX_WAIT_MS,
   HOST_TASK_PAGE_MAX,
   HOST_TASK_REPLIES_MAX_BYTES,
   type HostAssistantLane,
+  type HostCallArgs,
+  type HostCallResult,
   type HostCancelTaskArgs,
   type HostCancelTaskResult,
   type HostGetTaskArgs,
@@ -49,7 +53,14 @@ import type {
 import type { AssistantShellRoutes } from "./AssistantShellRoutes.js";
 import { inboxBodyFits } from "./AssistantInbox.js";
 import type { HostAssistantStarter, HostStartRefusal } from "./HostAssistantStarter.js";
-import type { LaneList } from "./linkMethods.js";
+import {
+  MAX_RELAY_ARGS_BYTES,
+  MAX_RELAY_RUN_MS,
+  type LaneList,
+  type McpCallAnswer,
+  type McpCallPayload,
+  type RelayRefusal,
+} from "./linkMethods.js";
 import { HOST_MESSAGING_PAUSED_MESSAGE, LANE_NOT_RUNNING_MESSAGE } from "./hostExchanges.js";
 import { TokenBucket } from "./tokenBucket.js";
 
@@ -78,8 +89,24 @@ export interface HubMessagingRuntimeDeps {
   /** Read at each call: the client is installed with the database and may come later. */
   client(): Pick<
     AssistantExchangeClient,
-    "listLanes" | "readQuota" | "send" | "get" | "getResponses" | "listChanges" | "cancel" | "known"
+    | "listLanes"
+    | "readQuota"
+    | "send"
+    | "get"
+    | "getResponses"
+    | "listChanges"
+    | "cancel"
+    | "known"
+    | "relayCall"
   > | null;
+  /**
+   * Whether a help session's assistant works through one of this machine's own
+   * views, from its provisioning, before its run is confirmed; false for one a
+   * remote Shell's view runs here. Listing `host.call` goes by it.
+   */
+  inLocalView?(helpSessionId: string): boolean;
+  /** The person's per-host "assistant control" switch, read at each call (#13493). */
+  controlEnabled?(hostId: HostId): boolean;
   hosts(): ObservedHost[];
   /** A connected host's projects, most used first; names what its assistants work in. */
   listHostProjects?(hostId: HostId): Promise<readonly HostProjectSummary[]>;
@@ -157,6 +184,72 @@ const START_REFUSALS: Record<
       "The assistant runs, but couldn't be enrolled for this Shell. List the host's assistants to see it.",
   },
 };
+const CONTROL_OFF_DETAIL =
+  "Assistant control is turned off for this host in this Shell's host settings. Only the person can turn it on.";
+const CALL_NO_HOST_DETAIL = "This Shell has no host with that id. List the hosts it knows.";
+const CALL_AMBIGUOUS_DETAIL =
+  "No answer came back, so the call may have reached the host and run. Resend it under this callId, which never runs it twice.";
+const CALL_NOT_SENT_DETAIL =
+  "The host can't be reached right now, so nothing was sent. Try again once it is back.";
+const CALL_RESEND_DISCONNECTED_DETAIL =
+  "The host can't be reached right now. Resend under the same callId once it is back; it never runs twice.";
+const CALL_UNKNOWN_DETAIL =
+  "The host no longer holds a record of this callId, so it may or may not have run. Check what it would have changed before running it again as a new call.";
+const CALL_CONFLICT_DETAIL =
+  "That callId was already used for a different call. Resend only the exact call it named, or make a new call.";
+const CALL_TOO_LARGE_DETAIL = "The call's arguments are too large to send. Nothing was sent.";
+const CALL_SENDER_REFUSED_DETAIL =
+  "The host refused this Shell's identity on the current connection. Try again shortly.";
+const RELAY_REFUSAL_DETAILS: Record<
+  RelayRefusal,
+  { code: Exclude<HostMessagingOutcomeCode, "ok">; detail: string }
+> = {
+  "control-off": {
+    code: "policy_rejected",
+    detail:
+      "The host refuses tools run for other machines' assistants: its own setting is off. Nothing was run.",
+  },
+  "no-project": {
+    code: "not_found",
+    detail:
+      "The host has no project with that id. Nothing was run. List its assistants for its projects.",
+  },
+  "server-off": {
+    code: "unsupported",
+    detail: "The host's Daintree MCP server is off, so it can't run tools. Nothing was run.",
+  },
+};
+
+/** Least a relayed call is given: a dispatch, a confirmation the person may take, and the trip. */
+const RELAY_MIN_RUN_MS = 90_000;
+/** Room past what a tool asks for, for its own dispatch and its answer to come back. */
+const RELAY_RUN_MARGIN_MS = 30_000;
+/** How much longer than the host's own deadline the Shell waits for the answer. */
+const RELAY_ANSWER_GRACE_MS = 15_000;
+
+/**
+ * How long a relayed call may run on its host: above the longest wait the
+ * call's own arguments ask for, so a long check or a held reply isn't cut off
+ * and reported as lost.
+ */
+export function relayRunMs(tool: string, args: Record<string, unknown>): number {
+  let wanted = 0;
+  const timeoutMs = args.timeoutMs;
+  if (typeof timeoutMs === "number" && Number.isFinite(timeoutMs) && timeoutMs > 0) {
+    wanted = timeoutMs;
+  } else if (tool === "project.runCheck") {
+    wanted = PROJECT_CHECK_DEFAULT_TIMEOUT_MS;
+  }
+  if (args.waitForReply === true) {
+    const seconds =
+      typeof args.waitSeconds === "number" && Number.isFinite(args.waitSeconds)
+        ? args.waitSeconds
+        : REPLY_WAIT_DEFAULT_SECONDS;
+    wanted = Math.max(wanted, seconds * 1000);
+  }
+  return Math.min(MAX_RELAY_RUN_MS, Math.max(RELAY_MIN_RUN_MS, wanted + RELAY_RUN_MARGIN_MS));
+}
+
 const QUOTA_UNSUPPORTED_DETAIL =
   "This host can't report its Codex quota. It may need a newer Daintree.";
 const QUOTA_NO_ANSWER_DETAIL = "The host didn't answer in time. Try again shortly.";
@@ -431,6 +524,8 @@ export class HubMessagingRuntime implements HostMessagingRuntimeHandle {
   private readonly sendBucket: TokenBucket;
   private readonly readBucket: TokenBucket;
   private readonly lanes = new Map<HostId, { lanes: HostAssistantLane[]; at: number }>();
+  /** Relayed calls out to each host right now, for the host's dialogs to be believed by. */
+  private readonly callsOut = new Map<HostId, number>();
   private waits = 0;
   private disposed = false;
 
@@ -475,17 +570,136 @@ export class HubMessagingRuntime implements HostMessagingRuntimeHandle {
     );
   }
 
+  /**
+   * Whether this session is offered `host.call` (#13493): any live assistant
+   * session working through one of this machine's own views, from its start
+   * and whether or not a host exists yet, since a client that reads its tool
+   * list once never learns of a host added later. One a remote Shell's view
+   * runs here is never offered it: a host relaying through this machine could
+   * reach every other. The call itself still asks of the running run.
+   */
+  isCallReachable(helpSessionId: string): boolean {
+    return (
+      !this.disposed &&
+      this.deps.policy.isSupported() &&
+      this.deps.getSessionLane(helpSessionId) !== null &&
+      this.deps.inLocalView?.(helpSessionId) === true
+    );
+  }
+
+  /** Whether one of this Shell's assistants has a call out to `hostId` right now. */
+  hasCallInFlight(hostId: HostId): boolean {
+    return (this.callsOut.get(hostId) ?? 0) > 0;
+  }
+
   /** Stops outstanding waits; exchanges on hosts are left as they are. */
   dispose(): void {
     this.disposed = true;
     this.lanes.clear();
+    this.callsOut.clear();
+  }
+
+  /**
+   * Runs one of a host's own Daintree tools for the calling assistant
+   * (#13493). The host admits it through its own MCP gates as this Shell's
+   * sender and the caller's help session, at the caller's tier, so it can do
+   * no more there than the assistant could here, and less where the host says
+   * so. Needs only the person's "assistant control" switch for the host, not
+   * messaging. A first send mints its callId; a callId given back is always a
+   * resend, which the host never runs twice and never starts if it holds no
+   * record of it.
+   */
+  call(
+    helpSessionId: string,
+    args: HostCallArgs,
+    context: { tier: "core" | "full" }
+  ): Promise<HostMessagingOutcome<HostCallResult>> {
+    return this.settle(helpSessionId, async () => {
+      const resend = args.callId !== undefined;
+      const callId = args.callId ?? this.newId();
+      const sent = { callId, result: null };
+      // A first send refused here sent nothing, so there is no call to follow.
+      const unsent = { callId: resend ? callId : null, result: null };
+      const host = this.deps.hosts().find((candidate) => candidate.hostId === args.hostId);
+      if (!host) return { ...this.outcomeWith("not_found", CALL_NO_HOST_DETAIL), ...unsent };
+      if (this.deps.controlEnabled?.(args.hostId) !== true) {
+        return { ...this.outcomeWith("opted_out", CONTROL_OFF_DETAIL), ...unsent };
+      }
+      const toolArgs = args.args ?? {};
+      if (Buffer.byteLength(JSON.stringify(toolArgs), "utf8") > MAX_RELAY_ARGS_BYTES) {
+        return { ...this.outcomeWith("too_large", CALL_TOO_LARGE_DETAIL), ...unsent };
+      }
+      const runMs = relayRunMs(args.tool, toolArgs);
+      const payload: McpCallPayload = {
+        helpSessionId,
+        projectId: args.projectId,
+        tier: context.tier,
+        callId,
+        resend,
+        tool: args.tool,
+        args: toolArgs,
+        runMs,
+      };
+      this.callsOut.set(args.hostId, (this.callsOut.get(args.hostId) ?? 0) + 1);
+      let answer: McpCallAnswer;
+      try {
+        answer = await this.requireClient().relayCall(
+          args.hostId,
+          payload,
+          runMs + RELAY_ANSWER_GRACE_MS
+        );
+      } catch (error) {
+        switch (codeOf(error)) {
+          case "OUTCOME_UNKNOWN":
+            return { ...this.outcomeWith("ambiguous", CALL_AMBIGUOUS_DETAIL), ...sent };
+          // Never written to the link: a first send is simply not sent.
+          case "HOST_DISCONNECTED":
+            return resend
+              ? { ...this.outcomeWith("disconnected", CALL_RESEND_DISCONNECTED_DETAIL), ...sent }
+              : { ...this.outcomeWith("disconnected", CALL_NOT_SENT_DETAIL), ...unsent };
+          case "RATE_LIMITED":
+            return { ...this.outcome("rate_limited", 1_000), ...unsent };
+          case "UNSUPPORTED":
+            return { ...this.outcomeWith("unsupported", unsupportedCallDetail(host)), ...unsent };
+          case "PERMISSION":
+            return {
+              ...this.outcomeWith("policy_rejected", CALL_SENDER_REFUSED_DETAIL),
+              ...unsent,
+            };
+          default:
+            if (error instanceof RefusalError) throw error;
+            // Sent, then something unreadable came back: it may have run.
+            console.warn("[HubMessaging] A relayed call ended without a known outcome:", error);
+            return { ...this.outcomeWith("ambiguous", CALL_AMBIGUOUS_DETAIL), ...sent };
+        }
+      } finally {
+        const left = (this.callsOut.get(args.hostId) ?? 1) - 1;
+        if (left > 0) this.callsOut.set(args.hostId, left);
+        else this.callsOut.delete(args.hostId);
+      }
+      switch (answer.status) {
+        case "done":
+          return { ...this.ok(), callId, result: answer.result };
+        case "unknown":
+          return { ...this.outcomeWith("expired", CALL_UNKNOWN_DETAIL), ...sent };
+        case "conflict":
+          return { ...this.outcomeWith("conflict", CALL_CONFLICT_DETAIL), ...sent };
+        case "refused": {
+          const { code, detail } = RELAY_REFUSAL_DETAILS[answer.reason];
+          return { ...this.outcomeWith(code, detail), ...sent };
+        }
+      }
+    });
   }
 
   list(helpSessionId: string): Promise<HostMessagingOutcome<HostListResult>> {
     return this.settle(helpSessionId, async () => {
       const hosts = this.deps
         .hosts()
-        .filter((host) => host.assistantMessagingEnabled)
+        .filter(
+          (host) =>
+            host.assistantMessagingEnabled || this.deps.controlEnabled?.(host.hostId) === true
+        )
         .map((host): HostListEntry => {
           const summary = host.summary;
           const connected = host.connection.status === "connected";
@@ -509,6 +723,7 @@ export class HubMessagingRuntime implements HostMessagingRuntimeHandle {
               connected && summary?.agentsObserved ? { ...summary.agentsObserved } : null,
             lanes: observed ? observed.lanes.map((lane) => ({ ...lane })) : null,
             lanesObservedAt: observed ? observed.at : null,
+            control: this.deps.controlEnabled?.(host.hostId) === true,
           };
         });
       return { hosts };
@@ -972,6 +1187,14 @@ export class HubMessagingRuntime implements HostMessagingRuntimeHandle {
       return { ok: false, code: "UNAVAILABLE", message: ERROR_MESSAGE };
     }
   }
+}
+
+/** A host that can't run relayed calls, named with the version it said it runs. */
+function unsupportedCallDetail(host: ObservedHost): string {
+  const version = host.connection.status === "connected" ? host.connection.handshake.version : null;
+  return version !== null
+    ? `${host.name} runs Daintree ${version}, which can't run tools for other machines' assistants. It needs a newer Daintree.`
+    : `${host.name} can't run tools for other machines' assistants. It may need a newer Daintree.`;
 }
 
 /**

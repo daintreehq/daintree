@@ -507,7 +507,12 @@ describe("LLM-facing tool descriptions (#11542)", () => {
   // What the prose has to carry is that the command runs as the host's user,
   // that cwd is where it starts and not a sandbox, and that a non-zero exit is
   // a result. Assistant at full only, off the external surface.
-  const MAX_COHORT_TOTAL_BYTES = 22_300;
+  // 22_300 → 22_500 for `host.call` (#13493), measured at 22_458 B. What the
+  // prose has to carry is that it runs a host's own tool in one of its
+  // projects, that a change needs a window here controlling that project, and
+  // that an ambiguous call is resent under its callId, which never runs twice.
+  // In-app only, off the external surface.
+  const MAX_COHORT_TOTAL_BYTES = 22_500;
 
   const ARG_SECTION = /\b(?:args?|arguments?|parameters?)\s*(?:\([^)]*\))?\s*:|\btakes no args\b/i;
 
@@ -1480,6 +1485,7 @@ describe("plugin-dispatch injection guard (#10558)", () => {
       "host.cancelTask": { hostId: "h-placeholder", taskId: "task-placeholder" },
       "host.startAssistant": { hostId: "h-placeholder", projectId: "p-placeholder" },
       "host.readQuota": { hostId: "h-placeholder" },
+      "host.call": { hostId: "h-placeholder", projectId: "p-placeholder", tool: "terminal.list" },
     };
 
     const failures: string[] = [];
@@ -1538,5 +1544,20 @@ describe("ActionService.list() snapshot", () => {
       .sort((a, b) => a.id.localeCompare(b.id));
 
     expect(entries).toMatchSnapshot();
+  });
+});
+
+describe("main-process runners under the relay's drive rule (#13493)", () => {
+  // A relayed call to a renderer action is classed a read only by its
+  // advertised readOnlyHint; these run in main and are lease-checked as writes
+  // there. Neither may ever advertise itself as a read.
+  it("never advertises project.runCheck or project.runCommand as read-only", async () => {
+    const { registry } = await createRegistryWithAudit();
+    for (const id of ["project.runCheck", "project.runCommand"] as const) {
+      const def = registry.get(id as ActionId)?.();
+      expect(def, id).toBeDefined();
+      expect(def?.kind, id).not.toBe("query");
+      expect(def?.mcpAnnotations?.readOnlyHint, id).toBe(false);
+    }
   });
 });

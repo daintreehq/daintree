@@ -30,7 +30,7 @@ import {
   ASSISTANT_MESSAGING_TOOL_IDS,
   ASSISTANT_SEND_MESSAGE_TOOL,
 } from "../../../shared/types/assistantMessaging.js";
-import { HOST_MESSAGING_TOOL_IDS } from "../../../shared/types/hostMessaging.js";
+import { HOST_CALL_TOOL, HOST_MESSAGING_TOOL_IDS } from "../../../shared/types/hostMessaging.js";
 
 export { deriveBand, BAND_OVERRIDES };
 
@@ -158,10 +158,35 @@ export function shouldExposeTool(
   if (HOST_MESSAGING_TOOL_IDS.has(entry.id) && session.hubMessaging !== true) {
     return false;
   }
+  if (entry.id === HOST_CALL_TOOL && session.hostCall !== true) {
+    return false;
+  }
+  if (session.relay === true && isWithheldFromRelaySession(entry.id)) {
+    return false;
+  }
   return (
     isTierPermitted(tier, entry.id, session.rendererOwnedOrigin === true) ||
     isApprovalRequestable(tier, entry.id, session.paneApproval === true)
   );
+}
+
+/** This machine's own assistant-panel tools, which mean nothing to another machine's assistant. */
+const RELAY_WITHHELD_TOOL_IDS: ReadonlySet<string> = new Set([
+  "help.displayImage",
+  "assistant.getInbox",
+  "assistant.reply",
+  "assistant.sendMessage",
+]);
+
+/**
+ * What a session another machine's assistant reaches through its Shell
+ * (#13493) is never given, at listing, discovery and dispatch alike, whatever
+ * its tier or grants: every `host.*` tool, so a host can never reach through
+ * here into another machine and a relayed call never chains, and this
+ * machine's own assistant-panel tools.
+ */
+export function isWithheldFromRelaySession(actionId: string): boolean {
+  return actionId.startsWith("host.") || RELAY_WITHHELD_TOOL_IDS.has(actionId);
 }
 
 export interface SessionSurfacePolicy {
@@ -210,6 +235,18 @@ export interface SessionSurfacePolicy {
    * read live per listing, and as `=== true`.
    */
   hubMessaging?: boolean;
+  /**
+   * Whether this session is one of this machine's own assistants, hosts or
+   * not (#13493). Only then is `host.call` offered; read live per listing,
+   * and as `=== true`.
+   */
+  hostCall?: boolean;
+  /**
+   * Whether this session is another machine's assistant reaching this host
+   * through its Shell (#13493); see {@link isWithheldFromRelaySession}. Read as
+   * `=== true`.
+   */
+  relay?: boolean;
 }
 
 /**
