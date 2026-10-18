@@ -152,8 +152,13 @@ const NOTICE_LINK_HOLD_MS = 2 * 60 * 60_000;
 const MAX_SEEN_NOTICES = 1024;
 /** Host terminals whose recent prompts from here are remembered, for superseding. */
 const MAX_PROMPTED_TERMINALS = 512;
-/** Prompts remembered per host terminal, newest kept. */
-const MAX_PROMPTS_PER_TERMINAL = 8;
+/**
+ * Prompts remembered per host terminal, newest kept: ones that ran apart from
+ * ones still unanswered, so a burst of calls refused later never pushes out
+ * the evidence that one ran.
+ */
+const MAX_RAN_PROMPTS_PER_TERMINAL = 4;
+const MAX_PENDING_PROMPTS_PER_TERMINAL = 32;
 
 /** A call that may arm notices on its host, and the run here that made it. */
 interface NoticePin {
@@ -184,6 +189,14 @@ interface NotedCall {
 }
 
 const NOTHING_NOTED: NotedCall = { ran: () => {}, notRun: () => {} };
+
+function trimMarks(marks: readonly PromptMark[]): PromptMark[] {
+  const kept = new Set([
+    ...marks.filter((mark) => mark.ran).slice(-MAX_RAN_PROMPTS_PER_TERMINAL),
+    ...marks.filter((mark) => !mark.ran).slice(-MAX_PENDING_PROMPTS_PER_TERMINAL),
+  ]);
+  return marks.filter((mark) => kept.has(mark));
+}
 
 /**
  * The host terminals a prompt, or keys with `notify`, makes an undelivered
@@ -803,7 +816,7 @@ export class HubMessagingRuntime implements HostMessagingRuntimeHandle {
       remember(
         this.prompted,
         key,
-        [...(this.prompted.get(key) ?? []), mark].slice(-MAX_PROMPTS_PER_TERMINAL),
+        trimMarks([...(this.prompted.get(key) ?? []), mark]),
         MAX_PROMPTED_TERMINALS
       );
       marks.push(mark);

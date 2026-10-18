@@ -284,6 +284,27 @@ describe("HubMessagingRuntime notices from hosts (#13500)", () => {
     expect(queued[0]!.wake.recheck()).toEqual({ kind: "ready" });
   });
 
+  it("keeps a prompt that ran as evidence through a burst of later prompts refused", async () => {
+    await runtime.call("a", LAUNCH, { tier: "core" });
+    runtime.receiveNotices("studio", { notices: [notice()] });
+    now += 1_000;
+    const prompt = {
+      ...LAUNCH,
+      tool: "terminal.sendCommandOwned",
+      args: { terminalId: "host-t-1", command: "x" },
+    };
+    await runtime.call("a", prompt, { tier: "core" });
+    const answers: Array<(value: McpCallAnswer) => void> = [];
+    relayCall.mockImplementation(
+      () => new Promise<McpCallAnswer>((resolve) => answers.push(resolve))
+    );
+    const burst = Array.from({ length: 10 }, () => runtime.call("a", prompt, { tier: "core" }));
+    await vi.waitFor(() => expect(answers).toHaveLength(10));
+    for (const answer of answers) answer({ status: "refused", reason: "control-off" });
+    await Promise.all(burst);
+    expect(queued[0]!.wake.recheck()).toEqual({ kind: "unavailable", reason: "superseded" });
+  });
+
   it("lets a batch prompt to the terminal make a waiting notice stale", async () => {
     await runtime.call("a", LAUNCH, { tier: "core" });
     runtime.receiveNotices("studio", { notices: [notice()] });
