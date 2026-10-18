@@ -25,7 +25,9 @@ const electronMock = vi.hoisted(() => {
     static isSupported = vi.fn(() => true);
     handlers: Record<string, (...args: unknown[]) => void> = {};
     show = vi.fn();
-    removeAllListeners = vi.fn();
+    removeAllListeners = vi.fn(() => {
+      this.handlers = {};
+    });
     // Like Electron, closing a shown notification emits "close".
     close = vi.fn(() => this.trigger("close"));
     constructor(public options: { title: string; body: string; silent?: boolean }) {
@@ -769,6 +771,29 @@ describe("NotificationService", () => {
       expect(first.removeAllListeners).toHaveBeenCalled();
       expect(second.close).not.toHaveBeenCalled();
       expect(second.show).toHaveBeenCalledTimes(1);
+    });
+
+    it("a replaced banner's late click runs nothing; only its successor's does", () => {
+      const first = vi.fn();
+      const second = vi.fn();
+      notificationService.showNativeNotification("t", "a", { replaceKey: "k", onClick: first });
+      const old = electronMock.notificationInstances.at(-1)!;
+      notificationService.showNativeNotification("t", "b", { replaceKey: "k", onClick: second });
+
+      old.trigger("click");
+      expect(first).not.toHaveBeenCalled();
+      electronMock.notificationInstances.at(-1)!.trigger("click");
+      expect(second).toHaveBeenCalledTimes(1);
+    });
+
+    it("keeps a keyed banner that timed out into Action Center replaceable", () => {
+      notificationService.showNativeNotification("t", "a", { replaceKey: "k" });
+      const first = electronMock.notificationInstances.at(-1)!;
+      first.trigger("close", { reason: "timedOut" });
+
+      notificationService.showNativeNotification("t", "b", { replaceKey: "k" });
+
+      expect(first.close).toHaveBeenCalledTimes(1);
     });
 
     it("leaves banners under other keys, and unkeyed ones, alone", () => {

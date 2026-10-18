@@ -89,7 +89,7 @@ describe("useMainProcessToastListener", () => {
         message: "Approve",
         pluginActions: [
           { label: "Open", actionId: "acme.openRun", args: { runId: "r1" } },
-          { label: "Skip", actionId: "acme.skipRun" },
+          { label: "Undo", actionId: "acme.undoRun" },
         ],
         replaceKey: "plugin:acme:k",
       });
@@ -101,11 +101,13 @@ describe("useMainProcessToastListener", () => {
     expect(payload.urgent).toBe(false);
     expect(payload.actions?.map((a) => [a.label, a.actionId, a.actionArgs, a.variant])).toEqual([
       ["Open", "acme.openRun", { runId: "r1" }, "primary"],
-      ["Skip", "acme.skipRun", undefined, "secondary"],
+      ["Undo", "acme.undoRun", undefined, "secondary"],
     ]);
 
     await payload.actions![0]!.onClick();
     expect(dispatchMock).toHaveBeenCalledWith("acme.openRun", { runId: "r1" }, { source: "user" });
+    await payload.actions![1]!.onClick();
+    expect(dispatchMock).toHaveBeenLastCalledWith("acme.undoRun", undefined, { source: "user" });
   });
 
   it("leaves an ordinary toast without plugin buttons or replacement", () => {

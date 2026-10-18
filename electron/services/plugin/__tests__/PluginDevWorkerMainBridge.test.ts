@@ -68,6 +68,7 @@ function makeHost() {
     setToolbarButtonBadge: vi.fn(async () => {}),
     setPanelMenuItems: vi.fn(async () => {}),
     showToast: vi.fn(async () => {}),
+    notify: vi.fn(async (_options: unknown) => ({ id: "n-1" })),
     showQuickPick: vi.fn(async (): Promise<unknown> => undefined),
     sendToAgent: vi.fn(async (): Promise<unknown> => ({ status: "drafted", terminalId: "t-1" })),
     agents: {
@@ -271,6 +272,26 @@ describe("PluginDevWorkerMainBridge", () => {
       { projectId: "p-b" }
     );
     expect(host.dispatch).toHaveBeenNthCalledWith(2, "terminal.focus", undefined, undefined);
+  });
+
+  it("relays notify options whole, unknown keys included, and returns the host's id (#13505)", async () => {
+    const { host, workerHost } = makeBridge();
+    const options = {
+      title: "t",
+      body: "b",
+      actions: [{ id: "o", label: "Open", actionId: "acme.demo.open", extra: true }],
+      sound: true,
+    };
+    workerHost.emit("worker-message", {
+      type: "host-call",
+      requestId: "c-n",
+      method: "notify",
+      params: { options },
+    });
+    await flush();
+    expect(host.notify).toHaveBeenCalledWith(options);
+    const result = workerHost.sent.find((m) => m.type === "host-result" && m.requestId === "c-n");
+    expect(result).toMatchObject({ ok: true, result: { id: "n-1" } });
   });
 
   it("relays db.resolve with only the database id", async () => {

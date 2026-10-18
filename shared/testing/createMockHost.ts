@@ -644,6 +644,17 @@ function validateToastOptions(opts: PluginToastOptions): void {
 
 const NOTIFY_OPTION_KEYS = new Set(["title", "body", "actions", "os", "dedupeKey"]);
 const NOTIFY_ACTION_KEYS = new Set(["id", "label", "actionId", "args"]);
+const NOTIFY_ARGS_MAX_BYTES = 4096;
+
+function isNotifyArgs(args: unknown): boolean {
+  if (args === null || typeof args !== "object" || Array.isArray(args)) return false;
+  try {
+    const json = JSON.stringify(args);
+    return json !== undefined && new TextEncoder().encode(json).length <= NOTIFY_ARGS_MAX_BYTES;
+  } catch {
+    return false;
+  }
+}
 
 /**
  * Validate `host.notify` options against the constraints production's
@@ -679,19 +690,26 @@ function validateNotifyOptions(
         issues.push(`actions: at most ${PLUGIN_NOTIFY_MAX_ACTIONS} entries`);
       }
       const ids = new Set<string>();
-      opts.actions.forEach((action, i) => {
-        for (const key of Object.keys(action ?? {})) {
+      for (let i = 0; i < opts.actions.length; i++) {
+        const action = opts.actions[i];
+        if (!action || typeof action !== "object") {
+          issues.push(`actions.${i}: must be an object`);
+          continue;
+        }
+        for (const key of Object.keys(action)) {
           if (!NOTIFY_ACTION_KEYS.has(key)) issues.push(`actions.${i}.${key}: unrecognized option`);
         }
-        text(`actions.${i}.id`, action?.id, 64);
-        text(`actions.${i}.label`, action?.label, 40);
-        if (typeof action?.id === "string") {
-          if (ids.has(action.id)) issues.push("actions: action ids must be unique");
-          ids.add(action.id);
+        text(`actions.${i}.id`, action.id, 64);
+        text(`actions.${i}.label`, action.label, 40);
+        if (typeof action.id === "string") {
+          const id = action.id.trim();
+          if (ids.has(id)) issues.push("actions: action ids must be unique");
+          ids.add(id);
         }
-        const actionId: unknown = action?.actionId;
+        const actionId: unknown = action.actionId;
         if (
           typeof actionId !== "string" ||
+          actionId.length > 200 ||
           !actionId.startsWith(`${manifestId}.`) ||
           actionId.length === manifestId.length + 1
         ) {
@@ -699,7 +717,12 @@ function validateNotifyOptions(
             `actions.${i}.actionId: must be one of this plugin's own actions, written "${manifestId}.<id>"`
           );
         }
-      });
+        if (action.args !== undefined && !isNotifyArgs(action.args)) {
+          issues.push(
+            `actions.${i}.args: must be a JSON-serializable object of at most ${NOTIFY_ARGS_MAX_BYTES} bytes`
+          );
+        }
+      }
     }
   }
   if (opts.os !== undefined && typeof opts.os !== "boolean") issues.push("os: must be a boolean");

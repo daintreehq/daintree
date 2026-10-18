@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const notificationServiceMock = vi.hoisted(() => ({
   showNativeNotification: vi.fn(),
@@ -31,6 +31,8 @@ vi.mock("../../ProjectStore.js", () => ({
 }));
 vi.mock("../../../../shared/utils/quietHours.js", () => quietMock);
 vi.mock("../../../window/projectOwnership.js", () => ownershipMock);
+const remoteHostMock = vi.hoisted(() => ({ isWindowOnRemoteHost: vi.fn((_id: number) => false) }));
+vi.mock("../../../window/windowHost.js", () => remoteHostMock);
 vi.mock("../../../window/windowRef.js", () => ({
   getWindowRegistry: () => registryMock.registry,
 }));
@@ -40,7 +42,6 @@ import {
   _resetPluginNotificationPagerForTests,
   type PluginNotificationPage,
 } from "../pluginNotificationPager.js";
-import { CHANNELS } from "../../../ipc/channels.js";
 
 const page = (overrides: Partial<PluginNotificationPage> = {}): PluginNotificationPage => ({
   pluginId: "acme",
@@ -71,7 +72,12 @@ beforeEach(() => {
   notificationServiceMock.isWindowFocused.mockReturnValue(false);
   notificationServiceMock.isOwnerViewFocused.mockReturnValue(false);
   ownershipMock.findOtherProjectOwner.mockReturnValue(null);
+  remoteHostMock.isWindowOnRemoteHost.mockReturnValue(false);
   registryMock.registry = { all: () => [], getPrimary: () => undefined };
+});
+
+afterEach(() => {
+  vi.useRealTimers();
 });
 
 describe("pagePluginNotification", () => {
@@ -157,30 +163,63 @@ describe("pagePluginNotification", () => {
     expect(ownershipMock.redirectToProjectOwner).not.toHaveBeenCalled();
   });
 
-  it("sends an app-wide plugin's first action to the primary window's active view", () => {
-    const send = vi.fn();
-    const focus = vi.fn();
+  function primaryShowing(projectId: string | null) {
     const browserWindow = { isDestroyed: () => false };
     registryMock.registry = {
       all: () => [],
       getPrimary: () => ({
+        windowId: 7,
         browserWindow,
-        services: {
-          projectViewManager: {
-            getActiveView: () => ({ webContents: { isDestroyed: () => false, send, focus } }),
-          },
-        },
+        services: { projectViewManager: { getActiveProjectId: () => projectId } },
       }),
     };
+    return browserWindow;
+  }
+
+  it("runs an app-wide plugin's first action in the primary window's project", () => {
+    primaryShowing("p1");
+    const owner = { state: "foreground" };
+    ownershipMock.findOtherProjectOwner.mockReturnValue(owner);
+    pagePluginNotification(page({ firstAction: { actionId: "acme.openRun" } }));
+
+    clickLastBanner();
+
+    expect(ownershipMock.findOtherProjectOwner).toHaveBeenCalledWith(
+      registryMock.registry,
+      "p1",
+      {}
+    );
+    expect(ownershipMock.redirectToProjectOwner).toHaveBeenCalledWith(
+      owner,
+      { id: "p1", name: "p1" },
+      { intent: "run-plugin-action", pluginId: "acme", actionId: "acme.openRun" }
+    );
+  });
+
+  it("only brings a window showing a remote host's project forward", () => {
+    const browserWindow = primaryShowing("p1");
+    remoteHostMock.isWindowOnRemoteHost.mockReturnValue(true);
+    ownershipMock.findOtherProjectOwner.mockReturnValue({ state: "foreground" });
     pagePluginNotification(page({ firstAction: { actionId: "acme.openRun" } }));
 
     clickLastBanner();
 
     expect(ownershipMock.revealWindow).toHaveBeenCalledWith(browserWindow);
-    expect(send).toHaveBeenCalledWith(CHANNELS.PROJECT_FOCUS_ON_ACTIVATE, {
-      intent: "run-plugin-action",
-      pluginId: "acme",
-      actionId: "acme.openRun",
-    });
+    expect(ownershipMock.redirectToProjectOwner).not.toHaveBeenCalled();
+  });
+
+  it("does not spend a token on a banner held back by quiet hours", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(0);
+    quietMock.isScheduledQuietNow.mockReturnValue(true);
+    for (let i = 0; i < 5; i++) pagePluginNotification(page());
+    quietMock.isScheduledQuietNow.mockReturnValue(false);
+
+    expect([1, 2, 3, 4].map(() => pagePluginNotification(page()))).toEqual([
+      true,
+      true,
+      true,
+      false,
+    ]);
   });
 });

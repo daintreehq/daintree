@@ -1,7 +1,7 @@
-import { CHANNELS } from "../../ipc/channels.js";
 import { isScheduledQuietNow } from "../../../shared/utils/quietHours.js";
 import type { ProjectFocusOnActivateIntent } from "../../../shared/types/ipc/project.js";
 import { getWindowRegistry } from "../../window/windowRef.js";
+import { isWindowOnRemoteHost } from "../../window/windowHost.js";
 import {
   findOtherProjectOwner,
   redirectToProjectOwner,
@@ -101,13 +101,24 @@ function activatePluginNotification(page: PluginNotificationPage): void {
     return;
   }
 
+  // An app-wide plugin's action belongs wherever the user was working: the
+  // primary window's project, delivered through the same activation path so
+  // a view still switching in receives it once it can. A window showing a
+  // remote host's project runs that host's plugins, not this one, so it is
+  // only brought forward.
   const primary = registry.getPrimary();
   if (!primary || primary.browserWindow.isDestroyed()) return;
-  revealWindow(primary.browserWindow);
-  const webContents = primary.services.projectViewManager?.getActiveView()?.webContents;
-  if (!intent || !webContents || webContents.isDestroyed()) return;
-  webContents.focus();
-  webContents.send(CHANNELS.PROJECT_FOCUS_ON_ACTIVATE, intent);
+  const activeProjectId = primary.services.projectViewManager?.getActiveProjectId() ?? null;
+  const project =
+    activeProjectId !== null && !isWindowOnRemoteHost(primary.windowId)
+      ? projectStore.getProjectById(activeProjectId)
+      : undefined;
+  const owner = project ? findOtherProjectOwner(registry, project.id, {}) : null;
+  if (!project || !owner) {
+    revealWindow(primary.browserWindow);
+    return;
+  }
+  redirectToProjectOwner(owner, project, intent);
 }
 
 /**

@@ -178,6 +178,24 @@ describe("host.notify", () => {
     expect(lastToast()).toBeUndefined();
   });
 
+  it("refuses an own-namespace id that spells a built-in action", async () => {
+    const deps = makeDeps();
+    (deps.plugins as Map<string, LoadedPlugin>).set(
+      "worktree.resource",
+      deps.plugins.get(PLUGIN_ID)!
+    );
+    const { host } = createHost(deps, "worktree.resource", UNBOUND_PLUGIN_HOST_BINDING);
+
+    await expect(
+      host.notify({
+        title: "t",
+        body: "b",
+        actions: [{ id: "x", label: "X", actionId: "worktree.resource.teardown" }],
+      })
+    ).rejects.toThrow(/built-in action/);
+    expect(lastToast()).toBeUndefined();
+  });
+
   it("rejects more than two actions, duplicate ids and unknown keys", async () => {
     const { host } = createHost(makeDeps(), PLUGIN_ID, UNBOUND_PLUGIN_HOST_BINDING);
     const action = (id: string) => ({ id, label: id, actionId: `acme.${id}` });

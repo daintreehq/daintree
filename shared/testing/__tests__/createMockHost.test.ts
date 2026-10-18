@@ -335,6 +335,25 @@ describe("createMockHost", () => {
     );
     expect(host.notifications).toEqual([]);
 
+    const withArgs = (args: unknown) =>
+      host.notify({
+        title: "t",
+        body: "b",
+        actions: [{ id: "a", label: "A", actionId: "acme.demo.a", args } as never],
+      });
+    await expect(withArgs([1])).rejects.toThrow(/args/);
+    await expect(withArgs({ text: "界".repeat(2000) })).rejects.toThrow(/args/);
+    const circular: Record<string, unknown> = {};
+    circular.self = circular;
+    await expect(withArgs(circular)).rejects.toThrow(/args/);
+    await expect(
+      host.notify({
+        title: "t",
+        body: "b",
+        actions: [action("open"), { ...action("x"), id: " open " }],
+      })
+    ).rejects.toThrow(/unique/);
+
     const paging = createMockHost({ pluginId: "acme.demo", capabilities: ["notification:os"] });
     await expect(paging.notify({ title: "t", body: "b", os: true })).resolves.toEqual({
       id: expect.any(String),

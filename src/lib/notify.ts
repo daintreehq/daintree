@@ -1114,6 +1114,22 @@ export function notify(payload: NotifyPayload): string {
     !payload.coalesce &&
     checkAndApplyRateLimit(payload)
   ) {
+    // A replacement still retires the row it replaces and leaves its own
+    // buttons in the inbox; only its toast is held back.
+    if (payload.replaceKey !== undefined && historyMessage) {
+      useNotificationHistoryStore.getState().addEntry({
+        type,
+        title,
+        message: historyMessage,
+        correlationId,
+        seenAsToast: false,
+        countable: payload.countable,
+        actions: historyActions.length > 0 ? historyActions : undefined,
+        context,
+        supersedeKey: payload.supersedeKey,
+        supersedes: payload.supersedes,
+      });
+    }
     return "";
   }
 

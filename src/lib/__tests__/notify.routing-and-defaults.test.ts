@@ -183,6 +183,44 @@ describe("notify()", () => {
       expect(active).not.toContain("Run r1 waiting");
     });
 
+    it("a rate-limited replacement still replaces the inbox row and keeps its buttons", () => {
+      vi.spyOn(document, "hasFocus").mockReturnValue(true);
+      const open = (runId: string) => ({
+        label: "Open",
+        actionId: "acme.openRun" as never,
+        actionArgs: { runId },
+        onClick: () => {},
+      });
+      for (const n of [1, 2, 3]) {
+        notify({
+          type: "info",
+          message: `burst ${n}`,
+          rateLimitKey: "plugin:acme:notify",
+          replaceKey: `burst-${n}`,
+        });
+      }
+      notify({
+        type: "info",
+        message: "v1",
+        rateLimitKey: "plugin:acme:notify",
+        replaceKey: "k",
+        actions: [open("old")],
+      });
+      notify({
+        type: "info",
+        message: "v2",
+        rateLimitKey: "plugin:acme:notify",
+        replaceKey: "k",
+        actions: [open("new")],
+      });
+
+      const rows = useNotificationHistoryStore
+        .getState()
+        .entries.filter((e) => !e.archivedAt && e.supersedeKey === "k");
+      expect(rows.map((e) => e.message)).toEqual(["v2"]);
+      expect(rows[0]!.actions?.[0]?.actionArgs).toEqual({ runId: "new" });
+    });
+
     it("replaceKey retires the old toast even when the replacement is held back", () => {
       vi.spyOn(document, "hasFocus").mockReturnValue(true);
       notify({ type: "info", message: "first", replaceKey: "k" });

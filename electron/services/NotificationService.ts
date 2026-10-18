@@ -483,7 +483,14 @@ class NotificationService {
       // A Windows toast that times out moves to Action Center rather than
       // going away, so one that closes with its panels stays tracked until
       // they are dealt with. Nothing else could ever close it, so the rest go.
-      if (details?.reason === "timedOut" && this.pendingPanelsByNotification.has(notification)) {
+      // A keyed banner stays tracked too, so its replacement can still take
+      // it out of Action Center.
+      if (
+        details?.reason === "timedOut" &&
+        (this.pendingPanelsByNotification.has(notification) ||
+          (replaceKey !== undefined &&
+            this.notificationsByReplaceKey.get(replaceKey) === notification))
+      ) {
         return;
       }
       cleanup();

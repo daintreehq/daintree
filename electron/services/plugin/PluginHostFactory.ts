@@ -121,6 +121,7 @@ import type { ActionDispatchResult } from "../../../shared/types/actions.js";
 import { CHANNELS } from "../../ipc/channels.js";
 import { getPluginActionAuditService } from "../PluginActionAuditService.js";
 import {
+  isBuiltInActionId,
   PluginNotifyOptionsSchema,
   PluginPanelBadgeSchema,
   PluginToastOptionsSchema,
@@ -2446,9 +2447,18 @@ export function createHost(
             `Plugin "${pluginId}" notify: actions.${index}.actionId "${action.actionId.slice(0, 200)}" must be one of this plugin's own actions, written "${manifestId}.<id>"`
           );
         }
+        const actionId = `${pluginId}.${action.actionId.slice(ownPrefix.length)}`;
+        // A manifest name can spell a built-in's prefix ("worktree.resource"),
+        // and a click runs with the user's authority, so the rewritten id must
+        // still be the plugin's and never a built-in's.
+        if (isBuiltInActionId(actionId)) {
+          throw new Error(
+            `Plugin "${pluginId}" notify: actions.${index}.actionId "${actionId}" is a built-in action, not one of this plugin's own`
+          );
+        }
         return {
           label: action.label,
-          actionId: `${pluginId}.${action.actionId.slice(ownPrefix.length)}`,
+          actionId,
           ...(action.args !== undefined ? { args: action.args } : {}),
         };
       });
@@ -2468,10 +2478,37 @@ export function createHost(
         ...(actions.length > 0 ? { pluginActions: actions } : {}),
         ...(replaceKey !== undefined ? { replaceKey } : {}),
       });
+      // The switch is the whole grant: no first-use prompt, no builtin bypass.
+      // A notification that doesn't page still retires the banner it replaces.
+      // The pager is loaded only here, since it pulls in the notification and
+      // window services that nothing else in the host needs.
+      const frontend = resolvePluginFrontend(boundProjectId, pluginId);
+      const pages = os === true && frontend.kind !== "remote" && hasOsNotificationsGrant(pluginId);
+      if (
+        pages ||
+        (replaceKey !== undefined && deps.declaredCapabilities(pluginId).has("notification:os"))
+      ) {
+        const pager = await import("./pluginNotificationPager.js");
+        if (!deps.plugins.has(pluginId)) return { id };
+        if (pages) {
+          pager.pagePluginNotification({
+            pluginId,
+            projectId: boundProjectId,
+            title: displayTitle,
+            body,
+            ...(replaceKey !== undefined ? { replaceKey } : {}),
+            ...(actions[0]
+              ? { firstAction: { actionId: actions[0].actionId, args: actions[0].args } }
+              : {}),
+          });
+        } else if (replaceKey !== undefined) {
+          pager.retirePluginNotification(replaceKey);
+        }
+      }
       // A Shell driving the project gets the plain toast. The banner belongs
       // on that Shell's screen, which this machine can't page, so it is
-      // dropped rather than shown here to nobody.
-      const frontend = resolvePluginFrontend(boundProjectId, pluginId);
+      // dropped rather than shown here to nobody. The reverse toast carries no
+      // replacement key, so a Shell's toasts for one key stack.
       if (frontend.kind === "remote") {
         frontend.endpoint
           .request(
@@ -2482,33 +2519,6 @@ export function createHost(
           .catch(() => {
             // Best-effort, like the local push.
           });
-        return { id };
-      }
-      // The switch is the whole grant: no first-use prompt, no builtin bypass.
-      // A notification that doesn't page still retires the banner it replaces.
-      // The pager is loaded only here, since it pulls in the notification and
-      // window services that nothing else in the host needs.
-      const pages = os === true && hasOsNotificationsGrant(pluginId);
-      if (
-        pages ||
-        (replaceKey !== undefined && deps.declaredCapabilities(pluginId).has("notification:os"))
-      ) {
-        const pager = await import("./pluginNotificationPager.js");
-        if (!deps.plugins.has(pluginId)) return { id };
-        if (!pages) {
-          if (replaceKey !== undefined) pager.retirePluginNotification(replaceKey);
-          return { id };
-        }
-        pager.pagePluginNotification({
-          pluginId,
-          projectId: boundProjectId,
-          title: displayTitle,
-          body,
-          ...(replaceKey !== undefined ? { replaceKey } : {}),
-          ...(actions[0]
-            ? { firstAction: { actionId: actions[0].actionId, args: actions[0].args } }
-            : {}),
-        });
       }
       return { id };
     },

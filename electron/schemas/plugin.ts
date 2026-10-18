@@ -66,6 +66,11 @@ const BUILT_IN_ACTION_ID_SET: ReadonlySet<string> = new Set([
   ...KEY_ACTION_VALUES,
 ]);
 
+/** Whether `actionId` names a built-in action, runtime or keybinding-driven. */
+export function isBuiltInActionId(actionId: string): boolean {
+  return BUILT_IN_ACTION_ID_SET.has(actionId);
+}
+
 // Built-in actions a plugin contribution may never dispatch (terminal input
 // injection, fleet command relays). The host refuses these at runtime, so a
 // contribution wired to one is a dead button — reject it at parse time (#10580).
@@ -1659,7 +1664,10 @@ const PluginNotifyActionSchema = z
           if (args === undefined) return true;
           try {
             const json = JSON.stringify(args);
-            return json !== undefined && json.length <= PLUGIN_NOTIFY_ARGS_MAX_BYTES;
+            return (
+              json !== undefined &&
+              new TextEncoder().encode(json).length <= PLUGIN_NOTIFY_ARGS_MAX_BYTES
+            );
           } catch {
             return false;
           }
