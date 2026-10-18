@@ -1,12 +1,6 @@
 import type { ActionContext } from "@shared/types/actions";
 import { getActionContext } from "@/services/ActionService";
-
-/**
- * Launch agents whose MCP session replays the context captured here (#12486).
- * Claude is the only one main binds to its launch workspace; the Daintree
- * Assistant keeps whatever its own caller supplies.
- */
-const LAUNCH_CONTEXT_AGENT_IDS: ReadonlySet<string> = new Set(["claude"]);
+import { LAUNCH_CONTEXT_AGENT_IDS } from "@shared/config/agentLaunchContext";
 
 /**
  * The `ActionContext` an agent pane's MCP session replays for its whole life

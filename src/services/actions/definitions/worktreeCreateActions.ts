@@ -12,18 +12,7 @@ import {
 } from "@/components/Worktree/worktreeDeleteHelper";
 import { PartialSuccessError } from "@shared/utils/partialSuccess";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
-
-/**
- * The clause `WorkspaceService.deleteWorktree` emits when the safe `branch -d`
- * refused a branch Git does not consider fully merged.
- *
- * Duplicated rather than imported: the other consumer holds it as a private
- * const inside `createWorktreeStore`, and that module is the per-project view
- * store — importing it here would pull a store into an action definition
- * evaluated at registry build time. Matched as a substring, so a wrapped or
- * prefixed variant still classifies.
- */
-const BRANCH_KEPT_MARKER = "was kept because Git reports it isn't fully merged";
+import { WORKTREE_BRANCH_KEPT_MARKER } from "@shared/utils/worktreeSummary";
 
 export function registerWorktreeCreateActions(
   actions: ActionRegistry,
@@ -174,7 +163,7 @@ export function registerWorktreeCreateActions(
           // nothing good comes of handing a delete's payload the shape that
           // mints ownership.
           const message = formatErrorMessage(error, "Worktree delete failed");
-          if (message.includes(BRANCH_KEPT_MARKER)) {
+          if (message.includes(WORKTREE_BRANCH_KEPT_MARKER)) {
             throw new PartialSuccessError(message, {
               worktreeDeleted: true,
               branchDeleted: false,

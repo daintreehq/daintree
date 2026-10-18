@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { projectAuditArgs, projectAuditResult } from "../auditResultProjection.js";
+import {
+  auditVerbatimArgKeys,
+  projectAuditArgs,
+  projectAuditResult,
+} from "../auditResultProjection.js";
 import { summarizeMcpArgs, summarizeMcpResult } from "../../../../shared/utils/mcpArgsSummary.js";
 
 const TOOL = "terminal.readLastMessageOwned";
@@ -463,5 +467,66 @@ describe("plugin.capturePanel audit projection (#13384)", () => {
     expect(projectAuditResult("plugin.capturePanel", { pngBase64: "x" })).toEqual({
       status: "unrecognized",
     });
+  });
+});
+
+describe("project.runCommand audit entries keep the command, never its output (#13495)", () => {
+  const OUTPUT = "OUTPUT-SENTINEL token=ghp_abcdefghijklmnopqrstuvwxyz0123456789";
+  const COMMAND = "git -C /repo/worktrees/feature-a log --oneline -20 --decorate --no-color";
+  const scrub = (value: string) => value;
+
+  it("keeps a command longer than the inline limit whole in the summary", () => {
+    const summary = summarizeMcpArgs(
+      projectAuditArgs("project.runCommand", {
+        projectId: "proj-1",
+        command: COMMAND,
+        cwd: "/repo",
+        stray: "x".repeat(80),
+      }),
+      scrub,
+      auditVerbatimArgKeys("project.runCommand")
+    );
+
+    expect(COMMAND.length).toBeGreaterThan(50);
+    expect(JSON.parse(summary)).toEqual({
+      projectId: "proj-1",
+      command: COMMAND,
+      cwd: "/repo",
+      timeoutMs: null,
+    });
+  });
+
+  it("records how a run ended and how much it printed, never what", () => {
+    const projected = projectAuditResult("project.runCommand", {
+      projectId: "proj-1",
+      cwd: "/repo",
+      exitCode: 1,
+      signalName: null,
+      durationMs: 42,
+      timedOut: false,
+      aborted: false,
+      output: OUTPUT,
+      outputTruncated: true,
+    });
+
+    expect(JSON.stringify(projected)).not.toContain("SENTINEL");
+    expect(summarizeMcpResult(projected)).not.toContain("SENTINEL");
+    expect(projected).toEqual({
+      exitCode: 1,
+      signalName: null,
+      timedOut: false,
+      aborted: false,
+      durationMs: 42,
+      outputChars: OUTPUT.length,
+      outputTruncated: true,
+    });
+  });
+
+  it("reduces a result of another shape to a marker", () => {
+    expect(projectAuditResult("project.runCommand", OUTPUT)).toEqual({ status: "unrecognized" });
+  });
+
+  it("keeps every other tool's long strings collapsed", () => {
+    expect(auditVerbatimArgKeys("terminal.sendCommand")).toBeUndefined();
   });
 });

@@ -1790,14 +1790,15 @@ describe("McpServerService", () => {
     it("reports no frontend attached for a viewless workspace when Host-mode routing is on", async () => {
       // Host mode installs the drive-lease resolver, which is what lets the
       // host run actions alone. A vacant lease with no view falls through to
-      // the viewless executor, which has no form of `terminal.list` and says so.
+      // the viewless executor, which has no form of `worktree.getCurrent` (the
+      // view's own selection) and says so.
       const offResolver = setMcpDriveTargetResolver(() => ({ state: "vacant" }));
       try {
         const winA = boundWindow(REF_A, "from-window-A");
         await service.start(winA.window);
 
         const client = await connectBound(service.currentPort!, CLOSED_PROJECT_ID);
-        const result = await client.callTool({ name: "terminal.list", arguments: {} });
+        const result = await client.callTool({ name: "worktree.getCurrent", arguments: {} });
         expect(result.isError).toBe(true);
         const failure = JSON.parse(getTextResult(result).content[0].text as string) as {
           code: string;

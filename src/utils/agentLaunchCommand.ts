@@ -1,5 +1,5 @@
 import type { AgentCliDetail } from "@shared/types/ipc";
-import { escapeShellArgOptional, isWindows, quotePowerShellArg } from "@shared/utils/shellEscape";
+import { resolveAgentLaunchBaseCommandFor } from "@shared/utils/agentLaunchCommand";
 import { useCliAvailabilityStore } from "@/store/cliAvailabilityStore";
 import { getHostPlatformInfo, hostShellDialect, isRemoteWindow } from "@/hooks/useHostPlatform";
 
@@ -26,19 +26,6 @@ export async function getCurrentLaunchCliDetail(
   return useCliAvailabilityStore.getState().details[agentId];
 }
 
-/**
- * `~` and `~/rest` with the host's home in place of the tilde. Quoting would
- * otherwise hand the host's shell a literal `~`, which it never expands. With
- * no home reported yet the tilde is left bare and only the rest is quoted, so
- * the host's shell still expands it.
- */
-function escapeHomeRelativePosix(path: string, homeDir: string | null): string | null {
-  if (path !== "~" && !path.startsWith("~/")) return null;
-  const rest = path.slice(1);
-  if (homeDir) return escapeShellArgOptional(homeDir.replace(/\/+$/, "") + rest, "posix");
-  return rest.length > 1 ? `~/${escapeShellArgOptional(rest.slice(1), "posix")}` : "~";
-}
-
 export function resolveAgentLaunchBaseCommand(
   registryCommand: string,
   detail: AgentCliDetail | undefined,
@@ -50,30 +37,11 @@ export function resolveAgentLaunchBaseCommand(
    */
   homeDir?: string | null
 ): string {
-  const resolvedPath =
-    detail &&
-    detail.state !== "missing" &&
-    detail.state !== "blocked" &&
-    detail.state !== "installed"
-      ? detail.resolvedPath?.trim()
-      : undefined;
-
-  const effective = resolvedPath ?? registryCommand;
-  const isPathLike = effective.includes("/") || effective.includes("\\");
-  if (!resolvedPath && !isPathLike) return registryCommand;
-
   // The command runs on the project's host, whose shell may differ from this client's.
-  const dialect = platform ?? hostShellDialect();
-  const useWindows = dialect ? dialect === "windows" : isWindows();
-  if (useWindows) {
-    return `& ${quotePowerShellArg(effective)}`;
-  }
-
-  const home =
-    homeDir !== undefined ? homeDir : isRemoteWindow() ? getHostPlatformInfo().homeDir : undefined;
-  if (home !== undefined) {
-    const expanded = escapeHomeRelativePosix(effective, home);
-    if (expanded !== null) return expanded;
-  }
-  return escapeShellArgOptional(effective, "posix");
+  return resolveAgentLaunchBaseCommandFor(
+    registryCommand,
+    detail,
+    platform ?? hostShellDialect(),
+    homeDir !== undefined ? homeDir : isRemoteWindow() ? getHostPlatformInfo().homeDir : undefined
+  );
 }

@@ -1288,6 +1288,7 @@ export function createRendererBridge(
       confirmed,
       sessionOrigin,
       ...(options.contextOverride ? { context: options.contextOverride } : {}),
+      ...(confirmed && options.authorization ? { authorization: options.authorization } : {}),
     });
     if (result === null) throw new NoFrontendAttachedError(workspaceId, actionId);
     const dispatchedWorkspace = await describeViewlessWorkspace(workspaceId).catch(() => undefined);

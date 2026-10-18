@@ -30,8 +30,9 @@
  * Some ids here never run in this view at all. The host's MCP server answers
  * them in its own main process — the batches (`*Many`, expanded there into
  * single calls this list already carries), `terminal.notifyWhenIdle`,
- * `mcp.surface`, `help.displayImage`, `skills.*`, `assistant.*` (a host's
- * enrolled lane reads its inbox exactly while a Shell drives it), the hub's
+ * `mcp.surface`, `help.displayImage`, `skills.*`, `project.runCommand`,
+ * `assistant.*` (a host's enrolled lane reads its inbox exactly while a Shell
+ * drives it), the hub's
  * `host.*` messaging tools (a host can be a Shell to hosts of its own, and its
  * hub keeps reaching them while it is driven), the reads
  * and owned twins
@@ -77,6 +78,7 @@ export const HOST_DISPATCHABLE_ACTION_IDS: ReadonlySet<string> = new Set([
   "host.switch",
   "mcp.surface",
   "project.openOnHost",
+  "project.runCommand",
   "recipe.list",
   "recipe.run",
   "skills.load",

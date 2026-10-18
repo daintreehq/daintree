@@ -9,18 +9,12 @@ import { withWorktreeLocation, requireWorktreePath, requireWorktreeId } from "./
 import { getCurrentViewStore } from "@/store/createWorktreeStore";
 import { worktreeClient } from "@/clients";
 import type { WorktreeSnapshot } from "@shared/types/workspace-host";
-
-/**
- * The wire spelling of a worktree's post-create initialization state.
- *
- * An absent `setupStatus` is reported as `unknown`, never as `ready`: the host
- * holds it in memory, so a worktree created before this host process started —
- * or by another one — genuinely has no record, and saying "ready" there would
- * be an interpretation rather than an observation.
- */
-function readSetupState(worktree: Pick<WorktreeSnapshot, "setupStatus">): string {
-  return worktree.setupStatus?.state ?? "unknown";
-}
+import {
+  MAX_WAIT_UNTIL_READY_TIMEOUT_MS,
+  readWorktreeSetupState,
+  toWorktreeSummary,
+  waitForWorktreeSetup,
+} from "@shared/utils/worktreeSummary";
 
 /**
  * Read one worktree's setup status FROM THE HOST, which is the only authority
@@ -43,25 +37,6 @@ async function fetchSetupStatus(
   // has it and recorded nothing", which are different answers to the caller.
   return match ? match.setupStatus : null;
 }
-
-/**
- * The longest a wait may block. The renderer dispatch path times out at 30s, so
- * a longer wait would be killed mid-flight and reported as a transport failure
- * rather than as "still running" — which is the one answer this capability
- * exists to give honestly. Setup scripts routinely outlast this; the contract is
- * therefore "call again", not "wait longer".
- */
-const MAX_WAIT_UNTIL_READY_TIMEOUT_MS = 25_000;
-
-/**
- * How often the wait re-reads the host. Setup stages are seconds apart, and
- * each read is a host round trip rather than a local lookup, so this is
- * deliberately slower than a store poll would need to be.
- */
-const WAIT_UNTIL_READY_POLL_INTERVAL_MS = 500;
-
-/** States a wait stops on — every state that is not still in progress. */
-const SETTLED_SETUP_STATES = new Set(["ready", "failed", "timed-out", "needs-approval", "unknown"]);
 
 /**
  * Same ceiling and for the same reason as the readiness wait: the renderer
@@ -93,28 +68,10 @@ export function registerWorktreeQueryActions(
     scope: "renderer",
     resultSchema: z.object({ worktrees: z.array(WorktreeSummarySchema) }),
     run: async () => {
-      const worktrees = callbacks.getWorktrees();
       const activeWorktreeId = callbacks.getActiveWorktreeId();
-
-      const result = worktrees.map((w) => ({
-        id: w.id,
-        path: w.path,
-        // `Worktree.branch` is undefined on a detached HEAD, and the summary
-        // shape declares `string | null` like every sibling field here.
-        branch: w.branch ?? null,
-        isActive: w.id === activeWorktreeId,
-        isMain: w.isMainWorktree ?? false,
-        issueNumber: w.issueNumber ?? null,
-        issueTitle: w.issueTitle ?? null,
-        prNumber: w.linked?.pr?.ref.number ?? null,
-        prTitle: w.linked?.pr?.title ?? null,
-        prUrl: w.linked?.pr?.url ?? null,
-        status: w.mood ?? null,
-        lastCommit: w.summary ?? null,
-        setupState: readSetupState(w),
-      }));
-
-      return { worktrees: result };
+      return {
+        worktrees: callbacks.getWorktrees().map((w) => toWorktreeSummary(w, activeWorktreeId)),
+      };
     },
   }));
 
@@ -157,7 +114,7 @@ export function registerWorktreeQueryActions(
         prUrl: worktree.linked?.pr?.url ?? null,
         status: worktree.mood ?? null,
         lastCommit: worktree.summary ?? null,
-        setupState: readSetupState(worktree),
+        setupState: readWorktreeSetupState(worktree),
       };
 
       return { worktree: result };
@@ -361,39 +318,7 @@ export function registerWorktreeQueryActions(
       run: async (args, ctx: ActionContext) => {
         const { timeoutMs, ...location } = args ?? {};
         const worktreeId = requireWorktreeId(location, ctx);
-        const budgetMs = Math.min(
-          timeoutMs ?? MAX_WAIT_UNTIL_READY_TIMEOUT_MS,
-          MAX_WAIT_UNTIL_READY_TIMEOUT_MS
-        );
-        const deadline = Date.now() + budgetMs;
-
-        for (;;) {
-          const status = await fetchSetupStatus(worktreeId);
-          if (status === null) {
-            // Static, per the repo-wide rule: an error message must never carry
-            // the rejected input back out. The id is the caller's own argument,
-            // so naming it adds nothing it does not already have.
-            throw new Error("Unknown worktree — the workspace host has no worktree with that id.");
-          }
-          const state = status?.state ?? "unknown";
-          const settled = SETTLED_SETUP_STATES.has(state);
-          const remaining = deadline - Date.now();
-          if (settled || remaining <= 0) {
-            return {
-              worktreeId,
-              setupState: state,
-              stage: status?.stage ?? null,
-              error: status?.error ?? null,
-              // Only a genuinely unsettled state counts as a timeout. Running
-              // out of budget on the same tick a worktree became ready is a
-              // completed wait, not an expired one.
-              timedOut: !settled,
-            };
-          }
-          await new Promise((resolve) =>
-            setTimeout(resolve, Math.min(WAIT_UNTIL_READY_POLL_INTERVAL_MS, remaining))
-          );
-        }
+        return waitForWorktreeSetup(worktreeId, timeoutMs, fetchSetupStatus);
       },
     })
   );

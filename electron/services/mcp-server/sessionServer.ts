@@ -141,6 +141,7 @@ import { buildImageToolCallResult, isImageResultTool } from "./imageToolResult.j
 import { safeSerializeToolResultCompact } from "../../utils/safeSerializeToolResult.js";
 import { buildSurfaceManifest, MCP_SURFACE_TOOL_ID } from "./surfaceManifest.js";
 import { viewlessStatusArgsAreAnswerable } from "./terminalStatus.js";
+import { viewlessActionDanger } from "../viewless/viewlessActionCatalog.js";
 import { parseLastMessageReadArgs, type LastMessageReadArgs } from "./lastMessageArgs.js";
 import {
   extractOwnedResourcesFromDispatch,
@@ -201,6 +202,21 @@ const HELP_DISPLAY_IMAGE_TOOL = "help.displayImage";
 const SKILLS_SEARCH_TOOL = "skills.search";
 const SKILLS_LOAD_TOOL = "skills.load";
 const PROJECT_RUN_CHECK_TOOL = "project.runCheck";
+const PROJECT_RUN_COMMAND_TOOL = "project.runCommand";
+
+/**
+ * `project.runCommand` runs whatever command it is given, so it answers to its
+ * caller, not its tier alone (#13495): Daintree's own assistant at the full
+ * tier, never a worker pane, an api-key client or a core session, and no grant
+ * widens that. The origin is the renderer-owned one `tools/list` reads, so
+ * discovery and admission ask the same question.
+ */
+function mayRunProjectCommand(tier: string | null, rendererOwnedOrigin: boolean): boolean {
+  return tier === "full" && rendererOwnedOrigin;
+}
+
+const PROJECT_RUN_COMMAND_REFUSAL =
+  "project.runCommand is only available to Daintree's own assistant at the full tier.";
 const TERMINAL_GET_STATUS_TOOL = "terminal.getStatus";
 const TERMINAL_READ_LAST_MESSAGE_OWNED_TOOL = "terminal.readLastMessageOwned";
 
@@ -238,6 +254,7 @@ export const VIEWLESS_MAIN_PROCESS_TOOLS: ReadonlySet<string> = new Set([
   SKILLS_LOAD_TOOL,
   MCP_SURFACE_TOOL_ID,
   PROJECT_RUN_CHECK_TOOL,
+  PROJECT_RUN_COMMAND_TOOL,
   // Main-executed once its ownership check passes (#12479). It reads a file the
   // agent wrote and dispatches nothing, so a closed workspace is no reason to
   // refuse it.
@@ -1020,6 +1037,17 @@ export interface SessionServerDeps extends OwnedMainExecutors {
     signal: AbortSignal
   ) => Promise<import("../../../shared/types/projectCheck.js").ProjectCheckRunResult>;
   /**
+   * Execute `project.runCommand` in the main process (#13495), for the same
+   * reasons as `project.runCheck`. The caller restriction is applied before
+   * this is reached. Throws {@link McpError} on invalid args; throws for any
+   * reason the command could not start, and resolves when it ran, whatever
+   * its exit code.
+   */
+  handleProjectRunCommand: (
+    rawArgs: unknown,
+    signal: AbortSignal
+  ) => Promise<import("../../../shared/types/projectCommand.js").ProjectCommandRunResult>;
+  /**
    * Read `terminal.getStatus` off the pty-host for one workspace, with no
    * renderer (#12316). Used only as a fallback when the bound workspace has no
    * live view: the renderer answer is richer, and this one reports which fields
@@ -1272,6 +1300,7 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
     handleSkillsSearch,
     handleSkillsLoad,
     handleProjectRunCheck,
+    handleProjectRunCommand,
     handleTerminalGetStatusViewless,
     appendAuditRecord,
     getCachedManifest,
@@ -1733,6 +1762,10 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
           // Likewise the host tools, offered only to an assistant session while a host exists (#13336).
           if (!hubMessagingOffered()) {
             for (const id of HOST_MESSAGING_TOOL_IDS) permittedActionIds.delete(id);
+          }
+          // A grant never makes the command runner callable, so it never makes it findable.
+          if (!mayRunProjectCommand(tier, rendererOwnedOrigin)) {
+            permittedActionIds.delete(PROJECT_RUN_COMMAND_TOOL);
           }
           return {
             permittedActionIds,
@@ -2342,6 +2375,31 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
           details: { confirmationChannel: "workspace-bound" },
         });
       }
+    }
+
+    // Refused here, past the tier gate but before a grant's use is spent or a
+    // pane asks: a grant or a pane approval admits a call, and this one admits
+    // only its own caller.
+    if (actionId === PROJECT_RUN_COMMAND_TOOL && !mayRunProjectCommand(tier, rendererOwnedOrigin)) {
+      try {
+        appendAuditRecord({
+          toolId: actionId,
+          sessionId,
+          tier,
+          args,
+          durationMs: Date.now() - startedAt,
+          startedAt,
+          outcome: { kind: "unauthorized" },
+          capturedTurnId,
+          rendererOwnedOrigin,
+        });
+      } catch (err) {
+        console.error("[MCP] Failed to append audit record:", err);
+      }
+      return buildToolError({
+        code: TIER_NOT_PERMITTED_CODE,
+        message: PROJECT_RUN_COMMAND_REFUSAL,
+      });
     }
 
     // Charge the native automation grant's use now that the call has cleared
@@ -3607,6 +3665,56 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
           }
         }
 
+        // Short-circuit: project.runCommand runs in main for the same reasons
+        // as project.runCheck (#13495). Its caller was admitted above by
+        // `mayRunProjectCommand`, and is asked again here so no future path
+        // into this branch can skip it. Never `danger: "confirm"`: the same
+        // assistant already reaches a shell through `terminal.new` and
+        // `terminal.sendCommand`. A call relayed from another machine
+        // (#13493) has to be lease-checked as a write before it gets here,
+        // since no IPC channel's lease policy covers it.
+        if (actionId === PROJECT_RUN_COMMAND_TOOL) {
+          emitToolCallStarted(false);
+          try {
+            if (!mayRunProjectCommand(tier, rendererOwnedOrigin)) {
+              const message = PROJECT_RUN_COMMAND_REFUSAL;
+              outcome = {
+                kind: "result",
+                value: { ok: false, error: { code: TIER_NOT_PERMITTED_CODE, message } },
+              };
+              return buildToolError({ code: TIER_NOT_PERMITTED_CODE, message });
+            }
+            const result = await handleProjectRunCommand(args, extra.signal);
+            outcome = { kind: "result", value: { ok: true, result } };
+            // A command can outlive the grant window, as a check can.
+            if (grantIssuedAt !== undefined || nativeGrantId !== undefined) {
+              if (grantIssuedAt !== undefined) {
+                sessionStore.grantCache.refresh(sessionId, actionId, grantIssuedAt);
+              }
+              if (nativeGrantId !== undefined) {
+                sessionStore.grantCache.refreshNativeGrant(nativeGrantId);
+              }
+              if (sessionStore.sessions.has(sessionId)) {
+                sessionStore.resetIdleTimer(sessionId);
+              } else if (sessionStore.httpSessions.has(sessionId)) {
+                sessionStore.resetHttpIdleTimer(sessionId);
+              }
+            }
+            return buildToolCallResult(result, {
+              structuredContent: result as unknown as Record<string, unknown>,
+            });
+          } catch (err) {
+            outcome = { kind: "throw", error: err };
+            if (err instanceof McpError) {
+              throw err;
+            }
+            return buildToolError({
+              code: EXECUTION_ERROR_CODE,
+              message: formatErrorMessage(err, "project.runCommand failed"),
+            });
+          }
+        }
+
         // Short-circuit: help.displayImage runs entirely in the main process
         // (#9828). The action manifest entry handles schema/tier/audit; the URL
         // allowlist check, the per-session figure-number assignment, and the
@@ -3745,9 +3853,13 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
         // under the skip there is no typed-name gate either. The grant's use is
         // still spent. The assistant's protected close (#12881) settles the
         // preference above, where it would otherwise ask.
+        // With no frontend attached the host's base surface describes only the
+        // external tier, so an action the host runs itself is read from its own
+        // catalog, which restates each one's renderer danger (#13495).
+        const declaredDanger = entry?.danger ?? viewlessActionDanger(actionId);
         const confirmGated =
-          entry !== undefined &&
-          resolveEffectiveActionDanger(actionId, entry.danger, "agent", args) === "confirm";
+          declaredDanger !== undefined &&
+          resolveEffectiveActionDanger(actionId, declaredDanger, "agent", args) === "confirm";
         if (
           (dispatchAuthorization === undefined || dispatchAuthorization === "native-grant") &&
           confirmationsSkipped &&

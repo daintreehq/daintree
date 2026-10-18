@@ -6,6 +6,12 @@ import {
   PROJECT_CHECK_MAX_TIMEOUT_MS,
   PROJECT_CHECK_MIN_TIMEOUT_MS,
 } from "@shared/types/projectCheck";
+import {
+  PROJECT_COMMAND_DEFAULT_TIMEOUT_MS,
+  PROJECT_COMMAND_MAX_LENGTH,
+  PROJECT_COMMAND_MAX_TIMEOUT_MS,
+  PROJECT_COMMAND_MIN_TIMEOUT_MS,
+} from "@shared/types/projectCommand";
 
 /**
  * Built-in `project.runCheck` action (#11548). Registered here purely for
@@ -80,6 +86,72 @@ export function registerProjectCheckActions(
       run: async () => {
         throw new Error(
           "project.runCheck must be invoked through the MCP main-process path, not renderer dispatch."
+        );
+      },
+    })
+  );
+
+  // Manifest-only, like `project.runCheck`, and executed in main (#13495). It
+  // is the shell a hub assistant lacks on a host it reaches over a relay, so
+  // main answers it only for Daintree's own full-tier assistants, whatever
+  // tier or grant another caller holds. `safe` rather than `confirm` because
+  // the same callers already reach a shell through `terminal.new` and
+  // `terminal.sendCommand`; a dialog per `git status` would only make the
+  // verify step unusable, not the capability any narrower.
+  actions.set("project.runCommand", () =>
+    defineAction({
+      id: "project.runCommand",
+      title: "Run command",
+      description:
+        "Run one non-interactive shell command on this host and return its exit code, output and timing. cwd is where it starts, not a sandbox: it runs as the host's user. A non-zero exit is a result, not an error. Never for servers or prompts.",
+      category: "project",
+      kind: "command",
+      danger: "safe",
+      denyPluginDispatch: true,
+      scope: "renderer",
+      palette: { mode: "hidden" },
+      argsSchema: z.object({
+        projectId: z.string().min(1).describe("Project id from the project listing."),
+        command: z
+          .string()
+          .min(1)
+          .max(PROJECT_COMMAND_MAX_LENGTH)
+          .describe("Shell command line, run as given, with no stdin or TTY."),
+        cwd: z
+          .string()
+          .min(1)
+          .optional()
+          .describe("Project root or one of its worktrees (default: root)."),
+        timeoutMs: z
+          .number()
+          .int()
+          .min(PROJECT_COMMAND_MIN_TIMEOUT_MS)
+          .max(PROJECT_COMMAND_MAX_TIMEOUT_MS)
+          .optional()
+          .describe(
+            `Ms before the process tree is killed (default ${PROJECT_COMMAND_DEFAULT_TIMEOUT_MS}).`
+          ),
+      }),
+      resultSchema: z.object({
+        projectId: z.string(),
+        cwd: z.string(),
+        exitCode: z.number().nullable(),
+        signalName: z.string().nullable(),
+        durationMs: z.number(),
+        timedOut: z.boolean(),
+        aborted: z.boolean(),
+        output: z.string(),
+        outputTruncated: z.boolean(),
+      }),
+      mcpOutputSchema: true,
+      mcpAnnotations: {
+        readOnlyHint: false,
+        idempotentHint: false,
+        destructiveHint: true,
+      },
+      run: async () => {
+        throw new Error(
+          "project.runCommand must be invoked through the MCP main-process path, not renderer dispatch."
         );
       },
     })

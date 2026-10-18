@@ -254,6 +254,21 @@ function projectHostReplies(record: Record<string, unknown>): Record<string, unk
   };
 }
 
+/** How a command ended and how much it printed — never what it printed. */
+function projectCommandRun(result: unknown): Record<string, unknown> {
+  const record = asRecord(result);
+  if (!record) return { status: "unrecognized" };
+  return {
+    exitCode: finiteNumber(record.exitCode),
+    signalName: typeof record.signalName === "string" ? record.signalName : null,
+    timedOut: record.timedOut === true,
+    aborted: record.aborted === true,
+    durationMs: finiteNumber(record.durationMs),
+    outputChars: typeof record.output === "string" ? record.output.length : null,
+    outputTruncated: record.outputTruncated === true,
+  };
+}
+
 /** The capture's size and how many console lines came back — never the pixels or the lines. */
 function projectPanelCapture(result: unknown): Record<string, unknown> {
   const record = asRecord(result);
@@ -336,6 +351,7 @@ const AUDIT_RESULT_PROJECTIONS: ReadonlyMap<string, (result: unknown) => unknown
     }),
   ],
   ["plugin.capturePanel", projectPanelCapture],
+  ["project.runCommand", projectCommandRun],
 ]);
 
 /** The value to summarize for `toolId`'s audit record: its projection when it has one, else the result as is. */
@@ -440,6 +456,18 @@ const AUDIT_ARGS_PROJECTIONS: ReadonlyMap<string, (args: unknown) => unknown> = 
   ],
   ["host.readQuota", (args) => ({ hostId: auditHostId(asRecord(args)?.hostId) })],
   [
+    "project.runCommand",
+    (args) => {
+      const record = asRecord(args);
+      return {
+        projectId: typeof record?.projectId === "string" ? record.projectId : null,
+        command: typeof record?.command === "string" ? record.command : null,
+        cwd: typeof record?.cwd === "string" ? record.cwd : null,
+        timeoutMs: finiteNumber(record?.timeoutMs),
+      };
+    },
+  ],
+  [
     "assistant.reply",
     (args) => {
       const record = asRecord(args);
@@ -457,4 +485,18 @@ const AUDIT_ARGS_PROJECTIONS: ReadonlyMap<string, (args: unknown) => unknown> = 
 export function projectAuditArgs(toolId: string, args: unknown): unknown {
   const projection = AUDIT_ARGS_PROJECTIONS.get(toolId);
   return projection ? projection(args) : args;
+}
+
+/**
+ * Arguments kept whole in `toolId`'s summary rather than collapsed past 50
+ * characters (#13495). A command runner's audit is worth little without the
+ * command, which is the one thing the issue requires it to keep; its output
+ * stays out through the result projection above.
+ */
+const AUDIT_VERBATIM_ARG_KEYS: ReadonlyMap<string, ReadonlySet<string>> = new Map([
+  ["project.runCommand", new Set(["command"])],
+]);
+
+export function auditVerbatimArgKeys(toolId: string): ReadonlySet<string> | undefined {
+  return AUDIT_VERBATIM_ARG_KEYS.get(toolId);
 }
