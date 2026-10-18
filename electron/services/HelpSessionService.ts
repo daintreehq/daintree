@@ -125,7 +125,6 @@ const DEFAULT_DAINTREE_CONTROL = true;
 const DEFAULT_DOC_SEARCH = true;
 const DEFAULT_RUNBOOK_SEARCH = true;
 const DEFAULT_BYPASS_PERMISSIONS = false;
-const DEFAULT_DEBUG_LOGGING = false;
 
 // Codex reads project instructions up to `project_doc_max_bytes` (32 KiB) and
 // truncates past it without telling the model. The bundled AGENTS.md is held
@@ -328,12 +327,6 @@ interface HelpSessionRecord {
    * can still bypass Claude's confirmation gate (and vice versa).
    */
   bypassPermissions: boolean;
-  /**
-   * Snapshot at provision time of the user's debug-logging preference. Consumed
-   * by `lifecycle.ts` to decide whether to inject `DAINTREE_ASSISTANT_DEBUG_LOG=1`
-   * into the spawn env. Only the `daintree-assistant` backend reads that var.
-   */
-  debugLogging: boolean;
   createdAt: number;
   revoked: boolean;
   /**
@@ -1664,7 +1657,6 @@ export class HelpSessionService {
       agentId: input.agentId,
       tier,
       bypassPermissions: settings.bypassPermissions,
-      debugLogging: settings.debugLogging,
       createdAt: now,
       revoked: false,
       actionContext: input.actionContext,
@@ -2936,7 +2928,6 @@ export class HelpSessionService {
     runbookSearch: boolean;
     tier: HelpAssistantTier;
     bypassPermissions: boolean;
-    debugLogging: boolean;
     loadGlobalHooksAndServers: boolean;
     daintreeConfirmations: HelpAssistantDaintreeConfirmations;
   } {
@@ -2965,8 +2956,6 @@ export class HelpSessionService {
         typeof stored.runbookSearch === "boolean" ? stored.runbookSearch : DEFAULT_RUNBOOK_SEARCH,
       tier,
       bypassPermissions,
-      debugLogging:
-        typeof stored.debugLogging === "boolean" ? stored.debugLogging : DEFAULT_DEBUG_LOGGING,
       // Opt-in only: anything but an explicit stored `true` keeps user MCP
       // servers and hooks out of the session.
       loadGlobalHooksAndServers: stored.loadGlobalHooksAndServers === true,
@@ -3004,18 +2993,6 @@ export class HelpSessionService {
     const record = this.sessionsByToken.get(token);
     if (!record || record.revoked) return false;
     return record.bypassPermissions;
-  }
-
-  /**
-   * Returns the snapshot of the user's debug-logging preference taken at
-   * provision time. `lifecycle.ts` reads this to decide whether to inject
-   * `DAINTREE_ASSISTANT_DEBUG_LOG=1` into the assistant spawn env.
-   */
-  getDebugLogging(token: string): boolean {
-    if (!token) return false;
-    const record = this.sessionsByToken.get(token);
-    if (!record || record.revoked) return false;
-    return record.debugLogging;
   }
 
   private getSessionsRoot(): string {

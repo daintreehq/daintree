@@ -2743,10 +2743,8 @@ export interface HelpAssistantSettings {
    * Run the assistant without its per-tool confirmation gate. One flag, but
    * each backend honours it differently — Claude gets
    * `--dangerously-skip-permissions` plus `defaultMode: "bypassPermissions"` in
-   * the session's `.claude/settings.json`, Codex gets
-   * `--dangerously-bypass-approvals-and-sandbox`, and the Daintree Assistant
-   * (which has no such flag) gets `DAINTREE_ASSISTANT_AUTO_APPROVE=1` in its
-   * spawn env. The canonical per-agent flag lives in `DEFAULT_DANGEROUS_ARGS`
+   * the session's `.claude/settings.json`, and Codex gets
+   * `--dangerously-bypass-approvals-and-sandbox`. The canonical per-agent flag lives in `DEFAULT_DANGEROUS_ARGS`
    * and is only appended for agents declaring `supports.permissionBypass`; see
    * the help-launch branch in `electron/ipc/handlers/terminal/lifecycle.ts`.
    * Defaults to false.
@@ -2778,13 +2776,6 @@ export interface HelpAssistantSettings {
    * Memory Saver tiers).
    */
   idleHibernateMinutes: HelpAssistantIdleHibernateMinutes;
-  /**
-   * Enable the Daintree Assistant's own full-fidelity debug log for new
-   * sessions, by setting `DAINTREE_ASSISTANT_DEBUG_LOG=1` in the spawn env.
-   * Only the `daintree-assistant` backend reads this var (per-session trace to
-   * `~/.daintree/logs`); it is a no-op for other assistant agents. Defaults to false.
-   */
-  debugLogging: boolean;
   /**
    * Load `mcp.json` (MCP servers) and `hooks.json` (Claude hooks) from
    * `~/.daintree/assistant` into new assistant sessions. Both run programs, so

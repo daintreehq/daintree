@@ -43,7 +43,6 @@ const HELP_ASSISTANT_DEFAULTS: HelpAssistantSettings = {
   modelIds: {},
   customArgs: "",
   idleHibernateMinutes: 5,
-  debugLogging: false,
   loadGlobalHooksAndServers: false,
   daintreeConfirmations: "inherit",
   acceptRemoteMessages: true,
@@ -60,7 +59,6 @@ const HELP_ASSISTANT_KEYS = [
   "modelIds",
   "customArgs",
   "idleHibernateMinutes",
-  "debugLogging",
   "loadGlobalHooksAndServers",
   "daintreeConfirmations",
   "acceptRemoteMessages",
@@ -118,7 +116,6 @@ function sanitizeStored(stored: unknown): Partial<HelpAssistantSettings> {
   if (typeof record.docSearch === "boolean") out.docSearch = record.docSearch;
   if (typeof record.daintreeControl === "boolean") out.daintreeControl = record.daintreeControl;
   if (typeof record.runbookSearch === "boolean") out.runbookSearch = record.runbookSearch;
-  if (typeof record.debugLogging === "boolean") out.debugLogging = record.debugLogging;
   if (typeof record.loadGlobalHooksAndServers === "boolean") {
     out.loadGlobalHooksAndServers = record.loadGlobalHooksAndServers;
   }
@@ -206,7 +203,6 @@ export const helpAssistantNamespace = defineIpcNamespace({
               field === "daintreeControl" ||
               field === "runbookSearch" ||
               field === "bypassPermissions" ||
-              field === "debugLogging" ||
               field === "loadGlobalHooksAndServers" ||
               field === "acceptRemoteMessages" ||
               field === "acceptRemoteControl") &&

@@ -87,22 +87,6 @@ export type HelpSessionActionContextResolver = (token: string) => ActionContext 
  */
 export type HelpSessionIdResolver = (token: string) => string | null;
 /**
- * Resolver consulted at MCP handshake to pin a `daintree-assistant` pane
- * bearer to the WebContents that launched it (#10647). Same routing effect as
- * {@link HelpSessionWebContentsResolver} but sourced from
- * `McpPaneConfigService` rather than `HelpSessionService`, so the assistant
- * CLI's env-only pane token gets help-session-grade pinning without being
- * promoted to a full help session. Returns null for generic pane tokens.
- */
-export type AssistantPaneWebContentsResolver = (token: string) => number | null;
-/**
- * Resolver consulted at MCP handshake to replay the launch-time
- * `ActionContext` bound to a `daintree-assistant` pane bearer (#10647).
- * Returns null for generic pane tokens, which keep the live focused-window
- * context.
- */
-export type AssistantPaneActionContextResolver = (token: string) => ActionContext | null;
-/**
  * Where an ordinary agent pane's MCP session routes (#12486): the workspace it
  * was launched in, not whichever window has focus when a call arrives.
  *
@@ -125,9 +109,9 @@ export interface PaneWorkspaceBinding {
 }
 /**
  * Resolver consulted at MCP handshake for an ordinary agent pane bearer's
- * launch workspace (#12486). Consulted only after the help and assistant-pane
- * resolvers miss, and confers no origin: the session stays `external`, so
- * binding where its calls land never widens what it may call (#12407).
+ * launch workspace (#12486). Consulted only after the help resolvers miss, and
+ * confers no origin: the session stays `external`, so binding where its calls
+ * land never widens what it may call (#12407).
  */
 export type PaneWorkspaceBindingResolver = (token: string) => PaneWorkspaceBinding | null;
 /**
@@ -642,8 +626,8 @@ export function unionSet(...sets: ReadonlySet<string>[]): ReadonlySet<string> {
 const MCP_TOOL_ALLOWLIST: ReadonlySet<string> = new Set(MCP_EXTERNAL_TIER_TOOLS);
 
 /**
- * The surfaces as Daintree's own assistant sees them — `help` and
- * `assistant-pane` sessions. Every other session is admitted against
+ * The surfaces as Daintree's own assistant sees them — `help` sessions. Every
+ * other session is admitted against
  * {@link NON_RENDERER_OWNED_TIER_ALLOWLISTS}.
  */
 export const TIER_ALLOWLISTS: Readonly<Record<McpTier, ReadonlySet<string>>> = {
@@ -736,9 +720,7 @@ export const MCP_SERVER_INSTRUCTIONS_MAX_BYTES =
  * string is static and origin-agnostic, sent verbatim to api-key clients that
  * never receive that catalog, so a sentence about it would be false for most of
  * its readers. The rule for reading a stub belongs in each first-party client's
- * own prompt — `scripts/assistant-src/` for the ones this repo ships, and
- * `DAINTREE_HOST.md` in `daintreehq/assistant` for the companion CLI, which
- * carries its own.
+ * own prompt — `scripts/assistant-src/` for the ones this repo ships.
  *
  * What it must NOT say is that an unlisted name cannot be called. `tools/list`
  * is built from the static tier gate alone, while dispatch also honours live
@@ -763,10 +745,10 @@ export const MCP_SERVER_INSTRUCTIONS = [
 
 /**
  * The `instructions` for Daintree's own assistant sessions — the sidebar help
- * assistant and the assistant pane. Each ships its own prompt that carries the
- * rules above in fuller form, and Codex in code mode repeats a server's
- * instructions inside every one of its tool descriptions, so the long text
- * cost those sessions ~1 KB per tool each time the model looked a tool up.
+ * assistant. Each backend ships its own prompt that carries the rules above in
+ * fuller form, and Codex in code mode repeats a server's instructions inside
+ * every one of its tool descriptions, so the long text cost those sessions
+ * ~1 KB per tool each time the model looked a tool up.
  */
 export const MCP_ASSISTANT_SERVER_INSTRUCTIONS =
   "Daintree's control surface for its own assistant; your instruction file has the rules. `actions.search` finds a tool by intent.";

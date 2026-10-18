@@ -351,7 +351,7 @@ describe("ProjectStatsService adversarial", () => {
         id: "help-1",
         projectId: "p1",
         kind: "terminal",
-        launchAgentId: "daintree-assistant",
+        launchAgentId: "claude",
         agentState: "waiting",
       },
       // A genuine user agent — must still count.
@@ -391,7 +391,7 @@ describe("ProjectStatsService adversarial", () => {
         id: "help-p1",
         projectId: "p1",
         kind: "terminal",
-        launchAgentId: "daintree-assistant",
+        launchAgentId: "claude",
         agentState: "idle",
       },
       {
@@ -438,7 +438,7 @@ describe("ProjectStatsService adversarial", () => {
         id: "help-1",
         projectId: "p1",
         kind: "terminal",
-        launchAgentId: "daintree-assistant",
+        launchAgentId: "claude",
         agentState: "idle",
       },
       // An unowned live terminal sends the count to the host, which is the
@@ -913,7 +913,7 @@ describe("ProjectStatsService assistant presence (#11806)", () => {
       id: "help-1",
       projectId: "p1",
       kind: "terminal",
-      launchAgentId: "daintree-assistant",
+      launchAgentId: "claude",
       ...over,
     };
   }

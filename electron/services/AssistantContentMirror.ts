@@ -43,8 +43,6 @@ import { YAML_MERGE_SCHEMA } from "../utils/yamlMergeSchema.js";
  *     never mirrored to a .codex destination, because <cwd>/.codex rides
  *     Codex's trust-gated project-config layer.
  *   - Copilot CLI reads both .claude/skills and .agents/skills from cwd.
- *   - daintree-assistant runs in the project root and reads nothing from cwd,
- *     so it has no mapping here; it will read the source folders natively.
  */
 interface ContentMapping {
   sourceDir: string;
@@ -853,9 +851,8 @@ async function removeEmptyParents(fileAbs: string, sessionBase: string): Promise
 const CONTENT_README = `# Daintree Assistant — your assistant folder
 
 Everything here is added to each new Daintree Assistant session when it
-backs onto Claude Code, Codex or Copilot (the Daintree Assistant CLI doesn't
-read this folder yet). Hiding and showing the panel keeps the running
-session, so start a new session to pick up changes.
+backs onto Claude Code, Codex or Copilot. Hiding and showing the panel keeps
+the running session, so start a new session to pick up changes.
 
 Commands and skills (agent-native hidden folders):
 

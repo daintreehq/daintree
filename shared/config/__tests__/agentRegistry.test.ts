@@ -20,12 +20,7 @@ import {
 } from "../agentRegistry.js";
 import { UserAgentConfigSchema } from "../../types/userAgentRegistry.js";
 import { buildResumeCommand, buildResumeLatestCommand } from "../../types/agentSettings.js";
-import {
-  BUILT_IN_AGENT_IDS,
-  LAUNCHABLE_AGENT_IDS,
-  BUILT_IN_AGENT_KEY_ACTIONS,
-  isAssistantOnlyAgentId,
-} from "../agentIds.js";
+import { BUILT_IN_AGENT_IDS } from "../agentIds.js";
 
 describe("agentRegistry", () => {
   beforeEach(() => {
@@ -121,31 +116,6 @@ describe("agentRegistry", () => {
       expect(wired).not.toContain("interpreter");
       expect(wired).not.toContain("goose");
       expect(wired).not.toContain("cursor");
-    });
-
-    it("daintree-assistant is retired from the assistant picker and provisioning", () => {
-      expect(getAssistantWiredAgentIds()).not.toContain("daintree-assistant");
-      expect(getAssistantSupportedAgentIds()).not.toContain("daintree-assistant");
-      expect(getAgentConfig("daintree-assistant")?.supports).toMatchObject({
-        mcpInjection: "env-only",
-        settingsOverlay: false,
-        permissionBypass: false,
-        trustDialog: false,
-        versionProbe: true,
-        tier: "deprecated",
-      });
-    });
-
-    it("daintree-assistant is registered and detectable but not launchable (#10634)", () => {
-      // Registered (so CliAvailabilityService detects it and the assistant
-      // overlay can use it)...
-      expect(BUILT_IN_AGENT_IDS).toContain("daintree-assistant");
-      expect(getAgentConfig("daintree-assistant")).toBeDefined();
-      expect(isAssistantOnlyAgentId("daintree-assistant")).toBe(true);
-      // ...but excluded from every launchable surface and given no
-      // direct-launch keybinding action.
-      expect(LAUNCHABLE_AGENT_IDS).not.toContain("daintree-assistant");
-      expect(BUILT_IN_AGENT_KEY_ACTIONS).not.toContain("agent.daintree-assistant");
     });
 
     it("excludes agents whose supports object is at experimental tier", () => {
@@ -267,6 +237,25 @@ describe("agentRegistry", () => {
         const wired = getAssistantWiredAgentIds();
         expect(supported).not.toContain("exp-agent");
         expect(wired).toContain("exp-agent");
+      } finally {
+        setUserRegistry({});
+      }
+    });
+
+    it("deprecated user-defined agent is excluded from both lists even with an implemented mode", () => {
+      // `env-only` clears the implementation check, so the tier gate is the only
+      // thing that can drop it — gemini's `project-config` would fall out anyway.
+      setUserRegistry({
+        "old-agent": {
+          ...userDefinedWithStable,
+          id: "old-agent",
+          supports: { ...stableSupports, tier: "deprecated" },
+        },
+      });
+      try {
+        expect(hasAssistantMcpImplementation("old-agent")).toBe(true);
+        expect(getAssistantWiredAgentIds()).not.toContain("old-agent");
+        expect(getAssistantSupportedAgentIds()).not.toContain("old-agent");
       } finally {
         setUserRegistry({});
       }

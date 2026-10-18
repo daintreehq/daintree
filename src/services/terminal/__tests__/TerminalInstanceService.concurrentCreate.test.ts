@@ -125,8 +125,8 @@ describe("TerminalInstanceService.getOrCreate concurrent-create guard (assistant
     // setupTerminalAddons before either registers its instance — the exact
     // prewarmTerminal-vs-XtermAdapter race on "+"/new-session.
     const [a, b] = await Promise.all([
-      service.getOrCreate(id, "daintree-assistant", { fontSize: 13 }),
-      service.getOrCreate(id, "daintree-assistant", { fontSize: 13 }),
+      service.getOrCreate(id, "claude", { fontSize: 13 }),
+      service.getOrCreate(id, "claude", { fontSize: 13 }),
     ]);
 
     expect(a).toBe(b); // one shared instance, not two
@@ -136,8 +136,8 @@ describe("TerminalInstanceService.getOrCreate concurrent-create guard (assistant
 
   it("returns the same instance and adds no new subscription on a later getOrCreate(id)", async () => {
     const id = "asst-2";
-    const first = await service.getOrCreate(id, "daintree-assistant", { fontSize: 13 });
-    const second = await service.getOrCreate(id, "daintree-assistant", { fontSize: 13 });
+    const first = await service.getOrCreate(id, "claude", { fontSize: 13 });
+    const second = await service.getOrCreate(id, "claude", { fontSize: 13 });
 
     expect(second).toBe(first);
     expect(onDataCountFor(id)).toBe(1);
@@ -146,15 +146,15 @@ describe("TerminalInstanceService.getOrCreate concurrent-create guard (assistant
   it("frees the in-flight slot so a fresh id after teardown still creates exactly one", async () => {
     const id = "asst-3";
     const [a] = await Promise.all([
-      service.getOrCreate(id, "daintree-assistant", { fontSize: 13 }),
-      service.getOrCreate(id, "daintree-assistant", { fontSize: 13 }),
+      service.getOrCreate(id, "claude", { fontSize: 13 }),
+      service.getOrCreate(id, "claude", { fontSize: 13 }),
     ]);
     expect(onDataCountFor(id)).toBe(1);
     service.destroy(id);
 
     // A subsequent distinct id (a new "+"/session) creates cleanly — the guard
     // map didn't strand the prior id.
-    const other = await service.getOrCreate("asst-4", "daintree-assistant", { fontSize: 13 });
+    const other = await service.getOrCreate("asst-4", "claude", { fontSize: 13 });
     expect(a).not.toBe(other);
     expect(onDataCountFor("asst-4")).toBe(1);
   });
@@ -163,7 +163,7 @@ describe("TerminalInstanceService.getOrCreate concurrent-create guard (assistant
     const id = "asst-5";
     const release = armAddonGate(); // hold setupTerminalAddons open
 
-    const createP = service.getOrCreate(id, "daintree-assistant", { fontSize: 13 });
+    const createP = service.getOrCreate(id, "claude", { fontSize: 13 });
     await Promise.resolve(); // let getOrCreate run up to the addon await
 
     // The panel is torn down while the build is suspended (e.g. "+"/replaceExisting
@@ -177,7 +177,7 @@ describe("TerminalInstanceService.getOrCreate concurrent-create guard (assistant
     expect(service.creating.has(id)).toBe(false); // slot freed
 
     // The id is reusable afterward (no stranded cancel/creating state).
-    const fresh = await service.getOrCreate(id, "daintree-assistant", { fontSize: 13 });
+    const fresh = await service.getOrCreate(id, "claude", { fontSize: 13 });
     expect(service.instances.get(id)).toBe(fresh);
     expect(onDataCountFor(id)).toBe(1);
   });

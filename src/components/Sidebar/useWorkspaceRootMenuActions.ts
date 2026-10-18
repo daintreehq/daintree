@@ -2,7 +2,6 @@ import { useRef, useState } from "react";
 import type { WorkspaceRoot } from "@/hooks/useWorkspaceRoot";
 import { useWorktreeActions } from "@/hooks/useWorktreeActions";
 import { getAgentConfig, getAgentIds } from "@/config/agents";
-import { isAssistantOnlyAgentId } from "@shared/config/agentIds";
 import { getAgentSettingsEntry } from "@/types";
 import { isAgentLaunchable } from "@shared/utils/agentAvailability";
 import { isAgentPinned } from "@shared/utils/agentPinned";
@@ -43,7 +42,6 @@ export function useWorkspaceRootMenuActions(workspace: WorkspaceRoot): WorktreeM
   const baseIds = getAgentIds();
   const settingsIds = agentSettings?.agents ? Object.keys(agentSettings.agents) : [];
   const launchAgents = [...baseIds, ...settingsIds.filter((id) => !baseIds.includes(id)).sort()]
-    .filter((id) => !isAssistantOnlyAgentId(id))
     .filter((id) => isAgentPinned(getAgentSettingsEntry(agentSettings, id)))
     .map((id) => {
       const config = getAgentConfig(id);

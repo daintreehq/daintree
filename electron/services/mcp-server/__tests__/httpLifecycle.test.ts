@@ -126,8 +126,7 @@ function fakeDeps(overrides?: Partial<HttpLifecycleDeps>): HttpLifecycleDeps {
         return this.sessionOriginMap.get(sessionId) ?? "external";
       },
       isRendererOwnedOrigin(sessionId: string) {
-        const origin = this.getOrigin(sessionId);
-        return origin === "help" || origin === "assistant-pane";
+        return this.getOrigin(sessionId) === "help";
       },
       clearSessionBinding(sessionId: string) {
         this.sessionWebContentsMap.delete(sessionId);
@@ -1702,7 +1701,7 @@ describe("HttpLifecycle", () => {
       } as unknown as Partial<HttpLifecycleDeps>);
     }
 
-    it.each(["help", "assistant-pane", "external"] as const)(
+    it.each(["help", "external"] as const)(
       "forwards a %s session's origin on the pinned dispatch route",
       async (origin) => {
         const deps = pinnedOriginDeps();
@@ -1729,7 +1728,7 @@ describe("HttpLifecycle", () => {
       const revealOwnedRun = vi.fn();
       deps.revealOwnedRun = revealOwnedRun as unknown as HttpLifecycleDeps["revealOwnedRun"];
       const lc = new HttpLifecycle(deps);
-      deps.sessionStore.sessionOriginMap.set("sess-teardown", "assistant-pane");
+      deps.sessionStore.sessionOriginMap.set("sess-teardown", "help");
       deps.sessionStore.sessionWebContentsMap.set("sess-teardown", 7);
 
       const sessionDeps = (lc as unknown as OriginHandle).buildSessionServerDeps("sess-teardown");
@@ -1774,13 +1773,13 @@ describe("HttpLifecycle", () => {
     });
   });
 
-  describe("assistant-pane pinning resolvers (#10647)", () => {
+  describe("help-session pinning resolvers (#7002, #8317)", () => {
     function pinResolver(lc: HttpLifecycle) {
       return (
         lc as unknown as {
           resolveSessionPin: (
             h: string
-          ) => { origin: "help" | "assistant-pane" | "external"; webContentsId: number } | null;
+          ) => { origin: "help" | "external"; webContentsId: number } | null;
         }
       ).resolveSessionPin.bind(lc);
     }
@@ -1790,39 +1789,22 @@ describe("HttpLifecycle", () => {
       ).resolveActionContext.bind(lc);
     }
 
-    it("falls through to the assistant resolver for a pinned pane bearer", () => {
+    it("pins a help bearer to the renderer that minted it, with the help origin", () => {
       const lc = new HttpLifecycle(fakeDeps());
-      // A help resolver is wired but returns null for this (non-help) token.
-      lc.setHelpSessionWebContentsResolver(() => null);
-      lc.setAssistantPaneWebContentsResolver((token) => (token === "assistant-tok" ? 77 : null));
+      lc.setHelpSessionWebContentsResolver((token) => (token === "help-tok" ? 11 : null));
 
       const resolve = pinResolver(lc);
-      expect(resolve("Bearer assistant-tok")).toEqual({
-        origin: "assistant-pane",
-        webContentsId: 77,
-      });
+      expect(resolve("Bearer help-tok")).toEqual({ origin: "help", webContentsId: 11 });
       expect(resolve("Bearer unknown-tok")).toBeNull();
     });
 
-    it("prefers the help resolver over the assistant resolver", () => {
-      const lc = new HttpLifecycle(fakeDeps());
-      lc.setHelpSessionWebContentsResolver((token) => (token === "help-tok" ? 11 : null));
-      const assistant = vi.fn(() => 99);
-      lc.setAssistantPaneWebContentsResolver(assistant);
-
-      expect(pinResolver(lc)("Bearer help-tok")).toEqual({ origin: "help", webContentsId: 11 });
-      // Help match short-circuits — the assistant resolver is never consulted.
-      expect(assistant).not.toHaveBeenCalled();
-    });
-
-    it("replays the assistant ActionContext for a pinned pane bearer", () => {
+    it("replays the launch-time ActionContext for a help bearer", () => {
       const lc = new HttpLifecycle(fakeDeps());
       const ctx = { projectId: "p1", activeWorktreeId: "wt-3" };
-      lc.setHelpSessionActionContextResolver(() => null);
-      lc.setAssistantPaneActionContextResolver((token) => (token === "assistant-tok" ? ctx : null));
+      lc.setHelpSessionActionContextResolver((token) => (token === "help-tok" ? ctx : null));
 
       const resolve = ctxResolver(lc);
-      expect(resolve("Bearer assistant-tok")).toEqual(ctx);
+      expect(resolve("Bearer help-tok")).toEqual(ctx);
       expect(resolve("Bearer unknown-tok")).toBeNull();
     });
 
@@ -3347,17 +3329,17 @@ describe("HttpLifecycle", () => {
         expect(deps.sessionStore.sessionWorkspaceMap.size).toBe(0);
       });
 
-      it("never consults the pane binding for a bearer the assistant resolver pins", async () => {
-        // Pin precedence keeps the two binding models disjoint: an assistant
-        // bearer routes by its WebContents, with its own renderer-owned origin.
+      it("never consults the pane binding for a bearer the help resolver pins", async () => {
+        // Pin precedence keeps the two binding models disjoint: a help bearer
+        // routes by its WebContents, with its own renderer-owned origin.
         const deps = bindingDeps();
         const { lc, paneResolver } = paneLifecycle(deps);
-        lc.setAssistantPaneWebContentsResolver((token) => (token === PANE_TOKEN ? 77 : null));
+        lc.setHelpSessionWebContentsResolver((token) => (token === PANE_TOKEN ? 77 : null));
 
         const sessionId = await openSse(lc, deps, PANE_AUTH);
 
         expect(paneResolver).not.toHaveBeenCalled();
-        expect(deps.sessionStore.getOrigin(sessionId)).toBe("assistant-pane");
+        expect(deps.sessionStore.getOrigin(sessionId)).toBe("help");
         expect(deps.sessionStore.sessionWebContentsMap.get(sessionId)).toBe(77);
         expect(deps.sessionStore.sessionWorkspaceMap.has(sessionId)).toBe(false);
       });
@@ -3456,18 +3438,6 @@ describe("HttpLifecycle", () => {
         );
 
         expect(bind).toHaveBeenCalledExactlyOnceWith(expect.any(String), "principal-p");
-      });
-
-      it("binds an assistant-pane bearer too — it is a pane token, revoked on the same path", async () => {
-        const deps = bindingDeps();
-        const { lc } = principalLifecycle(deps);
-        lc.setAssistantPaneWebContentsResolver((token) => (token === PANE_TOKEN ? 77 : null));
-
-        const sessionId = await openSse(lc, deps, PANE_AUTH);
-
-        const ledger = deps.sessionStore.resourceOwnership;
-        expect(deps.sessionStore.getOrigin(sessionId)).toBe("assistant-pane");
-        expect(ledger.isPrincipalOwner(ledger.ownerOf(sessionId))).toBe(true);
       });
 
       it("leaves an api-key session owning its records itself", async () => {

@@ -952,18 +952,6 @@ describe("SessionStore.listExternalActiveClients (#8779)", () => {
     expect(clients.map((c) => c.sessionId)).toEqual(["ext"]);
   });
 
-  it("excludes an assistant-pane session", () => {
-    addExternal("ext", "Claude Code", "streamable-http");
-    store.httpSessions.set("pane", fakeHttpSession());
-    store.sessionTierMap.set("pane", "external");
-    store.sessionOriginMap.set("pane", "assistant-pane");
-    store.sessionWebContentsMap.set("pane", 8);
-    store.registerClientMetadata("pane", "node", "streamable-http");
-
-    const clients = store.listExternalActiveClients();
-    expect(clients.map((c) => c.sessionId)).toEqual(["ext"]);
-  });
-
   it("still lists a workspace-bound external client (#11789)", () => {
     // A real workspace handshake writes `sessionWorkspaceMap` only — the
     // selector and renderer-pin routes are mutually exclusive by construction,
@@ -1234,13 +1222,11 @@ describe("SessionStore session origin and workspace binding (#11789)", () => {
     expect(store.isRendererOwnedOrigin("never-seen")).toBe(false);
   });
 
-  it("treats help and assistant-pane as renderer-owned, external as not", () => {
+  it("treats help as renderer-owned, external as not", () => {
     store.sessionOriginMap.set("help", "help");
-    store.sessionOriginMap.set("pane", "assistant-pane");
     store.sessionOriginMap.set("ext", "external");
 
     expect(store.isRendererOwnedOrigin("help")).toBe(true);
-    expect(store.isRendererOwnedOrigin("pane")).toBe(true);
     expect(store.isRendererOwnedOrigin("ext")).toBe(false);
   });
 

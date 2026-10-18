@@ -111,7 +111,6 @@ const ASSISTANT_BASE = {
   modelIds: {},
   customArgs: "",
   idleHibernateMinutes: 5,
-  debugLogging: false,
 };
 
 const MCP_RUNNING = { enabled: true, state: "ready", port: 45454, lastError: null };

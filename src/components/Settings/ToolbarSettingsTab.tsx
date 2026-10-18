@@ -63,7 +63,7 @@ import {
 import { useRecipeStore } from "@/store/recipeStore";
 import { useUserAgentRegistryStore } from "@/store/userAgentRegistryStore";
 import { resolveLauncherItemMetadata } from "@/components/Layout/launcherToolbarCatalog";
-import { LAUNCHABLE_AGENT_IDS, isBuiltInAgentId } from "@shared/config/agentIds";
+import { BUILT_IN_AGENT_IDS, isBuiltInAgentId } from "@shared/config/agentIds";
 import {
   TOOLBAR_BUTTON_METADATA,
   getToolbarButtonGroup,
@@ -1012,7 +1012,7 @@ export function ToolbarSettingsTab() {
   // Everything not on the toolbar, by kind. Built-ins and panels come off the
   // side arrays or the fixed panel list; agents and plugin buttons off their
   // registries, since an unpinned one usually has no position at all.
-  const poolAgents = LAUNCHABLE_AGENT_IDS.filter(inPool);
+  const poolAgents = BUILT_IN_AGENT_IDS.filter(inPool);
   // The inventory rule: agents whose CLI isn't on this machine are the healthy
   // remainder, disclosed on request. One the user toggled this visit stays out.
   const isNotInstalled = (id: AnyToolbarButtonId) =>
@@ -1046,7 +1046,7 @@ export function ToolbarSettingsTab() {
   const defaultSelectionOptions = [
     { value: NO_DEFAULT_SELECTION, label: "None (first available)" },
     { value: "terminal", label: "Terminal" },
-    ...LAUNCHABLE_AGENT_IDS.map((id) => ({ value: id, label: getAgentConfig(id)?.name ?? id })),
+    ...BUILT_IN_AGENT_IDS.map((id) => ({ value: id, label: getAgentConfig(id)?.name ?? id })),
     { value: "browser", label: "Browser" },
     { value: "dev-server", label: "Dev preview" },
   ];

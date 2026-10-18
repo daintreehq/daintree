@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { DEFAULT_DANGEROUS_ARGS } from "@shared/types/agentSettings";
-import { LAUNCHABLE_AGENT_IDS } from "@shared/config/agentIds";
+import { BUILT_IN_AGENT_IDS } from "@shared/config/agentIds";
 
 /**
  * Tests for the skip-permissions toggle gating logic.
@@ -31,13 +31,12 @@ describe("Skip permissions toggle gating", () => {
 
   it("gating expression matches expected agents", () => {
     // This mirrors the gating logic in AgentCliStep.tsx, which operates on the
-    // wizard's selectable agents (LAUNCHABLE_AGENT_IDS). Assistant-only agents
-    // never reach the wizard, so they're excluded from the gating universe.
+    // wizard's selectable agents (BUILT_IN_AGENT_IDS).
     // agentsWithDangerousToggle = selectedAgentIds.filter(id => (DEFAULT_DANGEROUS_ARGS[id] ?? "") !== "")
-    const agentsWithToggle = LAUNCHABLE_AGENT_IDS.filter(
+    const agentsWithToggle = BUILT_IN_AGENT_IDS.filter(
       (id) => (DEFAULT_DANGEROUS_ARGS[id] ?? "") !== ""
     );
-    const agentsWithoutToggle = LAUNCHABLE_AGENT_IDS.filter(
+    const agentsWithoutToggle = BUILT_IN_AGENT_IDS.filter(
       (id) => (DEFAULT_DANGEROUS_ARGS[id] ?? "") === ""
     );
 

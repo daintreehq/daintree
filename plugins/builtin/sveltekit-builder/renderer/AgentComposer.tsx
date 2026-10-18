@@ -13,7 +13,7 @@ import { getEffectiveAgentConfig } from "@shared/config/agentRegistry";
 import { getAgentConfig } from "@/config/agents";
 import { BrandMark } from "@/components/icons/BrandMark";
 import { isAgentLaunchable } from "@shared/utils/agentAvailability";
-import { LAUNCHABLE_AGENT_IDS } from "@shared/config/agentIds";
+import { BUILT_IN_AGENT_IDS } from "@shared/config/agentIds";
 import { actionService } from "@/services/ActionService";
 import { useCliAvailabilityStore } from "@/store/cliAvailabilityStore";
 import {
@@ -212,7 +212,7 @@ export function AgentComposer({
   const inputId = useId();
 
   const launchable: Destination[] = launchOrder(
-    availabilityKnown ? LAUNCHABLE_AGENT_IDS : LEADING_AGENTS
+    availabilityKnown ? BUILT_IN_AGENT_IDS : LEADING_AGENTS
   ).flatMap((agentId) => {
     const config = getEffectiveAgentConfig(agentId);
     // The request is typed in only once the agent is seen waiting at its own

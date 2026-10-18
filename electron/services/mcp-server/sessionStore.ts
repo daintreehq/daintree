@@ -108,7 +108,7 @@ export class SessionStore {
   // a workspace selector: the target WebContents is re-resolved from this on
   // every operation, because a view's id dies with the view while the workspace
   // id outlives it. Absent for unbound external sessions, which keep the
-  // focused-window fallback, and for help / assistant-pane sessions, which
+  // focused-window fallback, and for help sessions, which
   // route through `sessionWebContentsMap` instead.
   readonly sessionWorkspaceMap = new Map<string, string>();
   // sessionId → digest of the credential that created the session, written at
@@ -260,8 +260,7 @@ export class SessionStore {
    * asking about ownership rather than routing.
    */
   isRendererOwnedOrigin(sessionId: string): boolean {
-    const origin = this.getOrigin(sessionId);
-    return origin === "help" || origin === "assistant-pane";
+    return this.getOrigin(sessionId) === "help";
   }
 
   /**

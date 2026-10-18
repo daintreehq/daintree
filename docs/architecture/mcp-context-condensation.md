@@ -2,8 +2,6 @@
 
 The authoring standard for every string Daintree pays to send to a model on every turn: tool descriptions, field descriptions, and the JSON Schemas that carry them. It applies to the action manifest, because that manifest _is_ the tool surface of the [MCP server](./mcp-server.md).
 
-This is the Daintree-side half of a standard shared with the assistant CLI. The two repos condense different artifacts (the CLI owns its own tool schemas; this repo owns actions, their schemas, and the prose on both) but the rules below and the reasoning in [What must not be cut](#what-must-not-be-cut) are the same on both sides.
-
 ## Why it exists
 
 The tool region is the largest single part of an MCP request, it is re-sent on every round including tool-continuation rounds where nothing the user typed changed, and clients cap what they will accept — Cursor silently truncates past its cap, Copilot hard-errors at 128 tools. #11585 already cut the external surface from 100 tools to the high twenties for exactly this reason. That cut attacked tool _count_; this standard attacks _bytes per tool_, which is the axis left over.

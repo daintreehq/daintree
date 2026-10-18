@@ -323,12 +323,10 @@ export type McpGrantRecordType =
 
 /**
  * Identity class of the actor a native automation grant (#10648) was issued
- * to. Both are renderer-pinned internal bearers:
- * - `help-session`: the help-chat assistant panel (a full help session).
- * - `assistant-pane`: a `daintree-assistant` CLI pane bearer (#10647) pinned
- *   to its launching WebContents without being promoted to a help session.
+ * to: `help-session`, the help-chat assistant panel, a renderer-pinned
+ * internal bearer.
  */
-export type McpGrantActorType = "help-session" | "assistant-pane";
+export type McpGrantActorType = "help-session";
 
 /**
  * Source of a `grant.revoked` transition.
@@ -385,8 +383,12 @@ export interface McpGrantRecord {
   remainingUses?: number;
   /** Public id of the actor the native grant was issued to. Native grants only. */
   actorId?: string;
-  /** Actor identity class for a native grant. Native grants only. */
-  actorType?: McpGrantActorType;
+  /**
+   * Actor identity class for a native grant. Native grants only. Read back as
+   * written, so a row from an older build can name an actor this one no longer
+   * issues grants to.
+   */
+  actorType?: McpGrantActorType | (string & {});
   /**
    * Dotted `BuiltInActionId`s a native grant authorizes. Carried on
    * `grant.issued`/`grant.revoked` (where `toolId` is `"*"`) so the audit
@@ -911,11 +913,11 @@ export interface HelpSessionBearerRecord {
  * one (#11808). Mirroring it renderer-side instead would leave two unions free
  * to drift, silently reclassifying a surface as external the day they did.
  *
- * The same two Daintree-own surfaces this splits out are the ones
+ * The Daintree-own surface this splits out is the one
  * {@link McpGrantActorType} names; that type classifies who a grant was issued
  * to, this one classifies how the session itself authenticated.
  */
-export type McpSessionOrigin = "help" | "assistant-pane" | "external";
+export type McpSessionOrigin = "help" | "external";
 
 /**
  * Display-only provenance for the external bearer behind a `danger: "confirm"`

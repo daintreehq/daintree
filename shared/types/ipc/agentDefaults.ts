@@ -1,4 +1,4 @@
-import { isBuiltInAgentId, type BuiltInAgentId } from "../../config/agentIds.js";
+import { isBuiltInAgentId, isRetiredAgentId, type BuiltInAgentId } from "../../config/agentIds.js";
 
 /**
  * The two agent defaults a host owns (#13345): the agent the Daintree
@@ -27,16 +27,19 @@ export type AgentDefaultsLegacyCandidates = AgentDefaultsSnapshot;
 const MAX_AGENT_ID_LENGTH = 128;
 
 /**
- * Syntax only. A stored assistant agent has to survive its CLI being
- * uninstalled or its registry entry not loading yet, so the renderer can say
- * why it isn't being used instead of the host silently forgetting it.
+ * Syntax only, bar a retired built-in. A stored assistant agent has to survive
+ * its CLI being uninstalled or its registry entry not loading yet, so the
+ * renderer can say why it isn't being used instead of the host silently
+ * forgetting it. A retired agent will never load, so it reads as cleared and an
+ * old localStorage value can't land it again.
  */
 export function isStorableAssistantAgentId(value: unknown): value is string {
   return (
     typeof value === "string" &&
     value.length > 0 &&
     value.length <= MAX_AGENT_ID_LENGTH &&
-    !/[\s\p{Cc}]/u.test(value)
+    !/[\s\p{Cc}]/u.test(value) &&
+    !isRetiredAgentId(value)
   );
 }
 

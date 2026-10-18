@@ -20,7 +20,7 @@ Multi-process topology, IPC transports, multi-window isolation.
 
 The four long-lived classes — the three hosts and the plugin worker — are forked from a `*-bootstrap.js` (`pty-host-bootstrap.ts`, `workspace-host-bootstrap.ts`, `watchdog-host-bootstrap.ts`, `plugin-dev-worker-bootstrap.ts`) with `stdio: "pipe"` (not `"inherit"` — fd 2 may point at a dead pty on AppImage GUI launches, #5588). The three hosts fork with `cwd: os.homedir()` and tag themselves with `DAINTREE_UTILITY_PROCESS_KIND` in `env`; a plugin worker instead forks at its plugin's own directory. The VAD child is the exception on every count: no bootstrap, forked directly at its compiled entry, `stdio: "ignore"` and no kind tag, because it is short-lived, prints nothing, and speaks only its own message protocol.
 
-Two more process classes exist but are not part of the steady-state topology: an **assistant native host** (`electron/services/assistant-host/`, contract landed, nothing spawns it yet — see [assistant-native-host.md](./assistant-native-host.md)), and the **paint-fabric surface views** behind `DAINTREE_PAINT_FABRIC_VIEWS` (sibling `WebContentsView`s, not utility processes — see [terminal-paint-fabric.md](./terminal-paint-fabric.md)).
+One more process class exists but is not part of the steady-state topology: the **paint-fabric surface views** behind `DAINTREE_PAINT_FABRIC_VIEWS` (sibling `WebContentsView`s, not utility processes — see [terminal-paint-fabric.md](./terminal-paint-fabric.md)).
 
 ### Topology
 

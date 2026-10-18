@@ -78,7 +78,6 @@ import {
 import { MenuActionSourceContext } from "@/components/ui/menu-source";
 import { buildPanelDuplicateOptions } from "@/services/terminal/panelDuplicationService";
 import { getEffectiveAgentIds } from "@shared/config/agentRegistry";
-import { isAssistantOnlyAgentId } from "@shared/config/agentIds";
 import {
   subscribeToPluginAgentRegistry,
   getPluginAgentRegistrySnapshot,
@@ -811,8 +810,6 @@ export function useContentGridContext({
     // getEffectiveAgentIds/getAgentConfig read the merged (incl. plugin) registry (#9879).
     void pluginAgentRegistry;
     const agents: DockLaunchAgent[] = getEffectiveAgentIds()
-      // Assistant-only agents are never offered in the grid launch menu.
-      .filter((id) => !isAssistantOnlyAgentId(id))
       .filter((id) => !gridSelectedAgentIds || gridSelectedAgentIds.has(id))
       .map((id) => {
         const config = getAgentConfig(id);

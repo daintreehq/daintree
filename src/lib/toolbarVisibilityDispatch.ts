@@ -44,7 +44,7 @@ export interface ToolbarVisibilityDispatchDeps {
  * rather than to the opposite of raw `pinned`.
  *
  * Pinning an agent also asks for a position. Since #11680 removed the
- * `LAUNCHABLE_AGENT_IDS` spread from `DEFAULT_LEFT_BUTTONS`, a fresh profile's
+ * `BUILT_IN_AGENT_IDS` spread from `DEFAULT_LEFT_BUTTONS`, a fresh profile's
  * agent ids sit in neither side array, so the pin alone would leave the button
  * with nowhere to render — the same gap `setPanelButtonOnToolbar` closes for
  * `browser`/`dev-server`. Both surfaces that can pin an agent (the launcher and

@@ -22,7 +22,6 @@ import {
   resolveKeepDecorations,
 } from "@shared/types/agentSettings";
 import { getAgentSettingsEntrySnapshot } from "@/store/storeAccessors";
-import { isAssistantOnlyAgentId } from "@shared/config/agentIds";
 import { loadCustomLaunchFlags } from "@/lib/assistantLaunchFlags";
 import {
   type HelpSessionRef,
@@ -1280,13 +1279,8 @@ export class HelpSessionController {
     // fresh. An entry without an id (a Codex lane never captured) starts fresh.
     if (hibernated.sessionId.length === 0) return null;
 
-    // The Daintree Assistant runs in the project root (env-only MCP, ships its
-    // own skills, reads nothing from cwd) — never the session dir or the
-    // captured hibernation cwd. Other help agents resume in the session dir
-    // that owns their config files.
-    const cwd = isAssistantOnlyAgentId(launchAgentId)
-      ? launchProject.path
-      : (session?.sessionPath ?? hibernated.cwd ?? folderPath);
+    // Resume in the session dir that owns the agent's config files.
+    const cwd = session?.sessionPath ?? hibernated.cwd ?? folderPath;
 
     const command = buildResumeCommand(launchAgentId, hibernated.sessionId, flags);
     if (!command) return null;
@@ -1610,14 +1604,8 @@ export class HelpSessionController {
         this._pendingSessionId = session.sessionId;
       }
       this._patch({ phase: "launching" });
-      // The Daintree Assistant is env-only (MCP via DAINTREE_MCP_* env vars)
-      // and ships its own skills, so it reads nothing from cwd. Run it in the
-      // project root so its file tools and the terminal's file-link resolution
-      // operate on the actual project; other help agents stay in the session
-      // dir that owns their .mcp.json / settings. `launchProject` is the exact
-      // project this session was provisioned for, so cwd can't drift to a
-      // different project the user switched to mid-launch.
-      const cwd = isAssistantOnlyAgentId(launchAgentId) ? launchProject.path : session.sessionPath;
+      // The session dir owns the agent's .mcp.json / settings.
+      const cwd = session.sessionPath;
       const helpEnv = buildHelpEnv(session, launchProject.id, launchAgentId);
       const env: Record<string, string> | undefined =
         helpEnv || presetEnv ? { ...(presetEnv ?? {}), ...(helpEnv ?? {}) } : undefined;

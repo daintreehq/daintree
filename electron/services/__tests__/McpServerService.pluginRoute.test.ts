@@ -54,8 +54,6 @@ vi.mock("../McpPaneConfigService.js", () => ({
   mcpPaneConfigService: {
     isValidPaneToken: (token: string) => paneTokenTiers.has(token),
     getTierForToken: (token: string) => paneTokenTiers.get(token),
-    getWebContentsIdForToken: () => null,
-    getActionContextForToken: () => null,
   },
 }));
 

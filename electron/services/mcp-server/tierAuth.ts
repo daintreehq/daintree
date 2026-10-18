@@ -858,9 +858,9 @@ const LADDER_RANK: Readonly<Record<LadderTier, number>> = {
 /**
  * Whether this session may be told that actions exist above its tier (#12117).
  *
- * Two conditions, both necessary. The origin must be renderer-owned — `help` or
- * `assistant-pane`, a pinned panel with a human watching and a first-party
- * prompt that carries the rule for reading a stub. And the tier must be on the
+ * Two conditions, both necessary. The origin must be renderer-owned — `help`,
+ * a pinned panel with a human watching and a first-party prompt that carries
+ * the rule for reading a stub. And the tier must be on the
  * in-app ladder: `external` is a flat peer of that ladder rather than a rung on
  * it, so there is no tier an external caller could be raised to and nothing
  * honest to report.

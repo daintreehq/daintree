@@ -40,7 +40,6 @@ import {
 } from "../../../shared/utils/dispatchTerminalCommand.js";
 import { isGenericNativeGrantEligible } from "../../../shared/config/nativeGrantUsePolicies.js";
 import { formatErrorMessage } from "../../../shared/utils/errorMessage.js";
-import { isAssistantOnlyAgentId } from "../../../shared/config/agentIds.js";
 import { OWNED_TWIN_TOOLS } from "../../../shared/config/helpAssistantTierAllowlists.js";
 import { MCP_EXTERNAL_OMITTED_ARGS } from "../../../shared/config/mcpExternalTierAllowlist.js";
 import { getAgentAvailabilityStore } from "../AgentAvailabilityStore.js";
@@ -1654,8 +1653,8 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
       rendererOwnedOrigin,
       relay: sessionSurface.relay === true,
     });
-    // Daintree's own assistant only (#12874): not the retired `assistant-pane`
-    // origin, not agent panes, not api-key clients. Read live per call, and a
+    // Daintree's own assistant only (#12874): not agent panes, not api-key
+    // clients. Read live per call, and a
     // failed read keeps the dialog. A batch item inherits its batch's answer.
     let confirmationsSkipped = false;
     if (batchItem?.confirmationsSkipped !== undefined) {
@@ -3073,7 +3072,7 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
           }
         }
 
-        // Two launch arguments that would otherwise hand a session authority it
+        // A launch argument that would otherwise hand a session authority it
         // was never given (#12407), refused before anything reaches a renderer.
         //
         // A caller-chosen panel id that is already live does not create a
@@ -3082,10 +3081,6 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
         // running. The ledger would record that shell as this session's, and
         // the owned input tools would type into it. A collision is never a
         // legitimate request, so this applies to every origin.
-        //
-        // An assistant-only agent launched from a session that is not the
-        // assistant would be given the assistant's own pinned bearer, and with
-        // it the unscoped terminal input this session was just denied.
         if (
           actionId === AGENT_LAUNCH_TOOL &&
           typeof args === "object" &&
@@ -3110,14 +3105,6 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
               value: { ok: false, error: { code: "VALIDATION_ERROR", message } },
             };
             return buildToolError({ code: "VALIDATION_ERROR", message });
-          }
-          if (!rendererOwnedOrigin && isAssistantOnlyAgentId(readStringArg(args, "agentId"))) {
-            const message = `'${actionId}' cannot start Daintree's own assistant from this connection.`;
-            outcome = {
-              kind: "result",
-              value: { ok: false, error: { code: TIER_NOT_PERMITTED_CODE, message } },
-            };
-            return buildToolError({ code: TIER_NOT_PERMITTED_CODE, message });
           }
         }
 

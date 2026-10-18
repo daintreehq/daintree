@@ -15,7 +15,7 @@ import { DndContext } from "@dnd-kit/core";
 import motionFeatures from "@/lib/motionFeatures";
 import { resolveAppTheme } from "@shared/theme/themes";
 import type { CliAvailability } from "@shared/types";
-import { LAUNCHABLE_AGENT_IDS } from "@shared/config/agentIds";
+import { BUILT_IN_AGENT_IDS } from "@shared/config/agentIds";
 import { applyAppThemeToRoot } from "@/theme/applyAppTheme";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -632,7 +632,7 @@ function DiffSidebarSection() {
 
 function AgentCliSection() {
   const availability = Object.fromEntries(
-    LAUNCHABLE_AGENT_IDS.map((id) => [id, "ready"])
+    BUILT_IN_AGENT_IDS.map((id) => [id, "ready"])
   ) as CliAvailability;
   const selections = { claude: true, codex: true, gemini: true, aider: true };
   return (

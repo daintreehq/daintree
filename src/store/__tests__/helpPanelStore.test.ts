@@ -838,6 +838,33 @@ describe("helpPanelStore persistence migration", () => {
       });
     });
 
+    // Resume needs the same agent, and the retired assistant CLI never
+    // launches again, so its entries are dropped rather than carried forever.
+    it("drops entries for the retired assistant CLI during rehydration", async () => {
+      const blob = JSON.stringify({
+        version: 7,
+        state: {
+          width: 400,
+          introDismissed: false,
+          hibernateSessions: {
+            [slotKey("live-proj", 0)]: { sessionId: "abc", cwd: "/tmp", agentId: "codex" },
+            [slotKey("retired-proj", 0)]: {
+              sessionId: "def",
+              cwd: "/tmp",
+              agentId: "daintree-assistant",
+            },
+          },
+        },
+      });
+      installLocalStorage({ [STORAGE_KEY]: blob });
+
+      const { useHelpPanelStore: store } = await import("../helpPanelStore");
+
+      expect(store.getState().hibernateSessions).toEqual({
+        [slotKey("live-proj", 0)]: { sessionId: "abc", cwd: "/tmp", agentId: "codex" },
+      });
+    });
+
     it("preserves empty-sessionId entries (resume-latest sentinel, #8787)", async () => {
       // sessionId: "" signals "graceful-shutdown capture missed — use the
       // agent's resume-latest flag on next open" (e.g. claude --continue).

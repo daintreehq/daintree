@@ -26,7 +26,6 @@ import {
   pluginRecipesClient,
 } from "@/clients";
 import { getAgentConfig, getMergedPreset } from "@/config/agents";
-import { isAssistantOnlyAgentId } from "@shared/config/agentIds";
 import {
   generateAgentCommand,
   buildAgentLaunchFlags,
@@ -1242,18 +1241,17 @@ const createRecipeStore: StateCreator<RecipeState> = (set, get) => ({
             : {};
 
           if (isAgentRecipeType(terminal.type)) {
-            // The sanitizer admits every built-in agent id, the assistant's
-            // included, but an assistant-only agent is never a standalone
-            // launch (#12407). Launching one here would mint the assistant's
-            // pinned bearer for whichever caller ran the recipe — an agent
-            // pane's MCP session among them.
-            if (isAssistantOnlyAgentId(terminal.type)) {
-              throw new Error(
-                `'${terminal.type}' only runs as Daintree's assistant and cannot be launched from a recipe.`
-              );
-            }
             const agentId = terminal.type as string;
             const agentConfig = getAgentConfig(agentId);
+            // A hand-edited recipe can name an agent nothing registers, a
+            // retired built-in or an unloaded plugin's among them. Fail this
+            // terminal alone rather than spawn a blank command for it.
+            if (!agentConfig) {
+              const safeType = sanitizeTerminalName(agentId).slice(0, 80);
+              throw new Error(
+                `'${safeType}' isn't a registered agent, so this terminal can't launch.`
+              );
+            }
             let launchCliDetail = launchCliDetails.get(agentId);
             if (!launchCliDetail) {
               launchCliDetail = getCurrentLaunchCliDetail(agentId, true);

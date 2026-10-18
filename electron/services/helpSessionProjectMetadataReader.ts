@@ -1,10 +1,6 @@
 import { projectStore } from "./ProjectStore.js";
 import { getEffectiveRegistry } from "../../shared/config/agentRegistry.js";
-import {
-  LAUNCHABLE_AGENT_IDS,
-  isAssistantOnlyAgentId,
-  isBuiltInAgentId,
-} from "../../shared/config/agentIds.js";
+import { BUILT_IN_AGENT_IDS, isBuiltInAgentId } from "../../shared/config/agentIds.js";
 import { isAgentLaunchable } from "../../shared/utils/agentAvailability.js";
 import type { CliAvailability } from "../../shared/types/ipc/system.js";
 import { gitServiceCache } from "./GitServiceCache.js";
@@ -57,9 +53,9 @@ async function readForgeRemote(
 export function listLaunchableAgents(availability: CliAvailability | null): HelpSessionAgentsFact {
   const registry = getEffectiveRegistry();
   const ids = [
-    ...LAUNCHABLE_AGENT_IDS.filter((id) => Object.hasOwn(registry, id)),
+    ...BUILT_IN_AGENT_IDS.filter((id) => Object.hasOwn(registry, id)),
     ...Object.keys(registry)
-      .filter((id) => !isBuiltInAgentId(id) && !isAssistantOnlyAgentId(id))
+      .filter((id) => !isBuiltInAgentId(id))
       .sort(),
   ];
   return {

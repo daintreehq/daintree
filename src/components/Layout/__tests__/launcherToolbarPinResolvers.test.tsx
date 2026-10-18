@@ -104,7 +104,7 @@ describe("getLauncherPanelButtonIdForKind", () => {
 
 describe("isAgentButtonOnToolbar (#11680)", () => {
   it("requires a position as well as an installed binary when the pin is unset", () => {
-    // The whole point of dropping the `LAUNCHABLE_AGENT_IDS` spread: installing a
+    // The whole point of dropping the built-in agent-id spread: installing a
     // CLI no longer implies a toolbar slot. `isAgentToolbarVisible` still answers
     // the old question and would report this one as on.
     expect(isAgentButtonOnToolbar(undefined, "ready", false)).toBe(false);

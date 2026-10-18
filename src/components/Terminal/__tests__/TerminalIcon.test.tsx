@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import { render } from "@testing-library/react";
 import { TerminalIcon } from "../TerminalIcon";
 import { deriveTerminalChrome, type TerminalChromeDescriptor } from "@/utils/terminalChrome";
+import { setPluginAgentRegistry } from "@shared/config/pluginAgentRegistry";
 import {
   PLUGIN_ICON_COMPONENTS,
   PLUGIN_ICON_IDS,
@@ -289,11 +290,25 @@ describe("TerminalIcon", () => {
     });
 
     it("resolves an agent whose registry id differs from its icon id", () => {
-      // `daintree-assistant` registers under that id but its brand mark is
-      // keyed `daintreeassistant`. The palette accepted the registry id via
-      // `getAgentConfig` while headers/tabs fell back to the terminal glyph.
-      expect(glyph("daintree-assistant")).toBe(glyph("daintreeassistant"));
-      expect(glyph("daintree-assistant")).not.toBe(glyph("no-such-icon"));
+      // A plugin agent can register under one id and name another brand mark.
+      // The palette accepted the registry id via `getAgentConfig` while
+      // headers/tabs fell back to the terminal glyph.
+      setPluginAgentRegistry({
+        "acme-agent": {
+          id: "acme-agent",
+          name: "Acme Agent",
+          command: "acme",
+          color: "#3366ff",
+          iconId: "codex",
+          supportsContextInjection: false,
+        },
+      });
+      try {
+        expect(glyph("acme-agent")).toBe(glyph("codex"));
+        expect(glyph("acme-agent")).not.toBe(glyph("no-such-icon"));
+      } finally {
+        setPluginAgentRegistry({});
+      }
     });
 
     it("treats inherited object keys as unknown ids", () => {

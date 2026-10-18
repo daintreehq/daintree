@@ -162,8 +162,6 @@ vi.mock("@/config/agents", () => ({
       };
     if (id === "codex")
       return { name: "Codex", supports: { permissionBypass: true, tier: "stable" } };
-    if (id === "daintree-assistant")
-      return { name: "Daintree Assistant", supports: { permissionBypass: false, tier: "stable" } };
     // Assistant-wired but with no bypass mechanism of any kind — the shape a
     // user-defined agent takes.
     if (id === "byoa")
@@ -419,40 +417,6 @@ describe("DaintreeAssistantSettingsTab", () => {
     });
   });
 
-  it("hides the debug logging toggle unless the Daintree Assistant agent is selected", async () => {
-    helpPanelState.preferredAgentId = "claude";
-    const { container } = render(
-      <SettingsValidationProvider>
-        <DaintreeAssistantSettingsTab />
-      </SettingsValidationProvider>
-    );
-    await waitForContent(container, "Search documentation");
-
-    expect(screen.queryByLabelText("Enable Daintree Assistant debug logging")).toBeNull();
-  });
-
-  it("shows the debug logging toggle for the Daintree Assistant agent and persists debugLogging=true", async () => {
-    helpPanelState.preferredAgentId = "daintree-assistant";
-    const { container } = render(
-      <SettingsValidationProvider>
-        <DaintreeAssistantSettingsTab />
-      </SettingsValidationProvider>
-    );
-    await waitForContent(container, "Search documentation");
-
-    const toggle = screen.getByLabelText("Enable Daintree Assistant debug logging");
-    await waitFor(() => {
-      expect(toggle.hasAttribute("disabled")).toBe(false);
-    });
-    fireEvent.click(toggle);
-
-    await waitFor(() => {
-      expect(window.electron.helpAssistant.setSettings).toHaveBeenCalledWith({
-        debugLogging: true,
-      });
-    });
-  });
-
   it("turning on bypass permissions reveals the inline warning copy", async () => {
     helpPanelState.preferredAgentId = "claude";
     const { container } = render(
@@ -591,11 +555,11 @@ describe("DaintreeAssistantSettingsTab", () => {
     });
   });
 
-  // One stored boolean, three different mechanisms behind it. Labelling them
+  // One stored boolean, a different mechanism per agent. Labelling them
   // all as Claude's flag reads as a no-op while silently enabling
   // auto-approval, so the copy has to follow the selected agent (#11879).
   it("labels the bypass toggle with the selected agent's own mechanism", async () => {
-    mockGetAssistantSupportedAgentIds.mockReturnValue(["claude", "codex", "daintree-assistant"]);
+    mockGetAssistantSupportedAgentIds.mockReturnValue(["claude", "codex"]);
     helpPanelState.preferredAgentId = "codex";
 
     const { container } = render(
@@ -621,54 +585,29 @@ describe("DaintreeAssistantSettingsTab", () => {
     expect(container.textContent).toContain("without its own approval prompts");
   });
 
-  it("describes the Daintree Assistant's env-var bypass, not a CLI flag", async () => {
-    mockGetAssistantSupportedAgentIds.mockReturnValue(["claude", "codex", "daintree-assistant"]);
-    helpPanelState.preferredAgentId = "daintree-assistant";
-
-    const { container } = render(
-      <SettingsValidationProvider>
-        <DaintreeAssistantSettingsTab />
-      </SettingsValidationProvider>
-    );
-    await waitForContent(container, "Auto-approve assistant actions");
-
-    expect(container.textContent).toContain("own per-action confirmation sheet");
-    // The assistant has no dangerous-args entry, so no flag may be claimed.
-    expect(container.textContent).not.toContain("--dangerously");
-
-    const toggle = screen.getByRole("switch", { name: "Auto-approve assistant actions" });
-    fireEvent.click(toggle);
-
-    await waitForContent(container, "acts without asking");
-    // Same #12119 scoping: the sheet it skips is its own, not Daintree's host
-    // confirmation, which still fires for confirmation-required actions.
-    expect(container.textContent).toContain("it skips its own confirmation sheet for everything");
-    expect(window.electron.helpAssistant.setSettings).toHaveBeenCalledWith({
-      bypassPermissions: true,
-    });
-  });
-
-  // #11907: with the confirmation sheet off, the tool set carries most of the
+  // #11907: with the permission gate off, the tool set carries most of the
   // remaining boundary, so the warning has to name it — and keep naming the
   // right one when the selector moves (a missing memo dependency would freeze
   // the old set in the copy while the selector reads the new one). #12119
   // stopped it claiming to be the *entire* boundary, so the assertions below
   // pin both halves: the set-named limit and the confirmation exception.
-  it("names the configured tool set in the auto-approve warning and follows the selector", async () => {
-    mockGetAssistantSupportedAgentIds.mockReturnValue(["claude", "codex", "daintree-assistant"]);
-    helpPanelState.preferredAgentId = "daintree-assistant";
+  it("names the configured tool set in the bypass warning and follows the selector", async () => {
+    mockGetAssistantSupportedAgentIds.mockReturnValue(["claude", "codex"]);
+    helpPanelState.preferredAgentId = "claude";
 
     const { container } = render(
       <SettingsValidationProvider>
         <DaintreeAssistantSettingsTab />
       </SettingsValidationProvider>
     );
-    await waitForContent(container, "Auto-approve assistant actions");
+    await waitForContent(container, "Bypass Claude permission prompts");
 
     // The switch stays disabled until the initial settings and MCP-status loads
     // both settle, and the heading above renders before that — clicking while
     // it's still disabled would drop the event and time out downstream.
-    const toggle = screen.getByRole("switch", { name: "Auto-approve assistant actions" });
+    const toggle = screen.getByRole("switch", {
+      name: "Bypass Claude permission prompts during help sessions",
+    });
     await waitFor(() => {
       expect(toggle.hasAttribute("disabled")).toBe(false);
     });
@@ -1578,9 +1517,9 @@ describe("DaintreeAssistantSettingsTab", () => {
     });
   });
 
-  it("marks debug logging and bypass permissions modified away from their defaults, and resets them", async () => {
-    mockGetAssistantSupportedAgentIds.mockReturnValue(["claude", "daintree-assistant"]);
-    helpPanelState.preferredAgentId = "daintree-assistant";
+  it("marks bypass permissions modified away from its default, and resets it", async () => {
+    mockGetAssistantSupportedAgentIds.mockReturnValue(["claude"]);
+    helpPanelState.preferredAgentId = "claude";
     installApi({
       getSettings: vi.fn().mockResolvedValue({
         docSearch: true,
@@ -1591,7 +1530,6 @@ describe("DaintreeAssistantSettingsTab", () => {
         modelIds: {},
         customArgs: "",
         idleHibernateMinutes: 5,
-        debugLogging: true,
       }),
     });
 
@@ -1600,23 +1538,20 @@ describe("DaintreeAssistantSettingsTab", () => {
         <DaintreeAssistantSettingsTab />
       </SettingsValidationProvider>
     );
-    await waitForContent(container, "Debug logging");
+    await waitForContent(container, "Bypass Claude permission prompts");
 
-    fireEvent.click(await screen.findByLabelText("Reset Debug logging to default"));
-    await waitFor(() => {
-      expect(window.electron.helpAssistant.setSettings).toHaveBeenCalledWith({
-        debugLogging: false,
-      });
-    });
-    fireEvent.click(screen.getByLabelText("Reset Auto-approve assistant actions to default"));
+    fireEvent.click(
+      await screen.findByLabelText("Reset Bypass Claude permission prompts to default")
+    );
     await waitFor(() => {
       expect(window.electron.helpAssistant.setSettings).toHaveBeenCalledWith({
         bypassPermissions: false,
       });
     });
     await waitFor(() => {
-      expect(screen.queryByLabelText("Reset Debug logging to default")).toBeNull();
-      expect(screen.queryByLabelText("Reset Auto-approve assistant actions to default")).toBeNull();
+      expect(
+        screen.queryByLabelText("Reset Bypass Claude permission prompts to default")
+      ).toBeNull();
     });
   });
 
@@ -2140,7 +2075,6 @@ describe("DaintreeAssistantSettingsTab accepting messages from other machines (#
     modelIds: {},
     customArgs: "",
     idleHibernateMinutes: 5 as const,
-    debugLogging: false,
     loadGlobalHooksAndServers: false,
     daintreeConfirmations: "inherit" as const,
     acceptRemoteMessages,

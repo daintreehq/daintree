@@ -20,7 +20,7 @@ import { AgentIdentityBlock, resolveIdentity } from "@/components/agents/AgentCa
 import { Button } from "@/components/ui/button";
 import { KbdChord } from "@/components/ui/Kbd";
 import { Badge } from "@/components/ui/badge";
-import { LAUNCHABLE_AGENT_IDS } from "@shared/config/agentIds";
+import { BUILT_IN_AGENT_IDS } from "@shared/config/agentIds";
 import type {
   HibernationConfig,
   SessionRestoreConfig,
@@ -64,7 +64,7 @@ const CURATED_SHORTCUTS = [
     category: "Agents",
     actionIds: [
       "panel.palette",
-      ...LAUNCHABLE_AGENT_IDS.map((id) => `agent.${id}`),
+      ...BUILT_IN_AGENT_IDS.map((id) => `agent.${id}`),
       "agent.terminal",
       "terminal.inject",
     ],

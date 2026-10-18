@@ -21,12 +21,12 @@ import {
   type PersistWriteMergeContext,
 } from "./persistence/persistWriteMerge";
 import { registerPersistedStore } from "./persistence/persistedStoreRegistry";
-import { BUILT_IN_AGENT_IDS, LAUNCHABLE_AGENT_IDS } from "@shared/config/agentIds";
+import { BUILT_IN_AGENT_IDS } from "@shared/config/agentIds";
 
 /**
  * `browser` and `dev-server` are deliberately absent (#11667), and so is every
  * agent id (#11680). `browser`/`dev-server` both assume web development; the
- * agents were spread in from `LAUNCHABLE_AGENT_IDS`, which made the row grow on
+ * agents were spread in from `BUILT_IN_AGENT_IDS`, which made the row grow on
  * its own every time someone installed another CLI. An unset agent pin now means
  * "listed in the launcher", not "on the toolbar".
  *
@@ -96,7 +96,7 @@ const FIXED_BUTTON_IDS: ToolbarButtonId[] = ["sidebar-toggle", "assistant-toggle
  */
 const LEFT_HOME_BUTTON_IDS: ToolbarButtonId[] = [
   ...DEFAULT_LEFT_BUTTONS,
-  ...(LAUNCHABLE_AGENT_IDS as unknown as ToolbarButtonId[]),
+  ...(BUILT_IN_AGENT_IDS as unknown as ToolbarButtonId[]),
   "browser",
   "dev-server",
 ];
@@ -442,7 +442,7 @@ interface ToolbarPreferencesState extends ToolbarPreferences {
    * Agents are the one launcher row whose pin does NOT live here — it is the
    * tri-state `pinned` in `agentSettingsStore`, IPC-persisted in main (#7673),
    * and this store must not mirror it (a second copy is a second thing that can
-   * disagree). But since #11680 removed the `LAUNCHABLE_AGENT_IDS` spread from
+   * disagree). But since #11680 removed the `BUILT_IN_AGENT_IDS` spread from
    * `DEFAULT_LEFT_BUTTONS`, a fresh profile's agent ids sit in neither side
    * array, so an explicit pin alone leaves the button with nowhere to render —
    * the same gap `setPanelButtonOnToolbar` closes for `browser`/`dev-server`.

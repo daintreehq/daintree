@@ -173,7 +173,7 @@ type ShotPayload = {
   actionDescription: string;
   argsSummary: string;
   danger: "safe" | "confirm" | "restricted";
-  sessionOrigin?: "help" | "assistant-pane" | "external";
+  sessionOrigin?: "help" | "external";
   dangerRationale?: string;
   callerInfo?: { token4LastChars: string; userAgent: string };
   preview?: string[];

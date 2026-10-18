@@ -941,10 +941,9 @@ describe("recipeStore", () => {
       expect(results.spawned[1]).toEqual({ index: 1, terminalId: "terminal-2" });
     });
 
-    // An assistant-only agent is never a standalone launch (#12407): running it
-    // from a recipe would mint the assistant's pinned bearer for whoever ran
-    // the recipe. Refused per terminal, so the rest of the recipe still spawns.
-    it("refuses an assistant-only agent terminal and spawns the rest", async () => {
+    // A hand-edited recipe can still name the retired assistant CLI, or any id
+    // nothing registers. That terminal fails alone; the rest still spawns.
+    it("fails an unregistered agent terminal and spawns the rest", async () => {
       addTerminalMock.mockResolvedValue("terminal-1");
       useRecipeStore.setState({
         recipes: [
@@ -970,7 +969,9 @@ describe("recipeStore", () => {
       expect(results.spawned.map((s) => s.index)).toEqual([0]);
       expect(results.failed).toHaveLength(1);
       expect(results.failed[0]!.index).toBe(1);
-      expect(results.failed[0]!.error).toContain("only runs as Daintree's assistant");
+      expect(results.failed[0]!.error).toBe(
+        "'daintree-assistant' isn't a registered agent, so this terminal can't launch."
+      );
       expect(addTerminalMock).not.toHaveBeenCalledWith(
         expect.objectContaining({ launchAgentId: "daintree-assistant" })
       );

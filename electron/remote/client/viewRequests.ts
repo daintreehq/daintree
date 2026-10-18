@@ -39,7 +39,7 @@ const McpDispatchPayloadSchema = z.object({
   args: z.unknown(),
   confirmed: z.boolean(),
   context: z.record(z.string(), z.unknown()).optional(),
-  sessionOrigin: z.enum(["help", "assistant-pane", "external"]),
+  sessionOrigin: z.enum(["help", "external"]),
   offerSessionApproval: z.boolean().optional(),
   approvalOnly: z.boolean().optional(),
   // Which approval dialog an `approvalOnly` request raises. It picks the

@@ -4,7 +4,6 @@ import fs from "node:fs/promises";
 import { app } from "electron";
 import { resilientAtomicWriteFile, resilientUnlink } from "../utils/fs.js";
 import type { DaintreeMcpTier } from "../../shared/types/project.js";
-import type { ActionContext } from "../../shared/types/actions.js";
 import type { PaneWorkspaceBinding } from "./mcp-server/shared.js";
 import { formatErrorMessage } from "../../shared/utils/errorMessage.js";
 import {
@@ -47,16 +46,9 @@ interface TokenRecord {
   // relaunch's fresh bearer starts owning nothing even if a revocation were
   // ever missed.
   ownershipPrincipal: string;
-  // Assistant-session pinning side-channel (#10647). Set only for
-  // `daintree-assistant` pane tokens via `registerAssistantPaneBearer`, and
-  // kept apart from `workspaceBinding` below because the assistant resolvers
-  // stamp a renderer-owned origin on whatever they match. Stored on the token
+  // Launch-workspace binding for an agent pane (#12486). Stored on the token
   // record so that `revokePaneConfig` (PTY exit / spawn failure) tears it down
   // for free.
-  webContentsId?: number;
-  actionContext?: ActionContext;
-  // Launch-workspace binding for an ordinary agent pane (#12486). Same
-  // lifetime as the assistant fields above, and never read by their resolvers.
   workspaceBinding?: PaneWorkspaceBinding;
 }
 
@@ -471,16 +463,15 @@ export class McpPaneConfigService {
    * The bearer identity of a pane that could be handed a terminal (#12490): an
    * ordinary agent pane holding a live Daintree bearer, minted before its first
    * connection. Null for a pane with no bearer (a shell, an agent launched
-   * without Daintree MCP, a revoked token) and for the assistant, whose
-   * renderer-owned origin already reaches unscoped terminal input. The tier is
-   * reported rather than judged here: whether it can drive a terminal is the
+   * without Daintree MCP, a revoked token). The tier is reported rather than
+   * judged here: whether it can drive a terminal is the
    * MCP server's allowlist to answer.
    */
   getOrchestratorPane(paneId: string): OrchestratorPaneIdentity | null {
     const token = this.records.get(paneId)?.token;
     if (!token) return null;
     const record = this.tokens.get(token);
-    if (record === undefined || record.webContentsId !== undefined) return null;
+    if (record === undefined) return null;
     return {
       principalId: record.ownershipPrincipal,
       tier: record.tier,
@@ -529,58 +520,9 @@ export class McpPaneConfigService {
   }
 
   /**
-   * Promote an already-minted pane token to a pinned assistant-session bearer
-   * (#10647). Binds the token to the launching renderer's WebContents and the
-   * launch-time `ActionContext` snapshot so the MCP transport handshake routes
-   * the session through `dispatchActionForWebContents` instead of the
-   * active-window fallback. Must be called synchronously in the spawn handler,
-   * after `preparePaneConfig`, before the IPC promise resolves — otherwise the
-   * CLI's first `/mcp` POST can race ahead of the binding and pin to nothing.
-   *
-   * No-ops if the token was never minted or has already been revoked (the
-   * record is gone), so a teardown that races the registration can't resurrect
-   * a stale entry.
-   */
-  registerAssistantPaneBearer(
-    token: string,
-    webContentsId: number,
-    actionContext?: ActionContext
-  ): void {
-    const record = this.tokens.get(token);
-    if (!record) return;
-    record.webContentsId = webContentsId;
-    record.actionContext = actionContext;
-  }
-
-  /**
-   * Resolver consulted at MCP handshake to pin an assistant-session bearer to
-   * the WebContents that launched it. Returns null for every other pane token,
-   * including ordinary agent panes bound through
-   * `registerPaneWorkspaceBinding` — this match confers the assistant's
-   * renderer-owned origin, which an agent pane must never get (#12407).
-   * Mirrors `HelpSessionService.getWebContentsIdForToken`.
-   */
-  getWebContentsIdForToken(token: string): number | null {
-    if (!token) return null;
-    return this.tokens.get(token)?.webContentsId ?? null;
-  }
-
-  /**
-   * Resolver consulted at MCP handshake to replay the launch-time
-   * `ActionContext` for an assistant-session bearer. Returns null for every
-   * other pane token; an ordinary pane's context travels with its workspace
-   * binding instead.
-   */
-  getActionContextForToken(token: string): ActionContext | null {
-    if (!token) return null;
-    return this.tokens.get(token)?.actionContext ?? null;
-  }
-
-  /**
    * Bind an ordinary agent pane's token to the workspace it was launched in
    * (#12486), so its MCP session routes there for its whole life instead of
-   * following window focus. Same timing contract as
-   * `registerAssistantPaneBearer`: synchronously after `preparePaneConfig`,
+   * following window focus. Called synchronously after `preparePaneConfig`,
    * before the PTY starts, so the CLI's first handshake cannot race ahead of
    * it. No-ops for a token already revoked.
    */
@@ -599,8 +541,8 @@ export class McpPaneConfigService {
 
   /**
    * Resolver consulted at MCP handshake for an ordinary pane's launch
-   * workspace. Null for tokens that never registered one — the assistant pane,
-   * and panes launched before a binding could be derived.
+   * workspace. Null for tokens that never registered one — panes launched
+   * before a binding could be derived.
    */
   getPaneWorkspaceBindingForToken(token: string): PaneWorkspaceBinding | null {
     if (!token) return null;

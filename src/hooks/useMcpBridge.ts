@@ -1040,12 +1040,9 @@ function withPreviewedWorktreeCwd(
  * Which spawn source a dispatch from this session should be stamped with
  * (#11808).
  *
- * `help` and `assistant-pane` are both Daintree's own assistant surfaces — one
- * is the assistant panel, the other a `daintree-assistant` CLI pane — so both
- * read as `"assistant"`. Splitting them apart in the terminal's provenance
- * would classify the implementation surface rather than the actor, and the user
- * question this answers is "did I ask for this run, or did the assistant start
- * it on its own?".
+ * `help` is Daintree's own assistant panel, so it reads as `"assistant"`. The
+ * user question this answers is "did I ask for this run, or did the assistant
+ * start it on its own?".
  *
  * Anything else, including an absent origin, is `"mcp"`. That mirrors
  * `SessionStore.getOrigin`'s own fail-closed default: an unknown or torn-down
@@ -1054,7 +1051,7 @@ function withPreviewedWorktreeCwd(
  * an external client's spawn as ours.
  */
 function spawnSourceForOrigin(sessionOrigin: McpSessionOrigin | undefined): TerminalSpawnSource {
-  return sessionOrigin === "help" || sessionOrigin === "assistant-pane" ? "assistant" : "mcp";
+  return sessionOrigin === "help" ? "assistant" : "mcp";
 }
 
 /**

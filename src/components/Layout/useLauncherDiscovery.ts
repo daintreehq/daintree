@@ -7,7 +7,7 @@ import { useAgentSettingsStore } from "@/store/agentSettingsStore";
 import { useCliAvailabilityStore } from "@/store/cliAvailabilityStore";
 import { isAgentLaunchable } from "@shared/utils/agentAvailability";
 import { isAgentPinned } from "@shared/utils/agentPinned";
-import { LAUNCHABLE_AGENT_IDS } from "@shared/config/agentIds";
+import { BUILT_IN_AGENT_IDS } from "@shared/config/agentIds";
 import type { CliAvailability } from "@shared/types";
 
 export interface LauncherDiscovery {
@@ -41,7 +41,7 @@ export function useLauncherDiscovery(agentAvailability?: CliAvailability): Launc
   const hasRealData = useCliAvailabilityStore((s) => s.hasRealData);
 
   const readyAgentIds = useMemo(
-    () => LAUNCHABLE_AGENT_IDS.filter((id) => isAgentLaunchable(agentAvailability?.[id])),
+    () => BUILT_IN_AGENT_IDS.filter((id) => isAgentLaunchable(agentAvailability?.[id])),
     [agentAvailability]
   );
 
@@ -57,7 +57,7 @@ export function useLauncherDiscovery(agentAvailability?: CliAvailability): Launc
     // going to render.
     if (!agentSettings) return false;
     if (!agentSettings.agents) return true;
-    return !LAUNCHABLE_AGENT_IDS.some((id) => isAgentPinned(agentSettings.agents?.[id]));
+    return !BUILT_IN_AGENT_IDS.some((id) => isAgentPinned(agentSettings.agents?.[id]));
   }, [agentSettings]);
 
   // While the first-run welcome card is actually being rendered, suppress the

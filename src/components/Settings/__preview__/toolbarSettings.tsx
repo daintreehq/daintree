@@ -9,7 +9,7 @@ import {
   type AnyToolbarButtonId,
   type ToolbarPinnedState,
 } from "@shared/types/toolbar";
-import { LAUNCHABLE_AGENT_IDS } from "@shared/config/agentIds";
+import { BUILT_IN_AGENT_IDS } from "@shared/config/agentIds";
 import { applyAppThemeToRoot } from "@/theme/applyAppTheme";
 import { initBuiltInPanelKinds } from "@/panels/registry";
 import { TooltipProvider } from "@/components/ui/tooltip";
@@ -78,7 +78,7 @@ function seed(): void {
   useAgentSettingsStore.setState({
     settings: {
       agents: Object.fromEntries(
-        LAUNCHABLE_AGENT_IDS.map((id) => [
+        BUILT_IN_AGENT_IDS.map((id) => [
           id,
           { pinned: (PINNED_AGENTS as readonly string[]).includes(id) },
         ])
@@ -98,7 +98,7 @@ function seed(): void {
   if (fixture === "legacy") {
     leftButtons = [
       "launcher",
-      ...LAUNCHABLE_AGENT_IDS,
+      ...BUILT_IN_AGENT_IDS,
       "terminal",
       "file-browser",
       "browser",

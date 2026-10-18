@@ -1,5 +1,5 @@
 import { installPreviewShims } from "@/components/HelpPanel/__preview__/previewShims";
-import { LAUNCHABLE_AGENT_IDS } from "@shared/config/agentIds";
+import { BUILT_IN_AGENT_IDS } from "@shared/config/agentIds";
 import { DEFAULT_AGENT_SETTINGS, type AgentSettings } from "@shared/types/agentSettings";
 import type { CliAvailability, OnboardingState, PrerequisiteSpec } from "@shared/types";
 import type { ChecklistItemId, ChecklistState } from "@shared/types/ipc/maps";
@@ -31,7 +31,7 @@ const gitMode = params.get("git") ?? "ok";
 const READY_AGENTS = new Set(["claude", "codex"]);
 
 export const previewAvailability: CliAvailability = Object.fromEntries(
-  LAUNCHABLE_AGENT_IDS.map((id) => [
+  BUILT_IN_AGENT_IDS.map((id) => [
     id,
     agentsMode !== "none" && READY_AGENTS.has(id) ? "ready" : "missing",
   ])
@@ -57,7 +57,7 @@ const onboarding: OnboardingState = {
   waitingNudgeSeen: true,
   // The "new agent" dot is discovery state for later launches; seen here so it
   // is not beside every name in every capture.
-  seenAgentIds: LAUNCHABLE_AGENT_IDS.slice(),
+  seenAgentIds: BUILT_IN_AGENT_IDS.slice(),
   availabilityFirstSeen: {},
   welcomeCardDismissed: params.get("welcomeCard") === "dismissed",
   setupBannerDismissed: onboardingMode !== "fresh",
