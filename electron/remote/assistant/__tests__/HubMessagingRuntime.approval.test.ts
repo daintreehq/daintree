@@ -184,9 +184,7 @@ describe("HubMessagingRuntime answering a host's approval ask (#13501)", () => {
     await deleteCall();
     await resent;
 
-    expect(answers.find((answer) => answer.approvalId === "approval-1")?.decision).toBe(
-      "approved"
-    );
+    expect(answers.find((answer) => answer.approvalId === "approval-1")?.decision).toBe("approved");
   });
 
   it("refuses once the call has settled", async () => {
