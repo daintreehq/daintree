@@ -4,6 +4,7 @@ import { getCurrentViewStoreOrNull } from "@/store/createWorktreeStore";
 import { classifyLaunchRootAlignment } from "@/utils/worktreeAlignment";
 import { isRuntimeAgentTerminal } from "@/utils/terminalType";
 import { isPtyPanel, type PanelInstance } from "@shared/types/panel";
+import { supportsCrossDirectoryResume } from "@shared/types/agentSettings";
 
 /**
  * Whether the panel's process can still act on the filesystem right now.
@@ -84,6 +85,16 @@ export function alignDeadPanelCwd(panelId: string, worktreeId: string): void {
 function confirmHeldPanelDestination(panelId: string, worktreeId: string): void {
   const panel = usePanelStore.getState().panelsById[panelId];
   if (!panel || !isPtyPanel(panel)) return;
+  // An agent that resumes only where its conversation began keeps that folder
+  // while it still has one to resume (#13509), the same as a live pane that is
+  // moved: running it in the destination would make Resume open nothing.
+  if (
+    panel.restoreRecovery?.sessionId !== undefined &&
+    !panel.restoreRecovery.awaitingDestination &&
+    !supportsCrossDirectoryResume(panel.launchAgentId)
+  ) {
+    return;
+  }
   const worktrees = readWorktreePaths();
   const destination = worktrees.find((w) => w.id === worktreeId);
   if (!destination?.path) return;

@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type Ref } from "react";
+import { useRef, useState, type PointerEvent, type Ref } from "react";
 import { TruncatedTooltip } from "@/components/ui/TruncatedTooltip";
 import { useShallow } from "zustand/react/shallow";
 import { FolderClock, Play, RotateCcw } from "lucide-react";
@@ -8,7 +8,7 @@ import { FindCodexSessionAction } from "@/components/Terminal/FindCodexSessionAc
 import { getAgentConfig } from "@/config/agents";
 import { usePanelStore } from "@/store/panelStore";
 import { useAgentSettingsStore } from "@/store/agentSettingsStore";
-import { isProjectViewObservable, subscribeProjectViewObservability } from "@/lib/viewCacheState";
+import { isProjectViewObservable } from "@/lib/viewCacheState";
 import {
   launchFromRestoreRecovery,
   type RestoreRecoveryChoice,
@@ -48,14 +48,14 @@ const REASON_COPY: Record<RestoreRecoveryReason, RecoveryCopy> = {
   "resume-deferred": {
     title: "Not resumed after restart",
     description:
-      "Agents wait to be started after a restart, as set in Settings > General. Resume its conversation or start a new one.",
+      "Agents wait to be started after a restart, as set in Settings > General > Startup. Resume its conversation or start a new one.",
   },
 };
 
 const RESUMES_ON_FOCUS_COPY: RecoveryCopy = {
   title: "Resumes when you focus this pane",
   description:
-    "Agents resume one at a time after a restart, as each pane is focused, as set in Settings > General.",
+    "Agents resume one at a time after a restart, as each pane is focused, as set in Settings > General > Startup.",
 };
 
 const AWAITING_DESTINATION_COPY: RecoveryCopy = {
@@ -86,10 +86,16 @@ function FolderRow({ label, path }: { label: string; path: string }) {
   );
 }
 
+// Conversations a focus already tried to resume, so a remount — a maximize, a
+// worktree switch, a tab group reusing the pane — never tries again (#13509).
+const autoResumeAttempts = new Set<string>();
+
+export function __resetRestoreRecoveryAutoResumeForTests(): void {
+  autoResumeAttempts.clear();
+}
+
 export interface RestoreRecoveryGateProps {
   panelId: string;
-  /** The pane is the focused one — what a pane held by the resume setting waits for. */
-  isFocused?: boolean;
   /** The pane's focus handler moves keyboard focus into this surface. */
   containerRef?: Ref<HTMLDivElement>;
 }
@@ -104,16 +110,13 @@ export interface RestoreRecoveryGateProps {
  * pane now runs.
  *
  * The one exception is a pane the resume setting held (#13509) while it allows
- * resuming: focusing it resumes the conversation it carries, once. Focus means
- * the user's own focus, in a window and view they are looking at — a pane that
- * is merely on screen, or the saved focus of a project restoring in the
- * background, never starts anything.
+ * resuming: moving focus into it resumes the conversation it carries, once.
+ * Only real focus counts — keyboard focus arriving in this surface, in a view
+ * someone is looking at. A pane that is merely on screen, or selected by a
+ * restore, never starts anything, and a press on one of the buttons is that
+ * button's choice, not a focus.
  */
-export function RestoreRecoveryGate({
-  panelId,
-  isFocused = false,
-  containerRef,
-}: RestoreRecoveryGateProps) {
+export function RestoreRecoveryGate({ panelId, containerRef }: RestoreRecoveryGateProps) {
   const { recovery, agentId, cwd, originCwd } = usePanelStore(
     useShallow((state) => {
       const panel = state.panelsById[panelId];
@@ -140,36 +143,8 @@ export function RestoreRecoveryGate({
     resumePolicy !== "never"
       ? recovery.sessionId
       : undefined;
-  // One automatic attempt per gate: a launch that fails or finds the
-  // conversation taken leaves the pane to the buttons, not a retry loop.
-  const autoResumeAttemptedRef = useRef(false);
-
-  useEffect(() => {
-    if (!isFocused || resumesOnFocusId === undefined || autoResumeAttemptedRef.current) return;
-    const sessionId = resumesOnFocusId;
-    const attempt = () => {
-      if (autoResumeAttemptedRef.current) return;
-      if (!isProjectViewObservable() || !document.hasFocus()) return;
-      autoResumeAttemptedRef.current = true;
-      setIsLaunching(true);
-      setOutcome(null);
-      void launchFromRestoreRecovery(panelId, { kind: "resume", sessionId })
-        .then((result) => {
-          if (result !== "launched") setOutcome(result);
-        })
-        .finally(() => setIsLaunching(false));
-    };
-    attempt();
-    if (autoResumeAttemptedRef.current) return;
-    window.addEventListener("focus", attempt);
-    const unsubscribe = subscribeProjectViewObservability((observable) => {
-      if (observable) attempt();
-    });
-    return () => {
-      window.removeEventListener("focus", attempt);
-      unsubscribe();
-    };
-  }, [isFocused, resumesOnFocusId, panelId]);
+  // Set by a press on a button, which focuses it a moment before its click.
+  const pressingButtonRef = useRef(false);
 
   if (!recovery) return null;
 
@@ -193,10 +168,29 @@ export function RestoreRecoveryGate({
       .finally(() => setIsLaunching(false));
   };
 
+  const onPointerDownCapture = (event: PointerEvent<HTMLDivElement>) => {
+    pressingButtonRef.current =
+      event.target instanceof Element && event.target.closest("button") !== null;
+  };
+
+  const onFocus = () => {
+    const pressingButton = pressingButtonRef.current;
+    pressingButtonRef.current = false;
+    if (resumesOnFocusId === undefined || pressingButton || isLaunching) return;
+    if (!isProjectViewObservable() || !document.hasFocus()) return;
+    const sessionId = resumesOnFocusId;
+    const key = `${panelId}\u0000${sessionId}`;
+    if (autoResumeAttempts.has(key)) return;
+    autoResumeAttempts.add(key);
+    void launch({ kind: "resume", sessionId });
+  };
+
   return (
     <div
       ref={containerRef}
       tabIndex={-1}
+      onPointerDownCapture={onPointerDownCapture}
+      onFocus={onFocus}
       className="flex-1 min-h-0 bg-surface-canvas flex flex-col items-center overflow-auto focus-visible:-outline-offset-2"
     >
       <div className="my-auto w-full max-w-lg space-y-4 px-6 py-8">

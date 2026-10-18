@@ -4,7 +4,6 @@ import {
   resolveResumeOnRestart,
   type ResumeOnRestart,
 } from "@shared/types/agentSettings";
-import { logError } from "@/utils/logger";
 import { SettingsPresetGroup } from "./SettingsPresetGroup";
 
 const OPTIONS = [
@@ -20,22 +19,29 @@ const DESCRIPTIONS: Record<ResumeOnRestart, string> = {
   never: "Agent panes wait for you to resume their conversation or start a new one",
 };
 
+export interface ResumeOnRestartRowProps {
+  /** A save is starting; whatever an earlier failure's Retry would resend is superseded. */
+  onSaveStart: () => void;
+  /** The save failed and the row is back on its previous value; `retry` resends it. */
+  onSaveFailed: (retry: () => Promise<void>) => void;
+}
+
 /**
  * "Resume agents after restart" (#13509). Held panes keep their conversation,
  * so nothing a restart holds is lost — only started later, or by hand.
  */
-export function ResumeOnRestartRow() {
-  const isInitialized = useAgentSettingsStore((state) => state.isInitialized);
+export function ResumeOnRestartRow({ onSaveStart, onSaveFailed }: ResumeOnRestartRowProps) {
+  // Loaded means a snapshot is in hand: a failed load leaves `settings` null.
   const value = useAgentSettingsStore((state) =>
-    state.isInitialized ? resolveResumeOnRestart(state.settings) : null
+    state.isInitialized && state.settings ? resolveResumeOnRestart(state.settings) : null
   );
   const setResumeOnRestart = useAgentSettingsStore((state) => state.setResumeOnRestart);
 
-  const save = (next: ResumeOnRestart) => {
-    void setResumeOnRestart(next).catch((error: unknown) => {
-      logError("[settings] Failed to save resume after restart", error);
-    });
+  const persist = (next: ResumeOnRestart): Promise<void> => {
+    onSaveStart();
+    return setResumeOnRestart(next).catch(() => onSaveFailed(() => persist(next)));
   };
+  const save = (next: ResumeOnRestart) => void persist(next);
 
   return (
     <SettingsPresetGroup<ResumeOnRestart>
@@ -45,7 +51,7 @@ export function ResumeOnRestartRow() {
       options={OPTIONS}
       value={value}
       onChange={save}
-      disabled={!isInitialized}
+      disabled={value === null}
       isModified={value !== null && value !== DEFAULT_RESUME_ON_RESTART}
       onReset={() => save(DEFAULT_RESUME_ON_RESTART)}
     />

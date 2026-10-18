@@ -1080,7 +1080,10 @@ export function GeneralTab({
                   }
                   onReset={() => void handleSessionRestoreToggle()}
                 />
-                <ResumeOnRestartRow />
+                <ResumeOnRestartRow
+                  onSaveStart={() => clearSaveFailure("sessionRestore")}
+                  onSaveFailed={(retry) => recordSaveFailure("sessionRestore", retry)}
+                />
               </SettingsGroup>
             </SettingsSection>
 
