@@ -1409,6 +1409,56 @@ describe("PluginDevWorkerHostProxy reloadPanel (#12610)", () => {
   });
 });
 
+describe("PluginDevWorkerHostProxy setContext (#13506)", () => {
+  beforeEach(() => vi.clearAllMocks());
+  afterEach(() => vi.restoreAllMocks());
+
+  it("relays the vetted key and value as a call, normalizing a clear to null", async () => {
+    const { proxy, sent } = makeProxy();
+    const set = proxy.host.setContext("needsYou", true);
+    const call = sent.find((m) => m.type === "host-call" && m.method === "setContext");
+    expect(call?.params).toEqual({ key: "needsYou", value: true });
+    resolveCall(proxy, sent, "setContext", undefined);
+    await expect(set).resolves.toBeUndefined();
+
+    const clear = proxy.host.setContext("needsYou", undefined as never);
+    const clears = sent.filter((m) => m.type === "host-call" && m.method === "setContext");
+    expect(clears.at(-1)?.params).toEqual({ key: "needsYou", value: null });
+    resolveCall(proxy, sent, "setContext", undefined);
+    await expect(clear).resolves.toBeUndefined();
+  });
+
+  it("passes main's cap rejection back to the caller", async () => {
+    const { proxy, sent } = makeProxy();
+    const promise = proxy.host.setContext("k33", true);
+    const call = sent.find((m) => m.type === "host-call" && m.method === "setContext");
+    proxy.handleMessage({
+      type: "host-result",
+      requestId: call.requestId,
+      ok: false,
+      error: 'Plugin "acme" setContext: at most 32 keys per plugin',
+    });
+    await expect(promise).rejects.toThrow(/at most 32 keys per plugin/);
+  });
+
+  it("rejects a bad key or value without crossing the port", async () => {
+    const { proxy, sent } = makeProxy();
+    await expect(proxy.host.setContext("a.b", true)).rejects.toThrow(/setContext: key "a\.b"/);
+    await expect(proxy.host.setContext("k", 1 as never)).rejects.toThrow(/setContext: value/);
+    expect(sent.find((m) => m.type === "host-call")).toBeUndefined();
+  });
+
+  it("resolves once the proxy is disposed, like the in-process no-op after unload", async () => {
+    const { proxy } = makeProxy();
+    const promise = proxy.host.setContext("k", true);
+    proxy.dispose();
+    await expect(promise).resolves.toBeUndefined();
+    await expect(proxy.host.setContext("k", true)).resolves.toBeUndefined();
+    // Even an invalid call is a silent no-op once torn down, as in process.
+    await expect(proxy.host.setContext("a.b", 7 as never)).resolves.toBeUndefined();
+  });
+});
+
 describe("PluginDevWorkerHostProxy invocation id", () => {
   it("stamps each host call with the invocation whose handler made it", async () => {
     const { proxy, sent } = makeProxy();

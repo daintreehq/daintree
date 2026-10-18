@@ -216,6 +216,7 @@ import type {
   PluginArchiveInstallIntent,
   PluginDeepLinkIntent,
   PluginPanelBadge,
+  PluginContextValue,
   PluginFocusedPanel,
 } from "../shared/types/plugin.js";
 import type { PanelKindConfig } from "../shared/config/panelKindRegistry.js";
@@ -981,6 +982,8 @@ const _eventBusReplayable: ReadonlySet<keyof IpcEventBusMap> = new Set([
   "plugin:panel-menus-changed",
   // Same replay, landing before the toolbar has mounted its badge store (#13503).
   "plugin:toolbar-badges-changed",
+  // Same replay, landing before the keybinding hook subscribes its store (#13506).
+  "plugin:context-keys-changed",
 ]);
 // Replayable events that accumulate instead of superseding. A double-clicked
 // `.dntr` archive (#11280) is one decision per file, so collapsing two
@@ -997,12 +1000,14 @@ const _eventBusFifoReplay: ReadonlySet<keyof IpcEventBusMap> = new Set([
   // matters — but the latest of all would drop every other plugin's.
   "plugin:panel-menus-changed",
   "plugin:toolbar-badges-changed",
+  "plugin:context-keys-changed",
 ]);
 // FIFO events whose every payload is one plugin's whole map: a newer one for the
 // same plugin supersedes the buffered one.
 const _eventBusPerPluginLatest: ReadonlySet<keyof IpcEventBusMap> = new Set([
   "plugin:panel-menus-changed",
   "plugin:toolbar-badges-changed",
+  "plugin:context-keys-changed",
 ]);
 const _eventBusBuffered = new Map<keyof IpcEventBusMap, unknown[]>();
 
@@ -3761,6 +3766,12 @@ function buildElectronApi(): ElectronAPI {
       onToolbarBadgesChanged: (
         callback: (payload: { pluginId: string; badges: Record<string, PluginPanelBadge> }) => void
       ) => _eventBusOn("plugin:toolbar-badges-changed", callback),
+      onContextKeysChanged: (
+        callback: (payload: {
+          pluginId: string;
+          keys: Record<string, PluginContextValue> | null;
+        }) => void
+      ) => _eventBusOn("plugin:context-keys-changed", callback),
       onPanelMenusChanged: (
         callback: (payload: {
           pluginId: string;

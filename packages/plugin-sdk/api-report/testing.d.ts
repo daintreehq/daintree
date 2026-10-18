@@ -1625,6 +1625,8 @@ type PluginPanelBadge = {
     color?: PluginPanelBadgeColor;
     tooltip?: string;
 };
+/** Value a plugin publishes to `when` clauses via {@link PluginHostApi.setContext}. */
+type PluginContextValue = boolean | string;
 declare const BUILT_IN_PLUGIN_CAPABILITIES: readonly ["fs:project-read", "fs:project-write", "fs:user-data-read", "fs:user-data-write", "network:fetch", "agent:invoke", "agent:read", "agent:register", "agent:input", "terminal:read", "git:read", "git:write", "clipboard:read", "clipboard:write", "shell:exec", "socket:connect", "mcp:expose", "project:dispatch", "panel:focus-read", "notification:os"];
 type BuiltInPluginCapability = (typeof BUILT_IN_PLUGIN_CAPABILITIES)[number];
 /** Third argument to {@link PluginHostApi.dispatch} (#13119). */
@@ -4496,6 +4498,28 @@ interface PluginHostApi extends PluginActivationApi {
      */
     setToolbarButtonBadge(buttonId: string, badge: PluginPanelBadge | null): Promise<void>;
     /**
+     * Publish one of this plugin's own context keys to `when` clauses, so a
+     * keybinding or `contributes.contextMenus` entry can turn on and off with the
+     * plugin's state. The host namespaces the key under this plugin's manifest
+     * name: `setContext("needsYou", true)` from `acme.beads` is read as
+     * `acme.beads.needsYou`. A plugin can never set a built-in key or another
+     * plugin's. Pass `null` to clear the key.
+     *
+     * A key is letters, digits, `_` and `-`, at most
+     * {@link PLUGIN_CONTEXT_KEY_LENGTH_MAX} characters, with no dots; a string
+     * value is at most {@link PLUGIN_CONTEXT_VALUE_LENGTH_MAX} characters; a
+     * plugin holds at most {@link PLUGIN_CONTEXT_KEYS_MAX} keys at once. A
+     * violation rejects. As in every `when` clause, a bare key is true for `true`
+     * or a non-empty string, and `==` compares exactly.
+     *
+     * Native application menu `menuItems` do not see these keys. Keys are not
+     * persisted and are cleared when the plugin unloads or its worker is
+     * replaced, so republish them after a restart. Like {@link setPanelBadge}
+     * this is NOT revoke-guarded and becomes a silent no-op once the plugin is
+     * unloaded.
+     */
+    setContext(key: string, value: PluginContextValue | null): Promise<void>;
+    /**
      * Publish the contextual actions the ⋯ and right-click menus of one of this
      * plugin's own panels offer right now — the backend-side twin of the view's
      * `PanelViewProps.setMenuItems`, and the only way a PTY-backed panel (which
@@ -4937,6 +4961,11 @@ interface SetToolbarButtonBadgeRecord {
     buttonId: string;
     badge: PluginPanelBadge | null;
 }
+/** Captured `host.setContext(key, value)` calls. `null` clears. */
+interface SetContextRecord {
+    key: string;
+    value: PluginContextValue | null;
+}
 /** Captured `host.setPanelBadge(panelId, badge)` calls. `null` clears. */
 interface SetPanelBadgeRecord {
     panelId: string;
@@ -5004,6 +5033,13 @@ interface MockHostState {
     readonly invalidationCalls: ReadonlyArray<InvalidationRecord>;
     readonly setPanelBadgeCalls: ReadonlyArray<SetPanelBadgeRecord>;
     readonly setToolbarButtonBadgeCalls: ReadonlyArray<SetToolbarButtonBadgeRecord>;
+    /** Accepted `host.setContext` calls, in order. */
+    readonly setContextCalls: ReadonlyArray<SetContextRecord>;
+    /**
+     * The context keys this plugin holds right now, bare (not namespaced) — what
+     * its `when` clauses would read under `{publisher.name}.{key}`.
+     */
+    readonly contextKeys: ReadonlyMap<string, PluginContextValue>;
     readonly setPanelMenuItemsCalls: ReadonlyArray<SetPanelMenuItemsRecord>;
     /**
      * Panel ids passed to `host.reloadPanel(panelId)`, in order (#12610). Only

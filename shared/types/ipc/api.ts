@@ -2422,6 +2422,17 @@ export interface ElectronAPI extends GeneratedElectronAPI {
       }) => void
     ): () => void;
     /**
+     * Subscribe to plugin `when`-clause context keys (#13506). The callback fires
+     * with one plugin's COMPLETE current map (key → value): empty when it holds
+     * no keys, `null` once it unloads. Returns a cleanup.
+     */
+    onContextKeysChanged(
+      callback: (payload: {
+        pluginId: string;
+        keys: Record<string, import("../plugin.js").PluginContextValue> | null;
+      }) => void
+    ): () => void;
+    /**
      * Subscribe to plugin runtime panel menus (#13213). The callback fires with
      * one plugin's COMPLETE current map (`panelId → items`); an empty map clears
      * that plugin's lists, as on unload. Returns a cleanup.

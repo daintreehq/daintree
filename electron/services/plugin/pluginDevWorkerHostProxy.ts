@@ -73,6 +73,7 @@ import type {
 } from "../../../shared/types/actions.js";
 import { formatErrorMessage } from "../../../shared/utils/errorMessage.js";
 import { normalizePanelMenuItems } from "../../../shared/utils/pluginPanelMenuItems.js";
+import { validatePluginContextEntry } from "../../../shared/utils/pluginContextKeys.js";
 import { toPluginFocusedPanel } from "../../../shared/utils/pluginFocusedPanel.js";
 import {
   normalizePluginAllAgentsSnapshot,
@@ -1255,6 +1256,23 @@ export class PluginDevWorkerHostProxy {
         }
         this.notify("setToolbarButtonBadge", { buttonId, badge: badge ?? null });
         return Promise.resolve();
+      },
+      // Vetted here with the host's own rules so a bad call rejects without a
+      // round trip, then sent as a call so main's per-plugin key cap rejects
+      // back to the caller too. Resolves (not rejects) once the worker is torn
+      // down, matching the in-process host's silent no-op after unload.
+      setContext: (key, value) => {
+        if (this.disposed) return Promise.resolve();
+        const entry = validatePluginContextEntry(key, value);
+        if (!entry.ok) {
+          // Reject (not sync throw): runtime-surface Promise method (#10617).
+          return Promise.reject(new Error(`Plugin "${this.pluginId}" setContext: ${entry.error}`));
+        }
+        return this.callWithGrace<void>(
+          "setContext",
+          { key: entry.key, value: entry.value },
+          undefined
+        );
       },
       // Vetted here with the host's own rules, so an authoring mistake rejects
       // back to the caller rather than only being logged in main, then sent as

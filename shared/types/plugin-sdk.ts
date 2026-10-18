@@ -87,6 +87,7 @@ export type {
   PluginNotifyOptions,
   PluginNotifyResult,
   PluginPanelBadge,
+  PluginContextValue,
   PluginPanelBadgeColor,
   PluginPanelToolbarItemState,
   PluginQuickPickItem,

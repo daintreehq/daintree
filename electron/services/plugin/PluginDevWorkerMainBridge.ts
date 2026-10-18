@@ -45,6 +45,7 @@ import type {
   ReloadPanelParams,
   SetPanelBadgeParams,
   SetToolbarButtonBadgeParams,
+  SetContextParams,
   SetPanelMenuItemsParams,
   RegisterActionParams,
   RegisterFileDecorationProviderParams,
@@ -841,6 +842,11 @@ export class PluginDevWorkerMainBridge {
       case "reloadPanel": {
         const p = params as ReloadPanelParams;
         return this.host.reloadPanel(p.panelId);
+      }
+      case "setContext": {
+        const p = params as SetContextParams;
+        await this.host.setContext(p.key, p.value);
+        return undefined;
       }
       case "restartWorker":
         // The host defers the restart past this result's post, so the worker

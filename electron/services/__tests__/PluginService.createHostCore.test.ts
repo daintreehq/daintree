@@ -302,6 +302,7 @@ type CreateHostShape = (pluginId: string) => {
     postToPanel: (channel: string, payload: unknown, panelId?: string | null) => Promise<void>;
     setPanelBadge: (panelId: string, badge: unknown) => Promise<void>;
     setToolbarButtonBadge: (buttonId: string, badge: unknown) => Promise<void>;
+    setContext: (key: unknown, value: unknown) => Promise<void>;
     setPanelMenuItems: (panelId: string, items: unknown) => Promise<void>;
     reloadPanel: (panelId: unknown) => Promise<string>;
     restartWorker: () => Promise<string>;
@@ -653,6 +654,79 @@ describe("createHost (plugin activation API)", () => {
       const { service, host } = await toolbarHost("tb-unloaded");
       service.unloadPlugin("acme.tb-unloaded");
       await expect(host.setToolbarButtonBadge("", { kind: "bogus" })).resolves.toBeUndefined();
+    });
+  });
+
+  describe("host.setContext (#13506)", () => {
+    async function contextHost(id: string) {
+      await writePlugin(id, { name: `acme.${id}`, version: "1.0.0" });
+      const service = new PluginService(tmpDir);
+      await service.initialize();
+      const created = (service as unknown as { createHost: CreateHostShape }).createHost(
+        `acme.${id}`
+      );
+      return { service, ...created };
+    }
+    const contextKeyEvents = () =>
+      broadcastToRendererMock.mock.calls
+        .filter((call) => call[0] === CHANNELS.EVENTS_PUSH)
+        .map((call) => call[1] as { name: string; payload: unknown })
+        .filter((event) => event.name === "plugin:context-keys-changed");
+
+    it("publishes the whole map on each change, skips no-op writes and sends null on unload", async () => {
+      const { service, host } = await contextHost("ctx-publish");
+      broadcastToRendererMock.mockClear();
+
+      await host.setContext("needsYou", true);
+      await host.setContext("needsYou", true);
+      await host.setContext("view", "triage");
+      await host.setContext("needsYou", null);
+      await host.setContext("needsYou", null);
+      await host.setContext("view", null);
+      service.unloadPlugin("acme.ctx-publish");
+
+      expect(contextKeyEvents().map((event) => event.payload)).toEqual([
+        { pluginId: "acme.ctx-publish", keys: { needsYou: true } },
+        { pluginId: "acme.ctx-publish", keys: { needsYou: true, view: "triage" } },
+        { pluginId: "acme.ctx-publish", keys: { view: "triage" } },
+        // Emptied, not gone: the plugin still owns its namespace.
+        { pluginId: "acme.ctx-publish", keys: {} },
+        { pluginId: "acme.ctx-publish", keys: null },
+      ]);
+    });
+
+    it("keeps working after the activation window is revoked", async () => {
+      const { host, revoke } = await contextHost("ctx-revoked");
+      revoke();
+      broadcastToRendererMock.mockClear();
+      await host.setContext("ready", true);
+      expect(contextKeyEvents()).toHaveLength(1);
+    });
+
+    it("rejects a bad key, value or a key past the cap, publishing nothing for it", async () => {
+      const { host } = await contextHost("ctx-reject");
+      broadcastToRendererMock.mockClear();
+
+      await expect(host.setContext("a.b", true)).rejects.toThrow(/setContext: key "a\.b"/);
+      await expect(host.setContext("k", 7)).rejects.toThrow(/setContext: value/);
+      await expect(host.setContext("k", "x".repeat(257))).rejects.toThrow(/setContext: value/);
+      // A rejection, never a synchronous throw.
+      expect(() => host.setContext("", true).catch(() => {})).not.toThrow();
+      expect(contextKeyEvents()).toEqual([]);
+
+      for (let i = 0; i < 32; i++) await host.setContext(`k${i}`, true);
+      broadcastToRendererMock.mockClear();
+      await expect(host.setContext("k32", true)).rejects.toThrow(/at most 32 keys per plugin/);
+      await host.setContext("k0", "replaced");
+      expect(contextKeyEvents()).toHaveLength(1);
+    });
+
+    it("silently no-ops once the plugin is unloaded, even for an invalid call", async () => {
+      const { service, host } = await contextHost("ctx-unloaded");
+      service.unloadPlugin("acme.ctx-unloaded");
+      broadcastToRendererMock.mockClear();
+      await expect(host.setContext("a.b", 7)).resolves.toBeUndefined();
+      expect(contextKeyEvents()).toEqual([]);
     });
   });
 

@@ -227,6 +227,18 @@ export type PluginPanelBadge =
 /** Max length of a {@link PluginPanelBadge} `label` text, enforced host-side. */
 export const PLUGIN_PANEL_BADGE_LABEL_MAX = 6;
 
+/** Value a plugin publishes to `when` clauses via {@link PluginHostApi.setContext}. */
+export type PluginContextValue = boolean | string;
+
+/** Most context keys one plugin may hold at once via {@link PluginHostApi.setContext}. */
+export const PLUGIN_CONTEXT_KEYS_MAX = 32;
+
+/** Max length of a {@link PluginHostApi.setContext} key. */
+export const PLUGIN_CONTEXT_KEY_LENGTH_MAX = 64;
+
+/** Max length of a string {@link PluginHostApi.setContext} value. */
+export const PLUGIN_CONTEXT_VALUE_LENGTH_MAX = 256;
+
 export type MenuItemLocation = "terminal" | "file" | "view" | "help";
 // `"panel"` was removed (#10512): no renderer surface ever mounted
 // `usePluginContextMenuItems("panel")`, so a contributed panel context-menu item
@@ -5092,6 +5104,28 @@ export interface PluginHostApi extends PluginActivationApi {
    * malformed badge is logged in the host instead.)
    */
   setToolbarButtonBadge(buttonId: string, badge: PluginPanelBadge | null): Promise<void>;
+  /**
+   * Publish one of this plugin's own context keys to `when` clauses, so a
+   * keybinding or `contributes.contextMenus` entry can turn on and off with the
+   * plugin's state. The host namespaces the key under this plugin's manifest
+   * name: `setContext("needsYou", true)` from `acme.beads` is read as
+   * `acme.beads.needsYou`. A plugin can never set a built-in key or another
+   * plugin's. Pass `null` to clear the key.
+   *
+   * A key is letters, digits, `_` and `-`, at most
+   * {@link PLUGIN_CONTEXT_KEY_LENGTH_MAX} characters, with no dots; a string
+   * value is at most {@link PLUGIN_CONTEXT_VALUE_LENGTH_MAX} characters; a
+   * plugin holds at most {@link PLUGIN_CONTEXT_KEYS_MAX} keys at once. A
+   * violation rejects. As in every `when` clause, a bare key is true for `true`
+   * or a non-empty string, and `==` compares exactly.
+   *
+   * Native application menu `menuItems` do not see these keys. Keys are not
+   * persisted and are cleared when the plugin unloads or its worker is
+   * replaced, so republish them after a restart. Like {@link setPanelBadge}
+   * this is NOT revoke-guarded and becomes a silent no-op once the plugin is
+   * unloaded.
+   */
+  setContext(key: string, value: PluginContextValue | null): Promise<void>;
   /**
    * Publish the contextual actions the ⋯ and right-click menus of one of this
    * plugin's own panels offer right now — the backend-side twin of the view's

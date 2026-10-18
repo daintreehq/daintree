@@ -6,6 +6,7 @@ import {
   usePluginContextMenuItemsStore,
   type PluginContextMenuItemEntry,
 } from "@/store/pluginContextMenuItemsStore";
+import { usePluginContextKeyStore } from "@/store/pluginContextKeyStore";
 
 export type { PluginContextMenuItemEntry };
 
@@ -22,7 +23,9 @@ const EMPTY_CONTEXT: WhenClauseContext = {};
  * context keys evaluate correctly. An item that references unset keys evaluates
  * to `false` and is hidden — fail-closed. Parse errors are also fail-closed.
  * Because the context is consumer-specific, the `when`-clause evaluation stays
- * here rather than in the shared store.
+ * here rather than in the shared store. Keys plugins publish with
+ * `host.setContext` are visible too, under their manifest name; the caller's
+ * surface keys win any clash.
  */
 export function usePluginContextMenuItems(
   location: ContextMenuLocation,
@@ -30,13 +33,16 @@ export function usePluginContextMenuItems(
 ): PluginContextMenuItemEntry[] {
   const entries = usePluginContextMenuItemsStore((s) => s.entries);
   const init = usePluginContextMenuItemsStore((s) => s.init);
+  const pluginContext = usePluginContextKeyStore((s) => s.whenContext);
+  const initPluginContext = usePluginContextKeyStore((s) => s.init);
 
   useEffect(() => {
     init();
-  }, [init]);
+    initPluginContext();
+  }, [init, initPluginContext]);
 
   return useMemo(() => {
-    const context = ctx ?? EMPTY_CONTEXT;
+    const context = { ...pluginContext, ...(ctx ?? EMPTY_CONTEXT) };
     return entries.filter((entry) => {
       if (entry.item.location !== location) return false;
       const whenExpr = entry.item.when;
@@ -47,5 +53,5 @@ export function usePluginContextMenuItems(
         return false;
       }
     });
-  }, [entries, location, ctx]);
+  }, [entries, location, ctx, pluginContext]);
 }

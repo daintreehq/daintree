@@ -11,6 +11,7 @@ import type {
   PluginWorktreeSnapshot,
 } from "../../types/plugin.js";
 import type { PluginActionManifestEntry } from "../../types/actions.js";
+import { PLUGIN_CONTEXT_KEYS_MAX } from "../../types/plugin.js";
 
 const sampleSnapshot: PluginWorktreeSnapshot = {
   id: "wt-1",
@@ -399,6 +400,28 @@ describe("createMockHost", () => {
       { panelId: "panel-1", badge: { kind: "label", text: "CI", color: "success" } },
       { panelId: "panel-1", badge: null },
     ]);
+  });
+
+  it("records setContext calls and tracks the keys held, with the host's own cap (#13506)", async () => {
+    const host = createMockHost();
+    await host.setContext("needsYou", true);
+    await host.setContext("view", "triage");
+    await host.setContext("needsYou", null);
+    expect(host.setContextCalls).toEqual([
+      { key: "needsYou", value: true },
+      { key: "view", value: "triage" },
+      { key: "needsYou", value: null },
+    ]);
+    expect([...host.contextKeys]).toEqual([["view", "triage"]]);
+
+    for (let i = host.contextKeys.size; i < PLUGIN_CONTEXT_KEYS_MAX; i++) {
+      await host.setContext(`k${i}`, true);
+    }
+    const recorded = host.setContextCalls.length;
+    await expect(host.setContext("overflow", true)).rejects.toThrow(/setContext: at most/);
+    await expect(host.setContext("a.b", true)).rejects.toThrow(/setContext: key/);
+    await expect(host.setContext("k", 3 as never)).rejects.toThrow(/setContext: value/);
+    expect(host.setContextCalls).toHaveLength(recorded);
   });
 
   it("records setToolbarButtonBadge calls, normalizing a cleared badge to null (#13503)", async () => {
