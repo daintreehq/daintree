@@ -765,6 +765,32 @@ describe("init gate — waitForInit() and pushSnapshotTo() (#9285)", () => {
     ]);
   });
 
+  it("pushSnapshotTo() replays a global plugin's context keys, empty ones too, and skips a project plugin's for another view (#13506)", async () => {
+    const service = new PluginService(tmpDir);
+    await service.activateStartupFinishedPlugins();
+    const keys = (
+      service as unknown as { pluginContextKeys: Map<string, Map<string, boolean | string>> }
+    ).pluginContextKeys;
+    keys.set("acme.global", new Map<string, boolean | string>([["needsYou", true]]));
+    keys.set("acme.emptied", new Map());
+    keys.set("project__other-project__acme.local", new Map([["busy", true]]));
+    const send = vi.fn();
+    const wc = { id: 4244, send, isDestroyed: () => false } as unknown as Electron.WebContents;
+
+    await service.pushSnapshotTo(wc);
+
+    const keyEvents = send.mock.calls
+      .map((c) => c[1] as { name?: string; payload?: unknown })
+      .filter((event) => event.name === "plugin:context-keys-changed");
+    expect(keyEvents).toEqual([
+      {
+        name: "plugin:context-keys-changed",
+        payload: { pluginId: "acme.global", keys: { needsYou: true } },
+      },
+      { name: "plugin:context-keys-changed", payload: { pluginId: "acme.emptied", keys: {} } },
+    ]);
+  });
+
   it("pushSnapshotToEndpoint() replays to a remote view scoped to its endpoint's project", async () => {
     const service = new PluginService(tmpDir);
     await service.activateStartupFinishedPlugins();

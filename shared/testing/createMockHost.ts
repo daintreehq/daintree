@@ -26,6 +26,7 @@ import { normalizePluginAllAgentsSnapshot } from "../utils/pluginAllAgentsSnapsh
 import { pluginFocusedPanelEquals, toPluginFocusedPanel } from "../utils/pluginFocusedPanel.js";
 import { toRuntimePanelKindId } from "../config/panelKindRegistry.js";
 import { normalizePanelMenuItems } from "../utils/pluginPanelMenuItems.js";
+import { applyPluginContextEntry, validatePluginContextEntry } from "../utils/pluginContextKeys.js";
 import {
   PLUGIN_INVOKE_MAX_RESULT_BYTES,
   PLUGIN_SUBSCRIPTION_DEFAULT_DEBOUNCE_MS,
@@ -99,6 +100,7 @@ import type {
   PluginSystemWakeEvent,
   PluginGitCommitResult,
   PluginPanelBadge,
+  PluginContextValue,
   SettingDefinition,
   SettingsApi,
   StorageApi,
@@ -207,6 +209,12 @@ export interface SetToolbarButtonBadgeRecord {
   badge: PluginPanelBadge | null;
 }
 
+/** Captured `host.setContext(key, value)` calls. `null` clears. */
+export interface SetContextRecord {
+  key: string;
+  value: PluginContextValue | null;
+}
+
 /** Captured `host.setPanelBadge(panelId, badge)` calls. `null` clears. */
 export interface SetPanelBadgeRecord {
   panelId: string;
@@ -282,6 +290,13 @@ export interface MockHostState {
   readonly invalidationCalls: ReadonlyArray<InvalidationRecord>;
   readonly setPanelBadgeCalls: ReadonlyArray<SetPanelBadgeRecord>;
   readonly setToolbarButtonBadgeCalls: ReadonlyArray<SetToolbarButtonBadgeRecord>;
+  /** Accepted `host.setContext` calls, in order. */
+  readonly setContextCalls: ReadonlyArray<SetContextRecord>;
+  /**
+   * The context keys this plugin holds right now, bare (not namespaced) — what
+   * its `when` clauses would read under `{publisher.name}.{key}`.
+   */
+  readonly contextKeys: ReadonlyMap<string, PluginContextValue>;
   readonly setPanelMenuItemsCalls: ReadonlyArray<SetPanelMenuItemsRecord>;
   /**
    * Panel ids passed to `host.reloadPanel(panelId)`, in order (#12610). Only
@@ -988,6 +1003,8 @@ export function createMockHost(options: CreateMockHostOptions = {}): PluginHostA
   const invalidationCalls: InvalidationRecord[] = [];
   const setPanelBadgeCalls: SetPanelBadgeRecord[] = [];
   const setToolbarButtonBadgeCalls: SetToolbarButtonBadgeRecord[] = [];
+  const setContextCalls: SetContextRecord[] = [];
+  const contextKeys = new Map<string, PluginContextValue>();
   const setPanelMenuItemsCalls: SetPanelMenuItemsRecord[] = [];
   const reloadPanelCalls: string[] = [];
   const restartWorkerCalls: WorkerRestartResult[] = [];
@@ -2104,6 +2121,16 @@ export function createMockHost(options: CreateMockHostOptions = {}): PluginHostA
       setToolbarButtonBadgeCalls.push({ buttonId, badge: badge ?? null });
       return Promise.resolve();
     },
+    setContext(key, value) {
+      // The host's own validator and cap, so a call the real host refuses
+      // rejects here too.
+      const entry = validatePluginContextEntry(key, value);
+      if (!entry.ok) return Promise.reject(new Error(`setContext: ${entry.error}`));
+      const applied = applyPluginContextEntry(contextKeys, entry.key, entry.value);
+      if (!applied.ok) return Promise.reject(new Error(`setContext: ${applied.error}`));
+      setContextCalls.push({ key: entry.key, value: entry.value });
+      return Promise.resolve();
+    },
     setPanelMenuItems(panelId, items) {
       // Vetted by the host's own normalizer, so a list the real host refuses
       // rejects here too.
@@ -2753,6 +2780,8 @@ export function createMockHost(options: CreateMockHostOptions = {}): PluginHostA
     invalidationCalls,
     setPanelBadgeCalls,
     setToolbarButtonBadgeCalls,
+    setContextCalls,
+    contextKeys,
     setPanelMenuItemsCalls,
     reloadPanelCalls,
     restartWorkerCalls,

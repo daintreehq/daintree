@@ -222,9 +222,11 @@ export default tseslint.config(
           // but centralizing setter call sites in TelemetryService.ts keeps
           // every injection point reviewable against the scrubbing contract.
           // Matches member calls (Sentry.setTag, sentryModule?.setTag,
-          // scope.setUser) and bare named-import calls. See #10047.
+          // scope.setUser) and bare named-import calls. See #10047. A plugin
+          // host's `setContext` (#13506) is a different API, so a call on
+          // `host` / `x.host` is not one.
           selector:
-            "CallExpression:matches([callee.type='MemberExpression'][callee.property.name=/^(setTag|setUser|setContext)$/], [callee.type='Identifier'][callee.name=/^(setTag|setUser|setContext)$/])",
+            "CallExpression:matches([callee.type='MemberExpression'][callee.property.name=/^(setTag|setUser|setContext)$/]:not([callee.object.name='host']):not([callee.object.property.name='host']), [callee.type='Identifier'][callee.name=/^(setTag|setUser|setContext)$/])",
           message:
             "Sentry scope setters (setTag/setUser/setContext) are centralized in TelemetryService.ts so every value entering event.tags/user/contexts stays within the scrubbing contract. Annotate a legitimate site with `// eslint-disable-next-line no-restricted-syntax -- sentry-scope-setter: ok` plus a rationale. See #10047.",
         },
@@ -339,7 +341,7 @@ export default tseslint.config(
           // Mirrored from the global block (flat-config last-write-wins).
           // See #10047.
           selector:
-            "CallExpression:matches([callee.type='MemberExpression'][callee.property.name=/^(setTag|setUser|setContext)$/], [callee.type='Identifier'][callee.name=/^(setTag|setUser|setContext)$/])",
+            "CallExpression:matches([callee.type='MemberExpression'][callee.property.name=/^(setTag|setUser|setContext)$/]:not([callee.object.name='host']):not([callee.object.property.name='host']), [callee.type='Identifier'][callee.name=/^(setTag|setUser|setContext)$/])",
           message:
             "Sentry scope setters (setTag/setUser/setContext) are centralized in TelemetryService.ts so every value entering event.tags/user/contexts stays within the scrubbing contract. Annotate a legitimate site with `// eslint-disable-next-line no-restricted-syntax -- sentry-scope-setter: ok` plus a rationale. See #10047.",
         },
@@ -566,7 +568,7 @@ export default tseslint.config(
           // Mirrored from the global block (flat-config last-write-wins).
           // See #10047.
           selector:
-            "CallExpression:matches([callee.type='MemberExpression'][callee.property.name=/^(setTag|setUser|setContext)$/], [callee.type='Identifier'][callee.name=/^(setTag|setUser|setContext)$/])",
+            "CallExpression:matches([callee.type='MemberExpression'][callee.property.name=/^(setTag|setUser|setContext)$/]:not([callee.object.name='host']):not([callee.object.property.name='host']), [callee.type='Identifier'][callee.name=/^(setTag|setUser|setContext)$/])",
           message:
             "Sentry scope setters (setTag/setUser/setContext) are centralized in TelemetryService.ts so every value entering event.tags/user/contexts stays within the scrubbing contract. Annotate a legitimate site with `// eslint-disable-next-line no-restricted-syntax -- sentry-scope-setter: ok` plus a rationale. See #10047.",
         },
@@ -927,7 +929,7 @@ export default tseslint.config(
           // Mirrored from the global block (flat-config last-write-wins).
           // See #10047.
           selector:
-            "CallExpression:matches([callee.type='MemberExpression'][callee.property.name=/^(setTag|setUser|setContext)$/], [callee.type='Identifier'][callee.name=/^(setTag|setUser|setContext)$/])",
+            "CallExpression:matches([callee.type='MemberExpression'][callee.property.name=/^(setTag|setUser|setContext)$/]:not([callee.object.name='host']):not([callee.object.property.name='host']), [callee.type='Identifier'][callee.name=/^(setTag|setUser|setContext)$/])",
           message:
             "Sentry scope setters (setTag/setUser/setContext) are centralized in TelemetryService.ts so every value entering event.tags/user/contexts stays within the scrubbing contract. Annotate a legitimate site with `// eslint-disable-next-line no-restricted-syntax -- sentry-scope-setter: ok` plus a rationale. See #10047.",
         },
@@ -988,7 +990,7 @@ export default tseslint.config(
           // Mirrored from the global block (flat-config last-write-wins).
           // See #10047.
           selector:
-            "CallExpression:matches([callee.type='MemberExpression'][callee.property.name=/^(setTag|setUser|setContext)$/], [callee.type='Identifier'][callee.name=/^(setTag|setUser|setContext)$/])",
+            "CallExpression:matches([callee.type='MemberExpression'][callee.property.name=/^(setTag|setUser|setContext)$/]:not([callee.object.name='host']):not([callee.object.property.name='host']), [callee.type='Identifier'][callee.name=/^(setTag|setUser|setContext)$/])",
           message:
             "Sentry scope setters (setTag/setUser/setContext) are centralized in TelemetryService.ts so every value entering event.tags/user/contexts stays within the scrubbing contract. Annotate a legitimate site with `// eslint-disable-next-line no-restricted-syntax -- sentry-scope-setter: ok` plus a rationale. See #10047.",
         },
@@ -1123,7 +1125,7 @@ export default tseslint.config(
           // Mirrored from the global block (flat-config last-write-wins).
           // See #10047.
           selector:
-            "CallExpression:matches([callee.type='MemberExpression'][callee.property.name=/^(setTag|setUser|setContext)$/], [callee.type='Identifier'][callee.name=/^(setTag|setUser|setContext)$/])",
+            "CallExpression:matches([callee.type='MemberExpression'][callee.property.name=/^(setTag|setUser|setContext)$/]:not([callee.object.name='host']):not([callee.object.property.name='host']), [callee.type='Identifier'][callee.name=/^(setTag|setUser|setContext)$/])",
           message:
             "Sentry scope setters (setTag/setUser/setContext) are centralized in TelemetryService.ts so every value entering event.tags/user/contexts stays within the scrubbing contract. Annotate a legitimate site with `// eslint-disable-next-line no-restricted-syntax -- sentry-scope-setter: ok` plus a rationale. See #10047.",
         },

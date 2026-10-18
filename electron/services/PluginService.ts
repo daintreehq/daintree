@@ -81,6 +81,7 @@ import type {
   PluginSettingsUiValues,
   PluginWorktreeStatus,
   PluginPanelBadge,
+  PluginContextValue,
   PluginRuntimeStatus,
   PluginWorkerStatus,
   PluginWorkerState,
@@ -757,6 +758,14 @@ export class PluginService {
    * buttons only exist in that project's views.
    */
   private pluginToolbarBadges = new Map<string, Map<string, PluginPanelBadge>>();
+  /**
+   * `when`-clause context keys set via `host.setContext`, keyed `pluginId → key
+   * → value` (#13506). Held, scoped and replayed like
+   * {@link pluginToolbarBadges}: a project plugin's keys reach only its own
+   * project's views, and a cold-restored view gets them back through
+   * {@link pushSnapshotTo}.
+   */
+  private pluginContextKeys = new Map<string, Map<string, PluginContextValue>>();
   /**
    * Runtime panel menus set via `host.setPanelMenuItems`, keyed `pluginId →
    * panelId → items` (#13213). Held here for the same reason as
@@ -3084,6 +3093,7 @@ export class PluginService {
         // toolbar count (#13503).
         this.clearPluginPanelMenus(pluginId);
         if (this.pluginToolbarBadges.delete(pluginId)) this.emitToolbarBadges(pluginId);
+        if (this.pluginContextKeys.delete(pluginId)) this.emitContextKeys(pluginId);
       },
       // A protocol violation terminates the worker for good (#12276). Provenance
       // is already recorded by `onActivationResult`; this releases the runtime
@@ -3824,6 +3834,8 @@ export class PluginService {
       pluginBadges: this.pluginBadges,
       pluginToolbarBadges: this.pluginToolbarBadges,
       emitToolbarBadges: (pluginId) => this.emitToolbarBadges(pluginId),
+      pluginContextKeys: this.pluginContextKeys,
+      emitContextKeys: (pluginId) => this.emitContextKeys(pluginId),
       pluginPanelMenus: this.pluginPanelMenus,
       pluginFsWatchers: this.pluginFsWatchers,
       broadcaster: this.broadcaster,
@@ -5548,6 +5560,37 @@ export class PluginService {
     return Object.fromEntries(buttonMap);
   }
 
+  /**
+   * Publish the complete set of `pluginId`'s context keys, scoped like
+   * {@link emitToolbarBadges}. An empty map means the plugin holds none; `null`
+   * means it no longer publishes at all (unloaded or its worker retired).
+   */
+  private emitContextKeys(pluginId: string): void {
+    if (this.disposed) return;
+    const event = {
+      name: "plugin:context-keys-changed" as const,
+      payload: {
+        pluginId,
+        keys: this.pluginContextKeys.has(pluginId)
+          ? this.serializePluginContextKeys(pluginId)
+          : null,
+      },
+    };
+    const owningProjectId = projectIdFromPluginInstanceKey(pluginId);
+    if (owningProjectId === null) {
+      broadcastToRenderer(CHANNELS.EVENTS_PUSH, event);
+      return;
+    }
+    broadcastToProjectRenderers(owningProjectId, CHANNELS.EVENTS_PUSH, event);
+  }
+
+  /** One plugin's context keys (`key → value`), empty when it has none. */
+  private serializePluginContextKeys(pluginId: string): Record<string, PluginContextValue> {
+    const keys = this.pluginContextKeys.get(pluginId);
+    if (!keys || keys.size === 0) return {};
+    return Object.fromEntries(keys);
+  }
+
   private emitActionsRunning(pluginId: string): void {
     if (this.disposed) return;
     const event = {
@@ -6546,6 +6589,10 @@ export class PluginService {
 
     if (this.pluginToolbarBadges.delete(pluginId)) {
       runUnloadStep(pluginId, "clearToolbarBadges", () => this.emitToolbarBadges(pluginId));
+    }
+
+    if (this.pluginContextKeys.delete(pluginId)) {
+      runUnloadStep(pluginId, "clearContextKeys", () => this.emitContextKeys(pluginId));
     }
 
     runUnloadStep(pluginId, "clearPanelMenus", () => this.clearPluginPanelMenus(pluginId));
@@ -7674,6 +7721,18 @@ export class PluginService {
         webContents.send(CHANNELS.EVENTS_PUSH, {
           name: "plugin:toolbar-badges-changed",
           payload: { pluginId, badges: this.serializePluginToolbarBadges(pluginId) },
+        });
+      } catch {
+        // Silently ignore send failures during window initialization/disposal.
+      }
+    }
+    for (const pluginId of this.pluginContextKeys.keys()) {
+      const owningProjectId = projectIdFromPluginInstanceKey(pluginId);
+      if (owningProjectId !== null && !inView(owningProjectId)) continue;
+      try {
+        webContents.send(CHANNELS.EVENTS_PUSH, {
+          name: "plugin:context-keys-changed",
+          payload: { pluginId, keys: this.serializePluginContextKeys(pluginId) },
         });
       } catch {
         // Silently ignore send failures during window initialization/disposal.

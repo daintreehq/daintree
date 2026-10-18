@@ -131,6 +131,10 @@ import {
   samePanelMenuItems,
   type PublishedPanelMenuItem,
 } from "../../../shared/utils/pluginPanelMenuItems.js";
+import {
+  applyPluginContextEntry,
+  validatePluginContextEntry,
+} from "../../../shared/utils/pluginContextKeys.js";
 import { makeForgeProviderId } from "../../../shared/utils/forgeProviderIds.js";
 import {
   toPluginWorktreeSnapshot,
@@ -212,6 +216,7 @@ import type {
   PluginGitCommitOptions,
   PluginGitCommitResult,
   PluginPanelBadge,
+  PluginContextValue,
   PluginHostBinding,
   PluginMcpCaller,
   PluginMcpToolDefinition,
@@ -553,6 +558,10 @@ export interface PluginHostFactoryDeps {
   pluginToolbarBadges: Map<string, Map<string, PluginPanelBadge>>;
   /** Publish one plugin's complete toolbar-badge map to the views entitled to it. */
   emitToolbarBadges: (pluginId: string) => void;
+  /** Context keys set via `host.setContext`, `pluginId → key → value`. */
+  pluginContextKeys: Map<string, Map<string, PluginContextValue>>;
+  /** Publish one plugin's complete context-key map to the views entitled to it. */
+  emitContextKeys: (pluginId: string) => void;
   /** Runtime panel menus set via `host.setPanelMenuItems`, `pluginId → panelId → items`. */
   pluginPanelMenus: Map<string, Map<string, readonly PublishedPanelMenuItem[]>>;
   pluginFsWatchers: Map<string, Set<() => void>>;
@@ -2300,6 +2309,35 @@ export function createHost(
       // Deliver this plugin's queued pushes first, as every direct send does.
       flushPluginPushes();
       deps.emitToolbarBadges(pluginId);
+      return Promise.resolve();
+    },
+    // NOT revoke-guarded, like setPanelBadge: a key tracks state the plugin
+    // learns from post-activation subscriptions (#13506).
+    setContext: (key, value) => {
+      // Identity, not id membership: a callback left over from before a same-id
+      // reload must not set its successor's keys.
+      if (!isBound()) return Promise.resolve();
+      const entry = validatePluginContextEntry(key, value);
+      if (!entry.ok) {
+        // Reject (not sync throw): runtime-surface Promise method (#10617).
+        return Promise.reject(new Error(`Plugin "${pluginId}" setContext: ${entry.error}`));
+      }
+      let keys = deps.pluginContextKeys.get(pluginId);
+      if (!keys) {
+        if (entry.value === null) return Promise.resolve();
+        keys = new Map<string, PluginContextValue>();
+        deps.pluginContextKeys.set(pluginId, keys);
+      }
+      // An emptied map stays until unload: a project instance with no keys
+      // still owns its namespace over an installed copy's.
+      const applied = applyPluginContextEntry(keys, entry.key, entry.value);
+      if (!applied.ok) {
+        return Promise.reject(new Error(`Plugin "${pluginId}" setContext: ${applied.error}`));
+      }
+      if (!applied.changed) return Promise.resolve();
+      // Deliver this plugin's queued pushes first, as every direct send does.
+      flushPluginPushes();
+      deps.emitContextKeys(pluginId);
       return Promise.resolve();
     },
     // NOT revoke-guarded, like setPanelBadge: a plugin republishes its menu

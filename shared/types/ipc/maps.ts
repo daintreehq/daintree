@@ -2111,6 +2111,14 @@ export interface IpcEventMap {
     badges: Record<string, import("../plugin.js").PluginPanelBadge>;
   };
 
+  // A plugin's `when`-clause context keys changed (main → renderer, #13506).
+  // Carries the plugin's COMPLETE current map (key → value), never a delta. An
+  // empty map means it holds no keys; `null` means it unloaded.
+  "plugin:context-keys-changed": {
+    pluginId: string;
+    keys: Record<string, import("../plugin.js").PluginContextValue> | null;
+  };
+
   // A plugin's runtime panel menus changed (main → renderer, #13213). Carries
   // the plugin's COMPLETE current map (panelId → items), never a delta; an
   // empty `menus` clears the plugin's lists, which is also how an unload or a
@@ -2337,6 +2345,8 @@ export type IpcEventBusMap = Pick<
   | "plugin:panel-badges-cleared"
   // Plugin toolbar-button badges (project-scoped for a project instance)
   | "plugin:toolbar-badges-changed"
+  // Plugin `when`-clause context keys (project-scoped for a project instance)
+  | "plugin:context-keys-changed"
   // Plugin runtime panel menus (project-scoped for a project instance)
   | "plugin:panel-menus-changed"
   // Plugin action handlers in flight (project-scoped for a project instance)

@@ -31,6 +31,7 @@ import type {
   PluginPtyProcessSpawnOptions,
   PluginProcessMode,
   PluginPanelBadge,
+  PluginContextValue,
   PanelMenuItemContribution,
   BuiltInPluginCapability,
   PluginFsWriteOptions,
@@ -62,6 +63,9 @@ export type PluginHostCallMethod =
   | "dispatch"
   | "reloadPanel"
   | "restartWorker"
+  // A call, not a notify like the badges: main owns the per-plugin key cap,
+  // and its rejection has to reach the plugin's `await` (#13506).
+  | "setContext"
   | "actions.list"
   | "actions.get"
   | "settings.get"
@@ -432,6 +436,12 @@ export interface SetPanelBadgeParams {
 export interface SetToolbarButtonBadgeParams {
   buttonId: string;
   badge: PluginPanelBadge | null;
+}
+
+/** Params for `setContext` (`host-call`). `null` clears the key. */
+export interface SetContextParams {
+  key: string;
+  value: PluginContextValue | null;
 }
 
 /** Params for `setPanelMenuItems` (`host-notify`). `null` clears the list. */

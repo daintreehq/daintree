@@ -1123,6 +1123,7 @@ export const EVENT_LOCALITY: Readonly<Record<string, ChannelLocality>> = {
   "plugin:settings-changed": "host",
   "plugin:archive-install-intent": "shell",
   "plugin:bg-update-available": "host",
+  "plugin:context-keys-changed": "host",
   "plugin:context-menu-items-changed": "host",
   "plugin:decorations-changed": "host",
   "plugin:icons-changed": "host",

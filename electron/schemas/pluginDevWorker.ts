@@ -49,6 +49,7 @@ const HOST_CALL_METHODS = {
   dispatch: true,
   reloadPanel: true,
   restartWorker: true,
+  setContext: true,
   "actions.list": true,
   "actions.get": true,
   "settings.get": true,

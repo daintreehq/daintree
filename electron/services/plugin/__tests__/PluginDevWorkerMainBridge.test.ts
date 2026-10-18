@@ -66,6 +66,7 @@ function makeHost() {
     invalidateFileDecorations: vi.fn(),
     setPanelBadge: vi.fn(async () => {}),
     setToolbarButtonBadge: vi.fn(async () => {}),
+    setContext: vi.fn(async () => {}),
     setPanelMenuItems: vi.fn(async () => {}),
     showToast: vi.fn(async () => {}),
     notify: vi.fn(async (_options: unknown) => ({ id: "n-1" })),
@@ -380,6 +381,33 @@ describe("PluginDevWorkerMainBridge", () => {
     expect(host.reloadPanel).toHaveBeenCalledWith("p1");
     const result = workerHost.sent.find((m) => m.type === "host-result" && m.requestId === "c-rp");
     expect(result).toMatchObject({ ok: true, result: "scheduled" });
+  });
+
+  it("relays setContext as a call and returns the host's rejection to the worker (#13506)", async () => {
+    const { host, workerHost } = makeBridge();
+    workerHost.emit("worker-message", {
+      type: "host-call",
+      requestId: "c-sc",
+      method: "setContext",
+      params: { key: "needsYou", value: "triage" },
+    });
+    await flush();
+    expect(host.setContext).toHaveBeenCalledWith("needsYou", "triage");
+    const ok = workerHost.sent.find((m) => m.type === "host-result" && m.requestId === "c-sc");
+    expect(ok).toMatchObject({ ok: true });
+
+    host.setContext.mockRejectedValueOnce(new Error("setContext: at most 32 keys per plugin"));
+    workerHost.emit("worker-message", {
+      type: "host-call",
+      requestId: "c-sc-cap",
+      method: "setContext",
+      params: { key: "k33", value: true },
+    });
+    await flush();
+    const refused = workerHost.sent.find(
+      (m) => m.type === "host-result" && m.requestId === "c-sc-cap"
+    );
+    expect(refused).toMatchObject({ ok: false, error: expect.stringMatching(/at most 32 keys/) });
   });
 
   it("relays restartWorker and returns the host's answer (#13410)", async () => {
