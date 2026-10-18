@@ -304,12 +304,27 @@ describe("a relayed session (#13493)", () => {
     expect(refuseWrite).toHaveBeenCalledTimes(2);
   });
 
-  it("never lists or runs the command runner: a relayed session is not this machine's assistant", async () => {
-    const refuseWrite = vi.fn(() => null);
-    const relay = await relayed("full", { relay: { shellName: "greg-mbp", refuseWrite } });
+  it("lists and runs the command runner for a Shell's assistant at the full tier (#13501)", async () => {
+    const handleProjectRunCommand = vi.fn().mockResolvedValue({ exitCode: 0 });
+    const relay = await relayed("full", { handleProjectRunCommand });
 
     const listed = (await relay.client.listTools()).tools.map((tool) => tool.name);
-    expect(listed).toContain("project.runCheck");
+    expect(listed).toContain("project.runCommand");
+
+    const result = await relay.client.callTool({
+      name: "project.runCommand",
+      arguments: { projectId: "project-1", command: "git status" },
+    });
+    expect(result.isError).not.toBe(true);
+    expect(handleProjectRunCommand).toHaveBeenCalledTimes(1);
+    // Still the session's own: its origin stays `external`.
+    expect(relay.store.getOrigin("relay-session")).toBe("external");
+  });
+
+  it("never lists or runs the command runner for a core-tier relay", async () => {
+    const relay = await relayed("core");
+
+    const listed = (await relay.client.listTools()).tools.map((tool) => tool.name);
     expect(listed).not.toContain("project.runCommand");
 
     const result = await relay.client.callTool({
@@ -320,14 +335,9 @@ describe("a relayed session (#13493)", () => {
     expect(relay.deps.handleProjectRunCommand).not.toHaveBeenCalled();
   });
 
-  // The runner answers only a renderer-owned origin (#13495), which a relayed
-  // session never has; these hold it to the drive rule regardless.
+  // A full-tier relay is admitted to the runner (#13501); these hold it to the drive rule.
   describe("the command runner, past its own caller gate", () => {
-    async function admitted(overrides: Partial<SessionServerDeps>) {
-      const relay = await relayed("full", overrides);
-      relay.store.sessionOriginMap.set("relay-session", "help");
-      return relay;
-    }
+    const admitted = (overrides: Partial<SessionServerDeps>) => relayed("full", overrides);
 
     it("runs only where it is bound, and only while its Shell drives there", async () => {
       const refuseWrite = vi.fn((projectId: string | undefined) =>

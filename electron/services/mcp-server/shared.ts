@@ -12,6 +12,7 @@ import type {
   McpAuditResult,
   McpConfirmationDecision,
   McpDispatchAuthorization,
+  McpHostPreview,
   McpRuntimeSnapshot,
   McpRuntimeState,
 } from "../../../shared/types/ipc/mcpServer.js";
@@ -176,15 +177,33 @@ export interface WorkspaceDispatchOptions {
    * truthfully. Absent reads as `above-tier`, the only reason a pane asks.
    */
   approvalReason?: McpApprovalReason;
+  /**
+   * What another machine shows about an `approvalOnly` call it would run
+   * itself (#13501), shown as given in place of a preview this view would
+   * build from its own stores.
+   */
+  hostPreview?: McpHostPreview;
   /** What pre-authorized a `confirmed` dispatch — see `SessionServerDeps.dispatchAction`. */
   authorization?: McpDispatchAuthorization;
   /**
    * A call one of another machine's assistants made here through its Shell
    * (#13493). Anything but a read runs only in that Shell's own view of the
-   * workspace, the one the drive lease says drives it; never in another
-   * machine's, whose authority the relay would then be borrowing.
+   * workspace, the one the drive lease says drives it, or on this host as that
+   * Shell while nobody drives it (#13501); never in another machine's view,
+   * whose authority the relay would then be borrowing.
    */
-  relay?: { linkSessionId: string; readOnly: boolean };
+  relay?: {
+    linkSessionId: string;
+    readOnly: boolean;
+    /**
+     * Asks the person at the requesting Shell, in its own window, about this
+     * one call when no view here can (#13501). Absent, an unapproved
+     * confirm-gated call the host runs itself is refused.
+     */
+    requestApproval?: (
+      ask: import("../viewless/index.js").ViewlessApprovalAsk
+    ) => Promise<import("../viewless/index.js").ViewlessApprovalDecision>;
+  };
 }
 export type { HelpAssistantTier };
 
@@ -1218,6 +1237,14 @@ export interface McpRelayCaller {
    * type into the run that asked. Absent, a relayed call can't ask for one.
    */
   deliverNotices?: (notices: readonly RelayedNotice[]) => void;
+  /**
+   * Puts one of this session's confirm-gated calls to the person at the
+   * Shell, in its own window, when no view here can (#13501). Absent, such a
+   * call with no view is refused.
+   */
+  requestApproval?: (
+    ask: import("../viewless/index.js").ViewlessApprovalAsk & { callId: string }
+  ) => Promise<import("../viewless/index.js").ViewlessApprovalDecision>;
 }
 
 const RESOURCE_URI_PATTERN =

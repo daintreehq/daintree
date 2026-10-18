@@ -12,8 +12,15 @@ import {
   waitForWorktreeSetup,
   WORKTREE_BRANCH_KEPT_MARKER,
 } from "../../../shared/utils/worktreeSummary.js";
+import {
+  formatTeardownPreviewLines,
+  formatWorktreeDeletePreviewLines,
+  summarizeWorktreeChanges,
+  type WorktreeSubmoduleRiskState,
+} from "../../../shared/utils/worktreeDeletePreview.js";
 import type {
   ViewlessActionRequest,
+  ViewlessApprovalPreview,
   ViewlessDeps,
   ViewlessWorkspaceHosts,
 } from "./ViewlessActionExecutor.js";
@@ -137,51 +144,137 @@ export async function runWorktreeWaitUntilReady(
   }
 }
 
+type CheckedWorktreeDelete =
+  | { ok: false; result: ActionDispatchResult }
+  | {
+      ok: true;
+      worktreeId: string;
+      force: boolean | undefined;
+      deleteBranch: boolean | undefined;
+      hosts: ViewlessWorkspaceHosts;
+    };
+
 /**
- * Delete one of this project's worktrees, the way a view's delete does: stop
- * any dev preview running in it first — Windows holds a directory lock while
- * the server runs, so removal would fail outright (#9084) — then remove it.
- * Only a worktree the host confirms belongs to this project is touched: the
- * delete handler routes by id alone.
+ * Whether a delete can run here at all, settled before anyone is asked about
+ * it and before anything is touched: a force delete no typed name can
+ * approve, panels no view holds to close, or a worktree this project can't
+ * be shown to own. Only a worktree the host confirms belongs to this project
+ * is touched: the delete handler routes by id alone.
  */
-export async function runWorktreeDelete(
+async function checkWorktreeDelete(
   request: ViewlessActionRequest,
   project: Project,
   deps: ViewlessDeps
-): Promise<ActionDispatchResult> {
+): Promise<CheckedWorktreeDelete> {
+  const refuse = (result: ActionDispatchResult): CheckedWorktreeDelete => ({ ok: false, result });
   const parsed = WorktreeDeleteArgsSchema.safeParse(request.args);
-  if (!parsed.success) return validationFailure(request.actionId, parsed.error);
+  if (!parsed.success) return refuse(validationFailure(request.actionId, parsed.error));
   const { worktreeId, force, deleteBranch, closeTerminals } = parsed.data;
   // A force delete can discard tracked work, which a view guards with a typed
   // name on top of the ordinary approval. Only the assistant's skip preference
   // stands in for that, as it does there; with no frontend to type the name
   // into, anything else is refused before the worktree is touched.
   if (force === true && request.authorization !== "skip-preference") {
-    return failure(
-      "CONFIRMATION_REQUIRED",
-      `${request.actionId} with force can discard uncommitted work, which needs a typed confirmation, but no Daintree frontend is attached to this project to take it. The worktree was not deleted.`,
-      { confirmationChannel: "unavailable" }
+    return refuse(
+      failure(
+        "CONFIRMATION_REQUIRED",
+        `${request.actionId} with force can discard uncommitted work, which needs a typed confirmation, but no Daintree frontend is attached to this project to take it. The worktree was not deleted.`,
+        { confirmationChannel: "unavailable" }
+      )
     );
   }
   // A view closes the worktree's panels from its own store, and restores them
   // if the delete fails. With no view there is no store to restore them into.
   if (closeTerminals === true) {
-    return failure(
-      "VALIDATION_ERROR",
-      `${request.actionId} cannot close a worktree's terminals when no frontend is attached to this project. Close them first, then delete without closeTerminals.`
+    return refuse(
+      failure(
+        "VALIDATION_ERROR",
+        `${request.actionId} cannot close a worktree's terminals when no frontend is attached to this project. Close them first, then delete without closeTerminals.`
+      )
     );
   }
-
   try {
     const hosts = await ensureWorkspaceHost(project, deps);
-    if (!hosts) return failure("EXECUTION_ERROR", "Workspace service is not available");
+    if (!hosts) return refuse(failure("EXECUTION_ERROR", "Workspace service is not available"));
     const owned = await hosts.isWorktreeOwnedByProject(worktreeId, project.path, project.id);
     if (owned !== true) {
-      return failure(
-        "VALIDATION_ERROR",
-        `'${worktreeId}' could not be confirmed as a worktree of this project, so ${request.actionId} will not delete it.`
+      return refuse(
+        failure(
+          "VALIDATION_ERROR",
+          `'${worktreeId}' could not be confirmed as a worktree of this project, so ${request.actionId} will not delete it.`
+        )
       );
     }
+    return { ok: true, worktreeId, force, deleteBranch, hosts };
+  } catch (err) {
+    return refuse(failure("EXECUTION_ERROR", formatErrorMessage(err, "Worktree delete failed")));
+  }
+}
+
+/**
+ * What the person is shown before a delete the host runs itself (#13501):
+ * the same lines a view's dialog shows, read fresh on this host from the
+ * worktree the delete would remove — what it would discard, inside its
+ * submodules too, and the teardown it would run first. A read that fails is
+ * said to have failed rather than left out.
+ */
+export async function previewWorktreeDelete(
+  request: ViewlessActionRequest,
+  project: Project,
+  deps: ViewlessDeps
+): Promise<ViewlessApprovalPreview> {
+  const checked = await checkWorktreeDelete(request, project, deps);
+  if (!checked.ok) return checked;
+  const { worktreeId, hosts } = checked;
+  const [read, worktrees] = await Promise.all([
+    hosts.getDeletePreview(project.path, project.id, worktreeId).catch(() => null),
+    readProjectWorktrees(project, deps).catch(() => null),
+  ]);
+  // A part that is null means the worktree is gone; only a failed read is unreadable.
+  const changes = read === null ? "unreadable" : read.changes;
+  const risk = read === null ? "unreadable" : read.risk;
+  const teardown = read === null ? "unreadable" : read.teardown;
+  const submodules: WorktreeSubmoduleRiskState =
+    risk === "unreadable" || risk === null || risk.incomplete
+      ? { status: "unverified", risk: risk === "unreadable" ? null : risk }
+      : { status: "verified", risk };
+  const lines =
+    changes === null
+      ? []
+      : [
+          ...formatWorktreeDeletePreviewLines(
+            changes === "unreadable"
+              ? null
+              : {
+                  ...summarizeWorktreeChanges(changes.changes ?? []),
+                  changes: changes.changes ?? [],
+                  rootPath: changes.rootPath,
+                  ...(changes.ahead === undefined ? {} : { ahead: changes.ahead }),
+                  submodules,
+                }
+          ),
+          ...formatTeardownPreviewLines(teardown),
+        ];
+  const worktree = worktrees?.find((candidate) => candidate.id === worktreeId);
+  const subject = worktree?.branch || worktree?.name;
+  return { ok: true, ...(subject ? { subject } : {}), lines };
+}
+
+/**
+ * Delete one of this project's worktrees, the way a view's delete does: stop
+ * any dev preview running in it first — Windows holds a directory lock while
+ * the server runs, so removal would fail outright (#9084) — then remove it.
+ */
+export async function runWorktreeDelete(
+  request: ViewlessActionRequest,
+  project: Project,
+  deps: ViewlessDeps
+): Promise<ActionDispatchResult> {
+  const checked = await checkWorktreeDelete(request, project, deps);
+  if (!checked.ok) return checked.result;
+  const { worktreeId, force, deleteBranch } = checked;
+
+  try {
     await deps.invoke<void>(project.id, DEV_PREVIEW_METHOD_CHANNELS.stopByWorktree, [
       { worktreeId },
     ]);

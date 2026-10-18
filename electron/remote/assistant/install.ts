@@ -66,7 +66,7 @@ declare module "../runtime.js" {
     /** What a host's dialogs are checked against: whether this Shell has a call out to it. */
     hostCallRelayClient: Pick<
       HubMessagingRuntime,
-      "hasCallInFlight" | "awaitsNotices" | "receiveNotices"
+      "hasCallInFlight" | "awaitsNotices" | "receiveNotices" | "receiveApproval"
     >;
   }
 }
@@ -416,6 +416,15 @@ export function installAssistantMessagingPolicy(
       return handle !== null && !isRemoteEndpointHandle(handle);
     },
     controlEnabled: (hostId) => deps.isHostControlEnabled?.(hostId) === true,
+    // A host's question about a call it would run itself goes to the person in
+    // the window of the assistant that made the call (#13501), never the
+    // focused one: an assistant a remote Shell's view runs here has none.
+    askApproval: async (ask) => {
+      const webContentsId = helpSessionService.getWebContentsIdForSessionId(ask.helpSessionId);
+      if (webContentsId === null || isRemoteEndpointHandle(webContentsId)) return null;
+      const { askHostApprovalInWindow } = await import("../client/viewRequests.js");
+      return askHostApprovalInWindow(webContentsId, ask);
+    },
     // A host's notice rides its run's own notice line, as a wake does (#13500).
     queueNotice: (lane, wake) => {
       void import("../../services/McpServerService.js")
@@ -630,6 +639,7 @@ export function installAssistantExchangeClient(
     hubReceiver: () => getRemoteService("assistantHubReceiver"),
     messagingEnabled: deps.messagingEnabled,
     noticeReceiver: () => getRemoteService("hostCallRelayClient"),
+    approvalReceiver: () => getRemoteService("hostCallRelayClient"),
     onExchangesMoved: (_hostId, moved) =>
       wakeAskersForMoved(moved, getRemoteService("assistantLaneWaker")),
   });

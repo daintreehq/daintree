@@ -15,6 +15,8 @@ import { RelayCallLedger } from "./relayCallLedger.js";
 import { RelayNoticeOutbox } from "./relayNoticeOutbox.js";
 import type { SenderSessions } from "./senderSessions.js";
 import type { RelayedNotice } from "../../services/mcp-server/terminalNotify.js";
+import type { ViewlessApprovalDecision } from "../../services/viewless/index.js";
+import { askShellApproval, type RelayApprovalAsk } from "./relayApprovals.js";
 
 /** Who a relayed session acts for, as this host established it. */
 export interface RelayMcpSessionSpec {
@@ -30,6 +32,13 @@ export interface RelayMcpSessionSpec {
   shellName: string;
   /** Carries the notices the session's calls arm back to the Shell (#13500). */
   deliverNotices(notices: readonly RelayedNotice[]): void;
+  /**
+   * Puts one confirm-gated call to the person at the Shell, in its own window,
+   * when no view here can (#13501). Decides that call alone.
+   */
+  requestApproval(
+    ask: Omit<RelayApprovalAsk, "helpSessionId" | "projectId">
+  ): Promise<ViewlessApprovalDecision>;
 }
 
 /** One MCP session this host admitted for a relay principal and project. */
@@ -341,6 +350,13 @@ export function installHostMcpRelay(
     }
   };
 
+  const liveLink = (linkSessionId: string): LinkSession | null => {
+    for (const ctx of server.sessions) {
+      if (ctx.sessionId === linkSessionId && ctx.session.isOpen) return ctx.session;
+    }
+    return null;
+  };
+
   const wire = ({ session, sessionId, client }: MetricsSessionContext): void => {
     if (wired.has(session)) return;
     wired.add(session);
@@ -359,6 +375,13 @@ export function installHostMcpRelay(
           tier: payload.tier,
           shellName: client?.clientName || "Remote Shell",
           deliverNotices,
+          // Asked over whichever session is live for this link when the call needs it.
+          requestApproval: (ask) =>
+            askShellApproval(liveLink(sessionId), {
+              ...ask,
+              helpSessionId: payload.helpSessionId,
+              projectId: payload.projectId,
+            }),
         };
         const digest = canonicalArgsHash(payload.tool, {
           helpSessionId: payload.helpSessionId,

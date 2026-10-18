@@ -68,10 +68,14 @@ import {
   type LaneList,
   type McpCallAnswer,
   type McpCallPayload,
+  type RelayApproveAnswer,
+  type RelayApprovePayload,
   type RelayNotice,
   type RelayNoticesPayload,
   type RelayRefusal,
 } from "./linkMethods.js";
+import { canonicalArgsHash } from "../../services/mcp-server/sessionDedup.js";
+import type { McpConfirmationDecision } from "../../../shared/types/ipc/mcpServer.js";
 import { HOST_MESSAGING_PAUSED_MESSAGE, LANE_NOT_RUNNING_MESSAGE } from "./hostExchanges.js";
 import { TokenBucket } from "./tokenBucket.js";
 
@@ -133,6 +137,13 @@ export interface HubMessagingRuntimeDeps {
   startEnabled?(hostId: HostId): boolean;
   /** Starts and enrolls an assistant in a host's project; absent where nothing can. */
   starter?(): Pick<HostAssistantStarter, "start"> | null;
+  /**
+   * Puts a host's question about one of this Shell's relayed calls to the
+   * person, in the window of the assistant that made it (#13501), showing the
+   * host's own preview. Null when it couldn't be asked there; absent, no host
+   * is ever answered.
+   */
+  askApproval?(ask: RelayApprovalQuestion): Promise<McpConfirmationDecision | null>;
   now?: () => number;
   newId?: () => string;
   /** Resolves after `ms`; injectable so a test's wait doesn't take real time. */
@@ -159,6 +170,64 @@ const MAX_PROMPTED_TERMINALS = 512;
  */
 const MAX_RAN_PROMPTS_PER_TERMINAL = 4;
 const MAX_PENDING_PROMPTS_PER_TERMINAL = 32;
+
+/** What the person at this Shell is asked about one of its relayed calls. */
+export interface RelayApprovalQuestion {
+  hostId: HostId;
+  helpSessionId: string;
+  actionId: string;
+  args: Record<string, unknown>;
+  subject?: string;
+  lines: string[];
+}
+
+/** A relayed call out to a host right now, and the run here that made it. */
+interface CallInFlight {
+  hostId: HostId;
+  helpSessionId: string;
+  projectId: string;
+  tool: string;
+  args: Record<string, unknown>;
+  run: OpenRun;
+  /** A host asked about it once already: an approval is for the call, not each ask. */
+  asked: boolean;
+}
+
+/**
+ * The confirm-gated actions a host may ask this Shell to approve (#13501),
+ * each with the owned tool that stands in for it, whose delegate the host
+ * rebuilds from the id alone.
+ */
+const RELAY_APPROVABLE: Readonly<Record<string, { ownedTool: string; idArg: string }>> = {
+  "worktree.delete": { ownedTool: "worktree.deleteOwned", idArg: "worktreeId" },
+};
+
+/** What a host's MCP server runs a call with: its arguments less the request's own keys. */
+function relayedActionArgs(args: Record<string, unknown>): Record<string, unknown> {
+  const { _meta: _ignored, requestKey: _requestKey, ...actionArgs } = args;
+  return actionArgs;
+}
+
+/**
+ * Whether a host's ask is about exactly the call this Shell made: the same
+ * action with the same arguments, or the plain action an owned tool stands
+ * in for, on the same id and nothing else.
+ */
+function asksAboutCall(call: CallInFlight, payload: RelayApprovePayload): boolean {
+  if (!Object.hasOwn(RELAY_APPROVABLE, payload.actionId)) return false;
+  const asked = canonicalArgsHash(payload.actionId, payload.args);
+  if (asked !== payload.argsHash) return false;
+  if (call.tool === payload.actionId) {
+    return canonicalArgsHash(call.tool, relayedActionArgs(call.args)) === asked;
+  }
+  const { ownedTool, idArg } = RELAY_APPROVABLE[payload.actionId]!;
+  const id = call.args[idArg];
+  return (
+    call.tool === ownedTool &&
+    typeof id === "string" &&
+    canonicalArgsHash(payload.actionId, { [idArg]: id }) === asked
+  );
+}
 
 /** A call that may arm notices on its host, and the run here that made it. */
 interface NoticePin {
@@ -625,6 +694,8 @@ export class HubMessagingRuntime implements HostMessagingRuntimeHandle {
   private readonly callsOut = new Map<HostId, number>();
   /** Calls that may arm notices on their host, by callId (#13500). */
   private readonly noticePins = new Map<string, NoticePin>();
+  /** Relayed calls out right now, by callId, for a host's ask about one to be checked against (#13501). */
+  private readonly callsInFlight = new Map<string, CallInFlight>();
   /** Notices already queued, by host and noticeId. */
   private readonly seenNotices = new Map<string, true>();
   /** Recent prompts sent from here to each host terminal, by host and terminal. */
@@ -708,6 +779,64 @@ export class HubMessagingRuntime implements HostMessagingRuntimeHandle {
       }
     }
     return false;
+  }
+
+  /**
+   * A host asking the person here about one of this Shell's relayed calls it
+   * would run itself, with no view of its own to ask in (#13501). Answered
+   * only for a call still out to that host from the run that made it, about
+   * exactly that call's action and arguments, once per call, and only while
+   * the person's control switch for the host is on; asked in that
+   * assistant's own window. Anything else is `refused`, which approves
+   * nothing. The host is the connection's, never the payload's.
+   */
+  async receiveApproval(hostId: HostId, payload: RelayApprovePayload): Promise<RelayApproveAnswer> {
+    const answer = (decision: RelayApproveAnswer["decision"]): RelayApproveAnswer => ({
+      approvalId: payload.approvalId,
+      argsHash: payload.argsHash,
+      decision,
+    });
+    const call = this.callsInFlight.get(payload.callId);
+    const ask = this.deps.askApproval;
+    if (
+      this.disposed ||
+      ask === undefined ||
+      call === undefined ||
+      call.asked ||
+      call.hostId !== hostId ||
+      call.helpSessionId !== payload.helpSessionId ||
+      call.projectId !== payload.projectId ||
+      !asksAboutCall(call, payload) ||
+      !this.stillRunning(call.run) ||
+      this.deps.controlEnabled?.(hostId) !== true
+    ) {
+      return answer("refused");
+    }
+    call.asked = true;
+    let decision: McpConfirmationDecision | null;
+    try {
+      decision = await ask({
+        hostId,
+        helpSessionId: payload.helpSessionId,
+        actionId: payload.actionId,
+        args: payload.args,
+        ...(payload.subject !== undefined ? { subject: payload.subject } : {}),
+        lines: payload.lines,
+      });
+    } catch (error) {
+      console.warn("[HubMessaging] Asking about a host's call failed:", error);
+      decision = null;
+    }
+    // The call can end, or its run be replaced, while the person decides.
+    if (
+      decision === "approved" &&
+      (this.callsInFlight.get(payload.callId) !== call ||
+        !this.stillRunning(call.run) ||
+        this.deps.controlEnabled?.(hostId) !== true)
+    ) {
+      return answer("refused");
+    }
+    return answer(decision ?? "refused");
   }
 
   /**
@@ -860,6 +989,7 @@ export class HubMessagingRuntime implements HostMessagingRuntimeHandle {
     this.disposed = true;
     this.lanes.clear();
     this.callsOut.clear();
+    this.callsInFlight.clear();
     this.noticePins.clear();
     this.seenNotices.clear();
     this.prompted.clear();
@@ -910,6 +1040,16 @@ export class HubMessagingRuntime implements HostMessagingRuntimeHandle {
         ? NOTHING_NOTED
         : this.noteCall(callId, args.hostId, caller, args.tool, toolArgs);
       this.callsOut.set(args.hostId, (this.callsOut.get(args.hostId) ?? 0) + 1);
+      const inFlight: CallInFlight = {
+        hostId: args.hostId,
+        helpSessionId,
+        projectId: args.projectId,
+        tool: args.tool,
+        args: toolArgs,
+        run: caller,
+        asked: false,
+      };
+      this.callsInFlight.set(callId, inFlight);
       let answer: McpCallAnswer;
       try {
         answer = await this.requireClient().relayCall(
@@ -955,6 +1095,7 @@ export class HubMessagingRuntime implements HostMessagingRuntimeHandle {
         const left = (this.callsOut.get(args.hostId) ?? 1) - 1;
         if (left > 0) this.callsOut.set(args.hostId, left);
         else this.callsOut.delete(args.hostId);
+        if (this.callsInFlight.get(callId) === inFlight) this.callsInFlight.delete(callId);
       }
       switch (answer.status) {
         // A tool error may still have run some of a batch before it failed.

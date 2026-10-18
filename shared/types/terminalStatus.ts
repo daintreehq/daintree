@@ -139,3 +139,32 @@ export interface TerminalStatusResult {
   source: TerminalStatusSource;
   unavailableFields: TerminalStatusUnavailableField[];
 }
+
+/**
+ * What a pty-sourced answer structurally cannot observe.
+ *
+ * `armed` is fleet-broadcast routing held in `useFleetArmingStore`, and
+ * `lastCheckResult` is parsed out of agent stdout by `CheckResultDetector` —
+ * both only ever reach the renderer's panel record, and main keeps no copy.
+ *
+ * `exitCode` is the one that looks reachable. Main caches exit metadata per
+ * terminal in `AgentAvailabilityStore` (#12494), but everything else in this
+ * answer comes from the pty-host record, and the store is a second copy fed
+ * separately by events — the two can disagree mid-respawn, and splicing one
+ * field in from it is a contract change of its own. The renderer path has the
+ * code on the panel itself and reports it there.
+ *
+ * All three are reported as unavailable rather than defaulted or guessed:
+ * `armed: false` and a borrowed exit code are both interpretations main has no
+ * evidence for. `agentState` still distinguishes `completed` from `exited`, so
+ * "the run finished, and how" survives without the numeric code.
+ *
+ * `hasPty` is deliberately *not* here. It is computed in the pty-host itself
+ * (`mapTerminalInfo`), so this is the surface that can observe it — the
+ * renderer's panel copy is the one that never gets written (#12336).
+ */
+export const VIEWLESS_STATUS_UNAVAILABLE_FIELDS: readonly TerminalStatusUnavailableField[] = [
+  "armed",
+  "lastCheckResult",
+  "exitCode",
+];

@@ -1,12 +1,12 @@
 import { describe, expect, it } from "vitest";
-import type { Issue, PR, Page } from "@shared/types/forge";
+import type { Issue, PR, Page } from "../../types/forge.js";
 import {
   ForgeIssueSummarySchema,
   ForgePRSummarySchema,
   projectForgePage,
   projectIssueSummary,
   projectPRSummary,
-} from "../forgeListProjection";
+} from "../forgeListProjection.js";
 
 const issue: Issue = {
   number: 11527,

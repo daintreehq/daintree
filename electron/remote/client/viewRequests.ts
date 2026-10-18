@@ -1,6 +1,10 @@
 import { z } from "zod";
 import type { ActionDispatchResult, ActionManifestEntry } from "../../../shared/types/actions.js";
-import type { McpBearerIdentity } from "../../../shared/types/ipc/mcpServer.js";
+import type {
+  McpBearerIdentity,
+  McpConfirmationDecision,
+} from "../../../shared/types/ipc/mcpServer.js";
+import type { RelayApprovalQuestion } from "../assistant/HubMessagingRuntime.js";
 import {
   MCP_DISPATCH_ACTION_METHOD,
   MCP_GET_MANIFEST_METHOD,
@@ -209,6 +213,41 @@ async function dispatchAction(
       ? { confirmationDecision: envelope.confirmationDecision }
       : {}),
   };
+}
+
+/**
+ * Put a host's question about one of this Shell's relayed calls to the person
+ * in this window (#13501): the dialog the action raises here, naming the host
+ * it came through and showing that host's own preview of the call, which
+ * dispatches nothing. The decision, or null when this window couldn't ask.
+ */
+export async function askHostApprovalInWindow(
+  webContentsId: number,
+  ask: RelayApprovalQuestion
+): Promise<McpConfirmationDecision | null> {
+  const service = await loadMcpServerService();
+  try {
+    const envelope = await service.dispatchActionForHost(
+      webContentsId,
+      ask.actionId,
+      ask.args,
+      false,
+      undefined,
+      "external",
+      {
+        approvalOnly: true,
+        hostPreview: { lines: ask.lines, ...(ask.subject ? { subject: ask.subject } : {}) },
+      },
+      describeHost(ask.hostId, true)
+    );
+    return envelope.confirmationDecision ?? null;
+  } catch (error) {
+    console.warn(
+      "[RemoteHosts] Couldn't ask about a host's call in its assistant's window:",
+      error
+    );
+    return null;
+  }
 }
 
 async function requestManifest(webContentsId: number): Promise<ActionManifestEntry[]> {

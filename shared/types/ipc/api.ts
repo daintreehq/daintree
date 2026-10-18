@@ -2229,6 +2229,11 @@ export interface ElectronAPI extends GeneratedElectronAPI {
          */
         approvalReason?: import("./mcpServer.js").McpApprovalReason;
         /**
+         * Another machine's own preview of an `approvalOnly` call it runs
+         * itself (#13501), shown as given in place of one this view builds.
+         */
+        hostPreview?: import("./mcpServer.js").McpHostPreview;
+        /**
          * What pre-authorized a `confirmed` dispatch, set only by main. Only
          * `skip-preference` also waives the typed-name gate on a force delete
          * (#12874); anything else keeps it.

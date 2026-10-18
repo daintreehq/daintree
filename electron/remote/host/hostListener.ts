@@ -190,12 +190,20 @@ async function buildHostListener(
       helpSessionId,
       shellName,
       deliverNotices,
+      requestApproval,
     }) => {
       const { mcpServerService } = await import("../../services/McpServerService.js");
       return mcpServerService.openRelaySession({
         tier,
         workspaceId: projectId,
-        caller: { linkSessionId, senderId, helpSessionId, shellName, deliverNotices },
+        caller: {
+          linkSessionId,
+          senderId,
+          helpSessionId,
+          shellName,
+          deliverNotices,
+          requestApproval,
+        },
       });
     },
     retirePrincipal: (senderId, helpSessionId) => {

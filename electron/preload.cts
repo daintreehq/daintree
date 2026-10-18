@@ -24,6 +24,7 @@ import type {
   McpDispatchAuthorization,
   McpSessionOrigin,
   McpApprovalReason,
+  McpHostPreview,
   McpToolCallStartedPayload,
   McpToolCallSettledPayload,
   McpHelpDisplayImagePayload,
@@ -3543,6 +3544,7 @@ function buildElectronApi(): ElectronAPI {
           offerSessionApproval?: boolean;
           approvalOnly?: boolean;
           approvalReason?: McpApprovalReason;
+          hostPreview?: McpHostPreview;
           authorization?: McpDispatchAuthorization;
         }) => void
       ) => _typedOn(CHANNELS.MCP_SERVER_DISPATCH_ACTION_REQUEST, callback),

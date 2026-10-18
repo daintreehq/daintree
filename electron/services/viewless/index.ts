@@ -7,7 +7,12 @@ import {
 } from "./ViewlessActionExecutor.js";
 
 export { hasViewlessImplementation, VIEWLESS_ACTION_IDS } from "./ViewlessActionExecutor.js";
-export type { ViewlessActionRequest, ViewlessDeps } from "./ViewlessActionExecutor.js";
+export type {
+  ViewlessActionRequest,
+  ViewlessApprovalAsk,
+  ViewlessApprovalDecision,
+  ViewlessDeps,
+} from "./ViewlessActionExecutor.js";
 
 /**
  * The live services, loaded on first use. The MCP bridge is the only caller and

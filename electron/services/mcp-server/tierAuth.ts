@@ -164,10 +164,31 @@ export function shouldExposeTool(
   if (session.relay === true && isWithheldFromRelaySession(entry.id)) {
     return false;
   }
+  if (entry.id === PROJECT_RUN_COMMAND_TOOL) return mayRunProjectCommand(tier, session);
   return (
     isTierPermitted(tier, entry.id, session.rendererOwnedOrigin === true) ||
     isApprovalRequestable(tier, entry.id, session.paneApproval === true)
   );
+}
+
+const PROJECT_RUN_COMMAND_TOOL = "project.runCommand";
+
+/**
+ * `project.runCommand` runs whatever command it is given, so it answers to its
+ * caller, not its tier alone (#13495): Daintree's own assistant at the full
+ * tier. That includes another machine's own assistant reaching this host at
+ * the full tier through its Shell's `host.call` (#13501): a relay is only
+ * ever offered to that Shell's assistant in one of its own windows, already
+ * reaches a shell here through `terminal.new` and `terminal.sendCommand`, and
+ * is held to the drive rule like any change it makes. Never a worker pane, an
+ * api-key client or a core session, and no grant widens that. Discovery and
+ * admission ask this same question.
+ */
+export function mayRunProjectCommand(
+  tier: string | null,
+  session: Pick<SessionSurfacePolicy, "rendererOwnedOrigin" | "relay">
+): boolean {
+  return tier === "full" && (session.rendererOwnedOrigin === true || session.relay === true);
 }
 
 /** This machine's own assistant-panel tools, which mean nothing to another machine's assistant. */

@@ -29,6 +29,10 @@ import {
   SendKeysArgsSchema,
 } from "../../../shared/utils/terminalKeys.js";
 import { fitTerminalOutputResult } from "../../../shared/utils/terminalOutputBudget.js";
+import {
+  VIEWLESS_STATUS_UNAVAILABLE_FIELDS,
+  type TerminalStatusResult,
+} from "../../../shared/types/terminalStatus.js";
 import { isAssistantTerminalRecord } from "../assistantTerminal.js";
 import type {
   ViewlessActionRequest,
@@ -280,13 +284,72 @@ export async function runTerminalGetOutput(
  * (#12316). It answers only for named terminals: the fleet path filters on
  * panel locations, which a status read off processes cannot apply honestly.
  */
+/** The fleet filters `terminal.getStatus` takes when it names no terminals. */
+const FleetStatusArgsSchema = z
+  .object({
+    worktreeId: z.string().optional(),
+    location: z.enum(["grid", "dock", "trash", "background"]).optional(),
+    submissionToken: z.string().min(1).max(128).optional(),
+  })
+  .passthrough();
+
+/** Ids the pty-host read takes at once; a project's panel limit sits far below it. */
+const MAX_STATUS_IDS = 256;
+
+/**
+ * `terminal.getStatus` for named terminals, read off the pty-host; or, naming
+ * none, for the project's fleet (#13501) as a view picks it: its panels in
+ * layout order, filtered by worktree and by location, leaving out the trash
+ * and background ones unless that location is asked for, then read the same
+ * way. Panel locations come from the saved layout a view would hydrate.
+ */
 export async function runTerminalGetStatus(
   request: ViewlessActionRequest,
   project: Project,
   deps: ViewlessDeps
 ): Promise<ActionDispatchResult> {
+  let args = request.args;
+  const named =
+    args !== null &&
+    typeof args === "object" &&
+    !Array.isArray(args) &&
+    (args as Record<string, unknown>).terminalIds !== undefined;
+  if (!named) {
+    const parsed = FleetStatusArgsSchema.safeParse(args ?? {});
+    if (!parsed.success) return validationFailure(request.actionId, parsed.error);
+    const { worktreeId, location, submissionToken } = parsed.data;
+    if (submissionToken !== undefined) {
+      return failure(
+        "EXECUTION_ERROR",
+        "terminal.getStatus requires `terminalIds` when `submissionToken` is set."
+      );
+    }
+    const ids = (await readProjectPanels(project, deps))
+      .filter((panel) => {
+        const where = panelLocation(panel);
+        if (
+          location !== undefined ? where !== location : where === "trash" || where === "background"
+        ) {
+          return false;
+        }
+        return (
+          worktreeId === undefined ||
+          (panel.record?.worktreeId ?? panel.snapshot?.worktreeId) === worktreeId
+        );
+      })
+      .map((panel) => panel.id)
+      .slice(0, MAX_STATUS_IDS);
+    if (ids.length === 0) {
+      return success({
+        terminals: [],
+        source: "pty",
+        unavailableFields: [...VIEWLESS_STATUS_UNAVAILABLE_FIELDS],
+      } satisfies TerminalStatusResult);
+    }
+    args = { ...parsed.data, terminalIds: ids };
+  }
   try {
-    return success(await deps.readTerminalStatus(request.args, project.id));
+    return success(await deps.readTerminalStatus(args, project.id));
   } catch (err) {
     if (err instanceof McpError) {
       return failure(

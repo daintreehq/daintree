@@ -18,6 +18,12 @@ import type { ActionId, ActionManifestEntry } from "../../../../shared/types/act
 import { HttpLifecycle, type HttpLifecycleDeps } from "../httpLifecycle.js";
 import { relayOwnershipPrincipal } from "../resourceOwnership.js";
 import { SessionStore } from "../sessionStore.js";
+import {
+  _resetMcpDriveTargetResolverForTesting,
+  setMcpDriveTargetResolver,
+  type McpDriveTarget,
+} from "../driveTarget.js";
+import type { ClientEndpoint } from "../../../ipc/endpoint.js";
 
 function entry(id: string, kind: "query" | "command", readOnlyHint?: boolean): ActionManifestEntry {
   return {
@@ -41,6 +47,7 @@ const MANIFEST = [
   // A query that writes: classified by what it advertises, not by its kind.
   entry("copyTree.generate", "query", false),
   entry("terminal.notifyWhenIdle", "command"),
+  entry("project.runCheck", "command"),
 ];
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -265,5 +272,99 @@ describe("HttpLifecycle.openRelaySession (#13493)", () => {
     expect(record.argsSummary).not.toContain("short secret");
     expect(record).not.toHaveProperty("resultSummary");
     session.close();
+  });
+
+  it("puts a call's confirmation to its own Shell, naming the call that needs it (#13501)", async () => {
+    const requestApproval = vi.fn().mockResolvedValue({ decision: "rejected" });
+    const { lc, dispatchActionForWorkspace } = await startedLifecycle();
+    dispatchActionForWorkspace.mockImplementation(async (...args: unknown[]) => {
+      const options = args[5] as {
+        relay?: { requestApproval?: (ask: unknown) => Promise<unknown> };
+      };
+      await options.relay?.requestApproval?.({
+        actionId: "agent.launch",
+        args: { agentId: "claude" },
+        lines: ["preview"],
+      });
+      return { result: { ok: true, result: {} } };
+    });
+    const session = (await lc.openRelaySession({
+      tier: "full",
+      workspaceId: "project-1",
+      caller: { ...CALLER, requestApproval },
+    }))!;
+
+    await session.callTool(
+      "agent.launch",
+      { agentId: "claude" },
+      { timeoutMs: 5_000, callId: "c7" }
+    );
+
+    expect(requestApproval).toHaveBeenCalledWith({
+      actionId: "agent.launch",
+      args: { agentId: "claude" },
+      lines: ["preview"],
+      callId: "c7",
+    });
+    session.close();
+  });
+
+  describe("a check main runs itself (#13501)", () => {
+    afterEach(() => _resetMcpDriveTargetResolverForTesting());
+
+    async function check(target: McpDriveTarget) {
+      setMcpDriveTargetResolver(() => target);
+      const handleProjectRunCheck = vi.fn().mockResolvedValue({ passed: true });
+      const { lc } = await startedLifecycle({ handleProjectRunCheck } as never);
+      const session = (await lc.openRelaySession({
+        tier: "full",
+        workspaceId: "project-1",
+        caller: CALLER,
+      }))!;
+      const result = await session.callTool(
+        "project.runCheck",
+        { projectId: "project-1", runnerId: "test" },
+        { timeoutMs: 5_000, callId: "check-1" }
+      );
+      session.close();
+      return { result, handleProjectRunCheck };
+    }
+
+    function shell(linkSessionId: string): ClientEndpoint {
+      return {
+        endpointId: `remote:${linkSessionId}:view-1`,
+        clientId: "client-1",
+        projectId: "project-1",
+        kind: "remote-view",
+        handle: -5,
+        linkSessionId,
+        send: vi.fn(),
+        request: vi.fn(),
+        onClose: vi.fn(() => ({ dispose: () => {} })),
+        isClosed: () => false,
+      };
+    }
+
+    it("runs while nobody drives the project, or while the requesting Shell's own view does", async () => {
+      expect((await check({ state: "vacant" })).handleProjectRunCheck).toHaveBeenCalledTimes(1);
+      expect(
+        (await check({ state: "live", endpoint: shell("link-1") })).handleProjectRunCheck
+      ).toHaveBeenCalledTimes(1);
+    });
+
+    it("refuses where someone else drives, naming them, or while the holder can't be reached", async () => {
+      const elsewhere = await check({
+        state: "live",
+        endpoint: shell("link-2"),
+        holderName: "studio-02",
+      });
+      expect(elsewhere.result.isError).toBe(true);
+      expect(JSON.stringify(elsewhere.result.content)).toContain("studio-02 has control");
+      expect(elsewhere.handleProjectRunCheck).not.toHaveBeenCalled();
+
+      const unreachable = await check({ state: "unavailable", reason: "reserved" });
+      expect(unreachable.result.isError).toBe(true);
+      expect(unreachable.handleProjectRunCheck).not.toHaveBeenCalled();
+    });
   });
 });

@@ -1124,6 +1124,7 @@ export function useMcpBridge(): void {
         offerSessionApproval,
         approvalOnly,
         approvalReason,
+        hostPreview,
         authorization,
       }) => {
         // Main started its 30s clock when it sent this; ours starts a beat
@@ -1270,11 +1271,25 @@ export function useMcpBridge(): void {
               previewTarget = closeApproval
                 ? closeApprovalPreviewTarget(args)
                 : resolveMcpConfirmPreviewTarget(actionId, args, context);
+              // A call another machine runs itself with no view of its own
+              // open (#13501) arrives with that machine's preview, read where
+              // the call acts. Shown as given: this view's stores know nothing
+              // of that machine, so a preview built here would describe the
+              // wrong thing or nothing.
+              const hostLines =
+                approvalOnly === true && Array.isArray(hostPreview?.lines)
+                  ? hostPreview.lines.filter((line): line is string => typeof line === "string")
+                  : undefined;
+              const hostSubject =
+                hostLines !== undefined && typeof hostPreview?.subject === "string"
+                  ? hostPreview.subject
+                  : undefined;
               // The checklist kind resolves synchronously below and has no
               // lines to fetch, so it must not arm the pending-preview gate —
               // that would leave its approve button disabled with nothing in
               // flight to ever re-enable it.
               const hasAsyncPreview =
+                hostLines === undefined &&
                 previewTarget !== undefined &&
                 previewTarget.kind !== "terminalKillBatch" &&
                 previewTarget.kind !== "terminalClose";
@@ -1323,13 +1338,18 @@ export function useMcpBridge(): void {
                       : {}),
                   argsSummary: summarizeMcpArgs(args),
                   // Names WHICH worktree/recipe in the title. Resolved from the
-                  // renderer's stores, not from the redacted args summary.
-                  ...(previewTarget
-                    ? (() => {
-                        const subject = resolveMcpConfirmSubject(previewTarget);
-                        return subject ? { subject } : {};
-                      })()
-                    : {}),
+                  // renderer's stores, not from the redacted args summary, or
+                  // for another machine's call from that machine's preview.
+                  ...(hostLines !== undefined
+                    ? hostSubject
+                      ? { subject: hostSubject }
+                      : {}
+                    : previewTarget
+                      ? (() => {
+                          const subject = resolveMcpConfirmSubject(previewTarget);
+                          return subject ? { subject } : {};
+                        })()
+                      : {}),
                   // A protected close is confirm-tier in effect even though
                   // `terminal.close` declares safe: it is what made main ask.
                   danger: closeApproval ? "confirm" : definition.danger,
@@ -1347,11 +1367,14 @@ export function useMcpBridge(): void {
                   ...(offerSessionApproval === true && isGenericNativeGrantEligible(actionId)
                     ? { offerSessionApproval: true }
                     : {}),
-                  ...(approvalOnly === true
+                  // Another machine's call is not above any tier of this
+                  // view's: it is that machine's question, asked here.
+                  ...(approvalOnly === true && hostLines === undefined
                     ? { approvalReason: approvalReason ?? ("above-tier" as const) }
                     : {}),
                   previewPending,
-                  ...(hasAsyncPreview && previewTarget
+                  ...(hostLines !== undefined ? { preview: hostLines } : {}),
+                  ...((hasAsyncPreview || hostLines !== undefined) && previewTarget
                     ? { previewTitle: mcpConfirmPreviewTitle(previewTarget) }
                     : {}),
                   ...(selectableTargets

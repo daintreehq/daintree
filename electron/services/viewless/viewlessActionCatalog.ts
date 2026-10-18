@@ -15,9 +15,9 @@ const write = (danger: ActionDanger = "safe"): ViewlessActionEntry => ({ danger,
  *
  * The set is what an orchestrator drives through a whole loop with no window
  * open (#13495): open a terminal or an agent, read and steer it, close it,
- * make and delete worktrees, and discover projects and runners. Everything
- * else is a question for a renderer, and is refused as "no frontend attached"
- * rather than guessed at.
+ * make and delete worktrees, discover projects and runners, and read the
+ * forge the runbooks consult (#13501). Everything else is a question for a
+ * renderer, and is refused as "no frontend attached" rather than guessed at.
  *
  * The danger is restated here, not read from a manifest, because no manifest
  * is reachable with no view: the host's generated base surface covers only the
@@ -40,11 +40,17 @@ export const VIEWLESS_ACTIONS: Readonly<Record<string, ViewlessActionEntry>> = {
   "agent.launch": write(),
   "agent.listAvailable": read(),
   "worktree.create": write(),
+  "worktree.createWithRecipe": write(),
   "worktree.list": read(),
   "worktree.waitUntilReady": read(),
   "worktree.delete": write("confirm"),
   "project.getAll": read(),
   "project.detectRunners": read(),
+  "forge.getPR": read(),
+  "forge.listPRs": read(),
+  "forge.getIssue": read(),
+  "forge.listIssues": read(),
+  "forge.getCIStatus": read(),
 };
 
 /** The declared danger of an action the host can run itself, or undefined. */
