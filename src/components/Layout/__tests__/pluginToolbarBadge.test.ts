@@ -54,9 +54,14 @@ describe("describeToolbarBadge", () => {
     expect(describeToolbarBadge(label("Failing"))).toBe("Failing");
   });
 
-  it("names a dot only by its tooltip", () => {
-    expect(describeToolbarBadge({ kind: "dot", tooltip: "Syncing" })).toBe("Syncing");
-    expect(describeToolbarBadge({ kind: "dot" })).toBeNull();
+  it("names a dot by its tooltip, else by the colour it asked for", () => {
+    expect(describeToolbarBadge({ kind: "dot", tooltip: "Syncing", color: "error" })).toBe(
+      "Syncing"
+    );
+    expect(describeToolbarBadge({ kind: "dot", color: "error" })).toBe("error");
+    expect(describeToolbarBadge({ kind: "dot", color: "warning" })).toBe("warning");
+    expect(describeToolbarBadge({ kind: "dot", color: "success" })).toBe("badge");
+    expect(describeToolbarBadge({ kind: "dot" })).toBe("badge");
   });
 });
 

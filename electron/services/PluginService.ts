@@ -3080,8 +3080,10 @@ export class PluginService {
         this.removeHandlers(pluginId);
         this.unregisterImperativePluginActions(pluginId);
         // A runtime menu describes the retiring backend's state (a selection,
-        // a mode); the next generation republishes its own (#13213).
+        // a mode); the next generation republishes its own (#13213). So does a
+        // toolbar count (#13503).
         this.clearPluginPanelMenus(pluginId);
+        if (this.pluginToolbarBadges.delete(pluginId)) this.emitToolbarBadges(pluginId);
       },
       // A protocol violation terminates the worker for good (#12276). Provenance
       // is already recorded by `onActivationResult`; this releases the runtime

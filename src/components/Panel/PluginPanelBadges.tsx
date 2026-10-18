@@ -42,14 +42,18 @@ const LABEL_COLOR: Record<PluginPanelBadgeColor, string> = {
 
 /**
  * One plugin badge drawn in full — the panel header's form, also used by a
- * toolbar button's tray and overflow rows (#13503).
+ * toolbar button's tray and overflow rows (#13503). A menu row passes
+ * `live={false}`: it names the badge in its own label, and a status region per
+ * row would announce one badge once for every menu that shows it.
  */
 export function PluginBadgeIndicator({
   pluginId,
   badge,
+  live = true,
 }: {
   pluginId: string;
   badge: PluginPanelBadge;
+  live?: boolean;
 }) {
   const color = badge.color ?? "default";
   // A primitive selector, read per badge rather than once over the whole map in
@@ -95,12 +99,19 @@ export function PluginBadgeIndicator({
       </span>
     );
 
-  if (!badge.tooltip) return indicator;
-  return (
+  const content = badge.tooltip ? (
     <Tooltip>
       <TooltipTrigger asChild>{indicator}</TooltipTrigger>
       <TooltipContent side="bottom">{badge.tooltip}</TooltipContent>
     </Tooltip>
+  ) : (
+    indicator
+  );
+  if (live) return content;
+  return (
+    <span aria-hidden="true" className="inline-flex">
+      {content}
+    </span>
   );
 }
 

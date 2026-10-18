@@ -219,9 +219,9 @@ const EXCEPTIONS: {
   {
     file: "src/styles/components/toolbar/pips.css",
     match: "border-radius: 2px",
-    count: 1,
+    count: 2,
     reason:
-      "WCAG 1.4.1 shape differentiator: the overflow badge encodes severity as square/slightly-rounded/pill, so its radius is semantic and must not move with the theme",
+      "WCAG 1.4.1 shape differentiator: the overflow badge and a plugin's toolbar pip encode severity as square/slightly-rounded/pill, so the radius is semantic and must not move with the theme",
   },
   {
     file: "src/utils/renderBootstrapError.ts",

@@ -1015,7 +1015,7 @@ await host.setToolbarButtonBadge("needs-you", null); // clear
 
 It takes the [`setPanelBadge`](#setpanelbadge) shape and limits unchanged. Where the user put the button decides how it draws: its plugin-tray row and its row in the overflow `…` menu show the badge in full. A button the user promoted to the toolbar shows a whole-number label as a count pill capped at `9+`, and a dot or any other label as a pip, with the full text in its tooltip. While the tray is collapsed, its own button shows one dot for any badged row that isn't promoted, so one badge never lights two buttons. Placement stays the user's call: a badge never promotes a button.
 
-Badges are keyed by `(pluginId, buttonId)` and cleared on unload. Not revoke-guarded, and a silent no-op once the plugin unloads. An empty `buttonId` rejects on both hosts. An id your manifest did not contribute, or an invalid badge, rejects in process and is only logged in main from a worker. `createMockHost` records calls in `setToolbarButtonBadgeCalls`, and rejects a foreign id when you pass its `toolbarButtonIds` option.
+Badges are keyed by `(pluginId, buttonId)` and cleared on unload and whenever your worker is replaced, so republish after a restart. Not revoke-guarded, and a silent no-op once the plugin unloads. An empty `buttonId` rejects on both hosts. An id your manifest did not contribute, or an invalid badge, rejects in process and is only logged in main from a worker. `createMockHost` records calls in `setToolbarButtonBadgeCalls`, and rejects a foreign id when you pass its `toolbarButtonIds` option.
 
 ## `setPanelMenuItems`
 

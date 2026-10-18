@@ -120,8 +120,7 @@ export function PluginToolbarButton({
   // with the full text in the tooltip and on the tray row.
   const countGlyph = shownBadge ? toolbarBadgeCountGlyph(shownBadge) : null;
   const badgeColor = shownBadge?.color ?? "default";
-  const description = badge ? describeToolbarBadge(badge) : null;
-  const name = description ? `${config.label}, ${description}` : config.label;
+  const name = badge ? `${config.label}, ${describeToolbarBadge(badge)}` : config.label;
 
   return (
     <ContextMenu>
@@ -205,9 +204,12 @@ export function PluginOverflowItem({
       <Icon className="mr-2 h-3.5 w-3.5" />
       <span className="flex-1">{config.label}</span>
       {badge && (
-        <span className="ml-2 inline-flex shrink-0 items-center">
-          <PluginBadgeIndicator pluginId={config.pluginId} badge={badge} />
-        </span>
+        <>
+          <span className="ml-2 inline-flex shrink-0 items-center">
+            <PluginBadgeIndicator pluginId={config.pluginId} badge={badge} live={false} />
+          </span>
+          <span className="sr-only">, {describeToolbarBadge(badge)}</span>
+        </>
       )}
     </DropdownMenuItem>
   );
@@ -250,9 +252,12 @@ function PluginTrayRow({
       </TruncatedTooltip>
 
       {badge && (
-        <span className="ml-2 inline-flex shrink-0 items-center">
-          <PluginBadgeIndicator pluginId={config.pluginId} badge={badge} />
-        </span>
+        <>
+          <span className="ml-2 inline-flex shrink-0 items-center">
+            <PluginBadgeIndicator pluginId={config.pluginId} badge={badge} live={false} />
+          </span>
+          <span className="sr-only">, {describeToolbarBadge(badge)}</span>
+        </>
       )}
 
       <span className="sr-only">Press P to {promoted ? "unpin from" : "pin to"} toolbar</span>
@@ -345,6 +350,11 @@ export function PluginTrayButton({
     return out;
   }, [configs, pinnedButtons, badgesByPlugin]);
   const trayBadgeColor = mostSevereBadgeColor(trayBadges);
+  // The dot keeps its last colour while it fades out, rather than greying.
+  const [shownTrayColor, setShownTrayColor] = useState(trayBadgeColor);
+  if (trayBadgeColor !== null && trayBadgeColor !== shownTrayColor) {
+    setShownTrayColor(trayBadgeColor);
+  }
   const trayName =
     trayBadges.length > 0 ? `Plugin tray, ${pluralize(trayBadges.length, "badge")}` : "Plugin tray";
 
@@ -417,9 +427,10 @@ export function PluginTrayButton({
                         aria-hidden="true"
                         data-testid="plugin-tray-badge"
                         data-visible={trayBadgeColor !== null}
+                        data-badge-color={shownTrayColor ?? "default"}
                         className={cn(
                           "toolbar-pip toolbar-badge",
-                          PLUGIN_BADGE_DOT_COLOR[trayBadgeColor ?? "default"]
+                          PLUGIN_BADGE_DOT_COLOR[shownTrayColor ?? "default"]
                         )}
                       />
                     </span>

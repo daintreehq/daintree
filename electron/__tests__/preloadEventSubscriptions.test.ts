@@ -43,8 +43,13 @@ interface TerminalBridge {
   onExit: (cb: (id: string, code: number) => void) => () => void;
 }
 
+interface PluginBridge {
+  onToolbarBadgesChanged: (cb: (payload: unknown) => void) => () => void;
+}
+
 const originalWindow = (globalThis as { window?: unknown }).window;
 let terminal: TerminalBridge;
+let plugin: PluginBridge;
 
 beforeAll(async () => {
   const fakeWindow = {
@@ -74,9 +79,10 @@ beforeAll(async () => {
     module,
     module.exports
   );
-  const api = exposed.electron as { terminal?: TerminalBridge } | undefined;
+  const api = exposed.electron as { terminal?: TerminalBridge; plugin?: PluginBridge } | undefined;
   expect(api?.terminal, "preload did not expose window.electron.terminal").toBeDefined();
   terminal = api!.terminal!;
+  plugin = api!.plugin!;
 });
 
 afterAll(() => {
@@ -122,5 +128,28 @@ describe("preload event subscriptions", () => {
     ipcRenderer.emit("events:push", {}, { name: "terminal:exit", payload: ["t2", 1] });
     expect(exits).toEqual([["t1", 0]]);
     expect(ipcRenderer.listenerCount("events:push")).toBe(busListenersBefore);
+  });
+
+  it("replays each plugin's latest toolbar-badge map to a late subscriber (#13503)", () => {
+    // Wire the bus, then leave the toolbar-badge event with no subscriber, as a
+    // restored view's did-finish-load replay finds it.
+    terminal.onExit(() => {})();
+    const push = (payload: unknown) =>
+      ipcRenderer.emit("events:push", {}, { name: "plugin:toolbar-badges-changed", payload });
+    push({ pluginId: "p1", badges: { needs: { kind: "label", text: "3" } } });
+    push({ pluginId: "p2", badges: { queue: { kind: "dot" } } });
+    push({ pluginId: "p1", badges: {} });
+
+    const received: unknown[] = [];
+    const dispose = plugin.onToolbarBadgesChanged((payload) => received.push(payload));
+    // p1's clear supersedes its earlier set; p2's map survives it.
+    expect(received).toEqual([
+      { pluginId: "p2", badges: { queue: { kind: "dot" } } },
+      { pluginId: "p1", badges: {} },
+    ]);
+
+    push({ pluginId: "p1", badges: { needs: { kind: "dot" } } });
+    expect(received).toHaveLength(3);
+    dispose();
   });
 });

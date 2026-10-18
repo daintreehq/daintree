@@ -200,6 +200,17 @@ describe("PluginToolbarButton badge (promoted)", () => {
   });
 });
 
+describe("PluginToolbarButton badge naming", () => {
+  it("names an unexplained dot by its colour, so adding it is never silent", () => {
+    const needs = config("needs");
+    setBadges({ "acme.beads": { needs: { kind: "dot", color: "error" } } });
+    const { getByRole } = render(<PluginToolbarButton pluginId={needs.id} config={needs} />);
+    expect(getByRole("button", { name: /^Needs you/ }).getAttribute("aria-label")).toBe(
+      "Needs you, error"
+    );
+  });
+});
+
 describe("PluginTrayButton badges", () => {
   const needs = config("needs");
   const queue = config("queue");
@@ -221,6 +232,22 @@ describe("PluginTrayButton badges", () => {
     );
     expect(trayDot(container).getAttribute("data-visible")).toBe("true");
     expect(getByLabelText("Plugin tray, 1 badge")).toBeTruthy();
+  });
+
+  it("keeps its dot's colour while it fades out", () => {
+    setBadges({ "acme.beads": { queue: { kind: "dot", color: "error" } } });
+    const { container } = render(<PluginTrayButton configs={new Map([[queue.id, queue]])} />);
+    setBadges({});
+    expect(trayDot(container).getAttribute("data-visible")).toBe("false");
+    expect(trayDot(container).getAttribute("data-badge-color")).toBe("error");
+  });
+
+  it("keeps a row's badge out of the live region and in the row's own name", () => {
+    setBadges({ "acme.beads": { queue: { kind: "label", text: "Review" } } });
+    const { getByTestId } = render(<PluginTrayButton configs={new Map([[queue.id, queue]])} />);
+    const row = getByTestId(`plugin-tray-row-${queue.id}`);
+    expect(row.querySelector('[role="status"]')?.closest('[aria-hidden="true"]')).not.toBeNull();
+    expect(row.querySelector(".sr-only")?.textContent).toBe(", Review");
   });
 
   it("leaves its dot dark when the only badged row is promoted, so one badge lights one button", () => {

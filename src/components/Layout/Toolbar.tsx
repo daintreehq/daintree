@@ -2027,48 +2027,46 @@ export function Toolbar({
 
   // Plugin badges folded into each `…` menu light its dot and join its name,
   // as the built-in buttons' signals do (#9821, #13503).
-  const toolbarBadgesByPlugin = usePluginToolbarBadgeStore((s) => s.badgesByPlugin);
-  const leftPluginBadges = useMemo(
-    () =>
-      overflowedPluginBadges(
-        visibleLeftOverflow,
-        pluginConfigs,
-        pinnedButtons,
-        toolbarBadgesByPlugin
-      ),
-    [visibleLeftOverflow, pluginConfigs, pinnedButtons, toolbarBadgesByPlugin]
-  );
-  const rightPluginBadges = useMemo(
-    () =>
-      overflowedPluginBadges(
-        visibleRightOverflow,
-        pluginConfigs,
-        pinnedButtons,
-        toolbarBadgesByPlugin
-      ),
-    [visibleRightOverflow, pluginConfigs, pinnedButtons, toolbarBadgesByPlugin]
-  );
-  const leftMenuSeverity = maxOverflowSeverity(
-    leftOverflowSeverity,
-    pluginBadgeOverflowSeverity(leftPluginBadges)
-  );
-  const rightMenuSeverity = maxOverflowSeverity(
-    rightOverflowSeverity,
-    pluginBadgeOverflowSeverity(rightPluginBadges)
-  );
+  // Derived inside the selector so a badge change that moves neither menu (a
+  // visible button's count, a tooltip) doesn't re-render the whole toolbar.
+  const [leftPluginBadgeCount, leftPluginSeverity, rightPluginBadgeCount, rightPluginSeverity] =
+    usePluginToolbarBadgeStore(
+      useShallow((s) => {
+        const left = overflowedPluginBadges(
+          visibleLeftOverflow,
+          pluginConfigs,
+          pinnedButtons,
+          s.badgesByPlugin
+        );
+        const right = overflowedPluginBadges(
+          visibleRightOverflow,
+          pluginConfigs,
+          pinnedButtons,
+          s.badgesByPlugin
+        );
+        return [
+          left.length,
+          pluginBadgeOverflowSeverity(left),
+          right.length,
+          pluginBadgeOverflowSeverity(right),
+        ] as const;
+      })
+    );
+  const leftMenuSeverity = maxOverflowSeverity(leftOverflowSeverity, leftPluginSeverity);
+  const rightMenuSeverity = maxOverflowSeverity(rightOverflowSeverity, rightPluginSeverity);
   const leftObservations = useMemo(
     () =>
-      leftPluginBadges.length > 0
-        ? [...leftAgentObservations, pluralize(leftPluginBadges.length, "plugin badge")]
+      leftPluginBadgeCount > 0
+        ? [...leftAgentObservations, pluralize(leftPluginBadgeCount, "plugin badge")]
         : leftAgentObservations,
-    [leftAgentObservations, leftPluginBadges.length]
+    [leftAgentObservations, leftPluginBadgeCount]
   );
   const rightObservations = useMemo(
     () =>
-      rightPluginBadges.length > 0
-        ? [...rightAgentObservations, pluralize(rightPluginBadges.length, "plugin badge")]
+      rightPluginBadgeCount > 0
+        ? [...rightAgentObservations, pluralize(rightPluginBadgeCount, "plugin badge")]
         : rightAgentObservations,
-    [rightAgentObservations, rightPluginBadges.length]
+    [rightAgentObservations, rightPluginBadgeCount]
   );
 
   const leftVisibleSet = useMemo(() => new Set<AnyToolbarButtonId>(leftVisible), [leftVisible]);

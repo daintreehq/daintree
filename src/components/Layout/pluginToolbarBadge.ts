@@ -17,13 +17,19 @@ export function toolbarBadgeCountGlyph(badge: PluginPanelBadge): string | null {
 }
 
 /**
- * The words behind a badge, for a tooltip or an accessible name; null for an
- * unexplained dot. A label keeps its full text even beside a tooltip, since the
- * promoted pill may have shown it only as a pip or a capped count.
+ * The words behind a badge, for a tooltip or an accessible name. A label keeps
+ * its full text even beside a tooltip, since the promoted pill may have shown
+ * it only as a pip or a capped count. An unexplained dot is named by the
+ * colour the plugin asked for, so adding one never goes unheard.
  */
-export function describeToolbarBadge(badge: PluginPanelBadge): string | null {
-  if (badge.kind === "dot") return badge.tooltip ?? null;
-  return badge.tooltip ? `${badge.text} — ${badge.tooltip}` : badge.text;
+export function describeToolbarBadge(badge: PluginPanelBadge): string {
+  if (badge.kind === "label") {
+    return badge.tooltip ? `${badge.text} — ${badge.tooltip}` : badge.text;
+  }
+  if (badge.tooltip) return badge.tooltip;
+  if (badge.color === "error") return "error";
+  if (badge.color === "warning") return "warning";
+  return "badge";
 }
 
 const COLOR_RANK: Record<PluginPanelBadgeColor, number> = {

@@ -122,6 +122,15 @@
   --toolbar-count-fill: var(--color-status-error);
 }
 
+/* A plugin pip's severity in its shape as well as its hue, as the overflow dot
+ * does (WCAG 1.4.1): forced colours paint every pip the same CanvasText. */
+.toolbar-pip[data-badge-color="error"] {
+  border-radius: 0;
+}
+.toolbar-pip[data-badge-color="warning"] {
+  border-radius: 2px;
+}
+
 /* ── Badge entrance / exit ──
  * Tier 2 timing from animationUtils.ts: 200ms enter (UI_ENTER_DURATION),
  * 120ms exit (UI_EXIT_DURATION). @starting-style + allow-discrete handle

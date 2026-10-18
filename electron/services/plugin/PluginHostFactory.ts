@@ -2213,8 +2213,9 @@ export function createHost(
     // post-activation subscriptions. The id must be one this plugin's manifest
     // contributed, so a plugin can never light another plugin's button.
     setToolbarButtonBadge: (buttonId, badge) => {
-      const boundPlugin = deps.plugins.get(pluginId);
-      if (!boundPlugin) return Promise.resolve();
+      // Identity, not id membership: a callback left over from before a same-id
+      // reload must not set or clear its successor's badges.
+      if (!isBound() || !boundPlugin) return Promise.resolve();
       if (typeof buttonId !== "string" || buttonId.length === 0) {
         // Reject (not sync throw): runtime-surface Promise method (#10617).
         return Promise.reject(
@@ -2256,6 +2257,8 @@ export function createHost(
         }
         buttonMap.set(buttonId, validated);
       }
+      // Deliver this plugin's queued pushes first, as every direct send does.
+      flushPluginPushes();
       deps.emitToolbarBadges(pluginId);
       return Promise.resolve();
     },
