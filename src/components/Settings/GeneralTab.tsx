@@ -14,6 +14,7 @@ import { WindowOpeningSection } from "@/components/Settings/WindowOpeningSection
 import { SettingsSubtabBar, subtabPanelProps } from "./SettingsSubtabBar";
 import { SettingsDependents, SettingsEmptyRow, SettingsGroup } from "./SettingsGroup";
 import { SettingsPresetGroup } from "./SettingsPresetGroup";
+import { ResumeOnRestartRow } from "./ResumeOnRestartRow";
 import type { SettingsSubtabItem } from "./SettingsSubtabBar";
 import { getAgentIds } from "@/config/agents";
 import { AgentIdentityBlock, resolveIdentity } from "@/components/agents/AgentCard";
@@ -1079,6 +1080,7 @@ export function GeneralTab({
                   }
                   onReset={() => void handleSessionRestoreToggle()}
                 />
+                <ResumeOnRestartRow />
               </SettingsGroup>
             </SettingsSection>
 

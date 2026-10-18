@@ -1,4 +1,4 @@
-import { useState, type Ref } from "react";
+import { useEffect, useRef, useState, type Ref } from "react";
 import { TruncatedTooltip } from "@/components/ui/TruncatedTooltip";
 import { useShallow } from "zustand/react/shallow";
 import { FolderClock, Play, RotateCcw } from "lucide-react";
@@ -7,12 +7,15 @@ import { InlineStatusBanner } from "@/components/Terminal/InlineStatusBanner";
 import { FindCodexSessionAction } from "@/components/Terminal/FindCodexSessionAction";
 import { getAgentConfig } from "@/config/agents";
 import { usePanelStore } from "@/store/panelStore";
+import { useAgentSettingsStore } from "@/store/agentSettingsStore";
+import { isProjectViewObservable, subscribeProjectViewObservability } from "@/lib/viewCacheState";
 import {
   launchFromRestoreRecovery,
   type RestoreRecoveryChoice,
   type RestoreRecoveryLaunchResult,
 } from "@/services/terminal/restoreRecoveryLaunch";
 import { isPtyPanel, type RestoreRecoveryReason } from "@shared/types/panel";
+import { resolveResumeOnRestart } from "@shared/types/agentSettings";
 import { resolveConversationSearchCwd } from "@/utils/restoreRecovery";
 
 interface RecoveryCopy {
@@ -42,6 +45,17 @@ const REASON_COPY: Record<RestoreRecoveryReason, RecoveryCopy> = {
     title: "Choose how this pane continues",
     description: "Resume its conversation or start a new one.",
   },
+  "resume-deferred": {
+    title: "Not resumed after restart",
+    description:
+      "Agents wait to be started after a restart, as set in Settings > General. Resume its conversation or start a new one.",
+  },
+};
+
+const RESUMES_ON_FOCUS_COPY: RecoveryCopy = {
+  title: "Resumes when you focus this pane",
+  description:
+    "Agents resume one at a time after a restart, as each pane is focused, as set in Settings > General.",
 };
 
 const AWAITING_DESTINATION_COPY: RecoveryCopy = {
@@ -74,6 +88,8 @@ function FolderRow({ label, path }: { label: string; path: string }) {
 
 export interface RestoreRecoveryGateProps {
   panelId: string;
+  /** The pane is the focused one — what a pane held by the resume setting waits for. */
+  isFocused?: boolean;
   /** The pane's focus handler moves keyboard focus into this surface. */
   containerRef?: Ref<HTMLDivElement>;
 }
@@ -86,8 +102,18 @@ export interface RestoreRecoveryGateProps {
  * way out is an explicit choice — resume the conversation restore already
  * knew, pick one from the folder it began in, or start a new one where the
  * pane now runs.
+ *
+ * The one exception is a pane the resume setting held (#13509) while it allows
+ * resuming: focusing it resumes the conversation it carries, once. Focus means
+ * the user's own focus, in a window and view they are looking at — a pane that
+ * is merely on screen, or the saved focus of a project restoring in the
+ * background, never starts anything.
  */
-export function RestoreRecoveryGate({ panelId, containerRef }: RestoreRecoveryGateProps) {
+export function RestoreRecoveryGate({
+  panelId,
+  isFocused = false,
+  containerRef,
+}: RestoreRecoveryGateProps) {
   const { recovery, agentId, cwd, originCwd } = usePanelStore(
     useShallow((state) => {
       const panel = state.panelsById[panelId];
@@ -103,12 +129,57 @@ export function RestoreRecoveryGate({ panelId, containerRef }: RestoreRecoveryGa
   const confirmDestination = usePanelStore((state) => state.confirmRestoreRecoveryDestination);
   const [isLaunching, setIsLaunching] = useState(false);
   const [outcome, setOutcome] = useState<RestoreRecoveryLaunchResult | null>(null);
+  // Unknown until the settings load, and unknown never resumes anything.
+  const resumePolicy = useAgentSettingsStore((state) =>
+    state.isInitialized ? resolveResumeOnRestart(state.settings) : undefined
+  );
+  const resumesOnFocusId =
+    recovery?.reason === "resume-deferred" &&
+    !recovery.awaitingDestination &&
+    resumePolicy !== undefined &&
+    resumePolicy !== "never"
+      ? recovery.sessionId
+      : undefined;
+  // One automatic attempt per gate: a launch that fails or finds the
+  // conversation taken leaves the pane to the buttons, not a retry loop.
+  const autoResumeAttemptedRef = useRef(false);
+
+  useEffect(() => {
+    if (!isFocused || resumesOnFocusId === undefined || autoResumeAttemptedRef.current) return;
+    const sessionId = resumesOnFocusId;
+    const attempt = () => {
+      if (autoResumeAttemptedRef.current) return;
+      if (!isProjectViewObservable() || !document.hasFocus()) return;
+      autoResumeAttemptedRef.current = true;
+      setIsLaunching(true);
+      setOutcome(null);
+      void launchFromRestoreRecovery(panelId, { kind: "resume", sessionId })
+        .then((result) => {
+          if (result !== "launched") setOutcome(result);
+        })
+        .finally(() => setIsLaunching(false));
+    };
+    attempt();
+    if (autoResumeAttemptedRef.current) return;
+    window.addEventListener("focus", attempt);
+    const unsubscribe = subscribeProjectViewObservability((observable) => {
+      if (observable) attempt();
+    });
+    return () => {
+      window.removeEventListener("focus", attempt);
+      unsubscribe();
+    };
+  }, [isFocused, resumesOnFocusId, panelId]);
 
   if (!recovery) return null;
 
   const agentName = (agentId && getAgentConfig(agentId)?.name) || agentId || "Agent";
   const awaitingDestination = recovery.awaitingDestination === true;
-  const copy = awaitingDestination ? AWAITING_DESTINATION_COPY : REASON_COPY[recovery.reason];
+  const copy = awaitingDestination
+    ? AWAITING_DESTINATION_COPY
+    : resumesOnFocusId !== undefined
+      ? RESUMES_ON_FOCUS_COPY
+      : REASON_COPY[recovery.reason];
   const outcomeMessage = outcome ? OUTCOME_MESSAGES[outcome] : undefined;
 
   const launch = (choice: RestoreRecoveryChoice): Promise<RestoreRecoveryLaunchResult> => {

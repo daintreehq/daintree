@@ -409,8 +409,9 @@ export type SessionLostReason =
 
 /**
  * Why restore held a pane instead of launching it (#12434). The first two are
- * the resume election's losers ({@link SessionLostReason}); the rest only occur
- * for an agent that can resume across directories.
+ * the resume election's losers ({@link SessionLostReason}); the next two only
+ * occur for an agent that can resume across directories, and the last for any
+ * agent, by the user's own setting.
  */
 export type RestoreRecoveryReason =
   | "sibling-owns-session-id"
@@ -418,7 +419,9 @@ export type RestoreRecoveryReason =
   /** Filed under another worktree than it began in, with no conversation it could name. */
   | "session-unresolved"
   /** Filed under a worktree this project no longer has. */
-  | "destination-unavailable";
+  | "destination-unavailable"
+  /** The "Resume agents after restart" setting held it (#13509), not anything restore saw. */
+  | "resume-deferred";
 
 /**
  * A terminal's Scratchpad (#12835): throwaway Markdown notes that belong to the

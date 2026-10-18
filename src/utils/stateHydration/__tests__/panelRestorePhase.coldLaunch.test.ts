@@ -330,3 +330,77 @@ describe("cold restore of moved Codex panes (#12434)", () => {
     expect(byId.get("a")?.restoreRecovery).toBeUndefined();
   });
 });
+
+describe("the resume-on-restart setting through restore (#13509)", () => {
+  const claudePane = (name: string, overrides: Partial<TerminalState> = {}): TerminalState => ({
+    id: name,
+    title: `Claude ${name}`,
+    kind: "terminal",
+    launchAgentId: "claude",
+    cwd: "/repo",
+    worktreeId: "/repo",
+    location: "grid",
+    ...overrides,
+  });
+
+  function persistHeld(id: string, args: RestoredArgs | undefined): TerminalState {
+    const panel: PtyPanelData = {
+      id,
+      kind: "terminal",
+      title: args?.title ?? id,
+      location: "grid",
+      cols: 80,
+      rows: 24,
+      cwd: args?.cwd ?? "",
+      worktreeId: args?.worktreeId,
+      launchAgentId: "claude",
+      command: args?.command,
+      agentLaunchFlags: args?.agentLaunchFlags,
+      restoreRecovery: args?.restoreRecovery,
+      hasPty: false,
+    };
+    return {
+      id,
+      title: panel.title,
+      location: "grid",
+      kind: "terminal",
+      worktreeId: panel.worktreeId,
+      ...serializePtyPanel(panel),
+    };
+  }
+
+  it("holds every agent pane under never and keeps each conversation across a second restart", async () => {
+    const agentSettings = { agents: { claude: {} }, resumeOnRestart: "never" as const };
+    const first = await restore([claudePane("a", { agentSessionId: "sess-a" }), claudePane("b")], {
+      agentSettings,
+    });
+
+    expect(first.get("a")?.restoreRecovery).toEqual({
+      reason: "resume-deferred",
+      sessionId: "sess-a",
+    });
+    expect(first.get("a")?.command).not.toContain("--resume");
+    expect(first.get("b")?.restoreRecovery).toEqual({ reason: "resume-deferred" });
+
+    // Even with the setting switched back, a held pane waits for the user.
+    const second = await restore([persistHeld("a", first.get("a"))], {
+      agentSettings: { agents: { claude: {} }, resumeOnRestart: "always" },
+    });
+
+    expect(second.get("a")?.restoreRecovery).toEqual({
+      reason: "resume-deferred",
+      sessionId: "sess-a",
+    });
+    expect(second.get("a")?.command).not.toContain("--resume");
+    expect(second.get("a")?.agentSessionId).toBeUndefined();
+  });
+
+  it("resumes as before when the setting is absent", async () => {
+    const byId = await restore([claudePane("a", { agentSessionId: "sess-a" })], {
+      agentSettings: { agents: { claude: {} } },
+    });
+
+    expect(byId.get("a")?.restoreRecovery).toBeUndefined();
+    expect(byId.get("a")?.command).toContain("--resume");
+  });
+});

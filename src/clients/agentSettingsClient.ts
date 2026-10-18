@@ -1,4 +1,4 @@
-import type { AgentSettings, AgentSettingsEntry } from "@shared/types";
+import type { AgentSettings, AgentSettingsEntry, ResumeOnRestart } from "@shared/types";
 
 // Value cache + singleflight on get(): burst paths (bulk restart, duplicate,
 // recipe spawns) coalesce concurrent reads into one IPC round-trip, and later
@@ -58,6 +58,11 @@ export const agentSettingsClient = {
   setGlobalInline: (value: boolean): Promise<AgentSettings> => {
     invalidate();
     return window.electron.agentSettings.setGlobalInline(value).finally(invalidate);
+  },
+
+  setResumeOnRestart: (value: ResumeOnRestart): Promise<AgentSettings> => {
+    invalidate();
+    return window.electron.agentSettings.setResumeOnRestart(value).finally(invalidate);
   },
 
   reset: (agentType?: string): Promise<AgentSettings> => {

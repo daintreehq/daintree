@@ -17,6 +17,7 @@ import type {
 import type { GitStatus } from "@shared/types/git";
 import type { AddPanelOptionsBase } from "@shared/types/addPanelOptions";
 import type { BuiltInAgentId } from "@shared/config/agentIds";
+import type { ResumeOnRestart } from "@shared/types/agentSettings";
 import { getAgentConfig, sanitizeAgentEnv } from "@/config/agents";
 import type { AgentPreset } from "@/config/agents";
 import {
@@ -580,6 +581,12 @@ export interface BuildArgsForRespawnOptions {
     /** The worktree list's own spelling of the filing, when it differs from the snapshot's. */
     worktreeId?: string;
   };
+  /**
+   * The "Resume agents after restart" setting (#13509). Anything but `"always"`
+   * holds an agent pane that would otherwise launch, keeping the conversation
+   * it would have resumed on the hold. Absent means `"always"`.
+   */
+  resumeOnRestart?: ResumeOnRestart;
 }
 
 export function buildArgsForRespawn(
@@ -609,8 +616,11 @@ export function buildArgsForRespawn(
   const effectiveAgentId = resolveRespawnAgentId(saved, kind);
   const coldLaunch = effectiveAgentId ? options?.coldLaunch : undefined;
   // A pane already held on a previous restore stays held until the user picks —
-  // re-running the election could hand it a conversation it never chose.
-  const savedRecovery = coldLaunch ? sanitizeRestoreRecovery(saved.restoreRecovery) : undefined;
+  // re-running the election could hand it a conversation it never chose. Any
+  // agent can carry one since the resume setting can hold any agent (#13509).
+  const savedRecovery = effectiveAgentId
+    ? sanitizeRestoreRecovery(saved.restoreRecovery)
+    : undefined;
   let restoreRecovery: PanelRestoreRecovery | undefined;
 
   const isAgentPanel = Boolean(effectiveAgentId);
@@ -628,6 +638,9 @@ export function buildArgsForRespawn(
   // launch. Recorded on the respawned panel so it reaches the terminal record
   // at spawn instead of depending on a teardown to observe it.
   let respawnSessionId: string | undefined;
+  // The exact conversation this respawn would replay, which a hold by the
+  // resume setting keeps so the pane can still resume it (#13509).
+  let resumedSessionId: string | undefined;
   let presetEnv: Record<string, string> | undefined;
   let preset: AgentPreset | undefined;
   // Bypass-reconciled launch flags (#10432); falls back to the raw saved flags
@@ -802,6 +815,7 @@ export function buildArgsForRespawn(
         // respawn so it's on the terminal record from the moment the PTY
         // exists, rather than only if a later teardown manages to observe it.
         respawnSessionId = saved.agentSessionId;
+        resumedSessionId = saved.agentSessionId;
       } else if (hasPersistedFlags) {
         command = buildFromPersistedFlags();
         // Had the id and permission to resume it, but the agent couldn't turn
@@ -849,6 +863,7 @@ export function buildArgsForRespawn(
           if (namedCmd) {
             resumeLatestCmd = namedCmd;
             respawnSessionId = namedResumeLatestId;
+            resumedSessionId = namedResumeLatestId;
           }
         }
         if (coldLaunch?.conversationCwd === undefined) {
@@ -914,6 +929,16 @@ export function buildArgsForRespawn(
         });
         sessionLostOnRestore = getElseReason();
       }
+    }
+
+    // Last, so every hold restore itself decided keeps its own reason. A pane
+    // with nothing exact to resume is held too: "never" has to mean nothing
+    // starts, not only that no conversation is reopened.
+    if (!restoreRecovery && (options?.resumeOnRestart ?? "always") !== "always") {
+      restoreRecovery = {
+        reason: "resume-deferred",
+        ...(resumedSessionId !== undefined && { sessionId: resumedSessionId }),
+      };
     }
 
     if (restoreRecovery) {

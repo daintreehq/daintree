@@ -60,6 +60,7 @@ export const CHANNEL_LOCALITY = {
   "agent-settings:set": "host",
   "agent-settings:set-global": "host",
   "agent-settings:set-global-inline": "host",
+  "agent-settings:set-resume-on-restart": "host",
   "agent-settings:stamp-version": "host",
   "app-agent:confirmation-response": "host",
   "app-agent:dispatch-action-response": "host",

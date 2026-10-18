@@ -72,6 +72,7 @@ vi.mock("../../../store/slices/panelRegistry/persistence", async () => {
 
 const { usePanelStore } = await import("@/store/panelStore");
 const { RestoreRecoveryGate } = await import("../RestoreRecoveryGate");
+const { useAgentSettingsStore } = await import("@/store/agentSettingsStore");
 
 function heldPanel(id: string, overrides: Partial<PtyPanelData> = {}): PtyPanelData {
   return {
@@ -280,5 +281,110 @@ describe("RestoreRecoveryGate (#12434)", () => {
     const { container } = render(<RestoreRecoveryGate panelId="p-1" />);
 
     expect(container.innerHTML).toBe("");
+  });
+});
+
+describe("RestoreRecoveryGate — held by the resume setting (#13509)", () => {
+  const deferred = (sessionId?: string) =>
+    heldPanel("p-1", {
+      launchAgentId: "claude",
+      cwd: "/repo",
+      conversationCwd: undefined,
+      restoreRecovery: {
+        reason: "resume-deferred",
+        ...(sessionId !== undefined && { sessionId }),
+      },
+    });
+
+  function setPolicy(resumeOnRestart: "always" | "on-focus" | "never" | undefined) {
+    useAgentSettingsStore.setState({
+      settings: { agents: {}, ...(resumeOnRestart && { resumeOnRestart }) },
+      isInitialized: true,
+    });
+  }
+
+  let windowFocused = true;
+  beforeEach(() => {
+    windowFocused = true;
+    vi.spyOn(document, "hasFocus").mockImplementation(() => windowFocused);
+    setPolicy("on-focus");
+  });
+
+  it("resumes the conversation it kept once the pane is focused, and only then", async () => {
+    seed(deferred("sess-c"));
+
+    const { rerender } = render(<RestoreRecoveryGate panelId="p-1" isFocused={false} />);
+    expect(screen.getByRole("heading", { name: "Resumes when you focus this pane" })).toBeTruthy();
+    expect(launchFromRestoreRecovery).not.toHaveBeenCalled();
+
+    rerender(<RestoreRecoveryGate panelId="p-1" isFocused />);
+
+    await waitFor(() =>
+      expect(launchFromRestoreRecovery).toHaveBeenCalledWith("p-1", {
+        kind: "resume",
+        sessionId: "sess-c",
+      })
+    );
+  });
+
+  it("waits for the window to have focus before resuming a focused pane", async () => {
+    windowFocused = false;
+    seed(deferred("sess-c"));
+
+    render(<RestoreRecoveryGate panelId="p-1" isFocused />);
+    expect(launchFromRestoreRecovery).not.toHaveBeenCalled();
+
+    windowFocused = true;
+    act(() => {
+      window.dispatchEvent(new Event("focus"));
+    });
+
+    await waitFor(() => expect(launchFromRestoreRecovery).toHaveBeenCalledTimes(1));
+  });
+
+  it("tries once, leaving a launch that didn't happen to the buttons", async () => {
+    launchFromRestoreRecovery.mockResolvedValue("held-elsewhere");
+    seed(deferred("sess-c"));
+
+    const { rerender } = render(<RestoreRecoveryGate panelId="p-1" isFocused />);
+    await waitFor(() => expect(screen.getByText("Conversation already open")).toBeTruthy());
+
+    rerender(<RestoreRecoveryGate panelId="p-1" isFocused={false} />);
+    rerender(<RestoreRecoveryGate panelId="p-1" isFocused />);
+    act(() => {
+      window.dispatchEvent(new Event("focus"));
+    });
+
+    expect(launchFromRestoreRecovery).toHaveBeenCalledTimes(1);
+  });
+
+  it("resumes nothing on focus under never", () => {
+    setPolicy("never");
+    seed(deferred("sess-c"));
+
+    render(<RestoreRecoveryGate panelId="p-1" isFocused />);
+
+    expect(screen.getByRole("heading", { name: "Not resumed after restart" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Resume session" })).toBeTruthy();
+    expect(launchFromRestoreRecovery).not.toHaveBeenCalled();
+  });
+
+  it("resumes nothing before the setting is known", () => {
+    useAgentSettingsStore.setState({ settings: null, isInitialized: false });
+    seed(deferred("sess-c"));
+
+    render(<RestoreRecoveryGate panelId="p-1" isFocused />);
+
+    expect(launchFromRestoreRecovery).not.toHaveBeenCalled();
+  });
+
+  it("offers only a new session to a focused pane with no conversation to resume", () => {
+    seed(deferred());
+
+    render(<RestoreRecoveryGate panelId="p-1" isFocused />);
+
+    expect(screen.getByRole("heading", { name: "Not resumed after restart" })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Resume session" })).toBeNull();
+    expect(launchFromRestoreRecovery).not.toHaveBeenCalled();
   });
 });
