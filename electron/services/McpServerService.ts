@@ -1209,6 +1209,17 @@ export class McpServerService {
     return this.bridge.dispatchActionForWebContents(...args);
   }
 
+  /**
+   * Remote Hosts (#13493): a session for another machine's assistant reaching
+   * this host through its Shell, admitted through this server's own gates and
+   * bound to one project. Null while the server is off.
+   */
+  openRelaySession(
+    ...args: Parameters<HttpLifecycle["openRelaySession"]>
+  ): ReturnType<HttpLifecycle["openRelaySession"]> {
+    return this.httpLifecycle.openRelaySession(...args);
+  }
+
   /** Remote Hosts: the action manifest of the local view that drives a host's project. */
   requestManifestForHost(webContentsId: number): Promise<ActionManifestEntry[]> {
     this.ensureHostBridgeListeners();

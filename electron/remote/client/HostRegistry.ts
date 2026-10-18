@@ -167,6 +167,12 @@ function sanitize(raw: unknown): HostDescriptor[] {
       // A field the record never had reads as an SSH host's default, on (#13469).
       assistantMessagingEnabled: storedSwitch(host.assistantMessagingEnabled, connection),
       assistantStartEnabled: storedSwitch(host.assistantStartEnabled, connection),
+      // A host from before control existed starts where its messaging was, so
+      // one the person turned messaging off for starts with control off (#13493).
+      assistantControlEnabled:
+        host.assistantControlEnabled === undefined
+          ? storedSwitch(host.assistantMessagingEnabled, connection)
+          : host.assistantControlEnabled === true,
     });
   }
   return out;
@@ -229,6 +235,7 @@ export class HostRegistry {
       // that user; a message, or an assistant started there, is no more.
       assistantMessagingEnabled: connection.kind === "ssh",
       assistantStartEnabled: connection.kind === "ssh",
+      assistantControlEnabled: connection.kind === "ssh",
     };
     this.write([...hosts, descriptor]);
     return descriptor;
@@ -276,6 +283,12 @@ export class HostRegistry {
         throw invalid("assistantStartEnabled must be true or false.");
       }
       next.assistantStartEnabled = payload.assistantStartEnabled;
+    }
+    if (payload.assistantControlEnabled !== undefined) {
+      if (typeof payload.assistantControlEnabled !== "boolean") {
+        throw invalid("assistantControlEnabled must be true or false.");
+      }
+      next.assistantControlEnabled = payload.assistantControlEnabled;
     }
     return next;
   }

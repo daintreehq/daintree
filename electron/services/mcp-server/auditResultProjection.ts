@@ -350,6 +350,20 @@ const AUDIT_RESULT_PROJECTIONS: ReadonlyMap<string, (result: unknown) => unknown
       };
     }),
   ],
+  [
+    "host.call",
+    // Whether the host answered and whether its tool failed, never what it returned (#13493).
+    (result) => {
+      const record = asRecord(result);
+      if (record === null) return { status: "unrecognized" };
+      const inner = asRecord(record.result);
+      return {
+        outcome: fromSet(record.outcome, HOST_OUTCOMES),
+        callId: auditId(record.callId),
+        isError: typeof inner?.isError === "boolean" ? inner.isError : null,
+      };
+    },
+  ],
   ["plugin.capturePanel", projectPanelCapture],
   ["project.runCommand", projectCommandRun],
 ]);
@@ -481,8 +495,48 @@ const AUDIT_ARGS_PROJECTIONS: ReadonlyMap<string, (args: unknown) => unknown> = 
   ],
 ]);
 
+/** A tool id as the manifest spells them: never a few words of a message. */
+const RELAYED_TOOL_ID_PATTERN = /^[a-z][A-Za-z0-9]*(?:\.[A-Za-z0-9]+){1,4}$/;
+/** Keys whose short strings are still someone's words: kept to their length, whatever the tool. */
+const RELAYED_TEXT_KEY_PATTERN =
+  /^(?:prompt|text|command|body|message|input|keys|data|content|reply|query)$/i;
+
+/**
+ * A `host.call` as the Shell audits it (#13493): the host, project, tool and
+ * callId, and the tool's own arguments as this machine would audit that tool,
+ * flattened so the summary doesn't fold them into `<object>`. Text a person
+ * or agent wrote is kept to its length, short or not.
+ */
+function projectHostCallArgs(args: unknown): Record<string, unknown> {
+  const record = asRecord(args);
+  const tool =
+    typeof record?.tool === "string" && RELAYED_TOOL_ID_PATTERN.test(record.tool)
+      ? record.tool
+      : null;
+  const inner = asRecord(record?.args);
+  // Never another relay's arguments, however deep a caller nested them.
+  const projected =
+    tool !== null && tool !== "host.call" && inner !== null
+      ? asRecord(projectAuditArgs(tool, inner))
+      : null;
+  const out: Record<string, unknown> = {
+    hostId: auditHostId(record?.hostId),
+    projectId: auditId(record?.projectId),
+    tool,
+    callId: auditId(record?.callId),
+  };
+  for (const [key, value] of Object.entries(projected ?? {})) {
+    out[`args.${key}`] =
+      typeof value === "string" && RELAYED_TEXT_KEY_PATTERN.test(key)
+        ? `<string: ${value.length} chars>`
+        : value;
+  }
+  return out;
+}
+
 /** The arguments to summarize for `toolId`'s audit record and activity strip. */
 export function projectAuditArgs(toolId: string, args: unknown): unknown {
+  if (toolId === "host.call") return projectHostCallArgs(args);
   const projection = AUDIT_ARGS_PROJECTIONS.get(toolId);
   return projection ? projection(args) : args;
 }

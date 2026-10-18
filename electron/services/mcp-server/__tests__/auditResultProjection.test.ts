@@ -530,3 +530,70 @@ describe("project.runCommand audit entries keep the command, never its output (#
     expect(auditVerbatimArgKeys("terminal.sendCommand")).toBeUndefined();
   });
 });
+
+describe("host.call audit projection (#13493)", () => {
+  const CALL_ID = "8f14e45f-ceea-467a-9b2c-5a1f6a2b9c11";
+
+  it("keeps the host, tool and callId, and the tool's own arguments flat, never short prompts", () => {
+    const projected = projectAuditArgs("host.call", {
+      hostId: "studio-01",
+      projectId: "not a uuid",
+      tool: "agent.launch",
+      callId: CALL_ID,
+      args: { agentId: "claude", prompt: "rm -rf now", notify: false },
+    });
+
+    expect(projected).toEqual({
+      hostId: "studio-01",
+      projectId: null,
+      tool: "agent.launch",
+      callId: CALL_ID,
+      "args.agentId": "claude",
+      "args.prompt": "<string: 10 chars>",
+      "args.notify": false,
+    });
+    expect(summarizeMcpArgs(projected)).not.toContain("rm -rf");
+  });
+
+  it("applies the relayed tool's own projection, so a message's text never reaches the log", () => {
+    const projected = projectAuditArgs("host.call", {
+      hostId: "studio-01",
+      tool: "assistant.sendMessage",
+      args: { contextId: CALL_ID, text: "TEXT-SENTINEL" },
+    }) as Record<string, unknown>;
+
+    expect(projected["args.textChars"]).toBe("TEXT-SENTINEL".length);
+    expect(JSON.stringify(projected)).not.toContain("TEXT-SENTINEL");
+  });
+
+  it("drops a tool name that isn't one, and never projects a relay of a relay", () => {
+    expect(
+      projectAuditArgs("host.call", {
+        hostId: "studio-01",
+        tool: "say hello to the team",
+        args: { prompt: "x" },
+      })
+    ).toEqual({ hostId: "studio-01", projectId: null, tool: null, callId: null });
+    expect(
+      projectAuditArgs("host.call", {
+        hostId: "studio-01",
+        tool: "host.call",
+        args: { tool: "agent.launch", args: { prompt: "nested" } },
+      })
+    ).toEqual({ hostId: "studio-01", projectId: null, tool: "host.call", callId: null });
+  });
+
+  it("records only the outcome, callId and whether the tool failed, never its result", () => {
+    const projected = projectAuditResult("host.call", {
+      outcome: "ok",
+      detail: null,
+      retryAfterMs: null,
+      callId: CALL_ID,
+      result: { isError: false, structured: { output: "OUTPUT-SENTINEL" }, text: null },
+    });
+
+    expect(projected).toEqual({ outcome: "ok", callId: CALL_ID, isError: false });
+    expect(JSON.stringify(summarizeMcpResult(projected))).not.toContain("OUTPUT-SENTINEL");
+    expect(projectAuditResult("host.call", "nope")).toEqual({ status: "unrecognized" });
+  });
+});

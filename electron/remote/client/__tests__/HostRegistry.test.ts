@@ -41,9 +41,11 @@ describe("HostRegistry", () => {
       lastSeenAt: null,
       addedAt: 1_000,
       notificationsEnabled: false,
-      // Reached over SSH, so messaging (#13441) and starting assistants (#13469) start on.
+      // Reached over SSH, so messaging (#13441), starting assistants (#13469) and
+      // assistant control (#13493) start on.
       assistantMessagingEnabled: true,
       assistantStartEnabled: true,
+      assistantControlEnabled: true,
     });
     expect(isValidRemoteHostId(added.id)).toBe(true);
     expect(registry.list()).toEqual([added]);
@@ -241,6 +243,57 @@ describe("HostRegistry", () => {
     });
   });
 
+  it("starts assistant control where messaging stood for a host saved before it existed (#13493)", () => {
+    const base = { name: "box", addedAt: 1, notificationsEnabled: false };
+    const registry = new HostRegistry(
+      memoryStore({
+        hosts: [
+          {
+            ...base,
+            id: "messaging-off",
+            connection: { kind: "ssh", target: "off.example" },
+            assistantMessagingEnabled: false,
+          },
+          {
+            ...base,
+            id: "messaging-on",
+            name: "box2",
+            connection: { kind: "ssh", target: "on.example" },
+            assistantMessagingEnabled: true,
+          },
+          {
+            ...base,
+            id: "control-saved",
+            name: "box3",
+            connection: { kind: "ssh", target: "saved.example" },
+            assistantMessagingEnabled: false,
+            assistantControlEnabled: true,
+          },
+        ],
+      })
+    );
+    expect(registry.get("messaging-off")?.assistantControlEnabled).toBe(false);
+    expect(registry.get("messaging-on")?.assistantControlEnabled).toBe(true);
+    expect(registry.get("control-saved")?.assistantControlEnabled).toBe(true);
+  });
+
+  it("turns assistant control on and off on its own, refusing anything but a boolean (#13493)", () => {
+    const registry = new HostRegistry(memoryStore());
+    const host = registry.add({ name: "box", connection: { kind: "ssh", target: "box.example" } });
+    expect(registry.update({ hostId: host.id, assistantControlEnabled: false })).toMatchObject({
+      assistantMessagingEnabled: true,
+      assistantControlEnabled: false,
+    });
+    expect(() =>
+      registry.update({ hostId: host.id, assistantControlEnabled: "yes" as unknown as boolean })
+    ).toThrow(expect.objectContaining({ code: "VALIDATION" }));
+    registry.update({ hostId: host.id, assistantMessagingEnabled: false });
+    expect(registry.update({ hostId: host.id, assistantControlEnabled: true })).toMatchObject({
+      assistantMessagingEnabled: false,
+      assistantControlEnabled: true,
+    });
+  });
+
   it("forgets a host and reports changes", () => {
     const registry = new HostRegistry(memoryStore());
     const listener = vi.fn();
@@ -333,6 +386,7 @@ describe("HostRegistry", () => {
       notificationsEnabled: false,
       assistantMessagingEnabled: false,
       assistantStartEnabled: false,
+      assistantControlEnabled: false,
     };
     const registry = new HostRegistry(
       memoryStore({
@@ -381,9 +435,10 @@ describe("HostRegistry", () => {
         lastSeenAt: 5,
         addedAt: 1,
         notificationsEnabled: true,
-        // Saved before either switch existed, so both read as an SSH host's default.
+        // Saved before any switch existed, so each reads as an SSH host's default.
         assistantMessagingEnabled: true,
         assistantStartEnabled: true,
+        assistantControlEnabled: true,
       },
     ]);
     // Reading changes nothing on disk; the next write saves the new shape.

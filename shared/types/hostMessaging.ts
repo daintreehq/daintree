@@ -25,6 +25,14 @@ export const HOST_LIST_TASKS_TOOL = "host.listTasks";
 export const HOST_CANCEL_TASK_TOOL = "host.cancelTask";
 export const HOST_START_ASSISTANT_TOOL = "host.startAssistant";
 export const HOST_READ_QUOTA_TOOL = "host.readQuota";
+/**
+ * Runs one of a host's own Daintree tools for this Shell's assistant (#13493),
+ * over the link the Shell already holds. Offered by its own rule rather than
+ * with the messaging tools: from the start of every assistant session in one
+ * of this machine's views, hosts or not, since a client that reads its tool
+ * list once never learns of a host added later.
+ */
+export const HOST_CALL_TOOL = "host.call";
 
 export const HOST_MESSAGING_TOOL_IDS: ReadonlySet<string> = new Set([
   HOST_LIST_TOOL,
@@ -131,6 +139,8 @@ export const HostListEntrySchema = z.object({
     .nullable(),
   lanes: z.array(laneSchema).nullable(),
   lanesObservedAt: z.number().nullable(),
+  /** This Shell's "assistant control" switch for the host: whether `host.call` may reach it. */
+  control: z.boolean(),
 });
 export type HostListEntry = z.infer<typeof HostListEntrySchema>;
 
@@ -349,6 +359,38 @@ export const HostReadQuotaResultSchema = z.object({
 });
 export type HostReadQuotaResult = z.infer<typeof HostReadQuotaResultSchema>;
 
+export const HostCallArgsSchema = z.object({
+  hostId: hostIdSchema,
+  projectId: idSchema.describe(
+    "A projectId from the host's assistant listing. The call runs there."
+  ),
+  tool: z
+    .string()
+    .min(1)
+    .max(128)
+    .describe("A Daintree tool on the host, by id. Search the host's own tools through this."),
+  args: z.record(z.string(), z.unknown()).optional().describe("The tool's own arguments."),
+  callId: idSchema
+    .optional()
+    .describe("Resend an ambiguous call under its callId. It never runs twice."),
+});
+export type HostCallArgs = z.infer<typeof HostCallArgsSchema>;
+
+/** A host tool's answer, as its own MCP result: structured when it has a schema, else its text. */
+const hostCallInnerSchema = z.object({
+  isError: z.boolean(),
+  structured: z.record(z.string(), z.unknown()).nullable(),
+  text: z.string().nullable(),
+});
+export type HostCallInnerResult = z.infer<typeof hostCallInnerSchema>;
+
+export const HostCallResultSchema = z.object({
+  ...outcomeFields,
+  callId: z.string().nullable(),
+  result: hostCallInnerSchema.nullable(),
+});
+export type HostCallResult = z.infer<typeof HostCallResultSchema>;
+
 /** Why a hub tool refused outright: the caller isn't the hub, or its arguments don't parse. */
 export type HostMessagingRefusalCode = "NOT_ELIGIBLE" | "INVALID_ARGS" | "UNAVAILABLE";
 
@@ -360,7 +402,8 @@ export type HostMessagingToolResult =
   | HostListTasksResult
   | HostCancelTaskResult
   | HostStartAssistantResult
-  | HostReadQuotaResult;
+  | HostReadQuotaResult
+  | HostCallResult;
 
 export type HostMessagingOutcome<T> =
   { ok: true; value: T } | { ok: false; code: HostMessagingRefusalCode; message: string };

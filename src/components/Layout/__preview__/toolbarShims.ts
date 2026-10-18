@@ -78,6 +78,7 @@ function previewHostEntry(name: string): HostListEntry {
       notificationsEnabled: false,
       assistantMessagingEnabled: false,
       assistantStartEnabled: false,
+      assistantControlEnabled: false,
     },
     connection:
       !current && previewFleet === "mixed" && MIXED_LINKS[name]

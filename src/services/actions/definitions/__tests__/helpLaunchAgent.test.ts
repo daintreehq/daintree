@@ -330,6 +330,7 @@ describe("help.launchAgent", () => {
       loadGlobalHooksAndServers: false,
       daintreeConfirmations: "inherit",
       acceptRemoteMessages: true,
+      acceptRemoteControl: true,
     });
 
     await action.run({ agentId: "codex" }, stubCtx);

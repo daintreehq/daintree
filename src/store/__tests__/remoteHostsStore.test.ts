@@ -15,6 +15,7 @@ const host: HostListEntry = {
     notificationsEnabled: false,
     assistantMessagingEnabled: false,
     assistantStartEnabled: false,
+    assistantControlEnabled: false,
   },
   connection: { status: "disconnected" },
   summary: null,

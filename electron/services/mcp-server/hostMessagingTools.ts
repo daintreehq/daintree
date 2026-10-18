@@ -1,5 +1,6 @@
 import type { ActionErrorCode } from "../../../shared/types/actions.js";
 import {
+  HOST_CALL_TOOL,
   HOST_CANCEL_TASK_TOOL,
   HOST_GET_TASK_TOOL,
   HOST_LIST_ASSISTANTS_TOOL,
@@ -8,6 +9,7 @@ import {
   HOST_READ_QUOTA_TOOL,
   HOST_SEND_MESSAGE_TOOL,
   HOST_START_ASSISTANT_TOOL,
+  HostCallArgsSchema,
   HostCancelTaskArgsSchema,
   HostGetTaskArgsSchema,
   HostListArgsSchema,
@@ -16,6 +18,8 @@ import {
   HostReadQuotaArgsSchema,
   HostSendMessageArgsSchema,
   HostStartAssistantArgsSchema,
+  type HostCallArgs,
+  type HostCallResult,
   type HostCancelTaskArgs,
   type HostCancelTaskResult,
   type HostGetTaskArgs,
@@ -77,6 +81,19 @@ export interface HostMessagingRuntimeHandle {
     helpSessionId: string,
     args: HostReadQuotaArgs
   ): Promise<HostMessagingOutcome<HostReadQuotaResult>>;
+  /** Whether this session is offered `host.call` (#13493): from its start, hosts or not. */
+  isCallReachable?(helpSessionId: string): boolean;
+  call?(
+    helpSessionId: string,
+    args: HostCallArgs,
+    context: HostCallContext
+  ): Promise<HostMessagingOutcome<HostCallResult>>;
+}
+
+/** What a `host.call` carries from the calling session beyond its arguments. */
+export interface HostCallContext {
+  /** The tier the call was admitted at here, which is all it may have on the host. */
+  tier: "core" | "full";
 }
 
 let installedRuntime: HostMessagingRuntimeHandle | null = null;
@@ -99,7 +116,13 @@ export interface HostMessagingAccess {
   isAvailable(): boolean;
   /** Whether it is an assistant session while a host exists; listing goes by this. */
   isReachable?(): boolean;
-  run(toolId: string, args: unknown): Promise<HostMessagingOutcome<HostMessagingToolResult>>;
+  /** Whether it is offered `host.call`: one of this machine's assistants, hosts or not. */
+  isCallReachable?(): boolean;
+  run(
+    toolId: string,
+    args: unknown,
+    context?: HostCallContext
+  ): Promise<HostMessagingOutcome<HostMessagingToolResult>>;
 }
 
 function notEligible(): { ok: false; code: "NOT_ELIGIBLE"; message: string } {
@@ -119,10 +142,17 @@ async function dispatch(
   runtime: HostMessagingRuntimeHandle,
   helpSessionId: string,
   toolId: string,
-  args: unknown
+  args: unknown,
+  context: HostCallContext | undefined
 ): Promise<HostMessagingOutcome<HostMessagingToolResult>> {
   const raw = args ?? {};
   switch (toolId) {
+    case HOST_CALL_TOOL: {
+      // A call with no tier from its session is no call this machine admitted.
+      if (context === undefined || runtime.call === undefined) return notEligible();
+      const parsed = HostCallArgsSchema.safeParse(raw);
+      return parsed.success ? runtime.call(helpSessionId, parsed.data, context) : invalidArgs();
+    }
     case HOST_LIST_TOOL: {
       if (!HostListArgsSchema.safeParse(raw).success) return invalidArgs();
       return runtime.list(helpSessionId);
@@ -181,10 +211,14 @@ export function bindHostMessaging(
       const found = caller();
       return found !== null && found.runtime.isReachable?.(found.helpSessionId) === true;
     },
-    run: async (toolId, args) => {
+    isCallReachable: () => {
+      const found = caller();
+      return found !== null && found.runtime.isCallReachable?.(found.helpSessionId) === true;
+    },
+    run: async (toolId, args, context) => {
       const found = caller();
       if (found === null) return notEligible();
-      return dispatch(found.runtime, found.helpSessionId, toolId, args);
+      return dispatch(found.runtime, found.helpSessionId, toolId, args, context);
     },
   };
 }
@@ -193,10 +227,11 @@ export function bindHostMessaging(
 export function runHostMessagingTool(
   toolId: string,
   args: unknown,
-  access: HostMessagingAccess | undefined
+  access: HostMessagingAccess | undefined,
+  context?: HostCallContext
 ): Promise<HostMessagingOutcome<HostMessagingToolResult>> {
   if (access === undefined) return Promise.resolve(notEligible());
-  return access.run(toolId, args);
+  return context === undefined ? access.run(toolId, args) : access.run(toolId, args, context);
 }
 
 export function auditCodeForHostMessagingRefusal(code: HostMessagingRefusalCode): ActionErrorCode {

@@ -40,6 +40,9 @@ import { initRemoteHostsHost } from "./initHost.js";
 import { installHostMetricsHost } from "../metrics/hostMetricsHost.js";
 import { installCanopyHost } from "../canopy/hostInstall.js";
 import { installAssistantExchangeHost } from "../assistant/hostExchanges.js";
+import { installHostMcpRelay } from "../assistant/hostMcpRelay.js";
+import { getHelpAssistantSettings } from "../../ipc/handlers/helpAssistant.js";
+import { projectStore } from "../../services/ProjectStore.js";
 import { observeAgents } from "../metrics/hostSources.js";
 import type { RemoteViewEndpoint } from "./RemoteViewEndpoint.js";
 import { createRemoteScopeGate } from "../../ipc/channelRemoteScope.js";
@@ -174,6 +177,21 @@ async function buildHostListener(
   teardowns.push(installCanopyHost(server));
   // Assistant exchanges a Shell sends to this host's enrolled lanes, view or not.
   teardowns.push(await installAssistantExchangeHost(server));
+  // This host's own tools, run for a Shell's assistant through this host's MCP gates (#13493).
+  const relay = installHostMcpRelay(server, {
+    senders: () => getRemoteService("assistantSenderSessions"),
+    acceptsRemoteControl: () => getHelpAssistantSettings().acceptRemoteControl,
+    hasProject: async (projectId) => projectStore.getProjectById(projectId) !== null,
+    openSession: async ({ tier, projectId, linkSessionId, senderId, helpSessionId, shellName }) => {
+      const { mcpServerService } = await import("../../services/McpServerService.js");
+      return mcpServerService.openRelaySession({
+        tier,
+        workspaceId: projectId,
+        caller: { linkSessionId, senderId, helpSessionId, shellName },
+      });
+    },
+  });
+  teardowns.push(() => relay.dispose());
 
   // Previews, downloads and host pickers for remote views; revoked with the listener.
   const files = installHostFileService();
@@ -211,7 +229,9 @@ async function buildHostListener(
   teardowns.push(
     setMcpDriveTargetResolver((projectId) => {
       const target = lease.getDriveTarget(projectId);
-      if (target.kind === "live") return { state: "live", endpoint: target.endpoint };
+      if (target.kind === "live") {
+        return { state: "live", endpoint: target.endpoint, holderName: target.holder.clientName };
+      }
       return target.kind === "vacant"
         ? { state: "vacant" }
         : { state: "unavailable", reason: "reserved" };

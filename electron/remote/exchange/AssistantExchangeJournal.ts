@@ -1,5 +1,5 @@
-import { randomBytes } from "node:crypto";
 import type Database from "better-sqlite3";
+import { AssistantSenderCredentials } from "../assistant/senderCredentials.js";
 import { TERMINAL_EXCHANGE_STATES, type ExchangeChanges, type ExchangeRecord } from "./types.js";
 
 const TERMINAL_STATES_SQL = [...TERMINAL_EXCHANGE_STATES].map((state) => `'${state}'`).join(", ");
@@ -37,6 +37,8 @@ interface JournalRow {
 
 export interface AssistantExchangeJournalOptions {
   now?: () => number;
+  /** Where this Shell's sender credentials live; one over the same database when absent. */
+  credentials?: AssistantSenderCredentials;
   newCredential?: () => string;
 }
 
@@ -61,7 +63,7 @@ function toEntry(row: JournalRow): JournalEntry {
  */
 export class AssistantExchangeJournal {
   private readonly now: () => number;
-  private readonly newCredential: () => string;
+  private readonly credentials: AssistantSenderCredentials;
   /** The last attempt mark handed out, so marks never repeat even once a row is gone. */
   private lastAttempt = 0;
   private readonly listeners = new Set<(hostId: string) => void>();
@@ -71,7 +73,12 @@ export class AssistantExchangeJournal {
     options: AssistantExchangeJournalOptions = {}
   ) {
     this.now = options.now ?? Date.now;
-    this.newCredential = options.newCredential ?? (() => randomBytes(32).toString("base64url"));
+    this.credentials =
+      options.credentials ??
+      new AssistantSenderCredentials(
+        sqlite,
+        options.newCredential ? { newCredential: options.newCredential } : {}
+      );
   }
 
   /** Told after any write that may have changed what `list(hostId)` returns. */
@@ -80,25 +87,24 @@ export class AssistantExchangeJournal {
     return () => this.listeners.delete(listener);
   }
 
-  /** The credential this Shell authenticates to `hostId` with, minted and saved on first use. */
+  /**
+   * The credential this Shell authenticates to `hostId` with, minted and saved
+   * on first use, and the host's row here for its cursor. The row repeats the
+   * credential only because older builds read it from there.
+   */
   credential(hostId: string): string {
-    const existing = this.existingCredential(hostId);
-    if (existing) return existing;
-    const credential = this.newCredential();
+    const credential = this.credentials.credential(hostId);
     this.sqlite
       .prepare(
         "INSERT INTO assistant_exchange_hosts (host_id, sender_credential, cursor) VALUES (?, ?, 0) ON CONFLICT(host_id) DO NOTHING"
       )
       .run(hostId, credential);
-    return this.existingCredential(hostId)!;
+    return credential;
   }
 
-  /** Null for a host this Shell never sent an exchange to. */
+  /** Null for a host this Shell never authenticated to. */
   existingCredential(hostId: string): string | null {
-    const row = this.sqlite
-      .prepare("SELECT sender_credential FROM assistant_exchange_hosts WHERE host_id = ?")
-      .get(hostId) as { sender_credential: string } | undefined;
-    return row?.sender_credential ?? null;
+    return this.credentials.existing(hostId);
   }
 
   cursor(hostId: string): number {
@@ -250,12 +256,14 @@ export class AssistantExchangeJournal {
     return row !== undefined;
   }
 
+  /** Every host this Shell holds a credential or a cursor for. */
   hosts(): string[] {
-    return (
+    const journalled = (
       this.sqlite.prepare("SELECT host_id FROM assistant_exchange_hosts").all() as Array<{
         host_id: string;
       }>
     ).map((row) => row.host_id);
+    return [...new Set([...journalled, ...this.credentials.hosts()])];
   }
 
   /** A host removed from this Shell takes its credential, cursor and exchanges with it. */
@@ -263,6 +271,7 @@ export class AssistantExchangeJournal {
     this.sqlite.transaction(() => {
       this.sqlite.prepare("DELETE FROM assistant_exchange_journal WHERE host_id = ?").run(hostId);
       this.sqlite.prepare("DELETE FROM assistant_exchange_hosts WHERE host_id = ?").run(hostId);
+      this.credentials.forget(hostId);
     })();
     this.changed(hostId);
   }

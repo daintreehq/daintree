@@ -175,6 +175,10 @@ function fakeSessionStore(tier: "core" | "full" | "external" = "core"): SessionS
     resetIdleTimer: vi.fn(),
     resetHttpIdleTimer: vi.fn(),
     clearDedupState: vi.fn(),
+    // The real predicate over this fixture's own maps.
+    hasLiveTransport(sessionId: string) {
+      return this.sessions.has(sessionId) || this.httpSessions.has(sessionId);
+    },
   } as unknown as SessionStore;
   return store;
 }

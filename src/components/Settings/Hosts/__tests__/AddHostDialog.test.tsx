@@ -102,6 +102,7 @@ function known(id: string, name: string, target: string): HostListEntry {
       notificationsEnabled: false,
       assistantMessagingEnabled: false,
       assistantStartEnabled: false,
+      assistantControlEnabled: false,
     },
     connection: { status: "disconnected" },
     summary: null,

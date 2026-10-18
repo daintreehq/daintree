@@ -764,7 +764,16 @@ describe("MCP wire budget — aggregate ratchets (§9)", () => {
   // an output schema of exit code, signal, timing, termination flags and the
   // scrubbed output tail. Assistant at full only, so the external ceiling does
   // not move.
-  const MAX_COHORT_PAYLOAD_BYTES = 141_100;
+  // 141_100 → 142_800 for `host.call` (#13493), measured at 142_767 B: its
+  // description, the host, project, tool, arguments and callId, and an output
+  // schema of the shared outcome fields beside the callId and the host tool's
+  // own answer, kept to whether it failed, its structured half and its text,
+  // never a copy of each wrapped tool's schema. It is what lets one connection
+  // reach every host's tools rather than a server entry or a `host` argument
+  // per tool, each of which would cost the whole surface again. `host.list`
+  // grows by the per-host control flag. Offered to this machine's assistant
+  // only, so the external ceiling does not move.
+  const MAX_COHORT_PAYLOAD_BYTES = 142_800;
 
   const wireBytes = (t: WireTool) => t.descriptionBytes + t.paramsBytes + t.outputBytes;
 

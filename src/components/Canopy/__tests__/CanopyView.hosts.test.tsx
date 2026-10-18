@@ -119,6 +119,7 @@ function host(
       notificationsEnabled: false,
       assistantMessagingEnabled: false,
       assistantStartEnabled: false,
+      assistantControlEnabled: false,
     },
     connection,
     summary: connection.status === "connected" ? summary(id, 2, 1) : null,

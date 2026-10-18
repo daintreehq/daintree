@@ -23,6 +23,7 @@ import {
   EnrollStartedResultSchema,
   LaneListSchema,
   MAX_EXCHANGE_PAGE,
+  McpCallAnswerSchema,
   MessageIdPayloadSchema,
   SendResultSchema,
   SendToHubPayloadSchema,
@@ -32,6 +33,8 @@ import {
   type EnrollStartedResult,
   type ExchangeResponse,
   type LaneList,
+  type McpCallAnswer,
+  type McpCallPayload,
 } from "./linkMethods.js";
 
 export interface AssistantExchangeClientDeps {
@@ -357,6 +360,32 @@ export class AssistantExchangeClient {
     if (!parsed.success) return { status: "unknown", messageId: payload.messageId };
     journal.recordAnswer(hostId, parsed.data.record);
     return { status: "accepted", ...parsed.data };
+  }
+
+  /**
+   * Run one of the host's own MCP tools for one of this Shell's assistants
+   * (#13493), once this Shell's sender is proven on the session. Not
+   * messaging: its own consent is the caller's to check, and the host records
+   * the call by its callId, so a resend after a lost answer is safe.
+   */
+  async relayCall(
+    hostId: HostId,
+    payload: McpCallPayload,
+    timeoutMs: number
+  ): Promise<McpCallAnswer> {
+    const session = await this.open(hostId);
+    try {
+      await this.authenticate(hostId, session);
+    } catch (error) {
+      // Nothing of the call left yet, whatever became of the proof.
+      if (isUnknownOutcome(error)) throw unreachable(hostId);
+      throw error;
+    }
+    const parsed = McpCallAnswerSchema.safeParse(
+      await this.call(hostId, session, AssistantLinkMethod.MCP_CALL, payload, timeoutMs)
+    );
+    if (!parsed.success) throw invalidAnswer(hostId, AssistantLinkMethod.MCP_CALL);
+    return parsed.data;
   }
 
   /** The host's record of one of this Shell's exchanges, or null when it has none. */

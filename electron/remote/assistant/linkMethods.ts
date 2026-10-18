@@ -74,6 +74,13 @@ export const AssistantLinkMethod = {
    * answered. Carries only the messageId; the host reads it back.
    */
   HUB_EXCHANGE_CHANGED: "assistant.hub-exchange-changed",
+  /**
+   * Shell → Host: run one of the host's own MCP tools for one of the Shell's
+   * assistants (#13493), in a session the host admits through its own MCP
+   * gates for this sender and help session. A resend of a callId never runs
+   * it twice. A host from before this answers UNSUPPORTED.
+   */
+  MCP_CALL: "assistant.mcp-call",
 } as const;
 
 export const MAX_EXCHANGE_BODY_CHARS = 256 * 1024;
@@ -324,3 +331,62 @@ export const HubExchangeSchema = z.discriminatedUnion("status", [
 export type HubExchange = z.infer<typeof HubExchangeSchema>;
 
 export const HubExchangeChangedPayloadSchema = z.object({ messageId: id }).strip();
+
+/** Longest a relayed call may run on its host: `project.runCheck`'s own ceiling, with room. */
+export const MAX_RELAY_RUN_MS = 65 * 60_000;
+/** Serialized bytes a relayed call's arguments may take. */
+export const MAX_RELAY_ARGS_BYTES = 256 * 1024;
+/** Serialized bytes a relayed call's answer may take; a host's own results stay well under. */
+export const MAX_RELAY_RESULT_BYTES = 192 * 1024;
+
+export const McpCallPayloadSchema = z
+  .object({
+    /** The Shell assistant's own help session: with the sender, who owns what the call makes. */
+    helpSessionId: id,
+    projectId: id,
+    tier: z.enum(["core", "full"]),
+    callId: id,
+    /** Set on every send after the first: a resend never starts a call the host has no record of. */
+    resend: z.boolean(),
+    tool: z.string().min(1).max(128),
+    args: z
+      .record(z.string(), z.unknown())
+      .refine((args) => Buffer.byteLength(JSON.stringify(args), "utf8") <= MAX_RELAY_ARGS_BYTES),
+    /** How long the host may let the tool run; the Shell waits a little longer. */
+    runMs: z.number().int().min(1_000).max(MAX_RELAY_RUN_MS),
+  })
+  .strict();
+export type McpCallPayload = z.infer<typeof McpCallPayloadSchema>;
+
+export const RELAY_REFUSALS = ["control-off", "no-project", "server-off"] as const;
+export type RelayRefusal = (typeof RELAY_REFUSALS)[number];
+
+const relayInnerResultSchema = z
+  .object({
+    isError: z.boolean(),
+    structured: z.record(z.string(), z.unknown()).nullable(),
+    text: z.string().nullable(),
+  })
+  .strip();
+
+export const McpCallAnswerSchema = z.discriminatedUnion("status", [
+  z.object({ status: z.literal("done"), result: relayInnerResultSchema }).strip(),
+  /** A resend the host holds no record of: it may have run, or never arrived. Nothing ran now. */
+  z.object({ status: z.literal("unknown") }).strip(),
+  /** That callId already named a different call. */
+  z.object({ status: z.literal("conflict") }).strip(),
+  /** Refused before anything ran; a newer host may name a reason this Shell doesn't know. */
+  z
+    .object({
+      status: z.literal("refused"),
+      reason: z.union([
+        z.enum(RELAY_REFUSALS),
+        z
+          .string()
+          .max(64)
+          .transform(() => "server-off" as const),
+      ]),
+    })
+    .strip(),
+]);
+export type McpCallAnswer = z.infer<typeof McpCallAnswerSchema>;

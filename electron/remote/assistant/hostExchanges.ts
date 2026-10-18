@@ -14,6 +14,7 @@ import type {
   SenderActor,
 } from "../exchange/types.js";
 import { inboxBodyFits, type InboxEnvelope } from "./AssistantInbox.js";
+import { SenderSessions } from "./senderSessions.js";
 import {
   OPEN_LANE_GENERATION,
   type AssistantMessagingPolicy,
@@ -43,6 +44,7 @@ declare module "../runtime.js" {
   interface RemoteServices {
     assistantExchangeStore: AssistantExchangeStore;
     assistantHostOutbox: AssistantHostOutbox;
+    assistantSenderSessions: SenderSessions;
   }
 }
 
@@ -68,6 +70,8 @@ export interface AssistantExchangeHostDeps {
   responses?: (key: ExchangeKey) => ExchangeResponse[];
   /** A Shell's enrollments moved to its newer link session; what waits on the old one follows. */
   onSessionRebound?: (rebind: SessionRebind) => void;
+  /** Where each session's proven sender is kept, for the host's other calls to read; private when absent. */
+  senders?: SenderSessions;
 }
 
 /**
@@ -157,7 +161,7 @@ export function installAssistantExchangeHostWith(
   deps: AssistantExchangeHostDeps
 ): () => void {
   const wired = new WeakSet<LinkSession>();
-  const senders = new WeakMap<LinkSession, string>();
+  const senders = deps.senders ?? new SenderSessions();
 
   const requirePolicy = (): AssistantMessagingPolicy => {
     const policy = deps.policy();
@@ -166,7 +170,7 @@ export function installAssistantExchangeHostWith(
   };
 
   const requireSender = (session: LinkSession): SenderActor => {
-    const senderId = senders.get(session);
+    const senderId = senders.senderOf(session);
     if (!senderId) {
       throw new AppError({
         code: "PERMISSION",
@@ -237,14 +241,14 @@ export function installAssistantExchangeHostWith(
       ({ credential }) => {
         const senderId = senderIdForCredential(credential);
         // Per transport here, and per session id in the policy, so a resume can't swap senders either.
-        const bound = senders.get(session) ?? deps.policy()?.sessionSender(sessionId);
+        const bound = senders.senderOf(session) ?? deps.policy()?.sessionSender(sessionId);
         if (bound !== undefined && bound !== senderId) {
           throw new AppError({
             code: "PERMISSION",
             message: "This session already authenticated another assistant sender",
           });
         }
-        senders.set(session, senderId);
+        senders.bind(session, senderId);
         // Consent follows the Shell this proves, not one connection.
         const policy = deps.policy();
         for (const rebind of policy?.bindSender(sessionId, senderId) ?? []) {
@@ -418,7 +422,7 @@ export function installAssistantExchangeHostWith(
     due.clear();
     for (const [senderId, revision] of batch) {
       for (const { session } of server.sessions) {
-        if (!session.isOpen || senders.get(session) !== senderId) continue;
+        if (!session.isOpen || senders.senderOf(session) !== senderId) continue;
         session.call(AssistantLinkMethod.EXCHANGE_CHANGED, { revision }).catch(() => {
           // Nothing to retry: the Shell reads every change by cursor when a session opens.
         });
@@ -499,11 +503,15 @@ export async function installAssistantExchangeHost(
   const timer = setInterval(sweep, SWEEP_INTERVAL_MS);
   timer.unref?.();
   const unregister = registerRemoteService("assistantExchangeStore", store);
+  // The sender each session proves, for the tools this host runs for a Shell too (#13493).
+  const senders = new SenderSessions();
+  const unregisterSenders = registerRemoteService("assistantSenderSessions", senders);
   // The inbox and the waker come with the messaging policy, read at each
   // call; without them an exchange waits as submitted, as availability allows.
   const unwire = installAssistantExchangeHostWith(server, {
     policy: () => getRemoteService("assistantMessagingPolicy"),
     store,
+    senders,
     onExchangeChanged,
     admit: (record, envelope) => {
       const runtime = getRemoteService("assistantMessagingRuntime");
@@ -556,6 +564,7 @@ export async function installAssistantExchangeHost(
     getRemoteService("assistantMessagingPolicy")?.refresh();
     outbox.dispose();
     unwire();
+    unregisterSenders();
     unregister();
   };
 }

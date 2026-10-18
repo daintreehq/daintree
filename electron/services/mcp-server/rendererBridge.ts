@@ -165,6 +165,29 @@ export class DriveHolderUnavailableError extends McpRouteBindingError {
   }
 }
 
+/**
+ * A call one of another machine's assistants relayed here (#13493) would
+ * change a workspace its Shell does not drive: someone else's window holds
+ * the drive lease, or no window of that Shell's shows it. Never retried
+ * elsewhere, and never run by main, which would act for whoever drives.
+ */
+export class RelayDrivenElsewhereError extends Error {
+  readonly code = "DRIVEN_ELSEWHERE";
+  readonly workspaceId: string;
+  readonly holderName: string | null;
+
+  constructor(workspaceId: string, holderName: string | null) {
+    super(
+      holderName !== null
+        ? `${holderName} has control of this project on the host, so this call can't change it. Nothing was run. The person can take control in a window on this Shell.`
+        : `No window on this Shell has control of this project on the host, so this call can't change it. Nothing was run. The person can open the project on the host in a window here.`
+    );
+    this.name = "RelayDrivenElsewhereError";
+    this.workspaceId = workspaceId;
+    this.holderName = holderName;
+  }
+}
+
 // Thrown when an unpinned dispatch can't reach any live renderer to route a
 // tool call through. For confirm-gated tools this is the "no confirmation
 // channel reachable" case: a headless conductor with no Daintree window open
@@ -1133,15 +1156,33 @@ export function createRendererBridge(
   function resolveDriver(workspaceId: string): {
     remote?: ClientEndpoint;
     localWebContentsId?: number;
+    holderName?: string;
   } | null {
     const target = resolveMcpDriveTarget(workspaceId);
     if (target === null) return null;
     if (target.state === "unavailable") throw new DriveHolderUnavailableError(workspaceId);
     if (target.state === "vacant") return {};
     const driver = target.endpoint;
-    if (driver.kind === "remote-view") return { remote: driver };
+    const named = target.holderName !== undefined ? { holderName: target.holderName } : {};
+    if (driver.kind === "remote-view") return { remote: driver, ...named };
     const wc = electronWebContents.fromId(driver.handle);
-    return wc && !wc.isDestroyed() ? { localWebContentsId: wc.id } : {};
+    return wc && !wc.isDestroyed() ? { localWebContentsId: wc.id, ...named } : named;
+  }
+
+  /**
+   * A relayed call that changes something goes only to the requesting
+   * Shell's own driving view (#13493). Asked of the driver this dispatch
+   * resolved, so a takeover between the caller's check and here still
+   * refuses; that view's own calls back are lease-checked again as they land.
+   */
+  function refuseRelayedWrite(
+    workspaceId: string,
+    driver: ReturnType<typeof resolveDriver>,
+    relay: WorkspaceDispatchOptions["relay"]
+  ): void {
+    if (relay === undefined || relay.readOnly) return;
+    if (driver?.remote !== undefined && driver.remote.linkSessionId === relay.linkSessionId) return;
+    throw new RelayDrivenElsewhereError(workspaceId, driver?.holderName ?? null);
   }
 
   /**
@@ -1241,15 +1282,19 @@ export function createRendererBridge(
     try {
       answer = await endpoint.request(
         MCP_DISPATCH_ACTION_METHOD,
-        buildDispatchPayload(
-          actionId,
-          args,
-          confirmed,
-          sessionOrigin,
-          options.contextOverride,
-          undefined,
-          options
-        ),
+        {
+          ...buildDispatchPayload(
+            actionId,
+            args,
+            confirmed,
+            sessionOrigin,
+            options.contextOverride,
+            undefined,
+            options
+          ),
+          // Display only: the Shell's dialog says its own assistant asked, through this host.
+          ...(options.relay ? { relayed: true } : {}),
+        },
         { timeoutMs: MCP_DISPATCH_TIMEOUT_MS }
       );
     } catch (err) {
@@ -1447,6 +1492,7 @@ export function createRendererBridge(
     options: WorkspaceDispatchOptions = {}
   ): Promise<DispatchEnvelope> {
     const driver = resolveDriver(workspaceId);
+    refuseRelayedWrite(workspaceId, driver, options.relay);
     if (driver === null) {
       return sendDispatchRequest(
         () => getWorkspaceWebContents(workspaceId, options.preferredWebContentsId),

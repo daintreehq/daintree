@@ -43,6 +43,10 @@ const McpDispatchPayloadSchema = z.object({
   // one is shown, so it is taken as-is.
   approvalReason: z.enum(["above-tier", "protected-close"]).optional(),
   authorization: z.string().max(64).optional(),
+  // This Shell's own assistant asked, through `host.call` (#13493). Display
+  // only, and believed only while this Shell has a call out to that host: it
+  // names who asked in the dialog and grants nothing.
+  relayed: z.boolean().optional(),
 });
 
 type McpDispatchPayload = z.infer<typeof McpDispatchPayloadSchema>;
@@ -92,8 +96,13 @@ function hostName(hostId: string): string {
  * "Requested by" row. No token suffix: no bearer of this machine's is involved,
  * and a slice of the host's id beside its name only repeated it.
  */
-function describeHost(hostId: string): McpBearerIdentity {
-  return { userAgent: `Agent on host "${hostName(hostId)}"`, token4LastChars: "" };
+function describeHost(hostId: string, relayed: boolean): McpBearerIdentity {
+  return {
+    userAgent: relayed
+      ? `Your assistant, through host "${hostName(hostId)}"`
+      : `Agent on host "${hostName(hostId)}"`,
+    token4LastChars: "",
+  };
 }
 
 function isHostDispatchableEntry(entry: unknown): boolean {
@@ -186,7 +195,11 @@ async function dispatchAction(
             ...(request.approvalReason ? { approvalReason: request.approvalReason } : {}),
           }
         : undefined,
-    describeHost(hostId)
+    describeHost(
+      hostId,
+      request.relayed === true &&
+        getRemoteService("hostCallRelayClient")?.hasCallInFlight(hostId) === true
+    )
   );
   // Only what the host reads back: this machine's view identity stays here,
   // and no approval is ever handed out for the host to reuse.

@@ -30,6 +30,10 @@ function fakeRuntime() {
     cancelTask: vi.fn(),
     startAssistant: vi.fn(),
     readQuota: vi.fn(),
+    isCallReachable: vi.fn((helpSessionId: string) => helpSessionId === "hub"),
+    call: vi.fn(() =>
+      ok({ outcome: "ok" as const, detail: null, retryAfterMs: null, callId: "c", result: null })
+    ),
   } satisfies HostMessagingRuntimeHandle;
 }
 
@@ -122,6 +126,28 @@ describe("runHostMessagingTool (#13336)", () => {
     uninstall();
     expect(runtime.readQuota).toHaveBeenCalledTimes(1);
     expect(runtime.readQuota).toHaveBeenCalledWith("hub", { hostId: "h" });
+    expect(missing).toMatchObject({ ok: false, code: "INVALID_ARGS" });
+  });
+
+  it("hands host.call to the runtime with the calling session's tier, and never without one (#13493)", async () => {
+    const runtime = fakeRuntime();
+    const uninstall = setHostMessagingRuntime(runtime);
+    const access = bindHostMessaging(() => "hub");
+    const args = { hostId: "h", projectId: "p", tool: "terminal.list", args: { owned: true } };
+
+    expect(access.isCallReachable?.()).toBe(true);
+    await runHostMessagingTool("host.call", args, access, { tier: "full" });
+    const untiered = await runHostMessagingTool("host.call", args, access);
+    const missing = await runHostMessagingTool(
+      "host.call",
+      { hostId: "h", tool: "terminal.list" },
+      access,
+      { tier: "core" }
+    );
+    uninstall();
+    expect(runtime.call).toHaveBeenCalledTimes(1);
+    expect(runtime.call).toHaveBeenCalledWith("hub", args, { tier: "full" });
+    expect(untiered).toMatchObject({ ok: false, code: "NOT_ELIGIBLE" });
     expect(missing).toMatchObject({ ok: false, code: "INVALID_ARGS" });
   });
 

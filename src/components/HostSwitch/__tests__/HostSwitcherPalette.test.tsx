@@ -113,6 +113,7 @@ function host(
       notificationsEnabled: false,
       assistantMessagingEnabled: false,
       assistantStartEnabled: false,
+      assistantControlEnabled: false,
     },
     connection,
     summary: null,

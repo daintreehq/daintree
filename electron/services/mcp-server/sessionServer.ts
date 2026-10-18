@@ -91,6 +91,7 @@ import {
   type DispatchedWorkspaceRef,
   type McpWorkspaceBinding,
   WORKSPACE_BINDING_RESOURCE_URI,
+  RELAY_CALL_ID_META_KEY,
 } from "./shared.js";
 import {
   INTERACTIVE_WAIT_UNTIL_IDLE_TIMEOUT_CAP_MS,
@@ -100,6 +101,7 @@ import { isMcpHostRoutingEnabled } from "./driveTarget.js";
 import {
   McpRouteBindingError,
   NoFrontendAttachedError,
+  RelayDrivenElsewhereError,
   RendererBridgeUnavailableError,
   RemoteHostWindowOnlyError,
   WorkspaceBindingError,
@@ -114,6 +116,7 @@ import {
 import {
   shouldExposeTool,
   isWithheldFromBoundSession,
+  isWithheldFromRelaySession,
   type SessionSurfacePolicy,
   isTierPermitted,
   isApprovalRequestable,
@@ -183,7 +186,7 @@ import {
   runAssistantMessagingTool,
   type AssistantMessagingAccess,
 } from "./assistantMessagingTools.js";
-import { HOST_MESSAGING_TOOL_IDS } from "../../../shared/types/hostMessaging.js";
+import { HOST_CALL_TOOL, HOST_MESSAGING_TOOL_IDS } from "../../../shared/types/hostMessaging.js";
 import {
   auditCodeForHostMessagingRefusal,
   runHostMessagingTool,
@@ -1103,6 +1106,21 @@ export interface SessionServerDeps extends OwnedMainExecutors {
   /** Blocking replies for `waitForReply`. Optional; absent, the flag is ignored. */
   replyWaiter?: Pick<ReplyWaiterService, "wait">;
   /**
+   * Set for a session another machine's assistant reaches through its Shell
+   * (#13493). It is then never offered a `host.*` tool or one of this
+   * machine's assistant-panel tools, whatever its tier or grants, so a relay
+   * never chains through here to another host.
+   */
+  relay?: {
+    shellName: string;
+    /**
+     * Asked right before a change this process makes itself rather than
+     * through a view: why it may not, or null while the requesting Shell's own
+     * view drives the bound project and `projectId`, when named, is that one.
+     */
+    refuseWrite(projectId: string | undefined): { code: string; message: string } | null;
+  };
+  /**
    * The caller's own pane, from its credential: a pane bearer's terminal, or
    * the terminal a help session is bound to. Null for everything else — an
    * api-key client has no pane to notify.
@@ -1138,6 +1156,8 @@ export interface SessionServerDeps extends OwnedMainExecutors {
     capturedTurnId?: string | null;
     /** The caller's origin, so an unauthorized row's tier hint reads its own surface. */
     rendererOwnedOrigin?: boolean;
+    /** A relayed call's callId from its Shell (#13493), so both records name one call. */
+    relayCallId?: string;
   }) => void;
   getCachedManifest: () => import("../../../shared/types/actions.js").ActionManifestEntry[] | null;
   /**
@@ -1302,7 +1322,7 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
     handleProjectRunCheck,
     handleProjectRunCommand,
     handleTerminalGetStatusViewless,
-    appendAuditRecord,
+    appendAuditRecord: appendSessionAuditRecord,
     getCachedManifest,
     notifyTierMismatch,
     recordDenial,
@@ -1342,6 +1362,7 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
     // Only an agent pane is handed an approval route (#12692).
     paneApproval: requestApproval !== undefined,
     paneSkipConfirmations: requestApproval !== undefined && deps.paneSkipConfirmations === true,
+    relay: deps.relay !== undefined,
   };
 
   // Whether this session is an enrolled lane's own assistant right now
@@ -1382,6 +1403,12 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
     (hostMessaging !== undefined &&
       sessionStore.sessionHelpIdMap.has(sessionId) &&
       hostMessaging.isReachable?.() === true);
+  // `host.call` (#13493): any of this machine's own assistants, from its start
+  // and whether or not a host exists yet. Read per listing, never cached.
+  const hostCallOffered = (): boolean =>
+    hostMessaging !== undefined &&
+    sessionStore.sessionHelpIdMap.has(sessionId) &&
+    hostMessaging.isCallReachable?.() === true;
 
   const server = new Server(
     { name: "Daintree", version: app.getVersion() },
@@ -1526,6 +1553,7 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
       assistantMessaging: laneMessagingOffered(),
       assistantSending: laneSendingOffered(),
       hubMessaging: hubMessagingOffered(),
+      hostCall: hostCallOffered(),
     };
     const tools = manifest
       .filter((entry) => shouldExposeTool(entry, tier, listSurface))
@@ -1560,10 +1588,24 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
     // so the item does not ask a second time; `confirmationsSkipped` carries the
     // batch's skip decision so every item runs under the one the batch read.
     // Never reachable from a client.
-    batchItem?: { noticeHold?: NoticeHold; closeApproved?: boolean; confirmationsSkipped?: boolean }
+    batchItem?: {
+      noticeHold?: NoticeHold;
+      closeApproved?: boolean;
+      confirmationsSkipped?: boolean;
+      relayCallId?: string;
+    }
   ): Promise<CallToolResult> => {
     const actionId = request.params.name;
     const { args, requestKey } = parseToolArguments(request.params.arguments);
+    // A relayed call's callId from its Shell (#13493), on every record of it and of its items.
+    const relayMeta = request.params._meta?.[RELAY_CALL_ID_META_KEY];
+    const relayCallId =
+      batchItem?.relayCallId ??
+      (deps.relay !== undefined && typeof relayMeta === "string" && relayMeta.length <= 256
+        ? relayMeta
+        : undefined);
+    const appendAuditRecord: SessionServerDeps["appendAuditRecord"] = (input) =>
+      appendSessionAuditRecord(relayCallId !== undefined ? { ...input, relayCallId } : input);
     const startedAt = Date.now();
     const tier = sessionStore.getTier(sessionId);
     // Gate 0 (#11799): no live session, no authorization. The SDK's own
@@ -1766,6 +1808,13 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
           // A grant never makes the command runner callable, so it never makes it findable.
           if (!mayRunProjectCommand(tier, rendererOwnedOrigin)) {
             permittedActionIds.delete(PROJECT_RUN_COMMAND_TOOL);
+          }
+          if (!hostCallOffered()) permittedActionIds.delete(HOST_CALL_TOOL);
+          // A relayed session finds nothing it would be refused (#13493).
+          if (sessionSurface.relay === true) {
+            for (const id of [...permittedActionIds]) {
+              if (isWithheldFromRelaySession(id)) permittedActionIds.delete(id);
+            }
           }
           return {
             permittedActionIds,
@@ -1974,8 +2023,7 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
       // `record` itself refuses one whose bearer was revoked (#12487).
       if (
         !sessionStore.resourceOwnership.isPrincipalOwner(ownershipOwner) &&
-        !sessionStore.sessions.has(sessionId) &&
-        !sessionStore.httpSessions.has(sessionId)
+        !sessionStore.hasLiveTransport(sessionId)
       ) {
         return;
       }
@@ -2015,7 +2063,10 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
     // the floor allows the call. Native grants are not ordered that way: see
     // the peek below for why nesting them under any one admission source is
     // what made them unreachable in the first place.
-    const tierPermitted = isTierPermitted(tier, actionId, rendererOwnedOrigin);
+    // A relayed session is refused what it is never listed (#13493), whatever
+    // its tier, and no grant stands in for that: it has none to consult.
+    const relayWithheld = sessionSurface.relay === true && isWithheldFromRelaySession(actionId);
+    const tierPermitted = !relayWithheld && isTierPermitted(tier, actionId, rendererOwnedOrigin);
     // An agent pane's tier is an auto-approval line, not a ceiling (#12692).
     const paneApproval = sessionSurface.paneApproval === true;
     let grantIssuedAt: number | undefined;
@@ -2034,7 +2085,7 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
     // confirmation that approval replaced (#12692). That second job is why a
     // pane consults it even for a tool its tier already permits — the
     // `worktree.deleteOwned` a user has allowed for the session.
-    if (!tierPermitted || paneApproval) {
+    if ((!tierPermitted || paneApproval) && !relayWithheld) {
       const grant = sessionStore.grantCache.check(sessionId, actionId);
       if (grant.granted) {
         // Grant authorised the call. Capture the `issuedAt` token so the
@@ -2061,7 +2112,10 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
     // would only spend a use and evict entries on a discovery call. When the
     // call is NOT otherwise admitted the peek still runs, because there the
     // grant is doing its first job and is load-bearing for authorization.
-    if (!authorizedWithoutNativeGrant || !INTROSPECTION_TOOL_IDS.has(actionId)) {
+    if (
+      !relayWithheld &&
+      (!authorizedWithoutNativeGrant || !INTROSPECTION_TOOL_IDS.has(actionId))
+    ) {
       // The use is NOT charged here: it is consumed only once the call is
       // committed to dispatching (below), so an unauthorized call can't burn
       // a use. The grant's allowlist gates which tools this authorizes.
@@ -2609,7 +2663,7 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
      * would outlive the session it was meant for.
      */
     const mintSessionApproval = (): void => {
-      if (!sessionStore.sessions.has(sessionId) && !sessionStore.httpSessions.has(sessionId)) {
+      if (!sessionStore.hasLiveTransport(sessionId)) {
         return;
       }
       sessionStore.grantCache.issueGrant(sessionId, actionId);
@@ -3128,11 +3182,15 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
               itemResult = await handleCallTool(
                 { method: "tools/call", params: { name: item.tool, arguments: item.args } },
                 extra,
-                noticeHold !== undefined || closeApproved !== undefined || confirmationsSkipped
+                noticeHold !== undefined ||
+                  closeApproved !== undefined ||
+                  confirmationsSkipped ||
+                  relayCallId !== undefined
                   ? {
                       ...(noticeHold !== undefined ? { noticeHold } : {}),
                       ...(closeApproved !== undefined ? { closeApproved: true } : {}),
                       ...(confirmationsSkipped ? { confirmationsSkipped: true } : {}),
+                      ...(relayCallId !== undefined ? { relayCallId } : {}),
                     }
                   : undefined
               );
@@ -3492,15 +3550,21 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
         // (#13468), whatever admitted the call above. Named outcomes (opted out, unreachable, ambiguous,
         // ...) are results; refusals are fixed text, and the audit projections
         // keep message and reply text out of the log.
-        if (HOST_MESSAGING_TOOL_IDS.has(actionId)) {
+        if (HOST_MESSAGING_TOOL_IDS.has(actionId) || actionId === HOST_CALL_TOOL) {
           emitToolCallStarted(false);
           try {
+            // `host.call` carries the tier it was admitted at here: all it may have on the host.
+            const callContext =
+              actionId === HOST_CALL_TOOL && (tier === "core" || tier === "full")
+                ? { tier }
+                : undefined;
             const settled = await runHostMessagingTool(
               actionId,
               args,
               hostMessaging !== undefined && sessionStore.sessionHelpIdMap.has(sessionId)
                 ? hostMessaging
-                : undefined
+                : undefined,
+              callContext
             );
             if (!settled.ok) {
               outcome = {
@@ -3597,6 +3661,7 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
                 assistantMessaging: laneMessagingOffered(),
                 assistantSending: laneSendingOffered(),
                 hubMessaging: hubMessagingOffered(),
+                hostCall: hostCallOffered(),
               }
             );
             outcome = { kind: "result", value: { ok: true, result } };
@@ -3627,6 +3692,18 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
           // Never `danger: "confirm"` — the runner is one the project already
           // declares, so the strip shows a plain in-flight row.
           emitToolCallStarted(false);
+          // A relayed check runs only where its session is bound, and only while
+          // the requesting Shell drives it there (#13493).
+          const relayRefusal = deps.relay?.refuseWrite(readStringArg(args, "projectId"));
+          if (relayRefusal) {
+            const auditCode =
+              relayRefusal.code === "VALIDATION_ERROR" ? "VALIDATION_ERROR" : "RESTRICTED";
+            outcome = {
+              kind: "result",
+              value: { ok: false, error: { code: auditCode, message: relayRefusal.message } },
+            };
+            return buildToolError(relayRefusal);
+          }
           try {
             const result = await handleProjectRunCheck(args, extra.signal);
             outcome = { kind: "result", value: { ok: true, result } };
@@ -4050,6 +4127,9 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
               message: `${err.message}${statusHint}`,
               retriable: true,
             });
+          }
+          if (err instanceof RelayDrivenElsewhereError) {
+            return buildToolError({ code: err.code, message: err.message });
           }
           if (err instanceof McpRouteBindingError) {
             return buildToolError({
@@ -4738,7 +4818,7 @@ function subscribeResource(
   if (bucket.has(uri)) return;
 
   const fire = () => {
-    if (!sessionStore.sessions.has(sessionId) && !sessionStore.httpSessions.has(sessionId)) return;
+    if (!sessionStore.hasLiveTransport(sessionId)) return;
     server.sendResourceUpdated({ uri }).catch((err) => {
       console.error(`[MCP] sendResourceUpdated failed for ${uri}:`, err);
     });

@@ -704,6 +704,7 @@ describe("HubMessagingRuntime (#13336)", () => {
           agentsObserved: { working: 2, waiting: 1, idle: 0 },
           lanes: null,
           lanesObservedAt: null,
+          control: false,
         },
       ]);
     });

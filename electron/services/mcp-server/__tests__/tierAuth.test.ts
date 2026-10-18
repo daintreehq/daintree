@@ -26,6 +26,7 @@ import {
   resolveTokenTier,
   shouldExposeTool,
   isWithheldFromBoundSession,
+  isWithheldFromRelaySession,
   UNBOUND_SESSION_SURFACE,
   ACTIONS_SEARCH_DEFAULT_LIMIT,
   ACTIONS_SEARCH_MAX_LIMIT,
@@ -515,6 +516,48 @@ describe("shouldExposeTool", () => {
     expect(shouldExposeTool(entry, "external", { workspaceBound: false, hubMessaging: true })).toBe(
       false
     );
+  });
+
+  // #13493: host.call goes by its own offer, to this machine's own assistant
+  // from core, hosts or not, and never to a pane or key.
+  it("offers host.call only where it is offered, from core", () => {
+    const entry = makeEntry({ id: "host.call" });
+    const assistant = { workspaceBound: false, rendererOwnedOrigin: true };
+    expect(shouldExposeTool(entry, "core", assistant)).toBe(false);
+    // The messaging offer, which needs a host to exist, is not this one.
+    expect(shouldExposeTool(entry, "core", { ...assistant, hubMessaging: true })).toBe(false);
+    expect(shouldExposeTool(entry, "core", { ...assistant, hostCall: true })).toBe(true);
+    expect(
+      shouldExposeTool(entry, "full", { workspaceBound: false, paneApproval: true, hostCall: true })
+    ).toBe(false);
+    expect(shouldExposeTool(entry, "external", { workspaceBound: false, hostCall: true })).toBe(
+      false
+    );
+  });
+
+  // #13493: a session another machine's assistant reaches through its Shell is
+  // never offered a host tool or this machine's assistant-panel tools.
+  it("withholds every host tool and this machine's panel tools from a relayed session", () => {
+    const relayed = { workspaceBound: true, relay: true };
+    for (const id of ["host.call", "host.list", "host.switch", "host.anythingNew"]) {
+      expect(isWithheldFromRelaySession(id)).toBe(true);
+    }
+    expect(isWithheldFromRelaySession("help.displayImage")).toBe(true);
+    expect(isWithheldFromRelaySession("assistant.getInbox")).toBe(true);
+    expect(isWithheldFromRelaySession("terminal.list")).toBe(false);
+    expect(shouldExposeTool(makeEntry({ id: "terminal.list" }), "core", relayed)).toBe(true);
+    expect(shouldExposeTool(makeEntry({ id: "agent.launch" }), "core", relayed)).toBe(true);
+    expect(
+      shouldExposeTool(makeEntry({ id: "host.call" }), "core", { ...relayed, hostCall: true })
+    ).toBe(false);
+    // Unlike a bound external session, a relayed one keeps its confirm-gated tools.
+    expect(
+      shouldExposeTool(
+        makeEntry({ id: "worktree.deleteOwned", danger: "confirm" }),
+        "core",
+        relayed
+      )
+    ).toBe(true);
   });
 });
 
@@ -2679,14 +2722,15 @@ describe("isWithheldFromBoundSession (#11789)", () => {
 // unscoped form or the owned twin is.
 describe("unscoped panel tools are reserved for renderer-owned origins (#12407)", () => {
   // An assistant whose lane is enrolled for messaging, and is this Shell's hub,
-  // so its own inbox tools (#13335) and host tools (#13336), reserved here too,
-  // are on its surface alongside the rest.
+  // so its own inbox tools (#13335) and host tools (#13336, #13493), reserved
+  // here too, are on its surface alongside the rest.
   const ASSISTANT = {
     workspaceBound: false,
     rendererOwnedOrigin: true,
     assistantMessaging: true,
     assistantSending: true,
     hubMessaging: true,
+    hostCall: true,
   };
   const TWIN_KEYS = new Set<string>(Object.keys(OWNED_TWIN_TOOLS));
   const TWIN_VALUES = new Set<string>(Object.values(OWNED_TWIN_TOOLS));

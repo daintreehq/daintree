@@ -2144,6 +2144,7 @@ describe("DaintreeAssistantSettingsTab accepting messages from other machines (#
     loadGlobalHooksAndServers: false,
     daintreeConfirmations: "inherit" as const,
     acceptRemoteMessages,
+    acceptRemoteControl: true,
   });
 
   beforeEach(() => {
