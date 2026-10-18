@@ -126,20 +126,6 @@ export interface GeneratedIpcInvokeMap {
     args: [options: import("./agent.js").SaveArtifactOptions];
     result: import("./agent.js").SaveArtifactResult | null;
   };
-  "assistant-messaging:get-state": {
-    args: [input?: import("./assistantMessaging.js").AssistantMessagingLaneRef | undefined];
-    result: import("./assistantMessaging.js").AssistantMessagingState;
-  };
-  "assistant-messaging:set-lane-enrolled": {
-    args: [
-      input: import("./assistantMessaging.js").AssistantMessagingLaneRef & { enrolled: boolean },
-    ];
-    result: import("./assistantMessaging.js").AssistantMessagingEnrollResult;
-  };
-  "assistant-messaging:set-paused": {
-    args: [paused: boolean];
-    result: boolean;
-  };
   "canopy-host:invoke": {
     args: [
       hostId: string,
@@ -2100,10 +2086,6 @@ export interface GeneratedIpcInvokeMap {
     args: [payload: import("./remoteHosts.js").AddHostPayload];
     result: import("../remoteHosts.js").HostDescriptor;
   };
-  "remote-hosts:cancel-assistant-exchange": {
-    args: [payload: import("./remoteHosts.js").AssistantExchangeCancelPayload];
-    result: import("./remoteHosts.js").AssistantExchangeView;
-  };
   "remote-hosts:cancel-install": {
     args: [payload: { opId: string }];
     result: boolean;
@@ -2155,10 +2137,6 @@ export interface GeneratedIpcInvokeMap {
   "remote-hosts:list": {
     args: [];
     result: import("../remoteHosts.js").HostListEntry[];
-  };
-  "remote-hosts:list-assistant-exchanges": {
-    args: [payload: import("./remoteHosts.js").AssistantExchangeListPayload];
-    result: import("./remoteHosts.js").AssistantExchangeView[];
   };
   "remote-hosts:list-clipboard-grants": {
     args: [payload: import("./remoteHosts.js").ListHostProjectsPayload];

@@ -31,9 +31,7 @@ import { safeFireAndForget } from "@/utils/safeFireAndForget";
 import { isBuiltInAgentId } from "@shared/config/agentIds";
 import { HelpIntroBanner } from "./HelpIntroBanner";
 import { usePaletteStore } from "@/store/paletteStore";
-import { HelpPanelHeader, type HelpPanelMessagingControls } from "./HelpPanelHeader";
-import { AssistantMessagingNotice } from "./AssistantMessagingNotice";
-import { useAssistantMessaging } from "@/hooks/useAssistantMessaging";
+import { HelpPanelHeader } from "./HelpPanelHeader";
 import { HelpSessionTabs, helpSessionTabId, type HelpSessionTab } from "./HelpSessionTabs";
 import { HelpSessionLaneRuntime } from "./HelpSessionLaneRuntime";
 import {
@@ -341,27 +339,6 @@ export function HelpPanel({
         : null,
     [activeWorkspaceId, activeWorkspacePath]
   );
-  const messaging = useAssistantMessaging(activeWorkspaceId, activeSlot, sessionId);
-  const messagingLane = messaging.state?.lane;
-  const messagingControls: HelpPanelMessagingControls | null =
-    messaging.state?.available && messagingLane
-      ? {
-          enrolled: messagingLane.enrolled,
-          // Turning it on needs a running assistant; turning it off never does.
-          canChangeEnrollment:
-            !messagingLane.enrolledElsewhere && (messagingLane.enrolled || Boolean(terminalId)),
-          enrollmentHint: messagingLane.enrolledElsewhere
-            ? "Turned on from another machine"
-            : !messagingLane.enrolled && !terminalId
-              ? "Start this assistant first"
-              : null,
-          paused: messaging.state.paused,
-          canPause: messaging.state.canPause,
-          pauseHint: messaging.state.canPause ? null : "Change this on the machine running it",
-          onEnrolledChange: messaging.setLaneEnrolled,
-          onPausedChange: messaging.setPaused,
-        }
-      : null;
 
   // The ActionContext pinned to this session at launch (#8772). Fetched once
   // per session id — the binding is fixed at provision time and only changes
@@ -1637,7 +1614,6 @@ export function HelpPanel({
         onOpenDocs={handleOpenAssistantDocs}
         onClose={handleClose}
         isFocused={isHighlighted}
-        messaging={messagingControls}
         newSessionAgentIds={supportedInstalledAgentIds}
         canStartNewSession={canStartSessionWithAgent}
         onNewSessionWithAgent={handleOpenSessionWithAgent}
@@ -1727,12 +1703,6 @@ export function HelpPanel({
           onOpenInstallerPage={handleOpenInstallerPage}
           onStartNewSession={handleRestartActiveSlot}
           onDismissSessionRevoked={dismissSessionRevoked}
-        />
-        <AssistantMessagingNotice
-          state={messaging.state}
-          refusal={messaging.refusal}
-          laneKey={messaging.laneKey}
-          onDismissRefusal={messaging.dismissRefusal}
         />
         {showTerminal ? (
           isMissingCli && agentId ? (

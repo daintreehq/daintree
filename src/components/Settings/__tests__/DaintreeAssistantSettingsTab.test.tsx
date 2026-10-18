@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { act, render, screen, fireEvent, waitFor, within } from "@testing-library/react";
+import { render, screen, fireEvent, waitFor, within } from "@testing-library/react";
 import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
 
 vi.stubGlobal(
@@ -12,6 +12,12 @@ vi.stubGlobal(
 );
 
 vi.mock("@/lib/notify", () => ({ notify: vi.fn() }));
+
+const remoteHostSupport = vi.hoisted(() => ({ supported: true }));
+vi.mock("@/lib/remoteHosts", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/remoteHosts")>()),
+  isRemoteHostSupported: () => remoteHostSupport.supported,
+}));
 vi.mock("@/utils/logger", () => ({
   logError: vi.fn(),
   logDebug: vi.fn(),
@@ -2063,9 +2069,9 @@ describe("SessionLiveStatusCard (live help session)", () => {
   });
 });
 
-describe("DaintreeAssistantSettingsTab accepting messages from other machines (#13441)", () => {
-  const LABEL = "Accept messages from other machines by default";
-  const savedSettings = (acceptRemoteMessages: boolean) => ({
+describe("DaintreeAssistantSettingsTab letting other machines' assistants work here (#13493, #13496)", () => {
+  const LABEL = "Let other machines' assistants work here";
+  const savedSettings = (acceptRemoteControl: boolean) => ({
     docSearch: true,
     daintreeControl: true,
     runbookSearch: true,
@@ -2077,8 +2083,7 @@ describe("DaintreeAssistantSettingsTab accepting messages from other machines (#
     idleHibernateMinutes: 5 as const,
     loadGlobalHooksAndServers: false,
     daintreeConfirmations: "inherit" as const,
-    acceptRemoteMessages,
-    acceptRemoteControl: true,
+    acceptRemoteControl,
   });
 
   beforeEach(() => {
@@ -2089,7 +2094,12 @@ describe("DaintreeAssistantSettingsTab accepting messages from other machines (#
     helpPanelState.setPreferredAgent = vi.fn();
     helpPanelState.clearDroppedPreferredAgent = vi.fn();
     mockGetAssistantSupportedAgentIds.mockReturnValue(["claude"]);
+    remoteHostSupport.supported = true;
     installApi({ getSettings: vi.fn().mockResolvedValue(savedSettings(true)) });
+  });
+
+  afterEach(() => {
+    remoteHostSupport.supported = true;
   });
 
   const waitForContent = (container: HTMLElement, text: string) =>
@@ -2100,36 +2110,6 @@ describe("DaintreeAssistantSettingsTab accepting messages from other machines (#
       { timeout: 5000 }
     );
 
-  function installMessaging(available: boolean) {
-    const listeners = new Set<() => void>();
-    let revision = 0;
-    let current = available;
-    const messaging = {
-      getState: vi.fn(async () => ({
-        available: current,
-        paused: false,
-        canPause: true,
-        lane: { enrolled: false, enrolledElsewhere: false, ended: null },
-        revision,
-      })),
-      setLaneEnrolled: vi.fn(),
-      setPaused: vi.fn(),
-      onChanged: vi.fn((listener: () => void) => {
-        listeners.add(listener);
-        return () => listeners.delete(listener);
-      }),
-    };
-    Object.assign(window.electron, { assistantMessaging: messaging });
-    return {
-      messaging,
-      push(next: boolean) {
-        current = next;
-        revision += 1;
-        for (const listener of [...listeners]) listener();
-      },
-    };
-  }
-
   const renderTab = () =>
     render(
       <SettingsValidationProvider>
@@ -2137,50 +2117,39 @@ describe("DaintreeAssistantSettingsTab accepting messages from other machines (#
       </SettingsValidationProvider>
     );
 
-  it("stays hidden where messaging between machines isn't offered", async () => {
-    const { messaging } = installMessaging(false);
+  it("stays hidden on a machine that can't be a host", async () => {
+    remoteHostSupport.supported = false;
     const { container } = renderTab();
     await waitForContent(container, "Search documentation");
-    await waitFor(() => expect(messaging.getState).toHaveBeenCalledWith(undefined));
-    // Absent after the answer landed, not merely before it did.
-    await act(async () => {
-      await messaging.getState.mock.results[0]?.value;
-    });
+    await waitFor(() => expect(window.electron.helpAssistant.getSettings).toHaveBeenCalled());
     expect(screen.queryByRole("switch", { name: LABEL })).toBeNull();
+    expect(screen.queryByRole("group", { name: "Other machines" })).toBeNull();
   });
 
-  it("shows the saved default as on, and persists turning it off", async () => {
-    installMessaging(true);
+  it("is the one switch for other machines, shows the saved default as on, and persists turning it off", async () => {
     const { container } = renderTab();
     await waitForContent(container, "Search documentation");
-    const toggle = await screen.findByRole("switch", { name: LABEL });
-    await waitFor(() => expect(window.electron.helpAssistant.getSettings).toHaveBeenCalled());
-    expect(toggle.getAttribute("aria-checked")).toBe("true");
+    const group = await screen.findByRole("group", { name: "Other machines" });
+    const switches = within(group).getAllByRole("switch");
+    expect(switches).toHaveLength(1);
+    const toggle = switches[0]!;
+    expect(screen.getByRole("switch", { name: LABEL })).toBe(toggle);
+    await waitFor(() => expect(toggle.getAttribute("aria-checked")).toBe("true"));
     fireEvent.click(toggle);
     await waitFor(() => {
       expect(window.electron.helpAssistant.setSettings).toHaveBeenCalledWith({
-        acceptRemoteMessages: false,
+        acceptRemoteControl: false,
       });
     });
   });
 
   it("shows a saved off as off", async () => {
     installApi({ getSettings: vi.fn().mockResolvedValue(savedSettings(false)) });
-    installMessaging(true);
     renderTab();
     await waitFor(() => {
       expect(screen.getByRole("switch", { name: LABEL }).getAttribute("aria-checked")).toBe(
         "false"
       );
     });
-  });
-
-  it("appears once the first host makes messaging available", async () => {
-    const { push } = installMessaging(false);
-    const { container } = renderTab();
-    await waitForContent(container, "Search documentation");
-    expect(screen.queryByRole("switch", { name: LABEL })).toBeNull();
-    push(true);
-    expect(await screen.findByRole("switch", { name: LABEL })).toBeTruthy();
   });
 });

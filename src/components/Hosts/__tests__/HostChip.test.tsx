@@ -69,8 +69,6 @@ function host(id: string, name: string, extra: Partial<HostListEntry> = {}): Hos
       lastSeenAt: null,
       addedAt: 1,
       notificationsEnabled: false,
-      assistantMessagingEnabled: false,
-      assistantStartEnabled: false,
       assistantControlEnabled: false,
     },
     connection: { status: "connected", rttMs: 1, handshake: HANDSHAKE },

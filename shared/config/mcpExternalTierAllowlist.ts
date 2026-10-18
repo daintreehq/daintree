@@ -265,10 +265,12 @@ export const MCP_EXTERNAL_TIER_TOOLS = [
  * Arguments of external tools that the external tier is not advertised, because
  * they only work for a caller with a pane of its own. `notify` types a line
  * into the caller's own prompt, and an api-key client has none: it is refused
- * if it sends one anyway, and `replyLines` only shapes that notice. Left off the listing so every such client does not
- * pay for an argument it can never use on every turn.
+ * if it sends one anyway, and `replyLines` only shapes that notice. `generation`
+ * names another assistant's run, which only an assistant may address (#13496).
+ * Left off the listing so every such client does not pay for an argument it can
+ * never use on every turn.
  */
 export const MCP_EXTERNAL_OMITTED_ARGS: Readonly<Record<string, readonly string[] | undefined>> = {
-  "terminal.sendCommandOwned": ["notify", "replyLines"],
+  "terminal.sendCommandOwned": ["notify", "replyLines", "generation"],
   "agent.launch": ["notify", "replyLines"],
 } satisfies Partial<Record<BuiltInActionId, readonly string[]>>;

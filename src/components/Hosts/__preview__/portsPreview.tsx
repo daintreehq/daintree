@@ -47,8 +47,6 @@ const host = (id: string, name: string, connected = true): HostListEntry => ({
     lastSeenAt: Date.now(),
     addedAt: 1,
     notificationsEnabled: false,
-    assistantMessagingEnabled: false,
-    assistantStartEnabled: false,
     assistantControlEnabled: false,
   },
   connection: connected

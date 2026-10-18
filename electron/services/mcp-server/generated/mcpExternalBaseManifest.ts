@@ -1993,7 +1993,7 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
     category: "terminal",
     danger: "safe",
     description:
-      "Read an agent's last transcript reply and unanswered tool calls, e.g. a question and its options. Agents this connection launched or was handed (right-click > Hand to orchestrator); Daintree's assistant: any in its project. Claude Code only. Not proof the agent is waiting; permission prompts are screen-only.",
+      "Read an agent's last transcript reply and unanswered tool calls, e.g. a question and its options. Agents this connection launched or was handed (right-click > Hand to orchestrator); Daintree's assistant: any in its project. Claude Code only, or another assistant's screen. Not proof the agent is waiting.",
     enabled: true,
     examples: [
       {
@@ -2171,6 +2171,28 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
           required: ["status", "reason"],
           additionalProperties: false,
         },
+        {
+          type: "object",
+          properties: {
+            status: {
+              type: "string",
+              const: "observed",
+            },
+            source: {
+              type: "string",
+              enum: ["handback", "screen"],
+              description: "Another assistant's screen, to its handback or before one.",
+            },
+            text: {
+              type: "string",
+            },
+            truncated: {
+              type: "boolean",
+            },
+          },
+          required: ["status", "source", "text", "truncated"],
+          additionalProperties: false,
+        },
       ],
       type: "object",
     },
@@ -2230,6 +2252,12 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
           description:
             "Ask the agent to end its reply with a Daintree marker, read back as `lastHandback`. Agent panes only.",
           type: "boolean",
+        },
+        generation: {
+          description: "Sending to another assistant: its generation from the assistant listing.",
+          type: "integer",
+          minimum: 0,
+          maximum: 9007199254740991,
         },
         notify: {
           description:

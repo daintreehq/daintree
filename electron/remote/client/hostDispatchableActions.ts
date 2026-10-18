@@ -31,12 +31,11 @@
  * them in its own main process — the batches (`*Many`, expanded there into
  * single calls this list already carries), `terminal.notifyWhenIdle`,
  * `mcp.surface`, `help.displayImage`, `skills.*`, `project.runCommand`,
- * `assistant.*` (a host's enrolled lane reads its inbox exactly while a Shell
- * drives it), the hub's
- * `host.*` messaging tools (a host can be a Shell to hosts of its own, and its
- * hub keeps reaching them while it is driven), the reads
- * and owned twins
- * that act after a host-side check — and their definitions here only throw.
+ * `assistant.list`, `assistant.start` and `agent.readQuota` (a Shell's
+ * assistant reaches the host's own assistants through them while it drives
+ * the project), `host.list` (a host can be a Shell to hosts of its own), the
+ * reads and owned twins that act after a host-side check — and their
+ * definitions here only throw.
  * They are listed because this list is also the manifest a host is shown: an
  * id left off it is a tool the host's session loses whenever a Shell drives
  * the project, though the host could still answer it (#13350). Listing one
@@ -60,21 +59,14 @@ export const HOST_DISPATCHABLE_ACTION_IDS: ReadonlySet<string> = new Set([
   "agent.listAvailable",
   "agent.listModels",
   "agent.listPresets",
-  "assistant.getInbox",
-  "assistant.reply",
-  "assistant.sendMessage",
+  "agent.readQuota",
+  "assistant.list",
+  "assistant.start",
   "browser.captureScreenshot",
   "file.view",
   "fleet.getRunStatus",
   "help.displayImage",
-  "host.cancelTask",
-  "host.getTask",
   "host.list",
-  "host.listAssistants",
-  "host.listTasks",
-  "host.readQuota",
-  "host.sendMessage",
-  "host.startAssistant",
   "host.switch",
   "mcp.surface",
   "project.openOnHost",

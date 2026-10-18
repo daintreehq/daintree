@@ -27,6 +27,7 @@ import {
   shouldExposeTool,
   isWithheldFromBoundSession,
   isWithheldFromRelaySession,
+  mayControlAssistants,
   UNBOUND_SESSION_SURFACE,
   ACTIONS_SEARCH_DEFAULT_LIMIT,
   ACTIONS_SEARCH_MAX_LIMIT,
@@ -440,92 +441,12 @@ describe("shouldExposeTool", () => {
     expect(TIER_ALLOWLISTS.external.has(entry.id)).toBe(true);
     expect(shouldExposeTool(entry, "external")).toBe(false);
   });
-  // #13335: an assistant's inbox tools are offered only while its own lane is
-  // enrolled for messaging, and never to a pane or an api-key client.
-  it.each(["assistant.getInbox", "assistant.reply"])(
-    "offers %s only to the assistant of an enrolled lane",
-    (id) => {
-      const entry = makeEntry({ id });
-      const assistant = { workspaceBound: false, rendererOwnedOrigin: true };
-      expect(shouldExposeTool(entry, "core", assistant)).toBe(false);
-      expect(shouldExposeTool(entry, "core", { ...assistant, assistantMessaging: true })).toBe(
-        true
-      );
-      expect(
-        shouldExposeTool(entry, "full", {
-          workspaceBound: false,
-          paneApproval: true,
-          assistantMessaging: true,
-        })
-      ).toBe(false);
-      expect(
-        shouldExposeTool(entry, "external", { workspaceBound: false, assistantMessaging: true })
-      ).toBe(false);
-    }
-  );
-  // #13338: sending to the hub is narrower again, a lane a remote Shell
-  // enrolled, so the hub itself never sees it.
-  it("offers assistant.sendMessage only to a lane that may send, never the hub", () => {
-    const entry = makeEntry({ id: "assistant.sendMessage" });
-    const assistant = { workspaceBound: false, rendererOwnedOrigin: true };
-    expect(shouldExposeTool(entry, "core", { ...assistant, assistantMessaging: true })).toBe(false);
-    expect(
-      shouldExposeTool(entry, "core", {
-        ...assistant,
-        assistantMessaging: true,
-        assistantSending: true,
-      })
-    ).toBe(true);
-    // Sending without the lane's own messaging is never enough.
-    expect(shouldExposeTool(entry, "core", { ...assistant, assistantSending: true })).toBe(false);
-    expect(
-      shouldExposeTool(entry, "full", {
-        workspaceBound: false,
-        paneApproval: true,
-        assistantMessaging: true,
-        assistantSending: true,
-      })
-    ).toBe(false);
-  });
-  // #13336 / #13469: the hub's host tools are offered only to this Shell's
-  // enrolled hub, all of them from core, and never to a pane or key.
-  it.each([
-    ["host.list", "core"],
-    ["host.listAssistants", "core"],
-    ["host.getTask", "core"],
-    ["host.listTasks", "core"],
-    ["host.readQuota", "core"],
-    ["host.sendMessage", "core"],
-    ["host.cancelTask", "core"],
-    ["host.startAssistant", "core"],
-  ] as const)("offers %s only to the hub, from the %s tier", (id, minimum) => {
+  // #13493: the host tools go by their own offer, to this machine's own
+  // assistant from core, hosts or not, and never to a pane or key.
+  it.each(["host.list", "host.call"])("offers %s only where it is offered, from core", (id) => {
     const entry = makeEntry({ id });
     const assistant = { workspaceBound: false, rendererOwnedOrigin: true };
-    const hub = { ...assistant, hubMessaging: true };
-    expect(shouldExposeTool(entry, "full", assistant)).toBe(false);
-    expect(shouldExposeTool(entry, "full", { ...assistant, assistantMessaging: true })).toBe(false);
-    expect(shouldExposeTool(entry, "full", hub)).toBe(true);
-    expect(shouldExposeTool(entry, "core", hub)).toBe(minimum === "core");
-    expect(
-      shouldExposeTool(entry, "full", {
-        workspaceBound: false,
-        paneApproval: true,
-        hubMessaging: true,
-      })
-    ).toBe(false);
-    expect(shouldExposeTool(entry, "external", { workspaceBound: false, hubMessaging: true })).toBe(
-      false
-    );
-  });
-
-  // #13493: host.call goes by its own offer, to this machine's own assistant
-  // from core, hosts or not, and never to a pane or key.
-  it("offers host.call only where it is offered, from core", () => {
-    const entry = makeEntry({ id: "host.call" });
-    const assistant = { workspaceBound: false, rendererOwnedOrigin: true };
     expect(shouldExposeTool(entry, "core", assistant)).toBe(false);
-    // The messaging offer, which needs a host to exist, is not this one.
-    expect(shouldExposeTool(entry, "core", { ...assistant, hubMessaging: true })).toBe(false);
     expect(shouldExposeTool(entry, "core", { ...assistant, hostCall: true })).toBe(true);
     expect(
       shouldExposeTool(entry, "full", { workspaceBound: false, paneApproval: true, hostCall: true })
@@ -535,6 +456,42 @@ describe("shouldExposeTool", () => {
     );
   });
 
+  // #13496: finding and starting assistants, and the quota, answer to their
+  // caller: an assistant here or another machine's through host.call, at any
+  // in-app tier; never a pane or an api-key client, whatever else it holds.
+  it.each(["assistant.list", "assistant.start", "agent.readQuota"])(
+    "offers %s to an assistant caller alone",
+    (id) => {
+      const entry = makeEntry({ id });
+      expect(mayControlAssistants("core", { assistantCaller: true })).toBe(true);
+      for (const tier of ["core", "full"] as const) {
+        expect(
+          shouldExposeTool(entry, tier, { workspaceBound: false, assistantCaller: true })
+        ).toBe(true);
+        expect(
+          shouldExposeTool(entry, tier, {
+            workspaceBound: true,
+            relay: true,
+            assistantCaller: true,
+          })
+        ).toBe(true);
+      }
+      expect(
+        shouldExposeTool(entry, "full", { workspaceBound: false, rendererOwnedOrigin: true })
+      ).toBe(false);
+      expect(
+        shouldExposeTool(entry, "full", {
+          workspaceBound: false,
+          paneApproval: true,
+          hostCall: true,
+        })
+      ).toBe(false);
+      expect(
+        shouldExposeTool(entry, "external", { workspaceBound: false, assistantCaller: true })
+      ).toBe(false);
+    }
+  );
+
   // #13493: a session another machine's assistant reaches through its Shell is
   // never offered a host tool or this machine's assistant-panel tools.
   it("withholds every host tool and this machine's panel tools from a relayed session", () => {
@@ -543,7 +500,7 @@ describe("shouldExposeTool", () => {
       expect(isWithheldFromRelaySession(id)).toBe(true);
     }
     expect(isWithheldFromRelaySession("help.displayImage")).toBe(true);
-    expect(isWithheldFromRelaySession("assistant.getInbox")).toBe(true);
+    expect(isWithheldFromRelaySession("assistant.list")).toBe(false);
     expect(isWithheldFromRelaySession("terminal.list")).toBe(false);
     expect(shouldExposeTool(makeEntry({ id: "terminal.list" }), "core", relayed)).toBe(true);
     expect(shouldExposeTool(makeEntry({ id: "agent.launch" }), "core", relayed)).toBe(true);
@@ -2337,14 +2294,13 @@ describe("filterIntrospectionResultForSession", () => {
       expect(McpUnavailableActionStubSchema.safeParse(stub).success).toBe(true);
     });
 
-    // #13469: the hub's sends sit on core, so a core session is never told to
-    // raise its tier for them, hub or not.
-    it.each(["host.sendMessage", "host.cancelTask", "host.startAssistant"])(
+    // The host and assistant tools exist only for an assistant, so a session
+    // is never told to raise its tier for them (#13493, #13496).
+    it.each(["host.list", "host.call", "assistant.list", "assistant.start", "agent.readQuota"])(
       "offers no upgrade stub for %s",
       (id) => {
-        const entry = makeEntry({ id, title: "Host messaging", category: "help", danger: "safe" });
+        const entry = makeEntry({ id, title: "Assistant tool", category: "help", danger: "safe" });
         expect(buildUnavailableStub(entry, firstParty())).toBeNull();
-        expect(buildUnavailableStub(entry, firstParty({ hubMessaging: true }))).toBeNull();
       }
     );
 
@@ -2743,16 +2699,14 @@ describe("isWithheldFromBoundSession (#11789)", () => {
 // decides whether a panel tool could be reached, the origin decides whether the
 // unscoped form or the owned twin is.
 describe("unscoped panel tools are reserved for renderer-owned origins (#12407)", () => {
-  // An assistant whose lane is enrolled for messaging, and is this Shell's hub,
-  // so its own inbox tools (#13335) and host tools (#13336, #13493), reserved
-  // here too, are on its surface alongside the rest.
+  // One of this machine's assistants, offered its host tools (#13493) and the
+  // tools it addresses other assistants with (#13496), reserved here too, on
+  // its surface alongside the rest.
   const ASSISTANT = {
     workspaceBound: false,
     rendererOwnedOrigin: true,
-    assistantMessaging: true,
-    assistantSending: true,
-    hubMessaging: true,
     hostCall: true,
+    assistantCaller: true,
   };
   const TWIN_KEYS = new Set<string>(Object.keys(OWNED_TWIN_TOOLS));
   const TWIN_VALUES = new Set<string>(Object.values(OWNED_TWIN_TOOLS));

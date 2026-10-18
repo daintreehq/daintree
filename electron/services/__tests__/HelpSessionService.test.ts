@@ -45,6 +45,7 @@ const {
     setHelpSessionIdResolver: vi.fn(),
     setSessionIdResolver: vi.fn(),
     setHelpSessionTerminalResolver: vi.fn(),
+    setAssistantControl: vi.fn(),
     disconnectHelpBearer: vi.fn(),
     resetHelpTransports: vi.fn(),
     recordTurnOutcome: vi.fn(),
@@ -152,7 +153,7 @@ import {
   codexTrustArgs,
   projectRuleRoots,
 } from "../HelpSessionService.js";
-import type { RunbooksHostState } from "../helpSessionRunbooks.js";
+import type { RunbooksHostsState } from "../helpSessionRunbooks.js";
 import { parse as parseToml } from "smol-toml";
 
 async function makeBundledHelpFolder(root: string): Promise<string> {
@@ -689,10 +690,11 @@ describe("HelpSessionService", () => {
     const LOCAL_WINDOW = 7;
     const REMOTE_VIEW = -3;
     const startedBy = {
+      kind: "relay",
       senderId: "sender-a",
       linkSessionId: "link-a",
       askingHelpSessionId: "hub-help-1",
-    };
+    } as const;
     const liveProbe = vi.fn(async () => ({ cwd: "/tmp/project" }));
 
     async function startWithoutView(slot = 0) {
@@ -759,6 +761,14 @@ describe("HelpSessionService", () => {
           windowId: NO_VIEW_HANDLE,
           projectViewWebContentsId: NO_VIEW_HANDLE,
           startedBy: { ...startedBy, linkSessionId: "" },
+        })
+      ).rejects.toThrow(/startedBy/);
+      await expect(
+        service.provisionSession({
+          ...provisionInput(),
+          windowId: NO_VIEW_HANDLE,
+          projectViewWebContentsId: NO_VIEW_HANDLE,
+          startedBy: { kind: "local", askingHelpSessionId: "" },
         })
       ).rejects.toThrow(/startedBy/);
     });
@@ -1227,9 +1237,11 @@ describe("HelpSessionService", () => {
       });
       expect(lane.mcpServers.daintree?.headers?.Authorization).toMatch(/^Bearer /);
       expect(lane.mcpServers["daintree-docs"]).toBeDefined();
+      // The model this build drives hosts with rides every runbook entry (#13496).
       expect(lane.mcpServers["daintree-runbooks"]).toEqual({
         type: "http",
         url: "https://assistant.daintree.org/v1/daintree/mcp",
+        headers: { "Daintree-Host-Control": "1" },
       });
       // The shared cwd file stays empty so nothing raises an approval prompt.
       expect((await readSharedMcp(result.sessionPath)).mcpServers).toEqual({});
@@ -4143,6 +4155,8 @@ describe("HelpSessionService", () => {
         'mcp_servers.daintree-runbooks.url="https://assistant.daintree.org/v1/daintree/mcp"',
         "-c",
         'mcp_servers.daintree-runbooks.default_tools_approval_mode="approve"',
+        "-c",
+        'mcp_servers.daintree-runbooks.http_headers={"Daintree-Host-Control"="1"}',
       ]);
       // Token must NEVER appear in argv — Codex reads it from PTY env via
       // `bearer_token_env_var`.
@@ -4371,6 +4385,7 @@ describe("HelpSessionService", () => {
       expect(mcp.mcpServers["daintree-runbooks"]).toEqual({
         type: "http",
         url: "https://assistant.daintree.org/v1/daintree/mcp",
+        headers: { "Daintree-Host-Control": "1" },
       });
     });
 
@@ -5005,58 +5020,29 @@ describe("HelpSessionService", () => {
     });
   });
 
-  describe("messaging note (#13333)", () => {
+  describe("retired messaging note (#13496)", () => {
     const START = "<!-- DAINTREE_MESSAGING_START -->";
+    const END = "<!-- DAINTREE_MESSAGING_END -->";
 
-    afterEach(() => {
-      service.setMessagingReach(null);
-    });
-
-    it("explains the wake line where messaging can reach the lane", async () => {
-      service.setMessagingReach(() => true);
-      const result = await service.provisionSession(provisionInput());
-      if (!result) throw new Error("expected result");
-
+    it("strips an older build's note from a reused session folder, keeping the rest", async () => {
+      const first = await service.provisionSession(provisionInput());
+      if (!first) throw new Error("expected result");
       for (const file of ["CLAUDE.md", "AGENTS.md"]) {
-        const content = await fs.readFile(path.join(result.sessionPath, file), "utf-8");
-        expect(content.match(new RegExp(START, "g")) ?? []).toHaveLength(1);
+        const target = path.join(first.sessionPath, file);
+        const content = await fs.readFile(target, "utf-8");
+        await fs.writeFile(
+          target,
+          `${content}\n${START}\n## Messages From Other Assistants\n${END}\n`
+        );
       }
-    });
-
-    it.each([
-      ["messaging never can", null],
-      ["messaging can't right now", () => false],
-    ] as const)("writes no note where %s", async (_label, reach) => {
-      service.setMessagingReach(reach);
-      const result = await service.provisionSession(provisionInput());
-      if (!result) throw new Error("expected result");
-
-      const content = await fs.readFile(path.join(result.sessionPath, "AGENTS.md"), "utf-8");
-      expect(content).not.toContain(START);
-    });
-
-    it("writes no note while Daintree control is off", async () => {
-      service.setMessagingReach(() => true);
-      mockStoreGet.mockImplementation((key: string) =>
-        key === "agentSettings" ? {} : { daintreeControl: false }
-      );
-      const result = await service.provisionSession(provisionInput());
-      if (!result) throw new Error("expected result");
-
-      const content = await fs.readFile(path.join(result.sessionPath, "AGENTS.md"), "utf-8");
-      expect(content).not.toContain(START);
-    });
-
-    it("removes the note on re-provision once messaging can't reach the lane", async () => {
-      service.setMessagingReach(() => true);
-      await service.provisionSession(provisionInput());
-      service.setMessagingReach(null);
       const second = await service.provisionSession(provisionInput());
       if (!second) throw new Error("expected result");
 
       for (const file of ["CLAUDE.md", "AGENTS.md"]) {
         const content = await fs.readFile(path.join(second.sessionPath, file), "utf-8");
         expect(content).not.toContain(START);
+        expect(content).not.toContain("Messages From Other Assistants");
+        expect(content).toContain("search_runbooks");
       }
     });
   });
@@ -5118,14 +5104,14 @@ describe("HelpSessionService", () => {
 
   describe("runbook host state (#13411)", () => {
     const RUNBOOKS_URL = "https://assistant.daintree.org/v1/daintree/mcp";
-    const hubWithLane: RunbooksHostState = { hosts: "connected", laneReachable: true };
+    const MODEL = { "Daintree-Host-Control": "1" };
 
     afterEach(() => {
       service.setRunbooksHostState(null);
     });
 
     it("hands Claude the state as literal headers on the runbook entry only", async () => {
-      service.setRunbooksHostState(() => hubWithLane);
+      service.setRunbooksHostState(() => "connected");
       const result = await service.provisionSession(provisionInput());
       if (!result) throw new Error("expected result");
 
@@ -5133,13 +5119,13 @@ describe("HelpSessionService", () => {
       expect(lane.mcpServers["daintree-runbooks"]).toEqual({
         type: "http",
         url: RUNBOOKS_URL,
-        headers: { "Daintree-Hosts": "connected", "Daintree-Lane": "reachable" },
+        headers: { ...MODEL, "Daintree-Hosts": "connected" },
       });
       expect(lane.mcpServers["daintree-docs"]?.headers).toBeUndefined();
     });
 
     it("hands Copilot the same headers in its .mcp.json", async () => {
-      service.setRunbooksHostState(() => ({ hosts: "configured", laneReachable: false }));
+      service.setRunbooksHostState(() => "configured");
       const result = await service.provisionSession({ ...provisionInput(), agentId: "copilot" });
       if (!result) throw new Error("expected result");
 
@@ -5147,12 +5133,12 @@ describe("HelpSessionService", () => {
       expect(mcp.mcpServers["daintree-runbooks"]).toEqual({
         type: "http",
         url: RUNBOOKS_URL,
-        headers: { "Daintree-Hosts": "configured" },
+        headers: { ...MODEL, "Daintree-Hosts": "configured" },
       });
     });
 
     it("hands Codex one http_headers override that parses as a TOML table", async () => {
-      service.setRunbooksHostState(() => hubWithLane);
+      service.setRunbooksHostState(() => "connected");
       const result = await service.provisionSession({ ...provisionInput(), agentId: "codex" });
       if (!result) throw new Error("expected result");
 
@@ -5162,26 +5148,29 @@ describe("HelpSessionService", () => {
       expect(overrides).toHaveLength(1);
       expect(args[args.indexOf(overrides[0]) - 1]).toBe("-c");
       expect(parseToml(`headers = ${overrides[0].slice(prefix.length)}`)).toEqual({
-        headers: { "Daintree-Hosts": "connected", "Daintree-Lane": "reachable" },
+        headers: { ...MODEL, "Daintree-Hosts": "connected" },
       });
     });
 
     it("takes one snapshot per provision, so the next session sees what changed", async () => {
-      const read = vi.fn<() => RunbooksHostState | null>(() => hubWithLane);
+      const read = vi.fn<() => RunbooksHostsState | null>(() => "connected");
       service.setRunbooksHostState(read);
       await service.provisionSession(provisionInput());
       expect(read).toHaveBeenCalledTimes(1);
 
-      read.mockReturnValue({ hosts: "none", laneReachable: false });
+      read.mockReturnValue("none");
       const second = await service.provisionSession(provisionInput());
       if (!second) throw new Error("expected result");
 
       expect(read).toHaveBeenCalledTimes(2);
       const lane = await readLaneConfig(second);
-      expect(lane.mcpServers["daintree-runbooks"]?.headers).toEqual({ "Daintree-Hosts": "none" });
+      expect(lane.mcpServers["daintree-runbooks"]?.headers).toEqual({
+        ...MODEL,
+        "Daintree-Hosts": "none",
+      });
     });
 
-    const unreported: [string, (() => RunbooksHostState | null) | null][] = [
+    const unreported: [string, (() => RunbooksHostsState | null) | null][] = [
       ["no state is wired", null],
       ["the state is unreported", () => null],
       [
@@ -5192,12 +5181,15 @@ describe("HelpSessionService", () => {
       ],
     ];
 
-    it.each(unreported)("sends no headers when %s", async (_label, read) => {
+    it.each(unreported)("sends the model header alone when %s", async (_label, read) => {
       service.setRunbooksHostState(read);
       const result = await service.provisionSession({ ...provisionInput(), agentId: "codex" });
       if (!result) throw new Error("expected result");
 
-      expect(service.getCodexLaunchArgs(result.token)!.join(" ")).not.toContain("http_headers");
+      const args = service.getCodexLaunchArgs(result.token)!;
+      const prefix = "mcp_servers.daintree-runbooks.http_headers=";
+      const override = args.find((arg) => arg.startsWith(prefix));
+      expect(parseToml(`headers = ${override!.slice(prefix.length)}`)).toEqual({ headers: MODEL });
       const claude = await service.provisionSession({
         ...provisionInput(),
         projectId: "proj-2",
@@ -5205,20 +5197,21 @@ describe("HelpSessionService", () => {
       });
       if (!claude) throw new Error("expected result");
       const lane = await readLaneConfig(claude);
-      expect(lane.mcpServers["daintree-runbooks"]).toEqual({ type: "http", url: RUNBOOKS_URL });
+      expect(lane.mcpServers["daintree-runbooks"]).toEqual({
+        type: "http",
+        url: RUNBOOKS_URL,
+        headers: MODEL,
+      });
     });
 
     it("keeps a Codex session's flags as provisioned when the state changes after", async () => {
-      const read = vi.fn<() => RunbooksHostState | null>(() => ({
-        hosts: "connected",
-        laneReachable: false,
-      }));
+      const read = vi.fn<() => RunbooksHostsState | null>(() => "connected");
       service.setRunbooksHostState(read);
       const result = await service.provisionSession({ ...provisionInput(), agentId: "codex" });
       if (!result) throw new Error("expected result");
       const provisioned = service.getCodexLaunchArgs(result.token);
 
-      read.mockReturnValue({ hosts: "none", laneReachable: false });
+      read.mockReturnValue("none");
       expect(service.getCodexLaunchArgs(result.token)).toEqual(provisioned);
       expect(read).toHaveBeenCalledTimes(1);
     });
@@ -5227,7 +5220,7 @@ describe("HelpSessionService", () => {
       ["runbook search is off", { runbookSearch: false }],
       ["Daintree control is off", { daintreeControl: false, runbookSearch: true }],
     ])("doesn't read the state while %s", async (_label, settings) => {
-      const read = vi.fn<() => RunbooksHostState | null>(() => hubWithLane);
+      const read = vi.fn<() => RunbooksHostsState | null>(() => "connected");
       service.setRunbooksHostState(read);
       mockStoreGet.mockReturnValue(settings);
       const result = await service.provisionSession(provisionInput());

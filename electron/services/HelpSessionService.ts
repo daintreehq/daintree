@@ -40,11 +40,10 @@ import {
   RUNBOOKS_BLOCK_START,
   RUNBOOKS_MCP_SERVER_NAME,
   buildConfirmationsAddendum,
-  buildMessagingAddendum,
   buildRunbooksAddendum,
   buildRunbooksHostHeaders,
   resolveRunbooksMcpUrl,
-  type RunbooksHostState,
+  type RunbooksHostsState,
 } from "./helpSessionRunbooks.js";
 import { agentSupportsAssistantContent, syncAssistantContent } from "./AssistantContentMirror.js";
 import {
@@ -166,6 +165,16 @@ export async function codexTrustArgs(sessionPath: string): Promise<string[]> {
   return entries.length > 0 ? ["-c", `projects={ ${entries.join(", ")} }`] : [];
 }
 
+function isValidStartedBy(startedBy: HelpSessionStartedBy): boolean {
+  const parts =
+    startedBy.kind === "relay"
+      ? [startedBy.senderId, startedBy.linkSessionId, startedBy.askingHelpSessionId]
+      : startedBy.kind === "local"
+        ? [startedBy.askingHelpSessionId]
+        : [];
+  return parts.length > 0 && parts.every((part) => typeof part === "string" && part.length > 0);
+}
+
 function runbooksEnabled(settings: { daintreeControl: boolean; runbookSearch: boolean }): boolean {
   return settings.daintreeControl && settings.runbookSearch;
 }
@@ -236,7 +245,7 @@ interface ProvisionInput {
    */
   actionContext?: ActionContext;
   /**
-   * Who asked for an assistant the host starts with no view (#13511). Only
+   * Who asked for an assistant started with no view (#13511, #13496). Only
    * with no view: `windowId` and `projectViewWebContentsId` are then both
    * `NO_VIEW_HANDLE`.
    */
@@ -244,16 +253,16 @@ interface ProvisionInput {
 }
 
 /**
- * Who asked the host to start an assistant with no view (#13511), taken at
- * launch from the link session the request came in on: the sender that
- * session proved, the session itself, and the Shell's help session that
- * asked. Kept for the run's whole life, whichever views show it later.
+ * Which assistant started one with no view (#13511, #13496), taken at launch
+ * from the caller's own session, never from anything it sent: one of this
+ * machine's assistants by its help session, or another machine's by the
+ * sender its link session proved, that link session, and the Shell's help
+ * session that asked. Kept for the run's whole life, whichever views show it
+ * later, and what decides who may close it.
  */
-export interface HelpSessionStartedBy {
-  senderId: string;
-  linkSessionId: string;
-  askingHelpSessionId: string;
-}
+export type HelpSessionStartedBy =
+  | { kind: "local"; askingHelpSessionId: string }
+  | { kind: "relay"; senderId: string; linkSessionId: string; askingHelpSessionId: string };
 
 export interface ProvisionResult {
   sessionId: string;
@@ -707,6 +716,7 @@ export class HelpSessionService {
   private readonly terminalBySessionId = new Map<string, string>();
   private mcpRegistry: WindowRegistry | null = null;
   private ptyClient: PtyKillClient | null = null;
+  private assistantControlWired = false;
   private pendingHibernationStore: PendingHelpHibernationStore | null = null;
   // #9639: tracks the in-flight capture owner per lane (slot key →
   // sessionId) while `gracefulKill` is outstanding. A placeholder
@@ -766,8 +776,7 @@ export class HelpSessionService {
   private onMcpSessionRepinnedFn: ((token: string) => void) | null = null;
   private disposed = false;
   private projectMetadataReader: ProjectMetadataReader | null = null;
-  private messagingReach: (() => boolean) | null = null;
-  private runbooksHostState: (() => RunbooksHostState | null) | null = null;
+  private runbooksHostState: (() => RunbooksHostsState | null) | null = null;
   private sweepTimer: ReturnType<typeof setInterval> | null = null;
 
   setMcpRegistry(registry: WindowRegistry): void {
@@ -782,31 +791,28 @@ export class HelpSessionService {
     this.projectMetadataReader = reader;
   }
 
-  /** Whether cross-host messaging can reach a lane on this machine; null where it never can. */
-  setMessagingReach(reach: (() => boolean) | null): void {
-    this.messagingReach = reach;
-  }
-
   /** What runbook search is told about this machine's Remote Hosts (#13411); null where nothing is told. */
-  setRunbooksHostState(read: (() => RunbooksHostState | null) | null): void {
+  setRunbooksHostState(read: (() => RunbooksHostsState | null) | null): void {
     this.runbooksHostState = read;
   }
 
   /**
-   * The runbook entry's host-state headers, read once per provision so every
-   * entry the session gets reports one snapshot, held until it relaunches. A
-   * read that fails sends none: an unreported caller searches the whole catalog.
+   * The runbook entry's headers: the host-control model this build speaks
+   * (#13496), and the host state, read once per provision so every entry the
+   * session gets reports one snapshot, held until it relaunches. A read that
+   * fails, or a build with no hosts at all, leaves the host state unreported:
+   * that caller searches the whole catalog of its model.
    */
   private readRunbooksHostHeaders(settings: {
     daintreeControl: boolean;
     runbookSearch: boolean;
   }): Record<string, string> {
-    if (!runbooksEnabled(settings) || !this.runbooksHostState) return {};
+    if (!runbooksEnabled(settings)) return {};
     try {
-      return buildRunbooksHostHeaders(this.runbooksHostState());
+      return buildRunbooksHostHeaders(this.runbooksHostState?.() ?? null);
     } catch (err) {
       console.warn("[HelpSessionService] Couldn't read the Remote Host state for runbooks:", err);
-      return {};
+      return buildRunbooksHostHeaders(null);
     }
   }
 
@@ -1601,10 +1607,7 @@ export class HelpSessionService {
               store.get("agentSettings")?.globalSkipPermissions
             )
         );
-        await this.writeMessagingAddendum(
-          sessionPath,
-          settings.daintreeControl && this.messagingReach?.() === true
-        );
+        await this.stripMessagingAddendum(sessionPath);
         // Same unconditional placement, for the same reason: the facts change
         // independently of the template, and every lane shares these files, so
         // only project-level observations go in — never a lane's focus.
@@ -3034,21 +3037,16 @@ export class HelpSessionService {
         throw new Error("projectViewWebContentsId must be a non-negative integer");
       }
     }
-    // No view means a host start, and a host start names who asked for it.
+    // No view means another assistant started it, and names which one.
     const noView =
       input.windowId === NO_VIEW_HANDLE && input.projectViewWebContentsId === NO_VIEW_HANDLE;
     if (noView !== (input.startedBy !== undefined)) {
       throw new Error("A session provisioned with no view must say who started it, and only then");
     }
-    if (
-      input.startedBy &&
-      [
-        input.startedBy.senderId,
-        input.startedBy.linkSessionId,
-        input.startedBy.askingHelpSessionId,
-      ].some((part) => typeof part !== "string" || !part)
-    ) {
-      throw new Error("startedBy needs a sender, a link session and an asking help session");
+    if (input.startedBy && !isValidStartedBy(input.startedBy)) {
+      throw new Error(
+        "startedBy needs its asking help session, and a relay's sender and link session"
+      );
     }
     if (typeof input.agentId !== "string" || !input.agentId.trim()) {
       throw new Error("agentId is required");
@@ -3215,6 +3213,25 @@ export class HelpSessionService {
     mcpServerService.setHelpSessionTerminalResolver((sessionId) =>
       this.getTerminalIdForSession(sessionId)
     );
+    // One assistant addressing another (#13496), within the project each
+    // session's lane is in. Idempotent re-set.
+    if (!this.assistantControlWired) {
+      const [{ liveAssistantTerminalControl }, { extractReply }, { getPtyClient }] =
+        await Promise.all([
+          import("./assistants/AssistantTerminalControl.js"),
+          import("./mcp-server/terminalNotify.js"),
+          import("../window/serviceRefs.js"),
+        ]);
+      mcpServerService.setAssistantControl({
+        control: liveAssistantTerminalControl({
+          help: this,
+          pty: () => getPtyClient(),
+          extractReply,
+        }),
+        sessionProject: (sessionId) => this.getSessionLane(sessionId)?.projectId ?? null,
+      });
+      this.assistantControlWired = true;
+    }
     // Eager MCP-session teardown on revoke (#9151). Idempotent re-set.
     this.setOnMcpSessionRevoked((token, sessionId) =>
       mcpServerService.disconnectHelpBearer(token, sessionId)
@@ -3654,13 +3671,12 @@ export class HelpSessionService {
     );
   }
 
-  /** The wake line's meaning (#13333), only where a wake can reach this lane. */
-  private async writeMessagingAddendum(sessionPath: string, reachable: boolean): Promise<void> {
+  /** An older build's rules for the retired inbox (#13496), gone from a reused session folder. */
+  private async stripMessagingAddendum(sessionPath: string): Promise<void> {
     const markers = { start: MESSAGING_BLOCK_START, end: MESSAGING_BLOCK_END };
-    const body = reachable ? buildMessagingAddendum() : null;
     await Promise.all(
       ["CLAUDE.md", "AGENTS.md"].map((name) =>
-        this.writeManagedBlock(path.join(sessionPath, name), markers, body)
+        this.writeManagedBlock(path.join(sessionPath, name), markers, null)
       )
     );
   }

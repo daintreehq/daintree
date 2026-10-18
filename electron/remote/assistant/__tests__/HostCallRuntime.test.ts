@@ -1,0 +1,155 @@
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  HOST_LIST_PROJECTS_MAX,
+  HostListResultSchema,
+} from "../../../../shared/types/hostControl.js";
+import { HostCallRuntime, type ObservedHost, type OpenRun } from "../HostCallRuntime.js";
+
+const RUN_A: OpenRun = {
+  projectId: "proj-1",
+  slot: 0,
+  sessionId: "a",
+  terminalId: "t-a",
+  launchGeneration: 1,
+};
+
+function host(overrides: Partial<ObservedHost> = {}): ObservedHost {
+  return {
+    hostId: "studio",
+    name: "studio-01",
+    connection: { status: "disconnected" },
+    lastSeenAt: null,
+    summary: null,
+    ...overrides,
+  };
+}
+
+const CONNECTED = { status: "connected", rttMs: 12, handshake: {} as never } as const;
+
+describe("HostCallRuntime (#13493, #13496)", () => {
+  let hosts: ObservedHost[];
+  let runs: Map<string, OpenRun>;
+  let control: Set<string>;
+  let listHostProjects: ReturnType<
+    typeof vi.fn<(hostId: string) => Promise<Array<{ id: string; name: string; path: string }>>>
+  >;
+  let runtime: HostCallRuntime;
+
+  beforeEach(() => {
+    hosts = [host()];
+    runs = new Map([["a", RUN_A]]);
+    control = new Set(["studio"]);
+    listHostProjects = vi.fn(async (_hostId: string) => [
+      { id: "proj-2", name: "website", path: "/repos/website" },
+      { id: "proj-3", name: "api", path: "/repos/api" },
+    ]);
+    runtime = new HostCallRuntime({
+      getSessionLane: (id) => (runs.has(id) ? { projectId: "proj-1", slot: 0 } : null),
+      callerRun: (id) => runs.get(id) ?? null,
+      client: () => null,
+      hosts: () => hosts,
+      inLocalView: () => true,
+      controlEnabled: (hostId) => control.has(hostId),
+      listHostProjects,
+    });
+  });
+
+  describe("who may call", () => {
+    it("refuses a session with no run of its own here, in words naming who may call", async () => {
+      runs.clear();
+      await expect(runtime.list("a")).resolves.toEqual({
+        ok: false,
+        code: "NOT_ELIGIBLE",
+        message: expect.stringMatching(/Daintree Assistant running on this machine/),
+      });
+    });
+
+    it("offers nothing once disposed", async () => {
+      runtime.dispose();
+      expect(runtime.isCallReachable("a")).toBe(false);
+      await expect(runtime.list("a")).resolves.toMatchObject({ ok: false, code: "NOT_ELIGIBLE" });
+    });
+  });
+
+  describe("host.list", () => {
+    it("lists every host as observed, naming a connected controlled host's projects", async () => {
+      hosts = [
+        host({
+          connection: CONNECTED,
+          lastSeenAt: 900,
+          summary: {
+            sampledAt: 950,
+            cpuPercent: 40,
+            memoryPressure: null,
+            thermal: "nominal",
+            agentsObserved: { working: 2, waiting: 1, idle: 0 },
+          } as never,
+        }),
+        host({ hostId: "off", name: "laptop", connection: CONNECTED }),
+      ];
+      const listed = await runtime.list("a");
+      if (!listed.ok) throw new Error("refused");
+      expect(HostListResultSchema.parse(listed.value)).toEqual(listed.value);
+      expect(listed.value.hosts).toEqual([
+        {
+          hostId: "studio",
+          name: "studio-01",
+          connection: "connected",
+          rttMs: 12,
+          lastSeenAt: 900,
+          load: { sampledAt: 950, cpuPercent: 40, memoryPressure: null, thermal: "nominal" },
+          agentsObserved: { working: 2, waiting: 1, idle: 0 },
+          projects: [
+            { projectId: "proj-2", name: "website" },
+            { projectId: "proj-3", name: "api" },
+          ],
+          control: true,
+        },
+        {
+          hostId: "off",
+          name: "laptop",
+          connection: "connected",
+          rttMs: 12,
+          lastSeenAt: null,
+          load: null,
+          agentsObserved: null,
+          // Its switch is off, so nothing is read from it.
+          projects: null,
+          control: false,
+        },
+      ]);
+      expect(listHostProjects).toHaveBeenCalledTimes(1);
+    });
+
+    it("drops a disconnected host's agent tally and reads none of its projects", async () => {
+      hosts = [host({ summary: { sampledAt: 1, agentsObserved: { working: 3 } } as never })];
+      const listed = await runtime.list("a");
+      if (!listed.ok) throw new Error("refused");
+      expect(listed.value.hosts[0]).toMatchObject({
+        connection: "disconnected",
+        agentsObserved: null,
+        projects: null,
+      });
+      expect(listHostProjects).not.toHaveBeenCalled();
+    });
+
+    it("names no projects when the host can't say, and caps how many it names", async () => {
+      hosts = [host({ connection: CONNECTED })];
+      listHostProjects.mockRejectedValueOnce(new Error("link dropped"));
+      let listed = await runtime.list("a");
+      if (!listed.ok) throw new Error("refused");
+      expect(listed.value.hosts[0]?.projects).toBeNull();
+
+      listHostProjects.mockResolvedValueOnce(
+        Array.from({ length: HOST_LIST_PROJECTS_MAX + 5 }, (_, index) => ({
+          id: `p-${index}`,
+          name: `Project ${index}`,
+          path: `/repos/${index}`,
+        }))
+      );
+      listed = await runtime.list("a");
+      if (!listed.ok) throw new Error("refused");
+      expect(listed.value.hosts[0]?.projects).toHaveLength(HOST_LIST_PROJECTS_MAX);
+    });
+  });
+});

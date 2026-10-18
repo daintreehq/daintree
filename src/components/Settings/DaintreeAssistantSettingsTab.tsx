@@ -11,7 +11,7 @@ import { Input } from "@/components/ui/input";
 import { useDeferredLoading, useHelpSessionLiveStatus } from "@/hooks";
 import { useVisibilityAwareInterval } from "@/hooks/useVisibilityAwareInterval";
 import { useMcpReadiness } from "@/hooks/useMcpReadiness";
-import { useAssistantMessagingAvailable } from "@/hooks/useAssistantMessaging";
+import { isRemoteHostSupported } from "@/lib/remoteHosts";
 import { actionService } from "@/services/ActionService";
 import { Button } from "@/components/ui/button";
 import { CopyButton } from "@/components/ui/CopyButton";
@@ -91,7 +91,6 @@ const SAVE_GROUP_BY_KEY: Record<keyof HelpAssistantSettings, SaveGroup> = {
   daintreeConfirmations: "security",
   auditRetention: "privacy",
   loadGlobalHooksAndServers: "content",
-  acceptRemoteMessages: "security",
   acceptRemoteControl: "security",
 };
 
@@ -107,7 +106,6 @@ const SETTING_KEYS: readonly (keyof HelpAssistantSettings)[] = [
   "daintreeConfirmations",
   "auditRetention",
   "loadGlobalHooksAndServers",
-  "acceptRemoteMessages",
   "acceptRemoteControl",
 ];
 
@@ -186,7 +184,6 @@ const SETTING_LABEL: Record<keyof HelpAssistantSettings, string> = {
   auditRetention: "Audit log retention",
   loadGlobalHooksAndServers: "Load my MCP servers and hooks",
   daintreeConfirmations: "Daintree confirmations",
-  acceptRemoteMessages: "Accept messages from other machines by default",
   acceptRemoteControl: "Let other machines' assistants work here",
 };
 
@@ -207,7 +204,6 @@ const DEFAULT_SETTINGS: HelpAssistantSettings = {
   idleHibernateMinutes: 5,
   loadGlobalHooksAndServers: false,
   daintreeConfirmations: "inherit",
-  acceptRemoteMessages: true,
   acceptRemoteControl: true,
 };
 
@@ -378,8 +374,8 @@ export function DaintreeAssistantSettingsTab() {
   // separate mcpStatus state still supplies apiKey for copy/rotate (not in
   // the runtime snapshot). Keep both — they update independently (lesson #4958).
   const runtimeSnapshot = useMcpReadiness();
-  // Hidden on Windows and, in a window of this machine, until it has a host.
-  const messagingAvailable = useAssistantMessagingAvailable();
+  // Only a machine that can be a host is reached by other machines' assistants.
+  const remoteControlOffered = isRemoteHostSupported();
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
   // Failures of one-off actions stay on the section they belong to, not at the page foot.
@@ -877,10 +873,6 @@ export function DaintreeAssistantSettingsTab() {
     void persist({ daintreeConfirmations: value });
   };
 
-  const toggleAcceptRemoteMessages = () => {
-    void persist({ acceptRemoteMessages: !settings.acceptRemoteMessages });
-  };
-
   const toggleAcceptRemoteControl = () => {
     void persist({ acceptRemoteControl: !settings.acceptRemoteControl });
   };
@@ -1236,8 +1228,8 @@ export function DaintreeAssistantSettingsTab() {
       <SettingsSection
         title="Security"
         description={
-          messagingAvailable
-            ? "How much of Daintree the assistant can reach, which confirmations it skips, and whether other machines can message it"
+          remoteControlOffered
+            ? "How much of Daintree the assistant can reach, which confirmations it skips, and whether other machines' assistants can work here"
             : "How much of Daintree the assistant can reach, and which confirmations it skips"
         }
       >
@@ -1315,24 +1307,12 @@ export function DaintreeAssistantSettingsTab() {
           />
         </SettingsGroup>
 
-        {messagingAvailable && (
+        {remoteControlOffered && (
           <SettingsGroup label="Other machines">
-            <SettingsSwitchCard
-              id="assistant-accept-remote-messages"
-              title="Accept messages from other machines by default"
-              subtitle="Any machine connected to this one as its host can message the assistants running here, wherever they run. Off, none of them takes a new message from another machine. Turning one off in its panel lasts until that assistant restarts."
-              isEnabled={settings.acceptRemoteMessages}
-              onChange={toggleAcceptRemoteMessages}
-              disabled={settingsUnavailable}
-              isModified={settings.acceptRemoteMessages !== DEFAULT_SETTINGS.acceptRemoteMessages}
-              onReset={() =>
-                void persist({ acceptRemoteMessages: DEFAULT_SETTINGS.acceptRemoteMessages })
-              }
-            />
             <SettingsSwitchCard
               id="assistant-accept-remote-control"
               title="Let other machines' assistants work here"
-              subtitle="An assistant on a machine connected to this one as its host can run Daintree's tools here, within this machine's own tool sets. Changing a project needs that machine's window to control it."
+              subtitle="An assistant on a machine connected to this one as its host can run Daintree's tools here, within this machine's own tool sets. That includes finding, starting and messaging the assistants running here."
               isEnabled={settings.acceptRemoteControl}
               onChange={toggleAcceptRemoteControl}
               disabled={settingsUnavailable}

@@ -49,17 +49,6 @@ export interface GeneratedElectronAPI {
       ...args: IpcInvokeMap["app:get-version-info"]["args"]
     ): Promise<IpcInvokeMap["app:get-version-info"]["result"]>;
   };
-  assistantMessaging: {
-    getState(
-      ...args: IpcInvokeMap["assistant-messaging:get-state"]["args"]
-    ): Promise<IpcInvokeMap["assistant-messaging:get-state"]["result"]>;
-    setLaneEnrolled(
-      ...args: IpcInvokeMap["assistant-messaging:set-lane-enrolled"]["args"]
-    ): Promise<IpcInvokeMap["assistant-messaging:set-lane-enrolled"]["result"]>;
-    setPaused(
-      ...args: IpcInvokeMap["assistant-messaging:set-paused"]["args"]
-    ): Promise<IpcInvokeMap["assistant-messaging:set-paused"]["result"]>;
-  };
   canopy: {
     answer(
       ...args: IpcInvokeMap["canopy:answer"]["args"]
@@ -1167,9 +1156,6 @@ export interface GeneratedElectronAPI {
     add(
       ...args: IpcInvokeMap["remote-hosts:add"]["args"]
     ): Promise<IpcInvokeMap["remote-hosts:add"]["result"]>;
-    cancelAssistantExchange(
-      ...args: IpcInvokeMap["remote-hosts:cancel-assistant-exchange"]["args"]
-    ): Promise<IpcInvokeMap["remote-hosts:cancel-assistant-exchange"]["result"]>;
     cancelInstall(
       ...args: IpcInvokeMap["remote-hosts:cancel-install"]["args"]
     ): Promise<IpcInvokeMap["remote-hosts:cancel-install"]["result"]>;
@@ -1209,9 +1195,6 @@ export interface GeneratedElectronAPI {
     list(
       ...args: IpcInvokeMap["remote-hosts:list"]["args"]
     ): Promise<IpcInvokeMap["remote-hosts:list"]["result"]>;
-    listAssistantExchanges(
-      ...args: IpcInvokeMap["remote-hosts:list-assistant-exchanges"]["args"]
-    ): Promise<IpcInvokeMap["remote-hosts:list-assistant-exchanges"]["result"]>;
     listClipboardGrants(
       ...args: IpcInvokeMap["remote-hosts:list-clipboard-grants"]["args"]
     ): Promise<IpcInvokeMap["remote-hosts:list-clipboard-grants"]["result"]>;

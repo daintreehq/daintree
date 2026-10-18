@@ -39,7 +39,7 @@ import type { HostSocketLocation } from "./hostSocketPath.js";
 import { initRemoteHostsHost } from "./initHost.js";
 import { installHostMetricsHost } from "../metrics/hostMetricsHost.js";
 import { installCanopyHost } from "../canopy/hostInstall.js";
-import { installAssistantExchangeHost } from "../assistant/hostExchanges.js";
+import { installAssistantSenderHost } from "../assistant/hostSenders.js";
 import { installHostMcpRelay } from "../assistant/hostMcpRelay.js";
 import { getHelpAssistantSettings } from "../../ipc/handlers/helpAssistant.js";
 import { projectStore } from "../../services/ProjectStore.js";
@@ -157,9 +157,6 @@ async function buildHostListener(
     launchCommand: hostLaunchCommand(),
     observeWorkingAgents: async () => (await observeAgents())?.working ?? null,
   });
-  // Runs after the server closes: closing ends every session without an expiry
-  // event, and no Shell can resume one, so their lanes are released here.
-  teardowns.push(() => getRemoteService("assistantMessagingPolicy")?.releaseRemoteShells());
   teardowns.push(() => server.close());
   teardowns.push(registerRemoteService("hostServer", server));
 
@@ -175,8 +172,9 @@ async function buildHostListener(
   teardowns.push(await installHostMetricsHost(server));
   // Canopy for Shells reading this host from a view bound elsewhere.
   teardowns.push(installCanopyHost(server));
-  // Assistant exchanges a Shell sends to this host's enrolled lanes, view or not.
-  teardowns.push(await installAssistantExchangeHost(server));
+  // The sender each Shell proves, for the tools this host runs for its
+  // assistants, and what v0.44 Shells still read of their retired exchanges (#13496).
+  teardowns.push(await installAssistantSenderHost(server));
   // This host's own tools, run for a Shell's assistant through this host's MCP gates (#13493).
   const relay = installHostMcpRelay(server, {
     senders: () => getRemoteService("assistantSenderSessions"),
@@ -343,9 +341,6 @@ async function buildHostListener(
         detachTerminalBridge(endpointId);
         detachWorktreePortBridge(endpointId);
       }
-      // That Shell can't come back as this session: lanes it enrolled end, unless
-      // its sender was proven, when they wait for its next session (bindSender).
-      getRemoteService("assistantMessagingPolicy")?.releaseLinkSession(sessionId);
       notify();
     })
   );

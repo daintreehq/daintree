@@ -164,15 +164,9 @@ function sanitize(raw: unknown): HostDescriptor[] {
       lastSeenAt: typeof host.lastSeenAt === "number" ? host.lastSeenAt : null,
       addedAt: typeof host.addedAt === "number" ? host.addedAt : 0,
       notificationsEnabled: host.notificationsEnabled === true,
-      // A field the record never had reads as an SSH host's default, on (#13469).
-      assistantMessagingEnabled: storedSwitch(host.assistantMessagingEnabled, connection),
-      assistantStartEnabled: storedSwitch(host.assistantStartEnabled, connection),
-      // A host from before control existed starts where its messaging was, so
-      // one the person turned messaging off for starts with control off (#13493).
-      assistantControlEnabled:
-        host.assistantControlEnabled === undefined
-          ? storedSwitch(host.assistantMessagingEnabled, connection)
-          : host.assistantControlEnabled === true,
+      // A field the record never had reads as an SSH host's default, on. Its
+      // retired messaging switches were folded into it at migration (#13496).
+      assistantControlEnabled: storedSwitch(host.assistantControlEnabled, connection),
     });
   }
   return out;
@@ -232,9 +226,7 @@ export class HostRegistry {
       addedAt: this.now(),
       notificationsEnabled: false,
       // A Shell that reaches a host over SSH can already run anything there as
-      // that user; a message, or an assistant started there, is no more.
-      assistantMessagingEnabled: connection.kind === "ssh",
-      assistantStartEnabled: connection.kind === "ssh",
+      // that user; a tool run there, or an assistant started there, is no more.
       assistantControlEnabled: connection.kind === "ssh",
     };
     this.write([...hosts, descriptor]);
@@ -271,18 +263,6 @@ export class HostRegistry {
         throw invalid("notificationsEnabled must be true or false.");
       }
       next.notificationsEnabled = payload.notificationsEnabled;
-    }
-    if (payload.assistantMessagingEnabled !== undefined) {
-      if (typeof payload.assistantMessagingEnabled !== "boolean") {
-        throw invalid("assistantMessagingEnabled must be true or false.");
-      }
-      next.assistantMessagingEnabled = payload.assistantMessagingEnabled;
-    }
-    if (payload.assistantStartEnabled !== undefined) {
-      if (typeof payload.assistantStartEnabled !== "boolean") {
-        throw invalid("assistantStartEnabled must be true or false.");
-      }
-      next.assistantStartEnabled = payload.assistantStartEnabled;
     }
     if (payload.assistantControlEnabled !== undefined) {
       if (typeof payload.assistantControlEnabled !== "boolean") {

@@ -277,21 +277,10 @@ export interface HostDescriptor {
   /** Cross-host notifications are opt-in per host. */
   notificationsEnabled: boolean;
   /**
-   * Whether this Shell's assistant and the host's assistants may message each
-   * other. On for an SSH host, and kept across a change of target; the person
-   * can turn it off.
-   */
-  assistantMessagingEnabled: boolean;
-  /**
-   * Whether this Shell's hub assistant may start an assistant in one of the
-   * host's projects and enroll it for itself, without a person there. On for
-   * an SSH host like messaging, and only acts with messaging on.
-   */
-  assistantStartEnabled: boolean;
-  /**
    * Whether this Shell's assistants may run the host's own Daintree tools
-   * there through `host.call` (#13493). On for an SSH host; a host the person
-   * turned messaging off for starts with it off. Independent of messaging.
+   * there through `host.call` (#13493): which is also how they find, start
+   * and message the host's assistants (#13496). On for an SSH host, kept
+   * across a change of target; the person can turn it off.
    */
   assistantControlEnabled: boolean;
 }

@@ -56,32 +56,6 @@ vi.mock("@/components/ui/dropdown-menu", () => ({
       {children}
     </button>
   ),
-  DropdownMenuCheckboxItem: ({
-    children,
-    checked,
-    disabled,
-    onCheckedChange,
-    "aria-describedby": describedBy,
-    "aria-labelledby": labelledBy,
-  }: {
-    children: ReactNode;
-    checked?: boolean;
-    disabled?: boolean;
-    onCheckedChange?: (checked: boolean) => void;
-    "aria-describedby"?: string;
-    "aria-labelledby"?: string;
-  }) => (
-    <button
-      role="menuitemcheckbox"
-      aria-describedby={describedBy}
-      aria-labelledby={labelledBy}
-      aria-checked={checked ? "true" : "false"}
-      disabled={disabled}
-      onClick={() => onCheckedChange?.(!checked)}
-    >
-      {children}
-    </button>
-  ),
   DropdownMenuSeparator: () => <hr />,
 }));
 
@@ -205,77 +179,6 @@ describe("HelpPanelHeader", () => {
 
     fireEvent.click(getByText("Resume a past session…"));
     expect(onResumePastSession).toHaveBeenCalledTimes(1);
-  });
-
-  describe("messaging between machines", () => {
-    const controls = (
-      overrides: Partial<NonNullable<ComponentProps<typeof HelpPanelHeader>["messaging"]>> = {}
-    ) => ({
-      enrolled: false,
-      canChangeEnrollment: true,
-      enrollmentHint: null,
-      paused: false,
-      canPause: true,
-      pauseHint: null,
-      onEnrolledChange: vi.fn(),
-      onPausedChange: vi.fn(),
-      ...overrides,
-    });
-    const items = (container: HTMLElement) =>
-      Array.from(container.querySelectorAll('[role="menuitemcheckbox"]')) as HTMLButtonElement[];
-
-    it("offers nothing while there's no host or the platform has no messaging", () => {
-      const { container } = renderHeader({ messaging: null });
-      expect(items(container)).toHaveLength(0);
-    });
-
-    it("keeps both labels the same whatever the state, carrying it in the check", () => {
-      const off = renderHeader({ messaging: controls() });
-      const offLabels = items(off.container).map((item) => item.textContent);
-      const offChecks = items(off.container).map((item) => item.getAttribute("aria-checked"));
-      off.unmount();
-      const on = renderHeader({ messaging: controls({ enrolled: true, paused: true }) });
-      expect(items(on.container).map((item) => item.textContent)).toEqual(offLabels);
-      expect(offChecks).toEqual(["false", "false"]);
-      expect(items(on.container).map((item) => item.getAttribute("aria-checked"))).toEqual([
-        "true",
-        "true",
-      ]);
-    });
-
-    it("hands each toggle's new value to its own handler", () => {
-      const messaging = controls({ paused: true });
-      const { container } = renderHeader({ messaging });
-      const [accept, pause] = items(container);
-      fireEvent.click(accept!);
-      fireEvent.click(pause!);
-      expect(messaging.onEnrolledChange).toHaveBeenCalledWith(true);
-      expect(messaging.onPausedChange).toHaveBeenCalledWith(false);
-    });
-
-    it("disables what this window can't change, and says why under the unchanged label", () => {
-      const { container } = renderHeader({
-        messaging: controls({
-          canChangeEnrollment: false,
-          enrollmentHint: "Start this assistant first",
-          canPause: false,
-          pauseHint: "Change this on the machine running it",
-        }),
-      });
-      const toggles = items(container);
-      expect(toggles.map((item) => item.disabled)).toEqual([true, true]);
-      for (const [item, hint] of [
-        [toggles[0]!, "Start this assistant first"],
-        [toggles[1]!, "Change this on the machine running it"],
-      ] as const) {
-        const describedBy = item.getAttribute("aria-describedby");
-        expect(describedBy).toBeTruthy();
-        expect(container.querySelector(`[id="${describedBy}"]`)?.textContent).toBe(hint);
-        // The hint describes the toggle; its name stays the fixed label.
-        const labelledBy = item.getAttribute("aria-labelledby");
-        expect(container.querySelector(`[id="${labelledBy}"]`)?.textContent).not.toContain(hint);
-      }
-    });
   });
 
   describe("new session on a named agent (#13442)", () => {

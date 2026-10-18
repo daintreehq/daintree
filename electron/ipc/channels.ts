@@ -428,10 +428,6 @@ export const CHANNELS = {
   KEEP_AWAKE_GET_STATE: "keep-awake:get-state",
   KEEP_AWAKE_UPDATE_CONFIG: "keep-awake:update-config",
   KEEP_AWAKE_STATE_CHANGED: "keep-awake:state-changed",
-  ASSISTANT_MESSAGING_GET_STATE: "assistant-messaging:get-state",
-  ASSISTANT_MESSAGING_SET_LANE_ENROLLED: "assistant-messaging:set-lane-enrolled",
-  ASSISTANT_MESSAGING_SET_PAUSED: "assistant-messaging:set-paused",
-  ASSISTANT_MESSAGING_CHANGED: "assistant-messaging:changed",
   HIBERNATION_GET_CONFIG: "hibernation:get-config",
   HIBERNATION_UPDATE_CONFIG: "hibernation:update-config",
   HIBERNATION_PROJECT_HIBERNATED: "hibernation:project-hibernated",
@@ -1342,8 +1338,6 @@ export const CHANNELS = {
   REMOTE_HOSTS_LIST_PLUGIN_VIEW_CONSENTS: "remote-hosts:list-plugin-view-consents",
   REMOTE_HOSTS_RESET_PLUGIN_VIEW_CONSENT: "remote-hosts:reset-plugin-view-consent",
   REMOTE_HOSTS_PREPARE_PLUGIN_VIEW: "remote-hosts:prepare-plugin-view",
-  REMOTE_HOSTS_LIST_ASSISTANT_EXCHANGES: "remote-hosts:list-assistant-exchanges",
-  REMOTE_HOSTS_CANCEL_ASSISTANT_EXCHANGE: "remote-hosts:cancel-assistant-exchange",
   REMOTE_HOSTS_EVENT: "remote-hosts:event",
 
   // Remote Hosts: hostMode (shell).

@@ -198,8 +198,6 @@ function entry(spec: HostSpec, connection: HostConnectionState): HostListEntry {
       lastSeenAt: Date.now() - 3_600_000,
       addedAt: Date.now() - 30 * 86_400_000,
       notificationsEnabled: false,
-      assistantMessagingEnabled: false,
-      assistantStartEnabled: false,
       assistantControlEnabled: false,
     },
     connection,

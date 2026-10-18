@@ -28,11 +28,6 @@ import {
 } from "../../../shared/types/terminalNotify.js";
 import { readTailSnapshot, tailCapturedOutput } from "../../../shared/utils/artifactParser.js";
 import { detectHandback } from "../pty/HandbackDetector.js";
-import {
-  EXCHANGE_UPDATE_LINE_PREFIX,
-  LANE_INBOX_TOOL,
-  LANE_WAKE_LINE_PREFIX,
-} from "../helpSessionRunbooks.js";
 import { evaluateWakeGate, wakeGateOptionsFor } from "../../../shared/utils/terminalWakeGate.js";
 import { fenceFor } from "../../../shared/utils/quoteFence.js";
 import { createLogger } from "../../utils/logger.js";
@@ -490,7 +485,8 @@ export interface ExtractedReply {
 export function extractReply(
   serialized: string,
   lines: number,
-  endAt: ObservedMarker | boolean
+  endAt: ObservedMarker | boolean,
+  maxChars: number = NOTIFY_REPLY_MAX_CHARS
 ): ExtractedReply {
   if (lines <= 0) return { reply: null, reachedHandback: false };
   const tail = tailCapturedOutput(serialized, REPLY_SEARCH_ROWS, true);
@@ -511,8 +507,8 @@ export function extractReply(
   }
   while (rows.length > 0 && rows[0].trim() === "") rows.shift();
   let text = rows.join("\n");
-  if (text.length > NOTIFY_REPLY_MAX_CHARS) {
-    text = cutToNewestChars(text, NOTIFY_REPLY_MAX_CHARS);
+  if (text.length > maxChars) {
+    text = cutToNewestChars(text, maxChars);
     truncated = true;
   }
   if (text.length === 0) return { reply: null, reachedHandback: false };
@@ -690,25 +686,27 @@ export type LaneWakeOutcome =
 export type LaneWakeCheck = { kind: "ready" } | { kind: "held" | "unavailable"; reason: string };
 
 /**
- * A message waiting for an enrolled assistant lane (#13333). It rides its
- * pane's notice line, so one writer types into that prompt. The line carries
- * `id` and fixed wording, never anything the sender wrote.
+ * A line for an assistant's own pane that no terminal of this machine fired.
+ * It rides that pane's notice line, so one writer types into that prompt, and
+ * carries fixed wording, never anything another machine's assistant wrote.
  */
 export interface LaneWake {
-  /** The exchange's opaque handle; see {@link LANE_WAKE_ID_PATTERN}. */
+  /** Its opaque handle, the same on a resend; see {@link LANE_WAKE_ID_PATTERN}. */
   id: string;
   /**
-   * `message` (the default) tells a receiving lane a message arrived;
-   * `update` tells an assistant one of its own exchanges changed state (#13337);
    * `notice` carries what a Remote Host saw of a terminal a relayed call asked
-   * about (#13500), in {@link LaneWake.hostNotice}.
+   * about (#13500), in {@link LaneWake.hostNotice}; `retired` says which
+   * messages this Shell sent through the retired inbox will get no reply
+   * (#13496), in {@link LaneWake.retired}.
    */
-  kind?: "message" | "update" | "notice";
+  kind: "notice" | "retired";
   /**
    * A `notice`'s observation. Only the host's name as this Shell knows it and
    * the host's observations: the line is still Daintree's own wording.
    */
   hostNotice?: { hostName: string; notice: FiredNotice };
+  /** A `retired` line's hosts, by the name this Shell knows each by, and how many each held. */
+  retired?: ReadonlyArray<{ hostName: string; count: number }>;
   /** Asked synchronously immediately before the line is typed, and while it waits. */
   recheck(): LaneWakeCheck;
   /**
@@ -727,18 +725,21 @@ export const LANE_WAKE_MAX_PENDING_MS = 10 * 60_000;
 export const LANE_WAKE_RECHECK_MS = 5_000;
 export const MAX_QUEUED_WAKES_PER_PANE = 32;
 
-/** The fixed line a wake types: Daintree's own wording and the exchange handles, nothing else. */
-export function formatLaneWakeLine(ids: readonly string[]): string {
-  const handles = ids.join(", ");
-  return ids.length === 1
-    ? `${LANE_WAKE_LINE_PREFIX} has a new message (exchange ${handles}). Read it with ${LANE_INBOX_TOOL}.`
-    : `${LANE_WAKE_LINE_PREFIX} has ${ids.length} new messages (exchanges ${handles}). Read them with ${LANE_INBOX_TOOL}.`;
-}
-
-/** The fixed line telling an assistant its exchanges moved: Daintree's own wording and the handles. */
-export function formatExchangeUpdateLine(ids: readonly string[]): string {
-  const noun = ids.length === 1 ? "exchange" : "exchanges";
-  return `${EXCHANGE_UPDATE_LINE_PREFIX} update (${noun} ${ids.join(", ")}).`;
+/**
+ * The fixed line telling an assistant that messages sent through the retired
+ * inbox will get no reply (#13496): Daintree's own wording, each host's name
+ * and a count, nothing else. "No longer followed" rather than "dropped": the
+ * host's assistant may already have done the work.
+ */
+export function formatRetiredExchangesLine(
+  hosts: ReadonlyArray<{ hostName: string; count: number }>
+): string {
+  const named = hosts.map(
+    ({ hostName, count }) => `${count} on host "${displayNoticeHostName(hostName)}"`
+  );
+  const total = hosts.reduce((sum, { count }) => sum + count, 0);
+  const noun = total === 1 ? "message" : "messages";
+  return `Daintree: assistant messaging was retired in this update, so ${total} ${noun} sent to other hosts' assistants will get no reply and are no longer followed: ${named.join(", ")}. Their work may already have run. Check it there with host.call before asking again.`;
 }
 
 interface WakeEntry {
@@ -2491,10 +2492,9 @@ export class TerminalNotifyService {
     for (const entry of wakes) entry.token = token;
     const dropped = entries.length > 0 ? owner.droppedCount : 0;
     owner.droppedCount -= dropped;
-    const messageIds = wakes
-      .filter((e) => (e.wake.kind ?? "message") === "message")
-      .map((e) => e.wake.id);
-    const updateIds = wakes.filter((e) => e.wake.kind === "update").map((e) => e.wake.id);
+    const retired = wakes.flatMap((e) =>
+      e.wake.kind === "retired" ? [...(e.wake.retired ?? [])] : []
+    );
     const hostNotices = new Map<string, FiredNotice[]>();
     for (const { wake } of wakes) {
       if (wake.kind !== "notice" || wake.hostNotice === undefined) continue;
@@ -2502,8 +2502,7 @@ export class TerminalNotifyService {
       hostNotices.set(hostName, [...(hostNotices.get(hostName) ?? []), notice]);
     }
     const lines = [
-      ...(messageIds.length > 0 ? [formatLaneWakeLine(messageIds)] : []),
-      ...(updateIds.length > 0 ? [formatExchangeUpdateLine(updateIds)] : []),
+      ...(retired.length > 0 ? [formatRetiredExchangesLine(retired)] : []),
       ...[...hostNotices].map(([hostName, notices]) => formatHostNoticeLine(hostName, notices)),
       ...(entries.length > 0
         ? [

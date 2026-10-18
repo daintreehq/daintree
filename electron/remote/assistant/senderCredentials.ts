@@ -8,10 +8,10 @@ export interface AssistantSenderCredentialsOptions {
 /**
  * The credential this Shell authenticates its assistants to each host with
  * (#13493): one per host, minted on first use and kept until the host is
- * removed. What a host knows this Shell by, for messaging and for the tools
- * it relays, so it lives apart from either. A credential the exchange journal
- * minted before this store existed is taken over as it is: a new one would be
- * a stranger to every host that knew the old.
+ * removed. What a host knows this Shell by, for the tools it relays. A
+ * credential the retired exchange journal minted before this store existed is
+ * taken over as it is: a new one would be a stranger to every host that knew
+ * the old.
  */
 export class AssistantSenderCredentials {
   private readonly newCredential: () => string;
@@ -52,9 +52,17 @@ export class AssistantSenderCredentials {
     ).map((row) => row.host_id);
   }
 
-  /** A host removed from this Shell takes its credential with it. */
+  /**
+   * A host removed from this Shell takes its credential with it, the retired
+   * journal's copy included, so the next start never adopts it back.
+   */
   forget(hostId: string): void {
-    this.sqlite.prepare("DELETE FROM assistant_sender_credentials WHERE host_id = ?").run(hostId);
+    this.sqlite.transaction(() => {
+      this.sqlite.prepare("DELETE FROM assistant_sender_credentials WHERE host_id = ?").run(hostId);
+      if (this.hasJournal()) {
+        this.sqlite.prepare("DELETE FROM assistant_exchange_hosts WHERE host_id = ?").run(hostId);
+      }
+    })();
   }
 
   /**
@@ -64,16 +72,21 @@ export class AssistantSenderCredentials {
    * minted and presented since, after forgetting the host or before this ran.
    */
   private adoptJournalCredentials(): void {
-    const journal = this.sqlite
-      .prepare(
-        "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'assistant_exchange_hosts'"
-      )
-      .get();
-    if (!journal) return;
+    if (!this.hasJournal()) return;
     this.sqlite
       .prepare(
         "INSERT INTO assistant_sender_credentials (host_id, sender_credential) SELECT host_id, sender_credential FROM assistant_exchange_hosts WHERE true ON CONFLICT(host_id) DO UPDATE SET sender_credential = excluded.sender_credential"
       )
       .run();
+  }
+
+  private hasJournal(): boolean {
+    return (
+      this.sqlite
+        .prepare(
+          "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'assistant_exchange_hosts'"
+        )
+        .get() !== undefined
+    );
   }
 }

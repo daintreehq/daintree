@@ -140,7 +140,6 @@ vi.mock("../../services/HelpSessionService.js", () => ({
     addSessionEndedListener: () => () => {},
 
     addSessionReattachedListener: () => () => {},
-    setMessagingReach: () => {},
     setRunbooksHostState: () => {},
     getRunningLaneSession: () => null,
     getAssistantBackends: () => [],

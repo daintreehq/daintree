@@ -72,6 +72,18 @@ const HANDBACK_ARG_SCHEMA = z
   );
 
 /**
+ * Which run of another assistant a send is for (#13496), shared by both submit
+ * tools. Main consumes it; an assistant target refuses a send without it, or
+ * with a run that has since been replaced.
+ */
+const ASSISTANT_GENERATION_ARG_SCHEMA = z
+  .number()
+  .int()
+  .min(0)
+  .optional()
+  .describe("Sending to another assistant: its generation from the assistant listing.");
+
+/**
  * The `notify` argument, shared by both submit tools and `agent.launch`. Main
  * consumes it before dispatch — which prompt to type into is known only from
  * the caller's MCP credential — so `run()` never acts on it; it is declared so
@@ -828,7 +840,7 @@ export function registerTerminalQueryActions(
     id: "terminal.readLastMessageOwned",
     title: "Read owned agent's last message",
     description:
-      "Read an agent's last transcript reply and unanswered tool calls, e.g. a question and its options. Agents this connection launched or was handed (right-click > Hand to orchestrator); Daintree's assistant: any in its project. Claude Code only. Not proof the agent is waiting; permission prompts are screen-only.",
+      "Read an agent's last transcript reply and unanswered tool calls, e.g. a question and its options. Agents this connection launched or was handed (right-click > Hand to orchestrator); Daintree's assistant: any in its project. Claude Code only, or another assistant's screen. Not proof the agent is waiting.",
     category: "terminal",
     kind: "query",
     danger: "safe",
@@ -920,6 +932,7 @@ export function registerTerminalQueryActions(
           "A shell command or the agent's next prompt. Multi-line text goes in atomically with one Enter."
         ),
       handback: HANDBACK_ARG_SCHEMA,
+      generation: ASSISTANT_GENERATION_ARG_SCHEMA,
       notify: NOTIFY_ARG_SCHEMA,
       replyLines: NotifyReplyLinesSchema,
       waitForReply: WaitForReplySchema,
@@ -1028,6 +1041,7 @@ export function registerTerminalQueryActions(
         .min(1)
         .describe("Text to submit. Multi-line text goes in atomically with one Enter."),
       handback: HANDBACK_ARG_SCHEMA,
+      generation: ASSISTANT_GENERATION_ARG_SCHEMA,
       notify: NOTIFY_ARG_SCHEMA,
       replyLines: NotifyReplyLinesSchema,
       waitForReply: WaitForReplySchema,

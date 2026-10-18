@@ -18,7 +18,6 @@ import {
 } from "@/components/Settings/Hosts/hostSettingsRequests";
 import { HostCard } from "./HostCard";
 import { HostFleetTargets } from "./HostFleetTargets";
-import { LazyHostExchanges } from "./LazyHostOverviewParts";
 import { isLive } from "./overviewModel";
 import { useOverviewConnections } from "./useOverviewConnections";
 
@@ -96,14 +95,6 @@ export function HostsOverviewDialog({ onClose }: HostsOverviewDialogProps) {
                 />
                 {!row.isCurrent && isLive(row) && (
                   <HostFleetTargets hostId={row.hostId} hostName={row.name} />
-                )}
-                {/* This Shell's own record, so it shows while the host is away too. */}
-                {!row.isLocal && (
-                  <LazyHostExchanges
-                    hostId={row.hostId}
-                    hostName={row.name}
-                    projects={projectLists.get(row.hostId)}
-                  />
                 )}
                 <div className="mt-auto flex flex-wrap gap-2 pt-1">
                   {isLive(row) && (

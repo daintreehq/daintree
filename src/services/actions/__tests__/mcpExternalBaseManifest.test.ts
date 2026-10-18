@@ -53,9 +53,9 @@ const MAIN_PROCESS_TOOLS = [
   "project.runCommand",
   "terminal.readLastMessageOwned",
   "terminal.notifyWhenIdle",
-  "assistant.getInbox",
-  "assistant.reply",
-  "assistant.sendMessage",
+  "assistant.list",
+  "assistant.start",
+  "agent.readQuota",
 ];
 
 /**

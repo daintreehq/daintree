@@ -395,8 +395,6 @@ export interface StoreSchema {
     modelIds?: Record<string, string>;
     /** Absent in stores written before #12874; read as `"inherit"`. */
     daintreeConfirmations?: "inherit" | "always-ask" | "never-ask";
-    /** Absent in stores written before #13441; read as on. */
-    acceptRemoteMessages?: boolean;
     /** Absent in stores written before #13493; read as on. */
     acceptRemoteControl?: boolean;
     /**

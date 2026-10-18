@@ -68,6 +68,7 @@ import { routedViewWorktreePort } from "./mcp-server/worktreeViewPort.js";
 import { createPluginMcpRoute } from "./pluginAgentMcp/pluginMcpRoute.js";
 import type * as PluginServiceModule from "./PluginService.js";
 import { getPtyClient, setMcpServerServiceRef } from "../window/serviceRefs.js";
+import { machineDisplayName } from "../utils/machineName.js";
 import type {
   PendingRequest,
   DispatchEnvelope,
@@ -80,6 +81,7 @@ import type {
   PaneOwnershipPrincipalResolver,
   PaneTerminalResolver,
   HelpSessionTerminalResolver,
+  AssistantControlBinding,
 } from "./mcp-server/shared.js";
 import type { ActionManifestEntry } from "../../shared/types/actions.js";
 import { events } from "./events.js";
@@ -89,6 +91,8 @@ import { wireMcpServerToConnectivityRegistry } from "./connectivity/index.js";
 // the whole plugin host, and only a request on the plugin MCP route needs it.
 type PluginServiceSingleton = typeof PluginServiceModule.pluginService;
 let pluginServicePromise: Promise<PluginServiceSingleton> | null = null;
+/** Read once: a Mac's computer name costs a subprocess. */
+let localMachineName: string | undefined;
 function loadPluginService(): Promise<PluginServiceSingleton> {
   pluginServicePromise ??= import("./PluginService.js").then(
     (m) => m.pluginService,
@@ -391,8 +395,13 @@ export class McpServerService {
         handleProjectRunCheck(rawArgs, signal, authorize),
       handleProjectRunCommand: (rawArgs, signal, authorize) =>
         handleProjectRunCommand(rawArgs, signal, authorize),
-      handleTerminalGetStatusViewless: (rawArgs, workspaceId) =>
-        handleTerminalGetStatusViewless(rawArgs, workspaceId),
+      handleTerminalGetStatusViewless: (rawArgs, workspaceId, admittedAssistants) =>
+        handleTerminalGetStatusViewless(rawArgs, workspaceId, admittedAssistants),
+      machineName: () => (localMachineName ??= machineDisplayName()),
+      readCodexQuota: async () => {
+        const { readCodexQuota } = await import("./codex/CodexQuotaService.js");
+        return readCodexQuota();
+      },
       handleTerminalReadLastMessageOwned: (terminalId, options, signal) =>
         handleTerminalReadLastMessageOwned(terminalId, options, signal),
       // The pty-host's own spawn tracking spans every view, which is what a
@@ -512,19 +521,6 @@ export class McpServerService {
     this.httpLifecycle.setHelpSessionIdResolver(resolver);
   }
 
-  /**
-   * A lane's messaging enrollment began or ended (#13335). Every assistant
-   * session re-lists, since its inbox tools are offered only while its own
-   * lane is enrolled; a transport closing meanwhile reads the new list anyway.
-   */
-  notifyAssistantMessagingChanged(): void {
-    for (const sessionId of this.sessionStore.sessionHelpIdMap.keys()) {
-      const session =
-        this.sessionStore.httpSessions.get(sessionId) ?? this.sessionStore.sessions.get(sessionId);
-      session?.server.sendToolListChanged().catch(() => {});
-    }
-  }
-
   setPaneWorkspaceBindingResolver(resolver: PaneWorkspaceBindingResolver | null): void {
     this.httpLifecycle.setPaneWorkspaceBindingResolver(resolver);
   }
@@ -539,6 +535,11 @@ export class McpServerService {
 
   setHelpSessionTerminalResolver(resolver: HelpSessionTerminalResolver | null): void {
     this.httpLifecycle.setHelpSessionTerminalResolver(resolver);
+  }
+
+  /** Lets assistants address one another (#13496); null takes it away again. */
+  setAssistantControl(binding: AssistantControlBinding | null): void {
+    this.httpLifecycle.setAssistantControl(binding);
   }
 
   /**
@@ -690,7 +691,7 @@ export class McpServerService {
     return this.terminalNotify.getPaneState(terminalId);
   }
 
-  /** Tell an assistant lane a message is waiting, on the same line its notices use (#13333). */
+  /** Queue a line for an assistant on the same line its notices use (#13500, #13496). */
   queueLaneWake(
     lane: { helpSessionId: string; terminalId: string; projectId: string },
     wake: LaneWake

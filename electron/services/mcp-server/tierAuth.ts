@@ -26,11 +26,8 @@ import { isGenericNativeGrantEligible } from "../../../shared/config/nativeGrant
 import { canonicalJson, toCompatibilityShape } from "./compatibilityHash.js";
 import type { McpTargetPolicy, McpTargetTier } from "../../../shared/types/mcpTargetPolicy.js";
 import type { McpUnavailableActionStub } from "../../../shared/types/mcpIntrospection.js";
-import {
-  ASSISTANT_MESSAGING_TOOL_IDS,
-  ASSISTANT_SEND_MESSAGE_TOOL,
-} from "../../../shared/types/assistantMessaging.js";
-import { HOST_CALL_TOOL, HOST_MESSAGING_TOOL_IDS } from "../../../shared/types/hostMessaging.js";
+import { ASSISTANT_CONTROL_TOOL_IDS } from "../../../shared/types/assistantControl.js";
+import { HOST_CONTROL_TOOL_IDS } from "../../../shared/types/hostControl.js";
 
 export { deriveBand, BAND_OVERRIDES };
 
@@ -149,22 +146,14 @@ export function shouldExposeTool(
   if (isWithheldFromBoundSession(entry, tier, session)) {
     return false;
   }
-  if (ASSISTANT_MESSAGING_TOOL_IDS.has(entry.id) && session.assistantMessaging !== true) {
-    return false;
-  }
-  if (entry.id === ASSISTANT_SEND_MESSAGE_TOOL && session.assistantSending !== true) {
-    return false;
-  }
-  if (HOST_MESSAGING_TOOL_IDS.has(entry.id) && session.hubMessaging !== true) {
-    return false;
-  }
-  if (entry.id === HOST_CALL_TOOL && session.hostCall !== true) {
+  if (HOST_CONTROL_TOOL_IDS.has(entry.id) && session.hostCall !== true) {
     return false;
   }
   if (session.relay === true && isWithheldFromRelaySession(entry.id)) {
     return false;
   }
   if (entry.id === PROJECT_RUN_COMMAND_TOOL) return mayRunProjectCommand(tier, session);
+  if (ASSISTANT_CONTROL_TOOL_IDS.has(entry.id)) return mayControlAssistants(tier, session);
   return (
     isTierPermitted(tier, entry.id, session.rendererOwnedOrigin === true) ||
     isApprovalRequestable(tier, entry.id, session.paneApproval === true)
@@ -191,13 +180,22 @@ export function mayRunProjectCommand(
   return tier === "full" && (session.rendererOwnedOrigin === true || session.relay === true);
 }
 
+/**
+ * The tools one assistant addresses another with (#13496) answer to their
+ * caller, not its tier alone: Daintree's own assistant, here or another
+ * machine's through its Shell's `host.call`, at any in-app tier. Never a
+ * worker pane or an api-key client, and no grant widens that. Discovery and
+ * admission ask this same question.
+ */
+export function mayControlAssistants(
+  tier: string | null,
+  session: Pick<SessionSurfacePolicy, "assistantCaller">
+): boolean {
+  return (tier === "core" || tier === "full") && session.assistantCaller === true;
+}
+
 /** This machine's own assistant-panel tools, which mean nothing to another machine's assistant. */
-const RELAY_WITHHELD_TOOL_IDS: ReadonlySet<string> = new Set([
-  "help.displayImage",
-  "assistant.getInbox",
-  "assistant.reply",
-  "assistant.sendMessage",
-]);
+const RELAY_WITHHELD_TOOL_IDS: ReadonlySet<string> = new Set(["help.displayImage"]);
 
 /**
  * What a session another machine's assistant reaches through its Shell
@@ -239,29 +237,17 @@ export interface SessionSurfacePolicy {
    */
   paneSkipConfirmations?: boolean;
   /**
-   * Whether this session is an assistant lane enrolled for cross-host
-   * messaging right now (#13335). Only then are its own inbox tools offered;
-   * read live per listing, and as `=== true`.
-   */
-  assistantMessaging?: boolean;
-  /**
-   * Whether that lane was enrolled by a remote Shell, so it may start a
-   * message to that Shell (#13338). Never true for a Shell's own lane; read
+   * Whether this session is one of this machine's own assistants, hosts or
+   * not (#13493). Only then are `host.list` and `host.call` offered; read
    * live per listing, and as `=== true`.
    */
-  assistantSending?: boolean;
-  /**
-   * Whether this session is one of this Shell's assistants and a host exists
-   * (#13336, #13468). Only then are the `host.*` messaging tools offered;
-   * read live per listing, and as `=== true`.
-   */
-  hubMessaging?: boolean;
-  /**
-   * Whether this session is one of this machine's own assistants, hosts or
-   * not (#13493). Only then is `host.call` offered; read live per listing,
-   * and as `=== true`.
-   */
   hostCall?: boolean;
+  /**
+   * Whether this session is an assistant that may address another (#13496):
+   * one of this machine's help sessions, or a relay principal. Only then are
+   * the assistant tools offered; read live per listing, and as `=== true`.
+   */
+  assistantCaller?: boolean;
   /**
    * Whether this session is another machine's assistant reaching this host
    * through its Shell (#13493); see {@link isWithheldFromRelaySession}. Read as
@@ -577,11 +563,11 @@ export interface TargetPolicySessionSnapshot {
    */
   paneSkipConfirmations?: boolean;
   /**
-   * Whether the session is one of this Shell's assistants while a host exists
-   * (#13336, #13468). The host tools exist for no other session at any tier,
-   * so they are never offered as a stub. Read as `=== true`.
+   * Whether the session is one of this machine's own assistants (#13493). The
+   * host tools exist for no other session at any tier, so they are never
+   * offered as a stub. Read as `=== true`.
    */
-  hubMessaging?: boolean;
+  hostCall?: boolean;
   /** Live per-tool grants, from the non-evicting snapshot. */
   perToolGrantedActionIds: ReadonlySet<string>;
   /** Live native automation grants' `allowedTools`, unioned. */
@@ -926,8 +912,9 @@ export function buildUnavailableStub(
   if (!isExistenceCatalogVisible(snapshot)) return null;
   const id = readEntryId(entry);
   if (id === null) return null;
-  // No tier makes these exist for anything but a Shell's own assistant, so "raise your tier" would be wrong.
-  if (HOST_MESSAGING_TOOL_IDS.has(id) && snapshot.hubMessaging !== true) return null;
+  // No tier makes these exist for anything but an assistant, so "raise your tier" would be wrong.
+  if (HOST_CONTROL_TOOL_IDS.has(id) && snapshot.hostCall !== true) return null;
+  if (ASSISTANT_CONTROL_TOOL_IDS.has(id)) return null;
   const record = entry as Partial<ActionManifestEntry>;
 
   if (record.mcpVisibility === "hidden") return null;

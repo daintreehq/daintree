@@ -513,7 +513,13 @@ describe("LLM-facing tool descriptions (#11542)", () => {
   // projects, that a change needs a window here controlling that project, and
   // that an ambiguous call is resent under its callId, which never runs twice.
   // In-app only, off the external surface.
-  const MAX_COHORT_TOTAL_BYTES = 22_500;
+  // 22_500 → 21_300 for #13496, measured at 21_231 B: the ten inbox and host
+  // messaging descriptions go for `assistant.list`, `assistant.start` and
+  // `agent.readQuota`. What their prose has to carry is that the listing is
+  // this project's other assistants, addressed with the agent messaging tools,
+  // and that a start that isn't ready still runs. In-app only, off the
+  // external surface.
+  const MAX_COHORT_TOTAL_BYTES = 21_300;
 
   const ARG_SECTION = /\b(?:args?|arguments?|parameters?)\s*(?:\([^)]*\))?\s*:|\btakes no args\b/i;
 
@@ -1467,22 +1473,10 @@ describe("plugin-dispatch injection guard (#10558)", () => {
       "agent.launchMany": { agentIds: ["claude"], prompt: "p" },
       "terminal.sendCommandMany": { sends: [{ terminalId: "t-placeholder", command: "c" }] },
       "terminal.closeMany": { terminalIds: ["t-placeholder"] },
-      // Not strict, but its required fields share names with other schemas' own.
-      "assistant.reply": { taskId: "task-placeholder", state: "completed", text: "noop" },
-      "assistant.sendMessage": { text: "noop" },
-      "host.listAssistants": { hostId: "h-placeholder" },
-      "host.sendMessage": {
-        hostId: "h-placeholder",
-        projectId: "p-placeholder",
-        slot: 0,
-        generation: "g-placeholder",
-        text: "noop",
-      },
-      "host.getTask": { hostId: "h-placeholder", taskId: "task-placeholder" },
-      "host.listTasks": { hostId: "h-placeholder" },
-      "host.cancelTask": { hostId: "h-placeholder", taskId: "task-placeholder" },
-      "host.startAssistant": { hostId: "h-placeholder", projectId: "p-placeholder" },
-      "host.readQuota": { hostId: "h-placeholder" },
+      "assistant.list": {},
+      "assistant.start": {},
+      "agent.readQuota": {},
+      "host.list": {},
       "host.call": { hostId: "h-placeholder", projectId: "p-placeholder", tool: "terminal.list" },
     };
 

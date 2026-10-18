@@ -76,8 +76,6 @@ function previewHostEntry(name: string): HostListEntry {
       lastSeenAt: 1_764_000_000_000,
       addedAt: 1_764_000_000_000,
       notificationsEnabled: false,
-      assistantMessagingEnabled: false,
-      assistantStartEnabled: false,
       assistantControlEnabled: false,
     },
     connection:
