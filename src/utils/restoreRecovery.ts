@@ -9,6 +9,7 @@ const RESTORE_RECOVERY_REASONS: ReadonlySet<string> = new Set<RestoreRecoveryRea
   "sibling-owns-resume-latest-slot",
   "session-unresolved",
   "destination-unavailable",
+  "resume-deferred",
 ]);
 
 // Control characters never belong in a path, and this one is later handed to

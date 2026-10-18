@@ -14,6 +14,7 @@ import {
 import { dispatchEscape } from "@/lib/escapeStack";
 import { useAgentSettingsStore } from "@/store/agentSettingsStore";
 import { OPEN_FOLDERS_IN_NEW_WINDOW_VALUES } from "@shared/types/windowOpen";
+import { RESUME_ON_RESTART_VALUES } from "@shared/types/agentSettings";
 
 const ProjectIdArgsSchema = z.object({ projectId: z.string().min(1) });
 
@@ -52,6 +53,8 @@ export function registerAppConfigActions(
       // them; dispatch strips whatever isn't declared here (#11539).
       globalSkipPermissions: z.boolean().optional(),
       globalUseAltScreen: z.boolean().optional(),
+      // What restored agent panes do after a restart (#13509).
+      resumeOnRestart: z.enum(RESUME_ON_RESTART_VALUES).optional(),
     }),
     run: async () => {
       const settings = await agentSettingsClient.get();

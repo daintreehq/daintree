@@ -358,6 +358,7 @@ export type {
   AgentSettings,
   DangerousMode,
   InlineMode,
+  ResumeOnRestart,
   GenerateAgentCommandOptions,
   GenerateAgentFlagsOptions,
 } from "./agentSettings.js";

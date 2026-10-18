@@ -17,7 +17,7 @@ import type {
 } from "../project.js";
 import type { ChecklistState, HelpAssistantTier, IpcEventBusMap, IpcInvokeMap } from "./maps.js";
 import type { GeneratedElectronAPI } from "./generated-api.js";
-import type { AgentSettings, AgentSettingsEntry } from "../agentSettings.js";
+import type { AgentSettings, AgentSettingsEntry, ResumeOnRestart } from "../agentSettings.js";
 import type { AgentPreset } from "../../config/agentRegistry.js";
 import type { VoiceInputError, VoiceInputStatus } from "../voice.js";
 export type { VoiceInputError, VoiceInputStatus };
@@ -1008,6 +1008,8 @@ export interface ElectronAPI extends GeneratedElectronAPI {
      * defaults.
      */
     setGlobalInline(value: boolean): Promise<AgentSettings>;
+    /** Set what restored agent panes do after a restart (#13509). */
+    setResumeOnRestart(value: ResumeOnRestart): Promise<AgentSettings>;
     reset(agentId?: AgentId): Promise<AgentSettings>;
     /**
      * Mark the persisted store with the given schema version. Only called by

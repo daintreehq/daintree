@@ -159,6 +159,7 @@ import type {
   IpcEventBusMap,
   EventBusEnvelope,
   AgentSettingsEntry,
+  ResumeOnRestart,
   PRDetectedPayload,
   PRClearedPayload,
   IssueDetectedPayload,
@@ -2373,6 +2374,9 @@ function buildElectronApi(): ElectronAPI {
 
       setGlobalInline: (value: boolean) =>
         _unwrappingInvoke(CHANNELS.AGENT_SETTINGS_SET_GLOBAL_INLINE, value),
+
+      setResumeOnRestart: (value: ResumeOnRestart) =>
+        _unwrappingInvoke(CHANNELS.AGENT_SETTINGS_SET_RESUME_ON_RESTART, value),
 
       reset: (agentType?: string) => _unwrappingInvoke(CHANNELS.AGENT_SETTINGS_RESET, agentType),
 

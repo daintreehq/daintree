@@ -197,14 +197,16 @@ function respawned(
  * Keep a pane's conversation findable when its directory changes under it
  * (#12434). Only for agents that resume across directories — the others can't
  * reopen a conversation anywhere but where it began, so there is nothing to
- * point back at.
+ * point back at — unless the pane is held with that conversation in hand
+ * (#13509): its Resume then has to run where the conversation began.
  */
 function conversationOriginPatch(
   panel: PanelInstance,
-  nextCwd: string
+  nextCwd: string,
+  holdsConversation = false
 ): { conversationCwd?: string } {
   if (!isPtyPanel(panel) || panel.cwd === nextCwd) return {};
-  if (!supportsCrossDirectoryResume(panel.launchAgentId)) return {};
+  if (!holdsConversation && !supportsCrossDirectoryResume(panel.launchAgentId)) return {};
   const origin = panel.conversationCwd || panel.cwd;
   return { conversationCwd: origin && origin !== nextCwd ? origin : undefined };
 }
@@ -1124,7 +1126,7 @@ export const createRestartActions = (
         [id]: {
           ...t,
           cwd: nextCwd,
-          ...conversationOriginPatch(t, nextCwd),
+          ...conversationOriginPatch(t, nextCwd, sessionId !== undefined),
           restoreRecovery: recovery,
         },
       };

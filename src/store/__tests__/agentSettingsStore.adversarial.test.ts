@@ -7,6 +7,7 @@ const clientMock = vi.hoisted(() => ({
   set: vi.fn(),
   setGlobal: vi.fn(),
   setGlobalInline: vi.fn(),
+  setResumeOnRestart: vi.fn(),
   reset: vi.fn(),
   stampVersion: vi.fn(),
 }));
@@ -826,6 +827,25 @@ describe("agentSettingsStore adversarial", () => {
 
     const state = useAgentSettingsStore.getState();
     expect(state.settings?.globalUseAltScreen).toBe(false);
+    expect(state.error).toBeTruthy();
+  });
+
+  it("setResumeOnRestart writes the root field and rolls back when the IPC write rejects (#13509)", async () => {
+    useAgentSettingsStore.setState({ settings: { agents: { claude: {} } } });
+    clientMock.setResumeOnRestart.mockResolvedValueOnce({});
+
+    await useAgentSettingsStore.getState().setResumeOnRestart("never");
+
+    expect(clientMock.setResumeOnRestart).toHaveBeenCalledWith("never");
+    expect(useAgentSettingsStore.getState().settings?.resumeOnRestart).toBe("never");
+
+    clientMock.setResumeOnRestart.mockRejectedValueOnce(new Error("ipc down"));
+    await expect(useAgentSettingsStore.getState().setResumeOnRestart("on-focus")).rejects.toThrow(
+      "ipc down"
+    );
+
+    const state = useAgentSettingsStore.getState();
+    expect(state.settings?.resumeOnRestart).toBe("never");
     expect(state.error).toBeTruthy();
   });
 });

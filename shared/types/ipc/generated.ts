@@ -106,6 +106,10 @@ export interface GeneratedIpcInvokeMap {
     args: [value: boolean];
     result: import("../agentSettings.js").AgentSettings;
   };
+  "agent-settings:set-resume-on-restart": {
+    args: [value: "never" | "always" | "on-focus"];
+    result: import("../agentSettings.js").AgentSettings;
+  };
   "app:clear-quarantined-panel": {
     args: [panelId: string];
     result: { cleared: boolean };

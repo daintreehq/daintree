@@ -7,6 +7,7 @@ import {
   type AgentSettings,
   type UserAgentConfig,
 } from "../../../shared/types/index.js";
+import { isResumeOnRestart, type ResumeOnRestart } from "../../../shared/types/agentSettings.js";
 import { AgentHelpService } from "../../services/AgentHelpService.js";
 import { UserAgentRegistryService } from "../../services/UserAgentRegistryService.js";
 import type { AgentHelpRequest, AgentHelpResult } from "../../../shared/types/ipc/agent.js";
@@ -154,6 +155,25 @@ export function registerAiHandlers(deps: HandlerDependencies): () => void {
           return {
             ...currentSettings.root,
             globalUseAltScreen: value,
+            agents: currentSettings.agents,
+          } as AgentSettings;
+        }
+      ),
+      // What restored agent panes do after a restart (#13509). Same dot-path
+      // leaf write as the switches above.
+      setResumeOnRestart: op(
+        CHANNELS.AGENT_SETTINGS_SET_RESUME_ON_RESTART,
+        async (value: ResumeOnRestart): Promise<AgentSettings> => {
+          if (!isResumeOnRestart(value)) {
+            throw new Error("Invalid resumeOnRestart");
+          }
+          const currentSettings = normalizeAgentSettings(
+            store.get("agentSettings", DEFAULT_AGENT_SETTINGS)
+          );
+          store.set("agentSettings.resumeOnRestart", value);
+          return {
+            ...currentSettings.root,
+            resumeOnRestart: value,
             agents: currentSettings.agents,
           } as AgentSettings;
         }

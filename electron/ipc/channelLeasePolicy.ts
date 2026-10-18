@@ -58,6 +58,7 @@ export const CHANNEL_LEASE_POLICY = {
   "agent-settings:set": "free",
   "agent-settings:set-global": "free",
   "agent-settings:set-global-inline": "free",
+  "agent-settings:set-resume-on-restart": "free",
   "agent-settings:stamp-version": "free",
   "app-agent:confirmation-response": "free",
   "app-agent:dispatch-action-response": "free",

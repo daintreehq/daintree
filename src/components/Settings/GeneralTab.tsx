@@ -14,6 +14,7 @@ import { WindowOpeningSection } from "@/components/Settings/WindowOpeningSection
 import { SettingsSubtabBar, subtabPanelProps } from "./SettingsSubtabBar";
 import { SettingsDependents, SettingsEmptyRow, SettingsGroup } from "./SettingsGroup";
 import { SettingsPresetGroup } from "./SettingsPresetGroup";
+import { ResumeOnRestartRow } from "./ResumeOnRestartRow";
 import type { SettingsSubtabItem } from "./SettingsSubtabBar";
 import { getAgentIds } from "@/config/agents";
 import { AgentIdentityBlock, resolveIdentity } from "@/components/agents/AgentCard";
@@ -1078,6 +1079,10 @@ export function GeneralTab({
                     sessionRestoreConfig.enabled !== DEFAULT_SESSION_RESTORE_ENABLED
                   }
                   onReset={() => void handleSessionRestoreToggle()}
+                />
+                <ResumeOnRestartRow
+                  onSaveStart={() => clearSaveFailure("sessionRestore")}
+                  onSaveFailed={(retry) => recordSaveFailure("sessionRestore", retry)}
                 />
               </SettingsGroup>
             </SettingsSection>
