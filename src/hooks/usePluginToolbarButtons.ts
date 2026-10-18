@@ -5,6 +5,7 @@ import type { ToolbarButtonConfig } from "@shared/config/toolbarButtonRegistry";
 import type { PluginToolbarButtonId } from "@shared/types/toolbar";
 import { useToolbarPreferencesStore } from "@/store";
 import { logWarn } from "@/utils/logger";
+import { usePluginToolbarBadgeStore } from "@/store/pluginToolbarBadgeStore";
 
 export interface PluginToolbarButtonState {
   buttonIds: PluginToolbarButtonId[];
@@ -54,6 +55,8 @@ export function usePluginToolbarButtons(): PluginToolbarButtonState {
 
     const electron = typeof window !== "undefined" ? window.electron : undefined;
     if (!electron?.plugin) return;
+    // The buttons' live badges, subscribed alongside the buttons themselves.
+    usePluginToolbarBadgeStore.getState().init();
 
     void electron.plugin
       .toolbarButtons()

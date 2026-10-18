@@ -30,11 +30,23 @@ import {
 import { actionService } from "@/services/ActionService";
 import { useToolbarPreferencesStore } from "@/store/toolbarPreferencesStore";
 import { usePluginRuntimeStore } from "@/store/pluginRuntimeStore";
-import { pluginManifestIdFromInstanceKey } from "@shared/types/plugin";
+import { pluginManifestIdFromInstanceKey, type PluginPanelBadge } from "@shared/types/plugin";
 import { useAriaKeyshortcuts, useShortcutHintHover } from "@/hooks";
 import type { ToolbarButtonConfig } from "@shared/config/toolbarButtonRegistry";
 import type { PluginToolbarButtonId } from "@shared/types/toolbar";
 import { cn } from "@/lib/utils";
+import { pluralize } from "@/lib/pluralize";
+import {
+  toolbarBadgeFor,
+  usePluginToolbarBadge,
+  usePluginToolbarBadgeStore,
+} from "@/store/pluginToolbarBadgeStore";
+import { PLUGIN_BADGE_DOT_COLOR, PluginBadgeIndicator } from "@/components/Panel/PluginPanelBadges";
+import {
+  describeToolbarBadge,
+  mostSevereBadgeColor,
+  toolbarBadgeCountGlyph,
+} from "./pluginToolbarBadge";
 
 export type PluginToolbarConfigs = ReadonlyMap<string, ToolbarButtonConfig>;
 
@@ -100,6 +112,15 @@ export function PluginToolbarButton({
   const ariaShortcut = useAriaKeyshortcuts(config.actionId);
   const setPluginButtonPromoted = useToolbarPreferencesStore((s) => s.setPluginButtonPromoted);
   const Icon = resolvePluginIcon(config.iconId, DEFAULT_PLUGIN_BUTTON_ICON);
+  const badge = usePluginToolbarBadge(config);
+  // The mark keeps its last badge while it fades out, as Canopy's count does.
+  const [shownBadge, setShownBadge] = useState(badge);
+  if (badge !== null && badge !== shownBadge) setShownBadge(badge);
+  // Two characters fit: a whole-number label is a count, anything else a pip,
+  // with the full text in the tooltip and on the tray row.
+  const countGlyph = shownBadge ? toolbarBadgeCountGlyph(shownBadge) : null;
+  const badgeColor = shownBadge?.color ?? "default";
+  const name = badge ? `${config.label}, ${describeToolbarBadge(badge)}` : config.label;
 
   return (
     <ContextMenu>
@@ -120,13 +141,28 @@ export function PluginToolbarButton({
                   );
                 }}
                 className="toolbar-icon-button text-text-primary relative"
-                aria-label={config.label}
+                aria-label={name}
                 aria-keyshortcuts={ariaShortcut}
               >
-                <Icon />
+                <span className="relative inline-flex">
+                  <Icon />
+                  <span
+                    aria-hidden="true"
+                    data-testid={`plugin-toolbar-badge-${config.id}`}
+                    data-visible={badge !== null}
+                    className={cn(
+                      countGlyph !== null ? "toolbar-count" : "toolbar-pip",
+                      "toolbar-badge",
+                      PLUGIN_BADGE_DOT_COLOR[badgeColor]
+                    )}
+                    data-badge-color={badgeColor}
+                  >
+                    {countGlyph}
+                  </span>
+                </span>
               </Button>
             </TooltipTrigger>
-            <TooltipContent side="bottom">{config.label}</TooltipContent>
+            <TooltipContent side="bottom">{name}</TooltipContent>
           </Tooltip>
         </span>
       </ContextMenuTrigger>
@@ -147,6 +183,38 @@ export function PluginToolbarButton({
   );
 }
 
+/**
+ * A plugin contribution inside the toolbar's overflow `…` menu, from either
+ * route there (an overflowed promoted button, or an overflowed tray's rows),
+ * carrying its live badge in full as the tray row does (#13503).
+ */
+export function PluginOverflowItem({
+  config,
+  onSelect,
+  keybinding,
+}: {
+  config: ToolbarButtonConfig;
+  onSelect: () => void;
+  keybinding?: string;
+}) {
+  const Icon = resolvePluginIcon(config.iconId, DEFAULT_PLUGIN_BUTTON_ICON);
+  const badge = usePluginToolbarBadge(config);
+  return (
+    <DropdownMenuItem onClick={onSelect} keybinding={keybinding}>
+      <Icon className="mr-2 h-3.5 w-3.5" />
+      <span className="flex-1">{config.label}</span>
+      {badge && (
+        <>
+          <span className="ml-2 inline-flex shrink-0 items-center">
+            <PluginBadgeIndicator pluginId={config.pluginId} badge={badge} live={false} />
+          </span>
+          <span className="sr-only">, {describeToolbarBadge(badge)}</span>
+        </>
+      )}
+    </DropdownMenuItem>
+  );
+}
+
 function PluginTrayRow({
   config,
   promoted,
@@ -159,6 +227,7 @@ function PluginTrayRow({
   onTogglePin: (config: ToolbarButtonConfig) => void;
 }) {
   const Icon = resolvePluginIcon(config.iconId, DEFAULT_PLUGIN_BUTTON_ICON);
+  const badge = usePluginToolbarBadge(config);
 
   const handleKeyDown = (e: KeyboardEvent<HTMLDivElement>) => {
     if (e.key === "p" || e.key === "P") {
@@ -181,6 +250,15 @@ function PluginTrayRow({
       <TruncatedTooltip content={config.label} focusable={false}>
         <span className="min-w-0 flex-1 truncate">{config.label}</span>
       </TruncatedTooltip>
+
+      {badge && (
+        <>
+          <span className="ml-2 inline-flex shrink-0 items-center">
+            <PluginBadgeIndicator pluginId={config.pluginId} badge={badge} live={false} />
+          </span>
+          <span className="sr-only">, {describeToolbarBadge(badge)}</span>
+        </>
+      )}
 
       <span className="sr-only">Press P to {promoted ? "unpin from" : "pin to"} toolbar</span>
 
@@ -239,6 +317,7 @@ export function PluginTrayButton({
   const pinnedButtons = useToolbarPreferencesStore((s) => s.layout.pinnedButtons);
   const setPluginButtonPromoted = useToolbarPreferencesStore((s) => s.setPluginButtonPromoted);
   const pluginMetaById = usePluginRuntimeStore((s) => s.pluginMetaById);
+  const badgesByPlugin = usePluginToolbarBadgeStore((s) => s.badgesByPlugin);
 
   const [open, setOpen] = useState(false);
   const [tooltipOpen, setTooltipOpen] = useState(false);
@@ -258,6 +337,26 @@ export function PluginTrayButton({
       ),
     [configs, pluginMetaById]
   );
+
+  // Only rows without a top-level button of their own count toward the tray's
+  // dot, so one badge never lights two buttons.
+  const trayBadges = useMemo(() => {
+    const out: PluginPanelBadge[] = [];
+    for (const config of configs.values()) {
+      if (pinnedButtons[config.id] === true) continue;
+      const badge = toolbarBadgeFor(badgesByPlugin, config);
+      if (badge) out.push(badge);
+    }
+    return out;
+  }, [configs, pinnedButtons, badgesByPlugin]);
+  const trayBadgeColor = mostSevereBadgeColor(trayBadges);
+  // The dot keeps its last colour while it fades out, rather than greying.
+  const [shownTrayColor, setShownTrayColor] = useState(trayBadgeColor);
+  if (trayBadgeColor !== null && trayBadgeColor !== shownTrayColor) {
+    setShownTrayColor(trayBadgeColor);
+  }
+  const trayName =
+    trayBadges.length > 0 ? `Plugin tray, ${pluralize(trayBadges.length, "badge")}` : "Plugin tray";
 
   // Defensive close for a direct consumer that keeps this mounted through the
   // last plugin unloading. `Toolbar` gates the registry entry on the same
@@ -317,16 +416,28 @@ export function PluginTrayButton({
                     size="icon"
                     data-toolbar-item={dataToolbarItem}
                     className="toolbar-icon-button text-text-primary relative"
-                    aria-label="Plugin tray"
+                    aria-label={trayName}
                     onPointerEnter={() => {
                       isRestoringFocusRef.current = false;
                     }}
                   >
-                    <Package />
+                    <span className="relative inline-flex">
+                      <Package />
+                      <span
+                        aria-hidden="true"
+                        data-testid="plugin-tray-badge"
+                        data-visible={trayBadgeColor !== null}
+                        data-badge-color={shownTrayColor ?? "default"}
+                        className={cn(
+                          "toolbar-pip toolbar-badge",
+                          PLUGIN_BADGE_DOT_COLOR[shownTrayColor ?? "default"]
+                        )}
+                      />
+                    </span>
                   </Button>
                 </DropdownMenuTrigger>
               </TooltipTrigger>
-              <TooltipContent side="bottom">Plugin tray</TooltipContent>
+              <TooltipContent side="bottom">{trayName}</TooltipContent>
             </Tooltip>
           </span>
         </ContextMenuTrigger>

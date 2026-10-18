@@ -65,6 +65,7 @@ function makeHost() {
     registerFileDecorationProvider: vi.fn(() => vi.fn()),
     invalidateFileDecorations: vi.fn(),
     setPanelBadge: vi.fn(async () => {}),
+    setToolbarButtonBadge: vi.fn(async () => {}),
     setPanelMenuItems: vi.fn(async () => {}),
     showToast: vi.fn(async () => {}),
     showQuickPick: vi.fn(async (): Promise<unknown> => undefined),
@@ -579,6 +580,17 @@ describe("PluginDevWorkerMainBridge", () => {
       text: "CI",
       color: "success",
     });
+  });
+
+  it("forwards setToolbarButtonBadge host-notify to the real host (#13503)", async () => {
+    const { host, workerHost } = makeBridge();
+    workerHost.emit("worker-message", {
+      type: "host-notify",
+      method: "setToolbarButtonBadge",
+      params: { buttonId: "needs", badge: { kind: "label", text: "4" } },
+    });
+    await flush();
+    expect(host.setToolbarButtonBadge).toHaveBeenCalledWith("needs", { kind: "label", text: "4" });
   });
 
   it("forwards a null setPanelBadge (clear) host-notify to the real host (#10585)", async () => {

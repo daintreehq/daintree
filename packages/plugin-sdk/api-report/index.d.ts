@@ -5691,6 +5691,26 @@ interface PluginHostApi extends PluginActivationApi {
      */
     setPanelBadge(panelId: string, badge: PluginPanelBadge | null): Promise<void>;
     /**
+     * Set (or clear) a live badge on one of this plugin's own toolbar buttons —
+     * `buttonId` is a `contributes.toolbarButtons[].id` from this plugin's
+     * manifest — so a count or status stays visible while the plugin's panel is
+     * closed. Takes the same {@link PluginPanelBadge} shape and limits as
+     * {@link setPanelBadge}; pass `null` to clear it.
+     *
+     * The badge shows in full on the button's plugin-tray row and in the overflow
+     * menu. On a button the user promoted to the toolbar, a numeric `label`
+     * shows as a count pill (capped at `9+`), and a `dot` or any other label shows
+     * as a pip, with the full text in its tooltip. While the tray is collapsed,
+     * its own button shows a dot for any badged row that isn't promoted.
+     *
+     * Like {@link setPanelBadge} this is NOT revoke-guarded, becomes a silent
+     * no-op once the plugin is unloaded (all of its toolbar badges are cleared on
+     * unload), and rejects an empty or foreign `buttonId` or an invalid badge.
+     * (In the hot-reload worker an empty `buttonId` still rejects; a foreign id or
+     * malformed badge is logged in the host instead.)
+     */
+    setToolbarButtonBadge(buttonId: string, badge: PluginPanelBadge | null): Promise<void>;
+    /**
      * Publish the contextual actions the ⋯ and right-click menus of one of this
      * plugin's own panels offer right now — the backend-side twin of the view's
      * `PanelViewProps.setMenuItems`, and the only way a PTY-backed panel (which

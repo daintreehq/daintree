@@ -192,6 +192,12 @@ export interface InvalidationRecord {
   paths: string[] | undefined;
 }
 
+/** Captured `host.setToolbarButtonBadge(buttonId, badge)` calls. `null` clears. */
+export interface SetToolbarButtonBadgeRecord {
+  buttonId: string;
+  badge: PluginPanelBadge | null;
+}
+
 /** Captured `host.setPanelBadge(panelId, badge)` calls. `null` clears. */
 export interface SetPanelBadgeRecord {
   panelId: string;
@@ -264,6 +270,7 @@ export interface MockHostState {
   readonly registeredMcpTools: ReadonlyArray<RegisteredMcpToolsRecord>;
   readonly invalidationCalls: ReadonlyArray<InvalidationRecord>;
   readonly setPanelBadgeCalls: ReadonlyArray<SetPanelBadgeRecord>;
+  readonly setToolbarButtonBadgeCalls: ReadonlyArray<SetToolbarButtonBadgeRecord>;
   readonly setPanelMenuItemsCalls: ReadonlyArray<SetPanelMenuItemsRecord>;
   /**
    * Panel ids passed to `host.reloadPanel(panelId)`, in order (#12610). Only
@@ -480,6 +487,12 @@ export interface CreateMockHostOptions {
    * `scope ?? "user"` default and existing manifest-free tests are unaffected.
    */
   manifestSettings?: SettingDefinition[];
+  /**
+   * Opt-in `contributes.toolbarButtons[].id` list, so `setToolbarButtonBadge`
+   * rejects an id the plugin did not contribute, as the real host does. Omitted
+   * by default (the mock has no manifest model), which accepts any non-empty id.
+   */
+  toolbarButtonIds?: readonly string[];
   /** Pre-seed private `host.storage` values per scope. */
   storage?: {
     user?: Record<string, unknown>;
@@ -865,6 +878,7 @@ export function createMockHost(options: CreateMockHostOptions = {}): PluginHostA
   const registeredMcpTools: RegisteredMcpToolsRecord[] = [];
   const invalidationCalls: InvalidationRecord[] = [];
   const setPanelBadgeCalls: SetPanelBadgeRecord[] = [];
+  const setToolbarButtonBadgeCalls: SetToolbarButtonBadgeRecord[] = [];
   const setPanelMenuItemsCalls: SetPanelMenuItemsRecord[] = [];
   const reloadPanelCalls: string[] = [];
   const restartWorkerCalls: WorkerRestartResult[] = [];
@@ -1956,6 +1970,31 @@ export function createMockHost(options: CreateMockHostOptions = {}): PluginHostA
       setPanelBadgeCalls.push({ panelId, badge: badge ?? null });
       return Promise.resolve();
     },
+    setToolbarButtonBadge(buttonId, badge) {
+      if (typeof buttonId !== "string" || buttonId.length === 0) {
+        return Promise.reject(
+          new Error("setToolbarButtonBadge: buttonId must be a non-empty string")
+        );
+      }
+      if (options.toolbarButtonIds && !options.toolbarButtonIds.includes(buttonId)) {
+        return Promise.reject(
+          new Error(
+            `setToolbarButtonBadge: "${buttonId}" is not one of this plugin's contributes.toolbarButtons`
+          )
+        );
+      }
+      if (badge !== null && badge !== undefined) {
+        try {
+          validatePanelBadge(badge);
+        } catch (err) {
+          return Promise.reject(
+            new Error((err as Error).message.replace(/^setPanelBadge:/, "setToolbarButtonBadge:"))
+          );
+        }
+      }
+      setToolbarButtonBadgeCalls.push({ buttonId, badge: badge ?? null });
+      return Promise.resolve();
+    },
     setPanelMenuItems(panelId, items) {
       // Vetted by the host's own normalizer, so a list the real host refuses
       // rejects here too.
@@ -2597,6 +2636,7 @@ export function createMockHost(options: CreateMockHostOptions = {}): PluginHostA
     registeredMcpTools,
     invalidationCalls,
     setPanelBadgeCalls,
+    setToolbarButtonBadgeCalls,
     setPanelMenuItemsCalls,
     reloadPanelCalls,
     restartWorkerCalls,

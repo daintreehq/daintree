@@ -107,6 +107,7 @@ export type PluginHostNotifyMethod =
   | "postToPanel"
   | "invalidateFileDecorations"
   | "setPanelBadge"
+  | "setToolbarButtonBadge"
   | "setPanelMenuItems"
   | "registerFileDecorationProvider"
   | "unregisterFileDecorationProvider"
@@ -423,6 +424,12 @@ export interface InvalidateFileDecorationsParams {
 /** Params for `setPanelBadge` (`host-notify`). `null` clears the badge. */
 export interface SetPanelBadgeParams {
   panelId: string;
+  badge: PluginPanelBadge | null;
+}
+
+/** Params for `setToolbarButtonBadge` (`host-notify`). `null` clears the badge. */
+export interface SetToolbarButtonBadgeParams {
+  buttonId: string;
   badge: PluginPanelBadge | null;
 }
 

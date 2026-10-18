@@ -44,6 +44,7 @@ import type {
   PostToPanelParams,
   ReloadPanelParams,
   SetPanelBadgeParams,
+  SetToolbarButtonBadgeParams,
   SetPanelMenuItemsParams,
   RegisterActionParams,
   RegisterFileDecorationProviderParams,
@@ -1245,6 +1246,11 @@ export class PluginDevWorkerMainBridge {
       case "setPanelBadge": {
         const p = params as SetPanelBadgeParams;
         await this.host.setPanelBadge(p.panelId, p.badge);
+        return;
+      }
+      case "setToolbarButtonBadge": {
+        const p = params as SetToolbarButtonBadgeParams;
+        await this.host.setToolbarButtonBadge(p.buttonId, p.badge);
         return;
       }
       case "setPanelMenuItems": {

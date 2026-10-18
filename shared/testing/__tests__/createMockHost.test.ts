@@ -335,6 +335,30 @@ describe("createMockHost", () => {
     ]);
   });
 
+  it("records setToolbarButtonBadge calls, normalizing a cleared badge to null (#13503)", async () => {
+    const host = createMockHost();
+    await host.setToolbarButtonBadge("needs", { kind: "label", text: "12", color: "warning" });
+    await host.setToolbarButtonBadge("needs", null);
+    expect(host.setToolbarButtonBadgeCalls).toEqual([
+      { buttonId: "needs", badge: { kind: "label", text: "12", color: "warning" } },
+      { buttonId: "needs", badge: null },
+    ]);
+  });
+
+  it("setToolbarButtonBadge rejects what the real host rejects, recording nothing (#13503)", async () => {
+    const host = createMockHost({ toolbarButtonIds: ["needs"] });
+    await expect(host.setToolbarButtonBadge("", { kind: "dot" })).rejects.toThrow(
+      /setToolbarButtonBadge: buttonId/
+    );
+    await expect(host.setToolbarButtonBadge("other", { kind: "dot" })).rejects.toThrow(
+      /"other" is not one of this plugin's contributes\.toolbarButtons/
+    );
+    await expect(
+      host.setToolbarButtonBadge("needs", { kind: "label", text: "TOOLONG" })
+    ).rejects.toThrow(/^setToolbarButtonBadge: invalid badge — text:/);
+    expect(host.setToolbarButtonBadgeCalls).toEqual([]);
+  });
+
   it("records reloadPanel calls and answers from simulated lifecycle phases (#12610)", async () => {
     const host = createMockHost({ pluginId: "acme" });
     await expect(host.reloadPanel("p1")).resolves.toBe("not-mounted");
