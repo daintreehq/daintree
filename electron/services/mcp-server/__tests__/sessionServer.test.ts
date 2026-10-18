@@ -189,6 +189,7 @@ function fakeDeps(overrides?: Partial<SessionServerDeps>): SessionServerDeps {
     handleSkillsSearch: vi.fn(() => ({ skills: [] })),
     handleSkillsLoad: vi.fn(),
     handleProjectRunCheck: vi.fn(),
+    handleProjectRunCommand: vi.fn(),
     handleTerminalGetStatusViewless: vi
       .fn()
       .mockResolvedValue({ terminals: [], source: "pty", unavailableFields: [] }),
@@ -1817,6 +1818,103 @@ describe("project.runCheck short-circuit (#11548)", () => {
 
     expect(result.isError).toBe(true);
     expect(handleProjectRunCheck).not.toHaveBeenCalled();
+  });
+});
+
+describe("project.runCommand short-circuit (#13495)", () => {
+  const ranResult = {
+    projectId: "proj-1",
+    cwd: "/repo",
+    exitCode: 0,
+    signalName: null,
+    durationMs: 120,
+    timedOut: false,
+    aborted: false,
+    output: "On branch main\n",
+    outputTruncated: false,
+  };
+
+  function storeWithOrigin(tier: "core" | "full" | "external", origin: McpSessionOrigin) {
+    const store = fakeSessionStore(tier);
+    (store as unknown as { sessionOriginMap: Map<string, string> }).sessionOriginMap.set(
+      "session-run-command",
+      origin
+    );
+    return store;
+  }
+
+  async function call(deps: SessionServerDeps) {
+    const server = createSessionServer("session-run-command", deps);
+    await server.connect(makeMockTransport());
+    return callTool(server, {
+      name: "project.runCommand",
+      arguments: { projectId: "proj-1", command: "git status" },
+    });
+  }
+
+  it("runs in main for Daintree's own assistant at the full tier", async () => {
+    const handleProjectRunCommand = vi.fn().mockResolvedValue(ranResult);
+    const dispatchAction = vi.fn();
+    const result = await call(
+      fakeDeps({
+        sessionStore: storeWithOrigin("full", "help"),
+        handleProjectRunCommand,
+        dispatchAction,
+      })
+    );
+
+    expect(dispatchAction).not.toHaveBeenCalled();
+    expect(handleProjectRunCommand.mock.calls[0]?.[0]).toEqual({
+      projectId: "proj-1",
+      command: "git status",
+    });
+    expect(handleProjectRunCommand.mock.calls[0]?.[1]).toBeInstanceOf(AbortSignal);
+    expect(result.isError).not.toBe(true);
+    expect(result.structuredContent).toEqual(ranResult);
+  });
+
+  it("returns a non-zero exit as a result, not a tool error", async () => {
+    const handleProjectRunCommand = vi
+      .fn()
+      .mockResolvedValue({ ...ranResult, exitCode: 128, output: "fatal: not a git repository\n" });
+    const result = await call(
+      fakeDeps({ sessionStore: storeWithOrigin("full", "help"), handleProjectRunCommand })
+    );
+
+    expect(result.isError).not.toBe(true);
+    expect((result.structuredContent as { exitCode: number }).exitCode).toBe(128);
+  });
+
+  it("refuses a full-tier session that is not the assistant, such as a worker pane", async () => {
+    const handleProjectRunCommand = vi.fn().mockResolvedValue(ranResult);
+    const result = await call(
+      fakeDeps({ sessionStore: storeWithOrigin("full", "external"), handleProjectRunCommand })
+    );
+
+    expect(toolErrorPayload(result).code).toBe(TIER_NOT_PERMITTED_CODE);
+    expect(handleProjectRunCommand).not.toHaveBeenCalled();
+  });
+
+  it("refuses the assistant at the core tier even when a grant admits the call", async () => {
+    const handleProjectRunCommand = vi.fn().mockResolvedValue(ranResult);
+    const sessionStore = storeWithOrigin("core", "help");
+    sessionStore.grantCache.issueGrant("session-run-command", "project.runCommand");
+    const result = await call(fakeDeps({ sessionStore, handleProjectRunCommand }));
+
+    expect(toolErrorPayload(result).code).toBe(TIER_NOT_PERMITTED_CODE);
+    expect(handleProjectRunCommand).not.toHaveBeenCalled();
+  });
+
+  it("surfaces a command that could not start as a tool error", async () => {
+    const handleProjectRunCommand = vi
+      .fn()
+      .mockRejectedValue(new Error("/elsewhere is not the project root or one of its worktrees."));
+    const result = await call(
+      fakeDeps({ sessionStore: storeWithOrigin("full", "help"), handleProjectRunCommand })
+    );
+
+    expect(result.isError).toBe(true);
+    expect(JSON.stringify(result.content)).toContain("not the project root");
   });
 });
 
@@ -6732,6 +6830,10 @@ describe("workspace-bound external sessions (#11789)", () => {
         "project.runCheck": {
           args: { projectId: "p-1", runnerId: "test" },
           handler: "handleProjectRunCheck",
+        },
+        "project.runCommand": {
+          args: { projectId: "p-1", command: "git status" },
+          handler: "handleProjectRunCommand",
         },
         "terminal.readLastMessageOwned": {
           args: { terminalId: "t-1" },

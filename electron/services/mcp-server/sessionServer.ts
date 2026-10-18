@@ -201,6 +201,7 @@ const HELP_DISPLAY_IMAGE_TOOL = "help.displayImage";
 const SKILLS_SEARCH_TOOL = "skills.search";
 const SKILLS_LOAD_TOOL = "skills.load";
 const PROJECT_RUN_CHECK_TOOL = "project.runCheck";
+const PROJECT_RUN_COMMAND_TOOL = "project.runCommand";
 const TERMINAL_GET_STATUS_TOOL = "terminal.getStatus";
 const TERMINAL_READ_LAST_MESSAGE_OWNED_TOOL = "terminal.readLastMessageOwned";
 
@@ -238,6 +239,7 @@ export const VIEWLESS_MAIN_PROCESS_TOOLS: ReadonlySet<string> = new Set([
   SKILLS_LOAD_TOOL,
   MCP_SURFACE_TOOL_ID,
   PROJECT_RUN_CHECK_TOOL,
+  PROJECT_RUN_COMMAND_TOOL,
   // Main-executed once its ownership check passes (#12479). It reads a file the
   // agent wrote and dispatches nothing, so a closed workspace is no reason to
   // refuse it.
@@ -1020,6 +1022,17 @@ export interface SessionServerDeps extends OwnedMainExecutors {
     signal: AbortSignal
   ) => Promise<import("../../../shared/types/projectCheck.js").ProjectCheckRunResult>;
   /**
+   * Execute `project.runCommand` in the main process (#13495), for the same
+   * reasons as `project.runCheck`. The caller restriction is applied before
+   * this is reached. Throws {@link McpError} on invalid args; throws for any
+   * reason the command could not start, and resolves when it ran, whatever
+   * its exit code.
+   */
+  handleProjectRunCommand: (
+    rawArgs: unknown,
+    signal: AbortSignal
+  ) => Promise<import("../../../shared/types/projectCommand.js").ProjectCommandRunResult>;
+  /**
    * Read `terminal.getStatus` off the pty-host for one workspace, with no
    * renderer (#12316). Used only as a fallback when the bound workspace has no
    * live view: the renderer answer is richer, and this one reports which fields
@@ -1272,6 +1285,7 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
     handleSkillsSearch,
     handleSkillsLoad,
     handleProjectRunCheck,
+    handleProjectRunCommand,
     handleTerminalGetStatusViewless,
     appendAuditRecord,
     getCachedManifest,
@@ -3603,6 +3617,58 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
             return buildToolError({
               code: EXECUTION_ERROR_CODE,
               message: formatErrorMessage(err, "project.runCheck failed"),
+            });
+          }
+        }
+
+        // Short-circuit: project.runCommand runs in main for the same reasons
+        // as project.runCheck (#13495), and is the one tool here held to a
+        // caller rather than a tier alone. It runs whatever command it is
+        // given, so only Daintree's own assistant at the full tier may call
+        // it: never a worker pane, an api-key client or a core session, and
+        // no grant widens that — the tier floor above can be widened by a
+        // per-tool or native grant, which is exactly what this must not
+        // honour. Never `danger: "confirm"`: the same assistant already
+        // reaches a shell through `terminal.new` and `terminal.sendCommand`.
+        if (actionId === PROJECT_RUN_COMMAND_TOOL) {
+          emitToolCallStarted(false);
+          try {
+            if (tier !== "full" || sessionStore.getOrigin(sessionId) !== "help") {
+              const message =
+                "project.runCommand is only available to Daintree's own assistant at the full tier.";
+              outcome = {
+                kind: "result",
+                value: { ok: false, error: { code: TIER_NOT_PERMITTED_CODE, message } },
+              };
+              return buildToolError({ code: TIER_NOT_PERMITTED_CODE, message });
+            }
+            const result = await handleProjectRunCommand(args, extra.signal);
+            outcome = { kind: "result", value: { ok: true, result } };
+            // A command can outlive the grant window, as a check can.
+            if (grantIssuedAt !== undefined || nativeGrantId !== undefined) {
+              if (grantIssuedAt !== undefined) {
+                sessionStore.grantCache.refresh(sessionId, actionId, grantIssuedAt);
+              }
+              if (nativeGrantId !== undefined) {
+                sessionStore.grantCache.refreshNativeGrant(nativeGrantId);
+              }
+              if (sessionStore.sessions.has(sessionId)) {
+                sessionStore.resetIdleTimer(sessionId);
+              } else if (sessionStore.httpSessions.has(sessionId)) {
+                sessionStore.resetHttpIdleTimer(sessionId);
+              }
+            }
+            return buildToolCallResult(result, {
+              structuredContent: result as unknown as Record<string, unknown>,
+            });
+          } catch (err) {
+            outcome = { kind: "throw", error: err };
+            if (err instanceof McpError) {
+              throw err;
+            }
+            return buildToolError({
+              code: EXECUTION_ERROR_CODE,
+              message: formatErrorMessage(err, "project.runCommand failed"),
             });
           }
         }

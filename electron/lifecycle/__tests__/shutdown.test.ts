@@ -96,6 +96,12 @@ vi.mock("../../services/ProjectCheckService.js", () => ({
   projectCheckService: projectCheckServiceMock,
 }));
 
+const projectCommandServiceMock = vi.hoisted(() => ({ dispose: vi.fn() }));
+
+vi.mock("../../services/ProjectCommandService.js", () => ({
+  projectCommandService: projectCommandServiceMock,
+}));
+
 const mcpServerMock = vi.hoisted(() => ({
   stop: vi.fn(() => Promise.resolve()),
 }));
@@ -999,6 +1005,7 @@ describe("registerShutdownHandler", () => {
 
       // POSIX checks spawn detached, so nothing else reaps them on quit.
       expect(projectCheckServiceMock.dispose).toHaveBeenCalledTimes(1);
+      expect(projectCommandServiceMock.dispose).toHaveBeenCalledTimes(1);
     });
 
     it("waits for the plugin-spawned children to be killed before exiting (#12216)", async () => {
@@ -2134,6 +2141,7 @@ describe("registerShutdownHandler", () => {
       expect(crashRecoveryMock.cleanupOnExit).toHaveBeenCalled();
       expect(crashLoopGuardMock.markCleanExit).toHaveBeenCalled();
       expect(projectCheckServiceMock.dispose).toHaveBeenCalled();
+      expect(projectCommandServiceMock.dispose).toHaveBeenCalled();
       expect(signalShutdownMock.clearSafetyBeltTimer).toHaveBeenCalled();
       // None of the chain's awaited work had been reached.
       expect(closeSharedDbMock.closeSharedDb).not.toHaveBeenCalled();

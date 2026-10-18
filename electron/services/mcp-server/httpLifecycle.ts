@@ -32,7 +32,11 @@ import type {
   McpWorkspaceBinding,
 } from "./shared.js";
 import { parseWorkspaceSelector, type WorkspaceSelectorRejection } from "./workspaceSelector.js";
-import { projectAuditArgs, projectAuditResult } from "./auditResultProjection.js";
+import {
+  auditVerbatimArgKeys,
+  projectAuditArgs,
+  projectAuditResult,
+} from "./auditResultProjection.js";
 import { helpOwnershipPrincipal } from "./resourceOwnership.js";
 import { SessionBindingError, WorkspaceBindingError } from "./rendererBridge.js";
 import { PLUGIN_MCP_ROUTE_PREFIX, type PluginMcpRouteHandler } from "../pluginAgentMcp/types.js";
@@ -223,6 +227,10 @@ export interface HttpLifecycleDeps {
     rawArgs: unknown,
     signal: AbortSignal
   ) => Promise<import("../../../shared/types/projectCheck.js").ProjectCheckRunResult>;
+  handleProjectRunCommand: (
+    rawArgs: unknown,
+    signal: AbortSignal
+  ) => Promise<import("../../../shared/types/projectCommand.js").ProjectCommandRunResult>;
   handleTerminalGetStatusViewless: (
     rawArgs: unknown,
     workspaceId: string
@@ -2277,8 +2285,10 @@ export class HttpLifecycle {
           () => ({
             sessionId: payload.sessionId,
             toolId: payload.toolId,
-            argsSummary: summarizeMcpArgs(projectAuditArgs(payload.toolId, payload.args), (s) =>
-              scrubSecrets(sanitizePath(s))
+            argsSummary: summarizeMcpArgs(
+              projectAuditArgs(payload.toolId, payload.args),
+              (s) => scrubSecrets(sanitizePath(s)),
+              auditVerbatimArgKeys(payload.toolId)
             ),
             startedAt: payload.startedAt,
             danger: payload.danger,
@@ -2361,6 +2371,7 @@ export class HttpLifecycle {
       handleSkillsSearch: this.deps.handleSkillsSearch,
       handleSkillsLoad: this.deps.handleSkillsLoad,
       handleProjectRunCheck: this.deps.handleProjectRunCheck,
+      handleProjectRunCommand: this.deps.handleProjectRunCommand,
       handleTerminalGetStatusViewless: this.deps.handleTerminalGetStatusViewless,
       handleTerminalReadLastMessageOwned: this.deps.handleTerminalReadLastMessageOwned,
       isTerminalIdInUse: this.deps.isTerminalIdInUse,
@@ -2419,8 +2430,10 @@ export class HttpLifecycle {
             : undefined;
         this.deps.auditService.appendRecord({
           ...recordInput,
-          argsSummary: summarizeMcpArgs(projectAuditArgs(input.toolId, input.args), (s) =>
-            scrubSecrets(sanitizePath(s))
+          argsSummary: summarizeMcpArgs(
+            projectAuditArgs(input.toolId, input.args),
+            (s) => scrubSecrets(sanitizePath(s)),
+            auditVerbatimArgKeys(input.toolId)
           ),
           ...(turnId !== null ? { turnId } : {}),
           ...(helpSessionId !== null ? { helpSessionId } : {}),

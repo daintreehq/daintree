@@ -569,6 +569,8 @@ export async function openSession(
       instantiateSchema(manifest.byId.get("skills.load")?.outputSchema) as never,
     handleProjectRunCheck: async () =>
       instantiateSchema(manifest.byId.get("project.runCheck")?.outputSchema) as never,
+    handleProjectRunCommand: async () =>
+      instantiateSchema(manifest.byId.get("project.runCommand")?.outputSchema) as never,
     handleTerminalGetStatusViewless: async () =>
       instantiateSchema(manifest.byId.get("terminal.getStatus")?.outputSchema) as never,
     // Self-gated (see SELF_GATED_TOOLS), so a battery never reaches it; this

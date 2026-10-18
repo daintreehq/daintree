@@ -35,10 +35,16 @@ const REDACTED_PLACEHOLDER = "<redacted>";
  * `scrubSecrets(sanitizePath(...))` pipeline here so structural secrets
  * (Bearer prefixes, sk-... keys, JWTs) cannot survive a truncation that
  * cuts the token body below the scrubber's minimum match length.
+ *
+ * `verbatimKeys` names top-level string arguments kept whole instead of
+ * collapsed, for a tool whose audit has to say what it was asked to do — the
+ * command `project.runCommand` ran. They still pass the sensitive-key check,
+ * the post-serialize scrub and the overall length cap.
  */
 export function summarizeMcpArgs(
   args: unknown,
-  postSerializeScrub?: (value: string) => string
+  postSerializeScrub?: (value: string) => string,
+  verbatimKeys?: ReadonlySet<string>
 ): string {
   const summarize = (value: unknown): unknown => {
     if (value === null) return null;
@@ -74,6 +80,10 @@ export function summarizeMcpArgs(
       if (key === "_meta") continue;
       if (SENSITIVE_KEY_PATTERN.test(key) && typeof value === "string" && value.length > 0) {
         out[key] = REDACTED_PLACEHOLDER;
+        continue;
+      }
+      if (verbatimKeys?.has(key) && typeof value === "string") {
+        out[key] = value;
         continue;
       }
       const reduced = summarize(value);

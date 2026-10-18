@@ -40,6 +40,7 @@ import { onRendererScopeChanged } from "../window/webContentsRegistry.js";
 import { handleWaitUntilIdle, handleWaitUntilIdleBatch } from "./mcp-server/waitUntilIdle.js";
 import { handleSkillsSearch, handleSkillsLoad } from "./mcp-server/skills.js";
 import { handleProjectRunCheck } from "./mcp-server/projectCheck.js";
+import { handleProjectRunCommand } from "./mcp-server/projectCommand.js";
 import {
   handleTerminalGetStatusViewless,
   isAgentPaneInWorkspace,
@@ -374,6 +375,7 @@ export class McpServerService {
       handleSkillsSearch: (rawArgs) => handleSkillsSearch(rawArgs),
       handleSkillsLoad: (rawArgs) => handleSkillsLoad(rawArgs),
       handleProjectRunCheck: (rawArgs, signal) => handleProjectRunCheck(rawArgs, signal),
+      handleProjectRunCommand: (rawArgs, signal) => handleProjectRunCommand(rawArgs, signal),
       handleTerminalGetStatusViewless: (rawArgs, workspaceId) =>
         handleTerminalGetStatusViewless(rawArgs, workspaceId),
       handleTerminalReadLastMessageOwned: (terminalId, options, signal) =>

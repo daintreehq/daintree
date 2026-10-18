@@ -759,7 +759,12 @@ describe("MCP wire budget — aggregate ratchets (§9)", () => {
   // rows of model id and name, nothing more. The assistant prompt no longer
   // names model ids, so this is how one the user names becomes an id. In-app
   // only, so the external ceiling does not move.
-  const MAX_COHORT_PAYLOAD_BYTES = 139_850;
+  // 139_850 → 141_100 for `project.runCommand` (#13495), measured at 141_068 B:
+  // its description, the projectId, command, cwd and timeoutMs arguments, and
+  // an output schema of exit code, signal, timing, termination flags and the
+  // scrubbed output tail. Assistant at full only, so the external ceiling does
+  // not move.
+  const MAX_COHORT_PAYLOAD_BYTES = 141_100;
 
   const wireBytes = (t: WireTool) => t.descriptionBytes + t.paramsBytes + t.outputBytes;
 

@@ -503,7 +503,11 @@ describe("LLM-facing tool descriptions (#11542)", () => {
   // user does name gets resolved. What the prose has to carry is that the ids
   // are current ones and that no model is the answer when none was named. In-app
   // only, off the external surface.
-  const MAX_COHORT_TOTAL_BYTES = 22_050;
+  // 22_050 → 22_300 for `project.runCommand` (#13495), measured at 22_262 B.
+  // What the prose has to carry is that the command runs as the host's user,
+  // that cwd is where it starts and not a sandbox, and that a non-zero exit is
+  // a result. Assistant at full only, off the external surface.
+  const MAX_COHORT_TOTAL_BYTES = 22_300;
 
   const ARG_SECTION = /\b(?:args?|arguments?|parameters?)\s*(?:\([^)]*\))?\s*:|\btakes no args\b/i;
 

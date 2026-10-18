@@ -205,6 +205,10 @@ export const FULL_TIER_ADDONS = [
   "project.detectRunners",
   // Runs a project-declared command as a real child process.
   "project.runCheck",
+  // Runs any command the assistant names, in a project root or worktree: the
+  // shell a hub lacks on a host it reaches over a relay (#13495). Reserved to
+  // the assistant below, and off the external list.
+  "project.runCommand",
 
   "git.getProjectPulse",
   "forge.getPR",
@@ -298,6 +302,8 @@ export const RENDERER_OWNED_ORIGIN_ONLY_TOOLS = [
   "host.cancelTask",
   "host.startAssistant",
   "host.readQuota",
+  // A shell command is the assistant's to run, never a worker pane's (#13495).
+  "project.runCommand",
 ] as const satisfies readonly BuiltInActionId[];
 
 /**
@@ -345,12 +351,14 @@ export const HELP_TIER_CUMULATIVE: Record<HelpAssistantTier, readonly string[]> 
  *
  * Operational risk, not minimum tier. The preview intersects this list with the
  * tier being previewed, so the same tool is called out wherever it first
- * becomes reachable. All three run project-defined teardown — arbitrary
+ * becomes reachable. The first three run project-defined teardown — arbitrary
  * commands from `.daintree/config.json`, and resource teardown that can destroy
- * a remote devbox. The two delete variants then remove the tree as well.
+ * a remote devbox. The two delete variants then remove the tree as well. The
+ * last runs whatever command the assistant chooses.
  */
 export const HIGH_BLAST_RADIUS_TOOLS: readonly string[] = [
   "worktree.delete",
   "worktree.deleteOwned",
   "worktree.resource.teardown",
+  "project.runCommand",
 ];
