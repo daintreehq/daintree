@@ -18,7 +18,8 @@ const WITHHELD_FROM_HOSTS: Record<string, string> = {
   "copyTree.generateAndCopyFile": "writes this Shell's clipboard",
   // #13493: an assistant a Shell's window runs on its host relaying through
   // that Shell could reach every machine the Shell reaches.
-  "host.call": "runs only for this machine's own assistants, never one a Shell's window runs on a host",
+  "host.call":
+    "runs only for this machine's own assistants, never one a Shell's window runs on a host",
 };
 
 const DEFAULT_SURFACE = [
