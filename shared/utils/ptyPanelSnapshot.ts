@@ -10,8 +10,14 @@ import type { PanelSnapshot } from "../types/project.js";
  * have recorded it.
  */
 
+/**
+ * A full PTY panel record. Kept as the whole type so the field-coverage test,
+ * which classifies every one of its keys, fails when a field is added.
+ */
+export type PtySerializeInput = PtyPanelData;
+
 /** The fields the PTY fragment is built from; any full panel record carries them. */
-export type PtySerializeInput = Pick<
+export type PtySnapshotSource = Pick<
   PtyPanelData,
   | "launchAgentId"
   | "cwd"
@@ -35,7 +41,7 @@ export type PtySerializeInput = Pick<
   | "lastStateChange"
 >;
 
-export function serializePtyPanel(t: PtySerializeInput): Partial<PanelSnapshot> {
+export function serializePtyPanel(t: PtySnapshotSource): Partial<PanelSnapshot> {
   // Sanitize the captured launch env on write so a compromised/edited on-disk
   // snapshot can't smuggle PATH/LD_PRELOAD or shell-injection values back in on
   // the next restore (#10922). Omitted entirely when nothing safe remains.

@@ -37,7 +37,7 @@ import {
 } from "../../../shared/utils/panelLimit.js";
 import {
   serializePtyPanel,
-  type PtySerializeInput,
+  type PtySnapshotSource,
 } from "../../../shared/utils/ptyPanelSnapshot.js";
 import {
   mergeTerminalLaunchEnv,
@@ -370,7 +370,7 @@ export async function runAgentLaunch(
   // added: the shared base fields, then the PTY fragment through the same
   // serializer. Never fatal — the agent is running either way, and hydration
   // still finds it through the pty-host.
-  const panel: PtySerializeInput = {
+  const panel: PtySnapshotSource = {
     cwd,
     launchAgentId,
     command: plan.command,
