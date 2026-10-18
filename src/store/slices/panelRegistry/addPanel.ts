@@ -1279,10 +1279,9 @@ export const createAddPanelActions = (
             agentPresetColor: options.agentPresetColor,
             originalAgentPresetId: options.originalPresetId ?? options.agentPresetId,
             handbackCode: options.handbackCode,
-            // Launch-time context the pane's MCP session replays: the
-            // assistant's is supplied by its caller (#10647), a Claude pane's
-            // is captured here for its own worktree (#12486). Main ignores it
-            // for every other agent.
+            // Launch-time context the pane's MCP session replays through its
+            // workspace binding (#12486): a caller may supply one, and a Claude
+            // pane's is captured here for its own worktree.
             actionContext:
               options.actionContext ??
               buildAgentLaunchContext({

@@ -304,7 +304,7 @@ export interface HelpLaunchOptions {
 // Help sessions keep their own bypass and model settings, but a CLI's
 // decorative effects are the same pane-repaint cost whoever launched it, so
 // the per-agent "keep decorations" choice applies here too (fresh launch and
-// resume alike). Assistant-only backends declare no decorations → no-op.
+// resume alike). A backend that declares no decorations is a no-op.
 function withDecorationChoice(flags: string[], agentId: string): string[] {
   const entry = getAgentSettingsEntrySnapshot(agentId) ?? {};
   return reconcileDecorationFlags(flags, agentId, resolveKeepDecorations(entry));

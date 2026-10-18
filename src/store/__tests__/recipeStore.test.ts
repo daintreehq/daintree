@@ -941,9 +941,9 @@ describe("recipeStore", () => {
       expect(results.spawned[1]).toEqual({ index: 1, terminalId: "terminal-2" });
     });
 
-    // A hand-edited recipe can still name the retired assistant CLI, or any id
-    // nothing registers. That terminal fails alone; the rest still spawns.
-    it("fails an unregistered agent terminal and spawns the rest", async () => {
+    // A hand-edited recipe can still name the retired assistant CLI. That
+    // terminal fails alone; the rest still spawns.
+    it("fails a retired agent terminal and spawns the rest", async () => {
       addTerminalMock.mockResolvedValue("terminal-1");
       useRecipeStore.setState({
         recipes: [
@@ -970,10 +970,38 @@ describe("recipeStore", () => {
       expect(results.failed).toHaveLength(1);
       expect(results.failed[0]!.index).toBe(1);
       expect(results.failed[0]!.error).toBe(
-        "'daintree-assistant' isn't a registered agent, so this terminal can't launch."
+        "'daintree-assistant' isn't an agent any more, so this terminal can't launch."
       );
       expect(addTerminalMock).not.toHaveBeenCalledWith(
         expect.objectContaining({ launchAgentId: "daintree-assistant" })
+      );
+    });
+
+    // A plugin agent the renderer's registry hasn't hydrated yet is still
+    // launched: main may already resolve its executable.
+    it("still launches an agent the renderer hasn't registered", async () => {
+      addTerminalMock.mockResolvedValue("terminal-1");
+      useRecipeStore.setState({
+        recipes: [
+          {
+            id: "recipe-plugin-agent",
+            name: "Recipe With Plugin Agent",
+            projectId: "project-1",
+            terminals: [{ type: "acme-agent", title: "Acme", env: {} }],
+            createdAt: Date.now(),
+          },
+        ],
+        isLoading: false,
+        currentProjectId: "project-1",
+      });
+
+      const results = await useRecipeStore
+        .getState()
+        .runRecipeWithResults("recipe-plugin-agent", "/tmp/worktree", "worktree-1");
+
+      expect(results.failed).toHaveLength(0);
+      expect(addTerminalMock).toHaveBeenCalledWith(
+        expect.objectContaining({ launchAgentId: "acme-agent" })
       );
     });
 

@@ -253,7 +253,7 @@ export const themeScenarios: PerfScenario[] = [
     id: "PERF-305",
     name: "Brand Mark Ink - APCA Search Across the Cohort",
     description:
-      "resolveBrandMarkInk for all 18 shipped agent brand colours against all 15 themes on all " +
+      "resolveBrandMarkInk for all 17 shipped agent brand colours against all 15 themes on all " +
       "6 surfaces a mark can be painted on — the heaviest real consumer of the APCA and OKLCH " +
       "maths, run for every brand mark whenever the active theme changes. The full sweep is " +
       "1,620 resolutions against a 512-entry FIFO cache, so it thrashes and every pass is cold; " +

@@ -12,7 +12,7 @@ import { createPerfTempRoot } from "./tempRoots";
  * `useAgentSetupPoll` calls `cliAvailabilityClient.refresh()` on a **3-second
  * interval** for as long as the agent setup wizard is open, and `refresh()` is
  * the cache-BYPASSING entry point: it bumps `checkId`, drops any in-flight
- * check, and re-probes all 18 agents from scratch. It used to spawn `which -a`
+ * check, and re-probes all 17 agents from scratch. It used to spawn `which -a`
  * per agent, and `which` again on every miss — 37 subprocess starts every three
  * seconds on a first run, happening exactly while a brand-new user watches the
  * app decide what they have installed. The PATH probe now searches PATH
@@ -32,7 +32,7 @@ import { createPerfTempRoot } from "./tempRoots";
  *     `npm config get prefix` attempt. Every start is counted through the
  *     harness's existing spawn observer in `lib/gitPipelineFixture.ts`, which
  *     validates itself before each measurement window.
- *   - The real 18-entry agent roster from `shared/config/agents/`.
+ *   - The real 17-entry agent roster from `shared/config/agents/`.
  *
  * WHAT IS NOT, AND WHY
  *   - **`electron/setup/environment.ts` is stubbed**, and this is the load-

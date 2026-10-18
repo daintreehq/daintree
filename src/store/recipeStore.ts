@@ -26,6 +26,7 @@ import {
   pluginRecipesClient,
 } from "@/clients";
 import { getAgentConfig, getMergedPreset } from "@/config/agents";
+import { isRetiredAgentId } from "@shared/config/agentIds";
 import {
   generateAgentCommand,
   buildAgentLaunchFlags,
@@ -1242,16 +1243,16 @@ const createRecipeStore: StateCreator<RecipeState> = (set, get) => ({
 
           if (isAgentRecipeType(terminal.type)) {
             const agentId = terminal.type as string;
-            const agentConfig = getAgentConfig(agentId);
-            // A hand-edited recipe can name an agent nothing registers, a
-            // retired built-in or an unloaded plugin's among them. Fail this
-            // terminal alone rather than spawn a blank command for it.
-            if (!agentConfig) {
-              const safeType = sanitizeTerminalName(agentId).slice(0, 80);
+            // A hand-edited recipe can still name a retired built-in. Fail this
+            // terminal alone rather than spawn a command for an agent that's
+            // gone. An unregistered plugin agent carries on: the renderer's
+            // registry may simply not have hydrated yet.
+            if (isRetiredAgentId(agentId)) {
               throw new Error(
-                `'${safeType}' isn't a registered agent, so this terminal can't launch.`
+                `'${agentId}' isn't an agent any more, so this terminal can't launch.`
               );
             }
+            const agentConfig = getAgentConfig(agentId);
             let launchCliDetail = launchCliDetails.get(agentId);
             if (!launchCliDetail) {
               launchCliDetail = getCurrentLaunchCliDetail(agentId, true);

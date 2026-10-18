@@ -2632,6 +2632,51 @@ describe("terminal spawn handler - Claude pane launch-workspace binding (#12486)
     expect(mockRegisterPaneWorkspaceBinding).not.toHaveBeenCalled();
     expect(ptyClient.spawn.mock.calls[0][1].env?.DAINTREE_MCP_TOKEN).toBeUndefined();
   });
+
+  it("revokes the pane bearer it minted when the PTY spawn throws", async () => {
+    ptyClient.spawn.mockImplementation(() => {
+      throw new Error("spawn boom");
+    });
+
+    await expect(launchClaude({ sender: { id: 42 }, projectId: "p1" })).rejects.toThrow(
+      /Failed to spawn terminal/
+    );
+
+    expect(mockRegisterPaneWorkspaceBinding).toHaveBeenCalledWith(
+      "pane-token",
+      expect.objectContaining({ workspaceId: "p1" })
+    );
+    expect(mockRevokePaneConfig).toHaveBeenCalledWith("claude-pane");
+  });
+
+  it("launches without MCP when preparing the pane config fails", async () => {
+    mockPreparePaneConfig.mockRejectedValue(new Error("mint failed"));
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      await launchClaude({ sender: { id: 42 }, projectId: "p1" });
+    } finally {
+      errorSpy.mockRestore();
+    }
+
+    expect(ptyClient.spawn).toHaveBeenCalledTimes(1);
+    const spawned = ptyClient.spawn.mock.calls[0][1];
+    expect(spawned.command).not.toContain("--mcp-config");
+    expect(spawned.env?.DAINTREE_MCP_TOKEN).toBeUndefined();
+    // Nothing was handed over, so nothing of a previous launch under this id
+    // is revoked either.
+    expect(mockRevokePaneConfig).not.toHaveBeenCalled();
+  });
+
+  it("prepares no MCP for a launch with no project to bind", async () => {
+    mockGetCurrentProject.mockReturnValue(null);
+    mockGetProjectById.mockReturnValue(null);
+
+    await launchClaude({ sender: { id: 42 } }, { projectId: undefined });
+
+    expect(ptyClient.spawn).toHaveBeenCalledTimes(1);
+    expect(mockPreparePaneConfig).not.toHaveBeenCalled();
+    expect(ptyClient.spawn.mock.calls[0][1].env?.DAINTREE_MCP_TOKEN).toBeUndefined();
+  });
 });
 
 describe("terminal spawn handler - plugin agent ${settings:*} resolution (#10619)", () => {
