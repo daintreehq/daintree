@@ -3,12 +3,26 @@ import { EventEmitter } from "events";
 import { Readable } from "stream";
 
 const spawnMock = vi.fn<(command: string, options: Record<string, unknown>) => unknown>();
+const treeKillMock = vi.fn<(target: unknown, options: { timeoutMs?: number }) => unknown>();
+const bgTreeKillMock =
+  vi.fn<(target: unknown, tag: string, options: { timeoutMs?: number }) => Promise<null>>();
 const realpathMock = vi.fn<(target: string) => Promise<string>>();
 const listWorktreesMock = vi.fn<() => Promise<Array<{ path: string; bare: boolean }>>>();
 const installEnvMock = vi.fn<() => Record<string, string>>();
 
 vi.mock("child_process", () => ({
   spawn: (command: string, options: Record<string, unknown>) => spawnMock(command, options),
+}));
+
+vi.mock("../../utils/windowsTreeKill.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../utils/windowsTreeKill.js")>()),
+  killWindowsProcessTreeSync: (target: unknown, options: { timeoutMs?: number }) =>
+    treeKillMock(target, options),
+  killWindowsProcessTreeInBackground: (
+    target: unknown,
+    tag: string,
+    options: { timeoutMs?: number }
+  ) => bgTreeKillMock(target, tag, options),
 }));
 
 vi.mock("fs/promises", () => ({
@@ -76,6 +90,19 @@ beforeEach(() => {
   realpathMock.mockImplementation(async (p: string) => p);
   listWorktreesMock.mockResolvedValue([{ path: "/repo-wt", bare: false }]);
   installEnvMock.mockReturnValue({ PATH: "/usr/bin", HOME: "/home/u", TERM: "dumb" });
+  treeKillMock.mockReturnValue({
+    mode: "tree",
+    targeted: [],
+    killed: [],
+    alreadyGone: [],
+    timedOut: [],
+    unconfirmed: [],
+    failed: [],
+    identityMismatch: [],
+    stale: [],
+    rootEnded: true,
+  });
+  bgTreeKillMock.mockResolvedValue(null);
 });
 
 afterEach(() => {
@@ -199,45 +226,77 @@ describe("ProjectCommandService.run", () => {
     }
   });
 
-  it("reports a cancelled run as aborted", async () => {
-    const killSpy = vi.spyOn(process, "kill").mockImplementation(() => true);
-    try {
-      const service = makeService();
-      const controller = new AbortController();
-      const promise = service.run(
-        { projectId: "proj-1", command: "sleep 600" },
-        { signal: controller.signal }
-      );
-      await vi.waitFor(() => expect(spawnMock).toHaveBeenCalled());
+  it.each(["darwin", "win32"] as const)(
+    "reports a cancelled run as aborted on %s",
+    async (platform) => {
+      const originalPlatform = Object.getOwnPropertyDescriptor(process, "platform")!;
+      Object.defineProperty(process, "platform", { value: platform, configurable: true });
+      const killSpy = vi.spyOn(process, "kill").mockImplementation(() => true);
+      try {
+        const service = makeService();
+        const controller = new AbortController();
+        const promise = service.run(
+          { projectId: "proj-1", command: "sleep 600" },
+          { signal: controller.signal }
+        );
+        await vi.waitFor(() => expect(spawnMock).toHaveBeenCalled());
 
-      controller.abort();
-      children[0]!.finish(null, "SIGTERM");
+        controller.abort();
+        if (platform === "win32") {
+          expect(bgTreeKillMock).toHaveBeenCalledExactlyOnceWith(
+            { pid: children[0]!.pid, ownChild: children[0] },
+            "[ProjectCommandService]",
+            { timeoutMs: 3_000 }
+          );
+          expect(treeKillMock).not.toHaveBeenCalled();
+        } else {
+          expect(killSpy).toHaveBeenCalledWith(-4242, "SIGTERM");
+        }
+        children[0]!.finish(null, "SIGTERM");
 
-      await expect(promise).resolves.toMatchObject({ aborted: true, timedOut: false });
-    } finally {
-      killSpy.mockRestore();
+        await expect(promise).resolves.toMatchObject({ aborted: true, timedOut: false });
+        expect(spawnMock).toHaveBeenCalledTimes(1);
+      } finally {
+        killSpy.mockRestore();
+        Object.defineProperty(process, "platform", originalPlatform);
+      }
     }
-  });
+  );
 
-  it("stops what is running on dispose and starts nothing after", async () => {
-    const killSpy = vi.spyOn(process, "kill").mockImplementation(() => true);
-    try {
-      const service = makeService();
-      const promise = service.run({ projectId: "proj-1", command: "sleep 600" });
-      await vi.waitFor(() => expect(spawnMock).toHaveBeenCalled());
+  it.each(["darwin", "win32"] as const)(
+    "stops what is running on dispose and starts nothing after on %s",
+    async (platform) => {
+      const originalPlatform = Object.getOwnPropertyDescriptor(process, "platform")!;
+      Object.defineProperty(process, "platform", { value: platform, configurable: true });
+      const killSpy = vi.spyOn(process, "kill").mockImplementation(() => true);
+      try {
+        const service = makeService();
+        const promise = service.run({ projectId: "proj-1", command: "sleep 600" });
+        await vi.waitFor(() => expect(spawnMock).toHaveBeenCalled());
 
-      service.dispose();
-      children[0]!.finish(null, "SIGKILL");
+        service.dispose();
+        if (platform === "win32") {
+          expect(treeKillMock).toHaveBeenCalledExactlyOnceWith(
+            { pid: children[0]!.pid, ownChild: children[0] },
+            { timeoutMs: 3_000 }
+          );
+          expect(bgTreeKillMock).not.toHaveBeenCalled();
+        } else {
+          expect(killSpy).toHaveBeenCalledWith(-4242, "SIGKILL");
+        }
+        children[0]!.finish(null, "SIGKILL");
 
-      await expect(promise).resolves.toMatchObject({ aborted: true });
-      await expect(service.run({ projectId: "proj-1", command: "ls" })).rejects.toThrow(
-        /shutting down/
-      );
-      expect(spawnMock).toHaveBeenCalledTimes(1);
-    } finally {
-      killSpy.mockRestore();
+        await expect(promise).resolves.toMatchObject({ aborted: true });
+        await expect(service.run({ projectId: "proj-1", command: "ls" })).rejects.toThrow(
+          /shutting down/
+        );
+        expect(spawnMock).toHaveBeenCalledTimes(1);
+      } finally {
+        killSpy.mockRestore();
+        Object.defineProperty(process, "platform", originalPlatform);
+      }
     }
-  });
+  );
 });
 
 describe("buildProjectCommandEnv", () => {
