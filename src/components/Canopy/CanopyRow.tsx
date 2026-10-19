@@ -279,29 +279,35 @@ export function CanopyRow({
     row.run.agentState === "waiting" &&
     row.run.since !== undefined &&
     nowMs - row.run.since >= OVERDUE_WAIT_MS;
-  // What follows where it runs, in order; only the reported facts give way
-  // when the line runs out of room, each one whole.
-  const metaTail: Array<{ text: string } | { facts: string[] }> = [];
+  // What follows where it runs, each part whole. The line gives way from its
+  // end, so what the agent reported goes last: it leaves before anything
+  // Daintree saw for itself.
+  const metaTail: string[] = [];
   const progress = compact ? null : itemProgress(item);
   const facts = compact ? [] : itemFacts(item);
   const choices = compact ? [] : answerOptions(item);
-  if (asideLabel !== null) metaTail.push({ text: asideLabel });
+  if (asideLabel !== null) metaTail.push(asideLabel);
   // Quiet and working share the spinner and differ only in hue once motion is
   // reduced; the word says which, since the clock beside the glyph is only a time.
-  if (row.band === "quiet") metaTail.push({ text: "Quiet" });
+  if (row.band === "quiet") metaTail.push("Quiet");
   // A reading, not an observation, so it is said as one: it looks done.
-  if (!compact && looksDone) metaTail.push({ text: "Looks done" });
-  if (facts.length > 0) metaTail.push({ facts });
+  if (!compact && looksDone) metaTail.push("Looks done");
   // Still behind a ticking spinner: Daintree's own quiet tracking cannot see it.
   const stalledSince = card?.stalledSince ?? null;
   if (!compact && row.band !== "quiet" && stalledSince !== null && itemIsBusy(item)) {
     // What was seen, not what it means: the screen hasn't moved.
-    metaTail.push({ text: `No change ${formatWaitAge(stalledSince, nowMs)}` });
+    metaTail.push(`No change ${formatWaitAge(stalledSince, nowMs)}`);
   }
   const contextWarning = compact ? null : itemContextWarning(item);
-  if (contextWarning !== null) metaTail.push({ text: contextWarning });
-  if (unseenLabel !== null) metaTail.push({ text: unseenLabel });
-  if (item.failed) metaTail.push({ text: "Read failed" });
+  if (contextWarning !== null) metaTail.push(contextWarning);
+  if (unseenLabel !== null) metaTail.push(unseenLabel);
+  if (item.failed) metaTail.push("Read failed");
+  // What the agent reported, read off its screen, not checked against the
+  // repository: said as a report. The word goes with the first fact, and the
+  // facts leave from the last, so it never stands alone or goes missing.
+  facts.forEach((fact, index) =>
+    metaTail.push(index === 0 ? `Reported: ${lowerFirst(fact)}` : lowerFirst(fact))
+  );
   // Every inbox row keeps the same height, idle ones too: a run that goes idle
   // or wakes up must not move every row beneath it.
   // A summary on its way and nothing to stand in for it: its two lines show as
@@ -533,9 +539,11 @@ export function CanopyRow({
             )}
             {/* What the dialog offers, numbered as the keys that pick it from
                 here: the strip carries its own remedy, one key away. Its key
-                caps overhang the line by a pixel rather than grow it. */}
+                caps overhang the line by a pixel rather than grow it, so a
+                menu too long for the row is cut across only: past its edge it
+                would scroll the whole list sideways. */}
             {choices.length > 0 && (
-              <span className="flex h-4 min-w-0 items-center gap-3 text-xs leading-4 text-text-secondary">
+              <span className="flex h-4 min-w-0 items-center gap-3 overflow-x-clip text-xs leading-4 text-text-secondary">
                 {choices.map((choice, index) => (
                   <span
                     key={choice}
@@ -555,10 +563,13 @@ export function CanopyRow({
           </span>
         )}
         {/* Held at its line's height even with nothing to say: facts landing,
-            a reply noted or a run going quiet must not move the rows below. */}
+            a reply noted or a run going quiet must not move the rows below.
+            Never wider than the row either, or the whole list scrolls
+            sideways: a part that doesn't fit wraps onto a second line the box
+            clips, whole and with its dot, and takes every part after it. */}
         <span
           data-canopy-meta=""
-          className="flex h-4 min-w-0 items-center text-xs leading-4 whitespace-nowrap text-text-secondary"
+          className="flex h-4 min-w-0 flex-wrap items-center overflow-hidden text-xs leading-4 whitespace-nowrap text-text-secondary"
         >
           {/* The emoji leads a place, never stands for one: a row titled after
               its project drops the name here, and its emoji goes with it. */}
@@ -566,50 +577,26 @@ export function CanopyRow({
             <span className="mr-1.5 shrink-0 leading-none select-none">{item.workspace.emoji}</span>
           )}
           {/* Where it runs is how a row is told apart: the project keeps its
-              name longest, the worktree's gives way before it, and the facts
-              after them never take the last ten rems of the line — and, short
-              of room, the facts give way, whole, before the worktree's name
-              is cut below a few characters. */}
+              name longest, and the worktree's gives way before it. The
+              worktree holds its first few letters while the parts after it
+              find their places, then grows back into whatever room they
+              leave, so the line gives way from its end before the worktree's
+              name is cut below a few characters. */}
           {project !== null && (
             <span className="max-w-[45%] min-w-0 shrink-0 truncate">{project}</span>
           )}
           {worktree !== null && (
-            <span className="flex min-w-[5rem] shrink-[4]">
+            <span className="flex max-w-max min-w-0 grow basis-12">
               {project !== null && <MetaDot />}
               <span className="min-w-0 truncate">{worktree}</span>
             </span>
           )}
-          {metaTail.map((part, index) => {
-            const dot = index > 0 || where !== "" ? <MetaDot /> : null;
-            if ("text" in part) {
-              return (
-                <span key={part.text} className="flex shrink-0">
-                  {dot}
-                  {part.text}
-                </span>
-              );
-            }
-            // A fact that doesn't fit drops whole rather than ending "Tests p…":
-            // each wraps onto a second line the box clips, and the empty
-            // first item holds the first line open for none of them.
-            return (
-              <span
-                key="facts"
-                className="flex h-4 max-w-[calc(100%-10rem)] min-w-0 shrink-[16] flex-wrap overflow-hidden"
-              >
-                <span className="h-4 w-0" />
-                {/* What the agent reported, read off its screen, not checked
-                    against the repository: said as a report. The word goes
-                    with the first fact, so it never stands alone. */}
-                {part.facts.map((fact, factIndex) => (
-                  <span key={fact} className="flex shrink-0 whitespace-nowrap">
-                    {(factIndex > 0 || dot !== null) && <MetaDot />}
-                    {factIndex === 0 ? `Reported: ${lowerFirst(fact)}` : lowerFirst(fact)}
-                  </span>
-                ))}
-              </span>
-            );
-          })}
+          {metaTail.map((part, index) => (
+            <span key={part} className="flex shrink-0">
+              {(index > 0 || where !== "") && <MetaDot />}
+              {part}
+            </span>
+          ))}
         </span>
       </span>
     </div>

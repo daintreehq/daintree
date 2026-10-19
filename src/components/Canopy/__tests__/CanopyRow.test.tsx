@@ -357,6 +357,30 @@ describe("CanopyRow", () => {
     expect(description(container)).toContain("reported tests pass, not committed");
   });
 
+  it("ends the meta line with what the agent reported, each part whole with its own dot", () => {
+    const { container } = renderRow(
+      itemFor(
+        "finished",
+        { tests: "passing", changes: "uncommitted", contextLeft: 10 },
+        { cwd: "/w/fix-rounding" }
+      )
+    );
+    const meta = container.querySelector("[data-canopy-meta]")!;
+    // The line gives way from its end, a part at a time: the agent's reports
+    // sit after everything Daintree saw, so they are the first to go, and
+    // each part is one box carrying its separator, so none leaves half of
+    // itself or a stray dot behind.
+    expect([...meta.children].map((part) => part.textContent)).toEqual([
+      "🦊",
+      "app",
+      "·fix-rounding",
+      "·Looks done",
+      "·10% context left",
+      "·Reported: tests pass",
+      "·not committed",
+    ]);
+  });
+
   it("rings a waiting agent that is asking a question with a question mark", () => {
     const { container } = renderRow(itemFor("question"));
     expect(container.querySelector("[data-asking]")).not.toBeNull();
