@@ -1,8 +1,13 @@
+import Module from "node:module";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-const { getAppMetricsMock } = vi.hoisted(() => ({ getAppMetricsMock: vi.fn() }));
+const { getAppMetricsMock, logWarnMock } = vi.hoisted(() => ({
+  getAppMetricsMock: vi.fn(),
+  logWarnMock: vi.fn(),
+}));
 
 vi.mock("electron", () => ({ app: { getAppMetrics: getAppMetricsMock } }));
+vi.mock("../logger.js", () => ({ logWarn: logWarnMock }));
 
 import {
   attachPhysFootprints,
@@ -44,6 +49,7 @@ function useReader(): void {
 beforeEach(() => {
   readPhysFootprints.mockReset();
   getAppMetricsMock.mockReset();
+  logWarnMock.mockReset();
   resetAppMetricsSnapshotForTesting();
 });
 
@@ -76,6 +82,88 @@ describe("readPhysFootprintsKb", () => {
 
     expect(readPhysFootprintsKb([10])).toBeNull();
   });
+
+  it("is null, and warns once, when not one pid of a batch could be read", () => {
+    useReader();
+    readPhysFootprints.mockReturnValue([null, null]);
+
+    expect(readPhysFootprintsKb([10, 11])).toBeNull();
+    expect(readPhysFootprintsKb([10, 11])).toBeNull();
+    expect(logWarnMock).toHaveBeenCalledTimes(1);
+    expect(logWarnMock).toHaveBeenCalledWith("phys-footprint-batch-unreadable", { pidCount: 2 });
+  });
+});
+
+describe("loading the addon", () => {
+  const originalPlatform = process.platform;
+  const originalVitest = process.env.VITEST;
+  const originalRequire = Module.prototype.require;
+  const requested: string[] = [];
+
+  function loadAs(platform: NodeJS.Platform, addon: unknown): void {
+    Object.defineProperty(process, "platform", { value: platform, configurable: true });
+    delete process.env.VITEST;
+    Module.prototype.require = function (this: NodeJS.Module, id: string): unknown {
+      if (id === "mac-phys-footprint") {
+        requested.push(id);
+        if (addon instanceof Error) throw addon;
+        return addon;
+      }
+      return originalRequire.call(this, id);
+    } as unknown as typeof Module.prototype.require;
+    resetPhysFootprintReaderForTesting();
+  }
+
+  afterEach(() => {
+    Object.defineProperty(process, "platform", { value: originalPlatform, configurable: true });
+    process.env.VITEST = originalVitest;
+    Module.prototype.require = originalRequire;
+    requested.length = 0;
+  });
+
+  it("reads through the addon on macOS", () => {
+    loadAs("darwin", {
+      readPhysFootprints: (pids: number[]) => pids.map(() => 5 * MB),
+      isAvailable: () => true,
+      getLoadError: () => null,
+    });
+
+    expect(readPhysFootprintsKb([42])).toEqual(new Map([[42, 5 * 1024]]));
+    expect(logWarnMock).not.toHaveBeenCalled();
+  });
+
+  it("warns once and stays on resident memory when the addon can't load", () => {
+    loadAs("darwin", new Error("Cannot find module 'mac-phys-footprint'"));
+
+    expect(readPhysFootprintsKb([42])).toBeNull();
+    expect(readPhysFootprintsKb([42])).toBeNull();
+    expect(requested).toHaveLength(1);
+    expect(logWarnMock).toHaveBeenCalledTimes(1);
+    expect(logWarnMock).toHaveBeenCalledWith("phys-footprint-unavailable", {
+      error: "Cannot find module 'mac-phys-footprint'",
+    });
+  });
+
+  it("warns when the addon is present but its binary didn't load", () => {
+    loadAs("darwin", {
+      readPhysFootprints: () => null,
+      isAvailable: () => false,
+      getLoadError: () => new Error("incompatible architecture"),
+    });
+
+    expect(readPhysFootprintsKb([42])).toBeNull();
+    expect(logWarnMock).toHaveBeenCalledWith("phys-footprint-unavailable", {
+      error: "incompatible architecture",
+    });
+  });
+
+  it("never loads the addon off macOS", () => {
+    loadAs("linux", new Error("must not load"));
+
+    expect(readPhysFootprintsKb([42])).toBeNull();
+    expect(requested).toHaveLength(0);
+    expect(logWarnMock).not.toHaveBeenCalled();
+  });
 });
 
 describe("getProcessMemoryKb", () => {
@@ -100,6 +188,17 @@ describe("getProcessMemoryKb", () => {
     attachPhysFootprints(metrics);
 
     expect(metrics.map(getProcessMemoryKb)).toEqual([40_000, 180 * 1024]);
+  });
+
+  it("labels a sweep resident when not one of its processes could be read", () => {
+    useReader();
+    readPhysFootprints.mockReturnValue([null, null]);
+    const metrics = [metric(100, 40_000), metric(101, 150_000)];
+
+    attachPhysFootprints(metrics);
+
+    expect(metrics.map(getProcessMemoryKb)).toEqual([40_000, 150_000]);
+    expect(getMetricsMemorySource(metrics)).toBe("resident");
   });
 
   it("stays on working set and says so when no reader is available", () => {

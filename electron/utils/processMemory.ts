@@ -22,6 +22,7 @@ export interface PhysFootprintReader {
 }
 
 let reader: PhysFootprintReader | null | undefined;
+let warnedEmptyBatch = false;
 
 // A suite feeding made-up PIDs through the real reader would measure whatever
 // live process holds them. Tests inject a reader.
@@ -50,8 +51,9 @@ function loadReader(): PhysFootprintReader | null {
 }
 
 /**
- * Physical footprint in KB for each pid that could be read, or null when the
- * reader is unavailable in this process. A pid missing from the map was
+ * Physical footprint in KB for each pid that could be read, or null when there
+ * is no footprint to report: the reader is unavailable in this process, or not
+ * one pid of a non-empty batch could be read. A pid missing from the map was
  * unreadable — another user's or a protected process, or one that exited
  * since it was listed — and the caller keeps its resident reading for it.
  */
@@ -67,6 +69,13 @@ export function readPhysFootprintsKb(pids: readonly number[]): Map<number, numbe
     if (typeof value === "number" && Number.isFinite(value) && value > 0) {
       kbByPid.set(pids[i]!, Math.round(value / 1024));
     }
+  }
+  if (pids.length > 0 && kbByPid.size === 0) {
+    if (!warnedEmptyBatch) {
+      warnedEmptyBatch = true;
+      logWarn("phys-footprint-batch-unreadable", { pidCount: pids.length });
+    }
+    return null;
   }
   return kbByPid;
 }
@@ -111,4 +120,5 @@ export function setPhysFootprintReaderForTesting(next: PhysFootprintReader | nul
 
 export function resetPhysFootprintReaderForTesting(): void {
   reader = undefined;
+  warnedEmptyBatch = false;
 }

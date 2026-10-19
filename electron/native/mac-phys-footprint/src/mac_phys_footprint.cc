@@ -9,7 +9,9 @@
 // proc_pid_rusage reads it from the task's ledger. It needs no task port, no
 // entitlement and no root for same-user processes, and it never walks the
 // address space, so it stays O(1) per pid while the machine is swapping — the
-// moment the exec-based probes time out.
+// moment the exec-based probes time out. V0 already carries the footprint;
+// V3 and later also sum per-thread QoS stats under the task lock, which every
+// census would pay for nothing.
 
 #include <napi.h>
 #include <libproc.h>
@@ -38,15 +40,16 @@ Napi::Value ReadPhysFootprints(const Napi::CallbackInfo& info) {
 
   for (uint32_t i = 0; i < length; i++) {
     Napi::Value value = pids.Get(i);
+    if (env.IsExceptionPending()) return env.Null();
     result.Set(i, env.Null());
     if (!value.IsNumber()) continue;
 
     double pidDouble = value.As<Napi::Number>().DoubleValue();
     if (!(pidDouble > 0) || pidDouble > INT_MAX || std::floor(pidDouble) != pidDouble) continue;
 
-    rusage_info_v4 usage = {};
+    rusage_info_v0 usage = {};
     int rc = proc_pid_rusage(
-        static_cast<pid_t>(pidDouble), RUSAGE_INFO_V4, reinterpret_cast<rusage_info_t*>(&usage));
+        static_cast<pid_t>(pidDouble), RUSAGE_INFO_V0, reinterpret_cast<rusage_info_t*>(&usage));
     if (rc != 0) continue;
 
     result.Set(i, Napi::Number::New(env, static_cast<double>(usage.ri_phys_footprint)));

@@ -104,6 +104,10 @@ function baseFiles() {
     "!demo/**",
     "!node_modules/node-pty/bin",
     "!node_modules/node-pty/prebuilds",
+    // @electron/rebuild copies every built .node into bin/<platform>-<arch>-<abi>;
+    // the shim only loads build/Release, and the copy is the same Mach-O in
+    // both universal slices, which @electron/universal rejects.
+    "!node_modules/mac-phys-footprint/bin",
     "!node_modules/ffmpeg-static/**/*",
     // Sample plugins are an e2e harness fixture (#9286) — sideloaded only
     // when `DAINTREE_E2E_SIDELOAD_PLUGIN_DIR` is set, which is constant-

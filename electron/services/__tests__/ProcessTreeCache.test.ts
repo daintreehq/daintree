@@ -1561,6 +1561,15 @@ describe("macOS physical footprint (#13526)", () => {
     expect(cache.getMemorySource()).toBe("resident");
   });
 
+  it("reports resident when not one footprint in the census could be read", async () => {
+    readPhysFootprints.mockImplementation((pids) => pids.map(() => null));
+
+    const cache = await refreshFromPs();
+
+    expect(cache.aggregateSubtreeMemory([{ key: "p", rootPid: 200 }]).totalMemoryKb).toBe(6000);
+    expect(cache.getMemorySource()).toBe("resident");
+  });
+
   it("never reads footprints off macOS", async () => {
     setPlatform("linux");
 
