@@ -105,6 +105,12 @@ function renderRow(
 
 const option = (container: HTMLElement) => container.querySelector<HTMLElement>("[role=option]")!;
 
+/** The meta line's parts, each the box that stays or wraps away whole; the empty line-holder is not one. */
+const metaParts = (container: HTMLElement) =>
+  [...container.querySelector("[data-canopy-meta]")!.children]
+    .map((part) => part.textContent ?? "")
+    .filter((text) => text !== "");
+
 /** What a screen reader hears after the name: every element the row points its description at. */
 function description(container: HTMLElement): string {
   return (option(container).getAttribute("aria-describedby") ?? "")
@@ -365,12 +371,11 @@ describe("CanopyRow", () => {
         { cwd: "/w/fix-rounding" }
       )
     );
-    const meta = container.querySelector("[data-canopy-meta]")!;
     // The line gives way from its end, a part at a time: the agent's reports
     // sit after everything Daintree saw, so they are the first to go, and
     // each part is one box carrying its separator, so none leaves half of
     // itself or a stray dot behind.
-    expect([...meta.children].map((part) => part.textContent)).toEqual([
+    expect(metaParts(container)).toEqual([
       "🦊",
       "app",
       "·fix-rounding",
@@ -379,6 +384,17 @@ describe("CanopyRow", () => {
       "·Reported: tests pass",
       "·not committed",
     ]);
+  });
+
+  it("leads the meta line without a dot when the row is titled after where it runs", () => {
+    const { container } = renderRow(
+      itemFor(
+        "finished",
+        { task: null, changes: "committed" },
+        { title: "Claude", cwd: "/Users/dev/app" }
+      )
+    );
+    expect(metaParts(container)).toEqual(["Looks done", "·Reported: committed"]);
   });
 
   it("rings a waiting agent that is asking a question with a question mark", () => {

@@ -566,11 +566,14 @@ export function CanopyRow({
             a reply noted or a run going quiet must not move the rows below.
             Never wider than the row either, or the whole list scrolls
             sideways: a part that doesn't fit wraps onto a second line the box
-            clips, whole and with its dot, and takes every part after it. */}
+            clips, whole and with its dot, and takes every part after it. The
+            empty first item holds the first line open at full height, so even
+            the first part can leave whole. */}
         <span
           data-canopy-meta=""
           className="flex h-4 min-w-0 flex-wrap items-center overflow-hidden text-xs leading-4 whitespace-nowrap text-text-secondary"
         >
+          <span className="h-4 w-0" />
           {/* The emoji leads a place, never stands for one: a row titled after
               its project drops the name here, and its emoji goes with it. */}
           {item.workspace.emoji && where !== "" && (
