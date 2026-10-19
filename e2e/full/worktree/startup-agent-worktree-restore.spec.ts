@@ -16,6 +16,7 @@ import {
   getTerminalTextById,
   typeTerminalCommand,
   waitForTerminalText,
+  waitForTerminalTextIgnoringLineBreaks,
 } from "../../helpers/terminal";
 import { dispatchAction } from "../../helpers/actions";
 import { readFakeAgentLaunchLog, type FakeAgentLaunchRecord } from "../../helpers/fakeAgent";
@@ -57,9 +58,9 @@ function prepareFixture(): void {
   const implName = process.platform === "win32" ? "claude.js" : "claude";
   const fakeClaude = path.join(fakeBinDir, implName);
   // Instant-boot fake agent: prints a banner, the READY token, and the
-  // basename of its cwd (short enough to never wrap in xterm), then idles so
-  // the PTY stays alive until app quit. The cwd line is what proves a
-  // restored panel respawned its agent in the right worktree directory.
+  // basename of its cwd, then idles so the PTY stays alive until app quit.
+  // The cwd line is what proves a restored panel respawned its agent in the
+  // right worktree directory.
   //
   // Every launch is also appended to `launches.log` in the shape
   // `readFakeAgentLaunchLog` reads, so the argv Daintree respawned it with is
@@ -194,7 +195,9 @@ async function selectWorktreeAndAwaitPanels(
 // Every visible agent panel must show the fake agent's READY token and the
 // expected cwd basename — proof the agent process actually (re)launched in
 // the worktree the panel claims to belong to. `plainTerminalId` is the one
-// plain shell in the grid, which runs no agent.
+// plain shell in the grid, which runs no agent. Row breaks are ignored
+// because narrow panes soft-wrap the cwd line (a 1024px macOS runner screen
+// leaves two ~40-column panes).
 async function expectVisibleAgents(
   page: AppContext["window"],
   count: number,
@@ -206,7 +209,7 @@ async function expectVisibleAgents(
   for (const id of ids) {
     const panel = getPanelById(page, id);
     await waitForTerminalText(panel, READY_TOKEN, T_LONG * 2);
-    await waitForTerminalText(panel, `AGENT_CWD=${cwdBasename}`, T_LONG);
+    await waitForTerminalTextIgnoringLineBreaks(panel, `AGENT_CWD=${cwdBasename}`, T_LONG);
   }
 }
 
