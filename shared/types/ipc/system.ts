@@ -39,11 +39,30 @@ export interface SystemWakePayload {
   timestamp: number;
 }
 
+/** One project's terminals and everything they spawned, as last measured. */
+export interface SystemMemoryWorkload {
+  /** Null for terminals no project owns. */
+  projectId: string | null;
+  /** The project's name when main could resolve it. */
+  projectName: string | null;
+  terminalCount: number;
+  memoryMb: number;
+}
+
+/** Memory Daintree itself hosts, measured when the payload was published. */
+export interface SystemMemoryWorkloads {
+  /** Daintree's own Electron processes; null when that sweep failed. */
+  appMemoryMb: number | null;
+  /** Heaviest first, at most a handful; empty when the terminal sweep failed. */
+  projects: SystemMemoryWorkload[];
+}
+
 /**
- * Pushed on the two edges of a sustained system-memory episode: `degraded` once
- * when it opens, `normal` once when it clears. Observations only — each figure
- * is non-null only when that measurement was over its threshold on the sample
- * that opened the episode, and both are null on `normal`.
+ * Pushed on the edges of a sustained system-memory episode: `degraded` when it
+ * opens and again each time it worsens (#13529), `normal` once when it clears.
+ * Observations only — each figure is non-null only when that measurement was
+ * over its threshold on the sample that published it, and all are null on
+ * `normal`.
  */
 export interface SystemMemoryPressurePayload {
   status: "degraded" | "normal";
@@ -54,6 +73,10 @@ export interface SystemMemoryPressurePayload {
   fseventsdRssMb: number | null;
   /** The level `kern.memorystatus_vm_pressure_level` reported. Darwin only. */
   kernelPressureLevel: "warn" | "critical" | null;
+  /** True on a publish after the first in the episode, each one worse than the last. */
+  escalated: boolean;
+  /** What Daintree was hosting at the time; null on `normal` or when nothing could be read. */
+  workloads: SystemMemoryWorkloads | null;
 }
 
 /**

@@ -29,6 +29,8 @@ const DEGRADED: SystemMemoryPressurePayload = {
   swapKind: "swap",
   fseventsdRssMb: null,
   kernelPressureLevel: "warn",
+  escalated: false,
+  workloads: null,
 };
 
 function view(id: number, destroyed = false) {

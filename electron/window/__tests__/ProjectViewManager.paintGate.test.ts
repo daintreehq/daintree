@@ -1918,6 +1918,8 @@ describe("ProjectViewManager — frame confirmation before reveal (#12394)", () 
       swapKind: "swap",
       fseventsdRssMb: null,
       kernelPressureLevel: "warn",
+      escalated: false,
+      workloads: null,
     } as const;
     publishSystemMemoryPressure(episode, []);
     try {

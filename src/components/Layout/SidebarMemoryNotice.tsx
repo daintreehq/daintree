@@ -33,15 +33,18 @@ const ACTION_CLASS = cn(
  * a machine that runs hot it came back every episode — too loud for a reading
  * Daintree didn't cause and can't fix.
  *
- * Tier-1 chrome: neutral glyph and secondary text, never an accent or a status
- * colour, no dismiss. It states what was measured and nothing else (#12462),
- * clears itself on recovery, and follows the footer's polarity — the reading on
- * the left, its controls on the right.
+ * Tier-1 chrome: neutral glyph and secondary text, never an accent, no
+ * dismiss. It states what was measured and nothing else (#12462), clears itself
+ * on recovery, and follows the footer's polarity — the reading on the left, its
+ * controls on the right. Once the kernel reports its critical level the glyph
+ * takes the warning colour and the reading primary text (#13529): the episode
+ * has worsened past where an ambient line is enough.
  *
- * Besides the diagnosis it offers to sleep idle background projects (#13223),
- * the one relief Daintree itself can give: their terminals stop and their
- * sessions keep for the reopen. Both sit behind one menu button (#13229): as
- * two text buttons they took most of the row and truncated the reading.
+ * Its menu offers the memory breakdown, which adds no load of its own, and to
+ * sleep idle background projects (#13223), the one relief Daintree itself can
+ * give: their terminals stop and their sessions keep for the reopen. Both sit
+ * behind one menu button (#13229): as two text buttons they took most of the
+ * row and truncated the reading.
  */
 export function SidebarMemoryNotice() {
   const notice = useSystemMemoryNoticeStore((s) => s.notice);
@@ -64,13 +67,22 @@ function MemoryNoticeRow({ notice }: { notice: SystemMemoryNotice }) {
     <div data-sidebar-memory-notice="" className="flex min-h-7 w-full shrink-0 items-stretch">
       <div className="flex min-w-0 flex-1 items-center gap-2 py-1.5 pl-4 pr-2">
         <SidebarFooterGlyph>
-          <MemoryStick className="h-3 w-3 text-text-secondary" aria-hidden="true" />
+          <MemoryStick
+            className={cn(
+              "h-3 w-3",
+              notice.critical ? "text-status-warning" : "text-text-secondary"
+            )}
+            aria-hidden="true"
+          />
         </SidebarFooterGlyph>
         <TruncatedTooltip content={notice.detail} side="top" contentClassName="max-w-xs">
           <span
             role="status"
             aria-atomic="true"
-            className="min-w-0 truncate text-2xs font-medium text-text-secondary"
+            className={cn(
+              "min-w-0 truncate text-2xs font-medium",
+              notice.critical ? "text-text-primary" : "text-text-secondary"
+            )}
           >
             {notice.reading}
           </span>
@@ -115,7 +127,7 @@ function MemoryNoticeRow({ notice }: { notice: SystemMemoryNotice }) {
                   pendingActionRef.current = () => void action.onClick();
                 }}
               >
-                Ask agent about memory
+                {action.label}
               </DropdownMenuItem>
             )}
             {canSleep && (

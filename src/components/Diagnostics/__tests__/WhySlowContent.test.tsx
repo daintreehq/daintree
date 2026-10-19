@@ -4,6 +4,7 @@ import { render, screen, act } from "@testing-library/react";
 import { WhySlowContent, describeSlowdowns, isAllClear } from "../WhySlowContent";
 import type { WhySlowSnapshot } from "@shared/types/whySlow";
 import { useHostMemoryPauseStore } from "@/store/hostMemoryPauseStore";
+import { useProjectStore } from "@/store/projectStore";
 
 const getWhySlowSnapshot = vi.fn();
 vi.mock("@/clients/systemClient", () => ({
@@ -185,6 +186,55 @@ describe("WhySlowContent", () => {
     expect(screen.getByText("12")).toBeTruthy(); // workload processes
     expect(screen.queryByText("process table unavailable")).toBeNull();
     expect(screen.queryByText("workload sample stale")).toBeNull();
+  });
+
+  it("names the projects whose terminals hold the most memory (#13529)", async () => {
+    useProjectStore.setState({
+      projects: [{ id: "p1", name: "App", path: "/work/app", emoji: "", lastOpened: 0 }],
+    });
+    getWhySlowSnapshot.mockResolvedValue(
+      makeSnapshot({
+        memory: {
+          ...quietMemory,
+          terminalWorkloads: {
+            ...quietMemory.terminalWorkloads,
+            topProjects: [
+              {
+                projectId: "p1",
+                memoryMb: 9216,
+                terminalCount: 4,
+                processCount: 9,
+                topProcessNames: [],
+              },
+              {
+                projectId: null,
+                memoryMb: 512,
+                terminalCount: 1,
+                processCount: 2,
+                topProcessNames: [],
+              },
+              {
+                projectId: "gone",
+                memoryMb: 64,
+                terminalCount: 1,
+                processCount: 1,
+                topProcessNames: [],
+              },
+            ],
+          },
+        },
+      })
+    );
+
+    render(<WhySlowContent />);
+
+    const list = await screen.findByTestId("why-slow-top-projects");
+    expect(Array.from(list.querySelectorAll("li")).map((li) => li.textContent)).toEqual([
+      "App9 GB · 4 terminals",
+      "Outside any project512 MB · 1 terminal",
+      "Unknown project64 MB · 1 terminal",
+    ]);
+    useProjectStore.setState({ projects: [] });
   });
 
   it("flags unavailable and stale workload samples without hiding last-good totals", async () => {
