@@ -161,6 +161,9 @@ vi.mock("../../services/CrashRecoveryService.js", () => ({
 vi.mock("../../services/ProcessMemoryMonitor.js", () => ({
   forgetBlinkSample: vi.fn(),
   forgetEluSample: vi.fn(),
+  noteRendererUnresponsive: vi.fn(),
+  noteRendererResponsive: vi.fn(),
+  clearRendererUnresponsive: vi.fn(),
 }));
 
 vi.mock("../../ipc/errorHandlers.js", () => ({

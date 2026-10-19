@@ -26,7 +26,12 @@ import type {
 } from "../../../shared/types/ipc/system.js";
 import { getActionBreadcrumbService } from "../../services/ActionBreadcrumbService.js";
 import type * as DiagnosticsCollectorModule from "../../services/DiagnosticsCollector.js";
-import { recordBlinkSample, recordEluSample } from "../../services/ProcessMemoryMonitor.js";
+import {
+  recordBlinkSample,
+  recordEluSample,
+  type RendererLoafReport,
+} from "../../services/ProcessMemoryMonitor.js";
+import { parseInputBlockingSnapshot } from "../../utils/inputBlockingSnapshot.js";
 import { getAppMetricsSnapshot } from "../../utils/appMetricsSnapshot.js";
 import { getRegisteredProjectViews } from "../../window/webContentsRegistry.js";
 import { projectStore } from "../../services/ProjectStore.js";
@@ -70,6 +75,10 @@ const CRASH_RECORD_FILE = /^(crash|renderer-gone)-[\w-]+\.json$/;
 // The default shard writes `pty-host.log`; other shards `pty-host-<suffix>.log`.
 const PTY_HOST_LOG_FILE = /^pty-host(-[\w-]+)?\.log$/;
 
+function optionalDurationMs(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : undefined;
+}
+
 async function listDir(dir: string): Promise<string[]> {
   try {
     return await fs.readdir(dir);
@@ -84,48 +93,77 @@ async function listDir(dir: string): Promise<string[]> {
  * copy-fallback paths can rewrite. Breadcrumb args are dropped because
  * action args can carry user-entered text; known secret shapes are scrubbed
  * before the user's own replacements run.
+ *
+ * The newest fatal crash ignores the window. Export usually follows the
+ * relaunch, so the record of how the last session died is older than any
+ * short window, and it is the one record the bundle exists to carry.
  */
 async function collectCrashRecordEntries(
   crashesDir: string,
   timeWindowStartMs: number | null,
   replacements: ReplacementRule[]
 ): Promise<Array<{ name: string; content: string }>> {
-  const records: Array<{ name: string; timestamp: number; content: string }> = [];
+  const candidates: Array<{
+    file: string;
+    timestamp: number | null;
+    record: Record<string, unknown>;
+  }> = [];
   for (const file of await listDir(crashesDir)) {
     if (!CRASH_RECORD_FILE.test(file)) continue;
-    let record: Record<string, unknown>;
     try {
       const parsed: unknown = JSON.parse(await fs.readFile(path.join(crashesDir, file), "utf-8"));
       if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) continue;
-      record = parsed as Record<string, unknown>;
+      const record = parsed as Record<string, unknown>;
+      const timestamp =
+        typeof record.timestamp === "number" && Number.isFinite(record.timestamp)
+          ? record.timestamp
+          : null;
+      candidates.push({ file, timestamp, record });
     } catch {
       continue;
     }
-    const timestamp = typeof record.timestamp === "number" ? record.timestamp : null;
-    // An undated record can't be placed inside a chosen window.
-    if (timeWindowStartMs !== null && (timestamp === null || timestamp < timeWindowStartMs)) {
-      continue;
-    }
-    if (Array.isArray(record.recentActions)) {
-      record.recentActions = record.recentActions
-        .filter((crumb: unknown) => !!crumb && typeof crumb === "object")
-        .map((crumb: unknown) => {
-          const { args: _args, ...rest } = crumb as Record<string, unknown>;
-          return rest;
-        });
-    } else {
-      delete record.recentActions;
-    }
-    records.push({
-      name: `crashes/${file}`,
-      timestamp: timestamp ?? 0,
-      content: applyReplacements(scrubSecrets(JSON.stringify(record, null, 2)), replacements),
-    });
   }
-  records.sort((a, b) => b.timestamp - a.timestamp);
-  return records
-    .slice(0, MAX_BUNDLED_CRASH_RECORDS)
-    .map(({ name, content }) => ({ name, content }));
+
+  let newestFatal: (typeof candidates)[number] | null = null;
+  for (const candidate of candidates) {
+    if (!candidate.file.startsWith("crash-") || candidate.timestamp === null) continue;
+    if (!newestFatal || candidate.timestamp > (newestFatal.timestamp ?? 0)) newestFatal = candidate;
+  }
+
+  const inWindow = candidates.filter(
+    ({ timestamp }) =>
+      // An undated record can't be placed inside a chosen window.
+      timeWindowStartMs === null || (timestamp !== null && timestamp >= timeWindowStartMs)
+  );
+  inWindow.sort((a, b) => (b.timestamp ?? 0) - (a.timestamp ?? 0));
+  const selected = inWindow.slice(0, MAX_BUNDLED_CRASH_RECORDS);
+  if (newestFatal && !selected.includes(newestFatal)) {
+    if (selected.length >= MAX_BUNDLED_CRASH_RECORDS) selected.pop();
+    selected.push(newestFatal);
+    selected.sort((a, b) => (b.timestamp ?? 0) - (a.timestamp ?? 0));
+  }
+
+  return selected.map(({ file, record }) => ({
+    name: `crashes/${file}`,
+    content: toBundledCrashRecord(record, replacements),
+  }));
+}
+
+function toBundledCrashRecord(
+  record: Record<string, unknown>,
+  replacements: ReplacementRule[]
+): string {
+  if (Array.isArray(record.recentActions)) {
+    record.recentActions = record.recentActions
+      .filter((crumb: unknown) => !!crumb && typeof crumb === "object")
+      .map((crumb: unknown) => {
+        const { args: _args, ...rest } = crumb as Record<string, unknown>;
+        return rest;
+      });
+  } else {
+    delete record.recentActions;
+  }
+  return applyReplacements(scrubSecrets(JSON.stringify(record, null, 2)), replacements);
 }
 
 /** PTY host emergency logs: process start lines and fatal errors, no terminal output. */
@@ -522,7 +560,8 @@ export function registerDiagnosticsHandlers(deps: HandlerDependencies): () => vo
     })
   );
 
-  // Renderer ELU report. webContents id is taken from event.sender.id.
+  // Renderer long-animation-frame report (the channel predates the LoAF
+  // naming). webContents id is taken from event.sender.id.
   handlers.push(
     typedHandleWithContext(CHANNELS.SYSTEM_REPORT_RENDERER_ELU, (ctx, payload) => {
       if (!payload) return;
@@ -535,10 +574,17 @@ export function registerDiagnosticsHandlers(deps: HandlerDependencies): () => vo
         return;
       }
       if (ctx.event ? ctx.event.sender.isDestroyed() : ctx.endpoint.isClosed()) return;
-      recordEluSample(ctx.webContentsId, {
+      const report: RendererLoafReport = {
         blockingDurationMs: payload.blockingDurationMs,
         sampleWindowMs: payload.sampleWindowMs,
-      });
+      };
+      const longestFrameMs = optionalDurationMs(payload.longestFrameMs);
+      if (longestFrameMs !== undefined) report.longestFrameMs = longestFrameMs;
+      const longestBlockingMs = optionalDurationMs(payload.longestBlockingMs);
+      if (longestBlockingMs !== undefined) report.longestBlockingMs = longestBlockingMs;
+      const inputBlocking = parseInputBlockingSnapshot(payload.inputBlocking);
+      if (inputBlocking) report.inputBlocking = inputBlocking;
+      recordEluSample(ctx.webContentsId, report);
     })
   );
 

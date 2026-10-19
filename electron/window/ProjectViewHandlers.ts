@@ -34,6 +34,11 @@ import type { ProjectViewManager } from "./ProjectViewManager.js";
 import type { ViewEntry } from "./ProjectViewManagerTypes.js";
 import { rendererReloadNotice } from "./rendererReloadNotice.js";
 import { getTerminationIntent } from "../services/processTerminationIntent.js";
+import {
+  clearRendererUnresponsive,
+  noteRendererResponsive,
+  noteRendererUnresponsive,
+} from "../services/ProcessMemoryMonitor.js";
 
 export {
   isWebviewSrcAllowed,
@@ -148,6 +153,8 @@ export function setupViewHandlers(
     _event: Electron.Event,
     details: Electron.RenderProcessGoneDetails
   ) => {
+    // A dead renderer never reports `responsive`, so its hang ends here.
+    clearRendererUnresponsive(wc.id);
     if (details.reason === "clean-exit") return;
 
     const projectId = host.webContentsToProject.get(wc.id);
@@ -354,12 +361,21 @@ export function setupViewHandlers(
     }
   };
 
+  const handleUnresponsive = () => {
+    noteRendererUnresponsive(wc.id, host.webContentsToProject.get(wc.id));
+  };
+  const handleResponsive = () => {
+    noteRendererResponsive(wc.id, host.webContentsToProject.get(wc.id));
+  };
+
   wc.on("will-navigate", handleWillNavigate);
   wc.on("will-redirect", handleWillRedirect);
   wc.on("will-attach-webview", handleWillAttachWebview);
   wc.on("before-input-event", handleBeforeInputEvent);
   wc.on("did-finish-load", handleDidFinishLoad);
   wc.on("render-process-gone", handleRenderProcessGone);
+  wc.on("unresponsive", handleUnresponsive);
+  wc.on("responsive", handleResponsive);
 
   // Capture wc in closure: post-eviction the view's webContents getter may be
   // undefined (Electron #50249). Removing listeners must happen before close()
@@ -373,6 +389,8 @@ export function setupViewHandlers(
     wc.removeListener("before-input-event", handleBeforeInputEvent);
     wc.removeListener("did-finish-load", handleDidFinishLoad);
     wc.removeListener("render-process-gone", handleRenderProcessGone);
+    wc.removeListener("unresponsive", handleUnresponsive);
+    wc.removeListener("responsive", handleResponsive);
     detachRendererConsoleCapture(wc);
     cleaned = true;
   };

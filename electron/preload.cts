@@ -17,6 +17,7 @@ import type { AppErrorCode } from "../shared/types/appError.js";
 import type { PanelTitleMode } from "../shared/types/panel.js";
 import type { HostMemoryPauseSnapshot } from "../shared/types/pty-host.js";
 import type { TerminalKillOptions } from "../shared/types/terminal.js";
+import type { RendererInputBlockingSnapshot } from "../shared/types/ipc/system.js";
 import type {
   McpRuntimeSnapshot,
   McpGrantLifecyclePayload,
@@ -45,6 +46,7 @@ import {
 } from "./services/rpc/RequestResponseBroker.js";
 import { buildClipboardPreloadBindings } from "./ipc/handlers/clipboard.preload.js";
 import { buildDroppedFilePathsBinding } from "./utils/droppedFilePaths.js";
+import { captureInputBlockingSnapshot } from "./utils/inputBlockingSnapshot.js";
 import { buildGitFetchPreloadBindings } from "./ipc/handlers/gitFetch.preload.js";
 import {
   buildFilesTrashPreloadBindings,
@@ -4040,13 +4042,13 @@ _eventBusOn("window:sample-blink-memory", ({ requestId }) => {
   }
 });
 
-// Renderer event-loop utilization sampler. The Node ELU API
-// (performance.eventLoopUtilization) is unavailable under sandbox: true, so we
-// observe the Web `long-animation-frame` PerformanceObserver and accumulate
-// `blockingDuration` between sample events. The preload runs on the same
-// renderer main thread as the page, so LoAF entries reflect the user-visible
-// JS thread saturation. blockingDuration is 0 for entries < 50ms by spec —
-// that's the intended noise floor for "long task" detection.
+// Renderer long-animation-frame sampler. This is not event-loop utilisation:
+// the Node ELU API is unavailable under sandbox: true and the web has none, so
+// we accumulate LoAF `blockingDuration` between sample events, plus the longest
+// single frame. The preload runs on the same renderer main thread as the page,
+// so LoAF entries reflect the user-visible JS thread saturation.
+// blockingDuration counts only the part of a frame past 50ms, so work in
+// shorter slices never shows — the ratio is a floor on how busy the view was.
 //
 // No startup suppression: ProcessMemoryMonitor's poll cadence is 30s, so any
 // LoAF replay from `buffered: true` is diluted across a full window before
@@ -4054,25 +4056,32 @@ _eventBusOn("window:sample-blink-memory", ({ requestId }) => {
 // side absorbs the residual cold-start noise.
 type LoAFEntry = PerformanceEntry & { blockingDuration?: number };
 let eluAccumulatedBlockingMs = 0;
+let eluLongestFrameMs = 0;
+let eluLongestBlockingMs = 0;
 let eluWindowStartMs =
   typeof performance !== "undefined" && typeof performance.now === "function"
     ? performance.now()
     : 0;
+let loafObserver: PerformanceObserver | null = null;
+const accumulateLoafEntries = (entries: PerformanceEntryList): void => {
+  for (const entry of entries as LoAFEntry[]) {
+    const blocking = entry.blockingDuration;
+    if (typeof blocking === "number" && blocking > 0) {
+      eluAccumulatedBlockingMs += blocking;
+      if (blocking > eluLongestBlockingMs) eluLongestBlockingMs = blocking;
+    }
+    if (entry.duration > eluLongestFrameMs) eluLongestFrameMs = entry.duration;
+  }
+};
 try {
   if (typeof PerformanceObserver === "function") {
-    const observer = new PerformanceObserver((list) => {
-      for (const entry of list.getEntries() as LoAFEntry[]) {
-        const blocking = entry.blockingDuration;
-        if (typeof blocking === "number" && blocking > 0) {
-          eluAccumulatedBlockingMs += blocking;
-        }
-      }
-    });
+    const observer = new PerformanceObserver((list) => accumulateLoafEntries(list.getEntries()));
     // long-animation-frame is in Chromium 123+. Older runtimes throw on
     // observe() — caught and ignored; the handler will report 0 blocking.
-    // The observer is intentionally not stored — it lives for the renderer's
-    // lifetime and never needs to be disconnected.
+    // The observer lives for the renderer's lifetime and is never disconnected;
+    // it is kept only so a sample can drain entries not yet delivered.
     observer.observe({ type: "long-animation-frame", buffered: true });
+    loafObserver = observer;
   }
 } catch {
   /* observer unavailable — sampler reports 0/window */
@@ -4083,15 +4092,33 @@ _eventBusOn("window:sample-renderer-elu", ({ requestId }) => {
       typeof performance !== "undefined" && typeof performance.now === "function"
         ? performance.now()
         : Date.now();
+    if (loafObserver) accumulateLoafEntries(loafObserver.takeRecords());
     const sampleWindowMs = Math.max(0, Math.round(now - eluWindowStartMs));
     const blockingDurationMs = Math.max(0, Math.round(eluAccumulatedBlockingMs));
+    const longestFrameMs = Math.max(0, Math.round(eluLongestFrameMs));
+    const longestBlockingMs = Math.max(0, Math.round(eluLongestBlockingMs));
     eluAccumulatedBlockingMs = 0;
+    eluLongestFrameMs = 0;
+    eluLongestBlockingMs = 0;
     eluWindowStartMs = now;
-    void ipcRenderer.invoke(CHANNELS.SYSTEM_REPORT_RENDERER_ELU, {
-      requestId,
-      blockingDurationMs,
-      sampleWindowMs,
-    });
+    let inputBlocking: RendererInputBlockingSnapshot | undefined;
+    try {
+      inputBlocking = captureInputBlockingSnapshot(document, window);
+    } catch {
+      /* the LoAF sample still goes out without it */
+    }
+    ipcRenderer
+      .invoke(CHANNELS.SYSTEM_REPORT_RENDERER_ELU, {
+        requestId,
+        blockingDurationMs,
+        sampleWindowMs,
+        longestFrameMs,
+        longestBlockingMs,
+        inputBlocking,
+      })
+      .catch(() => {
+        /* observability is best-effort */
+      });
   } catch {
     /* observability is best-effort */
   }

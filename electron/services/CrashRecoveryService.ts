@@ -7,6 +7,7 @@ import type {
   CrashCause,
   CrashLogEntry,
   CrashRecoveryConfig,
+  CrashTimestampSource,
   PanelSummary,
   PendingCrash,
 } from "../../shared/types/ipc/crashRecovery.js";
@@ -27,6 +28,7 @@ import { WATCHDOG_KILL_FLAG_NAME } from "../watchdog-host-core.js";
 import { markCrashRecoveryInspectionComplete } from "../utils/crashDumpRetention.js";
 import { stateFilePath } from "./projectStorePaths.js";
 import { PROJECT_STATE_SCHEMA_VERSION } from "./ProjectStateManager.js";
+import { logError, logInfo, logWarn } from "../utils/logger.js";
 
 const MAX_CRASH_LOGS = 10;
 const CRASH_LOG_PREFIX = "crash-";
@@ -70,6 +72,15 @@ const CRASH_CAUSES: ReadonlySet<CrashCause> = new Set<CrashCause>([
   "external-kill",
   "unknown",
 ]);
+
+// Logging is evidence, never a reason for recovery or crash recording to fail.
+function safeLog(write: () => void): void {
+  try {
+    write();
+  } catch {
+    // best-effort
+  }
+}
 
 export interface RendererGoneDetails {
   /** `app-view` is the window's initial view; `project-view` any view ProjectViewManager created. */
@@ -169,7 +180,6 @@ export class CrashRecoveryService {
     // dumps, so native-dump retention may start deleting them.
     markCrashRecoveryInspectionComplete(this.sessionStartMs);
     this.writeMarker();
-    console.log("[CrashRecovery] Initialized, pending crash:", this.pendingCrash !== null);
   }
 
   getPendingCrash(): PendingCrash | null {
@@ -263,7 +273,15 @@ export class CrashRecoveryService {
       const logPath = this.writeCrashLog(entry);
       this.writeMarker(entry);
       this.pruneOldLogs();
-      console.log("[CrashRecovery] Crash recorded:", logPath);
+      // ERROR is the logger's synchronous level, so the line lands before the
+      // process dies.
+      safeLog(() =>
+        logError("Crash recorded", undefined, {
+          crashId: entry.id,
+          crashCause: cause,
+          file: path.basename(logPath),
+        })
+      );
     } catch (err) {
       console.error("[CrashRecovery] Failed to record crash:", err);
     }
@@ -319,7 +337,7 @@ export class CrashRecoveryService {
         mode: OWNER_RW_FILE_MODE,
       });
       this.pruneLogs(RENDERER_GONE_PREFIX, MAX_RENDERER_GONE_LOGS);
-      console.log("[CrashRecovery] Renderer gone recorded:", logPath);
+      safeLog(() => logInfo("Renderer gone recorded", { file: path.basename(logPath) }));
     } catch (err) {
       console.error("[CrashRecovery] Failed to record renderer gone:", err);
     }
@@ -690,7 +708,7 @@ export class CrashRecoveryService {
       this.takeBackup();
       this.deleteMarker();
       this.cleanupOrphanedCrashedBackups();
-      console.log("[CrashRecovery] Clean exit — marker removed");
+      safeLog(() => logInfo("Clean exit, crash marker removed"));
     }
     this.unlinkCrashedBackup();
   }
@@ -793,15 +811,15 @@ export class CrashRecoveryService {
       // report, and 30s panel-suspect window. Existing crash logs already
       // carry their own timestamp from the recorder path and are unaffected.
       const nowMs = Date.now();
-      const crashTimestamp = this.resolveMarkerCrashTimestamp(
+      const crashTime = this.resolveMarkerCrashTimestamp(
         marker,
         watchdogAnnotation,
         backupTimestamp,
         nowMs
       );
       const entry = logPath
-        ? this.readCrashLog(logPath)
-        : this.buildCrashEntryFromMarker(marker, crashTimestamp);
+        ? this.readCrashLog(logPath, () => this.buildCrashEntryFromMarker(marker, crashTime))
+        : this.buildCrashEntryFromMarker(marker, crashTime);
       // A log states its own cause; only logs from before causes were stored
       // fall back to the heuristic chain.
       if (!logPath || !isCrashCause(entry.crashCause)) {
@@ -860,6 +878,7 @@ export class CrashRecoveryService {
       // the marker on disk and the next launch re-detects the crash against
       // the persisted log.
       this.deleteMarker();
+      this.logUncleanExit(marker, entry, nowMs);
 
       const panels = parseableBackupPath
         ? this.extractPanelSummaries(entry.timestamp, parseableBackupPath)
@@ -1156,6 +1175,7 @@ export class CrashRecoveryService {
     const entry: CrashLogEntry = {
       id,
       timestamp: Date.now(),
+      timestampSource: "recorded",
       appVersion: app.getVersion(),
       platform: process.platform,
       osVersion: os.release(),
@@ -1182,19 +1202,26 @@ export class CrashRecoveryService {
     return entry;
   }
 
-  private buildCrashEntryFromMarker(marker: MarkerFile, crashTimestamp: number): CrashLogEntry {
+  private buildCrashEntryFromMarker(
+    marker: MarkerFile,
+    crashTime: ResolvedCrashTime
+  ): CrashLogEntry {
     const id = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
     const entry: CrashLogEntry = {
       id,
-      timestamp: crashTimestamp,
+      timestamp: crashTime.timestamp,
+      timestampSource: crashTime.source,
       appVersion: marker.appVersion ?? app.getVersion(),
       platform: marker.platform ?? process.platform,
       osVersion: os.release(),
       arch: os.arch(),
       sessionDurationMs: marker.sessionStartMs
-        ? Math.max(0, crashTimestamp - marker.sessionStartMs)
+        ? Math.max(0, crashTime.timestamp - marker.sessionStartMs)
         : undefined,
     };
+    if (isFiniteTimestamp(marker.lastHeartbeatMs)) {
+      entry.lastHeartbeatMs = marker.lastHeartbeatMs;
+    }
 
     this.enrichWithEnvironmentMetadata(entry);
     this.enrichWithPanelData(entry, () => {
@@ -1231,19 +1258,46 @@ export class CrashRecoveryService {
     watchdogAnnotation: WatchdogKillAnnotation | null,
     backupTimestamp: number | undefined,
     nowMs: number
-  ): number {
-    const candidates: Array<number | null | undefined> = [
-      watchdogAnnotation?.killedAt,
-      marker.lastSuspendStart,
-      backupTimestamp,
-      marker.lastHeartbeatMs,
+  ): ResolvedCrashTime {
+    const candidates: Array<[number | null | undefined, CrashTimestampSource]> = [
+      [watchdogAnnotation?.killedAt, "watchdog"],
+      [marker.lastSuspendStart, "suspend"],
+      [backupTimestamp, "backup"],
+      [marker.lastHeartbeatMs, "heartbeat"],
     ];
-    for (const candidate of candidates) {
-      if (typeof candidate === "number" && Number.isFinite(candidate) && candidate > 0) {
-        return Math.max(marker.sessionStartMs, Math.min(candidate, nowMs));
+    for (const [candidate, source] of candidates) {
+      if (isFiniteTimestamp(candidate)) {
+        return {
+          timestamp: Math.max(marker.sessionStartMs, Math.min(candidate, nowMs)),
+          source,
+        };
       }
     }
-    return Math.max(marker.sessionStartMs, nowMs);
+    return { timestamp: Math.max(marker.sessionStartMs, nowMs), source: "relaunch" };
+  }
+
+  /**
+   * The one durable line saying the previous session died. Without it the log
+   * runs straight from the old session's last buffered line into the new
+   * session's startup, and that last line is not the time of death.
+   */
+  private logUncleanExit(marker: MarkerFile, entry: CrashLogEntry, nowMs: number): void {
+    safeLog(() =>
+      logWarn("Previous session ended uncleanly", {
+        crashId: entry.id,
+        crashCause: entry.crashCause,
+        cause: entry.cause,
+        endedAt: new Date(entry.timestamp).toISOString(),
+        endedAtSource: entry.timestampSource ?? "recorded",
+        sessionStartedAt: new Date(marker.sessionStartMs).toISOString(),
+        lastHeartbeatAt: isFiniteTimestamp(marker.lastHeartbeatMs)
+          ? new Date(marker.lastHeartbeatMs).toISOString()
+          : undefined,
+        sessionDurationMs: entry.sessionDurationMs,
+        downtimeMs: Math.max(0, nowMs - entry.timestamp),
+        appVersion: marker.appVersion,
+      })
+    );
   }
 
   private readPreCrashSnapshot(): SessionSnapshot | null {
@@ -1410,17 +1464,21 @@ export class CrashRecoveryService {
     }
   }
 
-  private readCrashLog(logPath: string): CrashLogEntry {
+  /**
+   * `fallback` rebuilds the entry from the marker when the log is unreadable,
+   * so its time stays the dead session's, never this launch's.
+   */
+  private readCrashLog(logPath: string, fallback: () => CrashLogEntry): CrashLogEntry {
     try {
       const raw = fs.readFileSync(logPath, "utf8");
       const parsed = JSON.parse(raw) as CrashLogEntry;
-      if (typeof parsed.id === "string" && typeof parsed.timestamp === "number") {
+      if (typeof parsed.id === "string" && isFiniteTimestamp(parsed.timestamp)) {
         return parsed;
       }
     } catch {
       // fall through
     }
-    return this.buildCrashEntry();
+    return fallback();
   }
 
   private readBackupInfo(): { exists: boolean; timestamp?: number; path?: string } {
@@ -1571,6 +1629,15 @@ export class CrashRecoveryService {
       console.error("[CrashRecovery] Failed to prune logs:", err);
     }
   }
+}
+
+interface ResolvedCrashTime {
+  timestamp: number;
+  source: CrashTimestampSource;
+}
+
+function isFiniteTimestamp(value: unknown): value is number {
+  return typeof value === "number" && Number.isFinite(value) && value > 0;
 }
 
 interface MarkerFile {
