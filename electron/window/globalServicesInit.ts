@@ -38,6 +38,7 @@ import {
 } from "../services/ProcessMemoryMonitor.js";
 import {
   createDefaultSystemMemoryPressureMonitor,
+  summarizeSystemMemoryWorkloads,
   readDarwinKernelPressureLevel,
 } from "../services/SystemMemoryPressureMonitor.js";
 import { publishSystemMemoryPressure } from "./systemMemoryPressureDelivery.js";
@@ -84,6 +85,7 @@ import { setPluginDirResolver, setPluginTourAudioResolver } from "../setup/proto
 import { isE2EFaultMode, isE2EMode } from "../setup/runtimeFlags.js";
 import { activateOpenFileInstaller } from "../setup/openFileInstall.js";
 import { projectStore } from "../services/ProjectStore.js";
+import { getCompositeMemorySnapshot } from "../services/memoryAccounting.js";
 import { scratchStore } from "../services/ScratchStore.js";
 import { registerCommands } from "../services/commands/index.js";
 import { store, wasStoreFreshAtBoot } from "../store.js";
@@ -731,12 +733,19 @@ export async function initGlobalServices(
       // into an unrelated spec.
       const systemMemoryPressure = isE2EMode
         ? null
-        : createDefaultSystemMemoryPressureMonitor((payload) => {
-            publishSystemMemoryPressure(
-              payload,
-              windowRegistry ? windowRegistry.all().map((wCtx) => wCtx.browserWindow) : []
-            );
-          });
+        : createDefaultSystemMemoryPressureMonitor(
+            (payload) => {
+              publishSystemMemoryPressure(
+                payload,
+                windowRegistry ? windowRegistry.all().map((wCtx) => wCtx.browserWindow) : []
+              );
+            },
+            async () =>
+              summarizeSystemMemoryWorkloads(
+                await getCompositeMemorySnapshot(getPtyClient()),
+                (projectId) => projectStore.getProjectById(projectId)?.name?.trim() || null
+              )
+          );
       setStopAppMetricsMonitor(
         startAppMetricsMonitor({
           destroyHiddenWebviews: async (tier) => {

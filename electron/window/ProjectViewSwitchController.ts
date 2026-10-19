@@ -38,6 +38,7 @@ import {
 import { notifyProjectPluginsOpened } from "./projectPluginLifecycle.js";
 import { createCancelledSwitchError, reportSwitchFailure } from "./projectSwitchCancelledError.js";
 import { setupViewHandlers } from "./ProjectViewHandlers.js";
+import { deliverOpenSystemMemoryPressure } from "./systemMemoryPressureDelivery.js";
 import { evictStaleViews } from "./ProjectViewEvictionController.js";
 import type { ProjectViewManager } from "./ProjectViewManager.js";
 import type { SwitchRequestOptions, ViewEntry } from "./ProjectViewManagerTypes.js";
@@ -385,6 +386,10 @@ export async function performSwitch(
         cached.view.webContents.send(CHANNELS.APP_VIEW_REVEALED, {
           switchId: switchTrace.switchId,
         });
+        // A cached view misses every memory publish made while it was hidden,
+        // escalations included (#13529); the delivery latch skips one that
+        // already has the latest.
+        deliverOpenSystemMemoryPressure(host.win, cached.view.webContents);
       }
     }
     const cachedIntent = consumePendingFocusIntent(host, projectId);

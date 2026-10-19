@@ -90,7 +90,7 @@ describe("SidebarMemoryNotice", () => {
     act(() =>
       useSystemMemoryNoticeStore
         .getState()
-        .setNotice({ reading: READING, detail: DETAIL, action: null })
+        .setNotice({ critical: false, reading: READING, detail: DETAIL, action: null })
     );
     const { container } = renderRow();
 
@@ -104,13 +104,45 @@ describe("SidebarMemoryNotice", () => {
     expect(row.outerHTML).not.toMatch(/status-(warning|danger|error)/);
   });
 
-  it("offers the diagnosis and clears when the store does", async () => {
+  it("keeps the detail reachable from the keyboard even when the reading fits (#13529)", () => {
+    act(() =>
+      useSystemMemoryNoticeStore
+        .getState()
+        .setNotice({ critical: false, reading: READING, detail: DETAIL, action: null })
+    );
+    const { container } = renderRow();
+    expect(container.querySelector('[role="status"]')?.getAttribute("tabindex")).toBe("0");
+
+    act(() =>
+      useSystemMemoryNoticeStore
+        .getState()
+        .setNotice({ critical: false, reading: READING, detail: READING, action: null })
+    );
+    expect(container.querySelector('[role="status"]')?.getAttribute("tabindex")).toBeNull();
+  });
+
+  it("takes the warning colour once the kernel reports its critical level (#13529)", () => {
+    act(() =>
+      useSystemMemoryNoticeStore
+        .getState()
+        .setNotice({ critical: true, reading: READING, detail: DETAIL, action: null })
+    );
+    const { container } = renderRow();
+
+    const row = container.querySelector("[data-sidebar-memory-notice]")!;
+    expect(row.outerHTML).toMatch(/status-warning/);
+    expect(row.outerHTML).not.toMatch(/(?<!outline-)accent-primary/);
+    expect(container.querySelector('[role="status"]')?.textContent).toBe(READING);
+  });
+
+  it("offers the memory breakdown and clears when the store does", async () => {
     const onClick = vi.fn();
     act(() =>
       useSystemMemoryNoticeStore.getState().setNotice({
+        critical: false,
         reading: READING,
         detail: DETAIL,
-        action: { label: "Ask agent about memory", onClick },
+        action: { label: "Show memory use", onClick },
       })
     );
     const { container } = renderRow();
@@ -120,9 +152,9 @@ describe("SidebarMemoryNotice", () => {
     expect(container.querySelector('[role="status"]')?.contains(trigger)).toBe(false);
 
     const menu = openMenu(container);
-    expect(menuItemLabels(menu)).toEqual(["Ask agent about memory"]);
+    expect(menuItemLabels(menu)).toEqual(["Show memory use"]);
     const item = menu.querySelector<HTMLElement>("[data-sidebar-memory-action]")!;
-    expect(item.getAttribute("aria-label")).toBe("Ask agent about memory");
+    expect(item.getAttribute("aria-label")).toBe("Show memory use");
 
     fireEvent.click(item);
     await waitFor(() => expect(onClick).toHaveBeenCalledTimes(1));
@@ -135,7 +167,7 @@ describe("SidebarMemoryNotice", () => {
     act(() =>
       useSystemMemoryNoticeStore
         .getState()
-        .setNotice({ reading: READING, detail: DETAIL, action: null })
+        .setNotice({ critical: false, reading: READING, detail: DETAIL, action: null })
     );
     const { container } = renderRow();
     expect(container.querySelector("[data-sidebar-memory-menu]")).toBeNull();
@@ -152,19 +184,17 @@ describe("SidebarMemoryNotice", () => {
     act(() => {
       seedIdleProjects(["a"]);
       useSystemMemoryNoticeStore.getState().setNotice({
+        critical: false,
         reading: READING,
         detail: DETAIL,
-        action: { label: "Ask agent about memory", onClick: vi.fn() },
+        action: { label: "Show memory use", onClick: vi.fn() },
       });
     });
     const { container } = renderRow();
 
     const row = container.querySelector("[data-sidebar-memory-notice]")!;
     expect(row.querySelectorAll("button")).toHaveLength(1);
-    expect(menuItemLabels(openMenu(container))).toEqual([
-      "Ask agent about memory",
-      "Sleep idle projects",
-    ]);
+    expect(menuItemLabels(openMenu(container))).toEqual(["Show memory use", "Sleep idle projects"]);
   });
 
   it("names every project in the confirmation, and sleeps them on confirm", async () => {
@@ -178,7 +208,7 @@ describe("SidebarMemoryNotice", () => {
       useProjectStore.setState({ sleepProject });
       useSystemMemoryNoticeStore
         .getState()
-        .setNotice({ reading: READING, detail: DETAIL, action: null });
+        .setNotice({ critical: false, reading: READING, detail: DETAIL, action: null });
     });
     vi.spyOn(projectPresenceClient, "getSnapshot").mockResolvedValue({
       thisWindow: [],
@@ -214,7 +244,7 @@ describe("SidebarMemoryNotice", () => {
       seedIdleProjects(["a"], 0);
       useSystemMemoryNoticeStore
         .getState()
-        .setNotice({ reading: READING, detail: DETAIL, action: null });
+        .setNotice({ critical: false, reading: READING, detail: DETAIL, action: null });
     });
     vi.spyOn(projectPresenceClient, "getSnapshot").mockResolvedValue({
       thisWindow: [],
@@ -236,7 +266,7 @@ describe("SidebarMemoryNotice", () => {
       seedIdleProjects(["a"]);
       useSystemMemoryNoticeStore
         .getState()
-        .setNotice({ reading: READING, detail: DETAIL, action: null });
+        .setNotice({ critical: false, reading: READING, detail: DETAIL, action: null });
     });
     vi.spyOn(projectPresenceClient, "getSnapshot").mockResolvedValue({
       thisWindow: [],
@@ -271,9 +301,10 @@ describe("SidebarMemoryNotice", () => {
     const onClick = vi.fn(() => elsewhere.focus());
     act(() =>
       useSystemMemoryNoticeStore.getState().setNotice({
+        critical: false,
         reading: READING,
         detail: DETAIL,
-        action: { label: "Ask agent about memory", onClick },
+        action: { label: "Show memory use", onClick },
       })
     );
     const { container } = renderRow();
@@ -293,9 +324,10 @@ describe("SidebarMemoryNotice", () => {
     act(() => {
       seedIdleProjects(["a"]);
       useSystemMemoryNoticeStore.getState().setNotice({
+        critical: false,
         reading: READING,
         detail: DETAIL,
-        action: { label: "Ask agent about memory", onClick },
+        action: { label: "Show memory use", onClick },
       });
     });
     const { container } = renderRow();

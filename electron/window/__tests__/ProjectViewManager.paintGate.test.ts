@@ -1257,6 +1257,47 @@ describe("ProjectViewManager — paint gate (cold-start visible swap)", () => {
     expect(win.contentView.removeChildView).toHaveBeenCalledTimes(1);
   });
 
+  it("hands a revived cached view the memory publish it missed while hidden (#13529)", async () => {
+    const incomingWc = createMockWebContents();
+    wcQueue.push(incomingWc);
+    const firstSwitch = manager.switchTo("proj-b", "/path/b");
+    await Promise.resolve();
+    await Promise.resolve();
+    manager.signalViewPainted(incomingWc.id);
+    await firstSwitch;
+
+    // Published while A sat in the cache, so only B's window view was sent it.
+    const escalation = {
+      status: "degraded",
+      swapUsedPercent: null,
+      swapKind: "swap",
+      fseventsdRssMb: null,
+      kernelPressureLevel: "critical",
+      escalated: true,
+      workloads: null,
+    } as const;
+    publishSystemMemoryPressure(escalation, []);
+    initialWc.send.mockClear();
+    try {
+      const pressureSends = () =>
+        initialWc.send.mock.calls.filter(
+          ([channel, envelope]) =>
+            channel === CHANNELS.EVENTS_PUSH &&
+            (envelope as { name?: string }).name === "system:memory-pressure"
+        );
+      const switchBack = manager.switchTo("proj-a", "/path/a");
+      for (let i = 0; i < 6; i++) await Promise.resolve();
+      manager.signalWarmViewPainted(initialWc.id);
+      await switchBack;
+
+      expect(pressureSends()).toEqual([
+        [CHANNELS.EVENTS_PUSH, { name: "system:memory-pressure", payload: escalation }],
+      ]);
+    } finally {
+      resetSystemMemoryPressureDeliveryForTesting();
+    }
+  });
+
   it("does not send the warm wake trigger on a cold switch", async () => {
     const incomingWc = createMockWebContents();
     wcQueue.push(incomingWc);
@@ -1918,6 +1959,8 @@ describe("ProjectViewManager — frame confirmation before reveal (#12394)", () 
       swapKind: "swap",
       fseventsdRssMb: null,
       kernelPressureLevel: "warn",
+      escalated: false,
+      workloads: null,
     } as const;
     publishSystemMemoryPressure(episode, []);
     try {
