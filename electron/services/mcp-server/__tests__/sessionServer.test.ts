@@ -4756,7 +4756,11 @@ describe("one assistant addressing another (#13496)", () => {
     const listed = (await deps.requestManifest()) as ActionManifestEntry[];
     deps.requestManifest = vi
       .fn()
-      .mockResolvedValue([...listed, makeManifestEntry("actions.getSchema")]);
+      .mockResolvedValue([
+        ...listed,
+        makeManifestEntry("actions.getSchema"),
+        makeManifestEntry("terminal.sendCommandOwned"),
+      ]);
     deps.dispatchAction = vi.fn(async (_actionId: string, args: unknown) => ({
       result: {
         ok: true,
@@ -4776,7 +4780,7 @@ describe("one assistant addressing another (#13496)", () => {
         ok: boolean;
         entry: unknown;
         policy: { callable: boolean; minimumTier: string } | null;
-        error: { code: string } | null;
+        error: { code: string; message: string } | null;
       };
     };
 
@@ -4786,13 +4790,16 @@ describe("one assistant addressing another (#13496)", () => {
         policy: { callable: true, minimumTier: "core" },
       });
     }
-    // The unscoped send is withheld from a relay: never described, whoever answers.
-    expect(await schemaOf("terminal.sendCommand")).toMatchObject({
+    // The unscoped send is withheld from a relay: never described, whoever
+    // answers, but the miss names the owned form it may call instead.
+    const withheld = await schemaOf("terminal.sendCommand");
+    expect(withheld).toMatchObject({
       ok: false,
       entry: null,
       policy: null,
       error: { code: "NOT_FOUND" },
     });
+    expect(withheld.error?.message).toContain('"terminal.sendCommandOwned"');
   });
 
   it("refuses a relayed start the drive rule refuses, starting nothing", async () => {

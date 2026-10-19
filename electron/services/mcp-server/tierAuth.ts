@@ -27,6 +27,7 @@ import { canonicalJson, toCompatibilityShape } from "./compatibilityHash.js";
 import type { McpTargetPolicy, McpTargetTier } from "../../../shared/types/mcpTargetPolicy.js";
 import type { McpUnavailableActionStub } from "../../../shared/types/mcpIntrospection.js";
 import { ASSISTANT_CONTROL_TOOL_IDS } from "../../../shared/types/assistantControl.js";
+import { OWNED_TWIN_TOOLS } from "../../../shared/config/helpAssistantTierAllowlists.js";
 import { HOST_CONTROL_TOOL_IDS } from "../../../shared/types/hostControl.js";
 
 export { deriveBand, BAND_OVERRIDES };
@@ -1186,7 +1187,13 @@ export function filterIntrospectionResultForSession(
     // the renderer's own denial: one shape for both branches means a client
     // reads `ok` rather than probing for which keys arrived. `unavailable` is
     // the one exception — absent rather than null, so this payload stays
-    // byte-for-byte what every caller received before #12117.
+    // byte-for-byte what every caller received before #12117. An unscoped
+    // tool this session reaches through its owned twin names the twin, so a
+    // caller isn't left searching for the call that would work.
+    const twin =
+      requestedId !== undefined
+        ? (OWNED_TWIN_TOOLS as Readonly<Record<string, string>>)[requestedId]
+        : undefined;
     return {
       ok: true,
       result: {
@@ -1195,7 +1202,10 @@ export function filterIntrospectionResultForSession(
         policy: null,
         error: {
           code: "NOT_FOUND",
-          message: `No action found with id "${requestedId ?? "unknown"}". Use actions.search to find available actions.`,
+          message:
+            twin !== undefined && permittedActionIds.has(twin)
+              ? `No action found with id "${requestedId}" for this session. Use "${twin}", which acts on what this session created or started.`
+              : `No action found with id "${requestedId ?? "unknown"}". Use actions.search to find available actions.`,
         },
       },
     };
