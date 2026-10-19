@@ -817,6 +817,26 @@ describe("registerDiagnosticsHandlers", () => {
       expect(names.at(-1)).toBe("crashes/crash-2000-b.json");
     });
 
+    it("keeps the newest fatal crash past the cap when the bundle has no window", async () => {
+      const goneFiles = Array.from({ length: 25 }, (_, i) => `renderer-gone-${10_000 + i}-x.json`);
+      readdirMock.mockImplementation((dir: string) =>
+        Promise.resolve(
+          path.normalize(dir) === crashesDir ? ["crash-2000-b.json", ...goneFiles] : []
+        )
+      );
+      readFileMock.mockImplementation((p: string) => {
+        const timestamp = Number(path.basename(p).match(/-(\d+)-/)![1]);
+        return Promise.resolve(JSON.stringify({ timestamp }));
+      });
+
+      await saveBundle(true, null);
+
+      const names = appendedNames().filter((n) => n.startsWith("crashes/"));
+      expect(names).toHaveLength(20);
+      expect(names.at(-1)).toBe("crashes/crash-2000-b.json");
+      expect(names[0]).toBe("crashes/renderer-gone-10024-x.json");
+    });
+
     it("never picks a record with a non-finite timestamp as the newest crash", async () => {
       readdirMock.mockImplementation((dir: string) =>
         Promise.resolve(

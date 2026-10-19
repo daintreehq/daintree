@@ -101,7 +101,7 @@ vi.mock("../../services/ProcessMemoryMonitor.js", () => ({
   forgetEluSample: vi.fn(),
   noteRendererUnresponsive: vi.fn(),
   noteRendererResponsive: vi.fn(),
-  clearRendererUnresponsive: vi.fn(),
+  forgetRendererDocumentState: vi.fn(),
 }));
 
 vi.mock("../webContentsRegistry.js", () => ({

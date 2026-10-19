@@ -68,7 +68,7 @@ import {
   getUnresponsiveSince,
   noteRendererUnresponsive,
   noteRendererResponsive,
-  clearRendererUnresponsive,
+  forgetRendererDocumentState,
   RENDERER_ELU_HIGH_RATIO,
   RENDERER_ELU_HIGH_SAMPLE_COUNT,
   hasSustainedRendererSaturation,
@@ -2665,11 +2665,15 @@ describe("ProcessMemoryMonitor", () => {
       expect(vi.mocked(logInfo)).not.toHaveBeenCalledWith("renderer-responsive", expect.anything());
     });
 
-    it("clears a hang without logging a recovery when the renderer died", () => {
+    it("drops a dead renderer's hang and snapshot without logging a recovery", () => {
+      recordEluSample(7, report({ ...clear, rootInert: true }));
       noteRendererUnresponsive(7);
-      clearRendererUnresponsive(7);
+      forgetRendererDocumentState(7);
       noteRendererResponsive(7);
       expect(getUnresponsiveSince().has(7)).toBe(false);
+      expect(getInputBlockingRecords().has(7)).toBe(false);
+      // The LoAF sample is the view's, not the document's, and stays.
+      expect(getEluSamples().has(7)).toBe(true);
       expect(vi.mocked(logInfo)).not.toHaveBeenCalledWith("renderer-responsive", expect.anything());
     });
 

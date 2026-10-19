@@ -441,9 +441,13 @@ export function noteRendererUnresponsive(webContentsId: number, projectId?: stri
   logWarn("renderer-unresponsive", { webContentsId, projectId });
 }
 
-/** Drop a hang without logging a recovery — the renderer died rather than recovered. */
-export function clearRendererUnresponsive(webContentsId: number): void {
+/**
+ * The renderer died: its hang ended without a recovery to log, and its input
+ * snapshot describes a document that no longer exists.
+ */
+export function forgetRendererDocumentState(webContentsId: number): void {
   unresponsiveSince.delete(webContentsId);
+  inputBlockingRecords.delete(webContentsId);
 }
 
 export function noteRendererResponsive(webContentsId: number, projectId?: string): void {

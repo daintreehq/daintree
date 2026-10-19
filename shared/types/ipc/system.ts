@@ -403,7 +403,10 @@ export type RendererCpuProfileStopResult =
  * tag and role only; nothing reads text, values or classes.
  */
 export interface RendererInputBlockingSnapshot {
-  /** Computed `pointer-events` of `<body>`; a modal Radix layer sets "none". */
+  /**
+   * Computed `pointer-events` of `<body>` — "auto", "none" (a modal Radix
+   * layer sets it), "other", or "" when there was no body.
+   */
   bodyPointerEvents: string;
   /** `inert` on `<html>` or `<body>`. */
   rootInert: boolean;
@@ -416,12 +419,14 @@ export interface RendererInputBlockingSnapshot {
   overlayClaims: number;
   /** `html[data-dragging]`, stamped for the length of a panel drag. */
   dragging: boolean;
+  /** `document.visibilityState`, or "other". */
   visibility: string;
   focused: boolean;
   /**
-   * Topmost element under the viewport centre that takes pointer events, so
-   * `html` there means nothing under the centre can be clicked.
-   * `coversViewport` is whether that element spans 90% of the viewport.
+   * What `elementFromPoint` returned at the viewport centre: an observation,
+   * not proof of what a click there would reach. `tag` is a standard tag name,
+   * "custom-element" or "other"; `role` appears only for layer roles such as
+   * "dialog". `coversViewport` is whether the element spans 90% of the viewport.
    */
   centerHit: { tag: string; role?: string; coversViewport: boolean } | null;
 }

@@ -817,12 +817,14 @@ export class CrashRecoveryService {
         backupTimestamp,
         nowMs
       );
-      const entry = logPath
-        ? this.readCrashLog(logPath, () => this.buildCrashEntryFromMarker(marker, crashTime))
-        : this.buildCrashEntryFromMarker(marker, crashTime);
+      // An unreadable log is treated like no log at all: the entry is rebuilt
+      // from the marker, dated by its evidence rather than this launch, and
+      // persisted as a fresh crash log below.
+      const loggedEntry = logPath ? this.readCrashLog(logPath) : null;
+      const entry = loggedEntry ?? this.buildCrashEntryFromMarker(marker, crashTime);
       // A log states its own cause; only logs from before causes were stored
       // fall back to the heuristic chain.
-      if (!logPath || !isCrashCause(entry.crashCause)) {
+      if (!loggedEntry || !isCrashCause(entry.crashCause)) {
         entry.crashCause = this.classifyCrashCause(marker);
       }
       if (watchdogAnnotation) {
@@ -834,7 +836,7 @@ export class CrashRecoveryService {
         // who opens the JSON file directly (via the dialog's "open log file"
         // affordance, or for support) sees the watchdog attribution. Failure
         // is non-fatal — the in-memory entry is the source of truth.
-        if (logPath) {
+        if (logPath && loggedEntry) {
           try {
             resilientAtomicWriteFileSync(logPath, JSON.stringify(entry, null, 2), "utf-8", {
               mode: OWNER_RW_FILE_MODE,
@@ -855,7 +857,7 @@ export class CrashRecoveryService {
       // is non-fatal — the in-memory entry is the source of truth and the
       // dialog falls back to a softer warning if the file later can't be
       // opened.
-      let resolvedLogPath = logPath;
+      let resolvedLogPath = loggedEntry ? logPath : null;
       if (!resolvedLogPath) {
         try {
           resolvedLogPath = this.writeCrashLog(entry);
@@ -1464,11 +1466,8 @@ export class CrashRecoveryService {
     }
   }
 
-  /**
-   * `fallback` rebuilds the entry from the marker when the log is unreadable,
-   * so its time stays the dead session's, never this launch's.
-   */
-  private readCrashLog(logPath: string, fallback: () => CrashLogEntry): CrashLogEntry {
+  /** Null when the log is missing, torn or not a crash entry. */
+  private readCrashLog(logPath: string): CrashLogEntry | null {
     try {
       const raw = fs.readFileSync(logPath, "utf8");
       const parsed = JSON.parse(raw) as CrashLogEntry;
@@ -1478,7 +1477,7 @@ export class CrashRecoveryService {
     } catch {
       // fall through
     }
-    return fallback();
+    return null;
   }
 
   private readBackupInfo(): { exists: boolean; timestamp?: number; path?: string } {

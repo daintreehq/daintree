@@ -94,6 +94,20 @@ describe("captureInputBlockingSnapshot", () => {
     expect(JSON.stringify(snapshot)).not.toContain("prompt");
   });
 
+  it("never carries an authored tag or role across", () => {
+    const widget = document.createElement("customer-acme-board");
+    widget.setAttribute("role", "private-project");
+    document.body.appendChild(widget);
+    const snapshot = capture({ hit: widget });
+    expect(snapshot.centerHit).toEqual({ tag: "custom-element", coversViewport: false });
+    expect(JSON.stringify(snapshot)).not.toContain("acme");
+    expect(JSON.stringify(snapshot)).not.toContain("private");
+  });
+
+  it("maps an unexpected pointer-events value onto the fixed vocabulary", () => {
+    expect(capture({ pointerEvents: "visiblePainted" }).bodyPointerEvents).toBe("other");
+  });
+
   it("does not call a small element under the centre viewport-covering", () => {
     const button = document.createElement("button");
     document.body.appendChild(button);
@@ -139,20 +153,35 @@ describe("parseInputBlockingSnapshot", () => {
     ["an array", []],
     ["a negative count", { ...valid, inertCount: -1 }],
     ["a fractional count", { ...valid, modalCount: 1.5 }],
-    ["free text in a token field", { ...valid, bodyPointerEvents: "none; content: x" }],
+    ["a non-string token field", { ...valid, visibility: 1 }],
     ["a missing boolean", { ...valid, dragging: undefined }],
-    ["a malformed centre hit", { ...valid, centerHit: { tag: "DIV", coversViewport: true } }],
+    ["a centre hit without a tag", { ...valid, centerHit: { coversViewport: true } }],
     ["a centre hit that is not an object", { ...valid, centerHit: "div" }],
   ])("rejects %s", (_label, value) => {
     expect(parseInputBlockingSnapshot(value)).toBeNull();
   });
 
-  it("drops a role that is not a plain token but keeps the hit", () => {
+  it("re-maps every string onto the capture vocabulary instead of trusting it", () => {
     const parsed = parseInputBlockingSnapshot({
       ...valid,
-      centerHit: { tag: "div", role: "button menuitem", coversViewport: false },
+      bodyPointerEvents: "none; content: x",
+      visibility: "customer acme",
+      centerHit: { tag: "customer-acme", role: "private-project", coversViewport: false },
     });
-    expect(parsed?.centerHit).toEqual({ tag: "div", coversViewport: false });
+    expect(parsed).toMatchObject({
+      bodyPointerEvents: "other",
+      visibility: "other",
+      centerHit: { tag: "custom-element", coversViewport: false },
+    });
+    expect(JSON.stringify(parsed)).not.toMatch(/acme|private|content/);
+  });
+
+  it("re-maps a tag that is not a standard tag name", () => {
+    const parsed = parseInputBlockingSnapshot({
+      ...valid,
+      centerHit: { tag: "x".repeat(40), coversViewport: false },
+    });
+    expect(parsed?.centerHit).toEqual({ tag: "other", coversViewport: false });
   });
 
   it("caps an implausible count", () => {

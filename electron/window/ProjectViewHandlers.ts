@@ -35,7 +35,7 @@ import type { ViewEntry } from "./ProjectViewManagerTypes.js";
 import { rendererReloadNotice } from "./rendererReloadNotice.js";
 import { getTerminationIntent } from "../services/processTerminationIntent.js";
 import {
-  clearRendererUnresponsive,
+  forgetRendererDocumentState,
   noteRendererResponsive,
   noteRendererUnresponsive,
 } from "../services/ProcessMemoryMonitor.js";
@@ -153,8 +153,9 @@ export function setupViewHandlers(
     _event: Electron.Event,
     details: Electron.RenderProcessGoneDetails
   ) => {
-    // A dead renderer never reports `responsive`, so its hang ends here.
-    clearRendererUnresponsive(wc.id);
+    // A dead renderer never reports `responsive`, and its last input snapshot
+    // belongs to the document that died with it.
+    forgetRendererDocumentState(wc.id);
     if (details.reason === "clean-exit") return;
 
     const projectId = host.webContentsToProject.get(wc.id);

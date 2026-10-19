@@ -1346,7 +1346,7 @@ describe("CrashRecoveryService", () => {
       });
     });
 
-    it("rebuilds an unreadable crash log from the marker instead of stamping the relaunch", () => {
+    it("rebuilds an unreadable crash log from the marker and persists it", () => {
       const crashDir = path.join(userData, "crashes");
       fs.mkdirSync(crashDir, { recursive: true });
       const crashLogPath = path.join(crashDir, "crash-torn.json");
@@ -1357,10 +1357,22 @@ describe("CrashRecoveryService", () => {
       const svc = makeService();
       svc.initialize();
 
-      const entry = svc.getPendingCrash()!.entry;
-      expect(entry.timestamp).toBe(heartbeat);
-      expect(entry.timestampSource).toBe("heartbeat");
-      expect(entry.sessionDurationMs).toBe(HOUR);
+      const pending = svc.getPendingCrash()!;
+      expect(pending.entry.timestamp).toBe(heartbeat);
+      expect(pending.entry.timestampSource).toBe("heartbeat");
+      expect(pending.entry.sessionDurationMs).toBe(HOUR);
+      expect(pending.entry.crashCause).toBe("uncaught-exception");
+      // The torn file can't be bundled, so the rebuilt record gets its own.
+      expect(pending.logPath).toBe(path.join(crashDir, `crash-${pending.entry.id}.json`));
+      expect(JSON.parse(fs.readFileSync(pending.logPath, "utf-8"))).toMatchObject({
+        id: pending.entry.id,
+        timestamp: heartbeat,
+        timestampSource: "heartbeat",
+      });
+      expect(fs.existsSync(path.join(userData, "running.lock"))).toBe(true);
+      expect(
+        JSON.parse(fs.readFileSync(path.join(userData, "running.lock"), "utf8"))
+      ).toMatchObject({ sessionStartMs: RELAUNCH });
     });
 
     it("falls back to the relaunch time, and says so, when the marker carries no evidence", () => {
