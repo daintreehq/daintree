@@ -74,6 +74,17 @@ vi.mock("../SystemSleepService.js", () => ({
   }),
 }));
 
+const loggerMock = vi.hoisted(() => ({
+  logInfo: vi.fn(),
+  logWarn: vi.fn(),
+  logError: vi.fn(),
+}));
+
+vi.mock("../../utils/logger.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../utils/logger.js")>()),
+  ...loggerMock,
+}));
+
 import { CrashRecoveryService } from "../CrashRecoveryService.js";
 import {
   _resetCrashRecoveryInspectionForTests,
@@ -1229,6 +1240,170 @@ describe("CrashRecoveryService", () => {
       } finally {
         vi.useRealTimers();
       }
+    });
+  });
+
+  describe("previous session evidence (#13527)", () => {
+    const HOUR = 60 * 60 * 1000;
+    const RELAUNCH = Date.UTC(2026, 9, 19, 12, 0, 0);
+    const uncleanWarns = () =>
+      loggerMock.logWarn.mock.calls.filter((c) => c[0] === "Previous session ended uncleanly");
+
+    function writeMarker(fields: Record<string, unknown>): void {
+      fs.writeFileSync(
+        path.join(userData, "running.lock"),
+        JSON.stringify({ appVersion: "0.9.0", platform: "darwin", ...fields })
+      );
+    }
+
+    beforeEach(() => {
+      vi.useFakeTimers({ toFake: ["Date"] });
+      vi.setSystemTime(RELAUNCH);
+      vi.spyOn(os, "uptime").mockReturnValue(24 * 60 * 60);
+    });
+
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    it("dates a killed session by its last heartbeat, not by the relaunch hours later", () => {
+      // The session died two hours before this launch; nothing ran in between.
+      const heartbeat = RELAUNCH - 2 * HOUR;
+      writeMarker({ sessionStartMs: heartbeat - 3 * HOUR, lastHeartbeatMs: heartbeat });
+
+      const svc = makeService();
+      svc.initialize();
+
+      const entry = svc.getPendingCrash()!.entry;
+      expect(entry.timestamp).toBe(heartbeat);
+      expect(entry.timestampSource).toBe("heartbeat");
+      expect(entry.lastHeartbeatMs).toBe(heartbeat);
+      expect(entry.sessionDurationMs).toBe(3 * HOUR);
+
+      const persisted = JSON.parse(
+        fs.readFileSync(path.join(userData, "crashes", `crash-${entry.id}.json`), "utf-8")
+      );
+      expect(persisted).toMatchObject({ timestamp: heartbeat, timestampSource: "heartbeat" });
+    });
+
+    it("writes one durable line saying the previous session ended uncleanly", () => {
+      const heartbeat = RELAUNCH - 2 * HOUR;
+      writeMarker({ sessionStartMs: heartbeat - 3 * HOUR, lastHeartbeatMs: heartbeat });
+
+      const svc = makeService();
+      svc.initialize();
+
+      const warns = uncleanWarns();
+      expect(warns).toHaveLength(1);
+      expect(warns[0]![1]).toMatchObject({
+        crashId: svc.getPendingCrash()!.entry.id,
+        crashCause: "external-kill",
+        endedAt: new Date(heartbeat).toISOString(),
+        endedAtSource: "heartbeat",
+        sessionStartedAt: new Date(heartbeat - 3 * HOUR).toISOString(),
+        lastHeartbeatAt: new Date(heartbeat).toISOString(),
+        sessionDurationMs: 3 * HOUR,
+        downtimeMs: 2 * HOUR,
+        appVersion: "0.9.0",
+      });
+    });
+
+    it("says nothing about an unclean exit after a clean one", () => {
+      const first = makeService();
+      first.initialize();
+      first.cleanupOnExit();
+      expect(loggerMock.logInfo).toHaveBeenCalledWith("Clean exit, crash marker removed");
+
+      vi.setSystemTime(RELAUNCH + HOUR);
+      const next = makeService();
+      next.initialize();
+
+      expect(next.getPendingCrash()).toBeNull();
+      expect(uncleanWarns()).toHaveLength(0);
+    });
+
+    it("marks a recorded crash as recorded and logs it on the synchronous level", () => {
+      const first = makeService();
+      first.initialize();
+      first.recordCrash(new Error("boom"));
+      expect(loggerMock.logError).toHaveBeenCalledWith(
+        "Crash recorded",
+        undefined,
+        expect.objectContaining({ crashCause: "uncaught-exception" })
+      );
+
+      vi.setSystemTime(RELAUNCH + 2 * HOUR);
+      const next = makeService();
+      next.initialize();
+
+      const entry = next.getPendingCrash()!.entry;
+      expect(entry.timestamp).toBe(RELAUNCH);
+      expect(entry.timestampSource).toBe("recorded");
+      expect(uncleanWarns()[0]![1]).toMatchObject({
+        endedAt: new Date(RELAUNCH).toISOString(),
+        endedAtSource: "recorded",
+        downtimeMs: 2 * HOUR,
+      });
+    });
+
+    it("rebuilds an unreadable crash log from the marker and persists it", () => {
+      const crashDir = path.join(userData, "crashes");
+      fs.mkdirSync(crashDir, { recursive: true });
+      const crashLogPath = path.join(crashDir, "crash-torn.json");
+      fs.writeFileSync(crashLogPath, '{"id": "torn", "timest');
+      const heartbeat = RELAUNCH - HOUR;
+      writeMarker({ sessionStartMs: heartbeat - HOUR, lastHeartbeatMs: heartbeat, crashLogPath });
+
+      const svc = makeService();
+      svc.initialize();
+
+      const pending = svc.getPendingCrash()!;
+      expect(pending.entry.timestamp).toBe(heartbeat);
+      expect(pending.entry.timestampSource).toBe("heartbeat");
+      expect(pending.entry.sessionDurationMs).toBe(HOUR);
+      expect(pending.entry.crashCause).toBe("uncaught-exception");
+      // The torn file can't be bundled, so the rebuilt record gets its own.
+      expect(pending.logPath).toBe(path.join(crashDir, `crash-${pending.entry.id}.json`));
+      expect(JSON.parse(fs.readFileSync(pending.logPath, "utf-8"))).toMatchObject({
+        id: pending.entry.id,
+        timestamp: heartbeat,
+        timestampSource: "heartbeat",
+      });
+      expect(fs.existsSync(path.join(userData, "running.lock"))).toBe(true);
+      expect(
+        JSON.parse(fs.readFileSync(path.join(userData, "running.lock"), "utf8"))
+      ).toMatchObject({ sessionStartMs: RELAUNCH });
+    });
+
+    it("falls back to the relaunch time, and says so, when the marker carries no evidence", () => {
+      writeMarker({ sessionStartMs: RELAUNCH - HOUR });
+
+      const svc = makeService();
+      svc.initialize();
+
+      const entry = svc.getPendingCrash()!.entry;
+      expect(entry.timestamp).toBe(RELAUNCH);
+      expect(entry.timestampSource).toBe("relaunch");
+      expect(entry).not.toHaveProperty("lastHeartbeatMs");
+      expect(uncleanWarns()[0]![1]).toMatchObject({
+        endedAtSource: "relaunch",
+        lastHeartbeatAt: undefined,
+      });
+    });
+
+    it("still recovers when the logger throws", () => {
+      loggerMock.logWarn.mockImplementationOnce(() => {
+        throw new Error("logger down");
+      });
+      writeMarker({ sessionStartMs: RELAUNCH - 3 * HOUR, lastHeartbeatMs: RELAUNCH - HOUR });
+
+      const svc = makeService();
+      svc.initialize();
+
+      expect(svc.getPendingCrash()).not.toBeNull();
+      // The marker on disk is this session's, not the dead one.
+      const marker = JSON.parse(fs.readFileSync(path.join(userData, "running.lock"), "utf8"));
+      expect(marker.sessionStartMs).toBe(RELAUNCH);
     });
   });
 });

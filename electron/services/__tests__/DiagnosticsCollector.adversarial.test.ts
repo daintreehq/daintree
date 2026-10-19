@@ -27,8 +27,17 @@ const renderer = vi.hoisted(() => ({
   blink: new Map<number, { allocated: number; total?: number; timestamp: number }>(),
   elu: new Map<
     number,
-    { blockingDurationMs: number; sampleWindowMs: number; ratio: number; timestamp: number }
+    {
+      blockingDurationMs: number;
+      sampleWindowMs: number;
+      blockedRatio: number;
+      longestFrameMs?: number;
+      longestBlockingMs?: number;
+      timestamp: number;
+    }
   >(),
+  inputBlocking: new Map<number, { snapshot: unknown; capturedAt: number }>(),
+  unresponsiveSince: new Map<number, number>(),
   hibernationSnapshot: {} as unknown,
   resourceProfileSnapshot: null as unknown,
 }));
@@ -127,6 +136,8 @@ vi.mock("../GpuCrashMonitorService.js", () => ({
 vi.mock("../ProcessMemoryMonitor.js", () => ({
   getBlinkSamples: () => renderer.blink,
   getEluSamples: () => renderer.elu,
+  getInputBlockingRecords: () => renderer.inputBlocking,
+  getUnresponsiveSince: () => renderer.unresponsiveSince,
   getTrendSnapshot: () => [],
   getSessionPeakSnapshot: () => [],
 }));
@@ -198,6 +209,8 @@ describe("DiagnosticsCollector adversarial", () => {
     shared.storeValues.set("appState", { recentProject: "/Users/alice/project" });
     renderer.blink = new Map();
     renderer.elu = new Map();
+    renderer.inputBlocking = new Map();
+    renderer.unresponsiveSince = new Map();
     renderer.hibernationSnapshot = {
       config: { enabled: false, inactiveThresholdHours: 24 },
       isRunning: false,
@@ -705,8 +718,37 @@ describe("DiagnosticsCollector adversarial", () => {
   it("PER_RENDERER_AND_HIBERNATION_SECTIONS_POPULATED (#10500)", async () => {
     renderer.blink = new Map([[101, { allocated: 51_200, total: 102_400, timestamp: 1 }]]);
     renderer.elu = new Map([
-      [101, { blockingDurationMs: 12.4, sampleWindowMs: 30_000, ratio: 0.87, timestamp: 2 }],
+      [
+        101,
+        {
+          blockingDurationMs: 4_800.4,
+          sampleWindowMs: 31_000,
+          blockedRatio: 0.1548,
+          longestFrameMs: 4_850,
+          longestBlockingMs: 4_800,
+          timestamp: 2,
+        },
+      ],
     ]);
+    const blockedSnapshot = {
+      bodyPointerEvents: "none",
+      rootInert: false,
+      inertCount: 1,
+      scrollLocked: true,
+      modalCount: 1,
+      overlayClaims: 1,
+      dragging: false,
+      visibility: "visible",
+      focused: true,
+      centerHit: { tag: "html", coversViewport: true },
+    };
+    const snapshotCapturedAt = Date.now() - 45_000;
+    renderer.inputBlocking = new Map([
+      [101, { snapshot: blockedSnapshot, capturedAt: snapshotCapturedAt }],
+    ]);
+    // 102 hung before it ever answered a sample.
+    const hangStartedAt = Date.now() - 90_000;
+    renderer.unresponsiveSince = new Map([[102, hangStartedAt]]);
     renderer.hibernationSnapshot = {
       config: { enabled: true, inactiveThresholdHours: 24 },
       isRunning: true,
@@ -758,7 +800,20 @@ describe("DiagnosticsCollector adversarial", () => {
       }>;
       rendererMemory: {
         blink: Array<{ webContentsId: number; allocatedKb: number; totalKb?: number }>;
-        elu: Array<{ webContentsId: number; ratio: number }>;
+        loafBlocking: Array<{
+          webContentsId: number;
+          blockingDurationMs: number;
+          blockedRatio: number;
+          longestFrameMs?: number;
+        }>;
+        inputBlocking: Array<{
+          webContentsId: number;
+          capturedAt: number | null;
+          ageMs: number | null;
+          unresponsiveSince: number | null;
+          unresponsiveForMs: number | null;
+          snapshot: unknown;
+        }>;
       };
       memoryTrends: { processes: unknown; sessionPeaks: unknown };
       resourceState: {
@@ -785,7 +840,28 @@ describe("DiagnosticsCollector adversarial", () => {
       webContentsId: 101,
       allocatedKb: 51_200,
     });
-    expect(payload.rendererMemory.elu[0]).toMatchObject({ webContentsId: 101, ratio: 0.87 });
+    expect(payload.rendererMemory).not.toHaveProperty("elu");
+    expect(payload.rendererMemory.loafBlocking[0]).toMatchObject({
+      webContentsId: 101,
+      blockingDurationMs: 4_800,
+      blockedRatio: 0.15,
+      longestFrameMs: 4_850,
+    });
+    const answering = payload.rendererMemory.inputBlocking.find((e) => e.webContentsId === 101)!;
+    expect(answering).toMatchObject({
+      capturedAt: snapshotCapturedAt,
+      unresponsiveSince: null,
+      snapshot: blockedSnapshot,
+    });
+    expect(answering.ageMs).toBeGreaterThanOrEqual(45_000);
+    const hung = payload.rendererMemory.inputBlocking.find((e) => e.webContentsId === 102)!;
+    expect(hung).toMatchObject({
+      capturedAt: null,
+      ageMs: null,
+      unresponsiveSince: hangStartedAt,
+      snapshot: null,
+    });
+    expect(hung.unresponsiveForMs).toBeGreaterThanOrEqual(90_000);
 
     // memoryTrends — wiring/shape only; EMA content is covered by the
     // ProcessMemoryMonitor unit tests (the real getTrendSnapshot runs here).

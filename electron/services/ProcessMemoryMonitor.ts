@@ -12,6 +12,7 @@ import { getWritesSuppressed } from "./diskPressureState.js";
 import { getIsE2EFaultMode, getIsE2EMode } from "../setup/runtimeFlags.js";
 import { getSystemMemoryThresholds, readAvailableSystemMemoryMb } from "../utils/systemMemory.js";
 import type { TrimStateSummary } from "../../shared/types/pty-host.js";
+import type { RendererInputBlockingSnapshot } from "../../shared/types/ipc/system.js";
 import {
   KERNEL_PRESSURE_CRITICAL,
   KERNEL_PRESSURE_WARN,
@@ -295,19 +296,82 @@ export const RENDERER_ELU_HIGH_RATIO = 0.85;
  */
 export const RENDERER_ELU_HIGH_SAMPLE_COUNT = 6;
 
-export interface RendererEluSample {
+/**
+ * A view's long-animation-frame blocking over one sample window. Not event-loop
+ * utilisation: only the part of each frame past 50ms counts, so the ratio is a
+ * floor on how busy the view was and the longest frame says more about a stall.
+ */
+export interface RendererLoafSample {
   /** Total LoAF blockingDuration accumulated by the preload over the window, in ms. */
   blockingDurationMs: number;
   /** Wall-clock width of the sample window the preload measured against, in ms. */
   sampleWindowMs: number;
-  /** Derived ratio = blockingDurationMs / sampleWindowMs, clamped to [0, 1]. */
-  ratio: number;
+  /** blockingDurationMs / sampleWindowMs, clamped to [0, 1]. */
+  blockedRatio: number;
+  /** Longest single animation frame in the window; absent from renderers that predate it. */
+  longestFrameMs?: number;
+  /** Largest single-frame blockingDuration in the window. */
+  longestBlockingMs?: number;
   /** Wall-clock time the sample was recorded. */
   timestamp: number;
 }
 
-const eluSamples = new Map<number, RendererEluSample>();
+export interface RendererInputBlockingRecord {
+  snapshot: RendererInputBlockingSnapshot;
+  /** Main's wall clock when the view reported it. */
+  capturedAt: number;
+}
+
+export interface RendererLoafReport {
+  blockingDurationMs: number;
+  sampleWindowMs: number;
+  longestFrameMs?: number;
+  longestBlockingMs?: number;
+  inputBlocking?: RendererInputBlockingSnapshot;
+}
+
+const eluSamples = new Map<number, RendererLoafSample>();
 const eluHighStreak = new Map<number, number>();
+const inputBlockingRecords = new Map<number, RendererInputBlockingRecord>();
+const unresponsiveSince = new Map<number, number>();
+
+/**
+ * The snapshot fields that can each stop a click on their own. A modal or
+ * overlay claim being open is normal; it is listed so a stuck one shows up.
+ */
+function listInputBlockers(snapshot: RendererInputBlockingSnapshot): string[] {
+  const blockers: string[] = [];
+  if (snapshot.bodyPointerEvents === "none") blockers.push("body-pointer-events-none");
+  if (snapshot.rootInert) blockers.push("root-inert");
+  if (snapshot.inertCount > 0) blockers.push("inert-elements");
+  if (snapshot.modalCount > 0) blockers.push("modal");
+  if (snapshot.overlayClaims > 0) blockers.push("overlay-claim");
+  if (snapshot.dragging) blockers.push("dragging");
+  return blockers;
+}
+
+// The log is the only copy that outlives a restart, so each change in what
+// could be blocking clicks is written once, when the sample shows it.
+function recordInputBlocking(
+  webContentsId: number,
+  snapshot: RendererInputBlockingSnapshot,
+  now: number
+): void {
+  const previous = inputBlockingRecords.get(webContentsId);
+  inputBlockingRecords.set(webContentsId, { snapshot, capturedAt: now });
+  const blockers = listInputBlockers(snapshot);
+  const previousBlockers = previous ? listInputBlockers(previous.snapshot) : [];
+  if (blockers.join(",") === previousBlockers.join(",")) return;
+  logInfo("renderer-input-blockers-changed", {
+    webContentsId,
+    blockers,
+    bodyPointerEvents: snapshot.bodyPointerEvents,
+    inertCount: snapshot.inertCount,
+    modalCount: snapshot.modalCount,
+    overlayClaims: snapshot.overlayClaims,
+    centerHit: snapshot.centerHit,
+  });
+}
 
 /**
  * Called by the IPC handler when a renderer reports its accumulated long-
@@ -318,25 +382,27 @@ const eluHighStreak = new Map<number, number>();
  * continues incrementing past the threshold, but only the boundary crossing
  * is logged to avoid flooding.
  */
-export function recordEluSample(
-  webContentsId: number,
-  payload: { blockingDurationMs: number; sampleWindowMs: number }
-): void {
+export function recordEluSample(webContentsId: number, payload: RendererLoafReport): void {
   const { blockingDurationMs, sampleWindowMs } = payload;
   if (sampleWindowMs <= 0) return;
   const rawRatio = blockingDurationMs / sampleWindowMs;
   const ratio = rawRatio < 0 ? 0 : rawRatio > 1 ? 1 : rawRatio;
-  const stored: RendererEluSample = {
+  const now = Date.now();
+  const stored: RendererLoafSample = {
     blockingDurationMs,
     sampleWindowMs,
-    ratio,
-    timestamp: Date.now(),
+    blockedRatio: ratio,
+    timestamp: now,
   };
+  if (payload.longestFrameMs !== undefined) stored.longestFrameMs = payload.longestFrameMs;
+  if (payload.longestBlockingMs !== undefined) stored.longestBlockingMs = payload.longestBlockingMs;
   eluSamples.set(webContentsId, stored);
+  if (payload.inputBlocking) recordInputBlocking(webContentsId, payload.inputBlocking, now);
   logDebug("renderer-elu-sample", {
     webContentsId,
-    ratio: Math.round(ratio * 100) / 100,
+    blockedRatio: Math.round(ratio * 100) / 100,
     blockingDurationMs: Math.round(blockingDurationMs),
+    longestFrameMs: stored.longestFrameMs,
     sampleWindowMs,
   });
 
@@ -346,7 +412,7 @@ export function recordEluSample(
     if (next === RENDERER_ELU_HIGH_SAMPLE_COUNT) {
       logWarn("renderer-elu-sustained-high", {
         webContentsId,
-        ratio: Math.round(ratio * 100) / 100,
+        blockedRatio: Math.round(ratio * 100) / 100,
         consecutiveSamples: next,
         windowMs: sampleWindowMs * next,
       });
@@ -356,10 +422,43 @@ export function recordEluSample(
   }
 }
 
-/** Drop a renderer's last ELU sample and streak (call from view eviction). */
+/** Drop a renderer's last LoAF sample, streak and input state (call from view eviction). */
 export function forgetEluSample(webContentsId: number): void {
   eluSamples.delete(webContentsId);
   eluHighStreak.delete(webContentsId);
+  inputBlockingRecords.delete(webContentsId);
+  unresponsiveSince.delete(webContentsId);
+}
+
+/**
+ * Chromium's hang monitor fired for a project view: its renderer stopped
+ * handling input. Logged because a stalled renderer and a click-blocking
+ * overlay look the same to the person using it.
+ */
+export function noteRendererUnresponsive(webContentsId: number, projectId?: string): void {
+  if (unresponsiveSince.has(webContentsId)) return;
+  unresponsiveSince.set(webContentsId, Date.now());
+  logWarn("renderer-unresponsive", { webContentsId, projectId });
+}
+
+/**
+ * The renderer died: its hang ended without a recovery to log, and its input
+ * snapshot describes a document that no longer exists.
+ */
+export function forgetRendererDocumentState(webContentsId: number): void {
+  unresponsiveSince.delete(webContentsId);
+  inputBlockingRecords.delete(webContentsId);
+}
+
+export function noteRendererResponsive(webContentsId: number, projectId?: string): void {
+  const since = unresponsiveSince.get(webContentsId);
+  if (since === undefined) return;
+  unresponsiveSince.delete(webContentsId);
+  logInfo("renderer-responsive", {
+    webContentsId,
+    projectId,
+    unresponsiveForMs: Math.max(0, Date.now() - since),
+  });
 }
 
 /**
@@ -389,8 +488,18 @@ export function hasSustainedRendererSaturation(now = Date.now()): boolean {
 }
 
 /** Read-only view for diagnostics / tests. */
-export function getEluSamples(): ReadonlyMap<number, RendererEluSample> {
+export function getEluSamples(): ReadonlyMap<number, RendererLoafSample> {
   return eluSamples;
+}
+
+/** Read-only view for diagnostics / tests. */
+export function getInputBlockingRecords(): ReadonlyMap<number, RendererInputBlockingRecord> {
+  return inputBlockingRecords;
+}
+
+/** When each currently-unresponsive view's hang began, for diagnostics / tests. */
+export function getUnresponsiveSince(): ReadonlyMap<number, number> {
+  return unresponsiveSince;
 }
 
 /** Read-only view of per-view consecutive saturated-sample counts (tests). */

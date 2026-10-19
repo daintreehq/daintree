@@ -398,6 +398,40 @@ export type RendererCpuProfileStopResult =
     };
 
 /**
+ * What a project view's DOM showed about whether clicks could land, read by
+ * the preload each time the view answers a LoAF sample. Elements are named by
+ * tag and role only; nothing reads text, values or classes.
+ */
+export interface RendererInputBlockingSnapshot {
+  /**
+   * Computed `pointer-events` of `<body>` — "auto", "none" (a modal Radix
+   * layer sets it), "other", or "" when there was no body.
+   */
+  bodyPointerEvents: string;
+  /** `inert` on `<html>` or `<body>`. */
+  rootInert: boolean;
+  inertCount: number;
+  /** `body[data-scroll-locked]`, set by react-remove-scroll under a modal layer. */
+  scrollLocked: boolean;
+  /** `[aria-modal="true"]` elements plus native modal `<dialog>`s. */
+  modalCount: number;
+  /** Overlay claims open in the view's UI store, mirrored onto `<html>`. */
+  overlayClaims: number;
+  /** `html[data-dragging]`, stamped for the length of a panel drag. */
+  dragging: boolean;
+  /** `document.visibilityState`, or "other". */
+  visibility: string;
+  focused: boolean;
+  /**
+   * What `elementFromPoint` returned at the viewport centre: an observation,
+   * not proof of what a click there would reach. `tag` is a standard tag name,
+   * "custom-element" or "other"; `role` appears only for layer roles such as
+   * "dialog". `coversViewport` is whether the element spans 90% of the viewport.
+   */
+  centerHit: { tag: string; role?: string; coversViewport: boolean } | null;
+}
+
+/**
  * Payload for starting an install job. Either an agent CLI (resolved through
  * the agent registry) or a baseline prerequisite (resolved through
  * `getBaselinePrerequisites()`). The renderer names a target; it never supplies

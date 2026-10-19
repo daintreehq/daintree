@@ -58,6 +58,7 @@ export { useWorktreeColorMap } from "./useWorktreeColorMap";
 
 export {
   useOverlayClaim,
+  useOverlayClaimCountMarker,
   useOverlayState,
   useOverlayOpen,
   useTopmostOverlay,

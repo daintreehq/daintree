@@ -451,17 +451,22 @@ export interface IpcInvokeMap extends GeneratedIpcInvokeMap {
     ];
     result: void;
   };
-  // Renderer reports event-loop utilization (LoAF blockingDuration accumulated
-  // since the prior sample) to ProcessMemoryMonitor. The webContents id is
-  // taken from event.sender on the handler side. `blockingDurationMs` is
-  // sub-window blocking time (>=50ms LoAF events only); main derives the
-  // ratio against `sampleWindowMs`.
+  // Renderer reports long-animation-frame blocking (LoAF blockingDuration
+  // accumulated since the prior sample) to ProcessMemoryMonitor. Not event-loop
+  // utilisation, despite the channel name: `blockingDurationMs` counts only the
+  // part of each frame past 50ms; main derives the ratio against
+  // `sampleWindowMs`. The longest frame and the DOM input-blocking snapshot are
+  // optional so a renderer built before them still reports. The webContents id
+  // is taken from event.sender on the handler side.
   "system:report-renderer-elu": {
     args: [
       payload: {
         requestId: string;
         blockingDurationMs: number;
         sampleWindowMs: number;
+        longestFrameMs?: number;
+        longestBlockingMs?: number;
+        inputBlocking?: import("./system.js").RendererInputBlockingSnapshot;
       },
     ];
     result: void;

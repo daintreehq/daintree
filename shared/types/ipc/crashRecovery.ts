@@ -41,9 +41,23 @@ export type CrashCause =
   | "external-kill"
   | "unknown";
 
+/**
+ * Which evidence a crash entry's `timestamp` came from. Only "recorded" and
+ * "watchdog" are the moment of death; the rest are the last sign of life
+ * written before it ("suspend" the sleep it never woke from, "backup" and
+ * "heartbeat" the last periodic write), and "relaunch" means nothing earlier
+ * survived, so the time is when the next launch found the marker.
+ */
+export type CrashTimestampSource =
+  "recorded" | "watchdog" | "suspend" | "backup" | "heartbeat" | "relaunch";
+
 export interface CrashLogEntry {
   id: string;
   timestamp: number;
+  /** Absent on entries written before the source was stored. */
+  timestampSource?: CrashTimestampSource;
+  /** The dead session's last marker heartbeat, for entries rebuilt from the marker. */
+  lastHeartbeatMs?: number;
   appVersion: string;
   platform: string;
   osVersion: string;

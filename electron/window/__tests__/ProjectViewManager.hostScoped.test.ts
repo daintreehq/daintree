@@ -99,6 +99,9 @@ vi.mock("electron", () => {
 vi.mock("../../services/ProcessMemoryMonitor.js", () => ({
   forgetBlinkSample: vi.fn(),
   forgetEluSample: vi.fn(),
+  noteRendererUnresponsive: vi.fn(),
+  noteRendererResponsive: vi.fn(),
+  forgetRendererDocumentState: vi.fn(),
 }));
 
 vi.mock("../webContentsRegistry.js", () => ({

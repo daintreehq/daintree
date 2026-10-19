@@ -64,6 +64,11 @@ import {
   forgetEluSample,
   getEluSamples,
   getEluHighStreaks,
+  getInputBlockingRecords,
+  getUnresponsiveSince,
+  noteRendererUnresponsive,
+  noteRendererResponsive,
+  forgetRendererDocumentState,
   RENDERER_ELU_HIGH_RATIO,
   RENDERER_ELU_HIGH_SAMPLE_COUNT,
   hasSustainedRendererSaturation,
@@ -2097,7 +2102,7 @@ describe("ProcessMemoryMonitor", () => {
       const stored = getEluSamples().get(42);
       expect(stored?.blockingDurationMs).toBe(1500);
       expect(stored?.sampleWindowMs).toBe(3000);
-      expect(stored?.ratio).toBeCloseTo(0.5, 5);
+      expect(stored?.blockedRatio).toBeCloseTo(0.5, 5);
       expect(typeof stored?.timestamp).toBe("number");
     });
 
@@ -2108,10 +2113,10 @@ describe("ProcessMemoryMonitor", () => {
 
     it("clamps ratio to [0, 1]", () => {
       recordEluSample(1, { blockingDurationMs: -100, sampleWindowMs: 1000 });
-      expect(getEluSamples().get(1)?.ratio).toBe(0);
+      expect(getEluSamples().get(1)?.blockedRatio).toBe(0);
 
       recordEluSample(2, { blockingDurationMs: 5000, sampleWindowMs: 1000 });
-      expect(getEluSamples().get(2)?.ratio).toBe(1);
+      expect(getEluSamples().get(2)?.blockedRatio).toBe(1);
     });
 
     it("does NOT log sustained-high warning while below threshold", () => {
@@ -2230,6 +2235,28 @@ describe("ProcessMemoryMonitor", () => {
       // Two poll periods after the last sample the streak is stale (the view
       // was evicted mid-streak or sampling paused) and must not stay latched.
       expect(hasSustainedRendererSaturation(sample.timestamp + 10 * 60_000)).toBe(false);
+    });
+
+    it("keeps the longest frame so a short stall is not averaged away", () => {
+      // 4.8 s blocked in a 31 s window reads as 0.15 — the longest frame is
+      // what shows the view was frozen.
+      recordEluSample(42, {
+        blockingDurationMs: 4800,
+        sampleWindowMs: 31_000,
+        longestFrameMs: 4850,
+        longestBlockingMs: 4800,
+      });
+      const stored = getEluSamples().get(42);
+      expect(stored?.blockedRatio).toBeCloseTo(0.155, 2);
+      expect(stored?.longestFrameMs).toBe(4850);
+      expect(stored?.longestBlockingMs).toBe(4800);
+    });
+
+    it("leaves the peaks absent for a renderer that does not report them", () => {
+      recordEluSample(42, { blockingDurationMs: 100, sampleWindowMs: 1000 });
+      const stored = getEluSamples().get(42);
+      expect(stored).not.toHaveProperty("longestFrameMs");
+      expect(stored).not.toHaveProperty("longestBlockingMs");
     });
 
     it("startAppMetricsMonitor invokes actions.sampleRendererElu once per poll", () => {
@@ -2539,6 +2566,123 @@ describe("ProcessMemoryMonitor", () => {
         vi.advanceTimersByTime(30_000);
         expect(logDebug).toHaveBeenCalledTimes(3);
       });
+    });
+  });
+
+  describe("renderer input blocking and hangs (#13527)", () => {
+    const clear = {
+      bodyPointerEvents: "auto",
+      rootInert: false,
+      inertCount: 0,
+      scrollLocked: false,
+      modalCount: 0,
+      overlayClaims: 0,
+      dragging: false,
+      visibility: "visible",
+      focused: true,
+      centerHit: { tag: "div", coversViewport: false },
+    };
+    const report = (inputBlocking: typeof clear) => ({
+      blockingDurationMs: 0,
+      sampleWindowMs: 30_000,
+      inputBlocking,
+    });
+    const changeLogs = () =>
+      vi.mocked(logInfo).mock.calls.filter((c) => c[0] === "renderer-input-blockers-changed");
+
+    beforeEach(() => {
+      for (const id of [7, 8]) forgetEluSample(id);
+      vi.mocked(logInfo).mockClear();
+      vi.mocked(logWarn).mockClear();
+    });
+
+    it("caches the latest snapshot per view with the time it arrived", () => {
+      recordEluSample(7, report(clear));
+      const record = getInputBlockingRecords().get(7);
+      expect(record?.snapshot).toEqual(clear);
+      expect(typeof record?.capturedAt).toBe("number");
+      expect(getInputBlockingRecords().has(8)).toBe(false);
+    });
+
+    it("logs nothing for a view that has never shown a blocker", () => {
+      recordEluSample(7, report(clear));
+      recordEluSample(7, report(clear));
+      expect(changeLogs()).toHaveLength(0);
+    });
+
+    it("logs once when a blocker appears and once when it clears", () => {
+      const modal = { ...clear, bodyPointerEvents: "none", modalCount: 1, scrollLocked: true };
+      recordEluSample(7, report(clear));
+      recordEluSample(7, report(modal));
+      recordEluSample(7, report(modal));
+      recordEluSample(7, report(clear));
+
+      const logs = changeLogs();
+      expect(logs).toHaveLength(2);
+      expect(logs[0]![1]).toMatchObject({
+        webContentsId: 7,
+        blockers: ["body-pointer-events-none", "modal"],
+      });
+      expect(logs[1]![1]).toMatchObject({ webContentsId: 7, blockers: [] });
+    });
+
+    it("logs a change in which blockers are present, not just their count", () => {
+      recordEluSample(7, report({ ...clear, overlayClaims: 1 }));
+      recordEluSample(7, report({ ...clear, dragging: true }));
+      const logs = changeLogs();
+      expect(logs).toHaveLength(2);
+      expect(logs[1]![1]).toMatchObject({ blockers: ["dragging"] });
+    });
+
+    it("keeps the previous snapshot when a sample arrives without one", () => {
+      recordEluSample(7, report({ ...clear, rootInert: true }));
+      recordEluSample(7, { blockingDurationMs: 0, sampleWindowMs: 30_000 });
+      expect(getInputBlockingRecords().get(7)?.snapshot.rootInert).toBe(true);
+    });
+
+    it("records a hang once and logs how long it lasted when it ends", () => {
+      vi.setSystemTime(1_000_000);
+      noteRendererUnresponsive(7, "project-a");
+      vi.setSystemTime(1_004_000);
+      noteRendererUnresponsive(7, "project-a");
+      expect(getUnresponsiveSince().get(7)).toBe(1_000_000);
+      expect(vi.mocked(logWarn).mock.calls.filter((c) => c[0] === "renderer-unresponsive")).toEqual(
+        [["renderer-unresponsive", { webContentsId: 7, projectId: "project-a" }]]
+      );
+
+      vi.setSystemTime(1_012_500);
+      noteRendererResponsive(7, "project-a");
+      expect(getUnresponsiveSince().has(7)).toBe(false);
+      expect(vi.mocked(logInfo)).toHaveBeenCalledWith("renderer-responsive", {
+        webContentsId: 7,
+        projectId: "project-a",
+        unresponsiveForMs: 12_500,
+      });
+    });
+
+    it("ignores a responsive event with no hang to end", () => {
+      noteRendererResponsive(8);
+      expect(vi.mocked(logInfo)).not.toHaveBeenCalledWith("renderer-responsive", expect.anything());
+    });
+
+    it("drops a dead renderer's hang and snapshot without logging a recovery", () => {
+      recordEluSample(7, report({ ...clear, rootInert: true }));
+      noteRendererUnresponsive(7);
+      forgetRendererDocumentState(7);
+      noteRendererResponsive(7);
+      expect(getUnresponsiveSince().has(7)).toBe(false);
+      expect(getInputBlockingRecords().has(7)).toBe(false);
+      // The LoAF sample is the view's, not the document's, and stays.
+      expect(getEluSamples().has(7)).toBe(true);
+      expect(vi.mocked(logInfo)).not.toHaveBeenCalledWith("renderer-responsive", expect.anything());
+    });
+
+    it("forgetEluSample drops the snapshot and the hang with the sample", () => {
+      recordEluSample(7, report(clear));
+      noteRendererUnresponsive(7);
+      forgetEluSample(7);
+      expect(getInputBlockingRecords().has(7)).toBe(false);
+      expect(getUnresponsiveSince().has(7)).toBe(false);
     });
   });
 

@@ -80,6 +80,9 @@ vi.mock("electron", () => {
 vi.mock("../../services/ProcessMemoryMonitor.js", () => ({
   forgetBlinkSample: vi.fn(),
   forgetEluSample: vi.fn(),
+  noteRendererUnresponsive: vi.fn(),
+  noteRendererResponsive: vi.fn(),
+  forgetRendererDocumentState: vi.fn(),
 }));
 
 vi.mock("../webContentsRegistry.js", () => ({
@@ -2184,6 +2187,8 @@ describe("ProjectViewManager — listener cleanup", () => {
     "before-input-event",
     "did-finish-load",
     "render-process-gone",
+    "unresponsive",
+    "responsive",
   ] as const;
 
   let win: ReturnType<typeof createMockWindow>;
