@@ -42,6 +42,7 @@ import {
   resumeFromAgentEndOffer,
 } from "@/services/terminal/agentEndRecovery";
 import { RestoreRecoveryGate } from "./RestoreRecoveryGate";
+import { MemoryPressureGate } from "./MemoryPressureGate";
 import { InlineStatusBanner } from "./InlineStatusBanner";
 import { PluginKindSetupStrip } from "@/components/Plugin/PluginSetupStrip";
 import { useForceResumeCycleWatchdog } from "@/hooks/terminal/useForceResumeCycleWatchdog";
@@ -65,6 +66,11 @@ import { useWorktreeStore } from "@/hooks/useWorktreeStore";
 import { useIsDragging } from "@/components/DragDrop";
 import { MissingCliGate } from "./MissingCliGate";
 import { useCliAvailabilityStore } from "@/store/cliAvailabilityStore";
+import {
+  launchDespiteMemoryPressure,
+  panelHoldKey,
+  useMemoryPressureWaitStore,
+} from "@/store/memoryPressureWaitStore";
 import type { AgentCliDetail } from "@shared/types/ipc";
 import {
   useErrorStore,
@@ -564,6 +570,9 @@ function TerminalPaneComponent({
     eagerAttach,
     isHeldForRecovery,
   } = terminalState;
+  const isHeldForMemoryPressure = useMemoryPressureWaitStore(
+    (state) => state.heldPanelIds[id] === true
+  );
   // Keyboard navigation into a held pane lands on its recovery surface, which
   // has no terminal or input bar to take focus (#12434).
   const recoveryGateRef = useRef<HTMLDivElement>(null);
@@ -1667,6 +1676,12 @@ function TerminalPaneComponent({
                   { source: "user" }
                 )
               }
+            />
+          ) : isHeldForMemoryPressure ? (
+            <MemoryPressureGate
+              agentId={agentId}
+              onLaunchAnyway={() => launchDespiteMemoryPressure(panelHoldKey(id))}
+              onCancel={() => onClose(true)}
             />
           ) : spawnStatus === "spawning" && !eagerAttach ? (
             <TerminalStartupPlaceholder agentId={agentId} onCancel={() => onClose()} />

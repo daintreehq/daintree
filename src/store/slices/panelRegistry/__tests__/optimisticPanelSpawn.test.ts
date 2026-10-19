@@ -226,7 +226,9 @@ describe("optimistic panel spawn (#5789)", () => {
       expect((state.panelsById[id] as PtyPanelData | undefined)?.eagerAttach).toBeUndefined();
     }
 
-    // Only the first PTY spawn is allowed to start while the startup job is blocked.
+    // Only the first PTY spawn is allowed to start while the startup job is
+    // blocked, however long the queue is left to run.
+    await drainMicrotasks();
     expect(terminalClient.spawn).toHaveBeenCalledTimes(1);
     expect(terminalClient.spawn.mock.calls[0]?.[0]).toMatchObject({ id: "concurrent-0" });
 

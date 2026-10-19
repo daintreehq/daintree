@@ -51,6 +51,9 @@ export type AppErrorCode =
   // Deliberately not a fallback to the focused view: delivering it elsewhere is
   // the confused-deputy bug this code exists to make visible.
   | "PROJECT_VIEW_UNAVAILABLE"
+  // The kernel reports critical memory pressure, so an open that would add a
+  // renderer is held until it eases or the user opens it anyway (#13530).
+  | "MEMORY_PRESSURE_CRITICAL"
   // Session-bookmark capture/persistence outcomes (#11288). Stable codes so the
   // UI (and MCP/automation callers) surface copy from the code, not exception text.
   | "NOT_BOOKMARKABLE"

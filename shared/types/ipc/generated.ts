@@ -2370,6 +2370,10 @@ export interface GeneratedIpcInvokeMap {
     args: [];
     result: import("../whySlow.js").WhySlowSnapshot;
   };
+  "system:is-memory-pressure-critical": {
+    args: [];
+    result: boolean;
+  };
   "system:report-terminal-renderer-diagnostics": {
     args: [
       payload: {

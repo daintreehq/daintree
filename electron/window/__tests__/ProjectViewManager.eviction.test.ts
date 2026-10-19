@@ -248,6 +248,10 @@ import {
   backgroundRestoreCapacity,
 } from "../ProjectViewEvictionController.js";
 import { recordSwapPressure, SWAP_PRESSURE_STALE_MS } from "../../services/systemSwapPressure.js";
+import {
+  recordKernelPressureLevel,
+  resetKernelPressureForTesting,
+} from "../../services/systemKernelPressure.js";
 import { toHostScopedKey } from "../../../shared/types/remoteHosts.js";
 
 // The shared snapshot is module-level state; without a reset, a test could be
@@ -3854,6 +3858,22 @@ describe("ProjectViewManager — graduated memory reclaim (#11469)", () => {
       expect(backgroundRestoreCapacity(mgr)).toBe("available");
       recordSwapPressure(true);
       expect(backgroundRestoreCapacity(mgr)).toBe("pressure");
+    });
+
+    it("refuses a background restore at critical kernel pressure alone (#13530)", async () => {
+      setAvailableMb(6000);
+      const mgr = makeManager(5);
+      mgr.setMemoryPressurePolicy(BAND);
+      await seedThreeViews(mgr);
+      try {
+        recordKernelPressureLevel(4);
+        expect(backgroundRestoreCapacity(mgr)).toBe("pressure");
+        recordKernelPressureLevel(1);
+        recordKernelPressureLevel(1);
+        expect(backgroundRestoreCapacity(mgr)).toBe("available");
+      } finally {
+        resetKernelPressureForTesting();
+      }
     });
   });
 });

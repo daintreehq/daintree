@@ -50,6 +50,11 @@ import {
   transferBetweenWorktreeIndex,
 } from "./worktreeIndex";
 import { agentLifecycleLedger } from "@/services/terminal/lifecycleLedger";
+import {
+  holdForMemoryPressure,
+  isMemoryPressureCritical,
+  panelHoldKey,
+} from "@/store/memoryPressureWaitStore";
 import { computeEnvProvenance } from "@shared/utils/agentLifecycleLedger";
 import { mergeTerminalLaunchEnv } from "@shared/utils/terminalLaunchOptions";
 import { getViewWorkspaceId } from "@/store/viewWorkspaceId";
@@ -1214,24 +1219,56 @@ export const createAddPanelActions = (
     }
 
     const shouldWaitForVisibleAttach = location === "grid" && isInActiveWorktree;
+    // An agent pane waits out critical kernel memory pressure before it spawns
+    // (#13530), launches and restores alike. Not the assistant: it renders in
+    // its own surface, and asking it about memory is what the memory notice
+    // offers.
+    const holdsForMemoryPressure =
+      Boolean(launchAgentId) && location !== "overlay" && location !== "dialog";
+    const isStillStarting = (): boolean => {
+      const current = get().panelsById[id];
+      return (
+        Boolean(current && isPtyPanel(current) && current.spawnStatus === "spawning") &&
+        agentLifecycleLedger.isCurrent(id, launchGeneration)
+      );
+    };
 
     // The panel chrome is already committed. Realize backend PTY startup and
     // visible xterm.open() through a bounded queue so bulk recipes can add many
     // panels without making Chromium/xterm settle every terminal in the same
     // frame. spawnStatus remains "spawning" while queued, so TerminalPane shows
-    // lightweight chrome instead of mounting XtermAdapter.
+    // lightweight chrome instead of mounting XtermAdapter. Named so a launch
+    // held for memory pressure can queue itself again when it continues.
     terminalStartupQueue.enqueue(
-      async () => {
+      async function startPty(launchAnyway = false): Promise<void> {
         const _p0 = get().panelsById[id];
         if (!_p0 || !isPtyPanel(_p0) || _p0.spawnStatus !== "spawning") return;
         markRendererPerformance("agentlaunch.task-start", { id });
 
         try {
+          // Asked as each launch reaches the front, not when it was queued, so
+          // a restore that tips the machine into critical holds the rest of
+          // itself. Started before the env await so the round trips overlap.
+          const pressureCheck =
+            holdsForMemoryPressure && !launchAnyway ? isMemoryPressureCritical() : null;
           const mergedEnv = await spawnEnvPromise;
 
           markRendererPerformance("agentlaunch.env-ready", { id });
           const _p1 = get().panelsById[id];
           if (!_p1 || !isPtyPanel(_p1) || _p1.spawnStatus !== "spawning") return;
+
+          // Held outside the queue, so a waiting agent never stops the panes
+          // queued behind it from starting. A released hold queues one at a
+          // time, whatever its batch: pressure has only just eased.
+          if (pressureCheck && (await pressureCheck)) {
+            if (!isStillStarting()) return;
+            holdForMemoryPressure(panelHoldKey(id), {
+              panelId: id,
+              resume: (anyway) => terminalStartupQueue.enqueue(() => startPty(anyway)),
+              isStale: () => !isStillStarting(),
+            });
+            return;
+          }
           const spawnWorktreeId = _p1.worktreeId;
 
           const commandToExecute = options.skipCommandExecution ? undefined : options.command;

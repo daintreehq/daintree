@@ -26,7 +26,9 @@ import { useTerminalInputStore } from "./terminalInputStore";
 import { isSmokeTestTerminalId } from "@shared/utils/smokeTestTerminals";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
 import { rebaseAbsolutePath } from "@shared/utils/projectPathRelocation";
-import { isClientAppError } from "@/utils/clientAppError";
+import { clientErrorCode, isClientAppError } from "@/utils/clientAppError";
+import { cancelMemoryPressureHold, PROJECT_OPEN_HOLD_KEY } from "@/store/memoryPressureWaitStore";
+import { holdProjectOpenForMemoryPressure } from "@/services/projectOpenMemoryHold";
 import {
   getProjectOpenFailure,
   PROJECT_OPEN_RECOVERY_LABELS,
@@ -320,6 +322,8 @@ interface ProjectState {
       focusIntent?: import("@shared/types/ipc/project").ProjectFocusOnActivateIntent;
       /** Perf-trace entry point when no gesture site minted a trace first. */
       entryPoint?: ProjectSwitchEntryPoint;
+      /** Open even at critical memory pressure — the user's "Open anyway" (#13530). */
+      ignoreMemoryPressure?: boolean;
     }
   ) => Promise<void>;
   setWorktreeLoadError: (error: string | null) => void;
@@ -348,7 +352,7 @@ interface ProjectState {
   dropToNoProject: () => void;
   reopenProject: (
     projectId: string,
-    options?: { entryPoint?: ProjectSwitchEntryPoint }
+    options?: { entryPoint?: ProjectSwitchEntryPoint; ignoreMemoryPressure?: boolean }
   ) => Promise<void>;
   checkMissingProjects: () => Promise<void>;
   locateProject: (projectId: string) => Promise<void>;
@@ -662,6 +666,27 @@ function openNonGitFolderDialogForTransition(
 }
 
 /**
+ * Main refused to cold-start the target at critical kernel memory pressure
+ * (#13530). Like the non-git refusal above, it rejects before persisting,
+ * swapping or marking anything, so this renderer is still the one on screen:
+ * clear the transition flags and hold the open until pressure eases or the
+ * user opens it anyway.
+ */
+function holdTransitionForMemoryPressure(
+  set: (partial: Partial<ProjectState>) => void,
+  get: () => ProjectState,
+  projectId: string,
+  error: unknown,
+  open: (ignoreMemoryPressure: boolean) => void
+): boolean {
+  if (clientErrorCode(error) !== "MEMORY_PRESSURE_CRITICAL") return false;
+  set({ error: null, isLoading: false, isSwitching: false, switchingToProjectId: null });
+  const projectName = get().projects.find((project) => project.id === projectId)?.name;
+  holdProjectOpenForMemoryPressure(projectName, open);
+  return true;
+}
+
+/**
  * Hand a registered project to main to open in a new window (#12594). Main
  * picks the window: an empty one other than this is reused before another is
  * made, and a window already showing the project is brought forward instead.
@@ -943,6 +968,8 @@ const createProjectStore: StateCreator<ProjectState> = (set, get) => ({
 
   switchProject: async (projectId, options) => {
     if (get().currentProject?.id === projectId) return;
+    // A newer open replaces one held for memory pressure.
+    cancelMemoryPressureHold(PROJECT_OPEN_HOLD_KEY);
     const requestId = ++projectTransitionRequestId;
     // Adopt the trace the gesture site minted (keydown/click instant), else
     // start one here so every switch is traceable, API-driven ones included.
@@ -1021,6 +1048,13 @@ const createProjectStore: StateCreator<ProjectState> = (set, get) => ({
       },
       (error) => {
         if (requestId !== projectTransitionRequestId) {
+          return;
+        }
+        if (
+          holdTransitionForMemoryPressure(set, get, projectId, error, (anyway) => {
+            void get().switchProject(projectId, { ...options, ignoreMemoryPressure: anyway });
+          })
+        ) {
           return;
         }
         if (openNonGitFolderDialogForTransition(set, get, projectId, error)) {
@@ -1297,6 +1331,7 @@ const createProjectStore: StateCreator<ProjectState> = (set, get) => ({
   },
 
   reopenProject: async (projectId, options) => {
+    cancelMemoryPressureHold(PROJECT_OPEN_HOLD_KEY);
     const requestId = ++projectTransitionRequestId;
     const currentProjectId = get().currentProject?.id;
     const before: PreSwitchState = {
@@ -1338,13 +1373,21 @@ const createProjectStore: StateCreator<ProjectState> = (set, get) => ({
     });
     markSwitch(PERF_MARKS.PROJECT_SWITCH_IPC_SENT, traceMeta);
     flushPendingPerfMarks();
-    projectClient.reopen(projectId, outgoingState, { trace }).then(
+    const reopenOptions = { trace, ignoreMemoryPressure: options?.ignoreMemoryPressure };
+    projectClient.reopen(projectId, outgoingState, reopenOptions).then(
       (result) => {
         if (requestId !== projectTransitionRequestId) return;
         settleRedirectedTransition(result, set, get, before);
       },
       (error) => {
         if (requestId !== projectTransitionRequestId) {
+          return;
+        }
+        if (
+          holdTransitionForMemoryPressure(set, get, projectId, error, (anyway) => {
+            void get().reopenProject(projectId, { ...options, ignoreMemoryPressure: anyway });
+          })
+        ) {
           return;
         }
         if (openNonGitFolderDialogForTransition(set, get, projectId, error)) {

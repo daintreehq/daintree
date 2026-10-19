@@ -109,6 +109,7 @@ import { buildSystemSleepPreloadBindings } from "./ipc/handlers/systemSleep.prel
 import { buildAppVersionInfoPreloadBindings } from "./ipc/handlers/appVersionInfo.preload.js";
 import { buildResourceProfilePreloadBindings } from "./ipc/handlers/resourceProfile.preload.js";
 import { buildWhySlowPreloadBindings } from "./ipc/handlers/whySlow.preload.js";
+import { buildMemoryPressurePreloadBindings } from "./ipc/handlers/memoryPressure.preload.js";
 import { buildOsDndPreloadBindings } from "./ipc/handlers/osDnd.preload.js";
 import { buildAgentCapabilitiesPreloadBindings } from "./ipc/handlers/agentCapabilities.preload.js";
 import { buildHelpAssistantPreloadBindings } from "./ipc/handlers/helpAssistant.preload.js";
@@ -1963,6 +1964,8 @@ function buildElectronApi(): ElectronAPI {
       ...buildResourceProfilePreloadBindings(_unwrappingInvoke),
 
       ...buildWhySlowPreloadBindings(_unwrappingInvoke),
+
+      ...buildMemoryPressurePreloadBindings(_unwrappingInvoke),
     },
 
     // App State API
@@ -2137,6 +2140,7 @@ function buildElectronApi(): ElectronAPI {
         options?: {
           focusIntent?: import("../shared/types/ipc/project.js").ProjectFocusOnActivateIntent;
           trace?: import("../shared/types/ipc/project.js").ProjectSwitchTrace;
+          ignoreMemoryPressure?: boolean;
         }
       ) => _unwrappingInvoke(CHANNELS.PROJECT_SWITCH, projectId, outgoingState, options),
 
@@ -2201,7 +2205,10 @@ function buildElectronApi(): ElectronAPI {
       reopen: (
         projectId: string,
         outgoingState?: import("../shared/types/ipc/project.js").ProjectSwitchOutgoingState,
-        options?: { trace?: import("../shared/types/ipc/project.js").ProjectSwitchTrace }
+        options?: {
+          trace?: import("../shared/types/ipc/project.js").ProjectSwitchTrace;
+          ignoreMemoryPressure?: boolean;
+        }
       ) => _unwrappingInvoke(CHANNELS.PROJECT_REOPEN, projectId, outgoingState, options),
 
       getStats: (projectId: string) => _unwrappingInvoke(CHANNELS.PROJECT_GET_STATS, projectId),

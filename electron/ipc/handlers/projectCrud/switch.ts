@@ -35,6 +35,7 @@ import { scheduleOpenWindowsSave } from "../../../window/openWindowsTracker.js";
 import { notificationService } from "../../../services/NotificationService.js";
 import { formatErrorMessage } from "../../../../shared/utils/errorMessage.js";
 import { logInfo } from "../../../utils/logger.js";
+import { checkKernelPressureCritical } from "../../../services/SystemMemoryPressureMonitor.js";
 import {
   projectSwitchStatusTiming,
   type HostLoadKind,
@@ -76,7 +77,11 @@ export function registerProjectSwitchHandlers(deps: HandlerDependencies): () => 
     ctx: IpcContext,
     projectId: string,
     outgoingState?: ProjectSwitchOutgoingState,
-    options?: { focusIntent?: ProjectFocusOnActivateIntent; trace?: ProjectSwitchTrace }
+    options?: {
+      focusIntent?: ProjectFocusOnActivateIntent;
+      trace?: ProjectSwitchTrace;
+      ignoreMemoryPressure?: boolean;
+    }
   ): Promise<ProjectSwitchResult> => {
     if (typeof projectId !== "string" || !projectId) {
       throw new Error("Invalid project ID");
@@ -108,6 +113,7 @@ export function registerProjectSwitchHandlers(deps: HandlerDependencies): () => 
       // same window. Throwing here simply discards it, and everything with a side
       // effect the sender couldn't undo still lies further down.
       await assertProjectRepositoryIntact(project);
+      await assertMemoryAdmitsColdOpen(operation, options?.ignoreMemoryPressure);
 
       const { outgoingProjectId, projectViewManager: pvm } = operation;
 
@@ -188,7 +194,7 @@ export function registerProjectSwitchHandlers(deps: HandlerDependencies): () => 
     ctx: IpcContext,
     projectId: string,
     outgoingState?: ProjectSwitchOutgoingState,
-    options?: { trace?: ProjectSwitchTrace }
+    options?: { trace?: ProjectSwitchTrace; ignoreMemoryPressure?: boolean }
   ): Promise<ProjectSwitchResult> => {
     if (typeof projectId !== "string" || !projectId) {
       throw new Error("Invalid project ID");
@@ -223,6 +229,7 @@ export function registerProjectSwitchHandlers(deps: HandlerDependencies): () => 
     const releaseClaim = claimProjectActivation(projectId, operation.windowId);
     try {
       await assertProjectRepositoryIntact(project);
+      await assertMemoryAdmitsColdOpen(operation, options?.ignoreMemoryPressure);
 
       const { outgoingProjectId, projectViewManager: pvm } = operation;
 
@@ -278,6 +285,30 @@ export function registerProjectSwitchHandlers(deps: HandlerDependencies): () => 
   handlers.push(typedHandleWithContext(CHANNELS.PROJECT_REOPEN, handleProjectReopen));
 
   return () => handlers.forEach((cleanup) => cleanup());
+}
+
+/**
+ * Refuses an activation that would cold-start a renderer while the kernel
+ * reports critical memory pressure (#13530) — a new view is a whole renderer
+ * plus every agent its layout respawns. A cached view creates nothing, and an
+ * explicit "Open anyway" is the user's call. Thrown before anything acts on
+ * the request, so the outgoing view stays exactly as it was and the renderer
+ * holds the open until pressure eases.
+ */
+async function assertMemoryAdmitsColdOpen(
+  operation: SwitchOperation,
+  ignoreMemoryPressure: boolean | undefined
+): Promise<void> {
+  if (ignoreMemoryPressure === true) return;
+  const { projectViewManager: pvm, incomingProjectId } = operation;
+  if (!pvm || hasLiveProjectView(pvm, incomingProjectId)) return;
+  if (!(await checkKernelPressureCritical())) return;
+  logInfo("project-open-held-memory-pressure", { projectId: incomingProjectId });
+  throw new AppError({
+    code: "MEMORY_PRESSURE_CRITICAL",
+    message: "Kernel memory pressure is critical; cold project open held",
+    userMessage: "macOS reports memory pressure at its critical level.",
+  });
 }
 
 /**
