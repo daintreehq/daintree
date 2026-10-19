@@ -238,8 +238,10 @@ test.describe.serial("Persistence: layout, window and preferences across restart
     await expect.poll(() => getGridPanelCount(window), { timeout: T_MEDIUM }).toBe(1);
     await expect.poll(() => getDockPanelCount(window), { timeout: T_MEDIUM }).toBe(2);
 
+    // Small enough to fit the 1024x768 macOS runner screen, which would
+    // otherwise clamp the window and the bounds saved with it.
     await app.evaluate(({ BrowserWindow }) => {
-      BrowserWindow.getAllWindows()[0].setBounds({ x: 100, y: 100, width: 1000, height: 700 });
+      BrowserWindow.getAllWindows()[0].setBounds({ x: 60, y: 60, width: 900, height: 600 });
     });
     await expect
       .poll(() =>
@@ -248,7 +250,7 @@ test.describe.serial("Persistence: layout, window and preferences across restart
           return `${width}x${height}`;
         })
       )
-      .toBe("1000x700");
+      .toBe("900x600");
     // timer: windowState bounds save debounce (500ms) — closeApp does not
     // reliably run the window's close-time flush, so let the debounced write land.
     await window.waitForTimeout(750);
@@ -287,10 +289,10 @@ test.describe.serial("Persistence: layout, window and preferences across restart
     const bounds = await app.evaluate(({ BrowserWindow }) =>
       BrowserWindow.getAllWindows()[0].getBounds()
     );
-    expect(bounds.width).toBeGreaterThanOrEqual(990);
-    expect(bounds.width).toBeLessThanOrEqual(1010);
-    expect(bounds.height).toBeGreaterThanOrEqual(690);
-    expect(bounds.height).toBeLessThanOrEqual(710);
+    expect(bounds.width).toBeGreaterThanOrEqual(890);
+    expect(bounds.width).toBeLessThanOrEqual(910);
+    expect(bounds.height).toBeGreaterThanOrEqual(590);
+    expect(bounds.height).toBeLessThanOrEqual(610);
 
     // bondi is light and non-default.
     await expect(window.locator("html")).toHaveAttribute("data-theme", "bondi", {

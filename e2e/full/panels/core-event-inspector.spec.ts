@@ -72,14 +72,36 @@ async function openEventsDock(window: Page): Promise<void> {
   // helper grew the window). Pressing `End` against that stale max only nudges
   // the dock to a fraction of its real ceiling, starving the virtualized
   // timeline of the height it needs to render rows. Wait for the post-layout
-  // max to land before pressing `End`, then wait for the height to actually
-  // reach it.
+  // max (half the dock's container) to land before pressing `End`, then wait
+  // for the height to actually reach it. The max is measured rather than a
+  // fixed floor because the window can't grow past a small runner screen.
   const resize = window.locator(SEL.diagnostics.resizeHandle);
+  const dock = window.locator(SEL.diagnostics.dock);
   await expect
-    .poll(async () => Number((await resize.getAttribute("aria-valuemax")) ?? 0), {
-      timeout: T_MEDIUM,
-    })
-    .toBeGreaterThan(400);
+    .poll(
+      async () => {
+        const [max, min, containerHalf] = await Promise.all([
+          resize.getAttribute("aria-valuemax"),
+          resize.getAttribute("aria-valuemin"),
+          dock.evaluate((el) => {
+            const parent = el.parentElement;
+            if (!parent) return -1;
+            const style = getComputedStyle(parent);
+            const content =
+              parent.getBoundingClientRect().height -
+              parseFloat(style.paddingTop) -
+              parseFloat(style.paddingBottom) -
+              parseFloat(style.borderTopWidth) -
+              parseFloat(style.borderBottomWidth);
+            return Math.floor(content * 0.5);
+          }),
+        ]);
+        const expected = Math.max(containerHalf, Number(min ?? 0));
+        return Math.abs(Number(max ?? 0) - expected) <= 1;
+      },
+      { timeout: T_MEDIUM }
+    )
+    .toBe(true);
   await resize.press("End");
   await expect
     .poll(
