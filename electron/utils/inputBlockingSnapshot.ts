@@ -31,8 +31,61 @@ const MAX_COUNT = 10_000;
 // Every string in the snapshot is drawn from a fixed vocabulary, mapped the
 // same way in the preload and again in main. Tags and roles are authored
 // strings — a custom element or a plugin's role could name anything — so only
-// the shapes below survive.
-const STANDARD_TAG = /^[a-z][a-z0-9]{0,15}$/;
+// the names below survive.
+const STANDARD_TAGS: ReadonlySet<string> = new Set([
+  "a",
+  "article",
+  "aside",
+  "body",
+  "button",
+  "canvas",
+  "circle",
+  "code",
+  "details",
+  "dialog",
+  "div",
+  "embed",
+  "fieldset",
+  "footer",
+  "form",
+  "g",
+  "h1",
+  "h2",
+  "h3",
+  "h4",
+  "h5",
+  "h6",
+  "header",
+  "html",
+  "iframe",
+  "img",
+  "input",
+  "label",
+  "li",
+  "main",
+  "nav",
+  "object",
+  "ol",
+  "p",
+  "path",
+  "pre",
+  "rect",
+  "section",
+  "select",
+  "span",
+  "summary",
+  "svg",
+  "table",
+  "tbody",
+  "td",
+  "textarea",
+  "th",
+  "thead",
+  "tr",
+  "ul",
+  "video",
+  "webview",
+]);
 const CUSTOM_ELEMENT_TAG = "custom-element";
 const OTHER = "other";
 const LAYER_ROLES: ReadonlySet<string> = new Set([
@@ -61,8 +114,8 @@ const VISIBILITY_STATES: ReadonlySet<string> = new Set(["visible", "hidden", "pr
 
 function normalizeTag(tag: string): string {
   const lower = tag.toLowerCase();
-  if (lower.includes("-")) return CUSTOM_ELEMENT_TAG;
-  return STANDARD_TAG.test(lower) ? lower : OTHER;
+  if (STANDARD_TAGS.has(lower)) return lower;
+  return lower.includes("-") ? CUSTOM_ELEMENT_TAG : OTHER;
 }
 
 function normalizeRole(role: string | null): string | undefined {

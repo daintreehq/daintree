@@ -104,6 +104,12 @@ describe("captureInputBlockingSnapshot", () => {
     expect(JSON.stringify(snapshot)).not.toContain("private");
   });
 
+  it("maps an unknown hyphenless tag to other", () => {
+    const widget = document.createElement("acmeclient");
+    document.body.appendChild(widget);
+    expect(capture({ hit: widget }).centerHit).toEqual({ tag: "other", coversViewport: false });
+  });
+
   it("maps an unexpected pointer-events value onto the fixed vocabulary", () => {
     expect(capture({ pointerEvents: "visiblePainted" }).bodyPointerEvents).toBe("other");
   });
@@ -176,10 +182,10 @@ describe("parseInputBlockingSnapshot", () => {
     expect(JSON.stringify(parsed)).not.toMatch(/acme|private|content/);
   });
 
-  it("re-maps a tag that is not a standard tag name", () => {
+  it.each(["acmeclient", "x".repeat(40)])("re-maps the non-standard tag %s to other", (tag) => {
     const parsed = parseInputBlockingSnapshot({
       ...valid,
-      centerHit: { tag: "x".repeat(40), coversViewport: false },
+      centerHit: { tag, coversViewport: false },
     });
     expect(parsed?.centerHit).toEqual({ tag: "other", coversViewport: false });
   });
