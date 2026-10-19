@@ -45,6 +45,11 @@ import {
   recordKernelPressureLevel,
   resetKernelPressureForTesting,
 } from "../systemKernelPressure.js";
+import {
+  isWatchdogMemoryPressureElevated,
+  recordWatchdogMemoryPressure,
+  WATCHDOG_PRESSURE_STALE_MS,
+} from "../watchdogMemoryPressure.js";
 
 const SWAP_TOTAL_MB = 4096;
 const swapAt = (percent: number): SwapUsage => ({
@@ -150,6 +155,7 @@ describe("createSystemMemoryPressureMonitor", () => {
     fseventsdRssMb?: () => number | null;
     kernelPressureLevel?: () => KernelPressureLevel | null;
     onSwapPressure?: (confirmed: boolean) => void;
+    onWatchdogPressure?: (elevated: boolean | null, sampledAt: number) => void;
   }) {
     const readSwap = vi.fn(async () => opts.swap());
     const readFseventsdRssMb = vi.fn(async () => (opts.fseventsdRssMb ?? (() => 100))());
@@ -164,6 +170,7 @@ describe("createSystemMemoryPressureMonitor", () => {
       readKernelPressureLevel,
       publish,
       onSwapPressure: opts.onSwapPressure,
+      onWatchdogPressure: opts.onWatchdogPressure,
       now: () => now,
       wallNow: () => now,
     });
@@ -175,6 +182,75 @@ describe("createSystemMemoryPressureMonitor", () => {
     };
     return { monitor, readSwap, readFseventsdRssMb, readKernelPressureLevel, tick };
   }
+
+  describe("pressure reading for the main-process watchdog (#13528)", () => {
+    const BIG_SWAP_TOTAL_MB = 20 * 1024;
+    const bigSwapAt = (percent: number): SwapUsage => ({
+      usedMb: (BIG_SWAP_TOTAL_MB * percent) / 100,
+      totalMb: BIG_SWAP_TOTAL_MB,
+    });
+
+    async function verdictFor(opts: {
+      isDarwin?: boolean;
+      swap: SwapUsage | null;
+      kernelPressureLevel?: KernelPressureLevel | null;
+      fseventsdRssMb?: number;
+    }) {
+      const onWatchdogPressure = vi.fn();
+      const { tick } = makeMonitor({
+        isDarwin: opts.isDarwin,
+        swap: () => opts.swap,
+        kernelPressureLevel: () =>
+          opts.kernelPressureLevel === undefined ? 1 : opts.kernelPressureLevel,
+        fseventsdRssMb: () => opts.fseventsdRssMb ?? 100,
+        onWatchdogPressure,
+      });
+      await tick();
+      expect(onWatchdogPressure).toHaveBeenCalledTimes(1);
+      return onWatchdogPressure.mock.calls[0]![0] as boolean | null;
+    }
+
+    it("reads one kernel warning as elevated, with no confirmation run", async () => {
+      expect(await verdictFor({ swap: HEALTHY_SWAP, kernelPressureLevel: 2 })).toBe(true);
+      expect(await verdictFor({ swap: HEALTHY_SWAP, kernelPressureLevel: 4 })).toBe(true);
+    });
+
+    it("needs heavy swap on Darwin, where a single small swapfile reads nearly full", async () => {
+      expect(FULL_SWAP.usedMb).toBeLessThan(SWAP_PRESSURE_MIN_USED_MB);
+      expect(await verdictFor({ swap: FULL_SWAP })).toBe(false);
+      expect(await verdictFor({ swap: bigSwapAt(91) })).toBe(true);
+      expect(await verdictFor({ isDarwin: false, swap: FULL_SWAP })).toBe(true);
+      expect(await verdictFor({ isDarwin: false, swap: swapAt(SWAP_USED_PERCENT_THRESHOLD) })).toBe(
+        false
+      );
+    });
+
+    it("clears only once every reading that applies came back, and ignores fseventsd", async () => {
+      expect(await verdictFor({ swap: HEALTHY_SWAP })).toBe(false);
+      expect(await verdictFor({ swap: HEALTHY_SWAP, kernelPressureLevel: null })).toBeNull();
+      expect(await verdictFor({ swap: null })).toBeNull();
+      expect(await verdictFor({ swap: null, kernelPressureLevel: 4 })).toBe(true);
+      expect(await verdictFor({ isDarwin: false, swap: null })).toBeNull();
+      expect(
+        await verdictFor({ swap: HEALTHY_SWAP, fseventsdRssMb: FSEVENTSD_RSS_THRESHOLD_MB * 2 })
+      ).toBe(false);
+    });
+
+    it("stamps the reading with the time the sample started, not when its probes finished", async () => {
+      const onWatchdogPressure = vi.fn();
+      const { tick } = makeMonitor({
+        swap: () => {
+          now += 4_000;
+          return HEALTHY_SWAP;
+        },
+        kernelPressureLevel: () => 2,
+        onWatchdogPressure,
+      });
+      const startedAt = now;
+      await tick();
+      expect(onWatchdogPressure).toHaveBeenCalledWith(true, startedAt);
+    });
+  });
 
   describe("kernel-plus-swap pressure for cached-view reclaim (#13223)", () => {
     const BIG_SWAP_TOTAL_MB = 20 * 1024;
@@ -768,6 +844,31 @@ describe("createDefaultSystemMemoryPressureMonitor", () => {
   afterEach(() => {
     setPlatform(originalPlatform);
     vi.restoreAllMocks();
+    recordWatchdogMemoryPressure(false);
+  });
+
+  it("feeds the watchdog's pressure reading from the kernel level a Darwin sample reads", async () => {
+    setPlatform("darwin");
+    vi.mocked(execFile).mockImplementation(((
+      file: string,
+      args: string[],
+      _opts: unknown,
+      cb: (err: Error | null, stdout: string) => void
+    ) => {
+      cb(
+        null,
+        file !== "/usr/sbin/sysctl"
+          ? "  1024 launchd\n"
+          : args.includes("vm.swapusage")
+            ? "total = 2048.00M  used = 64.00M  free = 1984.00M  (encrypted)"
+            : "2\n"
+      );
+    }) as unknown as typeof execFile);
+    const monitor = createDefaultSystemMemoryPressureMonitor(vi.fn());
+
+    expect(isWatchdogMemoryPressureElevated()).toBe(false);
+    await monitor.sample();
+    expect(isWatchdogMemoryPressureElevated()).toBe(true);
   });
 
   it("probes Darwin with sysctl and an rss-first ucomm ps, and publishes what they show", async () => {
@@ -990,5 +1091,26 @@ describe("kernel critical pressure for launch admission (#13530)", () => {
     await expect(
       checkKernelPressureCritical({ readLevel, isDarwin: true, now: () => clock })
     ).resolves.toBe(true);
+  });
+});
+
+describe("watchdogMemoryPressure", () => {
+  afterEach(() => recordWatchdogMemoryPressure(false));
+
+  it("holds an elevated reading until it goes stale; an undecided sample neither clears nor refreshes it", () => {
+    recordWatchdogMemoryPressure(true, 1_000);
+    recordWatchdogMemoryPressure(null, 50_000);
+    expect(isWatchdogMemoryPressureElevated(1_000 + WATCHDOG_PRESSURE_STALE_MS)).toBe(true);
+    expect(isWatchdogMemoryPressureElevated(1_000 + WATCHDOG_PRESSURE_STALE_MS + 1)).toBe(false);
+  });
+
+  it("drops a reading on a clear sample, or once the clock steps back past it", () => {
+    recordWatchdogMemoryPressure(true, 10_000);
+    expect(isWatchdogMemoryPressureElevated(9_999)).toBe(false);
+    expect(isWatchdogMemoryPressureElevated(10_000)).toBe(false);
+
+    recordWatchdogMemoryPressure(true, 20_000);
+    recordWatchdogMemoryPressure(false, 21_000);
+    expect(isWatchdogMemoryPressureElevated(21_000)).toBe(false);
   });
 });

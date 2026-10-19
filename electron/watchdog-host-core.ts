@@ -12,6 +12,24 @@ export const HEARTBEAT_INTERVAL_MS = 5000;
 // seconds, so anything under ~10s risks false positives.
 export const MAX_MISSED = 3;
 
+// 24 misses × 5s = ~120s once there is evidence of memory pressure (#13528).
+// A main stalled on page-ins recovers by itself, while a kill takes the
+// pty-host and every running agent down with it, so the deadline stretches —
+// but stays bounded, so a real deadlock under pressure is still caught.
+// Counted in beats rather than elapsed time: Node folds the intervals a
+// starved watchdog missed into one callback, so a stall that also freezes the
+// watchdog stretches the deadline instead of firing it on the first tick the
+// watchdog gets, before it has read the pings queued behind its own stall.
+export const MAX_MISSED_UNDER_PRESSURE = 24;
+
+// A tick this long after the previous one means the watchdog itself could not
+// run for a full interval: the machine stalled, not just main.
+export const LATE_TICK_GAP_MS = HEARTBEAT_INTERVAL_MS * 2;
+
+// How long a late tick counts as evidence of a machine-wide stall. Long enough
+// to still hold when a silence that begins just after it reaches MAX_MISSED.
+export const STALL_EVIDENCE_MS = 30_000;
+
 export interface WatchdogDeps {
   /** Send SIGKILL (or equivalent) to the main process. The watchdog never
    * calls this directly — it's injected so tests can observe and so the
@@ -32,6 +50,9 @@ export interface WatchdogDeps {
 
 export interface WatchdogMessage {
   type: "ping" | "sleep" | "wake" | "dispose";
+  /** On a ping: main's latest memory-pressure reading was elevated and fresh.
+   * Anything but `true` reads as no pressure. */
+  memoryPressure?: boolean;
 }
 
 export interface WatchdogState {
@@ -43,6 +64,15 @@ export interface WatchdogState {
    * Zero means "no wake observed yet" — the grace window only applies
    * after a real wake event, so it never masks a frozen-at-boot main. */
   lastWakeTimestamp: number;
+  /** Whether the last ping reported memory pressure. It stands through the
+   * silence that follows: it is main's last word before it stalled. */
+  mainReportedPressure: boolean;
+  /** Monotonic timestamp of the last armed tick that arrived late, or null. */
+  lastLateTickAt: number | null;
+  /** The current silence reached MAX_MISSED with pressure evidence, so the
+   * kill waits for MAX_MISSED_UNDER_PRESSURE. Latched until main is heard
+   * from again, so evidence ageing out mid-stall can't pull the deadline in. */
+  killDeferred: boolean;
 }
 
 export interface Watchdog {
@@ -66,9 +96,27 @@ export function createWatchdog(deps: WatchdogDeps): Watchdog {
     isPaused: false,
     missedBeats: 0,
     lastWakeTimestamp: 0,
+    mainReportedPressure: false,
+    lastLateTickAt: null,
+    killDeferred: false,
   };
+  // The runtime starts its interval as it creates the watchdog. Updated on
+  // every tick, armed or not, so the first tick after a pause isn't read as
+  // the watchdog itself having stalled.
+  let lastTickAt = now();
+
+  function pressureEvidence(t: number): string | null {
+    if (state.mainReportedPressure) return "main reported memory pressure";
+    if (state.lastLateTickAt !== null && t - state.lastLateTickAt <= STALL_EVIDENCE_MS) {
+      return "the watchdog itself stalled";
+    }
+    return null;
+  }
 
   function tick(): void {
+    const t = now();
+    const gapMs = t - lastTickAt;
+    lastTickAt = t;
     if (!state.isArmed || state.isPaused) return;
 
     // Suppress ticks that were queued during sleep and burst-fire on wake.
@@ -77,44 +125,70 @@ export function createWatchdog(deps: WatchdogDeps): Watchdog {
     // before the post-wake arming ping has a chance to reset it. The grace
     // is exactly one heartbeat interval — long enough to absorb the burst,
     // short enough to never mask a real deadlock on the awake system.
-    if (state.lastWakeTimestamp > 0 && now() - state.lastWakeTimestamp < HEARTBEAT_INTERVAL_MS) {
+    if (state.lastWakeTimestamp > 0 && t - state.lastWakeTimestamp < HEARTBEAT_INTERVAL_MS) {
       return;
     }
 
-    state.missedBeats += 1;
+    if (gapMs >= LATE_TICK_GAP_MS) state.lastLateTickAt = t;
 
-    if (state.missedBeats >= MAX_MISSED) {
-      log(
-        `[WatchdogHost] Main process unresponsive for ${state.missedBeats * HEARTBEAT_INTERVAL_MS}ms (${state.missedBeats} missed beats). Firing kill.`
-      );
-      try {
-        deps.killMain();
-      } catch (err) {
-        log(`[WatchdogHost] killMain threw: ${String(err)}`);
+    state.missedBeats += 1;
+    if (state.missedBeats < MAX_MISSED) return;
+
+    if (!state.killDeferred) {
+      const evidence = pressureEvidence(t);
+      if (evidence !== null) {
+        state.killDeferred = true;
+        log(
+          `[WatchdogHost] Main process unresponsive for ${state.missedBeats} missed beats, but ${evidence}. Deferring kill until ${MAX_MISSED_UNDER_PRESSURE} missed beats.`
+        );
       }
-      // Disarm so the next tick can't re-fire before main's relaunch sends
-      // its first ping. CrashRecoveryService will respawn main; it must
-      // explicitly re-arm us by sending a ping.
-      state.missedBeats = 0;
-      state.isArmed = false;
     }
+    if (state.killDeferred && state.missedBeats < MAX_MISSED_UNDER_PRESSURE) return;
+
+    log(
+      `[WatchdogHost] Main process unresponsive for at least ${state.missedBeats * HEARTBEAT_INTERVAL_MS}ms (${state.missedBeats} missed beats). Firing kill.`
+    );
+    try {
+      deps.killMain();
+    } catch (err) {
+      log(`[WatchdogHost] killMain threw: ${String(err)}`);
+    }
+    // Disarm so the next tick can't re-fire before main's relaunch sends
+    // its first ping. CrashRecoveryService will respawn main; it must
+    // explicitly re-arm us by sending a ping.
+    state.missedBeats = 0;
+    state.killDeferred = false;
+    state.isArmed = false;
   }
 
   function handleMessage(msg: WatchdogMessage | null | undefined): boolean {
     if (!msg || typeof msg.type !== "string") return false;
     switch (msg.type) {
       case "ping":
+        if (state.killDeferred) {
+          log(
+            `[WatchdogHost] Main process responded after ${state.missedBeats} missed beats; deferred kill cancelled.`
+          );
+        }
         state.isArmed = true;
         state.missedBeats = 0;
+        state.killDeferred = false;
+        state.mainReportedPressure = msg.memoryPressure === true;
         return true;
       case "sleep":
         state.isPaused = true;
         state.missedBeats = 0;
+        state.killDeferred = false;
         return true;
       case "wake":
         state.isPaused = false;
         state.missedBeats = 0;
+        state.killDeferred = false;
         state.lastWakeTimestamp = now();
+        // Neither the suspend gap nor a stall seen before it says anything
+        // about the machine now.
+        lastTickAt = state.lastWakeTimestamp;
+        state.lastLateTickAt = null;
         return true;
       case "dispose":
         state.isArmed = false;

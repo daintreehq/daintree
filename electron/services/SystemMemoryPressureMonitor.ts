@@ -7,6 +7,7 @@ import {
   isKernelPressureCritical,
   recordKernelPressureLevel,
 } from "./systemKernelPressure.js";
+import { recordWatchdogMemoryPressure } from "./watchdogMemoryPressure.js";
 import type { SystemMemoryPressurePayload } from "../../shared/types/ipc/system.js";
 
 /**
@@ -86,6 +87,16 @@ export interface SystemMemoryPressureMonitorDeps {
   onSwapPressure?: (confirmed: boolean) => void;
   /** Called with every sample's kernel level, null when it was not read. */
   onKernelPressureLevel?: (level: KernelPressureLevel | null) => void;
+  /**
+   * Called with every sample's verdict for the main-process watchdog (#13528):
+   * true on a kernel warning or worse, or swap over
+   * {@link SWAP_USED_PERCENT_THRESHOLD} (and on Darwin, whose swap is dynamic,
+   * over {@link SWAP_PRESSURE_MIN_USED_MB} too); false when every reading that
+   * applies came back below; null when a failed reading leaves it undecided.
+   * No confirmation run: one sample is enough to lengthen the watchdog's
+   * deadline. `sampledAt` is the wall-clock start of the sample.
+   */
+  onWatchdogPressure?: (elevated: boolean | null, sampledAt: number) => void;
   now?: () => number;
   /**
    * Wall clock for the swap-pressure run. The monotonic `now` stops while the
@@ -285,6 +296,15 @@ export function createSystemMemoryPressureMonitor(
     const fseventsdOver = fseventsdRssMb !== null && fseventsdRssMb > FSEVENTSD_RSS_THRESHOLD_MB;
     const kernelOver = kernelPressureLevel !== null && kernelPressureLevel >= KERNEL_PRESSURE_WARN;
     recordSwapPressureSample(sample, swapUsedPercent, startedAt);
+    if (deps.onWatchdogPressure) {
+      const heavySwap =
+        swapOver && swap !== null && (!deps.isDarwin || swap.usedMb >= SWAP_PRESSURE_MIN_USED_MB);
+      const observedAll = swap !== null && (!deps.isDarwin || kernelPressureLevel !== null);
+      deps.onWatchdogPressure(
+        kernelOver || heavySwap ? true : observedAll ? false : null,
+        startedAt
+      );
+    }
     const figures = {
       swapUsedPercent: swapUsedPercent === null ? null : Math.round(swapUsedPercent),
       swapUsedMb: swap === null ? null : Math.round(swap.usedMb),
@@ -496,5 +516,6 @@ export function createDefaultSystemMemoryPressureMonitor(
     publish,
     onSwapPressure: (confirmed) => recordSwapPressure(confirmed),
     onKernelPressureLevel: (level) => recordKernelPressureLevel(level),
+    onWatchdogPressure: (elevated, sampledAt) => recordWatchdogMemoryPressure(elevated, sampledAt),
   });
 }

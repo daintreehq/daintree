@@ -5,7 +5,10 @@ import {
   parseMainPid,
   writeWatchdogKillFlag,
   HEARTBEAT_INTERVAL_MS,
+  LATE_TICK_GAP_MS,
   MAX_MISSED,
+  MAX_MISSED_UNDER_PRESSURE,
+  STALL_EVIDENCE_MS,
   WATCHDOG_KILL_FLAG_NAME,
 } from "../watchdog-host-core.js";
 
@@ -269,6 +272,162 @@ describe("createWatchdog", () => {
       const after = performance.now();
       expect(wd.state.lastWakeTimestamp).toBeGreaterThanOrEqual(before);
       expect(wd.state.lastWakeTimestamp).toBeLessThanOrEqual(after);
+    });
+  });
+
+  describe("memory-pressure deferral (#13528)", () => {
+    function makeWatchdog() {
+      const killMain = vi.fn();
+      const logs: string[] = [];
+      let now = 1000;
+      const wd = createWatchdog({ killMain, logError: (msg) => logs.push(msg), now: () => now });
+      const tickAfter = (ms: number) => {
+        now += ms;
+        wd.tick();
+      };
+      const ticks = (count: number) => {
+        for (let i = 0; i < count; i++) tickAfter(HEARTBEAT_INTERVAL_MS);
+      };
+      return { wd, killMain, logs, tickAfter, ticks, advance: (ms: number) => (now += ms) };
+    }
+
+    const deferralLogs = (logs: string[]) => logs.filter((l) => l.includes("Deferring kill"));
+
+    it("holds the kill until MAX_MISSED_UNDER_PRESSURE when the last ping reported pressure", () => {
+      const { wd, killMain, logs, ticks } = makeWatchdog();
+      let beatsAtKill = 0;
+      killMain.mockImplementation(() => (beatsAtKill = wd.state.missedBeats));
+      wd.handleMessage({ type: "ping", memoryPressure: true });
+
+      ticks(MAX_MISSED_UNDER_PRESSURE - 1);
+      expect(killMain).not.toHaveBeenCalled();
+      expect(wd.state.killDeferred).toBe(true);
+      expect(deferralLogs(logs)).toHaveLength(1);
+
+      ticks(1);
+      expect(killMain).toHaveBeenCalledTimes(1);
+      // The kill flag records the beats the kill fired at.
+      expect(beatsAtKill).toBe(MAX_MISSED_UNDER_PRESSURE);
+      expect(wd.state.isArmed).toBe(false);
+      expect(wd.state.killDeferred).toBe(false);
+    });
+
+    it("keeps the normal threshold when the last ping did not report pressure", () => {
+      for (const memoryPressure of [false, undefined, "true" as unknown as boolean]) {
+        const { wd, killMain, ticks } = makeWatchdog();
+        wd.handleMessage({ type: "ping", memoryPressure: true });
+        wd.handleMessage({ type: "ping", memoryPressure });
+
+        ticks(MAX_MISSED);
+        expect(killMain).toHaveBeenCalledTimes(1);
+      }
+    });
+
+    it("cancels a deferred kill when main answers, and the next silence starts fresh", () => {
+      const { wd, killMain, logs, ticks } = makeWatchdog();
+      wd.handleMessage({ type: "ping", memoryPressure: true });
+      ticks(MAX_MISSED + 2);
+      expect(wd.state.killDeferred).toBe(true);
+
+      // A stalled main's queued pings land as a burst once it recovers.
+      wd.handleMessage({ type: "ping", memoryPressure: true });
+      wd.handleMessage({ type: "ping", memoryPressure: false });
+      expect(logs.filter((l) => l.includes("deferred kill cancelled"))).toHaveLength(1);
+      expect(wd.state.killDeferred).toBe(false);
+      expect(wd.state.missedBeats).toBe(0);
+
+      ticks(MAX_MISSED);
+      expect(killMain).toHaveBeenCalledTimes(1);
+    });
+
+    it("treats a late tick of its own as evidence of a machine-wide stall", () => {
+      const { wd, killMain, logs, tickAfter, ticks } = makeWatchdog();
+      wd.handleMessage({ type: "ping" });
+
+      tickAfter(LATE_TICK_GAP_MS);
+      ticks(MAX_MISSED - 1);
+      expect(killMain).not.toHaveBeenCalled();
+      expect(deferralLogs(logs)[0]).toContain("the watchdog itself stalled");
+
+      ticks(MAX_MISSED_UNDER_PRESSURE - MAX_MISSED);
+      expect(killMain).toHaveBeenCalledTimes(1);
+    });
+
+    it("does not count a tick just under the late threshold as a stall", () => {
+      const { wd, killMain, tickAfter, ticks } = makeWatchdog();
+      wd.handleMessage({ type: "ping" });
+
+      tickAfter(LATE_TICK_GAP_MS - 1);
+      ticks(MAX_MISSED - 1);
+      expect(killMain).toHaveBeenCalledTimes(1);
+    });
+
+    it("still credits a stall seen just before main went quiet", () => {
+      const { wd, killMain, tickAfter, ticks } = makeWatchdog();
+      wd.handleMessage({ type: "ping" });
+      tickAfter(LATE_TICK_GAP_MS);
+      wd.handleMessage({ type: "ping" });
+
+      ticks(MAX_MISSED);
+      expect(killMain).not.toHaveBeenCalled();
+      expect(wd.state.killDeferred).toBe(true);
+    });
+
+    it("lets stall evidence expire, but never pulls in a deadline it already granted", () => {
+      const stale = makeWatchdog();
+      stale.wd.handleMessage({ type: "ping" });
+      stale.tickAfter(LATE_TICK_GAP_MS);
+      // Main keeps answering, on time, for as long as the evidence lasts.
+      for (let i = 0; i < STALL_EVIDENCE_MS / HEARTBEAT_INTERVAL_MS; i++) {
+        stale.ticks(1);
+        stale.wd.handleMessage({ type: "ping" });
+      }
+      stale.ticks(MAX_MISSED);
+      expect(stale.killMain).toHaveBeenCalledTimes(1);
+
+      const granted = makeWatchdog();
+      granted.wd.handleMessage({ type: "ping" });
+      granted.tickAfter(LATE_TICK_GAP_MS);
+      granted.ticks(MAX_MISSED - 1);
+      expect(granted.wd.state.killDeferred).toBe(true);
+      // The evidence ages out long before this, and the deferral still holds.
+      granted.ticks(MAX_MISSED_UNDER_PRESSURE - MAX_MISSED - 1);
+      expect(granted.killMain).not.toHaveBeenCalled();
+      granted.ticks(1);
+      expect(granted.killMain).toHaveBeenCalledTimes(1);
+    });
+
+    it("reads neither a disarmed gap nor a suspend as the watchdog stalling", () => {
+      const disarmed = makeWatchdog();
+      disarmed.tickAfter(LATE_TICK_GAP_MS * 10);
+      disarmed.wd.handleMessage({ type: "ping" });
+      disarmed.ticks(MAX_MISSED);
+      expect(disarmed.killMain).toHaveBeenCalledTimes(1);
+
+      const suspended = makeWatchdog();
+      suspended.wd.handleMessage({ type: "ping" });
+      suspended.ticks(1);
+      suspended.wd.handleMessage({ type: "sleep" });
+      suspended.tickAfter(LATE_TICK_GAP_MS * 10);
+      suspended.advance(LATE_TICK_GAP_MS * 10);
+      suspended.wd.handleMessage({ type: "wake" });
+      suspended.ticks(MAX_MISSED);
+      expect(suspended.wd.state.lastLateTickAt).toBeNull();
+      expect(suspended.killMain).toHaveBeenCalledTimes(1);
+    });
+
+    it("drops a deferral when main reports sleep, so wake starts a fresh silence", () => {
+      const { wd, killMain, ticks } = makeWatchdog();
+      wd.handleMessage({ type: "ping", memoryPressure: true });
+      ticks(MAX_MISSED);
+      expect(wd.state.killDeferred).toBe(true);
+
+      wd.handleMessage({ type: "sleep" });
+      expect(wd.state.killDeferred).toBe(false);
+      wd.handleMessage({ type: "wake" });
+      // Main's pressure report stands until its next ping replaces it.
+      ticks(MAX_MISSED_UNDER_PRESSURE);
+      expect(killMain).toHaveBeenCalledTimes(1);
     });
   });
 });
