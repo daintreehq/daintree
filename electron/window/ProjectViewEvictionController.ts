@@ -582,6 +582,7 @@ export function evictStaleViews(
       next;
     const memoryKb = memoryFor(entry, memoryByPid);
     const guestMemoryKb = guestMemoryFor(entry, memoryByPid);
+    const residentKb = memoryFor(entry, residentByPid) + guestMemoryFor(entry, residentByPid);
     const ctx: Record<string, unknown> = {
       projectId,
       reason: effectiveReason,
@@ -609,7 +610,7 @@ export function evictStaleViews(
     // A remote project's residency is its host's; only local keys enter this ledger.
     if (isLocalViewKey(projectId)) recordWorkspaceEviction(projectId, effectiveReason);
     evictedCount++;
-    evictedResidentKb += memoryFor(entry, residentByPid) + guestMemoryFor(entry, residentByPid);
+    evictedResidentKb += residentKb;
   }
 
   // A soft-band sampler eviction is judged by the next reading — see

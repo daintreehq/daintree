@@ -116,7 +116,8 @@ describe("loading the addon", () => {
 
   afterEach(() => {
     Object.defineProperty(process, "platform", { value: originalPlatform, configurable: true });
-    process.env.VITEST = originalVitest;
+    if (originalVitest === undefined) delete process.env.VITEST;
+    else process.env.VITEST = originalVitest;
     Module.prototype.require = originalRequire;
     requested.length = 0;
   });

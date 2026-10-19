@@ -42,6 +42,7 @@ Napi::Value ReadPhysFootprints(const Napi::CallbackInfo& info) {
     Napi::Value value = pids.Get(i);
     if (env.IsExceptionPending()) return env.Null();
     result.Set(i, env.Null());
+    if (env.IsExceptionPending()) return env.Null();
     if (!value.IsNumber()) continue;
 
     double pidDouble = value.As<Napi::Number>().DoubleValue();
@@ -53,6 +54,7 @@ Napi::Value ReadPhysFootprints(const Napi::CallbackInfo& info) {
     if (rc != 0) continue;
 
     result.Set(i, Napi::Number::New(env, static_cast<double>(usage.ri_phys_footprint)));
+    if (env.IsExceptionPending()) return env.Null();
   }
 
   return result;
