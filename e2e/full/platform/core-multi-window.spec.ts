@@ -12,7 +12,12 @@ import {
 import { createFixtureRepos, type FixtureRepo } from "../../helpers/fixtures";
 import { openAndOnboardProject } from "../../helpers/project";
 import { spawnTerminalAndVerify } from "../../helpers/workflows";
-import { runTerminalCommand, getTerminalText, waitForTerminalText } from "../../helpers/terminal";
+import {
+  runTerminalCommand,
+  getTerminalText,
+  waitForTerminalText,
+  waitForTerminalTextIgnoringLineBreaks,
+} from "../../helpers/terminal";
 import { SEL } from "../../helpers/selectors";
 import { T_LONG, T_MEDIUM } from "../../helpers/timeouts";
 import { writeFileSync } from "fs";
@@ -246,12 +251,20 @@ test.describe.serial("Multi-window isolation", () => {
     window2Page = await getWindowPage(app, window2.windowId, MULTI_WINDOW_READY_TIMEOUT);
     await focusWindow(app, window2.windowId, window2Page);
 
-    const survivorNonce = `mw-survive-${randomUUID()}`;
+    const survivorId = randomUUID();
+    const survivorNonce = `mw-survive-${survivorId}`;
     const survivorPanel = await spawnTerminalAndVerify(window2Page, undefined, {
       waitForInitialOutput: false,
     });
-    await runTerminalCommand(window2Page, survivorPanel, `echo ${survivorNonce}`);
-    await waitForTerminalText(survivorPanel, survivorNonce, T_LONG);
+    // Assembled by node so only the command's output, never its echoed input,
+    // holds the whole nonce; at 47 characters it soft-wraps in a narrow pane
+    // (1024px macOS runner).
+    await runTerminalCommand(
+      window2Page,
+      survivorPanel,
+      `node -e "console.log('mw-survive-'+'${survivorId}')"`
+    );
+    await waitForTerminalTextIgnoringLineBreaks(survivorPanel, survivorNonce, T_LONG);
 
     // Prove window 2's worktree MessagePort is still live by triggering a
     // fresh external file change in fixture B and asserting the dirty
