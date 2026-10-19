@@ -260,10 +260,13 @@ export function createSystemMemoryPressureMonitor(
    * keeps the previous value rather than reading as a change.
    */
   let seenCauses: OverCauses | null = null;
-  /** The worst the episode's publishes have reported; null while none is open. */
-  let publishedCauses: {
-    swapOver: boolean;
-    fseventsdOver: boolean;
+  /**
+   * The figures the episode's last publish reported, each null when it was
+   * not over its threshold; null while no episode is open.
+   */
+  let lastPublished: {
+    swapUsedPercent: number | null;
+    fseventsdRssMb: number | null;
     kernelPressureLevel: KernelPressureLevel | null;
   } | null = null;
   const wallNow = deps.wallNow ?? (() => Date.now());
@@ -359,32 +362,45 @@ export function createSystemMemoryPressureMonitor(
       if (episodeOpening || causeChanged) {
         logWarn("system-health", { state: "over", ...figures, consecutiveSamples: overStreak });
       }
-      // Sampling is at least a minute apart and the episode is already
-      // confirmed, so a worse reading publishes at once.
+      // Worse than the last publish said: a threshold it didn't report, or a
+      // higher kernel level. Sampling is at least a minute apart and the
+      // episode is already confirmed, so it publishes at once.
       const escalating =
-        publishedCauses !== null &&
-        ((swapOver && !publishedCauses.swapOver) ||
-          (fseventsdOver && !publishedCauses.fseventsdOver) ||
+        lastPublished !== null &&
+        ((swapOver && lastPublished.swapUsedPercent === null) ||
+          (fseventsdOver && lastPublished.fseventsdRssMb === null) ||
           (kernelPressureLevel !== null &&
-            kernelPressureLevel > (publishedCauses.kernelPressureLevel ?? 1)));
+            kernelPressureLevel > (lastPublished.kernelPressureLevel ?? 1)));
       if (!episodeOpening && !escalating) return null;
       if (escalating) logWarn("system-health", { state: "escalated", ...figures });
       episodeOpen = true;
-      const publishedLevel = publishedCauses?.kernelPressureLevel ?? null;
-      publishedCauses = {
-        swapOver: swapOver || (publishedCauses?.swapOver ?? false),
-        fseventsdOver: fseventsdOver || (publishedCauses?.fseventsdOver ?? false),
-        kernelPressureLevel:
-          kernelPressureLevel !== null && kernelPressureLevel > (publishedLevel ?? 1)
-            ? kernelPressureLevel
-            : publishedLevel,
+      // A reading that failed keeps what the last publish said, so a probe
+      // that times out can't drop a cause the next good reading couldn't
+      // restore; one that came back under its threshold drops it.
+      const published = {
+        swapUsedPercent: swapOver
+          ? figures.swapUsedPercent
+          : swap === null
+            ? (lastPublished?.swapUsedPercent ?? null)
+            : null,
+        fseventsdRssMb: fseventsdOver
+          ? figures.fseventsdRssMb
+          : fseventsdRssMb === null
+            ? (lastPublished?.fseventsdRssMb ?? null)
+            : null,
+        kernelPressureLevel: kernelOver
+          ? kernelPressureLevel
+          : kernelPressureLevel === null
+            ? (lastPublished?.kernelPressureLevel ?? null)
+            : null,
       };
+      lastPublished = published;
       return {
         status: "degraded",
-        swapUsedPercent: swapOver ? figures.swapUsedPercent : null,
+        swapUsedPercent: published.swapUsedPercent,
         swapKind: deps.swapKind,
-        fseventsdRssMb: fseventsdOver ? figures.fseventsdRssMb : null,
-        kernelPressureLevel: describeKernelPressureLevel(kernelPressureLevel),
+        fseventsdRssMb: published.fseventsdRssMb,
+        kernelPressureLevel: describeKernelPressureLevel(published.kernelPressureLevel),
         escalated: escalating,
       };
     }
@@ -411,7 +427,7 @@ export function createSystemMemoryPressureMonitor(
     episodeOpen = false;
     clearStreak = 0;
     seenCauses = null;
-    publishedCauses = null;
+    lastPublished = null;
     if (!wasOpen) return null;
     return {
       status: "normal",

@@ -314,6 +314,9 @@ describe("useSystemMemoryPressureNotice", () => {
     expect(resolution.placement).toBeUndefined();
     // Same key, so the resolution row archives the warning's inbox row.
     expect(resolution.supersedeKey).toBe(warning.supersedeKey);
+    // And dismisses a critical toast still on screen.
+    expect(resolution.replaceKey).toBe(warning.replaceKey);
+    expect(warning.replaceKey).toEqual(expect.any(String));
   });
 
   it("does nothing on recovery in a view that never raised the notice", async () => {

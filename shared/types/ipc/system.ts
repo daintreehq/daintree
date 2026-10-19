@@ -61,8 +61,8 @@ export interface SystemMemoryWorkloads {
  * Pushed on the edges of a sustained system-memory episode: `degraded` when it
  * opens and again each time it worsens (#13529), `normal` once when it clears.
  * Observations only — each figure is non-null only when that measurement was
- * over its threshold on the sample that published it, and all are null on
- * `normal`.
+ * over its threshold on the sample that published it, or failed on that sample
+ * after the previous publish had it over; all are null on `normal`.
  */
 export interface SystemMemoryPressurePayload {
   status: "degraded" | "normal";

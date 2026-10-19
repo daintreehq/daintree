@@ -75,7 +75,14 @@ function MemoryNoticeRow({ notice }: { notice: SystemMemoryNotice }) {
             aria-hidden="true"
           />
         </SidebarFooterGlyph>
-        <TruncatedTooltip content={notice.detail} side="top" contentClassName="max-w-xs">
+        {/* The detail carries what the reading leaves out — the restart note and
+            Daintree's workloads (#13529) — so it shows even when the reading fits. */}
+        <TruncatedTooltip
+          content={notice.detail}
+          isTruncated={notice.detail !== notice.reading ? true : undefined}
+          side="top"
+          contentClassName="max-w-xs"
+        >
           <span
             role="status"
             aria-atomic="true"

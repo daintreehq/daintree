@@ -104,6 +104,23 @@ describe("SidebarMemoryNotice", () => {
     expect(row.outerHTML).not.toMatch(/status-(warning|danger|error)/);
   });
 
+  it("keeps the detail reachable from the keyboard even when the reading fits (#13529)", () => {
+    act(() =>
+      useSystemMemoryNoticeStore
+        .getState()
+        .setNotice({ critical: false, reading: READING, detail: DETAIL, action: null })
+    );
+    const { container } = renderRow();
+    expect(container.querySelector('[role="status"]')?.getAttribute("tabindex")).toBe("0");
+
+    act(() =>
+      useSystemMemoryNoticeStore
+        .getState()
+        .setNotice({ critical: false, reading: READING, detail: READING, action: null })
+    );
+    expect(container.querySelector('[role="status"]')?.getAttribute("tabindex")).toBeNull();
+  });
+
   it("takes the warning colour once the kernel reports its critical level (#13529)", () => {
     act(() =>
       useSystemMemoryNoticeStore
@@ -121,14 +138,12 @@ describe("SidebarMemoryNotice", () => {
   it("offers the memory breakdown and clears when the store does", async () => {
     const onClick = vi.fn();
     act(() =>
-      useSystemMemoryNoticeStore
-        .getState()
-        .setNotice({
-          critical: false,
-          reading: READING,
-          detail: DETAIL,
-          action: { label: "Show memory use", onClick },
-        })
+      useSystemMemoryNoticeStore.getState().setNotice({
+        critical: false,
+        reading: READING,
+        detail: DETAIL,
+        action: { label: "Show memory use", onClick },
+      })
     );
     const { container } = renderRow();
 
@@ -168,14 +183,12 @@ describe("SidebarMemoryNotice", () => {
   it("collapses both actions into one button so the reading keeps the row", () => {
     act(() => {
       seedIdleProjects(["a"]);
-      useSystemMemoryNoticeStore
-        .getState()
-        .setNotice({
-          critical: false,
-          reading: READING,
-          detail: DETAIL,
-          action: { label: "Show memory use", onClick: vi.fn() },
-        });
+      useSystemMemoryNoticeStore.getState().setNotice({
+        critical: false,
+        reading: READING,
+        detail: DETAIL,
+        action: { label: "Show memory use", onClick: vi.fn() },
+      });
     });
     const { container } = renderRow();
 
@@ -287,14 +300,12 @@ describe("SidebarMemoryNotice", () => {
     document.body.appendChild(elsewhere);
     const onClick = vi.fn(() => elsewhere.focus());
     act(() =>
-      useSystemMemoryNoticeStore
-        .getState()
-        .setNotice({
-          critical: false,
-          reading: READING,
-          detail: DETAIL,
-          action: { label: "Show memory use", onClick },
-        })
+      useSystemMemoryNoticeStore.getState().setNotice({
+        critical: false,
+        reading: READING,
+        detail: DETAIL,
+        action: { label: "Show memory use", onClick },
+      })
     );
     const { container } = renderRow();
     container.querySelector<HTMLButtonElement>("[data-sidebar-memory-menu]")!.focus();
@@ -312,14 +323,12 @@ describe("SidebarMemoryNotice", () => {
     const onClick = vi.fn();
     act(() => {
       seedIdleProjects(["a"]);
-      useSystemMemoryNoticeStore
-        .getState()
-        .setNotice({
-          critical: false,
-          reading: READING,
-          detail: DETAIL,
-          action: { label: "Show memory use", onClick },
-        });
+      useSystemMemoryNoticeStore.getState().setNotice({
+        critical: false,
+        reading: READING,
+        detail: DETAIL,
+        action: { label: "Show memory use", onClick },
+      });
     });
     const { container } = renderRow();
 

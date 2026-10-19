@@ -590,6 +590,50 @@ describe("createSystemMemoryPressureMonitor", () => {
       expect(publish).toHaveBeenCalledTimes(2);
     });
 
+    it("publishes a return to critical after a publish that reported a lower level", async () => {
+      let level: KernelPressureLevel = 4;
+      let fseventsd = 100;
+      const { tick } = makeMonitor({
+        swap: () => HEALTHY_SWAP,
+        kernelPressureLevel: () => level,
+        fseventsdRssMb: () => fseventsd,
+      });
+
+      await tick(EPISODE_OPEN_SAMPLES);
+      level = 2;
+      fseventsd = FSEVENTSD_RSS_THRESHOLD_MB + 1;
+      await tick(1);
+      level = 4;
+      await tick(1);
+
+      expect(publish.mock.calls.map(([p]) => [p.kernelPressureLevel, p.fseventsdRssMb])).toEqual([
+        ["critical", null],
+        ["warn", FSEVENTSD_RSS_THRESHOLD_MB + 1],
+        ["critical", FSEVENTSD_RSS_THRESHOLD_MB + 1],
+      ]);
+    });
+
+    it("keeps a published cause whose reading failed on the escalating sample", async () => {
+      let swap: SwapUsage | null = FULL_SWAP;
+      let level: KernelPressureLevel = 1;
+      const { tick } = makeMonitor({
+        swap: () => swap,
+        kernelPressureLevel: () => level,
+      });
+
+      await tick(EPISODE_OPEN_SAMPLES);
+      swap = null;
+      level = 4;
+      await tick(1);
+      swap = FULL_SWAP;
+      await tick(3);
+
+      expect(publish).toHaveBeenCalledTimes(2);
+      expect(publish).toHaveBeenLastCalledWith(
+        expect.objectContaining({ swapUsedPercent: 91, kernelPressureLevel: "critical" })
+      );
+    });
+
     it("starts the next episode from nothing after a recovery", async () => {
       let level: KernelPressureLevel = 4;
       const { tick } = makeMonitor({ swap: () => HEALTHY_SWAP, kernelPressureLevel: () => level });

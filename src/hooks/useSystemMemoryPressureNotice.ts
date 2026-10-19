@@ -114,6 +114,8 @@ export function handleSystemMemoryPressure(payload: SystemMemoryPressurePayload)
       priority: "low",
       urgent: false,
       countable: false,
+      // Also dismisses a critical toast still showing.
+      replaceKey: SUPERSEDE_KEY,
       supersedeKey: SUPERSEDE_KEY,
       title: "System memory readings recovered",
       message: "Every monitored reading has stayed below its threshold for three samples in a row.",
@@ -147,6 +149,7 @@ export function handleSystemMemoryPressure(payload: SystemMemoryPressurePayload)
     countable: false,
     title: critical ? "Critical system memory pressure" : "High system memory use",
     message,
+    replaceKey: SUPERSEDE_KEY,
     supersedeKey: SUPERSEDE_KEY,
     context: { eventKind: "host" },
     actions: [action],
