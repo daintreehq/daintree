@@ -90,6 +90,12 @@ export interface HostCallRuntimeDeps {
   /** A connected host's projects, most used first: the projectIds `host.call` takes. */
   listHostProjects?(hostId: HostId): Promise<readonly HostProjectSummary[]>;
   /**
+   * Dials a host this Shell holds no link to, as `host.call` would, settling
+   * once it is connected or `timeoutMs` pass, whichever is first; one the
+   * person disconnected is left alone.
+   */
+  connect?(hostId: HostId, timeoutMs: number): Promise<unknown>;
+  /**
    * Puts a host's question about one of this Shell's relayed calls to the
    * person, in the window of the assistant that made it (#13501), showing the
    * host's own preview. Null when it couldn't be asked there; absent, no host
@@ -123,6 +129,8 @@ const MAX_RAN_PROMPTS_PER_TERMINAL = 4;
 const MAX_PENDING_PROMPTS_PER_TERMINAL = 32;
 /** How long `host.list` waits for a connected host to name its projects. */
 const PROJECTS_READ_MS = 5_000;
+/** How long `host.list` waits for a host it dials to connect. */
+const LIST_CONNECT_MS = 8_000;
 
 /** What the person at this Shell is asked about one of its relayed calls. */
 export interface RelayApprovalQuestion {
@@ -768,7 +776,8 @@ export class HostCallRuntime implements HostControlRuntimeHandle {
   list(helpSessionId: string): Promise<HostControlOutcome<HostListResult>> {
     return this.settle(helpSessionId, async () => {
       const hosts = await Promise.all(
-        this.deps.hosts().map(async (host): Promise<HostListEntry> => {
+        this.deps.hosts().map(async (seen): Promise<HostListEntry> => {
+          const host = await this.dialed(seen);
           const summary = host.summary;
           const connected = host.connection.status === "connected";
           const control = this.deps.controlEnabled?.(host.hostId) === true;
@@ -796,6 +805,26 @@ export class HostCallRuntime implements HostControlRuntimeHandle {
       );
       return { hosts };
     });
+  }
+
+  /**
+   * A host with control on that this Shell holds no link to, dialed first:
+   * the Shell lets an unused link go after a few minutes, and `host.call`
+   * dials it again on demand, so to the assistant it is a host it can reach,
+   * not one that is down. One the person disconnected stays as it is. Observed
+   * again afterwards, whatever came of it.
+   */
+  private async dialed(host: ObservedHost): Promise<ObservedHost> {
+    const connect = this.deps.connect;
+    const status = host.connection.status;
+    if (!connect || (status !== "disconnected" && status !== "connecting")) return host;
+    if (this.deps.controlEnabled?.(host.hostId) !== true) return host;
+    // A dial that throws before it is under way fails this host's entry, never the listing.
+    const dial = Promise.resolve()
+      .then(() => connect(host.hostId, LIST_CONNECT_MS))
+      .catch(() => undefined);
+    await withinMs(dial, LIST_CONNECT_MS, undefined);
+    return this.deps.hosts().find((candidate) => candidate.hostId === host.hostId) ?? host;
   }
 
   /** A connected host's projects, or null when it didn't say in time. */

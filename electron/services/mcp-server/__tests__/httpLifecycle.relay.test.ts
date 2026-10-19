@@ -207,6 +207,47 @@ describe("HttpLifecycle.openRelaySession (#13493)", () => {
     session.close();
   });
 
+  it("classifies by the host's own catalog when no view describes the project", async () => {
+    const { lc, dispatchActionForWorkspace } = await startedLifecycle({
+      requestManifestForWorkspace: vi
+        .fn()
+        .mockResolvedValue([
+          ...MANIFEST,
+          entry("actions.search", "query"),
+          entry("worktree.createWithRecipe", "command"),
+          entry("recipe.list", "query"),
+        ]),
+      getCachedManifestForWorkspace: vi.fn(() => null),
+    });
+    const session = (await lc.openRelaySession({
+      tier: "full",
+      workspaceId: "project-1",
+      caller: CALLER,
+    }))!;
+
+    await session.callTool(
+      "actions.search",
+      { query: "terminal" },
+      { timeoutMs: 5_000, callId: "c1" }
+    );
+    await session.callTool("worktree.createWithRecipe", {}, { timeoutMs: 5_000, callId: "c2" });
+    await session.callTool("copyTree.generate", {}, { timeoutMs: 5_000, callId: "c3" });
+    await session.callTool("recipe.list", {}, { timeoutMs: 5_000, callId: "c4" });
+
+    const relayOf = (actionId: string) =>
+      dispatchActionForWorkspace.mock.calls.find((call) => call[1] === actionId)?.[5]?.relay;
+    expect(relayOf("actions.search")).toEqual({ linkSessionId: "link-1", readOnly: true });
+    // A query the catalog says writes (it reconciles the recipe store) stays a write.
+    expect(relayOf("recipe.list")).toEqual({ linkSessionId: "link-1", readOnly: false });
+    expect(relayOf("worktree.createWithRecipe")).toEqual({
+      linkSessionId: "link-1",
+      readOnly: false,
+    });
+    // Not in the host's catalog, so still a write.
+    expect(relayOf("copyTree.generate")).toEqual({ linkSessionId: "link-1", readOnly: false });
+    session.close();
+  });
+
   it("gives its notices the relay principal's pane, routed back over its link (#13500)", async () => {
     const whenIdle = vi.fn().mockResolvedValue({ armed: true, terminalId: "t-1" });
     const { lc } = await startedLifecycle({

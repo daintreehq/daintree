@@ -677,9 +677,38 @@ describe("rendererBridge — relayed calls (#13493)", () => {
     expect(viewless.runViewlessAction).toHaveBeenCalledTimes(1);
   });
 
-  it("refuses a change nobody drives when the host has no form of it to run", async () => {
+  it.each([
+    ["change", { relay: { linkSessionId: "shell-a", readOnly: false } }],
+    ["read", { relay: { linkSessionId: "shell-a", readOnly: true } }],
+  ] as const)(
+    "says no frontend is attached for a relayed %s nobody drives or shows that the host has no form of",
+    async (_kind, options) => {
+      setMcpDriveTargetResolver(() => ({ state: "vacant" }));
+      viewless.hasViewlessImplementation.mockReturnValue(false);
+
+      const err = await bridge
+        .dispatchActionForWorkspace(
+          WORKSPACE,
+          "git.getProjectPulse",
+          {},
+          false,
+          "external",
+          options
+        )
+        .catch((e: unknown) => e);
+
+      expect(err).toBeInstanceOf(NoFrontendAttachedError);
+      expect((err as NoFrontendAttachedError).actionId).toBe("git.getProjectPulse");
+      expect(viewless.runViewlessAction).not.toHaveBeenCalled();
+    }
+  );
+
+  it("refuses a change nobody drives that only a window here showing the project could run", async () => {
     setMcpDriveTargetResolver(() => ({ state: "vacant" }));
     viewless.hasViewlessImplementation.mockReturnValue(false);
+    const view = makeWebContents(7);
+    mockWebContentsRegistry.set(7, view);
+    mockProjectViews.set(WORKSPACE, [view]);
 
     const err = await bridge
       .dispatchActionForWorkspace(WORKSPACE, "terminal.moveToDock", {}, false, "external", write)
@@ -687,6 +716,7 @@ describe("rendererBridge — relayed calls (#13493)", () => {
 
     expect(err).toBeInstanceOf(RelayDrivenElsewhereError);
     expect((err as RelayDrivenElsewhereError).holderName).toBeNull();
+    expect(view.send).not.toHaveBeenCalled();
     expect(viewless.runViewlessAction).not.toHaveBeenCalled();
   });
 

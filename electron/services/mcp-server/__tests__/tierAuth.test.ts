@@ -2157,6 +2157,22 @@ describe("filterIntrospectionResultForSession", () => {
       expect(shouldExposeTool(runner, "full", { workspaceBound: false })).toBe(false);
     });
 
+    // #13496: the assistant tools answer their caller too, so a relayed
+    // assistant, with no ladder tier to place them on, can still read them.
+    it("describes the assistant tools for an assistant caller, relayed or not", () => {
+      for (const id of ["assistant.list", "assistant.start", "agent.readQuota"]) {
+        const entry = makeEntry({ id, kind: id === "assistant.start" ? "command" : "query" });
+        const relayed = { ...snap, tier: "full" as const, rendererOwnedOrigin: false, relay: true };
+
+        expect(buildTargetPolicy(entry, { ...relayed, assistantControl: true }), id).toMatchObject({
+          authorizedBy: "tier",
+          minimumTier: "core",
+          callable: true,
+        });
+        expect(buildTargetPolicy(entry, relayed), id).toBeNull();
+      }
+    });
+
     it("returns null instead of throwing on a schema that cannot be canonicalised", () => {
       const cyclic: Record<string, unknown> = { type: "object" };
       cyclic["self"] = cyclic;

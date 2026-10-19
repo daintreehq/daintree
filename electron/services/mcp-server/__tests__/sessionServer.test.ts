@@ -4746,6 +4746,55 @@ describe("one assistant addressing another (#13496)", () => {
     expect(control.start).not.toHaveBeenCalled();
   });
 
+  it("describes the assistant tools to a relayed assistant's schema read, and withholds what it can't call", async () => {
+    const { deps } = assistantDeps({
+      caller: { ...CALLER, kind: "relay", senderId: "s", linkSessionId: "l" } as AssistantCaller,
+      origin: "external",
+      tier: "full",
+      relay: true,
+    });
+    const listed = (await deps.requestManifest()) as ActionManifestEntry[];
+    deps.requestManifest = vi
+      .fn()
+      .mockResolvedValue([...listed, makeManifestEntry("actions.getSchema")]);
+    deps.dispatchAction = vi.fn(async (_actionId: string, args: unknown) => ({
+      result: {
+        ok: true,
+        result: {
+          ok: true,
+          entry: makeManifestEntry((args as { actionId: string }).actionId),
+          policy: null,
+          error: null,
+        },
+      },
+    })) as unknown as SessionServerDeps["dispatchAction"];
+    const server = await serve(deps);
+    const schemaOf = async (actionId: string) => {
+      const res = await callTool(server, { name: "actions.getSchema", arguments: { actionId } });
+      const [first] = res.content as Array<{ text: string }>;
+      return JSON.parse(first!.text) as {
+        ok: boolean;
+        entry: unknown;
+        policy: { callable: boolean; minimumTier: string } | null;
+        error: { code: string } | null;
+      };
+    };
+
+    for (const id of ["assistant.list", "assistant.start", "agent.readQuota"]) {
+      expect(await schemaOf(id), id).toMatchObject({
+        ok: true,
+        policy: { callable: true, minimumTier: "core" },
+      });
+    }
+    // The unscoped send is withheld from a relay: never described, whoever answers.
+    expect(await schemaOf("terminal.sendCommand")).toMatchObject({
+      ok: false,
+      entry: null,
+      policy: null,
+      error: { code: "NOT_FOUND" },
+    });
+  });
+
   it("refuses a relayed start the drive rule refuses, starting nothing", async () => {
     const { deps, control } = assistantDeps({
       caller: { ...CALLER, kind: "relay", senderId: "s", linkSessionId: "l" } as AssistantCaller,
@@ -10901,6 +10950,27 @@ describe("unscoped terminal input by session origin (#12407)", () => {
       expect(deps.dispatchAction).not.toHaveBeenCalled();
     }
   );
+
+  it("names the owned form to another machine's assistant without calling it someone it isn't", async () => {
+    const deps = originDeps("external", "full");
+    (deps as { relay?: unknown }).relay = {
+      shellName: "studio-01",
+      refuseWrite: vi.fn(() => null),
+    };
+    const server = createSessionServer("s-origin", deps);
+
+    const result = await callTool(server, {
+      name: "terminal.sendCommand",
+      arguments: { terminalId: "user-shell", command: "ls" },
+    });
+
+    const text = JSON.stringify(result.content);
+    expect(text).toContain("TIER_NOT_PERMITTED");
+    expect(text).toContain("'terminal.sendCommandOwned'");
+    expect(text).toContain("another machine's assistant");
+    expect(text).not.toContain("reserved for Daintree's own assistant");
+    expect(deps.dispatchAction).not.toHaveBeenCalled();
+  });
 
   it.each(RENDERER_OWNED_ORIGIN_ONLY_TOOLS)(
     "refuses %s from a non-renderer-owned session without dispatching",

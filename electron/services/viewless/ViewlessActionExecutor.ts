@@ -64,6 +64,7 @@ import {
 } from "./viewlessWorktrees.js";
 import { runProjectDetectRunners, runProjectGetAll } from "./viewlessProjects.js";
 import { runForgeRead } from "./viewlessForge.js";
+import { runActionsGetSchema, runActionsList, runActionsSearch } from "./viewlessIntrospection.js";
 import { refuseRecipeWithNoView, runWorktreeCreateWithRecipe } from "./viewlessWorktreeCreation.js";
 
 const TERMINAL_SEND_COMMAND_ACTION_ID = "terminal.sendCommand";
@@ -795,6 +796,12 @@ async function runAction(
       return runProjectDetectRunners(request, project, deps);
     case "worktree.createWithRecipe":
       return runWorktreeCreateWithRecipe(request, project, deps);
+    case "actions.list":
+      return runActionsList(request);
+    case "actions.search":
+      return runActionsSearch(request);
+    case "actions.getSchema":
+      return runActionsGetSchema(request);
     default:
       return runForgeRead(request, project, deps);
   }

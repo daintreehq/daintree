@@ -427,6 +427,152 @@ describe("AssistantTerminalControl (#13496)", () => {
       });
     });
 
+    describe("one whose screen is ready while its greeting's turn is still finishing", () => {
+      let clock: number;
+      let slept: number[];
+      let started: Lane;
+
+      beforeEach(() => {
+        clock = 0;
+        slept = [];
+        deps.now = () => clock;
+        deps.sleep = async (ms) => {
+          slept.push(ms);
+          clock += ms;
+        };
+        mocks.launch.mockImplementation(async (request) => {
+          started = addLane(2, "t-new", {
+            startedBy: request.startedBy,
+            attached: false,
+            generation: 1,
+            record: atPrompt({ agentState: "working", waitingReason: undefined }),
+          });
+          return {
+            status: "started",
+            sessionId: "session-2",
+            terminalId: "t-new",
+            slot: 2,
+            agentId: "codex",
+            ready: true,
+            notReadyReason: null,
+          };
+        });
+        control = new AssistantTerminalControl(deps);
+      });
+
+      it("reports it ready only once a send would be admitted", async () => {
+        deps.sleep = async (ms) => {
+          slept.push(ms);
+          clock += ms;
+          // The greeting's turn ends a second in.
+          if (clock >= 1_000) started.record = atPrompt({ lastStateChange: clock });
+        };
+        control = new AssistantTerminalControl(deps);
+
+        const result = await control.start(RELAY, { agentId: "codex" });
+
+        expect(result).toMatchObject({
+          ready: true,
+          notReadyReason: null,
+          assistant: { agentState: "waiting", waitingReason: "prompt" },
+        });
+        expect(slept.length).toBeGreaterThan(0);
+        expect(mocks.submit).not.toHaveBeenCalled();
+      });
+
+      it("reports a turn that never settles as not ready, without starting another", async () => {
+        const result = await control.start(RELAY, { agentId: "codex" });
+
+        expect(result).toMatchObject({
+          ready: false,
+          notReadyReason: "timed-out",
+          assistant: { terminalId: "t-new", agentState: "working" },
+        });
+        expect(mocks.launch).toHaveBeenCalledTimes(1);
+      });
+
+      it.each([
+        ["approval", "timed-out"],
+        ["question", "timed-out"],
+        ["error", "agent-error"],
+      ] as const)(
+        "stops waiting at once on a %s on screen, reporting %s",
+        async (waitingReason, notReadyReason) => {
+          started.record = atPrompt({ waitingReason });
+          mocks.launch.mockImplementationOnce(async (request) => {
+            addLane(2, "t-new", {
+              startedBy: request.startedBy,
+              attached: false,
+              generation: 1,
+              record: atPrompt({ waitingReason }),
+            });
+            return {
+              status: "started",
+              sessionId: "session-2",
+              terminalId: "t-new",
+              slot: 2,
+              agentId: "codex",
+              ready: true,
+              notReadyReason: null,
+            };
+          });
+
+          const result = await control.start(RELAY, { agentId: "codex" });
+
+          expect(result).toMatchObject({ ready: false, notReadyReason });
+          expect(slept).toEqual([]);
+        }
+      );
+
+      it("reads again after a read that fails", async () => {
+        let reads = 0;
+        const read = deps.getTerminal;
+        deps.getTerminal = async (terminalId) => {
+          reads += 1;
+          if (reads === 1) throw new Error("pty-host busy");
+          if (terminalId === "t-new") started.record = atPrompt();
+          return read(terminalId);
+        };
+        control = new AssistantTerminalControl(deps);
+
+        const result = await control.start(RELAY, { agentId: "codex" });
+
+        expect(result).toMatchObject({ ready: true, notReadyReason: null });
+        expect(slept).toHaveLength(1);
+      });
+
+      it("counts a read that never answers against the same bound", async () => {
+        vi.useFakeTimers();
+        try {
+          deps.now = undefined;
+          deps.sleep = undefined;
+          const read = deps.getTerminal;
+          let hung = false;
+          // The wait's read never answers; the entry read after it does.
+          deps.getTerminal = (terminalId) => {
+            if (terminalId !== "t-new" || hung) return read(terminalId);
+            hung = true;
+            return new Promise(() => {});
+          };
+          control = new AssistantTerminalControl(deps);
+          let settled = false;
+          const pending = control
+            .start(RELAY, { agentId: "codex" })
+            .finally(() => (settled = true));
+
+          await vi.advanceTimersByTimeAsync(19_000);
+          expect(settled).toBe(false);
+          await vi.advanceTimersByTimeAsync(1_500);
+          await expect(pending).resolves.toMatchObject({
+            ready: false,
+            notReadyReason: "timed-out",
+          });
+        } finally {
+          vi.useRealTimers();
+        }
+      });
+    });
+
     it("refuses with words of its own when nothing started", async () => {
       mocks.launch.mockResolvedValue({ status: "refused", reason: "no-slot" });
       await expect(control.start(LOCAL, { slot: 2 })).rejects.toMatchObject({

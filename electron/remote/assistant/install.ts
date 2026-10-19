@@ -27,11 +27,20 @@ declare module "../runtime.js" {
   }
 }
 
+const REACHABLE_STATUSES: ReadonlySet<ObservedHost["connection"]["status"]> = new Set([
+  "connected",
+  "connecting",
+  "disconnected",
+]);
+
 /**
  * This machine's hosts as runbook search is told them (#13411), from what
  * `host.list` reads: connected means a host this Shell's assistant controls
- * is connected right now. Hosts this Shell can't observe are unreported
- * rather than guessed down to "none connected".
+ * is connected, or holds no link that said why it is down. `host.list` and
+ * `host.call` dial a host with no link, and the Shell lets an unused link go
+ * after a few minutes, so a host with none is one the assistant reaches on
+ * its next call. Hosts this Shell can't observe are unreported rather than
+ * guessed down to "none connected".
  */
 export function observedRunbooksHostsState(
   hasHosts: boolean,
@@ -41,7 +50,7 @@ export function observedRunbooksHostsState(
   if (!hasHosts) return "none";
   if (observed === null) return null;
   return observed.some(
-    (host) => controlEnabled(host.hostId) && host.connection.status === "connected"
+    (host) => controlEnabled(host.hostId) && REACHABLE_STATUSES.has(host.connection.status)
   )
     ? "connected"
     : "configured";
@@ -92,6 +101,8 @@ export interface HostControlInstallDeps {
   hasHosts(): boolean;
   /** A connected host's projects, for `host.list` to name. */
   listHostProjects?(hostId: HostId): Promise<readonly HostProjectSummary[]>;
+  /** Dials a host this Shell holds no link to, for `host.list` to observe it connected. */
+  connect?(hostId: HostId, timeoutMs: number): Promise<unknown>;
   /** The person's "assistant control" switch for a host: whether its assistant reaches it (#13493). */
   isHostControlEnabled(hostId: HostId): boolean;
 }
@@ -107,6 +118,7 @@ export function installHostControl(deps: HostControlInstallDeps): () => void {
     client: () => getRemoteService("hostControlLinkClient") ?? null,
     hosts: () => deps.observeHosts(),
     listHostProjects: deps.listHostProjects,
+    connect: deps.connect,
     // From provisioning, before the run is confirmed: the view a session was opened in.
     inLocalView: (helpSessionId) => {
       const handle = helpSessionService.getWebContentsIdForSessionId(helpSessionId);

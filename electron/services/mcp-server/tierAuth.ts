@@ -568,6 +568,12 @@ export interface TargetPolicySessionSnapshot {
    * offered as a stub. Read as `=== true`.
    */
   hostCall?: boolean;
+  /**
+   * Whether the session is an assistant the assistant tools answer to (#13496),
+   * here or another machine's through its Shell — see
+   * {@link mayControlAssistants}. Read as `=== true`.
+   */
+  assistantControl?: boolean;
   /** Live per-tool grants, from the non-evicting snapshot. */
   perToolGrantedActionIds: ReadonlySet<string>;
   /** Live native automation grants' `allowedTools`, unioned. */
@@ -693,14 +699,19 @@ export function buildTargetPolicy(
   // The command runner answers to its caller, not its tier list (#13501).
   const commandRunner =
     id === PROJECT_RUN_COMMAND_TOOL ? mayRunProjectCommand(snapshot.tier, snapshot) : undefined;
+  // So do the assistant tools, for an assistant whose relayed calls hold no ladder tier to place them on.
+  const assistantTool =
+    ASSISTANT_CONTROL_TOOL_IDS.has(id) && snapshot.assistantControl === true ? true : undefined;
   const minimumTier: McpTargetTier | null =
     commandRunner === true
       ? "full"
-      : snapshot.tier === "external"
-        ? TIER_ALLOWLISTS.external.has(id)
-          ? "external"
-          : null
-        : minimumPermittingTier(id, snapshot.rendererOwnedOrigin === true);
+      : assistantTool === true
+        ? "core"
+        : snapshot.tier === "external"
+          ? TIER_ALLOWLISTS.external.has(id)
+            ? "external"
+            : null
+          : minimumPermittingTier(id, snapshot.rendererOwnedOrigin === true);
   // A ladder target with no permitting tier cannot be described honestly, and
   // cannot legitimately be granted either: both issuance paths refuse a tool
   // `minimumPermittingTier` does not place. Fail closed.
@@ -711,7 +722,9 @@ export function buildTargetPolicy(
   // would actually admit its next call, and therefore whether that access can
   // lapse.
   const tierPermitted =
-    commandRunner ?? isTierPermitted(snapshot.tier, id, snapshot.rendererOwnedOrigin);
+    commandRunner ??
+    assistantTool ??
+    isTierPermitted(snapshot.tier, id, snapshot.rendererOwnedOrigin);
   const authorizedBy = tierPermitted
     ? "tier"
     : perToolGranted

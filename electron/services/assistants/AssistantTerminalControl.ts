@@ -16,7 +16,11 @@ import { stampAssistantPrompt } from "../../../shared/utils/assistantProvenance.
 import { appendHandbackInstruction, mintHandbackCode } from "../../../shared/utils/handback.js";
 import { assessInterruptCandidate } from "../../../shared/utils/terminalInterrupt.js";
 import { buildTerminalSendCommandReceipt } from "../../../shared/utils/terminalSendCommandResult.js";
-import { evaluateWakeGate, type WakeGateVerdict } from "../../../shared/utils/terminalWakeGate.js";
+import {
+  evaluateWakeGate,
+  type WakeBlockReason,
+  type WakeGateVerdict,
+} from "../../../shared/utils/terminalWakeGate.js";
 import type {
   HelpSessionStartedBy,
   RunningLane,
@@ -83,6 +87,8 @@ export interface AssistantTerminalControlDeps {
   launch(request: AssistantLaunchRequest): Promise<AssistantLaunchResult>;
   /** Ends the session, which kills its PTY. */
   revoke(sessionId: string): Promise<void>;
+  now?: () => number;
+  sleep?: (ms: number) => Promise<void>;
   /** The reply a screen shows, ending at the handback marker observed when there is one. */
   extractReply(
     serialized: string,
@@ -102,6 +108,21 @@ export class AssistantTargetError extends Error {
     super(message);
     this.name = "AssistantTargetError";
   }
+}
+
+/** How long a started assistant gets, once its screen is ready, to settle where a send is admitted. */
+const START_SETTLE_WAIT_MS = 20_000;
+const START_SETTLE_POLL_MS = 250;
+/** What a started assistant's screen can show that no amount of waiting clears. */
+const WAITING_WONT_CLEAR: ReadonlySet<WakeBlockReason> = new Set(["approval", "question", "error"]);
+
+/** A read that gives up, as unread, once `ms` pass; the timer never outlives it. */
+function readWithin<T>(read: Promise<T>, ms: number): Promise<T | null> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const late = new Promise<null>((resolve) => {
+    timer = setTimeout(() => resolve(null), ms);
+  });
+  return Promise.race([read.catch(() => null), late]).finally(() => clearTimeout(timer));
 }
 
 /** Rows the reply read quotes at most. */
@@ -285,6 +306,8 @@ export class AssistantTerminalControl {
       attached: false,
       startedBy: startedByCaller(caller),
     };
+    const settled = result.ready ? await this.untilSendAdmitted(result.terminalId) : null;
+    const ready = settled === "ready";
     const entry = (await this.entryFor(target, caller, result.agentId)) ?? {
       terminalId: result.terminalId,
       generation: this.deps.getLiveGeneration(result.terminalId) ?? 0,
@@ -295,7 +318,40 @@ export class AssistantTerminalControl {
       attached: false,
       startedByYou: true,
     };
-    return { assistant: entry, ready: result.ready, notReadyReason: result.notReadyReason };
+    return {
+      assistant: entry,
+      ready,
+      notReadyReason: ready ? null : (settled ?? result.notReadyReason ?? "timed-out"),
+    };
+  }
+
+  /**
+   * Ready by its screen is not yet where a send is admitted: the greeting's
+   * turn can still be finishing under a prompt the CLI already draws, and a
+   * send then is refused as busy. Waits, bounded, for the gate `submit` asks,
+   * so a send right after a start goes in. An approval, question or error on
+   * screen won't clear by waiting. Each read counts against the same bound.
+   */
+  private async untilSendAdmitted(
+    terminalId: string
+  ): Promise<"ready" | NonNullable<AssistantStartResult["notReadyReason"]>> {
+    const now = this.deps.now ?? Date.now;
+    const sleep = this.deps.sleep ?? ((ms: number) => new Promise((r) => setTimeout(r, ms)));
+    const deadline = now() + START_SETTLE_WAIT_MS;
+    for (;;) {
+      const left = deadline - now();
+      if (left <= 0) return "timed-out";
+      const record = await readWithin(this.deps.getTerminal(terminalId), left);
+      if (record) {
+        const verdict = evaluateWakeGate(record, { acceptWorking: false });
+        if (verdict.kind === "ready") return "ready";
+        if (verdict.kind === "blocked" && WAITING_WONT_CLEAR.has(verdict.reason)) {
+          return verdict.reason === "error" ? "agent-error" : "timed-out";
+        }
+      }
+      if (now() >= deadline) return "timed-out";
+      await sleep(START_SETTLE_POLL_MS);
+    }
   }
 
   /**

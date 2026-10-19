@@ -1979,6 +1979,7 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
               paneApproval: sessionSurface.paneApproval === true,
               paneSkipConfirmations: sessionSurface.paneSkipConfirmations === true,
               hostCall: hostCallOffered(),
+              assistantControl: assistantControlCaller,
               perToolGrantedActionIds,
               nativeGrantedActionIds,
               confirmationsSkipped,
@@ -2356,13 +2357,20 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
       const ownedTwin = withheldByOrigin
         ? (OWNED_TWIN_TOOLS as Readonly<Record<string, string>>)[actionId]
         : undefined;
+      // A relayed caller is another machine's own assistant, so "reserved for
+      // Daintree's own assistant" would tell it it is something it isn't (#13493).
+      const relayed = sessionSurface.relay === true;
       return buildToolError({
         code: TIER_NOT_PERMITTED_CODE,
         message:
           ownedTwin !== undefined
-            ? `action '${actionId}' can reach any terminal or worktree, so it is reserved for Daintree's own assistant. Use '${ownedTwin}', which acts on what this connection created.`
+            ? relayed
+              ? `action '${actionId}' can reach any terminal or worktree on this host, so another machine's assistant uses '${ownedTwin}' here, which acts on what its calls created or started.`
+              : `action '${actionId}' can reach any terminal or worktree, so it is reserved for Daintree's own assistant. Use '${ownedTwin}', which acts on what this connection created.`
             : withheldByOrigin
-              ? `action '${actionId}' can reach any terminal, so it is reserved for Daintree's own assistant. This connection may only act on terminals it created.`
+              ? relayed
+                ? `action '${actionId}' can reach any terminal on this host, so another machine's assistant may only act on terminals its calls created or started here.`
+                : `action '${actionId}' can reach any terminal, so it is reserved for Daintree's own assistant. This connection may only act on terminals it created.`
               : `action '${actionId}' is not permitted for the '${tier}' tier.`,
       });
     }

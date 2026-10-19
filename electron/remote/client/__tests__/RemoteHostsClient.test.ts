@@ -1884,6 +1884,27 @@ describe("RemoteHostsClient", () => {
       return events.filter((event) => event.type === "resync-required");
     }
 
+    it("remembers the person disconnected it, until something dials it again", async () => {
+      manager.connect("studio-01");
+      expect(client.isDisconnectedByPerson("studio-01")).toBe(false);
+
+      await client.disconnect({ hostId: "studio-01" });
+      expect(client.isDisconnectedByPerson("studio-01")).toBe(true);
+
+      await client.connectAndWait("studio-01", 1_000);
+      expect(client.isDisconnectedByPerson("studio-01")).toBe(false);
+
+      await client.disconnect({ hostId: "studio-01" });
+      client.connect({ hostId: "studio-01" });
+      expect(client.isDisconnectedByPerson("studio-01")).toBe(false);
+    });
+
+    it("never counts a link the Shell let go on its own", async () => {
+      manager.connect("studio-01");
+      await manager.disconnect("studio-01");
+      expect(client.isDisconnectedByPerson("studio-01")).toBe(false);
+    });
+
     it("resyncs the views it cut off once a new connection can take calls", async () => {
       await disconnectWithBoundView();
       manager.connect("studio-01");

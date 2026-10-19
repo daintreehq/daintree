@@ -133,6 +133,105 @@ describe("HostCallRuntime (#13493, #13496)", () => {
       expect(listHostProjects).not.toHaveBeenCalled();
     });
 
+    describe("a host this Shell holds no link to", () => {
+      function dialing(connect: (hostId: string) => Promise<unknown>): HostCallRuntime {
+        return new HostCallRuntime({
+          getSessionLane: (id) => (runs.has(id) ? { projectId: "proj-1", slot: 0 } : null),
+          callerRun: (id) => runs.get(id) ?? null,
+          client: () => null,
+          hosts: () => hosts,
+          inLocalView: () => true,
+          controlEnabled: (hostId) => control.has(hostId),
+          listHostProjects,
+          connect,
+        });
+      }
+
+      it("dials one with control on, and lists it as it is once connected", async () => {
+        hosts = [host({ hostId: "studio" }), host({ hostId: "off", name: "laptop" })];
+        const connect = vi.fn(async (hostId: string) => {
+          hosts = hosts.map((h) => (h.hostId === hostId ? { ...h, connection: CONNECTED } : h));
+        });
+        const listed = await dialing(connect).list("a");
+        if (!listed.ok) throw new Error("refused");
+        expect(connect.mock.calls.map(([hostId]) => hostId)).toEqual(["studio"]);
+        expect(listed.value.hosts[0]).toMatchObject({
+          hostId: "studio",
+          connection: "connected",
+          projects: [
+            { projectId: "proj-2", name: "website" },
+            { projectId: "proj-3", name: "api" },
+          ],
+        });
+        expect(listed.value.hosts[1]).toMatchObject({ connection: "disconnected", projects: null });
+      });
+
+      it("never redials a host whose link reported why it is down", async () => {
+        hosts = [
+          host({
+            connection: { status: "unreachable", lastSeenAt: null, detail: "ssh: no route" },
+          }),
+        ];
+        const connect = vi.fn(async () => undefined);
+        const listed = await dialing(connect).list("a");
+        if (!listed.ok) throw new Error("refused");
+        expect(connect).not.toHaveBeenCalled();
+        expect(listed.value.hosts[0]?.connection).toBe("disconnected");
+      });
+
+      it("waits for a dial up to its bound, then lists the host as disconnected", async () => {
+        vi.useFakeTimers();
+        try {
+          const connect = vi.fn((_hostId: string) => new Promise<never>(() => {}));
+          let settled = false;
+          const pending = dialing(connect)
+            .list("a")
+            .finally(() => (settled = true));
+          await vi.advanceTimersByTimeAsync(7_000);
+          expect(connect).toHaveBeenCalledTimes(1);
+          expect(settled).toBe(false);
+
+          await vi.advanceTimersByTimeAsync(2_000);
+          const listed = await pending;
+          if (!listed.ok) throw new Error("refused");
+          expect(listed.value.hosts[0]).toMatchObject({
+            connection: "disconnected",
+            projects: null,
+          });
+          expect(vi.getTimerCount()).toBe(0);
+        } finally {
+          vi.useRealTimers();
+        }
+      });
+
+      it("keeps the other hosts when one dial throws or rejects", async () => {
+        hosts = [
+          host({ hostId: "studio" }),
+          host({ hostId: "laptop", name: "laptop" }),
+          host({ hostId: "mini", name: "mini" }),
+        ];
+        control = new Set(["studio", "laptop", "mini"]);
+        const connect = vi.fn(async (hostId: string) => {
+          if (hostId === "laptop") throw new Error("no such transport");
+          if (hostId === "mini") return Promise.reject(new Error("ssh refused"));
+          hosts = hosts.map((h) => (h.hostId === hostId ? { ...h, connection: CONNECTED } : h));
+        });
+        const throwing = dialing((hostId) => {
+          if (hostId === "laptop") throw new Error("thrown before a promise");
+          return connect(hostId);
+        });
+
+        const listed = await throwing.list("a");
+
+        if (!listed.ok) throw new Error(`refused: ${listed.code}`);
+        expect(listed.value.hosts.map((h) => [h.hostId, h.connection])).toEqual([
+          ["studio", "connected"],
+          ["laptop", "disconnected"],
+          ["mini", "disconnected"],
+        ]);
+      });
+    });
+
     it("names no projects when the host can't say, and caps how many it names", async () => {
       hosts = [host({ connection: CONNECTED })];
       listHostProjects.mockRejectedValueOnce(new Error("link dropped"));

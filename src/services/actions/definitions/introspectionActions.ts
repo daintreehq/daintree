@@ -1,15 +1,16 @@
 import type { ActionCallbacks, ActionRegistry } from "../actionTypes";
-import type { ActionContext, ActionManifestEntry } from "@shared/types/actions";
+import type { ActionContext } from "@shared/types/actions";
 import { z } from "zod";
 import { PersistedStoreInfoSchema } from "./schemas";
 import { McpSurfaceResultSchema } from "@shared/types/mcpSurface";
 import { McpGetSchemaResultSchema } from "@shared/types/mcpTargetPolicy";
 import {
-  ACTIONS_LIST_DEFAULT_LIMIT,
-  ACTIONS_LIST_MAX_LIMIT,
-  ACTIONS_SEARCH_DEFAULT_LIMIT,
-  ACTIONS_SEARCH_MAX_LIMIT,
-} from "@shared/config/mcpIntrospection";
+  ActionsGetSchemaArgsSchema,
+  ActionsListArgsSchema,
+  ActionsSearchArgsSchema,
+  listActionManifest,
+  searchActionManifest,
+} from "@shared/utils/actionIntrospection";
 import { actionService } from "@/services/ActionService";
 import { usePanelStore } from "@/store/panelStore";
 import { usePortalStore } from "@/store/portalStore";
@@ -18,12 +19,6 @@ import { useWorktreeSelectionStore } from "@/store/worktreeStore";
 import { getCurrentViewStore } from "@/store/createWorktreeStore";
 import { listPersistedStores } from "@/store/persistence/persistedStoreRegistry";
 import { readLocalStorageItemSafely } from "@/store/persistence/safeStorage";
-
-// Page bounds for actions.list, shared with the main-process tier filter so
-// the advertised default can never drift from the applied one (#11529) nor
-// from the window main walks to collect the full match set (#11525).
-const DEFAULT_LIST_LIMIT = ACTIONS_LIST_DEFAULT_LIMIT;
-const MAX_LIST_LIMIT = ACTIONS_LIST_MAX_LIMIT;
 
 export function registerIntrospectionActions(
   actions: ActionRegistry,
@@ -39,28 +34,7 @@ export function registerIntrospectionActions(
     danger: "safe",
     scope: "renderer",
     mcpVisibility: "core",
-    argsSchema: z
-      .object({
-        category: z.string().optional().describe("Exact category, e.g. terminal, worktree, forge"),
-        search: z.string().optional().describe("Substring of id, title or description"),
-        enabledOnly: z.boolean().optional().describe("Only enabled actions (default false)"),
-        limit: z
-          .number()
-          .int()
-          .min(1)
-          .max(MAX_LIST_LIMIT)
-          .optional()
-          .default(DEFAULT_LIST_LIMIT)
-          .describe(`Max actions, 1-${MAX_LIST_LIMIT} (default ${DEFAULT_LIST_LIMIT})`),
-        offset: z
-          .number()
-          .int()
-          .min(0)
-          .optional()
-          .default(0)
-          .describe("Matches to skip (default 0)"),
-      })
-      .optional(),
+    argsSchema: ActionsListArgsSchema,
     resultSchema: z.object({
       actions: z.array(z.unknown()),
       total: z.number().int().nonnegative(),
@@ -68,61 +42,11 @@ export function registerIntrospectionActions(
       offset: z.number().int().nonnegative(),
       hasMore: z.boolean(),
     }),
-    run: async (args: unknown, ctx: ActionContext) => {
-      const {
-        category,
-        search,
-        enabledOnly,
-        limit = DEFAULT_LIST_LIMIT,
-        offset = 0,
-      } = (args as
-        | {
-            category?: string;
-            search?: string;
-            enabledOnly?: boolean;
-            limit?: number;
-            offset?: number;
-          }
-        | undefined) ?? {};
-      let manifest = actionService.list(ctx, { includeSchemas: false });
-      manifest = manifest.filter((entry) => entry.mcpVisibility !== "hidden");
-
-      if (category) {
-        manifest = manifest.filter((a) => a.category === category);
-      }
-      if (search) {
-        const q = search.toLowerCase();
-        manifest = manifest.filter(
-          (a) =>
-            (a.id ?? "").toLowerCase().includes(q) ||
-            (a.title ?? "").toLowerCase().includes(q) ||
-            (a.description ?? "").toLowerCase().includes(q)
-        );
-      }
-      if (enabledOnly) {
-        manifest = manifest.filter((a) => a.enabled);
-      }
-
-      // Count after filtering but before paging so `total`/`hasMore` describe
-      // the whole match set, not the slice the caller happens to be holding.
-      const total = manifest.length;
-      // Sort before slicing: the registry is a Map, and re-registering a plugin
-      // action (usePluginActions replaces any whose descriptor changed) moves it
-      // to the end of insertion order. An offset walk over that order could
-      // repeat one entry and skip another. Compared by code unit rather than
-      // localeCompare so page boundaries don't shift with the host locale —
-      // ids are opaque ASCII identifiers, so collation buys nothing here.
-      manifest.sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
-      const page = manifest.slice(offset, offset + limit);
-
-      return {
-        actions: page,
-        total,
-        limit,
-        offset,
-        hasMore: offset + page.length < total,
-      };
-    },
+    run: async (args: unknown, ctx: ActionContext) =>
+      listActionManifest(
+        actionService.list(ctx, { includeSchemas: false }),
+        (args as z.infer<typeof ActionsListArgsSchema>) ?? {}
+      ),
   }));
 
   // Registered here purely for manifest registration — schema, description,
@@ -289,23 +213,7 @@ export function registerIntrospectionActions(
     danger: "safe",
     scope: "renderer",
     mcpVisibility: "core",
-    argsSchema: z.object({
-      query: z
-        .string()
-        .min(1)
-        .refine((s) => s.trim().length > 0, "must contain non-whitespace text")
-        .describe("Natural-language query or keywords"),
-      limit: z
-        .number()
-        .int()
-        .min(1)
-        .max(ACTIONS_SEARCH_MAX_LIMIT)
-        .optional()
-        .default(ACTIONS_SEARCH_DEFAULT_LIMIT)
-        .describe(
-          `Max results, 1-${ACTIONS_SEARCH_MAX_LIMIT} (default ${ACTIONS_SEARCH_DEFAULT_LIMIT})`
-        ),
-    }),
+    argsSchema: ActionsSearchArgsSchema,
     examples: [
       {
         args: { query: "terminal output" },
@@ -321,75 +229,8 @@ export function registerIntrospectionActions(
       results: z.array(z.unknown()),
     }),
     run: async (args: unknown, ctx: ActionContext) => {
-      const { query, limit = ACTIONS_SEARCH_DEFAULT_LIMIT } = args as {
-        query: string;
-        limit?: number;
-      };
-      const manifest = actionService.list(ctx, { includeSchemas: false });
-
-      const q = query.toLowerCase();
-      const qTerms = q.split(/\s+/).filter((t) => t.length > 0);
-
-      interface ScoredEntry {
-        entry: ActionManifestEntry;
-        score: number;
-      }
-
-      const scored: ScoredEntry[] = [];
-
-      for (const entry of manifest) {
-        if (entry.mcpVisibility === "hidden") continue;
-
-        const id = (entry.id ?? "").toLowerCase();
-        const title = (entry.title ?? "").toLowerCase();
-        const description = (entry.description ?? "").toLowerCase();
-        const category = (entry.category ?? "").toLowerCase();
-        const keywords = (entry.keywords ?? []).join(" ").toLowerCase();
-        const keywordTokens = new Set(keywords.split(/\s+/));
-
-        let score = 0;
-
-        for (const term of qTerms) {
-          if (id === term) {
-            score += 50;
-          } else if (id.includes(term)) {
-            score += 25;
-          }
-          if (title.includes(term)) {
-            score += 15;
-          }
-          // Keywords are synonyms: they score only for a word the id and title
-          // don't already carry, so an action that restates its title in
-          // keywords doesn't count the same word twice. One the query names
-          // outright is weighted like an id match — that is what lets "spawn"
-          // lift `agent.launch` past siblings that merely share the query's noun.
-          if (!id.includes(term) && !title.includes(term)) {
-            if (keywordTokens.has(term)) {
-              score += 25;
-            } else if (keywords.includes(term)) {
-              score += 8;
-            }
-          }
-          if (description.includes(term)) {
-            score += 4;
-          }
-          if (category.includes(term)) {
-            score += 2;
-          }
-        }
-
-        if (score > 0) {
-          scored.push({ entry, score });
-        }
-      }
-
-      scored.sort((a, b) => b.score - a.score || a.entry.id.localeCompare(b.entry.id));
-
-      const results = scored
-        .slice(0, Math.min(limit, ACTIONS_SEARCH_MAX_LIMIT))
-        .map((s) => s.entry);
-
-      return { totalMatches: scored.length, results };
+      const { query, limit } = args as z.infer<typeof ActionsSearchArgsSchema>;
+      return searchActionManifest(actionService.list(ctx, { includeSchemas: false }), query, limit);
     },
   }));
 
@@ -403,12 +244,7 @@ export function registerIntrospectionActions(
     danger: "safe",
     scope: "renderer",
     mcpVisibility: "core",
-    argsSchema: z.object({
-      actionId: z
-        .string()
-        .min(1)
-        .describe("Action id from search or listing, passed as a value; not a tool name."),
-    }),
+    argsSchema: ActionsGetSchemaArgsSchema,
     examples: [
       {
         args: { actionId: "terminal.getStatus" },

@@ -1219,7 +1219,14 @@ export function createRendererBridge(
     if (driver?.remote !== undefined && driver.remote.linkSessionId === relay.linkSessionId) {
       return false;
     }
-    if (driver?.vacant === true && hasViewlessImplementation(actionId)) return true;
+    if (driver?.vacant === true) {
+      if (hasViewlessImplementation(actionId)) return true;
+      // Nobody drives it and no window here shows it: what stops the call is
+      // that the host can't run it alone, which holds for a read the catalog
+      // couldn't describe as much as for a change.
+      const shown = getWebContentsForProject(workspaceId).some((wc) => !wc.isDestroyed());
+      if (!shown) throw new NoFrontendAttachedError(workspaceId, actionId);
+    }
     throw new RelayDrivenElsewhereError(workspaceId, driver?.holderName ?? null);
   }
 

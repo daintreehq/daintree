@@ -271,6 +271,12 @@ function startClient(options: StartRemoteHostsOptions): void {
       observeHosts,
       hasHosts: () => client.registry.list().length > 0,
       listHostProjects: (hostId) => client.client.listHostProjects({ hostId }),
+      // Never one the person disconnected: listing it isn't a call to it.
+      connect: async (hostId, timeoutMs) => {
+        if (client.client.isDisconnectedByPerson(hostId)) return;
+        client.manager.touch(hostId);
+        await client.client.connectAndWait(hostId, timeoutMs);
+      },
       isHostControlEnabled: (hostId) =>
         client.registry.get(hostId)?.assistantControlEnabled === true,
     })

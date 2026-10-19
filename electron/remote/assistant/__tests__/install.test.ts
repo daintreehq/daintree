@@ -135,19 +135,35 @@ afterEach(() => {
 describe("observedRunbooksHostsState (#13411, #13496)", () => {
   const controlled = (hostId: string) => hostId === "studio";
 
-  it("names connected only for a connected host this Shell's assistant controls", () => {
+  it("names connected for a controlled host the assistant reaches now or on its next call", () => {
     expect(observedRunbooksHostsState(false, null, controlled)).toBe("none");
     expect(observedRunbooksHostsState(true, null, controlled)).toBeNull();
     expect(observedRunbooksHostsState(true, [host("studio", "connected")], controlled)).toBe(
       "connected"
     );
+    // No link held, as after the idle release or before the first call: dialled on demand.
+    expect(observedRunbooksHostsState(true, [host("studio", "disconnected")], controlled)).toBe(
+      "connected"
+    );
+    const connecting: ObservedHost = {
+      ...host("studio", "disconnected"),
+      connection: { status: "connecting", attempt: 1 },
+    };
+    expect(observedRunbooksHostsState(true, [connecting], controlled)).toBe("connected");
+    // A host whose switch is off counts for nothing, whatever its link does.
     expect(
-      observedRunbooksHostsState(
-        true,
-        [host("studio", "disconnected"), host("laptop", "connected")],
-        controlled
-      )
+      observedRunbooksHostsState(true, [{ ...connecting, hostId: "laptop" }], controlled)
     ).toBe("configured");
+  });
+
+  it("names configured when every controlled host's link said why it is down", () => {
+    const down: ObservedHost = {
+      ...host("studio", "disconnected"),
+      connection: { status: "unreachable", lastSeenAt: null, detail: "ssh: no route" },
+    };
+    expect(observedRunbooksHostsState(true, [down, host("laptop", "connected")], controlled)).toBe(
+      "configured"
+    );
   });
 });
 

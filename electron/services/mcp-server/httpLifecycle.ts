@@ -2279,9 +2279,13 @@ export class HttpLifecycle {
         // A relayed call names who asked (#13493): anything but a read goes only
         // to that Shell's own driving view. A read is what the tool advertises as
         // one, so a query that writes a file counts as the write it is, and one
-        // the cache can't describe is a write too.
+        // the cache can't describe is a write too. With no view to describe the
+        // project at all, the host's generated catalog does, so a read on a
+        // headless host is still a read.
         const relayEntry = relay
-          ? getCachedManifest()?.find((entry) => entry.id === actionId)
+          ? (getCachedManifest() ?? getViewlessHelpBaseManifest()).find(
+              (entry) => entry.id === actionId
+            )
           : undefined;
         // Its confirmation, with no view here to raise one, is put to the
         // person at that Shell about this very call (#13501).
