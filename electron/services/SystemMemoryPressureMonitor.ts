@@ -261,10 +261,13 @@ export function createSystemMemoryPressureMonitor(
    */
   let seenCauses: OverCauses | null = null;
   /**
-   * The figures the episode's last publish reported, each null when it was
-   * not over its threshold; null while no episode is open.
+   * The worst the episode has published: each threshold's figure from the
+   * publish that first reported it, or a later one, and the highest kernel
+   * level; null while no episode is open. Never lowered within an episode, so
+   * each cause escalates at most once and readings that alternate cannot
+   * republish every sample.
    */
-  let lastPublished: {
+  let published: {
     swapUsedPercent: number | null;
     fseventsdRssMb: number | null;
     kernelPressureLevel: KernelPressureLevel | null;
@@ -362,39 +365,31 @@ export function createSystemMemoryPressureMonitor(
       if (episodeOpening || causeChanged) {
         logWarn("system-health", { state: "over", ...figures, consecutiveSamples: overStreak });
       }
-      // Worse than the last publish said: a threshold it didn't report, or a
-      // higher kernel level. Sampling is at least a minute apart and the
-      // episode is already confirmed, so it publishes at once.
+      // A threshold the episode hasn't published yet, or a higher kernel
+      // level. Sampling is at least a minute apart and the episode is already
+      // confirmed, so it publishes at once.
       const escalating =
-        lastPublished !== null &&
-        ((swapOver && lastPublished.swapUsedPercent === null) ||
-          (fseventsdOver && lastPublished.fseventsdRssMb === null) ||
+        published !== null &&
+        ((swapOver && published.swapUsedPercent === null) ||
+          (fseventsdOver && published.fseventsdRssMb === null) ||
           (kernelPressureLevel !== null &&
-            kernelPressureLevel > (lastPublished.kernelPressureLevel ?? 1)));
+            kernelPressureLevel > (published.kernelPressureLevel ?? 1)));
       if (!episodeOpening && !escalating) return null;
       if (escalating) logWarn("system-health", { state: "escalated", ...figures });
       episodeOpen = true;
-      // A reading that failed keeps what the last publish said, so a probe
-      // that times out can't drop a cause the next good reading couldn't
-      // restore; one that came back under its threshold drops it.
-      const published = {
-        swapUsedPercent: swapOver
-          ? figures.swapUsedPercent
-          : swap === null
-            ? (lastPublished?.swapUsedPercent ?? null)
-            : null,
+      // The worst of the episode so far: a cause stays named once published,
+      // whether its latest reading eased or failed.
+      const publishedLevel = published?.kernelPressureLevel ?? null;
+      published = {
+        swapUsedPercent: swapOver ? figures.swapUsedPercent : (published?.swapUsedPercent ?? null),
         fseventsdRssMb: fseventsdOver
           ? figures.fseventsdRssMb
-          : fseventsdRssMb === null
-            ? (lastPublished?.fseventsdRssMb ?? null)
-            : null,
-        kernelPressureLevel: kernelOver
-          ? kernelPressureLevel
-          : kernelPressureLevel === null
-            ? (lastPublished?.kernelPressureLevel ?? null)
-            : null,
+          : (published?.fseventsdRssMb ?? null),
+        kernelPressureLevel:
+          kernelPressureLevel !== null && kernelPressureLevel > (publishedLevel ?? 1)
+            ? kernelPressureLevel
+            : publishedLevel,
       };
-      lastPublished = published;
       return {
         status: "degraded",
         swapUsedPercent: published.swapUsedPercent,
@@ -427,7 +422,7 @@ export function createSystemMemoryPressureMonitor(
     episodeOpen = false;
     clearStreak = 0;
     seenCauses = null;
-    lastPublished = null;
+    published = null;
     if (!wasOpen) return null;
     return {
       status: "normal",

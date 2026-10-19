@@ -590,7 +590,7 @@ describe("createSystemMemoryPressureMonitor", () => {
       expect(publish).toHaveBeenCalledTimes(2);
     });
 
-    it("publishes a return to critical after a publish that reported a lower level", async () => {
+    it("keeps the episode's worst in every publish, and alternating readings cannot re-arm it", async () => {
       let level: KernelPressureLevel = 4;
       let fseventsd = 100;
       const { tick } = makeMonitor({
@@ -600,15 +600,15 @@ describe("createSystemMemoryPressureMonitor", () => {
       });
 
       await tick(EPISODE_OPEN_SAMPLES);
-      level = 2;
-      fseventsd = FSEVENTSD_RSS_THRESHOLD_MB + 1;
-      await tick(1);
-      level = 4;
-      await tick(1);
+      for (let i = 0; i < 40; i++) {
+        const even = i % 2 === 0;
+        level = even ? 2 : 4;
+        fseventsd = even ? FSEVENTSD_RSS_THRESHOLD_MB + 1 : 100;
+        await tick(1);
+      }
 
       expect(publish.mock.calls.map(([p]) => [p.kernelPressureLevel, p.fseventsdRssMb])).toEqual([
         ["critical", null],
-        ["warn", FSEVENTSD_RSS_THRESHOLD_MB + 1],
         ["critical", FSEVENTSD_RSS_THRESHOLD_MB + 1],
       ]);
     });
