@@ -98,6 +98,7 @@ function makeWorkloads(overrides: Partial<TerminalWorkloadSlice> = {}): Terminal
     ageMs: 2_000,
     sampledAt: Date.now() - 2_000,
     totalMemoryMb: 900,
+    memorySource: "footprint",
     processCount: 6,
     terminalCount: 2,
     byProject: [],
@@ -113,6 +114,7 @@ function makeMemorySnapshot(
     electron: {
       available: true,
       totalWorkingSetMb: 300,
+      memorySource: "footprint",
       processCount: 4,
       sampledAt: Date.now(),
     },

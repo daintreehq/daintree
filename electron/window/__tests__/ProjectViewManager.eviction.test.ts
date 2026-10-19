@@ -246,6 +246,10 @@ import {
 } from "../../utils/webContentsLifecycle.js";
 import { resetAppMetricsSnapshotForTesting } from "../../utils/appMetricsSnapshot.js";
 import {
+  resetPhysFootprintReaderForTesting,
+  setPhysFootprintReaderForTesting,
+} from "../../utils/processMemory.js";
+import {
   MIN_CRITICAL_PRESSURE_EVICTION_AGE_MS,
   MIN_PRESSURE_EVICTION_AGE_MS,
   backgroundRestoreCapacity,
@@ -3586,7 +3590,48 @@ describe("ProjectViewManager — graduated memory reclaim (#11469)", () => {
       expect(mgr.softPressureBackoffLatched).toBe(false);
     });
 
-    it("scales the gain it needs with the footprint it destroyed", async () => {
+    it("logs a view's footprint but expects a gain from its resident memory", async () => {
+      // A cached renderer mostly swapped out: 2000 MB footprint, 800 MB
+      // resident. Freeing the swapped share never shows up as available RAM,
+      // so the verdict must not demand a quarter of the footprint (#13526).
+      setPhysFootprintReaderForTesting({
+        readPhysFootprints: (pids) => pids.map(() => 2_000 * 1024 * 1024),
+        isAvailable: () => true,
+        getLoadError: () => null,
+      });
+      try {
+        setAvailableMb(2500);
+        const mgr = await seedFiveViews();
+        const pidA = mgr
+          .getAllViews()
+          .find((v) => v.projectId === "proj-a")!
+          .view.webContents.getOSProcessId() as number;
+        mockGetAppMetrics.mockReturnValue([
+          { pid: pidA, memory: { workingSetSize: 800 * 1024, privateBytes: 0 } },
+        ] as unknown as Electron.ProcessMetric[]);
+        resetAppMetricsSnapshotForTesting();
+        setAvailableMb(1200);
+        armPressureLadder(mgr);
+        tickPressureCheck(mgr);
+        expect(logged("projectview.eviction")[0]).toMatchObject({
+          projectId: "proj-a",
+          memoryKb: 2_000 * 1024,
+        });
+
+        setAvailableMb(1450);
+        tickPressureCheck(mgr);
+        expect(logged("projectview.pressure-eviction-outcome")[0]).toMatchObject({
+          outcome: "productive",
+          gainMb: 250,
+          requiredGainMb: 200,
+          evictedResidentMb: 800,
+        });
+      } finally {
+        resetPhysFootprintReaderForTesting();
+      }
+    });
+
+    it("scales the gain it needs with the resident memory it destroyed", async () => {
       setAvailableMb(2500);
       const mgr = await seedFiveViews();
       const pidA = mgr
@@ -3609,7 +3654,7 @@ describe("ProjectViewManager — graduated memory reclaim (#11469)", () => {
         outcome: "unproductive",
         gainMb: 100,
         requiredGainMb: 200,
-        evictedFootprintMb: 800,
+        evictedResidentMb: 800,
       });
     });
 

@@ -362,7 +362,7 @@ export class ProjectViewManager {
    * evictions until a reading reaches the warning edge. Per window, and
    * deliberately separate from ProcessMemoryMonitor's global tier backoff.
    */
-  pendingSoftPressureEviction: { availableMbBefore: number; evictedFootprintMb: number } | null =
+  pendingSoftPressureEviction: { availableMbBefore: number; evictedResidentMb: number } | null =
     null;
   softPressureUnproductivePasses = 0;
   softPressureBackoffLatched = false;

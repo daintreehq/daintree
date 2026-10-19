@@ -2,6 +2,7 @@ import {
   getAppMetricsSnapshot,
   getAppMetricsSnapshotTimestamp,
 } from "../utils/appMetricsSnapshot.js";
+import { getMetricsMemorySource, getProcessMemoryKb } from "../utils/processMemory.js";
 import type { PtyClient } from "./PtyClient.js";
 import type { MemoryRollup } from "../../shared/types/pty-host.js";
 import {
@@ -69,17 +70,22 @@ export function composeMemorySnapshot(
 ): CompositeMemorySnapshot {
   let electron: ElectronMemorySlice;
   if (metrics === null) {
-    electron = { available: false, totalWorkingSetMb: 0, processCount: 0, sampledAt: 0 };
+    electron = {
+      available: false,
+      totalWorkingSetMb: 0,
+      memorySource: "resident",
+      processCount: 0,
+      sampledAt: 0,
+    };
   } else {
     let totalKb = 0;
     for (const proc of metrics) {
-      // workingSetSize is the only cross-platform field — privateBytes is
-      // Windows-only and reports 0 (not undefined) on macOS/Linux (lesson #8646).
-      totalKb += proc.memory.workingSetSize;
+      totalKb += getProcessMemoryKb(proc);
     }
     electron = {
       available: true,
       totalWorkingSetMb: Math.round(totalKb / 1024),
+      memorySource: getMetricsMemorySource(metrics),
       processCount: metrics.length,
       sampledAt: metricsSampledAt,
     };
@@ -93,6 +99,7 @@ export function composeMemorySnapshot(
       ageMs: null,
       sampledAt: 0,
       totalMemoryMb: 0,
+      memorySource: "resident",
       processCount: 0,
       terminalCount: 0,
       byProject: [],
@@ -110,6 +117,7 @@ export function composeMemorySnapshot(
       ageMs,
       sampledAt: rollup.sampledAt,
       totalMemoryMb: Math.round(rollup.totalMemoryKb / 1024),
+      memorySource: rollup.memorySource,
       processCount: rollup.totalProcessCount,
       terminalCount: rollup.terminalCount,
       byProject: rollup.byProject.map((p) => ({
@@ -126,7 +134,7 @@ export function composeMemorySnapshot(
 }
 
 /**
- * The unified memory snapshot: Electron working-set + terminal descendant RSS,
+ * The unified memory snapshot: Electron processes + terminal descendants,
  * grouped by project, with per-slice freshness. Both reads go through their
  * TTL caches, so pulling this on a popover/diagnostics cadence costs at most
  * one metrics sweep and one pty-host round-trip per 5s across all consumers.

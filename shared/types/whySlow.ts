@@ -10,6 +10,7 @@
 
 import type { ResourceProfile, ResourceThermalState } from "./resourceProfile.js";
 import type { WhySlowWorkerSummary } from "./workerGovernance.js";
+import type { MemorySource } from "./memoryAccounting.js";
 
 export type { WhySlowWorkerSummary };
 
@@ -133,12 +134,13 @@ export interface WhySlowTerminalWorkloadProject {
 
 /**
  * Memory split for "is Daintree large, or are my terminal workloads large?" —
- * Electron working-set vs terminal descendant RSS, with the freshness metadata
+ * Electron processes vs terminal descendants, with the freshness metadata
  * needed to tell a genuine 0 from an unreadable process table.
  */
 export interface WhySlowMemorySnapshot {
-  /** Summed Electron working-set (MB), or null when the metrics sweep failed. */
+  /** Summed Electron process memory (MB), or null when the metrics sweep failed. */
   appMemoryMb: number | null;
+  appMemorySource: MemorySource;
   terminalWorkloads: {
     /** False when the OS process table couldn't be read. */
     available: boolean;
@@ -147,6 +149,7 @@ export interface WhySlowMemorySnapshot {
     /** Age of the last successful sweep, or null when never sampled. */
     ageMs: number | null;
     totalMemoryMb: number;
+    memorySource: MemorySource;
     processCount: number;
     terminalCount: number;
     /** Highest-memory projects, descending. */

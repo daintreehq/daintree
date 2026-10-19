@@ -872,11 +872,13 @@ async function collectWhySlowMemory(ptyClient?: PtyClient): Promise<WhySlowMemor
       }));
     return {
       appMemoryMb: snapshot.electron.available ? snapshot.electron.totalWorkingSetMb : null,
+      appMemorySource: snapshot.electron.memorySource,
       terminalWorkloads: {
         available: workloads.available,
         stale: workloads.stale,
         ageMs: workloads.ageMs,
         totalMemoryMb: workloads.totalMemoryMb,
+        memorySource: workloads.memorySource,
         processCount: workloads.processCount,
         terminalCount: workloads.terminalCount,
         topProjects,

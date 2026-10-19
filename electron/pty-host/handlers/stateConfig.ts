@@ -99,6 +99,7 @@ export function createStateConfigHandlers(ctx: HostContext): HandlerMap {
         rollup: {
           byProject,
           totalMemoryKb: agg.totalMemoryKb,
+          memorySource: processTreeCache.getMemorySource(),
           totalProcessCount: agg.totalProcessCount,
           terminalCount: roots.length,
           // A ps/PowerShell failure leaves the tree cache stale — signal it so the

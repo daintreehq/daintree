@@ -2777,6 +2777,7 @@ export class PtyClient extends EventEmitter {
       return {
         byProject: [],
         totalMemoryKb: 0,
+        memorySource: "resident",
         totalProcessCount: 0,
         terminalCount: 0,
         available: false,

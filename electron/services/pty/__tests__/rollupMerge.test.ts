@@ -14,6 +14,7 @@ function makeRollup(overrides: Partial<MemoryRollup> = {}): MemoryRollup {
   return {
     byProject: [],
     totalMemoryKb: 0,
+    memorySource: "footprint",
     totalProcessCount: 0,
     terminalCount: 0,
     available: true,
@@ -44,6 +45,13 @@ function makeFlowControlSnapshot(
 }
 
 describe("mergeMemoryRollups", () => {
+  it("reports footprint only when every shard measured it", () => {
+    expect(mergeMemoryRollups([makeRollup(), makeRollup()]).memorySource).toBe("footprint");
+    expect(
+      mergeMemoryRollups([makeRollup(), makeRollup({ memorySource: "resident" })]).memorySource
+    ).toBe("resident");
+  });
+
   it("sums per-project rows that appear on only one shard", () => {
     const merged = mergeMemoryRollups([
       makeRollup({

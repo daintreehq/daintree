@@ -7,6 +7,7 @@
 
 import { getAppMetricsSnapshot } from "../utils/appMetricsSnapshot.js";
 import { logDebug, logInfo } from "../utils/logger.js";
+import { getProcessMemoryKb } from "../utils/processMemory.js";
 import { cleanupEntry, sumGuestMemoryKb } from "./ProjectViewLifecycleController.js";
 import { hasActiveAgent } from "./ProjectViewAgentStateCache.js";
 import { isLocalViewKey } from "./ProjectViewFactory.js";
@@ -69,21 +70,13 @@ export const SOFT_PRESSURE_UNPRODUCTIVE_LIMIT = 2;
 
 /**
  * An eviction counts as productive when the next reading's availability rose
- * by at least this much, or by this fraction of the evicted footprint if that
- * is larger. Readings are noisy, so a token gain is not progress.
+ * by at least this much, or by this fraction of the evicted views' resident
+ * memory if that is larger. Readings are noisy, so a token gain is not
+ * progress. Resident, not footprint: availability is resident memory, and the
+ * swapped share of a footprint never comes back as available RAM (#13526).
  */
 export const MIN_SOFT_PRESSURE_GAIN_MB = 32;
 export const SOFT_PRESSURE_GAIN_FRACTION = 0.25;
-
-/**
- * workingSetSize is the only cross-platform field — privateBytes is
- * Windows-only and reports 0 (not undefined) on macOS/Linux, so a
- * `privateBytes ?? workingSetSize` fallback never fires there and silently
- * logs every view as 0 KB (lesson #8646).
- */
-function readProcessMemoryKb(proc: Electron.ProcessMetric): number {
-  return proc.memory.workingSetSize;
-}
 
 /**
  * Whether destroying `entry` would kill a running Daintree Assistant (#11157).
@@ -342,32 +335,34 @@ export function evictStaleViews(
   // project the user has been working in, so size-first ordering destroys
   // the most valuable view. Eviction is pure LRU (see #8602).
   const memoryByPid = new Map<number, number>();
+  const residentByPid = new Map<number, number>();
   try {
     // Shared TTL snapshot: the eviction log line tolerates a few seconds of
     // staleness, so a pass landing near another sampler's sweep reuses it.
     for (const proc of getAppMetricsSnapshot()) {
-      const kb = readProcessMemoryKb(proc);
+      const kb = getProcessMemoryKb(proc);
       if (kb > 0) {
         memoryByPid.set(proc.pid, kb);
+      }
+      if (proc.memory.workingSetSize > 0) {
+        residentByPid.set(proc.pid, proc.memory.workingSetSize);
       }
     }
   } catch {
     // app.getAppMetrics() throwing is non-fatal — memoryKb is simply omitted
     // from the eviction log line below.
   }
-  const memoryFor = (entry: ViewEntry): number => {
+  const memoryFor = (entry: ViewEntry, byPid: ReadonlyMap<number, number>): number => {
     const wc = entry.view.webContents;
     if (wc.isDestroyed()) return 0;
     const getPid = (wc as { getOSProcessId?: () => number }).getOSProcessId;
     if (typeof getPid !== "function") return 0;
     const pid = getPid.call(wc);
     if (typeof pid !== "number" || pid <= 0) return 0;
-    return memoryByPid.get(pid) ?? 0;
+    return byPid.get(pid) ?? 0;
   };
-  const guestMemoryFor = (entry: ViewEntry): number =>
-    entry.view.webContents.isDestroyed()
-      ? 0
-      : sumGuestMemoryKb(entry.view.webContents, memoryByPid);
+  const guestMemoryFor = (entry: ViewEntry, byPid: ReadonlyMap<number, number>): number =>
+    entry.view.webContents.isDestroyed() ? 0 : sumGuestMemoryKb(entry.view.webContents, byPid);
 
   // Outgoing view of an open paint gate is still on-screen and serving as
   // the anti-flash bridge — treat it as non-evictable, same as the active
@@ -563,7 +558,7 @@ export function evictStaleViews(
       : baseMax;
 
   let evictedCount = 0;
-  let evictedFootprintKb = 0;
+  let evictedResidentKb = 0;
   while (host.views.size > effectiveMax && candidates.length > 0 && evictedCount < evictionBudget) {
     const next = candidates[0];
     const ageMs = Date.now() - next.entry.lastUsed;
@@ -585,8 +580,9 @@ export function evictStaleViews(
     candidates.shift();
     const { projectId, entry, activeAgent, liveAssistantBackend, boundMcpSession, keepResident } =
       next;
-    const memoryKb = memoryFor(entry);
-    const guestMemoryKb = guestMemoryFor(entry);
+    const memoryKb = memoryFor(entry, memoryByPid);
+    const guestMemoryKb = guestMemoryFor(entry, memoryByPid);
+    const residentKb = memoryFor(entry, residentByPid) + guestMemoryFor(entry, residentByPid);
     const ctx: Record<string, unknown> = {
       projectId,
       reason: effectiveReason,
@@ -614,7 +610,7 @@ export function evictStaleViews(
     // A remote project's residency is its host's; only local keys enter this ledger.
     if (isLocalViewKey(projectId)) recordWorkspaceEviction(projectId, effectiveReason);
     evictedCount++;
-    evictedFootprintKb += memoryKb + guestMemoryKb;
+    evictedResidentKb += residentKb;
   }
 
   // A soft-band sampler eviction is judged by the next reading — see
@@ -623,7 +619,7 @@ export function evictStaleViews(
   if (evictedCount > 0) {
     host.pendingSoftPressureEviction =
       gradualPressure && level === "soft" && availableMb != null
-        ? { availableMbBefore: availableMb, evictedFootprintMb: evictedFootprintKb / 1024 }
+        ? { availableMbBefore: availableMb, evictedResidentMb: evictedResidentKb / 1024 }
         : null;
   }
 
@@ -751,7 +747,7 @@ export function sampleCachedViewMemory(host: ProjectViewManager): void {
     // samplers near the 30s aligned sweeps reuse them instead of stacking
     // additional full-process-table scans.
     for (const proc of getAppMetricsSnapshot()) {
-      const kb = readProcessMemoryKb(proc);
+      const kb = getProcessMemoryKb(proc);
       if (kb > 0) {
         memoryByPid.set(proc.pid, kb);
       }
@@ -920,7 +916,7 @@ function settleSoftPressureEviction(
   const gainMb = availableMb - pending.availableMbBefore;
   const requiredGainMb = Math.max(
     MIN_SOFT_PRESSURE_GAIN_MB,
-    pending.evictedFootprintMb * SOFT_PRESSURE_GAIN_FRACTION
+    pending.evictedResidentMb * SOFT_PRESSURE_GAIN_FRACTION
   );
   const productive = gainMb >= requiredGainMb;
   host.softPressureUnproductivePasses = productive ? 0 : host.softPressureUnproductivePasses + 1;
@@ -934,7 +930,7 @@ function settleSoftPressureEviction(
     availableMb,
     gainMb,
     requiredGainMb,
-    evictedFootprintMb: Math.round(pending.evictedFootprintMb),
+    evictedResidentMb: Math.round(pending.evictedResidentMb),
     unproductivePasses: host.softPressureUnproductivePasses,
   });
   if (latch) {
