@@ -7,7 +7,6 @@ import { extractBearerToken } from "../mcp-server/tierAuth.js";
 import { parseWorkspaceSelector } from "../mcp-server/workspaceSelector.js";
 import {
   MCP_HANDSHAKE_REJECTED_CODE,
-  MCP_SSE_IDLE_TIMEOUT_MS,
   MCP_WORKSPACE_ID_HEADER,
   MCP_WORKSPACE_ID_QUERY_PARAM,
 } from "../mcp-server/shared.js";
@@ -26,9 +25,10 @@ const logger = createLogger("main:PluginAgentMcp");
 
 /**
  * Open sessions one credential may hold. An agent needs one; a few more covers
- * reconnects that race the old session's teardown. Beyond that a leaked or
- * misbehaving credential would just be allocating servers until the idle
- * reaper caught up.
+ * reconnects that race the old session's teardown. Sessions live as long as
+ * their credential, so this is also what bounds a client that keeps opening
+ * new ones without closing the old: past it, a new session retires the one the
+ * credential used least recently.
  */
 export const MAX_PLUGIN_MCP_SESSIONS_PER_CREDENTIAL = 8;
 
@@ -80,7 +80,6 @@ export interface PluginMcpRouteDeps {
   isGrantAllowed?: (grant: PluginMcpGrant) => boolean;
   grantRegistry?: PluginMcpGrantRegistry;
   endpointRegistry?: AgentMcpEndpointRegistry;
-  idleTimeoutMs?: number;
   handshakeTimeoutMs?: number;
   reloadWaitMs?: number;
   callTimeoutMs?: number;
@@ -92,7 +91,6 @@ interface PluginMcpSession {
   server: Server;
   credentialId: string;
   pluginInstanceId: string;
-  idleTimer: ReturnType<typeof setTimeout>;
   /** Aborted on teardown; every in-flight call of the session listens to it. */
   lifetime: AbortController;
   /** Follow-up responses handed to the SDK and not yet finished. */
@@ -174,6 +172,10 @@ function writeWorkspaceRejected(res: http.ServerResponse, code: string, message:
  */
 export class PluginMcpRoute implements PluginMcpRouteHandler {
   private readonly sessions = new Map<string, PluginMcpSession>();
+  /**
+   * Session ids by credential, least recently used first: a request on a
+   * session moves it to the end.
+   */
   private readonly sessionsByCredential = new Map<string, Set<string>>();
   /** Admitted handshakes not yet filed as sessions, by credential then reserved session id. */
   private readonly pendingByCredential = new Map<string, Map<string, PendingHandshake>>();
@@ -182,7 +184,6 @@ export class PluginMcpRoute implements PluginMcpRouteHandler {
   private readonly isGrantAllowed: NonNullable<PluginMcpRouteDeps["isGrantAllowed"]>;
   private readonly grants: PluginMcpGrantRegistry;
   private readonly endpoints: AgentMcpEndpointRegistry;
-  private readonly idleTimeoutMs: number;
   private readonly handshakeTimeoutMs: number;
   private readonly reloadWaitMs: number;
   /** Requests parked on a reload, by credential, each with its way out. */
@@ -191,7 +192,7 @@ export class PluginMcpRoute implements PluginMcpRouteHandler {
   private readonly maxResultBytes: number | undefined;
   private readonly offRevoked: () => void;
   private readonly offKept: () => void;
-  /** When each rejection kind was last logged, by kind and credential. */
+  /** When each kind of rejection or eviction was last logged, by kind and credential. */
   private readonly rejectionsLoggedAt = new Map<string, number>();
   /**
    * Bumped by {@link closeAllSessions}, so a handshake still in flight when the
@@ -206,7 +207,6 @@ export class PluginMcpRoute implements PluginMcpRouteHandler {
     this.isGrantAllowed = deps.isGrantAllowed ?? isPluginMcpGrantAllowed;
     this.grants = deps.grantRegistry ?? pluginMcpGrantRegistry;
     this.endpoints = deps.endpointRegistry ?? agentMcpEndpointRegistry;
-    this.idleTimeoutMs = deps.idleTimeoutMs ?? MCP_SSE_IDLE_TIMEOUT_MS;
     this.handshakeTimeoutMs = deps.handshakeTimeoutMs ?? PLUGIN_MCP_HANDSHAKE_TIMEOUT_MS;
     this.reloadWaitMs = deps.reloadWaitMs ?? PLUGIN_MCP_RELOAD_WAIT_MS;
     this.callTimeoutMs = deps.callTimeoutMs;
@@ -397,7 +397,7 @@ export class PluginMcpRoute implements PluginMcpRouteHandler {
         writeSessionNotFound(res);
         return;
       }
-      this.resetIdleTimer(sessionId, session);
+      this.markUsed(sessionId, session);
       // The SDK reads the body before it opens this request's stream, and its
       // `close()` only ends the streams that exist. A session torn down during
       // that read would leave this response open with nothing left to answer
@@ -417,17 +417,31 @@ export class PluginMcpRoute implements PluginMcpRouteHandler {
       writeText(res, 503, "Service unavailable");
       return;
     }
+    const established = this.sessionsByCredential.get(grant.credentialId);
     if (
-      (this.sessionsByCredential.get(grant.credentialId)?.size ?? 0) +
-        (this.pendingByCredential.get(grant.credentialId)?.size ?? 0) >=
+      (established?.size ?? 0) + (this.pendingByCredential.get(grant.credentialId)?.size ?? 0) >=
       MAX_PLUGIN_MCP_SESSIONS_PER_CREDENTIAL
     ) {
-      this.logRejection(429, "session-cap", grant.credentialId, {
-        credentialId: grant.credentialId,
-        pluginInstanceId: grant.pluginInstanceId,
-      });
-      writeText(res, 429, "Too many sessions for this credential");
-      return;
+      // Sessions never expire while their credential is live, so a client
+      // that reconnects without a DELETE would otherwise lock itself out. Only
+      // a POST can open a session, and a handshake still arriving is never
+      // displaced: with nothing established to retire, the cap holds.
+      const leastRecent = req.method === "POST" ? established?.values().next().value : undefined;
+      if (leastRecent === undefined) {
+        this.logRejection(429, "session-cap", grant.credentialId, {
+          credentialId: grant.credentialId,
+          pluginInstanceId: grant.pluginInstanceId,
+        });
+        writeText(res, 429, "Too many sessions for this credential");
+        return;
+      }
+      this.closeSession(leastRecent);
+      if (this.shouldLog(`session-evicted:${grant.credentialId}`)) {
+        logger.info("Closed the least recently used plugin MCP session to open a new one", {
+          credentialId: grant.credentialId,
+          pluginInstanceId: grant.pluginInstanceId,
+        });
+      }
     }
     // Reserved in the same turn as the cap check: a session is only filed once
     // the SDK has read its body and initialised it, and every handshake
@@ -511,10 +525,15 @@ export class PluginMcpRoute implements PluginMcpRouteHandler {
     credentialId: string | null,
     context: Record<string, unknown>
   ): void {
-    const key = `${rejection}:${credentialId ?? ""}`;
+    if (!this.shouldLog(`${rejection}:${credentialId ?? ""}`)) return;
+    logger.warn(`Rejected plugin MCP request: ${status} ${rejection}`, context);
+  }
+
+  /** Whether a line under this key is due, recording it as logged when it is. */
+  private shouldLog(key: string): boolean {
     const now = Date.now();
     const last = this.rejectionsLoggedAt.get(key);
-    if (last !== undefined && now - last < PLUGIN_MCP_REJECTION_LOG_INTERVAL_MS) return;
+    if (last !== undefined && now - last < PLUGIN_MCP_REJECTION_LOG_INTERVAL_MS) return false;
     if (last === undefined && this.rejectionsLoggedAt.size >= MAX_TRACKED_PLUGIN_MCP_REJECTIONS) {
       for (const [tracked, at] of this.rejectionsLoggedAt) {
         if (now - at >= PLUGIN_MCP_REJECTION_LOG_INTERVAL_MS)
@@ -522,10 +541,10 @@ export class PluginMcpRoute implements PluginMcpRouteHandler {
       }
       // Still full of live suppressions: dropping this line keeps the log
       // bounded, where clearing would let a cycle of keys log every request.
-      if (this.rejectionsLoggedAt.size >= MAX_TRACKED_PLUGIN_MCP_REJECTIONS) return;
+      if (this.rejectionsLoggedAt.size >= MAX_TRACKED_PLUGIN_MCP_REJECTIONS) return false;
     }
     this.rejectionsLoggedAt.set(key, now);
-    logger.warn(`Rejected plugin MCP request: ${status} ${rejection}`, context);
+    return true;
   }
 
   private async handleNewSession(
@@ -571,13 +590,11 @@ export class PluginMcpRoute implements PluginMcpRouteHandler {
         // The reservation becomes the session in one step, so the cap never
         // counts it twice or not at all. One already abandoned stays that way.
         if (!this.releaseHandshake(grant.credentialId, initializedSessionId)) return;
-        const idleTimer = this.createIdleTimer(initializedSessionId);
         this.sessions.set(initializedSessionId, {
           transport,
           server,
           credentialId: grant.credentialId,
           pluginInstanceId: grant.pluginInstanceId,
-          idleTimer,
           lifetime,
           openResponses: new Set(),
         });
@@ -663,15 +680,16 @@ export class PluginMcpRoute implements PluginMcpRouteHandler {
     }
   }
 
-  private createIdleTimer(sessionId: string): ReturnType<typeof setTimeout> {
-    const timer = setTimeout(() => this.closeSession(sessionId), this.idleTimeoutMs);
-    timer.unref?.();
-    return timer;
-  }
-
-  private resetIdleTimer(sessionId: string, session: PluginMcpSession): void {
-    clearTimeout(session.idleTimer);
-    session.idleTimer = this.createIdleTimer(sessionId);
+  /**
+   * There is no idle expiry: agent CLIs keep sending a session id the server
+   * dropped rather than initialising again (#13531), so a session lasts as
+   * long as its credential. A request only moves its session to the back of
+   * the line the cap retires from.
+   */
+  private markUsed(sessionId: string, session: PluginMcpSession): void {
+    const ids = this.sessionsByCredential.get(session.credentialId);
+    if (!ids?.delete(sessionId)) return;
+    ids.add(sessionId);
   }
 
   private closeCredentialSessions(credentialId: string): void {
@@ -701,7 +719,6 @@ export class PluginMcpRoute implements PluginMcpRouteHandler {
   private forgetSession(sessionId: string): PluginMcpSession | undefined {
     const session = this.sessions.get(sessionId);
     if (!session) return undefined;
-    clearTimeout(session.idleTimer);
     this.sessions.delete(sessionId);
     const ids = this.sessionsByCredential.get(session.credentialId);
     if (ids) {
