@@ -869,8 +869,13 @@ describe("PluginMcpRoute", () => {
     expect(touched.status).toBe(200);
     await touched.text();
 
+    logMock.info.mockClear();
     const replacement = await openSession(token);
     expect(route.sessionCount).toBe(MAX_PLUGIN_MCP_SESSIONS_PER_CREDENTIAL + 1);
+    // The retirement is logged by credential, never by bearer or session id.
+    expect(logMock.info).toHaveBeenCalledTimes(1);
+    const logged = JSON.stringify(logMock.info.mock.calls);
+    for (const secret of [token, replacement, ...opened]) expect(logged).not.toContain(secret);
 
     const retired = await listTools(token, opened[1]);
     const unknown = await listTools(token, "00000000-0000-4000-8000-000000000000");
@@ -887,11 +892,16 @@ describe("PluginMcpRoute", () => {
       expect(await response.text()).toContain("lookup");
     }
 
-    // Only an initialize opens a session, so nothing else displaces one.
-    const get = await rawRequest({ token, method: "GET" });
-    expect(get.status).toBe(429);
-    await get.body?.cancel();
+    // Only a POST opens a session, so nothing else displaces one.
+    for (const method of ["GET", "DELETE"]) {
+      const refused = await rawRequest({ token, method });
+      expect(refused.status).toBe(429);
+      await refused.body?.cancel();
+    }
     expect(route.sessionCount).toBe(MAX_PLUGIN_MCP_SESSIONS_PER_CREDENTIAL + 1);
+    const stillOpen = await listTools(token, opened[2]);
+    expect(stillOpen.status).toBe(200);
+    await stillOpen.text();
   });
 
   it("counts handshakes admitted concurrently against the cap", async () => {

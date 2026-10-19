@@ -398,7 +398,7 @@ The same listener also serves the tools plugins contribute through `contributes.
 | The plugin instance is loaded, the grant is still live after that check, and the project's access still covers everything the grant reaches | `403` (`401` if revoked meanwhile) |
 | A workspace selector (`Daintree-Workspace-Id` header or `workspaceId` query parameter), if sent, is well-formed, unambiguous and equals the grant's project | `400` |
 | An `mcp-session-id`, if sent, names a session opened by this credential on this route | `404 Session not found`, identical to an unknown id |
-| A new session: the listener has not stopped since the request arrived, and the credential holds fewer than 8 sessions and handshakes in progress. At the cap, an `initialize` POST closes the credential's least recently used session to make room; it is refused only when every slot is a handshake still in progress | `503`, then `429` |
+| A new session: the listener has not stopped since the request arrived, and the credential holds fewer than 8 sessions and handshakes in progress. At the cap, a POST without a session id closes the credential's least recently used session to make room; it is refused only when every slot is a handshake still in progress | `503`, then `429` |
 
 **Session↔credential binding.** A plugin session answers only to the credential and route that opened it — the same rule as orchestration sessions (see **Session binding** under [Auth ladder](#auth-ladder-tierauthts--httplifecyclehandlerequest)), enforced by the route's own session table rather than `SessionStore`, so a guessed or stolen session id reveals nothing and borrows nothing.
 
