@@ -1132,12 +1132,18 @@ export async function handleDirectoryOpen(
     // it with an "Open anyway" rather than a renderer starting from here.
     if (pvm && !hasReusableProjectView(pvm, project.id) && (await checkKernelPressureCritical())) {
       const wc = getAppWebContents(targetWindow);
-      if (!wc.isDestroyed()) {
+      const sendSwitch = (): void => {
+        if (wc.isDestroyed()) return;
         wc.send(CHANNELS.MENU_ACTION, {
           actionId: "project.switch",
           args: { projectId: project.id },
         });
-      }
+      };
+      // A send before did-finish-load is dropped, as for the git-init dialog below.
+      if (wc.isLoadingMainFrame()) wc.once("did-finish-load", sendSwitch);
+      else sendSwitch();
+      // The project is in Recent Projects now, whenever it opens.
+      createApplicationMenu(targetWindow, cliAvailabilityService);
       return;
     }
 

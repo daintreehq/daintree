@@ -9,6 +9,7 @@ vi.mock("@/utils/logger", () => ({ logInfo: vi.fn() }));
 
 import {
   cancelMemoryPressureHold,
+  clearPanelMemoryPressureMark,
   holdForMemoryPressure,
   isMemoryPressureCritical,
   launchDespiteMemoryPressure,
@@ -72,7 +73,8 @@ describe("memory pressure holds (#13530)", () => {
     await vi.advanceTimersByTimeAsync(MEMORY_PRESSURE_POLL_MS);
 
     expect(order).toEqual(["a:false", "b:false"]);
-    expect(heldPanels()).toEqual([]);
+    // Still marked: each launch clears its own mark as it starts.
+    expect(heldPanels()).toEqual(["a", "b"]);
   });
 
   it("stops polling once nothing is held", async () => {
@@ -84,6 +86,17 @@ describe("memory pressure holds (#13530)", () => {
     await vi.advanceTimersByTimeAsync(MEMORY_PRESSURE_POLL_MS * 4);
 
     expect(isMemoryPressureCriticalMock).not.toHaveBeenCalled();
+  });
+
+  it("keeps a released pane marked until its launch clears the mark itself", () => {
+    // The launch is queued, not started: the mark is what keeps a restart off it.
+    holdForMemoryPressure(panelHoldKey("p1"), { panelId: "p1", resume: vi.fn() });
+
+    launchDespiteMemoryPressure(panelHoldKey("p1"));
+    expect(heldPanels()).toEqual(["p1"]);
+
+    clearPanelMemoryPressureMark("p1");
+    expect(heldPanels()).toEqual([]);
   });
 
   it("launches one hold anyway without touching the others", () => {

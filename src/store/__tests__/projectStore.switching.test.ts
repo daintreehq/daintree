@@ -1025,6 +1025,60 @@ describe("an open main holds for critical memory pressure (#13530)", () => {
     });
   });
 
+  it("drops the held open when this view is shown again after the window went elsewhere", async () => {
+    let revealed: () => void = () => {};
+    (window as unknown as { electron?: unknown }).electron = {
+      app: {
+        onViewRevealed: (callback: () => void) => {
+          revealed = callback;
+          return () => {};
+        },
+      },
+    };
+    try {
+      projectClientMock.switch.mockRejectedValueOnce(memoryPressureRejection());
+      const { useProjectStore } = await import("../projectStore");
+      useProjectStore.setState({ projects: [projectA, projectB], currentProject: projectA });
+      await useProjectStore.getState().switchProject(projectB.id);
+      await flushCatch();
+      const { launchDespiteMemoryPressure, PROJECT_OPEN_HOLD_KEY } =
+        await import("../memoryPressureWaitStore");
+
+      revealed();
+      launchDespiteMemoryPressure(PROJECT_OPEN_HOLD_KEY);
+      await flushCatch();
+
+      expect(projectClientMock.switch).toHaveBeenCalledTimes(1);
+    } finally {
+      delete (window as unknown as { electron?: unknown }).electron;
+    }
+  });
+
+  it("waits while this view is off screen, however far pressure has eased", async () => {
+    vi.useFakeTimers();
+    const visibility = vi.spyOn(document, "visibilityState", "get").mockReturnValue("hidden");
+    try {
+      const { MEMORY_PRESSURE_POLL_MS } = await import("../memoryPressureWaitStore");
+      projectClientMock.switch.mockRejectedValueOnce(memoryPressureRejection());
+      const { useProjectStore } = await import("../projectStore");
+      useProjectStore.setState({ projects: [projectA, projectB], currentProject: projectA });
+      const pending = useProjectStore.getState().switchProject(projectB.id);
+      await vi.advanceTimersByTimeAsync(0);
+      await pending;
+      await flushCatch();
+
+      await vi.advanceTimersByTimeAsync(MEMORY_PRESSURE_POLL_MS * 2);
+      expect(projectClientMock.switch).toHaveBeenCalledTimes(1);
+
+      visibility.mockReturnValue("visible");
+      await vi.advanceTimersByTimeAsync(MEMORY_PRESSURE_POLL_MS + 10);
+      expect(projectClientMock.switch).toHaveBeenCalledTimes(2);
+    } finally {
+      visibility.mockRestore();
+      vi.useRealTimers();
+    }
+  });
+
   it("opens on its own once a poll reads pressure below critical", async () => {
     vi.useFakeTimers();
     try {

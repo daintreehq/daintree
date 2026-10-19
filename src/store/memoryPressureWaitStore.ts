@@ -60,11 +60,15 @@ function setPanelHeld(panelId: string, held: boolean): void {
   });
 }
 
-function take(key: string): MemoryPressureHold | undefined {
+/**
+ * `resuming` leaves a pane marked held: its launch is queued, not started, and
+ * the mark is what keeps a restart off it until the launch clears it itself.
+ */
+function take(key: string, resuming = false): MemoryPressureHold | undefined {
   const hold = holds.get(key);
   if (!hold) return undefined;
   holds.delete(key);
-  if (hold.panelId !== undefined) setPanelHeld(hold.panelId, false);
+  if (hold.panelId !== undefined && !resuming) setPanelHeld(hold.panelId, false);
   if (holds.size === 0 && pollTimer !== null) {
     clearTimeout(pollTimer);
     pollTimer = null;
@@ -91,7 +95,7 @@ async function poll(): Promise<void> {
     // Insertion order, so a restore resumes in the order it was laid out; the
     // startup queue then starts them one at a time as it always does.
     for (const [key, hold] of [...holds]) {
-      if (holds.get(key) === hold && !hold.isDeferred?.()) take(key)?.resume(false);
+      if (holds.get(key) === hold && !hold.isDeferred?.()) take(key, true)?.resume(false);
     }
   }
   schedulePoll();
@@ -109,7 +113,12 @@ export function holdForMemoryPressure(key: string, hold: MemoryPressureHold): vo
 
 /** The user's "anyway": continue this one launch now, whatever the pressure. */
 export function launchDespiteMemoryPressure(key: string): void {
-  take(key)?.resume(true);
+  take(key, true)?.resume(true);
+}
+
+/** Called by a resumed launch as it starts, whatever it then does. */
+export function clearPanelMemoryPressureMark(panelId: string): void {
+  setPanelHeld(panelId, false);
 }
 
 export function cancelMemoryPressureHold(key: string): void {

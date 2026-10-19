@@ -160,6 +160,11 @@ async function drain(): Promise<void> {
 }
 
 async function runOne(job: QueuedJob, projectId: string): Promise<void> {
+  // First, so everything below is read after it: a quit or a closed window
+  // landing during the reading is seen, not raced.
+  await job.refreshAdmission?.().catch(() => undefined);
+  if (stopped) return;
+
   let manager: ProjectViewManager | undefined;
   let projectPath: string | null;
   try {
@@ -199,7 +204,6 @@ async function runOne(job: QueuedJob, projectId: string): Promise<void> {
 
   running = manager;
   try {
-    await job.refreshAdmission?.();
     const result = await manager.restoreInBackground(projectId, projectPath, {
       // Below every live view, and stepping further back with each project
       // taken, so the recency order this queue was given survives into the LRU

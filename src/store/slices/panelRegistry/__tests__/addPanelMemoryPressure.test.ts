@@ -302,6 +302,38 @@ describe("agent launches at critical memory pressure (#13530)", () => {
     expect(isHeld("dup")).toBe(true);
   });
 
+  it("keeps a released launch held against a restart, and in the trash, until it runs", async () => {
+    await launchAgent("queued-1");
+    await drainMicrotasks();
+
+    let releaseBlocker: () => void = () => {};
+    terminalClient.spawn.mockImplementationOnce(async ({ id }: { id: string }) => {
+      await new Promise<void>((resolve) => {
+        releaseBlocker = resolve;
+      });
+      return id;
+    });
+    await usePanelStore.getState().addPanel({
+      kind: "terminal",
+      requestedId: "blocker",
+      cwd: "/",
+      bypassLimits: true,
+    });
+    await drainMicrotasks();
+    launchDespiteMemoryPressure(panelHoldKey("queued-1"));
+
+    // Still queued: a restart is refused, and closing it puts it back to waiting.
+    await usePanelStore.getState().restartTerminal("queued-1");
+    expect(isHeld("queued-1")).toBe(true);
+    usePanelStore.getState().trashPanel("queued-1");
+    releaseBlocker();
+    await drainMicrotasks();
+
+    expect(spawnedIds()).toEqual(["blocker"]);
+    expect(isHeld("queued-1")).toBe(true);
+    expect(terminalClient.kill).not.toHaveBeenCalled();
+  });
+
   it("launches straight away when pressure is below critical", async () => {
     isMemoryPressureCriticalMock.mockResolvedValue(false);
     await launchAgent("free-1");

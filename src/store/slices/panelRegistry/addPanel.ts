@@ -51,6 +51,7 @@ import {
 } from "./worktreeIndex";
 import { agentLifecycleLedger } from "@/services/terminal/lifecycleLedger";
 import {
+  clearPanelMemoryPressureMark,
   holdForMemoryPressure,
   isMemoryPressureCritical,
   panelHoldKey,
@@ -1240,7 +1241,8 @@ export const createAddPanelActions = (
     // lightweight chrome instead of mounting XtermAdapter. Named so a launch
     // held for memory pressure can queue itself again when it continues.
     terminalStartupQueue.enqueue(
-      async function startPty(launchAnyway = false): Promise<void> {
+      async function startPty(launchAnyway = false, resumed = false): Promise<void> {
+        if (resumed) clearPanelMemoryPressureMark(id);
         const _p0 = get().panelsById[id];
         if (!_p0 || !isPtyPanel(_p0) || _p0.spawnStatus !== "spawning") return;
         markRendererPerformance("agentlaunch.task-start", { id });
@@ -1265,11 +1267,12 @@ export const createAddPanelActions = (
             if (!isStillStarting()) return;
             // Held outside the queue, so a waiting agent never stops the panes
             // queued behind it from starting. A released hold queues one at a
-            // time, whatever its batch: pressure has only just eased.
-            if (pressureCritical) {
+            // time, whatever its batch: pressure has only just eased. One that
+            // was closed while its release queued goes back to waiting.
+            if (pressureCritical || (resumed && _p1.location === "trash")) {
               holdForMemoryPressure(panelHoldKey(id), {
                 panelId: id,
-                resume: (anyway) => terminalStartupQueue.enqueue(() => startPty(anyway)),
+                resume: (anyway) => terminalStartupQueue.enqueue(() => startPty(anyway, true)),
                 isStale: () => !isStillStarting(),
                 // A pane closed while it waited stays held in the trash, so an
                 // undo brings back the same waiting launch rather than one that

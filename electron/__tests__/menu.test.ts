@@ -1496,7 +1496,11 @@ describe("handleDirectoryOpen at critical memory pressure (#13530)", () => {
 
   it("hands a cold open to the view's own switch, which holds it", async () => {
     const send = vi.fn();
-    getAppWebContentsMock.mockImplementation(() => ({ isDestroyed: () => false, send }));
+    getAppWebContentsMock.mockImplementation(() => ({
+      isDestroyed: () => false,
+      isLoadingMainFrame: () => false,
+      send,
+    }));
     const manager = createManager();
     useManager(manager);
 
@@ -1507,6 +1511,32 @@ describe("handleDirectoryOpen at critical memory pressure (#13530)", () => {
       actionId: "project.switch",
       args: { projectId: PROJECT.id },
     });
+  });
+
+  it("waits for a view still loading before handing it the open", async () => {
+    // A send before did-finish-load is dropped, which would lose the open.
+    const send = vi.fn();
+    let finishLoad: () => void = () => {};
+    getAppWebContentsMock.mockImplementation(() => ({
+      isDestroyed: () => false,
+      isLoadingMainFrame: () => true,
+      once: (event: string, listener: () => void) => {
+        if (event === "did-finish-load") finishLoad = listener;
+      },
+      send,
+    }));
+    const manager = createManager();
+    useManager(manager);
+
+    await handleDirectoryOpen(PROJECT.path, targetWindow);
+    expect(send).not.toHaveBeenCalled();
+
+    finishLoad();
+    expect(send).toHaveBeenCalledWith(CHANNELS.MENU_ACTION, {
+      actionId: "project.switch",
+      args: { projectId: PROJECT.id },
+    });
+    expect(manager.switchTo).not.toHaveBeenCalled();
   });
 
   it("opens a project this window already has a view of without asking", async () => {
