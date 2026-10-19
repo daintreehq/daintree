@@ -889,8 +889,16 @@ function ProjectListItem({
       )}
       // The current project is selectable too: picking where you already are is
       // a "never mind", and the handler closes the palette rather than sitting
-      // there doing nothing.
-      onClick={() => onSelect(project, "pointer")}
+      // there doing nothing. Cmd-click (Ctrl-click off macOS) is ⌘↵ by pointer,
+      // through the same gate, so the rows ⌘↵ won't open elsewhere stay a plain
+      // pick. Ctrl-click on macOS is the context menu and never arrives here.
+      onClick={(e) => {
+        if (onSelectNewWindow && isNewWindowClick(e) && modEnterOpensWindow(project, true)) {
+          onSelectNewWindow(project);
+          return;
+        }
+        onSelect(project, "pointer");
+      }}
       // The pointer moves the palette's one cursor, so the lit row is always the
       // one Enter switches to; the prefetch below is a separate concern.
       onPointerMove={onHoverRow && !isSelected ? () => onHoverRow(project.id) : undefined}
