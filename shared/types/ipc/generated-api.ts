@@ -1340,6 +1340,9 @@ export interface GeneratedElectronAPI {
     getWhySlowSnapshot(
       ...args: IpcInvokeMap["system:get-why-slow-snapshot"]["args"]
     ): Promise<IpcInvokeMap["system:get-why-slow-snapshot"]["result"]>;
+    isMemoryPressureCritical(
+      ...args: IpcInvokeMap["system:is-memory-pressure-critical"]["args"]
+    ): Promise<IpcInvokeMap["system:is-memory-pressure-critical"]["result"]>;
     reportTerminalRendererDiagnostics(
       ...args: IpcInvokeMap["system:report-terminal-renderer-diagnostics"]["args"]
     ): Promise<IpcInvokeMap["system:report-terminal-renderer-diagnostics"]["result"]>;

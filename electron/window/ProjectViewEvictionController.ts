@@ -16,6 +16,7 @@ import type { EvictionReason, ViewEntry } from "./ProjectViewManagerTypes.js";
 import { readAvailableSystemMemoryMb } from "../utils/systemMemory.js";
 import { memoryPressureTarget } from "../utils/cachedProjectViews.js";
 import { isSwapPressureConfirmed } from "../services/systemSwapPressure.js";
+import { isKernelPressureCritical } from "../services/systemKernelPressure.js";
 import {
   isWorkspaceKeepResident,
   recordWorkspaceEviction,
@@ -224,6 +225,10 @@ export function backgroundRestoreCapacity(
 
   if (host.views.size >= host.maxCachedViews) return "capacity";
   if (host.views.size >= targetMax) return level === "none" ? "capacity" : "pressure";
+  // A restore nobody asked for never adds a renderer at critical kernel
+  // pressure (#13530); the project still opens cold, through its own gate,
+  // when the user goes to it.
+  if (isKernelPressureCritical()) return "pressure";
   return "available";
 }
 

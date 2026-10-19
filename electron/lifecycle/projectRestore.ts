@@ -38,6 +38,12 @@ export interface BackgroundRestoreJob {
    * elsewhere while this job waited in the queue belongs to that window now.
    */
   isOwnedElsewhere?: (projectId: string) => boolean;
+  /**
+   * Refresh the readings restore admission works from, before each project.
+   * The kernel pressure latch it consults may hold nothing yet at startup, and
+   * each project is a renderer added (#13530). Never rejects.
+   */
+  refreshAdmission?: () => Promise<unknown>;
 }
 
 interface QueuedJob extends BackgroundRestoreJob {
@@ -154,6 +160,11 @@ async function drain(): Promise<void> {
 }
 
 async function runOne(job: QueuedJob, projectId: string): Promise<void> {
+  // First, so everything below is read after it: a quit or a closed window
+  // landing during the reading is seen, not raced.
+  await job.refreshAdmission?.().catch(() => undefined);
+  if (stopped) return;
+
   let manager: ProjectViewManager | undefined;
   let projectPath: string | null;
   try {

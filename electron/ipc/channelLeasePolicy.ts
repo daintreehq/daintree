@@ -592,6 +592,7 @@ export const CHANNEL_LEASE_POLICY = {
   "system:get-tmp-dir": "free",
   "system:health-check": "free",
   "system:health-check-specs": "free",
+  "system:is-memory-pressure-critical": "free",
   "system:open-in-editor": "free",
   "system:open-path": "free",
   "system:refresh-agent-versions": "free",

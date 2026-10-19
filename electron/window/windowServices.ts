@@ -32,6 +32,7 @@ import { logError, logInfo, logWarn } from "../utils/logger.js";
 import { formatErrorMessage } from "../../shared/utils/errorMessage.js";
 import { resolveRestoreWorkspace, resolveWorktreeLoadPath } from "./restoreWorkspaceBinding.js";
 import { enqueueBackgroundRestores } from "../lifecycle/projectRestore.js";
+import { checkKernelPressureCritical } from "../services/SystemMemoryPressureMonitor.js";
 import { extractRestorePanelCwds } from "./restorePanelCwds.js";
 import { mergeProjectEnv } from "./restoreProjectEnv.js";
 import { store } from "../store.js";
@@ -974,5 +975,6 @@ export function queueWindowBackgroundProjects(opts: {
         windowId: opts.windowId,
         projectViewManager: opts.projectViewManager,
       }) !== null,
+    refreshAdmission: () => checkKernelPressureCritical(),
   });
 }

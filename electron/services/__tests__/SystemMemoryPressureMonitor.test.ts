@@ -19,11 +19,13 @@ import { logInfo, logWarn } from "../../utils/logger.js";
 import { readElectronSwapUsage, type SwapUsage } from "../../utils/systemMemory.js";
 import type { SystemMemoryPressurePayload } from "../../../shared/types/ipc/system.js";
 import {
+  checkKernelPressureCritical,
   createDefaultSystemMemoryPressureMonitor,
   createSystemMemoryPressureMonitor,
   EPISODE_CLEAR_SAMPLES,
   EPISODE_OPEN_SAMPLES,
   FSEVENTSD_RSS_THRESHOLD_MB,
+  KERNEL_PRESSURE_PROBE_CACHE_MS,
   parseDarwinSwapUsage,
   parseFseventsdRssMb,
   parseKernelPressureLevel,
@@ -38,6 +40,11 @@ import {
   recordSwapPressure,
   SWAP_PRESSURE_STALE_MS,
 } from "../systemSwapPressure.js";
+import {
+  isKernelPressureCritical,
+  recordKernelPressureLevel,
+  resetKernelPressureForTesting,
+} from "../systemKernelPressure.js";
 
 const SWAP_TOTAL_MB = 4096;
 const swapAt = (percent: number): SwapUsage => ({
@@ -866,5 +873,122 @@ describe("systemSwapPressure", () => {
     expect(isSwapPressureConfirmed(1_000 + SWAP_PRESSURE_STALE_MS + 1)).toBe(false);
     recordSwapPressure(false, 2_000);
     expect(isSwapPressureConfirmed(2_000)).toBe(false);
+  });
+});
+
+describe("kernel critical pressure for launch admission (#13530)", () => {
+  const originalPlatform = process.platform;
+  let clock: number;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    resetKernelPressureForTesting();
+    clock = 1_000_000;
+  });
+
+  afterEach(() => {
+    Object.defineProperty(process, "platform", { configurable: true, value: originalPlatform });
+    vi.restoreAllMocks();
+    resetKernelPressureForTesting();
+  });
+
+  it("hands every sample's kernel level to the monitor's caller, failed readings included", async () => {
+    const levels: Array<KernelPressureLevel | null> = [];
+    const readings: Array<KernelPressureLevel | null> = [4, null, 2];
+    let sampleIndex = 0;
+    let now = 0;
+    const monitor = createSystemMemoryPressureMonitor({
+      isDarwin: true,
+      swapKind: "swap",
+      readSwap: async () => HEALTHY_SWAP,
+      readFseventsdRssMb: async () => 100,
+      readKernelPressureLevel: async () => {
+        const level = readings[sampleIndex++];
+        return level === undefined ? 1 : level;
+      },
+      publish: vi.fn(),
+      onKernelPressureLevel: (level) => levels.push(level),
+      now: () => now,
+      wallNow: () => now,
+    });
+    for (let i = 0; i < 3; i++) {
+      await monitor.sample();
+      now += SAMPLE_INTERVAL_MS;
+    }
+    expect(levels).toEqual([4, null, 2]);
+  });
+
+  it("feeds the default monitor's sysctl reading into the latch", async () => {
+    Object.defineProperty(process, "platform", { configurable: true, value: "darwin" });
+    vi.spyOn(performance, "now").mockImplementation(() => clock);
+    vi.mocked(execFile).mockImplementation(((
+      file: string,
+      args: string[],
+      _opts: unknown,
+      cb: (err: Error | null, stdout: string) => void
+    ) => {
+      cb(
+        null,
+        file !== "/usr/sbin/sysctl"
+          ? "  1024 launchd\n"
+          : args.includes("vm.swapusage")
+            ? "total = 2048.00M  used = 64.00M  free = 1984.00M  (encrypted)"
+            : "4\n"
+      );
+    }) as unknown as typeof execFile);
+
+    await createDefaultSystemMemoryPressureMonitor(vi.fn()).sample();
+
+    expect(isKernelPressureCritical()).toBe(true);
+  });
+
+  it("is false off Darwin without probing", async () => {
+    const readLevel = vi.fn(async (): Promise<KernelPressureLevel | null> => 4);
+    await expect(
+      checkKernelPressureCritical({ readLevel, isDarwin: false, now: () => clock })
+    ).resolves.toBe(false);
+    expect(readLevel).not.toHaveBeenCalled();
+  });
+
+  it("probes live and answers a burst from one reading", async () => {
+    const readLevel = vi.fn(async (): Promise<KernelPressureLevel | null> => 4);
+    const probe = { readLevel, isDarwin: true, now: () => clock };
+
+    const burst = await Promise.all([
+      checkKernelPressureCritical(probe),
+      checkKernelPressureCritical(probe),
+    ]);
+    clock += KERNEL_PRESSURE_PROBE_CACHE_MS - 1;
+    const cached = await checkKernelPressureCritical(probe);
+
+    expect([...burst, cached]).toEqual([true, true, true]);
+    expect(readLevel).toHaveBeenCalledTimes(1);
+  });
+
+  it("reads again once the last reading is older than the cache, and clears with the latch", async () => {
+    const levels: KernelPressureLevel[] = [4, 1, 1];
+    const readLevel = vi.fn(async (): Promise<KernelPressureLevel | null> => levels.shift() ?? 1);
+    const probe = { readLevel, isDarwin: true, now: () => clock };
+
+    const verdicts: boolean[] = [];
+    for (let i = 0; i < 3; i++) {
+      verdicts.push(await checkKernelPressureCritical(probe));
+      clock += KERNEL_PRESSURE_PROBE_CACHE_MS;
+    }
+
+    expect(verdicts).toEqual([true, true, false]);
+    expect(readLevel).toHaveBeenCalledTimes(3);
+  });
+
+  it("keeps the verdict it had when a probe fails, and never rejects", async () => {
+    recordKernelPressureLevel(4, clock);
+    clock += KERNEL_PRESSURE_PROBE_CACHE_MS;
+    const readLevel = vi.fn(async (): Promise<KernelPressureLevel | null> => {
+      throw new Error("spawn failed");
+    });
+
+    await expect(
+      checkKernelPressureCritical({ readLevel, isDarwin: true, now: () => clock })
+    ).resolves.toBe(true);
   });
 });

@@ -36,9 +36,11 @@ import {
   claimProjectActivation,
   findOtherProjectOwner,
   hasLiveProjectView,
+  hasReusableProjectView,
   redirectToProjectOwner,
   releaseCachedOwner,
 } from "./window/projectOwnership.js";
+import { checkKernelPressureCritical } from "./services/SystemMemoryPressureMonitor.js";
 import {
   CLOSE_WINDOW_MENU_ITEM_ID,
   PROJECT_MENU_ITEM_IDS,
@@ -1123,6 +1125,26 @@ export async function handleDirectoryOpen(
         redirectToProjectOwner(owner, project);
         return;
       }
+    }
+
+    // A cold open at critical kernel memory pressure goes through the view's
+    // own switch instead (#13530): main refuses it there, and the view holds
+    // it with an "Open anyway" rather than a renderer starting from here.
+    if (pvm && !hasReusableProjectView(pvm, project.id) && (await checkKernelPressureCritical())) {
+      const wc = getAppWebContents(targetWindow);
+      const sendSwitch = (): void => {
+        if (wc.isDestroyed()) return;
+        wc.send(CHANNELS.MENU_ACTION, {
+          actionId: "project.switch",
+          args: { projectId: project.id },
+        });
+      };
+      // A send before did-finish-load is dropped, as for the git-init dialog below.
+      if (wc.isLoadingMainFrame()) wc.once("did-finish-load", sendSwitch);
+      else sendSwitch();
+      // The project is in Recent Projects now, whenever it opens.
+      createApplicationMenu(targetWindow, cliAvailabilityService);
+      return;
     }
 
     if (pvm) {

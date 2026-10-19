@@ -706,6 +706,7 @@ export interface ElectronAPI extends GeneratedElectronAPI {
       options?: {
         focusIntent?: import("./project.js").ProjectFocusOnActivateIntent;
         trace?: import("./project.js").ProjectSwitchTrace;
+        ignoreMemoryPressure?: boolean;
       }
     ): Promise<ProjectSwitchResult>;
     /**
@@ -766,7 +767,10 @@ export interface ElectronAPI extends GeneratedElectronAPI {
     reopen(
       projectId: string,
       outgoingState?: ProjectSwitchOutgoingState,
-      options?: { trace?: import("./project.js").ProjectSwitchTrace }
+      options?: {
+        trace?: import("./project.js").ProjectSwitchTrace;
+        ignoreMemoryPressure?: boolean;
+      }
     ): Promise<ProjectSwitchResult>;
     getStats(projectId: string): Promise<ProjectStats>;
     getBulkStats(projectIds: string[]): Promise<BulkProjectStats>;

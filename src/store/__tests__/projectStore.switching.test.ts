@@ -919,6 +919,193 @@ describe("switching to a project whose repository is gone (#11649)", () => {
   });
 });
 
+describe("an open main holds for critical memory pressure (#13530)", () => {
+  // Each test loads its own module instance (resetModules above), and a hold
+  // left in one would poll on its own timer into a later test's mocks.
+  afterEach(async () => {
+    const { resetMemoryPressureHoldsForTesting } = await import("../memoryPressureWaitStore");
+    resetMemoryPressureHoldsForTesting();
+  });
+
+  function memoryPressureRejection(): Error {
+    return new Error(
+      "[AppError|MEMORY_PRESSURE_CRITICAL] Kernel memory pressure is critical; cold project open held"
+    );
+  }
+
+  async function flushCatch(): Promise<void> {
+    for (let i = 0; i < 5; i++) await Promise.resolve();
+  }
+
+  const TRANSITIONS = [
+    ["switchProject", "switch"],
+    ["reopenProject", "reopen"],
+  ] as const;
+
+  describe.each(TRANSITIONS)("%s", (action, clientMethod) => {
+    async function runHeldTransition() {
+      const { notify } = await import("@/lib/notify");
+      vi.mocked(notify).mockReturnValue("held-toast");
+      projectClientMock[clientMethod].mockRejectedValueOnce(memoryPressureRejection());
+      const { useProjectStore } = await import("../projectStore");
+      useProjectStore.setState({ projects: [projectA, projectB], currentProject: projectA });
+
+      await useProjectStore.getState()[action](projectB.id);
+      await flushCatch();
+      return useProjectStore;
+    }
+
+    it("leaves the sender where it was, with the transition settled and no error", async () => {
+      const useProjectStore = await runHeldTransition();
+
+      expect(useProjectStore.getState().currentProject).toEqual(projectA);
+      expect(useProjectStore.getState().isSwitching).toBe(false);
+      expect(useProjectStore.getState().switchingToProjectId).toBeNull();
+      expect(useProjectStore.getState().isLoading).toBe(false);
+      expect(useProjectStore.getState().error).toBeNull();
+    });
+
+    it("says what it read and offers to open anyway, instead of an error toast", async () => {
+      const { notify } = await import("@/lib/notify");
+      await runHeldTransition();
+
+      expect(notify).toHaveBeenCalledTimes(1);
+      const payload = vi.mocked(notify).mock.calls[0]![0];
+      expect(payload.type).toBe("warning");
+      expect(payload.title).toContain(projectB.name);
+      expect(payload.actions?.map((action) => action.label)).toEqual(["Open anyway"]);
+    });
+
+    it("opens anyway on the action, and tells main to skip the gate", async () => {
+      const { notify } = await import("@/lib/notify");
+      await runHeldTransition();
+      projectClientMock[clientMethod].mockResolvedValueOnce(undefined);
+
+      void vi.mocked(notify).mock.calls[0]![0].actions![0]!.onClick();
+
+      await vi.waitFor(() => expect(projectClientMock[clientMethod]).toHaveBeenCalledTimes(2));
+      expect(projectClientMock[clientMethod].mock.calls[1]![0]).toBe(projectB.id);
+      expect(projectClientMock[clientMethod].mock.calls[1]![2]).toMatchObject({
+        ignoreMemoryPressure: true,
+      });
+    });
+
+    it("drops the held open when the toast is dismissed", async () => {
+      const { notify } = await import("@/lib/notify");
+      await runHeldTransition();
+      const { launchDespiteMemoryPressure, PROJECT_OPEN_HOLD_KEY } =
+        await import("../memoryPressureWaitStore");
+
+      vi.mocked(notify).mock.calls[0]![0].onDismiss!();
+      launchDespiteMemoryPressure(PROJECT_OPEN_HOLD_KEY);
+      await flushCatch();
+
+      expect(projectClientMock[clientMethod]).toHaveBeenCalledTimes(1);
+    });
+
+    it("lets a newer open replace the held one, withdrawing its toast", async () => {
+      const useProjectStore = await runHeldTransition();
+      const { useNotificationStore } = await import("../notificationStore");
+      const dismissNotification = vi.spyOn(useNotificationStore.getState(), "dismissNotification");
+      const { launchDespiteMemoryPressure, PROJECT_OPEN_HOLD_KEY } =
+        await import("../memoryPressureWaitStore");
+      const projectC = { ...projectB, id: "project-c", name: "Project C" };
+      useProjectStore.setState({ projects: [projectA, projectB, projectC] });
+
+      await useProjectStore.getState().switchProject(projectC.id);
+      launchDespiteMemoryPressure(PROJECT_OPEN_HOLD_KEY);
+      await flushCatch();
+
+      expect(dismissNotification).toHaveBeenCalledWith("held-toast");
+      const opened = [
+        ...projectClientMock.switch.mock.calls,
+        ...projectClientMock.reopen.mock.calls,
+      ].map((call) => call[0]);
+      expect(opened.sort()).toEqual([projectB.id, projectC.id]);
+    });
+  });
+
+  it("drops the held open when this view is shown again after the window went elsewhere", async () => {
+    let revealed: () => void = () => {};
+    vi.stubGlobal("electron", {
+      app: {
+        onViewRevealed: (callback: () => void) => {
+          revealed = callback;
+          return () => {};
+        },
+      },
+    });
+    try {
+      projectClientMock.switch.mockRejectedValueOnce(memoryPressureRejection());
+      const { useProjectStore } = await import("../projectStore");
+      useProjectStore.setState({ projects: [projectA, projectB], currentProject: projectA });
+      await useProjectStore.getState().switchProject(projectB.id);
+      await flushCatch();
+      const { launchDespiteMemoryPressure, PROJECT_OPEN_HOLD_KEY } =
+        await import("../memoryPressureWaitStore");
+
+      revealed();
+      launchDespiteMemoryPressure(PROJECT_OPEN_HOLD_KEY);
+      await flushCatch();
+
+      expect(projectClientMock.switch).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("waits while this view is off screen, however far pressure has eased", async () => {
+    vi.useFakeTimers();
+    const visibility = vi.spyOn(document, "visibilityState", "get").mockReturnValue("hidden");
+    try {
+      const { MEMORY_PRESSURE_POLL_MS } = await import("../memoryPressureWaitStore");
+      projectClientMock.switch.mockRejectedValueOnce(memoryPressureRejection());
+      const { useProjectStore } = await import("../projectStore");
+      useProjectStore.setState({ projects: [projectA, projectB], currentProject: projectA });
+      const pending = useProjectStore.getState().switchProject(projectB.id);
+      await vi.advanceTimersByTimeAsync(0);
+      await pending;
+      await flushCatch();
+
+      await vi.advanceTimersByTimeAsync(MEMORY_PRESSURE_POLL_MS * 2);
+      expect(projectClientMock.switch).toHaveBeenCalledTimes(1);
+
+      visibility.mockReturnValue("visible");
+      await vi.advanceTimersByTimeAsync(MEMORY_PRESSURE_POLL_MS + 10);
+      expect(projectClientMock.switch).toHaveBeenCalledTimes(2);
+    } finally {
+      visibility.mockRestore();
+      vi.useRealTimers();
+    }
+  });
+
+  it("opens on its own once a poll reads pressure below critical", async () => {
+    vi.useFakeTimers();
+    try {
+      const { MEMORY_PRESSURE_POLL_MS } = await import("../memoryPressureWaitStore");
+      projectClientMock.switch.mockRejectedValueOnce(memoryPressureRejection());
+      const { useProjectStore } = await import("../projectStore");
+      useProjectStore.setState({ projects: [projectA, projectB], currentProject: projectA });
+
+      const pending = useProjectStore.getState().switchProject(projectB.id);
+      await vi.advanceTimersByTimeAsync(0);
+      await pending;
+      await flushCatch();
+      expect(projectClientMock.switch).toHaveBeenCalledTimes(1);
+
+      // jsdom has no pressure reading to give, which reads as below critical.
+      await vi.advanceTimersByTimeAsync(MEMORY_PRESSURE_POLL_MS + 10);
+
+      expect(projectClientMock.switch).toHaveBeenCalledTimes(2);
+      expect(projectClientMock.switch.mock.calls[1]![2]).not.toMatchObject({
+        ignoreMemoryPressure: true,
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
 describe("switch busy indication (#10736)", () => {
   it("clears isSwitching when the switch IPC rejects (outgoing view stays visible)", async () => {
     projectClientMock.switch.mockRejectedValueOnce(new Error("boom"));

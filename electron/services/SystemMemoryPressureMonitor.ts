@@ -2,6 +2,11 @@ import { execFile } from "node:child_process";
 import { logDebug, logInfo, logWarn } from "../utils/logger.js";
 import { readElectronSwapUsage, type SwapUsage } from "../utils/systemMemory.js";
 import { recordSwapPressure, SWAP_PRESSURE_STALE_MS } from "./systemSwapPressure.js";
+import {
+  getLastKernelPressureReadingAt,
+  isKernelPressureCritical,
+  recordKernelPressureLevel,
+} from "./systemKernelPressure.js";
 import type { SystemMemoryPressurePayload } from "../../shared/types/ipc/system.js";
 
 /**
@@ -79,6 +84,8 @@ export interface SystemMemoryPressureMonitorDeps {
    * alone never qualifies: since #12815 a warning only asks renderers to trim.
    */
   onSwapPressure?: (confirmed: boolean) => void;
+  /** Called with every sample's kernel level, null when it was not read. */
+  onKernelPressureLevel?: (level: KernelPressureLevel | null) => void;
   now?: () => number;
   /**
    * Wall clock for the swap-pressure run. The monotonic `now` stops while the
@@ -356,6 +363,7 @@ export function createSystemMemoryPressureMonitor(
       deps.isDarwin ? deps.readFseventsdRssMb().catch(() => null) : Promise.resolve(null),
       deps.isDarwin ? deps.readKernelPressureLevel().catch(() => null) : Promise.resolve(null),
     ]);
+    deps.onKernelPressureLevel?.(kernelPressureLevel);
     record({ swap, fseventsdRssMb, kernelPressureLevel }, startedAt);
   }
 
@@ -416,6 +424,53 @@ export async function readDarwinKernelPressureLevel(): Promise<KernelPressureLev
 }
 
 /**
+ * Longest a kernel reading answers {@link checkKernelPressureCritical} before
+ * it probes again. A recipe or a session restore asks once per agent in a
+ * burst; one sysctl covers all of them.
+ */
+export const KERNEL_PRESSURE_PROBE_CACHE_MS = 3_000;
+
+let kernelProbeInFlight: Promise<boolean> | null = null;
+
+/**
+ * Whether the kernel reports critical memory pressure now (#13530), read live
+ * rather than from the monitor's last sample, which can be minutes old. A
+ * failed probe leaves the verdict as it was. Always false off Darwin, where
+ * there is no kernel level to read. Never rejects.
+ */
+export function checkKernelPressureCritical(
+  probe: {
+    readLevel?: () => Promise<KernelPressureLevel | null>;
+    isDarwin?: boolean;
+    now?: () => number;
+  } = {}
+): Promise<boolean> {
+  const {
+    readLevel = readDarwinKernelPressureLevel,
+    isDarwin = process.platform === "darwin",
+    now = Date.now,
+  } = probe;
+  if (!isDarwin) return Promise.resolve(false);
+  const lastReadingAt = getLastKernelPressureReadingAt();
+  const ageMs = lastReadingAt === null ? null : now() - lastReadingAt;
+  if (ageMs !== null && ageMs >= 0 && ageMs < KERNEL_PRESSURE_PROBE_CACHE_MS) {
+    return Promise.resolve(isKernelPressureCritical(now()));
+  }
+  if (kernelProbeInFlight) return kernelProbeInFlight;
+  const pending = readLevel()
+    .catch(() => null)
+    .then((level) => {
+      recordKernelPressureLevel(level, now());
+      return isKernelPressureCritical(now());
+    })
+    .finally(() => {
+      kernelProbeInFlight = null;
+    });
+  kernelProbeInFlight = pending;
+  return pending;
+}
+
+/**
  * The production probes. Windows and Linux read swap from the Electron memory
  * call the other memory monitors already make, so they spawn nothing; Darwin
  * has no swap figure there and spawns `sysctl` plus a narrow `ps` per sample.
@@ -440,5 +495,6 @@ export function createDefaultSystemMemoryPressureMonitor(
     readKernelPressureLevel: readDarwinKernelPressureLevel,
     publish,
     onSwapPressure: (confirmed) => recordSwapPressure(confirmed),
+    onKernelPressureLevel: (level) => recordKernelPressureLevel(level),
   });
 }

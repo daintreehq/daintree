@@ -145,6 +145,14 @@ vi.mock("../../../window/portDistribution.js", () => ({
   distributePortsToView: vi.fn(),
 }));
 
+// The live kernel probe behind the cold-open gate (#13530). Mocked so no test
+// here spawns sysctl on a Mac, or depends on how loaded the machine running it is.
+const checkKernelPressureCriticalMock = vi.hoisted(() => vi.fn(async () => false));
+vi.mock("../../../services/SystemMemoryPressureMonitor.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../../services/SystemMemoryPressureMonitor.js")>()),
+  checkKernelPressureCritical: checkKernelPressureCriticalMock,
+}));
+
 // Mocked so the multi-window tests can assert the exact ids the switch
 // announces. Row-delivery behavior stays covered by projectSwitchBroadcast.test.ts.
 const mockBroadcastProjectSwitchUpdates =
@@ -562,6 +570,120 @@ describe("project switch/reopen refuses a row whose repository is gone (#11649)"
 // when the switch is leaving a scratch. That was never the missing half — the
 // reader pruning every non-project entry was — so this pins the behavior the fix
 // now depends on.
+describe("project switch/reopen holds a cold open at critical memory pressure (#13530)", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    checkKernelPressureCriticalMock.mockResolvedValue(true);
+    mockGetWindowForWebContents.mockReturnValue({ id: 1, isDestroyed: () => false });
+    projectStoreMock.setCurrentProject.mockResolvedValue(undefined);
+    projectStoreMock.getProjectById.mockReturnValue({
+      id: "proj-cold",
+      name: "Cold",
+      path: "/projects/cold",
+      status: "background",
+    });
+    mockGetProjectForWebContents.mockReturnValue("proj-outgoing");
+  });
+
+  afterEach(() => {
+    checkKernelPressureCriticalMock.mockResolvedValue(false);
+  });
+
+  /** `liveProjectIds` are the projects this window already has a renderer for. */
+  function makePvm(
+    liveProjectIds: string[] = [],
+    state: "active" | "cached" | "loading" = "cached"
+  ) {
+    return {
+      switchTo: vi.fn().mockResolvedValue({
+        view: { webContents: { id: 200, isDestroyed: () => false, send: vi.fn() } },
+        isNew: true,
+      }),
+      getProjectIdForWebContents: vi.fn(),
+      setPendingFocusIntent: vi.fn(),
+      getAllViews: () =>
+        liveProjectIds.map((projectId) => ({
+          projectId,
+          state,
+          view: { webContents: { isDestroyed: () => false } },
+        })),
+    };
+  }
+
+  function handlerFor(channel: string, pvm: unknown) {
+    const ctx = makeWindowContext(1, 10, { projectViewManager: pvm as never });
+    registerProjectCrudHandlers({
+      mainWindow: { id: 1 } as unknown,
+      windowRegistry: makeWindowRegistry([ctx]),
+      projectViewManager: pvm,
+    } as unknown as HandlerDependencies);
+    const call = (ipcMain.handle as ReturnType<typeof vi.fn>).mock.calls.find(
+      (c) => c[0] === channel
+    );
+    expect(call).toBeDefined();
+    return call![1] as (...args: unknown[]) => Promise<unknown>;
+  }
+
+  const outgoingState = { terminals: [], draftInputs: { "term-1": "half typed" } };
+
+  describe.each([CHANNELS.PROJECT_SWITCH, CHANNELS.PROJECT_REOPEN])("%s", (channel) => {
+    it("refuses before anything is persisted, swapped or marked active", async () => {
+      const pvm = makePvm();
+
+      await expect(
+        handlerFor(channel, pvm)({ sender: { id: 10 } }, "proj-cold", outgoingState)
+      ).rejects.toThrow(expect.objectContaining({ code: "MEMORY_PRESSURE_CRITICAL" }));
+
+      expect(pvm.switchTo).not.toHaveBeenCalled();
+      expect(projectStoreMock.setCurrentProject).not.toHaveBeenCalled();
+      expect(projectStoreMock.updateProjectStatus).not.toHaveBeenCalled();
+      expect(projectStoreMock.enqueueProjectStateUpdate).not.toHaveBeenCalled();
+      expect(projectStoreMock.saveProjectState).not.toHaveBeenCalled();
+      expect(mockBroadcastProjectSwitchUpdates).not.toHaveBeenCalled();
+    });
+
+    it("opens anyway when the user asked to", async () => {
+      const pvm = makePvm();
+
+      await handlerFor(channel, pvm)({ sender: { id: 10 } }, "proj-cold", outgoingState, {
+        ignoreMemoryPressure: true,
+      });
+
+      expect(pvm.switchTo).toHaveBeenCalledTimes(1);
+      expect(checkKernelPressureCriticalMock).not.toHaveBeenCalled();
+    });
+
+    it("never holds a switch to a view the window already has", async () => {
+      const pvm = makePvm(["proj-cold"]);
+
+      await handlerFor(channel, pvm)({ sender: { id: 10 } }, "proj-cold", outgoingState);
+
+      expect(pvm.switchTo).toHaveBeenCalledTimes(1);
+      expect(checkKernelPressureCriticalMock).not.toHaveBeenCalled();
+    });
+
+    it("treats a background restore still loading as the cold start it becomes", async () => {
+      // The switch abandons a loading restore and boots the project from
+      // scratch (#12320), so that view is no reason to let the open through.
+      const pvm = makePvm(["proj-cold"], "loading");
+
+      await expect(
+        handlerFor(channel, pvm)({ sender: { id: 10 } }, "proj-cold", outgoingState)
+      ).rejects.toThrow(expect.objectContaining({ code: "MEMORY_PRESSURE_CRITICAL" }));
+      expect(pvm.switchTo).not.toHaveBeenCalled();
+    });
+
+    it("opens cold when pressure is below critical", async () => {
+      checkKernelPressureCriticalMock.mockResolvedValue(false);
+      const pvm = makePvm();
+
+      await handlerFor(channel, pvm)({ sender: { id: 10 } }, "proj-cold", outgoingState);
+
+      expect(pvm.switchTo).toHaveBeenCalledTimes(1);
+    });
+  });
+});
+
 describe("project:switch records the workspace it is leaving", () => {
   const SCRATCH_ID = "11111111-1111-4111-8111-111111111111";
   const PROJECT_ID = "a".repeat(64);

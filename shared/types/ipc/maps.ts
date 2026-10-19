@@ -664,7 +664,11 @@ export interface IpcInvokeMap extends GeneratedIpcInvokeMap {
     args: [
       projectId: string,
       outgoingState?: ProjectSwitchOutgoingState,
-      options?: { focusIntent?: ProjectFocusOnActivateIntent; trace?: ProjectSwitchTrace },
+      options?: {
+        focusIntent?: ProjectFocusOnActivateIntent;
+        trace?: ProjectSwitchTrace;
+        ignoreMemoryPressure?: boolean;
+      },
     ];
     result: ProjectSwitchResult;
   };
@@ -696,7 +700,7 @@ export interface IpcInvokeMap extends GeneratedIpcInvokeMap {
     args: [
       projectId: string,
       outgoingState?: ProjectSwitchOutgoingState,
-      options?: { trace?: ProjectSwitchTrace },
+      options?: { trace?: ProjectSwitchTrace; ignoreMemoryPressure?: boolean },
     ];
     result: ProjectSwitchResult;
   };

@@ -100,6 +100,7 @@ import { registerWebviewEmulationHandlers } from "./handlers/webviewEmulation.js
 import { registerDiagnosticsHandlers } from "./handlers/diagnostics.js";
 import { registerResourceProfileHandlers } from "./handlers/resourceProfile.js";
 import { registerWhySlowHandlers } from "./handlers/whySlow.js";
+import { registerMemoryPressureHandlers } from "./handlers/memoryPressure.js";
 import { registerPerfHandlers } from "./handlers/perf.js";
 
 import { registerAccessibilityHandlers } from "./handlers/accessibility.js";
@@ -253,6 +254,7 @@ export function registerIpcHandlers(deps: HandlerDependencies): () => void {
     register(() => registerDiagnosticsHandlers(deps));
     register(() => registerResourceProfileHandlers(deps));
     register(() => registerWhySlowHandlers(deps));
+    register(() => registerMemoryPressureHandlers(deps));
 
     register(() => registerAccessibilityHandlers());
     register(() => registerDemoHandlers(deps));
