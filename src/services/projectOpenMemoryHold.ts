@@ -60,5 +60,6 @@ export function holdProjectOpenForMemoryPressure(
     // The answer to an open the user just asked for, and the only place its
     // "Open anyway" lives, so quiet hours must not hold it back.
     urgent: true,
+    context: { eventKind: "host" },
   });
 }

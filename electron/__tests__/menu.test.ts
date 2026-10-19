@@ -1541,7 +1541,11 @@ describe("handleDirectoryOpen at critical memory pressure (#13530)", () => {
 
   it("opens a project this window already has a view of without asking", async () => {
     const manager = createManager([
-      { projectId: PROJECT.id, state: "cached", view: { webContents: { isDestroyed: () => false } } },
+      {
+        projectId: PROJECT.id,
+        state: "cached",
+        view: { webContents: { isDestroyed: () => false } },
+      },
     ]);
     useManager(manager);
 

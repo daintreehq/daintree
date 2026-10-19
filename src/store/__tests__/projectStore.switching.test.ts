@@ -981,7 +981,7 @@ describe("an open main holds for critical memory pressure (#13530)", () => {
       await runHeldTransition();
       projectClientMock[clientMethod].mockResolvedValueOnce(undefined);
 
-      vi.mocked(notify).mock.calls[0]![0].actions![0]!.onClick();
+      void vi.mocked(notify).mock.calls[0]![0].actions![0]!.onClick();
 
       await vi.waitFor(() => expect(projectClientMock[clientMethod]).toHaveBeenCalledTimes(2));
       expect(projectClientMock[clientMethod].mock.calls[1]![0]).toBe(projectB.id);
@@ -1027,14 +1027,14 @@ describe("an open main holds for critical memory pressure (#13530)", () => {
 
   it("drops the held open when this view is shown again after the window went elsewhere", async () => {
     let revealed: () => void = () => {};
-    (window as unknown as { electron?: unknown }).electron = {
+    vi.stubGlobal("electron", {
       app: {
         onViewRevealed: (callback: () => void) => {
           revealed = callback;
           return () => {};
         },
       },
-    };
+    });
     try {
       projectClientMock.switch.mockRejectedValueOnce(memoryPressureRejection());
       const { useProjectStore } = await import("../projectStore");
@@ -1050,7 +1050,7 @@ describe("an open main holds for critical memory pressure (#13530)", () => {
 
       expect(projectClientMock.switch).toHaveBeenCalledTimes(1);
     } finally {
-      delete (window as unknown as { electron?: unknown }).electron;
+      vi.unstubAllGlobals();
     }
   });
 

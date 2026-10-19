@@ -767,7 +767,10 @@ export interface ElectronAPI extends GeneratedElectronAPI {
     reopen(
       projectId: string,
       outgoingState?: ProjectSwitchOutgoingState,
-      options?: { trace?: import("./project.js").ProjectSwitchTrace; ignoreMemoryPressure?: boolean }
+      options?: {
+        trace?: import("./project.js").ProjectSwitchTrace;
+        ignoreMemoryPressure?: boolean;
+      }
     ): Promise<ProjectSwitchResult>;
     getStats(projectId: string): Promise<ProjectStats>;
     getBulkStats(projectIds: string[]): Promise<BulkProjectStats>;

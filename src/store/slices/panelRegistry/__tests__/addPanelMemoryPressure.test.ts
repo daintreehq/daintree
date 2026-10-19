@@ -5,7 +5,7 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
-import type { PtyPanelData } from "@shared/types/panel";
+import { isPtyPanel, type PtyPanelData } from "@shared/types/panel";
 
 const isMemoryPressureCriticalMock = vi.hoisted(() => vi.fn<() => Promise<boolean>>());
 vi.mock("@/clients/systemClient", () => ({
@@ -82,8 +82,10 @@ beforeEach(() => {
 });
 
 const { usePanelStore } = await import("../../../panelStore");
-const { terminalClient } = (await import("@/clients")) as unknown as {
-  terminalClient: { spawn: ReturnType<typeof vi.fn>; kill: ReturnType<typeof vi.fn> };
+const clients = await import("@/clients");
+const terminalClient = {
+  spawn: vi.mocked(clients.terminalClient.spawn),
+  kill: vi.mocked(clients.terminalClient.kill),
 };
 const {
   launchDespiteMemoryPressure,
@@ -94,7 +96,8 @@ const {
 } = await import("@/store/memoryPressureWaitStore");
 
 function getPtyPanel(id: string): PtyPanelData | undefined {
-  return usePanelStore.getState().panelsById[id] as PtyPanelData | undefined;
+  const panel = usePanelStore.getState().panelsById[id];
+  return panel && isPtyPanel(panel) ? panel : undefined;
 }
 
 async function drainMicrotasks(iterations = 100): Promise<void> {
@@ -103,8 +106,7 @@ async function drainMicrotasks(iterations = 100): Promise<void> {
   }
 }
 
-const spawnedIds = () =>
-  terminalClient.spawn.mock.calls.map(([options]) => (options as { id: string }).id);
+const spawnedIds = () => terminalClient.spawn.mock.calls.map(([options]) => options.id);
 
 const isHeld = (id: string) => useMemoryPressureWaitStore.getState().heldPanelIds[id] === true;
 
@@ -125,7 +127,7 @@ describe("agent launches at critical memory pressure (#13530)", () => {
     await usePanelStore.getState().reset();
     resetMemoryPressureHoldsForTesting();
     terminalClient.spawn.mockReset();
-    terminalClient.spawn.mockImplementation(async ({ id }: { id?: string }) => id ?? "spawn-id");
+    terminalClient.spawn.mockImplementation(async ({ id }) => id ?? "spawn-id");
     terminalClient.kill.mockClear();
     isMemoryPressureCriticalMock.mockReset();
     isMemoryPressureCriticalMock.mockResolvedValue(true);
@@ -277,11 +279,11 @@ describe("agent launches at critical memory pressure (#13530)", () => {
 
     // A shell occupies the queue, so the "Launch anyway" run waits behind it.
     let releaseBlocker: () => void = () => {};
-    terminalClient.spawn.mockImplementationOnce(async ({ id }: { id: string }) => {
+    terminalClient.spawn.mockImplementationOnce(async ({ id }) => {
       await new Promise<void>((resolve) => {
         releaseBlocker = resolve;
       });
-      return id;
+      return id ?? "blocker";
     });
     await usePanelStore.getState().addPanel({
       kind: "terminal",
@@ -307,11 +309,11 @@ describe("agent launches at critical memory pressure (#13530)", () => {
     await drainMicrotasks();
 
     let releaseBlocker: () => void = () => {};
-    terminalClient.spawn.mockImplementationOnce(async ({ id }: { id: string }) => {
+    terminalClient.spawn.mockImplementationOnce(async ({ id }) => {
       await new Promise<void>((resolve) => {
         releaseBlocker = resolve;
       });
-      return id;
+      return id ?? "blocker";
     });
     await usePanelStore.getState().addPanel({
       kind: "terminal",

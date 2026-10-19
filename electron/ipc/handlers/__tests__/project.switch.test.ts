@@ -590,7 +590,10 @@ describe("project switch/reopen holds a cold open at critical memory pressure (#
   });
 
   /** `liveProjectIds` are the projects this window already has a renderer for. */
-  function makePvm(liveProjectIds: string[] = [], state: "active" | "cached" | "loading" = "cached") {
+  function makePvm(
+    liveProjectIds: string[] = [],
+    state: "active" | "cached" | "loading" = "cached"
+  ) {
     return {
       switchTo: vi.fn().mockResolvedValue({
         view: { webContents: { id: 200, isDestroyed: () => false, send: vi.fn() } },
