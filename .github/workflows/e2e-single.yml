@@ -66,13 +66,13 @@ jobs:
           PLATFORM="${{ inputs.platform }}"
 
           if [ "$PLATFORM" = "macos" ]; then
-            echo 'matrix={"include":[{"os":"macos-14","name":"macOS"}]}' >> "$GITHUB_OUTPUT"
+            echo 'matrix={"include":[{"os":"macos-15","name":"macOS"}]}' >> "$GITHUB_OUTPUT"
           elif [ "$PLATFORM" = "linux" ]; then
             echo 'matrix={"include":[{"os":"ubuntu-22.04","name":"Linux"}]}' >> "$GITHUB_OUTPUT"
           elif [ "$PLATFORM" = "windows" ]; then
             echo 'matrix={"include":[{"os":"windows-2022","name":"Windows"}]}' >> "$GITHUB_OUTPUT"
           else
-            echo 'matrix={"include":[{"os":"macos-14","name":"macOS"},{"os":"ubuntu-22.04","name":"Linux"},{"os":"windows-2022","name":"Windows"}]}' >> "$GITHUB_OUTPUT"
+            echo 'matrix={"include":[{"os":"macos-15","name":"macOS"},{"os":"ubuntu-22.04","name":"Linux"},{"os":"windows-2022","name":"Windows"}]}' >> "$GITHUB_OUTPUT"
           fi
 
   e2e-single:
