@@ -250,6 +250,14 @@ vi.mock("../window/webContentsRegistry.js", () => ({
   getProjectForWebContents: getProjectForWebContentsMock,
 }));
 
+// The cold-open gate's live kernel probe (#13530), mocked so a run on a Mac
+// never spawns sysctl or depends on how loaded the machine is.
+const checkKernelPressureCriticalMock = vi.hoisted(() => vi.fn(async () => false));
+vi.mock("../services/SystemMemoryPressureMonitor.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../services/SystemMemoryPressureMonitor.js")>()),
+  checkKernelPressureCritical: checkKernelPressureCriticalMock,
+}));
+
 const isPluginVisibleInProjectMock = vi.hoisted(() =>
   vi.fn((_pluginId: string, _projectId: string | null) => true)
 );
@@ -1437,6 +1445,80 @@ describe("handleDirectoryOpen window targeting", () => {
     expect(ownerWindow.focus).not.toHaveBeenCalled();
     expect(ownerManager.switchTo).not.toHaveBeenCalled();
     expect(targetManager.switchTo).toHaveBeenCalled();
+  });
+});
+
+describe("handleDirectoryOpen at critical memory pressure (#13530)", () => {
+  const PROJECT = { id: "project-a", name: "Alpha", path: "/repos/alpha" };
+  const targetWindow = { id: 7, isDestroyed: () => false } as unknown as Electron.BrowserWindow;
+
+  function createManager(views: unknown[] = []) {
+    return {
+      switchTo: vi.fn(async () => ({
+        view: { webContents: { isDestroyed: () => false, send: vi.fn() } },
+        isNew: true,
+      })),
+      getActiveProjectId: vi.fn<() => string | null>(() => null),
+      getOutgoingBridgeProjectId: vi.fn<() => string | null>(() => null),
+      getAllViews: vi.fn<() => unknown[]>(() => views),
+      getActiveView: vi.fn<() => unknown>(() => null),
+      setPendingFocusIntent: vi.fn(),
+      releaseCachedView: vi.fn<(projectId: string) => boolean>(() => true),
+    };
+  }
+
+  function useManager(manager: ReturnType<typeof createManager>) {
+    windowRefMock.getWindowRegistry.mockReturnValue({
+      getByWindowId: (id: number) =>
+        id === 7 ? { services: { projectViewManager: manager } } : undefined,
+      getPrimary: () => ({ services: { projectViewManager: manager } }),
+      all: () => [
+        {
+          windowId: 7,
+          browserWindow: targetWindow,
+          services: { projectViewManager: manager },
+        },
+      ],
+    });
+  }
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    projectStoreMock.addProject.mockResolvedValue(PROJECT);
+    projectStoreMock.getProjectById.mockReturnValue(PROJECT);
+    projectStoreMock.getCurrentProjectId.mockReturnValue(null);
+    checkKernelPressureCriticalMock.mockResolvedValue(true);
+  });
+
+  afterEach(() => {
+    checkKernelPressureCriticalMock.mockResolvedValue(false);
+  });
+
+  it("hands a cold open to the view's own switch, which holds it", async () => {
+    const send = vi.fn();
+    getAppWebContentsMock.mockImplementation(() => ({ isDestroyed: () => false, send }));
+    const manager = createManager();
+    useManager(manager);
+
+    await handleDirectoryOpen(PROJECT.path, targetWindow);
+
+    expect(manager.switchTo).not.toHaveBeenCalled();
+    expect(send).toHaveBeenCalledWith(CHANNELS.MENU_ACTION, {
+      actionId: "project.switch",
+      args: { projectId: PROJECT.id },
+    });
+  });
+
+  it("opens a project this window already has a view of without asking", async () => {
+    const manager = createManager([
+      { projectId: PROJECT.id, state: "cached", view: { webContents: { isDestroyed: () => false } } },
+    ]);
+    useManager(manager);
+
+    await handleDirectoryOpen(PROJECT.path, targetWindow);
+
+    expect(checkKernelPressureCriticalMock).not.toHaveBeenCalled();
+    expect(manager.switchTo).toHaveBeenCalled();
   });
 });
 

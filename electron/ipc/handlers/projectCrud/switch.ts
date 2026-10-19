@@ -11,6 +11,7 @@ import {
   claimProjectActivation,
   findOtherProjectOwner,
   hasLiveProjectView,
+  hasReusableProjectView,
   redirectToProjectOwner,
   releaseCachedOwner,
   type ProjectOwner,
@@ -301,7 +302,7 @@ async function assertMemoryAdmitsColdOpen(
 ): Promise<void> {
   if (ignoreMemoryPressure === true) return;
   const { projectViewManager: pvm, incomingProjectId } = operation;
-  if (!pvm || hasLiveProjectView(pvm, incomingProjectId)) return;
+  if (!pvm || hasReusableProjectView(pvm, incomingProjectId)) return;
   if (!(await checkKernelPressureCritical())) return;
   logInfo("project-open-held-memory-pressure", { projectId: incomingProjectId });
   throw new AppError({

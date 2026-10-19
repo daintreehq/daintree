@@ -83,7 +83,7 @@ beforeEach(() => {
 
 const { usePanelStore } = await import("../../../panelStore");
 const { terminalClient } = (await import("@/clients")) as unknown as {
-  terminalClient: { spawn: ReturnType<typeof vi.fn> };
+  terminalClient: { spawn: ReturnType<typeof vi.fn>; kill: ReturnType<typeof vi.fn> };
 };
 const {
   launchDespiteMemoryPressure,
@@ -126,6 +126,7 @@ describe("agent launches at critical memory pressure (#13530)", () => {
     resetMemoryPressureHoldsForTesting();
     terminalClient.spawn.mockReset();
     terminalClient.spawn.mockImplementation(async ({ id }: { id?: string }) => id ?? "spawn-id");
+    terminalClient.kill.mockClear();
     isMemoryPressureCriticalMock.mockReset();
     isMemoryPressureCriticalMock.mockResolvedValue(true);
   });
@@ -215,6 +216,90 @@ describe("agent launches at critical memory pressure (#13530)", () => {
 
     expect(terminalClient.spawn).not.toHaveBeenCalled();
     expect(isHeld("held-gone")).toBe(false);
+  });
+
+  it("holds again when pressure is back at critical by the time a resumed launch runs", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    await launchAgent("flap-1");
+    await drainMicrotasks();
+
+    // The poll reads below critical, the resumed launch's own check does not.
+    isMemoryPressureCriticalMock.mockResolvedValue(false);
+    isMemoryPressureCriticalMock.mockResolvedValueOnce(false).mockResolvedValueOnce(true);
+    await vi.advanceTimersByTimeAsync(MEMORY_PRESSURE_POLL_MS);
+    await drainMicrotasks();
+    expect(terminalClient.spawn).not.toHaveBeenCalled();
+    expect(isHeld("flap-1")).toBe(true);
+
+    await vi.advanceTimersByTimeAsync(MEMORY_PRESSURE_POLL_MS);
+    await drainMicrotasks();
+    expect(spawnedIds()).toEqual(["flap-1"]);
+  });
+
+  it("keeps a pane closed while it waited held in the trash, and starts it after an undo", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    await launchAgent("trashed-1");
+    await drainMicrotasks();
+
+    usePanelStore.getState().trashPanel("trashed-1");
+    isMemoryPressureCriticalMock.mockClear();
+    isMemoryPressureCriticalMock.mockResolvedValue(false);
+    await vi.advanceTimersByTimeAsync(MEMORY_PRESSURE_POLL_MS * 2);
+    await drainMicrotasks();
+
+    expect(terminalClient.spawn).not.toHaveBeenCalled();
+    expect(isHeld("trashed-1")).toBe(true);
+    // Nothing to ask main for while the only hold is in the trash.
+    expect(isMemoryPressureCriticalMock).not.toHaveBeenCalled();
+
+    usePanelStore.getState().restoreTerminal("trashed-1");
+    await vi.advanceTimersByTimeAsync(MEMORY_PRESSURE_POLL_MS);
+    await drainMicrotasks();
+    expect(spawnedIds()).toEqual(["trashed-1"]);
+  });
+
+  it("refuses a restart of a held pane, leaving it held", async () => {
+    await launchAgent("restart-held");
+    await drainMicrotasks();
+
+    await usePanelStore.getState().restartTerminal("restart-held");
+    await drainMicrotasks();
+
+    expect(terminalClient.spawn).not.toHaveBeenCalled();
+    expect(terminalClient.kill).not.toHaveBeenCalled();
+    expect(isHeld("restart-held")).toBe(true);
+    expect(getPtyPanel("restart-held")?.isRestarting).not.toBe(true);
+  });
+
+  it("never spawns a launch the same id was relaunched over while it was queued", async () => {
+    await launchAgent("dup");
+    await drainMicrotasks();
+
+    // A shell occupies the queue, so the "Launch anyway" run waits behind it.
+    let releaseBlocker: () => void = () => {};
+    terminalClient.spawn.mockImplementationOnce(async ({ id }: { id: string }) => {
+      await new Promise<void>((resolve) => {
+        releaseBlocker = resolve;
+      });
+      return id;
+    });
+    await usePanelStore.getState().addPanel({
+      kind: "terminal",
+      requestedId: "blocker",
+      cwd: "/",
+      bypassLimits: true,
+    });
+    await drainMicrotasks();
+    launchDespiteMemoryPressure(panelHoldKey("dup"));
+
+    // The pane is closed and the id launched afresh before that run starts.
+    usePanelStore.getState().removePanel("dup");
+    await launchAgent("dup");
+    releaseBlocker();
+    await drainMicrotasks();
+
+    expect(spawnedIds()).toEqual(["blocker"]);
+    expect(isHeld("dup")).toBe(true);
   });
 
   it("launches straight away when pressure is below critical", async () => {

@@ -38,6 +38,12 @@ export interface BackgroundRestoreJob {
    * elsewhere while this job waited in the queue belongs to that window now.
    */
   isOwnedElsewhere?: (projectId: string) => boolean;
+  /**
+   * Refresh the readings restore admission works from, before each project.
+   * The kernel pressure latch it consults may hold nothing yet at startup, and
+   * each project is a renderer added (#13530). Never rejects.
+   */
+  refreshAdmission?: () => Promise<unknown>;
 }
 
 interface QueuedJob extends BackgroundRestoreJob {
@@ -193,6 +199,7 @@ async function runOne(job: QueuedJob, projectId: string): Promise<void> {
 
   running = manager;
   try {
+    await job.refreshAdmission?.();
     const result = await manager.restoreInBackground(projectId, projectPath, {
       // Below every live view, and stepping further back with each project
       // taken, so the recency order this queue was given survives into the LRU

@@ -920,6 +920,13 @@ describe("switching to a project whose repository is gone (#11649)", () => {
 });
 
 describe("an open main holds for critical memory pressure (#13530)", () => {
+  // Each test loads its own module instance (resetModules above), and a hold
+  // left in one would poll on its own timer into a later test's mocks.
+  afterEach(async () => {
+    const { resetMemoryPressureHoldsForTesting } = await import("../memoryPressureWaitStore");
+    resetMemoryPressureHoldsForTesting();
+  });
+
   function memoryPressureRejection(): Error {
     return new Error(
       "[AppError|MEMORY_PRESSURE_CRITICAL] Kernel memory pressure is critical; cold project open held"

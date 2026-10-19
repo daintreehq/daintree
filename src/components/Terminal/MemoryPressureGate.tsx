@@ -1,3 +1,4 @@
+import type { Ref } from "react";
 import { MemoryStick } from "@/components/icons";
 import { Button } from "@/components/ui/button";
 import { PaneState, PaneStateActions } from "@/components/ui/PaneState";
@@ -12,14 +13,21 @@ export function MemoryPressureGate({
   agentId,
   onLaunchAnyway,
   onCancel,
+  containerRef,
 }: {
   agentId?: string;
   onLaunchAnyway: () => void;
   onCancel: () => void;
+  /** Where the pane's focus handler lands keyboard navigation into the gate. */
+  containerRef?: Ref<HTMLDivElement>;
 }) {
   const agentName = agentId ? (getAgentConfig(agentId)?.name ?? agentId) : "agent";
   return (
-    <div className="relative flex-1 min-h-0">
+    <div
+      ref={containerRef}
+      tabIndex={-1}
+      className="relative flex-1 min-h-0 focus-visible:-outline-offset-2"
+    >
       <PaneState
         icon={<MemoryStick className="text-text-secondary" />}
         title={`Waiting to start ${agentName}`}

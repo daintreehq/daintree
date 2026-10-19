@@ -114,6 +114,36 @@ describe("memory pressure holds (#13530)", () => {
     expect(heldPanels()).toEqual([]);
   });
 
+  it("leaves a deferred hold waiting, and asks main nothing while every hold is deferred", async () => {
+    const resume = vi.fn();
+    let deferred = true;
+    holdForMemoryPressure("k", { resume, isDeferred: () => deferred });
+    isMemoryPressureCriticalMock.mockResolvedValue(false);
+
+    await vi.advanceTimersByTimeAsync(MEMORY_PRESSURE_POLL_MS * 2);
+    expect(resume).not.toHaveBeenCalled();
+    expect(isMemoryPressureCriticalMock).not.toHaveBeenCalled();
+
+    deferred = false;
+    await vi.advanceTimersByTimeAsync(MEMORY_PRESSURE_POLL_MS);
+    expect(resume).toHaveBeenCalledWith(false);
+  });
+
+  it("resumes the holds that are not deferred, and keeps the rest", async () => {
+    const waiting = vi.fn();
+    const trashed = vi.fn();
+    holdForMemoryPressure("waiting", { resume: waiting });
+    holdForMemoryPressure("trashed", { resume: trashed, isDeferred: () => true });
+    isMemoryPressureCriticalMock.mockResolvedValue(false);
+
+    await vi.advanceTimersByTimeAsync(MEMORY_PRESSURE_POLL_MS);
+
+    expect(waiting).toHaveBeenCalledTimes(1);
+    expect(trashed).not.toHaveBeenCalled();
+    launchDespiteMemoryPressure("trashed");
+    expect(trashed).toHaveBeenCalledWith(true);
+  });
+
   it("cancels the hold a second one under the same key replaces", () => {
     const onCancel = vi.fn();
     const replaced = vi.fn();

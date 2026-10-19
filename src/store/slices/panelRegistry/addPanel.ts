@@ -1252,22 +1252,32 @@ export const createAddPanelActions = (
           const pressureCheck =
             holdsForMemoryPressure && !launchAnyway ? isMemoryPressureCritical() : null;
           const mergedEnv = await spawnEnvPromise;
+          const pressureCritical = pressureCheck !== null && (await pressureCheck);
 
           markRendererPerformance("agentlaunch.env-ready", { id });
           const _p1 = get().panelsById[id];
           if (!_p1 || !isPtyPanel(_p1) || _p1.spawnStatus !== "spawning") return;
 
-          // Held outside the queue, so a waiting agent never stops the panes
-          // queued behind it from starting. A released hold queues one at a
-          // time, whatever its batch: pressure has only just eased.
-          if (pressureCheck && (await pressureCheck)) {
+          if (holdsForMemoryPressure) {
+            // The pressure round trip and a hold's wait are each long enough for
+            // a restart or replay to take this id over, so ownership is checked
+            // again before anything starts.
             if (!isStillStarting()) return;
-            holdForMemoryPressure(panelHoldKey(id), {
-              panelId: id,
-              resume: (anyway) => terminalStartupQueue.enqueue(() => startPty(anyway)),
-              isStale: () => !isStillStarting(),
-            });
-            return;
+            // Held outside the queue, so a waiting agent never stops the panes
+            // queued behind it from starting. A released hold queues one at a
+            // time, whatever its batch: pressure has only just eased.
+            if (pressureCritical) {
+              holdForMemoryPressure(panelHoldKey(id), {
+                panelId: id,
+                resume: (anyway) => terminalStartupQueue.enqueue(() => startPty(anyway)),
+                isStale: () => !isStillStarting(),
+                // A pane closed while it waited stays held in the trash, so an
+                // undo brings back the same waiting launch rather than one that
+                // started unseen.
+                isDeferred: () => get().panelsById[id]?.location === "trash",
+              });
+              return;
+            }
           }
           const spawnWorktreeId = _p1.worktreeId;
 

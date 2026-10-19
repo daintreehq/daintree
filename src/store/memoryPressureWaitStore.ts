@@ -29,8 +29,10 @@ export const useMemoryPressureWaitStore = create<MemoryPressureWaitState>(() => 
 export interface MemoryPressureHold {
   /** Continue the held launch; `anyway` when the user overrode the wait. */
   resume: (anyway: boolean) => void;
-  /** True once nothing wants the launch any more (pane closed, superseded). */
+  /** True once nothing wants the launch any more (pane removed, superseded). */
   isStale?: () => boolean;
+  /** True while the launch should keep waiting whatever the pressure (pane in the trash). */
+  isDeferred?: () => boolean;
   /** Runs when the hold ends without the launch continuing. */
   onCancel?: () => void;
   panelId?: string;
@@ -83,10 +85,14 @@ async function poll(): Promise<void> {
     if (hold.isStale?.()) take(key);
   }
   if (holds.size === 0) return;
-  if (!(await isMemoryPressureCritical())) {
+  // Nothing to ask main for while every hold is deferred anyway.
+  const waiting = [...holds].some(([, hold]) => !hold.isDeferred?.());
+  if (waiting && !(await isMemoryPressureCritical())) {
     // Insertion order, so a restore resumes in the order it was laid out; the
     // startup queue then starts them one at a time as it always does.
-    for (const key of [...holds.keys()]) take(key)?.resume(false);
+    for (const [key, hold] of [...holds]) {
+      if (holds.get(key) === hold && !hold.isDeferred?.()) take(key)?.resume(false);
+    }
   }
   schedulePoll();
 }

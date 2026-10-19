@@ -46,6 +46,29 @@ export function hasLiveProjectView(
 }
 
 /**
+ * A live view an activation would reuse as it is. A background restore's
+ * `"loading"` entry is live but not this: the switch abandons it and starts a
+ * renderer from scratch (#12320).
+ */
+export function hasReusableProjectView(
+  pvm: ProjectViewManager | null | undefined,
+  projectId: string
+): boolean {
+  try {
+    return Boolean(
+      pvm
+        ?.getAllViews()
+        .some(
+          (v) =>
+            v.projectId === projectId && v.state !== "loading" && !v.view.webContents.isDestroyed()
+        )
+    );
+  } catch {
+    return false;
+  }
+}
+
+/**
  * The window, other than the one making the request, that holds a live view of
  * `projectId`. Walks every registered window's own manager — never the
  * process-global one, which only reaches the last-created window (#8607).

@@ -46,5 +46,8 @@ export function holdProjectOpenForMemoryPressure(
     ],
     onDismiss: () => cancelMemoryPressureHold(PROJECT_OPEN_HOLD_KEY),
     replaceKey: HOLD_TOAST_KEY,
+    // The answer to an open the user just asked for, and the only place its
+    // "Open anyway" lives, so quiet hours must not hold it back.
+    urgent: true,
   });
 }

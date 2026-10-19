@@ -590,7 +590,7 @@ describe("project switch/reopen holds a cold open at critical memory pressure (#
   });
 
   /** `liveProjectIds` are the projects this window already has a renderer for. */
-  function makePvm(liveProjectIds: string[] = []) {
+  function makePvm(liveProjectIds: string[] = [], state: "active" | "cached" | "loading" = "cached") {
     return {
       switchTo: vi.fn().mockResolvedValue({
         view: { webContents: { id: 200, isDestroyed: () => false, send: vi.fn() } },
@@ -601,6 +601,7 @@ describe("project switch/reopen holds a cold open at critical memory pressure (#
       getAllViews: () =>
         liveProjectIds.map((projectId) => ({
           projectId,
+          state,
           view: { webContents: { isDestroyed: () => false } },
         })),
     };
@@ -656,6 +657,17 @@ describe("project switch/reopen holds a cold open at critical memory pressure (#
 
       expect(pvm.switchTo).toHaveBeenCalledTimes(1);
       expect(checkKernelPressureCriticalMock).not.toHaveBeenCalled();
+    });
+
+    it("treats a background restore still loading as the cold start it becomes", async () => {
+      // The switch abandons a loading restore and boots the project from
+      // scratch (#12320), so that view is no reason to let the open through.
+      const pvm = makePvm(["proj-cold"], "loading");
+
+      await expect(
+        handlerFor(channel, pvm)({ sender: { id: 10 } }, "proj-cold", outgoingState)
+      ).rejects.toThrow(expect.objectContaining({ code: "MEMORY_PRESSURE_CRITICAL" }));
+      expect(pvm.switchTo).not.toHaveBeenCalled();
     });
 
     it("opens cold when pressure is below critical", async () => {
