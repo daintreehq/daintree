@@ -4,8 +4,10 @@
  * Lives outside the main event loop so a fully-deadlocked main process can
  * still be force-killed. Receives the main PID via `--main-pid=<pid>` argv,
  * expects a "ping" message every HEARTBEAT_INTERVAL_MS, and SIGKILLs main
- * after MAX_MISSED missed beats. CrashRecoveryService and CrashLoopGuard
- * handle the relaunch + safe-mode path.
+ * after MAX_MISSED missed beats — MAX_MISSED_UNDER_PRESSURE when main last
+ * reported memory pressure (or had no reading) or the watchdog itself just
+ * stalled.
+ * CrashRecoveryService and CrashLoopGuard handle the relaunch + safe-mode path.
  *
  * Fail-open: if anything is malformed (no PID, no parentPort, watchdog
  * itself crashes), we exit without killing main. False positives are far
@@ -21,6 +23,7 @@ import {
   writeWatchdogKillFlag,
   HEARTBEAT_INTERVAL_MS,
   MAX_MISSED,
+  MAX_MISSED_UNDER_PRESSURE,
   type WatchdogMessage,
 } from "./watchdog-host-core.js";
 
@@ -124,5 +127,5 @@ port.on("message", (rawMsg: unknown) => {
 });
 
 console.log(
-  `[WatchdogHost] Started; main PID=${mainPid ?? "<missing>"}, interval=${HEARTBEAT_INTERVAL_MS}ms, threshold=${MAX_MISSED}`
+  `[WatchdogHost] Started; main PID=${mainPid ?? "<missing>"}, interval=${HEARTBEAT_INTERVAL_MS}ms, threshold=${MAX_MISSED} (${MAX_MISSED_UNDER_PRESSURE} under memory pressure)`
 );
