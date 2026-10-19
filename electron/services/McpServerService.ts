@@ -27,7 +27,11 @@ import type {
   TurnOutcomeClass,
 } from "../../shared/types/ipc/mcpServer.js";
 import { SessionStore } from "./mcp-server/sessionStore.js";
-import { helpOwnershipPrincipal, principalOwnerKey } from "./mcp-server/resourceOwnership.js";
+import {
+  helpOwnershipPrincipal,
+  principalOwnerKey,
+  relayOwnershipPrincipal,
+} from "./mcp-server/resourceOwnership.js";
 import type { TerminalAdoptionRecord } from "./mcp-server/terminalAdoption.js";
 import { isTierPermitted } from "./mcp-server/tierAuth.js";
 import type { OrchestratorPaneIdentity } from "./McpPaneConfigService.js";
@@ -40,6 +44,7 @@ import { onRendererScopeChanged } from "../window/webContentsRegistry.js";
 import { handleWaitUntilIdle, handleWaitUntilIdleBatch } from "./mcp-server/waitUntilIdle.js";
 import { handleSkillsSearch, handleSkillsLoad } from "./mcp-server/skills.js";
 import { handleProjectRunCheck } from "./mcp-server/projectCheck.js";
+import { handleProjectRunCommand } from "./mcp-server/projectCommand.js";
 import {
   handleTerminalGetStatusViewless,
   isAgentPaneInWorkspace,
@@ -49,6 +54,7 @@ import {
   TerminalNotifyService,
   helpNotifyKey,
   paneNotifyKey,
+  relayNotifyKey,
   type LaneWake,
 } from "./mcp-server/terminalNotify.js";
 import { ReplyWaiterService } from "./mcp-server/replyWaiter.js";
@@ -62,19 +68,20 @@ import { routedViewWorktreePort } from "./mcp-server/worktreeViewPort.js";
 import { createPluginMcpRoute } from "./pluginAgentMcp/pluginMcpRoute.js";
 import type * as PluginServiceModule from "./PluginService.js";
 import { getPtyClient, setMcpServerServiceRef } from "../window/serviceRefs.js";
+import { machineDisplayName } from "../utils/machineName.js";
 import type {
   PendingRequest,
   DispatchEnvelope,
   HelpTokenValidator,
   HelpSessionWebContentsResolver,
+  HelpSessionViewlessProjectResolver,
   HelpSessionActionContextResolver,
   HelpSessionIdResolver,
-  AssistantPaneWebContentsResolver,
-  AssistantPaneActionContextResolver,
   PaneWorkspaceBindingResolver,
   PaneOwnershipPrincipalResolver,
   PaneTerminalResolver,
   HelpSessionTerminalResolver,
+  AssistantControlBinding,
 } from "./mcp-server/shared.js";
 import type { ActionManifestEntry } from "../../shared/types/actions.js";
 import { events } from "./events.js";
@@ -84,6 +91,8 @@ import { wireMcpServerToConnectivityRegistry } from "./connectivity/index.js";
 // the whole plugin host, and only a request on the plugin MCP route needs it.
 type PluginServiceSingleton = typeof PluginServiceModule.pluginService;
 let pluginServicePromise: Promise<PluginServiceSingleton> | null = null;
+/** Read once: a Mac's computer name costs a subprocess. */
+let localMachineName: string | undefined;
 function loadPluginService(): Promise<PluginServiceSingleton> {
   pluginServicePromise ??= import("./PluginService.js").then(
     (m) => m.pluginService,
@@ -347,6 +356,15 @@ export class McpServerService {
           sessionOrigin,
           options
         ),
+      dispatchActionWithoutView: (workspaceId, actionId, args, confirmed, sessionOrigin, options) =>
+        this.bridge.dispatchActionWithoutView(
+          workspaceId,
+          actionId,
+          args,
+          confirmed,
+          sessionOrigin,
+          options
+        ),
       // Deliberately not this session's own route (#12315): a reveal runs in
       // the view that is being replaced, in the window that already holds the
       // destination workspace.
@@ -373,9 +391,17 @@ export class McpServerService {
         handleWaitUntilIdleBatch(rawArgs, signal, options),
       handleSkillsSearch: (rawArgs) => handleSkillsSearch(rawArgs),
       handleSkillsLoad: (rawArgs) => handleSkillsLoad(rawArgs),
-      handleProjectRunCheck: (rawArgs, signal) => handleProjectRunCheck(rawArgs, signal),
-      handleTerminalGetStatusViewless: (rawArgs, workspaceId) =>
-        handleTerminalGetStatusViewless(rawArgs, workspaceId),
+      handleProjectRunCheck: (rawArgs, signal, authorize) =>
+        handleProjectRunCheck(rawArgs, signal, authorize),
+      handleProjectRunCommand: (rawArgs, signal, authorize) =>
+        handleProjectRunCommand(rawArgs, signal, authorize),
+      handleTerminalGetStatusViewless: (rawArgs, workspaceId, admittedAssistants) =>
+        handleTerminalGetStatusViewless(rawArgs, workspaceId, admittedAssistants),
+      machineName: () => (localMachineName ??= machineDisplayName()),
+      readCodexQuota: async () => {
+        const { readCodexQuota } = await import("./codex/CodexQuotaService.js");
+        return readCodexQuota();
+      },
       handleTerminalReadLastMessageOwned: (terminalId, options, signal) =>
         handleTerminalReadLastMessageOwned(terminalId, options, signal),
       // The pty-host's own spawn tracking spans every view, which is what a
@@ -483,33 +509,16 @@ export class McpServerService {
     this.httpLifecycle.setHelpSessionWebContentsResolver(resolver);
   }
 
+  setHelpSessionViewlessProjectResolver(resolver: HelpSessionViewlessProjectResolver | null): void {
+    this.httpLifecycle.setHelpSessionViewlessProjectResolver(resolver);
+  }
+
   setHelpSessionActionContextResolver(resolver: HelpSessionActionContextResolver | null): void {
     this.httpLifecycle.setHelpSessionActionContextResolver(resolver);
   }
 
   setHelpSessionIdResolver(resolver: HelpSessionIdResolver | null): void {
     this.httpLifecycle.setHelpSessionIdResolver(resolver);
-  }
-
-  /**
-   * A lane's messaging enrollment began or ended (#13335). Every assistant
-   * session re-lists, since its inbox tools are offered only while its own
-   * lane is enrolled; a transport closing meanwhile reads the new list anyway.
-   */
-  notifyAssistantMessagingChanged(): void {
-    for (const sessionId of this.sessionStore.sessionHelpIdMap.keys()) {
-      const session =
-        this.sessionStore.httpSessions.get(sessionId) ?? this.sessionStore.sessions.get(sessionId);
-      session?.server.sendToolListChanged().catch(() => {});
-    }
-  }
-
-  setAssistantPaneWebContentsResolver(resolver: AssistantPaneWebContentsResolver | null): void {
-    this.httpLifecycle.setAssistantPaneWebContentsResolver(resolver);
-  }
-
-  setAssistantPaneActionContextResolver(resolver: AssistantPaneActionContextResolver | null): void {
-    this.httpLifecycle.setAssistantPaneActionContextResolver(resolver);
   }
 
   setPaneWorkspaceBindingResolver(resolver: PaneWorkspaceBindingResolver | null): void {
@@ -526,6 +535,11 @@ export class McpServerService {
 
   setHelpSessionTerminalResolver(resolver: HelpSessionTerminalResolver | null): void {
     this.httpLifecycle.setHelpSessionTerminalResolver(resolver);
+  }
+
+  /** Lets assistants address one another (#13496); null takes it away again. */
+  setAssistantControl(binding: AssistantControlBinding | null): void {
+    this.httpLifecycle.setAssistantControl(binding);
   }
 
   /**
@@ -677,7 +691,7 @@ export class McpServerService {
     return this.terminalNotify.getPaneState(terminalId);
   }
 
-  /** Tell an assistant lane a message is waiting, on the same line its notices use (#13333). */
+  /** Queue a line for an assistant on the same line its notices use (#13500, #13496). */
   queueLaneWake(
     lane: { helpSessionId: string; terminalId: string; projectId: string },
     wake: LaneWake
@@ -1205,6 +1219,35 @@ export class McpServerService {
   ): ReturnType<typeof this.bridge.dispatchActionForWebContents> {
     this.ensureHostBridgeListeners();
     return this.bridge.dispatchActionForWebContents(...args);
+  }
+
+  /**
+   * Remote Hosts (#13493): a session for another machine's assistant reaching
+   * this host through its Shell, admitted through this server's own gates and
+   * bound to one project. Null while the server is off.
+   */
+  openRelaySession(
+    ...args: Parameters<HttpLifecycle["openRelaySession"]>
+  ): ReturnType<HttpLifecycle["openRelaySession"]> {
+    return this.httpLifecycle.openRelaySession(...args);
+  }
+
+  /**
+   * Remote Hosts (#13493): another machine's assistant no longer holds what it
+   * made here. Its terminals and worktrees stay; only the authority goes.
+   */
+  retireRelayPrincipal(senderId: string, helpSessionId: string): void {
+    const principal = relayOwnershipPrincipal(senderId, helpSessionId);
+    this.sessionStore.resourceOwnership.revokePrincipal(principal);
+    this.terminalNotify.revokeOwner(relayNotifyKey(principal));
+  }
+
+  /**
+   * Remote Hosts (#13500): a Shell's link session ended for good, so the
+   * notices its assistants' calls armed have nowhere left to go.
+   */
+  dropRelayLinkNotices(linkSessionId: string): void {
+    this.terminalNotify.dropRelayLink(linkSessionId);
   }
 
   /** Remote Hosts: the action manifest of the local view that drives a host's project. */

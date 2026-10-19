@@ -375,6 +375,26 @@ export const SETTINGS_REGISTRY = [
         ],
       },
       {
+        id: "general-resume-on-restart",
+        subtab: "overview",
+        subtabLabel: "Overview",
+        section: "Startup",
+        title: "Resume agents after restart",
+        description:
+          "Resume every agent pane after a restart, only when each is first focused, or never on its own.",
+        keywords: [
+          "resume",
+          "restart",
+          "startup",
+          "agents",
+          "session",
+          "conversation",
+          "lazy",
+          "focus",
+          "memory",
+        ],
+      },
+      {
         id: "general-window-opening",
         subtab: "overview",
         subtabLabel: "Overview",

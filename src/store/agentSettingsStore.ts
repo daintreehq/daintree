@@ -1,10 +1,15 @@
 import { create } from "zustand";
-import type { AgentSettings, AgentSettingsEntry, CliAvailability } from "@shared/types";
+import type {
+  AgentSettings,
+  AgentSettingsEntry,
+  CliAvailability,
+  ResumeOnRestart,
+} from "@shared/types";
 import { agentSettingsClient } from "@/clients";
 import { getSafeBootPromise } from "@/lib/bootPromise";
 import { DEFAULT_AGENT_SETTINGS } from "@shared/types";
 import { getEffectiveAgentIds } from "../../shared/config/agentRegistry";
-import { BUILT_IN_AGENT_IDS, LAUNCHABLE_AGENT_IDS } from "../../shared/config/agentIds";
+import { BUILT_IN_AGENT_IDS } from "../../shared/config/agentIds";
 import { isAgentPinned } from "../../shared/utils/agentPinned";
 import { isAgentInstalled } from "../../shared/utils/agentAvailability";
 import { useCliAvailabilityStore } from "./cliAvailabilityStore";
@@ -94,7 +99,7 @@ export function buildInitialAgentPinUpdates(
   if (!isFreshDefaultAgentSettings(settings)) return null;
 
   const selected = new Set(
-    LAUNCHABLE_AGENT_IDS.filter((id) => isAgentInstalled(availability[id])).slice(
+    BUILT_IN_AGENT_IDS.filter((id) => isAgentInstalled(availability[id])).slice(
       0,
       INITIAL_PIN_LIMIT
     )
@@ -235,6 +240,8 @@ interface AgentSettingsActions {
    * per-agent `inlineMode`. Optimistic with rollback on IPC failure.
    */
   setGlobalUseAltScreen: (value: boolean) => Promise<void>;
+  /** Root-level `resumeOnRestart` (#13509); optimistic, rolled back on failure. */
+  setResumeOnRestart: (value: ResumeOnRestart) => Promise<void>;
   /**
    * Set or clear the worktree-scoped preset override for an agent. Reads the
    * current `worktreePresets` map, spreads sibling keys, then writes the merged
@@ -472,6 +479,23 @@ export const useAgentSettingsStore = create<AgentSettingsStore>()((set, get) => 
       if (myEpoch !== normalizeEpoch) return;
       if (previous) set({ settings: previous });
       set({ error: formatErrorMessage(e, "Failed to update global alt-screen setting") });
+      throw e;
+    }
+  },
+
+  setResumeOnRestart: async (value: ResumeOnRestart) => {
+    const myEpoch = ++normalizeEpoch;
+    set({ error: null });
+    const previous = get().settings;
+    if (previous) {
+      set({ settings: { ...previous, resumeOnRestart: value } });
+    }
+    try {
+      await agentSettingsClient.setResumeOnRestart(value);
+    } catch (e) {
+      if (myEpoch !== normalizeEpoch) return;
+      if (previous) set({ settings: previous });
+      set({ error: formatErrorMessage(e, "Failed to update the resume after restart setting") });
       throw e;
     }
   },

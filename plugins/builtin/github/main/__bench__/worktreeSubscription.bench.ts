@@ -173,6 +173,8 @@ async function runScenario(): Promise<Metrics> {
     pluginActionOwners: new Map(),
     actionValidators: new Map(),
     pluginBadges: new Map(),
+    pluginToolbarBadges: new Map(),
+    emitToolbarBadges: () => {},
     pluginFsWatchers: new Map(),
     broadcaster: { schedulePluginActionsBroadcast: () => {} },
     panelLifecycleBroker: { subscribe: () => () => {} },

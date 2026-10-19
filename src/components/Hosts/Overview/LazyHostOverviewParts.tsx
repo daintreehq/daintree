@@ -2,7 +2,6 @@ import { lazy, Suspense, type ComponentProps, type ComponentType } from "react";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
 import { isRemoteShellSupported } from "@/lib/remoteHosts";
 import { hasRemoteHosts, useHostList } from "../hostList";
-import type { HostExchanges as HostExchangesComponent } from "./HostExchanges";
 import type { HostSparkline as HostSparklineComponent } from "./HostSparkline";
 import type { OtherHostsWorktrees as OtherHostsWorktreesComponent } from "./OtherHostsWorktrees";
 import type { WorktreePlacementRow as WorktreePlacementRowComponent } from "./WorktreePlacementRow";
@@ -10,7 +9,6 @@ import type { WorktreePlacementRow as WorktreePlacementRowComponent } from "./Wo
 type PlacementProps = ComponentProps<typeof WorktreePlacementRowComponent>;
 type OtherWorktreesProps = ComponentProps<typeof OtherHostsWorktreesComponent>;
 type SparklineProps = ComponentProps<typeof HostSparklineComponent>;
-type ExchangesProps = ComponentProps<typeof HostExchangesComponent>;
 
 // Each loader tests the define directly so a build without Remote Hosts
 // (Windows) drops these components from its output.
@@ -35,15 +33,7 @@ function loadHostSparkline(): Promise<{ default: ComponentType<SparklineProps> }
   return Promise.resolve({ default: (_props: SparklineProps) => null });
 }
 
-function loadHostExchanges(): Promise<{ default: ComponentType<ExchangesProps> }> {
-  if (__DAINTREE_REMOTE_HOSTS__) {
-    return import("./HostExchanges").then((m) => ({ default: m.HostExchanges }));
-  }
-  return Promise.resolve({ default: (_props: ExchangesProps) => null });
-}
-
 const PlacementRow = lazy(loadPlacementRow);
-const Exchanges = lazy(loadHostExchanges);
 const Sparkline = lazy(loadHostSparkline);
 const OtherWorktrees = lazy(loadOtherHostsWorktrees);
 
@@ -86,17 +76,6 @@ export function LazyHostSparkline(props: SparklineProps) {
     <ErrorBoundary variant="component" componentName="HostSparkline">
       <Suspense fallback={<span className={props.className} aria-hidden="true" />}>
         <Sparkline {...props} />
-      </Suspense>
-    </ErrorBoundary>
-  );
-}
-
-/** A host card's assistant exchanges; renders nothing until it has some to show. */
-export function LazyHostExchanges(props: ExchangesProps) {
-  return (
-    <ErrorBoundary variant="component" componentName="HostExchanges">
-      <Suspense fallback={null}>
-        <Exchanges {...props} />
       </Suspense>
     </ErrorBoundary>
   );

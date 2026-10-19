@@ -666,6 +666,24 @@ describe("AuditService hydrate — backward compat", () => {
     expect(record!.severity).toBe("critical");
   });
 
+  it("keeps a grant row naming an actor this build no longer issues to, as written", () => {
+    const retiredActorGrant = {
+      type: "grant.issued",
+      id: "grant-old",
+      timestamp: 1000,
+      sessionId: "sess-1",
+      toolId: "*",
+      ttlMs: 60_000,
+      grantId: "g-1",
+      actorId: "pane-1",
+      actorType: "assistant-pane",
+    };
+    const { service } = makeFixture({}, [retiredActorGrant]);
+    const records = service.getLogRecords();
+    expect(records).toHaveLength(1);
+    expect(records[0]).toMatchObject({ id: "grant-old", actorType: "assistant-pane" });
+  });
+
   it("reclassifies a malformed persisted record with `type: 'dispatch'` as audit (#10027)", () => {
     // A forward-compat dispatch-record discriminator on a persisted row
     // would otherwise be misclassified as a grant and bypass severity

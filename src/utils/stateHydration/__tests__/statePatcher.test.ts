@@ -3666,7 +3666,9 @@ describe("buildArgsForRespawn — cold launch for an agent that resumes across d
     expect(result.command).not.toContain("resume");
   });
 
-  it("ignores a recovery marker for an agent restore has no cold-launch decision for", () => {
+  // Any agent can be held now that the resume setting holds whichever it finds
+  // (#13509), so a held Claude pane must stay held on the next restart too.
+  it("holds a pane of any agent held last time again as-is", () => {
     const result = buildArgsForRespawn(
       {
         id: "t1",
@@ -3684,8 +3686,139 @@ describe("buildArgsForRespawn — cold launch for an agent that resumes across d
       "/tmp"
     );
 
-    expect(result.restoreRecovery).toBeUndefined();
+    expect(result.restoreRecovery).toEqual({ reason: "sibling-owns-session-id" });
+    expect(result.agentSessionId).toBeUndefined();
+    expect(result.command).not.toContain("--resume");
+  });
+});
+
+describe("buildArgsForRespawn — the resume-on-restart setting (#13509)", () => {
+  const claudePane = {
+    id: "t1",
+    kind: "terminal" as const,
+    launchAgentId: "claude",
+    cwd: "/repo",
+    location: "grid" as const,
+    title: "Claude",
+  };
+  const settings = { agents: { claude: {} } };
+  const respawn = (
+    snapshot: SavedSnapshot,
+    options: Parameters<typeof buildArgsForRespawn>[7]
+  ): AddTerminalArgs =>
+    buildArgsForRespawn(snapshot, "terminal", "/repo", settings, false, "/tmp", undefined, options);
+
+  it("resumes as today under always", () => {
+    const result = respawn(
+      { ...claudePane, agentSessionId: "sess-c" },
+      { resumeOnRestart: "always" }
+    );
+
     expect(result.command).toBe("claude --resume sess-c");
+    expect(result.agentSessionId).toBe("sess-c");
+    expect(result.restoreRecovery).toBeUndefined();
+  });
+
+  it.each(["never", "on-focus"] as const)(
+    "holds a pane under %s, keeping the exact conversation on the hold",
+    (policy) => {
+      const result = respawn(
+        { ...claudePane, agentSessionId: "sess-c", command: "claude --resume sess-c" },
+        { resumeOnRestart: policy }
+      );
+
+      expect(result.restoreRecovery).toEqual({ reason: "resume-deferred", sessionId: "sess-c" });
+      // Nothing launches, and the pane claims no conversation until it resumes.
+      expect(result.agentSessionId).toBeUndefined();
+      expect(result.command).not.toContain("--resume");
+      expect(result.sessionLostOnRestore).toBeUndefined();
+    }
+  );
+
+  it("keeps the conversation a resume-latest lookup named", () => {
+    const result = respawn(claudePane, {
+      resumeOnRestart: "on-focus",
+      resolvedResumeLatestSessionId: "sess-named",
+    });
+
+    expect(result.restoreRecovery).toEqual({
+      reason: "resume-deferred",
+      sessionId: "sess-named",
+    });
+    expect(result.agentSessionId).toBeUndefined();
+  });
+
+  it("holds a pane with nothing exact to resume, offering no conversation", () => {
+    buildResumeLatestCommandMock.mockReturnValue("claude --continue");
+
+    const result = respawn(claudePane, { resumeOnRestart: "never" });
+
+    expect(result.restoreRecovery).toEqual({ reason: "resume-deferred" });
+    expect(result.command).not.toContain("--continue");
+    expect(result.agentSessionId).toBeUndefined();
+  });
+
+  it("holds a pane whose resume was withheld without offering the sibling's conversation", () => {
+    const result = respawn(
+      { ...claudePane, agentSessionId: "sess-dup" },
+      { resumeOnRestart: "never", allowSessionIdResume: false }
+    );
+
+    expect(result.restoreRecovery).toEqual({ reason: "resume-deferred" });
+    expect(result.sessionLostOnRestore).toBeUndefined();
+  });
+
+  it("keeps a hold restore itself decided, with its own reason", () => {
+    const result = buildArgsForRespawn(
+      {
+        id: "pane-a",
+        kind: "terminal",
+        launchAgentId: "codex",
+        cwd: "/repo",
+        worktreeId: "/repo",
+        location: "grid",
+        agentSessionId: "sess-a",
+      },
+      "terminal",
+      "/repo",
+      { agents: { codex: {} } },
+      false,
+      "/tmp",
+      undefined,
+      { coldLaunch: { cwd: "/repo", awaitingDestination: true }, resumeOnRestart: "never" }
+    );
+
+    expect(result.restoreRecovery).toEqual({
+      reason: "destination-unavailable",
+      sessionId: "sess-a",
+      awaitingDestination: true,
+    });
+  });
+
+  it("keeps a pane the setting held held on the next restart, conversation and all", () => {
+    const result = respawn(
+      { ...claudePane, restoreRecovery: { reason: "resume-deferred", sessionId: "sess-c" } },
+      { resumeOnRestart: "always" }
+    );
+
+    expect(result.restoreRecovery).toEqual({ reason: "resume-deferred", sessionId: "sess-c" });
+    expect(result.agentSessionId).toBeUndefined();
+  });
+
+  it("leaves a plain terminal alone", () => {
+    const result = buildArgsForRespawn(
+      { id: "t2", kind: "terminal", cwd: "/repo", location: "grid", command: "npm run dev" },
+      "terminal",
+      "/repo",
+      settings,
+      false,
+      "/tmp",
+      undefined,
+      { resumeOnRestart: "never" }
+    );
+
+    expect(result.restoreRecovery).toBeUndefined();
+    expect(result.command).toBe("npm run dev");
   });
 });
 

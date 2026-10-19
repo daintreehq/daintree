@@ -65,8 +65,11 @@ function makeHost() {
     registerFileDecorationProvider: vi.fn(() => vi.fn()),
     invalidateFileDecorations: vi.fn(),
     setPanelBadge: vi.fn(async () => {}),
+    setToolbarButtonBadge: vi.fn(async () => {}),
+    setContext: vi.fn(async () => {}),
     setPanelMenuItems: vi.fn(async () => {}),
     showToast: vi.fn(async () => {}),
+    notify: vi.fn(async (_options: unknown) => ({ id: "n-1" })),
     showQuickPick: vi.fn(async (): Promise<unknown> => undefined),
     sendToAgent: vi.fn(async (): Promise<unknown> => ({ status: "drafted", terminalId: "t-1" })),
     agents: {
@@ -272,6 +275,26 @@ describe("PluginDevWorkerMainBridge", () => {
     expect(host.dispatch).toHaveBeenNthCalledWith(2, "terminal.focus", undefined, undefined);
   });
 
+  it("relays notify options whole, unknown keys included, and returns the host's id (#13505)", async () => {
+    const { host, workerHost } = makeBridge();
+    const options = {
+      title: "t",
+      body: "b",
+      actions: [{ id: "o", label: "Open", actionId: "acme.demo.open", extra: true }],
+      sound: true,
+    };
+    workerHost.emit("worker-message", {
+      type: "host-call",
+      requestId: "c-n",
+      method: "notify",
+      params: { options },
+    });
+    await flush();
+    expect(host.notify).toHaveBeenCalledWith(options);
+    const result = workerHost.sent.find((m) => m.type === "host-result" && m.requestId === "c-n");
+    expect(result).toMatchObject({ ok: true, result: { id: "n-1" } });
+  });
+
   it("relays db.resolve with only the database id", async () => {
     const { host, workerHost } = makeBridge();
     (host as unknown as { db: { resolve: ReturnType<typeof vi.fn> } }).db = {
@@ -358,6 +381,33 @@ describe("PluginDevWorkerMainBridge", () => {
     expect(host.reloadPanel).toHaveBeenCalledWith("p1");
     const result = workerHost.sent.find((m) => m.type === "host-result" && m.requestId === "c-rp");
     expect(result).toMatchObject({ ok: true, result: "scheduled" });
+  });
+
+  it("relays setContext as a call and returns the host's rejection to the worker (#13506)", async () => {
+    const { host, workerHost } = makeBridge();
+    workerHost.emit("worker-message", {
+      type: "host-call",
+      requestId: "c-sc",
+      method: "setContext",
+      params: { key: "needsYou", value: "triage" },
+    });
+    await flush();
+    expect(host.setContext).toHaveBeenCalledWith("needsYou", "triage");
+    const ok = workerHost.sent.find((m) => m.type === "host-result" && m.requestId === "c-sc");
+    expect(ok).toMatchObject({ ok: true });
+
+    host.setContext.mockRejectedValueOnce(new Error("setContext: at most 32 keys per plugin"));
+    workerHost.emit("worker-message", {
+      type: "host-call",
+      requestId: "c-sc-cap",
+      method: "setContext",
+      params: { key: "k33", value: true },
+    });
+    await flush();
+    const refused = workerHost.sent.find(
+      (m) => m.type === "host-result" && m.requestId === "c-sc-cap"
+    );
+    expect(refused).toMatchObject({ ok: false, error: expect.stringMatching(/at most 32 keys/) });
   });
 
   it("relays restartWorker and returns the host's answer (#13410)", async () => {
@@ -579,6 +629,17 @@ describe("PluginDevWorkerMainBridge", () => {
       text: "CI",
       color: "success",
     });
+  });
+
+  it("forwards setToolbarButtonBadge host-notify to the real host (#13503)", async () => {
+    const { host, workerHost } = makeBridge();
+    workerHost.emit("worker-message", {
+      type: "host-notify",
+      method: "setToolbarButtonBadge",
+      params: { buttonId: "needs", badge: { kind: "label", text: "4" } },
+    });
+    await flush();
+    expect(host.setToolbarButtonBadge).toHaveBeenCalledWith("needs", { kind: "label", text: "4" });
   });
 
   it("forwards a null setPanelBadge (clear) host-notify to the real host (#10585)", async () => {

@@ -62,3 +62,21 @@ export async function invokeHostChannel<T>(
   if (!envelope.ok) throw new ViewlessInvokeError(envelope.error);
   return envelope.data as T;
 }
+
+/**
+ * Deliver one fire-and-forget host IPC message for a project with no renderer
+ * attached — terminal input, which a view sends with `ipcRenderer.send` — to
+ * the same handler a view's message reaches.
+ */
+export function sendHostChannel(
+  projectId: string,
+  channel: string,
+  args: unknown[],
+  client: ClientRef = getLocalClientRef()
+): void {
+  getIpcDispatcher().sendForEndpoint(
+    { endpoint: createViewlessEndpoint(projectId), client },
+    channel,
+    args
+  );
+}

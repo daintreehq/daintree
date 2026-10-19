@@ -39,6 +39,10 @@ const projectTargetingMock = vi.hoisted(() => ({
   setProjectTargeting: vi.fn((input: { pluginId: string; enabled: boolean }) =>
     Promise.resolve(input.enabled)
   ),
+  getOsNotifications: vi.fn((_input: { pluginId: string }) => Promise.resolve(false)),
+  setOsNotifications: vi.fn((input: { pluginId: string; enabled: boolean }) =>
+    Promise.resolve(input.enabled)
+  ),
 }));
 
 // The Performance tab is earned by main having a snapshot for the plugin.
@@ -50,6 +54,12 @@ beforeEach(() => {
   projectTargetingMock.getProjectTargeting.mockResolvedValue(false);
   projectTargetingMock.setProjectTargeting.mockReset();
   projectTargetingMock.setProjectTargeting.mockImplementation((input) =>
+    Promise.resolve(input.enabled)
+  );
+  projectTargetingMock.getOsNotifications.mockReset();
+  projectTargetingMock.getOsNotifications.mockResolvedValue(false);
+  projectTargetingMock.setOsNotifications.mockReset();
+  projectTargetingMock.setOsNotifications.mockImplementation((input) =>
     Promise.resolve(input.enabled)
   );
   getPerfSnapshotsMock.mockClear();
@@ -301,6 +311,39 @@ describe("PluginDetailPane project targeting switch (#13119)", () => {
       withCapabilities(["project:dispatch"], { origin: "project", projectId: "project-a" })
     );
     expect(screen.queryByTestId("plugin-project-targeting-switch")).toBeNull();
+  });
+});
+
+describe("PluginDetailPane OS notifications switch (#13505)", () => {
+  const osSwitch = () => screen.getByTestId("plugin-os-notifications-switch");
+
+  it("turns the grant on for this plugin instance only", async () => {
+    renderPane(withCapabilities(["notification:os"]));
+    expect(screen.getByText("Send system notifications")).toBeTruthy();
+    await vi.waitFor(() => expect(osSwitch().hasAttribute("disabled")).toBe(false));
+    expect(osSwitch().getAttribute("aria-checked")).toBe("false");
+
+    fireEvent.click(screen.getByRole("switch", { name: "Allow OS notifications" }));
+    await vi.waitFor(() => expect(osSwitch().getAttribute("aria-checked")).toBe("true"));
+    expect(projectTargetingMock.setOsNotifications).toHaveBeenCalledWith({
+      pluginId: "acme.demo",
+      enabled: true,
+    });
+    expect(projectTargetingMock.setProjectTargeting).not.toHaveBeenCalled();
+  });
+
+  it("is offered to a project plugin too, which can page about its own project", async () => {
+    renderPane(
+      withCapabilities(["notification:os"], { origin: "project", projectId: "project-a" })
+    );
+    await vi.waitFor(() => expect(osSwitch().hasAttribute("disabled")).toBe(false));
+    expect(screen.queryByTestId("plugin-project-targeting-switch")).toBeNull();
+  });
+
+  it("is absent when the plugin does not declare notification:os", () => {
+    renderPane(withCapabilities(["project:dispatch"]));
+    expect(screen.queryByTestId("plugin-os-notifications-switch")).toBeNull();
+    expect(projectTargetingMock.getOsNotifications).not.toHaveBeenCalled();
   });
 });
 

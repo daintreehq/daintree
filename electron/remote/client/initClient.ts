@@ -76,14 +76,9 @@ import { WslKeepalive } from "./wslKeepalive.js";
 import { WslTransport } from "./wslTransport.js";
 import { TransportError, UnusableConnectionError, type LinkTransport } from "./transport.js";
 import { WindowHostBinding } from "./WindowHostBinding.js";
-import {
-  prepareHostProjectView,
-  type HostProjectViewDeps,
-  type HostProjectViewResult,
-} from "./hostProjectViews.js";
 import { defaultCommandRunner } from "./commandRunner.js";
 import { readOrCreateDeviceId } from "./deviceId.js";
-import { machineDisplayName } from "./machineName.js";
+import { machineDisplayName } from "../../utils/machineName.js";
 import { detectClientBundle, downloadArtifact } from "./clientBuild.js";
 import { HostSetupService, RELEASE_FEED_PREFIXES } from "./HostSetupService.js";
 
@@ -183,30 +178,6 @@ const senders: SenderLookup = {
     else queueMicrotask(callback);
   },
 };
-
-/** The window registry's side of preparing a host project's view (see hostProjectViews.ts). */
-function hostProjectViewDeps(bindings: WindowHostBinding): HostProjectViewDeps {
-  return {
-    owner(key) {
-      const owner = otherOwnerOf(key, null);
-      if (!owner) return null;
-      const entry = owner.projectViewManager.views.get(key);
-      const wc = entry?.view.webContents;
-      return {
-        state: owner.state,
-        entry: entry
-          ? { state: entry.state, webContentsId: wc && !wc.isDestroyed() ? wc.id : null }
-          : null,
-      };
-    },
-    windowsOn: (hostId) => [...bindings.windowsOn(hostId)],
-    restore: async (windowId, key, projectPath) => {
-      const pvm = getWindowRegistry()?.getByWindowId(windowId)?.services.projectViewManager;
-      return pvm ? pvm.restoreInBackground(key, projectPath, { lastUsed: Date.now() }) : null;
-    },
-    claim: (key, windowId) => claimProjectActivation(key, windowId),
-  };
-}
 
 function managerFor(windowId: number) {
   const pvm = getWindowRegistry()?.getByWindowId(windowId)?.services.projectViewManager;
@@ -680,12 +651,6 @@ export function initRemoteHostsClient(hooks: RemoteHostsClientHooks = {}): {
   /** Sends a Remote Hosts event to every view on this machine. */
   emitLocal(event: RemoteHostsEvent): void;
   registry: HostRegistry;
-  /** A live view of a host's project, made in the background if need be; see prepareHostProjectView. */
-  prepareHostProjectView(
-    hostId: HostId,
-    projectId: string,
-    projectPath: string
-  ): Promise<HostProjectViewResult>;
   dispose(): Promise<void>;
 } {
   const registry = new HostRegistry(store as unknown as RemoteHostsStore);
@@ -871,13 +836,6 @@ export function initRemoteHostsClient(hooks: RemoteHostsClientHooks = {}): {
     manager,
     emitLocal: broadcastLocal,
     registry,
-    prepareHostProjectView: (hostId, projectId, projectPath) =>
-      prepareHostProjectView(
-        hostProjectViewDeps(bindings),
-        toHostScopedKey(hostId, projectId),
-        hostId,
-        projectPath
-      ),
     async dispose() {
       unregister();
       unregisterWindowHosts();

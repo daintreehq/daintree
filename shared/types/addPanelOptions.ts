@@ -234,11 +234,11 @@ export interface AddPanelOptionsBase {
   lastActiveAt?: number;
   /**
    * Launch-time `ActionContext` snapshot, captured synchronously by the caller
-   * when it initiates the launch. Threaded to `terminal.spawn` and consumed
-   * only by the `daintree-assistant` pinned-session path (#10647) so the CLI's
-   * MCP tool dispatch targets the worktree/terminal focused at launch even if
-   * focus later changes. Ignored for every other agent. The help-session
-   * launch path captures its own snapshot via `help.provisionSession` instead.
+   * when it initiates the launch. Threaded to `terminal.spawn`, where an agent
+   * pane's workspace binding replays it (#12486) so its MCP tool dispatch
+   * targets the worktree/terminal focused at launch even if focus later
+   * changes. The help-session launch path captures its own snapshot via
+   * `help.provisionSession` instead.
    */
   actionContext?: ActionContext;
   /**

@@ -8,6 +8,16 @@ import {
 } from "./persistence/persistWriteMerge";
 import { registerPersistedStore } from "./persistence/persistedStoreRegistry";
 import { notify } from "@/lib/notify";
+import {
+  buildPanelLimitSnapshot,
+  computeHardwareDefaults,
+  evaluatePanelLimit,
+  type PanelLimitSnapshot,
+  type PanelLimitTier,
+} from "@shared/utils/panelLimit";
+
+export { buildPanelLimitSnapshot, computeHardwareDefaults, evaluatePanelLimit };
+export type { PanelLimitSnapshot, PanelLimitTier };
 
 export const DEFAULT_SOFT_WARNING_LIMIT = 12;
 export const DEFAULT_CONFIRMATION_LIMIT = 20;
@@ -15,55 +25,6 @@ export const DEFAULT_HARD_LIMIT = 32;
 export const DISMISS_STEP_SIZE = 4;
 
 const STORAGE_KEY = "daintree-panel-limits";
-
-export type PanelLimitTier = "ok" | "soft" | "confirm" | "hard";
-
-export function evaluatePanelLimit(
-  count: number,
-  limits: { softWarningLimit: number; confirmationLimit: number; hardLimit: number }
-): PanelLimitTier {
-  if (count >= limits.hardLimit) return "hard";
-  if (count >= limits.confirmationLimit) return "confirm";
-  if (count >= limits.softWarningLimit) return "soft";
-  return "ok";
-}
-
-/** The panel count and the limits in force, as `addPanel` judged them. */
-export interface PanelLimitSnapshot {
-  count: number;
-  softWarningLimit: number;
-  confirmationLimit: number;
-  hardLimit: number;
-  tier: PanelLimitTier;
-}
-
-export function buildPanelLimitSnapshot(
-  count: number,
-  limits: { softWarningLimit: number; confirmationLimit: number; hardLimit: number }
-): PanelLimitSnapshot {
-  const { softWarningLimit, confirmationLimit, hardLimit } = limits;
-  return {
-    count,
-    softWarningLimit,
-    confirmationLimit,
-    hardLimit,
-    tier: evaluatePanelLimit(count, limits),
-  };
-}
-
-const GB = 1024 * 1024 * 1024;
-
-export function computeHardwareDefaults(totalMemoryBytes: number): {
-  soft: number;
-  confirm: number;
-  hard: number;
-} {
-  const gb = totalMemoryBytes / GB;
-  if (gb <= 8) return { soft: 8, confirm: 16, hard: 24 };
-  if (gb <= 16) return { soft: 16, confirm: 30, hard: 48 };
-  if (gb <= 32) return { soft: 24, confirm: 48, hard: 72 };
-  return { soft: 32, confirm: 64, hard: 100 };
-}
 
 /** The operations that open panels in a batch. */
 export type PanelLimitBatchSource = { kind: "recipe"; name: string } | { kind: "clone-layout" };

@@ -14,8 +14,7 @@
 // `import type`, so keeping the schema out of `shared/` keeps Zod out of the
 // worker bundle's dependency graph.
 //
-// Mirrors the `AssistantHostEventSchema` pattern in `./ipc.ts` — a
-// `z.discriminatedUnion` on the envelope tag, which fails closed on `null`,
+// A `z.discriminatedUnion` on the envelope tag, which fails closed on `null`,
 // primitives and a missing/unknown tag without ever throwing.
 
 import { z } from "zod";
@@ -46,9 +45,11 @@ const HOST_CALL_METHODS = {
   "terminals.readScreen": true,
   sendToAgent: true,
   showToast: true,
+  notify: true,
   dispatch: true,
   reloadPanel: true,
   restartWorker: true,
+  setContext: true,
   "actions.list": true,
   "actions.get": true,
   "settings.get": true,
@@ -95,6 +96,7 @@ const HOST_NOTIFY_METHODS = {
   postToPanel: true,
   invalidateFileDecorations: true,
   setPanelBadge: true,
+  setToolbarButtonBadge: true,
   setPanelMenuItems: true,
   registerFileDecorationProvider: true,
   unregisterFileDecorationProvider: true,

@@ -6,10 +6,10 @@ import {
   boundTerminalStatusOutput,
   type CapturedTail,
 } from "../../../shared/utils/terminalOutputBudget.js";
-import type {
-  TerminalStatusEntry,
-  TerminalStatusResult,
-  TerminalStatusUnavailableField,
+import {
+  VIEWLESS_STATUS_UNAVAILABLE_FIELDS,
+  type TerminalStatusEntry,
+  type TerminalStatusResult,
 } from "../../../shared/types/terminalStatus.js";
 import { isAssistantTerminalRecord } from "../assistantTerminal.js";
 import { getPtyClient } from "../../window/serviceRefs.js";
@@ -32,35 +32,6 @@ import type { PtyClient } from "../PtyClient.js";
  * two are told apart on the wire by `source` and `unavailableFields` rather
  * than by the client guessing from which fields happen to be present.
  */
-
-/**
- * What a pty-sourced answer structurally cannot observe.
- *
- * `armed` is fleet-broadcast routing held in `useFleetArmingStore`, and
- * `lastCheckResult` is parsed out of agent stdout by `CheckResultDetector` —
- * both only ever reach the renderer's panel record, and main keeps no copy.
- *
- * `exitCode` is the one that looks reachable. Main caches exit metadata per
- * terminal in `AgentAvailabilityStore` (#12494), but everything else in this
- * answer comes from the pty-host record, and the store is a second copy fed
- * separately by events — the two can disagree mid-respawn, and splicing one
- * field in from it is a contract change of its own. The renderer path has the
- * code on the panel itself and reports it there.
- *
- * All three are reported as unavailable rather than defaulted or guessed:
- * `armed: false` and a borrowed exit code are both interpretations main has no
- * evidence for. `agentState` still distinguishes `completed` from `exited`, so
- * "the run finished, and how" survives without the numeric code.
- *
- * `hasPty` is deliberately *not* here. It is computed in the pty-host itself
- * (`mapTerminalInfo`), so this is the surface that can observe it — the
- * renderer's panel copy is the one that never gets written (#12336).
- */
-export const VIEWLESS_STATUS_UNAVAILABLE_FIELDS: readonly TerminalStatusUnavailableField[] = [
-  "armed",
-  "lastCheckResult",
-  "exitCode",
-];
 
 /** Mirrors the action's own `terminalIds` bound, which does not run here. */
 const MAX_TERMINAL_IDS = 256;
@@ -216,12 +187,17 @@ function parseArgs(rawArgs: unknown): ParsedArgs {
  * {@link buildViewlessTerminalStatus}, which is what actually keeps a foreign
  * id from being looked up.
  */
-function isVisibleToBoundSession(record: TerminalRecord, workspaceId: string): boolean {
+function isVisibleToBoundSession(
+  record: TerminalRecord,
+  workspaceId: string,
+  admittedAssistants?: ReadonlySet<string>
+): boolean {
   if (record.projectId !== workspaceId) return false;
   // A record with no `kind` is a plain terminal from an older pty-host entry;
   // it came from the terminal backend, so it has a PTY by construction.
   if (record.kind !== undefined && !panelKindHasPty(record.kind)) return false;
-  if (isAssistantTerminalRecord(record)) return false;
+  // Only an assistant caller's own resolution names one it may read (#13496).
+  if (isAssistantTerminalRecord(record)) return admittedAssistants?.has(record.id) === true;
   return true;
 }
 
@@ -331,7 +307,8 @@ function buildEntry(record: TerminalRecord, submissionToken?: string): TerminalS
 export async function buildViewlessTerminalStatus(
   deps: ViewlessTerminalStatusDeps,
   workspaceId: string,
-  rawArgs: unknown
+  rawArgs: unknown,
+  admittedAssistants?: ReadonlySet<string>
 ): Promise<TerminalStatusResult> {
   const { terminalIds, lines, stripAnsi, includeOutput, submissionToken } = parseArgs(rawArgs);
   const uniqueIds = [...new Set(terminalIds)];
@@ -364,7 +341,9 @@ export async function buildViewlessTerminalStatus(
     const record = fetched[index];
     // `getTerminalAsync` folds an RPC failure into `null`, so this means "not
     // found or unreadable" — never evidence that the terminal has exited.
-    if (record && isVisibleToBoundSession(record, workspaceId)) records.set(id, record);
+    if (record && isVisibleToBoundSession(record, workspaceId, admittedAssistants)) {
+      records.set(id, record);
+    }
   });
 
   const outputs = new Map<string, CapturedTail | null>();
@@ -438,7 +417,8 @@ export async function buildViewlessTerminalStatus(
  */
 export async function handleTerminalGetStatusViewless(
   rawArgs: unknown,
-  workspaceId: string
+  workspaceId: string,
+  admittedAssistants?: ReadonlySet<string>
 ): Promise<TerminalStatusResult> {
   const ptyClient = getPtyClient();
   if (!ptyClient) {
@@ -447,5 +427,5 @@ export async function handleTerminalGetStatusViewless(
       "The terminal backend is not available, so terminal status cannot be read without a live view."
     );
   }
-  return buildViewlessTerminalStatus({ ptyClient }, workspaceId, rawArgs);
+  return buildViewlessTerminalStatus({ ptyClient }, workspaceId, rawArgs, admittedAssistants);
 }

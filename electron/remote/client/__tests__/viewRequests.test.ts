@@ -4,6 +4,8 @@ const m = vi.hoisted(() => ({
   dispatchActionForHost: vi.fn(),
   requestManifestForHost: vi.fn(),
   showHostNotification: vi.fn(() => true),
+  // Hosts this Shell's assistant has a `host.call` out to right now (#13493).
+  callsOut: new Set<string>(),
 }));
 
 vi.mock("../../../services/McpServerService.js", () => ({
@@ -16,7 +18,9 @@ vi.mock("../../runtime.js", () => ({
   getRemoteService: (key: string) =>
     key === "remoteHostsClient"
       ? { list: () => [{ descriptor: { id: "studio", name: "Studio Mac" } }] }
-      : undefined,
+      : key === "hostCallRelayClient"
+        ? { hasCallInFlight: (hostId: string) => m.callsOut.has(hostId) }
+        : undefined,
 }));
 vi.mock("../../hybrid/notifications.js", () => ({
   NOTIFICATION_SHOW_METHOD: "notification.show",
@@ -28,7 +32,11 @@ import {
   answerReverseRequest,
   registerReverseRequestMethod,
 } from "../reverseRequests.js";
-import { HOST_DISPATCHABLE_ACTION_IDS, installViewReverseRequests } from "../viewRequests.js";
+import {
+  askHostApprovalInWindow,
+  HOST_DISPATCHABLE_ACTION_IDS,
+  installViewReverseRequests,
+} from "../viewRequests.js";
 
 function ask(method: string, payload: unknown = {}) {
   return answerReverseRequest({ hostId: "studio", webContentsId: 11, method, payload });
@@ -36,6 +44,7 @@ function ask(method: string, payload: unknown = {}) {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  m.callsOut.clear();
   _resetReverseRequestMethodsForTesting();
 });
 
@@ -104,6 +113,36 @@ describe("view reverse requests", () => {
     });
   });
 
+  it("names this Shell's own assistant as asking only while it has a call out to that host (#13493)", async () => {
+    installViewReverseRequests();
+    m.dispatchActionForHost.mockResolvedValue({ result: { ok: true, result: 1 } });
+    const relayed = {
+      actionId: "worktree.delete",
+      args: { worktreeId: "/srv/wt" },
+      confirmed: false,
+      sessionOrigin: "external",
+      relayed: true,
+    };
+    const askedBy = () => m.dispatchActionForHost.mock.calls.at(-1)?.[7];
+
+    // A host can say anything; with no call out, it is just an agent there.
+    await ask("mcp:dispatch-action", relayed);
+    expect(askedBy()).toEqual({ userAgent: 'Agent on host "Studio Mac"', token4LastChars: "" });
+
+    m.callsOut.add("studio");
+    await ask("mcp:dispatch-action", relayed);
+    expect(askedBy()).toEqual({
+      userAgent: 'Your assistant, through host "Studio Mac"',
+      token4LastChars: "",
+    });
+    // Still never pre-confirmed: the person answers this Shell's own dialog.
+    expect(m.dispatchActionForHost.mock.calls.at(-1)?.[3]).toBe(false);
+
+    m.callsOut.clear();
+    await ask("mcp:dispatch-action", relayed);
+    expect(askedBy()).toEqual({ userAgent: 'Agent on host "Studio Mac"', token4LastChars: "" });
+  });
+
   it("runs the host assistant's call under its Never ask without this Shell's dialog", async () => {
     installViewReverseRequests();
     m.dispatchActionForHost.mockResolvedValue({ result: { ok: true, result: 1 } });
@@ -130,8 +169,10 @@ describe("view reverse requests", () => {
   });
 
   it.each([
-    ["an agent pane", { sessionOrigin: "assistant-pane", authorization: "skip-preference" }],
-    ["an api-key client", { sessionOrigin: "external", authorization: "skip-preference" }],
+    [
+      "an agent pane or api-key client",
+      { sessionOrigin: "external", authorization: "skip-preference" },
+    ],
     ["another authorization", { sessionOrigin: "help", authorization: "native-grant" }],
     ["no authorization", { sessionOrigin: "help" }],
     [
@@ -221,6 +262,22 @@ describe("view reverse requests", () => {
     });
     // A reason without approval-only changes nothing about the dispatch.
     expect(m.dispatchActionForHost.mock.calls[1]?.[6]).toBeUndefined();
+  });
+
+  // Only the retired assistant CLI's pane ever authenticated this way, so a
+  // host from before its removal can still send it. Refused like any other bad
+  // request: the reverse request rejects, nothing dispatches, the link stays.
+  it("refuses an origin this Shell no longer knows", async () => {
+    installViewReverseRequests();
+    await expect(
+      ask("mcp:dispatch-action", {
+        actionId: "terminal.new",
+        args: {},
+        confirmed: false,
+        sessionOrigin: "assistant-pane",
+      })
+    ).rejects.toMatchObject({ code: "VALIDATION" });
+    expect(m.dispatchActionForHost).not.toHaveBeenCalled();
   });
 
   it("refuses an approval reason this Shell does not know", async () => {
@@ -480,5 +537,49 @@ describe("view reverse requests", () => {
     const uninstall = installViewReverseRequests();
     uninstall();
     await expect(ask("mcp:get-manifest")).rejects.toMatchObject({ code: "UNSUPPORTED" });
+  });
+});
+
+describe("askHostApprovalInWindow (#13501)", () => {
+  const QUESTION = {
+    hostId: "studio",
+    helpSessionId: "help-1",
+    actionId: "worktree.delete",
+    args: { worktreeId: "/wt/feature" },
+    subject: "feature/thing",
+    lines: ["No uncommitted changes."],
+  };
+
+  it("raises the action's own dialog approval-only, with the host's preview and the host named", async () => {
+    m.dispatchActionForHost.mockResolvedValue({
+      result: { ok: true, result: null },
+      confirmationDecision: "approved",
+    });
+
+    await expect(askHostApprovalInWindow(7, QUESTION)).resolves.toBe("approved");
+
+    expect(m.dispatchActionForHost).toHaveBeenCalledWith(
+      7,
+      "worktree.delete",
+      { worktreeId: "/wt/feature" },
+      false,
+      undefined,
+      "external",
+      {
+        approvalOnly: true,
+        hostPreview: { lines: ["No uncommitted changes."], subject: "feature/thing" },
+      },
+      { userAgent: 'Your assistant, through host "Studio Mac"', token4LastChars: "" }
+    );
+  });
+
+  it("reads a window that couldn't ask as no decision at all", async () => {
+    m.dispatchActionForHost.mockResolvedValueOnce({
+      result: { ok: false, error: { code: "NOT_FOUND", message: "not in this view" } },
+    });
+    await expect(askHostApprovalInWindow(7, QUESTION)).resolves.toBeNull();
+
+    m.dispatchActionForHost.mockRejectedValueOnce(new Error("window gone"));
+    await expect(askHostApprovalInWindow(7, QUESTION)).resolves.toBeNull();
   });
 });

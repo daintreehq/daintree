@@ -92,6 +92,7 @@ const baseConfig: KnipConfig = {
     "src/components/HostFilePicker/__preview__/hostFilePickerPreview.tsx",
     "src/components/HostSwitch/__preview__/hostSwitcher.tsx",
     "src/components/Markdown/__preview__/preview.tsx",
+    "src/components/Markdown/__preview__/loadingPreview.tsx",
     "src/components/Panel/__preview__/moveToWorktreePicker.tsx",
     "src/services/plugin/__preview__/pluginPanelPreview.tsx",
     "src/components/Portal/__preview__/closeConfirmPreview.tsx",
@@ -111,10 +112,15 @@ const baseConfig: KnipConfig = {
     "src/components/DevPreview/__preview__/destructiveConfirmPreview.tsx",
     "src/components/DevPreview/__preview__/twinsPreview.tsx",
     "src/components/Diagnostics/__preview__/preview.tsx",
+    "src/components/Diagnostics/__preview__/clearLogsConfirmPreview.tsx",
     "src/components/ErrorBoundary/__preview__/preview.tsx",
     "src/components/Errors/__preview__/preview.tsx",
     "src/components/FileViewer/__preview__/preview.tsx",
+    "src/components/FileViewer/__preview__/audioPlayerPreview.tsx",
+    "src/components/FileViewer/__preview__/pdfLoadingPreview.tsx",
+    "src/components/FileViewer/__preview__/videoPreview.tsx",
     "src/components/FileViewer/__preview__/imageDiffPreview.tsx",
+    "src/components/Html/__preview__/preview.tsx",
     "src/components/HelpPanel/__preview__/preview.tsx",
     "src/components/HelpPanel/__preview__/footerPreview.tsx",
     "src/components/HelpPanel/__preview__/bannersPreview.tsx",
@@ -147,6 +153,8 @@ const baseConfig: KnipConfig = {
     "src/components/Terminal/__preview__/subagentChip.tsx",
     "src/components/Terminal/__preview__/agentIndicator.tsx",
     "src/components/Terminal/__preview__/hybridInput.tsx",
+    "src/components/Terminal/__preview__/pausedOutput.tsx",
+    "src/components/Terminal/__preview__/selectedFileMenuPreview.tsx",
     "src/components/Terminal/__preview__/artifactOverlay.tsx",
     "src/components/Terminal/__preview__/banners.tsx",
     "src/components/Terminal/__preview__/panelLimitPreview.tsx",
@@ -279,12 +287,6 @@ const baseConfig: KnipConfig = {
     // predicates. The current fail-closed menu path documents that producers
     // are not wired yet; keep this as deliberate feature scaffolding.
     "src/services/WhenClauseStore.ts",
-
-    // why: native assistant-host process wrapper added with the protocol and
-    // entry resolver, but not wired into a service yet. Keep the wrapper
-    // available while the integration lands without making the repo's knip
-    // gate fail on the scaffold file.
-    "electron/services/assistant-host/AssistantHostProcess.ts",
   ],
 
   ignoreBinaries: [

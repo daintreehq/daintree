@@ -311,7 +311,7 @@ Components have `data-testid` and `data-worktree-branch` attributes for reliable
 A single reusable workflow runs every E2E suite. Pick one via the `suite` input: `full` (meta — all seven buckets sequentially on one runner; workflow_dispatch default), `core`, any of the seven `full-*` buckets (`full-terminal`, `full-worktree`, `full-presets`, `full-platform`, `full-panels`, `full-resilience`, `full-plugins`), `nightly`, or `demo`.
 
 - **Triggers:** workflow_dispatch, workflow_call
-- **Matrix:** macOS-14, ubuntu-22.04, windows-latest (selectable via `platform`)
+- **Matrix:** macos-15, ubuntu-22.04, windows-2022 (selectable via `platform`)
 - **Single-file runs:** pass `test_file: e2e/full/<bucket>/foo.spec.ts` and set `suite` to the bucket that owns that path (workflow_dispatch).
 - **Conditional behaviour by suite:**
   - `full` — expands to all seven `--project=full-*` flags on a single runner. Use this for ad-hoc validation; the release workflows and `stabilize.yml` fan the buckets out across separate runners instead.
@@ -334,7 +334,7 @@ Releases run as three independent per-OS workflows (`release-macos.yml`, `releas
 
 | Platform | Runner                     | Notes                          |
 | -------- | -------------------------- | ------------------------------ |
-| macOS    | `macos-14` (Apple Silicon) | No extra setup                 |
+| macOS    | `macos-15` (Apple Silicon) | No extra setup                 |
 | Linux    | `ubuntu-22.04`             | `xvfb-run` for virtual display |
 | Windows  | `windows-latest`           | No xvfb needed                 |
 

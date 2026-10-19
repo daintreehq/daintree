@@ -12,6 +12,7 @@ import { ESCAPE_BACKSTOP_DIALOG_ATTR } from "@/lib/dialogEscapeBackstop";
 import { isTerminalReservedKey } from "@/services/terminalReservedKeys";
 import { CLOSE_OWNER_ATTR, requestOwnedClose } from "@/lib/closeRequest";
 import { buildKeybindingWhenContext } from "@/services/keybindingWhenContext";
+import { usePluginContextKeyStore } from "@/store/pluginContextKeyStore";
 import { usePaletteStore, usePanelStore } from "../store";
 import { isStagedConfirmation } from "@/services/actions/confirmationStaged";
 import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";
@@ -426,6 +427,7 @@ export function useGlobalKeybindings(enabled: boolean = true): void {
     // Live `when`-clause context for bindings that carry one (plugin
     // contributions). Registered here, alongside the handler that consumes it.
     keybindingService.setWhenContextProvider(buildKeybindingWhenContext);
+    usePluginContextKeyStore.getState().init();
     return () => {
       window.removeEventListener("keydown", handler, { capture: true });
       window.removeEventListener("blur", handleBlur);

@@ -3,7 +3,7 @@
  *
  * General is the pane the Settings dialog opens on, so it is the settings screen a user
  * sees most. Its design questions — can I tell at a glance whether I am set up, can I
- * find one agent among eighteen, does anything on this pane earn the pixels it occupies
+ * find one agent among seventeen, does anything on this pane earn the pixels it occupies
  * — are all questions about what is on screen, so they can only be answered on rendered
  * pixels.
  *
@@ -283,7 +283,7 @@ interface GeneralState {
 const STATES: GeneralState[] = [
   {
     // The headline state and the one the review is really about: a realistic machine,
-    // every status the list can render present at once, eighteen agents deep.
+    // every status the list can render present at once, seventeen agents deep.
     slug: "01-overview-mixed",
     target: { tab: "general", subtab: "overview" },
     availability: MIXED_AVAILABILITY,

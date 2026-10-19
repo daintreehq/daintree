@@ -1,9 +1,18 @@
 import type { ASTNode, BinaryOpNode, IdentifierNode, LiteralNode, UnaryOpNode } from "./types.js";
 
-const IDENT_RE = /^[a-zA-Z_]\w*(?:\.[a-zA-Z_]\w*)*/;
+// Segments may hold hyphens and start with a digit so any plugin manifest name
+// (`publisher.name`, e.g. `acme.linear-planner`, `3m.tools`) is a valid path
+// root for the keys that plugin publishes with `host.setContext` (#13506).
+const IDENT_RE = /^\w[\w-]*(?:\.\w[\w-]*)*/;
+// A digit-leading path is a plugin key only as `publisher.name.key`; anything
+// shorter (`1`, `1.5`, `1e3`, `0x10`) is a number this grammar doesn't support.
+const DIGIT_LEADING_RE = /^\d/;
+const MIN_PLUGIN_KEY_SEGMENTS = 3;
 const UNSUPPORTED_OPS: Array<[RegExp, string]> = [
   [/^=~/, "regex operator `=~` is not yet supported"],
-  [/^in\b/, "`in` operator is not yet supported"],
+  // `in` is an operator only as a whole word: `in.tools.key` and
+  // `in-house.tools.key` are identifiers rooted at a plugin publisher.
+  [/^in(?![\w.-])/, "`in` operator is not yet supported"],
   [/^[<>]=?/, "numeric comparison operators are not yet supported"],
   [/^\(/, "parentheses are not supported"],
   [/^\)/, "parentheses are not supported"],
@@ -38,6 +47,9 @@ class Tokenizer {
     if (m) {
       const ident = m[0]!;
       if (ident === "true" || ident === "false") return "bool";
+      if (DIGIT_LEADING_RE.test(ident) && ident.split(".").length < MIN_PLUGIN_KEY_SEGMENTS) {
+        throw new ParseError("numeric literals are not supported", this.pos);
+      }
       return "ident";
     }
     throw new ParseError(`unexpected token "${slice[0]}"`, this.pos);

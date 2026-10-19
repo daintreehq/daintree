@@ -1,6 +1,7 @@
 import "./hybridInputShims";
 import { StrictMode, use, useState, type ReactNode } from "react";
 import { createRoot } from "react-dom/client";
+import latin400Woff2Url from "@fontsource/jetbrains-mono/files/jetbrains-mono-latin-400-normal.woff2?url";
 import { EditorState } from "@codemirror/state";
 import { EditorView } from "@codemirror/view";
 import { resolveAppTheme } from "@shared/theme/themes";
@@ -18,6 +19,7 @@ import {
   selectEffectiveTheme,
 } from "@/store/terminalColorSchemeStore";
 import { cn } from "@/lib/utils";
+import { ensureLatin400Preload } from "@/lib/fontPreload";
 import { HybridInputBar } from "../HybridInputBar";
 import { insertFileAttachments } from "../fileAttachments";
 import { fileDropChipField, imageChipField } from "../inputEditorExtensions";
@@ -27,8 +29,13 @@ import {
   DRAFTS,
   PANE_AGENTS,
   PANE_TITLES,
+  PILL_DRAFT,
+  PILL_PANES,
   TERMINAL_LINES,
   TILE_AGENTS,
+  TYPING_DRAFT,
+  TYPING_LENGTHS,
+  TYPING_WIDTH,
   WIDTHS,
   resolveDraft,
   type DraftName,
@@ -56,8 +63,10 @@ import "@/index.css";
  *
  * Query parameters (the screenshot spec drives these):
  *   ?theme=daintree|bondi|namib|…   built-in theme id
- *   ?case=ladder|growth|tiles       which arrangement to render
- *   ?draft=empty|short|reported|overflow   the seeded draft (ladder case)
+ *   ?case=ladder|growth|tiles|typing   which arrangement to render
+ *   ?case=live                      one empty composer at the typing width, for the spec to type into
+ *   ?case=pills                     a prompt at six widths, for the spec to paste a screenshot chip onto
+ *   ?draft=empty|short|reported|prose|list|path|overflow   the seeded draft (ladder case)
  *   ?case=controls                  the control row at rest and disabled (the states spec hovers it)
  *   ?case=panes|fleet               whole grid panes, one of them selected (the selection-states spec)
  *   ?case=chips                     one composer carrying every chip kind (the chips spec attaches the files)
@@ -75,6 +84,10 @@ const withStash = params.get("stash") === "1";
 // the rail beneath a wrapped draft is hardest on.
 const withVoice = params.get("voice") !== "0";
 
+// The composer face is `font-display: optional`: a sheet that mounts twenty
+// editors can miss its first 100ms and keep the fallback mono, which wraps at
+// different points. Preload it the way the app's boot does.
+ensureLatin400Preload(latin400Woff2Url);
 applyAppThemeToRoot(document.documentElement, resolveAppTheme(themeId));
 // The composer paints from the terminal palette, which follows the app theme by
 // default. Without this every theme's composer wore Daintree's terminal colours.
@@ -206,6 +219,15 @@ switch (caseName) {
   case "chips":
     seedPane(CHIPS_PANE, CHIP_DRAFT);
     break;
+  case "typing":
+    TYPING_LENGTHS.forEach((n) => seedPane(`typing-${n}`, TYPING_DRAFT.slice(0, n)));
+    break;
+  case "live":
+    seedPane("live", DRAFTS.empty);
+    break;
+  case "pills":
+    PILL_PANES.forEach((pane) => seedPane(pane.id, PILL_DRAFT));
+    break;
   case "tiles":
     TILE_AGENTS.forEach((_agent, i) => {
       seedPane(`tile-${i}`, i % 3 === 0 ? DRAFTS.short : DRAFTS.empty);
@@ -271,6 +293,56 @@ function Sidebar() {
           ))}
         </div>
       ))}
+    </div>
+  );
+}
+
+/**
+ * One prompt at a run of lengths, as if typed, five to a row. Each row is
+ * aligned at the foot, as the composer is pinned to the foot of its pane, so
+ * a control that moves between frames, or a step in height that is not one
+ * line, shows as a break in the row.
+ */
+function Typing() {
+  return (
+    <div
+      className="grid items-end gap-x-6 gap-y-8 p-8"
+      style={{ gridTemplateColumns: `repeat(5, ${TYPING_WIDTH}px)` }}
+      data-preview-case="typing"
+    >
+      {TYPING_LENGTHS.map((n) => (
+        <Column key={n} width={TYPING_WIDTH} label={`${n} chars`}>
+          <Bar terminalId={`typing-${n}`} agentId="claude" />
+        </Column>
+      ))}
+    </div>
+  );
+}
+
+/** A prompt at several widths, each ended by the spec with a pasted screenshot's chip. */
+function Pills() {
+  return (
+    <div className="flex flex-wrap items-start gap-6 p-8" data-preview-case="pills">
+      {PILL_PANES.map((pane) => (
+        <Column
+          key={pane.id}
+          width={pane.width}
+          label={`${pane.width}px · ${pane.file ? "ends on a dropped file" : pane.tight ? "ends on the chip" : "pasted screenshot"}`}
+        >
+          <Bar terminalId={pane.id} agentId="claude" />
+        </Column>
+      ))}
+    </div>
+  );
+}
+
+/** One empty composer for the spec to type a prompt into and delete it from. */
+function Live() {
+  return (
+    <div className="flex items-start p-8" data-preview-case="live">
+      <Column width={TYPING_WIDTH} label={`${TYPING_WIDTH}px · live`}>
+        <Bar terminalId="live" agentId="claude" />
+      </Column>
     </div>
   );
 }
@@ -405,10 +477,10 @@ function Fleet() {
   );
 }
 
-function chipsView(): EditorView {
-  const dom = document.querySelector(`[data-hybrid-input-root="${CHIPS_PANE}"] .cm-editor`);
+function chipsView(terminalId: string = CHIPS_PANE): EditorView {
+  const dom = document.querySelector(`[data-hybrid-input-root="${terminalId}"] .cm-editor`);
   const view = dom instanceof HTMLElement ? EditorView.findFromDOM(dom) : null;
-  if (!view) throw new Error("the chips composer has no editor");
+  if (!view) throw new Error(`the ${terminalId} composer has no editor`);
   return view;
 }
 
@@ -425,6 +497,22 @@ const chipsHooks = {
     view.dispatch({ selection: { anchor: view.state.doc.length } });
     await insertFileAttachments({ current: view }, view, CHIP_ATTACHMENTS, CWD);
     return view.state.field(imageChipField).length + view.state.field(fileDropChipField).length;
+  },
+  /** Attach one fixture — the screenshot, or the dropped file — to the end of a draft. */
+  async attachOne(terminalId: string, which: 0 | 1): Promise<number> {
+    const view = chipsView(terminalId);
+    view.dispatch({ selection: { anchor: view.state.doc.length } });
+    await insertFileAttachments({ current: view }, view, [CHIP_ATTACHMENTS[which]], CWD);
+    return view.state.field(imageChipField).length + view.state.field(fileDropChipField).length;
+  },
+  /** Delete whatever follows the last chip, so the draft ends on the pill. */
+  trimAfterChip(terminalId: string): void {
+    const view = chipsView(terminalId);
+    const last = [...view.state.field(imageChipField), ...view.state.field(fileDropChipField)]
+      .sort((a, b) => a.to - b.to)
+      .at(-1);
+    if (!last) throw new Error(`${terminalId} has no chip to end on`);
+    view.dispatch({ changes: { from: last.to, to: view.state.doc.length } });
   },
   caretAfter(kind: "image" | "file-drop"): void {
     const view = chipsView();
@@ -463,6 +551,9 @@ const CASES: Record<string, () => ReactNode> = {
   growth: Growth,
   sidebar: Sidebar,
   tiles: Tiles,
+  typing: Typing,
+  live: Live,
+  pills: Pills,
 };
 
 const Chosen = CASES[caseName] ?? Ladder;

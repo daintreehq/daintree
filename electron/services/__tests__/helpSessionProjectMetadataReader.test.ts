@@ -159,11 +159,10 @@ describe("listLaunchableAgents", () => {
     expect(listed.agents.find((agent) => agent.id === "antigravity")?.name).toBe("Antigravity");
   });
 
-  it("lists every registered agent, and never the assistant's own, before a probe", () => {
+  it("lists every registered agent before a probe", () => {
     const listed = listLaunchableAgents(null);
     const ids = listed.agents.map((agent) => agent.id);
     expect(listed.availabilityChecked).toBe(false);
     expect(ids).toContain("antigravity");
-    expect(ids).not.toContain("daintree-assistant");
   });
 });

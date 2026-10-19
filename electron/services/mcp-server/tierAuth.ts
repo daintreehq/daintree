@@ -26,11 +26,9 @@ import { isGenericNativeGrantEligible } from "../../../shared/config/nativeGrant
 import { canonicalJson, toCompatibilityShape } from "./compatibilityHash.js";
 import type { McpTargetPolicy, McpTargetTier } from "../../../shared/types/mcpTargetPolicy.js";
 import type { McpUnavailableActionStub } from "../../../shared/types/mcpIntrospection.js";
-import {
-  ASSISTANT_MESSAGING_TOOL_IDS,
-  ASSISTANT_SEND_MESSAGE_TOOL,
-} from "../../../shared/types/assistantMessaging.js";
-import { HOST_MESSAGING_TOOL_IDS } from "../../../shared/types/hostMessaging.js";
+import { ASSISTANT_CONTROL_TOOL_IDS } from "../../../shared/types/assistantControl.js";
+import { OWNED_TWIN_TOOLS } from "../../../shared/config/helpAssistantTierAllowlists.js";
+import { HOST_CONTROL_TOOL_IDS } from "../../../shared/types/hostControl.js";
 
 export { deriveBand, BAND_OVERRIDES };
 
@@ -149,19 +147,66 @@ export function shouldExposeTool(
   if (isWithheldFromBoundSession(entry, tier, session)) {
     return false;
   }
-  if (ASSISTANT_MESSAGING_TOOL_IDS.has(entry.id) && session.assistantMessaging !== true) {
+  if (HOST_CONTROL_TOOL_IDS.has(entry.id) && session.hostCall !== true) {
     return false;
   }
-  if (entry.id === ASSISTANT_SEND_MESSAGE_TOOL && session.assistantSending !== true) {
+  if (session.relay === true && isWithheldFromRelaySession(entry.id)) {
     return false;
   }
-  if (HOST_MESSAGING_TOOL_IDS.has(entry.id) && session.hubMessaging !== true) {
-    return false;
-  }
+  if (entry.id === PROJECT_RUN_COMMAND_TOOL) return mayRunProjectCommand(tier, session);
+  if (ASSISTANT_CONTROL_TOOL_IDS.has(entry.id)) return mayControlAssistants(tier, session);
   return (
     isTierPermitted(tier, entry.id, session.rendererOwnedOrigin === true) ||
     isApprovalRequestable(tier, entry.id, session.paneApproval === true)
   );
+}
+
+const PROJECT_RUN_COMMAND_TOOL = "project.runCommand";
+
+/**
+ * `project.runCommand` runs whatever command it is given, so it answers to its
+ * caller, not its tier alone (#13495): Daintree's own assistant at the full
+ * tier. That includes another machine's own assistant reaching this host at
+ * the full tier through its Shell's `host.call` (#13501): a relay is only
+ * ever offered to that Shell's assistant in one of its own windows, already
+ * reaches a shell here through `terminal.new` and `terminal.sendCommand`, and
+ * is held to the drive rule like any change it makes. Never a worker pane, an
+ * api-key client or a core session, and no grant widens that. Discovery and
+ * admission ask this same question.
+ */
+export function mayRunProjectCommand(
+  tier: string | null,
+  session: Pick<SessionSurfacePolicy, "rendererOwnedOrigin" | "relay">
+): boolean {
+  return tier === "full" && (session.rendererOwnedOrigin === true || session.relay === true);
+}
+
+/**
+ * The tools one assistant addresses another with (#13496) answer to their
+ * caller, not its tier alone: Daintree's own assistant, here or another
+ * machine's through its Shell's `host.call`, at any in-app tier. Never a
+ * worker pane or an api-key client, and no grant widens that. Discovery and
+ * admission ask this same question.
+ */
+export function mayControlAssistants(
+  tier: string | null,
+  session: Pick<SessionSurfacePolicy, "assistantCaller">
+): boolean {
+  return (tier === "core" || tier === "full") && session.assistantCaller === true;
+}
+
+/** This machine's own assistant-panel tools, which mean nothing to another machine's assistant. */
+const RELAY_WITHHELD_TOOL_IDS: ReadonlySet<string> = new Set(["help.displayImage"]);
+
+/**
+ * What a session another machine's assistant reaches through its Shell
+ * (#13493) is never given, at listing, discovery and dispatch alike, whatever
+ * its tier or grants: every `host.*` tool, so a host can never reach through
+ * here into another machine and a relayed call never chains, and this
+ * machine's own assistant-panel tools.
+ */
+export function isWithheldFromRelaySession(actionId: string): boolean {
+  return actionId.startsWith("host.") || RELAY_WITHHELD_TOOL_IDS.has(actionId);
 }
 
 export interface SessionSurfacePolicy {
@@ -193,23 +238,23 @@ export interface SessionSurfacePolicy {
    */
   paneSkipConfirmations?: boolean;
   /**
-   * Whether this session is an assistant lane enrolled for cross-host
-   * messaging right now (#13335). Only then are its own inbox tools offered;
-   * read live per listing, and as `=== true`.
-   */
-  assistantMessaging?: boolean;
-  /**
-   * Whether that lane was enrolled by a remote Shell, so it may start a
-   * message to the Shell's hub (#13338). Never true for the hub itself; read
+   * Whether this session is one of this machine's own assistants, hosts or
+   * not (#13493). Only then are `host.list` and `host.call` offered; read
    * live per listing, and as `=== true`.
    */
-  assistantSending?: boolean;
+  hostCall?: boolean;
   /**
-   * Whether this session is this Shell's enrolled hub and a host exists
-   * (#13336). Only then are the `host.*` messaging tools offered; read live
-   * per listing, and as `=== true`.
+   * Whether this session is an assistant that may address another (#13496):
+   * one of this machine's help sessions, or a relay principal. Only then are
+   * the assistant tools offered; read live per listing, and as `=== true`.
    */
-  hubMessaging?: boolean;
+  assistantCaller?: boolean;
+  /**
+   * Whether this session is another machine's assistant reaching this host
+   * through its Shell (#13493); see {@link isWithheldFromRelaySession}. Read as
+   * `=== true`.
+   */
+  relay?: boolean;
 }
 
 /**
@@ -504,6 +549,11 @@ export interface TargetPolicySessionSnapshot {
    */
   rendererOwnedOrigin: boolean;
   /**
+   * Whether another machine's assistant reaches this session through its Shell
+   * (#13493) — see {@link SessionSurfacePolicy.relay}. Read as `=== true`.
+   */
+  relay?: boolean;
+  /**
    * Whether the session is an agent pane (#12692) — see
    * {@link SessionSurfacePolicy.paneApproval}. Optional and read as `=== true`.
    */
@@ -514,11 +564,17 @@ export interface TargetPolicySessionSnapshot {
    */
   paneSkipConfirmations?: boolean;
   /**
-   * Whether the session is this Shell's enrolled hub while a host exists
-   * (#13336). The hub's host tools exist for no other session at any tier, so
-   * they are never offered as a stub. Read as `=== true`.
+   * Whether the session is one of this machine's own assistants (#13493). The
+   * host tools exist for no other session at any tier, so they are never
+   * offered as a stub. Read as `=== true`.
    */
-  hubMessaging?: boolean;
+  hostCall?: boolean;
+  /**
+   * Whether the session is an assistant the assistant tools answer to (#13496),
+   * here or another machine's through its Shell — see
+   * {@link mayControlAssistants}. Read as `=== true`.
+   */
+  assistantControl?: boolean;
   /** Live per-tool grants, from the non-evicting snapshot. */
   perToolGrantedActionIds: ReadonlySet<string>;
   /** Live native automation grants' `allowedTools`, unioned. */
@@ -641,12 +697,22 @@ export function buildTargetPolicy(
   // which answers "how far would an in-app session have to elevate" — reports
   // either a rung this caller can never reach or nothing at all for a tool that
   // is external-only.
+  // The command runner answers to its caller, not its tier list (#13501).
+  const commandRunner =
+    id === PROJECT_RUN_COMMAND_TOOL ? mayRunProjectCommand(snapshot.tier, snapshot) : undefined;
+  // So do the assistant tools, for an assistant whose relayed calls hold no ladder tier to place them on.
+  const assistantTool =
+    ASSISTANT_CONTROL_TOOL_IDS.has(id) && snapshot.assistantControl === true ? true : undefined;
   const minimumTier: McpTargetTier | null =
-    snapshot.tier === "external"
-      ? TIER_ALLOWLISTS.external.has(id)
-        ? "external"
-        : null
-      : minimumPermittingTier(id, snapshot.rendererOwnedOrigin === true);
+    commandRunner === true
+      ? "full"
+      : assistantTool === true
+        ? "core"
+        : snapshot.tier === "external"
+          ? TIER_ALLOWLISTS.external.has(id)
+            ? "external"
+            : null
+          : minimumPermittingTier(id, snapshot.rendererOwnedOrigin === true);
   // A ladder target with no permitting tier cannot be described honestly, and
   // cannot legitimately be granted either: both issuance paths refuse a tool
   // `minimumPermittingTier` does not place. Fail closed.
@@ -656,7 +722,10 @@ export function buildTargetPolicy(
   // grant, then native grant — so a client reading this learns which mechanism
   // would actually admit its next call, and therefore whether that access can
   // lapse.
-  const tierPermitted = isTierPermitted(snapshot.tier, id, snapshot.rendererOwnedOrigin);
+  const tierPermitted =
+    commandRunner ??
+    assistantTool ??
+    isTierPermitted(snapshot.tier, id, snapshot.rendererOwnedOrigin);
   const authorizedBy = tierPermitted
     ? "tier"
     : perToolGranted
@@ -789,9 +858,9 @@ const LADDER_RANK: Readonly<Record<LadderTier, number>> = {
 /**
  * Whether this session may be told that actions exist above its tier (#12117).
  *
- * Two conditions, both necessary. The origin must be renderer-owned — `help` or
- * `assistant-pane`, a pinned panel with a human watching and a first-party
- * prompt that carries the rule for reading a stub. And the tier must be on the
+ * Two conditions, both necessary. The origin must be renderer-owned — `help`,
+ * a pinned panel with a human watching and a first-party prompt that carries
+ * the rule for reading a stub. And the tier must be on the
  * in-app ladder: `external` is a flat peer of that ladder rather than a rung on
  * it, so there is no tier an external caller could be raised to and nothing
  * honest to report.
@@ -857,8 +926,9 @@ export function buildUnavailableStub(
   if (!isExistenceCatalogVisible(snapshot)) return null;
   const id = readEntryId(entry);
   if (id === null) return null;
-  // No tier makes these exist for anyone but the hub, so "raise your tier" would be wrong.
-  if (HOST_MESSAGING_TOOL_IDS.has(id) && snapshot.hubMessaging !== true) return null;
+  // No tier makes these exist for anything but an assistant, so "raise your tier" would be wrong.
+  if (HOST_CONTROL_TOOL_IDS.has(id) && snapshot.hostCall !== true) return null;
+  if (ASSISTANT_CONTROL_TOOL_IDS.has(id)) return null;
   const record = entry as Partial<ActionManifestEntry>;
 
   if (record.mcpVisibility === "hidden") return null;
@@ -1117,7 +1187,13 @@ export function filterIntrospectionResultForSession(
     // the renderer's own denial: one shape for both branches means a client
     // reads `ok` rather than probing for which keys arrived. `unavailable` is
     // the one exception — absent rather than null, so this payload stays
-    // byte-for-byte what every caller received before #12117.
+    // byte-for-byte what every caller received before #12117. An unscoped
+    // tool this session reaches through its owned twin names the twin, so a
+    // caller isn't left searching for the call that would work.
+    const twin =
+      requestedId !== undefined
+        ? (OWNED_TWIN_TOOLS as Readonly<Record<string, string>>)[requestedId]
+        : undefined;
     return {
       ok: true,
       result: {
@@ -1126,7 +1202,10 @@ export function filterIntrospectionResultForSession(
         policy: null,
         error: {
           code: "NOT_FOUND",
-          message: `No action found with id "${requestedId ?? "unknown"}". Use actions.search to find available actions.`,
+          message:
+            twin !== undefined && permittedActionIds.has(twin)
+              ? `No action found with id "${requestedId}" for this session. Use "${twin}", which acts on what this session created or started.`
+              : `No action found with id "${requestedId ?? "unknown"}". Use actions.search to find available actions.`,
         },
       },
     };

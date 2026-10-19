@@ -20,32 +20,17 @@ export const BUILT_IN_AGENT_IDS = [
   "interpreter",
   "mistral",
   "kiro",
-  "daintree-assistant",
 ] as const;
 
 export type BuiltInAgentId = (typeof BUILT_IN_AGENT_IDS)[number];
 
-// Agents that are registered and detected (so the Daintree Assistant overlay
-// can favour them) but must NEVER be offered as a standalone, launchable
-// coding agent. They are too narrow to treat as a general CLI — they only
-// make sense as the Daintree assistant. Launch surfaces (toolbar, launch
-// list, setup wizard, agent keybindings) iterate `LAUNCHABLE_AGENT_IDS`
-// instead of `BUILT_IN_AGENT_IDS` so these stay hidden everywhere a user
-// could spawn an agent directly.
-export const ASSISTANT_ONLY_AGENT_IDS = ["daintree-assistant"] as const;
+// Agents Daintree no longer ships. Stored settings, hibernated assistant
+// sessions and hand-edited recipes can still name them, so readers drop them.
+export const RETIRED_AGENT_IDS: readonly string[] = ["daintree-assistant"];
 
-export type AssistantOnlyAgentId = (typeof ASSISTANT_ONLY_AGENT_IDS)[number];
-
-export function isAssistantOnlyAgentId(value: unknown): value is AssistantOnlyAgentId {
-  return (
-    typeof value === "string" && (ASSISTANT_ONLY_AGENT_IDS as readonly string[]).includes(value)
-  );
+export function isRetiredAgentId(value: unknown): boolean {
+  return typeof value === "string" && RETIRED_AGENT_IDS.includes(value);
 }
-
-/** Built-in agents a user can launch directly — excludes assistant-only agents. */
-export const LAUNCHABLE_AGENT_IDS = BUILT_IN_AGENT_IDS.filter(
-  (id) => !isAssistantOnlyAgentId(id)
-) as readonly BuiltInAgentId[];
 
 export const BUILT_IN_TERMINAL_TYPES = ["terminal", ...BUILT_IN_AGENT_IDS] as const;
 
@@ -53,9 +38,7 @@ export type BuiltInTerminalType = (typeof BUILT_IN_TERMINAL_TYPES)[number];
 
 export type AgentKeyAction = `agent.${BuiltInAgentId}`;
 
-// Keybinding actions are generated only for launchable agents — an
-// assistant-only agent has no direct-launch action to bind.
-export const BUILT_IN_AGENT_KEY_ACTIONS: readonly AgentKeyAction[] = LAUNCHABLE_AGENT_IDS.map(
+export const BUILT_IN_AGENT_KEY_ACTIONS: readonly AgentKeyAction[] = BUILT_IN_AGENT_IDS.map(
   (id) => `agent.${id}` as AgentKeyAction
 );
 

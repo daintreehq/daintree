@@ -10,7 +10,8 @@ import {
   useSyncExternalStore,
 } from "react";
 import { isMac } from "@/lib/platform";
-import { isHostMac, isHostWindows, isRemoteWindow } from "@/hooks/useHostPlatform";
+import { isRemoteWindow, isWslWindow } from "@/hooks/useHostPlatform";
+import { revealCopy } from "@/components/FileViewer/revealCopy";
 import type React from "react";
 import { type PanelLocation } from "@/types";
 import { usePanelStore } from "@/store";
@@ -211,12 +212,6 @@ interface TerminalContextMenuProps {
    * bar — so a file, diff or browser body keeps the right-click for itself.
    */
   triggerScope?: "surface" | "header";
-}
-
-/** Named for the host's file manager, which is where the hovered path lives. */
-function revealInFolderLabel(): string {
-  if (isHostMac()) return "Reveal in Finder";
-  return isHostWindows() ? "Show in Explorer" : "Show in folder";
 }
 
 /**
@@ -733,8 +728,8 @@ function TerminalContextMenuBody({
   const terminalPty = terminal && isPtyPanel(terminal) ? terminal : undefined;
   const terminalBrowser = terminal && isBrowserPanel(terminal) ? terminal : undefined;
 
-  // A selection that resolves to a file path unlocks the "View file" / "Open
-  // folder" section. Relative paths resolve against the terminal's cwd;
+  // A selection that resolves to a file path unlocks the "View file" / reveal
+  // section. Relative paths resolve against the terminal's cwd;
   // absolute selections resolve without one (empty cwd is fine for those).
   const selectionFilePath = useMemo(
     () =>
@@ -799,8 +794,9 @@ function TerminalContextMenuBody({
       if (actionId.startsWith("reveal-in-finder:")) {
         const path = actionId.slice("reveal-in-finder:".length);
         // The path is the host's; a remote host's file manager is on a screen
-        // nobody is looking at, so hand the path over instead.
-        if (isRemoteWindow()) {
+        // nobody is looking at, so hand the path over instead. A WSL distro's
+        // files are on this PC, so those reveal in Explorer like local ones.
+        if (isRemoteWindow() && !isWslWindow()) {
           copyWithToast("Host path", path);
           return;
         }
@@ -1791,15 +1787,20 @@ function TerminalContextMenuBody({
                       Open in file browser
                     </ContextMenuItem>
                   )}
+                  {/* Right-clicking a selected path usually hovers the same path,
+                      so its View file joins this group and one reveal serves both. */}
+                  {selectionFilePath === hoveredFilePath && (
+                    <SelectedFileMenuItems absolutePath={selectionFilePath} reveal={false} />
+                  )}
                   <ContextMenuItem
                     onSelect={() => handleAction(`reveal-in-finder:${hoveredFilePath}`)}
                   >
                     <FolderOpen className={ICON_CLASS} aria-hidden="true" />
-                    {isRemoteWindow() ? "Copy host path" : revealInFolderLabel()}
+                    {revealCopy().label}
                   </ContextMenuItem>
                 </>
               )}
-              {selectionFilePath && (
+              {selectionFilePath && selectionFilePath !== hoveredFilePath && (
                 <>
                   <ContextMenuSeparator />
                   <SelectedFileMenuItems absolutePath={selectionFilePath} />

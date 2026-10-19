@@ -8,6 +8,14 @@ import { UI_TOOLTIP_DELAY_DURATION, UI_TOOLTIP_SKIP_DELAY_DURATION } from "@/lib
 import { Avatar } from "@/components/ui/Avatar";
 import { IssueTooltipContent } from "@/components/Worktree/WorktreeCard/ForgeTooltipContent";
 import { AssignIssueToggle } from "@/components/Worktree/views/IssueSelectorView";
+import {
+  CommitAuthorAvatar,
+  type CommitAuthor,
+} from "@/components/Worktree/WorktreeCard/CommitAuthorAvatar";
+import { CommitInfoTooltip } from "@/components/Worktree/WorktreeCard/CommitInfoTooltip";
+import { ActivityLight } from "@/components/Worktree/ActivityLight";
+import { CAT_COLOR_CLASSES } from "@/config/categoryColors";
+import { djb2 } from "@shared/utils/hash";
 import type { ForgeUser, IssueTooltipData } from "@shared/types/forge";
 import "@/index.css";
 
@@ -20,6 +28,11 @@ import "@/index.css";
  *   hovercard-*  the REAL `IssueTooltipContent` (author + assignee avatars) on the overlay plane
  *   list-rail    the GitHub list row's assignee rail slot
  *   assign-row   the REAL `AssignIssueToggle` from the new-worktree dialog
+ *   commit-initials  the REAL `CommitAuthorAvatar` initials tier, one author per hue × 16/20/24px
+ *   commit-contexts  the same avatar in the Details "Last active" row and the REAL `CommitInfoTooltip`
+ *
+ * Commit authors resolve a Gravatar first; the spec 404s that host so every
+ * commit avatar lands on its initials.
  *
  * Avatar URLs point at `https://avatars.githubusercontent.com/<login>`; the
  * capture spec routes that host by login prefix: `ok-*` → a generated square
@@ -185,9 +198,145 @@ function AssignRows() {
   );
 }
 
+const HUES = [
+  "blue",
+  "purple",
+  "cyan",
+  "green",
+  "amber",
+  "orange",
+  "teal",
+  "indigo",
+  "rose",
+  "pink",
+  "violet",
+  "slate",
+] as const;
+
+// Wide, narrow and round letter pairs, plus a single-word name, so the matrix
+// shows the worst fit in the circle as well as the typical one.
+const COMMIT_NAMES = [
+  "Greg Priday",
+  "Mia Wong",
+  "Will Morris",
+  "Olivia Ortiz",
+  "Ian Lee",
+  "Jo",
+  "Sam Quinn",
+  "Ava Brooks",
+  "Kai Rhodes",
+  "Elena Fisher",
+  "Theo Young",
+  "Noah Xu",
+];
+
+/** An address whose djb2 bucket is `hue`, so each row is pinned to one colour. */
+function authorForHue(name: string, hue: number): CommitAuthor {
+  const slug = name.toLowerCase().replace(/\s+/g, ".");
+  for (let n = 0; ; n++) {
+    const email = `${slug}${n}@example.com`;
+    if (Math.abs(djb2(email)) % CAT_COLOR_CLASSES.length === hue) return { name, email };
+  }
+}
+
+const COMMIT_AUTHORS = COMMIT_NAMES.map((name, i) => authorForHue(name, i));
+const COMMIT_SIZES = [16, 20, 24] as const;
+
+function CommitInitialsMatrix() {
+  return (
+    <Section shot="commit-initials" title="Commit author initials — hue × size">
+      <div className="rounded-[var(--radius-md)] bg-surface-panel p-3">
+        <table className="text-2xs text-text-secondary border-separate border-spacing-x-3 border-spacing-y-1.5">
+          <thead>
+            <tr>
+              <th />
+              <th />
+              {COMMIT_SIZES.map((px) => (
+                <th key={px} className="font-normal text-center">
+                  {px}px
+                </th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {COMMIT_AUTHORS.map((author, i) => (
+              <tr key={author.email}>
+                <td className="pr-1 text-left">{HUES[i]}</td>
+                <td className="pr-2 text-left text-text-primary">{author.name}</td>
+                {COMMIT_SIZES.map((px) => (
+                  <td key={px} className="align-middle">
+                    <div
+                      className="flex items-center justify-center h-7 w-7"
+                      data-commit-avatar={`${HUES[i]}-${px}`}
+                    >
+                      <CommitAuthorAvatar author={author} size={px} />
+                    </div>
+                  </td>
+                ))}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </Section>
+  );
+}
+
+const HOUR_MS = 3_600_000;
+
+/**
+ * Copy of the Details footer's "Last active" line (`WorktreeDetails`) — harness
+ * decoration around the real avatar at the size that row passes.
+ */
+function LastActiveRow({ author, at }: { author: CommitAuthor; at: number }) {
+  return (
+    <div className="flex items-center gap-2 text-xs">
+      <ActivityLight lastActivityTimestamp={at} />
+      <CommitAuthorAvatar author={author} size={20} />
+      <div className="flex min-w-0 items-center gap-1.5">
+        <span className="shrink-0 font-medium text-text-secondary">Last active</span>
+        <span className="shrink-0 text-text-secondary">2h ago</span>
+        <span className="shrink-0 text-text-secondary" aria-hidden="true">
+          ·
+        </span>
+        <span className="min-w-0 truncate text-text-secondary">{author.name}</span>
+      </div>
+    </div>
+  );
+}
+
+function CommitContexts() {
+  const now = Date.now();
+  return (
+    <Section
+      shot="commit-contexts"
+      title="Commit avatar — Details footer (20px), commit card (24px)"
+    >
+      <div className="flex items-start gap-4">
+        <div className="w-80 rounded-[var(--radius-md)] bg-surface-panel p-3 space-y-2.5">
+          {COMMIT_AUTHORS.filter((_, i) => [0, 1, 4, 7].includes(i)).map((author) => (
+            <LastActiveRow key={author.email} author={author} at={now - 2 * HOUR_MS} />
+          ))}
+        </div>
+        <OverlayCard>
+          <CommitInfoTooltip
+            lastCommitTimestampMs={now - 2 * HOUR_MS}
+            author={COMMIT_AUTHORS[1]}
+            commitMessage="fix(upload): honour the server's Retry-After on 429"
+            commitBody="The uploader backed off on a fixed 2s step."
+            commitSha="3be6726f6b0c1d9e2a4f5b6c7d8e9f0a1b2c3d4e"
+          />
+        </OverlayCard>
+      </div>
+    </Section>
+  );
+}
+
 function Preview() {
   return (
     <div data-preview-shell className="flex flex-col gap-2 p-2 text-text-primary">
+      <CommitInitialsMatrix />
+      <CommitContexts />
       <Matrix />
       <Section shot="hovercard-single" title="Issue hover card — author loaded, assignee failed">
         <OverlayCard>

@@ -7,7 +7,7 @@ import type { WorktreeSnapshot } from "@shared/types";
 import type { PaneNotifyState } from "@shared/types/terminalNotify";
 import { applyAppThemeToRoot } from "@/theme/applyAppTheme";
 import { installPreviewShims } from "@/components/HelpPanel/__preview__/previewShims";
-import { LAUNCHABLE_AGENT_IDS } from "@shared/config/agentIds";
+import { BUILT_IN_AGENT_IDS } from "@shared/config/agentIds";
 import {
   FIXTURES as RESUME_FIXTURES,
   PROJECT as RESUME_PROJECT,
@@ -87,7 +87,7 @@ const commits = COMMITS_FIXTURES.few!;
 installPreviewShims({
   onboarding: answering({
     get: async () => ({
-      seenAgentIds: LAUNCHABLE_AGENT_IDS.slice(),
+      seenAgentIds: BUILT_IN_AGENT_IDS.slice(),
       availabilityFirstSeen: {},
       welcomeCardDismissed: true,
       setupBannerDismissed: true,
@@ -696,7 +696,6 @@ const loadControls: Loader = async () => {
             }}
             isPinnedWorktreeDiverged
             onReturnToPinnedWorktree={noop}
-            agentId="claude"
             agentConfig={claude}
             launchedModelLabel={null}
           />

@@ -140,12 +140,12 @@ jobs:
           REQUESTED_SHARD_TOTAL="${{ inputs.shard_total }}"
 
           case "$PLATFORM" in
-            macos)         OSES='[{"os":"macos-14","name":"macOS"}]' ;;
+            macos)         OSES='[{"os":"macos-15","name":"macOS"}]' ;;
             linux)         OSES='[{"os":"ubuntu-22.04","name":"Linux"}]' ;;
             windows)       OSES='[{"os":"windows-2022","name":"Windows"}]' ;;
-            non-windows)   OSES='[{"os":"macos-14","name":"macOS"},{"os":"ubuntu-22.04","name":"Linux"}]' ;;
+            non-windows)   OSES='[{"os":"macos-15","name":"macOS"},{"os":"ubuntu-22.04","name":"Linux"}]' ;;
             linux-windows) OSES='[{"os":"ubuntu-22.04","name":"Linux"},{"os":"windows-2022","name":"Windows"}]' ;;
-            *)             OSES='[{"os":"macos-14","name":"macOS"},{"os":"ubuntu-22.04","name":"Linux"},{"os":"windows-2022","name":"Windows"}]' ;;
+            *)             OSES='[{"os":"macos-15","name":"macOS"},{"os":"ubuntu-22.04","name":"Linux"},{"os":"windows-2022","name":"Windows"}]' ;;
           esac
 
           # Only the full-* buckets and the `full` meta-suite fan out. N=4 is

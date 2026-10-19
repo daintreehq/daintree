@@ -271,6 +271,8 @@ export class RemoteHostsClient {
    * began before then is about the old machine even once the change is done.
    */
   private readonly epochs = new Map<HostId, number>();
+  /** Hosts the person disconnected, until something dials them again. */
+  private readonly disconnectedByPerson = new Set<HostId>();
   private readonly unsubscribe: Array<() => void> = [];
   private readonly detached: DetachedViewRegistry;
 
@@ -491,6 +493,7 @@ export class RemoteHostsClient {
     // Being removed or re-pointed: a link dialled now would be to the old machine.
     if (this.retiring.has(hostId)) return this.options.manager.connectionState(hostId);
     this.ensureRouter();
+    this.disconnectedByPerson.delete(hostId);
     return this.options.manager.connect(hostId).state();
   }
 
@@ -502,13 +505,27 @@ export class RemoteHostsClient {
   /** Dial (or re-dial) a host and settle once it is usable, runs another build, or times out. */
   connectAndWait(hostId: HostId, timeoutMs: number): Promise<HostReadiness> {
     this.ensureRouter();
+    this.disconnectedByPerson.delete(hostId);
     return this.options.manager.connect(hostId).whenReady(timeoutMs);
   }
 
   async disconnect(payload: { hostId: string }): Promise<void> {
     const hostId = hostIdOf(payload);
     this.rememberBoundViews(hostId);
+    this.disconnectedByPerson.add(hostId);
     await this.options.manager.disconnect(hostId);
+  }
+
+  /**
+   * Whether the host is disconnected because the person disconnected it, and
+   * nothing has dialled it since: a listing leaves it alone, while a call made
+   * to it still dials it.
+   */
+  isDisconnectedByPerson(hostId: HostId): boolean {
+    return (
+      this.disconnectedByPerson.has(hostId) &&
+      this.options.manager.connectionState(hostId).status === "disconnected"
+    );
   }
 
   /**

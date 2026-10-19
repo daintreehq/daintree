@@ -394,7 +394,8 @@ describe("terminal.readLastMessageOwned (#12479)", () => {
     const schema = z
       .object({
         type: z.literal("object"),
-        oneOf: z.array(z.object({ additionalProperties: z.literal(false) })).length(2),
+        // ok, unavailable, and another assistant's reply as observed (#13496).
+        oneOf: z.array(z.object({ additionalProperties: z.literal(false) })).length(3),
       })
       .safeParse(outputSchema(registerAll(), ID));
 
@@ -412,6 +413,8 @@ describe("terminal.readLastMessageOwned (#12479)", () => {
       { status: "unavailable", reason: "store-unknown" },
       { status: "unavailable", reason: "search-cap-reached" },
       { status: "unavailable", reason: "message-not-found" },
+      { status: "observed", source: "handback", text: "Done: shipped it.", truncated: false },
+      { status: "observed", source: "screen", text: "", truncated: true },
       {
         ...OK_WITH_MESSAGE,
         message: { ...OK_WITH_MESSAGE.message, truncated: true, nextCursor: "eyJ2IjoxfQ" },
@@ -507,6 +510,9 @@ describe("terminal.readLastMessageOwned (#12479)", () => {
       { ...OK_WITH_MESSAGE, extra: true },
       { ...OK_WITH_MESSAGE, message: { ...OK_WITH_MESSAGE.message, text: undefined } },
       { ...OK_WITH_MESSAGE, message: { ...OK_WITH_MESSAGE.message, nextCursor: undefined } },
+      { status: "observed", source: "transcript", text: "x", truncated: false },
+      { status: "observed", source: "screen", text: "x" },
+      { status: "observed", source: "screen", text: "x", truncated: false, message: null },
     ]) {
       expect(validate(payload)).toBe(false);
     }

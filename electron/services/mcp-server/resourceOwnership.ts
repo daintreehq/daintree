@@ -100,6 +100,16 @@ export function helpOwnershipPrincipal(helpSessionId: string): string {
   return `help\u0000${helpSessionId}`;
 }
 
+/**
+ * The principal a Shell's assistant holds what it makes here through
+ * `host.call` under (#13493): the sender its Shell proved and that
+ * assistant's own help session, so a dropped link or a new session keeps it.
+ * Namespaced apart from this machine's own help and pane principals.
+ */
+export function relayOwnershipPrincipal(senderId: string, helpSessionId: string): string {
+  return `relay\u0000${senderId}\u0000${helpSessionId}`;
+}
+
 function isPrincipalOwner(owner: string): boolean {
   return owner.startsWith(PRINCIPAL_OWNER_PREFIX);
 }

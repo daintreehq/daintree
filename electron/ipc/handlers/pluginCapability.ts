@@ -30,6 +30,8 @@ import {
   type PluginCapabilityAcknowledgeConsentInput,
   type PluginCapabilityConsentOutcome,
   type PluginCapabilityResolveConsentInput,
+  type PluginOsNotificationsQuery,
+  type PluginOsNotificationsUpdate,
   type PluginProjectTargetingQuery,
   type PluginProjectTargetingUpdate,
 } from "../../../shared/types/pluginCapabilityConsent.js";
@@ -381,6 +383,40 @@ export async function handleSetProjectTargeting(
   return store.hasGrant(identity);
 }
 
+function osNotificationsIdentity(pluginId: unknown) {
+  if (typeof pluginId !== "string" || pluginId.length === 0) {
+    throw new Error("pluginId must be a non-empty string");
+  }
+  // The instance id already tells one project's instance of a project plugin
+  // from another's, so the app-wide scope is the whole key.
+  return { pluginId, capability: "notification:os", scopeKey: "global" } as const;
+}
+
+/** Read a plugin's "Allow OS notifications" switch (#13505). */
+export async function handleGetOsNotifications(
+  input: PluginOsNotificationsQuery
+): Promise<boolean> {
+  return getPluginCapabilityConsentStore().hasGrant(osNotificationsIdentity(input?.pluginId));
+}
+
+/**
+ * Flip a plugin's "Allow OS notifications" switch (#13505) and return the
+ * persisted state. Uninstall purges it with the plugin's other grants.
+ */
+export async function handleSetOsNotifications(
+  input: PluginOsNotificationsUpdate
+): Promise<boolean> {
+  const identity = osNotificationsIdentity(input?.pluginId);
+  if (typeof input.enabled !== "boolean") {
+    throw new Error("enabled must be a boolean");
+  }
+  const store = getPluginCapabilityConsentStore();
+  if (!store.setGrant(identity, input.enabled)) {
+    throw new Error("The OS notifications setting could not be saved");
+  }
+  return store.hasGrant(identity);
+}
+
 export const pluginCapabilityNamespace = defineIpcNamespace({
   name: "pluginCapability",
   ops: {
@@ -399,6 +435,14 @@ export const pluginCapabilityNamespace = defineIpcNamespace({
     setProjectTargeting: op(
       PLUGIN_CAPABILITY_METHOD_CHANNELS.setProjectTargeting,
       handleSetProjectTargeting
+    ),
+    getOsNotifications: op(
+      PLUGIN_CAPABILITY_METHOD_CHANNELS.getOsNotifications,
+      handleGetOsNotifications
+    ),
+    setOsNotifications: op(
+      PLUGIN_CAPABILITY_METHOD_CHANNELS.setOsNotifications,
+      handleSetOsNotifications
     ),
   },
 });

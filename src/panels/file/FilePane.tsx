@@ -1134,17 +1134,22 @@ export function FilePane({
   // lands on its active segment rather than falling to <body> (#12323).
   const modeToggleRef = useRef<HTMLDivElement>(null);
   const wasEditModeRef = useRef(viewMode === "edit");
+  // The HTML fallback's View source button unmounts with the view it leaves,
+  // so it hands off the same way; ringed only when it was keyboard-activated.
+  const sourceFocusRef = useRef<{ focusVisible: boolean } | null>(null);
   useEffect(() => {
     // Only when the editor's unmount actually dropped focus: a mode that
     // vanished under a pane nobody was typing in (the plugin toggled off, a
     // background reload) must not pull focus across the window.
     const focusLost = document.activeElement === null || document.activeElement === document.body;
-    if (wasEditModeRef.current && viewMode !== "edit" && focusLost) {
+    const sourceFocus = sourceFocusRef.current;
+    sourceFocusRef.current = null;
+    if (((wasEditModeRef.current && viewMode !== "edit") || sourceFocus) && focusLost) {
       const toggle = modeToggleRef.current;
       const active =
         toggle?.querySelector<HTMLButtonElement>('[role="radio"][aria-checked="true"]') ??
         toggle?.querySelector<HTMLButtonElement>("button");
-      active?.focus({ preventScroll: true });
+      active?.focus({ preventScroll: true, focusVisible: sourceFocus?.focusVisible });
     }
     wasEditModeRef.current = viewMode === "edit";
   }, [viewMode]);
@@ -1663,6 +1668,10 @@ export function FilePane({
                 previewUrl={htmlPreviewUrl}
                 reloadNonce={reloadNonce}
                 title={fileName ?? "HTML preview"}
+                onShowSource={(event) => {
+                  sourceFocusRef.current = { focusVisible: event.detail === 0 };
+                  handleViewModeChange("source");
+                }}
                 className="min-h-full"
               />
             ) : (

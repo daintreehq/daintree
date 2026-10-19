@@ -11,6 +11,7 @@ import type {
   PluginWorktreeSnapshot,
 } from "../../types/plugin.js";
 import type { PluginActionManifestEntry } from "../../types/actions.js";
+import { PLUGIN_CONTEXT_KEYS_MAX } from "../../types/plugin.js";
 
 const sampleSnapshot: PluginWorktreeSnapshot = {
   id: "wt-1",
@@ -295,6 +296,72 @@ describe("createMockHost", () => {
     await expect(host.showToast({ message: "" })).rejects.toThrow(/non-empty/);
   });
 
+  it("records notify calls with a fresh id each (#13505)", async () => {
+    const host = createMockHost({ pluginId: "acme.demo" });
+    const options = {
+      title: "Run needs you",
+      body: "Approve",
+      actions: [{ id: "open", label: "Open", actionId: "acme.demo.openRun", args: { r: 1 } }],
+      dedupeKey: "r1",
+    };
+    const first = await host.notify(options);
+    const second = await host.notify({ title: "t", body: "b" });
+
+    expect(first.id).not.toBe(second.id);
+    expect(host.notifications).toEqual([
+      { id: first.id, options },
+      { id: second.id, options: { title: "t", body: "b" } },
+    ]);
+  });
+
+  it("rejects notify options the real host would reject", async () => {
+    const host = createMockHost({ pluginId: "acme.demo" });
+    const action = (id: string, actionId = `acme.demo.${id}`) => ({ id, label: id, actionId });
+
+    await expect(host.notify({ title: "", body: "b" })).rejects.toThrow(/title/);
+    await expect(
+      host.notify({ title: "t", body: "b", actions: [action("a"), action("b"), action("c")] })
+    ).rejects.toThrow(/at most 2/);
+    await expect(
+      host.notify({ title: "t", body: "b", actions: [action("a", "other.open")] })
+    ).rejects.toThrow(/own actions/);
+    await expect(
+      host.notify({ title: "t", body: "b", actions: [action("a"), action("a")] })
+    ).rejects.toThrow(/unique/);
+    await expect(host.notify({ title: "t", body: "b", sound: true } as never)).rejects.toThrow(
+      /unrecognized/
+    );
+    await expect(host.notify({ title: "t", body: "b", os: true })).rejects.toThrow(
+      /PERMISSION_REQUIRED/
+    );
+    expect(host.notifications).toEqual([]);
+
+    const withArgs = (args: unknown) =>
+      host.notify({
+        title: "t",
+        body: "b",
+        actions: [{ id: "a", label: "A", actionId: "acme.demo.a", args } as never],
+      });
+    await expect(withArgs([1])).rejects.toThrow(/args/);
+    await expect(withArgs(new Date(0))).rejects.toThrow(/args/);
+    await expect(withArgs({ text: "界".repeat(2000) })).rejects.toThrow(/args/);
+    const circular: Record<string, unknown> = {};
+    circular.self = circular;
+    await expect(withArgs(circular)).rejects.toThrow(/args/);
+    await expect(
+      host.notify({
+        title: "t",
+        body: "b",
+        actions: [action("open"), { ...action("x"), id: " open " }],
+      })
+    ).rejects.toThrow(/unique/);
+
+    const paging = createMockHost({ pluginId: "acme.demo", capabilities: ["notification:os"] });
+    await expect(paging.notify({ title: "t", body: "b", os: true })).resolves.toEqual({
+      id: expect.any(String),
+    });
+  });
+
   it("rejects toast options the production schema would reject (#10617)", async () => {
     const host = createMockHost();
     // Message past the 2000-char cap.
@@ -333,6 +400,52 @@ describe("createMockHost", () => {
       { panelId: "panel-1", badge: { kind: "label", text: "CI", color: "success" } },
       { panelId: "panel-1", badge: null },
     ]);
+  });
+
+  it("records setContext calls and tracks the keys held, with the host's own cap (#13506)", async () => {
+    const host = createMockHost();
+    await host.setContext("needsYou", true);
+    await host.setContext("view", "triage");
+    await host.setContext("needsYou", null);
+    expect(host.setContextCalls).toEqual([
+      { key: "needsYou", value: true },
+      { key: "view", value: "triage" },
+      { key: "needsYou", value: null },
+    ]);
+    expect([...host.contextKeys]).toEqual([["view", "triage"]]);
+
+    for (let i = host.contextKeys.size; i < PLUGIN_CONTEXT_KEYS_MAX; i++) {
+      await host.setContext(`k${i}`, true);
+    }
+    const recorded = host.setContextCalls.length;
+    await expect(host.setContext("overflow", true)).rejects.toThrow(/setContext: at most/);
+    await expect(host.setContext("a.b", true)).rejects.toThrow(/setContext: key/);
+    await expect(host.setContext("k", 3 as never)).rejects.toThrow(/setContext: value/);
+    expect(host.setContextCalls).toHaveLength(recorded);
+  });
+
+  it("records setToolbarButtonBadge calls, normalizing a cleared badge to null (#13503)", async () => {
+    const host = createMockHost();
+    await host.setToolbarButtonBadge("needs", { kind: "label", text: "12", color: "warning" });
+    await host.setToolbarButtonBadge("needs", null);
+    expect(host.setToolbarButtonBadgeCalls).toEqual([
+      { buttonId: "needs", badge: { kind: "label", text: "12", color: "warning" } },
+      { buttonId: "needs", badge: null },
+    ]);
+  });
+
+  it("setToolbarButtonBadge rejects what the real host rejects, recording nothing (#13503)", async () => {
+    const host = createMockHost({ toolbarButtonIds: ["needs"] });
+    await expect(host.setToolbarButtonBadge("", { kind: "dot" })).rejects.toThrow(
+      /setToolbarButtonBadge: buttonId/
+    );
+    await expect(host.setToolbarButtonBadge("other", { kind: "dot" })).rejects.toThrow(
+      /"other" is not one of this plugin's contributes\.toolbarButtons/
+    );
+    await expect(
+      host.setToolbarButtonBadge("needs", { kind: "label", text: "TOOLONG" })
+    ).rejects.toThrow(/^setToolbarButtonBadge: invalid badge — text:/);
+    expect(host.setToolbarButtonBadgeCalls).toEqual([]);
   });
 
   it("records reloadPanel calls and answers from simulated lifecycle phases (#12610)", async () => {

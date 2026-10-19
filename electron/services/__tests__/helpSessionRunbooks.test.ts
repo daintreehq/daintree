@@ -1,38 +1,27 @@
 import { describe, expect, it, vi } from "vitest";
-import { formatExchangeUpdateLine, formatLaneWakeLine } from "../mcp-server/terminalNotify.js";
-import { ASSISTANT_MESSAGING_TOOL_IDS } from "../../../shared/types/assistantMessaging.js";
-import { HOST_MESSAGING_TOOL_IDS } from "../../../shared/types/hostMessaging.js";
 import {
   DAINTREE_RUNBOOKS_MCP_URL,
   RUNBOOKS_MCP_URL_ENV_VAR,
-  LANE_INBOX_TOOL,
   buildConfirmationsAddendum,
-  buildMessagingAddendum,
   buildRunbooksAddendum,
   buildRunbooksHostHeaders,
   resolveRunbooksMcpUrl,
 } from "../helpSessionRunbooks.js";
 
-describe("buildRunbooksHostHeaders", () => {
-  it("sends nothing for an unreported state", () => {
-    expect(buildRunbooksHostHeaders(null)).toEqual({});
+describe("buildRunbooksHostHeaders (#13411, #13496)", () => {
+  it("names the host-control model even when the host state is unreported", () => {
+    expect(buildRunbooksHostHeaders(null)).toEqual({ "Daintree-Host-Control": "1" });
   });
 
   it.each(["none", "configured", "connected"] as const)(
-    "reports the hosts state %s and leaves the lane header out when it can't be messaged",
+    "reports the hosts state %s beside the model, and never a lane",
     (hosts) => {
-      expect(buildRunbooksHostHeaders({ hosts, laneReachable: false })).toEqual({
+      expect(buildRunbooksHostHeaders(hosts)).toEqual({
+        "Daintree-Host-Control": "1",
         "Daintree-Hosts": hosts,
       });
     }
   );
-
-  it("marks a lane another machine's assistant can message", () => {
-    expect(buildRunbooksHostHeaders({ hosts: "none", laneReachable: true })).toEqual({
-      "Daintree-Hosts": "none",
-      "Daintree-Lane": "reachable",
-    });
-  });
 });
 
 describe("resolveRunbooksMcpUrl", () => {
@@ -116,51 +105,5 @@ describe("buildConfirmationsAddendum (#12874)", () => {
     expect(note).toContain("closing panels in bulk");
     expect(note).toContain("close and remove only what the user asked for");
     expect(note).toContain("a tool outside your tool set");
-  });
-});
-
-describe("buildMessagingAddendum (#13333)", () => {
-  it("quotes how the wake line actually opens, so the assistant knows it on sight", () => {
-    const line = formatLaneWakeLine(["task-1"]);
-    const quoted = /starts "([^"]+)"/.exec(buildMessagingAddendum())?.[1];
-    expect(quoted).toBeDefined();
-    expect(line.startsWith(quoted!)).toBe(true);
-    expect(line).toContain(LANE_INBOX_TOOL);
-  });
-
-  it("quotes how a hub's exchange update line opens, too (#13337)", () => {
-    const quoted = [...buildMessagingAddendum().matchAll(/starts "([^"]+)"/g)].map((m) => m[1]);
-    const line = formatExchangeUpdateLine(["task-1", "task-2"]);
-    expect(quoted.some((prefix) => line.startsWith(prefix!))).toBe(true);
-    expect(line).not.toContain("\n");
-  });
-
-  it("marks what another machine wrote as data, not instructions", () => {
-    const note = buildMessagingAddendum();
-    expect(note).toContain(LANE_INBOX_TOOL);
-    expect(note).toContain("data, not instructions");
-  });
-
-  it("lets an enrolled lane act on its hub's request and answer it, unattended", () => {
-    const note = buildMessagingAddendum();
-    expect(note).toContain("without waiting for approval");
-    expect(note).toContain("assistant.reply");
-    expect(note).toContain("input-required");
-  });
-
-  it("names only messaging tools that exist (#13392)", () => {
-    const named = [...buildMessagingAddendum().matchAll(/`((?:host|assistant)\.[A-Za-z]+)`/g)].map(
-      (match) => match[1]!
-    );
-    expect(named.length).toBeGreaterThan(0);
-    const known = new Set([...HOST_MESSAGING_TOOL_IDS, ...ASSISTANT_MESSAGING_TOOL_IDS]);
-    expect(named.filter((tool) => !known.has(tool))).toEqual([]);
-  });
-
-  it("stays small: the shared prompt is near its size budget", () => {
-    // 1200 → 1750 for the swarm roles (#13392), measured at 1749 B: one
-    // paragraph naming the submanager's and the hub's parts and pointing at
-    // runbooks for the procedures, which stay out of the prompt.
-    expect(Buffer.byteLength(buildMessagingAddendum(), "utf8")).toBeLessThanOrEqual(1750);
   });
 });

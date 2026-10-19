@@ -225,12 +225,18 @@ const SAVED = [
 ].join("\n");
 const EDITED = SAVED.replace("port: 8080", "port: 9090").replace("tail: 1", "tail: 2");
 
+// The diff view is lazy, and React 19 holds a Suspense reveal for 300 ms after
+// its fallback commits even with the chunk cached; on a busy CI worker that
+// plus timer lag outruns waitFor's 1 s default, so the reveal gets its own budget.
 async function loadedDiff(testId: string): Promise<HTMLElement> {
-  return waitFor(() => {
-    const root = screen.getByTestId(testId);
-    if (!root.hasAttribute("data-kit-diff-view")) throw new Error("diff chunk not in yet");
-    return root;
-  });
+  return waitFor(
+    () => {
+      const root = screen.getByTestId(testId);
+      if (!root.hasAttribute("data-kit-diff-view")) throw new Error("diff chunk not in yet");
+      return root;
+    },
+    { timeout: 5_000 }
+  );
 }
 
 async function hunkHeaders(root: HTMLElement): Promise<HTMLElement[]> {
@@ -525,7 +531,8 @@ describe("DiffView", () => {
 
   it("says there is nothing to show for identical texts", async () => {
     render(withTooltips(createElement(kit.DiffView, { oldText: "a\n", newText: "a\n" })));
-    await screen.findByText("No changes detected");
+    // Behind the same lazy reveal as loadedDiff, so the same budget.
+    await screen.findByText("No changes detected", {}, { timeout: 5_000 });
   });
 
   it("ignores values off the contract", async () => {

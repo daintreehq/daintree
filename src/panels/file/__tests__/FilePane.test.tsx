@@ -1476,6 +1476,7 @@ describe("FilePane diff mode (#11274)", () => {
     // Chromium's custom-scheme media loader can't do follow-up range requests
     // (electron#51442) — so the suite stubs the fetch/object-URL boundary.
     const videoFetchMock = vi.fn();
+    const realFetch = globalThis.fetch;
     beforeEach(() => {
       videoFetchMock.mockResolvedValue({
         ok: true,
@@ -1488,7 +1489,7 @@ describe("FilePane diff mode (#11274)", () => {
       URL.revokeObjectURL = vi.fn();
     });
     afterEach(() => {
-      vi.unstubAllGlobals();
+      vi.stubGlobal("fetch", realFetch);
       videoFetchMock.mockReset();
     });
 
@@ -1522,6 +1523,7 @@ describe("FilePane diff mode (#11274)", () => {
     // and unstubAllGlobals never restores a directly assigned URL method.
     const realCreateObjectURL = URL.createObjectURL;
     const realRevokeObjectURL = URL.revokeObjectURL;
+    const realFetch = globalThis.fetch;
     beforeEach(() => {
       audioFetchMock.mockResolvedValue({
         ok: true,
@@ -1534,7 +1536,7 @@ describe("FilePane diff mode (#11274)", () => {
       URL.revokeObjectURL = vi.fn();
     });
     afterEach(() => {
-      vi.unstubAllGlobals();
+      vi.stubGlobal("fetch", realFetch);
       URL.createObjectURL = realCreateObjectURL;
       URL.revokeObjectURL = realRevokeObjectURL;
       audioFetchMock.mockReset();
@@ -2869,6 +2871,7 @@ describe("FilePane live disk refresh (#11451)", () => {
       >();
     const realCreateObjectURL = URL.createObjectURL;
     const realRevokeObjectURL = URL.revokeObjectURL;
+    const realFetch = globalThis.fetch;
     beforeEach(() => {
       mediaFetchMock.mockResolvedValue({
         ok: true,
@@ -2881,7 +2884,7 @@ describe("FilePane live disk refresh (#11451)", () => {
       URL.revokeObjectURL = vi.fn();
     });
     afterEach(() => {
-      vi.unstubAllGlobals();
+      vi.stubGlobal("fetch", realFetch);
       mediaFetchMock.mockReset();
       URL.createObjectURL = realCreateObjectURL;
       URL.revokeObjectURL = realRevokeObjectURL;
@@ -3158,6 +3161,7 @@ describe("FilePane re-reads when the project view is revealed (#11588)", () => {
       >();
     const realCreateObjectURL = URL.createObjectURL;
     const realRevokeObjectURL = URL.revokeObjectURL;
+    const realFetch = globalThis.fetch;
     beforeEach(() => {
       mediaFetchMock.mockResolvedValue({
         ok: true,
@@ -3173,7 +3177,7 @@ describe("FilePane re-reads when the project view is revealed (#11588)", () => {
       URL.revokeObjectURL = vi.fn();
     });
     afterEach(() => {
-      vi.unstubAllGlobals();
+      vi.stubGlobal("fetch", realFetch);
       mediaFetchMock.mockReset();
       URL.createObjectURL = realCreateObjectURL;
       URL.revokeObjectURL = realRevokeObjectURL;

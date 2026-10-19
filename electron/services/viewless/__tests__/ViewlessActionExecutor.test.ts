@@ -1,71 +1,22 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { CHANNELS } from "../../../ipc/channels.js";
-import type { Project, ProjectState } from "../../../../shared/types/project.js";
 import { MAX_ECHOED_COMMAND_CHARS } from "../../../../shared/utils/terminalSendCommandResult.js";
 import {
   executeViewlessAction,
   hasViewlessImplementation,
+  type ViewlessApprovalAsk,
   type ViewlessDeps,
   type ViewlessPtyReader,
-  type ViewlessWorkspaceHosts,
 } from "../ViewlessActionExecutor.js";
-
-const PROJECT: Project = {
-  id: "proj-1",
-  path: "/repo",
-  name: "Repo",
-  emoji: "tree",
-  lastOpened: 0,
-} as Project;
-
-/**
- * An in-memory project state store that queues updates the way the real one
- * does, so "the next hydrate sees it" is a read of what was written.
- */
-function makeStateStore(initial: ProjectState | null = null) {
-  let state = initial;
-  return {
-    read: () => state,
-    getProjectState: vi.fn(async () => state),
-    enqueueProjectStateUpdate: vi.fn(
-      async (
-        _projectId: string,
-        updater: (
-          existing: ProjectState | null
-        ) => ProjectState | null | Promise<ProjectState | null>
-      ) => {
-        const next = await updater(state);
-        if (next !== null) state = next;
-      }
-    ),
-  };
-}
-
-function makeDeps(overrides: Partial<ViewlessDeps> = {}) {
-  const store = makeStateStore();
-  const invoke = vi.fn(async (_projectId: string, channel: string, args: unknown[]) => {
-    if (channel === CHANNELS.TERMINAL_SPAWN) return (args[0] as { id: string }).id;
-    if (channel === CHANNELS.WORKTREE_CREATE) {
-      return { worktreeId: "/repo-wt/feature", branch: "feature", setupState: "pending" };
-    }
-    return undefined;
-  });
-  const deps: ViewlessDeps = {
-    getProject: (id) => (id === PROJECT.id ? PROJECT : null),
-    getLaunchEnvLayers: async () => ({ global: {}, project: {} }),
-    getProjectState: store.getProjectState,
-    stateWriter: store,
-    getPtyReader: () => null,
-    getWorkspaceHosts: () => null,
-    invoke: invoke as ViewlessDeps["invoke"],
-    ...overrides,
-  };
-  return { deps, store, invoke };
-}
-
-function request(actionId: string, args: unknown, extra: { confirmed?: boolean } = {}) {
-  return { workspaceId: PROJECT.id, actionId, args, confirmed: extra.confirmed ?? false };
-}
+import {
+  makeDeps,
+  makeHosts,
+  makePty,
+  makeStateStore,
+  makeWorktree,
+  PROJECT,
+  request,
+} from "./viewlessTestDeps.js";
 
 describe("viewless actions", () => {
   it("covers exactly the agent-facing actions", () => {
@@ -75,6 +26,347 @@ describe("viewless actions", () => {
     // Opens a palette: inherently a frontend's job.
     expect(hasViewlessImplementation("terminal.sendToAgent")).toBe(false);
     expect(hasViewlessImplementation("terminal.moveToDock")).toBe(false);
+  });
+
+  it("covers the loop an orchestrator drives with no window open", () => {
+    for (const id of [
+      "agent.launch",
+      "agent.listAvailable",
+      "terminal.list",
+      "terminal.getOutput",
+      "terminal.getStatus",
+      "terminal.close",
+      "terminal.interrupt",
+      "terminal.sendKeys",
+      "worktree.list",
+      "worktree.waitUntilReady",
+      "worktree.delete",
+      "project.getAll",
+      "project.detectRunners",
+      "worktree.createWithRecipe",
+      "forge.getPR",
+      "forge.listPRs",
+      "forge.getIssue",
+      "forge.listIssues",
+      "forge.getCIStatus",
+    ]) {
+      expect(hasViewlessImplementation(id)).toBe(true);
+    }
+  });
+
+  it("refuses an argument that raises a safe action to confirmation, unapproved", async () => {
+    const { deps, invoke } = makeDeps({ getWorkspaceHosts: () => makeHosts() });
+
+    const result = await executeViewlessAction(
+      request("worktree.create", { worktreeId: "/repo", options: {}, recipeId: "r-1" }),
+      deps
+    );
+
+    expect(result).toMatchObject({
+      ok: false,
+      error: { code: "CONFIRMATION_REQUIRED", details: { confirmationChannel: "unavailable" } },
+    });
+    expect(invoke).not.toHaveBeenCalled();
+  });
+
+  it("asks the caller's write check before a write, and never before a read", async () => {
+    const { deps, invoke } = makeDeps();
+    const refusal = new Error("Driven elsewhere");
+    const checkWrite = vi.fn((_changed: boolean) => refusal);
+
+    const write = await executeViewlessAction(
+      { ...request("terminal.new", {}), checkWrite },
+      deps
+    ).catch((err: unknown) => err);
+    const read = await executeViewlessAction(
+      { ...request("project.getAll", undefined), checkWrite },
+      deps
+    );
+
+    expect(write).toBe(refusal);
+    expect(checkWrite).toHaveBeenCalledTimes(1);
+    expect(checkWrite).toHaveBeenCalledWith(false);
+    expect(read).toMatchObject({ ok: true });
+    expect(invoke).not.toHaveBeenCalledWith(PROJECT.id, CHANNELS.TERMINAL_SPAWN, expect.anything());
+  });
+
+  describe("a write whose caller's standing is checked (#13501)", () => {
+    it("asks again right before each host call, and runs when it still stands", async () => {
+      const { deps, invoke } = makeDeps();
+      const checkWrite = vi.fn((_changed: boolean): Error | null => null);
+
+      const result = await executeViewlessAction(
+        { ...request("terminal.new", {}), checkWrite },
+        deps
+      );
+
+      expect(result).toMatchObject({ ok: true });
+      // Once as it is admitted, and once more right before the spawn.
+      expect(checkWrite.mock.calls.map(([changed]) => changed)).toEqual([false, false]);
+      expect(invoke).toHaveBeenCalledWith(PROJECT.id, CHANNELS.TERMINAL_SPAWN, expect.anything());
+    });
+
+    it("stops before the change when the standing goes mid-call, whatever the action makes of it", async () => {
+      const { deps, invoke } = makeDeps();
+      const takenOver = new Error("studio-02 has control of this project on the host");
+      let asks = 0;
+      const checkWrite = vi.fn(() => (++asks > 1 ? takenOver : null));
+
+      // The spawn helper turns any error from its host call into a spawn
+      // failure; the stop must still be the call's answer.
+      const err = await executeViewlessAction(
+        { ...request("terminal.new", {}), checkWrite },
+        deps
+      ).catch((caught: unknown) => caught);
+
+      expect(err).toBe(takenOver);
+      expect(invoke).not.toHaveBeenCalledWith(
+        PROJECT.id,
+        CHANNELS.TERMINAL_SPAWN,
+        expect.anything()
+      );
+    });
+
+    it("tells a later ask that an earlier host call already changed something", async () => {
+      const hosts = makeHosts();
+      const { deps, invoke } = makeDeps({ getWorkspaceHosts: () => hosts });
+      const stopped = new Error("stopped");
+      const checkWrite = vi.fn((changed: boolean) => (changed ? stopped : null));
+
+      const err = await executeViewlessAction(
+        {
+          ...request("worktree.delete", { worktreeId: "/repo-wt/feature" }, { confirmed: true }),
+          checkWrite,
+        },
+        deps
+      ).catch((caught: unknown) => caught);
+
+      // The dev preview stop is a change; the delete after it never runs.
+      expect(err).toBe(stopped);
+      expect(invoke).not.toHaveBeenCalledWith(
+        PROJECT.id,
+        CHANNELS.WORKTREE_DELETE,
+        expect.anything()
+      );
+    });
+
+    it("keeps a check that throws as the stop, never as a failure to carry on from", async () => {
+      const { deps, invoke } = makeDeps();
+      const broken = new Error("lease lookup threw");
+      let asks = 0;
+      const checkWrite = vi.fn(() => {
+        if (++asks > 1) throw broken;
+        return null;
+      });
+
+      const err = await executeViewlessAction(
+        { ...request("terminal.new", {}), checkWrite },
+        deps
+      ).catch((caught: unknown) => caught);
+
+      expect(err).toBe(broken);
+      expect(invoke).not.toHaveBeenCalledWith(
+        PROJECT.id,
+        CHANNELS.TERMINAL_SPAWN,
+        expect.anything()
+      );
+    });
+
+    it("holds a layout write that is the call's only change to the same check", async () => {
+      // A panel whose process is gone: closing it only edits the saved layout.
+      const store = makeStateStore({
+        projectId: PROJECT.id,
+        sidebarWidth: 350,
+        terminals: [{ id: "t-gone", kind: "terminal", title: "Gone", location: "grid" }],
+      });
+      const { deps } = makeDeps({
+        getProjectState: store.getProjectState,
+        stateWriter: store,
+        getPtyReader: () => makePty(),
+      });
+      const takenOver = new Error("studio-02 has control");
+      let asks = 0;
+      const checkWrite = () => (++asks > 1 ? takenOver : null);
+
+      const err = await executeViewlessAction(
+        { ...request("terminal.close", { terminalId: "t-gone" }), checkWrite },
+        deps
+      ).catch((caught: unknown) => caught);
+
+      expect(err).toBe(takenOver);
+      expect(store.read()?.terminals.map((t) => t.id)).toEqual(["t-gone"]);
+    });
+
+    it("still records a launch that landed, whoever takes the project after it", async () => {
+      const { deps, store, invoke } = makeDeps();
+      let spawned = false;
+      invoke.mockImplementation(async (_projectId, channel, args) => {
+        if (channel === CHANNELS.TERMINAL_SPAWN) {
+          spawned = true;
+          return (args[0] as { id: string }).id;
+        }
+        return undefined;
+      });
+      const takenOver = new Error("studio-02 has control");
+
+      const result = await executeViewlessAction(
+        { ...request("terminal.new", {}), checkWrite: () => (spawned ? takenOver : null) },
+        deps
+      );
+
+      expect(result).toMatchObject({ ok: true });
+      expect(store.read()?.terminals).toHaveLength(1);
+    });
+  });
+
+  describe("a confirm-gated call put to someone else (#13501)", () => {
+    const deleteArgs = { worktreeId: "/repo-wt/feature" };
+
+    function setup() {
+      const hosts = makeHosts();
+      const made = makeDeps(
+        { getWorkspaceHosts: () => hosts },
+        {
+          worktrees: [
+            makeWorktree(),
+            makeWorktree({
+              id: "/repo-wt/feature",
+              worktreeId: "/repo-wt/feature",
+              path: "/repo-wt/feature",
+              name: "feature",
+              branch: "feature/thing",
+              isMainWorktree: false,
+            }),
+          ],
+        }
+      );
+      return { ...made, hosts };
+    }
+
+    it("asks with the host's own preview of exactly the call, and runs it once approved", async () => {
+      const { deps, invoke } = setup();
+      const requestApproval = vi.fn(async (_ask: ViewlessApprovalAsk) => ({
+        decision: "approved" as const,
+        deadline: Date.now() + 60_000,
+      }));
+
+      const result = await executeViewlessAction(
+        { ...request("worktree.delete", deleteArgs), requestApproval },
+        deps
+      );
+
+      expect(result).toMatchObject({ ok: true });
+      expect(requestApproval).toHaveBeenCalledWith({
+        actionId: "worktree.delete",
+        args: deleteArgs,
+        subject: "feature/thing",
+        lines: ["No uncommitted changes."],
+      });
+      expect(invoke).toHaveBeenCalledWith(PROJECT.id, CHANNELS.WORKTREE_DELETE, [
+        { worktreeId: "/repo-wt/feature", force: undefined, deleteBranch: undefined },
+      ]);
+    });
+
+    it("answers a decline or a missed dialog the way a view's dialog does, and deletes nothing", async () => {
+      for (const [decision, code] of [
+        ["rejected", "USER_REJECTED"],
+        ["timeout", "CONFIRMATION_TIMEOUT"],
+      ] as const) {
+        const { deps, invoke } = setup();
+        const result = await executeViewlessAction(
+          {
+            ...request("worktree.delete", deleteArgs),
+            requestApproval: async () => ({ decision }),
+          },
+          deps
+        );
+        expect(result).toMatchObject({ ok: false, error: { code } });
+        expect(invoke).not.toHaveBeenCalledWith(
+          PROJECT.id,
+          CHANNELS.WORKTREE_DELETE,
+          expect.anything()
+        );
+      }
+    });
+
+    it("keeps the plain refusal when nobody could be asked", async () => {
+      const { deps, invoke } = setup();
+      const result = await executeViewlessAction(
+        {
+          ...request("worktree.delete", deleteArgs),
+          requestApproval: async () => ({ decision: "unavailable" as const }),
+        },
+        deps
+      );
+      expect(result).toMatchObject({
+        ok: false,
+        error: { code: "CONFIRMATION_REQUIRED", details: { confirmationChannel: "unavailable" } },
+      });
+      expect(invoke).not.toHaveBeenCalledWith(
+        PROJECT.id,
+        CHANNELS.WORKTREE_DELETE,
+        expect.anything()
+      );
+    });
+
+    it("never asks about a call that couldn't run anyway", async () => {
+      const { deps, hosts } = setup();
+      const requestApproval = vi.fn(async () => ({
+        decision: "approved" as const,
+        deadline: Date.now() + 60_000,
+      }));
+
+      const forced = await executeViewlessAction(
+        { ...request("worktree.delete", { ...deleteArgs, force: true }), requestApproval },
+        deps
+      );
+      hosts.isWorktreeOwnedByProject.mockResolvedValueOnce(false);
+      const foreign = await executeViewlessAction(
+        { ...request("worktree.delete", deleteArgs), requestApproval },
+        deps
+      );
+
+      expect(forced).toMatchObject({ ok: false, error: { code: "CONFIRMATION_REQUIRED" } });
+      expect(foreign).toMatchObject({ ok: false, error: { code: "VALIDATION_ERROR" } });
+      expect(requestApproval).not.toHaveBeenCalled();
+    });
+
+    it("refuses a change the approval no longer covers once its deadline passes", async () => {
+      const { deps, invoke } = setup();
+      const result = await executeViewlessAction(
+        {
+          ...request("worktree.delete", deleteArgs),
+          requestApproval: async () => ({
+            decision: "approved" as const,
+            deadline: Date.now() - 1,
+          }),
+        },
+        deps
+      );
+      expect(result).toMatchObject({ ok: false, error: { code: "CONFIRMATION_TIMEOUT" } });
+      expect(invoke).not.toHaveBeenCalledWith(
+        PROJECT.id,
+        CHANNELS.WORKTREE_DELETE,
+        expect.anything()
+      );
+    });
+
+    it("says when the host couldn't read what the delete would discard", async () => {
+      const { deps, hosts } = setup();
+      hosts.getDeletePreview.mockRejectedValueOnce(new Error("host gone"));
+      const requestApproval = vi.fn(async (_ask: ViewlessApprovalAsk) => ({
+        decision: "rejected" as const,
+      }));
+
+      await executeViewlessAction(
+        { ...request("worktree.delete", deleteArgs), requestApproval },
+        deps
+      );
+
+      const [ask] = requestApproval.mock.calls[0]!;
+      expect(ask.lines[0]).toMatch(/Could not verify current changes/);
+      expect(ask.lines.some((line) => /teardown may also run/.test(line))).toBe(true);
+    });
   });
 
   it("answers null for a workspace that is not a registered project", async () => {
@@ -281,6 +573,9 @@ describe("viewless actions", () => {
       pty = {
         getTerminalProjectId: vi.fn(() => PROJECT.id),
         getTerminalAsync: vi.fn(async () => ({ kind: "terminal", hasPty: true })),
+        getAllTerminalsAsync: vi.fn(async () => []),
+        getTerminalsForProjectAsync: vi.fn(async () => []),
+        getSerializedStateAsync: vi.fn(async () => null),
       };
     });
 
@@ -419,17 +714,6 @@ describe("viewless actions", () => {
   });
 
   describe("worktree.create", () => {
-    function makeHosts(loaded: boolean) {
-      return {
-        getHostForProject: vi.fn((_path: string): unknown => (loaded ? {} : undefined)),
-        prewarmProject: vi.fn((_path: string) => {}),
-        waitForReady: vi.fn(async () => {}),
-        isWorktreeOwnedByProject: vi.fn(
-          async (_id: string, _path: string, _projectId: string): Promise<boolean | null> => true
-        ),
-      } satisfies ViewlessWorkspaceHosts;
-    }
-
     const OPTIONS = { baseBranch: "main", newBranch: "feature", path: "/repo-wt/feature" };
 
     it("loads the project into a workspace host with no window, then creates", async () => {

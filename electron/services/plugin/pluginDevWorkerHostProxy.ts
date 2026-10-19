@@ -25,6 +25,8 @@ import type {
   PluginSettingsScope,
   PluginStorageScope,
   PluginToastOptions,
+  PluginNotifyOptions,
+  PluginNotifyResult,
   PluginQuickPickItem,
   PluginQuickPickOptions,
   PluginPromptCallOptions,
@@ -71,6 +73,7 @@ import type {
 } from "../../../shared/types/actions.js";
 import { formatErrorMessage } from "../../../shared/utils/errorMessage.js";
 import { normalizePanelMenuItems } from "../../../shared/utils/pluginPanelMenuItems.js";
+import { validatePluginContextEntry } from "../../../shared/utils/pluginContextKeys.js";
 import { toPluginFocusedPanel } from "../../../shared/utils/pluginFocusedPanel.js";
 import {
   normalizePluginAllAgentsSnapshot,
@@ -1240,6 +1243,37 @@ export class PluginDevWorkerHostProxy {
         this.notify("setPanelBadge", { panelId, badge: badge ?? null });
         return Promise.resolve();
       },
+      // Same fire-and-forget shape: the real host checks the id is one of this
+      // plugin's own toolbar buttons and re-validates the badge.
+      setToolbarButtonBadge: (buttonId, badge) => {
+        if (typeof buttonId !== "string" || buttonId.length === 0) {
+          // Reject (not sync throw): runtime-surface Promise method (#10617).
+          return Promise.reject(
+            new Error(
+              `Plugin "${this.pluginId}" setToolbarButtonBadge: buttonId must be a non-empty string`
+            )
+          );
+        }
+        this.notify("setToolbarButtonBadge", { buttonId, badge: badge ?? null });
+        return Promise.resolve();
+      },
+      // Vetted here with the host's own rules so a bad call rejects without a
+      // round trip, then sent as a call so main's per-plugin key cap rejects
+      // back to the caller too. Resolves (not rejects) once the worker is torn
+      // down, matching the in-process host's silent no-op after unload.
+      setContext: (key, value) => {
+        if (this.disposed) return Promise.resolve();
+        const entry = validatePluginContextEntry(key, value);
+        if (!entry.ok) {
+          // Reject (not sync throw): runtime-surface Promise method (#10617).
+          return Promise.reject(new Error(`Plugin "${this.pluginId}" setContext: ${entry.error}`));
+        }
+        return this.callWithGrace<void>(
+          "setContext",
+          { key: entry.key, value: entry.value },
+          undefined
+        );
+      },
       // Vetted here with the host's own rules, so an authoring mistake rejects
       // back to the caller rather than only being logged in main, then sent as
       // a plain copy that always survives the port. Main vets it again and
@@ -1273,6 +1307,8 @@ export class PluginDevWorkerHostProxy {
           type: options?.type,
           durationMs: options?.durationMs,
         }),
+      notify: (options: PluginNotifyOptions) =>
+        this.call<PluginNotifyResult>("notify", { options }),
       dispatch: (actionId, args, options) =>
         this.call<ActionDispatchResult>(
           "dispatch",

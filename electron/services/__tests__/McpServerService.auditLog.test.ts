@@ -570,7 +570,7 @@ describe("McpServerService", () => {
       expect(record.errorCode).toBeUndefined();
     });
 
-    it("keeps an assistant reply's text out of the audit even when the call is refused (#13335)", async () => {
+    it("keeps a brief for another machine's assistant out of the audit even when the call is refused (#13496)", async () => {
       const { window } = createMockWindow({ getManifest: () => [] });
       await service.start(window);
       const { client, transport } = await connectClient(service.currentPort!);
@@ -578,48 +578,25 @@ describe("McpServerService", () => {
 
       await client
         .callTool({
-          name: "assistant.reply",
-          arguments: { taskId: "BODY-SENTINEL", state: "completed", text: "BODY-SENTINEL ok" },
-        })
-        .catch(() => {});
-
-      const records = getAuditRecords(service);
-      expect(records).toHaveLength(1);
-      expect(records[0].toolId).toBe("assistant.reply");
-      expect(records[0].argsSummary).not.toContain("BODY-SENTINEL");
-      expect(JSON.parse(records[0].argsSummary)).toEqual({
-        taskId: null,
-        state: "completed",
-        textChars: "BODY-SENTINEL ok".length,
-      });
-    });
-
-    it("keeps a hub message's text out of the audit even when the call is refused (#13336)", async () => {
-      const { window } = createMockWindow({ getManifest: () => [] });
-      await service.start(window);
-      const { client, transport } = await connectClient(service.currentPort!);
-      transports.push(transport);
-
-      await client
-        .callTool({
-          name: "host.sendMessage",
+          name: "host.call",
           arguments: {
             hostId: "studio",
             projectId: "BODY-SENTINEL",
-            slot: 0,
-            generation: "BODY-SENTINEL",
-            text: "BODY-SENTINEL ok",
+            tool: "terminal.sendCommand",
+            args: { terminalId: "t-1", command: "BODY-SENTINEL ok" },
           },
         })
         .catch(() => {});
 
       const records = getAuditRecords(service);
       expect(records).toHaveLength(1);
-      expect(records[0].toolId).toBe("host.sendMessage");
+      expect(records[0].toolId).toBe("host.call");
       expect(records[0].argsSummary).not.toContain("BODY-SENTINEL");
       expect(JSON.parse(records[0].argsSummary)).toMatchObject({
         hostId: "studio",
-        textChars: "BODY-SENTINEL ok".length,
+        projectId: null,
+        tool: "terminal.sendCommand",
+        "args.command": `<string: ${"BODY-SENTINEL ok".length} chars>`,
       });
     });
 

@@ -1,5 +1,6 @@
 import { usePanelStore } from "@/store/panelStore";
 import { buildResumeCommand } from "@shared/types";
+import { supportsCrossDirectoryResume } from "@shared/types/agentSettings";
 import type { AddPanelOptions } from "@shared/types/addPanelOptions";
 import { isPtyPanel, type PanelInstance, type PtyPanelData } from "@shared/types/panel";
 import { getAgentConfig } from "@/config/agents";
@@ -9,6 +10,7 @@ import {
   resolveAgentLaunchBaseCommand,
 } from "@/utils/agentLaunchCommand";
 import { logError } from "@/utils/logger";
+import { reconcileMovedPanel } from "@/services/terminal/crossWorktreeMove";
 
 export type RestoreRecoveryChoice = { kind: "resume"; sessionId: string } | { kind: "fresh" };
 
@@ -81,12 +83,18 @@ export function buildRestoreRecoveryLaunchOptions(
     launchAgentId: agentId,
     title: panel.title,
     titleMode: panel.titleMode,
-    cwd: panel.cwd,
+    // An agent that reopens a conversation only where it began resumes there;
+    // a fresh start runs where the pane now lives (#13509).
+    cwd:
+      resuming && !supportsCrossDirectoryResume(agentId)
+        ? panel.conversationCwd || panel.cwd
+        : panel.cwd,
     worktreeId: panel.worktreeId,
     location: panel.location,
     command,
     agentSessionId: resuming ? choice.sessionId : undefined,
-    conversationCwd: resuming ? panel.conversationCwd : undefined,
+    conversationCwd:
+      resuming && supportsCrossDirectoryResume(agentId) ? panel.conversationCwd : undefined,
     isInputLocked: panel.isInputLocked,
     agentLaunchFlags: panel.agentLaunchFlags,
     callerLaunchFlags: panel.callerLaunchFlags,
@@ -187,7 +195,13 @@ export async function launchFromRestoreRecovery(
     });
     if (!options) return "unavailable";
     const launchedId = await latest.addPanel(options);
-    return launchedId === null ? "unavailable" : "launched";
+    if (launchedId === null) return "unavailable";
+    // A conversation resumed in the folder it began in, while the pane is filed
+    // under another worktree, gets the same notice a live pane moved there gets.
+    if (options.cwd !== current.cwd && options.worktreeId) {
+      reconcileMovedPanel(launchedId, options.worktreeId);
+    }
+    return "launched";
   } catch (error) {
     logError("[restoreRecovery] Failed to launch held pane", error);
     return "unavailable";

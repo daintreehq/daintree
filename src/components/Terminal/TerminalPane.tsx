@@ -1648,7 +1648,12 @@ function TerminalPaneComponent({
       <div className="flex-1 min-h-0 flex">
         <div className="flex-1 min-w-0 min-h-0 bg-surface-canvas flex flex-col">
           {isHeldForRecovery ? (
-            <RestoreRecoveryGate panelId={id} containerRef={recoveryGateRef} />
+            <RestoreRecoveryGate
+              key={id}
+              panelId={id}
+              isFocused={isFocused}
+              containerRef={recoveryGateRef}
+            />
           ) : spawnStatus === "missing-cli" && agentId ? (
             <MissingCliGate
               agentId={agentId}

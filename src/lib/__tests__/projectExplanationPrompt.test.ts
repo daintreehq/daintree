@@ -107,14 +107,4 @@ describe("getDefaultAgentId", () => {
     expect(getDefaultAgentId(undefined, "terminal", availability)).toBe("gemini");
     expect(getDefaultAgentId(undefined, "browser", availability)).toBe("gemini");
   });
-
-  it("does not favour an installed daintree-assistant over registry order", () => {
-    const availability: CliAvailability = {
-      claude: "ready",
-      gemini: "ready",
-      codex: "ready",
-      "daintree-assistant": "ready",
-    };
-    expect(getDefaultAgentId(undefined, undefined, availability)).toBe("claude");
-  });
 });

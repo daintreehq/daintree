@@ -17,6 +17,7 @@ import {
   NOTIFY_SETTLE_GRACE_MS,
   NOTIFY_TARGET_SETTLE_MS,
   TerminalNotifyWhenIdleArgsSchema,
+  displayNoticeHostName,
   displayNoticeTerminalId,
   sanitizeNotifyNote,
   type PaneNotifyState,
@@ -27,11 +28,6 @@ import {
 } from "../../../shared/types/terminalNotify.js";
 import { readTailSnapshot, tailCapturedOutput } from "../../../shared/utils/artifactParser.js";
 import { detectHandback } from "../pty/HandbackDetector.js";
-import {
-  EXCHANGE_UPDATE_LINE_PREFIX,
-  LANE_INBOX_TOOL,
-  LANE_WAKE_LINE_PREFIX,
-} from "../helpSessionRunbooks.js";
 import { evaluateWakeGate, wakeGateOptionsFor } from "../../../shared/utils/terminalWakeGate.js";
 import { fenceFor } from "../../../shared/utils/quoteFence.js";
 import { createLogger } from "../../utils/logger.js";
@@ -49,7 +45,36 @@ const logger = createLogger("main:TerminalNotify");
 export interface OwnPane {
   key: string;
   terminalId: string;
+  /** Set for a call another machine's assistant relayed here: its pane is on that machine. */
+  relay?: RelayNoticeRoute;
 }
+
+/**
+ * Where a relayed call's notices go (#13500): back over the link it came in
+ * on, to be typed on its Shell into the run that armed them. Nothing here
+ * types them, so there is no pane of this machine's to read or gate.
+ */
+export interface RelayNoticeRoute {
+  /** The project the relayed session is bound to; its targets must be in it. */
+  projectId: string;
+  linkSessionId: string;
+  helpSessionId: string;
+  /** The call arming the notice, which the Shell pinned to its run. Absent, none is armed. */
+  callId?: string;
+  deliver(notices: readonly RelayedNotice[]): void;
+}
+
+/** A relayed call's fired notice, as it leaves for its Shell: observations only. */
+export interface RelayedNotice {
+  linkSessionId: string;
+  helpSessionId: string;
+  callId: string;
+  terminalId: string;
+  observation: NoticeObservation;
+  awaitingHandback?: boolean;
+}
+
+type RelayTag = Pick<RelayedNotice, "linkSessionId" | "helpSessionId" | "callId">;
 
 // NUL-led so a pane principal and a help session id can never spell the same key.
 export function paneNotifyKey(principal: string): string {
@@ -58,6 +83,29 @@ export function paneNotifyKey(principal: string): string {
 
 export function helpNotifyKey(helpSessionId: string): string {
   return `help\u0000${helpSessionId}`;
+}
+
+export function relayNotifyKey(principal: string): string {
+  return `relay\u0000${principal}`;
+}
+
+/**
+ * A relay principal's notice pane. Its terminal id is its key, which no
+ * pty-host terminal can have, so no event about a real terminal reaches it.
+ */
+export function relayNoticePane(principal: string, route: RelayNoticeRoute): OwnPane {
+  const key = relayNotifyKey(principal);
+  return { key, terminalId: key, relay: route };
+}
+
+function relayTagOf(pane: OwnPane): RelayTag | undefined {
+  const relay = pane.relay;
+  if (relay?.callId === undefined) return undefined;
+  return {
+    linkSessionId: relay.linkSessionId,
+    helpSessionId: relay.helpSessionId,
+    callId: relay.callId,
+  };
 }
 
 /** The slice of a pty-host terminal record the notify service reads. */
@@ -437,7 +485,8 @@ export interface ExtractedReply {
 export function extractReply(
   serialized: string,
   lines: number,
-  endAt: ObservedMarker | boolean
+  endAt: ObservedMarker | boolean,
+  maxChars: number = NOTIFY_REPLY_MAX_CHARS
 ): ExtractedReply {
   if (lines <= 0) return { reply: null, reachedHandback: false };
   const tail = tailCapturedOutput(serialized, REPLY_SEARCH_ROWS, true);
@@ -458,8 +507,8 @@ export function extractReply(
   }
   while (rows.length > 0 && rows[0].trim() === "") rows.shift();
   let text = rows.join("\n");
-  if (text.length > NOTIFY_REPLY_MAX_CHARS) {
-    text = cutToNewestChars(text, NOTIFY_REPLY_MAX_CHARS);
+  if (text.length > maxChars) {
+    text = cutToNewestChars(text, maxChars);
     truncated = true;
   }
   if (text.length === 0) return { reply: null, reachedHandback: false };
@@ -590,6 +639,29 @@ export function formatNoticeLine(notices: readonly FiredNotice[], droppedCount =
 }
 
 /**
+ * What a Remote Host saw of terminals a call relayed to it asked about
+ * (#13500): fixed wording, the host's name as this Shell knows it, and the
+ * host's observations. Nothing read off the host's screen is ever in it.
+ */
+export function formatHostNoticeLine(hostName: string, notices: readonly FiredNotice[]): string {
+  const where = `on host "${displayNoticeHostName(hostName)}"`;
+  if (notices.length === 1) {
+    const [notice] = notices;
+    const note = notice.note !== undefined ? ` Your note: "${notice.note}".` : "";
+    return `Daintree: ${where}, terminal ${describeNotice(notice)}.${note} Check it with terminal.getStatus through host.call.`;
+  }
+  const detailed = notices.slice(0, MAX_DETAILED_NOTICES_PER_LINE).map((notice) => {
+    const note = notice.note !== undefined ? `, note "${notice.note}"` : "";
+    return `${describeNotice(notice)}${note}`;
+  });
+  const rest = notices
+    .slice(MAX_DETAILED_NOTICES_PER_LINE)
+    .map((notice) => displayNoticeTerminalId(notice.terminalId));
+  const more = rest.length > 0 ? `; and ${rest.length} more: ${rest.join(", ")}` : "";
+  return `Daintree: ${where}, ${notices.length} terminals you asked about changed. ${detailed.join("; ")}${more}. Check them with terminal.getStatus through host.call.`;
+}
+
+/**
  * Whether a pty-host record is a live agent a notice can follow. A detected
  * agent is. A launched one that has not been detected yet is, while it boots;
  * once an agent has been detected and gone, the launch hint is stale — what is
@@ -614,18 +686,27 @@ export type LaneWakeOutcome =
 export type LaneWakeCheck = { kind: "ready" } | { kind: "held" | "unavailable"; reason: string };
 
 /**
- * A message waiting for an enrolled assistant lane (#13333). It rides its
- * pane's notice line, so one writer types into that prompt. The line carries
- * `id` and fixed wording, never anything the sender wrote.
+ * A line for an assistant's own pane that no terminal of this machine fired.
+ * It rides that pane's notice line, so one writer types into that prompt, and
+ * carries fixed wording, never anything another machine's assistant wrote.
  */
 export interface LaneWake {
-  /** The exchange's opaque handle; see {@link LANE_WAKE_ID_PATTERN}. */
+  /** Its opaque handle, the same on a resend; see {@link LANE_WAKE_ID_PATTERN}. */
   id: string;
   /**
-   * `message` (the default) tells a receiving lane a message arrived;
-   * `update` tells the hub one of its own exchanges changed state (#13337).
+   * `notice` carries what a Remote Host saw of a terminal a relayed call asked
+   * about (#13500), in {@link LaneWake.hostNotice}; `retired` says which
+   * messages this Shell sent through the retired inbox will get no reply
+   * (#13496), in {@link LaneWake.retired}.
    */
-  kind?: "message" | "update";
+  kind: "notice" | "retired";
+  /**
+   * A `notice`'s observation. Only the host's name as this Shell knows it and
+   * the host's observations: the line is still Daintree's own wording.
+   */
+  hostNotice?: { hostName: string; notice: FiredNotice };
+  /** A `retired` line's hosts, by the name this Shell knows each by, and how many each held. */
+  retired?: ReadonlyArray<{ hostName: string; count: number }>;
   /** Asked synchronously immediately before the line is typed, and while it waits. */
   recheck(): LaneWakeCheck;
   /**
@@ -644,18 +725,21 @@ export const LANE_WAKE_MAX_PENDING_MS = 10 * 60_000;
 export const LANE_WAKE_RECHECK_MS = 5_000;
 export const MAX_QUEUED_WAKES_PER_PANE = 32;
 
-/** The fixed line a wake types: Daintree's own wording and the exchange handles, nothing else. */
-export function formatLaneWakeLine(ids: readonly string[]): string {
-  const handles = ids.join(", ");
-  return ids.length === 1
-    ? `${LANE_WAKE_LINE_PREFIX} has a new message (exchange ${handles}). Read it with ${LANE_INBOX_TOOL}.`
-    : `${LANE_WAKE_LINE_PREFIX} has ${ids.length} new messages (exchanges ${handles}). Read them with ${LANE_INBOX_TOOL}.`;
-}
-
-/** The fixed line telling a hub its exchanges moved: Daintree's own wording and the handles. */
-export function formatExchangeUpdateLine(ids: readonly string[]): string {
-  const noun = ids.length === 1 ? "exchange" : "exchanges";
-  return `${EXCHANGE_UPDATE_LINE_PREFIX} update (${noun} ${ids.join(", ")}).`;
+/**
+ * The fixed line telling an assistant that messages sent through the retired
+ * inbox will get no reply (#13496): Daintree's own wording, each host's name
+ * and a count, nothing else. "No longer followed" rather than "dropped": the
+ * host's assistant may already have done the work.
+ */
+export function formatRetiredExchangesLine(
+  hosts: ReadonlyArray<{ hostName: string; count: number }>
+): string {
+  const named = hosts.map(
+    ({ hostName, count }) => `${count} on host "${displayNoticeHostName(hostName)}"`
+  );
+  const total = hosts.reduce((sum, { count }) => sum + count, 0);
+  const noun = total === 1 ? "message" : "messages";
+  return `Daintree: assistant messaging was retired in this update, so ${total} ${noun} sent to other hosts' assistants will get no reply and are no longer followed: ${named.join(", ")}. Their work may already have run. Check it there with host.call before asking again.`;
 }
 
 interface WakeEntry {
@@ -708,6 +792,8 @@ interface Notice {
   handbackCode?: string;
   /** Set while a reply wait on the same call may return the answer itself. */
   heldBy?: NoticeHold;
+  /** The relayed call that armed it, whose Shell it goes back to (#13500). */
+  relay?: RelayTag;
   /** A settle out of `working`, waiting out {@link NOTIFY_TARGET_SETTLE_MS}. */
   settling?: {
     state: AgentState;
@@ -757,6 +843,7 @@ interface FiredEntry {
   wakeToken?: string;
   /** A later prompt to the target superseded it while its line was in flight. */
   superseded?: boolean;
+  relay?: RelayTag;
 }
 
 interface DeliveryState {
@@ -792,6 +879,8 @@ interface PaneOwner {
   releaseTimer?: ReturnType<typeof setTimeout>;
   /** The next recheck of a held or blocked delivery; reset once nothing waits. */
   recheckMs?: number;
+  /** A relay principal's: fired notices leave for its Shell rather than being typed here. */
+  relay?: Pick<RelayNoticeRoute, "deliver">;
   attempting: boolean;
   disposed: boolean;
 }
@@ -852,6 +941,8 @@ export class TerminalNotifyService {
   private readonly teardownEpochs = new Map<string, number>();
   /** Notices whose history is being replayed into them right now. */
   private readonly replaying = new Set<Notice>();
+  /** Shells' link sessions that ended for good, so nothing more is armed for them. */
+  private readonly endedRelayLinks = new Map<string, true>();
   private globalTeardownEpoch = 0;
   private epoch = 0;
   private disposed = false;
@@ -892,7 +983,14 @@ export class TerminalNotifyService {
           ...(target.waitingReason !== undefined ? { waitingReason: target.waitingReason } : {}),
         };
       }
-      const notice = this.addNotice(owner, args.terminalId, "when-idle", note, args.replyLines);
+      const notice = this.addNotice(
+        owner,
+        args.terminalId,
+        "when-idle",
+        note,
+        args.replyLines,
+        relayTagOf(pane)
+      );
       this.activate(owner, notice, since);
       this.publish(owner);
       return { armed: true, terminalId: args.terminalId };
@@ -908,7 +1006,14 @@ export class TerminalNotifyService {
     const replyLines = options.replyLines;
     const { owner, notice } = await this.admit(pane, targetId, (owner) => {
       this.dropUndelivered(owner, targetId);
-      const notice = this.addNotice(owner, targetId, "send", undefined, replyLines);
+      const notice = this.addNotice(
+        owner,
+        targetId,
+        "send",
+        undefined,
+        replyLines,
+        relayTagOf(pane)
+      );
       if (options.hold !== undefined && options.hold.settled !== true) notice.heldBy = options.hold;
       if (options.handback === true) notice.handbackRequested = true;
       this.publish(owner);
@@ -956,7 +1061,14 @@ export class TerminalNotifyService {
     const preparedAt = this.now();
     const { owner, notice } = await this.admit(pane, targetId, (owner) => {
       this.dropUndelivered(owner, targetId);
-      const notice = this.addNotice(owner, targetId, "keys", undefined, replyLines);
+      const notice = this.addNotice(
+        owner,
+        targetId,
+        "keys",
+        undefined,
+        replyLines,
+        relayTagOf(pane)
+      );
       this.publish(owner);
       return { owner, notice };
     });
@@ -1004,7 +1116,7 @@ export class TerminalNotifyService {
           result !== null &&
           (result as Record<string, unknown>).launched === true &&
           (result as Record<string, unknown>).spawnStatus == null;
-        if (owner.disposed || !launched || terminalId === undefined) {
+        if (owner.disposed || !launched || terminalId === undefined || this.relayEnded(pane)) {
           this.maybeDispose(owner);
           if (!owner.disposed) this.publish(owner);
           return;
@@ -1012,7 +1124,14 @@ export class TerminalNotifyService {
         // The launch ran in this session's own workspace, which is the pane's
         // project, so no project check is repeated here — and the pty-host
         // may not know the terminal yet, so there is nothing to read anyway.
-        const notice = this.addNotice(owner, terminalId, "launch", undefined, replyLines);
+        const notice = this.addNotice(
+          owner,
+          terminalId,
+          "launch",
+          undefined,
+          replyLines,
+          relayTagOf(pane)
+        );
         if (options.hold !== undefined && options.hold.settled !== true) {
           notice.heldBy = options.hold;
         }
@@ -1181,6 +1300,24 @@ export class TerminalNotifyService {
     if (owner !== undefined) this.disposeOwner(owner);
   }
 
+  /**
+   * A Shell's link session ended for good (#13500). What its calls armed has
+   * nowhere left to go, so it stops taking a relay principal's notice slots.
+   */
+  dropRelayLink(linkSessionId: string): void {
+    // Remembered, so a call still being admitted over it, or a launch still
+    // running, arms nothing for it afterwards.
+    remember(this.endedRelayLinks, linkSessionId, true);
+    for (const owner of [...this.ownersByKey.values()]) {
+      if (owner.relay === undefined) continue;
+      for (const notice of [...owner.notices.values()]) {
+        if (notice.relay?.linkSessionId === linkSessionId) this.removeNotice(owner, notice);
+      }
+      owner.fired = owner.fired.filter((entry) => entry.relay?.linkSessionId !== linkSessionId);
+      this.maybeDispose(owner);
+    }
+  }
+
   /** The MCP server was turned off, or the service is shutting down. */
   disposeAll(): void {
     this.globalTeardownEpoch = ++this.epoch;
@@ -1217,6 +1354,15 @@ export class TerminalNotifyService {
         "A pane cannot ask to be notified about its own terminal."
       );
     }
+    // A relayed notice is the Shell's to deliver, pinned to the run that made
+    // this call; with no call to pin it to, nobody would hear it.
+    const relay = pane.relay;
+    if (relay !== undefined && relay.callId === undefined) {
+      throw new TerminalNotifyError(
+        NOTIFY_NOT_ELIGIBLE,
+        "This relayed call carries no call id, so its notice could not reach the assistant that asked."
+      );
+    }
     const client = this.deps.getPtyClient();
     if (client === null) {
       throw new TerminalNotifyError(NOTIFY_NOT_ELIGIBLE, "Terminals cannot be read right now.");
@@ -1228,7 +1374,10 @@ export class TerminalNotifyService {
     this.pendingAdmissions++;
     try {
       const [own, target] = await Promise.all([
-        client.getTerminalAsync(pane.terminalId).catch(() => null),
+        // A relay principal's pane is on its Shell: there is nothing here to read.
+        relay !== undefined
+          ? Promise.resolve(null)
+          : client.getTerminalAsync(pane.terminalId).catch(() => null),
         targetId === undefined
           ? Promise.resolve(null)
           : client.getTerminalAsync(targetId).catch(() => null),
@@ -1239,19 +1388,30 @@ export class TerminalNotifyService {
           "This pane's notices were stopped while this one was being set up."
         );
       }
-      if (
-        own === null ||
-        own.hasPty === false ||
-        own.isTrashed === true ||
-        own.projectId === undefined ||
-        this.exitedSince(pane.terminalId, epochBefore)
-      ) {
+      if (this.relayEnded(pane)) {
         throw new TerminalNotifyError(
           NOTIFY_NOT_ELIGIBLE,
-          "This connection's own terminal is not running, so there is no pane to notify."
+          "The link this call came over ended, so its notice could not reach the assistant that asked."
         );
       }
-      const projectId = own.projectId;
+      let projectId: string;
+      if (relay !== undefined) {
+        projectId = relay.projectId;
+      } else {
+        if (
+          own === null ||
+          own.hasPty === false ||
+          own.isTrashed === true ||
+          own.projectId === undefined ||
+          this.exitedSince(pane.terminalId, epochBefore)
+        ) {
+          throw new TerminalNotifyError(
+            NOTIFY_NOT_ELIGIBLE,
+            "This connection's own terminal is not running, so there is no pane to notify."
+          );
+        }
+        projectId = own.projectId;
+      }
       if (targetId !== undefined) {
         // One message for missing, exited, trashed and other-project ids:
         // notices must not become a way to learn which ids exist elsewhere.
@@ -1286,7 +1446,7 @@ export class TerminalNotifyService {
           `This pane already has ${MAX_PENDING_NOTICES_PER_PANE} notices pending. Wait for some to arrive before asking for more.`
         );
       }
-      return register(this.ownerFor(pane, projectId), target ?? own);
+      return register(this.ownerFor(pane, projectId), target ?? own ?? {});
     } finally {
       this.pendingAdmissions--;
       if (this.pendingAdmissions === 0 && this.ownersByKey.size === 0) this.unsubscribe();
@@ -1297,6 +1457,10 @@ export class TerminalNotifyService {
     // Never pruned under an admission still reading: evicting its pane's mark
     // would let it bring the notices back.
     remember(this.teardownEpochs, mark, ++this.epoch, this.pendingAdmissions === 0);
+  }
+
+  private relayEnded(pane: OwnPane): boolean {
+    return pane.relay !== undefined && this.endedRelayLinks.has(pane.relay.linkSessionId);
   }
 
   private torndownSince(pane: OwnPane, epoch: number): boolean {
@@ -1323,7 +1487,10 @@ export class TerminalNotifyService {
    */
   private ownerFor(pane: OwnPane, projectId: string): PaneOwner {
     const existing = this.existingOwner(pane);
-    if (existing !== undefined) return existing;
+    if (existing !== undefined) {
+      if (pane.relay !== undefined) existing.relay = { deliver: pane.relay.deliver };
+      return existing;
+    }
     const byKey = this.ownersByKey.get(pane.key);
     if (byKey !== undefined) this.disposeOwner(byKey);
     const byTerminal = this.ownersByTerminal.get(pane.terminalId);
@@ -1338,6 +1505,7 @@ export class TerminalNotifyService {
       wakes: new Map(),
       droppedCount: 0,
       delivery: { status: "idle" },
+      ...(pane.relay !== undefined ? { relay: { deliver: pane.relay.deliver } } : {}),
       attempting: false,
       disposed: false,
     };
@@ -1408,13 +1576,15 @@ export class TerminalNotifyService {
       watchers.delete(owner);
       if (watchers.size === 0) this.watchersByTarget.delete(target);
     }
-    this.safePublish(owner.projectId, {
-      terminalId: owner.terminalId,
-      pendingCount: 0,
-      readyCount: 0,
-      delivery: { status: "idle" },
-      revision: ++this.revision,
-    });
+    if (owner.relay === undefined) {
+      this.safePublish(owner.projectId, {
+        terminalId: owner.terminalId,
+        pendingCount: 0,
+        readyCount: 0,
+        delivery: { status: "idle" },
+        revision: ++this.revision,
+      });
+    }
     if (this.ownersByKey.size === 0 && this.pendingAdmissions === 0) this.unsubscribe();
   }
 
@@ -1437,18 +1607,22 @@ export class TerminalNotifyService {
     targetId: string,
     source: NoticeSource,
     note: string | undefined,
-    replyLines: number | undefined
+    replyLines: number | undefined,
+    relay?: RelayTag
   ): Notice {
     const previous = owner.notices.get(targetId);
     if (previous !== undefined) clearSettling(previous);
     const notice: Notice = {
       targetId,
       ...(note !== undefined ? { note } : {}),
-      replyLines: replyLines ?? NOTIFY_REPLY_LINES_DEFAULT,
-      quoteRequested: replyLines !== undefined,
+      // A relayed notice quotes nothing: another machine's screen is never
+      // typed into its Shell's prompt. A reply wait still returns the screen.
+      replyLines: relay !== undefined ? 0 : (replyLines ?? NOTIFY_REPLY_LINES_DEFAULT),
+      quoteRequested: relay === undefined && replyLines !== undefined,
       source,
       buffered: [],
       handbackSeen: false,
+      ...(relay !== undefined ? { relay } : {}),
     };
     owner.notices.set(targetId, notice);
     let watchers = this.watchersByTarget.get(targetId);
@@ -1531,7 +1705,8 @@ export class TerminalNotifyService {
       if (entry.token !== undefined) continue;
       if (now >= entry.deadline) {
         owner.wakes.delete(id);
-        reportWake(entry.wake, { kind: "held", reason: "expired" });
+        // Ends it: whoever queued it may try again, and nothing else will.
+        reportWake(entry.wake, { kind: "unavailable", reason: "expired" });
         continue;
       }
       const check = recheckWake(entry.wake);
@@ -1966,6 +2141,7 @@ export class TerminalNotifyService {
         ...(notice.quoteRequested ? { quoteRequested: true } : {}),
       },
       ...(notice.heldBy !== undefined ? { heldBy: notice.heldBy } : {}),
+      ...(notice.relay !== undefined ? { relay: notice.relay } : {}),
       ...(observed !== undefined
         ? {
             observed,
@@ -2030,7 +2206,8 @@ export class TerminalNotifyService {
       fired.targetId,
       fired.source,
       fired.note,
-      fired.quoteRequested ? fired.replyLines : undefined
+      fired.quoteRequested ? fired.replyLines : undefined,
+      fired.relay
     );
     next.handbackRequested = true;
     next.followUp = true;
@@ -2219,6 +2396,12 @@ export class TerminalNotifyService {
       this.setDelivery(owner, { status: "idle" });
       return;
     }
+    // The pane is on the relayed call's Shell, whose own notice line types it
+    // under that pane's gate; nothing here can read or wait on it.
+    if (owner.relay !== undefined) {
+      this.handOff(owner, owner.relay);
+      return;
+    }
 
     const lastDeliveredAt = owner.delivery.lastDeliveredAt;
     if (lastDeliveredAt !== undefined) {
@@ -2310,11 +2493,18 @@ export class TerminalNotifyService {
     for (const entry of wakes) entry.token = token;
     const dropped = entries.length > 0 ? owner.droppedCount : 0;
     owner.droppedCount -= dropped;
-    const messageIds = wakes.filter((e) => e.wake.kind !== "update").map((e) => e.wake.id);
-    const updateIds = wakes.filter((e) => e.wake.kind === "update").map((e) => e.wake.id);
+    const retired = wakes.flatMap((e) =>
+      e.wake.kind === "retired" ? [...(e.wake.retired ?? [])] : []
+    );
+    const hostNotices = new Map<string, FiredNotice[]>();
+    for (const { wake } of wakes) {
+      if (wake.kind !== "notice" || wake.hostNotice === undefined) continue;
+      const { hostName, notice } = wake.hostNotice;
+      hostNotices.set(hostName, [...(hostNotices.get(hostName) ?? []), notice]);
+    }
     const lines = [
-      ...(messageIds.length > 0 ? [formatLaneWakeLine(messageIds)] : []),
-      ...(updateIds.length > 0 ? [formatExchangeUpdateLine(updateIds)] : []),
+      ...(retired.length > 0 ? [formatRetiredExchangesLine(retired)] : []),
+      ...[...hostNotices].map(([hostName, notices]) => formatHostNoticeLine(hostName, notices)),
       ...(entries.length > 0
         ? [
             formatNoticeLine(
@@ -2424,6 +2614,38 @@ export class TerminalNotifyService {
     if (owner.delivery.token === token) this.failDelivery(owner, lastSeen);
   }
 
+  /**
+   * Give a relay principal's fired notices to its route, which owns them from
+   * here: superseding stops at the hand-off, as it does once a line is typed.
+   * Held ones stay until their reply wait ends.
+   */
+  private handOff(owner: PaneOwner, relay: Pick<RelayNoticeRoute, "deliver">): void {
+    const ready = owner.fired.filter((entry) => isDeliverable(entry));
+    owner.fired = owner.fired.filter((entry) => !isDeliverable(entry));
+    owner.droppedCount = 0;
+    owner.recheckMs = undefined;
+    this.setDelivery(owner, { status: "idle" });
+    const notices: RelayedNotice[] = [];
+    for (const { notice, relay: tag } of ready) {
+      if (tag === undefined) continue;
+      notices.push({
+        ...tag,
+        terminalId: notice.terminalId,
+        observation: notice.observation,
+        ...(notice.awaitingHandback === true ? { awaitingHandback: true } : {}),
+      });
+    }
+    if (notices.length > 0) {
+      logger.info("Relayed notices handed to their link", { notices: notices.length });
+      try {
+        relay.deliver(notices);
+      } catch (err) {
+        console.error("[MCP] terminal notify: handing relayed notices on failed:", err);
+      }
+    }
+    this.maybeDispose(owner);
+  }
+
   /** Reserve a wake's one attempt; a refusal or failure takes it off the line for good. */
   private reserveWake(owner: PaneOwner, entry: WakeEntry): boolean {
     let reserved: boolean;
@@ -2499,7 +2721,8 @@ export class TerminalNotifyService {
   }
 
   private publish(owner: PaneOwner): void {
-    if (owner.disposed) return;
+    // A relay principal's pane is on another machine, with no chrome here.
+    if (owner.disposed || owner.relay !== undefined) return;
     this.revision++;
     this.safePublish(owner.projectId, this.paneState(owner));
   }

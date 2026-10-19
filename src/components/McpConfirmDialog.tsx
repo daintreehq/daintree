@@ -292,8 +292,8 @@ export function McpConfirmDialog() {
   const selectedCount = approvedTargetIds?.length ?? 0;
 
   // The Daintree confirmations preference applies to the assistant's own
-  // session only — main consults it for `help` alone, never the retired
-  // `assistant-pane` origin, an agent pane or an api-key client (#13137).
+  // session only — main consults it for `help` alone, never an agent pane or
+  // an api-key client (#13137).
   const showAssistantPreference =
     current.sessionOrigin === "help" &&
     !current.callerInfo &&
@@ -512,7 +512,7 @@ export function confirmTitle(current: PendingMcpConfirm): string {
  */
 function RequesterRow({ current }: { current: PendingMcpConfirm }) {
   const { callerInfo, sessionOrigin } = current;
-  const isAssistant = sessionOrigin === "help" || sessionOrigin === "assistant-pane";
+  const isAssistant = sessionOrigin === "help";
 
   let Icon = ShieldAlert;
   let name = "Unidentified client";

@@ -157,7 +157,7 @@ describe("TerminalStatusSlot", () => {
     expect(label).toMatch(/prompt still sending/i);
     expect(statuses[0]!.querySelector("svg")?.outerHTML).toBe(pauseGlyph);
     const text = tooltipText();
-    expect(text).toContain("Output paused to prevent data loss.");
+    expect(text).toContain("The pause lifts on its own.");
     expect(text).toContain("Later prompts stay queued");
   });
 
@@ -184,13 +184,13 @@ describe("TerminalStatusSlot", () => {
   it("reports how long backpressure has held output", () => {
     mockTerminal = { id: "t1", kind: "terminal", heldDurationMs: 65_000 };
     render(<TerminalStatusSlot id="t1" flowStatus="paused-backpressure" />);
-    expect(tooltipText()).toContain(`Paused for ${formatElapsedDuration(65_000)}`);
+    expect(tooltipText()).toContain(`Output paused · ${formatElapsedDuration(65_000)}`);
   });
 
   it("omits the held duration until one has accrued", () => {
     mockTerminal = { id: "t1", kind: "terminal", heldDurationMs: 0 };
     render(<TerminalStatusSlot id="t1" flowStatus="paused-backpressure" />);
-    expect(tooltipText()).not.toContain("Paused for");
+    expect(tooltipText()).not.toContain(" · ");
   });
 
   it("leaves a memory pause during a slow prompt to the toolbar and names only the prompt", () => {

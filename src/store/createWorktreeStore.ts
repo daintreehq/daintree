@@ -16,6 +16,7 @@ import { formatErrorMessage } from "@shared/utils/errorMessage";
 import { NESTED_WORKTREE_DELETE_MARKER } from "@shared/utils/nestedWorktrees";
 import { issueNumberBelongsToLinkedPr } from "@shared/utils/worktreeIssueProjection";
 import { worktreeNameFromId } from "@/lib/notificationSourceLabel";
+import { WORKTREE_BRANCH_KEPT_MARKER } from "@shared/utils/worktreeSummary";
 
 /**
  * How long a `worktree-removed` tombstone suppresses a late `worktree-update`
@@ -213,17 +214,12 @@ export interface IssueMutationError {
 }
 
 /**
- * The clause `WorkspaceService.deleteWorktree` uses when the safe `branch -d`
- * refused a branch Git does not consider fully merged. Two things key off it:
- * the delete is permanent-failed rather than retried (a retry can only find
- * the worktree already gone), and the toast reports a branch deliberately kept
- * rather than a broken delete. Matched as a substring so a wrapped or prefixed
- * variant still classifies.
+ * Two things key off the branch-kept clause: the delete is permanent-failed
+ * rather than retried (a retry can only find the worktree already gone), and
+ * the toast reports a branch deliberately kept rather than a broken delete.
  */
-const BRANCH_KEPT_MARKER = "was kept because Git reports it isn't fully merged";
-
 function isBranchKeptError(message: string): boolean {
-  return message.includes(BRANCH_KEPT_MARKER);
+  return message.includes(WORKTREE_BRANCH_KEPT_MARKER);
 }
 
 /**
@@ -241,7 +237,7 @@ const PERMANENT_ERROR_PATTERNS = [
   "Cannot delete the main worktree",
   "Cannot delete active worktree",
   "Cannot delete branch:",
-  BRANCH_KEPT_MARKER,
+  WORKTREE_BRANCH_KEPT_MARKER,
   "(detached HEAD)",
   NESTED_WORKTREE_DELETE_MARKER,
 ];

@@ -6,6 +6,7 @@ import type { WorktreeViewStore, WorktreeViewStoreApi } from "@/store/createWork
 import type { WorktreeSnapshot } from "@shared/types";
 import { KEY_ACTION_VALUES } from "@shared/types/keymap";
 import { BUILT_IN_ACTION_IDS, DENY_PLUGIN_DISPATCH_ACTION_IDS } from "@shared/config/actionIds";
+import { BUILT_IN_AGENT_IDS } from "@shared/config/agentIds";
 import type { ActionId } from "@shared/types/actions";
 import type { ActionRegistry, ActionCallbacks } from "../actionTypes";
 import { DEFAULT_KEYBINDINGS } from "../../defaultKeybindings";
@@ -503,7 +504,22 @@ describe("LLM-facing tool descriptions (#11542)", () => {
   // user does name gets resolved. What the prose has to carry is that the ids
   // are current ones and that no model is the answer when none was named. In-app
   // only, off the external surface.
-  const MAX_COHORT_TOTAL_BYTES = 22_050;
+  // 22_050 → 22_300 for `project.runCommand` (#13495), measured at 22_262 B.
+  // What the prose has to carry is that the command runs as the host's user,
+  // that cwd is where it starts and not a sandbox, and that a non-zero exit is
+  // a result. Assistant at full only, off the external surface.
+  // 22_300 → 22_500 for `host.call` (#13493), measured at 22_458 B. What the
+  // prose has to carry is that it runs a host's own tool in one of its
+  // projects, that a change needs a window here controlling that project, and
+  // that an ambiguous call is resent under its callId, which never runs twice.
+  // In-app only, off the external surface.
+  // 22_500 → 21_300 for #13496, measured at 21_231 B: the ten inbox and host
+  // messaging descriptions go for `assistant.list`, `assistant.start` and
+  // `agent.readQuota`. What their prose has to carry is that the listing is
+  // this project's other assistants, addressed with the agent messaging tools,
+  // and that a start that isn't ready still runs. In-app only, off the
+  // external surface.
+  const MAX_COHORT_TOTAL_BYTES = 21_300;
 
   const ARG_SECTION = /\b(?:args?|arguments?|parameters?)\s*(?:\([^)]*\))?\s*:|\btakes no args\b/i;
 
@@ -920,14 +936,11 @@ describe("registry-vs-union drift", () => {
 });
 
 describe("createActionDefinitions", () => {
-  it("registers a launch action for launchable agents but not assistant-only agents (#10634)", async () => {
+  it("registers a direct-launch action for every built-in agent", async () => {
     const { registry: actions } = await createRegistryWithAudit();
 
-    // Launchable built-in agents get a direct-launch action...
-    expect(actions.has("agent.claude" as any)).toBe(true);
-    // ...but the assistant-only daintree-assistant is never launchable, so no
-    // action is registered (keeps it out of the action palette and MCP manifest).
-    expect(actions.has("agent.daintree-assistant" as any)).toBe(false);
+    const missing = BUILT_IN_AGENT_IDS.filter((id) => !actions.has(`agent.${id}` as ActionId));
+    expect(missing).toEqual([]);
   });
 
   it("does not register removed github.* action ids", async () => {
@@ -1460,22 +1473,11 @@ describe("plugin-dispatch injection guard (#10558)", () => {
       "agent.launchMany": { agentIds: ["claude"], prompt: "p" },
       "terminal.sendCommandMany": { sends: [{ terminalId: "t-placeholder", command: "c" }] },
       "terminal.closeMany": { terminalIds: ["t-placeholder"] },
-      // Not strict, but its required fields share names with other schemas' own.
-      "assistant.reply": { taskId: "task-placeholder", state: "completed", text: "noop" },
-      "assistant.sendMessage": { text: "noop" },
-      "host.listAssistants": { hostId: "h-placeholder" },
-      "host.sendMessage": {
-        hostId: "h-placeholder",
-        projectId: "p-placeholder",
-        slot: 0,
-        generation: "g-placeholder",
-        text: "noop",
-      },
-      "host.getTask": { hostId: "h-placeholder", taskId: "task-placeholder" },
-      "host.listTasks": { hostId: "h-placeholder" },
-      "host.cancelTask": { hostId: "h-placeholder", taskId: "task-placeholder" },
-      "host.startAssistant": { hostId: "h-placeholder", projectId: "p-placeholder" },
-      "host.readQuota": { hostId: "h-placeholder" },
+      "assistant.list": {},
+      "assistant.start": {},
+      "agent.readQuota": {},
+      "host.list": {},
+      "host.call": { hostId: "h-placeholder", projectId: "p-placeholder", tool: "terminal.list" },
     };
 
     const failures: string[] = [];
@@ -1534,5 +1536,27 @@ describe("ActionService.list() snapshot", () => {
       .sort((a, b) => a.id.localeCompare(b.id));
 
     expect(entries).toMatchSnapshot();
+  });
+});
+
+describe("main-process runners under the relay's drive rule (#13493)", () => {
+  // A relayed call to a renderer action is classed a read only by its
+  // advertised readOnlyHint; these run in main and are lease-checked as writes
+  // there. Neither may ever advertise itself as a read.
+  it("never advertises project.runCheck or project.runCommand as read-only", async () => {
+    const { registry } = await createRegistryWithAudit();
+    for (const id of ["project.runCheck", "project.runCommand"] as const) {
+      const def = registry.get(id as ActionId)?.();
+      expect(def, id).toBeDefined();
+      expect(def?.kind, id).not.toBe("query");
+      expect(def?.mcpAnnotations?.readOnlyHint, id).toBe(false);
+    }
+  });
+
+  it("never advertises recipe.list as read-only: its reload reconciles recipes into the repo (#13500)", async () => {
+    const { registry } = await createRegistryWithAudit();
+    const def = registry.get("recipe.list" as ActionId)?.();
+    expect(def?.kind).toBe("query");
+    expect(def?.mcpAnnotations?.readOnlyHint).toBe(false);
   });
 });

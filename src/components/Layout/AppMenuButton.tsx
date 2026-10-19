@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef } from "react";
 import { Menu } from "@/components/icons";
 import { Button } from "@/components/ui/button";
+import { OVERLAY_SIDE_OFFSET } from "@/components/ui/overlayMotion";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { isMac } from "@/lib/platform";
 import { safeFireAndForget } from "@/utils/safeFireAndForget";
@@ -67,11 +68,15 @@ export function AppMenuButton() {
       restoreTo.focus({ preventScroll: true });
     }
 
-    // Anchor the popup under the button. Omitting the rect is survivable —
+    // Anchor the popup under the button, the same gap below it as the
+    // toolbar's DOM menus. The gap is added in CSS pixels so main's zoom
+    // scaling moves it in step with theirs. Omitting the rect is survivable —
     // main falls back to Electron's cursor default — so this never blocks.
     const rect = buttonRef.current?.getBoundingClientRect();
     safeFireAndForget(
-      window.electron.menu.showApplication(rect ? { x: rect.left, y: rect.bottom } : undefined),
+      window.electron.menu.showApplication(
+        rect ? { x: rect.left, y: rect.bottom + OVERLAY_SIDE_OFFSET } : undefined
+      ),
       { context: "Failed to open the application menu" }
     );
   }, []);

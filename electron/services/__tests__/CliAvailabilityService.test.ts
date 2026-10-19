@@ -229,8 +229,8 @@ describe("CliAvailabilityService", () => {
       // `detail.authConfirmed` but the state signalled is distinct so
       // the UI can show a "Login required" nudge.
       // Agents Daintree probes auth for surface `unauthenticated` when no
-      // credentials are found. Agents that own their auth (no `authCheck`,
-      // e.g. daintree-assistant) stay `ready` — the CLI handles login itself.
+      // credentials are found. Agents that own their auth (no `authCheck`)
+      // stay `ready` — the CLI handles login itself.
       for (const [id, state] of Object.entries(result)) {
         if (!getAgentConfig(id)?.authCheck) continue;
         expect(state).toBe("unauthenticated");
@@ -248,7 +248,7 @@ describe("CliAvailabilityService", () => {
       // WSL) only fire when the PATH probe returns missing — in this test every
       // agent succeeds on the first probe, so the count matches the registry
       // size exactly.
-      expect(mockedExecFileSync).toHaveBeenCalledTimes(18);
+      expect(mockedExecFileSync).toHaveBeenCalledTimes(17);
 
       // The PATH probe is bounded, and on POSIX it never spawns a subprocess.
       expect(mockedFindAllOnPath).toHaveBeenCalledWith(
@@ -275,7 +275,7 @@ describe("CliAvailabilityService", () => {
 
       const details = service.getDetails();
       // `authConfirmed` is only populated for agents with an `authCheck`;
-      // agents that own their auth (daintree-assistant) leave it undefined.
+      // agents that own their auth leave it undefined.
       for (const [id, detail] of Object.entries(details!)) {
         if (!getAgentConfig(id)?.authCheck) continue;
         expect(detail?.authConfirmed).toBe(true);
@@ -308,7 +308,6 @@ describe("CliAvailabilityService", () => {
         mistral: "missing",
         kimi: "missing",
         amp: "missing",
-        "daintree-assistant": "missing",
       });
     });
 
@@ -659,7 +658,7 @@ describe("CliAvailabilityService", () => {
       expect(service.getAvailability()).toEqual(refreshed);
       // One PATH lookup per registry entry, hit or miss: the in-process walk
       // has no flag a minimal `which` could reject, so a miss is never retried.
-      expect(mockedExecFileSync).toHaveBeenCalledTimes(18);
+      expect(mockedExecFileSync).toHaveBeenCalledTimes(17);
     });
   });
 
@@ -675,7 +674,7 @@ describe("CliAvailabilityService", () => {
 
       expect(result1).toEqual(result2);
       expect(result2).toEqual(result3);
-      expect(mockedExecFileSync).toHaveBeenCalledTimes(18);
+      expect(mockedExecFileSync).toHaveBeenCalledTimes(17);
     });
 
     it("concurrent refresh calls each trigger a new check", async () => {
@@ -684,7 +683,7 @@ describe("CliAvailabilityService", () => {
       const [result1, result2] = await Promise.all([service.refresh(), service.refresh()]);
 
       expect(result1).toEqual(result2);
-      expect(mockedExecFileSync).toHaveBeenCalledTimes(36);
+      expect(mockedExecFileSync).toHaveBeenCalledTimes(34);
     });
   });
 

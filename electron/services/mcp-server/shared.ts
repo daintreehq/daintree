@@ -12,6 +12,7 @@ import type {
   McpAuditResult,
   McpConfirmationDecision,
   McpDispatchAuthorization,
+  McpHostPreview,
   McpRuntimeSnapshot,
   McpRuntimeState,
 } from "../../../shared/types/ipc/mcpServer.js";
@@ -37,6 +38,7 @@ import { MCP_WORKSPACE_ID_HEADER as MCP_WORKSPACE_ID_HEADER_CANONICAL } from "..
 import { MCP_RESPONSE_TEXT_MAX_BYTES } from "../../../shared/config/mcpLimits.js";
 import { safeSerializeToolResult } from "../../utils/safeSerializeToolResult.js";
 import { buildToolCallTextResult } from "./toolCallResult.js";
+import type { RelayedNotice } from "./terminalNotify.js";
 
 // Re-exported for SDK-free consumers that historically imported from here.
 // `readinessProbe.ts` and `pluginMcpHash.ts` import from the standalone homes
@@ -65,6 +67,13 @@ export type HelpTokenValidator = (token: string) => HelpAssistantTier | false;
  */
 export type HelpSessionWebContentsResolver = (token: string) => number | null;
 /**
+ * The project of a help bearer running with no view (#13511), for which the
+ * WebContents resolver answers `NO_VIEW_HANDLE`. The session is then routed
+ * to the host's own form of each action for that project, never to a window;
+ * null for every other bearer.
+ */
+export type HelpSessionViewlessProjectResolver = (token: string) => string | null;
+/**
  * Resolver used at MCP transport handshake to bind a help-session bearer to
  * the `ActionContext` snapshot captured in the renderer at provision time
  * (#8317). Returning a non-null context causes `httpLifecycle` to record it
@@ -84,22 +93,6 @@ export type HelpSessionActionContextResolver = (token: string) => ActionContext 
  * non-help bearers (api-key / pane tokens).
  */
 export type HelpSessionIdResolver = (token: string) => string | null;
-/**
- * Resolver consulted at MCP handshake to pin a `daintree-assistant` pane
- * bearer to the WebContents that launched it (#10647). Same routing effect as
- * {@link HelpSessionWebContentsResolver} but sourced from
- * `McpPaneConfigService` rather than `HelpSessionService`, so the assistant
- * CLI's env-only pane token gets help-session-grade pinning without being
- * promoted to a full help session. Returns null for generic pane tokens.
- */
-export type AssistantPaneWebContentsResolver = (token: string) => number | null;
-/**
- * Resolver consulted at MCP handshake to replay the launch-time
- * `ActionContext` bound to a `daintree-assistant` pane bearer (#10647).
- * Returns null for generic pane tokens, which keep the live focused-window
- * context.
- */
-export type AssistantPaneActionContextResolver = (token: string) => ActionContext | null;
 /**
  * Where an ordinary agent pane's MCP session routes (#12486): the workspace it
  * was launched in, not whichever window has focus when a call arrives.
@@ -123,9 +116,9 @@ export interface PaneWorkspaceBinding {
 }
 /**
  * Resolver consulted at MCP handshake for an ordinary agent pane bearer's
- * launch workspace (#12486). Consulted only after the help and assistant-pane
- * resolvers miss, and confers no origin: the session stays `external`, so
- * binding where its calls land never widens what it may call (#12407).
+ * launch workspace (#12486). Consulted only after the help resolvers miss, and
+ * confers no origin: the session stays `external`, so binding where its calls
+ * land never widens what it may call (#12407).
  */
 export type PaneWorkspaceBindingResolver = (token: string) => PaneWorkspaceBinding | null;
 /**
@@ -148,6 +141,16 @@ export type PaneTerminalResolver = (token: string) => string | null;
  * when it is displaced.
  */
 export type HelpSessionTerminalResolver = (helpSessionId: string) => string | null;
+
+/**
+ * Main's side of one assistant addressing another (#13496), wired by the help
+ * session service: the control itself, and the project a live help session's
+ * lane is in, which is all a local assistant caller may reach.
+ */
+export interface AssistantControlBinding {
+  control: NonNullable<import("./sessionServer.js").SessionServerDeps["assistantControl"]>;
+  sessionProject(helpSessionId: string): string | null;
+}
 /**
  * What an agent pane's workspace-bound dispatch carries beyond an external
  * session's (#12486). Every field is optional, so an external bound session
@@ -175,8 +178,33 @@ export interface WorkspaceDispatchOptions {
    * truthfully. Absent reads as `above-tier`, the only reason a pane asks.
    */
   approvalReason?: McpApprovalReason;
+  /**
+   * What another machine shows about an `approvalOnly` call it would run
+   * itself (#13501), shown as given in place of a preview this view would
+   * build from its own stores.
+   */
+  hostPreview?: McpHostPreview;
   /** What pre-authorized a `confirmed` dispatch — see `SessionServerDeps.dispatchAction`. */
   authorization?: McpDispatchAuthorization;
+  /**
+   * A call one of another machine's assistants made here through its Shell
+   * (#13493). Anything but a read runs only in that Shell's own view of the
+   * workspace, the one the drive lease says drives it, or on this host as that
+   * Shell while nobody drives it (#13501); never in another machine's view,
+   * whose authority the relay would then be borrowing.
+   */
+  relay?: {
+    linkSessionId: string;
+    readOnly: boolean;
+    /**
+     * Asks the person at the requesting Shell, in its own window, about this
+     * one call when no view here can (#13501). Absent, an unapproved
+     * confirm-gated call the host runs itself is refused.
+     */
+    requestApproval?: (
+      ask: import("../viewless/index.js").ViewlessApprovalAsk
+    ) => Promise<import("../viewless/index.js").ViewlessApprovalDecision>;
+  };
 }
 export type { HelpAssistantTier };
 
@@ -558,6 +586,13 @@ export function buildToolError(input: {
 export const RESOLVED_WORKSPACE_META_KEY = "org.daintree/resolved-workspace";
 
 /**
+ * `_meta` key a relayed call carries its Shell's callId under (#13493), so
+ * this host's audit record of the tool shares it with the Shell's record of
+ * the `host.call`. Read only on relayed sessions.
+ */
+export const RELAY_CALL_ID_META_KEY = "org.daintree/relay-call-id";
+
+/**
  * Stamp the resolved workspace onto a tool result (#11536).
  *
  * Top-level `_meta` rather than `structuredContent`, so it never has to satisfy
@@ -608,8 +643,8 @@ export function unionSet(...sets: ReadonlySet<string>[]): ReadonlySet<string> {
 const MCP_TOOL_ALLOWLIST: ReadonlySet<string> = new Set(MCP_EXTERNAL_TIER_TOOLS);
 
 /**
- * The surfaces as Daintree's own assistant sees them — `help` and
- * `assistant-pane` sessions. Every other session is admitted against
+ * The surfaces as Daintree's own assistant sees them — `help` sessions. Every
+ * other session is admitted against
  * {@link NON_RENDERER_OWNED_TIER_ALLOWLISTS}.
  */
 export const TIER_ALLOWLISTS: Readonly<Record<McpTier, ReadonlySet<string>>> = {
@@ -702,9 +737,7 @@ export const MCP_SERVER_INSTRUCTIONS_MAX_BYTES =
  * string is static and origin-agnostic, sent verbatim to api-key clients that
  * never receive that catalog, so a sentence about it would be false for most of
  * its readers. The rule for reading a stub belongs in each first-party client's
- * own prompt — `scripts/assistant-src/` for the ones this repo ships, and
- * `DAINTREE_HOST.md` in `daintreehq/assistant` for the companion CLI, which
- * carries its own.
+ * own prompt — `scripts/assistant-src/` for the ones this repo ships.
  *
  * What it must NOT say is that an unlisted name cannot be called. `tools/list`
  * is built from the static tier gate alone, while dispatch also honours live
@@ -729,10 +762,10 @@ export const MCP_SERVER_INSTRUCTIONS = [
 
 /**
  * The `instructions` for Daintree's own assistant sessions — the sidebar help
- * assistant and the assistant pane. Each ships its own prompt that carries the
- * rules above in fuller form, and Codex in code mode repeats a server's
- * instructions inside every one of its tool descriptions, so the long text
- * cost those sessions ~1 KB per tool each time the model looked a tool up.
+ * assistant. Each backend ships its own prompt that carries the rules above in
+ * fuller form, and Codex in code mode repeats a server's instructions inside
+ * every one of its tool descriptions, so the long text cost those sessions
+ * ~1 KB per tool each time the model looked a tool up.
  */
 export const MCP_ASSISTANT_SERVER_INSTRUCTIONS =
   "Daintree's control surface for its own assistant; your instruction file has the rules. `actions.search` finds a tool by intent.";
@@ -1175,6 +1208,42 @@ export interface McpHttpSession {
   transport: import("@modelcontextprotocol/sdk/server/streamableHttp.js").StreamableHTTPServerTransport;
   server: import("@modelcontextprotocol/sdk/server/index.js").Server;
   idleTimer: ReturnType<typeof setTimeout>;
+}
+
+/**
+ * A session a Shell's assistant reaches over the link (#13493), served
+ * in-process: no socket, no bearer. The relay that opened it closes it when
+ * it goes unused, so the store keeps no idle timer of its own for it.
+ */
+export interface McpRelaySession {
+  transport: import("@modelcontextprotocol/sdk/shared/transport.js").Transport;
+  server: import("@modelcontextprotocol/sdk/server/index.js").Server;
+}
+
+/**
+ * Who a relayed session acts for (#13493), as the host established it: the
+ * requesting Shell's link session (its drive-lease identity), the sender it
+ * proved, the Shell assistant's own help session, and the Shell's name for
+ * display. Never one of this machine's own help sessions.
+ */
+export interface McpRelayCaller {
+  linkSessionId: string;
+  senderId: string;
+  helpSessionId: string;
+  shellName: string;
+  /**
+   * Takes the notices this session's calls arm (#13500), for the Shell to
+   * type into the run that asked. Absent, a relayed call can't ask for one.
+   */
+  deliverNotices?: (notices: readonly RelayedNotice[]) => void;
+  /**
+   * Puts one of this session's confirm-gated calls to the person at the
+   * Shell, in its own window, when no view here can (#13501). Absent, such a
+   * call with no view is refused.
+   */
+  requestApproval?: (
+    ask: import("../viewless/index.js").ViewlessApprovalAsk & { callId: string }
+  ) => Promise<import("../viewless/index.js").ViewlessApprovalDecision>;
 }
 
 const RESOURCE_URI_PATTERN =

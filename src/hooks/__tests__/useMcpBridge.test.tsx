@@ -149,10 +149,11 @@ describe("useMcpBridge", () => {
         confirmed?: boolean;
         context?: Record<string, unknown>;
         callerInfo?: { token4LastChars: string; userAgent: string };
-        sessionOrigin?: "help" | "assistant-pane" | "external";
+        sessionOrigin?: "help" | "external";
         offerSessionApproval?: boolean;
         approvalOnly?: boolean;
         approvalReason?: "above-tier" | "protected-close";
+        hostPreview?: { subject?: string; lines: string[] };
         authorization?: "tier" | "user" | "session-grant" | "native-grant" | "skip-preference";
       }) => void | Promise<void>)
     | undefined;
@@ -414,33 +415,30 @@ describe("useMcpBridge", () => {
     );
   });
 
-  it.each(["help", "assistant-pane"] as const)(
-    "replays a %s snapshot exactly as captured, even one missing its worktree's path",
-    async (sessionOrigin) => {
-      // Describing the worktree is for agent panes, whose snapshot pins an id
-      // on purpose. An assistant's snapshot is replayed as the user left it.
-      mocks.get.mockReturnValue(safeManifestEntry());
-      mocks.dispatch.mockResolvedValue({ ok: true, result: { ok: true } });
-      mocks.worktrees.set("wt-pane", { id: "wt-pane", name: "pane", path: "/repo/pane" });
+  it("replays a help snapshot exactly as captured, even one missing its worktree's path", async () => {
+    // Describing the worktree is for agent panes, whose snapshot pins an id
+    // on purpose. An assistant's snapshot is replayed as the user left it.
+    mocks.get.mockReturnValue(safeManifestEntry());
+    mocks.dispatch.mockResolvedValue({ ok: true, result: { ok: true } });
+    mocks.worktrees.set("wt-pane", { id: "wt-pane", name: "pane", path: "/repo/pane" });
 
-      renderHook(() => useMcpBridge());
+    renderHook(() => useMcpBridge());
 
-      const snapshot = { projectId: "p1", activeWorktreeId: "wt-pane" };
-      await dispatchHandler?.({
-        requestId: `req-${sessionOrigin}`,
-        actionId: "files.search",
-        args: { query: "x" },
-        context: snapshot,
-        sessionOrigin,
-      });
+    const snapshot = { projectId: "p1", activeWorktreeId: "wt-pane" };
+    await dispatchHandler?.({
+      requestId: "req-help",
+      actionId: "files.search",
+      args: { query: "x" },
+      context: snapshot,
+      sessionOrigin: "help",
+    });
 
-      expect(mocks.dispatch).toHaveBeenCalledWith(
-        "files.search",
-        { query: "x" },
-        { source: "agent", confirmed: undefined, contextOverride: snapshot }
-      );
-    }
-  );
+    expect(mocks.dispatch).toHaveBeenCalledWith(
+      "files.search",
+      { query: "x" },
+      { source: "agent", confirmed: undefined, contextOverride: snapshot }
+    );
+  });
 
   it("passes contextOverride: undefined for unpinned dispatch — live context preserved (#8317)", async () => {
     mocks.get.mockReturnValue(safeManifestEntry());
@@ -736,6 +734,43 @@ describe("useMcpBridge", () => {
     );
   });
 
+  // #13501: a host with no view of its own asks about a call it runs itself,
+  // with its own preview; this view's stores know nothing of that host.
+  it("shows a host's own preview of a call it runs itself, building none here", async () => {
+    mocks.get.mockReturnValue(confirmManifestEntry({ id: "worktree.delete", title: "Delete" }));
+
+    renderHook(() => useMcpBridge());
+
+    const dispatched = dispatchHandler?.({
+      requestId: "req-host",
+      actionId: "worktree.delete",
+      args: { worktreeId: "/host/wt" },
+      sessionOrigin: "external",
+      callerInfo: { token4LastChars: "", userAgent: 'Your assistant, through host "studio-01"' },
+      approvalOnly: true,
+      hostPreview: { subject: "feature/thing", lines: ["No uncommitted changes."] },
+    });
+
+    await Promise.resolve();
+    const pending = useMcpConfirmStore.getState().current;
+    expect(pending?.preview).toEqual(["No uncommitted changes."]);
+    expect(pending?.subject).toBe("feature/thing");
+    expect(pending?.previewPending).toBe(false);
+    expect(pending?.approvalReason).toBeUndefined();
+    expect(pending?.callerInfo?.userAgent).toContain("studio-01");
+    expect(mocks.buildPreview).not.toHaveBeenCalled();
+
+    useMcpConfirmStore.getState().resolveCurrent("approved");
+    await dispatched;
+
+    expect(mocks.dispatch).not.toHaveBeenCalled();
+    expect(sendDispatchActionResponse).toHaveBeenCalledWith({
+      requestId: "req-host",
+      result: { ok: true, result: null },
+      confirmationDecision: "approved",
+    });
+  });
+
   // #12881: the assistant closing panels it did not open is asked about as a
   // checklist, and the rows left checked go back to main to close.
   it("puts an assistant close to the user as a checklist and reports the rows kept", async () => {
@@ -948,7 +983,6 @@ describe("useMcpBridge", () => {
   describe("assistant vs external spawn provenance (#11808)", () => {
     it.each([
       ["help", "assistant"],
-      ["assistant-pane", "assistant"],
       ["external", "mcp"],
     ] as const)(
       "resolves a %s-origin dispatch to spawnedBy: '%s'",
@@ -1010,7 +1044,7 @@ describe("useMcpBridge", () => {
         requestId: "req-confirm-origin",
         actionId: "recipe.run",
         args: { recipeId: "recipe-1" },
-        sessionOrigin: "assistant-pane",
+        sessionOrigin: "help",
       });
 
       await Promise.resolve();
@@ -1034,7 +1068,7 @@ describe("useMcpBridge", () => {
       const readSpawnedBy = (args: unknown): unknown =>
         typeof args === "object" && args !== null ? Reflect.get(args, "spawnedBy") : undefined;
 
-      for (const origin of ["help", "assistant-pane", "external"] as const) {
+      for (const origin of ["help", "external"] as const) {
         const spawnedBy = readSpawnedBy(tagMcpSpawnSource("agent.launch", {}, origin));
         expect(TerminalSpawnSourceSchema.safeParse(spawnedBy).success).toBe(true);
       }
@@ -1050,7 +1084,7 @@ describe("useMcpBridge", () => {
         requestId: "req-list-assistant",
         actionId: "actions.list",
         args: { query: "worktree" },
-        sessionOrigin: "assistant-pane",
+        sessionOrigin: "help",
       });
 
       expect(mocks.dispatch).toHaveBeenCalledWith(

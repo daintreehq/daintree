@@ -77,6 +77,18 @@ export type McpApprovalScope = "once" | "session";
 export type McpApprovalReason = "above-tier" | "protected-close";
 
 /**
+ * What another machine shows the person about a call it would run itself
+ * with no view of its own open (#13501): read there, from the target the call
+ * acts on, and shown here as given, in place of a preview this view would
+ * build from its own stores, which know nothing of that machine.
+ */
+export interface McpHostPreview {
+  /** What the dialog's question names, such as the worktree's branch. */
+  subject?: string;
+  lines: string[];
+}
+
+/**
  * What authorized an agent pane's dispatch past the ordinary confirmation
  * (#12692), stamped on its audit record so an automatic run can be told apart
  * from one a person approved.
@@ -245,6 +257,24 @@ export interface McpAuditRecord {
   severity: McpAuditSeverity;
   /** Number of times this event repeated within the coalesce window. Absent when the event occurred once. */
   repeatCount?: number;
+  /**
+   * Set when another machine's assistant ran this tool here through its Shell
+   * (`host.call`, #13493); absent for every call made on this machine.
+   */
+  relay?: McpAuditRelay;
+}
+
+/**
+ * Who a relayed call came from, as this host established it (#13493). `sender`
+ * is the start of the id the Shell's credential derives, which is one-way and
+ * never lets anyone authenticate as it. `callId` is the one the Shell's own
+ * record of the `host.call` carries.
+ */
+export interface McpAuditRelay {
+  shellName: string;
+  sender: string;
+  helpSessionId: string;
+  callId?: string;
 }
 
 /**
@@ -293,12 +323,10 @@ export type McpGrantRecordType =
 
 /**
  * Identity class of the actor a native automation grant (#10648) was issued
- * to. Both are renderer-pinned internal bearers:
- * - `help-session`: the help-chat assistant panel (a full help session).
- * - `assistant-pane`: a `daintree-assistant` CLI pane bearer (#10647) pinned
- *   to its launching WebContents without being promoted to a help session.
+ * to: `help-session`, the help-chat assistant panel, a renderer-pinned
+ * internal bearer.
  */
-export type McpGrantActorType = "help-session" | "assistant-pane";
+export type McpGrantActorType = "help-session";
 
 /**
  * Source of a `grant.revoked` transition.
@@ -355,8 +383,12 @@ export interface McpGrantRecord {
   remainingUses?: number;
   /** Public id of the actor the native grant was issued to. Native grants only. */
   actorId?: string;
-  /** Actor identity class for a native grant. Native grants only. */
-  actorType?: McpGrantActorType;
+  /**
+   * Actor identity class for a native grant. Native grants only. Read back as
+   * written, so a row from an older build can name an actor this one no longer
+   * issues grants to.
+   */
+  actorType?: McpGrantActorType | (string & {});
   /**
    * Dotted `BuiltInActionId`s a native grant authorizes. Carried on
    * `grant.issued`/`grant.revoked` (where `toolId` is `"*"`) so the audit
@@ -881,11 +913,11 @@ export interface HelpSessionBearerRecord {
  * one (#11808). Mirroring it renderer-side instead would leave two unions free
  * to drift, silently reclassifying a surface as external the day they did.
  *
- * The same two Daintree-own surfaces this splits out are the ones
+ * The Daintree-own surface this splits out is the one
  * {@link McpGrantActorType} names; that type classifies who a grant was issued
  * to, this one classifies how the session itself authenticated.
  */
-export type McpSessionOrigin = "help" | "assistant-pane" | "external";
+export type McpSessionOrigin = "help" | "external";
 
 /**
  * Display-only provenance for the external bearer behind a `danger: "confirm"`

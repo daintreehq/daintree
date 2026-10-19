@@ -191,6 +191,12 @@ export interface AgentSettings {
    */
   globalUseAltScreen?: boolean;
   /**
+   * What an agent pane does when Daintree restarts with no live process behind
+   * it (#13509). Absent or unrecognised reads as `"always"`, today's behaviour —
+   * read it through {@link resolveResumeOnRestart}.
+   */
+  resumeOnRestart?: ResumeOnRestart;
+  /**
    * The agent new terminals and automated workflows launch when none is named
    * (#13345). Absent means never set on this host, which is what lets the
    * one-time move from a machine's localStorage happen; `null` is an explicit
@@ -198,6 +204,30 @@ export interface AgentSettings {
    * and kept across a full agent-settings reset.
    */
   defaultAgent?: BuiltInAgentId | null;
+}
+
+/**
+ * - `always`: every restored agent pane relaunches, resuming its conversation.
+ * - `on-focus`: panes come back held, and one resumes when it is first focused.
+ * - `never`: panes come back held until the user resumes or starts them.
+ */
+export const RESUME_ON_RESTART_VALUES = ["always", "on-focus", "never"] as const;
+
+export type ResumeOnRestart = (typeof RESUME_ON_RESTART_VALUES)[number];
+
+export const DEFAULT_RESUME_ON_RESTART: ResumeOnRestart = "always";
+
+export function isResumeOnRestart(value: unknown): value is ResumeOnRestart {
+  return (
+    typeof value === "string" && (RESUME_ON_RESTART_VALUES as readonly string[]).includes(value)
+  );
+}
+
+export function resolveResumeOnRestart(
+  settings: Pick<AgentSettings, "resumeOnRestart"> | null | undefined
+): ResumeOnRestart {
+  const value = settings?.resumeOnRestart;
+  return isResumeOnRestart(value) ? value : DEFAULT_RESUME_ON_RESTART;
 }
 
 export const DEFAULT_DANGEROUS_ARGS: Record<string, string> = {

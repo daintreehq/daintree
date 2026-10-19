@@ -46,13 +46,6 @@ vi.mock("@/hooks/useHostConnection", () => ({ getViewHostId: () => null }));
 vi.mock("../../hostSwitching", () => ({ switchToHost: h.switchToHost }));
 vi.mock("../../PortsView", () => ({ PortsView: () => null }));
 vi.mock("../HostFleetTargets", () => ({ HostFleetTargets: () => null }));
-vi.mock("../LazyHostOverviewParts", () => ({
-  LazyHostExchanges: (props: { hostId: string; projects?: unknown[] }) => (
-    <span data-testid={`exchanges-${props.hostId}`}>
-      {String(props.projects?.length ?? "none")}
-    </span>
-  ),
-}));
 vi.mock("../HostCard", () => ({
   HostCard: ({
     row,
@@ -106,8 +99,7 @@ function entry(id: string, connection: HostListEntry["connection"]): HostListEnt
       lastSeenAt: null,
       addedAt: 1,
       notificationsEnabled: false,
-      assistantMessagingEnabled: false,
-      assistantStartEnabled: false,
+      assistantControlEnabled: false,
     },
     connection,
     summary: null,
@@ -169,23 +161,5 @@ describe("HostsOverviewDialog projects", () => {
     expect(dialog.getAttribute("data-host-id")).toBe("studio-01");
     fireEvent.click(screen.getByText("finish clone"));
     expect(h.switchToHost).toHaveBeenCalledWith("studio-01", false, "cloned-1");
-  });
-});
-
-describe("HostsOverviewDialog assistant exchanges", () => {
-  beforeEach(() => {
-    h.hosts = [
-      entry("studio-01", { status: "connected", rttMs: 12, handshake: HANDSHAKE }),
-      entry("studio-02", { status: "unreachable", lastSeenAt: null, detail: null }),
-    ];
-    h.projects = new Map([["studio-01", [{ id: "s1", name: "api", path: "/home/g/api" }]]]);
-  });
-
-  it("shows exchanges on every remote host's card, reachable or not, and none on this machine's", () => {
-    render(<HostsOverviewDialog onClose={() => {}} />);
-    expect(screen.getByTestId("exchanges-studio-01").textContent).toBe("1");
-    // The journal is this Shell's own, so an unreachable host still shows its history.
-    expect(screen.getByTestId("exchanges-studio-02").textContent).toBe("none");
-    expect(screen.queryByTestId("exchanges-local")).toBeNull();
   });
 });

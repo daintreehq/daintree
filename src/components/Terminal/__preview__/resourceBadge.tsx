@@ -1,4 +1,4 @@
-import "./scrollPillShims";
+import "./resourceBadgeShims";
 import { StrictMode, useEffect, useMemo, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { resolveAppTheme } from "@shared/theme/themes";

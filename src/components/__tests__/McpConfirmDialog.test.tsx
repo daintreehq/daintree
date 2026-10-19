@@ -65,7 +65,7 @@ function enqueue(
     preview?: string[];
     previewTitle?: string;
     previewPending?: boolean;
-    sessionOrigin?: "help" | "assistant-pane" | "external";
+    sessionOrigin?: "help" | "external";
     argsSummary?: string;
     subject?: string;
     typedNameTarget?: string;
@@ -1163,7 +1163,6 @@ describe("McpConfirmDialog", () => {
     );
 
     it.each([
-      ["assistant-pane origin", { sessionOrigin: "assistant-pane" as const }],
       ["external origin", { sessionOrigin: "external" as const }],
       ["missing origin", {}],
       [

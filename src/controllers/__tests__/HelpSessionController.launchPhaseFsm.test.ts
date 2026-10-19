@@ -100,7 +100,6 @@ vi.mock("@/config/agents", () => ({
   getAgentConfig: (id: string) =>
     ({
       claude: { name: "Claude", assistantMinVersion: "1.0.0" },
-      "daintree-assistant": { name: "Daintree Assistant", assistantMinVersion: "1.0.0" },
     })[id],
 }));
 
@@ -462,53 +461,11 @@ describe("HelpSessionController — launch phase FSM", () => {
     // it can never fire 90s later and tear down a healthy live session.
     expect(ctrl["_launchWatchdogTimer"]).toBeNull();
     expect(ctrl.getSnapshot().launchError).toBeNull();
-    // Non-assistant agents read their .mcp.json / settings from cwd, so they
-    // run in the provisioned session dir, not the project root.
+    // Help agents read their .mcp.json / settings from cwd, so they run in the
+    // provisioned session dir, not the project root.
     expect(vi.mocked(actionService.dispatch)).toHaveBeenCalledWith(
       "agent.launch",
       expect.objectContaining({ cwd: "/help" }),
-      expect.anything()
-    );
-    ctrl.stop();
-  });
-
-  it("launches the Daintree Assistant in the project root, not the session dir", async () => {
-    // The assistant is env-only (MCP via env, ships its own skills) so it reads
-    // nothing from cwd — it runs in the actual project. Same provision (session
-    // dir "/help") and project ("/repo") as the Claude case above; only the
-    // resolved cwd differs by agent.
-    const ctrl = new HelpSessionController();
-    ctrl.start();
-    helpPanelState.preferredAgentId = "daintree-assistant";
-    (window.electron.help.provisionSession as ReturnType<typeof vi.fn>).mockResolvedValue({
-      sessionId: "sess-asst",
-      sessionPath: "/help",
-      token: "tok-asst",
-      mcpUrl: null,
-      windowId: 1,
-    });
-    vi.mocked(actionService.dispatch).mockResolvedValue({
-      ok: true,
-      result: { terminalId: "term-asst" },
-    } as never);
-
-    ctrl.syncInputs({
-      isOpen: true,
-      isReadyToLaunch: true,
-      currentProject: { id: "proj", path: "/repo" },
-      terminalId: null,
-      preferredAgentId: "daintree-assistant",
-      supportedInstalledAgentIds: ["daintree-assistant"],
-      autoLaunchEnabled: true,
-      visibilityEpoch: 0,
-    });
-
-    await vi.waitFor(() => {
-      expect(ctrl.getSnapshot().phase).toBe("live");
-    });
-    expect(vi.mocked(actionService.dispatch)).toHaveBeenCalledWith(
-      "agent.launch",
-      expect.objectContaining({ agentId: "daintree-assistant", cwd: "/repo" }),
       expect.anything()
     );
     ctrl.stop();
@@ -518,8 +475,8 @@ describe("HelpSessionController — launch phase FSM", () => {
     // Resume path (_spawnResumed): the project identity must come from the
     // project captured at launch, never live store state — otherwise a project
     // switch mid-resume makes cwd and DAINTREE_PROJECT_ID disagree. Drive it
-    // with claude (which has a resume config; the assistant has none and always
-    // fresh-launches) and deliberately drift the store's currentProject.
+    // with claude (which has a resume config) and deliberately drift the
+    // store's currentProject.
     const ctrl = new HelpSessionController();
     ctrl.start();
     helpPanelState.preferredAgentId = "claude";

@@ -7,7 +7,12 @@ import {
 } from "./ViewlessActionExecutor.js";
 
 export { hasViewlessImplementation, VIEWLESS_ACTION_IDS } from "./ViewlessActionExecutor.js";
-export type { ViewlessActionRequest, ViewlessDeps } from "./ViewlessActionExecutor.js";
+export type {
+  ViewlessActionRequest,
+  ViewlessApprovalAsk,
+  ViewlessApprovalDecision,
+  ViewlessDeps,
+} from "./ViewlessActionExecutor.js";
 
 /**
  * The live services, loaded on first use. The MCP bridge is the only caller and
@@ -18,15 +23,59 @@ export type { ViewlessActionRequest, ViewlessDeps } from "./ViewlessActionExecut
 async function loadLiveDeps(): Promise<ViewlessDeps> {
   const [
     { projectStore },
-    { getPtyClient, getWorkspaceClientRef },
-    { invokeHostChannel },
+    { getPtyClient, getWorkspaceClientRef, getCliAvailabilityServiceRef },
+    { invokeHostChannel, sendHostChannel },
     { store },
+    { CcrConfigService },
+    { handleTerminalGetStatusViewless },
+    os,
   ] = await Promise.all([
     import("../ProjectStore.js"),
     import("../../window/serviceRefs.js"),
     import("./viewlessInvoke.js"),
     import("../../store.js"),
+    import("../CcrConfigService.js"),
+    import("../mcp-server/terminalStatus.js"),
+    import("node:os"),
   ]);
+
+  const agents: ViewlessDeps["agents"] = {
+    getSettings: async () => store.get("agentSettings") ?? null,
+    // Discovered presets exist for Claude only; a view's store holds them under
+    // that agent once a read finds any, and nothing for every other agent.
+    getCcrPresets: async (agentId) => {
+      if (agentId !== "claude") return undefined;
+      const presets = await CcrConfigService.getInstance().loadAndApply();
+      return presets.length > 0 ? presets : undefined;
+    },
+    getProjectPresets: (projectPath) => projectStore.readInRepoPresets(projectPath),
+    // A launchable probe with a resolved path is reused, as the view's
+    // launcher reuses it; anything else is probed again first.
+    getCliDetail: async (agentId) => {
+      const service = getCliAvailabilityServiceRef();
+      if (!service) return undefined;
+      const current = service.getDetails()?.[agentId];
+      if (
+        (current?.state === "ready" || current?.state === "unauthenticated") &&
+        current.resolvedPath?.trim()
+      ) {
+        return current;
+      }
+      try {
+        await service.refresh();
+      } catch {
+        // The registry command still launches; availability reports its own failure.
+      }
+      return service.getDetails()?.[agentId];
+    },
+    getAvailability: async () => {
+      const service = getCliAvailabilityServiceRef();
+      if (!service) return { availability: {}, live: false };
+      const availability = service.getAvailability() ?? (await service.checkAvailability());
+      return { availability, live: true };
+    },
+  };
+
   return {
     getProject: (projectId) => projectStore.getProjectById(projectId),
     getLaunchEnvLayers: async (projectId) => ({
@@ -38,6 +87,15 @@ async function loadLiveDeps(): Promise<ViewlessDeps> {
     getPtyReader: () => getPtyClient(),
     getWorkspaceHosts: () => getWorkspaceClientRef(),
     invoke: (projectId, channel, args) => invokeHostChannel(projectId, channel, args),
+    send: (projectId, channel, args) => sendHostChannel(projectId, channel, args),
+    agents,
+    readTerminalStatus: (args, projectId) => handleTerminalGetStatusViewless(args, projectId),
+    hostPlatform: {
+      shellDialect: process.platform === "win32" ? "windows" : "posix",
+      tmpDir: os.tmpdir(),
+      totalMemoryBytes: os.totalmem(),
+    },
+    sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
   };
 }
 
@@ -51,6 +109,18 @@ export async function runViewlessAction(
 ): Promise<ActionDispatchResult | null> {
   if (!hasViewlessImplementation(request.actionId)) return null;
   return executeViewlessAction(request, deps ?? (await loadLiveDeps()));
+}
+
+/** Spawn the host's own assistant with no view (#13511); see `spawnHostAssistant`. */
+export async function spawnHostAssistantLive(
+  project: Parameters<typeof import("./viewlessAgents.js").spawnHostAssistant>[0],
+  spec: Parameters<typeof import("./viewlessAgents.js").spawnHostAssistant>[1]
+): Promise<boolean> {
+  const [{ spawnHostAssistant }, deps] = await Promise.all([
+    import("./viewlessAgents.js"),
+    loadLiveDeps(),
+  ]);
+  return spawnHostAssistant(project, spec, deps);
 }
 
 /** The workspace identity a viewless result is stamped with, when it is a project. */

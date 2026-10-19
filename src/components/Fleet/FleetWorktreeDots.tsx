@@ -1,5 +1,15 @@
 import type { ReactElement } from "react";
+import { cn } from "@/lib/utils";
 import type { FleetWorktreeScope } from "./useFleetWorktreeScope";
+
+// Each dot after the first gives up a crescent where the one in front of it
+// sits: a circle 1.5px wider than that dot, centred on it (10px dots overlapping
+// by 4px put its centre 1px left of this dot's edge). A mask, not a ring: the
+// chip's fill is translucent over the ribbon and strengthens on hover and open,
+// so no ring colour matches it, whereas a mask shows whatever is behind. It
+// also survives forced colors, which drop box-shadow rings outright while
+// `status-mark` repaints the dots themselves.
+const CUTOUT = "[mask-image:radial-gradient(circle_at_-1px_50%,transparent_6.5px,black_7px)]";
 
 export function FleetWorktreeDots({ scope }: { scope: FleetWorktreeScope }): ReactElement | null {
   if (scope.colors.length === 0) return null;
@@ -17,8 +27,8 @@ export function FleetWorktreeDots({ scope }: { scope: FleetWorktreeScope }): Rea
       {shown.map((color, i) => (
         <span
           key={color}
-          className="h-2.5 w-2.5 rounded-full ring-2 ring-[var(--theme-surface-canvas)]"
-          style={{ backgroundColor: color, zIndex: shown.length - i }}
+          className={cn("status-mark h-2.5 w-2.5 rounded-full", i > 0 && CUTOUT)}
+          style={{ backgroundColor: color }}
         />
       ))}
     </span>

@@ -10,6 +10,7 @@
  */
 
 import {
+  PLUGIN_NOTIFY_MAX_ACTIONS,
   pluginManifestIdFromInstanceKey,
   projectIdFromPluginInstanceKey,
 } from "../types/plugin.js";
@@ -25,6 +26,7 @@ import { normalizePluginAllAgentsSnapshot } from "../utils/pluginAllAgentsSnapsh
 import { pluginFocusedPanelEquals, toPluginFocusedPanel } from "../utils/pluginFocusedPanel.js";
 import { toRuntimePanelKindId } from "../config/panelKindRegistry.js";
 import { normalizePanelMenuItems } from "../utils/pluginPanelMenuItems.js";
+import { applyPluginContextEntry, validatePluginContextEntry } from "../utils/pluginContextKeys.js";
 import {
   PLUGIN_INVOKE_MAX_RESULT_BYTES,
   PLUGIN_SUBSCRIPTION_DEFAULT_DEBOUNCE_MS,
@@ -72,6 +74,8 @@ import type {
   PluginSettingsScope,
   PluginStorageScope,
   PluginToastOptions,
+  PluginNotifyOptions,
+  PluginNotifyResult,
   PluginTypedIpcHandler,
   PluginHandlerOptions,
   PluginWorktreeSnapshot,
@@ -96,6 +100,7 @@ import type {
   PluginSystemWakeEvent,
   PluginGitCommitResult,
   PluginPanelBadge,
+  PluginContextValue,
   SettingDefinition,
   SettingsApi,
   StorageApi,
@@ -128,6 +133,12 @@ export interface ShownToastRecord {
   message: string;
   type: NotificationType | undefined;
   durationMs: number | undefined;
+}
+
+/** Captured `host.notify(options)` calls that passed validation (#13505). */
+export interface NotificationRecord {
+  id: string;
+  options: PluginNotifyOptions;
 }
 
 /** Captured `host.process.spawn(command, options)` calls. */
@@ -192,6 +203,18 @@ export interface InvalidationRecord {
   paths: string[] | undefined;
 }
 
+/** Captured `host.setToolbarButtonBadge(buttonId, badge)` calls. `null` clears. */
+export interface SetToolbarButtonBadgeRecord {
+  buttonId: string;
+  badge: PluginPanelBadge | null;
+}
+
+/** Captured `host.setContext(key, value)` calls. `null` clears. */
+export interface SetContextRecord {
+  key: string;
+  value: PluginContextValue | null;
+}
+
 /** Captured `host.setPanelBadge(panelId, badge)` calls. `null` clears. */
 export interface SetPanelBadgeRecord {
   panelId: string;
@@ -252,6 +275,8 @@ export interface MockHostState {
   readonly broadcastCalls: ReadonlyArray<BroadcastRecord>;
   readonly postToPanelCalls: ReadonlyArray<PostToPanelRecord>;
   readonly shownToasts: ReadonlyArray<ShownToastRecord>;
+  /** Every `host.notify` call that got past validation, in order. */
+  readonly notifications: ReadonlyArray<NotificationRecord>;
   readonly dispatchedActions: ReadonlyArray<DispatchedActionRecord>;
   readonly sentToActiveAgentCalls: ReadonlyArray<SentToActiveAgentRecord>;
   /** Every `host.sendToAgent` call that got past validation, in order. */
@@ -264,6 +289,14 @@ export interface MockHostState {
   readonly registeredMcpTools: ReadonlyArray<RegisteredMcpToolsRecord>;
   readonly invalidationCalls: ReadonlyArray<InvalidationRecord>;
   readonly setPanelBadgeCalls: ReadonlyArray<SetPanelBadgeRecord>;
+  readonly setToolbarButtonBadgeCalls: ReadonlyArray<SetToolbarButtonBadgeRecord>;
+  /** Accepted `host.setContext` calls, in order. */
+  readonly setContextCalls: ReadonlyArray<SetContextRecord>;
+  /**
+   * The context keys this plugin holds right now, bare (not namespaced) — what
+   * its `when` clauses would read under `{publisher.name}.{key}`.
+   */
+  readonly contextKeys: ReadonlyMap<string, PluginContextValue>;
   readonly setPanelMenuItemsCalls: ReadonlyArray<SetPanelMenuItemsRecord>;
   /**
    * Panel ids passed to `host.reloadPanel(panelId)`, in order (#12610). Only
@@ -480,6 +513,12 @@ export interface CreateMockHostOptions {
    * `scope ?? "user"` default and existing manifest-free tests are unaffected.
    */
   manifestSettings?: SettingDefinition[];
+  /**
+   * Opt-in `contributes.toolbarButtons[].id` list, so `setToolbarButtonBadge`
+   * rejects an id the plugin did not contribute, as the real host does. Omitted
+   * by default (the mock has no manifest model), which accepts any non-empty id.
+   */
+  toolbarButtonIds?: readonly string[];
   /** Pre-seed private `host.storage` values per scope. */
   storage?: {
     user?: Record<string, unknown>;
@@ -615,6 +654,103 @@ function validateToastOptions(opts: PluginToastOptions): void {
   }
   if (issues.length > 0) {
     throw new Error(`showToast: invalid options — ${issues.join("; ")}`);
+  }
+}
+
+const NOTIFY_OPTION_KEYS = new Set(["title", "body", "actions", "os", "dedupeKey"]);
+const NOTIFY_ACTION_KEYS = new Set(["id", "label", "actionId", "args"]);
+const NOTIFY_ARGS_MAX_BYTES = 4096;
+
+function isNotifyArgs(args: unknown): boolean {
+  if (args === null || typeof args !== "object") return false;
+  const proto: unknown = Object.getPrototypeOf(args);
+  if (proto !== Object.prototype && proto !== null) return false;
+  try {
+    const json = JSON.stringify(args);
+    return json !== undefined && new TextEncoder().encode(json).length <= NOTIFY_ARGS_MAX_BYTES;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Validate `host.notify` options against the constraints production's
+ * `PluginNotifyOptionsSchema` and namespace check apply (#13505), so a plugin
+ * tested against the mock fails on a shape the real host would reject.
+ */
+function validateNotifyOptions(
+  opts: PluginNotifyOptions,
+  manifestId: string,
+  capabilities: ReadonlySet<string>
+): void {
+  const issues: string[] = [];
+  if (!opts || typeof opts !== "object") {
+    throw new Error("notify: invalid options — (root): must be an object");
+  }
+  for (const key of Object.keys(opts)) {
+    if (!NOTIFY_OPTION_KEYS.has(key)) issues.push(`${key}: unrecognized option`);
+  }
+  const text = (name: string, value: unknown, max: number) => {
+    if (typeof value !== "string" || value.trim().length < 1) {
+      issues.push(`${name}: must be a non-empty string`);
+    } else if (value.trim().length > max) {
+      issues.push(`${name}: must be at most ${max} characters`);
+    }
+  };
+  text("title", opts.title, 200);
+  text("body", opts.body, 2000);
+  if (opts.actions !== undefined) {
+    if (!Array.isArray(opts.actions)) {
+      issues.push("actions: must be an array");
+    } else {
+      if (opts.actions.length > PLUGIN_NOTIFY_MAX_ACTIONS) {
+        issues.push(`actions: at most ${PLUGIN_NOTIFY_MAX_ACTIONS} entries`);
+      }
+      const ids = new Set<string>();
+      for (let i = 0; i < opts.actions.length; i++) {
+        const action = opts.actions[i];
+        if (!action || typeof action !== "object") {
+          issues.push(`actions.${i}: must be an object`);
+          continue;
+        }
+        for (const key of Object.keys(action)) {
+          if (!NOTIFY_ACTION_KEYS.has(key)) issues.push(`actions.${i}.${key}: unrecognized option`);
+        }
+        text(`actions.${i}.id`, action.id, 64);
+        text(`actions.${i}.label`, action.label, 40);
+        if (typeof action.id === "string") {
+          const id = action.id.trim();
+          if (ids.has(id)) issues.push("actions: action ids must be unique");
+          ids.add(id);
+        }
+        const actionId: unknown = action.actionId;
+        if (
+          typeof actionId !== "string" ||
+          actionId.length > 200 ||
+          !actionId.startsWith(`${manifestId}.`) ||
+          actionId.length === manifestId.length + 1
+        ) {
+          issues.push(
+            `actions.${i}.actionId: must be one of this plugin's own actions, written "${manifestId}.<id>"`
+          );
+        }
+        if (action.args !== undefined && !isNotifyArgs(action.args)) {
+          issues.push(
+            `actions.${i}.args: must be a JSON-serializable object of at most ${NOTIFY_ARGS_MAX_BYTES} bytes`
+          );
+        }
+      }
+    }
+  }
+  if (opts.os !== undefined && typeof opts.os !== "boolean") issues.push("os: must be a boolean");
+  if (opts.dedupeKey !== undefined) text("dedupeKey", opts.dedupeKey, 200);
+  if (issues.length > 0) {
+    throw new Error(`notify: invalid options — ${issues.join("; ")}`);
+  }
+  if (opts.os && !capabilities.has("notification:os")) {
+    throw new Error(
+      'PERMISSION_REQUIRED: notify with os: true requires "notification:os", which is not declared in manifest.capabilities'
+    );
   }
 }
 
@@ -845,6 +981,7 @@ export function createMockHost(options: CreateMockHostOptions = {}): PluginHostA
   const broadcastCalls: BroadcastRecord[] = [];
   const postToPanelCalls: PostToPanelRecord[] = [];
   const shownToasts: ShownToastRecord[] = [];
+  const notifications: NotificationRecord[] = [];
   const dispatchedActions: DispatchedActionRecord[] = [];
   const sentToActiveAgentCalls: SentToActiveAgentRecord[] = [];
   const sentToAgentCalls: SentToAgentRecord[] = [];
@@ -865,6 +1002,9 @@ export function createMockHost(options: CreateMockHostOptions = {}): PluginHostA
   const registeredMcpTools: RegisteredMcpToolsRecord[] = [];
   const invalidationCalls: InvalidationRecord[] = [];
   const setPanelBadgeCalls: SetPanelBadgeRecord[] = [];
+  const setToolbarButtonBadgeCalls: SetToolbarButtonBadgeRecord[] = [];
+  const setContextCalls: SetContextRecord[] = [];
+  const contextKeys = new Map<string, PluginContextValue>();
   const setPanelMenuItemsCalls: SetPanelMenuItemsRecord[] = [];
   const reloadPanelCalls: string[] = [];
   const restartWorkerCalls: WorkerRestartResult[] = [];
@@ -1956,6 +2096,41 @@ export function createMockHost(options: CreateMockHostOptions = {}): PluginHostA
       setPanelBadgeCalls.push({ panelId, badge: badge ?? null });
       return Promise.resolve();
     },
+    setToolbarButtonBadge(buttonId, badge) {
+      if (typeof buttonId !== "string" || buttonId.length === 0) {
+        return Promise.reject(
+          new Error("setToolbarButtonBadge: buttonId must be a non-empty string")
+        );
+      }
+      if (options.toolbarButtonIds && !options.toolbarButtonIds.includes(buttonId)) {
+        return Promise.reject(
+          new Error(
+            `setToolbarButtonBadge: "${buttonId}" is not one of this plugin's contributes.toolbarButtons`
+          )
+        );
+      }
+      if (badge !== null && badge !== undefined) {
+        try {
+          validatePanelBadge(badge);
+        } catch (err) {
+          return Promise.reject(
+            new Error((err as Error).message.replace(/^setPanelBadge:/, "setToolbarButtonBadge:"))
+          );
+        }
+      }
+      setToolbarButtonBadgeCalls.push({ buttonId, badge: badge ?? null });
+      return Promise.resolve();
+    },
+    setContext(key, value) {
+      // The host's own validator and cap, so a call the real host refuses
+      // rejects here too.
+      const entry = validatePluginContextEntry(key, value);
+      if (!entry.ok) return Promise.reject(new Error(`setContext: ${entry.error}`));
+      const applied = applyPluginContextEntry(contextKeys, entry.key, entry.value);
+      if (!applied.ok) return Promise.reject(new Error(`setContext: ${applied.error}`));
+      setContextCalls.push({ key: entry.key, value: entry.value });
+      return Promise.resolve();
+    },
     setPanelMenuItems(panelId, items) {
       // Vetted by the host's own normalizer, so a list the real host refuses
       // rejects here too.
@@ -1999,6 +2174,12 @@ export function createMockHost(options: CreateMockHostOptions = {}): PluginHostA
         type: opts.type,
         durationMs: opts.durationMs,
       });
+    },
+    async notify(opts: PluginNotifyOptions): Promise<PluginNotifyResult> {
+      validateNotifyOptions(opts, mockManifestId, capabilities);
+      const id = `mock-notification-${notifications.length + 1}`;
+      notifications.push({ id, options: opts });
+      return { id };
     },
     async dispatch(actionId, args, dispatchOptions) {
       dispatchedActions.push(
@@ -2588,6 +2769,7 @@ export function createMockHost(options: CreateMockHostOptions = {}): PluginHostA
     broadcastCalls,
     postToPanelCalls,
     shownToasts,
+    notifications,
     dispatchedActions,
     sentToActiveAgentCalls,
     sentToAgentCalls,
@@ -2597,6 +2779,9 @@ export function createMockHost(options: CreateMockHostOptions = {}): PluginHostA
     registeredMcpTools,
     invalidationCalls,
     setPanelBadgeCalls,
+    setToolbarButtonBadgeCalls,
+    setContextCalls,
+    contextKeys,
     setPanelMenuItemsCalls,
     reloadPanelCalls,
     restartWorkerCalls,

@@ -106,6 +106,10 @@ export interface GeneratedIpcInvokeMap {
     args: [value: boolean];
     result: import("../agentSettings.js").AgentSettings;
   };
+  "agent-settings:set-resume-on-restart": {
+    args: [value: "never" | "always" | "on-focus"];
+    result: import("../agentSettings.js").AgentSettings;
+  };
   "app:clear-quarantined-panel": {
     args: [panelId: string];
     result: { cleared: boolean };
@@ -125,20 +129,6 @@ export interface GeneratedIpcInvokeMap {
   "artifact:save-to-file": {
     args: [options: import("./agent.js").SaveArtifactOptions];
     result: import("./agent.js").SaveArtifactResult | null;
-  };
-  "assistant-messaging:get-state": {
-    args: [input?: import("./assistantMessaging.js").AssistantMessagingLaneRef | undefined];
-    result: import("./assistantMessaging.js").AssistantMessagingState;
-  };
-  "assistant-messaging:set-lane-enrolled": {
-    args: [
-      input: import("./assistantMessaging.js").AssistantMessagingLaneRef & { enrolled: boolean },
-    ];
-    result: import("./assistantMessaging.js").AssistantMessagingEnrollResult;
-  };
-  "assistant-messaging:set-paused": {
-    args: [paused: boolean];
-    result: boolean;
   };
   "canopy-host:invoke": {
     args: [
@@ -1507,6 +1497,10 @@ export interface GeneratedIpcInvokeMap {
     args: [input: import("../pluginCapabilityConsent.js").PluginCapabilityAcknowledgeConsentInput];
     result: void;
   };
+  "plugin-capability:get-os-notifications": {
+    args: [input: import("../pluginCapabilityConsent.js").PluginOsNotificationsQuery];
+    result: boolean;
+  };
   "plugin-capability:get-project-targeting": {
     args: [input: import("../pluginCapabilityConsent.js").PluginProjectTargetingQuery];
     result: boolean;
@@ -1514,6 +1508,10 @@ export interface GeneratedIpcInvokeMap {
   "plugin-capability:resolve-consent": {
     args: [input: import("../pluginCapabilityConsent.js").PluginCapabilityResolveConsentInput];
     result: void;
+  };
+  "plugin-capability:set-os-notifications": {
+    args: [input: import("../pluginCapabilityConsent.js").PluginOsNotificationsUpdate];
+    result: boolean;
   };
   "plugin-capability:set-project-targeting": {
     args: [input: import("../pluginCapabilityConsent.js").PluginProjectTargetingUpdate];
@@ -2100,10 +2098,6 @@ export interface GeneratedIpcInvokeMap {
     args: [payload: import("./remoteHosts.js").AddHostPayload];
     result: import("../remoteHosts.js").HostDescriptor;
   };
-  "remote-hosts:cancel-assistant-exchange": {
-    args: [payload: import("./remoteHosts.js").AssistantExchangeCancelPayload];
-    result: import("./remoteHosts.js").AssistantExchangeView;
-  };
   "remote-hosts:cancel-install": {
     args: [payload: { opId: string }];
     result: boolean;
@@ -2155,10 +2149,6 @@ export interface GeneratedIpcInvokeMap {
   "remote-hosts:list": {
     args: [];
     result: import("../remoteHosts.js").HostListEntry[];
-  };
-  "remote-hosts:list-assistant-exchanges": {
-    args: [payload: import("./remoteHosts.js").AssistantExchangeListPayload];
-    result: import("./remoteHosts.js").AssistantExchangeView[];
   };
   "remote-hosts:list-clipboard-grants": {
     args: [payload: import("./remoteHosts.js").ListHostProjectsPayload];

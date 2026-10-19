@@ -174,6 +174,13 @@ vi.mock("@/components/ui/context-menu", () => ({
   ContextMenuRadioItem: () => null,
 }));
 
+// Null leaves jsdom's own (non-Mac) platform in place.
+const platformState = vi.hoisted(() => ({ mac: null as boolean | null }));
+vi.mock("@/lib/platform", async () => {
+  const actual = await vi.importActual<typeof import("@/lib/platform")>("@/lib/platform");
+  return { ...actual, isMac: () => platformState.mac ?? actual.isMac() };
+});
+
 const modifierKeysState = { meta: false, alt: false };
 vi.mock("@/hooks/useModifierKeys", () => ({
   useModifierKeys: () => modifierKeysState,
@@ -747,6 +754,120 @@ describe("ProjectSwitcherPalette pointer cursor", () => {
       const row = document.getElementById(`project-option-${id}`)!;
       expect(row.className.split(/\s+/).filter((t) => t.startsWith("hover:bg-"))).toEqual([]);
     }
+  });
+
+  // jsdom reports no Mac platform, so the new-window click is Ctrl, not ⌘.
+  it("opens a new window on a modified click, as ⌘↵ does (#13523)", () => {
+    const onSelect = vi.fn();
+    const onSelectNewWindow = vi.fn();
+    const row = makeProject({ id: "p1" });
+    render(
+      <ProjectSwitcherPalette
+        {...baseProps}
+        onSelect={onSelect}
+        results={[row]}
+        onSelectNewWindow={onSelectNewWindow}
+      />
+    );
+
+    fireEvent.click(document.getElementById("project-option-p1")!, { ctrlKey: true });
+    expect(onSelectNewWindow).toHaveBeenCalledWith(row);
+    expect(onSelect).not.toHaveBeenCalled();
+  });
+
+  it("takes ⌘ rather than Ctrl as the new-window click on macOS", () => {
+    platformState.mac = true;
+    try {
+      const onSelect = vi.fn();
+      const onSelectNewWindow = vi.fn();
+      const row = makeProject({ id: "p1" });
+      render(
+        <ProjectSwitcherPalette
+          {...baseProps}
+          onSelect={onSelect}
+          results={[row]}
+          onSelectNewWindow={onSelectNewWindow}
+        />
+      );
+      const option = document.getElementById("project-option-p1")!;
+
+      fireEvent.click(option, { metaKey: true });
+      expect(onSelectNewWindow).toHaveBeenCalledWith(row);
+      expect(onSelect).not.toHaveBeenCalled();
+
+      onSelectNewWindow.mockClear();
+      fireEvent.click(option, { ctrlKey: true });
+      expect(onSelect).toHaveBeenCalledWith(row, "pointer");
+      expect(onSelectNewWindow).not.toHaveBeenCalled();
+    } finally {
+      platformState.mac = null;
+    }
+  });
+
+  it("keeps a plain click a plain pick", () => {
+    const onSelect = vi.fn();
+    const onSelectNewWindow = vi.fn();
+    const row = makeProject({ id: "p1" });
+    render(
+      <ProjectSwitcherPalette
+        {...baseProps}
+        onSelect={onSelect}
+        results={[row]}
+        onSelectNewWindow={onSelectNewWindow}
+      />
+    );
+
+    fireEvent.click(document.getElementById("project-option-p1")!);
+    expect(onSelect).toHaveBeenCalledWith(row, "pointer");
+    expect(onSelectNewWindow).not.toHaveBeenCalled();
+  });
+
+  it("ignores the other platform's modifier", () => {
+    const onSelect = vi.fn();
+    const onSelectNewWindow = vi.fn();
+    const row = makeProject({ id: "p1" });
+    render(
+      <ProjectSwitcherPalette
+        {...baseProps}
+        onSelect={onSelect}
+        results={[row]}
+        onSelectNewWindow={onSelectNewWindow}
+      />
+    );
+
+    fireEvent.click(document.getElementById("project-option-p1")!, { metaKey: true });
+    expect(onSelect).toHaveBeenCalledWith(row, "pointer");
+    expect(onSelectNewWindow).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["the current project", { isActive: true }],
+    ["a missing project", { isMissing: true }],
+  ])("falls back to a plain pick for %s, as ⌘↵ does", (_label, overrides) => {
+    const onSelect = vi.fn();
+    const onSelectNewWindow = vi.fn();
+    const row = makeProject({ id: "p1", ...overrides });
+    render(
+      <ProjectSwitcherPalette
+        {...baseProps}
+        onSelect={onSelect}
+        results={[row]}
+        onSelectNewWindow={onSelectNewWindow}
+      />
+    );
+
+    fireEvent.click(document.getElementById("project-option-p1")!, { ctrlKey: true });
+    expect(onSelect).toHaveBeenCalledWith(row, "pointer");
+    expect(onSelectNewWindow).not.toHaveBeenCalled();
+  });
+
+  it("falls back to a plain pick where no new window can open", () => {
+    const onSelect = vi.fn();
+    const row = makeProject({ id: "p1" });
+    render(<ProjectSwitcherPalette {...baseProps} onSelect={onSelect} results={[row]} />);
+
+    fireEvent.click(document.getElementById("project-option-p1")!, { ctrlKey: true });
+    expect(onSelect).toHaveBeenCalledWith(row, "pointer");
   });
 });
 

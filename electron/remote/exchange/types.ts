@@ -1,6 +1,9 @@
 /**
- * A2A 1.0's task-state vocabulary, applied to the exchange rather than the
- * work: `completed` means a reply arrived, not that anything in it is right.
+ * The records of v0.44's assistant exchanges, retired with the inbox
+ * (#13496): what a host still holds for the Shells that sent them, in the
+ * shape those Shells read. A2A 1.0's task-state vocabulary, applied to the
+ * exchange rather than the work: `completed` means a reply arrived, not that
+ * anything in it is right.
  */
 export const EXCHANGE_STATES = [
   "submitted",
@@ -21,9 +24,6 @@ export const TERMINAL_EXCHANGE_STATES: ReadonlySet<ExchangeState> = new Set([
   "rejected",
 ]);
 
-/** Delivery observations, each recorded the first time it is seen. */
-export type DeliveryFact = "accepted" | "wake-typed" | "inbox-fetched" | "reply-received";
-
 /** The authenticated Shell that sent the exchange. Never read from the payload. */
 export interface SenderActor {
   kind: "sender";
@@ -37,26 +37,10 @@ export interface ExchangeReceiver {
   enrollmentGeneration: string;
 }
 
-/** The receiving lane, as enrolled. A later enrollment generation is a different participant. */
-export interface ReceiverActor extends ExchangeReceiver {
-  kind: "receiver";
-}
-
-export type ExchangeActor = SenderActor | ReceiverActor;
-
 /** Idempotency scope: one sender's own message ids never collide with another's. */
 export interface ExchangeKey {
   senderId: string;
   messageId: string;
-}
-
-export interface CreateExchangeInput {
-  messageId: string;
-  contextId: string;
-  referenceTaskIds: readonly string[];
-  receiver: ExchangeReceiver;
-  /** Hashed and measured, never stored. */
-  body: string;
 }
 
 export interface ExchangeDelivery {
@@ -91,13 +75,6 @@ export interface ExchangeRecord {
   /** Set once the record has expired; it is kept only to refuse late resends. */
   tombstonedAt: number | null;
   revision: number;
-}
-
-export type CreateDisposition = "created" | "existing" | "tombstoned";
-
-export interface CreateExchangeResult {
-  disposition: CreateDisposition;
-  record: ExchangeRecord;
 }
 
 export interface ExchangeChanges {

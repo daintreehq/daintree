@@ -44,6 +44,8 @@ import type {
   PostToPanelParams,
   ReloadPanelParams,
   SetPanelBadgeParams,
+  SetToolbarButtonBadgeParams,
+  SetContextParams,
   SetPanelMenuItemsParams,
   RegisterActionParams,
   RegisterFileDecorationProviderParams,
@@ -56,6 +58,7 @@ import type {
   StorageSetParams,
   StorageDeleteParams,
   ShowToastParams,
+  NotifyParams,
   ShowQuickPickParams,
   ShowInputBoxParams,
   ShowConfirmParams,
@@ -824,6 +827,10 @@ export class PluginDevWorkerMainBridge {
         });
         return undefined;
       }
+      case "notify": {
+        const p = params as NotifyParams;
+        return this.host.notify(p.options as Parameters<PluginHostApi["notify"]>[0]);
+      }
       case "dispatch": {
         const p = params as DispatchParams;
         return this.host.dispatch(
@@ -835,6 +842,11 @@ export class PluginDevWorkerMainBridge {
       case "reloadPanel": {
         const p = params as ReloadPanelParams;
         return this.host.reloadPanel(p.panelId);
+      }
+      case "setContext": {
+        const p = params as SetContextParams;
+        await this.host.setContext(p.key, p.value);
+        return undefined;
       }
       case "restartWorker":
         // The host defers the restart past this result's post, so the worker
@@ -1245,6 +1257,11 @@ export class PluginDevWorkerMainBridge {
       case "setPanelBadge": {
         const p = params as SetPanelBadgeParams;
         await this.host.setPanelBadge(p.panelId, p.badge);
+        return;
+      }
+      case "setToolbarButtonBadge": {
+        const p = params as SetToolbarButtonBadgeParams;
+        await this.host.setToolbarButtonBadge(p.buttonId, p.badge);
         return;
       }
       case "setPanelMenuItems": {

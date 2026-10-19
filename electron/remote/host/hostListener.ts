@@ -39,7 +39,10 @@ import type { HostSocketLocation } from "./hostSocketPath.js";
 import { initRemoteHostsHost } from "./initHost.js";
 import { installHostMetricsHost } from "../metrics/hostMetricsHost.js";
 import { installCanopyHost } from "../canopy/hostInstall.js";
-import { installAssistantExchangeHost } from "../assistant/hostExchanges.js";
+import { installAssistantSenderHost } from "../assistant/hostSenders.js";
+import { installHostMcpRelay } from "../assistant/hostMcpRelay.js";
+import { getHelpAssistantSettings } from "../../ipc/handlers/helpAssistant.js";
+import { projectStore } from "../../services/ProjectStore.js";
 import { observeAgents } from "../metrics/hostSources.js";
 import type { RemoteViewEndpoint } from "./RemoteViewEndpoint.js";
 import { createRemoteScopeGate } from "../../ipc/channelRemoteScope.js";
@@ -154,9 +157,6 @@ async function buildHostListener(
     launchCommand: hostLaunchCommand(),
     observeWorkingAgents: async () => (await observeAgents())?.working ?? null,
   });
-  // Runs after the server closes: closing ends every session without an expiry
-  // event, and no Shell can resume one, so their lanes are released here.
-  teardowns.push(() => getRemoteService("assistantMessagingPolicy")?.releaseRemoteShells());
   teardowns.push(() => server.close());
   teardowns.push(registerRemoteService("hostServer", server));
 
@@ -172,8 +172,62 @@ async function buildHostListener(
   teardowns.push(await installHostMetricsHost(server));
   // Canopy for Shells reading this host from a view bound elsewhere.
   teardowns.push(installCanopyHost(server));
-  // Assistant exchanges a Shell sends to this host's enrolled lanes, view or not.
-  teardowns.push(await installAssistantExchangeHost(server));
+  // The sender each Shell proves, for the tools this host runs for its
+  // assistants, and what v0.44 Shells still read of their retired exchanges (#13496).
+  teardowns.push(await installAssistantSenderHost(server));
+  // This host's own tools, run for a Shell's assistant through this host's MCP gates (#13493).
+  const relay = installHostMcpRelay(server, {
+    senders: () => getRemoteService("assistantSenderSessions"),
+    acceptsRemoteControl: () => getHelpAssistantSettings().acceptRemoteControl,
+    hasProject: async (projectId) => projectStore.getProjectById(projectId) !== null,
+    openSession: async ({
+      tier,
+      projectId,
+      linkSessionId,
+      senderId,
+      helpSessionId,
+      shellName,
+      deliverNotices,
+      requestApproval,
+    }) => {
+      const [{ mcpServerService }, { helpSessionService }] = await Promise.all([
+        import("../../services/McpServerService.js"),
+        import("../../services/HelpSessionService.js"),
+      ]);
+      // A host that hasn't run an assistant of its own still lists and starts
+      // its assistants for another machine's (#13496).
+      await helpSessionService.ensureAssistantControl();
+      return mcpServerService.openRelaySession({
+        tier,
+        workspaceId: projectId,
+        caller: {
+          linkSessionId,
+          senderId,
+          helpSessionId,
+          shellName,
+          deliverNotices,
+          requestApproval,
+        },
+      });
+    },
+    retirePrincipal: (senderId, helpSessionId) => {
+      void import("../../services/McpServerService.js")
+        .then(({ mcpServerService }) =>
+          mcpServerService.retireRelayPrincipal(senderId, helpSessionId)
+        )
+        .catch((error: unknown) => {
+          console.warn("[RemoteHosts] Couldn't retire a relay principal:", error);
+        });
+    },
+    dropLinkNotices: (linkSessionId) => {
+      void import("../../services/McpServerService.js")
+        .then(({ mcpServerService }) => mcpServerService.dropRelayLinkNotices(linkSessionId))
+        .catch((error: unknown) => {
+          console.warn("[RemoteHosts] Couldn't drop an ended link's notices:", error);
+        });
+    },
+  });
+  teardowns.push(() => relay.dispose());
 
   // Previews, downloads and host pickers for remote views; revoked with the listener.
   const files = installHostFileService();
@@ -211,7 +265,9 @@ async function buildHostListener(
   teardowns.push(
     setMcpDriveTargetResolver((projectId) => {
       const target = lease.getDriveTarget(projectId);
-      if (target.kind === "live") return { state: "live", endpoint: target.endpoint };
+      if (target.kind === "live") {
+        return { state: "live", endpoint: target.endpoint, holderName: target.holder.clientName };
+      }
       return target.kind === "vacant"
         ? { state: "vacant" }
         : { state: "unavailable", reason: "reserved" };
@@ -291,9 +347,6 @@ async function buildHostListener(
         detachTerminalBridge(endpointId);
         detachWorktreePortBridge(endpointId);
       }
-      // That Shell can't come back as this session: lanes it enrolled end, unless
-      // its sender was proven, when they wait for its next session (bindSender).
-      getRemoteService("assistantMessagingPolicy")?.releaseLinkSession(sessionId);
       notify();
     })
   );

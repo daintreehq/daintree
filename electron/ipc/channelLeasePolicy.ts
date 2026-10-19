@@ -58,6 +58,7 @@ export const CHANNEL_LEASE_POLICY = {
   "agent-settings:set": "free",
   "agent-settings:set-global": "free",
   "agent-settings:set-global-inline": "free",
+  "agent-settings:set-resume-on-restart": "free",
   "agent-settings:stamp-version": "free",
   "app-agent:confirmation-response": "free",
   "app-agent:dispatch-action-response": "free",
@@ -76,10 +77,6 @@ export const CHANNEL_LEASE_POLICY = {
   "artifact:apply-patch": "driver",
   "artifact:detected": "free",
   "artifact:save-to-file": "driver",
-  "assistant-messaging:changed": "free",
-  "assistant-messaging:get-state": "free",
-  "assistant-messaging:set-lane-enrolled": "free",
-  "assistant-messaging:set-paused": "free",
   // Canopy's inbox state (reads, archive, scope) is its own; what types to,
   // resizes or restores a run's terminal is checked per run in the handler.
   "canopy:answer": "handler",
@@ -394,7 +391,9 @@ export const CHANNEL_LEASE_POLICY = {
   // Grants or revokes a plugin's agent tools for the caller's project, or as
   // the default for every project, so an observing window cannot do it.
   "plugin-agent-mcp:set-plugin-access": "driver",
+  "plugin-capability:get-os-notifications": "free",
   "plugin-capability:get-project-targeting": "free",
+  "plugin-capability:set-os-notifications": "free",
   "plugin-capability:set-project-targeting": "free",
   "plugin-mcp:call-tool": "free",
   "plugin-mcp:get-config": "free",

@@ -77,7 +77,8 @@ function optionalTimeout(args: Record<string, unknown>): number | undefined {
 
 export async function handleProjectRunCheck(
   rawArgs: unknown,
-  signal?: AbortSignal
+  signal?: AbortSignal,
+  authorize?: () => void
 ): Promise<ProjectCheckRunResult> {
   const args = asArgsObject(rawArgs);
 
@@ -88,7 +89,7 @@ export async function handleProjectRunCheck(
       cwd: optionalString(args, "cwd"),
       timeoutMs: optionalTimeout(args),
     },
-    { signal }
+    authorize ? { signal, authorize } : { signal }
   );
 
   const cappedOutput = truncateText(result.output, PROJECT_CHECK_MAX_OUTPUT_BYTES);

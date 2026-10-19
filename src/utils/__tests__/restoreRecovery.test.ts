@@ -20,6 +20,13 @@ describe("sanitizeRestoreRecovery (#12434)", () => {
     });
   });
 
+  it("keeps a marker the resume setting wrote, with its conversation (#13509)", () => {
+    expect(sanitizeRestoreRecovery({ reason: "resume-deferred", sessionId: "sess-c" })).toEqual({
+      reason: "resume-deferred",
+      sessionId: "sess-c",
+    });
+  });
+
   it("drops anything that isn't a marker at all", () => {
     for (const value of [undefined, null, "held", 1, true, ["reason"]]) {
       expect(sanitizeRestoreRecovery(value)).toBeUndefined();

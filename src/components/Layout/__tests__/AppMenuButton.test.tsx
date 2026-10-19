@@ -10,6 +10,7 @@ vi.mock("@/utils/rendererGlobalErrorHandlers", () => ({
 }));
 
 import { reportRendererGlobalError } from "@/utils/rendererGlobalErrorHandlers";
+import { OVERLAY_SIDE_OFFSET } from "@/components/ui/overlayMotion";
 import { AppMenuButton } from "../AppMenuButton";
 
 const mockedReport = vi.mocked(reportRendererGlobalError);
@@ -125,13 +126,13 @@ describe("AppMenuButton", () => {
     expect(button!.hasAttribute("data-toolbar-item")).toBe(true);
   });
 
-  it("anchors the popup to the button's bottom-left corner", () => {
+  it("anchors the popup under the button's bottom-left corner, one overlay gap below it", () => {
     const { button } = renderInToolbar();
     stubRect(button!, { left: 84, bottom: 44 });
 
     fireEvent.click(button!);
 
-    expect(showApplication).toHaveBeenCalledWith({ x: 84, y: 44 });
+    expect(showApplication).toHaveBeenCalledWith({ x: 84, y: 44 + OVERLAY_SIDE_OFFSET });
   });
 
   it("cancels a primary press so the browser never moves focus onto the button", () => {

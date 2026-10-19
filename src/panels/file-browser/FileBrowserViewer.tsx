@@ -467,12 +467,17 @@ export function FileBrowserViewer({
   const effectiveDiffWrapLines = diffWrapLines ?? (filePath !== null && isProseFilePath(filePath));
   const modeToggleRef = useRef<HTMLDivElement>(null);
   const previousMode = useRef(renderMode);
+  // Set by the HTML fallback's View source button, which unmounts with the
+  // view it leaves; ringed only when it was keyboard-activated.
+  const sourceFocusRef = useRef<{ focusVisible: boolean } | null>(null);
   useEffect(() => {
+    const sourceFocus = sourceFocusRef.current;
+    sourceFocusRef.current = null;
     // Leaving Edit unmounts the editor, and Diff can vanish under the reader
     // when the file goes clean — either way focus can fall to the body, so
     // hand it back to the toggle.
     if (
-      (previousMode.current === "edit" || previousMode.current === "diff") &&
+      (previousMode.current === "edit" || previousMode.current === "diff" || sourceFocus) &&
       renderMode !== previousMode.current &&
       document.activeElement === document.body
     ) {
@@ -483,7 +488,7 @@ export function FileBrowserViewer({
         toggle?.querySelector<HTMLElement>('[role="radio"][aria-checked="true"]') ??
         toggle?.querySelector<HTMLElement>("button") ??
         bodyRef.current?.parentElement?.querySelector<HTMLElement>("[data-toolbar-path]")
-      )?.focus({ preventScroll: true });
+      )?.focus({ preventScroll: true, focusVisible: sourceFocus?.focusVisible });
     }
     previousMode.current = renderMode;
   }, [renderMode]);
@@ -1421,7 +1426,7 @@ export function FileBrowserViewer({
         // content the preview read already returned — switching modes never
         // costs a second read. A null previewUrl still renders HtmlViewer in
         // rendered mode rather than silently showing source: its empty state
-        // says why and points at the Source segment, which now exists here.
+        // says why and offers Source itself.
         if (renderMode === "source") {
           return (
             <CodeViewer
@@ -1433,7 +1438,15 @@ export function FileBrowserViewer({
           );
         }
         return (
-          <HtmlViewer previewUrl={state.previewUrl} reloadNonce={reloadNonce} title={fileName} />
+          <HtmlViewer
+            previewUrl={state.previewUrl}
+            reloadNonce={reloadNonce}
+            title={fileName}
+            onShowSource={(event) => {
+              sourceFocusRef.current = { focusVisible: event.detail === 0 };
+              setExplicitRenderMode("source");
+            }}
+          />
         );
 
       case "text":

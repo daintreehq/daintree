@@ -152,22 +152,14 @@ async function getMcpServerService(): Promise<McpServerSingleton> {
   return cachedMcpServerService;
 }
 
-// Wiring of the pane-token resolvers: the assistant pane's WebContents pin
-// (#10647), an agent pane's launch-workspace binding (#12486), and the principal
-// a pane bearer's resource ownership is held under, with the revocation that
-// drops it (#12487). Help-session resolvers are wired in globalServicesInit /
+// Wiring of the pane-token resolvers: an agent pane's launch-workspace binding
+// (#12486), and the principal a pane bearer's resource ownership is held under,
+// with the revocation that drops it (#12487). Help-session resolvers are wired in globalServicesInit /
 // HelpSessionService; pane tokens have no such owner, so every spawn that
 // registers one wires them first — before the CLI's first handshake.
 // Re-setting is a handful of reference writes, and doing it per registration
-// keeps the wiring ahead of each one rather than dependent on which kind of
-// pane happened to launch first.
+// keeps the wiring ahead of each one.
 function wirePaneTokenResolvers(mcpServerService: McpServerSingleton): void {
-  mcpServerService.setAssistantPaneWebContentsResolver((token) =>
-    mcpPaneConfigService.getWebContentsIdForToken(token)
-  );
-  mcpServerService.setAssistantPaneActionContextResolver((token) =>
-    mcpPaneConfigService.getActionContextForToken(token)
-  );
   mcpServerService.setPaneWorkspaceBindingResolver((token) =>
     mcpPaneConfigService.getPaneWorkspaceBindingForToken(token)
   );
@@ -343,12 +335,6 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
     ctx: IpcContext,
     validatedOptions: ValidatedTerminalSpawnOptions
   ): Promise<string> => {
-    // Capture the sender window id synchronously before any `await` — the
-    // window can be destroyed mid-spawn, after which `ctx.senderWindow` would
-    // be a stale reference. Only the daintree-assistant env-only path consumes
-    // this (as `DAINTREE_WINDOW_ID`); `null` means no window was in scope.
-    const windowId = ctx.senderWindow?.id ?? null;
-
     const bypassedRateLimit = validatedOptions.restore === true && consumeRestoreQuota();
     if (!bypassedRateLimit) {
       // A bounded recipe consumes one admission slot, not one slot per panel.
@@ -561,12 +547,6 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
     // gated on the session's snapshotted `bypassPermissions` (independent
     // of `tier`), so a `core` session can still skip permission prompts and a
     // `full` session can still respect them.
-    //
-    // The Daintree Assistant is the exception to the session-dir cwd: it is
-    // env-only (MCP via DAINTREE_MCP_* env vars, reads no cwd config) so the
-    // renderer points it at the project root instead — see the assistant cwd
-    // branches in HelpSessionController/`helpActions`. Nothing here depends on
-    // the assistant's cwd; we just honor whatever cwd the renderer supplied.
     const helpToken = spawnEnv?.DAINTREE_MCP_TOKEN ?? "";
     const helpTier = helpToken ? helpSessionService.validateToken(helpToken) : false;
     const isAssistantAgent =
@@ -708,23 +688,6 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
     if (isHelpLaunch && launchAgentId) {
       const dangerous = DEFAULT_DANGEROUS_ARGS[launchAgentId];
       const bypassPermissions = helpSessionService.getBypassPermissions(helpToken);
-      // The Daintree Assistant is not Claude Code — it has no
-      // `--dangerously-skip-permissions` flag (no DEFAULT_DANGEROUS_ARGS entry).
-      // For it, the user's "bypass permissions" preference maps to skipping the
-      // assistant's OWN per-action confirm sheet, which the CLI reads from this
-      // env var at startup. The capability tier is then the main safeguard, but
-      // not the only one: `danger: "confirm"` actions still open the host
-      // confirmation dialog unless a native automation grant covers them
-      // (#12119).
-      if (launchAgentId === "daintree-assistant" && bypassPermissions) {
-        spawnEnv = { ...(spawnEnv ?? {}), DAINTREE_ASSISTANT_AUTO_APPROVE: "1" };
-      }
-      // The Daintree Assistant emits a full-fidelity per-session debug trace
-      // when this env var is set (off by default). Gated on the user's
-      // provision-time preference; only the assistant's own CLI reads it.
-      if (launchAgentId === "daintree-assistant" && helpSessionService.getDebugLogging(helpToken)) {
-        spawnEnv = { ...(spawnEnv ?? {}), DAINTREE_ASSISTANT_DEBUG_LOG: "1" };
-      }
       // A `waitForReply` send holds its call until the agent answers, and
       // Claude Code's own MCP call timeout would cut it off first.
       if (launchAgentId === "claude" && spawnEnv?.MCP_TOOL_TIMEOUT === undefined) {
@@ -932,10 +895,9 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
               if (prepared.token !== null) {
                 // Bind the bearer to the workspace this pane was launched in, so
                 // its MCP session acts there for its whole life instead of on
-                // whichever window has focus when a call lands (#12486). Same
-                // timing rule as the assistant's pin below: registered before
-                // this IPC resolves, because the CLI's first handshake can race
-                // ahead of anything later. Revoked with the token on PTY exit.
+                // whichever window has focus when a call lands (#12486).
+                // Registered before this IPC resolves, because the CLI's first
+                // handshake can race ahead of anything later. Revoked with the token on PTY exit.
                 wirePaneTokenResolvers(mcpServerService);
                 mcpPaneConfigService.registerPaneWorkspaceBinding(prepared.token, {
                   workspaceId: resolvedProject.id,
@@ -972,77 +934,6 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
         }
         console.error(
           "[TerminalSpawn] Failed to prepare Daintree MCP config; continuing without MCP injection:",
-          mcpErr
-        );
-      }
-    } else if (
-      launchAgentId === "daintree-assistant" &&
-      safeCommand.length > 0 &&
-      resolvedProject
-    ) {
-      // Daintree Assistant reads its MCP connection details straight from PTY
-      // env (`mcpInjection: "env-only"`) — no .mcp.json, no CLI flags. Mint a
-      // per-pane bearer via the same `preparePaneConfig` path Claude uses so
-      // the token is registered with the MCP server's bearer validator (an
-      // unregistered raw UUID would be rejected on connect) and revoked on PTY
-      // exit; we discard the written config file and use only the token.
-      // The assistant speaks Streamable HTTP at /mcp (not Claude's /sse).
-      // DAINTREE_PROJECT_ID is injected downstream by `injectDaintreeMetadata`
-      // in the pty-host, so it is intentionally not set here.
-      try {
-        const projSettings = await projectStore.getProjectSettings(resolvedProject.id);
-        const tier = resolveDaintreeMcpTier(projSettings);
-        if (tier !== "off") {
-          const mcpServerService = await getMcpServerService();
-          const ready = mcpServerService.isRunning || (await mcpServerService.ensureReady());
-          if (!ready) {
-            console.warn(
-              "[TerminalSpawn] Daintree MCP requested for assistant launch, but the MCP server is not ready; continuing without MCP injection"
-            );
-          }
-          const port = mcpServerService.currentPort;
-          if (ready && port) {
-            const { token } = await mcpPaneConfigService.preparePaneConfig({
-              paneId: id,
-              port,
-              tier,
-            });
-            // Promote the assistant's pane token to a pinned bearer so its MCP
-            // session binds to the launching renderer's WebContents and replays
-            // the launch-time ActionContext, instead of falling back to
-            // active-window dispatch (#10647). The resolvers must be wired and
-            // the bearer registered before this IPC resolves — the PTY starts
-            // immediately and the CLI's first /mcp POST can race ahead. When the
-            // sender WebContents is unknown we skip registration and degrade to
-            // the generic pane-token behaviour rather than pinning to nothing.
-            //
-            // Cleanup is free: the pinning metadata lives on the token record,
-            // so the existing `revokePaneConfig(id)` on PTY exit (events.ts) and
-            // spawn failure tears it down. A destroyed renderer is handled by
-            // the fail-closed `getPinnedWebContents` → `SessionBindingError`
-            // primitive, which is exactly the structured tool error we want —
-            // revoking the token here would degrade that into a 401 instead.
-            // Wired whatever the sender: an unpinned assistant bearer is still a
-            // pane token whose ownership should follow it (#12487).
-            wirePaneTokenResolvers(mcpServerService);
-            if (Number.isInteger(ctx.webContentsId) && ctx.webContentsId > 0) {
-              mcpPaneConfigService.registerAssistantPaneBearer(
-                token,
-                ctx.webContentsId,
-                validatedOptions.actionContext
-              );
-            }
-            spawnEnv = {
-              ...(spawnEnv ?? {}),
-              DAINTREE_MCP_URL: `http://127.0.0.1:${port}/mcp`,
-              DAINTREE_MCP_TOKEN: token,
-              ...(windowId !== null ? { DAINTREE_WINDOW_ID: String(windowId) } : {}),
-            };
-          }
-        }
-      } catch (mcpErr) {
-        console.error(
-          "[TerminalSpawn] Failed to prepare Daintree Assistant MCP env; continuing without MCP injection:",
           mcpErr
         );
       }

@@ -185,10 +185,10 @@ export type TerminalRuntimeStatus = PersistableFlowStatus | "background" | "exit
  *
  * `assistant` and `mcp` both arrive over the MCP bridge and are split apart by
  * the session's authenticated origin, not by anything the caller sends (#11808).
- * `assistant` is one of Daintree's own surfaces — the assistant panel or an
- * assistant pane — starting work the user did not ask for directly; `mcp` is an
- * arbitrary external client. Collapsing them left a terminal the user never
- * started looking identical to one they did.
+ * `assistant` is Daintree's own surface — the assistant panel — starting work
+ * the user did not ask for directly; `mcp` is an arbitrary external client.
+ * Collapsing them left a terminal the user never started looking identical to
+ * one they did.
  */
 export const TERMINAL_SPAWN_SOURCES = [
   "quickrun",
@@ -409,8 +409,9 @@ export type SessionLostReason =
 
 /**
  * Why restore held a pane instead of launching it (#12434). The first two are
- * the resume election's losers ({@link SessionLostReason}); the rest only occur
- * for an agent that can resume across directories.
+ * the resume election's losers ({@link SessionLostReason}); the next two only
+ * occur for an agent that can resume across directories, and the last for any
+ * agent, by the user's own setting.
  */
 export type RestoreRecoveryReason =
   | "sibling-owns-session-id"
@@ -418,7 +419,9 @@ export type RestoreRecoveryReason =
   /** Filed under another worktree than it began in, with no conversation it could name. */
   | "session-unresolved"
   /** Filed under a worktree this project no longer has. */
-  | "destination-unavailable";
+  | "destination-unavailable"
+  /** The "Resume agents after restart" setting held it (#13509), not anything restore saw. */
+  | "resume-deferred";
 
 /**
  * A terminal's Scratchpad (#12835): throwaway Markdown notes that belong to the

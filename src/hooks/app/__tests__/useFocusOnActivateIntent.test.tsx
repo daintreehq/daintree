@@ -125,6 +125,42 @@ describe("useFocusOnActivateIntent", () => {
     expect(dispatchMock).not.toHaveBeenCalled();
   });
 
+  it("runs a plugin banner's first action with its args once hydrated (#13505)", async () => {
+    dispatchMock.mockResolvedValue({ ok: true, data: undefined });
+    const { rerender } = renderHook(({ loaded }) => useFocusOnActivateIntent(loaded), {
+      initialProps: { loaded: false },
+    });
+
+    act(() => {
+      lastCallback?.({
+        intent: "run-plugin-action",
+        pluginId: "acme",
+        actionId: "acme.openRun",
+        args: { runId: "r1" },
+      } as never);
+    });
+    expect(dispatchMock).not.toHaveBeenCalled();
+
+    rerender({ loaded: true });
+    expect(dispatchMock).toHaveBeenCalledWith("acme.openRun", { runId: "r1" }, { source: "user" });
+  });
+
+  it("refuses a plugin banner action outside that plugin's namespace", () => {
+    renderHook(({ loaded }) => useFocusOnActivateIntent(loaded), {
+      initialProps: { loaded: true },
+    });
+
+    act(() => {
+      lastCallback?.({
+        intent: "run-plugin-action",
+        pluginId: "acme",
+        actionId: "terminal.closeAll",
+      } as never);
+    });
+
+    expect(dispatchMock).not.toHaveBeenCalled();
+  });
+
   it("unsubscribes on unmount", () => {
     const { unmount } = renderHook(({ loaded }) => useFocusOnActivateIntent(loaded), {
       initialProps: { loaded: false },

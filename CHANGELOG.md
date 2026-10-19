@@ -1,5 +1,73 @@
 # Changelog
 
+## [0.45.0] - 2026-10-19
+
+Assistant control across machines is rebuilt around `host.call`: the Daintree Assistant calls a remote host's own MCP tools directly and reaches other assistants through the ordinary terminal tools, replacing 0.44.0's inbox, and a host with no Daintree window open now runs the whole loop. Agent panes can be held on restart or resumed on focus, plugins gain actionable notifications, toolbar badges, context keys and dialog panels, and a design pass tidies file previews, the composer and the toolbar.
+
+### Breaking Changes
+
+- 0.44.0's assistant messaging tools are retired: `host.sendMessage`, `host.listAssistants`, `host.listTasks`, `host.getTask`, `host.cancelTask`, `host.readQuota`, `host.startAssistant`, `assistant.getInbox`, `assistant.reply` and `assistant.sendMessage` give way to `host.call` and the terminal tools, and exchanges still open from 0.44.0 end visibly as `messaging_retired` (#13514)
+- The per-host messaging and start-assistant switches fold into one "Let the assistant work on this host" switch, with "Let other machines' assistants work here" on the host; an explicit opt-out on an ssh host carries over (#13499, #13514)
+
+### Features
+
+**Remote Hosts and the Daintree Assistant**
+
+- `host.call` lets the assistant run a remote host's own MCP tools; each call passes the host's tier, grants and audit, writes run only in the asking Shell's driving view (otherwise `DRIVEN_ELSEWHERE`), and a relayed delete is confirmed in the Shell's own window (#13499, #13510)
+- A host with no Daintree window open runs the orchestration loop itself: launching agents, terminals, worktrees and deletes work headless, and a later view picks up the same panels (#13498, #13510)
+- A host can start its own assistant with no view, and a window that opens there adopts it and hands it back without ending it (#13512)
+- Assistants reach other assistants with `terminal.sendCommand`, `getStatus`, `waitUntilIdle`, `notifyWhenIdle` and `readLastMessageOwned`, plus new `assistant.list`, `assistant.start` and `agent.readQuota`; assistant terminals stay invisible to every other caller (#13514)
+- `terminal.notify` and `terminal.notifyWhenIdle` work through `host.call`: the host's idle notice is typed into the pane that asked, best effort, held across a dropped link for 10 minutes (#13508)
+- `project.runCommand` (Daintree's own assistant, Full tool set) runs one non-interactive command in the project or a worktree and returns its exit code and output tail (#13498)
+
+**Terminals and agents**
+
+- Settings › General › Startup › "Resume agents after restart": Always, On focus (a held pane resumes when you look at it) or Never; held panes stay held across a second restart (#13518)
+
+**Projects**
+
+- `Cmd+Click` (`Ctrl+Click` on Windows and Linux) on a project in the project switcher opens it in a new window, like `Cmd+Enter` (#13525)
+
+**Plugins**
+
+- `host.notify` raises notifications with up to two action buttons that run the plugin's own actions; OS banners need the `notification:os` capability and the user's "Allow OS notifications" switch in the Plugin Manager (#13519)
+- `host.setToolbarButtonBadge` badges a plugin's own toolbar buttons, on the tray, the overflow menu and promoted buttons (#13517)
+- `host.setContext` publishes namespaced context keys that keybinding and context-menu `when` clauses can read (#13520)
+- `panel.openPluginPanel` can present a plugin panel as a sized dialog, with `toggle` to close it again (#13515)
+- `host.dispatch("terminal.close", …)` with project targeting closes a terminal in a project with no live view (#13516)
+
+### Bug Fixes
+
+**Terminals and agents**
+
+- The composer's attach, stash and mic buttons sit beside the last line of a wrapped draft when there's room, instead of taking a row of their own (#13466)
+- Plugin input sent to the active agent, CopyTree injection and `action.repeatLast` can no longer reach the Daintree Assistant's terminal (#13497)
+- The selected-path menu says Reveal in Finder, Show in Explorer or Show in folder (Copy host path over SSH) instead of "Open folder" (#13472)
+- The paused-output tooltip names the pause instead of "Buffer overflow", and the CPU sparkline's over-one-core stretch draws at the solid line's weight (#13485, #13491)
+
+**Files and previews**
+
+- Inline video previews fit small panes, the narrow audio player keeps its play button reachable, and the PDF loading frame fills its pane (#13474, #13488, #13486)
+- The HTML preview fallback has a View source button, and the Markdown loading placeholder sits where the document lands (#13482, #13471)
+- The diff change stepper's arrows hold still as the counter gains a digit (#13470)
+
+**Worktrees**
+
+- The Create worktree dialog's branch switch reads New | Existing, and its footer gives a long new branch name the larger share (#13478, #13489)
+- Commit avatar initials are readable at 16px and in light themes (#13487)
+
+**Toolbar, menus and panels**
+
+- The forge status stripe is its own bar with no flash after each refresh, and quota resets pick out the countdown and name the day (#13481, #13490)
+- The application menu on Windows and Linux opens the same 4px below its button as the other toolbar menus (#13479)
+- Fleet chip worktree dots no longer draw a mismatched ring (#13476)
+- The Canopy inbox no longer scrolls sideways when a row's meta line is long (#13524)
+- A restored Portal tab's skeleton looks like a chat, the clear-logs confirm leads with what gets cleared, the memory-pause hint works for keyboard focus, and SvelteKit Tools property rows keep their controls whole (#13475, #13477, #13484, #13483)
+
+### Other Changes
+
+- The retired Daintree Assistant CLI is removed; a saved assistant preference that still names it is cleared (#13513)
+
 ## [0.44.0] - 2026-10-17
 
 Remote Hosts ships: a window can drive another Mac or Linux machine's Daintree over ssh, or a Linux Host in a WSL 2 distro on Windows, and the Daintree Assistant can hand work to the assistants running there. Canopy arrives as an opt-in inbox of every agent ranked by what it needs from you, agent hand-backs are tracked as read or unread instead of counting as waiting, and Linux gains arm64 builds and a self-updating `.deb`.

@@ -142,6 +142,18 @@ export const FIXTURES: Record<string, Fixture> = {
     provider: true,
     stats: "pending",
   },
+  error: {
+    what: "a failure with no fresh baseline — persistent at once, the error stripe and warning slot",
+    provider: true,
+    stats: {
+      issueCount: 7,
+      prCount: 6,
+      commitCount: 23_645,
+      stale: true,
+      lastUpdated: undefined,
+      error: "GitHub API unreachable (ECONNRESET)",
+    },
+  },
 };
 
 export const FIXTURE_NAMES = Object.keys(FIXTURES);

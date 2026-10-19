@@ -43,7 +43,6 @@ An argument shown as `name?` is optional. Argument names come from each action's
 
 | Action | Title | Danger | Arguments |
 | --- | --- | --- | --- |
-| `action.repeatLast` | Repeat last action | safe | — |
 | `app.developerMode.set` | Set developer mode | safe | `enabled`, `autoOpenDiagnostics?`, `focusEventsTab?` |
 | `app.exportConfig` | Export configuration… | safe | — |
 | `app.importConfig` | Import configuration… | confirm | — |
@@ -263,7 +262,7 @@ An argument shown as `name?` is optional. Argument names come from each action's
 | `panel.focus` | Focus panel | safe | `panelId` |
 | `panel.focusIndex` | Focus panel by index | safe | `index` |
 | `panel.list` | List panels | safe | `location?`, `worktreeId?` |
-| `panel.openPluginPanel` | Open plugin panel | safe | `kind`, `initialArgs?`, `reuseExisting?`, `worktreeId?` |
+| `panel.openPluginPanel` | Open plugin panel | safe | `kind`, `initialArgs?`, `presentation?`, `reuseExisting?`, `size?`, `toggle?`, `worktreeId?` |
 | `panel.palette` | Panel palette | safe | — |
 
 ## plugins

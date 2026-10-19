@@ -1,5 +1,5 @@
 import { installPreviewShims } from "@/components/HelpPanel/__preview__/previewShims";
-import { LAUNCHABLE_AGENT_IDS } from "@shared/config/agentIds";
+import { BUILT_IN_AGENT_IDS } from "@shared/config/agentIds";
 import type { Project } from "@shared/types";
 import type { ToolbarButtonConfig } from "@shared/config/toolbarButtonRegistry";
 import type { PluginToolbarButtonId } from "@shared/types/toolbar";
@@ -56,7 +56,7 @@ const noopSubscribe = () => () => {};
 installPreviewShims({
   onboarding: withFallback({
     get: async () => ({
-      seenAgentIds: LAUNCHABLE_AGENT_IDS.slice(),
+      seenAgentIds: BUILT_IN_AGENT_IDS.slice(),
       availabilityFirstSeen: {},
       welcomeCardDismissed: true,
       setupBannerDismissed: true,

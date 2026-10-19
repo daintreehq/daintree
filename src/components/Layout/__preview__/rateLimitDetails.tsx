@@ -164,6 +164,26 @@ export const FIXTURES: Record<string, Fixture> = {
     details: toBuckets([bucket("core", 5_000, 0, -4 * second)]),
     resetInMs: -4 * second,
   },
+  "large-quota": {
+    kind: "panel",
+    what: "six- and seven-digit quotas beside day-long resets — the widest each row gets",
+    providerName: "GitHub",
+    limitKind: "primary",
+    details: toBuckets([
+      bucket("core", 15_000, 0, 59 * minute + 59 * second),
+      bucket("graphql", 1_000_000, 999_999, 23 * hour + 59 * minute + 30 * second),
+      bucket("search", 250_000, 3, 26 * hour + 5 * minute + 30 * second),
+    ]),
+    resetInMs: 59 * minute + 59 * second,
+  },
+  "long-countdown": {
+    kind: "panel",
+    what: "a spent seven-digit quota a day from resetting — the footer at its longest",
+    providerName: "GitLab",
+    limitKind: "primary",
+    details: toBuckets([bucket("rest", 1_000_000, 0, 23 * hour + 59 * minute + 30 * second)]),
+    resetInMs: 23 * hour + 59 * minute + 30 * second,
+  },
   "countdown-ladder": {
     kind: "panel",
     what: "the countdown label either side of each boundary (h, m, s)",

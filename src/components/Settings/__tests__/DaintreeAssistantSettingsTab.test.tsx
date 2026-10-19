@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { act, render, screen, fireEvent, waitFor, within } from "@testing-library/react";
+import { render, screen, fireEvent, waitFor, within } from "@testing-library/react";
 import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
 
 vi.stubGlobal(
@@ -12,6 +12,12 @@ vi.stubGlobal(
 );
 
 vi.mock("@/lib/notify", () => ({ notify: vi.fn() }));
+
+const remoteHostSupport = vi.hoisted(() => ({ supported: true }));
+vi.mock("@/lib/remoteHosts", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/remoteHosts")>()),
+  isRemoteHostSupported: () => remoteHostSupport.supported,
+}));
 vi.mock("@/utils/logger", () => ({
   logError: vi.fn(),
   logDebug: vi.fn(),
@@ -162,8 +168,6 @@ vi.mock("@/config/agents", () => ({
       };
     if (id === "codex")
       return { name: "Codex", supports: { permissionBypass: true, tier: "stable" } };
-    if (id === "daintree-assistant")
-      return { name: "Daintree Assistant", supports: { permissionBypass: false, tier: "stable" } };
     // Assistant-wired but with no bypass mechanism of any kind — the shape a
     // user-defined agent takes.
     if (id === "byoa")
@@ -419,40 +423,6 @@ describe("DaintreeAssistantSettingsTab", () => {
     });
   });
 
-  it("hides the debug logging toggle unless the Daintree Assistant agent is selected", async () => {
-    helpPanelState.preferredAgentId = "claude";
-    const { container } = render(
-      <SettingsValidationProvider>
-        <DaintreeAssistantSettingsTab />
-      </SettingsValidationProvider>
-    );
-    await waitForContent(container, "Search documentation");
-
-    expect(screen.queryByLabelText("Enable Daintree Assistant debug logging")).toBeNull();
-  });
-
-  it("shows the debug logging toggle for the Daintree Assistant agent and persists debugLogging=true", async () => {
-    helpPanelState.preferredAgentId = "daintree-assistant";
-    const { container } = render(
-      <SettingsValidationProvider>
-        <DaintreeAssistantSettingsTab />
-      </SettingsValidationProvider>
-    );
-    await waitForContent(container, "Search documentation");
-
-    const toggle = screen.getByLabelText("Enable Daintree Assistant debug logging");
-    await waitFor(() => {
-      expect(toggle.hasAttribute("disabled")).toBe(false);
-    });
-    fireEvent.click(toggle);
-
-    await waitFor(() => {
-      expect(window.electron.helpAssistant.setSettings).toHaveBeenCalledWith({
-        debugLogging: true,
-      });
-    });
-  });
-
   it("turning on bypass permissions reveals the inline warning copy", async () => {
     helpPanelState.preferredAgentId = "claude";
     const { container } = render(
@@ -591,11 +561,11 @@ describe("DaintreeAssistantSettingsTab", () => {
     });
   });
 
-  // One stored boolean, three different mechanisms behind it. Labelling them
+  // One stored boolean, a different mechanism per agent. Labelling them
   // all as Claude's flag reads as a no-op while silently enabling
   // auto-approval, so the copy has to follow the selected agent (#11879).
   it("labels the bypass toggle with the selected agent's own mechanism", async () => {
-    mockGetAssistantSupportedAgentIds.mockReturnValue(["claude", "codex", "daintree-assistant"]);
+    mockGetAssistantSupportedAgentIds.mockReturnValue(["claude", "codex"]);
     helpPanelState.preferredAgentId = "codex";
 
     const { container } = render(
@@ -621,54 +591,29 @@ describe("DaintreeAssistantSettingsTab", () => {
     expect(container.textContent).toContain("without its own approval prompts");
   });
 
-  it("describes the Daintree Assistant's env-var bypass, not a CLI flag", async () => {
-    mockGetAssistantSupportedAgentIds.mockReturnValue(["claude", "codex", "daintree-assistant"]);
-    helpPanelState.preferredAgentId = "daintree-assistant";
-
-    const { container } = render(
-      <SettingsValidationProvider>
-        <DaintreeAssistantSettingsTab />
-      </SettingsValidationProvider>
-    );
-    await waitForContent(container, "Auto-approve assistant actions");
-
-    expect(container.textContent).toContain("own per-action confirmation sheet");
-    // The assistant has no dangerous-args entry, so no flag may be claimed.
-    expect(container.textContent).not.toContain("--dangerously");
-
-    const toggle = screen.getByRole("switch", { name: "Auto-approve assistant actions" });
-    fireEvent.click(toggle);
-
-    await waitForContent(container, "acts without asking");
-    // Same #12119 scoping: the sheet it skips is its own, not Daintree's host
-    // confirmation, which still fires for confirmation-required actions.
-    expect(container.textContent).toContain("it skips its own confirmation sheet for everything");
-    expect(window.electron.helpAssistant.setSettings).toHaveBeenCalledWith({
-      bypassPermissions: true,
-    });
-  });
-
-  // #11907: with the confirmation sheet off, the tool set carries most of the
+  // #11907: with the permission gate off, the tool set carries most of the
   // remaining boundary, so the warning has to name it — and keep naming the
   // right one when the selector moves (a missing memo dependency would freeze
   // the old set in the copy while the selector reads the new one). #12119
   // stopped it claiming to be the *entire* boundary, so the assertions below
   // pin both halves: the set-named limit and the confirmation exception.
-  it("names the configured tool set in the auto-approve warning and follows the selector", async () => {
-    mockGetAssistantSupportedAgentIds.mockReturnValue(["claude", "codex", "daintree-assistant"]);
-    helpPanelState.preferredAgentId = "daintree-assistant";
+  it("names the configured tool set in the bypass warning and follows the selector", async () => {
+    mockGetAssistantSupportedAgentIds.mockReturnValue(["claude", "codex"]);
+    helpPanelState.preferredAgentId = "claude";
 
     const { container } = render(
       <SettingsValidationProvider>
         <DaintreeAssistantSettingsTab />
       </SettingsValidationProvider>
     );
-    await waitForContent(container, "Auto-approve assistant actions");
+    await waitForContent(container, "Bypass Claude permission prompts");
 
     // The switch stays disabled until the initial settings and MCP-status loads
     // both settle, and the heading above renders before that — clicking while
     // it's still disabled would drop the event and time out downstream.
-    const toggle = screen.getByRole("switch", { name: "Auto-approve assistant actions" });
+    const toggle = screen.getByRole("switch", {
+      name: "Bypass Claude permission prompts during help sessions",
+    });
     await waitFor(() => {
       expect(toggle.hasAttribute("disabled")).toBe(false);
     });
@@ -1578,9 +1523,9 @@ describe("DaintreeAssistantSettingsTab", () => {
     });
   });
 
-  it("marks debug logging and bypass permissions modified away from their defaults, and resets them", async () => {
-    mockGetAssistantSupportedAgentIds.mockReturnValue(["claude", "daintree-assistant"]);
-    helpPanelState.preferredAgentId = "daintree-assistant";
+  it("marks bypass permissions modified away from its default, and resets it", async () => {
+    mockGetAssistantSupportedAgentIds.mockReturnValue(["claude"]);
+    helpPanelState.preferredAgentId = "claude";
     installApi({
       getSettings: vi.fn().mockResolvedValue({
         docSearch: true,
@@ -1591,7 +1536,6 @@ describe("DaintreeAssistantSettingsTab", () => {
         modelIds: {},
         customArgs: "",
         idleHibernateMinutes: 5,
-        debugLogging: true,
       }),
     });
 
@@ -1600,23 +1544,20 @@ describe("DaintreeAssistantSettingsTab", () => {
         <DaintreeAssistantSettingsTab />
       </SettingsValidationProvider>
     );
-    await waitForContent(container, "Debug logging");
+    await waitForContent(container, "Bypass Claude permission prompts");
 
-    fireEvent.click(await screen.findByLabelText("Reset Debug logging to default"));
-    await waitFor(() => {
-      expect(window.electron.helpAssistant.setSettings).toHaveBeenCalledWith({
-        debugLogging: false,
-      });
-    });
-    fireEvent.click(screen.getByLabelText("Reset Auto-approve assistant actions to default"));
+    fireEvent.click(
+      await screen.findByLabelText("Reset Bypass Claude permission prompts to default")
+    );
     await waitFor(() => {
       expect(window.electron.helpAssistant.setSettings).toHaveBeenCalledWith({
         bypassPermissions: false,
       });
     });
     await waitFor(() => {
-      expect(screen.queryByLabelText("Reset Debug logging to default")).toBeNull();
-      expect(screen.queryByLabelText("Reset Auto-approve assistant actions to default")).toBeNull();
+      expect(
+        screen.queryByLabelText("Reset Bypass Claude permission prompts to default")
+      ).toBeNull();
     });
   });
 
@@ -2128,9 +2069,9 @@ describe("SessionLiveStatusCard (live help session)", () => {
   });
 });
 
-describe("DaintreeAssistantSettingsTab accepting messages from other machines (#13441)", () => {
-  const LABEL = "Accept messages from other machines by default";
-  const savedSettings = (acceptRemoteMessages: boolean) => ({
+describe("DaintreeAssistantSettingsTab letting other machines' assistants work here (#13493, #13496)", () => {
+  const LABEL = "Let other machines' assistants work here";
+  const savedSettings = (acceptRemoteControl: boolean) => ({
     docSearch: true,
     daintreeControl: true,
     runbookSearch: true,
@@ -2140,10 +2081,9 @@ describe("DaintreeAssistantSettingsTab accepting messages from other machines (#
     modelIds: {},
     customArgs: "",
     idleHibernateMinutes: 5 as const,
-    debugLogging: false,
     loadGlobalHooksAndServers: false,
     daintreeConfirmations: "inherit" as const,
-    acceptRemoteMessages,
+    acceptRemoteControl,
   });
 
   beforeEach(() => {
@@ -2154,7 +2094,12 @@ describe("DaintreeAssistantSettingsTab accepting messages from other machines (#
     helpPanelState.setPreferredAgent = vi.fn();
     helpPanelState.clearDroppedPreferredAgent = vi.fn();
     mockGetAssistantSupportedAgentIds.mockReturnValue(["claude"]);
+    remoteHostSupport.supported = true;
     installApi({ getSettings: vi.fn().mockResolvedValue(savedSettings(true)) });
+  });
+
+  afterEach(() => {
+    remoteHostSupport.supported = true;
   });
 
   const waitForContent = (container: HTMLElement, text: string) =>
@@ -2165,36 +2110,6 @@ describe("DaintreeAssistantSettingsTab accepting messages from other machines (#
       { timeout: 5000 }
     );
 
-  function installMessaging(available: boolean) {
-    const listeners = new Set<() => void>();
-    let revision = 0;
-    let current = available;
-    const messaging = {
-      getState: vi.fn(async () => ({
-        available: current,
-        paused: false,
-        canPause: true,
-        lane: { enrolled: false, enrolledElsewhere: false, ended: null },
-        revision,
-      })),
-      setLaneEnrolled: vi.fn(),
-      setPaused: vi.fn(),
-      onChanged: vi.fn((listener: () => void) => {
-        listeners.add(listener);
-        return () => listeners.delete(listener);
-      }),
-    };
-    Object.assign(window.electron, { assistantMessaging: messaging });
-    return {
-      messaging,
-      push(next: boolean) {
-        current = next;
-        revision += 1;
-        for (const listener of [...listeners]) listener();
-      },
-    };
-  }
-
   const renderTab = () =>
     render(
       <SettingsValidationProvider>
@@ -2202,50 +2117,39 @@ describe("DaintreeAssistantSettingsTab accepting messages from other machines (#
       </SettingsValidationProvider>
     );
 
-  it("stays hidden where messaging between machines isn't offered", async () => {
-    const { messaging } = installMessaging(false);
+  it("stays hidden on a machine that can't be a host", async () => {
+    remoteHostSupport.supported = false;
     const { container } = renderTab();
     await waitForContent(container, "Search documentation");
-    await waitFor(() => expect(messaging.getState).toHaveBeenCalledWith(undefined));
-    // Absent after the answer landed, not merely before it did.
-    await act(async () => {
-      await messaging.getState.mock.results[0]?.value;
-    });
+    await waitFor(() => expect(window.electron.helpAssistant.getSettings).toHaveBeenCalled());
     expect(screen.queryByRole("switch", { name: LABEL })).toBeNull();
+    expect(screen.queryByRole("group", { name: "Other machines" })).toBeNull();
   });
 
-  it("shows the saved default as on, and persists turning it off", async () => {
-    installMessaging(true);
+  it("is the one switch for other machines, shows the saved default as on, and persists turning it off", async () => {
     const { container } = renderTab();
     await waitForContent(container, "Search documentation");
-    const toggle = await screen.findByRole("switch", { name: LABEL });
-    await waitFor(() => expect(window.electron.helpAssistant.getSettings).toHaveBeenCalled());
-    expect(toggle.getAttribute("aria-checked")).toBe("true");
+    const group = await screen.findByRole("group", { name: "Other machines" });
+    const switches = within(group).getAllByRole("switch");
+    expect(switches).toHaveLength(1);
+    const toggle = switches[0]!;
+    expect(screen.getByRole("switch", { name: LABEL })).toBe(toggle);
+    await waitFor(() => expect(toggle.getAttribute("aria-checked")).toBe("true"));
     fireEvent.click(toggle);
     await waitFor(() => {
       expect(window.electron.helpAssistant.setSettings).toHaveBeenCalledWith({
-        acceptRemoteMessages: false,
+        acceptRemoteControl: false,
       });
     });
   });
 
   it("shows a saved off as off", async () => {
     installApi({ getSettings: vi.fn().mockResolvedValue(savedSettings(false)) });
-    installMessaging(true);
     renderTab();
     await waitFor(() => {
       expect(screen.getByRole("switch", { name: LABEL }).getAttribute("aria-checked")).toBe(
         "false"
       );
     });
-  });
-
-  it("appears once the first host makes messaging available", async () => {
-    const { push } = installMessaging(false);
-    const { container } = renderTab();
-    await waitForContent(container, "Search documentation");
-    expect(screen.queryByRole("switch", { name: LABEL })).toBeNull();
-    push(true);
-    expect(await screen.findByRole("switch", { name: LABEL })).toBeTruthy();
   });
 });

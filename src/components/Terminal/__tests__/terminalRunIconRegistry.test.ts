@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { resolveTerminalRunIcon, TERMINAL_RUN_ICON_MAP } from "../terminalRunIconRegistry";
 import { PROCESS_TOOL_REGISTRY } from "@shared/config/processToolRegistry";
+import { setPluginAgentRegistry } from "@shared/config/pluginAgentRegistry";
 import { getAgentConfig } from "@/config/agents";
 
 describe("resolveTerminalRunIcon", () => {
@@ -21,14 +22,25 @@ describe("resolveTerminalRunIcon", () => {
   });
 
   it("resolves an agent by registry id even when its icon id differs", () => {
-    // `daintree-assistant` registers under that id but keys its brand mark
-    // `daintreeassistant`, so the raw lookup misses. `PanelKindIcon` accepted
-    // the registry id via `getAgentConfig`, and panel headers must agree.
-    const config = getAgentConfig("daintree-assistant");
-    expect(config?.iconId).not.toBe("daintree-assistant");
-    expect(resolveTerminalRunIcon("daintree-assistant")).toBe(
-      TERMINAL_RUN_ICON_MAP[config!.iconId]
-    );
+    // A plugin agent can name any brand mark, so its registry id misses the raw
+    // lookup. `PanelKindIcon` accepted the registry id via `getAgentConfig`,
+    // and panel headers must agree.
+    setPluginAgentRegistry({
+      "acme-agent": {
+        id: "acme-agent",
+        name: "Acme Agent",
+        command: "acme",
+        color: "#3366ff",
+        iconId: "codex",
+        supportsContextInjection: false,
+      },
+    });
+    try {
+      expect(Object.hasOwn(TERMINAL_RUN_ICON_MAP, "acme-agent")).toBe(false);
+      expect(resolveTerminalRunIcon("acme-agent")).toBe(TERMINAL_RUN_ICON_MAP.codex);
+    } finally {
+      setPluginAgentRegistry({});
+    }
   });
 
   it("resolves a renderable component for every process tool in the registry", () => {
@@ -44,7 +56,7 @@ describe("resolveTerminalRunIcon", () => {
   });
 
   it("resolves every built-in agent by both its registry id and its icon id", () => {
-    for (const agentId of ["claude", "codex", "gemini", "daintree-assistant"]) {
+    for (const agentId of ["claude", "codex", "gemini"]) {
       const config = getAgentConfig(agentId);
       expect(config, `"${agentId}" is not a registered agent`).toBeDefined();
       expect(resolveTerminalRunIcon(agentId), `"${agentId}" by registry id`).toBe(

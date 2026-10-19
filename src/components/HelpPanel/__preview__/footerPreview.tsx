@@ -82,7 +82,7 @@ const FIXTURES = {
   rest: { ...BASE },
   "rest-assistant": {
     ...BASE,
-    agentId: "daintree-assistant",
+    agentId: "codex",
     model: "Sonnet",
     pinned: DISTINCT_NAME,
   },
@@ -104,7 +104,7 @@ const FIXTURES = {
   diverged: { ...BASE, diverged: true },
   busy: {
     ...BASE,
-    agentId: "daintree-assistant",
+    agentId: "codex",
     model: "Opus",
     activity: call({
       status: "in-flight",
@@ -127,10 +127,10 @@ const FIXTURES = {
     delivery: { status: "blocked", reason: "approval" },
   },
   "watch-ready": { ...BASE, watching: 0, ready: 1 },
-  "watch-many": { ...BASE, agentId: "daintree-assistant", model: "Opus", watching: 12 },
+  "watch-many": { ...BASE, agentId: "codex", model: "Opus", watching: 12 },
   "busy-confirm": {
     ...BASE,
-    agentId: "daintree-assistant",
+    agentId: "codex",
     model: "Opus",
     activity: call({
       status: "in-flight",
@@ -220,7 +220,6 @@ function App() {
           pinnedContext={fixture.pinned}
           isPinnedWorktreeDiverged={fixture.diverged}
           onReturnToPinnedWorktree={() => {}}
-          agentId={fixture.agentId}
           agentConfig={agentConfig}
           launchedModelLabel={fixture.model}
         />

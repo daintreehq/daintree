@@ -49,6 +49,44 @@ describe("when clause parser", () => {
       const ast = parse("true.foo");
       expect(ast).toEqual({ kind: "identifier", path: ["true", "foo"] });
     });
+
+    it("parses hyphenated and digit-leading segments of a plugin manifest name", () => {
+      expect(parse("acme.linear-planner.needsYou")).toEqual({
+        kind: "identifier",
+        path: ["acme", "linear-planner", "needsYou"],
+      });
+      expect(parse("3m.2fa-tools.key")).toEqual({
+        kind: "identifier",
+        path: ["3m", "2fa-tools", "key"],
+      });
+    });
+
+    it("parses a publisher named or prefixed `in` as an identifier", () => {
+      expect(parse("in.tools.key")).toEqual({ kind: "identifier", path: ["in", "tools", "key"] });
+      expect(parse("in-house.tools.key")).toEqual({
+        kind: "identifier",
+        path: ["in-house", "tools", "key"],
+      });
+      expect(parse("inbox")).toEqual({ kind: "identifier", path: ["inbox"] });
+    });
+
+    it("parses a hyphenated path inside a compound expression", () => {
+      expect(parse("!acme.linear-planner.busy && acme.linear-planner.mode != 'idle'")).toEqual({
+        kind: "binary",
+        operator: "&&",
+        left: {
+          kind: "unary",
+          operator: "!",
+          operand: { kind: "identifier", path: ["acme", "linear-planner", "busy"] },
+        },
+        right: {
+          kind: "binary",
+          operator: "!=",
+          left: { kind: "identifier", path: ["acme", "linear-planner", "mode"] },
+          right: { kind: "literal", value: "idle" },
+        },
+      });
+    });
   });
 
   describe("equality", () => {
@@ -236,6 +274,16 @@ describe("when clause parser", () => {
 
     it("rejects in operator", () => {
       expect(() => parse("panel.kind in 'terminal'")).toThrow(ParseError);
+      expect(() => parse("panel.kind in")).toThrow(ParseError);
+    });
+
+    it("rejects bare numbers rather than reading them as identifiers", () => {
+      expect(() => parse("count == 1")).toThrow(/numeric literals/);
+      expect(() => parse("1.5")).toThrow(ParseError);
+      expect(() => parse("missing == 1e3")).toThrow(/numeric literals/);
+      expect(() => parse("missing == 1e-3")).toThrow(/numeric literals/);
+      expect(() => parse("missing == 0x10")).toThrow(/numeric literals/);
+      expect(() => parse("3m.tools")).toThrow(/numeric literals/);
     });
 
     it("rejects numeric comparison <", () => {

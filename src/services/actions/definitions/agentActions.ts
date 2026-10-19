@@ -31,17 +31,14 @@ import {
 } from "@/config/agents";
 import { agentCapabilitiesClient, agentSettingsClient, cliAvailabilityClient } from "@/clients";
 import { userAgentRegistryClient } from "@/clients/userAgentRegistryClient";
-import {
-  isAssistantOnlyAgentId,
-  isBuiltInAgentId,
-  LAUNCHABLE_AGENT_IDS,
-} from "@shared/config/agentIds";
+import { BUILT_IN_AGENT_IDS } from "@shared/config/agentIds";
 import { isAgentToolbarVisible } from "@shared/utils/agentPinned";
+import { buildAvailableAgentListing, listedAgentIds } from "@shared/utils/agentListing";
 import { unknownAgentIdMessage } from "@/utils/agentLaunchValidation";
 import { NOTIFY_ARG_DESCRIPTION, NotifyReplyLinesSchema } from "@shared/types/terminalNotify";
 import { AgentLaunchManyArgsSchema } from "@shared/types/mcpBatch";
 import { AwaitedReplySchema, WaitForReplySchema, WaitSecondsSchema } from "@shared/types/replyWait";
-import { isAgentInstalled, isAgentLaunchable } from "@shared/utils/agentAvailability";
+import { isAgentInstalled } from "@shared/utils/agentAvailability";
 import {
   hasSystemPromptOverride,
   resolveSystemPromptArgs,
@@ -335,14 +332,6 @@ export function registerAgentActions(actions: ActionRegistry, callbacks: ActionC
       clearTimeout(deadlineTimer);
     }
   };
-
-  /** The agents a listing reports, in the launcher's order. */
-  const listedAgentIds = (registry: Readonly<Record<string, unknown>>): string[] => [
-    ...LAUNCHABLE_AGENT_IDS.filter((id) => Object.hasOwn(registry, id)),
-    ...Object.keys(registry)
-      .filter((id) => !isBuiltInAgentId(id) && !isAssistantOnlyAgentId(id))
-      .sort(),
-  ];
 
   /** Launch ids the launcher always turns into a panel, never an agent. */
   const HANDBACK_PANEL_LAUNCH_IDS: ReadonlySet<string> = new Set(["browser", "dev-preview"]);
@@ -722,11 +711,6 @@ export function registerAgentActions(actions: ActionRegistry, callbacks: ActionC
     .nullable();
 
   for (const [id, config] of Object.entries(AGENT_REGISTRY)) {
-    // Assistant-only agents (e.g. daintree-assistant) have no direct-launch
-    // action — they're never spawned as a standalone agent, only used by the
-    // Daintree Assistant overlay. Skipping registration keeps them out of the
-    // action palette and the MCP action manifest.
-    if (isAssistantOnlyAgentId(id)) continue;
     const actionId = `agent.${id}` as ActionId;
     actions.set(actionId, () => ({
       id: actionId,
@@ -1470,7 +1454,7 @@ export function registerAgentActions(actions: ActionRegistry, callbacks: ActionC
     run: async () => {
       const { settings, availability } = await readAgentDiscoveryState();
       return {
-        agents: LAUNCHABLE_AGENT_IDS.map((id) => {
+        agents: BUILT_IN_AGENT_IDS.map((id) => {
           const entry = settings.agents?.[id];
           const state = availability[id];
           // Omit `pinned` unless it's an explicit boolean (tri-state): an
@@ -1520,42 +1504,13 @@ export function registerAgentActions(actions: ActionRegistry, callbacks: ActionC
     run: async () => {
       const [{ settings, availability, availabilityLive }, registry, userRegistry] =
         await readAvailableAgentSources();
-      const registryIds = listedAgentIds(registry);
-      return {
-        complete: true as const,
-        // Only certify completeness once a live probe has run: a hydrating cache
-        // synthesizes "missing" for unprobed agents, which would otherwise pass
-        // the own-key check and mislabel a never-checked agent as uninstalled.
-        availabilityComplete:
-          availabilityLive && registryIds.every((id) => Object.hasOwn(availability, id)),
-        agents: registryIds.map((id) => {
-          // `rawState` mirrors what the toolbar renders (used for toolbarVisible);
-          // `probedState` is the authoritative probe result we're willing to
-          // report as availability/installed/launchable — undefined until live.
-          const rawState = availability[id];
-          const probedState = availabilityLive ? rawState : undefined;
-          const builtIn = isBuiltInAgentId(id);
-          const entry = builtIn ? settings.agents?.[id] : undefined;
-          return {
-            id,
-            displayName: registry[id]?.name ?? id,
-            source: builtIn
-              ? ("built-in" as const)
-              : Object.prototype.hasOwnProperty.call(userRegistry, id)
-                ? ("user" as const)
-                : ("plugin" as const),
-            ...(probedState
-              ? {
-                  availability: probedState,
-                  installed: isAgentInstalled(probedState),
-                  launchable: isAgentLaunchable(probedState),
-                }
-              : {}),
-            ...(builtIn && typeof entry?.pinned === "boolean" ? { pinned: entry.pinned } : {}),
-            ...(builtIn ? { toolbarVisible: isAgentToolbarVisible(entry, rawState) } : {}),
-          };
-        }),
-      };
+      return buildAvailableAgentListing({
+        registry,
+        userRegistry,
+        settings,
+        availability,
+        availabilityLive,
+      });
     },
   }));
 

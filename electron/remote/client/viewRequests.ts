@@ -1,6 +1,10 @@
 import { z } from "zod";
 import type { ActionDispatchResult, ActionManifestEntry } from "../../../shared/types/actions.js";
-import type { McpBearerIdentity } from "../../../shared/types/ipc/mcpServer.js";
+import type {
+  McpBearerIdentity,
+  McpConfirmationDecision,
+} from "../../../shared/types/ipc/mcpServer.js";
+import type { RelayApprovalQuestion } from "../assistant/HostCallRuntime.js";
 import {
   MCP_DISPATCH_ACTION_METHOD,
   MCP_GET_MANIFEST_METHOD,
@@ -35,7 +39,7 @@ const McpDispatchPayloadSchema = z.object({
   args: z.unknown(),
   confirmed: z.boolean(),
   context: z.record(z.string(), z.unknown()).optional(),
-  sessionOrigin: z.enum(["help", "assistant-pane", "external"]),
+  sessionOrigin: z.enum(["help", "external"]),
   offerSessionApproval: z.boolean().optional(),
   approvalOnly: z.boolean().optional(),
   // Which approval dialog an `approvalOnly` request raises. It picks the
@@ -43,6 +47,10 @@ const McpDispatchPayloadSchema = z.object({
   // one is shown, so it is taken as-is.
   approvalReason: z.enum(["above-tier", "protected-close"]).optional(),
   authorization: z.string().max(64).optional(),
+  // This Shell's own assistant asked, through `host.call` (#13493). Display
+  // only, and believed only while this Shell has a call out to that host: it
+  // names who asked in the dialog and grants nothing.
+  relayed: z.boolean().optional(),
 });
 
 type McpDispatchPayload = z.infer<typeof McpDispatchPayloadSchema>;
@@ -92,8 +100,13 @@ function hostName(hostId: string): string {
  * "Requested by" row. No token suffix: no bearer of this machine's is involved,
  * and a slice of the host's id beside its name only repeated it.
  */
-function describeHost(hostId: string): McpBearerIdentity {
-  return { userAgent: `Agent on host "${hostName(hostId)}"`, token4LastChars: "" };
+function describeHost(hostId: string, relayed: boolean): McpBearerIdentity {
+  return {
+    userAgent: relayed
+      ? `Your assistant, through host "${hostName(hostId)}"`
+      : `Agent on host "${hostName(hostId)}"`,
+    token4LastChars: "",
+  };
 }
 
 function isHostDispatchableEntry(entry: unknown): boolean {
@@ -186,7 +199,11 @@ async function dispatchAction(
             ...(request.approvalReason ? { approvalReason: request.approvalReason } : {}),
           }
         : undefined,
-    describeHost(hostId)
+    describeHost(
+      hostId,
+      request.relayed === true &&
+        getRemoteService("hostCallRelayClient")?.hasCallInFlight(hostId) === true
+    )
   );
   // Only what the host reads back: this machine's view identity stays here,
   // and no approval is ever handed out for the host to reuse.
@@ -196,6 +213,41 @@ async function dispatchAction(
       ? { confirmationDecision: envelope.confirmationDecision }
       : {}),
   };
+}
+
+/**
+ * Put a host's question about one of this Shell's relayed calls to the person
+ * in this window (#13501): the dialog the action raises here, naming the host
+ * it came through and showing that host's own preview of the call, which
+ * dispatches nothing. The decision, or null when this window couldn't ask.
+ */
+export async function askHostApprovalInWindow(
+  webContentsId: number,
+  ask: RelayApprovalQuestion
+): Promise<McpConfirmationDecision | null> {
+  const service = await loadMcpServerService();
+  try {
+    const envelope = await service.dispatchActionForHost(
+      webContentsId,
+      ask.actionId,
+      ask.args,
+      false,
+      undefined,
+      "external",
+      {
+        approvalOnly: true,
+        hostPreview: { lines: ask.lines, ...(ask.subject ? { subject: ask.subject } : {}) },
+      },
+      describeHost(ask.hostId, true)
+    );
+    return envelope.confirmationDecision ?? null;
+  } catch (error) {
+    console.warn(
+      "[RemoteHosts] Couldn't ask about a host's call in its assistant's window:",
+      error
+    );
+    return null;
+  }
 }
 
 async function requestManifest(webContentsId: number): Promise<ActionManifestEntry[]> {

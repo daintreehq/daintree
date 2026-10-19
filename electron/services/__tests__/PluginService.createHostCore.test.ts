@@ -301,6 +301,8 @@ type CreateHostShape = (pluginId: string) => {
     broadcastToRenderer: (channel: string, payload: unknown) => void;
     postToPanel: (channel: string, payload: unknown, panelId?: string | null) => Promise<void>;
     setPanelBadge: (panelId: string, badge: unknown) => Promise<void>;
+    setToolbarButtonBadge: (buttonId: string, badge: unknown) => Promise<void>;
+    setContext: (key: unknown, value: unknown) => Promise<void>;
     setPanelMenuItems: (panelId: string, items: unknown) => Promise<void>;
     reloadPanel: (panelId: unknown) => Promise<string>;
     restartWorker: () => Promise<string>;
@@ -582,6 +584,150 @@ describe("createHost (plugin activation API)", () => {
 
     // Liveness no-op stays a silent resolve even with an otherwise-invalid badge.
     await expect(host.setPanelBadge("", { kind: "bogus" })).resolves.toBeUndefined();
+  });
+
+  describe("host.setToolbarButtonBadge (#13503)", () => {
+    async function toolbarHost(id: string) {
+      await writePlugin(id, {
+        name: `acme.${id}`,
+        version: "1.0.0",
+        contributes: {
+          toolbarButtons: [
+            { id: "needs", label: "Needs you", iconId: "puzzle", actionId: `acme.${id}.open` },
+          ],
+        },
+      });
+      const service = new PluginService(tmpDir);
+      await service.initialize();
+      const { host } = (service as unknown as { createHost: CreateHostShape }).createHost(
+        `acme.${id}`
+      );
+      return { service, host };
+    }
+    const toolbarBadgeEvents = () =>
+      broadcastToRendererMock.mock.calls
+        .filter((call) => call[0] === CHANNELS.EVENTS_PUSH)
+        .map((call) => call[1] as { name: string; payload: unknown })
+        .filter((event) => event.name === "plugin:toolbar-badges-changed");
+
+    it("publishes the plugin's whole map on set and clear, and an empty one on unload", async () => {
+      const { service, host } = await toolbarHost("tb-publish");
+      broadcastToRendererMock.mockClear();
+
+      await host.setToolbarButtonBadge("needs", { kind: "label", text: "12", color: "warning" });
+      await host.setToolbarButtonBadge("needs", null);
+      // Clearing a badge that is already gone sends nothing.
+      await host.setToolbarButtonBadge("needs", null);
+      await host.setToolbarButtonBadge("needs", { kind: "dot" });
+      service.unloadPlugin("acme.tb-publish");
+
+      expect(toolbarBadgeEvents().map((event) => event.payload)).toEqual([
+        {
+          pluginId: "acme.tb-publish",
+          badges: { needs: { kind: "label", text: "12", color: "warning" } },
+        },
+        { pluginId: "acme.tb-publish", badges: {} },
+        { pluginId: "acme.tb-publish", badges: { needs: { kind: "dot" } } },
+        { pluginId: "acme.tb-publish", badges: {} },
+      ]);
+    });
+
+    it("rejects an empty or foreign buttonId and an invalid badge, publishing nothing", async () => {
+      const { host } = await toolbarHost("tb-reject");
+      broadcastToRendererMock.mockClear();
+
+      await expect(host.setToolbarButtonBadge("", { kind: "dot" })).rejects.toThrow(
+        /setToolbarButtonBadge: buttonId/
+      );
+      await expect(host.setToolbarButtonBadge("other", { kind: "dot" })).rejects.toThrow(
+        /"other" is not one of this plugin's contributes\.toolbarButtons/
+      );
+      await expect(
+        host.setToolbarButtonBadge("needs", { kind: "label", text: "1234567" })
+      ).rejects.toThrow(/setToolbarButtonBadge: invalid badge/);
+      // A rejection, never a synchronous throw.
+      expect(() => host.setToolbarButtonBadge("", null).catch(() => {})).not.toThrow();
+      expect(toolbarBadgeEvents()).toEqual([]);
+    });
+
+    it("silently no-ops once the plugin is unloaded", async () => {
+      const { service, host } = await toolbarHost("tb-unloaded");
+      service.unloadPlugin("acme.tb-unloaded");
+      await expect(host.setToolbarButtonBadge("", { kind: "bogus" })).resolves.toBeUndefined();
+    });
+  });
+
+  describe("host.setContext (#13506)", () => {
+    async function contextHost(id: string) {
+      await writePlugin(id, { name: `acme.${id}`, version: "1.0.0" });
+      const service = new PluginService(tmpDir);
+      await service.initialize();
+      const created = (service as unknown as { createHost: CreateHostShape }).createHost(
+        `acme.${id}`
+      );
+      return { service, ...created };
+    }
+    const contextKeyEvents = () =>
+      broadcastToRendererMock.mock.calls
+        .filter((call) => call[0] === CHANNELS.EVENTS_PUSH)
+        .map((call) => call[1] as { name: string; payload: unknown })
+        .filter((event) => event.name === "plugin:context-keys-changed");
+
+    it("publishes the whole map on each change, skips no-op writes and sends null on unload", async () => {
+      const { service, host } = await contextHost("ctx-publish");
+      broadcastToRendererMock.mockClear();
+
+      await host.setContext("needsYou", true);
+      await host.setContext("needsYou", true);
+      await host.setContext("view", "triage");
+      await host.setContext("needsYou", null);
+      await host.setContext("needsYou", null);
+      await host.setContext("view", null);
+      service.unloadPlugin("acme.ctx-publish");
+
+      expect(contextKeyEvents().map((event) => event.payload)).toEqual([
+        { pluginId: "acme.ctx-publish", keys: { needsYou: true } },
+        { pluginId: "acme.ctx-publish", keys: { needsYou: true, view: "triage" } },
+        { pluginId: "acme.ctx-publish", keys: { view: "triage" } },
+        // Emptied, not gone: the plugin still owns its namespace.
+        { pluginId: "acme.ctx-publish", keys: {} },
+        { pluginId: "acme.ctx-publish", keys: null },
+      ]);
+    });
+
+    it("keeps working after the activation window is revoked", async () => {
+      const { host, revoke } = await contextHost("ctx-revoked");
+      revoke();
+      broadcastToRendererMock.mockClear();
+      await host.setContext("ready", true);
+      expect(contextKeyEvents()).toHaveLength(1);
+    });
+
+    it("rejects a bad key, value or a key past the cap, publishing nothing for it", async () => {
+      const { host } = await contextHost("ctx-reject");
+      broadcastToRendererMock.mockClear();
+
+      await expect(host.setContext("a.b", true)).rejects.toThrow(/setContext: key "a\.b"/);
+      await expect(host.setContext("k", 7)).rejects.toThrow(/setContext: value/);
+      await expect(host.setContext("k", "x".repeat(257))).rejects.toThrow(/setContext: value/);
+      // A rejection, never a synchronous throw.
+      expect(() => host.setContext("", true).catch(() => {})).not.toThrow();
+      expect(contextKeyEvents()).toEqual([]);
+
+      for (let i = 0; i < 32; i++) await host.setContext(`k${i}`, true);
+      broadcastToRendererMock.mockClear();
+      await expect(host.setContext("k32", true)).rejects.toThrow(/at most 32 keys per plugin/);
+      await host.setContext("k0", "replaced");
+      expect(contextKeyEvents()).toHaveLength(1);
+    });
+
+    it("silently no-ops once the plugin is unloaded, even for an invalid call", async () => {
+      const { service, host } = await contextHost("ctx-unloaded");
+      service.unloadPlugin("acme.ctx-unloaded");
+      broadcastToRendererMock.mockClear();
+      await expect(host.setContext("a.b", 7)).resolves.toBeUndefined();
+      expect(contextKeyEvents()).toEqual([]);
+    });
   });
 
   it("host.setPanelMenuItems publishes the plugin's whole map, skips an unchanged list and clears on unload (#13213)", async () => {

@@ -1,6 +1,7 @@
-import { useMemo } from "react";
-import { FileWarning } from "lucide-react";
-import { EmptyState } from "@/components/ui/EmptyState";
+import { useMemo, type MouseEvent } from "react";
+import { FileCode, FileWarning } from "lucide-react";
+import { FileUnavailableState } from "@/components/FileViewer/FileUnavailableState";
+import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 
 export interface HtmlViewerProps {
@@ -20,6 +21,12 @@ export interface HtmlViewerProps {
   reloadNonce: number;
   /** Accessible name for the frame (the file name). */
   title: string;
+  /**
+   * Switches the host to Source — the fallback's one way out, and a view only
+   * the host owns. The click rides along so the host can tell a keyboard
+   * activation from a pointer one when it hands focus to its Source segment.
+   */
+  onShowSource: (event: MouseEvent<HTMLButtonElement>) => void;
   className?: string;
 }
 
@@ -33,7 +40,13 @@ export interface HtmlViewerProps {
  * component is rendered-only — a thin, non-lazy iframe wrapper with no heavy
  * deps.
  */
-export function HtmlViewer({ previewUrl, reloadNonce, title, className }: HtmlViewerProps) {
+export function HtmlViewer({
+  previewUrl,
+  reloadNonce,
+  title,
+  onShowSource,
+  className,
+}: HtmlViewerProps) {
   const src = useMemo(() => {
     if (!previewUrl) return null;
     const separator = previewUrl.includes("?") ? "&" : "?";
@@ -41,16 +54,22 @@ export function HtmlViewer({ previewUrl, reloadNonce, title, className }: HtmlVi
   }, [previewUrl, reloadNonce]);
 
   if (!src) {
+    // Both causes of a missing URL are about where the file sits, not what is
+    // in it, so the copy says so and offers Source in the body: at narrow
+    // widths the toolbar's Source segment is folded into a menu.
     return (
-      <div className="flex h-full w-full items-center justify-center p-6">
-        <EmptyState
-          variant="zero-data"
-          scale="canvas"
-          icon={<FileWarning className="h-6 w-6" />}
-          title="Can't render this file"
-          description="Switch to Source to view the markup."
-        />
-      </div>
+      <FileUnavailableState
+        icon={FileWarning}
+        title="Can't preview this file here"
+        description="Previews don't open from this location. The markup is readable in Source."
+        data-testid="html-preview-unavailable"
+        action={
+          <Button variant="subtle" size="sm" onClick={onShowSource}>
+            <FileCode />
+            View source
+          </Button>
+        }
+      />
     );
   }
 

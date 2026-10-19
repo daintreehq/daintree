@@ -18,6 +18,9 @@ vi.mock("@/services/agentResume", () => ({
 
 vi.mock("@/utils/logger", () => ({ logError: vi.fn() }));
 
+const reconcileMovedPanel = vi.hoisted(() => vi.fn());
+vi.mock("@/services/terminal/crossWorktreeMove", () => ({ reconcileMovedPanel }));
+
 const resolvedCli = vi.hoisted((): { path: string | undefined } => ({ path: undefined }));
 
 vi.mock("@/utils/agentLaunchCommand", () => ({
@@ -72,6 +75,7 @@ function livePane(id: string, sessionId: string, agentId = "codex"): PtyPanelDat
 }
 
 beforeEach(() => {
+  reconcileMovedPanel.mockReset();
   resolvedCli.path = undefined;
   storeState.panelsById = {};
   storeState.addPanel.mockReset();
@@ -129,6 +133,29 @@ describe("buildRestoreRecoveryLaunchOptions (#12434)", () => {
     expect(options?.command).toBe("/opt/bin/codex --model gpt-5");
   });
 
+  // Claude reopens a conversation only in the folder it began in (#13509).
+  it("resumes an agent bound to its conversation's folder there, and starts new where it lives", () => {
+    const pane = heldPane({
+      launchAgentId: "claude",
+      command: "claude",
+      agentLaunchFlags: undefined,
+      env: undefined,
+      restoreRecovery: { reason: "resume-deferred", sessionId: "sess-c" },
+    });
+
+    const resumed = buildRestoreRecoveryLaunchOptions(
+      pane,
+      { kind: "resume", sessionId: "sess-c" },
+      NO_INPUTS
+    );
+    const fresh = buildRestoreRecoveryLaunchOptions(pane, { kind: "fresh" }, NO_INPUTS);
+
+    expect(resumed?.cwd).toBe("/repo");
+    expect(resumed?.conversationCwd).toBeUndefined();
+    expect(resumed?.worktreeId).toBe("/worktrees/task-a");
+    expect(fresh?.cwd).toBe("/worktrees/task-a");
+  });
+
   it("launches nothing while the pane still has no destination", () => {
     const pane = heldPane({
       restoreRecovery: { reason: "destination-unavailable", awaitingDestination: true },
@@ -179,6 +206,28 @@ describe("launchFromRestoreRecovery (#12434)", () => {
       requestedId: "pane-a",
       replacesRestoreRecovery: true,
     });
+  });
+
+  it("raises the move notice when a conversation resumes away from where the pane is filed (#13509)", async () => {
+    const claude = {
+      launchAgentId: "claude",
+      command: "claude",
+      agentLaunchFlags: undefined,
+      env: undefined,
+      restoreRecovery: { reason: "resume-deferred" as const, sessionId: "sess-c" },
+    };
+    storeState.panelsById = { "pane-a": heldPane(claude) };
+
+    await launchFromRestoreRecovery("pane-a", { kind: "resume", sessionId: "sess-c" });
+
+    expect(storeState.addPanel.mock.calls[0]?.[0].cwd).toBe("/repo");
+    expect(reconcileMovedPanel).toHaveBeenCalledWith("pane-a", "/worktrees/task-a");
+
+    reconcileMovedPanel.mockReset();
+    storeState.panelsById = { "pane-a": heldPane(claude) };
+    await launchFromRestoreRecovery("pane-a", { kind: "fresh" });
+
+    expect(reconcileMovedPanel).not.toHaveBeenCalled();
   });
 
   it("launches the probed executable", async () => {

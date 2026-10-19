@@ -1,5 +1,5 @@
 import { installPreviewShims } from "@/components/HelpPanel/__preview__/previewShims";
-import { LAUNCHABLE_AGENT_IDS } from "@shared/config/agentIds";
+import { BUILT_IN_AGENT_IDS } from "@shared/config/agentIds";
 
 // Imported first by `preview.tsx`, so the shim is on `window` before any store module
 // below it evaluates. ES modules run in import order, and a store that reads
@@ -13,7 +13,7 @@ const isHarness = !Reflect.get(window, "electron");
 // an empty onboarding record it would sit beside every name in every capture.
 const onboarding = {
   get: async () => ({
-    seenAgentIds: LAUNCHABLE_AGENT_IDS.slice(),
+    seenAgentIds: BUILT_IN_AGENT_IDS.slice(),
     availabilityFirstSeen: {},
     welcomeCardDismissed: true,
     setupBannerDismissed: true,

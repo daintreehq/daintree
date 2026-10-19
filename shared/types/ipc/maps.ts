@@ -115,7 +115,6 @@ import type {
 } from "../pty-host.js";
 import type { HibernationProjectHibernatedPayload } from "./hibernation.js";
 import type { KeepAwakeState } from "./keepAwake.js";
-import type { AssistantMessagingChangedEvent } from "./assistantMessaging.js";
 import type { IdleTerminalNotifyPayload } from "./idleTerminals.js";
 import type { IdleBackgroundClosedPayload } from "./idleBackgroundAutoClose.js";
 import type { AppThemeConfig } from "../appTheme.js";
@@ -251,6 +250,17 @@ export interface MainProcessToastPayload {
      *  (e.g. the text to copy for a "clipboard:write-text" action). */
     data?: string;
   };
+  /**
+   * Buttons from a plugin's `host.notify` (#13505). Main has already held each
+   * `actionId` to that plugin's own namespace; a click dispatches it with its
+   * `args`.
+   */
+  pluginActions?: Array<{ label: string; actionId: string; args?: Record<string, unknown> }>;
+  /**
+   * Replaces the live toast and the inbox row of an earlier notification with
+   * the same key (#13505).
+   */
+  replaceKey?: string;
   /**
    * A switch to another host that failed, for the renderer's one host-switch
    * failure presenter: it picks the recovery from the code (Set up…, Update…,
@@ -1593,6 +1603,8 @@ export interface IpcEventMap {
     offerSessionApproval?: boolean;
     approvalOnly?: boolean;
     approvalReason?: import("./mcpServer.js").McpApprovalReason;
+    /** Another machine's own preview of an `approvalOnly` call (#13501); set only by main. */
+    hostPreview?: import("./mcpServer.js").McpHostPreview;
     /** What pre-authorized a `confirmed` dispatch (#12874); set only by main. */
     authorization?: import("./mcpServer.js").McpDispatchAuthorization;
   };
@@ -1956,9 +1968,6 @@ export interface IpcEventMap {
   // Keep-awake events
   "keep-awake:state-changed": KeepAwakeState;
 
-  // Assistant messaging: a change happened; each view reads its own state again
-  "assistant-messaging:changed": AssistantMessagingChangedEvent;
-
   // Idle terminal notification events
   "idle-terminal:notify": IdleTerminalNotifyPayload;
 
@@ -2092,6 +2101,22 @@ export interface IpcEventMap {
   // Plugin unloaded — drop all of its panel badges (main → renderer, #10585).
   "plugin:panel-badges-cleared": {
     pluginId: string;
+  };
+
+  // A plugin's toolbar-button badges changed (main → renderer, #13503). Carries
+  // the plugin's COMPLETE current map (manifest button id → badge), never a
+  // delta; an empty `badges` clears them, which is also how an unload is sent.
+  "plugin:toolbar-badges-changed": {
+    pluginId: string;
+    badges: Record<string, import("../plugin.js").PluginPanelBadge>;
+  };
+
+  // A plugin's `when`-clause context keys changed (main → renderer, #13506).
+  // Carries the plugin's COMPLETE current map (key → value), never a delta. An
+  // empty map means it holds no keys; `null` means it unloaded.
+  "plugin:context-keys-changed": {
+    pluginId: string;
+    keys: Record<string, import("../plugin.js").PluginContextValue> | null;
   };
 
   // A plugin's runtime panel menus changed (main → renderer, #13213). Carries
@@ -2318,6 +2343,10 @@ export type IpcEventBusMap = Pick<
   // Plugin panel-badge state (global broadcast)
   | "plugin:panel-badges-changed"
   | "plugin:panel-badges-cleared"
+  // Plugin toolbar-button badges (project-scoped for a project instance)
+  | "plugin:toolbar-badges-changed"
+  // Plugin `when`-clause context keys (project-scoped for a project instance)
+  | "plugin:context-keys-changed"
   // Plugin runtime panel menus (project-scoped for a project instance)
   | "plugin:panel-menus-changed"
   // Plugin action handlers in flight (project-scoped for a project instance)

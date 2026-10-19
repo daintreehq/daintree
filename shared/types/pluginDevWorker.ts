@@ -31,6 +31,7 @@ import type {
   PluginPtyProcessSpawnOptions,
   PluginProcessMode,
   PluginPanelBadge,
+  PluginContextValue,
   PanelMenuItemContribution,
   BuiltInPluginCapability,
   PluginFsWriteOptions,
@@ -58,9 +59,13 @@ export type PluginHostCallMethod =
   | "terminals.readScreen"
   | "sendToAgent"
   | "showToast"
+  | "notify"
   | "dispatch"
   | "reloadPanel"
   | "restartWorker"
+  // A call, not a notify like the badges: main owns the per-plugin key cap,
+  // and its rejection has to reach the plugin's `await` (#13506).
+  | "setContext"
   | "actions.list"
   | "actions.get"
   | "settings.get"
@@ -107,6 +112,7 @@ export type PluginHostNotifyMethod =
   | "postToPanel"
   | "invalidateFileDecorations"
   | "setPanelBadge"
+  | "setToolbarButtonBadge"
   | "setPanelMenuItems"
   | "registerFileDecorationProvider"
   | "unregisterFileDecorationProvider"
@@ -426,6 +432,18 @@ export interface SetPanelBadgeParams {
   badge: PluginPanelBadge | null;
 }
 
+/** Params for `setToolbarButtonBadge` (`host-notify`). `null` clears the badge. */
+export interface SetToolbarButtonBadgeParams {
+  buttonId: string;
+  badge: PluginPanelBadge | null;
+}
+
+/** Params for `setContext` (`host-call`). `null` clears the key. */
+export interface SetContextParams {
+  key: string;
+  value: PluginContextValue | null;
+}
+
 /** Params for `setPanelMenuItems` (`host-notify`). `null` clears the list. */
 export interface SetPanelMenuItemsParams {
   panelId: string;
@@ -527,6 +545,14 @@ export interface ShowToastParams {
   message: string;
   type?: string;
   durationMs?: number;
+}
+
+/**
+ * Params for `notify` (`host-call`, #13505): the options object as the plugin
+ * wrote it, relayed whole so the host's strict schema sees any unknown key.
+ */
+export interface NotifyParams {
+  options: unknown;
 }
 
 /** Params for `reloadPanel` (`host-call`, #12610). */

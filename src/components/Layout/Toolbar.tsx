@@ -55,11 +55,18 @@ import { WINDOWS_CAPTION_WIDTH_PX } from "@shared/config/windowChrome";
 import { createTooltipContent } from "@/lib/tooltipShortcut";
 import { AgentButton } from "./AgentButton";
 import {
+  PluginOverflowItem,
   PluginToolbarButton,
   PluginTrayButton,
   groupPluginToolbarButtons,
   type PluginTrayGroup,
 } from "./PluginTrayButton";
+import {
+  maxOverflowSeverity,
+  overflowedPluginBadges,
+  pluginBadgeOverflowSeverity,
+} from "./pluginToolbarBadge";
+import { usePluginToolbarBadgeStore } from "@/store/pluginToolbarBadgeStore";
 import { LAUNCHER_PANEL_ITEMS } from "./launcherPanelItems";
 import { deriveAgentAttentionStates } from "@/lib/agentAttentionStates";
 import { useHandBackRunIds } from "@/hooks/useRunHandBackState";
@@ -75,10 +82,7 @@ import { buildLauncherToolbarMeta, useLauncherToolbarCatalog } from "./launcherT
 import { LauncherToolbarButton } from "./LauncherToolbarButton";
 import { usePluginRuntimeStore } from "@/store/pluginRuntimeStore";
 import { pluginManifestIdFromInstanceKey } from "@shared/types/plugin";
-import {
-  DEFAULT_PLUGIN_BUTTON_ICON,
-  resolvePluginIcon,
-} from "@/components/icons/pluginIconRegistry";
+import type { ToolbarButtonConfig } from "@shared/config/toolbarButtonRegistry";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import {
   DropdownMenu,
@@ -173,11 +177,7 @@ import { useCopyTreeCompletionNotice } from "@/hooks/useCopyTreeCompletionNotice
 import { useCopyTreeRunStore } from "@/store/copyTreeRunStore";
 import type { CopyTreeHistoryRecord } from "@shared/types";
 
-import {
-  LAUNCHABLE_AGENT_IDS,
-  isBuiltInAgentId,
-  type BuiltInAgentId,
-} from "@shared/config/agentIds";
+import { BUILT_IN_AGENT_IDS, isBuiltInAgentId, type BuiltInAgentId } from "@shared/config/agentIds";
 import { pluralize } from "@/lib/pluralize";
 
 type OverflowMenuMeta = { label: string; icon: React.ComponentType<{ className?: string }> };
@@ -270,6 +270,9 @@ interface OverflowMenuProps {
   // overflows, its dropdown is unreachable, so the overflow menu inlines these
   // groups instead — an un-promoted contribution has no other toolbar route.
   pluginTrayGroups: PluginTrayGroup[];
+  // Every plugin contribution by id, so a promoted one that overflowed renders
+  // with its live badge rather than as a bare label.
+  pluginConfigs: ReadonlyMap<string, ToolbarButtonConfig>;
   // Launchable agent ids, in the launcher's own order. When `launcher` itself
   // overflows its dropdown is unreachable, so the overflow menu inlines these
   // alongside the panels — since #11680 an unpinned agent has no other toolbar
@@ -304,6 +307,7 @@ function OverflowMenu({
   overflowActions,
   dynamicOverflowMeta,
   pluginTrayGroups,
+  pluginConfigs,
   launcherAgentIds,
   panelTrayDisabled,
   keybindingById,
@@ -518,18 +522,13 @@ function OverflowMenu({
               ...pluginTrayGroups.map((group) => (
                 <DropdownMenuGroup key={`plugin-tray-${group.pluginId}`}>
                   <DropdownMenuLabel>{group.displayName}</DropdownMenuLabel>
-                  {group.buttons.map((config) => {
-                    const Icon = resolvePluginIcon(config.iconId, DEFAULT_PLUGIN_BUTTON_ICON);
-                    return (
-                      <DropdownMenuItem
-                        key={config.id}
-                        onClick={() => overflowActions[config.id]?.()}
-                      >
-                        <Icon className="mr-2 h-3.5 w-3.5" />
-                        <span className="flex-1">{config.label}</span>
-                      </DropdownMenuItem>
-                    );
-                  })}
+                  {group.buttons.map((config) => (
+                    <PluginOverflowItem
+                      key={config.id}
+                      config={config}
+                      onSelect={() => overflowActions[config.id]?.()}
+                    />
+                  ))}
                 </DropdownMenuGroup>
               )),
               ...(isLast ? [] : [<DropdownMenuSeparator key="plugin-tray-sep" />]),
@@ -588,6 +587,17 @@ function OverflowMenu({
                 );
               }),
               ...(isLast ? [] : [<DropdownMenuSeparator key="launcher-sep" />]),
+            ];
+          }
+          const pluginConfig = pluginConfigs.get(id);
+          if (pluginConfig) {
+            return [
+              <PluginOverflowItem
+                key={id}
+                config={pluginConfig}
+                onSelect={() => overflowActions[id]?.()}
+                keybinding={keybindingById[id]}
+              />,
             ];
           }
           const meta = OVERFLOW_MENU_META[id] ?? dynamicOverflowMeta[id];
@@ -1352,7 +1362,7 @@ export function Toolbar({
         isAvailable: true,
       },
       ...Object.fromEntries(
-        LAUNCHABLE_AGENT_IDS.map((id) => [
+        BUILT_IN_AGENT_IDS.map((id) => [
           id,
           {
             render: () => (
@@ -1792,7 +1802,7 @@ export function Toolbar({
   // this issue removed.
   const unpositionedAgentPins = useMemo(() => {
     const onEitherSide = new Set([...toolbarLayout.leftButtons, ...toolbarLayout.rightButtons]);
-    return LAUNCHABLE_AGENT_IDS.filter(
+    return BUILT_IN_AGENT_IDS.filter(
       (id) => !onEitherSide.has(id) && isAgentPinned(effectiveAgentSettings?.agents?.[id])
     );
   }, [toolbarLayout.leftButtons, toolbarLayout.rightButtons, effectiveAgentSettings]);
@@ -2015,6 +2025,50 @@ export function Toolbar({
   const leftAgentObservations = useOverflowAgentObservations(visibleLeftOverflow);
   const rightAgentObservations = useOverflowAgentObservations(visibleRightOverflow);
 
+  // Plugin badges folded into each `…` menu light its dot and join its name,
+  // as the built-in buttons' signals do (#9821, #13503).
+  // Derived inside the selector so a badge change that moves neither menu (a
+  // visible button's count, a tooltip) doesn't re-render the whole toolbar.
+  const [leftPluginBadgeCount, leftPluginSeverity, rightPluginBadgeCount, rightPluginSeverity] =
+    usePluginToolbarBadgeStore(
+      useShallow((s) => {
+        const left = overflowedPluginBadges(
+          visibleLeftOverflow,
+          pluginConfigs,
+          pinnedButtons,
+          s.badgesByPlugin
+        );
+        const right = overflowedPluginBadges(
+          visibleRightOverflow,
+          pluginConfigs,
+          pinnedButtons,
+          s.badgesByPlugin
+        );
+        return [
+          left.length,
+          pluginBadgeOverflowSeverity(left),
+          right.length,
+          pluginBadgeOverflowSeverity(right),
+        ] as const;
+      })
+    );
+  const leftMenuSeverity = maxOverflowSeverity(leftOverflowSeverity, leftPluginSeverity);
+  const rightMenuSeverity = maxOverflowSeverity(rightOverflowSeverity, rightPluginSeverity);
+  const leftObservations = useMemo(
+    () =>
+      leftPluginBadgeCount > 0
+        ? [...leftAgentObservations, pluralize(leftPluginBadgeCount, "plugin badge")]
+        : leftAgentObservations,
+    [leftAgentObservations, leftPluginBadgeCount]
+  );
+  const rightObservations = useMemo(
+    () =>
+      rightPluginBadgeCount > 0
+        ? [...rightAgentObservations, pluralize(rightPluginBadgeCount, "plugin badge")]
+        : rightAgentObservations,
+    [rightAgentObservations, rightPluginBadgeCount]
+  );
+
   const leftVisibleSet = useMemo(() => new Set<AnyToolbarButtonId>(leftVisible), [leftVisible]);
   const rightVisibleSet = useMemo(() => new Set<AnyToolbarButtonId>(rightVisible), [rightVisible]);
 
@@ -2193,7 +2247,7 @@ export function Toolbar({
 
   const overflowActions = useMemo<Partial<Record<AnyToolbarButtonId, () => void>>>(
     () => ({
-      ...Object.fromEntries(LAUNCHABLE_AGENT_IDS.map((id) => [id, () => onLaunchAgent(id)])),
+      ...Object.fromEntries(BUILT_IN_AGENT_IDS.map((id) => [id, () => onLaunchAgent(id)])),
       terminal: () => onLaunchAgent("terminal"),
       browser: () => onLaunchAgent("browser"),
       "file-browser": openFileBrowser,
@@ -2266,7 +2320,7 @@ export function Toolbar({
   // Same filter the launcher's own Launch section applies, so the rows the
   // overflow menu inlines are exactly the rows the dropdown would have shown.
   const launcherAgentIds = useMemo(
-    () => LAUNCHABLE_AGENT_IDS.filter((id) => isAgentLaunchable(agentAvailability?.[id])),
+    () => BUILT_IN_AGENT_IDS.filter((id) => isAgentLaunchable(agentAvailability?.[id])),
     [agentAvailability]
   );
 
@@ -2291,6 +2345,7 @@ export function Toolbar({
       overflowActions={overflowActions}
       dynamicOverflowMeta={dynamicOverflowMeta}
       pluginTrayGroups={pluginTrayGroups}
+      pluginConfigs={pluginConfigs}
       launcherAgentIds={launcherAgentIds}
       panelTrayDisabled={panelTrayDisabled}
       keybindingById={OVERFLOW_KEYBINDING_BY_ID}
@@ -2513,12 +2568,7 @@ export function Toolbar({
               >
                 {renderGroupedButtons(effectiveLeftButtons, leftVisibleSet)}
               </div>
-              {renderOverflowMenu(
-                visibleLeftOverflow,
-                "left",
-                leftOverflowSeverity,
-                leftAgentObservations
-              )}
+              {renderOverflowMenu(visibleLeftOverflow, "left", leftMenuSeverity, leftObservations)}
             </div>
 
             {/* CENTER GROUP - Grid-centered, shrinks gracefully on narrow windows */}
@@ -2717,8 +2767,8 @@ export function Toolbar({
               {renderOverflowMenu(
                 visibleRightOverflow,
                 "right",
-                rightOverflowSeverity,
-                rightAgentObservations
+                rightMenuSeverity,
+                rightObservations
               )}
 
               {/* Fixed chrome outside the measured button row: it exists only

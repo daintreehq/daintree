@@ -1010,6 +1010,27 @@ describe("PluginDevWorkerHostProxy runtime-surface validation rejects, never thr
     expect(sent.some((m) => m.type === "host-notify" && m.method === "setPanelBadge")).toBe(false);
   });
 
+  it("setToolbarButtonBadge rejects an empty buttonId and forwards a valid call (#13503)", async () => {
+    const { proxy, sent } = makeProxy();
+    await expect(proxy.host.setToolbarButtonBadge("", { kind: "dot" })).rejects.toThrow(
+      /setToolbarButtonBadge: buttonId/
+    );
+    expect(sent.some((m) => m.type === "host-notify" && m.method === "setToolbarButtonBadge")).toBe(
+      false
+    );
+
+    await expect(proxy.host.setToolbarButtonBadge("needs", undefined as never)).resolves.toBe(
+      undefined
+    );
+    expect(sent).toContainEqual(
+      expect.objectContaining({
+        type: "host-notify",
+        method: "setToolbarButtonBadge",
+        params: { buttonId: "needs", badge: null },
+      })
+    );
+  });
+
   it("setPanelMenuItems vets the list locally and notifies main with a plain copy (#13213)", async () => {
     const { proxy, sent } = makeProxy();
     await expect(proxy.host.setPanelMenuItems("", [])).rejects.toThrow(
@@ -1385,6 +1406,56 @@ describe("PluginDevWorkerHostProxy reloadPanel (#12610)", () => {
     const promise = proxy.host.reloadPanel("p1");
     proxy.dispose();
     await expect(promise).resolves.toBe("unavailable");
+  });
+});
+
+describe("PluginDevWorkerHostProxy setContext (#13506)", () => {
+  beforeEach(() => vi.clearAllMocks());
+  afterEach(() => vi.restoreAllMocks());
+
+  it("relays the vetted key and value as a call, normalizing a clear to null", async () => {
+    const { proxy, sent } = makeProxy();
+    const set = proxy.host.setContext("needsYou", true);
+    const call = sent.find((m) => m.type === "host-call" && m.method === "setContext");
+    expect(call?.params).toEqual({ key: "needsYou", value: true });
+    resolveCall(proxy, sent, "setContext", undefined);
+    await expect(set).resolves.toBeUndefined();
+
+    const clear = proxy.host.setContext("needsYou", undefined as never);
+    const clears = sent.filter((m) => m.type === "host-call" && m.method === "setContext");
+    expect(clears.at(-1)?.params).toEqual({ key: "needsYou", value: null });
+    resolveCall(proxy, sent, "setContext", undefined);
+    await expect(clear).resolves.toBeUndefined();
+  });
+
+  it("passes main's cap rejection back to the caller", async () => {
+    const { proxy, sent } = makeProxy();
+    const promise = proxy.host.setContext("k33", true);
+    const call = sent.find((m) => m.type === "host-call" && m.method === "setContext");
+    proxy.handleMessage({
+      type: "host-result",
+      requestId: call.requestId,
+      ok: false,
+      error: 'Plugin "acme" setContext: at most 32 keys per plugin',
+    });
+    await expect(promise).rejects.toThrow(/at most 32 keys per plugin/);
+  });
+
+  it("rejects a bad key or value without crossing the port", async () => {
+    const { proxy, sent } = makeProxy();
+    await expect(proxy.host.setContext("a.b", true)).rejects.toThrow(/setContext: key "a\.b"/);
+    await expect(proxy.host.setContext("k", 1 as never)).rejects.toThrow(/setContext: value/);
+    expect(sent.find((m) => m.type === "host-call")).toBeUndefined();
+  });
+
+  it("resolves once the proxy is disposed, like the in-process no-op after unload", async () => {
+    const { proxy } = makeProxy();
+    const promise = proxy.host.setContext("k", true);
+    proxy.dispose();
+    await expect(promise).resolves.toBeUndefined();
+    await expect(proxy.host.setContext("k", true)).resolves.toBeUndefined();
+    // Even an invalid call is a silent no-op once torn down, as in process.
+    await expect(proxy.host.setContext("a.b", 7 as never)).resolves.toBeUndefined();
   });
 });
 

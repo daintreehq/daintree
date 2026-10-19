@@ -17,8 +17,9 @@
 
 /**
  * The gap between a trigger and the surface it opens, for every anchored
- * overlay — Radix's and `FixedDropdown`'s alike — so a menu, a palette and a
- * toolbar dropdown all hang the same distance below the control that owns them.
+ * overlay — Radix's, `FixedDropdown`'s and the native application menu's
+ * (`AppMenuButton`) alike — so a menu, a palette and a toolbar dropdown all
+ * hang the same distance below the control that owns them.
  */
 export const OVERLAY_SIDE_OFFSET = 4;
 

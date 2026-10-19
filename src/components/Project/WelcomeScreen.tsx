@@ -34,7 +34,7 @@ import { useAgentDiscoveryOnboarding } from "@/hooks/app/useAgentDiscoveryOnboar
 import { TourWelcomeLink } from "@/components/Tour/TourInviteCard";
 import { safeFireAndForget } from "@/utils/safeFireAndForget";
 import { getAgentConfig } from "@/config/agents";
-import { LAUNCHABLE_AGENT_IDS, type BuiltInAgentId } from "@shared/config/agentIds";
+import { BUILT_IN_AGENT_IDS, type BuiltInAgentId } from "@shared/config/agentIds";
 import { decayFrecencyScore, FRECENCY_COLD_START } from "@shared/utils/frecency";
 import { isAgentLaunchable } from "../../../shared/utils/agentAvailability";
 import { isAgentPinned } from "../../../shared/utils/agentPinned";
@@ -373,9 +373,9 @@ export function isAgentWelcomeCardEligible({
 }): boolean {
   if (!agentSettings) return false;
   if (!hasRealData || welcomeCardDismissed) return false;
-  const hasReady = LAUNCHABLE_AGENT_IDS.some((id) => isAgentLaunchable(availability?.[id]));
+  const hasReady = BUILT_IN_AGENT_IDS.some((id) => isAgentLaunchable(availability?.[id]));
   if (!hasReady) return false;
-  const hasPinned = LAUNCHABLE_AGENT_IDS.some((id) => isAgentPinned(agentSettings.agents?.[id]));
+  const hasPinned = BUILT_IN_AGENT_IDS.some((id) => isAgentPinned(agentSettings.agents?.[id]));
   return !hasPinned;
 }
 
@@ -584,7 +584,7 @@ function AgentWelcomeCard() {
   const [pinError, setPinError] = useState(false);
 
   const readyAgentIds = useMemo<BuiltInAgentId[]>(() => {
-    return LAUNCHABLE_AGENT_IDS.filter((id) => isAgentLaunchable(availability?.[id]));
+    return BUILT_IN_AGENT_IDS.filter((id) => isAgentLaunchable(availability?.[id]));
   }, [availability]);
 
   if (!loaded) return null;

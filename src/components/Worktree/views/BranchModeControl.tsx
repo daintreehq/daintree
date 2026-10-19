@@ -5,9 +5,11 @@ import {
 
 type BranchMode = "new" | "existing";
 
+// The section heading already says "Branch"; the names keep the noun for anyone
+// who meets a segment without it.
 const OPTIONS: SegmentedRadioOption<BranchMode>[] = [
-  { value: "new", label: "New branch" },
-  { value: "existing", label: "Existing branch" },
+  { value: "new", label: "New", ariaLabel: "New branch" },
+  { value: "existing", label: "Existing", ariaLabel: "Existing branch" },
 ];
 
 interface BranchModeControlProps {

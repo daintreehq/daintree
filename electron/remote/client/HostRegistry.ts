@@ -99,6 +99,10 @@ function normalizeConnection(value: unknown): HostConnection {
   return requireSupportedConnection(connection);
 }
 
+function storedSwitch(value: unknown, connection: HostConnection): boolean {
+  return value === undefined ? connection.kind === "ssh" : value === true;
+}
+
 /** A readable id from the name, falling back to random when nothing usable is left. */
 function slugFor(name: string): string {
   const slug = name
@@ -160,8 +164,9 @@ function sanitize(raw: unknown): HostDescriptor[] {
       lastSeenAt: typeof host.lastSeenAt === "number" ? host.lastSeenAt : null,
       addedAt: typeof host.addedAt === "number" ? host.addedAt : 0,
       notificationsEnabled: host.notificationsEnabled === true,
-      assistantMessagingEnabled: host.assistantMessagingEnabled === true,
-      assistantStartEnabled: host.assistantStartEnabled === true,
+      // A field the record never had reads as an SSH host's default, on. Its
+      // retired messaging switches were folded into it at migration (#13496).
+      assistantControlEnabled: storedSwitch(host.assistantControlEnabled, connection),
     });
   }
   return out;
@@ -221,9 +226,8 @@ export class HostRegistry {
       addedAt: this.now(),
       notificationsEnabled: false,
       // A Shell that reaches a host over SSH can already run anything there as
-      // that user; a message is no more. A host already listed keeps its value.
-      assistantMessagingEnabled: connection.kind === "ssh",
-      assistantStartEnabled: false,
+      // that user; a tool run there, or an assistant started there, is no more.
+      assistantControlEnabled: connection.kind === "ssh",
     };
     this.write([...hosts, descriptor]);
     return descriptor;
@@ -252,9 +256,6 @@ export class HostRegistry {
         next.arch = null;
         next.lastHandshake = null;
         next.lastSeenAt = null;
-        // Consent was given to the machine that answered before, not this one.
-        next.assistantMessagingEnabled = false;
-        next.assistantStartEnabled = false;
       }
     }
     if (payload.notificationsEnabled !== undefined) {
@@ -263,17 +264,11 @@ export class HostRegistry {
       }
       next.notificationsEnabled = payload.notificationsEnabled;
     }
-    if (payload.assistantMessagingEnabled !== undefined) {
-      if (typeof payload.assistantMessagingEnabled !== "boolean") {
-        throw invalid("assistantMessagingEnabled must be true or false.");
+    if (payload.assistantControlEnabled !== undefined) {
+      if (typeof payload.assistantControlEnabled !== "boolean") {
+        throw invalid("assistantControlEnabled must be true or false.");
       }
-      next.assistantMessagingEnabled = payload.assistantMessagingEnabled;
-    }
-    if (payload.assistantStartEnabled !== undefined) {
-      if (typeof payload.assistantStartEnabled !== "boolean") {
-        throw invalid("assistantStartEnabled must be true or false.");
-      }
-      next.assistantStartEnabled = payload.assistantStartEnabled;
+      next.assistantControlEnabled = payload.assistantControlEnabled;
     }
     return next;
   }

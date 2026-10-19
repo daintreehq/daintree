@@ -11,7 +11,7 @@ import { Input } from "@/components/ui/input";
 import { useDeferredLoading, useHelpSessionLiveStatus } from "@/hooks";
 import { useVisibilityAwareInterval } from "@/hooks/useVisibilityAwareInterval";
 import { useMcpReadiness } from "@/hooks/useMcpReadiness";
-import { useAssistantMessagingAvailable } from "@/hooks/useAssistantMessaging";
+import { isRemoteHostSupported } from "@/lib/remoteHosts";
 import { actionService } from "@/services/ActionService";
 import { Button } from "@/components/ui/button";
 import { CopyButton } from "@/components/ui/CopyButton";
@@ -82,7 +82,6 @@ type SaveGroup = "agent" | "launch" | "behavior" | "security" | "privacy" | "con
 const SAVE_GROUP_BY_KEY: Record<keyof HelpAssistantSettings, SaveGroup> = {
   modelIds: "agent",
   customArgs: "launch",
-  debugLogging: "launch",
   docSearch: "behavior",
   daintreeControl: "behavior",
   runbookSearch: "behavior",
@@ -92,13 +91,12 @@ const SAVE_GROUP_BY_KEY: Record<keyof HelpAssistantSettings, SaveGroup> = {
   daintreeConfirmations: "security",
   auditRetention: "privacy",
   loadGlobalHooksAndServers: "content",
-  acceptRemoteMessages: "security",
+  acceptRemoteControl: "security",
 };
 
 const SETTING_KEYS: readonly (keyof HelpAssistantSettings)[] = [
   "modelIds",
   "customArgs",
-  "debugLogging",
   "docSearch",
   "daintreeControl",
   "runbookSearch",
@@ -108,7 +106,7 @@ const SETTING_KEYS: readonly (keyof HelpAssistantSettings)[] = [
   "daintreeConfirmations",
   "auditRetention",
   "loadGlobalHooksAndServers",
-  "acceptRemoteMessages",
+  "acceptRemoteControl",
 ];
 
 function patchedKeys(patch: Partial<HelpAssistantSettings>): (keyof HelpAssistantSettings)[] {
@@ -177,7 +175,6 @@ function revertSettingsPatch(
 const SETTING_LABEL: Record<keyof HelpAssistantSettings, string> = {
   modelIds: "Model",
   customArgs: "Custom CLI args",
-  debugLogging: "Debug logging",
   docSearch: "Search documentation",
   daintreeControl: "Daintree control",
   runbookSearch: "Follow runbooks",
@@ -187,7 +184,7 @@ const SETTING_LABEL: Record<keyof HelpAssistantSettings, string> = {
   auditRetention: "Audit log retention",
   loadGlobalHooksAndServers: "Load my MCP servers and hooks",
   daintreeConfirmations: "Daintree confirmations",
-  acceptRemoteMessages: "Accept messages from other machines by default",
+  acceptRemoteControl: "Let other machines' assistants work here",
 };
 
 interface SaveFailure {
@@ -205,10 +202,9 @@ const DEFAULT_SETTINGS: HelpAssistantSettings = {
   modelIds: {},
   customArgs: "",
   idleHibernateMinutes: 5,
-  debugLogging: false,
   loadGlobalHooksAndServers: false,
   daintreeConfirmations: "inherit",
-  acceptRemoteMessages: true,
+  acceptRemoteControl: true,
 };
 
 // Radix Select rejects an empty-string item value, so the "use the CLI default"
@@ -230,7 +226,7 @@ const TIER_CHOICES: { value: HelpAssistantTier; label: string; description: stri
 ];
 
 const TIER_DETAILS: Record<HelpAssistantTier, string> = {
-  core: "The assistant can create worktrees, launch agents and send them prompts, read and wait on terminals, and move, rename or close them. It can delete worktrees, including ones an earlier session created, which asks you to confirm unless Daintree confirmations says otherwise. This covers most orchestration and keeps the tool list the model rereads every turn short.",
+  core: "The assistant can create worktrees, launch agents and send them prompts, read and wait on terminals, and move, rename or close them. It can delete worktrees, including ones an earlier session created, which asks you to confirm unless Daintree confirmations says otherwise. It can message and start assistants on your other hosts, as each host's settings allow. This covers most orchestration and keeps the tool list the model rereads every turn short.",
   full: "Adds recipes and project checks, starting work on an issue, forge PR, issue and CI reads, git activity, CopyTree context, managing worktree resources, and diagnostics. Teardowns ask you to confirm unless Daintree confirmations says otherwise. Git and forge writes and file edits aren't available in either tool set.",
 };
 
@@ -351,17 +347,6 @@ function getBypassCopy(
 
   const safeguard = tierBoundsNewSessions(tier, confirmationsSkipped);
 
-  // The assistant has no CLI flag: bypass skips its own confirm sheet via
-  // DAINTREE_ASSISTANT_AUTO_APPROVE, which is why it carries no
-  // DEFAULT_DANGEROUS_ARGS entry and declares `permissionBypass: false`.
-  if (agentId === "daintree-assistant") {
-    return {
-      title: "Auto-approve assistant actions",
-      subtitle: "Skip the assistant's own per-action confirmation sheet",
-      warning: `With this on, the assistant acts without asking — it skips its own confirmation sheet for everything it does. ${safeguard}`,
-    };
-  }
-
   const flag = DEFAULT_DANGEROUS_ARGS[agentId];
   const config = getAgentConfig(agentId);
   if (!flag || config?.supports === false || config?.supports?.permissionBypass !== true) {
@@ -389,8 +374,8 @@ export function DaintreeAssistantSettingsTab() {
   // separate mcpStatus state still supplies apiKey for copy/rotate (not in
   // the runtime snapshot). Keep both — they update independently (lesson #4958).
   const runtimeSnapshot = useMcpReadiness();
-  // Hidden on Windows and, in a window of this machine, until it has a host.
-  const messagingAvailable = useAssistantMessagingAvailable();
+  // Only a machine that can be a host is reached by other machines' assistants.
+  const remoteControlOffered = isRemoteHostSupported();
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
   // Failures of one-off actions stay on the section they belong to, not at the page foot.
@@ -888,12 +873,8 @@ export function DaintreeAssistantSettingsTab() {
     void persist({ daintreeConfirmations: value });
   };
 
-  const toggleDebugLogging = () => {
-    void persist({ debugLogging: !settings.debugLogging });
-  };
-
-  const toggleAcceptRemoteMessages = () => {
-    void persist({ acceptRemoteMessages: !settings.acceptRemoteMessages });
+  const toggleAcceptRemoteControl = () => {
+    void persist({ acceptRemoteControl: !settings.acceptRemoteControl });
   };
 
   const toggleLoadGlobalHooksAndServers = () => {
@@ -1247,8 +1228,8 @@ export function DaintreeAssistantSettingsTab() {
       <SettingsSection
         title="Security"
         description={
-          messagingAvailable
-            ? "How much of Daintree the assistant can reach, which confirmations it skips, and whether other machines can message it"
+          remoteControlOffered
+            ? "How much of Daintree the assistant can reach, which confirmations it skips, and whether other machines' assistants can work here"
             : "How much of Daintree the assistant can reach, and which confirmations it skips"
         }
       >
@@ -1267,7 +1248,7 @@ export function DaintreeAssistantSettingsTab() {
 
           {/* The stored preference is agent-agnostic but its effect is not, so the
               row only renders once an agent with a real bypass mechanism is
-              selected — mirroring the agent-gated Debug logging switch above. */}
+              selected. */}
           {bypassCopy && (
             <SettingsSwitchCard
               id="assistant-skip-permissions"
@@ -1326,18 +1307,18 @@ export function DaintreeAssistantSettingsTab() {
           />
         </SettingsGroup>
 
-        {messagingAvailable && (
+        {remoteControlOffered && (
           <SettingsGroup label="Other machines">
             <SettingsSwitchCard
-              id="assistant-accept-remote-messages"
-              title="Accept messages from other machines by default"
-              subtitle="As each assistant here starts, it turns on Accept messages from other machines wherever that can be on. Turning it off in an assistant's panel lasts until that assistant restarts."
-              isEnabled={settings.acceptRemoteMessages}
-              onChange={toggleAcceptRemoteMessages}
+              id="assistant-accept-remote-control"
+              title="Let other machines' assistants work here"
+              subtitle="An assistant on a machine connected to this one as its host can run Daintree's tools here, within this machine's own tool sets. That includes finding, starting and messaging the assistants running here."
+              isEnabled={settings.acceptRemoteControl}
+              onChange={toggleAcceptRemoteControl}
               disabled={settingsUnavailable}
-              isModified={settings.acceptRemoteMessages !== DEFAULT_SETTINGS.acceptRemoteMessages}
+              isModified={settings.acceptRemoteControl !== DEFAULT_SETTINGS.acceptRemoteControl}
               onReset={() =>
-                void persist({ acceptRemoteMessages: DEFAULT_SETTINGS.acceptRemoteMessages })
+                void persist({ acceptRemoteControl: DEFAULT_SETTINGS.acceptRemoteControl })
               }
             />
           </SettingsGroup>
@@ -1488,18 +1469,6 @@ export function DaintreeAssistantSettingsTab() {
             isModified={settings.idleHibernateMinutes !== DEFAULT_SETTINGS.idleHibernateMinutes}
             onReset={() => setHibernateMinutes(String(DEFAULT_SETTINGS.idleHibernateMinutes))}
           />
-          {preferredAgentId === "daintree-assistant" && (
-            <SettingsSwitchCard
-              title="Debug logging"
-              subtitle="Write a full-fidelity per-session trace to ~/.daintree/logs"
-              isEnabled={settings.debugLogging}
-              onChange={toggleDebugLogging}
-              ariaLabel="Enable Daintree Assistant debug logging"
-              disabled={settingsUnavailable}
-              isModified={settings.debugLogging !== DEFAULT_SETTINGS.debugLogging}
-              onReset={() => void persist({ debugLogging: DEFAULT_SETTINGS.debugLogging })}
-            />
-          )}
         </SettingsGroup>
       </SettingsSection>
 

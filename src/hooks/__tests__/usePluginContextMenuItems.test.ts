@@ -4,10 +4,12 @@ import { renderHook, waitFor, act } from "@testing-library/react";
 import type { ContextMenuContribution, ContextMenuLocation } from "@shared/types/plugin";
 import type { WhenClauseContext } from "@shared/utils/whenClause";
 
-const { contextMenuItemsMock, onContextMenuItemsChangedMock } = vi.hoisted(() => ({
-  contextMenuItemsMock: vi.fn(),
-  onContextMenuItemsChangedMock: vi.fn(),
-}));
+const { contextMenuItemsMock, onContextMenuItemsChangedMock, onContextKeysChangedMock } =
+  vi.hoisted(() => ({
+    contextMenuItemsMock: vi.fn(),
+    onContextMenuItemsChangedMock: vi.fn(),
+    onContextKeysChangedMock: vi.fn(),
+  }));
 
 function entry(
   pluginId: string,
@@ -33,12 +35,14 @@ beforeEach(() => {
       plugin: {
         contextMenuItems: contextMenuItemsMock,
         onContextMenuItemsChanged: onContextMenuItemsChangedMock,
+        onContextKeysChanged: onContextKeysChangedMock,
       },
     },
   });
   vi.resetModules();
   contextMenuItemsMock.mockResolvedValue([]);
   onContextMenuItemsChangedMock.mockReturnValue(() => {});
+  onContextKeysChangedMock.mockReturnValue(() => {});
 });
 
 describe("usePluginContextMenuItems", () => {
@@ -247,5 +251,41 @@ describe("usePluginContextMenuItems", () => {
     expect(second.result.current.map((e) => e.item.label)).toEqual(["Live"]);
     // No re-subscription: the module-level listener was never torn down.
     expect(onContextMenuItemsChangedMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("re-filters on plugin context keys, with the caller's own keys winning a clash", async () => {
+    let emitKeys:
+      ((p: { pluginId: string; keys: Record<string, boolean | string> | null }) => void) | null =
+      null;
+    onContextKeysChangedMock.mockImplementation(
+      (cb: (p: { pluginId: string; keys: Record<string, boolean | string> | null }) => void) => {
+        emitKeys = cb;
+        return () => {};
+      }
+    );
+    contextMenuItemsMock.mockResolvedValue([
+      entry("acme.beads", "Answer", "terminal", { when: "acme.beads.needsYou" }),
+      entry("acme.beads", "Mine", "terminal", { when: "panelKind == 'terminal'" }),
+      entry("acme.other", "Clash", "terminal", { when: "acme.other.on" }),
+    ]);
+    const { usePluginContextMenuItems } = await import("../usePluginContextMenuItems");
+    // The caller's own `acme` key shadows the whole plugin namespace under it.
+    const ctx: WhenClauseContext = { panelKind: "terminal", acme: { other: { on: false } } };
+    const { result } = renderHook(() => usePluginContextMenuItems("terminal", ctx));
+
+    await waitFor(() => expect(result.current.map((e) => e.item.label)).toEqual(["Mine"]));
+    expect(emitKeys).not.toBeNull();
+
+    act(() => emitKeys!({ pluginId: "acme.other", keys: { on: true } }));
+    expect(result.current.map((e) => e.item.label)).toEqual(["Mine"]);
+
+    const { result: uncontested } = renderHook(() =>
+      usePluginContextMenuItems("terminal", { panelKind: "terminal" })
+    );
+    act(() => emitKeys!({ pluginId: "acme.beads", keys: { needsYou: true } }));
+    expect(uncontested.current.map((e) => e.item.label)).toEqual(["Answer", "Mine", "Clash"]);
+
+    act(() => emitKeys!({ pluginId: "acme.beads", keys: null }));
+    expect(uncontested.current.map((e) => e.item.label)).toEqual(["Mine", "Clash"]);
   });
 });

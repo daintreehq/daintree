@@ -16,7 +16,6 @@ import { useHomeDir } from "@/hooks/app/useHomeDir";
 import { logError, logWarn } from "@/utils/logger";
 import { markRendererPerformance } from "@/utils/performance";
 import { resolveWorkspaceCwd } from "@/utils/workspaceCwd";
-import { isAbsolute, isPathInside, pathComparisonKey } from "@shared/utils/path";
 import { readViewDevServerCommand } from "@/utils/devServerCommand";
 import { useCcrPresetsStore } from "@/store/ccrPresetsStore";
 import { useProjectPresetsStore } from "@/store/projectPresetsStore";
@@ -28,30 +27,20 @@ import type {
   TerminalSpawnSource,
   AddPanelFocusPolicy,
 } from "@shared/types";
-import {
-  generateAgentCommand,
-  mintAssignedSessionId,
-  buildAgentLaunchFlags,
-  resolveEffectivePresetId,
-} from "@shared/types";
 import { isAgentLaunchable } from "@shared/utils/agentAvailability";
 import { findEquivalentMissingCliGate } from "@/utils/missingCliGate";
 import { isAssistantFocused } from "@/store/macroFocusStore";
-import { appendCallerLaunchFlagsToCommand } from "@shared/utils/callerLaunchFlags";
 import {
-  getAgentConfig,
-  isRegisteredAgent,
-  getAgentDisplayTitle,
-  getMergedPreset,
-  sanitizeAgentEnv,
-} from "@/config/agents";
-import type { AgentCliDetail } from "@shared/types/ipc";
-import { applyPresetBehaviorOverrides } from "@/utils/agentRuntimeSettings";
+  buildAgentLaunchPlan,
+  buildLaunchIdentity,
+  type LaunchAgentIdentity,
+} from "@shared/utils/agentLaunchPlan";
+import { getAgentConfig, isRegisteredAgent } from "@/config/agents";
 import {
   getCurrentLaunchCliDetail,
   resolveAgentLaunchBaseCommand,
 } from "@/utils/agentLaunchCommand";
-import { resolveAgentLaunchKind, sanitizeTerminalName } from "@/utils/agentLaunchValidation";
+import { resolveAgentLaunchKind } from "@/utils/agentLaunchValidation";
 import {
   hostShellDialect,
   isHostMac,
@@ -62,6 +51,7 @@ import {
 import { agentClipboardDirectory } from "@shared/types/agentSettings";
 
 export { resolveAgentLaunchBaseCommand } from "@/utils/agentLaunchCommand";
+export { buildLaunchIdentity, type LaunchAgentIdentity };
 // Re-exported so the hook stays the canonical import site for launch-path
 // callers; the action layer imports the pure module directly (#11547).
 export { resolveAgentLaunchKind } from "@/utils/agentLaunchValidation";
@@ -252,72 +242,6 @@ export interface LaunchDecline {
   reason: LaunchDeclineReason;
   /** The count and limits the refusal was judged on; set only for `panel-limit`. */
   panelLimit: PanelLimitSnapshot | null;
-}
-
-/**
- * Where a launch landed. Resolved before the panel is created, so it
- * accompanies every non-null launch result — a caller driving several launches
- * at once can map a terminal back to its worktree without re-resolving the
- * target itself and reconciling afterwards (#11547).
- */
-export interface LaunchAgentIdentity {
-  /** Resolved target worktree, or null when the launch is outside one. */
-  worktreeId: string | null;
-  /** Absolute path of the resolved worktree; null when there is none. */
-  worktreePath: string | null;
-  /** Branch of the resolved worktree; null when detached or absent. */
-  branch: string | null;
-  /** Directory the panel was created with; null when none resolved. */
-  cwd: string | null;
-  /**
-   * Whether `cwd` sits outside `worktreePath` — the pane is filed under a
-   * worktree its process does not run in (#13130). Null when either path is
-   * unknown or `cwd` is relative (main resolves that against a base the
-   * renderer never sees). Lexical, like `isPathInside`.
-   */
-  cwdOutsideWorktree: boolean | null;
-}
-
-/**
- * Build the identity reported alongside a launch. Extracted as a pure helper so
- * the four return points in `launchAgent` share one construction and it stays
- * testable without mounting the hook — same reason `resolveLaunchWorktree` and
- * `resolveAgentLaunchKind` are separate.
- *
- * `cwd` is normalized from `""` to null: `resolveWorkspaceCwd` returns an empty
- * string when nothing at all resolves, and main reads a falsy cwd as "use the
- * home dir". Reporting `""` would name a directory the process never runs in.
- *
- * `worktreeId` is reported even when `targetWorktree` is null (the map has not
- * initialized yet, so the id could not be looked up) because that is the id the
- * panel is actually created with — the path and branch stay null since neither
- * is known.
- *
- * `cwd` never selects the worktree, so an explicit cwd in another repo still
- * files under the active one. `cwdOutsideWorktree` reports that disagreement
- * instead of leaving the caller to compare paths itself (#13130).
- */
-export function buildLaunchIdentity(
-  targetWorktreeId: string | null | undefined,
-  targetWorktree: { path?: string; branch?: string } | null,
-  cwd: string,
-  options: { caseInsensitive: boolean }
-): LaunchAgentIdentity {
-  const worktreePath = targetWorktree?.path || null;
-  const reportedCwd = cwd || null;
-  return {
-    worktreeId: targetWorktreeId || null,
-    worktreePath,
-    branch: targetWorktree?.branch ?? null,
-    cwd: reportedCwd,
-    cwdOutsideWorktree:
-      worktreePath && reportedCwd && isAbsolute(reportedCwd)
-        ? !isPathInside(
-            pathComparisonKey(reportedCwd, options),
-            pathComparisonKey(worktreePath, options)
-          )
-        : null,
-  };
 }
 
 export interface LaunchAgentResult extends LaunchAgentIdentity {
@@ -537,208 +461,54 @@ export function useAgentLauncher(): UseAgentLauncherReturn {
         const agentConfig = getAgentConfig(agentId);
         const isAgent = resolveAgentLaunchKind(agentId, isRegisteredAgent(agentId)) === "agent";
 
-        let command: string | undefined;
-        let launchFlags: string[] | undefined;
-        let callerLaunchFlags: string[] | undefined;
-        // Session id chosen up front for CLIs that accept one (#11782). Minted
-        // per launch and never reused: re-offering an id the CLI already knows
-        // is rejected outright, so each fresh conversation needs its own.
-        let assignedSessionId: string | undefined;
-        let presetEnv: Record<string, string> | undefined;
-        let preset: import("../../shared/config/agentRegistry").AgentPreset | undefined;
-        // Hoisted so the soft-launch gate below reuses the result of the
-        // single fetch inside the agentConfig block — avoids a second call
-        // (and its potential `refresh(true)` fan-out across all CLIs) on
-        // every launch. Background `refreshCliAvailability` (focus / wake
-        // handlers) can still race against awaits between this fetch and
-        // the gate, but that race is benign and pre-existing: at worst a
-        // launch sees a slightly stale `state` and creates the diagnostic
-        // panel, which the user can retry.
-        let cachedLaunchCliDetail: AgentCliDetail | undefined;
-        if (agentConfig) {
-          if (!useAgentSettingsStore.getState().isInitialized) {
-            await useAgentSettingsStore.getState().initialize();
-          }
-          const launchSettings = useAgentSettingsStore.getState().settings ?? agentSettings;
-          const entry = launchSettings?.agents?.[agentId] ?? {};
-          // null = explicitly default — skip preset lookup entirely
-          // undefined = use saved preset for this worktree (or agent-level
-          //   default, or nothing). Worktree-scoped override wins over the
-          //   agent-level `presetId` so switching worktrees doesn't silently
-          //   surface another worktree's pick.
-          const explicitDefault = launchOptions?.presetId === null;
-          const savedPresetId = resolveEffectivePresetId(entry, effectiveWorktreeId);
-          const resolvedPresetId = explicitDefault
-            ? undefined
-            : (launchOptions?.presetId ?? savedPresetId);
-          const ccrPresets = useCcrPresetsStore.getState().ccrPresetsByAgent[agentId];
-          const projectPresets = useProjectPresetsStore.getState().presetsByAgent[agentId];
-          const primaryPreset =
-            isAgent && !explicitDefault
-              ? getMergedPreset(
-                  agentId,
-                  resolvedPresetId,
-                  entry.customPresets,
-                  ccrPresets,
-                  projectPresets
-                )
-              : undefined;
-          preset = primaryPreset;
-
-          // Fallback for this launch: if the worktree-scoped pick is stale but
-          // the agent-level default is still valid, use the agent default now.
-          // Without this, a deleted scoped preset would launch preset-free even
-          // when a valid global fallback exists. The stale scoped slot is still
-          // cleared below so the next launch resolves directly against global.
-          const scopedId =
-            effectiveWorktreeId && entry.worktreePresets
-              ? entry.worktreePresets[effectiveWorktreeId]
-              : undefined;
-          if (
-            !primaryPreset &&
-            isAgent &&
-            !explicitDefault &&
-            launchOptions?.presetId === undefined &&
-            scopedId &&
-            scopedId === resolvedPresetId &&
-            entry.presetId &&
-            entry.presetId !== scopedId
-          ) {
-            preset = getMergedPreset(
-              agentId,
-              entry.presetId,
-              entry.customPresets,
-              ccrPresets,
-              projectPresets
-            );
-          }
-
-          // Stale presetId cleanup: clear whichever scope held the vanished ID.
-          // The worktree slot wins at resolution time, so only fall through to
-          // clearing the agent-level default when that's what the launch used.
-          if (resolvedPresetId && !primaryPreset) {
-            const { useAgentSettingsStore: settingsStore } =
-              await import("@/store/agentSettingsStore");
-            if (scopedId && scopedId === resolvedPresetId && effectiveWorktreeId) {
-              void settingsStore
+        if (agentConfig && !useAgentSettingsStore.getState().isInitialized) {
+          await useAgentSettingsStore.getState().initialize();
+        }
+        const plan = await buildAgentLaunchPlan({
+          agentId,
+          agentConfig,
+          isAgent,
+          worktreeId: effectiveWorktreeId,
+          settings: useAgentSettingsStore.getState().settings ?? agentSettings,
+          ccrPresets: useCcrPresetsStore.getState().ccrPresetsByAgent[agentId],
+          projectPresets: useProjectPresetsStore.getState().presetsByAgent[agentId],
+          options: launchOptions,
+          shellDialect: hostShellDialect(),
+          resolveBaseCommand: (registryCommand, detail) =>
+            resolveAgentLaunchBaseCommand(registryCommand, detail),
+          // Hoisted into the plan so the soft-launch gate below reuses this
+          // single fetch — avoids a second call (and its potential
+          // `refresh(true)` fan-out across all CLIs) on every launch.
+          // Background `refreshCliAvailability` (focus / wake handlers) can
+          // still race against awaits between this fetch and the gate, but
+          // that race is benign and pre-existing: at worst a launch sees a
+          // slightly stale `state` and creates the diagnostic panel, which the
+          // user can retry.
+          getCliDetail: (id) => getCurrentLaunchCliDetail(id),
+          getClipboardDirectory: async () =>
+            agentClipboardDirectory(
+              await resolveHostTmpDir(() => systemClient.getTmpDir()),
+              isRemoteWindow()
+            ),
+          onStalePreset: (scope) => {
+            if (scope === "worktree" && effectiveWorktreeId) {
+              void useAgentSettingsStore
                 .getState()
                 .updateWorktreePreset(agentId, effectiveWorktreeId, undefined);
-            } else if (entry.presetId && entry.presetId === resolvedPresetId) {
-              void settingsStore.getState().updateAgent(agentId, { presetId: undefined });
+            } else if (scope === "agent") {
+              void useAgentSettingsStore.getState().updateAgent(agentId, { presetId: undefined });
             }
-          }
-
-          // Merge: global env (base) overridden by preset env (preset wins on conflicts).
-          // Caller-supplied launchOptions.env layers on top of both — used for
-          // session-bound secrets like DAINTREE_MCP_TOKEN.
-          const sanitizedGlobal = sanitizeAgentEnv(entry.globalEnv as Record<string, unknown>);
-          const sanitizedPreset = preset?.env;
-          const callerEnv = launchOptions?.env;
-          if (sanitizedGlobal || sanitizedPreset || callerEnv) {
-            presetEnv = { ...sanitizedGlobal, ...sanitizedPreset, ...callerEnv };
-          }
-
-          // Merge per-preset behavioral overrides (incl. tri-state bypass mode)
-          // on top of agent-level settings via the shared resolver.
-          const effectiveEntry = applyPresetBehaviorOverrides(entry, preset);
-
-          // Resolve clipboard directory for agents that need it (e.g. Gemini)
-          let clipboardDirectory: string | undefined;
-          if (agentId === "gemini" && effectiveEntry.shareClipboardDirectory !== false) {
-            try {
-              const tmpDir = await resolveHostTmpDir(() => systemClient.getTmpDir());
-              clipboardDirectory = agentClipboardDirectory(tmpDir, isRemoteWindow());
-            } catch {
-              // Non-critical: Gemini will work without clipboard access
-            }
-          }
-
-          cachedLaunchCliDetail = await getCurrentLaunchCliDetail(agentId);
-          const baseCommand = resolveAgentLaunchBaseCommand(
-            agentConfig.command,
-            cachedLaunchCliDetail
-          );
-          const globalSkipPermissions = launchSettings?.globalSkipPermissions ?? false;
-          const globalUseAltScreen = launchSettings?.globalUseAltScreen ?? false;
-          assignedSessionId = isAgent ? mintAssignedSessionId(agentId) : undefined;
-          command = generateAgentCommand(baseCommand, effectiveEntry, agentId, {
-            initialPrompt: launchOptions?.prompt,
-            interactive: launchOptions?.interactive ?? true,
-            clipboardDirectory,
-            modelId: launchOptions?.modelId,
-            systemPromptArgs: launchOptions?.systemPromptArgs,
-            presetArgs: preset?.args?.join(" "),
-            globalSkipPermissions,
-            globalUseAltScreen,
-            sessionId: assignedSessionId,
-          });
-
-          // Capture process-level flags for session resume persistence
-          if (isAgent) {
-            launchFlags = buildAgentLaunchFlags(effectiveEntry, agentId, {
-              modelId: launchOptions?.modelId,
-              systemPromptArgs: launchOptions?.systemPromptArgs,
-              presetArgs: preset?.args,
-              globalSkipPermissions,
-              globalUseAltScreen,
-            });
-          }
-
-          // Append caller-supplied launch flags last so they override
-          // earlier flag values (argv parsers typically take the last
-          // occurrence, e.g. `--model sonnet` after a preset's `--model`).
-          // Mirrored into both the spawn command string and the persisted
-          // `launchFlags` array so resume reproduces the same configuration.
-          // Recorded separately too (#13046): recovery paths that rebuild or
-          // reconcile the settings-derived flags re-append exactly these.
-          const extraFlags = launchOptions?.agentLaunchFlags?.filter(Boolean);
-          if (extraFlags?.length) {
-            command = appendCallerLaunchFlagsToCommand(command, extraFlags, hostShellDialect());
-            if (isAgent) {
-              launchFlags = [...(launchFlags ?? []), ...extraFlags];
-              callerLaunchFlags = extraFlags;
-            }
-          }
-        }
-
-        const title =
-          launchOptions?.modelId && isAgent
-            ? getAgentDisplayTitle(agentId, launchOptions.modelId)
-            : (agentConfig?.name ?? "Terminal");
+          },
+        });
+        const { command, assignedSessionId, preset } = plan;
+        const cachedLaunchCliDetail = plan.cliDetail;
 
         if (isAgent && !command) {
           logWarn(`Cannot launch ${agentId} agent: command could not be generated`);
           return decline("spawn-failed");
         }
 
-        // Preset title: an explicit `displayTitle` wins verbatim; otherwise
-        // compose the agent name with the preset in brackets ("Claude [Z.ai]")
-        // so the active preset is visible next to the agent name. Pinned as
-        // "custom" below so the agent-detected title sync can't overwrite it
-        // with the bare agent name.
-        let presetTitle = title;
-        let hasPresetTitle = false;
-        if (isAgent && preset) {
-          const presetName = preset.name?.trim();
-          if (presetName) {
-            hasPresetTitle = true;
-            presetTitle = preset.displayTitle?.trim()
-              ? preset.displayTitle
-              : `${title} [${presetName}]`;
-          }
-        }
-        // A caller-supplied name overrides the computed title and pins it so
-        // agent detection can't rewrite it. Strip control characters (an LLM
-        // assistant could emit newlines/ANSI/tabs) and collapse whitespace so
-        // tab chrome and aria labels stay intact. Empty/whitespace after
-        // sanitizing is treated as no name — fall back to the default title
-        // with no `titleMode`.
-        const trimmedName = launchOptions?.name
-          ? sanitizeTerminalName(launchOptions.name)
-          : undefined;
-        // Pin any non-default title (caller name OR preset) as "custom" so the
-        // agent-detected title sync (computeDefaultTitle) can't clobber it.
-        const customTitle = trimmedName || hasPresetTitle ? { titleMode: "custom" as const } : {};
+        const customTitle = plan.titleMode ? { titleMode: plan.titleMode } : {};
         const spawnedBy = launchOptions?.spawnedBy;
         const focusPolicy =
           launchOptions?.focusPolicy ?? (isMcpSpawnFocusSuppressed() ? "preserve" : undefined);
@@ -748,19 +518,19 @@ export function useAgentLauncher(): UseAgentLauncherReturn {
               kind: "terminal",
               launchAgentId: agentId,
               command: command as string,
-              title: trimmedName || presetTitle,
+              title: plan.title,
               ...customTitle,
               cwd,
               worktreeId: effectiveWorktreeId || undefined,
               location: launchOptions?.location,
-              agentLaunchFlags: launchFlags,
-              callerLaunchFlags,
+              agentLaunchFlags: plan.launchFlags,
+              callerLaunchFlags: plan.callerLaunchFlags,
               agentModelId: launchOptions?.modelId,
               agentSessionId: assignedSessionId,
               handbackCode: launchOptions?.handbackCode,
               agentPresetId: preset?.id,
               agentPresetColor: preset?.color,
-              env: presetEnv,
+              env: plan.env,
               activateDockOnCreate: launchOptions?.activateDockOnCreate,
               excludeFromPersistence: launchOptions?.excludeFromPersistence,
               removeOnExit: launchOptions?.removeOnExit,
@@ -770,7 +540,7 @@ export function useAgentLauncher(): UseAgentLauncherReturn {
             }
           : {
               kind: "terminal",
-              title: trimmedName || title,
+              title: plan.title,
               ...customTitle,
               cwd,
               worktreeId: effectiveWorktreeId || undefined,
@@ -800,7 +570,7 @@ export function useAgentLauncher(): UseAgentLauncherReturn {
               id: gateId,
               kind: "terminal",
               launchAgentId: agentId,
-              title: trimmedName || presetTitle,
+              title: plan.title,
               ...customTitle,
               worktreeId: effectiveWorktreeId || undefined,
               cwd,
@@ -808,15 +578,15 @@ export function useAgentLauncher(): UseAgentLauncherReturn {
               rows: 24,
               location: launchOptions?.location === "dock" ? "dock" : "grid",
               command: command as string | undefined,
-              agentLaunchFlags: launchFlags,
-              callerLaunchFlags,
+              agentLaunchFlags: plan.launchFlags,
+              callerLaunchFlags: plan.callerLaunchFlags,
               agentModelId: launchOptions?.modelId,
               agentPresetId: preset?.id,
               agentPresetColor: preset?.color,
               spawnStatus: "missing-cli",
               startedAt: Date.now(),
               isVisible: true,
-              extensionState: presetEnv ? { presetEnv } : undefined,
+              extensionState: plan.env ? { presetEnv: plan.env } : undefined,
               excludeFromPersistence: launchOptions?.excludeFromPersistence,
               removeOnExit: launchOptions?.removeOnExit,
               spawnedBy,

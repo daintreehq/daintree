@@ -253,6 +253,33 @@ describe("ai handler payload validation", () => {
     );
   });
 
+  it("rejects AGENT_SETTINGS_SET_RESUME_ON_RESTART values it doesn't know (#13509)", async () => {
+    const handler = getInvokeHandler(CHANNELS.AGENT_SETTINGS_SET_RESUME_ON_RESTART);
+    for (const value of ["sometimes", true, undefined]) {
+      await expect(handler({} as never, value as never)).rejects.toThrow("Invalid resumeOnRestart");
+    }
+    expect(storeMock.set).not.toHaveBeenCalled();
+  });
+
+  it("writes AGENT_SETTINGS_SET_RESUME_ON_RESTART as a leaf, leaving agents untouched (#13509)", async () => {
+    const handler = getInvokeHandler(CHANNELS.AGENT_SETTINGS_SET_RESUME_ON_RESTART);
+    (storeMock.get as Mock).mockImplementation((key: string, defaultValue?: unknown) => {
+      if (key === "agentSettings") return { agents: { claude: { customFlags: "-v" } } };
+      return defaultValue;
+    });
+
+    const result = await handler({} as never, "on-focus" as never);
+
+    expect(storeMock.set).toHaveBeenCalledWith("agentSettings.resumeOnRestart", "on-focus");
+    expect(storeMock.set).not.toHaveBeenCalledWith("agentSettings", expect.anything());
+    expect(result).toEqual(
+      expect.objectContaining({
+        resumeOnRestart: "on-focus",
+        agents: { claude: { customFlags: "-v" } },
+      })
+    );
+  });
+
   it.each([
     ["a chosen default", { defaultAgent: "codex" }, "codex"],
     ["an explicit clear", { defaultAgent: null }, null],

@@ -234,10 +234,10 @@ const OVERFLOW_SIZE = {
   lg: "h-8 min-w-8 text-2xs",
 } as const;
 
-// The cut-out between overlapping discs is the pane's own canvas, the same
-// ring the fleet dots draw. The strong hairline inside it is each disc's own
-// edge: the initials' neutral fill barely steps off a dark canvas, so without
-// it the discs and the gaps between them read as one smudge.
+// The cut-out between overlapping discs is the pane's own canvas. The strong
+// hairline inside it is each disc's own edge: the initials' neutral fill barely
+// steps off a dark canvas, so without it the discs and the gaps between them
+// read as one smudge.
 const CUTOUT = "ring-2 ring-surface-canvas border border-border-strong";
 
 interface GroupAvatar {

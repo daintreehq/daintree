@@ -33,6 +33,26 @@ describe("summarizeMcpArgs", () => {
     expect(out).not.toContain("xxx");
   });
 
+  it("keeps a named long string whole, and only that one", () => {
+    const long = "x".repeat(MCP_ARGS_INLINE_STRING_LIMIT + 10);
+    const out = JSON.parse(
+      summarizeMcpArgs({ command: long, note: long }, undefined, new Set(["command"]))
+    ) as Record<string, unknown>;
+    expect(out.command).toBe(long);
+    expect(out.note).toBe(`<string: ${long.length} chars>`);
+  });
+
+  it("still scrubs and caps a string it keeps whole", () => {
+    const scrub = (s: string) => s.replace(/ghp_[A-Za-z0-9]+/g, "[REDACTED]");
+    const out = summarizeMcpArgs(
+      { command: `gh auth login --with-token ghp_abcdef ${"y".repeat(400)}` },
+      scrub,
+      new Set(["command"])
+    );
+    expect(out).not.toContain("ghp_abcdef");
+    expect(out.length).toBeLessThanOrEqual(MCP_ARGS_SUMMARY_LIMIT);
+  });
+
   it("collapses nested objects to <object>", () => {
     const out = summarizeMcpArgs({ args: { deep: { value: 1 } } });
     expect(out).toBe('{"args":"<object>"}');

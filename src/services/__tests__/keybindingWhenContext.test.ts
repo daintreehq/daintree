@@ -6,6 +6,9 @@ import { usePaletteStore, usePanelStore } from "@/store";
 import type { PaletteId } from "@/store/paletteStore";
 import { useFleetArmingStore } from "@/store/fleetArmingStore";
 import { useCanopyStore } from "@/store/canopyStore";
+import { usePluginContextKeyStore } from "@/store/pluginContextKeyStore";
+import { buildPluginWhenContext } from "@shared/utils/pluginContextKeys";
+import { evaluate, parse } from "@shared/utils/whenClause";
 
 function makeAgent(id: string, overrides: Partial<PtyPanelData> = {}): PtyPanelData {
   return {
@@ -33,8 +36,16 @@ afterEach(() => {
   usePaletteStore.setState({ activePaletteId: null });
   useFleetArmingStore.setState({ armedIds: new Set<string>() });
   usePanelStore.setState({ panelsById: {} });
+  usePluginContextKeyStore.setState({ keysByPlugin: {}, whenContext: {} });
   document.body.innerHTML = "";
 });
+
+function seedPluginKeys(keysByPlugin: Parameters<typeof buildPluginWhenContext>[0]): void {
+  usePluginContextKeyStore.setState({
+    keysByPlugin,
+    whenContext: buildPluginWhenContext(keysByPlugin),
+  });
+}
 
 describe("buildKeybindingWhenContext", () => {
   it("reports canopyHidden only while the user has hidden Canopy", () => {
@@ -104,6 +115,26 @@ describe("buildKeybindingWhenContext", () => {
 
     useFleetArmingStore.setState({ armedIds: new Set(["t-1", "t-2"]) });
     expect(buildKeybindingWhenContext(eventFrom(null)).fleetWaiting).toBe(true);
+  });
+
+  it("exposes plugin context keys under their manifest name alongside the built-ins", () => {
+    seedPluginKeys({ "digitalfrontier.beads": { needsYou: true, view: "triage" } });
+    useCanopyStore.setState({ mode: "hidden" });
+    const ctx = buildKeybindingWhenContext(eventFrom(null));
+    expect(evaluate(parse("digitalfrontier.beads.needsYou && !textInputFocused"), ctx)).toBe(true);
+    expect(evaluate(parse("digitalfrontier.beads.view == 'triage'"), ctx)).toBe(true);
+    expect(ctx.canopyHidden).toBe(true);
+  });
+
+  it("never lets a plugin namespace replace a built-in key", () => {
+    // A lowercase built-in is impossible today, but built-ins win structurally.
+    usePluginContextKeyStore.setState({
+      keysByPlugin: {},
+      whenContext: { canopyHidden: { forged: true }, modalOpen: "yes" },
+    });
+    const ctx = buildKeybindingWhenContext(eventFrom(null));
+    expect(ctx.canopyHidden).toBe(false);
+    expect(ctx.modalOpen).toBe(false);
   });
 
   it("marks a text field or editor as text input, but not a terminal's own textarea", () => {

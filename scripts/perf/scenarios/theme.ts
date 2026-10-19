@@ -253,10 +253,10 @@ export const themeScenarios: PerfScenario[] = [
     id: "PERF-305",
     name: "Brand Mark Ink - APCA Search Across the Cohort",
     description:
-      "resolveBrandMarkInk for all 18 shipped agent brand colours against all 15 themes on all " +
+      "resolveBrandMarkInk for all 17 shipped agent brand colours against all 15 themes on all " +
       "6 surfaces a mark can be painted on — the heaviest real consumer of the APCA and OKLCH " +
       "maths, run for every brand mark whenever the active theme changes. The full sweep is " +
-      "1,620 resolutions against a 512-entry FIFO cache, so it thrashes and every pass is cold; " +
+      "1,530 resolutions against a 512-entry FIFO cache, so it thrashes and every pass is cold; " +
       "warmSpeedup is measured on a bounded subset that fits. inkMisses composites each backdrop " +
       "itself and grades the two things the resolution actually costs: WCAG 1.4.11's 3:1 across " +
       "a 17x17 crossfade grid rather than at its endpoints, and the APCA Lc 35 floor an active " +

@@ -51,7 +51,14 @@ export function ClearLogsConfirmDialog({ isOpen, onOpenChange }: ClearLogsConfir
       isOpen={isOpen}
       onClose={() => onOpenChange(false)}
       title="Clear logs?"
-      description="Empties the log view and the in-memory buffer that diagnostic reports are built from. Doesn't delete the log file on disk."
+      description={
+        <>
+          <span className="block font-medium text-balance text-text-primary">
+            Clears the log view and the logs used to build diagnostic reports.
+          </span>
+          <span className="mt-1 block">The log file on disk is kept.</span>
+        </>
+      }
       confirmLabel="Clear logs"
       variant="destructive"
       isConfirmLoading={isClearing}

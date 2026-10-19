@@ -500,12 +500,13 @@ label:focus-within .brand-mark,
   }
 }
 
-/* GitHub Status Indicator Animations
- * Refined loading strip for toolbar git status icons.
- * Uses GPU-accelerated transforms for smooth 60fps animation.
- */
-
-/* Loading shimmer - left to right sweep */
+/* Forge status stripe (`ForgeStatusIndicator`), under the toolbar's forge stats.
+ * Loading is neutral ink, not accent: the counters already show em-dashes, so
+ * the stripe only has to say "still arriving", and the capsule's one accent
+ * belongs to a focused counter. A hue would also collide with a theme whose
+ * accent sits in the error or success family. The track is decoration; the
+ * band is what is seen, so it is opaque across its middle rather than a
+ * gradient that only peaks at one point. */
 @keyframes forge-status-shimmer {
   0% {
     transform: translateX(-100%);
@@ -516,7 +517,7 @@ label:focus-within .brand-mark,
 }
 
 .forge-status-loading {
-  background: color-mix(in oklab, var(--color-accent-primary) 20%, transparent);
+  background: color-mix(in oklab, var(--color-text-secondary) 20%, transparent);
 }
 
 .forge-status-loading::after {
@@ -529,7 +530,8 @@ label:focus-within .brand-mark,
   background: linear-gradient(
     90deg,
     transparent,
-    color-mix(in oklab, var(--color-accent-primary) 80%, transparent),
+    var(--color-text-secondary) 30%,
+    var(--color-text-secondary) 70%,
     transparent
   );
   animation: forge-status-shimmer 1.5s ease-in-out infinite;
@@ -609,34 +611,11 @@ label:focus-within .brand-mark,
   }
 }
 
-/* Success fade - scale in then fade out */
-@keyframes forge-status-success-fade {
-  0% {
-    opacity: 0;
-    transform: scaleX(0);
-  }
-  30% {
-    opacity: 1;
-    transform: scaleX(1);
-  }
-  100% {
-    opacity: 0;
-    transform: scaleX(1);
-  }
-}
-
-.forge-status-success {
-  background: var(--color-status-success);
-  transform-origin: left;
-  animation: forge-status-success-fade 500ms ease-out forwards;
-  will-change: opacity, transform;
-}
-
 /* Error pulse - subtle breathing animation */
 @keyframes forge-status-error-pulse {
   0%,
   100% {
-    opacity: 0.8;
+    opacity: 0.85;
   }
   50% {
     opacity: 1;
@@ -659,13 +638,7 @@ label:focus-within .brand-mark,
   }
 
   .forge-status-loading {
-    background: color-mix(in oklab, var(--color-accent-primary) 60%, transparent);
-  }
-
-  .forge-status-success {
-    animation: none;
-    opacity: 1;
-    transform: scaleX(1);
+    background: color-mix(in oklab, var(--color-text-secondary) 70%, transparent);
   }
 
   .forge-status-error {
@@ -686,18 +659,13 @@ body[data-performance-mode="true"] .forge-status-loading::after {
 }
 
 body[data-performance-mode="true"] .forge-status-loading {
-  background: color-mix(in oklab, var(--color-accent-primary) 60%, transparent) !important;
+  background: color-mix(in oklab, var(--color-text-secondary) 70%, transparent) !important;
 }
 
 body[data-performance-mode="true"] .palette-loading-bar__sweep {
   animation: none !important;
   width: 100% !important;
   background: color-mix(in oklab, var(--color-accent-primary) 50%, transparent) !important;
-}
-
-body[data-performance-mode="true"] .forge-status-success {
-  opacity: 1 !important;
-  transform: scaleX(1) !important;
 }
 
 body[data-performance-mode="true"] .forge-status-error {

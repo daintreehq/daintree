@@ -660,6 +660,23 @@ await host.registerAction(
 
 `reuseExisting` defaults to `true`: if a panel of this kind is already open in the target worktree (`worktreeId`, or the active worktree when you pass none) and not in the trash, the action focuses that panel where it is, grid or dock, and resolves with its `panelId`. It does **not** hand it the new `initialArgs` — the open panel keeps the state it has — so "Show in Video Manager" on a second file only brings the manager forward. To act on the new argument, keep it where the view pulls from — worker state the view reads with an `invoke` on mount — and then push a "changed" notice (`host.postToPanel(channel, payload, panelId)`) so an open view pulls again; a push alone can be lost, because the action returns before a view has necessarily subscribed and pushes are not buffered. Or pass `reuseExisting: false`, which always adds a new panel to the grid with these `initialArgs`. A panel in another worktree is never reused. `host.panelKindId` qualifies your bare panel id for whichever origin you load under (`project:{projectId}/{manifestId}/{kindId}` for a project plugin). A `contextMenus` entry at `location: "file"` dispatches your command with `{ path, worktreePath, status }`, which is how "Show in Video Manager" appears on every file row.
 
+### Open it as a dialog
+
+Pass `presentation: "dialog"` to present the panel as a modal instead of a grid panel, the way Canopy opens from its toolbar button. The view renders with `location: "dialog"` inside the host's dialog chrome, and the dialog replaces any panel dialog already open. A PTY-backed kind can't be presented this way. `size` picks its width from the host's dialog sizes (`sm`, `md`, `lg`, `4xl`, `5xl`, `6xl`, `7xl`, `workspace`); it defaults to `6xl`.
+
+```js
+await host.dispatch("panel.openPluginPanel", {
+  kind: host.panelKindId("triage"),
+  presentation: "dialog",
+  size: "workspace",
+  toggle: true,
+});
+```
+
+If a dialog of the kind is already open for the target worktree, a plain open resolves with its `panelId` and leaves it alone. Add `toggle: true` to close it instead when it is the topmost dialog, so one keybinding opens and closes it. A keybinding fires inside the dialog only if its `when` does not exclude `modalOpen`. A second click on a toolbar button already closes the dialog, because the click lands on its backdrop. `reuseExisting` does not apply to dialogs, and a grid or dock panel of the kind is never reused as one.
+
+A dialog panel is ephemeral. Closing it removes the panel, so `panelRemovedSignal` aborts and whatever the view wrote through `persistState` goes with it. Keep anything that should outlive a close in `host.storage` or your worker.
+
 ## Look like the app: the kit first, Tailwind for the rest
 
 Draw with `@daintreehq/plugin-ui` before writing markup of your own. It is Daintree's own components, served to your view through the import map like `react` — themed with the app, keyboard- and screen-reader-complete, and linted for: `daintree-plugin lint` flags a hand-rolled button, form control, spinner, badge, inline icon or native dialog and names the kit component to use. The Videos dashboard's list, drawn with it:

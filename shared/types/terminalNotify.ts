@@ -207,3 +207,15 @@ export function displayNoticeTerminalId(terminalId: string): string {
     ? `${plain.slice(0, NOTICE_TERMINAL_ID_MAX_CHARS)}…`
     : plain;
 }
+
+/** Longest host name spelled out in a delivered line. */
+const NOTICE_HOST_NAME_MAX_CHARS = 64;
+
+/** A Remote Host's name as a delivered line quotes it, reduced like a note and bounded. */
+export function displayNoticeHostName(name: string): string {
+  const plain = toPlainLine(name);
+  if (plain.length === 0) return "remote host";
+  return plain.length > NOTICE_HOST_NAME_MAX_CHARS
+    ? `${plain.slice(0, NOTICE_HOST_NAME_MAX_CHARS)}…`
+    : plain;
+}

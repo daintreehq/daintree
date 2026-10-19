@@ -24,6 +24,7 @@ import type {
   McpDispatchAuthorization,
   McpSessionOrigin,
   McpApprovalReason,
+  McpHostPreview,
   McpToolCallStartedPayload,
   McpToolCallSettledPayload,
   McpHelpDisplayImagePayload,
@@ -102,7 +103,6 @@ import { buildHibernationPreloadBindings } from "./ipc/handlers/hibernation.prel
 import { buildSessionRestorePreloadBindings } from "./ipc/handlers/sessionRestore.preload.js";
 import { buildWindowOpeningPreloadBindings } from "./ipc/handlers/windowOpening.preload.js";
 import { buildKeepAwakePreloadBindings } from "./ipc/handlers/keepAwake.preload.js";
-import { buildAssistantMessagingPreloadBindings } from "./ipc/handlers/assistantMessaging.preload.js";
 import { buildIdleTerminalPreloadBindings } from "./ipc/handlers/idleTerminals.preload.js";
 import { buildIdleBackgroundAutoClosePreloadBindings } from "./ipc/handlers/idleBackgroundAutoClose.preload.js";
 import { buildSystemSleepPreloadBindings } from "./ipc/handlers/systemSleep.preload.js";
@@ -159,6 +159,7 @@ import type {
   IpcEventBusMap,
   EventBusEnvelope,
   AgentSettingsEntry,
+  ResumeOnRestart,
   PRDetectedPayload,
   PRClearedPayload,
   IssueDetectedPayload,
@@ -215,6 +216,7 @@ import type {
   PluginArchiveInstallIntent,
   PluginDeepLinkIntent,
   PluginPanelBadge,
+  PluginContextValue,
   PluginFocusedPanel,
 } from "../shared/types/plugin.js";
 import type { PanelKindConfig } from "../shared/config/panelKindRegistry.js";
@@ -978,6 +980,10 @@ const _eventBusReplayable: ReadonlySet<keyof IpcEventBusMap> = new Set([
   // A restored view's runtime panel menus arrive in the did-finish-load
   // replay, before the store behind the boot gate subscribes (#13213).
   "plugin:panel-menus-changed",
+  // Same replay, landing before the toolbar has mounted its badge store (#13503).
+  "plugin:toolbar-badges-changed",
+  // Same replay, landing before the keybinding hook subscribes its store (#13506).
+  "plugin:context-keys-changed",
 ]);
 // Replayable events that accumulate instead of superseding. A double-clicked
 // `.dntr` archive (#11280) is one decision per file, so collapsing two
@@ -993,6 +999,15 @@ const _eventBusFifoReplay: ReadonlySet<keyof IpcEventBusMap> = new Set([
   // Each event is one plugin's whole map, so only the latest per plugin
   // matters — but the latest of all would drop every other plugin's.
   "plugin:panel-menus-changed",
+  "plugin:toolbar-badges-changed",
+  "plugin:context-keys-changed",
+]);
+// FIFO events whose every payload is one plugin's whole map: a newer one for the
+// same plugin supersedes the buffered one.
+const _eventBusPerPluginLatest: ReadonlySet<keyof IpcEventBusMap> = new Set([
+  "plugin:panel-menus-changed",
+  "plugin:toolbar-badges-changed",
+  "plugin:context-keys-changed",
 ]);
 const _eventBusBuffered = new Map<keyof IpcEventBusMap, unknown[]>();
 
@@ -1010,10 +1025,10 @@ function _ensureEventBusWired(): void {
         let prior = _eventBusFifoReplay.has(envelope.name)
           ? (_eventBusBuffered.get(envelope.name) ?? [])
           : [];
-        // Each runtime-menu event is one plugin's whole map, so only its latest
+        // Each such event is one plugin's whole map, so only its latest
         // is worth keeping: a busy plugin during a slow boot replaces rather
         // than piles up.
-        if (envelope.name === "plugin:panel-menus-changed") {
+        if (_eventBusPerPluginLatest.has(envelope.name)) {
           const pluginId = (envelope.payload as { pluginId?: unknown } | null)?.pluginId;
           prior = prior.filter(
             (payload) => (payload as { pluginId?: unknown } | null)?.pluginId !== pluginId
@@ -2374,6 +2389,9 @@ function buildElectronApi(): ElectronAPI {
       setGlobalInline: (value: boolean) =>
         _unwrappingInvoke(CHANNELS.AGENT_SETTINGS_SET_GLOBAL_INLINE, value),
 
+      setResumeOnRestart: (value: ResumeOnRestart) =>
+        _unwrappingInvoke(CHANNELS.AGENT_SETTINGS_SET_RESUME_ON_RESTART, value),
+
       reset: (agentType?: string) => _unwrappingInvoke(CHANNELS.AGENT_SETTINGS_RESET, agentType),
 
       stampVersion: (version: number) =>
@@ -2754,16 +2772,6 @@ function buildElectronApi(): ElectronAPI {
       ): (() => void) => _typedOn(CHANNELS.KEEP_AWAKE_STATE_CHANGED, callback),
     },
 
-    assistantMessaging: {
-      ...buildAssistantMessagingPreloadBindings(_unwrappingInvoke),
-
-      onChanged: (
-        callback: (
-          event: import("../shared/types/ipc/assistantMessaging.js").AssistantMessagingChangedEvent
-        ) => void
-      ): (() => void) => _typedOn(CHANNELS.ASSISTANT_MESSAGING_CHANGED, callback),
-    },
-
     hibernation: {
       ...buildHibernationPreloadBindings(_unwrappingInvoke),
 
@@ -2952,6 +2960,12 @@ function buildElectronApi(): ElectronAPI {
           rateLimitKey?: string;
           priority?: "high" | "low" | "watch";
           action?: { label: string; ipcChannel: string; data?: string };
+          pluginActions?: Array<{
+            label: string;
+            actionId: string;
+            args?: Record<string, unknown>;
+          }>;
+          replaceKey?: string;
         }) => void
       ) => _typedOn(CHANNELS.NOTIFICATION_SHOW_TOAST, callback),
     },
@@ -3543,6 +3557,7 @@ function buildElectronApi(): ElectronAPI {
           offerSessionApproval?: boolean;
           approvalOnly?: boolean;
           approvalReason?: McpApprovalReason;
+          hostPreview?: McpHostPreview;
           authorization?: McpDispatchAuthorization;
         }) => void
       ) => _typedOn(CHANNELS.MCP_SERVER_DISPATCH_ACTION_REQUEST, callback),
@@ -3748,6 +3763,15 @@ function buildElectronApi(): ElectronAPI {
       ) => _eventBusOn("plugin:panel-badges-changed", callback),
       onPanelBadgesCleared: (callback: (payload: { pluginId: string }) => void) =>
         _eventBusOn("plugin:panel-badges-cleared", callback),
+      onToolbarBadgesChanged: (
+        callback: (payload: { pluginId: string; badges: Record<string, PluginPanelBadge> }) => void
+      ) => _eventBusOn("plugin:toolbar-badges-changed", callback),
+      onContextKeysChanged: (
+        callback: (payload: {
+          pluginId: string;
+          keys: Record<string, PluginContextValue> | null;
+        }) => void
+      ) => _eventBusOn("plugin:context-keys-changed", callback),
       onPanelMenusChanged: (
         callback: (payload: {
           pluginId: string;

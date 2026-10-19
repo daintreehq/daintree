@@ -107,6 +107,13 @@ export function isRemoteEndpointHandle(handle: number): boolean {
   return handle < 0;
 }
 
+/**
+ * The pin of a host's own assistant with no view (#13511): started from main,
+ * or left behind by the view it ran through. No WebContents has this id, and
+ * no endpoint registers it, so it never routes to a renderer.
+ */
+export const NO_VIEW_HANDLE = 0;
+
 /** Host-side index of every attached endpoint, local and remote. */
 export interface EndpointRegistry {
   add(endpoint: ClientEndpoint): void;

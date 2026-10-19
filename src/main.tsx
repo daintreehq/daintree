@@ -39,6 +39,7 @@ import { WorktreeStoreProvider } from "./contexts/WorktreeStoreContext";
 import { installPluginDocumentRuntime } from "./services/plugin/pluginDocumentRuntime";
 import { installProjectSwitchStatusTiming } from "./services/projectSwitchStatusTiming";
 import { installRunningPluginActions } from "./services/plugin/runningPluginActions";
+import { usePluginContextKeyStore } from "./store/pluginContextKeyStore";
 import { installAppPluginKitHost } from "./services/plugin/appPluginKitHost";
 import { getSafeBootPromise } from "./lib/bootPromise";
 import { isRemoteShellSupported } from "./lib/remoteHosts";
@@ -105,6 +106,9 @@ async function bootstrap() {
   // Same reason: main replays the running plugin actions at `did-finish-load`,
   // and its events reach only a listener that already exists.
   installRunningPluginActions();
+  // Plugin `when`-clause keys replay at the same point, and a keybinding can
+  // fire before any hook that would otherwise subscribe the store has mounted.
+  usePluginContextKeyStore.getState().init();
   // Before the first render: a kit view reads its host as it draws.
   cleanupPluginKitHost = installAppPluginKitHost();
 

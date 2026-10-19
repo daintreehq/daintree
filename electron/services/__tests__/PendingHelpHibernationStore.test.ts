@@ -267,6 +267,31 @@ describe("PendingHelpHibernationStore", () => {
     expect(store.get(slotKey("proj-ok", 0))).not.toBeNull();
   });
 
+  it("drops a token captured for the retired assistant CLI, which can never resume", async () => {
+    const entry = (agentId: string) => ({
+      agentId,
+      agentSessionId: "id",
+      cwd: "/x",
+      capturedAt: Date.now(),
+    });
+    await fs.writeFile(
+      filePath,
+      JSON.stringify({
+        version: 2,
+        entries: {
+          [slotKey("proj-retired", 0)]: entry("daintree-assistant"),
+          [slotKey("proj-live", 0)]: entry("copilot"),
+        },
+      }),
+      "utf-8"
+    );
+
+    const store = new PendingHelpHibernationStore(filePath);
+    await store.load();
+    expect(store.get(slotKey("proj-retired", 0))).toBeNull();
+    expect(store.get(slotKey("proj-live", 0))?.agentId).toBe("copilot");
+  });
+
   it("ignores files written with a future version (forward incompatibility)", async () => {
     await fs.writeFile(
       filePath,

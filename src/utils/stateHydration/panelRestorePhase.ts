@@ -34,6 +34,7 @@ import {
 } from "./statePatcher";
 import {
   buildResumeLatestCommand,
+  resolveResumeOnRestart,
   supportsCrossDirectoryResume,
 } from "@shared/types/agentSettings";
 import {
@@ -171,13 +172,11 @@ function conversationScopeCwd(saved: TerminalState, agentId: string): string | u
 
 /**
  * A pane an earlier restore held for recovery is held again as-is (#12434), so
- * it never launches and takes no part in who resumes what.
+ * it never launches and takes no part in who resumes what. Any agent can carry
+ * one: the resume setting holds whichever agent it finds (#13509).
  */
 function isHeldFromSnapshot(saved: TerminalState, agentId: string | undefined): boolean {
-  return (
-    supportsCrossDirectoryResume(agentId) &&
-    sanitizeRestoreRecovery(saved.restoreRecovery) !== undefined
-  );
+  return agentId !== undefined && sanitizeRestoreRecovery(saved.restoreRecovery) !== undefined;
 }
 
 /**
@@ -787,6 +786,8 @@ export async function restorePanelsPhase(
       }
     }
 
+    const resumeOnRestart = resolveResumeOnRestart(agentSettings);
+
     // Decide which panes may resume what, before any restore task runs. At most
     // one pane per (agent, cwd) may use the agent's resume-latest fallback, none
     // may where a sibling already holds a session in that directory, and only one
@@ -1090,6 +1091,7 @@ export async function restorePanelsPhase(
                     allowSessionIdResume: !resumeSuppression.sessionId.has(saved.id),
                     resolvedResumeLatestSessionId,
                     coldLaunch,
+                    resumeOnRestart,
                   }
                 );
 

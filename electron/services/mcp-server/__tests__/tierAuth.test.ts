@@ -26,6 +26,8 @@ import {
   resolveTokenTier,
   shouldExposeTool,
   isWithheldFromBoundSession,
+  isWithheldFromRelaySession,
+  mayControlAssistants,
   UNBOUND_SESSION_SURFACE,
   ACTIONS_SEARCH_DEFAULT_LIMIT,
   ACTIONS_SEARCH_MAX_LIMIT,
@@ -41,7 +43,7 @@ import {
 } from "../tierAuth.js";
 import { McpUnavailableActionStubSchema } from "../../../../shared/types/mcpIntrospection.js";
 import { findWireStrippedKeywords } from "../../../../shared/utils/mcpWireSchema.js";
-import { TIER_ALLOWLISTS } from "../shared.js";
+import { TIER_ALLOWLISTS, TIER_NOT_PERMITTED_CODE } from "../shared.js";
 import { BUILT_IN_ACTION_IDS } from "../../../../shared/config/actionIds.js";
 import {
   OWNED_TWIN_TOOLS,
@@ -439,81 +441,80 @@ describe("shouldExposeTool", () => {
     expect(TIER_ALLOWLISTS.external.has(entry.id)).toBe(true);
     expect(shouldExposeTool(entry, "external")).toBe(false);
   });
-  // #13335: an assistant's inbox tools are offered only while its own lane is
-  // enrolled for messaging, and never to a pane or an api-key client.
-  it.each(["assistant.getInbox", "assistant.reply"])(
-    "offers %s only to the assistant of an enrolled lane",
+  // #13493: the host tools go by their own offer, to this machine's own
+  // assistant from core, hosts or not, and never to a pane or key.
+  it.each(["host.list", "host.call"])("offers %s only where it is offered, from core", (id) => {
+    const entry = makeEntry({ id });
+    const assistant = { workspaceBound: false, rendererOwnedOrigin: true };
+    expect(shouldExposeTool(entry, "core", assistant)).toBe(false);
+    expect(shouldExposeTool(entry, "core", { ...assistant, hostCall: true })).toBe(true);
+    expect(
+      shouldExposeTool(entry, "full", { workspaceBound: false, paneApproval: true, hostCall: true })
+    ).toBe(false);
+    expect(shouldExposeTool(entry, "external", { workspaceBound: false, hostCall: true })).toBe(
+      false
+    );
+  });
+
+  // #13496: finding and starting assistants, and the quota, answer to their
+  // caller: an assistant here or another machine's through host.call, at any
+  // in-app tier; never a pane or an api-key client, whatever else it holds.
+  it.each(["assistant.list", "assistant.start", "agent.readQuota"])(
+    "offers %s to an assistant caller alone",
     (id) => {
       const entry = makeEntry({ id });
-      const assistant = { workspaceBound: false, rendererOwnedOrigin: true };
-      expect(shouldExposeTool(entry, "core", assistant)).toBe(false);
-      expect(shouldExposeTool(entry, "core", { ...assistant, assistantMessaging: true })).toBe(
-        true
-      );
+      expect(mayControlAssistants("core", { assistantCaller: true })).toBe(true);
+      for (const tier of ["core", "full"] as const) {
+        expect(
+          shouldExposeTool(entry, tier, { workspaceBound: false, assistantCaller: true })
+        ).toBe(true);
+        expect(
+          shouldExposeTool(entry, tier, {
+            workspaceBound: true,
+            relay: true,
+            assistantCaller: true,
+          })
+        ).toBe(true);
+      }
+      expect(
+        shouldExposeTool(entry, "full", { workspaceBound: false, rendererOwnedOrigin: true })
+      ).toBe(false);
       expect(
         shouldExposeTool(entry, "full", {
           workspaceBound: false,
           paneApproval: true,
-          assistantMessaging: true,
+          hostCall: true,
         })
       ).toBe(false);
       expect(
-        shouldExposeTool(entry, "external", { workspaceBound: false, assistantMessaging: true })
+        shouldExposeTool(entry, "external", { workspaceBound: false, assistantCaller: true })
       ).toBe(false);
     }
   );
-  // #13338: sending to the hub is narrower again, a lane a remote Shell
-  // enrolled, so the hub itself never sees it.
-  it("offers assistant.sendMessage only to a lane that may send, never the hub", () => {
-    const entry = makeEntry({ id: "assistant.sendMessage" });
-    const assistant = { workspaceBound: false, rendererOwnedOrigin: true };
-    expect(shouldExposeTool(entry, "core", { ...assistant, assistantMessaging: true })).toBe(false);
+
+  // #13493: a session another machine's assistant reaches through its Shell is
+  // never offered a host tool or this machine's assistant-panel tools.
+  it("withholds every host tool and this machine's panel tools from a relayed session", () => {
+    const relayed = { workspaceBound: true, relay: true };
+    for (const id of ["host.call", "host.list", "host.switch", "host.anythingNew"]) {
+      expect(isWithheldFromRelaySession(id)).toBe(true);
+    }
+    expect(isWithheldFromRelaySession("help.displayImage")).toBe(true);
+    expect(isWithheldFromRelaySession("assistant.list")).toBe(false);
+    expect(isWithheldFromRelaySession("terminal.list")).toBe(false);
+    expect(shouldExposeTool(makeEntry({ id: "terminal.list" }), "core", relayed)).toBe(true);
+    expect(shouldExposeTool(makeEntry({ id: "agent.launch" }), "core", relayed)).toBe(true);
     expect(
-      shouldExposeTool(entry, "core", {
-        ...assistant,
-        assistantMessaging: true,
-        assistantSending: true,
-      })
+      shouldExposeTool(makeEntry({ id: "host.call" }), "core", { ...relayed, hostCall: true })
+    ).toBe(false);
+    // Unlike a bound external session, a relayed one keeps its confirm-gated tools.
+    expect(
+      shouldExposeTool(
+        makeEntry({ id: "worktree.deleteOwned", danger: "confirm" }),
+        "core",
+        relayed
+      )
     ).toBe(true);
-    // Sending without the lane's own messaging is never enough.
-    expect(shouldExposeTool(entry, "core", { ...assistant, assistantSending: true })).toBe(false);
-    expect(
-      shouldExposeTool(entry, "full", {
-        workspaceBound: false,
-        paneApproval: true,
-        assistantMessaging: true,
-        assistantSending: true,
-      })
-    ).toBe(false);
-  });
-  // #13336: the hub's host tools are offered only to this Shell's enrolled hub,
-  // reads on core and sends and cancels on full, and never to a pane or key.
-  it.each([
-    ["host.list", "core"],
-    ["host.listAssistants", "core"],
-    ["host.getTask", "core"],
-    ["host.listTasks", "core"],
-    ["host.readQuota", "core"],
-    ["host.sendMessage", "full"],
-    ["host.cancelTask", "full"],
-  ] as const)("offers %s only to the hub, from the %s tier", (id, minimum) => {
-    const entry = makeEntry({ id });
-    const assistant = { workspaceBound: false, rendererOwnedOrigin: true };
-    const hub = { ...assistant, hubMessaging: true };
-    expect(shouldExposeTool(entry, "full", assistant)).toBe(false);
-    expect(shouldExposeTool(entry, "full", { ...assistant, assistantMessaging: true })).toBe(false);
-    expect(shouldExposeTool(entry, "full", hub)).toBe(true);
-    expect(shouldExposeTool(entry, "core", hub)).toBe(minimum === "core");
-    expect(
-      shouldExposeTool(entry, "full", {
-        workspaceBound: false,
-        paneApproval: true,
-        hubMessaging: true,
-      })
-    ).toBe(false);
-    expect(shouldExposeTool(entry, "external", { workspaceBound: false, hubMessaging: true })).toBe(
-      false
-    );
   });
 });
 
@@ -1483,6 +1484,34 @@ describe("filterIntrospectionResultForSession", () => {
       return policy;
     }
 
+    it("names the owned twin in a miss only when this session may call it", () => {
+      const send = makeEntry({ id: "terminal.sendCommand", kind: "command" });
+      const external = snapshot({ tier: "full", rendererOwnedOrigin: false, relay: true });
+      const missFor = (permittedActionIds: ReadonlySet<string>) =>
+        payloadOf(lookup(send, { permittedActionIds, policySnapshot: external }));
+
+      const withTwin = missFor(new Set(["terminal.sendCommandOwned"]));
+      expect(withTwin).toMatchObject({ ok: false, entry: null, policy: null });
+      expect(withTwin.error?.code).toBe("NOT_FOUND");
+      expect(withTwin.error?.message).toContain('"terminal.sendCommandOwned"');
+
+      const withoutTwin = missFor(new Set(["terminal.list"]));
+      expect(withoutTwin.error?.code).toBe("NOT_FOUND");
+      expect(withoutTwin.error?.message).not.toContain("terminal.sendCommandOwned");
+    });
+
+    it("keeps the tier stub, not a twin hint, for the assistant asking above its tier", () => {
+      const inject = makeEntry({ id: "terminal.inject", kind: "command" });
+      const payload = lookup(inject, {
+        permittedActionIds: new Set(["terminal.injectOwned"]),
+        policySnapshot: snapshot({ tier: "core", rendererOwnedOrigin: true }),
+      });
+
+      const body = payloadOf(payload) as { error: { code: string; message: string } | null };
+      expect(body.error?.code).toBe(TIER_NOT_PERMITTED_CODE);
+      expect(body.error?.message).not.toContain("terminal.injectOwned");
+    });
+
     it("returns a permitted entry alongside its policy", () => {
       const entry = makeEntry({ id: "terminal.list" });
       const payload = payloadOf(lookup(entry));
@@ -1956,7 +1985,7 @@ describe("filterIntrospectionResultForSession", () => {
       // The renderer's own `resultSchema` check runs before main substitutes the
       // policy, so it only ever validates the null placeholder. Nothing else
       // validates what main builds — this is the check that the finished record
-      // satisfies the contract the companion CLI codes against.
+      // satisfies the contract clients code against.
       it("builds a record that satisfies the published wire contract", () => {
         for (const target of [
           makeEntry({ id: "terminal.list" }),
@@ -2134,6 +2163,44 @@ describe("filterIntrospectionResultForSession", () => {
     // A manifest entry is only as well-formed as whatever built it, and
     // JSON.stringify throws on a cycle. Fail closed rather than letting it
     // escape the tool call as an exception.
+    // #13501: the command runner answers its caller, so a full-tier relay is
+    // described as its listing and its admission treat it.
+    it("describes the command runner for a full-tier relay, and nobody a relay can't be", () => {
+      const runner = makeEntry({ id: "project.runCommand", kind: "command" });
+      const relay = (tier: "core" | "full") =>
+        buildTargetPolicy(runner, {
+          ...snap,
+          tier,
+          rendererOwnedOrigin: false,
+          relay: true,
+        });
+
+      expect(relay("full")).toMatchObject({ authorizedBy: "tier", minimumTier: "full" });
+      expect(relay("core")).toBeNull();
+      expect(
+        buildTargetPolicy(runner, { ...snap, tier: "full", rendererOwnedOrigin: false })
+      ).toBeNull();
+      expect(shouldExposeTool(runner, "full", { workspaceBound: true, relay: true })).toBe(true);
+      expect(shouldExposeTool(runner, "core", { workspaceBound: true, relay: true })).toBe(false);
+      expect(shouldExposeTool(runner, "full", { workspaceBound: false })).toBe(false);
+    });
+
+    // #13496: the assistant tools answer their caller too, so a relayed
+    // assistant, with no ladder tier to place them on, can still read them.
+    it("describes the assistant tools for an assistant caller, relayed or not", () => {
+      for (const id of ["assistant.list", "assistant.start", "agent.readQuota"]) {
+        const entry = makeEntry({ id, kind: id === "assistant.start" ? "command" : "query" });
+        const relayed = { ...snap, tier: "full" as const, rendererOwnedOrigin: false, relay: true };
+
+        expect(buildTargetPolicy(entry, { ...relayed, assistantControl: true }), id).toMatchObject({
+          authorizedBy: "tier",
+          minimumTier: "core",
+          callable: true,
+        });
+        expect(buildTargetPolicy(entry, relayed), id).toBeNull();
+      }
+    });
+
     it("returns null instead of throwing on a schema that cannot be canonicalised", () => {
       const cyclic: Record<string, unknown> = { type: "object" };
       cyclic["self"] = cyclic;
@@ -2271,21 +2338,15 @@ describe("filterIntrospectionResultForSession", () => {
       expect(McpUnavailableActionStubSchema.safeParse(stub).success).toBe(true);
     });
 
-    // #13336: a core session that isn't the hub can't raise its tier into the
-    // hub's send tools, so it is never told it could.
-    it("offers the hub's full-tier tools as a stub to the hub alone", () => {
-      const entry = makeEntry({
-        id: "host.sendMessage",
-        title: "Message an assistant on a host",
-        category: "help",
-        danger: "safe",
-      });
-      expect(buildUnavailableStub(entry, firstParty())).toBeNull();
-      expect(buildUnavailableStub(entry, firstParty({ hubMessaging: true }))).toMatchObject({
-        id: "host.sendMessage",
-        minimumTier: "full",
-      });
-    });
+    // The host and assistant tools exist only for an assistant, so a session
+    // is never told to raise its tier for them (#13493, #13496).
+    it.each(["host.list", "host.call", "assistant.list", "assistant.start", "agent.readQuota"])(
+      "offers no upgrade stub for %s",
+      (id) => {
+        const entry = makeEntry({ id, title: "Assistant tool", category: "help", danger: "safe" });
+        expect(buildUnavailableStub(entry, firstParty())).toBeNull();
+      }
+    );
 
     // The stub above proves nothing about the derivation: BAND_OVERRIDES pins
     // it, so a builder that passed a hard-coded `danger` into `deriveBand`
@@ -2682,15 +2743,14 @@ describe("isWithheldFromBoundSession (#11789)", () => {
 // decides whether a panel tool could be reached, the origin decides whether the
 // unscoped form or the owned twin is.
 describe("unscoped panel tools are reserved for renderer-owned origins (#12407)", () => {
-  // An assistant whose lane is enrolled for messaging, and is this Shell's hub,
-  // so its own inbox tools (#13335) and host tools (#13336), reserved here too,
-  // are on its surface alongside the rest.
+  // One of this machine's assistants, offered its host tools (#13493) and the
+  // tools it addresses other assistants with (#13496), reserved here too, on
+  // its surface alongside the rest.
   const ASSISTANT = {
     workspaceBound: false,
     rendererOwnedOrigin: true,
-    assistantMessaging: true,
-    assistantSending: true,
-    hubMessaging: true,
+    hostCall: true,
+    assistantCaller: true,
   };
   const TWIN_KEYS = new Set<string>(Object.keys(OWNED_TWIN_TOOLS));
   const TWIN_VALUES = new Set<string>(Object.values(OWNED_TWIN_TOOLS));

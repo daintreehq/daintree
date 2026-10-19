@@ -105,6 +105,37 @@ That was the main thing Daintree had to solve: how do you jump between a lot of 
 
 And the agents are still the ones you already use — for me that's Claude Code, Codex and Grok, and a lot of my role now is knowing which one suits a particular task. You'll have your own favourites. Daintree just runs them and watches what they do — the output, the silence, the prompts, the exits — and works out from that whether each agent is working or waiting.`;
 
+/** Twenty steps, so the change stepper's counter has a digit boundary to cross. */
+const RELEASE_STEPS = [
+  "Freeze develop",
+  "Cut the release branch",
+  "Bump the version",
+  "Write the changelog",
+  "Regenerate the keyboard shortcuts doc",
+  "Run the full suite in CI",
+  "Build the macOS bundle",
+  "Notarize the macOS bundle",
+  "Build the Windows installer",
+  "Sign the Windows installer",
+  "Build the Linux packages",
+  "Smoke-test each platform",
+  "Tag the release",
+  "Publish the update feed",
+  "Upload the artifacts",
+  "Merge the release into main",
+  "Merge main back into develop",
+  "Post the release notes",
+  "Watch the crash reports",
+  "Close the milestone",
+];
+
+function releaseChecklist(check: string): string {
+  return [
+    "# Release checklist",
+    ...RELEASE_STEPS.map((step, i) => `## ${i + 1}. ${step}\n\n${check}`),
+  ].join("\n\n");
+}
+
 export const FIXTURES: Record<string, MarkdownDiffFixture> = {
   /**
    * The complaint case, taken from the screenshot that opened this review: a
@@ -244,6 +275,17 @@ There are five coding agents running on my machine as I write this.
 ${TAIL}
 
 That's two people, not a universal limit. But their numbers matched the ceiling I kept hitting, which is why I stopped trying to fix an attention problem by running more agents.`,
+  },
+
+  /**
+   * The stepper case: twenty separate changes, one per step, so the counter
+   * steps from "9 of 20" to "10 of 20" and the arrows beside it either hold
+   * still or don't.
+   */
+  "many-changes": {
+    what: "twenty changes — the stepper's counter crosses a digit boundary",
+    old: releaseChecklist("Tick it off once it's done."),
+    new: releaseChecklist("Tick it off once it has landed on main."),
   },
 };
 

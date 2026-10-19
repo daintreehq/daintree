@@ -1,7 +1,14 @@
 import { timingSafeEqual } from "node:crypto";
 import type { ActionContext } from "../../../shared/types/actions.js";
 import type { McpActiveClientInfo } from "../../../shared/types/ipc/mcpServer.js";
-import type { McpTier, McpSseSession, McpHttpSession, McpSessionOrigin } from "./shared.js";
+import type {
+  McpTier,
+  McpSseSession,
+  McpHttpSession,
+  McpRelayCaller,
+  McpRelaySession,
+  McpSessionOrigin,
+} from "./shared.js";
 import { MCP_SSE_IDLE_TIMEOUT_MS, MCP_TIER_ELEVATION_TTL_MS } from "./shared.js";
 import type { DedupCacheEntry, DedupInFlightEntry } from "./sessionDedup.js";
 import { GrantCache, type GrantLifecycleEmitter } from "./grantCache.js";
@@ -57,13 +64,21 @@ export interface SessionStoreOptions {
 export class SessionStore {
   readonly sessions = new Map<string, McpSseSession>();
   readonly httpSessions = new Map<string, McpHttpSession>();
+  /** Sessions a Shell's assistant reaches over the link (#13493), served in-process. */
+  readonly relaySessions = new Map<string, McpRelaySession>();
+  // sessionId → who a relayed session acts for (#13493). Present exactly for
+  // the sessions in `relaySessions`, and cleared with the rest of the binding.
+  readonly sessionRelayMap = new Map<string, McpRelayCaller>();
   /**
    * Tells a bound session its tool list moved with its route (#13350). Kept
    * here so every teardown path, each of which clears the session's binding,
    * forgets it too.
    */
   readonly toolListRouteWatch = new ToolListRouteWatch((sessionId) => {
-    const session = this.httpSessions.get(sessionId) ?? this.sessions.get(sessionId);
+    const session =
+      this.httpSessions.get(sessionId) ??
+      this.sessions.get(sessionId) ??
+      this.relaySessions.get(sessionId);
     session?.server.sendToolListChanged().catch(() => {
       // Transport already closing; its next list reads the new route anyway.
     });
@@ -93,9 +108,15 @@ export class SessionStore {
   // a workspace selector: the target WebContents is re-resolved from this on
   // every operation, because a view's id dies with the view while the workspace
   // id outlives it. Absent for unbound external sessions, which keep the
-  // focused-window fallback, and for help / assistant-pane sessions, which
+  // focused-window fallback, and for help sessions, which
   // route through `sessionWebContentsMap` instead.
   readonly sessionWorkspaceMap = new Map<string, string>();
+  // sessionId → the project of a help-session bearer running with no view
+  // (#13511), bound at handshake in place of a `sessionWebContentsMap` pin.
+  // Its calls run through the host's own form of each action for that
+  // project, never in a window. Kept apart from `sessionWorkspaceMap`, whose
+  // binding is an external session's, with an external session's ceiling.
+  readonly sessionViewlessHelpMap = new Map<string, string>();
   // sessionId → digest of the credential that created the session, written at
   // handshake. A session id is a routing handle that travels in URLs and
   // headers, not proof of ownership: `isAuthorized` only establishes that a
@@ -212,6 +233,20 @@ export class SessionStore {
     this.dedupResultCache.delete(sessionId);
   }
 
+  /** Whether a live transport of any kind owns `sessionId`. */
+  hasLiveTransport(sessionId: string): boolean {
+    return (
+      this.sessions.has(sessionId) ||
+      this.httpSessions.has(sessionId) ||
+      this.relaySessions.has(sessionId)
+    );
+  }
+
+  /** Who a relayed session acts for (#13493); undefined for every other session. */
+  getRelayCaller(sessionId: string): McpRelayCaller | undefined {
+    return this.sessionRelayMap.get(sessionId);
+  }
+
   /**
    * How this session's bearer was authenticated (#11789). Defaults to
    * `external` — the least-privileged classification — so a session whose
@@ -231,8 +266,7 @@ export class SessionStore {
    * asking about ownership rather than routing.
    */
   isRendererOwnedOrigin(sessionId: string): boolean {
-    const origin = this.getOrigin(sessionId);
-    return origin === "help" || origin === "assistant-pane";
+    return this.getOrigin(sessionId) === "help";
   }
 
   /**
@@ -261,7 +295,7 @@ export class SessionStore {
     for (const [sessionId, boundWorkspaceId] of this.sessionWorkspaceMap) {
       if (boundWorkspaceId !== workspaceId) continue;
       if (this.sessionOriginMap.get(sessionId) !== "external") continue;
-      if (this.sessions.has(sessionId) || this.httpSessions.has(sessionId)) return true;
+      if (this.hasLiveTransport(sessionId)) return true;
     }
     return false;
   }
@@ -295,7 +329,9 @@ export class SessionStore {
     this.sessionContextMap.delete(sessionId);
     this.sessionOriginMap.delete(sessionId);
     this.sessionWorkspaceMap.delete(sessionId);
+    this.sessionViewlessHelpMap.delete(sessionId);
     this.sessionCredentialMap.delete(sessionId);
+    this.sessionRelayMap.delete(sessionId);
     this.resourceOwnership.clearSession(sessionId);
     this.toolListRouteWatch.forget(sessionId);
   }
@@ -585,7 +621,7 @@ export class SessionStore {
     // mutation-during-iteration from `decayTier`.
     const elevationEntries = Array.from(this.tierElevationStartedAt.entries());
     for (const [sessionId, startedAt] of elevationEntries) {
-      if (!this.sessions.has(sessionId) && !this.httpSessions.has(sessionId)) {
+      if (!this.hasLiveTransport(sessionId)) {
         this.clearElevationTimer(sessionId);
         continue;
       }
@@ -635,7 +671,7 @@ export class SessionStore {
   private checkAndDecayTier(sessionId: string): void {
     // Guard #1 (#3728): the session may have been reaped/closed between arm
     // and fire — its teardown path already dropped the elevation state.
-    if (!this.sessions.has(sessionId) && !this.httpSessions.has(sessionId)) {
+    if (!this.hasLiveTransport(sessionId)) {
       this.clearElevationTimer(sessionId);
       return;
     }
@@ -664,7 +700,7 @@ export class SessionStore {
     const current = this.sessionTierMap.get(sessionId);
     this.clearElevationTimer(sessionId);
     // Guard #1: session gone — nothing to decay, nobody to notify.
-    if (!this.sessions.has(sessionId) && !this.httpSessions.has(sessionId)) return;
+    if (!this.hasLiveTransport(sessionId)) return;
     // Guard #2 (#2243): a fresh "Always allow" re-elevated this session
     // between arm and fire — its own timer owns the new window now; never
     // wipe a tier the user just re-approved.
@@ -720,7 +756,7 @@ export class SessionStore {
    * (every connect path stamps the tier before registering the transport).
    */
   getTier(sessionId: string): McpTier | null {
-    if (!this.sessions.has(sessionId) && !this.httpSessions.has(sessionId)) return null;
+    if (!this.hasLiveTransport(sessionId)) return null;
     return this.sessionTierMap.get(sessionId) ?? "core";
   }
 
@@ -818,7 +854,7 @@ export class SessionStore {
     for (const [transportSessionId, mappedHelpId] of this.sessionHelpIdMap) {
       if (mappedHelpId !== helpSessionId) continue;
       if (this.sessionWebContentsMap.get(transportSessionId) !== callerWebContentsId) continue;
-      if (!this.sessions.has(transportSessionId) && !this.httpSessions.has(transportSessionId)) {
+      if (!this.hasLiveTransport(transportSessionId)) {
         continue;
       }
       return transportSessionId;
@@ -829,7 +865,8 @@ export class SessionStore {
   revokeSession(sessionId: string): boolean {
     const sseSession = this.sessions.get(sessionId);
     const httpSession = this.httpSessions.get(sessionId);
-    if (!sseSession && !httpSession) return false;
+    const relaySession = this.relaySessions.get(sessionId);
+    if (!sseSession && !httpSession && !relaySession) return false;
 
     if (sseSession) {
       clearTimeout(sseSession.idleTimer);
@@ -840,6 +877,10 @@ export class SessionStore {
       clearTimeout(httpSession.idleTimer);
       this.httpSessions.delete(sessionId);
       httpSession.transport.close().catch(() => {});
+    }
+    if (relaySession) {
+      this.relaySessions.delete(sessionId);
+      relaySession.transport.close().catch(() => {});
     }
 
     this.sessionTierMap.delete(sessionId);
@@ -894,6 +935,17 @@ export class SessionStore {
     }
     this.httpSessions.clear();
     this.httpIdleStartedAt.clear();
+    for (const session of this.relaySessions.values()) {
+      try {
+        Promise.resolve(session.transport.close()).catch(() => {
+          /* best-effort during teardown */
+        });
+      } catch {
+        // ignore synchronous close errors during teardown
+      }
+    }
+    this.relaySessions.clear();
+    this.sessionRelayMap.clear();
     for (const timer of this.tierElevationTimers.values()) {
       clearTimeout(timer);
     }
@@ -906,6 +958,7 @@ export class SessionStore {
     this.sessionContextMap.clear();
     this.sessionOriginMap.clear();
     this.sessionWorkspaceMap.clear();
+    this.sessionViewlessHelpMap.clear();
     this.sessionCredentialMap.clear();
     this.toolListRouteWatch.clear();
     // Authority only — the terminals and worktrees these records named are

@@ -125,23 +125,6 @@ describe("isToolbarButtonVisible", () => {
       expect(isToolbarButtonVisible(pluginId, {}, null, undefined, true)).toBe(false);
     });
   });
-
-  it("never shows an assistant-only agent as a toolbar button, even when installed or pinned (#10634)", () => {
-    const id = "daintree-assistant" as AnyToolbarButtonId;
-    // Installed (would normally make an agent button appear when pinned:undefined).
-    expect(isToolbarButtonVisible(id, {}, null, { "daintree-assistant": "ready" } as never)).toBe(
-      false
-    );
-    // Even an explicit pin must not surface it.
-    expect(
-      isToolbarButtonVisible(
-        id,
-        {},
-        { agents: { "daintree-assistant": { pinned: true } } } as never,
-        { "daintree-assistant": "ready" } as never
-      )
-    ).toBe(false);
-  });
 });
 
 describe("getToolbarButtonGroup (#11681)", () => {

@@ -46,6 +46,12 @@ vi.mock("../../plugin-capability/instances.js", () => ({
 vi.mock("../../forge/forgeCredentialUtils.js", () => ({
   buildStoredCredentials: vi.fn(() => null),
 }));
+const viewless = vi.hoisted(() => ({
+  runViewlessAction: vi.fn(async (_request: unknown): Promise<unknown> => null),
+}));
+vi.mock("../../viewless/index.js", () => ({
+  runViewlessAction: viewless.runViewlessAction,
+}));
 
 import {
   createHost,
@@ -134,6 +140,8 @@ function makeHarness(): Harness {
     pluginActionOwners: new Map(),
     actionValidators: new Map(),
     pluginBadges: new Map(),
+    pluginToolbarBadges: new Map(),
+    emitToolbarBadges: () => {},
     pluginPanelMenus: new Map(),
     pluginFsWatchers: new Map(),
     broadcaster: { schedulePluginActionsBroadcast: vi.fn() },
@@ -776,6 +784,135 @@ describe("createHost dispatch with an explicit project (#13119)", () => {
     ]);
   });
 
+  describe("terminal.close for a project with no live view (#13507)", () => {
+    const noView = () =>
+      new AppError({ code: "PROJECT_VIEW_UNAVAILABLE", message: "no live renderer" });
+
+    beforeEach(() => {
+      viewless.runViewlessAction.mockReset();
+      viewless.runViewlessAction.mockResolvedValue(null);
+    });
+
+    it("closes in main and audits the outcome", async () => {
+      const h = makeHarness();
+      const host = unboundWithTargeting(h, true);
+      h.sendDispatchToRenderer.mockRejectedValueOnce(noView());
+      viewless.runViewlessAction.mockResolvedValueOnce({
+        ok: true,
+        result: { closedIds: ["t-1"] },
+      });
+
+      await expect(
+        host.dispatch("terminal.close", { terminalId: "t-1" }, { projectId: PROJECT_A })
+      ).resolves.toEqual({ ok: true, result: { closedIds: ["t-1"] } });
+
+      expect(viewless.runViewlessAction).toHaveBeenCalledWith({
+        workspaceId: PROJECT_A,
+        actionId: "terminal.close",
+        args: { terminalId: "t-1" },
+        confirmed: false,
+      });
+      expect(h.deps.safeAppendAudit).toHaveBeenCalledWith(
+        expect.objectContaining({
+          actionId: `dispatch:${PROJECT_A}:terminal.close`,
+          channel: "plugin:dispatch-targeted",
+          result: "success",
+        })
+      );
+    });
+
+    it("hands main only the terminal id, so a stray field cannot ask for a confirmation", async () => {
+      const h = makeHarness();
+      const host = unboundWithTargeting(h, true);
+      h.sendDispatchToRenderer.mockRejectedValueOnce(noView());
+      viewless.runViewlessAction.mockResolvedValueOnce({ ok: true, result: { closedIds: [] } });
+
+      await host.dispatch(
+        "terminal.close",
+        { terminalId: "t-1", recipeId: "r-1" },
+        { projectId: PROJECT_A }
+      );
+
+      expect(viewless.runViewlessAction).toHaveBeenCalledWith(
+        expect.objectContaining({ args: { terminalId: "t-1" } })
+      );
+      expect(h.deps.safeAppendAudit).toHaveBeenCalledTimes(1);
+    });
+
+    it("gives a terminal in another project the uniform miss", async () => {
+      const h = makeHarness();
+      const host = unboundWithTargeting(h, true);
+      h.sendDispatchToRenderer.mockRejectedValueOnce(noView());
+      viewless.runViewlessAction.mockResolvedValueOnce({
+        ok: false,
+        error: {
+          code: "TERMINAL_IN_OTHER_PROJECT",
+          message: "elsewhere",
+          details: { actionId: "terminal.close", terminalId: "t-9" },
+        },
+      });
+
+      const result = await host.dispatch(
+        "terminal.close",
+        { terminalId: "t-9" },
+        { projectId: PROJECT_A }
+      );
+
+      expect(result).toMatchObject({ ok: false, error: { code: "EXECUTION_ERROR" } });
+      expect(result.ok ? undefined : result.error).not.toHaveProperty("details");
+      expect(h.deps.safeAppendAudit).toHaveBeenCalledWith(
+        expect.objectContaining({ result: "error", errorMessage: "EXECUTION_ERROR" })
+      );
+    });
+
+    it("keeps the original rejection when main cannot act for the project", async () => {
+      const h = makeHarness();
+      const host = unboundWithTargeting(h, true);
+      const original = noView();
+      h.sendDispatchToRenderer.mockRejectedValueOnce(original);
+
+      await expect(
+        host.dispatch("terminal.close", { terminalId: "t-1" }, { projectId: PROJECT_A })
+      ).rejects.toBe(original);
+      expect(h.deps.safeAppendAudit).toHaveBeenCalledWith(
+        expect.objectContaining({ result: "error", errorMessage: "PROJECT_VIEW_UNAVAILABLE" })
+      );
+    });
+
+    it("never runs any other action in main", async () => {
+      const h = makeHarness();
+      const host = unboundWithTargeting(h, true);
+      h.sendDispatchToRenderer.mockRejectedValueOnce(noView());
+
+      await expect(
+        host.dispatch("terminal.sendKeys", { terminalId: "t-1" }, { projectId: PROJECT_A })
+      ).rejects.toMatchObject({ code: "PROJECT_VIEW_UNAVAILABLE" });
+      expect(viewless.runViewlessAction).not.toHaveBeenCalled();
+    });
+
+    it("leaves a bound plugin's own-project close to its view", async () => {
+      const h = makeHarness();
+      h.sendDispatchToRenderer.mockRejectedValue(noView());
+      const { host } = createHost(h.deps, PLUGIN_ID, BOUND);
+
+      await expect(host.dispatch("terminal.close", { terminalId: "t-1" })).rejects.toMatchObject({
+        code: "PROJECT_VIEW_UNAVAILABLE",
+      });
+      expect(viewless.runViewlessAction).not.toHaveBeenCalled();
+    });
+
+    it("does not reach main for a failure other than a missing view", async () => {
+      const h = makeHarness();
+      const host = unboundWithTargeting(h, true);
+      h.sendDispatchToRenderer.mockRejectedValueOnce(new Error("boom"));
+
+      await expect(
+        host.dispatch("terminal.close", { terminalId: "t-1" }, { projectId: PROJECT_A })
+      ).rejects.toThrow("boom");
+      expect(viewless.runViewlessAction).not.toHaveBeenCalled();
+    });
+  });
+
   it("refuses without the switch, before any round-trip and without an audit", async () => {
     const h = makeHarness();
     const host = unboundWithTargeting(h, false);
@@ -933,6 +1070,74 @@ describe("createHost sendToActiveAgent", () => {
 
     expect(pty.submit).toHaveBeenCalledWith("term-b", "hello");
   });
+
+  // A waiting assistant scores above a working grid agent, so ranking alone
+  // would hand it the plugin's text (#13494).
+  const assistantTerminal = (id: string, projectId: string) => ({
+    ...agentTerminal(id, projectId),
+    isAssistantTerminal: true,
+    lastOutputTime: 99,
+  });
+
+  it.each([
+    ["stage", undefined],
+    ["submit", { submit: true }],
+  ] as const)("never picks the assistant over a grid agent (%s)", async (method, options) => {
+    const h = makeHarness();
+    const pty = installPty(
+      [
+        assistantTerminal("term-assistant", PROJECT_A),
+        { ...agentTerminal("term-grid", PROJECT_A), agentState: "working" },
+      ],
+      PROJECT_A
+    );
+    const { host } = createHost(h.deps, PLUGIN_ID, BOUND);
+
+    await host.sendToActiveAgent("hello", options);
+
+    const other = method === "stage" ? pty.submit : pty.stage;
+    expect(pty[method]).toHaveBeenCalledTimes(1);
+    expect(pty[method]).toHaveBeenCalledWith("term-grid", "hello");
+    expect(other).not.toHaveBeenCalled();
+  });
+
+  it("no-ops with a warning when the bound project's only agent is the assistant", async () => {
+    const h = makeHarness();
+    const pty = installPty(
+      [assistantTerminal("term-assistant", PROJECT_A), agentTerminal("term-b", "project-b")],
+      "project-b"
+    );
+    const { host } = createHost(h.deps, PLUGIN_ID, BOUND);
+
+    await expect(host.sendToActiveAgent("hello", { submit: true })).resolves.toBeUndefined();
+
+    expect(pty.stage).not.toHaveBeenCalled();
+    expect(pty.submit).not.toHaveBeenCalled();
+    expect(h.recordPluginLog).toHaveBeenCalledWith(
+      expect.anything(),
+      PLUGIN_ID,
+      "warn",
+      expect.stringContaining("no agent terminal")
+    );
+  });
+
+  it.each([
+    ["the focused project", "project-b"],
+    ["no active project", null],
+  ])(
+    "throws NO_ACTIVE_AGENT for an unbound host whose only agent is the assistant (%s)",
+    async (_label, activeProjectId) => {
+      const h = makeHarness();
+      const pty = installPty([assistantTerminal("term-assistant", "project-b")], activeProjectId);
+      const { host } = createHost(h.deps, PLUGIN_ID, UNBOUND_PLUGIN_HOST_BINDING);
+
+      await expect(host.sendToActiveAgent("hello", { submit: true })).rejects.toThrow(
+        "NO_ACTIVE_AGENT"
+      );
+      expect(pty.stage).not.toHaveBeenCalled();
+      expect(pty.submit).not.toHaveBeenCalled();
+    }
+  );
 });
 
 describe("createHost onDidChangeAgentState", () => {

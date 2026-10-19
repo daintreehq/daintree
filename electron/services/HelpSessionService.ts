@@ -5,7 +5,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { app } from "electron";
 import type { WindowRegistry } from "../window/WindowRegistry.js";
-import { isRemoteEndpointHandle } from "../ipc/endpoint.js";
+import { isRemoteEndpointHandle, NO_VIEW_HANDLE } from "../ipc/endpoint.js";
 import { store } from "../store.js";
 import { getHelpFolderPath } from "./HelpService.js";
 import { resilientAtomicWriteFile } from "../utils/fs.js";
@@ -40,11 +40,10 @@ import {
   RUNBOOKS_BLOCK_START,
   RUNBOOKS_MCP_SERVER_NAME,
   buildConfirmationsAddendum,
-  buildMessagingAddendum,
   buildRunbooksAddendum,
   buildRunbooksHostHeaders,
   resolveRunbooksMcpUrl,
-  type RunbooksHostState,
+  type RunbooksHostsState,
 } from "./helpSessionRunbooks.js";
 import { agentSupportsAssistantContent, syncAssistantContent } from "./AssistantContentMirror.js";
 import {
@@ -125,7 +124,6 @@ const DEFAULT_DAINTREE_CONTROL = true;
 const DEFAULT_DOC_SEARCH = true;
 const DEFAULT_RUNBOOK_SEARCH = true;
 const DEFAULT_BYPASS_PERMISSIONS = false;
-const DEFAULT_DEBUG_LOGGING = false;
 
 // Codex reads project instructions up to `project_doc_max_bytes` (32 KiB) and
 // truncates past it without telling the model. The bundled AGENTS.md is held
@@ -165,6 +163,16 @@ export async function codexTrustArgs(sessionPath: string): Promise<string[]> {
     .filter((p) => !/['\r\n]/.test(p))
     .map((p) => `'${p}' = { trust_level = "trusted" }`);
   return entries.length > 0 ? ["-c", `projects={ ${entries.join(", ")} }`] : [];
+}
+
+function isValidStartedBy(startedBy: HelpSessionStartedBy): boolean {
+  const parts =
+    startedBy.kind === "relay"
+      ? [startedBy.senderId, startedBy.linkSessionId, startedBy.askingHelpSessionId]
+      : startedBy.kind === "local"
+        ? [startedBy.askingHelpSessionId]
+        : [];
+  return parts.length > 0 && parts.every((part) => typeof part === "string" && part.length > 0);
 }
 
 function runbooksEnabled(settings: { daintreeControl: boolean; runbookSearch: boolean }): boolean {
@@ -236,7 +244,25 @@ interface ProvisionInput {
    * renderers / test fixtures omit it and fall back to live context.
    */
   actionContext?: ActionContext;
+  /**
+   * Who asked for an assistant started with no view (#13511, #13496). Only
+   * with no view: `windowId` and `projectViewWebContentsId` are then both
+   * `NO_VIEW_HANDLE`.
+   */
+  startedBy?: HelpSessionStartedBy;
 }
+
+/**
+ * Which assistant started one with no view (#13511, #13496), taken at launch
+ * from the caller's own session, never from anything it sent: one of this
+ * machine's assistants by its help session, or another machine's by the
+ * sender its link session proved, that link session, and the Shell's help
+ * session that asked. Kept for the run's whole life, whichever views show it
+ * later, and what decides who may close it.
+ */
+export type HelpSessionStartedBy =
+  | { kind: "local"; askingHelpSessionId: string }
+  | { kind: "relay"; senderId: string; linkSessionId: string; askingHelpSessionId: string };
 
 export interface ProvisionResult {
   sessionId: string;
@@ -263,6 +289,8 @@ export interface RunningLaneSession {
   sessionId: string;
   terminalId: string;
   projectViewWebContentsId: number;
+  /** Who asked for it, when the host started it with no view. */
+  startedBy?: HelpSessionStartedBy;
 }
 
 export interface RunningLane {
@@ -328,12 +356,6 @@ interface HelpSessionRecord {
    * can still bypass Claude's confirmation gate (and vice versa).
    */
   bypassPermissions: boolean;
-  /**
-   * Snapshot at provision time of the user's debug-logging preference. Consumed
-   * by `lifecycle.ts` to decide whether to inject `DAINTREE_ASSISTANT_DEBUG_LOG=1`
-   * into the spawn env. Only the `daintree-assistant` backend reads that var.
-   */
-  debugLogging: boolean;
   createdAt: number;
   revoked: boolean;
   /**
@@ -343,14 +365,22 @@ interface HelpSessionRecord {
    */
   ending?: boolean;
   /**
-   * When the remote view this assistant was pinned to went away while its PTY
-   * was running (#13360). A host assistant outlives its view the way the
-   * host's grid agents do; it keeps its PTY, bearer and lane, stays pinned to
-   * the closed endpoint's handle so its tool calls fail closed, and waits for
-   * the next view of its own project to take it over. Never set for a local
-   * view, whose WebContents going is handled by `revokeByWebContentsId`.
+   * When this assistant last had no view: started without one (#13511), or
+   * its view went while its PTY was running (#13360). A host assistant
+   * outlives its view the way the host's grid agents do; it keeps its PTY,
+   * bearer and lane, is pinned to `NO_VIEW_HANDLE` so its tool calls run on
+   * the host, and waits for the next view of its own project to take it over.
    */
   detachedAt?: number;
+  /**
+   * Set once this assistant has run with no view (#13511), and never cleared:
+   * a view that takes it over and then goes leaves it detached again rather
+   * than ending it. An assistant a local view launched never has it, so
+   * closing that view ends it as before.
+   */
+  outlivesView?: true;
+  /** Who asked for it, when the host started it with no view (#13511). */
+  startedBy?: HelpSessionStartedBy;
   /**
    * Whether the assistant panel was open when the view went, frozen at that
    * moment: the next view mounts with its panel closed and reports so before
@@ -686,6 +716,7 @@ export class HelpSessionService {
   private readonly terminalBySessionId = new Map<string, string>();
   private mcpRegistry: WindowRegistry | null = null;
   private ptyClient: PtyKillClient | null = null;
+  private assistantControlWired = false;
   private pendingHibernationStore: PendingHelpHibernationStore | null = null;
   // #9639: tracks the in-flight capture owner per lane (slot key →
   // sessionId) while `gracefulKill` is outstanding. A placeholder
@@ -741,11 +772,11 @@ export class HelpSessionService {
   private onMcpSessionRevokedFn: ((token: string, sessionId: string) => void) | null = null;
   private readonly sessionEndedListeners = new Set<(event: HelpSessionEndedEvent) => void>();
   private readonly sessionReattachedListeners = new Set<(lane: RunningLane) => void>();
+  private readonly laneDetachedListeners = new Set<(projectId: string) => void>();
   private onMcpSessionRepinnedFn: ((token: string) => void) | null = null;
   private disposed = false;
   private projectMetadataReader: ProjectMetadataReader | null = null;
-  private messagingReach: (() => boolean) | null = null;
-  private runbooksHostState: (() => RunbooksHostState | null) | null = null;
+  private runbooksHostState: (() => RunbooksHostsState | null) | null = null;
   private sweepTimer: ReturnType<typeof setInterval> | null = null;
 
   setMcpRegistry(registry: WindowRegistry): void {
@@ -760,31 +791,28 @@ export class HelpSessionService {
     this.projectMetadataReader = reader;
   }
 
-  /** Whether cross-host messaging can reach a lane on this machine; null where it never can. */
-  setMessagingReach(reach: (() => boolean) | null): void {
-    this.messagingReach = reach;
-  }
-
   /** What runbook search is told about this machine's Remote Hosts (#13411); null where nothing is told. */
-  setRunbooksHostState(read: (() => RunbooksHostState | null) | null): void {
+  setRunbooksHostState(read: (() => RunbooksHostsState | null) | null): void {
     this.runbooksHostState = read;
   }
 
   /**
-   * The runbook entry's host-state headers, read once per provision so every
-   * entry the session gets reports one snapshot, held until it relaunches. A
-   * read that fails sends none: an unreported caller searches the whole catalog.
+   * The runbook entry's headers: the host-control model this build speaks
+   * (#13496), and the host state, read once per provision so every entry the
+   * session gets reports one snapshot, held until it relaunches. A read that
+   * fails, or a build with no hosts at all, leaves the host state unreported:
+   * that caller searches the whole catalog of its model.
    */
   private readRunbooksHostHeaders(settings: {
     daintreeControl: boolean;
     runbookSearch: boolean;
   }): Record<string, string> {
-    if (!runbooksEnabled(settings) || !this.runbooksHostState) return {};
+    if (!runbooksEnabled(settings)) return {};
     try {
-      return buildRunbooksHostHeaders(this.runbooksHostState());
+      return buildRunbooksHostHeaders(this.runbooksHostState?.() ?? null);
     } catch (err) {
       console.warn("[HelpSessionService] Couldn't read the Remote Host state for runbooks:", err);
-      return {};
+      return buildRunbooksHostHeaders(null);
     }
   }
 
@@ -824,6 +852,37 @@ export class HelpSessionService {
     return () => {
       this.sessionReattachedListeners.delete(listener);
     };
+  }
+
+  /**
+   * A project gained a running assistant with no view (#13511): its view went,
+   * or one the host started got its PTY. What the view that drives the project
+   * may now take over.
+   */
+  addLaneDetachedListener(listener: (projectId: string) => void): () => void {
+    this.laneDetachedListeners.add(listener);
+    return () => {
+      this.laneDetachedListeners.delete(listener);
+    };
+  }
+
+  /**
+   * One of this machine's project views finished loading (#13511). A view
+   * passed over while it crashed or loaded may now take over its project's
+   * assistant left with no view, so each project with one is announced again.
+   */
+  noteViewReady(): void {
+    for (const projectId of this.detachedProjectIds()) this.emitLaneDetached(projectId);
+  }
+
+  private emitLaneDetached(projectId: string): void {
+    for (const listener of [...this.laneDetachedListeners]) {
+      try {
+        listener(projectId);
+      } catch (err) {
+        console.warn("[HelpSessionService] Lane-detached listener failed:", err);
+      }
+    }
   }
 
   private emitSessionEnded(
@@ -880,6 +939,7 @@ export class HelpSessionService {
         sessionId: record.sessionId,
         terminalId,
         projectViewWebContentsId: record.projectViewWebContentsId,
+        ...(record.startedBy ? { startedBy: { ...record.startedBy } } : {}),
       };
     }
     return null;
@@ -1011,6 +1071,7 @@ export class HelpSessionService {
     // The same bearer now drives a different PTY: whatever reached the old run
     // must not carry over to this one.
     if (priorTerminal && priorTerminal !== terminalId) this.emitSessionEnded(record, "relaunched");
+    if (record.detachedAt !== undefined) this.emitLaneDetached(record.projectId);
     return true;
   }
 
@@ -1214,7 +1275,24 @@ export class HelpSessionService {
     if (!sessionId) return null;
     const record = this.sessionsById.get(sessionId);
     if (!record || record.revoked) return null;
+    // No view minted it, so no view may read it as its own.
+    if (record.projectViewWebContentsId === NO_VIEW_HANDLE) return null;
     return record.projectViewWebContentsId;
+  }
+
+  /**
+   * The project of a live help bearer running with no view (#13511), whose
+   * tool calls the host runs itself; null for any other bearer. Read at
+   * handshake beside `getWebContentsIdForToken`, which answers
+   * `NO_VIEW_HANDLE` for the same bearer.
+   */
+  getViewlessProjectForToken(token: string): string | null {
+    if (!token) return null;
+    const record = this.sessionsByToken.get(token);
+    if (!record || record.revoked || record.projectViewWebContentsId !== NO_VIEW_HANDLE) {
+      return null;
+    }
+    return record.projectId;
   }
 
   /**
@@ -1478,7 +1556,7 @@ export class HelpSessionService {
         // hooks. Same fail-closed policy as the mirror: an existing file that
         // can't be read, or an opted-in hooks.json that can't be parsed, blocks
         // the launch — a hook or instruction may be a guard the user relies on.
-        // Agents that read nothing from the session cwd get an empty config so
+        // An agent with no assistant-content mapping gets an empty config so
         // any blocks a previous agent left in the shared markdown are cleared.
         let userConfig: AssistantUserConfig = {
           instructions: [],
@@ -1529,10 +1607,7 @@ export class HelpSessionService {
               store.get("agentSettings")?.globalSkipPermissions
             )
         );
-        await this.writeMessagingAddendum(
-          sessionPath,
-          settings.daintreeControl && this.messagingReach?.() === true
-        );
+        await this.stripMessagingAddendum(sessionPath);
         // Same unconditional placement, for the same reason: the facts change
         // independently of the template, and every lane shares these files, so
         // only project-level observations go in — never a lane's focus.
@@ -1664,10 +1739,18 @@ export class HelpSessionService {
       agentId: input.agentId,
       tier,
       bypassPermissions: settings.bypassPermissions,
-      debugLogging: settings.debugLogging,
       createdAt: now,
       revoked: false,
       actionContext: input.actionContext,
+      ...(input.startedBy
+        ? {
+            startedBy: { ...input.startedBy },
+            outlivesView: true as const,
+            // Born with no view: the first view of its project takes it over.
+            detachedAt: now,
+            panelOpenAtDetach: false,
+          }
+        : {}),
       codexLaunchArgs,
       copilotLaunchArgs,
       laneMcpConfigPath,
@@ -2359,18 +2442,30 @@ export class HelpSessionService {
     return null;
   }
 
-  /** The lane's running assistant if it is pinned to `viewHandle`, a remote view. */
+  /** The lane's running assistant if it is pinned to the view `viewHandle`. */
   private findLaneHeldFor(
     projectId: string,
     slot: number,
     viewHandle: number | undefined,
     isTerminalLive: (terminalId: string) => boolean
   ): HelpSessionRecord | null {
-    if (viewHandle === undefined || !isRemoteEndpointHandle(viewHandle)) return null;
+    if (viewHandle === undefined || viewHandle === NO_VIEW_HANDLE) return null;
     const record = this.findLaneBackend(projectId, slot);
     if (!record || record.projectViewWebContentsId !== viewHandle) return null;
     const terminalId = this.terminalBySessionId.get(record.sessionId);
     return terminalId && isTerminalLive(terminalId) ? record : null;
+  }
+
+  /** The projects with an assistant running with no view (#13511); see `detachedSlots`. */
+  detachedProjectIds(): string[] {
+    const projects = new Set<string>();
+    for (const record of this.sessionsById.values()) {
+      if (record.revoked || record.detachedAt === undefined) continue;
+      if (this.findLaneBackend(record.projectId, record.slot) === record) {
+        projects.add(record.projectId);
+      }
+    }
+    return [...projects];
   }
 
   /**
@@ -2496,8 +2591,10 @@ export class HelpSessionService {
     for (const [slotKey, claim] of this.claimsBySlotKey) {
       if (claim.ownerWebContentsId === webContentsId) this.claimsBySlotKey.delete(slotKey);
     }
+    // An assistant that has run with no view outlives this one too (#13511).
     const targets = [...this.sessionsById.values()].filter(
-      (record) => record.projectViewWebContentsId === webContentsId
+      (record) =>
+        record.projectViewWebContentsId === webContentsId && !this.detachIfOutlivesView(record)
     );
     // LRU eviction destroys the renderer for a project the user almost
     // certainly intends to return to — capture the agent's resume ID
@@ -2516,27 +2613,25 @@ export class HelpSessionService {
    * gone, but the assistant it launched is a process on this host like any
    * grid agent, and may be in the middle of work nobody can see: a scheduled
    * wakeup, a monitor, subagents. So a running one is detached rather than
-   * killed — its PTY, bearer and lane stay, its pin stays on the closed handle
-   * (which is never reused, so its tool calls fail closed), and the next view
-   * of the same project takes it over through `adoptDetachedSession`.
+   * killed — its PTY, bearer and lane stay, its tool calls run on the host
+   * with no view (#13511), and the next view of the same project takes it
+   * over through `adoptDetachedSession`.
    *
    * A session that never got a PTY has nothing worth keeping and is revoked,
-   * as before. A local view never comes here: its WebContents going is
-   * `revokeByWebContentsId`, unchanged.
+   * as before. A local view's WebContents going is `revokeByWebContentsId`,
+   * which keeps only an assistant that has already run with no view.
    */
   async detachByWebContentsId(webContentsId: number): Promise<void> {
     if (!isRemoteEndpointHandle(webContentsId)) return this.revokeByWebContentsId(webContentsId);
     for (const [slotKey, claim] of this.claimsBySlotKey) {
       if (claim.ownerWebContentsId === webContentsId) this.claimsBySlotKey.delete(slotKey);
     }
-    const detachedAt = Date.now();
     const revokes: Promise<void>[] = [];
     for (const record of [...this.sessionsById.values()]) {
       if (record.revoked || record.projectViewWebContentsId !== webContentsId) continue;
-      if (record.detachedAt !== undefined) continue;
       if (this.findLaneBackend(record.projectId, record.slot) === record) {
-        record.detachedAt = detachedAt;
-        record.panelOpenAtDetach = this.panelOpenByProjectId.get(record.projectId) === true;
+        record.outlivesView = true;
+        this.detachIfOutlivesView(record);
       } else {
         revokes.push(this.revokeSession(record.sessionId));
       }
@@ -2545,10 +2640,40 @@ export class HelpSessionService {
   }
 
   /**
-   * Hand the lane's running assistant to the remote view `webContentsId`
-   * (#13360). The caller has already established that the view is bound to
-   * `projectId` on this host; this decides whether the lane has an assistant
-   * to give it:
+   * Leave a running assistant that has had no view before with none again,
+   * rather than end it with the view that was showing it (#13511): unpinned to
+   * `NO_VIEW_HANDLE`, its transports retired so it reconnects onto the host's
+   * own route, its panel's open state kept for the next view. False when it
+   * is to be ended instead: it never ran without a view, or its lane's PTY
+   * isn't its own.
+   */
+  private detachIfOutlivesView(record: HelpSessionRecord): boolean {
+    if (record.revoked || record.outlivesView !== true) return false;
+    if (this.findLaneBackend(record.projectId, record.slot) !== record) return false;
+    const repinned = record.projectViewWebContentsId !== NO_VIEW_HANDLE;
+    if (record.detachedAt === undefined) {
+      record.detachedAt = Date.now();
+      record.panelOpenAtDetach = this.panelOpenByProjectId.get(record.projectId) === true;
+    }
+    record.windowId = NO_VIEW_HANDLE;
+    record.projectViewWebContentsId = NO_VIEW_HANDLE;
+    if (repinned) {
+      try {
+        this.onMcpSessionRepinnedFn?.(record.token);
+      } catch (err) {
+        console.warn("[HelpSessionService] Resetting a detached assistant's MCP failed:", err);
+      }
+      this.emitLaneDetached(record.projectId);
+    }
+    return true;
+  }
+
+  /**
+   * Hand the lane's running assistant to the view `webContentsId` (#13360),
+   * a remote view's endpoint handle or, since #13511, one of this machine's
+   * own project views. The caller has already established that the view is
+   * bound to `projectId` on this host; this decides whether the lane has an
+   * assistant to give it:
    *
    * - `adopted`: a detached one, or one already pinned to this very view (a
    *   launch superseded after the host had moved it over can claim it again).
@@ -2569,9 +2694,15 @@ export class HelpSessionService {
     slot: number,
     webContentsId: number,
     probe: (terminalId: string) => Promise<HelpAdoptProbe | null>,
-    options?: { keepRestoreIntent?: boolean }
+    /** `windowId`: a local view's BrowserWindow; a remote view's handle stands in for it. */
+    options?: { keepRestoreIntent?: boolean; windowId?: number }
   ): Promise<HelpAdoptResult> {
-    if (this.disposed || !projectId || !isRemoteEndpointHandle(webContentsId)) {
+    if (
+      this.disposed ||
+      !projectId ||
+      !Number.isInteger(webContentsId) ||
+      webContentsId === NO_VIEW_HANDLE
+    ) {
       return { status: "absent" };
     }
     const claimableBy = (record: HelpSessionRecord): boolean =>
@@ -2607,7 +2738,7 @@ export class HelpSessionService {
 
       const repinned = record.projectViewWebContentsId !== webContentsId;
       const wasDetached = record.detachedAt !== undefined;
-      record.windowId = webContentsId;
+      record.windowId = options?.windowId ?? webContentsId;
       record.projectViewWebContentsId = webContentsId;
       delete record.detachedAt;
       // A host taking it over for a view whose panel hasn't shown it yet keeps
@@ -2656,14 +2787,16 @@ export class HelpSessionService {
    * ended it — otherwise its bearer would stay valid and its lane look taken
    * for as long as nobody asks after the project. The conversation pointer
    * written at spawn stays, so the next view resumes it. An attached session
-   * is left to its view, as before.
+   * is left to its view, as before, unless it has run with no view (#13511):
+   * its view going later would otherwise keep the exited run as a detached one.
    */
   handleTerminalExit(terminalId: string): void {
     if (!terminalId) return;
     for (const [sessionId, boundId] of [...this.terminalBySessionId]) {
       if (boundId !== terminalId) continue;
       const record = this.sessionsById.get(sessionId);
-      if (!record || record.revoked || record.detachedAt === undefined) continue;
+      if (!record || record.revoked) continue;
+      if (record.detachedAt === undefined && record.outlivesView !== true) continue;
       void this.revokeSession(sessionId).catch((err: unknown) => {
         console.warn("[HelpSessionService] Revoking an exited detached assistant failed:", err);
       });
@@ -2672,7 +2805,7 @@ export class HelpSessionService {
 
   async revokeByWindowId(windowId: number): Promise<void> {
     const targets = [...this.sessionsById.values()].filter(
-      (record) => record.windowId === windowId
+      (record) => record.windowId === windowId && !this.detachIfOutlivesView(record)
     );
     // Window close = user is done with this window but the project lives on
     // in other windows / future launches. Capture the resume ID so the next
@@ -2838,6 +2971,38 @@ export class HelpSessionService {
    */
   private mcpServerModule: Promise<typeof import("./McpServerService.js")> | null = null;
 
+  /**
+   * Hands the MCP server what one assistant addressing another needs (#13496),
+   * once, before any session that may name an assistant is admitted. A session
+   * reads it when it opens, so this runs at the server's start, at a help
+   * session's provision, and before a host opens a session for another
+   * machine's assistant, which can come before this process ran one of its own.
+   */
+  async ensureAssistantControl(): Promise<void> {
+    if (this.assistantControlWired) return;
+    const [
+      { mcpServerService },
+      { liveAssistantTerminalControl },
+      { extractReply },
+      { getPtyClient },
+    ] = await Promise.all([
+      this.loadMcpServerModule(),
+      import("./assistants/AssistantTerminalControl.js"),
+      import("./mcp-server/terminalNotify.js"),
+      import("../window/serviceRefs.js"),
+    ]);
+    if (this.assistantControlWired) return;
+    mcpServerService.setAssistantControl({
+      control: liveAssistantTerminalControl({
+        help: this,
+        pty: () => getPtyClient(),
+        extractReply,
+      }),
+      sessionProject: (sessionId) => this.getSessionLane(sessionId)?.projectId ?? null,
+    });
+    this.assistantControlWired = true;
+  }
+
   private loadMcpServerModule(): Promise<typeof import("./McpServerService.js")> {
     this.mcpServerModule ??= import("./McpServerService.js");
     return this.mcpServerModule;
@@ -2904,6 +3069,17 @@ export class HelpSessionService {
         throw new Error("projectViewWebContentsId must be a non-negative integer");
       }
     }
+    // No view means another assistant started it, and names which one.
+    const noView =
+      input.windowId === NO_VIEW_HANDLE && input.projectViewWebContentsId === NO_VIEW_HANDLE;
+    if (noView !== (input.startedBy !== undefined)) {
+      throw new Error("A session provisioned with no view must say who started it, and only then");
+    }
+    if (input.startedBy && !isValidStartedBy(input.startedBy)) {
+      throw new Error(
+        "startedBy needs its asking help session, and a relay's sender and link session"
+      );
+    }
     if (typeof input.agentId !== "string" || !input.agentId.trim()) {
       throw new Error("agentId is required");
     }
@@ -2936,7 +3112,6 @@ export class HelpSessionService {
     runbookSearch: boolean;
     tier: HelpAssistantTier;
     bypassPermissions: boolean;
-    debugLogging: boolean;
     loadGlobalHooksAndServers: boolean;
     daintreeConfirmations: HelpAssistantDaintreeConfirmations;
   } {
@@ -2965,8 +3140,6 @@ export class HelpSessionService {
         typeof stored.runbookSearch === "boolean" ? stored.runbookSearch : DEFAULT_RUNBOOK_SEARCH,
       tier,
       bypassPermissions,
-      debugLogging:
-        typeof stored.debugLogging === "boolean" ? stored.debugLogging : DEFAULT_DEBUG_LOGGING,
       // Opt-in only: anything but an explicit stored `true` keeps user MCP
       // servers and hooks out of the session.
       loadGlobalHooksAndServers: stored.loadGlobalHooksAndServers === true,
@@ -3004,18 +3177,6 @@ export class HelpSessionService {
     const record = this.sessionsByToken.get(token);
     if (!record || record.revoked) return false;
     return record.bypassPermissions;
-  }
-
-  /**
-   * Returns the snapshot of the user's debug-logging preference taken at
-   * provision time. `lifecycle.ts` reads this to decide whether to inject
-   * `DAINTREE_ASSISTANT_DEBUG_LOG=1` into the assistant spawn env.
-   */
-  getDebugLogging(token: string): boolean {
-    if (!token) return false;
-    const record = this.sessionsByToken.get(token);
-    if (!record || record.revoked) return false;
-    return record.debugLogging;
   }
 
   private getSessionsRoot(): string {
@@ -3073,6 +3234,9 @@ export class HelpSessionService {
     mcpServerService.setHelpSessionWebContentsResolver((token) =>
       this.getWebContentsIdForToken(token)
     );
+    mcpServerService.setHelpSessionViewlessProjectResolver((token) =>
+      this.getViewlessProjectForToken(token)
+    );
     mcpServerService.setHelpSessionActionContextResolver((token) =>
       this.getActionContextForToken(token)
     );
@@ -3081,6 +3245,7 @@ export class HelpSessionService {
     mcpServerService.setHelpSessionTerminalResolver((sessionId) =>
       this.getTerminalIdForSession(sessionId)
     );
+    await this.ensureAssistantControl();
     // Eager MCP-session teardown on revoke (#9151). Idempotent re-set.
     this.setOnMcpSessionRevoked((token, sessionId) =>
       mcpServerService.disconnectHelpBearer(token, sessionId)
@@ -3520,13 +3685,12 @@ export class HelpSessionService {
     );
   }
 
-  /** The wake line's meaning (#13333), only where a wake can reach this lane. */
-  private async writeMessagingAddendum(sessionPath: string, reachable: boolean): Promise<void> {
+  /** An older build's rules for the retired inbox (#13496), gone from a reused session folder. */
+  private async stripMessagingAddendum(sessionPath: string): Promise<void> {
     const markers = { start: MESSAGING_BLOCK_START, end: MESSAGING_BLOCK_END };
-    const body = reachable ? buildMessagingAddendum() : null;
     await Promise.all(
       ["CLAUDE.md", "AGENTS.md"].map((name) =>
-        this.writeManagedBlock(path.join(sessionPath, name), markers, body)
+        this.writeManagedBlock(path.join(sessionPath, name), markers, null)
       )
     );
   }

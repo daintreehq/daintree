@@ -98,6 +98,22 @@ describe("agentDefaults", () => {
     expect(readAgentDefaults().assistantAgentId).toBe("my-custom-agent");
   });
 
+  // The retired assistant CLI never loads again, so a host still holding it
+  // offers the agent choice, and neither a write nor an old machine's
+  // localStorage can bring it back.
+  it("reads a retired assistant agent as cleared and never stores one", () => {
+    fakeStore.reset({ ...FRESH, helpAssistant: { tier: "core", agentId: "daintree-assistant" } });
+    expect(readAgentDefaults()).toEqual({ assistantAgentId: null });
+    expect(migrateLegacyAgentDefaults({ assistantAgentId: "daintree-assistant" })).toEqual({
+      assistantAgentId: null,
+    });
+
+    fakeStore.reset(FRESH);
+    expect(setAgentDefaults({ assistantAgentId: "daintree-assistant" })).toBe(false);
+    expect(migrateLegacyAgentDefaults({ assistantAgentId: "daintree-assistant" })).toEqual({});
+    expect(broadcastMock).not.toHaveBeenCalled();
+  });
+
   it("rejects values that aren't agents, leaving the stored ones alone", () => {
     setAgentDefaults({ assistantAgentId: "claude", defaultAgent: "codex" });
     broadcastMock.mockClear();

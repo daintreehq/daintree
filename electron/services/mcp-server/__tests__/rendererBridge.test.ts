@@ -303,20 +303,13 @@ describe("rendererBridge — per-session pinned dispatch (#7002)", () => {
       });
     });
 
-    await bridge.dispatchActionForWebContents(
-      901,
-      "agent.launch",
-      {},
-      false,
-      undefined,
-      "assistant-pane"
-    );
+    await bridge.dispatchActionForWebContents(901, "agent.launch", {}, false, undefined, "help");
     // Omitted entirely — a WebContents route proves where to send, not who owns
     // the session, so only HttpLifecycle can positively establish that this is
     // one of Daintree's own surfaces. Everything else lands as external.
     await bridge.dispatchActionForWebContents(901, "agent.launch", {}, false);
 
-    expect(sentOrigins).toEqual(["assistant-pane", "external"]);
+    expect(sentOrigins).toEqual(["help", "external"]);
   });
 
   it("fails closed when the pinned view has been destroyed (#7002 — never silently re-routes)", async () => {
@@ -1416,7 +1409,7 @@ describe("rendererBridge — workspace-bound routing (#11789)", () => {
       "terminal.list",
       {},
       false,
-      "assistant-pane"
+      "help"
     );
     await settleDispatch();
     await promiseOne;
@@ -1429,7 +1422,7 @@ describe("rendererBridge — workspace-bound routing (#11789)", () => {
       .filter(([channel]) => channel === CHANNELS.MCP_SERVER_DISPATCH_ACTION_REQUEST)
       .map(([, payload]) => (payload as { sessionOrigin?: unknown }).sessionOrigin);
 
-    expect(origins).toEqual(["assistant-pane", "external"]);
+    expect(origins).toEqual(["help", "external"]);
   });
 
   it("follows the workspace to a replacement view rather than dying with the old one", async () => {
@@ -2554,7 +2547,7 @@ describe("rendererBridge — reveal routing and window raise (#12315)", () => {
       "pilot.openRun",
       { runId: "t1" },
       false,
-      "assistant-pane"
+      "help"
     );
 
     expect(active.send).toHaveBeenCalledTimes(1);
@@ -2566,7 +2559,7 @@ describe("rendererBridge — reveal routing and window raise (#12315)", () => {
     expect(otherWindow.show).not.toHaveBeenCalled();
     // Provenance survives the reveal route — an external client's call must not
     // reach the renderer stamped as the assistant's.
-    expect(active.send.mock.calls[0][1]).toMatchObject({ sessionOrigin: "assistant-pane" });
+    expect(active.send.mock.calls[0][1]).toMatchObject({ sessionOrigin: "help" });
   });
 
   it("reveals through an agent pane's launch view when its workspace is open in two windows (#12486)", async () => {

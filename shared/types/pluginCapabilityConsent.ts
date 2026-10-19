@@ -203,3 +203,18 @@ export interface PluginProjectTargetingUpdate {
   pluginId: string;
   enabled: boolean;
 }
+
+/**
+ * Renderer → main read of a plugin's "Allow OS notifications" switch (#13505)
+ * — the `notification:os` grant in the `"global"` scope, keyed by the plugin's
+ * instance id, so each project's instance of a project plugin has its own.
+ */
+export interface PluginOsNotificationsQuery {
+  pluginId: string;
+}
+
+/** Renderer → main write of the "Allow OS notifications" switch (#13505). */
+export interface PluginOsNotificationsUpdate {
+  pluginId: string;
+  enabled: boolean;
+}

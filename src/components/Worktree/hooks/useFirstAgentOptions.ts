@@ -4,7 +4,7 @@ import {
   subscribeToPluginAgentRegistry,
   getPluginAgentRegistrySnapshot,
 } from "@shared/config/pluginAgentRegistry";
-import { isAssistantOnlyAgentId, isBuiltInAgentId } from "@shared/config/agentIds";
+import { isBuiltInAgentId } from "@shared/config/agentIds";
 import { isAgentInstalled } from "@shared/utils/agentAvailability";
 import { useCliAvailabilityStore } from "@/store/cliAvailabilityStore";
 
@@ -31,7 +31,6 @@ export function useFirstAgentOptions(): FirstAgentOption[] {
     const ids = new Set([...getEffectiveAgentIds(), ...Object.keys(pluginAgentSnapshot)]);
     const options: FirstAgentOption[] = [];
     for (const id of ids) {
-      if (isAssistantOnlyAgentId(id)) continue;
       if (isAvailabilityInitialized && isBuiltInAgentId(id) && !isAgentInstalled(availability[id]))
         continue;
       const config = getEffectiveAgentConfig(id);

@@ -13,10 +13,10 @@ This page is the reference: every member, its gates and its failure modes. For a
 - Conventions: [Calling conventions](#calling-conventions) · [Activation](#activation) · [`PluginHostApi`](#pluginhostapi) · [Errors and error codes](#errors-and-error-codes) · [Capabilities and consent](#capabilities-and-consent) · [Identity](#identity--pluginid-plugininfo-panelkindid)
 - Registration: [`registerAction`](#registeraction) · [`registerHandler` and `broadcastToRenderer`](#registerhandler-and-broadcasttorenderer) · [Deadlines and size limits](#deadlines-and-size-limits) · [`postToPanel`](#posttopanel) · [Push delivery](#push-delivery) · [Listener hints](#listener-hints--haslisteners-ondidchangelisteners) · [`registerForgeProvider`](#registerforgeprovider) · [File decorations](#registerfiledecorationprovider-and-invalidatefiledecorations) · [`mcp.registerTools`](#mcpregistertools)
 - Observation: [Worktrees](#worktree-observation) · [Agent state](#agent-observation) · [Focused panel](#ondidchangefocusedpanel) · [Panel lifecycle](#ondidchangepanellifecycle) · [`onDidWake`](#ondidwake)
-- Panels and actions: [`reloadPanel`](#reloadpanel) · [`restartWorker`](#restartworker) · [`setPanelBadge`](#setpanelbadge) · [`setPanelMenuItems`](#setpanelmenuitems) · [`dispatch`](#dispatch) · [`actions`](#actions--built-in-action-catalog)
+- Panels and actions: [`reloadPanel`](#reloadpanel) · [`restartWorker`](#restartworker) · [`setPanelBadge`](#setpanelbadge) · [`setToolbarButtonBadge`](#settoolbarbuttonbadge) · [`setContext`](#setcontext) · [`setPanelMenuItems`](#setpanelmenuitems) · [`dispatch`](#dispatch) · [`actions`](#actions--built-in-action-catalog)
 - Agents: [`sendToActiveAgent`](#sendtoactiveagent--inject-text-into-the-active-agent) · [`sendToAgent`](#sendtoagent--hand-work-to-an-agents-draft) · [`agents.list`](#agentslist--the-projects-agent-panes) · [`agents.listAll`](#agentslistall--every-agent-in-every-open-project) · [`terminals.readScreen`](#terminalsreadscreen--what-a-terminal-shows)
 - State: [`settings`](#settings) · [`storage`](#storage--private-keyvalue-storage) · [`db`](#db--host-managed-sqlite)
-- UI: [`logger`](#logger) · [`showToast`](#showtoast) · [User prompts](#user-prompts--showquickpick-showinputbox-showconfirm)
+- UI: [`logger`](#logger) · [`showToast`](#showtoast) · [`notify`](#notify) · [User prompts](#user-prompts--showquickpick-showinputbox-showconfirm)
 - System: [`process`](#process--managed-child-processes) · [`fs`](#fs--host-mediated-scope-contained-filesystem) · [`git`](#git--host-mediated-git-scoped-to-a-worktree) · [`clipboard`](#clipboard--host-mediated-os-clipboard) · [`system`](#system--open-and-reveal-files-in-your-own-scope) · [`documents`](#documents--render-html-to-pdf)
 - SDK entries: [React hooks](#react-hooks--daintreehqplugin-sdkreact) · [Root entry](#root-entry-runtime-values--daintreehqplugin-sdk) · [File listings](#file-listings--daintreehqplugin-sdkfiles) · [Data files](#data-files--daintreehqplugin-sdkdata) · [UI kit](./ui-kit.md)
 - Lifecycle and testing: [Disposables](#disposables) · [Testing against a mock host](#testing-against-a-mock-host) · [Remote hosts](#remote-hosts--when-nobody-is-sitting-at-this-machine) · [What's not exposed](#whats-not-exposed) · [Process model](#process-model-and-memory)
@@ -172,6 +172,10 @@ interface PluginHostApi {
 
   // Panel title-chrome badge
   setPanelBadge(panelId: string, badge: PluginPanelBadge | null): Promise<void>;
+  setToolbarButtonBadge(buttonId: string, badge: PluginPanelBadge | null): Promise<void>;
+
+  // Your own keys for keybinding and context-menu `when` clauses
+  setContext(key: string, value: boolean | string | null): Promise<void>;
 
   // Contextual entries on one of your panels' ⋯ and right-click menus
   setPanelMenuItems(
@@ -217,6 +221,7 @@ interface PluginHostApi {
 
   // UI helpers — overloaded so `canSelectMany: true` types as an array
   showToast(options: PluginToastOptions): Promise<void>;
+  notify(options: PluginNotifyOptions): Promise<PluginNotifyResult>;
   showQuickPick(
     items: PluginQuickPickItem[],
     options: PluginQuickPickOptions & { canSelectMany: true },
@@ -258,7 +263,7 @@ Two option bags recur. `PluginHostCallOptions` is the trailing argument on long-
 
 Nearly every host method now returns a Promise — the API became fully async in the move to the out-of-process worker model, so `registerAction`, `postToPanel`, `setPanelBadge`, and the rest resolve `Promise<void>`, and the subscription methods resolve `Promise<() => void>`. Always `await` a registration before assuming it took effect, and `await` the subscription methods to get the disposer. The synchronous exceptions are `logger` (its `info`/`warn`/`error` calls return `void`), `pluginInfo` and `panelKindId` (static data), a database handle's `onDidChange`, which returns its disposer directly, and `hasListeners` / `onDidChangeListeners`, which answer and return their disposer synchronously and throw at the call on an invalid channel or callback.
 
-The revoke-guarded methods — `registerAction`, `registerHandler`, `broadcastToRenderer`, `registerForgeProvider`, `registerFileDecorationProvider`, `mcp.registerTools`, `onDidChangeActiveWorktree`, `onDidChangeWorktrees`, `onDidChangeAgentState`, `onDidChangeAllAgents`, `onDidChangeFocusedPanel`, `onDidChangePanelLifecycle`, `onDidWake`, `settings.onDidChange` and `storage.onDidChange` — must be called during `activate()` and throw once the host is revoked. Subscribing counts as an activation-window operation even though the callback fires later: register all your subscriptions during `activate()`, then react to them for the plugin's lifetime. Everything else is deliberately NOT revoke-guarded — `postToPanel`, `hasListeners`, `onDidChangeListeners`, `setPanelBadge`, `setPanelMenuItems`, `reloadPanel`, `restartWorker`, the worktree and agent reads, `invalidateFileDecorations`, `showToast`, the prompts, `dispatch`, `actions.*`, `sendToActiveAgent`, `sendToAgent`, `agents.list`, `agents.listAll`, `terminals.readScreen`, `settings.get`/`set`/`open`/`missingRequired`, `storage.get`/`set`/`delete`, `db.*` (including a handle's `onDidChange`), `process.spawn`, `fs.*` (including `watch`), `git.*`, `clipboard.*`, `system.*`, `documents.renderPdf` and `logger`. Plugins call them from post-activation subscription callbacks and timers, so they stay callable for the plugin's lifetime and become a silent no-op or an empty answer after unload (`dispatch` resolves `{ ok: false }` with `PLUGIN_UNLOADED`; in process, `settings.get` and `set` have no liveness check and keep working) — except the ones that act on disk or on a process, which reject: new `fs.*`, `git.*`, `clipboard.*`, `system.*`, `documents.renderPdf` and `db.*` calls with a `PLUGIN_UNLOADED:` message, `process.spawn` and `settings.open` with a plain "plugin is no longer loaded" one. A database handle the host closed at unload rejects `DB_CLOSED`, and in a worker any call still outstanding when the worker is torn down rejects "Plugin dev worker disposed" (see [Worker and in-process differences](#worker-and-in-process-differences)). `pluginId`, `pluginInfo` and `panelKindId` are static data and keep working even after unload. This split is the load-bearing distinction between the activation-window registration surface and the live runtime surface — `postToPanel` is the canonical post-activation push: a plugin's `activate()` subscribes once (revoke-guarded `registerHandler`/worktree subscriptions), then streams live data into its panels with `postToPanel` for the rest of its lifetime.
+The revoke-guarded methods — `registerAction`, `registerHandler`, `broadcastToRenderer`, `registerForgeProvider`, `registerFileDecorationProvider`, `mcp.registerTools`, `onDidChangeActiveWorktree`, `onDidChangeWorktrees`, `onDidChangeAgentState`, `onDidChangeAllAgents`, `onDidChangeFocusedPanel`, `onDidChangePanelLifecycle`, `onDidWake`, `settings.onDidChange` and `storage.onDidChange` — must be called during `activate()` and throw once the host is revoked. Subscribing counts as an activation-window operation even though the callback fires later: register all your subscriptions during `activate()`, then react to them for the plugin's lifetime. Everything else is deliberately NOT revoke-guarded — `postToPanel`, `hasListeners`, `onDidChangeListeners`, `setPanelBadge`, `setToolbarButtonBadge`, `setContext`, `setPanelMenuItems`, `reloadPanel`, `restartWorker`, the worktree and agent reads, `invalidateFileDecorations`, `showToast`, `notify`, the prompts, `dispatch`, `actions.*`, `sendToActiveAgent`, `sendToAgent`, `agents.list`, `agents.listAll`, `terminals.readScreen`, `settings.get`/`set`/`open`/`missingRequired`, `storage.get`/`set`/`delete`, `db.*` (including a handle's `onDidChange`), `process.spawn`, `fs.*` (including `watch`), `git.*`, `clipboard.*`, `system.*`, `documents.renderPdf` and `logger`. Plugins call them from post-activation subscription callbacks and timers, so they stay callable for the plugin's lifetime and become a silent no-op or an empty answer after unload (`dispatch` resolves `{ ok: false }` with `PLUGIN_UNLOADED`; in process, `settings.get` and `set` have no liveness check and keep working) — except the ones that act on disk or on a process, which reject: new `fs.*`, `git.*`, `clipboard.*`, `system.*`, `documents.renderPdf` and `db.*` calls with a `PLUGIN_UNLOADED:` message, `process.spawn` and `settings.open` with a plain "plugin is no longer loaded" one. A database handle the host closed at unload rejects `DB_CLOSED`, and in a worker any call still outstanding when the worker is torn down rejects "Plugin dev worker disposed" (see [Worker and in-process differences](#worker-and-in-process-differences)). `pluginId`, `pluginInfo` and `panelKindId` are static data and keep working even after unload. This split is the load-bearing distinction between the activation-window registration surface and the live runtime surface — `postToPanel` is the canonical post-activation push: a plugin's `activate()` subscribes once (revoke-guarded `registerHandler`/worktree subscriptions), then streams live data into its panels with `postToPanel` for the rest of its lifetime.
 
 **Where validation errors surface.** The two groups report errors differently. A revoke-guarded activation-window method (`registerAction`, `registerHandler`, the subscriptions) throws synchronously at the call site on a bad descriptor or a revoked host — wrap the `activate()` body in `try`/`catch` if you want to handle it. In a worker only the shape and revoke checks throw there; the deeper checks fail the activation by name ([Worker and in-process differences](#worker-and-in-process-differences)). `broadcastToRenderer` is in that group and throws at the call for a channel that is not a string or contains a colon (an empty one is accepted), a payload over the push cap, or one structured clone refuses (`PLUGIN_PAYLOAD_UNCLONEABLE` in process, `DataCloneError` in a worker). The post-activation runtime-surface methods (`postToPanel`, `setPanelBadge`, `setPanelMenuItems`, `invalidateFileDecorations`) instead reject the returned Promise rather than throwing synchronously — `postToPanel` on an invalid channel, an empty-string `panelId`, an oversize or uncloneable payload — so handle their validation errors with `await` + `.catch()` (the exception is the synchronous `hasListeners` / `onDidChangeListeners`, which throw on an invalid channel):
 
@@ -302,7 +307,7 @@ Node's own filesystem errors (`ENOENT`, `ENOTDIR`, `EISDIR`, `EACCES`) reach you
 | `PLUGIN_PAYLOAD_TOO_LARGE` | message; also `code` on a rejected `postToPanel` / `broadcastToRenderer` | invoke arguments (4 MiB), invoke results (16 MiB), `postToPanel` / `broadcastToRenderer` payloads (1 MiB) | The serialized payload is over its transport cap. Send less, page it, or send deltas. |
 | `PLUGIN_PAYLOAD_UNCLONEABLE` | message; also `code` on a rejected `postToPanel` / `broadcastToRenderer` | the same payloads | Structured clone refuses the value (a function, a symbol, a throwing getter). In a worker, a push the port cannot clone rejects with the port's own `DataCloneError` instead. |
 | `PLUGIN_UNLOADED` | message; `dispatch` result code | `fs`, `git`, `clipboard`, `system`, `documents`, `db` after unload | You are being torn down; stop. In a worker, a call made after the worker itself is disposed rejects with an uncoded `Plugin dev worker disposed` instead. |
-| `PROJECT_VIEW_UNAVAILABLE` | `code` only | `dispatch` and the prompts from a project plugin, `dispatch` with `options.projectId`, `settings.open` | Your project has no live window. Try again when it is open. (`agents.list` and `actions.*` answer empty instead, and `sendToAgent` refuses with `project-unavailable`.) |
+| `PROJECT_VIEW_UNAVAILABLE` | `code` only | `dispatch` and the prompts from a project plugin, `dispatch` with `options.projectId` (except an installed plugin's `terminal.close`, which closes without a view), `settings.open` | Your project has no live window. Try again when it is open. (`agents.list` and `actions.*` answer empty instead, and `sendToAgent` refuses with `project-unavailable`.) |
 | `NO_FRONTEND_ATTACHED` | both | the prompts, `sendToAgent`, `clipboard.*`, when the project lives on a host nobody is attached to | Nobody is driving the project. Pass `{ whenNoFrontend: "queue" }` on a prompt to wait ([User prompts](#user-prompts--showquickpick-showinputbox-showconfirm)); otherwise try again later. `dispatch` returns it as a result code instead. |
 | `UNSUPPORTED` | `code`; the message starts `REMOTE_FRONTEND:` | `system.openPath` / `showItemInFolder` | The project is driven from a window on another machine, so nothing is opened on this host's screen. |
 | `HOST_DISCONNECTED`, `OUTCOME_UNKNOWN` | `code` (SDK) | a view's `invoke` / `useHostChannel` in a window attached to another machine | The link to the host is down. `HOST_DISCONNECTED`: the call never reached the host, so a retry is safe. `OUTCOME_UNKNOWN`: it may have run, so check its effect before repeating. See [`useHostChannel`](#usehostchannel--requestresponse-the-pull-half). |
@@ -357,10 +362,11 @@ A capability is declared in `manifest.capabilities` and checked on every call �
 | `mcp:expose` | `mcp.registerTools` and `contributes.agentMcp` | — (the user sets the plugin's agent access per project) |
 | `panel:focus-read` | `onDidChangeFocusedPanel` | — |
 | `project:dispatch` | `dispatch` with `options.projectId` from an installed plugin | — (the user turns on **Allow project targeting** in the plugin's Permissions; there is no prompt) |
+| `notification:os` | `notify` with `os: true` | — (the user turns on **Allow OS notifications** in the plugin's Permissions; there is no prompt) |
 
 `network:fetch`, `agent:invoke` and `socket:connect` gate no host call: they are disclosure and danger input only (see [Manifest → `capabilities`](./manifest.md#capabilities)).
 
-No capability: `settings`, `storage`, a `"local"` database, `logger`, `showToast`, the prompts, `postToPanel`, `broadcastToRenderer`, `hasListeners`, `onDidChangeListeners`, `setPanelBadge`, `setPanelMenuItems`, `reloadPanel`, `restartWorker`, `onDidChangePanelLifecycle`, `onDidWake`, the worktree reads and subscriptions, `registerAction` and `registerHandler` (beyond their own `requires`), `registerForgeProvider`, `registerFileDecorationProvider` / `invalidateFileDecorations`, `dispatch` (the action's own `danger` still applies) and `actions`. How capabilities raise an action's effective danger is in the [trust model](./trust-model.md).
+No capability: `settings`, `storage`, a `"local"` database, `logger`, `showToast`, `notify` without `os`, the prompts, `postToPanel`, `broadcastToRenderer`, `hasListeners`, `onDidChangeListeners`, `setPanelBadge`, `setPanelMenuItems`, `reloadPanel`, `restartWorker`, `onDidChangePanelLifecycle`, `onDidWake`, the worktree reads and subscriptions, `registerAction` and `registerHandler` (beyond their own `requires`), `registerForgeProvider`, `registerFileDecorationProvider` / `invalidateFileDecorations`, `dispatch` (the action's own `danger` still applies) and `actions`. How capabilities raise an action's effective danger is in the [trust model](./trust-model.md).
 
 ## Identity — `pluginId`, `pluginInfo`, `panelKindId`
 
@@ -999,6 +1005,47 @@ A badge is either `{ kind: "dot" }` or `{ kind: "label", text }`, each taking an
 
 Badges are keyed by `(pluginId, panelId)`, so two plugins never clobber each other's badge on the same panel, and all of a plugin's badges are cleared on unload. Not revoke-guarded — call it from timers and subscription callbacks; it becomes a silent no-op once the plugin unloads. An empty `panelId` rejects the returned Promise on both hosts. An invalid badge shape rejects in process, but in a worker it resolves and is only logged in main ([Worker and in-process differences](#worker-and-in-process-differences)), so check your badge shapes against `createMockHost`, which rejects them.
 
+## `setToolbarButtonBadge`
+
+Put the same kind of badge on one of your own toolbar buttons, so a count or status stays in sight while your panel is closed. `buttonId` is a `contributes.toolbarButtons[].id` from your manifest, written as you wrote it there.
+
+```ts
+await host.setToolbarButtonBadge("needs-you", {
+  kind: "label",
+  text: String(count),
+  color: "warning",
+});
+await host.setToolbarButtonBadge("needs-you", null); // clear
+```
+
+It takes the [`setPanelBadge`](#setpanelbadge) shape and limits unchanged. Where the user put the button decides how it draws: its plugin-tray row and its row in the overflow `…` menu show the badge in full. A button the user promoted to the toolbar shows a whole-number label as a count pill capped at `9+`, and a dot or any other label as a pip, with the full text in its tooltip. While the tray is collapsed, its own button shows one dot for any badged row that isn't promoted, so one badge never lights two buttons. Placement stays the user's call: a badge never promotes a button.
+
+Badges are keyed by `(pluginId, buttonId)` and cleared on unload and whenever your worker is replaced, so republish after a restart. Not revoke-guarded, and a silent no-op once the plugin unloads. An empty `buttonId` rejects on both hosts. An id your manifest did not contribute, or an invalid badge, rejects in process and is only logged in main from a worker. `createMockHost` records calls in `setToolbarButtonBadgeCalls`, and rejects a foreign id when you pass its `toolbarButtonIds` option.
+
+## `setContext`
+
+Publish a key of your own to `when` clauses, so a keybinding or a `contextMenus` entry turns on and off with your plugin's state instead of always holding its key.
+
+```ts
+await host.setContext("needsYou", queue.length > 0);
+await host.setContext("view", "triage");
+await host.setContext("view", null); // clear
+```
+
+The host namespaces every key under your manifest name, so from `digitalfrontier.beads` the keys above read as `digitalfrontier.beads.needsYou` and `digitalfrontier.beads.view`:
+
+```json
+{
+  "actionId": "digitalfrontier.beads.next",
+  "combo": "Cmd+Shift+N",
+  "when": "digitalfrontier.beads.needsYou && !textInputFocused"
+}
+```
+
+A plugin can never set a built-in key or another plugin's. A key starts with a letter or `_` and holds only letters, digits, `_` and `-`, with no dots, up to 64 characters (`PLUGIN_CONTEXT_KEY_LENGTH_MAX`). `__proto__`, `constructor` and `prototype` are reserved. A value is `true`, `false` or a string of at most 256 characters (`PLUGIN_CONTEXT_VALUE_LENGTH_MAX`); `null` (or `undefined`) clears the key. You can hold at most 32 keys at once (`PLUGIN_CONTEXT_KEYS_MAX`). Anything else rejects the returned Promise, on both hosts. As everywhere in a `when` clause, a bare key is true for `true` or a non-empty string, and `==` compares exactly, so `"digitalfrontier.beads.view == 'triage'"` works on a string value.
+
+The keys reach keybinding `when` clauses and renderer `contextMenus` `when` clauses. Native `menuItems` do not see them, since those are evaluated once against an empty context. A project copy of a plugin that is also installed owns the namespace in its own project's windows from the moment it loads, even before it sets a key. Keys are not persisted: they are cleared on unload and whenever your worker is replaced, so republish after a restart. Not revoke-guarded, and a silent no-op once the plugin unloads. `createMockHost` applies the same checks and cap, records accepted calls in `setContextCalls`, and holds the current keys in `contextKeys`.
+
 ## `setPanelMenuItems`
 
 Publish the contextual actions that the ⋯ and right-click menus of one of your panels offer right now. It is the backend twin of the view's `setMenuItems`, and the only way a PTY-backed panel, which has no view, gets entries of its own:
@@ -1042,7 +1089,7 @@ await host.dispatch(
 );
 ```
 
-The plugin must declare `project:dispatch`, and the user must turn on **Allow project targeting** in the plugin's Permissions tab. It is off by default and never prompts, so an unattended plugin fails fast: without the declaration or the switch the call rejects with `PERMISSION_REQUIRED` naming what is missing, and nothing is dispatched. With both, the action runs in that project's view without switching to it, and each targeted dispatch is recorded in the plugin audit log (target and action id, with an args hash, never the args). A backgrounded project still counts, and its view is woken for the call if it was frozen; a project with no open view rejects with `PROJECT_VIEW_UNAVAILABLE` — nothing opens it for you, so `project.switch` first if you need one. An empty or non-string `projectId` is refused rather than read as "no target". A project plugin may pass only its own project's id; any other is refused whatever the user has granted. The switch changes where an action runs, not which actions a plugin can dispatch.
+The plugin must declare `project:dispatch`, and the user must turn on **Allow project targeting** in the plugin's Permissions tab. It is off by default and never prompts, so an unattended plugin fails fast: without the declaration or the switch the call rejects with `PERMISSION_REQUIRED` naming what is missing, and nothing is dispatched. With both, the action runs in that project's view without switching to it, and each targeted dispatch is recorded in the plugin audit log (target and action id, with an args hash, never the args). A backgrounded project still counts, and its view is woken for the call if it was frozen; a project with no open view rejects with `PROJECT_VIEW_UNAVAILABLE` — nothing opens it for you, so `project.switch` first if you need one. The one exception is an installed plugin's `terminal.close` with an explicit `terminalId`: Daintree closes the panel itself, sending its process to the trash and dropping it from the project's saved layout, and answers with the same `{ closedIds }` a view would, so a plugin can close finished panels in projects nobody has open. An empty or non-string `projectId` is refused rather than read as "no target". A project plugin may pass only its own project's id; any other is refused whatever the user has granted. The switch changes where an action runs, not which actions a plugin can dispatch.
 
 A dispatch that times out is not cancelled: the action can still run after `dispatch` resolved with the timeout, so don't blindly retry a launch.
 
@@ -1363,11 +1410,36 @@ await host.showToast({
 });
 ```
 
-The host prefixes `message` with your plugin's display name (`{displayName}: {message}`, falling back to the manifest `name`) so users can tell which plugin raised the toast — you don't add the prefix yourself. `message` is a string only, trimmed and then 1 to 2000 characters; `priority` and action buttons aren't exposed to plugins. `durationMs` must be a positive integer up to 60000 (60s). An empty message, an unknown `type`, an out-of-range `durationMs` or any other key rejects.
+The host prefixes `message` with your plugin's display name (`{displayName}: {message}`, falling back to the manifest `name`) so users can tell which plugin raised the toast — you don't add the prefix yourself. `message` is a string only, trimmed and then 1 to 2000 characters; `priority` and action buttons aren't exposed here — use [`notify`](#notify) for a notification with buttons. `durationMs` must be a positive integer up to 60000 (60s). An empty message, an unknown `type`, an out-of-range `durationMs` or any other key rejects.
 
 Toasts route through Daintree's standard `notify()` path, so quiet-hours and inbox-history semantics apply. The rate-limit bucket is scoped per plugin id and type (two plugins sharing a display name still get separate buckets), so a noisy plugin can't suppress another plugin's toasts (or system toasts). Audit your toasts against the four-question checklist (timely, helpful, not already visible, ignorable) — the host delivers what you ask for, it doesn't second-guess. There's no "sticky" or "action required" toast type — for persistent UI, register a panel view instead. A toast with an action button, or an Undo toast, comes from the view instead: [`useToast`](./ui-kit.md#hooks) in `@daintreehq/plugin-ui` routes through the same `notify()` path under the same limits, and its button calls straight back into the view.
 
 When the project is driven from a window on another machine (see [Remote hosts](#remote-hosts--when-nobody-is-sitting-at-this-machine)), the toast is shown in that window.
+
+## `notify`
+
+```ts
+const { id } = await host.notify({
+  title: "Run needs approval",
+  body: "plan-from-issue is waiting on you",
+  actions: [
+    { id: "open", label: "Open run", actionId: "acme.openRun", args: { runId } },
+    { id: "skip", label: "Skip", actionId: "acme.skipRun", args: { runId } },
+  ],
+  os: true, // also page the OS — needs `notification:os` and the user's switch
+  dedupeKey: `run:${runId}`, // replace this run's earlier notification instead of stacking
+});
+```
+
+A notification with up to two buttons, each running one of your own actions with its `args`. Write each `actionId` as `{manifest name}.{id}`, as in `contributes.menu`; the host runs it in your plugin's own namespace, so a project plugin runs its own copy. An action outside your namespace, a third action, a repeated action `id`, an empty `title` or `body` and any unknown key reject. `title` is up to 200 characters, `body` up to 2000, a label up to 40, and each action's `args` must serialize to JSON within 4 KB. The host prefixes `title` with your display name, as `showToast` does with `message`.
+
+It routes through the same `notify()` path as `showToast`: the toast shows when the window has focus, the inbox row keeps the buttons either way, and quiet hours, the session mute and a per-plugin rate limit apply. A button click is the user's: the action runs as if they had picked it from your panel menu, and its own `danger` still applies.
+
+`os: true` asks for an OS banner as well. It is a request the host may turn down: the banner is dropped while the user's **Allow OS notifications** switch is off, when notifications are off, during quiet hours or a session mute, while the user is looking at your project (or, for an app-wide plugin, at any Daintree window), and past a burst of three banners followed by one every ten seconds. Banners carry no buttons. Clicking one brings your project forward and runs the first action; with no actions it just brings the project forward. A project with no open view isn't opened. `os: true` without `notification:os` declared rejects with `PERMISSION_REQUIRED`. Unsigned macOS development builds never display banners.
+
+`dedupeKey` (up to 200 characters) replaces your earlier notification with the same key — its toast, its inbox row and its banner — rather than adding beside it. Keys are scoped to your plugin. The returned `id` is fresh per call and says nothing about which surfaces showed it.
+
+When the project is driven from a window on another machine, that window gets a plain toast with the title and body, and no banner is shown on either machine.
 
 ## User prompts — `showQuickPick`, `showInputBox`, `showConfirm`
 
@@ -1966,7 +2038,7 @@ expect(host.postToPanelCalls[0]).toMatchObject({ channel: "build-status" });
 await expect(host.sendToActiveAgent("hi")).rejects.toThrow(/PERMISSION_REQUIRED/);
 ```
 
-It validates argument shapes the way the real host does — `registerAction` descriptors (id grammar, kind, danger, required strings), `showToast` message/type/`durationMs` bounds and unknown keys, `setPanelBadge` shape and unknown keys, the channel format of `postToPanel`, `broadcastToRenderer`, `hasListeners` and `onDidChangeListeners` (only `registerHandler` skips it), `showConfirm`'s string `title`, `showQuickPick` item arrays, `fs.watch` options, `sendToAgent` text, title and ids, `documents.renderPdf` options (with the host's own validator), and `git.commit`'s non-empty message — so a malformed call fails the test the way it would fail in the app.
+It validates argument shapes the way the real host does — `registerAction` descriptors (id grammar, kind, danger, required strings), `showToast` message/type/`durationMs` bounds and unknown keys, `notify` options, action namespace and the `notification:os` declaration (recorded in `notifications`), `setPanelBadge` shape and unknown keys, the channel format of `postToPanel`, `broadcastToRenderer`, `hasListeners` and `onDidChangeListeners` (only `registerHandler` skips it), `showConfirm`'s string `title`, `showQuickPick` item arrays, `fs.watch` options, `sendToAgent` text, title and ids, `documents.renderPdf` options (with the host's own validator), and `git.commit`'s non-empty message — so a malformed call fails the test the way it would fail in the app.
 
 ### Options
 
@@ -1997,7 +2069,7 @@ All are read-only arrays in call order.
 
 - **Current registrations**, not a history — re-registering the same id replaces the entry in place, and disposing a provider or MCP roster removes it: `registeredActions`, `registeredForgeProviders`, `registeredFileDecorationProviders`, `registeredMcpTools` (with each tool's `execute`, so a test can call a tool directly).
 - **Subscription windows:** `subscriptionOptions` has one `{ kind, debounceMs }` per `onDidChangeWorktrees` (`"worktrees"`), `onDidChangeActiveWorktree` (`"active-worktree"`), `onDidChangeAgentState` (`"agent-state"`), `onDidChangeAllAgents` (`"all-agents"`) and `onDidChangeFocusedPanel` (`"focused-panel"`) subscription, with the window the host would apply — 100 for an omitted option (250 for `"focused-panel"`), `0` for raw, otherwise clamped to 50–60,000 — so a test can assert a plugin kept the default or opted out.
-- **Append-only call records:** `registeredHandlers`, `broadcastCalls`, `postToPanelCalls` (`panelId` is `null` for a broadcast), `shownToasts`, `dispatchedActions` (every call, including `settings.open`, recorded as `plugin.openSettings`), `sentToActiveAgentCalls`, `sentToAgentCalls` (`{ text, options, result }`), `invalidationCalls`, `setPanelBadgeCalls`, `setPanelMenuItemsCalls` (the items as you wrote them), `reloadPanelCalls`, `restartWorkerCalls` (the answers), `showQuickPickCalls`, `showInputBoxCalls`, `showConfirmCalls`, `spawnCalls`, `fsWriteCalls`, `fsAppendCalls` (the appended text only), `fsMkdirCalls`, `gitCommitCalls`, `clipboardWriteCalls`, `clipboardWriteImageCalls` (byte lengths), `systemOpenPathCalls`, `systemShowItemCalls`, `documentsRenderPdfCalls`.
+- **Append-only call records:** `registeredHandlers`, `broadcastCalls`, `postToPanelCalls` (`panelId` is `null` for a broadcast), `shownToasts`, `dispatchedActions` (every call, including `settings.open`, recorded as `plugin.openSettings`), `sentToActiveAgentCalls`, `sentToAgentCalls` (`{ text, options, result }`), `invalidationCalls`, `setPanelBadgeCalls`, `setToolbarButtonBadgeCalls`, `setContextCalls` (with the keys held now in `contextKeys`), `setPanelMenuItemsCalls` (the items as you wrote them), `reloadPanelCalls`, `restartWorkerCalls` (the answers), `showQuickPickCalls`, `showInputBoxCalls`, `showConfirmCalls`, `spawnCalls`, `fsWriteCalls`, `fsAppendCalls` (the appended text only), `fsMkdirCalls`, `gitCommitCalls`, `clipboardWriteCalls`, `clipboardWriteImageCalls` (byte lengths), `systemOpenPathCalls`, `systemShowItemCalls`, `documentsRenderPdfCalls`.
 
 Calls that fail validation, and prompts or `sendToAgent` calls whose signal was already aborted, are not recorded. `/testing` exports some record types by name (`RegisteredActionRecord`, `RegisteredHandlerRecord`, `ShownToastRecord`, `ShowConfirmRecord`, …) but not all: the elements of `postToPanelCalls`, `spawnCalls`, `setPanelBadgeCalls`, `fsWriteCalls`, `gitCommitCalls`, `sentToActiveAgentCalls` and `subscriptionOptions` have no importable type, so infer them from the array — `MockHostState["postToPanelCalls"][number]`.
 

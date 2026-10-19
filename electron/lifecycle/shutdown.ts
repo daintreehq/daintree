@@ -18,6 +18,7 @@ import { terminalCrashReapService } from "../services/TerminalCrashReapService.j
 import { disposeWorkspaceClient } from "../services/WorkspaceClient.js";
 import { disposeMainProcessWatchdog } from "../services/MainProcessWatchdogClient.js";
 import { projectCheckService } from "../services/ProjectCheckService.js";
+import { projectCommandService } from "../services/ProjectCommandService.js";
 import { getCrashRecoveryService } from "../services/CrashRecoveryService.js";
 import { getCrashLoopGuard } from "../services/CrashLoopGuardService.js";
 import { getPanelSuspectLedger } from "../services/PanelSuspectLedgerService.js";
@@ -236,6 +237,11 @@ function finishGroupStop(): boolean {
     projectCheckService.dispose();
   } catch (err) {
     console.warn("[MAIN] projectCheckService.dispose failed:", err);
+  }
+  try {
+    projectCommandService.dispose();
+  } catch (err) {
+    console.warn("[MAIN] projectCommandService.dispose failed:", err);
   }
   // A chain that settled clean has written the markers already.
   if (outcome === "clean" && chainOutcome === null) writeCleanExitMarkers();
@@ -829,6 +835,11 @@ async function runShutdownChain(deps: ShutdownDeps): Promise<ShutdownOutcome> {
             projectCheckService.dispose();
           } catch (err) {
             console.warn("[MAIN] projectCheckService.dispose failed:", err);
+          }
+          try {
+            projectCommandService.dispose();
+          } catch (err) {
+            console.warn("[MAIN] projectCommandService.dispose failed:", err);
           }
           try {
             disposeWorkspaceClient();

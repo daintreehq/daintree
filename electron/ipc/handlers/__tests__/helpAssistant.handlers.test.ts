@@ -86,10 +86,9 @@ describe("registerHelpAssistantHandlers", () => {
       modelIds: {},
       customArgs: "",
       idleHibernateMinutes: 5,
-      debugLogging: false,
       loadGlobalHooksAndServers: false,
       daintreeConfirmations: "inherit",
-      acceptRemoteMessages: true,
+      acceptRemoteControl: true,
     });
   });
 
@@ -113,10 +112,9 @@ describe("registerHelpAssistantHandlers", () => {
       modelIds: {},
       customArgs: "",
       idleHibernateMinutes: 5,
-      debugLogging: false,
       loadGlobalHooksAndServers: false,
       daintreeConfirmations: "inherit",
-      acceptRemoteMessages: true,
+      acceptRemoteControl: true,
     });
   });
 
@@ -197,18 +195,6 @@ describe("registerHelpAssistantHandlers", () => {
     expect(storeMock.set).toHaveBeenCalledTimes(2);
   });
 
-  it("persists debugLogging and rejects a non-boolean value", async () => {
-    registerHelpAssistantHandlers();
-    const handler = ipcMainMock._handlers.get(SET_CHANNEL)!;
-
-    await handler(null, { debugLogging: true });
-    expect(storeMock.set).toHaveBeenCalledWith("helpAssistant.debugLogging", true);
-
-    storeMock.set.mockClear();
-    await handler(null, { debugLogging: "yes" as unknown as boolean });
-    expect(storeMock.set).not.toHaveBeenCalled();
-  });
-
   it("persists loadGlobalHooksAndServers and rejects a non-boolean value", async () => {
     registerHelpAssistantHandlers();
     const handler = ipcMainMock._handlers.get(SET_CHANNEL)!;
@@ -221,29 +207,42 @@ describe("registerHelpAssistantHandlers", () => {
     expect(storeMock.set).not.toHaveBeenCalled();
   });
 
-  it("keeps a saved acceptRemoteMessages off, rejects a non-boolean, and tells listeners of a write (#13441)", async () => {
+  it("keeps a saved acceptRemoteControl off, rejects a non-boolean, and tells listeners of a write (#13493)", async () => {
     const { onHelpAssistantSettingsChanged } = await import("../helpAssistant.js");
-    storeMock.get.mockReturnValue({ acceptRemoteMessages: false });
+    storeMock.get.mockReturnValue({ acceptRemoteControl: false });
     registerHelpAssistantHandlers();
     const get = ipcMainMock._handlers.get(GET_CHANNEL)!;
     const set = ipcMainMock._handlers.get(SET_CHANNEL)!;
-    expect(await get(null)).toMatchObject({ acceptRemoteMessages: false });
+    expect(await get(null)).toMatchObject({ acceptRemoteControl: false });
 
     let heard = 0;
     const off = onHelpAssistantSettingsChanged(() => heard++);
     try {
-      await set(null, { acceptRemoteMessages: true });
-      expect(storeMock.set).toHaveBeenCalledWith("helpAssistant.acceptRemoteMessages", true);
+      await set(null, { acceptRemoteControl: true });
+      expect(storeMock.set).toHaveBeenCalledWith("helpAssistant.acceptRemoteControl", true);
       expect(heard).toBe(1);
 
       storeMock.set.mockClear();
-      await set(null, { acceptRemoteMessages: "yes" as unknown as boolean });
+      await set(null, { acceptRemoteControl: "yes" as unknown as boolean });
       expect(storeMock.set).not.toHaveBeenCalled();
       // Nothing written, nothing to hear.
       expect(heard).toBe(1);
     } finally {
       off();
     }
+  });
+
+  it("neither reads nor writes the retired acceptRemoteMessages (#13496)", async () => {
+    storeMock.get.mockReturnValue({
+      acceptRemoteMessages: false,
+    } as unknown as Partial<HelpAssistantSettings>);
+    registerHelpAssistantHandlers();
+    const get = ipcMainMock._handlers.get(GET_CHANNEL)!;
+    const set = ipcMainMock._handlers.get(SET_CHANNEL)!;
+    expect(await get(null)).not.toHaveProperty("acceptRemoteMessages");
+
+    await set(null, { acceptRemoteMessages: true });
+    expect(storeMock.set).not.toHaveBeenCalled();
   });
 
   it("persists daintreeConfirmations and rejects values outside the union (#12874)", async () => {
@@ -276,15 +275,6 @@ describe("registerHelpAssistantHandlers", () => {
       daintreeConfirmations: "skip" as unknown as "inherit",
     });
     expect(await handler(null)).toMatchObject({ daintreeConfirmations: "inherit" });
-  });
-
-  it("returns a stored debugLogging=true over the default", async () => {
-    storeMock.get.mockReturnValue({ debugLogging: true });
-    registerHelpAssistantHandlers();
-    const handler = ipcMainMock._handlers.get(GET_CHANNEL)!;
-
-    const result = await handler(null);
-    expect(result).toMatchObject({ debugLogging: true });
   });
 
   it("persists tier when set to a valid value", async () => {
@@ -464,10 +454,9 @@ describe("registerHelpAssistantHandlers", () => {
       modelIds: {},
       customArgs: "",
       idleHibernateMinutes: 5,
-      debugLogging: false,
       loadGlobalHooksAndServers: false,
       daintreeConfirmations: "inherit",
-      acceptRemoteMessages: true,
+      acceptRemoteControl: true,
     });
   });
 

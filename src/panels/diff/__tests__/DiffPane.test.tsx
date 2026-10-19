@@ -600,6 +600,7 @@ describe("DiffPane — video current-version mode (#11382)", () => {
   // Chromium's custom-scheme media loader can't do follow-up range requests
   // (electron#51442) — so the suite stubs the fetch/object-URL boundary.
   const videoFetchMock = vi.fn();
+  const realFetch = globalThis.fetch;
   beforeEach(() => {
     videoFetchMock.mockResolvedValue({
       ok: true,
@@ -613,7 +614,7 @@ describe("DiffPane — video current-version mode (#11382)", () => {
     URL.revokeObjectURL = vi.fn();
   });
   afterEach(() => {
-    vi.unstubAllGlobals();
+    vi.stubGlobal("fetch", realFetch);
     videoFetchMock.mockReset();
   });
 
@@ -742,6 +743,7 @@ describe("DiffPane — audio current-version mode (#11425)", () => {
   // Same fetch/object-URL boundary as the video suite: audio shares the
   // protocol path because electron#51442 covers <audio> too.
   const audioFetchMock = vi.fn();
+  const realFetch = globalThis.fetch;
   beforeEach(() => {
     audioFetchMock.mockResolvedValue({
       ok: true,
@@ -755,7 +757,7 @@ describe("DiffPane — audio current-version mode (#11425)", () => {
     URL.revokeObjectURL = vi.fn();
   });
   afterEach(() => {
-    vi.unstubAllGlobals();
+    vi.stubGlobal("fetch", realFetch);
     audioFetchMock.mockReset();
   });
 

@@ -227,6 +227,18 @@ export type PluginPanelBadge =
 /** Max length of a {@link PluginPanelBadge} `label` text, enforced host-side. */
 export const PLUGIN_PANEL_BADGE_LABEL_MAX = 6;
 
+/** Value a plugin publishes to `when` clauses via {@link PluginHostApi.setContext}. */
+export type PluginContextValue = boolean | string;
+
+/** Most context keys one plugin may hold at once via {@link PluginHostApi.setContext}. */
+export const PLUGIN_CONTEXT_KEYS_MAX = 32;
+
+/** Max length of a {@link PluginHostApi.setContext} key. */
+export const PLUGIN_CONTEXT_KEY_LENGTH_MAX = 64;
+
+/** Max length of a string {@link PluginHostApi.setContext} value. */
+export const PLUGIN_CONTEXT_VALUE_LENGTH_MAX = 256;
+
 export type MenuItemLocation = "terminal" | "file" | "view" | "help";
 // `"panel"` was removed (#10512): no renderer surface ever mounted
 // `usePluginContextMenuItems("panel")`, so a contributed panel context-menu item
@@ -275,6 +287,12 @@ export const BUILT_IN_PLUGIN_CAPABILITIES = [
   // #13221): the kind, an agent flag and the worktree id, never a panel's id,
   // title, URL or content. Disclosure-only and not confirm-triggering.
   "panel:focus-read",
+  // Page the operating system from `host.notify({ os: true })` (#13505).
+  // Declaring it enables nothing: banners stay off until the user turns on
+  // "Allow OS notifications" for this plugin in the Plugin Manager. Not
+  // confirm-triggering — it changes where a notification is shown, not what a
+  // plugin can do.
+  "notification:os",
 ] as const;
 
 export type BuiltInPluginCapability = (typeof BUILT_IN_PLUGIN_CAPABILITIES)[number];
@@ -3261,6 +3279,51 @@ export interface PluginToastOptions {
   durationMs?: number;
 }
 
+/** Most buttons one {@link PluginHostApi.notify} call may carry. */
+export const PLUGIN_NOTIFY_MAX_ACTIONS = 2;
+
+/** A button on a {@link PluginHostApi.notify} notification. */
+export interface PluginNotifyAction {
+  /** Unique within the notification. */
+  id: string;
+  /** Button text on the toast and inbox row. */
+  label: string;
+  /**
+   * One of the caller's own actions, written `"{manifest name}.{id}"` as in
+   * `contributes.menu`. The host runs it in the plugin's instance namespace.
+   */
+  actionId: ActionId;
+  /** Passed to the action, validated against its `argsSchema` at dispatch. */
+  args?: Record<string, unknown>;
+}
+
+/** Options for {@link PluginHostApi.notify}. */
+export interface PluginNotifyOptions {
+  title: string;
+  body: string;
+  /** At most {@link PLUGIN_NOTIFY_MAX_ACTIONS}. */
+  actions?: PluginNotifyAction[];
+  /**
+   * Also page the operating system. A request, never a bypass: the host drops
+   * the banner when the user hasn't turned it on, during quiet hours or a
+   * session mute, while the user is looking at the plugin's project, and when
+   * the plugin pages faster than the host allows. Needs the `notification:os`
+   * capability.
+   */
+  os?: boolean;
+  /**
+   * A later notification with the same key replaces this one — its toast, its
+   * inbox row and its OS banner — instead of stacking beside it.
+   */
+  dedupeKey?: string;
+}
+
+/** What {@link PluginHostApi.notify} resolves with. */
+export interface PluginNotifyResult {
+  /** A fresh id per call; it doesn't say which surfaces showed it. */
+  id: string;
+}
+
 /**
  * One selectable row in a {@link PluginHostApi.showQuickPick} list. `id` is the
  * stable identity used for selection tracking and search keys; `label` is the
@@ -4930,6 +4993,9 @@ export interface PluginHostApi extends PluginActivationApi {
    * `terminal.sendCommand` action is closed to plugin dispatch — this is the
    * sanctioned injection path.
    *
+   * The Daintree Assistant is never the target, whatever the plugin's consent:
+   * a project whose only agent is the assistant is treated as having none.
+   *
    * `options.submit` controls whether the text is executed. It defaults to
    * `false` — the **stage-only** default-safe mode: the text is pasted into the
    * agent's input for the user to review and submit, with no Enter appended.
@@ -5018,6 +5084,48 @@ export interface PluginHostApi extends PluginActivationApi {
    * still rejected synchronously worker-side.)
    */
   setPanelBadge(panelId: string, badge: PluginPanelBadge | null): Promise<void>;
+  /**
+   * Set (or clear) a live badge on one of this plugin's own toolbar buttons —
+   * `buttonId` is a `contributes.toolbarButtons[].id` from this plugin's
+   * manifest — so a count or status stays visible while the plugin's panel is
+   * closed. Takes the same {@link PluginPanelBadge} shape and limits as
+   * {@link setPanelBadge}; pass `null` to clear it.
+   *
+   * The badge shows in full on the button's plugin-tray row and in the overflow
+   * menu. On a button the user promoted to the toolbar, a numeric `label`
+   * shows as a count pill (capped at `9+`), and a `dot` or any other label shows
+   * as a pip, with the full text in its tooltip. While the tray is collapsed,
+   * its own button shows a dot for any badged row that isn't promoted.
+   *
+   * Like {@link setPanelBadge} this is NOT revoke-guarded, becomes a silent
+   * no-op once the plugin is unloaded (all of its toolbar badges are cleared on
+   * unload), and rejects an empty or foreign `buttonId` or an invalid badge.
+   * (In the hot-reload worker an empty `buttonId` still rejects; a foreign id or
+   * malformed badge is logged in the host instead.)
+   */
+  setToolbarButtonBadge(buttonId: string, badge: PluginPanelBadge | null): Promise<void>;
+  /**
+   * Publish one of this plugin's own context keys to `when` clauses, so a
+   * keybinding or `contributes.contextMenus` entry can turn on and off with the
+   * plugin's state. The host namespaces the key under this plugin's manifest
+   * name: `setContext("needsYou", true)` from `acme.beads` is read as
+   * `acme.beads.needsYou`. A plugin can never set a built-in key or another
+   * plugin's. Pass `null` to clear the key.
+   *
+   * A key is letters, digits, `_` and `-`, at most
+   * {@link PLUGIN_CONTEXT_KEY_LENGTH_MAX} characters, with no dots; a string
+   * value is at most {@link PLUGIN_CONTEXT_VALUE_LENGTH_MAX} characters; a
+   * plugin holds at most {@link PLUGIN_CONTEXT_KEYS_MAX} keys at once. A
+   * violation rejects. As in every `when` clause, a bare key is true for `true`
+   * or a non-empty string, and `==` compares exactly.
+   *
+   * Native application menu `menuItems` do not see these keys. Keys are not
+   * persisted and are cleared when the plugin unloads or its worker is
+   * replaced, so republish them after a restart. Like {@link setPanelBadge}
+   * this is NOT revoke-guarded and becomes a silent no-op once the plugin is
+   * unloaded.
+   */
+  setContext(key: string, value: PluginContextValue | null): Promise<void>;
   /**
    * Publish the contextual actions the ⋯ and right-click menus of one of this
    * plugin's own panels offer right now — the backend-side twin of the view's
@@ -5108,6 +5216,23 @@ export interface PluginHostApi extends PluginActivationApi {
    */
   showToast(options: PluginToastOptions): Promise<void>;
   /**
+   * Raise a notification with up to {@link PLUGIN_NOTIFY_MAX_ACTIONS} buttons,
+   * each running one of the caller's own actions (#13505). It routes through
+   * the app's notification path like {@link showToast} — inbox, focus, quiet
+   * hours, session mute and the plugin's rate limit — and the title carries
+   * the plugin's display name for provenance.
+   *
+   * `os: true` also asks for an OS banner. Banners carry no buttons: clicking
+   * one brings the plugin's project forward and runs the first action. The
+   * call rejects when `notification:os` isn't declared; with it declared and
+   * the user's switch off, the banner is quietly dropped.
+   *
+   * NOT revoke-guarded, like {@link showToast}: it resolves with an id and
+   * shows nothing once the plugin is unloaded. Invalid options and actions
+   * outside the plugin's namespace reject.
+   */
+  notify(options: PluginNotifyOptions): Promise<PluginNotifyResult>;
+  /**
    * Dispatch an action by id through the app's `ActionService` with a `"plugin"`
    * source. Plugins use this to invoke their own registered actions, actions
    * contributed by other plugins, or any built-in action — always through the
@@ -5130,7 +5255,9 @@ export interface PluginHostApi extends PluginActivationApi {
    * `project:dispatch` and the user must turn on "Allow project targeting" for
    * it, or the call rejects with `PERMISSION_REQUIRED`. A project-bound plugin
    * may only name its own project. A project with no live view rejects with
-   * `PROJECT_VIEW_UNAVAILABLE` — nothing opens or wakes a closed project.
+   * `PROJECT_VIEW_UNAVAILABLE` — nothing opens or wakes a closed project —
+   * except an installed plugin's targeted `terminal.close`, which Daintree
+   * runs itself and answers with `{ closedIds }` (#13507).
    */
   dispatch(
     actionId: ActionId,

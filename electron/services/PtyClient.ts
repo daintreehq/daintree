@@ -2255,6 +2255,21 @@ export class PtyClient extends EventEmitter {
   }
 
   /**
+   * Whether the terminal running under `id` backs the Daintree Assistant, from
+   * the stamp sealed onto its spawn options. Read locally so a write path can
+   * refuse the assistant without a host query, which resolves `null` on a
+   * timeout and would leave the answer unknown. While a duplicate spawn awaits
+   * the host's answer, the one it displaced is still running and still counts
+   * (see `getLiveGeneration`).
+   */
+  isAssistantTerminal(id: string): boolean {
+    return (
+      this.pendingSpawns.get(id)?.isAssistantTerminal === true ||
+      this.displacedSpawns.get(id)?.entry.isAssistantTerminal === true
+    );
+  }
+
+  /**
    * Workspaces that currently own at least one tracked terminal (#12320).
    *
    * The open-window manifest needs this because a project's agents outlive its
@@ -2882,15 +2897,22 @@ export class PtyClient extends EventEmitter {
     this.shardForTerminal(id).send({ type: "force-resume", id });
   }
 
-  /** Get terminal IDs for a specific project */
-  async getTerminalsForProjectAsync(projectId: string): Promise<string[]> {
+  /**
+   * Get terminal IDs for a specific project. `strict` rejects when the host
+   * doesn't answer instead of resolving `[]`, for a caller that must not
+   * mistake an unread inventory for an empty one.
+   */
+  async getTerminalsForProjectAsync(
+    projectId: string,
+    options?: { strict?: boolean }
+  ): Promise<string[]> {
     const shard = this.shardForProjectQuery(projectId);
     const promise = sendPtyHostRpc<string[]>(shard, `terminals-${projectId}`, (requestId) => ({
       type: "get-terminals-for-project",
       projectId,
       requestId,
     }));
-    return promise.catch(() => []);
+    return options?.strict === true ? promise : promise.catch(() => []);
   }
 
   /**

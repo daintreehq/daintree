@@ -1,7 +1,7 @@
 import fs, { type FileHandle } from "fs/promises";
 import type { BigIntStats } from "fs";
 import path from "path";
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { resilientAtomicWriteFile } from "../../utils/fs.js";
 import { runExclusive } from "../../utils/keyedMutex.js";
 import { watchShared } from "../FileObservationService.js";
@@ -107,6 +107,7 @@ import {
   admitPluginTerminalScreenRead,
   readPluginTerminalScreen,
 } from "./pluginTerminalScreenRead.js";
+import { isAssistantTerminalRecord } from "../assistantTerminal.js";
 import { assertPayloadWithinLimit, snapshotPayload } from "./pluginPayloadLimits.js";
 import { resolveInvokeTimeoutMs, runWithInvokeDeadline } from "./pluginInvokeDeadline.js";
 import { flushPluginPushes, routePluginPush, withPushFlushBarrier } from "./pluginPushBatcher.js";
@@ -115,14 +116,25 @@ import { runWalk, validateWalkCall } from "./pluginFsWalk.js";
 import { checkIgnoredPaths, hasTrackedIgnoredPaths } from "../../utils/gitCheckIgnore.js";
 import { AppError, isAppError } from "../../utils/errorTypes.js";
 import { formatErrorMessage } from "../../../shared/utils/errorMessage.js";
+import { maskTerminalInOtherProject } from "../../../shared/utils/terminalInOtherProject.js";
+import type { ActionDispatchResult } from "../../../shared/types/actions.js";
 import { CHANNELS } from "../../ipc/channels.js";
 import { getPluginActionAuditService } from "../PluginActionAuditService.js";
-import { PluginPanelBadgeSchema, PluginToastOptionsSchema } from "../../schemas/plugin.js";
+import {
+  isBuiltInActionId,
+  PluginNotifyOptionsSchema,
+  PluginPanelBadgeSchema,
+  PluginToastOptionsSchema,
+} from "../../schemas/plugin.js";
 import {
   normalizePanelMenuItems,
   samePanelMenuItems,
   type PublishedPanelMenuItem,
 } from "../../../shared/utils/pluginPanelMenuItems.js";
+import {
+  applyPluginContextEntry,
+  validatePluginContextEntry,
+} from "../../../shared/utils/pluginContextKeys.js";
 import { makeForgeProviderId } from "../../../shared/utils/forgeProviderIds.js";
 import {
   toPluginWorktreeSnapshot,
@@ -204,6 +216,7 @@ import type {
   PluginGitCommitOptions,
   PluginGitCommitResult,
   PluginPanelBadge,
+  PluginContextValue,
   PluginHostBinding,
   PluginMcpCaller,
   PluginMcpToolDefinition,
@@ -268,6 +281,39 @@ function isSameProjectPath(a: string, b: string): boolean {
  */
 function isProjectViewUnavailable(error: unknown): boolean {
   return isAppError(error) && error.code === "PROJECT_VIEW_UNAVAILABLE";
+}
+
+/**
+ * A targeted `terminal.close` for a project with no live view (#13507): main
+ * closes it as it does for an MCP call with no frontend (#13498), trashing the
+ * process and dropping the panel from the saved layout, so finished work no
+ * longer waits for someone to open the project. Nothing opens a view.
+ *
+ * Exactly one action: the main-side path never passes through ActionService's
+ * plugin gates (`denyPluginDispatch`, restricted, confirm), so widening this to
+ * every action main can run would hand a targeting grant a side door.
+ * Anything else, or a project main does not know, keeps the original rejection.
+ */
+async function closeWithNoView(
+  error: unknown,
+  actionId: string,
+  args: unknown,
+  projectId: string
+): Promise<ActionDispatchResult> {
+  if (actionId !== "terminal.close" || !isProjectViewUnavailable(error)) throw error;
+  const { runViewlessAction } = await import("../viewless/index.js");
+  // Only the id goes on: main admits the call on its raw args, where a stray
+  // field (a `recipeId`) could ask for a confirmation a view would never need.
+  const terminalId = (args as { terminalId?: unknown } | null | undefined)?.terminalId;
+  const result = await runViewlessAction({
+    workspaceId: projectId,
+    actionId,
+    args: typeof terminalId === "string" ? { terminalId } : args,
+    confirmed: false,
+  });
+  if (result === null) throw error;
+  // The same uniform miss a view's answer gets for a terminal in another project (#13120).
+  return maskTerminalInOtherProject(result);
 }
 
 /**
@@ -508,6 +554,14 @@ export interface PluginHostFactoryDeps {
   pluginActionOwners: Map<string, Set<string>>;
   actionValidators: Map<string, ValidateFn>;
   pluginBadges: Map<string, Map<string, PluginPanelBadge>>;
+  /** Live toolbar-button badges set via `host.setToolbarButtonBadge`, `pluginId → buttonId → badge`. */
+  pluginToolbarBadges: Map<string, Map<string, PluginPanelBadge>>;
+  /** Publish one plugin's complete toolbar-badge map to the views entitled to it. */
+  emitToolbarBadges: (pluginId: string) => void;
+  /** Context keys set via `host.setContext`, `pluginId → key → value`. */
+  pluginContextKeys: Map<string, Map<string, PluginContextValue>>;
+  /** Publish one plugin's complete context-key map to the views entitled to it. */
+  emitContextKeys: (pluginId: string) => void;
   /** Runtime panel menus set via `host.setPanelMenuItems`, `pluginId → panelId → items`. */
   pluginPanelMenus: Map<string, Map<string, readonly PublishedPanelMenuItem[]>>;
   pluginFsWatchers: Map<string, Set<() => void>>;
@@ -2204,6 +2258,88 @@ export function createHost(
       });
       return Promise.resolve();
     },
+    // NOT revoke-guarded, like setPanelBadge: a count is set from the same
+    // post-activation subscriptions. The id must be one this plugin's manifest
+    // contributed, so a plugin can never light another plugin's button.
+    setToolbarButtonBadge: (buttonId, badge) => {
+      // Identity, not id membership: a callback left over from before a same-id
+      // reload must not set or clear its successor's badges.
+      if (!isBound() || !boundPlugin) return Promise.resolve();
+      if (typeof buttonId !== "string" || buttonId.length === 0) {
+        // Reject (not sync throw): runtime-surface Promise method (#10617).
+        return Promise.reject(
+          new Error(
+            `Plugin "${pluginId}" setToolbarButtonBadge: buttonId must be a non-empty string`
+          )
+        );
+      }
+      if (!boundPlugin.manifest.contributes.toolbarButtons.some((btn) => btn.id === buttonId)) {
+        return Promise.reject(
+          new Error(
+            `Plugin "${pluginId}" setToolbarButtonBadge: "${buttonId}" is not one of this plugin's contributes.toolbarButtons`
+          )
+        );
+      }
+      let validated: PluginPanelBadge | null = null;
+      if (badge !== null && badge !== undefined) {
+        const parsed = PluginPanelBadgeSchema.safeParse(badge);
+        if (!parsed.success) {
+          return Promise.reject(
+            new Error(
+              `Plugin "${pluginId}" setToolbarButtonBadge: invalid badge — ${parsed.error.issues
+                .map((i) => `${i.path.join(".") || "(root)"}: ${i.message}`)
+                .join("; ")}`
+            )
+          );
+        }
+        validated = parsed.data;
+      }
+      let buttonMap = deps.pluginToolbarBadges.get(pluginId);
+      if (validated === null) {
+        if (!buttonMap || !buttonMap.has(buttonId)) return Promise.resolve();
+        buttonMap.delete(buttonId);
+        if (buttonMap.size === 0) deps.pluginToolbarBadges.delete(pluginId);
+      } else {
+        if (!buttonMap) {
+          buttonMap = new Map<string, PluginPanelBadge>();
+          deps.pluginToolbarBadges.set(pluginId, buttonMap);
+        }
+        buttonMap.set(buttonId, validated);
+      }
+      // Deliver this plugin's queued pushes first, as every direct send does.
+      flushPluginPushes();
+      deps.emitToolbarBadges(pluginId);
+      return Promise.resolve();
+    },
+    // NOT revoke-guarded, like setPanelBadge: a key tracks state the plugin
+    // learns from post-activation subscriptions (#13506).
+    setContext: (key, value) => {
+      // Identity, not id membership: a callback left over from before a same-id
+      // reload must not set its successor's keys.
+      if (!isBound()) return Promise.resolve();
+      const entry = validatePluginContextEntry(key, value);
+      if (!entry.ok) {
+        // Reject (not sync throw): runtime-surface Promise method (#10617).
+        return Promise.reject(new Error(`Plugin "${pluginId}" setContext: ${entry.error}`));
+      }
+      let keys = deps.pluginContextKeys.get(pluginId);
+      if (!keys) {
+        if (entry.value === null) return Promise.resolve();
+        keys = new Map<string, PluginContextValue>();
+        deps.pluginContextKeys.set(pluginId, keys);
+      }
+      // An emptied map stays until unload: a project instance with no keys
+      // still owns its namespace over an installed copy's.
+      const applied = applyPluginContextEntry(keys, entry.key, entry.value);
+      if (!applied.ok) {
+        return Promise.reject(new Error(`Plugin "${pluginId}" setContext: ${applied.error}`));
+      }
+      if (!applied.changed) return Promise.resolve();
+      // Deliver this plugin's queued pushes first, as every direct send does.
+      flushPluginPushes();
+      deps.emitContextKeys(pluginId);
+      return Promise.resolve();
+    },
     // NOT revoke-guarded, like setPanelBadge: a plugin republishes its menu
     // from lifecycle callbacks and its own state changes (#13213). Ownership is
     // not checked against the panel here — `panel.openPluginPanel` hands back an
@@ -2326,13 +2462,112 @@ export function createHost(
           });
       }
     },
+    // NOT revoke-guarded, like showToast (#13505). Each action is held to the
+    // caller's own namespace here, where the caller is known, and rewritten to
+    // its instance's, the same rule as setPanelMenuItems: a button can only run
+    // what the plugin could already put in its own panel menu.
+    notify: async (options) => {
+      const id = randomUUID();
+      if (!deps.plugins.has(pluginId)) return { id };
+      const parsed = PluginNotifyOptionsSchema.safeParse(options);
+      if (!parsed.success) {
+        throw new Error(
+          `Plugin "${pluginId}" notify: invalid options — ${parsed.error.issues
+            .map((i) => `${i.path.join(".") || "(root)"}: ${i.message}`)
+            .join("; ")}`
+        );
+      }
+      const { title, body, os, dedupeKey } = parsed.data;
+      const ownPrefix = `${manifestId}.`;
+      const actions = (parsed.data.actions ?? []).map((action, index) => {
+        if (!action.actionId.startsWith(ownPrefix) || action.actionId.length === ownPrefix.length) {
+          throw new Error(
+            `Plugin "${pluginId}" notify: actions.${index}.actionId "${action.actionId.slice(0, 200)}" must be one of this plugin's own actions, written "${manifestId}.<id>"`
+          );
+        }
+        const actionId = `${pluginId}.${action.actionId.slice(ownPrefix.length)}`;
+        // A manifest name can spell a built-in's prefix ("worktree.resource"),
+        // and a click runs with the user's authority, so the rewritten id must
+        // still be the plugin's and never a built-in's.
+        if (isBuiltInActionId(actionId)) {
+          throw new Error(
+            `Plugin "${pluginId}" notify: actions.${index}.actionId "${actionId}" is a built-in action, not one of this plugin's own`
+          );
+        }
+        return {
+          label: action.label,
+          actionId,
+          ...(action.args !== undefined ? { args: action.args } : {}),
+        };
+      });
+      if (os && !deps.declaredCapabilities(pluginId).has("notification:os")) {
+        throw new Error(
+          `PERMISSION_REQUIRED: plugin "${pluginId}" notify with os: true requires "notification:os", which is not declared in manifest.capabilities`
+        );
+      }
+
+      const displayTitle = `${deps.pluginDisplayName(pluginId)}: ${title}`;
+      const replaceKey = dedupeKey !== undefined ? `plugin:${pluginId}:${dedupeKey}` : undefined;
+      pushToRenderers(CHANNELS.NOTIFICATION_SHOW_TOAST, {
+        type: "info",
+        title: displayTitle,
+        message: body,
+        rateLimitKey: `plugin:${pluginId}:notify`,
+        ...(actions.length > 0 ? { pluginActions: actions } : {}),
+        ...(replaceKey !== undefined ? { replaceKey } : {}),
+      });
+      // The switch is the whole grant: no first-use prompt, no builtin bypass.
+      // A notification that doesn't page still retires the banner it replaces.
+      // The pager is loaded only here, since it pulls in the notification and
+      // window services that nothing else in the host needs.
+      const frontend = resolvePluginFrontend(boundProjectId, pluginId);
+      const pages = os === true && frontend.kind !== "remote" && hasOsNotificationsGrant(pluginId);
+      if (
+        pages ||
+        (replaceKey !== undefined && deps.declaredCapabilities(pluginId).has("notification:os"))
+      ) {
+        const pager = await import("./pluginNotificationPager.js");
+        if (!deps.plugins.has(pluginId)) return { id };
+        if (pages) {
+          pager.pagePluginNotification({
+            pluginId,
+            projectId: boundProjectId,
+            title: displayTitle,
+            body,
+            ...(replaceKey !== undefined ? { replaceKey } : {}),
+            ...(actions[0]
+              ? { firstAction: { actionId: actions[0].actionId, args: actions[0].args } }
+              : {}),
+          });
+        } else if (replaceKey !== undefined) {
+          pager.retirePluginNotification(replaceKey);
+        }
+      }
+      // A Shell driving the project gets the plain toast. The banner belongs
+      // on that Shell's screen, which this machine can't page, so it is
+      // dropped rather than shown here to nobody. The reverse toast carries no
+      // replacement key, so a Shell's toasts for one key stack.
+      if (frontend.kind === "remote") {
+        frontend.endpoint
+          .request(
+            PluginFrontendMethod.TOAST,
+            { pluginId, type: "info", message: `${displayTitle} — ${body}` },
+            { timeoutMs: 10_000 }
+          )
+          .catch(() => {
+            // Best-effort, like the local push.
+          });
+      }
+      return { id };
+    },
     // NOT revoke-guarded for the same reason as invalidateFileDecorations and
     // showToast: plugins dispatch actions from post-activation callbacks and
     // timers. Liveness is plugin membership — once the plugin unloads this
     // returns PLUGIN_UNLOADED without attempting a round-trip. Args are
     // validated by ActionService against the action's argsSchema, and
     // danger:"restricted"/"confirm" are rejected there with the "plugin"
-    // source, so the host does not re-check them.
+    // source, so the host does not re-check them. The one exception runs in
+    // main and validates there: see closeWithNoView.
     dispatch: async (actionId, args, options) => {
       if (!deps.plugins.has(pluginId)) {
         return {
@@ -2391,12 +2626,9 @@ export function createHost(
         });
       };
       try {
-        const result = await dispatcher.sendDispatchToRenderer(
-          actionId,
-          args,
-          requestedProjectId,
-          pluginId
-        );
+        const result = await dispatcher
+          .sendDispatchToRenderer(actionId, args, requestedProjectId, pluginId)
+          .catch((err: unknown) => closeWithNoView(err, actionId, args, requestedProjectId));
         if (result.ok) audit("success", "");
         else audit("error", result.error.code);
         return result;
@@ -2998,6 +3230,15 @@ function hasProjectTargetingGrant(pluginId: string): boolean {
   });
 }
 
+/** Whether the user turned on "Allow OS notifications" for this plugin (#13505). */
+function hasOsNotificationsGrant(pluginId: string): boolean {
+  return getPluginCapabilityConsentStore().hasGrant({
+    pluginId,
+    capability: "notification:os",
+    scopeKey: "global",
+  });
+}
+
 /**
  * Meter every prompt that puts a dialog in front of the user, so an invoke
  * whose handler awaited one is not reported as a slow handler. Only
@@ -3079,6 +3320,13 @@ async function ensureCapabilityConsent(
  * no agent or in an ended state (`exited` / `completed`, or no live PTY) are
  * excluded.
  *
+ * So is the Daintree Assistant (#13494), whatever the plugin's consent: it runs
+ * a real agent CLI, so it passes every other test, and a waiting assistant
+ * outscores a busy grid agent. It holds the project's full MCP surface, which
+ * consent to "send text to the active agent" never covered. Filtered before
+ * ranking, so a project whose only agent is the assistant takes the same
+ * no-agent path as one with none.
+ *
  * `boundProjectId` is the host's binding. Bound: only that project's terminals
  * are eligible, and `null` comes back when it has none, so the caller can
  * no-op instead of injecting into a project the user never consented to.
@@ -3101,7 +3349,8 @@ async function resolveActiveAgentTerminalId(boundProjectId: string | null): Prom
     Boolean(t.detectedAgentId ?? t.launchAgentId) &&
     t.hasPty !== false &&
     t.agentState !== "exited" &&
-    t.agentState !== "completed";
+    t.agentState !== "completed" &&
+    !isAssistantTerminalRecord(t);
   // Scope to the bound project, or to the focused one; never cross into another
   // project's terminals.
   const scopeProjectId = boundProjectId ?? ptyClient.getActiveProjectId();

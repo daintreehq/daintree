@@ -62,6 +62,7 @@ test.use({ deviceScaleFactor: 2 });
 const FRAME = "[data-fixture]";
 const STRIP = '[role="toolbar"][aria-label="SvelteKit Tools"]';
 const DRAWER = '[aria-label="SvelteKit Tools details"]';
+const BREAKPOINT_PREFIX = "breakpoint--";
 
 let server: ViteDevServer | undefined;
 let baseURL = "";
@@ -189,7 +190,12 @@ async function snapRegion(page: Page, file: string): Promise<string> {
  * screen. A timeout here is a real failure — never a reason to photograph
  * whatever happens to be rendered.
  */
-async function open(page: Page, fixture: FixtureName, theme: string): Promise<Locator> {
+async function open(
+  page: Page,
+  fixture: FixtureName,
+  theme: string,
+  drawerWidth?: number
+): Promise<Locator> {
   await page.setViewportSize({ width: 1280, height: 760 });
   await stubViteHmrClient(page);
   // A harness that mounts blank is the failure this whole spec exists to avoid,
@@ -203,7 +209,9 @@ async function open(page: Page, fixture: FixtureName, theme: string): Promise<Lo
   page.on("pageerror", (error) => {
     console.warn(`[site-builder-shots] pageerror: ${error.message}`);
   });
-  const url = `${baseURL}/site-builder-preview.html?theme=${theme}&fixture=${fixture}`;
+  const url =
+    `${baseURL}/site-builder-preview.html?theme=${theme}&fixture=${fixture}` +
+    (drawerWidth ? `&drawer=${drawerWidth}` : "");
   const frame = page.locator(FRAME).first();
   const timeout = 30_000;
   try {
@@ -313,8 +321,64 @@ test("SvelteKit Tools — states, interactions and themes", async ({ page }) => 
 
   // Count the files ourselves. A harness that trusts its own exit code is how a
   // review ends up reasoning about screenshots that were never written.
-  const onDisk = readdirSync(OUT_DIR).filter((f) => f.endsWith(".png"));
+  const onDisk = readdirSync(OUT_DIR).filter(
+    (f) => f.endsWith(".png") && !f.startsWith(BREAKPOINT_PREFIX)
+  );
   expect(onDisk.length).toBe(written.length);
   expect(onDisk.length).toBeGreaterThanOrEqual(THEMES.length * FIXTURE_NAMES.length);
   console.log(`[site-builder-shots] ${onDisk.length} PNGs in ${OUT_DIR}`);
+});
+
+/**
+ * The property rows either side of the drawer's label-column breakpoint.
+ *
+ * The rows answer to `@[340px]/drawer`, measured on the chrome's content box,
+ * which is the drawer width less its 1px left border: a 340px drawer is the
+ * last stacked one and 341px the first with a label column. Each fixture is a
+ * different control in the row — a segmented scope chain, a scope list, the
+ * app switcher — shot at the floor, both sides of the switch, and the default.
+ *
+ *   DAINTREE_SHOT_SITEBUILDER=1 DAINTREE_SHOT_DIR=/abs/out \
+ *     npx playwright test --project=screenshots site-builder-review -g breakpoint
+ */
+test("SvelteKit Tools — property-row breakpoint", async ({ page }) => {
+  test.info().annotations.push({
+    type: "conditional-skip",
+    description: "DAINTREE_SHOT_SITEBUILDER is required for the site-builder capture",
+  });
+  test.skip(!ENABLED, "set DAINTREE_SHOT_SITEBUILDER=1 to run the capture");
+  test.setTimeout(10 * 60_000);
+
+  const widths = [280, 340, 341, 360];
+  const fixtures: FixtureName[] = ["element", "deepScope", "appSwitcher"];
+  const written: string[] = [];
+
+  for (const theme of THEMES) {
+    for (const name of fixtures) {
+      for (const width of widths) {
+        await open(page, name, theme, width);
+        const drawer = page.locator(DRAWER).first();
+        // The switch is the thing under review, so prove which side of it this
+        // frame is on rather than trusting the width that was asked for.
+        const columns = await page
+          .locator(DRAWER)
+          .locator("[data-property-row]")
+          .first()
+          .evaluate((row) => getComputedStyle(row).gridTemplateColumns.split(" ").length);
+        const expected = width - 1 >= 340 ? 2 : 1;
+        if (columns !== expected) {
+          throw new Error(
+            `${name} at ${width}px: property row has ${columns} column(s), expected ${expected}`
+          );
+        }
+        written.push(await snap(drawer, `${BREAKPOINT_PREFIX}${name}--${theme}--w${width}.png`));
+      }
+    }
+  }
+
+  const onDisk = readdirSync(OUT_DIR).filter(
+    (f) => f.endsWith(".png") && f.startsWith(BREAKPOINT_PREFIX)
+  );
+  expect(onDisk.length).toBe(written.length);
+  console.log(`[site-builder-shots] ${onDisk.length} breakpoint PNGs in ${OUT_DIR}`);
 });

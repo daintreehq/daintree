@@ -261,23 +261,6 @@ describe("help.launchAgent", () => {
     expect(mockNotify).not.toHaveBeenCalled();
   });
 
-  it("runs the Daintree Assistant in the project root, not the provisioned session dir", async () => {
-    // The assistant is env-only and ships its own skills, so it reads nothing
-    // from cwd — it should operate on the actual project files. Same mock setup
-    // as the non-assistant case below; only the cwd differs.
-    (window.electron.help.getFolderPath as ReturnType<typeof vi.fn>).mockResolvedValue(
-      "/mock/help"
-    );
-
-    await action.run({ agentId: "daintree-assistant" }, stubCtx);
-
-    expect(mockDispatch).toHaveBeenCalledWith(
-      "agent.launch",
-      expect.objectContaining({ agentId: "daintree-assistant", cwd: "/repo" }),
-      { source: "user" }
-    );
-  });
-
   it("launches with the CLI default model and custom args", async () => {
     (window.electron.help.getFolderPath as ReturnType<typeof vi.fn>).mockResolvedValue(
       "/mock/help"
@@ -326,10 +309,9 @@ describe("help.launchAgent", () => {
       modelIds: { claude: "opus" },
       customArgs: "",
       idleHibernateMinutes: 5,
-      debugLogging: false,
       loadGlobalHooksAndServers: false,
       daintreeConfirmations: "inherit",
-      acceptRemoteMessages: true,
+      acceptRemoteControl: true,
     });
 
     await action.run({ agentId: "codex" }, stubCtx);
@@ -609,27 +591,6 @@ describe("help.launchAgent", () => {
       { source: "user" }
     );
     expect(mockNotify).not.toHaveBeenCalled();
-  });
-
-  it("runs the assistant in the scratch root when a scratch is the active workspace", async () => {
-    (window.electron.help.getFolderPath as ReturnType<typeof vi.fn>).mockResolvedValue(
-      "/mock/help"
-    );
-    mockGetProjectState.mockReturnValue({ currentProject: null, isBootstrapped: true });
-    mockGetScratchState.mockReturnValue({
-      currentScratch: { id: "scratch-1", path: "/scratches/scratch-1" },
-    });
-
-    await action.run({ agentId: "daintree-assistant" }, stubCtx);
-
-    expect(mockDispatch).toHaveBeenCalledWith(
-      "agent.launch",
-      expect.objectContaining({
-        agentId: "daintree-assistant",
-        cwd: "/scratches/scratch-1",
-      }),
-      { source: "user" }
-    );
   });
 
   it("prefers the project over a stale scratch pointer when both are somehow set", async () => {

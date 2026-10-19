@@ -284,6 +284,13 @@ interface NotifyPayloadBase {
    * or already archived.
    */
   supersedes?: string;
+  /**
+   * Replace an earlier notification with the same key: its live toast is
+   * dismissed and, unless `supersedeKey` says otherwise, its inbox row is
+   * retired. Unlike `coalesce` there is no window and no count — the new one
+   * stands alone. Retirement happens whether or not the new one toasts.
+   */
+  replaceKey?: string;
   /** When set, rapidly fired notifications with the same key coalesce into a single updating toast */
   coalesce?: CoalesceOptions;
   /**
@@ -754,6 +761,10 @@ function checkAndApplyRateLimit(payload: NotifyPayload): boolean {
     return false;
   }
 
+  // A held-back replacement keeps its own inbox row (the caller writes it),
+  // so it isn't counted again in a summary row.
+  if (payload.replaceKey !== undefined) return true;
+
   bucket.overflowCount += 1;
   const historyStore = useNotificationHistoryStore.getState();
 
@@ -908,6 +919,18 @@ export function notify(payload: NotifyPayload): string {
   payload = resolveEventPolicyDefaults(payload);
   if (payload.urgent === undefined && carriesUndo(payload)) {
     payload = { ...payload, urgent: true };
+  }
+
+  if (payload.replaceKey !== undefined) {
+    const store = useNotificationStore.getState();
+    for (const live of store.notifications) {
+      if (live.replaceKey === payload.replaceKey && !live.dismissed) {
+        store.dismissNotification(live.id);
+      }
+    }
+    if (payload.supersedeKey === undefined) {
+      payload = { ...payload, supersedeKey: payload.replaceKey };
+    }
   }
 
   const priority = payload.priority ?? "high";
@@ -1095,6 +1118,22 @@ export function notify(payload: NotifyPayload): string {
     !payload.coalesce &&
     checkAndApplyRateLimit(payload)
   ) {
+    // A replacement still retires the row it replaces and leaves its own
+    // buttons in the inbox; only its toast is held back.
+    if (payload.replaceKey !== undefined && historyMessage) {
+      useNotificationHistoryStore.getState().addEntry({
+        type,
+        title,
+        message: historyMessage,
+        correlationId,
+        seenAsToast: false,
+        countable: payload.countable,
+        actions: historyActions.length > 0 ? historyActions : undefined,
+        context,
+        supersedeKey: payload.supersedeKey,
+        supersedes: payload.supersedes,
+      });
+    }
     return "";
   }
 

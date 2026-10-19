@@ -1,10 +1,13 @@
 // eager-import-allow: reads MCP server config via store.get synchronously during lifecycle setup
 import http from "node:http";
-import { createHash, randomUUID } from "node:crypto";
+import { createHash, randomBytes, randomUUID } from "node:crypto";
 import type { AddressInfo } from "node:net";
+import { Client } from "@modelcontextprotocol/sdk/client/index.js";
+import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { SSEServerTransport } from "@modelcontextprotocol/sdk/server/sse.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
-import { webContents as webContentsModule } from "electron";
+import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
+import { app, webContents as webContentsModule } from "electron";
 import type { WindowRegistry } from "../../window/WindowRegistry.js";
 import { store } from "../../store.js";
 import { CHANNELS } from "../../ipc/channels.js";
@@ -17,24 +20,38 @@ import { sanitizePath } from "../../utils/pathScrubber.js";
 import type {
   HelpTokenValidator,
   HelpSessionWebContentsResolver,
+  HelpSessionViewlessProjectResolver,
   HelpSessionActionContextResolver,
   HelpSessionIdResolver,
-  AssistantPaneWebContentsResolver,
-  AssistantPaneActionContextResolver,
   PaneWorkspaceBinding,
   PaneWorkspaceBindingResolver,
   PaneOwnershipPrincipalResolver,
   PaneTerminalResolver,
   HelpSessionTerminalResolver,
+  AssistantControlBinding,
   WorkspaceDispatchOptions,
+  McpRelayCaller,
   McpTier,
   McpSessionOrigin,
   McpWorkspaceBinding,
 } from "./shared.js";
 import { parseWorkspaceSelector, type WorkspaceSelectorRejection } from "./workspaceSelector.js";
-import { projectAuditArgs, projectAuditResult } from "./auditResultProjection.js";
-import { helpOwnershipPrincipal } from "./resourceOwnership.js";
-import { SessionBindingError, WorkspaceBindingError } from "./rendererBridge.js";
+import {
+  auditVerbatimArgKeys,
+  projectAuditArgs,
+  projectAuditResult,
+  projectRelayedAuditArgs,
+} from "./auditResultProjection.js";
+import { helpOwnershipPrincipal, relayOwnershipPrincipal } from "./resourceOwnership.js";
+import {
+  DriveHolderUnavailableError,
+  RelayDrivenElsewhereError,
+  SessionBindingError,
+  WorkspaceBindingError,
+} from "./rendererBridge.js";
+import { relayWriteStanding } from "./relayWriteRule.js";
+import { getViewlessHelpBaseManifest } from "./baseManifest.js";
+import { NO_VIEW_HANDLE } from "../../ipc/endpoint.js";
 import { PLUGIN_MCP_ROUTE_PREFIX, type PluginMcpRouteHandler } from "../pluginAgentMcp/types.js";
 import { isProjectWorkspaceId, isScratchWorkspaceId } from "../../../shared/utils/workspaceIds.js";
 import type {
@@ -50,14 +67,15 @@ import type {
   McpTurnOutcomeAlertPayload,
 } from "../../../shared/types/ipc/mcpServer.js";
 import {
+  buildAnnotations,
   extractBearerToken,
   isAuthorized,
   precomputeApiKeyBearerHash,
   resolveTokenTier,
 } from "./tierAuth.js";
 import { createSessionServer, cleanupResourceSubscriptions } from "./sessionServer.js";
-import { bindAssistantMessaging } from "./assistantMessagingTools.js";
-import { bindHostMessaging } from "./hostMessagingTools.js";
+import { bindHostControl } from "./hostControlTools.js";
+import type { AssistantCaller } from "../assistants/AssistantTerminalControl.js";
 import type { SessionStore } from "./sessionStore.js";
 import type { AuditService } from "./auditLog.js";
 import { classifyMcpDispatchResult } from "./auditLog.js";
@@ -65,7 +83,7 @@ import { computeMcpAuditSeverity } from "../../../shared/types/ipc/mcpServer.js"
 import { buildMcpClientConfig } from "../../../shared/config/mcpClientConfigs.js";
 import { isGenericNativeGrantEligible } from "../../../shared/config/nativeGrantUsePolicies.js";
 import type { TurnOutcomeService } from "./turnOutcomeLog.js";
-import { helpNotifyKey, paneNotifyKey } from "./terminalNotify.js";
+import { helpNotifyKey, paneNotifyKey, relayNoticePane } from "./terminalNotify.js";
 import type { AbusePolicy } from "./abusePolicy.js";
 import {
   DEFAULT_PORT,
@@ -87,6 +105,7 @@ import {
   MCP_WORKSPACE_ID_HEADER,
   MCP_WORKSPACE_ID_QUERY_PARAM,
   MCP_HANDSHAKE_REJECTED_CODE,
+  RELAY_CALL_ID_META_KEY,
   minimumPermittingTier,
 } from "./shared.js";
 import { createLogger } from "../../utils/logger.js";
@@ -182,6 +201,15 @@ export interface HttpLifecycleDeps {
     sessionOrigin?: McpSessionOrigin,
     options?: WorkspaceDispatchOptions
   ) => Promise<import("./shared.js").DispatchEnvelope>;
+  /** A help session with no view (#13511): the host's own form of the action, in its project. */
+  dispatchActionWithoutView?: (
+    workspaceId: string,
+    actionId: string,
+    args: unknown,
+    confirmed?: boolean,
+    sessionOrigin?: McpSessionOrigin,
+    options?: WorkspaceDispatchOptions
+  ) => Promise<import("./shared.js").DispatchEnvelope>;
   getCachedManifestForWorkspace?: (
     workspaceId: string,
     preferredWebContentsId?: number
@@ -221,13 +249,22 @@ export interface HttpLifecycleDeps {
   handleSkillsLoad: (rawArgs: unknown) => import("../../../shared/types/skills.js").SkillLoadResult;
   handleProjectRunCheck: (
     rawArgs: unknown,
-    signal: AbortSignal
+    signal: AbortSignal,
+    /** Asked once more right before the spawn; throws to refuse (#13493). */
+    authorize?: () => void
   ) => Promise<import("../../../shared/types/projectCheck.js").ProjectCheckRunResult>;
-  handleTerminalGetStatusViewless: (
+  handleProjectRunCommand: (
     rawArgs: unknown,
-    workspaceId: string
-  ) => Promise<import("../../../shared/types/terminalStatus.js").TerminalStatusResult>;
+    signal: AbortSignal,
+    /** Asked once more right before the spawn; throws to refuse (#13493). */
+    authorize?: () => void
+  ) => Promise<import("../../../shared/types/projectCommand.js").ProjectCommandRunResult>;
+  handleTerminalGetStatusViewless: import("./sessionServer.js").SessionServerDeps["handleTerminalGetStatusViewless"];
   handleTerminalReadLastMessageOwned: import("./sessionServer.js").OwnedMainExecutors["handleTerminalReadLastMessageOwned"];
+  /** How this machine names itself to people, for the stamp on what its assistants send. */
+  machineName?: () => string;
+  /** This machine's Codex quota, as `agent.readQuota` reports it. */
+  readCodexQuota?: import("./sessionServer.js").SessionServerDeps["readCodexQuota"];
   isTerminalIdInUse: (terminalId: string) => boolean;
   readTerminalCloseContext?: import("./sessionServer.js").SessionServerDeps["readTerminalCloseContext"];
   /**
@@ -315,6 +352,18 @@ function startSseHeartbeat(res: http.ServerResponse): ReturnType<typeof setInter
  * header and is equally privileged. The two inputs are prefixed so a header
  * can never collide with a token.
  */
+/** One relayed session as its opener holds it: call its tools, close it. */
+export interface McpRelaySessionHandle {
+  readonly sessionId: string;
+  isOpen(): boolean;
+  callTool(
+    tool: string,
+    args: Record<string, unknown>,
+    options: { timeoutMs: number; callId: string }
+  ): Promise<CallToolResult>;
+  close(): void;
+}
+
 export function sessionCredentialDigest(authHeader: string): string {
   const token = extractBearerToken(authHeader);
   const material = token !== null ? `token:${token}` : `raw:${authHeader}`;
@@ -392,14 +441,31 @@ export class HttpLifecycle {
   private stopPromise: Promise<void> | null = null;
   private helpTokenValidator: HelpTokenValidator | null = null;
   private helpSessionWebContentsResolver: HelpSessionWebContentsResolver | null = null;
+  private helpSessionViewlessProjectResolver: HelpSessionViewlessProjectResolver | null = null;
   private helpSessionActionContextResolver: HelpSessionActionContextResolver | null = null;
   private helpSessionIdResolver: HelpSessionIdResolver | null = null;
-  private assistantPaneWebContentsResolver: AssistantPaneWebContentsResolver | null = null;
-  private assistantPaneActionContextResolver: AssistantPaneActionContextResolver | null = null;
   private paneWorkspaceBindingResolver: PaneWorkspaceBindingResolver | null = null;
   private paneOwnershipPrincipalResolver: PaneOwnershipPrincipalResolver | null = null;
   private paneTerminalResolver: PaneTerminalResolver | null = null;
   private helpSessionTerminalResolver: HelpSessionTerminalResolver | null = null;
+  private assistantControlBinding: AssistantControlBinding | null = null;
+  /**
+   * Main's side of one assistant addressing another (#13496) as each call
+   * finds it, so a session opened before the binding was set is held to it
+   * from then on. Unbound, nothing is an assistant: none can run before then.
+   */
+  private readonly assistantControl: AssistantControlBinding["control"] = {
+    isAssistantTerminal: (terminalId) =>
+      this.assistantControlBinding?.control.isAssistantTerminal(terminalId) ?? false,
+    resolve: (caller, terminalId) =>
+      this.assistantControlBinding?.control.resolve(caller, terminalId) ?? null,
+    list: (...args) => this.boundAssistantControl().list(...args),
+    start: (...args) => this.boundAssistantControl().start(...args),
+    submit: (...args) => this.boundAssistantControl().submit(...args),
+    interrupt: (...args) => this.boundAssistantControl().interrupt(...args),
+    close: (...args) => this.boundAssistantControl().close(...args),
+    readReply: (...args) => this.boundAssistantControl().readReply(...args),
+  };
   private lastError: string | null = null;
   private intentionalStop = false;
   private restartAttempts = 0;
@@ -478,20 +544,16 @@ export class HttpLifecycle {
     this.helpSessionWebContentsResolver = resolver;
   }
 
+  setHelpSessionViewlessProjectResolver(resolver: HelpSessionViewlessProjectResolver | null): void {
+    this.helpSessionViewlessProjectResolver = resolver;
+  }
+
   setHelpSessionActionContextResolver(resolver: HelpSessionActionContextResolver | null): void {
     this.helpSessionActionContextResolver = resolver;
   }
 
   setHelpSessionIdResolver(resolver: HelpSessionIdResolver | null): void {
     this.helpSessionIdResolver = resolver;
-  }
-
-  setAssistantPaneWebContentsResolver(resolver: AssistantPaneWebContentsResolver | null): void {
-    this.assistantPaneWebContentsResolver = resolver;
-  }
-
-  setAssistantPaneActionContextResolver(resolver: AssistantPaneActionContextResolver | null): void {
-    this.assistantPaneActionContextResolver = resolver;
   }
 
   setPaneWorkspaceBindingResolver(resolver: PaneWorkspaceBindingResolver | null): void {
@@ -510,13 +572,22 @@ export class HttpLifecycle {
     this.helpSessionTerminalResolver = resolver;
   }
 
+  setAssistantControl(binding: AssistantControlBinding | null): void {
+    this.assistantControlBinding = binding;
+  }
+
+  private boundAssistantControl(): AssistantControlBinding["control"] {
+    const binding = this.assistantControlBinding;
+    if (binding === null) throw new Error("Assistant control isn't available yet");
+    return binding.control;
+  }
+
   /**
-   * Parses a Bearer header and asks the help-session resolver — then the
-   * assistant-pane resolver (#10647) — which renderer minted it, keeping *which*
-   * resolver matched (#11789).
+   * Parses a Bearer header and asks the help-session resolver which renderer
+   * minted it, keeping the origin that match confers (#11789).
    *
-   * The origin is the part that cannot be re-derived later: both resolvers
-   * produce a bare WebContents id, and once it lands in `sessionWebContentsMap`
+   * The origin is the part that cannot be re-derived later: the resolver
+   * produces a bare WebContents id, and once it lands in `sessionWebContentsMap`
    * there is no way to tell a Daintree assistant surface from anything else that
    * happens to route to a renderer. Authorization, notification routing, and
    * external-client inventory all need that distinction, so it is recorded here
@@ -526,22 +597,31 @@ export class HttpLifecycle {
    * pane tokens — which are classified `external`. An api-key client follows
    * window focus unless it names a workspace; an agent pane is bound to its
    * launch workspace by {@link resolvePaneWorkspaceBinding} instead.
+   *
+   * A help bearer with no view (#13511) pins `NO_VIEW_HANDLE` and names its
+   * project, which routes it to the host's own form of each action. One whose
+   * project can't be read keeps the bare pin, which no view answers: it fails
+   * closed rather than following focus.
    */
   private resolveSessionPin(
     authHeader: string
-  ): { origin: McpSessionOrigin; webContentsId: number } | null {
+  ): { origin: McpSessionOrigin; webContentsId: number; viewlessProjectId?: string } | null {
     const token = extractBearerToken(authHeader);
     if (!token) return null;
     const fromHelp = this.helpSessionWebContentsResolver?.(token) ?? null;
+    if (fromHelp === NO_VIEW_HANDLE) {
+      const viewlessProjectId = this.helpSessionViewlessProjectResolver?.(token) ?? null;
+      return viewlessProjectId !== null
+        ? { origin: "help", webContentsId: fromHelp, viewlessProjectId }
+        : { origin: "help", webContentsId: fromHelp };
+    }
     if (fromHelp !== null) return { origin: "help", webContentsId: fromHelp };
-    const fromPane = this.assistantPaneWebContentsResolver?.(token) ?? null;
-    if (fromPane !== null) return { origin: "assistant-pane", webContentsId: fromPane };
     return null;
   }
 
   /**
    * The launch workspace of an ordinary agent pane bearer (#12486), for a
-   * bearer neither pin resolver matched.
+   * bearer the help-session resolver didn't match.
    *
    * Server-derived, never client-supplied: the binding was recorded when the
    * pane was spawned, so the pane cannot choose or change its target, and a
@@ -564,9 +644,7 @@ export class HttpLifecycle {
    * Resolved before any session state is written, like the pane's workspace
    * binding, and bound with no await in between, so no revocation can land
    * between the two — a revoked token resolves to nothing, and the session
-   * keeps session-scoped ownership. Looked up whatever the session's origin:
-   * the assistant pane's bearer is a pane token too, minted and revoked on the
-   * same path.
+   * keeps session-scoped ownership. Looked up whatever the session's origin.
    */
   private resolveOwnershipPrincipal(authHeader: string): string | null {
     const token = extractBearerToken(authHeader);
@@ -619,8 +697,8 @@ export class HttpLifecycle {
    * session may bind to, or a rejection the caller turns into a 400 — creating
    * no session, no transport, and no `Mcp-Session-Id`.
    *
-   * Only `external` sessions may bind. A help or assistant-pane bearer already
-   * routes through the renderer that minted it, so a selector from one is a
+   * Only `external` sessions may bind. A help bearer already routes through
+   * the renderer that minted it, so a selector from one is a
    * configuration mistake with two plausible targets; refusing it keeps the two
    * binding models disjoint instead of silently letting one win.
    *
@@ -729,20 +807,17 @@ export class HttpLifecycle {
   }
 
   /**
-   * Parses a Bearer header and asks the help-session resolver — then the
-   * assistant-pane resolver (#10647) — for the `ActionContext` snapshot bound
-   * to it at launch time (#8317). Returns null for non-pinned bearers so
-   * external/api-key/generic-pane sessions keep their live focused-window
-   * context in `buildSessionServerDeps`.
+   * Parses a Bearer header and asks the help-session resolver for the
+   * `ActionContext` snapshot bound to it at launch time (#8317). Returns null
+   * for non-pinned bearers so external/api-key/generic-pane sessions keep their
+   * live focused-window context in `buildSessionServerDeps`.
    */
   private resolveActionContext(
     authHeader: string
   ): import("../../../shared/types/actions.js").ActionContext | null {
     const token = extractBearerToken(authHeader);
     if (!token) return null;
-    const fromHelp = this.helpSessionActionContextResolver?.(token) ?? null;
-    if (fromHelp !== null) return fromHelp;
-    return this.assistantPaneActionContextResolver?.(token) ?? null;
+    return this.helpSessionActionContextResolver?.(token) ?? null;
   }
 
   /**
@@ -1447,9 +1522,10 @@ export class HttpLifecycle {
       if (ownershipPrincipal !== null) {
         this.deps.sessionStore.resourceOwnership.bindPrincipal(sessionId, ownershipPrincipal);
       }
-      const pinnedWebContentsId = pin?.webContentsId ?? null;
-      if (pinnedWebContentsId !== null) {
-        this.deps.sessionStore.sessionWebContentsMap.set(sessionId, pinnedWebContentsId);
+      if (pin?.viewlessProjectId !== undefined) {
+        this.deps.sessionStore.sessionViewlessHelpMap.set(sessionId, pin.viewlessProjectId);
+      } else if (pin !== null) {
+        this.deps.sessionStore.sessionWebContentsMap.set(sessionId, pin.webContentsId);
       }
 
       if (workspaceBinding !== null) {
@@ -1696,7 +1772,9 @@ export class HttpLifecycle {
       "streamable-http"
     );
 
-    if (pin !== null) {
+    if (pin?.viewlessProjectId !== undefined) {
+      this.deps.sessionStore.sessionViewlessHelpMap.set(newSessionId, pin.viewlessProjectId);
+    } else if (pin !== null) {
       this.deps.sessionStore.sessionWebContentsMap.set(newSessionId, pin.webContentsId);
     }
 
@@ -1859,6 +1937,73 @@ export class HttpLifecycle {
   }
 
   /**
+   * Admit a session for another machine's assistant reaching this host over
+   * the link (#13493), through the same chain an HTTP handshake builds: its
+   * tier, origin, owner and workspace binding, then the real session server,
+   * on an in-memory transport. `external` origin, so it is never one of this
+   * machine's assistant surfaces and never takes its assistant's confirmation
+   * preference; bound to the one project, so nothing it does follows focus.
+   * No bearer is involved: nothing an HTTP request presents can address it.
+   * Null while the server isn't running.
+   */
+  async openRelaySession(spec: {
+    tier: "core" | "full";
+    workspaceId: string;
+    caller: McpRelayCaller;
+  }): Promise<McpRelaySessionHandle | null> {
+    if (!this.isRunning) return null;
+    const store = this.deps.sessionStore;
+    const sessionId = randomUUID();
+    const workspaceBinding = this.describePaneWorkspaceBinding(spec.workspaceId);
+    store.sessionTierMap.set(sessionId, spec.tier);
+    store.sessionOriginMap.set(sessionId, "external");
+    store.resourceOwnership.bindPrincipal(
+      sessionId,
+      relayOwnershipPrincipal(spec.caller.senderId, spec.caller.helpSessionId)
+    );
+    store.sessionWorkspaceMap.set(sessionId, workspaceBinding.workspaceId);
+    store.sessionRelayMap.set(sessionId, { ...spec.caller });
+    // Held only here: no bearer this host ever saw digests to it.
+    store.bindSessionCredential(
+      sessionId,
+      sessionCredentialDigest(`Relay ${randomBytes(32).toString("base64url")}`)
+    );
+    const server = createSessionServer(
+      sessionId,
+      this.buildSessionServerDeps(sessionId, workspaceBinding, undefined, null, spec.caller)
+    );
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    store.relaySessions.set(sessionId, { transport: serverTransport, server });
+    // Whichever side closes first, every map written above goes with it.
+    serverTransport.onclose = () => {
+      store.revokeSession(sessionId);
+    };
+    const client = new Client({ name: "daintree-host-call", version: app.getVersion() });
+    try {
+      await server.connect(serverTransport);
+      await client.connect(clientTransport);
+    } catch (err) {
+      store.revokeSession(sessionId);
+      await client.close().catch(() => {});
+      throw err;
+    }
+    return {
+      sessionId,
+      isOpen: () => store.relaySessions.has(sessionId),
+      callTool: async (tool, args, { timeoutMs, callId }) =>
+        (await client.callTool(
+          { name: tool, arguments: args, _meta: { [RELAY_CALL_ID_META_KEY]: callId } },
+          undefined,
+          { timeout: timeoutMs }
+        )) as CallToolResult,
+      close: () => {
+        store.revokeSession(sessionId);
+        void client.close().catch(() => {});
+      },
+    };
+  }
+
+  /**
    * Builds per-session dispatch deps, routing on how the session was bound at
    * handshake. Three routes, in precedence order:
    *
@@ -1868,8 +2013,8 @@ export class HttpLifecycle {
    *    the session survives its view being replaced and fails closed rather
    *    than following focus when the workspace has no single live view. A
    *    pane's launch view is preferred while it still shows the workspace.
-   * 2. **WebContents-pinned** (#7002) — help-session and assistant-pane
-   *    bearers, routed to the renderer that minted them, with a cache-free
+   * 2. **WebContents-pinned** (#7002) — help-session bearers, routed to the
+   *    renderer that minted them, with a cache-free
    *    manifest lookup so window A's manifest can never be served to window B.
    * 3. **Unbound** — api-key tokens with no selector, which keep the shared
    *    dispatch and cached-manifest path and follow window focus, as
@@ -1877,13 +2022,14 @@ export class HttpLifecycle {
    *
    * The two bound routes are mutually exclusive by construction: a selector
    * from a pinned bearer is refused at handshake, and a pane binding is only
-   * looked up for a bearer neither pin resolver matched.
+   * looked up for a bearer the pin resolver didn't match.
    */
   private buildSessionServerDeps(
     sessionId: string,
     workspaceBinding?: McpWorkspaceBinding,
     paneBinding?: PaneWorkspaceBinding,
-    ownPane?: import("./terminalNotify.js").OwnPane | null
+    ownPane?: import("./terminalNotify.js").OwnPane | null,
+    relay?: McpRelayCaller
   ): import("./sessionServer.js").SessionServerDeps {
     const pinnedDispatch = this.deps.dispatchActionForWebContents;
     const pinnedManifest = this.deps.requestManifestForWebContents;
@@ -1924,6 +2070,11 @@ export class HttpLifecycle {
     // per-WebContents cache, so a session torn down mid-call can never flip to
     // the shared cache and leak another window's tool surface (#7003 / #9887).
     const pinnedWebContentsId = this.deps.sessionStore.sessionWebContentsMap.get(sessionId) ?? null;
+    // A help session with no view (#13511) is bound to its project instead of
+    // a pin, snapshotted for the pin's reason: torn down mid-call, it keeps
+    // failing closed to its own project rather than following focus.
+    const viewlessProjectId = this.deps.sessionStore.sessionViewlessHelpMap.get(sessionId) ?? null;
+    const viewlessDispatch = this.deps.dispatchActionWithoutView;
     // Snapshotted for the same reason as the pin: `clearSessionBinding` deletes
     // the origin entry on teardown, and `getOrigin` fails closed to `external`
     // — so an in-flight dispatch settling after that would downgrade one of the
@@ -1944,6 +2095,11 @@ export class HttpLifecycle {
      * window's or the active project's.
      */
     const pinnedWorkspaceId = (): string | null => {
+      if (viewlessProjectId !== null) {
+        return this.deps.sessionStore.sessionViewlessHelpMap.get(sessionId) === viewlessProjectId
+          ? viewlessProjectId
+          : null;
+      }
       if (pinnedWebContentsId === null || !pinnedWebContents) return null;
       if (this.deps.sessionStore.sessionWebContentsMap.get(sessionId) !== pinnedWebContentsId) {
         return null;
@@ -1994,15 +2150,55 @@ export class HttpLifecycle {
       new WorkspaceBindingError(boundWorkspaceId ?? "", "not-found");
 
     /**
+     * This session as an assistant addressing another (#13496), from its own
+     * state alone: a relay principal in the project it was admitted for, or a
+     * live help session in the project its lane is in. Null for every other
+     * session, and for a help session whose bearer has since been unbound.
+     */
+    const assistantCallerFor = (): AssistantCaller | null => {
+      if (this.assistantControlBinding === null) return null;
+      if (relay) {
+        if (boundWorkspaceId === null) return null;
+        return {
+          kind: "relay",
+          senderId: relay.senderId,
+          linkSessionId: relay.linkSessionId,
+          helpSessionId: relay.helpSessionId,
+          projectId: boundWorkspaceId,
+          machineName: relay.shellName,
+        };
+      }
+      if (sessionOrigin !== "help" || helpSessionId === null) return null;
+      if (this.deps.sessionStore.sessionHelpIdMap.get(sessionId) !== helpSessionId) return null;
+      const projectId = this.assistantControlBinding?.sessionProject(helpSessionId) ?? null;
+      if (projectId === null) return null;
+      return {
+        kind: "local",
+        helpSessionId,
+        projectId,
+        machineName: this.deps.machineName?.() ?? "this machine",
+      };
+    };
+
+    /**
      * Pinned at handshake and torn down since — a take-over retiring the
      * assistant's transports (#13360), a revoke, an idle reap — while a call
      * was still on its way. Such a call fails closed, as a gone pin does,
      * rather than falling through to a route that follows focus.
      */
-    const goneBinding = (): SessionBindingError | null =>
-      pinnedWebContentsId !== null && !this.deps.sessionStore.sessionWebContentsMap.has(sessionId)
-        ? new SessionBindingError(pinnedWebContentsId)
-        : null;
+    const goneBinding = (): SessionBindingError | null => {
+      if (pinnedWebContentsId !== null) {
+        return this.deps.sessionStore.sessionWebContentsMap.has(sessionId)
+          ? null
+          : new SessionBindingError(pinnedWebContentsId);
+      }
+      if (viewlessProjectId !== null) {
+        return this.deps.sessionStore.sessionViewlessHelpMap.has(sessionId)
+          ? null
+          : new SessionBindingError(NO_VIEW_HANDLE);
+      }
+      return null;
+    };
 
     const requestManifest: import("./sessionServer.js").SessionServerDeps["requestManifest"] =
       () => {
@@ -2010,6 +2206,12 @@ export class HttpLifecycle {
           return workspaceManifest
             ? workspaceManifest(boundWorkspaceId, preferredWebContentsId)
             : Promise.reject(missingWorkspaceRoute());
+        }
+        // No view to describe one, so the host's own: a tool only a view can
+        // run is still listed, and answers NO_FRONTEND_ATTACHED when called.
+        if (viewlessProjectId !== null) {
+          const gone = goneBinding();
+          return gone ? Promise.reject(gone) : Promise.resolve(getViewlessHelpBaseManifest());
         }
         const id = this.deps.sessionStore.sessionWebContentsMap.get(sessionId);
         if (id !== undefined && pinnedManifest) {
@@ -2031,7 +2233,9 @@ export class HttpLifecycle {
      * reveal on the ordinary dispatch: the right target for every session
      * except a bound one, and no window raise.
      */
-    const bridgeReveal = this.deps.revealOwnedRun;
+    // A relayed reveal takes the ordinary dispatch, and with it the relay's drive check.
+    // One with no view has no window to raise, and takes the ordinary dispatch's refusal.
+    const bridgeReveal = relay || viewlessProjectId !== null ? undefined : this.deps.revealOwnedRun;
     const revealOwnedRun: import("./sessionServer.js").SessionServerDeps["revealOwnedRun"] =
       bridgeReveal
         ? (workspaceId, actionId, args, confirmed) => {
@@ -2052,7 +2256,8 @@ export class HttpLifecycle {
       actionId,
       args,
       confirmed,
-      authorization
+      authorization,
+      relayCallId
     ) => {
       if (boundWorkspaceId !== null) {
         // A bound external session records no context: unlike a help session,
@@ -2071,6 +2276,33 @@ export class HttpLifecycle {
         // bind — a selector from a pinned bearer is refused at handshake — so
         // the payload is built the same way on all three routes rather than one
         // of them relying on a default that a later binding rule could falsify.
+        // A relayed call names who asked (#13493): anything but a read goes only
+        // to that Shell's own driving view. A read is what the tool advertises as
+        // one, so a query that writes a file counts as the write it is, and one
+        // the cache can't describe is a write too. With no view to describe the
+        // project at all, the host's generated catalog does, so a read on a
+        // headless host is still a read.
+        const relayEntry = relay
+          ? (getCachedManifest() ?? getViewlessHelpBaseManifest()).find(
+              (entry) => entry.id === actionId
+            )
+          : undefined;
+        // Its confirmation, with no view here to raise one, is put to the
+        // person at that Shell about this very call (#13501).
+        const askShell = relay?.requestApproval;
+        const relayOptions: WorkspaceDispatchOptions | undefined = relay
+          ? {
+              relay: {
+                linkSessionId: relay.linkSessionId,
+                readOnly:
+                  relayEntry !== undefined && buildAnnotations(relayEntry).readOnlyHint === true,
+                ...(askShell !== undefined && relayCallId !== undefined
+                  ? { requestApproval: (ask) => askShell({ ...ask, callId: relayCallId }) }
+                  : {}),
+              },
+            }
+          : undefined;
+        const options = relayOptions ?? paneDispatchOptions;
         return workspaceDispatch
           ? workspaceDispatch(
               boundWorkspaceId,
@@ -2078,11 +2310,20 @@ export class HttpLifecycle {
               args,
               confirmed,
               sessionOrigin,
-              authorization !== undefined
-                ? { ...paneDispatchOptions, authorization }
-                : paneDispatchOptions
+              authorization !== undefined ? { ...options, authorization } : options
             )
           : Promise.reject(missingWorkspaceRoute());
+      }
+      if (viewlessProjectId !== null) {
+        const gone = goneBinding();
+        if (gone) return Promise.reject(gone);
+        // Never an unwired fallback to focus: no route is a dead binding.
+        if (!viewlessDispatch) return Promise.reject(new SessionBindingError(NO_VIEW_HANDLE));
+        const boundContext = this.deps.sessionStore.sessionContextMap.get(sessionId);
+        return viewlessDispatch(viewlessProjectId, actionId, args, confirmed, sessionOrigin, {
+          ...(boundContext ? { contextOverride: boundContext } : {}),
+          ...(authorization !== undefined ? { authorization } : {}),
+        });
       }
       const id = this.deps.sessionStore.sessionWebContentsMap.get(sessionId);
       if (id !== undefined && pinnedDispatch) {
@@ -2182,6 +2423,7 @@ export class HttpLifecycle {
         if (pinnedWebContentsId !== null) {
           return this.deps.getCachedManifestForWebContents?.(pinnedWebContentsId) ?? null;
         }
+        if (viewlessProjectId !== null) return getViewlessHelpBaseManifest();
         return this.deps.getCachedManifest();
       };
 
@@ -2277,8 +2519,10 @@ export class HttpLifecycle {
           () => ({
             sessionId: payload.sessionId,
             toolId: payload.toolId,
-            argsSummary: summarizeMcpArgs(projectAuditArgs(payload.toolId, payload.args), (s) =>
-              scrubSecrets(sanitizePath(s))
+            argsSummary: summarizeMcpArgs(
+              projectAuditArgs(payload.toolId, payload.args),
+              (s) => scrubSecrets(sanitizePath(s)),
+              auditVerbatimArgKeys(payload.toolId)
             ),
             startedAt: payload.startedAt,
             danger: payload.danger,
@@ -2361,6 +2605,7 @@ export class HttpLifecycle {
       handleSkillsSearch: this.deps.handleSkillsSearch,
       handleSkillsLoad: this.deps.handleSkillsLoad,
       handleProjectRunCheck: this.deps.handleProjectRunCheck,
+      handleProjectRunCommand: this.deps.handleProjectRunCommand,
       handleTerminalGetStatusViewless: this.deps.handleTerminalGetStatusViewless,
       handleTerminalReadLastMessageOwned: this.deps.handleTerminalReadLastMessageOwned,
       isTerminalIdInUse: this.deps.isTerminalIdInUse,
@@ -2372,18 +2617,84 @@ export class HttpLifecycle {
       ...(this.deps.terminalNotify !== undefined
         ? { terminalNotify: this.deps.terminalNotify }
         : {}),
-      // The lane is whichever help session this transport is bound to (#13335).
-      assistantMessaging: bindAssistantMessaging(() =>
-        this.deps.sessionStore.sessionHelpIdMap.get(sessionId)
-      ),
-      // The hub is whichever help session this transport is bound to, if it is the hub (#13336).
-      hostMessaging: bindHostMessaging(() =>
-        this.deps.sessionStore.sessionHelpIdMap.get(sessionId)
-      ),
+      // A relayed session is never this machine's assistant: no lane, and no
+      // hosts of its own to reach, so a call never chains (#13493).
+      ...(relay
+        ? {
+            relay: {
+              shellName: relay.shellName,
+              refuseWrite: (projectId: string | undefined) => {
+                if (boundWorkspaceId === null) return null;
+                if (projectId !== undefined && projectId !== boundWorkspaceId) {
+                  return {
+                    code: "VALIDATION_ERROR",
+                    message: `This call can only act in project ${boundWorkspaceId}, the one it was made for. Nothing was run.`,
+                  };
+                }
+                // Run while nobody drives the project, or while the
+                // requesting Shell's own view does (#13501).
+                const standing = relayWriteStanding(boundWorkspaceId, relay.linkSessionId);
+                if (standing.kind === "vacant" || standing.kind === "own-view") return null;
+                const refused =
+                  standing.kind === "unavailable"
+                    ? new DriveHolderUnavailableError(boundWorkspaceId)
+                    : new RelayDrivenElsewhereError(boundWorkspaceId, standing.holderName);
+                return { code: "DRIVEN_ELSEWHERE", message: refused.message };
+              },
+            },
+          }
+        : {
+            // A project's runner is a change this process makes itself, so one
+            // with no view runs it only while nobody drives the project (#13511).
+            ...(viewlessProjectId !== null
+              ? {
+                  refuseWrite: (projectId: string | undefined) => {
+                    if (projectId !== undefined && projectId !== viewlessProjectId) {
+                      return {
+                        code: "VALIDATION_ERROR",
+                        message: `This assistant can only act in project ${viewlessProjectId}, its own, while no window shows it. Nothing was run.`,
+                      };
+                    }
+                    const standing = relayWriteStanding(viewlessProjectId, null);
+                    if (standing.kind === "vacant") return null;
+                    const refused =
+                      standing.kind === "unavailable"
+                        ? new DriveHolderUnavailableError(viewlessProjectId)
+                        : new RelayDrivenElsewhereError(
+                            viewlessProjectId,
+                            standing.kind === "elsewhere" ? standing.holderName : null,
+                            { withoutView: true }
+                          );
+                    return { code: "DRIVEN_ELSEWHERE", message: refused.message };
+                  },
+                }
+              : {}),
+            // Whichever help session this transport is bound to; the runtime decides if it may (#13493).
+            hostControl: bindHostControl(() =>
+              this.deps.sessionStore.sessionHelpIdMap.get(sessionId)
+            ),
+          }),
+      assistantControl: this.assistantControl,
+      assistantCaller: () => assistantCallerFor(),
+      ...(this.deps.readCodexQuota !== undefined
+        ? { readCodexQuota: this.deps.readCodexQuota }
+        : {}),
       // A pane bearer's own terminal is fixed for the bearer's life and was
       // resolved at handshake; a help lane's is read per call, because its
       // binding follows the PTY that currently serves it.
       resolveOwnPane: () => {
+        if (relay) {
+          // Its pane is on the Shell (#13500): notices go back over the link,
+          // held under the relay principal so the session closing keeps them.
+          const deliver = relay.deliverNotices;
+          if (deliver === undefined || boundWorkspaceId === null) return null;
+          return relayNoticePane(relayOwnershipPrincipal(relay.senderId, relay.helpSessionId), {
+            projectId: boundWorkspaceId,
+            linkSessionId: relay.linkSessionId,
+            helpSessionId: relay.helpSessionId,
+            deliver,
+          });
+        }
         if (ownPane) return ownPane;
         if (helpSessionId === null) return null;
         const terminalId = this.helpSessionTerminalResolver?.(helpSessionId) ?? null;
@@ -2401,11 +2712,14 @@ export class HttpLifecycle {
         // `capturedTurnId` is the transport-only carrier — peel it off so it
         // never lands in the persisted record (the stamped `turnId` is the
         // public field).
-        const { capturedTurnId, ...recordInput } = input;
+        const { capturedTurnId, relayCallId, ...recordInput } = input;
         const turnId = capturedTurnId ?? null;
-        const resultSummary = summarizeAuditOutcome(input.toolId, input.outcome, (s) =>
-          scrubSecrets(sanitizePath(s))
-        );
+        // A relayed call's output is the asking machine's to keep (#13493).
+        const resultSummary = relay
+          ? null
+          : summarizeAuditOutcome(input.toolId, input.outcome, (s) =>
+              scrubSecrets(sanitizePath(s))
+            );
         // `summarizeAuditOutcome` returns null for all gate outcomes by
         // contract — the wait-time hint for `rate_limited` reaches the audit
         // record through `resultMeta` instead, so the recent-calls popover
@@ -2419,13 +2733,28 @@ export class HttpLifecycle {
             : undefined;
         this.deps.auditService.appendRecord({
           ...recordInput,
-          argsSummary: summarizeMcpArgs(projectAuditArgs(input.toolId, input.args), (s) =>
-            scrubSecrets(sanitizePath(s))
+          argsSummary: summarizeMcpArgs(
+            relay
+              ? projectRelayedAuditArgs(input.toolId, input.args)
+              : projectAuditArgs(input.toolId, input.args),
+            (s) => scrubSecrets(sanitizePath(s)),
+            auditVerbatimArgKeys(input.toolId)
           ),
           ...(turnId !== null ? { turnId } : {}),
           ...(helpSessionId !== null ? { helpSessionId } : {}),
           ...(resultSummary !== null ? { resultSummary } : {}),
           ...(resultMeta !== undefined ? { resultMeta } : {}),
+          // Who asked from another machine, told apart from this machine's own calls (#13493).
+          ...(relay
+            ? {
+                relay: {
+                  shellName: relay.shellName,
+                  sender: relay.senderId.slice(0, 16),
+                  helpSessionId: relay.helpSessionId,
+                  ...(relayCallId !== undefined ? { callId: relayCallId } : {}),
+                },
+              }
+            : {}),
         });
       },
       getCachedManifest,

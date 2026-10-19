@@ -2,10 +2,6 @@ import path from "node:path";
 import { app } from "electron";
 import { formatErrorMessage } from "../../shared/utils/errorMessage.js";
 import { ensureWorkspaceClient, isWorkspaceClientStarting } from "../boot/hostServices.js";
-import {
-  getHelpAssistantSettings,
-  onHelpAssistantSettingsChanged,
-} from "../ipc/handlers/helpAssistant.js";
 import { notifyRemoteViewEndpointOpened } from "../ipc/hostSendRelay.js";
 import { setRemoteBoundViewFilter } from "../ipc/utils.js";
 import { releaseWindowTerminalPort, setRemoteViewHooks } from "../window/portDistribution.js";
@@ -13,7 +9,6 @@ import { getPtyClient } from "../window/serviceRefs.js";
 import { resolveLiveWebContents } from "../window/webContentsRegistry.js";
 import { getWindowRegistry } from "../window/windowRef.js";
 import { toDisposable } from "../utils/lifecycle.js";
-import { AppError } from "../utils/errorTypes.js";
 import { isRemoteHostSupported } from "./buildGate.js";
 import { initRemoteHostsClient } from "./client/initClient.js";
 import { closeSshMasters } from "./client/sshTransport.js";
@@ -22,10 +17,7 @@ import { installHostFileClient } from "./files/clientInstall.js";
 import { installHostUploadClient } from "./files/uploadClient.js";
 import { installHostMetricsClient } from "./metrics/clientInstall.js";
 import { installCanopyHostsClient } from "./canopy/clientInstall.js";
-import {
-  installAssistantExchangeClient,
-  installAssistantMessagingPolicy,
-} from "./assistant/install.js";
+import { installHostControl, installHostControlLinkClient } from "./assistant/install.js";
 import {
   acceptLocalPushForRemoteView,
   installHybridSplits,
@@ -90,8 +82,8 @@ let started = false;
 
 /** Each ssh master may take this long to answer `-O exit` at quit; they are asked together. */
 const MASTER_EXIT_TIMEOUT_MS = 1_000;
-/** Long enough for a sleeping host's link to come back; a send that can't wait reports it unreachable. */
-const ASSISTANT_EXCHANGE_CONNECT_MS = 10_000;
+/** Long enough for a sleeping host's link to come back; a call that can't wait reports it unreachable. */
+const HOST_CALL_CONNECT_MS = 10_000;
 
 function startClient(options: StartRemoteHostsOptions): void {
   // First in, so it runs last: port forwards and links are cancelled on the
@@ -265,85 +257,38 @@ function startClient(options: StartRemoteHostsOptions): void {
       hostForView: client.hostForView,
     })
   );
-  // Holds consent only; nothing reaches an assistant through it until a lane is
-  // enrolled, by the person or by this machine's saved default as a run starts.
+  // This Shell's assistants' reach into its hosts: `host.list` and `host.call` (#13493).
+  const observeHosts = () =>
+    client.client.list().map(({ descriptor, connection, summary }) => ({
+      hostId: descriptor.id,
+      name: descriptor.name,
+      connection,
+      lastSeenAt: descriptor.lastSeenAt,
+      summary,
+    }));
   teardowns.push(
-    installAssistantMessagingPolicy({
-      isHostMessagingEnabled: (hostId) =>
-        client.registry.get(hostId)?.assistantMessagingEnabled === true,
-      acceptsByDefault: () => getHelpAssistantSettings().acceptRemoteMessages,
-      onDefaultChanged: (listener) => onHelpAssistantSettingsChanged(listener),
-      hasMessagingHost: () => client.registry.list().some((host) => host.assistantMessagingEnabled),
+    installHostControl({
+      observeHosts,
       hasHosts: () => client.registry.list().length > 0,
-      onHostsChanged: (listener) => client.registry.onChange(listener),
-      observeHosts: () =>
-        client.client.list().map(({ descriptor, connection, summary }) => ({
-          hostId: descriptor.id,
-          name: descriptor.name,
-          assistantMessagingEnabled: descriptor.assistantMessagingEnabled,
-          connection,
-          lastSeenAt: descriptor.lastSeenAt,
-          summary,
-        })),
       listHostProjects: (hostId) => client.client.listHostProjects({ hostId }),
-      onHostSessionOpened: (listener) =>
-        client.manager.onSessionOpened((hostId) => listener(hostId)),
-      isHostStartEnabled: (hostId) => {
-        const descriptor = client.registry.get(hostId);
-        return (
-          descriptor?.assistantMessagingEnabled === true &&
-          descriptor.assistantStartEnabled === true
-        );
+      // Never one the person disconnected: listing it isn't a call to it.
+      connect: async (hostId, timeoutMs) => {
+        if (client.client.isDisconnectedByPerson(hostId)) return;
+        client.manager.touch(hostId);
+        await client.client.connectAndWait(hostId, timeoutMs);
       },
-      hostAssistants: {
-        projectPath: async (hostId, projectId) =>
-          (await client.client.listHostProjects({ hostId })).find(
-            (project) => project.id === projectId
-          )?.path ?? null,
-        prepareView: (hostId, projectId, projectPath) =>
-          client.prepareHostProjectView(hostId, projectId, projectPath),
-        dispatch: async (webContentsId, actionId, args) => {
-          const { mcpServerService } = await import("../services/McpServerService.js");
-          const { result } = await mcpServerService.dispatchActionForHost(
-            webContentsId,
-            actionId,
-            args
-          );
-          return result.ok
-            ? { ok: true, result: result.result }
-            : { ok: false, code: result.error.code, message: result.error.message };
-        },
-        invoke: async (hostId, webContentsId, projectId, channel, args) => {
-          const connection = client.manager.get(hostId);
-          if (!connection) {
-            throw new AppError({
-              code: "HOST_DISCONNECTED",
-              message: `Host ${hostId} isn't connected`,
-            });
-          }
-          const envelope = await connection.invoke(webContentsId, projectId, channel, args);
-          if (!envelope.ok) {
-            throw new AppError({ code: "INTERNAL", message: envelope.error.message });
-          }
-          return envelope.data;
-        },
-      },
-      // An enrolled lane's inbox tools, and the hub's host tools, come and go with its enrollment.
-      onAvailabilityChanged: () => {
-        void import("../services/McpServerService.js")
-          .then(({ mcpServerService }) => mcpServerService.notifyAssistantMessagingChanged())
-          .catch((err) => console.error("[RemoteHosts] Couldn't re-list assistant tools:", err));
-      },
+      isHostControlEnabled: (hostId) =>
+        client.registry.get(hostId)?.assistantControlEnabled === true,
     })
   );
-  // Exchanges this Shell sends to hosts' assistants: reconciled whenever a session to one opens.
+  // The sender each session proves to a host before a call is relayed there.
   teardowns.push(
-    installAssistantExchangeClient({
+    installHostControlLinkClient({
       async session(hostId) {
         if (!client.registry.get(hostId)) return null;
         client.manager.touch(hostId);
         if (client.manager.connectionState(hostId).status !== "connected") {
-          await client.client.connectAndWait(hostId, ASSISTANT_EXCHANGE_CONNECT_MS);
+          await client.client.connectAndWait(hostId, HOST_CALL_CONNECT_MS);
         }
         const session = client.sessionFor(hostId);
         return session?.isOpen ? session : null;
@@ -352,8 +297,7 @@ function startClient(options: StartRemoteHostsOptions): void {
       knownHosts: () => client.registry.list().map((host) => host.id),
       onHostsChanged: (listener) => client.registry.onChange(listener),
       addUseCheck: (check) => client.manager.addUseCheck(check),
-      onExchangesChanged: (hostId) => client.emitLocal({ type: "exchanges-changed", hostId }),
-      messagingEnabled: (hostId) => client.registry.get(hostId)?.assistantMessagingEnabled === true,
+      hostName: (hostId) => client.registry.get(hostId)?.name ?? "a removed host",
     })
   );
   // Answered only once a session exists, so registering costs nothing until then.

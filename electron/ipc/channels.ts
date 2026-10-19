@@ -341,6 +341,7 @@ export const CHANNELS = {
   AGENT_SETTINGS_SET: "agent-settings:set",
   AGENT_SETTINGS_SET_GLOBAL: "agent-settings:set-global",
   AGENT_SETTINGS_SET_GLOBAL_INLINE: "agent-settings:set-global-inline",
+  AGENT_SETTINGS_SET_RESUME_ON_RESTART: "agent-settings:set-resume-on-restart",
   AGENT_SETTINGS_RESET: "agent-settings:reset",
   AGENT_SETTINGS_STAMP_VERSION: "agent-settings:stamp-version",
 
@@ -428,10 +429,6 @@ export const CHANNELS = {
   KEEP_AWAKE_GET_STATE: "keep-awake:get-state",
   KEEP_AWAKE_UPDATE_CONFIG: "keep-awake:update-config",
   KEEP_AWAKE_STATE_CHANGED: "keep-awake:state-changed",
-  ASSISTANT_MESSAGING_GET_STATE: "assistant-messaging:get-state",
-  ASSISTANT_MESSAGING_SET_LANE_ENROLLED: "assistant-messaging:set-lane-enrolled",
-  ASSISTANT_MESSAGING_SET_PAUSED: "assistant-messaging:set-paused",
-  ASSISTANT_MESSAGING_CHANGED: "assistant-messaging:changed",
   HIBERNATION_GET_CONFIG: "hibernation:get-config",
   HIBERNATION_UPDATE_CONFIG: "hibernation:update-config",
   HIBERNATION_PROJECT_HIBERNATED: "hibernation:project-hibernated",
@@ -1244,6 +1241,11 @@ export const CHANNELS = {
   // on `host.dispatch`. Set only from the Plugin Manager, never by a prompt.
   PLUGIN_CAPABILITY_GET_PROJECT_TARGETING: "plugin-capability:get-project-targeting",
   PLUGIN_CAPABILITY_SET_PROJECT_TARGETING: "plugin-capability:set-project-targeting",
+  // The per-plugin "Allow OS notifications" switch (#13505): the
+  // `notification:os` grant behind `host.notify({ os: true })`. Set only from
+  // the Plugin Manager, never by a prompt.
+  PLUGIN_CAPABILITY_GET_OS_NOTIFICATIONS: "plugin-capability:get-os-notifications",
+  PLUGIN_CAPABILITY_SET_OS_NOTIFICATIONS: "plugin-capability:set-os-notifications",
 
   // Plugin managed-process channels (#9234) — child processes spawned by a
   // plugin via `host.process.spawn` (gated on `shell:exec`). `list` is the
@@ -1342,8 +1344,6 @@ export const CHANNELS = {
   REMOTE_HOSTS_LIST_PLUGIN_VIEW_CONSENTS: "remote-hosts:list-plugin-view-consents",
   REMOTE_HOSTS_RESET_PLUGIN_VIEW_CONSENT: "remote-hosts:reset-plugin-view-consent",
   REMOTE_HOSTS_PREPARE_PLUGIN_VIEW: "remote-hosts:prepare-plugin-view",
-  REMOTE_HOSTS_LIST_ASSISTANT_EXCHANGES: "remote-hosts:list-assistant-exchanges",
-  REMOTE_HOSTS_CANCEL_ASSISTANT_EXCHANGE: "remote-hosts:cancel-assistant-exchange",
   REMOTE_HOSTS_EVENT: "remote-hosts:event",
 
   // Remote Hosts: hostMode (shell).

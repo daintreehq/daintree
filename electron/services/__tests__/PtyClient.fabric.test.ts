@@ -1375,6 +1375,22 @@ describe("PtyClient fabric", () => {
       expect(all.map((t) => t.id).sort()).toEqual(["t0", "t1"]);
       client.dispose();
     });
+
+    // #13501: a fleet read must not take an unanswered inventory for an empty one.
+    it("lets a strict caller tell an unanswered project inventory from an empty one", async () => {
+      const client = createFabricClient();
+      client.spawn("t1", { cwd: "/a", cols: 80, rows: 24, projectId: "project-a" });
+      const shardA = projectShard("project-a");
+      shardA.child.emit("message", { type: "ready" });
+
+      const tolerant = client.getTerminalsForProjectAsync("project-a");
+      const strict = client.getTerminalsForProjectAsync("project-a", { strict: true });
+      shardA.child.emit("exit", 1);
+
+      await expect(tolerant).resolves.toEqual([]);
+      await expect(strict).rejects.toBeInstanceOf(Error);
+      client.dispose();
+    });
   });
 
   describe("fallback-eligible projects (#12557)", () => {

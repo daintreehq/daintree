@@ -1,6 +1,6 @@
 # Daintree
 
-Electron IDE for orchestrating AI coding agents — many agent terminals running in parallel across git worktrees, with fleet broadcasting, a worktree dashboard, context injection, and an MCP control surface. 18 agent CLIs are supported; the roster lives in `shared/config/agents/` + `shared/config/agentRegistry.ts`. Product, repo, and config dir are all "Daintree" (`daintreehq/daintree`, `.daintree/`).
+Electron IDE for orchestrating AI coding agents — many agent terminals running in parallel across git worktrees, with fleet broadcasting, a worktree dashboard, context injection, and an MCP control surface. 17 agent CLIs are supported; the roster lives in `shared/config/agents/` + `shared/config/agentRegistry.ts`. Product, repo, and config dir are all "Daintree" (`daintreehq/daintree`, `.daintree/`).
 
 **Stack:** Electron 42 (Chromium 148), React 19 + React Compiler, Vite 8, TypeScript 6, Tailwind CSS v4, Zustand 5, node-pty, simple-git, better-sqlite3 + drizzle, @xterm/xterm 6.1 beta. Node 22.23.2 (`.nvmrc`, guarded by `check:node-version`). Exact pins in `package.json`.
 
@@ -77,7 +77,6 @@ CI on PRs: `npm run check` split into `static` (typecheck, guards, format) and `
 - `.daintree/recipes/*.json` are intentionally tracked. Never remove or gitignore them.
 - `.planning/` is gitignored and the pre-commit hook rejects it.
 - Skip issues labelled **`human-review`** (not solvable autonomously; 10-20x cost) and **`monitoring`** (blocked on an external event — checkable, not workable; sweep monthly via the `monitoring-sweep` skill).
-- The in-app assistant is a **separate repo**, `daintreehq/assistant`. Its host-embedding contract lives there in `DAINTREE_HOST.md`; a change to that contract belongs in both repos.
 - `AGENTS.md` and `GEMINI.md` point here. Update this file, not those.
 
 ## Product invariants

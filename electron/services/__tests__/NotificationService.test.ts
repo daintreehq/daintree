@@ -25,7 +25,9 @@ const electronMock = vi.hoisted(() => {
     static isSupported = vi.fn(() => true);
     handlers: Record<string, (...args: unknown[]) => void> = {};
     show = vi.fn();
-    removeAllListeners = vi.fn();
+    removeAllListeners = vi.fn(() => {
+      this.handlers = {};
+    });
     // Like Electron, closing a shown notification emits "close".
     close = vi.fn(() => this.trigger("close"));
     constructor(public options: { title: string; body: string; silent?: boolean }) {
@@ -758,6 +760,107 @@ describe("NotificationService", () => {
   // #11110 — state used to be one global `currentState` that any renderer could
   // overwrite, so the last window to report won and every other window's title
   // and the dock badge followed it.
+  describe("replacing and click handlers (#13505)", () => {
+    it("closes the banner showing under the same key before the next goes up", () => {
+      notificationService.showNativeNotification("t", "first", { replaceKey: "k" });
+      const first = electronMock.notificationInstances.at(-1)!;
+      notificationService.showNativeNotification("t", "second", { replaceKey: "k" });
+      const second = electronMock.notificationInstances.at(-1)!;
+
+      expect(first.close).toHaveBeenCalledTimes(1);
+      expect(first.removeAllListeners).toHaveBeenCalled();
+      expect(second.close).not.toHaveBeenCalled();
+      expect(second.show).toHaveBeenCalledTimes(1);
+    });
+
+    it("a replaced banner's late click runs nothing; only its successor's does", () => {
+      const first = vi.fn();
+      const second = vi.fn();
+      notificationService.showNativeNotification("t", "a", { replaceKey: "k", onClick: first });
+      const old = electronMock.notificationInstances.at(-1)!;
+      notificationService.showNativeNotification("t", "b", { replaceKey: "k", onClick: second });
+
+      old.trigger("click");
+      expect(first).not.toHaveBeenCalled();
+      electronMock.notificationInstances.at(-1)!.trigger("click");
+      expect(second).toHaveBeenCalledTimes(1);
+    });
+
+    it("keeps a keyed banner that timed out into Action Center replaceable", () => {
+      notificationService.showNativeNotification("t", "a", { replaceKey: "k" });
+      const first = electronMock.notificationInstances.at(-1)!;
+      first.trigger("close", { reason: "timedOut" });
+
+      notificationService.showNativeNotification("t", "b", { replaceKey: "k" });
+
+      expect(first.close).toHaveBeenCalledTimes(1);
+    });
+
+    it("stops tracking the oldest keyed banners past the cap", () => {
+      for (let i = 0; i < 51; i++) {
+        notificationService.showNativeNotification("t", `${i}`, { replaceKey: `k${i}` });
+        electronMock.notificationInstances.at(-1)!.trigger("close", { reason: "timedOut" });
+      }
+      const oldest = electronMock.notificationInstances.at(-51)!;
+      const newest = electronMock.notificationInstances.at(-1)!;
+
+      notificationService.closeNotificationByKey("k0");
+      notificationService.closeNotificationByKey("k50");
+
+      expect(oldest.close).not.toHaveBeenCalled();
+      expect(newest.close).toHaveBeenCalledTimes(1);
+    });
+
+    it("leaves banners under other keys, and unkeyed ones, alone", () => {
+      notificationService.showNativeNotification("t", "a", { replaceKey: "a" });
+      const keyed = electronMock.notificationInstances.at(-1)!;
+      notificationService.showNativeNotification("t", "plain");
+      const plain = electronMock.notificationInstances.at(-1)!;
+
+      notificationService.showNativeNotification("t", "b", { replaceKey: "b" });
+
+      expect(keyed.close).not.toHaveBeenCalled();
+      expect(plain.close).not.toHaveBeenCalled();
+    });
+
+    it("forgets a key once its banner is gone, so a late close can't drop its successor", () => {
+      notificationService.showNativeNotification("t", "first", { replaceKey: "k" });
+      const first = electronMock.notificationInstances.at(-1)!;
+      first.trigger("close");
+      notificationService.showNativeNotification("t", "second", { replaceKey: "k" });
+      const second = electronMock.notificationInstances.at(-1)!;
+
+      first.trigger("close");
+      notificationService.closeNotificationByKey("k");
+
+      expect(second.close).toHaveBeenCalledTimes(1);
+    });
+
+    it("runs onClick in main instead of routing navigation", () => {
+      const onClick = vi.fn();
+      notificationService.showNativeNotification("t", "b", {
+        onClick,
+        navigation: { channel: "nav", context: { panelId: "p", panelTitle: "P" } },
+      });
+      electronMock.notificationInstances.at(-1)!.trigger("click");
+
+      expect(onClick).toHaveBeenCalledTimes(1);
+      expect(sendToRendererMock).not.toHaveBeenCalled();
+    });
+
+    it("survives a throwing click handler", () => {
+      notificationService.showNativeNotification("t", "b", {
+        onClick: () => {
+          throw new Error("boom");
+        },
+      });
+      const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+      expect(() => electronMock.notificationInstances.at(-1)!.trigger("click")).not.toThrow();
+      expect(warn).toHaveBeenCalled();
+    });
+  });
+
   describe("per-owner waiting counts", () => {
     it("aggregates the badge across owners instead of taking the last writer", () => {
       const win1 = createWindowMock(false, [11]);

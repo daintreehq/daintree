@@ -24,8 +24,7 @@ export interface UpdateHostPayload {
   name?: string;
   connection?: HostConnection;
   notificationsEnabled?: boolean;
-  assistantMessagingEnabled?: boolean;
-  assistantStartEnabled?: boolean;
+  assistantControlEnabled?: boolean;
 }
 
 export interface WindowHostInfo {
@@ -123,61 +122,6 @@ export interface ResetClipboardGrantsPayload {
   hostId: HostId;
   /** One plugin's answers; omitted, every plugin's on that host. */
   pluginId?: string;
-}
-
-/** The A2A exchange states a host records, as observed; `completed` means a reply arrived. */
-export type AssistantExchangeState =
-  "submitted" | "working" | "input-required" | "completed" | "canceled" | "failed" | "rejected";
-
-/**
- * The furthest delivery this Shell has seen confirmed for an exchange.
- * "unconfirmed": the send's outcome is unknown, it expired, or the host
- * marked it ambiguous; never read as success or failure.
- */
-export type AssistantExchangeDelivery =
-  "unconfirmed" | "pending" | "accepted" | "wake-typed" | "inbox-fetched" | "reply-received";
-
-/**
- * What a cancel would do now. "cancel": nothing has left for the lane yet, so
- * the host cancels it; "request": delivery may have happened, so the host
- * only records the request; "requested": one is already recorded.
- */
-export type AssistantExchangeCancelKind = "cancel" | "request" | "requested";
-
-/** One exchange this Shell sent to an assistant on a host, as its journal last knew it. */
-export interface AssistantExchangeView {
-  hostId: HostId;
-  messageId: string;
-  sentAt: number;
-  /** When the host's record last changed, or when this Shell last noted the send. */
-  updatedAt: number;
-  /** Null until the host answered the send with a record. */
-  state: AssistantExchangeState | null;
-  /** The host's short outcome code (`expired`, …), when it set one. */
-  outcome: string | null;
-  delivery: AssistantExchangeDelivery;
-  /** When the host observed the furthest delivery fact, if any. */
-  deliveryAt: number | null;
-  /** Sends from a Shell always come from its hub, directly: these are fixed by the link. */
-  sendingLane: "hub";
-  hopCount: 1;
-  /** The receiving lane's project and session, from the host's record; null until it answered. */
-  receiver: { projectId: string; slot: number | null } | null;
-  contextId: string | null;
-  cancelRequestedAt: number | null;
-  terminalAt: number | null;
-  /** When the host expires a still-live exchange; null once it ended. */
-  expiresAt: number | null;
-  cancel: AssistantExchangeCancelKind | null;
-}
-
-export interface AssistantExchangeListPayload {
-  hostId: HostId;
-}
-
-export interface AssistantExchangeCancelPayload {
-  hostId: HostId;
-  messageId: string;
 }
 
 /** A host plugin this machine was asked about running the view code of. */
@@ -478,9 +422,4 @@ export type RemoteHostsEvent =
    * A host was removed from this device. Every view drops what it kept under
    * the host's id (history, layout, toggles): no later host is given that id.
    */
-  | { type: "host-forgotten"; hostId: HostId }
-  /**
-   * This Shell's record of its assistant exchanges with a host changed. A
-   * hint only: read them again with `listAssistantExchanges`.
-   */
-  | { type: "exchanges-changed"; hostId: HostId };
+  | { type: "host-forgotten"; hostId: HostId };

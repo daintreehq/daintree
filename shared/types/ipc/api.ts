@@ -17,7 +17,7 @@ import type {
 } from "../project.js";
 import type { ChecklistState, HelpAssistantTier, IpcEventBusMap, IpcInvokeMap } from "./maps.js";
 import type { GeneratedElectronAPI } from "./generated-api.js";
-import type { AgentSettings, AgentSettingsEntry } from "../agentSettings.js";
+import type { AgentSettings, AgentSettingsEntry, ResumeOnRestart } from "../agentSettings.js";
 import type { AgentPreset } from "../../config/agentRegistry.js";
 import type { VoiceInputError, VoiceInputStatus } from "../voice.js";
 export type { VoiceInputError, VoiceInputStatus };
@@ -154,7 +154,6 @@ import type {
 import type { TerminalConfig } from "./config.js";
 import type { HibernationProjectHibernatedPayload } from "./hibernation.js";
 import type { KeepAwakeState } from "./keepAwake.js";
-import type { AssistantMessagingChangedEvent } from "./assistantMessaging.js";
 import type { IdleTerminalNotifyPayload } from "./idleTerminals.js";
 import type { IdleBackgroundClosedPayload } from "./idleBackgroundAutoClose.js";
 import type { KeyAction } from "../keymap.js";
@@ -1009,6 +1008,8 @@ export interface ElectronAPI extends GeneratedElectronAPI {
      * defaults.
      */
     setGlobalInline(value: boolean): Promise<AgentSettings>;
+    /** Set what restored agent panes do after a restart (#13509). */
+    setResumeOnRestart(value: ResumeOnRestart): Promise<AgentSettings>;
     reset(agentId?: AgentId): Promise<AgentSettings>;
     /**
      * Mark the persisted store with the given schema version. Only called by
@@ -1336,10 +1337,6 @@ export interface ElectronAPI extends GeneratedElectronAPI {
   // Invoke methods come from GeneratedElectronAPI; the rest are renderer-only subscriptions.
   keepAwake: GeneratedElectronAPI["keepAwake"] & {
     onStateChanged(callback: (state: KeepAwakeState) => void): () => void;
-  };
-  // Invoke methods come from GeneratedElectronAPI; the rest are renderer-only subscriptions.
-  assistantMessaging: GeneratedElectronAPI["assistantMessaging"] & {
-    onChanged(callback: (event: AssistantMessagingChangedEvent) => void): () => void;
   };
   // Invoke methods come from GeneratedElectronAPI; the rest are renderer-only subscriptions.
   hibernation: GeneratedElectronAPI["hibernation"] & {
@@ -2229,6 +2226,11 @@ export interface ElectronAPI extends GeneratedElectronAPI {
          */
         approvalReason?: import("./mcpServer.js").McpApprovalReason;
         /**
+         * Another machine's own preview of an `approvalOnly` call it runs
+         * itself (#13501), shown as given in place of one this view builds.
+         */
+        hostPreview?: import("./mcpServer.js").McpHostPreview;
+        /**
          * What pre-authorized a `confirmed` dispatch, set only by main. Only
          * `skip-preference` also waives the typed-name gate on a force delete
          * (#12874); anything else keeps it.
@@ -2408,6 +2410,28 @@ export interface ElectronAPI extends GeneratedElectronAPI {
      * plugin's id so the renderer drops all of its panel badges. Returns a cleanup.
      */
     onPanelBadgesCleared(callback: (payload: { pluginId: string }) => void): () => void;
+    /**
+     * Subscribe to plugin toolbar-button badges (#13503). The callback fires with
+     * one plugin's COMPLETE current map (manifest button id → badge); an empty
+     * map clears that plugin's badges, as on unload. Returns a cleanup.
+     */
+    onToolbarBadgesChanged(
+      callback: (payload: {
+        pluginId: string;
+        badges: Record<string, import("../plugin.js").PluginPanelBadge>;
+      }) => void
+    ): () => void;
+    /**
+     * Subscribe to plugin `when`-clause context keys (#13506). The callback fires
+     * with one plugin's COMPLETE current map (key → value): empty when it holds
+     * no keys, `null` once it unloads. Returns a cleanup.
+     */
+    onContextKeysChanged(
+      callback: (payload: {
+        pluginId: string;
+        keys: Record<string, import("../plugin.js").PluginContextValue> | null;
+      }) => void
+    ): () => void;
     /**
      * Subscribe to plugin runtime panel menus (#13213). The callback fires with
      * one plugin's COMPLETE current map (`panelId → items`); an empty map clears
@@ -2738,10 +2762,8 @@ export interface HelpAssistantSettings {
    * Run the assistant without its per-tool confirmation gate. One flag, but
    * each backend honours it differently — Claude gets
    * `--dangerously-skip-permissions` plus `defaultMode: "bypassPermissions"` in
-   * the session's `.claude/settings.json`, Codex gets
-   * `--dangerously-bypass-approvals-and-sandbox`, and the Daintree Assistant
-   * (which has no such flag) gets `DAINTREE_ASSISTANT_AUTO_APPROVE=1` in its
-   * spawn env. The canonical per-agent flag lives in `DEFAULT_DANGEROUS_ARGS`
+   * the session's `.claude/settings.json`, and Codex gets
+   * `--dangerously-bypass-approvals-and-sandbox`. The canonical per-agent flag lives in `DEFAULT_DANGEROUS_ARGS`
    * and is only appended for agents declaring `supports.permissionBypass`; see
    * the help-launch branch in `electron/ipc/handlers/terminal/lifecycle.ts`.
    * Defaults to false.
@@ -2774,13 +2796,6 @@ export interface HelpAssistantSettings {
    */
   idleHibernateMinutes: HelpAssistantIdleHibernateMinutes;
   /**
-   * Enable the Daintree Assistant's own full-fidelity debug log for new
-   * sessions, by setting `DAINTREE_ASSISTANT_DEBUG_LOG=1` in the spawn env.
-   * Only the `daintree-assistant` backend reads this var (per-session trace to
-   * `~/.daintree/logs`); it is a no-op for other assistant agents. Defaults to false.
-   */
-  debugLogging: boolean;
-  /**
    * Load `mcp.json` (MCP servers) and `hooks.json` (Claude hooks) from
    * `~/.daintree/assistant` into new assistant sessions. Both run programs, so
    * they are opt-in and never read from a project's `.daintree/assistant`.
@@ -2795,13 +2810,13 @@ export interface HelpAssistantSettings {
    */
   daintreeConfirmations: HelpAssistantDaintreeConfirmations;
   /**
-   * This machine's assistants accept messages from other machines as soon as
-   * they're running, without being turned on in the panel: on this Shell its
-   * first running assistant becomes the hub for hosts with messaging on, and
-   * on a host each assistant accepts the Shell whose view it runs in. The
-   * panel turns one run off. Machine-owned; never travels. Defaults to true.
+   * Whether this machine, as a host, takes another machine's assistant's
+   * `host.call` (#13493): runs its own Daintree tools for it, including
+   * finding, starting and messaging this machine's assistants (#13496). Each
+   * call still passes this machine's own tiers and drive lease.
+   * Machine-owned; never travels. Defaults to true.
    */
-  acceptRemoteMessages: boolean;
+  acceptRemoteControl: boolean;
 }
 
 /**

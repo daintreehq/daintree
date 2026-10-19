@@ -24,13 +24,12 @@ export function mergeTerminalLaunchEnv(
 /**
  * The spawn source an MCP-dispatched spawn is stamped with (#11808).
  *
- * `help` and `assistant-pane` are both Daintree's own assistant surfaces, so
- * both read as `"assistant"`. Anything else, including an absent origin, is
- * `"mcp"`: an unknown session must never be promoted into one of Daintree's
- * own surfaces.
+ * `help` is Daintree's own assistant surface, so it reads as `"assistant"`.
+ * Anything else, including an absent origin, is `"mcp"`: an unknown session
+ * must never be promoted into one of Daintree's own surfaces.
  */
 export function spawnSourceForMcpOrigin(
   sessionOrigin: McpSessionOrigin | undefined
 ): TerminalSpawnSource {
-  return sessionOrigin === "help" || sessionOrigin === "assistant-pane" ? "assistant" : "mcp";
+  return sessionOrigin === "help" ? "assistant" : "mcp";
 }

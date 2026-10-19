@@ -130,19 +130,18 @@ export const CORE_TIER_TOOLS = [
   "slashCommands.list",
 
   "help.displayImage",
-  // An enrolled lane's own inbox (#13335) and its messages to the hub (#13338).
-  // Offered only while the caller's own lane is enrolled for messaging, and run
-  // only for that lane's help session.
-  "assistant.getInbox",
-  "assistant.reply",
-  "assistant.sendMessage",
-  // The hub's reads of other hosts' assistants (#13336). Offered only to the
-  // help session this Shell's hub was enrolled with, while a host exists.
+  // One assistant finding and starting another (#13496), and this machine's
+  // Codex quota. Offered only to an assistant caller: this machine's own, or
+  // another machine's through its Shell's `host.call`.
+  "assistant.list",
+  "assistant.start",
+  "agent.readQuota",
+  // This Shell's hosts, and their own tools run there for this machine's
+  // assistant (#13493). Offered from every such session's start, hosts or
+  // not; each wrapped tool keeps the host's own gates, and the person's
+  // per-host switch decides what it reaches.
   "host.list",
-  "host.listAssistants",
-  "host.getTask",
-  "host.listTasks",
-  "host.readQuota",
+  "host.call",
   // Logs meant for someone else go through the review the user trims and saves
   // themselves, not an archive the assistant builds from the raw log folder
   // (#12882). Reserved to the assistant below; off the external list.
@@ -200,6 +199,10 @@ export const FULL_TIER_ADDONS = [
   "project.detectRunners",
   // Runs a project-declared command as a real child process.
   "project.runCheck",
+  // Runs any command the assistant names, in a project root or worktree: the
+  // shell a hub lacks on a host it reaches over a relay (#13495). Reserved to
+  // the assistant below, and off the external list.
+  "project.runCommand",
 
   "git.getProjectPulse",
   "forge.getPR",
@@ -243,12 +246,6 @@ export const FULL_TIER_ADDONS = [
   // switch dialog is confirmed there. Registered only where Remote Hosts is.
   "host.switch",
   "project.openOnHost",
-  // The hub messaging an assistant on another host, and asking it to stop
-  // (#13336): both act on another machine, so only a `full` hub sends. Starting
-  // one there (#13392) is the same reach.
-  "host.sendMessage",
-  "host.cancelTask",
-  "host.startAssistant",
 ] as const satisfies readonly BuiltInActionId[];
 
 /**
@@ -275,7 +272,7 @@ export const OWNED_TWIN_TOOLS = {
 
 /**
  * Unscoped tools with no owned form, reserved for Daintree's own assistant
- * surfaces — `help` and `assistant-pane` sessions — for the reason above.
+ * surface — `help` sessions — for the reason above.
  * Withheld from every other session at discovery and at dispatch.
  */
 export const RENDERER_OWNED_ORIGIN_ONLY_TOOLS = [
@@ -286,19 +283,16 @@ export const RENDERER_OWNED_ORIGIN_ONLY_TOOLS = [
   // Opens a dialog in the window the user is watching, which only the
   // assistant pinned to that window should do.
   "diagnostics.openReview",
-  // A lane's inbox belongs to the assistant enrolled in it, never a pane (#13335).
-  "assistant.getInbox",
-  "assistant.reply",
-  "assistant.sendMessage",
-  // So does the hub's reach to other hosts' assistants (#13336).
+  // Assistants are an assistant's to find and start, never a pane's (#13496);
+  // a relayed assistant is admitted to them by its own rule.
+  "assistant.list",
+  "assistant.start",
+  "agent.readQuota",
+  // So is the Shell's reach into its hosts (#13493).
   "host.list",
-  "host.listAssistants",
-  "host.sendMessage",
-  "host.getTask",
-  "host.listTasks",
-  "host.cancelTask",
-  "host.startAssistant",
-  "host.readQuota",
+  "host.call",
+  // A shell command is the assistant's to run, never a worker pane's (#13495).
+  "project.runCommand",
 ] as const satisfies readonly BuiltInActionId[];
 
 /**
@@ -346,12 +340,14 @@ export const HELP_TIER_CUMULATIVE: Record<HelpAssistantTier, readonly string[]> 
  *
  * Operational risk, not minimum tier. The preview intersects this list with the
  * tier being previewed, so the same tool is called out wherever it first
- * becomes reachable. All three run project-defined teardown — arbitrary
+ * becomes reachable. The first three run project-defined teardown — arbitrary
  * commands from `.daintree/config.json`, and resource teardown that can destroy
- * a remote devbox. The two delete variants then remove the tree as well.
+ * a remote devbox. The two delete variants then remove the tree as well. The
+ * last runs whatever command the assistant chooses.
  */
 export const HIGH_BLAST_RADIUS_TOOLS: readonly string[] = [
   "worktree.delete",
   "worktree.deleteOwned",
   "worktree.resource.teardown",
+  "project.runCommand",
 ];

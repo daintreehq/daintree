@@ -1223,6 +1223,7 @@ export class WorkspaceHostProcess extends EventEmitter {
         break;
 
       case "monitor":
+      case "delete-preview-result":
         this.handleRequestResult(this.toResult(event, true));
         break;
 
