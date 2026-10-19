@@ -4756,11 +4756,7 @@ describe("one assistant addressing another (#13496)", () => {
     const listed = (await deps.requestManifest()) as ActionManifestEntry[];
     deps.requestManifest = vi
       .fn()
-      .mockResolvedValue([
-        ...listed,
-        makeManifestEntry("actions.getSchema"),
-        makeManifestEntry("terminal.sendCommandOwned"),
-      ]);
+      .mockResolvedValue([...listed, makeManifestEntry("actions.getSchema")]);
     deps.dispatchAction = vi.fn(async (_actionId: string, args: unknown) => ({
       result: {
         ok: true,

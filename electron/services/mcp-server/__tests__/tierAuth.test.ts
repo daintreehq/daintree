@@ -43,7 +43,7 @@ import {
 } from "../tierAuth.js";
 import { McpUnavailableActionStubSchema } from "../../../../shared/types/mcpIntrospection.js";
 import { findWireStrippedKeywords } from "../../../../shared/utils/mcpWireSchema.js";
-import { TIER_ALLOWLISTS } from "../shared.js";
+import { TIER_ALLOWLISTS, TIER_NOT_PERMITTED_CODE } from "../shared.js";
 import { BUILT_IN_ACTION_IDS } from "../../../../shared/config/actionIds.js";
 import {
   OWNED_TWIN_TOOLS,
@@ -1483,6 +1483,34 @@ describe("filterIntrospectionResultForSession", () => {
       if (policy === null) throw new Error("expected a policy record");
       return policy;
     }
+
+    it("names the owned twin in a miss only when this session may call it", () => {
+      const send = makeEntry({ id: "terminal.sendCommand", kind: "command" });
+      const external = snapshot({ tier: "full", rendererOwnedOrigin: false, relay: true });
+      const missFor = (permittedActionIds: ReadonlySet<string>) =>
+        payloadOf(lookup(send, { permittedActionIds, policySnapshot: external }));
+
+      const withTwin = missFor(new Set(["terminal.sendCommandOwned"]));
+      expect(withTwin).toMatchObject({ ok: false, entry: null, policy: null });
+      expect(withTwin.error?.code).toBe("NOT_FOUND");
+      expect(withTwin.error?.message).toContain('"terminal.sendCommandOwned"');
+
+      const withoutTwin = missFor(new Set(["terminal.list"]));
+      expect(withoutTwin.error?.code).toBe("NOT_FOUND");
+      expect(withoutTwin.error?.message).not.toContain("terminal.sendCommandOwned");
+    });
+
+    it("keeps the tier stub, not a twin hint, for the assistant asking above its tier", () => {
+      const inject = makeEntry({ id: "terminal.inject", kind: "command" });
+      const payload = lookup(inject, {
+        permittedActionIds: new Set(["terminal.injectOwned"]),
+        policySnapshot: snapshot({ tier: "core", rendererOwnedOrigin: true }),
+      });
+
+      const body = payloadOf(payload) as { error: { code: string; message: string } | null };
+      expect(body.error?.code).toBe(TIER_NOT_PERMITTED_CODE);
+      expect(body.error?.message).not.toContain("terminal.injectOwned");
+    });
 
     it("returns a permitted entry alongside its policy", () => {
       const entry = makeEntry({ id: "terminal.list" });
