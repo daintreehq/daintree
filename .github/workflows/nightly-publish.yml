@@ -54,7 +54,7 @@ jobs:
           - os: ubuntu-22.04-arm
             name: Linux arm64
             linux_metadata: latest-linux-arm64.yml
-          - os: macos-14
+          - os: macos-15
             name: macOS
 
     steps:
@@ -127,7 +127,7 @@ jobs:
 
       - name: Build
         env:
-          # tsc's type graph exceeds node's default old-space on macos-14
+          # tsc's type graph exceeds node's default old-space on the macOS runner
           # (~2 GB), aborting the build. Matches the release workflows.
           NODE_OPTIONS: "--max-old-space-size=6144"
         run: npm run build
@@ -145,7 +145,7 @@ jobs:
         timeout-minutes: 10
 
       - name: Smoke test (macOS)
-        if: matrix.os == 'macos-14'
+        if: startsWith(matrix.os, 'macos')
         run: npm run test:smoke
         env:
           NODE_ENV: production
@@ -278,7 +278,7 @@ jobs:
       - name: Download macOS artifacts
         uses: actions/download-artifact@v8
         with:
-          name: nightly-macos-14
+          name: nightly-macos-15
           path: release/
 
       - name: Download Linux artifacts

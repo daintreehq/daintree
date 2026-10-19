@@ -154,12 +154,12 @@ jobs:
           PLATFORM="${{ inputs.platform || 'linux-windows' }}"
 
           case "$PLATFORM" in
-            macos)         echo 'matrix={"include":[{"os":"macos-14","name":"macOS"}]}' >> "$GITHUB_OUTPUT" ;;
+            macos)         echo 'matrix={"include":[{"os":"macos-15","name":"macOS"}]}' >> "$GITHUB_OUTPUT" ;;
             linux)         echo 'matrix={"include":[{"os":"ubuntu-22.04","name":"Linux"}]}' >> "$GITHUB_OUTPUT" ;;
             windows)       echo 'matrix={"include":[{"os":"windows-2022","name":"Windows"}]}' >> "$GITHUB_OUTPUT" ;;
-            non-windows)   echo 'matrix={"include":[{"os":"ubuntu-22.04","name":"Linux"},{"os":"macos-14","name":"macOS"}]}' >> "$GITHUB_OUTPUT" ;;
+            non-windows)   echo 'matrix={"include":[{"os":"ubuntu-22.04","name":"Linux"},{"os":"macos-15","name":"macOS"}]}' >> "$GITHUB_OUTPUT" ;;
             linux-windows) echo 'matrix={"include":[{"os":"ubuntu-22.04","name":"Linux"},{"os":"windows-2022","name":"Windows"}]}' >> "$GITHUB_OUTPUT" ;;
-            *)             echo 'matrix={"include":[{"os":"ubuntu-22.04","name":"Linux"},{"os":"macos-14","name":"macOS"},{"os":"windows-2022","name":"Windows"}]}' >> "$GITHUB_OUTPUT" ;;
+            *)             echo 'matrix={"include":[{"os":"ubuntu-22.04","name":"Linux"},{"os":"macos-15","name":"macOS"},{"os":"windows-2022","name":"Windows"}]}' >> "$GITHUB_OUTPUT" ;;
           esac
 
       # Windows can exceed the job limit while the full unit suite is still
@@ -348,7 +348,7 @@ jobs:
         timeout-minutes: 10
 
       - name: Smoke test (macOS)
-        if: matrix.os == 'macos-14'
+        if: matrix.os == 'macos-15'
         run: npm run test:smoke
         env:
           NODE_ENV: production

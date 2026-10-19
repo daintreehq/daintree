@@ -69,7 +69,7 @@ jobs:
 
   unit-tests:
     name: Unit Tests (macOS)
-    runs-on: macos-14
+    runs-on: macos-15
     timeout-minutes: 40
     steps:
       - name: Check out repository
@@ -117,7 +117,7 @@ jobs:
   build-daintree:
     needs: [checks, unit-tests, e2e-core-gate, e2e-full-gate]
     name: Build Daintree (macOS)
-    runs-on: macos-14
+    runs-on: macos-15
     timeout-minutes: 90
     steps:
       - name: Check out repository
@@ -322,7 +322,7 @@ jobs:
         run: |
           set -euo pipefail
           # Smoke every published arch (matching the per-arch codesign/staple
-          # audits above). The macos-14 runner is arm64; the x64 bundle runs via
+          # audits above). The macOS runner is arm64; the x64 bundle runs via
           # the pre-installed Rosetta 2, and the universal bundle runs its arm64
           # slice — together exercising the unpacked natives of all three.
           for app in release/mac-arm64/Daintree.app release/mac/Daintree.app release/mac-universal/Daintree.app; do
@@ -334,7 +334,7 @@ jobs:
       - name: Upload build artifacts
         uses: actions/upload-artifact@v7
         with:
-          name: release-daintree-macos-14
+          name: release-daintree-macos-15
           path: |
             release/*.dmg
             release/*.zip
@@ -359,7 +359,7 @@ jobs:
       - name: Publish Daintree (macOS)
         uses: ./.github/actions/publish-daintree
         with:
-          artifact_name: release-daintree-macos-14
+          artifact_name: release-daintree-macos-15
           include_globs: "*.dmg *.zip *.blockmap"
           metadata_suffix: "-mac"
           release_platforms: mac
