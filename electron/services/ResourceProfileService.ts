@@ -20,6 +20,7 @@ import {
   readExcessEventLoopDelay,
 } from "../utils/eventLoopDelay.js";
 import { getAppMetricsSnapshot } from "../utils/appMetricsSnapshot.js";
+import { getProcessMemoryMb } from "../utils/processMemory.js";
 import { getCachedMemoryRollup } from "./memoryAccounting.js";
 import type { PtyClient } from "./PtyClient.js";
 import type { WorkspaceClient } from "./WorkspaceClient.js";
@@ -128,12 +129,12 @@ const FLEET_AGENTS_PER_GB_HIGH = FLEET_COUNT_HIGH / 16;
 const FLEET_AGENTS_PER_GB_VERY_HIGH = FLEET_COUNT_VERY_HIGH / 16;
 const FLEET_AGENTS_PER_GB_CRITICAL = FLEET_COUNT_CRITICAL / 16;
 
-// Terminal-workload signal: summed RSS of every live terminal's descendant
+// Terminal-workload signal: summed memory of every live terminal's descendant
 // tree (agent CLIs, dev servers, language servers, test runners) from the
 // pty-host memory rollup. These are the largest real consumers in Daintree
 // sessions and invisible to app.getAppMetrics(). Fractions of total RAM like
 // the other memory signals, sitting well above the app-private bands because
-// RSS double-counts shared pages across the fleet — this is a generous
+// per-process sums double-count shared pages across the fleet — this is a generous
 // pressure heuristic, not a unique-footprint budget. Bounded at +2 so
 // terminal workloads alone can reach `balanced` but can never latch
 // `efficiency` (score ≥ 3) without a second corroborating signal; like every
@@ -875,10 +876,7 @@ export class ResourceProfileService {
       const metrics = getAppMetricsSnapshot();
       let totalPrivateMb = 0;
       for (const proc of metrics) {
-        // workingSetSize is the only cross-platform field — privateBytes is
-        // Windows-only and returns 0 (not undefined) on macOS/Linux, so the
-        // previous `?? workingSetSize` fallback silently never fired there.
-        totalPrivateMb += proc.memory.workingSetSize / 1024;
+        totalPrivateMb += getProcessMemoryMb(proc);
       }
 
       if (totalPrivateMb > this.memoryThresholdHighMb) {

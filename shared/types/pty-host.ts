@@ -18,6 +18,7 @@ import type { AgentSessionRecord } from "./ipc/agentSessionHistory.js";
 import type { AgentEndObservation } from "./ipc/agent.js";
 import type { SemanticSearchMatch, TerminalInfoPayload } from "./ipc/terminal.js";
 import type { WorkerResourceSnapshot } from "./workerGovernance.js";
+import type { MemorySource } from "./memoryAccounting.js";
 import type { SerializedTerminalSnapshot } from "./terminal.js";
 import type { TerminalSubmissionRecord } from "./terminalSubmission.js";
 import type { TerminalHandback } from "./handback.js";
@@ -142,21 +143,23 @@ export interface MemoryRollupProject {
   projectId: string | null;
   terminalCount: number;
   processCount: number;
-  /** Summed resident memory (KB) across this project's terminal process trees. */
+  /** Summed memory (KB) across this project's terminal process trees. */
   memoryKb: number;
   /** Highest-memory processes in this project's trees (basename only, no command line). */
   topProcesses: TerminalResourceProcess[];
 }
 
 /**
- * On-demand rollup of resident memory across every live terminal's process
- * subtree (shell + descendants: dev servers, agents, language servers), grouped
- * by project. Sourced from the warm ProcessTreeCache; sums RSS, so it counts
- * shared pages — a pressure heuristic, not unique footprint.
+ * On-demand rollup of memory across every live terminal's process subtree
+ * (shell + descendants: dev servers, agents, language servers), grouped by
+ * project. Sourced from the warm ProcessTreeCache; sums per-process figures
+ * (physical footprint on macOS, RSS elsewhere), so it counts shared pages — a
+ * pressure heuristic, not unique footprint.
  */
 export interface MemoryRollup {
   byProject: MemoryRollupProject[];
   totalMemoryKb: number;
+  memorySource: MemorySource;
   totalProcessCount: number;
   terminalCount: number;
   /** False when the OS process table couldn't be read (ps/PowerShell failed). */

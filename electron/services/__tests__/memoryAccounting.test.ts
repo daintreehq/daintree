@@ -16,6 +16,11 @@ import {
   resetMemoryAccountingForTesting,
 } from "../memoryAccounting.js";
 import { resetAppMetricsSnapshotForTesting } from "../../utils/appMetricsSnapshot.js";
+import {
+  attachPhysFootprints,
+  resetPhysFootprintReaderForTesting,
+  setPhysFootprintReaderForTesting,
+} from "../../utils/processMemory.js";
 import { TERMINAL_WORKLOAD_STALE_MS } from "../../../shared/types/memoryAccounting.js";
 
 const mockGetAppMetrics = app.getAppMetrics as Mock;
@@ -50,6 +55,7 @@ function makeRollup(overrides?: Partial<MemoryRollup>): MemoryRollup {
       },
     ],
     totalMemoryKb: 512_000,
+    memorySource: "footprint",
     totalProcessCount: 5,
     terminalCount: 2,
     available: true,
@@ -70,6 +76,7 @@ describe("composeMemorySnapshot", () => {
     expect(snapshot.electron).toEqual({
       available: true,
       totalWorkingSetMb: 150,
+      memorySource: "resident",
       processCount: 2,
       sampledAt: NOW - 1_000,
     });
@@ -79,10 +86,33 @@ describe("composeMemorySnapshot", () => {
       ageMs: null,
       sampledAt: 0,
       totalMemoryMb: 0,
+      memorySource: "resident",
       processCount: 0,
       terminalCount: 0,
       byProject: [],
     });
+  });
+
+  it("sums macOS footprint for Electron processes and labels both slices' basis", () => {
+    setPhysFootprintReaderForTesting({
+      readPhysFootprints: (pids) => pids.map(() => 1_000 * 1024 * 1024),
+      isAvailable: () => true,
+      getLoadError: () => null,
+    });
+    try {
+      // Working set reads 150 MB; the footprint that includes compressed and
+      // swapped pages is 2000 MB (#13526).
+      const metrics = [makeMetric(100 * 1024), makeMetric(50 * 1024)];
+      attachPhysFootprints(metrics);
+
+      const snapshot = composeMemorySnapshot(metrics, NOW, makeRollup(), NOW);
+
+      expect(snapshot.electron.totalWorkingSetMb).toBe(2_000);
+      expect(snapshot.electron.memorySource).toBe("footprint");
+      expect(snapshot.terminalWorkloads.memorySource).toBe("footprint");
+    } finally {
+      resetPhysFootprintReaderForTesting();
+    }
   });
 
   it("marks the Electron slice unavailable when the metrics sweep failed", () => {

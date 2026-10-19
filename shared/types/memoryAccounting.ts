@@ -15,12 +15,25 @@ import type { TerminalResourceProcess } from "./pty-host.js";
  */
 export const TERMINAL_WORKLOAD_STALE_MS = 30_000;
 
-/** Working-set summary of Daintree's own Electron processes (app.getAppMetrics()). */
+/**
+ * What a memory figure measures. `footprint` is macOS physical footprint: dirty
+ * memory whether resident, compressed or swapped. `resident` is RSS / working
+ * set, which drops compressed and swapped pages and so reads far low under
+ * memory pressure — the basis on Windows and Linux, and on macOS only when the
+ * footprint reader failed to load.
+ */
+export type MemorySource = "footprint" | "resident";
+
+/** Memory summary of Daintree's own Electron processes (app.getAppMetrics()). */
 export interface ElectronMemorySlice {
   /** False when the metrics sweep threw — totals are 0 and must not be shown as data. */
   available: boolean;
-  /** Summed working-set across all Electron processes, in MB (shared pages double-count). */
+  /**
+   * Summed memory across all Electron processes, in MB: physical footprint on
+   * macOS, working set elsewhere (shared pages double-count).
+   */
   totalWorkingSetMb: number;
+  memorySource: MemorySource;
   processCount: number;
   /** Wall-clock time of the underlying metrics sweep (0 = never sampled). */
   sampledAt: number;
@@ -32,16 +45,17 @@ export interface TerminalWorkloadProject {
   projectId: string | null;
   terminalCount: number;
   processCount: number;
-  /** Summed RSS (MB) across the project's terminal process trees. */
+  /** Summed memory (MB) across the project's terminal process trees. */
   memoryMb: number;
-  /** Highest-RSS processes — basenames only, never command lines or paths. */
+  /** Highest-memory processes — basenames only, never command lines or paths. */
   topProcesses: TerminalResourceProcess[];
 }
 
 /**
- * RSS rollup across every live terminal's process subtree, sourced from the
- * pty-host's ProcessTreeCache. Sums resident set size, so shared pages are
- * counted per process — a pressure heuristic, not unique footprint.
+ * Memory rollup across every live terminal's process subtree, sourced from the
+ * pty-host's ProcessTreeCache. Sums per-process figures (physical footprint on
+ * macOS, RSS elsewhere), so shared pages are counted per process — a pressure
+ * heuristic, not unique footprint.
  */
 export interface TerminalWorkloadSlice {
   /** False when the OS process table couldn't be read (ps/PowerShell failed or pty-host unreachable). */
@@ -52,8 +66,9 @@ export interface TerminalWorkloadSlice {
   ageMs: number | null;
   /** Wall-clock time of the last successful process-table sweep (0 = never). */
   sampledAt: number;
-  /** Summed RSS (MB), globally PID-deduplicated across overlapping trees. */
+  /** Summed memory (MB), globally PID-deduplicated across overlapping trees. */
   totalMemoryMb: number;
+  memorySource: MemorySource;
   processCount: number;
   terminalCount: number;
   byProject: TerminalWorkloadProject[];

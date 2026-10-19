@@ -28,6 +28,7 @@ import { getActionBreadcrumbService } from "../../services/ActionBreadcrumbServi
 import type * as DiagnosticsCollectorModule from "../../services/DiagnosticsCollector.js";
 import { recordBlinkSample, recordEluSample } from "../../services/ProcessMemoryMonitor.js";
 import { getAppMetricsSnapshot } from "../../utils/appMetricsSnapshot.js";
+import { getProcessMemoryKb } from "../../utils/processMemory.js";
 import { getRegisteredProjectViews } from "../../window/webContentsRegistry.js";
 import { projectStore } from "../../services/ProjectStore.js";
 
@@ -355,10 +356,7 @@ export function registerDiagnosticsHandlers(deps: HandlerDependencies): () => vo
       const metrics = getAppMetricsSnapshot();
       let totalKB = 0;
       for (const proc of metrics) {
-        // workingSetSize is the only cross-platform field: privateBytes is
-        // Windows-only and reports 0 on macOS/Linux, so a `?? workingSetSize`
-        // fallback never fires there and silently sums to zero (lesson #8646).
-        totalKB += proc.memory.workingSetSize;
+        totalKB += getProcessMemoryKb(proc);
       }
       return { totalMemoryMB: Math.round(totalKB / 1024) };
     } catch {
@@ -415,9 +413,7 @@ export function registerDiagnosticsHandlers(deps: HandlerDependencies): () => vo
             pid: proc.pid,
             type: proc.type,
             name: proc.name ?? proc.type,
-            // workingSetSize only — privateBytes is Windows-only and reports 0
-            // on macOS/Linux (lesson #8646).
-            memoryMB: Math.round(proc.memory.workingSetSize / 1024),
+            memoryMB: Math.round(getProcessMemoryKb(proc) / 1024),
             cpuPercent: Math.round((proc.cpu?.percentCPUUsage ?? 0) * 10) / 10,
           };
           const names = proc.type === "Tab" ? projectNamesByPid.get(proc.pid) : undefined;

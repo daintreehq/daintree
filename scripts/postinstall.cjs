@@ -6,7 +6,7 @@ const { version: electronVersion } = require("electron/package.json");
 const { patchNodePtyBindingGyp } = require("./patchNodePtyBinding.cjs");
 const { patchNodePtyConptySource } = require("./patchNodePtyConpty.cjs");
 
-const NATIVE_MODULES = ["node-pty", "win-job-object", "posix-pty-reaper"];
+const NATIVE_MODULES = ["node-pty", "win-job-object", "posix-pty-reaper", "mac-phys-footprint"];
 
 const buildPath = path.resolve(__dirname, "..");
 

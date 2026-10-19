@@ -11,8 +11,9 @@
  * codesigning that real users see.
  *
  * Expected markers cover the shipped native surfaces: node-pty,
- * better-sqlite3, win-job-object (Windows only), and the posix-pty-reaper
- * supervisor executable (macOS / Linux only).
+ * better-sqlite3, win-job-object (Windows only), the posix-pty-reaper
+ * supervisor executable (macOS / Linux only), and mac-phys-footprint (macOS
+ * only).
  */
 
 import { spawn } from "child_process";
@@ -40,6 +41,9 @@ export function buildRequiredMarkers(platform) {
     markers.push("[SMOKE] CHECK: win-job-object native module");
   } else if (platform === "darwin" || platform === "linux") {
     markers.push("[SMOKE] CHECK: posix-pty-reaper supervisor");
+  }
+  if (platform === "darwin") {
+    markers.push("[SMOKE] CHECK: mac-phys-footprint native module");
   }
   return markers;
 }

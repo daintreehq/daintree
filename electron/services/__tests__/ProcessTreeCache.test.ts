@@ -2,6 +2,10 @@ import { EventEmitter } from "node:events";
 import os from "node:os";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ProcessTreeCache, type ProcessInfo } from "../ProcessTreeCache.js";
+import {
+  resetPhysFootprintReaderForTesting,
+  setPhysFootprintReaderForTesting,
+} from "../../utils/processMemory.js";
 import { CENSUS_SENTINEL_PREFIX } from "../WindowsProcessCensus.js";
 
 const { mockExec, mockExecFile, mockSpawn } = vi.hoisted(() => {
@@ -41,9 +45,9 @@ function createSeededCache(): ProcessTreeCache {
   };
 
   internals.cache = new Map<number, ProcessInfo>([
-    [2, { pid: 2, ppid: 1, comm: "node", command: "node a.js", cpuPercent: 0.2, rssKb: 50000 }],
-    [3, { pid: 3, ppid: 1, comm: "node", command: "node b.js", cpuPercent: 0.1, rssKb: 30000 }],
-    [4, { pid: 4, ppid: 2, comm: "npm", command: "npm test", cpuPercent: 1.5, rssKb: 20000 }],
+    [2, { pid: 2, ppid: 1, comm: "node", command: "node a.js", cpuPercent: 0.2, memoryKb: 50000 }],
+    [3, { pid: 3, ppid: 1, comm: "node", command: "node b.js", cpuPercent: 0.1, memoryKb: 30000 }],
+    [4, { pid: 4, ppid: 2, comm: "npm", command: "npm test", cpuPercent: 1.5, memoryKb: 20000 }],
   ]);
   internals.childrenMap = new Map<number, number[]>([
     [1, [2, 3]],
@@ -169,10 +173,10 @@ describe("getTreeResourceSummary breakdown cap", () => {
     };
     const children = Array.from({ length: 12 }, (_, i) => 101 + i);
     const entries: Array<[number, ProcessInfo]> = [
-      [100, { pid: 100, ppid: 1, comm: "zsh", command: "zsh", cpuPercent: 0, rssKb: 4000 }],
+      [100, { pid: 100, ppid: 1, comm: "zsh", command: "zsh", cpuPercent: 0, memoryKb: 4000 }],
       ...children.map((pid, i): [number, ProcessInfo] => [
         pid,
-        { pid, ppid: 100, comm: "worker", command: "worker", cpuPercent: 20 - i, rssKb: 10_000 },
+        { pid, ppid: 100, comm: "worker", command: "worker", cpuPercent: 20 - i, memoryKb: 10_000 },
       ]),
       [
         200,
@@ -182,7 +186,7 @@ describe("getTreeResourceSummary breakdown cap", () => {
           comm: "tsserver",
           command: "tsserver",
           cpuPercent: 0,
-          rssKb: 2_000_000,
+          memoryKb: 2_000_000,
         },
       ],
     ];
@@ -235,7 +239,7 @@ describe("aggregateSubtreeMemory", () => {
       comm: "/Users/someone/.nvm/versions/node/v22.23.2/bin/npm",
       command: "npm test",
       cpuPercent: 1.5,
-      rssKb: 20000,
+      memoryKb: 20000,
     });
 
     const agg = processTree.aggregateSubtreeMemory([{ key: "a", rootPid: 2 }]);
@@ -301,7 +305,7 @@ describe("poll scheduling and adaptive backoff", () => {
     internals.cache = new Map(
       pids.map((pid) => [
         pid,
-        { pid, ppid: 1, comm: "node", command: "node", cpuPercent: 0, rssKb: 1000 },
+        { pid, ppid: 1, comm: "node", command: "node", cpuPercent: 0, memoryKb: 1000 },
       ])
     );
   }
@@ -319,7 +323,7 @@ describe("poll scheduling and adaptive backoff", () => {
             comm: "node",
             command: "node",
             cpuPercent: 0,
-            rssKb: 1000,
+            memoryKb: 1000,
           } as ProcessInfo,
         ])
       );
@@ -1457,5 +1461,113 @@ describe("ProcessTreeCache command/env construction", () => {
         vi.useRealTimers();
       }
     });
+  });
+});
+
+describe("macOS physical footprint (#13526)", () => {
+  const originalPlatform = process.platform;
+  const MB = 1024 * 1024;
+  const readPhysFootprints = vi.fn<(pids: number[]) => Array<number | null> | null>();
+  // A shell running an agent CLI that has been mostly compressed and swapped
+  // out: `ps` RSS reads a few MB where the process holds hundreds.
+  const PS_OUTPUT = [
+    "  PID  PPID %CPU   RSS COMM COMMAND",
+    "  200     1  0.0  1000 zsh zsh",
+    "  201   200  0.0  2000 codex codex",
+    "  202   201  0.0  3000 node node mcp.js",
+  ].join("\n");
+  const FOOTPRINT_BYTES: Record<number, number | null> = {
+    200: 4 * MB,
+    201: 250 * MB,
+    202: 44 * MB,
+  };
+
+  function setPlatform(platform: NodeJS.Platform): void {
+    Object.defineProperty(process, "platform", { value: platform, configurable: true });
+  }
+
+  async function refreshFromPs(): Promise<ProcessTreeCache> {
+    mockExecFile.mockImplementationOnce(
+      (
+        _file: string,
+        _args: unknown,
+        _opts: unknown,
+        cb: (err: null, stdout: string, stderr: string) => void
+      ) => {
+        cb(null, PS_OUTPUT, "");
+        return { pid: 999 };
+      }
+    );
+    const cache = new ProcessTreeCache(2500);
+    await (cache as unknown as { refreshUnix: () => Promise<boolean> }).refreshUnix();
+    return cache;
+  }
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    readPhysFootprints.mockReset();
+    readPhysFootprints.mockImplementation((pids) =>
+      pids.map((pid) => FOOTPRINT_BYTES[pid] ?? null)
+    );
+    setPhysFootprintReaderForTesting({
+      readPhysFootprints,
+      isAvailable: () => true,
+      getLoadError: () => null,
+    });
+    setPlatform("darwin");
+  });
+
+  afterEach(() => {
+    setPlatform(originalPlatform);
+    resetPhysFootprintReaderForTesting();
+  });
+
+  it("sums and ranks subtrees by footprint instead of RSS", async () => {
+    const cache = await refreshFromPs();
+
+    const agg = cache.aggregateSubtreeMemory([{ key: "p", rootPid: 200 }]);
+
+    expect(readPhysFootprints).toHaveBeenCalledTimes(1);
+    expect(agg.totalMemoryKb).toBe((4 + 250 + 44) * 1024);
+    expect(agg.byKey["p"].topProcesses.map((p) => [p.comm, p.memoryKb])).toEqual([
+      ["codex", 250 * 1024],
+      ["node", 44 * 1024],
+      ["zsh", 4 * 1024],
+    ]);
+    expect(cache.getTreeResourceSummary(200)?.memoryKb).toBe((4 + 250 + 44) * 1024);
+    expect(cache.getMemorySource()).toBe("footprint");
+  });
+
+  it("keeps a process's RSS when its footprint can't be read", async () => {
+    FOOTPRINT_BYTES[202] = null;
+    try {
+      const cache = await refreshFromPs();
+
+      expect(cache.getProcess(202)?.memoryKb).toBe(3000);
+      expect(cache.aggregateSubtreeMemory([{ key: "p", rootPid: 200 }]).totalMemoryKb).toBe(
+        (4 + 250) * 1024 + 3000
+      );
+    } finally {
+      FOOTPRINT_BYTES[202] = 44 * MB;
+    }
+  });
+
+  it("falls back to RSS and reports it when the reader is unavailable", async () => {
+    readPhysFootprints.mockReturnValue(null);
+
+    const cache = await refreshFromPs();
+
+    expect(cache.aggregateSubtreeMemory([{ key: "p", rootPid: 200 }]).totalMemoryKb).toBe(6000);
+    expect(cache.getMemorySource()).toBe("resident");
+  });
+
+  it("never reads footprints off macOS", async () => {
+    setPlatform("linux");
+
+    const cache = await refreshFromPs();
+
+    expect(readPhysFootprints).not.toHaveBeenCalled();
+    expect(cache.aggregateSubtreeMemory([{ key: "p", rootPid: 200 }]).totalMemoryKb).toBe(6000);
+    expect(cache.getMemorySource()).toBe("resident");
   });
 });

@@ -1855,6 +1855,7 @@ describe("ResourceProfileService", () => {
       const rollupBase: MemoryRollup = {
         byProject: [],
         totalMemoryKb: 2_500 * 1024,
+        memorySource: "footprint",
         totalProcessCount: 4,
         terminalCount: 2,
         available: true,
@@ -1887,6 +1888,7 @@ describe("ResourceProfileService", () => {
       const rollupBase: MemoryRollup = {
         byProject: [],
         totalMemoryKb: 3_500 * 1024,
+        memorySource: "footprint",
         totalProcessCount: 6,
         terminalCount: 3,
         available: true,

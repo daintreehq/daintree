@@ -686,6 +686,7 @@ installPreviewShims({
       electron: {
         available: true,
         totalWorkingSetMb: APP_MEMORY_MB,
+        memorySource: "footprint",
         processCount: BUSY_PROCESSES.length,
         sampledAt: Date.now(),
       },
@@ -695,6 +696,7 @@ installPreviewShims({
         ageMs: 1_000,
         sampledAt: Date.now(),
         totalMemoryMb: TERMINAL_WORKLOAD_MB,
+        memorySource: "footprint",
         processCount: 24,
         terminalCount: 12,
         byProject: WORKLOAD_BY_PROJECT,

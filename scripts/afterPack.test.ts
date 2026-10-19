@@ -183,6 +183,7 @@ describe("afterPack", () => {
         .mockReturnValueOnce(true) // node-pty dir
         .mockReturnValueOnce(true) // pty.node
         .mockReturnValueOnce(true) // posix-pty-reaper supervisor
+        .mockReturnValueOnce(true) // mac-phys-footprint addon
         .mockReturnValueOnce(false) // Assets.car (macOS icon injection)
         .mockReturnValueOnce(false); // better-sqlite3 dir
 
@@ -196,6 +197,7 @@ describe("afterPack", () => {
         .mockReturnValueOnce(true) // node-pty dir
         .mockReturnValueOnce(true) // pty.node
         .mockReturnValueOnce(true) // posix-pty-reaper supervisor
+        .mockReturnValueOnce(true) // mac-phys-footprint addon
         .mockReturnValueOnce(false) // Assets.car (macOS icon injection)
         .mockReturnValueOnce(true) // better-sqlite3 dir
         .mockReturnValueOnce(false); // prebuilds/darwin-<arch>.node
@@ -213,6 +215,50 @@ describe("afterPack", () => {
 
       await expect(afterPack(createContext("darwin", "/build/mac"))).rejects.toThrow(
         /posix-pty-reaper supervisor binary not found/
+      );
+    });
+
+    it("should throw when the mac-phys-footprint addon is missing", async () => {
+      mockExistsSync
+        .mockReturnValueOnce(true) // node-pty dir
+        .mockReturnValueOnce(true) // pty.node
+        .mockReturnValueOnce(true) // posix-pty-reaper supervisor
+        .mockReturnValueOnce(false); // mac-phys-footprint addon
+
+      await expect(afterPack(createContext("darwin", "/build/mac"))).rejects.toThrow(
+        /mac-phys-footprint native binary not found/
+      );
+    });
+
+    it("should throw when the mac-phys-footprint addon fails to load", async () => {
+      mockExistsSync.mockReturnValue(true);
+      const footprintBinary = path.join(
+        unpackedBase,
+        "node_modules/mac-phys-footprint/build/Release/mac_phys_footprint.node"
+      );
+      process.dlopen = ((_module: unknown, filename: string) => {
+        if (filename === footprintBinary) throw new Error("incompatible architecture");
+      }) as typeof process.dlopen;
+
+      await expect(afterPack(createContext("darwin", "/build/mac"))).rejects.toThrow(
+        /mac-phys-footprint failed to load: incompatible architecture/
+      );
+    });
+
+    it("should skip the mac-phys-footprint load check for a foreign-arch slice", async () => {
+      mockExistsSync.mockReturnValue(true);
+      const foreignArch = process.arch === "arm64" ? Arch.x64 : Arch.arm64;
+      const dlopenSpy = vi.fn();
+      process.dlopen = dlopenSpy as unknown as typeof process.dlopen;
+
+      await afterPack(createContext("darwin", "/build/mac", "Daintree", foreignArch));
+
+      expect(dlopenSpy).not.toHaveBeenCalledWith(
+        expect.anything(),
+        expect.stringContaining("mac_phys_footprint.node")
+      );
+      expect(warnSpy).toHaveBeenCalledWith(
+        expect.stringContaining("Skipping mac-phys-footprint load check")
       );
     });
   });

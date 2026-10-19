@@ -391,6 +391,28 @@ function validateWinJobObjectAbi(nativeBinaryPath) {
   }
 }
 
+/**
+ * Validate that mac_phys_footprint.node loads. Like win-job-object it is an
+ * N-API addon, so a successful dlopen under Node proves the binary is the
+ * runner's arch and links; module init only registers exports. A broken one
+ * would ship and silently drop every macOS memory reading back to resident
+ * size, which misses compressed and swapped memory (#13526).
+ */
+function validateMacPhysFootprintAbi(nativeBinaryPath) {
+  const testModule = { exports: {} };
+  try {
+    process.dlopen(testModule, nativeBinaryPath);
+    console.log("[afterPack] mac-phys-footprint load check passed");
+  } catch (err) {
+    const msg = err && err.message ? err.message : String(err);
+    throw new Error(
+      `[afterPack] CRITICAL: mac-phys-footprint failed to load: ${msg}. ` +
+        'The binary may be the wrong arch. Run "npm run rebuild". Path: ' +
+        nativeBinaryPath
+    );
+  }
+}
+
 function getWindowsPackageArch(contextArch) {
   if (contextArch === 0) return "ia32";
   if (contextArch === 1) return "x64";
@@ -748,6 +770,28 @@ exports.default = async function afterPack(context) {
     }
 
     if (electronPlatformName === "darwin") {
+      // mac-phys-footprint: macOS memory readings (#13526). Source-only addon
+      // compiled by electron-rebuild during postinstall on the macOS runner.
+      const footprintBinary = path.join(
+        unpackedPath,
+        "node_modules/mac-phys-footprint/build/Release/mac_phys_footprint.node"
+      );
+      if (!fs.existsSync(footprintBinary)) {
+        throw new Error(
+          `[afterPack] CRITICAL: mac-phys-footprint native binary not found at ${footprintBinary}. ` +
+            'Memory readings would miss compressed and swapped memory (#13526). Run "npm run rebuild".'
+        );
+      }
+      console.log(`[afterPack] mac-phys-footprint verified: ${footprintBinary}`);
+
+      if (isRunnerExecutableArch(context.arch)) {
+        validateMacPhysFootprintAbi(footprintBinary);
+      } else {
+        console.warn(
+          `[afterPack] Skipping mac-phys-footprint load check for ${ARCH_ENUM_NAMES[context.arch]} slice on ${process.arch} runner`
+        );
+      }
+
       // Inject pre-compiled Assets.car for macOS 26+ Liquid Glass icon.
       // The .car was compiled from build/AppIcon.icon via actool on a machine
       // with Xcode 26, so CI runners don't need Xcode installed.

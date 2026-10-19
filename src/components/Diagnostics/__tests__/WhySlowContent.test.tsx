@@ -30,11 +30,13 @@ const quietRenderer: WhySlowSnapshot["rendererTerminals"] = [
 
 const quietMemory: WhySlowSnapshot["memory"] = {
   appMemoryMb: 400,
+  appMemorySource: "footprint",
   terminalWorkloads: {
     available: true,
     stale: false,
     ageMs: 1000,
     totalMemoryMb: 800,
+    memorySource: "footprint",
     processCount: 10,
     terminalCount: 3,
     topProjects: [],
@@ -160,11 +162,13 @@ describe("WhySlowContent", () => {
       makeSnapshot({
         memory: {
           appMemoryMb: 512,
+          appMemorySource: "footprint",
           terminalWorkloads: {
             available: true,
             stale: false,
             ageMs: 2_000,
             totalMemoryMb: 2048,
+            memorySource: "footprint",
             processCount: 12,
             terminalCount: 4,
             topProjects: [],
@@ -188,11 +192,13 @@ describe("WhySlowContent", () => {
       makeSnapshot({
         memory: {
           appMemoryMb: null,
+          appMemorySource: "footprint",
           terminalWorkloads: {
             available: false,
             stale: true,
             ageMs: 90_000,
             totalMemoryMb: 3100,
+            memorySource: "footprint",
             processCount: 9,
             terminalCount: 3,
             topProjects: [],
@@ -214,11 +220,13 @@ describe("WhySlowContent", () => {
       makeSnapshot({
         memory: {
           appMemoryMb: 512,
+          appMemorySource: "footprint",
           terminalWorkloads: {
             available: false,
             stale: false,
             ageMs: null,
             totalMemoryMb: 0,
+            memorySource: "footprint",
             processCount: 0,
             terminalCount: 0,
             topProjects: [],

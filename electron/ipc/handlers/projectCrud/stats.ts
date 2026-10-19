@@ -224,6 +224,7 @@ export function registerProjectStatsHandlers(deps: HandlerDependencies): () => v
         : Promise.resolve<MemoryRollup>({
             byProject: [],
             totalMemoryKb: 0,
+            memorySource: "resident",
             totalProcessCount: 0,
             terminalCount: 0,
             available: false,

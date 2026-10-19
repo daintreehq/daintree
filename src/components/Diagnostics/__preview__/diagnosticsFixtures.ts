@@ -414,11 +414,13 @@ function snapshot(overrides: Partial<WhySlowSnapshot> = {}): WhySlowSnapshot {
     workers: { subsystemCount: 3, aliveWorkerCount: 3, totalQueueDepth: 0, degraded: [] },
     memory: {
       appMemoryMb: 612,
+      appMemorySource: "footprint",
       terminalWorkloads: {
         available: true,
         stale: false,
         ageMs: 4000,
         totalMemoryMb: 1840,
+        memorySource: "footprint",
         processCount: 23,
         terminalCount: 6,
         topProjects: [],
@@ -489,11 +491,13 @@ export const WHY_SLOW_PRESSURE = snapshot({
   },
   memory: {
     appMemoryMb: 3120,
+    appMemorySource: "footprint",
     terminalWorkloads: {
       available: true,
       stale: true,
       ageMs: 95_000,
       totalMemoryMb: 9310,
+      memorySource: "footprint",
       processCount: 142,
       terminalCount: 17,
       topProjects: [],

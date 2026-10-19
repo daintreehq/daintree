@@ -7,6 +7,7 @@ import { app } from "electron";
 import { logDebug, logInfo, logWarn } from "../utils/logger.js";
 import { setAlignedInterval } from "../utils/setAlignedInterval.js";
 import { refreshAppMetricsSnapshot } from "../utils/appMetricsSnapshot.js";
+import { getMetricsMemorySource, getProcessMemoryMb } from "../utils/processMemory.js";
 import { getSystemSleepService } from "./SystemSleepService.js";
 import { getWritesSuppressed } from "./diskPressureState.js";
 import { getIsE2EFaultMode, getIsE2EMode } from "../setup/runtimeFlags.js";
@@ -29,8 +30,8 @@ const BROWSER_MEMORY_FRACTION = 300 / 8192;
 const TAB_MEMORY_FRACTION = 768 / 8192;
 const UTILITY_MEMORY_FRACTION = 500 / 8192;
 
-// Combined working-set ceiling across all monitored processes. Working-set
-// sums double-count shared library pages on macOS, so this is intentionally
+// Combined memory ceiling across all monitored processes. Per-process figures
+// double-count shared pages, so this is intentionally
 // generous — it is a pressure heuristic, not a precise private-footprint
 // budget. 25% of total RAM is enough headroom that the per-process thresholds
 // trip first under typical leak shapes while still catching fan-out cases
@@ -179,20 +180,20 @@ export interface MainProcessTrendSample {
   type: string;
   /** Epoch ms when this pid was first sampled in the current monitor lifetime. */
   startedAt: number;
-  /** Latest exponential moving average of working-set footprint, in MB. */
+  /** Latest exponential moving average of process memory, in MB. */
   emaMb: number;
   /** Bounded rolling EMA history (≤ BUCKET_WINDOW entries), in MB, oldest→newest. */
   emaHistoryMb: number[];
-  /** Most recent raw working-set sample, in MB. */
+  /** Most recent raw memory sample, in MB. */
   mb: number;
-  /** Largest raw working-set sample seen for this pid, in MB. */
+  /** Largest raw memory sample seen for this pid, in MB. */
   peakMb: number;
 }
 
 export interface ProcessTypePeakSample {
   type: string;
   /**
-   * Largest working set any single process of this type reached — not the
+   * Largest memory any single process of this type reached — not the
    * combined footprint of every process of the type.
    */
   peakMb: number;
@@ -216,7 +217,7 @@ export function getSessionPeakSnapshot(): ProcessTypePeakSample[] {
  * Bounded snapshot of the per-pid memory trend buffers for diagnostics export.
  * Returns deep copies — never the live history arrays — so a diagnostics read
  * can't race the 30s poll that mutates them. All values derive from
- * workingSetSize (the only cross-platform memory field; #8646).
+ * `getProcessMemoryMb` — physical footprint on macOS, working set elsewhere.
  */
 export function getTrendSnapshot(): MainProcessTrendSample[] {
   const out: MainProcessTrendSample[] = [];
@@ -459,14 +460,6 @@ export interface MemoryPressureActions {
    * not measured and it never gates escalation.
    */
   releaseRendererMemory?: () => void;
-}
-
-// workingSetSize is the only memory field Electron guarantees on all three
-// platforms: privateBytes is Windows-only and reported as 0 (not undefined)
-// on macOS/Linux, which silently defeated the previous `privateBytes ??
-// workingSetSize` fallback.
-function getProcessMemoryMb(proc: Electron.ProcessMetric): number {
-  return proc.memory.workingSetSize / 1024;
 }
 
 /**
@@ -718,6 +711,7 @@ export function startAppMetricsMonitor(actions?: MemoryPressureActions): () => v
               type: proc.type,
               mb: Math.round(mb),
               thresholdMb: Math.round(threshold),
+              source: getMetricsMemorySource(metrics),
             });
           }
         } else if (threshold !== undefined) {
@@ -808,9 +802,12 @@ export function startAppMetricsMonitor(actions?: MemoryPressureActions): () => v
           state.bucketMin = Infinity;
         }
 
+        // Resident, not footprint: this hunts JS heap growth, and a footprint
+        // inflated by swap would write a heap snapshot every cooldown at
+        // exactly the moment the machine can least afford one.
         if (
           proc.type === "Browser" &&
-          mb > SNAPSHOT_THRESHOLD_MB &&
+          proc.memory.workingSetSize / 1024 > SNAPSHOT_THRESHOLD_MB &&
           !app.isPackaged &&
           !getIsE2EMode()
         ) {
@@ -838,7 +835,7 @@ export function startAppMetricsMonitor(actions?: MemoryPressureActions): () => v
         }
       }
 
-      // Aggregate working-set check: fans-out of small processes can collectively
+      // Aggregate memory check: fans-out of small processes can collectively
       // exceed a safe footprint without any single one tripping its per-type
       // threshold. Feeds the same hasPressure signal so the existing tiered
       // mitigation pipeline handles the response — no separate log emission to

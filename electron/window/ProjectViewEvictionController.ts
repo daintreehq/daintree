@@ -7,6 +7,7 @@
 
 import { getAppMetricsSnapshot } from "../utils/appMetricsSnapshot.js";
 import { logDebug, logInfo } from "../utils/logger.js";
+import { getProcessMemoryKb } from "../utils/processMemory.js";
 import { cleanupEntry, sumGuestMemoryKb } from "./ProjectViewLifecycleController.js";
 import { hasActiveAgent } from "./ProjectViewAgentStateCache.js";
 import { isLocalViewKey } from "./ProjectViewFactory.js";
@@ -74,16 +75,6 @@ export const SOFT_PRESSURE_UNPRODUCTIVE_LIMIT = 2;
  */
 export const MIN_SOFT_PRESSURE_GAIN_MB = 32;
 export const SOFT_PRESSURE_GAIN_FRACTION = 0.25;
-
-/**
- * workingSetSize is the only cross-platform field — privateBytes is
- * Windows-only and reports 0 (not undefined) on macOS/Linux, so a
- * `privateBytes ?? workingSetSize` fallback never fires there and silently
- * logs every view as 0 KB (lesson #8646).
- */
-function readProcessMemoryKb(proc: Electron.ProcessMetric): number {
-  return proc.memory.workingSetSize;
-}
 
 /**
  * Whether destroying `entry` would kill a running Daintree Assistant (#11157).
@@ -346,7 +337,7 @@ export function evictStaleViews(
     // Shared TTL snapshot: the eviction log line tolerates a few seconds of
     // staleness, so a pass landing near another sampler's sweep reuses it.
     for (const proc of getAppMetricsSnapshot()) {
-      const kb = readProcessMemoryKb(proc);
+      const kb = getProcessMemoryKb(proc);
       if (kb > 0) {
         memoryByPid.set(proc.pid, kb);
       }
@@ -751,7 +742,7 @@ export function sampleCachedViewMemory(host: ProjectViewManager): void {
     // samplers near the 30s aligned sweeps reuse them instead of stacking
     // additional full-process-table scans.
     for (const proc of getAppMetricsSnapshot()) {
-      const kb = readProcessMemoryKb(proc);
+      const kb = getProcessMemoryKb(proc);
       if (kb > 0) {
         memoryByPid.set(proc.pid, kb);
       }

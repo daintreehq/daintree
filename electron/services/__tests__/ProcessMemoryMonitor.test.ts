@@ -74,6 +74,10 @@ import {
   type MemoryPressureActions,
 } from "../ProcessMemoryMonitor.js";
 import type { TrimStateSummary } from "../../../shared/types/pty-host.js";
+import {
+  resetPhysFootprintReaderForTesting,
+  setPhysFootprintReaderForTesting,
+} from "../../utils/processMemory.js";
 import type { KernelPressureLevel } from "../SystemMemoryPressureMonitor.js";
 
 const EIGHT_GB = 8 * 1024 * 1024 * 1024;
@@ -177,6 +181,7 @@ describe("ProcessMemoryMonitor", () => {
       type: "Browser",
       mb: 350,
       thresholdMb: 300,
+      source: "resident",
     });
   });
 
@@ -191,6 +196,7 @@ describe("ProcessMemoryMonitor", () => {
       type: "Tab",
       mb: 800,
       thresholdMb: 768,
+      source: "resident",
     });
   });
 
@@ -205,6 +211,7 @@ describe("ProcessMemoryMonitor", () => {
       type: "Utility",
       mb: 600,
       thresholdMb: 500,
+      source: "resident",
     });
   });
 
@@ -218,6 +225,47 @@ describe("ProcessMemoryMonitor", () => {
     expect(v8.writeHeapSnapshot).toHaveBeenCalledTimes(1);
     expect(logWarn).toHaveBeenCalledWith("heap-snapshot-written", {
       path: "/tmp/test-logs/heap-123-1000.heapsnapshot",
+    });
+  });
+
+  describe("macOS physical footprint (#13526)", () => {
+    beforeEach(() => {
+      setPhysFootprintReaderForTesting({
+        // Mostly compressed or swapped out: working set reads 50 MB of a
+        // 900 MB footprint.
+        readPhysFootprints: (pids) => pids.map(() => 900 * 1024 * 1024),
+        isAvailable: () => true,
+        getLoadError: () => null,
+      });
+    });
+
+    afterEach(() => {
+      resetPhysFootprintReaderForTesting();
+    });
+
+    it("judges per-process thresholds against footprint and names the basis", () => {
+      mockGetAppMetrics.mockReturnValue([makeMetric("Utility", 50 * 1024, 300)]);
+
+      stop = startAppMetricsMonitor();
+      vi.advanceTimersByTime(30_000);
+
+      expect(logWarn).toHaveBeenCalledWith("process-memory-threshold-exceeded", {
+        pid: 300,
+        type: "Utility",
+        mb: 900,
+        thresholdMb: 500,
+        source: "footprint",
+      });
+    });
+
+    it("keeps the dev heap snapshot trigger on working set", () => {
+      mockGetAppMetrics.mockReturnValue([makeMetric("Browser", 50 * 1024, 100)]);
+      Object.defineProperty(app, "isPackaged", { value: false, writable: true });
+
+      stop = startAppMetricsMonitor();
+      vi.advanceTimersByTime(30_000);
+
+      expect(v8.writeHeapSnapshot).not.toHaveBeenCalled();
     });
   });
 
@@ -564,6 +612,7 @@ describe("ProcessMemoryMonitor", () => {
         type: "Browser",
         mb: 2401,
         thresholdMb: 2400,
+        source: "resident",
       });
     });
 
@@ -580,6 +629,7 @@ describe("ProcessMemoryMonitor", () => {
         type: "Tab",
         mb: 400,
         thresholdMb: 384,
+        source: "resident",
       });
     });
 
