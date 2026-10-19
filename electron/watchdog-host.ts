@@ -5,7 +5,8 @@
  * still be force-killed. Receives the main PID via `--main-pid=<pid>` argv,
  * expects a "ping" message every HEARTBEAT_INTERVAL_MS, and SIGKILLs main
  * after MAX_MISSED missed beats — MAX_MISSED_UNDER_PRESSURE when main last
- * reported memory pressure or the watchdog itself just stalled.
+ * reported memory pressure (or had no reading) or the watchdog itself just
+ * stalled.
  * CrashRecoveryService and CrashLoopGuard handle the relaunch + safe-mode path.
  *
  * Fail-open: if anything is malformed (no PID, no parentPort, watchdog

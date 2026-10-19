@@ -50,9 +50,12 @@ export interface WatchdogDeps {
 
 export interface WatchdogMessage {
   type: "ping" | "sleep" | "wake" | "dispose";
-  /** On a ping: main's latest memory-pressure reading was elevated and fresh.
-   * Anything but `true` reads as no pressure. */
-  memoryPressure?: boolean;
+  /** On a ping, main's latest memory-pressure reading: true when elevated,
+   * false when clear, null when main has no fresh reading (boot, E2E, failed
+   * probes). Null earns the longer deadline too: a main that cannot see the
+   * machine is given the benefit of the doubt. Absent or malformed reads as
+   * clear. */
+  memoryPressure?: boolean | null;
 }
 
 export interface WatchdogState {
@@ -64,9 +67,10 @@ export interface WatchdogState {
    * Zero means "no wake observed yet" — the grace window only applies
    * after a real wake event, so it never masks a frozen-at-boot main. */
   lastWakeTimestamp: number;
-  /** Whether the last ping reported memory pressure. It stands through the
-   * silence that follows: it is main's last word before it stalled. */
-  mainReportedPressure: boolean;
+  /** The last ping's `memoryPressure`, normalised to true, false or null. It
+   * stands through the silence that follows: main's last word before it
+   * stalled. */
+  mainPressure: boolean | null;
   /** Monotonic timestamp of the last armed tick that arrived late, or null. */
   lastLateTickAt: number | null;
   /** The current silence reached MAX_MISSED with pressure evidence, so the
@@ -96,7 +100,7 @@ export function createWatchdog(deps: WatchdogDeps): Watchdog {
     isPaused: false,
     missedBeats: 0,
     lastWakeTimestamp: 0,
-    mainReportedPressure: false,
+    mainPressure: false,
     lastLateTickAt: null,
     killDeferred: false,
   };
@@ -104,9 +108,11 @@ export function createWatchdog(deps: WatchdogDeps): Watchdog {
   // every tick, armed or not, so the first tick after a pause isn't read as
   // the watchdog itself having stalled.
   let lastTickAt = now();
+  let killHeld = false;
 
   function pressureEvidence(t: number): string | null {
-    if (state.mainReportedPressure) return "main reported memory pressure";
+    if (state.mainPressure === true) return "main reported memory pressure";
+    if (state.mainPressure === null) return "main had no memory-pressure reading";
     if (state.lastLateTickAt !== null && t - state.lastLateTickAt <= STALL_EVIDENCE_MS) {
       return "the watchdog itself stalled";
     }
@@ -129,7 +135,8 @@ export function createWatchdog(deps: WatchdogDeps): Watchdog {
       return;
     }
 
-    if (gapMs >= LATE_TICK_GAP_MS) state.lastLateTickAt = t;
+    const late = gapMs >= LATE_TICK_GAP_MS;
+    if (late) state.lastLateTickAt = t;
 
     state.missedBeats += 1;
     if (state.missedBeats < MAX_MISSED) return;
@@ -144,6 +151,13 @@ export function createWatchdog(deps: WatchdogDeps): Watchdog {
       }
     }
     if (state.killDeferred && state.missedBeats < MAX_MISSED_UNDER_PRESSURE) return;
+    // A late tick can run before the pings queued behind the watchdog's own
+    // stall have been read, so it never fires the kill itself: the next tick
+    // does if main is still silent. One beat of slack, never more.
+    if (late && !killHeld) {
+      killHeld = true;
+      return;
+    }
 
     log(
       `[WatchdogHost] Main process unresponsive for at least ${state.missedBeats * HEARTBEAT_INTERVAL_MS}ms (${state.missedBeats} missed beats). Firing kill.`
@@ -158,6 +172,7 @@ export function createWatchdog(deps: WatchdogDeps): Watchdog {
     // explicitly re-arm us by sending a ping.
     state.missedBeats = 0;
     state.killDeferred = false;
+    killHeld = false;
     state.isArmed = false;
   }
 
@@ -173,17 +188,21 @@ export function createWatchdog(deps: WatchdogDeps): Watchdog {
         state.isArmed = true;
         state.missedBeats = 0;
         state.killDeferred = false;
-        state.mainReportedPressure = msg.memoryPressure === true;
+        killHeld = false;
+        state.mainPressure =
+          msg.memoryPressure === true ? true : msg.memoryPressure === null ? null : false;
         return true;
       case "sleep":
         state.isPaused = true;
         state.missedBeats = 0;
         state.killDeferred = false;
+        killHeld = false;
         return true;
       case "wake":
         state.isPaused = false;
         state.missedBeats = 0;
         state.killDeferred = false;
+        killHeld = false;
         state.lastWakeTimestamp = now();
         // Neither the suspend gap nor a stall seen before it says anything
         // about the machine now.

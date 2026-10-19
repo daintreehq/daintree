@@ -14,7 +14,7 @@ import { SWAP_PRESSURE_STALE_MS } from "./systemSwapPressure.js";
  */
 export const WATCHDOG_PRESSURE_STALE_MS = SWAP_PRESSURE_STALE_MS;
 
-let elevatedAt: number | null = null;
+let reading: { elevated: boolean; sampledAt: number } | null = null;
 
 /**
  * `elevated` is null when a failed reading left the sample undecided: the
@@ -25,14 +25,18 @@ export function recordWatchdogMemoryPressure(
   sampledAt: number = Date.now()
 ): void {
   if (elevated === null) return;
-  elevatedAt = elevated ? sampledAt : null;
+  reading = { elevated, sampledAt };
 }
 
-/** A clock that stepped backwards is no evidence the reading is still fresh. */
-export function isWatchdogMemoryPressureElevated(now: number = Date.now()): boolean {
-  if (elevatedAt === null) return false;
-  const ageMs = now - elevatedAt;
-  if (ageMs >= 0 && ageMs <= WATCHDOG_PRESSURE_STALE_MS) return true;
-  elevatedAt = null;
-  return false;
+/**
+ * The fresh verdict, or null when there is none: no sample yet (boot, or E2E,
+ * where the monitor never runs), or the last one has gone stale. A clock that
+ * stepped backwards is no evidence the reading is still fresh.
+ */
+export function readWatchdogMemoryPressure(now: number = Date.now()): boolean | null {
+  if (reading === null) return null;
+  const ageMs = now - reading.sampledAt;
+  if (ageMs >= 0 && ageMs <= WATCHDOG_PRESSURE_STALE_MS) return reading.elevated;
+  reading = null;
+  return null;
 }

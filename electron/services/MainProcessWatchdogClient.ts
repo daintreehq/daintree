@@ -20,7 +20,7 @@ import { trackEvent } from "./TelemetryService.js";
 import { createLogger } from "../utils/logger.js";
 import { noteTerminationIntent } from "./processTerminationIntent.js";
 import { getActiveShutdown } from "../lifecycle/shutdownCoordinator.js";
-import { isWatchdogMemoryPressureElevated } from "./watchdogMemoryPressure.js";
+import { readWatchdogMemoryPressure } from "./watchdogMemoryPressure.js";
 
 const logger = createLogger("main:Watchdog");
 
@@ -310,7 +310,7 @@ export class MainProcessWatchdogClient {
     try {
       // The watchdog holds the last value it was sent, so a main that stalls
       // under pressure has already said so (#13528).
-      this.child.postMessage({ type: "ping", memoryPressure: isWatchdogMemoryPressureElevated() });
+      this.child.postMessage({ type: "ping", memoryPressure: readWatchdogMemoryPressure() });
     } catch (err) {
       // postMessage can throw if the child is between exit and our exit
       // handler (the channel is already torn down). Drop silently — the
