@@ -288,16 +288,25 @@ const UNSAFE_FLAGS: UnsafeFlags = {
  * GIT_WORK_TREE, GIT_INDEX_FILE), reconfigure it (GIT_CONFIG_PARAMETERS,
  * GIT_CONFIG_COUNT, GIT_EXEC_PATH), or contradict the profile — git hard-fails
  * when GIT_GLOB_PATHSPECS or GIT_ICASE_PATHSPECS meets our
- * GIT_LITERAL_PATHSPECS. These only label commits, choose a CA bundle, or
- * narrow where git looks for config and repositories.
+ * GIT_LITERAL_PATHSPECS. These label commits, choose the TLS trust and client
+ * certificate, keep git-lfs from transferring objects, or narrow where git
+ * looks for config and repositories — none names a program for git to run.
+ * GIT_ALLOW_PROTOCOL stays out deliberately: it would override
+ * `protocol.ext.allow=never`.
  */
 const INHERITED_GIT_ENV_PASSTHROUGH = [
   "GIT_AUTHOR_NAME",
   "GIT_AUTHOR_EMAIL",
+  "GIT_AUTHOR_DATE",
   "GIT_COMMITTER_NAME",
   "GIT_COMMITTER_EMAIL",
+  "GIT_COMMITTER_DATE",
   "GIT_SSL_CAINFO",
   "GIT_SSL_CAPATH",
+  "GIT_SSL_CERT",
+  "GIT_SSL_KEY",
+  "GIT_LFS_SKIP_SMUDGE",
+  "GIT_LFS_SKIP_PUSH",
   "GIT_CONFIG_NOSYSTEM",
   "GIT_CEILING_DIRECTORIES",
 ] as const;

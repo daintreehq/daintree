@@ -124,7 +124,9 @@ describe("CopyTreeService against the installed CopyTree", () => {
     function git(...args: string[]): string {
       return execFileSync("git", args, {
         cwd: tempDir,
-        env: { ...process.env, GIT_CONFIG_NOSYSTEM: "1" },
+        // Built from scratch: an inherited GIT_DIR or GIT_WORK_TREE would point
+        // these fixture writes at a real repository instead of tempDir.
+        env: { PATH: process.env.PATH ?? "", HOME: fakeHome, GIT_CONFIG_NOSYSTEM: "1" },
         encoding: "utf8",
       }).trim();
     }

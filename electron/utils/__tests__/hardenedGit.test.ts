@@ -468,24 +468,30 @@ describe("profile environments under simple-git's guard", () => {
         }),
     ],
   ])("allows every git variable the %s profile hands git", async (_name, create) => {
-    process.env.GIT_AUTHOR_NAME = "Inherited Author";
+    vi.stubEnv("GIT_AUTHOR_NAME", "Inherited Author");
     try {
       await create();
       expectEnvFullyAllowed();
     } finally {
-      delete process.env.GIT_AUTHOR_NAME;
+      vi.unstubAllEnvs();
     }
   });
 
-  it("keeps the inherited variables that only label commits or pick a CA bundle", async () => {
-    const kept = { GIT_COMMITTER_EMAIL: "me@example.com", GIT_SSL_CAINFO: "/etc/ca.pem" };
-    for (const [key, value] of Object.entries(kept)) process.env[key] = value;
+  it("keeps the inherited variables that label commits, pick TLS credentials or skip LFS", async () => {
+    const kept = {
+      GIT_COMMITTER_EMAIL: "me@example.com",
+      GIT_SSL_CAINFO: "/etc/ca.pem",
+      GIT_SSL_CERT: "/etc/client.pem",
+      GIT_LFS_SKIP_SMUDGE: "1",
+    };
+    for (const [key, value] of Object.entries(kept)) vi.stubEnv(key, value);
     try {
       await createHardenedGit("/test/repo", undefined, "linux");
 
       expect(mockGitInstance.env.mock.calls[0][0]).toMatchObject(kept);
+      expectEnvFullyAllowed();
     } finally {
-      for (const key of Object.keys(kept)) delete process.env[key];
+      vi.unstubAllEnvs();
     }
   });
 
