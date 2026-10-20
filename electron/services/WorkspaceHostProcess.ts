@@ -24,6 +24,7 @@ import { getForgeProviderImplEntries } from "./forgeProviderRegistry.js";
 import type { ForgeProviderMatcher } from "../../shared/utils/forgeHostnames.js";
 import type { WorkspacePollingPolicy } from "../../shared/types/powerPolicy.js";
 import { getTerminationIntent, noteTerminationIntent } from "./processTerminationIntent.js";
+import { noteChildProcessFatalError } from "./childProcessExitReport.js";
 
 const logger = createLogger("main:WorkspaceHost");
 const logInfo = (msg: string, ctx?: Record<string, unknown>) =>
@@ -1198,6 +1199,7 @@ export class WorkspaceHostProcess extends EventEmitter {
 
       case "error":
         console.error(`[WorkspaceHost:${this.serviceName}] Host error:`, event.error);
+        if (event.fatal) noteChildProcessFatalError(this.serviceName, event.error);
         if (event.requestId) {
           this.broker.reject(event.requestId, new Error(event.error));
         }

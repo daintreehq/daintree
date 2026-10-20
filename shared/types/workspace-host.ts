@@ -828,7 +828,8 @@ export type WorkspaceHostEvent =
       settled: boolean;
       pending: WorkspaceHostDisposePending;
     }
-  | { type: "error"; error: string; requestId?: string }
+  // `fatal`: the host is about to exit because of this error.
+  | { type: "error"; error: string; requestId?: string; fatal?: boolean }
   // Project lifecycle responses
   | { type: "load-project-result"; requestId: string; success: boolean; error?: string }
   | { type: "sync-result"; requestId: string; success: boolean; error?: string }

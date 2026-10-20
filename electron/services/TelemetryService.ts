@@ -1,6 +1,6 @@
 // eager-import-allow: reads telemetry consent/config via store.get synchronously
 import { randomUUID } from "node:crypto";
-import { app } from "electron";
+import { app, type Details, type RenderProcessGoneDetails, type WebContents } from "electron";
 import { store } from "../store.js";
 import type { ActionBreadcrumb } from "../../shared/types/ipc/crashRecovery.js";
 import type { SanitizedTelemetryEvent } from "../../shared/types/ipc/telemetryPreview.js";
@@ -8,6 +8,16 @@ import { scrubSecrets } from "../../shared/utils/secretScrubber.js";
 import { sanitizePath } from "../utils/pathScrubber.js";
 import { emitTelemetryPreview, isTelemetryPreviewActive } from "./TelemetryPreviewBroadcaster.js";
 import { getWritesSuppressed } from "./diskPressureState.js";
+import { BreadcrumbRepeatLimiter } from "./breadcrumbRepeatLimiter.js";
+import {
+  REPORTED_EXIT_REASONS,
+  buildChildProcessExitEvent,
+  buildRendererExitEvent,
+  fatalErrorNotes,
+  serviceNameOf,
+  type ChildProcessExitDetails,
+  type ChildProcessExitEvent,
+} from "./childProcessExitReport.js";
 
 export { sanitizePath };
 
@@ -65,6 +75,9 @@ const EMAIL_REGEX = new RegExp(
   "gi"
 );
 // SSH remotes name the (possibly private) owner and repo.
+// Utility process names (`daintree-workspace-host:<project>-<hash>`, PTY shards,
+// plugin workers) embed a project or plugin name after the colon.
+const SERVICE_INSTANCE_REGEX = /\b(daintree-[a-z][a-z0-9-]{0,40}):[A-Za-z0-9_-]{1,120}/g;
 const SSH_REMOTE_REGEX =
   /\b(git@[A-Za-z0-9.-]{1,253}:)[A-Za-z0-9._-]{1,100}\/[A-Za-z0-9._-]{1,100}(?:\/[A-Za-z0-9._-]{1,100}){0,10}/g;
 // Also matches the escaped form a JSON-stringified log argument carries (`\/`,
@@ -77,6 +90,7 @@ const REDACTED_URL = "[REDACTED_URL]";
 
 function scrubText(value: string): string {
   return scrubSecrets(sanitizePath(value))
+    .replace(SERVICE_INSTANCE_REGEX, "$1:[instance]")
     .replace(SSH_REMOTE_REGEX, "$1REDACTED/REDACTED")
     .replace(EMAIL_REGEX, "[EMAIL]");
 }
@@ -350,7 +364,14 @@ export async function initializeTelemetry(): Promise<void> {
         // stack/register memory that may include env vars (API keys, tokens) at
         // crash time, and JS-level beforeSend cannot scrub binary data. JS
         // crashes remain captured via globalErrorHandlers.ts / main-crash.log.
-        integrations: (defaults) => defaults.filter((i) => i.name !== "SentryMinidump"),
+        //
+        // The ChildProcess integration's own exit events carry only the process
+        // type and reason, so unrelated causes share one Sentry issue. Keep its
+        // breadcrumbs and capture exits here instead (#13542).
+        integrations: (defaults) => [
+          ...defaults.filter((i) => i.name !== "SentryMinidump" && i.name !== "ChildProcess"),
+          sentry.childProcessIntegration({ events: [] }),
+        ],
         // Sentry normalizes events (default depth 3) *before* beforeSend fires,
         // replacing nested objects/arrays past the cap with the literal strings
         // "[Object]"/"[Array]". Raise to match MAX_DEEP_SANITIZE_DEPTH so the
@@ -363,6 +384,7 @@ export async function initializeTelemetry(): Promise<void> {
         // (drag bursts, agent-state polls, file-watcher fanouts) don't rotate
         // the crash-triggering breadcrumb out before flush. See #7575.
         maxBreadcrumbs: 250,
+        beforeBreadcrumb: (breadcrumb) => breadcrumbLimiter.filter(breadcrumb),
         // No tracing backend consumes these, and the default fetch / Electron
         // net integrations otherwise stamp `sentry-trace` + `baggage` (public
         // key, release, trace id) onto every outbound request to third-party
@@ -394,6 +416,7 @@ export async function initializeTelemetry(): Promise<void> {
       captureEventFn = sentry.captureEvent as unknown as (event: SentryEvent) => string;
       sentryModule = sentry;
       initialized = true;
+      installExitReporting();
     } catch (err) {
       console.warn("[Telemetry] Failed to initialize Sentry:", err);
     }
@@ -404,6 +427,81 @@ export async function initializeTelemetry(): Promise<void> {
   } finally {
     initPromise = null;
   }
+}
+
+const breadcrumbLimiter = new BreadcrumbRepeatLimiter();
+let removeExitListeners: (() => void) | null = null;
+const pendingExitReports = new Set<() => void>();
+
+function captureExitEvent(event: ChildProcessExitEvent): void {
+  if (!captureEventFn) return;
+  try {
+    captureEventFn(event as unknown as SentryEvent);
+  } catch {
+    // never let telemetry errors escape into product code paths
+  }
+}
+
+function installExitReporting(): void {
+  if (removeExitListeners) return;
+
+  const onChildGone = (_event: Electron.Event, details: Details) => {
+    // GpuCrashMonitorService reports GPU exits: only it knows whether one
+    // counts toward a fallback (reportGpuProcessExit).
+    if (details.type === "GPU") return;
+    if (!REPORTED_EXIT_REASONS.has(details.reason)) return;
+    // A host posts its fatal error just before it exits, and that message can
+    // land after `child-process-gone`; give it one turn to arrive.
+    const report = () => {
+      pendingExitReports.delete(report);
+      clearImmediate(handle);
+      const fatalError = fatalErrorNotes.consume(serviceNameOf(details));
+      captureExitEvent(buildChildProcessExitEvent(details, { fatalError }));
+    };
+    const handle = setImmediate(report);
+    pendingExitReports.add(report);
+  };
+
+  const onRendererGone = (
+    _event: Electron.Event,
+    webContents: WebContents,
+    details: RenderProcessGoneDetails
+  ) => {
+    if (!REPORTED_EXIT_REASONS.has(details.reason)) return;
+    let type = "unknown";
+    try {
+      type = webContents.getType();
+    } catch {
+      // destroyed webContents
+    }
+    captureExitEvent(buildRendererExitEvent(details.reason, details.exitCode, type));
+  };
+
+  app.on("child-process-gone", onChildGone);
+  app.on("render-process-gone", onRendererGone);
+  removeExitListeners = () => {
+    app.off("child-process-gone", onChildGone);
+    app.off("render-process-gone", onRendererGone);
+  };
+}
+
+function uninstallExitReporting(): void {
+  for (const report of [...pendingExitReports]) report();
+  removeExitListeners?.();
+  removeExitListeners = null;
+  fatalErrorNotes.clear();
+  breadcrumbLimiter.clear();
+}
+
+/**
+ * Report a GPU process exit GpuCrashMonitorService decided is worth a Sentry
+ * event, whatever its reason. No-op until telemetry is initialized.
+ */
+export function reportGpuProcessExit(
+  details: ChildProcessExitDetails,
+  extra: Record<string, unknown>
+): void {
+  captureExitEvent(buildChildProcessExitEvent(details, { extra }));
 }
 
 export type TelemetryLevel = "off" | "errors" | "full";
@@ -643,6 +741,7 @@ export async function closeTelemetry(): Promise<void> {
     }
 
     if (!initialized || !sentryModule) return;
+    uninstallExitReporting();
     const mod = sentryModule;
     try {
       const drained = await mod.close(SENTRY_CLOSE_TIMEOUT_MS);

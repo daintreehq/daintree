@@ -369,7 +369,7 @@ function attachWorktreePort(newPort: MessagePort): void {
 process.on("uncaughtException", (err) => {
   console.error("[WorkspaceHost] Uncaught Exception:", err);
   try {
-    sendEvent({ type: "error", error: err.message });
+    sendEvent({ type: "error", error: err.message, fatal: true });
   } catch {
     // ignore
   }
@@ -384,6 +384,7 @@ process.on("unhandledRejection", (reason) => {
     sendEvent({
       type: "error",
       error: formatErrorMessage(reason, "Unhandled rejection in workspace host"),
+      fatal: true,
     });
   } catch {
     // ignore

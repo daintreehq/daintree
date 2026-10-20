@@ -61,9 +61,22 @@ const storeMock = vi.hoisted(() => {
 
 vi.mock("../../store.js", () => ({ store: storeMock }));
 
-vi.mock("electron", () => ({
-  app: { getVersion: () => "1.0.0", isPackaged: false },
-}));
+const appMock = vi.hoisted(() => {
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  const { EventEmitter } = require("events") as typeof import("events");
+  return Object.assign(new EventEmitter(), { getVersion: () => "1.0.0", isPackaged: false });
+});
+const childProcessIntegrationMock = vi.hoisted(() =>
+  vi.fn((options: unknown) => ({ name: "ChildProcess", options }))
+);
+
+vi.mock("electron", () => ({ app: appMock }));
+
+// Fresh module instances install exit listeners on the shared emitter; drop
+// them so an earlier instance never answers a later test's events.
+beforeEach(() => {
+  appMock.removeAllListeners();
+});
 
 vi.mock("@sentry/electron/main", () => ({
   init: sentryInitMock,
@@ -73,6 +86,7 @@ vi.mock("@sentry/electron/main", () => ({
   addBreadcrumb: sentryAddBreadcrumbMock,
   makeElectronTransport: makeElectronTransportMock,
   makeElectronOfflineTransport: makeElectronOfflineTransportMock,
+  childProcessIntegration: childProcessIntegrationMock,
 }));
 
 import {
@@ -1139,9 +1153,13 @@ describe("initializeTelemetry", () => {
     const result = fn([
       { name: "SentryMinidump" },
       { name: "Other" },
+      { name: "ChildProcess" },
       { name: "ElectronMinidump" },
     ]);
-    expect(result.map((i) => i.name)).toEqual(["Other", "ElectronMinidump"]);
+    expect(result.map((i) => i.name)).toEqual(["Other", "ElectronMinidump", "ChildProcess"]);
+    // The SDK's own exit events lack the exit code and cause (#13542); only its
+    // breadcrumbs stay.
+    expect(childProcessIntegrationMock).toHaveBeenCalledWith({ events: [] });
     process.env.SENTRY_DSN = original;
   });
 });
@@ -1927,5 +1945,145 @@ describe("consent withdrawn mid-session (#12404)", () => {
 
     expect(sentryInitMock).toHaveBeenCalledTimes(1);
     expect(captureEventMock).not.toHaveBeenCalled();
+  });
+});
+
+describe("child process exit reporting", () => {
+  const hostName = "daintree-workspace-host:acme-billing-1a2b3c4d";
+  const nextTurn = () => new Promise<void>((resolve) => setImmediate(resolve));
+
+  async function initFresh() {
+    vi.resetModules();
+    const mod = await import("../TelemetryService.js");
+    const exitReport = await import("../childProcessExitReport.js");
+    await mod.initializeTelemetry();
+    const options = sentryInitMock.mock.calls[0]?.[0] as {
+      beforeSend: (event: unknown) => unknown;
+      beforeBreadcrumb: (breadcrumb: unknown) => unknown;
+    };
+    return { mod, exitReport, options };
+  }
+
+  function emitChildGone(details: Record<string, unknown>) {
+    appMock.emit("child-process-gone", {}, details);
+  }
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    sentryInitMock.mockReset();
+    appMock.removeAllListeners();
+    setPrivacy({ telemetryLevel: "errors", hasSeenPrompt: true });
+    process.env.SENTRY_DSN = "https://test@sentry.io/123";
+  });
+
+  it("captures a host exit with its code and the fatal error it reported first", async () => {
+    const { mod, exitReport, options } = await initFresh();
+    const details = {
+      type: "Utility",
+      reason: "abnormal-exit",
+      exitCode: 1,
+      name: hostName,
+      serviceName: hostName,
+    };
+    emitChildGone(details);
+    // The host's message can arrive just after `child-process-gone`.
+    exitReport.noteChildProcessFatalError(hostName, "block timeout reached");
+    expect(captureEventMock).not.toHaveBeenCalled();
+    await nextTurn();
+
+    expect(captureEventMock).toHaveBeenCalledTimes(1);
+    const event = (captureEventMock.mock.calls[0] as unknown[])[0] as SentryEvent;
+    expect(event.message).toBe(
+      "'workspace-host' process exited with 'abnormal-exit' (exit code 1): block timeout reached"
+    );
+    expect(event.fingerprint).toEqual([
+      "child-process-gone",
+      "workspace-host",
+      "abnormal-exit",
+      "1",
+      "block timeout reached",
+    ]);
+    expect(JSON.stringify(options.beforeSend(event))).not.toContain("acme");
+    await mod.closeTelemetry();
+  });
+
+  it("leaves GPU exits to GpuCrashMonitorService and skips unreported reasons", async () => {
+    const { mod } = await initFresh();
+    emitChildGone({ type: "GPU", reason: "abnormal-exit", exitCode: 8704 });
+    emitChildGone({ type: "Utility", reason: "killed", exitCode: 15, name: hostName });
+    emitChildGone({ type: "Utility", reason: "clean-exit", exitCode: 0, name: hostName });
+    await nextTurn();
+    expect(captureEventMock).not.toHaveBeenCalled();
+    await mod.closeTelemetry();
+  });
+
+  it("still reports renderer exits the SDK no longer captures", async () => {
+    const { mod } = await initFresh();
+    appMock.emit(
+      "render-process-gone",
+      {},
+      { getType: () => "window" },
+      {
+        reason: "abnormal-exit",
+        exitCode: 1,
+      }
+    );
+    expect(captureEventMock).toHaveBeenCalledTimes(1);
+    const event = (captureEventMock.mock.calls[0] as unknown[])[0] as SentryEvent;
+    expect(event.fingerprint).toEqual(["render-process-gone", "window", "abnormal-exit", "1"]);
+    await mod.closeTelemetry();
+  });
+
+  it("sends a pending exit before close and stops listening after", async () => {
+    const { mod } = await initFresh();
+    emitChildGone({ type: "Utility", reason: "abnormal-exit", exitCode: 1, name: hostName });
+    await mod.closeTelemetry();
+    expect(captureEventMock).toHaveBeenCalledTimes(1);
+    expect(appMock.listenerCount("child-process-gone")).toBe(0);
+    expect(appMock.listenerCount("render-process-gone")).toBe(0);
+  });
+
+  it("reports the GPU exits the crash monitor passes on", async () => {
+    const { mod } = await initFresh();
+    mod.reportGpuProcessExit(
+      { type: "GPU", reason: "abnormal-exit", exitCode: 8704 },
+      { crashCount: 2 }
+    );
+    // The monitor only passes on a crash when it selects a fallback.
+    mod.reportGpuProcessExit({ type: "GPU", reason: "crashed", exitCode: 11 }, { crashCount: 1 });
+    expect(captureEventMock).toHaveBeenCalledTimes(2);
+    const [contextLoss, crash] = captureEventMock.mock.calls.map(
+      (call) => (call as unknown[])[0] as SentryEvent
+    );
+    expect(contextLoss.extra).toMatchObject({ crashCount: 2, rawExitCode: 8704 });
+    expect(crash.level).toBe("fatal");
+    await mod.closeTelemetry();
+  });
+
+  it("limits a repeated console breadcrumb and strips service instance names", async () => {
+    const { mod, options } = await initFresh();
+    const crumb = (id: string) => ({
+      category: "console",
+      level: "error",
+      message: `[IPC] Error on channel terminal:get-info [undefined]: Error: Terminal terminal-${id} not found`,
+    });
+    const kept = Array.from({ length: 30 }, (_, i) =>
+      options.beforeBreadcrumb(crumb(`0000000${i % 6}-1111-4222-8333-444444444444`))
+    ).filter(Boolean);
+    expect(kept.length).toBeLessThan(30);
+
+    const sanitized = sanitizeEvent({
+      breadcrumbs: [
+        {
+          message: `[WorkspaceHost:${hostName}] Host error: boom`,
+          data: { name: hostName },
+        },
+      ],
+    });
+    expect(JSON.stringify(sanitized)).not.toContain("acme");
+    expect(sanitized?.breadcrumbs?.[0].message).toBe(
+      "[WorkspaceHost:daintree-workspace-host:[instance]] Host error: boom"
+    );
+    await mod.closeTelemetry();
   });
 });
