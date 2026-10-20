@@ -402,6 +402,74 @@ describe("ProjectSettingsManager caching", () => {
     expect((await manager.getProjectSettings(projectId)).devServerCommand).toBe("pnpm dev");
   });
 
+  it("a read holding damaged bytes cannot quarantine a save that lands behind it (#13553)", async () => {
+    const settingsPath = path.join(tempDir, projectId, "settings.json");
+    await fs.writeFile(settingsPath, "{broken", "utf-8");
+
+    const realReadFile = fs.readFile.bind(fs) as (p: string, enc: string) => Promise<string>;
+    let readStarted!: () => void;
+    const started = new Promise<void>((resolve) => (readStarted = resolve));
+    let releaseRead!: () => void;
+    const gate = new Promise<void>((resolve) => (releaseRead = resolve));
+    const readSpy = vi.spyOn(fs, "readFile").mockImplementationOnce((async (
+      file: string,
+      encoding: string
+    ) => {
+      const content = await realReadFile(file, encoding);
+      readStarted();
+      await gate;
+      return content;
+    }) as unknown as typeof fs.readFile);
+
+    const read = manager.getProjectSettings(projectId);
+    await started;
+    const save = manager.saveProjectSettings(projectId, {
+      runCommands: [],
+      devServerCommand: "npm run dev",
+    });
+    // An unserialized save would land here, before the read resumes; a
+    // serialized one is still waiting, so the race falls through to the timer.
+    await Promise.race([save, new Promise((resolve) => setTimeout(resolve, 50))]);
+    releaseRead();
+    await Promise.all([read, save]);
+    readSpy.mockRestore();
+
+    const fresh = new ProjectSettingsManager(tempDir, createMockStore());
+    expect((await fresh.getProjectSettings(projectId)).devServerCommand).toBe("npm run dev");
+    const quarantined = (await fs.readdir(path.join(tempDir, projectId))).filter((name) =>
+      name.startsWith("settings.json.corrupted.")
+    );
+    expect(quarantined).toHaveLength(1);
+    expect(await fs.readFile(path.join(tempDir, projectId, quarantined[0]), "utf-8")).toBe(
+      "{broken"
+    );
+  });
+
+  it("a warm cache does not answer for a save that is queued but not yet written", async () => {
+    await manager.saveProjectSettings(projectId, {
+      runCommands: [],
+      devServerCommand: "npm start",
+    });
+    expect((await manager.getProjectSettings(projectId)).devServerCommand).toBe("npm start");
+
+    const save = manager.saveProjectSettings(projectId, {
+      runCommands: [],
+      devServerCommand: "pnpm dev",
+    });
+    const read = manager.getProjectSettings(projectId);
+
+    expect((await read).devServerCommand).toBe("pnpm dev");
+    await save;
+  });
+
+  it("adds a host over a damaged settings file without waiting on itself", async () => {
+    await fs.writeFile(path.join(tempDir, projectId, "settings.json"), "{broken", "utf-8");
+
+    await expect(manager.addBrowserAllowedHost(projectId, "example.com")).resolves.toEqual([
+      "example.com",
+    ]);
+  });
+
   describe("addBrowserAllowedHost", () => {
     const readFromDisk = () =>
       new ProjectSettingsManager(tempDir, createMockStore()).getProjectSettings(projectId);

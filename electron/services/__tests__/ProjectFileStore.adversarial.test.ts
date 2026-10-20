@@ -858,3 +858,116 @@ describe("ProjectFileStore copy-tree history", () => {
     expect(utilsMock.resilientRename).not.toHaveBeenCalled();
   });
 });
+
+describe("ProjectFileStore recipe reads that quarantine (#13553)", () => {
+  let store: ProjectFileStore;
+
+  beforeEach(() => {
+    vi.resetAllMocks();
+    store = new ProjectFileStore(CONFIG_DIR);
+    fsMock.mkdir.mockResolvedValue(undefined);
+    fsSyncMock.existsSync.mockReturnValue(false);
+  });
+
+  /**
+   * Each rename waits on its own gate and then moves whatever currently sits
+   * at the source path, so a reader released late renames the live file.
+   */
+  function gateRenames(disk: Map<string, string>) {
+    const releases: Array<() => void> = [];
+    utilsMock.resilientRename.mockImplementation(async (from: string, to: string) => {
+      await new Promise<void>((resolve) => releases.push(resolve));
+      const content = disk.get(from);
+      if (content === undefined) {
+        throw Object.assign(new Error("ENOENT"), { code: "ENOENT" });
+      }
+      disk.delete(from);
+      disk.set(to, content);
+    });
+    return releases;
+  }
+
+  const flush = () => new Promise((resolve) => setTimeout(resolve, 0));
+
+  it("a paused quarantining read cannot move aside a recipe saved behind it", async () => {
+    const disk = installDiskModel();
+    const filePath = recipeFilePath(VALID_ID);
+    disk.set(filePath, "{ not json");
+    const releases = gateRenames(disk);
+
+    const first = store.getRecipes(VALID_ID);
+    await flush();
+    expect(releases).toHaveLength(1);
+
+    const add = store.addRecipe(VALID_ID, recipe("kept"));
+    const second = store.getRecipes(VALID_ID);
+    await flush();
+    // The add and the second read wait for the first read's turn instead of
+    // reading the damaged file and starting a quarantine of their own.
+    expect(releases).toHaveLength(1);
+
+    releases[0]();
+    await expect(first).resolves.toEqual([]);
+    await add;
+    expect((await second).map((r) => r.id)).toEqual(["kept"]);
+
+    expect(utilsMock.resilientRename).toHaveBeenCalledTimes(1);
+    const saved = JSON.parse(disk.get(filePath) as string) as { recipes: TerminalRecipe[] };
+    expect(saved.recipes.map((r) => r.id)).toEqual(["kept"]);
+  });
+
+  it("a paused quarantining read cannot move aside a blind save queued behind it", async () => {
+    const disk = installDiskModel();
+    const filePath = recipeFilePath(VALID_ID);
+    disk.set(filePath, "{ not json");
+    const releases = gateRenames(disk);
+
+    const first = store.getRecipes(VALID_ID);
+    await flush();
+    const save = store.saveRecipes(VALID_ID, [recipe("saved")]);
+    await flush();
+    expect(utilsMock.resilientAtomicWriteFile).not.toHaveBeenCalled();
+
+    releases[0]();
+    await first;
+    await save;
+
+    const quarantined = [...disk.entries()].filter(([p]) => p.startsWith(`${filePath}.corrupted.`));
+    expect(quarantined.map(([, content]) => content)).toEqual(["{ not json"]);
+    expect((await store.getRecipes(VALID_ID)).map((r) => r.id)).toEqual(["saved"]);
+  });
+
+  it("a paused read for one project does not hold up another project's read", async () => {
+    const disk = installDiskModel();
+    disk.set(recipeFilePath(VALID_ID), "{ not json");
+    disk.set(
+      recipeFilePath(OTHER_ID),
+      JSON.stringify({ _schemaVersion: RECIPES_SCHEMA_VERSION, recipes: [recipe("other")] })
+    );
+    const releases = gateRenames(disk);
+
+    const blocked = store.getRecipes(VALID_ID);
+    await flush();
+
+    expect((await store.getRecipes(OTHER_ID)).map((r) => r.id)).toEqual(["other"]);
+
+    releases[0]();
+    await expect(blocked).resolves.toEqual([]);
+  });
+
+  it("mutators over a damaged file quarantine it without waiting on themselves", async () => {
+    const disk = installDiskModel();
+    disk.set(recipeFilePath(VALID_ID), "{ not json");
+    utilsMock.resilientRename.mockImplementation(async (from: string, to: string) => {
+      disk.set(to, disk.get(from) as string);
+      disk.delete(from);
+    });
+
+    await store.addRecipe(VALID_ID, recipe("a"));
+    await store.updateRecipe(VALID_ID, "a", { name: "renamed" });
+    await store.addRecipe(VALID_ID, recipe("b"));
+    await store.deleteRecipe(VALID_ID, "b");
+
+    expect(await store.getRecipes(VALID_ID)).toEqual([{ ...recipe("a"), name: "renamed" }]);
+  });
+});

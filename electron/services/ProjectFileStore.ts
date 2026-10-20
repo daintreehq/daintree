@@ -35,7 +35,32 @@ export class ProjectFileStore {
 
   // --- Recipes ---
 
+  /**
+   * Read the project's recipes.
+   *
+   * Takes a turn in the write queue even though it mutates nothing itself:
+   * {@link readRecipesUnqueued} quarantines an unreadable file by renaming it,
+   * so a reader still holding bytes from before a queued save could otherwise
+   * rename the newly committed file aside, and two concurrent readers could
+   * both try to quarantine it. Mirrors {@link getCopyTreeHistory}.
+   */
   async getRecipes(projectId: string): Promise<TerminalRecipe[]> {
+    let recipes: TerminalRecipe[] = [];
+    await this.enqueueRecipesUpdate(projectId, async () => {
+      recipes = await this.readRecipesUnqueued(projectId);
+      return null;
+    });
+    return recipes;
+  }
+
+  /**
+   * Unqueued read, for code already running inside an
+   * {@link enqueueRecipesUpdate} turn for this project, where the queued
+   * {@link getRecipes} would wait behind the turn awaiting it. Callers outside
+   * this class get it as the updater's `read` argument. Calling it outside a
+   * turn reintroduces the quarantine race described on getRecipes.
+   */
+  private async readRecipesUnqueued(projectId: string): Promise<TerminalRecipe[]> {
     const filePath = recipesFilePath(this.projectsConfigDir, projectId);
     if (!filePath) {
       return [];
@@ -148,8 +173,9 @@ export class ProjectFileStore {
    * Serialize recipe read-modify-write updates per project. Each queued
    * updater runs after the previous one has committed, so its own reads see
    * the prior update's on-disk result rather than a stale pre-write snapshot.
-   * The updater does its own reads (via {@link getRecipes}) and returns the
-   * recipe list to persist, or `null` to skip the write (idempotent no-op).
+   * The updater does its own reads through the `read` argument (the unqueued
+   * read, bound to this project) and returns the recipe list to persist, or
+   * `null` to skip the write (idempotent no-op).
    *
    * The three load-bearing details mirror
    * ProjectStateManager.enqueueProjectStateUpdate: `.catch(() => {})` keeps one
@@ -161,18 +187,21 @@ export class ProjectFileStore {
    *
    * Updaters MUST NOT call another queued method for the same projectId
    * (saveRecipes / add / update / delete), or the inner call would chain behind
-   * the outer turn that is awaiting it and self-deadlock. They may freely call
-   * the unqueued {@link getRecipes} and any store other than this recipe queue.
+   * the outer turn that is awaiting it and self-deadlock. That includes the
+   * queued {@link getRecipes}: read through `read` instead.
+   * Any store other than this recipe queue is fine.
    */
   enqueueRecipesUpdate(
     projectId: string,
-    updater: () => TerminalRecipe[] | null | Promise<TerminalRecipe[] | null>
+    updater: (
+      read: () => Promise<TerminalRecipe[]>
+    ) => TerminalRecipe[] | null | Promise<TerminalRecipe[] | null>
   ): Promise<void> {
     const current = this.recipesWriteQueues.get(projectId) ?? Promise.resolve();
     const next = current
       .catch(() => {})
       .then(async () => {
-        const updated = await updater();
+        const updated = await updater(() => this.readRecipesUnqueued(projectId));
         if (updated !== null) {
           await this.saveRecipesInner(projectId, updated);
         }
@@ -235,7 +264,7 @@ export class ProjectFileStore {
 
   async addRecipe(projectId: string, recipe: TerminalRecipe): Promise<void> {
     await this.enqueueRecipesUpdate(projectId, async () => {
-      const recipes = await this.getRecipes(projectId);
+      const recipes = await this.readRecipesUnqueued(projectId);
       recipes.push(recipe);
       return recipes;
     });
@@ -247,7 +276,7 @@ export class ProjectFileStore {
     updates: Partial<Omit<TerminalRecipe, "id" | "projectId" | "createdAt">>
   ): Promise<void> {
     await this.enqueueRecipesUpdate(projectId, async () => {
-      const recipes = await this.getRecipes(projectId);
+      const recipes = await this.readRecipesUnqueued(projectId);
       const index = recipes.findIndex((r) => r.id === recipeId);
       if (index === -1) {
         throw new Error(`Recipe ${recipeId} not found in project ${projectId}`);
@@ -267,7 +296,7 @@ export class ProjectFileStore {
 
   async deleteRecipe(projectId: string, recipeId: string): Promise<void> {
     await this.enqueueRecipesUpdate(projectId, async () => {
-      const recipes = await this.getRecipes(projectId);
+      const recipes = await this.readRecipesUnqueued(projectId);
       return recipes.filter((r) => r.id !== recipeId);
     });
   }
@@ -367,7 +396,7 @@ export class ProjectFileStore {
    * have the later write silently drop the earlier one's dedupe bump.
    *
    * Same three load-bearing details as {@link enqueueRecipesUpdate}, and the
-   * same rule for updaters: read through the unqueued {@link getCopyTreeHistory}
+   * same rule for updaters: read through the unqueued {@link readCopyTreeHistory}
    * and never re-enter this queue for the same project.
    */
   enqueueCopyTreeHistoryUpdate(
