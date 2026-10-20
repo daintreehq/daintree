@@ -112,7 +112,9 @@ export function assertPlacementAllowed(
     if (!member) continue;
     const memberLocation = placementOf(member);
     if (memberLocation !== "grid" && memberLocation !== "dock") {
-      throw new UnactionableTargetError(describeRefusal(actionId, panelId, memberId, memberLocation));
+      throw new UnactionableTargetError(
+        describeRefusal(actionId, panelId, memberId, memberLocation)
+      );
     }
     if (destination === "dock" && !panelKindIsDockable(member.kind ?? "terminal")) {
       throw new UnactionableTargetError(

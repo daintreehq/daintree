@@ -278,9 +278,9 @@ describe("placement results and refusals (#13663)", () => {
       groups: [{ location: "grid", panelIds: ["p1", "p2"] }],
     });
 
-    await expect(
-      setupActions()("terminal.background", { terminalId: "p1" })
-    ).resolves.toEqual({ location: "background" });
+    await expect(setupActions()("terminal.background", { terminalId: "p1" })).resolves.toEqual({
+      location: "background",
+    });
     expect(spies.backgroundPanelGroup).toHaveBeenCalledWith("p1");
     expect(spies.backgroundTerminal).not.toHaveBeenCalled();
   });
@@ -298,24 +298,21 @@ describe("placement results and refusals (#13663)", () => {
     ["terminal.background", "grid", "background", "backgroundTerminal"],
     ["terminal.moveToDock", "grid", "dock", "moveTerminalToDock"],
     ["terminal.moveToGrid", "dock", "grid", "moveTerminalToGrid"],
-  ] as const)(
-    "%s acts on the focused panel when none is named",
-    async (id, from, to, mover) => {
-      const spies = setStore({
-        panels: [
-          { id: "p1", location: from },
-          { id: "other", location: from },
-        ],
-        focusedId: "p1",
-      });
+  ] as const)("%s acts on the focused panel when none is named", async (id, from, to, mover) => {
+    const spies = setStore({
+      panels: [
+        { id: "p1", location: from },
+        { id: "other", location: from },
+      ],
+      focusedId: "p1",
+    });
 
-      await expect(setupActions()(id, {})).resolves.toEqual({ location: to });
-      expect(spies[mover]).toHaveBeenCalledWith("p1");
-      expect(spies[mover]).toHaveBeenCalledTimes(1);
-      expect(spies.location("p1")).toBe(to);
-      expect(spies.location("other")).toBe(from);
-    }
-  );
+    await expect(setupActions()(id, {})).resolves.toEqual({ location: to });
+    expect(spies[mover]).toHaveBeenCalledWith("p1");
+    expect(spies[mover]).toHaveBeenCalledTimes(1);
+    expect(spies.location("p1")).toBe(to);
+    expect(spies.location("other")).toBe(from);
+  });
 
   it.each(ACTIONS)("%s refuses a focused panel in the trash", async (id) => {
     setStore({ panels: [{ id: "p1", location: "trash" }], focusedId: "p1" });
