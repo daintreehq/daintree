@@ -81,8 +81,10 @@ const killFlagDeps = {
 // A syscall (or a /proc read) and no spawn, so it is safe to take under thrash.
 // Skipped on macOS, where the free count leaves out cached pages.
 function readAvailableMemoryRatio(): number | null {
+  // On Linux `os.freemem()` reads the host's MemAvailable.
   return availableMemoryRatio(
     process.availableMemory(),
+    os.freemem(),
     os.totalmem(),
     process.constrainedMemory()
   );

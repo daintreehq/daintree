@@ -269,17 +269,24 @@ export function createWatchdog(deps: WatchdogDeps): Watchdog {
   return { state, tick, handleMessage, disarm };
 }
 
-/** The share of memory available, for {@link WatchdogDeps.readAvailableMemoryRatio}.
- * A positive constraint (a cgroup or job limit) caps the total, but never
- * beyond physical memory: libuv may report "unlimited" as a huge figure. */
+/** The share of memory available, for {@link WatchdogDeps.readAvailableMemoryRatio}:
+ * the lower of the process's share and the host's. A positive constraint (a
+ * cgroup or job limit) caps the process's total, but never beyond physical
+ * memory, since libuv may report "unlimited" as a huge figure. Under a cgroup
+ * the process figure is the limit minus usage and ignores the host, so a
+ * thrashing host behind a roomy limit only shows in the host figure. */
 export function availableMemoryRatio(
   availableBytes: number,
+  hostAvailableBytes: number,
   totalBytes: number,
   constrainedBytes: number
 ): number | null {
-  const total = constrainedBytes > 0 ? Math.min(totalBytes, constrainedBytes) : totalBytes;
-  if (!(total > 0) || !Number.isFinite(availableBytes)) return null;
-  return availableBytes / total;
+  if (!(totalBytes > 0)) return null;
+  const processTotal = constrainedBytes > 0 ? Math.min(totalBytes, constrainedBytes) : totalBytes;
+  const ratios = [availableBytes / processTotal, hostAvailableBytes / totalBytes].filter(
+    Number.isFinite
+  );
+  return ratios.length > 0 ? Math.min(...ratios) : null;
 }
 
 /** Name of the sidecar flag file the watchdog writes synchronously before

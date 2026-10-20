@@ -436,14 +436,19 @@ describe("createWatchdog", () => {
     });
 
     it("still credits a stall seen just before main went quiet", () => {
-      const { wd, killMain, tickAfter, ticks } = makeWatchdog();
+      const { wd, killMain, logs, tickAfter, ticks, advance } = makeWatchdog();
       wd.handleMessage({ type: "ping" });
-      tickAfter(LATE_TICK_GAP_MS);
+      // Main keeps pinging on time; only the watchdog's own tick is late.
+      advance(HEARTBEAT_INTERVAL_MS);
       wd.handleMessage({ type: "ping" });
+      tickAfter(LATE_TICK_GAP_MS - HEARTBEAT_INTERVAL_MS);
+      wd.handleMessage({ type: "ping" });
+      expect(wd.state.lastLatePingAt).toBeNull();
 
       ticks(MAX_MISSED);
       expect(killMain).not.toHaveBeenCalled();
       expect(wd.state.killDeferred).toBe(true);
+      expect(deferralLogs(logs)[0]).toContain("the watchdog itself stalled");
     });
 
     it("lets stall evidence expire, but never pulls in a deadline it already granted", () => {
@@ -509,7 +514,25 @@ describe("createWatchdog", () => {
       ticks(MAX_MISSED);
       expect(killMain).not.toHaveBeenCalled();
       expect(deferralLogs(logs)[0]).toContain("pings were already arriving late");
-      ticks(MAX_MISSED_UNDER_PRESSURE - MAX_MISSED);
+      ticks(MAX_MISSED_UNDER_PRESSURE - MAX_MISSED - 1);
+      expect(killMain).not.toHaveBeenCalled();
+      ticks(1);
+      expect(killMain).toHaveBeenCalledTimes(1);
+    });
+
+    it("gives a silence straight after a deferred stall's recovery the longer deadline too", () => {
+      const { wd, killMain, ticks } = makeWatchdog();
+      wd.handleMessage({ type: "ping", memoryPressure: true });
+      ticks(MAX_MISSED + 2);
+      wd.handleMessage({ type: "ping", memoryPressure: false });
+      expect(wd.state.missedBeats).toBe(0);
+      expect(wd.state.killDeferred).toBe(false);
+
+      ticks(MAX_MISSED);
+      expect(wd.state.killDeferred).toBe(true);
+      ticks(MAX_MISSED_UNDER_PRESSURE - MAX_MISSED - 1);
+      expect(killMain).not.toHaveBeenCalled();
+      ticks(1);
       expect(killMain).toHaveBeenCalledTimes(1);
     });
 
@@ -527,18 +550,27 @@ describe("createWatchdog", () => {
 
     it("reads neither a disarmed nor a suspended gap between pings as main slowing", () => {
       const relaunched = makeWatchdog();
-      relaunched.wd.handleMessage({ type: "ping" });
-      relaunched.ticks(MAX_MISSED);
+      relaunched.wd.handleMessage({ type: "ping", memoryPressure: true });
+      relaunched.ticks(2);
+      relaunched.wd.handleMessage({ type: "ping", memoryPressure: true });
+      expect(relaunched.wd.state.lastLatePingAt).not.toBeNull();
+      relaunched.ticks(MAX_MISSED_UNDER_PRESSURE);
       expect(relaunched.killMain).toHaveBeenCalledTimes(1);
+      // The kill drops the evidence along with the baseline.
+      expect(relaunched.wd.state.lastLatePingAt).toBeNull();
       relaunched.advance(LATE_TICK_GAP_MS);
       relaunched.wd.handleMessage({ type: "ping" });
       expect(relaunched.wd.state.lastLatePingAt).toBeNull();
 
       const suspended = makeWatchdog();
       suspended.wd.handleMessage({ type: "ping" });
+      suspended.ticks(2);
+      suspended.wd.handleMessage({ type: "ping" });
+      expect(suspended.wd.state.lastLatePingAt).not.toBeNull();
       suspended.wd.handleMessage({ type: "sleep" });
       suspended.advance(LATE_TICK_GAP_MS * 10);
       suspended.wd.handleMessage({ type: "wake" });
+      expect(suspended.wd.state.lastLatePingAt).toBeNull();
       suspended.ticks(1);
       suspended.wd.handleMessage({ type: "ping" });
       expect(suspended.wd.state.lastLatePingAt).toBeNull();
@@ -551,30 +583,47 @@ describe("createWatchdog", () => {
       paused.wd.handleMessage({ type: "sleep" });
       paused.wd.handleMessage({ type: "ping" });
       paused.advance(LATE_TICK_GAP_MS * 10);
-      paused.wd.handleMessage({ type: "wake" });
       paused.wd.handleMessage({ type: "ping" });
       expect(paused.wd.state.lastLatePingAt).toBeNull();
 
-      const disposed = makeWatchdog();
-      disposed.wd.handleMessage({ type: "ping" });
-      disposed.wd.disarm();
-      disposed.advance(LATE_TICK_GAP_MS * 10);
-      disposed.wd.handleMessage({ type: "ping" });
-      expect(disposed.wd.state.lastLatePingAt).toBeNull();
+      for (const teardown of ["disarm", "dispose"] as const) {
+        const disposed = makeWatchdog();
+        disposed.wd.handleMessage({ type: "ping" });
+        if (teardown === "disarm") disposed.wd.disarm();
+        else disposed.wd.handleMessage({ type: "dispose" });
+        disposed.advance(LATE_TICK_GAP_MS * 10);
+        disposed.wd.handleMessage({ type: "ping" });
+        expect(disposed.wd.state.lastLatePingAt).toBeNull();
+      }
     });
 
-    it("lets a late ping's evidence expire while main keeps answering on time", () => {
-      const { wd, killMain, ticks, advance } = makeWatchdog();
-      wd.handleMessage({ type: "ping" });
-      advance(LATE_TICK_GAP_MS);
-      wd.handleMessage({ type: "ping" });
-      expect(wd.state.lastLatePingAt).not.toBeNull();
-      for (let i = 0; i < STALL_EVIDENCE_MS / HEARTBEAT_INTERVAL_MS; i++) {
-        ticks(1);
+    it("credits a late ping for exactly STALL_EVIDENCE_MS, while main keeps answering on time", () => {
+      const silenceAt = (extraMs: number) => {
+        const { wd, killMain, ticks, advance } = makeWatchdog();
         wd.handleMessage({ type: "ping" });
-      }
-      ticks(MAX_MISSED);
-      expect(killMain).toHaveBeenCalledTimes(1);
+        ticks(LATE_TICK_GAP_MS / HEARTBEAT_INTERVAL_MS);
+        wd.handleMessage({ type: "ping" });
+        expect(wd.state.lastLatePingAt).not.toBeNull();
+        // On-time answers until the silence's MAX_MISSED decision lands
+        // STALL_EVIDENCE_MS (+ extraMs) after the late ping.
+        const onTime =
+          (STALL_EVIDENCE_MS - MAX_MISSED * HEARTBEAT_INTERVAL_MS) / HEARTBEAT_INTERVAL_MS;
+        for (let i = 0; i < onTime; i++) {
+          ticks(1);
+          wd.handleMessage({ type: "ping" });
+        }
+        advance(extraMs);
+        ticks(MAX_MISSED);
+        expect(wd.state.lastLateTickAt).toBeNull();
+        return { wd, killMain };
+      };
+
+      const atLimit = silenceAt(0);
+      expect(atLimit.killMain).not.toHaveBeenCalled();
+      expect(atLimit.wd.state.killDeferred).toBe(true);
+
+      const past = silenceAt(1);
+      expect(past.killMain).toHaveBeenCalledTimes(1);
     });
 
     describe("the watchdog's own available-memory read", () => {
@@ -628,10 +677,26 @@ describe("createWatchdog", () => {
           },
         ];
         for (const read of reads) {
-          const { wd, killMain, ticks } = makeReadingWatchdog(read);
+          const { wd, killMain, ticks, readAvailableMemoryRatio } = makeReadingWatchdog(read);
           wd.handleMessage({ type: "ping", memoryPressure: false });
-          ticks(MAX_MISSED);
+          ticks(MAX_MISSED - 1);
+          expect(killMain).not.toHaveBeenCalled();
+          ticks(1);
           expect(killMain).toHaveBeenCalledTimes(1);
+          expect(readAvailableMemoryRatio).toHaveBeenCalledTimes(1);
+        }
+      });
+
+      it("skips the read when other evidence already defers the kill", () => {
+        for (const memoryPressure of [true, null]) {
+          const { wd, killMain, ticks, readAvailableMemoryRatio } = makeReadingWatchdog(
+            () => LOW_AVAILABLE_MEMORY_RATIO / 2
+          );
+          wd.handleMessage({ type: "ping", memoryPressure });
+          ticks(MAX_MISSED);
+          expect(wd.state.killDeferred).toBe(true);
+          expect(killMain).not.toHaveBeenCalled();
+          expect(readAvailableMemoryRatio).not.toHaveBeenCalled();
         }
       });
     });
@@ -658,18 +723,22 @@ describe("availableMemoryRatio", () => {
   const GB = 1024 ** 3;
 
   it("divides by physical memory when there is no constraint", () => {
-    expect(availableMemoryRatio(4 * GB, 16 * GB, 0)).toBe(0.25);
+    expect(availableMemoryRatio(4 * GB, 4 * GB, 16 * GB, 0)).toBe(0.25);
   });
 
   it("caps the total at a positive constraint, but never above physical memory", () => {
-    expect(availableMemoryRatio(1 * GB, 16 * GB, 2 * GB)).toBe(0.5);
+    expect(availableMemoryRatio(1 * GB, 8 * GB, 16 * GB, 2 * GB)).toBe(0.5);
     // libuv may report an unlimited constraint as a huge figure.
-    expect(availableMemoryRatio(4 * GB, 16 * GB, Number.MAX_SAFE_INTEGER)).toBe(0.25);
+    expect(availableMemoryRatio(4 * GB, 4 * GB, 16 * GB, Number.MAX_SAFE_INTEGER)).toBe(0.25);
+  });
+
+  it("reports the host's share when a roomy limit hides a starved host", () => {
+    expect(availableMemoryRatio(7 * GB, 0.25 * GB, 16 * GB, 8 * GB)).toBe(1 / 64);
   });
 
   it("returns null when there is nothing sound to divide", () => {
-    expect(availableMemoryRatio(1 * GB, 0, 0)).toBeNull();
-    expect(availableMemoryRatio(Number.NaN, 16 * GB, 0)).toBeNull();
+    expect(availableMemoryRatio(1 * GB, 1 * GB, 0, 0)).toBeNull();
+    expect(availableMemoryRatio(Number.NaN, Number.NaN, 16 * GB, 0)).toBeNull();
   });
 });
 
