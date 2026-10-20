@@ -37,12 +37,16 @@ vi.mock("fs/promises", () => ({
   realpath: vi.fn(),
 }));
 
-/** An `lstat` result for a path of the given kind. */
-function statOf(kind: "file" | "dir" | "symlink") {
+/**
+ * An `lstat` result for a path of the given kind. Born long before any burst by
+ * default — the shape of a file being edited in place.
+ */
+function statOf(kind: "file" | "dir" | "symlink", birthtimeMs = 1) {
   return {
     isFile: () => kind === "file",
     isDirectory: () => kind === "dir",
     isSymbolicLink: () => kind === "symlink",
+    birthtimeMs,
   };
 }
 
@@ -1419,6 +1423,13 @@ describe("GitFileWatcher", () => {
     it.each([
       ["a directory", () => Promise.resolve(statOf("dir"))],
       [
+        "a symlink, whose retarget moves listings beneath it",
+        () => Promise.resolve(statOf("symlink")),
+      ],
+      // A directory moved out and a file written in its place: the final type
+      // passes, the birth time gives the fold away.
+      ["a file born inside the burst", () => Promise.resolve(statOf("file", Date.now()))],
+      [
         "a vanished path",
         () => Promise.reject(Object.assign(new Error("gone"), { code: "ENOENT" })),
       ],
@@ -1445,15 +1456,35 @@ describe("GitFileWatcher", () => {
       }
     );
 
-    it("accepts a symlink as content-only, since git lists it as one entry", async () => {
-      const { gitWatcher, cb, onPathMembershipChanged } = await liveWatcher();
-      vi.mocked(lstat).mockResolvedValue(statOf("symlink") as never);
+    it("trusts type alone on a filesystem that reports no birth time", async () => {
+      const { gitWatcher, cb, onWorktreeFilesChanged, onPathMembershipChanged } =
+        await liveWatcher();
+      vi.mocked(lstat).mockResolvedValue(statOf("file", 0) as never);
 
-      fireEvents(cb, [{ type: "update", path: file("link") }]);
+      fireEvents(cb, [{ type: "update", path: file("a.ts") }]);
       await vi.advanceTimersByTimeAsync(500);
       await flushClassification();
 
+      expect(onWorktreeFilesChanged.mock.calls[0][1]).toBe(false);
+      expect(lstat).toHaveBeenCalledWith(file("a.ts"));
       expect(onPathMembershipChanged).not.toHaveBeenCalled();
+      gitWatcher.dispose();
+    });
+
+    it("gives up on a verification that never answers and reports a change", async () => {
+      // A path on a dead mount: the stat never settles, and the burst must not
+      // stay content-only forever because of it.
+      const { gitWatcher, cb, onPathMembershipChanged } = await liveWatcher();
+      vi.mocked(lstat).mockImplementation((() => new Promise(() => {})) as never);
+
+      fireEvents(cb, [{ type: "update", path: file("a.ts") }]);
+      await vi.advanceTimersByTimeAsync(500);
+      expect(lstat).toHaveBeenCalledTimes(1);
+      expect(onPathMembershipChanged).not.toHaveBeenCalled();
+
+      await vi.advanceTimersByTimeAsync(2_000);
+
+      expect(onPathMembershipChanged).toHaveBeenCalledTimes(1);
       gitWatcher.dispose();
     });
 
@@ -1469,11 +1500,30 @@ describe("GitFileWatcher", () => {
 
       fireEvents(cb, [{ type: "update", path: file("a.ts") }]);
       await vi.advanceTimersByTimeAsync(500);
+      expect(rejectStat).toBeDefined();
       gitWatcher.dispose();
-      rejectStat?.(new Error("gone"));
+      rejectStat!(new Error("gone"));
       await flushClassification();
 
       expect(onPathMembershipChanged).not.toHaveBeenCalled();
+    });
+
+    it("reports a membership change when git-only coverage is established", async () => {
+      // A rotation disposes the previous watcher with its git-internal debounce
+      // still pending; a checkout inside that gap would otherwise go unreported.
+      const onPathMembershipChanged = vi.fn();
+      const gitWatcher = new GitFileWatcher({
+        worktreePath: "/repo",
+        branch: "main",
+        debounceMs: 300,
+        onChange: vi.fn(),
+        onPathMembershipChanged,
+      });
+
+      await expect(gitWatcher.start()).resolves.toBe(true);
+
+      expect(onPathMembershipChanged).toHaveBeenCalledTimes(1);
+      gitWatcher.dispose();
     });
 
     it("reports a membership change when the recursive subscription goes live", async () => {

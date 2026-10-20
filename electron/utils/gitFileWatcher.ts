@@ -102,6 +102,19 @@ const WORKTREE_BURST_PATH_CAP = 2048;
 const CONTENT_ONLY_VERIFY_CAP = 64;
 
 /**
+ * Deadline for that check. A path on a wedged mount must not hold back the
+ * membership answer indefinitely; on expiry the burst counts as a change.
+ */
+const CONTENT_ONLY_VERIFY_TIMEOUT_MS = 2_000;
+
+/**
+ * How far before a burst's first event a file may have been born and still be
+ * suspect. Covers the debounce lead-in and filesystem timestamp granularity; a
+ * file born inside this window is too new to count as an in-place edit.
+ */
+const CONTENT_ONLY_BIRTH_SLACK_MS = 1_000;
+
+/**
  * Deadline for the per-flush classification. `GIT_BLOCK_TIMEOUT_MS` (30s) stays
  * the hard ceiling inside the helper, but this path is latency-sensitive: a
  * wedged git must not hold an isolated save's status refresh open for half a
@@ -270,6 +283,8 @@ export class GitFileWatcher {
    * still checks that every path is a regular file.
    */
   private pendingMembershipChange = false;
+  /** Wall-clock time of the current burst's first event. */
+  private worktreeBurstStartedAt = 0;
   /** Canonical form of `worktreePath`, when it differs (macOS /var -> /private/var). */
   private worktreeRealPath: string | null = null;
   /** Aborts the in-flight classification when it is superseded or disposed. */
@@ -458,6 +473,12 @@ export class GitFileWatcher {
         // callbacks when the Promise rejects. WatcherController.handleWatcherFailed()
         // is already designed for async callback delivery.
         this.startWorktreeWatcher(watchRoot, exclusions);
+      } else if (!this.disposed) {
+        // Git-only coverage is live. Whatever moved the index or HEAD while no
+        // watcher held it — a checkout racing the rotation that replaced the
+        // previous watcher, whose pending debounce died with it — is
+        // unaccounted for. The recursive mode says the same at readiness.
+        this.onPathMembershipChanged?.();
       }
 
       return true;
@@ -965,6 +986,7 @@ export class GitFileWatcher {
     this.collectWorktreePaths(events);
 
     const burstStart = this.worktreeBurstCount === 0;
+    if (burstStart) this.worktreeBurstStartedAt = Date.now();
     this.worktreeBurstCount += eventCount;
     let delay = Math.min(
       this.worktreeMaxDebounceMs,
@@ -1060,23 +1082,52 @@ export class GitFileWatcher {
    * Prove an update-only burst left the path set alone, or report that it may
    * not have. `update` alone is not that proof: Parcel's event list folds a
    * delete followed by a re-create of the same path into `update`, so a file
-   * swapped for a directory moved in from elsewhere — whose children raise no
-   * events of their own — reads as an edit. Every path still being a regular
-   * file (or a symlink, which git lists as one entry) rules that out; a
-   * directory, a vanished path or any stat failure reports a change.
+   * swapped for a directory — or a directory moved out and a file written in
+   * its place, whose children raise no events of their own — reads as an edit.
+   *
+   * Each path must still be a regular file born before the burst began. The
+   * type check catches a directory or a vanished path; the birth check catches
+   * the fold landing on a file, since a node created inside the burst is not
+   * the node that was indexed. An in-place write keeps its birth time, which is
+   * the whole case this optimisation serves — an atomic save already arrives as
+   * `create` on every backend. A symlink is never content-only: retargeting
+   * one moves every listing rooted beneath it. A filesystem reporting no birth
+   * time (0) cannot be held to that check and is trusted on type alone.
    *
    * Arrives a few milliseconds after the content-only report, never instead of
    * one, so the conservative answer at worst follows a stamp the file browser
    * already acted on. Not fenced against later bursts: a late "may have
    * changed" is always safe to deliver.
    */
-  private async verifyContentOnlyBurst(paths: readonly string[]): Promise<void> {
+  private async verifyContentOnlyBurst(
+    paths: readonly string[],
+    burstStartedAt: number
+  ): Promise<void> {
+    const bornBefore = burstStartedAt - CONTENT_ONLY_BIRTH_SLACK_MS;
+    let deadline: ReturnType<typeof setTimeout> | undefined;
     let contentOnly: boolean;
     try {
-      const stats = await Promise.all(paths.map((path) => lstat(path)));
-      contentOnly = stats.every((stat) => stat.isFile() || stat.isSymbolicLink());
+      // Rejects on the first suspect path rather than waiting out the rest.
+      const checks = Promise.all(
+        paths.map(async (path) => {
+          const stat = await lstat(path);
+          if (!stat.isFile() || (stat.birthtimeMs > 0 && stat.birthtimeMs >= bornBefore)) {
+            throw new Error("not an in-place edit");
+          }
+        })
+      );
+      const expired = new Promise<never>((_resolve, reject) => {
+        deadline = setTimeout(
+          () => reject(new Error("verification timed out")),
+          CONTENT_ONLY_VERIFY_TIMEOUT_MS
+        );
+      });
+      await Promise.race([checks, expired]);
+      contentOnly = true;
     } catch {
       contentOnly = false;
+    } finally {
+      if (deadline !== undefined) clearTimeout(deadline);
     }
     if (contentOnly || this.disposed) return;
     try {
@@ -1183,7 +1234,7 @@ export class GitFileWatcher {
     if (this.disposed) return;
 
     if (!membershipChanged && burst !== null && burst.size > 0) {
-      void this.verifyContentOnlyBurst([...burst]);
+      void this.verifyContentOnlyBurst([...burst], this.worktreeBurstStartedAt);
     }
 
     const paths = burst === null || superseded ? null : [...burst];
