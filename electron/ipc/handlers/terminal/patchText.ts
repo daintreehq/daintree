@@ -97,6 +97,8 @@ function unquoteCStylePath(quoted: string): string | null {
     if (next === undefined) return null;
     const octal = /^[0-3][0-7]{2}/.exec(body.slice(i + 1, i + 4));
     if (octal) {
+      // git cuts a name at NUL, so no real path carries one.
+      if (octal[0] === "000") return null;
       bytes.push(parseInt(octal[0], 8));
       i += 3;
       continue;

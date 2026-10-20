@@ -189,9 +189,32 @@ describe("parsePatchModifiedFiles", () => {
     expect(parsePatchModifiedFiles("+++ b/orphan.md\n@@ -1 +1 @@\n-a\n+b\n")).toEqual([]);
   });
 
-  it("skips a quoted path whose bytes are not UTF-8", () => {
+  it("skips a quoted path whose bytes are not UTF-8 or hold a NUL", () => {
     const patch = '--- "a/\\377.md"\n+++ "b/\\377.md"\n@@ -1 +1 @@\n-a\n+b\n';
     expect(parsePatchModifiedFiles(patch)).toEqual([]);
+    const nul = '--- /dev/null\n+++ "b/x\\000y"\n@@ -0,0 +1 @@\n+hi\n';
+    expect(parsePatchModifiedFiles(nul)).toEqual([]);
+  });
+
+  it("keeps an escaped trailing tab and reads headers after a multi-hunk file", () => {
+    const patch = [
+      '--- "a/end\\t"',
+      '+++ "b/end\\t"',
+      "@@ -1,2 +1,2 @@",
+      "-a",
+      "+--- a/fake",
+      " b",
+      "@@ -10 +10 @@",
+      "-c",
+      "+++ b/fake",
+      "--- a/last.md",
+      "+++ b/last.md",
+      "@@ -1 +1 @@",
+      "-x",
+      "+y",
+      "",
+    ].join("\n");
+    expect(parsePatchModifiedFiles(patch)).toEqual(["end\t", "last.md"]);
   });
 
   it("skips a quoted header it cannot decode rather than inventing a path", () => {
