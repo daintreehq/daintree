@@ -719,6 +719,8 @@ describe("rendererBridge — unpinned routing follows focus order (#11536)", () 
 
   interface FakeContextOptions {
     windowDestroyed?: boolean;
+    /** Whether Electron reports this window focused right now, as opposed to its place in focus history. */
+    windowFocused?: boolean;
     /** Omitted entirely for a window with no active project view. */
     activeWebContents?: FakeWebContents | null;
     workspaceRef?: {
@@ -735,7 +737,12 @@ describe("rendererBridge — unpinned routing follows focus order (#11536)", () 
   }
 
   function makeContext(options: FakeContextOptions) {
-    const { windowDestroyed = false, activeWebContents = null, workspaceRef = null } = options;
+    const {
+      windowDestroyed = false,
+      windowFocused = false,
+      activeWebContents = null,
+      workspaceRef = null,
+    } = options;
     const getActiveView = () => (activeWebContents ? { webContents: activeWebContents } : null);
     // Spied so a test can assert the lookup happened per-sender at response
     // time, rather than eagerly at send time.
@@ -760,7 +767,7 @@ describe("rendererBridge — unpinned routing follows focus order (#11536)", () 
         }
       : { projectViewManager };
     return {
-      browserWindow: { isDestroyed: () => windowDestroyed },
+      browserWindow: { isDestroyed: () => windowDestroyed, isFocused: () => windowFocused },
       services,
       activeWebContentsId: activeWebContents?.id ?? null,
       /** Test-only handle on the spy — production reads it via `services`. */
@@ -888,6 +895,62 @@ describe("rendererBridge — unpinned routing follows focus order (#11536)", () 
     await bridge.dispatchAction("actions.list", {}, false);
     expect(wcA.send).toHaveBeenCalledTimes(1);
     expect(wcB.send).toHaveBeenCalledTimes(1);
+  });
+
+  it("prefers the window Electron reports focused over a stale head of focus history (#13667)", async () => {
+    const wcA = makeWebContents(961);
+    const wcB = makeWebContents(962);
+    const ctxA = makeContext({ activeWebContents: wcA, windowFocused: true });
+    const ctxB = makeContext({ activeWebContents: wcB });
+    autoRespond(wcA);
+    autoRespond(wcB);
+
+    // History still leads with B although A holds focus: the window a second
+    // approval raced into, right after the first one in A was cancelled.
+    const bridge = createRendererBridge(
+      pendingManifests,
+      pendingDispatches,
+      () => makeRegistry([ctxB, ctxA], { current: [ctxB, ctxA] }) as never
+    );
+    bridge.setupListeners([]);
+
+    await bridge.dispatchAction("worktree.delete", { worktreeId: "/repos/a-wt" }, false);
+    await bridge.dispatchAction("worktree.delete", { worktreeId: "/repos/a-wt" }, false);
+
+    expect(wcA.send).toHaveBeenCalledTimes(2);
+    expect(wcB.send).not.toHaveBeenCalled();
+  });
+
+  it("falls back to focus history when no window is focused, or the focused one has no live view", async () => {
+    const wcFocusedDead = makeWebContents(971);
+    wcFocusedDead.isDestroyed.mockReturnValue(true);
+    const wcHead = makeWebContents(972);
+    const wcTail = makeWebContents(973);
+    const ctxFocusedDead = makeContext({ activeWebContents: wcFocusedDead, windowFocused: true });
+    const ctxHead = makeContext({ activeWebContents: wcHead });
+    const ctxTail = makeContext({ activeWebContents: wcTail });
+    autoRespond(wcHead);
+    autoRespond(wcTail);
+
+    const registry = { current: makeRegistry([ctxTail, ctxHead], { current: [ctxHead, ctxTail] }) };
+    const bridge = createRendererBridge(
+      pendingManifests,
+      pendingDispatches,
+      () => registry.current as never
+    );
+    bridge.setupListeners([]);
+
+    await bridge.dispatchAction("actions.list", {}, false);
+    expect(wcHead.send).toHaveBeenCalledTimes(1);
+    expect(wcTail.send).not.toHaveBeenCalled();
+
+    registry.current = makeRegistry([ctxFocusedDead, ctxTail, ctxHead], {
+      current: [ctxHead, ctxTail, ctxFocusedDead],
+    });
+    await bridge.dispatchAction("actions.list", {}, false);
+    expect(wcHead.send).toHaveBeenCalledTimes(2);
+    expect(wcTail.send).not.toHaveBeenCalled();
+    expect(wcFocusedDead.send).not.toHaveBeenCalled();
   });
 
   it("skips destroyed windows and view-less windows ahead of a live one in focus order", async () => {
