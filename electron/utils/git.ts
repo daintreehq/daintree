@@ -386,6 +386,8 @@ export interface ListCommitsOptions {
   branch?: string;
   skip?: number;
   limit?: number;
+  /** Omitted counts as true. `false` skips the revision count and reports `total: 0`. */
+  includeTotal?: boolean;
 }
 
 export interface ListCommitsResult {
@@ -423,13 +425,18 @@ function parseCommitOutput(output: string): CommitInfo[] {
 }
 
 export async function listCommits(options: ListCommitsOptions): Promise<ListCommitsResult> {
-  const { cwd, search, branch, skip = 0, limit = 30 } = options;
+  const { cwd, search, branch, skip = 0, limit = 30, includeTotal = true } = options;
 
   try {
     const git = await createHardenedGit(cwd);
 
-    const totalCountStr = await git.raw(["rev-list", "--count", branch || "HEAD"]);
-    const total = parseInt(totalCountStr.trim(), 10);
+    // The count walks the whole history and ignores `search`, so callers that
+    // only page (`hasMore` comes from the limit + 1 peek) opt out of it.
+    let total = 0;
+    if (includeTotal) {
+      const totalCountStr = await git.raw(["rev-list", "--count", branch || "HEAD"]);
+      total = parseInt(totalCountStr.trim(), 10);
+    }
 
     // `--grep` only matches commit-message text, so a hash-prefix query returns
     // nothing. On the first page, additionally resolve hash-like queries directly
@@ -459,6 +466,9 @@ export async function listCommits(options: ListCommitsOptions): Promise<ListComm
     if (branch) {
       logOptions.push(branch);
     }
+    // Without the separator, an unknown branch that names a worktree path is
+    // read as a pathspec and returns HEAD history filtered to that path.
+    logOptions.push("--");
 
     const output = await git.raw(logOptions);
     const msgCommits = parseCommitOutput(output);

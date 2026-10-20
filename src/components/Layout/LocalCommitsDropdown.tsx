@@ -718,6 +718,7 @@ export function LocalCommitsDropdown({
           search: debouncedSearch || undefined,
           skip: currentSkip,
           limit: PAGE_SIZE,
+          includeTotal: false,
         });
 
         if (gen !== fetchGenRef.current) return;

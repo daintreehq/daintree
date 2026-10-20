@@ -2499,6 +2499,7 @@ function buildElectronApi(): ElectronAPI {
         branch?: string;
         skip?: number;
         limit?: number;
+        includeTotal?: boolean;
       }) => _unwrappingInvoke(CHANNELS.GIT_LIST_COMMITS, options),
 
       stageFile: (cwd: string, filePath: string) =>

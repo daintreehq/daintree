@@ -570,6 +570,7 @@ export function registerGitActions(actions: ActionRegistry, _callbacks: ActionCa
         cwd: resolvedCwd,
         skip,
         limit,
+        includeTotal: true,
       } as any);
 
       // Bounded at limit + 1, not limit: a hash-prefix search pins its match

@@ -617,6 +617,7 @@ describe("gitActions adversarial", () => {
       search: "fix",
       skip: 0,
       limit: 5,
+      includeTotal: true,
     });
   });
 
@@ -628,6 +629,7 @@ describe("gitActions adversarial", () => {
       cwd: "/canonical",
       skip: 0,
       limit: GIT_LIST_COMMITS_LIMIT_DEFAULT,
+      includeTotal: true,
     });
 
     await runParsed("git.listCommits", { cwd: "/legacy" }, {});
@@ -635,6 +637,7 @@ describe("gitActions adversarial", () => {
       cwd: "/legacy",
       skip: 0,
       limit: GIT_LIST_COMMITS_LIMIT_DEFAULT,
+      includeTotal: true,
     });
   });
 
@@ -642,10 +645,20 @@ describe("gitActions adversarial", () => {
     const { runParsed, git } = setupActions();
 
     await runParsed("git.listCommits", { skip: 20, limit: 5 }, { activeWorktreePath: "/repo" });
-    expect(git.listCommits).toHaveBeenLastCalledWith({ cwd: "/repo", skip: 20, limit: 5 });
+    expect(git.listCommits).toHaveBeenLastCalledWith({
+      cwd: "/repo",
+      skip: 20,
+      limit: 5,
+      includeTotal: true,
+    });
 
     await runParsed("git.listCommits", { offset: 20, limit: 5 }, { activeWorktreePath: "/repo" });
-    expect(git.listCommits).toHaveBeenLastCalledWith({ cwd: "/repo", skip: 20, limit: 5 });
+    expect(git.listCommits).toHaveBeenLastCalledWith({
+      cwd: "/repo",
+      skip: 20,
+      limit: 5,
+      includeTotal: true,
+    });
   });
 
   it("git.listCommits rejects a legacy alias that contradicts its canonical field", async () => {
@@ -742,6 +755,22 @@ describe("gitActions bounded reads", () => {
     // limit + 1 is the real ceiling — a hash-prefix search pins its match ahead
     // of a full page of message matches.
     expect(result.items.length).toBeLessThanOrEqual(11);
+  });
+
+  it("git.listCommits always requests and returns the exact total", async () => {
+    const { run, git } = setupActions();
+    git.listCommits.mockResolvedValue({ items: [], hasMore: false, total: 5000 });
+
+    const result = await run(
+      "git.listCommits",
+      { includeTotal: false },
+      { activeWorktreePath: "/repo" }
+    );
+
+    expect(git.listCommits).toHaveBeenLastCalledWith(
+      expect.objectContaining({ includeTotal: true })
+    );
+    expect(result).toMatchObject({ total: 5000 });
   });
 
   it("git.listCommits advances nextCursor by limit so a pinned hash match skips nothing", async () => {

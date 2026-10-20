@@ -1333,6 +1333,104 @@ describe("listCommits", () => {
     expect(result.hasMore).toBe(false);
     expect(result.total).toBe(0);
   });
+
+  describe("includeTotal", () => {
+    const commit = (h: string) => ({
+      hash: h,
+      short: h.slice(0, 7),
+      msg: `msg ${h}`,
+      body: "",
+      name: "A",
+      email: "a@b.com",
+      date: "2024-01-15T12:00:00+00:00",
+    });
+
+    function revListCalls(): string[][] {
+      return mockGit.raw.mock.calls
+        .map((call) => call[0] as string[])
+        .filter((args) => args[0] === "rev-list");
+    }
+
+    it("never counts revisions across pages and searches when totals are declined", async () => {
+      mockGit.raw
+        .mockResolvedValueOnce(makeLogOutput([commit("aaa1111"), commit("bbb2222")]))
+        .mockResolvedValueOnce(makeLogOutput([commit("bbb2222")]))
+        .mockResolvedValueOnce(makeLogOutput([commit("ccc3333")]));
+
+      const first = await listCommits({ cwd: "/test", limit: 1, includeTotal: false });
+      const next = await listCommits({ cwd: "/test", skip: 1, limit: 1, includeTotal: false });
+      const search = await listCommits({ cwd: "/test", search: "fix", includeTotal: false });
+
+      expect(revListCalls()).toEqual([]);
+      const logCalls = mockGit.raw.mock.calls.map((call) => call[0] as string[]);
+      expect(logCalls).toHaveLength(3);
+      expect(logCalls[0]).toEqual(expect.arrayContaining(["--skip=0", "2"]));
+      expect(logCalls[1]).toEqual(expect.arrayContaining(["--skip=1", "2"]));
+      expect(logCalls[2]).toEqual(expect.arrayContaining(["--skip=0", "--grep=fix", "-i"]));
+      expect(first.items.map((c) => c.hash)).toEqual(["aaa1111"]);
+      expect(first.hasMore).toBe(true);
+      expect(next.items.map((c) => c.hash)).toEqual(["bbb2222"]);
+      expect(next.hasMore).toBe(false);
+      expect(search.items.map((c) => c.hash)).toEqual(["ccc3333"]);
+      expect(first.total).toBe(0);
+    });
+
+    it("returns the empty result when log fails on an unborn HEAD with totals declined", async () => {
+      mockGit.raw.mockRejectedValue(
+        new Error("fatal: your current branch 'main' does not have any commits yet")
+      );
+
+      const result = await listCommits({ cwd: "/test", includeTotal: false });
+
+      expect(revListCalls()).toEqual([]);
+      expect(result).toEqual({ items: [], hasMore: false, total: 0 });
+    });
+
+    it("ends revision arguments so an unknown branch is never read as a path", async () => {
+      mockGit.raw.mockResolvedValueOnce("");
+
+      await listCommits({ cwd: "/test", branch: "src", includeTotal: false });
+
+      const logCall = mockGit.raw.mock.calls[0][0] as string[];
+      expect(logCall.slice(-2)).toEqual(["src", "--"]);
+    });
+
+    it("keeps hash-prefix resolution when totals are declined", async () => {
+      const fullHash = "abc1234def567890abc1234def567890abc12345";
+      mockGit.raw
+        .mockResolvedValueOnce(`${fullHash}\n`) // rev-parse --verify
+        .mockResolvedValueOnce(makeLogOutput([commit(fullHash)])) // log -1 <fullHash>
+        .mockResolvedValueOnce(makeLogOutput([commit("ffff999")])); // log --grep
+
+      const result = await listCommits({
+        cwd: "/test",
+        branch: "main",
+        search: "abc1234",
+        includeTotal: false,
+      });
+
+      expect(revListCalls()).toEqual([]);
+      expect(result.items.map((c) => c.hash)).toEqual([fullHash, "ffff999"]);
+    });
+
+    it("counts the requested branch exactly when totals are requested", async () => {
+      mockGit.raw.mockResolvedValueOnce("42\n").mockResolvedValueOnce("");
+
+      const result = await listCommits({ cwd: "/test", branch: "main", includeTotal: true });
+
+      expect(revListCalls()).toEqual([["rev-list", "--count", "main"]]);
+      expect(result.total).toBe(42);
+    });
+
+    it("still counts when the option is omitted", async () => {
+      mockGit.raw.mockResolvedValueOnce("7\n").mockResolvedValueOnce("");
+
+      const result = await listCommits({ cwd: "/test" });
+
+      expect(revListCalls()).toEqual([["rev-list", "--count", "HEAD"]]);
+      expect(result.total).toBe(7);
+    });
+  });
 });
 
 describe("getWorktreeChangesWithStats cancellation (#12460)", () => {

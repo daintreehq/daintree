@@ -72,6 +72,7 @@ describe("LocalCommitsDropdown", () => {
       search: undefined,
       skip: 0,
       limit: 30,
+      includeTotal: false,
     });
   });
 
