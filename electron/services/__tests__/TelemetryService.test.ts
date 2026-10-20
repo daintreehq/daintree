@@ -72,6 +72,12 @@ const childProcessIntegrationMock = vi.hoisted(() =>
 
 vi.mock("electron", () => ({ app: appMock }));
 
+// Fresh module instances install exit listeners on the shared emitter; drop
+// them so an earlier instance never answers a later test's events.
+beforeEach(() => {
+  appMock.removeAllListeners();
+});
+
 vi.mock("@sentry/electron/main", () => ({
   init: sentryInitMock,
   captureEvent: captureEventMock,
@@ -2043,10 +2049,14 @@ describe("child process exit reporting", () => {
       { type: "GPU", reason: "abnormal-exit", exitCode: 8704 },
       { crashCount: 2 }
     );
+    // The monitor only passes on a crash when it selects a fallback.
     mod.reportGpuProcessExit({ type: "GPU", reason: "crashed", exitCode: 11 }, { crashCount: 1 });
-    expect(captureEventMock).toHaveBeenCalledTimes(1);
-    const event = (captureEventMock.mock.calls[0] as unknown[])[0] as SentryEvent;
-    expect(event.extra).toMatchObject({ crashCount: 2 });
+    expect(captureEventMock).toHaveBeenCalledTimes(2);
+    const [contextLoss, crash] = captureEventMock.mock.calls.map(
+      (call) => (call as unknown[])[0] as SentryEvent
+    );
+    expect(contextLoss.extra).toMatchObject({ crashCount: 2, rawExitCode: 8704 });
+    expect(crash.level).toBe("fatal");
     await mod.closeTelemetry();
   });
 

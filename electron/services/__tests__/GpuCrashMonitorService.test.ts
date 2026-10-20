@@ -353,6 +353,22 @@ describe("GpuCrashMonitorService", () => {
         expect(reportGpuProcessExit).toHaveBeenCalledTimes(1);
       });
 
+      it("reports a crash that selects a fallback, but not a lone one that does not", async () => {
+        await loadAndInit();
+        emitGpuCrash("crashed", 11);
+        expect(reportGpuProcessExit).toHaveBeenCalledWith(
+          expect.objectContaining({ reason: "crashed" }),
+          { crashCount: 1, selectsFallback: true }
+        );
+      });
+
+      it("leaves a lone crash that selects no fallback to the crash log", async () => {
+        Object.defineProperty(process, "platform", { value: "darwin", configurable: true });
+        await loadAndInit();
+        emitGpuCrash("crashed", 11);
+        expect(reportGpuProcessExit).not.toHaveBeenCalled();
+      });
+
       it("still counts a context loss toward the fallback", async () => {
         writeGpuAngleFallbackFlag(tmpDir);
         await loadAndInit();
@@ -363,6 +379,10 @@ describe("GpuCrashMonitorService", () => {
           expect(appMock.exit).toHaveBeenCalledWith(0);
         });
         expect(isGpuDisabledByFlag(tmpDir)).toBe(true);
+        expect(reportGpuProcessExit).toHaveBeenLastCalledWith(expect.anything(), {
+          crashCount: 3,
+          selectsFallback: true,
+        });
       });
     });
 

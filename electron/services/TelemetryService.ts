@@ -77,7 +77,7 @@ const EMAIL_REGEX = new RegExp(
 // SSH remotes name the (possibly private) owner and repo.
 // Utility process names (`daintree-workspace-host:<project>-<hash>`, PTY shards,
 // plugin workers) embed a project or plugin name after the colon.
-const SERVICE_INSTANCE_REGEX = /\b(daintree-[a-z][a-z0-9-]*):[A-Za-z0-9_-]+/g;
+const SERVICE_INSTANCE_REGEX = /\b(daintree-[a-z][a-z0-9-]{0,40}):[A-Za-z0-9_-]{1,120}/g;
 const SSH_REMOTE_REGEX =
   /\b(git@[A-Za-z0-9.-]{1,253}:)[A-Za-z0-9._-]{1,100}\/[A-Za-z0-9._-]{1,100}(?:\/[A-Za-z0-9._-]{1,100}){0,10}/g;
 // Also matches the escaped form a JSON-stringified log argument carries (`\/`,
@@ -495,13 +495,12 @@ function uninstallExitReporting(): void {
 
 /**
  * Report a GPU process exit GpuCrashMonitorService decided is worth a Sentry
- * event. No-op until telemetry is initialized.
+ * event, whatever its reason. No-op until telemetry is initialized.
  */
 export function reportGpuProcessExit(
   details: ChildProcessExitDetails,
   extra: Record<string, unknown>
 ): void {
-  if (!REPORTED_EXIT_REASONS.has(details.reason)) return;
   captureExitEvent(buildChildProcessExitEvent(details, { extra }));
 }
 

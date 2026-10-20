@@ -29,8 +29,9 @@ describe("BreadcrumbRepeatLimiter", () => {
     for (; now < 180_000; now += 5_000) {
       for (const id of ids) if (limiter.filter(notFound(id))) kept++;
     }
-    // 216 identical answers; the issue saw 147 of them in a 250-slot ring.
-    expect(kept).toBeLessThanOrEqual(Math.ceil(180_000 / REPEAT_WINDOW_MS) * REPEATS_PER_WINDOW);
+    // 216 identical answers, the issue saw 147 of them in a 250-slot ring; one
+    // window's allowance per minute is left.
+    expect(kept).toBe((180_000 / REPEAT_WINDOW_MS) * REPEATS_PER_WINDOW);
   });
 
   it("lets unrelated lines through while one repeats", () => {
@@ -42,6 +43,28 @@ describe("BreadcrumbRepeatLimiter", () => {
       message: "[WorkspaceHost] Host error: boom",
     };
     expect(limiter.filter(other)).toBe(other);
+  });
+
+  it("treats lines differing only by a timestamp, duration or correlation id as repeats", () => {
+    const limiter = new BreadcrumbRepeatLimiter(() => 0);
+    const line = (i: number) => ({
+      category: "console",
+      level: "warn",
+      message: `[2026-10-20T12:00:0${i}.000Z] [IPC] Error on channel x [${ids[i % ids.length]}] after ${100 + i}ms`,
+    });
+    const kept = Array.from({ length: 10 }, (_, i) => limiter.filter(line(i))).filter(Boolean);
+    expect(kept).toHaveLength(REPEATS_PER_WINDOW);
+  });
+
+  it("does not mistake words with digits for ids", () => {
+    const limiter = new BreadcrumbRepeatLimiter(() => 0);
+    const line = (tool: string) => ({
+      category: "console",
+      level: "error",
+      message: `${tool} failed`,
+    });
+    for (let i = 0; i < REPEATS_PER_WINDOW; i++) limiter.filter(line("sha256sum"));
+    expect(limiter.filter(line("sha512sum"))).not.toBeNull();
   });
 
   it("tells error codes apart", () => {

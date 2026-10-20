@@ -45,7 +45,8 @@ const removeBootstrapGuard = installBootstrapErrorGuard({
   postError: (error) => {
     // Shape must match the `error` variant of WorkspaceHostEvent (shared/types/workspace-host.ts).
     const port = process.parentPort as unknown as MessagePort | undefined;
-    port?.postMessage({ type: "error", error });
+    // The guard exits right after posting, so this is the host's fatal cause.
+    port?.postMessage({ type: "error", error, fatal: true });
   },
 });
 

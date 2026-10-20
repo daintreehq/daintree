@@ -6,7 +6,7 @@ import { store } from "../store.js";
 import { resilientAtomicWriteFileSync } from "../utils/fs.js";
 import { createLogger } from "../utils/logger.js";
 import { closeTelemetry, reportGpuProcessExit } from "./TelemetryService.js";
-import { isGpuContextLossExit } from "./childProcessExitReport.js";
+import { REPORTED_EXIT_REASONS, isGpuContextLossExit } from "./childProcessExitReport.js";
 import { getCrashLoopGuard } from "./CrashLoopGuardService.js";
 import { getCrashRecoveryService } from "./CrashRecoveryService.js";
 import { getPanelSuspectLedger } from "./PanelSuspectLedgerService.js";
@@ -160,7 +160,8 @@ class GpuCrashMonitorService {
 
       // Chromium restarts the GPU process on purpose after a context loss, so
       // a lone one is not a crash. It still is once it repeats, or when this
-      // strike is the one that moves acceleration to a fallback.
+      // strike is the one that moves acceleration to a fallback — and a
+      // fallback is reported whatever the exit reason.
       const selectsFallback =
         !this.relaunching &&
         !alreadyDisabled &&
@@ -169,7 +170,11 @@ class GpuCrashMonitorService {
             !alreadyHasAngleFallback &&
             process.platform === "linux" &&
             process.env.XDG_SESSION_TYPE === "wayland"));
-      if (!isGpuContextLossExit(details) || effectiveCount > 1 || selectsFallback) {
+      const reportable =
+        selectsFallback ||
+        (REPORTED_EXIT_REASONS.has(details.reason) &&
+          (!isGpuContextLossExit(details) || effectiveCount > 1));
+      if (reportable) {
         reportGpuProcessExit(details, { crashCount: effectiveCount, selectsFallback });
       }
 

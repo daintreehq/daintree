@@ -13,10 +13,19 @@ export const REPEAT_WINDOW_MS = 60_000;
 export const REPEATS_PER_WINDOW = 3;
 const MAX_SIGNATURES = 200;
 
-// Ids that change between otherwise identical lines. Plain short numbers stay:
-// they are usually error codes, and those tell causes apart.
-const VOLATILE_TOKEN =
-  /\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b|\b(?=[a-z0-9]*\d)[a-z0-9]{8,}\b|\b\d{5,}\b/gi;
+// Ids, timestamps and durations that change between otherwise identical lines.
+// Plain short numbers stay: they are usually error codes, and those tell
+// causes apart.
+const VOLATILE_TOKEN = new RegExp(
+  [
+    String.raw`\b\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:?\d{2})?`,
+    String.raw`\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b`,
+    String.raw`\b(?=[0-9a-f]*\d)[0-9a-f]{8,}\b`,
+    String.raw`\b\d+(?:\.\d+)?(?:ms|s)\b`,
+    String.raw`\b\d{5,}\b`,
+  ].join("|"),
+  "gi"
+);
 
 export function breadcrumbSignature(breadcrumb: LimitableBreadcrumb): string {
   const message = (breadcrumb.message ?? "").replace(VOLATILE_TOKEN, "<id>");

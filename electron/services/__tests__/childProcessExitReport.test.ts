@@ -115,6 +115,17 @@ describe("buildChildProcessExitEvent", () => {
     expect(serialized).not.toContain("/Users/me");
   });
 
+  it("groups the same cause across volatile ids outside paths", () => {
+    const fingerprint = (id: string) =>
+      buildChildProcessExitEvent(workspaceHost(), {
+        fatalError: `Terminal ${id} not found`,
+        platform: "linux",
+      }).fingerprint;
+    expect(fingerprint("3f2b8c1e-4d5a-4b6c-9e7f-0a1b2c3d4e5f")).toEqual(
+      fingerprint("9a8b7c6d-5e4f-4a3b-8c2d-1e0f9a8b7c6d")
+    );
+  });
+
   it("puts the decoded exit code in the grouping and keeps the raw one", () => {
     const event = buildChildProcessExitEvent(
       { type: "GPU", reason: "abnormal-exit", exitCode: 8704 },
@@ -151,6 +162,16 @@ describe("describeFatalError", () => {
   it("flattens and bounds the text", () => {
     expect(describeFatalError("Error:\n  boom")).toBe("Error: boom");
     expect(describeFatalError("x".repeat(1000)).length).toBeLessThanOrEqual(301);
+  });
+
+  it("removes quoted paths with spaces and Windows paths in either slash style", () => {
+    expect(describeFatalError("ENOENT: open '/work/Acme Secret/config.json'")).toBe(
+      "ENOENT: open '<path>'"
+    );
+    expect(describeFatalError('spawn "C:\\Users\\Jane Doe\\repo\\git.exe" failed')).toBe(
+      'spawn "<path>" failed'
+    );
+    expect(describeFatalError("cannot read C:/acme/file.txt")).toBe("cannot read <path>");
   });
 
   it("keeps relative paths and words with slashes", () => {
