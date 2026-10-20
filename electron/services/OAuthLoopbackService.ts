@@ -5,6 +5,7 @@
  * Requires the IdP to accept http://127.0.0.1:* as a redirect_uri (RFC 8252 §7.3).
  */
 
+import { createHash, timingSafeEqual } from "crypto";
 import { createServer, type Server, type IncomingMessage, type ServerResponse } from "http";
 import { app } from "electron";
 import { canOpenExternalUrl, openExternalUrl } from "../utils/openExternal.js";
@@ -23,6 +24,42 @@ function escapeHtml(str: string): string {
     .replace(/>/g, "&gt;")
     .replace(/"/g, "&quot;")
     .replace(/'/g, "&#39;");
+}
+
+function statesMatch(expected: string, actual: string): boolean {
+  const a = createHash("sha256").update(expected).digest();
+  const b = createHash("sha256").update(actual).digest();
+  return timingSafeEqual(a, b);
+}
+
+/**
+ * Decide whether a callback request is the authorization response this flow is
+ * waiting for. Anything else is refused without settling, so a stray or forged
+ * local request cannot consume the session before the real IdP redirect lands.
+ * A flow whose auth URL carried no `state` has nothing to correlate the
+ * callback with, so it accepts any well-formed response that also carries none
+ * (RFC 6749 §4.1.2 only returns `state` when the request sent it).
+ */
+function isAuthorizationResponse(params: URLSearchParams, expectedState: string | null): boolean {
+  const states = params.getAll("state");
+  if (expectedState === null) {
+    if (states.length !== 0) return false;
+  } else if (states.length !== 1 || !statesMatch(expectedState, states[0])) {
+    return false;
+  }
+  const codes = params.getAll("code");
+  const errors = params.getAll("error");
+  if (codes.length + errors.length !== 1) return false;
+  return (codes[0] ?? errors[0]) !== "";
+}
+
+function refuse(res: ServerResponse, status: number, headers: Record<string, string> = {}): void {
+  res.writeHead(status, {
+    "Content-Type": "text/plain; charset=utf-8",
+    Connection: "close",
+    ...headers,
+  });
+  res.end(status === 405 ? "Method Not Allowed" : "Bad Request");
 }
 
 interface LoopbackSession {
@@ -45,6 +82,15 @@ export function startOAuthLoopback(authUrl: string, panelId: string): Promise<OA
     console.warn("[OAuthLoopback] Invalid auth URL");
     return Promise.resolve({ success: false, cause: "server-error" });
   }
+
+  // A repeated or empty `state` in the auth URL leaves no single value to bind
+  // the callback to.
+  const authStates = parsed.searchParams.getAll("state");
+  if (authStates.length > 1 || authStates[0] === "") {
+    console.warn("[OAuthLoopback] Auth URL has an ambiguous state parameter");
+    return Promise.resolve({ success: false, cause: "server-error" });
+  }
+  const expectedState = authStates[0] ?? null;
 
   const originalRedirectUri = parsed.searchParams.get("redirect_uri");
 
@@ -72,6 +118,7 @@ export function startOAuthLoopback(authUrl: string, panelId: string): Promise<OA
   return new Promise((resolve) => {
     let settled = false;
     let capturedLoopbackUri = "";
+    let expectedHost = "";
 
     const settle = (result: OAuthLoopbackResult) => {
       if (settled) return;
@@ -81,7 +128,13 @@ export function startOAuthLoopback(authUrl: string, panelId: string): Promise<OA
     };
 
     const server = createServer((req: IncomingMessage, res: ServerResponse) => {
-      const reqUrl = new URL(req.url ?? "/", "http://127.0.0.1");
+      let reqUrl: URL;
+      try {
+        reqUrl = new URL(req.url ?? "/", "http://127.0.0.1");
+      } catch {
+        refuse(res, 400);
+        return;
+      }
 
       if (reqUrl.pathname !== CALLBACK_PATH) {
         res.writeHead(404);
@@ -89,8 +142,28 @@ export function startOAuthLoopback(authUrl: string, panelId: string): Promise<OA
         return;
       }
 
-      // Capture all query params from the callback (code, state, error, etc.)
+      if (req.method !== "GET") {
+        refuse(res, 405, { Allow: "GET" });
+        return;
+      }
+
+      // A kept-alive socket can still deliver requests after the flow settled,
+      // and the redirect we handed the IdP names 127.0.0.1 literally, so any
+      // other Host is not the browser following it.
+      if (settled || req.headers.host !== expectedHost) {
+        refuse(res, 400);
+        return;
+      }
+
+      // Validate the raw params before the rebuild below — `searchParams.set`
+      // collapses repeated keys and would hide a duplicate `state`.
       const callbackParams = reqUrl.searchParams;
+      if (!isAuthorizationResponse(callbackParams, expectedState)) {
+        console.warn(`[OAuthLoopback] Refused a non-matching callback for panel ${panelId}`);
+        refuse(res, 400);
+        return;
+      }
+
       const hasError = callbackParams.has("error");
 
       // Build the original callback URL with the captured params
@@ -107,7 +180,7 @@ export function startOAuthLoopback(authUrl: string, panelId: string): Promise<OA
         ? `Authentication was not completed: ${escapeHtml(rawDetail)}`
         : "You can close this tab and return to Daintree.";
 
-      res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
+      res.writeHead(200, { "Content-Type": "text/html; charset=utf-8", Connection: "close" });
       res.end(
         `<!DOCTYPE html><html><head><title>${title}</title></head>` +
           `<body style="font-family:system-ui;display:flex;align-items:center;justify-content:center;` +
@@ -134,6 +207,7 @@ export function startOAuthLoopback(authUrl: string, panelId: string): Promise<OA
     server.unref();
 
     server.listen(0, "127.0.0.1", () => {
+      if (settled) return;
       const address = server.address();
       if (!address || typeof address === "string") {
         console.error("[OAuthLoopback] Failed to get server address");
@@ -142,7 +216,8 @@ export function startOAuthLoopback(authUrl: string, panelId: string): Promise<OA
       }
 
       const port = address.port;
-      capturedLoopbackUri = `http://127.0.0.1:${port}${CALLBACK_PATH}`;
+      expectedHost = `127.0.0.1:${port}`;
+      capturedLoopbackUri = `http://${expectedHost}${CALLBACK_PATH}`;
 
       parsed.searchParams.set("redirect_uri", capturedLoopbackUri);
 
