@@ -75,9 +75,9 @@ export class DbWorkerClient {
   private degraded = false;
   private shuttingDown = false;
   private fenceEpoch: number | null = null;
-  // Bumped only by a synchronous ring write's fence(), never by the failure or
-  // shutdown fence advances — those must still replay their fallbacks.
-  private supersedeGeneration = 0;
+  // Per-ring count of synchronous writes, bumped only by fence() — never by the
+  // failure or shutdown fence advances, whose fallbacks must still replay.
+  private readonly ringSupersedes = new Map<string, number>();
   private lastRequestAt: number | null = null;
 
   constructor(deps: Partial<DbWorkerClientDeps> = {}) {
@@ -95,11 +95,12 @@ export class DbWorkerClient {
     if (!this.canUseWorker()) {
       return fallback();
     }
-    const generation = this.supersedeGeneration;
+    const ring = op.op === "ringWriteAll" ? op.ring : null;
+    const generation = ring === null ? 0 : this.supersedeCount(ring);
     try {
       return (await this.request(op)) as T;
     } catch (error) {
-      if (op.op === "ringWriteAll" && generation !== this.supersedeGeneration) {
+      if (ring !== null && generation !== this.supersedeCount(ring)) {
         console.warn(`[DbWorker] "${op.op}" failed after being superseded — dropped:`, error);
         return undefined as T;
       }
@@ -114,12 +115,17 @@ export class DbWorkerClient {
    * worker was stamped with the previous epoch and will no-op, so an older
    * snapshot can never land after the newer synchronous one. Collateral: queued
    * snapshots for OTHER rings are dropped too — harmless, since every write is
-   * a full snapshot and the owner's next flush rewrites it. The same holds on
-   * the failure path: those writes' main-thread fallbacks are skipped too.
+   * a full snapshot and the owner's next flush rewrites it. On the failure
+   * path the supersede is scoped to `ring`: only that ring's in-flight writes
+   * skip their main-thread fallbacks, so other rings' snapshots still land.
    */
-  fence(): void {
-    this.supersedeGeneration++;
+  fence(ring: string): void {
+    this.ringSupersedes.set(ring, this.supersedeCount(ring) + 1);
     this.advanceFenceIfLive();
+  }
+
+  private supersedeCount(ring: string): number {
+    return this.ringSupersedes.get(ring) ?? 0;
   }
 
   /**
@@ -316,8 +322,8 @@ export function runDbWork<T>(op: DbWorkerOp, fallback: () => T): Promise<T> {
  * Fence any queued worker ring writes before a synchronous main-thread write.
  * No-ops when the client (and thus the worker) was never created.
  */
-export function fenceDbWorkerWrites(): void {
-  instance?.fence();
+export function fenceDbWorkerWrites(ring: string): void {
+  instance?.fence(ring);
 }
 
 export async function shutdownDbWorker(): Promise<void> {

@@ -65,6 +65,7 @@ describe("auditRingStore.writeAll routing", () => {
 
     expect(mockRunDbWork).not.toHaveBeenCalled();
     expect(mockFence).toHaveBeenCalledTimes(1);
+    expect(mockFence).toHaveBeenCalledWith("mcpAuditLog");
     expect(mockSqlite.clear.run).toHaveBeenCalledWith("mcpAuditLog");
     expect(mockSqlite.insert.run).toHaveBeenCalledTimes(2);
     expect(mockSqlite.insert.run).toHaveBeenCalledWith(

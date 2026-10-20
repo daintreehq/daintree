@@ -385,7 +385,7 @@ describe("DbWorkerClient", () => {
       const fallback = vi.fn(() => "resurrected");
 
       const pending = client.run(staleWrite, fallback);
-      client.fence();
+      client.fence("a");
       worker.emit("exit", 1);
 
       await expect(pending).resolves.toBeUndefined();
@@ -398,7 +398,7 @@ describe("DbWorkerClient", () => {
       const fallback = vi.fn(() => "resurrected");
 
       const pending = client.run(staleWrite, fallback);
-      client.fence();
+      client.fence("a");
       worker.emit("error", new Error("boom"));
 
       await expect(pending).resolves.toBeUndefined();
@@ -411,7 +411,7 @@ describe("DbWorkerClient", () => {
       const fallback = vi.fn(() => "resurrected");
 
       const pending = client.run(staleWrite, fallback);
-      client.fence();
+      client.fence("a");
       worker.respond({ id: worker.posted[0]!.id, ok: false, error: "disk I/O error" });
 
       await expect(pending).resolves.toBeUndefined();
@@ -424,7 +424,7 @@ describe("DbWorkerClient", () => {
       const fallback = vi.fn(() => "resurrected");
 
       const pending = client.run(staleWrite, fallback);
-      client.fence();
+      client.fence("a");
 
       await expect(pending).resolves.toBeUndefined();
       expect(fallback).not.toHaveBeenCalled();
@@ -450,7 +450,7 @@ describe("DbWorkerClient", () => {
       const fresh = vi.fn(() => "fresh");
 
       const first = client.run(staleWrite, stale);
-      client.fence();
+      client.fence("a");
       const second = client.run({ ...staleWrite, records: ["new"] }, fresh);
       worker.emit("exit", 1);
 
@@ -460,13 +460,26 @@ describe("DbWorkerClient", () => {
       expect(fresh).toHaveBeenCalledTimes(1);
     });
 
+    it("still runs the fallback of another ring's write after a sync fence", async () => {
+      const worker = new FakeWorker();
+      const { client } = holdingClient(worker);
+      const fallback = vi.fn(() => "main-result");
+
+      const pending = client.run({ ...staleWrite, ring: "b" }, fallback);
+      client.fence("a");
+      worker.emit("exit", 1);
+
+      await expect(pending).resolves.toBe("main-result");
+      expect(fallback).toHaveBeenCalledTimes(1);
+    });
+
     it("still runs non-ring fallbacks after a sync fence", async () => {
       const worker = new FakeWorker();
       const { client } = holdingClient(worker);
       const fallback = vi.fn(() => "main-result");
 
       const pending = client.run(checkpointOp, fallback);
-      client.fence();
+      client.fence("a");
       worker.emit("exit", 1);
 
       await expect(pending).resolves.toBe("main-result");
