@@ -8,6 +8,7 @@ import type { TransferBeginMessage, TransferReason } from "../link/messages.js";
 import type { LinkSession } from "../link/session.js";
 import type { TransferSink } from "../link/transfer.js";
 import { acceptClientBundleTransfer } from "../projects/bundleSinks.js";
+import { copyInto, NEW_FILE_FLAGS } from "./exclusiveCopy.js";
 import {
   DOWNLOAD_SINK_PREFIX,
   FileDownloadStartSchema,
@@ -112,7 +113,6 @@ function candidateName(name: string, attempt: number): string {
   return `${name.slice(0, name.length - ext.length)} (${attempt})${ext}`;
 }
 
-/** Move the finished part file to the first free name; never overwrites. */
 /**
  * macOS: tag a file that came from another machine the way a browser tags a
  * download, so Gatekeeper checks it before it first opens or runs. Best
@@ -132,16 +132,74 @@ async function markDownloaded(file: string): Promise<void> {
   });
 }
 
-async function placeUnique(partPath: string, dir: string, name: string): Promise<string> {
+/** What link() answers on a filesystem without hard links (FAT, exFAT, some SMB and FUSE mounts). */
+const LINK_UNSUPPORTED = new Set(["EPERM", "ENOTSUP", "EOPNOTSUPP", "ENOSYS"]);
+
+/**
+ * Copy the part file into a name created exclusively. False when the name is
+ * taken; a copy that fails or comes up short leaves nothing at the name.
+ */
+async function copyUnique(
+  partPath: string,
+  target: string,
+  stopped: () => boolean
+): Promise<boolean> {
+  let out: Awaited<ReturnType<typeof fs.open>>;
+  try {
+    out = await fs.open(target, NEW_FILE_FLAGS, 0o600);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "EEXIST") return false;
+    throw error;
+  }
+  let complete = false;
+  try {
+    // Tagged while still empty: a link would have carried the part file's tag.
+    await markDownloaded(target);
+    const source = await fs.open(partPath, "r");
+    try {
+      complete = (await copyInto(source, out)) === (await source.stat()).size && !stopped();
+    } finally {
+      await source.close().catch(() => {});
+    }
+  } finally {
+    await out.close().catch(() => {});
+    if (!complete) await fs.rm(target, { force: true }).catch(() => {});
+  }
+  if (!complete) {
+    throw new AppError({
+      code: "INTERNAL",
+      message: "The download was not copied into place completely",
+      userMessage: "The download couldn't be saved completely. Try again.",
+    });
+  }
+  return true;
+}
+
+/** Move the finished part file to the first free name; never overwrites. */
+async function placeUnique(
+  partPath: string,
+  dir: string,
+  name: string,
+  stopped: () => boolean
+): Promise<string> {
+  let linkable = true;
   for (let attempt = 0; attempt < MAX_UNIQUE_ATTEMPTS; attempt++) {
     const target = path.join(dir, candidateName(name, attempt));
-    try {
-      await fs.link(partPath, target);
+    if (linkable) {
+      try {
+        await fs.link(partPath, target);
+        await fs.unlink(partPath).catch(() => {});
+        return target;
+      } catch (error) {
+        const code = (error as NodeJS.ErrnoException).code;
+        if (code === "EEXIST") continue;
+        if (!code || !LINK_UNSUPPORTED.has(code)) throw error;
+        linkable = false;
+      }
+    }
+    if (await copyUnique(partPath, target, stopped)) {
       await fs.unlink(partPath).catch(() => {});
       return target;
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === "EEXIST") continue;
-      throw error;
     }
   }
   throw new AppError({ code: "INTERNAL", message: "No free file name for the download" });
@@ -380,6 +438,7 @@ export class ClientFileTransport {
       );
       let written = 0;
       let closed = false;
+      let aborted = false;
       const close = async () => {
         if (closed) return;
         closed = true;
@@ -428,7 +487,13 @@ export class ClientFileTransport {
                 userMessage: "The download couldn't be saved completely. Try again.",
               });
             }
-            const localPath = await placeUnique(partPath, options.destinationDir, name);
+            // A copy can outlast the commit budget; the abort that follows must win.
+            const localPath = await placeUnique(
+              partPath,
+              options.destinationDir,
+              name,
+              () => aborted || !!signal?.aborted
+            );
             settle.resolve({ localPath, bytes: written });
           } catch (error) {
             await fs.rm(partPath, { force: true }).catch(() => {});
@@ -439,6 +504,7 @@ export class ClientFileTransport {
           return "saved";
         },
         async abort(reason) {
+          aborted = true;
           await close();
           await fs.rm(partPath, { force: true }).catch(() => {});
           settle.reject(signal?.aborted ? transferFailure("cancelled") : transferFailure(reason));

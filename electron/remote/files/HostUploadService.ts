@@ -3,10 +3,10 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { UPLOAD_REFUSE_BYTES } from "../../../shared/types/remoteHosts.js";
 import { AppError } from "../../utils/errorTypes.js";
-import { BULK_CHUNK_BYTES } from "../link/frames.js";
 import type { TransferBeginMessage } from "../link/messages.js";
 import type { LinkSession } from "../link/session.js";
 import type { TransferSink } from "../link/transfer.js";
+import { copyInto, NEW_FILE_FLAGS } from "./exclusiveCopy.js";
 import { componentsBelow, openDirectoryBeneath, type HeldDirectory } from "./hostContainment.js";
 import type { HostFileEndpoint } from "./HostFileService.js";
 import { HostInbox, sanitizeInboxName } from "./hostInbox.js";
@@ -167,33 +167,6 @@ function notInProject(): AppError {
   });
 }
 
-async function copyInto(
-  source: Awaited<ReturnType<typeof fs.open>>,
-  target: Awaited<ReturnType<typeof fs.open>>
-): Promise<number> {
-  const buf = Buffer.allocUnsafe(BULK_CHUNK_BYTES);
-  let position = 0;
-  for (;;) {
-    const { bytesRead } = await source.read(buf, 0, buf.byteLength, position);
-    if (bytesRead === 0) break;
-    for (let offset = 0; offset < bytesRead;) {
-      const { bytesWritten } = await target.write(
-        buf,
-        offset,
-        bytesRead - offset,
-        position + offset
-      );
-      if (bytesWritten <= 0) throw new Error("The file could not be written");
-      offset += bytesWritten;
-    }
-    position += bytesRead;
-  }
-  await target.sync();
-  return position;
-}
-
-const NEW_FILE_FLAGS =
-  fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_EXCL | fs.constants.O_NOFOLLOW;
 /** Files added to a project are ordinary repository files, not private temp data. */
 const PROJECT_FILE_MODE = 0o644;
 

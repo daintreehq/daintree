@@ -995,4 +995,97 @@ describe("saving on the Shell", () => {
       open.mockRestore();
     }
   });
+
+  function noHardLinks() {
+    return vi
+      .spyOn(fs, "link")
+      .mockRejectedValue(
+        Object.assign(new Error("operation not supported"), { code: "EOPNOTSUPP" })
+      );
+  }
+
+  it("copies into place when the destination has no hard links, never overwriting", async () => {
+    const { transport } = await setup();
+    const bytes = crypto.randomBytes(300 * 1024 + 5);
+    await fs.writeFile(path.join(project, "report.bin"), bytes);
+    await fs.writeFile(path.join(downloads, "report.bin"), "already here");
+    const link = noHardLinks();
+    try {
+      const saved = await transport.download(HOST, path.join(project, "report.bin"), {
+        webContentsId: 7,
+        destinationDir: downloads,
+      });
+      expect(link).toHaveBeenCalled();
+      expect(path.basename(saved.localPath)).toBe("report (1).bin");
+      expect(sha256(await fs.readFile(saved.localPath))).toBe(sha256(bytes));
+      expect(await fs.readFile(path.join(downloads, "report.bin"), "utf8")).toBe("already here");
+      expect((await fs.readdir(downloads)).sort()).toEqual(["report (1).bin", "report.bin"]);
+      if (process.platform === "darwin") {
+        const probe = path.join(downloads, ".xattr-probe");
+        await fs.writeFile(probe, "");
+        let tagsWork = true;
+        try {
+          execFileSync("/usr/bin/xattr", ["-w", "dev.daintree.probe", "1", probe]);
+        } catch {
+          tagsWork = false;
+        }
+        await fs.rm(probe, { force: true });
+        if (tagsWork) {
+          const tag = execFileSync("/usr/bin/xattr", [
+            "-p",
+            "com.apple.quarantine",
+            saved.localPath,
+          ]);
+          expect(tag.toString()).toMatch(/^0081;[0-9a-f]+;Daintree;/);
+        }
+      }
+    } finally {
+      link.mockRestore();
+    }
+  });
+
+  it("removes a partial copy when the fallback copy fails", async () => {
+    const { transport } = await setup();
+    await fs.writeFile(path.join(project, "broken.bin"), crypto.randomBytes(200 * 1024));
+    const link = noHardLinks();
+    const realOpen = fs.open.bind(fs);
+    const open = vi.spyOn(fs, "open").mockImplementation(async (...args) => {
+      const handle = await realOpen(...(args as Parameters<typeof fs.open>));
+      if (String(args[0]) === path.join(downloads, "broken.bin")) {
+        handle.write = (() => Promise.reject(new Error("disk full"))) as typeof handle.write;
+      }
+      return handle;
+    });
+    try {
+      await expect(
+        transport.download(HOST, path.join(project, "broken.bin"), {
+          webContentsId: 7,
+          destinationDir: downloads,
+        })
+      ).rejects.toThrow();
+      await expectEventuallyEmpty(downloads);
+    } finally {
+      open.mockRestore();
+      link.mockRestore();
+    }
+  });
+
+  it("still fails on a link error a copy would not fix", async () => {
+    const { transport } = await setup();
+    await fs.writeFile(path.join(project, "denied.bin"), "bytes");
+    const link = vi
+      .spyOn(fs, "link")
+      .mockRejectedValue(Object.assign(new Error("no space"), { code: "ENOSPC" }));
+    try {
+      await expect(
+        transport.download(HOST, path.join(project, "denied.bin"), {
+          webContentsId: 7,
+          destinationDir: downloads,
+        })
+      ).rejects.toMatchObject({ code: "ENOSPC" });
+      await expectEventuallyEmpty(downloads);
+    } finally {
+      link.mockRestore();
+    }
+  });
 });
