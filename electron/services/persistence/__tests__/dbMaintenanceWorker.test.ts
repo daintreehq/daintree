@@ -17,8 +17,10 @@ const AUDIT_RINGS_DDL = `
     id integer PRIMARY KEY AUTOINCREMENT NOT NULL,
     ring text NOT NULL,
     record text NOT NULL,
-    created_at integer NOT NULL
+    created_at integer NOT NULL,
+    record_id text
   );
+  CREATE UNIQUE INDEX audit_rings_ring_record_id_idx ON audit_rings (ring, record_id);
 `;
 
 let bundleDir: string;
@@ -138,25 +140,28 @@ describe("dbMaintenanceWorker (real worker thread)", () => {
 
   it("writes ring snapshots that the main connection reads back, honoring the trim cap", async () => {
     const w = spawn();
-    const records = ["a", "b", "c", "d", "e"].map((v) => JSON.stringify({ v }));
+    const rows = ["a", "b", "c", "d", "e"].map((v) => ({
+      recordId: null,
+      record: JSON.stringify({ v }),
+    }));
     const first = await request(w, {
       op: "ringWriteAll",
       ring: "testRing",
-      records,
+      rows,
       maxRecords: 3,
     });
     expect(first.ok).toBe(true);
 
-    const rows = mainDb
+    const written = mainDb
       .prepare("SELECT record FROM audit_rings WHERE ring = ? ORDER BY id ASC")
       .all("testRing") as { record: string }[];
-    expect(rows.map((r) => (JSON.parse(r.record) as { v: string }).v)).toEqual(["c", "d", "e"]);
+    expect(written.map((r) => (JSON.parse(r.record) as { v: string }).v)).toEqual(["c", "d", "e"]);
 
     // Snapshot semantics: a second write replaces the ring entirely.
     const second = await request(w, {
       op: "ringWriteAll",
       ring: "testRing",
-      records: [JSON.stringify({ v: "z" })],
+      rows: [{ recordId: null, record: JSON.stringify({ v: "z" }) }],
       maxRecords: 3,
     });
     expect(second.ok).toBe(true);
@@ -172,7 +177,7 @@ describe("dbMaintenanceWorker (real worker thread)", () => {
     const baseline = await request(w, {
       op: "ringWriteAll",
       ring: "fenced",
-      records: [JSON.stringify({ v: "worker-old" })],
+      rows: [{ recordId: null, record: JSON.stringify({ v: "worker-old" }) }],
       maxRecords: 10,
     });
     expect(baseline).toMatchObject({ ok: true, result: true });
@@ -194,7 +199,7 @@ describe("dbMaintenanceWorker (real worker thread)", () => {
       {
         op: "ringWriteAll",
         ring: "fenced",
-        records: [JSON.stringify({ v: "worker-stale" })],
+        rows: [{ recordId: null, record: JSON.stringify({ v: "worker-stale" }) }],
         maxRecords: 10,
       },
       0
@@ -212,7 +217,7 @@ describe("dbMaintenanceWorker (real worker thread)", () => {
       {
         op: "ringWriteAll",
         ring: "fenced",
-        records: [JSON.stringify({ v: "post-fence" })],
+        rows: [{ recordId: null, record: JSON.stringify({ v: "post-fence" }) }],
         maxRecords: 10,
       },
       1
@@ -243,7 +248,7 @@ describe("dbMaintenanceWorker (real worker thread)", () => {
       {
         op: "ringWriteAll",
         ring: "drain",
-        records: [JSON.stringify({ v: "late-worker" })],
+        rows: [{ recordId: null, record: JSON.stringify({ v: "late-worker" }) }],
         maxRecords: 10,
       },
       0
@@ -257,6 +262,71 @@ describe("dbMaintenanceWorker (real worker thread)", () => {
       .prepare("SELECT record FROM audit_rings WHERE ring = ? ORDER BY id ASC")
       .all("drain") as { record: string }[];
     expect(rows.map((r) => (JSON.parse(r.record) as { v: string }).v)).toEqual(["final-flush"]);
+  });
+
+  function readRing(ring: string): { id: number; recordId: string | null; v: string }[] {
+    return (
+      mainDb
+        .prepare("SELECT id, record_id, record FROM audit_rings WHERE ring = ? ORDER BY id ASC")
+        .all(ring) as { id: number; record_id: string | null; record: string }[]
+    ).map((row) => ({
+      id: row.id,
+      recordId: row.record_id,
+      v: (JSON.parse(row.record) as { v: string }).v,
+    }));
+  }
+
+  it("applies a keyed delta in place: updates keep their row, deletes and appends touch only their rows", async () => {
+    const w = spawn();
+    const keyed = (id: string, v: string) => ({ recordId: id, record: JSON.stringify({ v }) });
+    await request(w, {
+      op: "ringWriteAll",
+      ring: "delta",
+      rows: [keyed("a", "a0"), keyed("b", "b0"), keyed("c", "c0")],
+      maxRecords: 10,
+    });
+    const before = readRing("delta");
+
+    const response = await request(w, {
+      op: "ringApply",
+      ring: "delta",
+      upserts: [keyed("b", "b1"), keyed("d", "d0")],
+      deletes: ["a"],
+    });
+    expect(response).toMatchObject({ ok: true, result: true });
+
+    const after = readRing("delta");
+    expect(after.map((r) => r.v)).toEqual(["b1", "c0", "d0"]);
+    // The updated record keeps its numeric id, so its place in the ring holds.
+    expect(after[0]!.id).toBe(before[1]!.id);
+    expect(after[1]!.id).toBe(before[2]!.id);
+    expect(after[2]!.id).toBeGreaterThan(before[2]!.id);
+  });
+
+  it("no-ops a stale keyed delta once the fence has advanced — a cleared ring stays cleared", async () => {
+    const w = spawn();
+    await request(w, {
+      op: "ringWriteAll",
+      ring: "cleared",
+      rows: [{ recordId: "a", record: JSON.stringify({ v: "a0" }) }],
+      maxRecords: 10,
+    });
+    // A synchronous clear on main: fence first, then the empty replacement.
+    mainDb.pragma("user_version = 1");
+    mainDb.prepare("DELETE FROM audit_rings WHERE ring = ?").run("cleared");
+
+    const stale = await request(
+      w,
+      {
+        op: "ringApply",
+        ring: "cleared",
+        upserts: [{ recordId: "b", record: JSON.stringify({ v: "b0" }) }],
+        deletes: [],
+      },
+      0
+    );
+    expect(stale).toMatchObject({ ok: true, result: false });
+    expect(readRing("cleared")).toEqual([]);
   });
 
   it("probes a healthy file at an arbitrary path, not just its own connection", async () => {

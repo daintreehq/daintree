@@ -915,10 +915,10 @@ export class AuditService {
    * removed. `retentionDays <= 0` is the "Off" setting — keep everything,
    * bounded only by the count cap. Filters on each record's own `.timestamp`
    * (event time, `Date.now()` at append), NOT the SQLite `created_at` column:
-   * `writeAll` re-stamps `created_at` to the flush time on every flush, so it
-   * cannot distinguish record ages. Records whose `timestamp` is not a finite
-   * number are retained rather than dropped — a corrupt timestamp shouldn't
-   * silently evict privacy-sensitive history.
+   * it records when a row was first written, not when the event happened.
+   * Records whose `timestamp` is not a finite number are retained rather than
+   * dropped — a corrupt timestamp shouldn't silently evict privacy-sensitive
+   * history.
    */
   pruneByAge(retentionDays: number): void {
     if (!Number.isFinite(retentionDays) || retentionDays <= 0) return;

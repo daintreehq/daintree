@@ -517,6 +517,12 @@ describe("openDb (integration)", () => {
         key TEXT PRIMARY KEY,
         value TEXT NOT NULL
       );
+      CREATE TABLE audit_rings (
+        id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+        ring TEXT NOT NULL,
+        record TEXT NOT NULL,
+        created_at INTEGER NOT NULL
+      );
     `);
     const ins = seed.prepare("INSERT INTO __drizzle_migrations (hash, created_at) VALUES (?, ?)");
     for (const entry of applied) ins.run(entry.tag, entry.when);
@@ -674,6 +680,12 @@ describe("openDb (integration)", () => {
       CREATE TABLE app_state (
         key TEXT PRIMARY KEY,
         value TEXT NOT NULL
+      );
+      CREATE TABLE audit_rings (
+        id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+        ring TEXT NOT NULL,
+        record TEXT NOT NULL,
+        created_at INTEGER NOT NULL
       );
     `);
     const applied = seed.prepare(
