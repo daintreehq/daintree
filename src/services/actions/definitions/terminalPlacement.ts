@@ -33,9 +33,11 @@ export async function throwTerminalMiss(actionId: string, terminalId: string): P
   throw new Error(formatNoPanelMessage(actionId, terminalId));
 }
 
+export const PLACEMENT_DESTINATIONS = ["grid", "dock", "background"] as const;
+
 export const PanelPlacementResultSchema = z.object({
   location: z
-    .enum(["grid", "dock", "background"])
+    .enum(PLACEMENT_DESTINATIONS)
     .nullable()
     .describe(
       "Where the panel is now. Null means nothing was targeted (no panel named and none focused)."
@@ -44,7 +46,7 @@ export const PanelPlacementResultSchema = z.object({
 
 export type PanelPlacementResult = z.infer<typeof PanelPlacementResultSchema>;
 
-export type PlacementDestination = "grid" | "dock" | "background";
+export type PlacementDestination = (typeof PLACEMENT_DESTINATIONS)[number];
 
 interface PlacementPanel {
   location?: PanelLocation;
@@ -84,6 +86,10 @@ function placementOf(panel: PlacementPanel): PanelLocation {
  * background a member that is already somewhere else, or rescue a dock request
  * into the grid (#11375) and report it as docked.
  *
+ * `detach` is a single-panel placement (`terminal.placeOwned`): the panel
+ * leaves its group instead of taking it along, so only the panel itself is
+ * checked, and a backgrounded panel may come back from the background.
+ *
  * Returns true when the panel is already at the destination — an idempotent
  * success the caller acknowledges without moving anything.
  */
@@ -91,7 +97,8 @@ export function assertPlacementAllowed(
   actionId: string,
   panelId: string,
   destination: PlacementDestination,
-  state: PlacementState
+  state: PlacementState,
+  options?: { detach?: boolean }
 ): boolean {
   const panel = state.panelsById[panelId]!;
   const current = placementOf(panel);
@@ -104,14 +111,19 @@ export function assertPlacementAllowed(
     return true;
   }
 
-  const memberIds = state.getPanelGroup(panelId)?.panelIds ?? [panelId];
+  const detach = options?.detach === true;
+  const memberIds = detach ? [panelId] : (state.getPanelGroup(panelId)?.panelIds ?? [panelId]);
   for (const memberId of memberIds) {
     const member = Object.hasOwn(state.panelsById, memberId)
       ? state.panelsById[memberId]
       : undefined;
     if (!member) continue;
     const memberLocation = placementOf(member);
-    if (memberLocation !== "grid" && memberLocation !== "dock") {
+    const movable =
+      memberLocation === "grid" ||
+      memberLocation === "dock" ||
+      (detach && memberLocation === "background");
+    if (!movable) {
       throw new UnactionableTargetError(
         describeRefusal(actionId, panelId, memberId, memberLocation)
       );

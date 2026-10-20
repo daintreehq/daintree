@@ -159,6 +159,13 @@ export const MCP_EXTERNAL_TIER_TOOLS = [
   // created it — and the ledger is server-authoritative, written from trusted
   // dispatch results, so the id cannot be claimed into it.
   "terminal.revealOwned",
+  // Where an owned panel sits, without taking the user there (#13662). An
+  // orchestrator parks idle seats in the background and brings them back to
+  // the dock or grid when they need the operator; the reveal above would drag
+  // the user along each time. One tool for the three places rather than a
+  // twin per generic action: the generic ones take any id, so a session could
+  // hide panes it never opened, and the slot budget is spent once.
+  "terminal.placeOwned",
   // The step between waiting and destroying, which this surface did not have
   // (#12338). A client could launch an agent and watch it, and if the agent had
   // misread the task its only lever was `terminal.closeOwned` — which takes the

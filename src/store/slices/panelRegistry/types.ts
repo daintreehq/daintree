@@ -78,6 +78,11 @@ export interface BackgroundedTerminal {
  */
 export type HydrationBatchToken = symbol;
 
+export interface PanelMoveOptions {
+  /** Defaults to true: a grouped panel moves with its whole group. */
+  moveGroup?: boolean;
+}
+
 export interface PanelRegistrySlice {
   panelsById: Record<string, PanelInstance>;
   panelIds: string[];
@@ -163,8 +168,9 @@ export interface PanelRegistrySlice {
   stampLastActive: (id: string) => void;
   getTerminal: (id: string) => PanelInstance | undefined;
 
-  moveTerminalToDock: (id: string) => void;
-  moveTerminalToGrid: (id: string) => boolean;
+  /** `moveGroup: false` moves only this panel, detaching it from its tab group. */
+  moveTerminalToDock: (id: string, options?: PanelMoveOptions) => void;
+  moveTerminalToGrid: (id: string, options?: PanelMoveOptions) => boolean;
   /**
    * Promote a `location: "dialog"` panel into the grid, keeping the same panel
    * id so the content the user is already reading carries over intact.

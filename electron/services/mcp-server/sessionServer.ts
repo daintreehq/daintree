@@ -416,6 +416,20 @@ const OWNED_RESOURCE_TOOLS: Record<string, OwnedResourceTool> = {
     acceptsAdoption: true,
     reveals: true,
   },
+  // Where an owned panel sits, without moving the user (#13662). It delegates
+  // to itself: the renderer definition is the focus-free placement, and the
+  // generic placements it would otherwise wrap open the dock popover or take
+  // focus. Only the destination is forwarded. Placing is not a claim the panel
+  // stopped existing, so the record stays.
+  "terminal.placeOwned": {
+    resourceKind: "terminal",
+    executor: "renderer",
+    delegateTo: "terminal.placeOwned",
+    idArg: "terminalId",
+    forwardArgs: ["location"],
+    releasesOwnership: false,
+    acceptsAdoption: true,
+  },
   // Keeps its record for the same reason the reveal above does: interrupting a
   // turn is not a claim the panel stopped existing, and dropping the record
   // would cost the session the authority to interrupt it again — or to close it

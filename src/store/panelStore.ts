@@ -41,6 +41,7 @@ import { useWorktreeSelectionStore } from "./worktreeStore";
 import { isAssistantFocused } from "./macroFocusStore";
 import { isMcpSpawnFocusSuppressed } from "./mcpSpawnFocusGuard";
 import type { CrashType } from "@shared/types/pty-host";
+import type { TabGroup } from "@shared/types/panel";
 import { isRuntimeAgentTerminal } from "@/utils/terminalType";
 import { isProjectViewCached } from "@/lib/viewCacheState";
 import { logInfo, logWarn, logError } from "@/utils/logger";
@@ -250,6 +251,15 @@ export interface PanelGridState
    * trash is empty (nothing restored) so callers can fall back to another
    * source (e.g. the resume journal). */
   restoreLastTrashed: () => boolean;
+  /**
+   * Move one panel to `location` without focusing it, opening the dock
+   * popover or leaving a neighbour's maximize — the placement an MCP session
+   * makes for a panel it owns (#13662). A grouped panel leaves its group
+   * rather than taking the group along. Focus moves only when the panel held
+   * it and is leaving view. A refused move leaves the panel where it was;
+   * read `panelsById` back to see where it landed.
+   */
+  placeTerminal: (id: string, location: "background" | "dock" | "grid") => void;
 }
 
 /**
@@ -275,6 +285,54 @@ function buildMaximizeClearPatch(
     return { maximizedId: null, maximizeTarget: null, preMaximizeLayout: null };
   }
   return {};
+}
+
+/**
+ * Focus and maximize repair for a panel that just landed in the dock: focus
+ * leaves it only if it held focus (an automatic fallback, so the alternate
+ * pointer is cleared rather than round-tripping into a panel the user didn't
+ * choose), and a maximize it anchored ends. `state` is the pre-move snapshot.
+ */
+function dockArrivalPatch(
+  state: PanelGridState,
+  id: string,
+  policy: Required<PanelKindPolicy>,
+  maximizePatch: Partial<PanelGridState>,
+  activeWorktreeId: string | undefined
+): Partial<PanelGridState> {
+  const updates: Partial<PanelGridState> = {};
+  if (state.focusedId === id) {
+    updates.focusedId = pickFallbackFocusId(state, new Set([id]), activeWorktreeId, policy, false);
+    updates.previousFocusedId = null;
+  }
+  if (state.previousFocusedId === id) {
+    updates.previousFocusedId = null;
+  }
+  Object.assign(updates, maximizePatch);
+  return updates;
+}
+
+/**
+ * The maximize repair for one panel leaving a tab group on its own. A group
+ * that survives stays maximized, re-anchored on its active tab if the leaver
+ * was the anchor; one that dissolves to a single panel becomes that panel's
+ * maximize, as `validateMaximizeTarget` downgrades a shrunken group. Only a
+ * maximize the leaver held alone ends. `state` and `group` are pre-move.
+ */
+function detachMaximizePatch(
+  state: PanelGridState,
+  id: string,
+  group: TabGroup | undefined,
+  tabGroupsAfter: Map<string, TabGroup>
+): Partial<PanelGridState> {
+  const { maximizedId, maximizeTarget } = state;
+  if (group && maximizeTarget?.type === "group" && maximizeTarget.id === group.id) {
+    const remaining = tabGroupsAfter.get(group.id);
+    if (remaining) return maximizedId === id ? { maximizedId: remaining.activeTabId } : {};
+    const survivor = group.panelIds.find((panelId) => panelId !== id);
+    if (survivor) return { maximizedId: survivor, maximizeTarget: { type: "panel", id: survivor } };
+  }
+  return buildMaximizeClearPatch(maximizedId, id, undefined);
 }
 
 export const usePanelStore = create<PanelGridState>()(
@@ -333,6 +391,66 @@ export const usePanelStore = create<PanelGridState>()(
       (id) => get().activateTerminal(id),
       getActiveWorktreeId
     )(set, get, api);
+
+    /**
+     * Background one panel and repair focus, the dock pointer and the ping
+     * around it. `maximizePatch` decides what happens to a maximize the panel
+     * was part of; it is handed the pre-move state and group.
+     */
+    const backgroundSingle = (
+      id: string,
+      maximizePatch: (state: PanelGridState, group: TabGroup | undefined) => Partial<PanelGridState>
+    ): void => {
+      const state = get();
+      // Resolve the kind's policy and agent flag BEFORE the registry
+      // mutation — mirrors trashPanel so the fallback pick reads
+      // pre-background grid contents (#9937).
+      const terminalToBackground = state.panelsById[id];
+      const policy = resolvePanelKindPolicy(terminalToBackground?.kind);
+      const preferAgent = Boolean(
+        terminalToBackground && isRuntimeAgentTerminal(terminalToBackground)
+      );
+      // Snapshot the group before the move — backgrounding dissolves it (#9935).
+      const group = registrySlice.getPanelGroup(id);
+
+      registrySlice.backgroundTerminal(id);
+
+      // The slice declines missing/trash/overlay panels — skip focus repair
+      // when nothing was backgrounded so a no-op can't steal focus.
+      if (get().panelsById[id]?.location !== "background") return;
+
+      const updates: Partial<PanelGridState> = {};
+
+      if (state.focusedId === id) {
+        updates.focusedId = pickFallbackFocusId(
+          state,
+          new Set([id]),
+          getActiveWorktreeId() ?? undefined,
+          policy,
+          preferAgent
+        );
+        updates.previousFocusedId = null;
+      } else if (state.previousFocusedId === id) {
+        updates.previousFocusedId = null;
+      }
+
+      Object.assign(updates, maximizePatch(state, group));
+
+      if (state.activeDockTerminalId === id) {
+        updates.activeDockTerminalId = null;
+      }
+
+      // A hidden panel must not keep a live ping highlight. The ping timer's
+      // callback checks `pingedId === id` before clearing, so nulling here
+      // can't race it.
+      if (state.pingedId === id) {
+        updates.pingedId = null;
+      }
+
+      if (Object.keys(updates).length > 0) {
+        set(updates);
+      }
+    };
 
     return {
       ...registrySlice,
@@ -504,27 +622,53 @@ export const usePanelStore = create<PanelGridState>()(
         // skip the moved-to-dock focus/maximize cleanup when nothing docked.
         if (get().panelsById[id]?.location !== "dock") return;
 
-        const updates: Partial<PanelGridState> = {};
-
-        if (state.focusedId === id) {
-          updates.focusedId = pickFallbackFocusId(
-            state,
-            new Set([id]),
-            getActiveWorktreeId() ?? undefined,
-            policy,
-            false
-          );
-          // Auto-fallback focus from a moved-to-dock panel isn't a user
-          // navigation event — clear the alternate pointer to avoid round-
-          // tripping into a panel the user didn't choose.
-          updates.previousFocusedId = null;
+        const updates = dockArrivalPatch(
+          state,
+          id,
+          policy,
+          buildMaximizeClearPatch(state.maximizedId, id, group),
+          getActiveWorktreeId() ?? undefined
+        );
+        if (Object.keys(updates).length > 0) {
+          set(updates);
         }
-        if (state.previousFocusedId === id) {
-          updates.previousFocusedId = null;
+      },
+
+      placeTerminal: (id, location) => {
+        const state = get();
+        const panel = state.panelsById[id];
+        if (!panel || (panel.location ?? "grid") === location) return;
+        const group = registrySlice.getPanelGroup(id);
+        if (location === "background") {
+          backgroundSingle(id, (pre) => detachMaximizePatch(pre, id, group, get().tabGroups));
+          return;
         }
 
-        Object.assign(updates, buildMaximizeClearPatch(state.maximizedId, id, group));
+        const policy = resolvePanelKindPolicy(panel.kind);
+        const options = { moveGroup: false };
+        if (location === "dock") {
+          registrySlice.moveTerminalToDock(id, options);
+        } else {
+          registrySlice.moveTerminalToGrid(id, options);
+        }
+        if (get().panelsById[id]?.location !== location) return;
 
+        // Only this panel moved, so only pointers at it need repair. Nothing is
+        // focused or opened on its behalf, and a grid arrival leaves a
+        // maximized neighbour maximized: placing is not navigating.
+        const updates: Partial<PanelGridState> =
+          location === "dock"
+            ? dockArrivalPatch(
+                state,
+                id,
+                policy,
+                detachMaximizePatch(state, id, group, get().tabGroups),
+                getActiveWorktreeId() ?? undefined
+              )
+            : {};
+        if (location === "grid" && state.activeDockTerminalId === id) {
+          updates.activeDockTerminalId = null;
+        }
         if (Object.keys(updates).length > 0) {
           set(updates);
         }
@@ -751,59 +895,12 @@ export const usePanelStore = create<PanelGridState>()(
         }
       },
 
-      backgroundTerminal: (id: string) => {
-        const state = get();
-        // Resolve the kind's policy and agent flag BEFORE the registry
-        // mutation — mirrors trashPanel so the fallback pick reads
-        // pre-background grid contents (#9937).
-        const terminalToBackground = state.panelsById[id];
-        const policy = resolvePanelKindPolicy(terminalToBackground?.kind);
-        const preferAgent = Boolean(
-          terminalToBackground && isRuntimeAgentTerminal(terminalToBackground)
-        );
-        // Snapshot the group before the move — backgrounding dissolves it (#9935).
-        const group = registrySlice.getPanelGroup(id);
-
-        registrySlice.backgroundTerminal(id);
-
-        // The slice declines missing/trash/overlay panels — skip focus repair
-        // when nothing was backgrounded so a no-op can't steal focus.
-        if (get().panelsById[id]?.location !== "background") return;
-
-        const updates: Partial<PanelGridState> = {};
-
-        if (state.focusedId === id) {
-          updates.focusedId = pickFallbackFocusId(
-            state,
-            new Set([id]),
-            getActiveWorktreeId() ?? undefined,
-            policy,
-            preferAgent
-          );
-          updates.previousFocusedId = null;
-        } else if (state.previousFocusedId === id) {
-          updates.previousFocusedId = null;
-        }
-
+      backgroundTerminal: (id: string) =>
         // Clear the full maximize trio (#9935) when the backgrounded panel was
         // maximized or belonged to the maximized group.
-        Object.assign(updates, buildMaximizeClearPatch(state.maximizedId, id, group));
-
-        if (state.activeDockTerminalId === id) {
-          updates.activeDockTerminalId = null;
-        }
-
-        // A hidden panel must not keep a live ping highlight. The ping timer's
-        // callback checks `pingedId === id` before clearing, so nulling here
-        // can't race it.
-        if (state.pingedId === id) {
-          updates.pingedId = null;
-        }
-
-        if (Object.keys(updates).length > 0) {
-          set(updates);
-        }
-      },
+        backgroundSingle(id, (state, group) =>
+          buildMaximizeClearPatch(state.maximizedId, id, group)
+        ),
 
       backgroundPanelGroup: (panelId: string) => {
         const state = get();

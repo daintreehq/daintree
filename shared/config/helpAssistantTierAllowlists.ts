@@ -124,6 +124,9 @@ export const CORE_TIER_TOOLS = [
   "terminal.moveToWorktree",
   // Brings a panel this session created into view (#12315).
   "terminal.revealOwned",
+  // Parks or brings back a panel this session created, without moving the
+  // user (#13662). Owned for every origin, so it has no unscoped twin.
+  "terminal.placeOwned",
   "terminal.rename",
   // Read-only. How much usage is left lives only in each CLI's own view, and
   // the command that opens it is only typed after this confirms it exists.

@@ -823,6 +823,7 @@ export function forbiddenCallSample(
 export const SELF_GATED_TOOLS: ReadonlySet<string> = new Set([
   "terminal.closeOwned",
   "terminal.revealOwned",
+  "terminal.placeOwned",
   "terminal.interruptOwned",
   "terminal.sendCommandOwned",
   "terminal.injectOwned",
